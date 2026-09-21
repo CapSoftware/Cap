@@ -376,7 +376,9 @@ export class EditorHostBridge {
 	private workerPreparationId: string | null = null;
 	private pendingWorkerPreparation: Promise<void> | null = null;
 	private pendingWorkerRelease: Promise<void> | null = null;
+	private pendingWorkerAcquisition: Promise<void> = Promise.resolve();
 	private workerIdleTimer: number | null = null;
+	private activeWorkerUses = 0;
 	private workerBundleDownloadUntil = 0;
 	private activeProjectBundleDownloads = 0;
 	private activeRecordingClipImports = 0;
@@ -520,6 +522,17 @@ export class EditorHostBridge {
 		this.workerIdleTimer = null;
 	}
 
+	private holdWorkerSession() {
+		this.activeWorkerUses++;
+		let released = false;
+		return () => {
+			if (released) return;
+			released = true;
+			this.activeWorkerUses--;
+			if (!this.disposed) this.scheduleWorkerIdleRelease();
+		};
+	}
+
 	private scheduleWorkerIdleRelease() {
 		if (!this.browserOnly || this.disposed || !this.workerSessionId) return;
 		this.cancelWorkerIdleRelease();
@@ -536,6 +549,7 @@ export class EditorHostBridge {
 				this.activeCapImport ||
 				this.activeAssetImports > 0 ||
 				this.activeRecordingClipImports > 0 ||
+				this.activeWorkerUses > 0 ||
 				this.pendingWorkerPreparation
 			) {
 				this.scheduleWorkerIdleRelease();
@@ -551,6 +565,11 @@ export class EditorHostBridge {
 		if (this.pendingWorkerRelease) return this.pendingWorkerRelease;
 		const sessionId = this.workerSessionId;
 		if (!sessionId) return;
+		if (this.activeWorkerUses > 0) {
+			throw new Error(
+				"Finish the current editor operation before changing export sessions",
+			);
+		}
 		this.cancelWorkerIdleRelease();
 		const pending = (async () => {
 			const response = await fetch(
@@ -578,7 +597,22 @@ export class EditorHostBridge {
 	}
 
 	private async ensureWorkerSession() {
-		if (!this.browserOnly) return;
+		if (!this.browserOnly) return () => undefined;
+		const previous = this.pendingWorkerAcquisition;
+		let unlock: () => void = () => undefined;
+		this.pendingWorkerAcquisition = new Promise<void>((resolve) => {
+			unlock = resolve;
+		});
+		this.cancelWorkerIdleRelease();
+		await previous;
+		try {
+			return await this.acquireWorkerSession();
+		} finally {
+			unlock();
+		}
+	}
+
+	private async acquireWorkerSession() {
 		if (this.disposed) throw new Error("Editor bridge is closed");
 		this.cancelWorkerIdleRelease();
 		await this.pendingWorkerRelease;
@@ -590,7 +624,7 @@ export class EditorHostBridge {
 			this.workerCaptionPlan === captionsEnabled
 		) {
 			this.scheduleWorkerIdleRelease();
-			return;
+			return this.holdWorkerSession();
 		}
 		if (!this.pendingWorkerPreparation) {
 			const pending = (async () => {
@@ -603,6 +637,7 @@ export class EditorHostBridge {
 						Date.now() < this.workerBundleDownloadUntil ||
 						this.activeProjectBundleDownloads > 0 ||
 						this.activeRecordingClipImports > 0 ||
+						this.activeWorkerUses > 0 ||
 						this.preparedExport ||
 						this.activeShare
 					) {
@@ -636,12 +671,13 @@ export class EditorHostBridge {
 		}
 		await this.pendingWorkerPreparation;
 		if (this.workerCaptionPlan !== (await this.currentPlan())) {
-			await this.releaseWorkerSession();
+			if (this.activeWorkerUses === 0) await this.releaseWorkerSession();
 			throw new Error(
 				"Recording plan changed during export preparation. Try again.",
 			);
 		}
 		this.scheduleWorkerIdleRelease();
+		return this.holdWorkerSession();
 	}
 
 	private async currentPlan() {
@@ -797,6 +833,7 @@ export class EditorHostBridge {
 
 	private async handleExport(message: BridgeRequest) {
 		let reply: CommandReply;
+		let releaseWorkerUse: (() => void) | null = null;
 		await this.canceledExportCleanup;
 		if (this.disposed || !this.port) return;
 		if (this.activeExport || this.preparedExport) {
@@ -830,7 +867,7 @@ export class EditorHostBridge {
 			) {
 				throw new Error("Editor export request was invalid");
 			}
-			await this.ensureWorkerSession();
+			releaseWorkerUse = await this.ensureWorkerSession();
 			await this.renderExport(
 				active,
 				channelId,
@@ -925,6 +962,7 @@ export class EditorHostBridge {
 				await this.cancelExportJob(active.jobId);
 			}
 			if (this.activeExport === active) this.activeExport = null;
+			releaseWorkerUse?.();
 			active.finish();
 		}
 		if (!active.replied) this.port?.postMessage(reply);
@@ -933,6 +971,7 @@ export class EditorHostBridge {
 	private async handleProjectBundleDownload(message: BridgeRequest) {
 		let reply: CommandReply;
 		let bundleActive = false;
+		let releaseWorkerUse: (() => void) | null = null;
 		try {
 			const argument = message.args[0];
 			const projectPath = this.editorPath;
@@ -945,7 +984,7 @@ export class EditorHostBridge {
 				(argument.path !== projectPath && argument.path !== `${projectPath}/`)
 			)
 				throw new Error("Editor bundle request was invalid");
-			await this.ensureWorkerSession();
+			releaseWorkerUse = await this.ensureWorkerSession();
 			this.activeProjectBundleDownloads++;
 			bundleActive = true;
 			this.cancelWorkerIdleRelease();
@@ -1007,11 +1046,13 @@ export class EditorHostBridge {
 				this.activeProjectBundleDownloads--;
 				this.scheduleWorkerIdleRelease();
 			}
+			releaseWorkerUse?.();
 		}
 		this.port?.postMessage(reply);
 	}
 
 	private async handleRenderExport(message: BridgeRequest) {
+		let releaseWorkerUse: (() => void) | null = null;
 		await this.canceledExportCleanup;
 		if (this.disposed || !this.port) return;
 		if (this.activeExport || this.preparedExport) {
@@ -1038,7 +1079,7 @@ export class EditorHostBridge {
 			) {
 				throw new Error("Editor export request was invalid");
 			}
-			await this.ensureWorkerSession();
+			releaseWorkerUse = await this.ensureWorkerSession();
 			const status = await this.renderExport(
 				active,
 				channelId,
@@ -1071,6 +1112,7 @@ export class EditorHostBridge {
 				});
 		} finally {
 			if (this.activeExport === active) this.activeExport = null;
+			releaseWorkerUse?.();
 			active.finish();
 		}
 	}
@@ -1156,8 +1198,9 @@ export class EditorHostBridge {
 		pathOnly = false,
 	) {
 		let active = false;
+		let releaseWorkerUse: (() => void) | null = null;
 		try {
-			await this.ensureWorkerSession();
+			releaseWorkerUse = await this.ensureWorkerSession();
 			this.activeAssetImports++;
 			active = true;
 			const file = message.args[0];
@@ -1291,6 +1334,7 @@ export class EditorHostBridge {
 			});
 		} finally {
 			if (active) this.activeAssetImports--;
+			releaseWorkerUse?.();
 		}
 	}
 
@@ -1320,8 +1364,9 @@ export class EditorHostBridge {
 	}
 
 	private async handleVideoImport(message: BridgeRequest) {
+		let releaseWorkerUse: (() => void) | null = null;
 		try {
-			await this.ensureWorkerSession();
+			releaseWorkerUse = await this.ensureWorkerSession();
 			const file = message.args[0];
 			if (!(file instanceof File))
 				throw new Error("Selected video file is invalid");
@@ -1337,6 +1382,8 @@ export class EditorHostBridge {
 				id: message.id,
 				error: error instanceof Error ? error.message : "Video import failed",
 			});
+		} finally {
+			releaseWorkerUse?.();
 		}
 	}
 
@@ -1346,7 +1393,7 @@ export class EditorHostBridge {
 		cameraOffsetMs: number,
 	) {
 		if (this.disposed) throw new Error("Editor bridge is closed");
-		await this.ensureWorkerSession();
+		const releaseWorkerUse = await this.ensureWorkerSession();
 		this.activeRecordingClipImports++;
 		try {
 			const imported =
@@ -1397,13 +1444,15 @@ export class EditorHostBridge {
 			}
 		} finally {
 			this.activeRecordingClipImports--;
+			releaseWorkerUse();
 		}
 	}
 
 	private async handleRecordingClipImport(message: BridgeRequest) {
 		let active = false;
+		let releaseWorkerUse: (() => void) | null = null;
 		try {
-			await this.ensureWorkerSession();
+			releaseWorkerUse = await this.ensureWorkerSession();
 			this.activeRecordingClipImports++;
 			active = true;
 			const file = message.args[0];
@@ -1481,6 +1530,7 @@ export class EditorHostBridge {
 			});
 		} finally {
 			if (active) this.activeRecordingClipImports--;
+			releaseWorkerUse?.();
 		}
 	}
 
@@ -1516,7 +1566,7 @@ export class EditorHostBridge {
 			return;
 		}
 		if (!this.activeCaptions) {
-			await this.ensureWorkerSession();
+			const releaseWorkerUse = await this.ensureWorkerSession();
 			const pending = generateWebEditorCaptions(
 				this.videoId,
 				this.sessionId,
@@ -1528,10 +1578,12 @@ export class EditorHostBridge {
 				() => {
 					if (this.activeCaptions?.promise === pending)
 						this.activeCaptions = null;
+					releaseWorkerUse();
 				},
 				() => {
 					if (this.activeCaptions?.promise === pending)
 						this.activeCaptions = null;
+					releaseWorkerUse();
 				},
 			);
 		}

@@ -553,6 +553,135 @@ test("browser Studio reprepares export workers after Cap Pro changes without res
 	}
 });
 
+test("a plan change cannot release a worker during another browser Studio operation", async () => {
+	let planReads = 0;
+	let preparations = 0;
+	let bundleTicketRequests = 0;
+	let resolvePreparation: (response: Response) => void = () => undefined;
+	let resolveChangedPlan: (response: Response) => void = () => undefined;
+	let resolveBundleTicket: (response: Response) => void = () => undefined;
+	const preparationReady = new Promise<Response>((resolve) => {
+		resolvePreparation = resolve;
+	});
+	const changedPlan = new Promise<Response>((resolve) => {
+		resolveChangedPlan = resolve;
+	});
+	const bundleTicket = new Promise<Response>((resolve) => {
+		resolveBundleTicket = resolve;
+	});
+	const released: string[] = [];
+	const downloaded: string[] = [];
+	vi.stubGlobal("window", {
+		setTimeout,
+		clearTimeout,
+		location: { origin: "http://127.0.0.1:3000" },
+	});
+	vi.stubGlobal(
+		"fetch",
+		vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+			const url = String(input);
+			if (url === "/api/editor/videos/video/plan") {
+				planReads++;
+				return planReads === 3 ? changedPlan : Response.json({ pro: true });
+			}
+			if (url === "/api/editor/preparations" && init?.method === "POST") {
+				preparations++;
+				return Response.json({ id: "prep-1", status: "preparing" });
+			}
+			if (url === "/api/editor/preparations/prep-1?videoId=video")
+				return preparationReady;
+			if (
+				url === "/api/editor/sessions/worker-1?videoId=video" &&
+				init?.method === "DELETE"
+			) {
+				released.push(url);
+				return Response.json({ closed: true });
+			}
+			if (
+				url ===
+					"/api/editor/sessions/worker-1/project-bundle/download-ticket" &&
+				init?.method === "POST"
+			) {
+				bundleTicketRequests++;
+				return bundleTicket;
+			}
+			throw new Error(`Unexpected editor request ${url}`);
+		}),
+	);
+	vi.stubGlobal("document", {
+		createElement: vi.fn(() => ({
+			href: "",
+			rel: "",
+			download: "",
+			click() {
+				downloaded.push(this.href);
+			},
+			remove: vi.fn(),
+		})),
+		body: { append: vi.fn() },
+	});
+	const { iframe, postMessage } = frame();
+	const bridge = new EditorHostBridge(
+		"video",
+		"session",
+		"user",
+		vi.fn(),
+		vi.fn(),
+		undefined,
+		undefined,
+		undefined,
+		true,
+		undefined,
+		undefined,
+		() => "saved-revision",
+		true,
+	);
+	try {
+		await bridge.connect(iframe);
+		const port = postMessage.mock.calls[0]?.[2]?.[0] as MessagePort;
+		const replies: Array<{ kind: string; id: number; error?: string }> = [];
+		port.onmessage = (event) => replies.push(event.data);
+		port.start();
+		for (const id of [1, 2]) {
+			port.postMessage({
+				kind: "invoke",
+				id,
+				name: "tauri:download_editor_bundle",
+				args: [{ path: "cap-web-editor://session/session" }],
+			});
+		}
+		await vi.waitFor(() => expect(planReads).toBe(1));
+		await vi.waitFor(() => expect(preparations).toBe(1));
+		resolvePreparation(
+			Response.json({ status: "ready", sessionId: "worker-1" }),
+		);
+		await vi.waitFor(() => expect(bundleTicketRequests).toBe(1));
+		await vi.waitFor(() => expect(planReads).toBe(3));
+		resolveChangedPlan(Response.json({ pro: false }));
+		await vi.waitFor(() =>
+			expect(replies).toContainEqual({
+				kind: "error",
+				id: 2,
+				error: "Finish the current editor operation before exporting new edits",
+			}),
+		);
+		expect(released).toEqual([]);
+		resolveBundleTicket(
+			Response.json({
+				url: `https://media.cap.so/editor/sessions/worker-1/project-bundle/download?ticket=${ticket}`,
+			}),
+		);
+		await vi.waitFor(() =>
+			expect(replies).toContainEqual({ kind: "result", id: 1, value: null }),
+		);
+		expect(downloaded).toHaveLength(1);
+		expect(released).toEqual([]);
+		port.close();
+	} finally {
+		bridge.dispose();
+	}
+});
+
 test("chosen desktop wallpaper uploads as an image and returns its portable path", async () => {
 	const path = "content/images/22222222-2222-4222-8222-222222222222.jpg";
 	const key = `user/video/editor-assets/images/${path.slice("content/images/".length)}`;

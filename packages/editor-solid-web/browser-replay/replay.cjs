@@ -80,7 +80,8 @@ async function replay(forceWebGl, forceWebGpu = false) {
 			if (message.type() === "error") consoleErrors.push(message.text());
 			if (
 				message.text().startsWith("Cap replay stage:") ||
-				message.text().startsWith("Cap renderer stage:")
+				message.text().startsWith("Cap renderer stage:") ||
+				message.text().startsWith("Cap WebGL query:")
 			) {
 				replayStage = message.text();
 				console.log(replayStage);
@@ -112,6 +113,22 @@ async function replay(forceWebGl, forceWebGpu = false) {
 				}
 				return result;
 			};
+			for (const name of [
+				"getSupportedExtensions",
+				"getExtension",
+				"getParameter",
+				"getInternalformatParameter",
+				"getShaderPrecisionFormat",
+			]) {
+				const method = WebGL2RenderingContext.prototype[name];
+				if (typeof method !== "function") continue;
+				WebGL2RenderingContext.prototype[name] = function (...args) {
+					console.info(`Cap WebGL query: ${name} ${args.join(",")}`);
+					const value = method.apply(this, args);
+					console.info(`Cap WebGL query: ${name} returned`);
+					return value;
+				};
+			}
 			if (!navigator.gpu) return;
 			const gpuPrototype = Object.getPrototypeOf(navigator.gpu);
 			const requestAdapter = gpuPrototype.requestAdapter;
