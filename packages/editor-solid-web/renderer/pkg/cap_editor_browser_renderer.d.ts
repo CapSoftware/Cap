@@ -9,6 +9,7 @@ export class BrowserGpuRenderer {
   free(): void;
   static create(canvas: HTMLCanvasElement): Promise<BrowserGpuRenderer>;
   set_background(project_json: string): void;
+  set_frame_time(frame_number: number, frame_rate: number): void;
   resize(width: number, height: number): void;
   render(screen_video: HTMLVideoElement, screen_uniforms: Uint8Array, camera_video?: HTMLVideoElement | null, camera_uniforms?: Uint8Array | null): void;
   render_transition(outgoing_screen: HTMLVideoElement, outgoing_screen_uniforms: Uint8Array, outgoing_camera: HTMLVideoElement | null | undefined, outgoing_camera_uniforms: Uint8Array | null | undefined, incoming_screen: HTMLVideoElement, incoming_screen_uniforms: Uint8Array, incoming_camera: HTMLVideoElement | null | undefined, incoming_camera_uniforms: Uint8Array | null | undefined, kind: number, progress: number): void;
@@ -52,6 +53,7 @@ export interface InitOutput {
   readonly browsergpurenderer_create: (a: any) => any;
   readonly browsergpurenderer_backend: (a: number) => [number, number];
   readonly browsergpurenderer_set_background: (a: number, b: number, c: number) => [number, number];
+  readonly browsergpurenderer_set_frame_time: (a: number, b: number, c: number) => [number, number];
   readonly browsergpurenderer_resize: (a: number, b: number, c: number) => [number, number];
   readonly browsergpurenderer_render: (a: number, b: any, c: number, d: number, e: number, f: number, g: number) => [number, number];
   readonly browsergpurenderer_render_transition: (a: number, b: any, c: number, d: number, e: number, f: number, g: number, h: any, i: number, j: number, k: number, l: number, m: number, n: number, o: number) => [number, number];
@@ -70,8 +72,8 @@ export interface InitOutput {
   readonly __wbindgen_free: (a: number, b: number, c: number) => void;
   readonly __wbindgen_export_6: WebAssembly.Table;
   readonly __externref_table_dealloc: (a: number) => void;
-  readonly wasm_bindgen__convert__closures_____invoke__h147cdb123ff2ae0f: (a: number, b: number) => void;
   readonly closure375_externref_shim: (a: number, b: number, c: any) => void;
+  readonly wasm_bindgen__convert__closures_____invoke__h147cdb123ff2ae0f: (a: number, b: number) => void;
   readonly closure1445_externref_shim: (a: number, b: number, c: any, d: any) => void;
   readonly __wbindgen_start: () => void;
 }

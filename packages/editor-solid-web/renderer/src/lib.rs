@@ -1,3 +1,5 @@
+#[path = "../../../../crates/rendering/src/layers/animated_gradient.rs"]
+mod animated_gradient;
 #[path = "../../../../crates/rendering/src/composite_frame.rs"]
 mod composite_frame;
 #[path = "../../../../crates/editor/src/screen_recording_defaults.rs"]
@@ -7,11 +9,13 @@ mod segment_timing;
 #[path = "../../../../crates/rendering/src/transition.rs"]
 mod transition;
 
+use animated_gradient::AnimatedGradientLayer;
 use bytemuck::{Pod, Zeroable};
 use cap_project::{
-    AspectRatio, BackgroundSource, CameraShape, CameraXPosition, CameraYPosition,
-    ClipConfiguration, ClipOffsets, ClipTransitionType, CornerStyle, ProjectConfiguration,
-    StudioRecordingMeta, TimelineConfiguration, TimelineFrameMapping, TimelineSource,
+    AnimatedGradientConfig, AspectRatio, BackgroundSource, CameraShape, CameraXPosition,
+    CameraYPosition, ClipConfiguration, ClipOffsets, ClipTransitionType, CornerStyle,
+    ProjectConfiguration, StudioRecordingMeta, TimelineConfiguration, TimelineFrameMapping,
+    TimelineSource,
 };
 use composite_frame::{
     ColorGradeUniformParams, CompositeVideoFramePipeline, CompositeVideoFrameUniforms,
@@ -22,8 +26,14 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
-use web_sys::{HtmlCanvasElement, HtmlVideoElement};
+use web_sys::{HtmlCanvasElement, HtmlVideoElement, WebGl2RenderingContext};
 use wgpu::util::DeviceExt;
+
+struct ProjectUniforms {
+    output_size: (u32, u32),
+    frame_number: u32,
+    frame_rate: u32,
+}
 
 fn js_error(value: impl std::fmt::Display) -> JsValue {
     JsValue::from_str(&value.to_string())
@@ -534,6 +544,7 @@ fn upload_video(
 
 fn draw_layers(
     background: &BrowserBackground,
+    animated_background: Option<&AnimatedGradientLayer>,
     pipeline: &CompositeVideoFramePipeline,
     encoder: &mut wgpu::CommandEncoder,
     target: &wgpu::TextureView,
@@ -554,7 +565,11 @@ fn draw_layers(
         timestamp_writes: None,
         occlusion_query_set: None,
     });
-    background.draw(&mut pass);
+    if let Some(animated_background) = animated_background {
+        animated_background.render(&mut pass);
+    } else {
+        background.draw(&mut pass);
+    }
     pass.set_pipeline(&pipeline.render_pipeline);
     pass.set_bind_group(0, &screen.bind_group, &[]);
     pass.draw(0..3, 0..1);
@@ -593,6 +608,10 @@ pub struct BrowserGpuRenderer {
     pipeline: CompositeVideoFramePipeline,
     background: BrowserBackground,
     background_uniforms: BackgroundUniforms,
+    animated_background: Option<AnimatedGradientLayer>,
+    animated_config: Option<AnimatedGradientConfig>,
+    frame_number: u32,
+    frame_rate: u32,
     intermediate_background: Option<BrowserBackground>,
     transition: Option<TransitionCompositor>,
     intermediate_pipeline: Option<CompositeVideoFramePipeline>,
@@ -621,6 +640,7 @@ fn draw_retained(
                 .ok_or_else(|| js_error("Retained display frame is missing"))?;
             draw_layers(
                 &renderer.background,
+                renderer.animated_background.as_ref(),
                 &renderer.pipeline,
                 encoder,
                 target,
@@ -695,8 +715,16 @@ impl BrowserGpuRenderer {
                     .await;
                 trace_renderer("creating WebGL surface");
                 let surface = instance
-                    .create_surface(wgpu::SurfaceTarget::Canvas(canvas))
+                    .create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone()))
                     .map_err(js_error)?;
+                let context: WebGl2RenderingContext = canvas
+                    .get_context("webgl2")?
+                    .ok_or_else(|| js_error("Browser WebGL2 is unavailable"))?
+                    .dyn_into()
+                    .map_err(|_| js_error("Browser WebGL2 context is invalid"))?;
+                if context.is_context_lost() || context.get_supported_extensions().is_none() {
+                    return Err(js_error("Browser WebGL2 context was lost"));
+                }
                 trace_renderer("requesting WebGL adapter");
                 let adapter = instance
                     .request_adapter(&wgpu::RequestAdapterOptions {
@@ -746,6 +774,10 @@ impl BrowserGpuRenderer {
             pipeline,
             background,
             background_uniforms,
+            animated_background: None,
+            animated_config: None,
+            frame_number: 0,
+            frame_rate: 60,
             intermediate_background: None,
             transition: None,
             intermediate_pipeline: None,
@@ -766,13 +798,57 @@ impl BrowserGpuRenderer {
 
     pub fn set_background(&mut self, project_json: &str) -> Result<(), JsValue> {
         let project: ProjectConfiguration = serde_json::from_str(project_json).map_err(js_error)?;
-        let uniforms = BackgroundUniforms::from_source(&project.background.source)?;
-        self.background.update(&self.queue, uniforms);
-        self.intermediate_background
-            .as_ref()
-            .map(|background| background.update(&self.queue, uniforms));
-        self.background_uniforms = uniforms;
+        match &project.background.source {
+            BackgroundSource::AnimatedGradient { config } => {
+                if self.animated_background.is_none() {
+                    self.animated_background = Some(AnimatedGradientLayer::new(
+                        &self.device,
+                        config.clone(),
+                        &self.project_uniforms(),
+                    ));
+                }
+                self.animated_config = Some(config.clone());
+            }
+            source => {
+                let uniforms = BackgroundUniforms::from_source(source)?;
+                self.background.update(&self.queue, uniforms);
+                self.intermediate_background
+                    .as_ref()
+                    .map(|background| background.update(&self.queue, uniforms));
+                self.background_uniforms = uniforms;
+                self.animated_background = None;
+                self.animated_config = None;
+            }
+        }
         Ok(())
+    }
+
+    pub fn set_frame_time(&mut self, frame_number: u32, frame_rate: u32) -> Result<(), JsValue> {
+        if frame_rate == 0 {
+            return Err(js_error("Editor frame rate is invalid"));
+        }
+        self.frame_number = frame_number;
+        self.frame_rate = frame_rate;
+        Ok(())
+    }
+
+    fn project_uniforms(&self) -> ProjectUniforms {
+        ProjectUniforms {
+            output_size: (self.surface_config.width, self.surface_config.height),
+            frame_number: self.frame_number,
+            frame_rate: self.frame_rate,
+        }
+    }
+
+    fn prepare_background(&mut self, encoder: &mut wgpu::CommandEncoder) {
+        let project = self.project_uniforms();
+        if let (Some(layer), Some(config)) = (
+            self.animated_background.as_mut(),
+            self.animated_config.as_ref(),
+        ) {
+            layer.prepare(&self.device, &self.queue, config.clone(), &project);
+            layer.render_surface(encoder);
+        }
     }
 
     pub fn resize(&mut self, width: u32, height: u32) -> Result<(), JsValue> {
@@ -858,12 +934,14 @@ impl BrowserGpuRenderer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Browser editor composite"),
             });
+        self.prepare_background(&mut encoder);
         let screen = self
             .screen
             .as_ref()
             .ok_or_else(|| js_error("Display frame is missing"))?;
         draw_layers(
             &self.background,
+            self.animated_background.as_ref(),
             &self.pipeline,
             &mut encoder,
             &view,
@@ -941,6 +1019,12 @@ impl BrowserGpuRenderer {
                 self.surface_config.format,
             ));
         }
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Browser editor transition"),
+            });
+        self.prepare_background(&mut encoder);
         let pipeline = self
             .intermediate_pipeline
             .as_ref()
@@ -949,17 +1033,12 @@ impl BrowserGpuRenderer {
             .intermediate
             .as_ref()
             .ok_or_else(|| js_error("Transition canvas is missing"))?;
+        let intermediate_view = intermediate.create_view(&wgpu::TextureViewDescriptor::default());
         let transition = self
             .transition
             .as_mut()
             .ok_or_else(|| js_error("Transition effect is missing"))?;
         transition.ensure_size(&self.device, output_width, output_height);
-        let intermediate_view = intermediate.create_view(&wgpu::TextureViewDescriptor::default());
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Browser editor transition"),
-            });
         upload_video(
             &self.device,
             &self.queue,
@@ -989,6 +1068,7 @@ impl BrowserGpuRenderer {
             self.intermediate_background
                 .as_ref()
                 .ok_or_else(|| js_error("Transition background is missing"))?,
+            self.animated_background.as_ref(),
             pipeline,
             &mut encoder,
             &intermediate_view,
@@ -1027,6 +1107,7 @@ impl BrowserGpuRenderer {
             self.intermediate_background
                 .as_ref()
                 .ok_or_else(|| js_error("Transition background is missing"))?,
+            self.animated_background.as_ref(),
             pipeline,
             &mut encoder,
             &intermediate_view,
@@ -1070,6 +1151,7 @@ impl BrowserGpuRenderer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Browser editor retained composition"),
             });
+        self.prepare_background(&mut encoder);
         draw_retained(self, &mut encoder, &view)?;
         self.queue.submit(Some(encoder.finish()));
         frame.present();
@@ -1114,6 +1196,7 @@ impl BrowserGpuRenderer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Editor snapshot readback"),
             });
+        self.prepare_background(&mut encoder);
         match stored {
             StoredComposition::Single { screen, camera } => {
                 upload_video(
@@ -1140,6 +1223,7 @@ impl BrowserGpuRenderer {
                 }
                 draw_layers(
                     &self.background,
+                    self.animated_background.as_ref(),
                     &self.pipeline,
                     &mut encoder,
                     &view,

@@ -130,6 +130,7 @@ export class BrowserLocalCanvas {
 		if (this.disposed || !this.renderer) {
 			throw new Error("Editor canvas is closed");
 		}
+		this.renderer.set_frame_time(frameNumber, 60);
 		if (composition.kind === "single") {
 			this.renderer.render(
 				composition.screen.video,

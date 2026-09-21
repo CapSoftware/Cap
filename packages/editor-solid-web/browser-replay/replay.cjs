@@ -108,38 +108,11 @@ async function replay(forceWebGl, forceWebGpu = false) {
 				const result = getContext.call(this, kind, ...args);
 				if (kind === "webgl2" || kind === "webgpu") {
 					console.info(
-						`Cap replay stage: canvas ${kind} context ${result ? "ready" : "unavailable"}`,
+						`Cap replay stage: canvas ${kind} context ${result ? "ready" : "unavailable"}${kind === "webgl2" && result ? ` lost=${result.isContextLost()}` : ""}`,
 					);
 				}
 				return result;
 			};
-			for (const name of [
-				"getSupportedExtensions",
-				"getExtension",
-				"getParameter",
-				"getInternalformatParameter",
-				"getShaderPrecisionFormat",
-			]) {
-				const method = WebGL2RenderingContext.prototype[name];
-				if (typeof method !== "function") continue;
-				WebGL2RenderingContext.prototype[name] = function (...args) {
-					console.info(`Cap WebGL query: ${name} ${args.join(",")}`);
-					const value = method.apply(this, args);
-					if (name === "getSupportedExtensions") {
-						const invalid = Array.isArray(value)
-							? value.flatMap((extension, index) =>
-									typeof extension === "string" ? [] : [index],
-								)
-							: [];
-						console.info(
-							`Cap WebGL query: ${name} returned length=${value?.length ?? "null"} lost=${this.isContextLost()} invalid=${invalid.join(",")}`,
-						);
-					} else {
-						console.info(`Cap WebGL query: ${name} returned`);
-					}
-					return value;
-				};
-			}
 			if (!navigator.gpu) return;
 			const gpuPrototype = Object.getPrototypeOf(navigator.gpu);
 			const requestAdapter = gpuPrototype.requestAdapter;
@@ -390,6 +363,28 @@ async function replay(forceWebGl, forceWebGpu = false) {
 					);
 					console.info("Cap replay stage: first frame compared");
 					const returnToStartMs = performance.now() - returnStarted;
+					config.background.source = {
+						type: "animatedGradient",
+						config: JSON.parse(
+							playback.module.random_animated_gradient_json(1234),
+						),
+					};
+					await playback.setConfig(config);
+					await playback.seek(0);
+					const gradientStart = await snapshot();
+					const gradientChangedPixels = differentPixels(
+						withCamera,
+						gradientStart,
+					);
+					await playback.seek(0.75);
+					const gradientMotionPixels = differentPixels(
+						gradientStart,
+						await snapshot(),
+					);
+					config.background.source = JSON.parse(
+						playback.module.default_project_config_json(),
+					).background.source;
+					await playback.setConfig(config);
 					await playback.seek(0.75);
 					const beforePlay = frames.length;
 					playback.play();
@@ -406,6 +401,8 @@ async function replay(forceWebGl, forceWebGpu = false) {
 						returnToStartMs,
 						changedPixels,
 						startChangedPixels,
+						gradientChangedPixels,
+						gradientMotionPixels,
 						playedFrames: frames.length - beforePlay,
 						videos,
 						width: canvas.width,
@@ -455,6 +452,14 @@ async function replay(forceWebGl, forceWebGpu = false) {
 		assert(
 			result.startChangedPixels < 100,
 			"Returning to the start did not reproduce the first GPU frame",
+		);
+		assert(
+			result.gradientChangedPixels > 1000,
+			"Animated gradient did not change the GPU frame",
+		);
+		assert(
+			result.gradientMotionPixels > 1000,
+			"Animated gradient did not move across the timeline",
 		);
 		assert(result.playedFrames >= 2, "Local playback did not advance");
 		assert(
