@@ -97,6 +97,30 @@ async function replay(forceWebGl, forceWebGpu = false) {
 				return device;
 			};
 		});
+		await page.addInitScript(() => {
+			const getContext = HTMLCanvasElement.prototype.getContext;
+			HTMLCanvasElement.prototype.getContext = function (kind, ...args) {
+				const result = getContext.call(this, kind, ...args);
+				if (kind === "webgl2" || kind === "webgpu") {
+					console.info(
+						`Cap replay stage: canvas ${kind} context ${result ? "ready" : "unavailable"}`,
+					);
+				}
+				return result;
+			};
+			if (!navigator.gpu) return;
+			const gpuPrototype = Object.getPrototypeOf(navigator.gpu);
+			const requestAdapter = gpuPrototype.requestAdapter;
+			if (typeof requestAdapter !== "function") return;
+			gpuPrototype.requestAdapter = async function (...args) {
+				console.info("Cap replay stage: WebGPU adapter requested");
+				const adapter = await requestAdapter.apply(this, args);
+				console.info(
+					`Cap replay stage: WebGPU adapter ${adapter ? "ready" : "unavailable"}`,
+				);
+				return adapter;
+			};
+		});
 		page.on("request", (request) => {
 			if (request.url().includes("/api/editor/sessions/")) {
 				workerRequests.push(request.url());
@@ -188,6 +212,9 @@ async function replay(forceWebGl, forceWebGpu = false) {
 		let replayTimer;
 		const result = await Promise.race([
 			page.evaluate(async () => {
+				console.info(
+					`Cap replay stage: capabilities WebGPU=${Boolean(navigator.gpu)} WebGL2=${Boolean(document.createElement("canvas").getContext("webgl2"))}`,
+				);
 				console.info("Cap replay stage: creating local renderer");
 				const started = performance.now();
 				const canvas = document.createElement("canvas");
@@ -290,6 +317,22 @@ async function replay(forceWebGl, forceWebGpu = false) {
 							throw new Error("GPU frame inspection is unavailable");
 						return context.getImageData(0, 0, target.width, target.height).data;
 					};
+					const differentPixels = (first, second) => {
+						if (first.length !== second.length) {
+							throw new Error("GPU frame dimensions changed unexpectedly");
+						}
+						let count = 0;
+						for (let index = 0; index < first.length; index += 4) {
+							if (
+								Math.abs(first[index] - second[index]) > 8 ||
+								Math.abs(first[index + 1] - second[index + 1]) > 8 ||
+								Math.abs(first[index + 2] - second[index + 2]) > 8
+							) {
+								count++;
+							}
+						}
+						return count;
+					};
 					const withCamera = await snapshot();
 					console.info("Cap replay stage: first GPU frame inspected");
 					const config = JSON.parse(
@@ -299,16 +342,7 @@ async function replay(forceWebGl, forceWebGpu = false) {
 					await playback.setConfig(config);
 					console.info("Cap replay stage: camera visibility updated");
 					const withoutCamera = await snapshot();
-					let changedPixels = 0;
-					for (let index = 0; index < withCamera.length; index += 4) {
-						if (
-							Math.abs(withCamera[index] - withoutCamera[index]) > 8 ||
-							Math.abs(withCamera[index + 1] - withoutCamera[index + 1]) > 8 ||
-							Math.abs(withCamera[index + 2] - withoutCamera[index + 2]) > 8
-						) {
-							changedPixels++;
-						}
-					}
+					const changedPixels = differentPixels(withCamera, withoutCamera);
 					config.camera.hide = false;
 					await playback.setConfig(config);
 					const seekStarted = performance.now();
@@ -318,6 +352,11 @@ async function replay(forceWebGl, forceWebGpu = false) {
 					const returnStarted = performance.now();
 					await playback.seek(0);
 					console.info("Cap replay stage: return seek completed");
+					const startChangedPixels = differentPixels(
+						withCamera,
+						await snapshot(),
+					);
+					console.info("Cap replay stage: first frame compared");
 					const returnToStartMs = performance.now() - returnStarted;
 					await playback.seek(0.75);
 					const beforePlay = frames.length;
@@ -334,6 +373,7 @@ async function replay(forceWebGl, forceWebGpu = false) {
 						seekMs,
 						returnToStartMs,
 						changedPixels,
+						startChangedPixels,
 						playedFrames: frames.length - beforePlay,
 						videos,
 						width: canvas.width,
@@ -379,6 +419,10 @@ async function replay(forceWebGl, forceWebGpu = false) {
 		assert(
 			result.changedPixels > 1000,
 			"Camera visibility did not change the GPU frame",
+		);
+		assert(
+			result.startChangedPixels < 100,
+			"Returning to the start did not reproduce the first GPU frame",
 		);
 		assert(result.playedFrames >= 2, "Local playback did not advance");
 		assert(

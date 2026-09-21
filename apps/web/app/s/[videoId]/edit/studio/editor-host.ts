@@ -372,6 +372,7 @@ export class EditorHostBridge {
 	private readonly browserSessionId: string;
 	private workerSessionId: string | null = null;
 	private workerProjectSavedAt: string | null = null;
+	private workerCaptionPlan: boolean | null = null;
 	private workerPreparationId: string | null = null;
 	private pendingWorkerPreparation: Promise<void> | null = null;
 	private pendingWorkerRelease: Promise<void> | null = null;
@@ -450,7 +451,7 @@ export class EditorHostBridge {
 		return value;
 	}
 
-	private async prepareWorkerSession() {
+	private async prepareWorkerSession(captionsEnabled: boolean) {
 		const signal = this.controller.signal;
 		const projectSavedAt = this.getProjectSavedAt?.() ?? null;
 		const created = await startWebEditorPreparation(
@@ -487,6 +488,7 @@ export class EditorHostBridge {
 					this.sessionId = status.sessionId;
 					this.workerSessionId = status.sessionId;
 					this.workerProjectSavedAt = projectSavedAt;
+					this.workerCaptionPlan = captionsEnabled;
 					this.workerPreparationId = null;
 					this.scheduleWorkerIdleRelease();
 					return;
@@ -561,6 +563,7 @@ export class EditorHostBridge {
 			if (this.workerSessionId === sessionId) {
 				this.workerSessionId = null;
 				this.workerProjectSavedAt = null;
+				this.workerCaptionPlan = null;
 				this.sessionId = this.browserSessionId;
 			}
 		})();
@@ -579,8 +582,13 @@ export class EditorHostBridge {
 		if (this.disposed) throw new Error("Editor bridge is closed");
 		this.cancelWorkerIdleRelease();
 		await this.pendingWorkerRelease;
+		const captionsEnabled = await this.currentPlan();
 		const projectSavedAt = this.getProjectSavedAt?.() ?? null;
-		if (this.workerSessionId && this.workerProjectSavedAt === projectSavedAt) {
+		if (
+			this.workerSessionId &&
+			this.workerProjectSavedAt === projectSavedAt &&
+			this.workerCaptionPlan === captionsEnabled
+		) {
 			this.scheduleWorkerIdleRelease();
 			return;
 		}
@@ -604,7 +612,7 @@ export class EditorHostBridge {
 					}
 					await this.releaseWorkerSession();
 				}
-				await this.prepareWorkerSession();
+				await this.prepareWorkerSession(captionsEnabled);
 				if (
 					this.workerProjectSavedAt !== (this.getProjectSavedAt?.() ?? null)
 				) {
@@ -627,6 +635,12 @@ export class EditorHostBridge {
 			);
 		}
 		await this.pendingWorkerPreparation;
+		if (this.workerCaptionPlan !== (await this.currentPlan())) {
+			await this.releaseWorkerSession();
+			throw new Error(
+				"Recording plan changed during export preparation. Try again.",
+			);
+		}
 		this.scheduleWorkerIdleRelease();
 	}
 

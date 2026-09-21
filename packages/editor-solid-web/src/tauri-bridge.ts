@@ -16,6 +16,7 @@ import {
 	renderBrowserEditorPreview,
 	seekBrowserEditorPreview,
 	setBrowserEditorPreviewConfig,
+	setBrowserPlaybackFrameListener,
 } from "./browser-frame-socket";
 import { EditorCaptionCacheMemo } from "./caption-cache-memo";
 import {
@@ -408,6 +409,13 @@ export class PortEditorTransport {
 		};
 	}
 
+	browserPlaybackFrame(frameNumber: number) {
+		if (this.disposed) return;
+		for (const listener of this.listeners.get("editorStateChanged") ?? []) {
+			listener({ playhead_position: frameNumber });
+		}
+	}
+
 	dispose() {
 		if (this.disposed) return;
 		this.disposed = true;
@@ -434,6 +442,9 @@ let transport: PortEditorTransport | null = null;
 export function setEditorTransport(next: PortEditorTransport | null) {
 	transport?.dispose();
 	transport = next;
+	setBrowserPlaybackFrameListener(
+		next ? (frameNumber) => next.browserPlaybackFrame(frameNumber) : null,
+	);
 }
 
 function editorTransport() {

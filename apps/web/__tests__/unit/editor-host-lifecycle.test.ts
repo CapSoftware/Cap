@@ -428,6 +428,131 @@ test("both editor folder actions download an owned recording bundle", async () =
 	}
 });
 
+test("browser Studio reprepares export workers after Cap Pro changes without restarting local playback", async () => {
+	let pro = true;
+	let now = Date.now();
+	let preparations = 0;
+	const released: string[] = [];
+	const downloaded: string[] = [];
+	const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+	vi.stubGlobal("window", {
+		setTimeout,
+		clearTimeout,
+		location: { origin: "http://127.0.0.1:3000" },
+	});
+	vi.stubGlobal(
+		"fetch",
+		vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+			const url = String(input);
+			if (url === "/api/editor/videos/video/plan")
+				return Response.json({ pro });
+			if (url === "/api/editor/preparations" && init?.method === "POST") {
+				preparations++;
+				return Response.json({
+					id: `prep-${preparations}`,
+					status: "preparing",
+				});
+			}
+			if (
+				url.startsWith("/api/editor/preparations/prep-") &&
+				init?.method !== "DELETE"
+			) {
+				const number = url.match(/prep-(\d+)/)?.[1];
+				return Response.json({
+					status: "ready",
+					sessionId: `worker-${number}`,
+				});
+			}
+			if (
+				url.startsWith("/api/editor/sessions/worker-") &&
+				init?.method === "DELETE"
+			) {
+				released.push(url);
+				return Response.json({ closed: true });
+			}
+			if (
+				url.endsWith("/project-bundle/download-ticket") &&
+				init?.method === "POST"
+			) {
+				const number = url.match(/worker-(\d+)/)?.[1];
+				return Response.json({
+					url: `https://media.cap.so/editor/sessions/worker-${number}/project-bundle/download?ticket=${ticket}`,
+				});
+			}
+			throw new Error(`Unexpected editor request ${url}`);
+		}),
+	);
+	vi.stubGlobal("document", {
+		createElement: vi.fn(() => ({
+			href: "",
+			rel: "",
+			download: "",
+			click() {
+				downloaded.push(this.href);
+			},
+			remove: vi.fn(),
+		})),
+		body: { append: vi.fn() },
+	});
+	const { iframe, postMessage } = frame();
+	const bridge = new EditorHostBridge(
+		"video",
+		"session",
+		"user",
+		vi.fn(),
+		vi.fn(),
+		undefined,
+		undefined,
+		undefined,
+		true,
+		undefined,
+		undefined,
+		() => "saved-revision",
+		true,
+	);
+	try {
+		await bridge.connect(iframe);
+		const port = postMessage.mock.calls[0]?.[2]?.[0] as MessagePort;
+		port.start();
+		const download = async (id: number) => {
+			const reply = new Promise<unknown>((resolve) => {
+				port.onmessage = (event) => resolve(event.data);
+			});
+			port.postMessage({
+				kind: "invoke",
+				id,
+				name: "tauri:download_editor_bundle",
+				args: [{ path: "cap-web-editor://session/session" }],
+			});
+			return reply;
+		};
+		for (const [id, plan] of [
+			[1, true],
+			[2, false],
+			[3, true],
+		] as const) {
+			pro = plan;
+			if (id > 1) now += 31_000;
+			expect(await download(id)).toEqual({ kind: "result", id, value: null });
+		}
+		expect(preparations).toBe(3);
+		expect(released).toEqual([
+			"/api/editor/sessions/worker-1?videoId=video",
+			"/api/editor/sessions/worker-2?videoId=video",
+		]);
+		expect(downloaded).toEqual(
+			[1, 2, 3].map(
+				(number) =>
+					`https://media.cap.so/editor/sessions/worker-${number}/project-bundle/download?ticket=${ticket}`,
+			),
+		);
+		port.close();
+	} finally {
+		bridge.dispose();
+		clock.mockRestore();
+	}
+});
+
 test("chosen desktop wallpaper uploads as an image and returns its portable path", async () => {
 	const path = "content/images/22222222-2222-4222-8222-222222222222.jpg";
 	const key = `user/video/editor-assets/images/${path.slice("content/images/".length)}`;
@@ -1725,6 +1850,9 @@ test("Solid caption commands share one authenticated AssemblyAI request and bypa
 	});
 	const { bridge, port } = await connectedExportHost(async (url, init) => {
 		requests.push({ url, init });
+		if (url === "/api/editor/sessions/session/plan?videoId=video") {
+			return Response.json({ pro: true });
+		}
 		if (
 			url === "/api/editor/sessions/session/captions" &&
 			init?.method === "POST"
@@ -1750,7 +1878,11 @@ test("Solid caption commands share one authenticated AssemblyAI request and bypa
 			],
 		});
 	}
-	await vi.waitFor(() => expect(requests).toHaveLength(1));
+	await vi.waitFor(() =>
+		expect(
+			requests.filter((request) => request.init?.method === "POST"),
+		).toHaveLength(1),
+	);
 	const captions = {
 		settings: null,
 		segments: [
@@ -1767,8 +1899,11 @@ test("Solid caption commands share one authenticated AssemblyAI request and bypa
 	await vi.waitFor(() => expect(replies).toHaveLength(2));
 	expect(replies).toContainEqual({ kind: "result", id: 41, value: captions });
 	expect(replies).toContainEqual({ kind: "result", id: 42, value: captions });
-	expect(requests[0]?.url).toBe("/api/editor/sessions/session/captions");
-	expect(JSON.parse(String(requests[0]?.init?.body))).toEqual({
+	const captionRequest = requests.find(
+		(request) => request.init?.method === "POST",
+	);
+	expect(captionRequest?.url).toBe("/api/editor/sessions/session/captions");
+	expect(JSON.parse(String(captionRequest?.init?.body))).toEqual({
 		videoId: "video",
 		language: "auto",
 	});

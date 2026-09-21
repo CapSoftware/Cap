@@ -33,6 +33,14 @@ type FrameRequest = {
 	resolution_base: { x: number; y: number } | null;
 };
 
+let playbackFrameListener: ((frameNumber: number) => void) | null = null;
+
+export function setBrowserPlaybackFrameListener(
+	listener: ((frameNumber: number) => void) | null,
+) {
+	playbackFrameListener = listener;
+}
+
 function frameRequest(value: unknown): FrameRequest | null {
 	if (typeof value !== "object" || value === null || Array.isArray(value)) {
 		return null;
@@ -146,6 +154,8 @@ class BrowserPreviewController {
 				if (this.disposed) return;
 				this.setRendered(true);
 				this.onFrame(frame);
+				if (this.desiredPlaying)
+					playbackFrameListener?.(frame.renderedFrame.frameNumber);
 			},
 			(error) => {
 				if (!this.disposed) {

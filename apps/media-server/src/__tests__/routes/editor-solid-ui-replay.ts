@@ -163,6 +163,8 @@ let proCaptionSaves = 0;
 let savedPaidCaptions = false;
 let preservingFreeSaves = 0;
 let bundleTicketRequests = 0;
+let browserBootstrapRequests = 0;
+let browserMediaRangeRequests = 0;
 let imageImports = 0;
 let imagePreviewRequests = 0;
 let uploadedImage: Uint8Array<ArrayBuffer> | null = null;
@@ -192,6 +194,44 @@ let completedShare: {
 	duration: number;
 } | null = null;
 let base = "";
+function mediaFixtureResponse(
+	request: Request,
+	path: string,
+	contentType: string,
+) {
+	const blob = Bun.file(path);
+	const headers: Record<string, string> = {
+		"Content-Type": contentType,
+		"Accept-Ranges": "bytes",
+		"Access-Control-Allow-Origin": "*",
+		"Access-Control-Expose-Headers": "Content-Range",
+	};
+	const range = /^bytes=(\d+)-(\d*)$/.exec(request.headers.get("range") ?? "");
+	if (!range) return new Response(blob, { headers });
+	const start = Number(range[1]);
+	const end = range[2]
+		? Math.min(Number(range[2]), blob.size - 1)
+		: blob.size - 1;
+	if (
+		!Number.isSafeInteger(start) ||
+		!Number.isSafeInteger(end) ||
+		start >= blob.size ||
+		end < start
+	) {
+		return new Response(null, {
+			status: 416,
+			headers: { ...headers, "Content-Range": `bytes */${blob.size}` },
+		});
+	}
+	browserMediaRangeRequests++;
+	return new Response(blob.slice(start, end + 1), {
+		status: 206,
+		headers: {
+			...headers,
+			"Content-Range": `bytes ${start}-${end}/${blob.size}`,
+		},
+	});
+}
 try {
 	server = Bun.serve({
 		hostname: "127.0.0.1",
@@ -199,9 +239,13 @@ try {
 		async fetch(request) {
 			const url = new URL(request.url);
 			if (url.pathname === "/display.webm" || url.pathname === "/display.mp4")
-				return new Response(Bun.file(display));
+				return mediaFixtureResponse(
+					request,
+					display,
+					proCaptions ? "video/mp4" : "video/webm",
+				);
 			if (url.pathname === "/camera.webm")
-				return new Response(Bun.file(camera));
+				return mediaFixtureResponse(request, camera, "video/webm");
 			if (url.pathname === "/input-events.ndjson")
 				return new Response(cursorInputEvents, {
 					headers: { "Content-Type": "application/x-ndjson" },
@@ -358,6 +402,34 @@ try {
 					'<!doctype html><html><head><style>html,body{margin:0;height:100%;overflow:hidden}iframe{width:100vw;height:100vh;border:0}</style></head><body><iframe id="editor" src="/editor-solid/index.html"></iframe></body></html>',
 					{ headers: { "Content-Type": "text/html; charset=utf-8" } },
 				);
+			if (
+				url.pathname ===
+					`/api/editor/videos/${encodeURIComponent(videoId)}/bootstrap` &&
+				request.method === "GET"
+			) {
+				browserBootstrapRequests++;
+				return Response.json({
+					videoId,
+					sources: {
+						videoId,
+						title: "Paired editor UI fixture",
+						captionsEnabled: currentCaptionPlan,
+						signedUrlExpiresAt: Date.now() + 20 * 60_000,
+						displayHasAudio: proCaptions,
+						display: {
+							url: `${base}/display.${proCaptions ? "mp4" : "webm"}`,
+							contentType: proCaptions ? "video/mp4" : "video/webm",
+							fps: 30,
+						},
+						camera: {
+							url: `${base}/camera.webm`,
+							contentType: "video/webm",
+							fps: 25,
+							offsetMs: 125,
+						},
+					},
+				});
+			}
 			if (url.pathname.startsWith("/editor-solid/")) {
 				const staticPath = resolve(
 					editorPublic,
@@ -1009,6 +1081,19 @@ try {
 			state: "visible",
 			timeout: 20_000,
 		});
+		try {
+			await editor.locator('[aria-busy="false"]').waitFor({
+				state: "attached",
+				timeout: 20_000,
+			});
+		} catch (cause) {
+			throw new Error(
+				`Local Studio preview did not render: ${JSON.stringify({ browserBootstrapRequests, browserMediaRangeRequests, pageErrors, failedResponses, rendererFallbacks })}`,
+				{ cause },
+			);
+		}
+		assert.ok(browserBootstrapRequests > 0);
+		assert.ok(browserMediaRangeRequests > 0);
 		assert.equal(
 			await editor.getByRole("tab", { name: "Camera" }).isDisabled(),
 			false,
@@ -1234,7 +1319,6 @@ try {
 			await editor.getByText("Font settings", { exact: true }).waitFor({
 				state: "hidden",
 			});
-			await waitForWorkerCaptionContent(false);
 			const previousFreeSaves = freeCaptionlessSaves;
 			const previousPreservingFreeSaves = preservingFreeSaves;
 			await editor.getByRole("tab", { name: "Camera" }).click();
@@ -1301,7 +1385,6 @@ try {
 			await editor.getByText("Font settings", { exact: true }).waitFor({
 				state: "visible",
 			});
-			await waitForWorkerCaptionContent(true);
 		} else {
 			await editor.getByRole("link", { name: "Upgrade to Cap Pro" }).waitFor({
 				state: "visible",
@@ -1359,7 +1442,7 @@ try {
 				timeout: 10_000,
 			});
 			await editor
-				.getByText(/^0:00\.[1-9]\d$/)
+				.getByText(/^0:(?:00\.(?:0[1-9]|[1-9]\d)|01\.\d\d)$/)
 				.first()
 				.waitFor({
 					state: "visible",
