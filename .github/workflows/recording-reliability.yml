@@ -52,6 +52,34 @@ jobs:
       - name: Replay long captions in Chromium and WebKit
         run: bun apps/media-server/src/__tests__/routes/editor-caption-cache-browser-replay.ts
 
+  browser-studio-compositor:
+    name: Web Studio local compositor (${{ matrix.browser }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - browser: chromium
+            runner: ubuntu-24.04
+          - browser: firefox
+            runner: ubuntu-24.04
+          - browser: webkit
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: ./.github/actions/setup-js
+      - name: Install browser on Ubuntu
+        if: matrix.browser != 'webkit'
+        run: bunx playwright install --with-deps ${{ matrix.browser }}
+      - name: Install WebKit on macOS
+        if: matrix.browser == 'webkit'
+        run: bunx playwright install webkit
+      - name: Build browser compositor replay
+        run: bunx vite build --config packages/editor-solid-web/browser-replay/vite.config.ts
+      - name: Replay separate screen and camera clips on the local GPU
+        run: bun packages/editor-solid-web/browser-replay/replay.cjs ${{ matrix.browser }}
+
   browser-paired-recording:
     name: Web recorder paired capture (${{ matrix.browser }})
     strategy:
