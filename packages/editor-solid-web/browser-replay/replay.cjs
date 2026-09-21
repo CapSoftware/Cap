@@ -8,15 +8,27 @@ if (!browserType) throw new Error("Choose chromium, firefox, or webkit");
 
 const output = path.join(__dirname, "out");
 const origin = "http://localhost:18999";
-const format = browserName === "firefox" ? "webm" : "mp4";
-const contentType = format === "webm" ? "video/webm" : "video/mp4";
-const screen = fs.readFileSync(
+const defaultFormat = browserName === "firefox" ? "webm" : "mp4";
+
+function media(file) {
+	const format = path.extname(file).slice(1).toLowerCase();
+	if (format !== "mp4" && format !== "webm") {
+		throw new Error("Replay media must be an MP4 or WebM file");
+	}
+	return {
+		format,
+		contentType: format === "webm" ? "video/webm" : "video/mp4",
+		body: fs.readFileSync(file),
+	};
+}
+
+const screen = media(
 	process.env.CAP_REPLAY_SCREEN_FILE ||
-		path.join(__dirname, `screen.${format}`),
+		path.join(__dirname, `screen.${defaultFormat}`),
 );
-const camera = fs.readFileSync(
+const camera = media(
 	process.env.CAP_REPLAY_CAMERA_FILE ||
-		path.join(__dirname, `camera.${format}`),
+		path.join(__dirname, `camera.${defaultFormat}`),
 );
 const expectedScreenWidth = Number(process.env.CAP_REPLAY_SCREEN_WIDTH || 640);
 const expectedScreenHeight = Number(
@@ -31,7 +43,7 @@ function assert(condition, message) {
 	if (!condition) throw new Error(message);
 }
 
-async function fulfillMedia(route, body) {
+async function fulfillMedia(route, asset) {
 	const range = /^bytes=(\d+)-(\d*)$/.exec(
 		route.request().headers().range ?? "",
 	);
@@ -41,29 +53,34 @@ async function fulfillMedia(route, body) {
 		"Accept-Ranges": "bytes",
 	};
 	if (!range) {
-		await route.fulfill({ status: 200, contentType, headers, body });
+		await route.fulfill({
+			status: 200,
+			contentType: asset.contentType,
+			headers,
+			body: asset.body,
+		});
 		return;
 	}
 	const start = Number(range[1]);
 	const end = range[2]
-		? Math.min(Number(range[2]), body.length - 1)
-		: body.length - 1;
-	if (start >= body.length || end < start) {
+		? Math.min(Number(range[2]), asset.body.length - 1)
+		: asset.body.length - 1;
+	if (start >= asset.body.length || end < start) {
 		await route.fulfill({
 			status: 416,
-			contentType,
-			headers: { ...headers, "Content-Range": `bytes */${body.length}` },
+			contentType: asset.contentType,
+			headers: { ...headers, "Content-Range": `bytes */${asset.body.length}` },
 		});
 		return;
 	}
 	await route.fulfill({
 		status: 206,
-		contentType,
+		contentType: asset.contentType,
 		headers: {
 			...headers,
-			"Content-Range": `bytes ${start}-${end}/${body.length}`,
+			"Content-Range": `bytes ${start}-${end}/${asset.body.length}`,
 		},
-		body: body.subarray(start, end + 1),
+		body: asset.body.subarray(start, end + 1),
 	});
 }
 
@@ -168,13 +185,13 @@ async function replay(forceWebGl, forceWebGpu = false) {
 							captionsEnabled: false,
 							signedUrlExpiresAt: Date.now() + 20 * 60_000,
 							display: {
-								url: `${origin}/screen.${format}`,
-								contentType,
+								url: `${origin}/screen.${screen.format}`,
+								contentType: screen.contentType,
 								fps: 30,
 							},
 							camera: {
-								url: `${origin}/camera.${format}`,
-								contentType,
+								url: `${origin}/camera.${camera.format}`,
+								contentType: camera.contentType,
 								fps: 30,
 								offsetMs: 0,
 							},
@@ -183,11 +200,11 @@ async function replay(forceWebGl, forceWebGpu = false) {
 				});
 				return;
 			}
-			if (pathname === `/screen.${format}`) {
+			if (pathname === `/screen.${screen.format}`) {
 				await fulfillMedia(route, screen);
 				return;
 			}
-			if (pathname === `/camera.${format}`) {
+			if (pathname === `/camera.${camera.format}`) {
 				await fulfillMedia(route, camera);
 				return;
 			}
@@ -427,7 +444,7 @@ async function replay(forceWebGl, forceWebGpu = false) {
 				} finally {
 					playback.dispose();
 				}
-			}, format),
+			}, screen.format),
 			new Promise((_, reject) => {
 				replayTimer = setTimeout(
 					() => reject(new Error(`Browser replay stalled at ${replayStage}`)),
