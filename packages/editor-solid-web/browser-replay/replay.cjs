@@ -216,7 +216,7 @@ async function replay(forceWebGl, forceWebGpu = false) {
 		);
 		let replayTimer;
 		const result = await Promise.race([
-			page.evaluate(async () => {
+			page.evaluate(async (mediaFormat) => {
 				console.info(
 					`Cap replay stage: capabilities WebGPU=${Boolean(navigator.gpu)} WebGL2=${Boolean(document.createElement("canvas").getContext("webgl2"))}`,
 				);
@@ -246,7 +246,7 @@ async function replay(forceWebGl, forceWebGpu = false) {
 						video.muted = true;
 						video.playsInline = true;
 						video.crossOrigin = "anonymous";
-						video.src = "/screen.webm";
+						video.src = `/screen.${mediaFormat}`;
 						document.body.append(video);
 						const finish = () => {
 							window.clearTimeout(timer);
@@ -412,7 +412,7 @@ async function replay(forceWebGl, forceWebGpu = false) {
 				} finally {
 					playback.dispose();
 				}
-			}),
+			}, format),
 			new Promise((_, reject) => {
 				replayTimer = setTimeout(
 					() => reject(new Error(`Browser replay stalled at ${replayStage}`)),

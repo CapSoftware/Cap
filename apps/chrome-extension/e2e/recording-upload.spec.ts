@@ -635,6 +635,54 @@ const sendServiceWorkerMessage = async (
 		});
 	}, message);
 
+const injectUncertainOffscreenStartResponse = async (
+	worker: Awaited<ReturnType<typeof getServiceWorker>>,
+	deliverRequest: boolean,
+) => {
+	await worker.evaluate((deliverRequest) => {
+		const runtime = (globalThis as ChromeGlobal).chrome.runtime;
+		const sendMessage = runtime.sendMessage.bind(runtime) as (
+			message: unknown,
+			callback: (response: unknown) => void,
+		) => void;
+		let injected = false;
+		Object.defineProperty(runtime, "sendMessage", {
+			configurable: true,
+			value: (message: unknown, callback: (response: unknown) => void) => {
+				if (
+					injected ||
+					typeof message !== "object" ||
+					message === null ||
+					!("target" in message) ||
+					message.target !== "offscreen" ||
+					!("type" in message) ||
+					message.type !== "start-recording"
+				) {
+					sendMessage(message, callback);
+					return;
+				}
+				injected = true;
+				const loseResponse = () => {
+					Object.defineProperty(runtime, "lastError", {
+						configurable: true,
+						value: {
+							message:
+								"The message port closed before a response was received.",
+						},
+					});
+					try {
+						callback(undefined);
+					} finally {
+						Reflect.deleteProperty(runtime, "lastError");
+					}
+				};
+				if (deliverRequest) sendMessage(message, loseResponse);
+				else globalThis.setTimeout(loseResponse, 0);
+			},
+		});
+	}, deliverRequest);
+};
+
 const expectSuccessfulUpload = async (
 	page: Page,
 	state: MockState,
@@ -949,6 +997,27 @@ test.describe("extension recording upload", () => {
 		await extension?.cleanup();
 		await mockServer?.close();
 	});
+
+	for (const deliverRequest of [false, true]) {
+		test(`recovers an offscreen start response lost ${deliverRequest ? "after" : "before"} capture starts`, async () => {
+			if (!extension || !mockServer)
+				throw new Error("Test harness did not start");
+			const worker = await getServiceWorker(extension.context);
+			await injectUncertainOffscreenStartResponse(worker, deliverRequest);
+			const { messengerPage } = await startRecording(
+				extension.context,
+				worker,
+				mockServer.origin,
+			);
+			expect(mockServer.state.initiateBodies).toHaveLength(2);
+			const stopResponse = await sendServiceWorkerMessage(messengerPage, {
+				target: "service-worker",
+				type: "stop-recording",
+			});
+			expect(stopResponse).toMatchObject({ ok: true });
+			await expectSuccessfulUpload(messengerPage, mockServer.state);
+		});
+	}
 
 	test("hides confirmed uploaded backups from the options recovery list", async () => {
 		if (!extension) throw new Error("Test harness did not start");

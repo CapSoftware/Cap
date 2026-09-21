@@ -260,6 +260,10 @@ const isTransientOffscreenMessageError = (error: unknown) => {
 	);
 };
 
+const isUncertainOffscreenStartError = (error: unknown) =>
+	error instanceof Error &&
+	error.message.toLowerCase().includes("message port closed before a response");
+
 const sendOffscreenRuntimeMessage = (message: OffscreenRequest) =>
 	new Promise<OffscreenResponse>((resolve, reject) => {
 		chrome.runtime.sendMessage(message, (response) => {
@@ -270,6 +274,37 @@ const sendOffscreenRuntimeMessage = (message: OffscreenRequest) =>
 			resolve(response as OffscreenResponse);
 		});
 	});
+
+const reconcileUncertainOffscreenStart = async () => {
+	let lastError: unknown;
+	for (let attempt = 1; attempt <= OFFSCREEN_MESSAGE_ATTEMPTS; attempt += 1) {
+		await wait(OFFSCREEN_MESSAGE_RETRY_DELAY_MS);
+		await ensureOffscreenDocument();
+		try {
+			const response = await sendOffscreenRuntimeMessage({
+				target: "offscreen",
+				type: "get-recording-status",
+			});
+			if (!response.ok) return response;
+			const status = response.status;
+			if (!status) throw new Error("Offscreen recorder status is unavailable");
+			if (status.phase === "idle") return null;
+			if (status.phase === "error") {
+				return { ok: false, error: status.message } satisfies OffscreenResponse;
+			}
+			return response;
+		} catch (error) {
+			lastError = error;
+			if (
+				!isTransientOffscreenMessageError(error) &&
+				!isUncertainOffscreenStartError(error)
+			) {
+				throw error;
+			}
+		}
+	}
+	throw lastError instanceof Error ? lastError : new Error(String(lastError));
+};
 
 const sendOffscreen = async (
 	message: OffscreenRequest,
@@ -290,6 +325,14 @@ const sendOffscreen = async (
 			return await sendOffscreenRuntimeMessage(message);
 		} catch (error) {
 			lastError = error;
+			if (
+				message.type === "start-recording" &&
+				isUncertainOffscreenStartError(error)
+			) {
+				const recovered = await reconcileUncertainOffscreenStart();
+				if (recovered) return recovered;
+				if (attempt < OFFSCREEN_MESSAGE_ATTEMPTS) continue;
+			}
 			if (
 				options.createIfMissing === false ||
 				attempt === OFFSCREEN_MESSAGE_ATTEMPTS ||
