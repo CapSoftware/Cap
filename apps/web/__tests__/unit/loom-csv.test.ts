@@ -5,7 +5,9 @@ describe("concierge Loom CSV", () => {
 	it("keeps quoted workspace names and source row numbers", () => {
 		const rows = parseConciergeLoomCsv(
 			"\uFEFFuser_email,space_name,loom_video_url\r\n" +
-				'owner@example.com,"Sales, Europe",https://www.loom.com/share/0123456789abcdef\r\n',
+				"owner@example.com," +
+				JSON.stringify("Sales, Europe") +
+				",https://www.loom.com/share/0123456789abcdef\r\n",
 		);
 		expect(rows).toEqual([
 			{

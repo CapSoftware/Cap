@@ -16,7 +16,7 @@ import {
 } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import type { Organisation } from "@cap/web-domain";
-import { and, eq, inArray, isNotNull } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, lte, or } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import {
 	getCustomerMigrationRequests,
@@ -281,6 +281,9 @@ export async function updateLoomMigrationStatus({
 			capMessage: normalizedMessage || null,
 			expectedVideoCount,
 			importedVideoCount,
+			activeImportCount: nextStatus === "completed" ? 0 : undefined,
+			activeImportLeaseToken: nextStatus === "completed" ? null : undefined,
+			activeImportLeaseUntil: nextStatus === "completed" ? null : undefined,
 			activeOrganizationId:
 				nextStatus === "completed" ? null : request.organizationId,
 			completedAt: nextStatus === "completed" ? new Date() : null,
@@ -294,7 +297,10 @@ export async function updateLoomMigrationStatus({
 				eq(loomMigrationRequests.status, request.status),
 				isNotNull(loomMigrationRequests.activeOrganizationId),
 				nextStatus === "completed"
-					? eq(loomMigrationRequests.activeImportCount, 0)
+					? or(
+							eq(loomMigrationRequests.activeImportCount, 0),
+							lte(loomMigrationRequests.activeImportLeaseUntil, new Date()),
+						)
 					: undefined,
 			),
 		);

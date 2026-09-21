@@ -1,5 +1,6 @@
 import "server-only";
 
+import { randomUUID } from "node:crypto";
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import {
@@ -14,11 +15,11 @@ import {
 	asc,
 	desc,
 	eq,
-	gt,
 	isNotNull,
 	isNull,
+	lte,
 	ne,
-	sql,
+	or,
 } from "drizzle-orm";
 import { requireOrganizationSettingsManager } from "@/actions/organization/authorization";
 import { MESSENGER_ADMIN_EMAIL } from "@/lib/messenger/constants";
@@ -26,6 +27,7 @@ import { isOrganizationOwnerPro } from "@/lib/org-pro";
 import type { LoomMigrationStatus } from "./loom-migration-state";
 
 type MigrationRecord = typeof loomMigrationRequests.$inferSelect;
+const IMPORT_LEASE_MS = 60 * 60 * 1000;
 
 export type LoomMigrationView = {
 	id: string;
@@ -63,7 +65,11 @@ export function migrationToView(record: MigrationRecord): LoomMigrationView {
 		expectedVideoCount: record.expectedVideoCount,
 		importedVideoCount: record.importedVideoCount,
 		queuedVideoCount: record.queuedVideoCount,
-		activeImportCount: record.activeImportCount,
+		activeImportCount:
+			record.activeImportLeaseUntil &&
+			record.activeImportLeaseUntil.getTime() <= Date.now()
+				? 0
+				: record.activeImportCount,
 		completedAt: record.completedAt?.toISOString() ?? null,
 		createdAt: record.createdAt.toISOString(),
 		updatedAt: record.updatedAt.toISOString(),
@@ -117,42 +123,52 @@ export async function reserveConciergeImport(
 	requestId: string,
 	operatorId: User.UserId,
 ) {
+	const token = randomUUID();
+	const now = new Date();
 	const result = await db()
 		.update(loomMigrationRequests)
 		.set({
-			activeImportCount: sql`${loomMigrationRequests.activeImportCount} + 1`,
+			activeImportCount: 1,
+			activeImportLeaseToken: token,
+			activeImportLeaseUntil: new Date(now.getTime() + IMPORT_LEASE_MS),
 			status: "in_progress",
 			lastOperatorUserId: operatorId,
-			lastOperatorAt: new Date(),
-			updatedAt: new Date(),
+			lastOperatorAt: now,
+			updatedAt: now,
 		})
 		.where(
 			and(
 				eq(loomMigrationRequests.id, requestId),
 				isNotNull(loomMigrationRequests.activeOrganizationId),
+				or(
+					eq(loomMigrationRequests.activeImportCount, 0),
+					lte(loomMigrationRequests.activeImportLeaseUntil, now),
+				),
 			),
 		);
 	if (affectedRows(result) === 0) {
-		throw new Error("The migration request changed. Refresh and try again.");
+		throw new Error(
+			"The migration request changed or another import is starting. Refresh and try again.",
+		);
 	}
+	return token;
 }
 
-export async function releaseConciergeImport(requestId: string) {
-	const result = await db()
+export async function releaseConciergeImport(requestId: string, token: string) {
+	await db()
 		.update(loomMigrationRequests)
 		.set({
-			activeImportCount: sql`${loomMigrationRequests.activeImportCount} - 1`,
+			activeImportCount: 0,
+			activeImportLeaseToken: null,
+			activeImportLeaseUntil: null,
 			updatedAt: new Date(),
 		})
 		.where(
 			and(
 				eq(loomMigrationRequests.id, requestId),
-				gt(loomMigrationRequests.activeImportCount, 0),
+				eq(loomMigrationRequests.activeImportLeaseToken, token),
 			),
 		);
-	if (affectedRows(result) === 0) {
-		throw new Error("Could not release the migration import reservation.");
-	}
 }
 
 export async function getCustomerMigrationRequests(

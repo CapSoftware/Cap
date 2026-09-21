@@ -316,12 +316,14 @@ async function importLoomVideoForOwner({
 	ownerId,
 	destination = {},
 	migrationRequestId,
+	migrationLeaseToken,
 }: {
 	loomUrl: string;
 	orgId: Organisation.OrganisationId;
 	ownerId: User.UserId;
 	destination?: LoomImportDestination;
 	migrationRequestId?: string;
+	migrationLeaseToken?: string;
 }): Promise<LoomImportResult> {
 	const loomVideoId = extractLoomVideoId(loomUrl.trim());
 	if (!loomVideoId) {
@@ -412,6 +414,27 @@ async function importLoomVideoForOwner({
 		`Loom Import - ${new Date().toLocaleDateString("en-US", { day: "numeric", month: "long", year: "numeric" })}`;
 
 	await db().transaction(async (tx) => {
+		if (migrationRequestId) {
+			const [reservation] = await tx
+				.select({
+					activeOrganizationId: loomMigrationRequests.activeOrganizationId,
+					leaseToken: loomMigrationRequests.activeImportLeaseToken,
+					leaseUntil: loomMigrationRequests.activeImportLeaseUntil,
+				})
+				.from(loomMigrationRequests)
+				.where(eq(loomMigrationRequests.id, migrationRequestId))
+				.limit(1)
+				.for("update");
+			if (
+				!migrationLeaseToken ||
+				!reservation?.activeOrganizationId ||
+				reservation.leaseToken !== migrationLeaseToken ||
+				!reservation.leaseUntil ||
+				reservation.leaseUntil <= new Date()
+			) {
+				throw new Error("The concierge import expired. Retry this video.");
+			}
+		}
 		await tx.insert(videos).values({
 			id: videoId,
 			name,
@@ -801,11 +824,13 @@ async function processLoomCsvRows({
 	orgId,
 	actorId,
 	migrationRequestId,
+	migrationLeaseToken,
 }: {
 	rows: LoomCsvImportRow[];
 	orgId: Organisation.OrganisationId;
 	actorId: User.UserId;
 	migrationRequestId?: string;
+	migrationLeaseToken?: string;
 }): Promise<LoomCsvImportResult> {
 	const inputRows = Array.isArray(rows) ? rows : [];
 	const normalizedRows = inputRows
@@ -916,6 +941,7 @@ async function processLoomCsvRows({
 				orgId,
 				ownerId: member.userId,
 				migrationRequestId,
+				migrationLeaseToken,
 			});
 
 			let spaceName = row.spaceName || undefined;
@@ -1019,13 +1045,14 @@ export async function importFromLoomCsvForConcierge({
 	if (!(await isOrganizationOwnerPro(request.organizationId))) {
 		throw new Error("The destination workspace needs Cap Pro.");
 	}
-	await reserveConciergeImport(requestId, operator.id);
+	const leaseToken = await reserveConciergeImport(requestId, operator.id);
 	try {
 		const result = await processLoomCsvRows({
 			rows,
 			orgId: request.organizationId,
 			actorId: request.ownerId,
 			migrationRequestId: requestId,
+			migrationLeaseToken: leaseToken,
 		});
 		if (result.importedCount > 0) {
 			await db()
@@ -1036,13 +1063,19 @@ export async function importFromLoomCsvForConcierge({
 					lastOperatorAt: new Date(),
 					updatedAt: new Date(),
 				})
-				.where(eq(loomMigrationRequests.id, requestId));
+				.where(
+					and(
+						eq(loomMigrationRequests.id, requestId),
+						eq(loomMigrationRequests.activeImportLeaseToken, leaseToken),
+						isNotNull(loomMigrationRequests.activeOrganizationId),
+					),
+				);
 		}
 		revalidatePath("/dashboard/migrations/loom");
 		revalidatePath("/dashboard/admin/loom-migrations");
 		return result;
 	} finally {
-		await releaseConciergeImport(requestId);
+		await releaseConciergeImport(requestId, leaseToken);
 	}
 }
 
@@ -1102,7 +1135,7 @@ export async function createConciergeLoomFileUpload({
 	if (!(await isOrganizationOwnerPro(request.organizationId))) {
 		throw new Error("The destination workspace needs Cap Pro.");
 	}
-	await reserveConciergeImport(requestId, operator.id);
+	const leaseToken = await reserveConciergeImport(requestId, operator.id);
 	try {
 		const [existing] = await db()
 			.select({
@@ -1180,12 +1213,30 @@ export async function createConciergeLoomFileUpload({
 				);
 			}
 			if (!mapped) {
-				await db()
-					.insert(loomMigrationImports)
-					.values({
+				await db().transaction(async (tx) => {
+					const [reservation] = await tx
+						.select({
+							activeOrganizationId: loomMigrationRequests.activeOrganizationId,
+							leaseToken: loomMigrationRequests.activeImportLeaseToken,
+							leaseUntil: loomMigrationRequests.activeImportLeaseUntil,
+						})
+						.from(loomMigrationRequests)
+						.where(eq(loomMigrationRequests.id, requestId))
+						.limit(1)
+						.for("update");
+					if (
+						!reservation?.activeOrganizationId ||
+						reservation.leaseToken !== leaseToken ||
+						!reservation.leaseUntil ||
+						reservation.leaseUntil <= new Date()
+					) {
+						throw new Error("The concierge import expired. Retry this video.");
+					}
+					await tx.insert(loomMigrationImports).values({
 						videoId: Video.VideoId.make(existing.id),
 						requestId,
 					});
+				});
 			}
 			return {
 				videoId: Video.VideoId.make(existing.id),
@@ -1230,6 +1281,24 @@ export async function createConciergeLoomFileUpload({
 			request.organizationId,
 		).pipe(runPromise);
 		await db().transaction(async (tx) => {
+			const [reservation] = await tx
+				.select({
+					activeOrganizationId: loomMigrationRequests.activeOrganizationId,
+					leaseToken: loomMigrationRequests.activeImportLeaseToken,
+					leaseUntil: loomMigrationRequests.activeImportLeaseUntil,
+				})
+				.from(loomMigrationRequests)
+				.where(eq(loomMigrationRequests.id, requestId))
+				.limit(1)
+				.for("update");
+			if (
+				!reservation?.activeOrganizationId ||
+				reservation.leaseToken !== leaseToken ||
+				!reservation.leaseUntil ||
+				reservation.leaseUntil <= new Date()
+			) {
+				throw new Error("The concierge import expired. Retry this video.");
+			}
 			await tx.insert(videos).values({
 				id: videoId,
 				name: normalizedTitle,
@@ -1267,7 +1336,7 @@ export async function createConciergeLoomFileUpload({
 		revalidatePath("/dashboard/admin/loom-migrations");
 		return { videoId, uploadTarget: upload.upload };
 	} finally {
-		await releaseConciergeImport(requestId);
+		await releaseConciergeImport(requestId, leaseToken);
 	}
 }
 
@@ -1282,7 +1351,7 @@ export async function finishConciergeLoomFileUpload({
 	if (typeof requestId !== "string" || !/^[A-Za-z0-9_-]{15}$/.test(requestId)) {
 		throw new Error("Invalid migration request.");
 	}
-	await reserveConciergeImport(requestId, operator.id);
+	const leaseToken = await reserveConciergeImport(requestId, operator.id);
 	try {
 		const [record] = await db()
 			.select({
@@ -1361,6 +1430,7 @@ export async function finishConciergeLoomFileUpload({
 				.where(
 					and(
 						eq(loomMigrationRequests.id, requestId),
+						eq(loomMigrationRequests.activeImportLeaseToken, leaseToken),
 						isNotNull(loomMigrationRequests.activeOrganizationId),
 					),
 				);
@@ -1369,6 +1439,6 @@ export async function finishConciergeLoomFileUpload({
 		revalidatePath("/dashboard/admin/loom-migrations");
 		return { status };
 	} finally {
-		await releaseConciergeImport(requestId);
+		await releaseConciergeImport(requestId, leaseToken);
 	}
 }

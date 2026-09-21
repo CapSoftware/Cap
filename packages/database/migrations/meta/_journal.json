@@ -330,6 +330,13 @@
 			"when": 1789988285195,
 			"tag": "0046_loom_concierge",
 			"breakpoints": true
+		},
+		{
+			"idx": 47,
+			"version": "5",
+			"when": 1789989245680,
+			"tag": "0047_loom_concierge_lease",
+			"breakpoints": true
 		}
 	]
 }

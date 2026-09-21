@@ -1576,6 +1576,10 @@ export const loomMigrationRequests = mysqlTable(
 		importedVideoCount: int("importedVideoCount").notNull().default(0),
 		queuedVideoCount: int("queuedVideoCount").notNull().default(0),
 		activeImportCount: int("activeImportCount").notNull().default(0),
+		activeImportLeaseToken: varchar("activeImportLeaseToken", { length: 36 }),
+		activeImportLeaseUntil: datetime("activeImportLeaseUntil", {
+			mode: "date",
+		}),
 		lastOperatorUserId:
 			nanoIdNullable("lastOperatorUserId").$type<User.UserId>(),
 		lastOperatorAt: datetime("lastOperatorAt", { mode: "date" }),

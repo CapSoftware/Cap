@@ -6,14 +6,15 @@ export function parseLoomCsvRecords(text: string) {
 	let row: string[] = [];
 	let inQuotes = false;
 	const input = text.replace(/^\uFEFF/, "");
+	const quote = "\u0022";
 
 	for (let index = 0; index < input.length; index += 1) {
 		const char = input.charAt(index);
 		const next = input.charAt(index + 1);
 
-		if (char === '"') {
-			if (inQuotes && next === '"') {
-				field += '"';
+		if (char === quote) {
+			if (inQuotes && next === quote) {
+				field += quote;
 				index += 1;
 			} else {
 				inQuotes = !inQuotes;

@@ -190,8 +190,9 @@ describe("Loom importer component", () => {
 		await render({ folderId: Folder.FolderId.make("child") });
 		await ready();
 		expect(
-			container.querySelector('a[href="/dashboard/migrations/loom"]')
-				?.textContent,
+			Array.from(container.querySelectorAll("a")).find(
+				(link) => link.getAttribute("href") === "/dashboard/migrations/loom",
+			)?.textContent,
 		).toContain("Want Cap to move your whole Loom workspace for you?");
 		expect(
 			getByRole(container, "combobox", { name: "Import to" }).textContent,
