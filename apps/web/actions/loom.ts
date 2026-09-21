@@ -42,6 +42,7 @@ import {
 import { requireSpaceManager } from "@/actions/organization/space-authorization";
 import {
 	releaseConciergeImport,
+	renewConciergeImport,
 	requireMigrationOperator,
 	reserveConciergeImport,
 } from "@/lib/loom-concierge";
@@ -472,6 +473,13 @@ async function importLoomVideoForOwner({
 				videoId,
 				requestId: migrationRequestId,
 			});
+			await tx
+				.update(loomMigrationRequests)
+				.set({
+					queuedVideoCount: sql`${loomMigrationRequests.queuedVideoCount} + 1`,
+					updatedAt: new Date(),
+				})
+				.where(eq(loomMigrationRequests.id, migrationRequestId));
 		}
 
 		if (destination.spaceId === orgId) {
@@ -880,6 +888,12 @@ async function processLoomCsvRows({
 	const touchedSpaceIds = new Set<Space.SpaceIdOrOrganisationId>();
 
 	for (const row of normalizedRows) {
+		if (migrationRequestId) {
+			if (!migrationLeaseToken) {
+				throw new Error("The concierge import is missing its reservation.");
+			}
+			await renewConciergeImport(migrationRequestId, migrationLeaseToken);
+		}
 		if (!row.loomUrl) {
 			results.push({
 				rowNumber: row.rowNumber,
@@ -1049,6 +1063,9 @@ export async function importFromLoomCsvForConcierge({
 	if (!(await isOrganizationOwnerPro(request.organizationId))) {
 		throw new Error("The destination workspace needs Cap Pro.");
 	}
+	if (!Array.isArray(rows) || rows.length > 10) {
+		throw new Error("Concierge CSV imports run in batches of 10 videos.");
+	}
 	const leaseToken = await reserveConciergeImport(requestId, operator.id);
 	try {
 		const result = await processLoomCsvRows({
@@ -1058,23 +1075,6 @@ export async function importFromLoomCsvForConcierge({
 			migrationRequestId: requestId,
 			migrationLeaseToken: leaseToken,
 		});
-		if (result.importedCount > 0) {
-			await db()
-				.update(loomMigrationRequests)
-				.set({
-					queuedVideoCount: sql`${loomMigrationRequests.queuedVideoCount} + ${result.importedCount}`,
-					lastOperatorUserId: operator.id,
-					lastOperatorAt: new Date(),
-					updatedAt: new Date(),
-				})
-				.where(
-					and(
-						eq(loomMigrationRequests.id, requestId),
-						eq(loomMigrationRequests.activeImportLeaseToken, leaseToken),
-						isNotNull(loomMigrationRequests.activeOrganizationId),
-					),
-				);
-		}
 		revalidatePath("/dashboard/migrations/loom");
 		revalidatePath("/dashboard/admin/loom-migrations");
 		return result;
@@ -1240,6 +1240,13 @@ export async function createConciergeLoomFileUpload({
 						videoId: Video.VideoId.make(existing.id),
 						requestId,
 					});
+					await tx
+						.update(loomMigrationRequests)
+						.set({
+							queuedVideoCount: sql`${loomMigrationRequests.queuedVideoCount} + 1`,
+							updatedAt: new Date(),
+						})
+						.where(eq(loomMigrationRequests.id, requestId));
 				});
 			}
 			return {
@@ -1328,6 +1335,13 @@ export async function createConciergeLoomFileUpload({
 				sourceId: loomVideoId,
 			});
 			await tx.insert(loomMigrationImports).values({ videoId, requestId });
+			await tx
+				.update(loomMigrationRequests)
+				.set({
+					queuedVideoCount: sql`${loomMigrationRequests.queuedVideoCount} + 1`,
+					updatedAt: new Date(),
+				})
+				.where(eq(loomMigrationRequests.id, requestId));
 			if (space) {
 				await tx.insert(spaceVideos).values({
 					id: nanoId(),
@@ -1422,23 +1436,6 @@ export async function finishConciergeLoomFileUpload({
 			processingMessage: "Processing Loom video...",
 			startFailureMessage: "Loom file processing could not start.",
 		});
-		if (status === "started") {
-			await db()
-				.update(loomMigrationRequests)
-				.set({
-					queuedVideoCount: sql`${loomMigrationRequests.queuedVideoCount} + 1`,
-					lastOperatorUserId: operator.id,
-					lastOperatorAt: new Date(),
-					updatedAt: new Date(),
-				})
-				.where(
-					and(
-						eq(loomMigrationRequests.id, requestId),
-						eq(loomMigrationRequests.activeImportLeaseToken, leaseToken),
-						isNotNull(loomMigrationRequests.activeOrganizationId),
-					),
-				);
-		}
 		revalidatePath("/dashboard/migrations/loom");
 		revalidatePath("/dashboard/admin/loom-migrations");
 		return { status };

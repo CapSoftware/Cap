@@ -15,11 +15,13 @@ import {
 	asc,
 	desc,
 	eq,
+	gt,
 	isNotNull,
 	isNull,
 	lte,
 	ne,
 	or,
+	sql,
 } from "drizzle-orm";
 import { requireOrganizationSettingsManager } from "@/actions/organization/authorization";
 import { MESSENGER_ADMIN_EMAIL } from "@/lib/messenger/constants";
@@ -169,6 +171,28 @@ export async function releaseConciergeImport(requestId: string, token: string) {
 				eq(loomMigrationRequests.activeImportLeaseToken, token),
 			),
 		);
+}
+
+export async function renewConciergeImport(requestId: string, token: string) {
+	const now = new Date();
+	const deadline = new Date(now.getTime() + IMPORT_LEASE_MS);
+	const result = await db()
+		.update(loomMigrationRequests)
+		.set({
+			activeImportLeaseUntil: sql`DATE_ADD(GREATEST(${loomMigrationRequests.activeImportLeaseUntil}, ${deadline}), INTERVAL 1 SECOND)`,
+			updatedAt: now,
+		})
+		.where(
+			and(
+				eq(loomMigrationRequests.id, requestId),
+				eq(loomMigrationRequests.activeImportLeaseToken, token),
+				gt(loomMigrationRequests.activeImportLeaseUntil, now),
+				isNotNull(loomMigrationRequests.activeOrganizationId),
+			),
+		);
+	if (affectedRows(result) === 0) {
+		throw new Error("The concierge import expired. Refresh and retry.");
+	}
 }
 
 export async function getCustomerMigrationRequests(

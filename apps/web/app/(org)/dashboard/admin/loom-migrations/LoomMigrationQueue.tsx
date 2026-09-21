@@ -193,7 +193,7 @@ function QueueItem({ request }: { request: OperatorLoomMigrationView }) {
 					Loom invite:{" "}
 					{request.invitedAt ? "Marked as sent" : "Waiting for customer"}
 				</p>
-				<p>Jobs started: {request.queuedVideoCount}</p>
+				<p>Videos queued: {request.queuedVideoCount}</p>
 				<p>Verified videos: {request.importedVideoCount}</p>
 				<p>Imports starting: {request.activeImportCount}</p>
 			</div>
