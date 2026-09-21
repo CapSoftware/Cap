@@ -108,6 +108,7 @@ const MAX_LOOM_SPACE_NAME_LENGTH = 255;
 const LOOM_CSV_LIMIT_ERROR = `CSV imports are limited to ${MAX_LOOM_CSV_ROWS} rows at a time. Contact support to raise this limit.`;
 const LOOM_CSV_PERMISSION_ERROR =
 	"Only organization admins and owners can import Loom videos from a CSV.";
+const LOOM_VIDEO_ID_PATTERN = /^[A-Za-z0-9_-]{10,64}$/;
 
 function extractLoomVideoId(url: string): string | null {
 	try {
@@ -122,11 +123,11 @@ function extractLoomVideoId(url: string): string | null {
 		const pathParts = parsed.pathname.split("/").filter(Boolean);
 		const id = pathParts[pathParts.length - 1] ?? null;
 
-		if (!id || id.length < 10) {
+		if (!id || !LOOM_VIDEO_ID_PATTERN.test(id)) {
 			return null;
 		}
 
-		return id.split("?")[0] ?? null;
+		return id;
 	} catch {
 		return null;
 	}
@@ -134,7 +135,7 @@ function extractLoomVideoId(url: string): string | null {
 
 async function fetchLoomEndpoint(
 	videoId: string,
-	endpoint: string,
+	endpoint: "transcoded-url" | "raw-url",
 	includeBody = true,
 ): Promise<string | null> {
 	try {
@@ -153,7 +154,7 @@ async function fetchLoomEndpoint(
 		}
 
 		const response = await fetch(
-			`https://www.loom.com/api/campaigns/sessions/${videoId}/${endpoint}`,
+			`https://www.loom.com/api/campaigns/sessions/${encodeURIComponent(videoId)}/${endpoint}`,
 			options,
 		);
 
@@ -215,7 +216,10 @@ function isDirectMp4Url(url: string): boolean {
 }
 
 async function getLoomDownloadUrl(loomVideoId: string): Promise<string | null> {
-	const requestVariants: Array<{ endpoint: string; includeBody: boolean }> = [
+	const requestVariants: Array<{
+		endpoint: "transcoded-url" | "raw-url";
+		includeBody: boolean;
+	}> = [
 		{ endpoint: "transcoded-url", includeBody: true },
 		{ endpoint: "raw-url", includeBody: true },
 		{ endpoint: "transcoded-url", includeBody: false },
@@ -241,7 +245,7 @@ async function fetchLoomOEmbed(
 ): Promise<{ duration?: number; width?: number; height?: number } | null> {
 	try {
 		const response = await fetch(
-			`https://www.loom.com/v1/oembed?url=https://www.loom.com/share/${loomVideoId}`,
+			`https://www.loom.com/v1/oembed?url=${encodeURIComponent(`https://www.loom.com/share/${loomVideoId}`)}`,
 			{ headers: { Accept: "application/json" } },
 		);
 		if (!response.ok) return null;
