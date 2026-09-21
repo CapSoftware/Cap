@@ -123,6 +123,7 @@ async function replayPairedCapture(
 	const requests = [];
 	const parts = [];
 	const browserErrors = [];
+	const browserWarnings = [];
 	const cameraSubpath = `camera-upload.${engine.extension}`;
 	const screenSubpath = `raw-upload.${engine.extension}`;
 	const context = await browser.newContext();
@@ -146,6 +147,32 @@ async function replayPairedCapture(
 						return put.call(this, value, ...rest);
 					};
 				}
+				window.capRecorderMediaRecorders = [];
+				window.capRecorderCanvasSources = [];
+				window.capRecorderAudioContexts = [];
+				const recorderStart = MediaRecorder.prototype.start;
+				MediaRecorder.prototype.start = function (...args) {
+					const stats = {
+						dataEvents: 0,
+						bytes: 0,
+						startEvents: 0,
+						stopEvents: 0,
+						pauseEvents: 0,
+						resumeEvents: 0,
+						errorEvents: 0,
+					};
+					this.addEventListener("dataavailable", (event) => {
+						stats.dataEvents++;
+						stats.bytes += event.data.size;
+					});
+					for (const name of ["start", "stop", "pause", "resume", "error"]) {
+						this.addEventListener(name, () => {
+							stats[`${name}Events`]++;
+						});
+					}
+					window.capRecorderMediaRecorders.push({ recorder: this, stats });
+					return recorderStart.apply(this, args);
+				};
 				const createCanvasStream = (width, height, color) => {
 					const canvas = document.createElement("canvas");
 					canvas.width = width;
@@ -153,16 +180,26 @@ async function replayPairedCapture(
 					const canvasContext = canvas.getContext("2d");
 					if (!canvasContext) throw new Error("Canvas capture is unavailable");
 					let frame = 0;
+					let track;
 					const paint = () => {
 						canvasContext.fillStyle = color;
 						canvasContext.fillRect(0, 0, width, height);
 						canvasContext.fillStyle = "white";
 						canvasContext.font = "24px sans-serif";
 						canvasContext.fillText(String(frame++), 20, 40);
+						track?.requestFrame?.();
 					};
 					paint();
+					const stream = canvas.captureStream(30);
+					track = stream.getVideoTracks()[0];
+					window.capRecorderCanvasSources.push({
+						width,
+						height,
+						framesPainted: () => frame,
+					});
+					track?.requestFrame?.();
 					setInterval(paint, 33);
-					return canvas.captureStream(30);
+					return stream;
 				};
 				let display;
 				let camera;
@@ -175,6 +212,7 @@ async function replayPairedCapture(
 				const getUserMedia = async (constraints) => {
 					if (constraints?.audio) {
 						const context = new AudioContext();
+						window.capRecorderAudioContexts.push(context);
 						const oscillator = context.createOscillator();
 						const output = context.createMediaStreamDestination();
 						oscillator.connect(output);
@@ -226,6 +264,7 @@ async function replayPairedCapture(
 		const page = await context.newPage();
 		page.on("console", (message) => {
 			if (message.type() === "error") browserErrors.push(message.text());
+			if (message.type() === "warning") browserWarnings.push(message.text());
 		});
 		page.on("pageerror", (error) => browserErrors.push(error.message));
 		await page.route("https://capture.test/**", async (route) => {
@@ -438,6 +477,28 @@ async function replayPairedCapture(
 				videoId: window.capRecorderHarness?.videoId,
 				cameraDownload: Boolean(window.capRecorderHarness?.cameraErrorDownload),
 				displayDownload: Boolean(window.capRecorderHarness?.errorDownload),
+				recorders: window.capRecorderMediaRecorders?.map(
+					({ recorder, stats }) => ({
+						state: recorder.state,
+						mimeType: recorder.mimeType,
+						tracks: recorder.stream.getTracks().map((track) => ({
+							kind: track.kind,
+							readyState: track.readyState,
+							muted: track.muted,
+							settings: track.getSettings(),
+						})),
+						stats,
+					}),
+				),
+				canvasSources: window.capRecorderCanvasSources?.map((source) => ({
+					width: source.width,
+					height: source.height,
+					framesPainted: source.framesPainted(),
+				})),
+				audioContexts: window.capRecorderAudioContexts?.map((context) => ({
+					state: context.state,
+					currentTime: context.currentTime,
+				})),
 			}));
 			throw new Error(
 				"Paired capture did not reach its terminal phase: " +
@@ -446,6 +507,7 @@ async function replayPairedCapture(
 						pauseResume,
 						failCameraCompletion,
 						browserErrors,
+						browserWarnings,
 						state,
 						requests: requests.map((request) => request.path),
 						partBytes: parts.map((part) => part.bytes),
