@@ -93,6 +93,16 @@ describe("Loom workflow startup receipts", () => {
 		);
 	});
 
+	it("does not overwrite a newer import startup receipt", async () => {
+		mocks.where
+			.mockResolvedValueOnce([{ affectedRows: 1 }])
+			.mockResolvedValueOnce([{ affectedRows: 0 }]);
+		await expect(startLoomImportWorkflow(payload)).resolves.toBeUndefined();
+		const condition = mocks.where.mock.calls.at(-1)?.[0].conditions.at(-1);
+		expect(condition.values).toEqual(["metadata", "run-1"]);
+		expect(condition.strings.join("")).toContain("$.loomImportRun.runId");
+	});
+
 	it.each([
 		"BadRequestError",
 		"UnauthorizedError",

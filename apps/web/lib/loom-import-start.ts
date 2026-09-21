@@ -71,6 +71,9 @@ async function saveReceipt(payload: ImportPayload, receipt: LoomImportRun) {
 			and(
 				eq(videos.id, Video.VideoId.make(payload.videoId)),
 				eq(videos.ownerId, User.UserId.make(payload.userId)),
+				receipt.dispatch === "pending"
+					? undefined
+					: sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.loomImportRun.runId')) = ${receipt.runId}`,
 			),
 		);
 	const affectedRows = Array.isArray(result)
