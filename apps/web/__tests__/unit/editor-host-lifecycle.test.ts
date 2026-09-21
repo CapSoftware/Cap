@@ -1079,9 +1079,227 @@ test("canceling while export creation is pending still deletes the native job", 
 			error: "Export cancelled",
 		}),
 	);
-	expect(deleted).toHaveBeenCalledOnce();
+	await vi.waitFor(() => expect(deleted).toHaveBeenCalledOnce());
 	port.close();
 	bridge.dispose();
+});
+
+test("canceling a file export acknowledges the dialog and retries after native cleanup", async () => {
+	let resolveStart: (response: Response) => void = () => undefined;
+	const pendingStart = new Promise<Response>((resolve) => {
+		resolveStart = resolve;
+	});
+	let resolveDelete: (response: Response) => void = () => undefined;
+	const pendingDelete = new Promise<Response>((resolve) => {
+		resolveDelete = resolve;
+	});
+	const requests: Array<{ url: string; init?: RequestInit }> = [];
+	let starts = 0;
+	let linkClicked = false;
+	const anchor = {
+		href: "",
+		rel: "",
+		download: "",
+		click: vi.fn(() => {
+			linkClicked = true;
+		}),
+		remove: vi.fn(),
+	};
+	vi.stubGlobal("document", {
+		createElement: vi.fn(() => anchor),
+		body: { append: vi.fn() },
+	});
+	const { bridge, port } = await connectedExportHost(async (url, init) => {
+		requests.push({ url, init });
+		if (url.endsWith("/exports") && init?.method === "POST") {
+			starts++;
+			return starts === 1
+				? pendingStart
+				: Response.json({ id: "retry", status: "running" }, { status: 202 });
+		}
+		if (url.includes("/exports/job?videoId=") && init?.method === "DELETE")
+			return pendingDelete;
+		if (url.includes("/exports/retry?videoId="))
+			return Response.json({
+				...exportState("ready", linkClicked ? Date.now() : null),
+				id: "retry",
+			});
+		if (url.endsWith("/exports/retry/download-ticket"))
+			return Response.json({
+				url: `http://127.0.0.1:1234/editor/sessions/session/exports/retry/download?ticket=${ticket}`,
+			});
+		throw new Error(`Unexpected request ${url}`);
+	});
+	const messages: unknown[] = [];
+	port.onmessage = (event: MessageEvent<unknown>) => {
+		messages.push(event.data);
+	};
+	const fileArgs = [
+		"cap-web-editor://session/session",
+		"__CHANNEL__:42",
+		exportSettings,
+		"Paired test.mp4",
+		"mp4",
+	];
+	try {
+		port.postMessage({
+			kind: "invoke",
+			id: 7,
+			name: "exportVideoToFile",
+			args: fileArgs,
+		});
+		await vi.waitFor(() => expect(starts).toBe(1));
+		port.postMessage({
+			kind: "invoke",
+			id: 6,
+			name: "exportVideoToFile",
+			args: fileArgs,
+		});
+		await vi.waitFor(() =>
+			expect(messages).toContainEqual({
+				kind: "error",
+				id: 6,
+				error: "Finish or cancel the current editor export first",
+			}),
+		);
+		port.postMessage({
+			kind: "invoke",
+			id: 8,
+			name: "cancelCurrentWindowExports",
+			args: [],
+		});
+		await vi.waitFor(() => {
+			expect(messages).toContainEqual({
+				kind: "error",
+				id: 7,
+				error: "Export cancelled",
+			});
+			expect(messages).toContainEqual({ kind: "result", id: 8, value: null });
+		});
+		expect(
+			requests.find(
+				(request) =>
+					request.url.endsWith("/exports") && request.init?.method === "POST",
+			)?.init?.signal?.aborted,
+		).toBe(false);
+		port.postMessage({
+			kind: "invoke",
+			id: 9,
+			name: "exportVideoToFile",
+			args: fileArgs,
+		});
+		resolveStart(
+			Response.json({ id: "job", status: "running" }, { status: 202 }),
+		);
+		await vi.waitFor(() =>
+			expect(
+				requests.some(
+					(request) =>
+						request.url.includes("/exports/job?videoId=") &&
+						request.init?.method === "DELETE",
+				),
+			).toBe(true),
+		);
+		expect(starts).toBe(1);
+		expect(messages).not.toContainEqual({
+			kind: "error",
+			id: 9,
+			error: "Finish or cancel the current editor export first",
+		});
+		resolveDelete(Response.json({ canceled: true }));
+		await vi.waitFor(() =>
+			expect(messages).toContainEqual({
+				kind: "result",
+				id: 9,
+				value: "Paired test.mp4",
+			}),
+		);
+		expect(starts).toBe(2);
+		expect(anchor.click).toHaveBeenCalledOnce();
+		expect(
+			messages.filter(
+				(message) =>
+					typeof message === "object" &&
+					message !== null &&
+					"id" in message &&
+					message.id === 7,
+			),
+		).toHaveLength(1);
+	} finally {
+		port.close();
+		bridge.dispose();
+	}
+});
+
+test("canceling a prepared share waits for job deletion before starting another export", async () => {
+	let resolveDelete: (response: Response) => void = () => undefined;
+	const pendingDelete = new Promise<Response>((resolve) => {
+		resolveDelete = resolve;
+	});
+	let starts = 0;
+	const { bridge, port } = await connectedExportHost(async (url, init) => {
+		if (url.endsWith("/exports") && init?.method === "POST") {
+			starts++;
+			return Response.json(
+				{ id: starts === 1 ? "job" : "retry", status: "running" },
+				{ status: 202 },
+			);
+		}
+		if (url.includes("/exports/job?videoId=") && init?.method === "DELETE")
+			return pendingDelete;
+		if (url.includes("/exports/job?videoId="))
+			return Response.json(exportState("ready"));
+		if (url.includes("/exports/retry?videoId="))
+			return Response.json({ ...exportState("ready"), id: "retry" });
+		throw new Error(`Unexpected request ${url}`);
+	});
+	const messages: unknown[] = [];
+	port.onmessage = (event: MessageEvent<unknown>) => {
+		messages.push(event.data);
+	};
+	const args = [
+		"cap-web-editor://session/session",
+		"__CHANNEL__:42",
+		exportSettings,
+	];
+	try {
+		port.postMessage({ kind: "invoke", id: 7, name: "exportVideo", args });
+		await vi.waitFor(() =>
+			expect(messages).toContainEqual({
+				kind: "result",
+				id: 7,
+				value: "cap-web-editor://export/job",
+			}),
+		);
+		port.postMessage({
+			kind: "invoke",
+			id: 8,
+			name: "cancelCurrentWindowExports",
+			args: [],
+		});
+		await vi.waitFor(() =>
+			expect(messages).toContainEqual({ kind: "result", id: 8, value: null }),
+		);
+		port.postMessage({ kind: "invoke", id: 9, name: "exportVideo", args });
+		await vi.waitFor(() => expect(starts).toBe(1));
+		expect(messages).not.toContainEqual({
+			kind: "error",
+			id: 9,
+			error: "Finish or cancel the current editor export first",
+		});
+		resolveDelete(Response.json({ canceled: true }));
+		await vi.waitFor(() =>
+			expect(messages).toContainEqual({
+				kind: "result",
+				id: 9,
+				value: "cap-web-editor://export/retry",
+			}),
+		);
+		expect(starts).toBe(2);
+	} finally {
+		port.close();
+		bridge.dispose();
+	}
 });
 
 test.each(["put", "driveResumable"] as const)(

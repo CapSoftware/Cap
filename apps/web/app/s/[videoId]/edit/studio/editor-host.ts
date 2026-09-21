@@ -55,9 +55,13 @@ type ExportStatus = {
 	mediaMetadata: WebEditorExportMetadata | null;
 };
 type ActiveExport = {
+	requestId: number;
 	jobId: string | null;
 	canceled: boolean;
+	replied: boolean;
 	controller: AbortController;
+	finished: Promise<void>;
+	finish: () => void;
 };
 type PreparedExport = {
 	jobId: string;
@@ -66,6 +70,22 @@ type PreparedExport = {
 	size: number;
 	mediaMetadata: WebEditorExportMetadata | null;
 };
+
+function createActiveExport(requestId: number): ActiveExport {
+	let finish: () => void = () => undefined;
+	const finished = new Promise<void>((resolve) => {
+		finish = resolve;
+	});
+	return {
+		requestId,
+		jobId: null,
+		canceled: false,
+		replied: false,
+		controller: new AbortController(),
+		finished,
+		finish,
+	};
+}
 
 const TICKET_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const CHANNEL_PATTERN = /^__CHANNEL__:(\d+)$/;
@@ -353,6 +373,7 @@ export class EditorHostBridge {
 	private readonly pendingMetaRequests = new Set<number>();
 	private activeExport: ActiveExport | null = null;
 	private preparedExport: PreparedExport | null = null;
+	private canceledExportCleanup: Promise<void> | null = null;
 	private activeShare: AbortController | null = null;
 	private activeCaptions: {
 		language: AiGenerationLanguage;
@@ -469,7 +490,7 @@ export class EditorHostBridge {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({ videoId: this.videoId, settings }),
-			signal: active.controller.signal,
+			signal: this.controller.signal,
 		});
 		if (!started.ok) {
 			throw new Error(
@@ -525,11 +546,8 @@ export class EditorHostBridge {
 
 	private async handleExport(message: BridgeRequest) {
 		let reply: CommandReply;
-		const active: ActiveExport = {
-			jobId: null,
-			canceled: false,
-			controller: new AbortController(),
-		};
+		await this.canceledExportCleanup;
+		if (this.disposed || !this.port) return;
 		if (this.activeExport || this.preparedExport) {
 			this.port?.postMessage({
 				kind: "error",
@@ -538,6 +556,7 @@ export class EditorHostBridge {
 			});
 			return;
 		}
+		const active = createActiveExport(message.id);
 		this.activeExport = active;
 		let downloaded = false;
 		try {
@@ -654,8 +673,9 @@ export class EditorHostBridge {
 				await this.cancelExportJob(active.jobId);
 			}
 			if (this.activeExport === active) this.activeExport = null;
+			active.finish();
 		}
-		this.port?.postMessage(reply);
+		if (!active.replied) this.port?.postMessage(reply);
 	}
 
 	private async handleProjectBundleDownload(message: BridgeRequest) {
@@ -729,6 +749,8 @@ export class EditorHostBridge {
 	}
 
 	private async handleRenderExport(message: BridgeRequest) {
+		await this.canceledExportCleanup;
+		if (this.disposed || !this.port) return;
 		if (this.activeExport || this.preparedExport) {
 			this.port?.postMessage({
 				kind: "error",
@@ -737,11 +759,7 @@ export class EditorHostBridge {
 			});
 			return;
 		}
-		const active: ActiveExport = {
-			jobId: null,
-			canceled: false,
-			controller: new AbortController(),
-		};
+		const active = createActiveExport(message.id);
 		this.activeExport = active;
 		try {
 			const [projectPath, channel, settings] = message.args;
@@ -772,21 +790,24 @@ export class EditorHostBridge {
 				size: status.size,
 				mediaMetadata: status.mediaMetadata,
 			};
+			active.replied = true;
 			this.port?.postMessage({ kind: "result", id: message.id, value: token });
 		} catch (cause) {
 			if (active.jobId) await this.cancelExportJob(active.jobId);
-			this.port?.postMessage({
-				kind: "error",
-				id: message.id,
-				error:
-					active.canceled || this.disposed
-						? "Export cancelled"
-						: cause instanceof Error
-							? cause.message
-							: "Editor export failed",
-			});
+			if (!active.replied)
+				this.port?.postMessage({
+					kind: "error",
+					id: message.id,
+					error:
+						active.canceled || this.disposed
+							? "Export cancelled"
+							: cause instanceof Error
+								? cause.message
+								: "Editor export failed",
+				});
 		} finally {
 			if (this.activeExport === active) this.activeExport = null;
+			active.finish();
 		}
 	}
 
@@ -1673,14 +1694,34 @@ export class EditorHostBridge {
 			message.kind === "invoke" &&
 			message.name === "cancelCurrentWindowExports"
 		) {
+			const pending: Promise<void>[] = [];
+			if (this.canceledExportCleanup) pending.push(this.canceledExportCleanup);
 			if (this.activeExport) {
-				this.activeExport.canceled = true;
-				this.activeExport.controller.abort();
+				const active = this.activeExport;
+				active.canceled = true;
+				active.controller.abort();
+				if (!active.replied) {
+					active.replied = true;
+					this.port.postMessage({
+						kind: "error",
+						id: active.requestId,
+						error: "Export cancelled",
+					});
+				}
+				pending.push(active.finished);
 			}
 			this.activeShare?.abort();
 			if (this.preparedExport) {
-				void this.cancelExportJob(this.preparedExport.jobId);
+				pending.push(this.cancelExportJob(this.preparedExport.jobId));
 				this.preparedExport = null;
+			}
+			if (pending.length > 0) {
+				const cleanup = Promise.all(pending).then(() => undefined);
+				this.canceledExportCleanup = cleanup;
+				void cleanup.then(() => {
+					if (this.canceledExportCleanup === cleanup)
+						this.canceledExportCleanup = null;
+				});
 			}
 			this.port.postMessage({ kind: "result", id: message.id, value: null });
 			return;
