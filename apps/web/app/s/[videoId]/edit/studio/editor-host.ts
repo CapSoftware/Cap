@@ -377,6 +377,7 @@ export class EditorHostBridge {
 	private pendingWorkerRelease: Promise<void> | null = null;
 	private workerIdleTimer: number | null = null;
 	private workerBundleDownloadUntil = 0;
+	private activeProjectBundleDownloads = 0;
 	private activeRecordingClipImports = 0;
 	private port: MessagePort | null = null;
 	private commands: WebSocket | null = null;
@@ -524,6 +525,7 @@ export class EditorHostBridge {
 			this.workerIdleTimer = null;
 			if (
 				Date.now() < this.workerBundleDownloadUntil ||
+				this.activeProjectBundleDownloads > 0 ||
 				this.activeExport ||
 				this.preparedExport ||
 				this.activeShare ||
@@ -591,6 +593,7 @@ export class EditorHostBridge {
 						this.activeCapImport ||
 						this.activeAssetImports > 0 ||
 						Date.now() < this.workerBundleDownloadUntil ||
+						this.activeProjectBundleDownloads > 0 ||
 						this.activeRecordingClipImports > 0 ||
 						this.preparedExport ||
 						this.activeShare
@@ -915,6 +918,7 @@ export class EditorHostBridge {
 
 	private async handleProjectBundleDownload(message: BridgeRequest) {
 		let reply: CommandReply;
+		let bundleActive = false;
 		try {
 			const argument = message.args[0];
 			const projectPath = this.editorPath;
@@ -928,6 +932,9 @@ export class EditorHostBridge {
 			)
 				throw new Error("Editor bundle request was invalid");
 			await this.ensureWorkerSession();
+			this.activeProjectBundleDownloads++;
+			bundleActive = true;
+			this.cancelWorkerIdleRelease();
 			const response = await fetch(
 				`/api/editor/sessions/${encodeURIComponent(this.sessionId)}/project-bundle/download-ticket`,
 				{
@@ -971,7 +978,6 @@ export class EditorHostBridge {
 			link.click();
 			link.remove();
 			this.workerBundleDownloadUntil = Date.now() + 30_000;
-			this.scheduleWorkerIdleRelease();
 			reply = { kind: "result", id: message.id, value: null };
 		} catch (cause) {
 			reply = {
@@ -982,6 +988,11 @@ export class EditorHostBridge {
 						? cause.message
 						: "Recording bundle is unavailable",
 			};
+		} finally {
+			if (bundleActive) {
+				this.activeProjectBundleDownloads--;
+				this.scheduleWorkerIdleRelease();
+			}
 		}
 		this.port?.postMessage(reply);
 	}
