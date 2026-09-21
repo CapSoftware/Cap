@@ -132,6 +132,16 @@ export const applicationEmails: ApplicationEmail[] = [
 		sources: ["apps/web/lib/account-deletion-request.ts"],
 	},
 	{
+		id: "loom-migration",
+		name: "Concierge Loom migration",
+		trigger: "A Cap Pro organization requests migration or its status changes",
+		recipients:
+			"Cap support for new requests; the requester for status updates",
+		notes: "The request stays in the dashboard even if email delivery fails.",
+		template: "loom-migration",
+		sources: ["apps/web/actions/loom-concierge.tsx"],
+	},
+	{
 		id: "login-link",
 		name: "Legacy login link template",
 		trigger: "No current send call found in this checkout",
