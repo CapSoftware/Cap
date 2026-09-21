@@ -96,6 +96,9 @@ vi.mock("next/link", () => ({
 	}: React.PropsWithChildren<Record<string, unknown>>) =>
 		React.createElement("a", props, children),
 }));
+vi.mock("@cap/env", () => ({
+	buildEnv: { NEXT_PUBLIC_IS_CAP: "true" },
+}));
 vi.mock("@/actions/loom", () => ({
 	getLoomImportFolders: mocks.folders,
 	importFromLoom: mocks.import,
@@ -186,6 +189,10 @@ describe("Loom importer component", () => {
 	it("shows the inherited subfolder and submits it then returns there", async () => {
 		await render({ folderId: Folder.FolderId.make("child") });
 		await ready();
+		expect(
+			container.querySelector('a[href="/dashboard/migrations/loom"]')
+				?.textContent,
+		).toContain("Want Cap to move your whole Loom workspace for you?");
 		expect(
 			getByRole(container, "combobox", { name: "Import to" }).textContent,
 		).toContain("My Caps / Course / Live Calls - Two");
