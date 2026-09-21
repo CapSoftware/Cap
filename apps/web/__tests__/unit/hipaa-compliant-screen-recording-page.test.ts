@@ -59,6 +59,13 @@ describe("HipaaCompliantScreenRecordingPage component content", () => {
 		expect(componentSource).toContain("comparisonTable");
 	});
 
+	it("describes the license split in the comparison table", () => {
+		expect(componentSource).toContain(
+			'{ text: "Yes — AGPLv3 and MIT crates", status: "positive" }',
+		);
+		expect(componentSource).not.toContain('{ text: "Yes — MIT"');
+	});
+
 	it("includes recording modes section", () => {
 		expect(componentSource).toContain("recordingModes");
 	});

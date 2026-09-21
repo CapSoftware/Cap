@@ -136,7 +136,7 @@ export const asyncVideoCodeReviewsContent: SeoPageContent = {
 			],
 			[
 				"Open source",
-				{ text: "Yes — MIT", status: "positive" },
+				{ text: "Yes — AGPLv3 and MIT crates", status: "positive" },
 				{ text: "No", status: "negative" },
 				{ text: "Open source (GitHub)", status: "positive" },
 				{ text: "No", status: "negative" },

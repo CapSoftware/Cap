@@ -107,7 +107,7 @@ export const hipaaCompliantScreenRecordingContent: SeoPageContent = {
 			],
 			[
 				"Open-source code",
-				{ text: "Yes — MIT", status: "positive" },
+				{ text: "Yes — AGPLv3 and MIT crates", status: "positive" },
 				{ text: "No", status: "negative" },
 				{ text: "No", status: "negative" },
 				{ text: "No", status: "negative" },
