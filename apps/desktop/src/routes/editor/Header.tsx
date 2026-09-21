@@ -140,7 +140,7 @@ export function Header(props: {
 				</div>
 
 				<div
-					inert={props.disabled}
+					inert={props.disabled && !isWebEditor}
 					class="flex gap-0.5 items-center ml-1.5 shrink-0"
 				>
 					<EditorButton
@@ -165,6 +165,7 @@ export function Header(props: {
 						leftIcon={<IconLucideFolder />}
 					/>
 					<EditorButton
+						inert={isWebEditor && props.disabled}
 						onClick={async () => {
 							clearTimelineSelection();
 

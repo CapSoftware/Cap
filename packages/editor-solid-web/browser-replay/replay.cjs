@@ -74,9 +74,14 @@ async function replay(forceWebGl, forceWebGpu = false) {
 		const pageErrors = [];
 		const consoleErrors = [];
 		const workerRequests = [];
+		let replayStage = "browser page loading";
 		page.on("pageerror", (error) => pageErrors.push(error.message));
 		page.on("console", (message) => {
 			if (message.type() === "error") consoleErrors.push(message.text());
+			if (message.text().startsWith("Cap replay stage:")) {
+				replayStage = message.text();
+				console.log(replayStage);
+			}
 		});
 		await page.addInitScript(() => {
 			window.CapBrowserGpuErrors = [];
@@ -172,6 +177,7 @@ async function replay(forceWebGl, forceWebGpu = false) {
 			});
 		});
 		await page.goto(`${origin}/browser-replay/`);
+		replayStage = "browser page loaded";
 		await page.waitForFunction(
 			() => Boolean(window.CapBrowserLocalPlayback),
 			null,
@@ -179,153 +185,172 @@ async function replay(forceWebGl, forceWebGpu = false) {
 				timeout: 30_000,
 			},
 		);
-		const result = await page.evaluate(async () => {
-			const started = performance.now();
-			const canvas = document.createElement("canvas");
-			canvas.style.cssText = "width:640px;height:360px";
-			document.body.append(canvas);
-			const frames = [];
-			const errors = [];
-			let playback;
-			try {
-				playback = await window.CapBrowserLocalPlayback.create(
-					"fixture",
-					canvas,
-					0,
-					0,
-					(frame) => frames.push(frame),
-					(error) => errors.push(error.message),
-				);
-			} catch (error) {
-				const probe = document.createElement("canvas");
-				const mediaProbe = await new Promise((resolve) => {
-					const video = document.createElement("video");
-					const events = [];
-					video.muted = true;
-					video.playsInline = true;
-					video.crossOrigin = "anonymous";
-					video.src = "/screen.webm";
-					document.body.append(video);
-					const finish = () => {
-						window.clearTimeout(timer);
-						const state = {
-							events,
-							readyState: video.readyState,
-							networkState: video.networkState,
-							width: video.videoWidth,
-							height: video.videoHeight,
-							duration: video.duration,
-							error: video.error?.code ?? null,
+		let replayTimer;
+		const result = await Promise.race([
+			page.evaluate(async () => {
+				console.info("Cap replay stage: creating local renderer");
+				const started = performance.now();
+				const canvas = document.createElement("canvas");
+				canvas.style.cssText = "width:640px;height:360px";
+				document.body.append(canvas);
+				const frames = [];
+				const errors = [];
+				let playback;
+				try {
+					playback = await window.CapBrowserLocalPlayback.create(
+						"fixture",
+						canvas,
+						0,
+						0,
+						(frame) => frames.push(frame),
+						(error) => errors.push(error.message),
+					);
+					console.info("Cap replay stage: local renderer created");
+				} catch (error) {
+					const probe = document.createElement("canvas");
+					const mediaProbe = await new Promise((resolve) => {
+						const video = document.createElement("video");
+						const events = [];
+						video.muted = true;
+						video.playsInline = true;
+						video.crossOrigin = "anonymous";
+						video.src = "/screen.webm";
+						document.body.append(video);
+						const finish = () => {
+							window.clearTimeout(timer);
+							const state = {
+								events,
+								readyState: video.readyState,
+								networkState: video.networkState,
+								width: video.videoWidth,
+								height: video.videoHeight,
+								duration: video.duration,
+								error: video.error?.code ?? null,
+							};
+							video.remove();
+							resolve(state);
 						};
-						video.remove();
-						resolve(state);
+						video.addEventListener("loadedmetadata", () =>
+							events.push("loadedmetadata"),
+						);
+						video.addEventListener(
+							"loadeddata",
+							() => {
+								events.push("loadeddata");
+								finish();
+							},
+							{ once: true },
+						);
+						video.addEventListener(
+							"error",
+							() => {
+								events.push("error");
+								finish();
+							},
+							{ once: true },
+						);
+						const timer = window.setTimeout(() => {
+							events.push("timeout");
+							finish();
+						}, 3_000);
+						video.load();
+					});
+					return {
+						fatal: {
+							error: String(error),
+							type: typeof error,
+							message: error?.message ?? null,
+							stack: error?.stack ?? null,
+							mediaProbe,
+							capabilities: {
+								webgpu: Boolean(navigator.gpu),
+								webgl2: Boolean(probe.getContext("webgl2")),
+								webm: document
+									.createElement("video")
+									.canPlayType('video/webm; codecs="vp8"'),
+							},
+						},
 					};
-					video.addEventListener("loadedmetadata", () =>
-						events.push("loadedmetadata"),
-					);
-					video.addEventListener(
-						"loadeddata",
-						() => {
-							events.push("loadeddata");
-							finish();
-						},
-						{ once: true },
-					);
-					video.addEventListener(
-						"error",
-						() => {
-							events.push("error");
-							finish();
-						},
-						{ once: true },
-					);
-					const timer = window.setTimeout(() => {
-						events.push("timeout");
-						finish();
-					}, 3_000);
-					video.load();
-				});
-				return {
-					fatal: {
-						error: String(error),
-						type: typeof error,
-						message: error?.message ?? null,
-						stack: error?.stack ?? null,
-						mediaProbe,
-						capabilities: {
-							webgpu: Boolean(navigator.gpu),
-							webgl2: Boolean(probe.getContext("webgl2")),
-							webm: document
-								.createElement("video")
-								.canPlayType('video/webm; codecs="vp8"'),
-						},
-					},
-				};
-			}
-			try {
-				const firstFrameMs = performance.now() - started;
-				const backend = playback.canvas.renderer.backend;
-				const snapshot = async () => {
-					if (/webgpu/i.test(backend)) {
-						return await playback.canvas.renderer.snapshot_rgba();
-					}
-					const target = document.createElement("canvas");
-					if (!playback.drawLatestFrameToCanvas(target)) {
-						throw new Error("GPU frame could not be inspected");
-					}
-					const context = target.getContext("2d", { willReadFrequently: true });
-					if (!context) throw new Error("GPU frame inspection is unavailable");
-					return context.getImageData(0, 0, target.width, target.height).data;
-				};
-				const withCamera = await snapshot();
-				const config = JSON.parse(
-					playback.module.default_project_config_json(),
-				);
-				config.camera.hide = true;
-				await playback.setConfig(config);
-				const withoutCamera = await snapshot();
-				let changedPixels = 0;
-				for (let index = 0; index < withCamera.length; index += 4) {
-					if (
-						Math.abs(withCamera[index] - withoutCamera[index]) > 8 ||
-						Math.abs(withCamera[index + 1] - withoutCamera[index + 1]) > 8 ||
-						Math.abs(withCamera[index + 2] - withoutCamera[index + 2]) > 8
-					) {
-						changedPixels++;
-					}
 				}
-				config.camera.hide = false;
-				await playback.setConfig(config);
-				const seekStarted = performance.now();
-				await playback.seek(0.75);
-				const seekMs = performance.now() - seekStarted;
-				const returnStarted = performance.now();
-				await playback.seek(0);
-				const returnToStartMs = performance.now() - returnStarted;
-				await playback.seek(0.75);
-				const beforePlay = frames.length;
-				playback.play();
-				await new Promise((resolve) => setTimeout(resolve, 850));
-				playback.pause();
-				const videos = Array.from(document.querySelectorAll("video")).map(
-					(video) => [video.videoWidth, video.videoHeight],
+				try {
+					const firstFrameMs = performance.now() - started;
+					const backend = playback.canvas.renderer.backend;
+					const snapshot = async () => {
+						if (/webgpu/i.test(backend)) {
+							return await playback.canvas.renderer.snapshot_rgba();
+						}
+						const target = document.createElement("canvas");
+						if (!playback.drawLatestFrameToCanvas(target)) {
+							throw new Error("GPU frame could not be inspected");
+						}
+						const context = target.getContext("2d", {
+							willReadFrequently: true,
+						});
+						if (!context)
+							throw new Error("GPU frame inspection is unavailable");
+						return context.getImageData(0, 0, target.width, target.height).data;
+					};
+					const withCamera = await snapshot();
+					console.info("Cap replay stage: first GPU frame inspected");
+					const config = JSON.parse(
+						playback.module.default_project_config_json(),
+					);
+					config.camera.hide = true;
+					await playback.setConfig(config);
+					console.info("Cap replay stage: camera visibility updated");
+					const withoutCamera = await snapshot();
+					let changedPixels = 0;
+					for (let index = 0; index < withCamera.length; index += 4) {
+						if (
+							Math.abs(withCamera[index] - withoutCamera[index]) > 8 ||
+							Math.abs(withCamera[index + 1] - withoutCamera[index + 1]) > 8 ||
+							Math.abs(withCamera[index + 2] - withoutCamera[index + 2]) > 8
+						) {
+							changedPixels++;
+						}
+					}
+					config.camera.hide = false;
+					await playback.setConfig(config);
+					const seekStarted = performance.now();
+					await playback.seek(0.75);
+					console.info("Cap replay stage: first seek completed");
+					const seekMs = performance.now() - seekStarted;
+					const returnStarted = performance.now();
+					await playback.seek(0);
+					console.info("Cap replay stage: return seek completed");
+					const returnToStartMs = performance.now() - returnStarted;
+					await playback.seek(0.75);
+					const beforePlay = frames.length;
+					playback.play();
+					await new Promise((resolve) => setTimeout(resolve, 850));
+					console.info("Cap replay stage: playback interval completed");
+					playback.pause();
+					const videos = Array.from(document.querySelectorAll("video")).map(
+						(video) => [video.videoWidth, video.videoHeight],
+					);
+					return {
+						backend,
+						firstFrameMs,
+						seekMs,
+						returnToStartMs,
+						changedPixels,
+						playedFrames: frames.length - beforePlay,
+						videos,
+						width: canvas.width,
+						height: canvas.height,
+						errors,
+					};
+				} finally {
+					playback.dispose();
+				}
+			}),
+			new Promise((_, reject) => {
+				replayTimer = setTimeout(
+					() => reject(new Error(`Browser replay stalled at ${replayStage}`)),
+					45_000,
 				);
-				return {
-					backend,
-					firstFrameMs,
-					seekMs,
-					returnToStartMs,
-					changedPixels,
-					playedFrames: frames.length - beforePlay,
-					videos,
-					width: canvas.width,
-					height: canvas.height,
-					errors,
-				};
-			} finally {
-				playback.dispose();
-			}
-		});
+			}),
+		]).finally(() => clearTimeout(replayTimer));
 		if (result.fatal) {
 			throw new Error(
 				JSON.stringify({

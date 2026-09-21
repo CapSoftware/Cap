@@ -68,7 +68,7 @@ function waitForVideo(
 	});
 }
 
-function waitForVideoDimensions(
+function waitForDecodedVideoFrame(
 	video: HTMLVideoElement,
 	signal: AbortSignal,
 	timeoutMs: number,
@@ -108,7 +108,7 @@ function waitForVideoDimensions(
 					: new DOMException("Canceled", "AbortError"),
 			);
 		const timer = window.setTimeout(
-			() => done(new Error("Editor video dimensions timed out")),
+			() => done(new Error("Editor video frame timed out")),
 			timeoutMs,
 		);
 		const interval = window.setInterval(check, 25);
@@ -310,11 +310,12 @@ export class BrowserVideoPool {
 			} else if (!video.paused) {
 				video.pause();
 			}
-			if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
-				throw mediaError(video);
-			}
-			if (video.videoWidth === 0 || video.videoHeight === 0) {
-				await waitForVideoDimensions(video, signal, 5_000);
+			if (
+				video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA ||
+				video.videoWidth === 0 ||
+				video.videoHeight === 0
+			) {
+				await waitForDecodedVideoFrame(video, signal, 5_000);
 			}
 			return video;
 		} finally {
