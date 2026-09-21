@@ -125,7 +125,18 @@ async function replay(forceWebGl, forceWebGpu = false) {
 				WebGL2RenderingContext.prototype[name] = function (...args) {
 					console.info(`Cap WebGL query: ${name} ${args.join(",")}`);
 					const value = method.apply(this, args);
-					console.info(`Cap WebGL query: ${name} returned`);
+					if (name === "getSupportedExtensions") {
+						const invalid = Array.isArray(value)
+							? value.flatMap((extension, index) =>
+									typeof extension === "string" ? [] : [index],
+								)
+							: [];
+						console.info(
+							`Cap WebGL query: ${name} returned length=${value?.length ?? "null"} lost=${this.isContextLost()} invalid=${invalid.join(",")}`,
+						);
+					} else {
+						console.info(`Cap WebGL query: ${name} returned`);
+					}
 					return value;
 				};
 			}
