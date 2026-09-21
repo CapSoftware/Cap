@@ -36,7 +36,7 @@ describe("getLoomDownloadUrl", () => {
 		});
 	});
 
-	it("does not classify an unavailable source as a temporary failure", async () => {
+	it("does not retry a missing or inaccessible video", async () => {
 		const fetch = vi
 			.fn()
 			.mockResolvedValue(new Response(null, { status: 204 }));
@@ -138,6 +138,32 @@ describe("getLoomDownloadUrl", () => {
 			"https://cdn.loom.com/video-trim.mp4",
 		);
 	});
+
+	it.each([null, {}])(
+		"retries a public downloadable video while its source is unavailable: %j",
+		async (source) => {
+			vi.stubGlobal(
+				"fetch",
+				vi.fn(async (input) =>
+					String(input) === "https://www.loom.com/graphql"
+						? Response.json({
+								data: {
+									getVideo: {
+										id: "video",
+										downloadable: true,
+										download_enabled: true,
+										nullableRawCdnUrl: source,
+									},
+								},
+							})
+						: new Response(null, { status: 204 }),
+				),
+			);
+			await expect(getLoomDownloadUrl("video")).rejects.toBeInstanceOf(
+				LoomDownloadTemporaryError,
+			);
+		},
+	);
 
 	it.each([
 		{ id: "video", downloadable: false, download_enabled: false },

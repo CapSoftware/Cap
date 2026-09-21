@@ -225,7 +225,8 @@ async function fetchPublicLoomPlaybackUrl(
 		)
 			return null;
 		const source = video.nullableRawCdnUrl;
-		if (typeof source !== "object" || source === null) return null;
+		if (typeof source !== "object" || source === null)
+			throw new LoomDownloadTemporaryError(60_000);
 		const credentials = "credentials" in source ? source.credentials : null;
 		const partCredentials =
 			typeof credentials === "object" &&
@@ -239,10 +240,12 @@ async function fetchPublicLoomPlaybackUrl(
 						"Key-Pair-Id": credentials.KeyPairId,
 					}
 				: null;
-		return parseLoomDownloadResponse({
+		const url = parseLoomDownloadResponse({
 			...source,
 			part_credentials: partCredentials,
 		});
+		if (!url) throw new LoomDownloadTemporaryError(60_000);
+		return url;
 	} catch {
 		throw new LoomDownloadTemporaryError(60_000);
 	}
