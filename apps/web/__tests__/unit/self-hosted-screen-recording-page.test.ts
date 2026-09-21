@@ -73,9 +73,10 @@ describe("SelfHostedScreenRecordingPage component content", () => {
 		expect(componentSource).toContain("migrationGuide");
 	});
 
-	it("mentions open source and MIT license", () => {
+	it("mentions AGPLv3 and specified MIT crates", () => {
 		expect(componentSource.toLowerCase()).toContain("open source");
-		expect(componentSource.toLowerCase()).toContain("mit");
+		expect(componentSource).toContain("AGPLv3");
+		expect(componentSource).toContain("MIT");
 	});
 
 	it("has badge set", () => {
@@ -117,7 +118,7 @@ describe("SelfHostedScreenRecordingPage FAQ schema", () => {
 		{
 			question: "Can I self-host the entire Cap platform, not just storage?",
 			answer:
-				"Yes. Cap is fully open source under the MIT license. You can deploy the complete Cap platform on your own infrastructure.",
+				"Yes. Most Cap code is under AGPLv3, with specified Rust crates under MIT. You can deploy the platform on your own infrastructure.",
 		},
 		{
 			question: "Is self-hosted Cap suitable for HIPAA compliance?",

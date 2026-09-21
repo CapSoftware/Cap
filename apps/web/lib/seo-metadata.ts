@@ -229,7 +229,7 @@ export const seoMetadata = {
 	"open-source-screen-recorder": {
 		title: "Open Source Screen Recorder — Free, Private, Self-Hostable | Cap",
 		description:
-			"Cap is the leading open-source screen recorder for Mac and Windows. Audit the code, self-host your recordings, and own your data. MIT-licensed, 4K quality, no watermarks.",
+			"Cap is the leading open-source screen recorder for Mac and Windows. Audit the code, self-host your recordings, and own your data. AGPLv3 and MIT crates, 4K quality, no watermarks.",
 		keywords: [
 			"open source screen recorder",
 			"open source screen recording",
@@ -317,7 +317,7 @@ export const seoMetadata = {
 		title:
 			"Self-Hosted Screen Recording — Own Your Data, No Vendor Lock-In | Cap",
 		description:
-			"Cap lets you self-host screen recordings on your own S3-compatible storage. Connect AWS S3, Cloudflare R2, or MinIO — recordings go directly to your infrastructure. Open source, MIT-licensed, free to use.",
+			"Cap lets you self-host screen recordings on your own S3-compatible storage. Connect AWS S3, Cloudflare R2, or MinIO — recordings go directly to your infrastructure. Open source with most code under AGPLv3, free to use.",
 		keywords: [
 			"self hosted screen recording",
 			"self hosted screen recorder",

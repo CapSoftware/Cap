@@ -107,7 +107,8 @@ describe("HipaaCompliantScreenRecordingPage FAQ schema", () => {
 		{
 			question:
 				"Is Cap open source and auditable for HIPAA vendor assessments?",
-			answer: "Yes. Cap is MIT-licensed and fully open source on GitHub.",
+			answer:
+				"Yes. Most Cap code is under AGPLv3, with specified Rust crates under MIT. The source is available on GitHub.",
 		},
 		{
 			question: "Can I disable AI transcription in Cap for HIPAA compliance?",
