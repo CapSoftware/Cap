@@ -42,7 +42,7 @@ describe("getLoomDownloadUrl", () => {
 			.mockResolvedValue(new Response(null, { status: 204 }));
 		vi.stubGlobal("fetch", fetch);
 		await expect(getLoomDownloadUrl("video")).resolves.toBeNull();
-		expect(fetch).toHaveBeenCalledTimes(4);
+		expect(fetch).toHaveBeenCalledTimes(5);
 	});
 
 	it("uses an available stream when a later endpoint is rate limited", async () => {
@@ -75,6 +75,94 @@ describe("getLoomDownloadUrl", () => {
 			"https://cdn.loom.com/original.mp4",
 		);
 	});
+
+	it.each(["m3u8", "mpd"])(
+		"uses segment credentials for a legacy %s stream",
+		async (extension) => {
+			vi.stubGlobal(
+				"fetch",
+				vi.fn().mockResolvedValue(
+					Response.json({
+						url: `https://cdn.loom.com/video.${extension}?Policy=manifest-policy&Signature=manifest-signature&Key-Pair-Id=manifest-key`,
+						part_credentials: {
+							Policy: "segment-policy",
+							Signature: "segment-signature",
+							"Key-Pair-Id": "segment-key",
+						},
+					}),
+				),
+			);
+			const url = new URL((await getLoomDownloadUrl("video")) ?? "");
+			expect(url.searchParams.get("Policy")).toBe("segment-policy");
+			expect(url.searchParams.get("Signature")).toBe("segment-signature");
+			expect(url.searchParams.get("Key-Pair-Id")).toBe("segment-key");
+		},
+	);
+
+	it("treats incomplete segment credentials as a temporary source failure", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn().mockResolvedValue(
+				Response.json({
+					url: "https://cdn.loom.com/video.m3u8?Policy=manifest-policy",
+					part_credentials: { Policy: "segment-policy" },
+				}),
+			),
+		);
+		await expect(getLoomDownloadUrl("video")).rejects.toBeInstanceOf(
+			LoomDownloadTemporaryError,
+		);
+	});
+
+	it("uses the public player source for older trimmed videos", async () => {
+		const fetch = vi
+			.fn()
+			.mockResolvedValueOnce(new Response(null, { status: 204 }))
+			.mockResolvedValueOnce(new Response(null, { status: 204 }))
+			.mockResolvedValueOnce(new Response(null, { status: 204 }))
+			.mockResolvedValueOnce(new Response(null, { status: 204 }))
+			.mockResolvedValueOnce(
+				Response.json({
+					data: {
+						getVideo: {
+							id: "video",
+							downloadable: true,
+							download_enabled: true,
+							nullableRawCdnUrl: { url: "https://cdn.loom.com/video-trim.mp4" },
+						},
+					},
+				}),
+			);
+		vi.stubGlobal("fetch", fetch);
+		await expect(getLoomDownloadUrl("video")).resolves.toBe(
+			"https://cdn.loom.com/video-trim.mp4",
+		);
+	});
+
+	it.each([
+		{ id: "video", downloadable: false, download_enabled: false },
+		{ id: "different-video", downloadable: true, download_enabled: true },
+	])(
+		"rejects a disabled or mismatched public player source: %j",
+		async (video) => {
+			const fetch = vi.fn().mockImplementation(async (url: string) =>
+				url.endsWith("/graphql")
+					? Response.json({
+							data: {
+								getVideo: {
+									...video,
+									nullableRawCdnUrl: {
+										url: "https://cdn.loom.com/video.mp4",
+									},
+								},
+							},
+						})
+					: new Response(null, { status: 204 }),
+			);
+			vi.stubGlobal("fetch", fetch);
+			await expect(getLoomDownloadUrl("video")).resolves.toBeNull();
+		},
+	);
 });
 
 describe("getReusableLoomDownloadUrl", () => {

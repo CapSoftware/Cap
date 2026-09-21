@@ -104,18 +104,145 @@ async function fetchEndpoint(
 		const text = await response.text();
 		if (!text.trim()) return null;
 		const data: unknown = JSON.parse(text);
+		return parseLoomDownloadResponse(data);
+	} catch {
+		throw new LoomDownloadTemporaryError(60_000);
+	}
+}
+
+function parseLoomDownloadResponse(data: unknown): string | null {
+	if (
+		typeof data !== "object" ||
+		data === null ||
+		!("url" in data) ||
+		typeof data.url !== "string"
+	) {
+		return null;
+	}
+	const url = new URL(data.url);
+	if (url.protocol !== "https:" || url.username || url.password) return null;
+	const pathname = url.pathname.toLowerCase();
+	if (
+		(pathname.endsWith(".m3u8") || pathname.endsWith(".mpd")) &&
+		"part_credentials" in data &&
+		data.part_credentials !== null
+	) {
+		const credentials = data.part_credentials;
 		if (
-			typeof data !== "object" ||
-			data === null ||
-			!("url" in data) ||
-			typeof data.url !== "string"
+			typeof credentials !== "object" ||
+			!("Signature" in credentials) ||
+			typeof credentials.Signature !== "string" ||
+			!credentials.Signature ||
+			!("Key-Pair-Id" in credentials) ||
+			typeof credentials["Key-Pair-Id"] !== "string" ||
+			!credentials["Key-Pair-Id"]
 		) {
-			return null;
+			throw new LoomDownloadTemporaryError(60_000);
 		}
-		const url = new URL(data.url);
-		return url.protocol === "https:" && !url.username && !url.password
-			? url.href
-			: null;
+		if (
+			"Policy" in credentials &&
+			typeof credentials.Policy === "string" &&
+			credentials.Policy
+		) {
+			url.searchParams.set("Policy", credentials.Policy);
+			url.searchParams.delete("Expires");
+		} else if (
+			"Expires" in credentials &&
+			Number.isFinite(Number(credentials.Expires)) &&
+			Number(credentials.Expires) > 0
+		) {
+			url.searchParams.set("Expires", String(credentials.Expires));
+			url.searchParams.delete("Policy");
+		} else {
+			throw new LoomDownloadTemporaryError(60_000);
+		}
+		url.searchParams.set("Signature", credentials.Signature);
+		url.searchParams.set("Key-Pair-Id", credentials["Key-Pair-Id"]);
+	}
+	return url.href;
+}
+
+async function fetchPublicLoomPlaybackUrl(
+	videoId: string,
+): Promise<string | null> {
+	let response: Response;
+	try {
+		response = await fetch("https://www.loom.com/graphql", {
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json",
+				Accept: "application/json",
+			},
+			body: JSON.stringify({
+				operationName: "GetVideoSource",
+				variables: {
+					videoId,
+					password: null,
+					acceptableMimes: ["DASH", "M3U8", "MP4", "WEBM"],
+				},
+				query:
+					"query GetVideoSource($videoId: ID!, $password: String, $acceptableMimes: [CloudfrontVideoAcceptableMime]) { getVideo(id: $videoId, password: $password) { ... on RegularUserVideo { id downloadable download_enabled nullableRawCdnUrl(acceptableMimes: $acceptableMimes, password: $password) { url credentials { Policy Signature KeyPairId } } } __typename } }",
+			}),
+			signal: AbortSignal.timeout(15_000),
+		});
+	} catch {
+		throw new LoomDownloadTemporaryError(60_000);
+	}
+	if (response.status === 429 || response.status >= 500) {
+		await response.body?.cancel();
+		throw new LoomDownloadTemporaryError(
+			getRetryAfterMs(response.headers.get("retry-after")),
+		);
+	}
+	if (!response.ok || response.status === 204) return null;
+	try {
+		const body: unknown = await response.json();
+		if (typeof body !== "object" || body === null) return null;
+		if (
+			"errors" in body &&
+			Array.isArray(body.errors) &&
+			body.errors.length > 0
+		)
+			throw new LoomDownloadTemporaryError(60_000);
+		if (
+			!("data" in body) ||
+			typeof body.data !== "object" ||
+			body.data === null ||
+			!("getVideo" in body.data)
+		)
+			return null;
+		const video = body.data.getVideo;
+		if (
+			typeof video !== "object" ||
+			video === null ||
+			!("id" in video) ||
+			video.id !== videoId ||
+			!("downloadable" in video) ||
+			video.downloadable !== true ||
+			!("download_enabled" in video) ||
+			video.download_enabled !== true ||
+			!("nullableRawCdnUrl" in video)
+		)
+			return null;
+		const source = video.nullableRawCdnUrl;
+		if (typeof source !== "object" || source === null) return null;
+		const credentials = "credentials" in source ? source.credentials : null;
+		const partCredentials =
+			typeof credentials === "object" &&
+			credentials !== null &&
+			"Policy" in credentials &&
+			"Signature" in credentials &&
+			"KeyPairId" in credentials
+				? {
+						Policy: credentials.Policy,
+						Signature: credentials.Signature,
+						"Key-Pair-Id": credentials.KeyPairId,
+					}
+				: null;
+		return parseLoomDownloadResponse({
+			...source,
+			part_credentials: partCredentials,
+		});
 	} catch {
 		throw new LoomDownloadTemporaryError(60_000);
 	}
@@ -147,5 +274,5 @@ export async function getLoomDownloadUrl(
 		}
 		streamingUrl ??= url;
 	}
-	return streamingUrl;
+	return streamingUrl ?? fetchPublicLoomPlaybackUrl(videoId);
 }
