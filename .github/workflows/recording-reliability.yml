@@ -62,10 +62,13 @@ jobs:
         include:
           - browser: chromium
             runner: ubuntu-24.04
+            headed: "0"
           - browser: firefox
             runner: ubuntu-24.04
+            headed: "1"
           - browser: webkit
             runner: macos-15-intel
+            headed: "1"
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
     steps:
@@ -82,11 +85,13 @@ jobs:
       - name: Replay separate screen and camera clips on the local GPU
         if: matrix.browser != 'firefox'
         run: bun packages/editor-solid-web/browser-replay/replay.cjs ${{ matrix.browser }}
+        env:
+          CAP_REPLAY_HEADED: ${{ matrix.headed }}
       - name: Replay Firefox clips through software WebGL under Xvfb
         if: matrix.browser == 'firefox'
         run: xvfb-run -a bun packages/editor-solid-web/browser-replay/replay.cjs firefox
         env:
-          CAP_REPLAY_HEADED: "1"
+          CAP_REPLAY_HEADED: ${{ matrix.headed }}
 
   browser-studio-webgpu:
     name: Web Studio WebGPU compositor (Chromium macOS)

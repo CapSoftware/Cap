@@ -278,24 +278,21 @@ export class BrowserVideoPool {
 			const target = Number.isFinite(video.duration)
 				? Math.min(sourceTime, Math.max(video.duration - 0.001, 0))
 				: sourceTime;
+			// Firefox can clear WebM frame dimensions after a seek to exactly zero;
+			// this sample is still inside the first encoded frame.
+			const decodeTarget =
+				target === 0 && Number.isFinite(video.duration) && video.duration > 0
+					? Math.min(video.duration / 2, 0.0001)
+					: target;
 			const tolerance = playing ? 0.05 : 1 / 120;
 			if (
-				!slot.primed &&
-				target === 0 &&
-				Number.isFinite(video.duration) &&
-				video.duration > 0
+				!slot.primed ||
+				Math.abs(video.currentTime - decodeTarget) > tolerance
 			) {
 				video.pause();
-				const primeTime = Math.min(video.duration / 2, 0.0001);
-				const primed = waitForVideo(video, "seeked", signal, 10_000);
-				video.currentTime = primeTime;
-				await primed;
-			}
-			if (!slot.primed || Math.abs(video.currentTime - target) > tolerance) {
-				video.pause();
-				if (Math.abs(video.currentTime - target) > 0) {
+				if (Math.abs(video.currentTime - decodeTarget) > 0) {
 					const seeked = waitForVideo(video, "seeked", signal, 10_000);
-					video.currentTime = target;
+					video.currentTime = decodeTarget;
 					await seeked;
 				}
 				slot.primed = true;
