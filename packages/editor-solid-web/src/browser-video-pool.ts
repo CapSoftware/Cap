@@ -21,6 +21,8 @@ type VideoSlot = {
 	playPending: boolean;
 	playError: Error | null;
 	lastSeekAt: number;
+	presentedTime: number | null;
+	presentedCallback: number | null;
 };
 
 function mediaError(video: HTMLVideoElement) {
@@ -188,7 +190,27 @@ function pauseSlot(slot: VideoSlot) {
 	slot.element.pause();
 }
 
+function watchPresentedFrame(slot: VideoSlot) {
+	const video = slot.element;
+	if (
+		!video.isConnected ||
+		typeof video.requestVideoFrameCallback !== "function" ||
+		slot.presentedCallback !== null
+	) {
+		return;
+	}
+	slot.presentedCallback = video.requestVideoFrameCallback((_, metadata) => {
+		slot.presentedCallback = null;
+		slot.presentedTime = metadata.mediaTime;
+		watchPresentedFrame(slot);
+	});
+}
+
 function releaseSlot(slot: VideoSlot) {
+	if (slot.presentedCallback !== null) {
+		slot.element.cancelVideoFrameCallback(slot.presentedCallback);
+		slot.presentedCallback = null;
+	}
 	pauseSlot(slot);
 	slot.element.removeAttribute("src");
 	slot.element.load();
@@ -273,8 +295,11 @@ export class BrowserVideoPool {
 				playPending: false,
 				playError: null,
 				lastSeekAt: Number.NEGATIVE_INFINITY,
+				presentedTime: null,
+				presentedCallback: null,
 			};
 			this.slots.set(key, slot);
+			watchPresentedFrame(slot);
 			created = true;
 		}
 		slot.activeCalls++;
@@ -352,6 +377,7 @@ export class BrowserVideoPool {
 			if (!slot.primed || (difference > tolerance && seekReady)) {
 				pauseSlot(slot);
 				if (Math.abs(video.currentTime - decodeTarget) > 0) {
+					slot.presentedTime = null;
 					const presentation = playing
 						? null
 						: waitForPresentedVideoFrame(video, decodeTarget, signal, 250);
@@ -403,6 +429,13 @@ export class BrowserVideoPool {
 				video.videoHeight === 0
 			) {
 				await waitForDecodedVideoFrame(video, signal, 5_000);
+			}
+			if (
+				continuous &&
+				slot.presentedTime !== null &&
+				Math.abs(slot.presentedTime - decodeTarget) > 0.075
+			) {
+				await waitForPresentedVideoFrame(video, decodeTarget, signal, 150);
 			}
 			return video;
 		} finally {
