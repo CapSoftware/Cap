@@ -124,6 +124,44 @@ function hasEntitledProSubscription(subscriptions: Stripe.Subscription[]) {
 	);
 }
 
+function effectiveProSubscription(
+	eventSubscription: Stripe.Subscription,
+	subscriptions: Stripe.Subscription[],
+) {
+	const current =
+		subscriptions.find((sub) => sub.id === eventSubscription.id) ??
+		eventSubscription;
+	return (
+		subscriptions.find(
+			(sub) =>
+				isProSubscription(sub) &&
+				(sub.status === "active" || sub.status === "trialing"),
+		) ??
+		subscriptions.find(
+			(sub) => isProSubscription(sub) && sub.status === "past_due",
+		) ??
+		current
+	);
+}
+
+function proInviteQuota(subscriptions: Stripe.Subscription[]) {
+	return subscriptions
+		.filter(
+			(sub) =>
+				isProSubscription(sub) &&
+				ENTITLED_SUBSCRIPTION_STATUSES.has(sub.status),
+		)
+		.reduce(
+			(total, sub) =>
+				total +
+				sub.items.data.reduce(
+					(subTotal, item) => subTotal + (item.quantity || 1),
+					0,
+				),
+			0,
+		);
+}
+
 async function cancelEntitledBaaSubscriptions(
 	subscriptions: Stripe.Subscription[],
 	customerId: string,
@@ -737,25 +775,15 @@ export const POST = async (req: Request) => {
 				// Quota follows entitlement: past_due keeps its seats during the
 				// dunning window instead of collapsing the org to zero while
 				// Stripe retries the card.
-				const inviteQuota = subscriptions.data
-					.filter(
-						(sub) =>
-							ENTITLED_SUBSCRIPTION_STATUSES.has(sub.status) &&
-							isProSubscription(sub),
-					)
-					.reduce((total, sub) => {
-						return (
-							total +
-							sub.items.data.reduce(
-								(subTotal, item) => subTotal + (item.quantity || 1),
-								0,
-							)
-						);
-					}, 0);
+				const currentSubscription = effectiveProSubscription(
+					subscription,
+					subscriptions.data,
+				);
+				const inviteQuota = proInviteQuota(subscriptions.data);
 
 				console.log("Updating user in database with:", {
-					subscriptionId: subscription.id,
-					status: subscription.status,
+					subscriptionId: currentSubscription.id,
+					status: currentSubscription.status,
 					customerId: customer.id,
 					inviteQuota,
 				});
@@ -763,8 +791,8 @@ export const POST = async (req: Request) => {
 				await db()
 					.update(users)
 					.set({
-						stripeSubscriptionId: subscription.id,
-						stripeSubscriptionStatus: subscription.status,
+						stripeSubscriptionId: currentSubscription.id,
+						stripeSubscriptionStatus: currentSubscription.status,
 						stripeCustomerId: customer.id,
 						inviteQuota: inviteQuota,
 					})
@@ -891,6 +919,11 @@ export const POST = async (req: Request) => {
 						customer.id,
 					);
 				}
+				const currentSubscription = effectiveProSubscription(
+					subscription,
+					remainingSubscriptions.data,
+				);
+				const inviteQuota = proInviteQuota(remainingSubscriptions.data) || 1;
 
 				let foundUserId: User.UserId | undefined;
 				if ("metadata" in customer) {
@@ -940,16 +973,16 @@ export const POST = async (req: Request) => {
 				await db()
 					.update(users)
 					.set({
-						stripeSubscriptionId: subscription.id,
-						stripeSubscriptionStatus: subscription.status,
-						inviteQuota: 1,
+						stripeSubscriptionId: currentSubscription.id,
+						stripeSubscriptionStatus: currentSubscription.status,
+						inviteQuota,
 					})
 					.where(eq(users.id, foundUserId));
 				await enqueueLoopsSync(db(), foundUserId);
 
 				console.log("User updated successfully", {
 					foundUserId,
-					inviteQuota: 1,
+					inviteQuota,
 				});
 			}
 
