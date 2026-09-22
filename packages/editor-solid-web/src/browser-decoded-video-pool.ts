@@ -21,6 +21,8 @@ type DecodedSlot = {
 	current: VideoSample | null;
 	upcoming: VideoSample | null;
 	lastRequestedTime: number;
+	streamSamples: number;
+	slowStreamSamples: number;
 	serial: Promise<void>;
 };
 
@@ -65,6 +67,8 @@ async function resetStream(slot: DecodedSlot) {
 	slot.upcoming?.close();
 	slot.upcoming = null;
 	slot.lastRequestedTime = -1;
+	slot.streamSamples = 0;
+	slot.slowStreamSamples = 0;
 	if (iterator) await iterator.return();
 }
 
@@ -108,6 +112,7 @@ async function sampleAtTime(
 
 export class BrowserDecodedVideoPool {
 	private readonly slots = new Map<string, SlotEntry>();
+	private readonly slowSources = new Set<string>();
 	private retainedKeys: Set<string> | null = null;
 	private disposed = false;
 
@@ -150,6 +155,8 @@ export class BrowserDecodedVideoPool {
 				current: null,
 				upcoming: null,
 				lastRequestedTime: -1,
+				streamSamples: 0,
+				slowStreamSamples: 0,
 				serial: Promise.resolve(),
 				retagBt601:
 					config.codec.startsWith("avc1") &&
@@ -205,6 +212,7 @@ export class BrowserDecodedVideoPool {
 		) {
 			throw new Error("Editor video source URL is invalid");
 		}
+		if (this.slowSources.has(url.href)) return "fallback";
 		const key = slotKey(segmentIndex, track, role);
 		let entry = this.slots.get(key);
 		if (entry && entry.url !== url.href) {
@@ -235,11 +243,13 @@ export class BrowserDecodedVideoPool {
 				releaseSerial = resolve;
 			});
 			let sample: VideoSample | null;
+			let decodeStarted = 0;
 			try {
 				await previous;
 				if (signal.aborted || this.disposed) {
 					throw signal.reason ?? new DOMException("Canceled", "AbortError");
 				}
+				decodeStarted = performance.now();
 				sample = await sampleAtTime(slot, sourceTime, stream);
 			} finally {
 				releaseSerial();
@@ -311,6 +321,16 @@ export class BrowserDecodedVideoPool {
 						bitmap.close();
 						throw signal.reason ?? new DOMException("Canceled", "AbortError");
 					}
+					if (stream) {
+						if (slot.streamSamples > 0) {
+							slot.slowStreamSamples =
+								performance.now() - decodeStarted > 100
+									? slot.slowStreamSamples + 1
+									: 0;
+							if (slot.slowStreamSamples >= 2) this.retireSource(url.href);
+						}
+						slot.streamSamples++;
+					}
 					return {
 						bitmap,
 						width: bitmap.width,
@@ -348,6 +368,15 @@ export class BrowserDecodedVideoPool {
 		}
 	}
 
+	private retireSource(url: string) {
+		this.slowSources.add(url);
+		for (const [key, entry] of this.slots) {
+			if (entry.url !== url) continue;
+			this.slots.delete(key);
+			releaseEntry(entry);
+		}
+	}
+
 	retainSegments(primary: number, overlap: number | null) {
 		const wanted = new Set<string>();
 		for (const track of ["display", "camera"] as const) {
@@ -376,6 +405,7 @@ export class BrowserDecodedVideoPool {
 		this.disposed = true;
 		for (const entry of this.slots.values()) releaseEntry(entry);
 		this.slots.clear();
+		this.slowSources.clear();
 		this.retainedKeys = null;
 	}
 }
