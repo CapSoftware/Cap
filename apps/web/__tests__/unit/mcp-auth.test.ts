@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { User } from "@cap/web-domain";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
@@ -39,6 +40,7 @@ vi.mock("@cap/database", () => ({
 }));
 
 import {
+	createMcpAuthorizationCode,
 	exchangeMcpCode,
 	isMcpRedirectUri,
 	parseMcpAuthorizationRequest,
@@ -113,6 +115,23 @@ describe("MCP OAuth authorization", () => {
 			params.set(key, value);
 			expect(parseMcpAuthorizationRequest(params, resource)).toBeNull();
 		}
+	});
+
+	it("activates a registered client when consent issues a code", async () => {
+		const request = parseMcpAuthorizationRequest(validRequest(), resource);
+		expect(request).not.toBeNull();
+		if (!request) return;
+		const code = await createMcpAuthorizationCode(
+			User.UserId.make("owner"),
+			request,
+		);
+		expect(code).toMatch(/^cap_mcp_code_[A-Za-z0-9_-]{43}$/);
+		expect(databaseState.updated).toBe(1);
+		expect(databaseState.inserted[0]).toMatchObject({
+			userId: "owner",
+			clientId: request.clientId,
+			resource,
+		});
 	});
 
 	it("exchanges a single PKCE-bound code for a resource-bound token", async () => {

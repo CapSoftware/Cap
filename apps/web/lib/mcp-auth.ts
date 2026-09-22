@@ -107,9 +107,14 @@ export const createMcpAuthorizationCode = async (
 	request: McpAuthorizationRequest,
 ) => {
 	const code = token("cap_mcp_code_");
-	await db()
-		.insert(mcpOAuthCodes)
-		.values({
+	await db().transaction(async (tx) => {
+		const activated = await tx
+			.update(mcpOAuthClients)
+			.set({ activatedAt: new Date() })
+			.where(eq(mcpOAuthClients.clientId, request.clientId));
+		if (affectedRows(activated) !== 1)
+			throw new Error("Client registration expired");
+		await tx.insert(mcpOAuthCodes).values({
 			id: nanoId(),
 			userId,
 			clientId: request.clientId,
@@ -119,6 +124,7 @@ export const createMcpAuthorizationCode = async (
 			resource: request.resource,
 			expiresAt: new Date(Date.now() + 5 * 60_000),
 		});
+	});
 	return code;
 };
 

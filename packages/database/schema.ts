@@ -1013,9 +1013,13 @@ export const mcpOAuthClients = mysqlTable(
 		clientId: varchar("clientId", { length: 128 }).notNull(),
 		clientName: varchar("clientName", { length: 100 }).notNull(),
 		redirectUris: json("redirectUris").notNull().$type<string[]>(),
+		activatedAt: timestamp("activatedAt"),
 		createdAt: timestamp("createdAt").notNull().defaultNow(),
 	},
-	(table) => [uniqueIndex("client_id_idx").on(table.clientId)],
+	(table) => [
+		uniqueIndex("client_id_idx").on(table.clientId),
+		index("inactive_created_at_idx").on(table.activatedAt, table.createdAt),
+	],
 );
 
 export const mcpOAuthCodes = mysqlTable(

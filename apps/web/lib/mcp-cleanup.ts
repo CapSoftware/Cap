@@ -1,8 +1,12 @@
 import "server-only";
 
 import { db } from "@cap/database";
-import { mcpOAuthCodes, mcpOAuthTokens } from "@cap/database/schema";
-import { lt } from "drizzle-orm";
+import {
+	mcpOAuthClients,
+	mcpOAuthCodes,
+	mcpOAuthTokens,
+} from "@cap/database/schema";
+import { and, isNull, lt } from "drizzle-orm";
 
 const affectedRows = (value: unknown) => {
 	const result = Array.isArray(value) ? value[0] : value;
@@ -13,6 +17,7 @@ export const cleanupExpiredMcpRecords = async (now = new Date()) => {
 	const database = db();
 	let codes = 0;
 	let tokens = 0;
+	let clients = 0;
 	for (let batch = 0; batch < 10; batch += 1) {
 		const deleted = affectedRows(
 			await database
@@ -33,5 +38,21 @@ export const cleanupExpiredMcpRecords = async (now = new Date()) => {
 		tokens += deleted;
 		if (deleted < 1_000) break;
 	}
-	return { codes, tokens };
+	const unusedBefore = new Date(now.getTime() - 24 * 60 * 60_000);
+	for (let batch = 0; batch < 10; batch += 1) {
+		const deleted = affectedRows(
+			await database
+				.delete(mcpOAuthClients)
+				.where(
+					and(
+						isNull(mcpOAuthClients.activatedAt),
+						lt(mcpOAuthClients.createdAt, unusedBefore),
+					),
+				)
+				.limit(1_000),
+		);
+		clients += deleted;
+		if (deleted < 1_000) break;
+	}
+	return { codes, tokens, clients };
 };
