@@ -87,11 +87,23 @@ jobs:
         run: bun packages/editor-solid-web/browser-replay/replay.cjs ${{ matrix.browser }}
         env:
           CAP_REPLAY_HEADED: ${{ matrix.headed }}
+      - name: Check screen and camera frame parity at 8x
+        if: matrix.browser != 'firefox'
+        run: bun packages/editor-solid-web/browser-replay/replay.cjs ${{ matrix.browser }}
+        env:
+          CAP_REPLAY_HEADED: ${{ matrix.headed }}
+          CAP_REPLAY_INDEXED: "1"
       - name: Replay Firefox clips through software WebGL under Xvfb
         if: matrix.browser == 'firefox'
         run: xvfb-run -a bun packages/editor-solid-web/browser-replay/replay.cjs firefox
         env:
           CAP_REPLAY_HEADED: ${{ matrix.headed }}
+      - name: Check Firefox screen and camera frame parity at 8x
+        if: matrix.browser == 'firefox'
+        run: xvfb-run -a bun packages/editor-solid-web/browser-replay/replay.cjs firefox
+        env:
+          CAP_REPLAY_HEADED: ${{ matrix.headed }}
+          CAP_REPLAY_INDEXED: "1"
 
   browser-studio-webgpu:
     name: Web Studio WebGPU compositor (Chromium macOS)
@@ -107,6 +119,11 @@ jobs:
       - name: Replay paired clips through WebGPU
         run: bun packages/editor-solid-web/browser-replay/replay.cjs chromium
         env:
+          CAP_REPLAY_REQUIRE_WEBGPU: "1"
+      - name: Check screen and camera frame parity through WebGPU at 8x
+        run: bun packages/editor-solid-web/browser-replay/replay.cjs chromium
+        env:
+          CAP_REPLAY_INDEXED: "1"
           CAP_REPLAY_REQUIRE_WEBGPU: "1"
 
   browser-paired-recording:

@@ -9,6 +9,8 @@ if (!browserType) throw new Error("Choose chromium, firefox, or webkit");
 const output = path.join(__dirname, "out");
 const origin = "http://localhost:18999";
 const defaultFormat = browserName === "firefox" ? "webm" : "mp4";
+const indexed = process.env.CAP_REPLAY_INDEXED === "1";
+const fixturePrefix = indexed ? "indexed-" : "";
 
 function media(file) {
 	const format = path.extname(file).slice(1).toLowerCase();
@@ -24,11 +26,11 @@ function media(file) {
 
 const screen = media(
 	process.env.CAP_REPLAY_SCREEN_FILE ||
-		path.join(__dirname, `screen.${defaultFormat}`),
+		path.join(__dirname, `${fixturePrefix}screen.${defaultFormat}`),
 );
 const camera = media(
 	process.env.CAP_REPLAY_CAMERA_FILE ||
-		path.join(__dirname, `camera.${defaultFormat}`),
+		path.join(__dirname, `${fixturePrefix}camera.${defaultFormat}`),
 );
 const expectedScreenWidth = Number(process.env.CAP_REPLAY_SCREEN_WIDTH || 640);
 const expectedScreenHeight = Number(
@@ -246,9 +248,13 @@ async function replay(forceWebGl, forceWebGpu = false) {
 				timeout: 30_000,
 			},
 		);
+		await page.evaluate((enabled) => {
+			window.CapReplayIndexed = enabled;
+		}, indexed);
 		let replayTimer;
 		const result = await Promise.race([
 			page.evaluate(async (mediaFormat) => {
+				const indexed = window.CapReplayIndexed;
 				console.info(
 					`Cap replay stage: capabilities WebGPU=${Boolean(navigator.gpu)} WebGL2=${Boolean(document.createElement("canvas").getContext("webgl2"))}`,
 				);
@@ -423,6 +429,103 @@ async function replay(forceWebGl, forceWebGpu = false) {
 					await new Promise((resolve) => setTimeout(resolve, 850));
 					console.info("Cap replay stage: playback interval completed");
 					playback.pause();
+					const playedFrames = frames.length - beforePlay;
+					let indexedParity = null;
+					if (indexed) {
+						config.background.padding = 0;
+						config.timeline = {
+							segments: [
+								{
+									recordingSegment: 0,
+									start: 0,
+									end: playback.sourceDurations[0],
+									timescale: 8,
+								},
+							],
+							transitions: [],
+							zoomSegments: [],
+						};
+						await playback.setConfig(config);
+						await playback.seek(0);
+						const sourceCanvas = document.createElement("canvas");
+						sourceCanvas.width = 8;
+						sourceCanvas.height = 1;
+						const sourceContext = sourceCanvas.getContext("2d", {
+							willReadFrequently: true,
+						});
+						const retainedCanvas = document.createElement("canvas");
+						const retainedContext = retainedCanvas.getContext("2d", {
+							willReadFrequently: true,
+						});
+						if (!sourceContext || !retainedContext) {
+							throw new Error("Indexed frame inspection is unavailable");
+						}
+						const readIndex = (context, width, height, inverted) => {
+							let index = 0;
+							for (let bit = 0; bit < 8; bit++) {
+								const pixel = context.getImageData(
+									Math.floor(((bit + 0.5) * width) / 8),
+									Math.floor(height / 4),
+									1,
+									1,
+								).data;
+								const white = pixel[0] + pixel[1] + pixel[2] > 384;
+								if (white !== inverted) index |= 1 << bit;
+							}
+							return index;
+						};
+						const mismatches = [];
+						const samples = { display: 0, camera: 0, gpu: 0 };
+						const originalFrame = playback.pool.frame.bind(playback.pool);
+						playback.pool.frame = async (...args) => {
+							const video = await originalFrame(...args);
+							if (args[4] && video) {
+								sourceContext.drawImage(video, 0, 0, 8, 1);
+								const observed = readIndex(
+									sourceContext,
+									8,
+									1,
+									args[1] === "camera",
+								);
+								const target = Math.round(args[3] * 30);
+								samples[args[1]]++;
+								if (Math.abs(observed - target) > 1) {
+									mismatches.push(`${args[1]} ${target}/${observed}`);
+								}
+							}
+							return video;
+						};
+						const originalRender = playback.canvas.render.bind(playback.canvas);
+						playback.canvas.render = async (...args) => {
+							await originalRender(...args);
+							if (!playback.drawLatestFrameToCanvas(retainedCanvas)) {
+								throw new Error("Indexed GPU frame is unavailable");
+							}
+							const observed = readIndex(
+								retainedContext,
+								retainedCanvas.width,
+								retainedCanvas.height,
+								false,
+							);
+							const target = Math.round((Number(args[2]) / 1e9) * 8 * 30);
+							samples.gpu++;
+							if (Math.abs(observed - target) > 1) {
+								mismatches.push(`gpu ${target}/${observed}`);
+							}
+						};
+						const beforeIndexedPlay = frames.length;
+						playback.play();
+						await new Promise((resolve) => setTimeout(resolve, 500));
+						playback.pause();
+						indexedParity = {
+							playedFrames: frames.length - beforeIndexedPlay,
+							samples,
+							mismatches,
+						};
+						console.info(
+							`Cap replay stage: indexed parity ${JSON.stringify(indexedParity)}`,
+						);
+					}
 					const videos = Array.from(document.querySelectorAll("video")).map(
 						(video) => [video.videoWidth, video.videoHeight],
 					);
@@ -435,7 +538,8 @@ async function replay(forceWebGl, forceWebGpu = false) {
 						startChangedPixels,
 						gradientChangedPixels,
 						gradientMotionPixels,
-						playedFrames: frames.length - beforePlay,
+						playedFrames,
+						indexedParity,
 						videos,
 						width: canvas.width,
 						height: canvas.height,
@@ -494,6 +598,29 @@ async function replay(forceWebGl, forceWebGpu = false) {
 			"Animated gradient did not move across the timeline",
 		);
 		assert(result.playedFrames >= 2, "Local playback did not advance");
+		if (indexed) {
+			assert(result.indexedParity !== null, "Indexed parity did not run");
+			assert(
+				result.indexedParity.playedFrames >= 4,
+				"8× local playback did not advance",
+			);
+			assert(
+				result.indexedParity.samples.display >= 4,
+				"8× display frames were not inspected",
+			);
+			assert(
+				result.indexedParity.samples.camera >= 4,
+				"8× camera frames were not inspected",
+			);
+			assert(
+				result.indexedParity.samples.gpu >= 4,
+				"8× GPU frames were not inspected",
+			);
+			assert(
+				result.indexedParity.mismatches.length === 0,
+				`8× playback/export frame mismatch: ${result.indexedParity.mismatches.join(", ")}`,
+			);
+		}
 		assert(
 			result.videos.some(
 				([width, height]) =>
