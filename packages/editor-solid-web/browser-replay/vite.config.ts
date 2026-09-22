@@ -4,6 +4,7 @@ import { defineConfig } from "vite";
 export default defineConfig({
 	root: import.meta.dirname,
 	base: "/browser-replay/",
+	worker: { format: "es" },
 	build: {
 		outDir: resolve(import.meta.dirname, "out"),
 		emptyOutDir: true,

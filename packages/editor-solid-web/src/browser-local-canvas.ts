@@ -1,8 +1,8 @@
 import type { BrowserGpuRenderer } from "../renderer/pkg/cap_editor_browser_renderer.js";
 import { browserWebGpuPresentationWorks } from "./browser-gpu-probe";
+import { BrowserImageDecoder } from "./browser-image-decoder";
 import { loadBrowserRenderer } from "./browser-renderer";
 import { resolveEditorAssetUrl } from "./editor-asset-url";
-import { restoreRawJpegOrientation } from "./editor-background-orientation";
 
 export type BrowserVideoLayer = {
 	video: HTMLVideoElement;
@@ -76,6 +76,7 @@ export class BrowserLocalCanvas {
 	private configQueue: Promise<void> = Promise.resolve();
 	private readonly imageAbort = new AbortController();
 	private readonly imageCache = new Map<string, ImageBitmap>();
+	private imageDecoder: BrowserImageDecoder | null = null;
 
 	constructor(
 		private width: number,
@@ -165,40 +166,21 @@ export class BrowserLocalCanvas {
 			signal: this.imageAbort.signal,
 		});
 		if (!response.ok) throw new Error("Editor background image could not load");
-		const blob = await response.blob();
-		if (blob.size < 1 || blob.size > 64 * 1024 * 1024) {
+		const bytes = await response.arrayBuffer();
+		if (bytes.byteLength < 1 || bytes.byteLength > 64 * 1024 * 1024) {
 			throw new Error("Editor background image is invalid");
 		}
-		let bitmap = await createImageBitmap(blob);
-		if (
-			bitmap.width < 1 ||
-			bitmap.height < 1 ||
-			bitmap.width * bitmap.height > 16_777_216
-		) {
-			bitmap.close();
-			throw new Error("Editor background image is too large");
-		}
-		if (bitmap.width > 2560 || bitmap.height > 2560) {
-			const scale = 2560 / Math.max(bitmap.width, bitmap.height);
-			try {
-				const resized = await createImageBitmap(bitmap, {
-					resizeWidth: Math.max(1, Math.round(bitmap.width * scale)),
-					resizeHeight: Math.max(1, Math.round(bitmap.height * scale)),
-					resizeQuality: "high",
-				});
-				bitmap.close();
-				bitmap = resized;
-			} catch (error) {
-				bitmap.close();
-				throw error;
-			}
-		}
-		try {
-			bitmap = await restoreRawJpegOrientation(bitmap, blob);
-		} catch (error) {
-			bitmap.close();
-			throw error;
-		}
+		if (!this.imageDecoder) this.imageDecoder = new BrowserImageDecoder();
+		const decoder = this.imageDecoder;
+		const image = await decoder.decode(bytes);
+		const bitmap = await createImageBitmap(
+			new ImageData(
+				new Uint8ClampedArray(image.pixels),
+				image.width,
+				image.height,
+			),
+			{ premultiplyAlpha: "none", colorSpaceConversion: "none" },
+		);
 		if (this.disposed) {
 			bitmap.close();
 			throw new Error("Editor canvas is closed");
@@ -298,6 +280,8 @@ export class BrowserLocalCanvas {
 		if (this.disposed) return;
 		this.disposed = true;
 		this.imageAbort.abort();
+		this.imageDecoder?.dispose();
+		this.imageDecoder = null;
 		for (const image of this.imageCache.values()) image.close();
 		this.imageCache.clear();
 		this.rejectMount?.(new Error("Editor canvas is closed"));

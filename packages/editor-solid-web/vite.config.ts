@@ -35,6 +35,7 @@ const browserFrameSocket = resolve(
 
 export default defineConfig({
 	base: "/editor-solid/",
+	worker: { format: "es" },
 	plugins: [
 		solid(),
 		{
