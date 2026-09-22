@@ -10,6 +10,7 @@ export type BrowserDecodedVideoFrame = {
 	width: number;
 	height: number;
 	mediaTime: number;
+	sourceColorFix: boolean;
 };
 
 type DecodedSlot = {
@@ -246,6 +247,7 @@ export class BrowserDecodedVideoPool {
 			if (!sample) throw new Error("Editor decoded frame is unavailable");
 			try {
 				let videoFrame = sample.toVideoFrame();
+				let colorRetagged = false;
 				try {
 					if (
 						slot.retagBt601 &&
@@ -275,6 +277,7 @@ export class BrowserDecodedVideoPool {
 						});
 						videoFrame.close();
 						videoFrame = tagged;
+						colorRetagged = true;
 					}
 					const scale =
 						maxSourceWidth !== null && maxSourceHeight !== null
@@ -313,6 +316,11 @@ export class BrowserDecodedVideoPool {
 						width: bitmap.width,
 						height: bitmap.height,
 						mediaTime: sample.timestamp,
+						sourceColorFix:
+							slot.retagBt601 &&
+							!colorRetagged &&
+							videoFrame.colorSpace.matrix !== "bt470bg" &&
+							navigator.userAgent.includes("Firefox/"),
 					};
 				} finally {
 					videoFrame.close();

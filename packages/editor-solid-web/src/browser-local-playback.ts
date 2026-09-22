@@ -547,7 +547,7 @@ export class BrowserLocalPlayback {
 					height: decoded.height,
 					mediaTime: decoded.mediaTime,
 					release: () => decoded.bitmap.close(),
-					sourceColorFix: false,
+					sourceColorFix: decoded.sourceColorFix,
 				};
 			}
 		}

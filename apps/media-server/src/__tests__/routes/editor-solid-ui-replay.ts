@@ -930,6 +930,36 @@ try {
 			});
 		});
 	}
+	if (browserEngine.name() === "firefox" && proCaptions) {
+		await page.addInitScript(() => {
+			const original = window.createImageBitmap;
+			window.createImageBitmap = new Proxy(original, {
+				apply(target, thisArg, args) {
+					const source: unknown = args[0];
+					const browserWindow = window as typeof window & {
+						capTestColorPath?: Record<string, unknown>;
+					};
+					if (!browserWindow.capTestColorPath) {
+						if (
+							typeof VideoFrame === "function" &&
+							source instanceof VideoFrame
+						) {
+							browserWindow.capTestColorPath = {
+								kind: "VideoFrame",
+								format: source.format,
+								matrix: source.colorSpace.matrix,
+							};
+						} else if (source instanceof HTMLVideoElement) {
+							browserWindow.capTestColorPath = {
+								kind: "HTMLVideoElement",
+							};
+						}
+					}
+					return Reflect.apply(target, thisArg, args);
+				},
+			});
+		});
+	}
 	await page.addInitScript(() => {
 		const nativeClose = WebSocket.prototype.close;
 		WebSocket.prototype.close = function (code?: number, reason?: string) {
@@ -1335,6 +1365,7 @@ try {
 						webGlLost: webGl?.isContextLost() ?? null,
 						preserveDrawingBuffer:
 							webGl?.getContextAttributes()?.preserveDrawingBuffer ?? null,
+						colorPath: Reflect.get(window, "capTestColorPath") as unknown,
 						videos: [...document.querySelectorAll("video")].map((video) => ({
 							readyState: video.readyState,
 							width: video.videoWidth,
