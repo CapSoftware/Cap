@@ -638,32 +638,38 @@ try {
 		.ensureAlpha()
 		.raw()
 		.toBuffer({ resolveWithObject: true });
+	const directScreenshotInfo = await sharp(directScreenshot).metadata();
 	const { data: directPixels, info: directInfo } = await sharp(directScreenshot)
 		.ensureAlpha()
+		.resize(browserInfo.width, browserInfo.height, { kernel: "nearest" })
 		.raw()
 		.toBuffer({ resolveWithObject: true });
-	const directCenter =
-		(Math.floor(directInfo.height / 2) * directInfo.width +
-			Math.floor(directInfo.width / 2)) *
-		4;
-	const cropCenter =
-		(Math.floor(browserInfo.height / 2) * browserInfo.width +
-			Math.floor(browserInfo.width / 2)) *
-		4;
-	const visibleCenter = [
-		...directPixels.subarray(directCenter, directCenter + 3),
-	];
-	const retainedCenter = [
-		...browserPixels.subarray(cropCenter, cropCenter + 3),
-	];
-	const visibleDifference = Math.max(
-		...visibleCenter.map((value, index) =>
-			Math.abs(value - (retainedCenter[index] ?? 0)),
-		),
-	);
-	if (visibleDifference >= 20) {
+	assert.equal(directInfo.channels, 4);
+	assert.equal(directPixels.length, browserPixels.length);
+	let visibleAbsolute = 0;
+	let visibleDifferentPixels = 0;
+	let visibleAlphaDifferentPixels = 0;
+	for (let pixel = 0; pixel < browserPixels.length; pixel += 4) {
+		let changed = false;
+		for (let channel = 0; channel < 4; channel++) {
+			const delta = Math.abs(
+				(directPixels[pixel + channel] ?? 0) -
+					(browserPixels[pixel + channel] ?? 0),
+			);
+			visibleAbsolute += delta;
+			changed ||= delta > 20;
+			if (channel === 3 && delta > 20) visibleAlphaDifferentPixels++;
+		}
+		if (changed) visibleDifferentPixels++;
+	}
+	const visibleMeanAbsoluteError =
+		Math.round((visibleAbsolute / browserPixels.length) * 100) / 100;
+	const visibleMismatch =
+		visibleMeanAbsoluteError >= 5 ||
+		visibleDifferentPixels >= browserInfo.width * browserInfo.height * 0.05;
+	if (visibleMismatch) {
 		process.stderr.write(
-			`${JSON.stringify({ stage: "visible-canvas", browserEngine: engine.name(), visibleCenter, retainedCenter })}\n`,
+			`${JSON.stringify({ stage: "visible-canvas", browserEngine: engine.name(), screenshotSize: { width: directScreenshotInfo.width, height: directScreenshotInfo.height }, retainedSize: { width: browserInfo.width, height: browserInfo.height }, visibleMeanAbsoluteError, visibleDifferentPixels, visibleAlphaDifferentPixels })}\n`,
 		);
 		await reportStageFailure(
 			"visible-canvas",
@@ -689,7 +695,10 @@ try {
 			]);
 		}
 	}
-	assert.ok(visibleDifference < 20);
+	assert.ok(visibleMeanAbsoluteError < 5);
+	assert.ok(
+		visibleDifferentPixels < browserInfo.width * browserInfo.height * 0.05,
+	);
 	await editor.getByRole("button", { name: "Play video" }).click();
 	await editor.getByRole("button", { name: "Pause video" }).waitFor({
 		state: "visible",
@@ -917,7 +926,7 @@ try {
 	assert.deepEqual(failedResponses, []);
 	assert.deepEqual(pageErrors, []);
 	process.stdout.write(
-		`${JSON.stringify({ browserEngine: engine.name(), browserOnly: true, bootstrapRequests, rangeRequests, workerRequests, preparationRequests, playbackAdvanced: true, persistedGradient: true, webGlPreserve, workerExportPreviewVisible: true, workerExportEstimateVisible: true, workerExportPreviewMs, workerExportEstimateMs, meanAbsoluteError, psnrDb, differentPixels, totalPixels: browserInfo.width * browserInfo.height, pageErrors, failedResponses })}\n`,
+		`${JSON.stringify({ browserEngine: engine.name(), browserOnly: true, bootstrapRequests, rangeRequests, workerRequests, preparationRequests, playbackAdvanced: true, persistedGradient: true, webGlPreserve, workerExportPreviewVisible: true, workerExportEstimateVisible: true, workerExportPreviewMs, workerExportEstimateMs, visibleMeanAbsoluteError, visibleDifferentPixels, visibleAlphaDifferentPixels, meanAbsoluteError, psnrDb, differentPixels, totalPixels: browserInfo.width * browserInfo.height, pageErrors, failedResponses })}\n`,
 	);
 	await page.evaluate(() => {
 		(
