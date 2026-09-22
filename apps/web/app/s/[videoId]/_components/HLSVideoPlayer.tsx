@@ -777,9 +777,19 @@ export function HLSVideoPlayer({
 				{captionsSrc && (
 					<track
 						key={captionsSrc}
-						label="English"
+						label={
+							availableCaptions.find(
+								(caption) => caption.code === captionLanguage,
+							)?.name ?? "Original"
+						}
 						kind="captions"
-						srcLang="en"
+						srcLang={
+							captionLanguage &&
+							captionLanguage !== "original" &&
+							captionLanguage !== "off"
+								? captionLanguage
+								: "en"
+						}
 						src={captionsSrc}
 					/>
 				)}

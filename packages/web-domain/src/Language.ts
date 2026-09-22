@@ -14,6 +14,7 @@ export const SUPPORTED_LANGUAGES = {
 	ja: "Japanese",
 	ko: "Korean",
 	zh: "Chinese (Simplified)",
+	"zh-Hant": "Chinese (Traditional)",
 	ar: "Arabic",
 	hi: "Hindi",
 	bn: "Bengali",
