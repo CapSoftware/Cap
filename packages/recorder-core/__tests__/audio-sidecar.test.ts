@@ -126,7 +126,7 @@ test("a missing secure random source cancels the unused audio upload", async () 
 	expect(FakeAudioRecorder.instances[0]?.state).toBe("inactive");
 });
 
-test("a mid-capture spool write failure keeps the streamed audio and its recovery copy", async () => {
+test("a stalled spool flush after a write failure keeps streamed audio and a full recovery copy", async () => {
 	const first = new Blob(["first"]);
 	const spool = {
 		sessionId: "durable-spool",
@@ -134,10 +134,8 @@ test("a mid-capture spool write failure keeps the streamed audio and its recover
 		appendChunk: vi.fn(async () => {
 			throw new Error("IndexedDB write failed");
 		}),
-		flush: vi.fn(async () => {
-			throw new Error("IndexedDB write failed");
-		}),
-		recoverBlob: vi.fn(async () => first),
+		flush: vi.fn(() => new Promise<void>(() => undefined)),
+		recoverBlob: vi.fn(async () => null),
 		dispose: vi.fn(async () => undefined),
 		touch: vi.fn(async () => undefined),
 	};

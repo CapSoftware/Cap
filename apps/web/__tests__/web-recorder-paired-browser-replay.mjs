@@ -119,6 +119,7 @@ async function replayPairedCapture(
 	failCameraCompletion = false,
 	failAudioResume = false,
 	failBackupDeletion = false,
+	stallAudioSpool = false,
 ) {
 	const requests = [];
 	const parts = [];
@@ -378,6 +379,27 @@ async function replayPairedCapture(
 		await page.waitForFunction(
 			() => window.capRecorderHarness?.phase === "recording",
 		);
+		if (stallAudioSpool) {
+			await page.evaluate(() => {
+				const append = window.capRecorderSpool.prototype.appendChunk;
+				const flush = window.capRecorderSpool.prototype.flush;
+				window.capRecorderSpool.prototype.appendChunk = function (chunk) {
+					if (this.session.mimeType.startsWith("audio/")) {
+						this.simulatedAudioSpoolFailure = true;
+						return Promise.reject(
+							new Error("Simulated IndexedDB audio backup write failure"),
+						);
+					}
+					return append.call(this, chunk);
+				};
+				window.capRecorderSpool.prototype.flush = function () {
+					if (this.simulatedAudioSpoolFailure) {
+						return new Promise(() => undefined);
+					}
+					return flush.call(this);
+				};
+			});
+		}
 		if (pauseResume) {
 			if (failAudioResume) {
 				await page.evaluate(() => {
@@ -566,6 +588,13 @@ async function replayPairedCapture(
 				(await page.evaluate(() => window.capRecorderCameraSpoolFailures)) > 0,
 			);
 		}
+		if (stallAudioSpool) {
+			assert.ok(
+				browserWarnings.some((warning) =>
+					warning.includes("Simulated IndexedDB audio backup write failure"),
+				),
+			);
+		}
 		const completions = requests.filter((request) =>
 			request.path.endsWith("/complete"),
 		);
@@ -671,6 +700,7 @@ async function replayPairedCapture(
 			failAudioResume,
 			failBackupDeletion,
 			failCameraSpool,
+			stallAudioSpool,
 			cameraBytes,
 			screenBytes,
 			cameraOffsetMs: cameraComplete.body.cameraOffsetMs,
@@ -712,6 +742,21 @@ try {
 					true,
 				),
 			);
+			if (engine.name === "WebKit") {
+				results.push(
+					await replayPairedCapture(
+						browser,
+						bundle,
+						true,
+						engine,
+						false,
+						false,
+						true,
+						false,
+						true,
+					),
+				);
+			}
 			if (engine.name === "Chromium") {
 				results.push(
 					await replayPairedCapture(browser, bundle, false, engine, true),
