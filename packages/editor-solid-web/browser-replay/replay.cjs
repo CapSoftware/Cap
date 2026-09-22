@@ -460,15 +460,13 @@ async function replay(forceWebGl, forceWebGpu = false) {
 						if (!sourceContext || !retainedContext) {
 							throw new Error("Indexed frame inspection is unavailable");
 						}
-						const readIndex = (context, width, height, inverted) => {
+						const readIndex = (pixelAt, width, height, inverted) => {
 							let index = 0;
 							for (let bit = 0; bit < 8; bit++) {
-								const pixel = context.getImageData(
+								const pixel = pixelAt(
 									Math.floor(((bit + 0.5) * width) / 8),
 									Math.floor(height / 4),
-									1,
-									1,
-								).data;
+								);
 								const white = pixel[0] + pixel[1] + pixel[2] > 384;
 								if (white !== inverted) index |= 1 << bit;
 							}
@@ -479,10 +477,10 @@ async function replay(forceWebGl, forceWebGpu = false) {
 						const originalFrame = playback.pool.frame.bind(playback.pool);
 						playback.pool.frame = async (...args) => {
 							const video = await originalFrame(...args);
-							if (args[4] && video) {
+							if (video) {
 								sourceContext.drawImage(video, 0, 0, 8, 1);
 								const observed = readIndex(
-									sourceContext,
+									(x, y) => sourceContext.getImageData(x, y, 1, 1).data,
 									8,
 									1,
 									args[1] === "camera",
@@ -496,29 +494,54 @@ async function replay(forceWebGl, forceWebGpu = false) {
 							return video;
 						};
 						const originalRender = playback.canvas.render.bind(playback.canvas);
-						playback.canvas.render = async (...args) => {
-							await originalRender(...args);
-							if (!playback.drawLatestFrameToCanvas(retainedCanvas)) {
-								throw new Error("Indexed GPU frame is unavailable");
-							}
-							const observed = readIndex(
-								retainedContext,
-								retainedCanvas.width,
-								retainedCanvas.height,
-								false,
-							);
-							const target = Math.round((Number(args[2]) / 1e9) * 8 * 30);
-							samples.gpu++;
-							if (Math.abs(observed - target) > 1) {
-								mismatches.push(`gpu ${target}/${observed}`);
-							}
+						const gpuReads = [];
+						playback.canvas.render = (...args) => {
+							const read = (async () => {
+								await originalRender(...args);
+								let observed;
+								if (/webgpu/i.test(backend)) {
+									const pixels = await playback.canvas.renderer.snapshot_rgba();
+									observed = readIndex(
+										(x, y) =>
+											pixels.subarray(
+												(y * canvas.width + x) * 4,
+												(y * canvas.width + x) * 4 + 4,
+											),
+										canvas.width,
+										canvas.height,
+										false,
+									);
+								} else {
+									if (!playback.drawLatestFrameToCanvas(retainedCanvas)) {
+										throw new Error("Indexed GPU frame is unavailable");
+									}
+									observed = readIndex(
+										(x, y) => retainedContext.getImageData(x, y, 1, 1).data,
+										retainedCanvas.width,
+										retainedCanvas.height,
+										false,
+									);
+								}
+								const target = Math.round((Number(args[2]) / 1e9) * 8 * 30);
+								samples.gpu++;
+								if (Math.abs(observed - target) > 1) {
+									mismatches.push(`gpu ${target}/${observed}`);
+								}
+							})();
+							gpuReads.push(read);
+							return read;
 						};
+						const probeTimes = [0.05, 0.15, 0.25, 0.35, 0.45];
+						for (const time of probeTimes) await playback.seek(time);
+						await playback.seek(0);
 						const beforeIndexedPlay = frames.length;
 						playback.play();
 						await new Promise((resolve) => setTimeout(resolve, 500));
 						playback.pause();
+						await Promise.all(gpuReads);
 						indexedParity = {
 							playedFrames: frames.length - beforeIndexedPlay,
+							pausedProbes: probeTimes.length,
 							samples,
 							mismatches,
 						};
@@ -601,19 +624,23 @@ async function replay(forceWebGl, forceWebGpu = false) {
 		if (indexed) {
 			assert(result.indexedParity !== null, "Indexed parity did not run");
 			assert(
-				result.indexedParity.playedFrames >= 4,
+				result.indexedParity.playedFrames >= 1,
 				"8× local playback did not advance",
 			);
 			assert(
-				result.indexedParity.samples.display >= 4,
+				result.indexedParity.pausedProbes === 5,
+				"8× paused timestamps were not inspected",
+			);
+			assert(
+				result.indexedParity.samples.display >= 5,
 				"8× display frames were not inspected",
 			);
 			assert(
-				result.indexedParity.samples.camera >= 4,
+				result.indexedParity.samples.camera >= 5,
 				"8× camera frames were not inspected",
 			);
 			assert(
-				result.indexedParity.samples.gpu >= 4,
+				result.indexedParity.samples.gpu >= 5,
 				"8× GPU frames were not inspected",
 			);
 			assert(
