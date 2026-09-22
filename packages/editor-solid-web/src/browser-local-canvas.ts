@@ -2,6 +2,7 @@ import type { BrowserGpuRenderer } from "../renderer/pkg/cap_editor_browser_rend
 import { browserWebGpuPresentationWorks } from "./browser-gpu-probe";
 import { loadBrowserRenderer } from "./browser-renderer";
 import { resolveEditorAssetUrl } from "./editor-asset-url";
+import { restoreRawJpegOrientation } from "./editor-background-orientation";
 
 export type BrowserVideoLayer = {
 	video: HTMLVideoElement;
@@ -191,6 +192,12 @@ export class BrowserLocalCanvas {
 				bitmap.close();
 				throw error;
 			}
+		}
+		try {
+			bitmap = await restoreRawJpegOrientation(bitmap, blob);
+		} catch (error) {
+			bitmap.close();
+			throw error;
 		}
 		if (this.disposed) {
 			bitmap.close();

@@ -97,6 +97,12 @@ async function replay(forceWebGl, forceWebGpu = false) {
 	)
 		.png()
 		.toBuffer();
+	const rawBackground = fs.readFileSync(
+		path.join(__dirname, "raw-background.png"),
+	);
+	const exifBackground = fs.readFileSync(
+		path.join(__dirname, "exif-background-6.jpg"),
+	);
 	const browser = await browserType.launch({
 		headless: process.env.CAP_REPLAY_HEADED !== "1",
 		timeout: 30_000,
@@ -269,10 +275,18 @@ async function replay(forceWebGl, forceWebGpu = false) {
 				return;
 			}
 			if (pathname === "/api/editor/videos/fixture/file") {
+				const requested = new URL(route.request().url()).searchParams.get(
+					"path",
+				);
+				const exif = requested?.endsWith("000000000002.jpg") ?? false;
 				await route.fulfill({
 					status: 200,
-					contentType: "image/png",
-					body: background,
+					contentType: exif ? "image/jpeg" : "image/png",
+					body: exif
+						? exifBackground
+						: requested?.endsWith("000000000002.png")
+							? rawBackground
+							: background,
 				});
 				return;
 			}
@@ -510,6 +524,24 @@ async function replay(forceWebGl, forceWebGpu = false) {
 						paddedSolid,
 						await snapshot(),
 					);
+					config.background.source = {
+						type: "image",
+						path: "/api/editor/videos/fixture/file?raw=1&path=content/images/00000000-0000-0000-0000-000000000002.png",
+					};
+					await playback.setConfig(config);
+					const rawJpegPixels = await snapshot();
+					config.background.source = {
+						type: "image",
+						path: "/api/editor/videos/fixture/file?raw=1&path=content/images/00000000-0000-0000-0000-000000000002.jpg",
+					};
+					await playback.setConfig(config);
+					const exifOrientationChangedPixels = differentPixels(
+						rawJpegPixels,
+						await snapshot(),
+					);
+					if (exifOrientationChangedPixels > 1000) {
+						throw new Error("JPEG EXIF orientation differs from native export");
+					}
 					config.background.padding = originalPadding;
 					config.background.source = JSON.parse(
 						playback.module.default_project_config_json(),
@@ -771,6 +803,7 @@ async function replay(forceWebGl, forceWebGpu = false) {
 						returnToStartMs,
 						changedPixels,
 						imageChangedPixels,
+						exifOrientationChangedPixels,
 						startChangedPixels,
 						gradientChangedPixels,
 						gradientMotionPixels,
