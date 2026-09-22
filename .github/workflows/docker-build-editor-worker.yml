@@ -117,6 +117,7 @@ jobs:
               cd /source
               bun install --frozen-lockfile
               bunx playwright install --with-deps chromium webkit firefox
+              apt-get install -y --no-install-recommends xauth
               bun run --filter @cap/editor-solid-web build
               cd /source/apps/media-server
               run_browser_only_studio() {
