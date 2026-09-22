@@ -20,6 +20,7 @@ type VideoSlot = {
 	playVersion: number;
 	playPending: boolean;
 	playError: Error | null;
+	lastSeekAt: number;
 };
 
 function mediaError(video: HTMLVideoElement) {
@@ -271,6 +272,7 @@ export class BrowserVideoPool {
 				playVersion: 0,
 				playPending: false,
 				playError: null,
+				lastSeekAt: Number.NEGATIVE_INFINITY,
 			};
 			this.slots.set(key, slot);
 			created = true;
@@ -337,12 +339,17 @@ export class BrowserVideoPool {
 				target === 0 && Number.isFinite(video.duration) && video.duration > 0
 					? Math.min(video.duration / 2, 0.0001)
 					: target;
-			const tolerance =
-				playing && !forceSeek && speed >= 0.25 && speed <= 4 ? 0.05 : 1 / 120;
-			if (
+			const continuous = playing && !forceSeek && speed >= 0.25 && speed <= 4;
+			const tolerance = continuous
+				? Math.max(0.05, Math.min(0.25, speed * 0.15))
+				: 1 / 120;
+			const difference = Math.abs(video.currentTime - decodeTarget);
+			const seekReady =
+				!continuous ||
 				!slot.primed ||
-				Math.abs(video.currentTime - decodeTarget) > tolerance
-			) {
+				performance.now() - slot.lastSeekAt >= 1500 ||
+				difference > Math.max(0.75, speed * 0.75);
+			if (!slot.primed || (difference > tolerance && seekReady)) {
 				pauseSlot(slot);
 				if (Math.abs(video.currentTime - decodeTarget) > 0) {
 					const presentation = playing
@@ -350,6 +357,7 @@ export class BrowserVideoPool {
 						: waitForPresentedVideoFrame(video, decodeTarget, signal, 250);
 					const seeked = waitForVideo(video, "seeked", signal, 10_000);
 					video.currentTime = decodeTarget;
+					slot.lastSeekAt = performance.now();
 					await seeked;
 					if (presentation && !(await presentation) && !signal.aborted) {
 						await new Promise((resolve) => window.setTimeout(resolve, 16));

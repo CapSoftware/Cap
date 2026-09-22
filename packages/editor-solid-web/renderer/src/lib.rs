@@ -16,15 +16,16 @@ use blur::BlurLayer;
 use bytemuck::{Pod, Zeroable};
 use cap_project::{
     AnimatedGradientConfig, AspectRatio, BackgroundSource, CameraShape, CameraXPosition,
-    CameraYPosition, ClipConfiguration, ClipOffsets, ClipTransitionType, CornerStyle,
-    ProjectConfiguration, StudioRecordingMeta, TimelineConfiguration, TimelineFrameMapping,
-    TimelineSource,
+    CameraYPosition, ClipConfiguration, ClipOffsets, ClipTransitionType, CornerStyle, ImageSegment,
+    OverlayTrackKind, ProjectConfiguration, StudioRecordingMeta, TimelineConfiguration,
+    TimelineFrameMapping, TimelineSource,
 };
 use composite_frame::{
     ColorGradeUniformParams, CompositeVideoFramePipeline, CompositeVideoFrameUniforms,
 };
 use segment_timing::{SegmentVideoTiming, segment_video_timing};
 use std::cell::Cell;
+use std::collections::{HashMap, HashSet};
 use transition::{TransitionCompositor, TransitionParameters};
 use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
@@ -1092,6 +1093,432 @@ fn draw_layers(
     }
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct BrowserImageUniforms {
+    center_size: [f32; 4],
+    rotation_opacity_radius: [f32; 4],
+    flips: [f32; 4],
+}
+
+struct BrowserOverlayTexture {
+    texture: wgpu::Texture,
+    byte_len: u64,
+    last_used: u64,
+}
+
+struct BrowserOverlayDraw {
+    segment: ImageSegment,
+    group: wgpu::BindGroup,
+}
+
+struct BrowserOverlayUpload<'a> {
+    path: &'a str,
+    width: u32,
+    height: u32,
+    levels: &'a js_sys::Array,
+    output_size: (u32, u32),
+    time: f64,
+}
+
+struct BrowserImageOverlays {
+    pipeline: wgpu::RenderPipeline,
+    sampler: wgpu::Sampler,
+    segments: Vec<ImageSegment>,
+    textures: HashMap<String, BrowserOverlayTexture>,
+    draws: Vec<BrowserOverlayDraw>,
+    counter: u64,
+}
+
+fn browser_image_uniforms(
+    segment: &ImageSegment,
+    output_size: (u32, u32),
+) -> Option<BrowserImageUniforms> {
+    if segment.path.is_empty()
+        || !segment.opacity.is_finite()
+        || segment.opacity <= 0.0
+        || !segment.rotation.is_finite()
+        || !segment.rounding.is_finite()
+    {
+        return None;
+    }
+    let center_size = [
+        (segment.center.x * f64::from(output_size.0)) as f32,
+        (segment.center.y * f64::from(output_size.1)) as f32,
+        (segment.size.x * f64::from(output_size.0)) as f32,
+        (segment.size.y * f64::from(output_size.1)) as f32,
+    ];
+    if center_size
+        .iter()
+        .any(|value| !value.is_finite() || value.abs() > 1.0e7)
+        || center_size[2] <= 0.0
+        || center_size[3] <= 0.0
+    {
+        return None;
+    }
+    let (sin, cos) = (segment.rotation % 360.0).to_radians().sin_cos();
+    let half_width = (cos.abs() * center_size[2] + sin.abs() * center_size[3]) * 0.5;
+    let half_height = (sin.abs() * center_size[2] + cos.abs() * center_size[3]) * 0.5;
+    if center_size[0] + half_width < 0.0
+        || center_size[1] + half_height < 0.0
+        || center_size[0] - half_width > output_size.0 as f32
+        || center_size[1] - half_height > output_size.1 as f32
+    {
+        return None;
+    }
+    Some(BrowserImageUniforms {
+        center_size,
+        rotation_opacity_radius: [
+            cos,
+            sin,
+            segment.opacity.clamp(0.0, 1.0),
+            segment.rounding.clamp(0.0, 100.0) * 0.005 * center_size[2].min(center_size[3]),
+        ],
+        flips: [
+            u8::from(segment.flip_x) as f32,
+            u8::from(segment.flip_y) as f32,
+            0.0,
+            0.0,
+        ],
+    })
+}
+
+impl BrowserImageOverlays {
+    fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+        let shader = device.create_shader_module(wgpu::include_wgsl!(
+            "../../../../crates/rendering/src/shaders/image.wgsl"
+        ));
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Browser image overlay pipeline"),
+            layout: None,
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+        Self {
+            pipeline,
+            sampler: device.create_sampler(&wgpu::SamplerDescriptor {
+                label: Some("Browser image overlay sampler"),
+                address_mode_u: wgpu::AddressMode::ClampToEdge,
+                address_mode_v: wgpu::AddressMode::ClampToEdge,
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Linear,
+                mipmap_filter: wgpu::FilterMode::Linear,
+                ..Default::default()
+            }),
+            segments: Vec::new(),
+            textures: HashMap::new(),
+            draws: Vec::new(),
+            counter: 0,
+        }
+    }
+
+    fn update_project(
+        &mut self,
+        device: &wgpu::Device,
+        project: &ProjectConfiguration,
+        output_size: (u32, u32),
+    ) {
+        let Some(timeline) = project.timeline.as_ref() else {
+            self.segments.clear();
+            self.textures.clear();
+            self.draws.clear();
+            return;
+        };
+        let referenced: HashSet<_> = timeline
+            .image_segments
+            .iter()
+            .filter(|segment| !segment.path.is_empty())
+            .map(|segment| segment.path.as_str())
+            .collect();
+        self.textures
+            .retain(|path, _| referenced.contains(path.as_str()));
+        let mut indexed: Vec<_> = timeline.image_segments.iter().enumerate().collect();
+        if project.overlay_order.is_empty() {
+            indexed.sort_unstable_by_key(|(index, segment)| (segment.track, *index));
+        } else {
+            let image_tracks: Vec<_> = project
+                .overlay_tracks()
+                .into_iter()
+                .rev()
+                .filter(|track| track.kind == OverlayTrackKind::Image)
+                .map(|track| track.track)
+                .collect();
+            indexed.sort_by_key(|(index, segment)| {
+                (
+                    image_tracks
+                        .iter()
+                        .position(|track| *track == segment.track)
+                        .unwrap_or(image_tracks.len()),
+                    *index,
+                )
+            });
+        }
+        self.segments = indexed
+            .into_iter()
+            .map(|(_, segment)| segment.clone())
+            .collect();
+        self.rebuild_draws(device, output_size);
+    }
+
+    fn rebuild_draws(&mut self, device: &wgpu::Device, output_size: (u32, u32)) {
+        self.draws.clear();
+        for segment in &self.segments {
+            let Some(texture) = self.textures.get(&segment.path) else {
+                continue;
+            };
+            let Some(uniforms) = browser_image_uniforms(segment, output_size) else {
+                continue;
+            };
+            let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Browser image overlay uniforms"),
+                contents: bytemuck::bytes_of(&uniforms),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+            let view = texture
+                .texture
+                .create_view(&wgpu::TextureViewDescriptor::default());
+            let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Browser image overlay bind group"),
+                layout: &self.pipeline.get_bind_group_layout(0),
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(&view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::Sampler(&self.sampler),
+                    },
+                ],
+            });
+            self.draws.push(BrowserOverlayDraw {
+                segment: segment.clone(),
+                group,
+            });
+        }
+    }
+
+    fn make_room(&mut self, byte_len: u64, time: f64) {
+        let active: HashSet<_> = self
+            .segments
+            .iter()
+            .filter(|segment| segment.is_active_at(time))
+            .map(|segment| segment.path.as_str())
+            .collect();
+        loop {
+            let used: u64 = self.textures.values().map(|texture| texture.byte_len).sum();
+            if self.textures.len() < 16 && used.saturating_add(byte_len) <= 256 * 1024 * 1024 {
+                return;
+            }
+            let Some(oldest) = self
+                .textures
+                .iter()
+                .filter(|(path, _)| !active.contains(path.as_str()))
+                .min_by_key(|(_, texture)| texture.last_used)
+                .map(|(path, _)| path.clone())
+            else {
+                return;
+            };
+            self.textures.remove(&oldest);
+        }
+    }
+
+    fn set_texture(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        upload: BrowserOverlayUpload<'_>,
+    ) -> Result<(), JsValue> {
+        let BrowserOverlayUpload {
+            path,
+            width,
+            height,
+            levels,
+            output_size,
+            time,
+        } = upload;
+        if !self.segments.iter().any(|segment| segment.path == path) {
+            return Err(js_error("Image overlay is not referenced by the project"));
+        }
+        if width == 0
+            || height == 0
+            || width > device.limits().max_texture_dimension_2d
+            || height > device.limits().max_texture_dimension_2d
+            || u64::from(width) * u64::from(height) * 4 > 64 * 1024 * 1024
+            || levels.length() == 0
+            || levels.length() > 16
+        {
+            return Err(js_error("Image overlay dimensions exceed browser limits"));
+        }
+        let mut level_width = width;
+        let mut level_height = height;
+        let mut byte_len = 0_u64;
+        for index in 0..levels.length() {
+            let pixels = levels
+                .get(index)
+                .dyn_into::<js_sys::Uint8Array>()
+                .map_err(|_| js_error("Image overlay mip pixels are invalid"))?;
+            let expected = u64::from(level_width) * u64::from(level_height) * 4;
+            if u64::from(pixels.length()) != expected {
+                return Err(js_error("Image overlay mip dimensions are invalid"));
+            }
+            byte_len = byte_len.saturating_add(expected);
+            level_width = (level_width / 2).max(1);
+            level_height = (level_height / 2).max(1);
+        }
+        if byte_len > 96 * 1024 * 1024 {
+            return Err(js_error("Image overlay exceeds the browser memory limit"));
+        }
+        self.counter = self.counter.saturating_add(1);
+        let previous = self.textures.remove(path);
+        self.make_room(byte_len, time);
+        if self
+            .textures
+            .values()
+            .map(|texture| texture.byte_len)
+            .sum::<u64>()
+            .saturating_add(byte_len)
+            > 512 * 1024 * 1024
+        {
+            if let Some(previous) = previous {
+                self.textures.insert(path.to_owned(), previous);
+            }
+            self.rebuild_draws(device, output_size);
+            return Err(js_error(
+                "Concurrent image overlays exceed browser GPU memory",
+            ));
+        }
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Browser image overlay texture"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: levels.length(),
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        level_width = width;
+        level_height = height;
+        for index in 0..levels.length() {
+            let pixels = levels
+                .get(index)
+                .dyn_into::<js_sys::Uint8Array>()
+                .map_err(|_| js_error("Image overlay mip pixels are invalid"))?
+                .to_vec();
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &texture,
+                    mip_level: index,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &pixels,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(level_width * 4),
+                    rows_per_image: Some(level_height),
+                },
+                wgpu::Extent3d {
+                    width: level_width,
+                    height: level_height,
+                    depth_or_array_layers: 1,
+                },
+            );
+            level_width = (level_width / 2).max(1);
+            level_height = (level_height / 2).max(1);
+        }
+        self.textures.insert(
+            path.to_owned(),
+            BrowserOverlayTexture {
+                texture,
+                byte_len,
+                last_used: self.counter,
+            },
+        );
+        self.rebuild_draws(device, output_size);
+        Ok(())
+    }
+
+    fn has_texture(&self, path: &str) -> bool {
+        self.textures.contains_key(path)
+    }
+
+    fn has_active(&self, time: f64) -> bool {
+        self.draws
+            .iter()
+            .any(|draw| draw.segment.is_active_at(time))
+    }
+
+    fn render(&mut self, pass: &mut wgpu::RenderPass<'_>, time: f64) {
+        self.counter = self.counter.saturating_add(1);
+        pass.set_pipeline(&self.pipeline);
+        for draw in &self.draws {
+            if !draw.segment.is_active_at(time) {
+                continue;
+            }
+            if let Some(texture) = self.textures.get_mut(&draw.segment.path) {
+                texture.last_used = self.counter;
+            }
+            pass.set_bind_group(0, &draw.group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+    }
+}
+
+fn draw_image_overlays(
+    overlays: Option<&mut BrowserImageOverlays>,
+    encoder: &mut wgpu::CommandEncoder,
+    target: &wgpu::TextureView,
+    time: f64,
+) {
+    let Some(overlays) = overlays.filter(|overlays| overlays.has_active(time)) else {
+        return;
+    };
+    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("Browser editor image overlays"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view: target,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Load,
+                store: wgpu::StoreOp::Store,
+            },
+        })],
+        depth_stencil_attachment: None,
+        timestamp_writes: None,
+        occlusion_query_set: None,
+    });
+    overlays.render(&mut pass, time);
+}
+
 #[derive(Clone, Copy)]
 enum LastRenderedComposition {
     Single { has_camera: bool },
@@ -1110,6 +1537,8 @@ pub struct BrowserGpuRenderer {
     background_key: Option<String>,
     background_uniforms: BackgroundUniforms,
     image_background: Option<BrowserImageBackground>,
+    image_overlays: Option<BrowserImageOverlays>,
+    image_overlay_key: Option<String>,
     animated_background: Option<AnimatedGradientLayer>,
     animated_intermediate: Option<AnimatedGradientLayer>,
     animated_config: Option<AnimatedGradientConfig>,
@@ -1127,7 +1556,7 @@ pub struct BrowserGpuRenderer {
 }
 
 fn draw_retained(
-    renderer: &BrowserGpuRenderer,
+    renderer: &mut BrowserGpuRenderer,
     encoder: &mut wgpu::CommandEncoder,
     target: &wgpu::TextureView,
 ) -> Result<bool, JsValue> {
@@ -1167,6 +1596,12 @@ fn draw_retained(
             transition.render_cached(encoder, target);
         }
     }
+    draw_image_overlays(
+        renderer.image_overlays.as_mut(),
+        encoder,
+        target,
+        f64::from(renderer.frame_number) / f64::from(renderer.frame_rate),
+    );
     Ok(true)
 }
 
@@ -1320,6 +1755,8 @@ impl BrowserGpuRenderer {
             background_key: None,
             background_uniforms,
             image_background: None,
+            image_overlays: None,
+            image_overlay_key: None,
             animated_background: None,
             animated_intermediate: None,
             animated_config: None,
@@ -1349,6 +1786,15 @@ impl BrowserGpuRenderer {
     ) -> Result<(), JsValue> {
         let project: ProjectConfiguration = serde_json::from_str(project_json).map_err(js_error)?;
         let background_key = serde_json::to_string(&project.background).map_err(js_error)?;
+        let image_overlay_key = project
+            .timeline
+            .as_ref()
+            .filter(|timeline| !timeline.image_segments.is_empty())
+            .map(|timeline| {
+                serde_json::to_string(&(&timeline.image_segments, &project.overlay_order))
+            })
+            .transpose()
+            .map_err(js_error)?;
         let background_changed = self.background_key.as_ref() != Some(&background_key);
         match &project.background.source {
             BackgroundSource::AnimatedGradient { config } => {
@@ -1456,7 +1902,58 @@ impl BrowserGpuRenderer {
             self.background_blur = None;
         }
         self.background_key = Some(background_key);
+        if image_overlay_key != self.image_overlay_key {
+            if image_overlay_key.is_some() {
+                if self.image_overlays.is_none() {
+                    self.image_overlays = Some(BrowserImageOverlays::new(
+                        &self.device,
+                        self.surface_config.format,
+                    ));
+                }
+                if let Some(overlays) = self.image_overlays.as_mut() {
+                    overlays.update_project(
+                        &self.device,
+                        &project,
+                        (self.surface_config.width, self.surface_config.height),
+                    );
+                }
+            } else {
+                self.image_overlays = None;
+            }
+            self.image_overlay_key = image_overlay_key;
+        }
         Ok(())
+    }
+
+    pub fn has_overlay_image(&self, path: &str) -> bool {
+        self.image_overlays
+            .as_ref()
+            .is_some_and(|overlays| overlays.has_texture(path))
+    }
+
+    pub fn set_overlay_image(
+        &mut self,
+        path: &str,
+        width: u32,
+        height: u32,
+        levels: js_sys::Array,
+    ) -> Result<(), JsValue> {
+        let overlays = self
+            .image_overlays
+            .as_mut()
+            .ok_or_else(|| js_error("Editor project has no image overlays"))?;
+        overlays.set_texture(
+            &self.device,
+            &self.queue,
+            BrowserOverlayUpload {
+                path,
+                width,
+                height,
+                levels: &levels,
+                output_size: (self.surface_config.width, self.surface_config.height),
+                time: f64::from(self.frame_number) / f64::from(self.frame_rate),
+            },
+        )
     }
 
     pub fn set_frame_time(&mut self, frame_number: u32, frame_rate: u32) -> Result<(), JsValue> {
@@ -1517,6 +2014,9 @@ impl BrowserGpuRenderer {
                     height,
                     self.surface_config.format,
                 ));
+            }
+            if let Some(overlays) = self.image_overlays.as_mut() {
+                overlays.rebuild_draws(&self.device, (width, height));
             }
             self.intermediate = None;
             self.last_rendered = None;
@@ -1597,6 +2097,12 @@ impl BrowserGpuRenderer {
             &view,
             screen,
             has_camera.then(|| self.camera.as_ref()).flatten(),
+        );
+        draw_image_overlays(
+            self.image_overlays.as_mut(),
+            &mut encoder,
+            &view,
+            f64::from(self.frame_number) / f64::from(self.frame_rate),
         );
         self.queue.submit(Some(encoder.finish()));
         frame.present();
@@ -1807,6 +2313,12 @@ impl BrowserGpuRenderer {
                 progress,
                 opaque: true,
             },
+        );
+        draw_image_overlays(
+            self.image_overlays.as_mut(),
+            &mut encoder,
+            &surface_view,
+            f64::from(self.frame_number) / f64::from(self.frame_rate),
         );
         self.queue.submit(Some(encoder.finish()));
         frame.present();

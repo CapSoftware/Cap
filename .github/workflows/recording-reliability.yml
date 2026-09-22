@@ -104,6 +104,17 @@ jobs:
         env:
           CAP_REPLAY_HEADED: ${{ matrix.headed }}
           CAP_REPLAY_INDEXED: "1"
+      - name: Stress continuous HTML video playback on a slow decoder
+        run: |
+          if [ "${{ matrix.browser }}" = "firefox" ]; then
+            xvfb-run -a bun packages/editor-solid-web/browser-replay/replay.cjs firefox
+          else
+            bun packages/editor-solid-web/browser-replay/replay.cjs ${{ matrix.browser }}
+          fi
+        env:
+          CAP_REPLAY_HEADED: ${{ matrix.headed }}
+          CAP_REPLAY_FORCE_HTML: "1"
+          CAP_REPLAY_SLOW_HTML: "1"
 
   browser-studio-webgpu:
     name: Web Studio GPU auto-selection (Chromium Intel macOS)

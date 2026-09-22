@@ -78,6 +78,8 @@ const staticServer = Bun.serve({
 const origin = `http://127.0.0.1:${staticServer.port}`;
 const defaultFormat = browserName === "firefox" ? "webm" : "mp4";
 const indexed = process.env.CAP_REPLAY_INDEXED === "1";
+const slowHtml = process.env.CAP_REPLAY_SLOW_HTML === "1";
+const forceHtml = process.env.CAP_REPLAY_FORCE_HTML === "1";
 const simulateFailedProbe =
 	process.env.CAP_REPLAY_SIMULATE_FAILED_PROBE === "1";
 const fixturePrefix = indexed ? "indexed-" : "";
@@ -278,6 +280,14 @@ async function replay(forceWebGl, forceWebGpu = false) {
 				});
 			});
 		}
+		if (forceHtml) {
+			await page.addInitScript(() => {
+				Object.defineProperty(window, "VideoDecoder", {
+					configurable: true,
+					value: undefined,
+				});
+			});
+		}
 		await page.route(`${origin}/**`, async (route) => {
 			const pathname = new URL(route.request().url()).pathname;
 			if (
@@ -389,11 +399,16 @@ async function replay(forceWebGl, forceWebGpu = false) {
 			},
 		);
 		await page.evaluate(
-			({ indexed, headed }) => {
+			({ indexed, headed, slowHtml }) => {
 				window.CapReplayIndexed = indexed;
 				window.CapReplayHeaded = headed;
+				window.CapReplaySlowHtml = slowHtml;
 			},
-			{ indexed, headed: process.env.CAP_REPLAY_HEADED === "1" },
+			{
+				indexed,
+				headed: process.env.CAP_REPLAY_HEADED === "1",
+				slowHtml,
+			},
 		);
 		let replayTimer;
 		const result = await Promise.race([
@@ -730,6 +745,70 @@ async function replay(forceWebGl, forceWebGpu = false) {
 						playback.module.default_project_config_json(),
 					).background.source;
 					await playback.setConfig(config);
+					const withoutOverlay = await snapshot();
+					config.timeline = {
+						segments: [
+							{
+								recordingSegment: 0,
+								timescale: 1,
+								start: 0,
+								end: playback.sourceDurations[0],
+							},
+						],
+						transitions: [],
+						zoomSegments: [],
+						imageSegments: [
+							{
+								start: 0,
+								end: playback.sourceDurations[0],
+								path: importedImagePath,
+								center: { x: 0.5, y: 0.5 },
+								size: { x: 0.4, y: 0.4 },
+								opacity: 1,
+							},
+						],
+					};
+					await playback.setConfig(config);
+					const overlayChangedPixels = differentPixels(
+						withoutOverlay,
+						await snapshot(),
+					);
+					config.timeline.imageSegments[0].opacity = 0.4;
+					await playback.setConfig(config);
+					const overlayOpacityChangedPixels = differentPixels(
+						withoutOverlay,
+						await snapshot(),
+					);
+					config.timeline.imageSegments[0].enabled = false;
+					await playback.setConfig(config);
+					const disabledOverlayChangedPixels = differentPixels(
+						withoutOverlay,
+						await snapshot(),
+					);
+					config.timeline.imageSegments = Array.from(
+						{ length: 20 },
+						(_, index) => ({
+							start: 0,
+							end: playback.sourceDurations[0],
+							path: `/api/editor/videos/fixture/file?raw=1&path=content/images/00000000-0000-0000-0000-${String(index + 100).padStart(12, "0")}.png`,
+							center: {
+								x: ((index % 5) + 0.5) / 5,
+								y: (Math.floor(index / 5) + 0.5) / 4,
+							},
+							size: { x: 0.15, y: 0.2 },
+						}),
+					);
+					await playback.setConfig(config);
+					const manyOverlayChangedPixels = differentPixels(
+						withoutOverlay,
+						await snapshot(),
+					);
+					const manyOverlayTextures = config.timeline.imageSegments.filter(
+						(segment) =>
+							playback.canvas.renderer.has_overlay_image(segment.path),
+					).length;
+					config.timeline = undefined;
+					await playback.setConfig(config);
 					const seekStarted = performance.now();
 					await playback.seek(0.75);
 					console.info("Cap replay stage: first seek completed");
@@ -940,6 +1019,83 @@ async function replay(forceWebGl, forceWebGpu = false) {
 							compositeCosts.slice(beforeCompositeCosts),
 						),
 					};
+					let slowHtmlPlayback = null;
+					if (window.CapReplaySlowHtml) {
+						const decoderDescriptor = Object.getOwnPropertyDescriptor(
+							window,
+							"VideoDecoder",
+						);
+						const timeDescriptor = Object.getOwnPropertyDescriptor(
+							HTMLMediaElement.prototype,
+							"currentTime",
+						);
+						const rateDescriptor = Object.getOwnPropertyDescriptor(
+							HTMLMediaElement.prototype,
+							"playbackRate",
+						);
+						if (
+							!timeDescriptor?.get ||
+							!timeDescriptor.set ||
+							!rateDescriptor?.get ||
+							!rateDescriptor.set
+						) {
+							throw new Error("Slow HTML video clock could not be measured");
+						}
+						let seekCount = 0;
+						Object.defineProperty(window, "VideoDecoder", {
+							configurable: true,
+							value: undefined,
+							writable: true,
+						});
+						Object.defineProperty(HTMLMediaElement.prototype, "currentTime", {
+							...timeDescriptor,
+							set(value) {
+								if (this.tagName === "VIDEO") seekCount++;
+								return timeDescriptor.set.call(this, value);
+							},
+						});
+						Object.defineProperty(HTMLMediaElement.prototype, "playbackRate", {
+							...rateDescriptor,
+							set(value) {
+								return rateDescriptor.set.call(
+									this,
+									this.tagName === "VIDEO" ? Math.min(value, 0.5) : value,
+								);
+							},
+						});
+						try {
+							await playback.seek(0.1);
+							seekCount = 0;
+							const beforeSlowPlay = frames.length;
+							playback.play();
+							await new Promise((resolve) => setTimeout(resolve, 1200));
+							playback.pause();
+							slowHtmlPlayback = {
+								seekCount,
+								playedFrames: frames.length - beforeSlowPlay,
+								outputTime: playback.outputTime,
+							};
+						} finally {
+							playback.pause();
+							Object.defineProperty(
+								HTMLMediaElement.prototype,
+								"currentTime",
+								timeDescriptor,
+							);
+							Object.defineProperty(
+								HTMLMediaElement.prototype,
+								"playbackRate",
+								rateDescriptor,
+							);
+							if (decoderDescriptor)
+								Object.defineProperty(
+									window,
+									"VideoDecoder",
+									decoderDescriptor,
+								);
+							else delete window.VideoDecoder;
+						}
+					}
 					let indexedParity = null;
 					if (indexed) {
 						config.background.padding = 0;
@@ -1231,6 +1387,11 @@ async function replay(forceWebGl, forceWebGpu = false) {
 						returnToStartMs,
 						changedPixels,
 						imageChangedPixels,
+						overlayChangedPixels,
+						overlayOpacityChangedPixels,
+						disabledOverlayChangedPixels,
+						manyOverlayChangedPixels,
+						manyOverlayTextures,
 						blurChangedPixels,
 						exifOrientationChangedPixels,
 						startChangedPixels,
@@ -1240,6 +1401,7 @@ async function replay(forceWebGl, forceWebGpu = false) {
 						blurredTransitionChangedPixels,
 						playedFrames,
 						playbackMetrics,
+						slowHtmlPlayback,
 						indexedParity,
 						videos,
 						colorSample,
@@ -1302,6 +1464,14 @@ async function replay(forceWebGl, forceWebGpu = false) {
 			"Imported image background did not change the GPU frame",
 		);
 		assert(
+			result.overlayChangedPixels > 1000 &&
+				result.overlayOpacityChangedPixels > 1000 &&
+				result.disabledOverlayChangedPixels < 100 &&
+				result.manyOverlayChangedPixels > 50_000 &&
+				result.manyOverlayTextures === 20,
+			`Image overlay pixel behavior differs: ${JSON.stringify({ visible: result.overlayChangedPixels, opacity: result.overlayOpacityChangedPixels, disabled: result.disabledOverlayChangedPixels, manyVisible: result.manyOverlayChangedPixels, manyTextures: result.manyOverlayTextures })}`,
+		);
+		assert(
 			result.blurChangedPixels > result.width * result.height * 0.004,
 			`Background blur changed ${result.blurChangedPixels} pixels at ${result.width}×${result.height}`,
 		);
@@ -1331,6 +1501,13 @@ async function replay(forceWebGl, forceWebGpu = false) {
 			);
 		}
 		assert(result.playedFrames >= 2, "Local playback did not advance");
+		if (slowHtml) {
+			assert(
+				result.slowHtmlPlayback?.playedFrames >= 2 &&
+					result.slowHtmlPlayback.seekCount <= 3,
+				`Slow HTML playback sought too often: ${JSON.stringify(result.slowHtmlPlayback)}`,
+			);
+		}
 		for (const track of ["display", "camera"]) {
 			const decoded = result.playbackMetrics.decodedFrameDriftMs[track];
 			if (decoded.count > 0) {
@@ -1413,7 +1590,7 @@ async function replay(forceWebGl, forceWebGpu = false) {
 			),
 			"Camera clip did not decode",
 		);
-		if (browserName !== "firefox") {
+		if (browserName !== "firefox" && !forceHtml) {
 			assert(result.colorSample !== null, "Untagged color clip did not decode");
 			assert(
 				result.colorSample[0] <= 2 &&

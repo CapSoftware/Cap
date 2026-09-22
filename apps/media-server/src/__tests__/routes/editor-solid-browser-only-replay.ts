@@ -43,6 +43,15 @@ const camera = join(
 	import.meta.dir,
 	"../fixtures/editor-clips/camera-green.webm",
 );
+const overlayImagePath =
+	"content/images/7db75f36-4b50-4ebf-9a5c-3e6be0b6e929.png";
+const overlayImage = await sharp(
+	Buffer.from(
+		'<svg xmlns="http://www.w3.org/2000/svg" width="160" height="120"><rect width="80" height="120" fill="#ff2400" fill-opacity="0.65"/><rect x="80" width="80" height="120" fill="#05fb39" fill-opacity="0.9"/></svg>',
+	),
+)
+	.png()
+	.toBuffer();
 
 assert.ok(process.env.CAP_WEB_EDITOR_PREPARE_BIN);
 assert.ok(process.env.CAP_WEB_EDITOR_SERVICE_BIN);
@@ -57,12 +66,31 @@ initSync({
 });
 let config = JSON.parse(default_project_config_json()) as {
 	background: { source: unknown; blur: number };
+	timeline?: unknown;
 };
 config.background.source = {
 	type: "animatedGradient",
 	config: JSON.parse(random_animated_gradient_json(1234)),
 };
 config.background.blur = 60;
+config.timeline = {
+	segments: [{ recordingSegment: 0, timescale: 1, start: 0, end: 3 }],
+	transitions: [],
+	zoomSegments: [],
+	imageSegments: [
+		{
+			start: 0,
+			end: 3,
+			path: overlayImagePath,
+			center: { x: 0.5, y: 0.5 },
+			size: { x: 0.42, y: 0.36 },
+			opacity: 0.8,
+			rotation: 15,
+			rounding: 20,
+			flipX: true,
+		},
+	],
+};
 
 const hostModule = await Bun.build({
 	entrypoints: [
@@ -121,6 +149,15 @@ async function preparationInput() {
 			offsetMs: 125,
 		},
 		projectConfig: config,
+		imageAssets: [
+			{
+				path: overlayImagePath,
+				name: "Preview parity image",
+				url: `${base}/overlay-image.png`,
+				size: overlayImage.byteLength,
+				contentType: "image/png",
+			},
+		],
 	};
 }
 
@@ -273,6 +310,10 @@ try {
 				return mediaResponse(request, display);
 			if (url.pathname === "/camera.webm")
 				return mediaResponse(request, camera);
+			if (url.pathname === "/overlay-image.png")
+				return new Response(overlayImage, {
+					headers: { "Content-Type": "image/png" },
+				});
 			if (url.pathname === "/favicon.ico")
 				return new Response(null, { status: 204 });
 			if (url.pathname === "/api/desktop/organizations")
@@ -331,6 +372,13 @@ try {
 				return new Response("Missing editor asset", { status: 404 });
 			}
 			const apiRoot = `/api/editor/videos/${videoId}`;
+			if (url.pathname === `${apiRoot}/file` && request.method === "GET") {
+				if (url.searchParams.get("path") !== overlayImagePath)
+					return new Response("Missing editor image", { status: 404 });
+				return new Response(overlayImage, {
+					headers: { "Content-Type": "image/png" },
+				});
+			}
 			if (url.pathname === `${apiRoot}/plan` && request.method === "GET") {
 				planRequests++;
 				return Response.json({ pro: currentCaptionPlan });
