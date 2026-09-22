@@ -99,6 +99,8 @@ let rangeRequests = 0;
 let workerRequests = 0;
 let preparationRequests = 0;
 let workerFixtureEnabled = false;
+let currentCaptionPlan = false;
+let planRequests = 0;
 
 async function preparationInput() {
 	return {
@@ -329,8 +331,10 @@ try {
 				return new Response("Missing editor asset", { status: 404 });
 			}
 			const apiRoot = `/api/editor/videos/${videoId}`;
-			if (url.pathname === `${apiRoot}/plan` && request.method === "GET")
-				return Response.json({ pro: false });
+			if (url.pathname === `${apiRoot}/plan` && request.method === "GET") {
+				planRequests++;
+				return Response.json({ pro: currentCaptionPlan });
+			}
 			if (url.pathname === `${apiRoot}/assets` && request.method === "GET")
 				return Response.json({ path: null });
 			if (url.pathname === `${apiRoot}/config` && request.method === "GET")
@@ -550,6 +554,33 @@ try {
 	assert.ok(bootstrapRequests > 0);
 	assert.ok(rangeRequests > 0);
 	assert.equal(workerRequests, 0);
+	await editor.getByRole("tab", { name: "Captions" }).click();
+	await editor.getByRole("link", { name: "Upgrade to Cap Pro" }).waitFor({
+		state: "visible",
+	});
+	const planRequestsBeforeFocus = planRequests;
+	currentCaptionPlan = true;
+	await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+	await editor.getByRole("link", { name: "Upgrade to Cap Pro" }).waitFor({
+		state: "hidden",
+	});
+	await editor.getByText("Font settings", { exact: true }).waitFor({
+		state: "visible",
+	});
+	assert.ok(planRequests > planRequestsBeforeFocus);
+	assert.equal(workerRequests, 0);
+	currentCaptionPlan = false;
+	await page.evaluate(() =>
+		document.dispatchEvent(new Event("visibilitychange")),
+	);
+	await editor.getByRole("link", { name: "Upgrade to Cap Pro" }).waitFor({
+		state: "visible",
+	});
+	await editor.getByText("Font settings", { exact: true }).waitFor({
+		state: "hidden",
+	});
+	assert.equal(workerRequests, 0);
+	await editor.getByRole("tab", { name: "Background" }).click();
 	assert.ok(
 		(
 			await editor.getByText("Blur", { exact: true }).locator("..").innerText()
@@ -939,7 +970,7 @@ try {
 	assert.deepEqual(failedResponses, []);
 	assert.deepEqual(pageErrors, []);
 	process.stdout.write(
-		`${JSON.stringify({ browserEngine: engine.name(), browserOnly: true, bootstrapRequests, rangeRequests, workerRequests, preparationRequests, playbackAdvanced: true, persistedGradient: true, webGlPreserve, workerExportPreviewVisible: true, workerExportEstimateVisible: true, workerExportPreviewMs, workerExportEstimateMs, visibleMeanAbsoluteError, visibleDifferentPixels, visibleAlphaDifferentPixels, meanAbsoluteError, psnrDb, differentPixels, totalPixels: browserInfo.width * browserInfo.height, pageErrors, failedResponses })}\n`,
+		`${JSON.stringify({ browserEngine: engine.name(), browserOnly: true, bootstrapRequests, rangeRequests, workerRequests, preparationRequests, captionPlanChangesWithoutReload: true, planRequests, playbackAdvanced: true, persistedGradient: true, webGlPreserve, workerExportPreviewVisible: true, workerExportEstimateVisible: true, workerExportPreviewMs, workerExportEstimateMs, visibleMeanAbsoluteError, visibleDifferentPixels, visibleAlphaDifferentPixels, meanAbsoluteError, psnrDb, differentPixels, totalPixels: browserInfo.width * browserInfo.height, pageErrors, failedResponses })}\n`,
 	);
 	await page.evaluate(() => {
 		(

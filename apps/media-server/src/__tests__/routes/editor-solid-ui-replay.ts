@@ -838,6 +838,7 @@ try {
 		code: number;
 		reason: string;
 		upstreamReadyState: number | null;
+		atMs: number;
 	}> = [];
 	const baseSocketHandler: Bun.WebSocketHandler<EditorSocketConnection> =
 		runtimeFault
@@ -879,6 +880,7 @@ try {
 				code,
 				reason,
 				upstreamReadyState: ws.data.upstream?.readyState ?? null,
+				atMs: Date.now(),
 			});
 			baseSocketHandler.close?.(ws, code, reason);
 		},
@@ -944,6 +946,14 @@ try {
 		};
 	});
 	const pageErrors: string[] = [];
+	const navigationRequests: string[] = [];
+	const frameNavigations: string[] = [];
+	page.on("request", (request) => {
+		if (request.isNavigationRequest()) navigationRequests.push(request.url());
+	});
+	page.on("framenavigated", (frame) => {
+		frameNavigations.push(frame.url());
+	});
 	const dialogMessages: string[] = [];
 	const rendererFallbacks: string[] = [];
 	const failedResponses: string[] = [];
@@ -1721,7 +1731,7 @@ try {
 					})
 					.catch(() => null);
 				process.stderr.write(
-					`${JSON.stringify({ stage: "caption-plan-focus", browserEngine: browserEngine.name(), planRequestsBeforeFocus, planRequests, currentCaptionPlan, iframePlan, hostState, socketClosures: socketClosures.slice(-12), pageErrors, failedResponses })}\n`,
+					`${JSON.stringify({ stage: "caption-plan-focus", browserEngine: browserEngine.name(), planRequestsBeforeFocus, planRequests, currentCaptionPlan, iframePlan, hostState, socketClosures: socketClosures.slice(-12), navigationRequests: navigationRequests.slice(-12), frameNavigations: frameNavigations.slice(-12), pageErrors, failedResponses })}\n`,
 				);
 				throw cause;
 			}

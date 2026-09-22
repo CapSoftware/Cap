@@ -483,7 +483,32 @@ async function replay(forceWebGl, forceWebGpu = false) {
 					};
 				}
 				const videoFrameCosts = [];
+				const videoSlotCosts = [];
+				const videoPlayCosts = [];
 				const compositeCosts = [];
+				const poolSlot = playback.pool.slot.bind(playback.pool);
+				playback.pool.slot = async (...args) => {
+					const started = performance.now();
+					try {
+						return await poolSlot(...args);
+					} finally {
+						videoSlotCosts.push(performance.now() - started);
+					}
+				};
+				const nativePlay = HTMLMediaElement.prototype.play;
+				HTMLMediaElement.prototype.play = function (...args) {
+					const started = performance.now();
+					return nativePlay.apply(this, args).then(
+						(value) => {
+							videoPlayCosts.push(performance.now() - started);
+							return value;
+						},
+						(cause) => {
+							videoPlayCosts.push(performance.now() - started);
+							throw cause;
+						},
+					);
+				};
 				const poolFrame = playback.pool.frame.bind(playback.pool);
 				playback.pool.frame = async (...args) => {
 					const started = performance.now();
@@ -741,6 +766,8 @@ async function replay(forceWebGl, forceWebGpu = false) {
 					await playback.seek(0.75);
 					const beforePlay = frames.length;
 					const beforeVideoFrameCosts = videoFrameCosts.length;
+					const beforeVideoSlotCosts = videoSlotCosts.length;
+					const beforeVideoPlayCosts = videoPlayCosts.length;
 					const beforeCompositeCosts = compositeCosts.length;
 					playback.play();
 					const playbackIntervalMs =
@@ -771,6 +798,12 @@ async function replay(forceWebGl, forceWebGpu = false) {
 						averageFrameCostMs: playback.averageFrameCostMs,
 						videoFrameCosts: costSummary(
 							videoFrameCosts.slice(beforeVideoFrameCosts),
+						),
+						videoSlotCosts: costSummary(
+							videoSlotCosts.slice(beforeVideoSlotCosts),
+						),
+						videoPlayCosts: costSummary(
+							videoPlayCosts.slice(beforeVideoPlayCosts),
 						),
 						compositeCosts: costSummary(
 							compositeCosts.slice(beforeCompositeCosts),
@@ -969,6 +1002,7 @@ async function replay(forceWebGl, forceWebGpu = false) {
 					);
 					throw error;
 				} finally {
+					HTMLMediaElement.prototype.play = nativePlay;
 					playback.dispose();
 				}
 			}, screen.format),
