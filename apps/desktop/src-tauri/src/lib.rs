@@ -60,6 +60,7 @@ mod tray;
 mod update_project_names;
 mod updates;
 mod upload;
+mod upload_health;
 pub mod web_api;
 mod window_exclusion;
 mod window_position_persistence;
@@ -1638,6 +1639,7 @@ impl App {
         }
 
         self.recording_state = RecordingState::Pending { mode, target };
+        crate::upload_health::recording_started(&self.handle);
         CurrentRecordingChanged.emit(&self.handle).ok();
 
         Ok(())
@@ -6931,6 +6933,8 @@ fn specta_builder() -> tauri_specta::Builder {
             updates::updates_download_and_install,
             restart_app,
             updates::updates_channel_changed,
+            upload_health::get_upload_health_status,
+            upload_health::refresh_upload_health,
         ])
         .events(tauri_specta::collect_events![
             linux_instant_camera::CameraPresentationRequested,
@@ -6967,6 +6971,7 @@ fn specta_builder() -> tauri_specta::Builder {
             updates::UpdateDownloadProgress,
             updates::UpdateReady,
             diagnostics::DiagnosticProgress,
+            upload_health::UploadHealthChanged,
         ])
         .error_handling(tauri_specta::ErrorHandlingMode::Throw)
         .typ::<ProjectConfiguration>()
@@ -7446,6 +7451,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             });
 
             upload::lifecycle::init(app.clone());
+            upload_health::init(&app);
 
             spawn_mic_error_handler(app.clone(), mic_error_rx);
             spawn_device_watchers(app.clone());
