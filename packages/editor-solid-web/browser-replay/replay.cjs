@@ -8,11 +8,42 @@ const browserType = { chromium, firefox, webkit }[browserName];
 if (!browserType) throw new Error("Choose chromium, firefox, or webkit");
 
 const output = path.join(__dirname, "out");
+function serveMedia(request, asset) {
+	const headers = {
+		"Access-Control-Allow-Origin": "*",
+		"Access-Control-Expose-Headers": "Content-Range",
+		"Accept-Ranges": "bytes",
+		"Content-Type": asset.contentType,
+	};
+	const range = /^bytes=(\d+)-(\d*)$/.exec(request.headers.get("range") ?? "");
+	if (!range) return new Response(Bun.file(asset.file), { headers });
+	const start = Number(range[1]);
+	const end = range[2]
+		? Math.min(Number(range[2]), asset.size - 1)
+		: asset.size - 1;
+	if (!Number.isSafeInteger(start) || start >= asset.size || end < start) {
+		return new Response(null, {
+			status: 416,
+			headers: { ...headers, "Content-Range": `bytes */${asset.size}` },
+		});
+	}
+	return new Response(Bun.file(asset.file).slice(start, end + 1), {
+		status: 206,
+		headers: {
+			...headers,
+			"Content-Range": `bytes ${start}-${end}/${asset.size}`,
+		},
+	});
+}
 const staticServer = Bun.serve({
 	hostname: "127.0.0.1",
 	port: 0,
 	async fetch(request) {
 		const pathname = new URL(request.url).pathname;
+		if (pathname === `/screen.${screen.format}`)
+			return serveMedia(request, screen);
+		if (pathname === `/camera.${camera.format}`)
+			return serveMedia(request, camera);
 		if (pathname === "/browser-replay/large-background.png") {
 			return new Response(
 				Bun.file(path.join(__dirname, "large-background.png")),
@@ -56,9 +87,10 @@ function media(file) {
 		throw new Error("Replay media must be an MP4 or WebM file");
 	}
 	return {
+		file,
 		format,
 		contentType: format === "webm" ? "video/webm" : "video/mp4",
-		body: fs.readFileSync(file),
+		size: fs.statSync(file).size,
 	};
 }
 
@@ -81,47 +113,6 @@ const expectedCameraHeight = Number(
 
 function assert(condition, message) {
 	if (!condition) throw new Error(message);
-}
-
-async function fulfillMedia(route, asset) {
-	const range = /^bytes=(\d+)-(\d*)$/.exec(
-		route.request().headers().range ?? "",
-	);
-	const headers = {
-		"Access-Control-Allow-Origin": "*",
-		"Access-Control-Expose-Headers": "Content-Range",
-		"Accept-Ranges": "bytes",
-	};
-	if (!range) {
-		await route.fulfill({
-			status: 200,
-			contentType: asset.contentType,
-			headers,
-			body: asset.body,
-		});
-		return;
-	}
-	const start = Number(range[1]);
-	const end = range[2]
-		? Math.min(Number(range[2]), asset.body.length - 1)
-		: asset.body.length - 1;
-	if (start >= asset.body.length || end < start) {
-		await route.fulfill({
-			status: 416,
-			contentType: asset.contentType,
-			headers: { ...headers, "Content-Range": `bytes */${asset.body.length}` },
-		});
-		return;
-	}
-	await route.fulfill({
-		status: 206,
-		contentType: asset.contentType,
-		headers: {
-			...headers,
-			"Content-Range": `bytes ${start}-${end}/${asset.body.length}`,
-		},
-		body: asset.body.subarray(start, end + 1),
-	});
 }
 
 async function replay(forceWebGl, forceWebGpu = false) {
@@ -312,11 +303,11 @@ async function replay(forceWebGl, forceWebGpu = false) {
 				return;
 			}
 			if (pathname === `/screen.${screen.format}`) {
-				await fulfillMedia(route, screen);
+				await route.continue();
 				return;
 			}
 			if (pathname === `/camera.${camera.format}`) {
-				await fulfillMedia(route, camera);
+				await route.continue();
 				return;
 			}
 			if (pathname === "/browser-replay/large-background.png") {
