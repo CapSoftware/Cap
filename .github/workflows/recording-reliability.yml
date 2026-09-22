@@ -119,10 +119,12 @@ jobs:
       - name: Replay paired clips through WebGPU
         run: bun packages/editor-solid-web/browser-replay/replay.cjs chromium
         env:
+          CAP_REPLAY_HEADED: "1"
           CAP_REPLAY_REQUIRE_WEBGPU: "1"
       - name: Check screen and camera frame parity through WebGPU at 8x
         run: bun packages/editor-solid-web/browser-replay/replay.cjs chromium
         env:
+          CAP_REPLAY_HEADED: "1"
           CAP_REPLAY_INDEXED: "1"
           CAP_REPLAY_REQUIRE_WEBGPU: "1"
 

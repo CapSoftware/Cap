@@ -248,9 +248,13 @@ async function replay(forceWebGl, forceWebGpu = false) {
 				timeout: 30_000,
 			},
 		);
-		await page.evaluate((enabled) => {
-			window.CapReplayIndexed = enabled;
-		}, indexed);
+		await page.evaluate(
+			({ indexed, headed }) => {
+				window.CapReplayIndexed = indexed;
+				window.CapReplayHeaded = headed;
+			},
+			{ indexed, headed: process.env.CAP_REPLAY_HEADED === "1" },
+		);
 		let replayTimer;
 		const result = await Promise.race([
 			page.evaluate(async (mediaFormat) => {
@@ -499,7 +503,7 @@ async function replay(forceWebGl, forceWebGpu = false) {
 							const read = (async () => {
 								await originalRender(...args);
 								let observed;
-								if (/webgpu/i.test(backend)) {
+								if (/webgpu/i.test(backend) && !window.CapReplayHeaded) {
 									const pixels = await playback.canvas.renderer.snapshot_rgba();
 									observed = readIndex(
 										(x, y) =>
