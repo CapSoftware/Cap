@@ -87,6 +87,9 @@ jobs:
 
       - run: bun run --cwd apps/web next typegen
 
+      - name: Check MCP card bundle
+        run: bun run --cwd apps/web mcp-card:check
+
       - name: Test workspace tooling
         run: node --test scripts/bun-scripts.test.mjs scripts/check-tauri-plugin-versions.test.mjs
 

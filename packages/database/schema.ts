@@ -493,6 +493,7 @@ export const videos = mysqlTable(
 	},
 	(table) => [
 		index("owner_id_idx").on(table.ownerId),
+		index("owner_updated_id_idx").on(table.ownerId, table.updatedAt, table.id),
 		index("is_public_idx").on(table.public),
 		index("folder_id_idx").on(table.folderId),
 		index("storage_integration_id_idx").on(table.storageIntegrationId),
@@ -1002,6 +1003,80 @@ export const agentApiAuthorizationCodes = mysqlTable(
 		uniqueIndex("code_hash_idx").on(table.codeHash),
 		index("expires_at_idx").on(table.expiresAt),
 		index("user_created_at_idx").on(table.userId, table.createdAt),
+	],
+);
+
+export const mcpOAuthClients = mysqlTable(
+	"mcp_oauth_clients",
+	{
+		id: nanoId("id").notNull().primaryKey(),
+		clientId: varchar("clientId", { length: 128 }).notNull(),
+		clientName: varchar("clientName", { length: 100 }).notNull(),
+		redirectUris: json("redirectUris").notNull().$type<string[]>(),
+		activatedAt: timestamp("activatedAt"),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+	},
+	(table) => [
+		uniqueIndex("client_id_idx").on(table.clientId),
+		index("inactive_created_at_idx").on(table.activatedAt, table.createdAt),
+	],
+);
+
+export const mcpOAuthRegistrationQuotas = mysqlTable(
+	"mcp_oauth_registration_quotas",
+	{
+		windowId: varchar("windowId", { length: 10 }).notNull().primaryKey(),
+		registrations: int("registrations").notNull().default(0),
+		expiresAt: timestamp("expiresAt").notNull(),
+	},
+	(table) => [index("expires_at_idx").on(table.expiresAt)],
+);
+
+export const mcpOAuthCodes = mysqlTable(
+	"mcp_oauth_codes",
+	{
+		id: nanoId("id").notNull().primaryKey(),
+		userId: nanoId("userId").notNull().$type<User.UserId>(),
+		clientId: varchar("clientId", { length: 128 }).notNull(),
+		codeHash: varchar("codeHash", { length: 64 }).notNull(),
+		codeChallenge: varchar("codeChallenge", { length: 64 }).notNull(),
+		redirectUri: varchar("redirectUri", { length: 512 }).notNull(),
+		resource: varchar("resource", { length: 512 }).notNull(),
+		expiresAt: timestamp("expiresAt").notNull(),
+		consumedAt: timestamp("consumedAt"),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+	},
+	(table) => [
+		uniqueIndex("code_hash_idx").on(table.codeHash),
+		index("expires_at_idx").on(table.expiresAt),
+	],
+);
+
+export const mcpOAuthTokens = mysqlTable(
+	"mcp_oauth_tokens",
+	{
+		id: nanoId("id").notNull().primaryKey(),
+		userId: nanoId("userId").notNull().$type<User.UserId>(),
+		clientId: varchar("clientId", { length: 128 }).notNull(),
+		familyId: nanoId("familyId").notNull(),
+		resource: varchar("resource", { length: 512 }).notNull(),
+		accessHash: varchar("accessHash", { length: 64 }).notNull(),
+		refreshHash: varchar("refreshHash", { length: 64 }).notNull(),
+		accessExpiresAt: timestamp("accessExpiresAt").notNull(),
+		refreshExpiresAt: timestamp("refreshExpiresAt").notNull(),
+		revokedAt: timestamp("revokedAt"),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+	},
+	(table) => [
+		uniqueIndex("access_hash_idx").on(table.accessHash),
+		uniqueIndex("refresh_hash_idx").on(table.refreshHash),
+		index("family_id_idx").on(table.familyId),
+		index("client_active_idx").on(
+			table.clientId,
+			table.revokedAt,
+			table.refreshExpiresAt,
+		),
+		index("refresh_expires_at_idx").on(table.refreshExpiresAt),
 	],
 );
 

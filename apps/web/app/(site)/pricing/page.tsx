@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { PricingPage } from "@/components/pages/PricingPage";
+import { PricingPage } from "@/components/pages/pricing/PricingPage";
 import { buildMarketingMetadata } from "@/lib/og/url";
 
 export const metadata: Metadata = buildMarketingMetadata({

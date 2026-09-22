@@ -1,16 +1,26 @@
-import { homepageCopy } from "@/data/homepage-copy";
+import { type FaqCopy, homepageCopy } from "@/data/homepage-copy";
 import { Eyebrow } from "./Eyebrow";
 import { BODY_TEXT, H_SECTION, MODE_THEME } from "./theme";
 
-export const Faq = () => (
+export const Faq = ({
+	items = homepageCopy.faq.items,
+	title = "Questions? We've got answers.",
+	accent = MODE_THEME.screenshot.accent,
+	eyebrow = true,
+}: {
+	items?: FaqCopy["items"];
+	title?: string;
+	accent?: string;
+	eyebrow?: boolean;
+}) => (
 	<section className="px-5 py-20 lg:py-28">
 		<div className="mx-auto grid max-w-[1100px] gap-12 lg:grid-cols-[minmax(0,340px)_minmax(0,1fr)] lg:gap-20">
 			<div className="lg:sticky lg:top-28 lg:self-start">
-				<Eyebrow accent={MODE_THEME.screenshot.accent}>FAQ</Eyebrow>
+				{eyebrow ? <Eyebrow accent={accent}>FAQ</Eyebrow> : null}
 				<h2
-					className={`${H_SECTION} mt-6 text-balance text-[clamp(34px,3.9vw,48px)]`}
+					className={`${H_SECTION} ${eyebrow ? "mt-6" : ""} text-balance text-[clamp(34px,3.9vw,48px)]`}
 				>
-					Questions? We've got answers.
+					{title}
 				</h2>
 				<p
 					className={`${BODY_TEXT} mt-5 max-w-[320px] text-[16px] leading-[1.5] text-[rgba(17,17,17,0.72)]`}
@@ -27,7 +37,7 @@ export const Faq = () => (
 			</div>
 
 			<div>
-				{homepageCopy.faq.items.map((item) => (
+				{items.map((item) => (
 					<details
 						key={item.question}
 						className="group border-t border-[#E1E7EE] last:border-b"
