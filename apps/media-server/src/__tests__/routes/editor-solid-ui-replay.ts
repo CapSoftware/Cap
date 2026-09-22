@@ -1302,6 +1302,8 @@ try {
 							: null,
 						webGlCenter,
 						webGlLost: webGl?.isContextLost() ?? null,
+						preserveDrawingBuffer:
+							webGl?.getContextAttributes()?.preserveDrawingBuffer ?? null,
 						videos: [...document.querySelectorAll("video")].map((video) => ({
 							readyState: video.readyState,
 							width: video.videoWidth,

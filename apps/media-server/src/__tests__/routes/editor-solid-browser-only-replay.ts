@@ -560,6 +560,14 @@ try {
 		return { width: element.width, height: element.height };
 	});
 	const directScreenshot = await editor.locator("#canvas").screenshot();
+	const webGlPreserve = await editor.locator("#canvas").evaluate((node) => {
+		const canvas = node as HTMLCanvasElement;
+		return (
+			canvas.getContext("webgl2")?.getContextAttributes()
+				?.preserveDrawingBuffer ?? null
+		);
+	});
+	assert.ok(webGlPreserve === null || webGlPreserve === true);
 	await editor.getByRole("button", { name: "Crop", exact: true }).click();
 	await editor.getByText("Loading frame…").waitFor({
 		state: "hidden",
@@ -630,6 +638,58 @@ try {
 		.ensureAlpha()
 		.raw()
 		.toBuffer({ resolveWithObject: true });
+	const { data: directPixels, info: directInfo } = await sharp(directScreenshot)
+		.ensureAlpha()
+		.raw()
+		.toBuffer({ resolveWithObject: true });
+	const directCenter =
+		(Math.floor(directInfo.height / 2) * directInfo.width +
+			Math.floor(directInfo.width / 2)) *
+		4;
+	const cropCenter =
+		(Math.floor(browserInfo.height / 2) * browserInfo.width +
+			Math.floor(browserInfo.width / 2)) *
+		4;
+	const visibleCenter = [
+		...directPixels.subarray(directCenter, directCenter + 3),
+	];
+	const retainedCenter = [
+		...browserPixels.subarray(cropCenter, cropCenter + 3),
+	];
+	const visibleDifference = Math.max(
+		...visibleCenter.map((value, index) =>
+			Math.abs(value - (retainedCenter[index] ?? 0)),
+		),
+	);
+	if (visibleDifference >= 20) {
+		process.stderr.write(
+			`${JSON.stringify({ stage: "visible-canvas", browserEngine: engine.name(), visibleCenter, retainedCenter })}\n`,
+		);
+		await reportStageFailure(
+			"visible-canvas",
+			page,
+			editor,
+			new Error("Visible Studio canvas differs from its retained frame"),
+			pageErrors,
+			pageWarnings,
+			failedResponses,
+		);
+		const artifactDir = process.env.CAP_EDITOR_UI_PARITY_ARTIFACT_DIR;
+		if (artifactDir) {
+			await mkdir(artifactDir, { recursive: true });
+			await Promise.all([
+				writeFile(
+					join(artifactDir, `${engine.name()}-visible-canvas.png`),
+					directScreenshot,
+				),
+				writeFile(
+					join(artifactDir, `${engine.name()}-retained-canvas.png`),
+					browserScreenshot,
+				),
+			]);
+		}
+	}
+	assert.ok(visibleDifference < 20);
 	await editor.getByRole("button", { name: "Play video" }).click();
 	await editor.getByRole("button", { name: "Pause video" }).waitFor({
 		state: "visible",
@@ -857,7 +917,7 @@ try {
 	assert.deepEqual(failedResponses, []);
 	assert.deepEqual(pageErrors, []);
 	process.stdout.write(
-		`${JSON.stringify({ browserEngine: engine.name(), browserOnly: true, bootstrapRequests, rangeRequests, workerRequests, preparationRequests, playbackAdvanced: true, persistedGradient: true, workerExportPreviewVisible: true, workerExportEstimateVisible: true, workerExportPreviewMs, workerExportEstimateMs, meanAbsoluteError, psnrDb, differentPixels, totalPixels: browserInfo.width * browserInfo.height, pageErrors, failedResponses })}\n`,
+		`${JSON.stringify({ browserEngine: engine.name(), browserOnly: true, bootstrapRequests, rangeRequests, workerRequests, preparationRequests, playbackAdvanced: true, persistedGradient: true, webGlPreserve, workerExportPreviewVisible: true, workerExportEstimateVisible: true, workerExportPreviewMs, workerExportEstimateMs, meanAbsoluteError, psnrDb, differentPixels, totalPixels: browserInfo.width * browserInfo.height, pageErrors, failedResponses })}\n`,
 	);
 	await page.evaluate(() => {
 		(

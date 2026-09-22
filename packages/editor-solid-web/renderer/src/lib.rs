@@ -1242,6 +1242,22 @@ impl BrowserGpuRenderer {
             Some(Ok(value)) => value,
             Some(Err(_)) | None => {
                 trace_renderer("requesting WebGL instance");
+                let context_options = js_sys::Object::new();
+                js_sys::Reflect::set(
+                    &context_options,
+                    &JsValue::from_str("antialias"),
+                    &JsValue::FALSE,
+                )?;
+                js_sys::Reflect::set(
+                    &context_options,
+                    &JsValue::from_str("preserveDrawingBuffer"),
+                    &JsValue::TRUE,
+                )?;
+                let context: WebGl2RenderingContext = canvas
+                    .get_context_with_context_options("webgl2", &context_options)?
+                    .ok_or_else(|| js_error("Browser WebGL2 is unavailable"))?
+                    .dyn_into()
+                    .map_err(|_| js_error("Browser WebGL2 context is invalid"))?;
                 let instance =
                     wgpu::util::new_instance_with_webgpu_detection(&wgpu::InstanceDescriptor {
                         backends: wgpu::Backends::GL,
@@ -1252,11 +1268,6 @@ impl BrowserGpuRenderer {
                 let surface = instance
                     .create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone()))
                     .map_err(js_error)?;
-                let context: WebGl2RenderingContext = canvas
-                    .get_context("webgl2")?
-                    .ok_or_else(|| js_error("Browser WebGL2 is unavailable"))?
-                    .dyn_into()
-                    .map_err(|_| js_error("Browser WebGL2 context is invalid"))?;
                 if context.is_context_lost() || context.get_supported_extensions().is_none() {
                     return Err(js_error("Browser WebGL2 context was lost"));
                 }
