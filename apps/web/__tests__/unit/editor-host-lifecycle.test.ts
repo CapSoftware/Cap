@@ -224,6 +224,7 @@ async function connectedExportHost(
 	request: (url: string, init?: RequestInit) => Promise<Response>,
 	captionsEnabled = false,
 	onUpgrade?: () => void,
+	parentEvents = false,
 ) {
 	vi.stubGlobal(
 		"fetch",
@@ -251,11 +252,22 @@ async function connectedExportHost(
 		}
 	}
 	vi.stubGlobal("WebSocket", OpenSocket);
-	vi.stubGlobal("window", {
+	const browserWindow = {
 		setTimeout,
 		clearTimeout,
 		location: { origin: "http://127.0.0.1:3000" },
-	});
+	};
+	vi.stubGlobal(
+		"window",
+		parentEvents
+			? Object.assign(new EventTarget(), browserWindow)
+			: browserWindow,
+	);
+	if (parentEvents)
+		vi.stubGlobal(
+			"document",
+			Object.assign(new EventTarget(), { hidden: false }),
+		);
 	const { iframe, postMessage } = frame();
 	const onClose = vi.fn();
 	const bridge = new EditorHostBridge(
@@ -275,6 +287,46 @@ async function connectedExportHost(
 	port.start();
 	return { bridge, port, onClose };
 }
+
+test("returning to the web page sends the refreshed caption plan to Studio", async () => {
+	const planRequests: string[] = [];
+	const { bridge, port } = await connectedExportHost(
+		async (url) => {
+			if (!url.includes("/plan?")) throw new Error(`Unexpected request ${url}`);
+			planRequests.push(url);
+			return Response.json({ pro: true });
+		},
+		false,
+		undefined,
+		true,
+	);
+	const plans: boolean[] = [];
+	port.onmessage = (event: MessageEvent<unknown>) => {
+		const message = event.data;
+		if (
+			typeof message === "object" &&
+			message !== null &&
+			"kind" in message &&
+			message.kind === "event" &&
+			"name" in message &&
+			message.name === "editorCaptionPlan" &&
+			"payload" in message &&
+			typeof message.payload === "boolean"
+		) {
+			plans.push(message.payload);
+		}
+	};
+	try {
+		window.dispatchEvent(new Event("focus"));
+		await vi.waitFor(() => expect(plans).toEqual([true]));
+		document.dispatchEvent(new Event("visibilitychange"));
+		await vi.waitFor(() => expect(plans).toEqual([true, true]));
+		expect(planRequests).toHaveLength(2);
+	} finally {
+		port.close();
+		bridge.dispose();
+	}
+});
 
 test("caption cache conflicts retain the shared bridge's full-payload retry", async () => {
 	const { bridge, port } = await connectedExportHost(

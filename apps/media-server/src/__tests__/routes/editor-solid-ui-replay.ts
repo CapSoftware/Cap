@@ -1575,7 +1575,10 @@ try {
 				.waitFor({ state: "visible" });
 		const planRequestsBeforeFocus = planRequests;
 		currentCaptionPlan = !proCaptions;
-		await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+		await page.evaluate(() => {
+			window.dispatchEvent(new Event("focus"));
+			document.dispatchEvent(new Event("visibilitychange"));
+		});
 		if (proCaptions) {
 			await editor
 				.getByRole("button", { name: "Back to editor" })

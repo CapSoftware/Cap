@@ -83,6 +83,12 @@ export class PortEditorTransport {
 		string,
 		Set<(payload: unknown) => void>
 	>();
+	private applyCaptionPlan(value: boolean) {
+		const previous = window.capWebEditorCaptionsEnabled;
+		window.capWebEditorCaptionsEnabled = value;
+		if (previous !== value)
+			window.dispatchEvent(new Event("cap-web-editor-captions-plan"));
+	}
 
 	constructor(
 		private readonly port: MessagePort,
@@ -102,6 +108,13 @@ export class PortEditorTransport {
 				return;
 			}
 			if (message.kind === "event") {
+				if (
+					message.name === "editorCaptionPlan" &&
+					typeof message.payload === "boolean"
+				) {
+					this.planRequestSequence++;
+					this.applyCaptionPlan(message.payload);
+				}
 				for (const listener of this.listeners.get(message.name) ?? []) {
 					listener(message.payload);
 				}
@@ -372,10 +385,7 @@ export class PortEditorTransport {
 				planRequestSequence === this.planRequestSequence &&
 				typeof value === "boolean"
 			) {
-				const previous = window.capWebEditorCaptionsEnabled;
-				window.capWebEditorCaptionsEnabled = value;
-				if (previous !== value)
-					window.dispatchEvent(new Event("cap-web-editor-captions-plan"));
+				this.applyCaptionPlan(value);
 			}
 			if (name === "getDisplayFrameForCropping") {
 				if (value instanceof Uint8Array) {

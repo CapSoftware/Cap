@@ -409,6 +409,23 @@ export class EditorHostBridge {
 		WebEditorImportedVideo
 	>();
 	private planRequestSequence = 0;
+	private readonly refreshCaptionPlanFromPage = () => {
+		const requestSequence = this.planRequestSequence + 1;
+		void this.currentPlan()
+			.then((plan) => {
+				if (!this.disposed && this.planRequestSequence === requestSequence) {
+					this.port?.postMessage({
+						kind: "event",
+						name: "editorCaptionPlan",
+						payload: plan,
+					});
+				}
+			})
+			.catch(() => undefined);
+	};
+	private readonly refreshCaptionPlanFromVisibility = () => {
+		if (!document.hidden) this.refreshCaptionPlanFromPage();
+	};
 
 	constructor(
 		private readonly videoId: string,
@@ -848,8 +865,9 @@ export class EditorHostBridge {
 		if (typeof plan !== "boolean") {
 			throw new Error("Recording plan response was invalid");
 		}
-		if (requestSequence === this.planRequestSequence)
+		if (requestSequence === this.planRequestSequence) {
 			this.captionsEnabled = plan;
+		}
 		return plan;
 	}
 
@@ -1954,6 +1972,21 @@ export class EditorHostBridge {
 			settleMount(new Error("Editor frame could not connect"));
 		}
 		await mounted;
+		if (typeof window.addEventListener === "function") {
+			window.addEventListener("focus", this.refreshCaptionPlanFromPage, {
+				signal: this.controller.signal,
+			});
+		}
+		if (
+			typeof document !== "undefined" &&
+			typeof document.addEventListener === "function"
+		) {
+			document.addEventListener(
+				"visibilitychange",
+				this.refreshCaptionPlanFromVisibility,
+				{ signal: this.controller.signal },
+			);
+		}
 	}
 
 	private async handleRequest(message: BridgeRequest) {

@@ -111,6 +111,51 @@ test("late plan replies cannot reopen paid caption controls", async () => {
 	}
 });
 
+test("host plan updates supersede pending iframe plan replies", async () => {
+	const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+	const browserWindow = Object.assign(new EventTarget(), {
+		capWebEditorCaptionsEnabled: false,
+	});
+	Object.defineProperty(globalThis, "window", {
+		configurable: true,
+		value: browserWindow,
+	});
+	let planEvents = 0;
+	browserWindow.addEventListener("cap-web-editor-captions-plan", () => {
+		planEvents++;
+	});
+	const channel = new MessageChannel();
+	const transport = new PortEditorTransport(channel.port1);
+	let requestId: number | null = null;
+	channel.port2.onmessage = (event: MessageEvent<unknown>) => {
+		const request = event.data as { id: number };
+		requestId = request.id;
+	};
+	channel.port2.start();
+	try {
+		const pending = transport.invoke("checkUpgradedAndUpdate", []);
+		await Bun.sleep(0);
+		expect(requestId).not.toBeNull();
+		channel.port2.postMessage({
+			kind: "event",
+			name: "editorCaptionPlan",
+			payload: true,
+		});
+		await Bun.sleep(0);
+		expect(browserWindow.capWebEditorCaptionsEnabled).toBe(true);
+		channel.port2.postMessage({ kind: "result", id: requestId, value: false });
+		expect(await pending).toBe(false);
+		expect(browserWindow.capWebEditorCaptionsEnabled).toBe(true);
+		expect(planEvents).toBe(1);
+	} finally {
+		transport.dispose();
+		channel.port2.close();
+		if (previousWindow)
+			Object.defineProperty(globalThis, "window", previousWindow);
+		else Reflect.deleteProperty(globalThis, "window");
+	}
+});
+
 test("Free preview updates and saves omit paid captions but keep video edits", async () => {
 	const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
 	Object.defineProperty(globalThis, "window", {
