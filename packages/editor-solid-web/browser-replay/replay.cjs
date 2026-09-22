@@ -1159,6 +1159,20 @@ async function replay(forceWebGl, forceWebGpu = false) {
 			);
 		}
 		assert(result.playedFrames >= 2, "Local playback did not advance");
+		for (const track of ["display", "camera"]) {
+			const sourceDrift =
+				result.playbackMetrics.videoSourceDriftMs[track].maxMs;
+			const presentedDrift =
+				result.playbackMetrics.videoPresentedDriftMs[track].maxMs;
+			assert(
+				sourceDrift <= 75,
+				`${track} media clock drifted ${sourceDrift} ms from the export timeline`,
+			);
+			assert(
+				presentedDrift <= 75,
+				`${track} presented frame drifted ${presentedDrift} ms from the export timeline`,
+			);
+		}
 		if (indexed) {
 			assert(result.indexedParity !== null, "Indexed parity did not run");
 			assert(

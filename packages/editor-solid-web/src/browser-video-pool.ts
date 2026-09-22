@@ -320,11 +320,7 @@ export class BrowserVideoPool {
 					? Math.min(video.duration / 2, 0.0001)
 					: target;
 			const tolerance =
-				playing && !forceSeek && speed >= 0.25 && speed <= 4
-					? 0.5
-					: playing
-						? 0.05
-						: 1 / 120;
+				playing && !forceSeek && speed >= 0.25 && speed <= 4 ? 0.05 : 1 / 120;
 			if (
 				!slot.primed ||
 				Math.abs(video.currentTime - decodeTarget) > tolerance
