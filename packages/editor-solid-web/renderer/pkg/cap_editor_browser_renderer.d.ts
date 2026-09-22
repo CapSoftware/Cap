@@ -10,6 +10,8 @@ export class BrowserGpuRenderer {
   static create(canvas: HTMLCanvasElement): Promise<BrowserGpuRenderer>;
   static createWebGl(canvas: HTMLCanvasElement): Promise<BrowserGpuRenderer>;
   set_background(project_json: string, image?: ImageBitmap | null): void;
+  has_overlay_image(path: string): boolean;
+  set_overlay_image(path: string, width: number, height: number, levels: Array<any>): void;
   set_frame_time(frame_number: number, frame_rate: number): void;
   resize(width: number, height: number): void;
   render(screen_video: any, screen_uniforms: Uint8Array, camera_video: any, camera_uniforms?: Uint8Array | null): void;
@@ -55,6 +57,8 @@ export interface InitOutput {
   readonly browsergpurenderer_createWebGl: (a: any) => any;
   readonly browsergpurenderer_backend: (a: number) => [number, number];
   readonly browsergpurenderer_set_background: (a: number, b: number, c: number, d: number) => [number, number];
+  readonly browsergpurenderer_has_overlay_image: (a: number, b: number, c: number) => number;
+  readonly browsergpurenderer_set_overlay_image: (a: number, b: number, c: number, d: number, e: number, f: any) => [number, number];
   readonly browsergpurenderer_set_frame_time: (a: number, b: number, c: number) => [number, number];
   readonly browsergpurenderer_resize: (a: number, b: number, c: number) => [number, number];
   readonly browsergpurenderer_render: (a: number, b: any, c: number, d: number, e: any, f: number, g: number) => [number, number];
@@ -74,9 +78,9 @@ export interface InitOutput {
   readonly __wbindgen_export_5: WebAssembly.Table;
   readonly __wbindgen_free: (a: number, b: number, c: number) => void;
   readonly __externref_table_dealloc: (a: number) => void;
-  readonly closure380_externref_shim: (a: number, b: number, c: any) => void;
+  readonly closure395_externref_shim: (a: number, b: number, c: any) => void;
   readonly wasm_bindgen__convert__closures_____invoke__h147cdb123ff2ae0f: (a: number, b: number) => void;
-  readonly closure1450_externref_shim: (a: number, b: number, c: any, d: any) => void;
+  readonly closure1465_externref_shim: (a: number, b: number, c: any, d: any) => void;
   readonly __wbindgen_start: () => void;
 }
 

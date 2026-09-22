@@ -64,6 +64,21 @@ export function decode_image(bytes, max_dimension) {
     return DecodedImage.__wrap(ret[0]);
 }
 
+/**
+ * @param {Uint8Array} bytes
+ * @param {number} max_dimension
+ * @returns {DecodedOverlayImage}
+ */
+export function decode_overlay_image(bytes, max_dimension) {
+    const ptr0 = passArray8ToWasm0(bytes, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.decode_overlay_image(ptr0, len0, max_dimension);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return DecodedOverlayImage.__wrap(ret[0]);
+}
+
 const DecodedImageFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_decodedimage_free(ptr >>> 0, 1));
@@ -109,6 +124,66 @@ export class DecodedImage {
     pixels() {
         const ptr = this.__destroy_into_raw();
         const ret = wasm.decodedimage_pixels(ptr);
+        var v1 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        return v1;
+    }
+}
+
+const DecodedOverlayImageFinalization = (typeof FinalizationRegistry === 'undefined')
+    ? { register: () => {}, unregister: () => {} }
+    : new FinalizationRegistry(ptr => wasm.__wbg_decodedoverlayimage_free(ptr >>> 0, 1));
+
+export class DecodedOverlayImage {
+
+    static __wrap(ptr) {
+        ptr = ptr >>> 0;
+        const obj = Object.create(DecodedOverlayImage.prototype);
+        obj.__wbg_ptr = ptr;
+        DecodedOverlayImageFinalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+    }
+
+    __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        DecodedOverlayImageFinalization.unregister(this);
+        return ptr;
+    }
+
+    free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_decodedoverlayimage_free(ptr, 0);
+    }
+    /**
+     * @returns {number}
+     */
+    level_count() {
+        const ret = wasm.decodedoverlayimage_level_count(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
+     * @param {number} index
+     * @returns {number}
+     */
+    level_width(index) {
+        const ret = wasm.decodedoverlayimage_level_width(this.__wbg_ptr, index);
+        return ret >>> 0;
+    }
+    /**
+     * @param {number} index
+     * @returns {number}
+     */
+    level_height(index) {
+        const ret = wasm.decodedoverlayimage_level_height(this.__wbg_ptr, index);
+        return ret >>> 0;
+    }
+    /**
+     * @param {number} index
+     * @returns {Uint8Array}
+     */
+    take_level_pixels(index) {
+        const ret = wasm.decodedoverlayimage_take_level_pixels(this.__wbg_ptr, index);
         var v1 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
         wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
         return v1;

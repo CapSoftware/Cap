@@ -1,12 +1,21 @@
 /* tslint:disable */
 /* eslint-disable */
 export function decode_image(bytes: Uint8Array, max_dimension: number): DecodedImage;
+export function decode_overlay_image(bytes: Uint8Array, max_dimension: number): DecodedOverlayImage;
 export class DecodedImage {
   private constructor();
   free(): void;
   width(): number;
   height(): number;
   pixels(): Uint8Array;
+}
+export class DecodedOverlayImage {
+  private constructor();
+  free(): void;
+  level_count(): number;
+  level_width(index: number): number;
+  level_height(index: number): number;
+  take_level_pixels(index: number): Uint8Array;
 }
 
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
@@ -18,6 +27,12 @@ export interface InitOutput {
   readonly decodedimage_height: (a: number) => number;
   readonly decodedimage_pixels: (a: number) => [number, number];
   readonly decode_image: (a: number, b: number, c: number) => [number, number, number];
+  readonly __wbg_decodedoverlayimage_free: (a: number, b: number) => void;
+  readonly decodedoverlayimage_level_count: (a: number) => number;
+  readonly decodedoverlayimage_level_width: (a: number, b: number) => number;
+  readonly decodedoverlayimage_level_height: (a: number, b: number) => number;
+  readonly decodedoverlayimage_take_level_pixels: (a: number, b: number) => [number, number];
+  readonly decode_overlay_image: (a: number, b: number, c: number) => [number, number, number];
   readonly __wbindgen_export_0: WebAssembly.Table;
   readonly __wbindgen_free: (a: number, b: number, c: number) => void;
   readonly __wbindgen_malloc: (a: number, b: number) => number;
