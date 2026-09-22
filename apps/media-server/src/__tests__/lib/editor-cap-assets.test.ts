@@ -11,7 +11,7 @@ const valid: EditorCapAsset = {
 	url: "https://storage.cap.so/recording.capbundle",
 	size: 1024,
 	contentType: CAP_BUNDLE_CONTENT_TYPE,
-	objectIdentity: '"recording-etag"',
+	objectIdentity: JSON.stringify("recording-etag"),
 };
 
 test("accepts a bounded, signed Cap project source", () => {

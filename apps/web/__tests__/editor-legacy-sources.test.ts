@@ -85,7 +85,10 @@ test("a previously trimmed recording opens the immutable original with its saved
 			],
 		},
 	};
-	storage.head.mockReturnValue({ ContentLength: 4321, ETag: '"original"' });
+	storage.head.mockReturnValue({
+		ContentLength: 4321,
+		ETag: JSON.stringify("original"),
+	});
 	storage.signed.mockReturnValue("https://storage.example/original");
 	const result = await signedSources(video(null));
 	expect(storage.head).toHaveBeenCalledExactlyOnceWith(originalKey);
@@ -93,7 +96,7 @@ test("a previously trimmed recording opens the immutable original with its saved
 	expect(result.display).toMatchObject({
 		url: "https://storage.example/original",
 		size: 4321,
-		objectIdentity: '"original"',
+		objectIdentity: JSON.stringify("original"),
 	});
 	expect(result.legacyEditSpec).toEqual(storage.legacyEdit.editSpec);
 	expect("camera" in result).toBe(false);
@@ -117,13 +120,16 @@ test("an older recording opens from its verified published MP4", async () => {
 		contentType: "video/mp4",
 		size: 1234,
 		fps: 30,
-		objectIdentity: '"published"',
+		objectIdentity: JSON.stringify("published"),
 	});
 	expect("camera" in result).toBe(false);
 });
 
 test("an unverified legacy output cannot be opened in the editor", async () => {
-	storage.head.mockReturnValue({ ContentLength: 0, ETag: '"empty"' });
+	storage.head.mockReturnValue({
+		ContentLength: 0,
+		ETag: JSON.stringify("empty"),
+	});
 	await expect(signedSources(video(null))).rejects.toThrow();
 	expect(storage.signed).not.toHaveBeenCalled();
 });
@@ -133,7 +139,8 @@ test("a new recording still uses its separate preserved screen and camera object
 	const cameraKey = "owner/video/camera-upload.webm";
 	storage.head.mockImplementation((key: string) => ({
 		ContentLength: key === displayKey ? 1234 : 456,
-		ETag: key === displayKey ? '"screen"' : '"camera"',
+		ETag:
+			key === displayKey ? JSON.stringify("screen") : JSON.stringify("camera"),
 	}));
 	storage.signed.mockImplementation(
 		(key: string) => `https://storage.example/${key}`,
@@ -146,13 +153,13 @@ test("a new recording still uses its separate preserved screen and camera object
 					key: displayKey,
 					contentType: "video/webm",
 					size: 1234,
-					objectIdentity: '"screen"',
+					objectIdentity: JSON.stringify("screen"),
 				},
 				camera: {
 					key: cameraKey,
 					contentType: "video/webm",
 					size: 456,
-					objectIdentity: '"camera"',
+					objectIdentity: JSON.stringify("camera"),
 					offsetMs: 125,
 				},
 			},
@@ -169,7 +176,7 @@ test("a new recording still uses its separate preserved screen and camera object
 		url: `https://storage.example/${cameraKey}`,
 		size: 456,
 		offsetMs: 125,
-		objectIdentity: '"camera"',
+		objectIdentity: JSON.stringify("camera"),
 	});
 });
 

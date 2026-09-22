@@ -232,7 +232,8 @@ describe("recorder source upload", () => {
 		const params = dialect.sqlToQuery(metadata as SQL).params;
 		const json = params.find(
 			(value): value is string =>
-				typeof value === "string" && value.includes('"editorSources"'),
+				typeof value === "string" &&
+				value.includes(JSON.stringify("editorSources")),
 		);
 		if (!json) throw new Error("Missing editor source JSON patch");
 		return JSON.parse(json) as Record<string, unknown>;

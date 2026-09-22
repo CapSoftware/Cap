@@ -16,7 +16,7 @@ const state = vi.hoisted(() => ({
 	row: null as Record<string, unknown> | null,
 	legacyEdit: null as { sourceKey: string } | null,
 	isPro: true,
-	baseEtag: '"base"',
+	baseEtag: JSON.stringify("base"),
 	objects: new Map<string, string>(),
 	writes: [] as Array<{ key: string; value: string }>,
 	transcribe: vi.fn(),
@@ -171,7 +171,7 @@ function metadata(): VideoMetadata {
 				key: "owner/video/display.webm",
 				contentType: "video/webm",
 				size: 4000,
-				objectIdentity: '"base"',
+				objectIdentity: JSON.stringify("base"),
 			},
 		},
 		webEditorVideos: {
@@ -183,7 +183,7 @@ function metadata(): VideoMetadata {
 					name: "Added clip",
 					contentType: "video/webm",
 					size: 3000,
-					objectIdentity: '"clip"',
+					objectIdentity: JSON.stringify("clip"),
 				},
 			],
 		},
@@ -288,7 +288,7 @@ function prepareLegacy(language: "auto" | "es" = "es") {
 		throw new Error("Missing migrated caption clips");
 	const sourceKey = "owner/video/source/original.mp4";
 	state.legacyEdit = { sourceKey };
-	state.baseEtag = '"original"';
+	state.baseEtag = JSON.stringify("original");
 	const plan = buildEditorCaptionSourcePlan(
 		"owner",
 		"video",
@@ -303,7 +303,7 @@ function prepareLegacy(language: "auto" | "es" = "es") {
 		},
 		"",
 		language,
-		{ key: sourceKey, size: 4000, objectIdentity: '"original"' },
+		{ key: sourceKey, size: 4000, objectIdentity: JSON.stringify("original") },
 	);
 	if (!plan || !details.webEditorCaptionJob) {
 		throw new Error("Missing migrated caption plan");
@@ -324,7 +324,7 @@ function prepareWithCap(): EditorCaptionSourcePlan {
 		name: "Studio recording",
 		contentType: CAP_BUNDLE_CONTENT_TYPE,
 		size: 8000,
-		objectIdentity: '"cap"',
+		objectIdentity: JSON.stringify("cap"),
 	});
 	details.webEditorImports = {
 		version: 1,
@@ -393,7 +393,7 @@ afterEach(() => {
 	state.row = null;
 	state.legacyEdit = null;
 	state.isPro = true;
-	state.baseEtag = '"base"';
+	state.baseEtag = JSON.stringify("base");
 	state.objects.clear();
 	state.writes.length = 0;
 	state.urls.length = 0;
@@ -483,7 +483,7 @@ test("a migrated trim captions its preserved MP4 through AssemblyAI", async () =
 
 test("a changed preserved MP4 stops migrated captions before AssemblyAI", async () => {
 	const plan = prepareLegacy();
-	state.baseEtag = '"replacement"';
+	state.baseEtag = JSON.stringify("replacement");
 	expect(
 		await transcribeWebEditorCaptionsWorkflow({ plan, requestId: "request-1" }),
 	).toEqual({ success: false });
@@ -511,7 +511,7 @@ test("Studio Cap voice audio streams through AssemblyAI without local model call
 				name: "Studio recording",
 				size: 8000,
 				contentType: CAP_BUNDLE_CONTENT_TYPE,
-				objectIdentity: '"cap"',
+				objectIdentity: JSON.stringify("cap"),
 			},
 			segments: plan.sources[1]?.cap?.segments,
 		},
@@ -585,7 +585,7 @@ test("changed raw media metadata stops the job before any provider call", async 
 	if (!state.row) throw new Error("Missing video row");
 	const details = state.row.metadata as VideoMetadata;
 	if (!details.editorSources) throw new Error("Missing source metadata");
-	details.editorSources.display.objectIdentity = '"changed"';
+	details.editorSources.display.objectIdentity = JSON.stringify("changed");
 	expect(
 		await transcribeWebEditorCaptionsWorkflow({ plan, requestId: "request-1" }),
 	).toEqual({ success: false });
@@ -595,7 +595,7 @@ test("changed raw media metadata stops the job before any provider call", async 
 
 test("changed raw object identity stops the job before added clips incur provider calls", async () => {
 	const plan = prepare();
-	state.baseEtag = '"changed"';
+	state.baseEtag = JSON.stringify("changed");
 	state.transcribe.mockResolvedValue({
 		status: "completed",
 		words: [{ text: "Added", start: 500, end: 900 }],

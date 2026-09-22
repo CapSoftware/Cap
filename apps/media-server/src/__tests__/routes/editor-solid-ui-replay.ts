@@ -409,7 +409,7 @@ try {
 				return new Response(null, { status: 204 });
 			if (url.pathname === "/test-editor")
 				return new Response(
-					'<!doctype html><html><head><style>html,body{margin:0;height:100%;overflow:hidden}iframe{width:100vw;height:100vh;border:0}</style></head><body><iframe id="editor" src="/editor-solid/index.html"></iframe></body></html>',
+					"<!doctype html><html><head><style>html,body{margin:0;height:100%;overflow:hidden}iframe{width:100vw;height:100vh;border:0}</style></head><body><iframe id='editor' src='/editor-solid/index.html'></iframe></body></html>",
 					{ headers: { "Content-Type": "text/html; charset=utf-8" } },
 				);
 			if (
@@ -1206,7 +1206,7 @@ try {
 			timeout: 20_000,
 		});
 		try {
-			await editor.locator('[aria-busy="false"]').waitFor({
+			await editor.locator("[aria-busy='false']").waitFor({
 				state: "attached",
 				timeout: 20_000,
 			});
@@ -1518,13 +1518,13 @@ try {
 				"rgb(246, 246, 247)",
 			);
 			const checkedCropItem = cropMenu.locator(
-				'[role="menuitemcheckbox"][aria-checked="true"]',
+				"[role='menuitemcheckbox'][aria-checked='true']",
 			);
 			assert.ok((await checkedCropItem.count()) > 0);
 			assert.equal(
 				await checkedCropItem
 					.first()
-					.locator('span[aria-hidden="true"]')
+					.locator("span[aria-hidden='true']")
 					.innerText(),
 				"✓",
 			);
@@ -1535,7 +1535,7 @@ try {
 			});
 			assert.equal(await selectedRatio.getAttribute("aria-checked"), "true");
 			assert.equal(
-				await selectedRatio.locator('span[aria-hidden="true"]').innerText(),
+				await selectedRatio.locator("span[aria-hidden='true']").innerText(),
 				"✓",
 			);
 			await page.keyboard.press("Escape");

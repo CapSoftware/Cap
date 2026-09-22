@@ -1655,17 +1655,17 @@ test.describe("extension recording upload", () => {
 			20_000,
 		);
 		await expectCameraPreviewOutOfCapture(capturePage);
-		await capturePage.locator('input[type="password"]').click();
+		await capturePage.locator("input[type='password']").click();
 		await capturePage.keyboard.type("secret");
 		await capturePage
 			.getByRole("textbox", { name: "Custom private field" })
 			.click();
 		await capturePage.keyboard.type("private");
-		await capturePage.locator('[aria-label="Custom PIN widget"]').click();
+		await capturePage.locator("[aria-label='Custom PIN widget']").click();
 		await capturePage.keyboard.type("1234");
 		await capturePage.getByRole("button", { name: "Secret button" }).click();
 		await capturePage.keyboard.type("secret");
-		await capturePage.locator('[aria-label="Canvas secret widget"]').click();
+		await capturePage.locator("[aria-label='Canvas secret widget']").click();
 		await capturePage.keyboard.type("pin");
 		await capturePage.mouse.click(500, 400);
 		await capturePage.keyboard.press("Escape");

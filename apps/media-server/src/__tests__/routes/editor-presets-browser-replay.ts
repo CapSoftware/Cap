@@ -100,7 +100,7 @@ try {
 			const url = new URL(request.url);
 			if (url.pathname === "/") {
 				return new Response(
-					'<!doctype html><html><body><script type="module" src="/browser-entry.js"></script></body></html>',
+					"<!doctype html><html><body><script type='module' src='/browser-entry.js'></script></body></html>",
 					{ headers: { "Content-Type": "text/html; charset=utf-8" } },
 				);
 			}

@@ -228,7 +228,8 @@ describe("media processing workflows", () => {
 			.sqlToQuery(sourceSql)
 			.params.find(
 				(value): value is string =>
-					typeof value === "string" && value.includes('"editorSources"'),
+					typeof value === "string" &&
+					value.includes(JSON.stringify("editorSources")),
 			);
 		expect(JSON.parse(patch ?? "null")).toEqual({
 			editorSources: {

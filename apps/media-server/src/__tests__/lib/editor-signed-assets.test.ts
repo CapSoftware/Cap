@@ -11,7 +11,7 @@ test("signed assets recover from changed identities, same-sized tampering, and m
 	const project = join(root, "recording.cap");
 	let server: ReturnType<typeof Bun.serve> | null = null;
 	let contents = "AAAA";
-	let identity = '"first"';
+	let identity = JSON.stringify("first");
 	let requests = 0;
 	try {
 		await mkdir(project);
@@ -52,7 +52,7 @@ test("signed assets recover from changed identities, same-sized tampering, and m
 		);
 		expect(requests).toBe(2);
 		contents = "BBBB";
-		identity = '"second"';
+		identity = JSON.stringify("second");
 		const revised = { ...asset, objectIdentity: identity };
 		expect(
 			(await stageSignedEditorAsset(project, revised, probe)).contents,
@@ -96,7 +96,7 @@ test("concurrent staging waits for a complete signed file and never trusts an un
 				return new Response("DATA", {
 					headers: {
 						"Content-Length": "4",
-						...(noIdentity ? {} : { ETag: '"same"' }),
+						...(noIdentity ? {} : { ETag: JSON.stringify("same") }),
 					},
 				});
 			},
@@ -107,7 +107,7 @@ test("concurrent staging waits for a complete signed file and never trusts an un
 			url: `http://127.0.0.1:${server.port}/asset`,
 			size: 4,
 			contentType: "image/png",
-			objectIdentity: '"same"',
+			objectIdentity: JSON.stringify("same"),
 		};
 		const probe = async (path: string) => ({
 			contents: await readFile(path, "utf8"),

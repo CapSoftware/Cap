@@ -111,10 +111,10 @@ export class Menu {
 				? document.activeElement
 				: null;
 		const dialog =
-			previousFocus?.closest<HTMLElement>('[role="dialog"][data-expanded]') ??
+			previousFocus?.closest<HTMLElement>("[role='dialog'][data-expanded]") ??
 			Array.from(
 				document.querySelectorAll<HTMLElement>(
-					'[role="dialog"][data-expanded]',
+					"[role='dialog'][data-expanded]",
 				),
 			).at(-1) ??
 			null;

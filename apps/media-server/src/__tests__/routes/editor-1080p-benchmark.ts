@@ -372,7 +372,7 @@ try {
 			const pathname = new URL(request.url).pathname;
 			if (pathname === "/bench") {
 				return new Response(
-					'<!doctype html><html><body><canvas id="bench-canvas"></canvas></body></html>',
+					"<!doctype html><html><body><canvas id='bench-canvas'></canvas></body></html>",
 					{ headers: { "Content-Type": "text/html; charset=utf-8" } },
 				);
 			}

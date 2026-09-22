@@ -283,7 +283,7 @@ async function replayPairedCapture(
 				await route.fulfill({
 					status: 200,
 					contentType: "text/html",
-					body: '<!doctype html><html><body><div id="root"></div><script src="/harness.js"></script></body></html>',
+					body: "<!doctype html><html><body><div id='root'></div><script src='/harness.js'></script></body></html>",
 				});
 				return;
 			}
@@ -304,7 +304,7 @@ async function replayPairedCapture(
 				});
 				await route.fulfill({
 					status: 200,
-					headers: { etag: '"replay-etag"' },
+					headers: { etag: JSON.stringify("replay-etag") },
 					body: "",
 				});
 				return;

@@ -42,14 +42,14 @@ test("uploaded audio is verified, staged, and reusable after reopening", async (
 					return new Response(Bun.file(source), {
 						headers: {
 							"Content-Length": String(bytes),
-							ETag: '"asset-1"',
+							ETag: JSON.stringify("asset-1"),
 							"Content-Type": "audio/mpeg",
 						},
 					});
 				}
 				if (path === "/invalid.mp3") {
 					return new Response("not audio", {
-						headers: { ETag: '"asset-1"' },
+						headers: { ETag: JSON.stringify("asset-1") },
 					});
 				}
 				return new Response("Not found", { status: 404 });
@@ -62,7 +62,7 @@ test("uploaded audio is verified, staged, and reusable after reopening", async (
 			url: `http://127.0.0.1:${server.port}/track.mp3`,
 			size: bytes,
 			contentType: "audio/mpeg",
-			objectIdentity: '"asset-1"',
+			objectIdentity: JSON.stringify("asset-1"),
 		};
 		const first = await stageSignedEditorAudioAsset(project, asset);
 		expect(first).toMatchObject({ path, name: "Imported tone" });
@@ -80,7 +80,7 @@ test("uploaded audio is verified, staged, and reusable after reopening", async (
 		const changed = {
 			...asset,
 			path: `assets/audio/import-${randomUUID()}.mp3`,
-			objectIdentity: '"other"',
+			objectIdentity: JSON.stringify("other"),
 		};
 		await expect(stageSignedEditorAudioAsset(project, changed)).rejects.toThrow(
 			"identity changed",

@@ -20,7 +20,7 @@ function rawBundle(files: unknown[], dataBytes: number) {
 
 describe("Cap editor project bundle", () => {
 	it("keeps large media as Blob parts and records exact byte offsets", async () => {
-		const metadata = new Blob(['{"version":1}']);
+		const metadata = new Blob([JSON.stringify({ version: 1 })]);
 		const screen = new Blob([new Uint8Array(4 * 1024 * 1024)]);
 		const camera = new Blob([new Uint8Array(2 * 1024 * 1024)]);
 		const bundle = createCapBundle([

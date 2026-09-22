@@ -35,9 +35,6 @@ let container: HTMLDivElement;
 const requests: Array<{ url: string; method: string; body: unknown }> = [];
 let currentRevision: string;
 let rejectNextRestore: boolean;
-let preparationReady: boolean;
-let busyResponses: number;
-let preparationStatusFailures: number;
 let restoreUnavailable: boolean;
 
 function browserStorage(): Storage {
@@ -63,9 +60,6 @@ beforeEach(() => {
 	requests.length = 0;
 	currentRevision = "newer";
 	rejectNextRestore = false;
-	preparationReady = true;
-	busyResponses = 0;
-	preparationStatusFailures = 0;
 	restoreUnavailable = false;
 	mocks.connect.mockClear();
 	container = document.createElement("div");
@@ -78,40 +72,7 @@ beforeEach(() => {
 			const method = init?.method ?? "GET";
 			const body = init?.body ? JSON.parse(String(init.body)) : null;
 			requests.push({ url, method, body });
-			if (url === "/api/editor/preparations" && method === "POST") {
-				if (busyResponses > 0) {
-					busyResponses--;
-					return Response.json(
-						{ _tag: "EditorCapacityBusy", retryAfterMs: 1_000 },
-						{ status: 503 },
-					);
-				}
-				return Response.json(
-					{ id: "preparation", status: "preparing" },
-					{ status: 202 },
-				);
-			}
-			if (
-				url.startsWith("/api/editor/preparations/preparation?") &&
-				method === "GET"
-			) {
-				if (preparationStatusFailures > 0) {
-					preparationStatusFailures--;
-					return new Response("Unavailable", { status: 502 });
-				}
-				return Response.json(
-					preparationReady
-						? { status: "ready", sessionId: "session" }
-						: { status: "preparing" },
-				);
-			}
-			if (
-				url.startsWith("/api/editor/preparations/preparation?") &&
-				method === "DELETE"
-			) {
-				return Response.json({ canceled: true });
-			}
-			if (url === "/api/editor/sessions/session/config" && method === "PUT") {
+			if (url === "/api/editor/videos/video/config" && method === "PUT") {
 				const expectedSavedAt = (body as Record<string, unknown>)
 					.expectedSavedAt;
 				if (expectedSavedAt !== currentRevision)
@@ -126,10 +87,7 @@ beforeEach(() => {
 				currentRevision = "recovered";
 				return Response.json({ saved: true, savedAt: currentRevision });
 			}
-			if (
-				url === "/api/editor/sessions/session/config?videoId=video" &&
-				method === "GET"
-			) {
+			if (url === "/api/editor/videos/video/config" && method === "GET") {
 				return Response.json({ savedAt: currentRevision });
 			}
 			if (
@@ -197,7 +155,7 @@ async function openRecoveryConflict() {
 		);
 	});
 	await waitFor(() => {
-		expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+		expect(container.querySelector("[role='alert']")?.textContent).toContain(
 			"changed",
 		);
 	});
@@ -207,11 +165,12 @@ async function openRecoveryConflict() {
 test("a changed recording keeps the browser draft until its owner chooses recovery", async () => {
 	const config = await openRecoveryConflict();
 	const saves = requests.filter(
-		(request) => request.url === "/api/editor/sessions/session/config",
+		(request) =>
+			request.url === "/api/editor/videos/video/config" &&
+			request.method === "PUT",
 	);
 	expect(saves).toHaveLength(1);
 	expect(saves[0]?.body).toEqual({
-		videoId: "video",
 		config,
 		expectedSavedAt: "older",
 	});
@@ -232,20 +191,25 @@ test("a changed recording keeps the browser draft until its owner chooses recove
 	await act(async () => restore.click());
 	await waitFor(() => {
 		expect(
-			container.querySelector('iframe[title="Cap editor"]'),
+			container.querySelector("iframe[title='Cap editor']"),
 		).not.toBeNull();
 	});
 	expect(
 		requests.filter(
-			(request) => request.url === "/api/editor/sessions/session/config",
+			(request) =>
+				request.url === "/api/editor/videos/video/config" &&
+				request.method === "PUT",
 		)[1]?.body,
 	).toEqual({
-		videoId: "video",
 		config,
 		expectedSavedAt: "newer",
 	});
 	expect(
-		requests.filter((request) => request.url.includes("/config?videoId=video")),
+		requests.filter(
+			(request) =>
+				request.url === "/api/editor/videos/video/config" &&
+				request.method === "GET",
+		),
 	).toHaveLength(1);
 	expect(
 		readEditorLocalDraft(window.localStorage, "owner", "video"),
@@ -263,72 +227,38 @@ test("a second tab save during chosen recovery keeps the draft for another owner
 	if (!first) throw new Error("Recovery choice was not shown");
 	await act(async () => first.click());
 	await waitFor(() => {
-		expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+		expect(container.querySelector("[role='alert']")?.textContent).toContain(
 			"changed again",
 		);
 	});
 	expect(
 		readEditorLocalDraft(window.localStorage, "owner", "video")?.config,
 	).toEqual(config);
-	expect(container.querySelector('iframe[title="Cap editor"]')).toBeNull();
+	expect(container.querySelector("iframe[title='Cap editor']")).toBeNull();
 	const second = restore();
 	if (!second) throw new Error("Recovery choice disappeared");
 	await act(async () => second.click());
 	await waitFor(() => {
 		expect(
-			container.querySelector('iframe[title="Cap editor"]'),
+			container.querySelector("iframe[title='Cap editor']"),
 		).not.toBeNull();
 	});
 	const saves = requests.filter(
-		(request) => request.url === "/api/editor/sessions/session/config",
+		(request) =>
+			request.url === "/api/editor/videos/video/config" &&
+			request.method === "PUT",
 	);
 	expect(saves.map((request) => request.body)).toEqual([
-		{ videoId: "video", config, expectedSavedAt: "older" },
-		{ videoId: "video", config, expectedSavedAt: "newer" },
-		{ videoId: "video", config, expectedSavedAt: "latest" },
+		{ config, expectedSavedAt: "older" },
+		{ config, expectedSavedAt: "newer" },
+		{ config, expectedSavedAt: "latest" },
 	]);
 	expect(
 		readEditorLocalDraft(window.localStorage, "owner", "video"),
 	).toBeNull();
 });
 
-test("a preparation status failure cancels its worker reservation before navigation", async () => {
-	preparationStatusFailures = 1;
-	await act(async () => {
-		root.render(
-			createElement(StudioEditorClient, {
-				videoId: "video",
-				userId: "owner",
-				captionsEnabled: true,
-				savedAt: null,
-				preparingTitle: "Paired replay",
-				preparingDuration: 900,
-				preparingTracks: ["display", "camera"],
-			}),
-		);
-	});
-	await waitFor(() => {
-		expect(container.querySelector('[role="alert"]')?.textContent).toContain(
-			"status is unavailable",
-		);
-	});
-	expect(
-		requests.filter(
-			(request) =>
-				request.url.startsWith("/api/editor/preparations/preparation?") &&
-				request.method === "DELETE",
-		),
-	).toHaveLength(1);
-	expect(
-		requests.filter(
-			(request) =>
-				request.url.startsWith("/api/editor/sessions/session?") &&
-				request.method === "DELETE",
-		),
-	).toHaveLength(0);
-});
-
-test("an unexpected browser-draft restore failure closes the ready session and preserves the draft", async () => {
+test("an unexpected browser-draft restore failure preserves the draft", async () => {
 	const config = { camera: { mirror: true } };
 	expect(
 		captureEditorLocalDraft(
@@ -354,7 +284,7 @@ test("an unexpected browser-draft restore failure closes the ready session and p
 		);
 	});
 	await waitFor(() => {
-		expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+		expect(container.querySelector("[role='alert']")?.textContent).toContain(
 			"could not restore them",
 		);
 	});
@@ -364,21 +294,13 @@ test("an unexpected browser-draft restore failure closes the ready session and p
 				request.url.startsWith("/api/editor/sessions/session?") &&
 				request.method === "DELETE",
 		),
-	).toHaveLength(1);
-	expect(
-		requests.filter(
-			(request) =>
-				request.url.startsWith("/api/editor/preparations/preparation?") &&
-				request.method === "DELETE",
-		),
 	).toHaveLength(0);
 	expect(
 		readEditorLocalDraft(window.localStorage, "owner", "video")?.config,
 	).toEqual(config);
 });
 
-test("preparation keeps the shared editor shell open and connects once when ready", async () => {
-	preparationReady = false;
+test("browser Studio keeps the shared editor shell open and connects once when ready", async () => {
 	await act(async () => {
 		root.render(
 			createElement(StudioEditorClient, {
@@ -393,14 +315,10 @@ test("preparation keeps the shared editor shell open and connects once when read
 		);
 	});
 	const iframe = container.querySelector<HTMLIFrameElement>(
-		'iframe[title="Cap editor"]',
+		"iframe[title='Cap editor']",
 	);
-	if (!iframe) throw new Error("Editor shell was not shown during preparation");
-	await waitFor(() => {
-		expect(
-			requests.some((request) => request.url === "/api/editor/preparations"),
-		).toBe(true);
-	});
+	if (!iframe) throw new Error("Editor shell was not shown");
+	expect(requests).toHaveLength(0);
 	const frameDocument =
 		document.implementation.createHTMLDocument("Cap editor");
 	Object.defineProperty(frameDocument, "URL", {
@@ -429,52 +347,11 @@ test("preparation keeps the shared editor shell open and connects once when read
 		},
 		window.location.origin,
 	);
-	expect(mocks.connect).not.toHaveBeenCalled();
-	preparationReady = true;
 	await waitFor(() => {
 		expect(mocks.connect).toHaveBeenCalledTimes(1);
 	});
 	await act(async () => iframe.dispatchEvent(new Event("load")));
 	expect(mocks.connect).toHaveBeenCalledTimes(1);
-});
-
-test("occupied workers show a waiting message in the shared editor shell until one opens", async () => {
-	vi.spyOn(Math, "random").mockReturnValue(0);
-	busyResponses = 1;
-	await act(async () => {
-		root.render(
-			createElement(StudioEditorClient, {
-				videoId: "video",
-				userId: "owner",
-				captionsEnabled: true,
-				savedAt: null,
-				preparingTitle: "Paired replay",
-				preparingDuration: 900,
-				preparingTracks: ["display", "camera"],
-			}),
-		);
-	});
-	const iframe = container.querySelector('iframe[title="Cap editor"]');
-	expect(iframe).not.toBeNull();
-	await waitFor(() => {
-		expect(container.querySelector("output")?.textContent).toContain(
-			"Editors are busy. Waiting for one to become available",
-		);
-	});
-	expect(
-		requests.filter((request) => request.url === "/api/editor/preparations"),
-	).toHaveLength(1);
-	expect(container.querySelector('[role="alert"]')).toBeNull();
-	await act(async () => {
-		await new Promise((resolve) => setTimeout(resolve, 1_100));
-	});
-	await waitFor(() => {
-		expect(
-			requests.filter((request) => request.url === "/api/editor/preparations"),
-		).toHaveLength(2);
-		expect(container.querySelector("output")).toBeNull();
-	});
-	expect(container.querySelector('iframe[title="Cap editor"]')).toBe(iframe);
 });
 
 test("a Free editor lets its owner restore non-caption edits from a Pro browser draft", async () => {
@@ -513,12 +390,14 @@ test("a Free editor lets its owner restore non-caption edits from a Pro browser 
 	});
 	await waitFor(() => {
 		expect(
-			container.querySelector('[role="alert"]')?.textContent ?? "",
+			container.querySelector("[role='alert']")?.textContent ?? "",
 		).toContain("Cap Pro");
 	});
 	expect(
 		requests.filter(
-			(request) => request.url === "/api/editor/sessions/session/config",
+			(request) =>
+				request.url === "/api/editor/videos/video/config" &&
+				request.method === "PUT",
 		),
 	).toHaveLength(0);
 	expect(
@@ -531,15 +410,16 @@ test("a Free editor lets its owner restore non-caption edits from a Pro browser 
 	await act(async () => restore.click());
 	await waitFor(() => {
 		expect(
-			container.querySelector('iframe[title="Cap editor"]'),
+			container.querySelector("iframe[title='Cap editor']"),
 		).not.toBeNull();
 	});
 	expect(
 		requests.filter(
-			(request) => request.url === "/api/editor/sessions/session/config",
+			(request) =>
+				request.url === "/api/editor/videos/video/config" &&
+				request.method === "PUT",
 		)[0]?.body,
 	).toEqual({
-		videoId: "video",
 		config: {
 			camera: { mirror: true },
 			captions: {
@@ -595,7 +475,9 @@ test("a Pro editor automatically restores a caption browser draft", async () => 
 	await waitFor(() => {
 		expect(
 			requests.filter(
-				(request) => request.url === "/api/editor/sessions/session/config",
+				(request) =>
+					request.url === "/api/editor/videos/video/config" &&
+					request.method === "PUT",
 			),
 		).toHaveLength(1);
 		expect(
@@ -604,9 +486,11 @@ test("a Pro editor automatically restores a caption browser draft", async () => 
 	});
 	expect(
 		requests.filter(
-			(request) => request.url === "/api/editor/sessions/session/config",
+			(request) =>
+				request.url === "/api/editor/videos/video/config" &&
+				request.method === "PUT",
 		)[0]?.body,
-	).toEqual({ videoId: "video", config, expectedSavedAt: "newer" });
+	).toEqual({ config, expectedSavedAt: "newer" });
 	expect(
 		readEditorLocalDraft(window.localStorage, "owner", "video"),
 	).toBeNull();

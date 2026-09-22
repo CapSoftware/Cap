@@ -47,7 +47,7 @@ const overlayImagePath =
 	"content/images/7db75f36-4b50-4ebf-9a5c-3e6be0b6e929.png";
 const overlayImage = await sharp(
 	Buffer.from(
-		'<svg xmlns="http://www.w3.org/2000/svg" width="160" height="120"><rect width="80" height="120" fill="#ff2400" fill-opacity="0.65"/><rect x="80" width="80" height="120" fill="#05fb39" fill-opacity="0.9"/></svg>',
+		"<svg xmlns='http://www.w3.org/2000/svg' width='160' height='120'><rect width='80' height='120' fill='#ff2400' fill-opacity='0.65'/><rect x='80' width='80' height='120' fill='#05fb39' fill-opacity='0.9'/></svg>",
 	),
 )
 	.png()
@@ -324,7 +324,7 @@ try {
 				});
 			if (url.pathname === "/test-editor")
 				return new Response(
-					'<!doctype html><html><head><style>html,body{margin:0;height:100%;overflow:hidden}iframe{width:100vw;height:100vh;border:0}</style></head><body><iframe id="editor" src="/editor-solid/index.html"></iframe></body></html>',
+					"<!doctype html><html><head><style>html,body{margin:0;height:100%;overflow:hidden}iframe{width:100vw;height:100vh;border:0}</style></head><body><iframe id='editor' src='/editor-solid/index.html'></iframe></body></html>",
 					{ headers: { "Content-Type": "text/html; charset=utf-8" } },
 				);
 			if (
@@ -573,7 +573,7 @@ try {
 		timeout: 20_000,
 	});
 	try {
-		await editor.locator('[aria-busy="false"]').waitFor({
+		await editor.locator("[aria-busy='false']").waitFor({
 			state: "attached",
 			timeout: 20_000,
 		});

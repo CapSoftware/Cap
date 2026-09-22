@@ -38,7 +38,7 @@ function metadata(): VideoMetadata {
 				key: "owner/video/display.webm",
 				contentType: "video/webm",
 				size: 4000,
-				objectIdentity: '"base"',
+				objectIdentity: JSON.stringify("base"),
 			},
 		},
 		webEditorVideos: {
@@ -50,7 +50,7 @@ function metadata(): VideoMetadata {
 					name: "Added clip",
 					contentType: "video/webm",
 					size: 3000,
-					objectIdentity: '"clip"',
+					objectIdentity: JSON.stringify("clip"),
 				},
 			],
 		},
@@ -103,7 +103,7 @@ function read(video: typeof videos.$inferSelect) {
 	const bucket = {
 		getObject: () => Effect.succeed(Option.fromNullable(state.stored)),
 		headObject: () =>
-			Effect.succeed({ ContentLength: 4000, ETag: '"original"' }),
+			Effect.succeed({ ContentLength: 4000, ETag: JSON.stringify("original") }),
 	};
 	const service = {
 		getAccessForVideo: (_video: unknown, options: unknown) => {
@@ -191,7 +191,7 @@ test("a changed source invalidates an earlier clip transcript job", async () => 
 	};
 	const asset = details.webEditorVideos?.items[0];
 	if (!asset) throw new Error("Missing clip asset");
-	asset.objectIdentity = '"new-object"';
+	asset.objectIdentity = JSON.stringify("new-object");
 	expect((await read(editorVideo(details))).snapshot.status).toBe("missing");
 });
 
@@ -202,7 +202,7 @@ test("a migrated edit caption job measures the preserved MP4 before using its ca
 	expect(result.plan.sources[0]).toMatchObject({
 		key: state.legacyEdit.sourceKey,
 		expectedSize: 4000,
-		expectedIdentity: '"original"',
+		expectedIdentity: JSON.stringify("original"),
 	});
 	expect(result.snapshot.status).toBe("missing");
 	expect(state.accessOptions).toEqual([

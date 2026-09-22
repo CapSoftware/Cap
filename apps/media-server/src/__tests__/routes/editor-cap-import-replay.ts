@@ -518,7 +518,7 @@ try {
 	const sourceBlob = Bun.file(bundlePath);
 	const instantBlob = Bun.file(instantBundlePath);
 	const clipBlob = Bun.file(imported);
-	const etag = '"cap-bundle-replay"';
+	const etag = JSON.stringify("cap-bundle-replay");
 	const server = Bun.serve({
 		port: 0,
 		fetch(request) {

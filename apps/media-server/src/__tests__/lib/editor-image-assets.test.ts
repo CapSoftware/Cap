@@ -51,7 +51,7 @@ test.skipIf(!process.env.CAP_WEB_EDITOR_PREPARE_BIN)(
 						return new Response(Bun.file(source), {
 							headers: {
 								"Content-Length": String(bytes),
-								ETag: '"image-1"',
+								ETag: JSON.stringify("image-1"),
 								"Content-Type": "image/png",
 							},
 						});
@@ -60,7 +60,7 @@ test.skipIf(!process.env.CAP_WEB_EDITOR_PREPARE_BIN)(
 						return new Response(Bun.file(rotatedSource), {
 							headers: {
 								"Content-Length": String(rotatedBytes),
-								ETag: '"image-2"',
+								ETag: JSON.stringify("image-2"),
 								"Content-Type": "image/jpeg",
 							},
 						});
@@ -69,14 +69,14 @@ test.skipIf(!process.env.CAP_WEB_EDITOR_PREPARE_BIN)(
 						return new Response(Bun.file(tiffSource), {
 							headers: {
 								"Content-Length": String(tiffBytes),
-								ETag: '"image-3"',
+								ETag: JSON.stringify("image-3"),
 								"Content-Type": "image/tiff",
 							},
 						});
 					}
 					if (path === "/damaged.png") {
 						return new Response("not an image", {
-							headers: { ETag: '"image-1"' },
+							headers: { ETag: JSON.stringify("image-1") },
 						});
 					}
 					return new Response("Not found", { status: 404 });
@@ -89,7 +89,7 @@ test.skipIf(!process.env.CAP_WEB_EDITOR_PREPARE_BIN)(
 				url: `http://127.0.0.1:${server.port}/overlay.png`,
 				size: bytes,
 				contentType: "image/png",
-				objectIdentity: '"image-1"',
+				objectIdentity: JSON.stringify("image-1"),
 			};
 			const first = await stageSignedEditorImageAsset(project, asset);
 			expect(first).toEqual({ path, name: "Overlay", width: 120, height: 80 });
@@ -103,7 +103,7 @@ test.skipIf(!process.env.CAP_WEB_EDITOR_PREPARE_BIN)(
 				url: `http://127.0.0.1:${server.port}/rotated.jpg`,
 				size: rotatedBytes,
 				contentType: "image/jpeg",
-				objectIdentity: '"image-2"',
+				objectIdentity: JSON.stringify("image-2"),
 			};
 			expect(await stageSignedEditorImageAsset(project, rotated)).toEqual({
 				path: rotated.path,
@@ -121,7 +121,7 @@ test.skipIf(!process.env.CAP_WEB_EDITOR_PREPARE_BIN)(
 				url: `http://127.0.0.1:${server.port}/rgb-tiff.tiff`,
 				size: tiffBytes,
 				contentType: "image/tiff",
-				objectIdentity: '"image-3"',
+				objectIdentity: JSON.stringify("image-3"),
 			};
 			expect(await stageSignedEditorImageAsset(project, tiff)).toEqual({
 				path: tiff.path,
@@ -141,7 +141,7 @@ test.skipIf(!process.env.CAP_WEB_EDITOR_PREPARE_BIN)(
 			const changed = {
 				...asset,
 				path: `content/images/${randomUUID()}.png`,
-				objectIdentity: '"other"',
+				objectIdentity: JSON.stringify("other"),
 			};
 			await expect(
 				stageSignedEditorImageAsset(project, changed),

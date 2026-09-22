@@ -16,7 +16,7 @@ function metadata(hasAudio = true): VideoMetadata {
 				key: "owner/video/display.webm",
 				contentType: "video/webm",
 				size: 4000,
-				objectIdentity: '"base"',
+				objectIdentity: JSON.stringify("base"),
 			},
 		},
 		webEditorVideos: {
@@ -28,7 +28,7 @@ function metadata(hasAudio = true): VideoMetadata {
 					name: "Extra screen",
 					contentType: "video/webm",
 					size: 3000,
-					objectIdentity: '"clip"',
+					objectIdentity: JSON.stringify("clip"),
 				},
 			],
 		},
@@ -128,7 +128,7 @@ test("Studio Cap voice tracks keep their source offsets before a later MP4", () 
 		name: "Studio source",
 		contentType: CAP_BUNDLE_CONTENT_TYPE,
 		size: 8000,
-		objectIdentity: '"cap"',
+		objectIdentity: JSON.stringify("cap"),
 	});
 	details.webEditorImports = {
 		version: 1,
@@ -203,7 +203,7 @@ test("caption cache identities change when a recorded source changes", () => {
 	const changed = metadata();
 	const asset = changed.webEditorVideos?.items[0];
 	if (!asset) throw new Error("Missing clip asset");
-	asset.objectIdentity = '"replacement"';
+	asset.objectIdentity = JSON.stringify("replacement");
 	const second = buildEditorCaptionSourcePlan(
 		"owner",
 		"video",
@@ -221,7 +221,7 @@ test("a migrated trim captions the immutable original instead of stale raw metad
 	const original = {
 		key: "owner/video/source/original.mp4",
 		size: 4321,
-		objectIdentity: '"original"',
+		objectIdentity: JSON.stringify("original"),
 	};
 	const migrated = buildEditorCaptionSourcePlan(
 		"owner",

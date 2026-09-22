@@ -206,7 +206,7 @@ try {
 	});
 	const bundlePath = await bundleProject(sourceProject);
 	const bundle = Bun.file(bundlePath);
-	const etag = '"cap-caption-900s"';
+	const etag = JSON.stringify("cap-caption-900s");
 	const server = Bun.serve({
 		port: 0,
 		fetch(request) {

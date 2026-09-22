@@ -22,7 +22,7 @@ const assets: NonNullable<VideoMetadata["webEditorVideos"]>["items"] = [
 		name: "Studio source",
 		contentType: CAP_BUNDLE_CONTENT_TYPE,
 		size: 1024,
-		objectIdentity: '"etag"',
+		objectIdentity: JSON.stringify("etag"),
 	},
 ];
 

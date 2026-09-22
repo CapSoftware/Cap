@@ -13,13 +13,13 @@ const videoId = "123e4567-e89b-42d3-a456-426614174000";
 const sessionId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const imagePath = "content/images/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb.png";
 const imageKey = `owner/${videoId}/editor-assets/images/${imagePath.slice("content/images/".length)}`;
-const imageIdentity = '"original-image"';
+const imageIdentity = JSON.stringify("original-image");
 
 const mocks = vi.hoisted(() => ({
 	assetSize: 1024,
-	assetIdentity: '"original-image"' as string | null,
+	assetIdentity: JSON.stringify("original-image") as string | null,
 	storedSize: 1024,
-	storedIdentity: '"original-image"',
+	storedIdentity: JSON.stringify("original-image"),
 	videoVisible: true,
 	sessionAllowed: true,
 	authenticated: true,
@@ -214,7 +214,7 @@ describe("web editor image file redirect", () => {
 						headers: {
 							"Content-Type": "image/png",
 							"Content-Length": "4",
-							ETag: '"replacement-image"',
+							ETag: JSON.stringify("replacement-image"),
 						},
 					}),
 			),
@@ -223,7 +223,7 @@ describe("web editor image file redirect", () => {
 	});
 
 	it("refuses an image replaced with different bytes of the same size", async () => {
-		mocks.storedIdentity = '"replacement-image"';
+		mocks.storedIdentity = JSON.stringify("replacement-image");
 		expect((await request()).status).toBe(503);
 		expect(mocks.head).toHaveBeenCalledWith(imageKey);
 		expect(mocks.sign).not.toHaveBeenCalled();

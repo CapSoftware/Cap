@@ -42,7 +42,7 @@ test("a signed imported video is probed once, staged, and reusable after reopeni
 						headers: {
 							"Content-Length": String(size),
 							"Content-Type": "video/mp4",
-							ETag: '"video-1"',
+							ETag: JSON.stringify("video-1"),
 						},
 					});
 				}
@@ -55,7 +55,7 @@ test("a signed imported video is probed once, staged, and reusable after reopeni
 			url: `http://127.0.0.1:${server.port}/clip.mp4`,
 			size,
 			contentType: "video/mp4",
-			objectIdentity: '"video-1"',
+			objectIdentity: JSON.stringify("video-1"),
 		};
 		const imported = await stageSignedEditorVideoAsset(project, asset);
 		expect(imported.path).toBe(asset.path);
@@ -78,7 +78,7 @@ test("a signed imported video is probed once, staged, and reusable after reopeni
 		const changed = {
 			...asset,
 			path: `content/videos/${randomUUID()}.mp4`,
-			objectIdentity: '"other"',
+			objectIdentity: JSON.stringify("other"),
 		};
 		await expect(stageSignedEditorVideoAsset(project, changed)).rejects.toThrow(
 			"identity changed",
