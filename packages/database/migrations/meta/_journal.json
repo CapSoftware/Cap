@@ -337,6 +337,13 @@
 			"when": 1790073320452,
 			"tag": "0047_mcp_client_lifecycle",
 			"breakpoints": true
+		},
+		{
+			"idx": 48,
+			"version": "5",
+			"when": 1790073970527,
+			"tag": "0048_mcp_registration_quota",
+			"breakpoints": true
 		}
 	]
 }

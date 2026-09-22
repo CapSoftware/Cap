@@ -1,8 +1,4 @@
-import { randomBytes } from "node:crypto";
-import { db } from "@cap/database";
-import { nanoId } from "@cap/database/helpers";
-import { mcpOAuthClients } from "@cap/database/schema";
-import { isMcpRedirectUri, mcpIssuer } from "@/lib/mcp-auth";
+import { isMcpRedirectUri, mcpIssuer, registerMcpClient } from "@/lib/mcp-auth";
 import { readMcpBody } from "@/lib/mcp-http";
 import { isRateLimited } from "@/lib/rate-limit";
 
@@ -63,13 +59,15 @@ export async function POST(request: Request) {
 	) {
 		return Response.json({ error: "invalid_client_metadata" }, { status: 400 });
 	}
-	const clientId = `cap_mcp_client_${randomBytes(32).toString("base64url")}`;
-	await db().insert(mcpOAuthClients).values({
-		id: nanoId(),
-		clientId,
+	const clientId = await registerMcpClient({
 		clientName: clientName.trim(),
 		redirectUris,
 	});
+	if (!clientId)
+		return Response.json(
+			{ error: "temporarily_unavailable" },
+			{ status: 429, headers: { "Cache-Control": "no-store" } },
+		);
 	return Response.json(
 		{
 			client_id: clientId,

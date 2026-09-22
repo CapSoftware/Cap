@@ -7,6 +7,7 @@ const databaseState = vi.hoisted(() => ({
 	selected: null as Record<string, unknown> | null,
 	inserted: [] as Record<string, unknown>[],
 	updated: 0,
+	quotaCount: 0,
 }));
 vi.mock("@cap/database", () => ({
 	db: () => ({
@@ -19,7 +20,14 @@ vi.mock("@cap/database", () => ({
 			callback({
 				select: () => ({
 					from: () => ({
-						where: () => ({ limit: async () => [databaseState.selected] }),
+						where: () => ({
+							limit: () =>
+								Object.assign(Promise.resolve([databaseState.selected]), {
+									for: async () => [
+										{ registrations: databaseState.quotaCount },
+									],
+								}),
+						}),
 					}),
 				}),
 				update: () => ({
@@ -31,8 +39,10 @@ vi.mock("@cap/database", () => ({
 					}),
 				}),
 				insert: () => ({
-					values: async (row: Record<string, unknown>) => {
-						databaseState.inserted.push(row);
+					values: (row: Record<string, unknown>) => {
+						if ("clientId" in row || "codeHash" in row || "accessHash" in row)
+							databaseState.inserted.push(row);
+						return { onDuplicateKeyUpdate: async () => undefined };
 					},
 				}),
 			}),
@@ -80,6 +90,7 @@ describe("MCP OAuth authorization", () => {
 		databaseState.selected = null;
 		databaseState.inserted = [];
 		databaseState.updated = 0;
+		databaseState.quotaCount = 0;
 	});
 	it("accepts only secure or explicit loopback redirect URIs", () => {
 		expect(isMcpRedirectUri("https://chatgpt.com/connector/callback")).toBe(
@@ -225,5 +236,11 @@ describe("MCP OAuth authorization", () => {
 		);
 		expect(unnamed.status).toBe(201);
 		expect(await unnamed.json()).toMatchObject({ client_name: "MCP client" });
+		databaseState.inserted = [];
+		databaseState.quotaCount = 5_000;
+		expect((await post("https://chatgpt.com/connector/callback")).status).toBe(
+			429,
+		);
+		expect(databaseState.inserted).toHaveLength(0);
 	});
 });

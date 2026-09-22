@@ -1022,6 +1022,16 @@ export const mcpOAuthClients = mysqlTable(
 	],
 );
 
+export const mcpOAuthRegistrationQuotas = mysqlTable(
+	"mcp_oauth_registration_quotas",
+	{
+		windowId: varchar("windowId", { length: 10 }).notNull().primaryKey(),
+		registrations: int("registrations").notNull().default(0),
+		expiresAt: timestamp("expiresAt").notNull(),
+	},
+	(table) => [index("expires_at_idx").on(table.expiresAt)],
+);
+
 export const mcpOAuthCodes = mysqlTable(
 	"mcp_oauth_codes",
 	{
@@ -1061,6 +1071,11 @@ export const mcpOAuthTokens = mysqlTable(
 		uniqueIndex("access_hash_idx").on(table.accessHash),
 		uniqueIndex("refresh_hash_idx").on(table.refreshHash),
 		index("family_id_idx").on(table.familyId),
+		index("client_active_idx").on(
+			table.clientId,
+			table.revokedAt,
+			table.refreshExpiresAt,
+		),
 		index("refresh_expires_at_idx").on(table.refreshExpiresAt),
 	],
 );

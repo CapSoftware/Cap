@@ -7,11 +7,12 @@ import { nanoId } from "@cap/database/helpers";
 import {
 	mcpOAuthClients,
 	mcpOAuthCodes,
+	mcpOAuthRegistrationQuotas,
 	mcpOAuthTokens,
 	users,
 } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
-import { and, eq, gt, isNull } from "drizzle-orm";
+import { and, eq, gt, isNull, sql } from "drizzle-orm";
 import {
 	hashAgentSecret,
 	isAgentCodeChallenge,
@@ -26,6 +27,7 @@ export const mcpProtectedResourceMetadataUrl = () =>
 
 const accessLifetimeSeconds = 3_600;
 const refreshLifetimeSeconds = 30 * 24 * 3_600;
+const dailyRegistrationLimit = 5_000;
 const token = (prefix: string) =>
 	`${prefix}${randomBytes(32).toString("base64url")}`;
 
@@ -81,6 +83,50 @@ export const parseMcpAuthorizationRequest = (
 		return null;
 	}
 	return { clientId, redirectUri, codeChallenge, state, resource };
+};
+
+export const registerMcpClient = async (input: {
+	clientName: string;
+	redirectUris: string[];
+}) => {
+	const now = new Date();
+	const windowId = now.toISOString().slice(0, 10);
+	const clientId = token("cap_mcp_client_");
+	const accepted = await db().transaction(async (tx) => {
+		await tx
+			.insert(mcpOAuthRegistrationQuotas)
+			.values({
+				windowId,
+				registrations: 0,
+				expiresAt: new Date(now.getTime() + 3 * 24 * 60 * 60_000),
+			})
+			.onDuplicateKeyUpdate({
+				set: {
+					windowId: sql`${mcpOAuthRegistrationQuotas.windowId}`,
+				},
+			});
+		const [quota] = await tx
+			.select({ registrations: mcpOAuthRegistrationQuotas.registrations })
+			.from(mcpOAuthRegistrationQuotas)
+			.where(eq(mcpOAuthRegistrationQuotas.windowId, windowId))
+			.limit(1)
+			.for("update");
+		if (!quota || quota.registrations >= dailyRegistrationLimit) return false;
+		await tx
+			.update(mcpOAuthRegistrationQuotas)
+			.set({
+				registrations: sql`${mcpOAuthRegistrationQuotas.registrations} + 1`,
+			})
+			.where(eq(mcpOAuthRegistrationQuotas.windowId, windowId));
+		await tx.insert(mcpOAuthClients).values({
+			id: nanoId(),
+			clientId,
+			clientName: input.clientName,
+			redirectUris: input.redirectUris,
+		});
+		return true;
+	});
+	return accepted ? clientId : null;
 };
 
 export const getMcpClient = async (clientId: string) => {
