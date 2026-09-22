@@ -44,12 +44,18 @@ jobs:
           $source = "crates/scap-targets/src/platform/win.rs"
           $patchedSource = [System.IO.File]::ReadAllBytes($source)
           try {
-            $baseline = git show "$($env:BASE_SHA):$source"
-            if ($LASTEXITCODE -ne 0) { throw "Could not load base Windows implementation" }
-            $baseline | Set-Content -Encoding utf8 $source
-            cargo test --locked -p scap-targets --test windows_targets -- --nocapture
-            $baselineExit = $LASTEXITCODE
-            "Base implementation discovery test exit code: $baselineExit (0 means this fixture already passed on the base)." | Add-Content $env:GITHUB_STEP_SUMMARY
+            $baseSource = git ls-tree $env:BASE_SHA -- $source
+            if ($LASTEXITCODE -ne 0) { throw "Could not inspect base Windows implementation" }
+            if ($baseSource) {
+              $baseline = git show "$($env:BASE_SHA):$source"
+              if ($LASTEXITCODE -ne 0) { throw "Could not load base Windows implementation" }
+              $baseline | Set-Content -Encoding utf8 $source
+              cargo test --locked -p scap-targets --test windows_targets -- --nocapture
+              $baselineExit = $LASTEXITCODE
+              "Base implementation discovery test exit code: $baselineExit (0 means this fixture already passed on the base)." | Add-Content $env:GITHUB_STEP_SUMMARY
+            } else {
+              "Base implementation discovery test skipped because $source is absent from the PR base." | Add-Content $env:GITHUB_STEP_SUMMARY
+            }
           } finally {
             [System.IO.File]::WriteAllBytes($source, $patchedSource)
           }
