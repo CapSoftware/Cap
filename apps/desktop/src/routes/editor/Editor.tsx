@@ -801,6 +801,12 @@ function Inner(props: {
 		createEventListener(document, "visibilitychange", () => {
 			if (!document.hidden) refreshCaptionPlan();
 		});
+		if (window.parent !== window) {
+			createEventListener(window.parent, "focus", refreshCaptionPlan);
+			createEventListener(window.parent.document, "visibilitychange", () => {
+				if (!window.parent.document.hidden) refreshCaptionPlan();
+			});
+		}
 		createEventListener(window, "cap-web-editor-captions-plan", () => {
 			if (
 				(window as Window & { capWebEditorCaptionsEnabled?: boolean })

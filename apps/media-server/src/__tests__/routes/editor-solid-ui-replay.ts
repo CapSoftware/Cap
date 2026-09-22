@@ -166,6 +166,7 @@ let sessionId: string | null = null;
 let savedAt: string | null = null;
 let captionRequests = 0;
 let currentCaptionPlan = proCaptions;
+let planRequests = 0;
 let freeCaptionlessSaves = 0;
 let proCaptionSaves = 0;
 let savedPaidCaptions = false;
@@ -747,8 +748,10 @@ try {
 						return Response.json({ saved: true, savedAt });
 					}
 				}
-				if (url.pathname === `${apiRoot}/plan` && request.method === "GET")
+				if (url.pathname === `${apiRoot}/plan` && request.method === "GET") {
+					planRequests++;
 					return Response.json({ pro: currentCaptionPlan });
+				}
 				if (url.pathname === `${apiRoot}/assets` && request.method === "GET")
 					return Response.json({ path: null });
 			}
@@ -1570,10 +1573,9 @@ try {
 			await editor
 				.getByRole("button", { name: "Back to editor" })
 				.waitFor({ state: "visible" });
+		const planRequestsBeforeFocus = planRequests;
 		currentCaptionPlan = !proCaptions;
-		await editor
-			.locator("body")
-			.evaluate(() => window.dispatchEvent(new Event("focus")));
+		await page.evaluate(() => window.dispatchEvent(new Event("focus")));
 		if (proCaptions) {
 			await editor
 				.getByRole("button", { name: "Back to editor" })
@@ -1639,18 +1641,33 @@ try {
 				0,
 			);
 		} else {
-			await editor.getByRole("link", { name: "Upgrade to Cap Pro" }).waitFor({
-				state: "hidden",
-			});
+			try {
+				await editor
+					.getByRole("link", { name: "Upgrade to Cap Pro" })
+					.waitFor({ state: "hidden" });
+			} catch (cause) {
+				const iframePlan = await editor
+					.locator("body")
+					.evaluate(
+						() =>
+							(window as Window & { capWebEditorCaptionsEnabled?: boolean })
+								.capWebEditorCaptionsEnabled,
+					);
+				process.stderr.write(
+					`${JSON.stringify({ stage: "caption-plan-focus", browserEngine: browserEngine.name(), planRequestsBeforeFocus, planRequests, currentCaptionPlan, iframePlan })}\n`,
+				);
+				throw cause;
+			}
+			assert.ok(planRequests > planRequestsBeforeFocus);
 			await editor.getByText("Font settings", { exact: true }).waitFor({
 				state: "visible",
 			});
 			await waitForWorkerCaptionContent(false);
 		}
 		currentCaptionPlan = proCaptions;
-		await editor
-			.locator("body")
-			.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+		await page.evaluate(() =>
+			document.dispatchEvent(new Event("visibilitychange")),
+		);
 		if (proCaptions) {
 			await editor
 				.getByRole("button", { name: "Captions", exact: true })
