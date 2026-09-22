@@ -577,6 +577,15 @@ async function replay(forceWebGl, forceWebGpu = false) {
 						paddedSolid,
 						await snapshot(),
 					);
+					const imageWithoutBlur = await snapshot();
+					config.background.blur = 100;
+					await playback.setConfig(config);
+					const blurChangedPixels = differentPixels(
+						imageWithoutBlur,
+						await snapshot(),
+					);
+					config.background.blur = 0;
+					await playback.setConfig(config);
 					config.background.source = {
 						type: "image",
 						path: "/api/editor/videos/fixture/file?raw=1&path=content/images/00000000-0000-0000-0000-000000000002.png",
@@ -694,6 +703,18 @@ async function replay(forceWebGl, forceWebGpu = false) {
 							"Paired image-background transition did not render",
 						);
 					}
+					config.background.blur = 60;
+					await playback.setConfig(config);
+					await playback.seek(transitionStart + transitionDuration * 0.2);
+					const blurredTransitionFirst = await snapshot();
+					await playback.seek(transitionStart + transitionDuration * 0.8);
+					const blurredTransitionLast = await snapshot();
+					const blurredTransitionChangedPixels = differentPixels(
+						blurredTransitionFirst,
+						blurredTransitionLast,
+					);
+					config.background.blur = 0;
+					await playback.setConfig(config);
 					config.timeline = undefined;
 					config.background.source = JSON.parse(
 						playback.module.default_project_config_json(),
@@ -856,11 +877,13 @@ async function replay(forceWebGl, forceWebGpu = false) {
 						returnToStartMs,
 						changedPixels,
 						imageChangedPixels,
+						blurChangedPixels,
 						exifOrientationChangedPixels,
 						startChangedPixels,
 						gradientChangedPixels,
 						gradientMotionPixels,
 						transitionChangedPixels,
+						blurredTransitionChangedPixels,
 						playedFrames,
 						indexedParity,
 						videos,
@@ -918,6 +941,10 @@ async function replay(forceWebGl, forceWebGpu = false) {
 			"Imported image background did not change the GPU frame",
 		);
 		assert(
+			result.blurChangedPixels > 1000,
+			"Background blur did not change the GPU frame",
+		);
+		assert(
 			result.startChangedPixels < 100,
 			`Returning to the start changed ${result.startChangedPixels} GPU pixels`,
 		);
@@ -932,6 +959,10 @@ async function replay(forceWebGl, forceWebGpu = false) {
 		assert(
 			result.transitionChangedPixels > 1000,
 			"Paired animated-gradient transition did not change the GPU frame",
+		);
+		assert(
+			result.blurredTransitionChangedPixels > 1000,
+			"Paired blurred-image transition did not change the GPU frame",
 		);
 		assert(result.playedFrames >= 2, "Local playback did not advance");
 		if (indexed) {

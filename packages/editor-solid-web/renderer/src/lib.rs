@@ -1,5 +1,7 @@
 #[path = "../../../../crates/rendering/src/layers/animated_gradient.rs"]
 mod animated_gradient;
+#[path = "../../../../crates/rendering/src/layers/blur.rs"]
+mod blur;
 #[path = "../../../../crates/rendering/src/composite_frame.rs"]
 mod composite_frame;
 #[path = "../../../../crates/editor/src/screen_recording_defaults.rs"]
@@ -10,6 +12,7 @@ mod segment_timing;
 mod transition;
 
 use animated_gradient::AnimatedGradientLayer;
+use blur::BlurLayer;
 use bytemuck::{Pod, Zeroable};
 use cap_project::{
     AnimatedGradientConfig, AspectRatio, BackgroundSource, CameraShape, CameraXPosition,
@@ -21,6 +24,7 @@ use composite_frame::{
     ColorGradeUniformParams, CompositeVideoFramePipeline, CompositeVideoFrameUniforms,
 };
 use segment_timing::{SegmentVideoTiming, segment_video_timing};
+use std::cell::Cell;
 use transition::{TransitionCompositor, TransitionParameters};
 use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
@@ -451,6 +455,131 @@ impl BrowserBackground {
     }
 }
 
+struct BrowserBlurredBackground {
+    background: wgpu::Texture,
+    horizontal: wgpu::Texture,
+    dirty: Cell<bool>,
+    blit_bind_group: wgpu::BindGroup,
+    surface_pipeline: wgpu::RenderPipeline,
+    intermediate_pipeline: Option<wgpu::RenderPipeline>,
+}
+
+impl BrowserBlurredBackground {
+    fn new(
+        device: &wgpu::Device,
+        width: u32,
+        height: u32,
+        surface_format: wgpu::TextureFormat,
+    ) -> Self {
+        let make_texture = |label| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+        };
+        let background = make_texture("Browser blurred background");
+        let horizontal = make_texture("Browser horizontal background blur");
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Browser blurred background blit layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            }],
+        });
+        let blit_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Browser blurred background blit"),
+            layout: &layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(
+                    &background.create_view(&wgpu::TextureViewDescriptor::default()),
+                ),
+            }],
+        });
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Shared browser background blit shader"),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../../../../crates/rendering/src/shaders/blit_bgra_surface.wgsl")
+                    .into(),
+            ),
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Browser blurred background blit pipeline layout"),
+            bind_group_layouts: &[&layout],
+            push_constant_ranges: &[],
+        });
+        let make_pipeline = |format| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("Browser blurred background blit"),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &[],
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend: Some(wgpu::BlendState::REPLACE),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    cull_mode: Some(wgpu::Face::Back),
+                    ..Default::default()
+                },
+                depth_stencil: None,
+                multisample: Default::default(),
+                multiview: None,
+                cache: None,
+            })
+        };
+        Self {
+            background,
+            horizontal,
+            dirty: Cell::new(true),
+            blit_bind_group,
+            surface_pipeline: make_pipeline(surface_format),
+            intermediate_pipeline: (surface_format != wgpu::TextureFormat::Rgba8Unorm)
+                .then(|| make_pipeline(wgpu::TextureFormat::Rgba8Unorm)),
+        }
+    }
+
+    fn draw(&self, pass: &mut wgpu::RenderPass<'_>, intermediate: bool) {
+        pass.set_pipeline(if intermediate {
+            self.intermediate_pipeline
+                .as_ref()
+                .unwrap_or(&self.surface_pipeline)
+        } else {
+            &self.surface_pipeline
+        });
+        pass.set_bind_group(0, &self.blit_bind_group, &[]);
+        pass.draw(0..3, 0..1);
+    }
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct ImageBackgroundUniforms {
@@ -806,17 +935,119 @@ fn upload_video(
     Ok(())
 }
 
-fn draw_layers(
+fn render_background(
+    pass: &mut wgpu::RenderPass<'_>,
     background: &BrowserBackground,
     animated_background: Option<&AnimatedGradientLayer>,
     image_background: Option<&BrowserImageBackground>,
     intermediate: bool,
+) {
+    if let Some(image_background) = image_background {
+        image_background.draw(pass, intermediate);
+    } else if let Some(animated_background) = animated_background {
+        animated_background.render(pass);
+    } else {
+        background.draw(pass);
+    }
+}
+
+type BrowserBlurInputs<'a> = (
+    &'a BlurLayer,
+    &'a BrowserBlurredBackground,
+    &'a BrowserBackground,
+    Option<&'a AnimatedGradientLayer>,
+);
+
+fn blur_inputs<'a>(
+    layer: Option<&'a BlurLayer>,
+    cached: Option<&'a BrowserBlurredBackground>,
+    background: Option<&'a BrowserBackground>,
+    animated: Option<&'a AnimatedGradientLayer>,
+) -> Option<BrowserBlurInputs<'a>> {
+    Some((layer?, cached?, background?, animated))
+}
+
+fn draw_layers(
+    background: &BrowserBackground,
+    animated_background: Option<&AnimatedGradientLayer>,
+    image_background: Option<&BrowserImageBackground>,
+    blur: Option<BrowserBlurInputs<'_>>,
+    intermediate: bool,
     pipeline: &CompositeVideoFramePipeline,
+    device: &wgpu::Device,
     encoder: &mut wgpu::CommandEncoder,
     target: &wgpu::TextureView,
     screen: &InputTexture,
     camera: Option<&InputTexture>,
 ) {
+    if let Some((layer, cached, rgba_background, rgba_animated)) = blur
+        && (cached.dirty.get() || rgba_animated.is_some())
+    {
+        let background_view = cached
+            .background
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let horizontal_view = cached
+            .horizontal
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Browser editor background before blur"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &background_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            render_background(
+                &mut pass,
+                rgba_background,
+                rgba_animated,
+                image_background,
+                true,
+            );
+        }
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Browser editor horizontal background blur"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &horizontal_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            layer.render_h(&mut pass, device, &background_view);
+        }
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Browser editor vertical background blur"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &background_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            layer.render_v(&mut pass, device, &horizontal_view);
+        }
+        cached.dirty.set(false);
+    }
     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         label: Some("Browser editor video layers"),
         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -831,12 +1062,16 @@ fn draw_layers(
         timestamp_writes: None,
         occlusion_query_set: None,
     });
-    if let Some(image_background) = image_background {
-        image_background.draw(&mut pass, intermediate);
-    } else if let Some(animated_background) = animated_background {
-        animated_background.render(&mut pass);
+    if let Some((_, cached, _, _)) = blur {
+        cached.draw(&mut pass, intermediate);
     } else {
-        background.draw(&mut pass);
+        render_background(
+            &mut pass,
+            background,
+            animated_background,
+            image_background,
+            intermediate,
+        );
     }
     pass.set_pipeline(&pipeline.render_pipeline);
     pass.set_bind_group(0, &screen.bind_group, &[]);
@@ -875,6 +1110,9 @@ pub struct BrowserGpuRenderer {
     queue: wgpu::Queue,
     pipeline: CompositeVideoFramePipeline,
     background: BrowserBackground,
+    background_blur: Option<BlurLayer>,
+    blurred_background: Option<BrowserBlurredBackground>,
+    background_key: Option<String>,
     background_uniforms: BackgroundUniforms,
     image_background: Option<BrowserImageBackground>,
     animated_background: Option<AnimatedGradientLayer>,
@@ -912,8 +1150,15 @@ fn draw_retained(
                 &renderer.background,
                 renderer.animated_background.as_ref(),
                 renderer.image_background.as_ref(),
+                blur_inputs(
+                    renderer.background_blur.as_ref(),
+                    renderer.blurred_background.as_ref(),
+                    renderer.intermediate_background.as_ref(),
+                    renderer.animated_intermediate.as_ref(),
+                ),
                 false,
                 &renderer.pipeline,
+                &renderer.device,
                 encoder,
                 target,
                 screen,
@@ -1065,6 +1310,9 @@ impl BrowserGpuRenderer {
             queue,
             pipeline,
             background,
+            background_blur: None,
+            blurred_background: None,
+            background_key: None,
             background_uniforms,
             image_background: None,
             animated_background: None,
@@ -1096,6 +1344,8 @@ impl BrowserGpuRenderer {
         image: Option<ImageBitmap>,
     ) -> Result<(), JsValue> {
         let project: ProjectConfiguration = serde_json::from_str(project_json).map_err(js_error)?;
+        let background_key = serde_json::to_string(&project.background).map_err(js_error)?;
+        let background_changed = self.background_key.as_ref() != Some(&background_key);
         match &project.background.source {
             BackgroundSource::AnimatedGradient { config } => {
                 self.image_background = None;
@@ -1158,6 +1408,50 @@ impl BrowserGpuRenderer {
                 self.animated_config = None;
             }
         }
+        if project.background.blur > 0.0 {
+            if self.background_blur.is_none() {
+                self.background_blur = Some(BlurLayer::new(&self.device));
+            }
+            if let Some(layer) = self.background_blur.as_mut() {
+                layer.prepare_values(
+                    &self.queue,
+                    (self.surface_config.width, self.surface_config.height),
+                    project.background.blur,
+                );
+            }
+            if self.blurred_background.is_none() {
+                self.blurred_background = Some(BrowserBlurredBackground::new(
+                    &self.device,
+                    self.surface_config.width,
+                    self.surface_config.height,
+                    self.surface_config.format,
+                ));
+            }
+            if background_changed && let Some(cached) = self.blurred_background.as_ref() {
+                cached.dirty.set(true);
+            }
+            if self.intermediate_background.is_none() {
+                self.intermediate_background = Some(BrowserBackground::new(
+                    &self.device,
+                    wgpu::TextureFormat::Rgba8Unorm,
+                    self.background_uniforms,
+                ));
+            }
+            if let (None, Some(config)) = (
+                self.animated_intermediate.as_ref(),
+                self.animated_config.as_ref(),
+            ) {
+                self.animated_intermediate = Some(AnimatedGradientLayer::new(
+                    &self.device,
+                    config.clone(),
+                    &self.project_uniforms(),
+                ));
+            }
+        } else {
+            self.blurred_background = None;
+            self.background_blur = None;
+        }
+        self.background_key = Some(background_key);
         Ok(())
     }
 
@@ -1211,6 +1505,15 @@ impl BrowserGpuRenderer {
             self.image_background
                 .as_ref()
                 .map(|background| background.update_size(&self.queue, width, height));
+            if let Some(layer) = self.background_blur.as_mut() {
+                layer.prepare_values(&self.queue, (width, height), layer.blur_amount);
+                self.blurred_background = Some(BrowserBlurredBackground::new(
+                    &self.device,
+                    width,
+                    height,
+                    self.surface_config.format,
+                ));
+            }
             self.intermediate = None;
             self.last_rendered = None;
             self.last_composition = None;
@@ -1291,8 +1594,15 @@ impl BrowserGpuRenderer {
             &self.background,
             self.animated_background.as_ref(),
             self.image_background.as_ref(),
+            blur_inputs(
+                self.background_blur.as_ref(),
+                self.blurred_background.as_ref(),
+                self.intermediate_background.as_ref(),
+                self.animated_intermediate.as_ref(),
+            ),
             false,
             &self.pipeline,
+            &self.device,
             &mut encoder,
             &view,
             screen,
@@ -1430,8 +1740,15 @@ impl BrowserGpuRenderer {
                 .ok_or_else(|| js_error("Transition background is missing"))?,
             self.animated_intermediate.as_ref(),
             self.image_background.as_ref(),
+            blur_inputs(
+                self.background_blur.as_ref(),
+                self.blurred_background.as_ref(),
+                self.intermediate_background.as_ref(),
+                self.animated_intermediate.as_ref(),
+            ),
             true,
             pipeline,
+            &self.device,
             &mut encoder,
             &intermediate_view,
             self.screen
@@ -1471,8 +1788,15 @@ impl BrowserGpuRenderer {
                 .ok_or_else(|| js_error("Transition background is missing"))?,
             self.animated_intermediate.as_ref(),
             self.image_background.as_ref(),
+            blur_inputs(
+                self.background_blur.as_ref(),
+                self.blurred_background.as_ref(),
+                self.intermediate_background.as_ref(),
+                self.animated_intermediate.as_ref(),
+            ),
             true,
             pipeline,
+            &self.device,
             &mut encoder,
             &intermediate_view,
             self.screen
@@ -1589,8 +1913,15 @@ impl BrowserGpuRenderer {
                     &self.background,
                     self.animated_background.as_ref(),
                     self.image_background.as_ref(),
+                    blur_inputs(
+                        self.background_blur.as_ref(),
+                        self.blurred_background.as_ref(),
+                        self.intermediate_background.as_ref(),
+                        self.animated_intermediate.as_ref(),
+                    ),
                     false,
                     &self.pipeline,
+                    &self.device,
                     &mut encoder,
                     &view,
                     self.screen

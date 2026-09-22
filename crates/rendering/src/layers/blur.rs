@@ -1,6 +1,7 @@
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 
+#[cfg(not(target_arch = "wasm32"))]
 use crate::ProjectUniforms;
 
 pub struct BlurLayer {
@@ -42,15 +43,29 @@ impl BlurLayer {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn prepare(&mut self, queue: &wgpu::Queue, uniforms: &ProjectUniforms) {
-        self.blur_amount = uniforms.project.background.blur;
+        self.prepare_values(
+            queue,
+            uniforms.output_size,
+            uniforms.project.background.blur,
+        );
+    }
+
+    pub fn prepare_values(
+        &mut self,
+        queue: &wgpu::Queue,
+        output_size: (u32, u32),
+        blur_amount: f64,
+    ) {
+        self.blur_amount = blur_amount;
         if self.blur_amount <= 0.0 {
             return;
         }
 
-        let blur_strength = uniforms.project.background.blur as f32 / 100.0;
+        let blur_strength = blur_amount as f32 / 100.0;
         let blur_uniform = BlurUniforms {
-            output_size: [uniforms.output_size.0 as f32, uniforms.output_size.1 as f32],
+            output_size: [output_size.0 as f32, output_size.1 as f32],
             blur_strength,
             direction: 0.0,
         };
