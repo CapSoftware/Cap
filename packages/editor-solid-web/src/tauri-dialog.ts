@@ -75,12 +75,12 @@ function openCapDirectory(): Promise<string | null> {
 				window.setTimeout(() => selectedFiles.delete(token), 60_000);
 				finish(token);
 			} catch (error) {
-				window.alert(
+				const message =
 					error instanceof Error
 						? error.message
-						: "Cap recording could not be opened",
-				);
+						: "Cap recording could not be opened";
 				finish(null);
+				window.setTimeout(() => window.alert(message), 0);
 			}
 		});
 		input.addEventListener("cancel", () => finish(null));
