@@ -485,7 +485,35 @@ async function replay(forceWebGl, forceWebGpu = false) {
 				const videoFrameCosts = [];
 				const videoSlotCosts = [];
 				const videoPlayCosts = [];
+				const videoSourceDrifts = [];
+				const videoPresentedDrifts = [];
 				const compositeCosts = [];
+				const presentedTimes = new WeakMap();
+				const presentationCallbacks = new Map();
+				const onPresented = (video, _, metadata) => {
+					presentedTimes.set(video, metadata.mediaTime);
+					if (video.isConnected) {
+						presentationCallbacks.set(
+							video,
+							video.requestVideoFrameCallback((now, next) =>
+								onPresented(video, now, next),
+							),
+						);
+					}
+				};
+				const trackPresentation = (video) => {
+					if (
+						presentationCallbacks.has(video) ||
+						typeof video.requestVideoFrameCallback !== "function"
+					)
+						return;
+					presentationCallbacks.set(
+						video,
+						video.requestVideoFrameCallback((now, metadata) =>
+							onPresented(video, now, metadata),
+						),
+					);
+				};
 				const poolSlot = playback.pool.slot.bind(playback.pool);
 				playback.pool.slot = async (...args) => {
 					const started = performance.now();
@@ -513,7 +541,28 @@ async function replay(forceWebGl, forceWebGpu = false) {
 				playback.pool.frame = async (...args) => {
 					const started = performance.now();
 					try {
-						return await poolFrame(...args);
+						const video = await poolFrame(...args);
+						if (
+							video &&
+							args[4] &&
+							Number.isFinite(args[3]) &&
+							args[5] >= 0.25 &&
+							args[5] <= 4
+						) {
+							trackPresentation(video);
+							videoSourceDrifts.push({
+								track: args[1],
+								absoluteMs: Math.abs(video.currentTime - args[3]) * 1000,
+							});
+							const presented = presentedTimes.get(video);
+							if (Number.isFinite(presented)) {
+								videoPresentedDrifts.push({
+									track: args[1],
+									absoluteMs: Math.abs(presented - args[3]) * 1000,
+								});
+							}
+						}
+						return video;
 					} finally {
 						videoFrameCosts.push(performance.now() - started);
 					}
@@ -768,6 +817,8 @@ async function replay(forceWebGl, forceWebGpu = false) {
 					const beforeVideoFrameCosts = videoFrameCosts.length;
 					const beforeVideoSlotCosts = videoSlotCosts.length;
 					const beforeVideoPlayCosts = videoPlayCosts.length;
+					const beforeVideoSourceDrifts = videoSourceDrifts.length;
+					const beforeVideoPresentedDrifts = videoPresentedDrifts.length;
 					const beforeCompositeCosts = compositeCosts.length;
 					playback.play();
 					const playbackIntervalMs =
@@ -805,6 +856,34 @@ async function replay(forceWebGl, forceWebGpu = false) {
 						videoPlayCosts: costSummary(
 							videoPlayCosts.slice(beforeVideoPlayCosts),
 						),
+						videoSourceDriftMs: {
+							display: costSummary(
+								videoSourceDrifts
+									.slice(beforeVideoSourceDrifts)
+									.filter((sample) => sample.track === "display")
+									.map((sample) => sample.absoluteMs),
+							),
+							camera: costSummary(
+								videoSourceDrifts
+									.slice(beforeVideoSourceDrifts)
+									.filter((sample) => sample.track === "camera")
+									.map((sample) => sample.absoluteMs),
+							),
+						},
+						videoPresentedDriftMs: {
+							display: costSummary(
+								videoPresentedDrifts
+									.slice(beforeVideoPresentedDrifts)
+									.filter((sample) => sample.track === "display")
+									.map((sample) => sample.absoluteMs),
+							),
+							camera: costSummary(
+								videoPresentedDrifts
+									.slice(beforeVideoPresentedDrifts)
+									.filter((sample) => sample.track === "camera")
+									.map((sample) => sample.absoluteMs),
+							),
+						},
 						compositeCosts: costSummary(
 							compositeCosts.slice(beforeCompositeCosts),
 						),
@@ -1002,6 +1081,10 @@ async function replay(forceWebGl, forceWebGpu = false) {
 					);
 					throw error;
 				} finally {
+					for (const [video, callbackId] of presentationCallbacks) {
+						video.cancelVideoFrameCallback(callbackId);
+					}
+					presentationCallbacks.clear();
 					HTMLMediaElement.prototype.play = nativePlay;
 					playback.dispose();
 				}

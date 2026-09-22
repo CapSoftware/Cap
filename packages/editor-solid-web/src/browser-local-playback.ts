@@ -470,6 +470,7 @@ export class BrowserLocalPlayback {
 		playing: boolean,
 		frameNumber: number,
 		signal: AbortSignal,
+		forceSeek: boolean,
 	): Promise<SourcePair> {
 		const sourceTimes = this.times.source_times(recordingClip, sourceTime);
 		if (sourceTimes.length !== 2 || !Number.isFinite(sourceTimes[0])) {
@@ -485,6 +486,7 @@ export class BrowserLocalPlayback {
 				playing,
 				speed,
 				signal,
+				forceSeek,
 			),
 			Number.isFinite(sourceTimes[1]) && sourceTimes[1] >= 0
 				? this.pool.frame(
@@ -495,6 +497,7 @@ export class BrowserLocalPlayback {
 						playing,
 						speed,
 						signal,
+						forceSeek,
 					)
 				: Promise.resolve(null),
 		]);
@@ -529,7 +532,7 @@ export class BrowserLocalPlayback {
 		};
 	}
 
-	private async renderAt(time: number, playing: boolean) {
+	private async renderAt(time: number, playing: boolean, forceSeek = false) {
 		this.frameController?.abort();
 		const controller = new AbortController();
 		this.frameController = controller;
@@ -568,6 +571,7 @@ export class BrowserLocalPlayback {
 			playing,
 			Math.round(time * 60),
 			controller.signal,
+			forceSeek,
 		);
 		const outgoing =
 			transition && outgoingClip !== null
@@ -579,6 +583,7 @@ export class BrowserLocalPlayback {
 						playing,
 						Math.round(time * 60),
 						controller.signal,
+						forceSeek,
 					)
 				: Promise.resolve(null);
 		let incomingPair: SourcePair;
@@ -708,7 +713,7 @@ export class BrowserLocalPlayback {
 			this.playStartedTime = time;
 			this.playClockAligned = false;
 		}
-		return this.renderAt(time, this.playing);
+		return this.renderAt(time, this.playing, true);
 	}
 
 	play() {

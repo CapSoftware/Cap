@@ -298,6 +298,7 @@ export class BrowserVideoPool {
 		playing: boolean,
 		speed: number,
 		signal: AbortSignal,
+		forceSeek = false,
 	): Promise<HTMLVideoElement | null> {
 		if (!Number.isSafeInteger(segmentIndex) || segmentIndex < 0) {
 			throw new Error("Editor clip index is invalid");
@@ -318,7 +319,12 @@ export class BrowserVideoPool {
 				target === 0 && Number.isFinite(video.duration) && video.duration > 0
 					? Math.min(video.duration / 2, 0.0001)
 					: target;
-			const tolerance = playing ? 0.05 : 1 / 120;
+			const tolerance =
+				playing && !forceSeek && speed >= 0.25 && speed <= 4
+					? 0.5
+					: playing
+						? 0.05
+						: 1 / 120;
 			if (
 				!slot.primed ||
 				Math.abs(video.currentTime - decodeTarget) > tolerance
