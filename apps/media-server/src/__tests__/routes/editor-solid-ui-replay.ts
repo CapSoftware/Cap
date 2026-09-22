@@ -1248,37 +1248,39 @@ try {
 				}
 			});
 			if (browserEngine.name() === "firefox" && proCaptions && shareReplay) {
-				firefoxColorPath = await page.evaluate(async () => {
-					let webCodecsSupported = false;
-					if (typeof VideoDecoder === "function") {
-						try {
-							webCodecsSupported =
-								(
-									await VideoDecoder.isConfigSupported({
-										codec: "avc1.64001e",
-										codedWidth: 640,
-										codedHeight: 360,
-									})
-								).supported === true;
-						} catch {
-							webCodecsSupported = false;
+				firefoxColorPath = await editor
+					.locator("#canvas")
+					.evaluate(async () => {
+						let webCodecsSupported = false;
+						if (typeof VideoDecoder === "function") {
+							try {
+								webCodecsSupported =
+									(
+										await VideoDecoder.isConfigSupported({
+											codec: "avc1.64001e",
+											codedWidth: 640,
+											codedHeight: 360,
+										})
+									).supported === true;
+							} catch {
+								webCodecsSupported = false;
+							}
 						}
-					}
-					const source: unknown = Reflect.get(window, "capTestColorPath");
-					const path =
-						typeof source === "object" && source !== null ? source : null;
-					return {
-						webCodecsSupported,
-						kind:
-							path && "kind" in path && typeof path.kind === "string"
-								? path.kind
-								: null,
-						matrix:
-							path && "matrix" in path && typeof path.matrix === "string"
-								? path.matrix
-								: null,
-					};
-				});
+						const source: unknown = Reflect.get(window, "capTestColorPath");
+						const path =
+							typeof source === "object" && source !== null ? source : null;
+						return {
+							webCodecsSupported,
+							kind:
+								path && "kind" in path && typeof path.kind === "string"
+									? path.kind
+									: null,
+							matrix:
+								path && "matrix" in path && typeof path.matrix === "string"
+									? path.matrix
+									: null,
+						};
+					});
 				if (firefoxColorPath.webCodecsSupported) {
 					assert.equal(firefoxColorPath.kind, "VideoFrame");
 				}
