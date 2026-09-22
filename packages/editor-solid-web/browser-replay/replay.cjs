@@ -577,15 +577,6 @@ async function replay(forceWebGl, forceWebGpu = false) {
 						paddedSolid,
 						await snapshot(),
 					);
-					const imageWithoutBlur = await snapshot();
-					config.background.blur = 100;
-					await playback.setConfig(config);
-					const blurChangedPixels = differentPixels(
-						imageWithoutBlur,
-						await snapshot(),
-					);
-					config.background.blur = 0;
-					await playback.setConfig(config);
 					config.background.source = {
 						type: "image",
 						path: "/api/editor/videos/fixture/file?raw=1&path=content/images/00000000-0000-0000-0000-000000000002.png",
@@ -667,6 +658,7 @@ async function replay(forceWebGl, forceWebGpu = false) {
 						],
 						zoomSegments: [],
 					};
+					const transitionTimeline = config.timeline;
 					await playback.setConfig(config);
 					const transitionStart = split - transitionDuration;
 					await playback.seek(transitionStart + transitionDuration * 0.2);
@@ -703,18 +695,6 @@ async function replay(forceWebGl, forceWebGpu = false) {
 							"Paired image-background transition did not render",
 						);
 					}
-					config.background.blur = 60;
-					await playback.setConfig(config);
-					await playback.seek(transitionStart + transitionDuration * 0.2);
-					const blurredTransitionFirst = await snapshot();
-					await playback.seek(transitionStart + transitionDuration * 0.8);
-					const blurredTransitionLast = await snapshot();
-					const blurredTransitionChangedPixels = differentPixels(
-						blurredTransitionFirst,
-						blurredTransitionLast,
-					);
-					config.background.blur = 0;
-					await playback.setConfig(config);
 					config.timeline = undefined;
 					config.background.source = JSON.parse(
 						playback.module.default_project_config_json(),
@@ -864,6 +844,33 @@ async function replay(forceWebGl, forceWebGpu = false) {
 							`Cap replay stage: indexed parity ${JSON.stringify(indexedParity)}`,
 						);
 					}
+					const blurConfig = JSON.parse(
+						playback.module.default_project_config_json(),
+					);
+					blurConfig.background.padding = 50;
+					blurConfig.background.source = {
+						type: "image",
+						path: importedImagePath,
+					};
+					await playback.setConfig(blurConfig);
+					const imageWithoutBlur = await snapshot();
+					blurConfig.background.blur = 100;
+					await playback.setConfig(blurConfig);
+					const blurChangedPixels = differentPixels(
+						imageWithoutBlur,
+						await snapshot(),
+					);
+					blurConfig.background.blur = 60;
+					blurConfig.timeline = transitionTimeline;
+					await playback.setConfig(blurConfig);
+					await playback.seek(transitionStart + transitionDuration * 0.2);
+					const blurredTransitionFirst = await snapshot();
+					await playback.seek(transitionStart + transitionDuration * 0.8);
+					const blurredTransitionLast = await snapshot();
+					const blurredTransitionChangedPixels = differentPixels(
+						blurredTransitionFirst,
+						blurredTransitionLast,
+					);
 					const videos = Array.from(document.querySelectorAll("video")).map(
 						(video) => [video.videoWidth, video.videoHeight],
 					);
