@@ -1,5 +1,6 @@
 "use client";
 
+import { buildEnv } from "@cap/env";
 import {
 	Button,
 	Dialog,
@@ -55,6 +56,7 @@ import {
 } from "@/actions/loom";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { UpgradeModal } from "@/components/UpgradeModal";
+import { parseLoomCsvRecords } from "@/lib/loom-csv";
 import {
 	type LoomImportDestination,
 	loomImportDestinationHref,
@@ -132,57 +134,8 @@ function buildCsvImportResult(
 	};
 }
 
-function parseCsvRecords(text: string) {
-	const records: string[][] = [];
-	let field = "";
-	let row: string[] = [];
-	let inQuotes = false;
-	const input = text.replace(/^\uFEFF/, "");
-
-	for (let index = 0; index < input.length; index += 1) {
-		const char = input.charAt(index);
-		const next = input.charAt(index + 1);
-
-		if (char === '"') {
-			if (inQuotes && next === '"') {
-				field += '"';
-				index += 1;
-			} else {
-				inQuotes = !inQuotes;
-			}
-			continue;
-		}
-
-		if (char === "," && !inQuotes) {
-			row.push(field.trim());
-			field = "";
-			continue;
-		}
-
-		if ((char === "\n" || char === "\r") && !inQuotes) {
-			if (char === "\r" && next === "\n") index += 1;
-			row.push(field.trim());
-			if (row.some((cell) => cell.length > 0)) records.push(row);
-			row = [];
-			field = "";
-			continue;
-		}
-
-		field += char;
-	}
-
-	if (inQuotes) throw new Error("CSV has an unclosed quoted field.");
-
-	if (field.length > 0 || row.length > 0) {
-		row.push(field.trim());
-		if (row.some((cell) => cell.length > 0)) records.push(row);
-	}
-
-	return records;
-}
-
 function parseCsv(text: string, fileName: string): CsvData {
-	const records = parseCsvRecords(text);
+	const records = parseLoomCsvRecords(text);
 	const headers = records[0]?.map((header) => header.trim()) ?? [];
 	const rows = records
 		.slice(1)
@@ -601,6 +554,14 @@ export const ImportLoomPage = ({
 								? "Bring a single Loom video into Cap, or bulk import recordings for organization members and new users from a CSV."
 								: "Paste a Loom share link to bring it into Cap."}
 						</p>
+						{buildEnv.NEXT_PUBLIC_IS_CAP && canUseCsvImport && (
+							<Link
+								href="/dashboard/migrations/loom"
+								className="mt-2 inline-block text-sm text-blue-11 underline"
+							>
+								Want Cap to move your whole Loom workspace for you?
+							</Link>
+						)}
 					</div>
 				</div>
 			</div>

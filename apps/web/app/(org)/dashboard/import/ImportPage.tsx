@@ -1,18 +1,34 @@
 "use client";
 
-import { faUpload } from "@fortawesome/free-solid-svg-icons";
+import { buildEnv } from "@cap/env";
+import { faArrowsRotate, faUpload } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import Link from "next/link";
+import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import {
 	type LoomImportDestination,
 	loomImportPageHref,
 } from "@/lib/loom-import-destination";
+import {
+	canManageOrganizationSettings,
+	getEffectiveOrganizationRole,
+} from "@/lib/permissions/roles";
 
 export const ImportPage = ({
 	initialDestination = {},
 }: {
 	initialDestination?: LoomImportDestination;
 }) => {
+	const { user, activeOrganization } = useDashboardContext();
+	const currentMember = activeOrganization?.members.find(
+		(member) => member.userId === user.id,
+	);
+	const currentRole = getEffectiveOrganizationRole({
+		userId: user.id,
+		ownerId: activeOrganization?.organization.ownerId,
+		memberRole: currentMember?.role,
+	});
+	const canRequestMigration = canManageOrganizationSettings(currentRole);
 	return (
 		<div className="flex flex-col w-full h-full">
 			<div className="mb-8">
@@ -71,6 +87,26 @@ export const ImportPage = ({
 						</p>
 					</div>
 				</Link>
+				{buildEnv.NEXT_PUBLIC_IS_CAP && canRequestMigration && (
+					<Link
+						href="/dashboard/migrations/loom"
+						className="flex overflow-hidden relative flex-col w-full rounded-xl border transition-all duration-200 group border-gray-3 bg-gray-1 hover:border-blue-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-8"
+					>
+						<div className="flex justify-center items-center w-full h-32 transition-colors duration-200 bg-gray-3 group-hover:bg-gray-4">
+							<div className="flex justify-center items-center rounded-full transition-all duration-200 size-14 bg-gray-1 text-gray-10 group-hover:text-gray-12 group-hover:scale-110">
+								<FontAwesomeIcon className="size-5" icon={faArrowsRotate} />
+							</div>
+						</div>
+						<div className="flex flex-col gap-1 p-4">
+							<p className="text-sm font-medium text-left text-gray-12">
+								Concierge Loom Migration
+							</p>
+							<p className="text-xs text-left text-gray-10">
+								Let Cap move your Loom workspace. Free with Cap Pro.
+							</p>
+						</div>
+					</Link>
+				)}
 			</div>
 		</div>
 	);

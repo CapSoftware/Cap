@@ -618,6 +618,7 @@ These are repository send paths and retained templates, not confirmation of prod
 | Messenger support notification | An eligible support conversation requests an email notification | Cap support; replies go to the user | [messenger-support-email](../packages/database/emails/messenger-support-email.tsx) |
 | Account deletion request notification | An account deletion request is submitted | Cap support; replies go to the requester | [messenger-support-email](../packages/database/emails/messenger-support-email.tsx) |
 | Mobile content report notification | A mobile content report is submitted | Cap support; replies go to the reporter | [messenger-support-email](../packages/database/emails/messenger-support-email.tsx) |
+| Concierge Loom migration | A Cap Pro organization requests migration or its status changes | Cap support for new requests; the requester for status updates | [loom-migration](../packages/database/emails/loom-migration.tsx) |
 | Legacy login link template | No current send call found in this checkout | None configured | [login-link](../packages/database/emails/login-link.tsx) |
 
 ### Login verification code
@@ -691,6 +692,12 @@ Send source: [apps/web/lib/account-deletion-request.ts](../apps/web/lib/account-
 Deduplicated by report ID.
 
 Send source: [apps/web/lib/account-deletion-request.ts](../apps/web/lib/account-deletion-request.ts).
+
+### Concierge Loom migration
+
+The request stays in the dashboard even if email delivery fails.
+
+Send source: [apps/web/actions/loom-concierge.tsx](../apps/web/actions/loom-concierge.tsx).
 
 ### Legacy login link template
 

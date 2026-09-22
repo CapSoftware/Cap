@@ -1548,6 +1548,74 @@ export const importedVideos = mysqlTable(
 	],
 );
 
+export const loomMigrationRequests = mysqlTable(
+	"loom_migration_requests",
+	{
+		id: nanoId("id").notNull().primaryKey(),
+		organizationId: nanoId("organizationId")
+			.notNull()
+			.$type<Organisation.OrganisationId>(),
+		activeOrganizationId: nanoIdNullable(
+			"activeOrganizationId",
+		).$type<Organisation.OrganisationId>(),
+		requestedByUserId: nanoId("requestedByUserId")
+			.notNull()
+			.$type<User.UserId>(),
+		workspaceName: varchar("workspaceName", { length: 255 }),
+		customerNote: text("customerNote"),
+		customerReply: text("customerReply"),
+		invitedAt: datetime("invitedAt", { mode: "date" }),
+		status: varchar("status", {
+			length: 32,
+			enum: ["pending", "in_progress", "needs_information", "completed"],
+		})
+			.notNull()
+			.default("pending"),
+		capMessage: text("capMessage"),
+		expectedVideoCount: int("expectedVideoCount"),
+		importedVideoCount: int("importedVideoCount").notNull().default(0),
+		queuedVideoCount: int("queuedVideoCount").notNull().default(0),
+		activeImportCount: int("activeImportCount").notNull().default(0),
+		activeImportLeaseToken: varchar("activeImportLeaseToken", { length: 36 }),
+		activeImportLeaseUntil: datetime("activeImportLeaseUntil", {
+			mode: "date",
+		}),
+		lastOperatorUserId:
+			nanoIdNullable("lastOperatorUserId").$type<User.UserId>(),
+		lastOperatorAt: datetime("lastOperatorAt", { mode: "date" }),
+		completedAt: datetime("completedAt", { mode: "date" }),
+		createdAt: datetime("createdAt", { mode: "date" })
+			.notNull()
+			.$defaultFn(() => new Date()),
+		updatedAt: datetime("updatedAt", { mode: "date" })
+			.notNull()
+			.$defaultFn(() => new Date()),
+	},
+	(table) => [
+		uniqueIndex("loom_migration_active_org_idx").on(table.activeOrganizationId),
+		index("loom_migration_org_created_idx").on(
+			table.organizationId,
+			table.createdAt,
+		),
+		index("loom_migration_status_created_idx").on(
+			table.status,
+			table.createdAt,
+		),
+	],
+);
+
+export const loomMigrationImports = mysqlTable(
+	"loom_migration_imports",
+	{
+		videoId: nanoId("videoId").notNull().primaryKey().$type<Video.VideoId>(),
+		requestId: nanoId("requestId").notNull(),
+		createdAt: datetime("createdAt", { mode: "date" })
+			.notNull()
+			.$defaultFn(() => new Date()),
+	},
+	(table) => [index("loom_migration_imports_request_idx").on(table.requestId)],
+);
+
 export const developerApps = mysqlTable(
 	"developer_apps",
 	{
