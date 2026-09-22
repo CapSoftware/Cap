@@ -562,15 +562,20 @@ async function replay(forceWebGl, forceWebGpu = false) {
 						for (const time of probeTimes) await playback.seek(time);
 						await playback.seek(0);
 						inspectGpu = false;
+						const beforeLiveSamples = { ...samples };
 						const beforeIndexedPlay = frames.length;
 						playback.play();
-						await new Promise((resolve) => setTimeout(resolve, 500));
+						await new Promise((resolve) => setTimeout(resolve, 2000));
 						playback.pause();
 						await Promise.all(gpuReads);
 						indexedParity = {
 							playedFrames: frames.length - beforeIndexedPlay,
 							pausedProbes: probeTimes.length,
 							samples,
+							liveSamples: {
+								display: samples.display - beforeLiveSamples.display,
+								camera: samples.camera - beforeLiveSamples.camera,
+							},
 							mismatches,
 						};
 						console.info(
@@ -652,8 +657,8 @@ async function replay(forceWebGl, forceWebGpu = false) {
 		if (indexed) {
 			assert(result.indexedParity !== null, "Indexed parity did not run");
 			assert(
-				result.indexedParity.playedFrames >= 1,
-				"8× local playback did not advance",
+				result.indexedParity.playedFrames >= 2,
+				"8× local playback did not keep advancing",
 			);
 			assert(
 				result.indexedParity.pausedProbes === 5,
@@ -670,6 +675,11 @@ async function replay(forceWebGl, forceWebGpu = false) {
 			assert(
 				result.indexedParity.samples.gpu >= 5,
 				"8× GPU frames were not inspected",
+			);
+			assert(
+				result.indexedParity.liveSamples.display >= 2 &&
+					result.indexedParity.liveSamples.camera >= 2,
+				"8× paired playback stopped requesting decoded frames",
 			);
 			assert(
 				result.indexedParity.mismatches.length === 0,
