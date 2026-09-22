@@ -159,6 +159,7 @@ async function replay(forceWebGl, forceWebGpu = false) {
 					`Cap replay stage: WebGPU adapter ${adapter ? "ready" : "unavailable"}`,
 				);
 				if (adapter?.info) {
+					window.CapReplayGpuAdapterArchitecture = adapter.info.architecture;
 					console.info(
 						`Cap replay stage: WebGPU adapter info ${JSON.stringify({ vendor: adapter.info.vendor, architecture: adapter.info.architecture, device: adapter.info.device, description: adapter.info.description })}`,
 					);
@@ -678,6 +679,8 @@ async function replay(forceWebGl, forceWebGpu = false) {
 					);
 					return {
 						backend,
+						gpuAdapterArchitecture:
+							window.CapReplayGpuAdapterArchitecture ?? null,
 						firstFrameMs,
 						seekMs,
 						returnToStartMs,
@@ -798,8 +801,15 @@ async function replay(forceWebGl, forceWebGpu = false) {
 		);
 		if (forceWebGl)
 			assert(/gl/i.test(result.backend), "WebGL fallback was not selected");
-		if (forceWebGpu)
+		if (forceWebGpu && process.env.CAP_REPLAY_ALLOW_AUTO_FALLBACK !== "1")
 			assert(/webgpu/i.test(result.backend), "WebGPU path was not selected");
+		if (
+			forceWebGpu &&
+			process.env.CAP_REPLAY_ALLOW_AUTO_FALLBACK === "1" &&
+			result.gpuAdapterArchitecture === "swiftshader"
+		) {
+			assert(/gl/i.test(result.backend), "SwiftShader did not select WebGL2");
+		}
 		console.log(
 			JSON.stringify({
 				browser: browserName,

@@ -1,4 +1,5 @@
 import type { BrowserGpuRenderer } from "../renderer/pkg/cap_editor_browser_renderer.js";
+import { browserWebGpuPresentationWorks } from "./browser-gpu-probe";
 import { loadBrowserRenderer } from "./browser-renderer";
 
 export type BrowserVideoLayer = {
@@ -62,8 +63,12 @@ export class BrowserLocalCanvas {
 		this.canvas = canvas;
 		canvas.width = this.width;
 		canvas.height = this.height;
-		void loadBrowserRenderer()
-			.then((module) => module.BrowserGpuRenderer.create(canvas))
+		void Promise.all([loadBrowserRenderer(), browserWebGpuPresentationWorks()])
+			.then(([module, webgpuReady]) =>
+				webgpuReady
+					? module.BrowserGpuRenderer.create(canvas)
+					: module.BrowserGpuRenderer.createWebGl(canvas),
+			)
 			.then((renderer) => {
 				if (this.disposed) {
 					renderer.free();

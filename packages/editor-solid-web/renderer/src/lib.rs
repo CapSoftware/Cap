@@ -664,49 +664,67 @@ fn draw_retained(
 impl BrowserGpuRenderer {
     #[wasm_bindgen(js_name = create)]
     pub async fn create(canvas: HtmlCanvasElement) -> Result<BrowserGpuRenderer, JsValue> {
+        Self::create_with_backend(canvas, true).await
+    }
+
+    #[wasm_bindgen(js_name = createWebGl)]
+    pub async fn create_webgl(canvas: HtmlCanvasElement) -> Result<BrowserGpuRenderer, JsValue> {
+        Self::create_with_backend(canvas, false).await
+    }
+
+    async fn create_with_backend(
+        canvas: HtmlCanvasElement,
+        prefer_webgpu: bool,
+    ) -> Result<BrowserGpuRenderer, JsValue> {
         let width = canvas.width().max(1);
         let height = canvas.height().max(1);
-        let webgpu = async {
-            trace_renderer("requesting WebGPU instance");
-            let instance =
-                wgpu::util::new_instance_with_webgpu_detection(&wgpu::InstanceDescriptor {
-                    backends: wgpu::Backends::BROWSER_WEBGPU,
-                    ..Default::default()
-                })
-                .await;
-            trace_renderer("requesting WebGPU adapter");
-            let adapter = instance
-                .request_adapter(&wgpu::RequestAdapterOptions {
-                    power_preference: wgpu::PowerPreference::HighPerformance,
-                    compatible_surface: None,
-                    force_fallback_adapter: false,
-                })
-                .await
-                .map_err(js_error)?;
-            trace_renderer("requesting WebGPU device");
-            let limits =
-                wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits());
-            let (device, queue) = adapter
-                .request_device(&wgpu::DeviceDescriptor {
-                    required_limits: limits,
-                    required_features: wgpu::Features::empty(),
-                    ..Default::default()
-                })
-                .await
-                .map_err(js_error)?;
-            trace_renderer("creating WebGPU surface");
-            let surface = instance
-                .create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone()))
-                .map_err(js_error)?;
-            let surface_config = surface
-                .get_default_config(&adapter, width, height)
-                .ok_or_else(|| js_error("Browser canvas is not supported by this GPU"))?;
-            Ok::<_, JsValue>((surface, adapter, device, queue, surface_config))
-        }
-        .await;
+        let webgpu = if prefer_webgpu {
+            Some(
+                async {
+                    trace_renderer("requesting WebGPU instance");
+                    let instance =
+                        wgpu::util::new_instance_with_webgpu_detection(&wgpu::InstanceDescriptor {
+                            backends: wgpu::Backends::BROWSER_WEBGPU,
+                            ..Default::default()
+                        })
+                        .await;
+                    trace_renderer("requesting WebGPU adapter");
+                    let adapter = instance
+                        .request_adapter(&wgpu::RequestAdapterOptions {
+                            power_preference: wgpu::PowerPreference::HighPerformance,
+                            compatible_surface: None,
+                            force_fallback_adapter: false,
+                        })
+                        .await
+                        .map_err(js_error)?;
+                    trace_renderer("requesting WebGPU device");
+                    let limits = wgpu::Limits::downlevel_webgl2_defaults()
+                        .using_resolution(adapter.limits());
+                    let (device, queue) = adapter
+                        .request_device(&wgpu::DeviceDescriptor {
+                            required_limits: limits,
+                            required_features: wgpu::Features::empty(),
+                            ..Default::default()
+                        })
+                        .await
+                        .map_err(js_error)?;
+                    trace_renderer("creating WebGPU surface");
+                    let surface = instance
+                        .create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone()))
+                        .map_err(js_error)?;
+                    let surface_config = surface
+                        .get_default_config(&adapter, width, height)
+                        .ok_or_else(|| js_error("Browser canvas is not supported by this GPU"))?;
+                    Ok::<_, JsValue>((surface, adapter, device, queue, surface_config))
+                }
+                .await,
+            )
+        } else {
+            None
+        };
         let (surface, adapter, device, queue, mut surface_config) = match webgpu {
-            Ok(value) => value,
-            Err(_) => {
+            Some(Ok(value)) => value,
+            Some(Err(_)) | None => {
                 trace_renderer("requesting WebGL instance");
                 let instance =
                     wgpu::util::new_instance_with_webgpu_detection(&wgpu::InstanceDescriptor {

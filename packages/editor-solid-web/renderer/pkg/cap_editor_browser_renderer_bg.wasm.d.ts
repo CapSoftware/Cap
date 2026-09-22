@@ -13,6 +13,7 @@ export const browserrecordingtimes_source_times: (a: number, b: number, c: numbe
 export const browserrecordingtimes_audio_times: (a: number, b: number, c: number) => [number, number];
 export const __wbg_browsergpurenderer_free: (a: number, b: number) => void;
 export const browsergpurenderer_create: (a: any) => any;
+export const browsergpurenderer_createWebGl: (a: any) => any;
 export const browsergpurenderer_backend: (a: number) => [number, number];
 export const browsergpurenderer_set_background: (a: number, b: number, c: number) => [number, number];
 export const browsergpurenderer_set_frame_time: (a: number, b: number, c: number) => [number, number];
@@ -34,7 +35,7 @@ export const __wbindgen_realloc: (a: number, b: number, c: number, d: number) =>
 export const __wbindgen_export_5: WebAssembly.Table;
 export const __wbindgen_free: (a: number, b: number, c: number) => void;
 export const __externref_table_dealloc: (a: number) => void;
+export const closure380_externref_shim: (a: number, b: number, c: any) => void;
 export const wasm_bindgen__convert__closures_____invoke__h147cdb123ff2ae0f: (a: number, b: number) => void;
-export const closure377_externref_shim: (a: number, b: number, c: any) => void;
-export const closure1447_externref_shim: (a: number, b: number, c: any, d: any) => void;
+export const closure1450_externref_shim: (a: number, b: number, c: any, d: any) => void;
 export const __wbindgen_start: () => void;

@@ -8,6 +8,7 @@ export class BrowserGpuRenderer {
   private constructor();
   free(): void;
   static create(canvas: HTMLCanvasElement): Promise<BrowserGpuRenderer>;
+  static createWebGl(canvas: HTMLCanvasElement): Promise<BrowserGpuRenderer>;
   set_background(project_json: string): void;
   set_frame_time(frame_number: number, frame_rate: number): void;
   resize(width: number, height: number): void;
@@ -51,6 +52,7 @@ export interface InitOutput {
   readonly browserrecordingtimes_audio_times: (a: number, b: number, c: number) => [number, number];
   readonly __wbg_browsergpurenderer_free: (a: number, b: number) => void;
   readonly browsergpurenderer_create: (a: any) => any;
+  readonly browsergpurenderer_createWebGl: (a: any) => any;
   readonly browsergpurenderer_backend: (a: number) => [number, number];
   readonly browsergpurenderer_set_background: (a: number, b: number, c: number) => [number, number];
   readonly browsergpurenderer_set_frame_time: (a: number, b: number, c: number) => [number, number];
@@ -72,9 +74,9 @@ export interface InitOutput {
   readonly __wbindgen_export_5: WebAssembly.Table;
   readonly __wbindgen_free: (a: number, b: number, c: number) => void;
   readonly __externref_table_dealloc: (a: number) => void;
+  readonly closure380_externref_shim: (a: number, b: number, c: any) => void;
   readonly wasm_bindgen__convert__closures_____invoke__h147cdb123ff2ae0f: (a: number, b: number) => void;
-  readonly closure377_externref_shim: (a: number, b: number, c: any) => void;
-  readonly closure1447_externref_shim: (a: number, b: number, c: any, d: any) => void;
+  readonly closure1450_externref_shim: (a: number, b: number, c: any, d: any) => void;
   readonly __wbindgen_start: () => void;
 }
 
