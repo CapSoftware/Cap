@@ -384,6 +384,10 @@ export class EditorHostBridge {
 	private activeRecordingClipImports = 0;
 	private port: MessagePort | null = null;
 	private commands: WebSocket | null = null;
+	private workerCommands: WebSocket | null = null;
+	private workerCommandSessionId: string | null = null;
+	private pendingWorkerCommandOpen: Promise<WebSocket> | null = null;
+	private readonly workerCommandUses = new Map<number, () => void>();
 	private events: WebSocket | null = null;
 	private audio: WebSocket | null = null;
 	private readonly frameTickets = new Map<number, SocketCredential>();
@@ -572,6 +576,7 @@ export class EditorHostBridge {
 		}
 		this.cancelWorkerIdleRelease();
 		const pending = (async () => {
+			this.closeWorkerCommandSocket();
 			const response = await fetch(
 				`/api/editor/sessions/${encodeURIComponent(sessionId)}?videoId=${encodeURIComponent(this.videoId)}`,
 				{ method: "DELETE", signal: this.controller.signal },
@@ -593,6 +598,127 @@ export class EditorHostBridge {
 			if (this.pendingWorkerRelease === pending) {
 				this.pendingWorkerRelease = null;
 			}
+		}
+	}
+
+	private closeWorkerCommandSocket() {
+		const socket = this.workerCommands;
+		this.workerCommands = null;
+		this.workerCommandSessionId = null;
+		if (socket) {
+			socket.onclose = null;
+			socket.close();
+		}
+		for (const [id, release] of this.workerCommandUses) {
+			this.workerCommandUses.delete(id);
+			release();
+			if (!this.disposed)
+				this.port?.postMessage({
+					kind: "error",
+					id,
+					error: "Editor export command disconnected",
+				});
+		}
+	}
+
+	private async ensureWorkerCommandSocket() {
+		const sessionId = this.workerSessionId;
+		if (!sessionId) throw new Error("Editor export worker is unavailable");
+		if (
+			this.workerCommands?.readyState === WebSocket.OPEN &&
+			this.workerCommandSessionId === sessionId
+		) {
+			return this.workerCommands;
+		}
+		if (!this.pendingWorkerCommandOpen) {
+			const opening = (async () => {
+				const tickets = await this.tickets();
+				const socket = await openSocket(
+					tickets.commands,
+					this.controller.signal,
+				);
+				if (this.disposed || this.workerSessionId !== sessionId) {
+					socket.close();
+					throw new Error("Editor export worker changed");
+				}
+				this.workerCommands = socket;
+				this.workerCommandSessionId = sessionId;
+				socket.onmessage = (event: MessageEvent<unknown>) => {
+					if (typeof event.data !== "string") return;
+					let reply: unknown;
+					try {
+						reply = JSON.parse(event.data);
+					} catch {
+						return;
+					}
+					if (!isCommandReply(reply)) return;
+					const release = this.workerCommandUses.get(reply.id);
+					if (!release) return;
+					if (reply.kind !== "channel") {
+						this.workerCommandUses.delete(reply.id);
+						release();
+					}
+					this.port?.postMessage(reply);
+				};
+				socket.onclose = () => {
+					if (this.workerCommands === socket) this.closeWorkerCommandSocket();
+				};
+				return socket;
+			})();
+			this.pendingWorkerCommandOpen = opening;
+			void opening.then(
+				() => {
+					if (this.pendingWorkerCommandOpen === opening)
+						this.pendingWorkerCommandOpen = null;
+				},
+				() => {
+					if (this.pendingWorkerCommandOpen === opening)
+						this.pendingWorkerCommandOpen = null;
+				},
+			);
+		}
+		return this.pendingWorkerCommandOpen;
+	}
+
+	private async handleBrowserWorkerCommand(message: BridgeRequest) {
+		if (message.kind !== "invoke") return;
+		if (message.name === "cancelExportEstimates" && !this.workerCommands) {
+			this.port?.postMessage({ kind: "result", id: message.id, value: null });
+			return;
+		}
+		let release: (() => void) | null = null;
+		try {
+			release = await this.ensureWorkerSession();
+			const socket = await this.ensureWorkerCommandSocket();
+			if (!this.port || this.disposed)
+				throw new Error("Editor bridge is closed");
+			const args = [...message.args];
+			if (message.name === "getExportEstimates") {
+				if (args.length !== 3 || args[0] !== this.editorPath)
+					throw new Error("Editor export estimate request was invalid");
+				args[0] = `cap-web-editor://session/${this.sessionId}`;
+			}
+			if (this.workerCommandUses.has(message.id))
+				throw new Error("Editor export command is already running");
+			this.workerCommandUses.set(message.id, release);
+			release = null;
+			try {
+				socket.send(JSON.stringify({ ...message, args }));
+			} catch (cause) {
+				this.workerCommandUses.get(message.id)?.();
+				this.workerCommandUses.delete(message.id);
+				throw cause;
+			}
+		} catch (cause) {
+			release?.();
+			this.port?.postMessage({
+				kind: "error",
+				id: message.id,
+				error:
+					cause instanceof Error
+						? cause.message
+						: "Editor export worker is unavailable",
+			});
 		}
 	}
 
@@ -1808,6 +1934,16 @@ export class EditorHostBridge {
 	private async handleRequest(message: BridgeRequest) {
 		if (!this.port || this.disposed) return;
 		if (
+			this.browserOnly &&
+			message.kind === "invoke" &&
+			(message.name === "generateExportPreviewFast" ||
+				message.name === "getExportEstimates" ||
+				message.name === "cancelExportEstimates")
+		) {
+			await this.handleBrowserWorkerCommand(message);
+			return;
+		}
+		if (
 			message.kind === "invoke" &&
 			message.name === "tauri:webEditorStoredDesktopBackground"
 		) {
@@ -2204,6 +2340,7 @@ export class EditorHostBridge {
 	dispose() {
 		if (this.disposed) return;
 		this.disposed = true;
+		this.closeWorkerCommandSocket();
 		this.cancelWorkerIdleRelease();
 		if (this.activeExport) {
 			this.activeExport.canceled = true;
