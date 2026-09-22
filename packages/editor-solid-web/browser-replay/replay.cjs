@@ -936,7 +936,8 @@ async function replay(forceWebGl, forceWebGpu = false) {
 					const beforeCompositeCosts = compositeCosts.length;
 					playback.play();
 					const playbackIntervalMs =
-						window.CapReplayGpuAdapterArchitecture === "swiftshader"
+						window.CapReplayGpuAdapterArchitecture === "swiftshader" ||
+						String(webGlRenderer).includes("SwiftShader")
 							? 2500
 							: 850;
 					await new Promise((resolve) =>

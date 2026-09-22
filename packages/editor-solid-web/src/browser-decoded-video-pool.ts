@@ -322,11 +322,12 @@ export class BrowserDecodedVideoPool {
 						throw signal.reason ?? new DOMException("Canceled", "AbortError");
 					}
 					if (stream) {
-						if (slot.streamSamples > 0) {
+						const elapsedMs = performance.now() - decodeStarted;
+						if (slot.streamSamples === 0 && elapsedMs > 250) {
+							this.retireSource(url.href);
+						} else if (slot.streamSamples > 0) {
 							slot.slowStreamSamples =
-								performance.now() - decodeStarted > 100
-									? slot.slowStreamSamples + 1
-									: 0;
+								elapsedMs > 100 ? slot.slowStreamSamples + 1 : 0;
 							if (slot.slowStreamSamples >= 2) this.retireSource(url.href);
 						}
 						slot.streamSamples++;
