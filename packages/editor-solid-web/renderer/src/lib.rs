@@ -1088,21 +1088,6 @@ enum LastRenderedComposition {
     Transition,
 }
 
-#[derive(Clone)]
-struct StoredLayer {
-    video: HtmlVideoElement,
-    uniforms: Vec<u8>,
-}
-
-#[derive(Clone)]
-enum StoredComposition {
-    Single {
-        screen: StoredLayer,
-        camera: Option<StoredLayer>,
-    },
-    Transition,
-}
-
 #[wasm_bindgen]
 pub struct BrowserGpuRenderer {
     surface: wgpu::Surface<'static>,
@@ -1129,7 +1114,6 @@ pub struct BrowserGpuRenderer {
     camera: Option<InputTexture>,
     intermediate: Option<wgpu::Texture>,
     last_rendered: Option<LastRenderedComposition>,
-    last_composition: Option<StoredComposition>,
 }
 
 fn draw_retained(
@@ -1340,7 +1324,6 @@ impl BrowserGpuRenderer {
             camera: None,
             intermediate: None,
             last_rendered: None,
-            last_composition: None,
         })
     }
 
@@ -1527,7 +1510,6 @@ impl BrowserGpuRenderer {
             }
             self.intermediate = None;
             self.last_rendered = None;
-            self.last_composition = None;
         }
         Ok(())
     }
@@ -1542,19 +1524,6 @@ impl BrowserGpuRenderer {
         let output_width = self.surface_config.width;
         let output_height = self.surface_config.height;
         let has_camera = camera_video.is_some();
-        let stored = StoredComposition::Single {
-            screen: StoredLayer {
-                video: screen_video.clone(),
-                uniforms: screen_uniforms.to_vec(),
-            },
-            camera: camera_video
-                .as_ref()
-                .zip(camera_uniforms.as_ref())
-                .map(|(video, uniforms)| StoredLayer {
-                    video: video.clone(),
-                    uniforms: uniforms.clone(),
-                }),
-        };
         if matches!(
             self.last_rendered,
             Some(LastRenderedComposition::Transition)
@@ -1622,7 +1591,6 @@ impl BrowserGpuRenderer {
         self.queue.submit(Some(encoder.finish()));
         frame.present();
         self.last_rendered = Some(LastRenderedComposition::Single { has_camera });
-        self.last_composition = Some(stored);
         Ok(())
     }
 
@@ -1833,7 +1801,6 @@ impl BrowserGpuRenderer {
         self.queue.submit(Some(encoder.finish()));
         frame.present();
         self.last_rendered = Some(LastRenderedComposition::Transition);
-        self.last_composition = Some(StoredComposition::Transition);
         Ok(())
     }
 
@@ -1858,10 +1825,9 @@ impl BrowserGpuRenderer {
     }
 
     pub async fn snapshot_rgba(&mut self) -> Result<Vec<u8>, JsValue> {
-        let stored = self
-            .last_composition
-            .clone()
-            .ok_or_else(|| js_error("No editor frame has been rendered"))?;
+        if self.last_rendered.is_none() {
+            return Err(js_error("No editor frame has been rendered"));
+        }
         let width = self.surface_config.width;
         let height = self.surface_config.height;
         let pixel_bytes = width as u64 * height as u64 * 4;
@@ -1896,55 +1862,7 @@ impl BrowserGpuRenderer {
                 label: Some("Editor snapshot readback"),
             });
         self.prepare_background(&mut encoder);
-        match stored {
-            StoredComposition::Single { screen, camera } => {
-                upload_video(
-                    &self.device,
-                    &self.queue,
-                    &self.pipeline,
-                    &mut self.screen,
-                    screen.video,
-                    &screen.uniforms,
-                    width,
-                    height,
-                )?;
-                if let Some(camera) = &camera {
-                    upload_video(
-                        &self.device,
-                        &self.queue,
-                        &self.pipeline,
-                        &mut self.camera,
-                        camera.video.clone(),
-                        &camera.uniforms,
-                        width,
-                        height,
-                    )?;
-                }
-                draw_layers(
-                    &self.background,
-                    self.animated_background.as_ref(),
-                    self.image_background.as_ref(),
-                    blur_inputs(
-                        self.background_blur.as_ref(),
-                        self.blurred_background.as_ref(),
-                        self.intermediate_background.as_ref(),
-                        self.animated_intermediate.as_ref(),
-                    ),
-                    false,
-                    &self.pipeline,
-                    &self.device,
-                    &mut encoder,
-                    &view,
-                    self.screen
-                        .as_ref()
-                        .ok_or_else(|| js_error("Display frame is missing"))?,
-                    camera.as_ref().and(self.camera.as_ref()),
-                );
-            }
-            StoredComposition::Transition => {
-                draw_retained(self, &mut encoder, &view)?;
-            }
-        }
+        draw_retained(self, &mut encoder, &view)?;
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
                 texture: &texture,

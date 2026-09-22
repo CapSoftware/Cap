@@ -930,6 +930,40 @@ async function replay(forceWebGl, forceWebGpu = false) {
 							}
 							return index;
 						};
+						let retainedChangedPixels = null;
+						if (/webgpu/i.test(backend)) {
+							const retainedBefore =
+								await playback.canvas.renderer.snapshot_rgba();
+							const screenSlot = playback.pool.slots.get("0:display:primary");
+							if (!screenSlot) {
+								throw new Error("Indexed display source was not primed");
+							}
+							await playback.pool.frame(
+								0,
+								"display",
+								"primary",
+								0.45,
+								false,
+								1,
+								new AbortController().signal,
+								true,
+							);
+							sourceContext.drawImage(screenSlot.element, 0, 0, 8, 1);
+							const advancedSource = readIndex(
+								(x, y) => sourceContext.getImageData(x, y, 1, 1).data,
+								8,
+								1,
+								false,
+							);
+							if (advancedSource < 10) {
+								throw new Error("Indexed display did not decode a later frame");
+							}
+							retainedChangedPixels = differentPixels(
+								retainedBefore,
+								await playback.canvas.renderer.snapshot_rgba(),
+							);
+							await playback.seek(0);
+						}
 						const mismatches = [];
 						const samples = { display: 0, camera: 0, gpu: 0 };
 						const originalFrame = playback.pool.frame.bind(playback.pool);
@@ -1007,6 +1041,7 @@ async function replay(forceWebGl, forceWebGpu = false) {
 						await Promise.all(gpuReads);
 						indexedParity = {
 							playedFrames: frames.length - beforeIndexedPlay,
+							retainedChangedPixels,
 							pausedProbes: probeTimes.length,
 							samples,
 							liveSamples: {
@@ -1160,6 +1195,14 @@ async function replay(forceWebGl, forceWebGpu = false) {
 		}
 		assert(result.playedFrames >= 2, "Local playback did not advance");
 		for (const track of ["display", "camera"]) {
+			assert(
+				result.playbackMetrics.videoSourceDriftMs[track].count > 0,
+				`${track} media clock was not sampled during playback`,
+			);
+			assert(
+				result.playbackMetrics.videoPresentedDriftMs[track].count > 0,
+				`${track} presented frame was not sampled during playback`,
+			);
 			const sourceDrift =
 				result.playbackMetrics.videoSourceDriftMs[track].maxMs;
 			const presentedDrift =
@@ -1175,6 +1218,12 @@ async function replay(forceWebGl, forceWebGpu = false) {
 		}
 		if (indexed) {
 			assert(result.indexedParity !== null, "Indexed parity did not run");
+			if (result.indexedParity.retainedChangedPixels !== null) {
+				assert(
+					result.indexedParity.retainedChangedPixels < 100,
+					"Retained GPU preview changed when the source video advanced",
+				);
+			}
 			assert(
 				result.indexedParity.playedFrames >= 2,
 				"8× local playback did not keep advancing",
