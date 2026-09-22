@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import {
 	CAP_BUNDLE_HEADER_BYTES,
@@ -1256,6 +1256,58 @@ try {
 				differentPixels,
 				totalPixels: browserInfo.width * browserInfo.height,
 			};
+			if (
+				nativePreviewParity.meanAbsoluteError >= 3 ||
+				nativePreviewParity.psnrDb <= 30 ||
+				differentPixels >= nativePreviewParity.totalPixels * 0.05
+			) {
+				const center =
+					(Math.floor(browserInfo.height / 2) * browserInfo.width +
+						Math.floor(browserInfo.width / 2)) *
+					4;
+				const diagnostics = {
+					browserEngine: browserEngine.name(),
+					proCaptions,
+					shareReplay,
+					nativePreviewParity,
+					centerBrowser: [...browserPixels.subarray(center, center + 3)],
+					centerNative: [...nativePixels.subarray(center, center + 3)],
+				};
+				process.stderr.write(`${JSON.stringify(diagnostics)}\n`);
+				const artifactDir = process.env.CAP_EDITOR_UI_PARITY_ARTIFACT_DIR;
+				if (artifactDir) {
+					try {
+						await mkdir(artifactDir, { recursive: true });
+						const stem = `${browserEngine.name()}-${proCaptions ? "pro" : "free"}-native-preview-parity`;
+						await Promise.all([
+							writeFile(
+								join(artifactDir, `${stem}.json`),
+								JSON.stringify(diagnostics, null, 2),
+							),
+							writeFile(
+								join(artifactDir, `${stem}-browser.png`),
+								browserScreenshot,
+							),
+							writeFile(
+								join(artifactDir, `${stem}-native.png`),
+								await sharp(packed, {
+									raw: {
+										width: nativeWidth,
+										height: nativeHeight,
+										channels: 4,
+									},
+								})
+									.png()
+									.toBuffer(),
+							),
+						]);
+					} catch (cause) {
+						process.stderr.write(
+							`Studio parity diagnostics failed: ${String(cause)}\n`,
+						);
+					}
+				}
+			}
 			assert.ok(nativePreviewParity.meanAbsoluteError < 3);
 			assert.ok(nativePreviewParity.psnrDb > 30);
 			assert.ok(differentPixels < nativePreviewParity.totalPixels * 0.05);

@@ -161,7 +161,7 @@ export class BrowserVideoPool {
 
 	constructor(private readonly sourceProvider: BrowserVideoSourceProvider) {
 		this.host.style.cssText =
-			"position:fixed;left:-10000px;top:0;width:1px;height:1px;overflow:hidden;pointer-events:none";
+			"position:fixed;left:0;top:0;width:1px;height:1px;overflow:hidden;pointer-events:none;opacity:0.01";
 		document.body.append(this.host);
 	}
 

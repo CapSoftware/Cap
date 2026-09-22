@@ -120,6 +120,7 @@ jobs:
               apt-get install -y --no-install-recommends xauth
               bun run --filter @cap/editor-solid-web build
               cd /source/apps/media-server
+              export CAP_EDITOR_UI_PARITY_ARTIFACT_DIR=/source/cap-editor-parity-artifacts
               run_browser_only_studio() {
                 case "$CAP_EDITOR_UI_BROWSER" in
                   firefox|webkit) CAP_EDITOR_UI_HEADED=1 xvfb-run -a bun src/__tests__/routes/editor-solid-browser-only-replay.ts ;;
