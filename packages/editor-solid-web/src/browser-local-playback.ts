@@ -662,9 +662,8 @@ export class BrowserLocalPlayback {
 		return true;
 	}
 
-	private samplePlaybackFrameCost(elapsedMs: number) {
+	private samplePlaybackFrameCost(elapsedMs: number, now = performance.now()) {
 		if (!this.previewBase || !this.playing) return;
-		const now = performance.now();
 		const cost = Math.max(
 			elapsedMs,
 			this.lastRenderedAt > 0 ? now - this.lastRenderedAt : elapsedMs,
@@ -678,7 +677,11 @@ export class BrowserLocalPlayback {
 			this.averageFrameCostMs > (this.previewScale === 1 ? 21 : 32)
 				? this.slowFrames + 1
 				: 0;
-		this.fastFrames = this.averageFrameCostMs < 13 ? this.fastFrames + 1 : 0;
+		this.fastFrames =
+			elapsedMs < 13 &&
+			this.averageFrameCostMs < (this.previewScale === 1 ? 21 : 32)
+				? this.fastFrames + 1
+				: 0;
 		let nextScale: 1 | 0.75 | 0.5 = this.previewScale;
 		if (this.slowFrames >= 18) {
 			nextScale = this.previewScale === 1 ? 0.75 : 0.5;

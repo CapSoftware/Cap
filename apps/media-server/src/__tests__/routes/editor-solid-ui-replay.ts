@@ -1261,6 +1261,61 @@ try {
 				nativePreviewParity.psnrDb <= 30 ||
 				differentPixels >= nativePreviewParity.totalPixels * 0.05
 			) {
+				const canvasState = await editor.locator("#canvas").evaluate((node) => {
+					const canvas = node as HTMLCanvasElement;
+					const bounds = canvas.getBoundingClientRect();
+					const probe = document.createElement("canvas");
+					probe.width = 1;
+					probe.height = 1;
+					const probeContext = probe.getContext("2d");
+					probeContext?.drawImage(
+						canvas,
+						-Math.floor(canvas.width / 2),
+						-Math.floor(canvas.height / 2),
+					);
+					const webGl = canvas.getContext("webgl2");
+					let webGlCenter: number[] | null = null;
+					if (webGl && !webGl.isContextLost()) {
+						const pixel = new Uint8Array(4);
+						webGl.bindFramebuffer(webGl.FRAMEBUFFER, null);
+						webGl.readPixels(
+							Math.floor(canvas.width / 2),
+							Math.floor(canvas.height / 2),
+							1,
+							1,
+							webGl.RGBA,
+							webGl.UNSIGNED_BYTE,
+							pixel,
+						);
+						webGlCenter = [...pixel];
+					}
+					return {
+						width: canvas.width,
+						height: canvas.height,
+						bounds: { width: bounds.width, height: bounds.height },
+						backgroundImage: getComputedStyle(canvas).backgroundImage,
+						busy: document
+							.querySelector("[aria-busy]")
+							?.getAttribute("aria-busy"),
+						bitmapCenter: probeContext
+							? [...probeContext.getImageData(0, 0, 1, 1).data]
+							: null,
+						webGlCenter,
+						webGlLost: webGl?.isContextLost() ?? null,
+						videos: [...document.querySelectorAll("video")].map((video) => ({
+							readyState: video.readyState,
+							width: video.videoWidth,
+							height: video.videoHeight,
+							currentTime: video.currentTime,
+						})),
+					};
+				});
+				await page.waitForTimeout(300);
+				const delayedScreenshot = await editor.locator("#canvas").screenshot();
+				const delayedPixels = await sharp(delayedScreenshot)
+					.ensureAlpha()
+					.raw()
+					.toBuffer();
 				const center =
 					(Math.floor(browserInfo.height / 2) * browserInfo.width +
 						Math.floor(browserInfo.width / 2)) *
@@ -1272,6 +1327,8 @@ try {
 					nativePreviewParity,
 					centerBrowser: [...browserPixels.subarray(center, center + 3)],
 					centerNative: [...nativePixels.subarray(center, center + 3)],
+					centerDelayed: [...delayedPixels.subarray(center, center + 3)],
+					canvasState,
 				};
 				process.stderr.write(`${JSON.stringify(diagnostics)}\n`);
 				const artifactDir = process.env.CAP_EDITOR_UI_PARITY_ARTIFACT_DIR;
@@ -1287,6 +1344,14 @@ try {
 							writeFile(
 								join(artifactDir, `${stem}-browser.png`),
 								browserScreenshot,
+							),
+							writeFile(
+								join(artifactDir, `${stem}-delayed.png`),
+								delayedScreenshot,
+							),
+							writeFile(
+								join(artifactDir, `${stem}-page.png`),
+								await page.screenshot(),
 							),
 							writeFile(
 								join(artifactDir, `${stem}-native.png`),
