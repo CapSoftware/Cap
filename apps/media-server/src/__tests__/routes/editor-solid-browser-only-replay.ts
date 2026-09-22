@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { stat } from "node:fs/promises";
+import { mkdir, stat, writeFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import { chromium, firefox, webkit } from "@playwright/test";
 import sharp from "sharp";
@@ -537,6 +537,79 @@ try {
 	const meanAbsoluteError = Math.round((absolute / samples) * 100) / 100;
 	const psnrDb =
 		Math.round((mse === 0 ? 100 : 10 * Math.log10(255 ** 2 / mse)) * 100) / 100;
+	if (
+		meanAbsoluteError >= 3 ||
+		psnrDb <= 30 ||
+		differentPixels >= browserInfo.width * browserInfo.height * 0.05
+	) {
+		const samplePoints = [
+			[0.05, 0.05],
+			[0.5, 0.05],
+			[0.5, 0.5],
+			[0.25, 0.5],
+			[0.95, 0.95],
+		].map(([x, y]) => {
+			const column = Math.floor(x * (browserInfo.width - 1));
+			const row = Math.floor(y * (browserInfo.height - 1));
+			const offset = (row * browserInfo.width + column) * 4;
+			return {
+				x,
+				y,
+				browser: [...browserPixels.subarray(offset, offset + 3)],
+				native: [...nativePixels.subarray(offset, offset + 3)],
+			};
+		});
+		const diagnostics = {
+			browserEngine: engine.name(),
+			meanAbsoluteError,
+			psnrDb,
+			differentPixels,
+			browserSize: { width: browserInfo.width, height: browserInfo.height },
+			nativeSize: { width: nativeWidth, height: nativeHeight },
+			samples: samplePoints,
+			videos: await editor.locator("video").evaluateAll((elements) =>
+				elements.map((element) => {
+					const video = element as HTMLVideoElement;
+					return {
+						readyState: video.readyState,
+						currentTime: video.currentTime,
+						videoWidth: video.videoWidth,
+						videoHeight: video.videoHeight,
+						error: video.error?.message ?? null,
+					};
+				}),
+			),
+			pageErrors,
+			failedResponses,
+		};
+		process.stderr.write(`${JSON.stringify(diagnostics)}\n`);
+		const artifactDir = process.env.CAP_EDITOR_UI_PARITY_ARTIFACT_DIR;
+		if (artifactDir) {
+			await mkdir(artifactDir, { recursive: true });
+			await Promise.all([
+				writeFile(
+					join(artifactDir, `${engine.name()}-browser.png`),
+					browserScreenshot,
+				),
+				writeFile(
+					join(artifactDir, `${engine.name()}-native.png`),
+					await sharp(packed, {
+						raw: {
+							width: nativeWidth,
+							height: nativeHeight,
+							channels: 4,
+						},
+					})
+						.png()
+						.toBuffer(),
+				),
+				writeFile(
+					join(artifactDir, `${engine.name()}-diagnostics.json`),
+					JSON.stringify(diagnostics, null, 2),
+				),
+			]);
+		}
+	}
 	assert.ok(meanAbsoluteError < 3);
 	assert.ok(psnrDb > 30);
 	assert.ok(differentPixels < browserInfo.width * browserInfo.height * 0.05);

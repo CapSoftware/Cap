@@ -119,9 +119,13 @@ jobs:
               bunx playwright install --with-deps chromium webkit firefox
               bun run --filter @cap/editor-solid-web build
               cd /source/apps/media-server
-              for browser in chromium webkit firefox; do
-                CAP_EDITOR_UI_BROWSER="$browser" bun src/__tests__/routes/editor-solid-browser-only-replay.ts
+              browser_replay_failed=0
+              for browser in chromium firefox webkit; do
+                if ! CAP_EDITOR_UI_PARITY_ARTIFACT_DIR=/source/.cap-editor-parity-artifacts CAP_EDITOR_UI_BROWSER="$browser" bun src/__tests__/routes/editor-solid-browser-only-replay.ts; then
+                  browser_replay_failed=1
+                fi
               done
+              if [ "$browser_replay_failed" -ne 0 ]; then exit 1; fi
               for browser in chromium webkit firefox; do
                 for pro in 0 1; do
                   CAP_EDITOR_UI_SHARE_REPLAY=1 CAP_EDITOR_UI_BROWSER="$browser" CAP_EDITOR_UI_PRO_CAPTIONS="$pro" bun run test:native-editor-ui
@@ -137,3 +141,10 @@ jobs:
               CAP_EDITOR_UI_CANVAS_FALLBACK=1 CAP_EDITOR_UI_BROWSER=webkit CAP_EDITOR_UI_PRO_CAPTIONS=1 bun run test:native-editor-ui
               bun src/__tests__/routes/editor-presets-browser-replay.ts
             '
+      - name: Upload Studio parity diagnostics
+        if: failure() && matrix.platform == 'amd64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-studio-parity-diagnostics
+          path: .cap-editor-parity-artifacts
+          if-no-files-found: ignore
