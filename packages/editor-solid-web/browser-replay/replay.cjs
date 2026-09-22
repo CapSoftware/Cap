@@ -388,6 +388,13 @@ async function replay(forceWebGl, forceWebGpu = false) {
 		const result = await Promise.race([
 			page.evaluate(async (mediaFormat) => {
 				const indexed = window.CapReplayIndexed;
+				const webGl = document.createElement("canvas").getContext("webgl2");
+				const debugRenderer = webGl?.getExtension("WEBGL_debug_renderer_info");
+				const webGlRenderer = webGl
+					? webGl.getParameter(
+							debugRenderer?.UNMASKED_RENDERER_WEBGL ?? webGl.RENDERER,
+						)
+					: null;
 				console.info(
 					`Cap replay stage: capabilities WebGPU=${Boolean(navigator.gpu)} WebGL2=${Boolean(document.createElement("canvas").getContext("webgl2"))}`,
 				);
@@ -475,6 +482,26 @@ async function replay(forceWebGl, forceWebGpu = false) {
 						},
 					};
 				}
+				const videoFrameCosts = [];
+				const compositeCosts = [];
+				const poolFrame = playback.pool.frame.bind(playback.pool);
+				playback.pool.frame = async (...args) => {
+					const started = performance.now();
+					try {
+						return await poolFrame(...args);
+					} finally {
+						videoFrameCosts.push(performance.now() - started);
+					}
+				};
+				const canvasRender = playback.canvas.render.bind(playback.canvas);
+				playback.canvas.render = async (...args) => {
+					const started = performance.now();
+					try {
+						return await canvasRender(...args);
+					} finally {
+						compositeCosts.push(performance.now() - started);
+					}
+				};
 				try {
 					const firstFrameMs = performance.now() - started;
 					const backend = playback.canvas.renderer.backend;
@@ -713,6 +740,8 @@ async function replay(forceWebGl, forceWebGpu = false) {
 					await playback.setConfig(config);
 					await playback.seek(0.75);
 					const beforePlay = frames.length;
+					const beforeVideoFrameCosts = videoFrameCosts.length;
+					const beforeCompositeCosts = compositeCosts.length;
 					playback.play();
 					const playbackIntervalMs =
 						window.CapReplayGpuAdapterArchitecture === "swiftshader"
@@ -724,11 +753,28 @@ async function replay(forceWebGl, forceWebGpu = false) {
 					console.info("Cap replay stage: playback interval completed");
 					playback.pause();
 					const playedFrames = frames.length - beforePlay;
+					const costSummary = (samples) => ({
+						count: samples.length,
+						meanMs: samples.length
+							? Math.round(
+									(samples.reduce((sum, sample) => sum + sample, 0) /
+										samples.length) *
+										10,
+								) / 10
+							: 0,
+						maxMs: Math.round(Math.max(0, ...samples) * 10) / 10,
+					});
 					const playbackMetrics = {
 						intervalMs: playbackIntervalMs,
 						outputTime: playback.outputTime,
 						previewScale: playback.previewScale,
 						averageFrameCostMs: playback.averageFrameCostMs,
+						videoFrameCosts: costSummary(
+							videoFrameCosts.slice(beforeVideoFrameCosts),
+						),
+						compositeCosts: costSummary(
+							compositeCosts.slice(beforeCompositeCosts),
+						),
 					};
 					let indexedParity = null;
 					if (indexed) {
@@ -893,6 +939,7 @@ async function replay(forceWebGl, forceWebGpu = false) {
 					);
 					return {
 						backend,
+						webGlRenderer,
 						gpuAdapterArchitecture:
 							window.CapReplayGpuAdapterArchitecture ?? null,
 						probeForcedFailure: window.CapReplayProbeForcedFailure === true,

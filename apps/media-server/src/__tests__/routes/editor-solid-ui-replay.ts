@@ -833,7 +833,13 @@ try {
 		});
 		assert.equal(saved.status, 204);
 	}
-	const socketHandler: Bun.WebSocketHandler<EditorSocketConnection> =
+	const socketClosures: Array<{
+		scope: string;
+		code: number;
+		reason: string;
+		upstreamReadyState: number | null;
+	}> = [];
+	const baseSocketHandler: Bun.WebSocketHandler<EditorSocketConnection> =
 		runtimeFault
 			? {
 					...editorWebSocketHandler,
@@ -865,6 +871,18 @@ try {
 					},
 				}
 			: editorWebSocketHandler;
+	const socketHandler: Bun.WebSocketHandler<EditorSocketConnection> = {
+		...baseSocketHandler,
+		close(ws, code, reason) {
+			socketClosures.push({
+				scope: ws.data.scope,
+				code,
+				reason,
+				upstreamReadyState: ws.data.upstream?.readyState ?? null,
+			});
+			baseSocketHandler.close?.(ws, code, reason);
+		},
+	};
 	socketServer = Bun.serve({
 		hostname: "127.0.0.1",
 		port: 0,
@@ -1703,7 +1721,7 @@ try {
 					})
 					.catch(() => null);
 				process.stderr.write(
-					`${JSON.stringify({ stage: "caption-plan-focus", browserEngine: browserEngine.name(), planRequestsBeforeFocus, planRequests, currentCaptionPlan, iframePlan, hostState, pageErrors, failedResponses })}\n`,
+					`${JSON.stringify({ stage: "caption-plan-focus", browserEngine: browserEngine.name(), planRequestsBeforeFocus, planRequests, currentCaptionPlan, iframePlan, hostState, socketClosures: socketClosures.slice(-12), pageErrors, failedResponses })}\n`,
 				);
 				throw cause;
 			}
