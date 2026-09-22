@@ -24,6 +24,7 @@ import {
 } from "./editor-worker-routing";
 import { getEditSourceKey } from "./video-edit-processing";
 import { decodeStorageVideo } from "./video-storage";
+import { isWebStudioEnabledForEmail } from "./web-studio-rollout";
 
 const MAX_SOURCE_BYTES = 12 * 1024 * 1024 * 1024;
 const MAX_INPUT_EVENTS_BYTES = 64 * 1024 * 1024;
@@ -75,6 +76,9 @@ export const loadEligibleEditorVideo = Effect.fn("loadEligibleEditorVideo")(
 		requirePro = false,
 	) {
 		const currentUser = yield* CurrentUser;
+		if (!isWebStudioEnabledForEmail(currentUser.email)) {
+			return yield* new HttpApiError.NotFound();
+		}
 		const database = yield* Database;
 		const [record] = yield* database
 			.use((client) =>

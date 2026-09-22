@@ -54,7 +54,7 @@ const mockSources = new Map([
 	],
 	[
 		"./recording-upload",
-		"export async function uploadRecording(){throw new Error('Unused buffered upload path')}",
+		"export async function uploadRecording(blob){window.capRecorderBufferedUploads.push({bytes:blob.size,type:blob.type})}",
 	],
 	[
 		"./recovered-recording-cache",
@@ -120,6 +120,7 @@ async function replayPairedCapture(
 	failAudioResume = false,
 	failBackupDeletion = false,
 	stallAudioSpool = false,
+	cameraEnabled = true,
 ) {
 	const requests = [];
 	const parts = [];
@@ -152,6 +153,7 @@ async function replayPairedCapture(
 				window.capRecorderMediaRecorders = [];
 				window.capRecorderCanvasSources = [];
 				window.capRecorderAudioContexts = [];
+				window.capRecorderBufferedUploads = [];
 				const recorderStart = MediaRecorder.prototype.start;
 				MediaRecorder.prototype.start = function (...args) {
 					const stats = {
@@ -358,8 +360,11 @@ async function replayPairedCapture(
 			await route.fulfill({ status: 404, body: `Unexpected request: ${path}` });
 		});
 
+		const params = new URLSearchParams();
+		if (failAudioResume) params.set("mic", "1");
+		if (!cameraEnabled) params.set("camera", "0");
 		await page.goto(
-			`https://capture.test/harness${failAudioResume ? "?mic=1" : ""}`,
+			`https://capture.test/harness${params.size ? `?${params}` : ""}`,
 		);
 		try {
 			await page.waitForFunction(
@@ -591,6 +596,22 @@ async function replayPairedCapture(
 		} else {
 			assert.deepEqual(browserErrors, []);
 		}
+		if (engine.name === "WebKit" && !cameraEnabled) {
+			const bufferedUploads = await page.evaluate(
+				() => window.capRecorderBufferedUploads,
+			);
+			assert.equal(bufferedUploads.length, 1);
+			assert.ok(bufferedUploads[0].bytes > 0);
+			assert.ok(bufferedUploads[0].type.startsWith("video/mp4"));
+			assert.deepEqual(requests, []);
+			assert.deepEqual(parts, []);
+			return {
+				engine: engine.name,
+				cameraEnabled,
+				pauseResume,
+				bufferedBytes: bufferedUploads[0].bytes,
+			};
+		}
 		if (failCameraSpool) {
 			assert.ok(
 				(await page.evaluate(() => window.capRecorderCameraSpoolFailures)) > 0,
@@ -606,7 +627,10 @@ async function replayPairedCapture(
 		const completions = requests.filter((request) =>
 			request.path.endsWith("/complete"),
 		);
-		assert.equal(completions.length, failAudioResume ? 3 : 2);
+		assert.equal(
+			completions.length,
+			failAudioResume ? 3 : cameraEnabled ? 2 : 1,
+		);
 		const micComplete = completions.find((request) =>
 			request.body.subpath.startsWith("mic-upload."),
 		);
@@ -615,7 +639,9 @@ async function replayPairedCapture(
 			completions.map((request) => request.body.subpath).sort(),
 			failAudioResume
 				? [cameraSubpath, micComplete?.body.subpath, screenSubpath].sort()
-				: [cameraSubpath, screenSubpath],
+				: cameraEnabled
+					? [cameraSubpath, screenSubpath]
+					: [screenSubpath],
 		);
 		const sentParts = await page.evaluate(() =>
 			Promise.all(window.capRecorderPutBodies),
@@ -634,9 +660,10 @@ async function replayPairedCapture(
 			(total, part) => total + part.bytes,
 			0,
 		);
-		assert.ok(cameraBytes > 0);
+		if (cameraEnabled) assert.ok(cameraBytes > 0);
+		else assert.equal(cameraBytes, 0);
 		assert.ok(screenBytes > 0);
-		if (engine.name === "WebKit") {
+		if (engine.name === "WebKit" && cameraEnabled) {
 			const cameraMime = await page.evaluate(
 				() => window.capRecorderMediaRecorders?.[1]?.recorder.mimeType,
 			);
@@ -650,8 +677,9 @@ async function replayPairedCapture(
 			assert.ok(micParts.reduce((total, part) => total + part.bytes, 0) > 0);
 			assert.ok(Number.isInteger(micComplete.body.audioOffsetMs));
 		}
-		assert.notEqual(cameraParts[0].sha256, screenParts[0].sha256);
-		if (engine.extension === "webm") {
+		if (cameraEnabled)
+			assert.notEqual(cameraParts[0].sha256, screenParts[0].sha256);
+		if (engine.extension === "webm" && cameraEnabled) {
 			const cameraPart = parts.find((part) =>
 				part.path.includes(cameraSubpath),
 			);
@@ -668,21 +696,27 @@ async function replayPairedCapture(
 		const screenComplete = completions.find(
 			(request) => request.body.subpath === screenSubpath,
 		);
-		assert.equal(cameraComplete.body.screenSubpath, screenSubpath);
-		assert.equal(
-			cameraComplete.body.parts.reduce((total, part) => total + part.size, 0),
-			cameraBytes,
-		);
+		if (cameraEnabled) {
+			assert.equal(cameraComplete.body.screenSubpath, screenSubpath);
+			assert.equal(
+				cameraComplete.body.parts.reduce((total, part) => total + part.size, 0),
+				cameraBytes,
+			);
+		} else {
+			assert.equal(cameraComplete, undefined);
+		}
 		assert.equal(
 			screenComplete.body.parts.reduce((total, part) => total + part.size, 0),
 			screenBytes,
 		);
-		assert.ok(Number.isInteger(cameraComplete.body.cameraOffsetMs));
-		assert.ok(Math.abs(cameraComplete.body.cameraOffsetMs) < 500);
-		assert.deepEqual(
-			[cameraComplete.body.width, cameraComplete.body.height],
-			[320, 180],
-		);
+		if (cameraEnabled) {
+			assert.ok(Number.isInteger(cameraComplete.body.cameraOffsetMs));
+			assert.ok(Math.abs(cameraComplete.body.cameraOffsetMs) < 500);
+			assert.deepEqual(
+				[cameraComplete.body.width, cameraComplete.body.height],
+				[320, 180],
+			);
+		}
 		assert.deepEqual(
 			[screenComplete.body.width, screenComplete.body.height],
 			[640, 360],
@@ -711,6 +745,7 @@ async function replayPairedCapture(
 		}
 		return {
 			engine: engine.name,
+			cameraEnabled,
 			pauseResume,
 			failAudioResume,
 			failBackupDeletion,
@@ -718,7 +753,7 @@ async function replayPairedCapture(
 			stallAudioSpool,
 			cameraBytes,
 			screenBytes,
-			cameraOffsetMs: cameraComplete.body.cameraOffsetMs,
+			cameraOffsetMs: cameraComplete?.body.cameraOffsetMs ?? null,
 		};
 	} finally {
 		await context.close();
@@ -744,6 +779,20 @@ try {
 			for (const pauseResume of [false, true]) {
 				results.push(
 					await replayPairedCapture(browser, bundle, pauseResume, engine),
+				);
+				results.push(
+					await replayPairedCapture(
+						browser,
+						bundle,
+						pauseResume,
+						engine,
+						false,
+						false,
+						false,
+						false,
+						false,
+						false,
+					),
 				);
 			}
 			results.push(

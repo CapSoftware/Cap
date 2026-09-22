@@ -18,14 +18,15 @@ window.capRecorderSpool = RecordingSpool;
 window.capRecorderRecoverOrphans = recoverOrphanedRecordingSpools;
 
 function RecorderHarness() {
-	const captureMic = new URLSearchParams(location.search).get("mic") === "1";
+	const params = new URLSearchParams(location.search);
+	const captureMic = params.get("mic") === "1";
 	const recorder = useWebRecorder({
 		organisationId: "test-org",
 		selectedMicId: captureMic ? "test-mic" : null,
 		micEnabled: captureMic,
 		systemAudioEnabled: false,
 		recordingMode: "fullscreen",
-		selectedCameraId: "test-camera",
+		selectedCameraId: params.get("camera") === "0" ? null : "test-camera",
 		getCameraPreviewStream: () => null,
 		isProUser: true,
 	});

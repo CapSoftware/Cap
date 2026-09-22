@@ -516,6 +516,7 @@ const configureExtension = async (
 	worker: Awaited<ReturnType<typeof getServiceWorker>>,
 	apiBaseUrl: string,
 	microphoneEnabled = false,
+	webcamEnabled = true,
 ) => {
 	await worker.evaluate(
 		async ({
@@ -525,6 +526,7 @@ const configureExtension = async (
 			settingsKey,
 			apiBaseUrl,
 			microphoneEnabled,
+			webcamEnabled,
 		}) => {
 			const chromeApi = (globalThis as ChromeGlobal).chrome;
 			await new Promise<void>((resolve, reject) => {
@@ -569,7 +571,7 @@ const configureExtension = async (
 								microphone: null,
 							},
 							webcam: {
-								enabled: true,
+								enabled: webcamEnabled,
 								deviceId: "__cap_default_camera__",
 								position: "bottom-left",
 								size: 230,
@@ -613,6 +615,7 @@ const configureExtension = async (
 			recordingMode: RECORDING_MODE,
 			settingsKey: SETTINGS_KEY,
 			microphoneEnabled,
+			webcamEnabled,
 		},
 	);
 };
@@ -902,8 +905,14 @@ const startRecording = async (
 	mode: "fullscreen" | "tab" = RECORDING_MODE,
 	recordingMs = RECORDING_MS,
 	microphoneEnabled = false,
+	webcamEnabled = true,
 ) => {
-	await configureExtension(worker, apiBaseUrl, microphoneEnabled);
+	await configureExtension(
+		worker,
+		apiBaseUrl,
+		microphoneEnabled,
+		webcamEnabled,
+	);
 	const messengerPage = await openExtensionMessengerPage(context, worker);
 	const capturePage = await context.newPage();
 	await capturePage.goto(`${apiBaseUrl}/capture.html`);
@@ -1087,6 +1096,48 @@ test.describe("extension recording upload", () => {
 		);
 		await optionsPage.reload();
 		await expect(optionsPage.locator(".recovery-item")).toHaveCount(1);
+	});
+
+	test("keeps screen-only Instant recordings working without a webcam", async () => {
+		if (!extension || !mockServer)
+			throw new Error("Test harness did not start");
+		const worker = await getServiceWorker(extension.context);
+		const { messengerPage } = await startRecording(
+			extension.context,
+			worker,
+			mockServer.origin,
+			RECORDING_MODE,
+			RECORDING_MS,
+			false,
+			false,
+		);
+		expect(mockServer.state.initiateBodies).toEqual([
+			expect.objectContaining({ subpath: "raw-upload.webm" }),
+		]);
+		const stopResponse = await sendServiceWorkerMessage(messengerPage, {
+			target: "service-worker",
+			type: "stop-recording",
+		});
+		expect(stopResponse).toMatchObject({ ok: true });
+		await expect
+			.poll(async () => {
+				const response = await sendServiceWorkerMessage(messengerPage, {
+					target: "service-worker",
+					type: "get-recording-status",
+				});
+				if (!response.ok) return response.error;
+				return response.status?.phase;
+			})
+			.toBe("completed");
+		expect(mockServer.state.completeBodies).toEqual([
+			expect.objectContaining({ subpath: "raw-upload.webm" }),
+		]);
+		expect(
+			mockServer.state.uploadBytesBySubpath["raw-upload.webm"],
+		).toBeGreaterThan(0);
+		expect(
+			mockServer.state.uploadBytesBySubpath["camera-upload.webm"],
+		).toBeUndefined();
 	});
 
 	test("records a separate camera sidecar and hides its page overlay during display capture", async () => {

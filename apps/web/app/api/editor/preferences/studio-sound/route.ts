@@ -11,6 +11,7 @@ import {
 import { eq, sql } from "drizzle-orm";
 import { Effect, Layer } from "effect";
 import { apiToHandler } from "@/lib/server";
+import { isWebStudioEnabledForEmail } from "@/lib/web-studio-rollout";
 
 export const dynamic = "force-dynamic";
 
@@ -19,6 +20,7 @@ class Api extends HttpApi.make("WebEditorStudioSoundApi").add(
 		.add(
 			HttpApiEndpoint.get("load", "/api/editor/preferences/studio-sound")
 				.addSuccess(StudioSound.PreferenceSchema)
+				.addError(HttpApiError.NotFound)
 				.addError(HttpApiError.InternalServerError)
 				.middleware(HttpAuthMiddleware),
 		)
@@ -26,6 +28,7 @@ class Api extends HttpApi.make("WebEditorStudioSoundApi").add(
 			HttpApiEndpoint.put("save", "/api/editor/preferences/studio-sound")
 				.setPayload(StudioSound.PreferenceSchema)
 				.addSuccess(StudioSound.PreferenceSchema)
+				.addError(HttpApiError.NotFound)
 				.addError(HttpApiError.InternalServerError)
 				.middleware(HttpAuthMiddleware),
 		),
@@ -38,6 +41,9 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 				.handle("load", () =>
 					Effect.gen(function* () {
 						const user = yield* CurrentUser;
+						if (!isWebStudioEnabledForEmail(user.email)) {
+							return yield* new HttpApiError.NotFound();
+						}
 						const database = yield* Database;
 						const [row] = yield* database
 							.use((client) =>
@@ -58,6 +64,9 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 				.handle("save", ({ payload }) =>
 					Effect.gen(function* () {
 						const user = yield* CurrentUser;
+						if (!isWebStudioEnabledForEmail(user.email)) {
+							return yield* new HttpApiError.NotFound();
+						}
 						const database = yield* Database;
 						yield* database
 							.use((client) =>

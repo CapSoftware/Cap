@@ -6,16 +6,16 @@ import { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { notFound } from "next/navigation";
 import { getEditSourceKey } from "@/lib/video-edit-processing";
+import { isWebStudioEnabledForEmail } from "@/lib/web-studio-rollout";
 import { StudioEditorClient } from "./StudioEditorClient";
 
 export default async function StudioEditorPage(props: {
 	params: Promise<{ videoId: string }>;
 }) {
-	if (process.env.CAP_WEB_EDITOR_STUDIO_ENABLED !== "enabled") notFound();
 	const { videoId: rawVideoId } = await props.params;
 	const videoId = Video.VideoId.make(rawVideoId);
 	const user = await getCurrentUser();
-	if (!user) notFound();
+	if (!user || !isWebStudioEnabledForEmail(user.email)) notFound();
 	const [video] = await db()
 		.select({
 			id: videos.id,

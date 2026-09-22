@@ -10,6 +10,7 @@ import {
 	areEditSpecsEquivalent,
 	createIdentityEditSpec,
 } from "@/lib/video-edits";
+import { isWebStudioEnabledForEmail } from "@/lib/web-studio-rollout";
 import { EditUpgradeGate } from "./EditUpgradeGate";
 import { EditVideoClient } from "./EditVideoClient";
 import { EditRecovery } from "./edit-recovery";
@@ -107,7 +108,7 @@ export default async function EditVideoPage(props: {
 				Number.isSafeInteger(editorSources.display.size) &&
 				(editorSources.display.size ?? 0) > 0);
 	if (
-		process.env.CAP_WEB_EDITOR_STUDIO_ENABLED === "enabled" &&
+		isWebStudioEnabledForEmail(user.email) &&
 		hasStudioSource &&
 		!video.metadata?.editProcessing
 	) {

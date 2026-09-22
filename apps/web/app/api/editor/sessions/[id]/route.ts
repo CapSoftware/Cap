@@ -12,6 +12,7 @@ import { eq } from "drizzle-orm";
 import { Effect, Layer, Schema } from "effect";
 import { requestMediaEditor } from "@/lib/editor-session";
 import { apiToHandler } from "@/lib/server";
+import { isWebStudioEnabledForEmail } from "@/lib/web-studio-rollout";
 
 export const dynamic = "force-dynamic";
 
@@ -34,6 +35,9 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 			handlers.handle("close", ({ path, urlParams }) =>
 				Effect.gen(function* () {
 					const user = yield* CurrentUser;
+					if (!isWebStudioEnabledForEmail(user.email)) {
+						return yield* new HttpApiError.NotFound();
+					}
 					const database = yield* Database;
 					const [video] = yield* database
 						.use((client) =>
