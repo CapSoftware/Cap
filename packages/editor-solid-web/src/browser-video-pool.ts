@@ -294,6 +294,9 @@ export class BrowserVideoPool {
 					const seeked = waitForVideo(video, "seeked", signal, 10_000);
 					video.currentTime = decodeTarget;
 					await seeked;
+					if (speed > 4 && navigator.vendor === "Google Inc.") {
+						await new Promise(requestAnimationFrame);
+					}
 				}
 				slot.primed = true;
 			}

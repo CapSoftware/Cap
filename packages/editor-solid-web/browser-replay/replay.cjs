@@ -719,12 +719,14 @@ async function replay(forceWebGl, forceWebGpu = false) {
 
 async function main() {
 	const modes =
-		process.env.CAP_REPLAY_REQUIRE_WEBGPU === "1"
-			? [[false, true]]
-			: [
-					[false, false],
-					[true, false],
-				];
+		process.env.CAP_REPLAY_ONLY_WEBGL === "1"
+			? [[true, false]]
+			: process.env.CAP_REPLAY_REQUIRE_WEBGPU === "1"
+				? [[false, true]]
+				: [
+						[false, false],
+						[true, false],
+					];
 	let failed = false;
 	for (const [forceWebGl, forceWebGpu] of modes) {
 		try {
