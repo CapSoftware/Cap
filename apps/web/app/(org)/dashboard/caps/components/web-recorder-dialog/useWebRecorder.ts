@@ -75,6 +75,21 @@ import {
 	FREE_PLAN_MAX_RECORDING_MS,
 } from "./web-recorder-constants";
 
+function selectPairedCameraPipeline(displayPipeline: RecordingPipeline) {
+	if (displayPipeline.fileExtension === "mp4") {
+		const mimeType = "video/webm;codecs=vp8";
+		if (MediaRecorder.isTypeSupported(mimeType)) {
+			return {
+				mode: "streaming-webm",
+				mimeType,
+				fileExtension: "webm",
+				supportsProgressiveUpload: true,
+			} satisfies RecordingPipeline;
+		}
+	}
+	return selectRecordingPipeline(false);
+}
+
 interface UseWebRecorderOptions {
 	organisationId: string | undefined;
 	selectedMicId: string | null;
@@ -1242,7 +1257,7 @@ export const useWebRecorder = ({
 				cameraSettingsRef.current = cameraRecordingStream
 					.getVideoTracks()[0]
 					?.getSettings();
-				cameraPipeline = selectRecordingPipeline(false);
+				cameraPipeline = selectPairedCameraPipeline(pipeline);
 				if (!cameraPipeline) {
 					throw new Error("No supported camera recording pipeline available");
 				}

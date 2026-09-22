@@ -14,6 +14,7 @@ import { createRecordingSessionId, RecordingSpool } from "./recording-spool";
 const RECORDING_TIMESLICE_MS = 1000;
 const DATA_REQUEST_GUARD_MS = 2500;
 const STOP_TIMEOUT_MS = 10_000;
+const BACKUP_FLUSH_TIMEOUT_MS = 5000;
 const MEMORY_BACKUP_MAX_BYTES = 64 * 1024 * 1024;
 
 export type AudioSidecarKind = "mic" | "systemAudio";
@@ -262,32 +263,57 @@ export class AudioRecordingSidecar {
 	async stop() {
 		if (this.stopPromise) return this.stopPromise;
 		this.clearIntervals();
-		let timeoutHandle: number | null = null;
-		const recorderStop = new Promise<number>((resolve, reject) => {
+		let stopTimeoutHandle: number | null = null;
+		const recorderStop = new Promise<void>((resolve, reject) => {
 			if (this.recorder.state === "inactive") {
-				this.completeStop(resolve, reject);
+				resolve();
 				return;
 			}
-			this.recorder.addEventListener(
-				"stop",
-				() => this.completeStop(resolve, reject),
-				{ once: true },
-			);
+			this.recorder.addEventListener("stop", () => resolve(), { once: true });
 			try {
 				this.recorder.stop();
 			} catch (error) {
 				reject(error);
 			}
 		});
-		const timeout = new Promise<never>((_resolve, reject) => {
-			timeoutHandle = window.setTimeout(
+		const stopTimeout = new Promise<never>((_resolve, reject) => {
+			stopTimeoutHandle = window.setTimeout(
 				() => reject(new Error(`${this.kind} audio recorder did not stop`)),
 				STOP_TIMEOUT_MS,
 			);
 		});
-		this.stopPromise = Promise.race([recorderStop, timeout]).finally(() => {
-			if (timeoutHandle !== null) window.clearTimeout(timeoutHandle);
-		});
+		this.stopPromise = Promise.race([recorderStop, stopTimeout])
+			.finally(() => {
+				if (stopTimeoutHandle !== null) window.clearTimeout(stopTimeoutHandle);
+			})
+			.then(async () => {
+				let backupTimeoutHandle: number | null = null;
+				try {
+					if (!this.spoolFailed && this.spool) {
+						await Promise.race([
+							this.spool.flush(),
+							new Promise<never>((_resolve, reject) => {
+								backupTimeoutHandle = window.setTimeout(
+									() =>
+										reject(
+											new Error(`${this.kind} audio backup write timed out`),
+										),
+									BACKUP_FLUSH_TIMEOUT_MS,
+								);
+							}),
+						]);
+					}
+				} catch (error) {
+					this.useMemoryBackup(
+						error instanceof Error ? error : new Error(String(error)),
+					);
+				} finally {
+					if (backupTimeoutHandle !== null)
+						window.clearTimeout(backupTimeoutHandle);
+				}
+				if (this.failed) throw this.failed;
+				return this.bytes;
+			});
 		return this.stopPromise;
 	}
 
@@ -415,25 +441,6 @@ export class AudioRecordingSidecar {
 			this.uploader.handleChunk(chunk, this.bytes);
 		} catch (error) {
 			this.fail(error instanceof Error ? error : new Error(String(error)));
-		}
-	}
-
-	private async completeStop(
-		resolve: (value: number) => void,
-		reject: (error: unknown) => void,
-	) {
-		try {
-			try {
-				if (!this.spoolFailed) await this.spool?.flush();
-			} catch (error) {
-				this.useMemoryBackup(
-					error instanceof Error ? error : new Error(String(error)),
-				);
-			}
-			if (this.failed) throw this.failed;
-			resolve(this.bytes);
-		} catch (error) {
-			reject(error);
 		}
 	}
 

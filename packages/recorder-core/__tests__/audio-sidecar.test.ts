@@ -154,6 +154,43 @@ test("a stalled spool flush after a write failure keeps streamed audio and a ful
 	expect(spool.dispose).toHaveBeenCalledOnce();
 });
 
+test("a stopped recorder can upload audio when its durable backup stalls", async () => {
+	const timers = new Map<number, () => void>();
+	let nextTimer = 0;
+	vi.stubGlobal("window", {
+		setInterval: () => 1,
+		clearInterval: () => undefined,
+		setTimeout: (callback: () => void) => {
+			const timer = ++nextTimer;
+			timers.set(timer, callback);
+			return timer;
+		},
+		clearTimeout: (timer: number) => timers.delete(timer),
+	});
+	const spool = {
+		sessionId: "durable-spool",
+		totalBytes: 0,
+		appendChunk: vi.fn(async () => undefined),
+		flush: vi.fn(() => new Promise<void>(() => undefined)),
+		recoverBlob: vi.fn(async () => null),
+		dispose: vi.fn(async () => undefined),
+		touch: vi.fn(async () => undefined),
+	};
+	mocks.createSpool.mockResolvedValue(spool);
+	const sidecar = await createSidecar();
+	sidecar.start(performance.now());
+	FakeAudioRecorder.instances[0]?.emitData(new Blob(["microphone"]));
+	const completed = sidecar.finalize(2);
+	await vi.waitFor(() => expect(spool.flush).toHaveBeenCalledOnce());
+	expect(timers.size).toBe(1);
+	timers.values().next().value?.();
+	await completed;
+	expect(await (await sidecar.recoverBlob())?.text()).toBe("microphone");
+	expect(backupFallback).toHaveBeenCalledOnce();
+	expect(mocks.uploaders[0]?.finalize).toHaveBeenCalledOnce();
+	expect(fatal).not.toHaveBeenCalled();
+});
+
 test("a late durable backup failure does not discard successfully streamed long audio", async () => {
 	const spool = {
 		sessionId: "durable-spool",

@@ -125,7 +125,8 @@ async function replayPairedCapture(
 	const parts = [];
 	const browserErrors = [];
 	const browserWarnings = [];
-	const cameraSubpath = `camera-upload.${engine.extension}`;
+	const cameraExtension = engine.name === "WebKit" ? "webm" : engine.extension;
+	const cameraSubpath = `camera-upload.${cameraExtension}`;
 	const screenSubpath = `raw-upload.${engine.extension}`;
 	const context = await browser.newContext();
 	try {
@@ -247,10 +248,17 @@ async function replayPairedCapture(
 						window.capRecorderPutBodies.push(
 							body
 								.arrayBuffer()
-								.then((buffer) => crypto.subtle.digest("SHA-256", buffer))
-								.then((digest) => ({
+								.then(async (buffer) => ({
+									header: Array.from(
+										new Uint8Array(buffer).subarray(0, 4),
+										(byte) => byte.toString(16).padStart(2, "0"),
+									).join(""),
+									digest: await crypto.subtle.digest("SHA-256", buffer),
+								}))
+								.then(({ digest, header }) => ({
 									url,
 									bytes: body.size,
+									header,
 									sha256: Array.from(new Uint8Array(digest), (byte) =>
 										byte.toString(16).padStart(2, "0"),
 									).join(""),
@@ -628,6 +636,13 @@ async function replayPairedCapture(
 		);
 		assert.ok(cameraBytes > 0);
 		assert.ok(screenBytes > 0);
+		if (engine.name === "WebKit") {
+			const cameraMime = await page.evaluate(
+				() => window.capRecorderMediaRecorders?.[1]?.recorder.mimeType,
+			);
+			assert.ok(cameraMime?.startsWith("video/webm"));
+			assert.equal(cameraParts[0].header, "1a45dfa3");
+		}
 		if (failAudioResume) {
 			const micParts = sentParts.filter((part) =>
 				part.url.includes(micComplete.body.subpath),
