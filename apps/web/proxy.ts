@@ -59,6 +59,7 @@ export async function proxy(request: NextRequest) {
 				path.startsWith("/s/") ||
 				path.startsWith("/c/") ||
 				path.startsWith("/cli/") ||
+				path.startsWith("/mcp/") ||
 				path.startsWith("/middleware") ||
 				path.startsWith("/dashboard") ||
 				path.startsWith("/onboarding") ||
@@ -71,7 +72,8 @@ export async function proxy(request: NextRequest) {
 				path.startsWith("/terms") ||
 				path.startsWith("/verify-otp") ||
 				path.startsWith("/embed/") ||
-				path.startsWith("/.well-known/workflow/")
+				path.startsWith("/.well-known/workflow/") ||
+				path.startsWith("/.well-known/oauth-")
 			) &&
 			process.env.NODE_ENV !== "development"
 		)
