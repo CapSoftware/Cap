@@ -381,6 +381,7 @@ export class EditorHostBridge {
 	private activeWorkerUses = 0;
 	private workerBundleDownloadUntil = 0;
 	private activeProjectBundleDownloads = 0;
+	private workerDownloadFrame: HTMLIFrameElement | null = null;
 	private activeRecordingClipImports = 0;
 	private port: MessagePort | null = null;
 	private commands: WebSocket | null = null;
@@ -888,6 +889,27 @@ export class EditorHostBridge {
 		}
 	}
 
+	private downloadWorkerFile(url: URL, fileName: string) {
+		// Firefox can cancel page sockets on cross-origin attachment navigation:
+		// https://bugzilla.mozilla.org/show_bug.cgi?id=896666
+		if (!this.workerDownloadFrame) {
+			const frame = document.createElement("iframe");
+			frame.name = `cap-studio-download-${this.sessionId}`;
+			frame.hidden = true;
+			frame.setAttribute("aria-hidden", "true");
+			document.body.append(frame);
+			this.workerDownloadFrame = frame;
+		}
+		const link = document.createElement("a");
+		link.href = url.toString();
+		link.rel = "noreferrer";
+		link.target = this.workerDownloadFrame.name;
+		link.download = fileName;
+		document.body.append(link);
+		link.click();
+		link.remove();
+	}
+
 	private exportPath(exportId?: string) {
 		const root = `/api/editor/sessions/${encodeURIComponent(this.sessionId)}/exports`;
 		return exportId ? `${root}/${encodeURIComponent(exportId)}` : root;
@@ -1094,13 +1116,7 @@ export class EditorHostBridge {
 				throw new Error("Editor download URL was invalid");
 			}
 			if (active.canceled || this.disposed) throw new Error("Export cancelled");
-			const link = document.createElement("a");
-			link.href = downloadUrl.toString();
-			link.rel = "noreferrer";
-			link.download = fileName;
-			document.body.append(link);
-			link.click();
-			link.remove();
+			this.downloadWorkerFile(downloadUrl, fileName);
 			const downloadDeadline = Date.now() + 15_000;
 			while (Date.now() < downloadDeadline) {
 				const response = await fetch(
@@ -1209,13 +1225,7 @@ export class EditorHostBridge {
 			)
 				throw new Error("Recording bundle URL was invalid");
 			if (this.disposed) throw new Error("Editor bridge is closed");
-			const link = document.createElement("a");
-			link.href = url.toString();
-			link.rel = "noreferrer";
-			link.download = "Cap Recording.capbundle";
-			document.body.append(link);
-			link.click();
-			link.remove();
+			this.downloadWorkerFile(url, "Cap Recording.capbundle");
 			this.workerBundleDownloadUntil = Date.now() + 30_000;
 			reply = { kind: "result", id: message.id, value: null };
 		} catch (cause) {
@@ -2422,6 +2432,8 @@ export class EditorHostBridge {
 			this.activeExport.controller.abort();
 		}
 		this.controller.abort();
+		this.workerDownloadFrame?.remove();
+		this.workerDownloadFrame = null;
 		if (this.browserOnly && this.workerSessionId) {
 			void fetch(
 				`/api/editor/sessions/${encodeURIComponent(this.workerSessionId)}?videoId=${encodeURIComponent(this.videoId)}`,
