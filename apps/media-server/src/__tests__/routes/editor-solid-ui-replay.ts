@@ -18,6 +18,7 @@ import sharp from "sharp";
 import { hasEditorCaptionContent } from "../../../../../apps/web/lib/editor-caption-access";
 import app from "../../editor-worker-app";
 import { parseEditorSocketRequest } from "../../lib/editor-command-socket";
+import { getEditorSession } from "../../lib/editor-sessions";
 import {
 	type EditorSocketConnection,
 	editorWebSocketHandler,
@@ -1099,6 +1100,102 @@ try {
 			await editor.getByRole("tab", { name: "Camera" }).isDisabled(),
 			false,
 		);
+		let nativePreviewParity: {
+			meanAbsoluteError: number;
+			psnrDb: number;
+			differentPixels: number;
+			totalPixels: number;
+		} | null = null;
+		if (!cursorMovReplay && !canvasFallbackReplay) {
+			await editor.locator("#canvas").evaluate(async (canvas) => {
+				const previewSurface = canvas.parentElement?.parentElement;
+				if (!previewSurface) throw new Error("Preview surface is unavailable");
+				const deadline = performance.now() + 3_000;
+				while (Number(getComputedStyle(previewSurface).opacity) < 0.999) {
+					if (performance.now() > deadline)
+						throw new Error("Preview fade did not complete");
+					await new Promise((resolve) => setTimeout(resolve, 25));
+				}
+			});
+			const canvasSize = await editor.locator("#canvas").evaluate((canvas) => {
+				const element = canvas as HTMLCanvasElement;
+				return { width: element.width, height: element.height };
+			});
+			const native = getEditorSession(sessionId);
+			assert.ok(native);
+			const preview = await native.request("/preview", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					frameNumber: 0,
+					fps: 60,
+					resolutionBase: { x: canvasSize.width, y: canvasSize.height },
+				}),
+			});
+			assert.equal(preview.status, 200);
+			const exact = Buffer.from(await preview.arrayBuffer());
+			const footer = exact.subarray(-24);
+			const stride = footer.readUInt32LE(0);
+			const nativeHeight = footer.readUInt32LE(4);
+			const nativeWidth = footer.readUInt32LE(8);
+			assert.equal(footer.readUInt32LE(12), 0);
+			assert.equal(exact.length, stride * nativeHeight + 24);
+			assert.ok(stride >= nativeWidth * 4);
+			const browserScreenshot = await editor.locator("#canvas").screenshot();
+			const { data: browserPixels, info: browserInfo } = await sharp(
+				browserScreenshot,
+			)
+				.ensureAlpha()
+				.raw()
+				.toBuffer({ resolveWithObject: true });
+			assert.ok(Math.abs(nativeWidth - browserInfo.width) <= 2);
+			assert.ok(Math.abs(nativeHeight - browserInfo.height) <= 2);
+			const packed = Buffer.alloc(nativeWidth * nativeHeight * 4);
+			for (let row = 0; row < nativeHeight; row++) {
+				exact.copy(
+					packed,
+					row * nativeWidth * 4,
+					row * stride,
+					row * stride + nativeWidth * 4,
+				);
+			}
+			const nativePixels = await sharp(packed, {
+				raw: { width: nativeWidth, height: nativeHeight, channels: 4 },
+			})
+				.resize(browserInfo.width, browserInfo.height, { kernel: "nearest" })
+				.raw()
+				.toBuffer();
+			assert.equal(nativePixels.length, browserPixels.length);
+			let absolute = 0;
+			let squared = 0;
+			let differentPixels = 0;
+			for (let pixel = 0; pixel < browserPixels.length; pixel += 4) {
+				let changed = false;
+				for (let channel = 0; channel < 3; channel++) {
+					const delta =
+						(nativePixels[pixel + channel] ?? 0) -
+						(browserPixels[pixel + channel] ?? 0);
+					absolute += Math.abs(delta);
+					squared += delta * delta;
+					changed ||= Math.abs(delta) > 8;
+				}
+				if (changed) differentPixels++;
+			}
+			const samples = browserInfo.width * browserInfo.height * 3;
+			const mse = squared / samples;
+			nativePreviewParity = {
+				meanAbsoluteError: Math.round((absolute / samples) * 100) / 100,
+				psnrDb:
+					Math.round(
+						(mse === 0 ? 100 : 10 * Math.log10(255 ** 2 / mse)) * 100,
+					) / 100,
+				differentPixels,
+				totalPixels: browserInfo.width * browserInfo.height,
+			};
+			assert.ok(nativePreviewParity.meanAbsoluteError < 3);
+			assert.ok(nativePreviewParity.psnrDb > 30);
+			assert.ok(differentPixels < nativePreviewParity.totalPixels * 0.05);
+		}
 		let cropFrameLoadMs = 0;
 		let cropFrameSize = { width: 0, height: 0 };
 		if (!shareReplay && !cursorMovReplay) {
@@ -1757,6 +1854,7 @@ try {
 				cursorMovReplay,
 				canvasFallbackReplay,
 				canvasFallbackPreviewPixel,
+				nativePreviewParity,
 				cursorMovVerification,
 				cursorMovExpectedStatus404,
 				cursorMovExpectedConsole404,
