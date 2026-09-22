@@ -539,7 +539,13 @@ async function replay(forceWebGl, forceWebGpu = false) {
 					await playback.seek(0.75);
 					const beforePlay = frames.length;
 					playback.play();
-					await new Promise((resolve) => setTimeout(resolve, 850));
+					const playbackIntervalMs =
+						window.CapReplayGpuAdapterArchitecture === "swiftshader"
+							? 2500
+							: 850;
+					await new Promise((resolve) =>
+						setTimeout(resolve, playbackIntervalMs),
+					);
 					console.info("Cap replay stage: playback interval completed");
 					playback.pause();
 					const playedFrames = frames.length - beforePlay;
