@@ -872,7 +872,18 @@ try {
 		websocket: socketHandler,
 	});
 	process.env.CAP_WEB_EDITOR_PUBLIC_ORIGIN = `http://127.0.0.1:${socketServer.port}`;
-	browser = await browserEngine.launch({ headless: true });
+	browser = await browserEngine.launch({
+		headless: process.env.CAP_EDITOR_UI_HEADED !== "1",
+		...(process.env.CAP_EDITOR_UI_HEADED === "1" &&
+		process.env.CAP_EDITOR_UI_BROWSER === "firefox"
+			? {
+					firefoxUserPrefs: {
+						"webgl.force-enabled": true,
+						"webgl.forbid-software": false,
+					},
+				}
+			: {}),
+	});
 	const page = await browser.newPage({
 		viewport: { width: 1440, height: 900 },
 	});

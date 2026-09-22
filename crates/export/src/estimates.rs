@@ -126,6 +126,27 @@ pub async fn estimate_export(
     project: ProjectConfiguration,
     settings: ExportSettings,
     cancel: Arc<AtomicBool>,
+    on_estimate: impl FnMut(ExportEstimates) + Send,
+) -> Result<ExportEstimates, String> {
+    estimate_export_inner(editor, project, settings, cancel, false, on_estimate).await
+}
+
+pub async fn estimate_export_web(
+    editor: Arc<EditorInstance>,
+    project: ProjectConfiguration,
+    settings: ExportSettings,
+    cancel: Arc<AtomicBool>,
+    on_estimate: impl FnMut(ExportEstimates) + Send,
+) -> Result<ExportEstimates, String> {
+    estimate_export_inner(editor, project, settings, cancel, true, on_estimate).await
+}
+
+async fn estimate_export_inner(
+    editor: Arc<EditorInstance>,
+    project: ProjectConfiguration,
+    settings: ExportSettings,
+    cancel: Arc<AtomicBool>,
+    web_fast: bool,
     mut on_estimate: impl FnMut(ExportEstimates) + Send,
 ) -> Result<ExportEstimates, String> {
     if cancel.load(Ordering::Acquire) || editor.export_active.load(Ordering::Acquire) {
@@ -175,6 +196,7 @@ pub async fn estimate_export(
     let total_frames = (duration * f64::from(settings.fps())).ceil() as u32;
     let mut hasher = DefaultHasher::new();
     editor.project_path.hash(&mut hasher);
+    web_fast.hash(&mut hasher);
     serde_json::to_vec(&(&project, settings))
         .map_err(|error| error.to_string())?
         .hash(&mut hasher);
@@ -246,7 +268,11 @@ pub async fn estimate_export(
         return Err("Recording sources changed during export estimation".into());
     }
     let setup_seconds = setup_started.elapsed().as_secs_f64();
-    let plan = sample_plan(settings);
+    let plan = if web_fast {
+        sample_plan_web(settings)
+    } else {
+        sample_plan(settings)
+    };
     let windows = sample_windows(
         total_frames,
         plan.window_frames,
@@ -443,6 +469,20 @@ fn sample_plan(settings: ExportSettings) -> SamplePlan {
             timing: FrameTiming::Steady,
             keyframe_interval,
         },
+    }
+}
+
+fn sample_plan_web(settings: ExportSettings) -> SamplePlan {
+    let plan = sample_plan(settings);
+    if matches!(settings, ExportSettings::Mp4(mp4) if !mp4.optimize_filesize) {
+        SamplePlan {
+            windows: 2,
+            window_frames: 24,
+            leading_window: true,
+            ..plan
+        }
+    } else {
+        plan
     }
 }
 
@@ -917,6 +957,20 @@ mod tests {
         assert_eq!((hardware.windows, hardware.window_frames), (4, 32));
         assert_eq!(hardware.timing, FrameTiming::Steady);
         assert_eq!(hardware.keyframe_interval, Some(120));
+        let web = sample_plan_web(ExportSettings::Mp4(crate::mp4::Mp4ExportSettings {
+            fps: 30,
+            resolution_base: cap_project::XY { x: 1280, y: 720 },
+            compression: crate::mp4::ExportCompression::Social,
+            custom_bpp: None,
+            force_ffmpeg_decoder: false,
+            optimize_filesize: false,
+        }));
+        assert_eq!((web.windows, web.window_frames), (2, 24));
+        assert!(web.leading_window);
+        assert_eq!(
+            sample_windows(90, web.window_frames, web.windows, web.leading_window).len(),
+            48
+        );
         let x264 = sample_plan(ExportSettings::Mp4(crate::mp4::Mp4ExportSettings {
             fps: 30,
             resolution_base: cap_project::XY { x: 1920, y: 1080 },
@@ -928,6 +982,15 @@ mod tests {
         assert_eq!((x264.windows, x264.window_frames), (3, 90));
         assert!(!x264.leading_window && hardware.leading_window);
         assert_eq!(x264.timing, FrameTiming::GopAmortized);
+        let web_x264 = sample_plan_web(ExportSettings::Mp4(crate::mp4::Mp4ExportSettings {
+            fps: 30,
+            resolution_base: cap_project::XY { x: 1920, y: 1080 },
+            compression: crate::mp4::ExportCompression::Social,
+            custom_bpp: None,
+            force_ffmpeg_decoder: false,
+            optimize_filesize: true,
+        }));
+        assert_eq!((web_x264.windows, web_x264.window_frames), (3, 90));
     }
 
     fn plan(timing: FrameTiming) -> SamplePlan {

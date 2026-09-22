@@ -13,7 +13,7 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use cap_editor::{AudioOutput, EditorInstance, default_screen_recording_project_config};
 use cap_export::{
     ExporterBase,
-    estimates::estimate_export,
+    estimates::estimate_export_web,
     make_cursor_only_project,
     preview::{ExportPreviewSettings, render_preview_with_config},
     settings::ExportSettings,
@@ -1024,7 +1024,7 @@ async fn estimate(
     )
     .await
     .map_err(io::Error::other)?;
-    let result = estimate_export(
+    let result = estimate_export_web(
         editor,
         config,
         settings,
@@ -1043,61 +1043,6 @@ async fn estimate(
         serde_json::json!({ "kind": "result", "value": result })
     );
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn imports_browser_input_as_native_editor_events() {
-        let directory = tempfile::tempdir().unwrap();
-        let source = directory.path().join("events.ndjson");
-        fs::write(
-            &source,
-            concat!(
-                "{\"version\":1,\"platform\":\"MacIntel\"}\n",
-                "{\"kind\":\"move\",\"timeMs\":12,\"x\":0.25,\"y\":0.5,\"cursor\":\"pointer\",\"button\":0,\"modifiers\":[]}\n",
-                "{\"kind\":\"down\",\"timeMs\":13,\"x\":0.25,\"y\":0.5,\"cursor\":\"pointer\",\"button\":0,\"modifiers\":[]}\n",
-                "{\"kind\":\"up\",\"timeMs\":20,\"x\":0.25,\"y\":0.5,\"cursor\":\"pointer\",\"button\":0,\"modifiers\":[]}\n",
-                "{\"kind\":\"keyDown\",\"timeMs\":21,\"key\":\"Escape\",\"code\":\"Escape\",\"modifiers\":[]}\n",
-            ),
-        )
-        .unwrap();
-        let data = load_web_input_events(&source).unwrap();
-        assert!(matches!(data.platform, Platform::MacOS));
-        assert_eq!(data.cursor.moves.len(), 1);
-        assert_eq!(data.cursor.clicks.len(), 2);
-        assert!(data.cursor.clicks[0].down);
-        assert!(!data.cursor.clicks[1].down);
-        assert_eq!(data.keyboard.presses.len(), 1);
-        assert_eq!(data.keyboard.presses[0].key_code, "Escape");
-        assert!(data.styles.contains("pointer"));
-    }
-
-    #[test]
-    fn rejects_incomplete_or_private_input_events() {
-        let directory = tempfile::tempdir().unwrap();
-        let source = directory.path().join("events.ndjson");
-        fs::write(
-            &source,
-            concat!(
-                "{\"version\":1,\"platform\":\"MacIntel\"}\n",
-                "{\"kind\":\"keyDown\",\"timeMs\":21,\"key\":\"secret\",\"code\":\"\",\"modifiers\":[],\"text\":\"secret\"}\n",
-            ),
-        )
-        .unwrap();
-        assert!(load_web_input_events(&source).is_err());
-        fs::write(
-            &source,
-            concat!(
-                "{\"version\":1,\"platform\":\"MacIntel\"}\n",
-                "{\"kind\":\"keyDown\",\"timeMs\":21,\"key\":\"k\",\"code\":\"KeyK\",\"modifiers\":[]}\n",
-            ),
-        )
-        .unwrap();
-        assert!(load_web_input_events(&source).is_err());
-    }
 }
 
 #[tokio::main]
@@ -1205,4 +1150,59 @@ async fn main() -> Result<(), Box<dyn Error>> {
         return Err(invalid_input("Unexpected extra arguments").into());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn imports_browser_input_as_native_editor_events() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("events.ndjson");
+        fs::write(
+            &source,
+            concat!(
+                "{\"version\":1,\"platform\":\"MacIntel\"}\n",
+                "{\"kind\":\"move\",\"timeMs\":12,\"x\":0.25,\"y\":0.5,\"cursor\":\"pointer\",\"button\":0,\"modifiers\":[]}\n",
+                "{\"kind\":\"down\",\"timeMs\":13,\"x\":0.25,\"y\":0.5,\"cursor\":\"pointer\",\"button\":0,\"modifiers\":[]}\n",
+                "{\"kind\":\"up\",\"timeMs\":20,\"x\":0.25,\"y\":0.5,\"cursor\":\"pointer\",\"button\":0,\"modifiers\":[]}\n",
+                "{\"kind\":\"keyDown\",\"timeMs\":21,\"key\":\"Escape\",\"code\":\"Escape\",\"modifiers\":[]}\n",
+            ),
+        )
+        .unwrap();
+        let data = load_web_input_events(&source).unwrap();
+        assert!(matches!(data.platform, Platform::MacOS));
+        assert_eq!(data.cursor.moves.len(), 1);
+        assert_eq!(data.cursor.clicks.len(), 2);
+        assert!(data.cursor.clicks[0].down);
+        assert!(!data.cursor.clicks[1].down);
+        assert_eq!(data.keyboard.presses.len(), 1);
+        assert_eq!(data.keyboard.presses[0].key_code, "Escape");
+        assert!(data.styles.contains("pointer"));
+    }
+
+    #[test]
+    fn rejects_incomplete_or_private_input_events() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("events.ndjson");
+        fs::write(
+            &source,
+            concat!(
+                "{\"version\":1,\"platform\":\"MacIntel\"}\n",
+                "{\"kind\":\"keyDown\",\"timeMs\":21,\"key\":\"secret\",\"code\":\"\",\"modifiers\":[],\"text\":\"secret\"}\n",
+            ),
+        )
+        .unwrap();
+        assert!(load_web_input_events(&source).is_err());
+        fs::write(
+            &source,
+            concat!(
+                "{\"version\":1,\"platform\":\"MacIntel\"}\n",
+                "{\"kind\":\"keyDown\",\"timeMs\":21,\"key\":\"k\",\"code\":\"KeyK\",\"modifiers\":[]}\n",
+            ),
+        )
+        .unwrap();
+        assert!(load_web_input_events(&source).is_err());
+    }
 }

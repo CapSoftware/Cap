@@ -439,7 +439,18 @@ try {
 		},
 	});
 	base = `http://127.0.0.1:${server.port}`;
-	browser = await engine.launch({ headless: true });
+	browser = await engine.launch({
+		headless: process.env.CAP_EDITOR_UI_HEADED !== "1",
+		...(process.env.CAP_EDITOR_UI_HEADED === "1" &&
+		process.env.CAP_EDITOR_UI_BROWSER === "firefox"
+			? {
+					firefoxUserPrefs: {
+						"webgl.force-enabled": true,
+						"webgl.forbid-software": false,
+					},
+				}
+			: {}),
+	});
 	const page = await browser.newPage({
 		viewport: { width: 1440, height: 900 },
 	});
@@ -581,8 +592,6 @@ try {
 			);
 			return [...context.getImageData(0, 0, 1, 1).data];
 		});
-	assert.ok((cropSourceSample[0] ?? 0) > 200);
-	assert.ok((cropSourceSample[1] ?? 255) < 50);
 	await editor.getByText("Rendering preview…").waitFor({
 		state: "hidden",
 		timeout: 10_000,
@@ -597,6 +606,22 @@ try {
 		cropDataUrl.split(",")[1] ?? "",
 		"base64",
 	);
+	if ((cropSourceSample[0] ?? 0) <= 200 || (cropSourceSample[1] ?? 255) >= 50) {
+		process.stderr.write(
+			`${JSON.stringify({ stage: "crop-source", browserEngine: engine.name(), cropSourceSample })}\n`,
+		);
+		await reportStageFailure(
+			"crop-source",
+			page,
+			editor,
+			new Error("Crop did not show the red display clip"),
+			pageErrors,
+			pageWarnings,
+			failedResponses,
+		);
+	}
+	assert.ok((cropSourceSample[0] ?? 0) > 200);
+	assert.ok((cropSourceSample[1] ?? 255) < 50);
 	await editor.getByRole("button", { name: "Cancel", exact: true }).click();
 	assert.equal(workerRequests, 0);
 	const { data: browserPixels, info: browserInfo } = await sharp(
@@ -824,6 +849,7 @@ try {
 		);
 		throw cause;
 	}
+	const workerExportEstimateMs = Date.now() - exportPreviewStartedAt;
 	assert.equal(preparationRequests, 1);
 	assert.ok(workerRequests > 0);
 	assert.ok(sessionId);
@@ -831,7 +857,7 @@ try {
 	assert.deepEqual(failedResponses, []);
 	assert.deepEqual(pageErrors, []);
 	process.stdout.write(
-		`${JSON.stringify({ browserEngine: engine.name(), browserOnly: true, bootstrapRequests, rangeRequests, workerRequests, preparationRequests, playbackAdvanced: true, persistedGradient: true, workerExportPreviewVisible: true, workerExportEstimateVisible: true, workerExportPreviewMs, meanAbsoluteError, psnrDb, differentPixels, totalPixels: browserInfo.width * browserInfo.height, pageErrors, failedResponses })}\n`,
+		`${JSON.stringify({ browserEngine: engine.name(), browserOnly: true, bootstrapRequests, rangeRequests, workerRequests, preparationRequests, playbackAdvanced: true, persistedGradient: true, workerExportPreviewVisible: true, workerExportEstimateVisible: true, workerExportPreviewMs, workerExportEstimateMs, meanAbsoluteError, psnrDb, differentPixels, totalPixels: browserInfo.width * browserInfo.height, pageErrors, failedResponses })}\n`,
 	);
 	await page.evaluate(() => {
 		(
