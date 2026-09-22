@@ -1302,8 +1302,8 @@ async function replay(forceWebGl, forceWebGpu = false) {
 			"Imported image background did not change the GPU frame",
 		);
 		assert(
-			result.blurChangedPixels > 1000,
-			"Background blur did not change the GPU frame",
+			result.blurChangedPixels > result.width * result.height * 0.004,
+			`Background blur changed ${result.blurChangedPixels} pixels at ${result.width}×${result.height}`,
 		);
 		assert(
 			result.startChangedPixels < 100,

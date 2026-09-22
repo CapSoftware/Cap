@@ -1231,6 +1231,11 @@ try {
 			differentPixels: number;
 			totalPixels: number;
 		} | null = null;
+		let firefoxColorPath: {
+			webCodecsSupported: boolean;
+			kind: string | null;
+			matrix: string | null;
+		} | null = null;
 		if (!cursorMovReplay && !canvasFallbackReplay) {
 			await editor.locator("#canvas").evaluate(async (canvas) => {
 				const previewSurface = canvas.parentElement?.parentElement;
@@ -1242,6 +1247,42 @@ try {
 					await new Promise((resolve) => setTimeout(resolve, 25));
 				}
 			});
+			if (browserEngine.name() === "firefox" && proCaptions && shareReplay) {
+				firefoxColorPath = await page.evaluate(async () => {
+					let webCodecsSupported = false;
+					if (typeof VideoDecoder === "function") {
+						try {
+							webCodecsSupported =
+								(
+									await VideoDecoder.isConfigSupported({
+										codec: "avc1.64001e",
+										codedWidth: 640,
+										codedHeight: 360,
+									})
+								).supported === true;
+						} catch {
+							webCodecsSupported = false;
+						}
+					}
+					const source: unknown = Reflect.get(window, "capTestColorPath");
+					const path =
+						typeof source === "object" && source !== null ? source : null;
+					return {
+						webCodecsSupported,
+						kind:
+							path && "kind" in path && typeof path.kind === "string"
+								? path.kind
+								: null,
+						matrix:
+							path && "matrix" in path && typeof path.matrix === "string"
+								? path.matrix
+								: null,
+					};
+				});
+				if (firefoxColorPath.webCodecsSupported) {
+					assert.equal(firefoxColorPath.kind, "VideoFrame");
+				}
+			}
 			const canvasSize = await editor.locator("#canvas").evaluate((canvas) => {
 				const element = canvas as HTMLCanvasElement;
 				return { width: element.width, height: element.height };
@@ -1388,6 +1429,7 @@ try {
 					browserEngine: browserEngine.name(),
 					proCaptions,
 					shareReplay,
+					firefoxColorPath,
 					nativePreviewParity,
 					centerBrowser: [...browserPixels.subarray(center, center + 3)],
 					centerNative: [...nativePixels.subarray(center, center + 3)],
@@ -2162,6 +2204,7 @@ try {
 				cursorMovReplay,
 				canvasFallbackReplay,
 				canvasFallbackPreviewPixel,
+				firefoxColorPath,
 				nativePreviewParity,
 				cursorMovVerification,
 				cursorMovExpectedStatus404,
