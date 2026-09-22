@@ -23,8 +23,8 @@ ENV CARGO_PROFILE_RELEASE_OPT_LEVEL=3 \
 	CARGO_PROFILE_RELEASE_DEBUG=0 \
 	CARGO_PROFILE_RELEASE_CODEGEN_UNITS=4
 
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-	--mount=type=cache,target=/source/target \
+RUN --mount=type=cache,id=cap-editor-cargo-registry,target=/usr/local/cargo/registry \
+	--mount=type=cache,id=cap-editor-target,target=/source/target \
 	cargo build --release --locked -p cap-export --bin web-editor -p cap-editor --bin web-editor-service --features cap-export/web-editor-camera-removal,cap-editor/web-editor-camera-removal \
 	&& install -Dm755 target/release/web-editor /out/web-editor \
 	&& install -Dm755 target/release/web-editor-service /out/web-editor-service
