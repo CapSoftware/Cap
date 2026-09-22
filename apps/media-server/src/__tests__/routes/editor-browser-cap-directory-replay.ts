@@ -34,7 +34,11 @@ const wrongRoot = join(temporary, "ordinary-folder");
 const expected = new Map([
 	[
 		"recording-meta.json",
-		'{"segments":[{"display":{"path":"content/segments/segment-0/display.mp4"}}]}',
+		JSON.stringify({
+			segments: [
+				{ display: { path: "content/segments/segment-0/display.mp4" } },
+			],
+		}),
 	],
 	["content/segments/segment-0/display.mp4", "screen-bytes-01"],
 	["content/segments/segment-0/camera.mp4", "camera-bytes-02"],
@@ -99,9 +103,10 @@ async function selectFolder(
 async function replay(browser: Browser, name: string) {
 	const page = await createPage(browser);
 	const alerts: string[] = [];
-	page.on("dialog", async (dialog) => {
+	const dialogAccepts: Promise<void>[] = [];
+	page.on("dialog", (dialog) => {
 		alerts.push(dialog.message());
-		await dialog.accept();
+		dialogAccepts.push(dialog.accept());
 	});
 	try {
 		const token = await selectFolder(page, good);
@@ -149,16 +154,21 @@ async function replay(browser: Browser, name: string) {
 			expected,
 		);
 		assert.equal(alerts.length, 0);
+		const missingDialog = page.waitForEvent("dialog", { timeout: 10_000 });
 		const missingToken = await selectFolder(page, missingMedia);
+		await missingDialog;
 		assert.equal(missingToken, null);
 		assert.match(alerts.at(-1) ?? "", /missing Cap recording media/);
+		const wrongRootDialog = page.waitForEvent("dialog", { timeout: 10_000 });
 		const wrongRootToken = await selectFolder(page, wrongRoot);
+		await wrongRootDialog;
 		assert.equal(wrongRootToken, null);
 		assert.match(alerts.at(-1) ?? "", /Select a \.cap recording folder/);
 		console.log(
 			JSON.stringify({ name, entries: result.entries.length, alerts }),
 		);
 	} finally {
+		await Promise.all(dialogAccepts);
 		await page.close();
 	}
 }

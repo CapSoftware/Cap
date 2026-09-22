@@ -42,6 +42,11 @@ const FRAME_BACKPRESSURE_BYTES = 4 * 1024 * 1024;
 const MAX_COMMAND_BYTES = 8 * 1024 * 1024 + 64 * 1024;
 const MAX_CROP_JPEG_BYTES = 2 * 1024 * 1024;
 const MAX_PENDING_COMMANDS = 64;
+const H264_MODE = JSON.stringify({ mode: "h264" });
+const PNG_MODE = JSON.stringify({ mode: "png" });
+const LOW_BITRATE = JSON.stringify({ bitrate: "low" });
+const HIGH_BITRATE = JSON.stringify({ bitrate: "high" });
+const BANDWIDTH_PROBE_REQUEST = JSON.stringify({ probe: "bandwidth" });
 const BANDWIDTH_PROBE = Buffer.concat([
 	Buffer.from("CAPBAND1"),
 	randomBytes(512 * 1024),
@@ -117,7 +122,7 @@ function connectEditorUpstream(
 			ws.data.frameMode === "h264" &&
 			ws.data.reducedBitrate
 		) {
-			upstream.send('{"bitrate":"low"}');
+			upstream.send(LOW_BITRATE);
 		}
 	};
 	upstream.onmessage = (event: MessageEvent<unknown>) => {
@@ -133,15 +138,13 @@ function connectEditorUpstream(
 			ws.getBufferedAmount() > 1024 * 1024
 		) {
 			ws.data.reducedBitrate = true;
-			if (upstream.readyState === WebSocket.OPEN)
-				upstream.send('{"bitrate":"low"}');
+			if (upstream.readyState === WebSocket.OPEN) upstream.send(LOW_BITRATE);
 		}
 		if (ws.getBufferedAmount() > FRAME_BACKPRESSURE_BYTES) {
 			if (ws.data.scope === "frames") {
 				if (ws.data.frameMode === "h264") {
 					ws.data.frameMode = "png-fallback";
-					if (upstream.readyState === WebSocket.OPEN)
-						upstream.send('{"mode":"png"}');
+					if (upstream.readyState === WebSocket.OPEN) upstream.send(PNG_MODE);
 					ws.send(
 						JSON.stringify({
 							kind: "cap-h264-unavailable",
@@ -183,38 +186,38 @@ export const editorWebSocketHandler: Bun.WebSocketHandler<EditorSocketConnection
 					ws.close(1008, "Invalid editor frame mode");
 					return;
 				}
-				if (message === '{"mode":"h264"}' && ws.data.frameMode === "png") {
+				if (message === H264_MODE && ws.data.frameMode === "png") {
 					ws.data.frameMode = "h264";
 					const upstream = new URL(ws.data.upstreamUrl);
 					upstream.pathname = "/frames-h264";
 					connectEditorUpstream(ws, upstream.toString());
 					return;
 				}
-				if (message === '{"mode":"h264"}' && ws.data.frameMode === "h264") {
+				if (message === H264_MODE && ws.data.frameMode === "h264") {
 					return;
 				}
 				if (
-					message === '{"probe":"bandwidth"}' &&
+					message === BANDWIDTH_PROBE_REQUEST &&
 					!ws.data.bandwidthProbeUsed
 				) {
 					ws.data.bandwidthProbeUsed = true;
 					ws.send(BANDWIDTH_PROBE);
 					return;
 				}
-				if (message === '{"bitrate":"low"}' && ws.data.frameMode === "h264") {
+				if (message === LOW_BITRATE && ws.data.frameMode === "h264") {
 					ws.data.reducedBitrate = true;
 					if (ws.data.upstream?.readyState === WebSocket.OPEN)
 						ws.data.upstream.send(message);
 					return;
 				}
-				if (message === '{"bitrate":"high"}' && ws.data.frameMode === "h264") {
+				if (message === HIGH_BITRATE && ws.data.frameMode === "h264") {
 					ws.data.reducedBitrate = false;
 					if (ws.data.upstream?.readyState === WebSocket.OPEN)
 						ws.data.upstream.send(message);
 					return;
 				}
 				if (
-					message === '{"mode":"png"}' &&
+					message === PNG_MODE &&
 					(ws.data.frameMode === "h264" || ws.data.frameMode === "png-fallback")
 				) {
 					if (ws.data.frameMode === "png-fallback") return;

@@ -127,7 +127,7 @@ function assert(condition, message) {
 async function replay(forceWebGl, forceWebGpu = false) {
 	const background = await sharp(
 		Buffer.from(
-			'<svg xmlns="http://www.w3.org/2000/svg" width="240" height="240"><rect width="120" height="240" fill="#cc1242"/><rect x="120" width="120" height="240" fill="#1235cc"/></svg>',
+			"<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240'><rect width='120' height='240' fill='#cc1242'/><rect x='120' width='120' height='240' fill='#1235cc'/></svg>",
 		),
 	)
 		.png()
@@ -503,7 +503,7 @@ async function replay(forceWebGl, forceWebGpu = false) {
 								webgl2: Boolean(probe.getContext("webgl2")),
 								webm: document
 									.createElement("video")
-									.canPlayType('video/webm; codecs="vp8"'),
+									.canPlayType(`video/webm; codecs=${JSON.stringify("vp8")}`),
 							},
 						},
 					};

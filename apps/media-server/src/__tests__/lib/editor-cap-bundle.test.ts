@@ -7,7 +7,7 @@ import { extractEditorCapBundle } from "../../lib/editor-cap-bundle";
 
 test("extracts separate screen, camera, audio, cursor, and keyboard files", async () => {
 	const content = [
-		["recording-meta.json", '{"version":1}'],
+		["recording-meta.json", JSON.stringify({ version: 1 })],
 		["content/display.mp4", "screen"],
 		["content/camera.mp4", "camera"],
 		["content/mic.wav", "microphone"],

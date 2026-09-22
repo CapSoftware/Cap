@@ -8,6 +8,11 @@ const h264FrameMagic = new Uint8Array([67, 65, 80, 72, 50, 54, 52, 49]);
 const bandwidthProbeMagic = new Uint8Array([67, 65, 80, 66, 65, 78, 68, 49]);
 const pngMagic = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
 const rgbaCopyOptions = { format: "RGBA" as const };
+const h264ModeMessage = JSON.stringify({ mode: "h264" });
+const pngModeMessage = JSON.stringify({ mode: "png" });
+const lowBitrateMessage = JSON.stringify({ bitrate: "low" });
+const highBitrateMessage = JSON.stringify({ bitrate: "high" });
+const bandwidthProbeMessage = JSON.stringify({ probe: "bandwidth" });
 
 type PixelCanvas = OffscreenCanvas | HTMLCanvasElement;
 type PixelContext =
@@ -296,7 +301,7 @@ export function createWS(url: string) {
 		h264Metadata.clear();
 		latestDecoded?.frame.close();
 		latestDecoded = null;
-		if (socket.readyState === WebSocket.OPEN) socket.send('{"mode":"png"}');
+		if (socket.readyState === WebSocket.OPEN) socket.send(pngModeMessage);
 	};
 	const drainDecoded = async () => {
 		try {
@@ -482,12 +487,12 @@ export function createWS(url: string) {
 			return;
 		bandwidthProbeRequested = true;
 		bandwidthProbeStartedAt = performance.now();
-		socket.send('{"probe":"bandwidth"}');
+		socket.send(bandwidthProbeMessage);
 	};
 	socket.addEventListener("open", () => {
 		if (h264Requested) {
-			socket.send('{"mode":"h264"}');
-			socket.send('{"bitrate":"low"}');
+			socket.send(h264ModeMessage);
+			socket.send(lowBitrateMessage);
 			h264LowRequested = true;
 			const downlink = connection?.downlink;
 			if (
@@ -527,7 +532,7 @@ export function createWS(url: string) {
 				);
 				const measuredMbps = (512 * 1024 * 8 * 1000) / elapsedMs / 1_000_000;
 				if (measuredMbps > 12 && socket.readyState === WebSocket.OPEN) {
-					socket.send('{"bitrate":"high"}');
+					socket.send(highBitrateMessage);
 					h264LowRequested = false;
 				}
 			}
@@ -598,7 +603,7 @@ export function createWS(url: string) {
 					socket.readyState === WebSocket.OPEN
 				) {
 					h264LowRequested = true;
-					socket.send('{"bitrate":"low"}');
+					socket.send(lowBitrateMessage);
 				}
 				decodeH264(packet);
 			} catch (error) {

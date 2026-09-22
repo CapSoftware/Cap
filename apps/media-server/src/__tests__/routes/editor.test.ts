@@ -706,7 +706,7 @@ test.skipIf(!hasNativeBinaries)(
 				if (!fastStartSocket)
 					return reject(new Error("Missing fast-start editor socket"));
 				fastStartSocket.onopen = () => {
-					fastStartSocket?.send('{"bitrate":"low"}');
+					fastStartSocket?.send(JSON.stringify({ bitrate: "low" }));
 				};
 				fastStartSocket.onmessage = (event: MessageEvent<unknown>) => {
 					if (!(event.data instanceof ArrayBuffer)) return;
@@ -731,7 +731,7 @@ test.skipIf(!hasNativeBinaries)(
 			expect(
 				((await nativeMetrics.json()) as { h264Viewers: number }).h264Viewers,
 			).toBe(1);
-			fastStartSocket.send('{"mode":"h264"}');
+			fastStartSocket.send(JSON.stringify({ mode: "h264" }));
 			await Bun.sleep(150);
 			expect(fastStartPngFrames).toBe(1);
 			expect(fastStartSocket.protocol).toBe("cap-editor-v1");
