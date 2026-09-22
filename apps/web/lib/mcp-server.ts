@@ -17,6 +17,7 @@ const readOnly = {
 	readOnlyHint: true,
 	destructiveHint: false,
 	idempotentHint: true,
+	openWorldHint: false,
 };
 
 const result = (value: Record<string, unknown>) => ({
