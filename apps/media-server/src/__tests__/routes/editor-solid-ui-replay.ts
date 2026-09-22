@@ -176,6 +176,7 @@ let browserBootstrapRequests = 0;
 let browserMediaRangeRequests = 0;
 let imageImports = 0;
 let imagePreviewRequests = 0;
+let relativeImagePreviewRequests = 0;
 let uploadedImage: Uint8Array<ArrayBuffer> | null = null;
 let renderedExportId: string | null = null;
 let cursorMovTicketRequests = 0;
@@ -636,14 +637,17 @@ try {
 					return imported;
 				}
 				if (url.pathname === `${apiRoot}/file`) {
+					const requestedPath = url.searchParams.get("path");
 					if (
 						request.method !== "GET" ||
 						url.searchParams.get("videoId") !== videoId ||
-						url.searchParams.get("path") !==
-							`cap-web-editor://session/${sessionId}/${imagePath}`
+						(requestedPath !== imagePath &&
+							requestedPath !==
+								`cap-web-editor://session/${sessionId}/${imagePath}`)
 					)
 						return new Response("Image asset is unavailable", { status: 404 });
 					imagePreviewRequests++;
+					if (requestedPath === imagePath) relativeImagePreviewRequests++;
 					return Response.redirect(`${base}/test-image.jpg`);
 				}
 				if (url.pathname === `${apiRoot}/captions`) {
@@ -1984,6 +1988,7 @@ try {
 				{ cause },
 			);
 		}
+		assert.ok(relativeImagePreviewRequests > 0);
 		const exportScreenshot = await page.screenshot();
 		if (process.env.CAP_EDITOR_UI_EXPORT_SCREENSHOT_PATH)
 			await writeFile(
