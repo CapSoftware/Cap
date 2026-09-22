@@ -409,12 +409,12 @@ export function default_layer_uniforms(output_width, output_height, source_width
     return v1;
 }
 
-function __wbg_adapter_10(arg0, arg1) {
-    wasm.wasm_bindgen__convert__closures_____invoke__h147cdb123ff2ae0f(arg0, arg1);
+function __wbg_adapter_12(arg0, arg1, arg2) {
+    wasm.closure380_externref_shim(arg0, arg1, arg2);
 }
 
-function __wbg_adapter_17(arg0, arg1, arg2) {
-    wasm.closure380_externref_shim(arg0, arg1, arg2);
+function __wbg_adapter_21(arg0, arg1) {
+    wasm.wasm_bindgen__convert__closures_____invoke__h147cdb123ff2ae0f(arg0, arg1);
 }
 
 function __wbg_adapter_1122(arg0, arg1, arg2, arg3) {
@@ -775,10 +775,11 @@ export class BrowserVisualConfig {
      * @param {number} source_height
      * @param {boolean} camera
      * @param {number} frame_number
+     * @param {boolean} source_color_fix
      * @returns {Uint8Array}
      */
-    layer_uniforms(output_width, output_height, source_width, source_height, camera, frame_number) {
-        const ret = wasm.browservisualconfig_layer_uniforms(this.__wbg_ptr, output_width, output_height, source_width, source_height, camera, frame_number);
+    layer_uniforms(output_width, output_height, source_width, source_height, camera, frame_number, source_color_fix) {
+        const ret = wasm.browservisualconfig_layer_uniforms(this.__wbg_ptr, output_width, output_height, source_width, source_height, camera, frame_number, source_color_fix);
         if (ret[3]) {
             throw takeFromExternrefTable0(ret[2]);
         }
@@ -2745,7 +2746,7 @@ function __wbg_get_imports() {
     }, arguments) };
     imports.wbg.__wbindgen_cast_1c1d8705c7a88cf9 = function(arg0, arg1) {
         // Cast intrinsic for `Closure(Closure { dtor_idx: 379, function: Function { arguments: [Externref], shim_idx: 380, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-        const ret = makeMutClosure(arg0, arg1, 379, __wbg_adapter_17);
+        const ret = makeMutClosure(arg0, arg1, 379, __wbg_adapter_12);
         return ret;
     };
     imports.wbg.__wbindgen_cast_2241b6af4c4b2941 = function(arg0, arg1) {
@@ -2772,7 +2773,7 @@ function __wbg_get_imports() {
     };
     imports.wbg.__wbindgen_cast_aaa93aae03c115ab = function(arg0, arg1) {
         // Cast intrinsic for `Closure(Closure { dtor_idx: 1, function: Function { arguments: [], shim_idx: 2, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-        const ret = makeMutClosure(arg0, arg1, 1, __wbg_adapter_10);
+        const ret = makeMutClosure(arg0, arg1, 1, __wbg_adapter_21);
         return ret;
     };
     imports.wbg.__wbindgen_cast_bbb4883c6389f1de = function(arg0, arg1) {

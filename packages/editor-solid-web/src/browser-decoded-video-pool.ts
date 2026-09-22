@@ -1,4 +1,4 @@
-import type { Input, VideoSampleSink } from "mediabunny";
+import type { Input, VideoSample, VideoSampleSink } from "mediabunny";
 import type {
 	BrowserVideoRole,
 	BrowserVideoSourceProvider,
@@ -16,6 +16,11 @@ type DecodedSlot = {
 	input: Input;
 	sink: VideoSampleSink;
 	retagBt601: boolean;
+	iterator: AsyncGenerator<VideoSample, void, unknown> | null;
+	current: VideoSample | null;
+	upcoming: VideoSample | null;
+	lastRequestedTime: number;
+	serial: Promise<void>;
 };
 
 type SlotEntry = {
@@ -38,10 +43,66 @@ function releaseEntry(entry: SlotEntry) {
 	entry.retired = true;
 	if (entry.activeCalls > 0 || entry.released) return;
 	entry.released = true;
-	void entry.promise.then(
-		(slot) => slot?.input.dispose(),
-		() => undefined,
-	);
+	void entry.promise
+		.then(async (slot) => {
+			if (!slot) return;
+			try {
+				await slot.serial;
+				await resetStream(slot);
+			} finally {
+				slot.input.dispose();
+			}
+		})
+		.catch(() => undefined);
+}
+
+async function resetStream(slot: DecodedSlot) {
+	const iterator = slot.iterator;
+	slot.iterator = null;
+	slot.current?.close();
+	slot.current = null;
+	slot.upcoming?.close();
+	slot.upcoming = null;
+	slot.lastRequestedTime = -1;
+	if (iterator) await iterator.return();
+}
+
+async function sampleAtTime(
+	slot: DecodedSlot,
+	sourceTime: number,
+	stream: boolean,
+) {
+	if (!stream) {
+		await resetStream(slot);
+		return slot.sink.getSample(Math.max(sourceTime, 0.0001));
+	}
+	if (
+		slot.iterator &&
+		(sourceTime + 0.000001 < slot.lastRequestedTime ||
+			(slot.current && sourceTime + 0.000001 < slot.current.timestamp))
+	) {
+		await resetStream(slot);
+	}
+	if (!slot.iterator) {
+		slot.iterator = slot.sink.samples(Math.max(sourceTime, 0.0001));
+		const first = await slot.iterator.next();
+		if (first.done) return null;
+		slot.current = first.value;
+	}
+	if (!slot.current) return null;
+	while (sourceTime > slot.current.timestamp + 0.000001) {
+		if (!slot.upcoming) {
+			const next = await slot.iterator.next();
+			if (next.done) break;
+			slot.upcoming = next.value;
+		}
+		if (slot.upcoming.timestamp > sourceTime + 0.000001) break;
+		slot.current.close();
+		slot.current = slot.upcoming;
+		slot.upcoming = null;
+	}
+	slot.lastRequestedTime = sourceTime;
+	return slot.current.clone();
 }
 
 export class BrowserDecodedVideoPool {
@@ -84,6 +145,11 @@ export class BrowserDecodedVideoPool {
 			return {
 				input,
 				sink: new VideoSampleSink(track),
+				iterator: null,
+				current: null,
+				upcoming: null,
+				lastRequestedTime: -1,
+				serial: Promise.resolve(),
 				retagBt601:
 					config.codec.startsWith("avc1") &&
 					config.colorSpace === undefined &&
@@ -102,6 +168,9 @@ export class BrowserDecodedVideoPool {
 		role: BrowserVideoRole,
 		sourceTime: number,
 		signal: AbortSignal,
+		stream = false,
+		maxSourceWidth: number | null = null,
+		maxSourceHeight: number | null = null,
 	): Promise<BrowserDecodedVideoFrame | null | "fallback"> {
 		if (this.disposed) throw new Error("Editor decoded video pool is closed");
 		if (!Number.isSafeInteger(segmentIndex) || segmentIndex < 0) {
@@ -109,6 +178,14 @@ export class BrowserDecodedVideoPool {
 		}
 		if (!Number.isFinite(sourceTime) || sourceTime < 0) {
 			throw new Error("Editor video time is invalid");
+		}
+		if (
+			(maxSourceWidth !== null &&
+				(!Number.isSafeInteger(maxSourceWidth) || maxSourceWidth < 2)) ||
+			(maxSourceHeight !== null &&
+				(!Number.isSafeInteger(maxSourceHeight) || maxSourceHeight < 2))
+		) {
+			throw new Error("Editor decoded frame size is invalid");
 		}
 		if (signal.aborted) {
 			throw signal.reason ?? new DOMException("Canceled", "AbortError");
@@ -151,7 +228,21 @@ export class BrowserDecodedVideoPool {
 			if (signal.aborted || this.disposed) {
 				throw signal.reason ?? new DOMException("Canceled", "AbortError");
 			}
-			const sample = await slot.sink.getSample(Math.max(sourceTime, 0.0001));
+			let releaseSerial: () => void = () => undefined;
+			const previous = slot.serial;
+			slot.serial = new Promise<void>((resolve) => {
+				releaseSerial = resolve;
+			});
+			let sample: VideoSample | null;
+			try {
+				await previous;
+				if (signal.aborted || this.disposed) {
+					throw signal.reason ?? new DOMException("Canceled", "AbortError");
+				}
+				sample = await sampleAtTime(slot, sourceTime, stream);
+			} finally {
+				releaseSerial();
+			}
 			if (!sample) throw new Error("Editor decoded frame is unavailable");
 			try {
 				let videoFrame = sample.toVideoFrame();
@@ -185,7 +276,34 @@ export class BrowserDecodedVideoPool {
 						videoFrame.close();
 						videoFrame = tagged;
 					}
-					const bitmap = await createImageBitmap(videoFrame);
+					const scale =
+						maxSourceWidth !== null && maxSourceHeight !== null
+							? Math.min(
+									1,
+									maxSourceWidth / videoFrame.displayWidth,
+									maxSourceHeight / videoFrame.displayHeight,
+								)
+							: 1;
+					let bitmap: ImageBitmap;
+					if (scale < 1) {
+						try {
+							bitmap = await createImageBitmap(videoFrame, {
+								resizeWidth: Math.max(
+									2,
+									Math.round(videoFrame.displayWidth * scale),
+								),
+								resizeHeight: Math.max(
+									2,
+									Math.round(videoFrame.displayHeight * scale),
+								),
+								resizeQuality: "medium",
+							});
+						} catch {
+							bitmap = await createImageBitmap(videoFrame);
+						}
+					} else {
+						bitmap = await createImageBitmap(videoFrame);
+					}
 					if (signal.aborted || this.disposed) {
 						bitmap.close();
 						throw signal.reason ?? new DOMException("Canceled", "AbortError");

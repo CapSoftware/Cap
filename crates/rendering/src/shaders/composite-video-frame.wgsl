@@ -18,7 +18,7 @@ struct Uniforms {
     border_enabled: f32,
     border_width: f32,
     preserve_source_alpha: f32,
-    _padding1a: f32,
+    source_color_fix: f32,
     _padding1b: f32,
     _padding1c: f32,
     border_color: vec4<f32>,
@@ -147,8 +147,16 @@ fn grain_hash(p: vec2<f32>) -> f32 {
 // output pixel after motion-blur resolve; ungraded layers skip everything in
 // a single coherent uniform branch.
 fn apply_color_grade(color: vec4<f32>, target_uv: vec2<f32>, frag_pos: vec2<f32>) -> vec4<f32> {
+    var corrected = color;
+    if uniforms.source_color_fix > 0.5 {
+        corrected.g = clamp(
+            -0.1483 * color.r + 1.2201 * color.g - 0.0718 * color.b,
+            0.0,
+            1.0,
+        );
+    }
     if uniforms.grain_params.z < 0.5 {
-        return color;
+        return corrected;
     }
 
     let exposure = uniforms.color_adjust_a.x;
@@ -162,7 +170,7 @@ fn apply_color_grade(color: vec4<f32>, target_uv: vec2<f32>, frag_pos: vec2<f32>
     let grain = uniforms.grain_params.x;
 
     // Exposure in stops.
-    var rgb = color.rgb * exp2(exposure);
+    var rgb = corrected.rgb * exp2(exposure);
 
     // White balance, multiplicative so black stays black.
     rgb = rgb * vec3<f32>(
@@ -210,7 +218,7 @@ fn apply_color_grade(color: vec4<f32>, target_uv: vec2<f32>, frag_pos: vec2<f32>
         rgb += (noise - 0.5) * grain * 0.35 * response;
     }
 
-    return vec4<f32>(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)), color.a);
+    return vec4<f32>(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)), corrected.a);
 }
 
 fn composite_source_over(foreground: vec4<f32>, background: vec4<f32>) -> vec4<f32> {

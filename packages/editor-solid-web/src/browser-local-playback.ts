@@ -37,6 +37,7 @@ type TrackFrame = {
 	height: number;
 	mediaTime: number;
 	release: () => void;
+	sourceColorFix: boolean;
 };
 
 function releasePair(pair: SourcePair | null) {
@@ -209,6 +210,7 @@ export class BrowserLocalPlayback {
 		private readonly screenWidth: number,
 		private readonly screenHeight: number,
 		private previewBase: { width: number; height: number } | null,
+		private readonly colorHints: Map<string, Promise<boolean>>,
 	) {
 		const timeline = timelineConfig(config, sourceDurations);
 		this.segments = segmentSettings(timeline);
@@ -292,6 +294,17 @@ export class BrowserLocalPlayback {
 			const config =
 				sources.projectConfig ??
 				JSON.parse(module.default_project_config_json());
+			const colorHints = new Map<string, Promise<boolean>>();
+			colorHints.set(
+				firstDisplay.url,
+				Promise.resolve(metadata.display.untaggedSdH264),
+			);
+			if (firstSegment.camera && metadata.camera) {
+				colorHints.set(
+					firstSegment.camera.url,
+					Promise.resolve(metadata.camera.untaggedSdH264),
+				);
+			}
 			const previewBase =
 				width === 0 && height === 0 ? { width: 1248, height: 702 } : null;
 			if ((width === 0) !== (height === 0)) {
@@ -334,6 +347,7 @@ export class BrowserLocalPlayback {
 				display.videoWidth,
 				display.videoHeight,
 				previewBase,
+				colorHints,
 			);
 			await controls.setProjectConfig(config);
 			await playback.seek(0);
@@ -481,6 +495,24 @@ export class BrowserLocalPlayback {
 		);
 	}
 
+	private async fallbackColorFix(url: string, signal: AbortSignal) {
+		if (!navigator.userAgent.includes("Firefox/")) return false;
+		let hint = this.colorHints.get(url);
+		if (!hint) {
+			hint = import("../../../apps/web/lib/browser-editor-metadata").then(
+				({ probeBrowserEditorColor }) => probeBrowserEditorColor(url, signal),
+			);
+			this.colorHints.set(url, hint);
+		}
+		try {
+			return await hint;
+		} catch (cause) {
+			this.colorHints.delete(url);
+			if (signal.aborted) throw cause;
+			return false;
+		}
+	}
+
 	private async trackFrame(
 		recordingClip: number,
 		track: "display" | "camera",
@@ -503,6 +535,9 @@ export class BrowserLocalPlayback {
 				role,
 				sourceTime,
 				signal,
+				playing && !forceSeek,
+				this.width * 2,
+				this.height * 2,
 			);
 			if (decoded === null) return null;
 			if (decoded !== "fallback") {
@@ -512,6 +547,7 @@ export class BrowserLocalPlayback {
 					height: decoded.height,
 					mediaTime: decoded.mediaTime,
 					release: () => decoded.bitmap.close(),
+					sourceColorFix: false,
 				};
 			}
 		}
@@ -526,6 +562,10 @@ export class BrowserLocalPlayback {
 			forceSeek,
 		);
 		if (!video) return null;
+		const sourceColorFix = await this.fallbackColorFix(
+			video.currentSrc || video.src,
+			signal,
+		);
 		const maxSourceWidth = this.width * 2;
 		const maxSourceHeight = this.height * 2;
 		const scale = Math.min(
@@ -550,6 +590,7 @@ export class BrowserLocalPlayback {
 					height: bitmap.height,
 					mediaTime: video.currentTime,
 					release: () => bitmap.close(),
+					sourceColorFix,
 				};
 			} catch (cause) {
 				if (signal.aborted) throw cause;
@@ -561,6 +602,7 @@ export class BrowserLocalPlayback {
 			height: video.videoHeight,
 			mediaTime: video.currentTime,
 			release: () => undefined,
+			sourceColorFix,
 		};
 	}
 
@@ -631,6 +673,7 @@ export class BrowserLocalPlayback {
 					screen.height,
 					false,
 					frameNumber,
+					screen.sourceColorFix,
 				),
 			},
 			camera: camera
@@ -645,6 +688,7 @@ export class BrowserLocalPlayback {
 							camera.height,
 							true,
 							frameNumber,
+							camera.sourceColorFix,
 						),
 					}
 				: null,

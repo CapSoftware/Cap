@@ -2048,6 +2048,7 @@ impl BrowserVisualConfig {
         source_height: u32,
         camera: bool,
         frame_number: u32,
+        source_color_fix: bool,
     ) -> Result<Vec<u8>, JsValue> {
         if output_width == 0 || output_height == 0 || source_width == 0 || source_height == 0 {
             return Err(js_error("Editor layer dimensions are invalid"));
@@ -2058,6 +2059,7 @@ impl BrowserVisualConfig {
             crop_bounds: [0.0, 0.0, source_width as f32, source_height as f32],
             ..Default::default()
         };
+        uniforms._padding1[0] = if source_color_fix { 1.0 } else { 0.0 };
         if camera {
             if self.project.camera.hide {
                 uniforms.opacity = 0.0;

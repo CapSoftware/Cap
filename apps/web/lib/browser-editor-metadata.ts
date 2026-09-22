@@ -6,6 +6,7 @@ export type BrowserEditorMediaMetadata = {
 	height: number | null;
 	audioChannels: number | null;
 	sampleRate: number | null;
+	untaggedSdH264: boolean;
 };
 
 function boundedMetadataFetch(input: RequestInfo | URL, init?: RequestInit) {
@@ -20,6 +21,51 @@ function boundedMetadataFetch(input: RequestInfo | URL, init?: RequestInit) {
 	return fetch(input, { ...init, headers });
 }
 
+function metadataInput(url: string) {
+	return new Input({
+		formats: ALL_FORMATS,
+		source: new UrlSource(url, {
+			maxCacheSize: 4 * 1024 * 1024,
+			fetchFn: boundedMetadataFetch as typeof fetch,
+		}),
+	});
+}
+
+async function untaggedSdH264(
+	video: Awaited<ReturnType<Input["getPrimaryVideoTrack"]>>,
+	width: number | null,
+	height: number | null,
+) {
+	if (!video || width === null || height === null) return false;
+	if (width > 720 || height > 576) return false;
+	const config = await video.getDecoderConfig().catch(() => null);
+	return !!config && config.codec.startsWith("avc1") && !config.colorSpace;
+}
+
+export async function probeBrowserEditorColor(
+	url: string,
+	signal: AbortSignal,
+) {
+	if (signal.aborted) {
+		throw signal.reason ?? new DOMException("Canceled", "AbortError");
+	}
+	const input = metadataInput(url);
+	const onAbort = () => input.dispose();
+	signal.addEventListener("abort", onAbort, { once: true });
+	try {
+		const video = await input.getPrimaryVideoTrack();
+		if (!video) return false;
+		const [width, height] = await Promise.all([
+			video.getDisplayWidth(),
+			video.getDisplayHeight(),
+		]);
+		return untaggedSdH264(video, width, height);
+	} finally {
+		signal.removeEventListener("abort", onAbort);
+		input.dispose();
+	}
+}
+
 export async function probeBrowserEditorMedia(
 	url: string,
 	signal: AbortSignal,
@@ -27,13 +73,7 @@ export async function probeBrowserEditorMedia(
 	if (signal.aborted) {
 		throw signal.reason ?? new DOMException("Canceled", "AbortError");
 	}
-	const input = new Input({
-		formats: ALL_FORMATS,
-		source: new UrlSource(url, {
-			maxCacheSize: 4 * 1024 * 1024,
-			fetchFn: boundedMetadataFetch as typeof fetch,
-		}),
-	});
+	const input = metadataInput(url);
 	const onAbort = () => input.dispose();
 	signal.addEventListener("abort", onAbort, { once: true });
 	try {
@@ -65,7 +105,14 @@ export async function probeBrowserEditorMedia(
 		) {
 			throw new Error("Editor media metadata is invalid");
 		}
-		return { duration, width, height, audioChannels, sampleRate };
+		return {
+			duration,
+			width,
+			height,
+			audioChannels,
+			sampleRate,
+			untaggedSdH264: await untaggedSdH264(video, width, height),
+		};
 	} catch (cause) {
 		if (signal.aborted) {
 			throw signal.reason ?? new DOMException("Canceled", "AbortError");

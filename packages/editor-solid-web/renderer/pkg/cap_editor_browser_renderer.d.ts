@@ -33,7 +33,7 @@ export class BrowserVisualConfig {
   free(): void;
   constructor(config_json: string);
   output_dimensions(source_width: number, source_height: number, resolution_width: number, resolution_height: number): Uint32Array;
-  layer_uniforms(output_width: number, output_height: number, source_width: number, source_height: number, camera: boolean, frame_number: number): Uint8Array;
+  layer_uniforms(output_width: number, output_height: number, source_width: number, source_height: number, camera: boolean, frame_number: number, source_color_fix: boolean): Uint8Array;
 }
 
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
@@ -65,7 +65,7 @@ export interface InitOutput {
   readonly __wbg_browservisualconfig_free: (a: number, b: number) => void;
   readonly browservisualconfig_new: (a: number, b: number) => [number, number, number];
   readonly browservisualconfig_output_dimensions: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
-  readonly browservisualconfig_layer_uniforms: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
+  readonly browservisualconfig_layer_uniforms: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
   readonly __wbindgen_exn_store: (a: number) => void;
   readonly __externref_table_alloc: () => number;
   readonly __wbindgen_export_2: WebAssembly.Table;
@@ -74,8 +74,8 @@ export interface InitOutput {
   readonly __wbindgen_export_5: WebAssembly.Table;
   readonly __wbindgen_free: (a: number, b: number, c: number) => void;
   readonly __externref_table_dealloc: (a: number) => void;
-  readonly wasm_bindgen__convert__closures_____invoke__h147cdb123ff2ae0f: (a: number, b: number) => void;
   readonly closure380_externref_shim: (a: number, b: number, c: any) => void;
+  readonly wasm_bindgen__convert__closures_____invoke__h147cdb123ff2ae0f: (a: number, b: number) => void;
   readonly closure1450_externref_shim: (a: number, b: number, c: any, d: any) => void;
   readonly __wbindgen_start: () => void;
 }
