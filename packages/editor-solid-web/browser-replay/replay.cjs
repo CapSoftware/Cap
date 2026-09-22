@@ -158,6 +158,11 @@ async function replay(forceWebGl, forceWebGpu = false) {
 				console.info(
 					`Cap replay stage: WebGPU adapter ${adapter ? "ready" : "unavailable"}`,
 				);
+				if (adapter?.info) {
+					console.info(
+						`Cap replay stage: WebGPU adapter info ${JSON.stringify({ vendor: adapter.info.vendor, architecture: adapter.info.architecture, device: adapter.info.device, description: adapter.info.description })}`,
+					);
+				}
 				return adapter;
 			};
 		});
@@ -399,6 +404,43 @@ async function replay(forceWebGl, forceWebGpu = false) {
 					};
 					const withCamera = await snapshot();
 					console.info("Cap replay stage: first GPU frame inspected");
+					if (/webgpu/i.test(backend)) {
+						playback.canvas.renderer.redraw_last();
+						const captured = await new Promise((resolve) =>
+							canvas.toBlob(resolve, "image/png"),
+						);
+						if (captured) {
+							const bitmap = await createImageBitmap(captured);
+							const sample = document.createElement("canvas");
+							sample.width = bitmap.width;
+							sample.height = bitmap.height;
+							const sampleContext = sample.getContext("2d", {
+								willReadFrequently: true,
+							});
+							if (sampleContext) {
+								sampleContext.drawImage(bitmap, 0, 0);
+								const pixels = sampleContext.getImageData(
+									0,
+									0,
+									bitmap.width,
+									bitmap.height,
+								).data;
+								let nonblack = 0;
+								for (let index = 0; index < pixels.length; index += 4) {
+									if (
+										pixels[index] + pixels[index + 1] + pixels[index + 2] >
+										48
+									) {
+										nonblack++;
+									}
+								}
+								console.info(
+									`Cap replay stage: WebGPU canvas toBlob nonblack ${nonblack}/${bitmap.width * bitmap.height}`,
+								);
+							}
+							bitmap.close();
+						}
+					}
 					const config = JSON.parse(
 						playback.module.default_project_config_json(),
 					);
