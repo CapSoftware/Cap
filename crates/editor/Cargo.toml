@@ -43,7 +43,7 @@ sentry.workspace = true
 futures = { workspace = true }
 tracing.workspace = true
 flume.workspace = true
-tokio-util = "0.7.15"
+tokio-util = { version = "0.7.15", features = ["rt"] }
 ringbuf = "0.4.8"
 lru = "0.12"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

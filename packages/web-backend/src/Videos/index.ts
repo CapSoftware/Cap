@@ -623,16 +623,12 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 						metadata: Option.none<RepoMetadataValue>(),
 						transcriptionStatus: Option.none<RepoTranscriptionStatusValue>(),
 					};
-					const videoId = yield* repo.create(createData);
-
-					if (input.supportsUploadProgress ?? true)
-						yield* db.use((db) =>
-							db.insert(Db.videoUploads).values({
-								videoId,
-								mode: "singlepart",
-							}),
-						);
-
+					const videoId = yield* repo.create(createData, {
+						initialUpload:
+							(input.supportsUploadProgress ?? true)
+								? { mode: "singlepart" }
+								: undefined,
+					});
 					const fileKey = `${user.id}/${videoId}/result.mp4`;
 					const upload = yield* writable.access.createUploadTarget(fileKey, {
 						contentType: "video/mp4",
@@ -647,7 +643,6 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 							"x-amz-meta-audiocodec": input.audioCodec ?? "",
 						},
 					});
-
 					const canonicalShareUrl = `${serverEnv().WEB_URL}/s/${videoId}`;
 
 					const verifiedCustomDomain = yield* db
