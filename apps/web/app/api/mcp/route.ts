@@ -1,9 +1,17 @@
 import {
+	HttpApi,
+	HttpApiBuilder,
+	HttpApiEndpoint,
+	HttpApiGroup,
+} from "@effect/platform";
+import { Layer } from "effect";
+import {
 	authenticateMcpBearer,
 	mcpIssuer,
 	mcpProtectedResourceMetadataUrl,
 	mcpResource,
 } from "@/lib/mcp-auth";
+import { mcpApiToHandler, mcpRequest } from "@/lib/mcp-effect";
 import { readMcpBody } from "@/lib/mcp-http";
 import { capMcpHandler } from "@/lib/mcp-server";
 
@@ -53,14 +61,14 @@ const challenge = (request: Request) =>
 		),
 	);
 
-export async function OPTIONS(request: Request) {
+async function handleOptions(request: Request) {
 	const origin = request.headers.get("origin");
 	if (origin && !allowedOrigins().has(origin))
 		return new Response(null, { status: 403 });
 	return respond(request, new Response(null, { status: 204 }));
 }
 
-export async function POST(request: Request) {
+async function handlePost(request: Request) {
 	const origin = request.headers.get("origin");
 	if (origin && !allowedOrigins().has(origin))
 		return new Response(null, { status: 403 });
@@ -102,7 +110,7 @@ export async function POST(request: Request) {
 	return respond(request, response);
 }
 
-export async function GET(request: Request) {
+async function handleGet(request: Request) {
 	const origin = request.headers.get("origin");
 	if (origin && !allowedOrigins().has(origin))
 		return new Response(null, { status: 403 });
@@ -115,3 +123,27 @@ export async function GET(request: Request) {
 		new Response("Stateless MCP endpoint", { status: 405 }),
 	);
 }
+
+class Api extends HttpApi.make("CapMcpTransportApi").add(
+	HttpApiGroup.make("root")
+		.add(HttpApiEndpoint.options("options")`/api/mcp`)
+		.add(HttpApiEndpoint.post("post")`/api/mcp`)
+		.add(HttpApiEndpoint.get("get")`/api/mcp`),
+) {}
+
+const ApiLive = HttpApiBuilder.api(Api).pipe(
+	Layer.provide(
+		HttpApiBuilder.group(Api, "root", (handlers) =>
+			handlers
+				.handle("options", () => mcpRequest(handleOptions))
+				.handle("post", () => mcpRequest(handlePost))
+				.handle("get", () => mcpRequest(handleGet)),
+		),
+	),
+);
+
+const handler = mcpApiToHandler(ApiLive);
+
+export const OPTIONS = handler;
+export const POST = handler;
+export const GET = handler;

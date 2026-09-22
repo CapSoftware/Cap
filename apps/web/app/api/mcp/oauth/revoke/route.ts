@@ -1,9 +1,17 @@
+import {
+	HttpApi,
+	HttpApiBuilder,
+	HttpApiEndpoint,
+	HttpApiGroup,
+} from "@effect/platform";
+import { Layer } from "effect";
 import { revokeMcpToken } from "@/lib/mcp-auth";
+import { mcpApiToHandler, mcpRequest } from "@/lib/mcp-effect";
 import { readMcpBody } from "@/lib/mcp-http";
 
 export const runtime = "nodejs";
 
-export async function POST(request: Request) {
+async function revoke(request: Request) {
 	if (
 		request.headers.get("content-type")?.split(";")[0] !==
 		"application/x-www-form-urlencoded"
@@ -26,3 +34,19 @@ export async function POST(request: Request) {
 		headers: { "Cache-Control": "no-store" },
 	});
 }
+
+class Api extends HttpApi.make("CapMcpRevocationApi").add(
+	HttpApiGroup.make("root").add(
+		HttpApiEndpoint.post("revoke")`/api/mcp/oauth/revoke`,
+	),
+) {}
+
+const ApiLive = HttpApiBuilder.api(Api).pipe(
+	Layer.provide(
+		HttpApiBuilder.group(Api, "root", (handlers) =>
+			handlers.handle("revoke", () => mcpRequest(revoke)),
+		),
+	),
+);
+
+export const POST = mcpApiToHandler(ApiLive);

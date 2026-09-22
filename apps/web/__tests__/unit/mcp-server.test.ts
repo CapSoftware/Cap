@@ -82,6 +82,52 @@ describe("hosted MCP transport", () => {
 		expect(response.status).toBe(403);
 	});
 
+	it("preserves browser preflight and OAuth challenge headers", async () => {
+		const origin = "https://chatgpt.com";
+		const preflight = await OPTIONS(
+			new Request("https://cap.so/api/mcp", {
+				method: "OPTIONS",
+				headers: { Origin: origin },
+			}),
+		);
+		expect(preflight.status).toBe(204);
+		expect(preflight.headers.get("access-control-allow-origin")).toBe(origin);
+		expect(preflight.headers.get("cache-control")).toBe("no-store");
+		const unauthorized = await POST(
+			new Request("https://cap.so/api/mcp", {
+				method: "POST",
+				headers: { Origin: origin, "Content-Type": "application/json" },
+				body: "{}",
+			}),
+		);
+		expect(unauthorized.status).toBe(401);
+		expect(unauthorized.headers.get("access-control-allow-origin")).toBe(
+			origin,
+		);
+		expect(unauthorized.headers.get("www-authenticate")).toContain(
+			"resource_metadata",
+		);
+	});
+
+	it("keeps host, origin, media type, and body limits ahead of MCP dispatch", async () => {
+		const payload = { jsonrpc: "2.0", id: 1, method: "initialize" };
+		const blockedOrigin = request(payload);
+		blockedOrigin.headers.set("Origin", "https://attacker.example");
+		expect((await POST(blockedOrigin)).status).toBe(403);
+		const wrongHost = new Request("https://elsewhere.example/api/mcp", {
+			method: "POST",
+			headers: { Authorization: "Bearer valid" },
+			body: JSON.stringify(payload),
+		});
+		expect((await POST(wrongHost)).status).toBe(421);
+		const wrongMediaType = request(payload);
+		wrongMediaType.headers.set("Content-Type", "text/plain");
+		expect((await POST(wrongMediaType)).status).toBe(415);
+		const oversized = request(payload);
+		oversized.headers.set("Content-Length", "32769");
+		expect((await POST(oversized)).status).toBe(413);
+	});
+
 	it("initializes, lists three read-only tools, and reads a recording", async () => {
 		const initialized = await POST(
 			request({

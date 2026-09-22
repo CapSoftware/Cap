@@ -243,4 +243,30 @@ describe("MCP OAuth authorization", () => {
 		);
 		expect(databaseState.inserted).toHaveLength(0);
 	});
+
+	it("preserves OAuth error and revocation responses", async () => {
+		const { POST: token } = await import("@/app/api/mcp/oauth/token/route");
+		const { POST: revoke } = await import("@/app/api/mcp/oauth/revoke/route");
+		const unsupported = await token(
+			new Request("https://cap.so/api/mcp/oauth/token", {
+				method: "POST",
+				headers: { "Content-Type": "application/x-www-form-urlencoded" },
+				body: "grant_type=client_credentials",
+			}),
+		);
+		expect(unsupported.status).toBe(400);
+		expect(await unsupported.json()).toEqual({
+			error: "unsupported_grant_type",
+		});
+		expect(unsupported.headers.get("cache-control")).toBe("no-store");
+		const invalid = await revoke(
+			new Request("https://cap.so/api/mcp/oauth/revoke", {
+				method: "POST",
+				headers: { "Content-Type": "application/x-www-form-urlencoded" },
+				body: "client_id=client",
+			}),
+		);
+		expect(invalid.status).toBe(400);
+		expect(await invalid.json()).toEqual({ error: "invalid_request" });
+	});
 });

@@ -1,10 +1,18 @@
+import {
+	HttpApi,
+	HttpApiBuilder,
+	HttpApiEndpoint,
+	HttpApiGroup,
+} from "@effect/platform";
+import { Layer } from "effect";
 import { exchangeMcpCode, refreshMcpTokens } from "@/lib/mcp-auth";
+import { mcpApiToHandler, mcpRequest } from "@/lib/mcp-effect";
 import { readMcpBody } from "@/lib/mcp-http";
 import { isRateLimited } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 
-export async function POST(request: Request) {
+async function token(request: Request) {
 	if (
 		request.headers.get("content-type")?.split(";")[0] !==
 		"application/x-www-form-urlencoded"
@@ -41,3 +49,19 @@ export async function POST(request: Request) {
 	}
 	return Response.json(result, { headers: { "Cache-Control": "no-store" } });
 }
+
+class Api extends HttpApi.make("CapMcpTokenApi").add(
+	HttpApiGroup.make("root").add(
+		HttpApiEndpoint.post("token")`/api/mcp/oauth/token`,
+	),
+) {}
+
+const ApiLive = HttpApiBuilder.api(Api).pipe(
+	Layer.provide(
+		HttpApiBuilder.group(Api, "root", (handlers) =>
+			handlers.handle("token", () => mcpRequest(token)),
+		),
+	),
+);
+
+export const POST = mcpApiToHandler(ApiLive);

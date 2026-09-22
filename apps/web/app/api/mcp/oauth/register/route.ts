@@ -1,10 +1,18 @@
+import {
+	HttpApi,
+	HttpApiBuilder,
+	HttpApiEndpoint,
+	HttpApiGroup,
+} from "@effect/platform";
+import { Layer } from "effect";
 import { isMcpRedirectUri, mcpIssuer, registerMcpClient } from "@/lib/mcp-auth";
+import { mcpApiToHandler, mcpRequest } from "@/lib/mcp-effect";
 import { readMcpBody } from "@/lib/mcp-http";
 import { isRateLimited } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 
-export async function POST(request: Request) {
+async function register(request: Request) {
 	if (
 		request.headers.get("content-type")?.split(";")[0] !== "application/json"
 	) {
@@ -82,3 +90,19 @@ export async function POST(request: Request) {
 		{ status: 201, headers: { "Cache-Control": "no-store" } },
 	);
 }
+
+class Api extends HttpApi.make("CapMcpRegistrationApi").add(
+	HttpApiGroup.make("root").add(
+		HttpApiEndpoint.post("register")`/api/mcp/oauth/register`,
+	),
+) {}
+
+const ApiLive = HttpApiBuilder.api(Api).pipe(
+	Layer.provide(
+		HttpApiBuilder.group(Api, "root", (handlers) =>
+			handlers.handle("register", () => mcpRequest(register)),
+		),
+	),
+);
+
+export const POST = mcpApiToHandler(ApiLive);
