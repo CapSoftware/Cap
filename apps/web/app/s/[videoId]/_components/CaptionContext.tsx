@@ -67,10 +67,16 @@ export function CaptionProvider({
 		staleTime: 5 * 60 * 1000,
 	});
 
-	const availableTranslations = useMemo(
-		() => availableData?.translations ?? [],
-		[availableData],
-	);
+	const availableTranslations = useMemo(() => {
+		const savedTranslations = availableData?.translations ?? [];
+		const savedCodes = new Set(savedTranslations.map(({ code }) => code));
+		return [
+			...savedTranslations,
+			...Array.from(translatedVttContent.keys())
+				.filter((code) => !savedCodes.has(code))
+				.map((code) => ({ code, name: SUPPORTED_LANGUAGES[code] })),
+		];
+	}, [availableData, translatedVttContent]);
 
 	const hasOriginal = availableData?.hasOriginal ?? false;
 

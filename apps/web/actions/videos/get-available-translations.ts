@@ -10,6 +10,7 @@ import * as EffectRuntime from "@/lib/server";
 import { runPromise } from "@/lib/server";
 import { decodeStorageVideo } from "@/lib/video-storage";
 import {
+	isLanguageCode,
 	type LanguageCode,
 	SUPPORTED_LANGUAGES,
 } from "./translation-languages";
@@ -97,15 +98,13 @@ export async function getAvailableTranslations(
 				continue;
 			}
 
-			const match = key.match(/transcription\.([a-z]{2})\.vtt$/);
-			if (match) {
-				const langCode = match[1] as LanguageCode;
-				if (SUPPORTED_LANGUAGES[langCode]) {
-					translations.push({
-						code: langCode,
-						name: SUPPORTED_LANGUAGES[langCode],
-					});
-				}
+			const match = key.match(/transcription\.([a-zA-Z-]+)\.vtt$/);
+			if (match && isLanguageCode(match[1])) {
+				const langCode = match[1];
+				translations.push({
+					code: langCode,
+					name: SUPPORTED_LANGUAGES[langCode],
+				});
 			}
 		}
 
