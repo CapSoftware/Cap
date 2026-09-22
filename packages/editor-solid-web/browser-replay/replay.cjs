@@ -1426,7 +1426,7 @@ async function replay(forceWebGl, forceWebGpu = false) {
 			new Promise((_, reject) => {
 				replayTimer = setTimeout(
 					() => reject(new Error(`Browser replay stalled at ${replayStage}`)),
-					45_000,
+					indexed ? 90_000 : 45_000,
 				);
 			}),
 		]).finally(() => clearTimeout(replayTimer));
