@@ -11,6 +11,8 @@ const output = path.join(__dirname, "out");
 const origin = "http://localhost:18999";
 const defaultFormat = browserName === "firefox" ? "webm" : "mp4";
 const indexed = process.env.CAP_REPLAY_INDEXED === "1";
+const simulateFailedProbe =
+	process.env.CAP_REPLAY_SIMULATE_FAILED_PROBE === "1";
 const fixturePrefix = indexed ? "indexed-" : "";
 
 function media(file) {
@@ -144,10 +146,19 @@ async function replay(forceWebGl, forceWebGpu = false) {
 				return device;
 			};
 		});
-		await page.addInitScript(() => {
+		await page.addInitScript((simulateFailedProbe) => {
 			const getContext = HTMLCanvasElement.prototype.getContext;
 			HTMLCanvasElement.prototype.getContext = function (kind, ...args) {
 				const result = getContext.call(this, kind, ...args);
+				if (
+					simulateFailedProbe &&
+					kind === "webgpu" &&
+					result &&
+					this.width === 8 &&
+					this.height === 8
+				) {
+					this.CapReplayProbeCanvas = true;
+				}
 				if (kind === "webgl2" || kind === "webgpu") {
 					console.info(
 						`Cap replay stage: canvas ${kind} context ${result ? "ready" : "unavailable"}${kind === "webgl2" && result ? ` lost=${result.isContextLost()}` : ""}`,
@@ -155,6 +166,17 @@ async function replay(forceWebGl, forceWebGpu = false) {
 				}
 				return result;
 			};
+			if (simulateFailedProbe) {
+				const toBlob = HTMLCanvasElement.prototype.toBlob;
+				HTMLCanvasElement.prototype.toBlob = function (callback, ...args) {
+					if (this.CapReplayProbeCanvas) {
+						window.CapReplayProbeForcedFailure = true;
+						queueMicrotask(() => callback(null));
+						return;
+					}
+					return toBlob.call(this, callback, ...args);
+				};
+			}
 			if (!navigator.gpu) return;
 			const gpuPrototype = Object.getPrototypeOf(navigator.gpu);
 			const requestAdapter = gpuPrototype.requestAdapter;
@@ -171,9 +193,15 @@ async function replay(forceWebGl, forceWebGpu = false) {
 						`Cap replay stage: WebGPU adapter info ${JSON.stringify({ vendor: adapter.info.vendor, architecture: adapter.info.architecture, device: adapter.info.device, description: adapter.info.description })}`,
 					);
 				}
-				return adapter;
+				return simulateFailedProbe && adapter
+					? {
+							info: { ...adapter.info, architecture: "probe-test" },
+							requestDevice: (...deviceArgs) =>
+								adapter.requestDevice(...deviceArgs),
+						}
+					: adapter;
 			};
-		});
+		}, simulateFailedProbe);
 		page.on("request", (request) => {
 			if (request.url().includes("/api/editor/sessions/")) {
 				workerRequests.push(request.url());
@@ -737,6 +765,7 @@ async function replay(forceWebGl, forceWebGpu = false) {
 						backend,
 						gpuAdapterArchitecture:
 							window.CapReplayGpuAdapterArchitecture ?? null,
+						probeForcedFailure: window.CapReplayProbeForcedFailure === true,
 						firstFrameMs,
 						seekMs,
 						returnToStartMs,
@@ -867,14 +896,30 @@ async function replay(forceWebGl, forceWebGpu = false) {
 		);
 		if (forceWebGl)
 			assert(/gl/i.test(result.backend), "WebGL fallback was not selected");
-		if (forceWebGpu && process.env.CAP_REPLAY_ALLOW_AUTO_FALLBACK !== "1")
-			assert(/webgpu/i.test(result.backend), "WebGPU path was not selected");
-		if (
-			forceWebGpu &&
-			process.env.CAP_REPLAY_ALLOW_AUTO_FALLBACK === "1" &&
-			result.gpuAdapterArchitecture === "swiftshader"
-		) {
-			assert(/gl/i.test(result.backend), "SwiftShader did not select WebGL2");
+		if (simulateFailedProbe) {
+			assert(
+				result.probeForcedFailure,
+				"Failed WebGPU probe was not exercised",
+			);
+			assert(
+				/gl/i.test(result.backend),
+				"Failed WebGPU probe did not select WebGL2",
+			);
+		} else if (forceWebGpu) {
+			if (process.env.CAP_REPLAY_ALLOW_AUTO_FALLBACK === "1") {
+				assert(
+					result.gpuAdapterArchitecture !== null,
+					"WebGPU adapter identity was unavailable",
+				);
+				assert(
+					result.gpuAdapterArchitecture === "swiftshader"
+						? /gl/i.test(result.backend)
+						: /webgpu/i.test(result.backend),
+					"Browser selected the wrong compositor for its GPU adapter",
+				);
+			} else {
+				assert(/webgpu/i.test(result.backend), "WebGPU path was not selected");
+			}
 		}
 		console.log(
 			JSON.stringify({
@@ -890,8 +935,9 @@ async function replay(forceWebGl, forceWebGpu = false) {
 }
 
 async function main() {
-	const modes =
-		process.env.CAP_REPLAY_ONLY_WEBGL === "1"
+	const modes = simulateFailedProbe
+		? [[false, true]]
+		: process.env.CAP_REPLAY_ONLY_WEBGL === "1"
 			? [[true, false]]
 			: process.env.CAP_REPLAY_REQUIRE_WEBGPU === "1"
 				? [[false, true]]

@@ -148,6 +148,28 @@ jobs:
           CAP_REPLAY_INDEXED: "1"
           CAP_REPLAY_ONLY_WEBGL: "1"
 
+  browser-studio-arm-webgpu:
+    name: Web Studio hardware WebGPU and probe fallback (Chromium arm64 macOS)
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: ./.github/actions/setup-js
+      - name: Install Chromium on macOS
+        run: bunx playwright install chromium
+      - name: Build browser compositor replay
+        run: bunx vite build --config packages/editor-solid-web/browser-replay/vite.config.ts
+      - name: Require healthy WebGPU playback
+        run: bun packages/editor-solid-web/browser-replay/replay.cjs chromium
+        env:
+          CAP_REPLAY_HEADED: "1"
+          CAP_REPLAY_REQUIRE_WEBGPU: "1"
+      - name: Require WebGL2 after a failed presentation probe
+        run: bun packages/editor-solid-web/browser-replay/replay.cjs chromium
+        env:
+          CAP_REPLAY_HEADED: "1"
+          CAP_REPLAY_SIMULATE_FAILED_PROBE: "1"
+
   browser-paired-recording:
     name: Web recorder paired capture (${{ matrix.browser }})
     strategy:
