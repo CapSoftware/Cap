@@ -1435,10 +1435,31 @@ try {
 			if (Math.max(...(canvasFallbackPreviewPixel ?? []).slice(0, 3)) <= 20) {
 				const browserState = await editor.locator("body").evaluate(() => {
 					const canvas = document.querySelector<HTMLCanvasElement>("#canvas");
+					const display = document.querySelector<HTMLVideoElement>("video");
+					const sample = (source: CanvasImageSource | null) => {
+						if (!source) return null;
+						const target = document.createElement("canvas");
+						target.width = 1;
+						target.height = 1;
+						const context = target.getContext("2d", {
+							willReadFrequently: true,
+						});
+						if (!context) return null;
+						try {
+							context.drawImage(source, 0, 0, 1, 1);
+							return Array.from(context.getImageData(0, 0, 1, 1).data);
+						} catch {
+							return null;
+						}
+					};
 					return {
 						canvasWidth: canvas?.width ?? null,
 						canvasHeight: canvas?.height ?? null,
 						canvasConnected: canvas?.isConnected ?? false,
+						canvasReadbackPixel: sample(canvas),
+						displayReadbackPixel: sample(display),
+						webglContextLost:
+							canvas?.getContext("webgl2")?.isContextLost() ?? null,
 						loadingFrame: document.body.textContent?.includes("Loading frame…"),
 						videos: Array.from(document.querySelectorAll("video")).map(
 							(video) => ({

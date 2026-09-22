@@ -1,6 +1,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { chromium, firefox, webkit } = require("playwright");
+const sharp = require("sharp");
 
 const browserName = process.argv[2];
 const browserType = { chromium, firefox, webkit }[browserName];
@@ -164,6 +165,22 @@ async function replay(forceWebGl, forceWebGpu = false) {
 			if (request.url().includes("/api/editor/sessions/")) {
 				workerRequests.push(request.url());
 			}
+		});
+		await page.exposeFunction("CapReplayPresentedIndex", async () => {
+			const screenshot = await page.locator("canvas").first().screenshot();
+			const { data, info } = await sharp(screenshot)
+				.raw()
+				.toBuffer({ resolveWithObject: true });
+			let index = 0;
+			for (let bit = 0; bit < 8; bit++) {
+				const x = Math.floor(((bit + 0.5) * info.width) / 8);
+				const y = Math.floor(info.height / 4);
+				const offset = (y * info.width + x) * info.channels;
+				if (data[offset] + data[offset + 1] + data[offset + 2] > 384) {
+					index |= 1 << bit;
+				}
+			}
+			return index;
 		});
 		if (forceWebGl) {
 			await page.addInitScript(() => {
@@ -499,7 +516,9 @@ async function replay(forceWebGl, forceWebGpu = false) {
 						};
 						const originalRender = playback.canvas.render.bind(playback.canvas);
 						const gpuReads = [];
+						let inspectGpu = true;
 						playback.canvas.render = (...args) => {
+							if (!inspectGpu) return originalRender(...args);
 							const read = (async () => {
 								await originalRender(...args);
 								let observed;
@@ -515,6 +534,10 @@ async function replay(forceWebGl, forceWebGpu = false) {
 										canvas.height,
 										false,
 									);
+								} else if (/webgpu/i.test(backend)) {
+									await new Promise(requestAnimationFrame);
+									await new Promise(requestAnimationFrame);
+									observed = await window.CapReplayPresentedIndex();
 								} else {
 									if (!playback.drawLatestFrameToCanvas(retainedCanvas)) {
 										throw new Error("Indexed GPU frame is unavailable");
@@ -538,6 +561,7 @@ async function replay(forceWebGl, forceWebGpu = false) {
 						const probeTimes = [0.05, 0.15, 0.25, 0.35, 0.45];
 						for (const time of probeTimes) await playback.seek(time);
 						await playback.seek(0);
+						inspectGpu = false;
 						const beforeIndexedPlay = frames.length;
 						playback.play();
 						await new Promise((resolve) => setTimeout(resolve, 500));
