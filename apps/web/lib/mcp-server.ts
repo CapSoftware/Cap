@@ -55,7 +55,7 @@ export const createCapMcpServer = (userId: User.UserId) => {
 				},
 				additionalProperties: false,
 			}),
-			annotations: readOnly,
+			annotations: { ...readOnly, title: "List Cap recordings" },
 		},
 		async (input) => {
 			try {
@@ -78,7 +78,7 @@ export const createCapMcpServer = (userId: User.UserId) => {
 				required: ["id"],
 				additionalProperties: false,
 			}),
-			annotations: readOnly,
+			annotations: { ...readOnly, title: "Get a Cap recording" },
 		},
 		async ({ id }) => {
 			try {
@@ -106,7 +106,7 @@ export const createCapMcpServer = (userId: User.UserId) => {
 				required: ["id"],
 				additionalProperties: false,
 			}),
-			annotations: readOnly,
+			annotations: { ...readOnly, title: "Read a Cap recording" },
 			_meta: { ui: { resourceUri: cardUri }, "openai/outputTemplate": cardUri },
 		},
 		async ({ id, query }) => {

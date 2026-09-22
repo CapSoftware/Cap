@@ -152,6 +152,31 @@ describe("hosted MCP transport", () => {
 		expect(listBody).toContain("caps_get");
 		expect(listBody).toContain("caps_context");
 		expect(listBody).toContain('"openWorldHint":false');
+		const data = listBody.split("\n").find((line) => line.startsWith("data: "));
+		expect(data).toBeDefined();
+		const tools = JSON.parse(data?.slice(6) ?? "").result.tools;
+		expect(tools).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					name: "caps_list",
+					annotations: expect.objectContaining({
+						title: "List Cap recordings",
+					}),
+				}),
+				expect.objectContaining({
+					name: "caps_get",
+					annotations: expect.objectContaining({
+						title: "Get a Cap recording",
+					}),
+				}),
+				expect.objectContaining({
+					name: "caps_context",
+					annotations: expect.objectContaining({
+						title: "Read a Cap recording",
+					}),
+				}),
+			]),
+		);
 		expect(listBody).not.toContain("caps_delete");
 		const called = await POST(
 			request({
