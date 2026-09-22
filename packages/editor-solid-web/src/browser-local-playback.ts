@@ -4,6 +4,7 @@ import type {
 	BrowserVisualConfig,
 } from "../renderer/pkg/cap_editor_browser_renderer.js";
 import { BrowserAudioPlayback } from "./browser-audio-playback";
+import { BrowserDecodedVideoPool } from "./browser-decoded-video-pool";
 import {
 	BrowserLocalCanvas,
 	type BrowserRenderedFrame,
@@ -29,6 +30,20 @@ type SourcePair = {
 	screen: BrowserVideoLayer;
 	camera: BrowserVideoLayer | null;
 };
+
+type TrackFrame = {
+	source: HTMLVideoElement | ImageBitmap;
+	width: number;
+	height: number;
+	mediaTime: number;
+	release: () => void;
+};
+
+function releasePair(pair: SourcePair | null) {
+	if (!pair) return;
+	pair.screen.release();
+	pair.camera?.release();
+}
 
 function record(value: unknown): Record<string, unknown> | null {
 	return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -180,6 +195,7 @@ export class BrowserLocalPlayback {
 		readonly sources: BrowserEditorSources,
 		private readonly catalog: BrowserEditorSourceCatalog,
 		private readonly pool: BrowserVideoPool,
+		private readonly decodedPool: BrowserDecodedVideoPool,
 		private readonly canvas: BrowserLocalCanvas,
 		private readonly visibleCanvas: HTMLCanvasElement,
 		private width: number,
@@ -217,6 +233,7 @@ export class BrowserLocalPlayback {
 	) {
 		const catalog = new BrowserEditorSourceCatalog(videoId);
 		const pool = new BrowserVideoPool(catalog.sourceProvider);
+		const decodedPool = new BrowserDecodedVideoPool(catalog.sourceProvider);
 		let controls: BrowserLocalCanvas | null = null;
 		let playback: BrowserLocalPlayback | null = null;
 		const controller = new AbortController();
@@ -303,6 +320,7 @@ export class BrowserLocalPlayback {
 				sources,
 				catalog,
 				pool,
+				decodedPool,
 				controls,
 				canvas,
 				width,
@@ -326,6 +344,7 @@ export class BrowserLocalPlayback {
 			else {
 				controls?.dispose();
 				pool.dispose();
+				decodedPool.dispose();
 				catalog.dispose();
 			}
 			throw error;
@@ -462,6 +481,89 @@ export class BrowserLocalPlayback {
 		);
 	}
 
+	private async trackFrame(
+		recordingClip: number,
+		track: "display" | "camera",
+		role: BrowserVideoRole,
+		sourceTime: number,
+		playing: boolean,
+		speed: number,
+		signal: AbortSignal,
+		forceSeek: boolean,
+	): Promise<TrackFrame | null> {
+		if (
+			this.screenWidth <= 1920 &&
+			this.screenHeight <= 1080 &&
+			typeof VideoDecoder === "function" &&
+			typeof createImageBitmap === "function"
+		) {
+			const decoded = await this.decodedPool.frame(
+				recordingClip,
+				track,
+				role,
+				sourceTime,
+				signal,
+			);
+			if (decoded === null) return null;
+			if (decoded !== "fallback") {
+				return {
+					source: decoded.bitmap,
+					width: decoded.width,
+					height: decoded.height,
+					mediaTime: decoded.mediaTime,
+					release: () => decoded.bitmap.close(),
+				};
+			}
+		}
+		const video = await this.pool.frame(
+			recordingClip,
+			track,
+			role,
+			sourceTime,
+			playing,
+			speed,
+			signal,
+			forceSeek,
+		);
+		if (!video) return null;
+		const maxSourceWidth = this.width * 2;
+		const maxSourceHeight = this.height * 2;
+		const scale = Math.min(
+			1,
+			maxSourceWidth / video.videoWidth,
+			maxSourceHeight / video.videoHeight,
+		);
+		if (scale < 1 && typeof createImageBitmap === "function") {
+			try {
+				const bitmap = await createImageBitmap(video, {
+					resizeWidth: Math.max(2, Math.round(video.videoWidth * scale)),
+					resizeHeight: Math.max(2, Math.round(video.videoHeight * scale)),
+					resizeQuality: "medium",
+				});
+				if (signal.aborted) {
+					bitmap.close();
+					throw signal.reason ?? new DOMException("Canceled", "AbortError");
+				}
+				return {
+					source: bitmap,
+					width: bitmap.width,
+					height: bitmap.height,
+					mediaTime: video.currentTime,
+					release: () => bitmap.close(),
+				};
+			} catch (cause) {
+				if (signal.aborted) throw cause;
+			}
+		}
+		return {
+			source: video,
+			width: video.videoWidth,
+			height: video.videoHeight,
+			mediaTime: video.currentTime,
+			release: () => undefined,
+		};
+	}
+
 	private async pair(
 		recordingClip: number,
 		segmentIndex: number,
@@ -477,8 +579,8 @@ export class BrowserLocalPlayback {
 			throw new Error("Editor recording timing is unavailable");
 		}
 		const speed = this.speed(segmentIndex);
-		const [screen, camera] = await Promise.all([
-			this.pool.frame(
+		const [screenResult, cameraResult] = await Promise.allSettled([
+			this.trackFrame(
 				recordingClip,
 				"display",
 				role,
@@ -489,7 +591,7 @@ export class BrowserLocalPlayback {
 				forceSeek,
 			),
 			Number.isFinite(sourceTimes[1]) && sourceTimes[1] >= 0
-				? this.pool.frame(
+				? this.trackFrame(
 						recordingClip,
 						"camera",
 						role,
@@ -501,29 +603,46 @@ export class BrowserLocalPlayback {
 					)
 				: Promise.resolve(null),
 		]);
-		if (!screen) throw new Error("Editor display video is unavailable");
+		if (screenResult.status === "rejected") {
+			if (cameraResult.status === "fulfilled") cameraResult.value?.release();
+			throw screenResult.reason;
+		}
+		if (cameraResult.status === "rejected") {
+			screenResult.value?.release();
+			throw cameraResult.reason;
+		}
+		const screen = screenResult.value;
+		const camera = cameraResult.value;
+		if (!screen) {
+			camera?.release();
+			throw new Error("Editor display video is unavailable");
+		}
 		const width = this.width;
 		const height = this.height;
 		return {
 			screen: {
-				video: screen,
+				source: screen.source,
+				mediaTime: screen.mediaTime,
+				release: screen.release,
 				uniforms: this.visual.layer_uniforms(
 					width,
 					height,
-					screen.videoWidth,
-					screen.videoHeight,
+					screen.width,
+					screen.height,
 					false,
 					frameNumber,
 				),
 			},
 			camera: camera
 				? {
-						video: camera,
+						source: camera.source,
+						mediaTime: camera.mediaTime,
+						release: camera.release,
 						uniforms: this.visual.layer_uniforms(
 							width,
 							height,
-							camera.videoWidth,
-							camera.videoHeight,
+							camera.width,
+							camera.height,
 							true,
 							frameNumber,
 						),
@@ -563,6 +682,7 @@ export class BrowserLocalPlayback {
 			throw new Error("Editor transition mapping is invalid");
 		}
 		this.pool.retainSegments(incomingClip, outgoingClip);
+		this.decodedPool.retainSegments(incomingClip, outgoingClip);
 		const incoming = this.pair(
 			incomingClip,
 			incomingSegment,
@@ -588,34 +708,53 @@ export class BrowserLocalPlayback {
 				: Promise.resolve(null);
 		let incomingPair: SourcePair;
 		let outgoingPair: SourcePair | null;
-		try {
-			[incomingPair, outgoingPair] = await Promise.all([incoming, outgoing]);
-		} catch (cause) {
+		const [incomingResult, outgoingResult] = await Promise.allSettled([
+			incoming,
+			outgoing,
+		]);
+		if (incomingResult.status === "rejected") {
+			if (outgoingResult.status === "fulfilled")
+				releasePair(outgoingResult.value);
 			if (controller.signal.aborted) return null;
-			throw cause;
+			throw incomingResult.reason;
 		}
+		if (outgoingResult.status === "rejected") {
+			releasePair(incomingResult.value);
+			if (controller.signal.aborted) return null;
+			throw outgoingResult.reason;
+		}
+		incomingPair = incomingResult.value;
+		outgoingPair = outgoingResult.value;
 		if (controller.signal.aborted || sequence !== this.frameSequence) {
+			releasePair(incomingPair);
+			releasePair(outgoingPair);
 			return null;
 		}
-		await this.canvas.render(
-			outgoingPair
-				? {
-						kind: "transition",
-						outgoing: outgoingPair,
-						incoming: incomingPair,
-						type: mapped[8] === 1 ? "fade-through-black" : "cross-fade",
-						progress: mapped[9],
-					}
-				: {
-						kind: "single",
-						screen: incomingPair.screen,
-						camera: incomingPair.camera,
-					},
-			Math.round(time * 60),
-			BigInt(Math.round(time * 1_000_000_000)),
-		);
+		try {
+			await this.canvas.render(
+				outgoingPair
+					? {
+							kind: "transition",
+							outgoing: outgoingPair,
+							incoming: incomingPair,
+							type: mapped[8] === 1 ? "fade-through-black" : "cross-fade",
+							progress: mapped[9],
+						}
+					: {
+							kind: "single",
+							screen: incomingPair.screen,
+							camera: incomingPair.camera,
+						},
+				Math.round(time * 60),
+				BigInt(Math.round(time * 1_000_000_000)),
+			);
+		} finally {
+			releasePair(incomingPair);
+			releasePair(outgoingPair);
+		}
 		if (!transition) {
 			this.pool.releaseOverlaps();
+			this.decodedPool.releaseOverlaps();
 			this.audio.releaseOverlaps();
 		}
 		const progress = Math.max(0, Math.min(mapped[9], 1));
@@ -656,7 +795,7 @@ export class BrowserLocalPlayback {
 			this.playClockAligned = true;
 			const sourceTime = this.times.source_times(incomingClip, mapped[3])[0];
 			const drift =
-				(incomingPair.screen.video.currentTime - sourceTime) /
+				(incomingPair.screen.mediaTime - sourceTime) /
 				this.speed(incomingSegment);
 			if (Number.isFinite(drift)) {
 				this.playStartedAt = performance.now();
@@ -783,6 +922,7 @@ export class BrowserLocalPlayback {
 		this.canvas.dispose();
 		this.audio.dispose();
 		this.pool.dispose();
+		this.decodedPool.dispose();
 		this.catalog.dispose();
 		this.timeline.free();
 		this.times.free();

@@ -12,8 +12,8 @@ export class BrowserGpuRenderer {
   set_background(project_json: string, image?: ImageBitmap | null): void;
   set_frame_time(frame_number: number, frame_rate: number): void;
   resize(width: number, height: number): void;
-  render(screen_video: HTMLVideoElement, screen_uniforms: Uint8Array, camera_video?: HTMLVideoElement | null, camera_uniforms?: Uint8Array | null): void;
-  render_transition(outgoing_screen: HTMLVideoElement, outgoing_screen_uniforms: Uint8Array, outgoing_camera: HTMLVideoElement | null | undefined, outgoing_camera_uniforms: Uint8Array | null | undefined, incoming_screen: HTMLVideoElement, incoming_screen_uniforms: Uint8Array, incoming_camera: HTMLVideoElement | null | undefined, incoming_camera_uniforms: Uint8Array | null | undefined, kind: number, progress: number): void;
+  render(screen_video: any, screen_uniforms: Uint8Array, camera_video: any, camera_uniforms?: Uint8Array | null): void;
+  render_transition(outgoing_screen: any, outgoing_screen_uniforms: Uint8Array, outgoing_camera: any, outgoing_camera_uniforms: Uint8Array | null | undefined, incoming_screen: any, incoming_screen_uniforms: Uint8Array, incoming_camera: any, incoming_camera_uniforms: Uint8Array | null | undefined, kind: number, progress: number): void;
   redraw_last(): boolean;
   snapshot_rgba(): Promise<Uint8Array>;
   readonly backend: string;
@@ -57,8 +57,8 @@ export interface InitOutput {
   readonly browsergpurenderer_set_background: (a: number, b: number, c: number, d: number) => [number, number];
   readonly browsergpurenderer_set_frame_time: (a: number, b: number, c: number) => [number, number];
   readonly browsergpurenderer_resize: (a: number, b: number, c: number) => [number, number];
-  readonly browsergpurenderer_render: (a: number, b: any, c: number, d: number, e: number, f: number, g: number) => [number, number];
-  readonly browsergpurenderer_render_transition: (a: number, b: any, c: number, d: number, e: number, f: number, g: number, h: any, i: number, j: number, k: number, l: number, m: number, n: number, o: number) => [number, number];
+  readonly browsergpurenderer_render: (a: number, b: any, c: number, d: number, e: any, f: number, g: number) => [number, number];
+  readonly browsergpurenderer_render_transition: (a: number, b: any, c: number, d: number, e: any, f: number, g: number, h: any, i: number, j: number, k: any, l: number, m: number, n: number, o: number) => [number, number];
   readonly browsergpurenderer_redraw_last: (a: number) => [number, number, number];
   readonly browsergpurenderer_snapshot_rgba: (a: number) => any;
   readonly default_layer_uniforms: (a: number, b: number, c: number, d: number, e: number) => [number, number];

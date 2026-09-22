@@ -409,15 +409,15 @@ export function default_layer_uniforms(output_width, output_height, source_width
     return v1;
 }
 
-function __wbg_adapter_20(arg0, arg1) {
+function __wbg_adapter_10(arg0, arg1) {
     wasm.wasm_bindgen__convert__closures_____invoke__h147cdb123ff2ae0f(arg0, arg1);
 }
 
-function __wbg_adapter_27(arg0, arg1, arg2) {
+function __wbg_adapter_17(arg0, arg1, arg2) {
     wasm.closure380_externref_shim(arg0, arg1, arg2);
 }
 
-function __wbg_adapter_1118(arg0, arg1, arg2, arg3) {
+function __wbg_adapter_1122(arg0, arg1, arg2, arg3) {
     wasm.closure1450_externref_shim(arg0, arg1, arg2, arg3);
 }
 
@@ -560,9 +560,9 @@ export class BrowserGpuRenderer {
         }
     }
     /**
-     * @param {HTMLVideoElement} screen_video
+     * @param {any} screen_video
      * @param {Uint8Array} screen_uniforms
-     * @param {HTMLVideoElement | null} [camera_video]
+     * @param {any} camera_video
      * @param {Uint8Array | null} [camera_uniforms]
      */
     render(screen_video, screen_uniforms, camera_video, camera_uniforms) {
@@ -570,19 +570,19 @@ export class BrowserGpuRenderer {
         const len0 = WASM_VECTOR_LEN;
         var ptr1 = isLikeNone(camera_uniforms) ? 0 : passArray8ToWasm0(camera_uniforms, wasm.__wbindgen_malloc);
         var len1 = WASM_VECTOR_LEN;
-        const ret = wasm.browsergpurenderer_render(this.__wbg_ptr, screen_video, ptr0, len0, isLikeNone(camera_video) ? 0 : addToExternrefTable0(camera_video), ptr1, len1);
+        const ret = wasm.browsergpurenderer_render(this.__wbg_ptr, screen_video, ptr0, len0, camera_video, ptr1, len1);
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
         }
     }
     /**
-     * @param {HTMLVideoElement} outgoing_screen
+     * @param {any} outgoing_screen
      * @param {Uint8Array} outgoing_screen_uniforms
-     * @param {HTMLVideoElement | null | undefined} outgoing_camera
+     * @param {any} outgoing_camera
      * @param {Uint8Array | null | undefined} outgoing_camera_uniforms
-     * @param {HTMLVideoElement} incoming_screen
+     * @param {any} incoming_screen
      * @param {Uint8Array} incoming_screen_uniforms
-     * @param {HTMLVideoElement | null | undefined} incoming_camera
+     * @param {any} incoming_camera
      * @param {Uint8Array | null | undefined} incoming_camera_uniforms
      * @param {number} kind
      * @param {number} progress
@@ -596,7 +596,7 @@ export class BrowserGpuRenderer {
         const len2 = WASM_VECTOR_LEN;
         var ptr3 = isLikeNone(incoming_camera_uniforms) ? 0 : passArray8ToWasm0(incoming_camera_uniforms, wasm.__wbindgen_malloc);
         var len3 = WASM_VECTOR_LEN;
-        const ret = wasm.browsergpurenderer_render_transition(this.__wbg_ptr, outgoing_screen, ptr0, len0, isLikeNone(outgoing_camera) ? 0 : addToExternrefTable0(outgoing_camera), ptr1, len1, incoming_screen, ptr2, len2, isLikeNone(incoming_camera) ? 0 : addToExternrefTable0(incoming_camera), ptr3, len3, kind, progress);
+        const ret = wasm.browsergpurenderer_render_transition(this.__wbg_ptr, outgoing_screen, ptr0, len0, outgoing_camera, ptr1, len1, incoming_screen, ptr2, len2, incoming_camera, ptr3, len3, kind, progress);
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
         }
@@ -1518,6 +1518,26 @@ function __wbg_get_imports() {
         const ret = result;
         return ret;
     };
+    imports.wbg.__wbg_instanceof_HtmlVideoElement_17477dd6330e99a4 = function(arg0) {
+        let result;
+        try {
+            result = arg0 instanceof HTMLVideoElement;
+        } catch (_) {
+            result = false;
+        }
+        const ret = result;
+        return ret;
+    };
+    imports.wbg.__wbg_instanceof_ImageBitmap_543b090022e268d5 = function(arg0) {
+        let result;
+        try {
+            result = arg0 instanceof ImageBitmap;
+        } catch (_) {
+            result = false;
+        }
+        const ret = result;
+        return ret;
+    };
     imports.wbg.__wbg_instanceof_WebGl2RenderingContext_335fb176a724f769 = function(arg0) {
         let result;
         try {
@@ -1717,7 +1737,7 @@ function __wbg_get_imports() {
                 const a = state0.a;
                 state0.a = 0;
                 try {
-                    return __wbg_adapter_1118(a, state0.b, arg0, arg1);
+                    return __wbg_adapter_1122(a, state0.b, arg0, arg1);
                 } finally {
                     state0.a = a;
                 }
@@ -2725,7 +2745,7 @@ function __wbg_get_imports() {
     }, arguments) };
     imports.wbg.__wbindgen_cast_1c1d8705c7a88cf9 = function(arg0, arg1) {
         // Cast intrinsic for `Closure(Closure { dtor_idx: 379, function: Function { arguments: [Externref], shim_idx: 380, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-        const ret = makeMutClosure(arg0, arg1, 379, __wbg_adapter_27);
+        const ret = makeMutClosure(arg0, arg1, 379, __wbg_adapter_17);
         return ret;
     };
     imports.wbg.__wbindgen_cast_2241b6af4c4b2941 = function(arg0, arg1) {
@@ -2752,7 +2772,7 @@ function __wbg_get_imports() {
     };
     imports.wbg.__wbindgen_cast_aaa93aae03c115ab = function(arg0, arg1) {
         // Cast intrinsic for `Closure(Closure { dtor_idx: 1, function: Function { arguments: [], shim_idx: 2, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-        const ret = makeMutClosure(arg0, arg1, 1, __wbg_adapter_20);
+        const ret = makeMutClosure(arg0, arg1, 1, __wbg_adapter_10);
         return ret;
     };
     imports.wbg.__wbindgen_cast_bbb4883c6389f1de = function(arg0, arg1) {

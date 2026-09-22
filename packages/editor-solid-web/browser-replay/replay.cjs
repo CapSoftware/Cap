@@ -44,6 +44,7 @@ const staticServer = Bun.serve({
 			return serveMedia(request, screen);
 		if (pathname === `/camera.${camera.format}`)
 			return serveMedia(request, camera);
+		if (pathname === "/blue.mp4") return serveMedia(request, blue);
 		if (pathname === "/browser-replay/large-background.png") {
 			return new Response(
 				Bun.file(path.join(__dirname, "large-background.png")),
@@ -101,6 +102,12 @@ const screen = media(
 const camera = media(
 	process.env.CAP_REPLAY_CAMERA_FILE ||
 		path.join(__dirname, `${fixturePrefix}camera.${defaultFormat}`),
+);
+const blue = media(
+	path.join(
+		__dirname,
+		"../../../apps/media-server/src/__tests__/fixtures/editor-clips/clip-blue-audio.mp4",
+	),
 );
 const expectedScreenWidth = Number(process.env.CAP_REPLAY_SCREEN_WIDTH || 640);
 const expectedScreenHeight = Number(
@@ -315,6 +322,10 @@ async function replay(forceWebGl, forceWebGpu = false) {
 				await route.continue();
 				return;
 			}
+			if (pathname === "/blue.mp4") {
+				await route.continue();
+				return;
+			}
 			if (pathname === "/browser-replay/large-background.png") {
 				await route.fulfill({
 					status: 200,
@@ -487,6 +498,9 @@ async function replay(forceWebGl, forceWebGpu = false) {
 				const videoPlayCosts = [];
 				const videoSourceDrifts = [];
 				const videoPresentedDrifts = [];
+				const decodedFrameDrifts = [];
+				const decodedFrameCosts = [];
+				const decodedDimensions = [];
 				const compositeCosts = [];
 				const presentedTimes = new WeakMap();
 				const presentationCallbacks = new Map();
@@ -565,6 +579,25 @@ async function replay(forceWebGl, forceWebGpu = false) {
 						return video;
 					} finally {
 						videoFrameCosts.push(performance.now() - started);
+					}
+				};
+				const decodedFrame = playback.decodedPool.frame.bind(
+					playback.decodedPool,
+				);
+				playback.decodedPool.frame = async (...args) => {
+					const started = performance.now();
+					try {
+						const frame = await decodedFrame(...args);
+						if (frame && frame !== "fallback") {
+							decodedDimensions.push([frame.width, frame.height]);
+							decodedFrameDrifts.push({
+								track: args[1],
+								absoluteMs: Math.abs(frame.mediaTime - args[3]) * 1000,
+							});
+						}
+						return frame;
+					} finally {
+						decodedFrameCosts.push(performance.now() - started);
 					}
 				};
 				const canvasRender = playback.canvas.render.bind(playback.canvas);
@@ -819,6 +852,8 @@ async function replay(forceWebGl, forceWebGpu = false) {
 					const beforeVideoPlayCosts = videoPlayCosts.length;
 					const beforeVideoSourceDrifts = videoSourceDrifts.length;
 					const beforeVideoPresentedDrifts = videoPresentedDrifts.length;
+					const beforeDecodedFrameDrifts = decodedFrameDrifts.length;
+					const beforeDecodedFrameCosts = decodedFrameCosts.length;
 					const beforeCompositeCosts = compositeCosts.length;
 					playback.play();
 					const playbackIntervalMs =
@@ -856,6 +891,23 @@ async function replay(forceWebGl, forceWebGpu = false) {
 						videoPlayCosts: costSummary(
 							videoPlayCosts.slice(beforeVideoPlayCosts),
 						),
+						decodedFrameCosts: costSummary(
+							decodedFrameCosts.slice(beforeDecodedFrameCosts),
+						),
+						decodedFrameDriftMs: {
+							display: costSummary(
+								decodedFrameDrifts
+									.slice(beforeDecodedFrameDrifts)
+									.filter((sample) => sample.track === "display")
+									.map((sample) => sample.absoluteMs),
+							),
+							camera: costSummary(
+								decodedFrameDrifts
+									.slice(beforeDecodedFrameDrifts)
+									.filter((sample) => sample.track === "camera")
+									.map((sample) => sample.absoluteMs),
+							),
+						},
 						videoSourceDriftMs: {
 							display: costSummary(
 								videoSourceDrifts
@@ -934,21 +986,36 @@ async function replay(forceWebGl, forceWebGpu = false) {
 						if (/webgpu/i.test(backend)) {
 							const retainedBefore =
 								await playback.canvas.renderer.snapshot_rgba();
-							const screenSlot = playback.pool.slots.get("0:display:primary");
-							if (!screenSlot) {
-								throw new Error("Indexed display source was not primed");
+							if (playback.decodedPool.slots.has("0:display:primary")) {
+								const decoded = await playback.decodedPool.frame(
+									0,
+									"display",
+									"primary",
+									0.45,
+									new AbortController().signal,
+								);
+								if (!decoded || decoded === "fallback") {
+									throw new Error("Indexed decoded source is unavailable");
+								}
+								sourceContext.drawImage(decoded.bitmap, 0, 0, 8, 1);
+								decoded.bitmap.close();
+							} else {
+								const screenSlot = playback.pool.slots.get("0:display:primary");
+								if (!screenSlot) {
+									throw new Error("Indexed display source was not primed");
+								}
+								await playback.pool.frame(
+									0,
+									"display",
+									"primary",
+									0.45,
+									false,
+									1,
+									new AbortController().signal,
+									true,
+								);
+								sourceContext.drawImage(screenSlot.element, 0, 0, 8, 1);
 							}
-							await playback.pool.frame(
-								0,
-								"display",
-								"primary",
-								0.45,
-								false,
-								1,
-								new AbortController().signal,
-								true,
-							);
-							sourceContext.drawImage(screenSlot.element, 0, 0, 8, 1);
 							const advancedSource = readIndex(
 								(x, y) => sourceContext.getImageData(x, y, 1, 1).data,
 								8,
@@ -984,6 +1051,27 @@ async function replay(forceWebGl, forceWebGpu = false) {
 								}
 							}
 							return video;
+						};
+						const originalDecodedFrame = playback.decodedPool.frame.bind(
+							playback.decodedPool,
+						);
+						playback.decodedPool.frame = async (...args) => {
+							const frame = await originalDecodedFrame(...args);
+							if (frame && frame !== "fallback") {
+								sourceContext.drawImage(frame.bitmap, 0, 0, 8, 1);
+								const observed = readIndex(
+									(x, y) => sourceContext.getImageData(x, y, 1, 1).data,
+									8,
+									1,
+									args[1] === "camera",
+								);
+								const target = Math.round(args[3] * 30);
+								samples[args[1]]++;
+								if (Math.abs(observed - target) > 1) {
+									mismatches.push(`${args[1]} ${target}/${observed}`);
+								}
+							}
+							return frame;
 						};
 						const originalRender = playback.canvas.render.bind(playback.canvas);
 						const gpuReads = [];
@@ -1081,9 +1169,57 @@ async function replay(forceWebGl, forceWebGpu = false) {
 						blurredTransitionFirst,
 						blurredTransitionLast,
 					);
-					const videos = Array.from(document.querySelectorAll("video")).map(
-						(video) => [video.videoWidth, video.videoHeight],
+					const decodedSizes = Array.from(
+						new Map(
+							decodedDimensions.map((size) => [size.join("x"), size]),
+						).values(),
 					);
+					const videos = [
+						...Array.from(document.querySelectorAll("video")).map((video) => [
+							video.videoWidth,
+							video.videoHeight,
+						]),
+						...decodedSizes,
+					];
+					const colorPool = new window.CapBrowserDecodedVideoPool(async () => ({
+						url: new URL("/blue.mp4", location.href).href,
+						expiresAt: null,
+					}));
+					let colorSample = null;
+					try {
+						const decoded = await colorPool.frame(
+							0,
+							"display",
+							"primary",
+							0.125,
+							new AbortController().signal,
+						);
+						if (decoded && decoded !== "fallback") {
+							const colorCanvas = document.createElement("canvas");
+							colorCanvas.width = decoded.width;
+							colorCanvas.height = decoded.height;
+							const colorContext = colorCanvas.getContext("2d", {
+								willReadFrequently: true,
+							});
+							try {
+								if (!colorContext)
+									throw new Error("Decoded color inspection failed");
+								colorContext.drawImage(decoded.bitmap, 0, 0);
+								colorSample = Array.from(
+									colorContext.getImageData(
+										decoded.width / 2,
+										decoded.height / 2,
+										1,
+										1,
+									).data,
+								);
+							} finally {
+								decoded.bitmap.close();
+							}
+						}
+					} finally {
+						colorPool.dispose();
+					}
 					return {
 						backend,
 						webGlRenderer,
@@ -1106,6 +1242,7 @@ async function replay(forceWebGl, forceWebGpu = false) {
 						playbackMetrics,
 						indexedParity,
 						videos,
+						colorSample,
 						width: canvas.width,
 						height: canvas.height,
 						errors,
@@ -1195,26 +1332,34 @@ async function replay(forceWebGl, forceWebGpu = false) {
 		}
 		assert(result.playedFrames >= 2, "Local playback did not advance");
 		for (const track of ["display", "camera"]) {
-			assert(
-				result.playbackMetrics.videoSourceDriftMs[track].count > 0,
-				`${track} media clock was not sampled during playback`,
-			);
-			assert(
-				result.playbackMetrics.videoPresentedDriftMs[track].count > 0,
-				`${track} presented frame was not sampled during playback`,
-			);
-			const sourceDrift =
-				result.playbackMetrics.videoSourceDriftMs[track].maxMs;
-			const presentedDrift =
-				result.playbackMetrics.videoPresentedDriftMs[track].maxMs;
-			assert(
-				sourceDrift <= 75,
-				`${track} media clock drifted ${sourceDrift} ms from the export timeline`,
-			);
-			assert(
-				presentedDrift <= 75,
-				`${track} presented frame drifted ${presentedDrift} ms from the export timeline`,
-			);
+			const decoded = result.playbackMetrics.decodedFrameDriftMs[track];
+			if (decoded.count > 0) {
+				assert(
+					decoded.maxMs <= 75,
+					`${track} decoded frame drifted ${decoded.maxMs} ms from the export timeline`,
+				);
+			} else {
+				assert(
+					result.playbackMetrics.videoSourceDriftMs[track].count > 0,
+					`${track} media clock was not sampled during playback`,
+				);
+				assert(
+					result.playbackMetrics.videoPresentedDriftMs[track].count > 0,
+					`${track} presented frame was not sampled during playback`,
+				);
+				const sourceDrift =
+					result.playbackMetrics.videoSourceDriftMs[track].maxMs;
+				const presentedDrift =
+					result.playbackMetrics.videoPresentedDriftMs[track].maxMs;
+				assert(
+					sourceDrift <= 75,
+					`${track} media clock drifted ${sourceDrift} ms from the export timeline`,
+				);
+				assert(
+					presentedDrift <= 75,
+					`${track} presented frame drifted ${presentedDrift} ms from the export timeline`,
+				);
+			}
 		}
 		if (indexed) {
 			assert(result.indexedParity !== null, "Indexed parity did not run");
@@ -1268,6 +1413,15 @@ async function replay(forceWebGl, forceWebGpu = false) {
 			),
 			"Camera clip did not decode",
 		);
+		if (browserName !== "firefox") {
+			assert(result.colorSample !== null, "Untagged color clip did not decode");
+			assert(
+				result.colorSample[0] <= 2 &&
+					result.colorSample[1] <= 2 &&
+					result.colorSample[2] >= 252,
+				`Untagged clip color differed from native export: ${result.colorSample.join(",")}`,
+			);
+		}
 		if (forceWebGl)
 			assert(/gl/i.test(result.backend), "WebGL fallback was not selected");
 		if (simulateFailedProbe) {

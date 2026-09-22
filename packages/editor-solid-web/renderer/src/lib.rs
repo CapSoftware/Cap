@@ -883,14 +883,24 @@ fn upload_video(
     queue: &wgpu::Queue,
     pipeline: &CompositeVideoFramePipeline,
     stored: &mut Option<InputTexture>,
-    video: HtmlVideoElement,
+    source: JsValue,
     uniform_bytes: &[u8],
     output_width: u32,
     output_height: u32,
 ) -> Result<(), JsValue> {
-    let width = video.video_width();
-    let height = video.video_height();
-    if video.ready_state() < 2 || width == 0 || height == 0 {
+    let external = if let Some(video) = source.dyn_ref::<HtmlVideoElement>() {
+        if video.ready_state() < 2 {
+            return Err(js_error("Video frame is not decoded"));
+        }
+        wgpu::ExternalImageSource::HTMLVideoElement(video.clone())
+    } else if let Some(bitmap) = source.dyn_ref::<ImageBitmap>() {
+        wgpu::ExternalImageSource::ImageBitmap(bitmap.clone())
+    } else {
+        return Err(js_error("Video frame source is invalid"));
+    };
+    let width = external.width();
+    let height = external.height();
+    if width == 0 || height == 0 {
         return Err(js_error("Video frame is not decoded"));
     }
     if width > device.limits().max_texture_dimension_2d
@@ -914,7 +924,7 @@ fn upload_video(
     uniforms.write_to_buffer(queue, &input.uniform_buffer);
     queue.copy_external_image_to_texture(
         &wgpu::CopyExternalImageSourceInfo {
-            source: wgpu::ExternalImageSource::HTMLVideoElement(video),
+            source: external,
             origin: wgpu::Origin2d::ZERO,
             flip_y: false,
         },
@@ -1516,14 +1526,14 @@ impl BrowserGpuRenderer {
 
     pub fn render(
         &mut self,
-        screen_video: HtmlVideoElement,
+        screen_video: JsValue,
         screen_uniforms: &[u8],
-        camera_video: Option<HtmlVideoElement>,
+        camera_video: JsValue,
         camera_uniforms: Option<Vec<u8>>,
     ) -> Result<(), JsValue> {
         let output_width = self.surface_config.width;
         let output_height = self.surface_config.height;
-        let has_camera = camera_video.is_some();
+        let has_camera = !camera_video.is_null() && !camera_video.is_undefined();
         if matches!(
             self.last_rendered,
             Some(LastRenderedComposition::Transition)
@@ -1541,7 +1551,7 @@ impl BrowserGpuRenderer {
             output_width,
             output_height,
         )?;
-        if let Some(video) = camera_video {
+        if has_camera {
             let uniforms = camera_uniforms
                 .as_deref()
                 .ok_or_else(|| js_error("Camera uniforms are missing"))?;
@@ -1550,7 +1560,7 @@ impl BrowserGpuRenderer {
                 &self.queue,
                 &self.pipeline,
                 &mut self.camera,
-                video,
+                camera_video,
                 uniforms,
                 output_width,
                 output_height,
@@ -1596,13 +1606,13 @@ impl BrowserGpuRenderer {
 
     pub fn render_transition(
         &mut self,
-        outgoing_screen: HtmlVideoElement,
+        outgoing_screen: JsValue,
         outgoing_screen_uniforms: &[u8],
-        outgoing_camera: Option<HtmlVideoElement>,
+        outgoing_camera: JsValue,
         outgoing_camera_uniforms: Option<Vec<u8>>,
-        incoming_screen: HtmlVideoElement,
+        incoming_screen: JsValue,
         incoming_screen_uniforms: &[u8],
-        incoming_camera: Option<HtmlVideoElement>,
+        incoming_camera: JsValue,
         incoming_camera_uniforms: Option<Vec<u8>>,
         kind: u32,
         progress: f32,
@@ -1617,8 +1627,8 @@ impl BrowserGpuRenderer {
         }
         let output_width = self.surface_config.width;
         let output_height = self.surface_config.height;
-        let outgoing_has_camera = outgoing_camera.is_some();
-        let incoming_has_camera = incoming_camera.is_some();
+        let outgoing_has_camera = !outgoing_camera.is_null() && !outgoing_camera.is_undefined();
+        let incoming_has_camera = !incoming_camera.is_null() && !incoming_camera.is_undefined();
         if matches!(
             self.last_rendered,
             Some(LastRenderedComposition::Single { .. })
@@ -1698,7 +1708,7 @@ impl BrowserGpuRenderer {
             output_width,
             output_height,
         )?;
-        if let Some(video) = outgoing_camera {
+        if outgoing_has_camera {
             let uniforms = outgoing_camera_uniforms
                 .as_deref()
                 .ok_or_else(|| js_error("Outgoing camera uniforms are missing"))?;
@@ -1707,7 +1717,7 @@ impl BrowserGpuRenderer {
                 &self.queue,
                 pipeline,
                 &mut self.camera,
-                video,
+                outgoing_camera,
                 uniforms,
                 output_width,
                 output_height,
@@ -1746,7 +1756,7 @@ impl BrowserGpuRenderer {
             output_width,
             output_height,
         )?;
-        if let Some(video) = incoming_camera {
+        if incoming_has_camera {
             let uniforms = incoming_camera_uniforms
                 .as_deref()
                 .ok_or_else(|| js_error("Incoming camera uniforms are missing"))?;
@@ -1755,7 +1765,7 @@ impl BrowserGpuRenderer {
                 &self.queue,
                 pipeline,
                 &mut self.camera,
-                video,
+                incoming_camera,
                 uniforms,
                 output_width,
                 output_height,

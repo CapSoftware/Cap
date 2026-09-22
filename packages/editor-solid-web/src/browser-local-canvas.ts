@@ -5,8 +5,10 @@ import { loadBrowserRenderer } from "./browser-renderer";
 import { resolveEditorAssetUrl } from "./editor-asset-url";
 
 export type BrowserVideoLayer = {
-	video: HTMLVideoElement;
+	source: HTMLVideoElement | ImageBitmap;
 	uniforms: Uint8Array;
+	mediaTime: number;
+	release: () => void;
 };
 
 export type BrowserComposition =
@@ -229,20 +231,20 @@ export class BrowserLocalCanvas {
 		this.renderer.set_frame_time(frameNumber, 60);
 		if (composition.kind === "single") {
 			this.renderer.render(
-				composition.screen.video,
+				composition.screen.source,
 				composition.screen.uniforms,
-				composition.camera?.video ?? null,
+				composition.camera?.source ?? null,
 				composition.camera?.uniforms ?? null,
 			);
 		} else {
 			this.renderer.render_transition(
-				composition.outgoing.screen.video,
+				composition.outgoing.screen.source,
 				composition.outgoing.screen.uniforms,
-				composition.outgoing.camera?.video ?? null,
+				composition.outgoing.camera?.source ?? null,
 				composition.outgoing.camera?.uniforms ?? null,
-				composition.incoming.screen.video,
+				composition.incoming.screen.source,
 				composition.incoming.screen.uniforms,
-				composition.incoming.camera?.video ?? null,
+				composition.incoming.camera?.source ?? null,
 				composition.incoming.camera?.uniforms ?? null,
 				composition.type === "cross-fade" ? 0 : 1,
 				composition.progress,

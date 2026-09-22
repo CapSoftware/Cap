@@ -1,0 +1,255 @@
+import type { Input, VideoSampleSink } from "mediabunny";
+import type {
+	BrowserVideoRole,
+	BrowserVideoSourceProvider,
+	BrowserVideoTrack,
+} from "./browser-video-pool";
+
+export type BrowserDecodedVideoFrame = {
+	bitmap: ImageBitmap;
+	width: number;
+	height: number;
+	mediaTime: number;
+};
+
+type DecodedSlot = {
+	input: Input;
+	sink: VideoSampleSink;
+	retagBt601: boolean;
+};
+
+type SlotEntry = {
+	url: string;
+	promise: Promise<DecodedSlot | null>;
+	activeCalls: number;
+	retired: boolean;
+	released: boolean;
+};
+
+function slotKey(
+	segmentIndex: number,
+	track: BrowserVideoTrack,
+	role: BrowserVideoRole,
+) {
+	return `${segmentIndex}:${track}:${role}`;
+}
+
+function releaseEntry(entry: SlotEntry) {
+	entry.retired = true;
+	if (entry.activeCalls > 0 || entry.released) return;
+	entry.released = true;
+	void entry.promise.then(
+		(slot) => slot?.input.dispose(),
+		() => undefined,
+	);
+}
+
+export class BrowserDecodedVideoPool {
+	private readonly slots = new Map<string, SlotEntry>();
+	private retainedKeys: Set<string> | null = null;
+	private disposed = false;
+
+	constructor(private readonly sourceProvider: BrowserVideoSourceProvider) {}
+
+	private async createSlot(url: string): Promise<DecodedSlot | null> {
+		if (typeof VideoDecoder !== "function") return null;
+		const { ALL_FORMATS, Input, UrlSource, VideoSampleSink } = await import(
+			"mediabunny"
+		);
+		const input = new Input({
+			formats: ALL_FORMATS,
+			source: new UrlSource(url, { maxCacheSize: 8 * 1024 * 1024 }),
+		});
+		try {
+			const track = await input.getPrimaryVideoTrack();
+			if (!track) throw new Error("Editor video track is unavailable");
+			const [width, height, config] = await Promise.all([
+				track.getDisplayWidth(),
+				track.getDisplayHeight(),
+				track.getDecoderConfig(),
+			]);
+			if (
+				width === null ||
+				height === null ||
+				width < 1 ||
+				height < 1 ||
+				width > 1920 ||
+				height > 1080 ||
+				!config ||
+				!(await VideoDecoder.isConfigSupported(config)).supported
+			) {
+				input.dispose();
+				return null;
+			}
+			return {
+				input,
+				sink: new VideoSampleSink(track),
+				retagBt601:
+					config.codec.startsWith("avc1") &&
+					config.colorSpace === undefined &&
+					width <= 720 &&
+					height <= 576,
+			};
+		} catch {
+			input.dispose();
+			return null;
+		}
+	}
+
+	async frame(
+		segmentIndex: number,
+		track: BrowserVideoTrack,
+		role: BrowserVideoRole,
+		sourceTime: number,
+		signal: AbortSignal,
+	): Promise<BrowserDecodedVideoFrame | null | "fallback"> {
+		if (this.disposed) throw new Error("Editor decoded video pool is closed");
+		if (!Number.isSafeInteger(segmentIndex) || segmentIndex < 0) {
+			throw new Error("Editor clip index is invalid");
+		}
+		if (!Number.isFinite(sourceTime) || sourceTime < 0) {
+			throw new Error("Editor video time is invalid");
+		}
+		if (signal.aborted) {
+			throw signal.reason ?? new DOMException("Canceled", "AbortError");
+		}
+		const source = await this.sourceProvider(segmentIndex, track, signal);
+		if (!source) {
+			if (track === "camera") return null;
+			throw new Error("Editor display video is unavailable");
+		}
+		const url = new URL(source.url, window.location.href);
+		if (
+			(url.protocol !== "https:" &&
+				url.protocol !== "http:" &&
+				url.protocol !== "blob:") ||
+			(source.expiresAt !== null && source.expiresAt <= Date.now())
+		) {
+			throw new Error("Editor video source URL is invalid");
+		}
+		const key = slotKey(segmentIndex, track, role);
+		let entry = this.slots.get(key);
+		if (entry && entry.url !== url.href) {
+			releaseEntry(entry);
+			this.slots.delete(key);
+			entry = undefined;
+		}
+		if (!entry) {
+			entry = {
+				url: url.href,
+				promise: this.createSlot(url.href),
+				activeCalls: 0,
+				retired: false,
+				released: false,
+			};
+			this.slots.set(key, entry);
+		}
+		entry.activeCalls++;
+		try {
+			const slot = await entry.promise;
+			if (!slot) return "fallback";
+			if (signal.aborted || this.disposed) {
+				throw signal.reason ?? new DOMException("Canceled", "AbortError");
+			}
+			const sample = await slot.sink.getSample(Math.max(sourceTime, 0.0001));
+			if (!sample) throw new Error("Editor decoded frame is unavailable");
+			try {
+				let videoFrame = sample.toVideoFrame();
+				try {
+					if (
+						slot.retagBt601 &&
+						videoFrame.colorSpace.matrix !== "bt470bg" &&
+						videoFrame.format !== null &&
+						(videoFrame.format === "I420" || videoFrame.format === "NV12") &&
+						sample.rotation === 0 &&
+						sample.visibleRect.left === 0 &&
+						sample.visibleRect.top === 0 &&
+						sample.visibleRect.width === sample.codedWidth &&
+						sample.visibleRect.height === sample.codedHeight
+					) {
+						const pixels = new Uint8Array(sample.allocationSize());
+						const layout = await sample.copyTo(pixels);
+						const tagged = new VideoFrame(pixels, {
+							format: videoFrame.format,
+							codedWidth: sample.codedWidth,
+							codedHeight: sample.codedHeight,
+							timestamp: videoFrame.timestamp,
+							layout,
+							colorSpace: {
+								primaries: "bt709",
+								transfer: "bt709",
+								matrix: "bt470bg",
+								fullRange: false,
+							},
+						});
+						videoFrame.close();
+						videoFrame = tagged;
+					}
+					const bitmap = await createImageBitmap(videoFrame);
+					if (signal.aborted || this.disposed) {
+						bitmap.close();
+						throw signal.reason ?? new DOMException("Canceled", "AbortError");
+					}
+					return {
+						bitmap,
+						width: bitmap.width,
+						height: bitmap.height,
+						mediaTime: sample.timestamp,
+					};
+				} finally {
+					videoFrame.close();
+				}
+			} finally {
+				sample.close();
+			}
+		} catch (cause) {
+			if (signal.aborted || this.disposed) throw cause;
+			if (this.slots.get(key) === entry) this.slots.delete(key);
+			releaseEntry(entry);
+			return "fallback";
+		} finally {
+			entry.activeCalls--;
+			if (entry.activeCalls === 0 && entry.retired) releaseEntry(entry);
+			if (
+				entry.activeCalls === 0 &&
+				this.slots.get(key) === entry &&
+				this.retainedKeys !== null &&
+				!this.retainedKeys.has(key)
+			) {
+				this.slots.delete(key);
+				releaseEntry(entry);
+			}
+		}
+	}
+
+	retainSegments(primary: number, overlap: number | null) {
+		const wanted = new Set<string>();
+		for (const track of ["display", "camera"] as const) {
+			wanted.add(slotKey(primary, track, "primary"));
+			if (overlap !== null) wanted.add(slotKey(overlap, track, "overlap"));
+		}
+		this.retainedKeys = wanted;
+		for (const [key, entry] of this.slots) {
+			if (wanted.has(key)) continue;
+			this.slots.delete(key);
+			releaseEntry(entry);
+		}
+	}
+
+	releaseOverlaps() {
+		for (const [key, entry] of this.slots) {
+			if (!key.endsWith(":overlap")) continue;
+			this.slots.delete(key);
+			this.retainedKeys?.delete(key);
+			releaseEntry(entry);
+		}
+	}
+
+	dispose() {
+		if (this.disposed) return;
+		this.disposed = true;
+		for (const entry of this.slots.values()) releaseEntry(entry);
+		this.slots.clear();
+		this.retainedKeys = null;
+	}
+}
