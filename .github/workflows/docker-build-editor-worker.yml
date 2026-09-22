@@ -121,7 +121,7 @@ jobs:
               cd /source/apps/media-server
               browser_replay_failed=0
               for browser in chromium firefox webkit; do
-                if ! CAP_EDITOR_UI_PARITY_ARTIFACT_DIR=/source/.cap-editor-parity-artifacts CAP_EDITOR_UI_BROWSER="$browser" bun src/__tests__/routes/editor-solid-browser-only-replay.ts; then
+                if ! CAP_EDITOR_UI_PARITY_ARTIFACT_DIR=/source/cap-editor-parity-artifacts CAP_EDITOR_UI_BROWSER="$browser" bun src/__tests__/routes/editor-solid-browser-only-replay.ts; then
                   browser_replay_failed=1
                 fi
               done
@@ -146,5 +146,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: web-studio-parity-diagnostics
-          path: .cap-editor-parity-artifacts
+          path: cap-editor-parity-artifacts
           if-no-files-found: ignore

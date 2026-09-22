@@ -2,7 +2,13 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { mkdir, stat, writeFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
-import { chromium, firefox, webkit } from "@playwright/test";
+import {
+	chromium,
+	type FrameLocator,
+	firefox,
+	type Page,
+	webkit,
+} from "@playwright/test";
 import sharp from "sharp";
 import {
 	default_project_config_json,
@@ -170,6 +176,89 @@ async function readySession(id: string) {
 		await Bun.sleep(100);
 	}
 	throw new Error("Editor reference preparation timed out");
+}
+
+async function reportStageFailure(
+	stage: string,
+	page: Page,
+	editor: FrameLocator,
+	cause: unknown,
+	pageErrors: string[],
+	pageWarnings: string[],
+	failedResponses: string[],
+) {
+	try {
+		const diagnostics = {
+			stage,
+			browserEngine: engine.name(),
+			error: cause instanceof Error ? cause.message : String(cause),
+			body: await editor
+				.locator("body")
+				.innerText()
+				.catch(() => null),
+			canvas: await editor
+				.locator("#canvas")
+				.evaluate((element) => {
+					const canvas = element as HTMLCanvasElement;
+					return {
+						width: canvas.width,
+						height: canvas.height,
+						busy: canvas.getAttribute("aria-busy"),
+						opacity: getComputedStyle(canvas).opacity,
+					};
+				})
+				.catch(() => null),
+			videos: await editor
+				.locator("video")
+				.evaluateAll((elements) =>
+					elements.map((element) => {
+						const video = element as HTMLVideoElement;
+						return {
+							readyState: video.readyState,
+							networkState: video.networkState,
+							currentTime: video.currentTime,
+							videoWidth: video.videoWidth,
+							videoHeight: video.videoHeight,
+							error: video.error?.message ?? null,
+						};
+					}),
+				)
+				.catch(() => null),
+			hostError: await page
+				.evaluate(
+					() =>
+						(window as typeof window & { capTestError?: string })
+							.capTestError ?? null,
+				)
+				.catch(() => null),
+			pageErrors,
+			pageWarnings,
+			failedResponses,
+		};
+		process.stderr.write(`${JSON.stringify(diagnostics)}\n`);
+		const artifactDir = process.env.CAP_EDITOR_UI_PARITY_ARTIFACT_DIR;
+		if (artifactDir) {
+			await mkdir(artifactDir, { recursive: true });
+			await Promise.all([
+				writeFile(
+					join(artifactDir, `${engine.name()}-${stage}.json`),
+					JSON.stringify(diagnostics, null, 2),
+				),
+				page
+					.screenshot()
+					.then((image) =>
+						writeFile(
+							join(artifactDir, `${engine.name()}-${stage}.png`),
+							image,
+						),
+					),
+			]);
+		}
+	} catch (diagnosticError) {
+		process.stderr.write(
+			`Studio ${stage} diagnostics failed: ${String(diagnosticError)}\n`,
+		);
+	}
 }
 
 try {
@@ -355,10 +444,12 @@ try {
 		viewport: { width: 1440, height: 900 },
 	});
 	const pageErrors: string[] = [];
+	const pageWarnings: string[] = [];
 	const failedResponses: string[] = [];
 	page.on("pageerror", (error) => pageErrors.push(error.message));
 	page.on("console", (message) => {
 		if (message.type() === "error") pageErrors.push(message.text());
+		if (message.type() === "warning") pageWarnings.push(message.text());
 	});
 	page.on("response", (response) => {
 		if (response.status() >= 400)
@@ -418,10 +509,23 @@ try {
 		state: "visible",
 		timeout: 20_000,
 	});
-	await editor.locator('[aria-busy="false"]').waitFor({
-		state: "attached",
-		timeout: 20_000,
-	});
+	try {
+		await editor.locator('[aria-busy="false"]').waitFor({
+			state: "attached",
+			timeout: 20_000,
+		});
+	} catch (cause) {
+		await reportStageFailure(
+			"canvas-readiness",
+			page,
+			editor,
+			cause,
+			pageErrors,
+			pageWarnings,
+			failedResponses,
+		);
+		throw cause;
+	}
 	await editor.locator("#canvas").evaluate(async (canvas) => {
 		const surface = canvas.parentElement?.parentElement;
 		if (!surface) throw new Error("Preview surface is unavailable");
@@ -444,7 +548,57 @@ try {
 		const element = canvas as HTMLCanvasElement;
 		return { width: element.width, height: element.height };
 	});
-	const browserScreenshot = await editor.locator("#canvas").screenshot();
+	const directScreenshot = await editor.locator("#canvas").screenshot();
+	await editor.getByRole("button", { name: "Crop", exact: true }).click();
+	await editor.getByText("Loading frame…").waitFor({
+		state: "hidden",
+		timeout: 20_000,
+	});
+	assert.ok(
+		(await editor
+			.getByRole("img", { name: "Current frame" })
+			.evaluate((element) => (element as HTMLImageElement).naturalWidth)) > 0,
+	);
+	const cropSourceSample = await editor
+		.getByRole("img", { name: "Current frame" })
+		.evaluate((element) => {
+			const image = element as HTMLImageElement;
+			const canvas = document.createElement("canvas");
+			canvas.width = 1;
+			canvas.height = 1;
+			const context = canvas.getContext("2d");
+			if (!context) throw new Error("Crop source sample is unavailable");
+			context.drawImage(
+				image,
+				Math.floor(image.naturalWidth / 2),
+				Math.floor(image.naturalHeight / 2),
+				1,
+				1,
+				0,
+				0,
+				1,
+				1,
+			);
+			return [...context.getImageData(0, 0, 1, 1).data];
+		});
+	assert.ok((cropSourceSample[0] ?? 0) > 200);
+	assert.ok((cropSourceSample[1] ?? 255) < 50);
+	await editor.getByText("Rendering preview…").waitFor({
+		state: "hidden",
+		timeout: 10_000,
+	});
+	const cropDataUrl = await editor
+		.locator("canvas")
+		.last()
+		.evaluate((element) =>
+			(element as HTMLCanvasElement).toDataURL("image/png"),
+		);
+	const browserScreenshot = Buffer.from(
+		cropDataUrl.split(",")[1] ?? "",
+		"base64",
+	);
+	await editor.getByRole("button", { name: "Cancel", exact: true }).click();
+	assert.equal(workerRequests, 0);
 	const { data: browserPixels, info: browserInfo } = await sharp(
 		browserScreenshot,
 	)
@@ -559,55 +713,66 @@ try {
 				native: [...nativePixels.subarray(offset, offset + 3)],
 			};
 		});
-		const diagnostics = {
-			browserEngine: engine.name(),
-			meanAbsoluteError,
-			psnrDb,
-			differentPixels,
-			browserSize: { width: browserInfo.width, height: browserInfo.height },
-			nativeSize: { width: nativeWidth, height: nativeHeight },
-			samples: samplePoints,
-			videos: await editor.locator("video").evaluateAll((elements) =>
-				elements.map((element) => {
-					const video = element as HTMLVideoElement;
-					return {
-						readyState: video.readyState,
-						currentTime: video.currentTime,
-						videoWidth: video.videoWidth,
-						videoHeight: video.videoHeight,
-						error: video.error?.message ?? null,
-					};
-				}),
-			),
-			pageErrors,
-			failedResponses,
-		};
-		process.stderr.write(`${JSON.stringify(diagnostics)}\n`);
-		const artifactDir = process.env.CAP_EDITOR_UI_PARITY_ARTIFACT_DIR;
-		if (artifactDir) {
-			await mkdir(artifactDir, { recursive: true });
-			await Promise.all([
-				writeFile(
-					join(artifactDir, `${engine.name()}-browser.png`),
-					browserScreenshot,
+		try {
+			const diagnostics = {
+				browserEngine: engine.name(),
+				meanAbsoluteError,
+				psnrDb,
+				differentPixels,
+				browserSize: { width: browserInfo.width, height: browserInfo.height },
+				nativeSize: { width: nativeWidth, height: nativeHeight },
+				samples: samplePoints,
+				videos: await editor.locator("video").evaluateAll((elements) =>
+					elements.map((element) => {
+						const video = element as HTMLVideoElement;
+						return {
+							readyState: video.readyState,
+							currentTime: video.currentTime,
+							videoWidth: video.videoWidth,
+							videoHeight: video.videoHeight,
+							error: video.error?.message ?? null,
+						};
+					}),
 				),
-				writeFile(
-					join(artifactDir, `${engine.name()}-native.png`),
-					await sharp(packed, {
-						raw: {
-							width: nativeWidth,
-							height: nativeHeight,
-							channels: 4,
-						},
-					})
-						.png()
-						.toBuffer(),
-				),
-				writeFile(
-					join(artifactDir, `${engine.name()}-diagnostics.json`),
-					JSON.stringify(diagnostics, null, 2),
-				),
-			]);
+				pageErrors,
+				pageWarnings,
+				failedResponses,
+			};
+			process.stderr.write(`${JSON.stringify(diagnostics)}\n`);
+			const artifactDir = process.env.CAP_EDITOR_UI_PARITY_ARTIFACT_DIR;
+			if (artifactDir) {
+				await mkdir(artifactDir, { recursive: true });
+				await Promise.all([
+					writeFile(
+						join(artifactDir, `${engine.name()}-direct-canvas.png`),
+						directScreenshot,
+					),
+					writeFile(
+						join(artifactDir, `${engine.name()}-browser.png`),
+						browserScreenshot,
+					),
+					writeFile(
+						join(artifactDir, `${engine.name()}-native.png`),
+						await sharp(packed, {
+							raw: {
+								width: nativeWidth,
+								height: nativeHeight,
+								channels: 4,
+							},
+						})
+							.png()
+							.toBuffer(),
+					),
+					writeFile(
+						join(artifactDir, `${engine.name()}-diagnostics.json`),
+						JSON.stringify(diagnostics, null, 2),
+					),
+				]);
+			}
+		} catch (diagnosticError) {
+			process.stderr.write(
+				`Studio parity diagnostics failed: ${String(diagnosticError)}\n`,
+			);
 		}
 	}
 	assert.ok(meanAbsoluteError < 3);
@@ -642,10 +807,23 @@ try {
 		timeout: 90_000,
 	});
 	const workerExportPreviewMs = Date.now() - exportPreviewStartedAt;
-	await editor
-		.getByText(/(?:< 1 MB|~[0-9.]+(?:–[0-9.]+)? (?:MB|GB))/)
-		.first()
-		.waitFor({ state: "visible", timeout: 30_000 });
+	try {
+		await editor
+			.getByText(/(?:< 1 MB|~[0-9.]+(?:–[0-9.]+)? (?:MB|GB))/)
+			.first()
+			.waitFor({ state: "visible", timeout: 30_000 });
+	} catch (cause) {
+		await reportStageFailure(
+			"export-estimate",
+			page,
+			editor,
+			cause,
+			pageErrors,
+			pageWarnings,
+			failedResponses,
+		);
+		throw cause;
+	}
 	assert.equal(preparationRequests, 1);
 	assert.ok(workerRequests > 0);
 	assert.ok(sessionId);

@@ -682,6 +682,113 @@ test("a plan change cannot release a worker during another browser Studio operat
 	}
 });
 
+test("canceling an export estimate during worker startup never starts native rendering", async () => {
+	let resolvePreparation: (response: Response) => void = () => undefined;
+	const preparation = new Promise<Response>((resolve) => {
+		resolvePreparation = resolve;
+	});
+	const requests: string[] = [];
+	const sends: string[] = [];
+	vi.stubGlobal("window", {
+		setTimeout,
+		clearTimeout,
+		location: { origin: "http://127.0.0.1:3000" },
+	});
+	vi.stubGlobal(
+		"fetch",
+		vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+			const url = String(input);
+			requests.push(url);
+			if (url === "/api/editor/videos/video/plan")
+				return Response.json({ pro: false });
+			if (url === "/api/editor/preparations" && init?.method === "POST")
+				return preparation;
+			if (url === "/api/editor/preparations/prep-1?videoId=video")
+				return Response.json({ status: "ready", sessionId: "worker-1" });
+			if (
+				url === "/api/editor/sessions/worker-1?videoId=video" &&
+				init?.method === "DELETE"
+			)
+				return Response.json({ closed: true });
+			if (
+				url === "/api/editor/sessions/worker-1/tickets" &&
+				init?.method === "POST"
+			)
+				return Response.json(credentials);
+			throw new Error(`Unexpected editor request ${url}`);
+		}),
+	);
+	class OpenSocket extends EventTarget {
+		protocol = "cap-editor-v1";
+		readyState = 1;
+		constructor(_url: string, _protocols: string[]) {
+			super();
+			queueMicrotask(() => this.dispatchEvent(new Event("open")));
+		}
+		close() {
+			this.readyState = 3;
+		}
+		send(value: string) {
+			sends.push(value);
+		}
+	}
+	vi.stubGlobal("WebSocket", OpenSocket);
+	const { iframe, postMessage } = frame();
+	const bridge = new EditorHostBridge(
+		"video",
+		"session",
+		"user",
+		vi.fn(),
+		vi.fn(),
+		undefined,
+		undefined,
+		undefined,
+		false,
+		undefined,
+		undefined,
+		() => null,
+		true,
+	);
+	try {
+		await bridge.connect(iframe);
+		const port = postMessage.mock.calls[0]?.[2]?.[0] as MessagePort;
+		const replies: Array<{ kind: string; id: number; error?: string }> = [];
+		port.onmessage = (event) => replies.push(event.data);
+		port.start();
+		port.postMessage({
+			kind: "invoke",
+			id: 51,
+			name: "getExportEstimates",
+			args: ["cap-web-editor://session/session", {}, 12],
+		});
+		await vi.waitFor(() =>
+			expect(requests).toContain("/api/editor/preparations"),
+		);
+		port.postMessage({
+			kind: "invoke",
+			id: 52,
+			name: "cancelExportEstimates",
+			args: [],
+		});
+		await vi.waitFor(() =>
+			expect(replies).toContainEqual({ kind: "result", id: 52, value: null }),
+		);
+		resolvePreparation(Response.json({ id: "prep-1", status: "preparing" }));
+		await vi.waitFor(() =>
+			expect(replies).toContainEqual({
+				kind: "error",
+				id: 51,
+				error: "Editor export estimate was canceled",
+			}),
+		);
+		expect(sends).toEqual([]);
+		expect(requests).not.toContain("/api/editor/sessions/worker-1/tickets");
+		port.close();
+	} finally {
+		bridge.dispose();
+	}
+});
+
 test("chosen desktop wallpaper uploads as an image and returns its portable path", async () => {
 	const path = "content/images/22222222-2222-4222-8222-222222222222.jpg";
 	const key = `user/video/editor-assets/images/${path.slice("content/images/".length)}`;

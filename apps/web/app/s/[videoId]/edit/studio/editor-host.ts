@@ -387,7 +387,8 @@ export class EditorHostBridge {
 	private workerCommands: WebSocket | null = null;
 	private workerCommandSessionId: string | null = null;
 	private pendingWorkerCommandOpen: Promise<WebSocket> | null = null;
-	private readonly workerCommandUses = new Map<number, () => void>();
+	private readonly workerCommandUses = new Set<number>();
+	private workerEstimateGeneration = 0;
 	private events: WebSocket | null = null;
 	private audio: WebSocket | null = null;
 	private readonly frameTickets = new Map<number, SocketCredential>();
@@ -609,9 +610,8 @@ export class EditorHostBridge {
 			socket.onclose = null;
 			socket.close();
 		}
-		for (const [id, release] of this.workerCommandUses) {
-			this.workerCommandUses.delete(id);
-			release();
+		for (const id of [...this.workerCommandUses]) {
+			this.releaseWorkerCommandUse(id);
 			if (!this.disposed)
 				this.port?.postMessage({
 					kind: "error",
@@ -619,6 +619,12 @@ export class EditorHostBridge {
 					error: "Editor export command disconnected",
 				});
 		}
+	}
+
+	private releaseWorkerCommandUse(id: number) {
+		if (!this.workerCommandUses.delete(id)) return;
+		this.activeWorkerUses--;
+		if (!this.disposed) this.scheduleWorkerIdleRelease();
 	}
 
 	private async ensureWorkerCommandSocket() {
@@ -652,11 +658,9 @@ export class EditorHostBridge {
 						return;
 					}
 					if (!isCommandReply(reply)) return;
-					const release = this.workerCommandUses.get(reply.id);
-					if (!release) return;
+					if (!this.workerCommandUses.has(reply.id)) return;
 					if (reply.kind !== "channel") {
-						this.workerCommandUses.delete(reply.id);
-						release();
+						this.releaseWorkerCommandUse(reply.id);
 					}
 					this.port?.postMessage(reply);
 				};
@@ -682,14 +686,36 @@ export class EditorHostBridge {
 
 	private async handleBrowserWorkerCommand(message: BridgeRequest) {
 		if (message.kind !== "invoke") return;
+		if (message.name === "cancelExportEstimates") {
+			this.workerEstimateGeneration++;
+		}
+		const estimateGeneration = this.workerEstimateGeneration;
 		if (message.name === "cancelExportEstimates" && !this.workerCommands) {
 			this.port?.postMessage({ kind: "result", id: message.id, value: null });
 			return;
 		}
 		let release: (() => void) | null = null;
 		try {
+			if (
+				message.name === "getExportEstimates" &&
+				estimateGeneration !== this.workerEstimateGeneration
+			) {
+				throw new Error("Editor export estimate was canceled");
+			}
 			release = await this.ensureWorkerSession();
+			if (
+				message.name === "getExportEstimates" &&
+				estimateGeneration !== this.workerEstimateGeneration
+			) {
+				throw new Error("Editor export estimate was canceled");
+			}
 			const socket = await this.ensureWorkerCommandSocket();
+			if (
+				message.name === "getExportEstimates" &&
+				estimateGeneration !== this.workerEstimateGeneration
+			) {
+				throw new Error("Editor export estimate was canceled");
+			}
 			if (!this.port || this.disposed)
 				throw new Error("Editor bridge is closed");
 			const args = [...message.args];
@@ -700,13 +726,12 @@ export class EditorHostBridge {
 			}
 			if (this.workerCommandUses.has(message.id))
 				throw new Error("Editor export command is already running");
-			this.workerCommandUses.set(message.id, release);
+			this.workerCommandUses.add(message.id);
 			release = null;
 			try {
 				socket.send(JSON.stringify({ ...message, args }));
 			} catch (cause) {
-				this.workerCommandUses.get(message.id)?.();
-				this.workerCommandUses.delete(message.id);
+				this.releaseWorkerCommandUse(message.id);
 				throw cause;
 			}
 		} catch (cause) {

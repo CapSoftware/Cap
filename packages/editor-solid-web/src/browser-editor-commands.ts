@@ -6,12 +6,17 @@ import type {
 	Video,
 } from "../../../apps/desktop/src/utils/tauri";
 import type { BrowserEditorMediaMetadata } from "../../../apps/web/lib/browser-editor-metadata";
+import {
+	browserEditorPreviewConfig,
+	browserEditorPreviewTime,
+} from "./browser-frame-socket";
 import { loadBrowserRenderer } from "./browser-renderer";
 import {
 	BrowserEditorSourceCatalog,
 	type BrowserEditorSources,
 	type BrowserSourceSegment,
 } from "./browser-sources";
+import { BrowserVideoPool } from "./browser-video-pool";
 
 type SegmentMedia = {
 	display: BrowserEditorMediaMetadata;
@@ -137,6 +142,7 @@ export class BrowserEditorCommands {
 			"createEditorInstance",
 			"getVideoMetadata",
 			"getDefaultProjectConfig",
+			"getDisplayFrameForCropping",
 			"loadCaptions",
 			"setWindowTransparent",
 			"tauri:get_recording_recovery_success",
@@ -333,7 +339,99 @@ export class BrowserEditorCommands {
 		return this.pending;
 	}
 
+	private async displayFrameForCropping(fps: number) {
+		if (!Number.isSafeInteger(fps) || fps < 1 || fps > 120) {
+			throw new Error("Editor crop frame rate is invalid");
+		}
+		const [info, sources, module] = await Promise.all([
+			this.snapshot(),
+			this.catalog.snapshot(this.controller.signal),
+			loadBrowserRenderer(),
+		]);
+		const config = record(browserEditorPreviewConfig()) ?? info.config;
+		const sourceDurations = info.instance.recordings.segments.map((segment) =>
+			Math.max(
+				segment.display.duration,
+				segment.camera?.duration ?? 0,
+				segment.mic?.duration ?? 0,
+			),
+		);
+		const timelineConfig = record(config.timeline) ?? {
+			segments: sourceDurations.map((duration, recordingSegment) => ({
+				recordingSegment,
+				timescale: 1,
+				start: 0,
+				end: duration,
+			})),
+			transitions: [],
+			zoomSegments: [],
+		};
+		const timeline = new module.BrowserTimeline(JSON.stringify(timelineConfig));
+		const timings = new module.BrowserRecordingTimes(
+			JSON.stringify(info.meta),
+			JSON.stringify(config.clips ?? []),
+		);
+		let segmentIndex: number;
+		let sourceTime: number;
+		try {
+			const outputTime = Math.max(
+				0,
+				Math.floor(browserEditorPreviewTime() * fps) / fps,
+			);
+			const mapped = timeline.map_frame(outputTime);
+			segmentIndex = mapped[2] ?? -1;
+			const sourceTimes = timings.source_times(segmentIndex, mapped[3] ?? -1);
+			sourceTime = sourceTimes[0] ?? -1;
+		} finally {
+			timings.free();
+			timeline.free();
+		}
+		if (
+			!Number.isSafeInteger(segmentIndex) ||
+			segmentIndex < 0 ||
+			!Number.isFinite(sourceTime) ||
+			sourceTime < 0
+		) {
+			throw new Error("Editor crop source time is unavailable");
+		}
+		const display = sources.segments[segmentIndex]?.display;
+		if (!display) throw new Error("Editor crop display source is unavailable");
+		const pool = new BrowserVideoPool(async (index, track) =>
+			index === segmentIndex && track === "display" ? display : null,
+		);
+		try {
+			const video = await pool.frame(
+				segmentIndex,
+				"display",
+				"primary",
+				sourceTime,
+				false,
+				1,
+				this.controller.signal,
+			);
+			if (!video || video.videoWidth < 1 || video.videoHeight < 1) {
+				throw new Error("Editor crop display frame is unavailable");
+			}
+			const canvas = document.createElement("canvas");
+			canvas.width = video.videoWidth;
+			canvas.height = video.videoHeight;
+			const context = canvas.getContext("2d");
+			if (!context) throw new Error("Editor crop canvas is unavailable");
+			context.drawImage(video, 0, 0);
+			const image = await new Promise<Blob | null>((resolve) =>
+				canvas.toBlob(resolve, "image/jpeg", 0.86),
+			);
+			if (!image) throw new Error("Editor crop image could not encode");
+			return new Uint8Array(await image.arrayBuffer());
+		} finally {
+			pool.dispose();
+		}
+	}
+
 	async invoke(name: string, args: unknown[]): Promise<unknown> {
+		if (name === "getDisplayFrameForCropping") {
+			return this.displayFrameForCropping(Number(args[0]));
+		}
 		if (name === "animatedGradientCatalog") {
 			return JSON.parse(
 				(await loadBrowserRenderer()).animated_gradient_catalog_json(),

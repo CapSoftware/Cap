@@ -127,6 +127,8 @@ class BrowserPreviewController {
 
 	isConnected = () => this.connected();
 	isReady = () => this.ready();
+	currentTime = () => this.desiredTime;
+	currentConfig = () => this.desiredConfig;
 
 	seedState(config: unknown, frame: FrameRequest | null, playing: boolean) {
 		this.desiredConfig = config;
@@ -152,6 +154,10 @@ class BrowserPreviewController {
 			0,
 			(frame) => {
 				if (this.disposed) return;
+				if (frame.renderedFrame) {
+					this.desiredTime =
+						Number(frame.renderedFrame.targetTimeNs) / 1_000_000_000;
+				}
 				this.setRendered(true);
 				this.onFrame(frame);
 				if (this.desiredPlaying)
@@ -307,6 +313,17 @@ export function setBrowserEditorVideoId(value: string | null) {
 
 export function browserEditorPreviewEnabled() {
 	return videoId !== null;
+}
+
+export function browserEditorPreviewTime() {
+	return (
+		active?.currentTime() ??
+		(pendingFrame?.frame_number ?? 0) / (pendingFrame?.fps ?? 60)
+	);
+}
+
+export function browserEditorPreviewConfig() {
+	return active?.currentConfig() ?? pendingConfig;
 }
 
 export function playBrowserEditorPreview() {

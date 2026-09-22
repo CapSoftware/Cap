@@ -378,6 +378,17 @@ export class PortEditorTransport {
 					window.dispatchEvent(new Event("cap-web-editor-captions-plan"));
 			}
 			if (name === "getDisplayFrameForCropping") {
+				if (value instanceof Uint8Array) {
+					if (
+						value.byteLength < 4 ||
+						value.byteLength > 16 * 1024 * 1024 ||
+						value[0] !== 0xff ||
+						value[1] !== 0xd8
+					) {
+						throw new Error("Crop frame response is not a JPEG");
+					}
+					return value;
+				}
 				if (
 					typeof value !== "object" ||
 					value === null ||
