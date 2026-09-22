@@ -8,7 +8,42 @@ const browserType = { chromium, firefox, webkit }[browserName];
 if (!browserType) throw new Error("Choose chromium, firefox, or webkit");
 
 const output = path.join(__dirname, "out");
-const origin = "http://localhost:18999";
+const staticServer = Bun.serve({
+	hostname: "127.0.0.1",
+	port: 0,
+	async fetch(request) {
+		const pathname = new URL(request.url).pathname;
+		if (pathname === "/browser-replay/large-background.png") {
+			return new Response(
+				Bun.file(path.join(__dirname, "large-background.png")),
+				{ headers: { "Content-Type": "image/png" } },
+			);
+		}
+		const relative =
+			pathname === "/browser-replay/"
+				? "index.html"
+				: pathname.replace(/^\/browser-replay\//, "");
+		const file = path.resolve(output, relative);
+		if (
+			(!file.startsWith(`${output}${path.sep}`) &&
+				file !== path.join(output, "index.html")) ||
+			!(await Bun.file(file).exists())
+		) {
+			return new Response(null, { status: 404 });
+		}
+		const type = file.endsWith(".wasm")
+			? "application/wasm"
+			: file.endsWith(".js")
+				? "text/javascript"
+				: file.endsWith(".css")
+					? "text/css"
+					: "text/html";
+		return new Response(Bun.file(file), {
+			headers: { "Content-Type": type },
+		});
+	},
+});
+const origin = `http://127.0.0.1:${staticServer.port}`;
 const defaultFormat = browserName === "firefox" ? "webm" : "mp4";
 const indexed = process.env.CAP_REPLAY_INDEXED === "1";
 const simulateFailedProbe =
@@ -242,6 +277,13 @@ async function replay(forceWebGl, forceWebGpu = false) {
 		}
 		await page.route(`${origin}/**`, async (route) => {
 			const pathname = new URL(route.request().url()).pathname;
+			if (
+				pathname === "/browser-replay/" ||
+				pathname.startsWith("/browser-replay/assets/")
+			) {
+				await route.continue();
+				return;
+			}
 			if (pathname === "/api/editor/videos/fixture/bootstrap") {
 				await route.fulfill({
 					status: 200,
@@ -338,68 +380,6 @@ async function replay(forceWebGl, forceWebGpu = false) {
 			{
 				timeout: 30_000,
 			},
-		);
-		const largeImage = await page.evaluate(async () => {
-			const decoder = new window.CapBrowserImageDecoder();
-			try {
-				const response = await fetch("/browser-replay/large-background.png");
-				if (!response.ok) throw new Error("Large image fixture is unavailable");
-				const started = performance.now();
-				const image = await decoder.decode(await response.arrayBuffer());
-				const decodeMs = performance.now() - started;
-				const pixels = new Uint8ClampedArray(image.pixels);
-				const bitmapStarted = performance.now();
-				const bitmap = await createImageBitmap(
-					new ImageData(pixels, image.width, image.height),
-					{ premultiplyAlpha: "none", colorSpaceConversion: "none" },
-				);
-				const bitmapMs = performance.now() - bitmapStarted;
-				const canvas = document.createElement("canvas");
-				canvas.width = bitmap.width;
-				canvas.height = bitmap.height;
-				const context = canvas.getContext("2d", { willReadFrequently: true });
-				if (!context) throw new Error("Large image canvas is unavailable");
-				context.drawImage(bitmap, 0, 0);
-				const observed = context.getImageData(
-					0,
-					0,
-					image.width,
-					image.height,
-				).data;
-				const digest = async (bytes) =>
-					Array.from(
-						new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)),
-					)
-						.map((value) => value.toString(16).padStart(2, "0"))
-						.join("");
-				const rawSha256 = await digest(pixels);
-				const bitmapSha256 = await digest(observed);
-				bitmap.close();
-				return {
-					width: image.width,
-					height: image.height,
-					decodeMs,
-					bitmapMs,
-					rawSha256,
-					bitmapSha256,
-				};
-			} finally {
-				decoder.dispose();
-			}
-		});
-		const nativeImageSha256 =
-			"ffe919d64110a31ef1862854bf685b3d0d70f2e0a96b9f9203f3026f2334224e";
-		assert(
-			largeImage.width === 2560 && largeImage.height === 1707,
-			"Large image dimensions differ from native export",
-		);
-		assert(
-			largeImage.rawSha256 === nativeImageSha256,
-			"Large image downscaling differs from native export",
-		);
-		assert(
-			largeImage.bitmapSha256 === nativeImageSha256,
-			"Large image browser bitmap differs from native export",
 		);
 		await page.evaluate(
 			({ indexed, headed }) => {
@@ -939,7 +919,7 @@ async function replay(forceWebGl, forceWebGpu = false) {
 		);
 		assert(
 			result.startChangedPixels < 100,
-			"Returning to the start did not reproduce the first GPU frame",
+			`Returning to the start changed ${result.startChangedPixels} GPU pixels`,
 		);
 		assert(
 			result.gradientChangedPixels > 1000,
@@ -1027,6 +1007,68 @@ async function replay(forceWebGl, forceWebGpu = false) {
 				assert(/webgpu/i.test(result.backend), "WebGPU path was not selected");
 			}
 		}
+		const largeImage = await page.evaluate(async () => {
+			const decoder = new window.CapBrowserImageDecoder();
+			try {
+				const response = await fetch("/browser-replay/large-background.png");
+				if (!response.ok) throw new Error("Large image fixture is unavailable");
+				const started = performance.now();
+				const image = await decoder.decode(await response.arrayBuffer());
+				const decodeMs = performance.now() - started;
+				const pixels = new Uint8ClampedArray(image.pixels);
+				const bitmapStarted = performance.now();
+				const bitmap = await createImageBitmap(
+					new ImageData(pixels, image.width, image.height),
+					{ premultiplyAlpha: "none", colorSpaceConversion: "none" },
+				);
+				const bitmapMs = performance.now() - bitmapStarted;
+				const canvas = document.createElement("canvas");
+				canvas.width = bitmap.width;
+				canvas.height = bitmap.height;
+				const context = canvas.getContext("2d", { willReadFrequently: true });
+				if (!context) throw new Error("Large image canvas is unavailable");
+				context.drawImage(bitmap, 0, 0);
+				const observed = context.getImageData(
+					0,
+					0,
+					image.width,
+					image.height,
+				).data;
+				const digest = async (bytes) =>
+					Array.from(
+						new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)),
+					)
+						.map((value) => value.toString(16).padStart(2, "0"))
+						.join("");
+				const rawSha256 = await digest(pixels);
+				const bitmapSha256 = await digest(observed);
+				bitmap.close();
+				return {
+					width: image.width,
+					height: image.height,
+					decodeMs,
+					bitmapMs,
+					rawSha256,
+					bitmapSha256,
+				};
+			} finally {
+				decoder.dispose();
+			}
+		});
+		const nativeImageSha256 =
+			"ffe919d64110a31ef1862854bf685b3d0d70f2e0a96b9f9203f3026f2334224e";
+		assert(
+			largeImage.width === 2560 && largeImage.height === 1707,
+			"Large image dimensions differ from native export",
+		);
+		assert(
+			largeImage.rawSha256 === nativeImageSha256,
+			"Large image downscaling differs from native export",
+		);
+		assert(
+			largeImage.bitmapSha256 === nativeImageSha256,
+			"Large image browser bitmap differs from native export",
+		);
 		console.log(
 			JSON.stringify({
 				browser: browserName,
@@ -1064,7 +1106,9 @@ async function main() {
 	if (failed) throw new Error("Browser compositor replay failed");
 }
 
-main().catch((error) => {
-	console.error(error.stack ?? String(error));
-	process.exitCode = 1;
-});
+main()
+	.catch((error) => {
+		console.error(error.stack ?? String(error));
+		process.exitCode = 1;
+	})
+	.finally(() => staticServer.stop(true));
