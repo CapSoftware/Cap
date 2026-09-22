@@ -135,7 +135,12 @@ async function replay(forceWebGl, forceWebGpu = false) {
 	const browser = await browserType.launch({
 		headless: process.env.CAP_REPLAY_HEADED !== "1",
 		timeout: 30_000,
-		...(forceWebGpu ? { args: ["--enable-unsafe-webgpu"] } : {}),
+		args: [
+			...(forceWebGpu ? ["--enable-unsafe-webgpu"] : []),
+			...(process.env.CAP_REPLAY_CHROME_SOFTWARE === "1"
+				? ["--use-angle=swiftshader", "--disable-gpu"]
+				: []),
+		],
 		...(browserName === "firefox" && process.env.CAP_REPLAY_HEADED === "1"
 			? {
 					firefoxUserPrefs: {
@@ -602,6 +607,21 @@ async function replay(forceWebGl, forceWebGpu = false) {
 						withCamera,
 						await snapshot(),
 					);
+					if (startChangedPixels > 100) {
+						const videoState = () =>
+							[...document.querySelectorAll("video")].map((video) => ({
+								time: video.currentTime,
+								readyState: video.readyState,
+								presentedFrames:
+									video.getVideoPlaybackQuality?.().totalVideoFrames ?? null,
+							}));
+						const firstVideoState = videoState();
+						await new Promise((resolve) => setTimeout(resolve, 250));
+						await playback.seek(0);
+						console.info(
+							`Cap replay stage: return-to-zero mismatch ${JSON.stringify({ firstChangedPixels: startChangedPixels, afterDelayChangedPixels: differentPixels(withCamera, await snapshot()), firstVideoState, delayedVideoState: videoState() })}`,
+						);
+					}
 					console.info("Cap replay stage: first frame compared");
 					const returnToStartMs = performance.now() - returnStarted;
 					config.background.source = {
@@ -704,6 +724,12 @@ async function replay(forceWebGl, forceWebGpu = false) {
 					console.info("Cap replay stage: playback interval completed");
 					playback.pause();
 					const playedFrames = frames.length - beforePlay;
+					const playbackMetrics = {
+						intervalMs: playbackIntervalMs,
+						outputTime: playback.outputTime,
+						previewScale: playback.previewScale,
+						averageFrameCostMs: playback.averageFrameCostMs,
+					};
 					let indexedParity = null;
 					if (indexed) {
 						config.background.padding = 0;
@@ -883,6 +909,7 @@ async function replay(forceWebGl, forceWebGpu = false) {
 						transitionChangedPixels,
 						blurredTransitionChangedPixels,
 						playedFrames,
+						playbackMetrics,
 						indexedParity,
 						videos,
 						width: canvas.width,
@@ -962,6 +989,11 @@ async function replay(forceWebGl, forceWebGpu = false) {
 			result.blurredTransitionChangedPixels > 1000,
 			"Paired blurred-image transition did not change the GPU frame",
 		);
+		if (result.playedFrames < 2) {
+			console.warn(
+				`Cap replay playback metrics: ${JSON.stringify({ backend: result.backend, playedFrames: result.playedFrames, ...result.playbackMetrics, firstFrameMs: result.firstFrameMs, seekMs: result.seekMs, returnToStartMs: result.returnToStartMs, indexedParity: result.indexedParity })}`,
+			);
+		}
 		assert(result.playedFrames >= 2, "Local playback did not advance");
 		if (indexed) {
 			assert(result.indexedParity !== null, "Indexed parity did not run");

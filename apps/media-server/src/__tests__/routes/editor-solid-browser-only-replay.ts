@@ -896,10 +896,23 @@ try {
 		state: "visible",
 		timeout: 20_000,
 	});
-	await editor.getByRole("img", { name: "Export preview" }).waitFor({
-		state: "visible",
-		timeout: 90_000,
-	});
+	try {
+		await editor.getByRole("img", { name: "Export preview" }).waitFor({
+			state: "visible",
+			timeout: 90_000,
+		});
+	} catch (cause) {
+		await reportStageFailure(
+			"export-preview",
+			page,
+			editor,
+			cause,
+			pageErrors,
+			pageWarnings,
+			failedResponses,
+		);
+		throw cause;
+	}
 	const workerExportPreviewMs = Date.now() - exportPreviewStartedAt;
 	try {
 		await editor

@@ -1656,8 +1656,54 @@ try {
 							(window as Window & { capWebEditorCaptionsEnabled?: boolean })
 								.capWebEditorCaptionsEnabled,
 					);
+				const hostState = await page
+					.evaluate(async () => {
+						const host = window as Window & {
+							capTestBridge?: object;
+							capTestEditorError?: string;
+						};
+						const bridge = host.capTestBridge;
+						let focusProbeCount = 0;
+						window.addEventListener(
+							"focus",
+							() => {
+								focusProbeCount++;
+							},
+							{ once: true },
+						);
+						const sequenceBeforeProbe = bridge
+							? Reflect.get(bridge, "planRequestSequence")
+							: null;
+						window.dispatchEvent(new Event("focus"));
+						await new Promise((resolve) => setTimeout(resolve, 100));
+						const controller = bridge
+							? Reflect.get(bridge, "controller")
+							: null;
+						return {
+							hidden: document.hidden,
+							visibilityState: document.visibilityState,
+							focusProbeCount,
+							sequenceBeforeProbe,
+							sequenceAfterProbe: bridge
+								? Reflect.get(bridge, "planRequestSequence")
+								: null,
+							refreshPending: bridge
+								? Reflect.get(bridge, "captionPlanRefreshPending")
+								: null,
+							controllerAborted:
+								controller instanceof AbortController
+									? controller.signal.aborted
+									: null,
+							disposed: bridge ? Reflect.get(bridge, "disposed") : null,
+							portAttached: bridge
+								? Reflect.get(bridge, "port") !== null
+								: null,
+							editorError: host.capTestEditorError ?? null,
+						};
+					})
+					.catch(() => null);
 				process.stderr.write(
-					`${JSON.stringify({ stage: "caption-plan-focus", browserEngine: browserEngine.name(), planRequestsBeforeFocus, planRequests, currentCaptionPlan, iframePlan })}\n`,
+					`${JSON.stringify({ stage: "caption-plan-focus", browserEngine: browserEngine.name(), planRequestsBeforeFocus, planRequests, currentCaptionPlan, iframePlan, hostState, pageErrors, failedResponses })}\n`,
 				);
 				throw cause;
 			}
