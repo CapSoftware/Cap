@@ -6,6 +6,10 @@
  * Video metadata structure
  */
 export interface VideoMetadata {
+	loomImportRun?: {
+		runId: string;
+		dispatch: "pending" | "accepted" | "rejected" | "uncertain";
+	};
 	editProcessing?: {
 		token: string;
 		startedAt: string;

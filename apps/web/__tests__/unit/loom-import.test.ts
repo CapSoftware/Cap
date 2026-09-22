@@ -1,3 +1,4 @@
+import type { Organisation } from "@cap/web-domain";
 import { Effect, Option } from "effect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -11,6 +12,8 @@ const headersMock = vi.hoisted(() => vi.fn());
 const getOrganizationAccessMock = vi.hoisted(() => vi.fn());
 const requireSpaceManagerMock = vi.hoisted(() => vi.fn());
 const requireOrganizationSettingsManagerMock = vi.hoisted(() => vi.fn());
+const isLoomImportRunningMock = vi.hoisted(() => vi.fn());
+const restoreLoomImportStartErrorMock = vi.hoisted(() => vi.fn());
 
 const mockDb = {
 	select: vi.fn(() => mockDb),
@@ -21,7 +24,7 @@ const mockDb = {
 	innerJoin: vi.fn(() => mockDb),
 	leftJoin: vi.fn(() => mockDb),
 	where: whereMock,
-	set: vi.fn(() => mockDb),
+	set: vi.fn((_value: { updatedAt?: Date }) => mockDb),
 	values: valuesMock,
 	transaction: vi.fn((callback) => callback(mockDb)),
 };
@@ -111,6 +114,9 @@ vi.mock("@cap/database/schema", () => ({
 	},
 	videoUploads: {
 		videoId: "videoId",
+		phase: "phase",
+		rawFileKey: "rawFileKey",
+		updatedAt: "updatedAt",
 	},
 }));
 
@@ -201,6 +207,18 @@ vi.mock("@/workflows/import-loom-video", () => ({
 	importLoomVideoWorkflow: Symbol("importLoomVideoWorkflow"),
 }));
 
+vi.mock("@/lib/loom-import-start", () => ({
+	isLoomImportRunning: isLoomImportRunningMock,
+	restoreLoomImportStartError: restoreLoomImportStartErrorMock,
+	startLoomImportWorkflow: (payload: unknown) =>
+		startMock(Symbol("workflow"), [payload]),
+	LoomImportStartError: class extends Error {
+		constructor(readonly canRetry: boolean) {
+			super("Loom import startup failed");
+		}
+	},
+}));
+
 import { getCurrentUser } from "@cap/database/auth/session";
 
 const mockGetCurrentUser = getCurrentUser as ReturnType<typeof vi.fn>;
@@ -231,6 +249,7 @@ describe("importFromLoom", () => {
 		valuesMock.mockResolvedValue(undefined);
 		whereMock.mockResolvedValue([]);
 		startMock.mockResolvedValue(undefined);
+		isLoomImportRunningMock.mockResolvedValue(false);
 		checkRateLimitMock.mockResolvedValue({ rateLimited: false });
 		getOrganizationAccessMock.mockResolvedValue({
 			id: "org-1",
@@ -254,6 +273,127 @@ describe("importFromLoom", () => {
 			id: "user-123",
 		});
 		vi.stubGlobal("fetch", vi.fn());
+	});
+
+	it("restarts a failed import without creating another video", async () => {
+		whereMock
+			.mockResolvedValueOnce([
+				{
+					videoId: "existing-video",
+					ownerId: "user-123",
+					bucketId: "bucket-1",
+					phase: "error",
+					rawFileKey: null,
+					uploadUpdatedAt: new Date("2026-09-01T00:00:00Z"),
+				},
+			])
+			.mockResolvedValueOnce([{ affectedRows: 1 }]);
+		const { importFromLoom } = await import("@/actions/loom");
+		await expect(
+			importFromLoom({
+				loomUrl: "https://www.loom.com/share/loom-abc1234567",
+				orgId: "org-1" as Organisation.OrganisationId,
+			}),
+		).resolves.toEqual({ success: true, videoId: "existing-video" });
+		expect(mockDb.insert).not.toHaveBeenCalled();
+		expect(startMock).toHaveBeenCalledWith(expect.anything(), [
+			{
+				videoId: "existing-video",
+				userId: "user-123",
+				bucketId: "bucket-1",
+				loomVideoId: "loom-abc1234567",
+				rawFileKey: "user-123/existing-video/raw-upload.mp4",
+				reuseExistingRawUpload: true,
+			},
+		]);
+	});
+
+	it.each([true, false])(
+		"restores a rejected startup without reopening an uncertain dispatch: %s",
+		async (canRetry) => {
+			whereMock
+				.mockResolvedValueOnce([
+					{
+						videoId: "existing-video",
+						ownerId: "user-123",
+						phase: "error",
+						bucketId: null,
+						rawFileKey: null,
+						uploadUpdatedAt: new Date(),
+					},
+				])
+				.mockResolvedValueOnce([{ affectedRows: 1 }]);
+			const { LoomImportStartError } = await import("@/lib/loom-import-start");
+			startMock.mockRejectedValueOnce(
+				new LoomImportStartError(canRetry, new Error()),
+			);
+			const { importFromLoom } = await import("@/actions/loom");
+			expect(
+				await importFromLoom({
+					loomUrl: "https://www.loom.com/share/loom-abc1234567",
+					orgId: "org-1" as never,
+				}),
+			).toMatchObject({ success: false, error: "Loom import startup failed" });
+			if (canRetry) {
+				expect(restoreLoomImportStartErrorMock).toHaveBeenCalledWith(
+					"existing-video",
+					"processing",
+					mockDb.set.mock.calls[0]?.[0].updatedAt,
+					"Loom import startup failed",
+				);
+			} else expect(restoreLoomImportStartErrorMock).not.toHaveBeenCalled();
+		},
+	);
+
+	it("holds a failed row while its recorded workflow is still active", async () => {
+		const receipt = { runId: "run-active", dispatch: "accepted" };
+		whereMock.mockResolvedValueOnce([
+			{
+				videoId: "existing-video",
+				ownerId: "user-123",
+				phase: "error",
+				uploadUpdatedAt: new Date(),
+				metadata: { loomImportRun: receipt },
+			},
+		]);
+		isLoomImportRunningMock.mockResolvedValueOnce(true);
+		const { importFromLoom } = await import("@/actions/loom");
+		expect(
+			await importFromLoom({
+				loomUrl: "https://www.loom.com/share/loom-abc1234567",
+				orgId: "org-1" as never,
+			}),
+		).toMatchObject({ success: false });
+		expect(isLoomImportRunningMock).toHaveBeenCalledWith(receipt);
+		expect(mockDb.update).not.toHaveBeenCalled();
+		expect(startMock).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		{ ownerId: "user-123", phase: "processing", affectedRows: 1 },
+		{ ownerId: "other-user", phase: "error", affectedRows: 1 },
+		{ ownerId: "user-123", phase: "error", affectedRows: 0 },
+	])("does not restart an unclaimed or foreign import: %j", async (row) => {
+		whereMock
+			.mockResolvedValueOnce([
+				{
+					videoId: "existing-video",
+					bucketId: "bucket-1",
+					rawFileKey: null,
+					uploadUpdatedAt: new Date("2026-09-01T00:00:00Z"),
+					...row,
+				},
+			])
+			.mockResolvedValueOnce([{ affectedRows: row.affectedRows }]);
+		const { importFromLoom } = await import("@/actions/loom");
+		await expect(
+			importFromLoom({
+				loomUrl: "https://www.loom.com/share/loom-abc1234567",
+				orgId: "org-1" as Organisation.OrganisationId,
+			}),
+		).resolves.toMatchObject({ success: false });
+		expect(startMock).not.toHaveBeenCalled();
+		expect(mockDb.insert).not.toHaveBeenCalled();
 	});
 
 	it("returns direct MP4 URLs for public Loom downloads", async () => {
@@ -493,7 +633,7 @@ describe("importFromLoom", () => {
 			3,
 			expect.objectContaining({
 				id: "video-123",
-				orgId: "org-1",
+				orgId: "org-1" as Organisation.OrganisationId,
 				source: "loom",
 				sourceId: "loom-abc1234567",
 			}),

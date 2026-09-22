@@ -213,6 +213,29 @@ describe("media processing workflows", () => {
 		);
 	});
 
+	it("uses a fresh preflight source without requesting it again", async () => {
+		const expires = Math.floor(Date.now() / 1000) + 7200;
+		const loomDownloadUrl = `https://cdn.loom.com/original.mp4?Expires=${expires}`;
+		mocks.rows = [[video], [pending], [], [metadata]];
+		await importLoomVideoWorkflow({ ...payload, loomDownloadUrl });
+		expect(mocks.fetch).toHaveBeenCalledOnce();
+		expect(JSON.parse(mocks.fetch.mock.calls[0]?.[1].body).videoUrl).toBe(
+			loomDownloadUrl,
+		);
+	});
+
+	it("refreshes an expired preflight source before dispatch", async () => {
+		mocks.rows = [[video], [pending], [], [metadata]];
+		await importLoomVideoWorkflow({
+			...payload,
+			loomDownloadUrl: "https://cdn.loom.com/original.mp4?Expires=1",
+		});
+		expect(mocks.fetch).toHaveBeenCalledTimes(2);
+		expect(JSON.parse(mocks.fetch.mock.calls[1]?.[1].body).videoUrl).toBe(
+			"https://cdn.loom.com/original.mp4",
+		);
+	});
+
 	it("retries a failed Loom worker from its preserved original", async () => {
 		mocks.rows = [
 			[video],

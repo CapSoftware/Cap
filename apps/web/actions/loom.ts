@@ -1,6 +1,5 @@
 "use server";
 
-import { randomUUID } from "node:crypto";
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
@@ -29,22 +28,26 @@ import {
 import { and, asc, eq, isNull } from "drizzle-orm";
 import { Option } from "effect";
 import { revalidatePath } from "next/cache";
-import { start } from "workflow/api";
 import {
 	getOrganizationAccess,
 	requireOrganizationAccess,
 	requireOrganizationSettingsManager,
 } from "@/actions/organization/authorization";
 import { requireSpaceManager } from "@/actions/organization/space-authorization";
+import {
+	getLoomDownloadUrl,
+	LoomDownloadTemporaryError,
+} from "@/lib/loom-download-url";
 import type { LoomImportDestination } from "@/lib/loom-import-destination";
+import {
+	isLoomImportRunning,
+	LoomImportStartError,
+	restoreLoomImportStartError,
+	startLoomImportWorkflow,
+} from "@/lib/loom-import-start";
 import { provisionOrganizationInvitee } from "@/lib/organization-provisioning";
 import { canManageOrganizationSettings } from "@/lib/permissions/roles";
 import { runPromise } from "@/lib/server";
-import { importLoomVideoWorkflow } from "@/workflows/import-loom-video";
-
-interface LoomUrlResponse {
-	url?: string;
-}
 
 type LoomDownloadMode = "direct-download" | "browser-conversion";
 
@@ -117,47 +120,6 @@ function extractLoomVideoId(url: string): string | null {
 	}
 }
 
-async function fetchLoomEndpoint(
-	videoId: string,
-	endpoint: string,
-	includeBody = true,
-): Promise<string | null> {
-	try {
-		const options: RequestInit = { method: "POST" };
-		if (includeBody) {
-			options.headers = {
-				"Content-Type": "application/json",
-				Accept: "application/json",
-			};
-			options.body = JSON.stringify({
-				anonID: randomUUID(),
-				deviceID: null,
-				force_original: false,
-				password: null,
-			});
-		}
-
-		const response = await fetch(
-			`https://www.loom.com/api/campaigns/sessions/${videoId}/${endpoint}`,
-			options,
-		);
-
-		if (!response.ok || response.status === 204) {
-			return null;
-		}
-
-		const text = await response.text();
-		if (!text.trim()) {
-			return null;
-		}
-
-		const data: LoomUrlResponse = JSON.parse(text);
-		return data.url ?? null;
-	} catch {
-		return null;
-	}
-}
-
 async function fetchVideoName(videoId: string): Promise<string | null> {
 	try {
 		const response = await fetch("https://www.loom.com/graphql", {
@@ -189,36 +151,9 @@ async function fetchVideoName(videoId: string): Promise<string | null> {
 	}
 }
 
-function isStreamingUrl(url: string): boolean {
-	const path = (url.split("?")[0] ?? "").toLowerCase();
-	return path.endsWith(".m3u8") || path.endsWith(".mpd");
-}
-
 function isDirectMp4Url(url: string): boolean {
 	const path = (url.split("?")[0] ?? "").toLowerCase();
 	return path.endsWith(".mp4");
-}
-
-async function getLoomDownloadUrl(loomVideoId: string): Promise<string | null> {
-	const requestVariants: Array<{ endpoint: string; includeBody: boolean }> = [
-		{ endpoint: "transcoded-url", includeBody: true },
-		{ endpoint: "raw-url", includeBody: true },
-		{ endpoint: "transcoded-url", includeBody: false },
-		{ endpoint: "raw-url", includeBody: false },
-	];
-
-	let fallbackStreamingUrl: string | null = null;
-
-	for (const { endpoint, includeBody } of requestVariants) {
-		const url = await fetchLoomEndpoint(loomVideoId, endpoint, includeBody);
-		if (!url) continue;
-
-		if (!isStreamingUrl(url)) return url;
-
-		if (!fallbackStreamingUrl) fallbackStreamingUrl = url;
-	}
-
-	return fallbackStreamingUrl;
 }
 
 async function fetchLoomOEmbed(
@@ -286,11 +221,13 @@ export async function downloadLoomVideo(
 			height: oembedMeta?.height,
 			requiresProxy: false,
 		};
-	} catch {
+	} catch (error) {
 		return {
 			success: false,
 			error:
-				"An unexpected error occurred. Please try again or check your internet connection.",
+				error instanceof LoomDownloadTemporaryError
+					? error.message
+					: "An unexpected error occurred. Please try again or check your internet connection.",
 		};
 	}
 }
@@ -318,6 +255,12 @@ async function importLoomVideoForOwner({
 	const existing = await db()
 		.select({
 			videoId: videos.id,
+			ownerId: videos.ownerId,
+			bucketId: videos.bucket,
+			metadata: videos.metadata,
+			phase: videoUploads.phase,
+			rawFileKey: videoUploads.rawFileKey,
+			uploadUpdatedAt: videoUploads.updatedAt,
 		})
 		.from(importedVideos)
 		.leftJoin(
@@ -327,6 +270,7 @@ async function importLoomVideoForOwner({
 				eq(videos.orgId, importedVideos.orgId),
 			),
 		)
+		.leftJoin(videoUploads, eq(videoUploads.videoId, videos.id))
 		.where(
 			and(
 				eq(importedVideos.orgId, orgId),
@@ -335,7 +279,78 @@ async function importLoomVideoForOwner({
 			),
 		);
 
-	if (existing.some((row) => row.videoId !== null)) {
+	const existingVideo = existing.find((row) => row.videoId !== null);
+	if (existingVideo?.videoId) {
+		if (
+			existingVideo.phase === "error" &&
+			existingVideo.ownerId === ownerId &&
+			existingVideo.uploadUpdatedAt
+		) {
+			if (await isLoomImportRunning(existingVideo.metadata?.loomImportRun)) {
+				return {
+					success: false,
+					error: "This Loom import is already restarting.",
+				};
+			}
+			const rawFileKey =
+				existingVideo.rawFileKey ??
+				`${ownerId}/${existingVideo.videoId}/raw-upload.mp4`;
+			const claimedAt = new Date(Math.floor(Date.now() / 1000) * 1000);
+			const claim = await db()
+				.update(videoUploads)
+				.set({
+					phase: "processing",
+					processingProgress: 0,
+					processingMessage: "Restarting Loom import...",
+					processingError: null,
+					rawFileKey,
+					updatedAt: claimedAt,
+				})
+				.where(
+					and(
+						eq(videoUploads.videoId, existingVideo.videoId),
+						eq(videoUploads.phase, "error"),
+						eq(videoUploads.updatedAt, existingVideo.uploadUpdatedAt),
+					),
+				);
+			const affectedRows = Array.isArray(claim)
+				? (claim[0] as { affectedRows?: number } | undefined)?.affectedRows
+				: (claim as { affectedRows?: number }).affectedRows;
+			if (affectedRows !== 1) {
+				return {
+					success: false,
+					error: "This Loom import is already restarting.",
+				};
+			}
+			try {
+				await startLoomImportWorkflow({
+					videoId: existingVideo.videoId,
+					userId: ownerId,
+					rawFileKey,
+					bucketId: existingVideo.bucketId,
+					loomVideoId,
+					reuseExistingRawUpload: true,
+				});
+			} catch (error) {
+				if (error instanceof LoomImportStartError && error.canRetry) {
+					await restoreLoomImportStartError(
+						existingVideo.videoId,
+						"processing",
+						claimedAt,
+						error.message,
+					);
+				}
+				return {
+					success: false,
+					error:
+						error instanceof Error
+							? error.message
+							: "Loom import could not restart.",
+				};
+			}
+			revalidatePath("/dashboard/caps");
+			return { success: true, videoId: existingVideo.videoId };
+		}
 		return {
 			success: false,
 			error: "This Loom video has already been imported.",
@@ -354,7 +369,15 @@ async function importLoomVideoForOwner({
 			);
 	}
 
-	const downloadUrl = await getLoomDownloadUrl(loomVideoId);
+	let downloadUrl: string | null;
+	try {
+		downloadUrl = await getLoomDownloadUrl(loomVideoId);
+	} catch (error) {
+		if (error instanceof LoomDownloadTemporaryError) {
+			return { success: false, error: error.message };
+		}
+		throw error;
+	}
 	if (!downloadUrl) {
 		return {
 			success: false,
@@ -394,6 +417,7 @@ async function importLoomVideoForOwner({
 		videoName ||
 		`Loom Import - ${new Date().toLocaleDateString("en-US", { day: "numeric", month: "long", year: "numeric" })}`;
 
+	const claimedAt = new Date(Math.floor(Date.now() / 1000) * 1000);
 	await db().transaction(async (tx) => {
 		await tx.insert(videos).values({
 			id: videoId,
@@ -415,6 +439,7 @@ async function importLoomVideoForOwner({
 			phase: "uploading",
 			processingProgress: 0,
 			processingMessage: "Importing from Loom...",
+			updatedAt: claimedAt,
 		});
 
 		await tx.insert(importedVideos).values({
@@ -455,15 +480,31 @@ async function importLoomVideoForOwner({
 			.catch(() => {});
 	}
 
-	await start(importLoomVideoWorkflow, [
-		{
+	try {
+		await startLoomImportWorkflow({
 			videoId,
 			userId: ownerId,
 			rawFileKey,
 			bucketId: Option.getOrNull(writable.bucketId),
 			loomVideoId,
-		},
-	]);
+			loomDownloadUrl: downloadUrl,
+		});
+	} catch (error) {
+		if (error instanceof LoomImportStartError && error.canRetry) {
+			await restoreLoomImportStartError(
+				videoId,
+				"uploading",
+				claimedAt,
+				error.message,
+			);
+		}
+		return {
+			success: false,
+			videoId,
+			error:
+				error instanceof Error ? error.message : "Loom import could not start.",
+		};
+	}
 
 	revalidatePath("/dashboard/caps");
 	if (destination.folderId) revalidatePath("/dashboard/folder/[id]", "page");
