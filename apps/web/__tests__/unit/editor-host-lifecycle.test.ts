@@ -328,6 +328,64 @@ test("returning to the web page sends the refreshed caption plan to Studio", asy
 	}
 });
 
+test("overlapping host plan requests still deliver the latest Studio entitlement", async () => {
+	const replies: Array<(response: Response) => void> = [];
+	const { bridge, port } = await connectedExportHost(
+		async (url) => {
+			if (!url.includes("/plan?")) throw new Error(`Unexpected request ${url}`);
+			return new Promise<Response>((resolve) => replies.push(resolve));
+		},
+		false,
+		undefined,
+		true,
+	);
+	const plans: boolean[] = [];
+	const commandResults: boolean[] = [];
+	port.onmessage = (event: MessageEvent<unknown>) => {
+		const message = event.data;
+		if (typeof message !== "object" || message === null) return;
+		if (
+			"kind" in message &&
+			message.kind === "event" &&
+			"name" in message &&
+			message.name === "editorCaptionPlan" &&
+			"payload" in message &&
+			typeof message.payload === "boolean"
+		) {
+			plans.push(message.payload);
+		} else if (
+			"kind" in message &&
+			message.kind === "result" &&
+			"id" in message &&
+			message.id === 73 &&
+			"value" in message &&
+			typeof message.value === "boolean"
+		) {
+			commandResults.push(message.value);
+		}
+	};
+	try {
+		window.dispatchEvent(new Event("focus"));
+		await vi.waitFor(() => expect(replies).toHaveLength(1));
+		port.postMessage({
+			kind: "invoke",
+			id: 73,
+			name: "checkUpgradedAndUpdate",
+			args: [],
+		});
+		await vi.waitFor(() => expect(replies).toHaveLength(2));
+		replies[1]?.(Response.json({ pro: true }));
+		await vi.waitFor(() => expect(plans).toEqual([true]));
+		await vi.waitFor(() => expect(commandResults).toEqual([true]));
+		replies[0]?.(Response.json({ pro: false }));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(plans).toEqual([true]);
+	} finally {
+		port.close();
+		bridge.dispose();
+	}
+});
+
 test("caption cache conflicts retain the shared bridge's full-payload retry", async () => {
 	const { bridge, port } = await connectedExportHost(
 		async () => new Response("Conflict", { status: 409 }),

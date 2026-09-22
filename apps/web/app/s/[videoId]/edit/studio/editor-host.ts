@@ -409,19 +409,10 @@ export class EditorHostBridge {
 		WebEditorImportedVideo
 	>();
 	private planRequestSequence = 0;
+	private captionPlanRefreshPending = false;
 	private readonly refreshCaptionPlanFromPage = () => {
-		const requestSequence = this.planRequestSequence + 1;
-		void this.currentPlan()
-			.then((plan) => {
-				if (!this.disposed && this.planRequestSequence === requestSequence) {
-					this.port?.postMessage({
-						kind: "event",
-						name: "editorCaptionPlan",
-						payload: plan,
-					});
-				}
-			})
-			.catch(() => undefined);
+		this.captionPlanRefreshPending = true;
+		void this.currentPlan().catch(() => undefined);
 	};
 	private readonly refreshCaptionPlanFromVisibility = () => {
 		if (!document.hidden) this.refreshCaptionPlanFromPage();
@@ -867,6 +858,14 @@ export class EditorHostBridge {
 		}
 		if (requestSequence === this.planRequestSequence) {
 			this.captionsEnabled = plan;
+			if (this.captionPlanRefreshPending && !this.disposed) {
+				this.captionPlanRefreshPending = false;
+				this.port?.postMessage({
+					kind: "event",
+					name: "editorCaptionPlan",
+					payload: plan,
+				});
+			}
 		}
 		return plan;
 	}
