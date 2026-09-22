@@ -120,6 +120,40 @@ function waitForDecodedVideoFrame(
 	});
 }
 
+function waitForPresentedVideoFrame(
+	video: HTMLVideoElement,
+	target: number,
+	signal: AbortSignal,
+	timeoutMs: number,
+) {
+	if (typeof video.requestVideoFrameCallback !== "function")
+		return Promise.resolve(false);
+	return new Promise<boolean>((resolve) => {
+		let settled = false;
+		let callbackId = 0;
+		const done = (presented: boolean) => {
+			if (settled) return;
+			settled = true;
+			video.cancelVideoFrameCallback(callbackId);
+			window.clearTimeout(timer);
+			signal.removeEventListener("abort", onAbort);
+			resolve(presented);
+		};
+		const onAbort = () => done(false);
+		const onFrame: VideoFrameRequestCallback = (_, metadata) => {
+			if (Math.abs(metadata.mediaTime - target) <= 0.075) {
+				done(true);
+			} else if (!settled) {
+				callbackId = video.requestVideoFrameCallback(onFrame);
+			}
+		};
+		const timer = window.setTimeout(() => done(false), timeoutMs);
+		signal.addEventListener("abort", onAbort, { once: true });
+		if (signal.aborted) onAbort();
+		else callbackId = video.requestVideoFrameCallback(onFrame);
+	});
+}
+
 function sourceUrl(value: string) {
 	const url = new URL(value, window.location.href);
 	if (
@@ -291,9 +325,15 @@ export class BrowserVideoPool {
 			) {
 				video.pause();
 				if (Math.abs(video.currentTime - decodeTarget) > 0) {
+					const presentation = playing
+						? null
+						: waitForPresentedVideoFrame(video, decodeTarget, signal, 250);
 					const seeked = waitForVideo(video, "seeked", signal, 10_000);
 					video.currentTime = decodeTarget;
 					await seeked;
+					if (presentation && !(await presentation) && !signal.aborted) {
+						await new Promise((resolve) => window.setTimeout(resolve, 16));
+					}
 					if (speed > 4 && navigator.vendor === "Google Inc.") {
 						await new Promise(requestAnimationFrame);
 					}
