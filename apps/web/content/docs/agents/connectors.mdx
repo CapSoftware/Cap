@@ -1,0 +1,29 @@
+---
+title: "Connect Cap to ChatGPT, Claude, or another agent"
+summary: "Use Cap's hosted MCP connector to read recordings in a chat app"
+tags: "Agents"
+---
+
+Cap's hosted connector lets an agent find recordings you own, read a recording's summary, and open timestamped transcript moments. It uses the remote Model Context Protocol (MCP), so it works without installing the Cap CLI on the agent host.
+
+The connector URL is:
+
+```text
+https://cap.so/api/mcp
+```
+
+Add that URL as a custom remote MCP connector in ChatGPT, Claude, or another host that supports remote MCP. Complete Cap's browser authorization when prompted. The connection requests only `caps:read` access. Hosts that support OAuth token revocation can revoke the connection's credentials when you disconnect it.
+
+The hosted connector currently provides three read-only tools:
+
+| Tool | What it does |
+| --- | --- |
+| `caps_list` | Finds recordings you own by title, 20 at a time |
+| `caps_get` | Reads a recording's title, status, duration, and URL |
+| `caps_context` | Reads a summary and up to 30 timestamped transcript cues from one recording; optionally finds matching cues |
+
+Hosts that support MCP Apps can display a Cap recording card for `caps_context`. Other hosts receive the same text and structured data. Transcript search is within a selected recording; the connector does not search every transcript in your library.
+
+For uploads, edits, comments, organization administration, local files, and the full tool set, continue using the [Cap CLI and local MCP setup](/docs/agents/setup). Its authentication and `cap mcp serve` behavior are separate from the hosted connector.
+
+Muse and other host directories may require their own review before they list Cap. The remote MCP endpoint is the integration surface for hosts that accept a custom connector URL.
