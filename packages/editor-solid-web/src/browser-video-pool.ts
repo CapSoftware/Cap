@@ -17,6 +17,9 @@ type VideoSlot = {
 	url: string;
 	activeCalls: number;
 	primed: boolean;
+	playVersion: number;
+	playPending: boolean;
+	playError: Error | null;
 };
 
 function mediaError(video: HTMLVideoElement) {
@@ -178,8 +181,14 @@ function sourceKey(segmentIndex: number, track: BrowserVideoTrack) {
 	return `${segmentIndex}:${track}`;
 }
 
-function releaseSlot(slot: VideoSlot) {
+function pauseSlot(slot: VideoSlot) {
+	slot.playVersion++;
+	slot.playPending = false;
 	slot.element.pause();
+}
+
+function releaseSlot(slot: VideoSlot) {
+	pauseSlot(slot);
 	slot.element.removeAttribute("src");
 	slot.element.load();
 	slot.element.remove();
@@ -254,7 +263,15 @@ export class BrowserVideoPool {
 			if (!source.url.startsWith("blob:")) video.crossOrigin = "anonymous";
 			video.src = source.url;
 			this.host.append(video);
-			slot = { element: video, url: source.url, activeCalls: 0, primed: false };
+			slot = {
+				element: video,
+				url: source.url,
+				activeCalls: 0,
+				primed: false,
+				playVersion: 0,
+				playPending: false,
+				playError: null,
+			};
 			this.slots.set(key, slot);
 			created = true;
 		}
@@ -310,6 +327,7 @@ export class BrowserVideoPool {
 		if (!slot) return null;
 		const video = slot.element;
 		try {
+			if (slot.playError) throw slot.playError;
 			const target = Number.isFinite(video.duration)
 				? Math.min(sourceTime, Math.max(video.duration - 0.001, 0))
 				: sourceTime;
@@ -325,7 +343,7 @@ export class BrowserVideoPool {
 				!slot.primed ||
 				Math.abs(video.currentTime - decodeTarget) > tolerance
 			) {
-				video.pause();
+				pauseSlot(slot);
 				if (Math.abs(video.currentTime - decodeTarget) > 0) {
 					const presentation = playing
 						? null
@@ -347,13 +365,29 @@ export class BrowserVideoPool {
 			}
 			if (playing && speed >= 0.25 && speed <= 4) {
 				video.playbackRate = speed;
-				if (video.paused) await video.play();
+				if (video.paused && !slot.playPending) {
+					const version = ++slot.playVersion;
+					slot.playPending = true;
+					void video.play().then(
+						() => {
+							if (slot.playVersion === version) slot.playPending = false;
+						},
+						(cause: unknown) => {
+							if (slot.playVersion !== version || this.disposed) return;
+							slot.playPending = false;
+							if (cause instanceof DOMException && cause.name === "AbortError")
+								return;
+							slot.playError =
+								cause instanceof Error ? cause : new Error(String(cause));
+						},
+					);
+				}
 				if (signal.aborted) {
-					video.pause();
+					pauseSlot(slot);
 					throw signal.reason ?? new DOMException("Canceled", "AbortError");
 				}
 			} else if (!video.paused) {
-				video.pause();
+				pauseSlot(slot);
 			}
 			if (
 				video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA ||
@@ -382,7 +416,10 @@ export class BrowserVideoPool {
 	}
 
 	pause() {
-		for (const slot of this.slots.values()) slot.element.pause();
+		for (const slot of this.slots.values()) {
+			pauseSlot(slot);
+			slot.playError = null;
+		}
 	}
 
 	retainSegments(primary: number, overlap: number | null) {
