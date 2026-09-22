@@ -409,8 +409,14 @@ export class EditorHostBridge {
 		WebEditorImportedVideo
 	>();
 	private planRequestSequence = 0;
+	private lastSuccessfulPlanRequestSequence = 0;
+	private activePlanRequests = 0;
 	private captionPlanRefreshPending = false;
+	private captionPlanRefreshStartSequence = 0;
 	private readonly refreshCaptionPlanFromPage = () => {
+		if (!this.captionPlanRefreshPending) {
+			this.captionPlanRefreshStartSequence = this.planRequestSequence + 1;
+		}
 		this.captionPlanRefreshPending = true;
 		void this.currentPlan().catch(() => undefined);
 	};
@@ -841,33 +847,45 @@ export class EditorHostBridge {
 
 	private async currentPlan() {
 		const requestSequence = ++this.planRequestSequence;
-		const response = await fetch(
-			this.browserOnly
-				? `/api/editor/videos/${encodeURIComponent(this.videoId)}/plan`
-				: `/api/editor/sessions/${encodeURIComponent(this.sessionId)}/plan?videoId=${encodeURIComponent(this.videoId)}`,
-			{ cache: "no-store", signal: this.controller.signal },
-		);
-		if (!response.ok) throw new Error("Recording plan is unavailable");
-		const value: unknown = await response.json();
-		const plan =
-			typeof value === "object" && value !== null && "pro" in value
-				? value.pro
-				: null;
-		if (typeof plan !== "boolean") {
-			throw new Error("Recording plan response was invalid");
-		}
-		if (requestSequence === this.planRequestSequence) {
-			this.captionsEnabled = plan;
-			if (this.captionPlanRefreshPending && !this.disposed) {
+		this.activePlanRequests++;
+		try {
+			const response = await fetch(
+				this.browserOnly
+					? `/api/editor/videos/${encodeURIComponent(this.videoId)}/plan`
+					: `/api/editor/sessions/${encodeURIComponent(this.sessionId)}/plan?videoId=${encodeURIComponent(this.videoId)}`,
+				{ cache: "no-store", signal: this.controller.signal },
+			);
+			if (!response.ok) throw new Error("Recording plan is unavailable");
+			const value: unknown = await response.json();
+			const plan =
+				typeof value === "object" && value !== null && "pro" in value
+					? value.pro
+					: null;
+			if (typeof plan !== "boolean") {
+				throw new Error("Recording plan response was invalid");
+			}
+			if (requestSequence > this.lastSuccessfulPlanRequestSequence) {
+				this.lastSuccessfulPlanRequestSequence = requestSequence;
+				this.captionsEnabled = plan;
+				if (
+					this.captionPlanRefreshPending &&
+					requestSequence >= this.captionPlanRefreshStartSequence &&
+					!this.disposed
+				) {
+					this.port?.postMessage({
+						kind: "event",
+						name: "editorCaptionPlan",
+						payload: plan,
+					});
+				}
+			}
+			return plan;
+		} finally {
+			this.activePlanRequests--;
+			if (this.activePlanRequests === 0) {
 				this.captionPlanRefreshPending = false;
-				this.port?.postMessage({
-					kind: "event",
-					name: "editorCaptionPlan",
-					payload: plan,
-				});
 			}
 		}
-		return plan;
 	}
 
 	private exportPath(exportId?: string) {
