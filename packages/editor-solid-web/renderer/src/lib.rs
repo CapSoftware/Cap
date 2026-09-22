@@ -609,6 +609,7 @@ pub struct BrowserGpuRenderer {
     background: BrowserBackground,
     background_uniforms: BackgroundUniforms,
     animated_background: Option<AnimatedGradientLayer>,
+    animated_intermediate: Option<AnimatedGradientLayer>,
     animated_config: Option<AnimatedGradientConfig>,
     frame_number: u32,
     frame_rate: u32,
@@ -754,13 +755,15 @@ impl BrowserGpuRenderer {
             }
         };
         let backend = format!("{:?}", adapter.get_info().backend);
-        if surface
-            .get_capabilities(&adapter)
-            .formats
-            .contains(&wgpu::TextureFormat::Rgba8Unorm)
+        if adapter.get_info().backend != wgpu::Backend::BrowserWebGpu
+            && surface
+                .get_capabilities(&adapter)
+                .formats
+                .contains(&wgpu::TextureFormat::Rgba8Unorm)
         {
             surface_config.format = wgpu::TextureFormat::Rgba8Unorm;
         }
+        trace_renderer(&format!("surface format {:?}", surface_config.format));
         surface_config.desired_maximum_frame_latency = 2;
         surface.configure(&device, &surface_config);
         let pipeline = CompositeVideoFramePipeline::new_for_format(&device, surface_config.format);
@@ -775,6 +778,7 @@ impl BrowserGpuRenderer {
             background,
             background_uniforms,
             animated_background: None,
+            animated_intermediate: None,
             animated_config: None,
             frame_number: 0,
             frame_rate: 60,
@@ -801,10 +805,11 @@ impl BrowserGpuRenderer {
         match &project.background.source {
             BackgroundSource::AnimatedGradient { config } => {
                 if self.animated_background.is_none() {
-                    self.animated_background = Some(AnimatedGradientLayer::new(
+                    self.animated_background = Some(AnimatedGradientLayer::new_for_format(
                         &self.device,
                         config.clone(),
                         &self.project_uniforms(),
+                        self.surface_config.format,
                     ));
                 }
                 self.animated_config = Some(config.clone());
@@ -817,6 +822,7 @@ impl BrowserGpuRenderer {
                     .map(|background| background.update(&self.queue, uniforms));
                 self.background_uniforms = uniforms;
                 self.animated_background = None;
+                self.animated_intermediate = None;
                 self.animated_config = None;
             }
         }
@@ -844,6 +850,13 @@ impl BrowserGpuRenderer {
         let project = self.project_uniforms();
         if let (Some(layer), Some(config)) = (
             self.animated_background.as_mut(),
+            self.animated_config.as_ref(),
+        ) {
+            layer.prepare(&self.device, &self.queue, config.clone(), &project);
+            layer.render_surface(encoder);
+        }
+        if let (Some(layer), Some(config)) = (
+            self.animated_intermediate.as_mut(),
             self.animated_config.as_ref(),
         ) {
             layer.prepare(&self.device, &self.queue, config.clone(), &project);
@@ -1006,6 +1019,16 @@ impl BrowserGpuRenderer {
         if self.intermediate_pipeline.is_none() {
             self.intermediate_pipeline = Some(CompositeVideoFramePipeline::new(&self.device));
         }
+        if let (None, Some(config)) = (
+            self.animated_intermediate.as_ref(),
+            self.animated_config.as_ref(),
+        ) {
+            self.animated_intermediate = Some(AnimatedGradientLayer::new(
+                &self.device,
+                config.clone(),
+                &self.project_uniforms(),
+            ));
+        }
         if self.intermediate_background.is_none() {
             self.intermediate_background = Some(BrowserBackground::new(
                 &self.device,
@@ -1068,7 +1091,7 @@ impl BrowserGpuRenderer {
             self.intermediate_background
                 .as_ref()
                 .ok_or_else(|| js_error("Transition background is missing"))?,
-            self.animated_background.as_ref(),
+            self.animated_intermediate.as_ref(),
             pipeline,
             &mut encoder,
             &intermediate_view,
@@ -1107,7 +1130,7 @@ impl BrowserGpuRenderer {
             self.intermediate_background
                 .as_ref()
                 .ok_or_else(|| js_error("Transition background is missing"))?,
-            self.animated_background.as_ref(),
+            self.animated_intermediate.as_ref(),
             pipeline,
             &mut encoder,
             &intermediate_view,
@@ -1180,7 +1203,7 @@ impl BrowserGpuRenderer {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
+            format: self.surface_config.format,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
@@ -1288,6 +1311,14 @@ impl BrowserGpuRenderer {
         }
         drop(mapped);
         buffer.unmap();
+        if matches!(
+            self.surface_config.format,
+            wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
+        ) {
+            for pixel in pixels.chunks_exact_mut(4) {
+                pixel.swap(0, 2);
+            }
+        }
         Ok(pixels)
     }
 }

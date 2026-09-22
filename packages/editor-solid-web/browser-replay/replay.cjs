@@ -440,6 +440,55 @@ async function replay(forceWebGl, forceWebGpu = false) {
 						gradientStart,
 						await snapshot(),
 					);
+					const sourceDuration = Math.min(playback.sourceDurations[0], 2);
+					const split = sourceDuration * 0.6;
+					const transitionDuration = 0.3;
+					config.timeline = {
+						segments: [
+							{
+								recordingSegment: 0,
+								start: 0,
+								end: split,
+								timescale: 1,
+							},
+							{
+								recordingSegment: 0,
+								start: split,
+								end: sourceDuration,
+								timescale: 1,
+							},
+						],
+						transitions: [
+							{
+								segmentIndex: 1,
+								type: "cross-fade",
+								duration: transitionDuration,
+							},
+						],
+						zoomSegments: [],
+					};
+					await playback.setConfig(config);
+					const transitionStart = split - transitionDuration;
+					await playback.seek(transitionStart + transitionDuration * 0.2);
+					const transitionFirst = await snapshot();
+					await playback.seek(transitionStart + transitionDuration * 0.5);
+					const transitionMiddle = await snapshot();
+					await playback.seek(transitionStart + transitionDuration * 0.8);
+					const transitionLast = await snapshot();
+					const transitionChangedPixels =
+						differentPixels(transitionFirst, transitionMiddle) +
+						differentPixels(transitionMiddle, transitionLast);
+					if (
+						playback.timeline.map_frame(
+							transitionStart + transitionDuration * 0.5,
+						)[0] !== 2 ||
+						transitionChangedPixels === 0
+					) {
+						throw new Error(
+							"Paired animated-gradient transition did not render",
+						);
+					}
+					config.timeline = undefined;
 					config.background.source = JSON.parse(
 						playback.module.default_project_config_json(),
 					).background.source;
@@ -594,6 +643,7 @@ async function replay(forceWebGl, forceWebGpu = false) {
 						startChangedPixels,
 						gradientChangedPixels,
 						gradientMotionPixels,
+						transitionChangedPixels,
 						playedFrames,
 						indexedParity,
 						videos,
@@ -652,6 +702,10 @@ async function replay(forceWebGl, forceWebGpu = false) {
 		assert(
 			result.gradientMotionPixels > 1000,
 			"Animated gradient did not move across the timeline",
+		);
+		assert(
+			result.transitionChangedPixels > 1000,
+			"Paired animated-gradient transition did not change the GPU frame",
 		);
 		assert(result.playedFrames >= 2, "Local playback did not advance");
 		if (indexed) {
