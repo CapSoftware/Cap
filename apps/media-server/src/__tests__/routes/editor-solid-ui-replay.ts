@@ -12,12 +12,14 @@ import {
 	type Browser,
 	chromium,
 	type Download,
+	firefox,
 	webkit,
 } from "@playwright/test";
 import sharp from "sharp";
 import { hasEditorCaptionContent } from "../../../../../apps/web/lib/editor-caption-access";
 import app from "../../editor-worker-app";
 import { parseEditorSocketRequest } from "../../lib/editor-command-socket";
+import { renderEditorExportPreview } from "../../lib/editor-export-previews";
 import { getEditorSession } from "../../lib/editor-sessions";
 import {
 	type EditorSocketConnection,
@@ -42,7 +44,11 @@ const runtimeFaultMessage = recoveryFault
 	? "Recording may need to be recovered"
 	: "Editor runtime fault for UI replay";
 const browserEngine =
-	process.env.CAP_EDITOR_UI_BROWSER === "webkit" ? webkit : chromium;
+	process.env.CAP_EDITOR_UI_BROWSER === "webkit"
+		? webkit
+		: process.env.CAP_EDITOR_UI_BROWSER === "firefox"
+			? firefox
+			: chromium;
 const editorPublic = resolve(
 	process.env.CAP_EDITOR_SOLID_PUBLIC_DIR ??
 		resolve(import.meta.dir, "../../../../../apps/web/public/editor-solid"),
@@ -784,6 +790,46 @@ try {
 	assert.equal(preparation.status, 202);
 	const prepared = (await preparation.json()) as { id: string };
 	sessionId = await readySession(prepared.id, headers);
+	const preparedNative = getEditorSession(sessionId);
+	assert.ok(preparedNative);
+	if (proCaptions && !runtimeFault) {
+		const endPreview = await renderEditorExportPreview(
+			sessionId,
+			preparedNative,
+			2,
+			{
+				fps: 60,
+				resolution_base: { x: 640, y: 360 },
+				compression_bpp: 0.14,
+			},
+			new AbortController().signal,
+		);
+		assert.equal(endPreview.total_frames, 120);
+		assert.ok(Buffer.from(endPreview.jpeg_base64, "base64").length > 1_000);
+	}
+	if (shareReplay) {
+		const gradientResponse = await preparedNative.request(
+			"/animated-gradients/random",
+		);
+		assert.equal(gradientResponse.status, 200);
+		const gradient = await gradientResponse.json();
+		const configResponse = await app.request(
+			`/editor/sessions/${sessionId}/config`,
+			{ headers },
+		);
+		assert.equal(configResponse.status, 200);
+		const config = (await configResponse.json()) as {
+			background: { source: unknown; blur: number };
+		};
+		config.background.source = { type: "animatedGradient", config: gradient };
+		config.background.blur = 60;
+		const saved = await app.request(`/editor/sessions/${sessionId}/config`, {
+			method: "PUT",
+			headers,
+			body: JSON.stringify(config),
+		});
+		assert.equal(saved.status, 204);
+	}
 	const socketHandler: Bun.WebSocketHandler<EditorSocketConnection> =
 		runtimeFault
 			? {
@@ -1100,6 +1146,13 @@ try {
 			await editor.getByRole("tab", { name: "Camera" }).isDisabled(),
 			false,
 		);
+		if (shareReplay) {
+			const blurControl = await editor
+				.getByText("Blur", { exact: true })
+				.locator("..")
+				.innerText();
+			assert.ok(blurControl.includes("60.0%"));
+		}
 		let nativePreviewParity: {
 			meanAbsoluteError: number;
 			psnrDb: number;

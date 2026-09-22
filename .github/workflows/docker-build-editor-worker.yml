@@ -11,6 +11,7 @@ on:
       - "apps/desktop/src-tauri/assets/backgrounds/**"
       - "crates/**"
       - "packages/editor-cap-bundle/**"
+      - "packages/editor-solid-web/**"
       - "vendor/**"
       - "Cargo.toml"
       - "Cargo.lock"
@@ -30,6 +31,7 @@ on:
       - "apps/desktop/src-tauri/assets/backgrounds/**"
       - "crates/**"
       - "packages/editor-cap-bundle/**"
+      - "packages/editor-solid-web/**"
       - "vendor/**"
       - "Cargo.toml"
       - "Cargo.lock"
@@ -114,10 +116,10 @@ jobs:
             bash -e -u -o pipefail -c '
               cd /source
               bun install --frozen-lockfile
-              bunx playwright install --with-deps chromium webkit
+              bunx playwright install --with-deps chromium webkit firefox
               bun run --filter @cap/editor-solid-web build
               cd /source/apps/media-server
-              for browser in chromium webkit; do
+              for browser in chromium webkit firefox; do
                 for pro in 0 1; do
                   CAP_EDITOR_UI_SHARE_REPLAY=1 CAP_EDITOR_UI_BROWSER="$browser" CAP_EDITOR_UI_PRO_CAPTIONS="$pro" bun run test:native-editor-ui
                 done

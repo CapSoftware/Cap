@@ -144,6 +144,27 @@ export class PortEditorTransport {
 					}
 					const instance: Record<string, unknown> = { ...value };
 					delete instance.frameSocketTicket;
+					if (
+						browserEditorPreviewEnabled() &&
+						"savedProjectConfig" in value &&
+						typeof value.savedProjectConfig === "object" &&
+						value.savedProjectConfig !== null &&
+						!Array.isArray(value.savedProjectConfig)
+					) {
+						const mapped = mapEditorImportedImages(value.savedProjectConfig);
+						const config =
+							window.capWebEditorCaptionsEnabled === true
+								? mapped
+								: stripEditorCaptionContent(mapped as Record<string, unknown>);
+						void setBrowserEditorPreviewConfig(config).then(
+							() => request.resolve(instance),
+							(cause: unknown) =>
+								request.reject(
+									cause instanceof Error ? cause : new Error(String(cause)),
+								),
+						);
+						return;
+					}
 					request.resolve(instance);
 				} else {
 					request.resolve(message.value);
