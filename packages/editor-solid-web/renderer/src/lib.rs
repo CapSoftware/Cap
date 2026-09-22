@@ -26,7 +26,7 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
-use web_sys::{HtmlCanvasElement, HtmlVideoElement, WebGl2RenderingContext};
+use web_sys::{HtmlCanvasElement, HtmlVideoElement, ImageBitmap, WebGl2RenderingContext};
 use wgpu::util::DeviceExt;
 
 struct ProjectUniforms {
@@ -451,6 +451,270 @@ impl BrowserBackground {
     }
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct ImageBackgroundUniforms {
+    output_size: [f32; 2],
+    padding: f32,
+    x_width: f32,
+    y_height: f32,
+    _padding: f32,
+    _padding2: [f32; 2],
+}
+
+struct BrowserImageBackground {
+    path: String,
+    image_width: u32,
+    image_height: u32,
+    surface_pipeline: wgpu::RenderPipeline,
+    intermediate_pipeline: Option<wgpu::RenderPipeline>,
+    uniform_buffer: wgpu::Buffer,
+    bind_group: wgpu::BindGroup,
+    _texture: wgpu::Texture,
+}
+
+impl BrowserImageBackground {
+    fn uniforms(
+        image_width: u32,
+        image_height: u32,
+        output_width: u32,
+        output_height: u32,
+    ) -> ImageBackgroundUniforms {
+        let output_ar = output_height as f32 / output_width as f32;
+        let image_ar = image_height as f32 / image_width as f32;
+        let y_height = if output_ar < image_ar {
+            ((image_ar - output_ar) / 2.0) / image_ar
+        } else {
+            0.0
+        };
+        let x_width = if output_ar > image_ar {
+            let output_ar = 1.0 / output_ar;
+            let image_ar = 1.0 / image_ar;
+            ((image_ar - output_ar) / 2.0) / image_ar
+        } else {
+            0.0
+        };
+        ImageBackgroundUniforms {
+            output_size: [output_width as f32, output_height as f32],
+            padding: 0.0,
+            x_width,
+            y_height,
+            _padding: 0.0,
+            _padding2: [0.0; 2],
+        }
+    }
+
+    fn new(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        surface_format: wgpu::TextureFormat,
+        output_width: u32,
+        output_height: u32,
+        path: String,
+        image: ImageBitmap,
+    ) -> Result<Self, JsValue> {
+        let image_width = image.width();
+        let image_height = image.height();
+        if image_width == 0
+            || image_height == 0
+            || image_width > device.limits().max_texture_dimension_2d
+            || image_height > device.limits().max_texture_dimension_2d
+        {
+            return Err(js_error(
+                "Editor background image exceeds browser GPU limits",
+            ));
+        }
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Shared editor image background shader"),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../../../../crates/rendering/src/shaders/image-background.wgsl")
+                    .into(),
+            ),
+        });
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Browser image background layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Browser image background pipeline layout"),
+            bind_group_layouts: &[&layout],
+            push_constant_ranges: &[],
+        });
+        let make_pipeline = |format| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("Browser editor image background pipeline"),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &[],
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend: Some(wgpu::BlendState::REPLACE),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    cull_mode: Some(wgpu::Face::Back),
+                    ..Default::default()
+                },
+                depth_stencil: None,
+                multisample: Default::default(),
+                multiview: None,
+                cache: None,
+            })
+        };
+        let surface_pipeline = make_pipeline(surface_format);
+        let intermediate_pipeline = (surface_format != wgpu::TextureFormat::Rgba8Unorm)
+            .then(|| make_pipeline(wgpu::TextureFormat::Rgba8Unorm));
+        let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Browser image background uniforms"),
+            contents: bytemuck::bytes_of(&Self::uniforms(
+                image_width,
+                image_height,
+                output_width,
+                output_height,
+            )),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Browser editor background image"),
+            size: wgpu::Extent3d {
+                width: image_width,
+                height: image_height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        queue.copy_external_image_to_texture(
+            &wgpu::CopyExternalImageSourceInfo {
+                source: wgpu::ExternalImageSource::ImageBitmap(image),
+                origin: wgpu::Origin2d::ZERO,
+                flip_y: false,
+            },
+            wgpu::CopyExternalImageDestInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+                color_space: wgpu::PredefinedColorSpace::Srgb,
+                premultiplied_alpha: false,
+            },
+            wgpu::Extent3d {
+                width: image_width,
+                height: image_height,
+                depth_or_array_layers: 1,
+            },
+        );
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Browser editor image background bind group"),
+            layout: &layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(
+                        &texture.create_view(&wgpu::TextureViewDescriptor::default()),
+                    ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+            ],
+        });
+        Ok(Self {
+            path,
+            image_width,
+            image_height,
+            surface_pipeline,
+            intermediate_pipeline,
+            uniform_buffer,
+            bind_group,
+            _texture: texture,
+        })
+    }
+
+    fn update_size(&self, queue: &wgpu::Queue, output_width: u32, output_height: u32) {
+        queue.write_buffer(
+            &self.uniform_buffer,
+            0,
+            bytemuck::bytes_of(&Self::uniforms(
+                self.image_width,
+                self.image_height,
+                output_width,
+                output_height,
+            )),
+        );
+    }
+
+    fn draw(&self, pass: &mut wgpu::RenderPass<'_>, intermediate: bool) {
+        let pipeline = if intermediate {
+            self.intermediate_pipeline
+                .as_ref()
+                .unwrap_or(&self.surface_pipeline)
+        } else {
+            &self.surface_pipeline
+        };
+        pass.set_pipeline(pipeline);
+        pass.set_bind_group(0, &self.bind_group, &[]);
+        pass.draw(0..4, 0..1);
+    }
+}
+
 fn create_input(
     device: &wgpu::Device,
     pipeline: &CompositeVideoFramePipeline,
@@ -545,6 +809,8 @@ fn upload_video(
 fn draw_layers(
     background: &BrowserBackground,
     animated_background: Option<&AnimatedGradientLayer>,
+    image_background: Option<&BrowserImageBackground>,
+    intermediate: bool,
     pipeline: &CompositeVideoFramePipeline,
     encoder: &mut wgpu::CommandEncoder,
     target: &wgpu::TextureView,
@@ -565,7 +831,9 @@ fn draw_layers(
         timestamp_writes: None,
         occlusion_query_set: None,
     });
-    if let Some(animated_background) = animated_background {
+    if let Some(image_background) = image_background {
+        image_background.draw(&mut pass, intermediate);
+    } else if let Some(animated_background) = animated_background {
         animated_background.render(&mut pass);
     } else {
         background.draw(&mut pass);
@@ -608,6 +876,7 @@ pub struct BrowserGpuRenderer {
     pipeline: CompositeVideoFramePipeline,
     background: BrowserBackground,
     background_uniforms: BackgroundUniforms,
+    image_background: Option<BrowserImageBackground>,
     animated_background: Option<AnimatedGradientLayer>,
     animated_intermediate: Option<AnimatedGradientLayer>,
     animated_config: Option<AnimatedGradientConfig>,
@@ -642,6 +911,8 @@ fn draw_retained(
             draw_layers(
                 &renderer.background,
                 renderer.animated_background.as_ref(),
+                renderer.image_background.as_ref(),
+                false,
                 &renderer.pipeline,
                 encoder,
                 target,
@@ -795,6 +1066,7 @@ impl BrowserGpuRenderer {
             pipeline,
             background,
             background_uniforms,
+            image_background: None,
             animated_background: None,
             animated_intermediate: None,
             animated_config: None,
@@ -818,10 +1090,15 @@ impl BrowserGpuRenderer {
         self.backend.clone()
     }
 
-    pub fn set_background(&mut self, project_json: &str) -> Result<(), JsValue> {
+    pub fn set_background(
+        &mut self,
+        project_json: &str,
+        image: Option<ImageBitmap>,
+    ) -> Result<(), JsValue> {
         let project: ProjectConfiguration = serde_json::from_str(project_json).map_err(js_error)?;
         match &project.background.source {
             BackgroundSource::AnimatedGradient { config } => {
+                self.image_background = None;
                 if self.animated_background.is_none() {
                     self.animated_background = Some(AnimatedGradientLayer::new_for_format(
                         &self.device,
@@ -832,6 +1109,42 @@ impl BrowserGpuRenderer {
                 }
                 self.animated_config = Some(config.clone());
             }
+            BackgroundSource::Image { path } | BackgroundSource::Wallpaper { path } => {
+                if let Some(path) = path.as_deref().filter(|path| !path.is_empty()) {
+                    if self
+                        .image_background
+                        .as_ref()
+                        .is_none_or(|background| background.path != path)
+                    {
+                        let image = image
+                            .ok_or_else(|| js_error("Editor background image is unavailable"))?;
+                        self.image_background = Some(BrowserImageBackground::new(
+                            &self.device,
+                            &self.queue,
+                            self.surface_config.format,
+                            self.surface_config.width,
+                            self.surface_config.height,
+                            path.to_owned(),
+                            image,
+                        )?);
+                    }
+                } else {
+                    let white = BackgroundSource::Color {
+                        value: [255, 255, 255],
+                        alpha: 255,
+                    };
+                    let uniforms = BackgroundUniforms::from_source(&white)?;
+                    self.background.update(&self.queue, uniforms);
+                    self.intermediate_background
+                        .as_ref()
+                        .map(|background| background.update(&self.queue, uniforms));
+                    self.background_uniforms = uniforms;
+                    self.image_background = None;
+                }
+                self.animated_background = None;
+                self.animated_intermediate = None;
+                self.animated_config = None;
+            }
             source => {
                 let uniforms = BackgroundUniforms::from_source(source)?;
                 self.background.update(&self.queue, uniforms);
@@ -839,6 +1152,7 @@ impl BrowserGpuRenderer {
                     .as_ref()
                     .map(|background| background.update(&self.queue, uniforms));
                 self.background_uniforms = uniforms;
+                self.image_background = None;
                 self.animated_background = None;
                 self.animated_intermediate = None;
                 self.animated_config = None;
@@ -894,6 +1208,9 @@ impl BrowserGpuRenderer {
             self.surface_config.width = width;
             self.surface_config.height = height;
             self.surface.configure(&self.device, &self.surface_config);
+            self.image_background
+                .as_ref()
+                .map(|background| background.update_size(&self.queue, width, height));
             self.intermediate = None;
             self.last_rendered = None;
             self.last_composition = None;
@@ -973,6 +1290,8 @@ impl BrowserGpuRenderer {
         draw_layers(
             &self.background,
             self.animated_background.as_ref(),
+            self.image_background.as_ref(),
+            false,
             &self.pipeline,
             &mut encoder,
             &view,
@@ -1110,6 +1429,8 @@ impl BrowserGpuRenderer {
                 .as_ref()
                 .ok_or_else(|| js_error("Transition background is missing"))?,
             self.animated_intermediate.as_ref(),
+            self.image_background.as_ref(),
+            true,
             pipeline,
             &mut encoder,
             &intermediate_view,
@@ -1149,6 +1470,8 @@ impl BrowserGpuRenderer {
                 .as_ref()
                 .ok_or_else(|| js_error("Transition background is missing"))?,
             self.animated_intermediate.as_ref(),
+            self.image_background.as_ref(),
+            true,
             pipeline,
             &mut encoder,
             &intermediate_view,
@@ -1265,6 +1588,8 @@ impl BrowserGpuRenderer {
                 draw_layers(
                     &self.background,
                     self.animated_background.as_ref(),
+                    self.image_background.as_ref(),
+                    false,
                     &self.pipeline,
                     &mut encoder,
                     &view,

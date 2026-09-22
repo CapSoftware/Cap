@@ -9,7 +9,7 @@ export class BrowserGpuRenderer {
   free(): void;
   static create(canvas: HTMLCanvasElement): Promise<BrowserGpuRenderer>;
   static createWebGl(canvas: HTMLCanvasElement): Promise<BrowserGpuRenderer>;
-  set_background(project_json: string): void;
+  set_background(project_json: string, image?: ImageBitmap | null): void;
   set_frame_time(frame_number: number, frame_rate: number): void;
   resize(width: number, height: number): void;
   render(screen_video: HTMLVideoElement, screen_uniforms: Uint8Array, camera_video?: HTMLVideoElement | null, camera_uniforms?: Uint8Array | null): void;
@@ -54,7 +54,7 @@ export interface InitOutput {
   readonly browsergpurenderer_create: (a: any) => any;
   readonly browsergpurenderer_createWebGl: (a: any) => any;
   readonly browsergpurenderer_backend: (a: number) => [number, number];
-  readonly browsergpurenderer_set_background: (a: number, b: number, c: number) => [number, number];
+  readonly browsergpurenderer_set_background: (a: number, b: number, c: number, d: number) => [number, number];
   readonly browsergpurenderer_set_frame_time: (a: number, b: number, c: number) => [number, number];
   readonly browsergpurenderer_resize: (a: number, b: number, c: number) => [number, number];
   readonly browsergpurenderer_render: (a: number, b: any, c: number, d: number, e: number, f: number, g: number) => [number, number];

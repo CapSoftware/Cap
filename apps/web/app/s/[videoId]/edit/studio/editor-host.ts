@@ -1790,7 +1790,7 @@ export class EditorHostBridge {
 					userId: this.userId,
 					captionsEnabled: this.captionsEnabled,
 					assetBase: this.browserOnly
-						? ""
+						? `/api/editor/videos/${encodeURIComponent(this.videoId)}/file?raw=1`
 						: `/api/editor/sessions/${encodeURIComponent(this.sessionId)}/file?videoId=${encodeURIComponent(this.videoId)}`,
 					...(this.browserOnly
 						? { browserSessionId: this.browserSessionId }

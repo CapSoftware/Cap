@@ -88,6 +88,13 @@ async function fulfillMedia(route, asset) {
 }
 
 async function replay(forceWebGl, forceWebGpu = false) {
+	const background = await sharp(
+		Buffer.from(
+			'<svg xmlns="http://www.w3.org/2000/svg" width="240" height="240"><rect width="120" height="240" fill="#cc1242"/><rect x="120" width="120" height="240" fill="#1235cc"/></svg>',
+		),
+	)
+		.png()
+		.toBuffer();
 	const browser = await browserType.launch({
 		headless: process.env.CAP_REPLAY_HEADED !== "1",
 		timeout: 30_000,
@@ -231,6 +238,14 @@ async function replay(forceWebGl, forceWebGpu = false) {
 			}
 			if (pathname === `/camera.${camera.format}`) {
 				await fulfillMedia(route, camera);
+				return;
+			}
+			if (pathname === "/api/editor/videos/fixture/file") {
+				await route.fulfill({
+					status: 200,
+					contentType: "image/png",
+					body: background,
+				});
 				return;
 			}
 			if (pathname === "/favicon.ico") {
@@ -452,6 +467,26 @@ async function replay(forceWebGl, forceWebGpu = false) {
 					const changedPixels = differentPixels(withCamera, withoutCamera);
 					config.camera.hide = false;
 					await playback.setConfig(config);
+					const originalPadding = config.background.padding;
+					config.background.padding = 50;
+					await playback.setConfig(config);
+					const paddedSolid = await snapshot();
+					const importedImagePath =
+						"/api/editor/videos/fixture/file?raw=1&path=content/images/00000000-0000-0000-0000-000000000001.png";
+					config.background.source = {
+						type: "image",
+						path: importedImagePath,
+					};
+					await playback.setConfig(config);
+					const imageChangedPixels = differentPixels(
+						paddedSolid,
+						await snapshot(),
+					);
+					config.background.padding = originalPadding;
+					config.background.source = JSON.parse(
+						playback.module.default_project_config_json(),
+					).background.source;
+					await playback.setConfig(config);
 					const seekStarted = performance.now();
 					await playback.seek(0.75);
 					console.info("Cap replay stage: first seek completed");
@@ -529,6 +564,21 @@ async function replay(forceWebGl, forceWebGpu = false) {
 					) {
 						throw new Error(
 							"Paired animated-gradient transition did not render",
+						);
+					}
+					config.background.source = {
+						type: "image",
+						path: importedImagePath,
+					};
+					await playback.setConfig(config);
+					await playback.seek(transitionStart + transitionDuration * 0.5);
+					const imageTransitionChangedPixels = differentPixels(
+						transitionMiddle,
+						await snapshot(),
+					);
+					if (imageTransitionChangedPixels < 1000) {
+						throw new Error(
+							"Paired image-background transition did not render",
 						);
 					}
 					config.timeline = undefined;
@@ -691,6 +741,7 @@ async function replay(forceWebGl, forceWebGpu = false) {
 						seekMs,
 						returnToStartMs,
 						changedPixels,
+						imageChangedPixels,
 						startChangedPixels,
 						gradientChangedPixels,
 						gradientMotionPixels,
@@ -702,6 +753,11 @@ async function replay(forceWebGl, forceWebGpu = false) {
 						height: canvas.height,
 						errors,
 					};
+				} catch (error) {
+					console.info(
+						`Cap replay stage: stalled video state ${JSON.stringify(Array.from(document.querySelectorAll("video")).map((video) => ({ path: video.currentSrc ? new URL(video.currentSrc).pathname : "", currentTime: video.currentTime, duration: video.duration, readyState: video.readyState, networkState: video.networkState, seeking: video.seeking, paused: video.paused, width: video.videoWidth, height: video.videoHeight, error: video.error?.code ?? null })))}`,
+					);
+					throw error;
 				} finally {
 					playback.dispose();
 				}
@@ -741,6 +797,10 @@ async function replay(forceWebGl, forceWebGpu = false) {
 		assert(
 			result.changedPixels > 1000,
 			"Camera visibility did not change the GPU frame",
+		);
+		assert(
+			result.imageChangedPixels > 1000,
+			"Imported image background did not change the GPU frame",
 		);
 		assert(
 			result.startChangedPixels < 100,

@@ -1,6 +1,7 @@
 import type { BrowserGpuRenderer } from "../renderer/pkg/cap_editor_browser_renderer.js";
 import { browserWebGpuPresentationWorks } from "./browser-gpu-probe";
 import { loadBrowserRenderer } from "./browser-renderer";
+import { resolveEditorAssetUrl } from "./editor-asset-url";
 
 export type BrowserVideoLayer = {
 	video: HTMLVideoElement;
@@ -33,6 +34,36 @@ export type BrowserRenderedFrame = {
 	renderedFrame: { frameNumber: number; targetTimeNs: bigint };
 };
 
+function backgroundImagePath(config: unknown) {
+	if (
+		typeof config !== "object" ||
+		config === null ||
+		!("background" in config)
+	) {
+		return null;
+	}
+	const background = config.background;
+	if (
+		typeof background !== "object" ||
+		background === null ||
+		!("source" in background)
+	) {
+		return null;
+	}
+	const source = background.source;
+	if (
+		typeof source !== "object" ||
+		source === null ||
+		!("type" in source) ||
+		(source.type !== "image" && source.type !== "wallpaper") ||
+		!("path" in source) ||
+		typeof source.path !== "string"
+	) {
+		return null;
+	}
+	return source.path || null;
+}
+
 export class BrowserLocalCanvas {
 	private canvas: HTMLCanvasElement | null = null;
 	private renderer: BrowserGpuRenderer | null = null;
@@ -41,6 +72,9 @@ export class BrowserLocalCanvas {
 	private rejectMount: ((error: Error) => void) | null = null;
 	private rendered = false;
 	private disposed = false;
+	private configQueue: Promise<void> = Promise.resolve();
+	private readonly imageAbort = new AbortController();
+	private readonly imageCache = new Map<string, ImageBitmap>();
 
 	constructor(
 		private width: number,
@@ -117,13 +151,81 @@ export class BrowserLocalCanvas {
 		this.rendered = false;
 	}
 
-	async setProjectConfig(config: unknown) {
-		await this.mounted;
-		if (this.disposed || !this.renderer) {
+	private async backgroundImage(url: string) {
+		const cached = this.imageCache.get(url);
+		if (cached) {
+			this.imageCache.delete(url);
+			this.imageCache.set(url, cached);
+			return cached;
+		}
+		const response = await fetch(url, {
+			cache: "no-store",
+			credentials: "same-origin",
+			signal: this.imageAbort.signal,
+		});
+		if (!response.ok) throw new Error("Editor background image could not load");
+		const blob = await response.blob();
+		if (blob.size < 1 || blob.size > 64 * 1024 * 1024) {
+			throw new Error("Editor background image is invalid");
+		}
+		let bitmap = await createImageBitmap(blob);
+		if (
+			bitmap.width < 1 ||
+			bitmap.height < 1 ||
+			bitmap.width * bitmap.height > 16_777_216
+		) {
+			bitmap.close();
+			throw new Error("Editor background image is too large");
+		}
+		if (bitmap.width > 2560 || bitmap.height > 2560) {
+			const scale = 2560 / Math.max(bitmap.width, bitmap.height);
+			try {
+				const resized = await createImageBitmap(bitmap, {
+					resizeWidth: Math.max(1, Math.round(bitmap.width * scale)),
+					resizeHeight: Math.max(1, Math.round(bitmap.height * scale)),
+					resizeQuality: "high",
+				});
+				bitmap.close();
+				bitmap = resized;
+			} catch (error) {
+				bitmap.close();
+				throw error;
+			}
+		}
+		if (this.disposed) {
+			bitmap.close();
 			throw new Error("Editor canvas is closed");
 		}
-		this.renderer.set_background(JSON.stringify(config));
-		this.rendered = false;
+		this.imageCache.set(url, bitmap);
+		if (this.imageCache.size > 8) {
+			const oldest = this.imageCache.keys().next().value;
+			if (oldest) {
+				this.imageCache.get(oldest)?.close();
+				this.imageCache.delete(oldest);
+			}
+		}
+		return bitmap;
+	}
+
+	setProjectConfig(config: unknown) {
+		const update = this.configQueue.then(async () => {
+			await this.mounted;
+			if (this.disposed || !this.renderer) {
+				throw new Error("Editor canvas is closed");
+			}
+			const path = backgroundImagePath(config);
+			const url = path ? resolveEditorAssetUrl(path) : null;
+			if (path && !url)
+				throw new Error("Editor background image is unavailable");
+			const image = url ? await this.backgroundImage(url) : undefined;
+			if (this.disposed || !this.renderer) {
+				throw new Error("Editor canvas is closed");
+			}
+			this.renderer.set_background(JSON.stringify(config), image);
+			this.rendered = false;
+		});
+		this.configQueue = update.catch(() => undefined);
+		return update;
 	}
 
 	async render(
@@ -188,6 +290,9 @@ export class BrowserLocalCanvas {
 	dispose() {
 		if (this.disposed) return;
 		this.disposed = true;
+		this.imageAbort.abort();
+		for (const image of this.imageCache.values()) image.close();
+		this.imageCache.clear();
 		this.rejectMount?.(new Error("Editor canvas is closed"));
 		this.resolveMount = null;
 		this.rejectMount = null;

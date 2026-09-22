@@ -409,11 +409,11 @@ export function default_layer_uniforms(output_width, output_height, source_width
     return v1;
 }
 
-function __wbg_adapter_12(arg0, arg1, arg2) {
+function __wbg_adapter_8(arg0, arg1, arg2) {
     wasm.closure380_externref_shim(arg0, arg1, arg2);
 }
 
-function __wbg_adapter_19(arg0, arg1) {
+function __wbg_adapter_23(arg0, arg1) {
     wasm.wasm_bindgen__convert__closures_____invoke__h147cdb123ff2ae0f(arg0, arg1);
 }
 
@@ -529,11 +529,12 @@ export class BrowserGpuRenderer {
     }
     /**
      * @param {string} project_json
+     * @param {ImageBitmap | null} [image]
      */
-    set_background(project_json) {
+    set_background(project_json, image) {
         const ptr0 = passStringToWasm0(project_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.browsergpurenderer_set_background(this.__wbg_ptr, ptr0, len0);
+        const ret = wasm.browsergpurenderer_set_background(this.__wbg_ptr, ptr0, len0, isLikeNone(image) ? 0 : addToExternrefTable0(image));
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
         }
@@ -2724,7 +2725,7 @@ function __wbg_get_imports() {
     }, arguments) };
     imports.wbg.__wbindgen_cast_1c1d8705c7a88cf9 = function(arg0, arg1) {
         // Cast intrinsic for `Closure(Closure { dtor_idx: 379, function: Function { arguments: [Externref], shim_idx: 380, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-        const ret = makeMutClosure(arg0, arg1, 379, __wbg_adapter_12);
+        const ret = makeMutClosure(arg0, arg1, 379, __wbg_adapter_8);
         return ret;
     };
     imports.wbg.__wbindgen_cast_2241b6af4c4b2941 = function(arg0, arg1) {
@@ -2751,7 +2752,7 @@ function __wbg_get_imports() {
     };
     imports.wbg.__wbindgen_cast_aaa93aae03c115ab = function(arg0, arg1) {
         // Cast intrinsic for `Closure(Closure { dtor_idx: 1, function: Function { arguments: [], shim_idx: 2, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-        const ret = makeMutClosure(arg0, arg1, 1, __wbg_adapter_19);
+        const ret = makeMutClosure(arg0, arg1, 1, __wbg_adapter_23);
         return ret;
     };
     imports.wbg.__wbindgen_cast_bbb4883c6389f1de = function(arg0, arg1) {
