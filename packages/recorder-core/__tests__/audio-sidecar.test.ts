@@ -153,3 +153,37 @@ test("a stalled spool flush after a write failure keeps streamed audio and a ful
 	await sidecar.disposeBackup();
 	expect(spool.dispose).toHaveBeenCalledOnce();
 });
+
+test("a late durable backup failure does not discard successfully streamed long audio", async () => {
+	const spool = {
+		sessionId: "durable-spool",
+		totalBytes: 0,
+		appendChunk: vi.fn(async () => undefined),
+		flush: vi.fn(async () => {
+			throw new Error("IndexedDB flush failed");
+		}),
+		recoverBlob: vi.fn(async () => null),
+		dispose: vi.fn(async () => undefined),
+		touch: vi.fn(async () => undefined),
+	};
+	mocks.createSpool.mockResolvedValue(spool);
+	const sidecar = await createSidecar();
+	sidecar.start(performance.now());
+	const longChunk = new Blob(["streamed audio"]);
+	Object.defineProperty(longChunk, "size", { value: 64 * 1024 * 1024 + 1 });
+	FakeAudioRecorder.instances[0]?.emitData(longChunk);
+	await sidecar.finalize(1800);
+	expect(mocks.uploaders[0]?.handleChunk).toHaveBeenCalledWith(
+		longChunk,
+		longChunk.size,
+	);
+	expect(mocks.uploaders[0]?.finalize).toHaveBeenCalledOnce();
+	expect(sidecar.isUploadCompleted).toBe(true);
+	expect(fatal).not.toHaveBeenCalled();
+	expect(backupFallback).toHaveBeenCalledWith(
+		expect.objectContaining({ message: "IndexedDB flush failed" }),
+		false,
+	);
+	expect(await sidecar.recoverBlob()).toBeNull();
+	expect(await sidecar.prepareRetryMetadata()).toBeNull();
+});

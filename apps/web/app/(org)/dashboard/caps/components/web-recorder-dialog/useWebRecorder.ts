@@ -693,16 +693,12 @@ export const useWebRecorder = ({
 					};
 			cameraSpoolFailedRef.current = true;
 			stopCameraSpoolHeartbeat();
-			console.warn("Camera backup moved to bounded memory", error);
+			console.warn("Camera backup changed", error);
 			toast.warning(
-				"Durable camera backup is unavailable. Camera recovery will use bounded memory.",
+				overflowed
+					? "Camera backup is unavailable. Recording continues, but camera video cannot be recovered if upload fails."
+					: "Camera backup is limited to memory while recording continues.",
 			);
-			if (overflowed) {
-				toast.warning(
-					"Camera memory backup reached its limit. Finishing both clips now.",
-				);
-				void stopRecordingRef.current?.();
-			}
 		},
 		[stopCameraSpoolHeartbeat],
 	);
@@ -1379,10 +1375,12 @@ export const useWebRecorder = ({
 							onFatalError: () => {
 								void stopRecordingRef.current?.();
 							},
-							onBackupFallback: (error) => {
-								console.warn("Microphone backup moved to memory", error);
+							onBackupFallback: (error, recoveryAvailable) => {
+								console.warn("Microphone backup changed", error);
 								toast.warning(
-									"Durable microphone backup is unavailable. Recovery will use bounded memory.",
+									recoveryAvailable
+										? "Microphone backup is limited to memory while recording continues."
+										: "Microphone backup is unavailable. Recording continues, but audio cannot be recovered if upload fails.",
 								);
 							},
 						}),
@@ -1398,10 +1396,12 @@ export const useWebRecorder = ({
 							onFatalError: () => {
 								void stopRecordingRef.current?.();
 							},
-							onBackupFallback: (error) => {
-								console.warn("System audio backup moved to memory", error);
+							onBackupFallback: (error, recoveryAvailable) => {
+								console.warn("System audio backup changed", error);
 								toast.warning(
-									"Durable system audio backup is unavailable. Recovery will use bounded memory.",
+									recoveryAvailable
+										? "System audio backup is limited to memory while recording continues."
+										: "System audio backup is unavailable. Recording continues, but audio cannot be recovered if upload fails.",
 								);
 							},
 						}),
@@ -1436,9 +1436,8 @@ export const useWebRecorder = ({
 						);
 						if (cameraBackupLimitReached) {
 							toast.warning(
-								"Camera memory backup reached its limit. Finishing both clips now.",
+								"Camera backup is unavailable. Recording continues, but camera video cannot be recovered if upload fails.",
 							);
-							void stopRecordingRef.current?.();
 						}
 					} catch (error) {
 						cameraRecorderFailedRef.current = true;
@@ -1761,10 +1760,7 @@ export const useWebRecorder = ({
 						window.clearTimeout(cameraFlushTimeoutId);
 					}
 				}
-				if (
-					cameraFallbackRef.current.overflowed ||
-					cameraRecorderFailedRef.current
-				) {
+				if (cameraRecorderFailedRef.current) {
 					throw new Error(
 						"Camera recording ended before both clips were saved",
 					);

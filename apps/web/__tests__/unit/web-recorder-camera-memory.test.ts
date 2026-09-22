@@ -29,6 +29,7 @@ const mocks = vi.hoisted(() => ({
 		resume: ReturnType<typeof vi.fn>;
 		stop: ReturnType<typeof vi.fn>;
 		finalize: ReturnType<typeof vi.fn>;
+		markUploadedBackup: ReturnType<typeof vi.fn>;
 		disposeBackup: ReturnType<typeof vi.fn>;
 		recoverBlob: ReturnType<typeof vi.fn>;
 		abortUploadRetainSpool: ReturnType<typeof vi.fn>;
@@ -46,6 +47,7 @@ vi.mock("@cap/recorder-core", () => ({
 				resume: vi.fn(),
 				stop: vi.fn(async () => 8),
 				finalize: vi.fn(async () => undefined),
+				markUploadedBackup: vi.fn(),
 				disposeBackup: vi.fn(async () => {
 					backupAvailable = false;
 				}),
@@ -85,6 +87,7 @@ vi.mock("@cap/recorder-core/recorder-utils", () => ({
 }));
 vi.mock("@cap/recorder-core/recording-spool", () => ({
 	canUseRecordingSpool: () => false,
+	createRecordingSessionId: () => "paired-recording-session",
 	deleteRecoveredRecordingSpool: vi.fn(),
 	RECORDING_SPOOL_HEARTBEAT_INTERVAL_MS: 10000,
 	RecordingSpool: { create: vi.fn() },
@@ -379,6 +382,9 @@ async function overflowCameraBackup() {
 			camera.emitData(chunk);
 		}
 	});
+	expect(latest.phase).toBe("recording");
+	expect(FakeRecorder.instances[0]?.stopCalled).not.toHaveBeenCalled();
+	await act(async () => latest.stopRecording());
 	await waitFor(() => {
 		expect(latest.phase).toMatch(/completed|error/);
 	});
@@ -400,7 +406,7 @@ async function overflowScreenBackup() {
 	return screen;
 }
 
-test("a long camera capture stops both clips at the memory limit and finalizes the paired upload", async () => {
+test("a long camera capture streams after its backup limit and finalizes the paired upload", async () => {
 	const camera = await overflowCameraBackup();
 	const screen = FakeRecorder.instances[0];
 	expect(screen?.stopCalled).toHaveBeenCalledOnce();
@@ -409,7 +415,7 @@ test("a long camera capture stops both clips at the memory limit and finalizes t
 	expect(cameraTrack.stop).toHaveBeenCalled();
 	expect(latest.phase).toBe("completed");
 	expect(mocks.warning).toHaveBeenCalledWith(
-		"Camera memory backup reached its limit. Finishing both clips now.",
+		"Camera backup is unavailable. Recording continues, but camera video cannot be recovered if upload fails.",
 	);
 	expect(mocks.uploaders.map((uploader) => uploader.subpath)).toEqual([
 		"raw-upload.webm",

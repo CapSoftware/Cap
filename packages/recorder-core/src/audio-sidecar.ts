@@ -34,7 +34,7 @@ type AudioSidecarOptions = {
 	screenSubpath: string;
 	api?: RecorderApiOptions;
 	onFatalError: (error: Error) => void;
-	onBackupFallback?: (error: Error) => void;
+	onBackupFallback?: (error: Error, recoveryAvailable: boolean) => void;
 };
 
 export async function uploadRecoveredAudioSidecar(options: {
@@ -88,7 +88,10 @@ export class AudioRecordingSidecar {
 	private readonly uploader: InstantRecordingUploader;
 	private readonly api: RecorderApiOptions;
 	private readonly onFatalError: (error: Error) => void;
-	private readonly onBackupFallback?: (error: Error) => void;
+	private readonly onBackupFallback?: (
+		error: Error,
+		recoveryAvailable: boolean,
+	) => void;
 	private readonly fallbackSessionId: string;
 	private readonly kind: AudioSidecarKind;
 	private readonly subpath: string;
@@ -153,6 +156,7 @@ export class AudioRecordingSidecar {
 		}).catch((error) => {
 			options.onBackupFallback?.(
 				error instanceof Error ? error : new Error(String(error)),
+				true,
 			);
 			return null;
 		});
@@ -289,11 +293,7 @@ export class AudioRecordingSidecar {
 
 	async finalize(durationSeconds: number) {
 		const recordedBytes = await this.stop();
-		if (
-			recordedBytes === 0 ||
-			this.failed ||
-			(this.spoolFailed && this.memoryBackup.overflowed)
-		) {
+		if (recordedBytes === 0 || this.failed) {
 			throw this.failed ?? new Error(`${this.kind} audio source was not saved`);
 		}
 		await this.uploader.finalize({
@@ -380,6 +380,7 @@ export class AudioRecordingSidecar {
 		if (chunk.size === 0) return;
 		this.lastDataAt = performance.now();
 		this.bytes += chunk.size;
+		let backupOverflowedNow = false;
 		if (!this.memoryBackup.overflowed) {
 			if (
 				this.memoryBackup.retainedBytes + chunk.size >
@@ -390,14 +391,18 @@ export class AudioRecordingSidecar {
 					retainedBytes: 0,
 					overflowed: true,
 				};
+				backupOverflowedNow = true;
 			} else {
 				this.memoryBackup.chunks.push(chunk);
 				this.memoryBackup.retainedBytes += chunk.size;
 			}
 		}
 		if (this.spoolFailed || !this.spool) {
-			if (this.memoryBackup.overflowed) {
-				this.fail(new Error(`${this.kind} audio backup reached its limit`));
+			if (backupOverflowedNow) {
+				this.onBackupFallback?.(
+					new Error(`${this.kind} audio recovery backup reached its limit`),
+					false,
+				);
 			}
 		} else {
 			void this.spool.appendChunk(chunk).catch((error) => {
@@ -441,10 +446,7 @@ export class AudioRecordingSidecar {
 	private useMemoryBackup(error: Error) {
 		if (this.spoolFailed) return;
 		this.spoolFailed = true;
-		this.onBackupFallback?.(error);
-		if (this.memoryBackup.overflowed) {
-			this.fail(new Error(`${this.kind} audio backup reached its limit`));
-		}
+		this.onBackupFallback?.(error, !this.memoryBackup.overflowed);
 	}
 
 	private clearIntervals() {
