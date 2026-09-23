@@ -135,8 +135,10 @@ export const ShareHeader = ({
 	data,
 	customDomain,
 	domainVerified,
+	allowedEmailDomain,
 	sharedOrganizations = [],
 	sharedSpaces = [],
+	viewerCount = 0,
 	spacesData = null,
 	branding,
 	canManageSharePageBranding = false,
@@ -147,7 +149,9 @@ export const ShareHeader = ({
 	data: VideoData;
 	customDomain?: string | null;
 	domainVerified?: boolean;
+	allowedEmailDomain?: string | null;
 	sharedOrganizations?: { id: string; name: string }[];
+	viewerCount?: number;
 	userOrganizations?: { id: string; name: string }[];
 	sharedSpaces?: {
 		id: string;
@@ -485,11 +489,17 @@ export const ShareHeader = ({
 	 */
 	const audience = describeShareAudience({
 		isPublic: Boolean(data.public),
+		allowedEmailDomain,
 		passwordProtected: effectivePasswordProtected,
 		audienceNames: [
 			...(sharedOrganizations ?? []).map((org) => org.name),
-			...(effectiveSharedSpaces ?? []).map((space) => space.name),
+			...(effectiveSharedSpaces ?? [])
+				.filter(
+					(space) => !sharedOrganizations.some((org) => org.id === space.id),
+				)
+				.map((space) => space.name),
 		],
+		viewerCount,
 	});
 
 	const renderSharedStatus = () => {
@@ -508,7 +518,7 @@ export const ShareHeader = ({
 		const AudienceIcon =
 			audience.kind === "public"
 				? Globe2
-				: audience.kind === "spaces"
+				: audience.kind === "spaces" || audience.kind === "people"
 					? Users
 					: Lock;
 
@@ -748,6 +758,7 @@ export const ShareHeader = ({
 					sharedSpaces={effectiveSharedSpaces || []}
 					onSharingUpdated={handleSharingUpdated}
 					isPublic={data.public}
+					allowedEmailDomain={allowedEmailDomain}
 					spacesData={spacesData}
 					hasPassword={passwordProtected}
 					inheritedPasswordSources={data.inheritedPasswordSources}

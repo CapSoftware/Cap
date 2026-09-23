@@ -7,7 +7,7 @@
  * out what that means for the link.
  */
 
-export type ShareAudienceKind = "public" | "spaces" | "private";
+export type ShareAudienceKind = "public" | "spaces" | "people" | "private";
 
 export interface ShareAudience {
 	kind: ShareAudienceKind;
@@ -17,6 +17,7 @@ export interface ShareAudience {
 
 export interface ShareAudienceInput {
 	isPublic: boolean;
+	allowedEmailDomain?: string | null;
 	/** Includes an inherited password from a space or organization. */
 	passwordProtected: boolean;
 	/**
@@ -25,6 +26,7 @@ export interface ShareAudienceInput {
 	 * "Shared with 2 spaces" rather than printing an empty one.
 	 */
 	audienceNames: (string | null | undefined)[];
+	viewerCount?: number;
 }
 
 const listNames = (names: string[], total: number): string => {
@@ -40,10 +42,19 @@ const listNames = (names: string[], total: number): string => {
 
 export const describeShareAudience = ({
 	isPublic,
+	allowedEmailDomain,
 	passwordProtected,
 	audienceNames,
+	viewerCount = 0,
 }: ShareAudienceInput): ShareAudience => {
 	if (isPublic) {
+		if (allowedEmailDomain?.trim()) {
+			return {
+				kind: "public",
+				label: "Restricted link access",
+				tooltip: `Only signed-in people whose email matches ${allowedEmailDomain.trim()} or invited viewers can watch this Cap.${passwordProtected ? " A password is also required." : ""}`,
+			};
+		}
 		return {
 			kind: "public",
 			label: passwordProtected
@@ -63,14 +74,26 @@ export const describeShareAudience = ({
 	if (total > 0) {
 		const listed = named.slice(0, 2);
 		const remainder = total - listed.length;
+		const spaceDescription = listed.length
+			? `members of ${listed.join(", ")}${remainder > 0 ? ` and ${remainder} more` : ""}`
+			: "members of the spaces this is shared with";
 		return {
 			kind: "spaces",
-			label: listNames(listed, total),
-			tooltip: listed.length
-				? `Only members of ${listed.join(", ")}${
-						remainder > 0 ? ` and ${remainder} more` : ""
-					} can watch this Cap. The link won't work for anyone else.`
-				: "Only members of the spaces this is shared with can watch this Cap. The link won't work for anyone else.",
+			label:
+				viewerCount > 0
+					? `Shared with spaces and ${viewerCount} ${viewerCount === 1 ? "person" : "people"}`
+					: listNames(listed, total),
+			tooltip:
+				viewerCount > 0
+					? `Only ${spaceDescription} and ${viewerCount} invited ${viewerCount === 1 ? "person" : "people"} can watch this Cap.${passwordProtected ? " A password is also required." : ""}`
+					: `Only ${spaceDescription} can watch this Cap. The link won't work for anyone else.`,
+		};
+	}
+	if (viewerCount > 0) {
+		return {
+			kind: "people",
+			label: `Shared with ${viewerCount} ${viewerCount === 1 ? "person" : "people"}`,
+			tooltip: `Only invited people can watch this Cap after signing in with their invited email address.${passwordProtected ? " A password is also required." : ""}`,
 		};
 	}
 
