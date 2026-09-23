@@ -40,7 +40,6 @@ def over(base: np.ndarray, color: np.ndarray, alpha: np.ndarray) -> np.ndarray:
 
 
 def radial(w: int, h: int, rx: float, ry: float, cx: float, cy: float, stop: float) -> np.ndarray:
-    """CSS `radial-gradient(rx ry at cx cy, c 0%, transparent stop)` alpha, sizes as fractions."""
     xs, ys = grid(w, h)
     d = np.sqrt(((xs - cx * w) / (rx * w)) ** 2 + ((ys - cy * h) / (ry * h)) ** 2)
     t = np.clip(d / stop, 0, 1)
@@ -61,10 +60,7 @@ def vertical(w: int, h: int, stops: list[tuple[float, str]]) -> np.ndarray:
 def grain(img: np.ndarray, strength: float, seed: int) -> np.ndarray:
     rng = np.random.default_rng(seed)
     noise = rng.normal(0, 1, img.shape[:2]).astype(np.float32)
-    # Soften the noise a touch so it reads as paper grain, not sensor noise.
-    n = Image.fromarray(((noise * 40) + 128).clip(0, 255).astype(np.uint8), mode="L")
-    n = n.resize((img.shape[1] // 1, img.shape[0] // 1), Image.BILINEAR)
-    noise = (np.asarray(n, dtype=np.float32) - 128) / 40
+    noise = (np.floor(np.clip(noise * 40 + 128, 0, 255)) - 128) / 40
     return img + noise[..., None] * strength
 
 
@@ -100,7 +96,6 @@ def save(img: np.ndarray, name: str, quality: int = 90) -> None:
 
 
 def marketing_sky() -> None:
-    """Text column on the left, product art bleeding off the right edge."""
     img = sky()
     img = paste_cloud(img, "wisp-a", 250, -30, 420, 0.55)
     img = paste_cloud(img, "tuft-a", -70, 60, 250, 0.5, flip=True)
@@ -113,7 +108,6 @@ def marketing_sky() -> None:
 
 
 def centered_sky() -> None:
-    """Status cards and other centred compositions."""
     img = sky()
     img = paste_cloud(img, "wisp-a", 60, 20, 380, 0.6)
     img = paste_cloud(img, "cumulus-b", 860, 40, 400, 0.85)
@@ -137,7 +131,6 @@ def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     marketing_sky()
     centered_sky()
-    # MODE_THEME.instant from components/pages/HomeTwo/theme.ts
     mesh(
         "mesh-instant.jpg",
         720,

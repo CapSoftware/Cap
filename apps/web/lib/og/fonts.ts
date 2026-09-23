@@ -8,8 +8,6 @@ export type OgFont = {
 	style: "normal";
 };
 
-// The homepage type system (components/pages/HomeTwo/fonts.ts): Instrument
-// Sans for display, Source Serif 4 Light for body copy, DM Mono for eyebrows.
 export const OG_SANS = "Instrument Sans";
 export const OG_SERIF = "Source Serif";
 export const OG_MONO = "DM Mono";
