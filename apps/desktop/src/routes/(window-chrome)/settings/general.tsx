@@ -271,8 +271,6 @@ function Inner(props: {
 		value: (typeof settings)[K],
 		extra?: Partial<GeneralSettingsStore>,
 	) => {
-		console.log(`Handling settings change for ${key}: ${value}`);
-
 		const previousValue = settings[key];
 		setSettings(key as keyof GeneralSettingsStore, value);
 		try {
@@ -1228,7 +1226,6 @@ function ExcludedWindowsCard(props: {
 		}
 
 		if (!windows.length) {
-			console.log("No available windows to exclude");
 			return;
 		}
 

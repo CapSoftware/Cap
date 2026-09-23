@@ -604,7 +604,7 @@ pub fn get_devices() -> Result<Vec<VideoDeviceInfo>, GetDevicesError> {
         .filter_map(|result| match result {
             Ok(r) => Some(r),
             Err(e) => {
-                println!("Failed to load MF device info: {e}");
+                tracing::warn!("Failed to load MF device info: {e}");
                 None
             }
         })
@@ -628,7 +628,7 @@ pub fn get_devices() -> Result<Vec<VideoDeviceInfo>, GetDevicesError> {
         })
         .filter_map(|result| {
             if result.is_none() {
-                println!("Failed to load DS device info");
+                tracing::warn!("Failed to load DS device info");
             }
             result
         })
