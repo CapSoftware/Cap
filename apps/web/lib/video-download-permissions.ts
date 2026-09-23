@@ -43,7 +43,6 @@ export async function canUserDownloadVideo({
 				),
 			)
 			.limit(1);
-
 		if (orgMembership) return true;
 	}
 
