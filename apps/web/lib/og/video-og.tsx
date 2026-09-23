@@ -11,6 +11,11 @@ import {
 	OG_WIDTH,
 	OgCanvas,
 } from "@/lib/og/template";
+import {
+	coverRect,
+	loadOgThumbnail,
+	type OgThumbnail,
+} from "@/lib/og/thumbnail";
 
 export type VideoOgData = {
 	title: string;
@@ -115,13 +120,32 @@ const THUMB_W = 600;
 const THUMB_H = Math.round((THUMB_W * 9) / 16);
 const FRAME_PAD = 12;
 
+const ThumbnailImage = ({ thumbnail }: { thumbnail: OgThumbnail }) => {
+	const rect = coverRect(thumbnail, { width: THUMB_W, height: THUMB_H });
+	return (
+		<div
+			style={{
+				display: "flex",
+				position: "absolute",
+				top: rect.top,
+				left: rect.left,
+				width: rect.width,
+				height: rect.height,
+				backgroundImage: `url(${thumbnail.src})`,
+				backgroundSize: `${rect.width}px ${rect.height}px`,
+				backgroundRepeat: "no-repeat",
+			}}
+		/>
+	);
+};
+
 const Thumbnail = ({
 	mesh,
-	screenshotUrl,
+	thumbnail,
 	duration,
 }: {
 	mesh: string;
-	screenshotUrl?: string;
+	thumbnail?: OgThumbnail;
 	duration?: number;
 }) => (
 	<MeshFrame
@@ -140,26 +164,12 @@ const Thumbnail = ({
 				overflow: "hidden",
 				alignItems: "center",
 				justifyContent: "center",
-				background: screenshotUrl ? "#0B0F17" : "rgba(255,255,255,0.35)",
+				background: thumbnail ? "#0B0F17" : "rgba(255,255,255,0.35)",
 				boxShadow: "0 0 0 1px rgba(17,24,39,0.06)",
 			}}
 		>
-			{screenshotUrl && (
-				// biome-ignore lint/performance/noImgElement: satori renders raw img tags
-				<img
-					alt="Video thumbnail"
-					src={screenshotUrl}
-					width={THUMB_W}
-					height={THUMB_H}
-					style={{
-						position: "absolute",
-						top: 0,
-						left: 0,
-						objectFit: "cover",
-					}}
-				/>
-			)}
-			{screenshotUrl && (
+			{thumbnail && <ThumbnailImage thumbnail={thumbnail} />}
+			{thumbnail && (
 				<div
 					style={{
 						display: "flex",
@@ -225,6 +235,7 @@ const videoTitleSize = (title: string) => {
 
 const videoLayout = (
 	video: VideoOgData,
+	thumbnail: OgThumbnail | undefined,
 	assets: Awaited<ReturnType<typeof loadOgAssets>>,
 ) => {
 	return (
@@ -239,7 +250,7 @@ const videoLayout = (
 			>
 				<Thumbnail
 					mesh={assets.mesh}
-					screenshotUrl={video.screenshotUrl}
+					thumbnail={thumbnail}
 					duration={video.duration}
 				/>
 			</div>
@@ -349,11 +360,17 @@ const statusLayout = (
 );
 
 export async function renderVideoOg(variant: VideoOgVariant) {
-	const [fonts, assets] = await Promise.all([loadOgFonts(), loadOgAssets()]);
+	const screenshotUrl =
+		variant.kind === "video" ? variant.video.screenshotUrl : undefined;
+	const [fonts, assets, thumbnail] = await Promise.all([
+		loadOgFonts(),
+		loadOgAssets(),
+		screenshotUrl ? loadOgThumbnail(screenshotUrl) : undefined,
+	]);
 	const element = (() => {
 		switch (variant.kind) {
 			case "video":
-				return videoLayout(variant.video, assets);
+				return videoLayout(variant.video, thumbnail, assets);
 			case "locked":
 				return statusLayout(
 					{
