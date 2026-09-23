@@ -579,6 +579,7 @@ async function AuthorizedContent({
 	const screenshotImageUrlPromise = video.isScreenshot
 		? Effect.flatMap(Videos, (videos) => videos.getThumbnailURL(videoId)).pipe(
 				Effect.map(Option.getOrNull),
+				provideOptionalAuth,
 				runPromise,
 			)
 		: Promise.resolve(null);

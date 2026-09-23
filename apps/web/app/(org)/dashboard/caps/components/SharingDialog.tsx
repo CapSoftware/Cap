@@ -449,23 +449,27 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 							</div>
 
 							<div className="p-3 mb-4 rounded-lg border bg-gray-1 border-gray-4">
-								<div className="flex items-center justify-between gap-2 mb-2">
-									<div>
-										<p className="text-sm font-medium text-gray-12">
-											People with access
-										</p>
-										<p className="text-xs text-gray-10">
-											Invite someone by email. They can view with a Cap account
-											using that address.
-										</p>
-									</div>
-									<Button size="xs" variant="gray" onClick={copyShareUrl}>
+								<div className="flex items-center justify-between gap-2">
+									<p className="text-sm font-medium text-gray-12">
+										People with access
+									</p>
+									<Button
+										size="xs"
+										variant="gray"
+										className="shrink-0 whitespace-nowrap"
+										onClick={copyShareUrl}
+									>
 										<FontAwesomeIcon icon={faCopy} className="size-3 mr-1" />
 										Copy link
 									</Button>
 								</div>
+								<p className="mt-1 mb-2 text-xs text-gray-10">
+									Invite someone by email. They can view with a Cap account
+									using that address.
+								</p>
 								<div className="flex gap-2">
 									<Input
+										className="min-w-0 flex-1"
 										type="email"
 										placeholder="viewer@example.com"
 										value={viewerEmail}
@@ -474,6 +478,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 									<Button
 										size="sm"
 										variant="dark"
+										className="shrink-0"
 										spinner={inviteViewer.isPending}
 										disabled={
 											inviteViewer.isPending ||
