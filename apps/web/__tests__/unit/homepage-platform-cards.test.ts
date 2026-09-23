@@ -10,9 +10,27 @@ const DOWNLOADS = [
 	{ href: "/download/linux-deb", name: "Linux" },
 ];
 
-describe("homepage platform downloads", () => {
+const renderCard = () =>
+	new JSDOM(renderToStaticMarkup(createElement(Platforms)));
+
+const luminance = (rgb: string) => {
+	const [r = 0, g = 0, b = 0] = (rgb.match(/\d+/g) ?? []).map(Number);
+	const channel = (value: number) => {
+		const c = value / 255;
+		return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+	};
+	return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
+};
+
+const contrast = (a: string, b: string) => {
+	const first = luminance(a);
+	const second = luminance(b);
+	return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05);
+};
+
+describe("homepage platform cards", () => {
 	it("keeps one visible download label across the platform cards", () => {
-		const dom = new JSDOM(renderToStaticMarkup(createElement(Platforms)));
+		const dom = renderCard();
 		try {
 			const labels = DOWNLOADS.map(
 				({ href }) =>
@@ -25,7 +43,7 @@ describe("homepage platform downloads", () => {
 	});
 
 	it("names each download link after the platform it installs", () => {
-		const dom = new JSDOM(renderToStaticMarkup(createElement(Platforms)));
+		const dom = renderCard();
 		try {
 			const document = dom.window.document;
 			for (const { href, name } of DOWNLOADS) {
@@ -36,6 +54,23 @@ describe("homepage platform downloads", () => {
 					href,
 				).toBe(`Download Cap for ${name}`);
 			}
+		} finally {
+			dom.window.close();
+		}
+	});
+
+	it("keeps the Your device label readable on its tinted chip", () => {
+		const dom = renderCard();
+		try {
+			const pill = [...dom.window.document.querySelectorAll("span")].find(
+				(node) => node.textContent === "Your device",
+			);
+			const { color, background } = pill?.style ?? {};
+			expect(color).toBeTruthy();
+			expect(background).toBeTruthy();
+			expect(contrast(color ?? "", background ?? "")).toBeGreaterThanOrEqual(
+				4.5,
+			);
 		} finally {
 			dom.window.close();
 		}

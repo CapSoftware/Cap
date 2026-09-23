@@ -15,6 +15,7 @@ import {
 	grainBg,
 	H_CARD,
 	H_SECTION,
+	INK,
 	MODE_THEME,
 	MONO,
 	type ModeKey,
@@ -163,7 +164,7 @@ export const Platforms = () => {
 											)}
 											style={{
 												background: MODE_THEME[desktop.mode].chip,
-												color: MODE_THEME[desktop.mode].glyph,
+												color: INK,
 											}}
 										>
 											Your device
