@@ -6,7 +6,6 @@ export const OG_HEIGHT = 630;
 
 export const OG_BLUE = "#4785FF";
 export const OG_BLUE_LIGHT = "#ADC9FF";
-/** Homepage ink (components/pages/HomeTwo/theme.ts INK / BODY_COLOR / MUTED). */
 export const OG_INK = "#111111";
 export const OG_INK_SOFT = "rgba(17,17,17,0.74)";
 export const OG_INK_MUTED = "rgba(17,17,17,0.5)";
@@ -32,10 +31,6 @@ const flex = (extra: CSSProperties = {}): CSSProperties => ({
 	...extra,
 });
 
-/**
- * Full-bleed OG canvas over one of the baked painted skies (see
- * scripts/og-sky/render.py), in the homepage type system.
- */
 export const OgCanvas = ({
 	background,
 	children,
@@ -53,13 +48,16 @@ export const OgCanvas = ({
 			background: "#EDF1F6",
 		})}
 	>
-		{/* biome-ignore lint/performance/noImgElement: satori renders raw img tags */}
-		<img
-			alt=""
-			src={background}
-			width={OG_WIDTH}
-			height={OG_HEIGHT}
-			style={{ position: "absolute", top: 0, left: 0 }}
+		<div
+			style={flex({
+				position: "absolute",
+				top: 0,
+				left: 0,
+				width: OG_WIDTH,
+				height: OG_HEIGHT,
+				backgroundImage: `url(${background})`,
+				backgroundSize: `${OG_WIDTH}px ${OG_HEIGHT}px`,
+			})}
 		/>
 		{children}
 	</div>
@@ -114,7 +112,6 @@ export const Body = ({
 	</span>
 );
 
-/** The mesh-and-grain frame the homepage puts around product shots. */
 export const MeshFrame = ({
 	mesh,
 	width,
@@ -142,13 +139,16 @@ export const MeshFrame = ({
 				"0 40px 80px -24px rgba(40,72,130,0.35), 0 0 0 1px rgba(255,255,255,0.55)",
 		})}
 	>
-		{/* biome-ignore lint/performance/noImgElement: satori renders raw img tags */}
-		<img
-			alt=""
-			src={mesh}
-			width={width}
-			height={height}
-			style={{ position: "absolute", top: 0, left: 0, objectFit: "cover" }}
+		<div
+			style={flex({
+				position: "absolute",
+				top: 0,
+				left: 0,
+				width,
+				height,
+				backgroundImage: `url(${mesh})`,
+				backgroundSize: `${width}px ${height}px`,
+			})}
 		/>
 		{children}
 	</div>
@@ -167,7 +167,6 @@ const logoMark = () => [
 const WORDMARK_PATH =
 	"M58.416 30.448c-5.404 0-9.212-3.864-9.212-10.36 0-6.384 3.668-10.416 9.268-10.416 5.068 0 7.784 2.66 8.624 7.168l-3.808.196c-.476-2.604-2.072-4.2-4.816-4.2-3.388 0-5.488 2.828-5.488 7.252 0 4.48 2.156 7.196 5.46 7.196 2.94 0 4.508-1.708 4.956-4.564l3.808.196c-.784 4.676-3.752 7.532-8.792 7.532zm16.23-.112c-3.137 0-5.209-1.484-5.209-4.088 0-2.576 1.596-3.948 4.872-4.592l4.956-.98c0-2.1-.98-3.192-2.856-3.192-1.764 0-2.716.812-3.052 2.324l-3.668-.168c.588-3.136 2.996-4.928 6.72-4.928 4.256 0 6.44 2.24 6.44 6.216v5.432c0 .812.28 1.036.84 1.036h.476V30c-.224.056-.812.112-1.288.112-1.624 0-2.828-.588-3.136-2.436-.728 1.596-2.632 2.66-5.096 2.66zm.727-2.604c2.38 0 3.892-1.512 3.892-3.78v-.84l-3.864.784c-1.596.308-2.24.98-2.24 2.016 0 1.176.784 1.82 2.212 1.82zM86.874 34.2V15.048h3.444l.056 2.212c.868-1.652 2.52-2.548 4.48-2.548 4.256 0 6.356 3.5 6.356 7.812s-2.128 7.812-6.384 7.812c-1.904 0-3.556-.924-4.368-2.38V34.2h-3.584zm7.112-6.776c2.184 0 3.5-1.82 3.5-4.9s-1.316-4.9-3.5-4.9-3.528 1.652-3.528 4.9 1.316 4.9 3.528 4.9z";
 
-/** The Cap app icon, the real LogoBadge: white rounded square, mark at 80%. */
 export const CapAppIcon = ({ size }: { size: number }) => (
 	<div
 		style={flex({
@@ -190,7 +189,6 @@ export const CapAppIcon = ({ size }: { size: number }) => (
 	</div>
 );
 
-/** App icon + drawn "Cap" wordmark lockup (the brand OG header). */
 export const CapWordmark = ({
 	height = 52,
 	color = OG_INK,
@@ -837,10 +835,6 @@ const MenuBar = () => (
 	</div>
 );
 
-/**
- * The homepage hero shot: the Cap recorder floating over a desktop, held in
- * the Instant-mode mesh frame. Sized to bleed off the right and bottom edges.
- */
 export const DesktopArt = ({
 	mesh,
 	wallpaper,
@@ -860,13 +854,16 @@ export const DesktopArt = ({
 				background: "#9FC0E6",
 			})}
 		>
-			{/* biome-ignore lint/performance/noImgElement: satori renders raw img tags */}
-			<img
-				alt=""
-				src={wallpaper}
-				width={1024}
-				height={576}
-				style={{ position: "absolute", top: -10, left: -150 }}
+			<div
+				style={flex({
+					position: "absolute",
+					top: -10,
+					left: -150,
+					width: 1024,
+					height: 576,
+					backgroundImage: `url(${wallpaper})`,
+					backgroundSize: "1024px 576px",
+				})}
 			/>
 			<MenuBar />
 			<div
@@ -1001,7 +998,6 @@ const PlanCardArt = ({
 	</div>
 );
 
-/** Cap Pro card in its mesh frame, as the pricing page lays it out. */
 export const PricingArt = ({
 	mesh,
 	pro,
