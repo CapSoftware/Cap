@@ -17,7 +17,9 @@ import {
 	H_SECTION,
 	MODE_THEME,
 	MONO,
+	type ModeKey,
 	PLATFORM_SURFACE,
+	type PlatformKey,
 } from "./theme";
 
 const WindowsGlyph = ({ className }: { className?: string }) => (
@@ -71,18 +73,27 @@ const Tile = ({
 	</Link>
 );
 
+type Desktop = {
+	key: PlatformKey;
+	name: string;
+	note: string;
+	href: string;
+	glyph: React.ReactNode;
+	mode: ModeKey;
+};
+
 export const Platforms = () => {
 	const { platform, isIntel } = useDetectPlatform();
 	const current = platform ?? "macos";
 
-	const desktops = [
+	const desktops: Desktop[] = [
 		{
 			key: "macos",
 			name: "macOS",
 			note: "Apple silicon and Intel. macOS 13.1 or newer.",
 			href: getDownloadUrl("macos", isIntel),
 			glyph: <AppleGlyph className="size-7" />,
-			mode: "instant" as const,
+			mode: "instant",
 		},
 		{
 			key: "windows",
@@ -90,7 +101,7 @@ export const Platforms = () => {
 			note: "Windows 10 or newer.",
 			href: getDownloadUrl("windows", false),
 			glyph: <WindowsGlyph className="size-6" />,
-			mode: "studio" as const,
+			mode: "studio",
 		},
 		{
 			key: "linux",
@@ -106,7 +117,7 @@ export const Platforms = () => {
 					className="size-7"
 				/>
 			),
-			mode: "screenshot" as const,
+			mode: "screenshot",
 		},
 	];
 
@@ -170,6 +181,7 @@ export const Platforms = () => {
 									</p>
 									<Link
 										href={desktop.href}
+										aria-label={`Download Cap for ${desktop.name}`}
 										className={classNames(
 											BTN_PRIMARY,
 											"mt-6 h-[46px] px-5 text-[15px]",
