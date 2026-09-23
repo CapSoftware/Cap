@@ -4,7 +4,7 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
 import { videos, videoUploads } from "@cap/database/schema";
-import { serverEnv } from "@cap/env";
+import { getNewVideoPublic } from "@cap/database/video-sharing-default";
 import { userIsPro } from "@cap/utils";
 import { Storage as StorageService } from "@cap/web-backend";
 import {
@@ -228,7 +228,7 @@ export async function createVideoAndGetUploadUrl({
 			isScreenshot,
 			bucket: Option.getOrNull(bucketId),
 			storageIntegrationId: Option.getOrNull(storageIntegrationId),
-			public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
+			public: await getNewVideoPublic(orgId),
 			...(folderId ? { folderId } : {}),
 		};
 
