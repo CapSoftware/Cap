@@ -50,6 +50,7 @@ const MAX_LEVEL_5_1_WIDTH = 4096;
 const MAX_LEVEL_5_1_HEIGHT = 2304;
 const MULTIPART_MIN_PART_SIZE_BYTES = 5 * 1024 * 1024;
 const MULTIPART_MAX_PARTS = 10_000;
+const MULTIPART_UPLOAD_CONCURRENCY = 2;
 const MULTIPART_ABORT_TIMEOUT_MS = 30_000;
 const STORAGE_ERROR_BODY_LIMIT_BYTES = 2_048;
 
@@ -2102,8 +2103,11 @@ async function readUploadReceipt(
 	return { objectIdentity: `"cap-drive-content-v1:${digest}"` };
 }
 
-function uploadSignal(abortSignal?: AbortSignal) {
-	const timeout = AbortSignal.timeout(UPLOAD_TIMEOUT_MS);
+function uploadSignal(
+	abortSignal?: AbortSignal,
+	timeoutMs = UPLOAD_TIMEOUT_MS,
+) {
+	const timeout = AbortSignal.timeout(timeoutMs);
 	return abortSignal ? AbortSignal.any([abortSignal, timeout]) : timeout;
 }
 
@@ -2299,7 +2303,8 @@ async function uploadMultipartPart(
 	body: Blob,
 	contentLength: number,
 	partNumber: number,
-	abortSignal?: AbortSignal,
+	abortSignal: AbortSignal,
+	timeoutMs: number,
 ): Promise<string> {
 	let lastError: Error | undefined;
 
@@ -2313,10 +2318,10 @@ async function uploadMultipartPart(
 					"Content-Length": contentLength.toString(),
 				},
 				body,
-				signal: uploadSignal(abortSignal),
+				signal: uploadSignal(abortSignal, timeoutMs),
 			});
 		} catch (err) {
-			abortSignal?.throwIfAborted();
+			abortSignal.throwIfAborted();
 			const uploadError = err instanceof Error ? err : new Error(String(err));
 
 			if (attempt === UPLOAD_MAX_RETRIES) {
@@ -2446,26 +2451,51 @@ async function uploadFileMultipart(
 			);
 		}
 
-		for (let partNumber = 1; partNumber <= partCount; partNumber++) {
-			const start = (partNumber - 1) * partSize;
-			const end = Math.min(start + partSize, contentLength);
-			const partLength = end - start;
-			const url = await getMultipartPartUrl(
-				target,
-				partNumber,
-				partLength,
-				abortSignal,
-			);
-			const etag = await uploadMultipartPart(
-				url,
-				fileHandle.slice(start, end),
-				partLength,
-				partNumber,
-				abortSignal,
-			);
-			parts.push({ partNumber, etag, size: partLength });
-		}
+		const batchAbort = new AbortController();
+		const partSignal = abortSignal
+			? AbortSignal.any([abortSignal, batchAbort.signal])
+			: batchAbort.signal;
+		let nextPartNumber = 1;
+		let failure: { error: unknown } | undefined;
+		const workerCount = Math.min(partCount, MULTIPART_UPLOAD_CONCURRENCY);
 
+		await Promise.all(
+			Array.from({ length: workerCount }, async () => {
+				while (nextPartNumber <= partCount && !partSignal.aborted) {
+					const partNumber = nextPartNumber++;
+					const start = (partNumber - 1) * partSize;
+					const end = Math.min(start + partSize, contentLength);
+					const partLength = end - start;
+
+					try {
+						const url = await getMultipartPartUrl(
+							target,
+							partNumber,
+							partLength,
+							partSignal,
+						);
+						const etag = await uploadMultipartPart(
+							url,
+							fileHandle.slice(start, end),
+							partLength,
+							partNumber,
+							partSignal,
+							UPLOAD_TIMEOUT_MS * workerCount,
+						);
+						parts[partNumber - 1] = { partNumber, etag, size: partLength };
+					} catch (error) {
+						if (!failure) {
+							failure = { error };
+							batchAbort.abort(error);
+						}
+						return;
+					}
+				}
+			}),
+		);
+
+		if (failure) throw failure.error;
+		abortSignal?.throwIfAborted();
 		return await completeMultipartUpload(target, parts, abortSignal);
 	} catch (error) {
 		await abortMultipartUpload(target).catch((abortError) => {
