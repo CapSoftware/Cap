@@ -269,6 +269,7 @@ export function Editor() {
 		if (lockedToImporting()) return "importing" as const;
 		return rawImportStatus();
 	};
+	const initialLoadError = () => projectPath.error ?? rawMetaQuery.error;
 
 	const [importAborted, setImportAborted] = createSignal(false);
 
@@ -299,6 +300,19 @@ export function Editor() {
 
 	return (
 		<Switch fallback={<EditorSkeleton />}>
+			<Match when={initialLoadError()}>
+				{(error) => (
+					<div class="flex h-full min-h-0 flex-col items-center justify-center gap-4 bg-ed-window px-6 text-center text-ed-text-1">
+						<h2 class="text-xl font-semibold">Unable to Open Recording</h2>
+						<p class="max-w-md text-sm text-ed-text-2">
+							{getEditorErrorMessage(error())}
+						</p>
+						<EditorButton onClick={() => window.location.reload()}>
+							Try again
+						</EditorButton>
+					</div>
+				)}
+			</Match>
 			<Match
 				when={importStatus() === "importing" ? (projectPath() ?? null) : null}
 			>
