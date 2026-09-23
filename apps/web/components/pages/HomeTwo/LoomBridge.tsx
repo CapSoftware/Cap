@@ -12,7 +12,7 @@ import { BAND, BODY_TEXT, BTN_PRIMARY, grainBg, MODE_THEME } from "./theme";
 export const LoomBridge = () => (
 	<section className="px-5 pb-4 pt-2">
 		<div
-			className="mx-auto flex max-w-[1200px] flex-col items-start justify-between gap-8 rounded-[20px] p-8 lg:flex-row lg:items-center lg:p-12"
+			className="mx-auto flex max-w-[1200px] flex-col items-start justify-between gap-10 rounded-[20px] p-8 lg:flex-row lg:items-end lg:gap-16 lg:p-12"
 			style={grainBg(BAND)}
 		>
 			<div className="max-w-[560px]">
@@ -31,7 +31,8 @@ export const LoomBridge = () => (
 				</p>
 			</div>
 
-			<div className="flex flex-col items-start gap-3 lg:items-end">
+			<div className="flex w-full shrink-0 flex-col items-start gap-4 lg:w-auto lg:items-end lg:border-l lg:border-[#DDE4EB] lg:pl-16">
+				<MigratePromoBadge sourcePage="home_loom_bridge" />
 				<Link
 					href="/migrate-from-loom"
 					onClick={() =>
@@ -46,7 +47,6 @@ export const LoomBridge = () => (
 					Import from Loom
 					<ArrowRight className="size-4" />
 				</Link>
-				<MigratePromoBadge sourcePage="home_loom_bridge" />
 			</div>
 		</div>
 	</section>

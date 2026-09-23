@@ -95,7 +95,7 @@ const AltIcon = ({
 		href="/download"
 		aria-label={`Download Cap: ${label}`}
 		title={label}
-		className="grid size-7 place-items-center rounded-[7px] text-[rgba(17,17,17,0.45)] transition-colors duration-200 hover:bg-[#E7EDF3] hover:text-[#111111] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#111111]"
+		className="grid size-9 place-items-center rounded-[9px] text-[rgba(17,17,17,0.45)] transition-colors duration-200 hover:bg-[#E7EDF3] hover:text-[#111111] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#111111]"
 	>
 		{children}
 	</Link>
@@ -107,7 +107,6 @@ export const Hero = () => {
 	const displayPlatform = platform ?? "macos";
 	const isWindows = displayPlatform === "windows";
 	const isLinux = displayPlatform === "linux";
-	const platformName = isWindows ? "Windows" : isLinux ? "Linux" : "macOS";
 	const downloadHref = isWindows
 		? "/download"
 		: getDownloadUrl(displayPlatform, isIntel);
@@ -179,7 +178,7 @@ export const Hero = () => {
 						) : (
 							<AppleGlyph className="mr-2.5 size-[19px]" />
 						)}
-						Download free for {platformName}
+						Download now
 					</Link>
 
 					<button
@@ -227,12 +226,12 @@ export const Hero = () => {
 					<span className="flex items-center gap-1">
 						{isWindows || isLinux ? (
 							<AltIcon label="macOS">
-								<AppleGlyph className="size-4" />
+								<AppleGlyph className="size-[18px]" />
 							</AltIcon>
 						) : null}
 						{!isWindows ? (
 							<AltIcon label="Windows">
-								<WindowsGlyph className="size-[15px]" />
+								<WindowsGlyph className="size-[17px]" />
 							</AltIcon>
 						) : null}
 						{!isLinux ? (
@@ -240,9 +239,9 @@ export const Hero = () => {
 								<Image
 									src="/logos/os/linux.svg"
 									alt=""
-									width={16}
-									height={16}
-									className="size-4 opacity-60"
+									width={18}
+									height={18}
+									className="size-[18px] opacity-60"
 								/>
 							</AltIcon>
 						) : null}
@@ -250,9 +249,9 @@ export const Hero = () => {
 							<Image
 								src="/logos/browsers/google-chrome.svg"
 								alt=""
-								width={16}
-								height={16}
-								className="size-4 opacity-70"
+								width={18}
+								height={18}
+								className="size-[18px] opacity-70"
 							/>
 						</AltIcon>
 					</span>

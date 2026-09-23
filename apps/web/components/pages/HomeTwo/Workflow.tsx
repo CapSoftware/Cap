@@ -84,7 +84,7 @@ const StepRow = ({
 		>
 			{index}
 		</span>
-		<span className="text-[13.5px] leading-snug text-[rgba(17,17,17,0.72)]">
+		<span className="text-[14.5px] leading-[1.45] text-[rgba(17,17,17,0.72)]">
 			{text}
 		</span>
 	</li>
@@ -112,14 +112,14 @@ export const Workflow = () => (
 				</Link>
 			</div>
 
-			<div className="mt-16 rounded-[20px] p-3 lg:p-4" style={grainBg(BAND)}>
-				<div className="grid gap-3 md:grid-cols-3 lg:gap-4">
+			<div className="mt-16 rounded-[20px] p-4 lg:p-5" style={grainBg(BAND)}>
+				<div className="mx-auto grid max-w-[620px] gap-4 lg:max-w-none lg:grid-cols-3">
 					{MODES.map((mode) => {
 						const theme = MODE_THEME[mode.key];
 						return (
 							<div
 								key={mode.key}
-								className="flex flex-col rounded-[14px] p-6 text-left"
+								className="flex flex-col rounded-[14px] p-7 text-left"
 								style={grainBg(CARD_BG)}
 							>
 								<div className="flex items-center gap-2.5">
@@ -134,34 +134,30 @@ export const Workflow = () => (
 									</span>
 								</div>
 
-								<h3 className="mt-5 max-w-[300px] text-balance text-[22px] font-normal leading-[1.1] tracking-[-0.02em] text-[#111111]">
+								<h3 className="mt-5 min-h-[2.2em] max-w-[300px] text-balance text-[22px] font-normal leading-[1.1] tracking-[-0.02em] text-[#111111]">
 									{mode.promise}
 								</h3>
 
-								<div className="flex flex-1 flex-col justify-between">
-									<div>
-										<ol className="mt-5 space-y-3">
-											{mode.steps.map((text, i) => (
-												<StepRow
-													key={text}
-													index={i + 1}
-													text={text}
-													theme={theme}
-												/>
-											))}
-										</ol>
+								<ol className="mb-6 mt-5 space-y-3.5">
+									{mode.steps.map((text, i) => (
+										<StepRow
+											key={text}
+											index={i + 1}
+											text={text}
+											theme={theme}
+										/>
+									))}
+								</ol>
 
-										<div className="mt-6 border-t border-[#E1E7EE] pt-4">
-											<p
-												className={`${MONO} text-[11px] font-normal uppercase leading-none tracking-[0.05em] text-[rgba(17,17,17,0.45)]`}
-											>
-												Best for
-											</p>
-											<p className="mt-2 text-[13.5px] leading-snug text-[rgba(17,17,17,0.72)]">
-												{mode.bestFor}
-											</p>
-										</div>
-									</div>
+								<div className="mt-auto border-t border-[#E1E7EE] pt-5">
+									<p
+										className={`${MONO} text-[11px] font-normal uppercase leading-none tracking-[0.05em] text-[rgba(17,17,17,0.45)]`}
+									>
+										Best for
+									</p>
+									<p className="mt-2 text-[14px] leading-snug text-[rgba(17,17,17,0.72)]">
+										{mode.bestFor}
+									</p>
 								</div>
 							</div>
 						);
