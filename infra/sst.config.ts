@@ -67,7 +67,7 @@ export default $config({
 			corsRules: [
 				{
 					allowedHeaders: ["*"],
-					allowedMethods: ["GET", "POST"],
+					allowedMethods: ["GET", "HEAD", "POST", "PUT"],
 					allowedOrigins:
 						stage.variant === "production"
 							? [
@@ -77,7 +77,7 @@ export default $config({
 									"https://dyk2p776s2gx5.cloudfront.net",
 								]
 							: ["http://localhost:*", "https://*.vercel.app", webUrl],
-					exposeHeaders: ["Content-Range", "Accept-Ranges"],
+					exposeHeaders: ["ETag", "Content-Range", "Accept-Ranges"],
 				},
 			],
 		});
