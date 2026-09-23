@@ -11,7 +11,6 @@ import {
 	OG_WIDTH,
 	OgCanvas,
 } from "@/lib/og/template";
-import type { SharePageBranding } from "@/lib/share-branding";
 
 export type VideoOgData = {
 	title: string;
@@ -19,7 +18,6 @@ export type VideoOgData = {
 	/** Duration in seconds. */
 	duration?: number;
 	screenshotUrl?: string;
-	branding?: SharePageBranding | null;
 };
 
 export type VideoOgVariant =
@@ -117,7 +115,6 @@ const THUMB_W = 600;
 const THUMB_H = Math.round((THUMB_W * 9) / 16);
 const FRAME_PAD = 12;
 
-/** The video thumbnail in the homepage mesh frame, play button on top. */
 const Thumbnail = ({
 	mesh,
 	screenshotUrl,
@@ -163,7 +160,6 @@ const Thumbnail = ({
 				/>
 			)}
 			{screenshotUrl && (
-				// Soften the frame so the play button carries the card.
 				<div
 					style={{
 						display: "flex",
@@ -221,22 +217,6 @@ const InitialAvatar = ({ name }: { name: string }) => (
 	</div>
 );
 
-const BrandLogo = ({ branding }: { branding: SharePageBranding | null }) => {
-	if (branding?.type === "cap") return <CapWordmark />;
-	if (branding?.type === "custom")
-		return (
-			// biome-ignore lint/performance/noImgElement: satori renders raw img tags
-			<img
-				alt={`${branding.name} logo`}
-				src={branding.imageUrl}
-				width={220}
-				height={52}
-				style={{ objectFit: "contain", objectPosition: "left" }}
-			/>
-		);
-	return <div style={{ display: "flex", height: 52 }} />;
-};
-
 const videoTitleSize = (title: string) => {
 	if (title.length <= 24) return 60;
 	if (title.length <= 48) return 50;
@@ -247,8 +227,6 @@ const videoLayout = (
 	video: VideoOgData,
 	assets: Awaited<ReturnType<typeof loadOgAssets>>,
 ) => {
-	const branding =
-		video.branding === undefined ? ({ type: "cap" } as const) : video.branding;
 	return (
 		<OgCanvas background={assets.skySplit}>
 			<div
@@ -278,7 +256,7 @@ const videoLayout = (
 					justifyContent: "space-between",
 				}}
 			>
-				<BrandLogo branding={branding} />
+				<CapWordmark />
 				<div style={{ display: "flex", flexDirection: "column", gap: 28 }}>
 					<Headline size={videoTitleSize(video.title)} lines={4}>
 						{video.title}
