@@ -2760,19 +2760,6 @@ function BackgroundConfig(props: {
 											)}
 										</For>
 									</div>
-									{/* <Tooltip content="Add custom color">
-                      <button
-                        class="flex justify-center items-center w-6 h-6 rounded-lg border border-gray-400 border-dashed text-gray-12 hover:border-gray-500"
-                        onClick={() => {
-                          // Function to add a new color (you can modify this)
-                          console.log(
-                            "Open color picker or modal to add a color"
-                          );
-                        }}
-                      >
-                        +
-                      </button>
-                    </Tooltip> */}
 								</div>
 							</Show>
 						</KTabs.Content>

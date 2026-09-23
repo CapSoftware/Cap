@@ -2609,7 +2609,6 @@ const createEditorInstanceContext = () => {
 
 	const [editorInstance, { refetch: refetchEditorInstance }] = createResource(
 		async () => {
-			console.log("[Editor] Creating editor instance...");
 
 			let instance: SerializedEditorInstance | undefined;
 			let lastError: unknown;
@@ -2642,7 +2641,6 @@ const createEditorInstanceContext = () => {
 				throw lastError;
 			}
 
-			console.log("[Editor] Editor instance created, setting up WebSocket");
 
 			const instanceId = instance.instanceId;
 			if (!alive) return instance;

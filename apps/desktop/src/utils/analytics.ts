@@ -42,7 +42,6 @@ if (clientId && apiUrl) {
 			// this also covers anything the SDK sends on its own.
 			filter: () => telemetryEnabledCache,
 		});
-		console.log("OpenPanel initialized");
 	} catch (error) {
 		console.error("Failed to initialize OpenPanel:", error);
 	}
@@ -89,7 +88,6 @@ export function identifyUser(
 					...(properties ? { properties } : {}),
 				}),
 			).catch((error) => console.error("Error identifying user:", error));
-			console.log(`User identified: ${userId}`);
 		} catch (error) {
 			console.error("Error identifying user:", error);
 		}
@@ -119,7 +117,6 @@ export function trackEvent(
 
 		try {
 			const eventProperties = { ...properties, platform: "desktop" };
-			console.log(`Capturing event ${eventName}:`, eventProperties);
 			void op
 				.track(eventName, eventProperties)
 				.catch((error) =>

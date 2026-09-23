@@ -128,7 +128,6 @@ export function Header(props: {
 						onClick={() => {
 							clearTimelineSelection();
 
-							console.log({ path: `${editorInstance.path}/` });
 							revealItemInDir(`${editorInstance.path}/`);
 						}}
 						tooltipText="Open recording bundle"

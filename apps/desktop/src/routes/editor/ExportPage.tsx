@@ -873,7 +873,6 @@ export function ExportPage() {
 				if (isCancelled()) throw new SilentError("Cancelled");
 
 				const uploadChannel = new Channel<UploadProgress>((progress) => {
-					console.log("Upload progress:", progress);
 					setExportState(
 						produce((state) => {
 							if (state.type !== "uploading") return;
@@ -884,8 +883,6 @@ export function ExportPage() {
 				});
 
 				setExportState({ type: "uploading", progress: 0 });
-
-				console.log({ organizationId: settings.organizationId });
 
 				const result = meta().sharing
 					? await commands.uploadExportedVideo(

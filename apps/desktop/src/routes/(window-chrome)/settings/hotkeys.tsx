@@ -140,7 +140,6 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
 																<button
 																	class="w-fit"
 																	type="button"
-																	onBlur={(e) => console.log(e)}
 																	onClick={(e) => {
 																		e.stopPropagation();
 
