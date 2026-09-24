@@ -144,20 +144,12 @@ export async function capture(ctx, session, recipePath, daytona) {
 			);
 		}
 		git(session.worktree, "archive", "--format=tar", "--output", archive, sha);
-		let env = {};
-		if (recipe.database !== false) {
-			inspectDatabase(session);
-			env = executionEnvironment(ctx, session);
-			for (const key of [
-				"PATH",
-				"HOME",
-				"USER",
-				"TMPDIR",
-				"SHELL",
-				"SYSTEMROOT",
-			])
-				delete env[key];
-		}
+		if (recipe.database !== false) inspectDatabase(session);
+		const env = executionEnvironment(ctx, session, {
+			credentials: recipe.database !== false,
+		});
+		for (const key of ["PATH", "HOME", "USER", "TMPDIR", "SHELL", "SYSTEMROOT"])
+			delete env[key];
 		if (session.capture) {
 			session.captureHistory ??= [];
 			session.captureHistory.push(session.capture);

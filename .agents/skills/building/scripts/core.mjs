@@ -427,10 +427,15 @@ export function databaseCredentials(ctx, session) {
 	return { created: true, passwordId: password.id };
 }
 
-export function executionEnvironment(ctx, session) {
-	const stored = existsSync(environmentPath(ctx, session))
-		? readEnvironment(ctx, session)
-		: {};
+export function executionEnvironment(
+	ctx,
+	session,
+	{ credentials = true } = {},
+) {
+	const stored =
+		credentials && existsSync(environmentPath(ctx, session))
+			? readEnvironment(ctx, session)
+			: {};
 	if (stored.DATABASE_URL) {
 		const database = new URL(stored.DATABASE_URL);
 		if (

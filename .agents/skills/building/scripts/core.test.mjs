@@ -522,6 +522,11 @@ test("failed export preserves the raw project before deleting the sandbox", asyn
 		target: "web",
 		base: "main",
 	});
+	writeEnvironment(ctx, session, {
+		DATABASE_URL: "omit-database-credential",
+		NEXTAUTH_SECRET: "omit-auth-credential",
+		CAP_AWS_SECRET_KEY: "omit-storage-credential",
+	});
 	let downloaded = false;
 	let deleted = false;
 	const sandbox = {
@@ -569,7 +574,19 @@ test("failed export preserves the raw project before deleting the sandbox", asyn
 		},
 	};
 	const daytona = {
-		create: async () => sandbox,
+		create: async ({ envVars }) => {
+			assert.equal(envVars.PORT, String(session.ports.web));
+			assert.equal(envVars.WEB_URL, `http://127.0.0.1:${session.ports.web}`);
+			for (const key of [
+				"DATABASE_URL",
+				"NEXTAUTH_SECRET",
+				"CAP_AWS_SECRET_KEY",
+				"HOME",
+				"PATH",
+			])
+				assert.equal(envVars[key], undefined);
+			return sandbox;
+		},
 		get: async () => sandbox,
 		delete: async () => {
 			assert.ok(downloaded);
