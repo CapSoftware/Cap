@@ -163,5 +163,4 @@ export default withSentryConfig(withWorkflow(nextConfig), {
 	telemetry: false,
 	silent: !process.env.CI,
 	sourcemaps: { disable: !process.env.SENTRY_AUTH_TOKEN },
-	webpack: { treeshake: { removeTracing: true } },
 });
