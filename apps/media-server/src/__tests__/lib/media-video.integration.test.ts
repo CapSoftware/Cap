@@ -511,6 +511,78 @@ describe("generatePreviewGif integration tests", () => {
 });
 
 describe("processVideo integration tests", () => {
+	test.each(["libvpx", "libvpx-vp9"])(
+		"preserves the playable ending of sparse %s screen recordings",
+		async (codec) => {
+			const directory = mkdtempSync(join(tmpdir(), "sparse-recording-"));
+			const inputPath = join(directory, "source.webm");
+			try {
+				execFileSync("ffmpeg", [
+					"-v",
+					"error",
+					"-y",
+					"-f",
+					"lavfi",
+					"-i",
+					"testsrc2=size=160x90:rate=30:duration=8",
+					"-vf",
+					"select=lt(t\\,1)+gte(t\\,1)*not(mod(n\\,30))",
+					"-fps_mode",
+					"vfr",
+					"-c:v",
+					codec,
+					"-deadline",
+					"realtime",
+					"-cpu-used",
+					"8",
+					inputPath,
+				]);
+				const metadata = await probeVideo(`file://${inputPath}`);
+				const output = await processVideo(inputPath, metadata);
+				try {
+					const probe = JSON.parse(
+						execFileSync("ffprobe", [
+							"-v",
+							"error",
+							"-select_streams",
+							"v:0",
+							"-show_frames",
+							"-show_entries",
+							"format=duration:frame=best_effort_timestamp_time",
+							"-of",
+							"json",
+							output.path,
+						]).toString(),
+					) as {
+						format: { duration: string };
+						frames: { best_effort_timestamp_time: string }[];
+					};
+					const lastTimestamp = Number(
+						probe.frames.at(-1)?.best_effort_timestamp_time,
+					);
+					expect(probe.frames).toHaveLength(37);
+					expect(lastTimestamp).toBeCloseTo(7, 1);
+					expect(Number(probe.format.duration)).toBeGreaterThan(lastTimestamp);
+					expect(Number(probe.format.duration)).toBeCloseTo(7 + 1 / 30, 1);
+					execFileSync("ffmpeg", [
+						"-v",
+						"error",
+						"-xerror",
+						"-i",
+						output.path,
+						"-f",
+						"null",
+						"-",
+					]);
+				} finally {
+					await output.cleanup();
+				}
+			} finally {
+				rmSync(directory, { recursive: true, force: true });
+			}
+		},
+	);
+
 	test("retries transient S3 upload failures", async () => {
 		const originalFetch = globalThis.fetch;
 		let attempts = 0;

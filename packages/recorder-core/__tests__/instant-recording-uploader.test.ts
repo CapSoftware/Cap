@@ -435,6 +435,38 @@ describe("InstantRecordingUploader", () => {
 		});
 	});
 
+	it("refuses completion when a recorded chunk never reached the uploader", async () => {
+		const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+			if (input.toString() === "/api/upload/multipart/presign-part") {
+				return makeJsonResponse({
+					presignedUrl: "https://uploads.example/part-1",
+				});
+			}
+			throw new Error(`Unexpected fetch call: ${input}`);
+		});
+		vi.stubGlobal("fetch", fetchMock);
+		MockXMLHttpRequest.setOutcomes([{ type: "success", etag: "etag-1" }]);
+		const uploader = new InstantRecordingUploader({
+			videoId,
+			uploadId: "upload-123",
+			mimeType: "video/webm;codecs=vp9,opus",
+			subpath: "raw-upload.webm",
+			setUploadStatus: vi.fn(),
+			sendProgressUpdate: vi.fn().mockResolvedValue(undefined),
+			onChunkStateChange: vi.fn(),
+		});
+		const chunk = makeBlob(STREAMED_PART_BYTES, "video/webm;codecs=vp9,opus");
+		uploader.handleChunk(chunk, chunk.size + 100);
+		await expect(
+			uploader.finalize({ durationSeconds: 12, subpath: "raw-upload.webm" }),
+		).rejects.toThrow("incomplete");
+		expect(
+			fetchMock.mock.calls.some(([input]) =>
+				input.toString().endsWith("/complete"),
+			),
+		).toBe(false);
+	});
+
 	it("retries a failed part upload before completing", async () => {
 		vi.useFakeTimers();
 
@@ -706,6 +738,140 @@ describe("InstantRecordingUploader", () => {
 			([input]) => input.toString() === "/api/upload/multipart/complete",
 		);
 		expect(completeCalls).toHaveLength(4);
+	});
+
+	it("keeps a later missing-session response uncertain after an earlier lost completion", async () => {
+		vi.useFakeTimers();
+		let retrying = false;
+		const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+			if (input.toString().endsWith("/presign-part"))
+				return makeJsonResponse({
+					presignedUrl: "https://uploads.example/part",
+				});
+			return new Response(retrying ? "NoSuchUpload" : "gateway timeout", {
+				status: retrying ? 404 : 504,
+			});
+		});
+		vi.stubGlobal("fetch", fetchMock);
+		MockXMLHttpRequest.setOutcomes([{ type: "success", etag: "etag-1" }]);
+		const uploader = new InstantRecordingUploader({
+			videoId,
+			uploadId: "same-upload",
+			mimeType: "video/webm",
+			subpath: "raw-upload.webm",
+			setUploadStatus: vi.fn(),
+			sendProgressUpdate: vi.fn().mockResolvedValue(undefined),
+		});
+		const options = {
+			finalBlob: makeBlob(10, "video/webm"),
+			durationSeconds: 1,
+			subpath: "raw-upload.webm",
+		};
+		const first = expect(uploader.finalize(options)).rejects.toBeInstanceOf(
+			MultipartCompletionUncertainError,
+		);
+		await vi.runAllTimersAsync();
+		await first;
+		retrying = true;
+		await expect(uploader.finalize(options)).rejects.toBeInstanceOf(
+			MultipartCompletionUncertainError,
+		);
+		expect(
+			fetchMock.mock.calls.filter(([input]) =>
+				input.toString().endsWith("/presign-part"),
+			),
+		).toHaveLength(1);
+	});
+
+	it("requires an explicit successful completion receipt", async () => {
+		vi.useFakeTimers();
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (input: RequestInfo | URL) =>
+				makeJsonResponse(
+					input.toString().endsWith("/presign-part")
+						? { presignedUrl: "https://uploads.example/part" }
+						: { success: false },
+				),
+			),
+		);
+		MockXMLHttpRequest.setOutcomes([{ type: "success", etag: "etag-1" }]);
+		const uploader = new InstantRecordingUploader({
+			videoId,
+			uploadId: "upload",
+			mimeType: "video/webm",
+			subpath: "raw-upload.webm",
+			setUploadStatus: vi.fn(),
+			sendProgressUpdate: vi.fn().mockResolvedValue(undefined),
+		});
+		const rejected = expect(
+			uploader.finalize({
+				finalBlob: makeBlob(10, "video/webm"),
+				durationSeconds: 1,
+				subpath: "raw-upload.webm",
+			}),
+		).rejects.toBeInstanceOf(MultipartCompletionUncertainError);
+		await vi.runAllTimersAsync();
+		await rejected;
+	});
+
+	it.each(["reject", "hang"])(
+		"does not turn confirmed upload success into failure when progress updates %s",
+		async (mode) => {
+			vi.stubGlobal(
+				"fetch",
+				vi.fn(async (input: RequestInfo | URL) =>
+					makeJsonResponse(
+						input.toString().endsWith("/presign-part")
+							? { presignedUrl: "https://uploads.example/part" }
+							: { success: true },
+					),
+				),
+			);
+			MockXMLHttpRequest.setOutcomes([{ type: "success", etag: "etag-1" }]);
+			const sendProgressUpdate = vi.fn(() =>
+				mode === "reject"
+					? Promise.reject(new Error("Progress unavailable"))
+					: new Promise<void>(() => {}),
+			);
+			const uploader = new InstantRecordingUploader({
+				videoId,
+				uploadId: "upload",
+				mimeType: "video/webm",
+				subpath: "raw-upload.webm",
+				setUploadStatus: vi.fn(),
+				sendProgressUpdate,
+			});
+			await expect(
+				uploader.finalize({
+					finalBlob: makeBlob(10, "video/webm"),
+					durationSeconds: 1,
+					subpath: "raw-upload.webm",
+				}),
+			).resolves.toBeUndefined();
+		},
+	);
+
+	it("suspends local work without aborting a remote upload and cannot report it completed", async () => {
+		const fetchMock = vi.fn();
+		vi.stubGlobal("fetch", fetchMock);
+		const uploader = new InstantRecordingUploader({
+			videoId,
+			uploadId: "upload",
+			mimeType: "video/webm",
+			subpath: "raw-upload.webm",
+			setUploadStatus: vi.fn(),
+			sendProgressUpdate: vi.fn(),
+		});
+		uploader.suspend();
+		await expect(
+			uploader.finalize({
+				finalBlob: makeBlob(10, "video/webm"),
+				durationSeconds: 1,
+				subpath: "raw-upload.webm",
+			}),
+		).rejects.toThrow("cancelled");
+		expect(fetchMock).not.toHaveBeenCalled();
 	});
 
 	it("surfaces upload overflow before multipart completion", async () => {
