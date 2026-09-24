@@ -573,8 +573,12 @@ fn reveal_path(path: &Path) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
-        std::process::Command::new("explorer")
-            .args(["/select,", path_str])
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+        let mut cmd = std::process::Command::new("explorer");
+        cmd.creation_flags(CREATE_NO_WINDOW);
+        cmd.args(["/select,", path_str])
             .spawn()
             .map_err(|e| format!("Failed to reveal: {e}"))?;
     }
