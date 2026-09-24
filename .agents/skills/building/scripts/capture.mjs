@@ -74,6 +74,21 @@ export function assertOwnedSandbox(session, sandbox) {
 	}
 }
 
+export function validateCaptureProbe(probe) {
+	const duration = Number(probe.format?.duration);
+	if (
+		!probe.streams?.some(
+			(stream) =>
+				stream.codec_type === "video" &&
+				stream.width === 1920 &&
+				stream.height === 1080,
+		) ||
+		!Number.isFinite(duration) ||
+		duration <= 0
+	)
+		throw new Error("Export did not contain a valid 1080p video");
+}
+
 export async function deleteSandbox(ctx, session, daytona) {
 	if (!session.capture?.sandboxId || session.capture.sandboxDeleted) return;
 	let sandbox;
@@ -305,17 +320,7 @@ export async function capture(ctx, session, recipePath, daytona) {
 				"json",
 				file,
 			]);
-			if (
-				!probe.streams?.some(
-					(stream) =>
-						stream.codec_type === "video" &&
-						stream.width === 1920 &&
-						stream.height === 1080,
-				) ||
-				Number(probe.format?.duration) <= 0
-			) {
-				throw new Error("Export did not contain a valid 1080p video");
-			}
+			validateCaptureProbe(probe);
 			session.capture.file = file;
 			session.capture.fileHash = createHash("sha256")
 				.update(readFileSync(file))

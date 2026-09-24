@@ -22,6 +22,7 @@ import {
 	readRecipe,
 	shareCapture,
 	shellQuote,
+	validateCaptureProbe,
 } from "./capture.mjs";
 import {
 	assertClean,
@@ -483,6 +484,23 @@ test("terminating a launcher stops its descendants before releasing the runtime 
 	await exited;
 	assert.throws(() => process.kill(descendant, 0), { code: "ESRCH" });
 	assert.equal(existsSync(join(ctx.state, "native-runtime.lock")), false);
+});
+
+test("capture verification rejects missing, nonfinite, and empty video duration", () => {
+	const streams = [{ codec_type: "video", width: 1920, height: 1080 }];
+	for (const duration of [undefined, "N/A", "Infinity", "", "0", "-1"]) {
+		assert.throws(
+			() => validateCaptureProbe({ streams, format: { duration } }),
+			/valid 1080p video/,
+		);
+	}
+	assert.doesNotThrow(() =>
+		validateCaptureProbe({ streams, format: { duration: "20.5" } }),
+	);
+	assert.throws(
+		() => validateCaptureProbe({ streams: [], format: { duration: "20.5" } }),
+		/valid 1080p video/,
+	);
 });
 
 test("failed export preserves the raw project before deleting the sandbox", async (t) => {
