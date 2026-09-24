@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, open, rm } from "node:fs/promises";
+import { chmod, mkdtemp, open, rename, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runEditorFile as runFile } from "./editor-process";
@@ -53,6 +53,58 @@ function validateSource(source: EditorMediaSource) {
 		(source.objectIdentity.length < 1 || source.objectIdentity.length > 256)
 	) {
 		throw new Error("Invalid editor object identity");
+	}
+}
+
+async function readableWebmDuration(path: string, signal?: AbortSignal) {
+	const { stdout } = await runFile(
+		"ffprobe",
+		[
+			"-v",
+			"error",
+			"-show_entries",
+			"format=duration",
+			"-of",
+			"default=noprint_wrappers=1:nokey=1",
+			path,
+		],
+		{ timeout: 30_000, maxBuffer: 64 * 1024, signal },
+	);
+	const duration = Number(stdout.trim());
+	return Number.isFinite(duration) && duration > 0;
+}
+
+async function finalizeWebmDuration(path: string, signal?: AbortSignal) {
+	if (await readableWebmDuration(path, signal)) return (await stat(path)).size;
+	const finalizedPath = `${path}.finalized.webm`;
+	try {
+		await runFile(
+			"ffmpeg",
+			[
+				"-hide_banner",
+				"-loglevel",
+				"error",
+				"-nostdin",
+				"-i",
+				path,
+				"-map",
+				"0",
+				"-c",
+				"copy",
+				"-f",
+				"webm",
+				finalizedPath,
+			],
+			{ timeout: DOWNLOAD_TIMEOUT_MS, maxBuffer: 64 * 1024, signal },
+		);
+		if (!(await readableWebmDuration(finalizedPath, signal))) {
+			throw new Error("Editor WebM duration is unavailable");
+		}
+		await chmod(finalizedPath, 0o600);
+		await rename(finalizedPath, path);
+		return (await stat(path)).size;
+	} finally {
+		await rm(finalizedPath, { force: true });
 	}
 }
 
@@ -123,7 +175,10 @@ export async function downloadEditorMedia(
 		await handle.sync();
 		await handle.close();
 		closed = true;
-		return { path, size: received, cleanup };
+		const size = source.contentType.endsWith("/webm")
+			? await finalizeWebmDuration(path, abortSignal)
+			: received;
+		return { path, size, cleanup };
 	} catch (error) {
 		if (!closed) await handle.close();
 		await cleanup();
