@@ -17,6 +17,11 @@ import {
 	BrowserEditorSourceCatalog,
 	type BrowserEditorSources,
 } from "./browser-sources";
+import {
+	recordingMeta,
+	studioRecordingMeta,
+	webInputRecording,
+} from "./browser-studio-setup";
 import { BrowserVideoPool, type BrowserVideoRole } from "./browser-video-pool";
 
 type RendererModule = Awaited<ReturnType<typeof loadBrowserRenderer>>;
@@ -81,6 +86,36 @@ function visiblePreviewSize(
 	] as const;
 }
 
+/// The desktop preview quality presets size frames for a fixed 1080p output.
+/// In the browser the renderer is cheap, so Full and Half render at the
+/// canvas's real device-pixel size (never softer than the preset, capped at
+/// 4K); Quarter stays a deliberate low-detail mode.
+function previewDetailBase(
+	canvas: HTMLCanvasElement,
+	width: number,
+	height: number,
+) {
+	if (width < 960) return { width, height };
+	const bounds = canvas.getBoundingClientRect();
+	const density = window.devicePixelRatio;
+	if (bounds.width < 2 || bounds.height < 2 || !(density > 0)) {
+		return { width, height };
+	}
+	const scale = Math.min(
+		Math.max(
+			1,
+			(bounds.width * density) / width,
+			(bounds.height * density) / height,
+		),
+		3840 / width,
+		2160 / height,
+	);
+	return {
+		width: Math.max(width, Math.round(width * scale)),
+		height: Math.max(height, Math.round(height * scale)),
+	};
+}
+
 function timelineConfig(config: unknown, sourceDurations: number[]) {
 	const saved = record(record(config)?.timeline);
 	if (saved) return saved;
@@ -127,96 +162,6 @@ function segmentSettings(config: Record<string, unknown>) {
 			volume: Math.max(0, Math.min(volume, 2)),
 		};
 	});
-}
-
-function recordingMeta(sources: BrowserEditorSources) {
-	return {
-		segments: sources.segments.map((segment, index) => ({
-			display: {
-				path: `display-${index}.webm`,
-				fps: segment.displayFps ?? 30,
-				start_time: 0,
-			},
-			...(segment.camera
-				? {
-						camera: {
-							path: `camera-${index}.webm`,
-							fps: segment.cameraFps ?? segment.displayFps ?? 30,
-							start_time: (segment.cameraOffsetMs ?? 0) / 1000,
-						},
-					}
-				: {}),
-			...(segment.micOffsetMs !== null
-				? {
-						mic: {
-							path: `mic-${index}.webm`,
-							start_time: segment.micOffsetMs / 1000,
-						},
-					}
-				: {}),
-			...(segment.systemAudioOffsetMs !== null
-				? {
-						system_audio: {
-							path: `system-${index}.webm`,
-							start_time: segment.systemAudioOffsetMs / 1000,
-						},
-					}
-				: {}),
-		})),
-	};
-}
-
-type WebInputRecording = {
-	platform: string;
-	cursor: unknown;
-	cursors: Record<string, unknown>;
-};
-
-function studioRecordingMeta(
-	sources: BrowserEditorSources,
-	input: WebInputRecording | null,
-) {
-	return {
-		pretty_name: sources.title,
-		...(input ? { platform: input.platform } : {}),
-		...recordingMeta(sources),
-		cursors: input?.cursors ?? {},
-		status: { status: "Complete" },
-	};
-}
-
-/// Pointer input recorded by the browser recorder or Chrome extension, parsed
-/// by the same code the web export worker uses. Missing input only drops the
-/// cursor layer, so failures are not fatal.
-async function webInputRecording(
-	sources: BrowserEditorSources,
-	module: RendererModule,
-	signal: AbortSignal,
-): Promise<WebInputRecording | null> {
-	if (!sources.inputEvents) return null;
-	try {
-		const response = await fetch(sources.inputEvents.url, {
-			signal,
-			credentials: "omit",
-		});
-		if (!response.ok) return null;
-		const size = Number(response.headers.get("content-length") ?? 0);
-		if (size > 64 * 1024 * 1024) return null;
-		const parsed: unknown = JSON.parse(
-			module.web_input_recording(await response.text()),
-		);
-		const value = record(parsed);
-		if (!value || typeof value.platform !== "string" || !record(value.cursors))
-			return null;
-		return {
-			platform: value.platform,
-			cursor: value.cursor,
-			cursors: record(value.cursors) ?? {},
-		};
-	} catch (cause) {
-		if (signal.aborted) throw cause;
-		return null;
-	}
 }
 
 export class BrowserLocalPlayback {
@@ -362,11 +307,16 @@ export class BrowserLocalPlayback {
 			if (previewBase) {
 				const visual = new module.BrowserVisualConfig(JSON.stringify(config));
 				try {
+					const detail = previewDetailBase(
+						canvas,
+						previewBase.width,
+						previewBase.height,
+					);
 					const size = visual.output_dimensions(
 						display.videoWidth,
 						display.videoHeight,
-						previewBase.width,
-						previewBase.height,
+						detail.width,
+						detail.height,
 					);
 					if (size.length !== 2 || size[0] < 2 || size[1] < 2) {
 						throw new Error("Editor output dimensions are unavailable");
@@ -472,11 +422,12 @@ export class BrowserLocalPlayback {
 	}
 
 	resizeForBase(width: number, height: number) {
+		const detail = previewDetailBase(this.visibleCanvas, width, height);
 		const size = this.visual.output_dimensions(
 			this.screenWidth,
 			this.screenHeight,
-			width,
-			height,
+			detail.width,
+			detail.height,
 		);
 		if (size.length !== 2 || size[0] < 2 || size[1] < 2) {
 			throw new Error("Editor output dimensions are unavailable");
@@ -488,7 +439,13 @@ export class BrowserLocalPlayback {
 			size[1],
 			this.previewScale,
 		);
-		if (this.width !== visibleWidth || this.height !== visibleHeight) {
+		// The layout sizes the canvas from the frame's aspect, and even-pixel
+		// rounding shifts that aspect slightly; ignoring few-pixel changes keeps
+		// the two from resizing each other forever.
+		if (
+			Math.abs(this.width - visibleWidth) > 4 ||
+			Math.abs(this.height - visibleHeight) > 4
+		) {
 			this.resize(visibleWidth, visibleHeight);
 			return true;
 		}
@@ -999,6 +956,22 @@ export class BrowserLocalPlayback {
 		cancelAnimationFrame(this.animationFrame);
 		this.pool.pause();
 		this.audio.pause();
+		// Playback may have lowered the resolution to keep up; a paused frame
+		// always renders at full detail.
+		if (this.previewScale !== 1) {
+			this.previewScale = 1;
+			this.averageFrameCostMs = 0;
+			this.lastRenderedAt = 0;
+			this.slowFrames = 0;
+			this.fastFrames = 0;
+			if (this.previewBase) {
+				this.resizeForBase(this.previewBase.width, this.previewBase.height);
+			}
+			void this.seek(this.outputTime).catch((cause: unknown) => {
+				if (this.disposed) return;
+				this.onError(cause instanceof Error ? cause : new Error(String(cause)));
+			});
+		}
 	}
 
 	dispose() {

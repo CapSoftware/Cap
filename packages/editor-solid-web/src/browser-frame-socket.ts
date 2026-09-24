@@ -368,6 +368,10 @@ export function setBrowserEditorVideoId(value: string | null) {
 	videoId = value;
 }
 
+export function browserEditorVideoId() {
+	return videoId;
+}
+
 export function browserEditorPreviewEnabled() {
 	return videoId !== null;
 }

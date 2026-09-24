@@ -20,6 +20,14 @@ import {
 	setBrowserFrameLayoutListener,
 	setBrowserPlaybackFrameListener,
 } from "./browser-frame-socket";
+import {
+	BrowserLocalExportUnavailable,
+	browserLocalExportEstimates,
+	browserLocalExportPreview,
+	browserLocalExportSupported,
+	cancelBrowserLocalExport,
+	runBrowserLocalExport,
+} from "./browser-local-export";
 import { EditorCaptionCacheMemo } from "./caption-cache-memo";
 import {
 	editorChannelId,
@@ -232,6 +240,70 @@ export class PortEditorTransport {
 		const planRequestSequence =
 			name === "checkUpgradedAndUpdate" ? ++this.planRequestSequence : 0;
 		if (name === "performHapticFeedback") return null;
+		if (name === "exportVideoToFile") {
+			const [, channel, settings, fileName] = args;
+			const channelId =
+				typeof channel === "object" && channel !== null && "id" in channel
+					? Number(channel.id)
+					: null;
+			if (
+				typeof settings === "object" &&
+				settings !== null &&
+				typeof fileName === "string"
+			) {
+				try {
+					return await runBrowserLocalExport(
+						settings as Record<string, unknown>,
+						channelId,
+						fileName,
+					);
+				} catch (cause) {
+					if (!(cause instanceof BrowserLocalExportUnavailable)) throw cause;
+					console.warn("Cap local export unavailable, using the worker", cause);
+				}
+			}
+		}
+		if (name === "cancelCurrentWindowExports") cancelBrowserLocalExport();
+		if (name === "generateExportPreviewFast") {
+			const [frameTime, previewSettings] = args;
+			if (
+				typeof frameTime === "number" &&
+				typeof previewSettings === "object" &&
+				previewSettings !== null
+			) {
+				try {
+					return await browserLocalExportPreview(
+						frameTime,
+						previewSettings as Record<string, unknown>,
+					);
+				} catch (cause) {
+					if (!(cause instanceof BrowserLocalExportUnavailable)) throw cause;
+					console.warn(
+						`Cap local ${name} unavailable, using the worker`,
+						cause,
+					);
+				}
+			}
+		}
+		if (name === "getExportEstimates") {
+			const [, settings] = args;
+			if (typeof settings === "object" && settings !== null) {
+				try {
+					return await browserLocalExportEstimates(
+						settings as Record<string, unknown>,
+					);
+				} catch (cause) {
+					if (!(cause instanceof BrowserLocalExportUnavailable)) throw cause;
+					console.warn(
+						`Cap local ${name} unavailable, using the worker`,
+						cause,
+					);
+				}
+			}
+		}
+		if (name === "cancelExportEstimates" && browserLocalExportSupported()) {
+			return null;
+		}
 		if (name === "saveFileDialog") {
 			const fileName = args[0];
 			const fileType = args[1];

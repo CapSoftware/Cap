@@ -2,7 +2,7 @@ import { loadBrowserRenderer } from "./browser-renderer";
 
 // The web export worker renders text with Debian's fonts-dejavu-core, so the
 // browser preview registers exactly those faces for identical shaping.
-const FONT_URLS = [
+export const BROWSER_RENDERER_FONT_URLS = [
 	new URL("../fonts/dejavu/DejaVuSans.ttf", import.meta.url),
 	new URL("../fonts/dejavu/DejaVuSans-Bold.ttf", import.meta.url),
 	new URL("../fonts/dejavu/DejaVuSerif.ttf", import.meta.url),
@@ -23,7 +23,7 @@ export function ensureBrowserRendererFonts() {
 	if (!pending) {
 		pending = Promise.all([
 			loadBrowserRenderer(),
-			...FONT_URLS.map(async (url) => {
+			...BROWSER_RENDERER_FONT_URLS.map(async (url) => {
 				const response = await fetch(url);
 				if (!response.ok) throw new Error("Editor fonts could not load");
 				return new Uint8Array(await response.arrayBuffer());
