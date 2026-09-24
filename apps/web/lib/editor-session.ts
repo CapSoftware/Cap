@@ -403,19 +403,22 @@ export const getSignedEditorSources = Effect.fn("getSignedEditorSources")(
 						expiresIn: SOURCE_URL_TTL_SECONDS,
 					});
 		const [displayHead, cameraHead, micHead, systemAudioHead, inputEventsHead] =
-			yield* Effect.all([
-				storage.headObject(displaySource.key),
-				cameraSource
-					? storage.headObject(cameraSource.key)
-					: Effect.succeed(null),
-				micSource ? storage.headObject(micSource.key) : Effect.succeed(null),
-				systemAudioSource
-					? storage.headObject(systemAudioSource.key)
-					: Effect.succeed(null),
-				inputEventsSource
-					? storage.headObject(inputEventsSource.key)
-					: Effect.succeed(null),
-			]).pipe(
+			yield* Effect.all(
+				[
+					storage.headObject(displaySource.key),
+					cameraSource
+						? storage.headObject(cameraSource.key)
+						: Effect.succeed(null),
+					micSource ? storage.headObject(micSource.key) : Effect.succeed(null),
+					systemAudioSource
+						? storage.headObject(systemAudioSource.key)
+						: Effect.succeed(null),
+					inputEventsSource
+						? storage.headObject(inputEventsSource.key)
+						: Effect.succeed(null),
+				],
+				{ concurrency: 5 },
+			).pipe(
 				Effect.catchTag("StorageError", () =>
 					Effect.fail(new HttpApiError.ServiceUnavailable()),
 				),
@@ -489,17 +492,20 @@ export const getSignedEditorSources = Effect.fn("getSignedEditorSources")(
 			return yield* new HttpApiError.ServiceUnavailable();
 		}
 		const [displayUrl, cameraUrl, micUrl, systemAudioUrl, inputEventsUrl] =
-			yield* Effect.all([
-				signSource(displaySource.key),
-				cameraSource ? signSource(cameraSource.key) : Effect.succeed(null),
-				micSource ? signSource(micSource.key) : Effect.succeed(null),
-				systemAudioSource
-					? signSource(systemAudioSource.key)
-					: Effect.succeed(null),
-				inputEventsSource
-					? signSource(inputEventsSource.key)
-					: Effect.succeed(null),
-			]).pipe(
+			yield* Effect.all(
+				[
+					signSource(displaySource.key),
+					cameraSource ? signSource(cameraSource.key) : Effect.succeed(null),
+					micSource ? signSource(micSource.key) : Effect.succeed(null),
+					systemAudioSource
+						? signSource(systemAudioSource.key)
+						: Effect.succeed(null),
+					inputEventsSource
+						? signSource(inputEventsSource.key)
+						: Effect.succeed(null),
+				],
+				{ concurrency: 5 },
+			).pipe(
 				Effect.catchTag("StorageError", () =>
 					Effect.fail(new HttpApiError.ServiceUnavailable()),
 				),
