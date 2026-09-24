@@ -12,9 +12,7 @@ export function EditProcessing({ videoId }: { videoId: Video.VideoId }) {
 	const [retrying, startRetry] = useTransition();
 	const [retryError, setRetryError] = useState<string>();
 	const ready = progress === null;
-	const canRetry =
-		progress?.status === "failed" ||
-		(progress?.status === "error" && progress.hasRawFallback);
+	const canRetry = progress?.status === "error" && progress.hasRawFallback;
 	const failed = progress?.status === "error" || progress?.status === "failed";
 
 	useEffect(() => {
@@ -30,9 +28,11 @@ export function EditProcessing({ videoId }: { videoId: Video.VideoId }) {
 						: "Preparing your recording"}
 				</h1>
 				<output className="block text-sm text-gray-11">
-					{failed
-						? "Your recording could not finish preparing. Return to the recording for more details, or retry if available below."
-						: "The editor will open automatically when your recording is ready."}
+					{progress?.status === "failed"
+						? "This recording did not finish uploading. Return to the device and recorder used to make it. In the browser recorder, check Recovered recordings for a download you can upload again."
+						: failed
+							? "Your recording could not finish preparing. Return to the recording for more details, or retry if available below."
+							: "The editor will open automatically when your recording is ready."}
 				</output>
 				{progress && "progress" in progress && (
 					<progress
@@ -46,6 +46,14 @@ export function EditProcessing({ videoId }: { videoId: Video.VideoId }) {
 					<p role="alert" className="text-sm text-red-11">
 						{retryError}
 					</p>
+				)}
+				{progress?.status === "failed" && (
+					<a
+						href="/dashboard/caps/record"
+						className="block text-sm text-blue-11 underline"
+					>
+						Go to recorder
+					</a>
 				)}
 				{canRetry && (
 					<button

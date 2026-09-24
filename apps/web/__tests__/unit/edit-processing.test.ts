@@ -62,41 +62,35 @@ test("waits through polling and refreshes once when processing completes", async
 	expect(mocks.router.refresh).toHaveBeenCalledTimes(1);
 });
 
-test.each(["error", "failed"] as const)(
-	"retries a stalled recording in the %s state",
-	async (status) => {
-		mocks.progress = {
-			status,
-			lastUpdated: new Date(),
-			errorMessage: "stalled",
-			hasRawFallback: true,
-		};
-		await render();
-		expect(container.textContent).toContain("needs attention");
-		await act(async () => container.querySelector("button")?.click());
-		expect(mocks.retry).toHaveBeenCalledWith({ videoId });
-		expect(mocks.router.refresh).toHaveBeenCalledOnce();
-	},
-);
+test("retries a stalled recording with retained source media", async () => {
+	mocks.progress = {
+		status: "error",
+		lastUpdated: new Date(),
+		errorMessage: "stalled",
+		hasRawFallback: true,
+	};
+	await render();
+	expect(container.textContent).toContain("needs attention");
+	await act(async () => container.querySelector("button")?.click());
+	expect(mocks.retry).toHaveBeenCalledWith({ videoId });
+	expect(mocks.router.refresh).toHaveBeenCalledOnce();
+});
 
-test.each(["error", "failed"] as const)(
-	"reports %s retry failures without navigating away",
-	async (status) => {
-		mocks.progress = {
-			status,
-			lastUpdated: new Date(),
-			errorMessage: "stalled",
-			hasRawFallback: true,
-		};
-		mocks.retry.mockRejectedValueOnce(new Error("Retry unavailable"));
-		await render();
-		await act(async () => container.querySelector("button")?.click());
-		expect(container.querySelector("[role='alert']")?.textContent).toBe(
-			"Retry unavailable",
-		);
-		expect(mocks.router.refresh).not.toHaveBeenCalled();
-	},
-);
+test("reports retry failures without navigating away", async () => {
+	mocks.progress = {
+		status: "error",
+		lastUpdated: new Date(),
+		errorMessage: "stalled",
+		hasRawFallback: true,
+	};
+	mocks.retry.mockRejectedValueOnce(new Error("Retry unavailable"));
+	await render();
+	await act(async () => container.querySelector("button")?.click());
+	expect(container.querySelector("[role='alert']")?.textContent).toBe(
+		"Retry unavailable",
+	);
+	expect(mocks.router.refresh).not.toHaveBeenCalled();
+});
 
 test("does not offer processing retries when no raw source remains", async () => {
 	mocks.progress = {
@@ -108,4 +102,29 @@ test("does not offer processing retries when no raw source remains", async () =>
 	await render();
 	expect(container.querySelector("button")).toBeNull();
 	expect(container.querySelector("a")?.getAttribute("href")).toBe("/s/video");
+});
+
+test("guides incomplete uploads to recovery without processing partial media", async () => {
+	mocks.progress = { status: "failed", lastUpdated: new Date() };
+	await render();
+	expect(container.textContent).toContain("did not finish uploading");
+	expect(container.textContent).toContain("Recovered recordings");
+	expect(container.querySelector("button")).toBeNull();
+	expect(container.querySelector("a")?.getAttribute("href")).toBe(
+		"/dashboard/caps/record",
+	);
+	expect(mocks.retry).not.toHaveBeenCalled();
+});
+
+test("does not offer processing or recovery while an upload is active", async () => {
+	mocks.progress = {
+		status: "uploading",
+		lastUpdated: new Date(),
+		progress: 30,
+	};
+	await render();
+	expect(container.querySelector("progress")?.value).toBe(30);
+	expect(container.querySelector("button")).toBeNull();
+	expect(container.textContent).not.toContain("Go to recorder");
+	expect(mocks.retry).not.toHaveBeenCalled();
 });
