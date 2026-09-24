@@ -19,6 +19,7 @@ const stubDisplayMedia = (
 
 afterEach(() => {
 	vi.unstubAllGlobals();
+	vi.useRealTimers();
 });
 
 describe("constraint builders", () => {
@@ -237,6 +238,44 @@ describe("createAudioMixer", () => {
 		});
 
 		expect(context.createMediaStreamSource).toHaveBeenCalledTimes(2);
+	});
+
+	it("releases the audio context if resuming never completes", async () => {
+		vi.useFakeTimers();
+		const { context } = makeContext();
+		context.state = "suspended";
+		context.resume.mockImplementation(() => new Promise(() => {}));
+		vi.stubGlobal(
+			"AudioContext",
+			vi.fn(() => context),
+		);
+		const result = createAudioMixer({ micStream: micStream("mic-a") }).catch(
+			(error: unknown) => error,
+		);
+		await vi.advanceTimersByTimeAsync(10_000);
+		expect(await result).toEqual(
+			expect.objectContaining({
+				message: expect.stringContaining("could not start recording audio"),
+			}),
+		);
+		expect(context.close).toHaveBeenCalledTimes(1);
+		expect(context.createMediaStreamSource).not.toHaveBeenCalled();
+	});
+
+	it("releases the audio context if graph setup fails", async () => {
+		const { context } = makeContext();
+		const error = new Error("Audio source unavailable");
+		context.createMediaStreamSource.mockImplementation(() => {
+			throw error;
+		});
+		vi.stubGlobal(
+			"AudioContext",
+			vi.fn(() => context),
+		);
+		await expect(
+			createAudioMixer({ micStream: micStream("mic-a") }),
+		).rejects.toBe(error);
+		expect(context.close).toHaveBeenCalledTimes(1);
 	});
 
 	it("resumes a suspended context before wiring the graph", async () => {

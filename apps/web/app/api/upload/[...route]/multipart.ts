@@ -31,6 +31,10 @@ import {
 	queueVideoTranscription,
 	shouldQueueTranscriptionAfterMultipartComplete,
 } from "@/lib/queue-video-transcription";
+import {
+	hasCompleteRecordingParts,
+	matchesCompletedRecordingParts,
+} from "@/lib/recording-multipart-integrity";
 import { runPromise } from "@/lib/server";
 import { startVideoProcessingWorkflow } from "@/lib/video-processing";
 import { stringOrNumberOptional } from "@/utils/zod";
@@ -452,6 +456,12 @@ app.post(
 				return c.text(`Video '${encodeURIComponent(videoId)}' not found`);
 			}
 			const [video] = maybeVideo.value;
+			if (isRawRecorderUpload(subpath) && !hasCompleteRecordingParts(parts)) {
+				return c.json(
+					{ error: "Recording parts are incomplete or invalid" },
+					400,
+				);
+			}
 			const replacement = yield* Effect.try(() =>
 				decodeDesktopReuploadToken(uploadId),
 			);
@@ -733,14 +743,33 @@ app.post(
 						),
 					);
 
-					const result = yield* bucket.multipart.complete(fileKey, uploadId, {
-						MultipartUpload: {
-							Parts: formattedParts,
-						},
-						...(bucket.provider === "googleDrive"
-							? { MpuObjectSize: totalSize }
-							: {}),
-					});
+					const result = yield* bucket.multipart
+						.complete(fileKey, uploadId, {
+							MultipartUpload: {
+								Parts: formattedParts,
+							},
+							...(bucket.provider === "googleDrive"
+								? { MpuObjectSize: totalSize }
+								: {}),
+						})
+						.pipe(
+							Effect.catchAll((error) => {
+								if (!isRawRecorderUpload(subpath) || bucket.provider !== "s3")
+									return Effect.fail(error);
+								// A lost completion response can leave no multipart session. Match
+								// the stored object to every submitted part before acknowledging it.
+								return bucket.headObject(fileKey).pipe(
+									Effect.flatMap((head) =>
+										matchesCompletedRecordingParts(head, sortedParts)
+											? Effect.succeed({
+													ETag: head.ETag,
+													Location: undefined,
+												})
+											: Effect.fail(error),
+									),
+								);
+							}),
+						);
 					yield* Effect.promise(() =>
 						invalidateGoogleDriveStorageQuotaCache(
 							Option.getOrNull(video.storageIntegrationId),
@@ -761,7 +790,18 @@ app.post(
 
 					yield* bucket.headObject(fileKey).pipe(
 						Effect.tap((head) =>
-							replacesVideo &&
+							isRawRecorderUpload(subpath) &&
+							head.ContentLength !==
+								parts.reduce((total, part) => total + part.size, 0)
+								? Effect.fail(
+										new Error(
+											"Uploaded recording size does not match its parts",
+										),
+									)
+								: Effect.void,
+						),
+						Effect.tap((head) =>
+							(replacesVideo || isRawRecorderUpload(subpath)) &&
 							(!head.ContentLength ||
 								(result.ETag && head.ETag !== result.ETag))
 								? Effect.fail(
@@ -779,7 +819,7 @@ app.post(
 							schedule: Schedule.exponential("50 millis"),
 						}),
 						Effect.catchAll((headError) =>
-							replacesVideo
+							replacesVideo || isRawRecorderUpload(subpath)
 								? Effect.fail(headError)
 								: Effect.logError(
 										`Warning: Unable to verify object: ${headError}`,

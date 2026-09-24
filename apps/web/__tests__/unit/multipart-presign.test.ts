@@ -75,7 +75,7 @@ vi.mock("@/lib/queue-video-transcription", () => ({
 		mocks.shouldQueueTranscription,
 }));
 vi.mock("@/lib/video-processing", () => ({
-	startVideoProcessingWorkflow: vi.fn(),
+	startVideoProcessingWorkflow: vi.fn(async () => "started"),
 }));
 
 import { app } from "@/app/api/upload/[...route]/multipart";
@@ -618,4 +618,128 @@ describe("desktop reupload completion", () => {
 		expect(response.status).toBe(500);
 		expect(mocks.sign).not.toHaveBeenCalled();
 	});
+});
+
+describe("raw recording completion integrity", () => {
+	const firstPart = {
+		partNumber: 1,
+		etag: "7fc56270e7a70fa81a5935b72eacbe29",
+		size: 1,
+	};
+	const secondPart = {
+		partNumber: 2,
+		etag: "9d5ed678fe57bcca610140957afab571",
+		size: 1,
+	};
+	const parts = [firstPart, secondPart];
+	const etag = '"938e9f75e9874032440e416d025877f8-2"';
+	const complete = (submittedParts = parts) =>
+		app.request("/complete", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				videoId: "video",
+				uploadId: "same-upload",
+				subpath: "raw-upload.webm",
+				durationInSecs: 1,
+				parts: submittedParts,
+			}),
+		});
+
+	beforeEach(() => {
+		vi.clearAllMocks();
+		mocks.getOwnedById.mockReturnValue(
+			Effect.succeed(
+				Option.some([
+					{
+						id: Video.VideoId.make("video"),
+						ownerId: User.UserId.make("owner"),
+						source: { type: "webMP4" },
+						bucketId: Option.none(),
+						storageIntegrationId: Option.none(),
+					},
+				]),
+			),
+		);
+		mocks.database.mockReturnValue({
+			update: () => ({ set: () => ({ where: async () => {} }) }),
+		});
+		mocks.complete.mockReturnValue(Effect.succeed({ ETag: etag }));
+		mocks.head.mockReturnValue(
+			Effect.succeed({ ETag: etag, ContentLength: 2 }),
+		);
+		mocks.storage.mockReturnValue(
+			Effect.succeed([
+				{
+					provider: "s3",
+					multipart: { complete: mocks.complete },
+					headObject: mocks.head,
+				},
+			]),
+		);
+	});
+
+	it("acknowledges only the assembled recording with matching size", async () => {
+		const response = await complete();
+		expect(response.status).toBe(200);
+		expect(await response.json()).toMatchObject({
+			success: true,
+			processingStarted: true,
+		});
+		expect(mocks.head).toHaveBeenCalledWith("owner/video/raw-upload.webm");
+	});
+
+	it("reconciles a lost completion response using all part identities and object size", async () => {
+		mocks.complete.mockReturnValue(Effect.fail(new Error("NoSuchUpload")));
+		const response = await complete([...parts].reverse());
+		expect(response.status).toBe(200);
+		expect(await response.json()).toMatchObject({
+			success: true,
+			objectIdentity: etag,
+		});
+		expect(mocks.abort).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		{ ETag: '"different"', ContentLength: 2 },
+		{ ETag: etag, ContentLength: 1 },
+		{ ETag: "provider-specific", ContentLength: 2 },
+	])(
+		"does not accept a different or unverifiable object after completion fails",
+		async (head) => {
+			mocks.complete.mockReturnValue(Effect.fail(new Error("NoSuchUpload")));
+			mocks.head.mockReturnValue(Effect.succeed(head));
+			const response = await complete();
+			expect(response.status).toBe(500);
+			const { startVideoProcessingWorkflow } = await import(
+				"@/lib/video-processing"
+			);
+			expect(startVideoProcessingWorkflow).not.toHaveBeenCalled();
+		},
+	);
+
+	it("does not acknowledge success if provider verification finds missing bytes", async () => {
+		mocks.head.mockReturnValue(
+			Effect.succeed({ ETag: etag, ContentLength: 1 }),
+		);
+		expect((await complete()).status).toBe(500);
+		const { startVideoProcessingWorkflow } = await import(
+			"@/lib/video-processing"
+		);
+		expect(startVideoProcessingWorkflow).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		{ invalid: [] },
+		{ invalid: [secondPart] },
+		{ invalid: [firstPart, firstPart] },
+		{ invalid: [{ ...firstPart, size: 0 }] },
+		{ invalid: [{ ...firstPart, size: 1.5 }] },
+	])(
+		"rejects incomplete or invalid part lists before completing storage",
+		async ({ invalid }) => {
+			expect((await complete(invalid)).status).toBe(400);
+			expect(mocks.complete).not.toHaveBeenCalled();
+		},
+	);
 });

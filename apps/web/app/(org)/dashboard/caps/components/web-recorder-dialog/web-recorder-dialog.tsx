@@ -148,6 +148,8 @@ export const WebRecorderDialog = () => {
 		hasAudioTrack,
 		chunkUploads,
 		errorDownload,
+		canRetryUpload,
+		retryUpload,
 		completedShareUrl,
 		recoveredDownloads,
 		isSettingUp,
@@ -361,7 +363,9 @@ export const WebRecorderDialog = () => {
 								)}
 								<RecordingButton
 									isRecording={isRecording}
-									disabled={!canStartRecording || (isBusy && !isRecording)}
+									disabled={
+										isRecording ? isRestarting : !canStartRecording || isBusy
+									}
 									onStart={handleStartClick}
 									onStop={handleStopClick}
 								/>
@@ -412,12 +416,6 @@ export const WebRecorderDialog = () => {
 															href={download.url}
 															download={download.fileName}
 															className="font-medium text-blue-11 hover:text-blue-12"
-															onClick={() =>
-																setTimeout(
-																	() => dismissRecoveredDownload(download.id),
-																	500,
-																)
-															}
 														>
 															Download
 														</a>
@@ -449,6 +447,8 @@ export const WebRecorderDialog = () => {
 					hasAudioTrack={hasAudioTrack}
 					chunkUploads={chunkUploads}
 					errorDownload={errorDownload}
+					onRetryUpload={canRetryUpload ? retryUpload : undefined}
+					shareUrl={completedShareUrl}
 					onStop={handleStopClick}
 					onPause={pauseRecording}
 					onResume={resumeRecording}

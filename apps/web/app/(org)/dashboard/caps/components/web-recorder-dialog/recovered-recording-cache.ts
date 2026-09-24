@@ -7,9 +7,13 @@ import {
 let recoveredRecordingSpoolsPromise: Promise<RecoveredRecordingSpool[]> | null =
 	null;
 let recoveredRecordingSpoolsCache: RecoveredRecordingSpool[] | null = null;
+let recoveredAt = 0;
 
 export const loadRecoveredRecordingSpools = async () => {
-	if (recoveredRecordingSpoolsCache !== null) {
+	if (
+		recoveredRecordingSpoolsCache !== null &&
+		Date.now() - recoveredAt < 60_000
+	) {
 		return recoveredRecordingSpoolsCache;
 	}
 
@@ -25,6 +29,7 @@ export const loadRecoveredRecordingSpools = async () => {
 		)
 			.then((recovered) => {
 				recoveredRecordingSpoolsCache = recovered;
+				recoveredAt = Date.now();
 				return recovered;
 			})
 			.finally(() => {
@@ -48,4 +53,5 @@ export const removeRecoveredRecordingSpoolFromCache = (sessionId: string) => {
 export const resetRecoveredRecordingSpoolsCache = () => {
 	recoveredRecordingSpoolsPromise = null;
 	recoveredRecordingSpoolsCache = null;
+	recoveredAt = 0;
 };
