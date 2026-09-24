@@ -684,6 +684,38 @@ export function hashFiles(root, files) {
 	return hash.digest("hex");
 }
 
+export function rustBuildFingerprint(root) {
+	const hash = createHash("sha256");
+	hash.update(git(root, "rev-parse", "HEAD^{tree}"));
+	hash.update(
+		git(root, "diff", "--no-ext-diff", "--no-textconv", "--binary", "HEAD"),
+	);
+	const localFiles = git(
+		root,
+		"ls-files",
+		"--others",
+		"--exclude-standard",
+		"-z",
+	)
+		.split("\0")
+		.filter(Boolean);
+	hash.update(
+		hashFiles(
+			root,
+			[
+				...new Set([
+					...localFiles,
+					".cargo/config",
+					".cargo/config.toml",
+					"apps/desktop-gpui/.cargo/config",
+					"apps/desktop-gpui/.cargo/config.toml",
+				]),
+			].sort(),
+		),
+	);
+	return hash.digest("hex");
+}
+
 export function cloneDirectory(source, destination) {
 	if (lstatSync(source).isSymbolicLink())
 		throw new Error("Clone source must be a real directory");
@@ -727,6 +759,13 @@ export async function warmDependencies(ctx, session, source, rust = false) {
 		throw new Error(
 			"Dependency/toolchain versions differ; prepare a matching cache",
 		);
+	const rustFingerprint = rust
+		? rustBuildFingerprint(session.worktree)
+		: undefined;
+	if (rust && rustFingerprint !== rustBuildFingerprint(source))
+		throw new Error(
+			"Rust source or Cargo configuration differs; prepare matching build inputs before warming compiled artifacts",
+		);
 	const release = await waitForLock(join(ctx.state, "cache.lock"));
 	try {
 		const directories = [
@@ -743,7 +782,7 @@ export async function warmDependencies(ctx, session, source, rust = false) {
 			const cache = join(
 				ctx.state,
 				"cache",
-				`${process.platform}-${process.arch}-${fingerprint}`,
+				`${process.platform}-${process.arch}-${directory === "target/native-deps" ? fingerprint : rustFingerprint}`,
 				directory,
 			);
 			if (!existsSync(cache)) {
@@ -754,7 +793,12 @@ export async function warmDependencies(ctx, session, source, rust = false) {
 			}
 			cloneDirectory(cache, destination);
 		}
-		session.dependencies = { fingerprint, strategy: "copy-on-write", rust };
+		session.dependencies = {
+			fingerprint,
+			rustFingerprint,
+			strategy: "copy-on-write",
+			rust,
+		};
 		saveSession(ctx, session);
 		return session.dependencies;
 	} finally {

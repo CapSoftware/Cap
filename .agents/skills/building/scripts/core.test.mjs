@@ -35,8 +35,10 @@ import {
 	git,
 	lock,
 	readSession,
+	rustBuildFingerprint,
 	saveSession,
 	sessionPath,
+	warmDependencies,
 	writeEnvironment,
 } from "./core.mjs";
 import { fixtureIds } from "./database.mjs";
@@ -263,6 +265,42 @@ test("copy-on-write clones remain independent when one worktree changes a depend
 	assert.equal(readFileSync(join(source, "library"), "utf8"), "original");
 	assert.equal(readFileSync(join(b, "library"), "utf8"), "original");
 	assert.throws(() => cloneDirectory(source, b), /already exists/);
+});
+
+test("compiled cache identity changes with source, manifests, and ignored Cargo configuration", async (t) => {
+	const ctx = fixture(t);
+	const session = await createSession(ctx, {
+		name: "cache",
+		target: "desktop",
+		base: "main",
+	});
+	const initial = rustBuildFingerprint(ctx.root);
+	assert.equal(rustBuildFingerprint(session.worktree), initial);
+	writeFileSync(join(session.worktree, "file.txt"), "changed source");
+	assert.notEqual(rustBuildFingerprint(session.worktree), initial);
+	await assert.rejects(
+		warmDependencies(ctx, session, ctx.root, true),
+		/Rust source or Cargo configuration differs/,
+	);
+	writeFileSync(join(session.worktree, "file.txt"), "base\n");
+	writeFileSync(
+		join(session.worktree, "Cargo.toml"),
+		"[profile.dev]\nopt-level = 2\n",
+	);
+	assert.notEqual(rustBuildFingerprint(session.worktree), initial);
+	rmSync(join(session.worktree, "Cargo.toml"));
+	mkdirSync(join(session.worktree, ".cargo"));
+	writeFileSync(join(ctx.common, "info", "exclude"), ".cargo/\n");
+	writeFileSync(
+		join(session.worktree, ".cargo", "config.toml"),
+		'[build]\ntarget = "aarch64-apple-darwin"\n',
+	);
+	assert.equal(git(session.worktree, "status", "--porcelain"), "");
+	assert.notEqual(rustBuildFingerprint(session.worktree), initial);
+	await assert.rejects(
+		warmDependencies(ctx, session, ctx.root, true),
+		/Rust source or Cargo configuration differs/,
+	);
 });
 
 test("capture rejects dirty source and untracked or escaping recipes", async (t) => {
