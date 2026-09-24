@@ -6,10 +6,12 @@ import type {
 import { BrowserAudioPlayback } from "./browser-audio-playback";
 import { BrowserDecodedVideoPool } from "./browser-decoded-video-pool";
 import {
+	type BrowserClipFrame,
 	BrowserLocalCanvas,
 	type BrowserRenderedFrame,
-	type BrowserVideoLayer,
+	type BrowserStudioSetup,
 } from "./browser-local-canvas";
+import { probeBrowserMedia } from "./browser-media-probe";
 import { loadBrowserRenderer } from "./browser-renderer";
 import {
 	BrowserEditorSourceCatalog,
@@ -26,11 +28,6 @@ type TimelineSegment = {
 	volume: number;
 };
 
-type SourcePair = {
-	screen: BrowserVideoLayer;
-	camera: BrowserVideoLayer | null;
-};
-
 type TrackFrame = {
 	source: HTMLVideoElement | ImageBitmap;
 	width: number;
@@ -40,7 +37,7 @@ type TrackFrame = {
 	sourceColorFix: boolean;
 };
 
-function releasePair(pair: SourcePair | null) {
+function releasePair(pair: BrowserClipFrame | null) {
 	if (!pair) return;
 	pair.screen.release();
 	pair.camera?.release();
@@ -169,6 +166,59 @@ function recordingMeta(sources: BrowserEditorSources) {
 	};
 }
 
+type WebInputRecording = {
+	platform: string;
+	cursor: unknown;
+	cursors: Record<string, unknown>;
+};
+
+function studioRecordingMeta(
+	sources: BrowserEditorSources,
+	input: WebInputRecording | null,
+) {
+	return {
+		pretty_name: sources.title,
+		...(input ? { platform: input.platform } : {}),
+		...recordingMeta(sources),
+		cursors: input?.cursors ?? {},
+		status: { status: "Complete" },
+	};
+}
+
+/// Pointer input recorded by the browser recorder or Chrome extension, parsed
+/// by the same code the web export worker uses. Missing input only drops the
+/// cursor layer, so failures are not fatal.
+async function webInputRecording(
+	sources: BrowserEditorSources,
+	module: RendererModule,
+	signal: AbortSignal,
+): Promise<WebInputRecording | null> {
+	if (!sources.inputEvents) return null;
+	try {
+		const response = await fetch(sources.inputEvents.url, {
+			signal,
+			credentials: "omit",
+		});
+		if (!response.ok) return null;
+		const size = Number(response.headers.get("content-length") ?? 0);
+		if (size > 64 * 1024 * 1024) return null;
+		const parsed: unknown = JSON.parse(
+			module.web_input_recording(await response.text()),
+		);
+		const value = record(parsed);
+		if (!value || typeof value.platform !== "string" || !record(value.cursors))
+			return null;
+		return {
+			platform: value.platform,
+			cursor: value.cursor,
+			cursors: record(value.cursors) ?? {},
+		};
+	} catch (cause) {
+		if (signal.aborted) throw cause;
+		return null;
+	}
+}
+
 export class BrowserLocalPlayback {
 	private readonly audio: BrowserAudioPlayback;
 	private timeline: BrowserTimeline;
@@ -251,31 +301,29 @@ export class BrowserLocalPlayback {
 				throw new Error("Editor display recording is unavailable");
 			}
 			const firstDisplay = firstSegment.display;
-			const metadataPromise = import(
-				"../../../apps/web/lib/browser-editor-metadata"
-			).then(async ({ probeBrowserEditorMedia }) => {
+			const metadataPromise = (async () => {
 				const [display, camera, mic] = await Promise.all([
-					probeBrowserEditorMedia(firstDisplay.url, signal),
+					probeBrowserMedia(firstDisplay.url, signal),
 					firstSegment.camera
-						? probeBrowserEditorMedia(firstSegment.camera.url, signal)
+						? probeBrowserMedia(firstSegment.camera.url, signal)
 						: Promise.resolve(null),
 					sources.mic
-						? probeBrowserEditorMedia(sources.mic.url, signal).catch(() => null)
+						? probeBrowserMedia(sources.mic.url, signal).catch(() => null)
 						: Promise.resolve(null),
 				]);
 				return { display, camera, mic };
-			});
-			const [display, metadata] = await Promise.all([
-				pool.frame(0, "display", "primary", 0, false, 1, signal),
+			})();
+			const [metadata, input] = await Promise.all([
 				metadataPromise,
+				webInputRecording(sources, module, signal),
 			]);
-			if (
-				!display ||
-				metadata.display.width === null ||
-				metadata.display.height === null
-			) {
+			if (metadata.display.width === null || metadata.display.height === null) {
 				throw new Error("Editor recording duration is unavailable");
 			}
+			const display = {
+				videoWidth: metadata.display.width,
+				videoHeight: metadata.display.height,
+			};
 			const firstDuration = Math.max(
 				metadata.display.duration,
 				metadata.camera?.duration ?? 0,
@@ -328,7 +376,22 @@ export class BrowserLocalPlayback {
 					visual.free();
 				}
 			}
-			controls = new BrowserLocalCanvas(width, height, onFrame);
+			const setup: BrowserStudioSetup = {
+				recordingMeta: studioRecordingMeta(sources, input),
+				screenWidth: display.videoWidth,
+				screenHeight: display.videoHeight,
+				cameraWidth: metadata.camera?.width ?? 0,
+				cameraHeight: metadata.camera?.height ?? 0,
+				cursors: sources.segments.map((_, index) =>
+					index === 0 && input ? JSON.stringify(input.cursor) : null,
+				),
+			};
+			controls = new BrowserLocalCanvas(setup, width, height, onFrame, () => {
+				const current = playback;
+				if (current && !current.playing && !current.disposed) {
+					void current.seek(current.outputTime).catch(() => undefined);
+				}
+			});
 			controls.initDirectCanvas(canvas);
 			playback = new BrowserLocalPlayback(
 				sources,
@@ -615,10 +678,9 @@ export class BrowserLocalPlayback {
 		sourceTime: number,
 		role: BrowserVideoRole,
 		playing: boolean,
-		frameNumber: number,
 		signal: AbortSignal,
 		forceSeek: boolean,
-	): Promise<SourcePair> {
+	): Promise<BrowserClipFrame> {
 		const sourceTimes = this.times.source_times(recordingClip, sourceTime);
 		if (sourceTimes.length !== 2 || !Number.isFinite(sourceTimes[0])) {
 			throw new Error("Editor recording timing is unavailable");
@@ -662,37 +724,21 @@ export class BrowserLocalPlayback {
 			camera?.release();
 			throw new Error("Editor display video is unavailable");
 		}
-		const width = this.width;
-		const height = this.height;
 		return {
+			recordingClip,
+			segmentTime: sourceTime,
 			screen: {
 				source: screen.source,
+				colorFix: screen.sourceColorFix,
 				mediaTime: screen.mediaTime,
 				release: screen.release,
-				uniforms: this.visual.layer_uniforms(
-					width,
-					height,
-					screen.width,
-					screen.height,
-					false,
-					frameNumber,
-					screen.sourceColorFix,
-				),
 			},
 			camera: camera
 				? {
 						source: camera.source,
+						colorFix: camera.sourceColorFix,
 						mediaTime: camera.mediaTime,
 						release: camera.release,
-						uniforms: this.visual.layer_uniforms(
-							width,
-							height,
-							camera.width,
-							camera.height,
-							true,
-							frameNumber,
-							camera.sourceColorFix,
-						),
 					}
 				: null,
 		};
@@ -736,7 +782,6 @@ export class BrowserLocalPlayback {
 			mapped[3],
 			"primary",
 			playing,
-			Math.round(time * 60),
 			controller.signal,
 			forceSeek,
 		);
@@ -748,13 +793,12 @@ export class BrowserLocalPlayback {
 						mapped[6],
 						"overlap",
 						playing,
-						Math.round(time * 60),
 						controller.signal,
 						forceSeek,
 					)
 				: Promise.resolve(null);
-		let incomingPair: SourcePair;
-		let outgoingPair: SourcePair | null;
+		let incomingPair: BrowserClipFrame;
+		let outgoingPair: BrowserClipFrame | null;
 		const [incomingResult, outgoingResult] = await Promise.allSettled([
 			incoming,
 			outgoing,
@@ -787,11 +831,7 @@ export class BrowserLocalPlayback {
 							type: mapped[8] === 1 ? "fade-through-black" : "cross-fade",
 							progress: mapped[9],
 						}
-					: {
-							kind: "single",
-							screen: incomingPair.screen,
-							camera: incomingPair.camera,
-						},
+					: { kind: "single", frame: incomingPair },
 				Math.round(time * 60),
 				BigInt(Math.round(time * 1_000_000_000)),
 			);

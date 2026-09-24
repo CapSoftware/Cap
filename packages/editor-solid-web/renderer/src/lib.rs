@@ -1,44 +1,30 @@
-#[path = "../../../../crates/rendering/src/layers/animated_gradient.rs"]
-mod animated_gradient;
-#[path = "../../../../crates/rendering/src/layers/blur.rs"]
-mod blur;
-#[path = "../../../../crates/rendering/src/composite_frame.rs"]
-mod composite_frame;
 #[path = "../../../../crates/editor/src/screen_recording_defaults.rs"]
 mod screen_recording_defaults;
-#[path = "../../../../crates/rendering/src/segment_timing.rs"]
-mod segment_timing;
-#[path = "../../../../crates/rendering/src/transition.rs"]
-mod transition;
 
-use animated_gradient::AnimatedGradientLayer;
-use blur::BlurLayer;
-use bytemuck::{Pod, Zeroable};
+mod present;
+
 use cap_project::{
-    AnimatedGradientConfig, AspectRatio, BackgroundSource, CameraShape, CameraXPosition,
-    CameraYPosition, ClipConfiguration, ClipOffsets, ClipTransitionType, CornerStyle, ImageSegment,
-    OverlayTrackKind, ProjectConfiguration, StudioRecordingMeta, TimelineConfiguration,
-    TimelineFrameMapping, TimelineSource,
+    AspectRatio, ClipConfiguration, ClipOffsets, ClipTransitionType, CursorEvents,
+    ProjectConfiguration, RecordingMeta, StudioRecordingMeta, TimelineConfiguration,
+    TimelineFrameMapping, TimelineSource, XY,
 };
-use composite_frame::{
-    ColorGradeUniformParams, CompositeVideoFramePipeline, CompositeVideoFrameUniforms,
+use cap_rendering::{
+    DecodedFrame, DecodedSegmentFrames, FrameRenderer, PrecomputedCursorTimeline, ProjectUniforms,
+    RenderOptions, RenderVideoConstants, RendererLayers, SharedWgpuDevice, TransitionRenderInput,
+    ZoomTransformTimeline,
+    decoder::BrowserFrameSource,
+    segment_timing::{SegmentVideoTiming, segment_frame_times, segment_video_timing},
 };
-use segment_timing::{SegmentVideoTiming, segment_video_timing};
-use std::cell::Cell;
-use std::collections::{HashMap, HashSet};
-use transition::{TransitionCompositor, TransitionParameters};
+use present::SurfacePresenter;
+use std::{
+    future::Future,
+    pin::pin,
+    sync::Arc,
+    task::{Context, Poll},
+};
 use wasm_bindgen::JsCast;
-use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
-use wasm_bindgen_futures::JsFuture;
 use web_sys::{HtmlCanvasElement, HtmlVideoElement, ImageBitmap, WebGl2RenderingContext};
-use wgpu::util::DeviceExt;
-
-struct ProjectUniforms {
-    output_size: (u32, u32),
-    frame_number: u32,
-    frame_rate: u32,
-}
 
 fn js_error(value: impl std::fmt::Display) -> JsValue {
     JsValue::from_str(&value.to_string())
@@ -61,26 +47,20 @@ fn trace_renderer(stage: &str) {
     web_sys::console::info_1(&JsValue::from_str(&format!("Cap renderer stage: {stage}")));
 }
 
-async fn wait_for_gpu_poll() -> Result<(), JsValue> {
-    let promise = js_sys::Promise::new(&mut |resolve, reject| {
-        let Some(window) = web_sys::window() else {
-            let _ = reject.call1(&JsValue::NULL, &js_error("Browser window is unavailable"));
-            return;
-        };
-        let callback = Closure::once(move || {
-            let _ = resolve.call0(&JsValue::NULL);
-        });
-        match window.set_timeout_with_callback_and_timeout_and_arguments_0(
-            callback.as_ref().unchecked_ref(),
-            8,
-        ) {
-            Ok(_) => callback.forget(),
-            Err(error) => {
-                let _ = reject.call1(&JsValue::NULL, &error);
-            }
-        }
-    });
-    JsFuture::from(promise).await.map(|_| ())
+/// The render core is async for native decoders and readbacks, but a browser
+/// frame only awaits uncontended locks, so it completes in a single poll.
+fn complete_now<T>(future: impl Future<Output = T>) -> Result<T, JsValue> {
+    let mut future = pin!(future);
+    let waker = futures::task::noop_waker();
+    match future.as_mut().poll(&mut Context::from_waker(&waker)) {
+        Poll::Ready(value) => Ok(value),
+        Poll::Pending => Err(js_error("Editor frame did not finish rendering")),
+    }
+}
+
+#[wasm_bindgen(start)]
+pub fn start() {
+    console_error_panic_hook::set_once();
 }
 
 #[wasm_bindgen]
@@ -97,6 +77,69 @@ pub fn animated_gradient_catalog_json() -> Result<String, JsValue> {
 #[wasm_bindgen]
 pub fn random_animated_gradient_json(seed: u32) -> Result<String, JsValue> {
     serde_json::to_string(&cap_project::AnimatedGradientConfig::from_seed(seed)).map_err(js_error)
+}
+
+/// Registers a font face for text, caption and keyboard overlays.
+#[wasm_bindgen]
+pub fn register_font(data: Vec<u8>) {
+    cap_rendering::register_browser_font(data);
+}
+
+/// Registers an image the renderer reads by project path (backgrounds, image
+/// overlays, cursor images).
+#[wasm_bindgen]
+pub fn register_asset(path: &str, data: Vec<u8>) {
+    cap_rendering::browser_assets::insert(path, data);
+}
+
+/// Registers straight RGBA the page decoded off the main thread.
+#[wasm_bindgen]
+pub fn register_decoded_asset(
+    path: &str,
+    width: u32,
+    height: u32,
+    pixels: Vec<u8>,
+) -> Result<(), JsValue> {
+    cap_rendering::browser_assets::insert_rgba(path, width, height, pixels).map_err(js_error)
+}
+
+#[wasm_bindgen]
+pub fn has_asset(path: &str) -> bool {
+    cap_rendering::browser_assets::get(std::path::Path::new(path)).is_some()
+}
+
+#[wasm_bindgen]
+pub fn remove_asset(path: &str) {
+    cap_rendering::browser_assets::remove(path);
+}
+
+/// Converts a browser recording's input-event NDJSON into native cursor
+/// events and cursor metadata, exactly as the web export worker stages them,
+/// and registers the stand-in cursor images the cursor layer may load.
+#[wasm_bindgen]
+pub fn web_input_recording(ndjson: &str) -> Result<String, JsValue> {
+    use cap_project::web_input::{parse_web_input_events, web_cursor_asset, web_cursor_id};
+    if ndjson.len() as u64 > cap_project::web_input::MAX_WEB_INPUT_BYTES {
+        return Err(js_error("Input event source exceeds the supported size"));
+    }
+    let data = parse_web_input_events(ndjson.as_bytes()).map_err(js_error)?;
+    let mut cursors = serde_json::Map::new();
+    for &style in &data.styles {
+        let (image, shape, hotspot) = web_cursor_asset(&data.platform, style).map_err(js_error)?;
+        let image_path = format!("content/cursors/web-{style}.png");
+        cap_rendering::browser_assets::insert(&image_path, image.to_vec());
+        cursors.insert(
+            web_cursor_id(style),
+            serde_json::json!({ "imagePath": image_path, "hotspot": hotspot, "shape": shape }),
+        );
+    }
+    serde_json::to_string(&serde_json::json!({
+        "platform": data.platform,
+        "cursor": data.cursor,
+        "cursors": cursors,
+        "hasKeyboard": !data.keyboard.presses.is_empty(),
+    }))
+    .map_err(js_error)
 }
 
 fn source_values(source: TimelineSource<'_>) -> [f64; 3] {
@@ -256,7 +299,7 @@ impl BrowserRecordingTimes {
             return Vec::new();
         };
         let segment_time = source_time as f32;
-        let (camera_request_time, _) = segment_timing::segment_frame_times(
+        let (camera_request_time, _) = segment_frame_times(
             segment_time,
             timing.latest_start_time.unwrap_or(0.0),
             *offsets,
@@ -294,2189 +337,6 @@ impl BrowserRecordingTimes {
     }
 }
 
-struct InputTexture {
-    texture: wgpu::Texture,
-    uniform_buffer: wgpu::Buffer,
-    bind_group: wgpu::BindGroup,
-    width: u32,
-    height: u32,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-struct BackgroundUniforms {
-    start: [f32; 4],
-    end: [f32; 4],
-    angle: f32,
-    noise_intensity: f32,
-    noise_scale: f32,
-    padding: f32,
-}
-
-impl BackgroundUniforms {
-    fn from_source(source: &BackgroundSource) -> Result<Self, JsValue> {
-        let color = |value: &[u16; 3], alpha: f32| {
-            [
-                value[0] as f32 / 255.0 * alpha,
-                value[1] as f32 / 255.0 * alpha,
-                value[2] as f32 / 255.0 * alpha,
-                alpha,
-            ]
-        };
-        match source {
-            BackgroundSource::Color { value, alpha } => {
-                let rgba = color(value, *alpha as f32 / 255.0);
-                Ok(Self {
-                    start: rgba,
-                    end: rgba,
-                    angle: 0.0,
-                    noise_intensity: 0.0,
-                    noise_scale: 0.0,
-                    padding: 0.0,
-                })
-            }
-            BackgroundSource::Gradient {
-                from,
-                to,
-                angle,
-                noise_intensity,
-                noise_scale,
-                ..
-            } => Ok(Self {
-                start: color(from, 1.0),
-                end: color(to, 1.0),
-                angle: *angle as f32,
-                noise_intensity: noise_intensity.unwrap_or(0.0),
-                noise_scale: noise_scale.unwrap_or(3.0),
-                padding: 0.0,
-            }),
-            BackgroundSource::Wallpaper { .. }
-            | BackgroundSource::Image { .. }
-            | BackgroundSource::AnimatedGradient { .. } => Err(js_error(
-                "This editor background needs a browser image layer",
-            )),
-        }
-    }
-}
-
-struct BrowserBackground {
-    pipeline: wgpu::RenderPipeline,
-    buffer: wgpu::Buffer,
-    bind_group: wgpu::BindGroup,
-}
-
-impl BrowserBackground {
-    fn new(
-        device: &wgpu::Device,
-        format: wgpu::TextureFormat,
-        uniforms: BackgroundUniforms,
-    ) -> Self {
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Shared editor background shader"),
-            source: wgpu::ShaderSource::Wgsl(
-                include_str!("../../../../crates/rendering/src/shaders/gradient-or-color.wgsl")
-                    .into(),
-            ),
-        });
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Browser editor background layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-        });
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Browser editor background pipeline layout"),
-            bind_group_layouts: &[&layout],
-            push_constant_ranges: &[],
-        });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Browser editor background pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: &[],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                cull_mode: Some(wgpu::Face::Back),
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: Default::default(),
-            multiview: None,
-            cache: None,
-        });
-        let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Browser editor background uniforms"),
-            contents: bytemuck::bytes_of(&uniforms),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Browser editor background bind group"),
-            layout: &layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: buffer.as_entire_binding(),
-            }],
-        });
-        Self {
-            pipeline,
-            buffer,
-            bind_group,
-        }
-    }
-
-    fn update(&self, queue: &wgpu::Queue, uniforms: BackgroundUniforms) {
-        queue.write_buffer(&self.buffer, 0, bytemuck::bytes_of(&uniforms));
-    }
-
-    fn draw(&self, pass: &mut wgpu::RenderPass<'_>) {
-        pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &self.bind_group, &[]);
-        pass.draw(0..4, 0..1);
-    }
-}
-
-struct BrowserBlurredBackground {
-    background: wgpu::Texture,
-    horizontal: wgpu::Texture,
-    dirty: Cell<bool>,
-    blit_bind_group: wgpu::BindGroup,
-    surface_pipeline: wgpu::RenderPipeline,
-    intermediate_pipeline: Option<wgpu::RenderPipeline>,
-}
-
-impl BrowserBlurredBackground {
-    fn new(
-        device: &wgpu::Device,
-        width: u32,
-        height: u32,
-        surface_format: wgpu::TextureFormat,
-    ) -> Self {
-        let make_texture = |label| {
-            device.create_texture(&wgpu::TextureDescriptor {
-                label: Some(label),
-                size: wgpu::Extent3d {
-                    width,
-                    height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
-            })
-        };
-        let background = make_texture("Browser blurred background");
-        let horizontal = make_texture("Browser horizontal background blur");
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Browser blurred background blit layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            }],
-        });
-        let blit_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Browser blurred background blit"),
-            layout: &layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(
-                    &background.create_view(&wgpu::TextureViewDescriptor::default()),
-                ),
-            }],
-        });
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Shared browser background blit shader"),
-            source: wgpu::ShaderSource::Wgsl(
-                include_str!("../../../../crates/rendering/src/shaders/blit_bgra_surface.wgsl")
-                    .into(),
-            ),
-        });
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Browser blurred background blit pipeline layout"),
-            bind_group_layouts: &[&layout],
-            push_constant_ranges: &[],
-        });
-        let make_pipeline = |format| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("Browser blurred background blit"),
-                layout: Some(&pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some("vs_main"),
-                    buffers: &[],
-                    compilation_options: Default::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some("fs_main"),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format,
-                        blend: Some(wgpu::BlendState::REPLACE),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                    compilation_options: Default::default(),
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    cull_mode: Some(wgpu::Face::Back),
-                    ..Default::default()
-                },
-                depth_stencil: None,
-                multisample: Default::default(),
-                multiview: None,
-                cache: None,
-            })
-        };
-        Self {
-            background,
-            horizontal,
-            dirty: Cell::new(true),
-            blit_bind_group,
-            surface_pipeline: make_pipeline(surface_format),
-            intermediate_pipeline: (surface_format != wgpu::TextureFormat::Rgba8Unorm)
-                .then(|| make_pipeline(wgpu::TextureFormat::Rgba8Unorm)),
-        }
-    }
-
-    fn draw(&self, pass: &mut wgpu::RenderPass<'_>, intermediate: bool) {
-        pass.set_pipeline(if intermediate {
-            self.intermediate_pipeline
-                .as_ref()
-                .unwrap_or(&self.surface_pipeline)
-        } else {
-            &self.surface_pipeline
-        });
-        pass.set_bind_group(0, &self.blit_bind_group, &[]);
-        pass.draw(0..3, 0..1);
-    }
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-struct ImageBackgroundUniforms {
-    output_size: [f32; 2],
-    padding: f32,
-    x_width: f32,
-    y_height: f32,
-    _padding: f32,
-    _padding2: [f32; 2],
-}
-
-struct BrowserImageBackground {
-    path: String,
-    image_width: u32,
-    image_height: u32,
-    surface_pipeline: wgpu::RenderPipeline,
-    intermediate_pipeline: Option<wgpu::RenderPipeline>,
-    uniform_buffer: wgpu::Buffer,
-    bind_group: wgpu::BindGroup,
-    _texture: wgpu::Texture,
-}
-
-impl BrowserImageBackground {
-    fn uniforms(
-        image_width: u32,
-        image_height: u32,
-        output_width: u32,
-        output_height: u32,
-    ) -> ImageBackgroundUniforms {
-        let output_ar = output_height as f32 / output_width as f32;
-        let image_ar = image_height as f32 / image_width as f32;
-        let y_height = if output_ar < image_ar {
-            ((image_ar - output_ar) / 2.0) / image_ar
-        } else {
-            0.0
-        };
-        let x_width = if output_ar > image_ar {
-            let output_ar = 1.0 / output_ar;
-            let image_ar = 1.0 / image_ar;
-            ((image_ar - output_ar) / 2.0) / image_ar
-        } else {
-            0.0
-        };
-        ImageBackgroundUniforms {
-            output_size: [output_width as f32, output_height as f32],
-            padding: 0.0,
-            x_width,
-            y_height,
-            _padding: 0.0,
-            _padding2: [0.0; 2],
-        }
-    }
-
-    fn new(
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        surface_format: wgpu::TextureFormat,
-        output_width: u32,
-        output_height: u32,
-        path: String,
-        image: ImageBitmap,
-    ) -> Result<Self, JsValue> {
-        let image_width = image.width();
-        let image_height = image.height();
-        if image_width == 0
-            || image_height == 0
-            || image_width > device.limits().max_texture_dimension_2d
-            || image_height > device.limits().max_texture_dimension_2d
-        {
-            return Err(js_error(
-                "Editor background image exceeds browser GPU limits",
-            ));
-        }
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Shared editor image background shader"),
-            source: wgpu::ShaderSource::Wgsl(
-                include_str!("../../../../crates/rendering/src/shaders/image-background.wgsl")
-                    .into(),
-            ),
-        });
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Browser image background layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Browser image background pipeline layout"),
-            bind_group_layouts: &[&layout],
-            push_constant_ranges: &[],
-        });
-        let make_pipeline = |format| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("Browser editor image background pipeline"),
-                layout: Some(&pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some("vs_main"),
-                    buffers: &[],
-                    compilation_options: Default::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some("fs_main"),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format,
-                        blend: Some(wgpu::BlendState::REPLACE),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                    compilation_options: Default::default(),
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    cull_mode: Some(wgpu::Face::Back),
-                    ..Default::default()
-                },
-                depth_stencil: None,
-                multisample: Default::default(),
-                multiview: None,
-                cache: None,
-            })
-        };
-        let surface_pipeline = make_pipeline(surface_format);
-        let intermediate_pipeline = (surface_format != wgpu::TextureFormat::Rgba8Unorm)
-            .then(|| make_pipeline(wgpu::TextureFormat::Rgba8Unorm));
-        let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Browser image background uniforms"),
-            contents: bytemuck::bytes_of(&Self::uniforms(
-                image_width,
-                image_height,
-                output_width,
-                output_height,
-            )),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Browser editor background image"),
-            size: wgpu::Extent3d {
-                width: image_width,
-                height: image_height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::COPY_DST
-                | wgpu::TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[],
-        });
-        queue.copy_external_image_to_texture(
-            &wgpu::CopyExternalImageSourceInfo {
-                source: wgpu::ExternalImageSource::ImageBitmap(image),
-                origin: wgpu::Origin2d::ZERO,
-                flip_y: false,
-            },
-            wgpu::CopyExternalImageDestInfo {
-                texture: &texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-                color_space: wgpu::PredefinedColorSpace::Srgb,
-                premultiplied_alpha: false,
-            },
-            wgpu::Extent3d {
-                width: image_width,
-                height: image_height,
-                depth_or_array_layers: 1,
-            },
-        );
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Browser editor image background bind group"),
-            layout: &layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: uniform_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(
-                        &texture.create_view(&wgpu::TextureViewDescriptor::default()),
-                    ),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
-                },
-            ],
-        });
-        Ok(Self {
-            path,
-            image_width,
-            image_height,
-            surface_pipeline,
-            intermediate_pipeline,
-            uniform_buffer,
-            bind_group,
-            _texture: texture,
-        })
-    }
-
-    fn update_size(&self, queue: &wgpu::Queue, output_width: u32, output_height: u32) {
-        queue.write_buffer(
-            &self.uniform_buffer,
-            0,
-            bytemuck::bytes_of(&Self::uniforms(
-                self.image_width,
-                self.image_height,
-                output_width,
-                output_height,
-            )),
-        );
-    }
-
-    fn draw(&self, pass: &mut wgpu::RenderPass<'_>, intermediate: bool) {
-        let pipeline = if intermediate {
-            self.intermediate_pipeline
-                .as_ref()
-                .unwrap_or(&self.surface_pipeline)
-        } else {
-            &self.surface_pipeline
-        };
-        pass.set_pipeline(pipeline);
-        pass.set_bind_group(0, &self.bind_group, &[]);
-        pass.draw(0..4, 0..1);
-    }
-}
-
-fn create_input(
-    device: &wgpu::Device,
-    pipeline: &CompositeVideoFramePipeline,
-    width: u32,
-    height: u32,
-) -> InputTexture {
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("Browser decoded video frame"),
-        size: wgpu::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8Unorm,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING
-            | wgpu::TextureUsages::COPY_DST
-            | wgpu::TextureUsages::RENDER_ATTACHMENT,
-        view_formats: &[],
-    });
-    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-    let uniform_buffer = CompositeVideoFrameUniforms::default().to_buffer(device);
-    let bind_group = pipeline.bind_group(device, &uniform_buffer, &view);
-    InputTexture {
-        texture,
-        uniform_buffer,
-        bind_group,
-        width,
-        height,
-    }
-}
-
-fn upload_video(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    pipeline: &CompositeVideoFramePipeline,
-    stored: &mut Option<InputTexture>,
-    source: JsValue,
-    uniform_bytes: &[u8],
-    output_width: u32,
-    output_height: u32,
-) -> Result<(), JsValue> {
-    let external = if let Some(video) = source.dyn_ref::<HtmlVideoElement>() {
-        if video.ready_state() < 2 {
-            return Err(js_error("Video frame is not decoded"));
-        }
-        wgpu::ExternalImageSource::HTMLVideoElement(video.clone())
-    } else if let Some(bitmap) = source.dyn_ref::<ImageBitmap>() {
-        wgpu::ExternalImageSource::ImageBitmap(bitmap.clone())
-    } else {
-        return Err(js_error("Video frame source is invalid"));
-    };
-    let width = external.width();
-    let height = external.height();
-    if width == 0 || height == 0 {
-        return Err(js_error("Video frame is not decoded"));
-    }
-    if width > device.limits().max_texture_dimension_2d
-        || height > device.limits().max_texture_dimension_2d
-    {
-        return Err(js_error("Video exceeds the browser GPU texture limit"));
-    }
-    if stored
-        .as_ref()
-        .is_none_or(|input| input.width != width || input.height != height)
-    {
-        *stored = Some(create_input(device, pipeline, width, height));
-    }
-    let input = stored
-        .as_ref()
-        .ok_or_else(|| js_error("Video input is missing"))?;
-    let mut uniforms: CompositeVideoFrameUniforms =
-        bytemuck::try_pod_read_unaligned(uniform_bytes).map_err(js_error)?;
-    uniforms.output_size = [output_width as f32, output_height as f32];
-    uniforms.frame_size = [width as f32, height as f32];
-    uniforms.write_to_buffer(queue, &input.uniform_buffer);
-    queue.copy_external_image_to_texture(
-        &wgpu::CopyExternalImageSourceInfo {
-            source: external,
-            origin: wgpu::Origin2d::ZERO,
-            flip_y: false,
-        },
-        wgpu::CopyExternalImageDestInfo {
-            texture: &input.texture,
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-            color_space: wgpu::PredefinedColorSpace::Srgb,
-            premultiplied_alpha: false,
-        },
-        wgpu::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        },
-    );
-    Ok(())
-}
-
-fn render_background(
-    pass: &mut wgpu::RenderPass<'_>,
-    background: &BrowserBackground,
-    animated_background: Option<&AnimatedGradientLayer>,
-    image_background: Option<&BrowserImageBackground>,
-    intermediate: bool,
-) {
-    if let Some(image_background) = image_background {
-        image_background.draw(pass, intermediate);
-    } else if let Some(animated_background) = animated_background {
-        animated_background.render(pass);
-    } else {
-        background.draw(pass);
-    }
-}
-
-type BrowserBlurInputs<'a> = (
-    &'a BlurLayer,
-    &'a BrowserBlurredBackground,
-    &'a BrowserBackground,
-    Option<&'a AnimatedGradientLayer>,
-);
-
-fn blur_inputs<'a>(
-    layer: Option<&'a BlurLayer>,
-    cached: Option<&'a BrowserBlurredBackground>,
-    background: Option<&'a BrowserBackground>,
-    animated: Option<&'a AnimatedGradientLayer>,
-) -> Option<BrowserBlurInputs<'a>> {
-    Some((layer?, cached?, background?, animated))
-}
-
-fn draw_layers(
-    background: &BrowserBackground,
-    animated_background: Option<&AnimatedGradientLayer>,
-    image_background: Option<&BrowserImageBackground>,
-    blur: Option<BrowserBlurInputs<'_>>,
-    intermediate: bool,
-    pipeline: &CompositeVideoFramePipeline,
-    device: &wgpu::Device,
-    encoder: &mut wgpu::CommandEncoder,
-    target: &wgpu::TextureView,
-    screen: &InputTexture,
-    camera: Option<&InputTexture>,
-) {
-    if let Some((layer, cached, rgba_background, rgba_animated)) = blur
-        && (cached.dirty.get() || rgba_animated.is_some())
-    {
-        let background_view = cached
-            .background
-            .create_view(&wgpu::TextureViewDescriptor::default());
-        let horizontal_view = cached
-            .horizontal
-            .create_view(&wgpu::TextureViewDescriptor::default());
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Browser editor background before blur"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &background_view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
-            render_background(
-                &mut pass,
-                rgba_background,
-                rgba_animated,
-                image_background,
-                true,
-            );
-        }
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Browser editor horizontal background blur"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &horizontal_view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
-            layer.render_h(&mut pass, device, &background_view);
-        }
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Browser editor vertical background blur"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &background_view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
-            layer.render_v(&mut pass, device, &horizontal_view);
-        }
-        cached.dirty.set(false);
-    }
-    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-        label: Some("Browser editor video layers"),
-        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-            view: target,
-            resolve_target: None,
-            ops: wgpu::Operations {
-                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                store: wgpu::StoreOp::Store,
-            },
-        })],
-        depth_stencil_attachment: None,
-        timestamp_writes: None,
-        occlusion_query_set: None,
-    });
-    if let Some((_, cached, _, _)) = blur {
-        cached.draw(&mut pass, intermediate);
-    } else {
-        render_background(
-            &mut pass,
-            background,
-            animated_background,
-            image_background,
-            intermediate,
-        );
-    }
-    pass.set_pipeline(&pipeline.render_pipeline);
-    pass.set_bind_group(0, &screen.bind_group, &[]);
-    pass.draw(0..3, 0..1);
-    if let Some(camera) = camera {
-        pass.set_bind_group(0, &camera.bind_group, &[]);
-        pass.draw(0..3, 0..1);
-    }
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-struct BrowserImageUniforms {
-    center_size: [f32; 4],
-    rotation_opacity_radius: [f32; 4],
-    flips: [f32; 4],
-}
-
-struct BrowserOverlayTexture {
-    texture: wgpu::Texture,
-    byte_len: u64,
-    last_used: u64,
-}
-
-struct BrowserOverlayDraw {
-    segment: ImageSegment,
-    group: wgpu::BindGroup,
-}
-
-struct BrowserOverlayUpload<'a> {
-    path: &'a str,
-    width: u32,
-    height: u32,
-    levels: &'a js_sys::Array,
-    output_size: (u32, u32),
-    time: f64,
-}
-
-struct BrowserImageOverlays {
-    pipeline: wgpu::RenderPipeline,
-    sampler: wgpu::Sampler,
-    segments: Vec<ImageSegment>,
-    textures: HashMap<String, BrowserOverlayTexture>,
-    draws: Vec<BrowserOverlayDraw>,
-    counter: u64,
-}
-
-fn browser_image_uniforms(
-    segment: &ImageSegment,
-    output_size: (u32, u32),
-) -> Option<BrowserImageUniforms> {
-    if segment.path.is_empty()
-        || !segment.opacity.is_finite()
-        || segment.opacity <= 0.0
-        || !segment.rotation.is_finite()
-        || !segment.rounding.is_finite()
-    {
-        return None;
-    }
-    let center_size = [
-        (segment.center.x * f64::from(output_size.0)) as f32,
-        (segment.center.y * f64::from(output_size.1)) as f32,
-        (segment.size.x * f64::from(output_size.0)) as f32,
-        (segment.size.y * f64::from(output_size.1)) as f32,
-    ];
-    if center_size
-        .iter()
-        .any(|value| !value.is_finite() || value.abs() > 1.0e7)
-        || center_size[2] <= 0.0
-        || center_size[3] <= 0.0
-    {
-        return None;
-    }
-    let (sin, cos) = (segment.rotation % 360.0).to_radians().sin_cos();
-    let half_width = (cos.abs() * center_size[2] + sin.abs() * center_size[3]) * 0.5;
-    let half_height = (sin.abs() * center_size[2] + cos.abs() * center_size[3]) * 0.5;
-    if center_size[0] + half_width < 0.0
-        || center_size[1] + half_height < 0.0
-        || center_size[0] - half_width > output_size.0 as f32
-        || center_size[1] - half_height > output_size.1 as f32
-    {
-        return None;
-    }
-    Some(BrowserImageUniforms {
-        center_size,
-        rotation_opacity_radius: [
-            cos,
-            sin,
-            segment.opacity.clamp(0.0, 1.0),
-            segment.rounding.clamp(0.0, 100.0) * 0.005 * center_size[2].min(center_size[3]),
-        ],
-        flips: [
-            u8::from(segment.flip_x) as f32,
-            u8::from(segment.flip_y) as f32,
-            0.0,
-            0.0,
-        ],
-    })
-}
-
-impl BrowserImageOverlays {
-    fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
-        let shader = device.create_shader_module(wgpu::include_wgsl!(
-            "../../../../crates/rendering/src/shaders/image.wgsl"
-        ));
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Browser image overlay pipeline"),
-            layout: None,
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
-        Self {
-            pipeline,
-            sampler: device.create_sampler(&wgpu::SamplerDescriptor {
-                label: Some("Browser image overlay sampler"),
-                address_mode_u: wgpu::AddressMode::ClampToEdge,
-                address_mode_v: wgpu::AddressMode::ClampToEdge,
-                mag_filter: wgpu::FilterMode::Linear,
-                min_filter: wgpu::FilterMode::Linear,
-                mipmap_filter: wgpu::FilterMode::Linear,
-                ..Default::default()
-            }),
-            segments: Vec::new(),
-            textures: HashMap::new(),
-            draws: Vec::new(),
-            counter: 0,
-        }
-    }
-
-    fn update_project(
-        &mut self,
-        device: &wgpu::Device,
-        project: &ProjectConfiguration,
-        output_size: (u32, u32),
-    ) {
-        let Some(timeline) = project.timeline.as_ref() else {
-            self.segments.clear();
-            self.textures.clear();
-            self.draws.clear();
-            return;
-        };
-        let referenced: HashSet<_> = timeline
-            .image_segments
-            .iter()
-            .filter(|segment| !segment.path.is_empty())
-            .map(|segment| segment.path.as_str())
-            .collect();
-        self.textures
-            .retain(|path, _| referenced.contains(path.as_str()));
-        let mut indexed: Vec<_> = timeline.image_segments.iter().enumerate().collect();
-        if project.overlay_order.is_empty() {
-            indexed.sort_unstable_by_key(|(index, segment)| (segment.track, *index));
-        } else {
-            let image_tracks: Vec<_> = project
-                .overlay_tracks()
-                .into_iter()
-                .rev()
-                .filter(|track| track.kind == OverlayTrackKind::Image)
-                .map(|track| track.track)
-                .collect();
-            indexed.sort_by_key(|(index, segment)| {
-                (
-                    image_tracks
-                        .iter()
-                        .position(|track| *track == segment.track)
-                        .unwrap_or(image_tracks.len()),
-                    *index,
-                )
-            });
-        }
-        self.segments = indexed
-            .into_iter()
-            .map(|(_, segment)| segment.clone())
-            .collect();
-        self.rebuild_draws(device, output_size);
-    }
-
-    fn rebuild_draws(&mut self, device: &wgpu::Device, output_size: (u32, u32)) {
-        self.draws.clear();
-        for segment in &self.segments {
-            let Some(texture) = self.textures.get(&segment.path) else {
-                continue;
-            };
-            let Some(uniforms) = browser_image_uniforms(segment, output_size) else {
-                continue;
-            };
-            let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Browser image overlay uniforms"),
-                contents: bytemuck::bytes_of(&uniforms),
-                usage: wgpu::BufferUsages::UNIFORM,
-            });
-            let view = texture
-                .texture
-                .create_view(&wgpu::TextureViewDescriptor::default());
-            let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("Browser image overlay bind group"),
-                layout: &self.pipeline.get_bind_group_layout(0),
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: buffer.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::TextureView(&view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: wgpu::BindingResource::Sampler(&self.sampler),
-                    },
-                ],
-            });
-            self.draws.push(BrowserOverlayDraw {
-                segment: segment.clone(),
-                group,
-            });
-        }
-    }
-
-    fn make_room(&mut self, byte_len: u64, time: f64) {
-        let active: HashSet<_> = self
-            .segments
-            .iter()
-            .filter(|segment| segment.is_active_at(time))
-            .map(|segment| segment.path.as_str())
-            .collect();
-        loop {
-            let used: u64 = self.textures.values().map(|texture| texture.byte_len).sum();
-            if self.textures.len() < 16 && used.saturating_add(byte_len) <= 256 * 1024 * 1024 {
-                return;
-            }
-            let Some(oldest) = self
-                .textures
-                .iter()
-                .filter(|(path, _)| !active.contains(path.as_str()))
-                .min_by_key(|(_, texture)| texture.last_used)
-                .map(|(path, _)| path.clone())
-            else {
-                return;
-            };
-            self.textures.remove(&oldest);
-        }
-    }
-
-    fn set_texture(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        upload: BrowserOverlayUpload<'_>,
-    ) -> Result<(), JsValue> {
-        let BrowserOverlayUpload {
-            path,
-            width,
-            height,
-            levels,
-            output_size,
-            time,
-        } = upload;
-        if !self.segments.iter().any(|segment| segment.path == path) {
-            return Err(js_error("Image overlay is not referenced by the project"));
-        }
-        if width == 0
-            || height == 0
-            || width > device.limits().max_texture_dimension_2d
-            || height > device.limits().max_texture_dimension_2d
-            || u64::from(width) * u64::from(height) * 4 > 64 * 1024 * 1024
-            || levels.length() == 0
-            || levels.length() > 16
-        {
-            return Err(js_error("Image overlay dimensions exceed browser limits"));
-        }
-        let mut level_width = width;
-        let mut level_height = height;
-        let mut byte_len = 0_u64;
-        for index in 0..levels.length() {
-            let pixels = levels
-                .get(index)
-                .dyn_into::<js_sys::Uint8Array>()
-                .map_err(|_| js_error("Image overlay mip pixels are invalid"))?;
-            let expected = u64::from(level_width) * u64::from(level_height) * 4;
-            if u64::from(pixels.length()) != expected {
-                return Err(js_error("Image overlay mip dimensions are invalid"));
-            }
-            byte_len = byte_len.saturating_add(expected);
-            level_width = (level_width / 2).max(1);
-            level_height = (level_height / 2).max(1);
-        }
-        if byte_len > 96 * 1024 * 1024 {
-            return Err(js_error("Image overlay exceeds the browser memory limit"));
-        }
-        self.counter = self.counter.saturating_add(1);
-        let previous = self.textures.remove(path);
-        self.make_room(byte_len, time);
-        if self
-            .textures
-            .values()
-            .map(|texture| texture.byte_len)
-            .sum::<u64>()
-            .saturating_add(byte_len)
-            > 512 * 1024 * 1024
-        {
-            if let Some(previous) = previous {
-                self.textures.insert(path.to_owned(), previous);
-            }
-            self.rebuild_draws(device, output_size);
-            return Err(js_error(
-                "Concurrent image overlays exceed browser GPU memory",
-            ));
-        }
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Browser image overlay texture"),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: levels.length(),
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        level_width = width;
-        level_height = height;
-        for index in 0..levels.length() {
-            let pixels = levels
-                .get(index)
-                .dyn_into::<js_sys::Uint8Array>()
-                .map_err(|_| js_error("Image overlay mip pixels are invalid"))?
-                .to_vec();
-            queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &texture,
-                    mip_level: index,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                &pixels,
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(level_width * 4),
-                    rows_per_image: Some(level_height),
-                },
-                wgpu::Extent3d {
-                    width: level_width,
-                    height: level_height,
-                    depth_or_array_layers: 1,
-                },
-            );
-            level_width = (level_width / 2).max(1);
-            level_height = (level_height / 2).max(1);
-        }
-        self.textures.insert(
-            path.to_owned(),
-            BrowserOverlayTexture {
-                texture,
-                byte_len,
-                last_used: self.counter,
-            },
-        );
-        self.rebuild_draws(device, output_size);
-        Ok(())
-    }
-
-    fn has_texture(&self, path: &str) -> bool {
-        self.textures.contains_key(path)
-    }
-
-    fn has_active(&self, time: f64) -> bool {
-        self.draws
-            .iter()
-            .any(|draw| draw.segment.is_active_at(time))
-    }
-
-    fn render(&mut self, pass: &mut wgpu::RenderPass<'_>, time: f64) {
-        self.counter = self.counter.saturating_add(1);
-        pass.set_pipeline(&self.pipeline);
-        for draw in &self.draws {
-            if !draw.segment.is_active_at(time) {
-                continue;
-            }
-            if let Some(texture) = self.textures.get_mut(&draw.segment.path) {
-                texture.last_used = self.counter;
-            }
-            pass.set_bind_group(0, &draw.group, &[]);
-            pass.draw(0..3, 0..1);
-        }
-    }
-}
-
-fn draw_image_overlays(
-    overlays: Option<&mut BrowserImageOverlays>,
-    encoder: &mut wgpu::CommandEncoder,
-    target: &wgpu::TextureView,
-    time: f64,
-) {
-    let Some(overlays) = overlays.filter(|overlays| overlays.has_active(time)) else {
-        return;
-    };
-    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-        label: Some("Browser editor image overlays"),
-        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-            view: target,
-            resolve_target: None,
-            ops: wgpu::Operations {
-                load: wgpu::LoadOp::Load,
-                store: wgpu::StoreOp::Store,
-            },
-        })],
-        depth_stencil_attachment: None,
-        timestamp_writes: None,
-        occlusion_query_set: None,
-    });
-    overlays.render(&mut pass, time);
-}
-
-#[derive(Clone, Copy)]
-enum LastRenderedComposition {
-    Single { has_camera: bool },
-    Transition,
-}
-
-#[wasm_bindgen]
-pub struct BrowserGpuRenderer {
-    surface: wgpu::Surface<'static>,
-    device: wgpu::Device,
-    queue: wgpu::Queue,
-    pipeline: CompositeVideoFramePipeline,
-    background: BrowserBackground,
-    background_blur: Option<BlurLayer>,
-    blurred_background: Option<BrowserBlurredBackground>,
-    background_key: Option<String>,
-    background_uniforms: BackgroundUniforms,
-    image_background: Option<BrowserImageBackground>,
-    image_overlays: Option<BrowserImageOverlays>,
-    image_overlay_key: Option<String>,
-    animated_background: Option<AnimatedGradientLayer>,
-    animated_intermediate: Option<AnimatedGradientLayer>,
-    animated_config: Option<AnimatedGradientConfig>,
-    frame_number: u32,
-    frame_rate: u32,
-    intermediate_background: Option<BrowserBackground>,
-    transition: Option<TransitionCompositor>,
-    intermediate_pipeline: Option<CompositeVideoFramePipeline>,
-    surface_config: wgpu::SurfaceConfiguration,
-    backend: String,
-    screen: Option<InputTexture>,
-    camera: Option<InputTexture>,
-    intermediate: Option<wgpu::Texture>,
-    last_rendered: Option<LastRenderedComposition>,
-}
-
-fn draw_retained(
-    renderer: &mut BrowserGpuRenderer,
-    encoder: &mut wgpu::CommandEncoder,
-    target: &wgpu::TextureView,
-) -> Result<bool, JsValue> {
-    let Some(last) = renderer.last_rendered else {
-        return Ok(false);
-    };
-    match last {
-        LastRenderedComposition::Single { has_camera } => {
-            let screen = renderer
-                .screen
-                .as_ref()
-                .ok_or_else(|| js_error("Retained display frame is missing"))?;
-            draw_layers(
-                &renderer.background,
-                renderer.animated_background.as_ref(),
-                renderer.image_background.as_ref(),
-                blur_inputs(
-                    renderer.background_blur.as_ref(),
-                    renderer.blurred_background.as_ref(),
-                    renderer.intermediate_background.as_ref(),
-                    renderer.animated_intermediate.as_ref(),
-                ),
-                false,
-                &renderer.pipeline,
-                &renderer.device,
-                encoder,
-                target,
-                screen,
-                has_camera.then(|| renderer.camera.as_ref()).flatten(),
-            );
-        }
-        LastRenderedComposition::Transition => {
-            let transition = renderer
-                .transition
-                .as_ref()
-                .ok_or_else(|| js_error("Retained transition is missing"))?;
-            transition.render_cached(encoder, target);
-        }
-    }
-    draw_image_overlays(
-        renderer.image_overlays.as_mut(),
-        encoder,
-        target,
-        f64::from(renderer.frame_number) / f64::from(renderer.frame_rate),
-    );
-    Ok(true)
-}
-
-#[wasm_bindgen]
-impl BrowserGpuRenderer {
-    #[wasm_bindgen(js_name = create)]
-    pub async fn create(canvas: HtmlCanvasElement) -> Result<BrowserGpuRenderer, JsValue> {
-        Self::create_with_backend(canvas, true).await
-    }
-
-    #[wasm_bindgen(js_name = createWebGl)]
-    pub async fn create_webgl(canvas: HtmlCanvasElement) -> Result<BrowserGpuRenderer, JsValue> {
-        Self::create_with_backend(canvas, false).await
-    }
-
-    async fn create_with_backend(
-        canvas: HtmlCanvasElement,
-        prefer_webgpu: bool,
-    ) -> Result<BrowserGpuRenderer, JsValue> {
-        let width = canvas.width().max(1);
-        let height = canvas.height().max(1);
-        let webgpu = if prefer_webgpu {
-            Some(
-                async {
-                    trace_renderer("requesting WebGPU instance");
-                    let instance =
-                        wgpu::util::new_instance_with_webgpu_detection(&wgpu::InstanceDescriptor {
-                            backends: wgpu::Backends::BROWSER_WEBGPU,
-                            ..Default::default()
-                        })
-                        .await;
-                    trace_renderer("requesting WebGPU adapter");
-                    let adapter = instance
-                        .request_adapter(&wgpu::RequestAdapterOptions {
-                            power_preference: wgpu::PowerPreference::HighPerformance,
-                            compatible_surface: None,
-                            force_fallback_adapter: false,
-                        })
-                        .await
-                        .map_err(js_error)?;
-                    trace_renderer("requesting WebGPU device");
-                    let limits = wgpu::Limits::downlevel_webgl2_defaults()
-                        .using_resolution(adapter.limits());
-                    let (device, queue) = adapter
-                        .request_device(&wgpu::DeviceDescriptor {
-                            required_limits: limits,
-                            required_features: wgpu::Features::empty(),
-                            ..Default::default()
-                        })
-                        .await
-                        .map_err(js_error)?;
-                    trace_renderer("creating WebGPU surface");
-                    let surface = instance
-                        .create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone()))
-                        .map_err(js_error)?;
-                    let surface_config = surface
-                        .get_default_config(&adapter, width, height)
-                        .ok_or_else(|| js_error("Browser canvas is not supported by this GPU"))?;
-                    Ok::<_, JsValue>((surface, adapter, device, queue, surface_config))
-                }
-                .await,
-            )
-        } else {
-            None
-        };
-        let (surface, adapter, device, queue, mut surface_config) = match webgpu {
-            Some(Ok(value)) => value,
-            Some(Err(_)) | None => {
-                trace_renderer("requesting WebGL instance");
-                let context_options = js_sys::Object::new();
-                js_sys::Reflect::set(
-                    &context_options,
-                    &JsValue::from_str("antialias"),
-                    &JsValue::FALSE,
-                )?;
-                js_sys::Reflect::set(
-                    &context_options,
-                    &JsValue::from_str("preserveDrawingBuffer"),
-                    &JsValue::TRUE,
-                )?;
-                let context: WebGl2RenderingContext = canvas
-                    .get_context_with_context_options("webgl2", &context_options)?
-                    .ok_or_else(|| js_error("Browser WebGL2 is unavailable"))?
-                    .dyn_into()
-                    .map_err(|_| js_error("Browser WebGL2 context is invalid"))?;
-                let instance =
-                    wgpu::util::new_instance_with_webgpu_detection(&wgpu::InstanceDescriptor {
-                        backends: wgpu::Backends::GL,
-                        ..Default::default()
-                    })
-                    .await;
-                trace_renderer("creating WebGL surface");
-                let surface = instance
-                    .create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone()))
-                    .map_err(js_error)?;
-                if context.is_context_lost() || context.get_supported_extensions().is_none() {
-                    return Err(js_error("Browser WebGL2 context was lost"));
-                }
-                trace_renderer("requesting WebGL adapter");
-                let adapter = instance
-                    .request_adapter(&wgpu::RequestAdapterOptions {
-                        power_preference: wgpu::PowerPreference::HighPerformance,
-                        compatible_surface: Some(&surface),
-                        force_fallback_adapter: false,
-                    })
-                    .await
-                    .map_err(js_error)?;
-                trace_renderer("requesting WebGL device");
-                let limits =
-                    wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits());
-                let (device, queue) = adapter
-                    .request_device(&wgpu::DeviceDescriptor {
-                        required_limits: limits,
-                        required_features: wgpu::Features::empty(),
-                        ..Default::default()
-                    })
-                    .await
-                    .map_err(js_error)?;
-                trace_renderer("configuring WebGL surface");
-                let surface_config = surface
-                    .get_default_config(&adapter, width, height)
-                    .ok_or_else(|| js_error("Browser canvas is not supported by this GPU"))?;
-                trace_renderer("WebGL surface configured");
-                (surface, adapter, device, queue, surface_config)
-            }
-        };
-        let backend = format!("{:?}", adapter.get_info().backend);
-        if adapter.get_info().backend != wgpu::Backend::BrowserWebGpu
-            && surface
-                .get_capabilities(&adapter)
-                .formats
-                .contains(&wgpu::TextureFormat::Rgba8Unorm)
-        {
-            surface_config.format = wgpu::TextureFormat::Rgba8Unorm;
-        }
-        trace_renderer(&format!("surface format {:?}", surface_config.format));
-        surface_config.desired_maximum_frame_latency = 2;
-        surface.configure(&device, &surface_config);
-        let pipeline = CompositeVideoFramePipeline::new_for_format(&device, surface_config.format);
-        let background_uniforms = BackgroundUniforms::from_source(&BackgroundSource::default())?;
-        let background =
-            BrowserBackground::new(&device, surface_config.format, background_uniforms);
-        Ok(Self {
-            surface,
-            device,
-            queue,
-            pipeline,
-            background,
-            background_blur: None,
-            blurred_background: None,
-            background_key: None,
-            background_uniforms,
-            image_background: None,
-            image_overlays: None,
-            image_overlay_key: None,
-            animated_background: None,
-            animated_intermediate: None,
-            animated_config: None,
-            frame_number: 0,
-            frame_rate: 60,
-            intermediate_background: None,
-            transition: None,
-            intermediate_pipeline: None,
-            surface_config,
-            backend,
-            screen: None,
-            camera: None,
-            intermediate: None,
-            last_rendered: None,
-        })
-    }
-
-    #[wasm_bindgen(getter)]
-    pub fn backend(&self) -> String {
-        self.backend.clone()
-    }
-
-    pub fn set_background(
-        &mut self,
-        project_json: &str,
-        image: Option<ImageBitmap>,
-    ) -> Result<(), JsValue> {
-        let project: ProjectConfiguration = serde_json::from_str(project_json).map_err(js_error)?;
-        let background_key = serde_json::to_string(&project.background).map_err(js_error)?;
-        let image_overlay_key = project
-            .timeline
-            .as_ref()
-            .filter(|timeline| !timeline.image_segments.is_empty())
-            .map(|timeline| {
-                serde_json::to_string(&(&timeline.image_segments, &project.overlay_order))
-            })
-            .transpose()
-            .map_err(js_error)?;
-        let background_changed = self.background_key.as_ref() != Some(&background_key);
-        match &project.background.source {
-            BackgroundSource::AnimatedGradient { config } => {
-                self.image_background = None;
-                if self.animated_background.is_none() {
-                    self.animated_background = Some(AnimatedGradientLayer::new_for_format(
-                        &self.device,
-                        config.clone(),
-                        &self.project_uniforms(),
-                        self.surface_config.format,
-                    ));
-                }
-                self.animated_config = Some(config.clone());
-            }
-            BackgroundSource::Image { path } | BackgroundSource::Wallpaper { path } => {
-                if let Some(path) = path.as_deref().filter(|path| !path.is_empty()) {
-                    if self
-                        .image_background
-                        .as_ref()
-                        .is_none_or(|background| background.path != path)
-                    {
-                        let image = image
-                            .ok_or_else(|| js_error("Editor background image is unavailable"))?;
-                        self.image_background = Some(BrowserImageBackground::new(
-                            &self.device,
-                            &self.queue,
-                            self.surface_config.format,
-                            self.surface_config.width,
-                            self.surface_config.height,
-                            path.to_owned(),
-                            image,
-                        )?);
-                    }
-                } else {
-                    let white = BackgroundSource::Color {
-                        value: [255, 255, 255],
-                        alpha: 255,
-                    };
-                    let uniforms = BackgroundUniforms::from_source(&white)?;
-                    self.background.update(&self.queue, uniforms);
-                    self.intermediate_background
-                        .as_ref()
-                        .map(|background| background.update(&self.queue, uniforms));
-                    self.background_uniforms = uniforms;
-                    self.image_background = None;
-                }
-                self.animated_background = None;
-                self.animated_intermediate = None;
-                self.animated_config = None;
-            }
-            source => {
-                let uniforms = BackgroundUniforms::from_source(source)?;
-                self.background.update(&self.queue, uniforms);
-                self.intermediate_background
-                    .as_ref()
-                    .map(|background| background.update(&self.queue, uniforms));
-                self.background_uniforms = uniforms;
-                self.image_background = None;
-                self.animated_background = None;
-                self.animated_intermediate = None;
-                self.animated_config = None;
-            }
-        }
-        if project.background.blur > 0.0 {
-            if self.background_blur.is_none() {
-                self.background_blur = Some(BlurLayer::new(&self.device));
-            }
-            if let Some(layer) = self.background_blur.as_mut() {
-                layer.prepare_values(
-                    &self.queue,
-                    (self.surface_config.width, self.surface_config.height),
-                    project.background.blur,
-                );
-            }
-            if self.blurred_background.is_none() {
-                self.blurred_background = Some(BrowserBlurredBackground::new(
-                    &self.device,
-                    self.surface_config.width,
-                    self.surface_config.height,
-                    self.surface_config.format,
-                ));
-            }
-            if background_changed && let Some(cached) = self.blurred_background.as_ref() {
-                cached.dirty.set(true);
-            }
-            if self.intermediate_background.is_none() {
-                self.intermediate_background = Some(BrowserBackground::new(
-                    &self.device,
-                    wgpu::TextureFormat::Rgba8Unorm,
-                    self.background_uniforms,
-                ));
-            }
-            if let (None, Some(config)) = (
-                self.animated_intermediate.as_ref(),
-                self.animated_config.as_ref(),
-            ) {
-                self.animated_intermediate = Some(AnimatedGradientLayer::new(
-                    &self.device,
-                    config.clone(),
-                    &self.project_uniforms(),
-                ));
-            }
-        } else {
-            self.blurred_background = None;
-            self.background_blur = None;
-        }
-        self.background_key = Some(background_key);
-        if image_overlay_key != self.image_overlay_key {
-            if image_overlay_key.is_some() {
-                if self.image_overlays.is_none() {
-                    self.image_overlays = Some(BrowserImageOverlays::new(
-                        &self.device,
-                        self.surface_config.format,
-                    ));
-                }
-                if let Some(overlays) = self.image_overlays.as_mut() {
-                    overlays.update_project(
-                        &self.device,
-                        &project,
-                        (self.surface_config.width, self.surface_config.height),
-                    );
-                }
-            } else {
-                self.image_overlays = None;
-            }
-            self.image_overlay_key = image_overlay_key;
-        }
-        Ok(())
-    }
-
-    pub fn has_overlay_image(&self, path: &str) -> bool {
-        self.image_overlays
-            .as_ref()
-            .is_some_and(|overlays| overlays.has_texture(path))
-    }
-
-    pub fn set_overlay_image(
-        &mut self,
-        path: &str,
-        width: u32,
-        height: u32,
-        levels: js_sys::Array,
-    ) -> Result<(), JsValue> {
-        let overlays = self
-            .image_overlays
-            .as_mut()
-            .ok_or_else(|| js_error("Editor project has no image overlays"))?;
-        overlays.set_texture(
-            &self.device,
-            &self.queue,
-            BrowserOverlayUpload {
-                path,
-                width,
-                height,
-                levels: &levels,
-                output_size: (self.surface_config.width, self.surface_config.height),
-                time: f64::from(self.frame_number) / f64::from(self.frame_rate),
-            },
-        )
-    }
-
-    pub fn set_frame_time(&mut self, frame_number: u32, frame_rate: u32) -> Result<(), JsValue> {
-        if frame_rate == 0 {
-            return Err(js_error("Editor frame rate is invalid"));
-        }
-        self.frame_number = frame_number;
-        self.frame_rate = frame_rate;
-        Ok(())
-    }
-
-    fn project_uniforms(&self) -> ProjectUniforms {
-        ProjectUniforms {
-            output_size: (self.surface_config.width, self.surface_config.height),
-            frame_number: self.frame_number,
-            frame_rate: self.frame_rate,
-        }
-    }
-
-    fn prepare_background(&mut self, encoder: &mut wgpu::CommandEncoder) {
-        let project = self.project_uniforms();
-        if let (Some(layer), Some(config)) = (
-            self.animated_background.as_mut(),
-            self.animated_config.as_ref(),
-        ) {
-            layer.prepare(&self.device, &self.queue, config.clone(), &project);
-            layer.render_surface(encoder);
-        }
-        if let (Some(layer), Some(config)) = (
-            self.animated_intermediate.as_mut(),
-            self.animated_config.as_ref(),
-        ) {
-            layer.prepare(&self.device, &self.queue, config.clone(), &project);
-            layer.render_surface(encoder);
-        }
-    }
-
-    pub fn resize(&mut self, width: u32, height: u32) -> Result<(), JsValue> {
-        if width == 0
-            || height == 0
-            || width > self.device.limits().max_texture_dimension_2d
-            || height > self.device.limits().max_texture_dimension_2d
-        {
-            return Err(js_error("Canvas size exceeds browser GPU limits"));
-        }
-        if width != self.surface_config.width || height != self.surface_config.height {
-            self.surface_config.width = width;
-            self.surface_config.height = height;
-            self.surface.configure(&self.device, &self.surface_config);
-            self.image_background
-                .as_ref()
-                .map(|background| background.update_size(&self.queue, width, height));
-            if let Some(layer) = self.background_blur.as_mut() {
-                layer.prepare_values(&self.queue, (width, height), layer.blur_amount);
-                self.blurred_background = Some(BrowserBlurredBackground::new(
-                    &self.device,
-                    width,
-                    height,
-                    self.surface_config.format,
-                ));
-            }
-            if let Some(overlays) = self.image_overlays.as_mut() {
-                overlays.rebuild_draws(&self.device, (width, height));
-            }
-            self.intermediate = None;
-            self.last_rendered = None;
-        }
-        Ok(())
-    }
-
-    pub fn render(
-        &mut self,
-        screen_video: JsValue,
-        screen_uniforms: &[u8],
-        camera_video: JsValue,
-        camera_uniforms: Option<Vec<u8>>,
-    ) -> Result<(), JsValue> {
-        let output_width = self.surface_config.width;
-        let output_height = self.surface_config.height;
-        let has_camera = !camera_video.is_null() && !camera_video.is_undefined();
-        if matches!(
-            self.last_rendered,
-            Some(LastRenderedComposition::Transition)
-        ) {
-            self.screen = None;
-            self.camera = None;
-        }
-        upload_video(
-            &self.device,
-            &self.queue,
-            &self.pipeline,
-            &mut self.screen,
-            screen_video,
-            screen_uniforms,
-            output_width,
-            output_height,
-        )?;
-        if has_camera {
-            let uniforms = camera_uniforms
-                .as_deref()
-                .ok_or_else(|| js_error("Camera uniforms are missing"))?;
-            upload_video(
-                &self.device,
-                &self.queue,
-                &self.pipeline,
-                &mut self.camera,
-                camera_video,
-                uniforms,
-                output_width,
-                output_height,
-            )?;
-        }
-        let frame = self.surface.get_current_texture().map_err(js_error)?;
-        let view = frame
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Browser editor composite"),
-            });
-        self.prepare_background(&mut encoder);
-        let screen = self
-            .screen
-            .as_ref()
-            .ok_or_else(|| js_error("Display frame is missing"))?;
-        draw_layers(
-            &self.background,
-            self.animated_background.as_ref(),
-            self.image_background.as_ref(),
-            blur_inputs(
-                self.background_blur.as_ref(),
-                self.blurred_background.as_ref(),
-                self.intermediate_background.as_ref(),
-                self.animated_intermediate.as_ref(),
-            ),
-            false,
-            &self.pipeline,
-            &self.device,
-            &mut encoder,
-            &view,
-            screen,
-            has_camera.then(|| self.camera.as_ref()).flatten(),
-        );
-        draw_image_overlays(
-            self.image_overlays.as_mut(),
-            &mut encoder,
-            &view,
-            f64::from(self.frame_number) / f64::from(self.frame_rate),
-        );
-        self.queue.submit(Some(encoder.finish()));
-        frame.present();
-        self.last_rendered = Some(LastRenderedComposition::Single { has_camera });
-        Ok(())
-    }
-
-    pub fn render_transition(
-        &mut self,
-        outgoing_screen: JsValue,
-        outgoing_screen_uniforms: &[u8],
-        outgoing_camera: JsValue,
-        outgoing_camera_uniforms: Option<Vec<u8>>,
-        incoming_screen: JsValue,
-        incoming_screen_uniforms: &[u8],
-        incoming_camera: JsValue,
-        incoming_camera_uniforms: Option<Vec<u8>>,
-        kind: u32,
-        progress: f32,
-    ) -> Result<(), JsValue> {
-        let transition_kind = match kind {
-            0 => ClipTransitionType::CrossFade,
-            1 => ClipTransitionType::FadeThroughBlack,
-            _ => return Err(js_error("Transition type is invalid")),
-        };
-        if !progress.is_finite() {
-            return Err(js_error("Transition progress is invalid"));
-        }
-        let output_width = self.surface_config.width;
-        let output_height = self.surface_config.height;
-        let outgoing_has_camera = !outgoing_camera.is_null() && !outgoing_camera.is_undefined();
-        let incoming_has_camera = !incoming_camera.is_null() && !incoming_camera.is_undefined();
-        if matches!(
-            self.last_rendered,
-            Some(LastRenderedComposition::Single { .. })
-        ) {
-            self.screen = None;
-            self.camera = None;
-        }
-        if self.intermediate.is_none() {
-            self.intermediate = Some(self.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("Browser transition composition"),
-                size: wgpu::Extent3d {
-                    width: output_width,
-                    height: output_height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-                view_formats: &[],
-            }));
-        }
-        if self.intermediate_pipeline.is_none() {
-            self.intermediate_pipeline = Some(CompositeVideoFramePipeline::new(&self.device));
-        }
-        if let (None, Some(config)) = (
-            self.animated_intermediate.as_ref(),
-            self.animated_config.as_ref(),
-        ) {
-            self.animated_intermediate = Some(AnimatedGradientLayer::new(
-                &self.device,
-                config.clone(),
-                &self.project_uniforms(),
-            ));
-        }
-        if self.intermediate_background.is_none() {
-            self.intermediate_background = Some(BrowserBackground::new(
-                &self.device,
-                wgpu::TextureFormat::Rgba8Unorm,
-                self.background_uniforms,
-            ));
-        }
-        if self.transition.is_none() {
-            self.transition = Some(TransitionCompositor::new_for_format(
-                &self.device,
-                self.surface_config.format,
-            ));
-        }
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Browser editor transition"),
-            });
-        self.prepare_background(&mut encoder);
-        let pipeline = self
-            .intermediate_pipeline
-            .as_ref()
-            .ok_or_else(|| js_error("Transition pipeline is missing"))?;
-        let intermediate = self
-            .intermediate
-            .as_ref()
-            .ok_or_else(|| js_error("Transition canvas is missing"))?;
-        let intermediate_view = intermediate.create_view(&wgpu::TextureViewDescriptor::default());
-        let transition = self
-            .transition
-            .as_mut()
-            .ok_or_else(|| js_error("Transition effect is missing"))?;
-        transition.ensure_size(&self.device, output_width, output_height);
-        upload_video(
-            &self.device,
-            &self.queue,
-            pipeline,
-            &mut self.screen,
-            outgoing_screen,
-            outgoing_screen_uniforms,
-            output_width,
-            output_height,
-        )?;
-        if outgoing_has_camera {
-            let uniforms = outgoing_camera_uniforms
-                .as_deref()
-                .ok_or_else(|| js_error("Outgoing camera uniforms are missing"))?;
-            upload_video(
-                &self.device,
-                &self.queue,
-                pipeline,
-                &mut self.camera,
-                outgoing_camera,
-                uniforms,
-                output_width,
-                output_height,
-            )?;
-        }
-        draw_layers(
-            self.intermediate_background
-                .as_ref()
-                .ok_or_else(|| js_error("Transition background is missing"))?,
-            self.animated_intermediate.as_ref(),
-            self.image_background.as_ref(),
-            blur_inputs(
-                self.background_blur.as_ref(),
-                self.blurred_background.as_ref(),
-                self.intermediate_background.as_ref(),
-                self.animated_intermediate.as_ref(),
-            ),
-            true,
-            pipeline,
-            &self.device,
-            &mut encoder,
-            &intermediate_view,
-            self.screen
-                .as_ref()
-                .ok_or_else(|| js_error("Outgoing display is missing"))?,
-            outgoing_has_camera.then(|| self.camera.as_ref()).flatten(),
-        );
-        transition.capture_outgoing(&mut encoder, intermediate);
-        upload_video(
-            &self.device,
-            &self.queue,
-            pipeline,
-            &mut self.screen,
-            incoming_screen,
-            incoming_screen_uniforms,
-            output_width,
-            output_height,
-        )?;
-        if incoming_has_camera {
-            let uniforms = incoming_camera_uniforms
-                .as_deref()
-                .ok_or_else(|| js_error("Incoming camera uniforms are missing"))?;
-            upload_video(
-                &self.device,
-                &self.queue,
-                pipeline,
-                &mut self.camera,
-                incoming_camera,
-                uniforms,
-                output_width,
-                output_height,
-            )?;
-        }
-        draw_layers(
-            self.intermediate_background
-                .as_ref()
-                .ok_or_else(|| js_error("Transition background is missing"))?,
-            self.animated_intermediate.as_ref(),
-            self.image_background.as_ref(),
-            blur_inputs(
-                self.background_blur.as_ref(),
-                self.blurred_background.as_ref(),
-                self.intermediate_background.as_ref(),
-                self.animated_intermediate.as_ref(),
-            ),
-            true,
-            pipeline,
-            &self.device,
-            &mut encoder,
-            &intermediate_view,
-            self.screen
-                .as_ref()
-                .ok_or_else(|| js_error("Incoming display is missing"))?,
-            incoming_has_camera.then(|| self.camera.as_ref()).flatten(),
-        );
-        let frame = self.surface.get_current_texture().map_err(js_error)?;
-        let surface_view = frame
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-        transition.capture_incoming_and_render(
-            &self.queue,
-            &mut encoder,
-            intermediate,
-            &surface_view,
-            TransitionParameters {
-                kind: transition_kind,
-                progress,
-                opaque: true,
-            },
-        );
-        draw_image_overlays(
-            self.image_overlays.as_mut(),
-            &mut encoder,
-            &surface_view,
-            f64::from(self.frame_number) / f64::from(self.frame_rate),
-        );
-        self.queue.submit(Some(encoder.finish()));
-        frame.present();
-        self.last_rendered = Some(LastRenderedComposition::Transition);
-        Ok(())
-    }
-
-    pub fn redraw_last(&mut self) -> Result<bool, JsValue> {
-        if self.last_rendered.is_none() {
-            return Ok(false);
-        }
-        let frame = self.surface.get_current_texture().map_err(js_error)?;
-        let view = frame
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Browser editor retained composition"),
-            });
-        self.prepare_background(&mut encoder);
-        draw_retained(self, &mut encoder, &view)?;
-        self.queue.submit(Some(encoder.finish()));
-        frame.present();
-        Ok(true)
-    }
-
-    pub async fn snapshot_rgba(&mut self) -> Result<Vec<u8>, JsValue> {
-        if self.last_rendered.is_none() {
-            return Err(js_error("No editor frame has been rendered"));
-        }
-        let width = self.surface_config.width;
-        let height = self.surface_config.height;
-        let pixel_bytes = width as u64 * height as u64 * 4;
-        if pixel_bytes > 64 * 1024 * 1024 {
-            return Err(js_error("Editor snapshot exceeds the browser memory limit"));
-        }
-        let row_bytes = (width * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
-        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Editor snapshot texture"),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: self.surface_config.format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
-        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Editor snapshot readback"),
-            size: row_bytes as u64 * height as u64,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Editor snapshot readback"),
-            });
-        self.prepare_background(&mut encoder);
-        draw_retained(self, &mut encoder, &view)?;
-        encoder.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
-                texture: &texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyBufferInfo {
-                buffer: &buffer,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(row_bytes),
-                    rows_per_image: Some(height),
-                },
-            },
-            wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-        );
-        self.queue.submit(Some(encoder.finish()));
-        let (sender, mut receiver) = futures_channel::oneshot::channel();
-        buffer
-            .slice(..)
-            .map_async(wgpu::MapMode::Read, move |status| {
-                let _ = sender.send(status);
-            });
-        let mut mapped = false;
-        for _ in 0..500 {
-            self.device.poll(wgpu::PollType::Poll).map_err(js_error)?;
-            if let Some(status) = receiver.try_recv().map_err(js_error)? {
-                status.map_err(js_error)?;
-                mapped = true;
-                break;
-            }
-            wait_for_gpu_poll().await?;
-        }
-        if !mapped {
-            return Err(js_error("Editor snapshot GPU readback timed out"));
-        }
-        let mapped = buffer.slice(..).get_mapped_range();
-        let mut pixels = vec![0; pixel_bytes as usize];
-        for row in 0..height as usize {
-            let source = row * row_bytes as usize;
-            let destination = row * width as usize * 4;
-            pixels[destination..destination + width as usize * 4]
-                .copy_from_slice(&mapped[source..source + width as usize * 4]);
-        }
-        drop(mapped);
-        buffer.unmap();
-        if matches!(
-            self.surface_config.format,
-            wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
-        ) {
-            for pixel in pixels.chunks_exact_mut(4) {
-                pixel.swap(0, 2);
-            }
-        }
-        Ok(pixels)
-    }
-}
-
-#[wasm_bindgen]
-pub fn default_layer_uniforms(
-    output_width: u32,
-    output_height: u32,
-    source_width: u32,
-    source_height: u32,
-    camera: bool,
-) -> Vec<u8> {
-    let mut uniforms = CompositeVideoFrameUniforms {
-        crop_bounds: [0.0, 0.0, source_width as f32, source_height as f32],
-        output_size: [output_width as f32, output_height as f32],
-        frame_size: [source_width as f32, source_height as f32],
-        ..Default::default()
-    };
-    if camera {
-        let size = output_height as f32 * 0.25;
-        let margin = output_height as f32 * 0.04;
-        let left = output_width as f32 - size - margin;
-        let top = output_height as f32 - size - margin;
-        uniforms.target_bounds = [left, top, left + size, top + size];
-        uniforms.target_size = [size, size];
-        uniforms.rounding_px = size * 0.5;
-    } else {
-        uniforms.target_bounds = [0.0, 0.0, output_width as f32, output_height as f32];
-        uniforms.target_size = [output_width as f32, output_height as f32];
-    }
-    bytemuck::bytes_of(&uniforms).to_vec()
-}
-
 #[wasm_bindgen]
 pub struct BrowserVisualConfig {
     project: ProjectConfiguration,
@@ -2491,6 +351,8 @@ impl BrowserVisualConfig {
         })
     }
 
+    /// Output frame size for a preview box, identical to the native renderer's
+    /// `ProjectUniforms::get_output_size`.
     pub fn output_dimensions(
         &self,
         source_width: u32,
@@ -2505,272 +367,677 @@ impl BrowserVisualConfig {
         {
             return Err(js_error("Editor output dimensions are invalid"));
         }
-        let crop = self.project.background.crop.as_ref();
-        let crop_width = crop.map_or(source_width, |value| value.size.x);
-        let crop_height = crop.map_or(source_height, |value| value.size.y);
-        if crop_width == 0 || crop_height == 0 {
+        if self
+            .project
+            .background
+            .crop
+            .as_ref()
+            .is_some_and(|crop| crop.size.x == 0 || crop.size.y == 0)
+        {
             return Err(js_error("Editor crop dimensions are invalid"));
         }
-        let padding_factor = self.project.background.padding / 100.0 * 0.4;
-        let base_size = match &self.project.aspect_ratio {
-            None => {
-                let scale = 1.0 + padding_factor * 2.0;
-                (
-                    (((crop_width as f64 * scale) as u32 + 1) & !1).max(2),
-                    (((crop_height as f64 * scale) as u32 + 1) & !1).max(2),
-                )
-            }
-            Some(aspect) => {
-                let target_aspect = match aspect {
-                    AspectRatio::Square => 1.0,
-                    AspectRatio::Wide => 16.0 / 9.0,
-                    AspectRatio::Vertical => 9.0 / 16.0,
-                    AspectRatio::Classic => 4.0 / 3.0,
-                    AspectRatio::Tall => 3.0 / 4.0,
-                };
-                let crop_aspect = crop_width as f64 / crop_height as f64;
-                let padding = f64::from(crop_width.max(crop_height)) * padding_factor * 2.0;
-                let (width, height) = if crop_aspect > target_aspect {
-                    let width = crop_width as f64 + padding;
-                    (width, width / target_aspect)
-                } else {
-                    let height = crop_height as f64 + padding;
-                    (height * target_aspect, height)
-                };
-                (
-                    (((width.ceil() as u32) + 1) & !1).max(2),
-                    (((height.ceil() as u32) + 1) & !1).max(2),
-                )
-            }
+        let options = RenderOptions {
+            screen_size: XY::new(source_width, source_height),
+            camera_size: None,
+            preserve_screen_alpha: false,
         };
-        let width_scale = resolution_width as f32 / base_size.0 as f32;
-        let height_scale = resolution_height as f32 / base_size.1 as f32;
-        let scale = width_scale.min(height_scale);
-        Ok(vec![
-            ((base_size.0 as f32 * scale) as u32 + 3) & !3,
-            ((base_size.1 as f32 * scale) as u32 + 1) & !1,
-        ])
+        let (width, height) = ProjectUniforms::get_output_size(
+            &options,
+            &self.project,
+            XY::new(resolution_width, resolution_height),
+        );
+        Ok(vec![width.max(2), height.max(2)])
     }
 
-    pub fn layer_uniforms(
-        &self,
-        output_width: u32,
-        output_height: u32,
-        source_width: u32,
-        source_height: u32,
-        camera: bool,
-        frame_number: u32,
-        source_color_fix: bool,
-    ) -> Result<Vec<u8>, JsValue> {
-        if output_width == 0 || output_height == 0 || source_width == 0 || source_height == 0 {
-            return Err(js_error("Editor layer dimensions are invalid"));
+    pub fn aspect_locked(&self) -> bool {
+        matches!(
+            self.project.aspect_ratio,
+            Some(
+                AspectRatio::Square
+                    | AspectRatio::Wide
+                    | AspectRatio::Vertical
+                    | AspectRatio::Classic
+                    | AspectRatio::Tall
+            )
+        )
+    }
+}
+
+fn browser_source(value: &JsValue) -> Result<(BrowserFrameSource, u32, u32), JsValue> {
+    if let Some(video) = value.dyn_ref::<HtmlVideoElement>() {
+        if video.ready_state() < 2 {
+            return Err(js_error("Video frame is not decoded"));
         }
-        let mut uniforms = CompositeVideoFrameUniforms {
-            output_size: [output_width as f32, output_height as f32],
-            frame_size: [source_width as f32, source_height as f32],
-            crop_bounds: [0.0, 0.0, source_width as f32, source_height as f32],
-            ..Default::default()
+        return Ok((
+            BrowserFrameSource::Video(video.clone()),
+            video.video_width(),
+            video.video_height(),
+        ));
+    }
+    if let Some(bitmap) = value.dyn_ref::<ImageBitmap>() {
+        return Ok((
+            BrowserFrameSource::Bitmap(bitmap.clone()),
+            bitmap.width(),
+            bitmap.height(),
+        ));
+    }
+    Err(js_error("Video frame source is invalid"))
+}
+
+fn decoded_frame(
+    value: &JsValue,
+    color_fix: bool,
+    max_dimension: u32,
+) -> Result<Option<DecodedFrame>, JsValue> {
+    if value.is_null() || value.is_undefined() {
+        return Ok(None);
+    }
+    let (source, width, height) = browser_source(value)?;
+    if width == 0 || height == 0 {
+        return Err(js_error("Video frame is not decoded"));
+    }
+    if width > max_dimension || height > max_dimension {
+        return Err(js_error("Video exceeds the browser GPU texture limit"));
+    }
+    Ok(Some(DecodedFrame::from_browser_source(
+        source, width, height, color_fix,
+    )))
+}
+
+struct ClipTimelines {
+    project_revision: u64,
+    recording_clip: u32,
+    outgoing: bool,
+    zoom: ZoomTransformTimeline,
+}
+
+struct CursorTimelineEntry {
+    project_revision: u64,
+    recording_clip: u32,
+    timeline: Arc<PrecomputedCursorTimeline>,
+}
+
+/// Owns the native render core for one canvas. `frame_renderer` borrows
+/// `constants`, so it is declared first and therefore dropped first.
+#[wasm_bindgen]
+pub struct BrowserStudioRenderer {
+    frame_renderer: FrameRenderer<'static>,
+    layers: RendererLayers,
+    presenter: SurfacePresenter,
+    zoom_cache: Vec<ClipTimelines>,
+    cursor_cache: Vec<CursorTimelineEntry>,
+    project: ProjectConfiguration,
+    project_revision: u64,
+    cursors: Vec<Arc<CursorEvents>>,
+    backend: String,
+    last_layout: Option<[f64; 10]>,
+    constants: Box<RenderVideoConstants>,
+}
+
+struct TrackFrames {
+    recording_clip: u32,
+    segment_time: f32,
+    screen: JsValue,
+    screen_color_fix: bool,
+    camera: JsValue,
+    camera_color_fix: bool,
+}
+
+#[wasm_bindgen]
+impl BrowserStudioRenderer {
+    /// `recording_meta_json` is a `RecordingMeta` for a studio recording and
+    /// `cursors_json` an array with one `CursorEvents` per recording clip.
+    #[wasm_bindgen(js_name = create)]
+    pub async fn create(
+        canvas: HtmlCanvasElement,
+        prefer_webgpu: bool,
+        recording_meta_json: String,
+        screen_width: u32,
+        screen_height: u32,
+        camera_width: u32,
+        camera_height: u32,
+    ) -> Result<BrowserStudioRenderer, JsValue> {
+        let recording_meta: RecordingMeta =
+            serde_json::from_str(&recording_meta_json).map_err(js_error)?;
+        let studio_meta = recording_meta
+            .studio_meta()
+            .cloned()
+            .ok_or_else(|| js_error("Editor recording is not a studio recording"))?;
+        if screen_width == 0 || screen_height == 0 {
+            return Err(js_error("Editor recording dimensions are invalid"));
+        }
+        let segment_count = match &studio_meta {
+            StudioRecordingMeta::SingleSegment { .. } => 1,
+            StudioRecordingMeta::MultipleSegments { inner } => inner.segments.len(),
         };
-        uniforms._padding1[0] = if source_color_fix { 1.0 } else { 0.0 };
-        if camera {
-            if self.project.camera.hide {
-                uniforms.opacity = 0.0;
-            }
-            let output = [output_width as f32, output_height as f32];
-            let min_axis = output[0].min(output[1]);
-            let padding = 50.0 * output[1] / 1080.0;
-            let base_size = self.project.camera.size / 100.0;
-            let source_aspect = source_width as f32 / source_height as f32;
-            let size = match self.project.camera.shape {
-                CameraShape::Square => {
-                    let side = min_axis * base_size + padding;
-                    [side, side]
-                }
-                CameraShape::Source if source_aspect >= 1.0 => {
-                    let height = min_axis * base_size + padding;
-                    [height * source_aspect, height]
-                }
-                CameraShape::Source => {
-                    let width = min_axis * base_size + padding;
-                    [width, width / source_aspect]
-                }
-            };
-            let position = if let Some(manual) = self.project.camera.manual_position {
-                [
-                    (manual.x as f32 * output[0] - size[0] / 2.0)
-                        .clamp(0.0, (output[0] - size[0]).max(0.0)),
-                    (manual.y as f32 * output[1] - size[1] / 2.0)
-                        .clamp(0.0, (output[1] - size[1]).max(0.0)),
-                ]
-            } else {
-                let x = match self.project.camera.position.x {
-                    CameraXPosition::Left => padding,
-                    CameraXPosition::Center => output[0] / 2.0 - size[0] / 2.0,
-                    CameraXPosition::Right => output[0] - padding - size[0],
-                };
-                let y = match self.project.camera.position.y {
-                    CameraYPosition::Top => padding,
-                    CameraYPosition::Bottom => output[1] - padding - size[1],
-                };
-                [x, y]
-            };
-            uniforms.target_bounds = [
-                position[0].round(),
-                position[1].round(),
-                (position[0] + size[0]).round(),
-                (position[1] + size[1]).round(),
-            ];
-            uniforms.target_size = [
-                uniforms.target_bounds[2] - uniforms.target_bounds[0],
-                uniforms.target_bounds[3] - uniforms.target_bounds[1],
-            ];
-            if matches!(self.project.camera.shape, CameraShape::Square) {
-                let source_size = source_width.min(source_height) as f32;
-                let inset = (2.0 / source_size).min(0.25);
-                let left = (source_width as f32 - source_size) * 0.5;
-                let top = (source_height as f32 - source_size) * 0.5;
-                uniforms.crop_bounds = [
-                    left + source_size * inset,
-                    top + source_size * inset,
-                    left + source_size * (1.0 - inset),
-                    top + source_size * (1.0 - inset),
-                ];
-            }
-            uniforms.rounding_px = self.project.camera.rounding / 100.0
-                * 0.5
-                * uniforms.target_size[0].min(uniforms.target_size[1]);
-            uniforms.rounding_type = match self.project.camera.rounding_type {
-                CornerStyle::Rounded => 0.0,
-                CornerStyle::Squircle => 1.0,
-            };
-            uniforms.mirror_x = if self.project.camera.mirror { 1.0 } else { 0.0 };
-            uniforms.shadow = self.project.camera.shadow;
-            let shadow = self.project.camera.advanced_shadow.as_ref();
-            uniforms.shadow_size = shadow.map_or(50.0, |value| value.size);
-            uniforms.shadow_opacity = shadow.map_or(18.0, |value| value.opacity);
-            uniforms.shadow_blur = shadow.map_or(50.0, |value| value.blur);
-        } else {
-            let crop = self.project.background.crop.as_ref();
-            let crop_width = crop.map_or(source_width, |value| value.size.x).max(1);
-            let crop_height = crop.map_or(source_height, |value| value.size.y).max(1);
-            let crop_x = crop.map_or(0, |value| value.position.x);
-            let crop_y = crop.map_or(0, |value| value.position.y);
-            uniforms.crop_bounds = [
-                crop_x as f32,
-                crop_y as f32,
-                (crop_x + crop_width) as f32,
-                (crop_y + crop_height) as f32,
-            ];
-            let pad_factor = self.project.background.padding / 100.0 * 0.4;
-            let crop_w = crop_width as f64;
-            let crop_h = crop_height as f64;
-            let output_w = output_width as f64;
-            let output_h = output_height as f64;
-            let (base_w, base_h) = match &self.project.aspect_ratio {
-                None => {
-                    let scale = 1.0 + pad_factor * 2.0;
-                    (
-                        ((crop_w * scale) as u32 + 1) & !1,
-                        ((crop_h * scale) as u32 + 1) & !1,
-                    )
-                }
-                Some(aspect_ratio) => {
-                    let aspect = match aspect_ratio {
-                        AspectRatio::Wide => 16.0 / 9.0,
-                        AspectRatio::Vertical => 9.0 / 16.0,
-                        AspectRatio::Square => 1.0,
-                        AspectRatio::Classic => 4.0 / 3.0,
-                        AspectRatio::Tall => 3.0 / 4.0,
-                    };
-                    let padding = crop_w.max(crop_h) * pad_factor * 2.0;
-                    let (width, height) = if crop_w / crop_h > aspect {
-                        let width = crop_w + padding;
-                        (width, width / aspect)
-                    } else {
-                        let height = crop_h + padding;
-                        (height * aspect, height)
-                    };
-                    (
-                        (((width.ceil() as u32) + 1) & !1).max(2),
-                        (((height.ceil() as u32) + 1) & !1).max(2),
-                    )
-                }
-            };
-            let output_scale =
-                (output_w / base_w.max(1) as f64).min(output_h / base_h.max(1) as f64);
-            let (offset_x, offset_y) = if self.project.aspect_ratio.is_none() {
-                (
-                    crop_w * pad_factor * output_scale,
-                    crop_h * pad_factor * output_scale,
-                )
-            } else {
-                let max_padding = ((output_w - 1.0) / 2.0)
-                    .min((output_h - 1.0) / 2.0)
-                    .max(0.0);
-                let padding = (crop_w.max(crop_h) * pad_factor * output_scale).min(max_padding);
-                let available_w = (output_w - padding * 2.0).max(1.0);
-                let available_h = (output_h - padding * 2.0).max(1.0);
-                if crop_w / crop_h <= output_w / output_h {
-                    ((output_w - available_h * crop_w / crop_h) / 2.0, padding)
-                } else {
-                    (padding, (output_h - available_w * crop_h / crop_w) / 2.0)
-                }
-            };
-            let shift = self
-                .project
-                .background
-                .display_position
-                .map_or([0.0, 0.0], |position| {
-                    [
-                        (position.x.clamp(0.0, 1.0) - 0.5) * output_w,
-                        (position.y.clamp(0.0, 1.0) - 0.5) * output_h,
-                    ]
-                });
-            uniforms.target_bounds = [
-                (offset_x + shift[0]) as f32,
-                (offset_y + shift[1]) as f32,
-                (output_w - offset_x + shift[0]) as f32,
-                (output_h - offset_y + shift[1]) as f32,
-            ];
-            uniforms.target_size = [
-                uniforms.target_bounds[2] - uniforms.target_bounds[0],
-                uniforms.target_bounds[3] - uniforms.target_bounds[1],
-            ];
-            uniforms.rounding_px = self.project.background.rounding as f32 / 100.0
-                * 0.5
-                * uniforms.target_size[0].min(uniforms.target_size[1]);
-            uniforms.rounding_type = match self.project.background.rounding_type {
-                CornerStyle::Rounded => 0.0,
-                CornerStyle::Squircle => 1.0,
-            };
-            uniforms.shadow = self.project.background.shadow;
-            let shadow = self.project.background.advanced_shadow.as_ref();
-            uniforms.shadow_size = shadow.map_or(50.0, |value| value.size);
-            uniforms.shadow_opacity = shadow.map_or(18.0, |value| value.opacity);
-            uniforms.shadow_blur = shadow.map_or(50.0, |value| value.blur);
-            if let Some(border) = self.project.background.border.as_ref() {
-                uniforms.border_enabled = if border.enabled { 1.0 } else { 0.0 };
-                uniforms.border_width = border.width;
-                uniforms.border_color = [
-                    border.color[0] as f32 / 255.0,
-                    border.color[1] as f32 / 255.0,
-                    border.color[2] as f32 / 255.0,
-                    border.opacity / 100.0,
-                ];
+        let (shared, surface, surface_config) =
+            present::create_device(&canvas, prefer_webgpu).await?;
+        shared.device.on_uncaptured_error(Box::new(|error| {
+            web_sys::console::error_1(&JsValue::from_str(&format!(
+                "Cap renderer GPU error: {error}"
+            )));
+        }));
+        let backend = format!("{:?}", shared.adapter.get_info().backend);
+        trace_renderer(&format!("backend {backend}"));
+        let options = RenderOptions {
+            screen_size: XY::new(screen_width, screen_height),
+            camera_size: (camera_width > 0 && camera_height > 0)
+                .then(|| XY::new(camera_width, camera_height)),
+            preserve_screen_alpha: false,
+        };
+        let constants = Box::new(RenderVideoConstants::from_shared_device(
+            shared,
+            options,
+            studio_meta,
+            recording_meta,
+            Arc::new(Default::default()),
+        ));
+        // SAFETY: `constants` is boxed, never moved out of or replaced, and the
+        // renderer that borrows it is dropped before it (field order).
+        let constants_ref: &'static RenderVideoConstants =
+            unsafe { &*(constants.as_ref() as *const RenderVideoConstants) };
+        trace_renderer("creating layers");
+        // Browser frames arrive as RGBA, so the native YUV compute converters
+        // are never used; WebGL2 has no compute stage to build them with.
+        constants
+            .device
+            .push_error_scope(wgpu::ErrorFilter::Validation);
+        let layers = RendererLayers::new(&constants.device, &constants.queue);
+        if let Some(error) = constants.device.pop_error_scope().await {
+            let message = error.to_string();
+            if !message.contains("Converter") {
+                web_sys::console::error_1(&JsValue::from_str(&format!(
+                    "Cap renderer GPU error: {message}"
+                )));
             }
         }
-        let grade = ColorGradeUniformParams::from_config(
-            if camera {
-                &self.project.color_correction.camera
-            } else {
-                &self.project.color_correction.screen
-            },
-            frame_number,
-            false,
+        let presenter = SurfacePresenter::new(&constants.device, surface, surface_config);
+        presenter.configure(&constants.device);
+        trace_renderer("renderer ready");
+        Ok(Self {
+            frame_renderer: FrameRenderer::new(constants_ref),
+            layers,
+            presenter,
+            zoom_cache: Vec::new(),
+            cursor_cache: Vec::new(),
+            project: screen_recording_defaults::default_screen_recording_project_config(),
+            project_revision: 0,
+            cursors: (0..segment_count)
+                .map(|_| Arc::new(CursorEvents::default()))
+                .collect(),
+            backend,
+            last_layout: None,
+            constants,
+        })
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn backend(&self) -> String {
+        self.backend.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn max_texture_dimension(&self) -> u32 {
+        self.constants.device.limits().max_texture_dimension_2d
+    }
+
+    pub fn set_project(&mut self, config_json: &str) -> Result<(), JsValue> {
+        self.project = serde_json::from_str(config_json).map_err(js_error)?;
+        self.project_revision += 1;
+        self.zoom_cache.clear();
+        self.cursor_cache.clear();
+        Ok(())
+    }
+
+    pub fn set_cursor(&mut self, recording_clip: u32, cursor_json: &str) -> Result<(), JsValue> {
+        let cursor: CursorEvents = serde_json::from_str(cursor_json).map_err(js_error)?;
+        let slot = self
+            .cursors
+            .get_mut(recording_clip as usize)
+            .ok_or_else(|| js_error("Editor recording clip is unavailable"))?;
+        *slot = Arc::new(cursor);
+        self.zoom_cache.clear();
+        self.cursor_cache.clear();
+        Ok(())
+    }
+
+    /// Output size the next frame will have for a preview box.
+    pub fn output_size(&self, resolution_width: u32, resolution_height: u32) -> Vec<u32> {
+        let (width, height) = ProjectUniforms::get_output_size(
+            &self.constants.options,
+            &self.project,
+            XY::new(resolution_width.max(2), resolution_height.max(2)),
         );
-        uniforms.color_adjust_a = grade.color_adjust_a;
-        uniforms.color_adjust_b = grade.color_adjust_b;
-        uniforms.grain_params = grade.grain_params;
-        Ok(bytemuck::bytes_of(&uniforms).to_vec())
+        vec![width.max(2), height.max(2)]
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn render(
+        &mut self,
+        frame_number: u32,
+        fps: u32,
+        resolution_width: u32,
+        resolution_height: u32,
+        recording_clip: u32,
+        segment_time: f64,
+        screen: JsValue,
+        screen_color_fix: bool,
+        camera: JsValue,
+        camera_color_fix: bool,
+    ) -> Result<Vec<f64>, JsValue> {
+        self.render_frame(
+            frame_number,
+            fps,
+            XY::new(resolution_width, resolution_height),
+            TrackFrames {
+                recording_clip,
+                segment_time: segment_time as f32,
+                screen,
+                screen_color_fix,
+                camera,
+                camera_color_fix,
+            },
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_transition(
+        &mut self,
+        frame_number: u32,
+        fps: u32,
+        resolution_width: u32,
+        resolution_height: u32,
+        outgoing_clip: u32,
+        outgoing_time: f64,
+        outgoing_screen: JsValue,
+        outgoing_screen_color_fix: bool,
+        outgoing_camera: JsValue,
+        outgoing_camera_color_fix: bool,
+        incoming_clip: u32,
+        incoming_time: f64,
+        incoming_screen: JsValue,
+        incoming_screen_color_fix: bool,
+        incoming_camera: JsValue,
+        incoming_camera_color_fix: bool,
+        kind: u32,
+        progress: f64,
+    ) -> Result<Vec<f64>, JsValue> {
+        self.render_frame(
+            frame_number,
+            fps,
+            XY::new(resolution_width, resolution_height),
+            TrackFrames {
+                recording_clip: incoming_clip,
+                segment_time: incoming_time as f32,
+                screen: incoming_screen,
+                screen_color_fix: incoming_screen_color_fix,
+                camera: incoming_camera,
+                camera_color_fix: incoming_camera_color_fix,
+            },
+            Some((
+                TrackFrames {
+                    recording_clip: outgoing_clip,
+                    segment_time: outgoing_time as f32,
+                    screen: outgoing_screen,
+                    screen_color_fix: outgoing_screen_color_fix,
+                    camera: outgoing_camera,
+                    camera_color_fix: outgoing_camera_color_fix,
+                },
+                if kind == 1 {
+                    ClipTransitionType::FadeThroughBlack
+                } else {
+                    ClipTransitionType::CrossFade
+                },
+                progress.clamp(0.0, 1.0) as f32,
+            )),
+        )
+    }
+
+    /// Presents the last rendered frame again, so a canvas snapshot taken in
+    /// the same task sees it.
+    pub fn redraw_last(&mut self) -> bool {
+        self.presenter
+            .redraw(&self.constants.device, &self.constants.queue)
+    }
+
+    pub async fn snapshot_rgba(&mut self) -> Result<Vec<u8>, JsValue> {
+        self.presenter
+            .snapshot_rgba(&self.constants.device, &self.constants.queue)
+            .await
+    }
+
+    /// `[display x0, y0, x1, y1, camera x0, y0, x1, y1, output width, height]`
+    /// of the last frame; camera entries are NaN when it is hidden.
+    pub fn last_layout(&self) -> Vec<f64> {
+        self.last_layout
+            .map(|layout| layout.to_vec())
+            .unwrap_or_default()
+    }
+}
+
+impl BrowserStudioRenderer {
+    fn segment_frames(
+        &self,
+        frames: &TrackFrames,
+    ) -> Result<(DecodedSegmentFrames, Arc<CursorEvents>), JsValue> {
+        let max_dimension = self.constants.device.limits().max_texture_dimension_2d;
+        let clip = frames.recording_clip as usize;
+        let cursor = self
+            .cursors
+            .get(clip)
+            .cloned()
+            .ok_or_else(|| js_error("Editor recording clip is unavailable"))?;
+        let timing = segment_video_timing(&self.constants.meta, clip);
+        let offsets = self
+            .project
+            .clips
+            .iter()
+            .find(|config| config.index == frames.recording_clip)
+            .map(|config| config.offsets)
+            .unwrap_or_default();
+        let (_, recording_time) = segment_frame_times(
+            frames.segment_time,
+            timing.latest_start_time.unwrap_or(0.0),
+            offsets,
+        );
+        let screen_frame = decoded_frame(&frames.screen, frames.screen_color_fix, max_dimension)?
+            .ok_or_else(|| js_error("Editor display video is unavailable"))?;
+        let camera_frame = if self.project.requires_camera() {
+            decoded_frame(&frames.camera, frames.camera_color_fix, max_dimension)?
+        } else {
+            None
+        };
+        Ok((
+            DecodedSegmentFrames {
+                screen_size: self.constants.options.screen_size,
+                screen_frame: Some(screen_frame),
+                camera_frame,
+                segment_time: frames.segment_time,
+                recording_time,
+                segment_has_camera: timing.camera_fps.is_some(),
+            },
+            cursor,
+        ))
+    }
+
+    fn zoom_timeline(
+        &mut self,
+        recording_clip: u32,
+        outgoing: bool,
+        cursor: &CursorEvents,
+        total_duration: f64,
+        until_secs: f32,
+    ) -> usize {
+        let revision = self.project_revision;
+        let index = match self.zoom_cache.iter().position(|entry| {
+            entry.project_revision == revision
+                && entry.recording_clip == recording_clip
+                && entry.outgoing == outgoing
+        }) {
+            Some(index) => index,
+            None => {
+                let zoom = if outgoing {
+                    ZoomTransformTimeline::from_project_for_outgoing_clip(
+                        &self.project,
+                        cursor,
+                        total_duration,
+                        self.constants.options.screen_size,
+                        recording_clip,
+                    )
+                } else {
+                    ZoomTransformTimeline::from_project_for_clip(
+                        &self.project,
+                        cursor,
+                        total_duration,
+                        self.constants.options.screen_size,
+                        recording_clip,
+                    )
+                };
+                if self.zoom_cache.len() >= 4 {
+                    self.zoom_cache.remove(0);
+                }
+                self.zoom_cache.push(ClipTimelines {
+                    project_revision: revision,
+                    recording_clip,
+                    outgoing,
+                    zoom,
+                });
+                self.zoom_cache.len() - 1
+            }
+        };
+        self.zoom_cache[index]
+            .zoom
+            .ensure_precomputed_until(until_secs);
+        index
+    }
+
+    fn cursor_timeline(
+        &mut self,
+        recording_clip: u32,
+        cursor: &Arc<CursorEvents>,
+    ) -> Option<Arc<PrecomputedCursorTimeline>> {
+        if cursor.moves.is_empty() {
+            return None;
+        }
+        let project = &self.project;
+        if project.cursor.raw
+            && !project.timeline.as_ref().is_some_and(|timeline| {
+                timeline.style_segments.iter().any(|style| {
+                    style.is_active_at(style.start)
+                        && style
+                            .overrides
+                            .cursor
+                            .as_ref()
+                            .is_some_and(|cursor| !cursor.raw)
+                })
+            })
+        {
+            return None;
+        }
+        let revision = self.project_revision;
+        if let Some(entry) = self.cursor_cache.iter().find(|entry| {
+            entry.project_revision == revision && entry.recording_clip == recording_clip
+        }) {
+            return Some(entry.timeline.clone());
+        }
+        let smoothing = cap_rendering::spring_mass_damper::SpringMassDamperSimulationConfig {
+            tension: project.cursor.tension,
+            mass: project.cursor.mass,
+            friction: project.cursor.friction,
+        };
+        let timeline = Arc::new(PrecomputedCursorTimeline::new(
+            cursor,
+            (!project.cursor.raw).then_some(smoothing),
+            Some(project.cursor.click_spring_config()),
+        ));
+        if self.cursor_cache.len() >= 2 {
+            self.cursor_cache.remove(0);
+        }
+        self.cursor_cache.push(CursorTimelineEntry {
+            project_revision: revision,
+            recording_clip,
+            timeline: timeline.clone(),
+        });
+        Some(timeline)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn uniforms(
+        &mut self,
+        frame_number: u32,
+        fps: u32,
+        resolution_base: XY<u32>,
+        recording_clip: u32,
+        outgoing: bool,
+        cursor: &Arc<CursorEvents>,
+        segment_frames: &DecodedSegmentFrames,
+        total_duration: f64,
+    ) -> ProjectUniforms {
+        let zoom_index = self.zoom_timeline(
+            recording_clip,
+            outgoing,
+            cursor,
+            total_duration,
+            (frame_number as f32 + 1.0) / fps as f32,
+        );
+        let cursor_timeline = self.cursor_timeline(recording_clip, cursor);
+        let zoom = &self.zoom_cache[zoom_index].zoom;
+        match cursor_timeline {
+            Some(cursor_timeline) => ProjectUniforms::new_with_precomputed_cursor(
+                &self.constants,
+                &self.project,
+                frame_number,
+                fps,
+                resolution_base,
+                cursor,
+                segment_frames,
+                total_duration,
+                zoom,
+                &cursor_timeline,
+            ),
+            None => ProjectUniforms::new(
+                &self.constants,
+                &self.project,
+                frame_number,
+                fps,
+                resolution_base,
+                cursor,
+                segment_frames,
+                total_duration,
+                zoom,
+            ),
+        }
+    }
+
+    fn render_frame(
+        &mut self,
+        frame_number: u32,
+        fps: u32,
+        resolution_base: XY<u32>,
+        incoming: TrackFrames,
+        outgoing: Option<(TrackFrames, ClipTransitionType, f32)>,
+    ) -> Result<Vec<f64>, JsValue> {
+        if fps == 0 || resolution_base.x < 2 || resolution_base.y < 2 {
+            return Err(js_error("Editor frame request is invalid"));
+        }
+        let total_duration = self
+            .project
+            .timeline
+            .as_ref()
+            .map(|timeline| timeline.duration())
+            .unwrap_or(0.0);
+        let (incoming_frames, incoming_cursor) = self.segment_frames(&incoming)?;
+        let incoming_uniforms = self.uniforms(
+            frame_number,
+            fps,
+            resolution_base,
+            incoming.recording_clip,
+            false,
+            &incoming_cursor,
+            &incoming_frames,
+            total_duration,
+        );
+        let layout = incoming_uniforms.frame_layout();
+        let outgoing = match outgoing {
+            Some((outgoing, kind, progress)) => {
+                let (frames, cursor) = self.segment_frames(&outgoing)?;
+                let uniforms = self.uniforms(
+                    frame_number,
+                    fps,
+                    resolution_base,
+                    outgoing.recording_clip,
+                    true,
+                    &cursor,
+                    &frames,
+                    total_duration,
+                );
+                Some((frames, uniforms, cursor, kind, progress))
+            }
+            None => None,
+        };
+        let (width, height) = incoming_uniforms.output_size;
+        self.presenter
+            .resize(&self.constants.device, width, height)?;
+        let presenter = &mut self.presenter;
+        let device = &self.constants.device;
+        let present = |encoder: &mut wgpu::CommandEncoder,
+                       texture: &wgpu::Texture,
+                       view: &wgpu::TextureView| {
+            presenter.present(device, encoder, texture, view);
+        };
+        let result = match outgoing {
+            None => complete_now(self.frame_renderer.render_and_present(
+                incoming_frames,
+                incoming_uniforms,
+                &incoming_cursor,
+                true,
+                &mut self.layers,
+                present,
+            ))?,
+            Some((outgoing_frames, outgoing_uniforms, outgoing_cursor, kind, progress)) => {
+                complete_now(self.frame_renderer.render_transition_and_present(
+                    TransitionRenderInput {
+                        segment_frames: outgoing_frames,
+                        uniforms: outgoing_uniforms,
+                        cursor: &outgoing_cursor,
+                        render_display: true,
+                    },
+                    TransitionRenderInput {
+                        segment_frames: incoming_frames,
+                        uniforms: incoming_uniforms,
+                        cursor: &incoming_cursor,
+                        render_display: true,
+                    },
+                    kind,
+                    progress,
+                    &mut self.layers,
+                    present,
+                ))?
+            }
+        };
+        self.presenter.finish();
+        result.map_err(js_error)?;
+        let camera = layout.camera.unwrap_or([f32::NAN; 4]);
+        let values = [
+            f64::from(layout.display[0]),
+            f64::from(layout.display[1]),
+            f64::from(layout.display[2]),
+            f64::from(layout.display[3]),
+            f64::from(camera[0]),
+            f64::from(camera[1]),
+            f64::from(camera[2]),
+            f64::from(camera[3]),
+            f64::from(layout.output_size[0]),
+            f64::from(layout.output_size[1]),
+        ];
+        self.last_layout = Some(values);
+        Ok(values.to_vec())
+    }
+}
+
+#[wasm_bindgen]
+pub fn webgl2_available(canvas: HtmlCanvasElement) -> bool {
+    canvas
+        .get_context("webgl2")
+        .ok()
+        .flatten()
+        .and_then(|context| context.dyn_into::<WebGl2RenderingContext>().ok())
+        .is_some()
+}
+
+pub(crate) fn shared_device(
+    instance: wgpu::Instance,
+    adapter: wgpu::Adapter,
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+) -> SharedWgpuDevice {
+    let is_software_adapter = cap_rendering::is_software_wgpu_adapter(&adapter.get_info());
+    SharedWgpuDevice {
+        instance,
+        adapter,
+        device,
+        queue,
+        is_software_adapter,
     }
 }

@@ -9,8 +9,10 @@ crate-type = ["cdylib", "rlib"]
 [workspace]
 
 [dependencies]
-bytemuck = { version = "1", features = ["derive"] }
+console_error_panic_hook = "0.1"
+futures = { version = "0.3", default-features = false, features = ["std"] }
 cap-project = { path = "../../../crates/project" }
+cap-rendering = { path = "../../../crates/rendering" }
 futures-channel = "0.3"
 js-sys = "=0.3.80"
 serde_json = "1"

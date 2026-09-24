@@ -1,33 +1,31 @@
-import type { BrowserGpuRenderer } from "../renderer/pkg/cap_editor_browser_renderer.js";
+import type { BrowserStudioRenderer } from "../renderer/pkg/cap_editor_browser_renderer.js";
 import { browserFrameLayout } from "./browser-frame-layout";
 import { browserWebGpuPresentationWorks } from "./browser-gpu-probe";
 import { BrowserImageDecoder } from "./browser-image-decoder";
 import { loadBrowserRenderer } from "./browser-renderer";
+import { ensureBrowserRendererFonts } from "./browser-renderer-fonts";
 import { resolveEditorAssetUrl } from "./editor-asset-url";
 
 export type BrowserVideoLayer = {
 	source: HTMLVideoElement | ImageBitmap;
-	uniforms: Uint8Array;
+	colorFix: boolean;
 	mediaTime: number;
 	release: () => void;
 };
 
+export type BrowserClipFrame = {
+	recordingClip: number;
+	segmentTime: number;
+	screen: BrowserVideoLayer;
+	camera: BrowserVideoLayer | null;
+};
+
 export type BrowserComposition =
-	| {
-			kind: "single";
-			screen: BrowserVideoLayer;
-			camera: BrowserVideoLayer | null;
-	  }
+	| { kind: "single"; frame: BrowserClipFrame }
 	| {
 			kind: "transition";
-			outgoing: {
-				screen: BrowserVideoLayer;
-				camera: BrowserVideoLayer | null;
-			};
-			incoming: {
-				screen: BrowserVideoLayer;
-				camera: BrowserVideoLayer | null;
-			};
+			outgoing: BrowserClipFrame;
+			incoming: BrowserClipFrame;
 			type: "cross-fade" | "fade-through-black";
 			progress: number;
 	  };
@@ -39,35 +37,14 @@ export type BrowserRenderedFrame = {
 	layout: ReturnType<typeof browserFrameLayout>;
 };
 
-function backgroundImagePath(config: unknown) {
-	if (
-		typeof config !== "object" ||
-		config === null ||
-		!("background" in config)
-	) {
-		return null;
-	}
-	const background = config.background;
-	if (
-		typeof background !== "object" ||
-		background === null ||
-		!("source" in background)
-	) {
-		return null;
-	}
-	const source = background.source;
-	if (
-		typeof source !== "object" ||
-		source === null ||
-		!("type" in source) ||
-		(source.type !== "image" && source.type !== "wallpaper") ||
-		!("path" in source) ||
-		typeof source.path !== "string"
-	) {
-		return null;
-	}
-	return source.path || null;
-}
+export type BrowserStudioSetup = {
+	recordingMeta: unknown;
+	screenWidth: number;
+	screenHeight: number;
+	cameraWidth: number;
+	cameraHeight: number;
+	cursors: Array<string | null>;
+};
 
 type OverlayImageSegment = {
 	path: string;
@@ -76,25 +53,31 @@ type OverlayImageSegment = {
 	enabled: boolean;
 };
 
-function overlayImageSegments(config: unknown): OverlayImageSegment[] {
+function record(value: unknown): Record<string, unknown> | null {
+	return typeof value === "object" && value !== null && !Array.isArray(value)
+		? (value as Record<string, unknown>)
+		: null;
+}
+
+function backgroundImagePath(config: unknown) {
+	const source = record(record(record(config)?.background)?.source);
 	if (
-		typeof config !== "object" ||
-		config === null ||
-		!("timeline" in config) ||
-		typeof config.timeline !== "object" ||
-		config.timeline === null ||
-		!("imageSegments" in config.timeline) ||
-		!Array.isArray(config.timeline.imageSegments)
+		!source ||
+		(source.type !== "image" && source.type !== "wallpaper") ||
+		typeof source.path !== "string"
 	) {
-		return [];
+		return null;
 	}
-	return config.timeline.imageSegments.flatMap((segment: unknown) => {
+	return source.path || null;
+}
+
+function overlayImageSegments(config: unknown): OverlayImageSegment[] {
+	const segments = record(record(config)?.timeline)?.imageSegments;
+	if (!Array.isArray(segments)) return [];
+	return segments.flatMap((value: unknown) => {
+		const segment = record(value);
 		if (
-			typeof segment !== "object" ||
-			segment === null ||
-			!("path" in segment) ||
-			!("start" in segment) ||
-			!("end" in segment) ||
+			!segment ||
 			typeof segment.path !== "string" ||
 			!segment.path ||
 			typeof segment.start !== "number" ||
@@ -110,15 +93,41 @@ function overlayImageSegments(config: unknown): OverlayImageSegment[] {
 				path: segment.path,
 				start: segment.start,
 				end: segment.end,
-				enabled: !("enabled" in segment) || segment.enabled !== false,
+				enabled: segment.enabled !== false,
 			},
 		];
 	});
 }
 
+type TimedSegment = { start: number; end: number };
+
+function timedSegments(value: unknown): TimedSegment[] {
+	if (!Array.isArray(value)) return [];
+	return value.flatMap((entry: unknown) => {
+		const segment = record(entry);
+		return segment &&
+			typeof segment.start === "number" &&
+			typeof segment.end === "number"
+			? [{ start: segment.start, end: segment.end }]
+			: [];
+	});
+}
+
+/// Time ranges that draw text (text and title cards, captions, keystrokes).
+function textRanges(config: unknown): TimedSegment[] {
+	const project = record(config);
+	const timeline = record(project?.timeline);
+	return [
+		...timedSegments(timeline?.textSegments),
+		...timedSegments(timeline?.captionSegments),
+		...timedSegments(timeline?.keyboardSegments),
+		...timedSegments(record(project?.captions)?.segments),
+	];
+}
+
 export class BrowserLocalCanvas {
 	private canvas: HTMLCanvasElement | null = null;
-	private renderer: BrowserGpuRenderer | null = null;
+	private renderer: BrowserStudioRenderer | null = null;
 	private readonly mounted: Promise<void>;
 	private resolveMount: (() => void) | null = null;
 	private rejectMount: ((error: Error) => void) | null = null;
@@ -126,17 +135,20 @@ export class BrowserLocalCanvas {
 	private disposed = false;
 	private configQueue: Promise<void> = Promise.resolve();
 	private readonly imageAbort = new AbortController();
-	private readonly imageCache = new Map<string, ImageBitmap>();
-	private readonly overlayDimensions = new Map<string, number>();
+	private readonly loadedAssets = new Map<string, Promise<void>>();
 	private overlaySegments: OverlayImageSegment[] = [];
-	private overlayRevision = 0;
 	private imageDecoder: BrowserImageDecoder | null = null;
-	private cameraHidden = false;
+	private textRanges: TimedSegment[] = [];
+	private fonts: Promise<void> | null = null;
+	private fontsReady = false;
+	private lastSize = { width: 0, height: 0 };
 
 	constructor(
+		private readonly setup: BrowserStudioSetup,
 		private width: number,
 		private height: number,
 		private readonly onFrame: (frame: BrowserRenderedFrame) => void,
+		private readonly onInvalidate: () => void = () => undefined,
 	) {
 		this.mounted = new Promise((resolve, reject) => {
 			this.resolveMount = resolve;
@@ -156,15 +168,24 @@ export class BrowserLocalCanvas {
 		canvas.height = this.height;
 		void Promise.all([loadBrowserRenderer(), browserWebGpuPresentationWorks()])
 			.then(([module, webgpuReady]) =>
-				webgpuReady
-					? module.BrowserGpuRenderer.create(canvas)
-					: module.BrowserGpuRenderer.createWebGl(canvas),
+				module.BrowserStudioRenderer.create(
+					canvas,
+					webgpuReady,
+					JSON.stringify(this.setup.recordingMeta),
+					this.setup.screenWidth,
+					this.setup.screenHeight,
+					this.setup.cameraWidth,
+					this.setup.cameraHeight,
+				),
 			)
 			.then((renderer) => {
 				if (this.disposed) {
 					renderer.free();
 					return;
 				}
+				this.setup.cursors.forEach((cursor, index) => {
+					if (cursor) renderer.set_cursor(index, cursor);
+				});
 				this.renderer = renderer;
 				this.resolveMount?.();
 				this.resolveMount = null;
@@ -187,15 +208,12 @@ export class BrowserLocalCanvas {
 		if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height)) {
 			throw new Error("Editor canvas size is invalid");
 		}
-		if (width < 1 || height < 1) {
+		if (width < 2 || height < 2) {
 			throw new Error("Editor canvas size is invalid");
 		}
 		this.width = width;
 		this.height = height;
-		if (this.canvas) {
-			this.overlayRevision++;
-			this.rendered = false;
-		}
+		if (this.canvas) this.rendered = false;
 	}
 
 	hasRenderedFrame() {
@@ -206,108 +224,92 @@ export class BrowserLocalCanvas {
 		this.rendered = false;
 	}
 
-	private async backgroundImage(url: string) {
-		const cached = this.imageCache.get(url);
-		if (cached) {
-			this.imageCache.delete(url);
-			this.imageCache.set(url, cached);
-			return cached;
-		}
-		const response = await fetch(url, {
-			cache: "no-store",
-			credentials: "same-origin",
-			signal: this.imageAbort.signal,
-		});
-		if (!response.ok) throw new Error("Editor background image could not load");
-		const bytes = await response.arrayBuffer();
-		if (bytes.byteLength < 1 || bytes.byteLength > 64 * 1024 * 1024) {
-			throw new Error("Editor background image is invalid");
-		}
-		if (!this.imageDecoder) this.imageDecoder = new BrowserImageDecoder();
-		const decoder = this.imageDecoder;
-		const image = await decoder.decode(bytes);
-		const bitmap = await createImageBitmap(
-			new ImageData(
-				new Uint8ClampedArray(image.pixels),
-				image.width,
-				image.height,
-			),
-			{ premultiplyAlpha: "none", colorSpaceConversion: "none" },
-		);
-		if (this.disposed) {
-			bitmap.close();
+	/// Output size of the next frame for a preview box, per the native renderer.
+	async outputSize(width: number, height: number) {
+		await this.mounted;
+		await this.configQueue;
+		if (this.disposed || !this.renderer) {
 			throw new Error("Editor canvas is closed");
 		}
-		this.imageCache.set(url, bitmap);
-		if (this.imageCache.size > 8) {
-			const oldest = this.imageCache.keys().next().value;
-			if (oldest) {
-				this.imageCache.get(oldest)?.close();
-				this.imageCache.delete(oldest);
-			}
-		}
-		return bitmap;
+		const size = this.renderer.output_size(width, height);
+		return [size[0] ?? width, size[1] ?? height] as const;
 	}
 
-	private async ensureOverlayImages(time: number) {
-		if (this.overlaySegments.length === 0) return;
-		const renderer = this.renderer;
-		if (!renderer) throw new Error("Editor canvas is closed");
-		const active = new Set(
-			this.overlaySegments
-				.filter(
-					(segment) =>
-						segment.enabled && time >= segment.start && time < segment.end,
-				)
-				.map((segment) => segment.path),
-		);
-		const memoryDimension = Math.floor(
-			Math.sqrt((256 * 1024 * 1024) / Math.max(active.size, 1) / (4 * (4 / 3))),
-		);
-		const dimension = Math.min(
-			4096,
-			Math.max(256, Math.min(this.width * 2, this.height * 2, memoryDimension)),
-		);
-		for (const path of active) {
-			if (
-				renderer.has_overlay_image(path) &&
-				(this.overlayDimensions.get(path) ?? 0) >= dimension
-			) {
-				continue;
-			}
+	private decoder() {
+		if (!this.imageDecoder) this.imageDecoder = new BrowserImageDecoder();
+		return this.imageDecoder;
+	}
+
+	private loadImageAsset(path: string) {
+		const existing = this.loadedAssets.get(path);
+		if (existing) return existing;
+		const load = (async () => {
+			const module = await loadBrowserRenderer();
+			if (module.has_asset(path)) return;
 			const url = resolveEditorAssetUrl(path);
-			if (!url) throw new Error("Editor image overlay is unavailable");
-			const revision = this.overlayRevision;
+			if (!url) throw new Error("Editor image is unavailable");
 			const response = await fetch(url, {
-				cache: "no-store",
+				cache: "default",
 				credentials: "same-origin",
 				signal: this.imageAbort.signal,
 			});
-			if (!response.ok) throw new Error("Editor image overlay could not load");
+			if (!response.ok) throw new Error("Editor image could not load");
 			const bytes = await response.arrayBuffer();
 			if (bytes.byteLength < 1 || bytes.byteLength > 64 * 1024 * 1024) {
-				throw new Error("Editor image overlay is invalid");
+				throw new Error("Editor image is invalid");
 			}
-			if (!this.imageDecoder) this.imageDecoder = new BrowserImageDecoder();
-			const image = await this.imageDecoder.decodeOverlay(bytes, dimension);
-			if (this.disposed || !this.renderer)
-				throw new Error("Editor canvas is closed");
-			if (
-				revision !== this.overlayRevision ||
-				!this.overlaySegments.some((segment) => segment.path === path)
-			) {
-				continue;
-			}
-			const first = image.levels[0];
-			if (!first) throw new Error("Editor image overlay is invalid");
-			this.renderer.set_overlay_image(
+			const image = await this.decoder().decode(bytes);
+			if (this.disposed) throw new Error("Editor canvas is closed");
+			module.register_decoded_asset(
 				path,
-				first.width,
-				first.height,
-				image.levels.map((level) => new Uint8Array(level.pixels)),
+				image.width,
+				image.height,
+				new Uint8Array(image.pixels),
 			);
-			this.overlayDimensions.set(path, dimension);
-		}
+		})();
+		this.loadedAssets.set(path, load);
+		load.catch(() => {
+			if (this.loadedAssets.get(path) === load) this.loadedAssets.delete(path);
+		});
+		return load;
+	}
+
+	/// Fonts download in the background; frames without visible text render
+	/// immediately and the preview redraws once the faces are registered.
+	private loadFonts() {
+		if (this.fonts) return this.fonts;
+		const fonts = ensureBrowserRendererFonts().then(() => {
+			if (this.disposed) return;
+			this.fontsReady = true;
+			this.rendered = false;
+			this.onInvalidate();
+		});
+		this.fonts = fonts;
+		fonts.catch(() => {
+			if (this.fonts === fonts) this.fonts = null;
+		});
+		return fonts;
+	}
+
+	private async ensureFonts(time: number) {
+		if (this.fontsReady) return;
+		if (
+			!this.textRanges.some(
+				(range) => time >= range.start - 0.1 && time < range.end,
+			)
+		)
+			return;
+		await this.loadFonts().catch(() => undefined);
+	}
+
+	private async ensureOverlayImages(time: number) {
+		const active = this.overlaySegments.filter(
+			(segment) =>
+				segment.enabled && time >= segment.start - 1 && time < segment.end,
+		);
+		await Promise.all(
+			active.map((segment) => this.loadImageAsset(segment.path)),
+		);
 	}
 
 	setProjectConfig(config: unknown) {
@@ -317,30 +319,14 @@ export class BrowserLocalCanvas {
 				throw new Error("Editor canvas is closed");
 			}
 			const path = backgroundImagePath(config);
-			const url = path ? resolveEditorAssetUrl(path) : null;
-			if (path && !url)
-				throw new Error("Editor background image is unavailable");
-			const image = url ? await this.backgroundImage(url) : undefined;
+			if (path) await this.loadImageAsset(path);
+			this.textRanges = textRanges(config);
+			if (this.textRanges.length > 0 && this.rendered) void this.loadFonts();
 			if (this.disposed || !this.renderer) {
 				throw new Error("Editor canvas is closed");
 			}
-			this.renderer.set_background(JSON.stringify(config), image);
-			this.cameraHidden =
-				typeof config === "object" &&
-				config !== null &&
-				"camera" in config &&
-				typeof config.camera === "object" &&
-				config.camera !== null &&
-				"hide" in config.camera &&
-				config.camera.hide === true;
 			this.overlaySegments = overlayImageSegments(config);
-			this.overlayRevision++;
-			const referenced = new Set(
-				this.overlaySegments.map((segment) => segment.path),
-			);
-			for (const path of this.overlayDimensions.keys()) {
-				if (!referenced.has(path)) this.overlayDimensions.delete(path);
-			}
+			this.renderer.set_project(JSON.stringify(config));
 			this.rendered = false;
 		});
 		this.configQueue = update.catch(() => undefined);
@@ -357,53 +343,62 @@ export class BrowserLocalCanvas {
 		if (this.disposed || !this.renderer) {
 			throw new Error("Editor canvas is closed");
 		}
-		this.renderer.set_frame_time(frameNumber, 60);
-		await this.ensureOverlayImages(frameNumber / 60);
-		if (this.disposed || !this.renderer) {
+		await Promise.all([
+			this.ensureOverlayImages(frameNumber / 60),
+			this.ensureFonts(frameNumber / 60),
+		]);
+		const renderer = this.renderer;
+		if (this.disposed || !renderer) {
 			throw new Error("Editor canvas is closed");
 		}
-		if (
-			this.canvas &&
-			(this.canvas.width !== this.width || this.canvas.height !== this.height)
-		) {
-			this.canvas.width = this.width;
-			this.canvas.height = this.height;
-			this.renderer.resize(this.width, this.height);
-		}
-		if (composition.kind === "single") {
-			this.renderer.render(
-				composition.screen.source,
-				composition.screen.uniforms,
-				composition.camera?.source ?? null,
-				composition.camera?.uniforms ?? null,
-			);
-		} else {
-			this.renderer.render_transition(
-				composition.outgoing.screen.source,
-				composition.outgoing.screen.uniforms,
-				composition.outgoing.camera?.source ?? null,
-				composition.outgoing.camera?.uniforms ?? null,
-				composition.incoming.screen.source,
-				composition.incoming.screen.uniforms,
-				composition.incoming.camera?.source ?? null,
-				composition.incoming.camera?.uniforms ?? null,
-				composition.type === "cross-fade" ? 0 : 1,
-				composition.progress,
-			);
-		}
+		const layout =
+			composition.kind === "single"
+				? renderer.render(
+						frameNumber,
+						60,
+						this.width,
+						this.height,
+						composition.frame.recordingClip,
+						composition.frame.segmentTime,
+						composition.frame.screen.source,
+						composition.frame.screen.colorFix,
+						composition.frame.camera?.source ?? null,
+						composition.frame.camera?.colorFix ?? false,
+					)
+				: renderer.render_transition(
+						frameNumber,
+						60,
+						this.width,
+						this.height,
+						composition.outgoing.recordingClip,
+						composition.outgoing.segmentTime,
+						composition.outgoing.screen.source,
+						composition.outgoing.screen.colorFix,
+						composition.outgoing.camera?.source ?? null,
+						composition.outgoing.camera?.colorFix ?? false,
+						composition.incoming.recordingClip,
+						composition.incoming.segmentTime,
+						composition.incoming.screen.source,
+						composition.incoming.screen.colorFix,
+						composition.incoming.camera?.source ?? null,
+						composition.incoming.camera?.colorFix ?? false,
+						composition.type === "cross-fade" ? 0 : 1,
+						composition.progress,
+					);
+		const frameLayout = browserFrameLayout(layout);
+		this.lastSize = {
+			width: frameLayout.output_width,
+			height: frameLayout.output_height,
+		};
 		this.rendered = true;
-		const frame =
-			composition.kind === "single" ? composition : composition.incoming;
+		if (this.textRanges.length > 0 && !this.fontsReady) {
+			void this.loadFonts().catch(() => undefined);
+		}
 		this.onFrame({
-			width: this.width,
-			height: this.height,
+			width: frameLayout.output_width,
+			height: frameLayout.output_height,
 			renderedFrame: { frameNumber, targetTimeNs },
-			layout: browserFrameLayout(
-				frame.screen.uniforms,
-				this.cameraHidden ? null : (frame.camera?.uniforms ?? null),
-				this.width,
-				this.height,
-			),
+			layout: frameLayout,
 		});
 	}
 
@@ -419,11 +414,13 @@ export class BrowserLocalCanvas {
 	drawLatestFrameToCanvas(target: HTMLCanvasElement) {
 		if (!this.rendered || !this.canvas || !this.renderer) return false;
 		if (!this.renderer.redraw_last()) return false;
-		target.width = this.width;
-		target.height = this.height;
+		const { width, height } = this.lastSize;
+		if (width < 1 || height < 1) return false;
+		target.width = width;
+		target.height = height;
 		const context = target.getContext("2d");
 		if (!context) return false;
-		context.drawImage(this.canvas, 0, 0, this.width, this.height);
+		context.drawImage(this.canvas, 0, 0, width, height);
 		return true;
 	}
 
@@ -433,9 +430,7 @@ export class BrowserLocalCanvas {
 		this.imageAbort.abort();
 		this.imageDecoder?.dispose();
 		this.imageDecoder = null;
-		for (const image of this.imageCache.values()) image.close();
-		this.imageCache.clear();
-		this.overlayDimensions.clear();
+		this.loadedAssets.clear();
 		this.overlaySegments = [];
 		this.rejectMount?.(new Error("Editor canvas is closed"));
 		this.resolveMount = null;

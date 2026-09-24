@@ -804,8 +804,7 @@ async function replay(forceWebGl, forceWebGpu = false) {
 						await snapshot(),
 					);
 					const manyOverlayTextures = config.timeline.imageSegments.filter(
-						(segment) =>
-							playback.canvas.renderer.has_overlay_image(segment.path),
+						(segment) => playback.module.has_asset(segment.path),
 					).length;
 					config.timeline = undefined;
 					await playback.setConfig(config);

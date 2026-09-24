@@ -24,6 +24,7 @@ export type BrowserEditorSources = {
 	displayHasAudio: boolean;
 	mic: BrowserAudioTrack | null;
 	systemAudio: BrowserAudioTrack | null;
+	inputEvents: BrowserVideoSource | null;
 	segments: BrowserSourceSegment[];
 	expiresAt: number;
 };
@@ -62,6 +63,34 @@ function signedVideo(value: unknown, expiresAt: number) {
 		url.hash
 	) {
 		return null;
+	}
+	return { url: url.href, expiresAt } satisfies BrowserVideoSource;
+}
+
+function signedInputEvents(value: unknown, expiresAt: number) {
+	if (value === undefined || value === null) return null;
+	const source = record(value);
+	if (
+		!source ||
+		source.contentType !== "application/x-ndjson" ||
+		typeof source.url !== "string" ||
+		source.url.length > 8192
+	) {
+		throw new Error("Editor input events are invalid");
+	}
+	let url: URL;
+	try {
+		url = new URL(source.url);
+	} catch {
+		throw new Error("Editor input events URL is invalid");
+	}
+	if (
+		(url.protocol !== "https:" && url.protocol !== "http:") ||
+		url.username ||
+		url.password ||
+		url.hash
+	) {
+		throw new Error("Editor input events URL is invalid");
 	}
 	return { url: url.href, expiresAt } satisfies BrowserVideoSource;
 }
@@ -276,6 +305,7 @@ export function parseBrowserEditorSources(
 		displayHasAudio: sources.displayHasAudio === true,
 		mic,
 		systemAudio,
+		inputEvents: signedInputEvents(sources.inputEvents, expiresAt),
 		segments,
 		expiresAt,
 	};
@@ -311,44 +341,76 @@ function waitWithAbort<T>(
 	});
 }
 
-const sharedSourceRequests = new Map<
-	string,
-	{ promise: Promise<BrowserEditorSources>; expiresAt: number }
->();
+type SharedSourceRequest = {
+	promise: Promise<BrowserEditorSources>;
+	expiresAt: number;
+	prefetched: boolean;
+	settled: boolean;
+};
 
-function sharedSourceRequest(videoId: string) {
+const sharedSourceRequests = new Map<string, SharedSourceRequest>();
+const PREFETCH_TTL_MS = 60_000;
+const SHARED_TTL_MS = 3000;
+
+function sharedSourceRequest(videoId: string, prefetch = false) {
 	const cached = sharedSourceRequests.get(videoId);
-	if (cached && cached.expiresAt > Date.now()) return cached.promise;
-	const request = fetch(
-		`/api/editor/videos/${encodeURIComponent(videoId)}/bootstrap`,
-		{ credentials: "same-origin", cache: "no-store" },
-	)
-		.then(async (response) => {
-			if (!response.ok)
-				throw new Error("Editor browser sources are unavailable");
-			const body: unknown = await response.json();
-			return parseBrowserEditorSources(body, videoId);
-		})
-		.then(
-			(value) => {
-				const entry = sharedSourceRequests.get(videoId);
-				if (entry?.promise === request) {
-					entry.expiresAt = Date.now() + 3000;
-					globalThis.setTimeout(() => {
-						if (sharedSourceRequests.get(videoId)?.promise === request)
-							sharedSourceRequests.delete(videoId);
-					}, 3000);
-				}
-				return value;
-			},
-			(error: unknown) => {
-				if (sharedSourceRequests.get(videoId)?.promise === request)
-					sharedSourceRequests.delete(videoId);
-				throw error;
-			},
-		);
-	sharedSourceRequests.set(videoId, { promise: request, expiresAt: Infinity });
-	return request;
+	if (cached && cached.expiresAt > Date.now()) {
+		if (!prefetch && cached.prefetched) {
+			cached.prefetched = false;
+			if (cached.settled) {
+				cached.expiresAt = Math.min(
+					cached.expiresAt,
+					Date.now() + SHARED_TTL_MS,
+				);
+			}
+		}
+		return cached.promise;
+	}
+	const entry: SharedSourceRequest = {
+		promise: fetch(
+			`/api/editor/videos/${encodeURIComponent(videoId)}/bootstrap`,
+			{ credentials: "same-origin", cache: "no-store" },
+		)
+			.then(async (response) => {
+				if (!response.ok)
+					throw new Error("Editor browser sources are unavailable");
+				const body: unknown = await response.json();
+				return parseBrowserEditorSources(body, videoId);
+			})
+			.then(
+				(value) => {
+					if (sharedSourceRequests.get(videoId) === entry) {
+						entry.settled = true;
+						const ttl = entry.prefetched ? PREFETCH_TTL_MS : SHARED_TTL_MS;
+						entry.expiresAt = Date.now() + ttl;
+						globalThis.setTimeout(() => {
+							if (
+								sharedSourceRequests.get(videoId) === entry &&
+								entry.expiresAt <= Date.now()
+							)
+								sharedSourceRequests.delete(videoId);
+						}, ttl);
+					}
+					return value;
+				},
+				(error: unknown) => {
+					if (sharedSourceRequests.get(videoId) === entry)
+						sharedSourceRequests.delete(videoId);
+					throw error;
+				},
+			),
+		expiresAt: Number.POSITIVE_INFINITY,
+		prefetched: prefetch,
+		settled: false,
+	};
+	sharedSourceRequests.set(videoId, entry);
+	return entry.promise;
+}
+
+/// Starts loading the recording's sources while the editor UI is still
+/// booting; the first catalog snapshot picks the request up.
+export function prefetchBrowserEditorSources(videoId: string) {
+	return sharedSourceRequest(videoId, true);
 }
 
 export class BrowserEditorSourceCatalog {
