@@ -11,6 +11,7 @@ import {
 	createMediaServerCapacityError,
 	isMediaServerCapacityError,
 } from "@/lib/media-server-backpressure";
+import { createMediaServerWebhookUrl } from "@/lib/media-server-webhook-url";
 import { transcribeVideo } from "@/lib/transcribe";
 import { decodeStorageVideo } from "@/lib/video-storage";
 import { runWorkflowPromise } from "@/lib/workflow-runtime";
@@ -269,8 +270,6 @@ async function processVideoOnMediaServer(
 	"use step";
 
 	const mediaServerUrl = serverEnv().MEDIA_SERVER_URL;
-	const webhookBaseUrl =
-		serverEnv().MEDIA_SERVER_WEBHOOK_URL || serverEnv().WEB_URL;
 	if (!mediaServerUrl) {
 		throw new FatalError("MEDIA_SERVER_URL is not configured");
 	}
@@ -330,7 +329,14 @@ async function processVideoOnMediaServer(
 		)
 		.pipe(runWorkflowPromise);
 
-	const webhookUrl = `${webhookBaseUrl}/api/webhooks/media-server/progress?retryable=true`;
+	const webhookUrl = createMediaServerWebhookUrl({
+		webUrl: serverEnv().WEB_URL,
+		webhookBaseUrl: serverEnv().MEDIA_SERVER_WEBHOOK_URL,
+		deploymentEnvironment: process.env.VERCEL_ENV,
+		deploymentHost: process.env.VERCEL_URL,
+		automationBypassSecret: process.env.VERCEL_AUTOMATION_BYPASS_SECRET,
+		searchParams: { retryable: "true" },
+	});
 	const webhookSecret = serverEnv().MEDIA_SERVER_WEBHOOK_SECRET;
 
 	await db()

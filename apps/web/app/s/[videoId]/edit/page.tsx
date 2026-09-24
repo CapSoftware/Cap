@@ -11,6 +11,7 @@ import {
 	createIdentityEditSpec,
 } from "@/lib/video-edits";
 import { isWebStudioEnabledForEmail } from "@/lib/web-studio-rollout";
+import { EditProcessing } from "./EditProcessing";
 import { EditUpgradeGate } from "./EditUpgradeGate";
 import { EditVideoClient } from "./EditVideoClient";
 import { EditRecovery } from "./edit-recovery";
@@ -51,9 +52,7 @@ export default async function EditVideoPage(props: {
 		!video ||
 		video.ownerId !== user.id ||
 		video.isScreenshot ||
-		!isMp4BackedVideo(video.source) ||
-		!video.duration ||
-		video.duration <= 0
+		!isMp4BackedVideo(video.source)
 	) {
 		notFound();
 	}
@@ -78,12 +77,13 @@ export default async function EditVideoPage(props: {
 	}
 	if (
 		video.uploadPhase &&
-		["uploading", "processing", "generating_thumbnail"].includes(
+		["uploading", "processing", "generating_thumbnail", "error"].includes(
 			video.uploadPhase,
 		)
 	) {
-		notFound();
+		return <EditProcessing videoId={videoId} />;
 	}
+	if (!video.duration || video.duration <= 0) notFound();
 
 	const [existingEdit] = await db()
 		.select({
