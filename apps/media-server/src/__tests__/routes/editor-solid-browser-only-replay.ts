@@ -66,6 +66,7 @@ initSync({
 });
 let config = JSON.parse(default_project_config_json()) as {
 	background: { source: unknown; blur: number };
+	camera: { manualPosition?: { x: number; y: number }; size: number };
 	timeline?: unknown;
 };
 config.background.source = {
@@ -1060,80 +1061,70 @@ try {
 		}
 	}
 	assert.ok(visibleRemountedPixels > remountedPixels.length / 12);
-	const cameraBox = editor
-		.locator("#canvas + div > div.pointer-events-auto")
-		.last();
+	const cameraBox = editor.locator('[data-editor-element="camera"]');
 	const cameraBounds = await cameraBox.boundingBox();
 	assert.ok(cameraBounds);
+	const cameraDragExposed = await cameraBox.evaluate((element) => {
+		const bounds = element.getBoundingClientRect();
+		return element.contains(
+			document.elementFromPoint(
+				bounds.x + bounds.width * 0.75,
+				bounds.y + bounds.height * 0.75,
+			),
+		);
+	});
+	assert.ok(cameraDragExposed);
 	await page.mouse.move(
-		cameraBounds.x + cameraBounds.width / 2,
-		cameraBounds.y + cameraBounds.height / 2,
+		cameraBounds.x + cameraBounds.width * 0.75,
+		cameraBounds.y + cameraBounds.height * 0.75,
 	);
 	await page.mouse.down();
 	await page.mouse.move(
-		cameraBounds.x + cameraBounds.width / 2 - 30,
-		cameraBounds.y + cameraBounds.height / 2 - 20,
+		cameraBounds.x + cameraBounds.width * 0.75 - 20,
+		cameraBounds.y + cameraBounds.height * 0.75 - 15,
 		{ steps: 4 },
 	);
 	await page.mouse.up();
-	const draggedCamera = await editor.locator("#canvas").evaluate((canvas) => {
-		const scope = canvas.ownerDocument.defaultView as Window & {
-			capSolidEditor?: { unsavedProject: () => string | null };
-		};
-		const snapshot = scope.capSolidEditor?.unsavedProject();
-		return snapshot ? JSON.parse(snapshot).camera : null;
-	});
+	const currentCamera = async () => {
+		const unsaved = await editor.locator("#canvas").evaluate((canvas) => {
+			const scope = canvas.ownerDocument.defaultView as Window & {
+				capSolidEditor?: { unsavedProject: () => string | null };
+			};
+			return scope.capSolidEditor?.unsavedProject() ?? null;
+		});
+		return unsaved
+			? (JSON.parse(unsaved).camera as typeof config.camera)
+			: config.camera;
+	};
+	const draggedCamera = await currentCamera();
 	assert.ok(draggedCamera?.manualPosition);
 	const originalCameraSize = draggedCamera.size;
-	const resizeHandle = cameraBox.locator(".cursor-nw-resize");
-	try {
-		await resizeHandle.waitFor({ state: "visible", timeout: 5_000 });
-	} catch (cause) {
-		const overlay = await editor
-			.locator("#canvas + div")
-			.evaluate((element) => ({
-				children: Array.from(element.children).map((child) => ({
-					text: child.textContent?.slice(0, 100),
-					className: child.className,
-					handles: child.querySelectorAll(".cursor-nw-resize").length,
-					bounds: child.getBoundingClientRect().toJSON(),
-				})),
-			}))
-			.catch(() => null);
-		process.stderr.write(
-			`${JSON.stringify({ stage: "camera-resize-handle", browserEngine: engine.name(), overlay })}\n`,
-		);
-		await reportStageFailure(
-			"camera-resize-handle",
-			page,
-			editor,
-			cause,
-			pageErrors,
-			pageWarnings,
-			failedResponses,
-		);
-		throw cause;
-	}
+	const resizeHandle = cameraBox.locator(".cursor-se-resize");
+	await resizeHandle.waitFor({ state: "visible", timeout: 5_000 });
 	const resizeBounds = await resizeHandle.boundingBox();
 	assert.ok(resizeBounds);
+	const cameraResizeExposed = await resizeHandle.evaluate((element) => {
+		const bounds = element.getBoundingClientRect();
+		return element.contains(
+			document.elementFromPoint(
+				bounds.x + bounds.width / 2,
+				bounds.y + bounds.height / 2,
+			),
+		);
+	});
+	assert.ok(cameraResizeExposed);
 	await page.mouse.move(
 		resizeBounds.x + resizeBounds.width / 2,
 		resizeBounds.y + resizeBounds.height / 2,
 	);
 	await page.mouse.down();
 	await page.mouse.move(
-		resizeBounds.x + resizeBounds.width / 2 - 20,
-		resizeBounds.y + resizeBounds.height / 2 - 15,
+		resizeBounds.x + resizeBounds.width / 2 + 20,
+		resizeBounds.y + resizeBounds.height / 2 + 15,
 		{ steps: 4 },
 	);
 	await page.mouse.up();
-	const resizedCamera = await editor.locator("#canvas").evaluate((canvas) => {
-		const scope = canvas.ownerDocument.defaultView as Window & {
-			capSolidEditor?: { unsavedProject: () => string | null };
-		};
-		const snapshot = scope.capSolidEditor?.unsavedProject();
-		return snapshot ? JSON.parse(snapshot).camera : null;
-	});
+	const resizedCamera = await currentCamera();
 	assert.notEqual(resizedCamera?.size, originalCameraSize);
 	await editor.getByRole("button", { name: "Full preview quality" }).click();
 	await editor.getByRole("button", { name: "Play video" }).click();
