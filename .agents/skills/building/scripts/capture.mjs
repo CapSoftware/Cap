@@ -401,6 +401,11 @@ export async function shareCapture(ctx, session) {
 			session.cap?.organization ?? account.defaultOrganizationId;
 		if (!organization)
 			throw new Error("Choose a Cap organization for PR recordings");
+		if (
+			!session.capture.upload &&
+			organization !== account.defaultOrganizationId
+		)
+			throw new Error("Restore the selected Cap organization before uploading");
 		const folders = jsonCommand("cap", [
 			"library",
 			"folders",
@@ -455,7 +460,7 @@ export async function shareCapture(ctx, session) {
 			"move",
 			id,
 			"--container",
-			"organization",
+			"personal",
 			"--organization",
 			organization,
 			"--folder",
@@ -464,7 +469,12 @@ export async function shareCapture(ctx, session) {
 			"--json",
 		]);
 		const metadata = jsonCommand("cap", ["caps", "get", id, "--json"]);
-		if (metadata.folderId !== folderId && metadata.cap?.folderId !== folderId)
+		const cap = metadata.cap ?? metadata;
+		if (
+			cap.id !== id ||
+			cap.folderId !== folderId ||
+			cap.organizationId !== organization
+		)
 			throw new Error("Cap folder placement could not be verified");
 		session.capture.upload.folderVerified = true;
 		saveSession(ctx, session);

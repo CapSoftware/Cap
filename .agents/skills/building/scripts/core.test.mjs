@@ -612,7 +612,7 @@ test("foreign sandboxes cannot be deleted", () => {
 	);
 });
 
-test("Cap sharing accepts resource receipts and retries without another upload", async (t) => {
+test("Cap sharing uses the personal PR folder and verifies placement without duplicate uploads", async (t) => {
 	const ctx = fixture(t);
 	const session = await createSession(ctx, {
 		name: "sharing",
@@ -633,15 +633,53 @@ test("Cap sharing accepts resource receipts and retries without another upload",
 	const bin = join(ctx.state, "bin");
 	mkdirSync(bin);
 	const statePath = join(ctx.state, "cap-fixture.json");
-	writeFileSync(statePath, JSON.stringify({ folder: false, uploads: 0 }));
+	writeFileSync(
+		statePath,
+		JSON.stringify({ folder: false, uploads: 0, incorrectOrganization: true }),
+	);
 	writeFileSync(
 		join(bin, "cap"),
-		`#!${process.execPath}\nconst fs = require("node:fs"), path = ${JSON.stringify(statePath)}, state = JSON.parse(fs.readFileSync(path)), args = process.argv.slice(2); let result; if (args[0] === "account") result = {defaultOrganizationId: "organization"}; else if (args[2] === "list") result = {folders: state.folder ? [{id: "folder", name: "PR's"}] : []}; else if (args[2] === "create") {state.folder = true; result = {action: "created", resource: {type: "folder", id: "folder"}};} else if (args[0] === "upload") {state.uploads++; result = {id: "video", link: "https://cap.so/s/video"};} else if (args[1] === "move") {state.moved = args[args.indexOf("--folder") + 1]; result = {action: "updated", resource: {id: "video"}};} else if (args[1] === "get") result = {folderId: state.moved}; else process.exit(99); fs.writeFileSync(path, JSON.stringify(state)); console.log(JSON.stringify(result));\n`,
+		`#!${process.execPath}
+const fs = require("node:fs"), assert = require("node:assert/strict");
+const path = ${JSON.stringify(statePath)}, state = JSON.parse(fs.readFileSync(path)), args = process.argv.slice(2);
+let result;
+if (args[0] === "account") result = {defaultOrganizationId: "organization"};
+else if (args[2] === "list") {
+	assert.equal(args.includes("--space"), false);
+	assert.equal(args.includes("--root"), true);
+	result = {folders: state.folder ? [{id: "folder", name: "PR's", organizationId: "organization", spaceId: null, parentId: null}] : []};
+} else if (args[2] === "create") {
+	assert.equal(args.includes("--space"), false);
+	state.folder = true;
+	result = {action: "created", resource: {type: "folder", id: "folder"}};
+} else if (args[0] === "upload") {
+	state.uploads++;
+	result = {id: "video", link: "https://cap.so/s/video"};
+} else if (args[1] === "move") {
+	assert.equal(args[args.indexOf("--container") + 1], "personal");
+	assert.equal(args[args.indexOf("--organization") + 1], "organization");
+	state.moved = args[args.indexOf("--folder") + 1];
+	result = {action: "updated", resource: {id: "video"}};
+} else if (args[1] === "get") {
+	result = {id: "video", folderId: state.moved, organizationId: state.incorrectOrganization ? "other" : "organization"};
+} else process.exit(99);
+fs.writeFileSync(path, JSON.stringify(state));
+console.log(JSON.stringify(result));
+`,
 		{ mode: 0o755 },
 	);
 	const previousPath = process.env.PATH;
 	process.env.PATH = `${bin}:${previousPath}`;
 	try {
+		await assert.rejects(
+			shareCapture(ctx, session),
+			/placement could not be verified/,
+		);
+		assert.notEqual(session.capture.upload.folderVerified, true);
+		const state = JSON.parse(readFileSync(statePath, "utf8"));
+		assert.equal(state.uploads, 1);
+		state.incorrectOrganization = false;
+		writeFileSync(statePath, JSON.stringify(state));
 		const first = await shareCapture(ctx, session);
 		assert.equal(first.folderId, "folder");
 		assert.equal(session.capture.upload.folderVerified, true);
