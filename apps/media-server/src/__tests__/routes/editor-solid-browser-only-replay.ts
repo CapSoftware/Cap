@@ -1064,24 +1064,38 @@ try {
 	const cameraBox = editor.locator('[data-editor-element="camera"]');
 	const cameraBounds = await cameraBox.boundingBox();
 	assert.ok(cameraBounds);
-	const cameraDragExposed = await cameraBox.evaluate((element) => {
+	const cameraDragTargets = await cameraBox.evaluate((element) => {
 		const bounds = element.getBoundingClientRect();
-		return element.contains(
-			document.elementFromPoint(
-				bounds.x + bounds.width * 0.75,
-				bounds.y + bounds.height * 0.75,
-			),
-		);
+		const points = [
+			{ x: 0.5, y: 0.5 },
+			{ x: 0.75, y: 0.5 },
+			{ x: 0.5, y: 0.75 },
+			{ x: 0.25, y: 0.5 },
+			{ x: 0.75, y: 0.75 },
+			{ x: 0.25, y: 0.75 },
+		];
+		return points.map((point) => {
+			const hit = document.elementFromPoint(
+				bounds.x + bounds.width * point.x,
+				bounds.y + bounds.height * point.y,
+			);
+			return {
+				...point,
+				exposed: element.contains(hit),
+				hit: hit instanceof HTMLElement ? hit.outerHTML.slice(0, 300) : null,
+			};
+		});
 	});
-	assert.ok(cameraDragExposed);
+	const cameraDragPoint = cameraDragTargets.find((target) => target.exposed);
+	assert.ok(cameraDragPoint, JSON.stringify(cameraDragTargets));
 	await page.mouse.move(
-		cameraBounds.x + cameraBounds.width * 0.75,
-		cameraBounds.y + cameraBounds.height * 0.75,
+		cameraBounds.x + cameraBounds.width * cameraDragPoint.x,
+		cameraBounds.y + cameraBounds.height * cameraDragPoint.y,
 	);
 	await page.mouse.down();
 	await page.mouse.move(
-		cameraBounds.x + cameraBounds.width * 0.75 - 20,
-		cameraBounds.y + cameraBounds.height * 0.75 - 15,
+		cameraBounds.x + cameraBounds.width * cameraDragPoint.x - 20,
+		cameraBounds.y + cameraBounds.height * cameraDragPoint.y - 15,
 		{ steps: 4 },
 	);
 	await page.mouse.up();
@@ -1099,28 +1113,40 @@ try {
 	const draggedCamera = await currentCamera();
 	assert.ok(draggedCamera?.manualPosition);
 	const originalCameraSize = draggedCamera.size;
-	const resizeHandle = cameraBox.locator(".cursor-se-resize");
-	await resizeHandle.waitFor({ state: "visible", timeout: 5_000 });
-	const resizeBounds = await resizeHandle.boundingBox();
-	assert.ok(resizeBounds);
-	const cameraResizeExposed = await resizeHandle.evaluate((element) => {
-		const bounds = element.getBoundingClientRect();
-		return element.contains(
-			document.elementFromPoint(
+	const resizeCorners = await cameraBox.evaluate((element) =>
+		[
+			{ cursor: "cursor-nw-resize", x: -20, y: -15 },
+			{ cursor: "cursor-ne-resize", x: 20, y: -15 },
+			{ cursor: "cursor-sw-resize", x: -20, y: 15 },
+			{ cursor: "cursor-se-resize", x: 20, y: 15 },
+		].map((corner) => {
+			const handle = element.querySelector<HTMLElement>(`.${corner.cursor}`);
+			if (!handle) return { ...corner, exposed: false };
+			const bounds = handle.getBoundingClientRect();
+			const hit = document.elementFromPoint(
 				bounds.x + bounds.width / 2,
 				bounds.y + bounds.height / 2,
-			),
-		);
-	});
-	assert.ok(cameraResizeExposed);
+			);
+			return {
+				...corner,
+				exposed: handle.contains(hit),
+				hit: hit instanceof HTMLElement ? hit.outerHTML.slice(0, 300) : null,
+			};
+		}),
+	);
+	const resizeCorner = resizeCorners.find((corner) => corner.exposed);
+	assert.ok(resizeCorner, JSON.stringify(resizeCorners));
+	const resizeHandle = cameraBox.locator(`.${resizeCorner.cursor}`);
+	const resizeBounds = await resizeHandle.boundingBox();
+	assert.ok(resizeBounds);
 	await page.mouse.move(
 		resizeBounds.x + resizeBounds.width / 2,
 		resizeBounds.y + resizeBounds.height / 2,
 	);
 	await page.mouse.down();
 	await page.mouse.move(
-		resizeBounds.x + resizeBounds.width / 2 + 20,
-		resizeBounds.y + resizeBounds.height / 2 + 15,
+		resizeBounds.x + resizeBounds.width / 2 + resizeCorner.x,
+		resizeBounds.y + resizeBounds.height / 2 + resizeCorner.y,
 		{ steps: 4 },
 	);
 	await page.mouse.up();
