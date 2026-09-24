@@ -20,12 +20,12 @@ import {
 	useRef,
 	useState,
 } from "react";
-import {
-	getVideoStatus,
-	type VideoStatusResult,
-} from "@/actions/videos/get-status";
 import type { OrganizationSettings } from "@/app/(org)/dashboard/dashboard-data";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
+import {
+	VideoStatusNotFoundError,
+	videoStatusQueryOptions,
+} from "@/lib/video-status-query";
 import { CaptionProvider } from "./_components/CaptionContext";
 import { PlaybackProvider } from "./_components/playback/PlaybackContext";
 import { ShareVideo } from "./_components/ShareVideo";
@@ -235,13 +235,7 @@ const useVideoStatus = (
 	enabled: boolean = true,
 ) => {
 	return useQuery({
-		queryKey: ["videoStatus", videoId],
-		queryFn: async (): Promise<VideoStatusResult> => {
-			const res = await getVideoStatus(videoId);
-			if ("success" in res && res.success === false)
-				throw new Error("Failed to fetch video status");
-			return res as VideoStatusResult;
-		},
+		...videoStatusQueryOptions(videoId),
 		initialData: initialData
 			? {
 					transcriptionStatus:
@@ -257,6 +251,7 @@ const useVideoStatus = (
 			: undefined,
 		enabled,
 		refetchInterval: (query) => {
+			if (query.state.error instanceof VideoStatusNotFoundError) return false;
 			const data = query.state.data;
 			if (!data) return 2000;
 
