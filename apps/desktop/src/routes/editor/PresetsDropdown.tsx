@@ -99,7 +99,28 @@ export function PresetsDropdown() {
 								}
 							>
 								{(preset, i) => {
-									function applyPreset() {
+									async function applyPreset() {
+										if (import.meta.env.VITE_CAP_WEB_EDITOR === "true") {
+											try {
+												const preparePresetBackground = (
+													window as Window & {
+														capWebEditorPreparePresetBackground?: (
+															config: unknown,
+														) => Promise<void>;
+													}
+												).capWebEditorPreparePresetBackground;
+												if (!preparePresetBackground)
+													throw new Error("Preset background is unavailable");
+												await preparePresetBackground(preset.config);
+											} catch (error) {
+												toast.error(
+													error instanceof Error
+														? error.message
+														: "Preset background could not be loaded",
+												);
+												return;
+											}
+										}
 										const normalizedConfig = normalizeProject({
 											...preset.config,
 											timeline: project.timeline ?? null,
@@ -114,9 +135,7 @@ export function PresetsDropdown() {
 											<MenuItem<typeof KDropdownMenu.SubTrigger>
 												as={KDropdownMenu.SubTrigger}
 												class="h-10"
-												onClick={() => {
-													applyPreset();
-												}}
+												onClick={() => void applyPreset()}
 											>
 												<span class="mr-auto">{preset.name}</span>
 												<Show when={presets.query.data?.default === i()}>
@@ -134,11 +153,7 @@ export function PresetsDropdown() {
 														dropdownContainerClasses,
 													)}
 												>
-													<DropdownItem
-														onSelect={() => {
-															applyPreset();
-														}}
-													>
+													<DropdownItem onSelect={() => void applyPreset()}>
 														Apply
 													</DropdownItem>
 													<DropdownItem

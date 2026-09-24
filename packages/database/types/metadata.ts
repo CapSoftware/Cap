@@ -6,6 +6,122 @@
  * Video metadata structure
  */
 export interface VideoMetadata {
+	webEditorAudioDefault?: {
+		enabledByDefault: boolean;
+		isolation: "light" | "balanced" | "strong";
+	};
+	webEditorProject?:
+		| {
+				version: 1;
+				config: Record<string, unknown>;
+				savedAt: string;
+		  }
+		| {
+				version: 2;
+				configGzipBase64: string;
+				uncompressedBytes: number;
+				savedAt: string;
+		  };
+	webEditorAssets?: {
+		version: 1;
+		items: Array<{
+			kind: "audio" | "image";
+			key: string;
+			path: string;
+			name: string;
+			contentType: string;
+			size: number;
+			objectIdentity: string | null;
+		}>;
+	};
+	webEditorVideoUpload?: {
+		version: 1;
+		sessionId: string;
+		key: string;
+		path: string;
+		fileName: string;
+		size: number;
+		contentType: string;
+		uploadId: string;
+		provider: "s3" | "googleDrive";
+		bucketId: string | null;
+		storageIntegrationId: string | null;
+		expiresAt: string;
+	};
+	webEditorVideos?: {
+		version: 1;
+		items: Array<{
+			key: string;
+			path: string;
+			name: string;
+			contentType: string;
+			size: number;
+			objectIdentity: string | null;
+		}>;
+	};
+	webEditorClips?: {
+		version: 1;
+		items: Array<{
+			displayPath: string;
+			duration: number;
+			fps: number;
+			hasAudio: boolean;
+			cameraPath?: string;
+			cameraFps?: number;
+			cameraOffsetMs?: number;
+		}>;
+	};
+	webEditorImports?: {
+		version: 1;
+		items: Array<
+			| { kind: "clip"; path: string }
+			| { kind: "cap"; path: string; clipCount: number }
+		>;
+	};
+	webEditorCaptionJob?: {
+		status: "processing" | "error";
+		requestId: string;
+		sourceHash: string;
+		requestedAt: string;
+	};
+	editorSources?: {
+		version: 1;
+		display: {
+			key: string;
+			contentType: "video/webm" | "video/mp4";
+			size?: number;
+			fps?: number;
+			objectIdentity?: string | null;
+		};
+		camera?: {
+			key: string;
+			contentType: "video/webm" | "video/mp4";
+			size: number;
+			fps?: number;
+			objectIdentity: string | null;
+			offsetMs: number;
+		};
+		mic?: {
+			key: string;
+			contentType: "audio/webm" | "audio/mp4";
+			size: number;
+			objectIdentity: string | null;
+			offsetMs: number;
+		};
+		systemAudio?: {
+			key: string;
+			contentType: "audio/webm" | "audio/mp4";
+			size: number;
+			objectIdentity: string | null;
+			offsetMs: number;
+		};
+		inputEvents?: {
+			key: string;
+			contentType: "application/x-ndjson";
+			size: number;
+			objectIdentity: string | null;
+		};
+	};
 	editProcessing?: {
 		token: string;
 		startedAt: string;

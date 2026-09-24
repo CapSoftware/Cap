@@ -435,6 +435,7 @@ impl BackgroundLayer {
                             x_width,
                             y_height,
                             _padding: 0.0,
+                            _padding2: [0.0; 2],
                         };
 
                         let uniform_buffer =
@@ -529,6 +530,7 @@ pub struct ImageBackgroundUniforms {
     x_width: f32,
     y_height: f32,
     _padding: f32, // For alignment
+    _padding2: [f32; 2],
 }
 
 impl ImageBackgroundPipeline {

@@ -301,9 +301,45 @@ test("repro: start recording with webcam preview enabled and live", async () => 
 			type: "bootstrap",
 		});
 		logs.push(`bootstrap: ${JSON.stringify(bootstrapResponse).slice(0, 200)}`);
+		const openResponse = await sendServiceWorkerMessage(messengerPage, {
+			target: "service-worker",
+			type: "open-recorder-panel",
+		});
+		logs.push(`open panel: ${JSON.stringify(openResponse)}`);
+		await expect
+			.poll(() =>
+				targetPage
+					.frames()
+					.some((frame) => frame.url().includes("camera-preview.html")),
+			)
+			.toBe(true);
 
 		// Give the camera preview time to go live (frames flowing over WebRTC).
 		await targetPage.waitForTimeout(6_000);
+		const previewFrame = targetPage
+			.frames()
+			.find((frame) => frame.url().includes("camera-preview.html"));
+		if (!previewFrame) throw new Error("Camera preview frame was not mounted");
+		await expect
+			.poll(() =>
+				previewFrame.evaluate(
+					() => document.querySelector("video")?.videoWidth ?? 0,
+				),
+			)
+			.toBeGreaterThan(0);
+		const pictureInPictureSupported = await previewFrame.evaluate(
+			() => document.pictureInPictureEnabled,
+		);
+		if (pictureInPictureSupported) {
+			await previewFrame.locator("[data-pip-control]").click();
+			await expect
+				.poll(() =>
+					previewFrame.evaluate(
+						() => document.pictureInPictureElement !== null,
+					),
+				)
+				.toBe(true);
+		}
 		await targetPage.screenshot({
 			path: "test-results/repro-before-start.png",
 		});
@@ -342,6 +378,13 @@ test("repro: start recording with webcam preview enabled and live", async () => 
 			type: "get-recording-status",
 		})) as { status?: { phase?: string } };
 		expect(finalStatus.status?.phase).toBe("recording");
+		await expect
+			.poll(() =>
+				targetPage
+					.frames()
+					.every((frame) => !frame.url().includes("camera-preview.html")),
+			)
+			.toBe(true);
 
 		// Content scripts read chrome.storage.session; without the service
 		// worker widening the access level every call fails with this error.

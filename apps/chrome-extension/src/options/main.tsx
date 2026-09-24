@@ -1,6 +1,8 @@
 import {
 	deleteRecoveredRecordingSpool,
-	recoverOrphanedRecordingSpools,
+	isRecordingSpoolUploaded,
+	listRecordingSpoolSessions,
+	recoverRecordingSpoolSession,
 } from "@cap/recorder-core";
 import { useCallback, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -15,9 +17,11 @@ import {
 	type FailedRecording,
 	loadAuth,
 	loadFailedRecordings,
+	loadLiveRecordingManifests,
 	loadSettings,
 	loadSharedRecordingState,
 	removeFailedRecording,
+	removeLiveRecordingManifest,
 	saveSettings,
 } from "../shared/storage";
 import type { ExtensionAuth, ExtensionSettings } from "../shared/types";
@@ -51,13 +55,37 @@ const isActiveRecordingPhase = (phase: string | undefined) =>
 // hold bytes, and also surfaces spools stranded by a crash before the
 // offscreen sweep could record them (those have no metadata yet).
 const loadRecoveredRecordings = async (): Promise<FailedRecording[]> => {
-	const [failed, spools, recordingState] = await Promise.all([
+	const [failed, storedSpools, manifests, recordingState] = await Promise.all([
 		loadFailedRecordings(),
-		recoverOrphanedRecordingSpools(),
+		listRecordingSpoolSessions(),
+		loadLiveRecordingManifests(),
 		loadSharedRecordingState().catch(() => null),
 	]);
-	const spoolSessions = new Set(spools.map((spool) => spool.sessionId));
-	const knownSessions = new Set(failed.map((entry) => entry.sessionId));
+	const spools = storedSpools.filter(
+		(spool) => !isRecordingSpoolUploaded(spool.sessionId),
+	);
+	const spoolSessions = new Set(
+		spools
+			.filter((spool) => spool.totalBytes > 0)
+			.map((spool) => spool.sessionId),
+	);
+	const knownSessions = new Set(
+		failed.flatMap((entry) => [
+			entry.sessionId,
+			...(entry.cameraSessionId ? [entry.cameraSessionId] : []),
+			...(entry.inputEventsSessionId ? [entry.inputEventsSessionId] : []),
+			...(entry.audioSources ?? []).map((source) => source.sessionId),
+		]),
+	);
+	for (const manifest of manifests) {
+		if (!spoolSessions.has(manifest.sessionId)) continue;
+		if (manifest.cameraSessionId) knownSessions.add(manifest.cameraSessionId);
+		if (manifest.inputEventsSessionId)
+			knownSessions.add(manifest.inputEventsSessionId);
+		for (const source of manifest.audioSources ?? []) {
+			knownSessions.add(source.sessionId);
+		}
+	}
 	const entries = failed.filter((entry) => spoolSessions.has(entry.sessionId));
 
 	// Skip unknown spools while a recording is live anywhere: an in-flight
@@ -139,12 +167,29 @@ function RecoveredRecordingsSection() {
 		}
 	};
 
-	const download = (entry: FailedRecording) =>
+	const download = (
+		entry: FailedRecording,
+		kind: "screen" | "camera" | "mic" | "systemAudio",
+	) =>
 		runAction(entry.sessionId, async () => {
-			const spools = await recoverOrphanedRecordingSpools();
-			const spool = spools.find(
-				(candidate) => candidate.sessionId === entry.sessionId,
+			const audioSource = entry.audioSources?.find(
+				(source) => source.kind === kind,
 			);
+			const sessionId =
+				kind === "screen"
+					? entry.sessionId
+					: kind === "camera"
+						? entry.cameraSessionId
+						: audioSource?.sessionId;
+			const mimeType =
+				kind === "screen"
+					? entry.mimeType
+					: kind === "camera"
+						? entry.cameraMimeType
+						: audioSource?.mimeType;
+			const spool = sessionId
+				? await recoverRecordingSpoolSession(sessionId)
+				: null;
 			if (!spool || spool.blob.size === 0) {
 				refresh();
 				throw new Error("The recorded data is no longer available.");
@@ -152,10 +197,21 @@ function RecoveredRecordingsSection() {
 			const url = URL.createObjectURL(spool.blob);
 			const anchor = document.createElement("a");
 			anchor.href = url;
-			anchor.download = `cap-recording-${
+			const recordingName =
 				entry.videoId ??
-				new Date(entry.createdAt).toISOString().replace(/[:.]/g, "-")
-			}.${fileExtensionForMimeType(entry.mimeType)}`;
+				new Date(entry.createdAt).toISOString().replace(/[:.]/g, "-");
+			const separateSources =
+				!!entry.cameraSessionId ||
+				entry.cameraRetryUnavailable === true ||
+				(entry.audioSources?.length ?? 0) > 0 ||
+				entry.audioRetryUnavailable === true;
+			const label =
+				kind === "screen"
+					? separateSources
+						? "-screen"
+						: ""
+					: `-${kind === "systemAudio" ? "system-audio" : kind}`;
+			anchor.download = `cap-recording-${recordingName}${label}.${fileExtensionForMimeType(mimeType ?? spool.mimeType)}`;
 			anchor.click();
 			window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
 			return null;
@@ -163,8 +219,16 @@ function RecoveredRecordingsSection() {
 
 	const remove = (entry: FailedRecording) =>
 		runAction(entry.sessionId, async () => {
-			await deleteRecoveredRecordingSpool(entry.sessionId);
+			await Promise.all(
+				[
+					entry.sessionId,
+					...(entry.cameraSessionId ? [entry.cameraSessionId] : []),
+					...(entry.inputEventsSessionId ? [entry.inputEventsSessionId] : []),
+					...(entry.audioSources ?? []).map((source) => source.sessionId),
+				].map((sessionId) => deleteRecoveredRecordingSpool(sessionId)),
+			);
 			await removeFailedRecording(entry.sessionId).catch(() => undefined);
+			await removeLiveRecordingManifest(entry.sessionId).catch(() => undefined);
 			refresh();
 			return null;
 		});
@@ -222,26 +286,56 @@ function RecoveredRecordingsSection() {
 							</span>
 						</div>
 						<div className="recovery-actions">
-							{entry.videoId && (
-								<button
-									type="button"
-									className="cta small"
-									disabled={busySession !== null}
-									onClick={() => retry(entry)}
-								>
-									{retryingSession === entry.sessionId
-										? "Uploading…"
-										: "Retry upload"}
-								</button>
+							{entry.videoId &&
+								!entry.cameraRetryUnavailable &&
+								!entry.audioRetryUnavailable && (
+									<button
+										type="button"
+										className="cta small"
+										disabled={busySession !== null}
+										onClick={() => retry(entry)}
+									>
+										{retryingSession === entry.sessionId
+											? "Uploading…"
+											: "Retry upload"}
+									</button>
+								)}
+							{(entry.cameraRetryUnavailable ||
+								entry.audioRetryUnavailable) && (
+								<span className="recovery-detail">
+									A separate source is missing. Download available sources.
+								</span>
 							)}
 							<button
 								type="button"
 								className="cta small ghost"
 								disabled={busySession !== null}
-								onClick={() => void download(entry)}
+								onClick={() => void download(entry, "screen")}
 							>
-								Download
+								Download screen
 							</button>
+							{entry.cameraSessionId && !entry.cameraRetryUnavailable && (
+								<button
+									type="button"
+									className="cta small ghost"
+									disabled={busySession !== null}
+									onClick={() => void download(entry, "camera")}
+								>
+									Download camera
+								</button>
+							)}
+							{entry.audioSources?.map((source) => (
+								<button
+									key={source.sessionId}
+									type="button"
+									className="cta small ghost"
+									disabled={busySession !== null}
+									onClick={() => void download(entry, source.kind)}
+								>
+									Download{" "}
+									{source.kind === "mic" ? "microphone" : "system audio"}
+								</button>
+							))}
 							<button
 								type="button"
 								className="cta small ghost"

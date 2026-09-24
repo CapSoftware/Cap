@@ -61,6 +61,11 @@ interface InProgressRecordingBarProps {
 	onRestart?: () => void | Promise<void>;
 	isRestarting?: boolean;
 	errorDownload?: RecordingFailureDownload | null;
+	cameraErrorDownload?: RecordingFailureDownload | null;
+	audioErrorDownloads?: Array<{
+		kind: "mic" | "systemAudio";
+		download: RecordingFailureDownload;
+	}>;
 }
 
 const DRAG_PADDING = 12;
@@ -76,6 +81,8 @@ export const InProgressRecordingBar = ({
 	onRestart,
 	isRestarting = false,
 	errorDownload,
+	cameraErrorDownload,
+	audioErrorDownloads = [],
 }: InProgressRecordingBarProps) => {
 	const [mounted, setMounted] = useState(false);
 	const [position, setPosition] = useState({ x: 0, y: 24 });
@@ -276,14 +283,43 @@ export const InProgressRecordingBar = ({
 							<span className="text-[0.95rem] font-semibold text-red-11">
 								Recording failed.
 							</span>
-							{errorDownload ? (
-								<a
-									href={errorDownload.url}
-									download={errorDownload.fileName}
-									className="text-[0.85rem] font-medium text-blue-11 underline underline-offset-2 hover:text-blue-12 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-9"
-								>
-									Download here.
-								</a>
+							{errorDownload ||
+							cameraErrorDownload ||
+							audioErrorDownloads.length > 0 ? (
+								<div className="flex flex-wrap gap-3">
+									{errorDownload && (
+										<a
+											href={errorDownload.url}
+											download={errorDownload.fileName}
+											className="text-[0.85rem] font-medium text-blue-11 underline underline-offset-2 hover:text-blue-12 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-9"
+										>
+											{cameraErrorDownload
+												? "Download screen"
+												: "Download recording"}
+										</a>
+									)}
+									{cameraErrorDownload && (
+										<a
+											href={cameraErrorDownload.url}
+											download={cameraErrorDownload.fileName}
+											className="text-[0.85rem] font-medium text-blue-11 underline underline-offset-2 hover:text-blue-12 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-9"
+										>
+											Download camera
+										</a>
+									)}
+									{audioErrorDownloads.map(({ kind, download }) => (
+										<a
+											key={kind}
+											href={download.url}
+											download={download.fileName}
+											className="text-[0.85rem] font-medium text-blue-11 underline underline-offset-2 hover:text-blue-12 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-9"
+										>
+											{kind === "mic"
+												? "Download microphone"
+												: "Download system audio"}
+										</a>
+									))}
+								</div>
 							) : (
 								<span className="text-[0.8rem] text-gray-11">
 									Download unavailable.

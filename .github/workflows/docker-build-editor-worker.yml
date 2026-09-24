@@ -1,0 +1,164 @@
+name: Docker Build Editor Worker
+
+on:
+  pull_request:
+    paths:
+      - "apps/media-server/**"
+      - "apps/web/lib/editor-caption-access.ts"
+      - "apps/web/lib/editor-caption-transport.ts"
+      - "apps/web/lib/editor-recording-title.ts"
+      - "apps/desktop/src/assets/music/**"
+      - "apps/desktop/src-tauri/assets/backgrounds/**"
+      - "crates/**"
+      - "packages/editor-cap-bundle/**"
+      - "packages/editor-solid-web/**"
+      - "vendor/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "package.json"
+      - "bun.lock"
+      - "bunfig.toml"
+      - ".github/workflows/docker-build-editor-worker.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "apps/media-server/**"
+      - "apps/web/lib/editor-caption-access.ts"
+      - "apps/web/lib/editor-caption-transport.ts"
+      - "apps/web/lib/editor-recording-title.ts"
+      - "apps/desktop/src/assets/music/**"
+      - "apps/desktop/src-tauri/assets/backgrounds/**"
+      - "crates/**"
+      - "packages/editor-cap-bundle/**"
+      - "packages/editor-solid-web/**"
+      - "vendor/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "package.json"
+      - "bun.lock"
+      - "bunfig.toml"
+      - ".github/workflows/docker-build-editor-worker.yml"
+
+permissions: {}
+
+jobs:
+  build:
+    name: Build and test editor worker (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: amd64
+            runner: ubuntu-24.04
+          - platform: arm64
+            runner: ubuntu-24.04-arm
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Set up Docker Buildx v3.12.0
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+      - name: Build editor worker image with Docker v6.19.2
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
+        with:
+          context: .
+          file: apps/media-server/Dockerfile.editor
+          platforms: linux/${{ matrix.platform }}
+          load: true
+          tags: cap-editor-worker:verification
+          cache-from: type=gha,scope=editor-worker-${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=editor-worker-${{ matrix.platform }}
+      - name: Check native worker readiness
+        run: |
+          docker run --rm --network none \
+            -e CAP_WEB_EDITOR_PUBLIC_ORIGIN=http://127.0.0.1:3457 \
+            -e MEDIA_SERVER_WEBHOOK_SECRET=test \
+            --entrypoint bun cap-editor-worker:verification \
+            -e 'import app from "./src/editor-worker-app.ts"; const response = await app.request("/health"); if (!response.ok) process.exit(1)'
+      - name: Exercise paired native editor routes
+        run: |
+          docker run --rm --network none --cpus 4 --memory 4g \
+            -e MEDIA_SERVER_WEBHOOK_SECRET=test \
+            --entrypoint bun cap-editor-worker:verification test \
+            src/__tests__/editor-worker-app.test.ts \
+            src/__tests__/lib/editor-assets.test.ts \
+            src/__tests__/lib/editor-clip-thumbnails.test.ts \
+            src/__tests__/lib/editor-config-paths.test.ts \
+            src/__tests__/lib/editor-image-assets.test.ts \
+            src/__tests__/lib/editor-security.test.ts \
+            src/__tests__/lib/editor-wallpapers.test.ts \
+            src/__tests__/routes/editor-clips.test.ts \
+            src/__tests__/routes/editor.test.ts
+      - name: Verify editor subprocess credential isolation
+        run: |
+          docker run --rm --network none \
+            -e MEDIA_SERVER_WEBHOOK_SECRET=test \
+            -e AWS_SECRET_ACCESS_KEY=test \
+            --entrypoint bun cap-editor-worker:verification \
+            src/__tests__/lib/editor-process-env-replay.ts
+      - name: Verify cursor-only MOV export
+        run: |
+          docker run --rm --network none --cpus 4 --memory 4g \
+            --entrypoint bun cap-editor-worker:verification \
+            src/__tests__/routes/editor-cursor-mov-replay.ts
+      - name: Replay browser-only Studio and worker exports
+        if: matrix.platform == 'amd64'
+        run: |
+          docker run --rm --cpus 4 --memory 8g --ipc host \
+            -v "${{ github.workspace }}:/source" \
+            -w /source/apps/media-server \
+            cap-editor-worker:verification \
+            bash -e -u -o pipefail -c '
+              cd /source
+              bun install --frozen-lockfile
+              bunx playwright install --with-deps chromium webkit firefox
+              apt-get install -y --no-install-recommends xauth
+              bun run --filter @cap/editor-solid-web build
+              cd /source/apps/media-server
+              export CAP_EDITOR_UI_PARITY_ARTIFACT_DIR=/source/cap-editor-parity-artifacts
+              run_browser_only_studio() {
+                case "$CAP_EDITOR_UI_BROWSER" in
+                  firefox|webkit) CAP_EDITOR_UI_HEADED=1 xvfb-run -a bun src/__tests__/routes/editor-solid-browser-only-replay.ts ;;
+                  *) bun src/__tests__/routes/editor-solid-browser-only-replay.ts ;;
+                esac
+              }
+              run_worker_studio() {
+                case "$CAP_EDITOR_UI_BROWSER" in
+                  firefox|webkit) CAP_EDITOR_UI_HEADED=1 xvfb-run -a bun run test:native-editor-ui ;;
+                  *) bun run test:native-editor-ui ;;
+                esac
+              }
+              browser_replay_failed=0
+              for browser in chromium firefox webkit; do
+                if ! CAP_EDITOR_UI_PARITY_ARTIFACT_DIR=/source/cap-editor-parity-artifacts CAP_EDITOR_UI_BROWSER="$browser" run_browser_only_studio; then
+                  browser_replay_failed=1
+                fi
+              done
+              for browser in chromium webkit firefox; do
+                for pro in 0 1; do
+                  CAP_EDITOR_UI_SHARE_REPLAY=1 CAP_EDITOR_UI_BROWSER="$browser" CAP_EDITOR_UI_PRO_CAPTIONS="$pro" run_worker_studio
+                done
+              done
+              for repeat in 2 3; do
+                printf "WebKit Free replay %s\n" "$repeat"
+                CAP_EDITOR_UI_SHARE_REPLAY=1 CAP_EDITOR_UI_BROWSER=webkit CAP_EDITOR_UI_PRO_CAPTIONS=0 run_worker_studio
+              done
+              CAP_EDITOR_UI_CURSOR_MOV=1 CAP_EDITOR_UI_BROWSER=chromium CAP_EDITOR_UI_PRO_CAPTIONS=0 run_worker_studio
+              CAP_EDITOR_UI_CURSOR_MOV=1 CAP_EDITOR_UI_BROWSER=webkit CAP_EDITOR_UI_PRO_CAPTIONS=1 run_worker_studio
+              CAP_EDITOR_UI_CANVAS_FALLBACK=1 CAP_EDITOR_UI_BROWSER=chromium CAP_EDITOR_UI_PRO_CAPTIONS=0 run_worker_studio
+              CAP_EDITOR_UI_CANVAS_FALLBACK=1 CAP_EDITOR_UI_BROWSER=webkit CAP_EDITOR_UI_PRO_CAPTIONS=1 run_worker_studio
+              bun src/__tests__/routes/editor-presets-browser-replay.ts
+              if [ "$browser_replay_failed" -ne 0 ]; then exit 1; fi
+            '
+      - name: Upload Studio parity diagnostics
+        if: failure() && matrix.platform == 'amd64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-studio-parity-diagnostics
+          path: cap-editor-parity-artifacts
+          if-no-files-found: ignore

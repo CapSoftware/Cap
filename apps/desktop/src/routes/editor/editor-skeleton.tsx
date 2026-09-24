@@ -187,8 +187,8 @@ function PreparingSidebar() {
 	);
 }
 
-export function EditorSkeleton() {
-	const model = usePreparingEditorModel();
+export function EditorSkeleton(props: { model?: PreparingEditorModel } = {}) {
+	const model = props.model ?? usePreparingEditorModel();
 	const [layoutRef, setLayoutRef] = createSignal<HTMLDivElement>();
 	const bounds = createElementBounds(layoutRef);
 	const [savedHeight] = makePersisted(createSignal<number | null>(null), {

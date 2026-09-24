@@ -4,7 +4,7 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { videos } from "@cap/database/schema";
 import type { Video } from "@cap/web-domain";
-import { eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { startVideoProcessingWorkflow } from "@/lib/video-processing";
 
 export async function triggerInstantRecordingProcessing({
@@ -24,6 +24,29 @@ export async function triggerInstantRecordingProcessing({
 	if (video.ownerId !== user.id) throw new Error("Unauthorized");
 
 	const rawFileKey = `${user.id}/${videoId}/result.mp4`;
+	if (!video.metadata?.editorSources) {
+		const sourcePatch = JSON.stringify({
+			editorSources: {
+				version: 1,
+				display: {
+					key: rawFileKey,
+					contentType: "video/mp4",
+				},
+			},
+		});
+		await db()
+			.update(videos)
+			.set({
+				metadata: sql`JSON_MERGE_PATCH(COALESCE(${videos.metadata}, JSON_OBJECT()), ${sourcePatch})`,
+			})
+			.where(
+				and(
+					eq(videos.id, videoId),
+					eq(videos.ownerId, user.id),
+					sql`JSON_EXTRACT(${videos.metadata}, '$.editorSources') IS NULL`,
+				),
+			);
+	}
 
 	await startVideoProcessingWorkflow({
 		videoId,

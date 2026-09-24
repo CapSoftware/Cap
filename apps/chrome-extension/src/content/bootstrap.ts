@@ -6,6 +6,7 @@ import {
 	RECORDING_STATE_KEY,
 	SHARED_UI_STATE_KEY,
 } from "../shared/storage-keys";
+import { initTabInputCapture } from "./input-events";
 
 // The manifest injects only this bootstrap into every page: a few KB of
 // vanilla code that decides whether the page actually needs the recorder UI.
@@ -186,5 +187,6 @@ const bootstrap = () => {
 const globalScope = globalThis as Record<string, unknown>;
 if (globalScope[BOOTSTRAP_FLAG] !== true) {
 	globalScope[BOOTSTRAP_FLAG] = true;
+	initTabInputCapture();
 	bootstrap();
 }

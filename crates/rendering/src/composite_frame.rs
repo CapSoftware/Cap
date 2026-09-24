@@ -8,12 +8,15 @@ pub struct CompositeVideoFramePipeline {
     sampler: wgpu::Sampler,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 static PIPELINE_CACHE_DATA: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
 
+#[cfg(not(target_arch = "wasm32"))]
 fn get_cache_path() -> Option<std::path::PathBuf> {
     dirs::data_local_dir().map(|p| p.join("Cap").join("shader_cache.bin"))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn load_pipeline_cache(device: &wgpu::Device) -> Option<wgpu::PipelineCache> {
     if !device.features().contains(wgpu::Features::PIPELINE_CACHE) {
         return None;
@@ -52,6 +55,7 @@ fn load_pipeline_cache(device: &wgpu::Device) -> Option<wgpu::PipelineCache> {
     })
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn save_pipeline_cache(cache: &wgpu::PipelineCache) {
     if let Some(data) = cache.get_data() {
         let _ = PIPELINE_CACHE_DATA.set(data.clone());
@@ -63,6 +67,14 @@ fn save_pipeline_cache(cache: &wgpu::PipelineCache) {
         }
     }
 }
+
+#[cfg(target_arch = "wasm32")]
+fn load_pipeline_cache(_: &wgpu::Device) -> Option<wgpu::PipelineCache> {
+    None
+}
+
+#[cfg(target_arch = "wasm32")]
+fn save_pipeline_cache(_: &wgpu::PipelineCache) {}
 
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
 #[repr(C)]
@@ -285,6 +297,10 @@ impl CompositeVideoFrameUniforms {
 
 impl CompositeVideoFramePipeline {
     pub fn new(device: &wgpu::Device) -> Self {
+        Self::new_for_format(device, wgpu::TextureFormat::Rgba8Unorm)
+    }
+
+    pub fn new_for_format(device: &wgpu::Device, output_format: wgpu::TextureFormat) -> Self {
         let pipeline_cache = load_pipeline_cache(device);
         let bind_group_layout = Self::bind_group_layout(device);
         let shader_desc = include_wgsl!("shaders/composite-video-frame.wgsl");
@@ -312,7 +328,7 @@ impl CompositeVideoFramePipeline {
                 module: &shader,
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    format: output_format,
                     blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],

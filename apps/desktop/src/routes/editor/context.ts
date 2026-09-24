@@ -58,6 +58,7 @@ import {
 	type TimelineSegment,
 	type XY,
 } from "~/utils/tauri";
+import { savedEditorProjectAfterFreeEdit } from "../../../../web/lib/editor-caption-access";
 import {
 	type AudioTrackSegment,
 	createAudioTrackSegment,
@@ -163,6 +164,8 @@ export type CurrentDialog = ModalDialog | LayoutMode;
 export type DialogState = { open: false } | ({ open: boolean } & CurrentDialog);
 export type OpenLayoutMode = { open: true } & LayoutMode;
 export type OpenModalDialog = { open: true } & ModalDialog;
+
+const isWebEditor = import.meta.env.VITE_CAP_WEB_EDITOR === "true";
 
 const LAYOUT_MODE_TYPES: Set<CurrentDialog["type"]> = new Set([
 	"export",
@@ -1689,18 +1692,65 @@ export const [EditorContextProvider, useBaseEditorContext] =
 				},
 			};
 
+			const initialWebConfig = isWebEditor
+				? JSON.stringify(serializeProjectConfiguration(project))
+				: null;
+			let lastPersistedWebConfig: string | null = null;
 			const projectSave = createProjectConfigSave({
 				trackChanges: () => {
 					trackStore(project);
 				},
 				getConfig: () => serializeProjectConfiguration(project),
 				save: async (config) => {
+					const preservePaidCaptions =
+						isWebEditor &&
+						(
+							window as Window & {
+								capWebEditorCaptionsEnabled?: boolean;
+							}
+						).capWebEditorCaptionsEnabled === false;
 					await commands.setProjectConfig(config);
+					if (isWebEditor) {
+						const prior = JSON.parse(
+							lastPersistedWebConfig ?? initialWebConfig ?? "{}",
+						) as Record<string, unknown>;
+						lastPersistedWebConfig = JSON.stringify(
+							preservePaidCaptions
+								? savedEditorProjectAfterFreeEdit(
+										config as unknown as Record<string, unknown>,
+										prior,
+									)
+								: config,
+						);
+					}
 				},
 				onError: (error) => {
 					console.error("Failed to persist project config", error);
 				},
 			});
+			if (isWebEditor) {
+				const editorWindow = window as Window & {
+					capWebEditorUnsavedProjectSnapshot?: () => string | null;
+				};
+				const unsavedProjectSnapshot = () => {
+					const serialized = JSON.stringify(
+						serializeProjectConfiguration(project),
+					);
+					return serialized === (lastPersistedWebConfig ?? initialWebConfig)
+						? null
+						: serialized;
+				};
+				editorWindow.capWebEditorUnsavedProjectSnapshot =
+					unsavedProjectSnapshot;
+				onCleanup(() => {
+					if (
+						editorWindow.capWebEditorUnsavedProjectSnapshot ===
+						unsavedProjectSnapshot
+					) {
+						delete editorWindow.capWebEditorUnsavedProjectSnapshot;
+					}
+				});
+			}
 
 			const [storedSettings] = createResource(() => generalSettingsStore.get());
 			const initialPreviewQuality = createMemo((): EditorPreviewQuality => {

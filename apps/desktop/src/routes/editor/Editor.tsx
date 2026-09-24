@@ -91,6 +91,7 @@ const DEFAULT_TIMELINE_CONTENT_HEIGHT = 124;
 // Vertical gutter between the player row and the timeline card, plus the
 // gutter below the timeline card; both live inside the measured layout box.
 const LAYOUT_GUTTERS = 16;
+const isWebEditor = import.meta.env.VITE_CAP_WEB_EDITOR === "true";
 
 const scheduleIdleWork = (callback: () => void) => {
 	const win = window as Window & {
@@ -268,6 +269,7 @@ export function Editor() {
 		if (lockedToImporting()) return "importing" as const;
 		return rawImportStatus();
 	};
+	const initialLoadError = () => projectPath.error ?? rawMetaQuery.error;
 
 	const [importAborted, setImportAborted] = createSignal(false);
 
@@ -298,6 +300,19 @@ export function Editor() {
 
 	return (
 		<Switch fallback={<EditorSkeleton />}>
+			<Match when={initialLoadError()}>
+				{(error) => (
+					<div class="flex h-full min-h-0 flex-col items-center justify-center gap-4 bg-ed-window px-6 text-center text-ed-text-1">
+						<h2 class="text-xl font-semibold">Unable to Open Recording</h2>
+						<p class="max-w-md text-sm text-ed-text-2">
+							{getEditorErrorMessage(error())}
+						</p>
+						<EditorButton onClick={() => window.location.reload()}>
+							Try again
+						</EditorButton>
+					</div>
+				)}
+			</Match>
 			<Match
 				when={importStatus() === "importing" ? (projectPath() ?? null) : null}
 			>
@@ -402,6 +417,7 @@ function Inner(props: {
 		setEditorState,
 		previewResolutionBase,
 		dialog,
+		setDialog,
 		exportState,
 		requestHandoffPlayback,
 		handoffPlaybackPending,
@@ -790,6 +806,27 @@ function Inner(props: {
 		throttledConfigUpdate(time);
 		trailingConfigUpdate(time);
 	};
+	if (isWebEditor) {
+		const refreshCaptionPlan = () => {
+			void commands.checkUpgradedAndUpdate().catch(() => undefined);
+		};
+		onMount(refreshCaptionPlan);
+		createEventListener(window, "focus", refreshCaptionPlan);
+		createEventListener(document, "visibilitychange", () => {
+			if (!document.hidden) refreshCaptionPlan();
+		});
+		createEventListener(window, "cap-web-editor-captions-plan", () => {
+			if (
+				(window as Window & { capWebEditorCaptionsEnabled?: boolean })
+					.capWebEditorCaptionsEnabled !== true
+			) {
+				if (isTranscriptMode()) setDialog((d) => ({ ...d, open: false }));
+				if (editorState.timeline.selection?.type === "caption")
+					setEditorState("timeline", "selection", null);
+			}
+			doConfigUpdate(frameNumberToRender());
+		});
+	}
 
 	createEffect(
 		on(

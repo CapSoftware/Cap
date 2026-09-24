@@ -1,0 +1,1734 @@
+const fs = require("node:fs");
+const path = require("node:path");
+const { chromium, firefox, webkit } = require("playwright");
+const sharp = require("sharp");
+
+const browserName = process.argv[2];
+const browserType = { chromium, firefox, webkit }[browserName];
+if (!browserType) throw new Error("Choose chromium, firefox, or webkit");
+
+const output = path.join(__dirname, "out");
+function serveMedia(request, asset) {
+	const headers = {
+		"Access-Control-Allow-Origin": "*",
+		"Access-Control-Expose-Headers": "Content-Range",
+		"Accept-Ranges": "bytes",
+		"Content-Type": asset.contentType,
+	};
+	const range = /^bytes=(\d+)-(\d*)$/.exec(request.headers.get("range") ?? "");
+	if (!range) return new Response(Bun.file(asset.file), { headers });
+	const start = Number(range[1]);
+	const end = range[2]
+		? Math.min(Number(range[2]), asset.size - 1)
+		: asset.size - 1;
+	if (!Number.isSafeInteger(start) || start >= asset.size || end < start) {
+		return new Response(null, {
+			status: 416,
+			headers: { ...headers, "Content-Range": `bytes */${asset.size}` },
+		});
+	}
+	return new Response(Bun.file(asset.file).slice(start, end + 1), {
+		status: 206,
+		headers: {
+			...headers,
+			"Content-Range": `bytes ${start}-${end}/${asset.size}`,
+		},
+	});
+}
+const staticServer = Bun.serve({
+	hostname: "127.0.0.1",
+	port: 0,
+	async fetch(request) {
+		const pathname = new URL(request.url).pathname;
+		if (pathname === `/screen.${screen.format}`)
+			return serveMedia(request, screen);
+		if (pathname === `/camera.${camera.format}`)
+			return serveMedia(request, camera);
+		if (pathname === "/blue.mp4") return serveMedia(request, blue);
+		if (pathname === "/browser-replay/large-background.png") {
+			return new Response(
+				Bun.file(path.join(__dirname, "large-background.png")),
+				{ headers: { "Content-Type": "image/png" } },
+			);
+		}
+		const relative =
+			pathname === "/browser-replay/"
+				? "index.html"
+				: pathname.replace(/^\/browser-replay\//, "");
+		const file = path.resolve(output, relative);
+		if (
+			(!file.startsWith(`${output}${path.sep}`) &&
+				file !== path.join(output, "index.html")) ||
+			!(await Bun.file(file).exists())
+		) {
+			return new Response(null, { status: 404 });
+		}
+		const type = file.endsWith(".wasm")
+			? "application/wasm"
+			: file.endsWith(".js")
+				? "text/javascript"
+				: file.endsWith(".css")
+					? "text/css"
+					: "text/html";
+		return new Response(Bun.file(file), {
+			headers: { "Content-Type": type },
+		});
+	},
+});
+const origin = `http://127.0.0.1:${staticServer.port}`;
+const defaultFormat = browserName === "firefox" ? "webm" : "mp4";
+const indexed = process.env.CAP_REPLAY_INDEXED === "1";
+const slowHtml = process.env.CAP_REPLAY_SLOW_HTML === "1";
+const forceHtml = process.env.CAP_REPLAY_FORCE_HTML === "1";
+const simulateFailedProbe =
+	process.env.CAP_REPLAY_SIMULATE_FAILED_PROBE === "1";
+const fixturePrefix = indexed ? "indexed-" : "";
+
+function media(file) {
+	const format = path.extname(file).slice(1).toLowerCase();
+	if (format !== "mp4" && format !== "webm") {
+		throw new Error("Replay media must be an MP4 or WebM file");
+	}
+	return {
+		file,
+		format,
+		contentType: format === "webm" ? "video/webm" : "video/mp4",
+		size: fs.statSync(file).size,
+	};
+}
+
+const screen = media(
+	process.env.CAP_REPLAY_SCREEN_FILE ||
+		path.join(__dirname, `${fixturePrefix}screen.${defaultFormat}`),
+);
+const camera = media(
+	process.env.CAP_REPLAY_CAMERA_FILE ||
+		path.join(__dirname, `${fixturePrefix}camera.${defaultFormat}`),
+);
+const blue = media(
+	path.join(
+		__dirname,
+		"../../../apps/media-server/src/__tests__/fixtures/editor-clips/clip-blue-audio.mp4",
+	),
+);
+const expectedScreenWidth = Number(process.env.CAP_REPLAY_SCREEN_WIDTH || 640);
+const expectedScreenHeight = Number(
+	process.env.CAP_REPLAY_SCREEN_HEIGHT || 360,
+);
+const expectedCameraWidth = Number(process.env.CAP_REPLAY_CAMERA_WIDTH || 320);
+const expectedCameraHeight = Number(
+	process.env.CAP_REPLAY_CAMERA_HEIGHT || 180,
+);
+
+function assert(condition, message) {
+	if (!condition) throw new Error(message);
+}
+
+async function replay(forceWebGl, forceWebGpu = false) {
+	const background = await sharp(
+		Buffer.from(
+			"<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240'><rect width='120' height='240' fill='#cc1242'/><rect x='120' width='120' height='240' fill='#1235cc'/></svg>",
+		),
+	)
+		.png()
+		.toBuffer();
+	const rawBackground = fs.readFileSync(
+		path.join(__dirname, "raw-background.png"),
+	);
+	const exifBackground = fs.readFileSync(
+		path.join(__dirname, "exif-background-6.jpg"),
+	);
+	const largeBackground = fs.readFileSync(
+		path.join(__dirname, "large-background.png"),
+	);
+	const browser = await browserType.launch({
+		headless: process.env.CAP_REPLAY_HEADED !== "1",
+		timeout: 30_000,
+		args: [
+			...(forceWebGpu ? ["--enable-unsafe-webgpu"] : []),
+			...(process.env.CAP_REPLAY_CHROME_SOFTWARE === "1"
+				? ["--use-angle=swiftshader", "--disable-gpu"]
+				: []),
+		],
+		...(browserName === "firefox" && process.env.CAP_REPLAY_HEADED === "1"
+			? {
+					firefoxUserPrefs: {
+						"webgl.force-enabled": true,
+						"webgl.forbid-software": false,
+					},
+				}
+			: {}),
+	});
+	try {
+		const page = await browser.newPage({
+			viewport: { width: 1280, height: 800 },
+			deviceScaleFactor: Number(process.env.CAP_REPLAY_DPR || 1),
+		});
+		const pageErrors = [];
+		const consoleErrors = [];
+		const workerRequests = [];
+		let replayStage = "browser page loading";
+		page.on("pageerror", (error) => pageErrors.push(error.message));
+		page.on("console", (message) => {
+			if (message.type() === "error") consoleErrors.push(message.text());
+			if (
+				message.text().startsWith("Cap replay stage:") ||
+				message.text().startsWith("Cap renderer stage:") ||
+				message.text().startsWith("Cap WebGL query:")
+			) {
+				replayStage = message.text();
+				console.log(replayStage);
+			}
+		});
+		await page.addInitScript(() => {
+			window.CapBrowserRendererTrace = true;
+			window.CapBrowserGpuErrors = [];
+			if (typeof GPUAdapter === "undefined") return;
+			const requestDevice = GPUAdapter.prototype.requestDevice;
+			GPUAdapter.prototype.requestDevice = async function (...args) {
+				const device = await requestDevice.apply(this, args);
+				device.addEventListener("uncapturederror", (event) => {
+					if (window.CapBrowserGpuErrors.length < 8) {
+						window.CapBrowserGpuErrors.push(event.error.message);
+					}
+				});
+				return device;
+			};
+		});
+		await page.addInitScript((simulateFailedProbe) => {
+			const getContext = HTMLCanvasElement.prototype.getContext;
+			HTMLCanvasElement.prototype.getContext = function (kind, ...args) {
+				const result = getContext.call(this, kind, ...args);
+				if (
+					simulateFailedProbe &&
+					kind === "webgpu" &&
+					result &&
+					this.width === 8 &&
+					this.height === 8
+				) {
+					this.CapReplayProbeCanvas = true;
+				}
+				if (kind === "webgl2" || kind === "webgpu") {
+					console.info(
+						`Cap replay stage: canvas ${kind} context ${result ? "ready" : "unavailable"}${kind === "webgl2" && result ? ` lost=${result.isContextLost()}` : ""}`,
+					);
+				}
+				return result;
+			};
+			if (simulateFailedProbe) {
+				const toBlob = HTMLCanvasElement.prototype.toBlob;
+				HTMLCanvasElement.prototype.toBlob = function (callback, ...args) {
+					if (this.CapReplayProbeCanvas) {
+						window.CapReplayProbeForcedFailure = true;
+						queueMicrotask(() => callback(null));
+						return;
+					}
+					return toBlob.call(this, callback, ...args);
+				};
+			}
+			if (!navigator.gpu) return;
+			const gpuPrototype = Object.getPrototypeOf(navigator.gpu);
+			const requestAdapter = gpuPrototype.requestAdapter;
+			if (typeof requestAdapter !== "function") return;
+			gpuPrototype.requestAdapter = async function (...args) {
+				console.info("Cap replay stage: WebGPU adapter requested");
+				const adapter = await requestAdapter.apply(this, args);
+				console.info(
+					`Cap replay stage: WebGPU adapter ${adapter ? "ready" : "unavailable"}`,
+				);
+				if (adapter?.info) {
+					window.CapReplayGpuAdapterArchitecture = adapter.info.architecture;
+					console.info(
+						`Cap replay stage: WebGPU adapter info ${JSON.stringify({ vendor: adapter.info.vendor, architecture: adapter.info.architecture, device: adapter.info.device, description: adapter.info.description })}`,
+					);
+				}
+				return simulateFailedProbe && adapter
+					? {
+							info: { ...adapter.info, architecture: "probe-test" },
+							requestDevice: (...deviceArgs) =>
+								adapter.requestDevice(...deviceArgs),
+						}
+					: adapter;
+			};
+		}, simulateFailedProbe);
+		page.on("request", (request) => {
+			if (request.url().includes("/api/editor/sessions/")) {
+				workerRequests.push(request.url());
+			}
+		});
+		await page.exposeFunction("CapReplayPresentedIndex", async () => {
+			const screenshot = await page.locator("canvas").first().screenshot();
+			const { data, info } = await sharp(screenshot)
+				.raw()
+				.toBuffer({ resolveWithObject: true });
+			let index = 0;
+			for (let bit = 0; bit < 8; bit++) {
+				const x = Math.floor(((bit + 0.5) * info.width) / 8);
+				const y = Math.floor(info.height / 4);
+				const offset = (y * info.width + x) * info.channels;
+				if (data[offset] + data[offset + 1] + data[offset + 2] > 384) {
+					index |= 1 << bit;
+				}
+			}
+			return index;
+		});
+		if (forceWebGl) {
+			await page.addInitScript(() => {
+				Object.defineProperty(navigator, "gpu", {
+					configurable: true,
+					value: undefined,
+				});
+			});
+		}
+		if (forceHtml) {
+			await page.addInitScript(() => {
+				Object.defineProperty(window, "VideoDecoder", {
+					configurable: true,
+					value: undefined,
+				});
+			});
+		}
+		await page.route(`${origin}/**`, async (route) => {
+			const pathname = new URL(route.request().url()).pathname;
+			if (
+				pathname === "/browser-replay/" ||
+				pathname.startsWith("/browser-replay/assets/")
+			) {
+				await route.continue();
+				return;
+			}
+			if (pathname === "/api/editor/videos/fixture/bootstrap") {
+				await route.fulfill({
+					status: 200,
+					contentType: "application/json",
+					body: JSON.stringify({
+						videoId: "fixture",
+						sources: {
+							videoId: "fixture",
+							title: "Paired browser compositor fixture",
+							captionsEnabled: false,
+							signedUrlExpiresAt: Date.now() + 20 * 60_000,
+							display: {
+								url: `${origin}/screen.${screen.format}`,
+								contentType: screen.contentType,
+								fps: 30,
+							},
+							camera: {
+								url: `${origin}/camera.${camera.format}`,
+								contentType: camera.contentType,
+								fps: 30,
+								offsetMs: 0,
+							},
+						},
+					}),
+				});
+				return;
+			}
+			if (pathname === `/screen.${screen.format}`) {
+				await route.continue();
+				return;
+			}
+			if (pathname === `/camera.${camera.format}`) {
+				await route.continue();
+				return;
+			}
+			if (pathname === "/blue.mp4") {
+				await route.continue();
+				return;
+			}
+			if (pathname === "/browser-replay/large-background.png") {
+				await route.fulfill({
+					status: 200,
+					contentType: "image/png",
+					body: largeBackground,
+				});
+				return;
+			}
+			if (pathname === "/api/editor/videos/fixture/file") {
+				const requested = new URL(route.request().url()).searchParams.get(
+					"path",
+				);
+				const exif = requested?.endsWith("000000000002.jpg") ?? false;
+				await route.fulfill({
+					status: 200,
+					contentType: exif ? "image/jpeg" : "image/png",
+					body: exif
+						? exifBackground
+						: requested?.endsWith("000000000002.png")
+							? rawBackground
+							: background,
+				});
+				return;
+			}
+			if (pathname === "/favicon.ico") {
+				await route.fulfill({ status: 204 });
+				return;
+			}
+			const relative =
+				pathname === "/browser-replay/"
+					? "index.html"
+					: pathname.replace(/^\/browser-replay\//, "");
+			const file = path.resolve(output, relative);
+			if (
+				!file.startsWith(`${output}${path.sep}`) &&
+				file !== path.join(output, "index.html")
+			) {
+				await route.fulfill({ status: 404 });
+				return;
+			}
+			const type = file.endsWith(".wasm")
+				? "application/wasm"
+				: file.endsWith(".js")
+					? "text/javascript"
+					: file.endsWith(".css")
+						? "text/css"
+						: "text/html";
+			await route.fulfill({
+				status: 200,
+				contentType: type,
+				body: fs.readFileSync(file),
+			});
+		});
+		await page.goto(`${origin}/browser-replay/`);
+		replayStage = "browser page loaded";
+		await page.waitForFunction(
+			() => Boolean(window.CapBrowserLocalPlayback),
+			null,
+			{
+				timeout: 30_000,
+			},
+		);
+		await page.evaluate(
+			({ indexed, headed, slowHtml }) => {
+				window.CapReplayIndexed = indexed;
+				window.CapReplayHeaded = headed;
+				window.CapReplaySlowHtml = slowHtml;
+			},
+			{
+				indexed,
+				headed: process.env.CAP_REPLAY_HEADED === "1",
+				slowHtml,
+			},
+		);
+		let replayTimer;
+		const result = await Promise.race([
+			page.evaluate(async (mediaFormat) => {
+				const indexed = window.CapReplayIndexed;
+				const webGl = document.createElement("canvas").getContext("webgl2");
+				const debugRenderer = webGl?.getExtension("WEBGL_debug_renderer_info");
+				const webGlRenderer = webGl
+					? webGl.getParameter(
+							debugRenderer?.UNMASKED_RENDERER_WEBGL ?? webGl.RENDERER,
+						)
+					: null;
+				console.info(
+					`Cap replay stage: capabilities WebGPU=${Boolean(navigator.gpu)} WebGL2=${Boolean(document.createElement("canvas").getContext("webgl2"))}`,
+				);
+				console.info("Cap replay stage: creating local renderer");
+				const started = performance.now();
+				const canvas = document.createElement("canvas");
+				canvas.style.cssText = "width:640px;height:360px";
+				document.body.append(canvas);
+				const frames = [];
+				const errors = [];
+				let playback;
+				try {
+					playback = await window.CapBrowserLocalPlayback.create(
+						"fixture",
+						canvas,
+						0,
+						0,
+						(frame) => frames.push(frame),
+						(error) => errors.push(error.message),
+					);
+					console.info("Cap replay stage: local renderer created");
+				} catch (error) {
+					const probe = document.createElement("canvas");
+					const mediaProbe = await new Promise((resolve) => {
+						const video = document.createElement("video");
+						const events = [];
+						video.muted = true;
+						video.playsInline = true;
+						video.crossOrigin = "anonymous";
+						video.src = `/screen.${mediaFormat}`;
+						document.body.append(video);
+						const finish = () => {
+							window.clearTimeout(timer);
+							const state = {
+								events,
+								readyState: video.readyState,
+								networkState: video.networkState,
+								width: video.videoWidth,
+								height: video.videoHeight,
+								duration: video.duration,
+								error: video.error?.code ?? null,
+							};
+							video.remove();
+							resolve(state);
+						};
+						video.addEventListener("loadedmetadata", () =>
+							events.push("loadedmetadata"),
+						);
+						video.addEventListener(
+							"loadeddata",
+							() => {
+								events.push("loadeddata");
+								finish();
+							},
+							{ once: true },
+						);
+						video.addEventListener(
+							"error",
+							() => {
+								events.push("error");
+								finish();
+							},
+							{ once: true },
+						);
+						const timer = window.setTimeout(() => {
+							events.push("timeout");
+							finish();
+						}, 3_000);
+						video.load();
+					});
+					return {
+						fatal: {
+							error: String(error),
+							type: typeof error,
+							message: error?.message ?? null,
+							stack: error?.stack ?? null,
+							mediaProbe,
+							capabilities: {
+								webgpu: Boolean(navigator.gpu),
+								webgl2: Boolean(probe.getContext("webgl2")),
+								webm: document
+									.createElement("video")
+									.canPlayType(`video/webm; codecs=${JSON.stringify("vp8")}`),
+							},
+						},
+					};
+				}
+				const videoFrameCosts = [];
+				const videoSlotCosts = [];
+				const videoPlayCosts = [];
+				const videoSourceDrifts = [];
+				const videoPresentedDrifts = [];
+				const decodedFrameDrifts = [];
+				const decodedFrameCosts = [];
+				const decodedDimensions = [];
+				const compositeCosts = [];
+				const presentedTimes = new WeakMap();
+				const presentationCallbacks = new Map();
+				const onPresented = (video, _, metadata) => {
+					presentedTimes.set(video, metadata.mediaTime);
+					if (video.isConnected) {
+						presentationCallbacks.set(
+							video,
+							video.requestVideoFrameCallback((now, next) =>
+								onPresented(video, now, next),
+							),
+						);
+					}
+				};
+				const trackPresentation = (video) => {
+					if (
+						presentationCallbacks.has(video) ||
+						typeof video.requestVideoFrameCallback !== "function"
+					)
+						return;
+					presentationCallbacks.set(
+						video,
+						video.requestVideoFrameCallback((now, metadata) =>
+							onPresented(video, now, metadata),
+						),
+					);
+				};
+				const poolSlot = playback.pool.slot.bind(playback.pool);
+				playback.pool.slot = async (...args) => {
+					const started = performance.now();
+					try {
+						return await poolSlot(...args);
+					} finally {
+						videoSlotCosts.push(performance.now() - started);
+					}
+				};
+				const nativePlay = HTMLMediaElement.prototype.play;
+				HTMLMediaElement.prototype.play = function (...args) {
+					const started = performance.now();
+					return nativePlay.apply(this, args).then(
+						(value) => {
+							videoPlayCosts.push(performance.now() - started);
+							return value;
+						},
+						(cause) => {
+							videoPlayCosts.push(performance.now() - started);
+							throw cause;
+						},
+					);
+				};
+				const poolFrame = playback.pool.frame.bind(playback.pool);
+				playback.pool.frame = async (...args) => {
+					const started = performance.now();
+					try {
+						const video = await poolFrame(...args);
+						if (
+							video &&
+							args[4] &&
+							Number.isFinite(args[3]) &&
+							args[5] >= 0.25 &&
+							args[5] <= 4
+						) {
+							trackPresentation(video);
+							videoSourceDrifts.push({
+								track: args[1],
+								absoluteMs: Math.abs(video.currentTime - args[3]) * 1000,
+							});
+							const presented = presentedTimes.get(video);
+							if (Number.isFinite(presented)) {
+								videoPresentedDrifts.push({
+									track: args[1],
+									absoluteMs: Math.abs(presented - args[3]) * 1000,
+								});
+							}
+						}
+						return video;
+					} finally {
+						videoFrameCosts.push(performance.now() - started);
+					}
+				};
+				const decodedFrame = playback.decodedPool.frame.bind(
+					playback.decodedPool,
+				);
+				playback.decodedPool.frame = async (...args) => {
+					const started = performance.now();
+					try {
+						const frame = await decodedFrame(...args);
+						if (frame && frame !== "fallback") {
+							decodedDimensions.push([frame.width, frame.height]);
+							decodedFrameDrifts.push({
+								track: args[1],
+								absoluteMs: Math.abs(frame.mediaTime - args[3]) * 1000,
+							});
+						}
+						return frame;
+					} finally {
+						decodedFrameCosts.push(performance.now() - started);
+					}
+				};
+				const canvasRender = playback.canvas.render.bind(playback.canvas);
+				playback.canvas.render = async (...args) => {
+					const started = performance.now();
+					try {
+						return await canvasRender(...args);
+					} finally {
+						compositeCosts.push(performance.now() - started);
+					}
+				};
+				try {
+					const firstFrameMs = performance.now() - started;
+					const backend = playback.canvas.renderer.backend;
+					const snapshot = async () => {
+						if (/webgpu/i.test(backend)) {
+							return await playback.canvas.renderer.snapshot_rgba();
+						}
+						const target = document.createElement("canvas");
+						if (!playback.drawLatestFrameToCanvas(target)) {
+							throw new Error("GPU frame could not be inspected");
+						}
+						const context = target.getContext("2d", {
+							willReadFrequently: true,
+						});
+						if (!context)
+							throw new Error("GPU frame inspection is unavailable");
+						return context.getImageData(0, 0, target.width, target.height).data;
+					};
+					const differentPixels = (first, second) => {
+						if (first.length !== second.length) {
+							throw new Error("GPU frame dimensions changed unexpectedly");
+						}
+						let count = 0;
+						for (let index = 0; index < first.length; index += 4) {
+							if (
+								Math.abs(first[index] - second[index]) > 8 ||
+								Math.abs(first[index + 1] - second[index + 1]) > 8 ||
+								Math.abs(first[index + 2] - second[index + 2]) > 8
+							) {
+								count++;
+							}
+						}
+						return count;
+					};
+					const withCamera = await snapshot();
+					console.info("Cap replay stage: first GPU frame inspected");
+					if (/webgpu/i.test(backend)) {
+						playback.canvas.renderer.redraw_last();
+						const captured = await new Promise((resolve) =>
+							canvas.toBlob(resolve, "image/png"),
+						);
+						if (captured) {
+							const bitmap = await createImageBitmap(captured);
+							const sample = document.createElement("canvas");
+							sample.width = bitmap.width;
+							sample.height = bitmap.height;
+							const sampleContext = sample.getContext("2d", {
+								willReadFrequently: true,
+							});
+							if (sampleContext) {
+								sampleContext.drawImage(bitmap, 0, 0);
+								const pixels = sampleContext.getImageData(
+									0,
+									0,
+									bitmap.width,
+									bitmap.height,
+								).data;
+								let nonblack = 0;
+								for (let index = 0; index < pixels.length; index += 4) {
+									if (
+										pixels[index] + pixels[index + 1] + pixels[index + 2] >
+										48
+									) {
+										nonblack++;
+									}
+								}
+								console.info(
+									`Cap replay stage: WebGPU canvas toBlob nonblack ${nonblack}/${bitmap.width * bitmap.height}`,
+								);
+							}
+							bitmap.close();
+						}
+					}
+					const config = JSON.parse(
+						playback.module.default_project_config_json(),
+					);
+					config.camera.hide = true;
+					await playback.setConfig(config);
+					console.info("Cap replay stage: camera visibility updated");
+					const withoutCamera = await snapshot();
+					const changedPixels = differentPixels(withCamera, withoutCamera);
+					config.camera.hide = false;
+					await playback.setConfig(config);
+					const originalPadding = config.background.padding;
+					config.background.padding = 50;
+					await playback.setConfig(config);
+					const paddedSolid = await snapshot();
+					const importedImagePath =
+						"/api/editor/videos/fixture/file?raw=1&path=content/images/00000000-0000-0000-0000-000000000001.png";
+					config.background.source = {
+						type: "image",
+						path: importedImagePath,
+					};
+					await playback.setConfig(config);
+					const imageChangedPixels = differentPixels(
+						paddedSolid,
+						await snapshot(),
+					);
+					config.background.source = {
+						type: "image",
+						path: "/api/editor/videos/fixture/file?raw=1&path=content/images/00000000-0000-0000-0000-000000000002.png",
+					};
+					await playback.setConfig(config);
+					const rawJpegPixels = await snapshot();
+					config.background.source = {
+						type: "image",
+						path: "/api/editor/videos/fixture/file?raw=1&path=content/images/00000000-0000-0000-0000-000000000002.jpg",
+					};
+					await playback.setConfig(config);
+					const exifOrientationChangedPixels = differentPixels(
+						rawJpegPixels,
+						await snapshot(),
+					);
+					if (exifOrientationChangedPixels > 1000) {
+						throw new Error("JPEG EXIF orientation differs from native export");
+					}
+					config.background.padding = originalPadding;
+					config.background.source = JSON.parse(
+						playback.module.default_project_config_json(),
+					).background.source;
+					await playback.setConfig(config);
+					const withoutOverlay = await snapshot();
+					config.timeline = {
+						segments: [
+							{
+								recordingSegment: 0,
+								timescale: 1,
+								start: 0,
+								end: playback.sourceDurations[0],
+							},
+						],
+						transitions: [],
+						zoomSegments: [],
+						imageSegments: [
+							{
+								start: 0,
+								end: playback.sourceDurations[0],
+								path: importedImagePath,
+								center: { x: 0.5, y: 0.5 },
+								size: { x: 0.4, y: 0.4 },
+								opacity: 1,
+							},
+						],
+					};
+					await playback.setConfig(config);
+					const overlayChangedPixels = differentPixels(
+						withoutOverlay,
+						await snapshot(),
+					);
+					config.timeline.imageSegments[0].opacity = 0.4;
+					await playback.setConfig(config);
+					const overlayOpacityChangedPixels = differentPixels(
+						withoutOverlay,
+						await snapshot(),
+					);
+					config.timeline.imageSegments[0].enabled = false;
+					await playback.setConfig(config);
+					const disabledOverlayChangedPixels = differentPixels(
+						withoutOverlay,
+						await snapshot(),
+					);
+					config.timeline.imageSegments = Array.from(
+						{ length: 20 },
+						(_, index) => ({
+							start: 0,
+							end: playback.sourceDurations[0],
+							path: `/api/editor/videos/fixture/file?raw=1&path=content/images/00000000-0000-0000-0000-${String(index + 100).padStart(12, "0")}.png`,
+							center: {
+								x: ((index % 5) + 0.5) / 5,
+								y: (Math.floor(index / 5) + 0.5) / 4,
+							},
+							size: { x: 0.15, y: 0.2 },
+						}),
+					);
+					await playback.setConfig(config);
+					const manyOverlayChangedPixels = differentPixels(
+						withoutOverlay,
+						await snapshot(),
+					);
+					const manyOverlayTextures = config.timeline.imageSegments.filter(
+						(segment) =>
+							playback.canvas.renderer.has_overlay_image(segment.path),
+					).length;
+					config.timeline = undefined;
+					await playback.setConfig(config);
+					const seekStarted = performance.now();
+					await playback.seek(0.75);
+					console.info("Cap replay stage: first seek completed");
+					const seekMs = performance.now() - seekStarted;
+					const returnStarted = performance.now();
+					await playback.seek(0);
+					console.info("Cap replay stage: return seek completed");
+					const startChangedPixels = differentPixels(
+						withCamera,
+						await snapshot(),
+					);
+					if (startChangedPixels > 100) {
+						const videoState = () =>
+							[...document.querySelectorAll("video")].map((video) => ({
+								time: video.currentTime,
+								readyState: video.readyState,
+								presentedFrames:
+									video.getVideoPlaybackQuality?.().totalVideoFrames ?? null,
+							}));
+						const firstVideoState = videoState();
+						await new Promise((resolve) => setTimeout(resolve, 250));
+						await playback.seek(0);
+						console.info(
+							`Cap replay stage: return-to-zero mismatch ${JSON.stringify({ firstChangedPixels: startChangedPixels, afterDelayChangedPixels: differentPixels(withCamera, await snapshot()), firstVideoState, delayedVideoState: videoState() })}`,
+						);
+					}
+					console.info("Cap replay stage: first frame compared");
+					const returnToStartMs = performance.now() - returnStarted;
+					config.background.source = {
+						type: "animatedGradient",
+						config: JSON.parse(
+							playback.module.random_animated_gradient_json(1234),
+						),
+					};
+					await playback.setConfig(config);
+					await playback.seek(0);
+					const gradientStart = await snapshot();
+					const gradientChangedPixels = differentPixels(
+						withCamera,
+						gradientStart,
+					);
+					await playback.seek(0.75);
+					const gradientMotionPixels = differentPixels(
+						gradientStart,
+						await snapshot(),
+					);
+					const sourceDuration = Math.min(playback.sourceDurations[0], 2);
+					const split = sourceDuration * 0.6;
+					const transitionDuration = 0.3;
+					config.timeline = {
+						segments: [
+							{
+								recordingSegment: 0,
+								start: 0,
+								end: split,
+								timescale: 1,
+							},
+							{
+								recordingSegment: 0,
+								start: split,
+								end: sourceDuration,
+								timescale: 1,
+							},
+						],
+						transitions: [
+							{
+								segmentIndex: 1,
+								type: "cross-fade",
+								duration: transitionDuration,
+							},
+						],
+						zoomSegments: [],
+					};
+					const transitionTimeline = config.timeline;
+					await playback.setConfig(config);
+					const transitionStart = split - transitionDuration;
+					await playback.seek(transitionStart + transitionDuration * 0.2);
+					const transitionFirst = await snapshot();
+					await playback.seek(transitionStart + transitionDuration * 0.5);
+					const transitionMiddle = await snapshot();
+					await playback.seek(transitionStart + transitionDuration * 0.8);
+					const transitionLast = await snapshot();
+					const transitionChangedPixels =
+						differentPixels(transitionFirst, transitionMiddle) +
+						differentPixels(transitionMiddle, transitionLast);
+					if (
+						playback.timeline.map_frame(
+							transitionStart + transitionDuration * 0.5,
+						)[0] !== 2 ||
+						transitionChangedPixels === 0
+					) {
+						throw new Error(
+							"Paired animated-gradient transition did not render",
+						);
+					}
+					config.background.source = {
+						type: "image",
+						path: importedImagePath,
+					};
+					await playback.setConfig(config);
+					await playback.seek(transitionStart + transitionDuration * 0.5);
+					const imageTransitionChangedPixels = differentPixels(
+						transitionMiddle,
+						await snapshot(),
+					);
+					if (imageTransitionChangedPixels < 1000) {
+						throw new Error(
+							"Paired image-background transition did not render",
+						);
+					}
+					config.timeline = undefined;
+					config.background.source = JSON.parse(
+						playback.module.default_project_config_json(),
+					).background.source;
+					await playback.setConfig(config);
+					await playback.seek(0.75);
+					const beforePlay = frames.length;
+					const beforeVideoFrameCosts = videoFrameCosts.length;
+					const beforeVideoSlotCosts = videoSlotCosts.length;
+					const beforeVideoPlayCosts = videoPlayCosts.length;
+					const beforeVideoSourceDrifts = videoSourceDrifts.length;
+					const beforeVideoPresentedDrifts = videoPresentedDrifts.length;
+					const beforeDecodedFrameDrifts = decodedFrameDrifts.length;
+					const beforeDecodedFrameCosts = decodedFrameCosts.length;
+					const beforeCompositeCosts = compositeCosts.length;
+					playback.play();
+					const playbackIntervalMs =
+						window.CapReplayGpuAdapterArchitecture === "swiftshader" ||
+						String(webGlRenderer).includes("SwiftShader")
+							? 2500
+							: 850;
+					await new Promise((resolve) =>
+						setTimeout(resolve, playbackIntervalMs),
+					);
+					console.info("Cap replay stage: playback interval completed");
+					playback.pause();
+					const playedFrames = frames.length - beforePlay;
+					const costSummary = (samples) => ({
+						count: samples.length,
+						meanMs: samples.length
+							? Math.round(
+									(samples.reduce((sum, sample) => sum + sample, 0) /
+										samples.length) *
+										10,
+								) / 10
+							: 0,
+						maxMs: Math.round(Math.max(0, ...samples) * 10) / 10,
+					});
+					const playbackMetrics = {
+						intervalMs: playbackIntervalMs,
+						outputTime: playback.outputTime,
+						previewScale: playback.previewScale,
+						averageFrameCostMs: playback.averageFrameCostMs,
+						videoFrameCosts: costSummary(
+							videoFrameCosts.slice(beforeVideoFrameCosts),
+						),
+						videoSlotCosts: costSummary(
+							videoSlotCosts.slice(beforeVideoSlotCosts),
+						),
+						videoPlayCosts: costSummary(
+							videoPlayCosts.slice(beforeVideoPlayCosts),
+						),
+						decodedFrameCosts: costSummary(
+							decodedFrameCosts.slice(beforeDecodedFrameCosts),
+						),
+						decodedFrameDriftMs: {
+							display: costSummary(
+								decodedFrameDrifts
+									.slice(beforeDecodedFrameDrifts)
+									.filter((sample) => sample.track === "display")
+									.map((sample) => sample.absoluteMs),
+							),
+							camera: costSummary(
+								decodedFrameDrifts
+									.slice(beforeDecodedFrameDrifts)
+									.filter((sample) => sample.track === "camera")
+									.map((sample) => sample.absoluteMs),
+							),
+						},
+						videoSourceDriftMs: {
+							display: costSummary(
+								videoSourceDrifts
+									.slice(beforeVideoSourceDrifts)
+									.filter((sample) => sample.track === "display")
+									.map((sample) => sample.absoluteMs),
+							),
+							camera: costSummary(
+								videoSourceDrifts
+									.slice(beforeVideoSourceDrifts)
+									.filter((sample) => sample.track === "camera")
+									.map((sample) => sample.absoluteMs),
+							),
+						},
+						videoPresentedDriftMs: {
+							display: costSummary(
+								videoPresentedDrifts
+									.slice(beforeVideoPresentedDrifts)
+									.filter((sample) => sample.track === "display")
+									.map((sample) => sample.absoluteMs),
+							),
+							camera: costSummary(
+								videoPresentedDrifts
+									.slice(beforeVideoPresentedDrifts)
+									.filter((sample) => sample.track === "camera")
+									.map((sample) => sample.absoluteMs),
+							),
+						},
+						compositeCosts: costSummary(
+							compositeCosts.slice(beforeCompositeCosts),
+						),
+					};
+					let slowHtmlPlayback = null;
+					if (window.CapReplaySlowHtml) {
+						const decoderDescriptor = Object.getOwnPropertyDescriptor(
+							window,
+							"VideoDecoder",
+						);
+						const timeDescriptor = Object.getOwnPropertyDescriptor(
+							HTMLMediaElement.prototype,
+							"currentTime",
+						);
+						const rateDescriptor = Object.getOwnPropertyDescriptor(
+							HTMLMediaElement.prototype,
+							"playbackRate",
+						);
+						if (
+							!timeDescriptor?.get ||
+							!timeDescriptor.set ||
+							!rateDescriptor?.get ||
+							!rateDescriptor.set
+						) {
+							throw new Error("Slow HTML video clock could not be measured");
+						}
+						let seekCount = 0;
+						Object.defineProperty(window, "VideoDecoder", {
+							configurable: true,
+							value: undefined,
+							writable: true,
+						});
+						Object.defineProperty(HTMLMediaElement.prototype, "currentTime", {
+							...timeDescriptor,
+							set(value) {
+								if (this.tagName === "VIDEO") seekCount++;
+								return timeDescriptor.set.call(this, value);
+							},
+						});
+						Object.defineProperty(HTMLMediaElement.prototype, "playbackRate", {
+							...rateDescriptor,
+							set(value) {
+								return rateDescriptor.set.call(
+									this,
+									this.tagName === "VIDEO" ? Math.min(value, 0.5) : value,
+								);
+							},
+						});
+						try {
+							await playback.seek(0.1);
+							seekCount = 0;
+							const beforeSlowPlay = frames.length;
+							playback.play();
+							await new Promise((resolve) => setTimeout(resolve, 1200));
+							playback.pause();
+							slowHtmlPlayback = {
+								seekCount,
+								playedFrames: frames.length - beforeSlowPlay,
+								outputTime: playback.outputTime,
+							};
+						} finally {
+							playback.pause();
+							Object.defineProperty(
+								HTMLMediaElement.prototype,
+								"currentTime",
+								timeDescriptor,
+							);
+							Object.defineProperty(
+								HTMLMediaElement.prototype,
+								"playbackRate",
+								rateDescriptor,
+							);
+							if (decoderDescriptor)
+								Object.defineProperty(
+									window,
+									"VideoDecoder",
+									decoderDescriptor,
+								);
+							else delete window.VideoDecoder;
+						}
+					}
+					let indexedParity = null;
+					if (indexed) {
+						config.background.padding = 0;
+						config.timeline = {
+							segments: [
+								{
+									recordingSegment: 0,
+									start: 0,
+									end: playback.sourceDurations[0],
+									timescale: 8,
+								},
+							],
+							transitions: [],
+							zoomSegments: [],
+						};
+						await playback.setConfig(config);
+						await playback.seek(0);
+						const sourceCanvas = document.createElement("canvas");
+						sourceCanvas.width = 8;
+						sourceCanvas.height = 1;
+						const sourceContext = sourceCanvas.getContext("2d", {
+							willReadFrequently: true,
+						});
+						const retainedCanvas = document.createElement("canvas");
+						const retainedContext = retainedCanvas.getContext("2d", {
+							willReadFrequently: true,
+						});
+						if (!sourceContext || !retainedContext) {
+							throw new Error("Indexed frame inspection is unavailable");
+						}
+						const readIndex = (pixelAt, width, height, inverted) => {
+							let index = 0;
+							for (let bit = 0; bit < 8; bit++) {
+								const pixel = pixelAt(
+									Math.floor(((bit + 0.5) * width) / 8),
+									Math.floor(height / 4),
+								);
+								const white = pixel[0] + pixel[1] + pixel[2] > 384;
+								if (white !== inverted) index |= 1 << bit;
+							}
+							return index;
+						};
+						let retainedChangedPixels = null;
+						if (/webgpu/i.test(backend)) {
+							const retainedBefore =
+								await playback.canvas.renderer.snapshot_rgba();
+							if (playback.decodedPool.slots.has("0:display:primary")) {
+								const decoded = await playback.decodedPool.frame(
+									0,
+									"display",
+									"primary",
+									0.45,
+									new AbortController().signal,
+								);
+								if (!decoded || decoded === "fallback") {
+									throw new Error("Indexed decoded source is unavailable");
+								}
+								sourceContext.drawImage(decoded.bitmap, 0, 0, 8, 1);
+								decoded.bitmap.close();
+							} else {
+								const screenSlot = playback.pool.slots.get("0:display:primary");
+								if (!screenSlot) {
+									throw new Error("Indexed display source was not primed");
+								}
+								await playback.pool.frame(
+									0,
+									"display",
+									"primary",
+									0.45,
+									false,
+									1,
+									new AbortController().signal,
+									true,
+								);
+								sourceContext.drawImage(screenSlot.element, 0, 0, 8, 1);
+							}
+							const advancedSource = readIndex(
+								(x, y) => sourceContext.getImageData(x, y, 1, 1).data,
+								8,
+								1,
+								false,
+							);
+							if (advancedSource < 10) {
+								throw new Error("Indexed display did not decode a later frame");
+							}
+							retainedChangedPixels = differentPixels(
+								retainedBefore,
+								await playback.canvas.renderer.snapshot_rgba(),
+							);
+							await playback.seek(0);
+						}
+						const mismatches = [];
+						const samples = { display: 0, camera: 0, gpu: 0 };
+						const originalFrame = playback.pool.frame.bind(playback.pool);
+						playback.pool.frame = async (...args) => {
+							const video = await originalFrame(...args);
+							if (video) {
+								sourceContext.drawImage(video, 0, 0, 8, 1);
+								const observed = readIndex(
+									(x, y) => sourceContext.getImageData(x, y, 1, 1).data,
+									8,
+									1,
+									args[1] === "camera",
+								);
+								const target = Math.round(args[3] * 30);
+								samples[args[1]]++;
+								if (Math.abs(observed - target) > 1) {
+									mismatches.push(`${args[1]} ${target}/${observed}`);
+								}
+							}
+							return video;
+						};
+						const originalDecodedFrame = playback.decodedPool.frame.bind(
+							playback.decodedPool,
+						);
+						playback.decodedPool.frame = async (...args) => {
+							const frame = await originalDecodedFrame(...args);
+							if (frame && frame !== "fallback") {
+								sourceContext.drawImage(frame.bitmap, 0, 0, 8, 1);
+								const observed = readIndex(
+									(x, y) => sourceContext.getImageData(x, y, 1, 1).data,
+									8,
+									1,
+									args[1] === "camera",
+								);
+								const target = Math.round(args[3] * 30);
+								samples[args[1]]++;
+								if (Math.abs(observed - target) > 1) {
+									mismatches.push(`${args[1]} ${target}/${observed}`);
+								}
+							}
+							return frame;
+						};
+						const originalRender = playback.canvas.render.bind(playback.canvas);
+						const gpuReads = [];
+						let inspectGpu = true;
+						playback.canvas.render = (...args) => {
+							if (!inspectGpu) return originalRender(...args);
+							const read = (async () => {
+								await originalRender(...args);
+								let observed;
+								if (/webgpu/i.test(backend) && !window.CapReplayHeaded) {
+									const pixels = await playback.canvas.renderer.snapshot_rgba();
+									observed = readIndex(
+										(x, y) =>
+											pixels.subarray(
+												(y * canvas.width + x) * 4,
+												(y * canvas.width + x) * 4 + 4,
+											),
+										canvas.width,
+										canvas.height,
+										false,
+									);
+								} else if (/webgpu/i.test(backend)) {
+									await new Promise(requestAnimationFrame);
+									await new Promise(requestAnimationFrame);
+									observed = await window.CapReplayPresentedIndex();
+								} else {
+									if (!playback.drawLatestFrameToCanvas(retainedCanvas)) {
+										throw new Error("Indexed GPU frame is unavailable");
+									}
+									observed = readIndex(
+										(x, y) => retainedContext.getImageData(x, y, 1, 1).data,
+										retainedCanvas.width,
+										retainedCanvas.height,
+										false,
+									);
+								}
+								const target = Math.round((Number(args[2]) / 1e9) * 8 * 30);
+								samples.gpu++;
+								if (Math.abs(observed - target) > 1) {
+									mismatches.push(`gpu ${target}/${observed}`);
+								}
+							})();
+							gpuReads.push(read);
+							return read;
+						};
+						const probeTimes = [0.05, 0.15, 0.25, 0.35, 0.45];
+						for (const time of probeTimes) await playback.seek(time);
+						await playback.seek(0);
+						inspectGpu = false;
+						const beforeLiveSamples = { ...samples };
+						const beforeIndexedPlay = frames.length;
+						playback.play();
+						await new Promise((resolve) => setTimeout(resolve, 2000));
+						playback.pause();
+						await Promise.all(gpuReads);
+						indexedParity = {
+							playedFrames: frames.length - beforeIndexedPlay,
+							retainedChangedPixels,
+							pausedProbes: probeTimes.length,
+							samples,
+							liveSamples: {
+								display: samples.display - beforeLiveSamples.display,
+								camera: samples.camera - beforeLiveSamples.camera,
+							},
+							mismatches,
+						};
+						console.info(
+							`Cap replay stage: indexed parity ${JSON.stringify(indexedParity)}`,
+						);
+					}
+					const blurConfig = JSON.parse(
+						playback.module.default_project_config_json(),
+					);
+					blurConfig.background.padding = 50;
+					blurConfig.background.source = {
+						type: "image",
+						path: importedImagePath,
+					};
+					await playback.setConfig(blurConfig);
+					const imageWithoutBlur = await snapshot();
+					blurConfig.background.blur = 100;
+					await playback.setConfig(blurConfig);
+					const blurChangedPixels = differentPixels(
+						imageWithoutBlur,
+						await snapshot(),
+					);
+					blurConfig.background.blur = 60;
+					blurConfig.timeline = transitionTimeline;
+					await playback.setConfig(blurConfig);
+					await playback.seek(transitionStart + transitionDuration * 0.2);
+					const blurredTransitionFirst = await snapshot();
+					await playback.seek(transitionStart + transitionDuration * 0.8);
+					const blurredTransitionLast = await snapshot();
+					const blurredTransitionChangedPixels = differentPixels(
+						blurredTransitionFirst,
+						blurredTransitionLast,
+					);
+					const decodedSizes = Array.from(
+						new Map(
+							decodedDimensions.map((size) => [size.join("x"), size]),
+						).values(),
+					);
+					const videos = [
+						...Array.from(document.querySelectorAll("video")).map((video) => [
+							video.videoWidth,
+							video.videoHeight,
+						]),
+						...decodedSizes,
+					];
+					const colorPool = new window.CapBrowserDecodedVideoPool(async () => ({
+						url: new URL("/blue.mp4", location.href).href,
+						expiresAt: null,
+					}));
+					let colorSample = null;
+					try {
+						const decoded = await colorPool.frame(
+							0,
+							"display",
+							"primary",
+							0.125,
+							new AbortController().signal,
+						);
+						if (decoded && decoded !== "fallback") {
+							const colorCanvas = document.createElement("canvas");
+							colorCanvas.width = decoded.width;
+							colorCanvas.height = decoded.height;
+							const colorContext = colorCanvas.getContext("2d", {
+								willReadFrequently: true,
+							});
+							try {
+								if (!colorContext)
+									throw new Error("Decoded color inspection failed");
+								colorContext.drawImage(decoded.bitmap, 0, 0);
+								colorSample = Array.from(
+									colorContext.getImageData(
+										decoded.width / 2,
+										decoded.height / 2,
+										1,
+										1,
+									).data,
+								);
+							} finally {
+								decoded.bitmap.close();
+							}
+						}
+					} finally {
+						colorPool.dispose();
+					}
+					return {
+						backend,
+						webGlRenderer,
+						gpuAdapterArchitecture:
+							window.CapReplayGpuAdapterArchitecture ?? null,
+						probeForcedFailure: window.CapReplayProbeForcedFailure === true,
+						firstFrameMs,
+						seekMs,
+						returnToStartMs,
+						changedPixels,
+						imageChangedPixels,
+						overlayChangedPixels,
+						overlayOpacityChangedPixels,
+						disabledOverlayChangedPixels,
+						manyOverlayChangedPixels,
+						manyOverlayTextures,
+						blurChangedPixels,
+						exifOrientationChangedPixels,
+						startChangedPixels,
+						gradientChangedPixels,
+						gradientMotionPixels,
+						transitionChangedPixels,
+						blurredTransitionChangedPixels,
+						playedFrames,
+						playbackMetrics,
+						slowHtmlPlayback,
+						indexedParity,
+						videos,
+						colorSample,
+						width: canvas.width,
+						height: canvas.height,
+						errors,
+					};
+				} catch (error) {
+					console.info(
+						`Cap replay stage: stalled video state ${JSON.stringify(Array.from(document.querySelectorAll("video")).map((video) => ({ path: video.currentSrc ? new URL(video.currentSrc).pathname : "", currentTime: video.currentTime, duration: video.duration, readyState: video.readyState, networkState: video.networkState, seeking: video.seeking, paused: video.paused, width: video.videoWidth, height: video.videoHeight, error: video.error?.code ?? null })))}`,
+					);
+					throw error;
+				} finally {
+					for (const [video, callbackId] of presentationCallbacks) {
+						video.cancelVideoFrameCallback(callbackId);
+					}
+					presentationCallbacks.clear();
+					HTMLMediaElement.prototype.play = nativePlay;
+					playback.dispose();
+				}
+			}, screen.format),
+			new Promise((_, reject) => {
+				replayTimer = setTimeout(
+					() => reject(new Error(`Browser replay stalled at ${replayStage}`)),
+					indexed ? 90_000 : 45_000,
+				);
+			}),
+		]).finally(() => clearTimeout(replayTimer));
+		if (result.fatal) {
+			throw new Error(
+				JSON.stringify({
+					browser: browserName,
+					forceWebGl,
+					forceWebGpu,
+					...result.fatal,
+					pageErrors,
+					consoleErrors,
+				}),
+			);
+		}
+		const gpuErrors = await page.evaluate(
+			() => window.CapBrowserGpuErrors ?? [],
+		);
+		assert(gpuErrors.length === 0, `GPU errors: ${gpuErrors.join(", ")}`);
+		assert(
+			result.errors.length === 0,
+			`Playback errors: ${result.errors.join(", ")}`,
+		);
+		assert(pageErrors.length === 0, `Page errors: ${pageErrors.join(", ")}`);
+		assert(
+			workerRequests.length === 0,
+			"Browser preview allocated a native worker",
+		);
+		assert(
+			result.changedPixels > 1000,
+			"Camera visibility did not change the GPU frame",
+		);
+		assert(
+			result.imageChangedPixels > 1000,
+			"Imported image background did not change the GPU frame",
+		);
+		assert(
+			result.overlayChangedPixels > 1000 &&
+				result.overlayOpacityChangedPixels > 1000 &&
+				result.disabledOverlayChangedPixels < 100 &&
+				result.manyOverlayChangedPixels > 50_000 &&
+				result.manyOverlayTextures === 20,
+			`Image overlay pixel behavior differs: ${JSON.stringify({ visible: result.overlayChangedPixels, opacity: result.overlayOpacityChangedPixels, disabled: result.disabledOverlayChangedPixels, manyVisible: result.manyOverlayChangedPixels, manyTextures: result.manyOverlayTextures })}`,
+		);
+		assert(
+			result.blurChangedPixels > result.width * result.height * 0.004,
+			`Background blur changed ${result.blurChangedPixels} pixels at ${result.width}×${result.height}`,
+		);
+		assert(
+			result.startChangedPixels < 100,
+			`Returning to the start changed ${result.startChangedPixels} GPU pixels`,
+		);
+		assert(
+			result.gradientChangedPixels > 1000,
+			"Animated gradient did not change the GPU frame",
+		);
+		assert(
+			result.gradientMotionPixels > 1000,
+			"Animated gradient did not move across the timeline",
+		);
+		assert(
+			result.transitionChangedPixels > 1000,
+			"Paired animated-gradient transition did not change the GPU frame",
+		);
+		assert(
+			result.blurredTransitionChangedPixels > 1000,
+			"Paired blurred-image transition did not change the GPU frame",
+		);
+		if (result.playedFrames < 2) {
+			console.warn(
+				`Cap replay playback metrics: ${JSON.stringify({ backend: result.backend, playedFrames: result.playedFrames, ...result.playbackMetrics, firstFrameMs: result.firstFrameMs, seekMs: result.seekMs, returnToStartMs: result.returnToStartMs, indexedParity: result.indexedParity })}`,
+			);
+		}
+		assert(result.playedFrames >= 2, "Local playback did not advance");
+		if (slowHtml) {
+			assert(
+				result.slowHtmlPlayback?.playedFrames >= 2 &&
+					result.slowHtmlPlayback.seekCount <= 3,
+				`Slow HTML playback sought too often: ${JSON.stringify(result.slowHtmlPlayback)}`,
+			);
+		}
+		for (const track of ["display", "camera"]) {
+			const decoded = result.playbackMetrics.decodedFrameDriftMs[track];
+			if (decoded.count > 0) {
+				assert(
+					decoded.maxMs <= 75,
+					`${track} decoded frame drifted ${decoded.maxMs} ms from the export timeline`,
+				);
+			} else {
+				assert(
+					result.playbackMetrics.videoSourceDriftMs[track].count > 0,
+					`${track} media clock was not sampled during playback`,
+				);
+				assert(
+					result.playbackMetrics.videoPresentedDriftMs[track].count > 0,
+					`${track} presented frame was not sampled during playback`,
+				);
+				const sourceDrift =
+					result.playbackMetrics.videoSourceDriftMs[track].maxMs;
+				const presentedDrift =
+					result.playbackMetrics.videoPresentedDriftMs[track].maxMs;
+				assert(
+					sourceDrift <= 75,
+					`${track} media clock drifted ${sourceDrift} ms from the export timeline`,
+				);
+				assert(
+					presentedDrift <= 75,
+					`${track} presented frame drifted ${presentedDrift} ms from the export timeline`,
+				);
+			}
+		}
+		if (indexed) {
+			assert(result.indexedParity !== null, "Indexed parity did not run");
+			if (result.indexedParity.retainedChangedPixels !== null) {
+				assert(
+					result.indexedParity.retainedChangedPixels < 100,
+					"Retained GPU preview changed when the source video advanced",
+				);
+			}
+			assert(
+				result.indexedParity.playedFrames >= 2,
+				"8× local playback did not keep advancing",
+			);
+			assert(
+				result.indexedParity.pausedProbes === 5,
+				"8× paused timestamps were not inspected",
+			);
+			assert(
+				result.indexedParity.samples.display >= 5,
+				"8× display frames were not inspected",
+			);
+			assert(
+				result.indexedParity.samples.camera >= 5,
+				"8× camera frames were not inspected",
+			);
+			assert(
+				result.indexedParity.samples.gpu >= 5,
+				"8× GPU frames were not inspected",
+			);
+			assert(
+				result.indexedParity.liveSamples.display >= 2 &&
+					result.indexedParity.liveSamples.camera >= 2,
+				"8× paired playback stopped requesting decoded frames",
+			);
+			assert(
+				result.indexedParity.mismatches.length === 0,
+				`8× playback/export frame mismatch: ${result.indexedParity.mismatches.join(", ")}`,
+			);
+		}
+		assert(
+			result.videos.some(
+				([width, height]) =>
+					width === expectedScreenWidth && height === expectedScreenHeight,
+			),
+			"Screen clip did not decode",
+		);
+		assert(
+			result.videos.some(
+				([width, height]) =>
+					width === expectedCameraWidth && height === expectedCameraHeight,
+			),
+			"Camera clip did not decode",
+		);
+		if (browserName !== "firefox" && !forceHtml) {
+			assert(result.colorSample !== null, "Untagged color clip did not decode");
+			assert(
+				result.colorSample[0] <= 2 &&
+					result.colorSample[1] <= 2 &&
+					result.colorSample[2] >= 252,
+				`Untagged clip color differed from native export: ${result.colorSample.join(",")}`,
+			);
+		}
+		if (forceWebGl)
+			assert(/gl/i.test(result.backend), "WebGL fallback was not selected");
+		if (simulateFailedProbe) {
+			assert(
+				result.probeForcedFailure,
+				"Failed WebGPU probe was not exercised",
+			);
+			assert(
+				/gl/i.test(result.backend),
+				"Failed WebGPU probe did not select WebGL2",
+			);
+		} else if (forceWebGpu) {
+			if (process.env.CAP_REPLAY_ALLOW_AUTO_FALLBACK === "1") {
+				assert(
+					result.gpuAdapterArchitecture !== null,
+					"WebGPU adapter identity was unavailable",
+				);
+				assert(
+					result.gpuAdapterArchitecture === "swiftshader"
+						? /gl/i.test(result.backend)
+						: /webgpu/i.test(result.backend),
+					"Browser selected the wrong compositor for its GPU adapter",
+				);
+			} else {
+				assert(/webgpu/i.test(result.backend), "WebGPU path was not selected");
+			}
+		}
+		const largeImage = await page.evaluate(async () => {
+			const decoder = new window.CapBrowserImageDecoder();
+			try {
+				const response = await fetch("/browser-replay/large-background.png");
+				if (!response.ok) throw new Error("Large image fixture is unavailable");
+				const started = performance.now();
+				const image = await decoder.decode(await response.arrayBuffer());
+				const decodeMs = performance.now() - started;
+				const pixels = new Uint8ClampedArray(image.pixels);
+				const bitmapStarted = performance.now();
+				const bitmap = await createImageBitmap(
+					new ImageData(pixels, image.width, image.height),
+					{ premultiplyAlpha: "none", colorSpaceConversion: "none" },
+				);
+				const bitmapMs = performance.now() - bitmapStarted;
+				const canvas = document.createElement("canvas");
+				canvas.width = bitmap.width;
+				canvas.height = bitmap.height;
+				const context = canvas.getContext("2d", { willReadFrequently: true });
+				if (!context) throw new Error("Large image canvas is unavailable");
+				context.drawImage(bitmap, 0, 0);
+				const observed = context.getImageData(
+					0,
+					0,
+					image.width,
+					image.height,
+				).data;
+				const digest = async (bytes) =>
+					Array.from(
+						new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)),
+					)
+						.map((value) => value.toString(16).padStart(2, "0"))
+						.join("");
+				const rawSha256 = await digest(pixels);
+				const bitmapSha256 = await digest(observed);
+				bitmap.close();
+				return {
+					width: image.width,
+					height: image.height,
+					decodeMs,
+					bitmapMs,
+					rawSha256,
+					bitmapSha256,
+				};
+			} finally {
+				decoder.dispose();
+			}
+		});
+		const nativeImageSha256 =
+			"ffe919d64110a31ef1862854bf685b3d0d70f2e0a96b9f9203f3026f2334224e";
+		assert(
+			largeImage.width === 2560 && largeImage.height === 1707,
+			"Large image dimensions differ from native export",
+		);
+		assert(
+			largeImage.rawSha256 === nativeImageSha256,
+			"Large image downscaling differs from native export",
+		);
+		assert(
+			largeImage.bitmapSha256 === nativeImageSha256,
+			"Large image browser bitmap differs from native export",
+		);
+		console.log(
+			JSON.stringify({
+				browser: browserName,
+				forceWebGl,
+				forceWebGpu,
+				largeImage,
+				...result,
+			}),
+		);
+	} finally {
+		await browser.close();
+	}
+}
+
+async function main() {
+	const modes = simulateFailedProbe
+		? [[false, true]]
+		: process.env.CAP_REPLAY_ONLY_WEBGL === "1"
+			? [[true, false]]
+			: process.env.CAP_REPLAY_REQUIRE_WEBGPU === "1"
+				? [[false, true]]
+				: [
+						[false, false],
+						[true, false],
+					];
+	let failed = false;
+	for (const [forceWebGl, forceWebGpu] of modes) {
+		try {
+			await replay(forceWebGl, forceWebGpu);
+		} catch (error) {
+			console.error(error);
+			failed = true;
+		}
+	}
+	if (failed) throw new Error("Browser compositor replay failed");
+}
+
+main()
+	.catch((error) => {
+		console.error(error.stack ?? String(error));
+		process.exitCode = 1;
+	})
+	.finally(() => staticServer.stop(true));

@@ -37,6 +37,35 @@ const DATABASE_VERSION = 1;
 const SESSIONS_STORE = "sessions";
 const CHUNKS_STORE = "chunks";
 const DEFAULT_MAX_PENDING_CHUNK_BYTES = 32 * 1024 * 1024;
+const TRANSACTION_TIMEOUT_MS = 15_000;
+const UPLOADED_SESSION_KEY_PREFIX = "cap-recording-spool-uploaded:";
+
+const uploadedSessionKey = (sessionId: string) =>
+	`${UPLOADED_SESSION_KEY_PREFIX}${sessionId}`;
+
+const isUploadedSession = (sessionId: string) => {
+	try {
+		return (
+			globalThis.localStorage?.getItem(uploadedSessionKey(sessionId)) === "1"
+		);
+	} catch {
+		return false;
+	}
+};
+
+export const isRecordingSpoolUploaded = isUploadedSession;
+
+const markUploadedSession = (sessionId: string) => {
+	try {
+		globalThis.localStorage?.setItem(uploadedSessionKey(sessionId), "1");
+	} catch {}
+};
+
+const clearUploadedSession = (sessionId: string) => {
+	try {
+		globalThis.localStorage?.removeItem(uploadedSessionKey(sessionId));
+	} catch {}
+};
 
 // Liveness contract between live recorders and recovery sweeps: a spool whose
 // session was updated within this window must be treated as live and never
@@ -61,20 +90,46 @@ const requestToPromise = <T>(request: IDBRequest<T>) =>
 
 const transactionToPromise = (transaction: IDBTransaction) =>
 	new Promise<void>((resolve, reject) => {
-		transaction.oncomplete = () => resolve();
-		transaction.onabort = () => reject(normalizeError(transaction.error));
-		transaction.onerror = () => reject(normalizeError(transaction.error));
+		const timeoutId = setTimeout(() => {
+			try {
+				transaction.abort();
+			} catch {}
+			reject(new Error("IndexedDB transaction timed out"));
+		}, TRANSACTION_TIMEOUT_MS);
+		transaction.oncomplete = () => {
+			clearTimeout(timeoutId);
+			resolve();
+		};
+		transaction.onabort = () => {
+			clearTimeout(timeoutId);
+			reject(normalizeError(transaction.error));
+		};
+		transaction.onerror = (event) => {
+			clearTimeout(timeoutId);
+			const request = event.target;
+			const requestError = request instanceof IDBRequest ? request.error : null;
+			reject(
+				normalizeError(
+					requestError ??
+						transaction.error ??
+						new Error("IndexedDB transaction failed"),
+				),
+			);
+		};
 	});
 
-const createSessionId = () => {
-	if (
-		typeof crypto !== "undefined" &&
-		typeof crypto.randomUUID === "function"
-	) {
-		return crypto.randomUUID();
+export const createRecordingSessionId = () => {
+	const secureRandom = globalThis.crypto;
+	if (typeof secureRandom?.randomUUID === "function") {
+		return secureRandom.randomUUID();
 	}
-
-	return `recording-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+	if (typeof secureRandom?.getRandomValues !== "function") {
+		throw new Error("Secure random source is unavailable");
+	}
+	const bytes = secureRandom.getRandomValues(new Uint8Array(16));
+	return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(
+		"",
+	);
 };
 
 export class RecordingSpoolBackpressureError extends Error {
@@ -121,30 +176,30 @@ class IndexedDbRecordingSpoolBackend implements RecordingSpoolBackend {
 		const database = await this.openDatabase();
 		const transaction = database.transaction(CHUNKS_STORE, "readonly");
 		const index = transaction.objectStore(CHUNKS_STORE).index("by-session");
-		const records = await requestToPromise(
-			index.getAll(IDBKeyRange.only(sessionId)),
-		);
-		await transactionToPromise(transaction);
+		const [records] = await Promise.all([
+			requestToPromise(index.getAll(IDBKeyRange.only(sessionId))),
+			transactionToPromise(transaction),
+		]);
 		return (records as RecordingSpoolChunk[]).map((record) => record.blob);
 	}
 
 	async listSessions() {
 		const database = await this.openDatabase();
 		const transaction = database.transaction(SESSIONS_STORE, "readonly");
-		const records = await requestToPromise(
-			transaction.objectStore(SESSIONS_STORE).getAll(),
-		);
-		await transactionToPromise(transaction);
+		const [records] = await Promise.all([
+			requestToPromise(transaction.objectStore(SESSIONS_STORE).getAll()),
+			transactionToPromise(transaction),
+		]);
 		return records as RecordingSpoolSessionRecord[];
 	}
 
 	async getSession(sessionId: string) {
 		const database = await this.openDatabase();
 		const transaction = database.transaction(SESSIONS_STORE, "readonly");
-		const record = await requestToPromise(
-			transaction.objectStore(SESSIONS_STORE).get(sessionId),
-		);
-		await transactionToPromise(transaction);
+		const [record] = await Promise.all([
+			requestToPromise(transaction.objectStore(SESSIONS_STORE).get(sessionId)),
+			transactionToPromise(transaction),
+		]);
 		return (record as RecordingSpoolSessionRecord | undefined) ?? null;
 	}
 
@@ -200,10 +255,10 @@ class IndexedDbRecordingSpoolBackend implements RecordingSpoolBackend {
 		const database = await this.openDatabase();
 		const transaction = database.transaction(CHUNKS_STORE, "readonly");
 		const index = transaction.objectStore(CHUNKS_STORE).index("by-session");
-		const keys = await requestToPromise(
-			index.getAllKeys(IDBKeyRange.only(sessionId)),
-		);
-		await transactionToPromise(transaction);
+		const [keys] = await Promise.all([
+			requestToPromise(index.getAllKeys(IDBKeyRange.only(sessionId))),
+			transactionToPromise(transaction),
+		]);
 		return keys;
 	}
 }
@@ -235,7 +290,7 @@ export class RecordingSpool {
 	) {
 		const now = Date.now();
 		const session = {
-			sessionId: options.sessionId ?? createSessionId(),
+			sessionId: options.sessionId ?? createRecordingSessionId(),
 			mimeType: options.mimeType,
 			totalBytes: 0,
 			chunkCount: 0,
@@ -263,6 +318,14 @@ export class RecordingSpool {
 
 	get chunkCount() {
 		return this.session.chunkCount;
+	}
+
+	getUnwrittenChunks() {
+		return [...this.pendingChunks];
+	}
+
+	markUploaded() {
+		markUploadedSession(this.session.sessionId);
 	}
 
 	appendChunk(chunk: Blob) {
@@ -357,6 +420,11 @@ export class RecordingSpool {
 		);
 	}
 
+	async recoverPersistedBlob() {
+		await this.pendingWrite;
+		return this.readPersistedBlob();
+	}
+
 	private async readPersistedBlob() {
 		const chunks = await this.backend.readChunks(this.session.sessionId);
 		if (chunks.length === 0) {
@@ -378,6 +446,7 @@ export class RecordingSpool {
 			await this.pendingWrite;
 		} catch {}
 		await this.backend.deleteSession(this.session.sessionId);
+		clearUploadedSession(this.session.sessionId);
 	}
 
 	private enqueue(task: () => Promise<void>) {
@@ -419,6 +488,19 @@ export const recoverOrphanedRecordingSpools = async (
 		// would offer the user a "recovered" copy whose dismissal deletes the
 		// live session's crash backup out from under it.
 		if (minIdleMs > 0 && now - session.updatedAt < minIdleMs) {
+			continue;
+		}
+		if (isUploadedSession(session.sessionId)) {
+			void backend
+				.deleteSession(session.sessionId)
+				.then(() => clearUploadedSession(session.sessionId))
+				.catch((error) => {
+					console.error(
+						"Failed to remove uploaded recording backup",
+						session.sessionId,
+						error,
+					);
+				});
 			continue;
 		}
 
@@ -491,4 +573,5 @@ export const deleteRecoveredRecordingSpool = async (
 ) => {
 	await backend.initialize();
 	await backend.deleteSession(sessionId);
+	clearUploadedSession(sessionId);
 };

@@ -10,7 +10,7 @@ use core::f64;
 use cursor_interpolation::{
     InterpolatedCursorPosition, interpolate_cursor, interpolate_cursor_with_click_spring,
 };
-use decoder::{AsyncVideoDecoderHandle, spawn_decoder};
+use decoder::{AsyncVideoDecoderHandle, DecodedFrameStorageIdentity, spawn_decoder};
 #[cfg(target_os = "macos")]
 use frame_pipeline::finish_encoder_bgra_surface;
 use frame_pipeline::{
@@ -5195,7 +5195,11 @@ mod tests {
                             ..Default::default()
                         };
                         camera.background_blur.mode = cap_project::BackgroundBlurMode::Remove;
-                        let padding = if cfg!(target_os = "macos") { 0.0 } else { 50.0 };
+                        let padding = if camera.background_blur.removes_background() {
+                            0.0
+                        } else {
+                            50.0
+                        };
                         let expected_x = match x {
                             CameraXPosition::Left => padding,
                             CameraXPosition::Center => (output[0] - subject[0]) / 2.0,
@@ -5506,13 +5510,14 @@ mod style_image_tests {
         for frame in [60, 108, 288, 330] {
             let uniforms = at(&project, frame);
             let camera = uniforms.camera.expect("overlay");
+            let removal_enabled = project.camera.background_blur.removes_background();
             assert_eq!(
                 camera.preserve_source_alpha,
-                if cfg!(target_os = "macos") { 1.0 } else { 0.0 }
+                if removal_enabled { 1.0 } else { 0.0 }
             );
             assert_eq!(
                 uniforms.camera_background_effect_mode(),
-                cfg!(target_os = "macos").then_some(cap_camera_effects::BlurMode::Remove)
+                removal_enabled.then_some(cap_camera_effects::BlurMode::Remove)
             );
             if let Some(camera_only) = uniforms.camera_only {
                 assert_eq!(camera_only.preserve_source_alpha, 0.0);
@@ -6784,6 +6789,11 @@ pub struct RendererLayers {
     overlays: Option<OverlayLayers>,
     camera3d: Camera3DLayer,
     camera_blur_processor: Option<cap_camera_effects::BlurProcessor>,
+    camera_blur_input: Option<(
+        DecodedFrameStorageIdentity,
+        cap_camera_effects::BlurMode,
+        (u32, u32),
+    )>,
     camera_blur_init_failed: bool,
     camera_blur_unavailable: bool,
 }
@@ -6874,6 +6884,7 @@ impl RendererLayers {
             overlays: include_overlays.then(|| OverlayLayers::new(device, queue)),
             camera3d: readiness::measure("layers.camera3d", || Camera3DLayer::new(device)),
             camera_blur_processor: None,
+            camera_blur_input: None,
             camera_blur_init_failed: false,
             camera_blur_unavailable: false,
         };
@@ -6908,6 +6919,7 @@ impl RendererLayers {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         mode: cap_camera_effects::BlurMode,
+        frame_storage: Option<&DecodedFrameStorageIdentity>,
     ) {
         if self.camera.source_texture_for_blur().is_none()
             && self.camera_only.source_texture_for_blur().is_none()
@@ -6930,17 +6942,46 @@ impl RendererLayers {
         };
 
         let dimensions = (source_texture.width(), source_texture.height());
-        reset_camera_blur_for_dimensions(processor, dimensions);
-        if let Some(time) = self
-            .camera
-            .source_time_for_blur()
-            .or_else(|| self.camera_only.source_time_for_blur())
+        let reused_input = cfg!(feature = "web-editor-camera-removal")
+            && frame_storage.is_some_and(|storage| {
+                self.camera_blur_input.as_ref().is_some_and(
+                    |(previous, previous_mode, previous_dimensions)| {
+                        previous.matches(storage)
+                            && *previous_mode == mode
+                            && *previous_dimensions == dimensions
+                    },
+                )
+            });
+        if !reused_input
+            || !camera_blur_output_is_available(
+                processor.output_status().as_ref(),
+                mode,
+                dimensions,
+            )
         {
-            processor.set_frame_time(time);
+            reset_camera_blur_for_dimensions(processor, dimensions);
+            if let Some(time) = self
+                .camera
+                .source_time_for_blur()
+                .or_else(|| self.camera_only.source_time_for_blur())
+            {
+                processor.set_frame_time(time);
+            }
+            let _ = processor.process(device, queue, source_texture, mode);
+            self.camera_blur_unavailable = !camera_blur_output_is_available(
+                processor.output_status().as_ref(),
+                mode,
+                dimensions,
+            );
+            self.camera_blur_input =
+                if self.camera_blur_unavailable || !cfg!(feature = "web-editor-camera-removal") {
+                    None
+                } else {
+                    frame_storage.map(|storage| (storage.clone(), mode, dimensions))
+                };
+        } else {
+            self.camera_blur_unavailable = false;
         }
-        let _ = processor.process(device, queue, source_texture, mode);
-        self.camera_blur_unavailable =
-            !camera_blur_output_is_available(processor.output_status().as_ref(), mode, dimensions);
 
         let processor: &cap_camera_effects::BlurProcessor = processor;
         self.camera.attach_shared_blur(device, processor, mode);
@@ -6955,6 +6996,7 @@ impl RendererLayers {
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         mode: cap_camera_effects::BlurMode,
+        frame_storage: Option<&DecodedFrameStorageIdentity>,
     ) {
         if self.camera.source_texture_for_blur().is_none()
             && self.camera_only.source_texture_for_blur().is_none()
@@ -6977,25 +7019,54 @@ impl RendererLayers {
         };
 
         let dimensions = (source_texture.width(), source_texture.height());
-        reset_camera_blur_for_dimensions(processor, dimensions);
-        if let Some(time) = self
-            .camera
-            .source_time_for_blur()
-            .or_else(|| self.camera_only.source_time_for_blur())
+        let reused_input = cfg!(feature = "web-editor-camera-removal")
+            && frame_storage.is_some_and(|storage| {
+                self.camera_blur_input.as_ref().is_some_and(
+                    |(previous, previous_mode, previous_dimensions)| {
+                        previous.matches(storage)
+                            && *previous_mode == mode
+                            && *previous_dimensions == dimensions
+                    },
+                )
+            });
+        if !reused_input
+            || !camera_blur_output_is_available(
+                processor.output_status().as_ref(),
+                mode,
+                dimensions,
+            )
         {
-            processor.set_frame_time(time);
+            reset_camera_blur_for_dimensions(processor, dimensions);
+            if let Some(time) = self
+                .camera
+                .source_time_for_blur()
+                .or_else(|| self.camera_only.source_time_for_blur())
+            {
+                processor.set_frame_time(time);
+            }
+            // YUV conversion in the caller's encoder must complete before segmentation reads this frame.
+            let pending = std::mem::replace(
+                encoder,
+                device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("Camera effects and composition"),
+                }),
+            );
+            queue.submit([pending.finish()]);
+            processor.process_into_encoder(device, queue, source_texture, encoder, mode);
+            self.camera_blur_unavailable = !camera_blur_output_is_available(
+                processor.output_status().as_ref(),
+                mode,
+                dimensions,
+            );
+            self.camera_blur_input =
+                if self.camera_blur_unavailable || !cfg!(feature = "web-editor-camera-removal") {
+                    None
+                } else {
+                    frame_storage.map(|storage| (storage.clone(), mode, dimensions))
+                };
+        } else {
+            self.camera_blur_unavailable = false;
         }
-        // YUV conversion in the caller's encoder must complete before segmentation reads this frame.
-        let pending = std::mem::replace(
-            encoder,
-            device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Camera effects and composition"),
-            }),
-        );
-        queue.submit([pending.finish()]);
-        processor.process_into_encoder(device, queue, source_texture, encoder, mode);
-        self.camera_blur_unavailable =
-            !camera_blur_output_is_available(processor.output_status().as_ref(), mode, dimensions);
 
         let processor: &cap_camera_effects::BlurProcessor = processor;
         self.camera.attach_shared_blur(device, processor, mode);
@@ -7127,7 +7198,15 @@ impl RendererLayers {
         );
 
         if let Some(mode) = uniforms.camera_background_effect_mode() {
-            self.run_shared_camera_blur(&constants.device, &constants.queue, mode);
+            let frame_storage = camera_frame_data
+                .as_ref()
+                .map(|(_, frame, _)| frame.storage_identity());
+            self.run_shared_camera_blur(
+                &constants.device,
+                &constants.queue,
+                mode,
+                frame_storage.as_ref(),
+            );
         }
 
         if let Some(overlays) = &mut self.overlays {
@@ -7299,11 +7378,15 @@ impl RendererLayers {
 
         let start = Instant::now();
         if let Some(mode) = uniforms.camera_background_effect_mode() {
+            let frame_storage = camera_frame_data
+                .as_ref()
+                .map(|(_, frame, _)| frame.storage_identity());
             self.run_shared_camera_blur_with_encoder(
                 &constants.device,
                 &constants.queue,
                 encoder,
                 mode,
+                frame_storage.as_ref(),
             );
         }
         timings.camera_blur_prepare_duration = start.elapsed();
@@ -7760,9 +7843,9 @@ fn blur_mode_from_config(
         cap_project::BackgroundBlurMode::Off => None,
         cap_project::BackgroundBlurMode::Light => Some(cap_camera_effects::BlurMode::Light),
         cap_project::BackgroundBlurMode::Heavy => Some(cap_camera_effects::BlurMode::Heavy),
-        cap_project::BackgroundBlurMode::Remove => {
-            cfg!(target_os = "macos").then_some(cap_camera_effects::BlurMode::Remove)
-        }
+        cap_project::BackgroundBlurMode::Remove => config
+            .removes_background()
+            .then_some(cap_camera_effects::BlurMode::Remove),
     }
 }
 

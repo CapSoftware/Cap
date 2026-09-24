@@ -1,3 +1,4 @@
+import { requestStorage } from "./storage-bridge";
 import { RECORDING_STATE_KEY, SHARED_UI_STATE_KEY } from "./storage-keys";
 import type {
 	BootstrapData,
@@ -39,20 +40,43 @@ export type MediaAccessState = {
 	updatedAt: number;
 };
 
+export type RecordingAudioSource = {
+	kind: "mic" | "systemAudio";
+	sessionId: string;
+	mimeType: string;
+	subpath: string;
+	offsetMs: number;
+	recordedBytes: number;
+};
+
 // Metadata for a recording whose upload did not complete. The captured bytes
 // stay in the IndexedDB recording spool under sessionId until the upload is
 // retried successfully or the entry is pruned.
 export type FailedRecording = {
 	sessionId: string;
+	cameraSessionId?: string;
+	cameraRetryUnavailable?: boolean;
+	inputEventsSessionId?: string;
+	inputEventsTotalBytes?: number;
+	inputEventsRetryUnavailable?: boolean;
+	audioSources?: RecordingAudioSource[];
+	audioRetryUnavailable?: boolean;
 	videoId: string | null;
 	shareUrl: string | null;
 	mimeType: string;
+	cameraMimeType?: string;
 	subpath: string | null;
+	cameraSubpath?: string;
+	cameraOffsetMs?: number;
 	durationMs: number;
 	width: number | null;
 	height: number | null;
 	fps: number | null;
+	cameraWidth?: number;
+	cameraHeight?: number;
+	cameraFps?: number;
 	totalBytes: number;
+	cameraTotalBytes?: number;
 	createdAt: number;
 	message: string | null;
 };
@@ -118,35 +142,61 @@ const withKeyLock = <T>(key: string, task: () => Promise<T>): Promise<T> => {
 	return run;
 };
 
-const getLocal = (keys: string[]) =>
-	new Promise<Record<string, unknown>>((resolve) => {
-		chrome.storage.local.get(keys, (items) => resolve(items));
-	});
+const getLocal = async (keys: string[]) =>
+	(
+		await requestStorage({
+			target: "storage-bridge",
+			type: "get",
+			area: "local",
+			keys,
+		})
+	).items ?? {};
 
-const setLocal = (items: Record<string, unknown>) =>
-	new Promise<void>((resolve) => {
-		chrome.storage.local.set(items, resolve);
+const setLocal = async (items: Record<string, unknown>) => {
+	await requestStorage({
+		target: "storage-bridge",
+		type: "set",
+		area: "local",
+		items,
 	});
+};
 
-const removeLocal = (keys: string[] | string) =>
-	new Promise<void>((resolve) => {
-		chrome.storage.local.remove(keys, resolve);
+const removeLocal = async (keys: string[] | string) => {
+	await requestStorage({
+		target: "storage-bridge",
+		type: "remove",
+		area: "local",
+		keys,
 	});
+};
 
-const getSession = (keys: string[]) =>
-	new Promise<Record<string, unknown>>((resolve) => {
-		chrome.storage.session.get(keys, (items) => resolve(items));
-	});
+const getSession = async (keys: string[]) =>
+	(
+		await requestStorage({
+			target: "storage-bridge",
+			type: "get",
+			area: "session",
+			keys,
+		})
+	).items ?? {};
 
-const setSession = (items: Record<string, unknown>) =>
-	new Promise<void>((resolve) => {
-		chrome.storage.session.set(items, resolve);
+const setSession = async (items: Record<string, unknown>) => {
+	await requestStorage({
+		target: "storage-bridge",
+		type: "set",
+		area: "session",
+		items,
 	});
+};
 
-const removeSession = (keys: string[] | string) =>
-	new Promise<void>((resolve) => {
-		chrome.storage.session.remove(keys, resolve);
+const removeSession = async (keys: string[] | string) => {
+	await requestStorage({
+		target: "storage-bridge",
+		type: "remove",
+		area: "session",
+		keys,
 	});
+};
 
 export const loadSettings = async () => {
 	const result = await getLocal([SETTINGS_KEY]);
@@ -274,6 +324,46 @@ export const saveWebcamPreviewDismissed = (dismissed: boolean) =>
 
 const MAX_FAILED_RECORDINGS = 5;
 
+const isRecordingAudioSource = (
+	value: unknown,
+): value is RecordingAudioSource => {
+	if (!value || typeof value !== "object") return false;
+	const source = value as Partial<RecordingAudioSource>;
+	return (
+		(source.kind === "mic" || source.kind === "systemAudio") &&
+		typeof source.sessionId === "string" &&
+		source.sessionId.length > 0 &&
+		typeof source.mimeType === "string" &&
+		/^audio\/(webm|mp4)(;|$)/.test(source.mimeType) &&
+		typeof source.subpath === "string" &&
+		source.subpath ===
+			`${source.kind === "mic" ? "mic" : "system-audio"}-upload.${source.mimeType.includes("webm") ? "webm" : "mp4"}` &&
+		typeof source.offsetMs === "number" &&
+		Number.isSafeInteger(source.offsetMs) &&
+		Math.abs(source.offsetMs) <= 30_000 &&
+		typeof source.recordedBytes === "number" &&
+		Number.isSafeInteger(source.recordedBytes) &&
+		source.recordedBytes >= 0
+	);
+};
+
+const validAudioSources = (
+	value: unknown,
+	screenSessionId: string,
+	cameraSessionId?: string,
+) =>
+	value === undefined ||
+	(Array.isArray(value) &&
+		value.length <= 2 &&
+		value.every(isRecordingAudioSource) &&
+		new Set(value.map((source) => source.kind)).size === value.length &&
+		new Set(value.map((source) => source.sessionId)).size === value.length &&
+		value.every(
+			(source) =>
+				source.sessionId !== screenSessionId &&
+				source.sessionId !== cameraSessionId,
+		));
+
 const isFailedRecording = (value: unknown): value is FailedRecording => {
 	if (!value || typeof value !== "object") return false;
 	const candidate = value as Partial<FailedRecording>;
@@ -281,7 +371,47 @@ const isFailedRecording = (value: unknown): value is FailedRecording => {
 		typeof candidate.sessionId === "string" &&
 		typeof candidate.mimeType === "string" &&
 		typeof candidate.totalBytes === "number" &&
-		typeof candidate.createdAt === "number"
+		typeof candidate.createdAt === "number" &&
+		(candidate.cameraSessionId === undefined ||
+			typeof candidate.cameraSessionId === "string") &&
+		(candidate.inputEventsSessionId === undefined ||
+			(typeof candidate.inputEventsSessionId === "string" &&
+				candidate.inputEventsSessionId.length > 0 &&
+				candidate.inputEventsSessionId !== candidate.sessionId &&
+				candidate.inputEventsSessionId !== candidate.cameraSessionId &&
+				(!Array.isArray(candidate.audioSources) ||
+					!candidate.audioSources.some(
+						(source) => source.sessionId === candidate.inputEventsSessionId,
+					)))) &&
+		(candidate.inputEventsTotalBytes === undefined ||
+			(Number.isSafeInteger(candidate.inputEventsTotalBytes) &&
+				candidate.inputEventsTotalBytes >= 0 &&
+				candidate.inputEventsTotalBytes <= 64 * 1024 * 1024)) &&
+		(candidate.inputEventsRetryUnavailable === undefined ||
+			typeof candidate.inputEventsRetryUnavailable === "boolean") &&
+		(candidate.cameraRetryUnavailable === undefined ||
+			typeof candidate.cameraRetryUnavailable === "boolean") &&
+		validAudioSources(
+			candidate.audioSources,
+			candidate.sessionId,
+			candidate.cameraSessionId,
+		) &&
+		(candidate.audioRetryUnavailable === undefined ||
+			typeof candidate.audioRetryUnavailable === "boolean") &&
+		(candidate.cameraMimeType === undefined ||
+			typeof candidate.cameraMimeType === "string") &&
+		(candidate.cameraSubpath === undefined ||
+			typeof candidate.cameraSubpath === "string") &&
+		(candidate.cameraOffsetMs === undefined ||
+			typeof candidate.cameraOffsetMs === "number") &&
+		(candidate.cameraWidth === undefined ||
+			typeof candidate.cameraWidth === "number") &&
+		(candidate.cameraHeight === undefined ||
+			typeof candidate.cameraHeight === "number") &&
+		(candidate.cameraFps === undefined ||
+			typeof candidate.cameraFps === "number") &&
+		(candidate.cameraTotalBytes === undefined ||
+			typeof candidate.cameraTotalBytes === "number")
 	);
 };
 
@@ -332,13 +462,22 @@ export const removeFailedRecording = (sessionId: string) =>
 // subpath, dimensions) instead of a download-only one.
 export type LiveRecordingManifest = {
 	sessionId: string;
+	cameraSessionId?: string;
+	inputEventsSessionId?: string;
+	audioSources?: RecordingAudioSource[];
 	videoId: string;
 	shareUrl: string;
 	mimeType: string;
+	cameraMimeType?: string;
 	subpath: string;
+	cameraSubpath?: string;
+	cameraOffsetMs?: number;
 	width: number;
 	height: number;
 	fps: number;
+	cameraWidth?: number;
+	cameraHeight?: number;
+	cameraFps?: number;
 	startedAt: number;
 };
 
@@ -358,7 +497,35 @@ const isLiveRecordingManifest = (
 		typeof candidate.width === "number" &&
 		typeof candidate.height === "number" &&
 		typeof candidate.fps === "number" &&
-		typeof candidate.startedAt === "number"
+		typeof candidate.startedAt === "number" &&
+		(candidate.cameraSessionId === undefined ||
+			typeof candidate.cameraSessionId === "string") &&
+		(candidate.inputEventsSessionId === undefined ||
+			(typeof candidate.inputEventsSessionId === "string" &&
+				candidate.inputEventsSessionId.length > 0 &&
+				candidate.inputEventsSessionId !== candidate.sessionId &&
+				candidate.inputEventsSessionId !== candidate.cameraSessionId &&
+				(!Array.isArray(candidate.audioSources) ||
+					!candidate.audioSources.some(
+						(source) => source.sessionId === candidate.inputEventsSessionId,
+					)))) &&
+		validAudioSources(
+			candidate.audioSources,
+			candidate.sessionId,
+			candidate.cameraSessionId,
+		) &&
+		(candidate.cameraMimeType === undefined ||
+			typeof candidate.cameraMimeType === "string") &&
+		(candidate.cameraSubpath === undefined ||
+			typeof candidate.cameraSubpath === "string") &&
+		(candidate.cameraOffsetMs === undefined ||
+			typeof candidate.cameraOffsetMs === "number") &&
+		(candidate.cameraWidth === undefined ||
+			typeof candidate.cameraWidth === "number") &&
+		(candidate.cameraHeight === undefined ||
+			typeof candidate.cameraHeight === "number") &&
+		(candidate.cameraFps === undefined ||
+			typeof candidate.cameraFps === "number")
 	);
 };
 
@@ -472,6 +639,34 @@ export const saveUploadProgressTabId = (tabId: number | null) =>
 	tabId === null
 		? removeSession(UPLOAD_PROGRESS_TAB_KEY)
 		: setSession({ [UPLOAD_PROGRESS_TAB_KEY]: tabId });
+
+const TAB_INPUT_CAPTURE_KEY = "cap-extension-tab-input-capture";
+
+export type TabInputCaptureSession = {
+	tabId: number;
+	recordingId: string;
+};
+
+export const loadTabInputCaptureSession =
+	async (): Promise<TabInputCaptureSession | null> => {
+		const result = await getSession([TAB_INPUT_CAPTURE_KEY]);
+		const saved = result[TAB_INPUT_CAPTURE_KEY];
+		if (!saved || typeof saved !== "object" || Array.isArray(saved))
+			return null;
+		const candidate = saved as Partial<TabInputCaptureSession>;
+		return Number.isSafeInteger(candidate.tabId) &&
+			typeof candidate.recordingId === "string" &&
+			candidate.recordingId.length > 0
+			? { tabId: candidate.tabId as number, recordingId: candidate.recordingId }
+			: null;
+	};
+
+export const saveTabInputCaptureSession = (
+	session: TabInputCaptureSession | null,
+) =>
+	session === null
+		? removeSession(TAB_INPUT_CAPTURE_KEY)
+		: setSession({ [TAB_INPUT_CAPTURE_KEY]: session });
 
 export const loadSharedRecordingState =
 	async (): Promise<SharedRecordingState | null> => {

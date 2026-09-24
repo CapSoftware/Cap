@@ -1,4 +1,5 @@
 import {
+	createRecordingSessionId,
 	deleteRecoveredRecordingSpool,
 	RecordingSpool,
 	type RecordingSpoolBackend,
@@ -6,7 +7,7 @@ import {
 	type RecordingSpoolSessionRecord,
 	recoverOrphanedRecordingSpools,
 } from "@cap/recorder-core/recording-spool";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 class MemoryRecordingSpoolBackend implements RecordingSpoolBackend {
 	private readonly sessions = new Map<string, RecordingSpoolSessionRecord>();
@@ -134,6 +135,46 @@ class DelayedRecordingSpoolBackend implements RecordingSpoolBackend {
 	}
 }
 
+describe("createRecordingSessionId", () => {
+	afterEach(() => vi.unstubAllGlobals());
+
+	it("uses the browser UUID generator when available", () => {
+		const randomUUID = vi.fn(() => "secure-uuid");
+		const getRandomValues = vi.fn();
+		vi.stubGlobal("crypto", { randomUUID, getRandomValues });
+
+		expect(createRecordingSessionId()).toBe("secure-uuid");
+		expect(randomUUID).toHaveBeenCalledOnce();
+		expect(getRandomValues).not.toHaveBeenCalled();
+	});
+
+	it("uses cryptographic bytes in browsers without randomUUID", () => {
+		let seed = 0;
+		const getRandomValues = vi.fn((bytes: Uint8Array) => {
+			for (let index = 0; index < bytes.length; index++) {
+				bytes[index] = (seed + index) & 0xff;
+			}
+			seed++;
+			return bytes;
+		});
+		vi.stubGlobal("crypto", { getRandomValues });
+
+		const first = createRecordingSessionId();
+		const second = createRecordingSessionId();
+		expect(first).toMatch(/^[0-9a-f]{32}$/);
+		expect(second).toMatch(/^[0-9a-f]{32}$/);
+		expect(second).not.toBe(first);
+		expect(getRandomValues).toHaveBeenCalledTimes(2);
+	});
+
+	it("fails if no cryptographic random source is available", () => {
+		vi.stubGlobal("crypto", undefined);
+		expect(createRecordingSessionId).toThrow(
+			"Secure random source is unavailable",
+		);
+	});
+});
+
 describe("RecordingSpool", () => {
 	it("persists chunks in order and rebuilds the recording blob", async () => {
 		const backend = new MemoryRecordingSpoolBackend();
@@ -201,6 +242,51 @@ describe("RecordingSpool", () => {
 		expect(backend.getChunkCount("session-2")).toBe(0);
 	});
 
+	it("hides uploaded backups until a stalled deletion can finish", async () => {
+		const values = new Map<string, string>();
+		vi.stubGlobal("localStorage", {
+			getItem: (key: string) => values.get(key) ?? null,
+			setItem: (key: string, value: string) => values.set(key, value),
+			removeItem: (key: string) => values.delete(key),
+		});
+		const consoleError = vi
+			.spyOn(console, "error")
+			.mockImplementation(() => {});
+		try {
+			const backend = new MemoryRecordingSpoolBackend();
+			const spool = await RecordingSpool.create(
+				{ mimeType: "video/webm", sessionId: "uploaded-backup" },
+				backend,
+			);
+			await spool.appendChunk(new Blob(["uploaded"], { type: "video/webm" }));
+			spool.markUploaded();
+			const key = "cap-recording-spool-uploaded:uploaded-backup";
+			expect(values.get(key)).toBe("1");
+
+			const originalDeleteSession = backend.deleteSession.bind(backend);
+			backend.deleteSession = async () => {
+				throw new Error("Backup deletion stalled");
+			};
+			await expect(spool.dispose()).rejects.toThrow("Backup deletion stalled");
+			const readChunks = vi.spyOn(backend, "readChunks");
+			expect(await recoverOrphanedRecordingSpools(backend)).toEqual([]);
+			expect(readChunks).not.toHaveBeenCalled();
+			expect(backend.getSessionCount()).toBe(1);
+			expect(values.get(key)).toBe("1");
+			await vi.waitFor(() => expect(consoleError).toHaveBeenCalled());
+
+			backend.deleteSession = originalDeleteSession;
+			expect(await recoverOrphanedRecordingSpools(backend)).toEqual([]);
+			await vi.waitFor(() => {
+				expect(backend.getSessionCount()).toBe(0);
+				expect(values.has(key)).toBe(false);
+			});
+		} finally {
+			consoleError.mockRestore();
+			vi.unstubAllGlobals();
+		}
+	});
+
 	it("fails fast when the pending spool backlog grows beyond its limit", async () => {
 		const backend = new DelayedRecordingSpoolBackend();
 		const spool = await RecordingSpool.create(
@@ -261,8 +347,13 @@ describe("RecordingSpool", () => {
 		).rejects.toThrow("Failed to persist chunk 1");
 
 		const blob = await spool.recoverBlob();
+		const persisted = await spool.recoverPersistedBlob();
 
 		expect(await blobToText(blob as Blob)).toBe("chunk-1chunk-2");
+		expect(await blobToText(persisted as Blob)).toBe("chunk-1");
+		expect(
+			await Promise.all(spool.getUnwrittenChunks().map(blobToText)),
+		).toEqual(["chunk-2"]);
 	});
 
 	it("keeps queued in-memory chunks available after a write failure", async () => {
@@ -292,6 +383,9 @@ describe("RecordingSpool", () => {
 		const blob = await spool.recoverBlob();
 
 		expect(await blobToText(blob as Blob)).toBe("chunk-1|chunk-2|chunk-3");
+		expect(
+			await Promise.all(spool.getUnwrittenChunks().map(blobToText)),
+		).toEqual(["chunk-2|", "chunk-3"]);
 	});
 
 	it("cleans up persisted state after a write failure", async () => {

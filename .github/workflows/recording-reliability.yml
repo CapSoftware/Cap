@@ -4,21 +4,31 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
+      - "apps/chrome-extension/**"
       - "apps/web/**"
       - "apps/media-server/**"
+      - "packages/editor-solid-web/**"
+      - "packages/editor-cap-bundle/**"
+      - "packages/recorder-core/**"
       - "packages/database/**"
       - "packages/web-*/**"
       - "crates/recording/**"
+      - "crates/rendering/src/shaders/**"
       - "bun.lock"
       - ".github/workflows/recording-reliability.yml"
   push:
     branches: [main]
     paths:
+      - "apps/chrome-extension/**"
       - "apps/web/**"
       - "apps/media-server/**"
+      - "packages/editor-solid-web/**"
+      - "packages/editor-cap-bundle/**"
+      - "packages/recorder-core/**"
       - "packages/database/**"
       - "packages/web-*/**"
       - "crates/recording/**"
+      - "crates/rendering/src/shaders/**"
       - "bun.lock"
       - ".github/workflows/recording-reliability.yml"
 
@@ -30,17 +40,208 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  browser-cap-import:
+    name: Web editor recording folder import (Chromium/WebKit)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: ./.github/actions/setup-js
+      - name: Install Playwright browsers
+        run: bunx playwright install --with-deps chromium webkit
+      - name: Replay browser recording import
+        run: bun run --filter @cap/media-server test:browser-cap-import
+      - name: Replay long captions in Chromium and WebKit
+        run: bun apps/media-server/src/__tests__/routes/editor-caption-cache-browser-replay.ts
+
+  browser-studio-compositor:
+    name: Web Studio local compositor (${{ matrix.browser }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - browser: chromium
+            runner: ubuntu-24.04
+            headed: "0"
+          - browser: firefox
+            runner: ubuntu-24.04
+            headed: "1"
+          - browser: webkit
+            runner: macos-15
+            headed: "1"
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: ./.github/actions/setup-js
+      - name: Install browser on Ubuntu
+        if: matrix.browser != 'webkit'
+        run: bunx playwright install --with-deps ${{ matrix.browser }}
+      - name: Install WebKit on macOS
+        if: matrix.browser == 'webkit'
+        run: bunx playwright install webkit
+      - name: Build browser compositor replay
+        run: bunx vite build --config packages/editor-solid-web/browser-replay/vite.config.ts
+      - name: Replay separate screen and camera clips on the local GPU
+        if: matrix.browser != 'firefox'
+        run: bun packages/editor-solid-web/browser-replay/replay.cjs ${{ matrix.browser }}
+        env:
+          CAP_REPLAY_HEADED: ${{ matrix.headed }}
+      - name: Check screen and camera frame parity at 8x
+        if: matrix.browser != 'firefox'
+        run: bun packages/editor-solid-web/browser-replay/replay.cjs ${{ matrix.browser }}
+        env:
+          CAP_REPLAY_HEADED: ${{ matrix.headed }}
+          CAP_REPLAY_INDEXED: "1"
+      - name: Replay Firefox clips through software WebGL under Xvfb
+        if: matrix.browser == 'firefox'
+        run: xvfb-run -a bun packages/editor-solid-web/browser-replay/replay.cjs firefox
+        env:
+          CAP_REPLAY_HEADED: ${{ matrix.headed }}
+      - name: Check Firefox screen and camera frame parity at 8x
+        if: matrix.browser == 'firefox'
+        run: xvfb-run -a bun packages/editor-solid-web/browser-replay/replay.cjs firefox
+        env:
+          CAP_REPLAY_HEADED: ${{ matrix.headed }}
+          CAP_REPLAY_INDEXED: "1"
+      - name: Stress continuous HTML video playback on a slow decoder
+        run: |
+          if [ "${{ matrix.browser }}" = "firefox" ]; then
+            xvfb-run -a bun packages/editor-solid-web/browser-replay/replay.cjs firefox
+          else
+            bun packages/editor-solid-web/browser-replay/replay.cjs ${{ matrix.browser }}
+          fi
+        env:
+          CAP_REPLAY_HEADED: ${{ matrix.headed }}
+          CAP_REPLAY_FORCE_HTML: "1"
+          CAP_REPLAY_SLOW_HTML: "1"
+
+  browser-studio-webgpu:
+    name: Web Studio GPU auto-selection (Chromium Intel macOS)
+    runs-on: macos-15-intel
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: ./.github/actions/setup-js
+      - name: Install Chromium on macOS
+        run: bunx playwright install chromium
+      - name: Build browser compositor replay
+        run: bunx vite build --config packages/editor-solid-web/browser-replay/vite.config.ts
+      - name: Replay paired clips with visible GPU output
+        run: bun packages/editor-solid-web/browser-replay/replay.cjs chromium
+        env:
+          CAP_REPLAY_HEADED: "1"
+          CAP_REPLAY_REQUIRE_WEBGPU: "1"
+          CAP_REPLAY_ALLOW_AUTO_FALLBACK: "1"
+      - name: Check visible screen and camera frame parity at 8x
+        run: bun packages/editor-solid-web/browser-replay/replay.cjs chromium
+        env:
+          CAP_REPLAY_HEADED: "1"
+          CAP_REPLAY_INDEXED: "1"
+          CAP_REPLAY_REQUIRE_WEBGPU: "1"
+          CAP_REPLAY_ALLOW_AUTO_FALLBACK: "1"
+
+  browser-studio-intel-webgl:
+    name: Web Studio WebGL2 fallback (Chromium Intel macOS)
+    runs-on: macos-15-intel
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: ./.github/actions/setup-js
+      - name: Install Chromium on macOS
+        run: bunx playwright install chromium
+      - name: Build browser compositor replay
+        run: bunx vite build --config packages/editor-solid-web/browser-replay/vite.config.ts
+      - name: Check visible WebGL2 fallback and paired 8x frame parity
+        run: bun packages/editor-solid-web/browser-replay/replay.cjs chromium
+        env:
+          CAP_REPLAY_HEADED: "1"
+          CAP_REPLAY_INDEXED: "1"
+          CAP_REPLAY_ONLY_WEBGL: "1"
+
+  browser-studio-arm-webgpu:
+    name: Web Studio hardware WebGPU and probe fallback (Chromium arm64 macOS)
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: ./.github/actions/setup-js
+      - name: Install Chromium on macOS
+        run: bunx playwright install chromium
+      - name: Build browser compositor replay
+        run: bunx vite build --config packages/editor-solid-web/browser-replay/vite.config.ts
+      - name: Require healthy WebGPU playback
+        run: bun packages/editor-solid-web/browser-replay/replay.cjs chromium
+        env:
+          CAP_REPLAY_HEADED: "1"
+          CAP_REPLAY_REQUIRE_WEBGPU: "1"
+      - name: Require WebGL2 after a failed presentation probe
+        run: bun packages/editor-solid-web/browser-replay/replay.cjs chromium
+        env:
+          CAP_REPLAY_HEADED: "1"
+          CAP_REPLAY_SIMULATE_FAILED_PROBE: "1"
+
+  browser-paired-recording:
+    name: Web recorder paired capture (${{ matrix.browser }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - browser: chromium
+            runner: ubuntu-24.04
+            headed: false
+          - browser: webkit
+            runner: macos-15-intel
+            headed: true
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: ./.github/actions/setup-js
+      - name: Install Chromium
+        if: matrix.browser == 'chromium'
+        run: bunx playwright install --with-deps chromium
+      - name: Install WebKit
+        if: matrix.browser == 'webkit'
+        run: bunx playwright install webkit
+      - name: Replay paired web recorder capture
+        working-directory: apps/web
+        run: bun __tests__/web-recorder-paired-browser-replay.mjs ${{ matrix.browser }}
+        env:
+          CAP_REPLAY_HEADED: ${{ matrix.headed }}
+
+  extension-paired-recording:
+    name: Chrome extension paired capture and recovery (Chromium)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: ./.github/actions/setup-js
+      - name: Install Chromium
+        run: bunx playwright install --with-deps chromium
+      - name: Build Chrome extension
+        run: bun run --filter @cap/chrome-extension build
+      - name: Verify private tab input is omitted
+        working-directory: apps/chrome-extension
+        run: bun src/content/input-events-browser-replay.ts
+      - name: Replay paired capture and recovery in the built extension
+        working-directory: apps/chrome-extension
+        run: |
+          bunx playwright test e2e/recording-upload.spec.ts \
+            --grep 'records a separate camera sidecar|keeps screen-only Instant recordings working without a webcam|recovers an offscreen start response lost|offers separate clip downloads|recovers camera, microphone and screen spools|uploads a camera multipart part during a long recording on a constrained network|hides confirmed uploaded backups from the options recovery list'
+
   recording-contract:
     name: Recording ownership, preservation, and recovery
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: ./.github/actions/setup-js
       - name: Verify recording contracts
         working-directory: apps/web
         run: |
           bun run vitest run \
+            __tests__/editor-image-file.test.ts \
             __tests__/unit/audio-level-publication.test.ts \
             __tests__/unit/recording-output.test.ts \
             __tests__/unit/recording-storage-lifecycle.test.ts \
@@ -57,3 +258,5 @@ jobs:
             __tests__/unit/upload-progress-playback.test.ts \
             __tests__/unit/recording-prepare.test.ts \
             __tests__/unit/s3-bucket-connections.test.ts
+      - name: Verify browser Solid caption cache
+        run: bun --conditions=browser test packages/editor-solid-web/src/tauri-bridge.test.ts

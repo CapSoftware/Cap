@@ -2,14 +2,16 @@ import { db } from "@cap/database";
 import { users, videos, videoUploads } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import { Storage } from "@cap/web-backend/src/Storage/index";
+import { getRecordingObjectIdentity } from "@cap/web-backend/src/Storage/recording-object-identity";
 import { Video } from "@cap/web-domain";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { FatalError, sleep } from "workflow";
 import { isAiGenerationEnabledForUser } from "@/lib/ai-generation-entitlement";
 import {
 	createMediaServerCapacityError,
 	isMediaServerCapacityError,
 } from "@/lib/media-server-backpressure";
+import { createMediaServerWebhookUrl } from "@/lib/media-server-webhook-url";
 import { transcribeVideo } from "@/lib/transcribe";
 import { decodeStorageVideo } from "@/lib/video-storage";
 import { runWorkflowPromise } from "@/lib/workflow-runtime";
@@ -85,10 +87,14 @@ export async function processVideoWorkflow(
 			}
 		}
 
-		await saveMetadataAndComplete(videoId, metadata);
+		await saveMetadataAndComplete(videoId, metadata, rawFileKey);
 
 		const outputKey = `${userId}/${videoId}/result.mp4`;
-		if (rawFileKey !== outputKey) {
+		const retainEditorSource = await shouldRetainEditorSource(
+			videoId,
+			rawFileKey,
+		);
+		if (rawFileKey !== outputKey && !retainEditorSource) {
 			await cleanupRawUpload(videoId, rawFileKey);
 		}
 
@@ -264,8 +270,6 @@ async function processVideoOnMediaServer(
 	"use step";
 
 	const mediaServerUrl = serverEnv().MEDIA_SERVER_URL;
-	const webhookBaseUrl =
-		serverEnv().MEDIA_SERVER_WEBHOOK_URL || serverEnv().WEB_URL;
 	if (!mediaServerUrl) {
 		throw new FatalError("MEDIA_SERVER_URL is not configured");
 	}
@@ -325,7 +329,14 @@ async function processVideoOnMediaServer(
 		)
 		.pipe(runWorkflowPromise);
 
-	const webhookUrl = `${webhookBaseUrl}/api/webhooks/media-server/progress?retryable=true`;
+	const webhookUrl = createMediaServerWebhookUrl({
+		webUrl: serverEnv().WEB_URL,
+		webhookBaseUrl: serverEnv().MEDIA_SERVER_WEBHOOK_URL,
+		deploymentEnvironment: process.env.VERCEL_ENV,
+		deploymentHost: process.env.VERCEL_URL,
+		automationBypassSecret: process.env.VERCEL_AUTOMATION_BYPASS_SECRET,
+		searchParams: { retryable: "true" },
+	});
 	const webhookSecret = serverEnv().MEDIA_SERVER_WEBHOOK_SECRET;
 
 	await db()
@@ -356,10 +367,53 @@ async function processVideoOnMediaServer(
 async function saveMetadataAndComplete(
 	videoId: string,
 	metadata: { duration: number; width: number; height: number; fps: number },
+	rawFileKey: string,
 ): Promise<void> {
 	"use step";
 
 	const duration = getValidDuration(metadata.duration);
+	const [video] = await db()
+		.select()
+		.from(videos)
+		.where(eq(videos.id, videoId as Video.VideoId));
+	if (!video) throw new FatalError("Video does not exist");
+	const directSource =
+		rawFileKey === `${video.ownerId}/${videoId}/result.mp4` &&
+		video.metadata?.editorSources?.version === 1 &&
+		video.metadata.editorSources.display.key === rawFileKey &&
+		!video.metadata.editorSources.camera;
+	let editorSourcePatch: string | null = null;
+	if (directSource) {
+		try {
+			const [bucket] = await Storage.getAccessForVideo(
+				decodeStorageVideo(video),
+				{ resolvePublishedOutput: false },
+			).pipe(runWorkflowPromise);
+			const head = await bucket.headObject(rawFileKey).pipe(runWorkflowPromise);
+			const identity = getRecordingObjectIdentity(head);
+			const sourceSize = head.ContentLength;
+			if (
+				typeof sourceSize !== "number" ||
+				!Number.isSafeInteger(sourceSize) ||
+				sourceSize < 1 ||
+				sourceSize > 12 * 1024 * 1024 * 1024 ||
+				!identity
+			) {
+				throw new Error("Processed display source could not be verified");
+			}
+			editorSourcePatch = JSON.stringify({
+				editorSources: {
+					display: {
+						size: sourceSize,
+						objectIdentity: identity,
+					},
+				},
+			});
+		} catch (error) {
+			console.warn("Processed editor source could not be retained", error);
+			editorSourcePatch = JSON.stringify({ editorSources: null });
+		}
+	}
 
 	await db()
 		.update(videos)
@@ -368,6 +422,11 @@ async function saveMetadataAndComplete(
 			height: metadata.height,
 			fps: metadata.fps,
 			...(duration === undefined ? {} : { duration }),
+			...(editorSourcePatch
+				? {
+						metadata: sql`JSON_MERGE_PATCH(COALESCE(${videos.metadata}, JSON_OBJECT()), ${editorSourcePatch})`,
+					}
+				: {}),
 		})
 		.where(eq(videos.id, videoId as Video.VideoId));
 
@@ -399,6 +458,36 @@ async function cleanupRawUpload(
 	} catch (error) {
 		console.error("[process-video] Failed to delete raw upload", error);
 	}
+}
+
+async function shouldRetainEditorSource(
+	videoId: string,
+	rawFileKey: string,
+): Promise<boolean> {
+	"use step";
+	const isRecord = (value: unknown): value is Record<string, unknown> =>
+		typeof value === "object" && value !== null && !Array.isArray(value);
+
+	const [video] = await db()
+		.select({ metadata: videos.metadata })
+		.from(videos)
+		.where(eq(videos.id, Video.VideoId.make(videoId)));
+	const metadata: unknown = video?.metadata;
+	const sources = isRecord(metadata) ? metadata.editorSources : null;
+	if (!isRecord(sources)) return false;
+	const display = sources.display;
+	const camera = sources.camera;
+	if (!isRecord(display) || (camera !== undefined && !isRecord(camera))) {
+		return false;
+	}
+	return (
+		sources.version === 1 &&
+		display.key === rawFileKey &&
+		typeof display.size === "number" &&
+		display.size > 0 &&
+		(camera === undefined ||
+			(typeof camera.size === "number" && camera.size > 0))
+	);
 }
 
 async function queueProcessedVideoTranscription(

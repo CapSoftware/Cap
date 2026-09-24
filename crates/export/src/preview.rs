@@ -220,6 +220,12 @@ async fn render_preview_frame(
         segments,
         total_duration,
     } = source;
+    if settings.fps == 0 {
+        return Err(ExportError::Other(
+            "Preview frame rate must be positive".to_string(),
+        ));
+    }
+    let frame_time = preview_frame_time(frame_time, total_duration, settings.fps);
     let transition_mapping = project_config.timeline.as_ref().and_then(|timeline| {
         if timeline.transitions.is_empty() {
             return None;
@@ -395,6 +401,33 @@ async fn render_preview_frame(
         frame_render_time_ms,
         total_frames,
     })
+}
+
+fn preview_frame_time(requested: f64, duration: f64, fps: u32) -> f64 {
+    let frame_duration = 1.0 / f64::from(fps);
+    if requested >= duration && requested <= duration + frame_duration {
+        ((duration * f64::from(fps)).ceil() - 1.0).max(0.0) * frame_duration
+    } else {
+        requested
+    }
+}
+
+#[cfg(test)]
+mod preview_frame_time_tests {
+    use super::preview_frame_time;
+
+    #[test]
+    fn exact_end_maps_to_last_frame() {
+        assert_eq!(preview_frame_time(2.0, 2.0, 60), 119.0 / 60.0);
+        assert_eq!(preview_frame_time(1.9, 1.9, 60), 113.0 / 60.0);
+        assert_eq!(preview_frame_time(0.01, 0.01, 60), 0.0);
+    }
+
+    #[test]
+    fn requests_far_outside_duration_remain_invalid() {
+        assert_eq!(preview_frame_time(2.5, 2.0, 60), 2.5);
+        assert_eq!(preview_frame_time(-1.0, 2.0, 60), -1.0);
+    }
 }
 
 fn estimate_cursor_only_size_mb(total_pixels: f64, total_frames: f64) -> f64 {

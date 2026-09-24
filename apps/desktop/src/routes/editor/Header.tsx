@@ -1,3 +1,4 @@
+import { createEventListener } from "@solid-primitives/event-listener";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { type as ostype } from "@tauri-apps/plugin-os";
@@ -49,6 +50,14 @@ export type TitleSaveRegistration = {
 };
 
 type RegisterTitleSave = (save: TitleSaveRegistration | undefined) => void;
+const isWebEditor = import.meta.env.VITE_CAP_WEB_EDITOR === "true";
+const captionsAllowed = () =>
+	!isWebEditor ||
+	(window as Window & { capWebEditorCaptionsEnabled?: boolean })
+		.capWebEditorCaptionsEnabled === true;
+const recordingBundleActionLabel = isWebEditor
+	? "Download recording bundle"
+	: "Open recording bundle";
 
 export function Header(props: {
 	registerTitleSave: RegisterTitleSave;
@@ -72,10 +81,20 @@ export function Header(props: {
 		setEditorState("timeline", "selection", null);
 		return true;
 	};
+	const [captionPlanAllowed, setCaptionPlanAllowed] = createSignal(
+		captionsAllowed(),
+	);
+	if (isWebEditor)
+		createEventListener(window, "cap-web-editor-captions-plan", () =>
+			setCaptionPlanAllowed(captionsAllowed()),
+		);
 
 	const hasTranscript = createMemo(() => {
 		const segments = project.captions?.segments ?? [];
-		return segments.some((seg) => seg.words && seg.words.length > 0);
+		return (
+			captionPlanAllowed() &&
+			segments.some((seg) => seg.words && seg.words.length > 0)
+		);
 	});
 
 	const isTranscriptOpen = createMemo(() => {
@@ -121,20 +140,32 @@ export function Header(props: {
 				</div>
 
 				<div
-					inert={props.disabled}
+					inert={props.disabled && !isWebEditor}
 					class="flex gap-0.5 items-center ml-1.5 shrink-0"
 				>
 					<EditorButton
 						onClick={() => {
 							clearTimelineSelection();
-
-							console.log({ path: `${editorInstance.path}/` });
-							revealItemInDir(`${editorInstance.path}/`);
+							const path = `${editorInstance.path}/`;
+							if (isWebEditor) {
+								void revealItemInDir(path).catch((error: unknown) => {
+									toast.error(
+										error instanceof Error
+											? error.message
+											: "Unable to download recording bundle",
+									);
+								});
+								return;
+							}
+							console.log({ path });
+							revealItemInDir(path);
 						}}
-						tooltipText="Open recording bundle"
+						tooltipText={recordingBundleActionLabel}
+						aria-label={recordingBundleActionLabel}
 						leftIcon={<IconLucideFolder />}
 					/>
 					<EditorButton
+						inert={isWebEditor && props.disabled}
 						onClick={async () => {
 							clearTimelineSelection();
 

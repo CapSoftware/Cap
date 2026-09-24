@@ -1,0 +1,27 @@
+{
+	"name": "@cap/editor-solid-web",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"build": "vite build"
+	},
+	"dependencies": {
+		"@cap/editor-cap-bundle": "workspace:*",
+		"@cap/ui-solid": "workspace:*",
+		"@fontsource/geist-sans": "^5.0.3",
+		"@tanstack/solid-query": "^5.51.21",
+		"mediabunny": "^1.45.2",
+		"solid-js": "^1.9.3",
+		"solid-toast": "^0.5.0"
+	},
+	"devDependencies": {
+		"@iconify/json": "^2.2.239",
+		"@tailwindcss/postcss": "^4.2.2",
+		"autoprefixer": "^10.4.21",
+		"typescript": "^5.8.3",
+		"unplugin-auto-import": "^0.18.2",
+		"unplugin-icons": "^0.19.2",
+		"vite": "^6.3.5",
+		"vite-plugin-solid": "^2.11.12"
+	}
+}
