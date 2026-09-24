@@ -21,6 +21,7 @@ import { HowItWorksButton } from "./HowItWorksButton";
 import { HowItWorksPanel } from "./HowItWorksPanel";
 import { InProgressRecordingBar } from "./InProgressRecordingBar";
 import { MicrophoneSelector } from "./MicrophoneSelector";
+import { MicrophoneUnavailablePrompt } from "./MicrophoneUnavailablePrompt";
 import { RecordingButton } from "./RecordingButton";
 import {
 	type RecordingMode,
@@ -154,6 +155,8 @@ export const WebRecorderDialog = () => {
 		completedShareUrl,
 		recoveredDownloads,
 		isSettingUp,
+		isMicrophoneUnavailable,
+		respondToMicrophoneFailure,
 		isRecording,
 		isBusy,
 		isRestarting,
@@ -362,14 +365,20 @@ export const WebRecorderDialog = () => {
 										onToggle={handleSystemAudioChange}
 									/>
 								)}
-								<RecordingButton
-									isRecording={isRecording}
-									disabled={
-										isRecording ? isRestarting : !canStartRecording || isBusy
-									}
-									onStart={handleStartClick}
-									onStop={handleStopClick}
-								/>
+								{isMicrophoneUnavailable ? (
+									<MicrophoneUnavailablePrompt
+										onRespond={respondToMicrophoneFailure}
+									/>
+								) : (
+									<RecordingButton
+										isRecording={isRecording}
+										disabled={
+											isRecording ? isRestarting : !canStartRecording || isBusy
+										}
+										onStart={handleStartClick}
+										onStop={handleStopClick}
+									/>
+								)}
 								{!isBrowserSupported && unsupportedReason && (
 									<div className="rounded-md border border-red-6 bg-red-3/70 px-3 py-2 text-xs leading-snug text-red-12">
 										{unsupportedReason}

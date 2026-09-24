@@ -139,6 +139,10 @@ export const useWebRecorder = ({
 	const [videoId, setVideoId] = useState<VideoId | null>(null);
 	const [hasAudioTrack, setHasAudioTrack] = useState(false);
 	const [isSettingUp, setIsSettingUp] = useState(false);
+	const [isMicrophoneUnavailable, setIsMicrophoneUnavailable] = useState(false);
+	const microphoneDecisionRef = useRef<((proceed: boolean) => void) | null>(
+		null,
+	);
 	const [isRestarting, setIsRestarting] = useState(false);
 	const [chunkUploads, setChunkUploads] = useState<ChunkUploadState[]>([]);
 	const [canRetryUpload, setCanRetryUpload] = useState(false);
@@ -667,9 +671,14 @@ export const useWebRecorder = ({
 		return getRecoveryBlob() ?? blob;
 	}, [stopRecordingInternal, cleanupStreams, clearTimer, getRecoveryBlob]);
 
+	const respondToMicrophoneFailure = useCallback((proceed: boolean) => {
+		microphoneDecisionRef.current?.(proceed);
+	}, []);
+
 	const cleanupRecordingState = useCallback(
 		async (preserveRecording = false) => {
 			setupGenerationRef.current += 1;
+			respondToMicrophoneFailure(false);
 			if (preserveRecording) {
 				await stopRecordingInternalWrapper().catch(() => {});
 			}
@@ -735,6 +744,7 @@ export const useWebRecorder = ({
 			replaceErrorDownload,
 			stopRecordingSpoolHeartbeat,
 			stopRecordingInternalWrapper,
+			respondToMicrophoneFailure,
 		],
 	);
 
@@ -961,12 +971,28 @@ export const useWebRecorder = ({
 				try {
 					micStream = await acquireMicStream(selectedMicId);
 				} catch (micError) {
-					// A selected microphone is part of the requested capture; silently
-					// continuing would produce a take with missing narration.
-					throw new Error(
-						"Your microphone is unavailable. Check its permissions, choose another microphone, or turn it off to record without it.",
-						{ cause: micError },
-					);
+					assertSetupActive();
+					const captureTrack = firstTrack;
+					if (!captureTrack || captureTrack.readyState === "ended") {
+						throw micError;
+					}
+					const proceed = await new Promise<boolean>((resolve) => {
+						const handleCaptureEnded = () => respondToMicrophoneFailure(false);
+						microphoneDecisionRef.current = (decision) => {
+							microphoneDecisionRef.current = null;
+							captureTrack.removeEventListener("ended", handleCaptureEnded);
+							setIsMicrophoneUnavailable(false);
+							resolve(decision);
+						};
+						captureTrack.addEventListener("ended", handleCaptureEnded, {
+							once: true,
+						});
+						setIsMicrophoneUnavailable(true);
+					});
+					if (!proceed) {
+						await resetState();
+						return;
+					}
 				}
 			}
 
@@ -1132,13 +1158,15 @@ export const useWebRecorder = ({
 				await deletePendingVideoSafely(orphanVideoId);
 			}
 
-			console.error("Failed to start recording", err);
-			toast.error(
-				getCaptureErrorMessage(
-					err,
-					recordingMode === "camera" ? "camera" : "display",
-				),
-			);
+			if (generation === setupGenerationRef.current) {
+				console.error("Failed to start recording", err);
+				toast.error(
+					getCaptureErrorMessage(
+						err,
+						recordingMode === "camera" ? "camera" : "display",
+					),
+				);
+			}
 			await resetState();
 		} finally {
 			startInFlightRef.current = false;
@@ -1502,6 +1530,8 @@ export const useWebRecorder = ({
 		completedShareUrl,
 		recoveredDownloads,
 		isSettingUp,
+		isMicrophoneUnavailable,
+		respondToMicrophoneFailure,
 		isRecording: isRecordingActive,
 		isPaused,
 		isBusy: isBusyState,

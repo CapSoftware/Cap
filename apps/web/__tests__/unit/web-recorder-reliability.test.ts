@@ -108,6 +108,8 @@ vi.mock(
 );
 
 import { MultipartCompletionUncertainError } from "@cap/recorder-core/instant-mp4-uploader";
+import { MicrophoneUnavailablePrompt } from "@/app/(org)/dashboard/caps/components/web-recorder-dialog/MicrophoneUnavailablePrompt";
+import type { RecordingMode } from "@/app/(org)/dashboard/caps/components/web-recorder-dialog/RecordingModeSelector";
 import { useWebRecorder } from "@/app/(org)/dashboard/caps/components/web-recorder-dialog/useWebRecorder";
 
 class Track extends EventTarget {
@@ -130,7 +132,7 @@ class Recorder extends EventTarget {
 	ondataavailable?: (event: BlobEvent) => void;
 	onstop?: (event: Event) => void;
 	onerror?: (event: Event) => void;
-	constructor() {
+	constructor(public stream: Stream) {
 		super();
 		Recorder.instances.push(this);
 	}
@@ -189,12 +191,17 @@ describe("web recording upload recovery", () => {
 	let spool: ReturnType<typeof makeSpool>;
 	let track: Track;
 	let micEnabled: boolean;
+	let recordingMode: RecordingMode;
+	let systemAudioEnabled: boolean;
 	let rerender: () => Promise<void>;
 
 	beforeEach(async () => {
 		vi.clearAllMocks();
 		vi.useFakeTimers();
 		micEnabled = false;
+		recordingMode = "camera";
+		systemAudioEnabled = false;
+		mocks.mic.mockReset();
 		mocks.uploaders.length = 0;
 		Recorder.instances = [];
 		mocks.pipeline = {
@@ -232,12 +239,16 @@ describe("web recording upload recovery", () => {
 				organisationId: "org",
 				selectedMicId: "mic",
 				micEnabled,
-				systemAudioEnabled: false,
-				recordingMode: "camera",
+				systemAudioEnabled,
+				recordingMode,
 				selectedCameraId: "camera",
 				isProUser: true,
 			});
-			return null;
+			return recorder.isMicrophoneUnavailable
+				? createElement(MicrophoneUnavailablePrompt, {
+						onRespond: recorder.respondToMicrophoneFailure,
+					})
+				: null;
 		}
 		rerender = async () => {
 			await act(async () => root?.render(createElement(Harness)));
@@ -528,25 +539,145 @@ describe("web recording upload recovery", () => {
 		expect(mocks.delete).not.toHaveBeenCalled();
 	});
 
-	it("requires the selected microphone or an explicit choice to record without it", async () => {
+	const clickMicrophoneChoice = (label: string) => {
+		const button = Array.from(container.querySelectorAll("button")).find(
+			(button) => button.textContent === label,
+		);
+		expect(button).toBeDefined();
+		button?.click();
+	};
+
+	const startWithUnavailableMicrophone = async () => {
 		micEnabled = true;
 		await rerender();
 		mocks.mic.mockRejectedValueOnce(
 			new DOMException("Denied", "NotAllowedError"),
 		);
-		await act(async () => recorder.startRecording());
+		let starting!: Promise<void>;
+		await act(async () => {
+			starting = recorder.startRecording();
+		});
+		expect(recorder.isMicrophoneUnavailable).toBe(true);
+		expect(recorder.isSettingUp).toBe(true);
+		expect(recorder.canStartRecording).toBe(false);
+		expect(Recorder.instances).toHaveLength(0);
+		expect(mocks.create).not.toHaveBeenCalled();
+		expect(track.stop).not.toHaveBeenCalled();
+		expect(document.activeElement?.textContent).toBe("Go back");
+		return { starting };
+	};
+
+	it.each(["camera", "tab"] as const)(
+		"continues the same %s capture only after choosing to record without a microphone",
+		async (mode) => {
+			recordingMode = mode;
+			const { starting } = await startWithUnavailableMicrophone();
+			await act(async () => recorder.startRecording());
+			expect(mocks.acquire).toHaveBeenCalledOnce();
+			await act(async () => {
+				clickMicrophoneChoice("Record without microphone");
+				await starting;
+			});
+			expect(recorder.phase).toBe("recording");
+			expect(recorder.isMicrophoneUnavailable).toBe(false);
+			expect(recorder.hasAudioTrack).toBe(false);
+			expect(mocks.acquire).toHaveBeenCalledOnce();
+			expect(Recorder.instances[0]?.stream.getVideoTracks()).toEqual([track]);
+			await act(async () => recorder.stopRecording());
+			expect(recorder.phase).toBe("completed");
+			expect(recorder.completedShareUrl).toBe("https://cap.so/s/video");
+		},
+	);
+
+	it("retains captured system audio when continuing without the microphone", async () => {
+		recordingMode = "tab";
+		systemAudioEnabled = true;
+		const systemAudio = new Track();
+		systemAudio.kind = "audio";
+		mocks.acquire.mockResolvedValue(new Stream([track, systemAudio]));
+		const { starting } = await startWithUnavailableMicrophone();
+		await act(async () => {
+			clickMicrophoneChoice("Record without microphone");
+			await starting;
+		});
+		expect(recorder.hasAudioTrack).toBe(true);
+		expect(Recorder.instances[0]?.stream.getAudioTracks()).toEqual([
+			systemAudio,
+		]);
+		await act(async () => recorder.stopRecording());
+		expect(systemAudio.stop).toHaveBeenCalled();
+	});
+
+	it("releases capture on Go back and allows retry with a working microphone", async () => {
+		const { starting } = await startWithUnavailableMicrophone();
+		await act(async () => {
+			clickMicrophoneChoice("Go back");
+			await starting;
+		});
 		expect(recorder.phase).toBe("idle");
+		expect(recorder.isMicrophoneUnavailable).toBe(false);
+		expect(recorder.canStartRecording).toBe(true);
+		expect(track.stop).toHaveBeenCalled();
+		expect(mocks.create).not.toHaveBeenCalled();
+		const mic = new Track();
+		mic.kind = "audio";
+		mocks.mic.mockResolvedValueOnce(new Stream([mic]));
+		mocks.acquire.mockResolvedValueOnce(new Stream([new Track()]));
+		await start();
+		expect(recorder.hasAudioTrack).toBe(true);
+		expect(mocks.mic).toHaveBeenCalledTimes(2);
+		await act(async () => recorder.stopRecording());
+		expect(mic.stop).toHaveBeenCalled();
+	});
+
+	it("cancels the microphone choice when screen sharing ends", async () => {
+		recordingMode = "tab";
+		const { starting } = await startWithUnavailableMicrophone();
+		await act(async () => {
+			track.readyState = "ended";
+			track.dispatchEvent(new Event("ended"));
+			await starting;
+		});
+		expect(recorder.isMicrophoneUnavailable).toBe(false);
 		expect(recorder.canStartRecording).toBe(true);
 		expect(Recorder.instances).toHaveLength(0);
+		expect(mocks.create).not.toHaveBeenCalled();
+	});
+
+	it("settles pending microphone setup and releases capture on unmount", async () => {
+		const { starting } = await startWithUnavailableMicrophone();
+		await act(async () => {
+			root?.unmount();
+			root = null;
+			await starting;
+		});
 		expect(track.stop).toHaveBeenCalled();
-		micEnabled = false;
-		track = new Track();
-		mocks.acquire.mockResolvedValue(new Stream([track]));
+		expect(Recorder.instances).toHaveLength(0);
+		expect(mocks.create).not.toHaveBeenCalled();
+	});
+
+	it("ignores a late microphone rejection after unmount", async () => {
+		micEnabled = true;
 		await rerender();
-		await start();
-		expect(mocks.mic).toHaveBeenCalledOnce();
-		await act(async () => recorder.stopRecording());
-		expect(recorder.phase).toBe("completed");
+		let rejectMicrophone!: (error: Error) => void;
+		mocks.mic.mockReturnValueOnce(
+			new Promise<MediaStream>((_resolve, reject) => {
+				rejectMicrophone = reject;
+			}),
+		);
+		let starting!: Promise<void>;
+		await act(async () => {
+			starting = recorder.startRecording();
+		});
+		await act(async () => {
+			root?.unmount();
+			root = null;
+			rejectMicrophone(new DOMException("Denied", "NotAllowedError"));
+			await starting;
+		});
+		expect(track.stop).toHaveBeenCalled();
+		expect(Recorder.instances).toHaveLength(0);
+		expect(mocks.create).not.toHaveBeenCalled();
 	});
 
 	it("stops a late camera stream after setup was cancelled", async () => {
