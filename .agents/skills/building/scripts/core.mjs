@@ -197,7 +197,7 @@ export async function createSession(ctx, options) {
 		const id = `${slug}-${randomBytes(4).toString("hex")}`;
 		const base = options.base ?? "origin/main";
 		const baseSha = git(ctx.root, "rev-parse", "--verify", `${base}^{commit}`);
-		const branch = `codex/${id}`;
+		const branch = `building/${id}`;
 		const worktree = join(dirname(ctx.common), "..", "Cap-building", id);
 		const sessionsDir = join(ctx.state, "sessions");
 		const ports = new Set();

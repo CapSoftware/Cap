@@ -77,6 +77,8 @@ test("creating two sessions preserves a dirty checkout and assigns independent b
 	assert.notEqual(a.worktree, b.worktree);
 	assert.notEqual(a.ports.web, b.ports.web);
 	assert.notEqual(a.ports.desktop, b.ports.desktop);
+	assert.equal(a.branch, `building/${a.id}`);
+	assert.equal(b.branch, `building/${b.id}`);
 	assert.equal(readFileSync(join(a.worktree, "file.txt"), "utf8"), "base\n");
 	assert.equal(git(ctx.root, "status", "--porcelain"), before);
 	assert.deepEqual(readFileSync(join(ctx.common, "index")), index);
@@ -370,6 +372,36 @@ test("a failed repeat check supersedes a previous success at the same commit", (
 		() => renderPrBody(session, "current", "Explanation", "Infrastructure"),
 		/latest check attempt failed/,
 	);
+});
+
+test("PR summaries do not copy private command arguments or resource identifiers", () => {
+	const session = {
+		target: "web",
+		database: { id: "private-resource-id", name: "private-resource-name" },
+		checks: [
+			{
+				sha: "current",
+				passed: true,
+				label:
+					"node /Users/synthetic-user/check.mjs --token synthetic-secret tester@example.invalid",
+			},
+		],
+	};
+	const body = renderPrBody(
+		session,
+		"current",
+		"Build tooling",
+		"Infrastructure only",
+	);
+	assert.match(body, /1 scoped verification checks passed/);
+	for (const value of [
+		"/Users/",
+		"synthetic-secret",
+		"tester@example.invalid",
+		"private-resource-id",
+		"private-resource-name",
+	])
+		assert.equal(body.includes(value), false);
 });
 
 test("a running server allows checks in the same session", async (t) => {

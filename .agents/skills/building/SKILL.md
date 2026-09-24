@@ -5,11 +5,21 @@ description: Build Cap features in isolated Git worktrees with PlanetScale devel
 
 # Building Cap
 
-`/building <request>` authorizes implementing the feature in a new worktree, provisioning its disposable development resources, running verification, recording and uploading a demonstration into the user's `PR's` Cap folder, and opening a pull request. Honor narrower user instructions. Merging and production deployment remain separate actions.
+Use `/building <request>` in Cursor or Claude Code, or `$building <request>` in Codex. Each invocation authorizes implementing the feature in a new worktree, provisioning its disposable development resources, running verification, recording and uploading a demonstration into the user's `PR's` Cap folder, and opening a pull request. Honor narrower user instructions. Merging and production deployment remain separate actions.
 
 Use the repository containing the requested Cap project. Keep the original checkout, its index, branches, running services, and recordings untouched. This workflow replaces the shared-checkout mechanics of `$build`; do not invoke that skill inside this workflow.
 
-The helper is `scripts/building.mjs` relative to this skill. Use its absolute path when working in a newly created worktree, which might predate the repository copy of this skill. Run `npm ci --prefix <skill-directory> --ignore-scripts --no-audit --no-fund` once if the provider dependencies are missing. `node <helper> help` lists commands.
+The helper is `scripts/building.mjs` relative to this skill. Use its absolute path when working in a newly created worktree, which might predate the repository copy of this skill. Run `npm ci --prefix <skill-directory> --ignore-scripts --no-audit --no-fund` once if the provider dependencies are missing. `node <helper> help` lists commands. Read [editors.md](references/editors.md) when installing or checking discovery in another editor; all editors use the same scripts and session registry.
+
+## Publication privacy
+
+Use neutral GitHub metadata. Branch names, commit messages, PR titles/descriptions, comments, release notes, and demo titles must not mention Codex, Cursor, Claude, model names, or automated authorship. Use `building/<feature>-<id>` branches and conventional commit titles describing the actual change. Never add tool signatures, generated-by text, co-author trailers, or other attribution. This naming rule applies whichever editor runs the workflow.
+
+Never put secrets, sensitive information, or real people's personal data in committed content, filenames, commit messages, GitHub PR titles/descriptions, comments, attachments, or linked demonstrations. This includes credentials, tokens, cookies, signed URLs, connection strings, customer names, email addresses, phone numbers, account identifiers, recordings, and private support or billing details. Choose public-safe feature names before creating branches, recipes, or video titles. Use synthetic fixtures and reserved example domains. Keep raw logs, local absolute paths, database/provider receipts, and session state out of Git and GitHub text; a private repository is not an exception.
+
+Before every commit, inspect the exact staged diff and proposed message. Before every push, review all outgoing commits, including intermediate versions that a later commit removes. Before each GitHub write or Cap upload, inspect the final text or media actually being published. Summarize test outcomes in safe language instead of pasting commands or raw output; inspect screenshots, video frames, and audio too. Use an available secret scanner as an additional check, never as proof that personal data is absent. Use the user's established public Git identity and GitHub no-reply email rather than publishing a private author or committer email; do not alter shared Git configuration.
+
+If anything sensitive appears or cannot be confidently classified, sanitize or replace it before proceeding. Do not publish first and clean it up later. If exposure has already occurred, stop further publication, report the affected artifact without repeating the value, and coordinate credential revocation and history cleanup rather than silently force-pushing. Do not silently redact application behavior or required source values; use configuration or synthetic fixtures and preserve the intended feature.
 
 ## Prepare and resume
 
@@ -37,7 +47,7 @@ Create or reuse a draft PR for the owned branch, then record its URL using `pr`.
 
 Upload the verified capture using `share`; the helper finds or creates `PR's` and moves the video there. An uncertain upload must be reconciled by its recorded title/ID, never blindly repeated. Write a short ELI5 file explaining the previous problem, the new behavior, and its benefit. `pr-body --eli5 <file>` produces a starting body with the recording and current-SHA checks. Add factual migration notes, platform coverage, and remaining limitations; remove limitations only after verification. Use `gh pr edit --body-file`, preserving unrelated reviewer-authored content.
 
-Use the installed `greptile-pr-loop` skill when available, fixing actionable findings through its stop condition. Any changed commit invalidates old evidence: rerun affected checks, update the recording, and review the final PR head. Attach the created PR to the current Codex task using `attach_artifact` when available. Mark it ready only after the required gates pass; otherwise report the concrete blocker and keep the draft.
+Use the installed `greptile-pr-loop` skill when available, fixing actionable findings through its stop condition. Any changed commit invalidates old evidence: rerun affected checks, update the recording, and review the final PR head. In Codex, attach the created PR to the current task using `attach_artifact` when available; Cursor and Claude Code can report the GitHub URL directly. These editor integrations are optional; resource management uses the shared CLI. Mark it ready only after the required gates pass; otherwise report the concrete blocker and keep the draft.
 
 ## Finish
 

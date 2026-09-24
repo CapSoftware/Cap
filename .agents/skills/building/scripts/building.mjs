@@ -75,7 +75,7 @@ export function renderPrBody(session, sha, eli5, noVisual) {
 	const visual = upload?.folderVerified
 		? `[Watch the change in Cap](${upload.link})\n\nRecorded on Linux at 1920×1080 from \`${sha}\`. ${upload.playbackVerified ? "Playback and reviewer access verified in a browser." : "Playback and reviewer access require a separate browser check."}`
 		: `Not applicable: ${noVisual.trim()}`;
-	return `## ELI5\n\n${eli5.trim()}\n\n## Demo\n\n${visual}\n\n## Verification\n\n${currentChecks.map((check) => `- ${check.label}`).join("\n")}\n\nVerified commit: \`${sha}\`.\n\n## Limits and deployment\n\n${session.target === "web" ? "Native desktop platforms were not exercised by this workflow." : "Linux sandbox evidence does not verify macOS or Windows behavior. Record native checks separately."}\n\n${session.database.id ? `Development database: \`${session.database.name}\`. Production schema deployment is separate from merging application code.` : "No database branch was used."}\n`;
+	return `## ELI5\n\n${eli5.trim()}\n\n## Demo\n\n${visual}\n\n## Verification\n\n${currentChecks.length} scoped verification checks passed for this commit.\n\nVerified commit: \`${sha}\`.\n\n## Limits and deployment\n\n${session.target === "web" ? "Native desktop platforms were not exercised by this workflow." : "Linux sandbox evidence does not verify macOS or Windows behavior. Record native checks separately."}\n\n${session.database.id ? "An isolated development database was used. Production schema deployment is separate from merging application code." : "No database branch was used."}\n`;
 }
 
 export function recordPr(ctx, session, url) {
