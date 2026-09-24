@@ -1,6 +1,6 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { capture, deleteSandbox, shareCapture } from "./capture.mjs";
 import {
@@ -400,7 +400,8 @@ export async function main(argv = process.argv.slice(2)) {
 
 if (
 	process.argv[1] &&
-	import.meta.url === pathToFileURL(resolve(process.argv[1])).href
+	existsSync(process.argv[1]) &&
+	realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1])
 ) {
 	main()
 		.then((result) => {

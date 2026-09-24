@@ -8,6 +8,7 @@ import {
 	readFileSync,
 	rmSync,
 	statSync,
+	symlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -56,6 +57,27 @@ function fixture(t) {
 	t.after(() => rmSync(directory, { recursive: true, force: true }));
 	return context(repo);
 }
+
+test("the CLI entry point runs through an editor skill symlink", (t) => {
+	const ctx = fixture(t);
+	const alias = join(ctx.root, "skill-alias");
+	symlinkSync(dirname(fileURLToPath(import.meta.url)), alias, "dir");
+	const output = execFileSync(
+		process.execPath,
+		[join(alias, "building.mjs"), "help"],
+		{ encoding: "utf8" },
+	);
+	assert.match(output, /^Cap building workflow\n/);
+	const imported = execFileSync(
+		process.execPath,
+		["--input-type=module", "-"],
+		{
+			encoding: "utf8",
+			input: `await import(${JSON.stringify(new URL("./building.mjs", import.meta.url).href)}); console.log("imported");`,
+		},
+	);
+	assert.equal(imported.trim(), "imported");
+});
 
 test("creating two sessions preserves a dirty checkout and assigns independent branches and ports", async (t) => {
 	const ctx = fixture(t);
