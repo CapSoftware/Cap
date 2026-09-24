@@ -98,6 +98,10 @@ impl CameraLayer {
             self.hidden = true;
             return;
         };
+        let mut uniforms = uniforms;
+        if let Some((_, frame, _)) = &frame_data {
+            frame.apply_source_color_fix(&mut uniforms);
+        }
 
         let has_previous_frame = self.last_recording_time.is_some();
         self.hidden = frame_data.is_none() && !has_previous_frame;
@@ -143,28 +147,31 @@ impl CameraLayer {
 
             match format {
                 PixelFormat::Rgba => {
-                    let frame_data_bytes = camera_frame.data();
-                    let src_bytes_per_row = frame_size.x * 4;
+                    if !camera_frame.upload_browser_frame(queue, &self.frame_textures[next_texture])
+                    {
+                        let frame_data_bytes = camera_frame.data();
+                        let src_bytes_per_row = frame_size.x * 4;
 
-                    queue.write_texture(
-                        wgpu::TexelCopyTextureInfo {
-                            texture: &self.frame_textures[next_texture],
-                            mip_level: 0,
-                            origin: wgpu::Origin3d::ZERO,
-                            aspect: wgpu::TextureAspect::All,
-                        },
-                        frame_data_bytes,
-                        wgpu::TexelCopyBufferLayout {
-                            offset: 0,
-                            bytes_per_row: Some(src_bytes_per_row),
-                            rows_per_image: Some(frame_size.y),
-                        },
-                        wgpu::Extent3d {
-                            width: frame_size.x,
-                            height: frame_size.y,
-                            depth_or_array_layers: 1,
-                        },
-                    );
+                        queue.write_texture(
+                            wgpu::TexelCopyTextureInfo {
+                                texture: &self.frame_textures[next_texture],
+                                mip_level: 0,
+                                origin: wgpu::Origin3d::ZERO,
+                                aspect: wgpu::TextureAspect::All,
+                            },
+                            frame_data_bytes,
+                            wgpu::TexelCopyBufferLayout {
+                                offset: 0,
+                                bytes_per_row: Some(src_bytes_per_row),
+                                rows_per_image: Some(frame_size.y),
+                            },
+                            wgpu::Extent3d {
+                                width: frame_size.x,
+                                height: frame_size.y,
+                                depth_or_array_layers: 1,
+                            },
+                        );
+                    }
                 }
                 PixelFormat::Nv12 => {
                     if let Err(e) = self.yuv_converter.prepare_for_dimensions(
@@ -374,6 +381,10 @@ impl CameraLayer {
             self.hidden = true;
             return;
         };
+        let mut uniforms = uniforms;
+        if let Some((_, frame, _)) = &frame_data {
+            frame.apply_source_color_fix(&mut uniforms);
+        }
 
         let has_previous_frame = self.last_recording_time.is_some();
         self.hidden = frame_data.is_none() && !has_previous_frame;
@@ -419,28 +430,31 @@ impl CameraLayer {
 
             match format {
                 PixelFormat::Rgba => {
-                    let frame_data_bytes = camera_frame.data();
-                    let src_bytes_per_row = frame_size.x * 4;
+                    if !camera_frame.upload_browser_frame(queue, &self.frame_textures[next_texture])
+                    {
+                        let frame_data_bytes = camera_frame.data();
+                        let src_bytes_per_row = frame_size.x * 4;
 
-                    queue.write_texture(
-                        wgpu::TexelCopyTextureInfo {
-                            texture: &self.frame_textures[next_texture],
-                            mip_level: 0,
-                            origin: wgpu::Origin3d::ZERO,
-                            aspect: wgpu::TextureAspect::All,
-                        },
-                        frame_data_bytes,
-                        wgpu::TexelCopyBufferLayout {
-                            offset: 0,
-                            bytes_per_row: Some(src_bytes_per_row),
-                            rows_per_image: Some(frame_size.y),
-                        },
-                        wgpu::Extent3d {
-                            width: frame_size.x,
-                            height: frame_size.y,
-                            depth_or_array_layers: 1,
-                        },
-                    );
+                        queue.write_texture(
+                            wgpu::TexelCopyTextureInfo {
+                                texture: &self.frame_textures[next_texture],
+                                mip_level: 0,
+                                origin: wgpu::Origin3d::ZERO,
+                                aspect: wgpu::TextureAspect::All,
+                            },
+                            frame_data_bytes,
+                            wgpu::TexelCopyBufferLayout {
+                                offset: 0,
+                                bytes_per_row: Some(src_bytes_per_row),
+                                rows_per_image: Some(frame_size.y),
+                            },
+                            wgpu::Extent3d {
+                                width: frame_size.x,
+                                height: frame_size.y,
+                                depth_or_array_layers: 1,
+                            },
+                        );
+                    }
                 }
                 PixelFormat::Nv12 => {
                     if let Err(e) = self.yuv_converter.prepare_for_dimensions(

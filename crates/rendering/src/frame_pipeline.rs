@@ -1,7 +1,7 @@
+use crate::platform::Instant;
 use std::ops::Deref;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
 use tokio::sync::oneshot;
 use wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
 
@@ -233,7 +233,7 @@ async fn acquire_surface_buffer<T: Send>(
                 "Surface pool is unavailable: {error}"
             )));
         }
-        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        crate::platform::sleep(std::time::Duration::from_millis(1)).await;
     }
 }
 
@@ -853,11 +853,11 @@ impl PendingNv12Surface {
             device.poll(wgpu::PollType::Poll)?;
             poll_count += 1;
             if poll_count < 10 {
-                tokio::task::yield_now().await;
+                crate::platform::yield_now().await;
             } else if poll_count < 100 {
-                tokio::time::sleep(std::time::Duration::from_micros(100)).await;
+                crate::platform::sleep(std::time::Duration::from_micros(100)).await;
             } else {
-                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                crate::platform::sleep(std::time::Duration::from_millis(1)).await;
             }
         }
 
@@ -923,11 +923,11 @@ impl PendingNv12Readback {
                     device.poll(wgpu::PollType::Poll)?;
                     poll_count += 1;
                     if poll_count < 10 {
-                        tokio::task::yield_now().await;
+                        crate::platform::yield_now().await;
                     } else if poll_count < 100 {
-                        tokio::time::sleep(std::time::Duration::from_micros(100)).await;
+                        crate::platform::sleep(std::time::Duration::from_micros(100)).await;
                     } else {
-                        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                        crate::platform::sleep(std::time::Duration::from_millis(1)).await;
                     }
                 }
                 Err(oneshot::error::TryRecvError::Closed) => {
@@ -1380,11 +1380,11 @@ impl PendingSurface {
             device.poll(wgpu::PollType::Poll)?;
             poll_count += 1;
             if poll_count < 10 {
-                tokio::task::yield_now().await;
+                crate::platform::yield_now().await;
             } else if poll_count < 100 {
-                tokio::time::sleep(std::time::Duration::from_micros(100)).await;
+                crate::platform::sleep(std::time::Duration::from_micros(100)).await;
             } else {
-                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                crate::platform::sleep(std::time::Duration::from_millis(1)).await;
             }
         }
 
@@ -1455,11 +1455,11 @@ impl PendingReadback {
                     device.poll(wgpu::PollType::Poll)?;
                     poll_count += 1;
                     if poll_count < 10 {
-                        tokio::task::yield_now().await;
+                        crate::platform::yield_now().await;
                     } else if poll_count < 100 {
-                        tokio::time::sleep(std::time::Duration::from_micros(100)).await;
+                        crate::platform::sleep(std::time::Duration::from_micros(100)).await;
                     } else {
-                        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                        crate::platform::sleep(std::time::Duration::from_millis(1)).await;
                     }
                     if poll_count.is_multiple_of(10000) {
                         tracing::warn!(

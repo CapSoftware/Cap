@@ -449,6 +449,11 @@ impl TextLayer {
     ) {
         self.buffers.clear();
         self.draws.clear();
+        let texts = if super::sync_browser_fonts(&mut self.font_system) {
+            texts
+        } else {
+            &[]
+        };
         let mut backgrounds: Vec<TextBackgroundUniforms> = Vec::new();
         let output_px = [output_size.0.max(1) as f32, output_size.1.max(1) as f32];
 

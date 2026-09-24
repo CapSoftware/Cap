@@ -150,6 +150,8 @@ impl DisplayLayer {
             uniforms.write_to_buffer(queue, &self.uniforms_buffer);
             return (false, frame_size.x, frame_size.y);
         };
+        let mut uniforms = uniforms;
+        screen_frame.apply_source_color_fix(&mut uniforms);
 
         let actual_width = screen_frame.width();
         let actual_height = screen_frame.height();
@@ -192,28 +194,31 @@ impl DisplayLayer {
 
             frame_uploaded = match format {
                 PixelFormat::Rgba => {
-                    let frame_data = screen_frame.data();
-                    let src_bytes_per_row = source_size.x * 4;
+                    if !screen_frame.upload_browser_frame(queue, &self.frame_textures[next_texture])
+                    {
+                        let frame_data = screen_frame.data();
+                        let src_bytes_per_row = source_size.x * 4;
 
-                    queue.write_texture(
-                        wgpu::TexelCopyTextureInfo {
-                            texture: &self.frame_textures[next_texture],
-                            mip_level: 0,
-                            origin: wgpu::Origin3d::ZERO,
-                            aspect: wgpu::TextureAspect::All,
-                        },
-                        frame_data,
-                        wgpu::TexelCopyBufferLayout {
-                            offset: 0,
-                            bytes_per_row: Some(src_bytes_per_row),
-                            rows_per_image: Some(source_size.y),
-                        },
-                        wgpu::Extent3d {
-                            width: source_size.x,
-                            height: source_size.y,
-                            depth_or_array_layers: 1,
-                        },
-                    );
+                        queue.write_texture(
+                            wgpu::TexelCopyTextureInfo {
+                                texture: &self.frame_textures[next_texture],
+                                mip_level: 0,
+                                origin: wgpu::Origin3d::ZERO,
+                                aspect: wgpu::TextureAspect::All,
+                            },
+                            frame_data,
+                            wgpu::TexelCopyBufferLayout {
+                                offset: 0,
+                                bytes_per_row: Some(src_bytes_per_row),
+                                rows_per_image: Some(source_size.y),
+                            },
+                            wgpu::Extent3d {
+                                width: source_size.x,
+                                height: source_size.y,
+                                depth_or_array_layers: 1,
+                            },
+                        );
+                    }
                     true
                 }
                 PixelFormat::Nv12 => {
@@ -538,6 +543,8 @@ impl DisplayLayer {
             uniforms.write_to_buffer(queue, &self.uniforms_buffer);
             return false;
         };
+        let mut uniforms = uniforms;
+        screen_frame.apply_source_color_fix(&mut uniforms);
 
         let actual_width = screen_frame.width();
         let actual_height = screen_frame.height();
@@ -580,28 +587,31 @@ impl DisplayLayer {
 
             frame_uploaded = match format {
                 PixelFormat::Rgba => {
-                    let frame_data = screen_frame.data();
-                    let src_bytes_per_row = source_size.x * 4;
+                    if !screen_frame.upload_browser_frame(queue, &self.frame_textures[next_texture])
+                    {
+                        let frame_data = screen_frame.data();
+                        let src_bytes_per_row = source_size.x * 4;
 
-                    queue.write_texture(
-                        wgpu::TexelCopyTextureInfo {
-                            texture: &self.frame_textures[next_texture],
-                            mip_level: 0,
-                            origin: wgpu::Origin3d::ZERO,
-                            aspect: wgpu::TextureAspect::All,
-                        },
-                        frame_data,
-                        wgpu::TexelCopyBufferLayout {
-                            offset: 0,
-                            bytes_per_row: Some(src_bytes_per_row),
-                            rows_per_image: Some(source_size.y),
-                        },
-                        wgpu::Extent3d {
-                            width: source_size.x,
-                            height: source_size.y,
-                            depth_or_array_layers: 1,
-                        },
-                    );
+                        queue.write_texture(
+                            wgpu::TexelCopyTextureInfo {
+                                texture: &self.frame_textures[next_texture],
+                                mip_level: 0,
+                                origin: wgpu::Origin3d::ZERO,
+                                aspect: wgpu::TextureAspect::All,
+                            },
+                            frame_data,
+                            wgpu::TexelCopyBufferLayout {
+                                offset: 0,
+                                bytes_per_row: Some(src_bytes_per_row),
+                                rows_per_image: Some(source_size.y),
+                            },
+                            wgpu::Extent3d {
+                                width: source_size.x,
+                                height: source_size.y,
+                                depth_or_array_layers: 1,
+                            },
+                        );
+                    }
                     true
                 }
                 PixelFormat::Nv12 => {

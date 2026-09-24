@@ -336,7 +336,7 @@ impl CursorLayer {
                         return None;
                     };
                     let cursor = inner.get_cursor_image(&constants.recording_meta, cursor_id)?;
-                    let image = image::open(&cursor.path)
+                    let image = crate::platform::open_image(&cursor.path)
                         .map_err(|err| {
                             error!("Failed to load cursor image from {:?}: {err}", cursor.path)
                         })

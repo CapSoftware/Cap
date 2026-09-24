@@ -1,7 +1,6 @@
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 
-#[cfg(not(target_arch = "wasm32"))]
 use crate::ProjectUniforms;
 
 pub struct BlurLayer {
@@ -43,7 +42,6 @@ impl BlurLayer {
         }
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn prepare(&mut self, queue: &wgpu::Queue, uniforms: &ProjectUniforms) {
         self.prepare_values(
             queue,

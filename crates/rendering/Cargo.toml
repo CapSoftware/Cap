@@ -10,21 +10,14 @@ workspace = true
 web-editor-camera-removal = ["cap-project/web-editor-camera-removal"]
 
 [dependencies]
-cap-enc-ffmpeg = { path = "../enc-ffmpeg" }
 anyhow.workspace = true
 bytemuck = { version = "1.7", features = ["derive"] }
 cap-camera-effects = { path = "../camera-effects" }
 cap-flags = { path = "../flags" }
 cap-project = { path = "../project" }
-cap-video-decode = { path = "../video-decode" }
 cap-cursor-info = { path = "../cursor-info" }
-ffmpeg-hw-device = { path = "../ffmpeg-hw-device" }
-tokio.workspace = true
-ffmpeg.workspace = true
 futures = { workspace = true }
 futures-intrusive = "0.5.0"
-rayon = "1.10"
-image = "0.25.2"
 log = "0.4"
 serde = { workspace = true }
 serde_json = "1.0"
@@ -37,9 +30,27 @@ glyphon = "0.9.0"
 tracing.workspace = true
 resvg = "0.45"
 tiny-skia = "0.11"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+image = "0.25.2"
+cap-enc-ffmpeg = { path = "../enc-ffmpeg" }
+cap-video-decode = { path = "../video-decode" }
+ffmpeg-hw-device = { path = "../ffmpeg-hw-device" }
+tokio.workspace = true
+ffmpeg.workspace = true
+rayon = "1.10"
 clap = { version = "4.5", features = ["derive"] }
 dirs = "5.0"
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+image = { version = "0.25.2", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp"] }
+tokio = { version = "1.39.3", default-features = false, features = ["macros", "sync"] }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = ["Window", "ImageBitmap", "HtmlVideoElement", "HtmlCanvasElement", "OffscreenCanvas", "VideoFrame"] }
+web-time = "1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cidre.workspace = true

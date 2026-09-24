@@ -26,16 +26,14 @@ pub fn clean_background_path(path: &str) -> Option<String> {
         .replace("asset://", "")
         .replace("localhost//", "/");
 
-    std::path::Path::new(&clean_path)
-        .exists()
-        .then_some(clean_path)
+    crate::platform::path_exists(std::path::Path::new(&clean_path)).then_some(clean_path)
 }
 
 fn decode_background_rgba(
     path: &str,
     max_dimension: u32,
 ) -> Result<(Vec<u8>, u32, u32), image::ImageError> {
-    let img = image::open(path)?;
+    let img = crate::platform::open_image(path)?;
     let (source_width, source_height) = img.dimensions();
 
     let img = if source_width > max_dimension || source_height > max_dimension {
@@ -184,9 +182,10 @@ impl BackgroundTextureCache {
         let max_dimension = MAX_BACKGROUND_DIMENSION.min(device.limits().max_texture_dimension_2d);
         let path_owned = path.to_string();
 
-        let decoded =
-            tokio::task::spawn_blocking(move || decode_background_rgba(&path_owned, max_dimension))
-                .await;
+        let decoded = crate::platform::run_blocking(move || {
+            decode_background_rgba(&path_owned, max_dimension)
+        })
+        .await;
 
         let (rgba, width, height) = match decoded {
             Ok(Ok(decoded)) => decoded,
