@@ -44,7 +44,7 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 			handlers.handle("ticket", ({ path, payload }) =>
 				Effect.gen(function* () {
 					const request = yield* HttpServerRequest.HttpServerRequest;
-					const origin = new URL(request.url).origin;
+					const origin = new URL(request.originalUrl).origin;
 					if (request.headers.origin && request.headers.origin !== origin) {
 						return yield* new HttpApiError.Forbidden();
 					}
