@@ -905,6 +905,10 @@ async function AuthorizedContent({
 			"timeline" && !video.isScreenshot
 			? ("timeline" as const)
 			: ("classic" as const);
+
+	const captionsInitiallyOff =
+		optionFromTOrFirst(searchParams.captions).pipe(Option.getOrNull) === "off";
+
 	// Recording media comments rides on the VIDEO OWNER's Pro plan; the
 	// upload/create paths re-check server-side via canUseMediaComments.
 	const canRecordMedia = Boolean(user) && videoWithOrganizationInfo.owner.isPro;
@@ -957,6 +961,7 @@ async function AuthorizedContent({
 				viewerId={user?.id ?? null}
 				viewerSignedIn={user !== null}
 				initialView={initialShareView}
+				captionsInitiallyOff={captionsInitiallyOff}
 				canRecordMedia={canRecordMedia}
 				isEditProcessing={isEditProcessing}
 				recordingStopped={recordingStopped}

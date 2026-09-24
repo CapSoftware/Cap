@@ -136,6 +136,7 @@ interface Props {
 	canRetryProcessing?: boolean;
 	duration?: number | null;
 	defaultPlaybackSpeed?: number;
+	captionsInitiallyOff?: boolean;
 	showPlaybackStatusBadge?: boolean;
 	showFloatingVolumeControl?: boolean;
 	onUploadComplete?: () => void;
@@ -173,6 +174,7 @@ export function CapVideoPlayer({
 	canRetryProcessing = false,
 	duration: fallbackDuration,
 	defaultPlaybackSpeed,
+	captionsInitiallyOff = false,
 	showPlaybackStatusBadge = false,
 	showFloatingVolumeControl = false,
 	onUploadComplete,
@@ -180,7 +182,7 @@ export function CapVideoPlayer({
 	const [currentCue, setCurrentCue] = useState<string>("");
 	const [controlsVisible, setControlsVisible] = useState(false);
 	const [mainControlsVisible, setMainControlsVisible] = useState(false);
-	const [toggleCaptions, setToggleCaptions] = useState(true);
+	const [toggleCaptions, setToggleCaptions] = useState(!captionsInitiallyOff);
 	const [showPlayButton, setShowPlayButton] = useState(false);
 	const [videoLoaded, setVideoLoaded] = useState(false);
 	const [hasPlayedOnce, setHasPlayedOnce] = useState(false);

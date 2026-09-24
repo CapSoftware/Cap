@@ -206,6 +206,8 @@ interface ShareProps {
 	transcriptionGenerationAvailable: boolean;
 	/** Server-resolved `?view=` so the first paint already has the right layout. */
 	initialView?: ShareView;
+	/** Server-resolved `?captions=off` so captions never flash on before being hidden. */
+	captionsInitiallyOff?: boolean;
 	canRecordMedia?: boolean;
 	viewerSignedIn?: boolean;
 	/**
@@ -333,6 +335,7 @@ export const Share = ({
 	aiGenerationAvailable,
 	transcriptionGenerationAvailable,
 	initialView = "classic",
+	captionsInitiallyOff = false,
 	canRecordMedia = false,
 	viewerSignedIn = false,
 	header,
@@ -996,6 +999,7 @@ export const Share = ({
 														isEditProcessing={isEditProcessing}
 														recordingStopped={recordingStopped}
 														defaultPlaybackSpeed={defaultPlaybackSpeed}
+														captionsInitiallyOff={captionsInitiallyOff}
 														viewerIsOwner={viewerId === data.owner.id}
 														ref={playerRef}
 													/>

@@ -97,6 +97,7 @@ export const ShareVideo = forwardRef<
 		isEditProcessing: boolean;
 		recordingStopped?: boolean;
 		defaultPlaybackSpeed?: number;
+		captionsInitiallyOff?: boolean;
 		viewerIsOwner?: boolean;
 	}
 >(
@@ -118,6 +119,7 @@ export const ShareVideo = forwardRef<
 			isEditProcessing,
 			recordingStopped = false,
 			defaultPlaybackSpeed,
+			captionsInitiallyOff = false,
 			viewerIsOwner = false,
 		},
 		ref,
@@ -551,6 +553,7 @@ export const ShareVideo = forwardRef<
 							initialPlaybackUrl={initialPlaybackUrl}
 							duration={data.duration}
 							defaultPlaybackSpeed={defaultPlaybackSpeed}
+							captionsInitiallyOff={captionsInitiallyOff}
 							showPlaybackStatusBadge={showPlaybackStatusBadge}
 							disableCaptions={areCaptionsDisabled ?? false}
 							disableCommentStamps={areCommentStampsDisabled ?? false}
@@ -586,6 +589,7 @@ export const ShareVideo = forwardRef<
 							videoSrc={videoSrc}
 							duration={data.duration}
 							defaultPlaybackSpeed={defaultPlaybackSpeed}
+							captionsInitiallyOff={captionsInitiallyOff}
 							externalTimeline={externalTimeline}
 							controlsPortalEl={controlsPortalEl}
 							disableCaptions={areCaptionsDisabled ?? false}

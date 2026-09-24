@@ -114,6 +114,7 @@ interface Props {
 	canRetryProcessing?: boolean;
 	duration?: number | null;
 	defaultPlaybackSpeed?: number;
+	captionsInitiallyOff?: boolean;
 	previewMode?: "background";
 	/** The share page's timeline deck owns scrubbing while visible. */
 	externalTimeline?: boolean;
@@ -148,6 +149,7 @@ export function HLSVideoPlayer({
 	canRetryProcessing = false,
 	duration: fallbackDuration,
 	defaultPlaybackSpeed,
+	captionsInitiallyOff = false,
 	previewMode,
 	externalTimeline = false,
 	controlsPortalEl = null,
@@ -155,7 +157,7 @@ export function HLSVideoPlayer({
 	const hlsInstance = useRef<Hls | null>(null);
 	const [currentCue, setCurrentCue] = useState<string>("");
 	const [controlsVisible, setControlsVisible] = useState(false);
-	const [toggleCaptions, setToggleCaptions] = useState(true);
+	const [toggleCaptions, setToggleCaptions] = useState(!captionsInitiallyOff);
 	const [showPlayButton, setShowPlayButton] = useState(false);
 	const [videoLoaded, setVideoLoaded] = useState(false);
 	const [hlsInitFailed, setHlsInitFailed] = useState(false);
