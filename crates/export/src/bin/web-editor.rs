@@ -1,10 +1,10 @@
 use std::{
-    collections::{BTreeSet, HashMap, HashSet},
+    collections::{HashMap, HashSet},
     env,
     error::Error,
     ffi::OsString,
     fs::{self, File, OpenOptions},
-    io::{self, BufRead, BufReader, Write},
+    io::{self, BufReader, Write},
     path::{Path, PathBuf},
     sync::{Arc, atomic::AtomicBool},
 };
@@ -19,11 +19,10 @@ use cap_export::{
     settings::ExportSettings,
 };
 use cap_project::{
-    AudioMeta, ClipConfiguration, CursorClickEvent, CursorEvents, CursorMeta, CursorMoveEvent,
-    Cursors, InstantRecordingMeta, KeyPressEvent, KeyboardEvents, MultipleSegment,
-    MultipleSegments, Platform, ProjectConfiguration, RecordingMeta, RecordingMetaInner,
+    AudioMeta, ClipConfiguration, CursorMeta, Cursors, InstantRecordingMeta, KeyboardEvents,
+    MultipleSegment, MultipleSegments, ProjectConfiguration, RecordingMeta, RecordingMetaInner,
     StudioRecordingMeta, StudioRecordingStatus, TimelineConfiguration, VideoMeta, VoiceIsolation,
-    XY,
+    web_input::{MAX_WEB_INPUT_BYTES, WebInputData, parse_web_input_events, web_cursor_asset},
 };
 use image::ImageDecoder;
 use serde::Deserialize;
@@ -70,34 +69,6 @@ struct LegacyKeepRange {
     end: f64,
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct WebInputHeader {
-    version: u8,
-    platform: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct WebInputEvent {
-    kind: String,
-    time_ms: f64,
-    x: Option<f64>,
-    y: Option<f64>,
-    cursor: Option<String>,
-    button: Option<u8>,
-    key: Option<String>,
-    code: Option<String>,
-    modifiers: Vec<String>,
-}
-
-struct WebInputData {
-    platform: Platform,
-    cursor: CursorEvents,
-    keyboard: KeyboardEvents,
-    styles: BTreeSet<&'static str>,
-}
-
 #[derive(Default)]
 struct StagedWebInput {
     cursor_path: Option<String>,
@@ -105,166 +76,15 @@ struct StagedWebInput {
     cursors: Cursors,
 }
 
-fn web_cursor_style(cursor: &str) -> io::Result<&'static str> {
-    match cursor {
-        "auto" | "default" => Ok("default"),
-        "pointer" => Ok("pointer"),
-        "text" => Ok("text"),
-        "crosshair" => Ok("crosshair"),
-        "grab" => Ok("grab"),
-        "grabbing" => Ok("grabbing"),
-        "not-allowed" => Ok("not-allowed"),
-        "ew-resize" => Ok("ew-resize"),
-        "ns-resize" => Ok("ns-resize"),
-        _ => Err(invalid_input("Unsupported web cursor shape")),
-    }
-}
-
-fn safe_web_keyboard_key(key: &str, code: &str) -> bool {
-    match key {
-        "Escape" | "Tab" | "Backspace" | "Delete" | "ArrowUp" | "ArrowDown" | "ArrowLeft"
-        | "ArrowRight" | "Home" | "End" | "PageUp" | "PageDown" => code == key,
-        "Enter" => matches!(code, "Enter" | "NumpadEnter"),
-        "Shift" => matches!(code, "ShiftLeft" | "ShiftRight"),
-        "Control" => matches!(code, "ControlLeft" | "ControlRight"),
-        "Alt" => matches!(code, "AltLeft" | "AltRight"),
-        "Meta" => matches!(code, "MetaLeft" | "MetaRight"),
-        _ => {
-            code == key
-                && key
-                    .strip_prefix('F')
-                    .and_then(|value| value.parse::<u8>().ok())
-                    .is_some_and(|number| (1..=24).contains(&number))
-        }
-    }
-}
-
 fn load_web_input_events(path: &Path) -> Result<WebInputData, Box<dyn Error>> {
     if path.extension().and_then(|value| value.to_str()) != Some("ndjson") {
         return Err(invalid_input("Input event source must be NDJSON").into());
     }
     let metadata = fs::symlink_metadata(path)?;
-    if !metadata.is_file() || !(1..=64 * 1024 * 1024).contains(&metadata.len()) {
+    if !metadata.is_file() || !(1..=MAX_WEB_INPUT_BYTES).contains(&metadata.len()) {
         return Err(invalid_input("Input event source exceeds the supported size").into());
     }
-    let mut lines = BufReader::new(File::open(path)?).lines();
-    let header_line = lines
-        .next()
-        .ok_or_else(|| invalid_input("Input event source is empty"))??;
-    if header_line.len() > 256 {
-        return Err(invalid_input("Input event header exceeds the supported size").into());
-    }
-    let header: WebInputHeader = serde_json::from_str(&header_line)?;
-    if header.version != 1 || header.platform.len() > 64 {
-        return Err(invalid_input("Unsupported input event source version").into());
-    }
-    let platform = if header.platform.starts_with("Mac") {
-        Platform::MacOS
-    } else if header.platform.starts_with("Win") {
-        Platform::Windows
-    } else if header.platform.starts_with("Linux") {
-        Platform::Linux
-    } else {
-        return Err(invalid_input("Unsupported input event platform").into());
-    };
-    let mut cursor = CursorEvents::default();
-    let mut keyboard = KeyboardEvents::default();
-    let mut styles = BTreeSet::new();
-    for (index, line) in lines.enumerate() {
-        if index >= 500_000 {
-            return Err(invalid_input("Input event count exceeds the supported limit").into());
-        }
-        let line = line?;
-        if line.len() > 1024 || line.is_empty() {
-            return Err(invalid_input("Input event line is invalid").into());
-        }
-        let event: WebInputEvent = serde_json::from_str(&line)?;
-        if !event.time_ms.is_finite()
-            || !(0.0..=86_400_000.0).contains(&event.time_ms)
-            || event.modifiers.len() > 4
-            || event.modifiers.iter().any(|modifier| {
-                !matches!(modifier.as_str(), "Meta" | "LControl" | "LAlt" | "LShift")
-            })
-        {
-            return Err(invalid_input("Input event timestamp or modifiers are invalid").into());
-        }
-        match event.kind.as_str() {
-            "move" | "down" | "up" => {
-                let (Some(x), Some(y), Some(cursor_name), Some(button)) =
-                    (event.x, event.y, event.cursor, event.button)
-                else {
-                    return Err(invalid_input("Pointer event is incomplete").into());
-                };
-                if !x.is_finite()
-                    || !y.is_finite()
-                    || !(-1.0..=2.0).contains(&x)
-                    || !(-1.0..=2.0).contains(&y)
-                    || button > 4
-                    || event.key.is_some()
-                    || event.code.is_some()
-                {
-                    return Err(invalid_input("Pointer event is invalid").into());
-                }
-                let style = web_cursor_style(&cursor_name)?;
-                styles.insert(style);
-                let cursor_id = format!("web-{style}");
-                if event.kind == "move" {
-                    cursor.moves.push(CursorMoveEvent {
-                        active_modifiers: event.modifiers,
-                        cursor_id,
-                        time_ms: event.time_ms,
-                        x,
-                        y,
-                    });
-                } else {
-                    cursor.clicks.push(CursorClickEvent {
-                        active_modifiers: event.modifiers,
-                        cursor_num: button,
-                        cursor_id,
-                        time_ms: event.time_ms,
-                        down: event.kind == "down",
-                    });
-                }
-            }
-            "keyDown" | "keyUp" => {
-                let (Some(key), Some(code)) = (event.key, event.code) else {
-                    return Err(invalid_input("Keyboard event is incomplete").into());
-                };
-                if key.len() > 64
-                    || code.len() > 64
-                    || !safe_web_keyboard_key(&key, &code)
-                    || event.x.is_some()
-                    || event.y.is_some()
-                    || event.cursor.is_some()
-                    || event.button.is_some()
-                {
-                    return Err(invalid_input("Keyboard event is invalid").into());
-                }
-                keyboard.presses.push(KeyPressEvent {
-                    key,
-                    key_code: code,
-                    time_ms: event.time_ms,
-                    down: event.kind == "keyDown",
-                });
-            }
-            _ => return Err(invalid_input("Unsupported input event kind").into()),
-        }
-    }
-    cursor
-        .moves
-        .sort_by(|left, right| left.time_ms.total_cmp(&right.time_ms));
-    cursor
-        .clicks
-        .sort_by(|left, right| left.time_ms.total_cmp(&right.time_ms));
-    keyboard
-        .presses
-        .sort_by(|left, right| left.time_ms.total_cmp(&right.time_ms));
-    Ok(WebInputData {
-        platform,
-        cursor,
-        keyboard,
-        styles,
-    })
+    Ok(parse_web_input_events(BufReader::new(File::open(path)?))?)
 }
 
 #[derive(Deserialize)]
@@ -344,101 +164,6 @@ fn stage_audio(
         device_id: None,
         gap_summary: None,
     })
-}
-
-fn web_cursor_asset(
-    platform: &Platform,
-    style: &str,
-) -> io::Result<(&'static [u8], &'static str, XY<f64>)> {
-    let asset = match platform {
-        Platform::Windows => match style {
-            "default" => (
-                include_bytes!("../../assets/web-cursors/windows-default.png").as_slice(),
-                "Windows|Arrow",
-                XY::new(0.288, 0.189),
-            ),
-            "pointer" | "grab" | "grabbing" => (
-                include_bytes!("../../assets/web-cursors/windows-pointer.png").as_slice(),
-                "Windows|Hand",
-                XY::new(0.441, 0.143),
-            ),
-            "text" => (
-                include_bytes!("../../assets/web-cursors/windows-text.png").as_slice(),
-                "Windows|IBeam",
-                XY::new(0.490, 0.471),
-            ),
-            "crosshair" => (
-                include_bytes!("../../assets/web-cursors/windows-crosshair.png").as_slice(),
-                "Windows|Cross",
-                XY::new(0.5, 0.5),
-            ),
-            "not-allowed" => (
-                include_bytes!("../../assets/web-cursors/windows-not-allowed.png").as_slice(),
-                "Windows|No",
-                XY::new(0.5, 0.5),
-            ),
-            "ew-resize" => (
-                include_bytes!("../../assets/web-cursors/windows-ew-resize.png").as_slice(),
-                "Windows|SizeWE",
-                XY::new(0.5, 0.5),
-            ),
-            "ns-resize" => (
-                include_bytes!("../../assets/web-cursors/windows-ns-resize.png").as_slice(),
-                "Windows|SizeNS",
-                XY::new(0.5, 0.5),
-            ),
-            _ => return Err(invalid_input("Unsupported Windows cursor style")),
-        },
-        Platform::MacOS | Platform::Linux => match style {
-            "default" => (
-                include_bytes!("../../assets/web-cursors/mac-default.png").as_slice(),
-                "MacOS|Arrow",
-                XY::new(0.302, 0.226),
-            ),
-            "pointer" => (
-                include_bytes!("../../assets/web-cursors/mac-pointer.png").as_slice(),
-                "MacOS|PointingHand",
-                XY::new(0.342, 0.172),
-            ),
-            "text" => (
-                include_bytes!("../../assets/web-cursors/mac-text.png").as_slice(),
-                "MacOS|IBeam",
-                XY::new(0.484, 0.520),
-            ),
-            "crosshair" => (
-                include_bytes!("../../assets/web-cursors/mac-crosshair.png").as_slice(),
-                "MacOS|Crosshair",
-                XY::new(0.52, 0.51),
-            ),
-            "grab" => (
-                include_bytes!("../../assets/web-cursors/mac-grab.png").as_slice(),
-                "MacOS|OpenHand",
-                XY::new(0.5, 0.5),
-            ),
-            "grabbing" => (
-                include_bytes!("../../assets/web-cursors/mac-grabbing.png").as_slice(),
-                "MacOS|ClosedHand",
-                XY::new(0.5, 0.5),
-            ),
-            "not-allowed" => (
-                include_bytes!("../../assets/web-cursors/mac-not-allowed.png").as_slice(),
-                "MacOS|OperationNotAllowed",
-                XY::new(0.24, 0.1),
-            ),
-            "ew-resize" => (
-                include_bytes!("../../assets/web-cursors/mac-ew-resize.png").as_slice(),
-                "MacOS|ResizeLeftRight",
-                XY::new(0.5, 0.5),
-            ),
-            "ns-resize" => (
-                include_bytes!("../../assets/web-cursors/mac-ns-resize.png").as_slice(),
-                "MacOS|ResizeUpDown",
-                XY::new(0.5, 0.5),
-            ),
-            _ => return Err(invalid_input("Unsupported Mac cursor style")),
-        },
-    };
-    Ok(asset)
 }
 
 fn stage_web_input(
@@ -1155,6 +880,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cap_project::Platform;
 
     #[test]
     fn imports_browser_input_as_native_editor_events() {

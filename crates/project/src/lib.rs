@@ -4,6 +4,7 @@ mod configuration;
 pub mod cursor;
 pub mod keyboard;
 mod meta;
+pub mod web_input;
 
 pub use animated_gradient::*;
 pub use caption_timing::{derive_caption_track_segments, source_caption_id, synchronize_captions};
