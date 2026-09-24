@@ -585,11 +585,13 @@ version = "0.1.0"
 dependencies = [
  "cap-project",
  "cap-rendering",
+ "cap-rnnoise",
  "console_error_panic_hook",
  "futures",
  "futures-channel",
  "js-sys",
  "serde_json",
+ "tracing",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
@@ -712,6 +714,15 @@ dependencies = [
  "wgpu-hal",
  "windows 0.58.0",
  "windows 0.60.0",
+ "workspace-hack",
+]
+
+[[package]]
+name = "cap-rnnoise"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "libm",
  "workspace-hack",
 ]
 

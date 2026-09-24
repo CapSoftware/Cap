@@ -6,6 +6,7 @@ use super::{DecodedFrame, PixelFormat};
 pub enum BrowserFrameSource {
     Bitmap(web_sys::ImageBitmap),
     Video(web_sys::HtmlVideoElement),
+    VideoFrame(web_sys::VideoFrame),
 }
 
 /// A decoded browser frame that stays on the GPU side of the page: layers copy
@@ -31,6 +32,9 @@ impl BrowserFrameImage {
             }
             BrowserFrameSource::Video(video) => {
                 wgpu::ExternalImageSource::HTMLVideoElement(video.clone())
+            }
+            BrowserFrameSource::VideoFrame(frame) => {
+                wgpu::ExternalImageSource::VideoFrame(Clone::clone(frame))
             }
         }
     }

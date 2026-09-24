@@ -26,6 +26,20 @@ export function remove_asset(path: string): void;
  */
 export function web_input_recording(ndjson: string): string;
 export function webgl2_available(canvas: HTMLCanvasElement): boolean;
+export class BrowserExportAudio {
+  free(): void;
+  constructor(config_json: string, total_frames: number);
+  /**
+   * Adds a decoded recording track. `offset_seconds` is where recording
+   * time zero falls in the track (the preview's `audio_times` offset).
+   */
+  add_track(clip: number, microphone: boolean, channels: number, sample_rate: number, offset_seconds: number, samples: Float32Array): void;
+  add_music(path: string, channels: number, sample_rate: number, samples: Float32Array): void;
+  /**
+   * Interleaved stereo 48 kHz samples; empty once the timeline is done.
+   */
+  next_chunk(frames: number): Float32Array;
+}
 export class BrowserRecordingTimes {
   free(): void;
   constructor(meta_json: string, clips_json: string);
@@ -90,6 +104,14 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 
 export interface InitOutput {
   readonly memory: WebAssembly.Memory;
+  readonly log10: (a: number) => number;
+  readonly sin: (a: number) => number;
+  readonly cos: (a: number) => number;
+  readonly __wbg_browserexportaudio_free: (a: number, b: number) => void;
+  readonly browserexportaudio_new: (a: number, b: number, c: number) => [number, number, number];
+  readonly browserexportaudio_add_track: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];
+  readonly browserexportaudio_add_music: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number];
+  readonly browserexportaudio_next_chunk: (a: number, b: number) => [number, number];
   readonly start: () => void;
   readonly default_project_config_json: () => [number, number, number, number];
   readonly animated_gradient_catalog_json: () => [number, number, number, number];
@@ -125,6 +147,19 @@ export interface InitOutput {
   readonly browserstudiorenderer_snapshot_rgba: (a: number) => any;
   readonly browserstudiorenderer_last_layout: (a: number) => [number, number];
   readonly webgl2_available: (a: any) => number;
+  readonly malloc: (a: number) => number;
+  readonly calloc: (a: number, b: number) => number;
+  readonly free: (a: number) => void;
+  readonly realloc: (a: number, b: number) => number;
+  readonly abs: (a: number) => number;
+  readonly strcmp: (a: number, b: number) => number;
+  readonly sqrt: (a: number) => number;
+  readonly floor: (a: number) => number;
+  readonly fopen: (a: number, b: number) => number;
+  readonly fread: (a: number, b: number, c: number, d: number) => number;
+  readonly fclose: (a: number) => number;
+  readonly fseek: (a: number, b: number, c: number) => number;
+  readonly ftell: (a: number) => number;
   readonly __wbindgen_exn_store: (a: number) => void;
   readonly __externref_table_alloc: () => number;
   readonly __wbindgen_export_2: WebAssembly.Table;
@@ -133,10 +168,10 @@ export interface InitOutput {
   readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
   readonly __wbindgen_export_6: WebAssembly.Table;
   readonly __externref_table_dealloc: (a: number) => void;
-  readonly wasm_bindgen__convert__closures_____invoke__h206b19c123560cb9: (a: number, b: number) => void;
-  readonly closure1244_externref_shim: (a: number, b: number, c: any) => void;
-  readonly closure1628_externref_shim: (a: number, b: number, c: any) => void;
-  readonly closure2700_externref_shim: (a: number, b: number, c: any, d: any) => void;
+  readonly wasm_bindgen__convert__closures_____invoke__h9f7756242072ca73: (a: number, b: number) => void;
+  readonly closure1634_externref_shim: (a: number, b: number, c: any) => void;
+  readonly closure1250_externref_shim: (a: number, b: number, c: any) => void;
+  readonly closure2706_externref_shim: (a: number, b: number, c: any, d: any) => void;
   readonly __wbindgen_start: () => void;
 }
 

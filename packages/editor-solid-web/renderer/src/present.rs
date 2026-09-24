@@ -1,7 +1,7 @@
 use cap_rendering::SharedWgpuDevice;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
-use web_sys::{HtmlCanvasElement, WebGl2RenderingContext};
+use web_sys::{HtmlCanvasElement, OffscreenCanvas, WebGl2RenderingContext};
 
 use crate::{js_error, shared_device, trace_renderer};
 
@@ -30,8 +30,43 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 }
 "#;
 
+/// The preview draws into a page canvas; exports draw into an `OffscreenCanvas`
+/// inside a worker and hand each frame to the encoder.
+#[derive(Clone)]
+pub(crate) enum CanvasTarget {
+    Html(HtmlCanvasElement),
+    Offscreen(OffscreenCanvas),
+}
+
+impl CanvasTarget {
+    pub fn from_js(value: JsValue) -> Result<Self, JsValue> {
+        let value = match value.dyn_into::<HtmlCanvasElement>() {
+            Ok(canvas) => return Ok(Self::Html(canvas)),
+            Err(value) => value,
+        };
+        value
+            .dyn_into::<OffscreenCanvas>()
+            .map(Self::Offscreen)
+            .map_err(|_| js_error("Editor canvas is invalid"))
+    }
+
+    fn size(&self) -> (u32, u32) {
+        match self {
+            Self::Html(canvas) => (canvas.width(), canvas.height()),
+            Self::Offscreen(canvas) => (canvas.width(), canvas.height()),
+        }
+    }
+
+    fn surface_target(&self) -> wgpu::SurfaceTarget<'static> {
+        match self {
+            Self::Html(canvas) => wgpu::SurfaceTarget::Canvas(canvas.clone()),
+            Self::Offscreen(canvas) => wgpu::SurfaceTarget::OffscreenCanvas(canvas.clone()),
+        }
+    }
+}
+
 pub(crate) async fn create_device(
-    canvas: &HtmlCanvasElement,
+    canvas: &CanvasTarget,
     prefer_webgpu: bool,
 ) -> Result<
     (
@@ -41,8 +76,8 @@ pub(crate) async fn create_device(
     ),
     JsValue,
 > {
-    let width = canvas.width().max(2);
-    let height = canvas.height().max(2);
+    let (width, height) = canvas.size();
+    let (width, height) = (width.max(2), height.max(2));
     if prefer_webgpu {
         match create_webgpu(canvas, width, height).await {
             Ok(result) => return Ok(result),
@@ -54,11 +89,14 @@ pub(crate) async fn create_device(
             }
         }
     }
-    create_webgl(canvas, width, height).await
+    match canvas {
+        CanvasTarget::Html(canvas) => create_webgl(canvas, width, height).await,
+        CanvasTarget::Offscreen(_) => Err(js_error("Offscreen rendering requires WebGPU")),
+    }
 }
 
 async fn create_webgpu(
-    canvas: &HtmlCanvasElement,
+    canvas: &CanvasTarget,
     width: u32,
     height: u32,
 ) -> Result<
@@ -94,7 +132,7 @@ async fn create_webgpu(
         .await
         .map_err(js_error)?;
     let surface = instance
-        .create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone()))
+        .create_surface(canvas.surface_target())
         .map_err(js_error)?;
     let mut config = surface
         .get_default_config(&adapter, width, height)

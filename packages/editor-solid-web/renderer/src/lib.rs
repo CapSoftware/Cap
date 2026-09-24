@@ -1,7 +1,37 @@
 #[path = "../../../../crates/editor/src/screen_recording_defaults.rs"]
 mod screen_recording_defaults;
 
+#[cfg(feature = "export-audio")]
+mod export_audio;
 mod present;
+// Shared verbatim with the desktop mixer; the browser uses the enhancer only.
+#[cfg(feature = "export-audio")]
+#[allow(dead_code)]
+#[path = "../../../../crates/audio/src/voice.rs"]
+mod voice;
+#[cfg(feature = "export-audio")]
+mod voice_level;
+
+#[cfg(feature = "export-audio")]
+pub(crate) use voice::VoiceEnhancer;
+#[cfg(feature = "export-audio")]
+pub(crate) use voice_level::VoiceProfile;
+
+/// `cap_audio::AudioSampleSource`, which the shared Studio Sound enhancer
+/// (`crates/audio/src/voice.rs`) reads interleaved samples through.
+#[cfg(feature = "export-audio")]
+pub(crate) trait AudioSampleSource {
+    fn channels(&self) -> u16;
+    fn sample_count(&self) -> usize;
+    fn sample(&self, index: usize) -> Option<&f32>;
+    #[allow(dead_code)]
+    fn sample_slice(&self, _range: std::ops::Range<usize>) -> Option<&[f32]> {
+        None
+    }
+}
+
+#[cfg(feature = "export-audio")]
+pub use export_audio::BrowserExportAudio;
 
 use cap_project::{
     AspectRatio, ClipConfiguration, ClipOffsets, ClipTransitionType, CursorEvents,
@@ -162,6 +192,11 @@ impl BrowserTimeline {
         Ok(Self {
             timeline: serde_json::from_str(timeline_json).map_err(js_error)?,
         })
+    }
+
+    /// Output duration in seconds, as native export sizes its frame count.
+    pub fn duration(&self) -> f64 {
+        self.timeline.duration()
     }
 
     pub fn map_frame(&self, time: f64) -> Vec<f64> {
@@ -414,6 +449,13 @@ fn browser_source(value: &JsValue) -> Result<(BrowserFrameSource, u32, u32), JsV
             video.video_height(),
         ));
     }
+    if let Some(frame) = value.dyn_ref::<web_sys::VideoFrame>() {
+        return Ok((
+            BrowserFrameSource::VideoFrame(Clone::clone(frame)),
+            frame.display_width(),
+            frame.display_height(),
+        ));
+    }
     if let Some(bitmap) = value.dyn_ref::<ImageBitmap>() {
         return Ok((
             BrowserFrameSource::Bitmap(bitmap.clone()),
@@ -489,7 +531,7 @@ impl BrowserStudioRenderer {
     /// `cursors_json` an array with one `CursorEvents` per recording clip.
     #[wasm_bindgen(js_name = create)]
     pub async fn create(
-        canvas: HtmlCanvasElement,
+        canvas: JsValue,
         prefer_webgpu: bool,
         recording_meta_json: String,
         screen_width: u32,
@@ -510,6 +552,7 @@ impl BrowserStudioRenderer {
             StudioRecordingMeta::SingleSegment { .. } => 1,
             StudioRecordingMeta::MultipleSegments { inner } => inner.segments.len(),
         };
+        let canvas = present::CanvasTarget::from_js(canvas)?;
         let (shared, surface, surface_config) =
             present::create_device(&canvas, prefer_webgpu).await?;
         shared.device.on_uncaptured_error(Box::new(|error| {
