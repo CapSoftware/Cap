@@ -21,7 +21,7 @@ export const useMediaRecorderSetup = () => {
 	const stopPromiseRejectRef = useRef<((reason?: unknown) => void) | null>(
 		null,
 	);
-	const isStoppingRef = useRef(false);
+	const stopPromiseRef = useRef<Promise<Blob | null> | null>(null);
 	const stoppedRef = useRef(false);
 	const stopTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const recorderErrorRef = useRef<Error | null>(null);
@@ -120,7 +120,7 @@ export const useMediaRecorderSetup = () => {
 				recorderErrorRef.current = error;
 				stopPromiseResolverRef.current = null;
 				stopPromiseRejectRef.current = null;
-				isStoppingRef.current = false;
+				stopPromiseRef.current = null;
 				setRecorderError(error);
 				rejecter?.(error);
 				return;
@@ -130,14 +130,14 @@ export const useMediaRecorderSetup = () => {
 				const rejecter = stopPromiseRejectRef.current;
 				stopPromiseResolverRef.current = null;
 				stopPromiseRejectRef.current = null;
-				isStoppingRef.current = false;
+				stopPromiseRef.current = null;
 				rejecter?.(new Error("No recorded data"));
 				return;
 			}
 
 			stopPromiseResolverRef.current = null;
 			stopPromiseRejectRef.current = null;
-			isStoppingRef.current = false;
+			stopPromiseRef.current = null;
 			resolver?.(blob);
 		},
 		[getRecoveryBlob],
@@ -152,6 +152,7 @@ export const useMediaRecorderSetup = () => {
 
 	const stopRecordingInternal = useCallback(
 		async (cleanupStreams: () => void, clearTimer: () => void) => {
+			if (stopPromiseRef.current) return stopPromiseRef.current;
 			const recorder = mediaRecorderRef.current;
 			if (!recorder || stoppedRef.current) {
 				cleanupStreams();
@@ -159,9 +160,6 @@ export const useMediaRecorderSetup = () => {
 				if (recorderErrorRef.current) throw recorderErrorRef.current;
 				return getRecoveryBlob();
 			}
-			if (isStoppingRef.current) return null;
-
-			isStoppingRef.current = true;
 
 			const stopPromise = new Promise<Blob | null>((resolve, reject) => {
 				stopPromiseResolverRef.current = resolve;
@@ -174,11 +172,13 @@ export const useMediaRecorderSetup = () => {
 					stopPromiseResolverRef.current = null;
 					stopPromiseRejectRef.current = null;
 					stopTimeoutRef.current = null;
-					isStoppingRef.current = false;
+					stopPromiseRef.current = null;
 					setRecorderError(error);
 					reject(error);
 				}, 30_000);
 			});
+
+			stopPromiseRef.current = stopPromise;
 
 			try {
 				if (recorder.state !== "inactive") recorder.stop();
@@ -189,7 +189,7 @@ export const useMediaRecorderSetup = () => {
 				stopPromiseRejectRef.current?.(error);
 				stopPromiseResolverRef.current = null;
 				stopPromiseRejectRef.current = null;
-				isStoppingRef.current = false;
+				stopPromiseRef.current = null;
 			}
 			cleanupStreams();
 			clearTimer();
@@ -205,7 +205,7 @@ export const useMediaRecorderSetup = () => {
 		stopPromiseRejectRef.current?.(new Error("Recording was reset"));
 		stopPromiseResolverRef.current = null;
 		stopPromiseRejectRef.current = null;
-		isStoppingRef.current = false;
+		stopPromiseRef.current = null;
 		stoppedRef.current = false;
 		mediaRecorderRef.current = null;
 		recordedChunksRef.current = [];

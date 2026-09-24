@@ -62,6 +62,7 @@ interface InProgressRecordingBarProps {
 	isRestarting?: boolean;
 	errorDownload?: RecordingFailureDownload | null;
 	onRetryUpload?: () => Promise<void>;
+	onNewRecording?: () => Promise<void>;
 	shareUrl?: string | null;
 }
 
@@ -79,6 +80,7 @@ export const InProgressRecordingBar = ({
 	isRestarting = false,
 	errorDownload,
 	onRetryUpload,
+	onNewRecording,
 	shareUrl,
 }: InProgressRecordingBarProps) => {
 	const [mounted, setMounted] = useState(false);
@@ -301,6 +303,15 @@ export const InProgressRecordingBar = ({
 								className="rounded-md bg-blue-9 px-3 py-2 text-sm font-medium text-white"
 							>
 								Retry upload
+							</button>
+						)}
+						{onNewRecording && (
+							<button
+								type="button"
+								onClick={() => void onNewRecording()}
+								className="rounded-md px-3 py-2 text-sm font-medium text-gray-12"
+							>
+								New recording
 							</button>
 						)}
 						{shareUrl && (

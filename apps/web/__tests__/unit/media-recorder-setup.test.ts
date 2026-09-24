@@ -93,6 +93,28 @@ describe("MediaRecorder failure recovery", () => {
 		expect(await (await stopped)?.text()).toBe("firstlast");
 	});
 
+	it("joins an in-flight stop while the recorder is inactive and awaits its tail", async () => {
+		setup.onRecorderDataAvailable(chunk("first"));
+		const cleanup = vi.fn();
+		const stopped = setup.stopRecordingInternal(cleanup, vi.fn());
+		expect(recorder.state).toBe("inactive");
+		let finished = false;
+		const joined = setup
+			.stopRecordingInternal(cleanup, vi.fn())
+			.then((blob) => {
+				finished = true;
+				return blob;
+			});
+		await Promise.resolve();
+		expect(finished).toBe(false);
+		setup.onRecorderDataAvailable(chunk("last"));
+		await act(async () => setup.onRecorderStop());
+		expect(await (await stopped)?.text()).toBe("firstlast");
+		expect(await (await joined)?.text()).toBe("firstlast");
+		expect(recorder.stop).toHaveBeenCalledOnce();
+		expect(cleanup).toHaveBeenCalledOnce();
+	});
+
 	it("bounds a missing stop event without discarding recorded data", async () => {
 		vi.useFakeTimers();
 		setup.onRecorderDataAvailable(chunk("saved"));

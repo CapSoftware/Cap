@@ -150,6 +150,7 @@ export const WebRecorderDialog = () => {
 		errorDownload,
 		canRetryUpload,
 		retryUpload,
+		prepareNewRecording,
 		completedShareUrl,
 		recoveredDownloads,
 		isSettingUp,
@@ -448,6 +449,10 @@ export const WebRecorderDialog = () => {
 					chunkUploads={chunkUploads}
 					errorDownload={errorDownload}
 					onRetryUpload={canRetryUpload ? retryUpload : undefined}
+					onNewRecording={async () => {
+						await prepareNewRecording();
+						setOpen(true);
+					}}
 					shareUrl={completedShareUrl}
 					onStop={handleStopClick}
 					onPause={pauseRecording}

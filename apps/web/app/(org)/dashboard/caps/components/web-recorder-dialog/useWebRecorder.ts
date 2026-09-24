@@ -266,6 +266,7 @@ export const useWebRecorder = ({
 	const recordingSpoolWarningShownRef = useRef(false);
 	const recordingSpoolHeartbeatRef = useRef<number | null>(null);
 	const recoveredDownloadUrlsRef = useRef(new Map<string, string>());
+	const memoryRecoveredRecordingsRef = useRef(new Set<string>());
 
 	const isStreamingPipelineActive = useCallback(
 		() => recordingPipelineRef.current?.mode === "streaming-webm",
@@ -312,6 +313,7 @@ export const useWebRecorder = ({
 
 	const dismissRecoveredDownload = useCallback((id: string) => {
 		toast.dismiss(recoveredToastId(id));
+		memoryRecoveredRecordingsRef.current.delete(id);
 		const url = recoveredDownloadUrlsRef.current.get(id);
 		if (url) {
 			URL.revokeObjectURL(url);
@@ -374,7 +376,13 @@ export const useWebRecorder = ({
 						} satisfies RecoveredRecordingDownload;
 					});
 
-					setRecoveredDownloads(nextDownloads);
+					setRecoveredDownloads((current) => [
+						...current.filter(
+							(download) =>
+								!nextDownloads.some((next) => next.id === download.id),
+						),
+						...nextDownloads,
+					]);
 					for (const download of nextDownloads) {
 						if (previousIds.has(download.id)) continue;
 						toast.info("Recovered an unfinished recording", {
@@ -642,11 +650,22 @@ export const useWebRecorder = ({
 		[onPhaseChange],
 	);
 
+	const stopRecordingInternalWrapper = useCallback(async () => {
+		let blob: Blob | null;
+		try {
+			blob = await stopRecordingInternal(cleanupStreams, clearTimer);
+		} finally {
+			await spoolFallbackRef.current;
+			await recordingSpoolRef.current?.flush();
+		}
+		return getRecoveryBlob() ?? blob;
+	}, [stopRecordingInternal, cleanupStreams, clearTimer, getRecoveryBlob]);
+
 	const cleanupRecordingState = useCallback(
 		async (preserveRecording = false) => {
 			setupGenerationRef.current += 1;
-			if (preserveRecording && mediaRecorderRef.current?.state !== "inactive") {
-				await stopRecordingInternal(cleanupStreams, clearTimer).catch(() => {});
+			if (preserveRecording) {
+				await stopRecordingInternalWrapper().catch(() => {});
 			}
 			cleanupStreams();
 			clearTimer();
@@ -709,8 +728,7 @@ export const useWebRecorder = ({
 			setUploadStatus,
 			replaceErrorDownload,
 			stopRecordingSpoolHeartbeat,
-			mediaRecorderRef,
-			stopRecordingInternal,
+			stopRecordingInternalWrapper,
 		],
 	);
 
@@ -719,6 +737,52 @@ export const useWebRecorder = ({
 		await cleanupRecordingState();
 		updatePhase("idle");
 	}, [cleanupRecordingState, updatePhase]);
+
+	const prepareNewRecording = useCallback(async () => {
+		if (phaseRef.current !== "error" || stopInFlightRef.current) return;
+		const recording = stoppedRecordingRef.current;
+		if (!recording) return;
+		stopInFlightRef.current = true;
+		const generation = setupGenerationRef.current;
+		try {
+			await stopRecordingInternalWrapper().catch(() => {});
+			if (generation !== setupGenerationRef.current) return;
+			const blob = await resolveFailureBlob(null);
+			if (generation !== setupGenerationRef.current) return;
+			if (blob?.size) {
+				const id = recordingSpoolRef.current?.sessionId ?? crypto.randomUUID();
+				const url =
+					recoveredDownloadUrlsRef.current.get(id) ?? URL.createObjectURL(blob);
+				recoveredDownloadUrlsRef.current.set(id, url);
+				if (!recordingSpoolRef.current)
+					memoryRecoveredRecordingsRef.current.add(id);
+				const createdAt = Date.now();
+				setRecoveredDownloads((current) => [
+					...current.filter((download) => download.id !== id),
+					{
+						id,
+						url,
+						createdAt,
+						fileName: createRecordingDownloadName(createdAt, blob.type),
+					},
+				]);
+			}
+			await cleanupRecordingState(true);
+			updatePhase("idle");
+		} catch (error) {
+			console.error("Failed to preserve the previous recording", error);
+			toast.error(
+				"Could not prepare a new recording. Your previous recording is still available.",
+			);
+		} finally {
+			stopInFlightRef.current = false;
+		}
+	}, [
+		cleanupRecordingState,
+		resolveFailureBlob,
+		stopRecordingInternalWrapper,
+		updatePhase,
+	]);
 
 	const unmountCleanupRef = useRef(cleanupRecordingState);
 
@@ -780,13 +844,6 @@ export const useWebRecorder = ({
 			handleLiveUploadFailure,
 		],
 	);
-
-	const stopRecordingInternalWrapper = useCallback(async () => {
-		const blob = await stopRecordingInternal(cleanupStreams, clearTimer);
-		await spoolFallbackRef.current;
-		await recordingSpoolRef.current?.flush();
-		return getRecoveryBlob() ?? blob;
-	}, [stopRecordingInternal, cleanupStreams, clearTimer, getRecoveryBlob]);
 
 	const startRecording = async () => {
 		if (
@@ -892,8 +949,10 @@ export const useWebRecorder = ({
 				try {
 					micStream = await acquireMicStream(selectedMicId);
 				} catch (micError) {
+					// A selected microphone is part of the requested capture; silently
+					// continuing would produce a take with missing narration.
 					throw new Error(
-						"Your microphone is unavailable. Check its permissions and try again.",
+						"Your microphone is unavailable. Check its permissions, choose another microphone, or turn it off to record without it.",
 						{ cause: micError },
 					);
 				}
@@ -1233,6 +1292,7 @@ export const useWebRecorder = ({
 			stopInFlightRef.current
 		)
 			return;
+		const generation = setupGenerationRef.current;
 		stopInFlightRef.current = true;
 		stopInstantChunkInterval();
 		clearInstantChunkGuard();
@@ -1256,10 +1316,13 @@ export const useWebRecorder = ({
 		setCompletedShareUrl(videoCreationRef.current?.shareUrl ?? null);
 		try {
 			recording.blob = await stopRecordingInternalWrapper();
+			if (generation !== setupGenerationRef.current) return;
 		} catch (error) {
+			if (generation !== setupGenerationRef.current) return;
 			console.error("Browser failed to finish recording", error);
 			recording.captureFailed = true;
 			recording.blob = await resolveFailureBlob(null);
+			if (generation !== setupGenerationRef.current) return;
 			replaceErrorDownload(recording.blob);
 			setCanRetryUpload(Boolean(recording.blob?.size));
 			setUploadStatus(undefined);
@@ -1268,7 +1331,9 @@ export const useWebRecorder = ({
 				"The browser stopped recording early. You can save or upload the available recording.",
 			);
 		} finally {
-			recording.totalBytes = totalRecordedBytesRef.current;
+			if (generation === setupGenerationRef.current) {
+				recording.totalBytes = totalRecordedBytesRef.current;
+			}
 			stopInFlightRef.current = false;
 		}
 		if (!recording.captureFailed) await uploadStoppedRecording();
@@ -1309,13 +1374,19 @@ export const useWebRecorder = ({
 	}, [phase, canRetryUpload, uploadStoppedRecording]);
 
 	useEffect(() => {
-		if (phase === "idle" || phase === "completed") return;
+		if (
+			(phase === "idle" || phase === "completed") &&
+			!recoveredDownloads.some((download) =>
+				memoryRecoveredRecordingsRef.current.has(download.id),
+			)
+		)
+			return;
 		const handleBeforeUnload = (event: BeforeUnloadEvent) => {
 			event.preventDefault();
 		};
 		window.addEventListener("beforeunload", handleBeforeUnload);
 		return () => window.removeEventListener("beforeunload", handleBeforeUnload);
-	}, [phase]);
+	}, [phase, recoveredDownloads]);
 
 	useEffect(() => {
 		stopRecordingRef.current = stopRecording;
@@ -1415,6 +1486,7 @@ export const useWebRecorder = ({
 		errorDownload,
 		canRetryUpload,
 		retryUpload: uploadStoppedRecording,
+		prepareNewRecording,
 		completedShareUrl,
 		recoveredDownloads,
 		isSettingUp,
