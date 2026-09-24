@@ -1085,9 +1085,36 @@ try {
 	});
 	assert.ok(draggedCamera?.manualPosition);
 	const originalCameraSize = draggedCamera.size;
-	const resizeBounds = await cameraBox
-		.locator(".cursor-nw-resize")
-		.boundingBox();
+	const resizeHandle = cameraBox.locator(".cursor-nw-resize");
+	try {
+		await resizeHandle.waitFor({ state: "visible", timeout: 5_000 });
+	} catch (cause) {
+		const overlay = await editor
+			.locator("#canvas + div")
+			.evaluate((element) => ({
+				children: Array.from(element.children).map((child) => ({
+					text: child.textContent?.slice(0, 100),
+					className: child.className,
+					handles: child.querySelectorAll(".cursor-nw-resize").length,
+					bounds: child.getBoundingClientRect().toJSON(),
+				})),
+			}))
+			.catch(() => null);
+		process.stderr.write(
+			`${JSON.stringify({ stage: "camera-resize-handle", browserEngine: engine.name(), overlay })}\n`,
+		);
+		await reportStageFailure(
+			"camera-resize-handle",
+			page,
+			editor,
+			cause,
+			pageErrors,
+			pageWarnings,
+			failedResponses,
+		);
+		throw cause;
+	}
+	const resizeBounds = await resizeHandle.boundingBox();
 	assert.ok(resizeBounds);
 	await page.mouse.move(
 		resizeBounds.x + resizeBounds.width / 2,
