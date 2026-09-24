@@ -124,6 +124,63 @@ function hasEntitledProSubscription(subscriptions: Stripe.Subscription[]) {
 	);
 }
 
+function effectiveProSubscription(
+	eventSubscription: Stripe.Subscription,
+	subscriptions: Stripe.Subscription[],
+) {
+	const current =
+		subscriptions.find((sub) => sub.id === eventSubscription.id) ??
+		eventSubscription;
+	return (
+		subscriptions.find(
+			(sub) =>
+				isProSubscription(sub) &&
+				(sub.status === "active" || sub.status === "trialing"),
+		) ??
+		subscriptions.find(
+			(sub) => isProSubscription(sub) && sub.status === "past_due",
+		) ??
+		current
+	);
+}
+
+function proInviteQuota(subscriptions: Stripe.Subscription[]) {
+	return subscriptions
+		.filter(
+			(sub) =>
+				isProSubscription(sub) &&
+				ENTITLED_SUBSCRIPTION_STATUSES.has(sub.status),
+		)
+		.reduce(
+			(total, sub) =>
+				total +
+				sub.items.data.reduce(
+					(subTotal, item) => subTotal + (item.quantity || 1),
+					0,
+				),
+			0,
+		);
+}
+
+async function listCustomerSubscriptions(customerId: string) {
+	const subscriptions: Stripe.Subscription[] = [];
+	let startingAfter: string | undefined;
+	while (true) {
+		const page = await stripe().subscriptions.list({
+			customer: customerId,
+			status: "all",
+			limit: 100,
+			...(startingAfter ? { starting_after: startingAfter } : {}),
+		});
+		subscriptions.push(...page.data);
+		if (!page.has_more) return subscriptions;
+		const last = page.data.at(-1);
+		if (!last)
+			throw new Error("Stripe subscription pagination did not advance");
+		startingAfter = last.id;
+	}
+}
+
 async function cancelEntitledBaaSubscriptions(
 	subscriptions: Stripe.Subscription[],
 	customerId: string,
@@ -702,21 +759,17 @@ export const POST = async (req: Request) => {
 					foundUserId,
 				);
 
-				const subscriptions = await stripe().subscriptions.list({
-					customer: customer.id,
-					status: "all",
-					limit: 100,
-				});
+				const subscriptions = await listCustomerSubscriptions(customer.id);
 
 				console.log("Retrieved all subscriptions:", {
-					count: subscriptions.data.length,
+					count: subscriptions.length,
 				});
 
 				// BAA cleanup depends only on Stripe state, so it must run even
 				// when the customer cannot be mapped to a user; the 202 below is
 				// treated as delivered and the event is never redelivered.
-				if (!hasEntitledProSubscription(subscriptions.data)) {
-					await cancelEntitledBaaSubscriptions(subscriptions.data, customer.id);
+				if (!hasEntitledProSubscription(subscriptions)) {
+					await cancelEntitledBaaSubscriptions(subscriptions, customer.id);
 				}
 
 				if (!dbUser) {
@@ -737,25 +790,15 @@ export const POST = async (req: Request) => {
 				// Quota follows entitlement: past_due keeps its seats during the
 				// dunning window instead of collapsing the org to zero while
 				// Stripe retries the card.
-				const inviteQuota = subscriptions.data
-					.filter(
-						(sub) =>
-							ENTITLED_SUBSCRIPTION_STATUSES.has(sub.status) &&
-							isProSubscription(sub),
-					)
-					.reduce((total, sub) => {
-						return (
-							total +
-							sub.items.data.reduce(
-								(subTotal, item) => subTotal + (item.quantity || 1),
-								0,
-							)
-						);
-					}, 0);
+				const currentSubscription = effectiveProSubscription(
+					subscription,
+					subscriptions,
+				);
+				const inviteQuota = proInviteQuota(subscriptions);
 
 				console.log("Updating user in database with:", {
-					subscriptionId: subscription.id,
-					status: subscription.status,
+					subscriptionId: currentSubscription.id,
+					status: currentSubscription.status,
 					customerId: customer.id,
 					inviteQuota,
 				});
@@ -763,8 +806,8 @@ export const POST = async (req: Request) => {
 				await db()
 					.update(users)
 					.set({
-						stripeSubscriptionId: subscription.id,
-						stripeSubscriptionStatus: subscription.status,
+						stripeSubscriptionId: currentSubscription.id,
+						stripeSubscriptionStatus: currentSubscription.status,
 						stripeCustomerId: customer.id,
 						inviteQuota: inviteQuota,
 					})
@@ -880,17 +923,20 @@ export const POST = async (req: Request) => {
 				// BAA cleanup depends only on Stripe state; it must run before the
 				// user-mapping early returns so an unmappable customer can't keep
 				// an active BAA billing after their last Pro subscription ends.
-				const remainingSubscriptions = await stripe().subscriptions.list({
-					customer: customer.id,
-					status: "all",
-					limit: 100,
-				});
-				if (!hasEntitledProSubscription(remainingSubscriptions.data)) {
+				const remainingSubscriptions = await listCustomerSubscriptions(
+					customer.id,
+				);
+				if (!hasEntitledProSubscription(remainingSubscriptions)) {
 					await cancelEntitledBaaSubscriptions(
-						remainingSubscriptions.data,
+						remainingSubscriptions,
 						customer.id,
 					);
 				}
+				const currentSubscription = effectiveProSubscription(
+					subscription,
+					remainingSubscriptions,
+				);
+				const inviteQuota = proInviteQuota(remainingSubscriptions) || 1;
 
 				let foundUserId: User.UserId | undefined;
 				if ("metadata" in customer) {
@@ -940,16 +986,16 @@ export const POST = async (req: Request) => {
 				await db()
 					.update(users)
 					.set({
-						stripeSubscriptionId: subscription.id,
-						stripeSubscriptionStatus: subscription.status,
-						inviteQuota: 1,
+						stripeSubscriptionId: currentSubscription.id,
+						stripeSubscriptionStatus: currentSubscription.status,
+						inviteQuota,
 					})
 					.where(eq(users.id, foundUserId));
 				await enqueueLoopsSync(db(), foundUserId);
 
 				console.log("User updated successfully", {
 					foundUserId,
-					inviteQuota: 1,
+					inviteQuota,
 				});
 			}
 
