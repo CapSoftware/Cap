@@ -9,7 +9,14 @@ import { createSignal, onCleanup } from "solid-js";
 import { render } from "solid-js/web";
 import { Toaster } from "solid-toast";
 import type { PreparingEditorModel } from "../../../apps/desktop/src/routes/editor/preparing-editor-model";
-import { setBrowserEditorVideoId } from "./browser-frame-socket";
+import {
+	onBrowserPreviewSettled,
+	setBrowserEditorVideoId,
+} from "./browser-frame-socket";
+import { browserWebGpuPresentationWorks } from "./browser-gpu-probe";
+import { probeBrowserMedia } from "./browser-media-probe";
+import { loadBrowserRenderer } from "./browser-renderer";
+import { prefetchBrowserEditorSources } from "./browser-sources";
 import {
 	clearEditorImportedImages,
 	serializeEditorProjectSnapshot,
@@ -40,6 +47,7 @@ const queryClient = new QueryClient({
 });
 
 let dispose: (() => void) | null = null;
+let skeletonHandoff: (() => void) | null = null;
 let skeletonDispose: (() => void) | null = null;
 let errorDispose: (() => void) | null = null;
 let skeletonModel: PreparingEditorModel | null = null;
@@ -106,6 +114,8 @@ async function mountEditorSkeleton(element: HTMLElement) {
 			import("../../../apps/desktop/src/routes/editor/preparing-editor-model"),
 		]);
 	if (generation !== mountGeneration || dispose || skeletonDispose) return;
+	element.style.display = "";
+	element.style.pointerEvents = "";
 	skeletonDispose = render(() => {
 		const model = createPreparingEditorModel();
 		skeletonModel = model;
@@ -122,6 +132,54 @@ async function mountEditorSkeleton(element: HTMLElement) {
 	}, element);
 }
 
+function disposeSkeleton() {
+	skeletonHandoff?.();
+	skeletonHandoff = null;
+	skeletonDispose?.();
+	skeletonDispose = null;
+	skeletonModel = null;
+	skeletonSequence = -1;
+	if (skeletonRoot) {
+		skeletonRoot.style.display = "none";
+		skeletonRoot.style.opacity = "";
+		skeletonRoot.style.transition = "";
+	}
+}
+
+/// Keeps the loading skeleton over the mounted editor until the preview has
+/// painted, so opening shows one loader instead of two.
+function handOffSkeletonWhenPreviewSettles(generation: number) {
+	skeletonHandoff?.();
+	let timer = 0;
+	const finish = () => {
+		window.clearTimeout(timer);
+		unsubscribe();
+		if (generation !== mountGeneration) return;
+		skeletonHandoff = null;
+		if (
+			!skeletonRoot ||
+			matchMedia("(prefers-reduced-motion: reduce)").matches
+		) {
+			disposeSkeleton();
+			return;
+		}
+		skeletonRoot.style.transition = "opacity 160ms ease-out";
+		skeletonRoot.style.opacity = "0";
+		skeletonRoot.style.pointerEvents = "none";
+		window.setTimeout(() => {
+			if (generation === mountGeneration && !skeletonHandoff) disposeSkeleton();
+		}, 180);
+	};
+	const unsubscribe = onBrowserPreviewSettled(() =>
+		requestAnimationFrame(finish),
+	);
+	timer = window.setTimeout(finish, 15_000);
+	skeletonHandoff = () => {
+		window.clearTimeout(timer);
+		unsubscribe();
+	};
+}
+
 export async function mountEditor(element: HTMLElement) {
 	if (dispose) return;
 	const generation = mountGeneration;
@@ -129,12 +187,10 @@ export async function mountEditor(element: HTMLElement) {
 	if (generation !== mountGeneration)
 		throw new Error("Editor mount was canceled");
 	if (dispose) return;
-	skeletonDispose?.();
-	skeletonDispose = null;
 	errorDispose?.();
 	errorDispose = null;
-	skeletonModel = null;
-	skeletonSequence = -1;
+	if (skeletonDispose) handOffSkeletonWhenPreviewSettles(generation);
+	else disposeSkeleton();
 	dispose = render(
 		() => (
 			<QueryClientProvider client={queryClient}>
@@ -152,12 +208,9 @@ export function disposeEditor() {
 	mountGeneration++;
 	dispose?.();
 	dispose = null;
-	skeletonDispose?.();
-	skeletonDispose = null;
+	disposeSkeleton();
 	errorDispose?.();
 	errorDispose = null;
-	skeletonModel = null;
-	skeletonSequence = -1;
 	setEditorTransport(null);
 	setBrowserEditorVideoId(null);
 }
@@ -176,9 +229,42 @@ declare global {
 	}
 }
 
-const root = document.getElementById("editor-root");
-if (root) {
-	void mountEditorSkeleton(root).catch(() => undefined);
+function layer(zIndex: number) {
+	const element = document.createElement("div");
+	element.style.cssText = `position:absolute;inset:0;z-index:${zIndex}`;
+	return element;
+}
+
+/// Starts everything the first preview frame needs before the host connects:
+/// the renderer module, the GPU check, the recording sources and media probes.
+function prefetchStartup() {
+	void loadBrowserRenderer().catch(() => undefined);
+	void browserWebGpuPresentationWorks().catch(() => undefined);
+	const videoId = new URLSearchParams(window.location.search).get("videoId");
+	if (!videoId || !/^[A-Za-z0-9_-]{1,255}$/.test(videoId)) return;
+	void prefetchBrowserEditorSources(videoId)
+		.then((sources) => {
+			const first = sources.segments[0];
+			for (const url of [
+				first?.display?.url,
+				first?.camera?.url,
+				sources.mic?.url,
+			]) {
+				if (url) void probeBrowserMedia(url).catch(() => undefined);
+			}
+		})
+		.catch(() => undefined);
+}
+
+const container = document.getElementById("editor-root");
+const root = container ? layer(0) : null;
+const skeletonRoot = container ? layer(1) : null;
+if (container && root && skeletonRoot) {
+	container.style.cssText =
+		"position:relative;width:100vw;height:100vh;overflow:hidden";
+	container.append(root, skeletonRoot);
+	prefetchStartup();
+	void mountEditorSkeleton(skeletonRoot).catch(() => undefined);
 	void loadEditorModule().catch(() => undefined);
 	window.capSolidEditor = {
 		mount: () => mountEditor(root),
@@ -217,10 +303,7 @@ if (root) {
 			const generation = ++mountGeneration;
 			dispose?.();
 			dispose = null;
-			skeletonDispose?.();
-			skeletonDispose = null;
-			skeletonModel = null;
-			skeletonSequence = -1;
+			disposeSkeleton();
 			setEditorTransport(null);
 			setBrowserEditorVideoId(null);
 			window.capWebEditorPreparePresetBackground = undefined;

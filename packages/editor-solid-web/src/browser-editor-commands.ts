@@ -10,6 +10,7 @@ import {
 	browserEditorPreviewConfig,
 	browserEditorPreviewTime,
 } from "./browser-frame-socket";
+import { probeBrowserMedia } from "./browser-media-probe";
 import { loadBrowserRenderer } from "./browser-renderer";
 import {
 	BrowserEditorSourceCatalog,
@@ -162,9 +163,6 @@ export class BrowserEditorCommands {
 	}
 
 	private async media(sources: BrowserEditorSources): Promise<SegmentMedia[]> {
-		const { probeBrowserEditorMedia } = await import(
-			"../../../apps/web/lib/browser-editor-metadata"
-		);
 		const segments = sources.segments;
 		const results = new Array<SegmentMedia>(segments.length);
 		let next = 0;
@@ -177,24 +175,18 @@ export class BrowserEditorCommands {
 						throw new Error("Editor imported recording media is unavailable");
 					}
 					const [display, camera, mic, systemAudio] = await Promise.all([
-						probeBrowserEditorMedia(
-							segment.display.url,
-							this.controller.signal,
-						),
+						probeBrowserMedia(segment.display.url, this.controller.signal),
 						segment.camera
-							? probeBrowserEditorMedia(
-									segment.camera.url,
-									this.controller.signal,
-								)
+							? probeBrowserMedia(segment.camera.url, this.controller.signal)
 							: Promise.resolve(null),
 						index === 0 && sources.mic
-							? probeBrowserEditorMedia(
+							? probeBrowserMedia(
 									sources.mic.url,
 									this.controller.signal,
 								).catch(() => null)
 							: Promise.resolve(null),
 						index === 0 && sources.systemAudio
-							? probeBrowserEditorMedia(
+							? probeBrowserMedia(
 									sources.systemAudio.url,
 									this.controller.signal,
 								).catch(() => null)
@@ -229,13 +221,14 @@ export class BrowserEditorCommands {
 	}
 
 	private async load(): Promise<BrowserEditorInfo> {
-		const [sources, module] = await Promise.all([
-			this.catalog.snapshot(this.controller.signal),
-			loadBrowserRenderer(),
+		const sources = await this.catalog.snapshot(this.controller.signal);
+		const [media, config] = await Promise.all([
+			this.media(sources),
+			sources.projectConfig ??
+				loadBrowserRenderer().then((module): unknown =>
+					JSON.parse(module.default_project_config_json()),
+				),
 		]);
-		const media = await this.media(sources);
-		const config: unknown =
-			sources.projectConfig ?? JSON.parse(module.default_project_config_json());
 		const project = record(config);
 		if (!project) throw new Error("Editor project configuration is invalid");
 		const recordings: ProjectRecordingsMeta = {

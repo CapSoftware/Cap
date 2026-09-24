@@ -44,6 +44,7 @@ export function StudioEditorClient(props: {
 		preparingTracks,
 	} = props;
 	const router = useRouter();
+	const editorSrc = `/editor-solid/index.html?videoId=${encodeURIComponent(videoId)}`;
 	const [sessionId, setSessionId] = useState<string | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [errorFrameReady, setErrorFrameReady] = useState(false);
@@ -409,7 +410,7 @@ export function StudioEditorClient(props: {
 			if (previous?.document === document) {
 				if (previous.sessionId === sessionId) return;
 				frameConnectRef.current = null;
-				iframe.src = "/editor-solid/index.html";
+				iframe.src = editorSrc;
 				return;
 			}
 			frameConnectRef.current = { document, sessionId };
@@ -452,6 +453,7 @@ export function StudioEditorClient(props: {
 		},
 		[
 			captionsEnabled,
+			editorSrc,
 			preparingDuration,
 			preparingTitle,
 			preparingTracks,
@@ -527,7 +529,7 @@ export function StudioEditorClient(props: {
 			<iframe
 				ref={iframeRef}
 				title="Cap editor"
-				src="/editor-solid/index.html"
+				src={editorSrc}
 				className="h-full w-full border-0"
 				onLoad={(event) => onFrameLoad(event.currentTarget)}
 			/>

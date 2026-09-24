@@ -35,6 +35,31 @@ type FrameRequest = {
 };
 
 let playbackFrameListener: ((frameNumber: number) => void) | null = null;
+let previewSettledListeners: Array<() => void> = [];
+let previewSettled = false;
+
+function settlePreview() {
+	if (previewSettled) return;
+	previewSettled = true;
+	const listeners = previewSettledListeners;
+	previewSettledListeners = [];
+	for (const listener of listeners) listener();
+}
+
+/// Runs `listener` once the preview has drawn its first frame or failed, so
+/// the loading skeleton can hand over to a fully painted editor.
+export function onBrowserPreviewSettled(listener: () => void) {
+	if (previewSettled) {
+		listener();
+		return () => undefined;
+	}
+	previewSettledListeners.push(listener);
+	return () => {
+		previewSettledListeners = previewSettledListeners.filter(
+			(candidate) => candidate !== listener,
+		);
+	};
+}
 let frameLayoutListener: ((layout: FrameLayoutEvent) => void) | null = null;
 
 export function setBrowserPlaybackFrameListener(
@@ -185,11 +210,13 @@ class BrowserPreviewController {
 				this.setRendered(true);
 				frameLayoutListener?.(frame.layout);
 				this.onFrame(frame);
+				settlePreview();
 				if (this.desiredPlaying)
 					playbackFrameListener?.(frame.renderedFrame.frameNumber);
 			},
 			(error) => {
 				if (!this.disposed && generation === this.canvasGeneration) {
+					settlePreview();
 					this.socket.dispatchEvent(new ErrorEvent("error", { error }));
 				}
 			},
@@ -221,6 +248,7 @@ class BrowserPreviewController {
 			})
 			.catch((error: unknown) => {
 				if (this.disposed || generation !== this.canvasGeneration) return;
+				settlePreview();
 				this.socket.dispatchEvent(new ErrorEvent("error", { error }));
 				this.dispose();
 			});
@@ -335,6 +363,7 @@ export function setBrowserEditorVideoId(value: string | null) {
 		pendingConfig = null;
 		pendingFrame = null;
 		pendingPlaying = false;
+		previewSettled = false;
 	}
 	videoId = value;
 }
