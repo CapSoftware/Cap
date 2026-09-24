@@ -232,6 +232,7 @@ export class BrowserLocalPlayback {
 		height: number,
 		onFrame: (frame: BrowserRenderedFrame) => void,
 		onError: (error: Error) => void,
+		initialTime = 0,
 	) {
 		const catalog = new BrowserEditorSourceCatalog(videoId);
 		const pool = new BrowserVideoPool(catalog.sourceProvider);
@@ -350,7 +351,9 @@ export class BrowserLocalPlayback {
 				colorHints,
 			);
 			await controls.setProjectConfig(config);
-			await playback.seek(0);
+			await playback.seek(
+				Math.min(initialTime, Math.max(0, recordingDuration - 1 / 60)),
+			);
 			return playback;
 		} catch (error) {
 			controller.abort();

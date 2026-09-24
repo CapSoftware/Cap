@@ -1,6 +1,7 @@
 import type {
 	commands as desktopCommands,
 	events as desktopEvents,
+	FrameLayoutEvent,
 } from "../../../apps/desktop/src/utils/tauri";
 import { stripEditorCaptionContent } from "../../../apps/web/lib/editor-caption-access";
 import {
@@ -16,6 +17,7 @@ import {
 	renderBrowserEditorPreview,
 	seekBrowserEditorPreview,
 	setBrowserEditorPreviewConfig,
+	setBrowserFrameLayoutListener,
 	setBrowserPlaybackFrameListener,
 } from "./browser-frame-socket";
 import { EditorCaptionCacheMemo } from "./caption-cache-memo";
@@ -458,6 +460,13 @@ export class PortEditorTransport {
 		}
 	}
 
+	browserFrameLayout(layout: FrameLayoutEvent) {
+		if (this.disposed) return;
+		for (const listener of this.listeners.get("frameLayoutEvent") ?? []) {
+			listener(layout);
+		}
+	}
+
 	dispose() {
 		if (this.disposed) return;
 		this.disposed = true;
@@ -486,6 +495,9 @@ export function setEditorTransport(next: PortEditorTransport | null) {
 	transport = next;
 	setBrowserPlaybackFrameListener(
 		next ? (frameNumber) => next.browserPlaybackFrame(frameNumber) : null,
+	);
+	setBrowserFrameLayoutListener(
+		next ? (layout) => next.browserFrameLayout(layout) : null,
 	);
 }
 

@@ -599,6 +599,17 @@ try {
 			await new Promise((resolve) => setTimeout(resolve, 25));
 		}
 	});
+	const draggableRects = await editor.locator("#canvas").evaluate((canvas) => {
+		const overlay = canvas.nextElementSibling;
+		return Array.from(overlay?.children ?? [])
+			.filter((element) => element.classList.contains("pointer-events-auto"))
+			.map((element) => {
+				const rect = element.getBoundingClientRect();
+				return { width: rect.width, height: rect.height };
+			});
+	});
+	assert.equal(draggableRects.length, 2);
+	assert.ok(draggableRects.every((rect) => rect.width > 0 && rect.height > 0));
 	assert.ok(bootstrapRequests > 0);
 	assert.ok(rangeRequests > 0);
 	assert.equal(workerRequests, 0);
@@ -1017,6 +1028,107 @@ try {
 	assert.ok(getEditorSession(sessionId));
 	assert.deepEqual(failedResponses, []);
 	assert.deepEqual(pageErrors, []);
+	await editor.getByRole("button", { name: "Back to editor" }).click();
+	const remountedCanvas = await editor
+		.locator("#canvas")
+		.evaluate(async (canvas) => {
+			const element = canvas as HTMLCanvasElement;
+			const deadline = performance.now() + 20_000;
+			while (element.width === 300 && element.height === 150) {
+				if (performance.now() > deadline) {
+					throw new Error("Editor preview did not reattach after export");
+				}
+				await new Promise((resolve) => setTimeout(resolve, 25));
+			}
+			return { width: element.width, height: element.height };
+		});
+	assert.ok(remountedCanvas.width > 0 && remountedCanvas.height > 0);
+	const remountedPixels = await sharp(
+		await editor.locator("#canvas").screenshot(),
+	)
+		.removeAlpha()
+		.raw()
+		.toBuffer();
+	let visibleRemountedPixels = 0;
+	for (let pixel = 0; pixel < remountedPixels.length; pixel += 3) {
+		if (
+			(remountedPixels[pixel] ?? 0) > 20 ||
+			(remountedPixels[pixel + 1] ?? 0) > 20 ||
+			(remountedPixels[pixel + 2] ?? 0) > 20
+		) {
+			visibleRemountedPixels++;
+		}
+	}
+	assert.ok(visibleRemountedPixels > remountedPixels.length / 12);
+	const cameraBox = editor
+		.locator("#canvas + div > div.pointer-events-auto")
+		.last();
+	const cameraBounds = await cameraBox.boundingBox();
+	assert.ok(cameraBounds);
+	await page.mouse.move(
+		cameraBounds.x + cameraBounds.width / 2,
+		cameraBounds.y + cameraBounds.height / 2,
+	);
+	await page.mouse.down();
+	await page.mouse.move(
+		cameraBounds.x + cameraBounds.width / 2 - 30,
+		cameraBounds.y + cameraBounds.height / 2 - 20,
+		{ steps: 4 },
+	);
+	await page.mouse.up();
+	const draggedCamera = await editor.locator("#canvas").evaluate((canvas) => {
+		const scope = canvas.ownerDocument.defaultView as Window & {
+			capSolidEditor?: { unsavedProject: () => string | null };
+		};
+		const snapshot = scope.capSolidEditor?.unsavedProject();
+		return snapshot ? JSON.parse(snapshot).camera : null;
+	});
+	assert.ok(draggedCamera?.manualPosition);
+	const originalCameraSize = draggedCamera.size;
+	const resizeBounds = await cameraBox
+		.locator(".cursor-nw-resize")
+		.boundingBox();
+	assert.ok(resizeBounds);
+	await page.mouse.move(
+		resizeBounds.x + resizeBounds.width / 2,
+		resizeBounds.y + resizeBounds.height / 2,
+	);
+	await page.mouse.down();
+	await page.mouse.move(
+		resizeBounds.x + resizeBounds.width / 2 - 20,
+		resizeBounds.y + resizeBounds.height / 2 - 15,
+		{ steps: 4 },
+	);
+	await page.mouse.up();
+	const resizedCamera = await editor.locator("#canvas").evaluate((canvas) => {
+		const scope = canvas.ownerDocument.defaultView as Window & {
+			capSolidEditor?: { unsavedProject: () => string | null };
+		};
+		const snapshot = scope.capSolidEditor?.unsavedProject();
+		return snapshot ? JSON.parse(snapshot).camera : null;
+	});
+	assert.notEqual(resizedCamera?.size, originalCameraSize);
+	await editor.getByRole("button", { name: "Full preview quality" }).click();
+	await editor.getByRole("button", { name: "Play video" }).click();
+	await editor.getByRole("button", { name: "Pause video" }).waitFor({
+		state: "visible",
+		timeout: 10_000,
+	});
+	const playbackOpacities = await editor
+		.locator("#canvas")
+		.evaluate(async (canvas) => {
+			const surface = canvas.parentElement?.parentElement;
+			if (!surface) throw new Error("Preview surface is unavailable");
+			const samples: number[] = [];
+			for (let index = 0; index < 20; index++) {
+				samples.push(Number(getComputedStyle(surface).opacity));
+				await new Promise((resolve) => setTimeout(resolve, 50));
+			}
+			return samples;
+		});
+	assert.ok(playbackOpacities.every((opacity) => opacity >= 0.99));
+	const pauseVideo = editor.getByRole("button", { name: "Pause video" });
+	if (await pauseVideo.isVisible()) await pauseVideo.click();
 	process.stdout.write(
 		`${JSON.stringify({ browserEngine: engine.name(), browserOnly: true, bootstrapRequests, rangeRequests, workerRequests, preparationRequests, captionPlanChangesWithoutReload: true, planRequests, playbackAdvanced: true, persistedGradient: true, webGlPreserve, workerExportPreviewVisible: true, workerExportEstimateVisible: true, workerExportPreviewMs, workerExportEstimateMs, visibleMeanAbsoluteError, visibleDifferentPixels, visibleAlphaDifferentPixels, meanAbsoluteError, psnrDb, differentPixels, totalPixels: browserInfo.width * browserInfo.height, pageErrors, failedResponses })}\n`,
 	);

@@ -4,6 +4,7 @@ import type {
 	FrameData,
 	ImageDataWSOptions,
 } from "../../../apps/desktop/src/utils/socket";
+import type { FrameLayoutEvent } from "../../../apps/desktop/src/utils/tauri";
 import { BrowserLocalPlayback } from "./browser-local-playback";
 
 export type {
@@ -34,11 +35,18 @@ type FrameRequest = {
 };
 
 let playbackFrameListener: ((frameNumber: number) => void) | null = null;
+let frameLayoutListener: ((layout: FrameLayoutEvent) => void) | null = null;
 
 export function setBrowserPlaybackFrameListener(
 	listener: ((frameNumber: number) => void) | null,
 ) {
 	playbackFrameListener = listener;
+}
+
+export function setBrowserFrameLayoutListener(
+	listener: ((layout: FrameLayoutEvent) => void) | null,
+) {
+	frameLayoutListener = listener;
 }
 
 function frameRequest(value: unknown): FrameRequest | null {
@@ -78,6 +86,8 @@ class BrowserPreviewController {
 	readonly socket = new BrowserPreviewSocket();
 	private playback: BrowserLocalPlayback | null = null;
 	private creating: Promise<BrowserLocalPlayback> | null = null;
+	private canvas: HTMLCanvasElement | null = null;
+	private canvasGeneration = 0;
 	private disposed = false;
 	private desiredTime = 0;
 	private desiredPlaying = false;
@@ -141,38 +151,54 @@ class BrowserPreviewController {
 
 	initDirectCanvas(canvas: HTMLCanvasElement) {
 		if (this.disposed) throw new Error("Editor local preview is closed");
-		if (this.creating || this.playback) return;
+		if (this.canvas === canvas) return;
+		this.canvas = canvas;
+		const generation = ++this.canvasGeneration;
+		this.playback?.dispose();
+		this.playback = null;
+		this.creating = null;
+		this.setReady(false);
+		this.setRendered(false);
+		this.sizeObserver?.disconnect();
+		if (this.sizeAnimationFrame !== 0) {
+			cancelAnimationFrame(this.sizeAnimationFrame);
+			this.sizeAnimationFrame = 0;
+		}
 		if (typeof ResizeObserver !== "undefined") {
 			this.sizeObserver = new ResizeObserver(this.scheduleVisibleSize);
 			this.sizeObserver.observe(canvas);
 		}
-		window.addEventListener("resize", this.scheduleVisibleSize);
+		if (generation === 1)
+			window.addEventListener("resize", this.scheduleVisibleSize);
+		const initialTime = this.desiredTime;
 		const creating = BrowserLocalPlayback.create(
 			this.videoId,
 			canvas,
 			0,
 			0,
 			(frame) => {
-				if (this.disposed) return;
+				if (this.disposed || generation !== this.canvasGeneration) return;
 				if (frame.renderedFrame) {
 					this.desiredTime =
 						Number(frame.renderedFrame.targetTimeNs) / 1_000_000_000;
 				}
 				this.setRendered(true);
+				frameLayoutListener?.(frame.layout);
 				this.onFrame(frame);
 				if (this.desiredPlaying)
 					playbackFrameListener?.(frame.renderedFrame.frameNumber);
 			},
 			(error) => {
-				if (!this.disposed) {
+				if (!this.disposed && generation === this.canvasGeneration) {
 					this.socket.dispatchEvent(new ErrorEvent("error", { error }));
 				}
 			},
+			initialTime,
 		);
 		this.creating = creating;
 		void creating
 			.then(async (playback) => {
-				if (this.disposed) {
+				if (this.disposed || generation !== this.canvasGeneration) {
 					playback.dispose();
 					return;
 				}
@@ -184,7 +210,7 @@ class BrowserPreviewController {
 					this.previewBase.x,
 					this.previewBase.y,
 				);
-				if (this.desiredTime !== 0 || resized) {
+				if (this.desiredTime !== initialTime || resized) {
 					await playback.seek(this.desiredTime);
 				}
 				if (this.desiredPlaying) playback.play();
@@ -194,7 +220,7 @@ class BrowserPreviewController {
 				this.onRequestFrame?.();
 			})
 			.catch((error: unknown) => {
-				if (this.disposed) return;
+				if (this.disposed || generation !== this.canvasGeneration) return;
 				this.socket.dispatchEvent(new ErrorEvent("error", { error }));
 				this.dispose();
 			});
@@ -275,8 +301,10 @@ class BrowserPreviewController {
 	dispose() {
 		if (this.disposed) return;
 		this.disposed = true;
+		this.canvasGeneration++;
 		this.playback?.dispose();
 		this.playback = null;
+		this.canvas = null;
 		this.sizeObserver?.disconnect();
 		this.sizeObserver = null;
 		window.removeEventListener("resize", this.scheduleVisibleSize);

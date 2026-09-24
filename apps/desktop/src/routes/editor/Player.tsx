@@ -591,6 +591,10 @@ function PreviewCanvas(props: {
 	} = useEditorContext();
 
 	const hasRenderedFrame = () => canvasControls()?.hasRenderedFrame() ?? false;
+	const [hasShownFrame, setHasShownFrame] = createSignal(false);
+	createEffect(() => {
+		if (latestFrame() && hasRenderedFrame()) setHasShownFrame(true);
+	});
 	createEffect(
 		on(
 			() => editorState.playing,
@@ -676,20 +680,10 @@ function PreviewCanvas(props: {
 	createEffect(() => {
 		const canvas = canvasRef();
 		const controls = canvasControls();
-		console.warn("[Player] Canvas init effect", {
-			hasCanvas: !!canvas,
-			hasControls: !!controls,
-			alreadyInit: initializedCanvas === canvas,
-		});
 		if (!canvas || !controls || initializedCanvas === canvas) return;
 
-		console.warn("[Player] Initializing canvas", {
-			canvasId: canvas.id,
-			isConnected: canvas.isConnected,
-		});
 		controls.initDirectCanvas(canvas);
 		initializedCanvas = canvas;
-		console.warn("[Player] Canvas initialized successfully");
 	});
 
 	const padding = 16;
@@ -753,7 +747,7 @@ function PreviewCanvas(props: {
 				class="flex overflow-hidden absolute inset-0 justify-center items-center h-full transition-opacity duration-300 ease-out motion-reduce:transition-none"
 				style={{
 					visibility: hasFrame() ? "visible" : "hidden",
-					opacity: preparing?.model.rendered() || hasRenderedFrame() ? 1 : 0,
+					opacity: preparing?.model.rendered() || hasShownFrame() ? 1 : 0,
 				}}
 			>
 				<div

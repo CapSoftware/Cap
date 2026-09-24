@@ -1,4 +1,5 @@
 import type { BrowserGpuRenderer } from "../renderer/pkg/cap_editor_browser_renderer.js";
+import { browserFrameLayout } from "./browser-frame-layout";
 import { browserWebGpuPresentationWorks } from "./browser-gpu-probe";
 import { BrowserImageDecoder } from "./browser-image-decoder";
 import { loadBrowserRenderer } from "./browser-renderer";
@@ -35,6 +36,7 @@ export type BrowserRenderedFrame = {
 	width: number;
 	height: number;
 	renderedFrame: { frameNumber: number; targetTimeNs: bigint };
+	layout: ReturnType<typeof browserFrameLayout>;
 };
 
 function backgroundImagePath(config: unknown) {
@@ -129,6 +131,7 @@ export class BrowserLocalCanvas {
 	private overlaySegments: OverlayImageSegment[] = [];
 	private overlayRevision = 0;
 	private imageDecoder: BrowserImageDecoder | null = null;
+	private cameraHidden = false;
 
 	constructor(
 		private width: number,
@@ -325,6 +328,14 @@ export class BrowserLocalCanvas {
 				throw new Error("Editor canvas is closed");
 			}
 			this.renderer.set_background(JSON.stringify(config), image);
+			this.cameraHidden =
+				typeof config === "object" &&
+				config !== null &&
+				"camera" in config &&
+				typeof config.camera === "object" &&
+				config.camera !== null &&
+				"hide" in config.camera &&
+				config.camera.hide === true;
 			this.overlaySegments = overlayImageSegments(config);
 			this.overlayRevision++;
 			const referenced = new Set(
@@ -376,10 +387,18 @@ export class BrowserLocalCanvas {
 			);
 		}
 		this.rendered = true;
+		const frame =
+			composition.kind === "single" ? composition : composition.incoming;
 		this.onFrame({
 			width: this.width,
 			height: this.height,
 			renderedFrame: { frameNumber, targetTimeNs },
+			layout: browserFrameLayout(
+				frame.screen.uniforms,
+				this.cameraHidden ? null : (frame.camera?.uniforms ?? null),
+				this.width,
+				this.height,
+			),
 		});
 	}
 
