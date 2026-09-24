@@ -193,9 +193,6 @@ export class BrowserLocalCanvas {
 		this.width = width;
 		this.height = height;
 		if (this.canvas) {
-			this.canvas.width = width;
-			this.canvas.height = height;
-			this.renderer?.resize(width, height);
 			this.overlayRevision++;
 			this.rendered = false;
 		}
@@ -364,6 +361,14 @@ export class BrowserLocalCanvas {
 		await this.ensureOverlayImages(frameNumber / 60);
 		if (this.disposed || !this.renderer) {
 			throw new Error("Editor canvas is closed");
+		}
+		if (
+			this.canvas &&
+			(this.canvas.width !== this.width || this.canvas.height !== this.height)
+		) {
+			this.canvas.width = this.width;
+			this.canvas.height = this.height;
+			this.renderer.resize(this.width, this.height);
 		}
 		if (composition.kind === "single") {
 			this.renderer.render(
