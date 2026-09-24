@@ -230,6 +230,37 @@ test("a prior nonvisual exemption cannot authorize cleanup of a later commit", a
 	assert.equal(JSON.parse(readFileSync(provider, "utf8")).deleted.length, 0);
 });
 
+test("a nonvisual exemption cannot bypass verification of an uploaded recording", async (t) => {
+	const { ctx, session, provider, sha } = await fixture(t);
+	session.capture = {
+		sha,
+		status: "captured",
+		sandboxDeleted: true,
+		upload: { link: "https://cap.so/s/fixture", folderVerified: false },
+	};
+	const args = [
+		"finish",
+		"--repo",
+		ctx.root,
+		"--session",
+		session.id,
+		"--no-visual",
+		"Build tooling only",
+	];
+	saveSession(ctx, session);
+	await assert.rejects(main(args), /recording is missing/);
+	session.capture.upload.folderVerified = true;
+	saveSession(ctx, session);
+	await assert.rejects(main(args), /Verify playback and reviewer access/);
+	assert.equal(existsSync(session.worktree), true);
+	assert.equal(JSON.parse(readFileSync(provider, "utf8")).deleted.length, 0);
+	assert.equal(readSession(ctx, session.id).status, "active");
+	session.capture.upload.playbackVerified = true;
+	saveSession(ctx, session);
+	assert.equal((await main(args)).status, "published");
+	assert.equal(readSession(ctx, session.id).noVisual, undefined);
+});
+
 test("cleanup checkpoints prevent process startup and support closing a published PR", async (t) => {
 	const { ctx, session, provider, state } = await fixture(t);
 	await main([

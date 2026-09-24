@@ -68,6 +68,7 @@ export function renderPrBody(session, sha, eli5, noVisual) {
 		session.capture?.sha === sha && session.capture?.status === "captured"
 			? session.capture.upload
 			: undefined;
+	if (upload) noVisual = undefined;
 	if (!upload?.folderVerified && !noVisual?.trim())
 		throw new Error(
 			"Current-commit recording is missing; supply a concrete nonvisual reason only when appropriate",
@@ -148,11 +149,14 @@ export async function closeSession(
 	)
 		throw new Error("PR is still open or local commits are unpublished");
 	if (publication) {
-		const reason =
-			noVisual?.trim() ||
-			(session.noVisual?.sha === sha ? session.noVisual.reason : undefined);
+		const upload =
+			session.capture?.sha === sha ? session.capture.upload : undefined;
+		const reason = upload
+			? undefined
+			: noVisual?.trim() ||
+				(session.noVisual?.sha === sha ? session.noVisual.reason : undefined);
 		renderPrBody(session, sha, "Publication cleanup", reason);
-		if (!reason && !session.capture?.upload?.playbackVerified)
+		if (!reason && !upload?.playbackVerified)
 			throw new Error(
 				"Verify playback and reviewer access before publication cleanup",
 			);
