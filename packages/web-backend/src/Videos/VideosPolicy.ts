@@ -27,6 +27,10 @@ export type VideosPolicyDeps = {
 		getById: (
 			id: Video.VideoId,
 		) => Effect.Effect<Option.Option<LoadedVideo>, DatabaseError>;
+		hasViewerGrant: (
+			id: Video.VideoId,
+			email: string,
+		) => Effect.Effect<boolean, DatabaseError>;
 	};
 	orgsRepo: {
 		membershipForVideo: (
@@ -50,11 +54,11 @@ export type VideosPolicyDeps = {
 
 export type ViewDecisionDeps = Pick<
 	VideosPolicyDeps,
-	"orgsRepo" | "spacesRepo"
+	"repo" | "orgsRepo" | "spacesRepo"
 >;
 
 const decideCanView = (
-	{ orgsRepo, spacesRepo }: ViewDecisionDeps,
+	{ repo, orgsRepo, spacesRepo }: ViewDecisionDeps,
 	user: Option.Option<CurrentUser["Type"]>,
 	video: ViewableVideo,
 	password: Option.Option<string>,
@@ -97,10 +101,17 @@ const decideCanView = (
 		}
 
 		if (!video.public) {
-			yield* Effect.log(
-				"Video is private and user has no explicit access. Access denied.",
-			);
-			return false;
+			if (
+				Option.isNone(user) ||
+				!(yield* repo.hasViewerGrant(video.id, user.value.email))
+			) {
+				yield* Effect.log(
+					"Video is private and user has no explicit access. Access denied.",
+				);
+				return false;
+			}
+			yield* Video.verifyPasswordCandidates(video, passwordHashes);
+			return true;
 		}
 
 		const allowedEmails = yield* orgsRepo.allowedEmailDomain(video.orgId);
@@ -121,7 +132,8 @@ const decideCanView = (
 			}
 			if (
 				Option.isSome(user) &&
-				!isEmailAllowedByRestriction(user.value.email, restriction)
+				!isEmailAllowedByRestriction(user.value.email, restriction) &&
+				!(yield* repo.hasViewerGrant(video.id, user.value.email))
 			) {
 				yield* Effect.log("Email access restriction active. Access denied.");
 				yield* Effect.fail(

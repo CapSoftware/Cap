@@ -5,9 +5,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
 	select: vi.fn(),
 	policy: vi.fn(),
+	thumbnailUrl: vi.fn(),
 	playbackUrl: vi.fn(),
 	quota: vi.fn(),
 	user: vi.fn(),
+	authenticated: false,
 	sharedOrganizations: [] as {
 		id: string;
 		name: string;
@@ -27,7 +29,12 @@ vi.mock("@cap/web-backend", () => ({
 	Database: Context.GenericTag("ShareTestDatabase"),
 	ImageUploads: Context.GenericTag("ShareTestImages"),
 	Videos: Context.GenericTag("ShareTestVideos"),
-	provideOptionalAuth: <A, E, R>(effect: Effect.Effect<A, E, R>) => effect,
+	provideOptionalAuth: <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+		mocks.authenticated
+			? Effect.provideService(Context.GenericTag("CurrentUser"), {
+					id: "owner",
+				})(effect)
+			: effect,
 	resolveEffectiveVideoRules: () => ({
 		settings: {},
 		hasInheritedPassword: false,
@@ -51,8 +58,7 @@ vi.mock("@/lib/server", () => ({
 				resolveImageUrl: (url: string) => Effect.succeed(url),
 			}),
 			Effect.provideService(Context.GenericTag("ShareTestVideos"), {
-				getThumbnailURL: () =>
-					Effect.succeed(Option.some("https://media.example.com/image.jpg")),
+				getThumbnailURL: mocks.thumbnailUrl,
 			}),
 			Effect.runPromise,
 		),
@@ -154,6 +160,7 @@ async function renderAuthorizedContent() {
 	)) as ReactElement<{
 		children: ReactElement<{
 			initialPlaybackUrl?: Promise<string | null>;
+			screenshotImageUrl?: string | null;
 			data: { sharedOrganizations: unknown[]; ownerIsOverShareLimit: boolean };
 		}>;
 	}>;
@@ -162,9 +169,13 @@ async function renderAuthorizedContent() {
 describe("share page loading", () => {
 	beforeEach(() => {
 		mocks.policy.mockReturnValue(Effect.void);
+		mocks.thumbnailUrl.mockReturnValue(
+			Effect.succeed(Option.some("https://media.example.com/image.jpg")),
+		);
 		mocks.playbackUrl.mockResolvedValue("https://media.example.com/result.mp4");
 		mocks.quota.mockResolvedValue(false);
 		mocks.user.mockResolvedValue(null);
+		mocks.authenticated = false;
 		mocks.sharedOrganizations = [];
 		arrangeRows([createVideo()]);
 	});
@@ -273,5 +284,24 @@ describe("share page loading", () => {
 		const content = await renderAuthorizedContent();
 		expect(content.props.children.props.initialPlaybackUrl).toBeUndefined();
 		expect(mocks.playbackUrl).not.toHaveBeenCalled();
+	});
+
+	it("keeps the owner's auth context when loading a private screenshot", async () => {
+		mocks.authenticated = true;
+		arrangeRows([{ ...createVideo(), public: false, isScreenshot: true }]);
+		mocks.thumbnailUrl.mockImplementation(() =>
+			Effect.flatMap(Effect.context<never>(), (context) =>
+				Option.isSome(
+					Context.getOption(context, Context.GenericTag("CurrentUser")),
+				)
+					? Effect.succeed(Option.some("https://media.example.com/image.jpg"))
+					: Effect.fail({ _tag: "PolicyDenied" }),
+			),
+		);
+
+		const content = await renderAuthorizedContent();
+		expect(content.props.children.props.screenshotImageUrl).toBe(
+			"https://media.example.com/image.jpg",
+		);
 	});
 });

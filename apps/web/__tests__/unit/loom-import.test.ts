@@ -11,6 +11,9 @@ const headersMock = vi.hoisted(() => vi.fn());
 const getOrganizationAccessMock = vi.hoisted(() => vi.fn());
 const requireSpaceManagerMock = vi.hoisted(() => vi.fn());
 const requireOrganizationSettingsManagerMock = vi.hoisted(() => vi.fn());
+const defaultSharing = vi.hoisted(() => ({
+	getNewVideoPublic: vi.fn(),
+}));
 
 const mockDb = {
 	select: vi.fn(() => mockDb),
@@ -29,6 +32,7 @@ const mockDb = {
 vi.mock("@cap/database", () => ({
 	db: vi.fn(() => mockDb),
 }));
+vi.mock("@cap/database/video-sharing-default", () => defaultSharing);
 
 vi.mock("server-only", () => ({}));
 
@@ -214,6 +218,7 @@ function withLimit(value: unknown) {
 describe("importFromLoom", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
+		defaultSharing.getNewVideoPublic.mockResolvedValue(true);
 		whereMock.mockReset();
 		requireSpaceManagerMock.mockReset();
 		requireOrganizationSettingsManagerMock.mockReset();

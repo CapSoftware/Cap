@@ -12,10 +12,11 @@ import type { SpaceRuleSource, ViewerSettingKey } from "@cap/web-backend";
 import { type ImageUpload, Space, type Video } from "@cap/web-domain";
 import { faCopy, faShareNodes } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import clsx from "clsx";
 import { Check, Globe2, Lock, Search } from "lucide-react";
 import { motion } from "motion/react";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { shareCap } from "@/actions/caps/share";
@@ -23,6 +24,11 @@ import {
 	removeVideoPassword,
 	setVideoPassword,
 } from "@/actions/videos/password";
+import {
+	getVideoViewerGrants,
+	inviteVideoViewer,
+	revokeVideoViewer,
+} from "@/actions/videos/viewer-invites";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import type { Spaces } from "@/app/(org)/dashboard/dashboard-data";
 import type { CurrentUser } from "@/app/Layout/AuthContext";
@@ -49,6 +55,7 @@ interface SharingDialogProps {
 	isPublic?: boolean;
 	spacesData?: Spaces[] | null;
 	hasPassword?: boolean;
+	allowedEmailDomain?: string | null;
 	inheritedPasswordSources?: SpaceRuleSource[];
 	onPasswordUpdated?: (protectedStatus: boolean) => void;
 	user?: CurrentUser | null;
@@ -65,6 +72,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 	isPublic = false,
 	spacesData: propSpacesData = null,
 	hasPassword = false,
+	allowedEmailDomain: propAllowedEmailDomain,
 	inheritedPasswordSources = [],
 	onPasswordUpdated,
 	user: propUser,
@@ -80,6 +88,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 	const user = propUser ?? contextUser;
 	const onUpgradeRequest = propOnUpgradeRequest ?? setUpgradeModalOpen;
 	const allowedEmailDomain =
+		propAllowedEmailDomain ??
 		activeOrganization?.organization.allowedEmailDomain;
 	const [selectedSpaces, setSelectedSpaces] = useState<Set<string>>(new Set());
 	const [searchTerm, setSearchTerm] = useState("");
@@ -94,6 +103,54 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 		useState(hasPassword);
 	const tabs = ["Share", "Embed"] as const;
 	const [activeTab, setActiveTab] = useState<(typeof tabs)[number]>("Share");
+	const [viewerEmail, setViewerEmail] = useState("");
+	const router = useRouter();
+	const { webUrl } = usePublicEnv();
+	const shareUrl = `${webUrl}/s/${capId}`;
+	const viewerGrants = useQuery({
+		queryKey: ["video-viewer-grants", capId],
+		queryFn: () => getVideoViewerGrants(capId),
+		enabled: isOpen,
+	});
+	const inviteViewer = useMutation({
+		mutationFn: () => inviteVideoViewer(capId, viewerEmail),
+		onSuccess: async (result) => {
+			await viewerGrants.refetch();
+			router.refresh();
+			setViewerEmail("");
+			if (result.alreadyAdded) {
+				toast.info("This viewer already has access");
+			} else if (result.emailSent) {
+				toast.success("Viewer invited");
+			} else {
+				toast.warning(
+					"Access added, but the invitation email was not sent. Copy the link to share it.",
+				);
+			}
+		},
+		onError: (error) => {
+			toast.error(
+				error instanceof Error ? error.message : "Failed to invite viewer",
+			);
+		},
+	});
+	const revokeViewer = useMutation({
+		mutationFn: (email: string) => revokeVideoViewer(capId, email),
+		onSuccess: async () => {
+			await viewerGrants.refetch();
+			router.refresh();
+			toast.success("Viewer access removed");
+		},
+		onError: () => toast.error("Failed to remove viewer access"),
+	});
+	const copyShareUrl = async () => {
+		try {
+			await navigator.clipboard.writeText(shareUrl);
+			toast.success("Link copied");
+		} catch {
+			toast.error("Failed to copy link");
+		}
+	};
 
 	const updateSharing = useMutation({
 		mutationFn: async ({
@@ -240,6 +297,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 			setPasswordValue("");
 			setInitialPasswordEnabled(hasPassword);
 			setSearchTerm("");
+			setViewerEmail("");
 			setActiveTab(tabs[0]);
 		}
 	}, [isOpen, sharedSpaces, isPublic, hasPassword, tabs[0]]);
@@ -317,7 +375,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 
 	return (
 		<Dialog open={isOpen} onOpenChange={onClose}>
-			<DialogContent className="p-0 w-full max-w-md rounded-xl border bg-gray-2 border-gray-4">
+			<DialogContent className="p-0 w-full max-w-md max-h-[90vh] overflow-y-auto rounded-xl border bg-gray-2 border-gray-4">
 				<DialogHeader
 					icon={<FontAwesomeIcon icon={faShareNodes} className="size-3.5" />}
 					description={
@@ -369,9 +427,11 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 									</div>
 									<div>
 										<p className="text-sm font-medium text-gray-12">
-											{allowedEmailDomain?.trim()
-												? "Restricted link access"
-												: "Anyone with the link"}
+											{!publicToggle
+												? "Private"
+												: allowedEmailDomain?.trim()
+													? "Restricted link access"
+													: "Anyone with the link"}
 										</p>
 										<p className="text-xs text-gray-10">
 											{!publicToggle
@@ -386,6 +446,80 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 									checked={publicToggle}
 									onCheckedChange={setPublicToggle}
 								/>
+							</div>
+
+							<div className="p-3 mb-4 rounded-lg border bg-gray-1 border-gray-4">
+								<div className="flex items-center justify-between gap-2">
+									<p className="text-sm font-medium text-gray-12">
+										People with access
+									</p>
+									<Button
+										size="xs"
+										variant="gray"
+										className="shrink-0 whitespace-nowrap"
+										onClick={copyShareUrl}
+									>
+										<FontAwesomeIcon icon={faCopy} className="size-3 mr-1" />
+										Copy link
+									</Button>
+								</div>
+								<p className="mt-1 mb-2 text-xs text-gray-10">
+									Invite someone by email. They can view with a Cap account
+									using that address.
+								</p>
+								<div className="flex gap-2">
+									<Input
+										className="min-w-0 flex-1"
+										type="email"
+										placeholder="viewer@example.com"
+										value={viewerEmail}
+										onChange={(event) => setViewerEmail(event.target.value)}
+									/>
+									<Button
+										size="sm"
+										variant="dark"
+										className="shrink-0"
+										spinner={inviteViewer.isPending}
+										disabled={
+											inviteViewer.isPending ||
+											!viewerEmail.trim() ||
+											publicToggle !== initialPublicState
+										}
+										onClick={() => inviteViewer.mutate()}
+									>
+										Invite
+									</Button>
+								</div>
+								{publicToggle !== initialPublicState && (
+									<p className="mt-2 text-xs text-gray-10">
+										Save the link access change before inviting viewers.
+									</p>
+								)}
+								{viewerGrants.isError && (
+									<p className="mt-2 text-xs text-red-11">
+										Could not load invited viewers.
+									</p>
+								)}
+								{viewerGrants.data && viewerGrants.data.length > 0 && (
+									<div className="mt-3 space-y-1">
+										{viewerGrants.data.map(({ email }) => (
+											<div
+												key={email}
+												className="flex items-center justify-between gap-2 text-xs text-gray-11"
+											>
+												<span className="truncate">{email}</span>
+												<Button
+													size="xs"
+													variant="gray"
+													disabled={revokeViewer.isPending}
+													onClick={() => revokeViewer.mutate(email)}
+												>
+													Remove
+												</Button>
+											</div>
+										))}
+									</div>
+								)}
 							</div>
 
 							{inheritedPasswordLabel && (
