@@ -193,6 +193,7 @@ describe("web recording upload recovery", () => {
 
 	beforeEach(async () => {
 		vi.clearAllMocks();
+		vi.useFakeTimers();
 		micEnabled = false;
 		mocks.uploaders.length = 0;
 		Recorder.instances = [];
@@ -317,7 +318,6 @@ describe("web recording upload recovery", () => {
 	it.each([true, false])(
 		"allows a new take while retaining a failed backup (disk: %s)",
 		async (disk) => {
-			vi.useFakeTimers();
 			if (!disk)
 				mocks.spoolCreate.mockRejectedValueOnce(
 					new Error("Storage unavailable"),
@@ -366,6 +366,68 @@ describe("web recording upload recovery", () => {
 			await act(async () => recorder.stopRecording());
 		},
 	);
+
+	it("keeps an already recovered blob when storage cannot be read again", async () => {
+		await start();
+		mocks.finalize.mockRejectedValueOnce(new Error("Upload failed"));
+		await act(async () => recorder.stopRecording());
+		expect(recorder.errorDownload).not.toBeNull();
+		spool.recoverBlob.mockRejectedValue(new Error("Storage unavailable"));
+		let prepared = false;
+		await act(async () => {
+			prepared = await recorder.prepareNewRecording();
+		});
+		expect(prepared).toBe(true);
+		expect(recorder.phase).toBe("idle");
+		expect(recorder.recoveredDownloads).toHaveLength(1);
+		const leaving = new Event("beforeunload", { cancelable: true });
+		window.dispatchEvent(leaving);
+		expect(leaving.defaultPrevented).toBe(true);
+		const savedBlob = vi
+			.mocked(URL.createObjectURL)
+			.mock.calls.at(-1)?.[0] as Blob;
+		expect(await savedBlob.text()).toBe("firsttail");
+		expect(spool.dispose).not.toHaveBeenCalled();
+	});
+
+	it("reports failed preparation without clearing the failed recording", async () => {
+		await start();
+		mocks.finalize.mockRejectedValueOnce(new Error("Upload failed"));
+		await act(async () => recorder.stopRecording());
+		const download = recorder.errorDownload;
+		vi.mocked(URL.createObjectURL).mockImplementationOnce(() => {
+			throw new Error("No object URL available");
+		});
+		let prepared = true;
+		await act(async () => {
+			prepared = await recorder.prepareNewRecording();
+		});
+		expect(prepared).toBe(false);
+		expect(recorder.phase).toBe("error");
+		expect(recorder.errorDownload).toBe(download);
+		expect(recorder.canRetryUpload).toBe(true);
+		expect(spool.dispose).not.toHaveBeenCalled();
+	});
+
+	it("does not restore a dismissed download from an earlier in-flight scan", async () => {
+		const recovered = {
+			sessionId: "old-take",
+			createdAt: 0,
+			mimeType: "video/webm",
+			blob: new Blob(["saved"]),
+		};
+		mocks.recovered.mockResolvedValue([recovered]);
+		await act(async () => vi.advanceTimersByTimeAsync(60_000));
+		expect(recorder.recoveredDownloads).toHaveLength(1);
+		const scan = deferred<Array<typeof recovered>>();
+		mocks.recovered.mockReturnValueOnce(scan.promise);
+		await act(async () => vi.advanceTimersByTimeAsync(60_000));
+		await act(async () => recorder.dismissRecoveredDownload("old-take"));
+		expect(recorder.recoveredDownloads).toHaveLength(0);
+		await act(async () => scan.resolve([recovered]));
+		expect(recorder.recoveredDownloads).toHaveLength(0);
+		expect(URL.createObjectURL).toHaveBeenCalledOnce();
+	});
 
 	it("retries uncertain completion using the same upload without replacing or aborting it", async () => {
 		await start();
@@ -586,7 +648,6 @@ describe("web recording upload recovery", () => {
 	});
 
 	it("automatically retries a transient failure even when no offline event occurred", async () => {
-		vi.useFakeTimers();
 		await start();
 		mocks.finalize.mockRejectedValueOnce(
 			new Error("Temporary gateway failure"),

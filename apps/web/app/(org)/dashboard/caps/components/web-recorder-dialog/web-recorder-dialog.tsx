@@ -450,8 +450,7 @@ export const WebRecorderDialog = () => {
 					errorDownload={errorDownload}
 					onRetryUpload={canRetryUpload ? retryUpload : undefined}
 					onNewRecording={async () => {
-						await prepareNewRecording();
-						setOpen(true);
+						if (await prepareNewRecording()) setOpen(true);
 					}}
 					shareUrl={completedShareUrl}
 					onStop={handleStopClick}

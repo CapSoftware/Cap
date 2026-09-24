@@ -267,6 +267,7 @@ export const useWebRecorder = ({
 	const recordingSpoolHeartbeatRef = useRef<number | null>(null);
 	const recoveredDownloadUrlsRef = useRef(new Map<string, string>());
 	const memoryRecoveredRecordingsRef = useRef(new Set<string>());
+	const dismissedRecoveredIdsRef = useRef(new Set<string>());
 
 	const isStreamingPipelineActive = useCallback(
 		() => recordingPipelineRef.current?.mode === "streaming-webm",
@@ -314,6 +315,7 @@ export const useWebRecorder = ({
 	const dismissRecoveredDownload = useCallback((id: string) => {
 		toast.dismiss(recoveredToastId(id));
 		memoryRecoveredRecordingsRef.current.delete(id);
+		dismissedRecoveredIdsRef.current.add(id);
 		const url = recoveredDownloadUrlsRef.current.get(id);
 		if (url) {
 			URL.revokeObjectURL(url);
@@ -360,21 +362,25 @@ export const useWebRecorder = ({
 					}
 
 					const previousIds = new Set(recoveredDownloadUrlsRef.current.keys());
-					const nextDownloads = recovered.map((item) => {
-						const url =
-							recoveredDownloadUrlsRef.current.get(item.sessionId) ??
-							URL.createObjectURL(item.blob);
-						recoveredDownloadUrlsRef.current.set(item.sessionId, url);
-						return {
-							id: item.sessionId,
-							url,
-							fileName: createRecordingDownloadName(
-								item.createdAt,
-								item.blob.type || item.mimeType,
-							),
-							createdAt: item.createdAt,
-						} satisfies RecoveredRecordingDownload;
-					});
+					const nextDownloads = recovered
+						.filter(
+							(item) => !dismissedRecoveredIdsRef.current.has(item.sessionId),
+						)
+						.map((item) => {
+							const url =
+								recoveredDownloadUrlsRef.current.get(item.sessionId) ??
+								URL.createObjectURL(item.blob);
+							recoveredDownloadUrlsRef.current.set(item.sessionId, url);
+							return {
+								id: item.sessionId,
+								url,
+								fileName: createRecordingDownloadName(
+									item.createdAt,
+									item.blob.type || item.mimeType,
+								),
+								createdAt: item.createdAt,
+							} satisfies RecoveredRecordingDownload;
+						});
 
 					setRecoveredDownloads((current) => [
 						...current.filter(
@@ -739,22 +745,26 @@ export const useWebRecorder = ({
 	}, [cleanupRecordingState, updatePhase]);
 
 	const prepareNewRecording = useCallback(async () => {
-		if (phaseRef.current !== "error" || stopInFlightRef.current) return;
+		if (phaseRef.current !== "error" || stopInFlightRef.current) return false;
 		const recording = stoppedRecordingRef.current;
-		if (!recording) return;
+		if (!recording) return false;
 		stopInFlightRef.current = true;
 		const generation = setupGenerationRef.current;
 		try {
 			await stopRecordingInternalWrapper().catch(() => {});
-			if (generation !== setupGenerationRef.current) return;
-			const blob = await resolveFailureBlob(null);
-			if (generation !== setupGenerationRef.current) return;
+			if (generation !== setupGenerationRef.current) return false;
+			const recovered = await resolveFailureBlob(null);
+			const blob =
+				recording.blob && (!recovered || recording.blob.size > recovered.size)
+					? recording.blob
+					: recovered;
+			if (generation !== setupGenerationRef.current) return false;
 			if (blob?.size) {
 				const id = recordingSpoolRef.current?.sessionId ?? crypto.randomUUID();
 				const url =
 					recoveredDownloadUrlsRef.current.get(id) ?? URL.createObjectURL(blob);
 				recoveredDownloadUrlsRef.current.set(id, url);
-				if (!recordingSpoolRef.current)
+				if (!recordingSpoolRef.current || blob !== recovered)
 					memoryRecoveredRecordingsRef.current.add(id);
 				const createdAt = Date.now();
 				setRecoveredDownloads((current) => [
@@ -769,11 +779,13 @@ export const useWebRecorder = ({
 			}
 			await cleanupRecordingState(true);
 			updatePhase("idle");
+			return true;
 		} catch (error) {
 			console.error("Failed to preserve the previous recording", error);
 			toast.error(
 				"Could not prepare a new recording. Your previous recording is still available.",
 			);
+			return false;
 		} finally {
 			stopInFlightRef.current = false;
 		}
