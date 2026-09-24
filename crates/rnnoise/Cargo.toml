@@ -10,5 +10,8 @@ cc = "1"
 [lints]
 workspace = true
 
-[dependencies]
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+libm = "0.2"

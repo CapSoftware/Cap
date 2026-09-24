@@ -2058,6 +2058,7 @@ name = "cap-rnnoise"
 version = "0.1.0"
 dependencies = [
  "cc",
+ "libm",
  "workspace-hack",
 ]
 
