@@ -860,7 +860,6 @@ function ElementBox(props: {
 
 	return (
 		<div
-			data-editor-element={props.label.toLowerCase()}
 			class="absolute pointer-events-auto"
 			style={{
 				left: `${props.rect.x * props.size.width}px`,
