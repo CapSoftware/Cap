@@ -21,6 +21,7 @@ import {
 	assertOwnedSandbox,
 	capture,
 	readRecipe,
+	recordCaptureReview,
 	shareCapture,
 	shellQuote,
 	validateCaptureProbe,
@@ -671,6 +672,179 @@ test("failed export preserves the raw project before deleting the sandbox", asyn
 	);
 	assert.equal(deleted, false);
 	assert.equal(session.capture.preserveSandbox, true);
+});
+
+test("credentialed capture requires current trust evidence and limits credentials to app startup", async (t) => {
+	const ctx = fixture(t);
+	writeFileSync(
+		join(ctx.root, "demo.json"),
+		JSON.stringify({
+			version: 1,
+			platform: "linux",
+			setup: ["setup-check"],
+			start: "start-feature",
+			ready: "ready-check",
+			walkthrough: "walkthrough-check",
+		}),
+	);
+	git(ctx.root, "add", "demo.json");
+	git(ctx.root, "commit", "-m", "test: capture recipe");
+	let session = await createSession(ctx, {
+		name: "trusted-capture",
+		target: "web",
+		base: "main",
+	});
+	const recipePath = join(session.worktree, "demo.json");
+	const sha = assertClean(ctx, session);
+	const evidence = {
+		sha,
+		recipeHash: readRecipe(session, recipePath).hash,
+		sourceTrusted: true,
+		commandsReviewed: true,
+		credentialScopesReviewed: true,
+		reviewedAt: new Date().toISOString(),
+	};
+	await assert.rejects(capture(ctx, session, recipePath, {}), /trusted review/);
+	assert.throws(
+		() =>
+			recordCaptureReview(ctx, session, recipePath, {
+				...evidence,
+				sourceTrusted: false,
+			}),
+		/Expected trusted source/,
+	);
+	const evidencePath = join(ctx.state, "review.json");
+	writeFileSync(evidencePath, JSON.stringify(evidence));
+	await main([
+		"capture-review",
+		"--repo",
+		ctx.root,
+		"--session",
+		session.id,
+		"--recipe",
+		recipePath,
+		"--evidence",
+		evidencePath,
+	]);
+	session = readSession(ctx, session.id);
+	session.captureReview.recipeHash = "stale";
+	await assert.rejects(capture(ctx, session, recipePath, {}), /trusted review/);
+	session.captureReview.recipeHash = evidence.recipeHash;
+	session.database = {
+		...session.database,
+		id: "owned",
+		host: "db.test",
+		username: "fixture",
+	};
+	const credentials = {
+		DATABASE_URL: "mysql://fixture:synthetic@db.test/cap-production",
+		NEXTAUTH_SECRET: "fixture-auth",
+		CAP_AWS_SECRET_KEY: "fixture-storage",
+	};
+	writeEnvironment(ctx, session, credentials);
+	const bin = join(ctx.state, "bin");
+	mkdirSync(bin);
+	writeFileSync(
+		join(bin, "pscale"),
+		`#!${process.execPath}\nconsole.log(${JSON.stringify(JSON.stringify({ id: "owned", name: session.database.name, parent_branch: "main", production: false, ready: true }))});\n`,
+		{ mode: 0o755 },
+	);
+	const previousPath = process.env.PATH;
+	process.env.PATH = `${bin}:${previousPath}`;
+	const phases = new Set();
+	let created = 0;
+	let deleted = false;
+	const sandbox = {
+		id: "fixture-sandbox",
+		labels: { "cap.building.session": session.id, "cap.building.sha": sha },
+		process: {
+			executeCommand: async (command, _cwd, env = {}) => {
+				if (command.startsWith("nohup")) {
+					assert.ok(command.includes("start-feature"));
+					for (const [key, value] of Object.entries(credentials)) {
+						assert.equal(env[key], value);
+						assert.equal(command.includes(value), false);
+					}
+					phases.add("start");
+				} else {
+					for (const key of Object.keys(credentials))
+						assert.equal(env[key], undefined);
+					phases.add(command);
+				}
+				if (command.startsWith("cap targets"))
+					return {
+						exitCode: 0,
+						result: JSON.stringify({ screens: [{ id: 0 }] }),
+					};
+				if (command.startsWith("cap record start"))
+					return {
+						exitCode: 0,
+						result: JSON.stringify({ recordingId: "fixture-recording" }),
+					};
+				if (command.startsWith("cap record stop"))
+					return {
+						exitCode: 0,
+						result: JSON.stringify({ recordingMetaExists: true }),
+					};
+				if (command.startsWith("cap export"))
+					return { exitCode: 3, result: "export failed" };
+				return { exitCode: 0, result: "{}" };
+			},
+		},
+		fs: {
+			uploadFile: async () => {},
+			downloadFile: async (_remote, local) => writeFileSync(local, "project"),
+		},
+		computerUse: {
+			start: async () => {},
+			display: {
+				getInfo: async () => ({
+					primary_display: { width: 1920, height: 1080 },
+				}),
+			},
+		},
+	};
+	const daytona = {
+		create: async ({ envVars }) => {
+			created++;
+			for (const key of Object.keys(credentials))
+				assert.equal(envVars[key], undefined);
+			return sandbox;
+		},
+		get: async () => sandbox,
+		delete: async () => {
+			deleted = true;
+		},
+	};
+	try {
+		await assert.rejects(
+			capture(ctx, session, recipePath, daytona),
+			/Sandbox command failed/,
+		);
+		for (const phase of [
+			"setup-check",
+			"start",
+			"ready-check",
+			"walkthrough-check",
+		])
+			assert.ok(phases.has(phase));
+		assert.equal(created, 1);
+		assert.equal(deleted, true);
+		git(
+			session.worktree,
+			"commit",
+			"--allow-empty",
+			"-m",
+			"test: changed source commit",
+		);
+		await assert.rejects(
+			capture(ctx, session, recipePath, daytona),
+			/trusted review/,
+		);
+		assert.equal(created, 1);
+	} finally {
+		process.env.PATH = previousPath;
+	}
 });
 
 test("foreign sandboxes cannot be deleted", () => {

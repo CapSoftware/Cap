@@ -2,7 +2,12 @@ import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { capture, deleteSandbox, shareCapture } from "./capture.mjs";
+import {
+	capture,
+	deleteSandbox,
+	recordCaptureReview,
+	shareCapture,
+} from "./capture.mjs";
 import {
 	assertClean,
 	assertIdle,
@@ -37,6 +42,7 @@ serve --session <id> [--native] -- <server-command> [args...]
 preview --session <id>
 stop --session <id>
 check --session <id> -- <command> [args...]
+capture-review --session <id> --recipe <tracked-recipe.json> --evidence <review.json>
 capture --session <id> --recipe <tracked-recipe.json>
 sandbox-cleanup --session <id>
 share --session <id>
@@ -323,6 +329,16 @@ export async function main(argv = process.argv.slice(2)) {
 					saveSession(ctx, session);
 				}
 				return { sha, passed: true };
+			}
+			case "capture-review": {
+				if (!values.recipe || !values.evidence)
+					throw new Error("--recipe and --evidence are required");
+				return recordCaptureReview(
+					ctx,
+					session,
+					resolve(values.recipe),
+					JSON.parse(readFileSync(values.evidence, "utf8")),
+				);
 			}
 			case "capture": {
 				if (!values.recipe) throw new Error("--recipe is required");

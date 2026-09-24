@@ -48,6 +48,47 @@ export function readRecipe(session, path) {
 	};
 }
 
+export function recordCaptureReview(ctx, session, recipePath, evidence) {
+	const sha = assertClean(ctx, session);
+	const recipe = readRecipe(session, recipePath);
+	if (
+		evidence.sha !== sha ||
+		evidence.recipeHash !== recipe.hash ||
+		evidence.sourceTrusted !== true ||
+		evidence.commandsReviewed !== true ||
+		evidence.credentialScopesReviewed !== true ||
+		!Number.isFinite(Date.parse(evidence.reviewedAt))
+	)
+		throw new Error(
+			"Expected trusted source, command, and credential-scope review for this commit and recipe",
+		);
+	session.captureReview = {
+		sha,
+		recipeHash: recipe.hash,
+		sourceTrusted: true,
+		commandsReviewed: true,
+		credentialScopesReviewed: true,
+		reviewedAt: evidence.reviewedAt,
+	};
+	saveSession(ctx, session);
+	return { sha, recipe: recipe.path, reviewed: true };
+}
+
+function assertCaptureReviewed(session, sha, recipe) {
+	if (recipe.database === false) return;
+	const review = session.captureReview;
+	if (
+		review?.sha !== sha ||
+		review?.recipeHash !== recipe.hash ||
+		review.sourceTrusted !== true ||
+		review.commandsReviewed !== true ||
+		review.credentialScopesReviewed !== true
+	)
+		throw new Error(
+			"Credentialed capture requires a trusted review of this exact commit and recipe; use capture-review first",
+		);
+}
+
 export async function remoteCommand(sandbox, command, env = {}, timeout = 300) {
 	const result = await sandbox.process.executeCommand(
 		command,
@@ -109,6 +150,7 @@ export async function deleteSandbox(ctx, session, daytona) {
 export async function capture(ctx, session, recipePath, daytona) {
 	const sha = assertClean(ctx, session);
 	const recipe = readRecipe(session, recipePath);
+	assertCaptureReviewed(session, sha, recipe);
 	if (session.capture?.uploadAttempted && !session.capture.upload)
 		throw new Error(
 			"Reconcile the prior uncertain upload before creating another capture",
@@ -145,11 +187,21 @@ export async function capture(ctx, session, recipePath, daytona) {
 		}
 		git(session.worktree, "archive", "--format=tar", "--output", archive, sha);
 		if (recipe.database !== false) inspectDatabase(session);
-		const env = executionEnvironment(ctx, session, {
+		const env = executionEnvironment(ctx, session, { credentials: false });
+		const runtimeEnv = executionEnvironment(ctx, session, {
 			credentials: recipe.database !== false,
 		});
-		for (const key of ["PATH", "HOME", "USER", "TMPDIR", "SHELL", "SYSTEMROOT"])
+		for (const key of [
+			"PATH",
+			"HOME",
+			"USER",
+			"TMPDIR",
+			"SHELL",
+			"SYSTEMROOT",
+		]) {
 			delete env[key];
+			delete runtimeEnv[key];
+		}
 		if (session.capture) {
 			session.captureHistory ??= [];
 			session.captureHistory.push(session.capture);
@@ -244,13 +296,10 @@ export async function capture(ctx, session, recipePath, daytona) {
 				);
 			}
 			if (recipe.start) {
-				await sandbox.process.createSession("feature");
-				await sandbox.process.executeSessionCommand(
-					"feature",
-					{
-						command: `cd /home/daytona/feature && ${recipe.start}`,
-						runAsync: true,
-					},
+				await remoteCommand(
+					sandbox,
+					`nohup sh -c ${shellQuote(recipe.start)} > /home/daytona/feature.log 2>&1 < /dev/null &`,
+					runtimeEnv,
 					30,
 				);
 			}
@@ -324,7 +373,7 @@ export async function capture(ctx, session, recipePath, daytona) {
 		} catch (error) {
 			session.capture.status = "failed";
 			let output = String(error.remoteOutput ?? error.message);
-			for (const [key, value] of Object.entries(env)) {
+			for (const [key, value] of Object.entries(runtimeEnv)) {
 				if (/SECRET|KEY|TOKEN|DATABASE_URL/.test(key) && value)
 					output = output.replaceAll(value, "[redacted]");
 			}
