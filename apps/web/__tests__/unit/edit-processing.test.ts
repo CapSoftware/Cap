@@ -62,35 +62,41 @@ test("waits through polling and refreshes once when processing completes", async
 	expect(mocks.router.refresh).toHaveBeenCalledTimes(1);
 });
 
-test("retries a stalled recording with retained source media", async () => {
-	mocks.progress = {
-		status: "error",
-		lastUpdated: new Date(),
-		errorMessage: "stalled",
-		hasRawFallback: true,
-	};
-	await render();
-	expect(container.textContent).toContain("needs attention");
-	await act(async () => container.querySelector("button")?.click());
-	expect(mocks.retry).toHaveBeenCalledWith({ videoId });
-	expect(mocks.router.refresh).toHaveBeenCalledOnce();
-});
+test.each(["error", "failed"] as const)(
+	"retries a stalled recording in the %s state",
+	async (status) => {
+		mocks.progress = {
+			status,
+			lastUpdated: new Date(),
+			errorMessage: "stalled",
+			hasRawFallback: true,
+		};
+		await render();
+		expect(container.textContent).toContain("needs attention");
+		await act(async () => container.querySelector("button")?.click());
+		expect(mocks.retry).toHaveBeenCalledWith({ videoId });
+		expect(mocks.router.refresh).toHaveBeenCalledOnce();
+	},
+);
 
-test("reports retry failures without navigating away", async () => {
-	mocks.progress = {
-		status: "error",
-		lastUpdated: new Date(),
-		errorMessage: "stalled",
-		hasRawFallback: true,
-	};
-	mocks.retry.mockRejectedValueOnce(new Error("Retry unavailable"));
-	await render();
-	await act(async () => container.querySelector("button")?.click());
-	expect(container.querySelector("[role='alert']")?.textContent).toBe(
-		"Retry unavailable",
-	);
-	expect(mocks.router.refresh).not.toHaveBeenCalled();
-});
+test.each(["error", "failed"] as const)(
+	"reports %s retry failures without navigating away",
+	async (status) => {
+		mocks.progress = {
+			status,
+			lastUpdated: new Date(),
+			errorMessage: "stalled",
+			hasRawFallback: true,
+		};
+		mocks.retry.mockRejectedValueOnce(new Error("Retry unavailable"));
+		await render();
+		await act(async () => container.querySelector("button")?.click());
+		expect(container.querySelector("[role='alert']")?.textContent).toBe(
+			"Retry unavailable",
+		);
+		expect(mocks.router.refresh).not.toHaveBeenCalled();
+	},
+);
 
 test("does not offer processing retries when no raw source remains", async () => {
 	mocks.progress = {

@@ -12,6 +12,9 @@ export function EditProcessing({ videoId }: { videoId: Video.VideoId }) {
 	const [retrying, startRetry] = useTransition();
 	const [retryError, setRetryError] = useState<string>();
 	const ready = progress === null;
+	const canRetry =
+		progress?.status === "failed" ||
+		(progress?.status === "error" && progress.hasRawFallback);
 	const failed = progress?.status === "error" || progress?.status === "failed";
 
 	useEffect(() => {
@@ -44,7 +47,7 @@ export function EditProcessing({ videoId }: { videoId: Video.VideoId }) {
 						{retryError}
 					</p>
 				)}
-				{progress?.status === "error" && progress.hasRawFallback && (
+				{canRetry && (
 					<button
 						type="button"
 						disabled={retrying}
