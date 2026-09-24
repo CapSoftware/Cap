@@ -1,15 +1,21 @@
 import { ImageResponse } from "next/og";
-import { loadOgFonts } from "@/lib/og/fonts";
+import { loadOgAssets } from "@/lib/og/assets";
+import { loadOgFonts, OG_MONO } from "@/lib/og/fonts";
 import {
-	CapAppIcon,
+	Body,
 	CapWordmark,
-	OG_BLUE,
+	Headline,
+	MeshFrame,
 	OG_HEIGHT,
 	OG_INK,
-	OG_INK_SOFT,
 	OG_WIDTH,
-	SkyBackground,
+	OgCanvas,
 } from "@/lib/og/template";
+import {
+	coverRect,
+	loadOgThumbnail,
+	type OgThumbnail,
+} from "@/lib/og/thumbnail";
 
 export type VideoOgData = {
 	title: string;
@@ -50,23 +56,25 @@ const PlayButton = ({ size }: { size: number }) => (
 			width: size,
 			height: size,
 			borderRadius: 9999,
-			background: OG_BLUE,
-			border: "5px solid rgba(255,255,255,0.9)",
+			background: "rgba(255,255,255,0.92)",
 			alignItems: "center",
 			justifyContent: "center",
-			boxShadow: "0 12px 32px rgba(20,52,120,0.45)",
+			boxShadow:
+				"0 18px 40px -8px rgba(17,24,39,0.45), 0 0 0 8px rgba(255,255,255,0.28)",
 		}}
 	>
 		<svg
 			role="img"
 			aria-label="Play"
-			width={Math.round(size * 0.42)}
-			height={Math.round(size * 0.42)}
+			width={Math.round(size * 0.36)}
+			height={Math.round(size * 0.36)}
 			viewBox="0 0 24 24"
-			fill="white"
 			style={{ marginLeft: Math.round(size * 0.05) }}
 		>
-			<path d="M7 4.5 L19.5 12 L7 19.5 Z" />
+			<path
+				d="M7 3.8c0-.8.9-1.3 1.6-.9l12 7.6c.6.4.6 1.3 0 1.7l-12 7.6c-.7.4-1.6-.1-1.6-.9Z"
+				fill={OG_INK}
+			/>
 		</svg>
 	</div>
 );
@@ -79,156 +87,125 @@ const LockIcon = ({ size }: { size: number }) => (
 		height={size}
 		viewBox="0 0 24 24"
 		fill="none"
-		stroke="white"
-		strokeWidth="2"
+		stroke={OG_INK}
+		strokeWidth="1.7"
 		strokeLinecap="round"
 		strokeLinejoin="round"
 	>
-		<rect width="18" height="11" x="3" y="11" rx="2" ry="2" />
-		<path d="M7 11V7a5 5 0 0 1 10 0v4" />
+		<rect width="16" height="11" x="4" y="10.5" rx="2.5" />
+		<path d="M8 10.5V7a4 4 0 0 1 8 0v3.5" />
+		<path d="M12 15v2" />
 	</svg>
 );
 
-/** Browser-chrome card holding the video thumbnail (or a branded fill). */
-const VideoCard = ({
-	screenshotUrl,
-	width,
-	fill = "play",
-}: {
-	screenshotUrl?: string;
-	width: number;
-	fill?: "play" | "lock" | "logo";
-}) => {
-	const bodyHeight = Math.round((width * 9) / 16);
+const SearchIcon = ({ size }: { size: number }) => (
+	<svg
+		role="img"
+		aria-label="Not found"
+		width={size}
+		height={size}
+		viewBox="0 0 24 24"
+		fill="none"
+		stroke={OG_INK}
+		strokeWidth="1.7"
+		strokeLinecap="round"
+		strokeLinejoin="round"
+	>
+		<circle cx="11" cy="11" r="7" />
+		<path d="m20 20-3.5-3.5" />
+	</svg>
+);
+
+const THUMB_W = 600;
+const THUMB_H = Math.round((THUMB_W * 9) / 16);
+const FRAME_PAD = 12;
+
+const ThumbnailImage = ({ thumbnail }: { thumbnail: OgThumbnail }) => {
+	const rect = coverRect(thumbnail, { width: THUMB_W, height: THUMB_H });
 	return (
 		<div
 			style={{
 				display: "flex",
-				flexDirection: "column",
-				width,
-				borderRadius: 20,
-				background: "white",
-				boxShadow: "0 30px 60px rgba(20,52,120,0.25)",
+				position: "absolute",
+				top: rect.top,
+				left: rect.left,
+				width: rect.width,
+				height: rect.height,
+				backgroundImage: `url(${thumbnail.src})`,
+				backgroundSize: `${rect.width}px ${rect.height}px`,
+				backgroundRepeat: "no-repeat",
 			}}
-		>
-			<div
-				style={{
-					display: "flex",
-					alignItems: "center",
-					height: 44,
-					padding: "0 18px",
-					gap: 8,
-				}}
-			>
-				<div
-					style={{
-						display: "flex",
-						width: 12,
-						height: 12,
-						borderRadius: 9999,
-						background: "#FF5F57",
-					}}
-				/>
-				<div
-					style={{
-						display: "flex",
-						width: 12,
-						height: 12,
-						borderRadius: 9999,
-						background: "#FEBC2E",
-					}}
-				/>
-				<div
-					style={{
-						display: "flex",
-						width: 12,
-						height: 12,
-						borderRadius: 9999,
-						background: "#28C840",
-					}}
-				/>
-				<div style={{ display: "flex", flexGrow: 1 }} />
-				<div
-					style={{
-						display: "flex",
-						alignItems: "center",
-						background: "#F3F4F6",
-						borderRadius: 8,
-						padding: "4px 14px",
-						fontSize: 15,
-						fontWeight: 500,
-						color: "#6B7280",
-					}}
-				>
-					cap.so
-				</div>
-				<div style={{ display: "flex", flexGrow: 1 }} />
-				<div style={{ display: "flex", width: 52 }} />
-			</div>
-			<div
-				style={{
-					display: "flex",
-					position: "relative",
-					width: "100%",
-					height: bodyHeight,
-					borderBottomLeftRadius: 20,
-					borderBottomRightRadius: 20,
-					overflow: "hidden",
-					alignItems: "center",
-					justifyContent: "center",
-					background: `linear-gradient(160deg, #D3E5FF 0%, ${OG_BLUE} 120%)`,
-				}}
-			>
-				{screenshotUrl && (
-					// biome-ignore lint/performance/noImgElement: satori renders raw img tags
-					<img
-						alt="Video thumbnail"
-						src={screenshotUrl}
-						width={width}
-						height={bodyHeight}
-						style={{
-							position: "absolute",
-							top: 0,
-							left: 0,
-							objectFit: "cover",
-						}}
-					/>
-				)}
-				{screenshotUrl && (
-					// Fade the frame so the play button carries the card.
-					<div
-						style={{
-							display: "flex",
-							position: "absolute",
-							top: 0,
-							left: 0,
-							width: "100%",
-							height: "100%",
-							background: "rgba(18,32,66,0.32)",
-						}}
-					/>
-				)}
-				{fill === "play" && <PlayButton size={92} />}
-				{fill === "lock" && (
-					<div
-						style={{
-							display: "flex",
-							width: 96,
-							height: 96,
-							borderRadius: 9999,
-							background: "rgba(30,64,150,0.55)",
-							alignItems: "center",
-							justifyContent: "center",
-						}}
-					>
-						<LockIcon size={44} />
-					</div>
-				)}
-				{fill === "logo" && <CapAppIcon size={96} />}
-			</div>
-		</div>
+		/>
 	);
 };
+
+const Thumbnail = ({
+	mesh,
+	thumbnail,
+	duration,
+}: {
+	mesh: string;
+	thumbnail?: OgThumbnail;
+	duration?: number;
+}) => (
+	<MeshFrame
+		mesh={mesh}
+		width={THUMB_W + FRAME_PAD * 2}
+		height={THUMB_H + FRAME_PAD * 2}
+		padding={FRAME_PAD}
+	>
+		<div
+			style={{
+				display: "flex",
+				position: "relative",
+				width: THUMB_W,
+				height: THUMB_H,
+				borderRadius: 16,
+				overflow: "hidden",
+				alignItems: "center",
+				justifyContent: "center",
+				background: thumbnail ? "#0B0F17" : "rgba(255,255,255,0.35)",
+				boxShadow: "0 0 0 1px rgba(17,24,39,0.06)",
+			}}
+		>
+			{thumbnail && <ThumbnailImage thumbnail={thumbnail} />}
+			{thumbnail && (
+				<div
+					style={{
+						display: "flex",
+						position: "absolute",
+						top: 0,
+						left: 0,
+						width: "100%",
+						height: "100%",
+						background:
+							"linear-gradient(180deg, rgba(17,24,39,0.06) 0%, rgba(17,24,39,0.18) 55%, rgba(17,24,39,0.42) 100%)",
+					}}
+				/>
+			)}
+			<PlayButton size={96} />
+			{duration != null && duration > 0 && (
+				<div
+					style={{
+						display: "flex",
+						position: "absolute",
+						right: 16,
+						bottom: 16,
+						padding: "6px 12px",
+						borderRadius: 999,
+						background: "rgba(17,17,17,0.72)",
+						fontFamily: OG_MONO,
+						fontSize: 18,
+						letterSpacing: 0.6,
+						color: "white",
+					}}
+				>
+					{formatDuration(duration)}
+				</div>
+			)}
+		</div>
+	</MeshFrame>
+);
 
 const InitialAvatar = ({ name }: { name: string }) => (
 	<div
@@ -237,20 +214,100 @@ const InitialAvatar = ({ name }: { name: string }) => (
 			width: 44,
 			height: 44,
 			borderRadius: 9999,
-			background: "white",
-			color: OG_BLUE,
-			fontSize: 22,
-			fontWeight: 700,
+			background: "#111111",
+			color: "white",
+			fontSize: 20,
+			fontWeight: 500,
 			alignItems: "center",
 			justifyContent: "center",
+			boxShadow: "0 0 0 3px rgba(255,255,255,0.7)",
 		}}
 	>
 		{name.trim().charAt(0).toUpperCase()}
 	</div>
 );
 
-const videoLayout = (video: VideoOgData) => (
-	<SkyBackground>
+const videoTitleSize = (title: string) => {
+	if (title.length <= 24) return 60;
+	if (title.length <= 48) return 50;
+	return 42;
+};
+
+const videoLayout = (
+	video: VideoOgData,
+	thumbnail: OgThumbnail | undefined,
+	assets: Awaited<ReturnType<typeof loadOgAssets>>,
+) => {
+	return (
+		<OgCanvas background={assets.skySplit}>
+			<div
+				style={{
+					display: "flex",
+					position: "absolute",
+					right: 52,
+					top: Math.round((OG_HEIGHT - THUMB_H - FRAME_PAD * 2) / 2) + 20,
+				}}
+			>
+				<Thumbnail
+					mesh={assets.mesh}
+					thumbnail={thumbnail}
+					duration={video.duration}
+				/>
+			</div>
+			<div
+				style={{
+					display: "flex",
+					position: "absolute",
+					top: 0,
+					left: 0,
+					width: 500,
+					height: "100%",
+					padding: "58px 0 54px 64px",
+					flexDirection: "column",
+					justifyContent: "space-between",
+				}}
+			>
+				<CapWordmark />
+				<div style={{ display: "flex", flexDirection: "column", gap: 28 }}>
+					<Headline size={videoTitleSize(video.title)} lines={4}>
+						{video.title}
+					</Headline>
+					{video.ownerName && (
+						<div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+							<InitialAvatar name={video.ownerName} />
+							<span
+								style={{
+									display: "block",
+									fontSize: 22,
+									fontWeight: 500,
+									color: "rgba(17,17,17,0.72)",
+									lineClamp: 1,
+								}}
+							>
+								{video.ownerName}
+							</span>
+						</div>
+					)}
+				</div>
+				<div style={{ display: "flex", height: 52 }} />
+			</div>
+		</OgCanvas>
+	);
+};
+
+const statusLayout = (
+	{
+		heading,
+		subline,
+		icon,
+	}: {
+		heading: string;
+		subline: string;
+		icon: "lock" | "search";
+	},
+	assets: Awaited<ReturnType<typeof loadOgAssets>>,
+) => (
+	<OgCanvas background={assets.skyCenter}>
 		<div
 			style={{
 				display: "flex",
@@ -259,218 +316,96 @@ const videoLayout = (video: VideoOgData) => (
 				left: 0,
 				width: "100%",
 				height: "100%",
-				padding: "52px 60px",
+				padding: "58px 120px 54px",
+				flexDirection: "column",
 				alignItems: "center",
-				gap: 48,
+				justifyContent: "space-between",
 			}}
 		>
+			<CapWordmark />
 			<div
 				style={{
 					display: "flex",
 					flexDirection: "column",
-					flexGrow: 1,
-					flexShrink: 1,
-					minWidth: 0,
-					height: "100%",
-					justifyContent: "space-between",
-				}}
-			>
-				<CapWordmark height={52} color={OG_INK} />
-				<div
-					style={{
-						display: "flex",
-						flexDirection: "column",
-						gap: 26,
-						paddingBottom: 6,
-					}}
-				>
-					<span
-						style={{
-							display: "block",
-							fontSize: video.title.length <= 40 ? 52 : 42,
-							fontWeight: 500,
-							color: OG_INK,
-							lineHeight: 1.15,
-							letterSpacing: -0.5,
-							lineClamp: 3,
-						}}
-					>
-						{video.title}
-					</span>
-					{(video.ownerName || video.duration != null) && (
-						<div
-							style={{
-								display: "flex",
-								alignItems: "center",
-								gap: 14,
-							}}
-						>
-							{video.ownerName && <InitialAvatar name={video.ownerName} />}
-							{video.ownerName && (
-								<span
-									style={{
-										fontSize: 24,
-										fontWeight: 500,
-										color: OG_INK_SOFT,
-									}}
-								>
-									{video.ownerName}
-								</span>
-							)}
-							{video.duration != null && video.duration > 0 && (
-								<div
-									style={{
-										display: "flex",
-										alignItems: "center",
-										gap: 8,
-										background: "rgba(255,255,255,0.42)",
-										border: "1px solid rgba(255,255,255,0.7)",
-										borderRadius: 999,
-										padding: "6px 16px",
-									}}
-								>
-									<svg
-										role="img"
-										aria-label="Play"
-										width="14"
-										height="14"
-										viewBox="0 0 24 24"
-										fill={OG_INK}
-									>
-										<path d="M7 4.5 L19.5 12 L7 19.5 Z" />
-									</svg>
-									<span
-										style={{ fontSize: 20, fontWeight: 500, color: OG_INK }}
-									>
-										{formatDuration(video.duration)}
-									</span>
-								</div>
-							)}
-						</div>
-					)}
-				</div>
-				<span
-					style={{
-						fontSize: 23,
-						fontWeight: 500,
-						color: OG_INK_SOFT,
-					}}
-				>
-					Watch on Cap.so
-				</span>
-			</div>
-			<div style={{ display: "flex", flexShrink: 0 }}>
-				<VideoCard screenshotUrl={video.screenshotUrl} width={560} />
-			</div>
-		</div>
-	</SkyBackground>
-);
-
-const statusLayout = ({
-	heading,
-	subline,
-	fill,
-}: {
-	heading: string;
-	subline: string;
-	fill: "lock" | "logo";
-}) => (
-	<SkyBackground>
-		<div
-			style={{
-				display: "flex",
-				position: "absolute",
-				top: 0,
-				left: 0,
-				width: "100%",
-				height: "100%",
-				padding: "52px 60px",
-				flexDirection: "column",
-			}}
-		>
-			<CapWordmark height={52} color={OG_INK} />
-			<div
-				style={{
-					display: "flex",
-					flexGrow: 1,
 					alignItems: "center",
-					gap: 48,
+					gap: 26,
+					textAlign: "center",
 				}}
 			>
 				<div
 					style={{
 						display: "flex",
-						flexDirection: "column",
-						flexGrow: 1,
-						flexShrink: 1,
-						minWidth: 0,
-						gap: 20,
+						width: 104,
+						height: 104,
+						borderRadius: 30,
+						alignItems: "center",
+						justifyContent: "center",
+						background:
+							"linear-gradient(180deg, rgba(255,255,255,0.86) 0%, rgba(236,243,252,0.7) 100%)",
+						border: "1px solid rgba(255,255,255,0.9)",
+						boxShadow:
+							"0 24px 48px -16px rgba(40,72,130,0.35), inset 0 -2px 4px rgba(61,119,194,0.12)",
 					}}
 				>
-					<span
-						style={{
-							display: "block",
-							fontSize: 56,
-							fontWeight: 500,
-							color: OG_INK,
-							lineHeight: 1.12,
-							letterSpacing: -0.5,
-							lineClamp: 3,
-						}}
-					>
-						{heading}
-					</span>
-					<span
-						style={{
-							display: "block",
-							fontSize: 26,
-							fontWeight: 400,
-							color: OG_INK_SOFT,
-							lineHeight: 1.4,
-							lineClamp: 2,
-						}}
-					>
-						{subline}
-					</span>
+					{icon === "lock" ? <LockIcon size={48} /> : <SearchIcon size={46} />}
 				</div>
-				<div style={{ display: "flex", flexShrink: 0 }}>
-					<VideoCard width={520} fill={fill} />
-				</div>
+				<Headline size={64} lines={2}>
+					{heading}
+				</Headline>
+				<Body size={26}>{subline}</Body>
 			</div>
+			<div style={{ display: "flex", height: 52 }} />
 		</div>
-	</SkyBackground>
+	</OgCanvas>
 );
 
 export async function renderVideoOg(variant: VideoOgVariant) {
+	const screenshotUrl =
+		variant.kind === "video" ? variant.video.screenshotUrl : undefined;
+	const [fonts, assets, thumbnail] = await Promise.all([
+		loadOgFonts(),
+		loadOgAssets(),
+		screenshotUrl ? loadOgThumbnail(screenshotUrl) : undefined,
+	]);
 	const element = (() => {
 		switch (variant.kind) {
 			case "video":
-				return videoLayout(variant.video);
+				return videoLayout(variant.video, thumbnail, assets);
 			case "locked":
-				return statusLayout({
-					heading: "This Cap is private",
-					subline: "Ask the owner for access, or sign in to watch it on Cap.",
-					fill: "lock",
-				});
+				return statusLayout(
+					{
+						heading: "This Cap is private",
+						subline: "Ask the owner for access, or sign in to watch it on Cap.",
+						icon: "lock",
+					},
+					assets,
+				);
 			case "password":
-				return statusLayout({
-					heading: "This Cap is password protected",
-					subline: "Enter the password on Cap to watch this recording.",
-					fill: "lock",
-				});
+				return statusLayout(
+					{
+						heading: "This Cap is password protected",
+						subline: "Enter the password on Cap to watch this recording.",
+						icon: "lock",
+					},
+					assets,
+				);
 			case "not-found":
-				return statusLayout({
-					heading: "This Cap doesn't exist",
-					subline: "The recording you're looking for has moved or was deleted.",
-					fill: "logo",
-				});
+				return statusLayout(
+					{
+						heading: "This Cap doesn't exist",
+						subline:
+							"The recording you're looking for has moved or was deleted.",
+						icon: "search",
+					},
+					assets,
+				);
 		}
 	})();
 
 	return new ImageResponse(element, {
 		width: OG_WIDTH,
 		height: OG_HEIGHT,
-		fonts: await loadOgFonts(),
+		fonts,
 		headers: {
 			"Cache-Control": VIDEO_OG_CACHE_CONTROL,
 			"X-Robots-Tag": "noindex",
