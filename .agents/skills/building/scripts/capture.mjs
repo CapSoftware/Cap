@@ -420,7 +420,7 @@ export async function shareCapture(ctx, session) {
 				"--yes",
 				"--json",
 			]);
-		const folderId = folder.id ?? folder.folder?.id;
+		const folderId = folder.id ?? folder.resource?.id ?? folder.folder?.id;
 		if (!folderId) throw new Error("Cap did not return a folder ID");
 		session.cap = { organization, folderId };
 		saveSession(ctx, session);

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
 	existsSync,
 	mkdirSync,
@@ -19,6 +20,7 @@ import {
 	assertOwnedSandbox,
 	capture,
 	readRecipe,
+	shareCapture,
 	shellQuote,
 } from "./capture.mjs";
 import {
@@ -558,6 +560,47 @@ test("foreign sandboxes cannot be deleted", () => {
 			labels: { "cap.building.session": "owned", "cap.building.sha": "abc" },
 		}),
 	);
+});
+
+test("Cap sharing accepts resource receipts and retries without another upload", async (t) => {
+	const ctx = fixture(t);
+	const session = await createSession(ctx, {
+		name: "sharing",
+		target: "web",
+		base: "main",
+	});
+	const sha = git(session.worktree, "rev-parse", "HEAD");
+	const file = join(ctx.state, "fixture.mp4");
+	writeFileSync(file, "fixture-video");
+	session.pr = { sha, number: 42 };
+	session.capture = {
+		sha,
+		status: "captured",
+		file,
+		fileHash: createHash("sha256").update(readFileSync(file)).digest("hex"),
+	};
+	saveSession(ctx, session);
+	const bin = join(ctx.state, "bin");
+	mkdirSync(bin);
+	const statePath = join(ctx.state, "cap-fixture.json");
+	writeFileSync(statePath, JSON.stringify({ folder: false, uploads: 0 }));
+	writeFileSync(
+		join(bin, "cap"),
+		`#!${process.execPath}\nconst fs = require("node:fs"), path = ${JSON.stringify(statePath)}, state = JSON.parse(fs.readFileSync(path)), args = process.argv.slice(2); let result; if (args[0] === "account") result = {defaultOrganizationId: "organization"}; else if (args[2] === "list") result = {folders: state.folder ? [{id: "folder", name: "PR's"}] : []}; else if (args[2] === "create") {state.folder = true; result = {action: "created", resource: {type: "folder", id: "folder"}};} else if (args[0] === "upload") {state.uploads++; result = {id: "video", link: "https://cap.so/s/video"};} else if (args[1] === "move") {state.moved = args[args.indexOf("--folder") + 1]; result = {action: "updated", resource: {id: "video"}};} else if (args[1] === "get") result = {folderId: state.moved}; else process.exit(99); fs.writeFileSync(path, JSON.stringify(state)); console.log(JSON.stringify(result));\n`,
+		{ mode: 0o755 },
+	);
+	const previousPath = process.env.PATH;
+	process.env.PATH = `${bin}:${previousPath}`;
+	try {
+		const first = await shareCapture(ctx, session);
+		assert.equal(first.folderId, "folder");
+		assert.equal(session.capture.upload.folderVerified, true);
+		const second = await shareCapture(ctx, session);
+		assert.equal(second.link, first.link);
+		assert.equal(JSON.parse(readFileSync(statePath, "utf8")).uploads, 1);
+	} finally {
+		process.env.PATH = previousPath;
+	}
 });
 
 test("fixture identities are deterministic and session-specific", () => {
