@@ -365,7 +365,16 @@ export function environmentPath(ctx, session) {
 }
 
 export function readEnvironment(ctx, session) {
-	return JSON.parse(readFileSync(environmentPath(ctx, session), "utf8"));
+	return readEnvironmentSnapshot(ctx, session).environment;
+}
+
+export function readEnvironmentSnapshot(ctx, session) {
+	const path = environmentPath(ctx, session);
+	const serialized = existsSync(path) ? readFileSync(path, "utf8") : "{}";
+	return {
+		environment: JSON.parse(serialized),
+		fingerprint: createHash("sha256").update(serialized).digest("hex"),
+	};
 }
 
 export function writeEnvironment(ctx, session, env) {
@@ -430,12 +439,14 @@ export function databaseCredentials(ctx, session) {
 export function executionEnvironment(
 	ctx,
 	session,
-	{ credentials = true } = {},
+	{ credentials = true, expectedHash } = {},
 ) {
-	const stored =
-		credentials && existsSync(environmentPath(ctx, session))
-			? readEnvironment(ctx, session)
-			: {};
+	const snapshot = credentials
+		? readEnvironmentSnapshot(ctx, session)
+		: undefined;
+	if (expectedHash && snapshot?.fingerprint !== expectedHash)
+		throw new Error("Credential configuration changed since capture review");
+	const stored = snapshot?.environment ?? {};
 	if (stored.DATABASE_URL) {
 		const database = new URL(stored.DATABASE_URL);
 		if (

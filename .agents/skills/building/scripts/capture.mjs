@@ -8,6 +8,7 @@ import {
 	git,
 	inspectDatabase,
 	jsonCommand,
+	readEnvironmentSnapshot,
 	run,
 	saveSession,
 	sessionPath,
@@ -51,9 +52,14 @@ export function readRecipe(session, path) {
 export function recordCaptureReview(ctx, session, recipePath, evidence) {
 	const sha = assertClean(ctx, session);
 	const recipe = readRecipe(session, recipePath);
+	const { fingerprint: environmentHash } = readEnvironmentSnapshot(
+		ctx,
+		session,
+	);
 	if (
 		evidence.sha !== sha ||
 		evidence.recipeHash !== recipe.hash ||
+		evidence.environmentHash !== environmentHash ||
 		evidence.sourceTrusted !== true ||
 		evidence.commandsReviewed !== true ||
 		evidence.credentialScopesReviewed !== true ||
@@ -65,6 +71,7 @@ export function recordCaptureReview(ctx, session, recipePath, evidence) {
 	session.captureReview = {
 		sha,
 		recipeHash: recipe.hash,
+		environmentHash,
 		sourceTrusted: true,
 		commandsReviewed: true,
 		credentialScopesReviewed: true,
@@ -74,12 +81,14 @@ export function recordCaptureReview(ctx, session, recipePath, evidence) {
 	return { sha, recipe: recipe.path, reviewed: true };
 }
 
-function assertCaptureReviewed(session, sha, recipe) {
+function assertCaptureReviewed(ctx, session, sha, recipe) {
 	if (recipe.database === false) return;
 	const review = session.captureReview;
 	if (
 		review?.sha !== sha ||
 		review?.recipeHash !== recipe.hash ||
+		review?.environmentHash !==
+			readEnvironmentSnapshot(ctx, session).fingerprint ||
 		review.sourceTrusted !== true ||
 		review.commandsReviewed !== true ||
 		review.credentialScopesReviewed !== true
@@ -150,7 +159,7 @@ export async function deleteSandbox(ctx, session, daytona) {
 export async function capture(ctx, session, recipePath, daytona) {
 	const sha = assertClean(ctx, session);
 	const recipe = readRecipe(session, recipePath);
-	assertCaptureReviewed(session, sha, recipe);
+	assertCaptureReviewed(ctx, session, sha, recipe);
 	if (session.capture?.uploadAttempted && !session.capture.upload)
 		throw new Error(
 			"Reconcile the prior uncertain upload before creating another capture",
@@ -190,6 +199,10 @@ export async function capture(ctx, session, recipePath, daytona) {
 		const env = executionEnvironment(ctx, session, { credentials: false });
 		const runtimeEnv = executionEnvironment(ctx, session, {
 			credentials: recipe.database !== false,
+			expectedHash:
+				recipe.database !== false
+					? session.captureReview.environmentHash
+					: undefined,
 		});
 		for (const key of [
 			"PATH",

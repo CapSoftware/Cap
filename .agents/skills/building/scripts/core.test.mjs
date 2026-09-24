@@ -36,6 +36,7 @@ import {
 	executionEnvironment,
 	git,
 	lock,
+	readEnvironmentSnapshot,
 	readSession,
 	rustBuildFingerprint,
 	saveSession,
@@ -696,9 +697,23 @@ test("credentialed capture requires current trust evidence and limits credential
 	});
 	const recipePath = join(session.worktree, "demo.json");
 	const sha = assertClean(ctx, session);
+	session.database = {
+		...session.database,
+		id: "owned",
+		host: "db.test",
+		username: "fixture",
+	};
+	const credentials = {
+		DATABASE_URL: "mysql://fixture:synthetic@db.test/cap-production",
+		NEXTAUTH_SECRET: "fixture-auth",
+		CAP_AWS_SECRET_KEY: "fixture-storage",
+	};
+	writeEnvironment(ctx, session, credentials);
+	saveSession(ctx, session);
 	const evidence = {
 		sha,
 		recipeHash: readRecipe(session, recipePath).hash,
+		environmentHash: readEnvironmentSnapshot(ctx, session).fingerprint,
 		sourceTrusted: true,
 		commandsReviewed: true,
 		credentialScopesReviewed: true,
@@ -730,17 +745,22 @@ test("credentialed capture requires current trust evidence and limits credential
 	session.captureReview.recipeHash = "stale";
 	await assert.rejects(capture(ctx, session, recipePath, {}), /trusted review/);
 	session.captureReview.recipeHash = evidence.recipeHash;
-	session.database = {
-		...session.database,
-		id: "owned",
-		host: "db.test",
-		username: "fixture",
-	};
-	const credentials = {
-		DATABASE_URL: "mysql://fixture:synthetic@db.test/cap-production",
-		NEXTAUTH_SECRET: "fixture-auth",
-		CAP_AWS_SECRET_KEY: "fixture-storage",
-	};
+	writeEnvironment(ctx, session, {
+		...credentials,
+		CAP_AWS_SECRET_KEY: "unreviewed-storage",
+	});
+	await assert.rejects(capture(ctx, session, recipePath, {}), /trusted review/);
+	assert.throws(
+		() => recordCaptureReview(ctx, session, recipePath, evidence),
+		/Expected trusted source/,
+	);
+	assert.throws(
+		() =>
+			executionEnvironment(ctx, session, {
+				expectedHash: evidence.environmentHash,
+			}),
+		/Credential configuration changed/,
+	);
 	writeEnvironment(ctx, session, credentials);
 	const bin = join(ctx.state, "bin");
 	mkdirSync(bin);
