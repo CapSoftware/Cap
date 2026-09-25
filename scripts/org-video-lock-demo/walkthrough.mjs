@@ -120,9 +120,13 @@ try {
 	for (const title of [
 		"Private external project update",
 		"Password-protected external update",
+		"Email-restricted external update",
 	]) {
 		await expect(memberPage.getByText(title, { exact: true })).toHaveCount(0);
 	}
+	await expect(
+		memberPage.getByText("Invited external update", { exact: true }),
+	).toBeVisible();
 	const mobileDetail = await member.request.get(
 		`${origin}/api/mobile/caps/${ids.privateVideo}`,
 		{ headers: { Authorization: `Bearer ${states.memberToken}` } },
@@ -252,6 +256,7 @@ try {
 				"public collection hides outsider metadata and allows owning members",
 				"saved collection passwords do not block organization members",
 				"eligible recordings from other organizations remain in collections",
+				"external email restrictions and explicit viewer grants are respected",
 				"sharing controls explain the organization policy",
 				"media and metadata endpoints blocked",
 				"organization member playback",

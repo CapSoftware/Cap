@@ -26,6 +26,9 @@ export const ids = {
 	externalVideo: id("demo-external-video"),
 	externalPrivateVideo: id("demo-external-private-video"),
 	externalPasswordVideo: id("demo-external-password-video"),
+	emailOrganization: id("demo-email-organization"),
+	emailRestrictedVideo: id("demo-email-restricted-video"),
+	emailGrantedVideo: id("demo-email-granted-video"),
 };
 export const directory = join(tmpdir(), `cap-${session}`);
 export const origin = `http://127.0.0.1:${process.env.PORT}`;

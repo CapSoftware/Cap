@@ -15,7 +15,10 @@ import {
 	videoUploads,
 } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
-import { organizationVideoAccessCondition } from "@cap/database/video-organization-access";
+import {
+	organizationVideoAccessCondition,
+	videoEmailAccessCondition,
+} from "@cap/database/video-organization-access";
 import { userIsPro } from "@cap/utils";
 import { ImageUploads } from "@cap/web-backend";
 import {
@@ -213,7 +216,10 @@ export async function getPublicCollectionPageData(
 		};
 	}
 
-	const videoAccess = collectionVideoAccess(verifiedPasswordHashes, user?.id);
+	const videoAccess = collectionVideoAccess(
+		verifiedPasswordHashes,
+		user ?? undefined,
+	);
 	const [childFolders, videoPage] = await Promise.all([
 		getPublicChildFolders(collection, videoAccess),
 		getPublicCollectionVideos(collection, page, videoAccess),
@@ -429,22 +435,23 @@ function isOrgLevelFolder(collection: PublicCollection) {
 
 function collectionVideoAccess(
 	verifiedPasswordHashes: readonly string[],
-	viewerId?: User.UserId,
+	viewer?: { id: User.UserId; email: string },
 ) {
 	return or(
 		and(
 			eq(organizations.videoSharingRestrictedToOrg, false),
 			eq(videos.public, true),
+			videoEmailAccessCondition(viewer),
 			videoPasswordPredicate(
 				sql`${videos.id}`,
 				sql`${videos.password}`,
 				verifiedPasswordHashes,
 			),
 		),
-		viewerId
+		viewer
 			? and(
 					eq(organizations.videoSharingRestrictedToOrg, true),
-					organizationVideoAccessCondition(viewerId),
+					organizationVideoAccessCondition(viewer.id),
 				)
 			: sql`FALSE`,
 	);

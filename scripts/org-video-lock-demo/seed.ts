@@ -13,7 +13,11 @@ import {
 	videos,
 	videoViewerGrants,
 } from "@cap/database/schema";
-import { getVideoOrganizationAccess } from "@cap/database/video-organization-access";
+import {
+	getVideoOrganizationAccess,
+	videoEmailAccessCondition,
+} from "@cap/database/video-organization-access";
+import { isEmailAllowedByRestriction } from "@cap/utils";
 import { Organisation, Space, User, Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { encode } from "next-auth/jwt";
@@ -223,6 +227,91 @@ for (const [id, name, isPublic, password] of [
 		})
 		.onDuplicateKeyUpdate({ set: { spaceId: domainSpaceId } });
 }
+
+for (const [email, restriction] of [
+	["member@example.invalid", "example.invalid"],
+	["member@example.invalid", "different.example.invalid"],
+	[
+		"MEMBER@EXAMPLE.INVALID",
+		"  other.example.invalid , Member@Example.Invalid  ",
+	],
+	["member+tag@example.invalid", "member+tag@example.invalid"],
+	["memberXtag@example.invalid", "member+tag@example.invalid"],
+	["member@exampleXinvalid", "example.invalid"],
+	["member@éxample.invalid", "example.invalid"],
+	["member@straße.invalid", "strasse.invalid"],
+	["member@example.invalid", " ,  , "],
+	["member@example.invalid", ""],
+] as const) {
+	await database
+		.update(organizations)
+		.set({ allowedEmailDomain: restriction })
+		.where(eq(organizations.id, outsideOrganizationId));
+	const [result] = await database
+		.select({
+			allowed: videoEmailAccessCondition({ id: memberId, email })?.mapWith(
+				Boolean,
+			),
+		})
+		.from(videos)
+		.innerJoin(organizations, eq(videos.orgId, organizations.id))
+		.where(eq(videos.id, Video.VideoId.make(ids.externalVideo)));
+	if (result?.allowed !== isEmailAllowedByRestriction(email, restriction))
+		throw new Error("Email restriction SQL parity assertion failed");
+}
+await database
+	.update(organizations)
+	.set({ allowedEmailDomain: null })
+	.where(eq(organizations.id, outsideOrganizationId));
+const emailOrganizationId = Organisation.OrganisationId.make(
+	ids.emailOrganization,
+);
+await database
+	.insert(organizations)
+	.values({
+		id: emailOrganizationId,
+		name: "External restricted studio",
+		ownerId: outsiderId,
+		allowedEmailDomain: "trusted.example.invalid",
+	})
+	.onDuplicateKeyUpdate({
+		set: { allowedEmailDomain: "trusted.example.invalid" },
+	});
+for (const [id, name] of [
+	[ids.emailRestrictedVideo, "Email-restricted external update"],
+	[ids.emailGrantedVideo, "Invited external update"],
+] as const) {
+	await database
+		.insert(videos)
+		.values({
+			id: Video.VideoId.make(id),
+			ownerId: outsiderId,
+			orgId: emailOrganizationId,
+			name,
+			public: true,
+			source: { type: "desktopMP4" },
+			duration: 12,
+		})
+		.onDuplicateKeyUpdate({ set: { public: true } });
+	await database
+		.insert(spaceVideos)
+		.values({
+			id,
+			spaceId: domainSpaceId,
+			videoId: Video.VideoId.make(id),
+			addedById: ownerId,
+		})
+		.onDuplicateKeyUpdate({ set: { spaceId: domainSpaceId } });
+}
+await database
+	.insert(videoViewerGrants)
+	.values({
+		id: ids.emailGrantedVideo,
+		videoId: Video.VideoId.make(ids.emailGrantedVideo),
+		email: "member@example.invalid",
+		invitedByUserId: outsiderId,
+	})
+	.onDuplicateKeyUpdate({ set: { revokedAt: null } });
 
 await database
 	.update(organizations)

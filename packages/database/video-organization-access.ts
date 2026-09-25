@@ -1,7 +1,15 @@
 import type { User, Video } from "@cap/web-domain";
-import { eq, sql } from "drizzle-orm";
+import { eq, or, sql } from "drizzle-orm";
 import { db } from "./index.ts";
-import { organizationMembers, organizations, videos } from "./schema.ts";
+import {
+	organizationMembers,
+	organizations,
+	sharedVideos,
+	spaceMembers,
+	spaceVideos,
+	videos,
+	videoViewerGrants,
+} from "./schema.ts";
 
 export const organizationVideoAccessCondition = (userId: User.UserId) =>
 	sql<boolean>`NOT EXISTS (
@@ -36,3 +44,43 @@ export async function getVideoOrganizationAccess(
 		.limit(1);
 	return video;
 }
+
+export const videoEmailAccessCondition = (user?: {
+	id: User.UserId;
+	email: string;
+}) => {
+	const unrestricted = sql<boolean>`REGEXP_LIKE(COALESCE(${organizations.allowedEmailDomain}, ''), '^[[:space:]]*$')`;
+	if (!user) return unrestricted;
+
+	const email = user.email.toLowerCase();
+	const domain = email.slice(email.lastIndexOf("@") + 1);
+	const escape = (value: string) =>
+		value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	const pattern = `(^|,)[[:space:]]*(${escape(email)}|${escape(domain)})[[:space:]]*(,|$)`;
+
+	return or(
+		unrestricted,
+		sql`REGEXP_LIKE(COALESCE(${organizations.allowedEmailDomain}, ''), '^[[:space:],]*$')`,
+		email.includes("@")
+			? sql`REGEXP_LIKE(LOWER(${organizations.allowedEmailDomain}), ${pattern}, 'c')`
+			: sql`FALSE`,
+		eq(videos.ownerId, user.id),
+		sql`EXISTS (
+			SELECT 1 FROM ${sharedVideos} email_shared
+			INNER JOIN ${organizationMembers} email_members
+				ON email_shared.organizationId = email_members.organizationId
+			WHERE email_shared.videoId = ${videos.id} AND email_members.userId = ${user.id}
+		)`,
+		sql`EXISTS (
+			SELECT 1 FROM ${spaceVideos} email_space
+			INNER JOIN ${spaceMembers} email_space_members
+				ON email_space.spaceId = email_space_members.spaceId
+			WHERE email_space.videoId = ${videos.id} AND email_space_members.userId = ${user.id}
+		)`,
+		sql`EXISTS (
+			SELECT 1 FROM ${videoViewerGrants} email_grants
+			WHERE email_grants.videoId = ${videos.id}
+				AND email_grants.email = ${email.trim()} AND email_grants.revokedAt IS NULL
+		)`,
+	);
+};
