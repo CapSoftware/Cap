@@ -23,6 +23,7 @@ export type ShareDashboardAccess = {
 	isOwner: boolean;
 	activeOrganizationId: string | null;
 	videoOrganizationId: string;
+	ownerIsVideoOrganizationMember: boolean;
 	ownerFolder: { id: string; name: string } | null;
 	memberSpaces: { id: string; name: string; organizationId: string }[];
 	memberOrganizations: { id: string; name: string }[];
@@ -42,26 +43,27 @@ const byActiveOrganizationFirst =
 export function pickShareDashboardDestination(
 	access: ShareDashboardAccess,
 ): ShareDashboardDestination | null {
-	// The dashboard only lists the active organization's content, so a
-	// destination in another organization has to switch to it first.
-	const inOrganization = (organizationId: string) =>
-		organizationId === access.activeOrganizationId ? null : organizationId;
-
 	if (access.isOwner) {
-		const switchOrganizationId = inOrganization(access.videoOrganizationId);
 		if (access.ownerFolder) {
 			return {
 				kind: "folder",
 				href: `/dashboard/folder/${access.ownerFolder.id}`,
 				label: access.ownerFolder.name,
-				switchOrganizationId,
+				switchOrganizationId: null,
 			};
 		}
+		// Folder and space pages load whatever the active organization is, but
+		// My Caps only lists the active organization's Caps, so it's the one
+		// destination that has to switch first.
 		return {
 			kind: "caps",
 			href: "/dashboard/caps",
 			label: "My Caps",
-			switchOrganizationId,
+			switchOrganizationId:
+				access.ownerIsVideoOrganizationMember &&
+				access.videoOrganizationId !== access.activeOrganizationId
+					? access.videoOrganizationId
+					: null,
 		};
 	}
 
@@ -85,7 +87,7 @@ export function pickShareDashboardDestination(
 			kind: "space",
 			href: `/dashboard/spaces/${space.id}`,
 			label: space.name,
-			switchOrganizationId: inOrganization(space.organizationId),
+			switchOrganizationId: null,
 		};
 	}
 
@@ -94,7 +96,7 @@ export function pickShareDashboardDestination(
 			kind: "organization",
 			href: `/dashboard/spaces/${organization.id}`,
 			label: organization.name,
-			switchOrganizationId: inOrganization(organization.id),
+			switchOrganizationId: null,
 		};
 	}
 
@@ -116,62 +118,79 @@ export async function getShareDashboardDestination({
 
 	const isOwner = viewer.id === ownerId;
 
-	const [ownerFolderRows, memberSpaces, memberOrganizations] =
-		await Promise.all([
-			isOwner
-				? db()
-						.select({ id: folders.id, name: folders.name })
-						.from(videos)
-						.innerJoin(folders, eq(folders.id, videos.folderId))
-						.where(and(eq(videos.id, videoId), isNull(folders.spaceId)))
-						.limit(1)
-				: Promise.resolve([]),
-			isOwner
-				? Promise.resolve([])
-				: db()
-						.select({
-							id: spaces.id,
-							name: spaces.name,
-							organizationId: spaces.organizationId,
-						})
-						.from(spaceVideos)
-						.innerJoin(spaces, eq(spaceVideos.spaceId, spaces.id))
-						.innerJoin(
-							spaceMembers,
-							and(
-								eq(spaceMembers.spaceId, spaces.id),
-								eq(spaceMembers.userId, viewer.id),
-							),
-						)
-						.where(eq(spaceVideos.videoId, videoId)),
-			isOwner
-				? Promise.resolve([])
-				: db()
-						.select({ id: organizations.id, name: organizations.name })
-						.from(sharedVideos)
-						.innerJoin(
-							organizations,
-							eq(sharedVideos.organizationId, organizations.id),
-						)
-						.innerJoin(
-							organizationMembers,
-							and(
-								eq(organizationMembers.organizationId, organizations.id),
-								eq(organizationMembers.userId, viewer.id),
-							),
-						)
-						.where(
-							and(
-								eq(sharedVideos.videoId, videoId),
-								isNull(organizations.tombstoneAt),
-							),
+	const [
+		ownerFolderRows,
+		ownerMembershipRows,
+		memberSpaces,
+		memberOrganizations,
+	] = await Promise.all([
+		isOwner
+			? db()
+					.select({ id: folders.id, name: folders.name })
+					.from(videos)
+					.innerJoin(folders, eq(folders.id, videos.folderId))
+					.where(and(eq(videos.id, videoId), isNull(folders.spaceId)))
+					.limit(1)
+			: Promise.resolve([]),
+		isOwner && videoOrganizationId !== viewer.activeOrganizationId
+			? db()
+					.select({ id: organizationMembers.id })
+					.from(organizationMembers)
+					.where(
+						and(
+							eq(organizationMembers.userId, viewer.id),
+							eq(organizationMembers.organizationId, videoOrganizationId),
 						),
-		]);
+					)
+					.limit(1)
+			: Promise.resolve([]),
+		isOwner
+			? Promise.resolve([])
+			: db()
+					.select({
+						id: spaces.id,
+						name: spaces.name,
+						organizationId: spaces.organizationId,
+					})
+					.from(spaceVideos)
+					.innerJoin(spaces, eq(spaceVideos.spaceId, spaces.id))
+					.innerJoin(
+						spaceMembers,
+						and(
+							eq(spaceMembers.spaceId, spaces.id),
+							eq(spaceMembers.userId, viewer.id),
+						),
+					)
+					.where(eq(spaceVideos.videoId, videoId)),
+		isOwner
+			? Promise.resolve([])
+			: db()
+					.select({ id: organizations.id, name: organizations.name })
+					.from(sharedVideos)
+					.innerJoin(
+						organizations,
+						eq(sharedVideos.organizationId, organizations.id),
+					)
+					.innerJoin(
+						organizationMembers,
+						and(
+							eq(organizationMembers.organizationId, organizations.id),
+							eq(organizationMembers.userId, viewer.id),
+						),
+					)
+					.where(
+						and(
+							eq(sharedVideos.videoId, videoId),
+							isNull(organizations.tombstoneAt),
+						),
+					),
+	]);
 
 	return pickShareDashboardDestination({
 		isOwner,
 		activeOrganizationId: viewer.activeOrganizationId,
 		videoOrganizationId,
+		ownerIsVideoOrganizationMember: ownerMembershipRows.length > 0,
 		ownerFolder: ownerFolderRows[0] ?? null,
 		memberSpaces,
 		memberOrganizations,

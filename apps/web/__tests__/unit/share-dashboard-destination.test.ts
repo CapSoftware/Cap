@@ -93,6 +93,7 @@ const access = (
 	isOwner: false,
 	activeOrganizationId: "org-active",
 	videoOrganizationId: "org-active",
+	ownerIsVideoOrganizationMember: true,
 	ownerFolder: null,
 	memberSpaces: [],
 	memberOrganizations: [],
@@ -198,12 +199,38 @@ describe("pickShareDashboardDestination", () => {
 		expect(pickShareDashboardDestination(access({}))).toBeNull();
 	});
 
-	it("switches to the organization the destination lives in", () => {
+	it("switches organization only for an owner's My Caps in another organization", () => {
 		expect(
 			pickShareDashboardDestination(
 				access({ isOwner: true, videoOrganizationId: "org-other" }),
 			)?.switchOrganizationId,
 		).toBe("org-other");
+
+		expect(
+			pickShareDashboardDestination(
+				access({ isOwner: true, activeOrganizationId: null }),
+			)?.switchOrganizationId,
+		).toBe("org-active");
+
+		expect(
+			pickShareDashboardDestination(
+				access({
+					isOwner: true,
+					videoOrganizationId: "org-other",
+					ownerIsVideoOrganizationMember: false,
+				}),
+			)?.switchOrganizationId,
+		).toBeNull();
+
+		expect(
+			pickShareDashboardDestination(
+				access({
+					isOwner: true,
+					videoOrganizationId: "org-other",
+					ownerFolder: { id: "folder-1", name: "Launch" },
+				}),
+			)?.switchOrganizationId,
+		).toBeNull();
 
 		expect(
 			pickShareDashboardDestination(
@@ -213,13 +240,7 @@ describe("pickShareDashboardDestination", () => {
 					],
 				}),
 			)?.switchOrganizationId,
-		).toBe("org-other");
-
-		expect(
-			pickShareDashboardDestination(
-				access({ isOwner: true, activeOrganizationId: null }),
-			)?.switchOrganizationId,
-		).toBe("org-active");
+		).toBeNull();
 	});
 });
 
@@ -233,14 +254,17 @@ describe("getShareDashboardDestination", () => {
 		rowsFor = {};
 	});
 
-	const resolve = (viewerId: User.UserId | null) =>
+	const resolve = (
+		viewerId: User.UserId | null,
+		videoOrganizationId = "org-active",
+	) =>
 		getShareDashboardDestination({
 			viewer: viewerId
 				? { id: viewerId, activeOrganizationId: "org-active" }
 				: null,
 			videoId: VIDEO,
 			ownerId: OWNER,
-			videoOrganizationId: "org-active",
+			videoOrganizationId,
 		});
 
 	it("resolves nothing for a signed-out viewer without querying", async () => {
@@ -299,6 +323,29 @@ describe("getShareDashboardDestination", () => {
 		expect(
 			queries.some((query) => query.joins.some((j) => j.table === "folders")),
 		).toBe(false);
+	});
+
+	it("checks the owner's membership before switching to the Cap's organization", async () => {
+		rowsFor = { organizationMembers: [{ id: "membership-1" }] };
+
+		expect(await resolve(OWNER, "org-other")).toMatchObject({
+			kind: "caps",
+			switchOrganizationId: "org-other",
+		});
+		const membershipQuery = queries.find(
+			(query) => query.from === "organizationMembers",
+		);
+		expect(
+			membershipQuery?.where &&
+				restrictsTo(membershipQuery.where, "organizationMembers", OWNER),
+		).toBe(true);
+	});
+
+	it("does not switch when the owner has left the Cap's organization", async () => {
+		expect(await resolve(OWNER, "org-other")).toMatchObject({
+			kind: "caps",
+			switchOrganizationId: null,
+		});
 	});
 
 	it("resolves nothing when the viewer has no membership", async () => {
