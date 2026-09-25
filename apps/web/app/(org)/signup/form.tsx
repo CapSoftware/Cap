@@ -7,6 +7,7 @@ import {
 	faExclamationCircle,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { captureException } from "@sentry/nextjs";
 import { AnimatePresence, motion } from "framer-motion";
 import Cookies from "js-cookie";
 import { LucideArrowUpRight } from "lucide-react";
@@ -169,6 +170,13 @@ export function SignupForm() {
 		});
 		signIn("google", {
 			...(nextPath ? { callbackUrl: nextPath } : {}),
+		}).catch((error) => {
+			captureException(error, {
+				tags: { auth_provider: "google", auth_surface: "signup" },
+			});
+			toast.error(
+				"Could not start sign-in. Check your connection and try again.",
+			);
 		});
 	};
 
