@@ -16,11 +16,13 @@ export type ShareDashboardDestination = {
 	kind: "caps" | "folder" | "space" | "organization";
 	href: string;
 	label: string;
+	switchOrganizationId: string | null;
 };
 
 export type ShareDashboardAccess = {
 	isOwner: boolean;
 	activeOrganizationId: string | null;
+	videoOrganizationId: string;
 	ownerFolder: { id: string; name: string } | null;
 	memberSpaces: { id: string; name: string; organizationId: string }[];
 	memberOrganizations: { id: string; name: string }[];
@@ -40,15 +42,27 @@ const byActiveOrganizationFirst =
 export function pickShareDashboardDestination(
 	access: ShareDashboardAccess,
 ): ShareDashboardDestination | null {
+	// The dashboard only lists the active organization's content, so a
+	// destination in another organization has to switch to it first.
+	const inOrganization = (organizationId: string) =>
+		organizationId === access.activeOrganizationId ? null : organizationId;
+
 	if (access.isOwner) {
+		const switchOrganizationId = inOrganization(access.videoOrganizationId);
 		if (access.ownerFolder) {
 			return {
 				kind: "folder",
 				href: `/dashboard/folder/${access.ownerFolder.id}`,
 				label: access.ownerFolder.name,
+				switchOrganizationId,
 			};
 		}
-		return { kind: "caps", href: "/dashboard/caps", label: "My Caps" };
+		return {
+			kind: "caps",
+			href: "/dashboard/caps",
+			label: "My Caps",
+			switchOrganizationId,
+		};
 	}
 
 	const activeFirst = byActiveOrganizationFirst(access.activeOrganizationId);
@@ -71,6 +85,7 @@ export function pickShareDashboardDestination(
 			kind: "space",
 			href: `/dashboard/spaces/${space.id}`,
 			label: space.name,
+			switchOrganizationId: inOrganization(space.organizationId),
 		};
 	}
 
@@ -79,6 +94,7 @@ export function pickShareDashboardDestination(
 			kind: "organization",
 			href: `/dashboard/spaces/${organization.id}`,
 			label: organization.name,
+			switchOrganizationId: inOrganization(organization.id),
 		};
 	}
 
@@ -89,10 +105,12 @@ export async function getShareDashboardDestination({
 	viewer,
 	videoId,
 	ownerId,
+	videoOrganizationId,
 }: {
 	viewer: { id: User.UserId; activeOrganizationId: string | null } | null;
 	videoId: Video.VideoId;
 	ownerId: User.UserId;
+	videoOrganizationId: string;
 }): Promise<ShareDashboardDestination | null> {
 	if (!viewer) return null;
 
@@ -153,6 +171,7 @@ export async function getShareDashboardDestination({
 	return pickShareDashboardDestination({
 		isOwner,
 		activeOrganizationId: viewer.activeOrganizationId,
+		videoOrganizationId,
 		ownerFolder: ownerFolderRows[0] ?? null,
 		memberSpaces,
 		memberOrganizations,

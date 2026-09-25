@@ -781,6 +781,7 @@ async function AuthorizedContent({
 			: null,
 		videoId,
 		ownerId: video.owner.id,
+		videoOrganizationId: video.orgId,
 	}).catch((error) => {
 		console.error(
 			`[ShareVideoPage] Dashboard destination lookup failed for ${videoId}:`,
