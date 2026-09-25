@@ -57,6 +57,7 @@ import { getPublicShareVideo } from "@/lib/public-share-video";
 import * as EffectRuntime from "@/lib/server";
 import { runPromise } from "@/lib/server";
 import { getSharePageBranding } from "@/lib/share-branding";
+import { parseShareCallToAction } from "@/lib/share-call-to-action";
 import { getSharePlaybackUrl } from "@/lib/share-playback";
 import { buildShareVideoMetadata } from "@/lib/share-video-metadata";
 import { resolveShareWebUrl } from "@/lib/share-web-url";
@@ -887,6 +888,7 @@ async function AuthorizedContent({
 		hasInheritedPassword: rules.hasInheritedPassword,
 		inheritedPasswordSources: rules.inheritedPasswordSources,
 		inheritedSpaceSettings: rules.inheritedSettings,
+		callToAction: parseShareCallToAction(video.videoSettings),
 	};
 	const isEditProcessing =
 		isEditSourceKey({

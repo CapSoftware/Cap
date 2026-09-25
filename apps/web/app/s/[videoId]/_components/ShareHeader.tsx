@@ -32,6 +32,7 @@ import {
 	Globe2,
 	LayoutDashboard,
 	Lock,
+	MousePointer2,
 	Pencil,
 	Scissors,
 	Users,
@@ -106,6 +107,13 @@ const PasswordDialog = dynamic(
 const DeleteCapDialog = dynamic(() => import("./DeleteCapDialog"), {
 	ssr: false,
 });
+const CallToActionDialog = dynamic(
+	() =>
+		import("./call-to-action/CallToActionDialog").then(
+			(m) => m.CallToActionDialog,
+		),
+	{ ssr: false },
+);
 const DuplicateCapMenuItem = dynamic(() => import("./DuplicateCapMenuItem"), {
 	ssr: false,
 });
@@ -203,6 +211,8 @@ export const ShareHeader = ({
 	const [settingsDialogMounted, setSettingsDialogMounted] = useState(false);
 	const [passwordDialogMounted, setPasswordDialogMounted] = useState(false);
 	const [deleteDialogMounted, setDeleteDialogMounted] = useState(false);
+	const [ctaDialogMounted, setCtaDialogMounted] = useState(false);
+	const [isCtaDialogOpen, setIsCtaDialogOpenRaw] = useState(false);
 	const [isSettingsDialogOpen, setIsSettingsDialogOpenRaw] = useState(false);
 	const [isPasswordDialogOpen, setIsPasswordDialogOpenRaw] = useState(false);
 	const [isDeleteDialogOpen, setIsDeleteDialogOpenRaw] = useState(false);
@@ -225,6 +235,10 @@ export const ShareHeader = ({
 	const setIsDeleteDialogOpen = (open: boolean) => {
 		if (open) setDeleteDialogMounted(true);
 		setIsDeleteDialogOpenRaw(open);
+	};
+	const setIsCtaDialogOpen = (open: boolean) => {
+		if (open) setCtaDialogMounted(true);
+		setIsCtaDialogOpenRaw(open);
 	};
 	const [passwordProtected, setPasswordProtected] = useState(
 		Boolean(data.hasPassword),
@@ -805,6 +819,15 @@ export const ShareHeader = ({
 							onPasswordUpdated={handlePasswordUpdated}
 						/>
 					)}
+					{ctaDialogMounted && (
+						<CallToActionDialog
+							open={isCtaDialogOpen}
+							onOpenChange={setIsCtaDialogOpen}
+							videoId={data.id}
+							callToAction={data.callToAction ?? null}
+							onSaved={refresh}
+						/>
+					)}
 					{deleteDialogMounted && (
 						<DeleteCapDialog
 							open={isDeleteDialogOpen}
@@ -1107,6 +1130,22 @@ export const ShareHeader = ({
 												>
 													<FontAwesomeIcon className="size-3" icon={faGear} />
 													<p className="text-sm text-gray-12">Video settings</p>
+												</DropdownMenuItem>
+												<DropdownMenuItem
+													onClick={() => setIsCtaDialogOpen(true)}
+													className="flex items-center gap-2 rounded-lg"
+												>
+													<MousePointer2 className="size-3.5" />
+													<p className="text-sm text-gray-12">
+														{data.callToAction
+															? "Edit call to action"
+															: "Add call to action"}
+													</p>
+													{data.callToAction && (
+														<span className="ml-auto pl-3 text-xs text-gray-10">
+															On
+														</span>
+													)}
 												</DropdownMenuItem>
 												<DropdownMenuItem
 													onClick={() => {

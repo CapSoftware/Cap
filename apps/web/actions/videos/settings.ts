@@ -4,7 +4,7 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { videos } from "@cap/database/schema";
 import type { Video } from "@cap/web-domain";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { normalizePlaybackSpeed } from "@/lib/playback-speed";
 
 export async function updateVideoSettings(
@@ -50,7 +50,9 @@ export async function updateVideoSettings(
 
 	await db()
 		.update(videos)
-		.set({ settings: settingsToSave })
+		.set({
+			settings: sql`JSON_MERGE_PATCH(COALESCE(${videos.settings}, JSON_OBJECT()), CAST(${JSON.stringify(settingsToSave)} AS JSON))`,
+		})
 		.where(eq(videos.id, videoId));
 
 	return { success: true };
