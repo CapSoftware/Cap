@@ -23,6 +23,12 @@ describe("normalizeCallToActionUrl", () => {
 		);
 	});
 
+	it("treats a bare host with a port as a web link", () => {
+		expect(normalizeCallToActionUrl("cap.so:8080/demo")).toBe(
+			"https://cap.so:8080/demo",
+		);
+	});
+
 	it("keeps explicit http and https links", () => {
 		expect(normalizeCallToActionUrl("http://example.com/a?b=1#c")).toBe(
 			"http://example.com/a?b=1#c",

@@ -120,8 +120,11 @@ export function CallToActionDialog({
 		form: useId(),
 	};
 
+	const wasOpenRef = useRef(false);
 	useEffect(() => {
-		if (!open) return;
+		const opening = open && !wasOpenRef.current;
+		wasOpenRef.current = open;
+		if (!opening) return;
 		setForm(formFromCallToAction(callToAction));
 		setErrors({});
 		setTouched({});

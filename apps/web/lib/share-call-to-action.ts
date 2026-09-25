@@ -53,7 +53,7 @@ export type CallToActionValidation =
 
 const collapseWhitespace = (value: string) => value.replace(/\s+/g, " ").trim();
 
-const HAS_SCHEME = /^[a-z][a-z0-9+.-]*:/i;
+const HAS_SCHEME = /^[a-z][a-z0-9+.-]*:(?!\d)/i;
 
 export function normalizeCallToActionUrl(input: string): string | null {
 	const trimmed = input.trim();

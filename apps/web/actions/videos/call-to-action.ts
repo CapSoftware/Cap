@@ -39,7 +39,7 @@ export async function updateVideoCallToAction(
 		await db()
 			.update(videos)
 			.set({
-				settings: sql`JSON_REMOVE(COALESCE(${videos.settings}, JSON_OBJECT()), '$.callToAction')`,
+				settings: sql`JSON_MERGE_PATCH(COALESCE(${videos.settings}, JSON_OBJECT()), CAST('{"callToAction":null}' AS JSON))`,
 			})
 			.where(eq(videos.id, videoId));
 		return { success: true, callToAction: null };
@@ -51,7 +51,7 @@ export async function updateVideoCallToAction(
 	await db()
 		.update(videos)
 		.set({
-			settings: sql`JSON_SET(COALESCE(${videos.settings}, JSON_OBJECT()), '$.callToAction', CAST(${JSON.stringify(toStoredCallToAction(result.value))} AS JSON))`,
+			settings: sql`JSON_MERGE_PATCH(JSON_MERGE_PATCH(COALESCE(${videos.settings}, JSON_OBJECT()), CAST('{"callToAction":null}' AS JSON)), CAST(${JSON.stringify({ callToAction: toStoredCallToAction(result.value) })} AS JSON))`,
 		})
 		.where(eq(videos.id, videoId));
 

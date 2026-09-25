@@ -102,8 +102,9 @@ describe("updateVideoCallToAction", () => {
 		const settings = sqlText(
 			(mocks.updates[0] as { settings: unknown }).settings,
 		);
-		expect(settings).toContain("JSON_SET(");
-		expect(settings).toContain("'$.callToAction'");
+		expect(settings).toContain("JSON_MERGE_PATCH(");
+		expect(settings).toContain('"callToAction":null');
+		expect(settings).toContain('"url":"https://cal.com/demo"');
 	});
 
 	it("removes only the call to action key", async () => {
@@ -112,7 +113,8 @@ describe("updateVideoCallToAction", () => {
 		const settings = sqlText(
 			(mocks.updates[0] as { settings: unknown }).settings,
 		);
-		expect(settings).toContain("JSON_REMOVE(");
-		expect(settings).toContain("'$.callToAction'");
+		expect(settings).toContain("JSON_MERGE_PATCH(");
+		expect(settings).toContain('{"callToAction":null}');
+		expect(settings).not.toContain('"url"');
 	});
 });
