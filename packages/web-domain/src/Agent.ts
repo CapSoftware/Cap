@@ -1229,7 +1229,7 @@ export const AgentSpaceMemberUpdateInput = Schema.Struct({
 export const AgentMoveCapInput = Schema.Struct({
 	container: Schema.Literal("personal", "organization", "space"),
 	organizationId: OrganisationId,
-	spaceId: Schema.optional(SpaceIdOrOrganisationId),
+	spaceId: Schema.optional(Schema.NullOr(SpaceIdOrOrganisationId)),
 	folderId: Schema.NullOr(FolderId),
 });
 

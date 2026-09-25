@@ -16,6 +16,28 @@ const status = {
 };
 
 describe("agent API contract", () => {
+	it("accepts installed clients' null space for personal and organization moves", () => {
+		const decode = Schema.decodeUnknownSync(Agent.AgentMoveCapInput);
+		for (const container of ["personal", "organization", "space"]) {
+			const input = {
+				container,
+				organizationId: "org_synthetic_1",
+				folderId: null,
+			};
+			expect(decode(input)).toEqual(input);
+			expect(decode({ ...input, spaceId: null })).toEqual({
+				...input,
+				spaceId: null,
+			});
+			expect(decode({ ...input, spaceId: "space_synthetic_1" })).toEqual({
+				...input,
+				spaceId: "space_synthetic_1",
+			});
+			expect(() => decode({ ...input, spaceId: 42 })).toThrow();
+			expect(() => decode({ ...input, organizationId: null })).toThrow();
+		}
+	});
+
 	it("accepts omitted and null Loom import options from installed clients", () => {
 		const loomUrl = "https://www.loom.com/share/synthetic";
 		const decode = Schema.decodeUnknownSync(Agent.AgentLoomImportInput);
