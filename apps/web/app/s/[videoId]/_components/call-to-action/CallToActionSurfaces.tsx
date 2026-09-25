@@ -103,18 +103,22 @@ export function CallToActionEndScreen({
 }: EndScreenProps) {
 	const destination = callToActionDestinationLabel(cta.url);
 	const compact = scale === "compact";
-	const replayButton = onReplay && !compact && (
+	const replayButton = onReplay && (
 		<button
 			type="button"
+			aria-label={compact ? "Replay" : undefined}
 			tabIndex={interactive ? undefined : -1}
 			onClick={(event) => {
 				event.stopPropagation();
 				onReplay();
 			}}
-			className="inline-flex h-8 items-center gap-1.5 rounded-full px-3 text-[13px] font-medium text-white/70 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
+			className={clsx(
+				"inline-flex shrink-0 items-center justify-center gap-1.5 rounded-full font-medium text-white/70 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70",
+				compact ? "size-9 bg-white/10" : "h-8 px-3 text-[13px]",
+			)}
 		>
 			<RotateCcw aria-hidden className="size-3.5" strokeWidth={2.25} />
-			Replay
+			{!compact && "Replay"}
 		</button>
 	);
 
@@ -159,20 +163,32 @@ export function CallToActionEndScreen({
 						{cta.headline}
 					</p>
 				)}
-				<div className="flex max-w-full flex-col items-center gap-2">
-					<CallToActionButton
-						cta={cta}
-						scale={scale}
-						interactive={interactive}
-						onOpen={onOpen}
-					/>
-					{!compact && (
-						<span className="max-w-full truncate text-xs font-medium text-white/55">
-							{destination}
-						</span>
-					)}
-				</div>
-				{replayButton}
+				{compact ? (
+					<div className="flex max-w-full items-center gap-2">
+						<CallToActionButton
+							cta={cta}
+							scale={scale}
+							interactive={interactive}
+							onOpen={onOpen}
+						/>
+						{replayButton}
+					</div>
+				) : (
+					<>
+						<div className="flex max-w-full flex-col items-center gap-2">
+							<CallToActionButton
+								cta={cta}
+								scale={scale}
+								interactive={interactive}
+								onOpen={onOpen}
+							/>
+							<span className="max-w-full truncate text-xs font-medium text-white/55">
+								{destination}
+							</span>
+						</div>
+						{replayButton}
+					</>
+				)}
 			</motion.div>
 		</motion.div>
 	);
