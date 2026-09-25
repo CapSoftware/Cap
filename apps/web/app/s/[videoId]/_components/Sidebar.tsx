@@ -249,7 +249,7 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 		// Desktop: a flush pane that fills its rail, so the comment list gets the
 		// viewport's height rather than the video's. Phones keep the card.
 		return (
-			<div className="bg-white rounded-2xl border border-gray-5 overflow-hidden h-[70svh] flex flex-col lg:h-full lg:rounded-none lg:border-0">
+			<div className="bg-gray-1 rounded-2xl border border-gray-5 overflow-hidden h-[70svh] flex flex-col lg:h-full lg:rounded-none lg:border-0">
 				<div className="flex-none">
 					<div
 						className={clsx(
