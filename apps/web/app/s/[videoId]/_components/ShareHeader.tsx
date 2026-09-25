@@ -586,11 +586,6 @@ export const ShareHeader = ({
 		</Button>
 	);
 
-	/**
-	 * Desktop shows the link itself, since the custom domain in it is worth seeing.
-	 * Below `lg` there's no row wide enough for a URL, so the same control
-	 * becomes a "Copy link" button in the action bar.
-	 */
 	const renderCopyLinkControl = (variant: "link" | "button") => (
 		<div
 			className={clsx("relative", variant === "button" && "min-w-0")}
@@ -1021,7 +1016,6 @@ export const ShareHeader = ({
 						{user !== null && (
 							// Holds its own width so the title, not this, absorbs what the
 							// row has left over. Its own link label already truncates.
-							// Desktop only: narrower screens copy from the action bar.
 							<div className="hidden lg:block lg:shrink-0">
 								<div className="flex gap-2 items-center">
 									{(data.hasPassword || data.hasInheritedPassword) && (
@@ -1046,13 +1040,6 @@ export const ShareHeader = ({
 						)}
 						{renderSignedOutNav()}
 					</div>
-					{/*
-					 * Below `lg`, the byline shares its row with the audience pill
-					 * and every action moves to a bar of its own underneath: on a
-					 * phone that bar is equal columns with full-size tap targets, on
-					 * a tablet it's the desktop buttons with room to breathe. `lg`
-					 * folds both back into the one row.
-					 */}
 					<div className="flex flex-col gap-3 lg:flex-row lg:items-center">
 						<div className="flex min-w-0 items-center justify-between gap-3 lg:justify-start lg:gap-5">
 							<div className="flex min-w-0 items-center gap-2">
@@ -1092,8 +1079,6 @@ export const ShareHeader = ({
 								<div className="min-w-0 lg:hidden">
 									{renderCopyLinkControl("button")}
 								</div>
-								{/* `contents` on phones so these join the equal columns
-								    above; from `sm` they group on the right. */}
 								<div className="contents sm:ml-auto sm:flex sm:items-center sm:gap-2">
 									{isOwner && (
 										<>
