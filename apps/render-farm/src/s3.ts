@@ -457,11 +457,17 @@ export class S3 {
 	}
 }
 
-function decodeXml(value: string) {
-	return value
-		.replaceAll("&amp;", "&")
-		.replaceAll("&lt;", "<")
-		.replaceAll("&gt;", ">")
-		.replaceAll("&quot;", '"')
-		.replaceAll("&apos;", "'");
+const XML_ENTITIES: Record<string, string> = {
+	amp: "&",
+	lt: "<",
+	gt: ">",
+	quot: '"',
+	apos: "'",
+};
+
+export function decodeXml(value: string) {
+	return value.replace(
+		/&(amp|lt|gt|quot|apos);/g,
+		(entity, name: string) => XML_ENTITIES[name] ?? entity,
+	);
 }
