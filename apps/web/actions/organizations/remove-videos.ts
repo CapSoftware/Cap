@@ -2,6 +2,7 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { directoryAccessAllowed } from "@cap/database/directory-sync/access";
 import {
 	folders,
 	organizationMembers,
@@ -46,7 +47,13 @@ export async function removeVideosFromOrganization(
 				.from(organizationMembers)
 				.where(
 					and(
-						eq(organizationMembers.userId, user.id),
+						and(
+							eq(organizationMembers.userId, user.id),
+							directoryAccessAllowed(
+								user.id,
+								organizationMembers.organizationId,
+							),
+						),
 						eq(organizationMembers.organizationId, organizationId),
 					),
 				)

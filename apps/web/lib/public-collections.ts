@@ -2,6 +2,7 @@ import "server-only";
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { hasDirectoryAccess } from "@cap/database/directory-sync/access";
 import {
 	comments,
 	folders,
@@ -160,6 +161,8 @@ export async function getPublicCollectionPageData(
 	]);
 
 	if (!collection) return null;
+	if (user && !(await hasDirectoryAccess(user.id, collection.organizationId)))
+		return null;
 
 	const access = resolvePublicCollectionAccess({
 		allowedEmailDomain: collection.allowedEmailDomain,

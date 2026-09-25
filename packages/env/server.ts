@@ -74,6 +74,8 @@ function createServerEnv() {
 			// Provide these to use WorkOS for enterprise SSO
 			WORKOS_CLIENT_ID: z.string().optional(),
 			WORKOS_API_KEY: z.string().optional(),
+			WORKOS_DIRECTORY_SYNC_ENABLED: boolString(false),
+			WORKOS_DIRECTORY_SYNC_ORGANIZATION_IDS: z.string().optional(),
 
 			/// Settings
 			CAP_VIDEOS_DEFAULT_PUBLIC: boolString(true).describe(

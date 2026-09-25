@@ -3,6 +3,10 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import {
+	directoryAccessAllowed,
+	directorySpaceAccessAllowed,
+} from "@cap/database/directory-sync/access";
+import {
 	organizationMembers,
 	organizations,
 	sharedVideos,
@@ -56,7 +60,12 @@ export async function searchDashboardVideos(
 	const organizationMembershipIds = database
 		.select({ organizationId: organizationMembers.organizationId })
 		.from(organizationMembers)
-		.where(eq(organizationMembers.userId, user.id));
+		.where(
+			and(
+				eq(organizationMembers.userId, user.id),
+				directoryAccessAllowed(user.id, organizationMembers.organizationId),
+			),
+		);
 	const sharedVideoIds = database
 		.select({ videoId: sharedVideos.videoId })
 		.from(sharedVideos)
@@ -69,14 +78,22 @@ export async function searchDashboardVideos(
 			and(
 				eq(spaces.organizationId, activeOrganizationId),
 				or(
-					eq(spaces.createdById, user.id),
+					and(
+						eq(spaces.createdById, user.id),
+						directoryAccessAllowed(user.id, spaces.organizationId),
+					),
 					eq(spaces.privacy, "Public"),
 					inArray(
 						spaces.id,
 						database
 							.select({ spaceId: spaceMembers.spaceId })
 							.from(spaceMembers)
-							.where(eq(spaceMembers.userId, user.id)),
+							.where(
+								and(
+									eq(spaceMembers.userId, user.id),
+									directorySpaceAccessAllowed(user.id, spaceMembers.spaceId),
+								),
+							),
 					),
 				),
 			),
@@ -99,12 +116,18 @@ export async function searchDashboardVideos(
 				eq(videos.orgId, activeOrganizationId),
 				isNull(organizations.tombstoneAt),
 				or(
-					eq(organizations.ownerId, user.id),
+					and(
+						eq(organizations.ownerId, user.id),
+						directoryAccessAllowed(user.id, organizations.id),
+					),
 					inArray(organizations.id, organizationMembershipIds),
 				),
 				sql`${videos.name} LIKE ${containsPattern} ESCAPE '!'`,
 				or(
-					eq(videos.ownerId, user.id),
+					and(
+						eq(videos.ownerId, user.id),
+						directoryAccessAllowed(user.id, videos.orgId),
+					),
 					inArray(videos.id, sharedVideoIds),
 					inArray(videos.id, accessibleSpaceVideoIds),
 				),

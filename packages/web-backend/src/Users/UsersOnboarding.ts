@@ -1,3 +1,4 @@
+import { directoryAccessAllowed } from "@cap/database/directory-sync/access";
 import { nanoId } from "@cap/database/helpers";
 import * as Db from "@cap/database/schema";
 import { CurrentUser, Organisation } from "@cap/web-domain";
@@ -54,7 +55,13 @@ export class UsersOnboarding extends Effect.Service<UsersOnboarding>()(
 								.where(
 									Dz.and(
 										Dz.eq(Db.organizations.id, activeOrgId),
-										Dz.eq(Db.organizations.ownerId, currentUser.id),
+										Dz.and(
+											Dz.eq(Db.organizations.ownerId, currentUser.id),
+											directoryAccessAllowed(
+												currentUser.id,
+												Db.organizations.id,
+											),
+										),
 										Dz.isNull(Db.organizations.tombstoneAt),
 										Dz.eq(Db.organizations.name, "My Organization"),
 									),
@@ -129,7 +136,13 @@ export class UsersOnboarding extends Effect.Service<UsersOnboarding>()(
 											.where(
 												Dz.and(
 													Dz.eq(Db.organizations.id, resolvedOrgId),
-													Dz.eq(Db.organizations.ownerId, currentUser.id),
+													Dz.and(
+														Dz.eq(Db.organizations.ownerId, currentUser.id),
+														directoryAccessAllowed(
+															currentUser.id,
+															Db.organizations.id,
+														),
+													),
 													Dz.isNull(Db.organizations.tombstoneAt),
 												),
 											);
@@ -165,7 +178,13 @@ export class UsersOnboarding extends Effect.Service<UsersOnboarding>()(
 									.where(
 										Dz.and(
 											Dz.eq(Db.organizations.id, finalOrganizationId),
-											Dz.eq(Db.organizations.ownerId, currentUser.id),
+											Dz.and(
+												Dz.eq(Db.organizations.ownerId, currentUser.id),
+												directoryAccessAllowed(
+													currentUser.id,
+													Db.organizations.id,
+												),
+											),
 											Dz.isNull(Db.organizations.tombstoneAt),
 										),
 									),
@@ -205,7 +224,13 @@ export class UsersOnboarding extends Effect.Service<UsersOnboarding>()(
 											.where(
 												Dz.and(
 													Dz.eq(Db.organizations.id, finalOrganizationId),
-													Dz.eq(Db.organizations.ownerId, currentUser.id),
+													Dz.and(
+														Dz.eq(Db.organizations.ownerId, currentUser.id),
+														directoryAccessAllowed(
+															currentUser.id,
+															Db.organizations.id,
+														),
+													),
 													Dz.isNull(Db.organizations.tombstoneAt),
 												),
 											),

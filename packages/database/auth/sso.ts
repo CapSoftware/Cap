@@ -4,6 +4,7 @@ import { hasSsoAccess } from "@cap/utils";
 import { Organisation, User } from "@cap/web-domain";
 import { WorkOS } from "@workos-inc/node";
 import { and, eq, isNull } from "drizzle-orm";
+import { requireDirectoryMembership } from "../directory-sync/access";
 import { nanoId } from "../helpers.ts";
 import { db } from "../index.ts";
 import { enqueueLoopsSync } from "../loops/queue.ts";
@@ -115,6 +116,7 @@ export async function validateSsoSignIn(
 		intent.organizationId,
 	);
 	const organization = await getRegisteredSsoOrganization(organizationId);
+	await requireDirectoryMembership(db(), organizationId, email);
 	if (organization.workosOrganizationId !== intent.workosOrganizationId) {
 		throw new Error("The SSO organization is no longer connected.");
 	}
@@ -215,6 +217,12 @@ export async function provisionSsoMembership(
 				"The SSO organization or account is no longer available.",
 			);
 		}
+		await requireDirectoryMembership(
+			tx,
+			identity.organizationId,
+			identity.email,
+			userId,
+		);
 		const linkedAccounts = await tx
 			.selectDistinct({ userId: accounts.userId })
 			.from(accounts)

@@ -1,3 +1,4 @@
+import { directoryAccessAllowed } from "@cap/database/directory-sync/access";
 import * as Db from "@cap/database/schema";
 import { userIsPro } from "@cap/utils";
 import type { Organisation, User } from "@cap/web-domain";
@@ -121,7 +122,7 @@ export class Extensions extends Effect.Service<Extensions>()("Extensions", {
 				activeOrganizationId: Organisation.OrganisationId;
 			}) {
 				let [organization] = yield* selectOwnedOrganization(
-					Dz.eq(Db.organizations.id, user.activeOrganizationId),
+					Dz.sql`${Dz.eq(Db.organizations.id, user.activeOrganizationId)} AND ${directoryAccessAllowed(user.id, Db.organizations.id)}`,
 				);
 
 				// A dangling activeOrganizationId (deleted org, revoked
@@ -130,7 +131,7 @@ export class Extensions extends Effect.Service<Extensions>()("Extensions", {
 				// of.
 				if (!organization) {
 					[organization] = yield* selectOwnedOrganization(
-						Dz.eq(Db.organizations.ownerId, user.id),
+						Dz.sql`${Dz.eq(Db.organizations.ownerId, user.id)} AND ${directoryAccessAllowed(user.id, Db.organizations.id)}`,
 					);
 				}
 
@@ -150,7 +151,15 @@ export class Extensions extends Effect.Service<Extensions>()("Extensions", {
 								),
 							)
 							.innerJoin(Db.users, Dz.eq(Db.organizations.ownerId, Db.users.id))
-							.where(Dz.eq(Db.organizationMembers.userId, user.id))
+							.where(
+								Dz.and(
+									Dz.eq(Db.organizationMembers.userId, user.id),
+									directoryAccessAllowed(
+										user.id,
+										Db.organizationMembers.organizationId,
+									),
+								),
+							)
 							// Oldest membership first, with the org id as a stable
 							// tie-break — same determinism requirement as above.
 							.orderBy(

@@ -33,6 +33,10 @@ export type VideosPolicyDeps = {
 		) => Effect.Effect<boolean, DatabaseError>;
 	};
 	orgsRepo: {
+		hasDirectoryAccess: (
+			userId: User.UserId,
+			orgId: Organisation.OrganisationId,
+		) => Effect.Effect<boolean, DatabaseError>;
 		membershipForVideo: (
 			userId: User.UserId,
 			videoId: Video.VideoId,
@@ -66,6 +70,8 @@ const decideCanView = (
 	Effect.gen(function* () {
 		if (Option.isSome(user)) {
 			const userId = user.value.id;
+			if (!(yield* orgsRepo.hasDirectoryAccess(userId, video.orgId)))
+				return false;
 			if (userId === video.ownerId) return true;
 		}
 
@@ -195,17 +201,24 @@ export class VideosPolicy extends Effect.Service<VideosPolicy>()(
 			const isOwner = (videoId: Video.VideoId) =>
 				Policy.policy((user) =>
 					repo.getById(videoId).pipe(
-						Effect.map(
+						Effect.flatMap(
 							Option.match({
-								onNone: () => true,
-								onSome: ([video]) => video.ownerId === user.id,
+								onNone: () => Effect.succeed(true),
+								onSome: ([video]) =>
+									video.ownerId === user.id
+										? orgsRepo.hasDirectoryAccess(user.id, video.orgId)
+										: Effect.succeed(false),
 							}),
 						),
 					),
 				);
 
-			const isOwnerLoaded = (video: Pick<Video.Video, "ownerId">) =>
-				Policy.policy((user) => Effect.succeed(video.ownerId === user.id));
+			const isOwnerLoaded = (video: Pick<Video.Video, "ownerId" | "orgId">) =>
+				Policy.policy((user) =>
+					video.ownerId === user.id
+						? orgsRepo.hasDirectoryAccess(user.id, video.orgId)
+						: Effect.succeed(false),
+				);
 
 			const getViewableById = (videoId: Video.VideoId) =>
 				repo.getById(videoId).pipe(

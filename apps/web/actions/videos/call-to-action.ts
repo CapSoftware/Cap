@@ -2,6 +2,7 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { directoryAccessAllowed } from "@cap/database/directory-sync/access";
 import { videos } from "@cap/database/schema";
 import { userIsPro } from "@cap/utils";
 import type { Video } from "@cap/web-domain";
@@ -29,7 +30,12 @@ export async function updateVideoCallToAction(
 	const [video] = await db()
 		.select({ ownerId: videos.ownerId })
 		.from(videos)
-		.where(eq(videos.id, videoId));
+		.where(
+			and(
+				eq(videos.id, videoId),
+				directoryAccessAllowed(user.id, videos.orgId),
+			),
+		);
 
 	if (!video) throw new Error("Video not found");
 	if (video.ownerId !== user.id) {
@@ -45,7 +51,15 @@ export async function updateVideoCallToAction(
 			.set({
 				settings: sql`JSON_MERGE_PATCH(COALESCE(${videos.settings}, JSON_OBJECT()), CAST('{"callToAction":null}' AS JSON))`,
 			})
-			.where(and(eq(videos.id, videoId), eq(videos.ownerId, user.id)));
+			.where(
+				and(
+					eq(videos.id, videoId),
+					and(
+						eq(videos.ownerId, user.id),
+						directoryAccessAllowed(user.id, videos.orgId),
+					),
+				),
+			);
 		return { success: true, callToAction: null };
 	}
 
@@ -57,7 +71,15 @@ export async function updateVideoCallToAction(
 		.set({
 			settings: sql`JSON_MERGE_PATCH(JSON_MERGE_PATCH(COALESCE(${videos.settings}, JSON_OBJECT()), CAST('{"callToAction":null}' AS JSON)), CAST(${JSON.stringify({ callToAction: toStoredCallToAction(result.value) })} AS JSON))`,
 		})
-		.where(and(eq(videos.id, videoId), eq(videos.ownerId, user.id)));
+		.where(
+			and(
+				eq(videos.id, videoId),
+				and(
+					eq(videos.ownerId, user.id),
+					directoryAccessAllowed(user.id, videos.orgId),
+				),
+			),
+		);
 
 	return { success: true, callToAction: result.value };
 }

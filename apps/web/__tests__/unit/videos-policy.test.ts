@@ -52,6 +52,7 @@ function makeDeps(config: {
 	spaceMembership?: boolean;
 	allowedEmailDomain?: Option.Option<string>;
 	viewerGrantEmail?: string;
+	directoryAccess?: boolean;
 }): VideosPolicyDeps {
 	const {
 		video,
@@ -72,6 +73,7 @@ function makeDeps(config: {
 			hasViewerGrant: (_, email) => Effect.succeed(email === viewerGrantEmail),
 		},
 		orgsRepo: {
+			hasDirectoryAccess: () => Effect.succeed(config.directoryAccess ?? true),
 			membershipForVideo: () =>
 				Effect.succeed(orgMembership ? [{ membershipId: "mem-1" }] : []),
 			allowedEmailDomain: () => Effect.succeed(allowedEmailDomain),
@@ -786,5 +788,33 @@ describe("VideosPolicy.canViewLoaded", () => {
 			),
 		).toBe("denied");
 		expect(getByIdCalls).toBe(0);
+	});
+});
+
+describe("Directory deprovisioning", () => {
+	it("denies ownership shortcuts after deprovisioning", async () => {
+		const deps = makeDeps({
+			video: makeVideo({ public: false }),
+			directoryAccess: false,
+		});
+		expect(
+			await runCanView(deps, makeUser("owner@example.com", TEST_OWNER_ID)),
+		).toBe("denied");
+	});
+	it("denies retained grants and membership on a signed-in session", async () => {
+		const deps = makeDeps({
+			video: makeVideo({ public: false }),
+			directoryAccess: false,
+			orgMembership: true,
+			spaceMembership: true,
+			viewerGrantEmail: "teammate@example.com",
+		});
+		expect(await runCanView(deps, makeUser("teammate@example.com"))).toBe(
+			"denied",
+		);
+	});
+	it("preserves anonymous public sharing", async () => {
+		const deps = makeDeps({ video: makeVideo(), directoryAccess: false });
+		expect(await runCanView(deps, noUser)).toBe("allowed");
 	});
 });

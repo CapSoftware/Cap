@@ -298,6 +298,87 @@ export const organizationSso = mysqlTable(
 );
 
 export type OrganisationMemberRole = "owner" | "admin" | "member";
+export const organizationDirectorySync = mysqlTable(
+	"organization_directory_sync",
+	{
+		organizationId: nanoId("organizationId")
+			.notNull()
+			.primaryKey()
+			.$type<Organisation.OrganisationId>(),
+		workosOrganizationId: varchar("workosOrganizationId", {
+			length: 255,
+		}).notNull(),
+		directoryId: varchar("directoryId", { length: 255 }),
+		state: varchar("state", { length: 32 }).notNull().default("pending"),
+		eventCursor: varchar("eventCursor", { length: 255 }),
+		eventStartedAt: datetime("eventStartedAt", { fsp: 3 }).notNull(),
+		reconcileStartedAt: datetime("reconcileStartedAt", { fsp: 3 }),
+		reconcileCursor: varchar("reconcileCursor", { length: 255 }),
+		reconcileListingComplete: boolean("reconcileListingComplete")
+			.notNull()
+			.default(false),
+		lastReconciledAt: datetime("lastReconciledAt", { fsp: 3 }),
+		lastSyncedAt: datetime("lastSyncedAt", { fsp: 3 }),
+		nextAttemptAt: datetime("nextAttemptAt", { fsp: 3 }).notNull(),
+		leaseToken: varchar("leaseToken", { length: 36 }),
+		leaseUntil: datetime("leaseUntil", { fsp: 3 }),
+		lastError: varchar("lastError", { length: 64 }),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+	},
+	(table) => ({
+		directoryIndex: uniqueIndex("directory_sync_directory_idx").on(
+			table.directoryId,
+		),
+		dueIndex: index("directory_sync_due_idx").on(table.nextAttemptAt),
+	}),
+);
+
+export const directoryUsers = mysqlTable(
+	"directory_users",
+	{
+		id: nanoId("id").notNull().primaryKey(),
+		organizationId: nanoId("organizationId")
+			.notNull()
+			.$type<Organisation.OrganisationId>(),
+		directoryId: varchar("directoryId", { length: 255 }).notNull(),
+		directoryUserId: varchar("directoryUserId", { length: 255 }).notNull(),
+		idpId: varchar("idpId", { length: 255 }).notNull(),
+		userId: nanoIdNullable("userId").$type<User.UserId>(),
+		email: varchar("email", { length: 255 }),
+		firstName: varchar("firstName", { length: 255 }),
+		lastName: varchar("lastName", { length: 255 }),
+		state: varchar("state", { length: 32 }).notNull(),
+		lastError: varchar("lastError", { length: 64 }),
+		remoteUpdatedAt: datetime("remoteUpdatedAt", { fsp: 3 }).notNull(),
+		lastSeenAt: datetime("lastSeenAt", { fsp: 3 }).notNull(),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+	},
+	(table) => ({
+		workosUserIndex: uniqueIndex("directory_user_workos_idx").on(
+			table.directoryUserId,
+		),
+		identityIndex: uniqueIndex("directory_user_identity_idx").on(
+			table.directoryId,
+			table.idpId,
+		),
+		userIndex: uniqueIndex("directory_user_org_user_idx").on(
+			table.organizationId,
+			table.userId,
+		),
+		emailIndex: index("directory_user_org_email_idx").on(
+			table.organizationId,
+			table.email,
+		),
+		reconcileIndex: index("directory_user_reconcile_idx").on(
+			table.directoryId,
+			table.state,
+			table.lastSeenAt,
+		),
+	}),
+);
+
 export const organizationMembers = mysqlTable(
 	"organization_members",
 	{

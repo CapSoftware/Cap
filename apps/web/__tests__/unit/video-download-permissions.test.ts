@@ -2,6 +2,7 @@ import type { Organisation, User, Video } from "@cap/web-domain";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const schema = {
+	videos: { table: "videos" },
 	organizationMembers: { table: "organizationMembers" },
 	sharedVideos: { table: "sharedVideos" },
 	spaceMembers: { table: "spaceMembers" },
@@ -14,15 +15,21 @@ vi.mock("@cap/database/schema", () => schema);
 // read is recorded so a test can assert which lookups actually happened.
 let queued: unknown[][] = [];
 const tablesRead: string[] = [];
+let directoryAllowed = true;
+let selectedTable = "";
 
 const mockDb = {
 	select: () => mockDb,
 	from: (table: { table: string }) => {
 		tablesRead.push(table.table);
+		selectedTable = table.table;
 		return mockDb;
 	},
 	where: () => {
-		const rows = queued.shift() ?? [];
+		const rows =
+			selectedTable === "videos"
+				? [{ allowed: directoryAllowed }]
+				: (queued.shift() ?? []);
 		const result = Promise.resolve(rows) as Promise<unknown[]> & {
 			limit: () => Promise<unknown[]>;
 		};
@@ -49,12 +56,13 @@ function call(userId: User.UserId) {
 describe("canUserDownloadVideo", () => {
 	beforeEach(() => {
 		queued = [];
+		directoryAllowed = true;
 		tablesRead.length = 0;
 	});
 
 	it("allows the owner without querying shares", async () => {
 		expect(await call(OWNER)).toBe(true);
-		expect(tablesRead).toEqual([]);
+		expect(tablesRead).toEqual(["videos"]);
 	});
 
 	// The video's own orgId must not grant download access: VideosPolicy.canView
@@ -78,7 +86,11 @@ describe("canUserDownloadVideo", () => {
 		];
 
 		expect(await call(OTHER)).toBe(true);
-		expect(tablesRead).toEqual(["sharedVideos", "organizationMembers"]);
+		expect(tablesRead).toEqual([
+			"videos",
+			"sharedVideos",
+			"organizationMembers",
+		]);
 	});
 
 	it("denies a non-member even when the video is shared with some org", async () => {
@@ -111,4 +123,16 @@ describe("canUserDownloadVideo", () => {
 
 		expect(await call(OTHER)).toBe(false);
 	});
+});
+
+vi.mock("@cap/database/directory-sync/access", () => ({
+	directoryAccessAllowed: () => undefined,
+	directorySpaceAccessAllowed: () => undefined,
+}));
+
+it("denies downloads by a removed owner before consulting shares", async () => {
+	directoryAllowed = false;
+	tablesRead.length = 0;
+	expect(await call(OWNER)).toBe(false);
+	expect(tablesRead).toEqual(["videos"]);
 });

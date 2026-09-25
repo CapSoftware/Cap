@@ -2,6 +2,7 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { hasDirectoryAccess } from "@cap/database/directory-sync/access";
 import { videos } from "@cap/database/schema";
 import { Storage } from "@cap/web-backend";
 import type { Video } from "@cap/web-domain";
@@ -43,7 +44,10 @@ export async function editTranscriptEntry(
 
 	const { video } = result;
 
-	if (video.ownerId !== userId) {
+	if (
+		video.ownerId !== userId ||
+		!(await hasDirectoryAccess(userId, video.orgId))
+	) {
 		return {
 			success: false,
 			message: "You don't have permission to edit this transcript",

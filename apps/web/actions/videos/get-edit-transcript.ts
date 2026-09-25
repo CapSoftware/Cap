@@ -3,6 +3,7 @@
 import { randomUUID } from "node:crypto";
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { hasDirectoryAccess } from "@cap/database/directory-sync/access";
 import { videoEdits, videos } from "@cap/database/schema";
 import { userIsPro } from "@cap/utils";
 import { Storage } from "@cap/web-backend";
@@ -68,7 +69,12 @@ async function loadEditableTranscriptVideo(videoId: Video.VideoId) {
 		.select()
 		.from(videos)
 		.where(eq(videos.id, videoId));
-	if (!video || video.ownerId !== user.id) throw new Error("Video not found");
+	if (
+		!video ||
+		video.ownerId !== user.id ||
+		!(await hasDirectoryAccess(user.id, video.orgId))
+	)
+		throw new Error("Video not found");
 	if (!isEditableTranscriptVideo(video)) {
 		if (video.transcriptionStatus !== "COMPLETE") {
 			throw new Error("Transcript is not ready");
@@ -191,7 +197,12 @@ async function claimEditTranscriptBackfill(
 			.from(videos)
 			.where(eq(videos.id, videoId))
 			.for("update");
-		if (!video || video.ownerId !== userId) throw new Error("Video not found");
+		if (
+			!video ||
+			video.ownerId !== userId ||
+			!(await hasDirectoryAccess(userId, video.orgId))
+		)
+			throw new Error("Video not found");
 		if (!isEditableTranscriptVideo(video)) {
 			throw new Error("Transcript editing is not available for this video");
 		}

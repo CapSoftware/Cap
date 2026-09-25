@@ -2,6 +2,7 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { hasDirectoryAccess } from "@cap/database/directory-sync/access";
 import { nanoId } from "@cap/database/helpers";
 import { videos, videoUploads } from "@cap/database/schema";
 import { getNewVideoPublic } from "@cap/database/video-sharing-default";
@@ -160,7 +161,11 @@ export async function createVideoAndGetUploadUrl({
 				.where(eq(videos.id, videoId));
 
 			if (existingVideo) {
-				if (existingVideo.ownerId !== user.id) throw new Error("Forbidden");
+				if (
+					existingVideo.ownerId !== user.id ||
+					!(await hasDirectoryAccess(user.id, existingVideo.orgId))
+				)
+					throw new Error("Forbidden");
 
 				const existingVideoDomain = Video.Video.decodeSync({
 					...existingVideo,
@@ -271,7 +276,11 @@ export async function deleteVideoResultFile({
 		.where(eq(videos.id, videoId));
 
 	if (!video) throw new Error("Video not found");
-	if (video.ownerId !== user.id) throw new Error("Forbidden");
+	if (
+		video.ownerId !== user.id ||
+		!(await hasDirectoryAccess(user.id, video.orgId))
+	)
+		throw new Error("Forbidden");
 
 	const videoDomain = Video.Video.decodeSync({
 		...video,

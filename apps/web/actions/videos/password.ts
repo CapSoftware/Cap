@@ -6,6 +6,7 @@ import {
 	hashPassword,
 	verifyPassword as verifyPlainPassword,
 } from "@cap/database/crypto";
+import { hasDirectoryAccess } from "@cap/database/directory-sync/access";
 import { spaces, spaceVideos, videos } from "@cap/database/schema";
 import { collectPasswordHashes } from "@cap/web-backend";
 import type { Video } from "@cap/web-domain";
@@ -29,7 +30,11 @@ export async function setVideoPassword(
 			.from(videos)
 			.where(eq(videos.id, videoId));
 
-		if (!video || video.ownerId !== user.id) {
+		if (
+			!video ||
+			video.ownerId !== user.id ||
+			!(await hasDirectoryAccess(user.id, video.orgId))
+		) {
 			throw new Error("Unauthorized");
 		}
 
@@ -63,7 +68,11 @@ export async function removeVideoPassword(videoId: Video.VideoId) {
 			.from(videos)
 			.where(eq(videos.id, videoId));
 
-		if (!video || video.ownerId !== user.id) {
+		if (
+			!video ||
+			video.ownerId !== user.id ||
+			!(await hasDirectoryAccess(user.id, video.orgId))
+		) {
 			throw new Error("Unauthorized");
 		}
 

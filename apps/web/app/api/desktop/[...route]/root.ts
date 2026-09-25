@@ -1,6 +1,7 @@
 import { db } from "@cap/database";
 import { isBlockedAccountEmail } from "@cap/database/auth/domain-utils";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { directoryAccessAllowed } from "@cap/database/directory-sync/access";
 import { sendEmail } from "@cap/database/emails/config";
 import { Feedback } from "@cap/database/emails/feedback";
 import {
@@ -404,13 +405,19 @@ app.get("/organizations", withAuth, async (c) => {
 				organizationMembers,
 				and(
 					eq(organizationMembers.organizationId, organizations.id),
-					eq(organizationMembers.userId, user.id),
+					and(
+						eq(organizationMembers.userId, user.id),
+						directoryAccessAllowed(user.id, organizationMembers.organizationId),
+					),
 				),
 			)
 			.where(
 				and(
 					isNull(organizations.tombstoneAt),
-					eq(organizations.ownerId, user.id),
+					and(
+						eq(organizations.ownerId, user.id),
+						directoryAccessAllowed(user.id, organizations.id),
+					),
 				),
 			),
 		db()
@@ -430,7 +437,10 @@ app.get("/organizations", withAuth, async (c) => {
 			)
 			.where(
 				and(
-					eq(organizationMembers.userId, user.id),
+					and(
+						eq(organizationMembers.userId, user.id),
+						directoryAccessAllowed(user.id, organizationMembers.organizationId),
+					),
 					isNull(organizations.tombstoneAt),
 				),
 			),
@@ -476,10 +486,18 @@ app.patch(
 				organizationMembers,
 				and(
 					eq(organizationMembers.organizationId, organizations.id),
-					eq(organizationMembers.userId, user.id),
+					and(
+						eq(organizationMembers.userId, user.id),
+						directoryAccessAllowed(user.id, organizationMembers.organizationId),
+					),
 				),
 			)
-			.where(eq(organizations.id, organizationId))
+			.where(
+				and(
+					eq(organizations.id, organizationId),
+					directoryAccessAllowed(user.id, organizations.id),
+				),
+			)
 			.limit(1);
 
 		if (!row || row.tombstoneAt !== null) {
@@ -503,7 +521,12 @@ app.patch(
 					body.brandColors,
 				),
 			})
-			.where(eq(organizations.id, organizationId));
+			.where(
+				and(
+					eq(organizations.id, organizationId),
+					directoryAccessAllowed(user.id, organizations.id),
+				),
+			);
 
 		const [updatedRow] = await db()
 			.select({
@@ -520,10 +543,18 @@ app.patch(
 				organizationMembers,
 				and(
 					eq(organizationMembers.organizationId, organizations.id),
-					eq(organizationMembers.userId, user.id),
+					and(
+						eq(organizationMembers.userId, user.id),
+						directoryAccessAllowed(user.id, organizationMembers.organizationId),
+					),
 				),
 			)
-			.where(eq(organizations.id, organizationId))
+			.where(
+				and(
+					eq(organizations.id, organizationId),
+					directoryAccessAllowed(user.id, organizations.id),
+				),
+			)
 			.limit(1);
 
 		if (!updatedRow) {

@@ -1169,3 +1169,9 @@ describe("Paid BAA checkout association", () => {
 		]);
 	});
 });
+
+vi.mock("@cap/database/directory-sync/access", () => ({
+	directoryAccessAllowed: () => undefined,
+	directorySpaceAccessAllowed: () => undefined,
+	hasDirectoryAccess: async () => true,
+}));

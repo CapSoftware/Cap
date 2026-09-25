@@ -10,6 +10,7 @@ export class SpacesPolicy extends Effect.Service<SpacesPolicy>()(
 	{
 		effect: Effect.gen(function* () {
 			const repo = yield* SpacesRepo;
+			const organizations = yield* OrganisationsRepo;
 
 			const hasMembership = (spaceId: Space.SpaceIdOrOrganisationId) =>
 				Policy.policy((user) =>
@@ -22,7 +23,13 @@ export class SpacesPolicy extends Effect.Service<SpacesPolicy>()(
 						const space = yield* repo.getById(spaceId);
 						if (Option.isNone(space)) return false;
 
-						return space.value.createdById === user.id;
+						return (
+							space.value.createdById === user.id &&
+							(yield* organizations.hasDirectoryAccess(
+								user.id,
+								space.value.organizationId,
+							))
+						);
 					}),
 				);
 

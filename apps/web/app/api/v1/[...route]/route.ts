@@ -6,6 +6,10 @@ import {
 	hashPassword,
 	verifyPassword,
 } from "@cap/database/crypto";
+import {
+	directoryAccessAllowed,
+	directorySpaceAccessAllowed,
+} from "@cap/database/directory-sync/access";
 import { sendEmail } from "@cap/database/emails/config";
 import { OrganizationInvite } from "@cap/database/emails/organization-invite";
 import { nanoId, nanoIdLong } from "@cap/database/helpers";
@@ -713,7 +717,10 @@ const listCaps = Effect.fn("Agent.listCaps")(function* (
 			.from(Db.videos)
 			.where(
 				and(
-					eq(Db.videos.ownerId, principal.id),
+					and(
+						eq(Db.videos.ownerId, principal.id),
+						directoryAccessAllowed(principal.id, Db.videos.orgId),
+					),
 					organizationId ? eq(Db.videos.orgId, organizationId) : undefined,
 					folderId ? eq(Db.videos.folderId, folderId) : undefined,
 				),
@@ -730,7 +737,13 @@ const listCaps = Effect.fn("Agent.listCaps")(function* (
 			)
 			.where(
 				and(
-					eq(Db.organizationMembers.userId, principal.id),
+					and(
+						eq(Db.organizationMembers.userId, principal.id),
+						directoryAccessAllowed(
+							principal.id,
+							Db.organizationMembers.organizationId,
+						),
+					),
 					organizationId
 						? eq(Db.sharedVideos.organizationId, organizationId)
 						: undefined,
@@ -747,7 +760,10 @@ const listCaps = Effect.fn("Agent.listCaps")(function* (
 			.innerJoin(Db.spaces, eq(Db.spaceMembers.spaceId, Db.spaces.id))
 			.where(
 				and(
-					eq(Db.spaceMembers.userId, principal.id),
+					and(
+						eq(Db.spaceMembers.userId, principal.id),
+						directorySpaceAccessAllowed(principal.id, Db.spaceMembers.spaceId),
+					),
 					organizationId
 						? eq(Db.spaces.organizationId, organizationId)
 						: undefined,
@@ -770,6 +786,7 @@ const listCaps = Effect.fn("Agent.listCaps")(function* (
 				)
 			: undefined;
 		const filters = [
+			directoryAccessAllowed(principal.id, Db.videos.orgId),
 			params.scope === "shared"
 				? ne(Db.videos.ownerId, principal.id)
 				: undefined,
@@ -1985,7 +2002,10 @@ const queueAgentCapOperation = Effect.fn("Agent.queueCapOperation")(
 					.where(
 						and(
 							eq(Db.videos.id, input.videoId),
-							eq(Db.videos.ownerId, principal.id),
+							and(
+								eq(Db.videos.ownerId, principal.id),
+								directoryAccessAllowed(principal.id, Db.videos.orgId),
+							),
 						),
 					)
 					.limit(1)
@@ -2055,7 +2075,10 @@ const queueAgentOrganizationDelete = Effect.fn("Agent.queueOrganizationDelete")(
 					.where(
 						and(
 							eq(Db.organizations.id, organizationId),
-							eq(Db.organizations.ownerId, principal.id),
+							and(
+								eq(Db.organizations.ownerId, principal.id),
+								directoryAccessAllowed(principal.id, Db.organizations.id),
+							),
 							isNull(Db.organizations.tombstoneAt),
 						),
 					)
@@ -2132,7 +2155,13 @@ const queueAgentOrganizationDomain = Effect.fn("Agent.queueOrganizationDomain")(
 						.where(
 							and(
 								eq(Db.organizationMembers.organizationId, input.organizationId),
-								eq(Db.organizationMembers.userId, principal.id),
+								and(
+									eq(Db.organizationMembers.userId, principal.id),
+									directoryAccessAllowed(
+										principal.id,
+										Db.organizationMembers.organizationId,
+									),
+								),
 							),
 						)
 						.limit(1),
@@ -5310,6 +5339,17 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 									.limit(1)
 									.for("update");
 								if (!organization || !member) return { state: "not_found" };
+								const [directoryMember] = await tx
+									.select({ id: Db.directoryUsers.id })
+									.from(Db.directoryUsers)
+									.where(
+										and(
+											eq(Db.directoryUsers.organizationId, path.organizationId),
+											eq(Db.directoryUsers.userId, member.userId),
+										),
+									)
+									.limit(1);
+								if (directoryMember) return { state: "forbidden" };
 								const targetRole = getEffectiveOrganizationRole({
 									userId: member.userId,
 									ownerId: organization.ownerId,
@@ -5421,7 +5461,13 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 										.from(Db.organizationMembers)
 										.where(
 											and(
-												eq(Db.organizationMembers.userId, principal.id),
+												and(
+													eq(Db.organizationMembers.userId, principal.id),
+													directoryAccessAllowed(
+														principal.id,
+														Db.organizationMembers.organizationId,
+													),
+												),
 												eq(
 													Db.organizationMembers.organizationId,
 													payload.defaultOrganizationId,
@@ -6757,7 +6803,10 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 										.where(
 											and(
 												eq(Db.videos.id, path.id),
-												eq(Db.videos.ownerId, principal.id),
+												and(
+													eq(Db.videos.ownerId, principal.id),
+													directoryAccessAllowed(principal.id, Db.videos.orgId),
+												),
 											),
 										)
 										.limit(1)
@@ -6845,7 +6894,13 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 											.where(
 												and(
 													eq(Db.videos.id, path.id),
-													eq(Db.videos.ownerId, principal.id),
+													and(
+														eq(Db.videos.ownerId, principal.id),
+														directoryAccessAllowed(
+															principal.id,
+															Db.videos.orgId,
+														),
+													),
 												),
 											);
 										await tx
@@ -7062,7 +7117,10 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 									.where(
 										and(
 											eq(Db.videos.id, path.id),
-											eq(Db.videos.ownerId, principal.id),
+											and(
+												eq(Db.videos.ownerId, principal.id),
+												directoryAccessAllowed(principal.id, Db.videos.orgId),
+											),
 										),
 									)
 									.limit(1)
@@ -7187,7 +7245,10 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 									.where(
 										and(
 											eq(Db.videos.id, path.id),
-											eq(Db.videos.ownerId, principal.id),
+											and(
+												eq(Db.videos.ownerId, principal.id),
+												directoryAccessAllowed(principal.id, Db.videos.orgId),
+											),
 										),
 									)
 									.limit(1)
@@ -7338,7 +7399,10 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 									.where(
 										and(
 											eq(Db.videos.id, path.id),
-											eq(Db.videos.ownerId, principal.id),
+											and(
+												eq(Db.videos.ownerId, principal.id),
+												directoryAccessAllowed(principal.id, Db.videos.orgId),
+											),
 										),
 									)
 									.limit(1)
@@ -7435,7 +7499,10 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 									.where(
 										and(
 											eq(Db.videos.id, path.id),
-											eq(Db.videos.ownerId, principal.id),
+											and(
+												eq(Db.videos.ownerId, principal.id),
+												directoryAccessAllowed(principal.id, Db.videos.orgId),
+											),
 										),
 									)
 									.limit(1)
@@ -7526,7 +7593,10 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 									.where(
 										and(
 											eq(Db.videos.id, path.id),
-											eq(Db.videos.ownerId, principal.id),
+											and(
+												eq(Db.videos.ownerId, principal.id),
+												directoryAccessAllowed(principal.id, Db.videos.orgId),
+											),
 										),
 									)
 									.limit(1)
@@ -7584,7 +7654,10 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 									.where(
 										and(
 											eq(Db.videos.id, path.id),
-											eq(Db.videos.ownerId, principal.id),
+											and(
+												eq(Db.videos.ownerId, principal.id),
+												directoryAccessAllowed(principal.id, Db.videos.orgId),
+											),
 										),
 									)
 									.limit(1)
@@ -7706,7 +7779,10 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 									.where(
 										and(
 											eq(Db.videos.id, path.id),
-											eq(Db.videos.ownerId, principal.id),
+											and(
+												eq(Db.videos.ownerId, principal.id),
+												directoryAccessAllowed(principal.id, Db.videos.orgId),
+											),
 										),
 									)
 									.limit(1)
@@ -7723,7 +7799,13 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 												payload.container === "personal"
 													? and(
 															isNull(Db.folders.spaceId),
-															eq(Db.folders.createdById, principal.id),
+															and(
+																eq(Db.folders.createdById, principal.id),
+																directoryAccessAllowed(
+																	principal.id,
+																	Db.folders.organizationId,
+																),
+															),
 														)
 													: eq(
 															Db.folders.spaceId,
@@ -7746,7 +7828,10 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 										.where(
 											and(
 												eq(Db.videos.id, path.id),
-												eq(Db.videos.ownerId, principal.id),
+												and(
+													eq(Db.videos.ownerId, principal.id),
+													directoryAccessAllowed(principal.id, Db.videos.orgId),
+												),
 											),
 										);
 								} else if (payload.container === "organization") {
@@ -7832,7 +7917,10 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 										.where(
 											and(
 												eq(Db.videos.id, path.id),
-												eq(Db.videos.ownerId, principal.id),
+												and(
+													eq(Db.videos.ownerId, principal.id),
+													directoryAccessAllowed(principal.id, Db.videos.orgId),
+												),
 											),
 										)
 										.limit(1),
@@ -7841,7 +7929,13 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 										.from(Db.organizationMembers)
 										.where(
 											and(
-												eq(Db.organizationMembers.userId, principal.id),
+												and(
+													eq(Db.organizationMembers.userId, principal.id),
+													directoryAccessAllowed(
+														principal.id,
+														Db.organizationMembers.organizationId,
+													),
+												),
 												eq(
 													Db.organizationMembers.organizationId,
 													path.organizationId,
@@ -7931,7 +8025,10 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 									.where(
 										and(
 											eq(Db.videos.id, path.id),
-											eq(Db.videos.ownerId, principal.id),
+											and(
+												eq(Db.videos.ownerId, principal.id),
+												directoryAccessAllowed(principal.id, Db.videos.orgId),
+											),
 										),
 									)
 									.limit(1);
@@ -7982,7 +8079,10 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 									.where(
 										and(
 											eq(Db.videos.id, path.id),
-											eq(Db.videos.ownerId, principal.id),
+											and(
+												eq(Db.videos.ownerId, principal.id),
+												directoryAccessAllowed(principal.id, Db.videos.orgId),
+											),
 										),
 									)
 									.limit(1);
@@ -8065,7 +8165,10 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 									.where(
 										and(
 											eq(Db.videos.id, path.id),
-											eq(Db.videos.ownerId, principal.id),
+											and(
+												eq(Db.videos.ownerId, principal.id),
+												directoryAccessAllowed(principal.id, Db.videos.orgId),
+											),
 										),
 									)
 									.limit(1);
@@ -8401,7 +8504,10 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 										.where(
 											and(
 												inArray(Db.videos.folderId, folderIds),
-												eq(Db.videos.ownerId, principal.id),
+												and(
+													eq(Db.videos.ownerId, principal.id),
+													directoryAccessAllowed(principal.id, Db.videos.orgId),
+												),
 											),
 										);
 								} else if (folder.spaceId === folder.organizationId) {

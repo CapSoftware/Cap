@@ -2,6 +2,10 @@ import crypto from "node:crypto";
 import { authOptions } from "@cap/database/auth/auth-options";
 import { isEmailAllowedForSignup } from "@cap/database/auth/domain-utils";
 import { hashPassword } from "@cap/database/crypto";
+import {
+	directoryAccessAllowed,
+	directorySpaceAccessAllowed,
+} from "@cap/database/directory-sync/access";
 import { sendEmail } from "@cap/database/emails/config";
 import { OTPEmail } from "@cap/database/emails/otp-email";
 import { nanoId } from "@cap/database/helpers";
@@ -711,15 +715,30 @@ const getAccessibleOrganizations = Effect.fn(
 				Db.organizationMembers,
 				and(
 					eq(Db.organizationMembers.organizationId, Db.organizations.id),
-					eq(Db.organizationMembers.userId, userId),
+					and(
+						eq(Db.organizationMembers.userId, userId),
+						directoryAccessAllowed(
+							userId,
+							Db.organizationMembers.organizationId,
+						),
+					),
 				),
 			)
 			.where(
 				and(
 					isNull(Db.organizations.tombstoneAt),
 					or(
-						eq(Db.organizations.ownerId, userId),
-						eq(Db.organizationMembers.userId, userId),
+						and(
+							eq(Db.organizations.ownerId, userId),
+							directoryAccessAllowed(userId, Db.organizations.id),
+						),
+						and(
+							eq(Db.organizationMembers.userId, userId),
+							directoryAccessAllowed(
+								userId,
+								Db.organizationMembers.organizationId,
+							),
+						),
 					),
 				),
 			),
@@ -758,7 +777,10 @@ const getAccessibleSpaces = Effect.fn("Mobile.getAccessibleSpaces")(function* (
 			.where(
 				and(
 					eq(Db.spaceMembers.spaceId, Db.spaces.id),
-					eq(Db.spaceMembers.userId, user.id),
+					and(
+						eq(Db.spaceMembers.userId, user.id),
+						directorySpaceAccessAllowed(user.id, Db.spaceMembers.spaceId),
+					),
 				),
 			)
 			.limit(1);
@@ -779,7 +801,10 @@ const getAccessibleSpaces = Effect.fn("Mobile.getAccessibleSpaces")(function* (
 				and(
 					eq(Db.spaces.organizationId, organization.id),
 					or(
-						eq(Db.spaces.createdById, user.id),
+						and(
+							eq(Db.spaces.createdById, user.id),
+							directoryAccessAllowed(user.id, Db.spaces.organizationId),
+						),
 						eq(Db.spaces.privacy, "Public"),
 						exists(membership),
 					),
@@ -837,7 +862,13 @@ const getSelectedSpace = Effect.fn("Mobile.getSelectedSpace")(function* (
 				Db.organizationMembers,
 				and(
 					eq(Db.organizationMembers.organizationId, Db.organizations.id),
-					eq(Db.organizationMembers.userId, user.id),
+					and(
+						eq(Db.organizationMembers.userId, user.id),
+						directoryAccessAllowed(
+							user.id,
+							Db.organizationMembers.organizationId,
+						),
+					),
 				),
 			)
 			.where(
@@ -845,8 +876,17 @@ const getSelectedSpace = Effect.fn("Mobile.getSelectedSpace")(function* (
 					eq(Db.organizations.id, user.activeOrganizationId),
 					isNull(Db.organizations.tombstoneAt),
 					or(
-						eq(Db.organizations.ownerId, user.id),
-						eq(Db.organizationMembers.userId, user.id),
+						and(
+							eq(Db.organizations.ownerId, user.id),
+							directoryAccessAllowed(user.id, Db.organizations.id),
+						),
+						and(
+							eq(Db.organizationMembers.userId, user.id),
+							directoryAccessAllowed(
+								user.id,
+								Db.organizationMembers.organizationId,
+							),
+						),
 					),
 				),
 			)
@@ -880,7 +920,10 @@ const getSelectedSpace = Effect.fn("Mobile.getSelectedSpace")(function* (
 			.where(
 				and(
 					eq(Db.spaceMembers.spaceId, Db.spaces.id),
-					eq(Db.spaceMembers.userId, user.id),
+					and(
+						eq(Db.spaceMembers.userId, user.id),
+						directorySpaceAccessAllowed(user.id, Db.spaceMembers.spaceId),
+					),
 				),
 			)
 			.limit(1);
@@ -902,7 +945,10 @@ const getSelectedSpace = Effect.fn("Mobile.getSelectedSpace")(function* (
 					eq(Db.spaces.id, selectedSpaceId),
 					eq(Db.spaces.organizationId, organization.id),
 					or(
-						eq(Db.spaces.createdById, user.id),
+						and(
+							eq(Db.spaces.createdById, user.id),
+							directoryAccessAllowed(user.id, Db.spaces.organizationId),
+						),
 						eq(Db.spaces.privacy, "Public"),
 						exists(membership),
 					),
@@ -940,7 +986,10 @@ const getRootFolders = Effect.fn("Mobile.getRootFolders")(function* (
 			.where(
 				and(
 					eq(Db.videos.folderId, Db.folders.id),
-					eq(Db.videos.ownerId, user.id),
+					and(
+						eq(Db.videos.ownerId, user.id),
+						directoryAccessAllowed(user.id, Db.videos.orgId),
+					),
 					eq(Db.videos.orgId, organizationId),
 				),
 			);
@@ -957,7 +1006,10 @@ const getRootFolders = Effect.fn("Mobile.getRootFolders")(function* (
 			.where(
 				and(
 					eq(Db.folders.organizationId, organizationId),
-					eq(Db.folders.createdById, user.id),
+					and(
+						eq(Db.folders.createdById, user.id),
+						directoryAccessAllowed(user.id, Db.folders.organizationId),
+					),
 					isNull(Db.folders.parentId),
 					isNull(Db.folders.spaceId),
 				),
@@ -1027,7 +1079,13 @@ const hasOrganizationAccess = Effect.fn("Mobile.hasOrganizationAccess")(
 					Db.organizationMembers,
 					and(
 						eq(Db.organizationMembers.organizationId, Db.organizations.id),
-						eq(Db.organizationMembers.userId, user.id),
+						and(
+							eq(Db.organizationMembers.userId, user.id),
+							directoryAccessAllowed(
+								user.id,
+								Db.organizationMembers.organizationId,
+							),
+						),
 					),
 				)
 				.where(
@@ -1035,8 +1093,17 @@ const hasOrganizationAccess = Effect.fn("Mobile.hasOrganizationAccess")(
 						eq(Db.organizations.id, organizationId),
 						isNull(Db.organizations.tombstoneAt),
 						or(
-							eq(Db.organizations.ownerId, user.id),
-							eq(Db.organizationMembers.userId, user.id),
+							and(
+								eq(Db.organizations.ownerId, user.id),
+								directoryAccessAllowed(user.id, Db.organizations.id),
+							),
+							and(
+								eq(Db.organizationMembers.userId, user.id),
+								directoryAccessAllowed(
+									user.id,
+									Db.organizationMembers.organizationId,
+								),
+							),
 						),
 					),
 				)
@@ -1077,7 +1144,13 @@ const getOrganizationSettings = Effect.fn("Mobile.getOrganizationSettings")(
 					Db.organizationMembers,
 					and(
 						eq(Db.organizationMembers.organizationId, Db.organizations.id),
-						eq(Db.organizationMembers.userId, user.id),
+						and(
+							eq(Db.organizationMembers.userId, user.id),
+							directoryAccessAllowed(
+								user.id,
+								Db.organizationMembers.organizationId,
+							),
+						),
 					),
 				)
 				.where(
@@ -1085,8 +1158,17 @@ const getOrganizationSettings = Effect.fn("Mobile.getOrganizationSettings")(
 						eq(Db.organizations.id, user.activeOrganizationId),
 						isNull(Db.organizations.tombstoneAt),
 						or(
-							eq(Db.organizations.ownerId, user.id),
-							eq(Db.organizationMembers.userId, user.id),
+							and(
+								eq(Db.organizations.ownerId, user.id),
+								directoryAccessAllowed(user.id, Db.organizations.id),
+							),
+							and(
+								eq(Db.organizationMembers.userId, user.id),
+								directoryAccessAllowed(
+									user.id,
+									Db.organizationMembers.organizationId,
+								),
+							),
 						),
 					),
 				)
@@ -1383,7 +1465,11 @@ const getCapLocations = Effect.fn("Mobile.getCapLocations")(function* ({
 			? eq(Db.videos.folderId, folderId)
 			: isNull(Db.videos.folderId);
 		const collectionWhereClause = and(
-			eq(Db.videos.ownerId, user.id),
+			directoryAccessAllowed(user.id, Db.videos.orgId),
+			and(
+				eq(Db.videos.ownerId, user.id),
+				directoryAccessAllowed(user.id, Db.videos.orgId),
+			),
 			eq(Db.videos.orgId, user.activeOrganizationId),
 			isNull(Db.organizations.tombstoneAt),
 		);
@@ -1425,6 +1511,7 @@ const getCapLocations = Effect.fn("Mobile.getCapLocations")(function* ({
 			? eq(Db.sharedVideos.folderId, folderId)
 			: isNull(Db.sharedVideos.folderId);
 		const collectionWhereClause = and(
+			directoryAccessAllowed(user.id, Db.videos.orgId),
 			eq(Db.sharedVideos.organizationId, user.activeOrganizationId),
 			isNull(Db.organizations.tombstoneAt),
 		);
@@ -1473,6 +1560,7 @@ const getCapLocations = Effect.fn("Mobile.getCapLocations")(function* ({
 		? eq(Db.spaceVideos.folderId, folderId)
 		: isNull(Db.spaceVideos.folderId);
 	const collectionWhereClause = and(
+		directoryAccessAllowed(user.id, Db.videos.orgId),
 		eq(Db.spaceVideos.spaceId, space.id),
 		isNull(Db.organizations.tombstoneAt),
 	);
@@ -1700,7 +1788,15 @@ const getCapStatuses = Effect.fn("Mobile.getCapStatuses")(function* (
 			})
 			.from(Db.videos)
 			.leftJoin(Db.videoUploads, eq(Db.videos.id, Db.videoUploads.videoId))
-			.where(and(eq(Db.videos.ownerId, user.id), inArray(Db.videos.id, ids))),
+			.where(
+				and(
+					and(
+						eq(Db.videos.ownerId, user.id),
+						directoryAccessAllowed(user.id, Db.videos.orgId),
+					),
+					inArray(Db.videos.id, ids),
+				),
+			),
 	);
 
 	return {
@@ -1797,7 +1893,10 @@ const assertMobileVideoAccess = Effect.fn("Mobile.assertVideoAccess")(
 				.where(
 					and(
 						eq(Db.spaceMembers.spaceId, Db.spaces.id),
-						eq(Db.spaceMembers.userId, user.id),
+						and(
+							eq(Db.spaceMembers.userId, user.id),
+							directorySpaceAccessAllowed(user.id, Db.spaceMembers.spaceId),
+						),
 					),
 				);
 			const sharedWithAccessibleSpace = db
@@ -1809,7 +1908,10 @@ const assertMobileVideoAccess = Effect.fn("Mobile.assertVideoAccess")(
 						eq(Db.spaceVideos.videoId, Db.videos.id),
 						eq(Db.spaces.organizationId, user.activeOrganizationId),
 						or(
-							eq(Db.spaces.createdById, user.id),
+							and(
+								eq(Db.spaces.createdById, user.id),
+								directoryAccessAllowed(user.id, Db.spaces.organizationId),
+							),
 							eq(Db.spaces.privacy, "Public"),
 							exists(spaceMembership),
 						),
@@ -1833,7 +1935,12 @@ const assertMobileVideoAccess = Effect.fn("Mobile.assertVideoAccess")(
 				})
 				.from(Db.videos)
 				.leftJoin(Db.users, eq(Db.videos.ownerId, Db.users.id))
-				.where(eq(Db.videos.id, videoId))
+				.where(
+					and(
+						eq(Db.videos.id, videoId),
+						directoryAccessAllowed(user.id, Db.videos.orgId),
+					),
+				)
 				.limit(1);
 		});
 
@@ -2216,7 +2323,15 @@ const getCapAnalytics = Effect.fn("Mobile.getCapAnalytics")(function* (
 		db
 			.select({ name: Db.videos.name, orgId: Db.videos.orgId })
 			.from(Db.videos)
-			.where(and(eq(Db.videos.id, videoId), eq(Db.videos.ownerId, user.id)))
+			.where(
+				and(
+					eq(Db.videos.id, videoId),
+					and(
+						eq(Db.videos.ownerId, user.id),
+						directoryAccessAllowed(user.id, Db.videos.orgId),
+					),
+				),
+			)
 			.limit(1),
 	);
 	if (!video) return yield* Effect.fail(new HttpApiError.NotFound());
@@ -2462,7 +2577,10 @@ const createUpload = Effect.fn("Mobile.createUpload")(function* (
 					and(
 						eq(Db.folders.id, folderId),
 						eq(Db.folders.organizationId, organizationId),
-						eq(Db.folders.createdById, user.id),
+						and(
+							eq(Db.folders.createdById, user.id),
+							directoryAccessAllowed(user.id, Db.folders.organizationId),
+						),
 						isNull(Db.folders.spaceId),
 					),
 				),
@@ -2557,7 +2675,10 @@ const createRecording = Effect.fn("Mobile.createRecording")(function* (
 					and(
 						eq(Db.folders.id, folderId),
 						eq(Db.folders.organizationId, organizationId),
-						eq(Db.folders.createdById, user.id),
+						and(
+							eq(Db.folders.createdById, user.id),
+							directoryAccessAllowed(user.id, Db.folders.organizationId),
+						),
 						isNull(Db.folders.spaceId),
 					),
 				),
@@ -2735,7 +2856,15 @@ const completeRecording = Effect.fn("Mobile.completeRecording")(function* (
 		await db
 			.update(Db.videos)
 			.set({ duration: input.durationSeconds })
-			.where(and(eq(Db.videos.id, video.id), eq(Db.videos.ownerId, user.id)));
+			.where(
+				and(
+					eq(Db.videos.id, video.id),
+					and(
+						eq(Db.videos.ownerId, user.id),
+						directoryAccessAllowed(user.id, Db.videos.orgId),
+					),
+				),
+			);
 		await db
 			.update(Db.videoUploads)
 			.set({
@@ -2918,7 +3047,10 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 										.where(
 											and(
 												eq(Db.videos.id, path.id),
-												eq(Db.videos.ownerId, user.id),
+												and(
+													eq(Db.videos.ownerId, user.id),
+													directoryAccessAllowed(user.id, Db.videos.orgId),
+												),
 											),
 										),
 								);
@@ -2948,7 +3080,10 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 										.where(
 											and(
 												eq(Db.videos.id, path.id),
-												eq(Db.videos.ownerId, user.id),
+												and(
+													eq(Db.videos.ownerId, user.id),
+													directoryAccessAllowed(user.id, Db.videos.orgId),
+												),
 											),
 										),
 								);
@@ -2986,7 +3121,10 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 										.where(
 											and(
 												eq(Db.videos.id, path.id),
-												eq(Db.videos.ownerId, user.id),
+												and(
+													eq(Db.videos.ownerId, user.id),
+													directoryAccessAllowed(user.id, Db.videos.orgId),
+												),
 											),
 										),
 								);
@@ -3119,7 +3257,10 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 										.where(
 											and(
 												eq(Db.videos.id, path.id),
-												eq(Db.videos.ownerId, user.id),
+												and(
+													eq(Db.videos.ownerId, user.id),
+													directoryAccessAllowed(user.id, Db.videos.orgId),
+												),
 											),
 										),
 								);
@@ -3151,7 +3292,10 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 										.where(
 											and(
 												eq(Db.videos.id, path.id),
-												eq(Db.videos.ownerId, user.id),
+												and(
+													eq(Db.videos.ownerId, user.id),
+													directoryAccessAllowed(user.id, Db.videos.orgId),
+												),
 											),
 										),
 								);

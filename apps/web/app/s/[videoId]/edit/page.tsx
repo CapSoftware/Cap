@@ -1,5 +1,6 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { hasDirectoryAccess } from "@cap/database/directory-sync/access";
 import { videoEdits, videos, videoUploads } from "@cap/database/schema";
 import { userIsPro } from "@cap/utils";
 import { Video } from "@cap/web-domain";
@@ -32,6 +33,7 @@ export default async function EditVideoPage(props: {
 			id: videos.id,
 			name: videos.name,
 			ownerId: videos.ownerId,
+			orgId: videos.orgId,
 			duration: videos.duration,
 			width: videos.width,
 			height: videos.height,
@@ -49,6 +51,7 @@ export default async function EditVideoPage(props: {
 	if (
 		!video ||
 		video.ownerId !== user.id ||
+		!(await hasDirectoryAccess(user.id, video.orgId)) ||
 		video.isScreenshot ||
 		!isMp4BackedVideo(video.source) ||
 		!video.duration ||

@@ -114,3 +114,9 @@ describe("signed upload metadata", () => {
 		expect(mocks.updateWhere).toHaveBeenCalledTimes(1);
 	});
 });
+
+vi.mock("@cap/database/directory-sync/access", () => ({
+	directoryAccessAllowed: () => undefined,
+	directorySpaceAccessAllowed: () => undefined,
+	hasDirectoryAccess: async () => true,
+}));

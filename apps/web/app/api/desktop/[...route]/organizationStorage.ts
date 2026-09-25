@@ -1,4 +1,5 @@
 import { db } from "@cap/database";
+import { directoryAccessAllowed } from "@cap/database/directory-sync/access";
 import {
 	organizationMembers,
 	organizations,
@@ -32,7 +33,10 @@ export const getAccessibleOrganization = async (
 			organizationMembers,
 			and(
 				eq(organizationMembers.organizationId, organizations.id),
-				eq(organizationMembers.userId, userId),
+				and(
+					eq(organizationMembers.userId, userId),
+					directoryAccessAllowed(userId, organizationMembers.organizationId),
+				),
 			),
 		)
 		.where(
@@ -40,8 +44,14 @@ export const getAccessibleOrganization = async (
 				eq(organizations.id, organizationId),
 				isNull(organizations.tombstoneAt),
 				or(
-					eq(organizations.ownerId, userId),
-					eq(organizationMembers.userId, userId),
+					and(
+						eq(organizations.ownerId, userId),
+						directoryAccessAllowed(userId, organizations.id),
+					),
+					and(
+						eq(organizationMembers.userId, userId),
+						directoryAccessAllowed(userId, organizationMembers.organizationId),
+					),
 				),
 			),
 		)

@@ -1,3 +1,4 @@
+import { directorySpaceAccessAllowed } from "@cap/database/directory-sync/access";
 import * as Db from "@cap/database/schema";
 import type { Space, User, Video } from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
@@ -22,7 +23,13 @@ export class SpacesRepo extends Effect.Service<SpacesRepo>()("SpacesRepo", {
 							)
 							.where(
 								Dz.and(
-									Dz.eq(Db.spaceMembers.userId, userId),
+									Dz.and(
+										Dz.eq(Db.spaceMembers.userId, userId),
+										directorySpaceAccessAllowed(
+											userId,
+											Db.spaceMembers.spaceId,
+										),
+									),
 									Dz.eq(Db.spaceVideos.videoId, videoId),
 								),
 							),
@@ -56,7 +63,13 @@ export class SpacesRepo extends Effect.Service<SpacesRepo>()("SpacesRepo", {
 							.from(Db.spaceMembers)
 							.where(
 								Dz.and(
-									Dz.eq(Db.spaceMembers.userId, userId),
+									Dz.and(
+										Dz.eq(Db.spaceMembers.userId, userId),
+										directorySpaceAccessAllowed(
+											userId,
+											Db.spaceMembers.spaceId,
+										),
+									),
 									Dz.eq(Db.spaceMembers.spaceId, spaceId),
 								),
 							),

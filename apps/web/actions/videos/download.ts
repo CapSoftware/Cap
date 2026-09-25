@@ -2,6 +2,7 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { hasDirectoryAccess } from "@cap/database/directory-sync/access";
 import { videoEdits, videos, videoUploads } from "@cap/database/schema";
 import { Storage } from "@cap/web-backend";
 import type { Video } from "@cap/web-domain";
@@ -42,7 +43,10 @@ export async function downloadVideo(videoId: Video.VideoId) {
 		throw new Error("Video not found");
 	}
 
-	if (video.ownerId !== userId) {
+	if (
+		video.ownerId !== userId ||
+		!(await hasDirectoryAccess(userId, video.orgId))
+	) {
 		throw new Error("You don't have permission to download this video");
 	}
 

@@ -2,6 +2,7 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { directoryAccessAllowed } from "@cap/database/directory-sync/access";
 import { sendEmail } from "@cap/database/emails/config";
 import { VideoViewerInvite } from "@cap/database/emails/video-viewer-invite";
 import { nanoId } from "@cap/database/helpers";
@@ -20,7 +21,12 @@ async function getOwnedVideo(videoId: Video.VideoId) {
 	const [video] = await db()
 		.select({ id: videos.id, name: videos.name, ownerId: videos.ownerId })
 		.from(videos)
-		.where(eq(videos.id, videoId))
+		.where(
+			and(
+				eq(videos.id, videoId),
+				directoryAccessAllowed(user.id, videos.orgId),
+			),
+		)
 		.limit(1);
 
 	if (!video || video.ownerId !== user.id) throw new Error("Unauthorized");
