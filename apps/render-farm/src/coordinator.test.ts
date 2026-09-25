@@ -251,25 +251,25 @@ function heartbeat(worker: string, taskId: string, attempt: number) {
 }
 
 describe("coordinator recovery", () => {
-	test("dispatch waits for its reservation, resume preserves original and hedge ranges", async () => {
+	test("a later dispatch waits for its reservation, resume preserves original and hedge ranges", async () => {
 		const h = harness();
 		const j = job();
 		const original = videoState(j);
 		await h.journalJob(j);
+		await h.dispatchedTask(j, original);
+		const hedge = videoState(j, true);
 		const gate = Promise.withResolvers<void>();
 		h.gate(gate.promise);
 		let sent = false;
-		const first = h.dispatchedTask(j, original).then((task) => {
+		const second = h.dispatchedTask(j, hedge).then((task) => {
 			sent = true;
 			return task;
 		});
 		await Promise.resolve();
 		expect(sent).toBe(false);
 		gate.resolve();
-		await first;
+		await second;
 		h.gate();
-		const hedge = videoState(j, true);
-		await h.dispatchedTask(j, hedge);
 		await h.resumeJobs();
 		const resumed = h.jobs.get(j.id) as Job;
 		expect(resumed.chunks[0]?.dispatches).toBe(2);
@@ -278,6 +278,25 @@ describe("coordinator recovery", () => {
 		expect(resumed.tasks.get(hedge.task.taskId)?.state).toBe("running");
 		const next = await h.dispatchedTask(resumed, original);
 		expect(next.kind === "video" && next.upload.firstPart).toBe(22);
+	});
+
+	test("a first dispatch writes nothing, stays retired after resume and any worker can re-attach it", async () => {
+		const h = harness();
+		const j = job();
+		const original = videoState(j);
+		await h.journalJob(j);
+		const writes = h.objects.size;
+		const first = await h.dispatchedTask(j, original);
+		expect(first.kind === "video" ? first.upload.firstPart : -1).toBe(
+			j.chunks[0]?.firstPart ?? 0,
+		);
+		expect(h.objects.size).toBe(writes);
+		await h.resumeJobs();
+		const resumed = h.jobs.get(j.id) as Job;
+		expect(resumed.chunks[0]?.dispatches).toBe(1);
+		await h.fetch(heartbeat("worker-c", original.task.taskId, 1));
+		expect(resumed.tasks.get(original.task.taskId)?.state).toBe("running");
+		expect(resumed.tasks.get(original.task.taskId)?.worker).toBe("worker-c");
 	});
 
 	test("a stale heartbeat cannot adopt a reserved newer attempt", async () => {

@@ -1148,6 +1148,22 @@ async function resumeJobs() {
 					if (original) original.duplicated = true;
 				}
 			}
+			for (const chunk of job.chunks) {
+				chunk.dispatches = Math.max(chunk.dispatches, 1);
+			}
+			// A first dispatch has no reservation of its own: any worker still
+			// rendering it may re-attach it as attempt 1.
+			for (const state of job.tasks.values()) {
+				if (
+					state.task.kind === "video" &&
+					state.state === "queued" &&
+					!state.duplicateOf &&
+					!state.reattach
+				) {
+					state.attempts = 1;
+					state.reattach = true;
+				}
+			}
 			if (job.hls) {
 				job.hls.audioExtradata = job.audioSections
 					.values()
@@ -1233,6 +1249,10 @@ async function dispatchedTask(
 		attempt: state.attempts,
 		upload: { ...task.upload, firstPart, partLimit: chunk.partLimit },
 	};
+	// The journaled plan already reserves every chunk's first range (a resumed
+	// coordinator never reuses it), so first dispatches skip this write; it
+	// cost ~1 s of time to first segment on long exports.
+	if (range === 0) return dispatched;
 	await journalPut(
 		journalKey(job.id, `dispatches/${chunk.index}/${range}.json`),
 		JSON.stringify({
@@ -2064,7 +2084,7 @@ Bun.serve({
 					state.heldUntil &&
 					(state.task.kind === "audio" ||
 						(state.reattach &&
-							state.worker === body.worker &&
+							(state.worker === undefined || state.worker === body.worker) &&
 							state.attempts === entry.attempt))
 				) {
 					// Still running from before a coordinator restart: adopt it.
