@@ -113,6 +113,36 @@ try {
 		memberPage.getByText("Private team update", { exact: true }),
 	).toBeVisible();
 	await pause(memberPage);
+	const mobileDetail = await member.request.get(
+		`${origin}/api/mobile/caps/${ids.privateVideo}`,
+		{ headers: { Authorization: `Bearer ${states.memberToken}` } },
+	);
+	expect(mobileDetail.status()).toBe(200);
+	const { cap: mobileCap } = await mobileDetail.json();
+	expect(mobileCap.public).toBe(false);
+	expect(mobileCap.protected).toBe(false);
+	expect(mobileCap.thumbnailUrl).toBeTruthy();
+	const mobileList = await member.request.get(
+		`${origin}/api/mobile/caps?spaceId=${ids.protectedSpace}`,
+		{ headers: { Authorization: `Bearer ${states.memberToken}` } },
+	);
+	expect(mobileList.status()).toBe(200);
+	const { caps: mobileCaps } = await mobileList.json();
+	expect(mobileCaps).toEqual(
+		expect.arrayContaining([
+			expect.objectContaining({
+				id: ids.privateVideo,
+				public: false,
+				protected: false,
+				thumbnailUrl: expect.any(String),
+			}),
+		]),
+	);
+	const mobileDenied = await outsider.request.get(
+		`${origin}/api/mobile/caps/${ids.publicVideo}`,
+		{ headers: { Authorization: `Bearer ${states.outsiderToken}` } },
+	);
+	expect(mobileDenied.status()).toBe(404);
 	const created = await owner.request.get(
 		`${origin}/api/desktop/video/create?recordingMode=desktopMP4&name=New%20organization%20recording&durationInSecs=12&width=1280&height=720`,
 		{ headers: { Authorization: `Bearer ${states.desktopToken}` } },
@@ -214,6 +244,7 @@ try {
 				"sharing controls explain the organization policy",
 				"media and metadata endpoints blocked",
 				"organization member playback",
+				"mobile details and listings reflect the organization policy",
 				"new recording access enforced",
 				"original settings restored",
 			],

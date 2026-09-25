@@ -142,9 +142,10 @@ await database
 		createdById: ownerId,
 		name: "Protected team library",
 		public: true,
+		privacy: "Public",
 		password: "synthetic-unverified-space-password",
 	})
-	.onDuplicateKeyUpdate({ set: { public: true } });
+	.onDuplicateKeyUpdate({ set: { public: true, privacy: "Public" } });
 await database
 	.insert(spaceVideos)
 	.values({
@@ -192,6 +193,11 @@ for (const [key, id, email] of [
 	["member", memberId, "member@example.invalid"],
 	["outsider", outsiderId, "guest@example.invalid"],
 ] as const) {
+	const apiToken = randomUUID();
+	await database
+		.insert(authApiKeys)
+		.values({ id: apiToken, userId: id, source: "unknown" });
+	states[`${key}Token`] = apiToken;
 	const value = await encode({
 		secret,
 		maxAge: 3600,
