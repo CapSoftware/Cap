@@ -25,12 +25,14 @@ describe("public collections policy", () => {
 			kind: "folder" as const,
 			public: true,
 			organizationTombstoneAt: null,
+			organizationVideoVisibility: null,
 			name: "Folder",
 		};
 		const space = {
 			kind: "space" as const,
 			public: true,
 			organizationTombstoneAt: null,
+			organizationVideoVisibility: null,
 			name: "Space",
 		};
 
@@ -42,16 +44,19 @@ describe("public collections policy", () => {
 			kind: "folder" as const,
 			public: false,
 			organizationTombstoneAt: null,
+			organizationVideoVisibility: null,
 		};
 		const tombstonedFolder = {
 			kind: "folder" as const,
 			public: true,
 			organizationTombstoneAt: new Date("2026-01-01T00:00:00.000Z"),
+			organizationVideoVisibility: null,
 		};
 		const space = {
 			kind: "space" as const,
 			public: true,
 			organizationTombstoneAt: null,
+			organizationVideoVisibility: null,
 		};
 
 		expect(resolvePublicCollectionCandidate(privateFolder, space)).toBe(space);
@@ -65,9 +70,35 @@ describe("public collections policy", () => {
 			kind: "space" as const,
 			public: true,
 			organizationTombstoneAt: new Date("2026-01-01T00:00:00.000Z"),
+			organizationVideoVisibility: null,
 		};
 
 		expect(resolvePublicCollectionCandidate(null, space)).toBeNull();
+	});
+
+	it("blocks every public collection in an organization restricted to members", () => {
+		const folder = {
+			kind: "folder" as const,
+			public: true,
+			organizationTombstoneAt: null,
+			organizationVideoVisibility: "members" as const,
+		};
+		const space = {
+			kind: "space" as const,
+			public: true,
+			organizationTombstoneAt: null,
+			organizationVideoVisibility: "members" as const,
+		};
+
+		expect(resolvePublicCollectionCandidate(folder, space)).toBeNull();
+
+		const privateDefaultFolder = {
+			...folder,
+			organizationVideoVisibility: "private" as const,
+		};
+		expect(resolvePublicCollectionCandidate(privateDefaultFolder, null)).toBe(
+			privateDefaultFolder,
+		);
 	});
 
 	it("applies email restrictions before password checks", () => {

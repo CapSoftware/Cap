@@ -10,7 +10,12 @@ const fixtures = vi.hoisted(() => ({
 	user: vi.fn(),
 	sendEmail: vi.fn(),
 	revalidatePath: vi.fn(),
-	video: { id: "video-1", ownerId: "owner-1", name: "Demo" },
+	video: {
+		id: "video-1",
+		ownerId: "owner-1",
+		name: "Demo",
+		organizationVideoVisibility: null as "private" | "members" | null,
+	},
 	grants: [] as string[],
 	revokedEmails: [] as string[],
 	inserted: vi.fn(),
@@ -18,7 +23,16 @@ const fixtures = vi.hoisted(() => ({
 }));
 
 const schema = vi.hoisted(() => ({
-	videos: { id: "videoId", name: "videoName", ownerId: "videoOwnerId" },
+	videos: {
+		id: "videoId",
+		name: "videoName",
+		ownerId: "videoOwnerId",
+		orgId: "videoOrgId",
+	},
+	organizations: {
+		id: "organizationId",
+		defaultVideoVisibility: "organizationDefaultVideoVisibility",
+	},
 	videoViewerGrants: {
 		videoId: "grantVideoId",
 		email: "grantEmail",
@@ -33,7 +47,8 @@ vi.mock("@cap/database", () => ({
 			select: () => ({
 				from: (table: unknown) => {
 					selectedTable = table;
-					return {
+					const query = {
+						leftJoin: () => query,
 						where: () => ({
 							limit: async () =>
 								selectedTable === schema.videos
@@ -47,6 +62,7 @@ vi.mock("@cap/database", () => ({
 							orderBy: async () => fixtures.grants.map((email) => ({ email })),
 						}),
 					};
+					return query;
 				},
 			}),
 			insert: () => ({
@@ -96,6 +112,7 @@ describe("recording viewer invitations", () => {
 		fixtures.grants = [];
 		fixtures.revokedEmails = [];
 		fixtures.video.ownerId = "owner-1";
+		fixtures.video.organizationVideoVisibility = null;
 		fixtures.user.mockResolvedValue({ id: "owner-1" });
 		fixtures.sendEmail.mockResolvedValue({
 			data: { id: "email-1" },
@@ -109,6 +126,16 @@ describe("recording viewer invitations", () => {
 		await expect(
 			inviteVideoViewer(VIDEO_ID, "viewer@example.com"),
 		).rejects.toThrow("Unauthorized");
+		expect(fixtures.inserted).not.toHaveBeenCalled();
+		expect(fixtures.sendEmail).not.toHaveBeenCalled();
+	});
+
+	it("refuses invites while the organization limits recordings to members", async () => {
+		fixtures.video.organizationVideoVisibility = "members";
+
+		await expect(
+			inviteVideoViewer(VIDEO_ID, "viewer@example.com"),
+		).rejects.toThrow("limits recordings to its members");
 		expect(fixtures.inserted).not.toHaveBeenCalled();
 		expect(fixtures.sendEmail).not.toHaveBeenCalled();
 	});

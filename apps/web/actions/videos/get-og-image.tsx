@@ -1,5 +1,5 @@
 import { db } from "@cap/database";
-import { users, videos } from "@cap/database/schema";
+import { organizations, users, videos } from "@cap/database/schema";
 import { findScreenshotObjectKey, Storage } from "@cap/web-backend";
 import { getPublishedRecordingThumbnailKey } from "@cap/web-backend/src/Storage/recording-output";
 import type { Video } from "@cap/web-domain";
@@ -15,10 +15,11 @@ export async function generateVideoOgImage(videoId: Video.VideoId) {
 
 	if (!videoData) return renderVideoOg({ kind: "not-found" });
 
-	const { video, ownerName } = videoData;
+	const { video, ownerName, organizationVideoVisibility } = videoData;
 
 	if (video.password) return renderVideoOg({ kind: "password" });
-	if (video.public === false) return renderVideoOg({ kind: "locked" });
+	if (video.public === false || organizationVideoVisibility === "members")
+		return renderVideoOg({ kind: "locked" });
 
 	let screenshotUrl: string | undefined;
 
@@ -68,9 +69,14 @@ export async function generateVideoOgImage(videoId: Video.VideoId) {
 
 async function getData(videoId: Video.VideoId) {
 	const query = await db()
-		.select({ video: videos, ownerName: users.name })
+		.select({
+			video: videos,
+			ownerName: users.name,
+			organizationVideoVisibility: organizations.defaultVideoVisibility,
+		})
 		.from(videos)
 		.leftJoin(users, eq(videos.ownerId, users.id))
+		.leftJoin(organizations, eq(videos.orgId, organizations.id))
 		.where(eq(videos.id, videoId));
 
 	const result = query[0];

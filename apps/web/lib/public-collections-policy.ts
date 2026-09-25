@@ -8,6 +8,7 @@ export type PublicCollectionCandidate = {
 	kind: PublicCollectionKind;
 	public: boolean;
 	organizationTombstoneAt: Date | null;
+	organizationVideoVisibility: "private" | "members" | null;
 };
 
 export type PublicCollectionAccess =
@@ -45,8 +46,15 @@ export function resolvePublicCollectionCandidate(
 	folder: PublicCollectionCandidate | null,
 	space: PublicCollectionCandidate | null,
 ): PublicCollectionCandidate | null {
-	if (folder?.public && !folder.organizationTombstoneAt) return folder;
-	if (space?.public && !space.organizationTombstoneAt) return space;
+	const isPublished = (collection: PublicCollectionCandidate | null) =>
+		Boolean(
+			collection?.public &&
+				!collection.organizationTombstoneAt &&
+				collection.organizationVideoVisibility !== "members",
+		);
+
+	if (isPublished(folder)) return folder;
+	if (isPublished(space)) return space;
 
 	return null;
 }

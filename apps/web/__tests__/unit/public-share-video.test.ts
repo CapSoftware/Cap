@@ -14,6 +14,7 @@ const candidate = (
 	hasPassword: false,
 	hasInheritedPassword: false,
 	allowedEmailDomain: null,
+	organizationMembersOnly: false,
 	isScreenshot: false,
 	hasActiveUpload: false,
 	sourceType: "desktopMP4",
@@ -35,6 +36,7 @@ describe("public share video eligibility", () => {
 		{ hasPassword: true },
 		{ hasInheritedPassword: true },
 		{ allowedEmailDomain: "@cap.so" },
+		{ organizationMembersOnly: true },
 		{ isScreenshot: true },
 		{ hasActiveUpload: true },
 	])("rejects restricted or non-video candidates", (override) => {

@@ -19,6 +19,7 @@ export type PublicShareVideoCandidate = {
 	hasPassword: boolean;
 	hasInheritedPassword: boolean;
 	allowedEmailDomain: string | null;
+	organizationMembersOnly: boolean;
 	isScreenshot: boolean;
 	hasActiveUpload: boolean;
 	sourceType:
@@ -40,6 +41,7 @@ export type PublicShareVideo = Omit<
 	| "hasPassword"
 	| "hasInheritedPassword"
 	| "allowedEmailDomain"
+	| "organizationMembersOnly"
 	| "isScreenshot"
 	| "hasActiveUpload"
 	| "jobStatus"
@@ -53,6 +55,7 @@ export const isPublicShareVideoCandidateEligible = (
 	!video.hasPassword &&
 	!video.hasInheritedPassword &&
 	(video.allowedEmailDomain?.trim().length ?? 0) === 0 &&
+	!video.organizationMembersOnly &&
 	!video.isScreenshot &&
 	!video.hasActiveUpload &&
 	(video.sourceType !== "MediaConvert" ||
@@ -73,6 +76,10 @@ export async function getPublicShareVideo(
 				Boolean,
 			),
 			allowedEmailDomain: organizations.allowedEmailDomain,
+			organizationMembersOnly:
+				sql<boolean>`${organizations.defaultVideoVisibility} <=> 'members'`.mapWith(
+					Boolean,
+				),
 			isScreenshot: videos.isScreenshot,
 			hasActiveUpload:
 				sql<boolean>`${videoUploads.videoId} IS NOT NULL AND ${videoUploads.phase} <> 'complete'`.mapWith(
