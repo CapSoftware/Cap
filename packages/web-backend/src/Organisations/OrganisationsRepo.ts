@@ -75,12 +75,14 @@ export class OrganisationsRepo extends Effect.Service<OrganisationsRepo>()(
 								})),
 							),
 						),
-				allowedEmailDomain: (orgId: Organisation.OrganisationId) =>
+				viewerRules: (orgId: Organisation.OrganisationId) =>
 					db
 						.use((db) =>
 							db
 								.select({
 									allowedEmailDomain: Db.organizations.allowedEmailDomain,
+									defaultVideoVisibility:
+										Db.organizations.defaultVideoVisibility,
 								})
 								.from(Db.organizations)
 								.where(Dz.eq(Db.organizations.id, orgId))
@@ -88,11 +90,18 @@ export class OrganisationsRepo extends Effect.Service<OrganisationsRepo>()(
 						)
 						.pipe(
 							Effect.map(Array.get(0)),
-							Effect.map(
-								Option.flatMap((row) =>
-									Option.fromNullable(row.allowedEmailDomain?.trim() || null),
+							Effect.map((row) => ({
+								allowedEmailDomain: row.pipe(
+									Option.flatMap((row) =>
+										Option.fromNullable(row.allowedEmailDomain?.trim() || null),
+									),
 								),
-							),
+								membersOnly: row.pipe(
+									Option.exists(
+										(row) => row.defaultVideoVisibility === "members",
+									),
+								),
+							})),
 						),
 			};
 		}),

@@ -48,6 +48,13 @@ describe("new recording visibility", () => {
 		expect(await getNewVideoPublic(ORGANIZATION_ID)).toBe(false);
 	});
 
+	it("starts recordings private while the organization is limited to members", async () => {
+		lookup.limit.mockResolvedValue([
+			{ defaultVideoVisibility: "members", tombstoneAt: null },
+		]);
+		expect(await getNewVideoPublic(ORGANIZATION_ID)).toBe(false);
+	});
+
 	it("rejects a missing or deleted organization", async () => {
 		lookup.limit.mockResolvedValue([]);
 		await expect(getNewVideoPublic(ORGANIZATION_ID)).rejects.toThrow(

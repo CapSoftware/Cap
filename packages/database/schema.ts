@@ -227,7 +227,7 @@ export const organizations = mysqlTable(
 		allowedEmailDomain: varchar("allowedEmailDomain", { length: 255 }),
 		defaultVideoVisibility: varchar("defaultVideoVisibility", {
 			length: 7,
-		}).$type<"private">(),
+		}).$type<"private" | "members">(),
 		customDomain: varchar("customDomain", { length: 255 }),
 		domainVerified: timestamp("domainVerified"),
 		settings: json("settings").$type<{

@@ -52,6 +52,8 @@ function makeDeps(config: {
 	spaceMembership?: boolean;
 	allowedEmailDomain?: Option.Option<string>;
 	viewerGrantEmail?: string;
+	membersOnly?: boolean;
+	organizationMemberIds?: string[];
 }): VideosPolicyDeps {
 	const {
 		video,
@@ -61,6 +63,8 @@ function makeDeps(config: {
 		spaceMembership = false,
 		allowedEmailDomain = Option.none<string>(),
 		viewerGrantEmail,
+		membersOnly = false,
+		organizationMemberIds = [],
 	} = config;
 
 	return {
@@ -74,7 +78,13 @@ function makeDeps(config: {
 		orgsRepo: {
 			membershipForVideo: () =>
 				Effect.succeed(orgMembership ? [{ membershipId: "mem-1" }] : []),
-			allowedEmailDomain: () => Effect.succeed(allowedEmailDomain),
+			membership: (userId) =>
+				Effect.succeed(
+					organizationMemberIds.includes(userId)
+						? Option.some({ membershipId: "org-mem-1" })
+						: Option.none(),
+				),
+			viewerRules: () => Effect.succeed({ allowedEmailDomain, membersOnly }),
 		},
 		spacesRepo: {
 			membershipForVideo: () =>
@@ -136,6 +146,25 @@ function makeUser(
 }
 
 const noUser = Option.none<CurrentUser["Type"]>();
+
+function deniedReason(
+	deps: VideosPolicyDeps,
+	user: Option.Option<CurrentUser["Type"]>,
+): Promise<string | undefined> {
+	const program = buildCanView(deps, TEST_VIDEO_ID).pipe(
+		Effect.as<string | undefined>("allowed"),
+		Effect.catchTag("PolicyDenied", (error) => Effect.succeed(error.reason)),
+	);
+
+	return Effect.runPromise(
+		user.pipe(
+			Option.match({
+				onNone: () => program,
+				onSome: (u) => Effect.provideService(program, CurrentUser, u),
+			}),
+		),
+	);
+}
 
 describe("VideosPolicy.canView", () => {
 	describe("owner access", () => {
@@ -574,6 +603,91 @@ describe("VideosPolicy.canView", () => {
 		});
 	});
 
+	describe("organization limited to members", () => {
+		const MEMBER_ID = "member-1";
+
+		it("lets organization members view public and private videos", async () => {
+			for (const isPublic of [true, false]) {
+				const deps = makeDeps({
+					video: makeVideo({ public: isPublic }),
+					membersOnly: true,
+					organizationMemberIds: [MEMBER_ID],
+				});
+
+				expect(
+					await runCanView(deps, makeUser("member@company.com", MEMBER_ID)),
+				).toBe("allowed");
+			}
+		});
+
+		it("asks anonymous viewers of a public video to sign in", async () => {
+			const deps = makeDeps({
+				video: makeVideo({ public: true }),
+				membersOnly: true,
+			});
+
+			expect(await deniedReason(deps, noUser)).toBe(
+				"organization_members_only_login_required",
+			);
+		});
+
+		it("denies signed-in non-members even with a public link, invite, or shared space", async () => {
+			const deps = makeDeps({
+				video: makeVideo({ public: true }),
+				membersOnly: true,
+				viewerGrantEmail: "guest@partner.com",
+				spaceMembership: true,
+				orgMembership: true,
+			});
+
+			expect(
+				await deniedReason(deps, makeUser("guest@partner.com", "guest-1")),
+			).toBe("organization_members_only");
+		});
+
+		it("denies outsiders even when their email matches the allowed domain", async () => {
+			const deps = makeDeps({
+				video: makeVideo({ public: true }),
+				membersOnly: true,
+				allowedEmailDomain: Option.some("company.com"),
+			});
+
+			expect(await runCanView(deps, makeUser("alice@company.com"))).toBe(
+				"denied",
+			);
+		});
+
+		it("still requires the video password from members", async () => {
+			const deps = makeDeps({
+				video: makeVideo({ public: true }),
+				password: Option.some("video-hash"),
+				membersOnly: true,
+				organizationMemberIds: [MEMBER_ID],
+			});
+			const member = makeUser("member@company.com", MEMBER_ID);
+
+			expect(await runCanView(deps, member)).toBe("password");
+			expect(await runCanView(deps, member, ["video-hash"])).toBe("allowed");
+		});
+
+		it("always lets the owner view", async () => {
+			const deps = makeDeps({
+				video: makeVideo({ public: false }),
+				membersOnly: true,
+			});
+
+			expect(
+				await runCanView(deps, makeUser("owner@anything.com", TEST_OWNER_ID)),
+			).toBe("allowed");
+		});
+
+		it("restores each video's own sharing once the organization turns it off", async () => {
+			const deps = makeDeps({ video: makeVideo({ public: true }) });
+
+			expect(await runCanView(deps, noUser)).toBe("allowed");
+		});
+	});
+
 	describe("video not found", () => {
 		it("allows access when video does not exist", async () => {
 			const deps = makeDeps({ video: null });
@@ -734,6 +848,20 @@ describe("VideosPolicy.canViewLoaded", () => {
 				video: makeVideo(),
 				allowedEmailDomain: Option.some("company.com"),
 			},
+			user: noUser,
+		},
+		{
+			name: "organization member while the organization is limited to members",
+			config: {
+				video: makeVideo({ public: false }),
+				membersOnly: true,
+				organizationMemberIds: ["member-1"],
+			},
+			user: makeUser("member@company.com", "member-1"),
+		},
+		{
+			name: "anonymous viewer while the organization is limited to members",
+			config: { video: makeVideo(), membersOnly: true },
 			user: noUser,
 		},
 		{

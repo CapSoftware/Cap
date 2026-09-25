@@ -37,9 +37,17 @@ export type VideosPolicyDeps = {
 			userId: User.UserId,
 			videoId: Video.VideoId,
 		) => Effect.Effect<readonly { membershipId: string }[], DatabaseError>;
-		allowedEmailDomain: (
+		membership: (
+			userId: User.UserId,
 			orgId: Organisation.OrganisationId,
-		) => Effect.Effect<Option.Option<string>, DatabaseError>;
+		) => Effect.Effect<Option.Option<unknown>, DatabaseError>;
+		viewerRules: (orgId: Organisation.OrganisationId) => Effect.Effect<
+			{
+				allowedEmailDomain: Option.Option<string>;
+				membersOnly: boolean;
+			},
+			DatabaseError
+		>;
 	};
 	spacesRepo: {
 		membershipForVideo: (
@@ -69,11 +77,46 @@ const decideCanView = (
 			if (userId === video.ownerId) return true;
 		}
 
-		const spacePasswords = yield* spacesRepo.passwordsForVideo(video.id);
+		const [spacePasswords, viewerRules] = yield* Effect.all(
+			[
+				spacesRepo.passwordsForVideo(video.id),
+				orgsRepo.viewerRules(video.orgId),
+			],
+			{ concurrency: "unbounded" },
+		);
 		const passwordHashes = collectPasswordHashes({
 			videoPassword: Option.getOrNull(password),
 			spacePasswords: [...spacePasswords],
 		});
+
+		if (viewerRules.membersOnly) {
+			if (Option.isNone(user)) {
+				yield* Effect.log(
+					"Organization restricts videos to members and user not logged in. Access denied.",
+				);
+				return yield* Effect.fail(
+					new Policy.PolicyDeniedError({
+						reason: "organization_members_only_login_required",
+					}),
+				);
+			}
+			const orgMembership = yield* orgsRepo.membership(
+				user.value.id,
+				video.orgId,
+			);
+			if (Option.isNone(orgMembership)) {
+				yield* Effect.log(
+					"Organization restricts videos to members. Access denied.",
+				);
+				return yield* Effect.fail(
+					new Policy.PolicyDeniedError({
+						reason: "organization_members_only",
+					}),
+				);
+			}
+			yield* Video.verifyPasswordCandidates(video, passwordHashes);
+			return true;
+		}
 
 		if (Option.isSome(user)) {
 			const userId = user.value.id;
@@ -114,9 +157,8 @@ const decideCanView = (
 			return true;
 		}
 
-		const allowedEmails = yield* orgsRepo.allowedEmailDomain(video.orgId);
-		const restriction = Option.isSome(allowedEmails)
-			? allowedEmails.value.trim()
+		const restriction = Option.isSome(viewerRules.allowedEmailDomain)
+			? viewerRules.allowedEmailDomain.value.trim()
 			: "";
 
 		if (restriction.length > 0) {

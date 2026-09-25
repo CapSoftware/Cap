@@ -20,6 +20,10 @@ export async function getNewVideoPublic(
 		throw new Error("Organization not found");
 	}
 
-	if (organization.defaultVideoVisibility === "private") return false;
+	if (
+		organization.defaultVideoVisibility === "private" ||
+		organization.defaultVideoVisibility === "members"
+	)
+		return false;
 	return serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC;
 }
