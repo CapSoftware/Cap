@@ -35,7 +35,12 @@ import {
 } from "./recovery";
 import { S3, s3ConfigFromEnv } from "./s3";
 import { pickQueued as pickQueuedTask } from "./scheduler";
-import { validateJobRequest } from "./validate";
+import {
+	AUDIO_FILE,
+	checkManifestBounds,
+	sourceLimitsFromEnv,
+	validateJobRequest,
+} from "./validate";
 
 const s3 = new S3(s3ConfigFromEnv());
 const ENGINE_BIN = process.env.RF_ENGINE_BIN ?? "cap-render-farm";
@@ -380,6 +385,9 @@ async function mp4MetaRanges(key: string, size: number) {
 	let moovStart: number;
 	let moovBytes: Uint8Array;
 	if (location && "start" in location && location.start !== undefined) {
+		if (location.size > SOURCE_LIMITS.moovBytes) {
+			throw new Error(`${key} has a ${location.size} byte moov`);
+		}
 		moovStart = location.start;
 		moovBytes =
 			location.start + location.size <= head.byteLength
@@ -391,6 +399,9 @@ async function mp4MetaRanges(key: string, size: number) {
 					);
 	} else if (location && "next" in location && location.next !== undefined) {
 		// Moov after mdat (Cap's recorder): fetch the tail in one request.
+		if (size - location.next > SOURCE_LIMITS.moovBytes) {
+			throw new Error(`${key} has ${size - location.next} bytes after mdat`);
+		}
 		const tail = await s3.getRange(key, location.next, size - 1);
 		const found = locateMoov(tail, tail.byteLength);
 		if (!found || !("start" in found) || found.start === undefined) {
@@ -446,8 +457,21 @@ const SOURCE_KEY_PREFIXES = (process.env.RF_SOURCE_KEY_PREFIXES ?? "")
 	.split(",")
 	.filter(Boolean);
 
+const SOURCE_LIMITS = sourceLimitsFromEnv(process.env);
+
+/** Reads a small object whole, refusing one over `limit` bytes. */
+async function getBounded(key: string, limit: number) {
+	const bytes = await s3.getRange(key, 0, limit);
+	if (bytes.byteLength > limit) {
+		throw new Error(`${key} is larger than ${limit} bytes`);
+	}
+	return bytes;
+}
+
 /** Manifests name local paths and bucket keys; neither may escape its scope. */
 function checkManifest(manifest: Manifest, prefix: string) {
+	const bounds = checkManifestBounds(manifest, SOURCE_LIMITS);
+	if (bounds) throw new Error(bounds);
 	for (const file of manifest.files) {
 		const parts = file.path.split("/");
 		if (
@@ -472,7 +496,9 @@ async function sourceIndex(prefix: string): Promise<SourceIndex> {
 		process.env.RF_INDEX_CACHE !== "0" ? sourceIndexes.get(prefix) : undefined;
 	if (cached) return cached;
 	const manifest = JSON.parse(
-		new TextDecoder().decode(await s3.get(`${prefix}/manifest.json`)),
+		new TextDecoder().decode(
+			await getBounded(`${prefix}/manifest.json`, SOURCE_LIMITS.metadataBytes),
+		),
 	) as Manifest;
 	checkManifest(manifest, prefix);
 	const keyOf = (file: { path: string; key?: string }) =>
@@ -482,7 +508,9 @@ async function sourceIndex(prefix: string): Promise<SourceIndex> {
 	);
 	if (!metaFile) throw new Error("recording has no recording-meta.json");
 	const recordingMeta = JSON.parse(
-		new TextDecoder().decode(await s3.get(keyOf(metaFile))),
+		new TextDecoder().decode(
+			await getBounded(keyOf(metaFile), SOURCE_LIMITS.metadataBytes),
+		),
 	) as RecordingMeta;
 	const mediaMeta: SourceIndex["mediaMeta"] = new Map();
 	await Promise.all(
@@ -516,7 +544,7 @@ async function planJob(job: Job) {
 		file.path.endsWith(".mp4"),
 	);
 	const audioFiles = manifest.files.filter((file) =>
-		/\.(ogg|m4a|wav|mp3|aac|opus|flac)$/i.test(file.path),
+		AUDIO_FILE.test(file.path),
 	);
 	const smallFiles = manifest.files.filter(
 		(file) => !mediaFiles.includes(file) && !audioFiles.includes(file),
@@ -588,6 +616,11 @@ async function planJob(job: Job) {
 		probe.total_frames = request.frameLimit;
 		probe.total_samples = Math.round(
 			(request.frameLimit * SAMPLE_RATE) / job.fps,
+		);
+	}
+	if (probe.total_frames > job.fps * SOURCE_LIMITS.exportSeconds) {
+		throw new Error(
+			`export is ${Math.round(probe.total_frames / job.fps)} s (limit ${SOURCE_LIMITS.exportSeconds} s)`,
 		);
 	}
 	job.totalFrames = probe.total_frames;

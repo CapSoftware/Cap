@@ -9,7 +9,7 @@ import * as planning from "./planning";
 import * as protocol from "./protocol";
 import * as recovery from "./recovery";
 import { pickQueued } from "./scheduler";
-import { validateJobRequest } from "./validate";
+import * as validate from "./validate";
 
 function harness() {
 	const objects = new Map<string, Uint8Array>();
@@ -53,7 +53,7 @@ function harness() {
 	const deps = {
 		timingSafeEqual,
 		randomUUID,
-		validateJobRequest,
+		...validate,
 		...fmp4,
 		...hls,
 		...mp4,

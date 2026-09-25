@@ -83,6 +83,9 @@ expires `hls/` and `jobs/` objects.
 | `RF_LEAD_IN_SECONDS` | `4` | Length of the lead-in chunk |
 | `RF_JOURNAL` | on | Resume unfinished jobs after a coordinator restart |
 | `RF_MAX_ACTIVE_JOBS` | `32` | Further `POST /jobs` get `429` |
+| `RF_MAX_SOURCE_FILES` / `RF_MAX_SOURCE_BYTES` | `4096` / 256 GiB | Largest recording manifest a job accepts |
+| `RF_MAX_EXPORT_SECONDS` | 4 h | Longest export a job accepts |
+| `RF_SOURCE_KEY_PREFIXES` | none | Shared bucket prefixes a manifest may reference besides its own recording |
 | `RF_JOB_STALL_MS` / `RF_JOB_RETENTION_MS` | 10 min / 1 h | Job watchdog and summary retention |
 | `RF_STALL_MS` | `30000` | Worker engine watchdog |
 | `RF_DRAIN_MS` | 15 min | Longest a `SIGTERM` drain may take |

@@ -77,3 +77,81 @@ export function validateJobRequest(body: unknown): JobRequest | string {
 	}
 	return request as JobRequest;
 }
+
+/** Audio sources: fetched whole for Studio Sound, never byte-range indexed. */
+export const AUDIO_FILE = /\.(ogg|m4a|wav|mp3|aac|opus|flac)$/i;
+
+export type SourceLimits = {
+	/** Largest manifest.json or recording-meta.json read into memory. */
+	metadataBytes: number;
+	files: number;
+	/** Sum of every source file's declared size. */
+	sourceBytes: number;
+	/** Files other than video and audio, which every chunk fetches whole. */
+	sidecarBytes: number;
+	/** An MP4's moov box, or the file tail searched for it. */
+	moovBytes: number;
+	exportSeconds: number;
+};
+
+export function sourceLimitsFromEnv(
+	env: Record<string, string | undefined>,
+): SourceLimits {
+	const read = (name: string, fallback: number) => {
+		const value = Number(env[name]);
+		return Number.isFinite(value) && value > 0 ? value : fallback;
+	};
+	return {
+		metadataBytes: 4 << 20,
+		files: read("RF_MAX_SOURCE_FILES", 4096),
+		sourceBytes: read("RF_MAX_SOURCE_BYTES", 256 * 2 ** 30),
+		sidecarBytes: 64 << 20,
+		moovBytes: 256 << 20,
+		exportSeconds: read("RF_MAX_EXPORT_SECONDS", 4 * 3600),
+	};
+}
+
+/**
+ * Bounds what one recording can make the coordinator and the fleet fetch and
+ * hold. Recordings are uploaded by users, so their manifest is untrusted.
+ */
+export function checkManifestBounds(
+	manifest: unknown,
+	limits: SourceLimits,
+): string | null {
+	const files =
+		manifest && typeof manifest === "object"
+			? (manifest as { files?: unknown }).files
+			: undefined;
+	if (!Array.isArray(files)) return "manifest has no files list";
+	if (files.length > limits.files) {
+		return `manifest lists ${files.length} files (limit ${limits.files})`;
+	}
+	let total = 0;
+	for (const file of files) {
+		if (!file || typeof file !== "object")
+			return "manifest entry is not an object";
+		const { path, key, size } = file as Record<string, unknown>;
+		if (typeof path !== "string" || path.length === 0 || path.length > 1024) {
+			return "manifest paths must be strings of 1 to 1024 characters";
+		}
+		if (key !== undefined && (typeof key !== "string" || key.length > 1024)) {
+			return `manifest key for ${path} must be a string of at most 1024 characters`;
+		}
+		if (typeof size !== "number" || !Number.isSafeInteger(size) || size < 0) {
+			return `manifest size for ${path} must be a non-negative integer`;
+		}
+		if (
+			!path.endsWith(".mp4") &&
+			!AUDIO_FILE.test(path) &&
+			size > limits.sidecarBytes
+		) {
+			return `${path} is ${size} bytes (limit ${limits.sidecarBytes})`;
+		}
+		total += size;
+	}
+	if (total > limits.sourceBytes) {
+		return `recording is ${total} bytes (limit ${limits.sourceBytes})`;
+	}
+	return null;
+}
