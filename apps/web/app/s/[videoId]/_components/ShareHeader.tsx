@@ -826,6 +826,7 @@ export const ShareHeader = ({
 							videoId={data.id}
 							callToAction={data.callToAction ?? null}
 							onSaved={refresh}
+							onUpgradeRequest={() => setUpgradeModalOpen(true)}
 						/>
 					)}
 					{deleteDialogMounted && (
@@ -1132,7 +1133,10 @@ export const ShareHeader = ({
 													<p className="text-sm text-gray-12">Video settings</p>
 												</DropdownMenuItem>
 												<DropdownMenuItem
-													onClick={() => setIsCtaDialogOpen(true)}
+													onClick={() => {
+														if (!data.owner.isPro) setUpgradeModalOpen(true);
+														else setIsCtaDialogOpen(true);
+													}}
 													className="flex items-center gap-2 rounded-lg"
 												>
 													<MousePointer2 className="size-3.5" />
@@ -1141,11 +1145,15 @@ export const ShareHeader = ({
 															? "Edit call to action"
 															: "Add call to action"}
 													</p>
-													{data.callToAction && (
+													{!data.owner.isPro ? (
+														<span className="ml-auto pl-3 text-xs text-gray-10">
+															Pro
+														</span>
+													) : data.callToAction ? (
 														<span className="ml-auto pl-3 text-xs text-gray-10">
 															On
 														</span>
-													)}
+													) : null}
 												</DropdownMenuItem>
 												<DropdownMenuItem
 													onClick={() => {

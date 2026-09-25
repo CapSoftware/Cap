@@ -888,7 +888,9 @@ async function AuthorizedContent({
 		hasInheritedPassword: rules.hasInheritedPassword,
 		inheritedPasswordSources: rules.inheritedPasswordSources,
 		inheritedSpaceSettings: rules.inheritedSettings,
-		callToAction: parseShareCallToAction(video.videoSettings),
+		callToAction: ownerIsPro
+			? parseShareCallToAction(video.videoSettings)
+			: null,
 	};
 	const isEditProcessing =
 		isEditSourceKey({

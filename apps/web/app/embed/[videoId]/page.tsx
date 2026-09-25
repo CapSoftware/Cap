@@ -411,7 +411,11 @@ async function EmbedContent({
 			)}
 			viewerSettings={rules.settings}
 			showPlaybackStatusBadge={user?.id === video.ownerId}
-			callToAction={minimal ? null : parseShareCallToAction(video.settings)}
+			callToAction={
+				ownerIsProUser && !minimal
+					? parseShareCallToAction(video.settings)
+					: null
+			}
 		/>
 	);
 }

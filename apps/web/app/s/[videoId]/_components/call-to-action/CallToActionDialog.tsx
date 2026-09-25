@@ -96,12 +96,14 @@ export function CallToActionDialog({
 	videoId,
 	callToAction,
 	onSaved,
+	onUpgradeRequest,
 }: {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 	videoId: Video.VideoId;
 	callToAction: ShareCallToAction | null;
 	onSaved?: (callToAction: ShareCallToAction | null) => void;
+	onUpgradeRequest: () => void;
 }) {
 	const [form, setForm] = useState<FormState>(() =>
 		formFromCallToAction(callToAction),
@@ -172,6 +174,11 @@ export function CallToActionDialog({
 		try {
 			const response = await updateVideoCallToAction(videoId, form);
 			if (!response.success) {
+				if (response.upgradeRequired) {
+					onOpenChange(false);
+					onUpgradeRequest();
+					return;
+				}
 				setErrors(response.errors);
 				return;
 			}
@@ -190,7 +197,16 @@ export function CallToActionDialog({
 	const handleRemove = async () => {
 		setPending("remove");
 		try {
-			await updateVideoCallToAction(videoId, null);
+			const response = await updateVideoCallToAction(videoId, null);
+			if (!response.success) {
+				if (response.upgradeRequired) {
+					onOpenChange(false);
+					onUpgradeRequest();
+				} else {
+					toast.error("Couldn't remove your call to action");
+				}
+				return;
+			}
 			toast.success("Call to action removed");
 			onSaved?.(null);
 			onOpenChange(false);

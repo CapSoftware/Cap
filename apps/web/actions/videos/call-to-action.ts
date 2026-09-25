@@ -3,6 +3,7 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { videos } from "@cap/database/schema";
+import { userIsPro } from "@cap/utils";
 import type { Video } from "@cap/web-domain";
 import { and, eq, sql } from "drizzle-orm";
 import {
@@ -15,7 +16,7 @@ import {
 
 export type UpdateVideoCallToActionResult =
 	| { success: true; callToAction: ShareCallToAction | null }
-	| { success: false; errors: CallToActionErrors };
+	| { success: false; errors: CallToActionErrors; upgradeRequired?: true };
 
 export async function updateVideoCallToAction(
 	videoId: Video.VideoId,
@@ -33,6 +34,9 @@ export async function updateVideoCallToAction(
 	if (!video) throw new Error("Video not found");
 	if (video.ownerId !== user.id) {
 		throw new Error("You don't have permission to update this video");
+	}
+	if (!userIsPro(user)) {
+		return { success: false, errors: {}, upgradeRequired: true };
 	}
 
 	if (input === null) {
