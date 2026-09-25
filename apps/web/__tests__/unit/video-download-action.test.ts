@@ -18,7 +18,7 @@ const user = {
 	id: User.UserId.make("test-owner"),
 	email: "owner@example.com",
 	activeOrganizationId: Organisation.OrganisationId.make("other-org"),
-	iconUrlOrKey: Option.none<string>(),
+	iconUrlOrKey: Option.none(),
 };
 const videoId = Video.VideoId.make("test-video");
 let password: string | null = null;
