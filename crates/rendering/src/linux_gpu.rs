@@ -403,6 +403,15 @@ pub struct RingSlot {
     device: wgpu::Device,
 }
 
+// Every field is already `Send + Sync` (wgpu handles, atomics and raw
+// Vulkan/CUDA handles). Stating it here stops auto-trait inference at these
+// types: otherwise a `Send` check on a rendered frame walks wgpu-core's
+// object graph and overflows the recursion limit in downstream crates.
+unsafe impl Send for SharedBuffer {}
+unsafe impl Sync for SharedBuffer {}
+unsafe impl Send for RingSlot {}
+unsafe impl Sync for RingSlot {}
+
 impl RingSlot {
     pub fn release(&self) {
         self.busy.store(false, Ordering::Release);
