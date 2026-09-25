@@ -43,6 +43,7 @@ describe("normalizeCallToActionUrl", () => {
 			"mailto:hello@example.com",
 		);
 		expect(normalizeCallToActionUrl("mailto:nobody")).toBeNull();
+		expect(normalizeCallToActionUrl("mailto:hello%ZZ@example.com")).toBeNull();
 	});
 
 	it("rejects script and data schemes", () => {

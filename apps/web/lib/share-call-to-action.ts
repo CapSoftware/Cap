@@ -55,6 +55,14 @@ const collapseWhitespace = (value: string) => value.replace(/\s+/g, " ").trim();
 
 const HAS_SCHEME = /^[a-z][a-z0-9+.-]*:(?!\d)/i;
 
+const safeDecode = (value: string) => {
+	try {
+		return decodeURIComponent(value);
+	} catch {
+		return null;
+	}
+};
+
 export function normalizeCallToActionUrl(input: string): string | null {
 	const trimmed = input.trim();
 	if (!trimmed || /\s/.test(trimmed)) return null;
@@ -69,8 +77,8 @@ export function normalizeCallToActionUrl(input: string): string | null {
 	}
 
 	if (url.protocol === "mailto:") {
-		const address = url.pathname;
-		if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(decodeURIComponent(address))) {
+		const address = safeDecode(url.pathname);
+		if (!address || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(address)) {
 			return null;
 		}
 	} else if (url.protocol === "http:" || url.protocol === "https:") {
