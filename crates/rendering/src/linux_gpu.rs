@@ -9,6 +9,7 @@
 use ash::vk;
 use std::{
     ffi::c_void,
+    os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd},
     sync::{
         Arc, Mutex, OnceLock,
         atomic::{AtomicBool, Ordering},
@@ -89,6 +90,8 @@ struct Cuda {
     stream_create: unsafe extern "C" fn(*mut CuStream, u32) -> CuResult,
     stream_synchronize: unsafe extern "C" fn(CuStream) -> CuResult,
     stream_destroy: unsafe extern "C" fn(CuStream) -> CuResult,
+    mem_free: unsafe extern "C" fn(CuDevicePtr) -> CuResult,
+    destroy_external_memory: unsafe extern "C" fn(CuExternalMemory) -> CuResult,
     mem_get_info: unsafe extern "C" fn(*mut usize, *mut usize) -> CuResult,
     import_external_memory:
         unsafe extern "C" fn(*mut CuExternalMemory, *const ExternalMemoryHandleDesc) -> CuResult,
@@ -151,6 +154,8 @@ impl Cuda {
                 stream_create: symbol!(b"cuStreamCreate\0"),
                 stream_synchronize: symbol!(b"cuStreamSynchronize\0"),
                 stream_destroy: symbol!(b"cuStreamDestroy_v2\0"),
+                mem_free: symbol!(b"cuMemFree_v2\0"),
+                destroy_external_memory: symbol!(b"cuDestroyExternalMemory\0"),
                 mem_get_info: symbol!(b"cuMemGetInfo_v2\0"),
                 import_external_memory: symbol!(b"cuImportExternalMemory\0"),
                 external_memory_mapped_buffer: symbol!(b"cuExternalMemoryGetMappedBuffer\0"),
@@ -280,11 +285,53 @@ pub struct SharedBuffer {
     _memory: vk::DeviceMemory,
 }
 
+struct VulkanAllocation {
+    device: ash::Device,
+    buffer: vk::Buffer,
+    memory: vk::DeviceMemory,
+}
+
+impl Drop for VulkanAllocation {
+    fn drop(&mut self) {
+        unsafe {
+            if self.buffer != vk::Buffer::null() {
+                self.device.destroy_buffer(self.buffer, None);
+            }
+            if self.memory != vk::DeviceMemory::null() {
+                self.device.free_memory(self.memory, None);
+            }
+        }
+    }
+}
+
+struct CudaImport {
+    driver: &'static Cuda,
+    external: CuExternalMemory,
+    pointer: CuDevicePtr,
+}
+
+impl Drop for CudaImport {
+    fn drop(&mut self) {
+        if self.external.is_null() {
+            return;
+        }
+        let _ = self.driver.with_context(|| unsafe {
+            if self.pointer != 0 {
+                check((self.driver.mem_free)(self.pointer), "cuMemFree")?;
+            }
+            check(
+                (self.driver.destroy_external_memory)(self.external),
+                "cuDestroyExternalMemory",
+            )
+        });
+    }
+}
+
 impl SharedBuffer {
     pub fn new(device: &wgpu::Device, size: u64, label: &str) -> Result<Self, String> {
         let cuda = cuda()?;
         let size = size.next_multiple_of(4096);
-        let (raw_buffer, memory, allocation_size, fd) = unsafe {
+        let (mut allocation, allocation_size, fd) = unsafe {
             device.as_hal::<wgpu_hal::api::Vulkan, _, _>(|hal| {
                 let hal = hal.ok_or("wgpu device is not Vulkan")?;
                 let raw = hal.raw_device();
@@ -303,6 +350,11 @@ impl SharedBuffer {
                 let buffer = raw
                     .create_buffer(&buffer_info, None)
                     .map_err(|error| format!("vkCreateBuffer: {error}"))?;
+                let mut allocation = VulkanAllocation {
+                    device: raw.clone(),
+                    buffer,
+                    memory: vk::DeviceMemory::null(),
+                };
                 let requirements = raw.get_buffer_memory_requirements(buffer);
                 let properties =
                     instance.get_physical_device_memory_properties(hal.raw_physical_device());
@@ -322,28 +374,33 @@ impl SharedBuffer {
                     .memory_type_index(memory_type)
                     .push_next(&mut export_info)
                     .push_next(&mut dedicated);
-                let memory = raw
+                allocation.memory = raw
                     .allocate_memory(&allocate, None)
                     .map_err(|error| format!("vkAllocateMemory: {error}"))?;
-                raw.bind_buffer_memory(buffer, memory, 0)
+                raw.bind_buffer_memory(buffer, allocation.memory, 0)
                     .map_err(|error| format!("vkBindBufferMemory: {error}"))?;
                 let fd_loader = ash::khr::external_memory_fd::Device::new(instance, raw);
                 let fd = fd_loader
                     .get_memory_fd(
                         &vk::MemoryGetFdInfoKHR::default()
-                            .memory(memory)
+                            .memory(allocation.memory)
                             .handle_type(vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD),
                     )
                     .map_err(|error| format!("vkGetMemoryFdKHR: {error}"))?;
-                Ok::<_, String>((buffer, memory, requirements.size, fd))
+                Ok::<_, String>((allocation, requirements.size, OwnedFd::from_raw_fd(fd)))
             })?
         };
 
-        let cuda_ptr = cuda.with_context(|| unsafe {
+        let mut imported = CudaImport {
+            driver: cuda,
+            external: std::ptr::null_mut(),
+            pointer: 0,
+        };
+        cuda.with_context(|| unsafe {
             let handle = ExternalMemoryHandleDesc {
                 kind: CU_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD,
                 _pad: 0,
-                fd,
+                fd: fd.as_raw_fd(),
                 _union_rest: [0; 12],
                 size: allocation_size,
                 flags: CUDA_EXTERNAL_MEMORY_DEDICATED,
@@ -354,6 +411,9 @@ impl SharedBuffer {
                 (cuda.import_external_memory)(&mut external, &handle),
                 "cuImportExternalMemory",
             )?;
+            imported.external = external;
+            // A successful CUDA import takes ownership of the exported fd.
+            let _ = fd.into_raw_fd();
             let mapping = ExternalMemoryBufferDesc {
                 offset: 0,
                 size,
@@ -362,14 +422,15 @@ impl SharedBuffer {
             };
             let mut pointer = 0;
             check(
-                (cuda.external_memory_mapped_buffer)(&mut pointer, external, &mapping),
+                (cuda.external_memory_mapped_buffer)(&mut pointer, imported.external, &mapping),
                 "cuExternalMemoryGetMappedBuffer",
             )?;
-            Ok(pointer)
+            imported.pointer = pointer;
+            Ok(())
         })?;
 
         let buffer = unsafe {
-            let hal_buffer = wgpu_hal::vulkan::Device::buffer_from_raw(raw_buffer);
+            let hal_buffer = wgpu_hal::vulkan::Device::buffer_from_raw(allocation.buffer);
             device.create_buffer_from_hal::<wgpu_hal::api::Vulkan>(
                 hal_buffer,
                 &wgpu::BufferDescriptor {
@@ -381,6 +442,12 @@ impl SharedBuffer {
             )
         };
 
+        let memory = allocation.memory;
+        let cuda_ptr = imported.pointer;
+        allocation.buffer = vk::Buffer::null();
+        allocation.memory = vk::DeviceMemory::null();
+        imported.external = std::ptr::null_mut();
+        imported.pointer = 0;
         Ok(Self {
             buffer,
             size,
