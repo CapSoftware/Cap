@@ -21,6 +21,7 @@ import {
 import { finalizeDesktopSegmentsRecording } from "@/actions/video/finalize-desktop-segments";
 import { Tooltip } from "@/components/Tooltip";
 import { isRetryableDesktopSegmentsFinalizationError } from "@/lib/desktop-segments-retryable-errors";
+import type { ShareCallToAction } from "@/lib/share-call-to-action";
 import type { VideoData } from "../types";
 import { type CaptionLanguage, useCaptionContext } from "./CaptionContext";
 import {
@@ -99,6 +100,7 @@ export const ShareVideo = forwardRef<
 		recordingStopped?: boolean;
 		defaultPlaybackSpeed?: number;
 		viewerIsOwner?: boolean;
+		callToAction?: ShareCallToAction | null;
 	}
 >(
 	(
@@ -121,6 +123,7 @@ export const ShareVideo = forwardRef<
 			recordingStopped = false,
 			defaultPlaybackSpeed,
 			viewerIsOwner = false,
+			callToAction = null,
 		},
 		ref,
 	) => {
@@ -578,6 +581,7 @@ export const ShareVideo = forwardRef<
 								liveVttContent != null
 							}
 							canRetryProcessing={canRetryProcessing}
+							callToAction={callToAction}
 						/>
 					) : (
 						<HLSVideoPlayer
@@ -611,6 +615,7 @@ export const ShareVideo = forwardRef<
 								liveVttContent != null
 							}
 							canRetryProcessing={canRetryProcessing}
+							callToAction={callToAction}
 						/>
 					)}
 					{showFinalizeRecordingControl && (

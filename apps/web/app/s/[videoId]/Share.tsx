@@ -1001,6 +1001,7 @@ export const Share = ({
 														recordingStopped={recordingStopped}
 														defaultPlaybackSpeed={defaultPlaybackSpeed}
 														viewerIsOwner={viewerId === data.owner.id}
+														callToAction={data.callToAction}
 														ref={playerRef}
 													/>
 												)}
