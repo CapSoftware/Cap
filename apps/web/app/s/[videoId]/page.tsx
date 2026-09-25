@@ -58,6 +58,7 @@ import * as EffectRuntime from "@/lib/server";
 import { runPromise } from "@/lib/server";
 import { getSharePageBranding } from "@/lib/share-branding";
 import { parseShareCallToAction } from "@/lib/share-call-to-action";
+import { getShareDashboardDestination } from "@/lib/share-dashboard-destination";
 import { getSharePlaybackUrl } from "@/lib/share-playback";
 import { buildShareVideoMetadata } from "@/lib/share-video-metadata";
 import { resolveShareWebUrl } from "@/lib/share-web-url";
@@ -774,6 +775,20 @@ async function AuthorizedContent({
 				})
 			: Promise.resolve(false);
 
+	const dashboardDestinationPromise = getShareDashboardDestination({
+		viewer: user
+			? { id: user.id, activeOrganizationId: user.activeOrganizationId }
+			: null,
+		videoId,
+		ownerId: video.owner.id,
+	}).catch((error) => {
+		console.error(
+			`[ShareVideoPage] Dashboard destination lookup failed for ${videoId}:`,
+			error,
+		);
+		return null;
+	});
+
 	const videoHasEditsPromise = canDownloadVideoPromise.then((canDownload) => {
 		if (!canDownload || video.isScreenshot) return false;
 		return db()
@@ -804,6 +819,7 @@ async function AuthorizedContent({
 		videoHasEdits,
 		ownerIsOverShareLimit,
 		resolvedImages,
+		dashboardDestination,
 	] = await Promise.all([
 		spacesDataPromise,
 		sharedSpacesPromise,
@@ -818,6 +834,7 @@ async function AuthorizedContent({
 		videoHasEditsPromise,
 		overShareLimitPromise,
 		imagesPromise,
+		dashboardDestinationPromise,
 		viewNotificationPromise,
 	]);
 
@@ -949,8 +966,10 @@ async function AuthorizedContent({
 						// header renders for everyone, and a failed count is worth
 						// less than the header it would otherwise take down.
 						views={viewsPromise.catch(() => null)}
+						dashboardDestination={dashboardDestination}
 					/>
 				}
+				dashboardDestination={dashboardDestination}
 				data={videoWithOrganizationInfo}
 				initialPlaybackUrl={initialPlaybackUrlPromise}
 				screenshotImageUrl={screenshotImageUrl}
