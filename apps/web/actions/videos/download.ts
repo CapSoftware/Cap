@@ -42,7 +42,10 @@ export async function downloadVideo(videoId: Video.VideoId) {
 		throw new Error("Video not found");
 	}
 
-	if (video.ownerId !== userId) {
+	if (
+		video.ownerId !== userId ||
+		!(await canUserDownloadVideo({ userId, ownerId: video.ownerId, videoId }))
+	) {
 		throw new Error("You don't have permission to download this video");
 	}
 

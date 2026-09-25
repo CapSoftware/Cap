@@ -1,0 +1,1 @@
+ALTER TABLE `organizations` ADD `videoSharingRestrictedToOrg` boolean DEFAULT false NOT NULL;

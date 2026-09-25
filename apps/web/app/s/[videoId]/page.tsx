@@ -198,7 +198,21 @@ function PolicyDeniedView({
 	let title = "This video is private";
 	let description: React.ReactNode = <PrivateAccessActions videoId={videoId} />;
 
-	if (reason === "email_restriction_login_required") {
+	if (
+		reason === "organization_only_login_required" ||
+		reason === "organization_only_denied"
+	) {
+		title = "This video is organization-only";
+		description = (
+			<>
+				Only members of this organization can view this recording.{" "}
+				<Link href={`/login?next=${encodeURIComponent(`/s/${videoId}`)}`}>
+					Sign in with your organization account
+				</Link>
+				.
+			</>
+		);
+	} else if (reason === "email_restriction_login_required") {
 		title = "This video requires sign-in";
 		description = (
 			<>
@@ -376,6 +390,8 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 					},
 					orgSettings: organizations.settings,
 					allowedEmailDomain: organizations.allowedEmailDomain,
+					videoSharingRestrictedToOrg:
+						organizations.videoSharingRestrictedToOrg,
 					organizationName: organizations.name,
 					organizationIconUrl: organizations.iconUrl,
 					shareableLinkIconUrl: organizations.shareableLinkIconUrl,
@@ -449,6 +465,7 @@ async function AuthorizedContent({
 		activeUploadRawFileKey: string | null;
 		orgSettings?: OrganizationSettings | null;
 		allowedEmailDomain?: string | null;
+		videoSharingRestrictedToOrg?: boolean | null;
 		videoSettings?: OrganizationSettings | null;
 		organizationName?: string | null;
 		organizationIconUrl?: ImageUpload.ImageUrlOrKey | null;
@@ -952,6 +969,9 @@ async function AuthorizedContent({
 						customDomain={customDomain}
 						domainVerified={domainVerified}
 						allowedEmailDomain={video.allowedEmailDomain}
+						videoSharingRestrictedToOrg={
+							video.videoSharingRestrictedToOrg ?? false
+						}
 						sharedOrganizations={
 							videoWithOrganizationInfo.sharedOrganizations || []
 						}

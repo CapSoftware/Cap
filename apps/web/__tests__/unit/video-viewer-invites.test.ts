@@ -10,7 +10,12 @@ const fixtures = vi.hoisted(() => ({
 	user: vi.fn(),
 	sendEmail: vi.fn(),
 	revalidatePath: vi.fn(),
-	video: { id: "video-1", ownerId: "owner-1", name: "Demo" },
+	video: {
+		id: "video-1",
+		ownerId: "owner-1",
+		name: "Demo",
+		videoSharingRestrictedToOrg: false,
+	},
 	grants: [] as string[],
 	revokedEmails: [] as string[],
 	inserted: vi.fn(),
@@ -18,6 +23,10 @@ const fixtures = vi.hoisted(() => ({
 }));
 
 const schema = vi.hoisted(() => ({
+	organizations: {
+		id: "organizationId",
+		videoSharingRestrictedToOrg: "videoSharingRestrictedToOrg",
+	},
 	videos: { id: "videoId", name: "videoName", ownerId: "videoOwnerId" },
 	videoViewerGrants: {
 		videoId: "grantVideoId",
@@ -33,20 +42,19 @@ vi.mock("@cap/database", () => ({
 			select: () => ({
 				from: (table: unknown) => {
 					selectedTable = table;
-					return {
-						where: () => ({
-							limit: async () =>
-								selectedTable === schema.videos
-									? [fixtures.video]
-									: fixtures.grants.map((email) => ({
-											email,
-											revokedAt: fixtures.revokedEmails.includes(email)
-												? new Date(0)
-												: null,
-										})),
-							orderBy: async () => fixtures.grants.map((email) => ({ email })),
-						}),
-					};
+					const where = () => ({
+						limit: async () =>
+							selectedTable === schema.videos
+								? [fixtures.video]
+								: fixtures.grants.map((email) => ({
+										email,
+										revokedAt: fixtures.revokedEmails.includes(email)
+											? new Date(0)
+											: null,
+									})),
+						orderBy: async () => fixtures.grants.map((email) => ({ email })),
+					});
+					return { where, innerJoin: () => ({ where }) };
 				},
 			}),
 			insert: () => ({
@@ -96,11 +104,21 @@ describe("recording viewer invitations", () => {
 		fixtures.grants = [];
 		fixtures.revokedEmails = [];
 		fixtures.video.ownerId = "owner-1";
+		fixtures.video.videoSharingRestrictedToOrg = false;
 		fixtures.user.mockResolvedValue({ id: "owner-1" });
 		fixtures.sendEmail.mockResolvedValue({
 			data: { id: "email-1" },
 			error: null,
 		});
+	});
+
+	it("rejects invitations while organization-only access is enabled", async () => {
+		fixtures.video.videoSharingRestrictedToOrg = true;
+		await expect(
+			inviteVideoViewer(VIDEO_ID, "viewer@example.com"),
+		).rejects.toThrow("Invitations are disabled");
+		expect(fixtures.inserted).not.toHaveBeenCalled();
+		expect(fixtures.sendEmail).not.toHaveBeenCalled();
 	});
 
 	it("rejects a non-owner before writing a grant or sending email", async () => {

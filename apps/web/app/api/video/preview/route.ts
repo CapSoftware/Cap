@@ -62,7 +62,7 @@ export async function GET(request: NextRequest) {
 	}
 
 	const response = NextResponse.redirect(previewUrl, 302);
-	response.headers.set("Cache-Control", "public, max-age=300");
+	response.headers.set("Cache-Control", "private, no-store, max-age=0");
 	return response;
 }
 

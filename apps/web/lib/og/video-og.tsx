@@ -33,8 +33,7 @@ export type VideoOgVariant =
 
 // Thumbnails and titles can change, so cache briefly at the edge and let
 // stale-while-revalidate keep crawler/email fetches instant.
-const VIDEO_OG_CACHE_CONTROL =
-	"public, max-age=600, s-maxage=3600, stale-while-revalidate=86400";
+const VIDEO_OG_CACHE_CONTROL = "private, no-store, max-age=0";
 
 export const formatDuration = (seconds: number) => {
 	const total = Math.max(0, Math.round(seconds));

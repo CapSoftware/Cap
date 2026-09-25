@@ -139,3 +139,16 @@ describe("describeShareAudience", () => {
 		);
 	});
 });
+
+it("describes the enforced organization audience before public or invited access", () => {
+	expect(
+		describeShareAudience({
+			isPublic: true,
+			videoSharingRestrictedToOrg: true,
+			allowedEmailDomain: "example.com",
+			passwordProtected: true,
+			audienceNames: ["Another organization"],
+			viewerCount: 2,
+		}).label,
+	).toBe("Organization only");
+});

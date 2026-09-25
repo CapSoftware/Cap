@@ -31,10 +31,7 @@ const jsonResponse = (body: unknown, status = 200) =>
 		contentType: "application/json; charset=utf-8",
 		headers: {
 			"Access-Control-Allow-Origin": "*",
-			"Cache-Control":
-				status === 200
-					? "public, max-age=300, stale-while-revalidate=3600"
-					: "private, no-store",
+			"Cache-Control": "private, no-store",
 			"X-Content-Type-Options": "nosniff",
 		},
 	});

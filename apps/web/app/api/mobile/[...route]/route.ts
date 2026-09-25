@@ -6,6 +6,7 @@ import { sendEmail } from "@cap/database/emails/config";
 import { OTPEmail } from "@cap/database/emails/otp-email";
 import { nanoId } from "@cap/database/helpers";
 import * as Db from "@cap/database/schema";
+import { organizationVideoAccessCondition } from "@cap/database/video-organization-access";
 import { getNewVideoPublic } from "@cap/database/video-sharing-default";
 import { serverEnv } from "@cap/env";
 import { userIsPro } from "@cap/utils";
@@ -1383,6 +1384,7 @@ const getCapLocations = Effect.fn("Mobile.getCapLocations")(function* ({
 			? eq(Db.videos.folderId, folderId)
 			: isNull(Db.videos.folderId);
 		const collectionWhereClause = and(
+			organizationVideoAccessCondition(user.id),
 			eq(Db.videos.ownerId, user.id),
 			eq(Db.videos.orgId, user.activeOrganizationId),
 			isNull(Db.organizations.tombstoneAt),
@@ -1425,6 +1427,7 @@ const getCapLocations = Effect.fn("Mobile.getCapLocations")(function* ({
 			? eq(Db.sharedVideos.folderId, folderId)
 			: isNull(Db.sharedVideos.folderId);
 		const collectionWhereClause = and(
+			organizationVideoAccessCondition(user.id),
 			eq(Db.sharedVideos.organizationId, user.activeOrganizationId),
 			isNull(Db.organizations.tombstoneAt),
 		);
@@ -1473,6 +1476,7 @@ const getCapLocations = Effect.fn("Mobile.getCapLocations")(function* ({
 		? eq(Db.spaceVideos.folderId, folderId)
 		: isNull(Db.spaceVideos.folderId);
 	const collectionWhereClause = and(
+		organizationVideoAccessCondition(user.id),
 		eq(Db.spaceVideos.spaceId, space.id),
 		isNull(Db.organizations.tombstoneAt),
 	);
@@ -1819,6 +1823,8 @@ const assertMobileVideoAccess = Effect.fn("Mobile.assertVideoAccess")(
 			return db
 				.select({
 					ownerId: Db.videos.ownerId,
+					videoSharingRestrictedToOrg:
+						Db.organizations.videoSharingRestrictedToOrg,
 					ownerPreferences: Db.users.preferences,
 					hasPassword: sql<boolean>`${Db.videos.password} IS NOT NULL`.mapWith(
 						Boolean,
@@ -1832,8 +1838,14 @@ const assertMobileVideoAccess = Effect.fn("Mobile.assertVideoAccess")(
 					),
 				})
 				.from(Db.videos)
+				.innerJoin(Db.organizations, eq(Db.videos.orgId, Db.organizations.id))
 				.leftJoin(Db.users, eq(Db.videos.ownerId, Db.users.id))
-				.where(eq(Db.videos.id, videoId))
+				.where(
+					and(
+						eq(Db.videos.id, videoId),
+						organizationVideoAccessCondition(user.id),
+					),
+				)
 				.limit(1);
 		});
 
@@ -1844,6 +1856,8 @@ const assertMobileVideoAccess = Effect.fn("Mobile.assertVideoAccess")(
 		) {
 			return yield* Effect.fail(new HttpApiError.NotFound());
 		}
+		if (row.videoSharingRestrictedToOrg)
+			return { ...row, hasPassword: false, hasInheritedPassword: false };
 		if (row.ownerId === user.id) return row;
 		if (!row.sharedWithOrganization && !row.sharedWithAccessibleSpace) {
 			return yield* Effect.fail(new HttpApiError.NotFound());
