@@ -130,9 +130,22 @@ vi.mock("@cap/database/directory-sync/access", () => ({
 	directorySpaceAccessAllowed: () => undefined,
 }));
 
-it("denies downloads by a removed owner before consulting shares", async () => {
+it("denies downloads by a removed owner without an independent share", async () => {
 	directoryAllowed = false;
+	queued = [[], []];
 	tablesRead.length = 0;
 	expect(await call(OWNER)).toBe(false);
-	expect(tablesRead).toEqual(["videos"]);
+	expect(tablesRead).toEqual(["videos", "sharedVideos", "spaceVideos"]);
 });
+
+it.each([OWNER, OTHER])(
+	"preserves an independent organization share for %s",
+	async (userId) => {
+		directoryAllowed = false;
+		queued = [
+			[{ organizationId: "other-organization" }],
+			[{ id: "independent-membership" }],
+		];
+		expect(await call(userId)).toBe(true);
+	},
+);

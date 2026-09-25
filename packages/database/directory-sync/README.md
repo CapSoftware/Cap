@@ -13,9 +13,9 @@ Directory Sync adds identity-provider provisioning alongside the existing WorkOS
 
 ## Membership and billing
 
-Provisioned users become ordinary members. Existing roles, profiles, personal organizations, subscriptions, and assigned seats are preserved. New accounts receive no personal organization, Stripe customer, or automatic Pro seat. Administrators assign roles and Pro seats in Cap. Group-to-role mapping is not included.
+Provisioned users become ordinary members. Existing roles, profiles, personal organizations, subscriptions, and assigned seats are preserved. New accounts receive no personal organization, Stripe customer, or automatic Pro seat. Administrators assign roles and Pro seats in Cap. Group-to-role mapping is not included. Membership changes refresh lifecycle profiles for existing signed-up users; pre-login provisioning does not enroll a new account in messaging.
 
-Inactive or deleted directory users lose organization and space membership. Their recordings and memberships in other organizations remain. Organization-scoped authorization also blocks ownership shortcuts and existing sessions; the account itself remains usable elsewhere. Public links retain anonymous access under existing sharing rules. Previously issued media URLs remain valid until their existing expiry.
+Inactive or deleted directory users lose organization and space membership. Their recordings and memberships in other organizations remain. Explicit shares through another organization or its spaces remain viewable under that organization's access rules; this does not restore ownership-based editing. Organization-scoped authorization also blocks ownership shortcuts and existing sessions; the account itself remains usable elsewhere. Public links retain anonymous access under existing sharing rules. Previously issued media URLs remain valid until their existing expiry.
 
 Stable directory and provider identity IDs bind a directory user to the Cap account. An initial email must belong to a verified WorkOS organization domain. Subsequent email changes, missing emails, or conflicting identity bindings require review rather than silently moving access to another account. Synced names are kept on the directory record; existing global profiles are not overwritten.
 

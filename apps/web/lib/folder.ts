@@ -1,6 +1,9 @@
 import "server-only";
 
-import { directoryAccessAllowed } from "@cap/database/directory-sync/access";
+import {
+	directoryAccessAllowed,
+	directorySpaceAccessAllowed,
+} from "@cap/database/directory-sync/access";
 import {
 	comments,
 	folders,
@@ -240,7 +243,11 @@ export const getVideosByFolderId = Effect.fn(function* (
 			.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
 			.where(
 				and(
-					directoryAccessAllowed(user.id, videos.orgId),
+					root.variant === "space"
+						? directorySpaceAccessAllowed(user.id, root.spaceId)
+						: root.variant === "org"
+							? directoryAccessAllowed(user.id, root.organizationId)
+							: directoryAccessAllowed(user.id, videos.orgId),
 					root.variant === "space"
 						? and(
 								eq(spaceVideos.folderId, folderId),

@@ -68,11 +68,11 @@ const decideCanView = (
 	password: Option.Option<string>,
 ) =>
 	Effect.gen(function* () {
+		let directoryAccess = true;
 		if (Option.isSome(user)) {
 			const userId = user.value.id;
-			if (!(yield* orgsRepo.hasDirectoryAccess(userId, video.orgId)))
-				return false;
-			if (userId === video.ownerId) return true;
+			directoryAccess = yield* orgsRepo.hasDirectoryAccess(userId, video.orgId);
+			if (userId === video.ownerId && directoryAccess) return true;
 		}
 
 		const spacePasswords = yield* spacesRepo.passwordsForVideo(video.id);
@@ -105,6 +105,8 @@ const decideCanView = (
 				return true;
 			}
 		}
+
+		if (!directoryAccess) return false;
 
 		if (!video.public) {
 			if (

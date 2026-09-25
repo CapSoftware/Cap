@@ -801,17 +801,43 @@ describe("Directory deprovisioning", () => {
 			await runCanView(deps, makeUser("owner@example.com", TEST_OWNER_ID)),
 		).toBe("denied");
 	});
-	it("denies retained grants and membership on a signed-in session", async () => {
+	it("denies retained direct viewer grants on a signed-in session", async () => {
 		const deps = makeDeps({
 			video: makeVideo({ public: false }),
 			directoryAccess: false,
-			orgMembership: true,
-			spaceMembership: true,
 			viewerGrantEmail: "teammate@example.com",
 		});
 		expect(await runCanView(deps, makeUser("teammate@example.com"))).toBe(
 			"denied",
 		);
+	});
+	it.each(["organization", "space"])(
+		"preserves an independent %s share after removal from the owning organization",
+		async (kind) => {
+			const video = makeVideo({ public: false });
+			const deps = makeDeps({
+				video,
+				directoryAccess: false,
+				orgMembership: kind === "organization",
+				spaceMembership: kind === "space",
+			});
+			const user = makeUser("teammate@example.com", TEST_OWNER_ID);
+			expect(await runCanView(deps, user)).toBe("allowed");
+			expect(await runCanViewLoaded(deps, video, Option.none(), user)).toBe(
+				"allowed",
+			);
+		},
+	);
+	it("requires passwords on independent shares for a removed owner", async () => {
+		const deps = makeDeps({
+			video: makeVideo({ public: false }),
+			directoryAccess: false,
+			orgMembership: true,
+			password: Option.some("video-hash"),
+		});
+		expect(
+			await runCanView(deps, makeUser("teammate@example.com", TEST_OWNER_ID)),
+		).toBe("password");
 	});
 	it("preserves anonymous public sharing", async () => {
 		const deps = makeDeps({ video: makeVideo(), directoryAccess: false });

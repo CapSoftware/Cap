@@ -786,7 +786,6 @@ const listCaps = Effect.fn("Agent.listCaps")(function* (
 				)
 			: undefined;
 		const filters = [
-			directoryAccessAllowed(principal.id, Db.videos.orgId),
 			params.scope === "shared"
 				? ne(Db.videos.ownerId, principal.id)
 				: undefined,

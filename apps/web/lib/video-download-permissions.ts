@@ -32,8 +32,8 @@ export async function canUserDownloadVideo({
 		.from(videos)
 		.where(eq(videos.id, videoId))
 		.limit(1);
-	if (!video || !video.allowed) return false;
-	if (userId === ownerId) return true;
+	if (!video) return false;
+	if (userId === ownerId && video.allowed) return true;
 
 	const sharedOrgs = await db()
 		.select({ organizationId: sharedVideos.organizationId })

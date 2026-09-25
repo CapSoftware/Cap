@@ -5,6 +5,7 @@ import { hashPassword } from "@cap/database/crypto";
 import {
 	directoryAccessAllowed,
 	directorySpaceAccessAllowed,
+	hasDirectoryAccess,
 } from "@cap/database/directory-sync/access";
 import { sendEmail } from "@cap/database/emails/config";
 import { OTPEmail } from "@cap/database/emails/otp-email";
@@ -1511,7 +1512,7 @@ const getCapLocations = Effect.fn("Mobile.getCapLocations")(function* ({
 			? eq(Db.sharedVideos.folderId, folderId)
 			: isNull(Db.sharedVideos.folderId);
 		const collectionWhereClause = and(
-			directoryAccessAllowed(user.id, Db.videos.orgId),
+			directoryAccessAllowed(user.id, Db.sharedVideos.organizationId),
 			eq(Db.sharedVideos.organizationId, user.activeOrganizationId),
 			isNull(Db.organizations.tombstoneAt),
 		);
@@ -1560,7 +1561,7 @@ const getCapLocations = Effect.fn("Mobile.getCapLocations")(function* ({
 		? eq(Db.spaceVideos.folderId, folderId)
 		: isNull(Db.spaceVideos.folderId);
 	const collectionWhereClause = and(
-		directoryAccessAllowed(user.id, Db.videos.orgId),
+		directorySpaceAccessAllowed(user.id, Db.spaceVideos.spaceId),
 		eq(Db.spaceVideos.spaceId, space.id),
 		isNull(Db.organizations.tombstoneAt),
 	);
@@ -1921,6 +1922,10 @@ const assertMobileVideoAccess = Effect.fn("Mobile.assertVideoAccess")(
 			return db
 				.select({
 					ownerId: Db.videos.ownerId,
+					ownerDirectoryAccess: directoryAccessAllowed(
+						user.id,
+						Db.videos.orgId,
+					).mapWith(Boolean),
 					ownerPreferences: Db.users.preferences,
 					hasPassword: sql<boolean>`${Db.videos.password} IS NOT NULL`.mapWith(
 						Boolean,
@@ -1935,12 +1940,7 @@ const assertMobileVideoAccess = Effect.fn("Mobile.assertVideoAccess")(
 				})
 				.from(Db.videos)
 				.leftJoin(Db.users, eq(Db.videos.ownerId, Db.users.id))
-				.where(
-					and(
-						eq(Db.videos.id, videoId),
-						directoryAccessAllowed(user.id, Db.videos.orgId),
-					),
-				)
+				.where(eq(Db.videos.id, videoId))
 				.limit(1);
 		});
 
@@ -1951,7 +1951,7 @@ const assertMobileVideoAccess = Effect.fn("Mobile.assertVideoAccess")(
 		) {
 			return yield* Effect.fail(new HttpApiError.NotFound());
 		}
-		if (row.ownerId === user.id) return row;
+		if (row.ownerId === user.id && row.ownerDirectoryAccess) return row;
 		if (!row.sharedWithOrganization && !row.sharedWithAccessibleSpace) {
 			return yield* Effect.fail(new HttpApiError.NotFound());
 		}
@@ -1967,7 +1967,7 @@ const assertMobileVideoOwner = Effect.fn("Mobile.assertVideoOwner")(function* (
 ) {
 	const user = yield* CurrentUser;
 	const video = yield* assertMobileVideoAccess(videoId);
-	if (video.ownerId !== user.id) {
+	if (video.ownerId !== user.id || !video.ownerDirectoryAccess) {
 		return yield* Effect.fail(new HttpApiError.NotFound());
 	}
 });
@@ -2730,7 +2730,11 @@ const getOwnedRecording = Effect.fn("Mobile.getOwnedRecording")(function* (
 		return yield* Effect.fail(new HttpApiError.NotFound());
 	}
 	const [video] = maybeVideo.value;
-	if (video.ownerId !== user.id) {
+	const database = yield* Database;
+	if (
+		video.ownerId !== user.id ||
+		!(yield* database.use((db) => hasDirectoryAccess(user.id, video.orgId, db)))
+	) {
 		return yield* Effect.fail(new HttpApiError.NotFound());
 	}
 	return video;
