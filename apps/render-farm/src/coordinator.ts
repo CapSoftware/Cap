@@ -15,6 +15,7 @@ import {
 	type TrackIndex,
 } from "./mp4";
 import { planChunkBoundaries } from "./planning";
+import { ProbeEngine } from "./probe-engine";
 import {
 	type AudioResultMeta,
 	type AudioTask,
@@ -26,6 +27,12 @@ import {
 	type VideoResult,
 	type VideoTask,
 } from "./protocol";
+import {
+	acceptOnce,
+	completeUpload,
+	PART_RANGES,
+	reservePartRange,
+} from "./recovery";
 import { S3, s3ConfigFromEnv } from "./s3";
 import { pickQueued as pickQueuedTask } from "./scheduler";
 import { validateJobRequest } from "./validate";
@@ -50,16 +57,13 @@ const JOB_RETENTION_MS = Number(process.env.RF_JOB_RETENTION_MS ?? 60 * 60_000);
 const SAMPLE_RATE = 48_000;
 const PACKET = 1024;
 
-const probeEngine = new Engine(ENGINE_BIN, {}, "coordinator-engine");
+const probeEngine = new ProbeEngine(
+	() => new Engine(ENGINE_BIN, {}, "coordinator-engine"),
+);
 
 // Audio sections (Studio Sound) are CPU work. These lanes render them on the
 // coordinator's cores, pulling from the same queue as workers' audio lanes.
 const LOCAL_AUDIO_SLOTS = Number(process.env.RF_LOCAL_AUDIO_SLOTS ?? 2);
-// Every dispatch of a chunk (original, hedge, retry) uploads into its own part
-// range, cycling through this many. NVENC output differs between GPUs, so two
-// live copies must never write the same part numbers; completion lists exactly
-// the accepted copy's parts and S3 discards the rest.
-const PART_RANGES = 4;
 // Progressive playback: chunks stream fMP4 segments while rendering and the
 // coordinator keeps an HLS EVENT playlist of the contiguous prefix, so an
 // export is watchable seconds after the request whatever its length. The
@@ -164,7 +168,7 @@ async function runAudioLocally(job: Job, state: TaskState) {
 				cpuSeconds: 0,
 			},
 		};
-		if (job.status === "rendering") onAudioDone(job, state, meta, data);
+		if (job.status === "rendering") await onAudioDone(job, state, meta, data);
 	} catch (error) {
 		if (state.attempts >= 3) failJob(job, error);
 		else
@@ -215,6 +219,8 @@ type TaskState = {
 	worker?: string;
 	startedAt?: number;
 	attempts: number;
+	dispatching?: boolean;
+	reattach?: boolean;
 	duplicateOf?: string;
 	duplicated?: boolean;
 	/** Reserved by a busy slot ahead of time; not started until it reports progress. */
@@ -241,10 +247,13 @@ type HlsState = {
 	writing: boolean;
 	dirty: boolean;
 	ended: boolean;
+	audioExtradata?: string;
+	retry?: ReturnType<typeof setTimeout>;
 };
 
 type Job = {
 	verified?: boolean;
+	acceptances: Map<string, Promise<void>>;
 	/** Summary frozen when the job ends; the job's media data is released then. */
 	final?: ReturnType<typeof summary>;
 	hls?: HlsState;
@@ -310,6 +319,42 @@ function liveSlots() {
 		}
 	}
 	return { slots, audioSlots, workers: count };
+}
+
+async function newJob(
+	id: string,
+	request: JobRequest,
+	requestedAt = now(),
+): Promise<Job> {
+	const compression = request.compression ?? "Maximum";
+	const job: Job = {
+		id,
+		acceptances: new Map(),
+		request,
+		status: "planning",
+		key: `out/${id}.mp4`,
+		t: { requested: requestedAt },
+		fps: request.fps ?? 30,
+		bpp: COMPRESSION_BPP[compression],
+		resolution: request.resolution ?? [1920, 1080],
+		totalFrames: 0,
+		totalSamples: 0,
+		width: 0,
+		height: 0,
+		chunks: [],
+		sections: [],
+		tasks: new Map(),
+		videoResults: new Map(),
+		audioSections: new Map(),
+		audioWaiters: [],
+		cpuSeconds: 0,
+		fetchedBytes: 0,
+		workersUsed: new Set(),
+		waiters: [],
+		taskStats: [],
+	};
+	if (HLS) job.hls = await newHlsState(`hls/${id}`);
+	return job;
 }
 
 // ---------------------------------------------------------------- planning ---
@@ -530,13 +575,14 @@ async function planJob(job: Job) {
 		audio_cuts: number[];
 		clips: { index: number; camera: number; mic: number }[];
 	};
-	const probe = await probeEngine.request<Probe>("probe", {
-		project: probeDir,
-		fps: job.fps,
-		resolution: job.resolution,
-		span_step: gop,
-	});
-	cache.close();
+	const probe = await probeEngine
+		.request<Probe>({
+			project: probeDir,
+			fps: job.fps,
+			resolution: job.resolution,
+			span_step: gop,
+		})
+		.finally(() => cache.close());
 	job.t.probed = now();
 	if (request.frameLimit && request.frameLimit < probe.total_frames) {
 		probe.total_frames = request.frameLimit;
@@ -829,8 +875,8 @@ async function planJob(job: Job) {
 		};
 		enqueue(job, task);
 	}
+	await journalJob(job);
 	job.status = "rendering";
-	journalJob(job);
 	dispatch();
 }
 
@@ -846,9 +892,9 @@ const JOURNAL = process.env.RF_JOURNAL !== "0";
 const RESUME_HOLD_MS = 10_000;
 const journalKey = (id: string, name: string) => `jobs/${id}/${name}`;
 
-function journalPut(key: string, body: Uint8Array | string) {
+async function journalPut(key: string, body: Uint8Array | string) {
 	if (!JOURNAL) return;
-	s3.put(key, body).catch((error) => console.error(`journal ${key}: ${error}`));
+	await s3.put(key, body);
 }
 
 type JournaledJob = Pick<
@@ -869,10 +915,11 @@ type JournaledJob = Pick<
 	| "sections"
 	| "plan"
 	| "probe"
-> & { tasks: Task[]; hls: { prefix: string } | null };
+> & { version: 2; tasks: Task[]; hls: { prefix: string } | null };
 
 function journalJob(job: Job) {
 	const record: JournaledJob = {
+		version: 2,
 		id: job.id,
 		request: job.request,
 		key: job.key,
@@ -894,7 +941,7 @@ function journalJob(job: Job) {
 			.map((state) => state.task),
 		hls: job.hls ? { prefix: job.hls.prefix } : null,
 	};
-	journalPut(journalKey(job.id, "job.json"), JSON.stringify(record));
+	return journalPut(journalKey(job.id, "job.json"), JSON.stringify(record));
 }
 
 function audioFrame(meta: AudioResultMeta, data: Uint8Array) {
@@ -957,18 +1004,52 @@ async function resumeJobs() {
 		byJob.set(id, names);
 	}
 	for (const [id, names] of byJob) {
-		if (names.has("done") || !names.has("job.json") || jobs.has(id)) continue;
+		if (names.has("done") || jobs.has(id)) continue;
 		try {
+			if (!names.has("job.json")) {
+				if (!names.has("request.json")) continue;
+				const receipt = JSON.parse(
+					new TextDecoder().decode(
+						await s3.get(journalKey(id, "request.json")),
+					),
+				) as { request: JobRequest; requestedAt: number };
+				if (Date.now() - receipt.requestedAt > 5 * 3600_000) {
+					await journalPut(journalKey(id, "done"), "expired");
+					continue;
+				}
+				const job = await newJob(id, receipt.request, receipt.requestedAt);
+				jobs.set(id, job);
+				planJob(job).catch((error) => failJob(job, error));
+				continue;
+			}
 			const record = JSON.parse(
 				new TextDecoder().decode(await s3.get(journalKey(id, "job.json"))),
 			) as JournaledJob;
 			// Presigned segment/playlist URLs last 6 h; older jobs are abandoned.
 			if (Date.now() - (record.t.requested ?? 0) > 5 * 3600_000) {
-				journalPut(journalKey(id, "done"), "expired");
+				await journalPut(journalKey(id, "done"), "expired");
 				continue;
 			}
+			if (record.version !== 2) {
+				if (record.uploadId)
+					await s3.abortMultipart(record.key, record.uploadId);
+				await journalPut(
+					journalKey(id, "done"),
+					"incompatible journal version",
+				);
+				console.error(
+					`job ${id}: legacy journal has no durable upload reservations`,
+				);
+				continue;
+			}
+			const reservations: {
+				task: Task;
+				worker: string;
+				duplicateOf?: string;
+			}[] = [];
 			const job: Job = {
 				...record,
+				acceptances: new Map(),
 				status: "rendering",
 				tasks: new Map(),
 				videoResults: new Map(),
@@ -984,6 +1065,21 @@ async function resumeJobs() {
 			job.t.resumed = now();
 			job.t.lastProgress = now();
 			for (const name of names) {
+				const dispatch = name.match(/^dispatches\/(\d+)\/(\d+)\.json$/);
+				if (dispatch) {
+					const chunk = job.chunks[Number(dispatch[1])];
+					if (!chunk) throw new Error("invalid reserved chunk");
+					chunk.dispatches = Math.max(
+						chunk.dispatches,
+						Number(dispatch[2]) + 1,
+					);
+					reservations.push(
+						JSON.parse(
+							new TextDecoder().decode(await s3.get(journalKey(id, name))),
+						),
+					);
+					continue;
+				}
 				const video = name.match(/^v\/(\d+)\.json$/);
 				if (video) {
 					const result = JSON.parse(
@@ -1026,7 +1122,36 @@ async function resumeJobs() {
 					requeued++;
 				}
 			}
+			for (const reservation of reservations) {
+				const { task, worker, duplicateOf } = reservation;
+				let state = job.tasks.get(task.taskId);
+				if (!state) {
+					const done =
+						task.kind === "video" && job.videoResults.has(task.chunk);
+					state = {
+						task,
+						state: done ? "done" : "queued",
+						attempts: 0,
+						duplicateOf,
+						heldUntil: done ? undefined : Date.now() + RESUME_HOLD_MS,
+					};
+					job.tasks.set(task.taskId, state);
+					if (!done) queue.push(state);
+				}
+				if ((task.attempt ?? 0) >= state.attempts) {
+					state.attempts = task.attempt ?? 0;
+					state.worker = worker;
+					state.reattach = true;
+				}
+				if (duplicateOf) {
+					const original = job.tasks.get(duplicateOf);
+					if (original) original.duplicated = true;
+				}
+			}
 			if (job.hls) {
+				job.hls.audioExtradata = job.audioSections
+					.values()
+					.next().value?.meta.extradata;
 				for (const chunk of job.chunks) {
 					const result = job.videoResults.get(chunk.index);
 					if (!result) continue;
@@ -1067,6 +1192,10 @@ function enqueue(job: Job, task: Task, duplicateOf?: string) {
 }
 
 function pickQueued(accepts: (kind: string) => boolean) {
+	for (const state of [...queue]) {
+		const job = jobs.get(state.task.jobId);
+		if (job && taskAccepted(job, state.task)) retireTask(state);
+	}
 	const schedulable = [...jobs.values()].map((job) => {
 		let runningTasks = 0;
 		for (const state of job.tasks.values()) {
@@ -1089,30 +1218,56 @@ function pickQueued(accepts: (kind: string) => boolean) {
 }
 
 /** The task as sent for this attempt: its attempt number and part range. */
-function dispatchedTask(job: Job | undefined, state: TaskState): Task {
+async function dispatchedTask(
+	job: Job | undefined,
+	state: TaskState,
+): Promise<Task> {
 	const task = state.task;
 	if (task.kind !== "video" || !job)
 		return { ...task, attempt: state.attempts };
 	const chunk = job.chunks[task.chunk];
-	if (!chunk) return { ...task, attempt: state.attempts };
-	const range = chunk.dispatches++ % PART_RANGES;
-	return {
+	if (!chunk) throw new Error("unknown chunk");
+	const { range, firstPart } = reservePartRange(chunk);
+	const dispatched = {
 		...task,
 		attempt: state.attempts,
-		upload: {
-			...task.upload,
-			firstPart: chunk.firstPart + range * chunk.partLimit,
-			partLimit: chunk.partLimit,
-		},
+		upload: { ...task.upload, firstPart, partLimit: chunk.partLimit },
 	};
+	await journalPut(
+		journalKey(job.id, `dispatches/${chunk.index}/${range}.json`),
+		JSON.stringify({
+			task: dispatched,
+			worker: state.worker,
+			duplicateOf: state.duplicateOf,
+		}),
+	);
+	return dispatched;
+}
+
+function taskAccepted(job: Job, task: Task) {
+	return task.kind === "video"
+		? job.videoResults.has(task.chunk)
+		: job.audioSections.has(task.section);
+}
+
+function retireTask(state: TaskState) {
+	state.state = "done";
+	const index = queue.indexOf(state);
+	if (index >= 0) queue.splice(index, 1);
 }
 
 /** Put a task back in the queue, at most once. */
 function requeue(state: TaskState, reason: string) {
+	const job = jobs.get(state.task.jobId);
+	if (!job || job.status !== "rendering" || taskAccepted(job, state.task)) {
+		retireTask(state);
+		return;
+	}
 	console.warn(`requeue ${state.task.taskId}: ${reason}`);
 	state.state = "queued";
 	state.worker = undefined;
 	state.progress = undefined;
+	state.reattach = false;
 	if (!queue.includes(state)) queue.unshift(state);
 }
 
@@ -1147,7 +1302,21 @@ function dispatch() {
 			if (state.task.kind === "video") job.t.firstVideoStarted ??= now();
 			job.workersUsed.add(poller.worker);
 		}
-		poller.resolve(dispatchedTask(job, state));
+		state.dispatching = true;
+		state.reattach = false;
+		const dispatchedState = state;
+		dispatchedTask(job, state).then(
+			(task) => {
+				dispatchedState.dispatching = false;
+				dispatchedState.startedAt = now();
+				poller.resolve(job?.status === "rendering" ? task : null);
+			},
+			(error) => {
+				dispatchedState.dispatching = false;
+				if (job) failJob(job, error);
+				poller.resolve(null);
+			},
+		);
 	}
 }
 
@@ -1179,6 +1348,7 @@ function straggler(): TaskState | undefined {
 		for (const state of job.tasks.values()) {
 			if (
 				state.task.kind !== "video" ||
+				state.dispatching ||
 				state.state !== "running" ||
 				state.duplicated ||
 				state.duplicateOf ||
@@ -1257,7 +1427,11 @@ function supersede(id: string) {
 		for (const job of jobs.values()) {
 			if (job.status !== "rendering") continue;
 			for (const state of job.tasks.values()) {
-				if (state.state === "running" && state.worker === old) {
+				if (
+					state.state === "running" &&
+					!state.dispatching &&
+					state.worker === old
+				) {
 					requeue(state, `worker ${old} restarted`);
 				}
 			}
@@ -1284,6 +1458,7 @@ setInterval(() => {
 		for (const state of job.tasks.values()) {
 			if (
 				state.state !== "running" ||
+				state.dispatching ||
 				!state.worker ||
 				state.worker === "coordinator"
 			)
@@ -1323,9 +1498,8 @@ async function writeInit(job: Job, hls: HlsState) {
 	if (!hls.extradata) return false;
 	let asc: Uint8Array | null = null;
 	if (job.sections.length > 0) {
-		const section = job.audioSections.values().next().value;
-		if (!section) return false;
-		asc = Buffer.from(section.meta.extradata, "base64");
+		if (!hls.audioExtradata) return false;
+		asc = Buffer.from(hls.audioExtradata, "base64");
 	}
 	const key = `${hls.prefix}/init.mp4`;
 	await s3.put(
@@ -1346,7 +1520,8 @@ async function writeInit(job: Job, hls: HlsState) {
 /** Rewrites the playlist whenever the contiguous run of segments grows. */
 async function publishPlaylist(job: Job) {
 	const hls = job.hls;
-	if (!hls || hls.ended) return;
+	if (!hls || hls.ended || job.status === "error") return;
+	clearTimeout(hls.retry);
 	if (hls.writing) {
 		hls.dirty = true;
 		return;
@@ -1357,46 +1532,60 @@ async function publishPlaylist(job: Job) {
 			hls.dirty = false;
 			if (!hls.initUrl && !(await writeInit(job, hls))) return;
 			let grew = false;
+			let cursor = { ...hls.cursor };
+			const listed = [...hls.listed];
 			for (;;) {
-				const segment = hls.segments
-					.get(hls.cursor.chunk)
-					?.get(hls.cursor.index);
+				const segment = hls.segments.get(cursor.chunk)?.get(cursor.index);
 				if (!segment) break;
-				hls.listed.push({
+				listed.push({
 					url: await s3.presignFresh("GET", segment.key, 6 * 3600),
 					duration: (segment.frames[1] - segment.frames[0]) / job.fps,
 				});
 				grew = true;
-				hls.cursor = segment.last
-					? { chunk: hls.cursor.chunk + 1, index: 0 }
-					: { chunk: hls.cursor.chunk, index: hls.cursor.index + 1 };
+				cursor = segment.last
+					? { chunk: cursor.chunk + 1, index: 0 }
+					: { chunk: cursor.chunk, index: cursor.index + 1 };
 			}
-			const ended = hls.cursor.chunk >= job.chunks.length;
+			const ended = cursor.chunk >= job.chunks.length;
 			if (!grew && !ended) continue;
 			await s3.put(
 				`${hls.prefix}/index.m3u8`,
-				playlist(hls.listed, {
+				playlist(listed, {
 					initUrl: hls.initUrl as string,
 					targetDuration: HLS_SEGMENT_SECONDS + 2,
 					ended,
 				}),
 				"application/vnd.apple.mpegurl",
 			);
+			hls.cursor = cursor;
+			hls.listed = listed;
 			if (hls.listed.length > 0) job.t.firstSegment ??= now();
 			if (ended) {
 				hls.ended = true;
 				job.t.hlsEnded = now();
+				if (job.status === "ready") persistFinished(job);
 			}
 		} while (hls.dirty && !hls.ended);
 	} catch (error) {
 		console.error(`job ${job.id} playlist: ${error}`);
+		if (now() - (job.t.requested ?? 0) < 5 * 3600_000) {
+			hls.retry = setTimeout(() => publishPlaylist(job), 1000);
+			hls.retry.unref();
+		}
 	} finally {
 		hls.writing = false;
 	}
 }
 
+function persistFinished(job: Job) {
+	journalPut(journalKey(job.id, "done"), job.status).catch((error) => {
+		console.error(`job ${job.id} terminal journal: ${error}`);
+		if (jobs.has(job.id)) setTimeout(() => persistFinished(job), 1000).unref();
+	});
+}
+
 function finish(job: Job) {
-	journalPut(journalKey(job.id, "done"), job.status);
+	if (job.status === "error" || !job.hls || job.hls.ended) persistFinished(job);
 	job.audioCache?.close();
 	// Freeze the summary, then drop the media: rendered audio alone is ~290 MB
 	// for a 2 h export, and finished jobs were never evicted.
@@ -1428,12 +1617,26 @@ function recordStat(
 	job.taskStats.push({ kind, index, worker, ...timings });
 }
 
-function onVideoDone(job: Job, state: TaskState, result: VideoResult) {
+async function onVideoDone(job: Job, state: TaskState, result: VideoResult) {
+	if (state.task.kind !== "video") return Promise.resolve();
+	await acceptOnce(job.acceptances, `v/${state.task.chunk}`, () =>
+		acceptVideo(job, state, result),
+	);
+	retireTask(state);
+}
+
+async function acceptVideo(job: Job, state: TaskState, result: VideoResult) {
 	if (state.task.kind !== "video") return;
+	const chunk = state.task.chunk;
+	if (job.videoResults.has(chunk) || job.status !== "rendering") return;
+	await journalPut(
+		journalKey(job.id, `v/${chunk}.json`),
+		JSON.stringify(result),
+	);
+	if (job.status !== "rendering") return;
 	state.state = "done";
 	const queued = queue.indexOf(state);
 	if (queued >= 0) queue.splice(queued, 1);
-	const chunk = state.task.chunk;
 	recordStat(job, "video", chunk, result.worker, {
 		...result.timings,
 		fetchBytes: result.timings.fetch.bytes,
@@ -1445,7 +1648,7 @@ function onVideoDone(job: Job, state: TaskState, result: VideoResult) {
 	});
 	job.cpuSeconds += result.timings.cpuSeconds;
 	job.fetchedBytes += result.timings.fetch.bytes;
-	if (job.videoResults.has(chunk)) return;
+
 	for (const other of job.tasks.values()) {
 		// The sibling copy (original or hedge) is now redundant.
 		if (
@@ -1474,32 +1677,46 @@ function onVideoDone(job: Job, state: TaskState, result: VideoResult) {
 		job.hls.segments.set(chunk, known);
 		publishPlaylist(job);
 	}
-	journalPut(journalKey(job.id, `v/${chunk}.json`), JSON.stringify(result));
 	if (job.videoResults.size === job.chunks.length) {
 		job.t.videoDone = now();
 		maybeAssemble(job);
 	}
 }
 
-function onAudioDone(
+async function onAudioDone(
 	job: Job,
 	state: TaskState,
 	meta: AudioResultMeta,
 	data: Uint8Array,
 ) {
-	if (state.task.kind !== "audio") return;
+	if (state.task.kind !== "audio") return Promise.resolve();
+	await acceptOnce(job.acceptances, `a/${state.task.section}`, () =>
+		acceptAudio(job, state, meta, data),
+	);
+	retireTask(state);
+}
+
+async function acceptAudio(
+	job: Job,
+	state: TaskState,
+	meta: AudioResultMeta,
+	data: Uint8Array,
+) {
+	if (
+		state.task.kind !== "audio" ||
+		job.status !== "rendering" ||
+		job.audioSections.has(state.task.section)
+	)
+		return;
+	await journalPut(
+		journalKey(job.id, `a/${state.task.section}.bin`),
+		audioFrame(meta, data),
+	);
+	if (job.status !== "rendering") return;
 	state.state = "done";
 	const queued = queue.indexOf(state);
 	if (queued >= 0) queue.splice(queued, 1);
-	// Chunks may already have muxed the first copy's packets; a second render
-	// replacing them would desync the header from those bytes.
-	if (job.audioSections.has(state.task.section)) return;
-	if (!job.audioSections.has(state.task.section)) {
-		journalPut(
-			journalKey(job.id, `a/${state.task.section}.bin`),
-			audioFrame(meta, data),
-		);
-	}
+	if (job.hls) job.hls.audioExtradata ??= meta.extradata;
 	job.audioSections.set(state.task.section, { meta, data });
 	job.t.lastProgress = now();
 	if (job.hls && !job.hls.initUrl) publishPlaylist(job);
@@ -1601,18 +1818,18 @@ async function assemble(job: Job) {
 	});
 	job.t.headerBuilt = now();
 	if (!job.uploadId) throw new Error("no upload");
-	const etag = await s3.uploadPart(job.key, job.uploadId, 1, header);
-	parts.push({ partNumber: 1, etag });
-	// Exactly the accepted copies' parts: other copies' parts sit in their own
-	// ranges and are discarded, and S3 checks every listed ETag, so a part
-	// overwritten with other bytes fails the completion instead of corrupting it.
-	await s3.completeMultipart(
-		job.key,
-		job.uploadId,
-		parts.sort((a, b) => a.partNumber - b.partNumber),
+	job.outputBytes = await completeUpload(
+		s3,
+		{
+			key: job.key,
+			uploadId: job.uploadId,
+			header,
+			payloadSize,
+			parts,
+		},
+		(intent) => journalPut(journalKey(job.id, "assembly.json"), intent),
 	);
 	job.t.completed = now();
-	job.outputBytes = payloadSize + header.byteLength;
 
 	await s3.ready();
 	job.url = await s3.presignFresh("GET", job.key, 24 * 3600);
@@ -1842,19 +2059,32 @@ Bun.serve({
 				const job = jobs.get(entry.taskId.split(":")[0] ?? "");
 				const state = job?.tasks.get(entry.taskId);
 				if (!state) continue;
-				if (state.state === "queued" && state.heldUntil) {
+				if (
+					state.state === "queued" &&
+					state.heldUntil &&
+					(state.task.kind === "audio" ||
+						(state.reattach &&
+							state.worker === body.worker &&
+							state.attempts === entry.attempt))
+				) {
 					// Still running from before a coordinator restart: adopt it.
 					state.state = "running";
 					state.worker = body.worker;
 					state.startedAt = now() - entry.elapsedMs;
 					state.heldUntil = undefined;
+					state.reattach = false;
 					state.attempts = entry.attempt ?? 1;
 					state.prefetched = entry.phase === "reserved";
 					const index = queue.indexOf(state);
 					if (index >= 0) queue.splice(index, 1);
 					console.log(`re-attached ${entry.taskId} to ${body.worker}`);
 				}
-				if (state.state !== "running" || state.worker !== body.worker) continue;
+				if (
+					state.state !== "running" ||
+					state.worker !== body.worker ||
+					(entry.attempt !== undefined && state.attempts !== entry.attempt)
+				)
+					continue;
 				state.lastReportedAt = Date.now();
 				if (entry.phase === "reserved") continue;
 				if (state.task.kind === "video") {
@@ -1954,7 +2184,7 @@ Bun.serve({
 			}
 			if (taskMatch[2] === "done") {
 				const result = (await request.json()) as VideoResult;
-				if (job.status === "rendering") onVideoDone(job, state, result);
+				if (job.status === "rendering") await onVideoDone(job, state, result);
 				return Response.json({ ok: true });
 			}
 			// audio: [u32 json length][json][packet bytes]
@@ -1965,7 +2195,7 @@ Bun.serve({
 			) as AudioResultMeta;
 			const data = bytes.slice(4 + length);
 			if (state.task.kind === "audio" && job.status === "rendering") {
-				onAudioDone(job, state, meta, data);
+				await onAudioDone(job, state, meta, data);
 			}
 			return Response.json({ ok: true });
 		}
@@ -2055,34 +2285,22 @@ Bun.serve({
 				});
 			}
 			const id = randomUUID().slice(0, 12);
-			const compression = body.compression ?? "Maximum";
-			const job: Job = {
-				id,
-				request: body,
-				status: "planning",
-				key: `out/${id}.mp4`,
-				t: { requested: now() },
-				fps: body.fps ?? 30,
-				bpp: COMPRESSION_BPP[compression],
-				resolution: body.resolution ?? [1920, 1080],
-				totalFrames: 0,
-				totalSamples: 0,
-				width: 0,
-				height: 0,
-				chunks: [],
-				sections: [],
-				tasks: new Map(),
-				videoResults: new Map(),
-				audioSections: new Map(),
-				audioWaiters: [],
-				cpuSeconds: 0,
-				fetchedBytes: 0,
-				workersUsed: new Set(),
-				waiters: [],
-				taskStats: [],
-			};
-			if (HLS) job.hls = await newHlsState(`hls/${id}`);
+			const job = await newJob(id, body);
+
 			jobs.set(id, job);
+			try {
+				await journalPut(
+					journalKey(id, "request.json"),
+					JSON.stringify({
+						id,
+						request: body,
+						requestedAt: job.t.requested,
+					}),
+				);
+			} catch (error) {
+				jobs.delete(id);
+				throw error;
+			}
 			planJob(job).catch((error) => failJob(job, error));
 			return Response.json({ id, hlsUrl: job.hls?.url });
 		}
@@ -2141,3 +2359,5 @@ console.log(`render-farm coordinator on :${PORT} (${PUBLIC_URL})`);
 
 // Pick up exports a previous coordinator process left unfinished.
 resumeJobs().catch((error) => console.error(`resume failed: ${error}`));
+
+export type { Job, TaskState };

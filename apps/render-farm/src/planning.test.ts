@@ -64,3 +64,21 @@ describe("planChunkBoundaries", () => {
 		expectValid(boundaries, 7);
 	});
 });
+
+test("all planner inputs leave six disjoint ranges even with a lead-in", () => {
+	for (const options of [
+		{ slots: 1000 },
+		{ chunks: 1000 },
+		{ chunks: 1000, maxChunks: 1000 },
+	]) {
+		const boundaries = planChunkBoundaries({
+			...base,
+			totalFrames: 2_160_000,
+			leadInFrames: 120,
+			...options,
+		});
+		const count = boundaries.length - 1;
+		expect(Math.floor(Math.floor(9998 / count) / 6)).toBeGreaterThanOrEqual(3);
+		expectValid(boundaries, 2_160_000);
+	}
+});

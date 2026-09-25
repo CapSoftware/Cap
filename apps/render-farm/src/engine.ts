@@ -128,8 +128,8 @@ export class Engine {
 		});
 	}
 
-	kill() {
-		this.process.kill();
+	kill(signal?: NodeJS.Signals) {
+		this.process.kill(signal);
 	}
 }
 

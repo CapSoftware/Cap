@@ -33,8 +33,20 @@ one S3 multipart upload.
   slot, and a worker-side watchdog kills engines that stop reporting progress.
 - A worker that restarts or stops heartbeating has its tasks requeued; `SIGTERM`
   drains a worker (finishes running tasks, takes no new ones) before it exits.
-- With the S3 journal a restarted coordinator reloads unfinished jobs and
-  re-attaches chunks that workers are still rendering.
+- Job acceptance waits for a durable request receipt; interrupted planning is
+  replayed after restart. The plan and each video dispatch reservation are durable
+  before work is sent.
+  Each chunk has six disjoint part ranges (five original attempts plus a hedge).
+  Retries never wrap around to old ranges; exhausting the range budget fails the
+  export. A restart restores reservations, attempt numbers and hedge ownership.
+- Accepted video results and audio packets are durable before acknowledgement or
+  use by another task. Concurrent copies cannot replace the first accepted result.
+- Recovery recognizes a completed MP4 by its expected size and header, including
+  when S3 committed completion but its response was lost.
+- Failed playlist writes retain the unpublished cursor and retry without waiting
+  for another segment report. The final journal marker waits for the HLS end list.
+- Probes run serially with a two-minute execution deadline and one fresh-process
+  retry after exit or timeout; a failed engine does not poison future exports.
 - `RF_REQUIRE_GPU=1` refuses a chunk whose engine fell back to software decoding
   or rendering, so it is retried on a healthy engine instead of slowing the job.
 - Finished jobs keep a summary for `RF_JOB_RETENTION_MS`; a job with no progress
@@ -45,6 +57,11 @@ one S3 multipart upload.
 ```sh
 docker build -f apps/render-farm/Dockerfile -t cap-render-farm .
 ```
+
+Before upgrading from the initial unversioned journal format, stop accepting new
+exports and let the active jobs finish. That format did not durably reserve upload
+ranges, so version 2 refuses to resume those unfinished uploads and aborts them.
+Jobs created with version 2 can resume across subsequent coordinator restarts.
 
 Run workers with the NVIDIA container toolkit (`--gpus all`) and `--init`.
 Give the coordinator a bucket-scoped IAM role (or keys), a shared `RF_TOKEN`,

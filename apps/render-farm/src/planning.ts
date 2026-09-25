@@ -1,3 +1,5 @@
+import { PART_RANGES } from "./recovery";
+
 export type ChunkPlanInput = {
 	totalFrames: number;
 	fps: number;
@@ -21,8 +23,7 @@ export type ChunkPlanInput = {
  * Boundaries sit on GOP edges when chunks are long enough, else on whole
  * seconds; every chunk opens with its own IDR either way.
  */
-/** Keeps four part ranges of at least three parts per chunk in one upload. */
-export const MAX_CHUNKS = 800;
+export const MAX_CHUNKS = Math.floor(9998 / (PART_RANGES * 3)) - 1;
 
 export function planChunkBoundaries(input: ChunkPlanInput) {
 	const { totalFrames, fps } = input;
@@ -46,7 +47,12 @@ export function planChunkBoundaries(input: ChunkPlanInput) {
 	const units = Math.ceil(totalFrames / unit);
 	chunkCount = Math.max(
 		1,
-		Math.min(chunkCount, units, input.maxChunks ?? Number.POSITIVE_INFINITY),
+		Math.min(
+			chunkCount,
+			MAX_CHUNKS,
+			units,
+			input.maxChunks ?? Number.POSITIVE_INFINITY,
+		),
 	);
 	const boundaries: number[] = [];
 	for (let index = 0; index <= chunkCount; index++) {
