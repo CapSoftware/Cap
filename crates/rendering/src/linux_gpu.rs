@@ -15,6 +15,17 @@ use std::{
     },
 };
 
+static INTEROP_FAILURES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub fn note_interop_failure() {
+    INTEROP_FAILURES.fetch_add(1, Ordering::Relaxed);
+}
+
+/// CUDA frames that failed to reach the compositor since the last call.
+pub fn take_interop_failures() -> u64 {
+    INTEROP_FAILURES.swap(0, Ordering::Relaxed)
+}
+
 pub fn enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| std::env::var("CAP_LINUX_GPU_FRAMES").as_deref() == Ok("1"))
@@ -77,6 +88,7 @@ struct Cuda {
     memcpy_2d_async: unsafe extern "C" fn(*const CudaMemcpy2d, CuStream) -> CuResult,
     stream_create: unsafe extern "C" fn(*mut CuStream, u32) -> CuResult,
     stream_synchronize: unsafe extern "C" fn(CuStream) -> CuResult,
+    stream_destroy: unsafe extern "C" fn(CuStream) -> CuResult,
     mem_get_info: unsafe extern "C" fn(*mut usize, *mut usize) -> CuResult,
     import_external_memory:
         unsafe extern "C" fn(*mut CuExternalMemory, *const ExternalMemoryHandleDesc) -> CuResult,
@@ -138,6 +150,7 @@ impl Cuda {
                 memcpy_2d_async: symbol!(b"cuMemcpy2DAsync_v2\0"),
                 stream_create: symbol!(b"cuStreamCreate\0"),
                 stream_synchronize: symbol!(b"cuStreamSynchronize\0"),
+                stream_destroy: symbol!(b"cuStreamDestroy_v2\0"),
                 mem_get_info: symbol!(b"cuMemGetInfo_v2\0"),
                 import_external_memory: symbol!(b"cuImportExternalMemory\0"),
                 external_memory_mapped_buffer: symbol!(b"cuExternalMemoryGetMappedBuffer\0"),
@@ -201,20 +214,38 @@ pub fn copy_plane(
 
 /// One blocking stream per thread: it orders after NVDEC's writes on the
 /// legacy stream, and waiting on it waits only for this thread's copies.
+/// Encoder threads are created per chunk; destroying the stream with the
+/// thread keeps a long-lived engine from leaking one per chunk.
+struct ThreadStream(std::cell::Cell<CuStream>);
+
+impl Drop for ThreadStream {
+    fn drop(&mut self) {
+        let stream = self.0.get();
+        if stream.is_null() {
+            return;
+        }
+        if let Ok(driver) = cuda() {
+            let _ = driver.with_context(|| unsafe {
+                check((driver.stream_destroy)(stream), "cuStreamDestroy")
+            });
+        }
+    }
+}
+
 fn thread_stream(cuda: &Cuda) -> Result<CuStream, String> {
     thread_local! {
-        static STREAM: std::cell::Cell<CuStream> = const { std::cell::Cell::new(std::ptr::null_mut()) };
+        static STREAM: ThreadStream = const { ThreadStream(std::cell::Cell::new(std::ptr::null_mut())) };
     }
     STREAM.with(|slot| {
-        if slot.get().is_null() {
+        if slot.0.get().is_null() {
             let mut stream = std::ptr::null_mut();
             check(
                 unsafe { (cuda.stream_create)(&mut stream, 0) },
                 "cuStreamCreate",
             )?;
-            slot.set(stream);
+            slot.0.set(stream);
         }
-        Ok(slot.get())
+        Ok(slot.0.get())
     })
 }
 
@@ -411,19 +442,24 @@ pub fn memory_stats() -> (usize, usize, u64) {
     (ALLOCATED.load(Ordering::Relaxed), pooled, free)
 }
 
+/// Pool buffers come in power-of-two sizes: every source resolution and
+/// output size would otherwise add its own set of buffers that the pool keeps
+/// forever, while callers only need a buffer at least as large as asked.
+fn pool_size_class(size: u64) -> u64 {
+    size.max(4096).next_power_of_two()
+}
+
 fn pooled_buffer(device: &wgpu::Device, size: u64, label: &str) -> Result<SharedBuffer, String> {
+    let class = pool_size_class(size);
     if let Ok(mut pool) = POOL.lock()
         && let Some(index) = pool
             .iter()
-            // `SharedBuffer::new` rounds up to whole pages and stores that.
-            .position(|(owner, buffer)| {
-                owner == device && buffer.size == size.next_multiple_of(4096)
-            })
+            .position(|(owner, buffer)| owner == device && buffer.size == class)
     {
         return Ok(pool.swap_remove(index).1);
     }
     ALLOCATED.fetch_add(1, Ordering::Relaxed);
-    SharedBuffer::new(device, size, label)
+    SharedBuffer::new(device, class, label)
 }
 
 /// The buffer goes back to the pool when the slot's last reference drops:
@@ -544,5 +580,19 @@ impl GpuNv12Output {
 impl Drop for GpuNv12Output {
     fn drop(&mut self) {
         self.slot.release();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pool_size_class;
+
+    #[test]
+    fn pool_sizes_collapse_into_power_of_two_classes() {
+        assert_eq!(pool_size_class(1), 4096);
+        assert_eq!(pool_size_class(3_110_400), 4 << 20);
+        assert_eq!(pool_size_class(12_441_600), 16 << 20);
+        assert_eq!(pool_size_class(16 << 20), 16 << 20);
+        assert!((3_000_000..4_000_000).all(|size| pool_size_class(size) == 4 << 20));
     }
 }

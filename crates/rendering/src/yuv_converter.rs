@@ -514,6 +514,20 @@ impl YuvToRgbaConverter {
         queue: &wgpu::Queue,
         frame: &crate::linux_gpu::CudaNv12Frame,
     ) -> Result<&wgpu::TextureView, YuvConversionError> {
+        // There is no CPU copy of a CUDA frame to fall back to, so a failed
+        // conversion leaves the previous texture on screen; count it so the
+        // caller can reject the render instead of encoding stale frames.
+        self.convert_nv12_cuda_into_textures(device, queue, frame)
+            .inspect_err(|_| crate::linux_gpu::note_interop_failure())
+    }
+
+    #[cfg(target_os = "linux")]
+    fn convert_nv12_cuda_into_textures(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        frame: &crate::linux_gpu::CudaNv12Frame,
+    ) -> Result<&wgpu::TextureView, YuvConversionError> {
         let width = frame.width;
         let height = frame.height;
         let (effective_width, effective_height, _downscaled) =

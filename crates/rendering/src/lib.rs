@@ -1264,6 +1264,10 @@ pub async fn render_video_to_channel_nv12(
     let mut layers = layers_reuse_key
         .as_deref()
         .and_then(|key| take_pooled_layers(&constants.device, key))
+        .map(|mut layers| {
+            layers.reset_frame_state();
+            layers
+        })
         .unwrap_or_else(|| {
             RendererLayers::new_with_options(
                 &constants.device,
@@ -6935,6 +6939,12 @@ pub struct RendererLayers {
 }
 
 impl RendererLayers {
+    fn reset_frame_state(&mut self) {
+        self.display.reset_frame_state();
+        self.camera.reset_frame_state();
+        self.camera_only.reset_frame_state();
+    }
+
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
         Self::new_with_options(device, queue, false)
     }

@@ -25,7 +25,12 @@ describe("validateJobRequest", () => {
 			{ recording: "rec", compression: "Lossless" },
 			"compression must be one of",
 		],
+		[
+			{ recording: "rec", compression: "toString" },
+			"compression must be one of",
+		],
 		[{ recording: "rec", maxChunks: -1 }, "maxChunks"],
+		[{ recording: "rec", chunks: 5000 }, "chunks"],
 		[{ recording: "rec", chunkWorkSeconds: Number.NaN }, "chunkWorkSeconds"],
 		[{ recording: "rec", label: "x".repeat(201) }, "label"],
 	])("rejects %j", (body, message) => {

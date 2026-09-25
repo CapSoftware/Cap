@@ -7,7 +7,7 @@ import {
 	writeFileSync,
 	writeSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import type { S3 } from "./s3";
 
 // Recreates a recording on local disk with only the bytes a task needs.
@@ -67,7 +67,10 @@ export class ProjectCache {
 	}
 
 	private open(spec: FileSpec) {
-		const fullPath = join(this.root, spec.path);
+		const fullPath = resolve(this.root, spec.path);
+		if (!fullPath.startsWith(resolve(this.root) + sep)) {
+			throw new Error(`${spec.path} is outside the project`);
+		}
 		let file = this.files.get(fullPath);
 		if (!file) {
 			mkdirSync(dirname(fullPath), { recursive: true });

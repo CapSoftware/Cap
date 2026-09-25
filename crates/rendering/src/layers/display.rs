@@ -31,6 +31,13 @@ pub struct DisplayLayer {
 }
 
 impl DisplayLayer {
+    /// Forget the last frame shown, as a new layer would.
+    pub(crate) fn reset_frame_state(&mut self) {
+        self.last_recording_time = None;
+        self.last_frame_storage = None;
+        self.has_valid_frame = false;
+    }
+
     #[allow(dead_code)]
     pub fn new(device: &wgpu::Device) -> Self {
         Self::new_with_options(device, false)

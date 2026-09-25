@@ -331,14 +331,24 @@ pub async fn render(request: VideoRequest) -> Result<VideoResult> {
         (received, forward_blocked_us)
     };
     cap_rendering::loop_stats::take();
+    #[cfg(target_os = "linux")]
+    cap_rendering::linux_gpu::take_interop_failures();
     let (render_result, (received, forward_blocked_us)) = tokio::join!(render, forward);
     let [decode, render_us, next_decode, join, send, _] = cap_rendering::loop_stats::take();
-    render_result.map_err(|error| anyhow!("render: {error}"))?;
     timings.render_ms = render_started.elapsed().as_millis() as u64;
-
+    // `forward` has dropped the encoder's sender, so this returns once the
+    // encoder drains. Joining before looking at the render result keeps a
+    // failed chunk's encoder from outliving the request (it reports events
+    // under the current request id and holds an NVENC session), and surfaces
+    // the encoder's error, which is usually why the render's send failed.
     let encoded = encoder
         .join()
-        .map_err(|_| anyhow!("encoder thread panicked"))??;
+        .map_err(|_| anyhow!("encoder thread panicked"))?;
+    let encoded = match (render_result, encoded) {
+        (_, Err(error)) => return Err(error.context("encode")),
+        (Err(error), Ok(_)) => bail!("render: {error}"),
+        (Ok(()), Ok(encoded)) => encoded,
+    };
     if received != expected || encoded.sizes.len() as u32 != expected {
         bail!(
             "chunk {:?} produced {received} rendered / {} encoded frames, expected {expected}",
@@ -356,6 +366,13 @@ pub async fn render(request: VideoRequest) -> Result<VideoResult> {
         && !encoded.cuda_input
     {
         bail!("gpu path degraded: frames reached the encoder through system memory");
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let failures = cap_rendering::linux_gpu::take_interop_failures();
+        if failures > 0 && std::env::var("RF_REQUIRE_GPU").as_deref() == Ok("1") {
+            bail!("gpu path degraded: {failures} decoded frames failed to reach the compositor");
+        }
     }
     let ms = |us: u64| us / 1000;
     timings.pipeline = Some(serde_json::json!({
@@ -540,6 +557,13 @@ fn encode(
     for (index, rendered) in first.into_iter().chain(frames.iter()).enumerate() {
         let pts = index as i64;
         stats[0] += waiting.elapsed().as_micros() as u64;
+        if rendered.width != width || rendered.height != height {
+            bail!(
+                "renderer produced {}x{}, expected {width}x{height}",
+                rendered.width,
+                rendered.height
+            );
+        }
         #[cfg(target_os = "linux")]
         if let (Some(cuda_frames), Some(gpu)) = (&cuda_frames, rendered.gpu.as_ref()) {
             let copy = Instant::now();
@@ -553,13 +577,6 @@ fn encode(
             stats[2] += encode.elapsed().as_micros() as u64;
             waiting = Instant::now();
             continue;
-        }
-        if rendered.width != width || rendered.height != height {
-            bail!(
-                "renderer produced {}x{}, expected {width}x{height}",
-                rendered.width,
-                rendered.height
-            );
         }
         // The encoder may still hold a reference to the previous frame's buffer.
         unsafe { ffmpeg::ffi::av_frame_make_writable(nv12.as_mut_ptr()) };

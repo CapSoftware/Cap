@@ -40,7 +40,7 @@ impl ProcessedFrame {
     fn to_decoded_frame(&self) -> DecodedFrame {
         #[cfg(target_os = "linux")]
         if let Some(cuda) = &self.cuda {
-            return DecodedFrame::new_nv12_cuda(Arc::clone(cuda));
+            return DecodedFrame::new_nv12_cuda(Arc::clone(cuda), Arc::clone(&self.data));
         }
         match self.format {
             PixelFormat::Rgba => {
@@ -78,6 +78,9 @@ struct PendingRequest {
 
 const MAX_FRAME_LOOKBACK_TOLERANCE: u32 = 2;
 const MAX_FRAME_CACHE_BYTES: usize = 128 * 1024 * 1024;
+/// Cache weight of a frame still on the GPU (it pins an NVDEC surface).
+#[cfg(target_os = "linux")]
+const CUDA_FRAME_CACHE_WEIGHT: usize = 16 * 1024 * 1024;
 
 fn extract_yuv_planes(frame: &frame::Video) -> Option<(Vec<u8>, PixelFormat, u32, u32)> {
     let height = frame.height();
@@ -251,9 +254,9 @@ impl CachedFrame {
         #[cfg(target_os = "linux")]
         match self {
             Self::Raw { frame, .. } if frame.format() == format::Pixel::CUDA => {
-                return 16 * 1024 * 1024;
+                return CUDA_FRAME_CACHE_WEIGHT;
             }
-            Self::Processed(frame) if frame.cuda.is_some() => return 16 * 1024 * 1024,
+            Self::Processed(frame) if frame.cuda.is_some() => return CUDA_FRAME_CACHE_WEIGHT,
             _ => {}
         }
         match self {
@@ -1160,10 +1163,16 @@ impl FfmpegDecoder {
         // frames past the last request and by the cache's byte budget (hw
         // surfaces). Off unless CAP_DECODER_READAHEAD is set: editor
         // playback keeps its on-demand behaviour.
+        // More than the cache holds would evict the frames just decoded ahead.
+        #[cfg(target_os = "linux")]
+        let readahead_limit = (MAX_FRAME_CACHE_BYTES / CUDA_FRAME_CACHE_WEIGHT) as u32;
+        #[cfg(not(target_os = "linux"))]
+        let readahead_limit = FRAME_CACHE_SIZE as u32;
         let readahead = std::env::var("CAP_DECODER_READAHEAD")
             .ok()
             .and_then(|value| value.parse::<u32>().ok())
-            .unwrap_or(0);
+            .unwrap_or(0)
+            .min(readahead_limit);
         let mut readahead_exhausted = false;
         loop {
             let r = if readahead > 0 {

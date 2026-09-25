@@ -50,13 +50,40 @@ function hmac(key: Buffer | string, value: string) {
 
 export class S3 {
 	private expiresAt = 0;
+	private fetchedAt = 0;
 	private refreshing: Promise<void> | null = null;
 
 	constructor(readonly config: S3Config) {}
 
 	/** Refresh instance-role credentials from IMDSv2 when close to expiry. */
-	async ready() {
-		if (!this.config.imds || Date.now() < this.expiresAt - 5 * 60_000) return;
+	/**
+	 * Presigns with credentials refreshed first. A URL signed with instance-role
+	 * credentials stops working when they expire, so its lifetime is capped at
+	 * theirs (up to ~6 h after issue); longer-lived playback needs a CDN.
+	 */
+	async presignFresh(method: string, key: string, expiresSeconds: number) {
+		await this.ready(Math.min(expiresSeconds * 1000, 60 * 60_000));
+		const remaining = this.config.imds
+			? Math.floor((this.expiresAt - Date.now()) / 1000) - 60
+			: expiresSeconds;
+		return this.presign(
+			method,
+			key,
+			Math.max(60, Math.min(expiresSeconds, remaining)),
+		);
+	}
+
+	async ready(minRemainingMs = 5 * 60_000) {
+		if (!this.config.imds || Date.now() < this.expiresAt - minRemainingMs)
+			return;
+		// Instance credentials rotate on AWS's schedule; asking again sooner
+		// returns the same ones, so only the hard 5 min floor forces a fetch.
+		if (
+			Date.now() - this.fetchedAt < 60_000 &&
+			Date.now() < this.expiresAt - 5 * 60_000
+		) {
+			return;
+		}
 		this.refreshing ??= (async () => {
 			const token = await (
 				await fetch("http://169.254.169.254/latest/api/token", {
@@ -82,6 +109,7 @@ export class S3 {
 			this.config.secretAccessKey = credentials.SecretAccessKey;
 			this.config.sessionToken = credentials.Token;
 			this.expiresAt = Date.parse(credentials.Expiration);
+			this.fetchedAt = Date.now();
 		})().finally(() => {
 			this.refreshing = null;
 		});

@@ -15,6 +15,8 @@ export const MIN_PART = 5 * 1024 * 1024;
 export type VideoTask = {
 	kind: "video";
 	taskId: string;
+	/** Dispatch attempt; echoed in failures so stale ones are ignored. */
+	attempt?: number;
 	jobId: string;
 	chunk: number;
 	fps: number;
@@ -53,6 +55,7 @@ export type SegmentReport = {
 export type AudioTask = {
 	kind: "audio";
 	taskId: string;
+	attempt?: number;
 	jobId: string;
 	section: number;
 	fps: number;

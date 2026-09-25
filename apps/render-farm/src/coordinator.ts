@@ -55,10 +55,11 @@ const probeEngine = new Engine(ENGINE_BIN, {}, "coordinator-engine");
 // Audio sections (Studio Sound) are CPU work. These lanes render them on the
 // coordinator's cores, pulling from the same queue as workers' audio lanes.
 const LOCAL_AUDIO_SLOTS = Number(process.env.RF_LOCAL_AUDIO_SLOTS ?? 2);
-// Stores that accept completing with a subset of uploaded parts (AWS S3) give
-// hedge copies their own part range: NVENC output is not bit-identical across
-// GPUs, so a copy overwriting the original's parts would break the header.
-const SPLIT_HEDGE_PARTS = process.env.RF_SPLIT_HEDGE_PARTS !== "0";
+// Every dispatch of a chunk (original, hedge, retry) uploads into its own part
+// range, cycling through this many. NVENC output differs between GPUs, so two
+// live copies must never write the same part numbers; completion lists exactly
+// the accepted copy's parts and S3 discards the rest.
+const PART_RANGES = 4;
 // Progressive playback: chunks stream fMP4 segments while rendering and the
 // coordinator keeps an HLS EVENT playlist of the contiguous prefix, so an
 // export is watchable seconds after the request whatever its length. The
@@ -168,9 +169,9 @@ async function runAudioLocally(job: Job, state: TaskState) {
 		if (state.attempts >= 3) failJob(job, error);
 		else
 			setTimeout(() => {
-				state.state = "queued";
-				state.worker = undefined;
-				queue.unshift(state);
+				if (job.status !== "rendering" || job.audioSections.has(task.section))
+					return;
+				requeue(state, "local audio lane failed");
 				pumpLocalAudio();
 				dispatch();
 			}, 1000 * state.attempts);
@@ -204,6 +205,8 @@ type Chunk = {
 	files: FileSpec[];
 	firstPart: number;
 	partLimit: number;
+	/** Copies dispatched so far; picks each dispatch's part range. */
+	dispatches: number;
 };
 
 type TaskState = {
@@ -222,6 +225,8 @@ type TaskState = {
 	 * chunk being rendered twice.
 	 */
 	heldUntil?: number;
+	/** Last heartbeat in which the owning worker listed this task. */
+	lastReportedAt?: number;
 	progress?: { frames: number; total: number; elapsedMs: number; at: number };
 };
 
@@ -390,6 +395,33 @@ type SourceIndex = {
 // once uploaded, so their moov indexes never need re-reading per export.
 const sourceIndexes = new Map<string, SourceIndex>();
 
+// Shared prefixes a manifest may point sources at besides its own recording
+// prefix (e.g. assets reused across recordings), comma-separated.
+const SOURCE_KEY_PREFIXES = (process.env.RF_SOURCE_KEY_PREFIXES ?? "")
+	.split(",")
+	.filter(Boolean);
+
+/** Manifests name local paths and bucket keys; neither may escape its scope. */
+function checkManifest(manifest: Manifest, prefix: string) {
+	for (const file of manifest.files) {
+		const parts = file.path.split("/");
+		if (
+			file.path.startsWith("/") ||
+			parts.includes("..") ||
+			parts.includes("")
+		) {
+			throw new Error(`manifest path ${file.path} is not a relative path`);
+		}
+		if (
+			file.key !== undefined &&
+			!file.key.startsWith(`${prefix}/`) &&
+			!SOURCE_KEY_PREFIXES.some((allowed) => file.key?.startsWith(allowed))
+		) {
+			throw new Error(`manifest key for ${file.path} is outside the recording`);
+		}
+	}
+}
+
 async function sourceIndex(prefix: string): Promise<SourceIndex> {
 	const cached =
 		process.env.RF_INDEX_CACHE !== "0" ? sourceIndexes.get(prefix) : undefined;
@@ -397,6 +429,7 @@ async function sourceIndex(prefix: string): Promise<SourceIndex> {
 	const manifest = JSON.parse(
 		new TextDecoder().decode(await s3.get(`${prefix}/manifest.json`)),
 	) as Manifest;
+	checkManifest(manifest, prefix);
 	const keyOf = (file: { path: string; key?: string }) =>
 		file.key ?? `${prefix}/${file.path}`;
 	const metaFile = manifest.files.find(
@@ -575,12 +608,10 @@ async function planJob(job: Job) {
 	});
 	const chunkCount = boundaries.length - 1;
 	const partsPerChunk = Math.floor(9998 / chunkCount);
-	if (partsPerChunk < (SPLIT_HEDGE_PARTS ? 8 : 4)) {
+	const partLimit = Math.floor(partsPerChunk / PART_RANGES);
+	if (partLimit < 3) {
 		throw new Error("too many chunks for one multipart upload");
 	}
-	const partLimit = SPLIT_HEDGE_PARTS
-		? Math.floor(partsPerChunk / 2)
-		: partsPerChunk;
 	const samplesPerFrame = SAMPLE_RATE / job.fps;
 	const totalPackets = Math.ceil(probe.total_samples / PACKET) + 1;
 	const packetAt = (frame: number, isStart: boolean, isEnd: boolean) => {
@@ -630,6 +661,7 @@ async function planJob(job: Job) {
 			],
 			firstPart: 2 + index * partsPerChunk,
 			partLimit,
+			dispatches: 0,
 		});
 	}
 
@@ -874,10 +906,10 @@ function audioFrame(meta: AudioResultMeta, data: Uint8Array) {
 	return body;
 }
 
-function newHlsState(prefix: string): HlsState {
+async function newHlsState(prefix: string): Promise<HlsState> {
 	return {
 		prefix,
-		url: s3.presign("GET", `${prefix}/index.m3u8`, 6 * 3600),
+		url: await s3.presignFresh("GET", `${prefix}/index.m3u8`, 6 * 3600),
 		segments: new Map(),
 		listed: [],
 		cursor: { chunk: 0, index: 0 },
@@ -947,9 +979,10 @@ async function resumeJobs() {
 				workersUsed: new Set(),
 				waiters: [],
 				taskStats: [],
-				hls: record.hls ? newHlsState(record.hls.prefix) : undefined,
+				hls: record.hls ? await newHlsState(record.hls.prefix) : undefined,
 			};
 			job.t.resumed = now();
+			job.t.lastProgress = now();
 			for (const name of names) {
 				const video = name.match(/^v\/(\d+)\.json$/);
 				if (video) {
@@ -1055,6 +1088,34 @@ function pickQueued(accepts: (kind: string) => boolean) {
 	});
 }
 
+/** The task as sent for this attempt: its attempt number and part range. */
+function dispatchedTask(job: Job | undefined, state: TaskState): Task {
+	const task = state.task;
+	if (task.kind !== "video" || !job)
+		return { ...task, attempt: state.attempts };
+	const chunk = job.chunks[task.chunk];
+	if (!chunk) return { ...task, attempt: state.attempts };
+	const range = chunk.dispatches++ % PART_RANGES;
+	return {
+		...task,
+		attempt: state.attempts,
+		upload: {
+			...task.upload,
+			firstPart: chunk.firstPart + range * chunk.partLimit,
+			partLimit: chunk.partLimit,
+		},
+	};
+}
+
+/** Put a task back in the queue, at most once. */
+function requeue(state: TaskState, reason: string) {
+	console.warn(`requeue ${state.task.taskId}: ${reason}`);
+	state.state = "queued";
+	state.worker = undefined;
+	state.progress = undefined;
+	if (!queue.includes(state)) queue.unshift(state);
+}
+
 function dispatch() {
 	pumpLocalAudio();
 	for (let p = 0; p < pollers.length; ) {
@@ -1079,13 +1140,14 @@ function dispatch() {
 		state.worker = poller.worker;
 		state.startedAt = now();
 		state.attempts++;
+		state.lastReportedAt = undefined;
 		const job = jobs.get(state.task.jobId);
 		if (job) {
 			job.t.firstTaskStarted ??= now();
 			if (state.task.kind === "video") job.t.firstVideoStarted ??= now();
 			job.workersUsed.add(poller.worker);
 		}
-		poller.resolve(state.task);
+		poller.resolve(dispatchedTask(job, state));
 	}
 }
 
@@ -1147,21 +1209,8 @@ function straggler(): TaskState | undefined {
 	best.state.duplicated = true;
 	const job = jobs.get(best.state.task.jobId);
 	if (!job) return undefined;
-	// Without RF_SPLIT_HEDGE_PARTS the copy reuses the original's part numbers,
-	// which stores that reject completions omitting uploaded parts require. That
-	// is only safe when both copies produce identical bytes (x264 with pinned
-	// threads); NVENC output differs across GPUs, so NVENC fleets need the split.
 	const original = best.state.task;
-	const task: VideoTask = {
-		...original,
-		taskId: `${original.taskId}:dup`,
-		upload: SPLIT_HEDGE_PARTS
-			? {
-					...original.upload,
-					firstPart: original.upload.firstPart + original.upload.partLimit,
-				}
-			: original.upload,
-	};
+	const task: VideoTask = { ...original, taskId: `${original.taskId}:dup` };
 	const state: TaskState = {
 		task,
 		state: "queued",
@@ -1198,17 +1247,19 @@ function cancellations(worker: string) {
  */
 function supersede(id: string) {
 	const host = id.slice(0, id.lastIndexOf("-"));
-	for (const old of [...workers.keys()]) {
+	// Only predecessors that have gone quiet: two live workers sharing a
+	// hostname (several GPUs on one host) must not evict each other.
+	const quietSince = Date.now() - 4_500;
+	for (const [old, worker] of [...workers.entries()]) {
 		if (old === id || old.slice(0, old.lastIndexOf("-")) !== host) continue;
+		if (worker.lastSeen > quietSince) continue;
 		workers.delete(old);
 		for (const job of jobs.values()) {
 			if (job.status !== "rendering") continue;
 			for (const state of job.tasks.values()) {
-				if (state.state !== "running" || state.worker !== old) continue;
-				console.warn(`requeue ${state.task.taskId}: worker ${old} restarted`);
-				state.state = "queued";
-				state.worker = undefined;
-				queue.unshift(state);
+				if (state.state === "running" && state.worker === old) {
+					requeue(state, `worker ${old} restarted`);
+				}
 			}
 		}
 	}
@@ -1238,13 +1289,15 @@ setInterval(() => {
 			)
 				continue;
 			const worker = workers.get(state.worker);
-			if (worker && worker.lastSeen >= cutoff) continue;
-			console.warn(
-				`requeue ${state.task.taskId}: worker ${state.worker} went away`,
-			);
-			state.state = "queued";
-			state.worker = undefined;
-			queue.unshift(state);
+			if (!worker || worker.lastSeen < cutoff) {
+				requeue(state, `worker ${state.worker} went away`);
+				continue;
+			}
+			// A live worker that stops listing a task (lost /work response,
+			// crashed slot) no longer holds it.
+			if ((state.lastReportedAt ?? state.startedAt ?? 0) < cutoff) {
+				requeue(state, `not reported by ${state.worker}`);
+			}
 		}
 	}
 	dispatch();
@@ -1286,7 +1339,7 @@ async function writeInit(job: Job, hls: HlsState) {
 		}),
 		"video/mp4",
 	);
-	hls.initUrl = s3.presign("GET", key, 6 * 3600);
+	hls.initUrl = await s3.presignFresh("GET", key, 6 * 3600);
 	return true;
 }
 
@@ -1310,7 +1363,7 @@ async function publishPlaylist(job: Job) {
 					?.get(hls.cursor.index);
 				if (!segment) break;
 				hls.listed.push({
-					url: s3.presign("GET", segment.key, 6 * 3600),
+					url: await s3.presignFresh("GET", segment.key, 6 * 3600),
 					duration: (segment.frames[1] - segment.frames[0]) / job.fps,
 				});
 				grew = true;
@@ -1378,6 +1431,8 @@ function recordStat(
 function onVideoDone(job: Job, state: TaskState, result: VideoResult) {
 	if (state.task.kind !== "video") return;
 	state.state = "done";
+	const queued = queue.indexOf(state);
+	if (queued >= 0) queue.splice(queued, 1);
 	const chunk = state.task.chunk;
 	recordStat(job, "video", chunk, result.worker, {
 		...result.timings,
@@ -1406,6 +1461,19 @@ function onVideoDone(job: Job, state: TaskState, result: VideoResult) {
 	}
 	job.videoResults.set(chunk, result);
 	job.t.lastProgress = now();
+	// Segments reported to a previous coordinator process (before a restart)
+	// are not reported again; derive any missing ones from the result.
+	const chunkPlan = job.chunks[chunk];
+	if (job.hls && chunkPlan) {
+		job.hls.extradata ??= result.extradata;
+		const known =
+			job.hls.segments.get(chunk) ?? new Map<number, SegmentReport>();
+		for (const segment of segmentsFromResult(job, chunkPlan, result)) {
+			if (!known.has(segment.index)) known.set(segment.index, segment);
+		}
+		job.hls.segments.set(chunk, known);
+		publishPlaylist(job);
+	}
 	journalPut(journalKey(job.id, `v/${chunk}.json`), JSON.stringify(result));
 	if (job.videoResults.size === job.chunks.length) {
 		job.t.videoDone = now();
@@ -1421,6 +1489,11 @@ function onAudioDone(
 ) {
 	if (state.task.kind !== "audio") return;
 	state.state = "done";
+	const queued = queue.indexOf(state);
+	if (queued >= 0) queue.splice(queued, 1);
+	// Chunks may already have muxed the first copy's packets; a second render
+	// replacing them would desync the header from those bytes.
+	if (job.audioSections.has(state.task.section)) return;
 	if (!job.audioSections.has(state.task.section)) {
 		journalPut(
 			journalKey(job.id, `a/${state.task.section}.bin`),
@@ -1530,68 +1603,19 @@ async function assemble(job: Job) {
 	if (!job.uploadId) throw new Error("no upload");
 	const etag = await s3.uploadPart(job.key, job.uploadId, 1, header);
 	parts.push({ partNumber: 1, etag });
-	// Complete from what the bucket actually holds, after checking it is
-	// exactly the layout the header describes (retries and straggler copies
-	// overwrite parts in place; any stray part would corrupt the offsets).
-	const expected = new Map(parts.map((part) => [part.partNumber, part]));
-	const expectedSizes = new Map<number, number>([[1, header.byteLength]]);
-	for (const result of results) {
-		for (const part of result.parts)
-			expectedSizes.set(part.partNumber, part.size);
-	}
-	if (SPLIT_HEDGE_PARTS && process.env.RF_TRUST_ETAGS !== "0") {
-		// S3 checks every listed part's ETag on completion, so a part that
-		// was overwritten with other bytes fails the call instead of
-		// corrupting the file; the ListParts round trip adds nothing.
-		await s3.completeMultipart(
-			job.key,
-			job.uploadId,
-			parts.sort((a, b) => a.partNumber - b.partNumber),
-		);
-	} else {
-		const listed = await s3.listParts(job.key, job.uploadId);
-		if (SPLIT_HEDGE_PARTS) {
-			// Complete with exactly the winners' parts; hedge losers' parts in
-			// their own ranges are discarded by the store.
-			const byNumber = new Map(listed.map((part) => [part.partNumber, part]));
-			for (const [partNumber, size] of expectedSizes) {
-				const part = byNumber.get(partNumber);
-				if (!part) throw new Error(`part ${partNumber} missing from upload`);
-				if (part.size !== size) {
-					throw new Error(
-						`part ${partNumber} is ${part.size} bytes, expected ${size}`,
-					);
-				}
-			}
-			await s3.completeMultipart(
-				job.key,
-				job.uploadId,
-				parts.sort((a, b) => a.partNumber - b.partNumber),
-			);
-		} else {
-			for (const part of listed) {
-				const size = expectedSizes.get(part.partNumber);
-				if (size === undefined)
-					throw new Error(`unexpected part ${part.partNumber} in upload`);
-				if (size !== part.size) {
-					throw new Error(
-						`part ${part.partNumber} is ${part.size} bytes, expected ${size}`,
-					);
-				}
-			}
-			if (listed.length !== expected.size) {
-				throw new Error(
-					`upload has ${listed.length} parts, expected ${expected.size}`,
-				);
-			}
-			await s3.completeMultipart(job.key, job.uploadId, listed);
-		}
-	}
+	// Exactly the accepted copies' parts: other copies' parts sit in their own
+	// ranges and are discarded, and S3 checks every listed ETag, so a part
+	// overwritten with other bytes fails the completion instead of corrupting it.
+	await s3.completeMultipart(
+		job.key,
+		job.uploadId,
+		parts.sort((a, b) => a.partNumber - b.partNumber),
+	);
 	job.t.completed = now();
 	job.outputBytes = payloadSize + header.byteLength;
 
 	await s3.ready();
-	job.url = s3.presign("GET", job.key, s3.config.imds ? 6 * 3600 : 24 * 3600);
+	job.url = await s3.presignFresh("GET", job.key, 24 * 3600);
 	if (process.env.RF_VERIFY_ASYNC !== "0") {
 		// Watchable as soon as the object exists; the ffprobe check still
 		// runs and is reported on the job, it just isn't on the user's path.
@@ -1756,6 +1780,7 @@ Bun.serve({
 				kinds?: string[];
 				audioSlots?: number;
 				prefetch?: boolean;
+				draining?: boolean;
 			};
 			const worker = workers.get(body.worker) ?? {
 				id: body.worker,
@@ -1767,8 +1792,10 @@ Bun.serve({
 			worker.lastSeen = Date.now();
 			worker.slots = body.slots;
 			worker.audioSlots = body.audioSlots ?? 0;
-			if (!workers.has(body.worker)) supersede(body.worker);
+			supersede(body.worker);
 			workers.set(body.worker, worker);
+			if (body.draining)
+				return Response.json({ task: null, finished: finishedJobs });
 			const task = await new Promise<Task | null>((resolve) => {
 				const poller: Poller = {
 					worker: body.worker,
@@ -1804,6 +1831,8 @@ Bun.serve({
 				usage?: Usage | null;
 				running?: {
 					taskId: string;
+					attempt?: number;
+					phase?: "reserved" | "running";
 					frames: number;
 					total: number;
 					elapsedMs: number;
@@ -1819,11 +1848,15 @@ Bun.serve({
 					state.worker = body.worker;
 					state.startedAt = now() - entry.elapsedMs;
 					state.heldUntil = undefined;
-					state.attempts = 1;
+					state.attempts = entry.attempt ?? 1;
+					state.prefetched = entry.phase === "reserved";
 					const index = queue.indexOf(state);
 					if (index >= 0) queue.splice(index, 1);
 					console.log(`re-attached ${entry.taskId} to ${body.worker}`);
 				}
+				if (state.state !== "running" || state.worker !== body.worker) continue;
+				state.lastReportedAt = Date.now();
+				if (entry.phase === "reserved") continue;
 				if (state.task.kind === "video") {
 					if (entry.frames > (state.progress?.frames ?? 0) && job)
 						job.t.lastProgress = now();
@@ -1831,11 +1864,11 @@ Bun.serve({
 				}
 			}
 			const worker = workers.get(body.worker);
+			supersede(body.worker);
 			if (worker) {
 				worker.lastSeen = Date.now();
 				worker.usage = body.usage;
 			} else {
-				supersede(body.worker);
 				workers.set(body.worker, {
 					id: body.worker,
 					slots: body.slots,
@@ -1882,9 +1915,19 @@ Bun.serve({
 				const body = (await request.json()) as {
 					error: string;
 					worker: string;
+					attempt?: number;
 				};
 				console.warn(`task ${taskId} failed on ${body.worker}: ${body.error}`);
 				if (job.status !== "rendering") return Response.json({ ok: true });
+				// A stale copy (already requeued, re-dispatched or resumed) failing
+				// says nothing about the attempt now in charge of the task.
+				if (
+					state.state !== "running" ||
+					state.worker !== body.worker ||
+					(body.attempt !== undefined && body.attempt !== state.attempts)
+				) {
+					return Response.json({ ok: true });
+				}
 				if (
 					state.task.kind === "video" &&
 					job.videoResults.has(state.task.chunk)
@@ -1903,11 +1946,9 @@ Bun.serve({
 					// can't burn every attempt within a second.
 					state.state = "queued";
 					state.worker = undefined;
-					setTimeout(() => {
-						if (job.status !== "rendering" || state.state !== "queued") return;
-						queue.unshift(state);
-						dispatch();
-					}, 1000 * state.attempts);
+					state.heldUntil = Date.now() + 1000 * state.attempts;
+					if (!queue.includes(state)) queue.unshift(state);
+					setTimeout(dispatch, 1000 * state.attempts + 50);
 				}
 				return Response.json({ ok: true });
 			}
@@ -1990,7 +2031,10 @@ Bun.serve({
 
 		if (url.pathname === "/index" && request.method === "POST") {
 			// Upload-time hook: index a recording's sources before any export.
-			const body = (await request.json()) as { recording: string };
+			const parsed = validateJobRequest(await request.json().catch(() => null));
+			if (typeof parsed === "string")
+				return new Response(parsed, { status: 400 });
+			const body = parsed;
 			const started = performance.now();
 			await sourceIndex(body.recording.replace(/\/$/, ""));
 			return Response.json({ ms: Math.round(performance.now() - started) });
@@ -2037,7 +2081,7 @@ Bun.serve({
 				waiters: [],
 				taskStats: [],
 			};
-			if (HLS) job.hls = newHlsState(`hls/${id}`);
+			if (HLS) job.hls = await newHlsState(`hls/${id}`);
 			jobs.set(id, job);
 			planJob(job).catch((error) => failJob(job, error));
 			return Response.json({ id, hlsUrl: job.hls?.url });

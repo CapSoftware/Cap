@@ -21,6 +21,9 @@ export type ChunkPlanInput = {
  * Boundaries sit on GOP edges when chunks are long enough, else on whole
  * seconds; every chunk opens with its own IDR either way.
  */
+/** Keeps four part ranges of at least three parts per chunk in one upload. */
+export const MAX_CHUNKS = 800;
+
 export function planChunkBoundaries(input: ChunkPlanInput) {
 	const { totalFrames, fps } = input;
 	const gop = fps * 2;
@@ -37,7 +40,7 @@ export function planChunkBoundaries(input: ChunkPlanInput) {
 			input.chunksPerSlot ?? 6,
 			Math.ceil(totalFrames / input.targetFrames / slots),
 		);
-		chunkCount = Math.min(slots * waves, 2000);
+		chunkCount = Math.min(slots * waves, MAX_CHUNKS);
 	}
 	const unit = totalFrames / Math.max(1, chunkCount) >= gop ? gop : fps;
 	const units = Math.ceil(totalFrames / unit);

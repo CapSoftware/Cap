@@ -115,6 +115,16 @@ describe("pickQueued", () => {
 		).toBe(1);
 	});
 
+	test("leftover entries of jobs that are no longer rendering are skipped", () => {
+		const done = job("done", 0, 4, { status: "ready" });
+		const live = job("live", 50, 4, { runningTasks: 30 });
+		const queue = [video("done", 0), video("gone", 0), video("live", 3)];
+		expect(pickQueued(queue, [done, live], any, options)).toBe(2);
+		expect(
+			pickQueued(queue, [done, live], any, { ...options, fifo: true }),
+		).toBe(2);
+	});
+
 	test("returns -1 when nothing is eligible", () => {
 		expect(pickQueued([], [], any, options)).toBe(-1);
 	});

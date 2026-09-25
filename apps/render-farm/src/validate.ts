@@ -42,14 +42,14 @@ export function validateJobRequest(body: unknown): JobRequest | string {
 		request.compression !== undefined &&
 		!(
 			typeof request.compression === "string" &&
-			request.compression in COMPRESSION_BPP
+			Object.hasOwn(COMPRESSION_BPP, request.compression)
 		)
 	) {
 		return `compression must be one of ${Object.keys(COMPRESSION_BPP).join(", ")}`;
 	}
 	for (const [field, max] of [
-		["maxChunks", 5000],
-		["chunks", 5000],
+		["maxChunks", 800],
+		["chunks", 800],
 		["chunksPerSlot", 64],
 		["frameLimit", 10_000_000],
 	] as const) {

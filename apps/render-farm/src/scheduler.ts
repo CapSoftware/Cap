@@ -42,13 +42,12 @@ export function pickQueued(
 	accepts: (kind: SchedulableTask["kind"]) => boolean,
 	options: SchedulerOptions,
 ) {
+	const byId = new Map<string, { job: SchedulableJob; head: Set<number> }>();
 	const eligible = (state: SchedulableState) =>
 		state.state === "queued" &&
+		byId.has(state.task.jobId) &&
 		accepts(state.task.kind) &&
 		!(state.heldUntil && state.heldUntil > options.now);
-	if (options.fifo) return queue.findIndex(eligible);
-
-	const byId = new Map<string, { job: SchedulableJob; head: Set<number> }>();
 	for (const job of jobs) {
 		if (job.status !== "rendering") continue;
 		const head = new Set<number>();
@@ -59,6 +58,7 @@ export function pickQueued(
 		}
 		byId.set(job.id, { job, head });
 	}
+	if (options.fifo) return queue.findIndex(eligible);
 
 	let best = -1;
 	let bestKey: number[] | null = null;
@@ -66,15 +66,14 @@ export function pickQueued(
 		if (!eligible(state)) continue;
 		const task = state.task;
 		const entry = byId.get(task.jobId);
+		if (!entry) continue;
 		const position = task.kind === "video" ? task.chunk : task.section;
 		const gating =
-			task.kind === "video"
-				? entry?.head.has(task.chunk) === true
-				: position === 0;
+			task.kind === "video" ? entry.head.has(task.chunk) : position === 0;
 		const key = [
 			gating ? 0 : 1,
-			entry?.job.runningTasks ?? 0,
-			entry?.job.requestedAt ?? 0,
+			entry.job.runningTasks,
+			entry.job.requestedAt,
 			position,
 		];
 		if (!bestKey || compareKeys(key, bestKey) < 0) {

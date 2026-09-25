@@ -186,9 +186,10 @@ export async function sampleThreads(pid: number, until: Promise<unknown>) {
 	const { readdirSync } = await import("node:fs");
 	const seen = new Map<string, { name: string; first: number; last: number }>();
 	let done = false;
-	until.finally(() => {
+	const stop = () => {
 		done = true;
-	});
+	};
+	until.then(stop, stop);
 	while (!done) {
 		try {
 			for (const tid of readdirSync(`/proc/${pid}/task`)) {

@@ -114,22 +114,27 @@ const progress = new Map<
 	}
 >();
 
-async function post(path: string, body: unknown) {
+async function post(path: string, body: unknown, signal?: AbortSignal) {
 	for (let attempt = 0; ; attempt++) {
 		try {
 			const response = await fetch(`${COORDINATOR}${path}`, {
 				method: "POST",
 				headers,
 				body: JSON.stringify(body),
+				signal,
 			});
 			if (!response.ok) throw new Error(`${path} -> ${response.status}`);
 			return response;
 		} catch (error) {
-			if (attempt >= 5) throw error;
+			if (attempt >= 5 || signal?.aborted) throw error;
 			await Bun.sleep(250 * 2 ** attempt);
 		}
 	}
 }
+
+// Open /work long-polls, aborted when the worker starts draining so the
+// coordinator stops handing it tasks it would never run.
+const openPolls = new Set<AbortController>();
 
 async function fetchAudio(task: VideoTask) {
 	if (!task.audio) return { sizes: [] as number[], data: new Uint8Array() };
@@ -433,6 +438,9 @@ async function runVideo(
 	const cache = cacheFor(task.jobId);
 	const fetchStats = await cache.materialize(task.files);
 	const audioPromise = fetchAudio(task);
+	// Awaited only after the render; without a handler until then, a failure
+	// (job cancelled, coordinator unreachable) would kill the whole worker.
+	audioPromise.catch(() => {});
 	const out = join(
 		cache.root,
 		`v${task.chunk}-${randomUUID().slice(0, 6)}.h264`,
@@ -490,6 +498,7 @@ async function runVideo(
 	});
 	nearEnd();
 	const segmentsDone = stream?.finish(result.sizes, result.extradata);
+	segmentsDone?.catch(() => {});
 	const engineMs = performance.now() - engineStarted;
 	const threads = await threadsPromise;
 	const waitStarted = performance.now();
@@ -633,15 +642,22 @@ async function runAudio(task: AudioTask, engine: Engine, queuedMs: number) {
 }
 
 async function poll(kinds: string[] | undefined, prefetch = false) {
-	const response = await post("/work", {
-		worker: WORKER_ID,
-		slots: SLOTS,
-		cpus: CPUS,
-		service: SERVICE,
-		kinds,
-		audioSlots: AUDIO_SLOTS,
-		prefetch,
-	});
+	const controller = new AbortController();
+	openPolls.add(controller);
+	const response = await post(
+		"/work",
+		{
+			worker: WORKER_ID,
+			slots: SLOTS,
+			cpus: CPUS,
+			service: SERVICE,
+			kinds,
+			audioSlots: AUDIO_SLOTS,
+			prefetch,
+			draining,
+		},
+		controller.signal,
+	).finally(() => openPolls.delete(controller));
 	const body = (await response.json()) as {
 		task: Task | null;
 		finished: string[];
@@ -650,9 +666,15 @@ async function poll(kinds: string[] | undefined, prefetch = false) {
 	return body.task;
 }
 
+// A stray rejection must not take down every slot's task with the process.
+process.on("unhandledRejection", (error) => {
+	console.error(`unhandled rejection: ${error}`);
+});
+
 let draining = false;
-// Slots holding a prefetched (already reserved) next task.
-const reserved = new Set<number>();
+// Slots holding a prefetched (already reserved) next task, once it is known.
+const reserved = new Map<number, Task | null>();
+const busySince = new Map<number, number>();
 
 function exitWhenIdle() {
 	if (draining && busy.size === 0 && reserved.size === 0) {
@@ -665,6 +687,7 @@ for (const signal of ["SIGTERM", "SIGINT"] as const) {
 	process.on(signal, () => {
 		if (draining) return;
 		draining = true;
+		for (const controller of openPolls) controller.abort();
 		console.log(
 			`${signal}: finishing ${busy.size} running task(s), taking no new work`,
 		);
@@ -698,19 +721,22 @@ async function slotLoop(slot: number) {
 		// source download (queued work only; never a hedge).
 		const prefetchNext = () => {
 			if (next || draining || PREFETCH_LEAD_MS <= 0) return;
-			reserved.add(slot);
+			reserved.set(slot, null);
 			next = poll(kinds, true)
 				.then((upcoming) => {
-					if (upcoming)
+					if (upcoming) {
+						reserved.set(slot, upcoming);
 						cacheFor(upcoming.jobId)
 							.materialize(upcoming.files)
 							.catch(() => {});
+					}
 					return upcoming;
 				})
 				.catch(() => null);
 		};
 		const received = performance.now();
 		busy.set(slot, task);
+		busySince.set(slot, Date.now());
 		try {
 			if (!engine.alive) {
 				engine = warm(
@@ -763,10 +789,12 @@ async function slotLoop(slot: number) {
 			}
 			await post(`/tasks/${encodeURIComponent(task.taskId)}/fail`, {
 				worker: WORKER_ID,
+				attempt: task.attempt,
 				error: String(error instanceof Error ? error.message : error),
 			}).catch(() => {});
 		} finally {
 			busy.delete(slot);
+			busySince.delete(slot);
 			exitWhenIdle();
 		}
 	}
@@ -844,12 +872,32 @@ setInterval(() => {
 }, 5_000);
 
 setInterval(async () => {
-	const running = [...progress.values()].map((entry) => ({
-		taskId: entry.taskId,
-		frames: entry.frames,
-		total: entry.total,
-		elapsedMs: Date.now() - entry.startedAt,
-	}));
+	// Every task this worker holds, in every phase (fetch, render, upload) and
+	// reserved ahead: the coordinator requeues anything a live worker stops
+	// listing, and a restarted coordinator re-attaches what is listed.
+	const running = [];
+	for (const [slot, task] of busy) {
+		const entry = progress.get(slot);
+		running.push({
+			taskId: task.taskId,
+			attempt: task.attempt,
+			phase: "running",
+			frames: entry?.taskId === task.taskId ? entry.frames : 0,
+			total: entry?.taskId === task.taskId ? entry.total : 0,
+			elapsedMs: Date.now() - (busySince.get(slot) ?? Date.now()),
+		});
+	}
+	for (const task of reserved.values()) {
+		if (!task) continue;
+		running.push({
+			taskId: task.taskId,
+			attempt: task.attempt,
+			phase: "reserved",
+			frames: 0,
+			total: 0,
+			elapsedMs: 0,
+		});
+	}
 	post("/heartbeat", {
 		worker: WORKER_ID,
 		slots: SLOTS,

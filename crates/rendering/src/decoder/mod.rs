@@ -307,10 +307,15 @@ impl DecodedFrame {
     }
 
     /// NV12 frame that never left GPU memory (NVDEC on Linux render hosts).
+    /// `storage` is the decoder's per-frame allocation: layers compare it to
+    /// skip re-uploading a frame they already hold (VFR holds, fps upsampling).
     #[cfg(target_os = "linux")]
-    pub fn new_nv12_cuda(frame: Arc<crate::linux_gpu::CudaNv12Frame>) -> Self {
+    pub fn new_nv12_cuda(
+        frame: Arc<crate::linux_gpu::CudaNv12Frame>,
+        storage: Arc<Vec<u8>>,
+    ) -> Self {
         Self {
-            data: Arc::new(Vec::new()),
+            data: storage,
             width: frame.width,
             height: frame.height,
             format: PixelFormat::Nv12,

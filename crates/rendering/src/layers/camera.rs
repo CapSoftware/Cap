@@ -34,6 +34,14 @@ struct BlurCacheEntry {
 }
 
 impl CameraLayer {
+    /// Forget the last frame shown, as a new layer would: the next render of
+    /// a reused layer set starts somewhere else in the recording.
+    pub(crate) fn reset_frame_state(&mut self) {
+        self.last_recording_time = None;
+        self.last_frame_storage = None;
+        self.blur_cache = None;
+    }
+
     #[allow(dead_code)]
     pub fn new(device: &wgpu::Device) -> Self {
         Self::new_with_all_shared_pipelines(
