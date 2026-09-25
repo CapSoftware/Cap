@@ -25,6 +25,7 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { skipToken, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import {
+	Building2,
 	Check,
 	Clock,
 	Copy,
@@ -144,6 +145,7 @@ export const ShareHeader = ({
 	customDomain,
 	domainVerified,
 	allowedEmailDomain,
+	organizationMembersOnly = false,
 	sharedOrganizations = [],
 	sharedSpaces = [],
 	viewerCount = 0,
@@ -158,6 +160,7 @@ export const ShareHeader = ({
 	customDomain?: string | null;
 	domainVerified?: boolean;
 	allowedEmailDomain?: string | null;
+	organizationMembersOnly?: boolean;
 	sharedOrganizations?: { id: string; name: string }[];
 	viewerCount?: number;
 	userOrganizations?: { id: string; name: string }[];
@@ -504,6 +507,8 @@ export const ShareHeader = ({
 	const audience = describeShareAudience({
 		isPublic: Boolean(data.public),
 		allowedEmailDomain,
+		organizationMembersOnly,
+		organizationName: data.organizationName,
 		passwordProtected: effectivePasswordProtected,
 		audienceNames: [
 			...(sharedOrganizations ?? []).map((org) => org.name),
@@ -532,9 +537,11 @@ export const ShareHeader = ({
 		const AudienceIcon =
 			audience.kind === "public"
 				? Globe2
-				: audience.kind === "spaces" || audience.kind === "people"
-					? Users
-					: Lock;
+				: audience.kind === "organization"
+					? Building2
+					: audience.kind === "spaces" || audience.kind === "people"
+						? Users
+						: Lock;
 
 		return (
 			<Tooltip content={audience.tooltip} position="bottom">
@@ -773,6 +780,7 @@ export const ShareHeader = ({
 					onSharingUpdated={handleSharingUpdated}
 					isPublic={data.public}
 					allowedEmailDomain={allowedEmailDomain}
+					organizationMembersOnly={organizationMembersOnly}
 					spacesData={spacesData}
 					hasPassword={passwordProtected}
 					inheritedPasswordSources={data.inheritedPasswordSources}
@@ -788,7 +796,7 @@ export const ShareHeader = ({
 					videoId={data.id}
 					videoTitle={displayTitle}
 					shareUrl={getVideoLink()}
-					isPublic={Boolean(data.public)}
+					isPublic={Boolean(data.public) && !organizationMembersOnly}
 					canManageAccess={Boolean(isOwner)}
 					onManageAccess={() => {
 						setIsShareLinkDialogOpen(false);

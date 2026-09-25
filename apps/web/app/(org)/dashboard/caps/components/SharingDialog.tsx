@@ -14,7 +14,7 @@ import { faCopy, faShareNodes } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import clsx from "clsx";
-import { Check, Globe2, Lock, Search } from "lucide-react";
+import { Building2, Check, Globe2, Lock, Search } from "lucide-react";
 import { motion } from "motion/react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -56,6 +56,7 @@ interface SharingDialogProps {
 	spacesData?: Spaces[] | null;
 	hasPassword?: boolean;
 	allowedEmailDomain?: string | null;
+	organizationMembersOnly?: boolean;
 	inheritedPasswordSources?: SpaceRuleSource[];
 	onPasswordUpdated?: (protectedStatus: boolean) => void;
 	user?: CurrentUser | null;
@@ -73,6 +74,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 	spacesData: propSpacesData = null,
 	hasPassword = false,
 	allowedEmailDomain: propAllowedEmailDomain,
+	organizationMembersOnly: propOrganizationMembersOnly,
 	inheritedPasswordSources = [],
 	onPasswordUpdated,
 	user: propUser,
@@ -90,6 +92,9 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 	const allowedEmailDomain =
 		propAllowedEmailDomain ??
 		activeOrganization?.organization.allowedEmailDomain;
+	const organizationMembersOnly =
+		propOrganizationMembersOnly ??
+		activeOrganization?.organization.defaultVideoVisibility === "members";
 	const [selectedSpaces, setSelectedSpaces] = useState<Set<string>>(new Set());
 	const [searchTerm, setSearchTerm] = useState("");
 	const [initialSelectedSpaces, setInitialSelectedSpaces] = useState<
@@ -423,27 +428,37 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 							<div className="flex justify-between items-center p-3 mb-4 rounded-lg border bg-gray-1 border-gray-4">
 								<div className="flex gap-3 items-center">
 									<div className="flex justify-center items-center w-8 h-8 rounded-full bg-gray-3">
-										<Globe2 className="w-4 h-4 text-gray-11" />
+										{organizationMembersOnly ? (
+											<Building2 className="w-4 h-4 text-gray-11" />
+										) : (
+											<Globe2 className="w-4 h-4 text-gray-11" />
+										)}
 									</div>
 									<div>
 										<p className="text-sm font-medium text-gray-12">
-											{!publicToggle
-												? "Private"
-												: allowedEmailDomain?.trim()
-													? "Restricted link access"
-													: "Anyone with the link"}
+											{organizationMembersOnly
+												? "Organization members only"
+												: !publicToggle
+													? "Private"
+													: allowedEmailDomain?.trim()
+														? "Restricted link access"
+														: "Anyone with the link"}
 										</p>
 										<p className="text-xs text-gray-10">
-											{!publicToggle
-												? "Only people with access can view"
-												: allowedEmailDomain?.trim()
-													? `Only users with matching ${allowedEmailDomain.trim().includes(",") ? "emails" : "email"} can view`
-													: "Anyone on the internet with the link can view"}
+											{organizationMembersOnly
+												? "Your organization limits every recording to its members"
+												: !publicToggle
+													? "Only people with access can view"
+													: allowedEmailDomain?.trim()
+														? `Only users with matching ${allowedEmailDomain.trim().includes(",") ? "emails" : "email"} can view`
+														: "Anyone on the internet with the link can view"}
 										</p>
 									</div>
 								</div>
 								<Switch
-									checked={publicToggle}
+									aria-label="Anyone with the link"
+									checked={publicToggle && !organizationMembersOnly}
+									disabled={organizationMembersOnly}
 									onCheckedChange={setPublicToggle}
 								/>
 							</div>
@@ -481,6 +496,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 										className="shrink-0"
 										spinner={inviteViewer.isPending}
 										disabled={
+											organizationMembersOnly ||
 											inviteViewer.isPending ||
 											!viewerEmail.trim() ||
 											publicToggle !== initialPublicState
@@ -490,10 +506,17 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 										Invite
 									</Button>
 								</div>
-								{publicToggle !== initialPublicState && (
+								{organizationMembersOnly ? (
 									<p className="mt-2 text-xs text-gray-10">
-										Save the link access change before inviting viewers.
+										Invites are paused while your organization limits recordings
+										to its members.
 									</p>
+								) : (
+									publicToggle !== initialPublicState && (
+										<p className="mt-2 text-xs text-gray-10">
+											Save the link access change before inviting viewers.
+										</p>
+									)
 								)}
 								{viewerGrants.isError && (
 									<p className="mt-2 text-xs text-red-11">

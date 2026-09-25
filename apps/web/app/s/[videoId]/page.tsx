@@ -208,6 +208,22 @@ function PolicyDeniedView({
 				with an authorized email address to view.
 			</>
 		);
+	} else if (reason === "organization_members_only_login_required") {
+		title = "This video requires sign-in";
+		description = (
+			<>
+				Only members of the organization that owns this video can view it.
+				Please{" "}
+				<Link href={`/login?next=${encodeURIComponent(`/s/${videoId}`)}`}>
+					sign in
+				</Link>{" "}
+				with your organization account to view.
+			</>
+		);
+	} else if (reason === "organization_members_only") {
+		title = "Organization members only";
+		description =
+			"Only members of the organization that owns this video can view it.";
 	} else if (reason === "email_restriction_denied") {
 		title = "Access restricted";
 		description =
@@ -375,6 +391,7 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 					},
 					orgSettings: organizations.settings,
 					allowedEmailDomain: organizations.allowedEmailDomain,
+					organizationVideoVisibility: organizations.defaultVideoVisibility,
 					organizationName: organizations.name,
 					organizationIconUrl: organizations.iconUrl,
 					shareableLinkIconUrl: organizations.shareableLinkIconUrl,
@@ -448,6 +465,7 @@ async function AuthorizedContent({
 		activeUploadRawFileKey: string | null;
 		orgSettings?: OrganizationSettings | null;
 		allowedEmailDomain?: string | null;
+		organizationVideoVisibility?: "private" | "members" | null;
 		videoSettings?: OrganizationSettings | null;
 		organizationName?: string | null;
 		organizationIconUrl?: ImageUpload.ImageUrlOrKey | null;
@@ -934,6 +952,9 @@ async function AuthorizedContent({
 						customDomain={customDomain}
 						domainVerified={domainVerified}
 						allowedEmailDomain={video.allowedEmailDomain}
+						organizationMembersOnly={
+							video.organizationVideoVisibility === "members"
+						}
 						sharedOrganizations={
 							videoWithOrganizationInfo.sharedOrganizations || []
 						}

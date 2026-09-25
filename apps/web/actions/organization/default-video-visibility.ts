@@ -7,7 +7,20 @@ import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { requireOrganizationSettingsManager } from "./authorization";
 
-export async function updateDefaultVideoVisibility(privateByDefault: boolean) {
+export type OrganizationVideoVisibility = "private" | "members" | null;
+
+const isOrganizationVideoVisibility = (
+	value: unknown,
+): value is OrganizationVideoVisibility =>
+	value === null || value === "private" || value === "members";
+
+export async function updateDefaultVideoVisibility(
+	visibility: OrganizationVideoVisibility,
+) {
+	if (!isOrganizationVideoVisibility(visibility)) {
+		throw new Error("Invalid sharing default");
+	}
+
 	const user = await getCurrentUser();
 	if (!user?.activeOrganizationId) throw new Error("Unauthorized");
 
@@ -16,10 +29,10 @@ export async function updateDefaultVideoVisibility(privateByDefault: boolean) {
 
 	await db()
 		.update(organizations)
-		.set({ defaultVideoVisibility: privateByDefault ? "private" : null })
+		.set({ defaultVideoVisibility: visibility })
 		.where(eq(organizations.id, organizationId));
 
 	revalidatePath("/dashboard/settings/organization/preferences");
-	revalidatePath("/dashboard/caps");
+	revalidatePath("/dashboard", "layout");
 	return { success: true };
 }

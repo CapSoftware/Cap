@@ -7,7 +7,12 @@
  * out what that means for the link.
  */
 
-export type ShareAudienceKind = "public" | "spaces" | "people" | "private";
+export type ShareAudienceKind =
+	| "public"
+	| "organization"
+	| "spaces"
+	| "people"
+	| "private";
 
 export interface ShareAudience {
 	kind: ShareAudienceKind;
@@ -18,6 +23,9 @@ export interface ShareAudience {
 export interface ShareAudienceInput {
 	isPublic: boolean;
 	allowedEmailDomain?: string | null;
+	/** The organization limits every recording to its members. */
+	organizationMembersOnly?: boolean;
+	organizationName?: string | null;
 	/** Includes an inherited password from a space or organization. */
 	passwordProtected: boolean;
 	/**
@@ -43,10 +51,23 @@ const listNames = (names: string[], total: number): string => {
 export const describeShareAudience = ({
 	isPublic,
 	allowedEmailDomain,
+	organizationMembersOnly = false,
+	organizationName,
 	passwordProtected,
 	audienceNames,
 	viewerCount = 0,
 }: ShareAudienceInput): ShareAudience => {
+	if (organizationMembersOnly) {
+		const members = organizationName?.trim()
+			? `members of ${organizationName.trim()}`
+			: "members of your organization";
+		return {
+			kind: "organization",
+			label: "Organization members only",
+			tooltip: `Only signed-in ${members} can watch this Cap. Your organization limits every recording to its members, so the public link and invites don't work for anyone else.${passwordProtected ? " A password is also required." : ""}`,
+		};
+	}
+
 	if (isPublic) {
 		if (allowedEmailDomain?.trim()) {
 			return {

@@ -78,15 +78,26 @@ export async function generateMetadata(
 	);
 }
 
-const renderEmbedPolicyDenied = () =>
+const renderEmbedPolicyDenied = (error: Policy.PolicyDeniedError) =>
 	Effect.succeed(
-		<div className="flex flex-col justify-center items-center min-h-screen text-center text-white bg-black">
-			<h1 className="mb-4 text-2xl font-bold">This video is private</h1>
-			<p className="text-gray-400">
-				If you own this video, please <Link href="/login">sign in</Link> to
-				manage sharing.
-			</p>
-		</div>,
+		error.reason?.startsWith("organization_members_only") ? (
+			<div className="flex flex-col justify-center items-center min-h-screen text-center text-white bg-black">
+				<h1 className="mb-4 text-2xl font-bold">Organization members only</h1>
+				<p className="text-gray-400">
+					Only members of the organization that owns this video can view it.
+					Please <Link href="/login">sign in</Link> with your organization
+					account.
+				</p>
+			</div>
+		) : (
+			<div className="flex flex-col justify-center items-center min-h-screen text-center text-white bg-black">
+				<h1 className="mb-4 text-2xl font-bold">This video is private</h1>
+				<p className="text-gray-400">
+					If you own this video, please <Link href="/login">sign in</Link> to
+					manage sharing.
+				</p>
+			</div>
+		),
 	);
 
 const renderNoSuchElement = () => Effect.sync(() => notFound());

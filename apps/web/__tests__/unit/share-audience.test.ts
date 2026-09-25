@@ -14,6 +14,21 @@ describe("describeShareAudience", () => {
 		expect(audience.tooltip).toContain("outside your organization");
 	});
 
+	it("puts the organization members-only limit ahead of the public link and invites", () => {
+		const audience = describeShareAudience({
+			isPublic: true,
+			organizationMembersOnly: true,
+			organizationName: "Acme",
+			passwordProtected: false,
+			audienceNames: ["Design"],
+			viewerCount: 2,
+		});
+
+		expect(audience.kind).toBe("organization");
+		expect(audience.label).toBe("Organization members only");
+		expect(audience.tooltip).toContain("members of Acme");
+	});
+
 	it("identifies domain restricted link sharing separately from a private recording", () => {
 		const audience = describeShareAudience({
 			isPublic: true,

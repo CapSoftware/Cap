@@ -7,6 +7,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { editDate } from "@/actions/videos/edit-date";
 import { editTitle } from "@/actions/videos/edit-title";
+import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { Tooltip } from "@/components/Tooltip";
 import type { CapCardProps } from "./CapCard";
 
@@ -129,6 +130,10 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 		}
 	};
 
+	const { activeOrganization } = useDashboardContext();
+	const organizationMembersOnly =
+		activeOrganization?.organization.defaultVideoVisibility === "members";
+
 	const renderSharedStatus = () => {
 		const baseClassName = clsx(
 			"text-sm text-gray-10 transition-colors duration-200 flex items-center mb-1",
@@ -140,6 +145,19 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 				(cap.sharedOrganizations?.length ?? 0) > 0 ||
 				(cap.sharedSpaces?.length ?? 0) > 0;
 			const isPublic = cap.public;
+
+			if (organizationMembersOnly) {
+				return (
+					<button
+						type="button"
+						className={baseClassName}
+						onClick={() => setIsSharingDialogOpen(true)}
+					>
+						Members only{" "}
+						<FontAwesomeIcon className="ml-1 size-2.5" icon={faChevronDown} />
+					</button>
+				);
+			}
 
 			if (!hasSpaceSharing && !isPublic) {
 				return (
