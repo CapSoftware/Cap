@@ -32,10 +32,16 @@ struct ProcessedFrame {
     format: PixelFormat,
     y_stride: u32,
     uv_stride: u32,
+    #[cfg(target_os = "linux")]
+    cuda: Option<Arc<crate::linux_gpu::CudaNv12Frame>>,
 }
 
 impl ProcessedFrame {
     fn to_decoded_frame(&self) -> DecodedFrame {
+        #[cfg(target_os = "linux")]
+        if let Some(cuda) = &self.cuda {
+            return DecodedFrame::new_nv12_cuda(Arc::clone(cuda));
+        }
         match self.format {
             PixelFormat::Rgba => {
                 DecodedFrame::new_with_arc(Arc::clone(&self.data), self.width, self.height)
@@ -131,6 +137,37 @@ impl CachedFrame {
     fn process_cpu(&mut self, converter: &mut FrameConverter) -> ProcessedFrame {
         match self {
             Self::Raw { frame, number } => {
+                #[cfg(target_os = "linux")]
+                if crate::linux_gpu::enabled() && frame.format() == format::Pixel::CUDA {
+                    // Keep NVDEC's surface: a new reference holds it alive
+                    // while the compositor copies it device-to-device.
+                    let data = unsafe {
+                        let mut reference = frame::Video::empty();
+                        ffmpeg::ffi::av_frame_ref(reference.as_mut_ptr(), frame.as_ptr());
+                        let raw = reference.as_ptr();
+                        let cuda = crate::linux_gpu::CudaNv12Frame::new(
+                            (*raw).data[0] as u64,
+                            (*raw).data[1] as u64,
+                            (*raw).linesize[0] as usize,
+                            (*raw).linesize[1] as usize,
+                            frame.width(),
+                            frame.height(),
+                            Box::new(reference),
+                        );
+                        ProcessedFrame {
+                            data: Arc::new(Vec::new()),
+                            number: *number,
+                            width: frame.width(),
+                            height: frame.height(),
+                            format: PixelFormat::Nv12,
+                            y_stride: cuda.y_pitch as u32,
+                            uv_stride: cuda.uv_pitch as u32,
+                            cuda: Some(Arc::new(cuda)),
+                        }
+                    };
+                    *self = Self::Processed(data.clone());
+                    return data;
+                }
                 let data = if let Some((yuv_data, pixel_format, y_stride, uv_stride)) =
                     extract_yuv_planes(frame)
                 {
@@ -142,6 +179,8 @@ impl CachedFrame {
                         format: pixel_format,
                         y_stride,
                         uv_stride,
+                        #[cfg(target_os = "linux")]
+                        cuda: None,
                     }
                 } else {
                     let frame_buffer = converter.convert(frame);
@@ -153,6 +192,8 @@ impl CachedFrame {
                         format: PixelFormat::Rgba,
                         y_stride: frame.width() * 4,
                         uv_stride: 0,
+                        #[cfg(target_os = "linux")]
+                        cuda: None,
                     }
                 };
 
@@ -205,6 +246,16 @@ enum CachedFrame {
 
 impl CachedFrame {
     fn estimated_bytes(&self) -> usize {
+        // Frames still on the GPU pin an NVDEC surface each; weighting them
+        // at 16 MB caps the 128 MB cache at 8 surfaces, inside the pool.
+        #[cfg(target_os = "linux")]
+        match self {
+            Self::Raw { frame, .. } if frame.format() == format::Pixel::CUDA => {
+                return 16 * 1024 * 1024;
+            }
+            Self::Processed(frame) if frame.cuda.is_some() => return 16 * 1024 * 1024,
+            _ => {}
+        }
         match self {
             Self::Raw { frame, .. } => {
                 let height = frame.height() as usize;
@@ -233,6 +284,19 @@ impl CachedFrame {
                 .saturating_mul(3),
         }
     }
+}
+
+/// Whether an idle decoder should decode one more frame past `anchor` (the
+/// frame the renderer last received): at most `readahead` frames ahead, so the
+/// held hardware surfaces stay within the decoder's pool.
+fn wants_readahead<T>(cache: &BTreeMap<u32, T>, anchor: Option<u32>, readahead: u32) -> bool {
+    anchor.is_some_and(|last| {
+        cache.range(last..).count() <= readahead as usize
+            && cache
+                .keys()
+                .next_back()
+                .is_none_or(|&newest| newest < last.saturating_add(readahead))
+    })
 }
 
 fn insert_cached_frame(
@@ -467,7 +531,11 @@ impl FfmpegDecoder {
             }
             #[cfg(not(any(target_os = "windows", target_os = "macos")))]
             {
-                None
+                // Opt-in NVDEC for Linux GPU hosts (render farm workers).
+                match std::env::var("CAP_LINUX_HW_DECODE").as_deref() {
+                    Ok("cuda") => Some(ffmpeg::sys::AVHWDeviceType::AV_HWDEVICE_TYPE_CUDA),
+                    _ => None,
+                }
             }
         } else {
             None
@@ -1085,7 +1153,80 @@ impl FfmpegDecoder {
         };
         let _ = ready_tx.send(Ok(init_result));
 
-        while let Ok(r) = rx.recv() {
+        // Export read-ahead: with no request pending, keep decoding forward
+        // into the cache so the renderer's next sequential request is served
+        // at once instead of waiting out NVDEC latency (~4.5 ms per 3K frame,
+        // which otherwise sits in every export frame). Bounded by `readahead`
+        // frames past the last request and by the cache's byte budget (hw
+        // surfaces). Off unless CAP_DECODER_READAHEAD is set: editor
+        // playback keeps its on-demand behaviour.
+        let readahead = std::env::var("CAP_DECODER_READAHEAD")
+            .ok()
+            .and_then(|value| value.parse::<u32>().ok())
+            .unwrap_or(0);
+        let mut readahead_exhausted = false;
+        loop {
+            let r = if readahead > 0 {
+                match rx.try_recv() {
+                    Ok(message) => message,
+                    Err(mpsc::TryRecvError::Disconnected) => break,
+                    Err(mpsc::TryRecvError::Empty) => {
+                        // Cache hits don't touch `last_active_frame`; the
+                        // last frame actually sent is the renderer's position.
+                        let anchor = last_sent_frame
+                            .borrow()
+                            .as_ref()
+                            .map(|sent| sent.number)
+                            .or(last_active_frame);
+                        if !readahead_exhausted && wants_readahead(&cache, anchor, readahead) {
+                            if managed_stopped(managed.as_ref()) {
+                                return;
+                            }
+                            match frames.next() {
+                                Some(Ok(frame)) => {
+                                    if let Some(pts) = frame.pts() {
+                                        let current_frame =
+                                            pts_to_frame(pts - start_time, time_base, fps);
+                                        if let Some(prev) = prev_vended
+                                            && current_frame > prev + 1
+                                        {
+                                            record_pts_hole(&mut pts_holes, prev, current_frame);
+                                        }
+                                        prev_vended = Some(current_frame);
+                                        let mut cache_frame = CachedFrame::Raw {
+                                            frame,
+                                            number: current_frame,
+                                        };
+                                        cache_frame.produce(&mut converter);
+                                        insert_cached_frame(
+                                            &mut cache,
+                                            current_frame,
+                                            cache_frame,
+                                            current_frame,
+                                            last_active_frame,
+                                            MAX_FRAME_CACHE_BYTES,
+                                        );
+                                    } else {
+                                        prev_vended = None;
+                                    }
+                                }
+                                Some(Err(_)) => prev_vended = None,
+                                None => readahead_exhausted = true,
+                            }
+                            continue;
+                        }
+                        match rx.recv() {
+                            Ok(message) => message,
+                            Err(_) => break,
+                        }
+                    }
+                }
+            } else {
+                match rx.recv() {
+                    Ok(message) => message,
+                    Err(_) => break,
+                }
+            };
             if managed_stopped(managed.as_ref()) {
                 return;
             }
@@ -1190,6 +1331,7 @@ impl FfmpegDecoder {
                         return;
                     }
                     frames = this.frames();
+                    readahead_exhausted = false;
                     *last_sent_frame.borrow_mut() = None;
                     cache.clear();
                     prev_vended = None;
@@ -1275,6 +1417,7 @@ impl FfmpegDecoder {
                         return;
                     }
                     frames = this.frames();
+                    readahead_exhausted = false;
                     *last_sent_frame.borrow_mut() = None;
                     cache.clear();
                     prev_vended = None;
@@ -1524,6 +1667,21 @@ impl FfmpegDecoder {
 mod cache_tests {
     use super::*;
 
+    #[test]
+    fn readahead_stops_at_its_window() {
+        let mut cache = BTreeMap::new();
+        assert!(!wants_readahead(&cache, None, 4), "no request served yet");
+        assert!(wants_readahead(&cache, Some(10), 4));
+        for number in 10..14 {
+            cache.insert(number, frame(number, 1));
+        }
+        assert!(wants_readahead(&cache, Some(10), 4));
+        cache.insert(14, frame(14, 1));
+        assert!(!wants_readahead(&cache, Some(10), 4), "window full");
+        assert!(wants_readahead(&cache, Some(12), 4), "renderer moved on");
+        assert!(!wants_readahead(&cache, Some(10), 0), "disabled");
+    }
+
     fn frame(number: u32, bytes: usize) -> CachedFrame {
         CachedFrame::Processed(ProcessedFrame {
             number,
@@ -1533,6 +1691,8 @@ mod cache_tests {
             format: PixelFormat::Nv12,
             y_stride: 2,
             uv_stride: 2,
+            #[cfg(target_os = "linux")]
+            cuda: None,
         })
     }
 

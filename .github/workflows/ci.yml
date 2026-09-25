@@ -99,6 +99,11 @@ jobs:
           bun test scripts/emails scripts/loops/profile.test.ts scripts/loops/lifecycle.test.ts scripts/loops/watchdog.test.ts
           bun run tsc --noEmit --strict --jsx react-jsx --allowImportingTsExtensions --target ESNext --module ESNext --moduleResolution bundler --resolveJsonModule --types bun --skipLibCheck scripts/loops/*.ts scripts/emails/*.ts emails/*.ts emails/marketing/*.ts
 
+      - name: Test render farm orchestration
+        run: |
+          bun test apps/render-farm
+          bun run --cwd apps/render-farm typecheck
+
       - name: Test web React compatibility
         run: >-
           bun run --cwd apps/web test

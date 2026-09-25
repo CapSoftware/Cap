@@ -1,0 +1,14 @@
+{
+	"name": "@cap/render-farm",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"build": "bun build src/main.ts --target bun --outfile dist/app.js",
+		"start": "bun src/boot.ts",
+		"test": "bun test",
+		"typecheck": "tsc --noEmit"
+	},
+	"devDependencies": {
+		"@types/bun": "latest"
+	}
+}

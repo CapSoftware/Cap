@@ -229,7 +229,16 @@ impl CameraLayer {
                                 .is_ok()
                         })
                         .unwrap_or(false);
-                    #[cfg(not(target_os = "macos"))]
+                    #[cfg(target_os = "linux")]
+                    let iosurface_converted = camera_frame.cuda_nv12().is_some_and(|cuda| {
+                        self.yuv_converter
+                            .convert_nv12_cuda(device, queue, cuda)
+                            .inspect_err(|error| {
+                                tracing::warn!(%error, "CUDA camera frame conversion failed")
+                            })
+                            .is_ok()
+                    });
+                    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
                     let iosurface_converted = false;
 
                     if iosurface_converted && self.yuv_converter.output_texture().is_some() {
@@ -460,7 +469,18 @@ impl CameraLayer {
                                 .is_ok()
                         })
                         .unwrap_or(false);
-                    #[cfg(not(target_os = "macos"))]
+                    // Submitted on its own ahead of `encoder`, so queue order
+                    // still has the conversion land before the copy below.
+                    #[cfg(target_os = "linux")]
+                    let iosurface_converted = camera_frame.cuda_nv12().is_some_and(|cuda| {
+                        self.yuv_converter
+                            .convert_nv12_cuda(device, queue, cuda)
+                            .inspect_err(|error| {
+                                tracing::warn!(%error, "CUDA camera frame conversion failed")
+                            })
+                            .is_ok()
+                    });
+                    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
                     let iosurface_converted = false;
 
                     if iosurface_converted && self.yuv_converter.output_texture().is_some() {

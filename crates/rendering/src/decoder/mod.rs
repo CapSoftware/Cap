@@ -159,6 +159,8 @@ pub struct DecodedFrame {
     image_buf_backing: Option<Arc<SendableImageBuf>>,
     #[cfg(target_os = "windows")]
     d3d11_texture_backing: Option<Arc<SendableD3D11Texture>>,
+    #[cfg(target_os = "linux")]
+    cuda_nv12: Option<Arc<crate::linux_gpu::CudaNv12Frame>>,
 }
 
 #[cfg(target_os = "macos")]
@@ -282,6 +284,8 @@ impl DecodedFrame {
             image_buf_backing: None,
             #[cfg(target_os = "windows")]
             d3d11_texture_backing: None,
+            #[cfg(target_os = "linux")]
+            cuda_nv12: None,
         }
     }
 
@@ -297,7 +301,28 @@ impl DecodedFrame {
             image_buf_backing: None,
             #[cfg(target_os = "windows")]
             d3d11_texture_backing: None,
+            #[cfg(target_os = "linux")]
+            cuda_nv12: None,
         }
+    }
+
+    /// NV12 frame that never left GPU memory (NVDEC on Linux render hosts).
+    #[cfg(target_os = "linux")]
+    pub fn new_nv12_cuda(frame: Arc<crate::linux_gpu::CudaNv12Frame>) -> Self {
+        Self {
+            data: Arc::new(Vec::new()),
+            width: frame.width,
+            height: frame.height,
+            format: PixelFormat::Nv12,
+            y_stride: frame.y_pitch as u32,
+            uv_stride: frame.uv_pitch as u32,
+            cuda_nv12: Some(frame),
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn cuda_nv12(&self) -> Option<&Arc<crate::linux_gpu::CudaNv12Frame>> {
+        self.cuda_nv12.as_ref()
     }
 
     pub fn new_nv12(data: Vec<u8>, width: u32, height: u32, y_stride: u32, uv_stride: u32) -> Self {
@@ -312,6 +337,8 @@ impl DecodedFrame {
             image_buf_backing: None,
             #[cfg(target_os = "windows")]
             d3d11_texture_backing: None,
+            #[cfg(target_os = "linux")]
+            cuda_nv12: None,
         }
     }
 
@@ -333,6 +360,8 @@ impl DecodedFrame {
             image_buf_backing: None,
             #[cfg(target_os = "windows")]
             d3d11_texture_backing: None,
+            #[cfg(target_os = "linux")]
+            cuda_nv12: None,
         }
     }
 
@@ -373,6 +402,8 @@ impl DecodedFrame {
             image_buf_backing: None,
             #[cfg(target_os = "windows")]
             d3d11_texture_backing: None,
+            #[cfg(target_os = "linux")]
+            cuda_nv12: None,
         }
     }
 
@@ -394,6 +425,8 @@ impl DecodedFrame {
             image_buf_backing: None,
             #[cfg(target_os = "windows")]
             d3d11_texture_backing: None,
+            #[cfg(target_os = "linux")]
+            cuda_nv12: None,
         }
     }
 

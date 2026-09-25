@@ -394,53 +394,81 @@ impl DisplayLayer {
                     }
 
                     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-                    if let (Some(y_data), Some(uv_data)) =
-                        (screen_frame.y_plane(), screen_frame.uv_plane())
                     {
-                        let y_stride = screen_frame.y_stride();
-                        let uv_stride = screen_frame.uv_stride();
-
-                        let convert_result = if self.prefer_cpu_conversion {
-                            self.yuv_converter.convert_nv12_cpu(
-                                device,
-                                queue,
-                                y_data,
-                                uv_data,
-                                source_size.x,
-                                source_size.y,
-                                y_stride,
-                                uv_stride,
-                            )
-                        } else {
-                            self.yuv_converter.convert_nv12(
-                                device,
-                                queue,
-                                y_data,
-                                uv_data,
-                                source_size.x,
-                                source_size.y,
-                                y_stride,
-                                uv_stride,
-                            )
-                        };
-
-                        match convert_result {
-                            Ok(_) => {
-                                if self.yuv_converter.output_texture().is_some() {
+                        #[cfg(target_os = "linux")]
+                        let cuda_result = screen_frame.cuda_nv12().map(|cuda| {
+                            let converted = self
+                                .yuv_converter
+                                .convert_nv12_cuda(device, queue, cuda)
+                                .map(|_| ());
+                            match converted {
+                                Ok(()) if self.yuv_converter.output_texture().is_some() => {
                                     self.pending_copy = Some(PendingTextureCopy {
                                         width: source_size.x,
                                         height: source_size.y,
                                         dst_texture_index: next_texture,
                                     });
                                     true
-                                } else {
+                                }
+                                Ok(()) => false,
+                                Err(error) => {
+                                    tracing::warn!(%error, "CUDA frame conversion failed");
                                     false
                                 }
                             }
-                            Err(_) => false,
+                        });
+                        #[cfg(not(target_os = "linux"))]
+                        let cuda_result: Option<bool> = None;
+                        if let Some(converted) = cuda_result {
+                            converted
+                        } else if let (Some(y_data), Some(uv_data)) =
+                            (screen_frame.y_plane(), screen_frame.uv_plane())
+                        {
+                            let y_stride = screen_frame.y_stride();
+                            let uv_stride = screen_frame.uv_stride();
+
+                            let convert_result = if self.prefer_cpu_conversion {
+                                self.yuv_converter.convert_nv12_cpu(
+                                    device,
+                                    queue,
+                                    y_data,
+                                    uv_data,
+                                    source_size.x,
+                                    source_size.y,
+                                    y_stride,
+                                    uv_stride,
+                                )
+                            } else {
+                                self.yuv_converter.convert_nv12(
+                                    device,
+                                    queue,
+                                    y_data,
+                                    uv_data,
+                                    source_size.x,
+                                    source_size.y,
+                                    y_stride,
+                                    uv_stride,
+                                )
+                            };
+
+                            match convert_result {
+                                Ok(_) => {
+                                    if self.yuv_converter.output_texture().is_some() {
+                                        self.pending_copy = Some(PendingTextureCopy {
+                                            width: source_size.x,
+                                            height: source_size.y,
+                                            dst_texture_index: next_texture,
+                                        });
+                                        true
+                                    } else {
+                                        false
+                                    }
+                                }
+                                Err(_) => false,
+                            }
+                        } else {
+                            false
                         }
-                    } else {
-                        false
                     }
                 }
                 PixelFormat::Yuv420p => {
@@ -738,7 +766,18 @@ impl DisplayLayer {
                                     .is_ok()
                             })
                             .unwrap_or(false);
-                        #[cfg(not(target_os = "macos"))]
+                        // Submitted ahead of `encoder`, so the conversion
+                        // lands before the pending copy recorded below.
+                        #[cfg(target_os = "linux")]
+                        let iosurface_converted = screen_frame.cuda_nv12().is_some_and(|cuda| {
+                            self.yuv_converter
+                                .convert_nv12_cuda(device, queue, cuda)
+                                .inspect_err(
+                                    |error| tracing::warn!(%error, "CUDA frame conversion failed"),
+                                )
+                                .is_ok()
+                        });
+                        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
                         let iosurface_converted = false;
 
                         if iosurface_converted && self.yuv_converter.output_texture().is_some() {
