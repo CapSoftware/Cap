@@ -479,11 +479,9 @@ function PreviewStage({
 			aria-hidden
 		>
 			{thumbnail ? (
-				// biome-ignore lint/performance/noImgElement: signed thumbnail URL
-				<img
-					src={thumbnail}
-					alt=""
-					className="absolute inset-0 size-full object-cover"
+				<div
+					className="absolute inset-0 bg-cover bg-center"
+					style={{ backgroundImage: `url(${JSON.stringify(thumbnail)})` }}
 				/>
 			) : (
 				<div className="absolute inset-0 bg-[radial-gradient(120%_90%_at_20%_10%,#2a3140_0%,#12151b_55%,#0b0c0f_100%)]">
