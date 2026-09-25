@@ -56,12 +56,19 @@ export const videoEmailAccessCondition = (user?: {
 	const domain = email.slice(email.lastIndexOf("@") + 1);
 	const escape = (value: string) =>
 		value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-	const pattern = `(^|,)[[:space:]]*(${escape(email)}|${escape(domain)})[[:space:]]*(,|$)`;
+	const alternatives = [email, domain]
+		.filter(
+			(entry) =>
+				entry.length > 0 && entry === entry.trim() && !entry.includes(","),
+		)
+		.map(escape)
+		.join("|");
+	const pattern = `(^|,)[[:space:]]*(${alternatives})[[:space:]]*(,|$)`;
 
 	return or(
 		unrestricted,
 		sql`REGEXP_LIKE(COALESCE(${organizations.allowedEmailDomain}, ''), '^[[:space:],]*$')`,
-		email.includes("@")
+		email.includes("@") && alternatives.length > 0
 			? sql`REGEXP_LIKE(LOWER(${organizations.allowedEmailDomain}), ${pattern}, 'c')`
 			: sql`FALSE`,
 		eq(videos.ownerId, user.id),

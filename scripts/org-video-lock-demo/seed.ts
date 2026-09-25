@@ -240,6 +240,10 @@ for (const [email, restriction] of [
 	["member@exampleXinvalid", "example.invalid"],
 	["member@éxample.invalid", "example.invalid"],
 	["member@straße.invalid", "strasse.invalid"],
+	["member,team@example.invalid", "member,team@example.invalid"],
+	["member,team@example.invalid", "example.invalid"],
+	["member@", ",example.invalid"],
+	[" member@example.invalid", " member@example.invalid"],
 	["member@example.invalid", " ,  , "],
 	["member@example.invalid", ""],
 ] as const) {
