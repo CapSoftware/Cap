@@ -213,15 +213,7 @@ export async function getPublicCollectionPageData(
 		};
 	}
 
-	const videoAccess = and(
-		collectionVideoAccess(verifiedPasswordHashes, user?.id),
-		memberOrganization
-			? and(
-					eq(videos.orgId, memberOrganization.id),
-					eq(organizations.videoSharingRestrictedToOrg, true),
-				)
-			: undefined,
-	);
+	const videoAccess = collectionVideoAccess(verifiedPasswordHashes, user?.id);
 	const [childFolders, videoPage] = await Promise.all([
 		getPublicChildFolders(collection, videoAccess),
 		getPublicCollectionVideos(collection, page, videoAccess),

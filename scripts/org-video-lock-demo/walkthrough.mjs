@@ -113,6 +113,16 @@ try {
 		memberPage.getByText("Private team update", { exact: true }),
 	).toBeVisible();
 	await pause(memberPage);
+	await visit(memberPage, `/c/${ids.domainSpace}`);
+	await expect(
+		memberPage.getByText("Shared public project update", { exact: true }),
+	).toBeVisible();
+	for (const title of [
+		"Private external project update",
+		"Password-protected external update",
+	]) {
+		await expect(memberPage.getByText(title, { exact: true })).toHaveCount(0);
+	}
 	const mobileDetail = await member.request.get(
 		`${origin}/api/mobile/caps/${ids.privateVideo}`,
 		{ headers: { Authorization: `Bearer ${states.memberToken}` } },
@@ -241,6 +251,7 @@ try {
 				"anonymous embed blocked",
 				"public collection hides outsider metadata and allows owning members",
 				"saved collection passwords do not block organization members",
+				"eligible recordings from other organizations remain in collections",
 				"sharing controls explain the organization policy",
 				"media and metadata endpoints blocked",
 				"organization member playback",

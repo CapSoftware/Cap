@@ -100,11 +100,36 @@ describe("organization members in restricted public collections", () => {
 			expect(membership.params).toContain("example-member");
 			for (const index of [4, 5]) {
 				const selection = queryAt(index);
-				expect(selection.sql).toContain("`videos`.`orgId` = ?");
-				expect(selection.params).toContain(space.organizationId);
+				expect(selection.sql).toContain("`videos`.`public` = ?");
+				expect(selection.sql).toContain("`videos`.`password` IS NULL");
+				expect(selection.sql).toContain("NOT EXISTS");
+				expect(selection.params).toContain("example-member");
+				expect(selection.params).not.toContain(space.organizationId);
 			}
 		},
 	);
+
+	it("retains eligible public recordings shared from another organization", async () => {
+		mocks.results.push(
+			[],
+			[
+				{
+					...space,
+					passwordHash: null,
+					allowedEmailDomain: "different.example.invalid",
+				},
+			],
+			[{ id: space.organizationId }],
+			[],
+			[{ ...video, id: "external-video", hasPassword: false }],
+			[{ count: 1 }],
+		);
+		const page = await getPublicCollectionPageData(space.id, 1);
+		expect(page?.access).toEqual({ state: "allowed" });
+		expect(page?.videos.map((item) => item.id)).toEqual(["external-video"]);
+		expect(page?.totalCount).toBe(1);
+		expect(queryAt(4).params).not.toContain(space.organizationId);
+	});
 
 	it("retains the password gate for outsiders and unlocked organizations", async () => {
 		mocks.results.push([], [space], []);

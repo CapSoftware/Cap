@@ -156,6 +156,74 @@ await database
 	})
 	.onDuplicateKeyUpdate({ set: { spaceId: protectedSpaceId } });
 
+const domainOrganizationId = Organisation.OrganisationId.make(
+	ids.domainOrganization,
+);
+const domainSpaceId = Space.SpaceId.make(ids.domainSpace);
+await database
+	.insert(organizations)
+	.values({
+		id: domainOrganizationId,
+		name: "Restricted project library",
+		ownerId,
+		allowedEmailDomain: "different.example.invalid",
+		videoSharingRestrictedToOrg: true,
+	})
+	.onDuplicateKeyUpdate({ set: { videoSharingRestrictedToOrg: true } });
+await database
+	.insert(organizationMembers)
+	.values({
+		id: ids.domainMembership,
+		organizationId: domainOrganizationId,
+		userId: memberId,
+		role: "member",
+	})
+	.onDuplicateKeyUpdate({ set: { role: "member" } });
+await database
+	.insert(spaces)
+	.values({
+		id: domainSpaceId,
+		organizationId: domainOrganizationId,
+		createdById: ownerId,
+		name: "Shared project library",
+		public: true,
+		privacy: "Public",
+	})
+	.onDuplicateKeyUpdate({ set: { public: true } });
+for (const [id, name, isPublic, password] of [
+	[ids.externalVideo, "Shared public project update", true, null],
+	[ids.externalPrivateVideo, "Private external project update", false, null],
+	[
+		ids.externalPasswordVideo,
+		"Password-protected external update",
+		true,
+		"synthetic-external-password",
+	],
+] as const) {
+	await database
+		.insert(videos)
+		.values({
+			id: Video.VideoId.make(id),
+			ownerId: outsiderId,
+			orgId: outsideOrganizationId,
+			name,
+			public: isPublic,
+			password,
+			source: { type: "desktopMP4" },
+			duration: 12,
+		})
+		.onDuplicateKeyUpdate({ set: { public: isPublic, password } });
+	await database
+		.insert(spaceVideos)
+		.values({
+			id,
+			spaceId: domainSpaceId,
+			videoId: Video.VideoId.make(id),
+			addedById: ownerId,
+		})
+		.onDuplicateKeyUpdate({ set: { spaceId: domainSpaceId } });
+}
+
 await database
 	.update(organizations)
 	.set({ videoSharingRestrictedToOrg: true })
