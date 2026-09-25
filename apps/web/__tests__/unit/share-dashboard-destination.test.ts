@@ -199,7 +199,7 @@ describe("pickShareDashboardDestination", () => {
 		expect(pickShareDashboardDestination(access({}))).toBeNull();
 	});
 
-	it("switches organization only for an owner's My Caps in another organization", () => {
+	it("switches organization only for an owner's destinations in another organization", () => {
 		expect(
 			pickShareDashboardDestination(
 				access({ isOwner: true, videoOrganizationId: "org-other" }),
@@ -226,11 +226,11 @@ describe("pickShareDashboardDestination", () => {
 			pickShareDashboardDestination(
 				access({
 					isOwner: true,
-					videoOrganizationId: "org-other",
+					activeOrganizationId: null,
 					ownerFolder: { id: "folder-1", name: "Launch" },
 				}),
 			)?.switchOrganizationId,
-		).toBeNull();
+		).toBe("org-active");
 
 		expect(
 			pickShareDashboardDestination(

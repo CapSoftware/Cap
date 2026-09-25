@@ -44,26 +44,27 @@ export function pickShareDashboardDestination(
 	access: ShareDashboardAccess,
 ): ShareDashboardDestination | null {
 	if (access.isOwner) {
+		// My Caps lists only the active organization's Caps, and the folder page
+		// 404s without an active organization, so the owner's destinations open
+		// in the Cap's own organization. Space pages load under any of them.
+		const switchOrganizationId =
+			access.ownerIsVideoOrganizationMember &&
+			access.videoOrganizationId !== access.activeOrganizationId
+				? access.videoOrganizationId
+				: null;
 		if (access.ownerFolder) {
 			return {
 				kind: "folder",
 				href: `/dashboard/folder/${access.ownerFolder.id}`,
 				label: access.ownerFolder.name,
-				switchOrganizationId: null,
+				switchOrganizationId,
 			};
 		}
-		// Folder and space pages load whatever the active organization is, but
-		// My Caps only lists the active organization's Caps, so it's the one
-		// destination that has to switch first.
 		return {
 			kind: "caps",
 			href: "/dashboard/caps",
 			label: "My Caps",
-			switchOrganizationId:
-				access.ownerIsVideoOrganizationMember &&
-				access.videoOrganizationId !== access.activeOrganizationId
-					? access.videoOrganizationId
-					: null,
+			switchOrganizationId,
 		};
 	}
 
