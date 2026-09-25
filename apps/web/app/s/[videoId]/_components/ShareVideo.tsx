@@ -84,6 +84,8 @@ export const ShareVideo = forwardRef<
 		chapters?: { title: string; start: number }[];
 		areChaptersDisabled?: boolean;
 		areCaptionsDisabled?: boolean;
+		/** Server-resolved `?captions=off`; seeds the player's caption toggle. */
+		captionsInitiallyOff?: boolean;
 		areCommentStampsDisabled?: boolean;
 		areReactionStampsDisabled?: boolean;
 		/** Timeline view scrubs on the deck below the video, not in it. */
@@ -107,6 +109,7 @@ export const ShareVideo = forwardRef<
 			comments,
 			chapters = NO_CHAPTERS,
 			areCaptionsDisabled,
+			captionsInitiallyOff = false,
 			areChaptersDisabled,
 			areCommentStampsDisabled,
 			areReactionStampsDisabled,
@@ -553,6 +556,7 @@ export const ShareVideo = forwardRef<
 							defaultPlaybackSpeed={defaultPlaybackSpeed}
 							showPlaybackStatusBadge={showPlaybackStatusBadge}
 							disableCaptions={areCaptionsDisabled ?? false}
+							captionsInitiallyOff={captionsInitiallyOff}
 							disableCommentStamps={areCommentStampsDisabled ?? false}
 							disableReactionStamps={areReactionStampsDisabled ?? false}
 							externalTimeline={externalTimeline}
@@ -589,6 +593,7 @@ export const ShareVideo = forwardRef<
 							externalTimeline={externalTimeline}
 							controlsPortalEl={controlsPortalEl}
 							disableCaptions={areCaptionsDisabled ?? false}
+							captionsInitiallyOff={captionsInitiallyOff}
 							chaptersSrc={areChaptersDisabled ? "" : chaptersUrl || ""}
 							captionsSrc={areCaptionsDisabled ? "" : subtitleUrl || ""}
 							videoRef={videoRef}

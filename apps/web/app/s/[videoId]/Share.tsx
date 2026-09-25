@@ -206,6 +206,8 @@ interface ShareProps {
 	transcriptionGenerationAvailable: boolean;
 	/** Server-resolved `?view=` so the first paint already has the right layout. */
 	initialView?: ShareView;
+	/** Server-resolved `?captions=off` so the player never flashes captions on before hiding them. */
+	captionsInitiallyOff?: boolean;
 	canRecordMedia?: boolean;
 	viewerSignedIn?: boolean;
 	/**
@@ -333,6 +335,7 @@ export const Share = ({
 	aiGenerationAvailable,
 	transcriptionGenerationAvailable,
 	initialView = "classic",
+	captionsInitiallyOff = false,
 	canRecordMedia = false,
 	viewerSignedIn = false,
 	header,
@@ -966,6 +969,7 @@ export const Share = ({
 														comments={comments}
 														areChaptersDisabled={areChaptersDisabled}
 														areCaptionsDisabled={areCaptionsDisabled}
+														captionsInitiallyOff={captionsInitiallyOff}
 														// The deck under the video owns seeking, the clock and
 														// comments in timeline view; duplicating them inside the
 														// video reads as two players. Fullscreen hides the deck,

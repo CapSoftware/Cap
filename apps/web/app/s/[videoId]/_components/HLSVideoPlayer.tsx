@@ -99,6 +99,8 @@ interface Props {
 	videoRef: React.RefObject<HTMLVideoElement | null>;
 	mediaPlayerClassName?: string;
 	disableCaptions?: boolean;
+	/** Server-resolved `?captions=off`; seeds the caption toggle instead of always starting on. */
+	captionsInitiallyOff?: boolean;
 	autoplay?: boolean;
 	hasActiveUpload?: boolean;
 	isLiveSegments?: boolean;
@@ -138,6 +140,7 @@ export function HLSVideoPlayer({
 	allowSegmentProbeDuringUpload = false,
 	onSourceComplete,
 	disableCaptions,
+	captionsInitiallyOff = false,
 	enhancedAudioUrl: _enhancedAudioUrl,
 	enhancedAudioStatus: _enhancedAudioStatus,
 	captionLanguage,
@@ -155,7 +158,7 @@ export function HLSVideoPlayer({
 	const hlsInstance = useRef<Hls | null>(null);
 	const [currentCue, setCurrentCue] = useState<string>("");
 	const [controlsVisible, setControlsVisible] = useState(false);
-	const [toggleCaptions, setToggleCaptions] = useState(true);
+	const [toggleCaptions, setToggleCaptions] = useState(!captionsInitiallyOff);
 	const [showPlayButton, setShowPlayButton] = useState(false);
 	const [videoLoaded, setVideoLoaded] = useState(false);
 	const [hlsInitFailed, setHlsInitFailed] = useState(false);

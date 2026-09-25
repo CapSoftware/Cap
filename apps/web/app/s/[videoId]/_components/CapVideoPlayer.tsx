@@ -100,6 +100,8 @@ interface Props {
 	chaptersSrc: string;
 	captionsSrc: string;
 	disableCaptions?: boolean;
+	/** Server-resolved `?captions=off`; seeds the caption toggle instead of always starting on. */
+	captionsInitiallyOff?: boolean;
 	videoRef: React.RefObject<HTMLVideoElement | null>;
 	mediaPlayerClassName?: string;
 	autoplay?: boolean;
@@ -149,6 +151,7 @@ export function CapVideoPlayer({
 	chaptersSrc,
 	captionsSrc,
 	disableCaptions,
+	captionsInitiallyOff = false,
 	videoRef,
 	mediaPlayerClassName,
 	autoplay = false,
@@ -180,7 +183,7 @@ export function CapVideoPlayer({
 	const [currentCue, setCurrentCue] = useState<string>("");
 	const [controlsVisible, setControlsVisible] = useState(false);
 	const [mainControlsVisible, setMainControlsVisible] = useState(false);
-	const [toggleCaptions, setToggleCaptions] = useState(true);
+	const [toggleCaptions, setToggleCaptions] = useState(!captionsInitiallyOff);
 	const [showPlayButton, setShowPlayButton] = useState(false);
 	const [videoLoaded, setVideoLoaded] = useState(false);
 	const [hasPlayedOnce, setHasPlayedOnce] = useState(false);
