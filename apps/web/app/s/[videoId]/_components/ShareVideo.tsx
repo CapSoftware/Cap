@@ -84,7 +84,6 @@ export const ShareVideo = forwardRef<
 		chapters?: { title: string; start: number }[];
 		areChaptersDisabled?: boolean;
 		areCaptionsDisabled?: boolean;
-		/** Server-resolved `?captions=off`; seeds the player's caption toggle. */
 		captionsInitiallyOff?: boolean;
 		areCommentStampsDisabled?: boolean;
 		areReactionStampsDisabled?: boolean;

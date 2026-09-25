@@ -100,7 +100,6 @@ interface Props {
 	chaptersSrc: string;
 	captionsSrc: string;
 	disableCaptions?: boolean;
-	/** Server-resolved `?captions=off`; seeds the caption toggle instead of always starting on. */
 	captionsInitiallyOff?: boolean;
 	videoRef: React.RefObject<HTMLVideoElement | null>;
 	mediaPlayerClassName?: string;

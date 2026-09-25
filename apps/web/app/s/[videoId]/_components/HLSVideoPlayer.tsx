@@ -99,7 +99,6 @@ interface Props {
 	videoRef: React.RefObject<HTMLVideoElement | null>;
 	mediaPlayerClassName?: string;
 	disableCaptions?: boolean;
-	/** Server-resolved `?captions=off`; seeds the caption toggle instead of always starting on. */
 	captionsInitiallyOff?: boolean;
 	autoplay?: boolean;
 	hasActiveUpload?: boolean;
