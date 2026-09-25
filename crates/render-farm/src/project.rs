@@ -93,27 +93,46 @@ impl LoadedProject {
     /// The coordinator widens these by keyframe distance and clip offsets to
     /// decide which bytes of each source a chunk worker has to download.
     pub fn source_spans(&self, fps: u32, frames: [u32; 2]) -> Vec<ClipSpan> {
-        let mut spans: Vec<ClipSpan> = Vec::new();
-        for frame in frames[0]..frames[1] {
-            let time = frame as f64 / fps as f64;
-            let Some((segment_time, segment)) = self.config.get_segment_time(time) else {
-                continue;
-            };
-            let clip = segment.recording_clip;
-            match spans.iter_mut().find(|span| span.clip == clip) {
-                Some(span) => {
-                    span.start = span.start.min(segment_time);
-                    span.end = span.end.max(segment_time);
-                }
-                None => spans.push(ClipSpan {
-                    clip,
-                    start: segment_time,
-                    end: segment_time,
-                }),
-            }
-        }
-        spans
+        source_spans(&self.config, fps, frames)
     }
+}
+
+fn source_spans(config: &ProjectConfiguration, fps: u32, frames: [u32; 2]) -> Vec<ClipSpan> {
+    use cap_project::TimelineFrameMapping;
+    let mut spans: Vec<ClipSpan> = Vec::new();
+    let Some(timeline) = &config.timeline else {
+        return spans;
+    };
+    let mut include = |source: cap_project::TimelineSource<'_>| {
+        let clip = source.segment.recording_clip;
+        match spans.iter_mut().find(|span| span.clip == clip) {
+            Some(span) => {
+                span.start = span.start.min(source.source_time);
+                span.end = span.end.max(source.source_time);
+            }
+            None => spans.push(ClipSpan {
+                clip,
+                start: source.source_time,
+                end: source.source_time,
+            }),
+        }
+    };
+    for frame in frames[0]..frames[1] {
+        match timeline.get_frame_mapping(frame as f64 / fps as f64) {
+            Some(
+                TimelineFrameMapping::Single { source, .. }
+                | TimelineFrameMapping::Hold { source, .. },
+            ) => include(source),
+            Some(TimelineFrameMapping::Transition {
+                outgoing, incoming, ..
+            }) => {
+                include(outgoing);
+                include(incoming);
+            }
+            None => {}
+        }
+    }
+    spans
 }
 
 fn mapping_key(timeline: &cap_project::TimelineConfiguration, time: f64) -> Option<(u8, usize)> {
@@ -164,4 +183,77 @@ pub struct ClipSpan {
     pub clip: u32,
     pub start: f64,
     pub end: f64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cap_project::{ClipTransition, ClipTransitionType, TimelineConfiguration, TimelineSegment};
+
+    fn config(second_clip: u32) -> ProjectConfiguration {
+        ProjectConfiguration {
+            timeline: Some(TimelineConfiguration {
+                segments: vec![
+                    TimelineSegment {
+                        recording_clip: 0,
+                        start: 0.0,
+                        end: 6.0,
+                        timescale: 1.0,
+                        ..Default::default()
+                    },
+                    TimelineSegment {
+                        recording_clip: second_clip,
+                        start: 10.0,
+                        end: 16.0,
+                        timescale: 1.0,
+                        ..Default::default()
+                    },
+                ],
+                transitions: vec![ClipTransition {
+                    segment_index: 1,
+                    kind: ClipTransitionType::CrossFade,
+                    duration: 2.0,
+                }],
+                zoom_segments: Vec::new(),
+                scene_segments: Vec::new(),
+                mask_segments: Vec::new(),
+                text_segments: Vec::new(),
+                caption_segments: Vec::new(),
+                keyboard_segments: Vec::new(),
+                audio_segments: Vec::new(),
+                style_segments: Vec::new(),
+                image_segments: Vec::new(),
+                camera3d_segments: Vec::new(),
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn transition_chunk_includes_both_sources_from_its_first_frame() {
+        let spans = source_spans(&config(1), 30, [120, 180]);
+        assert_eq!(spans.len(), 2);
+        assert_eq!(spans[0].clip, 0);
+        assert_eq!(spans[0].start, 4.0);
+        assert!((spans[0].end - (6.0 - 1.0 / 30.0)).abs() < 1e-9);
+        assert_eq!(spans[1].clip, 1);
+        assert_eq!(spans[1].start, 10.0);
+        assert!((spans[1].end - (12.0 - 1.0 / 30.0)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn transition_between_edits_of_one_clip_unions_both_time_ranges() {
+        let spans = source_spans(&config(0), 30, [120, 121]);
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].start, 4.0);
+        assert_eq!(spans[0].end, 10.0);
+    }
+
+    #[test]
+    fn frames_after_transition_only_need_incoming_clip() {
+        let spans = source_spans(&config(1), 30, [180, 181]);
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].clip, 1);
+        assert_eq!(spans[0].start, 12.0);
+    }
 }
