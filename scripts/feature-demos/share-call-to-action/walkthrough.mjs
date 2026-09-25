@@ -218,6 +218,10 @@ try {
 	await phonePage
 		.locator("[data-slot=cta-overlay] [data-slot=cta-end-screen]")
 		.waitFor({ timeout: 20_000 });
+	await phonePage
+		.locator("[data-slot=cta-end-screen]")
+		.getByRole("button", { name: "Replay" })
+		.waitFor();
 	await pause(3000);
 	await capture(phonePage, "phone-end-screen");
 	await phone.close();

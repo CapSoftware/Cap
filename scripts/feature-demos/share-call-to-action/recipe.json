@@ -6,7 +6,7 @@
 		"bun install --frozen-lockfile",
 		"node scripts/feature-demos/share-call-to-action/make-video.mjs"
 	],
-	"start": "node scripts/feature-demos/share-call-to-action/fake-s3.mjs & bun run --cwd apps/web dev --port \"$PORT\" --hostname 127.0.0.1",
+	"start": "node scripts/feature-demos/share-call-to-action/seed-video.mjs && { node scripts/feature-demos/share-call-to-action/fake-s3.mjs & bun run --cwd apps/web dev --port \"$PORT\" --hostname 127.0.0.1; }",
 	"ready": "node scripts/feature-demos/share-call-to-action/wait-for-server.mjs",
 	"walkthrough": "node scripts/feature-demos/share-call-to-action/walkthrough.mjs"
 }
