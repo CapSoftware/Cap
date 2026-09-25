@@ -455,12 +455,17 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 										</p>
 									</div>
 								</div>
-								<Switch
-									aria-label="Anyone with the link"
-									checked={publicToggle && !organizationMembersOnly}
-									disabled={organizationMembersOnly}
-									onCheckedChange={setPublicToggle}
-								/>
+								{organizationMembersOnly ? (
+									<span className="shrink-0 text-xs text-gray-10">
+										Set by organization
+									</span>
+								) : (
+									<Switch
+										aria-label="Anyone with the link"
+										checked={publicToggle}
+										onCheckedChange={setPublicToggle}
+									/>
+								)}
 							</div>
 
 							<div className="p-3 mb-4 rounded-lg border bg-gray-1 border-gray-4">
