@@ -639,7 +639,11 @@ pub(super) fn record_pts_hole(
     start: u32,
     end: u32,
 ) {
-    const MAX_TRACKED_HOLES: usize = 64;
+    // Hour-long VFR screen recordings hold thousands of static micro-holds; a
+    // small cap evicted exactly the holes covering the current playback
+    // region, so repeated requests inside a forgotten hole re-entered the
+    // decode loop and dragged the reader ahead of the playhead (#2144).
+    const MAX_TRACKED_HOLES: usize = 4096;
     holes.insert(start, end);
     if holes.len() > MAX_TRACKED_HOLES
         && let Some(narrowest) = holes

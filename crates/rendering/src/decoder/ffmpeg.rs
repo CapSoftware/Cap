@@ -71,6 +71,10 @@ struct PendingRequest {
 }
 
 const MAX_FRAME_LOOKBACK_TOLERANCE: u32 = 2;
+/// How far behind a request the nearest cached frame may lag before a request
+/// that the reader has already decoded past forces a re-seek instead of being
+/// served stale content. ~190ms at typical screen-recording frame rates.
+const READER_AHEAD_SERVE_TOLERANCE: u32 = 4;
 const MAX_FRAME_CACHE_BYTES: usize = 128 * 1024 * 1024;
 
 fn extract_yuv_planes(frame: &frame::Video) -> Option<(Vec<u8>, PixelFormat, u32, u32)> {
@@ -732,6 +736,45 @@ impl FfmpegDecoder {
                         }
                     }
 
+                    // The reader only moves forward: a request behind its vend position
+                    // can never be satisfied by pulling more frames. Doing so anyway
+                    // dragged the reader (and the cache window) ever further ahead of
+                    // the playhead, so each subsequent miss served an increasingly stale
+                    // frame — the growing cursor-vs-video desync of #2144. Serve a
+                    // close-enough cached hold, else re-seek so the true frame gets
+                    // decoded (which also re-records any forgotten pts hole).
+                    if !is_backward_seek
+                        && let Some(reader_pos) = sw_prev_vended
+                        && reader_pos > requested_frame
+                    {
+                        let nearest_before = sw_cache
+                            .range(..=requested_frame)
+                            .next_back()
+                            .map(|(&n, _)| n);
+                        if let Some(n) = nearest_before
+                            && requested_frame - n <= READER_AHEAD_SERVE_TOLERANCE
+                            && let Some(cached) = sw_cache.get_mut(&n)
+                        {
+                            let data = cached.produce(&mut sw_converter);
+                            *sw_last_sent_frame.borrow_mut() = Some(data.clone());
+                            let _ = reply.send(data.frame);
+                            continue;
+                        }
+
+                        if let Err(error) = sw_this.reset(requested_time)
+                            && let Some(control) = &managed
+                        {
+                            control.fail(managed_error(
+                                control,
+                                ManagedVideoError::Seek(error.to_string()),
+                            ));
+                            return;
+                        }
+                        sw_frames = sw_this.frames();
+                        *sw_last_sent_frame.borrow_mut() = None;
+                        sw_cache.clear();
+                        sw_prev_vended = None;
+                    }
                     if reply.is_closed() {
                         continue;
                     }
@@ -1222,6 +1265,43 @@ impl FfmpegDecoder {
                     }
                 }
 
+                // The reader only moves forward: a request behind its vend position
+                // can never be satisfied by pulling more frames. Doing so anyway
+                // dragged the reader (and the cache window) ever further ahead of
+                // the playhead, so each subsequent miss served an increasingly stale
+                // frame — the growing cursor-vs-video desync of #2144. Serve a
+                // close-enough cached hold, else re-seek so the true frame gets
+                // decoded (which also re-records any forgotten pts hole).
+                if !is_backward_seek
+                    && let Some(reader_pos) = prev_vended
+                    && reader_pos > requested_frame
+                {
+                    let nearest_before =
+                        cache.range(..=requested_frame).next_back().map(|(&n, _)| n);
+                    if let Some(n) = nearest_before
+                        && requested_frame - n <= READER_AHEAD_SERVE_TOLERANCE
+                        && let Some(cached) = cache.get_mut(&n)
+                    {
+                        let data = cached.produce(&mut converter);
+                        *last_sent_frame.borrow_mut() = Some(data.clone());
+                        let _ = reply.send(data.frame);
+                        continue;
+                    }
+
+                    if let Err(error) = this.reset(requested_time)
+                        && let Some(control) = &managed
+                    {
+                        control.fail(managed_error(
+                            control,
+                            ManagedVideoError::Seek(error.to_string()),
+                        ));
+                        return;
+                    }
+                    frames = this.frames();
+                    *last_sent_frame.borrow_mut() = None;
+                    cache.clear();
+                    prev_vended = None;
+                }
                 if reply.is_closed() {
                     continue;
                 }
