@@ -218,7 +218,6 @@ interface ShareProps {
 	 * view is active.
 	 */
 	header?: React.ReactNode;
-	/** Timeline view's slim bar replaces the header, so it carries its own way back. */
 	dashboardDestination?: ShareDashboardDestination | null;
 }
 

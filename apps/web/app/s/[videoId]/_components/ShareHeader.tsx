@@ -140,11 +140,6 @@ const TITLE_TEXT_CLASS =
 
 const TITLE_PLACEHOLDER = "Cap title";
 
-/**
- * One shape for every button in the action bar. Phones get a 40px target and
- * share the row in equal columns; from `sm` up the buttons size to their
- * labels at the compact header height.
- */
 const ACTION_BAR_BUTTON_CLASS =
 	"h-10 min-w-0 gap-1.5 rounded-full px-3 text-[13px] sm:h-8 sm:px-2.5 sm:text-xs";
 
@@ -198,11 +193,6 @@ export const ShareHeader = ({
 	 * Resolves late and never blocks the header (see `ViewCount`).
 	 */
 	views?: MaybePromise<number | null>;
-	/**
-	 * Where "back" goes for a viewer this Cap belongs to or was shared with:
-	 * the owner's folder or library, or the space it reached them through.
-	 * Null for everyone else, who has nothing on the dashboard to return to.
-	 */
 	dashboardDestination?: ShareDashboardDestination | null;
 }) => {
 	const user = useCurrentUser();
