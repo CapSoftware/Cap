@@ -1,4 +1,4 @@
-import type { User, Video } from "@cap/web-domain";
+import type { Organisation, User, Video } from "@cap/web-domain";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 type Column = { table: string; column: string };
@@ -256,7 +256,7 @@ describe("getShareDashboardDestination", () => {
 
 	const resolve = (
 		viewerId: User.UserId | null,
-		videoOrganizationId = "org-active",
+		videoOrganizationId = "org-active" as Organisation.OrganisationId,
 	) =>
 		getShareDashboardDestination({
 			viewer: viewerId
@@ -328,7 +328,9 @@ describe("getShareDashboardDestination", () => {
 	it("checks the owner's membership before switching to the Cap's organization", async () => {
 		rowsFor = { organizationMembers: [{ id: "membership-1" }] };
 
-		expect(await resolve(OWNER, "org-other")).toMatchObject({
+		expect(
+			await resolve(OWNER, "org-other" as Organisation.OrganisationId),
+		).toMatchObject({
 			kind: "caps",
 			switchOrganizationId: "org-other",
 		});
@@ -342,7 +344,9 @@ describe("getShareDashboardDestination", () => {
 	});
 
 	it("does not switch when the owner has left the Cap's organization", async () => {
-		expect(await resolve(OWNER, "org-other")).toMatchObject({
+		expect(
+			await resolve(OWNER, "org-other" as Organisation.OrganisationId),
+		).toMatchObject({
 			kind: "caps",
 			switchOrganizationId: null,
 		});

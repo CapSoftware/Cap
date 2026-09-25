@@ -9,7 +9,7 @@ import {
 	spaceVideos,
 	videos,
 } from "@cap/database/schema";
-import type { User, Video } from "@cap/web-domain";
+import type { Organisation, User, Video } from "@cap/web-domain";
 import { and, eq, isNull } from "drizzle-orm";
 
 export type ShareDashboardDestination = {
@@ -112,7 +112,7 @@ export async function getShareDashboardDestination({
 	viewer: { id: User.UserId; activeOrganizationId: string | null } | null;
 	videoId: Video.VideoId;
 	ownerId: User.UserId;
-	videoOrganizationId: string;
+	videoOrganizationId: Organisation.OrganisationId;
 }): Promise<ShareDashboardDestination | null> {
 	if (!viewer) return null;
 
