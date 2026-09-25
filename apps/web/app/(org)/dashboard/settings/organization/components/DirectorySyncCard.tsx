@@ -87,7 +87,7 @@ export function DirectorySyncCard({
 						) : null}
 						<p className="text-sm text-gray-11">
 							{settings.lastSyncedAt
-								? `Last checked ${new Date(settings.lastSyncedAt).toLocaleString()}`
+								? `Last checked ${settings.lastSyncedAt.slice(0, 16).replace("T", " ")} UTC.`
 								: "Waiting for the first sync."}{" "}
 							Directory changes are checked every minute; your identity provider
 							may take longer to send them.
