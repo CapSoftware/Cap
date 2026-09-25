@@ -14,6 +14,7 @@ import {
 	videoUploads,
 } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
+import { organizationVideoAccessCondition } from "@cap/database/video-organization-access";
 import { userIsPro } from "@cap/utils";
 import { ImageUploads } from "@cap/web-backend";
 import {
@@ -22,9 +23,10 @@ import {
 	type Organisation,
 	PublicCollection as PublicCollectionDomain,
 	type Space,
+	type User,
 	Video,
 } from "@cap/web-domain";
-import { and, desc, eq, inArray, isNull, type SQL, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, or, type SQL, sql } from "drizzle-orm";
 import { Effect } from "effect";
 import { cache } from "react";
 import { sortFolders } from "@/lib/folder-sort";
@@ -182,8 +184,13 @@ export async function getPublicCollectionPageData(
 	}
 
 	const [childFolders, videoPage] = await Promise.all([
-		getPublicChildFolders(collection, verifiedPasswordHashes),
-		getPublicCollectionVideos(collection, page, verifiedPasswordHashes),
+		getPublicChildFolders(collection, verifiedPasswordHashes, user?.id),
+		getPublicCollectionVideos(
+			collection,
+			page,
+			verifiedPasswordHashes,
+			user?.id,
+		),
 	]);
 
 	return {
@@ -394,24 +401,68 @@ function isOrgLevelFolder(collection: PublicCollection) {
 	);
 }
 
+function collectionVideoAccess(
+	verifiedPasswordHashes: readonly string[],
+	viewerId?: User.UserId,
+) {
+	return or(
+		and(
+			eq(organizations.videoSharingRestrictedToOrg, false),
+			eq(videos.public, true),
+			videoPasswordPredicate(
+				sql`${videos.id}`,
+				sql`${videos.password}`,
+				verifiedPasswordHashes,
+			),
+		),
+		viewerId
+			? and(
+					eq(organizations.videoSharingRestrictedToOrg, true),
+					organizationVideoAccessCondition(viewerId),
+				)
+			: sql`FALSE`,
+	);
+}
+
 async function getPublicCollectionVideos(
 	collection: PublicCollection,
 	page: number,
 	verifiedPasswordHashes: readonly string[],
+	viewerId?: User.UserId,
 ) {
 	if (collection.kind === "space") {
-		return getPublicSpaceVideos(collection, page, verifiedPasswordHashes);
+		return getPublicSpaceVideos(
+			collection,
+			page,
+			verifiedPasswordHashes,
+			viewerId,
+		);
 	}
 
 	if (isOrgLevelFolder(collection)) {
-		return getPublicOrgFolderVideos(collection, page, verifiedPasswordHashes);
+		return getPublicOrgFolderVideos(
+			collection,
+			page,
+			verifiedPasswordHashes,
+			viewerId,
+		);
 	}
 
 	if (collection.spaceId) {
-		return getPublicSpaceFolderVideos(collection, page, verifiedPasswordHashes);
+		return getPublicSpaceFolderVideos(
+			collection,
+			page,
+			verifiedPasswordHashes,
+			viewerId,
+		);
 	}
 
-	return getPublicUserFolderVideos(collection, page, verifiedPasswordHashes);
+	return getPublicUserFolderVideos(
+		collection,
+		page,
+		verifiedPasswordHashes,
+		viewerId,
+	);
 }
 
 const videoSelect = {
@@ -472,19 +523,14 @@ async function getPublicSpaceVideos(
 	collection: PublicCollection,
 	page: number,
 	verifiedPasswordHashes: readonly string[],
+	viewerId?: User.UserId,
 ) {
 	const offset = (page - 1) * PUBLIC_COLLECTION_PAGE_SIZE;
 	const where = and(
 		eq(spaceVideos.spaceId, collection.id as Space.SpaceIdOrOrganisationId),
 		isNull(spaceVideos.folderId),
-		eq(videos.public, true),
-		eq(organizations.videoSharingRestrictedToOrg, false),
 		isNull(organizations.tombstoneAt),
-		videoPasswordPredicate(
-			sql`${videos.id}`,
-			sql`${videos.password}`,
-			verifiedPasswordHashes,
-		),
+		collectionVideoAccess(verifiedPasswordHashes, viewerId),
 	);
 
 	const [videoRows, totalCountResult] = await Promise.all([
@@ -519,18 +565,13 @@ async function getPublicSpaceFolderVideos(
 	collection: PublicCollection,
 	page: number,
 	verifiedPasswordHashes: readonly string[],
+	viewerId?: User.UserId,
 ) {
 	const offset = (page - 1) * PUBLIC_COLLECTION_PAGE_SIZE;
 	const where = and(
 		eq(spaceVideos.folderId, collection.id as Folder.FolderId),
-		eq(videos.public, true),
-		eq(organizations.videoSharingRestrictedToOrg, false),
 		isNull(organizations.tombstoneAt),
-		videoPasswordPredicate(
-			sql`${videos.id}`,
-			sql`${videos.password}`,
-			verifiedPasswordHashes,
-		),
+		collectionVideoAccess(verifiedPasswordHashes, viewerId),
 	);
 
 	const [videoRows, totalCountResult] = await Promise.all([
@@ -565,18 +606,13 @@ async function getPublicOrgFolderVideos(
 	collection: PublicCollection,
 	page: number,
 	verifiedPasswordHashes: readonly string[],
+	viewerId?: User.UserId,
 ) {
 	const offset = (page - 1) * PUBLIC_COLLECTION_PAGE_SIZE;
 	const where = and(
 		eq(sharedVideos.folderId, collection.id as Folder.FolderId),
-		eq(videos.public, true),
-		eq(organizations.videoSharingRestrictedToOrg, false),
 		isNull(organizations.tombstoneAt),
-		videoPasswordPredicate(
-			sql`${videos.id}`,
-			sql`${videos.password}`,
-			verifiedPasswordHashes,
-		),
+		collectionVideoAccess(verifiedPasswordHashes, viewerId),
 	);
 
 	const [videoRows, totalCountResult] = await Promise.all([
@@ -611,18 +647,13 @@ async function getPublicUserFolderVideos(
 	collection: PublicCollection,
 	page: number,
 	verifiedPasswordHashes: readonly string[],
+	viewerId?: User.UserId,
 ) {
 	const offset = (page - 1) * PUBLIC_COLLECTION_PAGE_SIZE;
 	const where = and(
 		eq(videos.folderId, collection.id as Folder.FolderId),
-		eq(videos.public, true),
-		eq(organizations.videoSharingRestrictedToOrg, false),
 		isNull(organizations.tombstoneAt),
-		videoPasswordPredicate(
-			sql`${videos.id}`,
-			sql`${videos.password}`,
-			verifiedPasswordHashes,
-		),
+		collectionVideoAccess(verifiedPasswordHashes, viewerId),
 	);
 
 	const [videoRows, totalCountResult] = await Promise.all([
@@ -654,6 +685,7 @@ async function getPublicUserFolderVideos(
 async function getPublicChildFolders(
 	collection: PublicCollection,
 	verifiedPasswordHashes: readonly string[],
+	viewerId?: User.UserId,
 ): Promise<PublicCollectionFolder[]> {
 	const where =
 		collection.kind === "space"
@@ -689,10 +721,22 @@ async function getPublicChildFolders(
 
 	const folderIds = childFolders.map((folder) => folder.id);
 	const counts = isOrgLevelFolder(collection)
-		? await getPublicOrgFolderVideoCounts(folderIds, verifiedPasswordHashes)
+		? await getPublicOrgFolderVideoCounts(
+				folderIds,
+				verifiedPasswordHashes,
+				viewerId,
+			)
 		: collection.kind === "space" || Boolean(collection.spaceId)
-			? await getPublicSpaceFolderVideoCounts(folderIds, verifiedPasswordHashes)
-			: await getPublicUserFolderVideoCounts(folderIds, verifiedPasswordHashes);
+			? await getPublicSpaceFolderVideoCounts(
+					folderIds,
+					verifiedPasswordHashes,
+					viewerId,
+				)
+			: await getPublicUserFolderVideoCounts(
+					folderIds,
+					verifiedPasswordHashes,
+					viewerId,
+				);
 	const countByFolderId = new Map(
 		counts.map((row) => [row.folderId, row.videoCount]),
 	);
@@ -706,6 +750,7 @@ async function getPublicChildFolders(
 async function getPublicSpaceFolderVideoCounts(
 	folderIds: Folder.FolderId[],
 	verifiedPasswordHashes: readonly string[],
+	viewerId?: User.UserId,
 ) {
 	return db()
 		.select({
@@ -718,14 +763,8 @@ async function getPublicSpaceFolderVideoCounts(
 		.where(
 			and(
 				inArray(spaceVideos.folderId, folderIds),
-				eq(videos.public, true),
-				eq(organizations.videoSharingRestrictedToOrg, false),
 				isNull(organizations.tombstoneAt),
-				videoPasswordPredicate(
-					sql`${videos.id}`,
-					sql`${videos.password}`,
-					verifiedPasswordHashes,
-				),
+				collectionVideoAccess(verifiedPasswordHashes, viewerId),
 			),
 		)
 		.groupBy(spaceVideos.folderId);
@@ -734,6 +773,7 @@ async function getPublicSpaceFolderVideoCounts(
 async function getPublicOrgFolderVideoCounts(
 	folderIds: Folder.FolderId[],
 	verifiedPasswordHashes: readonly string[],
+	viewerId?: User.UserId,
 ) {
 	return db()
 		.select({
@@ -746,14 +786,8 @@ async function getPublicOrgFolderVideoCounts(
 		.where(
 			and(
 				inArray(sharedVideos.folderId, folderIds),
-				eq(videos.public, true),
-				eq(organizations.videoSharingRestrictedToOrg, false),
 				isNull(organizations.tombstoneAt),
-				videoPasswordPredicate(
-					sql`${videos.id}`,
-					sql`${videos.password}`,
-					verifiedPasswordHashes,
-				),
+				collectionVideoAccess(verifiedPasswordHashes, viewerId),
 			),
 		)
 		.groupBy(sharedVideos.folderId);
@@ -762,6 +796,7 @@ async function getPublicOrgFolderVideoCounts(
 async function getPublicUserFolderVideoCounts(
 	folderIds: Folder.FolderId[],
 	verifiedPasswordHashes: readonly string[],
+	viewerId?: User.UserId,
 ) {
 	return db()
 		.select({
@@ -773,14 +808,8 @@ async function getPublicUserFolderVideoCounts(
 		.where(
 			and(
 				inArray(videos.folderId, folderIds),
-				eq(videos.public, true),
-				eq(organizations.videoSharingRestrictedToOrg, false),
 				isNull(organizations.tombstoneAt),
-				videoPasswordPredicate(
-					sql`${videos.id}`,
-					sql`${videos.password}`,
-					verifiedPasswordHashes,
-				),
+				collectionVideoAccess(verifiedPasswordHashes, viewerId),
 			),
 		)
 		.groupBy(videos.folderId);
