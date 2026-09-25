@@ -1,10 +1,12 @@
 import { User } from "@cap/web-domain";
 import type { DirectoryUser } from "@workos-inc/node";
-import { and, eq, inArray, isNull, or } from "drizzle-orm";
+import { and, eq, exists, inArray, isNotNull, isNull, or } from "drizzle-orm";
 import { getSsoEmailDomain } from "../auth/sso";
 import { nanoId } from "../helpers";
 import type { db } from "../index";
+import { enqueueLoopsSync } from "../loops/queue";
 import {
+	accounts,
 	directoryUsers,
 	type organizationDirectorySync,
 	organizationInvites,
@@ -44,6 +46,32 @@ export function directoryUserIssue(
 		return "unverified_email_domain";
 	if (!user.idpId || user.idpId.length > 255) return "invalid_identity";
 	return null;
+}
+
+async function refreshDirectoryUserProfile(
+	tx: DirectoryTransaction,
+	userId: User.UserId,
+) {
+	if (process.env.LOOPS_SYNC_ENABLED !== "true") return;
+	const [signedUp] = await tx
+		.select({ id: users.id })
+		.from(users)
+		.where(
+			and(
+				eq(users.id, userId),
+				or(
+					isNotNull(users.emailVerified),
+					exists(
+						tx
+							.select({ id: accounts.userId })
+							.from(accounts)
+							.where(eq(accounts.userId, userId)),
+					),
+				),
+			),
+		)
+		.limit(1);
+	if (signedUp) await enqueueLoopsSync(tx, userId);
 }
 
 export async function revokeDirectoryMembership(
@@ -137,6 +165,8 @@ export async function revokeDirectoryMembership(
 	};
 	if (Object.keys(userChanges).length)
 		await tx.update(users).set(userChanges).where(eq(users.id, userId));
+	if (memberships.length || Object.keys(userChanges).length)
+		await refreshDirectoryUserProfile(tx, userId);
 }
 
 export async function applyDirectoryUser(
@@ -294,6 +324,7 @@ export async function applyDirectoryUser(
 			role: organization?.ownerId === userId ? "owner" : "member",
 			hasProSeat: false,
 		});
+		await refreshDirectoryUserProfile(tx, userId);
 	}
 	await tx
 		.update(organizationInvites)

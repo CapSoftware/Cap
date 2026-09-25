@@ -318,8 +318,11 @@ async function consumeDirectoryEvents(
 							domains,
 							new Date(
 								event.event === "dsync.user.deleted"
-									? event.createdAt
-									: event.data.updatedAt,
+									? Math.max(
+											Date.parse(event.createdAt),
+											Date.parse(event.data.updatedAt),
+										)
+									: Date.parse(event.data.updatedAt),
 							),
 						);
 					}

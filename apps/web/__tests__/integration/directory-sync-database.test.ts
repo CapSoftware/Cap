@@ -17,7 +17,7 @@ import type { WorkOS } from "@workos-inc/node";
 import { and, eq, inArray } from "drizzle-orm";
 import { drizzle, type MySql2Database } from "drizzle-orm/mysql2";
 import { createPool, type Pool } from "mysql2/promise";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 const enabled = process.env.CAP_DIRECTORY_SYNC_DATABASE_TESTS === "true";
 const newId = () => randomUUID().replaceAll("-", "").slice(0, 15);
@@ -132,6 +132,13 @@ describe.runIf(enabled)(
 			if (videoIds.length)
 				await database.delete(Db.videos).where(inArray(Db.videos.id, videoIds));
 			if (organizationIds.length) {
+				const identities = await database
+					.select({ userId: Db.directoryUsers.userId })
+					.from(Db.directoryUsers)
+					.where(inArray(Db.directoryUsers.organizationId, organizationIds));
+				for (const identity of identities)
+					if (identity.userId && !userIds.includes(identity.userId))
+						userIds.push(identity.userId);
 				const spaces = await database
 					.select({ id: Db.spaces.id })
 					.from(Db.spaces)
@@ -171,6 +178,10 @@ describe.runIf(enabled)(
 					.delete(Db.organizations)
 					.where(inArray(Db.organizations.id, organizationIds));
 			}
+			if (userIds.length)
+				await database
+					.delete(Db.loopsSyncJobs)
+					.where(inArray(Db.loopsSyncJobs.userId, userIds));
 			if (userIds.length)
 				await database.delete(Db.users).where(inArray(Db.users.id, userIds));
 			await pool.end();
@@ -586,60 +597,63 @@ describe.runIf(enabled)(
 				),
 			).toBe(true);
 		});
-		it("checkpoints ordered events and prevents stale snapshots from undoing deletion", async () => {
-			const { configuration, remote } = await fixture();
-			const record = await requireRecord(configuration, remote);
-			const eventId = `event_${newId()}`;
-			const workos = {
-				directorySync: {
-					getDirectory: async () => ({
-						id: configuration.directoryId,
-						organizationId: configuration.workosOrganizationId,
-						state: "active",
-					}),
-					listUsers: async () => ({
-						data: [remote],
-						listMetadata: { after: null },
-					}),
-				},
-				organizations: {
-					getOrganization: async () => ({
-						id: configuration.workosOrganizationId,
-						domains: [{ domain: "example.com", state: "verified" }],
-					}),
-				},
-				events: {
-					listEvents: async () => ({
-						data: [
-							{
-								id: eventId,
-								event: "dsync.user.deleted",
-								data: remote,
-								createdAt: new Date().toISOString(),
-							},
-						],
-					}),
-				},
-			} as unknown as WorkOS;
-			await syncClaimedDirectory(
-				database,
-				workos,
-				configuration,
-				Date.now() + 25_000,
-			);
-			expect(await memberships(record.userId)).toHaveLength(0);
-			const [updated] = await database
-				.select()
-				.from(Db.organizationDirectorySync)
-				.where(
-					eq(
-						Db.organizationDirectorySync.organizationId,
-						configuration.organizationId,
-					),
+		it.each(["2025-12-31T23:59:59.000Z", "2026-01-02T00:00:00.000Z"])(
+			"checkpoints deletion at %s without a stale snapshot restoring access",
+			async (createdAt) => {
+				const { configuration, remote } = await fixture();
+				const record = await requireRecord(configuration, remote);
+				const eventId = `event_${newId()}`;
+				const workos = {
+					directorySync: {
+						getDirectory: async () => ({
+							id: configuration.directoryId,
+							organizationId: configuration.workosOrganizationId,
+							state: "active",
+						}),
+						listUsers: async () => ({
+							data: [remote],
+							listMetadata: { after: null },
+						}),
+					},
+					organizations: {
+						getOrganization: async () => ({
+							id: configuration.workosOrganizationId,
+							domains: [{ domain: "example.com", state: "verified" }],
+						}),
+					},
+					events: {
+						listEvents: async () => ({
+							data: [
+								{
+									id: eventId,
+									event: "dsync.user.deleted",
+									data: remote,
+									createdAt,
+								},
+							],
+						}),
+					},
+				} as unknown as WorkOS;
+				await syncClaimedDirectory(
+					database,
+					workos,
+					configuration,
+					Date.now() + 25_000,
 				);
-			expect(updated?.eventCursor).toBe(eventId);
-			expect(updated?.lastReconciledAt).toBeInstanceOf(Date);
-		});
+				expect(await memberships(record.userId)).toHaveLength(0);
+				const [updated] = await database
+					.select()
+					.from(Db.organizationDirectorySync)
+					.where(
+						eq(
+							Db.organizationDirectorySync.organizationId,
+							configuration.organizationId,
+						),
+					);
+				expect(updated?.eventCursor).toBe(eventId);
+				expect(updated?.lastReconciledAt).toBeInstanceOf(Date);
+			},
+		);
 
 		it("reconciles missing users after missed events without retiring present users", async () => {
 			const { configuration, remote } = await fixture();
@@ -689,6 +703,134 @@ describe.runIf(enabled)(
 					database,
 				),
 			).toBe(false);
+		});
+
+		it("resumes a multi-page snapshot after the deadline interrupts a page", async () => {
+			const { configuration, remote } = await fixture();
+			const missing = await requireRecord(configuration, remote);
+			const remotes = Array.from({ length: 5 }, () => ({
+				...remote,
+				id: `directory_user_${newId()}`,
+				idpId: newId(),
+				email: `${newId()}@example.com`,
+			}));
+			const cursors: (string | undefined)[] = [];
+			const deadline = Date.now() + 30000;
+			let now = Date.now();
+			let interrupt = true;
+			const workos = {
+				directorySync: {
+					getDirectory: async () => ({
+						id: configuration.directoryId,
+						organizationId: configuration.workosOrganizationId,
+						state: "active",
+					}),
+					listUsers: async ({ after }: { after?: string }) => {
+						cursors.push(after);
+						const offset = after
+							? remotes.findIndex((user) => user.id === after) + 1
+							: 0;
+						const data = remotes.slice(offset, offset + 2);
+						if (offset === 2 && interrupt) now = deadline;
+						return {
+							data,
+							listMetadata: {
+								after: offset + 2 < remotes.length ? data.at(-1)?.id : null,
+							},
+						};
+					},
+					getUser: async () => {
+						throw Object.assign(new Error("Not found"), { status: 404 });
+					},
+				},
+				organizations: {
+					getOrganization: async () => ({
+						id: configuration.workosOrganizationId,
+						domains: [{ domain: "example.com", state: "verified" }],
+					}),
+				},
+				events: { listEvents: async () => ({ data: [] }) },
+			} as unknown as WorkOS;
+			const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+			try {
+				await syncClaimedDirectory(database, workos, configuration, deadline);
+			} finally {
+				clock.mockRestore();
+			}
+			const [saved] = await database
+				.select()
+				.from(Db.organizationDirectorySync)
+				.where(
+					eq(
+						Db.organizationDirectorySync.organizationId,
+						configuration.organizationId,
+					),
+				);
+			if (!saved) throw new Error("Configuration was not persisted");
+			expect(saved.reconcileCursor).toBe(remotes[2]?.id);
+			expect(saved.reconcileListingComplete).toBe(false);
+			expect(saved.lastReconciledAt).toBeNull();
+			expect(await memberships(missing.userId)).toHaveLength(1);
+			interrupt = false;
+			await syncClaimedDirectory(database, workos, saved, Date.now() + 30000);
+			expect(cursors).toEqual([undefined, remotes[1]?.id, remotes[2]?.id]);
+			const identities = await database
+				.select()
+				.from(Db.directoryUsers)
+				.where(
+					eq(Db.directoryUsers.organizationId, configuration.organizationId),
+				);
+			expect(identities.filter((user) => user.state === "active")).toHaveLength(
+				5,
+			);
+			for (const identity of identities.filter(
+				(user) => user.state === "active",
+			)) {
+				if (!identity.userId) throw new Error("User was not bound");
+				expect(await memberships(identity.userId)).toHaveLength(1);
+			}
+			expect(await memberships(missing.userId)).toHaveLength(0);
+		});
+
+		it("queues profile refreshes for signed-up membership changes without enrolling pre-login users", async () => {
+			const prior = process.env.LOOPS_SYNC_ENABLED;
+			process.env.LOOPS_SYNC_ENABLED = "true";
+			try {
+				const { configuration, remote, ownerId } = await fixture();
+				const fresh = await requireRecord(configuration, remote);
+				expect(
+					await database
+						.select()
+						.from(Db.loopsSyncJobs)
+						.where(eq(Db.loopsSyncJobs.userId, fresh.userId)),
+				).toHaveLength(0);
+				await database
+					.update(Db.users)
+					.set({ emailVerified: new Date() })
+					.where(eq(Db.users.id, ownerId));
+				const existingRemote = {
+					...remote,
+					id: `directory_user_${newId()}`,
+					idpId: newId(),
+					email: `${ownerId}@example.com`,
+				};
+				await requireRecord(configuration, existingRemote);
+				const [joined] = await database
+					.select()
+					.from(Db.loopsSyncJobs)
+					.where(eq(Db.loopsSyncJobs.userId, ownerId));
+				expect(joined).toBeDefined();
+				expect(joined?.teammateJoinedAt).toBeNull();
+				await apply(configuration, { ...existingRemote, state: "inactive" });
+				const [removed] = await database
+					.select()
+					.from(Db.loopsSyncJobs)
+					.where(eq(Db.loopsSyncJobs.userId, ownerId));
+				expect(removed?.revision).toBe((joined?.revision ?? 0) + 1);
+			} finally {
+				if (prior === undefined) delete process.env.LOOPS_SYNC_ENABLED;
+				else process.env.LOOPS_SYNC_ENABLED = prior;
+			}
 		});
 
 		it("denies inactive directories while retaining memberships for recovery", async () => {
