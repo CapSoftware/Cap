@@ -26,7 +26,9 @@ import {
 } from "@/actions/videos/get-status";
 import type { OrganizationSettings } from "@/app/(org)/dashboard/dashboard-data";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
+import type { ShareDashboardDestination } from "@/lib/share-dashboard-destination";
 import { CaptionProvider } from "./_components/CaptionContext";
+import { DashboardBackLink } from "./_components/DashboardBackLink";
 import { PlaybackProvider } from "./_components/playback/PlaybackContext";
 import { ShareVideo } from "./_components/ShareVideo";
 import { type ShareView, ShareViewToggle } from "./_components/ShareViewToggle";
@@ -216,6 +218,7 @@ interface ShareProps {
 	 * view is active.
 	 */
 	header?: React.ReactNode;
+	dashboardDestination?: ShareDashboardDestination | null;
 }
 
 const useVideoStatus = (
@@ -339,6 +342,7 @@ export const Share = ({
 	canRecordMedia = false,
 	viewerSignedIn = false,
 	header,
+	dashboardDestination = null,
 }: ShareProps) => {
 	const isScreenshot = data.isScreenshot === true;
 	// Memoized: a fresh Date each render would defeat the memoized `data`
@@ -809,6 +813,12 @@ export const Share = ({
 									// the player instead.
 									<div className="mx-auto flex h-14 w-full max-w-6xl items-center justify-between gap-3 rounded-t-xl border border-b-0 border-gray-5 bg-white px-5">
 										<div className="flex min-w-0 items-center gap-3">
+											{dashboardDestination && (
+												<DashboardBackLink
+													destination={dashboardDestination}
+													compact
+												/>
+											)}
 											<SignedImageUrl
 												image={data.owner.image}
 												name={data.owner.name ?? "Someone"}
