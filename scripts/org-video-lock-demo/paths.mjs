@@ -19,6 +19,7 @@ export const ids = {
 	publicVideo: id("demo-public-video"),
 	privateVideo: id("demo-private-video"),
 	publicSpace: id("demo-public-space"),
+	protectedSpace: id("demo-protected-space"),
 };
 export const directory = join(tmpdir(), `cap-${session}`);
 export const origin = `http://127.0.0.1:${process.env.PORT}`;

@@ -133,6 +133,28 @@ await database
 	})
 	.onDuplicateKeyUpdate({ set: { spaceId } });
 
+const protectedSpaceId = Space.SpaceId.make(ids.protectedSpace);
+await database
+	.insert(spaces)
+	.values({
+		id: protectedSpaceId,
+		organizationId,
+		createdById: ownerId,
+		name: "Protected team library",
+		public: true,
+		password: "synthetic-unverified-space-password",
+	})
+	.onDuplicateKeyUpdate({ set: { public: true } });
+await database
+	.insert(spaceVideos)
+	.values({
+		id: ids.protectedSpace,
+		spaceId: protectedSpaceId,
+		videoId: Video.VideoId.make(ids.privateVideo),
+		addedById: ownerId,
+	})
+	.onDuplicateKeyUpdate({ set: { spaceId: protectedSpaceId } });
+
 await database
 	.update(organizations)
 	.set({ videoSharingRestrictedToOrg: true })

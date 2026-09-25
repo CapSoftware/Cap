@@ -108,6 +108,11 @@ try {
 	await expect(
 		memberPage.getByText("Existing project walkthrough", { exact: true }),
 	).toBeVisible();
+	await visit(memberPage, `/c/${ids.protectedSpace}`);
+	await expect(
+		memberPage.getByText("Private team update", { exact: true }),
+	).toBeVisible();
+	await pause(memberPage);
 	const created = await owner.request.get(
 		`${origin}/api/desktop/video/create?recordingMode=desktopMP4&name=New%20organization%20recording&durationInSecs=12&width=1280&height=720`,
 		{ headers: { Authorization: `Bearer ${states.desktopToken}` } },
@@ -205,6 +210,7 @@ try {
 				"invited guest blocked",
 				"anonymous embed blocked",
 				"public collection hides outsider metadata and allows owning members",
+				"saved collection passwords do not block organization members",
 				"sharing controls explain the organization policy",
 				"media and metadata endpoints blocked",
 				"organization member playback",
