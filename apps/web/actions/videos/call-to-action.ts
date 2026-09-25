@@ -4,7 +4,7 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { videos } from "@cap/database/schema";
 import type { Video } from "@cap/web-domain";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import {
 	type CallToActionErrors,
 	type CallToActionInput,
@@ -41,7 +41,7 @@ export async function updateVideoCallToAction(
 			.set({
 				settings: sql`JSON_MERGE_PATCH(COALESCE(${videos.settings}, JSON_OBJECT()), CAST('{"callToAction":null}' AS JSON))`,
 			})
-			.where(eq(videos.id, videoId));
+			.where(and(eq(videos.id, videoId), eq(videos.ownerId, user.id)));
 		return { success: true, callToAction: null };
 	}
 
@@ -53,7 +53,7 @@ export async function updateVideoCallToAction(
 		.set({
 			settings: sql`JSON_MERGE_PATCH(JSON_MERGE_PATCH(COALESCE(${videos.settings}, JSON_OBJECT()), CAST('{"callToAction":null}' AS JSON)), CAST(${JSON.stringify({ callToAction: toStoredCallToAction(result.value) })} AS JSON))`,
 		})
-		.where(eq(videos.id, videoId));
+		.where(and(eq(videos.id, videoId), eq(videos.ownerId, user.id)));
 
 	return { success: true, callToAction: result.value };
 }
