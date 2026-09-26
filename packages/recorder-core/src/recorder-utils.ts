@@ -2,6 +2,7 @@ import {
 	type DetectedDisplayRecordingMode,
 	DISPLAY_SURFACE_TO_RECORDING_MODE,
 	MP4_MIME_TYPES,
+	STREAMING_MP4_MIME_TYPES,
 	WEBM_MIME_TYPES,
 } from "./recorder-constants";
 
@@ -21,9 +22,9 @@ type RecorderEnvironment = {
 
 export type RecordingPipeline =
 	| {
-			mode: "streaming-webm";
+			mode: "streaming";
 			mimeType: string;
-			fileExtension: "webm";
+			fileExtension: "webm" | "mp4";
 			supportsProgressiveUpload: true;
 	  }
 	| {
@@ -154,14 +155,36 @@ export const selectRecordingPipelineFromSupport = (
 	const supportedFallbackMimeType = fallbackCandidates.find((candidate) =>
 		isMimeSupported(candidate),
 	);
+	const streamingMp4Candidates = hasAudio
+		? [
+				...STREAMING_MP4_MIME_TYPES.withAudio,
+				...STREAMING_MP4_MIME_TYPES.videoOnly,
+			]
+		: [
+				...STREAMING_MP4_MIME_TYPES.videoOnly,
+				...STREAMING_MP4_MIME_TYPES.withAudio,
+			];
+	const supportedStreamingMp4MimeType = streamingMp4Candidates.find(
+		(candidate) => isMimeSupported(candidate),
+	);
 
-	if (supportedWebmMimeType && options?.preferStreamingUpload !== false) {
-		return {
-			mode: "streaming-webm",
-			mimeType: supportedWebmMimeType,
-			fileExtension: "webm",
-			supportsProgressiveUpload: true,
-		};
+	if (options?.preferStreamingUpload !== false) {
+		if (supportedStreamingMp4MimeType) {
+			return {
+				mode: "streaming",
+				mimeType: supportedStreamingMp4MimeType,
+				fileExtension: "mp4",
+				supportsProgressiveUpload: true,
+			};
+		}
+		if (supportedWebmMimeType) {
+			return {
+				mode: "streaming",
+				mimeType: supportedWebmMimeType,
+				fileExtension: "webm",
+				supportsProgressiveUpload: true,
+			};
+		}
 	}
 
 	if (supportedFallbackMimeType) {

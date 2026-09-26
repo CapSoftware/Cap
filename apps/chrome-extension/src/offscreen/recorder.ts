@@ -23,6 +23,7 @@ import {
 	uploadRecoveredAudioSidecar,
 	type VideoId,
 } from "@cap/recorder-core";
+import { recorderOptions } from "@cap/recorder-core/recorder-encoding";
 
 import {
 	createInstantRecording,
@@ -1313,14 +1314,25 @@ const startRecording = async (request: StartRecordingRequest) => {
 		}
 		throwIfStartCanceled();
 
-		const recorder = new MediaRecorder(recordingStream, {
-			mimeType: pipeline.mimeType,
-		});
+		const isSupported = (type: string) => MediaRecorder.isTypeSupported(type);
+		const recorder = new MediaRecorder(
+			recordingStream,
+			recorderOptions(
+				pipeline.mimeType,
+				recordingStream.getVideoTracks()[0],
+				isSupported,
+			),
+		);
 		const cameraRecorder =
 			cameraRecordingStream && cameraPipeline
-				? new MediaRecorder(cameraRecordingStream, {
-						mimeType: cameraPipeline.mimeType,
-					})
+				? new MediaRecorder(
+						cameraRecordingStream,
+						recorderOptions(
+							cameraPipeline.mimeType,
+							cameraRecordingStream.getVideoTracks()[0],
+							isSupported,
+						),
+					)
 				: null;
 
 		await countdownPromise;

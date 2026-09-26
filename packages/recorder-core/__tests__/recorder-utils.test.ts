@@ -21,11 +21,39 @@ describe("selectRecordingPipelineFromSupport", () => {
 		);
 
 		expect(pipeline).toEqual({
-			mode: "streaming-webm",
+			mode: "streaming",
 			mimeType: "video/webm;codecs=vp9,opus",
 			fileExtension: "webm",
 			supportsProgressiveUpload: true,
 		});
+	});
+
+	it("streams H.264 mp4 when the browser records it, so renders need no re-encode", () => {
+		const supportedTypes = new Set([
+			"video/webm;codecs=vp9,opus",
+			'video/mp4;codecs="avc1.64002A,mp4a.40.2"',
+			'video/mp4;codecs="avc1.64002A"',
+		]);
+
+		expect(
+			selectRecordingPipelineFromSupport(
+				true,
+				(candidate) => supportedTypes.has(candidate),
+				{ preferStreamingUpload: true },
+			),
+		).toEqual({
+			mode: "streaming",
+			mimeType: 'video/mp4;codecs="avc1.64002A,mp4a.40.2"',
+			fileExtension: "mp4",
+			supportsProgressiveUpload: true,
+		});
+		expect(
+			selectRecordingPipelineFromSupport(
+				false,
+				(candidate) => supportedTypes.has(candidate),
+				{ preferStreamingUpload: true },
+			)?.mimeType,
+		).toBe('video/mp4;codecs="avc1.64002A"');
 	});
 
 	it("prefers buffered mp4 when streaming uploads are not preferred", () => {
@@ -90,7 +118,7 @@ describe("selectRecordingPipelineFromSupport", () => {
 		);
 
 		expect(pipeline).toEqual({
-			mode: "streaming-webm",
+			mode: "streaming",
 			mimeType: "video/webm;codecs=vp9,opus",
 			fileExtension: "webm",
 			supportsProgressiveUpload: true,

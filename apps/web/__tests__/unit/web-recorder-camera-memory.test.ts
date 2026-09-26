@@ -79,7 +79,7 @@ vi.mock("@cap/recorder-core/recorder-utils", () => ({
 		hasDisplayMedia: true,
 	}),
 	selectRecordingPipeline: () => ({
-		mode: "streaming-webm",
+		mode: "streaming",
 		mimeType: "video/webm;codecs=vp8",
 		fileExtension: "webm",
 	}),
