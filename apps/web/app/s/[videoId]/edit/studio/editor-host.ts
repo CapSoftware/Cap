@@ -2029,9 +2029,11 @@ export class EditorHostBridge {
 			return;
 		}
 		if (message.kind === "invoke" && message.name === "tauri:webEditorSave") {
+			let releaseWorkerUse: () => void = () => undefined;
 			try {
-				if (this.browserOnly)
-					throw new Error("Saving needs the Cap editor worker");
+				// The render project is built from the worker's prepared copy of
+				// the recording, so a browser-only editor starts one first.
+				releaseWorkerUse = await this.ensureWorkerSession();
 				const response = await fetch(
 					`/api/editor/sessions/${encodeURIComponent(this.sessionId)}/save`,
 					{
@@ -2063,6 +2065,8 @@ export class EditorHostBridge {
 					id: message.id,
 					error: cause instanceof Error ? cause.message : "Save failed",
 				});
+			} finally {
+				releaseWorkerUse();
 			}
 			return;
 		}
