@@ -439,6 +439,22 @@ describe("VideosPolicy.canView", () => {
 	describe("public video WITH email restriction (comma-separated)", () => {
 		const restriction = "company.com, partner.org, vip@gmail.com";
 
+		it.each([
+			["member,team@example.invalid", "member,team@example.invalid", "denied"],
+			["member,team@example.invalid", "example.invalid", "allowed"],
+			["team@example.invalid", "member,team@example.invalid", "allowed"],
+		])(
+			"checks complete restriction entries for %s against %s",
+			async (email, savedRestriction, expected) => {
+				const deps = makeDeps({
+					video: makeVideo({ public: true }),
+					allowedEmailDomain: Option.some(savedRestriction),
+				});
+
+				expect(await runCanView(deps, makeUser(email))).toBe(expected);
+			},
+		);
+
 		it("allows user matching first domain", async () => {
 			const deps = makeDeps({
 				video: makeVideo({ public: true }),
