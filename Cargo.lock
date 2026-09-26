@@ -1981,10 +1981,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "cap-render-farm"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "cap-audio",
+ "cap-editor",
+ "cap-export",
+ "cap-project",
+ "cap-rendering",
+ "ffmpeg-next",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "wgpu",
+ "workspace-hack",
+]
+
+[[package]]
 name = "cap-rendering"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "ash",
  "bezier_easing",
  "build-time",
  "bytemuck",
@@ -2005,6 +2027,7 @@ dependencies = [
  "futures-intrusive",
  "glyphon",
  "image 0.25.8",
+ "libloading 0.8.8",
  "log",
  "metal 0.31.0",
  "objc2 0.6.2",

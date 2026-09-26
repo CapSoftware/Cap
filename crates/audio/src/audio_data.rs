@@ -253,6 +253,18 @@ impl AudioData {
             && source_end_sample <= self.covered_source_end_sample
     }
 
+    /// Interleaved 48 kHz samples starting at source sample 0. Used to
+    /// assemble a track from decoded windows (zero elsewhere) when only parts
+    /// of a long recording are needed.
+    pub fn from_samples(samples: Vec<f32>, channels: u16) -> Self {
+        Self {
+            samples,
+            channels,
+            source_start_sample: 0,
+            covered_source_end_sample: usize::MAX,
+        }
+    }
+
     #[cfg(any(test, feature = "test-support"))]
     pub fn from_raw_f32(samples: Vec<f32>, channels: u16) -> Self {
         Self {

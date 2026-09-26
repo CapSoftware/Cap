@@ -222,6 +222,12 @@
         "vitest": "^3.2.0",
       },
     },
+    "apps/render-farm": {
+      "name": "@cap/render-farm",
+      "devDependencies": {
+        "@types/bun": "1.4.0",
+      },
+    },
     "apps/web": {
       "name": "@cap/web",
       "version": "0.3.1",
@@ -983,6 +989,8 @@
     "@cap/mobile": ["@cap/mobile@workspace:apps/mobile"],
 
     "@cap/recorder-core": ["@cap/recorder-core@workspace:packages/recorder-core"],
+
+    "@cap/render-farm": ["@cap/render-farm@workspace:apps/render-farm"],
 
     "@cap/sdk-embed": ["@cap/sdk-embed@workspace:packages/sdk-embed"],
 

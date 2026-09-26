@@ -154,6 +154,10 @@ pub struct RgbaToNv12Converter {
     surface_ring: Option<Nv12SurfaceRing>,
     #[cfg(all(test, target_os = "macos"))]
     surface_setup_should_fail: bool,
+    #[cfg(target_os = "linux")]
+    external_ring: Option<crate::linux_gpu::SharedRing>,
+    #[cfg(target_os = "linux")]
+    external_output: bool,
 }
 
 /// An NV12 CVPixelBuffer produced by the GPU converter, ready for zero-copy
@@ -500,7 +504,18 @@ impl RgbaToNv12Converter {
             surface_ring: None,
             #[cfg(all(test, target_os = "macos"))]
             surface_setup_should_fail: false,
+            #[cfg(target_os = "linux")]
+            external_ring: None,
+            #[cfg(target_os = "linux")]
+            external_output: false,
         }
+    }
+
+    /// Keep NV12 output on the GPU: the compute result is copied into a ring
+    /// of CUDA-shared buffers for NVENC instead of being read back.
+    #[cfg(target_os = "linux")]
+    pub fn enable_external_output(&mut self) {
+        self.external_output = true;
     }
 
     /// Emit IOSurface-backed NV12 CVPixelBuffers instead of CPU readbacks:
@@ -750,6 +765,42 @@ impl RgbaToNv12Converter {
             return Ok(true);
         }
 
+        #[cfg(target_os = "linux")]
+        if self.external_output {
+            let nv12_size = self.nv12_size(width, height);
+            if self
+                .external_ring
+                .as_ref()
+                .is_none_or(|ring| ring.size() < nv12_size)
+            {
+                // Frames in flight between renderer and encoder hold slots,
+                // so the ring covers both channels' depth.
+                match crate::linux_gpu::SharedRing::new(device, 16, nv12_size, "NV12 CUDA Output") {
+                    Ok(ring) => self.external_ring = Some(ring),
+                    Err(error) => {
+                        tracing::warn!(%error, "CUDA output unavailable, reading frames back");
+                        self.external_output = false;
+                    }
+                }
+            }
+            if let Some(ring) = self.external_ring.as_mut().filter(|_| self.external_output) {
+                let slot = ring
+                    .acquire(device)
+                    .ok_or(RenderingError::BufferMapWaitingFailed)?;
+                encoder.copy_buffer_to_buffer(nv12_buffer, 0, &slot.shared.buffer, 0, nv12_size);
+                self.pending = Some(PendingNv12Output::External(PendingNv12External {
+                    slot: Some(slot),
+                    completed: None,
+                    width,
+                    height,
+                    y_stride,
+                    frame_number,
+                    frame_rate,
+                }));
+                return Ok(true);
+            }
+        }
+
         let readback_buffer = match self.readback_buffers[readback_idx].as_ref() {
             Some(b) => b.clone(),
             None => return Ok(false),
@@ -794,6 +845,15 @@ impl RgbaToNv12Converter {
                 });
                 pending.completed = Some(completed);
             }
+            #[cfg(target_os = "linux")]
+            Some(PendingNv12Output::External(pending)) => {
+                let completed = Arc::new(AtomicBool::new(false));
+                let callback_completed = Arc::clone(&completed);
+                queue.on_submitted_work_done(move || {
+                    callback_completed.store(true, Ordering::Release);
+                });
+                pending.completed = Some(completed);
+            }
             None => {}
         }
         let _ = queue;
@@ -808,6 +868,75 @@ pub enum PendingNv12Output {
     Readback(PendingNv12Readback),
     #[cfg(target_os = "macos")]
     Surface(PendingNv12Surface),
+    #[cfg(target_os = "linux")]
+    External(PendingNv12External),
+}
+
+#[cfg(target_os = "linux")]
+pub struct PendingNv12External {
+    slot: Option<Arc<crate::linux_gpu::RingSlot>>,
+    completed: Option<Arc<AtomicBool>>,
+    width: u32,
+    height: u32,
+    y_stride: u32,
+    frame_number: u32,
+    frame_rate: u32,
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for PendingNv12External {
+    fn drop(&mut self) {
+        // Abandoned before hand-off (error or flush): free the slot.
+        if let Some(slot) = self.slot.take() {
+            slot.release();
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl PendingNv12External {
+    async fn wait(mut self, device: &wgpu::Device) -> Result<Nv12RenderedFrame, RenderingError> {
+        let Some(completed) = self.completed.clone() else {
+            return Err(RenderingError::BufferMapWaitingFailed);
+        };
+        let started = Instant::now();
+        let mut poll_count = 0u32;
+        while !completed.load(Ordering::Acquire) {
+            if started.elapsed() > gpu_buffer_wait_timeout() {
+                return Err(RenderingError::BufferMapWaitingFailed);
+            }
+            device.poll(wgpu::PollType::Poll)?;
+            poll_count += 1;
+            if poll_count < 10 {
+                tokio::task::yield_now().await;
+            } else if poll_count < 100 {
+                tokio::time::sleep(std::time::Duration::from_micros(100)).await;
+            } else {
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            }
+        }
+        let slot = self
+            .slot
+            .take()
+            .ok_or(RenderingError::BufferMapWaitingFailed)?;
+        let target_time_ns =
+            (self.frame_number as u64 * 1_000_000_000) / self.frame_rate.max(1) as u64;
+        Ok(Nv12RenderedFrame {
+            data: SharedNv12Buffer::from_vec(Vec::new()),
+            width: self.width,
+            height: self.height,
+            y_stride: self.y_stride,
+            frame_number: self.frame_number,
+            target_time_ns,
+            format: GpuOutputFormat::Nv12,
+            gpu: Some(Arc::new(crate::linux_gpu::GpuNv12Output {
+                slot,
+                y_stride: self.y_stride,
+                uv_offset: u64::from(self.y_stride) * u64::from(self.height),
+                uv_stride: self.y_stride,
+            })),
+        })
+    }
 }
 
 impl PendingNv12Output {
@@ -820,6 +949,8 @@ impl PendingNv12Output {
             Self::Readback(pending) => pending.wait_with_pool(device, buffer_pool).await,
             #[cfg(target_os = "macos")]
             Self::Surface(pending) => pending.wait(device).await,
+            #[cfg(target_os = "linux")]
+            Self::External(pending) => pending.wait(device).await,
         }
     }
 }
@@ -873,6 +1004,8 @@ impl PendingNv12Surface {
             target_time_ns,
             format: GpuOutputFormat::Nv12,
             surface: Some(Nv12Surface(self.pixel_buffer)),
+            #[cfg(target_os = "linux")]
+            gpu: None,
         })
     }
 }
@@ -964,6 +1097,8 @@ impl PendingNv12Readback {
             format: GpuOutputFormat::Nv12,
             #[cfg(target_os = "macos")]
             surface: None,
+            #[cfg(target_os = "linux")]
+            gpu: None,
         })
     }
 }
@@ -986,6 +1121,10 @@ pub struct Nv12RenderedFrame {
     /// `data` is empty (surface-output mode; macOS export path).
     #[cfg(target_os = "macos")]
     pub surface: Option<Nv12Surface>,
+    /// When set, the frame lives in a CUDA-shared GPU buffer and `data` is
+    /// empty (Linux GPU render hosts, NVENC input).
+    #[cfg(target_os = "linux")]
+    pub gpu: Option<Arc<crate::linux_gpu::GpuNv12Output>>,
 }
 
 impl Nv12RenderedFrame {
@@ -1000,6 +1139,8 @@ impl Nv12RenderedFrame {
             format: self.format,
             #[cfg(target_os = "macos")]
             surface: self.surface.clone(),
+            #[cfg(target_os = "linux")]
+            gpu: self.gpu.clone(),
         }
     }
 
@@ -1695,6 +1836,19 @@ pub struct RenderSession {
     texture_height: u32,
 }
 
+/// The blur result cache copies into session textures, so only render hosts
+/// that enable it need them to be copy destinations.
+fn session_texture_usage() -> wgpu::TextureUsages {
+    let usage = wgpu::TextureUsages::TEXTURE_BINDING
+        | wgpu::TextureUsages::RENDER_ATTACHMENT
+        | wgpu::TextureUsages::COPY_SRC;
+    if crate::blur_result_cache_enabled() {
+        usage | wgpu::TextureUsages::COPY_DST
+    } else {
+        usage
+    }
+}
+
 impl RenderSession {
     pub fn new(device: &wgpu::Device, width: u32, height: u32) -> Self {
         let phase = crate::readiness::Phase::start("frame.session");
@@ -1709,9 +1863,7 @@ impl RenderSession {
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::COPY_SRC,
+                usage: session_texture_usage(),
                 label: Some("Intermediate Texture"),
                 view_formats: &[],
             })
@@ -1758,9 +1910,7 @@ impl RenderSession {
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::COPY_SRC,
+                usage: session_texture_usage(),
                 label: Some("Intermediate Texture"),
                 view_formats: &[],
             })
@@ -1973,6 +2123,8 @@ pub async fn finish_encoder_nv12_pooled(
             format: GpuOutputFormat::Rgba,
             #[cfg(target_os = "macos")]
             surface: None,
+            #[cfg(target_os = "linux")]
+            gpu: None,
         }))
     }
 }

@@ -1685,6 +1685,8 @@ mod tests {
             format: GpuOutputFormat::Nv12,
             #[cfg(target_os = "macos")]
             surface: None,
+            #[cfg(target_os = "linux")]
+            gpu: None,
         };
 
         let result = nv12_from_rendered_frame(frame);
