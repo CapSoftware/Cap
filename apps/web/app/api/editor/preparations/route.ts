@@ -18,6 +18,7 @@ import {
 	orderedEditorWorkers,
 	parseEditorWorkerPool,
 } from "@/lib/editor-worker-routing";
+import { prewarmRenderFarmSources } from "@/lib/render-farm-start";
 import { apiToHandler } from "@/lib/server";
 
 export const dynamic = "force-dynamic";
@@ -53,6 +54,12 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 			handlers.handle("prepare", ({ payload }) =>
 				Effect.gen(function* () {
 					const video = yield* loadEligibleEditorVideo(payload.videoId);
+					yield* Effect.forkDaemon(
+						prewarmRenderFarmSources(video).pipe(
+							Effect.timeout("10 seconds"),
+							Effect.ignore,
+						),
+					);
 					const sources = yield* getSignedEditorSources(video);
 					const env = serverEnv();
 					const workers = yield* Effect.try({
