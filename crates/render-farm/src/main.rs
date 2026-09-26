@@ -124,6 +124,7 @@ async fn handle(op: Op) -> Result<Value> {
 }
 
 fn main() -> Result<()> {
+    cap_rendering::enable_blur_result_cache();
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .with_env_filter(

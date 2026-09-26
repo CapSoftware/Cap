@@ -1111,6 +1111,19 @@ pub mod loop_stats {
     }
 }
 
+/// A blurred static background is identical on every frame. Render hosts
+/// reuse the first frame's result; editor and desktop exports keep blurring
+/// every frame until this has been verified there.
+static BLUR_RESULT_CACHE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn enable_blur_result_cache() {
+    BLUR_RESULT_CACHE.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn blur_result_cache_enabled() -> bool {
+    BLUR_RESULT_CACHE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Layer pipelines take ~0.25-0.5 s to build per render. A process that
 /// renders many ranges of the same project (a render-farm engine) can set a
 /// key naming that project; successful renders then hand their layers to the
@@ -7546,7 +7559,7 @@ impl RendererLayers {
         self.camera_only.copy_to_texture(encoder);
         self.background.render_surface(encoder);
 
-        let blur_key = (self.background_blur.blur_amount > 0.0)
+        let blur_key = (blur_result_cache_enabled() && self.background_blur.blur_amount > 0.0)
             .then(|| self.background.static_generation())
             .flatten()
             .map(|background_generation| {

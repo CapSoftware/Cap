@@ -1836,6 +1836,19 @@ pub struct RenderSession {
     texture_height: u32,
 }
 
+/// The blur result cache copies into session textures, so only render hosts
+/// that enable it need them to be copy destinations.
+fn session_texture_usage() -> wgpu::TextureUsages {
+    let usage = wgpu::TextureUsages::TEXTURE_BINDING
+        | wgpu::TextureUsages::RENDER_ATTACHMENT
+        | wgpu::TextureUsages::COPY_SRC;
+    if crate::blur_result_cache_enabled() {
+        usage | wgpu::TextureUsages::COPY_DST
+    } else {
+        usage
+    }
+}
+
 impl RenderSession {
     pub fn new(device: &wgpu::Device, width: u32, height: u32) -> Self {
         let phase = crate::readiness::Phase::start("frame.session");
@@ -1850,10 +1863,7 @@ impl RenderSession {
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::COPY_SRC
-                    | wgpu::TextureUsages::COPY_DST,
+                usage: session_texture_usage(),
                 label: Some("Intermediate Texture"),
                 view_formats: &[],
             })
@@ -1900,10 +1910,7 @@ impl RenderSession {
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::COPY_SRC
-                    | wgpu::TextureUsages::COPY_DST,
+                usage: session_texture_usage(),
                 label: Some("Intermediate Texture"),
                 view_formats: &[],
             })
