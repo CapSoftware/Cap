@@ -44,6 +44,22 @@ export function renderFarmTranscodeKey(
 	return `${root}.recording/render/sources/${digest}.mp4`;
 }
 
+/**
+ * Where the farm reports a finished render. Vercel preview deployments sit
+ * behind deployment protection, which would turn the callback away; the
+ * automation bypass secret lets it through (custom domains are unprotected).
+ */
+export function renderFarmCallbackUrl(
+	origin: string,
+	bypassSecret: string | undefined,
+) {
+	const url = new URL("/api/render-farm/callback", origin);
+	if (bypassSecret && url.hostname.endsWith(".vercel.app")) {
+		url.searchParams.set("x-vercel-protection-bypass", bypassSecret);
+	}
+	return url.toString();
+}
+
 export function verifyRenderFarmSignature(
 	body: string,
 	header: string | null,

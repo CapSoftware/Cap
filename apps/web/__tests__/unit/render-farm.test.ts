@@ -5,6 +5,7 @@ vi.mock("@cap/env", () => ({ serverEnv: () => ({}) }));
 
 import {
 	mapRenderFarmJob,
+	renderFarmCallbackUrl,
 	renderFarmKeys,
 	renderFarmTranscodeKey,
 	verifyRenderFarmSignature,
@@ -365,6 +366,22 @@ describe("awaitingUnknownRenderJob", () => {
 		expect(awaitingUnknownRenderJob({ startedAt }, at(16))).toBe(false);
 		expect(awaitingUnknownRenderJob({ startedAt: "not a date" }, at(1))).toBe(
 			false,
+		);
+	});
+});
+
+describe("renderFarmCallbackUrl", () => {
+	it("adds the protection bypass only for Vercel preview hosts", () => {
+		expect(
+			renderFarmCallbackUrl("https://cap-web-git-x.vercel.app", "secret"),
+		).toBe(
+			"https://cap-web-git-x.vercel.app/api/render-farm/callback?x-vercel-protection-bypass=secret",
+		);
+		expect(renderFarmCallbackUrl("https://cap.so", "secret")).toBe(
+			"https://cap.so/api/render-farm/callback",
+		);
+		expect(renderFarmCallbackUrl("https://cap-web.vercel.app", undefined)).toBe(
+			"https://cap-web.vercel.app/api/render-farm/callback",
 		);
 	});
 });

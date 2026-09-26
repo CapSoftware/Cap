@@ -13,6 +13,7 @@ import {
 	verifyOwnedEditorSession,
 } from "@/lib/editor-session";
 import {
+	renderFarmCallbackUrl,
 	renderFarmConfig,
 	renderFarmFetch,
 	renderFarmKeys,
@@ -328,7 +329,10 @@ export const startRenderFarmSave = Effect.fn("startRenderFarmSave")(function* (
 					recording: target.recording,
 					sourceRoot: target.root,
 					output: { key: target.outputKey, hlsPrefix: target.hlsPrefix },
-					callbackUrl: `${origin}/api/render-farm/callback`,
+					callbackUrl: renderFarmCallbackUrl(
+						origin,
+						process.env.VERCEL_AUTOMATION_BYPASS_SECRET,
+					),
 					reference: video.id,
 					resolution: SAVE_RESOLUTION,
 					fps,
