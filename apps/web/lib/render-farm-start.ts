@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { videoEdits, type videos } from "@cap/database/schema";
+import {
+	applyDefaultStyle,
+	type EditorDefaultStyle,
+} from "@cap/editor-cap-bundle/default-style";
 import { serverEnv } from "@cap/env";
 import { Database, Storage } from "@cap/web-backend";
 import type { Video } from "@cap/web-domain";
@@ -13,10 +17,12 @@ import {
 	verifyOwnedEditorSession,
 } from "@/lib/editor-session";
 import {
+	type RenderFarmJobKind,
 	renderFarmCallbackUrl,
 	renderFarmConfig,
 	renderFarmFetch,
 	renderFarmKeys,
+	renderFarmReference,
 	renderFarmTranscodeKey,
 } from "@/lib/render-farm";
 import {
@@ -26,12 +32,24 @@ import {
 	type RenderProjectFile,
 	type RenderProjectSource,
 } from "@/lib/render-farm-project";
-import { recordRenderFarmSave } from "@/lib/render-farm-save";
+import {
+	recordRenderFarmExport,
+	recordRenderFarmSave,
+} from "@/lib/render-farm-records";
+import { renderExportFileName } from "@/lib/render-farm-status";
+import { PRO_DURATION_SECONDS } from "@/lib/render-recording-eligibility";
 import { decodeStorageVideo } from "@/lib/video-storage";
 
 type DbVideo = typeof videos.$inferSelect;
 
-const PRO_DURATION_SECONDS = 5 * 60;
+export type RenderFarmCompression = "Maximum" | "Social" | "Web" | "Potato";
+
+export type RenderFarmJobSettings = {
+	resolution: [number, number];
+	fps: number;
+	compression: RenderFarmCompression;
+};
+
 const UPLOAD_URL_TTL_SECONDS = 30 * 60;
 const WORKER_UPLOAD_TIMEOUT_MS = 4 * 60 * 1000;
 const SAVE_RESOLUTION: [number, number] = [1920, 1080];
@@ -129,14 +147,109 @@ export const startRenderFarmSave = Effect.fn("startRenderFarmSave")(function* (
 	sessionId: string,
 	origin: string,
 ) {
-	const config = renderFarmConfig();
-	if (!config?.callbackSecret) {
-		return yield* new HttpApiError.ServiceUnavailable();
-	}
 	const sessionPath = yield* verifyOwnedEditorSession(videoId, sessionId);
 	const video = yield* loadEligibleEditorVideo(videoId);
 	if ((video.duration ?? 0) >= PRO_DURATION_SECONDS && !video.captionsEnabled) {
 		return yield* new HttpApiError.Forbidden();
+	}
+	const started = yield* startRenderFarmJob({
+		video,
+		sessionPath,
+		origin,
+		kind: "save",
+	});
+	yield* Effect.tryPromise({
+		try: () =>
+			recordRenderFarmSave(video.id, {
+				version: 1,
+				exportId: started.exportId,
+				jobId: started.jobId,
+				status: "rendering",
+				startedAt: new Date().toISOString(),
+				outputKey: started.target.outputKey,
+				hlsPrefix: started.target.hlsPrefix,
+			}),
+		catch: () => new HttpApiError.InternalServerError(),
+	});
+	return {
+		exportId: started.exportId,
+		jobId: started.jobId,
+		shareUrl: `${origin}/s/${video.id}`,
+	};
+});
+
+/**
+ * Renders the editor's current project with the chosen export settings into
+ * a separate download, leaving the share link's video untouched.
+ */
+export const startRenderFarmExport = Effect.fn("startRenderFarmExport")(
+	function* (
+		videoId: Video.VideoId,
+		sessionId: string,
+		origin: string,
+		settings: RenderFarmJobSettings,
+	) {
+		const sessionPath = yield* verifyOwnedEditorSession(videoId, sessionId);
+		const video = yield* loadEligibleEditorVideo(videoId);
+		if (
+			(video.duration ?? 0) >= PRO_DURATION_SECONDS &&
+			!video.captionsEnabled
+		) {
+			return yield* new HttpApiError.Forbidden();
+		}
+		const started = yield* startRenderFarmJob({
+			video,
+			sessionPath,
+			origin,
+			kind: "export",
+			settings,
+		});
+		yield* Effect.tryPromise({
+			try: () =>
+				recordRenderFarmExport(video.id, {
+					exportId: started.exportId,
+					jobId: started.jobId,
+					status: "rendering",
+					startedAt: new Date().toISOString(),
+					outputKey: started.target.outputKey,
+					fileName: renderExportFileName(video.name),
+					resolution: started.settings.resolution,
+					fps: started.settings.fps,
+				}),
+			catch: () => new HttpApiError.InternalServerError(),
+		});
+		return {
+			exportId: started.exportId,
+			downloadUrl: `${origin}/s/${video.id}/download?export=${encodeURIComponent(started.exportId)}`,
+		};
+	},
+);
+
+/**
+ * Builds a render project from a prepared editor worker session and starts
+ * a render-farm job for it. The caller records what the job is for.
+ */
+export const startRenderFarmJob = Effect.fn("startRenderFarmJob")(function* ({
+	video,
+	sessionPath,
+	origin,
+	kind,
+	exportId = randomUUID(),
+	settings,
+}: {
+	video: DbVideo & {
+		captionsEnabled: boolean;
+		defaultStyle?: EditorDefaultStyle | null;
+	};
+	sessionPath: string;
+	origin: string;
+	kind: RenderFarmJobKind;
+	exportId?: string;
+	settings?: RenderFarmJobSettings;
+}) {
+	const config = renderFarmConfig();
+	if (!config?.callbackSecret) {
+		return yield* new HttpApiError.ServiceUnavailable();
 	}
 	const [storage] = yield* Storage.getAccessForVideo(
 		decodeStorageVideo(video),
@@ -167,8 +280,16 @@ export const startRenderFarmSave = Effect.fn("startRenderFarmSave")(function* (
 		return yield* new HttpApiError.ServiceUnavailable();
 	}
 	const listing = parseListing(yield* readJson(listingResponse));
-	const projectConfig = yield* readJson(configResponse);
-	if (!listing) return yield* new HttpApiError.ServiceUnavailable();
+	const sessionConfig = yield* readJson(configResponse);
+	if (!listing || !asRecord(sessionConfig)) {
+		return yield* new HttpApiError.ServiceUnavailable();
+	}
+	// A project nobody has edited yet is shown with the owner's saved style
+	// (see getSignedEditorSources), so it renders with it too.
+	const projectConfig =
+		!video.metadata?.webEditorProject && video.defaultStyle
+			? applyDefaultStyle(sessionConfig, video.defaultStyle)
+			: sessionConfig;
 	if (!video.captionsEnabled && hasEditorCaptionContent(projectConfig)) {
 		return yield* new HttpApiError.Forbidden();
 	}
@@ -215,8 +336,12 @@ export const startRenderFarmSave = Effect.fn("startRenderFarmSave")(function* (
 		}
 	}
 
-	const exportId = randomUUID();
-	const target = renderFarmKeys(video.ownerId, video.id, exportId);
+	const target = renderFarmKeys(
+		video.ownerId,
+		video.id,
+		exportId,
+		kind === "export" ? "export" : "result",
+	);
 	const plan = yield* Effect.try({
 		try: () =>
 			buildRenderProject({
@@ -320,7 +445,11 @@ export const startRenderFarmSave = Effect.fn("startRenderFarmSave")(function* (
 		),
 	);
 
-	const fps = Math.min(60, Math.max(24, Math.round(video.fps ?? 30)));
+	const jobSettings: RenderFarmJobSettings = settings ?? {
+		resolution: SAVE_RESOLUTION,
+		fps: Math.min(60, Math.max(24, Math.round(video.fps ?? 30))),
+		compression: "Maximum",
+	};
 	const jobResponse = yield* Effect.tryPromise({
 		try: () =>
 			renderFarmFetch(config, "/jobs", {
@@ -333,10 +462,10 @@ export const startRenderFarmSave = Effect.fn("startRenderFarmSave")(function* (
 						origin,
 						process.env.VERCEL_AUTOMATION_BYPASS_SECRET,
 					),
-					reference: video.id,
-					resolution: SAVE_RESOLUTION,
-					fps,
-					compression: "Maximum",
+					reference: renderFarmReference(kind, video.id),
+					resolution: jobSettings.resolution,
+					fps: jobSettings.fps,
+					compression: jobSettings.compression,
 				}),
 			}),
 		catch: () => new HttpApiError.ServiceUnavailable(),
@@ -345,57 +474,59 @@ export const startRenderFarmSave = Effect.fn("startRenderFarmSave")(function* (
 	if (!jobResponse.ok || !asRecord(job) || typeof job.id !== "string") {
 		return yield* new HttpApiError.ServiceUnavailable();
 	}
-	const jobId = job.id;
-	yield* Effect.tryPromise({
-		try: () =>
-			recordRenderFarmSave(video.id, {
-				version: 1,
-				exportId,
-				jobId,
-				status: "rendering",
-				startedAt: new Date().toISOString(),
-				outputKey: target.outputKey,
-				hlsPrefix: target.hlsPrefix,
-			}),
-		catch: () => new HttpApiError.InternalServerError(),
-	});
-	return { exportId, jobId, shareUrl: `${origin}/s/${video.id}` };
+	return {
+		exportId,
+		jobId: job.id,
+		target,
+		settings: jobSettings,
+		projectConfig,
+	};
 });
 
 /**
- * Starts transcoding a recording's videos when its editor opens, so a later
- * Save only waits for the render itself. Best effort.
+ * Starts the farm transcoding one of a recording's videos, so a later render
+ * only waits for the render itself. Best effort.
  */
-export const prewarmRenderFarmSources = Effect.fn("prewarmRenderFarmSources")(
-	function* (video: DbVideo) {
+export const prewarmRenderFarmSource = Effect.fn("prewarmRenderFarmSource")(
+	function* (video: Video.Video, key: string) {
 		const config = renderFarmConfig();
 		if (!config) return;
-		const [storage] = yield* Storage.getAccessForVideo(
-			decodeStorageVideo(video),
-			{ resolvePublishedOutput: false },
-		);
+		const [storage] = yield* Storage.getAccessForVideo(video, {
+			resolvePublishedOutput: false,
+		});
 		if (
 			storage.provider !== "s3" ||
 			storage.bucketName !== serverEnv().CAP_AWS_BUCKET
 		) {
 			return;
 		}
-		const keys = yield* mainSourceKeys(video);
+		const head = yield* storage.headObject(key);
+		if (!head.ETag) return;
 		const root = `${video.ownerId}/${video.id}/`;
-		for (const key of [keys.display, keys.camera]) {
-			if (!key) continue;
-			const head = yield* storage.headObject(key);
-			if (!head.ETag) continue;
-			yield* Effect.tryPromise(() =>
-				renderFarmFetch(config, "/transcodes", {
-					method: "POST",
-					body: JSON.stringify({
-						sourceRoot: root,
-						source: key,
-						output: renderFarmTranscodeKey(root, key, head.ETag as string),
-					}),
+		yield* Effect.tryPromise(() =>
+			renderFarmFetch(config, "/transcodes", {
+				method: "POST",
+				body: JSON.stringify({
+					sourceRoot: root,
+					source: key,
+					output: renderFarmTranscodeKey(root, key, head.ETag as string),
 				}),
-			);
+			}),
+		);
+	},
+);
+
+/** Pre-warms a recording's screen and camera videos when its editor opens. */
+export const prewarmRenderFarmSources = Effect.fn("prewarmRenderFarmSources")(
+	function* (video: DbVideo) {
+		if (!renderFarmConfig()) return;
+		const keys = yield* mainSourceKeys(video);
+		for (const key of [keys.display, keys.camera]) {
+			if (key) {
+				yield* prewarmRenderFarmSource(decodeStorageVideo(video), key).pipe(
+					Effect.ignore,
+				);
+			}
 		}
 	},
 );

@@ -5,6 +5,8 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { videos } from "@cap/database/schema";
 import type { Video } from "@cap/web-domain";
 import { and, eq, sql } from "drizzle-orm";
+import { headers } from "next/headers";
+import { startRecordingRender } from "@/lib/render-recording";
 import { startVideoProcessingWorkflow } from "@/lib/video-processing";
 
 export async function triggerInstantRecordingProcessing({
@@ -57,6 +59,23 @@ export async function triggerInstantRecordingProcessing({
 		startFailureMessage: "Video uploaded, but processing could not start.",
 		mode: "singlepart",
 	});
+
+	const requestHeaders = await headers();
+	const host = (
+		requestHeaders.get("x-forwarded-host") ?? requestHeaders.get("host")
+	)
+		?.split(",")[0]
+		?.trim();
+	if (host) {
+		const protocol = requestHeaders.get("x-forwarded-proto") ?? "https";
+		await startRecordingRender(videoId, `${protocol}://${host}`).catch(
+			(error) =>
+				console.error(
+					"Failed to start the render of a finished recording",
+					error,
+				),
+		);
+	}
 
 	return { success: true };
 }

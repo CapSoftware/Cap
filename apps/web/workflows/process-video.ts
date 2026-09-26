@@ -5,6 +5,7 @@ import { Storage } from "@cap/web-backend/src/Storage/index";
 import { getRecordingObjectIdentity } from "@cap/web-backend/src/Storage/recording-object-identity";
 import { Video } from "@cap/web-domain";
 import { eq, sql } from "drizzle-orm";
+import type { AnyMySqlColumn } from "drizzle-orm/mysql-core";
 import { FatalError, sleep } from "workflow";
 import { isAiGenerationEnabledForUser } from "@/lib/ai-generation-entitlement";
 import {
@@ -415,13 +416,19 @@ async function saveMetadataAndComplete(
 		}
 	}
 
+	// A render published meanwhile (one started when the recording finished)
+	// is the share video now, so its dimensions stay.
+	const unlessRendered = (column: AnyMySqlColumn, value: number) =>
+		sql`CASE WHEN JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.renderFarmSave.status')) = 'published' THEN ${column} ELSE ${value} END`;
 	await db()
 		.update(videos)
 		.set({
-			width: metadata.width,
-			height: metadata.height,
-			fps: metadata.fps,
-			...(duration === undefined ? {} : { duration }),
+			width: unlessRendered(videos.width, metadata.width),
+			height: unlessRendered(videos.height, metadata.height),
+			fps: unlessRendered(videos.fps, metadata.fps),
+			...(duration === undefined
+				? {}
+				: { duration: unlessRendered(videos.duration, duration) }),
 			...(editorSourcePatch
 				? {
 						metadata: sql`JSON_MERGE_PATCH(COALESCE(${videos.metadata}, JSON_OBJECT()), ${editorSourcePatch})`,

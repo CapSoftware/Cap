@@ -1,4 +1,5 @@
 import { AwsCredentials } from "@cap/web-backend/src/Aws";
+import { Database } from "@cap/web-backend/src/Database";
 import { Organisations } from "@cap/web-backend/src/Organisations/index";
 import { Storage } from "@cap/web-backend/src/Storage/index";
 import { Cause, type Effect, Exit, Layer, ManagedRuntime } from "effect";
@@ -7,6 +8,7 @@ const WorkflowDependencies = Layer.mergeAll(
 	Storage.Default,
 	AwsCredentials.Default,
 	Organisations.Default,
+	Database.Default,
 );
 
 const WorkflowRuntime = ManagedRuntime.make(WorkflowDependencies);

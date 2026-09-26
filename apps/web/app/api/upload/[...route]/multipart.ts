@@ -31,8 +31,11 @@ import {
 	queueVideoTranscription,
 	shouldQueueTranscriptionAfterMultipartComplete,
 } from "@/lib/queue-video-transcription";
+import { prewarmRenderFarmSource } from "@/lib/render-farm-start";
+import { startRecordingRender } from "@/lib/render-recording";
 import { runPromise } from "@/lib/server";
 import { startVideoProcessingWorkflow } from "@/lib/video-processing";
+import { isWebStudioEnabledForEmail } from "@/lib/web-studio-rollout";
 import { stringOrNumberOptional } from "@/utils/zod";
 import {
 	getAudioRecorderUploadKind,
@@ -722,6 +725,12 @@ app.post(
 								and(eq(Db.videos.id, videoId), eq(Db.videos.ownerId, user.id)),
 							),
 					);
+					if (cameraSourceUpload && isWebStudioEnabledForEmail(user.email)) {
+						yield* prewarmRenderFarmSource(video, fileKey).pipe(
+							Effect.timeout("5 seconds"),
+							Effect.ignore,
+						);
+					}
 					return c.json({
 						success: true,
 						fileKey,
@@ -1064,6 +1073,26 @@ app.post(
 								).pipe(Effect.map(() => false)),
 							),
 						);
+
+						if (retainDisplaySource && isWebStudioEnabledForEmail(user.email)) {
+							yield* prewarmRenderFarmSource(video, fileKey).pipe(
+								Effect.timeout("5 seconds"),
+								Effect.ignore,
+							);
+							yield* Effect.tryPromise(() =>
+								startRecordingRender(
+									Video.VideoId.make(videoId),
+									new URL(c.req.url).origin,
+								),
+							).pipe(
+								Effect.catchAll((error) =>
+									Effect.logError(
+										"Failed to start the render of a finished recording",
+										error,
+									),
+								),
+							);
+						}
 
 						return c.json({
 							location: result.Location,
