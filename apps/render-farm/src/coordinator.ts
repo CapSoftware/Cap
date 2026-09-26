@@ -1,4 +1,9 @@
-import { randomUUID, timingSafeEqual } from "node:crypto";
+import {
+	createHash,
+	createHmac,
+	randomUUID,
+	timingSafeEqual,
+} from "node:crypto";
 import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { Engine } from "./engine";
@@ -24,8 +29,10 @@ import {
 	MIN_PART,
 	type SegmentReport,
 	type Task,
+	type TranscodeTask,
 	type VideoResult,
 	type VideoTask,
+	type WorkItem,
 } from "./protocol";
 import {
 	acceptOnce,
@@ -33,16 +40,20 @@ import {
 	PART_RANGES,
 	reservePartRange,
 } from "./recovery";
-import { S3, s3ConfigFromEnv } from "./s3";
+import { mediaS3ConfigFromEnv, S3, s3ConfigFromEnv } from "./s3";
 import { pickQueued as pickQueuedTask } from "./scheduler";
 import {
 	AUDIO_FILE,
 	checkManifestBounds,
+	isKey,
 	sourceLimitsFromEnv,
 	validateJobRequest,
 } from "./validate";
 
-const s3 = new S3(s3ConfigFromEnv());
+// Recordings and exports live in the media bucket (possibly the product's
+// own); the journal stays in the render farm's bucket.
+const s3 = new S3(mediaS3ConfigFromEnv());
+const journalS3 = new S3(s3ConfigFromEnv());
 const ENGINE_BIN = process.env.RF_ENGINE_BIN ?? "cap-render-farm";
 const WORK_DIR = process.env.RF_WORK_DIR ?? "/tmp/rf-coordinator";
 const PORT = Number(process.env.PORT ?? 8080);
@@ -309,7 +320,7 @@ type Poller = {
 	kinds?: string[];
 	/** A busy slot reserving its next task: queued work only, never a hedge. */
 	prefetch?: boolean;
-	resolve: (task: Task | null) => void;
+	resolve: (task: WorkItem | null) => void;
 };
 const pollers: Poller[] = [];
 const finishedJobs: string[] = [];
@@ -344,7 +355,7 @@ async function newJob(
 		acceptances: new Map(),
 		request,
 		status: "planning",
-		key: `out/${id}.mp4`,
+		key: request.output?.key ?? `out/${id}.mp4`,
 		t: { requested: requestedAt },
 		fps: request.fps ?? 30,
 		bpp: COMPRESSION_BPP[compression],
@@ -365,13 +376,23 @@ async function newJob(
 		waiters: [],
 		taskStats: [],
 	};
-	if (HLS) job.hls = await newHlsState(`hls/${id}`);
+	if (HLS) {
+		job.hls = await newHlsState(request.output?.hlsPrefix ?? `hls/${id}`);
+	}
 	return job;
 }
 
 // ---------------------------------------------------------------- planning ---
 
-type Manifest = { files: { path: string; size: number; key?: string }[] };
+type Manifest = {
+	files: {
+		path: string;
+		size: number;
+		key?: string;
+		/** Transcode this source to `key` first (see TranscodeTask). */
+		transcodeFrom?: string;
+	}[];
+};
 
 type RecordingMeta = {
 	segments?: {
@@ -475,7 +496,11 @@ async function getBounded(key: string, limit: number) {
 }
 
 /** Manifests name local paths and bucket keys; neither may escape its scope. */
-function checkManifest(manifest: Manifest, prefix: string) {
+function checkManifest(
+	manifest: Manifest,
+	prefix: string,
+	sourceRoot?: string,
+) {
 	const bounds = checkManifestBounds(manifest, SOURCE_LIMITS);
 	if (bounds) throw new Error(bounds);
 	for (const file of manifest.files) {
@@ -487,17 +512,27 @@ function checkManifest(manifest: Manifest, prefix: string) {
 		) {
 			throw new Error(`manifest path ${file.path} is not a relative path`);
 		}
-		if (
-			file.key !== undefined &&
-			!file.key.startsWith(`${prefix}/`) &&
-			!SOURCE_KEY_PREFIXES.some((allowed) => file.key?.startsWith(allowed))
-		) {
-			throw new Error(`manifest key for ${file.path} is outside the recording`);
+		const inScope = (key: string) =>
+			key.startsWith(`${prefix}/`) ||
+			(sourceRoot !== undefined && key.startsWith(sourceRoot)) ||
+			SOURCE_KEY_PREFIXES.some((allowed) => key.startsWith(allowed));
+		for (const key of [file.key, file.transcodeFrom]) {
+			if (key !== undefined && (!isKey(key) || !inScope(key))) {
+				throw new Error(
+					`manifest key for ${file.path} is outside the recording`,
+				);
+			}
+		}
+		if (file.transcodeFrom !== undefined && file.key === undefined) {
+			throw new Error(`manifest transcode for ${file.path} names no key`);
 		}
 	}
 }
 
-async function sourceIndex(prefix: string): Promise<SourceIndex> {
+async function sourceIndex(
+	prefix: string,
+	sourceRoot?: string,
+): Promise<SourceIndex> {
 	const cached =
 		process.env.RF_INDEX_CACHE !== "0" ? sourceIndexes.get(prefix) : undefined;
 	if (cached) return cached;
@@ -506,9 +541,19 @@ async function sourceIndex(prefix: string): Promise<SourceIndex> {
 			await getBounded(`${prefix}/manifest.json`, SOURCE_LIMITS.metadataBytes),
 		),
 	) as Manifest;
-	checkManifest(manifest, prefix);
+	checkManifest(manifest, prefix, sourceRoot);
 	const keyOf = (file: { path: string; key?: string }) =>
 		file.key ?? `${prefix}/${file.path}`;
+	await Promise.all(
+		manifest.files.map(async (file) => {
+			if (file.transcodeFrom === undefined) return;
+			file.size = await awaitTranscode(
+				await ensureTranscode(file.transcodeFrom, keyOf(file)),
+			);
+		}),
+	);
+	const bounds = checkManifestBounds(manifest, SOURCE_LIMITS);
+	if (bounds) throw new Error(bounds);
 	const metaFile = manifest.files.find(
 		(file) => file.path === "recording-meta.json",
 	);
@@ -541,7 +586,10 @@ async function sourceIndex(prefix: string): Promise<SourceIndex> {
 async function planJob(job: Job) {
 	const request = job.request;
 	const prefix = request.recording.replace(/\/$/, "");
-	const { manifest, recordingMeta, mediaMeta } = await sourceIndex(prefix);
+	const { manifest, recordingMeta, mediaMeta } = await sourceIndex(
+		prefix,
+		request.sourceRoot,
+	);
 
 	const keyOf = (file: { path: string; key?: string }) =>
 		file.key ?? `${prefix}/${file.path}`;
@@ -933,7 +981,7 @@ const journalKey = (id: string, name: string) => `jobs/${id}/${name}`;
 
 async function journalPut(key: string, body: Uint8Array | string) {
 	if (!JOURNAL) return;
-	await s3.put(key, body);
+	await journalS3.put(key, body);
 }
 
 type JournaledJob = Pick<
@@ -1035,7 +1083,7 @@ function segmentsFromResult(
 
 async function resumeJobs() {
 	if (!JOURNAL) return;
-	const keys = await s3.list("jobs/");
+	const keys = await journalS3.list("jobs/");
 	const byJob = new Map<string, Set<string>>();
 	for (const { key } of keys) {
 		const [, id, ...rest] = key.split("/");
@@ -1051,7 +1099,7 @@ async function resumeJobs() {
 				if (!names.has("request.json")) continue;
 				const receipt = JSON.parse(
 					new TextDecoder().decode(
-						await s3.get(journalKey(id, "request.json")),
+						await journalS3.get(journalKey(id, "request.json")),
 					),
 				) as { request: JobRequest; requestedAt: number };
 				if (Date.now() - receipt.requestedAt > 5 * 3600_000) {
@@ -1064,7 +1112,9 @@ async function resumeJobs() {
 				continue;
 			}
 			const record = JSON.parse(
-				new TextDecoder().decode(await s3.get(journalKey(id, "job.json"))),
+				new TextDecoder().decode(
+					await journalS3.get(journalKey(id, "job.json")),
+				),
 			) as JournaledJob;
 			// Presigned segment/playlist URLs last 6 h; older jobs are abandoned.
 			if (Date.now() - (record.t.requested ?? 0) > 5 * 3600_000) {
@@ -1116,7 +1166,9 @@ async function resumeJobs() {
 					);
 					reservations.push(
 						JSON.parse(
-							new TextDecoder().decode(await s3.get(journalKey(id, name))),
+							new TextDecoder().decode(
+								await journalS3.get(journalKey(id, name)),
+							),
 						),
 					);
 					continue;
@@ -1124,14 +1176,14 @@ async function resumeJobs() {
 				const video = name.match(/^v\/(\d+)\.json$/);
 				if (video) {
 					const result = JSON.parse(
-						new TextDecoder().decode(await s3.get(journalKey(id, name))),
+						new TextDecoder().decode(await journalS3.get(journalKey(id, name))),
 					) as VideoResult;
 					job.videoResults.set(Number(video[1]), result);
 					continue;
 				}
 				const audio = name.match(/^a\/(\d+)\.bin$/);
 				if (audio) {
-					const bytes = await s3.get(journalKey(id, name));
+					const bytes = await journalS3.get(journalKey(id, name));
 					const length = new DataView(bytes.buffer, bytes.byteOffset).getUint32(
 						0,
 					);
@@ -1335,12 +1387,166 @@ function requeue(state: TaskState, reason: string) {
 	if (!queue.includes(state)) queue.unshift(state);
 }
 
+// -------------------------------------------------------------- transcodes ---
+
+const TRANSCODE_KEYFRAME_SECONDS = 1;
+const TRANSCODE_ATTEMPTS = 3;
+
+type Transcode = {
+	id: string;
+	task: TranscodeTask;
+	state: "checking" | "queued" | "running" | "ready" | "error";
+	worker?: string;
+	attempts: number;
+	lastReportedAt?: number;
+	notBefore?: number;
+	size?: number;
+	error?: string;
+	/** Seconds of source encoded so far, from the worker's heartbeat. */
+	encodedSeconds?: number;
+	settledAt?: number;
+	settled: Promise<void>;
+	settle: () => void;
+};
+
+/** By output key: one transcode per target, shared by every job needing it. */
+const transcodes = new Map<string, Transcode>();
+
+async function ensureTranscode(source: string, output: string) {
+	const existing = transcodes.get(output);
+	if (existing && existing.state !== "error") return existing;
+	const { promise, resolve } = Promise.withResolvers<void>();
+	const id = createHash("sha256").update(output).digest("hex").slice(0, 16);
+	const transcode: Transcode = {
+		id,
+		task: {
+			kind: "transcode",
+			taskId: `tc:${id}`,
+			source,
+			output,
+			keyframeSeconds: TRANSCODE_KEYFRAME_SECONDS,
+		},
+		state: "checking",
+		attempts: 0,
+		settled: promise,
+		settle: resolve,
+	};
+	transcodes.set(output, transcode);
+	// Made by an earlier export (or a previous coordinator): reuse it.
+	const head = await s3.head(output).catch(() => null);
+	if (head && head.size > 0) {
+		settleTranscode(transcode, "ready", head.size);
+	} else {
+		transcode.state = "queued";
+		dispatch();
+	}
+	return transcode;
+}
+
+async function awaitTranscode(transcode: Transcode) {
+	await transcode.settled;
+	if (transcode.state !== "ready" || transcode.size === undefined) {
+		throw new Error(
+			`transcode of ${transcode.task.source} failed: ${transcode.error}`,
+		);
+	}
+	return transcode.size;
+}
+
+function nextTranscode() {
+	const at = Date.now();
+	for (const transcode of transcodes.values()) {
+		if (transcode.state === "queued" && (transcode.notBefore ?? 0) <= at) {
+			return transcode;
+		}
+	}
+}
+
+function transcodeById(id: string) {
+	for (const transcode of transcodes.values()) {
+		if (transcode.id === id) return transcode;
+	}
+}
+
+function settleTranscode(
+	transcode: Transcode,
+	state: "ready" | "error",
+	detail: number | string,
+) {
+	transcode.state = state;
+	transcode.worker = undefined;
+	if (state === "ready") transcode.size = Number(detail);
+	else transcode.error = String(detail);
+	transcode.settledAt = Date.now();
+	transcode.settle();
+}
+
+function requeueTranscode(transcode: Transcode, reason: string) {
+	console.warn(`requeue ${transcode.task.taskId}: ${reason}`);
+	if (transcode.attempts >= TRANSCODE_ATTEMPTS) {
+		settleTranscode(transcode, "error", reason);
+		return;
+	}
+	const delay = 1000 * 2 ** transcode.attempts;
+	transcode.state = "queued";
+	transcode.worker = undefined;
+	transcode.notBefore = Date.now() + delay;
+	setTimeout(dispatch, delay + 50).unref();
+}
+
+function transcodeSummary(transcode: Transcode) {
+	return {
+		id: transcode.id,
+		status: transcode.state === "checking" ? "queued" : transcode.state,
+		source: transcode.task.source,
+		output: transcode.task.output,
+		size: transcode.size,
+		error: transcode.error,
+		encodedSeconds: transcode.encodedSeconds,
+	};
+}
+
+setInterval(() => {
+	// Workers heartbeat every 3 s and report a running transcode each time.
+	const cutoff = Date.now() - 30_000;
+	for (const [output, transcode] of transcodes) {
+		if (transcode.state === "running") {
+			const worker = transcode.worker ? workers.get(transcode.worker) : null;
+			if (
+				!worker ||
+				worker.lastSeen < cutoff ||
+				(transcode.lastReportedAt ?? 0) < cutoff
+			) {
+				requeueTranscode(transcode, "worker stopped reporting it");
+			}
+		} else if (
+			transcode.settledAt !== undefined &&
+			Date.now() - transcode.settledAt > JOB_RETENTION_MS
+		) {
+			transcodes.delete(output);
+		}
+	}
+}, 5_000);
+
 function dispatch() {
 	pumpLocalAudio();
 	for (let p = 0; p < pollers.length; ) {
 		const poller = pollers[p] as Poller;
 		const accepts = (kind: string) =>
 			!poller.kinds || poller.kinds.includes(kind);
+		// Transcodes gate an export's planning, so they go before any chunk.
+		const transcode =
+			accepts("video") && !poller.prefetch ? nextTranscode() : undefined;
+		if (transcode) {
+			pollers.splice(p, 1);
+			transcode.state = "running";
+			transcode.worker = poller.worker;
+			transcode.attempts++;
+			transcode.lastReportedAt = Date.now();
+			transcode.encodedSeconds = 0;
+			poller.resolve({ ...transcode.task, attempt: transcode.attempts });
+			continue;
+		}
 		const next = pickQueued(accepts);
 		let state: TaskState | undefined;
 		if (next >= 0) {
@@ -1499,6 +1705,11 @@ function supersede(id: string) {
 		if (old === id || old.slice(0, old.lastIndexOf("-")) !== host) continue;
 		if (worker.lastSeen > quietSince) continue;
 		workers.delete(old);
+		for (const transcode of transcodes.values()) {
+			if (transcode.state === "running" && transcode.worker === old) {
+				requeueTranscode(transcode, `worker ${old} restarted`);
+			}
+		}
 		for (const job of jobs.values()) {
 			if (job.status !== "rendering") continue;
 			for (const state of job.tasks.values()) {
@@ -1659,8 +1870,76 @@ function persistFinished(job: Job) {
 	});
 }
 
+// ---------------------------------------------------------------- callbacks ---
+
+// Host suffixes a job may name as its callback (e.g. "vercel.app,cap.so").
+const CALLBACK_HOSTS = (process.env.RF_CALLBACK_HOSTS ?? "")
+	.split(",")
+	.map((host) => host.trim().toLowerCase())
+	.filter(Boolean);
+const CALLBACK_SECRET = process.env.RF_CALLBACK_SECRET || TOKEN;
+
+function callbackAllowed(callbackUrl: string) {
+	const host = new URL(callbackUrl).hostname.toLowerCase();
+	return CALLBACK_HOSTS.some(
+		(allowed) => host === allowed || host.endsWith(`.${allowed}`),
+	);
+}
+
+function callbackPayload(job: Job) {
+	return {
+		id: job.id,
+		reference: job.request.reference,
+		status: job.status,
+		error: job.error,
+		key: job.key,
+		bytes: job.outputBytes,
+		width: job.width,
+		height: job.height,
+		frames: job.totalFrames,
+		fps: job.fps,
+		durationSeconds: job.totalFrames / job.fps,
+	};
+}
+
+/** Posts the outcome, signed `sha256=<hex hmac of the body>`, with retries. */
+function notify(
+	job: Job,
+	body = JSON.stringify(callbackPayload(job)),
+	attempt = 0,
+) {
+	const url = job.request.callbackUrl;
+	if (!url) return;
+	const signature = createHmac("sha256", CALLBACK_SECRET)
+		.update(body)
+		.digest("hex");
+	fetch(url, {
+		method: "POST",
+		headers: {
+			"content-type": "application/json",
+			"x-render-farm-signature": `sha256=${signature}`,
+		},
+		body,
+		signal: AbortSignal.timeout(15_000),
+	})
+		.then((response) => {
+			if (!response.ok) throw new Error(`callback -> ${response.status}`);
+		})
+		.catch((error) => {
+			if (attempt >= 8) {
+				console.error(`job ${job.id} callback gave up: ${error}`);
+				return;
+			}
+			setTimeout(
+				() => notify(job, body, attempt + 1),
+				Math.min(60_000, 1000 * 2 ** attempt),
+			).unref();
+		});
+}
+
 function finish(job: Job) {
 	if (job.status === "error" || !job.hls || job.hls.ended) persistFinished(job);
+	notify(job);
 	job.audioCache?.close();
 	// Freeze the summary, then drop the media: rendered audio alone is ~290 MB
 	// for a 2 h export, and finished jobs were never evicted.
@@ -1981,6 +2260,29 @@ function percentile(values: number[], p: number) {
 	);
 }
 
+/** Share of the export rendered, 0-1; 1 only once the MP4 is complete. */
+function jobProgress(job: Job) {
+	if (job.status === "ready") return 1;
+	if (job.totalFrames <= 0) return 0;
+	let frames = 0;
+	for (const chunk of job.chunks) {
+		if (job.videoResults.has(chunk.index)) {
+			frames += chunk.frames[1] - chunk.frames[0];
+		}
+	}
+	for (const state of job.tasks.values()) {
+		if (
+			state.task.kind === "video" &&
+			state.state === "running" &&
+			!state.duplicateOf &&
+			!job.videoResults.has(state.task.chunk)
+		) {
+			frames += state.progress?.frames ?? 0;
+		}
+	}
+	return Math.min(0.99, frames / job.totalFrames);
+}
+
 function summary(job: Job) {
 	const start = job.t.requested ?? 0;
 	const rel = Object.fromEntries(
@@ -2015,6 +2317,8 @@ function summary(job: Job) {
 			bytes: job.outputBytes,
 		},
 		url: job.status === "ready" ? job.url : undefined,
+		reference: job.request.reference,
+		progress: jobProgress(job),
 		timeline: rel,
 		plan: job.plan,
 		probe: job.probe,
@@ -2088,7 +2392,7 @@ Bun.serve({
 			workers.set(body.worker, worker);
 			if (body.draining)
 				return Response.json({ task: null, finished: finishedJobs });
-			const task = await new Promise<Task | null>((resolve) => {
+			const task = await new Promise<WorkItem | null>((resolve) => {
 				const poller: Poller = {
 					worker: body.worker,
 					kinds: body.kinds,
@@ -2130,7 +2434,22 @@ Bun.serve({
 					elapsedMs: number;
 				}[];
 			};
+			const staleTranscodes: string[] = [];
 			for (const entry of body.running ?? []) {
+				if (entry.taskId.startsWith("tc:")) {
+					const transcode = transcodeById(entry.taskId.slice(3));
+					if (
+						transcode?.state === "running" &&
+						transcode.worker === body.worker &&
+						transcode.attempts === entry.attempt
+					) {
+						transcode.lastReportedAt = Date.now();
+						transcode.encodedSeconds = entry.frames;
+					} else {
+						staleTranscodes.push(entry.taskId);
+					}
+					continue;
+				}
 				const job = jobs.get(entry.taskId.split(":")[0] ?? "");
 				const state = job?.tasks.get(entry.taskId);
 				if (!state) continue;
@@ -2190,7 +2509,7 @@ Bun.serve({
 			}
 			return Response.json({
 				finished: finishedJobs,
-				cancel: cancellations(body.worker),
+				cancel: [...cancellations(body.worker), ...staleTranscodes],
 			});
 		}
 
@@ -2221,6 +2540,69 @@ Bun.serve({
 			// First copy wins; other copies wrote their own objects.
 			if (!chunk.has(report.index)) chunk.set(report.index, report);
 			publishPlaylist(job);
+			return Response.json({ ok: true });
+		}
+
+		if (url.pathname === "/transcodes" && request.method === "POST") {
+			const { source, output, sourceRoot } = (await request.json()) as Record<
+				string,
+				unknown
+			>;
+			if (
+				!isKey(sourceRoot, { trailingSlash: true }) ||
+				!sourceRoot.endsWith("/") ||
+				!isKey(source) ||
+				!isKey(output) ||
+				!source.startsWith(sourceRoot) ||
+				!output.startsWith(sourceRoot) ||
+				!output.endsWith(".mp4")
+			) {
+				return new Response(
+					"source and output must be keys inside sourceRoot, output an .mp4",
+					{ status: 400 },
+				);
+			}
+			return Response.json(
+				transcodeSummary(await ensureTranscode(source, output)),
+			);
+		}
+		const transcodeMatch = url.pathname.match(
+			/^\/transcodes\/([0-9a-f]{16})(?:\/(done|fail))?$/,
+		);
+		if (transcodeMatch) {
+			const transcode = transcodeById(transcodeMatch[1] ?? "");
+			if (!transcode) return new Response("unknown transcode", { status: 404 });
+			if (!transcodeMatch[2] && request.method === "GET") {
+				return Response.json(transcodeSummary(transcode));
+			}
+			if (request.method !== "POST") {
+				return new Response("method not allowed", { status: 405 });
+			}
+			const report = (await request.json()) as {
+				worker: string;
+				attempt?: number;
+				size?: number;
+				error?: string;
+			};
+			// Outputs are written with If-None-Match, so any attempt that
+			// finished produced the one object there is; failures count only
+			// for the current attempt.
+			if (transcodeMatch[2] === "done") {
+				if (
+					transcode.state !== "ready" &&
+					typeof report.size === "number" &&
+					report.size > 0
+				) {
+					settleTranscode(transcode, "ready", report.size);
+					dispatch();
+				}
+			} else if (
+				transcode.state === "running" &&
+				transcode.worker === report.worker &&
+				transcode.attempts === report.attempt
+			) {
+				requeueTranscode(transcode, report.error ?? "failed");
+			}
 			return Response.json({ ok: true });
 		}
 
@@ -2358,7 +2740,7 @@ Bun.serve({
 				return new Response(parsed, { status: 400 });
 			const body = parsed;
 			const started = performance.now();
-			await sourceIndex(body.recording.replace(/\/$/, ""));
+			await sourceIndex(body.recording.replace(/\/$/, ""), body.sourceRoot);
 			return Response.json({ ms: Math.round(performance.now() - started) });
 		}
 
@@ -2367,6 +2749,11 @@ Bun.serve({
 			if (typeof parsed === "string")
 				return new Response(parsed, { status: 400 });
 			const body = parsed;
+			if (body.callbackUrl && !callbackAllowed(body.callbackUrl)) {
+				return new Response("callbackUrl host is not in RF_CALLBACK_HOSTS", {
+					status: 400,
+				});
+			}
 			const active = [...jobs.values()].filter(
 				(job) => job.status !== "ready" && job.status !== "error",
 			).length;

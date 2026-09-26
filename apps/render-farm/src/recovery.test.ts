@@ -43,6 +43,7 @@ function store() {
 			completed++;
 			object = { size: 10 };
 			if (lostResponse) throw new Error("lost completion response");
+			return true;
 		},
 	};
 	return {

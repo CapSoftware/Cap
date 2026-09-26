@@ -12,14 +12,22 @@ import {
 	type AudioTask,
 	MIN_PART,
 	type SegmentReport,
-	type Task,
 	type TaskTimings,
+	type TranscodeTask,
 	type VideoResult,
 	type VideoTask,
+	type WorkItem,
 } from "./protocol";
-import { S3, s3ConfigFromEnv } from "./s3";
+import { mediaS3ConfigFromEnv, S3 } from "./s3";
+import {
+	canRemux,
+	encodedSeconds,
+	probeArgs,
+	remuxArgs,
+	transcodeArgs,
+} from "./transcode";
 
-const s3 = new S3(s3ConfigFromEnv());
+const s3 = new S3(mediaS3ConfigFromEnv());
 const COORDINATOR = (
 	process.env.RF_COORDINATOR_URL ?? "http://127.0.0.1:8080"
 ).replace(/\/$/, "");
@@ -94,19 +102,26 @@ function dropJobs(finished: string[]) {
 	for (const jobId of finished) {
 		const cache = caches.get(jobId);
 		if (!cache) continue;
-		if ([...busy.values()].some((task) => task.jobId === jobId)) continue;
+		if (
+			[...busy.values()].some(
+				(task) => task.kind !== "transcode" && task.jobId === jobId,
+			)
+		)
+			continue;
 		cache.close();
 		caches.delete(jobId);
 		rmSync(join(WORK_DIR, jobId), { recursive: true, force: true });
 	}
 }
 
-const busy = new Map<number, Task>();
+const busy = new Map<number, WorkItem>();
+// Running ffmpeg transcodes, by slot, so cancels and the watchdog can stop them.
+const transcoders = new Map<number, Bun.Subprocess>();
 const progress = new Map<
 	number,
 	{
 		taskId: string;
-		kind: "video" | "audio";
+		kind: "video" | "audio" | "transcode";
 		frames: number;
 		total: number;
 		startedAt: number;
@@ -646,6 +661,79 @@ async function runAudio(task: AudioTask, engine: Engine, queuedMs: number) {
 	}
 }
 
+const TRANSCODE_ENCODER = process.env.RF_TRANSCODE_ENCODER ?? "h264_nvenc";
+
+/** Re-encodes `task.source` into `task.output`; returns the stored size. */
+async function runTranscode(task: TranscodeTask, slot: number) {
+	const dir = join(WORK_DIR, `transcode-${randomUUID()}`);
+	mkdirSync(dir, { recursive: true });
+	const entry = {
+		taskId: task.taskId,
+		kind: "transcode" as const,
+		frames: 0,
+		total: 0,
+		startedAt: Date.now(),
+		lastProgressAt: Date.now(),
+	};
+	progress.set(slot, entry);
+	try {
+		const output = join(dir, "output.mp4");
+		const input = await s3.presignFresh("GET", task.source, 6 * 3600);
+		const probe = Bun.spawn(["ffprobe", ...probeArgs(input)], {
+			stdout: "pipe",
+			stderr: "ignore",
+		});
+		const probed = await new Response(probe.stdout).text();
+		// H.264 with frequent keyframes (Chrome, Edge and Safari recordings)
+		// only needs its container rewritten; anything else is re-encoded.
+		const remux = (await probe.exited) === 0 && canRemux(probed);
+		console.log(`${task.taskId}: ${remux ? "remuxing" : "transcoding"}`);
+		const ffmpeg = Bun.spawn(
+			[
+				"ffmpeg",
+				...(remux
+					? remuxArgs(input, output)
+					: transcodeArgs(
+							input,
+							output,
+							task.keyframeSeconds,
+							TRANSCODE_ENCODER,
+						)),
+			],
+			{ stdout: "pipe", stderr: "pipe" },
+		);
+		transcoders.set(slot, ffmpeg);
+		const stderr = new Response(ffmpeg.stderr).text();
+		const decoder = new TextDecoder();
+		let buffered = "";
+		for await (const bytes of ffmpeg.stdout) {
+			buffered += decoder.decode(bytes, { stream: true });
+			const lines = buffered.split("\n");
+			buffered = lines.pop() ?? "";
+			for (const line of lines) {
+				const seconds = encodedSeconds(line.trim());
+				if (seconds !== null && seconds > entry.frames) {
+					entry.frames = Math.floor(seconds);
+					entry.lastProgressAt = Date.now();
+				}
+			}
+		}
+		const code = await ffmpeg.exited;
+		if (code !== 0) {
+			throw new Error(
+				`ffmpeg exited ${code}: ${(await stderr).trim().slice(-500)}`,
+			);
+		}
+		return await s3.uploadFile(task.output, output, "video/mp4", {
+			ifNoneMatch: true,
+		});
+	} finally {
+		transcoders.delete(slot);
+		progress.delete(slot);
+		rmSync(dir, { recursive: true, force: true });
+	}
+}
+
 async function poll(kinds: string[] | undefined, prefetch = false) {
 	const controller = new AbortController();
 	openPolls.add(controller);
@@ -664,7 +752,7 @@ async function poll(kinds: string[] | undefined, prefetch = false) {
 		controller.signal,
 	).finally(() => openPolls.delete(controller));
 	const body = (await response.json()) as {
-		task: Task | null;
+		task: WorkItem | null;
 		finished: string[];
 	};
 	dropJobs(body.finished ?? []);
@@ -678,7 +766,7 @@ process.on("unhandledRejection", (error) => {
 
 let draining = false;
 // Slots holding a prefetched (already reserved) next task, once it is known.
-const reserved = new Map<number, Task | null>();
+const reserved = new Map<number, WorkItem | null>();
 const busySince = new Map<number, number>();
 
 function exitWhenIdle() {
@@ -703,14 +791,14 @@ for (const signal of ["SIGTERM", "SIGINT"] as const) {
 async function slotLoop(slot: number) {
 	let engine = engines[slot] as Engine;
 	const kinds = slot >= SLOTS ? ["audio"] : SLOT_KINDS;
-	let next: Promise<Task | null> | null = null;
+	let next: Promise<WorkItem | null> | null = null;
 	for (;;) {
 		if (draining && !next) {
 			exitWhenIdle();
 			await Bun.sleep(1000);
 			continue;
 		}
-		let task: Task | null = null;
+		let task: WorkItem | null = null;
 		try {
 			task = next ? await next : await poll(kinds);
 		} catch (error) {
@@ -731,9 +819,11 @@ async function slotLoop(slot: number) {
 				.then((upcoming) => {
 					if (upcoming) {
 						reserved.set(slot, upcoming);
-						cacheFor(upcoming.jobId)
-							.materialize(upcoming.files)
-							.catch(() => {});
+						if (upcoming.kind !== "transcode") {
+							cacheFor(upcoming.jobId)
+								.materialize(upcoming.files)
+								.catch(() => {});
+						}
 					}
 					return upcoming;
 				})
@@ -750,7 +840,14 @@ async function slotLoop(slot: number) {
 				);
 				engines[slot] = engine;
 			}
-			if (task.kind === "video") {
+			if (task.kind === "transcode") {
+				const size = await runTranscode(task, slot);
+				await post(`/transcodes/${task.taskId.slice(3)}/done`, {
+					worker: WORKER_ID,
+					attempt: task.attempt,
+					size,
+				});
+			} else if (task.kind === "video") {
 				const result = await runVideo(task, engine, 0, prefetchNext);
 				await post(`/tasks/${encodeURIComponent(task.taskId)}/done`, result);
 				const vram = (
@@ -792,11 +889,17 @@ async function slotLoop(slot: number) {
 					setTimeout(() => process.exit(75), 500);
 				}
 			}
-			await post(`/tasks/${encodeURIComponent(task.taskId)}/fail`, {
+			const failure = {
 				worker: WORKER_ID,
 				attempt: task.attempt,
 				error: String(error instanceof Error ? error.message : error),
-			}).catch(() => {});
+			};
+			await post(
+				task.kind === "transcode"
+					? `/transcodes/${task.taskId.slice(3)}/fail`
+					: `/tasks/${encodeURIComponent(task.taskId)}/fail`,
+				failure,
+			).catch(() => {});
 		} finally {
 			busy.delete(slot);
 			busySince.delete(slot);
@@ -859,6 +962,10 @@ function cancel(taskIds: string[]) {
 	for (const [slot, task] of busy) {
 		if (!taskIds.includes(task.taskId)) continue;
 		console.log(`cancelling ${task.taskId}`);
+		if (task.kind === "transcode") {
+			transcoders.get(slot)?.kill("SIGKILL");
+			continue;
+		}
 		// SIGKILL: a stopped or wedged engine never acts on SIGTERM and would
 		// hold its slot until the watchdog gave up on it too.
 		engines[slot]?.kill("SIGKILL");
@@ -868,6 +975,16 @@ function cancel(taskIds: string[]) {
 setInterval(() => {
 	const now = Date.now();
 	for (const [slot, entry] of progress) {
+		if (entry.kind === "transcode") {
+			// Decoding a long source can start slowly; a minute without any
+			// output means a wedged ffmpeg.
+			if (now - entry.lastProgressAt >= Math.max(STALL_MS, 60_000)) {
+				console.error(`${entry.taskId}: no progress, killing ffmpeg`);
+				entry.lastProgressAt = now;
+				transcoders.get(slot)?.kill("SIGKILL");
+			}
+			continue;
+		}
 		if (entry.kind !== "video" || now - entry.lastProgressAt < STALL_MS)
 			continue;
 		console.error(

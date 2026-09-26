@@ -66,6 +66,23 @@ export type AudioTask = {
 
 export type Task = VideoTask | AudioTask;
 
+/**
+ * Re-encodes a source the planner cannot index (a browser recording's WebM
+ * has no seek index and rare keyframes) into an H.264 MP4 with a keyframe
+ * every `keyframeSeconds`, so chunks can start anywhere in it.
+ */
+export type TranscodeTask = {
+	kind: "transcode";
+	taskId: string;
+	attempt?: number;
+	source: string;
+	output: string;
+	keyframeSeconds: number;
+};
+
+/** Anything a worker slot can be handed. */
+export type WorkItem = Task | TranscodeTask;
+
 export type TaskTimings = {
 	queuedMs: number;
 	fetch: FetchStats;
@@ -120,4 +137,15 @@ export type JobRequest = {
 	frameLimit?: number;
 	/** Pin the chunk count (profiling). */
 	chunks?: number;
+	/**
+	 * Folder the recording belongs to (e.g. a video's root). Manifest keys and
+	 * outputs may point anywhere inside it, not only inside `recording`.
+	 */
+	sourceRoot?: string;
+	/** Where the MP4 and HLS segments go; default `out/<id>.mp4` and `hls/<id>`. */
+	output?: { key: string; hlsPrefix?: string };
+	/** Receives the job summary (HMAC-signed) once the export is ready or failed. */
+	callbackUrl?: string;
+	/** Opaque, echoed in callbacks. */
+	reference?: string;
 };
