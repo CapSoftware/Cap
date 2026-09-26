@@ -377,6 +377,7 @@ export class EditorHostBridge {
 	private pendingWorkerPreparation: Promise<void> | null = null;
 	private pendingWorkerRelease: Promise<void> | null = null;
 	private pendingWorkerAcquisition: Promise<void> = Promise.resolve();
+	private readonly pendingConfigWrites = new Set<Promise<unknown>>();
 	private workerIdleTimer: number | null = null;
 	private activeWorkerUses = 0;
 	private workerBundleDownloadUntil = 0;
@@ -2031,6 +2032,9 @@ export class EditorHostBridge {
 		if (message.kind === "invoke" && message.name === "tauri:webEditorSave") {
 			let releaseWorkerUse: () => void = () => undefined;
 			try {
+				// The render is built from the stored project, so edits still being
+				// written must land before the worker copy is (re)prepared from it.
+				await Promise.allSettled([...this.pendingConfigWrites]);
 				// The render project is built from the worker's prepared copy of
 				// the recording, so a browser-only editor starts one first.
 				releaseWorkerUse = await this.ensureWorkerSession();
@@ -2405,7 +2409,7 @@ export class EditorHostBridge {
 						? { expectedSavedAt: this.getProjectSavedAt() }
 						: {}),
 				});
-				const response = await fetch(
+				const request = fetch(
 					this.browserOnly
 						? `/api/editor/videos/${encodeURIComponent(this.videoId)}/config`
 						: `/api/editor/sessions/${encodeURIComponent(this.sessionId)}/config`,
@@ -2416,6 +2420,11 @@ export class EditorHostBridge {
 						keepalive: new TextEncoder().encode(body).byteLength <= 60 * 1024,
 					},
 				);
+				this.pendingConfigWrites.add(request);
+				void request
+					.finally(() => this.pendingConfigWrites.delete(request))
+					.catch(() => undefined);
+				const response = await request;
 				if (!response.ok)
 					throw new Error(
 						response.status === 409

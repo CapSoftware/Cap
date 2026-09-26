@@ -8,6 +8,7 @@ import {
 	Switch,
 } from "solid-js";
 import toast from "solid-toast";
+import { useEditorContext } from "./context";
 import { EditorButton } from "./ui";
 
 type SaveStatus = {
@@ -22,6 +23,7 @@ type SaveStatus = {
 const POLL_MS = 2000;
 
 export default function WebSaveButton(props: { shareUrl?: string }) {
+	const { flushProjectConfig } = useEditorContext();
 	const [starting, setStarting] = createSignal(false);
 	const [status, setStatus] = createSignal<SaveStatus | null>(null);
 	const [shareUrl, setShareUrl] = createSignal(props.shareUrl ?? null);
@@ -53,6 +55,8 @@ export default function WebSaveButton(props: { shareUrl?: string }) {
 		if (starting()) return;
 		setStarting(true);
 		try {
+			// Save renders the stored project, so edits still debouncing must land first.
+			await flushProjectConfig();
 			const result = await invoke<{ shareUrl: string }>("webEditorSave");
 			setShareUrl(result.shareUrl);
 			setStatus({
