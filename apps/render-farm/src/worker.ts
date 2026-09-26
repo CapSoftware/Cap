@@ -859,7 +859,9 @@ function cancel(taskIds: string[]) {
 	for (const [slot, task] of busy) {
 		if (!taskIds.includes(task.taskId)) continue;
 		console.log(`cancelling ${task.taskId}`);
-		engines[slot]?.kill();
+		// SIGKILL: a stopped or wedged engine never acts on SIGTERM and would
+		// hold its slot until the watchdog gave up on it too.
+		engines[slot]?.kill("SIGKILL");
 	}
 }
 
@@ -872,7 +874,7 @@ setInterval(() => {
 			`${entry.taskId}: no progress for ${now - entry.lastProgressAt} ms, killing slot${slot}`,
 		);
 		entry.lastProgressAt = now;
-		engines[slot]?.kill();
+		engines[slot]?.kill("SIGKILL");
 	}
 }, 5_000);
 

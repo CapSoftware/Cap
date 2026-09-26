@@ -238,7 +238,14 @@ type TaskState = {
 	heldUntil?: number;
 	/** Last heartbeat in which the owning worker listed this task. */
 	lastReportedAt?: number;
-	progress?: { frames: number; total: number; elapsedMs: number; at: number };
+	progress?: {
+		frames: number;
+		total: number;
+		elapsedMs: number;
+		at: number;
+		/** When `frames` last grew. */
+		advancedAt: number;
+	};
 };
 
 type HlsState = {
@@ -1379,6 +1386,8 @@ function dispatch() {
  * whose projected finish is furthest behind what a fresh slot could do. Slow
  * replicas (noisy neighbours) otherwise set the whole export's tail.
  */
+const FROZEN_MS = 5_000;
+
 function straggler(): TaskState | undefined {
 	let best: { state: TaskState; gain: number } | undefined;
 	for (const job of jobs.values()) {
@@ -1416,10 +1425,19 @@ function straggler(): TaskState | undefined {
 				state.progress?.elapsedMs ?? now() - (state.startedAt ?? now());
 			const frames = state.progress?.frames ?? 0;
 			const expected = total / typicalRate + 2500;
+			// Engines report frames several times a second. A copy part-way
+			// through whose count stopped is hung: projecting from its average
+			// rate hedged one frozen near its end only when the engine watchdog
+			// fired, 30 s later.
+			const frozen =
+				frames > 0 &&
+				frames < total &&
+				now() - (state.progress?.advancedAt ?? now()) > FROZEN_MS;
 			// A copy with no frames long past its expected time is stuck (not
 			// merely slow): its remaining time is unknown, so always hedge it.
-			const remaining =
-				frames > 0
+			const remaining = frozen
+				? Number.POSITIVE_INFINITY
+				: frames > 0
 					? ((total - frames) * (state.progress?.elapsedMs ?? elapsed)) / frames
 					: elapsed > expected * 2
 						? Number.POSITIVE_INFINITY
@@ -2142,9 +2160,14 @@ Bun.serve({
 				state.lastReportedAt = Date.now();
 				if (entry.phase === "reserved") continue;
 				if (state.task.kind === "video") {
-					if (entry.frames > (state.progress?.frames ?? 0) && job)
-						job.t.lastProgress = now();
-					state.progress = { ...entry, at: now() };
+					const advanced = entry.frames > (state.progress?.frames ?? 0);
+					if (advanced && job) job.t.lastProgress = now();
+					state.progress = {
+						...entry,
+						at: now(),
+						advancedAt:
+							advanced || !state.progress ? now() : state.progress.advancedAt,
+					};
 				}
 			}
 			const worker = workers.get(body.worker);

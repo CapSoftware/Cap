@@ -93,12 +93,13 @@ function harness() {
 	const compiled = new Bun.Transpiler({ loader: "ts" }).transformSync(source);
 	const coordinator = new Function(
 		...Object.keys(deps),
-		`${compiled}\nreturn {jobs, queue, dispatchedTask, onVideoDone, onAudioDone, publishPlaylist, journalJob, resumeJobs, newHlsState, finish, requeue, setPlanner: (fn) => { planJob = fn; }};`,
+		`${compiled}\nreturn {jobs, queue, straggler, dispatchedTask, onVideoDone, onAudioDone, publishPlaylist, journalJob, resumeJobs, newHlsState, finish, requeue, setPlanner: (fn) => { planJob = fn; }};`,
 	)(...Object.values(deps)) as {
 		setPlanner: (fn: (job: Job) => Promise<void>) => void;
 		requeue: (state: TaskState, reason: string) => void;
 		jobs: Map<string, Job>;
 		queue: TaskState[];
+		straggler: () => TaskState | undefined;
 		dispatchedTask: (job: Job, state: TaskState) => Promise<protocol.Task>;
 		onVideoDone: (
 			job: Job,
@@ -421,6 +422,27 @@ describe("coordinator recovery", () => {
 		).toContain("#EXT-X-ENDLIST");
 		expect(h.objects.has("jobs/job/done")).toBe(true);
 	});
+});
+
+test("a copy whose frame count stopped part-way is hedged without waiting on its average rate", () => {
+	const h = harness();
+	const j = job();
+	h.jobs.set(j.id, j);
+	for (let index = 0; index < 3; index++) {
+		j.taskStats.push({ kind: "video", frames: 30, engineRenderMs: 1000 });
+	}
+	const original = videoState(j);
+	original.progress = {
+		frames: 27,
+		total: 30,
+		elapsedMs: 900,
+		at: 0,
+		advancedAt: Number.POSITIVE_INFINITY,
+	};
+	expect(h.straggler()).toBeUndefined();
+	original.progress.advancedAt = Number.NEGATIVE_INFINITY;
+	expect(h.straggler()?.duplicateOf).toBe(original.task.taskId);
+	expect(original.duplicated).toBe(true);
 });
 
 test("segment reports only list objects the reporting dispatch wrote", async () => {
