@@ -5,7 +5,8 @@ type Column = { table: string; column: string };
 type Condition =
 	| { eq: [Column, unknown] }
 	| { and: Condition[] }
-	| { isNull: Column };
+	| { isNull: Column }
+	| { directoryAccess: { userId: string; organizationId: Column } };
 
 const table = (name: string) =>
 	new Proxy({ __table: name } as Record<string, unknown>, {
@@ -22,6 +23,14 @@ vi.mock("@cap/database/schema", () => ({
 	spaces: table("spaces"),
 	spaceVideos: table("spaceVideos"),
 	videos: table("videos"),
+}));
+
+let directoryAccess = true;
+vi.mock("@cap/database/directory-sync/access", () => ({
+	hasDirectoryAccess: async () => directoryAccess,
+	directoryAccessAllowed: (userId: string, organizationId: Column) => ({
+		directoryAccess: { userId, organizationId },
+	}),
 }));
 
 vi.mock("drizzle-orm", () => ({
@@ -252,6 +261,7 @@ describe("getShareDashboardDestination", () => {
 	beforeEach(() => {
 		queries.length = 0;
 		rowsFor = {};
+		directoryAccess = true;
 	});
 
 	const resolve = (
@@ -350,6 +360,34 @@ describe("getShareDashboardDestination", () => {
 			kind: "caps",
 			switchOrganizationId: null,
 		});
+	});
+
+	it("sends a removed owner to an independently shared organization", async () => {
+		directoryAccess = false;
+		rowsFor = {
+			videos: [{ id: "removed-folder", name: "Private folder" }],
+			sharedVideos: [{ id: "org-active", name: "Other team" }],
+		};
+		expect(
+			await resolve(OWNER, "removed-org" as Organisation.OrganisationId),
+		).toMatchObject({
+			kind: "organization",
+			href: "/dashboard/spaces/org-active",
+			switchOrganizationId: null,
+		});
+		expect(queries.some((query) => query.from === "videos")).toBe(false);
+		for (const query of queries)
+			expect(
+				flatten(query.where).some(
+					(condition) =>
+						"directoryAccess" in condition &&
+						condition.directoryAccess.userId === OWNER,
+				),
+			).toBe(true);
+	});
+	it("does not offer ownership destinations after removal without another share", async () => {
+		directoryAccess = false;
+		expect(await resolve(OWNER)).toBeNull();
 	});
 
 	it("resolves nothing when the viewer has no membership", async () => {

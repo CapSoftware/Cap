@@ -1,6 +1,7 @@
 import "server-only";
 
 import { db } from "@cap/database";
+import { requireDirectoryMembership } from "@cap/database/directory-sync/access";
 import { nanoId } from "@cap/database/helpers";
 import { enqueueLoopsSync } from "@cap/database/loops/queue";
 import {
@@ -41,6 +42,12 @@ export async function provisionOrganizationInvitee({
 	const normalizedEmail = email.trim().toLowerCase();
 
 	return db().transaction(async (tx) => {
+		await tx
+			.select({ id: organizations.id })
+			.from(organizations)
+			.where(eq(organizations.id, organizationId))
+			.for("update");
+		await requireDirectoryMembership(tx, organizationId, normalizedEmail);
 		const [existingUser] = await tx
 			.select()
 			.from(users)

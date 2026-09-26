@@ -2,11 +2,12 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { hasDirectoryAccess } from "@cap/database/directory-sync/access";
 import { videoEdits, videos, videoUploads } from "@cap/database/schema";
-import { Storage } from "@cap/web-backend";
+import { provideOptionalAuth, Storage, VideosPolicy } from "@cap/web-backend";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
-import { Effect } from "effect";
+import { Effect, Option } from "effect";
 import { runPromise } from "@/lib/server";
 import { canUserDownloadVideo } from "@/lib/video-download-permissions";
 import { decodeStorageVideo } from "@/lib/video-storage";
@@ -42,7 +43,10 @@ export async function downloadVideo(videoId: Video.VideoId) {
 		throw new Error("Video not found");
 	}
 
-	if (video.ownerId !== userId) {
+	if (
+		video.ownerId !== userId ||
+		!(await hasDirectoryAccess(userId, video.orgId))
+	) {
 		throw new Error("You don't have permission to download this video");
 	}
 
@@ -95,6 +99,11 @@ export async function getVideoDownloadInfo(
 	if (!allowed) {
 		throw new Error("You don't have permission to download this video");
 	}
+
+	await Effect.gen(function* () {
+		const policy = yield* VideosPolicy;
+		yield* policy.canViewLoaded(video, Option.fromNullable(video.password));
+	}).pipe(provideOptionalAuth, runPromise);
 
 	if (variant === "current") {
 		const [activeUpload] = await db()

@@ -275,3 +275,9 @@ describe("recording completion acknowledgement", () => {
 		expect(mocks.queue).not.toHaveBeenCalled();
 	});
 });
+
+vi.mock("@cap/database/directory-sync/access", () => ({
+	directoryAccessAllowed: () => undefined,
+	directorySpaceAccessAllowed: () => undefined,
+	hasDirectoryAccess: async () => true,
+}));

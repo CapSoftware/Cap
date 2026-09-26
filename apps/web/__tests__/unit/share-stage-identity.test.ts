@@ -77,6 +77,10 @@ vi.mock("@/actions/videos/get-status", () => ({
 	getVideoStatus: async () => ({}),
 }));
 
+vi.mock("@/app/(org)/dashboard/_components/Navbar/server", () => ({
+	updateActiveOrganization: vi.fn(),
+}));
+
 vi.mock("@/app/s/[videoId]/_components/CaptionContext", () => ({
 	CaptionProvider: ({ children }: { children?: ReactNode }) => children,
 }));

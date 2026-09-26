@@ -2,6 +2,7 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { directoryAccessAllowed } from "@cap/database/directory-sync/access";
 import { nanoId } from "@cap/database/helpers";
 import { sharedVideos, spaceVideos, videos } from "@cap/database/schema";
 import type { Space, Video } from "@cap/web-domain";
@@ -41,7 +42,15 @@ export async function addVideosToSpace(
 		const userVideos = await db()
 			.select({ id: videos.id })
 			.from(videos)
-			.where(and(eq(videos.ownerId, user.id), inArray(videos.id, videoIds)));
+			.where(
+				and(
+					and(
+						eq(videos.ownerId, user.id),
+						directoryAccessAllowed(user.id, videos.orgId),
+					),
+					inArray(videos.id, videoIds),
+				),
+			);
 
 		const validVideoIds = userVideos.map((v) => v.id);
 

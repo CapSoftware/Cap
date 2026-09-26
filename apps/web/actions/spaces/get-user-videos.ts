@@ -2,6 +2,7 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { directoryAccessAllowed } from "@cap/database/directory-sync/access";
 import {
 	comments,
 	folders,
@@ -64,7 +65,13 @@ export async function getUserVideos(spaceId: Space.SpaceIdOrOrganisationId) {
 					.leftJoin(spaces, eq(folders.spaceId, spaces.id))
 					.leftJoin(organizations, eq(videos.orgId, organizations.id))
 					.where(
-						and(eq(videos.ownerId, userId), isNull(organizations.tombstoneAt)),
+						and(
+							and(
+								eq(videos.ownerId, userId),
+								directoryAccessAllowed(userId, videos.orgId),
+							),
+							isNull(organizations.tombstoneAt),
+						),
 					)
 					.groupBy(
 						videos.id,
@@ -97,7 +104,13 @@ export async function getUserVideos(spaceId: Space.SpaceIdOrOrganisationId) {
 					.leftJoin(spaces, eq(folders.spaceId, spaces.id))
 					.leftJoin(organizations, eq(videos.orgId, organizations.id))
 					.where(
-						and(eq(videos.ownerId, userId), isNull(organizations.tombstoneAt)),
+						and(
+							and(
+								eq(videos.ownerId, userId),
+								directoryAccessAllowed(userId, videos.orgId),
+							),
+							isNull(organizations.tombstoneAt),
+						),
 					)
 					.groupBy(
 						videos.id,

@@ -1,4 +1,5 @@
 import { db } from "@cap/database";
+import { directoryAccessAllowed } from "@cap/database/directory-sync/access";
 import { sendEmail } from "@cap/database/emails/config";
 import { FirstShareableLink } from "@cap/database/emails/first-shareable-link";
 import { nanoId } from "@cap/database/helpers";
@@ -148,7 +149,13 @@ app.get(
 									.update(videos)
 									.set({ isScreenshot: true })
 									.where(
-										and(eq(videos.id, video.id), eq(videos.ownerId, user.id)),
+										and(
+											eq(videos.id, video.id),
+											and(
+												eq(videos.ownerId, user.id),
+												directoryAccessAllowed(user.id, videos.orgId),
+											),
+										),
 									);
 							}
 
@@ -192,7 +199,12 @@ app.get(
 						createdAt: organizations.createdAt,
 					})
 					.from(organizations)
-					.where(eq(organizations.ownerId, user.id)),
+					.where(
+						and(
+							eq(organizations.ownerId, user.id),
+							directoryAccessAllowed(user.id, organizations.id),
+						),
+					),
 				db()
 					.select({
 						id: organizations.id,
@@ -204,7 +216,15 @@ app.get(
 						organizations,
 						eq(organizations.id, organizationMembers.organizationId),
 					)
-					.where(eq(organizationMembers.userId, user.id)),
+					.where(
+						and(
+							eq(organizationMembers.userId, user.id),
+							directoryAccessAllowed(
+								user.id,
+								organizationMembers.organizationId,
+							),
+						),
+					),
 			]);
 			const userOrganizations = mergeUserOrganizationSelections(
 				ownedOrganizations,
@@ -357,7 +377,12 @@ app.get(
 				const videoCount = await db()
 					.select({ count: count() })
 					.from(videos)
-					.where(eq(videos.ownerId, user.id));
+					.where(
+						and(
+							eq(videos.ownerId, user.id),
+							directoryAccessAllowed(user.id, videos.orgId),
+						),
+					);
 
 				if (videoCount?.[0] && videoCount[0].count === 1 && user.email) {
 					console.log(
@@ -414,7 +439,15 @@ app.delete(
 			const [result] = await db()
 				.select({ video: videos })
 				.from(videos)
-				.where(and(eq(videos.id, videoId), eq(videos.ownerId, user.id)));
+				.where(
+					and(
+						eq(videos.id, videoId),
+						and(
+							eq(videos.ownerId, user.id),
+							directoryAccessAllowed(user.id, videos.orgId),
+						),
+					),
+				);
 
 			if (!result)
 				return c.json(
@@ -485,7 +518,15 @@ app.post(
 					upload: videoUploads,
 				})
 				.from(videos)
-				.where(and(eq(videos.id, videoId), eq(videos.ownerId, user.id)))
+				.where(
+					and(
+						eq(videos.id, videoId),
+						and(
+							eq(videos.ownerId, user.id),
+							directoryAccessAllowed(user.id, videos.orgId),
+						),
+					),
+				)
 				.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId));
 			if (!video)
 				return c.json(

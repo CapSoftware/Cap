@@ -3,6 +3,7 @@ import { Effect } from "effect";
 
 import { Database } from "../Database.ts";
 import { OrganisationsPolicy } from "../Organisations/OrganisationsPolicy.ts";
+import { OrganisationsRepo } from "../Organisations/OrganisationsRepo.ts";
 import { Spaces } from "../Spaces/index.ts";
 import { SpacesPolicy } from "../Spaces/SpacesPolicy.ts";
 import { FoldersRepo } from "./FoldersRepo.ts";
@@ -15,6 +16,7 @@ export class FoldersPolicy extends Effect.Service<FoldersPolicy>()(
 			const spacesPolicy = yield* SpacesPolicy;
 			const orgsPolicy = yield* OrganisationsPolicy;
 			const spaces = yield* Spaces;
+			const organizations = yield* OrganisationsRepo;
 			const canManageSpaceOrOrg = (spaceId: Space.SpaceIdOrOrganisationId) =>
 				Effect.gen(function* () {
 					const spaceOrOrg = yield* spaces.getSpaceOrOrg(spaceId);
@@ -41,7 +43,14 @@ export class FoldersPolicy extends Effect.Service<FoldersPolicy>()(
 							),
 						);
 
-						if (folder.spaceId === null) return folder.createdById === user.id;
+						if (folder.spaceId === null)
+							return (
+								folder.createdById === user.id &&
+								(yield* organizations.hasDirectoryAccess(
+									user.id,
+									folder.organizationId,
+								))
+							);
 
 						const spaceOrOrg = yield* spaces.getSpaceOrOrg(folder.spaceId);
 						if (!spaceOrOrg) return false;
@@ -63,6 +72,7 @@ export class FoldersPolicy extends Effect.Service<FoldersPolicy>()(
 			Spaces.Default,
 			SpacesPolicy.Default,
 			OrganisationsPolicy.Default,
+			OrganisationsRepo.Default,
 		],
 	},
 ) {}

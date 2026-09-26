@@ -2,6 +2,7 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { directoryAccessAllowed } from "@cap/database/directory-sync/access";
 import { nanoId } from "@cap/database/helpers";
 import {
 	organizationMembers,
@@ -42,7 +43,12 @@ export async function shareCap({
 				organizationId: organizationMembers.organizationId,
 			})
 			.from(organizationMembers)
-			.where(eq(organizationMembers.userId, user.id));
+			.where(
+				and(
+					eq(organizationMembers.userId, user.id),
+					directoryAccessAllowed(user.id, organizationMembers.organizationId),
+				),
+			);
 
 		const userOrganizationIds = userOrganizations.map(
 			(org) => org.organizationId,

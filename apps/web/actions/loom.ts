@@ -3,6 +3,10 @@
 import { randomUUID } from "node:crypto";
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
+import {
+	directoryAccessAllowed,
+	directorySpaceAccessAllowed,
+} from "@cap/database/directory-sync/access";
 import { nanoId } from "@cap/database/helpers";
 import {
 	folders,
@@ -500,7 +504,13 @@ function loomImportFolderScope(
 		eq(folders.organizationId, orgId),
 		spaceId
 			? eq(folders.spaceId, spaceId)
-			: and(isNull(folders.spaceId), eq(folders.createdById, userId)),
+			: and(
+					isNull(folders.spaceId),
+					and(
+						eq(folders.createdById, userId),
+						directoryAccessAllowed(userId, folders.organizationId),
+					),
+				),
 	);
 }
 
@@ -716,7 +726,13 @@ async function addImportOwnerToSpace({
 		.select({ id: spaceMembers.id })
 		.from(spaceMembers)
 		.where(
-			and(eq(spaceMembers.spaceId, spaceId), eq(spaceMembers.userId, userId)),
+			and(
+				eq(spaceMembers.spaceId, spaceId),
+				and(
+					eq(spaceMembers.userId, userId),
+					directorySpaceAccessAllowed(userId, spaceMembers.spaceId),
+				),
+			),
 		)
 		.limit(1);
 

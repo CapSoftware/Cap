@@ -194,3 +194,9 @@ describe("optional recording preparation API", () => {
 		expect((await request()).status).toBe(500);
 	});
 });
+
+vi.mock("@cap/database/directory-sync/access", () => ({
+	directoryAccessAllowed: () => undefined,
+	directorySpaceAccessAllowed: () => undefined,
+	hasDirectoryAccess: async () => true,
+}));

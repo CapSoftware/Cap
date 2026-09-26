@@ -1,3 +1,7 @@
+import {
+	directoryAccessAllowed,
+	directorySpaceAccessAllowed,
+} from "@cap/database/directory-sync/access";
 import * as Db from "@cap/database/schema";
 import {
 	type Folder,
@@ -43,7 +47,13 @@ export class AgentManagement extends Effect.Service<AgentManagement>()(
 							)
 							.where(
 								and(
-									eq(Db.organizationMembers.userId, userId),
+									and(
+										eq(Db.organizationMembers.userId, userId),
+										directoryAccessAllowed(
+											userId,
+											Db.organizationMembers.organizationId,
+										),
+									),
 									eq(Db.organizationMembers.organizationId, organizationId),
 									isNull(Db.organizations.tombstoneAt),
 								),
@@ -93,14 +103,26 @@ export class AgentManagement extends Effect.Service<AgentManagement>()(
 										Db.organizationMembers.organizationId,
 										Db.spaces.organizationId,
 									),
-									eq(Db.organizationMembers.userId, userId),
+									and(
+										eq(Db.organizationMembers.userId, userId),
+										directoryAccessAllowed(
+											userId,
+											Db.organizationMembers.organizationId,
+										),
+									),
 								),
 							)
 							.leftJoin(
 								Db.spaceMembers,
 								and(
 									eq(Db.spaceMembers.spaceId, Db.spaces.id),
-									eq(Db.spaceMembers.userId, userId),
+									and(
+										eq(Db.spaceMembers.userId, userId),
+										directorySpaceAccessAllowed(
+											userId,
+											Db.spaceMembers.spaceId,
+										),
+									),
 								),
 							)
 							.where(eq(Db.spaces.id, spaceId))
@@ -155,7 +177,13 @@ export class AgentManagement extends Effect.Service<AgentManagement>()(
 							.innerJoin(Db.users, eq(Db.organizations.ownerId, Db.users.id))
 							.where(
 								and(
-									eq(Db.organizationMembers.userId, userId),
+									and(
+										eq(Db.organizationMembers.userId, userId),
+										directoryAccessAllowed(
+											userId,
+											Db.organizationMembers.organizationId,
+										),
+									),
 									isNull(Db.organizations.tombstoneAt),
 								),
 							)
@@ -303,7 +331,13 @@ export class AgentManagement extends Effect.Service<AgentManagement>()(
 										? eq(Db.folders.spaceId, spaceId)
 										: and(
 												isNull(Db.folders.spaceId),
-												eq(Db.folders.createdById, userId),
+												and(
+													eq(Db.folders.createdById, userId),
+													directoryAccessAllowed(
+														userId,
+														Db.folders.organizationId,
+													),
+												),
 											),
 									parentId === undefined
 										? undefined
@@ -359,7 +393,13 @@ export class AgentManagement extends Effect.Service<AgentManagement>()(
 								Db.spaceMembers,
 								and(
 									eq(Db.spaceMembers.spaceId, Db.spaces.id),
-									eq(Db.spaceMembers.userId, userId),
+									and(
+										eq(Db.spaceMembers.userId, userId),
+										directorySpaceAccessAllowed(
+											userId,
+											Db.spaceMembers.spaceId,
+										),
+									),
 								),
 							)
 							.where(
@@ -368,8 +408,20 @@ export class AgentManagement extends Effect.Service<AgentManagement>()(
 									membership.role === "member"
 										? or(
 												eq(Db.spaces.privacy, "Public"),
-												eq(Db.spaces.createdById, userId),
-												eq(Db.spaceMembers.userId, userId),
+												and(
+													eq(Db.spaces.createdById, userId),
+													directoryAccessAllowed(
+														userId,
+														Db.spaces.organizationId,
+													),
+												),
+												and(
+													eq(Db.spaceMembers.userId, userId),
+													directorySpaceAccessAllowed(
+														userId,
+														Db.spaceMembers.spaceId,
+													),
+												),
 											)
 										: undefined,
 								),

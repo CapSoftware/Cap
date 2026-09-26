@@ -2,6 +2,7 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { hasDirectoryAccess } from "@cap/database/directory-sync/access";
 import { sendEmail } from "@cap/database/emails/config";
 import { SignedBaa } from "@cap/database/emails/signed-baa";
 import { nanoId } from "@cap/database/helpers";
@@ -102,7 +103,10 @@ async function getOwnerContext(organizationId: Organisation.OrganisationId) {
 		.limit(1);
 
 	if (!organization) throw new Error("Organization not found");
-	if (organization.ownerId !== user.id)
+	if (
+		organization.ownerId !== user.id ||
+		!(await hasDirectoryAccess(user.id, organizationId))
+	)
 		throw new Error("Only the organization owner can manage the Signed BAA");
 
 	return { user, organization };

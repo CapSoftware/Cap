@@ -52,6 +52,7 @@ function makeDeps(config: {
 	spaceMembership?: boolean;
 	allowedEmailDomain?: Option.Option<string>;
 	viewerGrantEmail?: string;
+	directoryAccess?: boolean;
 }): VideosPolicyDeps {
 	const {
 		video,
@@ -72,6 +73,7 @@ function makeDeps(config: {
 			hasViewerGrant: (_, email) => Effect.succeed(email === viewerGrantEmail),
 		},
 		orgsRepo: {
+			hasDirectoryAccess: () => Effect.succeed(config.directoryAccess ?? true),
 			membershipForVideo: () =>
 				Effect.succeed(orgMembership ? [{ membershipId: "mem-1" }] : []),
 			allowedEmailDomain: () => Effect.succeed(allowedEmailDomain),
@@ -786,5 +788,59 @@ describe("VideosPolicy.canViewLoaded", () => {
 			),
 		).toBe("denied");
 		expect(getByIdCalls).toBe(0);
+	});
+});
+
+describe("Directory deprovisioning", () => {
+	it("denies ownership shortcuts after deprovisioning", async () => {
+		const deps = makeDeps({
+			video: makeVideo({ public: false }),
+			directoryAccess: false,
+		});
+		expect(
+			await runCanView(deps, makeUser("owner@example.com", TEST_OWNER_ID)),
+		).toBe("denied");
+	});
+	it("denies retained direct viewer grants on a signed-in session", async () => {
+		const deps = makeDeps({
+			video: makeVideo({ public: false }),
+			directoryAccess: false,
+			viewerGrantEmail: "teammate@example.com",
+		});
+		expect(await runCanView(deps, makeUser("teammate@example.com"))).toBe(
+			"denied",
+		);
+	});
+	it.each(["organization", "space"])(
+		"preserves an independent %s share after removal from the owning organization",
+		async (kind) => {
+			const video = makeVideo({ public: false });
+			const deps = makeDeps({
+				video,
+				directoryAccess: false,
+				orgMembership: kind === "organization",
+				spaceMembership: kind === "space",
+			});
+			const user = makeUser("teammate@example.com", TEST_OWNER_ID);
+			expect(await runCanView(deps, user)).toBe("allowed");
+			expect(await runCanViewLoaded(deps, video, Option.none(), user)).toBe(
+				"allowed",
+			);
+		},
+	);
+	it("requires passwords on independent shares for a removed owner", async () => {
+		const deps = makeDeps({
+			video: makeVideo({ public: false }),
+			directoryAccess: false,
+			orgMembership: true,
+			password: Option.some("video-hash"),
+		});
+		expect(
+			await runCanView(deps, makeUser("teammate@example.com", TEST_OWNER_ID)),
+		).toBe("password");
+	});
+	it("preserves anonymous public sharing", async () => {
+		const deps = makeDeps({ video: makeVideo(), directoryAccess: false });
+		expect(await runCanView(deps, noUser)).toBe("allowed");
 	});
 });

@@ -2,6 +2,7 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { hasDirectoryAccess } from "@cap/database/directory-sync/access";
 import { organizations, users } from "@cap/database/schema";
 import { isProSubscription, stripe } from "@cap/utils";
 import type { Organisation } from "@cap/web-domain";
@@ -31,7 +32,10 @@ export async function getSubscriptionDetails(
 		.limit(1);
 
 	if (!organization) throw new Error("Organization not found");
-	if (organization.ownerId !== user.id)
+	if (
+		organization.ownerId !== user.id ||
+		!(await hasDirectoryAccess(user.id, organizationId))
+	)
 		throw new Error("Only the owner can view subscription details");
 
 	const [owner] = await db()

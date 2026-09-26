@@ -1,6 +1,10 @@
 import "server-only";
 
 import {
+	directoryAccessAllowed,
+	directorySpaceAccessAllowed,
+} from "@cap/database/directory-sync/access";
+import {
 	comments,
 	folders,
 	organizations,
@@ -24,13 +28,19 @@ import { Effect } from "effect";
 
 export const getFolderById = Effect.fn(function* (folderId: string) {
 	if (!folderId) throw new Error("Folder ID is required");
+	const user = yield* CurrentUser;
 	const db = yield* Database;
 
 	const [folder] = yield* db.use((db) =>
 		db
 			.select()
 			.from(folders)
-			.where(eq(folders.id, Folder.FolderId.make(folderId))),
+			.where(
+				and(
+					eq(folders.id, Folder.FolderId.make(folderId)),
+					directoryAccessAllowed(user.id, folders.organizationId),
+				),
+			),
 	);
 
 	if (!folder) throw new Error("Folder not found");
@@ -174,6 +184,7 @@ export const getVideosByFolderId = Effect.fn(function* (
 		| { variant: "org"; organizationId: Organisation.OrganisationId },
 ) {
 	if (!folderId) throw new Error("Folder ID is required");
+	const user = yield* CurrentUser;
 	const db = yield* Database;
 	const imageUploads = yield* ImageUploads;
 
@@ -231,17 +242,24 @@ export const getVideosByFolderId = Effect.fn(function* (
 			.leftJoin(users, eq(videos.ownerId, users.id))
 			.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
 			.where(
-				root.variant === "space"
-					? and(
-							eq(spaceVideos.folderId, folderId),
-							isNull(organizations.tombstoneAt),
-						)
-					: root.variant === "org"
+				and(
+					root.variant === "space"
+						? directorySpaceAccessAllowed(user.id, root.spaceId)
+						: root.variant === "org"
+							? directoryAccessAllowed(user.id, root.organizationId)
+							: directoryAccessAllowed(user.id, videos.orgId),
+					root.variant === "space"
 						? and(
-								eq(sharedVideos.folderId, folderId),
+								eq(spaceVideos.folderId, folderId),
 								isNull(organizations.tombstoneAt),
 							)
-						: eq(videos.folderId, folderId),
+						: root.variant === "org"
+							? and(
+									eq(sharedVideos.folderId, folderId),
+									isNull(organizations.tombstoneAt),
+								)
+							: eq(videos.folderId, folderId),
+				),
 			)
 			.groupBy(
 				videos.id,
@@ -401,6 +419,7 @@ export const getChildFolders = Effect.fn(function* (
 			.where(
 				and(
 					eq(folders.parentId, folderId),
+					directoryAccessAllowed(user.id, folders.organizationId),
 					root.variant === "space"
 						? eq(folders.spaceId, root.spaceId)
 						: root.variant === "org"

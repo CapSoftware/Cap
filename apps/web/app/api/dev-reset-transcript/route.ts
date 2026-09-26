@@ -1,5 +1,6 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { directoryAccessAllowed } from "@cap/database/directory-sync/access";
 import { videoEdits, videos, videoUploads } from "@cap/database/schema";
 import { Storage } from "@cap/web-backend";
 import type { Video } from "@cap/web-domain";
@@ -28,7 +29,15 @@ export async function POST(request: NextRequest) {
 	const [video] = await db()
 		.select()
 		.from(videos)
-		.where(and(eq(videos.id, videoId), eq(videos.ownerId, user.id)));
+		.where(
+			and(
+				eq(videos.id, videoId),
+				and(
+					eq(videos.ownerId, user.id),
+					directoryAccessAllowed(user.id, videos.orgId),
+				),
+			),
+		);
 	if (!video) {
 		return Response.json({ error: "video not found" }, { status: 404 });
 	}

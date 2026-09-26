@@ -1,5 +1,9 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
+import {
+	directoryAccessAllowed,
+	requireDirectoryMembership,
+} from "@cap/database/directory-sync/access";
 import { nanoId } from "@cap/database/helpers";
 import { enqueueLoopsSync } from "@cap/database/loops/queue";
 import {
@@ -38,6 +42,17 @@ export async function POST(request: NextRequest) {
 
 	try {
 		await db().transaction(async (tx) => {
+			const [observedInvite] = await tx
+				.select({ organizationId: organizationInvites.organizationId })
+				.from(organizationInvites)
+				.where(eq(organizationInvites.id, inviteId))
+				.limit(1);
+			if (!observedInvite) throw new Error("INVITE_NOT_FOUND");
+			await tx
+				.select({ id: organizations.id })
+				.from(organizations)
+				.where(eq(organizations.id, observedInvite.organizationId))
+				.for("update");
 			const [invite] = await tx
 				.select()
 				.from(organizationInvites)
@@ -52,13 +67,25 @@ export async function POST(request: NextRequest) {
 				throw new Error("EMAIL_MISMATCH");
 			}
 
+			await requireDirectoryMembership(
+				tx,
+				invite.organizationId,
+				user.email,
+				user.id,
+			);
 			const [existingMembership] = await tx
 				.select({ id: organizationMembers.id })
 				.from(organizationMembers)
 				.where(
 					and(
 						eq(organizationMembers.organizationId, invite.organizationId),
-						eq(organizationMembers.userId, user.id),
+						and(
+							eq(organizationMembers.userId, user.id),
+							directoryAccessAllowed(
+								user.id,
+								organizationMembers.organizationId,
+							),
+						),
 					),
 				)
 				.limit(1);

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
 	updates: [] as unknown[],
+	directoryAccess: vi.fn(async () => true),
 }));
 
 vi.mock("@cap/database/auth/session", () => ({
@@ -40,6 +41,7 @@ const patchOf = (value: unknown): Record<string, unknown> => {
 describe("updateVideoSettings", () => {
 	beforeEach(() => {
 		mocks.updates = [];
+		mocks.directoryAccess.mockResolvedValue(true);
 	});
 
 	it("merges only known viewer settings", async () => {
@@ -58,4 +60,17 @@ describe("updateVideoSettings", () => {
 			defaultPlaybackSpeed: 1.5,
 		});
 	});
+});
+
+vi.mock("@cap/database/directory-sync/access", () => ({
+	hasDirectoryAccess: mocks.directoryAccess,
+}));
+
+it("denies settings changes from a removed owner on an existing session", async () => {
+	mocks.updates = [];
+	mocks.directoryAccess.mockResolvedValue(false);
+	await expect(
+		updateVideoSettings("video" as Video.VideoId, { disableComments: true }),
+	).rejects.toThrow("permission");
+	expect(mocks.updates).toHaveLength(0);
 });

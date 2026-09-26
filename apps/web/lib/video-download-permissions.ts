@@ -1,9 +1,14 @@
 import { db } from "@cap/database";
 import {
+	directoryAccessAllowed,
+	directorySpaceAccessAllowed,
+} from "@cap/database/directory-sync/access";
+import {
 	organizationMembers,
 	sharedVideos,
 	spaceMembers,
 	spaceVideos,
+	videos,
 } from "@cap/database/schema";
 import type { User, Video } from "@cap/web-domain";
 import { and, eq, inArray } from "drizzle-orm";
@@ -22,7 +27,13 @@ export async function canUserDownloadVideo({
 	ownerId: User.UserId;
 	videoId: Video.VideoId;
 }): Promise<boolean> {
-	if (userId === ownerId) return true;
+	const [video] = await db()
+		.select({ allowed: directoryAccessAllowed(userId, videos.orgId) })
+		.from(videos)
+		.where(eq(videos.id, videoId))
+		.limit(1);
+	if (!video) return false;
+	if (userId === ownerId && video.allowed) return true;
 
 	const sharedOrgs = await db()
 		.select({ organizationId: sharedVideos.organizationId })
@@ -35,7 +46,10 @@ export async function canUserDownloadVideo({
 			.from(organizationMembers)
 			.where(
 				and(
-					eq(organizationMembers.userId, userId),
+					and(
+						eq(organizationMembers.userId, userId),
+						directoryAccessAllowed(userId, organizationMembers.organizationId),
+					),
 					inArray(
 						organizationMembers.organizationId,
 						sharedOrgs.map((org) => org.organizationId),
@@ -59,7 +73,10 @@ export async function canUserDownloadVideo({
 		.from(spaceMembers)
 		.where(
 			and(
-				eq(spaceMembers.userId, userId),
+				and(
+					eq(spaceMembers.userId, userId),
+					directorySpaceAccessAllowed(userId, spaceMembers.spaceId),
+				),
 				inArray(
 					spaceMembers.spaceId,
 					sharedSpaces.map((space) => space.spaceId),

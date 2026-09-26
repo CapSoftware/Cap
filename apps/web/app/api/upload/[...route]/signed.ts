@@ -1,6 +1,9 @@
 import { inspect } from "node:util";
-
 import { db, updateIfDefined } from "@cap/database";
+import {
+	directoryAccessAllowed,
+	hasDirectoryAccess,
+} from "@cap/database/directory-sync/access";
 import * as Db from "@cap/database/schema";
 import { Storage } from "@cap/web-backend";
 import { isInternalRecordingKey } from "@cap/web-backend/src/Storage/recording-output";
@@ -68,7 +71,11 @@ app.post(
 				.where(eq(Db.videos.id, Video.VideoId.make(videoId)));
 
 			if (!video) return c.json({ error: "Video not found" }, 404);
-			if (video.ownerId !== user.id) return c.json({ error: "Forbidden" }, 403);
+			if (
+				video.ownerId !== user.id ||
+				!(await hasDirectoryAccess(user.id, video.orgId))
+			)
+				return c.json({ error: "Forbidden" }, 403);
 			const videoDomain = decodeVideo(video);
 
 			const batch = await Effect.gen(function* () {
@@ -145,7 +152,11 @@ app.post(
 				.where(eq(Db.videos.id, Video.VideoId.make(videoIdToUse)));
 
 			if (!video) return c.json({ error: "Video not found" }, 404);
-			if (video.ownerId !== user.id) return c.json({ error: "Forbidden" }, 403);
+			if (
+				video.ownerId !== user.id ||
+				!(await hasDirectoryAccess(user.id, video.orgId))
+			)
+				return c.json({ error: "Forbidden" }, 403);
 			const videoDomain = decodeVideo(video);
 
 			const contentType = fileKey.endsWith(".aac")
@@ -202,7 +213,13 @@ app.post(
 							fps: updateIfDefined(fps, Db.videos.fps),
 						})
 						.where(
-							and(eq(Db.videos.id, videoId), eq(Db.videos.ownerId, user.id)),
+							and(
+								eq(Db.videos.id, videoId),
+								and(
+									eq(Db.videos.ownerId, user.id),
+									directoryAccessAllowed(user.id, Db.videos.orgId),
+								),
+							),
 						);
 
 				const clientSupportsUploadProgress = isFromDesktopSemver(
