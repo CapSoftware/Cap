@@ -19,7 +19,13 @@ import {
 	type WorkItem,
 } from "./protocol";
 import { mediaS3ConfigFromEnv, S3 } from "./s3";
-import { encodedSeconds, transcodeArgs } from "./transcode";
+import {
+	canRemux,
+	encodedSeconds,
+	probeArgs,
+	remuxArgs,
+	transcodeArgs,
+} from "./transcode";
 
 const s3 = new S3(mediaS3ConfigFromEnv());
 const COORDINATOR = (
@@ -672,15 +678,27 @@ async function runTranscode(task: TranscodeTask, slot: number) {
 	progress.set(slot, entry);
 	try {
 		const output = join(dir, "output.mp4");
+		const input = await s3.presignFresh("GET", task.source, 6 * 3600);
+		const probe = Bun.spawn(["ffprobe", ...probeArgs(input)], {
+			stdout: "pipe",
+			stderr: "ignore",
+		});
+		const probed = await new Response(probe.stdout).text();
+		// H.264 with frequent keyframes (Chrome, Edge and Safari recordings)
+		// only needs its container rewritten; anything else is re-encoded.
+		const remux = (await probe.exited) === 0 && canRemux(probed);
+		console.log(`${task.taskId}: ${remux ? "remuxing" : "transcoding"}`);
 		const ffmpeg = Bun.spawn(
 			[
 				"ffmpeg",
-				...transcodeArgs(
-					await s3.presignFresh("GET", task.source, 6 * 3600),
-					output,
-					task.keyframeSeconds,
-					TRANSCODE_ENCODER,
-				),
+				...(remux
+					? remuxArgs(input, output)
+					: transcodeArgs(
+							input,
+							output,
+							task.keyframeSeconds,
+							TRANSCODE_ENCODER,
+						)),
 			],
 			{ stdout: "pipe", stderr: "pipe" },
 		);

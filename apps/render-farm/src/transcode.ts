@@ -53,3 +53,73 @@ export function encodedSeconds(line: string) {
 	const match = line.match(/^out_time_(?:us|ms)=(\d+)$/);
 	return match ? Number(match[1]) / 1_000_000 : null;
 }
+
+/** Longest keyframe gap a source may have and still be remuxed as-is. */
+export const MAX_REMUX_KEYFRAME_GAP_SECONDS = 4;
+
+/** ffprobe arguments listing the video codec and every packet's flags. */
+export function probeArgs(input: string) {
+	return [
+		"-v",
+		"error",
+		"-select_streams",
+		"v:0",
+		"-show_entries",
+		"stream=codec_name,pix_fmt:packet=pts_time,flags",
+		"-of",
+		"compact=p=0:nk=0",
+		input,
+	];
+}
+
+/**
+ * Whether a probed source can be copied into an indexed MP4 without
+ * re-encoding: H.264 4:2:0 (what browsers record as MP4) whose keyframes are
+ * close enough together for chunks to start near any point.
+ */
+export function canRemux(probe: string) {
+	const codec = probe.match(/codec_name=([^|\n]+)/)?.[1];
+	const pixelFormat = probe.match(/pix_fmt=([^|\n]+)/)?.[1];
+	if (codec !== "h264" || (pixelFormat && pixelFormat !== "yuv420p")) {
+		return false;
+	}
+	const keyframes: number[] = [];
+	let last = 0;
+	for (const match of probe.matchAll(/pts_time=([0-9.]+)\|flags=([A-Z_]+)/g)) {
+		const time = Number(match[1]);
+		last = Math.max(last, time);
+		if (match[2]?.includes("K")) keyframes.push(time);
+	}
+	if (keyframes.length === 0) return false;
+	keyframes.sort((a, b) => a - b);
+	let previous = 0;
+	for (const time of [...keyframes, last]) {
+		if (time - previous > MAX_REMUX_KEYFRAME_GAP_SECONDS) return false;
+		previous = time;
+	}
+	return true;
+}
+
+/** ffmpeg arguments that copy the video track into a faststart MP4. */
+export function remuxArgs(input: string, output: string) {
+	return [
+		"-hide_banner",
+		"-nostdin",
+		"-y",
+		"-loglevel",
+		"error",
+		"-progress",
+		"pipe:1",
+		"-nostats",
+		"-i",
+		input,
+		"-map",
+		"0:v:0",
+		"-an",
+		"-c:v",
+		"copy",
+		"-movflags",
+		"+faststart",
+		output,
+	];
+}
