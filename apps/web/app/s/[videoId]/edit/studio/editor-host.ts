@@ -2076,6 +2076,96 @@ export class EditorHostBridge {
 		}
 		if (
 			message.kind === "invoke" &&
+			message.name === "tauri:webEditorSaveDefaultStyle"
+		) {
+			try {
+				const request = message.args[0];
+				if (
+					message.args.length !== 1 ||
+					typeof request !== "object" ||
+					request === null ||
+					!("config" in request)
+				)
+					throw new Error("Default style request was invalid");
+				const response = await fetch("/api/editor/preferences/default-style", {
+					method: "PUT",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ config: request.config }),
+					cache: "no-store",
+					signal: this.controller.signal,
+				});
+				if (!response.ok)
+					throw new Error("Default style could not be saved. Try again.");
+				this.port?.postMessage({ kind: "result", id: message.id, value: null });
+			} catch (cause) {
+				this.port?.postMessage({
+					kind: "error",
+					id: message.id,
+					error:
+						cause instanceof Error
+							? cause.message
+							: "Default style could not be saved. Try again.",
+				});
+			}
+			return;
+		}
+		if (
+			message.kind === "invoke" &&
+			message.name === "tauri:webEditorBackgroundExport"
+		) {
+			let releaseWorkerUse: () => void = () => undefined;
+			try {
+				const settings = message.args[0];
+				if (
+					message.args.length !== 1 ||
+					typeof settings !== "object" ||
+					settings === null
+				)
+					throw new Error("Background export request was invalid");
+				await Promise.allSettled([...this.pendingConfigWrites]);
+				releaseWorkerUse = await this.ensureWorkerSession();
+				const response = await fetch(
+					`/api/editor/sessions/${encodeURIComponent(this.sessionId)}/background-exports`,
+					{
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({ videoId: this.videoId, ...settings }),
+						cache: "no-store",
+						signal: this.controller.signal,
+					},
+				);
+				if (!response.ok)
+					throw new Error(webEditorBackgroundExportError(response.status));
+				const started: unknown = await response.json();
+				if (
+					typeof started !== "object" ||
+					started === null ||
+					!("downloadUrl" in started) ||
+					typeof started.downloadUrl !== "string"
+				) {
+					throw new Error("Background export response was invalid");
+				}
+				this.port?.postMessage({
+					kind: "result",
+					id: message.id,
+					value: { downloadUrl: started.downloadUrl },
+				});
+			} catch (cause) {
+				this.port?.postMessage({
+					kind: "error",
+					id: message.id,
+					error:
+						cause instanceof Error
+							? cause.message
+							: "Background export could not start",
+				});
+			} finally {
+				releaseWorkerUse();
+			}
+			return;
+		}
+		if (
+			message.kind === "invoke" &&
 			message.name === "tauri:webEditorSaveStatus"
 		) {
 			try {
@@ -2541,4 +2631,13 @@ function webEditorSaveError(status: number) {
 		return "Saving recordings of 5 minutes or longer, or with captions, needs Cap Pro";
 	if (status === 404) return "This recording is no longer available";
 	return "Save is unavailable right now. Try again, or use Export.";
+}
+
+function webEditorBackgroundExportError(status: number) {
+	if (status === 400)
+		return "This project uses something background export can't render yet. Export on this device instead.";
+	if (status === 403)
+		return "Exporting recordings of 5 minutes or longer, or with captions, in the background needs Cap Pro";
+	if (status === 404) return "This recording is no longer available";
+	return "Background export is unavailable right now. Try again, or export on this device.";
 }

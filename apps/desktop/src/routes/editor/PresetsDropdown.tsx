@@ -1,10 +1,15 @@
 import { DropdownMenu as KDropdownMenu } from "@kobalte/core/dropdown-menu";
+import { invoke } from "@tauri-apps/api/core";
 import { cx } from "cva";
 import { For, Show, Suspense } from "solid-js";
 import { reconcile } from "solid-js/store";
 import toast from "solid-toast";
 import { commands } from "~/utils/tauri";
-import { normalizeProject, useEditorContext } from "./context";
+import {
+	normalizeProject,
+	serializeProjectConfiguration,
+	useEditorContext,
+} from "./context";
 import {
 	DropdownItem,
 	dropdownContainerClasses,
@@ -14,6 +19,8 @@ import {
 	PopperContent,
 	topCenterAnimateClasses,
 } from "./ui";
+
+const isWebEditor = import.meta.env.VITE_CAP_WEB_EDITOR === "true";
 
 export function PresetsDropdown() {
 	const { setDialog, presets, setProject, project } = useEditorContext();
@@ -30,6 +37,21 @@ export function PresetsDropdown() {
 				}),
 			),
 		);
+	}
+
+	async function saveDefaultStyle() {
+		try {
+			await invoke("webEditorSaveDefaultStyle", {
+				config: JSON.parse(
+					JSON.stringify(serializeProjectConfiguration(project)),
+				),
+			});
+			toast.success("New recordings will use this style");
+		} catch (error) {
+			toast.error(
+				error instanceof Error ? error.message : "Default style was not saved",
+			);
+		}
 	}
 
 	return (
@@ -210,6 +232,11 @@ export function PresetsDropdown() {
 								<span>Create new preset</span>
 								<IconCapCirclePlus class="ml-auto" />
 							</DropdownItem>
+							<Show when={isWebEditor}>
+								<DropdownItem onSelect={() => void saveDefaultStyle()}>
+									<span>Use as my default style</span>
+								</DropdownItem>
+							</Show>
 						</MenuItemList>
 					</PopperContent>
 				</Suspense>

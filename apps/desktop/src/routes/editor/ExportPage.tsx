@@ -3,7 +3,7 @@ import { createElementBounds } from "@solid-primitives/bounds";
 import { debounce } from "@solid-primitives/scheduled";
 import { makePersisted } from "@solid-primitives/storage";
 import { createMutation } from "@tanstack/solid-query";
-import { Channel } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { CheckMenuItem, Menu } from "@tauri-apps/api/menu";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { remove } from "@tauri-apps/plugin-fs";
@@ -354,6 +354,40 @@ export function ExportPage() {
 		return !COMPRESSION_OPTIONS.some(
 			(opt) => Math.abs(opt.bpp - currentBpp) < 0.001,
 		);
+	};
+
+	const canExportInBackground = () =>
+		isWebEditor &&
+		settings.exportTo === "file" &&
+		settings.format === "Mp4" &&
+		!cursorOnly() &&
+		!hasTransparentBackground() &&
+		!(advancedMode() && isCustomBpp());
+	const [backgroundExportStarting, setBackgroundExportStarting] =
+		createSignal(false);
+	const exportInBackground = async () => {
+		if (backgroundExportStarting()) return;
+		setBackgroundExportStarting(true);
+		try {
+			// The render is built from the stored project, so pending edits go first.
+			await flushProjectConfig();
+			await invoke("webEditorBackgroundExport", {
+				resolution: [settings.resolution.width, settings.resolution.height],
+				fps: settings.fps,
+				compression: settings.compression,
+			});
+			toast.success(
+				"Exporting in the background. We'll email you a download link when it's ready.",
+			);
+		} catch (error) {
+			toast.error(
+				error instanceof Error
+					? error.message
+					: "Background export could not start",
+			);
+		} finally {
+			setBackgroundExportStarting(false);
+		}
 	};
 
 	const _matchingPreset = () => {
@@ -1521,6 +1555,21 @@ export function ExportPage() {
 								)}
 							</button>
 						)}
+						<Show when={canExportInBackground()}>
+							<button
+								type="button"
+								class={cx(
+									EXPORT_CTA_CLASS,
+									"mt-2 h-9 bg-transparent text-ed-text-2 hover:bg-ed-ctl hover:text-ed-text-1",
+								)}
+								disabled={backgroundExportStarting()}
+								onClick={() => void exportInBackground()}
+							>
+								{backgroundExportStarting()
+									? "Starting…"
+									: "Export in background"}
+							</button>
+						</Show>
 					</div>
 				</div>
 			</div>
