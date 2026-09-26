@@ -174,6 +174,27 @@ export const createS3BucketAccess = Effect.gen(function* () {
 					},
 				),
 			).pipe(Effect.withSpan("getSignedObjectUrl")),
+		/** A browser download URL that saves the object under a chosen name. */
+		getSignedDownloadUrl: (
+			key: string,
+			download: {
+				contentDisposition: string;
+				contentType: string;
+				expiresIn: number;
+			},
+		) =>
+			withPublicSigningClient((client) =>
+				S3Presigner.getSignedUrl(
+					client,
+					new S3.GetObjectCommand({
+						Bucket: provider.bucket,
+						Key: key,
+						ResponseContentDisposition: download.contentDisposition,
+						ResponseContentType: download.contentType,
+					}),
+					{ expiresIn: download.expiresIn },
+				),
+			).pipe(Effect.withSpan("getSignedDownloadUrl")),
 		getInternalSignedObjectUrl: (
 			key: string,
 			signingArgs?: RequestPresigningArguments,
