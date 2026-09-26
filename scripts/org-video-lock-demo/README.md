@@ -15,4 +15,6 @@ Acceptance criteria:
 
 The browser walkthrough asserts the main flow and playback. Focused policy tests also cover passwords, external organization and space memberships, former owners, role restrictions, and invalid action inputs. The seed verifies the SQL access predicate against the isolated database.
 
+If the prepared Linux environment cannot start, `native-recipe.json` describes a macOS capture using the installed Cap CLI. Run its setup and readiness steps through the session wrapper and its server through `serve`. Run `native-capture.mjs` with the session's private artifact directory through the native wrapper. It records only a new Chrome window containing synthetic accounts, saves a Cap project and MP4, and retains an assertion receipt. It does not capture the desktop, microphone, or other windows. Review and bind the native recipe, source commit, environment, and recorder before capture, then verify the export and uploaded playback before accepting the result.
+
 Apply the generated additive organization column before deploying application code. Existing organizations default to unrestricted sharing. Downloaded copies and already-issued temporary media URLs cannot be recalled.
