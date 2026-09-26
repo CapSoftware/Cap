@@ -164,7 +164,14 @@ export function Slider(
 
 	// Pause history when slider is being dragged
 	let resumeHistory: (() => void) | null = null;
-	onCleanup(() => resumeHistory?.());
+	const endHistoryPause = () => {
+		resumeHistory?.();
+		resumeHistory = null;
+	};
+	onCleanup(endHistoryPause);
+	// Kobalte only reports the end of a keyboard change on blur (and never for
+	// Home/End), which left history paused while a dragged slider kept focus.
+	createEventListener(window, "keyup", endHistoryPause);
 
 	const [thumbRef, setThumbRef] = createSignal<HTMLDivElement>();
 
@@ -198,8 +205,7 @@ export function Slider(
 				props.onChange?.(v);
 			}}
 			onChangeEnd={(e) => {
-				resumeHistory?.();
-				resumeHistory = null;
+				endHistoryPause();
 				props.onChangeEnd?.(e);
 			}}
 		>
