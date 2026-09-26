@@ -226,6 +226,7 @@ type TaskState = {
 	attempts: number;
 	dispatching?: boolean;
 	reattach?: boolean;
+	firstPart?: number;
 	duplicateOf?: string;
 	duplicated?: boolean;
 	/** Reserved by a busy slot ahead of time; not started until it reports progress. */
@@ -1183,6 +1184,7 @@ async function resumeJobs() {
 					state.attempts = task.attempt ?? 0;
 					state.worker = worker;
 					state.reattach = true;
+					if (task.kind === "video") state.firstPart = task.upload.firstPart;
 				}
 				if (duplicateOf) {
 					const original = job.tasks.get(duplicateOf);
@@ -1203,6 +1205,7 @@ async function resumeJobs() {
 				) {
 					state.attempts = 1;
 					state.reattach = true;
+					state.firstPart = job.chunks[state.task.chunk]?.firstPart;
 				}
 			}
 			if (job.hls) {
@@ -1293,6 +1296,7 @@ async function dispatchedTask(
 	// The journaled plan already reserves every chunk's first range (a resumed
 	// coordinator never reuses it), so first dispatches skip this write; it
 	// cost ~1 s of time to first segment on long exports.
+	state.firstPart = firstPart;
 	if (range === 0) return dispatched;
 	await journalPut(
 		journalKey(job.id, `dispatches/${chunk.index}/${range}.json`),
@@ -2199,9 +2203,15 @@ Bun.serve({
 			const state = job.tasks.get(taskId);
 			const plan =
 				state?.task.kind === "video" ? job.chunks[state.task.chunk] : undefined;
-			const report = plan
-				? checkSegmentReport(await request.json(), job.hls.prefix, plan)
-				: null;
+			const report =
+				plan && state?.firstPart !== undefined
+					? checkSegmentReport(
+							await request.json(),
+							job.hls.prefix,
+							plan,
+							state.firstPart,
+						)
+					: null;
 			if (!report) return new Response("invalid segment", { status: 400 });
 			job.hls.extradata ??= report.extradata || undefined;
 			let chunk = job.hls.segments.get(report.chunk);

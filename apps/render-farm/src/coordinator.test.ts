@@ -452,10 +452,12 @@ test("segment reports only list objects the reporting dispatch wrote", async () 
 	const original = videoState(j);
 	h.jobs.set(j.id, j);
 	await h.dispatchedTask(j, original);
-	const report = (key: string) =>
+	const hedge = videoState(j, true);
+	await h.dispatchedTask(j, hedge);
+	const report = (key: string, state = original) =>
 		h.fetch(
 			new Request(
-				`http://test/tasks/${encodeURIComponent(original.task.taskId)}/segment`,
+				`http://test/tasks/${encodeURIComponent(state.task.taskId)}/segment`,
 				{
 					method: "POST",
 					headers: {
@@ -475,9 +477,11 @@ test("segment reports only list objects the reporting dispatch wrote", async () 
 		);
 	expect((await report("media/private.mp4")).status).toBe(400);
 	expect((await report("hls/job/c0-p12-0.m4s")).status).toBe(400);
+	expect((await report("hls/job/c0-p2-0.m4s", hedge)).status).toBe(400);
 	expect(j.hls.segments.size).toBe(0);
+	expect((await report("hls/job/c0-p12-0.m4s", hedge)).status).toBe(200);
 	expect((await report("hls/job/c0-p2-0.m4s")).status).toBe(200);
-	expect(j.hls.segments.get(0)?.get(0)?.key).toBe("hls/job/c0-p2-0.m4s");
+	expect(j.hls.segments.get(0)?.get(0)?.key).toBe("hls/job/c0-p12-0.m4s");
 });
 
 test("job acknowledgement waits for a planning receipt and receipt-only jobs resume", async () => {

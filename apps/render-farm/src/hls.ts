@@ -47,19 +47,15 @@ export function segmentKey(
 }
 
 /**
- * A worker's segment report, accepted only for objects its own dispatch of
- * this chunk wrote: the coordinator presigns report keys into the playlist.
+ * A worker's segment report, accepted only for an object the reporting
+ * dispatch itself wrote: the coordinator presigns report keys into the
+ * playlist, and another copy's key may not exist yet.
  */
 export function checkSegmentReport(
 	report: unknown,
 	prefix: string,
-	chunk: {
-		index: number;
-		frames: [number, number];
-		firstPart: number;
-		partLimit: number;
-		dispatches: number;
-	},
+	chunk: { index: number; frames: [number, number] },
+	firstPart: number,
 ): SegmentReport | null {
 	if (!report || typeof report !== "object") return null;
 	const { index, frames, key, last, extradata } = report as Record<
@@ -84,11 +80,7 @@ export function checkSegmentReport(
 	) {
 		return null;
 	}
-	for (let range = 0; range < Math.max(chunk.dispatches, 1); range++) {
-		const firstPart = chunk.firstPart + range * chunk.partLimit;
-		if (key === segmentKey(prefix, chunk.index, firstPart, index)) {
-			return report as SegmentReport;
-		}
-	}
-	return null;
+	return key === segmentKey(prefix, chunk.index, firstPart, index)
+		? (report as SegmentReport)
+		: null;
 }
