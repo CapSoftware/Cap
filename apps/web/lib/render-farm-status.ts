@@ -44,6 +44,19 @@ export function awaitingUnknownRenderJob(
 	return Number.isFinite(started) && now - started < UNKNOWN_JOB_GRACE_MS;
 }
 
+// A render started when a recording finishes waits for an editor worker to
+// prepare the recording before its farm job exists.
+const PENDING_JOB_GRACE_MS = 30 * 60_000;
+
+/** Whether a recording render still being prepared should keep waiting. */
+export function awaitingPendingRenderJob(
+	save: Pick<RenderFarmSave, "startedAt">,
+	now: number,
+) {
+	const started = Date.parse(save.startedAt);
+	return Number.isFinite(started) && now - started < PENDING_JOB_GRACE_MS;
+}
+
 export function validRenderedOutput(output: RenderedOutput) {
 	return (
 		Number.isSafeInteger(output.width) &&
@@ -77,12 +90,17 @@ export function publishedRenderFarmUpdate(
 		return null;
 	}
 	const metadata: VideoMetadata = { ...(video.metadata ?? {}) };
-	delete metadata.desktopRecordingUpload;
-	delete metadata.summary;
-	delete metadata.chapters;
-	delete metadata.aiGenerationStatus;
-	Reflect.deleteProperty(metadata, "editProcessing");
-	Reflect.deleteProperty(metadata, "completedVideoEdit");
+	// A render of the untouched recording keeps its timing, so the transcript
+	// and AI output made from the upload still line up.
+	const edited = save.trigger !== "recording";
+	if (edited) {
+		delete metadata.desktopRecordingUpload;
+		delete metadata.summary;
+		delete metadata.chapters;
+		delete metadata.aiGenerationStatus;
+		Reflect.deleteProperty(metadata, "editProcessing");
+		Reflect.deleteProperty(metadata, "completedVideoEdit");
+	}
 	metadata.renderFarmSave = {
 		...save,
 		status: "published",
@@ -91,7 +109,7 @@ export function publishedRenderFarmUpdate(
 	return {
 		source: { type: video.source.type, outputKey: save.outputKey },
 		metadata,
-		transcriptionStatus: null,
+		...(edited ? { transcriptionStatus: null } : {}),
 		duration: output.durationSeconds,
 		width: output.width,
 		height: output.height,
@@ -120,4 +138,88 @@ export function renderSaveStatusFromMetadata(
 		};
 	}
 	return null;
+}
+
+type RenderFarmExport = NonNullable<
+	VideoMetadata["renderFarmExports"]
+>["items"][number];
+
+const MAX_KEPT_EXPORTS = 10;
+
+/** The export list with `item` added or replaced, newest first, bounded. */
+export function upsertRenderFarmExport(
+	items: readonly RenderFarmExport[] | undefined,
+	item: RenderFarmExport,
+) {
+	return [
+		item,
+		...(items ?? []).filter((existing) => existing.exportId !== item.exportId),
+	].slice(0, MAX_KEPT_EXPORTS);
+}
+
+/** How long a background export stays downloadable after it finishes. */
+export const RENDER_EXPORT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+export type RenderExportView = {
+	exportId: string;
+	state: "rendering" | "ready" | "error" | "expired";
+	fileName: string;
+	resolution: [number, number];
+	fps: number;
+	bytes: number | null;
+	startedAt: string;
+	completedAt: string | null;
+	error: string | null;
+};
+
+export function renderExportView(
+	item: RenderFarmExport,
+	now: number,
+): RenderExportView {
+	const completedAt = item.completedAt ? Date.parse(item.completedAt) : NaN;
+	const expired =
+		item.status === "ready" &&
+		(!Number.isFinite(completedAt) || now - completedAt > RENDER_EXPORT_TTL_MS);
+	return {
+		exportId: item.exportId,
+		state: expired ? "expired" : item.status,
+		fileName: item.fileName,
+		resolution: item.resolution,
+		fps: item.fps,
+		bytes: item.bytes ?? null,
+		startedAt: item.startedAt,
+		completedAt: item.completedAt ?? null,
+		error: item.status === "error" ? (item.error ?? "Export failed") : null,
+	};
+}
+
+/** The export a download link names, or the newest when it names none. */
+export function pickRenderExport(
+	exports: readonly RenderExportView[],
+	exportId: string | null | undefined,
+) {
+	return exportId
+		? (exports.find((item) => item.exportId === exportId) ?? null)
+		: (exports[0] ?? null);
+}
+
+/** A download name from the video title: safe on every OS, always .mp4. */
+export function renderExportFileName(title: string | null | undefined) {
+	const base = (title ?? "")
+		.replace(/\.mp4$/i, "")
+		.normalize("NFKD")
+		.replace(/[\u0300-\u036f]/g, "")
+		.replace(/[^A-Za-z0-9 ._-]+/g, " ")
+		.replace(/\s+/g, " ")
+		.trim()
+		.replace(/^[.\s-]+|[.\s-]+$/g, "")
+		.slice(0, 120)
+		.trim();
+	return `${base || "Cap Export"}.mp4`;
+}
+
+/** Content-Disposition for a download, with an RFC 5987 UTF-8 fallback. */
+export function attachmentDisposition(fileName: string) {
+	const ascii = fileName.replace(/[^\x20-\x7e]|["\\]/g, "_");
+	return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(fileName)}`;
 }

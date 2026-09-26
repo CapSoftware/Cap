@@ -21,15 +21,41 @@ export function renderFarmKeys(
 	ownerId: string,
 	videoId: string,
 	exportId: string,
+	output: "result" | "export" = "result",
 ) {
 	const root = `${ownerId}/${videoId}/`;
 	const folder = `${root}.recording/render/${exportId}`;
 	return {
 		root,
 		recording: `${folder}/project`,
-		outputKey: `${folder}/result.mp4`,
+		outputKey: `${folder}/${output}.mp4`,
 		hlsPrefix: `${folder}/hls`,
 	};
+}
+
+export type RenderFarmJobKind = "save" | "recording" | "export";
+
+/**
+ * The job reference the farm echoes in callbacks. Saves predate kinds and
+ * use the bare video id.
+ */
+export function renderFarmReference(kind: RenderFarmJobKind, videoId: string) {
+	return kind === "save" ? videoId : `${kind}:${videoId}`;
+}
+
+export function parseRenderFarmReference(
+	reference: string,
+): { kind: RenderFarmJobKind; videoId: string } | null {
+	const separator = reference.indexOf(":");
+	const kind = separator === -1 ? "save" : reference.slice(0, separator);
+	const videoId = separator === -1 ? reference : reference.slice(separator + 1);
+	if (
+		(kind !== "save" && kind !== "recording" && kind !== "export") ||
+		!/^[A-Za-z0-9_-]{1,64}$/.test(videoId)
+	) {
+		return null;
+	}
+	return { kind, videoId };
 }
 
 export function renderFarmTranscodeKey(

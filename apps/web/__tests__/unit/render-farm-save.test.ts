@@ -7,12 +7,20 @@ const env = vi.hoisted(() => ({
 const saves = vi.hoisted(() => ({
 	finalize: vi.fn(async () => "published" as const),
 	fail: vi.fn(async () => undefined),
+	clearRecording: vi.fn(async () => undefined),
+	finalizeExport: vi.fn(async () => "ready" as const),
+	failExport: vi.fn(async () => null),
 }));
 
 vi.mock("@cap/env", () => ({ serverEnv: () => env.value }));
 vi.mock("@/lib/render-farm-save", () => ({
 	finalizeRenderFarmSave: saves.finalize,
+	finalizeRenderFarmExport: saves.finalizeExport,
+	failRenderFarmExport: saves.failExport,
+}));
+vi.mock("@/lib/render-farm-records", () => ({
 	failRenderFarmSave: saves.fail,
+	clearRecordingRender: saves.clearRecording,
 }));
 
 import { POST } from "@/app/api/render-farm/callback/route";
@@ -81,6 +89,25 @@ describe("publishedRenderFarmUpdate", () => {
 		});
 	});
 
+	it("keeps transcript and AI output for a render of the untouched recording", () => {
+		const update = publishedRenderFarmUpdate(
+			{
+				...video,
+				metadata: {
+					...video.metadata,
+					renderFarmSave: { ...save, trigger: "recording" as const },
+				},
+			},
+			"job-1",
+			output,
+			new Date("2026-09-26T01:00:00.000Z"),
+		);
+		expect(update?.source.outputKey).toBe(save.outputKey);
+		expect(update?.metadata.summary).toBe("old summary");
+		expect(update?.metadata.chapters).toEqual(video.metadata.chapters);
+		expect(update).not.toHaveProperty("transcriptionStatus");
+	});
+
 	it("ignores superseded, repeated or invalid results", () => {
 		const now = new Date();
 		expect(publishedRenderFarmUpdate(video, "job-0", output, now)).toBeNull();
@@ -140,8 +167,7 @@ describe("render farm callback route", () => {
 			RENDER_FARM_TOKEN: "token",
 			RENDER_FARM_CALLBACK_SECRET: "callback-secret",
 		};
-		saves.finalize.mockClear();
-		saves.fail.mockClear();
+		for (const mock of Object.values(saves)) mock.mockClear();
 	});
 
 	it("is unavailable until the farm is configured", async () => {
@@ -180,7 +206,76 @@ describe("render farm callback route", () => {
 			error: "gpu fell over",
 		});
 		expect((await post(failed, sign(failed))).status).toBe(200);
-		expect(saves.fail).toHaveBeenCalledWith("video", "job-2", "gpu fell over");
+		expect(saves.fail).toHaveBeenCalledWith(
+			"video",
+			{ jobId: "job-2" },
+			"gpu fell over",
+		);
+	});
+
+	it("routes background exports and recording renders by reference kind", async () => {
+		const ready = JSON.stringify({
+			id: "job-3",
+			reference: "export:video",
+			status: "ready",
+			width: 1920,
+			height: 1080,
+			fps: 30,
+			durationSeconds: 20,
+			bytes: 1234,
+		});
+		expect((await post(ready, sign(ready))).status).toBe(200);
+		expect(saves.finalizeExport).toHaveBeenCalledWith("video", "job-3", output);
+		expect(saves.finalize).not.toHaveBeenCalled();
+
+		const exportFailed = JSON.stringify({
+			id: "job-4",
+			reference: "export:video",
+			status: "error",
+			error: "out of disk",
+		});
+		expect((await post(exportFailed, sign(exportFailed))).status).toBe(200);
+		expect(saves.failExport).toHaveBeenCalledWith(
+			"video",
+			"job-4",
+			"out of disk",
+		);
+
+		const recordingReady = JSON.stringify({
+			id: "job-5",
+			reference: "recording:video",
+			status: "ready",
+			width: 1920,
+			height: 1080,
+			fps: 30,
+			durationSeconds: 20,
+			bytes: 1234,
+		});
+		expect((await post(recordingReady, sign(recordingReady))).status).toBe(200);
+		expect(saves.finalize).toHaveBeenCalledWith("video", "job-5", output);
+
+		const recordingFailed = JSON.stringify({
+			id: "job-6",
+			reference: "recording:video",
+			status: "error",
+		});
+		expect((await post(recordingFailed, sign(recordingFailed))).status).toBe(
+			200,
+		);
+		expect(saves.clearRecording).toHaveBeenCalledWith("video", {
+			jobId: "job-6",
+		});
+		expect(saves.fail).not.toHaveBeenCalled();
+	});
+
+	it("rejects references it cannot route", async () => {
+		const body = JSON.stringify({
+			id: "job-7",
+			reference: "thumbnail:video",
+			status: "ready",
+		});
+		expect((await post(body, sign(body))).status).toBe(400);
+		expect(saves.finalize).not.toHaveBeenCalled();
 	});
 
 	it("asks the farm to retry when publishing fails", async () => {

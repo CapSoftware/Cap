@@ -143,13 +143,33 @@ export interface VideoMetadata {
 	renderFarmSave?: {
 		version: 1;
 		exportId: string;
+		/** Empty while a render started on recording completion is being prepared. */
 		jobId: string;
 		status: "rendering" | "error" | "published";
+		/** Absent for editor saves; "recording" renders the finished upload. */
+		trigger?: "recording";
 		startedAt: string;
 		outputKey: string;
 		hlsPrefix: string;
 		error?: string;
 		publishedAt?: string;
+	};
+	renderFarmExports?: {
+		version: 1;
+		items: {
+			exportId: string;
+			jobId: string;
+			status: "rendering" | "ready" | "error";
+			startedAt: string;
+			outputKey: string;
+			fileName: string;
+			resolution: [number, number];
+			fps: number;
+			bytes?: number;
+			completedAt?: string;
+			emailedAt?: string;
+			error?: string;
+		}[];
 	};
 	completedVideoEdit?: {
 		token: string;
