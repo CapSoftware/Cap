@@ -30,6 +30,20 @@ export const IDLE_RENDER_SAVE: RenderSaveStatus = {
 	error: null,
 };
 
+// A restarted coordinator reloads unfinished jobs from its journal shortly
+// after it starts answering, and renders finish within minutes; a job it
+// still does not know after this long is lost.
+const UNKNOWN_JOB_GRACE_MS = 15 * 60_000;
+
+/** Whether a save whose job the farm does not know should keep waiting. */
+export function awaitingUnknownRenderJob(
+	save: Pick<RenderFarmSave, "startedAt">,
+	now: number,
+) {
+	const started = Date.parse(save.startedAt);
+	return Number.isFinite(started) && now - started < UNKNOWN_JOB_GRACE_MS;
+}
+
 export function validRenderedOutput(output: RenderedOutput) {
 	return (
 		Number.isSafeInteger(output.width) &&

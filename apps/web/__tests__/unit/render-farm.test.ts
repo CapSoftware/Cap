@@ -14,6 +14,7 @@ import {
 	finishRenderManifest,
 	RenderProjectError,
 } from "@/lib/render-farm-project";
+import { awaitingUnknownRenderJob } from "@/lib/render-farm-status";
 
 describe("render farm callbacks", () => {
 	const body = JSON.stringify({ id: "job", status: "ready" });
@@ -347,6 +348,23 @@ describe("buildRenderProject", () => {
 		).not.toThrow();
 		expect(() => finishRenderManifest(build({}), new Map(), [])).toThrow(
 			RenderProjectError,
+		);
+	});
+});
+
+describe("awaitingUnknownRenderJob", () => {
+	const startedAt = "2026-09-26T12:00:00.000Z";
+	const at = (minutes: number) => Date.parse(startedAt) + minutes * 60_000;
+
+	it("waits while a restarted coordinator may still be reloading the job", () => {
+		expect(awaitingUnknownRenderJob({ startedAt }, at(1))).toBe(true);
+		expect(awaitingUnknownRenderJob({ startedAt }, at(14))).toBe(true);
+	});
+
+	it("gives up on a job the farm still does not know later", () => {
+		expect(awaitingUnknownRenderJob({ startedAt }, at(16))).toBe(false);
+		expect(awaitingUnknownRenderJob({ startedAt: "not a date" }, at(1))).toBe(
+			false,
 		);
 	});
 });

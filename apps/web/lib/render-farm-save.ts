@@ -17,6 +17,7 @@ import {
 	renderFarmFetch,
 } from "@/lib/render-farm";
 import {
+	awaitingUnknownRenderJob,
 	IDLE_RENDER_SAVE,
 	publishedRenderFarmUpdate,
 	type RenderedOutput,
@@ -171,6 +172,9 @@ export async function refreshRenderFarmSave(
 			exportId: save.exportId,
 			progress: 1,
 		};
+	}
+	if (job.state === "gone" && awaitingUnknownRenderJob(save, Date.now())) {
+		return rendering;
 	}
 	if (job.state === "error" || job.state === "gone") {
 		const error = job.error ?? "The export is no longer available";
