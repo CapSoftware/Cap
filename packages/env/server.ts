@@ -188,6 +188,19 @@ function createServerEnv() {
 				.optional()
 				.describe("JSON array of named, individually addressed editor workers"),
 			CAP_WEB_EDITOR_STUDIO_ENABLED: z.literal("enabled").optional(),
+			RENDER_FARM_URL: z
+				.string()
+				.url()
+				.optional()
+				.describe("HTTPS URL of the GPU render farm coordinator"),
+			RENDER_FARM_TOKEN: z
+				.string()
+				.optional()
+				.describe("Bearer token for the render farm coordinator"),
+			RENDER_FARM_CALLBACK_SECRET: z
+				.string()
+				.optional()
+				.describe("HMAC secret the render farm signs export callbacks with"),
 			MEDIA_SERVER_WEBHOOK_SECRET: z
 				.string()
 				.optional()

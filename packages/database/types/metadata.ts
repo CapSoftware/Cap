@@ -140,6 +140,17 @@ export interface VideoMetadata {
 			fps: number;
 		};
 	};
+	renderFarmSave?: {
+		version: 1;
+		exportId: string;
+		jobId: string;
+		status: "rendering" | "error" | "published";
+		startedAt: string;
+		outputKey: string;
+		hlsPrefix: string;
+		error?: string;
+		publishedAt?: string;
+	};
 	completedVideoEdit?: {
 		token: string;
 		startedAt: string;
