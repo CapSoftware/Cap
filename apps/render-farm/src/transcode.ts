@@ -33,7 +33,9 @@ export function transcodeArgs(
 		"-c:v",
 		encoder,
 		...(nvenc
-			? ["-preset", "p4", "-tune", "hq", "-rc", "vbr", "-cq", "19", "-b:v", "0"]
+			? // p1: NVENC is the bottleneck here; p4 took 1.8x as long on a 3K
+				// recording for ~11% smaller files at the same quality target.
+				["-preset", "p1", "-rc", "vbr", "-cq", "19", "-b:v", "0"]
 			: ["-preset", "veryfast", "-crf", "18"]),
 		"-bf",
 		"0",
