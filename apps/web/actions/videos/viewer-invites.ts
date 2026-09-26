@@ -5,7 +5,7 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { sendEmail } from "@cap/database/emails/config";
 import { VideoViewerInvite } from "@cap/database/emails/video-viewer-invite";
 import { nanoId } from "@cap/database/helpers";
-import { videos, videoViewerGrants } from "@cap/database/schema";
+import { organizations, videos, videoViewerGrants } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import type { Video } from "@cap/web-domain";
 import { and, eq, isNull } from "drizzle-orm";
@@ -18,8 +18,14 @@ async function getOwnedVideo(videoId: Video.VideoId) {
 	if (!user) throw new Error("Unauthorized");
 
 	const [video] = await db()
-		.select({ id: videos.id, name: videos.name, ownerId: videos.ownerId })
+		.select({
+			id: videos.id,
+			name: videos.name,
+			ownerId: videos.ownerId,
+			videoSharingRestrictedToOrg: organizations.videoSharingRestrictedToOrg,
+		})
 		.from(videos)
+		.innerJoin(organizations, eq(videos.orgId, organizations.id))
 		.where(eq(videos.id, videoId))
 		.limit(1);
 
@@ -49,8 +55,18 @@ export async function getVideoViewerGrants(videoId: Video.VideoId) {
 		.orderBy(videoViewerGrants.email);
 }
 
+export async function getVideoSharingPolicy(videoId: Video.VideoId) {
+	const { video } = await getOwnedVideo(videoId);
+	return { videoSharingRestrictedToOrg: video.videoSharingRestrictedToOrg };
+}
+
 export async function inviteVideoViewer(videoId: Video.VideoId, email: string) {
 	const { user, video } = await getOwnedVideo(videoId);
+	if (video.videoSharingRestrictedToOrg) {
+		throw new Error(
+			"Only organization members can view this recording. Invitations are disabled by your organization.",
+		);
+	}
 	const normalizedEmail = normalizeEmail(email);
 
 	const [existingGrant] = await db()

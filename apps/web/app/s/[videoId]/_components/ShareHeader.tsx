@@ -148,6 +148,7 @@ export const ShareHeader = ({
 	customDomain,
 	domainVerified,
 	allowedEmailDomain,
+	videoSharingRestrictedToOrg = false,
 	sharedOrganizations = [],
 	sharedSpaces = [],
 	viewerCount = 0,
@@ -163,6 +164,7 @@ export const ShareHeader = ({
 	customDomain?: string | null;
 	domainVerified?: boolean;
 	allowedEmailDomain?: string | null;
+	videoSharingRestrictedToOrg?: boolean;
 	sharedOrganizations?: { id: string; name: string }[];
 	viewerCount?: number;
 	userOrganizations?: { id: string; name: string }[];
@@ -512,6 +514,7 @@ export const ShareHeader = ({
 	const audience = describeShareAudience({
 		isPublic: Boolean(data.public),
 		allowedEmailDomain,
+		videoSharingRestrictedToOrg,
 		passwordProtected: effectivePasswordProtected,
 		audienceNames: [
 			...(sharedOrganizations ?? []).map((org) => org.name),
@@ -842,6 +845,7 @@ export const ShareHeader = ({
 					onSharingUpdated={handleSharingUpdated}
 					isPublic={data.public}
 					allowedEmailDomain={allowedEmailDomain}
+					videoSharingRestrictedToOrg={videoSharingRestrictedToOrg}
 					spacesData={spacesData}
 					hasPassword={passwordProtected}
 					inheritedPasswordSources={data.inheritedPasswordSources}

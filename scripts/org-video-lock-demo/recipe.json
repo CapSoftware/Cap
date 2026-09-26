@@ -1,0 +1,14 @@
+{
+	"version": 1,
+	"platform": "linux",
+	"snapshot": "cap-building-linux-v1",
+	"setup": [
+		"cap doctor --json",
+		"bun install --frozen-lockfile",
+		"bun x playwright install chromium",
+		"node scripts/org-video-lock-demo/prepare.mjs"
+	],
+	"start": "bun scripts/org-video-lock-demo/seed.ts && node scripts/org-video-lock-demo/start.mjs",
+	"ready": "node scripts/org-video-lock-demo/ready.mjs",
+	"walkthrough": "node scripts/org-video-lock-demo/walkthrough.mjs"
+}

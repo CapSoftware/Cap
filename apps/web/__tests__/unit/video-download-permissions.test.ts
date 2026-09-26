@@ -1,6 +1,11 @@
 import type { Organisation, User, Video } from "@cap/web-domain";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+const organizationAccess = vi.hoisted(() => ({ get: vi.fn() }));
+vi.mock("@cap/database/video-organization-access", () => ({
+	getVideoOrganizationAccess: organizationAccess.get,
+}));
+
 const schema = {
 	organizationMembers: { table: "organizationMembers" },
 	sharedVideos: { table: "sharedVideos" },
@@ -48,10 +53,37 @@ function call(userId: User.UserId) {
 
 describe("canUserDownloadVideo", () => {
 	beforeEach(() => {
+		organizationAccess.get.mockResolvedValue({
+			restricted: false,
+			allowed: true,
+		});
 		queued = [];
 		tablesRead.length = 0;
 	});
 
+	it("denies a former owner while organization-only access is enabled", async () => {
+		organizationAccess.get.mockResolvedValue({
+			restricted: true,
+			allowed: false,
+		});
+		expect(await call(OWNER)).toBe(false);
+	});
+	it("denies external share members while organization-only access is enabled", async () => {
+		organizationAccess.get.mockResolvedValue({
+			restricted: true,
+			allowed: false,
+		});
+		queued = [[{ organizationId: VIDEO_ORG }], [{ id: "external-member" }]];
+		expect(await call(OTHER)).toBe(false);
+		expect(tablesRead).toEqual([]);
+	});
+	it("allows an organization member while organization-only access is enabled", async () => {
+		organizationAccess.get.mockResolvedValue({
+			restricted: true,
+			allowed: true,
+		});
+		expect(await call(OTHER)).toBe(true);
+	});
 	it("allows the owner without querying shares", async () => {
 		expect(await call(OWNER)).toBe(true);
 		expect(tablesRead).toEqual([]);

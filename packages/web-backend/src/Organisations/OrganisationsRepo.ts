@@ -75,25 +75,21 @@ export class OrganisationsRepo extends Effect.Service<OrganisationsRepo>()(
 								})),
 							),
 						),
-				allowedEmailDomain: (orgId: Organisation.OrganisationId) =>
+				videoSharingSettings: (orgId: Organisation.OrganisationId) =>
 					db
 						.use((db) =>
 							db
 								.select({
 									allowedEmailDomain: Db.organizations.allowedEmailDomain,
+									videoSharingRestrictedToOrg:
+										Db.organizations.videoSharingRestrictedToOrg,
+									tombstoneAt: Db.organizations.tombstoneAt,
 								})
 								.from(Db.organizations)
 								.where(Dz.eq(Db.organizations.id, orgId))
 								.limit(1),
 						)
-						.pipe(
-							Effect.map(Array.get(0)),
-							Effect.map(
-								Option.flatMap((row) =>
-									Option.fromNullable(row.allowedEmailDomain?.trim() || null),
-								),
-							),
-						),
+						.pipe(Effect.map(Array.get(0))),
 			};
 		}),
 		dependencies: [Database.Default],

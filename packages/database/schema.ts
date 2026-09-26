@@ -228,6 +228,9 @@ export const organizations = mysqlTable(
 		defaultVideoVisibility: varchar("defaultVideoVisibility", {
 			length: 7,
 		}).$type<"private">(),
+		videoSharingRestrictedToOrg: boolean("videoSharingRestrictedToOrg")
+			.notNull()
+			.default(false),
 		customDomain: varchar("customDomain", { length: 255 }),
 		domainVerified: timestamp("domainVerified"),
 		settings: json("settings").$type<{

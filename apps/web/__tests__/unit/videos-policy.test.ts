@@ -52,6 +52,8 @@ function makeDeps(config: {
 	spaceMembership?: boolean;
 	allowedEmailDomain?: Option.Option<string>;
 	viewerGrantEmail?: string;
+	organizationOnly?: boolean;
+	owningOrgMember?: boolean;
 }): VideosPolicyDeps {
 	const {
 		video,
@@ -61,6 +63,8 @@ function makeDeps(config: {
 		spaceMembership = false,
 		allowedEmailDomain = Option.none<string>(),
 		viewerGrantEmail,
+		organizationOnly = false,
+		owningOrgMember = false,
 	} = config;
 
 	return {
@@ -74,7 +78,20 @@ function makeDeps(config: {
 		orgsRepo: {
 			membershipForVideo: () =>
 				Effect.succeed(orgMembership ? [{ membershipId: "mem-1" }] : []),
-			allowedEmailDomain: () => Effect.succeed(allowedEmailDomain),
+			videoSharingSettings: () =>
+				Effect.succeed(
+					Option.some({
+						allowedEmailDomain: Option.getOrNull(allowedEmailDomain),
+						videoSharingRestrictedToOrg: organizationOnly,
+						tombstoneAt: null,
+					}),
+				),
+			membership: (_, orgId) =>
+				Effect.succeed(
+					owningOrgMember && orgId === TEST_ORG_ID
+						? Option.some({ membershipId: "owning-org-member" })
+						: Option.none(),
+				),
 		},
 		spacesRepo: {
 			membershipForVideo: () =>
@@ -421,6 +438,22 @@ describe("VideosPolicy.canView", () => {
 
 	describe("public video WITH email restriction (comma-separated)", () => {
 		const restriction = "company.com, partner.org, vip@gmail.com";
+
+		it.each([
+			["member,team@example.invalid", "member,team@example.invalid", "denied"],
+			["member,team@example.invalid", "example.invalid", "allowed"],
+			["team@example.invalid", "member,team@example.invalid", "allowed"],
+		])(
+			"checks complete restriction entries for %s against %s",
+			async (email, savedRestriction, expected) => {
+				const deps = makeDeps({
+					video: makeVideo({ public: true }),
+					allowedEmailDomain: Option.some(savedRestriction),
+				});
+
+				expect(await runCanView(deps, makeUser(email))).toBe(expected);
+			},
+		);
 
 		it("allows user matching first domain", async () => {
 			const deps = makeDeps({
@@ -786,5 +819,85 @@ describe("VideosPolicy.canViewLoaded", () => {
 			),
 		).toBe("denied");
 		expect(getByIdCalls).toBe(0);
+	});
+});
+
+describe("organization-only access", () => {
+	for (const loaded of [false, true]) {
+		for (const isPublic of [false, true]) {
+			for (const outsider of [
+				"anonymous",
+				"invited",
+				"shared-org",
+				"shared-space",
+				"matching-email",
+				"former-owner",
+			] as const) {
+				it(`denies ${outsider} with public=${isPublic} and loaded=${loaded}`, async () => {
+					const video = makeVideo({ public: isPublic });
+					const deps = makeDeps({
+						video,
+						organizationOnly: true,
+						viewerGrantEmail: "viewer@example.com",
+						orgMembership: outsider === "shared-org",
+						spaceMembership: outsider === "shared-space",
+						allowedEmailDomain: Option.some("example.com"),
+						password: Option.some("password"),
+						spacePasswords: ["space-password"],
+					});
+					const user =
+						outsider === "anonymous"
+							? noUser
+							: makeUser(
+									"viewer@example.com",
+									outsider === "former-owner"
+										? TEST_OWNER_ID
+										: TEST_OTHER_USER_ID,
+								);
+					const result = loaded
+						? await runCanViewLoaded(
+								deps,
+								video,
+								Option.some("password"),
+								user,
+								["password", "space-password"],
+							)
+						: await runCanView(deps, user, ["password", "space-password"]);
+					expect(result).toBe("denied");
+				});
+			}
+			it(`allows a current member and overrides individual access with public=${isPublic} and loaded=${loaded}`, async () => {
+				const video = makeVideo({ public: isPublic });
+				const deps = makeDeps({
+					video,
+					organizationOnly: true,
+					owningOrgMember: true,
+					allowedEmailDomain: Option.some("other.example"),
+					password: Option.some("password"),
+					spacePasswords: ["space-password"],
+				});
+				const user = makeUser("member@example.com");
+				expect(
+					loaded
+						? await runCanViewLoaded(deps, video, Option.some("password"), user)
+						: await runCanView(deps, user),
+				).toBe("allowed");
+			});
+		}
+	}
+	it("restores the original policy when the lock is disabled", async () => {
+		const config = {
+			video: makeVideo({ public: false }),
+			owningOrgMember: true,
+		};
+		expect(
+			await runCanView(
+				makeDeps({ ...config, organizationOnly: true }),
+				makeUser("member@example.com"),
+			),
+		).toBe("allowed");
+		expect(
+			await runCanView(makeDeps(config), makeUser("member@example.com")),
+		).toBe("denied");
 	});
 });

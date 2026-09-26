@@ -10,6 +10,7 @@ import { sendEmail } from "@cap/database/emails/config";
 import { OrganizationInvite } from "@cap/database/emails/organization-invite";
 import { nanoId, nanoIdLong } from "@cap/database/helpers";
 import * as Db from "@cap/database/schema";
+import { organizationVideoAccessCondition } from "@cap/database/video-organization-access";
 import { getNewVideoPublic } from "@cap/database/video-sharing-default";
 import { buildEnv, serverEnv } from "@cap/env";
 import {
@@ -770,6 +771,7 @@ const listCaps = Effect.fn("Agent.listCaps")(function* (
 				)
 			: undefined;
 		const filters = [
+			organizationVideoAccessCondition(principal.id),
 			params.scope === "shared"
 				? ne(Db.videos.ownerId, principal.id)
 				: undefined,

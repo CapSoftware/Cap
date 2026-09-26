@@ -6,6 +6,7 @@ import { sendEmail } from "@cap/database/emails/config";
 import { OTPEmail } from "@cap/database/emails/otp-email";
 import { nanoId } from "@cap/database/helpers";
 import * as Db from "@cap/database/schema";
+import { organizationVideoAccessCondition } from "@cap/database/video-organization-access";
 import { getNewVideoPublic } from "@cap/database/video-sharing-default";
 import { serverEnv } from "@cap/env";
 import { userIsPro } from "@cap/utils";
@@ -59,6 +60,10 @@ import {
 } from "@/lib/account-deletion-request";
 import { queueDesktopSegmentsFinalization } from "@/lib/desktop-segments-finalization";
 import {
+	type MobileCapRow as CapRow,
+	toMobileCapSummary,
+} from "@/lib/mobile-cap-summary";
+import {
 	resolveMobileRequestOrigin,
 	resolveMobileWebResourceUrl,
 } from "@/lib/mobile-request-origin";
@@ -71,39 +76,6 @@ import { importLoomVideoWorkflow } from "@/workflows/import-loom-video";
 
 export const dynamic = "force-dynamic";
 
-type CapRow = {
-	id: Video.VideoId;
-	ownerId: User.UserId;
-	ownerPreferences: unknown;
-	name: string;
-	createdAt: Date;
-	updatedAt: Date;
-	ownerName: string | null;
-	duration: number | null;
-	folderId: Folder.FolderId | null;
-	public: boolean;
-	hasPassword: boolean;
-	hasInheritedPassword: boolean;
-	commentCount: number;
-	reactionCount: number;
-	uploadVideoId: Video.VideoId | null;
-	uploadUploaded: number | null;
-	uploadTotal: number | null;
-	uploadPhase: Video.UploadPhase | null;
-	processingProgress: number | null;
-	processingMessage: string | null;
-	processingError: string | null;
-	metadata: unknown;
-	transcriptionStatus:
-		| "PROCESSING"
-		| "COMPLETE"
-		| "ERROR"
-		| "SKIPPED"
-		| "NO_AUDIO"
-		| null;
-};
-
-type MobileCapSummary = (typeof Mobile.MobileCapSummary)["Type"];
 type MobileFolder = (typeof Mobile.MobileFolder)["Type"];
 type MobileOrganization = (typeof Mobile.MobileOrganization)["Type"];
 type MobileSpace = (typeof Mobile.MobileSpace)["Type"];
@@ -317,53 +289,6 @@ const getFileExtension = (input: MobileUploadCreateInput) => {
 const getUploadTitle = (fileName: string) => {
 	const title = fileName.replace(/\.[^/.]+$/, "").trim();
 	return title.length > 0 ? title : "Mobile Upload";
-};
-
-const toMobileCapSummary = (
-	row: CapRow,
-	viewCount: number,
-	publicOrigin: string,
-	currentUserId: User.UserId,
-): MobileCapSummary => {
-	const hasThumbnail =
-		(!row.uploadVideoId || row.uploadPhase === "complete") &&
-		(row.ownerId === currentUserId ||
-			(!row.hasPassword && !row.hasInheritedPassword));
-	const thumbnailVersion = row.updatedAt.getTime();
-	return {
-		id: row.id,
-		ownerId: row.ownerId,
-		shareUrl: `${publicOrigin}/s/${row.id}`,
-		title: row.name,
-		createdAt: toIsoString(row.createdAt),
-		updatedAt: toIsoString(row.updatedAt),
-		ownerName: row.ownerName ?? "",
-		durationSeconds: row.duration,
-		thumbnailUrl: hasThumbnail
-			? `${publicOrigin}/api/mobile/caps/${encodeURIComponent(row.id)}/thumbnail?v=${thumbnailVersion}`
-			: null,
-		thumbnailCacheKey: hasThumbnail
-			? `cap-thumbnail:${row.id}:${thumbnailVersion}`
-			: null,
-		folderId: row.folderId,
-		public: row.public,
-		protected: row.hasPassword || row.hasInheritedPassword,
-		viewCount,
-		commentCount: Number(row.commentCount),
-		reactionCount: Number(row.reactionCount),
-		upload:
-			row.uploadVideoId && row.uploadPhase !== "complete"
-				? {
-						uploaded: Number(row.uploadUploaded ?? 0),
-						total: Number(row.uploadTotal ?? 0),
-						phase: row.uploadPhase ?? "uploading",
-						processingProgress: Number(row.processingProgress ?? 0),
-						processingMessage: row.processingMessage,
-						processingError: row.processingError,
-					}
-				: null,
-		ownedByCurrentUser: row.ownerId === currentUserId,
-	};
 };
 
 const withMappedErrors = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
@@ -1383,6 +1308,7 @@ const getCapLocations = Effect.fn("Mobile.getCapLocations")(function* ({
 			? eq(Db.videos.folderId, folderId)
 			: isNull(Db.videos.folderId);
 		const collectionWhereClause = and(
+			organizationVideoAccessCondition(user.id),
 			eq(Db.videos.ownerId, user.id),
 			eq(Db.videos.orgId, user.activeOrganizationId),
 			isNull(Db.organizations.tombstoneAt),
@@ -1425,6 +1351,7 @@ const getCapLocations = Effect.fn("Mobile.getCapLocations")(function* ({
 			? eq(Db.sharedVideos.folderId, folderId)
 			: isNull(Db.sharedVideos.folderId);
 		const collectionWhereClause = and(
+			organizationVideoAccessCondition(user.id),
 			eq(Db.sharedVideos.organizationId, user.activeOrganizationId),
 			isNull(Db.organizations.tombstoneAt),
 		);
@@ -1473,6 +1400,7 @@ const getCapLocations = Effect.fn("Mobile.getCapLocations")(function* ({
 		? eq(Db.spaceVideos.folderId, folderId)
 		: isNull(Db.spaceVideos.folderId);
 	const collectionWhereClause = and(
+		organizationVideoAccessCondition(user.id),
 		eq(Db.spaceVideos.spaceId, space.id),
 		isNull(Db.organizations.tombstoneAt),
 	);
@@ -1526,6 +1454,7 @@ const getCapRows = Effect.fn("Mobile.getCapRows")(function* (
 	if (locations.length === 0) return [];
 
 	const database = yield* Database;
+	const user = yield* CurrentUser;
 	const folderIds = new Map(
 		locations.map((location) => [location.id, location.folderId]),
 	);
@@ -1552,6 +1481,8 @@ const getCapRows = Effect.fn("Mobile.getCapRows")(function* (
 				duration: Db.videos.duration,
 				folderId: Db.videos.folderId,
 				public: Db.videos.public,
+				videoSharingRestrictedToOrg:
+					Db.organizations.videoSharingRestrictedToOrg,
 				hasPassword: sql<boolean>`${Db.videos.password} IS NOT NULL`.mapWith(
 					Boolean,
 				),
@@ -1569,13 +1500,17 @@ const getCapRows = Effect.fn("Mobile.getCapRows")(function* (
 				transcriptionStatus: Db.videos.transcriptionStatus,
 			})
 			.from(Db.videos)
+			.innerJoin(Db.organizations, eq(Db.videos.orgId, Db.organizations.id))
 			.leftJoin(Db.comments, eq(Db.videos.id, Db.comments.videoId))
 			.leftJoin(Db.users, eq(Db.videos.ownerId, Db.users.id))
 			.leftJoin(Db.videoUploads, eq(Db.videos.id, Db.videoUploads.videoId))
 			.where(
-				inArray(
-					Db.videos.id,
-					locations.map((location) => location.id),
+				and(
+					inArray(
+						Db.videos.id,
+						locations.map((location) => location.id),
+					),
+					organizationVideoAccessCondition(user.id),
 				),
 			)
 			.groupBy(
@@ -1588,6 +1523,7 @@ const getCapRows = Effect.fn("Mobile.getCapRows")(function* (
 				Db.videos.duration,
 				Db.videos.folderId,
 				Db.videos.public,
+				Db.organizations.videoSharingRestrictedToOrg,
 				Db.videos.password,
 				Db.videoUploads.videoId,
 				Db.videoUploads.uploaded,
@@ -1819,6 +1755,8 @@ const assertMobileVideoAccess = Effect.fn("Mobile.assertVideoAccess")(
 			return db
 				.select({
 					ownerId: Db.videos.ownerId,
+					videoSharingRestrictedToOrg:
+						Db.organizations.videoSharingRestrictedToOrg,
 					ownerPreferences: Db.users.preferences,
 					hasPassword: sql<boolean>`${Db.videos.password} IS NOT NULL`.mapWith(
 						Boolean,
@@ -1832,8 +1770,14 @@ const assertMobileVideoAccess = Effect.fn("Mobile.assertVideoAccess")(
 					),
 				})
 				.from(Db.videos)
+				.innerJoin(Db.organizations, eq(Db.videos.orgId, Db.organizations.id))
 				.leftJoin(Db.users, eq(Db.videos.ownerId, Db.users.id))
-				.where(eq(Db.videos.id, videoId))
+				.where(
+					and(
+						eq(Db.videos.id, videoId),
+						organizationVideoAccessCondition(user.id),
+					),
+				)
 				.limit(1);
 		});
 
@@ -1844,6 +1788,8 @@ const assertMobileVideoAccess = Effect.fn("Mobile.assertVideoAccess")(
 		) {
 			return yield* Effect.fail(new HttpApiError.NotFound());
 		}
+		if (row.videoSharingRestrictedToOrg)
+			return { ...row, hasPassword: false, hasInheritedPassword: false };
 		if (row.ownerId === user.id) return row;
 		if (!row.sharedWithOrganization && !row.sharedWithAccessibleSpace) {
 			return yield* Effect.fail(new HttpApiError.NotFound());
@@ -1931,6 +1877,8 @@ const getCapById = Effect.fn("Mobile.getCapById")(function* (
 	if (!row) return yield* Effect.fail(new HttpApiError.NotFound());
 	const capRow: CapRow = {
 		...row,
+		videoSharingRestrictedToOrg: access.videoSharingRestrictedToOrg,
+		hasPassword: access.hasPassword,
 		hasInheritedPassword: access.hasInheritedPassword,
 		ownerPreferences: access.ownerPreferences,
 	};
