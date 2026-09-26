@@ -178,3 +178,28 @@ test("shares browser source bootstrap across editor metadata and playback catalo
 		globalThis.fetch = originalFetch;
 	}
 });
+
+test("carries the owner's saved style for a project nobody has edited", () => {
+	const value = bootstrap();
+	const style = {
+		version: 1,
+		background: { padding: 12, crop: { size: { x: 1, y: 1 } } },
+	};
+	const sources = parseBrowserEditorSources(
+		{ ...value, sources: { ...value.sources, defaultStyle: style } },
+		"recording-1",
+	);
+	expect(sources.defaultStyle).toEqual({
+		version: 1,
+		background: { padding: 12 },
+	});
+	expect(
+		parseBrowserEditorSources(bootstrap(), "recording-1").defaultStyle,
+	).toBeNull();
+	expect(
+		parseBrowserEditorSources(
+			{ ...value, sources: { ...value.sources, defaultStyle: { version: 9 } } },
+			"recording-1",
+		).defaultStyle,
+	).toBeNull();
+});

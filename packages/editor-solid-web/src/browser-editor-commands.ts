@@ -1,3 +1,4 @@
+import { applyDefaultStyle } from "@cap/editor-cap-bundle/default-style";
 import type {
 	Audio,
 	ProjectRecordingsMeta,
@@ -225,9 +226,15 @@ export class BrowserEditorCommands {
 		const [media, config] = await Promise.all([
 			this.media(sources),
 			sources.projectConfig ??
-				loadBrowserRenderer().then((module): unknown =>
-					JSON.parse(module.default_project_config_json()),
-				),
+				loadBrowserRenderer().then((module): unknown => {
+					const defaults: unknown = JSON.parse(
+						module.default_project_config_json(),
+					);
+					const project = record(defaults);
+					return project && sources.defaultStyle
+						? applyDefaultStyle(project, sources.defaultStyle)
+						: defaults;
+				}),
 		]);
 		const project = record(config);
 		if (!project) throw new Error("Editor project configuration is invalid");

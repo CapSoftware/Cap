@@ -1,3 +1,7 @@
+import {
+	type EditorDefaultStyle,
+	parseDefaultStyle,
+} from "@cap/editor-cap-bundle/default-style";
 import type {
 	BrowserVideoSource,
 	BrowserVideoSourceProvider,
@@ -21,6 +25,7 @@ export type BrowserEditorSources = {
 	title: string;
 	captionsEnabled: boolean;
 	projectConfig: unknown;
+	defaultStyle: EditorDefaultStyle | null;
 	displayHasAudio: boolean;
 	mic: BrowserAudioTrack | null;
 	systemAudio: BrowserAudioTrack | null;
@@ -302,6 +307,7 @@ export function parseBrowserEditorSources(
 		title: sources.title,
 		captionsEnabled: sources.captionsEnabled,
 		projectConfig: sources.projectConfig ?? null,
+		defaultStyle: parseDefaultStyle(sources.defaultStyle),
 		displayHasAudio: sources.displayHasAudio === true,
 		mic,
 		systemAudio,

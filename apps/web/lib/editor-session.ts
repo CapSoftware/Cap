@@ -1,6 +1,10 @@
 import { users, videoEdits, videos, videoUploads } from "@cap/database/schema";
 import type { VideoEditSpec } from "@cap/database/types";
 import { CAP_BUNDLE_CONTENT_TYPE } from "@cap/editor-cap-bundle";
+import {
+	type EditorDefaultStyle,
+	parseDefaultStyle,
+} from "@cap/editor-cap-bundle/default-style";
 import { serverEnv } from "@cap/env";
 import { userIsPro } from "@cap/utils";
 import { Database, Storage } from "@cap/web-backend";
@@ -129,7 +133,13 @@ export const loadEligibleEditorVideo = Effect.fn("loadEligibleEditorVideo")(
 		if (requirePro && !captionsEnabled) {
 			return yield* new HttpApiError.Forbidden();
 		}
-		return { ...record.video, captionsEnabled };
+		return {
+			...record.video,
+			captionsEnabled,
+			defaultStyle: parseDefaultStyle(
+				record.owner.preferences?.editorDefaultStyle,
+			),
+		};
 	},
 );
 
@@ -256,7 +266,10 @@ function validSavedAsset(asset: unknown, video: DbVideo) {
 
 export const getSignedEditorSources = Effect.fn("getSignedEditorSources")(
 	function* (
-		video: DbVideo & { captionsEnabled?: boolean },
+		video: DbVideo & {
+			captionsEnabled?: boolean;
+			defaultStyle?: EditorDefaultStyle | null;
+		},
 		audience: "worker" | "browser" = "worker",
 	) {
 		const database = yield* Database;
@@ -679,6 +692,9 @@ export const getSignedEditorSources = Effect.fn("getSignedEditorSources")(
 							? restoredProject
 							: stripEditorCaptionContent(restoredProject),
 					}
+				: {}),
+			...(!restoredProject && audience === "browser" && video.defaultStyle
+				? { defaultStyle: video.defaultStyle }
 				: {}),
 			...(!restoredProject && video.metadata?.webEditorAudioDefault
 				? {
