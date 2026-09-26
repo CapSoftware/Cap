@@ -1,3 +1,5 @@
+import { parseVttCueText } from "@/lib/transcript-vtt";
+
 export function getActiveCaptionText(
 	activeCues: TextTrackCueList | null | undefined,
 ): string {
@@ -20,5 +22,7 @@ export function getActiveCaptionText(
 		}
 	}
 
-	return selectedCue?.text.replace(/<[^>]*>/g, "") ?? "";
+	if (!selectedCue) return "";
+	const { text, speaker } = parseVttCueText(selectedCue.text);
+	return speaker ? `Speaker ${speaker}: ${text}` : text;
 }

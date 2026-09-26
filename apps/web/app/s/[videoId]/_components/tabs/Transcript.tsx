@@ -22,7 +22,12 @@ import {
 } from "@/actions/videos/translation-languages";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
 import { formatTranscriptAsParagraphs } from "@/lib/transcript-text";
-import { normalizeTranscriptCueText } from "@/lib/transcript-vtt";
+import {
+	formatVttCueText,
+	normalizeTranscriptCueText,
+	parseVTT,
+	type TranscriptEntry,
+} from "@/lib/transcript-vtt";
 import type { VideoData } from "../../types";
 import { type CaptionLanguage, useCaptionContext } from "../CaptionContext";
 
@@ -31,116 +36,6 @@ interface TranscriptProps {
 	onSeek?: (time: number) => void;
 	user?: { id: string } | null;
 }
-
-interface TranscriptEntry {
-	id: number;
-	timestamp: string;
-	text: string;
-	startTime: number;
-	endTime: number;
-}
-
-const parseVTT = (vttContent: string): TranscriptEntry[] => {
-	const lines = vttContent.split("\n");
-	const entries: TranscriptEntry[] = [];
-	let currentEntry: Partial<TranscriptEntry & { startTime: number }> = {};
-	let currentId = 0;
-
-	const timeToSeconds = (timeStr: string): number | null => {
-		const parts = timeStr.split(":");
-		if (parts.length !== 3) return null;
-
-		const [hoursStr, minutesStr, secondsStr] = parts;
-		if (!hoursStr || !minutesStr || !secondsStr) return null;
-
-		const hours = parseInt(hoursStr, 10);
-		const minutes = parseInt(minutesStr, 10);
-		const seconds = parseInt(secondsStr, 10);
-
-		if (Number.isNaN(hours) || Number.isNaN(minutes) || Number.isNaN(seconds))
-			return null;
-
-		return hours * 3600 + minutes * 60 + seconds;
-	};
-
-	const parseTimestamp = (
-		timestamp: string,
-	): { mm_ss: string; totalSeconds: number } | null => {
-		const parts = timestamp.split(":");
-		if (parts.length !== 3) return null;
-
-		const [hoursStr, minutesStr, secondsWithMs] = parts;
-		if (!hoursStr || !minutesStr || !secondsWithMs) return null;
-
-		const secondsPart = secondsWithMs.split(".")[0];
-		if (!secondsPart) return null;
-
-		const totalSeconds = timeToSeconds(
-			`${hoursStr}:${minutesStr}:${secondsPart}`,
-		);
-		if (totalSeconds === null) return null;
-
-		const fractionPart = secondsWithMs.split(".")[1];
-		const fraction = fractionPart ? Number(`0.${fractionPart}`) : 0;
-
-		return {
-			mm_ss: `${minutesStr}:${secondsPart}`,
-			totalSeconds: totalSeconds + (Number.isFinite(fraction) ? fraction : 0),
-		};
-	};
-
-	for (let i = 0; i < lines.length; i++) {
-		const line = lines[i];
-		if (!line?.trim()) continue;
-
-		const trimmedLine = line.trim();
-
-		if (trimmedLine === "WEBVTT") continue;
-
-		if (/^\d+$/.test(trimmedLine)) {
-			currentId = parseInt(trimmedLine, 10);
-			continue;
-		}
-
-		if (trimmedLine.includes("-->")) {
-			const [startTimeStr, endTimeStr] = trimmedLine.split(" --> ");
-			if (!startTimeStr || !endTimeStr) continue;
-
-			const startTimestamp = parseTimestamp(startTimeStr);
-			const endTimestamp = parseTimestamp(endTimeStr);
-			if (startTimestamp) {
-				currentEntry = {
-					id: currentId,
-					timestamp: startTimestamp.mm_ss,
-					startTime: startTimestamp.totalSeconds,
-					endTime: endTimestamp?.totalSeconds ?? startTimestamp.totalSeconds,
-				};
-			}
-			continue;
-		}
-
-		if (currentEntry.timestamp && !currentEntry.text) {
-			const textContent =
-				trimmedLine.startsWith('"') && trimmedLine.endsWith('"')
-					? trimmedLine.slice(1, -1)
-					: trimmedLine;
-
-			currentEntry.text = textContent;
-			if (
-				currentEntry.id !== undefined &&
-				currentEntry.timestamp &&
-				currentEntry.text &&
-				currentEntry.startTime !== undefined
-			) {
-				entries.push(currentEntry as TranscriptEntry);
-			}
-			currentEntry = {};
-		}
-	}
-
-	const sortedEntries = entries.sort((a, b) => a.startTime - b.startTime);
-	return sortedEntries;
-};
 
 /** Module-level so the last live transcript survives component remounts and
  * router refreshes during the live→canonical handoff. */
@@ -428,7 +323,10 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 
 	const formatTranscriptForClipboard = (entries: TranscriptEntry[]): string => {
 		return entries
-			.map((entry) => `[${entry.timestamp}] ${entry.text}`)
+			.map(
+				(entry) =>
+					`[${entry.timestamp}] ${entry.speaker ? `Speaker ${entry.speaker}: ` : ""}${entry.text}`,
+			)
 			.join("\n\n");
 	};
 
@@ -438,7 +336,8 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 		const vttEntries = entries.map((entry, index) => {
 			const startSeconds = entry.startTime;
 			const nextEntry = entries[index + 1];
-			const endSeconds = nextEntry ? nextEntry.startTime : startSeconds + 3;
+			const endSeconds =
+				entry.endTime ?? (nextEntry ? nextEntry.startTime : startSeconds + 3);
 
 			const formatTime = (seconds: number): string => {
 				const hours = Math.floor(seconds / 3600);
@@ -455,7 +354,7 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 
 			return `${entry.id}\n${formatTime(startSeconds)} --> ${formatTime(
 				endSeconds,
-			)}\n${entry.text}\n`;
+			)}\n${formatVttCueText(entry.text, entry.speaker)}\n`;
 		});
 
 		return vttHeader + vttEntries.join("\n");
@@ -565,6 +464,11 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 									{entry.timestamp}
 								</span>
 								<span className="min-w-0 flex-1 text-[13px] leading-[22px] text-gray-11">
+									{entry.speaker && (
+										<span className="block text-[11px] font-semibold text-gray-12">
+											Speaker {entry.speaker}
+										</span>
+									)}
 									{entry.text}
 								</span>
 							</button>
@@ -963,6 +867,11 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 											{entry.timestamp}
 										</span>
 										<span className="min-w-0 flex-1 text-[13px] leading-[22px] text-gray-11">
+											{entry.speaker && (
+												<span className="block text-[11px] font-semibold text-gray-12">
+													Speaker {entry.speaker}
+												</span>
+											)}
 											{entry.text}
 										</span>
 									</button>
