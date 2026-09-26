@@ -74,6 +74,44 @@ export function validateJobRequest(body: unknown): JobRequest | string {
 	) {
 		return "duplicateStragglers must be a boolean";
 	}
+	const sourceRoot = request.sourceRoot;
+	if (sourceRoot !== undefined) {
+		if (
+			!isKey(sourceRoot, { trailingSlash: true }) ||
+			!sourceRoot.endsWith("/") ||
+			!recording.startsWith(sourceRoot)
+		) {
+			return "sourceRoot must be a folder containing the recording";
+		}
+	}
+	const scope = typeof sourceRoot === "string" ? sourceRoot : `${recording}/`;
+	const output = request.output;
+	if (output !== undefined) {
+		const { key, hlsPrefix } = (output ?? {}) as Record<string, unknown>;
+		if (
+			!output ||
+			typeof output !== "object" ||
+			!isKey(key) ||
+			!key.endsWith(".mp4") ||
+			!key.startsWith(scope) ||
+			(hlsPrefix !== undefined &&
+				(!isKey(hlsPrefix) || !hlsPrefix.startsWith(scope)))
+		) {
+			return "output must name an .mp4 key and HLS prefix inside the source folder";
+		}
+	}
+	if (
+		request.callbackUrl !== undefined &&
+		!isCallbackUrl(request.callbackUrl)
+	) {
+		return "callbackUrl must be an https URL";
+	}
+	if (
+		request.reference !== undefined &&
+		(typeof request.reference !== "string" || request.reference.length > 200)
+	) {
+		return "reference must be a string of at most 200 characters";
+	}
 	return request as JobRequest;
 }
 
@@ -126,27 +164,67 @@ export function checkManifestBounds(
 	for (const file of files) {
 		if (!file || typeof file !== "object")
 			return "manifest entry is not an object";
-		const { path, key, size } = file as Record<string, unknown>;
+		const { path, key, size, transcodeFrom } = file as Record<string, unknown>;
 		if (typeof path !== "string" || path.length === 0 || path.length > 1024) {
 			return "manifest paths must be strings of 1 to 1024 characters";
 		}
 		if (key !== undefined && (typeof key !== "string" || key.length > 1024)) {
 			return `manifest key for ${path} must be a string of at most 1024 characters`;
 		}
-		if (typeof size !== "number" || !Number.isSafeInteger(size) || size < 0) {
+		if (
+			transcodeFrom !== undefined &&
+			(typeof transcodeFrom !== "string" ||
+				transcodeFrom.length > 1024 ||
+				!path.endsWith(".mp4"))
+		) {
+			return `manifest transcodeFrom for ${path} must be a key and produce an .mp4`;
+		}
+		// Size of a source still to be transcoded is only known afterwards.
+		if (
+			!(transcodeFrom !== undefined && size === undefined) &&
+			(typeof size !== "number" || !Number.isSafeInteger(size) || size < 0)
+		) {
 			return `manifest size for ${path} must be a non-negative integer`;
 		}
 		if (
 			!path.endsWith(".mp4") &&
 			!AUDIO_FILE.test(path) &&
+			typeof size === "number" &&
 			size > limits.sidecarBytes
 		) {
 			return `${path} is ${size} bytes (limit ${limits.sidecarBytes})`;
 		}
-		total += size;
+		total += typeof size === "number" ? size : 0;
 	}
 	if (total > limits.sourceBytes) {
 		return `recording is ${total} bytes (limit ${limits.sourceBytes})`;
 	}
 	return null;
+}
+
+/** A bucket key or folder with no empty or parent segments. */
+export function isKey(
+	value: unknown,
+	options: { trailingSlash?: boolean } = {},
+): value is string {
+	if (typeof value !== "string" || !/^[A-Za-z0-9._/-]{1,512}$/.test(value)) {
+		return false;
+	}
+	const parts = value.split("/");
+	if (options.trailingSlash && parts.at(-1) === "") parts.pop();
+	return !parts.includes("..") && !parts.includes("") && !parts.includes(".");
+}
+
+function isCallbackUrl(value: unknown) {
+	if (typeof value !== "string" || value.length > 2048) return false;
+	try {
+		const url = new URL(value);
+		return (
+			url.protocol === "https:" ||
+			(url.protocol === "http:" &&
+				["localhost", "127.0.0.1", "[::1]"].includes(url.hostname))
+		);
+	} catch {
+		return false;
+	}
 }

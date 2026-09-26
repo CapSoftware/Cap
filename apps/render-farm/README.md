@@ -74,6 +74,10 @@ expires `hls/` and `jobs/` objects.
 | `RF_TOKEN` | required | Bearer token between clients, coordinator and workers |
 | `RF_S3_ENDPOINT`, `RF_S3_BUCKET`, `RF_S3_REGION` | required | Bucket holding recordings, outputs, HLS and the journal |
 | `RF_S3_IMDS` | off | Use the instance role instead of `RF_S3_ACCESS_KEY_ID`/`RF_S3_SECRET_ACCESS_KEY` |
+| `RF_MEDIA_S3_BUCKET` (`_REGION`, `_ENDPOINT`) | the `RF_S3_*` bucket | Bucket holding recordings and receiving exports; may belong to another account whose policy grants the farm's role. Objects are written `bucket-owner-full-control`; the journal stays in `RF_S3_BUCKET` |
+| `RF_CALLBACK_HOSTS` | none | Host suffixes a job's `callbackUrl` may use (e.g. `vercel.app,cap.so`) |
+| `RF_CALLBACK_SECRET` | `RF_TOKEN` | HMAC key for callback signatures |
+| `RF_TRANSCODE_ENCODER` | `h264_nvenc` | Encoder for source transcodes (`libx264` without a GPU) |
 | `RF_COORDINATOR_URL` | `http://127.0.0.1:8080` | Coordinator address (workers) and its advertised URL |
 | `RF_SLOTS` / `RF_AUDIO_SLOTS` | `5` / `4` | Render slots and audio lanes per worker (tuned on one L4 with 8 vCPUs) |
 | `RF_LOCAL_AUDIO_SLOTS` | `2` | Audio lanes on the coordinator |
@@ -91,6 +95,27 @@ expires `hls/` and `jobs/` objects.
 | `RF_DRAIN_MS` | 15 min | Longest a `SIGTERM` drain may take |
 | `CAP_DECODER_READAHEAD` | `8` | Frames each decoder decodes ahead of the renderer |
 | `RF_HOT_SWAP` | off | Development: pull the engine, app and tuning from the bucket's `bin/` pointers |
+
+## Product integration
+
+A job can export a recording that lives in the product's bucket:
+
+- `sourceRoot` names the recording's folder (e.g. `<owner>/<video>/`); manifest
+  keys may point anywhere inside it, so a small render project (manifest,
+  project config, cursors) can sit beside the untouched source files.
+- `output: { key, hlsPrefix }` places the MP4 and HLS segments inside that
+  folder instead of `out/` and `hls/`.
+- `callbackUrl` receives the job's outcome once it is ready or failed, signed
+  `x-render-farm-signature: sha256=<hex HMAC of the body>`. `GET /jobs/:id`
+  reports `progress` (0-1), `hlsSegments` and a freshly signed `hlsUrl`.
+
+Browser recordings are WebM with no seek index and few keyframes, so chunks
+cannot start in the middle of them. A manifest entry with `transcodeFrom`
+names such a source; the coordinator first has a GPU slot re-encode it into
+the entry's `key` as H.264 with a keyframe every second (kept and reused for
+later exports). `POST /transcodes {sourceRoot, source, output}` starts one
+ahead of time (e.g. when the editor opens) and `GET /transcodes/:id` reports
+it.
 
 ## Development
 

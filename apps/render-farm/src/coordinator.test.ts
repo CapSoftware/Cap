@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { randomUUID, timingSafeEqual } from "node:crypto";
+import {
+	createHash,
+	createHmac,
+	randomUUID,
+	timingSafeEqual,
+} from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { Job, TaskState } from "./coordinator";
 import * as fmp4 from "./fmp4";
@@ -18,7 +23,12 @@ function harness() {
 	const watchdogs: (() => void)[] = [];
 	let putGate: Promise<void> | undefined;
 	let failures = 0;
+	const callbacks: { url: string; init: RequestInit }[] = [];
 	const s3 = {
+		async head(key: string) {
+			const value = objects.get(key);
+			return value ? { size: value.byteLength } : null;
+		},
 		async put(key: string, body: Uint8Array | string) {
 			writes.push(key);
 			await putGate;
@@ -53,6 +63,8 @@ function harness() {
 	const deps = {
 		timingSafeEqual,
 		randomUUID,
+		createHash,
+		createHmac,
 		...validate,
 		...fmp4,
 		...hls,
@@ -67,10 +79,16 @@ function harness() {
 			}
 		},
 		s3ConfigFromEnv: () => ({}),
+		mediaS3ConfigFromEnv: () => ({}),
 		ProbeEngine: class {},
 		Engine: class {},
 		process: {
-			env: { RF_TOKEN: "test", RF_LOCAL_AUDIO_SLOTS: "0", RF_HLS: "1" },
+			env: {
+				RF_TOKEN: "test",
+				RF_LOCAL_AUDIO_SLOTS: "0",
+				RF_HLS: "1",
+				RF_CALLBACK_HOSTS: "cap.test",
+			},
 		},
 		Bun: {
 			serve: (options: { fetch: typeof fetchHandler }) => {
@@ -85,6 +103,10 @@ function harness() {
 			return { unref() {} };
 		},
 		clearTimeout: () => {},
+		fetch: async (url: string, init: RequestInit) => {
+			callbacks.push({ url, init });
+			return new Response("ok");
+		},
 		console: { log() {}, warn() {}, error() {} },
 		mkdirSync: () => {},
 		rmSync: () => {},
@@ -122,6 +144,7 @@ function harness() {
 		...coordinator,
 		objects,
 		writes,
+		callbacks,
 		timers,
 		watchdogs,
 		fetch: (request: Request) => fetchHandler(request),
@@ -520,4 +543,174 @@ test("job acknowledgement waits for a planning receipt and receipt-only jobs res
 	await h.resumeJobs();
 	expect(planned).toEqual([receipt.id, receipt.id]);
 	expect(h.jobs.get(receipt.id)?.status).toBe("planning");
+});
+
+function call(
+	h: ReturnType<typeof harness>,
+	path: string,
+	body?: Record<string, unknown>,
+) {
+	return h.fetch(
+		new Request(`http://test${path}`, {
+			method: body ? "POST" : "GET",
+			headers: {
+				authorization: "Bearer test",
+				"content-type": "application/json",
+			},
+			body: body ? JSON.stringify(body) : undefined,
+		}),
+	);
+}
+
+describe("transcodes", () => {
+	const request = {
+		sourceRoot: "owner/video/",
+		source: "owner/video/raw-upload.webm",
+		output: "owner/video/.recording/render/sources/display.mp4",
+	};
+
+	test("are queued once, go to a video slot first and settle on the worker's report", async () => {
+		const h = harness();
+		const created = (await (await call(h, "/transcodes", request)).json()) as {
+			id: string;
+			status: string;
+		};
+		expect(created.status).toBe("queued");
+		const again = (await (await call(h, "/transcodes", request)).json()) as {
+			id: string;
+		};
+		expect(again.id).toBe(created.id);
+		const work = (await (
+			await call(h, "/work", {
+				worker: "gpu-a",
+				slots: 1,
+				cpus: 8,
+				kinds: ["video"],
+			})
+		).json()) as { task: protocol.TranscodeTask };
+		expect(work.task).toMatchObject({
+			kind: "transcode",
+			source: request.source,
+			output: request.output,
+			attempt: 1,
+		});
+		const heartbeat = (await (
+			await call(h, "/heartbeat", {
+				worker: "gpu-b",
+				slots: 1,
+				cpus: 8,
+				running: [
+					{
+						taskId: work.task.taskId,
+						attempt: 1,
+						frames: 3,
+						total: 0,
+						elapsedMs: 10,
+					},
+				],
+			})
+		).json()) as { cancel: string[] };
+		expect(heartbeat.cancel).toContain(work.task.taskId);
+		await call(h, `/transcodes/${created.id}/done`, {
+			worker: "gpu-a",
+			attempt: 1,
+			size: 1234,
+		});
+		expect(
+			await (await call(h, `/transcodes/${created.id}`)).json(),
+		).toMatchObject({ status: "ready", size: 1234 });
+	});
+
+	test("reuse an output already in the bucket", async () => {
+		const h = harness();
+		h.objects.set(request.output, new Uint8Array(42));
+		expect(await (await call(h, "/transcodes", request)).json()).toMatchObject({
+			status: "ready",
+			size: 42,
+		});
+	});
+
+	test("must stay inside their source folder", async () => {
+		const h = harness();
+		for (const body of [
+			{ ...request, source: "other/raw-upload.webm" },
+			{ ...request, output: "owner/other/display.mp4" },
+			{ ...request, output: "owner/video/display.webm" },
+			{ ...request, sourceRoot: "owner/../" },
+		]) {
+			expect((await call(h, "/transcodes", body)).status).toBe(400);
+		}
+	});
+});
+
+describe("jobs for the product", () => {
+	test("write to the requested keys and call back signed when finished", async () => {
+		const h = harness();
+		h.setPlanner(async () => {});
+		const receipt = (await (
+			await call(h, "/jobs", {
+				recording: "owner/video/.recording/render/abc/project",
+				sourceRoot: "owner/video/",
+				output: {
+					key: "owner/video/.recording/render/abc/result.mp4",
+					hlsPrefix: "owner/video/.recording/render/abc/hls",
+				},
+				callbackUrl: "https://preview.cap.test/api/render-farm/callback",
+				reference: "video-1",
+			})
+		).json()) as { id: string };
+		const exported = h.jobs.get(receipt.id) as Job;
+		expect(exported.key).toBe("owner/video/.recording/render/abc/result.mp4");
+		expect(exported.hls?.prefix).toBe("owner/video/.recording/render/abc/hls");
+		exported.status = "ready";
+		exported.totalFrames = 60;
+		h.finish(exported);
+		const callback = h.callbacks[0];
+		expect(callback?.url).toBe(
+			"https://preview.cap.test/api/render-farm/callback",
+		);
+		const body = String(callback?.init.body);
+		expect(JSON.parse(body)).toMatchObject({
+			id: receipt.id,
+			reference: "video-1",
+			status: "ready",
+			key: "owner/video/.recording/render/abc/result.mp4",
+			durationSeconds: 2,
+		});
+		expect(
+			(callback?.init.headers as Record<string, string>)[
+				"x-render-farm-signature"
+			],
+		).toBe(`sha256=${createHmac("sha256", "test").update(body).digest("hex")}`);
+	});
+
+	test("refuse callbacks to hosts that are not allowed", async () => {
+		const h = harness();
+		h.setPlanner(async () => {});
+		const response = await call(h, "/jobs", {
+			recording: "recording",
+			callbackUrl: "https://attacker.example/hook",
+		});
+		expect(response.status).toBe(400);
+	});
+
+	test("report the share of frames rendered", async () => {
+		const h = harness();
+		const j = job();
+		h.jobs.set(j.id, j);
+		j.videoResults.set(0, {} as protocol.VideoResult);
+		const running = videoState(j);
+		running.task = { ...running.task, chunk: 1 } as protocol.VideoTask;
+		running.progress = {
+			frames: 15,
+			total: 30,
+			elapsedMs: 100,
+			at: 0,
+			advancedAt: 0,
+		};
+		const summary = (await (await call(h, `/jobs/${j.id}`)).json()) as {
+			progress: number;
+		};
+		expect(summary.progress).toBe(0.75);
+	});
 });
