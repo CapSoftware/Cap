@@ -73,6 +73,10 @@ export type TrackIndex = {
 	keyframes: Uint32Array;
 };
 
+// Sources are user uploads: a sample count drives several allocations, so it
+// is capped (about 23 h at 60 fps) and every table must fit inside its box.
+const MAX_SAMPLES = 5_000_000;
+
 /** Index the first video track of a moov box (bytes = the whole moov). */
 export function indexVideoTrack(moov: Uint8Array): TrackIndex {
 	const root = readBoxes(moov, 0, moov.byteLength).find(
@@ -100,26 +104,40 @@ export function indexVideoTrack(moov: Uint8Array): TrackIndex {
 		const timescale = view.getUint32(
 			mdhd.start + mdhd.headerSize + (version === 1 ? 20 : 12),
 		);
-		const body = (type: string) => {
+		// Full-box tables: `countAt` bytes into the body sits the entry count,
+		// and `entrySize`-byte entries follow it.
+		const table = (type: string, countAt: number, entrySize: number) => {
 			const box = child(moov, stbl, type);
-			return box ? box.start + box.headerSize : null;
+			if (!box) return null;
+			const body = box.start + box.headerSize;
+			const entries = view.getUint32(body + countAt);
+			if (
+				countAt + 4 + entries * entrySize > box.size - box.headerSize ||
+				entries > MAX_SAMPLES
+			) {
+				throw new Error(`${type} lists more entries than it holds`);
+			}
+			return { body, entries };
 		};
 
-		const stsz = body("stsz");
-		if (stsz === null) throw new Error("no stsz");
+		const stszBox = child(moov, stbl, "stsz");
+		if (!stszBox) throw new Error("no stsz");
+		const stsz = stszBox.start + stszBox.headerSize;
 		const uniform = view.getUint32(stsz + 4);
 		const count = view.getUint32(stsz + 8);
+		if (count > MAX_SAMPLES) throw new Error(`${count} video samples`);
+		if (!uniform) table("stsz", 8, 4);
 		const sizes = new Uint32Array(count);
 		for (let index = 0; index < count; index++) {
 			sizes[index] = uniform || view.getUint32(stsz + 12 + index * 4);
 		}
 
 		const times = new Float64Array(count);
-		const stts = body("stts");
-		if (stts !== null) {
+		const sttsTable = table("stts", 4, 8);
+		if (sttsTable !== null) {
+			const { body: stts, entries } = sttsTable;
 			let sample = 0;
 			let time = 0;
-			const entries = view.getUint32(stts + 4);
 			for (let entry = 0; entry < entries; entry++) {
 				const sampleCount = view.getUint32(stts + 8 + entry * 8);
 				const delta = view.getUint32(stts + 12 + entry * 8);
@@ -131,32 +149,36 @@ export function indexVideoTrack(moov: Uint8Array): TrackIndex {
 		}
 
 		const chunkOffsets: number[] = [];
-		const stco = body("stco");
-		const co64 = body("co64");
+		const stco = table("stco", 4, 4);
+		const co64 = stco ? null : table("co64", 4, 8);
 		if (stco !== null) {
-			const entries = view.getUint32(stco + 4);
-			for (let index = 0; index < entries; index++) {
-				chunkOffsets.push(view.getUint32(stco + 8 + index * 4));
+			for (let index = 0; index < stco.entries; index++) {
+				chunkOffsets.push(view.getUint32(stco.body + 8 + index * 4));
 			}
 		} else if (co64 !== null) {
-			const entries = view.getUint32(co64 + 4);
-			for (let index = 0; index < entries; index++) {
-				chunkOffsets.push(Number(view.getBigUint64(co64 + 8 + index * 8)));
+			for (let index = 0; index < co64.entries; index++) {
+				chunkOffsets.push(Number(view.getBigUint64(co64.body + 8 + index * 8)));
 			}
 		}
-		const stsc = body("stsc");
-		if (stsc === null) throw new Error("no stsc");
-		const stscEntries = view.getUint32(stsc + 4);
+		const stscTable = table("stsc", 4, 12);
+		if (stscTable === null) throw new Error("no stsc");
+		const { body: stsc, entries: stscEntries } = stscTable;
 		const offsets = new Float64Array(count);
 		let sample = 0;
 		for (let entry = 0; entry < stscEntries; entry++) {
 			const firstChunk = view.getUint32(stsc + 8 + entry * 12) - 1;
 			const perChunk = view.getUint32(stsc + 12 + entry * 12);
-			const lastChunk =
+			const lastChunk = Math.min(
+				chunkOffsets.length,
 				entry + 1 < stscEntries
 					? view.getUint32(stsc + 8 + (entry + 1) * 12) - 1
-					: chunkOffsets.length;
-			for (let chunk = firstChunk; chunk < lastChunk; chunk++) {
+					: chunkOffsets.length,
+			);
+			for (
+				let chunk = firstChunk;
+				chunk < lastChunk && sample < count;
+				chunk++
+			) {
 				let offset = chunkOffsets[chunk] ?? 0;
 				for (let index = 0; index < perChunk && sample < count; index++) {
 					offsets[sample] = offset;
@@ -166,12 +188,12 @@ export function indexVideoTrack(moov: Uint8Array): TrackIndex {
 			}
 		}
 
-		const stss = body("stss");
+		const stssTable = table("stss", 4, 4);
 		let keyframes: Uint32Array;
-		if (stss === null) {
+		if (stssTable === null) {
 			keyframes = Uint32Array.from({ length: count }, (_, index) => index);
 		} else {
-			const entries = view.getUint32(stss + 4);
+			const { body: stss, entries } = stssTable;
 			keyframes = new Uint32Array(entries);
 			for (let index = 0; index < entries; index++) {
 				keyframes[index] = view.getUint32(stss + 8 + index * 4) - 1;
