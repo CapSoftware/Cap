@@ -11,6 +11,7 @@ import {
 	getSignedEditorSources,
 	loadEligibleEditorVideo,
 } from "@/lib/editor-session";
+import { prewarmRenderFarmSources } from "@/lib/render-farm-start";
 import { apiToHandler } from "@/lib/server";
 
 export const dynamic = "force-dynamic";
@@ -40,6 +41,14 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 			handlers.handle("bootstrap", ({ path }) =>
 				Effect.gen(function* () {
 					const video = yield* loadEligibleEditorVideo(path.videoId);
+					// Browser-only editors never prepare a worker session up front,
+					// so start the farm transcodes a later Save or export needs here.
+					yield* Effect.forkDaemon(
+						prewarmRenderFarmSources(video).pipe(
+							Effect.timeout("10 seconds"),
+							Effect.ignore,
+						),
+					);
 					const sources = yield* getSignedEditorSources(video, "browser");
 					return { videoId: video.id, sources };
 				}),
