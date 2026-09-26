@@ -3,7 +3,7 @@ import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { Engine } from "./engine";
 import { initSegment, playlist } from "./fmp4";
-import { segmentCuts } from "./hls";
+import { checkSegmentReport, segmentCuts, segmentKey } from "./hls";
 import { type FileSpec, ProjectCache } from "./materialize";
 import {
 	avcC,
@@ -459,7 +459,6 @@ const SOURCE_KEY_PREFIXES = (process.env.RF_SOURCE_KEY_PREFIXES ?? "")
 
 const SOURCE_LIMITS = sourceLimitsFromEnv(process.env);
 
-/** Reads a small object whole, refusing one over `limit` bytes. */
 async function getBounded(key: string, limit: number) {
 	const bytes = await s3.getRange(key, 0, limit);
 	if (bytes.byteLength > limit) {
@@ -1010,6 +1009,8 @@ function segmentsFromResult(
 	result: VideoResult,
 ): SegmentReport[] {
 	if (!job.hls) return [];
+	// Parts are numbered from the dispatch's first part, which names its segments.
+	const firstPart = Math.min(...result.parts.map((part) => part.partNumber));
 	const cuts = segmentCuts(
 		result.keyframes,
 		result.sizes.length,
@@ -1019,7 +1020,7 @@ function segmentsFromResult(
 		chunk: chunk.index,
 		index,
 		frames: [chunk.frames[0] + a, chunk.frames[0] + b],
-		key: `${job.hls?.prefix}/c${chunk.index}-${index}.m4s`,
+		key: segmentKey(job.hls?.prefix ?? "", chunk.index, firstPart, index),
 		last: index === cuts.length - 1,
 		extradata: result.extradata,
 	}));
@@ -2172,14 +2173,20 @@ Bun.serve({
 			const taskId = decodeURIComponent(segmentMatch[1] ?? "");
 			const job = jobs.get(taskId.split(":")[0] ?? "");
 			if (!job?.hls) return new Response("unknown job", { status: 404 });
-			const report = (await request.json()) as SegmentReport;
+			const state = job.tasks.get(taskId);
+			const plan =
+				state?.task.kind === "video" ? job.chunks[state.task.chunk] : undefined;
+			const report = plan
+				? checkSegmentReport(await request.json(), job.hls.prefix, plan)
+				: null;
+			if (!report) return new Response("invalid segment", { status: 400 });
 			job.hls.extradata ??= report.extradata || undefined;
 			let chunk = job.hls.segments.get(report.chunk);
 			if (!chunk) {
 				chunk = new Map();
 				job.hls.segments.set(report.chunk, chunk);
 			}
-			// First copy wins (a hedge writes the same key with equivalent bytes).
+			// First copy wins; other copies wrote their own objects.
 			if (!chunk.has(report.index)) chunk.set(report.index, report);
 			publishPlaylist(job);
 			return Response.json({ ok: true });
@@ -2368,9 +2375,19 @@ Bun.serve({
 					setTimeout(resolve, 100_000);
 				});
 			}
-			return Response.json(
-				job.final ? { ...job.final, verified: job.verified } : summary(job),
-			);
+			const body = job.final
+				? { ...job.final, verified: job.verified }
+				: summary(job);
+			// Re-signed per read: a URL issued at submission lapses with its
+			// signature or the instance credentials behind it.
+			if (job.hls) {
+				body.hlsUrl = await s3.presignFresh(
+					"GET",
+					`${job.hls.prefix}/index.m3u8`,
+					6 * 3600,
+				);
+			}
+			return Response.json(body);
 		}
 
 		if (url.pathname === "/usage") {

@@ -423,6 +423,41 @@ describe("coordinator recovery", () => {
 	});
 });
 
+test("segment reports only list objects the reporting dispatch wrote", async () => {
+	const h = harness();
+	const j = job();
+	j.hls = await h.newHlsState("hls/job");
+	const original = videoState(j);
+	h.jobs.set(j.id, j);
+	await h.dispatchedTask(j, original);
+	const report = (key: string) =>
+		h.fetch(
+			new Request(
+				`http://test/tasks/${encodeURIComponent(original.task.taskId)}/segment`,
+				{
+					method: "POST",
+					headers: {
+						authorization: "Bearer test",
+						"content-type": "application/json",
+					},
+					body: JSON.stringify({
+						chunk: 0,
+						index: 0,
+						frames: [0, 30],
+						key,
+						last: true,
+						extradata: "",
+					}),
+				},
+			),
+		);
+	expect((await report("media/private.mp4")).status).toBe(400);
+	expect((await report("hls/job/c0-p12-0.m4s")).status).toBe(400);
+	expect(j.hls.segments.size).toBe(0);
+	expect((await report("hls/job/c0-p2-0.m4s")).status).toBe(200);
+	expect(j.hls.segments.get(0)?.get(0)?.key).toBe("hls/job/c0-p2-0.m4s");
+});
+
 test("job acknowledgement waits for a planning receipt and receipt-only jobs resume", async () => {
 	const h = harness();
 	const planned: string[] = [];

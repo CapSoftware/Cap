@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { closesSegment, segmentCuts } from "./hls";
+import {
+	checkSegmentReport,
+	closesSegment,
+	segmentCuts,
+	segmentKey,
+} from "./hls";
 
 // The worker applies `closesSegment` as each GOP finishes; this replays that
 // incremental rule so it can be compared with the coordinator's re-derivation.
@@ -58,5 +63,49 @@ describe("segmentCuts", () => {
 				workerCuts(keyframes, total, segmentFrames),
 			);
 		}
+	});
+});
+
+describe("checkSegmentReport", () => {
+	const chunk = {
+		index: 3,
+		frames: [90, 150] as [number, number],
+		firstPart: 40,
+		partLimit: 10,
+		dispatches: 2,
+	};
+	const report = (overrides: Record<string, unknown> = {}) => ({
+		chunk: 3,
+		index: 1,
+		frames: [120, 150],
+		key: segmentKey("hls/job", 3, 50, 1),
+		last: true,
+		extradata: "",
+		...overrides,
+	});
+
+	test("accepts a segment from any dispatched range of the chunk", () => {
+		expect(checkSegmentReport(report(), "hls/job", chunk)).not.toBeNull();
+		expect(
+			checkSegmentReport(
+				report({ key: segmentKey("hls/job", 3, 40, 1) }),
+				"hls/job",
+				chunk,
+			),
+		).not.toBeNull();
+	});
+
+	test.each([
+		["a key outside the job", { key: "out/other-job.mp4" }],
+		["a range not yet dispatched", { key: segmentKey("hls/job", 3, 60, 1) }],
+		["another chunk's key", { key: segmentKey("hls/job", 2, 40, 1) }],
+		["a key for another index", { key: segmentKey("hls/job", 3, 40, 0) }],
+		["another chunk", { chunk: 2 }],
+		["frames outside the chunk", { frames: [60, 120] }],
+		["empty frames", { frames: [120, 120] }],
+		["a fractional index", { index: 1.5 }],
+		["a missing last flag", { last: undefined }],
+	])("rejects %s", (_, overrides) => {
+		expect(checkSegmentReport(report(overrides), "hls/job", chunk)).toBeNull();
 	});
 });

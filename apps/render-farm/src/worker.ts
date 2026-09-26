@@ -4,7 +4,7 @@ import { availableParallelism, hostname } from "node:os";
 import { join } from "node:path";
 import { Engine, processCpuSeconds, sampleThreads } from "./engine";
 import { segmentHeader } from "./fmp4";
-import { closesSegment } from "./hls";
+import { closesSegment, segmentKey } from "./hls";
 import { ProjectCache } from "./materialize";
 import type { Run } from "./mp4";
 import {
@@ -271,7 +271,12 @@ class SegmentStream {
 		body.set(header, 0);
 		body.set(video, header.byteLength);
 		body.set(audio.data, header.byteLength + video.byteLength);
-		const key = `${task.hls.prefix}/c${task.chunk}-${index}.m4s`;
+		const key = segmentKey(
+			task.hls.prefix,
+			task.chunk,
+			task.upload.firstPart,
+			index,
+		);
 		await s3.put(key, body, "video/iso.segment");
 		this.firstUploadedMs ??= performance.now() - this.started;
 		const report: SegmentReport = {

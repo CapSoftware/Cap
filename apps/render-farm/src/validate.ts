@@ -1,6 +1,5 @@
 import { COMPRESSION_BPP, type JobRequest } from "./protocol";
 
-/** Rejects malformed or out-of-range export requests before any work starts. */
 export function validateJobRequest(body: unknown): JobRequest | string {
 	if (!body || typeof body !== "object") return "body must be a JSON object";
 	const request = body as Record<string, unknown>;
