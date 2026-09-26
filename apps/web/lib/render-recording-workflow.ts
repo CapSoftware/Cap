@@ -23,9 +23,16 @@ type RecordingRenderPayload = {
 	origin: string;
 };
 
-const SOURCE_WAIT_ATTEMPTS = 120;
+const SOURCE_WAIT_ATTEMPTS = 480;
 const CAPACITY_WAIT_ATTEMPTS = 40;
-const PREPARATION_POLL_ATTEMPTS = 180;
+const PREPARATION_POLL_ATTEMPTS = 300;
+
+// The last source usually lands within a second or two of the one that
+// started the render, and preparations take seconds: poll quickly at first
+// (every poll is a workflow step) and back off for long uploads.
+function pollDelay(attempt: number) {
+	return attempt < 30 ? "1s" : "5s";
+}
 
 async function loadRenderVideo(payload: RecordingRenderPayload) {
 	const [row] = await db()
@@ -158,7 +165,7 @@ async function waitForRecordingSources(
 		if (attempt >= SOURCE_WAIT_ATTEMPTS) {
 			throw new FatalError("The recording did not finish uploading");
 		}
-		await sleep("15s");
+		await sleep(pollDelay(attempt));
 	}
 }
 
@@ -186,7 +193,7 @@ async function waitForRecordingSession(preparationId: string): Promise<string> {
 		) {
 			throw new FatalError("The recording could not be prepared");
 		}
-		await sleep("5s");
+		await sleep(pollDelay(attempt));
 	}
 }
 
