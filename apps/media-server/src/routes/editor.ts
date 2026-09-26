@@ -38,6 +38,10 @@ import {
 	editorProjectBundleResponse,
 } from "../lib/editor-project-bundles";
 import {
+	listEditorRenderProject,
+	uploadEditorRenderProject,
+} from "../lib/editor-render-project";
+import {
 	attachEditorSession,
 	beginEditorPreparation,
 	cancelEditorPreparation,
@@ -1009,6 +1013,70 @@ editor.get("/sessions/:id/project-bundle/download", (c) => {
 	return ticket
 		? editorProjectBundleResponse(ticket)
 		: c.json({ error: "Not found" }, 404);
+});
+
+const renderUploadsSchema = z
+	.object({
+		files: z
+			.array(
+				z
+					.object({
+						path: z.string().min(1).max(1024),
+						url: z.string().url().max(8192),
+					})
+					.strict(),
+			)
+			.max(4000),
+		wallpapers: z
+			.array(
+				z
+					.object({
+						file: z.string().min(1).max(200),
+						url: z.string().url().max(8192),
+					})
+					.strict(),
+			)
+			.max(16),
+	})
+	.strict();
+
+editor.get("/sessions/:id/render-project", async (c) => {
+	const session = getEditorSession(c.req.param("id"));
+	if (!session) return c.json({ error: "Not found" }, 404);
+	try {
+		return c.json(await listEditorRenderProject(session.projectPath));
+	} catch (cause) {
+		console.error("Editor render project unavailable", cause);
+		return c.json({ error: "Editor render project is unavailable" }, 503);
+	}
+});
+
+editor.post("/sessions/:id/render-project/uploads", async (c) => {
+	const sessionId = c.req.param("id");
+	const session = getEditorSession(sessionId);
+	if (!session) return c.json({ error: "Not found" }, 404);
+	let body: unknown;
+	try {
+		body = await c.req.json();
+	} catch {
+		return c.json({ error: "Invalid render project uploads" }, 400);
+	}
+	const parsed = renderUploadsSchema.safeParse(body);
+	if (!parsed.success) {
+		return c.json({ error: "Invalid render project uploads" }, 400);
+	}
+	try {
+		const result = await uploadEditorRenderProject(
+			session.projectPath,
+			parsed.data,
+			c.req.raw.signal,
+		);
+		attachEditorSession(sessionId);
+		return c.json(result);
+	} catch (cause) {
+		console.error("Editor render project upload failed", cause);
+		return c.json({ error: "Editor render project upload failed" }, 502);
+	}
 });
 
 editor.delete("/sessions/:id/exports/:exportId", async (c) => {

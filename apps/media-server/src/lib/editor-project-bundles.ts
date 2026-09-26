@@ -63,7 +63,7 @@ function sameFile(
 	);
 }
 
-async function scanProject(projectPath: string) {
+export async function scanEditorProject(projectPath: string) {
 	const project = await lstat(projectPath);
 	if (!project.isDirectory()) throw new Error("Invalid editor project folder");
 	const files: {
@@ -134,7 +134,7 @@ export async function createEditorProjectBundleDownloadTicket(
 	if (tickets.size >= MAX_TICKETS)
 		throw new Error("Editor bundle download capacity is busy");
 	const origin = publicEditorOrigin();
-	const sources = await scanProject(projectPath);
+	const sources = await scanEditorProject(projectPath);
 	const root = await mkdtemp(join(tmpdir(), "cap-web-editor-bundle-"));
 	try {
 		const files: SnapshotFile[] = [];
