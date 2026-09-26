@@ -244,7 +244,6 @@ type TaskState = {
 		total: number;
 		elapsedMs: number;
 		at: number;
-		/** When `frames` last grew. */
 		advancedAt: number;
 	};
 };

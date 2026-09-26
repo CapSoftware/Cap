@@ -81,14 +81,10 @@ export function validateJobRequest(body: unknown): JobRequest | string {
 export const AUDIO_FILE = /\.(ogg|m4a|wav|mp3|aac|opus|flac)$/i;
 
 export type SourceLimits = {
-	/** Largest manifest.json or recording-meta.json read into memory. */
 	metadataBytes: number;
 	files: number;
-	/** Sum of every source file's declared size. */
 	sourceBytes: number;
-	/** Files other than video and audio, which every chunk fetches whole. */
 	sidecarBytes: number;
-	/** An MP4's moov box, or the file tail searched for it. */
 	moovBytes: number;
 	exportSeconds: number;
 };
