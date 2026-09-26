@@ -27,6 +27,7 @@ import {
 	PreparingVideoOverlay,
 	RecordingInProgressOverlay,
 } from "./RecordingInProgress";
+import { RenderFarmSaveView } from "./RenderFarmSaveView";
 import { ShareableLinkLimitOverlay } from "./ShareableLinkLimitOverlay";
 import {
 	isRecordingUpload,
@@ -488,6 +489,48 @@ export const ShareVideo = forwardRef<
 			videoSrc = `/api/playlist?userId=${data.owner.id}&videoId=${data.id}&videoType=video`;
 		}
 
+		const renderSaveActive =
+			isMp4Source && data.metadata?.renderFarmSave?.status === "rendering";
+		const capVideoPlayer = (
+			<CapVideoPlayer
+				videoId={data.id}
+				mediaPlayerClassName={clsx(
+					"w-full h-full max-w-full max-h-full overflow-visible",
+					// Timeline view: the player is a slice of the widescreen
+					// theater block, so no rounded corners against the black.
+					externalTimeline ? "rounded-none" : "rounded-xl",
+				)}
+				videoSrc={videoSrc}
+				rawFallbackSrc={rawFallbackSrc}
+				initialPlaybackUrl={initialPlaybackUrl}
+				duration={data.duration}
+				defaultPlaybackSpeed={defaultPlaybackSpeed}
+				showPlaybackStatusBadge={showPlaybackStatusBadge}
+				disableCaptions={areCaptionsDisabled ?? false}
+				disableCommentStamps={areCommentStampsDisabled ?? false}
+				disableReactionStamps={areReactionStampsDisabled ?? false}
+				externalTimeline={externalTimeline}
+				controlsPortalEl={controlsPortalEl}
+				chaptersSrc={areChaptersDisabled ? "" : chaptersUrl || ""}
+				captionsSrc={areCaptionsDisabled ? "" : subtitleUrl || ""}
+				videoRef={videoRef}
+				enableCrossOrigin={enableCrossOrigin}
+				hasActiveUpload={data.hasActiveUpload}
+				blockPlaybackDuringProcessing={isEditProcessing}
+				onUploadComplete={handleUploadComplete}
+				comments={stampComments}
+				onSeek={handleSeek}
+				captionLanguage={captionContext.selectedLanguage}
+				onCaptionLanguageChange={handleCaptionLanguageChange}
+				availableCaptions={captionContext.availableTranslations}
+				isCaptionLoading={captionContext.isTranslating}
+				hasCaptions={
+					data.transcriptionStatus === "COMPLETE" || liveVttContent != null
+				}
+				canRetryProcessing={canRetryProcessing}
+			/>
+		);
+
 		return (
 			<>
 				<div
@@ -538,44 +581,16 @@ export const ShareVideo = forwardRef<
 							className="h-full"
 						/>
 					) : isMp4Source ? (
-						<CapVideoPlayer
-							videoId={data.id}
-							mediaPlayerClassName={clsx(
-								"w-full h-full max-w-full max-h-full overflow-visible",
-								// Timeline view: the player is a slice of the widescreen
-								// theater block, so no rounded corners against the black.
-								externalTimeline ? "rounded-none" : "rounded-xl",
-							)}
-							videoSrc={videoSrc}
-							rawFallbackSrc={rawFallbackSrc}
-							initialPlaybackUrl={initialPlaybackUrl}
-							duration={data.duration}
-							defaultPlaybackSpeed={defaultPlaybackSpeed}
-							showPlaybackStatusBadge={showPlaybackStatusBadge}
-							disableCaptions={areCaptionsDisabled ?? false}
-							disableCommentStamps={areCommentStampsDisabled ?? false}
-							disableReactionStamps={areReactionStampsDisabled ?? false}
-							externalTimeline={externalTimeline}
-							controlsPortalEl={controlsPortalEl}
-							chaptersSrc={areChaptersDisabled ? "" : chaptersUrl || ""}
-							captionsSrc={areCaptionsDisabled ? "" : subtitleUrl || ""}
-							videoRef={videoRef}
-							enableCrossOrigin={enableCrossOrigin}
-							hasActiveUpload={data.hasActiveUpload}
-							blockPlaybackDuringProcessing={isEditProcessing}
-							onUploadComplete={handleUploadComplete}
-							comments={stampComments}
-							onSeek={handleSeek}
-							captionLanguage={captionContext.selectedLanguage}
-							onCaptionLanguageChange={handleCaptionLanguageChange}
-							availableCaptions={captionContext.availableTranslations}
-							isCaptionLoading={captionContext.isTranslating}
-							hasCaptions={
-								data.transcriptionStatus === "COMPLETE" ||
-								liveVttContent != null
-							}
-							canRetryProcessing={canRetryProcessing}
-						/>
+						renderSaveActive ? (
+							<RenderFarmSaveView
+								videoId={data.id}
+								videoRef={videoRef}
+								fallback={capVideoPlayer}
+								className="h-full rounded-xl"
+							/>
+						) : (
+							capVideoPlayer
+						)
 					) : (
 						<HLSVideoPlayer
 							videoId={data.id}
