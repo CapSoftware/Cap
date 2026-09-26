@@ -109,6 +109,14 @@ export const users = mysqlTable(
 				trackedEvents?: {
 					user_signed_up?: boolean;
 				};
+				/** Web editor look applied to new recordings; see @cap/editor-cap-bundle/default-style. */
+				editorDefaultStyle?: {
+					version: 1;
+					aspectRatio?: unknown;
+					background?: Record<string, unknown>;
+					camera?: Record<string, unknown>;
+					cursor?: Record<string, unknown>;
+				};
 			} | null>()
 			.default(null),
 		activeOrganizationId: nanoId(
