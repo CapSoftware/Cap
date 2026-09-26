@@ -2028,6 +2028,71 @@ export class EditorHostBridge {
 			await this.handleBrowserWorkerCommand(message);
 			return;
 		}
+		if (message.kind === "invoke" && message.name === "tauri:webEditorSave") {
+			try {
+				if (this.browserOnly)
+					throw new Error("Saving needs the Cap editor worker");
+				const response = await fetch(
+					`/api/editor/sessions/${encodeURIComponent(this.sessionId)}/save`,
+					{
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({ videoId: this.videoId }),
+						cache: "no-store",
+						signal: this.controller.signal,
+					},
+				);
+				if (!response.ok) throw new Error(webEditorSaveError(response.status));
+				const saved: unknown = await response.json();
+				if (
+					typeof saved !== "object" ||
+					saved === null ||
+					!("shareUrl" in saved) ||
+					typeof saved.shareUrl !== "string"
+				) {
+					throw new Error("Save response was invalid");
+				}
+				this.port?.postMessage({
+					kind: "result",
+					id: message.id,
+					value: { shareUrl: saved.shareUrl },
+				});
+			} catch (cause) {
+				this.port?.postMessage({
+					kind: "error",
+					id: message.id,
+					error: cause instanceof Error ? cause.message : "Save failed",
+				});
+			}
+			return;
+		}
+		if (
+			message.kind === "invoke" &&
+			message.name === "tauri:webEditorSaveStatus"
+		) {
+			try {
+				const response = await fetch(
+					`/api/videos/${encodeURIComponent(this.videoId)}/render-status`,
+					{ cache: "no-store", signal: this.controller.signal },
+				);
+				if (!response.ok) throw new Error("Save status is unavailable");
+				this.port?.postMessage({
+					kind: "result",
+					id: message.id,
+					value: await response.json(),
+				});
+			} catch (cause) {
+				this.port?.postMessage({
+					kind: "error",
+					id: message.id,
+					error:
+						cause instanceof Error
+							? cause.message
+							: "Save status is unavailable",
+				});
+			}
+			return;
+		}
 		if (
 			message.kind === "invoke" &&
 			message.name === "tauri:webEditorStoredDesktopBackground"
@@ -2454,4 +2519,13 @@ export class EditorHostBridge {
 		this.frameTickets.clear();
 		this.pendingMetaRequests.clear();
 	}
+}
+
+function webEditorSaveError(status: number) {
+	if (status === 400)
+		return "This project uses something Save can't render yet. Use Export instead.";
+	if (status === 403)
+		return "Saving recordings of 5 minutes or longer, or with captions, needs Cap Pro";
+	if (status === 404) return "This recording is no longer available";
+	return "Save is unavailable right now. Try again, or use Export.";
 }

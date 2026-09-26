@@ -24,6 +24,7 @@ import PresetsDropdown from "./PresetsDropdown";
 import { createRecordingTitleSave } from "./recording-title-save";
 import ShareButton from "./ShareButton";
 import { EditorButton } from "./ui";
+import WebSaveButton from "./WebSaveButton";
 
 export type ResolutionOption = {
 	label: string;
@@ -257,6 +258,9 @@ export function Header(props: {
 					</EditorButton>
 				</Show>
 				<ShareButton />
+				<Show when={isWebEditor}>
+					<WebSaveButton shareUrl={meta().sharing?.link} />
+				</Show>
 				<button
 					type="button"
 					class={cx(
