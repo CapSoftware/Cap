@@ -1,8 +1,10 @@
 "use client";
 
 import dynamic from "next/dynamic";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { EditorShellBar } from "@/components/editor-shell/EditorShellBar";
 import type { WebEditorCapImportProgress } from "@/lib/editor-cap-import-client";
 import {
 	hasEditorCaptionContent,
@@ -538,78 +540,93 @@ export function StudioEditorClient(props: {
 		);
 	}
 	return (
-		<div className="relative h-screen w-screen">
-			<iframe
-				ref={iframeRef}
-				title="Cap editor"
-				src={editorSrc}
-				className="h-full w-full border-0"
-				onLoad={(event) => onFrameLoad(event.currentTarget)}
+		<div className="flex h-screen w-screen flex-col bg-[#f1f1f3] dark:bg-[#131315]">
+			<EditorShellBar
+				tab={recordClipOpen ? "record" : "editor"}
+				onTabChange={(next) => {
+					if (next === "record") setRecordClipOpen(true);
+				}}
+				recordLabel="Record a clip"
+				tabsDisabled={recordClipOpen}
+				right={
+					<Link href="/dashboard/editor" className="rec-btn is-ghost">
+						All projects
+					</Link>
+				}
 			/>
-			{recordClipOpen && (
-				<EditorClipRecorder
-					onCaptured={async (clip: EditorClipCapture) => {
-						const bridge = bridgeRef.current;
-						if (!bridge || closedRef.current)
-							throw new Error("Editor session is unavailable");
-						await bridge.addRecordedClip(
-							clip.display,
-							clip.camera,
-							clip.cameraOffsetMs,
-						);
-					}}
-					onClose={(imported) => {
-						setRecordClipOpen(false);
-						if (imported) {
-							void restartAfterImport().catch((cause) => {
-								captureDraftRef.current();
-								setError(
-									cause instanceof Error
-										? cause.message
-										: "Editor could not restart",
-								);
-							});
-						}
-					}}
+			<div className="relative min-h-0 flex-1">
+				<iframe
+					ref={iframeRef}
+					title="Cap editor"
+					src={editorSrc}
+					className="h-full w-full border-0"
+					onLoad={(event) => onFrameLoad(event.currentTarget)}
 				/>
-			)}
-			{upgradeOpen && (
-				<UpgradeModal open={upgradeOpen} onOpenChange={setUpgradeOpen} />
-			)}
-			{sharedNoticeOpen && (
-				<div className="animate-fadeIn absolute right-3 top-[60px] z-50 w-[22rem] max-w-[calc(100vw-1.5rem)] max-[900px]:top-[80px]">
-					<SharedLinkCard
-						videoId={videoId}
-						description="Anyone with the link can watch it now. Edit your tracks here, then Save to update the same link."
-						onDismiss={() => setSharedNoticeOpen(false)}
-						className="shadow-[0_24px_60px_-24px_rgba(0,0,0,0.45)]"
+				{recordClipOpen && (
+					<EditorClipRecorder
+						onCaptured={async (clip: EditorClipCapture) => {
+							const bridge = bridgeRef.current;
+							if (!bridge || closedRef.current)
+								throw new Error("Editor session is unavailable");
+							await bridge.addRecordedClip(
+								clip.display,
+								clip.camera,
+								clip.cameraOffsetMs,
+							);
+						}}
+						onClose={(imported) => {
+							setRecordClipOpen(false);
+							if (imported) {
+								void restartAfterImport().catch((cause) => {
+									captureDraftRef.current();
+									setError(
+										cause instanceof Error
+											? cause.message
+											: "Editor could not restart",
+									);
+								});
+							}
+						}}
 					/>
-				</div>
-			)}
-			{videoImport && videoImport.stage !== "ready" && (
-				<output className="pointer-events-none absolute bottom-6 right-6 z-50 w-64 rounded-xl border border-white/10 bg-neutral-950/95 px-4 py-3 text-sm text-white shadow-xl">
-					{videoImport.stage === "uploading" ? (
-						<>
+				)}
+				{upgradeOpen && (
+					<UpgradeModal open={upgradeOpen} onOpenChange={setUpgradeOpen} />
+				)}
+				{sharedNoticeOpen && (
+					<div className="animate-fadeIn absolute right-3 top-[60px] z-50 w-[22rem] max-w-[calc(100vw-1.5rem)] max-[900px]:top-[80px]">
+						<SharedLinkCard
+							videoId={videoId}
+							description="Anyone with the link can watch it now. Edit your tracks here, then Save to update the same link."
+							onDismiss={() => setSharedNoticeOpen(false)}
+							className="shadow-[0_24px_60px_-24px_rgba(0,0,0,0.45)]"
+						/>
+					</div>
+				)}
+				{videoImport && videoImport.stage !== "ready" && (
+					<output className="pointer-events-none absolute bottom-6 right-6 z-50 w-64 rounded-xl border border-white/10 bg-neutral-950/95 px-4 py-3 text-sm text-white shadow-xl">
+						{videoImport.stage === "uploading" ? (
+							<>
+								<p>
+									Uploading {"kind" in videoImport ? "Cap recording" : "video"}{" "}
+									{Math.round(videoImport.fraction * 100)}%
+								</p>
+								<div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/20">
+									<div
+										className="h-full rounded-full bg-blue-400 transition-[width] duration-150"
+										style={{ width: `${videoImport.fraction * 100}%` }}
+									/>
+								</div>
+							</>
+						) : (
 							<p>
-								Uploading {"kind" in videoImport ? "Cap recording" : "video"}{" "}
-								{Math.round(videoImport.fraction * 100)}%
+								{videoImport.stage === "importing"
+									? "Importing Cap recording…"
+									: "Preparing video…"}
 							</p>
-							<div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/20">
-								<div
-									className="h-full rounded-full bg-blue-400 transition-[width] duration-150"
-									style={{ width: `${videoImport.fraction * 100}%` }}
-								/>
-							</div>
-						</>
-					) : (
-						<p>
-							{videoImport.stage === "importing"
-								? "Importing Cap recording…"
-								: "Preparing video…"}
-						</p>
-					)}
-				</output>
-			)}
+						)}
+					</output>
+				)}
+			</div>
 		</div>
 	);
 }

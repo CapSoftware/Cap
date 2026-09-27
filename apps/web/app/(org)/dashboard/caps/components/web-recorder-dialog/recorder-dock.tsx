@@ -193,7 +193,7 @@ export const RecordingBar = ({
 	restarting: boolean;
 	onStop: () => void;
 	onPauseToggle: () => void;
-	onRestart: () => void;
+	onRestart?: () => void;
 }) => (
 	<div
 		className="rec-pop flex h-11 items-stretch gap-0.5 rounded-2xl p-1"
@@ -228,16 +228,18 @@ export const RecordingBar = ({
 				<PauseIcon className="size-4" aria-hidden />
 			)}
 		</button>
-		<button
-			type="button"
-			onClick={onRestart}
-			disabled={restarting}
-			aria-label="Start over"
-			title="Start over"
-			className="rec-focus flex w-9 items-center justify-center rounded-xl text-[var(--rec-text-2)] transition-colors hover:bg-[var(--rec-ctl)] hover:text-[var(--rec-text-1)] disabled:opacity-40"
-		>
-			<RotateCcwIcon className="size-4" aria-hidden />
-		</button>
+		{onRestart && (
+			<button
+				type="button"
+				onClick={onRestart}
+				disabled={restarting}
+				aria-label="Start over"
+				title="Start over"
+				className="rec-focus flex w-9 items-center justify-center rounded-xl text-[var(--rec-text-2)] transition-colors hover:bg-[var(--rec-ctl)] hover:text-[var(--rec-text-1)] disabled:opacity-40"
+			>
+				<RotateCcwIcon className="size-4" aria-hidden />
+			</button>
+		)}
 	</div>
 );
 

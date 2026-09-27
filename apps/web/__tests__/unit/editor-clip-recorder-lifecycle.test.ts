@@ -64,7 +64,7 @@ async function renderRecorder(onCaptured = vi.fn(async () => undefined)) {
 
 async function startRecorder() {
 	const button = [...container.querySelectorAll("button")].find(
-		(candidate) => candidate.textContent === "Start recording",
+		(candidate) => candidate.textContent?.includes("Start Recording"),
 	);
 	expect(button).toBeDefined();
 	await act(async () => button?.click());
@@ -117,7 +117,7 @@ test("a recording that finishes after the editor closes is not imported", async 
 	const onCaptured = await renderRecorder();
 	await startRecorder();
 	const stopButton = [...container.querySelectorAll("button")].find(
-		(candidate) => candidate.textContent === "Stop and add clip",
+		(candidate) => candidate.getAttribute("aria-label") === "Stop recording",
 	);
 	expect(stopButton).toBeDefined();
 	await act(async () => stopButton?.click());

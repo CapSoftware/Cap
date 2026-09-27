@@ -1,6 +1,22 @@
 "use client";
 
+import {
+	CameraIcon,
+	LoaderCircleIcon,
+	MicIcon,
+	MonitorIcon,
+	Volume2Icon,
+} from "lucide-react";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
+import {
+	RecordingBar,
+	StartRecordingButton,
+} from "@/app/(org)/dashboard/caps/components/web-recorder-dialog/recorder-dock";
+import {
+	SourceRow,
+	Switch,
+} from "@/app/(org)/dashboard/caps/components/web-recorder-dialog/recorder-parts";
+import "@/app/(org)/dashboard/caps/components/web-recorder-dialog/recorder.css";
 import {
 	type EditorClipCapture,
 	type EditorClipCaptureSession,
@@ -18,9 +34,7 @@ type Phase =
 function elapsedLabel(milliseconds: number) {
 	const seconds = Math.floor(milliseconds / 1000);
 	const minutes = Math.floor(seconds / 60);
-	return `${minutes.toString().padStart(2, "0")}:${(seconds % 60)
-		.toString()
-		.padStart(2, "0")}`;
+	return `${minutes}:${(seconds % 60).toString().padStart(2, "0")}`;
 }
 
 export function EditorClipRecorder(props: {
@@ -218,100 +232,139 @@ export function EditorClipRecorder(props: {
 		props.onClose(false);
 	};
 
+	const idle = phase === "idle" || (phase === "error" && !captured);
+	const live = phase === "recording" || phase === "paused";
+
 	return (
-		<div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/75 p-5">
+		<div className="cap-rec absolute inset-0 z-[100] flex flex-col overflow-y-auto bg-[var(--rec-window)] text-[var(--rec-text-1)]">
 			<div
 				role="dialog"
 				aria-modal="true"
 				aria-labelledby={titleId}
-				className="w-full max-w-[460px] rounded-2xl border border-white/15 bg-[#181818] p-6 text-white shadow-2xl"
+				className="mx-auto flex w-full max-w-[560px] flex-1 flex-col justify-center gap-3 px-4 py-8"
 			>
-				<div className="flex items-start justify-between gap-4">
-					<div>
-						<h2 id={titleId} className="text-lg font-semibold">
-							Record New Clip
+				<div className="flex items-start justify-between gap-4 px-1">
+					<div className="flex flex-col gap-1">
+						<h2
+							id={titleId}
+							className="text-[20px] font-medium tracking-[-0.01em]"
+						>
+							Record a new clip
 						</h2>
-						<p className="mt-1 text-sm text-white/60">
-							Add another screen recording to this project.
+						<p className="text-[14px] leading-relaxed text-[var(--rec-text-2)]">
+							It goes on the end of your timeline, with your camera on its own
+							track, ready to edit.
 						</p>
 					</div>
 					{phase !== "starting" && phase !== "uploading" && (
 						<button
 							type="button"
-							aria-label="Discard clip and close recorder"
-							className="rounded-md px-2 py-1 text-white/60 hover:bg-white/10 hover:text-white"
+							aria-label="Back to the editor"
+							className="rec-btn is-ghost shrink-0"
 							onClick={() => void handleDiscard()}
 						>
-							×
+							{live ? "Discard" : "Back to editor"}
 						</button>
 					)}
 				</div>
-				{phase === "idle" || (phase === "error" && !captured) ? (
-					<div className="mt-6 flex flex-col gap-3 text-sm">
-						<label className="flex items-center justify-between gap-4">
-							<span>Camera</span>
-							<input
-								type="checkbox"
-								checked={cameraEnabled}
-								onChange={(event) => setCameraEnabled(event.target.checked)}
-							/>
-						</label>
-						<label className="flex items-center justify-between gap-4">
-							<span>Microphone</span>
-							<input
-								type="checkbox"
-								checked={micEnabled}
-								onChange={(event) => setMicEnabled(event.target.checked)}
-							/>
-						</label>
-						<label className="flex items-center justify-between gap-4">
-							<span>Screen audio</span>
-							<input
-								type="checkbox"
-								checked={systemAudioEnabled}
-								onChange={(event) =>
-									setSystemAudioEnabled(event.target.checked)
-								}
-							/>
-						</label>
-					</div>
-				) : null}
 				{previewStream && (
-					<video
-						ref={previewRef}
-						autoPlay
-						muted
-						playsInline
-						aria-label="Live camera preview"
-						className="mt-5 aspect-video w-full rounded-xl bg-black object-cover"
-					/>
-				)}
-				{phase === "recording" || phase === "paused" ? (
-					<div className="mt-5 flex items-center justify-between rounded-lg bg-white/10 px-4 py-3">
-						<span className="text-sm">
-							{phase === "paused" ? "Paused" : "Recording"}
-						</span>
-						<time className="font-mono text-sm tabular-nums">
-							{elapsedLabel(elapsedMs)}
-						</time>
+					<div className="relative aspect-video w-full overflow-hidden rounded-[12px] bg-[var(--rec-media)]">
+						<video
+							ref={previewRef}
+							autoPlay
+							muted
+							playsInline
+							aria-label="Live camera preview"
+							className="absolute inset-0 size-full -scale-x-100 object-cover"
+						/>
 					</div>
-				) : null}
+				)}
+				<section className="rec-card flex flex-col p-2">
+					<ul className="flex flex-col gap-0.5">
+						<SourceRow
+							kind="screen"
+							icon={MonitorIcon}
+							label="Screen"
+							on
+							detail={
+								idle
+									? "Your browser asks what to share when you start"
+									: "Recording"
+							}
+							actions={null}
+						/>
+						<SourceRow
+							kind="camera"
+							icon={CameraIcon}
+							label="Camera"
+							on={cameraEnabled}
+							detail={cameraEnabled ? "On its own track" : "Off"}
+							actions={
+								<Switch
+									label="Camera"
+									on={cameraEnabled}
+									disabled={!idle}
+									onChange={setCameraEnabled}
+								/>
+							}
+						/>
+						<SourceRow
+							kind="mic"
+							icon={MicIcon}
+							label="Microphone"
+							on={micEnabled}
+							detail={micEnabled ? "Your voice" : "Muted"}
+							actions={
+								<Switch
+									label="Microphone"
+									on={micEnabled}
+									disabled={!idle}
+									onChange={setMicEnabled}
+								/>
+							}
+						/>
+						<SourceRow
+							kind="system"
+							icon={Volume2Icon}
+							label="Screen audio"
+							on={systemAudioEnabled}
+							detail={
+								systemAudioEnabled
+									? "Turn on the audio switch in the share popup"
+									: "Off"
+							}
+							actions={
+								<Switch
+									label="Screen audio"
+									on={systemAudioEnabled}
+									disabled={!idle}
+									onChange={setSystemAudioEnabled}
+								/>
+							}
+						/>
+					</ul>
+				</section>
 				{phase === "starting" && (
-					<p className="mt-6 text-sm text-white/70">Opening screen picker…</p>
+					<p className="px-1 text-[13px] text-[var(--rec-text-2)]">
+						Choose what to share in your browser's popup…
+					</p>
 				)}
 				{phase === "uploading" && (
-					<p className="mt-6 text-sm text-white/70">Adding clip to editor…</p>
+					<div className="flex items-center gap-2 px-1 text-[13px] text-[var(--rec-text-2)]">
+						<LoaderCircleIcon className="size-4 animate-spin" aria-hidden />
+						Adding the clip to your timeline…
+					</div>
 				)}
 				{error && (
 					<p
 						role="alert"
-						className="mt-5 rounded-lg bg-red-500/15 px-3 py-2 text-sm text-red-200"
+						className="rounded-lg bg-[color-mix(in_srgb,var(--rec-red)_12%,transparent)] px-3 py-2 text-[13px] text-[var(--rec-red)]"
 					>
 						{error}
 					</p>
 				)}
 				{captured && downloadUrls && phase === "error" && (
-					<div className="mt-4 flex gap-4 text-sm text-blue-300">
+					<div className="flex gap-4 px-1 text-[13px] text-[var(--rec-accent)]">
 						<a href={downloadUrls.display} download={captured.display.name}>
 							Download screen clip
 						</a>
@@ -322,52 +375,29 @@ export function EditorClipRecorder(props: {
 						)}
 					</div>
 				)}
-				<div className="mt-6 flex justify-end gap-3">
-					{phase === "idle" || (phase === "error" && !captured) ? (
-						<button
-							type="button"
-							className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium hover:bg-blue-500"
+				<div className="flex items-center justify-center pt-3">
+					{idle ? (
+						<StartRecordingButton
+							detail="Adds a clip to this project"
 							onClick={() => void handleStart()}
-						>
-							Start recording
-						</button>
-					) : null}
-					{phase === "recording" && (
+						/>
+					) : live ? (
+						<RecordingBar
+							time={elapsedLabel(elapsedMs)}
+							paused={phase === "paused"}
+							restarting={false}
+							onStop={() => void handleStop()}
+							onPauseToggle={phase === "paused" ? handleResume : handlePause}
+						/>
+					) : phase === "error" && captured && capturedCanImport ? (
 						<button
 							type="button"
-							className="rounded-lg bg-white/10 px-4 py-2 text-sm hover:bg-white/20"
-							onClick={handlePause}
-						>
-							Pause
-						</button>
-					)}
-					{phase === "paused" && (
-						<button
-							type="button"
-							className="rounded-lg bg-white/10 px-4 py-2 text-sm hover:bg-white/20"
-							onClick={handleResume}
-						>
-							Resume
-						</button>
-					)}
-					{(phase === "recording" || phase === "paused") && (
-						<button
-							type="button"
-							className="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium hover:bg-red-500"
-							onClick={() => void handleStop()}
-						>
-							Stop and add clip
-						</button>
-					)}
-					{phase === "error" && captured && capturedCanImport && (
-						<button
-							type="button"
-							className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium hover:bg-blue-500"
+							className="rec-btn is-accent"
 							onClick={() => void importCapture(captured)}
 						>
-							Retry import
+							Try adding it again
 						</button>
-					)}
+					) : null}
 				</div>
 			</div>
 		</div>
