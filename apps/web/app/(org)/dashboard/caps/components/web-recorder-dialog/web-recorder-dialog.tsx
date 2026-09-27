@@ -697,6 +697,8 @@ export const WebRecorderDialog = () => {
 			: []),
 	];
 	const trackCount = sourceWords.length;
+	const recordedWordsRef = useRef<string[]>([]);
+	if (live) recordedWordsRef.current = sourceWords;
 	const recordLabel =
 		sharedScreen || cameraEnabled
 			? "Start recording"
@@ -1141,11 +1143,21 @@ export const WebRecorderDialog = () => {
 						micEnabled ? (
 							<>
 								{segment(null)}
-								<span className="pointer-events-none absolute inset-y-0 left-0 right-0">
-									<Waveform
-										samples={micSamples}
-										span={scaleMs / WAVE_SAMPLE_MS}
-									/>
+								<span
+									className="pointer-events-none absolute inset-y-0 left-0 overflow-hidden transition-[width] duration-500 ease-out"
+									style={{ width: `${Math.max(playheadPct, 0.8)}%` }}
+								>
+									<span
+										className="absolute inset-y-0 left-0"
+										style={{
+											width: `${10000 / Math.max(playheadPct, 0.8)}%`,
+										}}
+									>
+										<Waveform
+											samples={micSamples}
+											span={scaleMs / WAVE_SAMPLE_MS}
+										/>
+									</span>
 								</span>
 							</>
 						) : (
@@ -1327,18 +1339,20 @@ export const WebRecorderDialog = () => {
 		<main className="relative flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-2 pb-2 sm:px-3 sm:pb-3">
 			<section className="rec-card relative flex min-h-[15rem] flex-1 flex-col overflow-hidden">
 				{live && screenMode && (
-					<div className="rec-rise absolute left-1/2 top-3 z-10 flex max-w-[calc(100%-24px)] -translate-x-1/2 items-center gap-2 rounded-full bg-[var(--rec-card)] py-1 pl-1 pr-3.5 text-[13px] shadow-[var(--rec-pop-shadow)]">
-						<span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-[var(--rec-accent)] text-white">
-							<MonitorIcon className="size-3.5" aria-hidden />
-						</span>
-						<span className="truncate">
-							<span className="font-medium">
-								Switch to what you're sharing.
-							</span>{" "}
-							<span className="text-[var(--rec-text-2)]">
-								Come back to this tab to stop.
+					<div className="pointer-events-none absolute inset-x-3 top-3 z-10 flex justify-center">
+						<div className="rec-rise flex max-w-full items-center gap-2 rounded-full bg-[var(--rec-card)] py-1 pl-1 pr-3.5 text-[13px] shadow-[var(--rec-pop-shadow)]">
+							<span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-[var(--rec-accent)] text-white">
+								<MonitorIcon className="size-3.5" aria-hidden />
 							</span>
-						</span>
+							<span className="truncate">
+								<span className="font-medium">
+									Switch to what you're sharing.
+								</span>{" "}
+								<span className="text-[var(--rec-text-2)]">
+									Come back to this tab to stop.
+								</span>
+							</span>
+						</div>
 					</div>
 				)}
 				<div
@@ -1391,7 +1405,7 @@ export const WebRecorderDialog = () => {
 			className="rec-rise mt-8 flex flex-wrap items-center justify-center gap-1.5"
 			style={{ "--d": "0.15s" } as CSSProperties}
 		>
-			{sourceWords.map((word) => (
+			{recordedWordsRef.current.map((word) => (
 				<li
 					key={word}
 					className="rec-track flex h-8 items-center gap-2 rounded-lg bg-[var(--rec-ctl)] pl-1 pr-3 text-[13px]"
