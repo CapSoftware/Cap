@@ -378,40 +378,70 @@ export const MicMeter = ({ level }: { level: number }) => (
 	</span>
 );
 
-// Level history drawn as a mirrored waveform across a live mic segment.
-export const Waveform = ({
-	samples,
-	span,
+export const AudioLevel = ({
+	kind,
+	icon: Icon,
+	label,
+	on,
+	level,
+	note,
+	action,
 }: {
-	samples: number[];
-	span: number;
+	kind: TrackKind;
+	icon: LucideIcon;
+	label: string;
+	on: boolean;
+	level?: number;
+	note?: string;
+	action?: ReactNode;
 }) => {
-	if (samples.length === 0 || span <= 0) return null;
-	const width = 1000;
-	const step = width / span;
+	const segments = 24;
+	const lit = Math.round(Math.min(1, (level ?? 0) * 1.4) * segments);
 	return (
-		<svg
-			viewBox={`0 0 ${width} 20`}
-			preserveAspectRatio="none"
-			className="absolute inset-x-1 inset-y-1.5 h-[calc(100%-12px)] w-[calc(100%-8px)]"
-			aria-hidden="true"
+		<div
+			className="rec-track flex min-w-0 flex-col gap-1.5"
+			data-kind={kind}
+			data-on={on}
 		>
-			{samples.map((level, index) => {
-				const height = Math.max(1.2, Math.min(1, level * 1.6) * 20);
-				return (
-					<rect
-						// biome-ignore lint/suspicious/noArrayIndexKey: samples are positional
-						key={index}
-						className="rec-wave"
-						x={index * step}
-						y={(20 - height) / 2}
-						width={Math.max(1, step * 0.6)}
-						height={height}
-						rx={0.5}
-					/>
-				);
-			})}
-		</svg>
+			<span className="flex items-center gap-2 text-[12px]">
+				<span className="rec-track-tile flex size-5 shrink-0 items-center justify-center rounded">
+					<Icon className="size-3" aria-hidden />
+				</span>
+				<span
+					className={clsx(
+						"font-medium",
+						on ? "text-[var(--rec-text-1)]" : "text-[var(--rec-text-2)]",
+					)}
+				>
+					{label}
+				</span>
+				{note && (
+					<span className="truncate text-[var(--rec-text-3)]">{note}</span>
+				)}
+				{action}
+			</span>
+			{level !== undefined && on && (
+				<span className="flex h-3 gap-[3px]" aria-hidden>
+					{Array.from({ length: segments }, (_, index) => (
+						<span
+							// biome-ignore lint/suspicious/noArrayIndexKey: fixed meter segments
+							key={index}
+							className="h-full flex-1 rounded-[1.5px] transition-colors duration-75"
+							style={{
+								background:
+									index < lit
+										? index > segments * 0.85
+											? "var(--rec-red)"
+											: index > segments * 0.65
+												? "#f5a524"
+												: "var(--track-mic)"
+										: "var(--rec-ctl-active)",
+							}}
+						/>
+					))}
+				</span>
+			)}
+		</div>
 	);
 };
 

@@ -12,6 +12,8 @@ import {
 import clsx from "clsx";
 import {
 	CameraIcon,
+	CheckIcon,
+	CirclePlayIcon,
 	LoaderCircleIcon,
 	MicIcon,
 	MonitorIcon,
@@ -38,6 +40,7 @@ import { HowRecordingWorks } from "./how-recording-works";
 import { InProgressRecordingBar } from "./InProgressRecordingBar";
 import { DeviceMenu, OptionsMenu, RecordButton } from "./recorder-dock";
 import {
+	AudioLevel,
 	BoilFilter,
 	CountdownDial,
 	Doodle,
@@ -47,10 +50,8 @@ import {
 	SourceRow,
 	Squiggle,
 	Switch,
-	type TrackKind,
 	useLiveStream,
 	useMicLevel,
-	Waveform,
 } from "./recorder-parts";
 import type { RecordingMode } from "./recording-mode";
 import { SystemAudioGuide } from "./system-audio-guide";
@@ -88,7 +89,6 @@ const SURFACE_LABELS: Record<Exclude<RecordingMode, "camera">, string> = {
 	tab: "Browser tab",
 };
 
-const WAVE_SAMPLE_MS = 150;
 const AUDIO_GUIDE_DISMISSED_KEY = "cap-web-recorder-audio-guide-dismissed";
 const LIVE_PREVIEW_KEY = "cap-web-recorder-live-preview";
 
@@ -694,20 +694,6 @@ export const WebRecorderDialog = () => {
 				stage === "countdown" ||
 				stage === "recording"),
 	);
-	const [micSamples, setMicSamples] = useState<number[]>([]);
-	const micLevelRef = useRef(micLevel);
-	micLevelRef.current = micLevel;
-	useEffect(() => {
-		if (!isRecording) {
-			if (phase === "idle") setMicSamples([]);
-			return;
-		}
-		if (isPaused) return;
-		const interval = window.setInterval(() => {
-			setMicSamples((samples) => [...samples, micLevelRef.current]);
-		}, WAVE_SAMPLE_MS);
-		return () => window.clearInterval(interval);
-	}, [isRecording, isPaused, phase]);
 	const [howOpen, setHowOpen] = useState(false);
 	// Watching your own screen while recording it is distracting (and shows up
 	// in the capture), so the preview starts hidden once recording begins.
@@ -770,11 +756,6 @@ export const WebRecorderDialog = () => {
 	const recordedWordsRef = useRef<string[]>([]);
 	if (live) recordedWordsRef.current = sourceWords;
 
-	const scaleMs = Math.max(
-		60_000,
-		Math.ceil((durationMs + 6_000) / 60_000) * 60_000,
-	);
-	const playheadPct = Math.min(100, (durationMs / scaleMs) * 100);
 	const sentBytes = chunkUploads.reduce(
 		(total, chunk) =>
 			total +
@@ -796,7 +777,7 @@ export const WebRecorderDialog = () => {
 	const screenTile = screenSupported && (
 		<div
 			className={clsx(
-				"rec-tile relative overflow-hidden rounded-[10px]",
+				"rec-tile rec-mon-screen relative overflow-hidden rounded-[10px]",
 				screenStream
 					? "bg-[var(--rec-media)]"
 					: "bg-[var(--rec-card-2)] shadow-[inset_0_0_0_1px_var(--rec-line)]",
@@ -847,7 +828,7 @@ export const WebRecorderDialog = () => {
 	const cameraTile = (
 		<div
 			className={clsx(
-				"rec-tile relative overflow-hidden rounded-[10px]",
+				"rec-tile rec-mon-cam relative overflow-hidden rounded-[10px]",
 				cameraEnabled
 					? "bg-[var(--rec-media)]"
 					: "bg-[var(--rec-card-2)] shadow-[inset_0_0_0_1px_var(--rec-line)]",
@@ -972,11 +953,18 @@ export const WebRecorderDialog = () => {
 		</div>
 	);
 
-	const cameraName =
-		availableCameras.find((camera) => camera.deviceId === selectedCameraId)
-			?.label || "Camera";
-
 	const smallBtn = "rec-btn !h-7 !px-2.5 !text-[12px]";
+
+	const showMeHow = (
+		<button
+			type="button"
+			className="rec-focus inline-flex shrink-0 items-center gap-1 rounded px-1 font-medium text-[var(--rec-accent)] hover:underline"
+			onClick={() => setAudioGuideOpen(true)}
+		>
+			<CirclePlayIcon className="size-3" aria-hidden />
+			Show me how
+		</button>
+	);
 
 	const liveBadge = (on: boolean) =>
 		on ? (
@@ -1144,13 +1132,10 @@ export const WebRecorderDialog = () => {
 								Choose your screen again to include it
 							</button>
 						) : (
-							<button
-								type="button"
-								className="rec-focus -ml-1 rounded px-1 text-left hover:text-[var(--rec-text-1)]"
-								onClick={() => setAudioGuideOpen(true)}
-							>
-								How to share it
-							</button>
+							<>
+								<span className="truncate">Computer sound</span>
+								{showMeHow}
+							</>
 						)
 					}
 					actions={
@@ -1170,122 +1155,53 @@ export const WebRecorderDialog = () => {
 		</ul>
 	);
 
-	type Lane = {
-		kind: TrackKind;
-		icon: typeof MonitorIcon;
-		on: boolean;
-		label: string;
-	};
-	const lanes: Lane[] = [
-		...(screenSupported
-			? [
-					{
-						kind: "screen" as const,
-						icon: MonitorIcon,
-						on: live ? screenMode : sharedScreen !== null,
-						label: live
-							? screenMode
-								? SURFACE_LABELS[recordingMode]
-								: ""
-							: "Screen",
-					},
-				]
-			: []),
-		{
-			kind: "camera",
-			icon: CameraIcon,
-			on: cameraEnabled,
-			label: live ? cameraName : "Camera",
-		},
-		{ kind: "mic", icon: MicIcon, on: micEnabled, label: live ? "" : "Mic" },
-		...(screenSupported
-			? [
-					{
-						kind: "system" as const,
-						icon: Volume2Icon,
-						on: systemAudioOn && (live ? screenMode : true),
-						label: live ? "Computer sound" : "System audio",
-					},
-				]
-			: []),
-	];
-
-	const timeline = (
-		<div className="flex flex-col gap-2">
-			<div className="flex items-baseline justify-between gap-3">
-				<span className="text-[12px] font-medium text-[var(--rec-text-2)]">
-					Tracks
-				</span>
-				<span className="truncate text-[12px] text-[var(--rec-text-3)]">
-					{live
-						? partsSent === 0
-							? "Uploading as you record"
-							: `${partsSent} ${partsSent === 1 ? "part" : "parts"} uploaded`
-						: `${trackCount} separate ${trackCount === 1 ? "track" : "tracks"} in the editor`}
-				</span>
-			</div>
-			<div className="relative flex flex-col gap-1 [--gutter:22px]">
-				{lanes.map((lane) => (
-					<div
-						key={lane.kind}
-						className="rec-track flex h-6 items-center gap-1.5"
-						data-kind={lane.kind}
-						data-on={lane.on}
-					>
-						<span className="rec-track-tile flex size-4 shrink-0 items-center justify-center rounded">
-							<lane.icon className="size-2.5" aria-hidden />
-						</span>
-						<span className="relative h-full min-w-0 flex-1 overflow-hidden rounded-[5px] bg-[var(--rec-ctl)]">
-							{live && lane.on ? (
-								<span
-									className="rec-segment absolute inset-y-0 left-0 flex items-center overflow-hidden rounded-[5px] pl-2 text-[11px] font-medium transition-[width] duration-500 ease-out"
-									style={{ width: `${Math.max(playheadPct, 1.5)}%` }}
-								>
-									{lane.kind === "mic" ? (
-										<span
-											className="absolute inset-y-0 left-0"
-											style={{
-												width: `${10000 / Math.max(playheadPct, 1.5)}%`,
-											}}
-										>
-											<Waveform
-												samples={micSamples}
-												span={scaleMs / WAVE_SAMPLE_MS}
-											/>
-										</span>
-									) : (
-										<span className="relative truncate">{lane.label}</span>
-									)}
-								</span>
-							) : !live ? (
-								<span
-									className={clsx(
-										"absolute inset-0 flex items-center pl-2 text-[11px]",
-										lane.on
-											? "text-[var(--rec-text-2)]"
-											: "text-[var(--rec-text-3)]",
-									)}
-								>
-									{lane.on ? `${lane.label} · ready` : `${lane.label} · off`}
-								</span>
-							) : null}
-						</span>
-					</div>
-				))}
-				{live && (
-					<span
-						className="rec-playhead pointer-events-none absolute -inset-y-1 z-10 w-0.5 -translate-x-1/2 rounded-full bg-[var(--rec-red)] transition-[left] duration-500 ease-out"
-						style={{
-							left: `calc(var(--gutter) + (100% - var(--gutter)) * ${playheadPct / 100})`,
-						}}
-					/>
-				)}
-			</div>
+	const audioMonitor = (
+		<div className="rec-mon-audio flex min-w-0 flex-col justify-center gap-5 rounded-[10px] bg-[var(--rec-card-2)] px-5 shadow-[inset_0_0_0_1px_var(--rec-line)]">
+			<AudioLevel
+				kind="mic"
+				icon={MicIcon}
+				label="Microphone"
+				on={micEnabled}
+				level={micEnabled ? micLevel : 0}
+				note={
+					micEnabled
+						? undefined
+						: availableMics.length === 0
+							? "Needs permission"
+							: "Muted"
+				}
+			/>
+			{screenSupported && (
+				<AudioLevel
+					kind="system"
+					icon={Volume2Icon}
+					label="System audio"
+					on={systemAudioOn && (live ? screenMode : true)}
+					note={
+						systemAudioOn && (live ? screenMode : true)
+							? sharedScreen || live
+								? "From your shared screen"
+								: "Captured with your screen"
+							: "Off"
+					}
+					action={!live && !systemAudioOn ? showMeHow : undefined}
+				/>
+			)}
 		</div>
 	);
 
 	const controls = live ? (
-		<div className="flex flex-col gap-2">
+		<section className="rec-card flex flex-col gap-3 p-3">
+			<div className="flex items-center justify-between gap-3 px-1">
+				<span className="flex items-center gap-2 text-[13px] text-[var(--rec-text-2)]">
+					<LiveDot paused={isPaused} />
+					{isPaused ? "Paused" : "Recording"}
+				</span>
+				<span className="text-[24px] font-medium tabular-nums leading-none tracking-[-0.02em]">
+					{formatClock(durationMs)}
+				</span>
+			</div>
+			<RecordButton recording onClick={handleStopClick} />
 			<div className="grid grid-cols-2 gap-2">
 				<button
 					type="button"
@@ -1313,15 +1229,14 @@ export const WebRecorderDialog = () => {
 					Start over
 				</button>
 			</div>
-			<RecordButton recording onClick={handleStopClick} />
 			{!user.isPro && (
 				<span className="text-center text-[12px] tabular-nums text-[var(--rec-text-3)]">
 					{formatClock(recordingTimerDisplayMs)} left on Free
 				</span>
 			)}
-		</div>
+		</section>
 	) : (
-		<div className="flex flex-col gap-2">
+		<section className="rec-card flex flex-col gap-2.5 p-3">
 			<RecordButton
 				recording={false}
 				busy={
@@ -1336,7 +1251,7 @@ export const WebRecorderDialog = () => {
 					void handleRecordClick();
 				}}
 			/>
-			<span className="text-center text-[12px] text-[var(--rec-text-3)]">
+			<span className="text-center text-[12px] leading-snug text-[var(--rec-text-3)]">
 				{trackCount === 0
 					? screenSupported
 						? "You'll choose a screen next"
@@ -1345,37 +1260,114 @@ export const WebRecorderDialog = () => {
 							user.isPro ? "" : ` · up to ${freeMinutes} min on Free`
 						}`}
 			</span>
-		</div>
+		</section>
+	);
+
+	const steps = live
+		? [
+				{
+					done: true,
+					title: "Your link is live",
+					body: "Anyone with it can watch as soon as you stop.",
+				},
+				{
+					done: partsSent > 0,
+					title:
+						partsSent === 0
+							? "Uploading as you record"
+							: `${partsSent} ${partsSent === 1 ? "part" : "parts"} uploaded`,
+					body: "No export to wait for at the end.",
+				},
+				{
+					done: false,
+					title: "Stop to open the editor",
+					body: `Your ${trackCount} ${trackCount === 1 ? "track is" : "tracks are"} waiting there, separate.`,
+				},
+			]
+		: [
+				{
+					done: false,
+					title: "Each source is its own track",
+					body: "Screen, camera and audio stay separate.",
+				},
+				{
+					done: false,
+					title: "Uploads while you record",
+					body: "Your link works the moment you stop.",
+				},
+				{
+					done: false,
+					title: "Arrange it in the editor",
+					body: "Pick a layout, trim, then save.",
+				},
+			];
+
+	const whatHappens = (
+		<section className="rec-card flex flex-col gap-1 p-3">
+			<span className="px-1 pb-1 text-[12px] font-medium text-[var(--rec-text-2)]">
+				{live ? "While you record" : "What happens"}
+			</span>
+			<ol className="flex flex-col gap-2.5 px-1">
+				{steps.map((step, index) => (
+					<li key={step.body} className="flex gap-2.5">
+						<span
+							className={clsx(
+								"mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full text-[10px] font-medium tabular-nums",
+								step.done
+									? "bg-[var(--rec-green)] text-white"
+									: "bg-[var(--rec-ctl-active)] text-[var(--rec-text-2)]",
+							)}
+						>
+							{step.done ? (
+								<CheckIcon className="size-2.5" aria-hidden />
+							) : (
+								index + 1
+							)}
+						</span>
+						<span className="flex min-w-0 flex-col">
+							<span className="text-[13px] font-medium leading-5">
+								{step.title}
+							</span>
+							<span className="text-[12px] leading-snug text-[var(--rec-text-2)]">
+								{step.body}
+							</span>
+						</span>
+					</li>
+				))}
+			</ol>
+			{!live && (
+				<button
+					type="button"
+					className="rec-btn is-ghost mt-1.5 !h-7 self-start !px-1.5 !text-[12px] text-[var(--rec-accent)]"
+					onClick={() => setHowOpen(true)}
+				>
+					<CirclePlayIcon className="size-3.5" aria-hidden />
+					Watch how it works
+				</button>
+			)}
+		</section>
 	);
 
 	const sidebar = (
-		<aside className="rec-card flex shrink-0 flex-col lg:min-h-0">
-			<header className="flex h-11 shrink-0 items-center justify-between pl-4 pr-2">
-				<span className="text-[12px] font-medium text-[var(--rec-text-2)]">
-					Sources
-				</span>
-				{live && (
-					<span className="flex items-center gap-2 pr-2 text-[15px] font-medium tabular-nums">
-						<LiveDot paused={isPaused} />
-						{formatClock(durationMs)}
+		<aside className="flex shrink-0 flex-col gap-2 lg:min-h-0 lg:overflow-y-auto">
+			{controls}
+			<section className="rec-card flex flex-col">
+				<header className="flex h-10 shrink-0 items-center justify-between pl-4 pr-2">
+					<span className="text-[12px] font-medium text-[var(--rec-text-2)]">
+						Sources
 					</span>
-				)}
-				{!live && (
-					<OptionsMenu
-						disabled={setupLocked}
-						rememberDevices={rememberDevices}
-						onRememberDevicesChange={handleRememberDevicesChange}
-					/>
-				)}
-			</header>
-			<div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-2 pb-3">
-				{sources}
-				<div className="px-2">{timeline}</div>
-				{!live && notices}
-			</div>
-			<div className="shrink-0 p-3 shadow-[0_-1px_0_var(--rec-line)]">
-				{controls}
-			</div>
+					{!live && (
+						<OptionsMenu
+							disabled={setupLocked}
+							rememberDevices={rememberDevices}
+							onRememberDevicesChange={handleRememberDevicesChange}
+						/>
+					)}
+				</header>
+				<div className="px-2 pb-2">{sources}</div>
+			</section>
+			{whatHappens}
+			{notices}
 		</aside>
 	);
 
@@ -1495,13 +1487,20 @@ export const WebRecorderDialog = () => {
 					<div
 						className={clsx(
 							"rec-stage min-h-0 flex-1 p-3 sm:p-4",
-							screenSupported ? "is-stack" : "is-single",
+							screenSupported ? "is-director" : "is-single",
 						)}
 					>
-						<div className="rec-tiles">
-							{screenTile}
-							{cameraTile}
-						</div>
+						{screenSupported ? (
+							<div className="rec-monitors">
+								{screenTile}
+								<div className="rec-mon-row">
+									{cameraTile}
+									{audioMonitor}
+								</div>
+							</div>
+						) : (
+							<div className="rec-tiles">{cameraTile}</div>
+						)}
 					</div>
 				)}
 			</section>
