@@ -25,6 +25,7 @@ import {
 } from "solid-js";
 import { produce } from "solid-js/store";
 import toast from "solid-toast";
+import IconLucideLockOpen from "~icons/lucide/lock-open";
 import IconLucidePalette from "~icons/lucide/palette";
 import { stylesRevealCamera } from "../style";
 import { ImageTrack } from "./image-track";
@@ -34,7 +35,7 @@ import "./styles.css";
 
 import { defaultCaptionSettings } from "~/store/captions";
 import { defaultKeyboardSettings } from "~/store/keyboard";
-import { commands } from "~/utils/tauri";
+import { commands, type LockableTimelineTrack } from "~/utils/tauri";
 import type { AudioTrackSegment } from "../audio";
 import {
 	applyCaptionResultToProject,
@@ -1818,6 +1819,24 @@ function TrackRow(props: {
 		});
 	};
 
+	const lockKind = () =>
+		props.type === "clip" ? null : (props.type as LockableTimelineTrack);
+	const locked = () => {
+		const kind = lockKind();
+		return !!kind && (project.lockedTracks ?? []).includes(kind);
+	};
+	const toggleLocked = () => {
+		const kind = lockKind();
+		if (!kind) return;
+		const current = project.lockedTracks ?? [];
+		setProject(
+			"lockedTracks",
+			current.includes(kind)
+				? current.filter((track) => track !== kind)
+				: [...current, kind],
+		);
+	};
+
 	const canReorder = () =>
 		props.laneIndex !== undefined &&
 		(isOverlayTrackKind(props.type) ? overlayRows().length : laneCount()) > 1;
@@ -2059,12 +2078,49 @@ function TrackRow(props: {
 									? "text-ed-text-1"
 									: "text-ed-text-2 group-hover/row:text-ed-text-1",
 							)}
-							classList={{ "group-hover/icon:pr-5": !!props.onDelete }}
+							classList={{
+								"group-hover/icon:pr-5":
+									!props.onDelete && props.type !== "clip",
+								"group-hover/icon:pr-10": !!props.onDelete,
+								"pr-5": locked() && !props.onDelete,
+								"pr-10": locked() && !!props.onDelete,
+							}}
 						>
 							{props.label}
 						</span>
 					</Show>
 				</button>
+				<Show when={props.type !== "clip"}>
+					<button
+						type="button"
+						class={cx(
+							"absolute top-1/2 z-30 flex size-5 -translate-y-1/2 items-center justify-center rounded-md transition-opacity hover:bg-ed-ctl-active focus-visible:opacity-100",
+							props.onDelete ? "right-5" : "right-0",
+							locked()
+								? "text-ed-accent opacity-100"
+								: "text-ed-text-3 opacity-0 group-hover/icon:opacity-100",
+						)}
+						aria-label={locked() ? "Unlock track timing" : "Lock track timing"}
+						aria-pressed={locked()}
+						title={
+							locked()
+								? "Locked: stays in place when clips are cut, trimmed or retimed. Click to unlock."
+								: "Lock this track so clip edits don't move its segments"
+						}
+						onClick={(e) => {
+							e.stopPropagation();
+							toggleLocked();
+						}}
+						onMouseDown={(e) => e.stopPropagation()}
+					>
+						<Show
+							when={locked()}
+							fallback={<IconLucideLockOpen class="size-3.5" />}
+						>
+							<IconLucideLock class="size-3.5" />
+						</Show>
+					</button>
+				</Show>
 				<Show when={props.onDelete}>
 					<button
 						type="button"

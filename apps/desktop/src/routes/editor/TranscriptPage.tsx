@@ -439,6 +439,8 @@ export function TranscriptPanel() {
 							range.start,
 							range.end,
 							range.segmentIndex,
+							undefined,
+							p.lockedTracks ?? [],
 						);
 					}
 				}
