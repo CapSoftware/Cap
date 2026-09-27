@@ -2,7 +2,11 @@
 
 import type { RecorderCameraLayout } from "@cap/editor-cap-bundle/default-style";
 import clsx from "clsx";
-import { FlipHorizontal2Icon } from "lucide-react";
+import {
+	FlipHorizontal2Icon,
+	Maximize2Icon,
+	Minimize2Icon,
+} from "lucide-react";
 import {
 	type ReactNode,
 	type PointerEvent as ReactPointerEvent,
@@ -16,11 +20,9 @@ export type CameraLayout = Omit<RecorderCameraLayout, "version">;
 type XPosition = CameraLayout["position"]["x"];
 type YPosition = CameraLayout["position"]["y"];
 
-export const CAMERA_SIZES = [
-	{ label: "S", value: 22, name: "Small" },
-	{ label: "M", value: 30, name: "Medium" },
-	{ label: "L", value: 40, name: "Large" },
-] as const;
+// Like the desktop camera preview: a normal size and a large one.
+export const CAMERA_SIZE_NORMAL = 30;
+export const CAMERA_SIZE_LARGE = 42;
 
 export const DEFAULT_CAMERA_LAYOUT: CameraLayout = {
 	position: { x: "right", y: "bottom" },
@@ -32,14 +34,6 @@ export const DEFAULT_CAMERA_LAYOUT: CameraLayout = {
 const STORAGE_KEY = "cap-web-recorder-camera-layout";
 const X_POSITIONS: XPosition[] = ["left", "center", "right"];
 const Y_POSITIONS: YPosition[] = ["top", "bottom"];
-
-export const describeCameraLayout = (layout: CameraLayout) => {
-	const x = layout.position.x === "center" ? "centre" : layout.position.x;
-	const size =
-		CAMERA_SIZES.find((option) => option.value === layout.size)?.name ??
-		"Medium";
-	return `${layout.position.y === "top" ? "Top" : "Bottom"} ${x} · ${size}`;
-};
 
 export const useCameraLayout = () => {
 	const [layout, setLayoutState] = useState<CameraLayout>(
@@ -59,9 +53,10 @@ export const useCameraLayout = () => {
 					Y_POSITIONS.includes(stored.position.y)
 						? stored.position
 						: current.position,
-				size: CAMERA_SIZES.some((option) => option.value === stored.size)
-					? (stored.size as number)
-					: current.size,
+				size:
+					stored.size === CAMERA_SIZE_LARGE
+						? CAMERA_SIZE_LARGE
+						: CAMERA_SIZE_NORMAL,
 				mirror:
 					typeof stored.mirror === "boolean" ? stored.mirror : current.mirror,
 				shape:
@@ -181,6 +176,7 @@ export const CameraBubble = ({
 				y: drag.top + rest.height / 2,
 			})
 		: null;
+	const ghost = target ? cameraRect(frame, layout, cameraAspect, target) : null;
 
 	const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
 		if (locked || event.button !== 0) return;
@@ -226,29 +222,18 @@ export const CameraBubble = ({
 
 	return (
 		<>
-			{drag &&
-				X_POSITIONS.flatMap((x) =>
-					Y_POSITIONS.map((y) => {
-						const spot = cameraRect(frame, layout, cameraAspect, { x, y });
-						const active = target?.x === x && target?.y === y;
-						return (
-							<span
-								key={`${x}-${y}`}
-								className={clsx(
-									"pointer-events-none absolute border-[1.5px] border-dashed transition-colors",
-									active ? "border-white/80 bg-white/10" : "border-white/25",
-								)}
-								style={{
-									left: spot.left,
-									top: spot.top,
-									width: spot.width,
-									height: spot.height,
-									borderRadius: radius,
-								}}
-							/>
-						);
-					}),
-				)}
+			{drag && ghost && (
+				<span
+					className="pointer-events-none absolute bg-white/15 shadow-[inset_0_0_0_1.5px_rgba(255,255,255,0.35)] transition-[left,top] duration-200 ease-[cubic-bezier(.2,.8,.2,1)]"
+					style={{
+						left: ghost.left,
+						top: ghost.top,
+						width: ghost.width,
+						height: ghost.height,
+						borderRadius: radius,
+					}}
+				/>
+			)}
 			<div
 				className={clsx(
 					"group/cam absolute touch-none",
@@ -281,18 +266,28 @@ export const CameraBubble = ({
 							toolbarAbove ? "bottom-full mb-2" : "top-full mt-2",
 						)}
 					>
-						{CAMERA_SIZES.map((option) => (
-							<CamButton
-								key={option.value}
-								active={layout.size === option.value}
-								label={`${option.name} camera`}
-								onClick={() => onChange({ size: option.value })}
-							>
-								<span className="text-[11px] font-semibold">
-									{option.label}
-								</span>
-							</CamButton>
-						))}
+						<CamButton
+							active={layout.size === CAMERA_SIZE_LARGE}
+							label={
+								layout.size === CAMERA_SIZE_LARGE
+									? "Make camera smaller"
+									: "Make camera bigger"
+							}
+							onClick={() =>
+								onChange({
+									size:
+										layout.size === CAMERA_SIZE_LARGE
+											? CAMERA_SIZE_NORMAL
+											: CAMERA_SIZE_LARGE,
+								})
+							}
+						>
+							{layout.size === CAMERA_SIZE_LARGE ? (
+								<Minimize2Icon className="size-3.5" aria-hidden />
+							) : (
+								<Maximize2Icon className="size-3.5" aria-hidden />
+							)}
+						</CamButton>
 						<span className="mx-0.5 h-4 w-px bg-white/20" />
 						{(["round", "square", "full"] as const).map((shape) => (
 							<CamButton
