@@ -24,6 +24,7 @@ import {
 	type ReactNode,
 	useCallback,
 	useEffect,
+	useMemo,
 	useRef,
 	useState,
 } from "react";
@@ -97,6 +98,34 @@ const LIVE_PREVIEW_KEY = "cap-web-recorder-live-preview";
 type SharedScreen = {
 	stream: MediaStream;
 	surface: Exclude<RecordingMode, "camera">;
+};
+
+// Chrome's Capture Handle lets a capture of this tab identify itself, so
+// sharing some other tab can still preview normally.
+const CAPTURE_HANDLE =
+	typeof crypto !== "undefined" && "randomUUID" in crypto
+		? `cap-recorder-${crypto.randomUUID()}`
+		: `cap-recorder-${Date.now()}`;
+
+type CaptureHandleTrack = MediaStreamTrack & {
+	getCaptureHandle?: () => { handle?: string } | null;
+};
+
+// Showing a capture of the whole screen, or of this very tab, inside this tab
+// repeats the preview inside itself forever.
+const capturesThisTab = (stream: MediaStream | null) => {
+	const track = stream?.getVideoTracks()[0] as CaptureHandleTrack | undefined;
+	if (!track) return false;
+	const surface = (
+		track.getSettings() as MediaTrackSettings & { displaySurface?: string }
+	).displaySurface;
+	if (surface === "monitor") return true;
+	if (surface !== "browser") return false;
+	try {
+		return track.getCaptureHandle?.()?.handle === CAPTURE_HANDLE;
+	} catch {
+		return false;
+	}
 };
 
 const joinWords = (words: string[]) =>
@@ -408,6 +437,7 @@ export const WebRecorderDialog = () => {
 				if (sharedScreenRef.current === shared) replaceSharedScreen(null);
 			});
 			replaceSharedScreen(shared);
+			setMirrorPreviewShown(false);
 			return true;
 		} catch (error) {
 			if (
@@ -672,7 +702,26 @@ export const WebRecorderDialog = () => {
 	const [howOpen, setHowOpen] = useState(false);
 	// Watching your own screen while recording it is distracting (and shows up
 	// in the capture), so the preview starts hidden once recording begins.
+	useEffect(() => {
+		if (!open) return;
+		const mediaDevices = navigator.mediaDevices as MediaDevices & {
+			setCaptureHandleConfig?: (config: {
+				handle: string;
+				exposeOrigin?: boolean;
+				permittedOrigins: string[];
+			}) => void;
+		};
+		try {
+			mediaDevices.setCaptureHandleConfig?.({
+				handle: CAPTURE_HANDLE,
+				permittedOrigins: [window.location.origin],
+			});
+		} catch {
+			/* older browsers: tab captures just aren't recognised */
+		}
+	}, [open]);
 	const [livePreview, setLivePreviewState] = useState(false);
+	const [mirrorPreviewShown, setMirrorPreviewShown] = useState(false);
 	useEffect(() => {
 		try {
 			setLivePreviewState(
@@ -750,6 +799,11 @@ export const WebRecorderDialog = () => {
 			: null;
 
 	const showScreen = screenSupported && screenStream !== null;
+	const mirrorRisk = useMemo(
+		() => capturesThisTab(screenStream),
+		[screenStream],
+	);
+	const dimScreen = mirrorRisk && !mirrorPreviewShown;
 	const cameraVideo = cameraEnabled ? (
 		cameraStream ? (
 			<LiveVideo
@@ -775,8 +829,48 @@ export const WebRecorderDialog = () => {
 					<LiveVideo
 						stream={screenStream}
 						mirror={false}
-						className="absolute inset-0 size-full object-contain"
+						className={clsx(
+							"absolute inset-0 size-full object-contain transition-opacity duration-500",
+							dimScreen ? "opacity-[0.07]" : "opacity-100",
+						)}
 					/>
+					{mirrorRisk && (
+						<div
+							className={clsx(
+								"absolute inset-0 flex items-center justify-center p-6 transition-opacity duration-300",
+								dimScreen ? "opacity-100" : "pointer-events-none opacity-0",
+							)}
+						>
+							<div className="flex max-w-sm flex-col items-center gap-2 text-center text-white">
+								<span className="text-[14px] font-medium">
+									Preview dimmed to avoid a mirror effect
+								</span>
+								<span className="text-[13px] leading-snug text-white/60">
+									{recordingMode === "tab" || sharedScreen?.surface === "tab"
+										? "You're sharing this tab"
+										: "You're sharing your whole screen"}
+									, so showing it here would repeat inside itself. It still
+									records in full.
+								</span>
+								<button
+									type="button"
+									className="mt-1 h-7 rounded-md bg-white/10 px-2.5 text-[12px] font-medium text-white transition-colors hover:bg-white/15"
+									onClick={() => setMirrorPreviewShown(true)}
+								>
+									Show anyway
+								</button>
+							</div>
+						</div>
+					)}
+					{mirrorRisk && !dimScreen && (
+						<button
+							type="button"
+							className="absolute right-3 top-3 h-6 rounded-md bg-black/55 px-2 text-[12px] font-medium text-white backdrop-blur-md transition-colors hover:bg-black/70"
+							onClick={() => setMirrorPreviewShown(false)}
+						>
+							Dim preview
+						</button>
+					)}
 					<MediaLabel className="left-3 top-3">
 						{live ? (
 							<LiveDot paused={isPaused} />
