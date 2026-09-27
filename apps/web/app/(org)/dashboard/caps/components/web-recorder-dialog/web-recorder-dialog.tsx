@@ -29,11 +29,13 @@ import {
 	useState,
 } from "react";
 import { toast } from "sonner";
+import { setRecorderCamera } from "@/actions/video/set-recorder-camera";
 import { useDashboardContext } from "../../../Contexts";
 import {
 	CameraPreviewWindow,
 	type CameraPreviewWindowHandle,
 } from "./CameraPreviewWindow";
+import { CameraBubble, useCameraLayout } from "./camera-layout";
 import { HowRecordingWorks } from "./how-recording-works";
 import { InProgressRecordingBar } from "./InProgressRecordingBar";
 import {
@@ -454,6 +456,7 @@ export const WebRecorderDialog = () => {
 
 	const {
 		phase,
+		videoId,
 		durationMs,
 		hasAudioTrack,
 		chunkUploads,
@@ -648,6 +651,7 @@ export const WebRecorderDialog = () => {
 	};
 
 	const screenMode = recordingMode !== "camera";
+
 	const finishing =
 		phase === "creating" || phase === "converting" || phase === "uploading";
 	const recordingScreen = useLiveStream(
@@ -720,6 +724,41 @@ export const WebRecorderDialog = () => {
 			/* older browsers: tab captures just aren't recognised */
 		}
 	}, [open]);
+	const [cameraLayout, setCameraLayout] = useCameraLayout();
+
+	// The editor and the first render open with the camera where it sat here.
+	const savedLayoutForRef = useRef<string | null>(null);
+	useEffect(() => {
+		if (phase !== "recording" || !videoId || !cameraEnabled || !screenMode)
+			return;
+		if (savedLayoutForRef.current === videoId) return;
+		savedLayoutForRef.current = videoId;
+		void setRecorderCamera({
+			videoId,
+			layout: { version: 1, ...cameraLayout },
+		}).catch((error) => {
+			console.error("Failed to save the camera layout", error);
+		});
+	}, [phase, videoId, cameraEnabled, screenMode, cameraLayout]);
+	const [previewFrame, setPreviewFrame] = useState<{
+		width: number;
+		height: number;
+	} | null>(null);
+	const previewObserverRef = useRef<ResizeObserver | null>(null);
+	const previewRef = useCallback((element: HTMLDivElement | null) => {
+		previewObserverRef.current?.disconnect();
+		previewObserverRef.current = null;
+		if (!element) return;
+		const observer = new ResizeObserver(([entry]) => {
+			if (!entry) return;
+			setPreviewFrame({
+				width: entry.contentRect.width,
+				height: entry.contentRect.height,
+			});
+		});
+		observer.observe(element);
+		previewObserverRef.current = observer;
+	}, []);
 	const [livePreview, setLivePreviewState] = useState(false);
 	const [mirrorPreviewShown, setMirrorPreviewShown] = useState(false);
 	useEffect(() => {
@@ -799,6 +838,11 @@ export const WebRecorderDialog = () => {
 			: null;
 
 	const showScreen = screenSupported && screenStream !== null;
+	const cameraSettings = cameraStream?.getVideoTracks()[0]?.getSettings();
+	const cameraAspect =
+		cameraSettings?.width && cameraSettings.height
+			? cameraSettings.width / cameraSettings.height
+			: 16 / 9;
 	const mirrorRisk = useMemo(
 		() => capturesThisTab(screenStream),
 		[screenStream],
@@ -808,6 +852,7 @@ export const WebRecorderDialog = () => {
 		cameraStream ? (
 			<LiveVideo
 				stream={cameraStream}
+				mirror={cameraLayout.mirror}
 				className="absolute inset-0 size-full object-cover"
 			/>
 		) : (
@@ -823,7 +868,10 @@ export const WebRecorderDialog = () => {
 	// What the editor opens with: the screen, with the camera as a rounded
 	// bubble in the corner, or the camera on its own.
 	const preview = (
-		<div className="rec-preview relative overflow-hidden rounded-[10px] bg-[var(--rec-media)] shadow-[0_1px_2px_rgba(0,0,0,0.08),0_12px_32px_-16px_rgba(0,0,0,0.35)]">
+		<div
+			ref={previewRef}
+			className="rec-preview relative overflow-hidden rounded-[10px] bg-[var(--rec-media)] shadow-[0_1px_2px_rgba(0,0,0,0.08),0_12px_32px_-16px_rgba(0,0,0,0.35)]"
+		>
 			{showScreen ? (
 				<>
 					<LiveVideo
@@ -880,17 +928,31 @@ export const WebRecorderDialog = () => {
 						Screen
 					</MediaLabel>
 					{cameraEnabled && (
-						<div className="rec-bubble absolute bottom-[5%] right-[3.5%] overflow-hidden bg-black shadow-[0_8px_24px_-8px_rgba(0,0,0,0.6)] ring-1 ring-white/15">
+						<CameraBubble
+							frame={previewFrame}
+							layout={cameraLayout}
+							cameraAspect={cameraAspect}
+							locked={setupLocked}
+							onChange={setCameraLayout}
+							label={
+								<MediaLabel className="bottom-2 left-1/2 -translate-x-1/2 !h-5 !px-1.5 !text-[11px]">
+									{live ? (
+										<LiveDot paused={isPaused} />
+									) : (
+										<CameraIcon className="size-3" aria-hidden />
+									)}
+									Camera
+								</MediaLabel>
+							}
+						>
 							{cameraVideo}
-							<MediaLabel className="bottom-2 left-1/2 -translate-x-1/2 !h-5 !px-1.5 !text-[11px]">
-								{live ? (
-									<LiveDot paused={isPaused} />
-								) : (
-									<CameraIcon className="size-3" aria-hidden />
-								)}
-								Camera
-							</MediaLabel>
-						</div>
+						</CameraBubble>
+					)}
+					{live && cameraEnabled && (
+						<span className="absolute bottom-3 left-3 rounded-md bg-black/55 px-2 py-1 text-[11px] text-white/80 backdrop-blur-md">
+							Camera layout is locked while recording. Change it in the editor
+							after you stop.
+						</span>
 					)}
 				</>
 			) : cameraEnabled ? (
@@ -1635,8 +1697,8 @@ export const WebRecorderDialog = () => {
 								<span className="font-medium">Preview</span>
 								<span className="text-[var(--rec-text-2)]">
 									{" "}
-									· How your video starts in the editor. Change the layout
-									after.
+									· Drag the camera to place it, and hover it to resize or flip.
+									The editor opens the same way.
 								</span>
 							</span>
 						)}
