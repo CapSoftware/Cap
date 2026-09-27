@@ -54,7 +54,11 @@ test("waits through polling and refreshes once when processing completes", async
 		lastUpdated: new Date(),
 	};
 	await render();
-	expect(container.querySelector("progress")?.value).toBe(40);
+	expect(
+		container
+			.querySelector('[role="progressbar"]')
+			?.getAttribute("aria-valuenow"),
+	).toBe("40");
 	expect(mocks.router.refresh).not.toHaveBeenCalled();
 	mocks.progress = null;
 	await render();
@@ -123,8 +127,12 @@ test("does not offer processing or recovery while an upload is active", async ()
 		progress: 30,
 	};
 	await render();
-	expect(container.querySelector("progress")?.value).toBe(30);
-	expect(container.querySelector("button")).toBeNull();
+	expect(
+		container
+			.querySelector('[role="progressbar"]')
+			?.getAttribute("aria-valuenow"),
+	).toBe("30");
+	expect(container.textContent).not.toContain("Retry processing");
 	expect(container.textContent).not.toContain("Go to recorder");
 	expect(mocks.retry).not.toHaveBeenCalled();
 });
