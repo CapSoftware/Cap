@@ -26,14 +26,15 @@ import {
 	VideoThumbnail,
 } from "@/components/VideoThumbnail";
 import { useDashboardContext } from "../Contexts";
-import {
-	formatClock,
-	Squiggle,
-} from "../caps/components/web-recorder-dialog/recorder-parts";
+import { Squiggle } from "../caps/components/web-recorder-dialog/recorder-parts";
 import { WebRecorderDialog } from "../caps/components/web-recorder-dialog/web-recorder-dialog";
 import type { UploadStatus } from "../caps/UploadingContext";
 import { useUploadingContext } from "../caps/UploadingContext";
 import { importMediaFile, isSupportedEditorFile } from "../import/import-media";
+import {
+	isSupportedAudioFile,
+	isSupportedVideoFile,
+} from "../import/media-file-types";
 
 export type RecentRecording = {
 	id: string;
@@ -89,6 +90,8 @@ export function EditorApp({ recordings }: { recordings: RecentRecording[] }) {
 type ImportState = {
 	fileName: string;
 	status: UploadStatus | undefined;
+	/** 0-1 while an audio file is being turned into a video. */
+	converting?: number;
 };
 
 function RecordingThumbnail({ recording }: { recording: RecentRecording }) {
@@ -132,9 +135,30 @@ function EditorHome({
 				return;
 			}
 			let videoId: string | null = null;
+			let upload = file;
+			if (isSupportedAudioFile(file) && !isSupportedVideoFile(file)) {
+				setImporting({ fileName: file.name, status: undefined, converting: 0 });
+				try {
+					const { convertAudioToVideo } = await import("@/lib/audio-to-video");
+					upload = await convertAudioToVideo(file, (converting) =>
+						setImporting((current) =>
+							current ? { ...current, converting } : current,
+						),
+					);
+				} catch (error) {
+					console.error("Audio conversion failed", error);
+					toast.error(
+						error instanceof Error
+							? `Couldn't use that audio file: ${error.message}`
+							: "Couldn't use that audio file",
+					);
+					setImporting(null);
+					return;
+				}
+			}
 			setImporting({ fileName: file.name, status: { status: "parsing" } });
 			const ok = await importMediaFile({
-				file,
+				file: upload,
 				orgId,
 				setUploadStatus: (status) => {
 					setUploadStatus(status);
@@ -167,7 +191,11 @@ function EditorHome({
 
 	const status = importing?.status;
 	const progress =
-		status?.status === "uploadingVideo" ? status.progress / 100 : null;
+		importing?.converting !== undefined
+			? importing.converting
+			: status?.status === "uploadingVideo"
+				? status.progress / 100
+				: null;
 
 	return (
 		<main
@@ -219,11 +247,13 @@ function EditorHome({
 							<Squiggle progress={progress} />
 						</div>
 						<p className="mt-3 text-[12px] text-[var(--rec-text-3)]">
-							{status?.status === "uploadingVideo"
-								? "Uploading. The editor opens when it's ready."
-								: status?.status === "serverProcessing"
-									? "Preparing your tracks"
-									: "Reading your file"}
+							{importing.converting !== undefined
+								? "Turning your audio into a project"
+								: status?.status === "uploadingVideo"
+									? "Uploading. The editor opens when it's ready."
+									: status?.status === "serverProcessing"
+										? "Preparing your tracks"
+										: "Reading your file"}
 						</p>
 					</div>
 				) : (
@@ -317,9 +347,6 @@ function EditorHome({
 										</span>
 										<span className="text-[12px] text-[var(--rec-text-3)]">
 											{dateFormatter.format(new Date(recording.createdAt))}
-											{recording.duration
-												? ` · ${formatClock(recording.duration * 1000)}`
-												: ""}
 										</span>
 									</span>
 								</button>
