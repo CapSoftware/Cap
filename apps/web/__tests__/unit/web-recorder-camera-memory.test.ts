@@ -244,10 +244,12 @@ let micTrack: FakeTrack;
 let enableMic = false;
 
 let beforeRecordingStarts: (() => Promise<void>) | undefined;
+let takeSharedDisplayStream: (() => MediaStream | null) | undefined;
 
 function Harness() {
 	latest = useWebRecorder({
 		beforeRecordingStarts,
+		takeSharedDisplayStream,
 		organisationId: "organisation",
 		selectedMicId: enableMic ? "mic" : null,
 		micEnabled: enableMic,
@@ -318,6 +320,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
 	beforeRecordingStarts = undefined;
+	takeSharedDisplayStream = undefined;
 	await act(async () => root.unmount());
 	container.remove();
 	vi.unstubAllGlobals();
@@ -561,5 +564,27 @@ test("recording waits for the countdown while setup finishes underneath it", asy
 	await waitFor(() => expect(latest.phase).toBe("recording"));
 	expect(
 		FakeRecorder.instances.every((recorder) => recorder.state === "recording"),
+	).toBe(true);
+});
+
+test("a screen shared before starting records without opening the picker again", async () => {
+	await act(async () => latest.stopRecording());
+	await act(async () => root.unmount());
+	FakeRecorder.instances = [];
+	mocks.displayStream.mockClear();
+	const sharedTrack = new FakeTrack();
+	const shared = new FakeStream([sharedTrack]);
+	takeSharedDisplayStream = vi.fn(() => shared as unknown as MediaStream);
+	root = createRoot(container);
+	await act(async () => root.render(createElement(Harness)));
+	await act(async () => latest.startRecording());
+	await waitFor(() => expect(latest.phase).toBe("recording"));
+	expect(takeSharedDisplayStream).toHaveBeenCalledOnce();
+	expect(mocks.displayStream).not.toHaveBeenCalled();
+	expect(latest.getActiveDisplayStream()).toBe(shared);
+	expect(
+		FakeRecorder.instances.some((recorder) =>
+			recorder.stream.getVideoTracks().includes(sharedTrack),
+		),
 	).toBe(true);
 });

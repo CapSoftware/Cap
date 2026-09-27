@@ -56,12 +56,12 @@ import { ThumbnailRequest } from "@/lib/Requests/ThumbnailRequest";
 import { uploadWithTarget } from "@/utils/upload-target";
 import { useUploadingContext } from "../../UploadingContext";
 import { sendProgressUpdate } from "../sendProgressUpdate";
-import type { RecordingMode } from "./RecordingModeSelector";
 import {
 	canConvertToMp4InBrowser,
 	captureThumbnail,
 	convertToMp4,
 } from "./recording-conversion";
+import type { RecordingMode } from "./recording-mode";
 import { uploadRecording } from "./recording-upload";
 import {
 	loadRecoveredRecordingSpools,
@@ -103,6 +103,9 @@ interface UseWebRecorderOptions {
 	selectedCameraId: string | null;
 	getCameraPreviewStream: () => MediaStream | null;
 	onDisplayStreamAcquired?: () => Promise<void>;
+	// Hands over a screen the user already shared from the recorder, so
+	// starting doesn't open the browser picker a second time.
+	takeSharedDisplayStream?: () => MediaStream | null;
 	isProUser: boolean;
 	onPhaseChange?: (phase: RecorderPhase) => void;
 	onRecordingSurfaceDetected?: (mode: RecordingMode) => void;
@@ -175,6 +178,7 @@ export const useWebRecorder = ({
 	selectedCameraId,
 	getCameraPreviewStream,
 	onDisplayStreamAcquired,
+	takeSharedDisplayStream,
 	isProUser,
 	onPhaseChange,
 	onRecordingSurfaceDetected,
@@ -1172,15 +1176,17 @@ export const useWebRecorder = ({
 				cameraStreamRef.current = videoStream;
 				firstTrack = videoStream.getVideoTracks()[0] ?? null;
 			} else {
-				videoStream = await acquireDisplayStream({
-					mode: recordingMode as DetectedDisplayRecordingMode,
-					systemAudioEnabled,
-					onSystemAudioFallback: () => {
-						toast.warning(
-							"System audio isn't supported in this browser. Recording without it.",
-						);
-					},
-				});
+				videoStream =
+					takeSharedDisplayStream?.() ??
+					(await acquireDisplayStream({
+						mode: recordingMode as DetectedDisplayRecordingMode,
+						systemAudioEnabled,
+						onSystemAudioFallback: () => {
+							toast.warning(
+								"System audio isn't supported in this browser. Recording without it.",
+							);
+						},
+					}));
 				displayStreamRef.current = videoStream;
 				await onDisplayStreamAcquired?.();
 				firstTrack = videoStream.getVideoTracks()[0] ?? null;
@@ -2410,6 +2416,7 @@ export const useWebRecorder = ({
 		supportCheckCompleted,
 		screenCaptureWarning,
 		getActiveCameraStream: () => cameraStreamRef.current,
+		getActiveDisplayStream: () => displayStreamRef.current,
 		recordedBytes,
 	};
 };

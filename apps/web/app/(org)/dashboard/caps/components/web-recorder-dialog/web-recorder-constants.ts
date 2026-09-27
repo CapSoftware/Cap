@@ -1,6 +1,6 @@
 import type { DetectedDisplayRecordingMode } from "@cap/recorder-core/recorder-constants";
 import { Video } from "@cap/web-domain";
-import type { RecordingMode } from "./RecordingModeSelector";
+import type { RecordingMode } from "./recording-mode";
 
 export * from "@cap/recorder-core/recorder-constants";
 
@@ -10,7 +10,7 @@ export * from "@cap/recorder-core/recorder-constants";
 export const FREE_PLAN_MAX_RECORDING_MS =
 	Video.FREE_PLAN_MAX_RECORDING_SECONDS * 1000;
 
-// Compile-time guard: recorder-core can't import RecordingModeSelector, so it
+// Compile-time guard: recorder-core can't import recording-mode, so it
 // hand-writes DetectedDisplayRecordingMode. Fail the build if the two unions
 // ever diverge.
 type MutuallyAssignable<A, B> = [A] extends [B]
