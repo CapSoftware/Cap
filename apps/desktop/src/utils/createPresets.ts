@@ -33,6 +33,7 @@ export function createPresets() {
 				timeline: null,
 				overlayOrder: [],
 				clips: [],
+				lockedTracks: [],
 			};
 
 			await updatePresets((store) => {
@@ -70,6 +71,7 @@ export function createPresets() {
 					timeline: null,
 					overlayOrder: [],
 					clips: [],
+					lockedTracks: [],
 				};
 			}),
 	};

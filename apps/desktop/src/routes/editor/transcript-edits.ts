@@ -124,6 +124,8 @@ export function deleteTranscriptWords(
 				range.start,
 				range.end,
 				range.segmentIndex,
+				undefined,
+				project.lockedTracks ?? [],
 			);
 		}
 	}
