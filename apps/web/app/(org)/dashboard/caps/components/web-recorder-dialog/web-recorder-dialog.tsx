@@ -409,6 +409,23 @@ export const WebRecorderDialog = () => {
 		</span>
 	);
 
+	const startControls = (
+		<>
+			<RecordingButton
+				isRecording={false}
+				disabled={!canStartRecording}
+				onStart={handleStartClick}
+				onStop={handleStopClick}
+			/>
+			<p className="text-center text-[0.8125rem] leading-snug text-gray-10">
+				{screenMode
+					? "Next, your browser asks what to share."
+					: "Recording starts straight away."}
+				{user.isPro ? "" : ` Up to ${freeMinutes} minutes on Free.`}
+			</p>
+		</>
+	);
+
 	const setupView = (
 		<div className="mx-auto grid w-full max-w-[1240px] gap-6 px-4 py-6 sm:px-8 lg:grid-cols-[minmax(0,1fr)_22rem] lg:gap-10 lg:py-10">
 			<section className="flex min-w-0 flex-col gap-5">
@@ -539,19 +556,8 @@ export const WebRecorderDialog = () => {
 						/>
 					)}
 				</div>
-				<div className="flex flex-col gap-2.5 pt-1">
-					<RecordingButton
-						isRecording={false}
-						disabled={!canStartRecording}
-						onStart={handleStartClick}
-						onStop={handleStopClick}
-					/>
-					<p className="text-center text-[0.8125rem] leading-snug text-gray-10">
-						{screenMode
-							? "Next, your browser asks what to share."
-							: "Recording starts straight away."}
-						{user.isPro ? "" : ` Up to ${freeMinutes} minutes on Free.`}
-					</p>
+				<div className="hidden flex-col gap-2.5 pt-1 lg:flex">
+					{startControls}
 				</div>
 				{!isBrowserSupported && unsupportedReason && (
 					<p className="rounded-xl border border-red-6 bg-red-3 px-3 py-2 text-[0.8125rem] leading-snug text-red-12">
@@ -790,9 +796,12 @@ export const WebRecorderDialog = () => {
 						onRememberDevicesChange={handleRememberDevicesChange}
 						onClose={handleClose}
 					/>
-					<main className="min-h-0 flex-1 overflow-y-auto pb-[env(safe-area-inset-bottom)]">
-						{stageView}
-					</main>
+					<main className="min-h-0 flex-1 overflow-y-auto">{stageView}</main>
+					{stage === "setup" && (
+						<div className="flex flex-col gap-2 border-t border-gray-3 bg-gray-2 px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 lg:hidden">
+							{startControls}
+						</div>
+					)}
 				</DialogContent>
 			</Dialog>
 			{phase === "error" && (
