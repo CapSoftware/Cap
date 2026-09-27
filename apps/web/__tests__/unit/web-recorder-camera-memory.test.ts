@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
 	deleteVideo: vi.fn(),
 	initiateMultipart: vi.fn(),
 	refresh: vi.fn(),
+	push: vi.fn(),
 	refetchQueries: vi.fn(),
 	warning: vi.fn(),
 	uploaders: [] as Array<{
@@ -132,7 +133,7 @@ vi.mock("@tanstack/react-query", () => ({
 	useQueryClient: () => ({ refetchQueries: mocks.refetchQueries }),
 }));
 vi.mock("next/navigation", () => ({
-	useRouter: () => ({ refresh: mocks.refresh }),
+	useRouter: () => ({ refresh: mocks.refresh, push: mocks.push }),
 }));
 vi.mock("@/actions/video/trigger-instant-recording-processing", () => ({
 	triggerInstantRecordingProcessing: vi.fn(),
@@ -344,6 +345,7 @@ test("microphone capture stays paired with screen and camera through stop", asyn
 	expect(sidecar.resume).toHaveBeenCalledOnce();
 	await act(async () => latest.stopRecording());
 	await waitFor(() => expect(latest.phase).toBe("completed"));
+	expect(mocks.push).toHaveBeenCalledWith("/s/video/edit?from=recording");
 	expect(sidecar.kind).toBe("mic");
 	expect(sidecar.start).toHaveBeenCalledOnce();
 	expect(sidecar.stop).toHaveBeenCalledOnce();

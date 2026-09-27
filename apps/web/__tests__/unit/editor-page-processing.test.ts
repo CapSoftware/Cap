@@ -163,3 +163,43 @@ test("the existing editor and upgrade gate remain available outside the pilot", 
 	expect((await EditPage(params)).type).toBe(EditUpgradeGate);
 	await expect(StudioPage(params)).rejects.toThrow("NOT_FOUND");
 });
+
+describe("arriving straight from the recorder", () => {
+	const fromRecording = {
+		...params,
+		searchParams: Promise.resolve({ from: "recording" }),
+	};
+
+	test("keeps the recording context through the Studio redirect", async () => {
+		mocks.rows = [[video], []];
+		await expect(EditPage(fromRecording)).rejects.toThrow(
+			"REDIRECT:/s/video/edit/studio?from=recording",
+		);
+	});
+
+	test("tells Studio and the preparing screen it was just recorded", async () => {
+		mocks.rows = [[video], []];
+		const studio = await StudioPage(fromRecording);
+		expect(studio.type).toBe(StudioEditorClient);
+		expect(studio.props.justRecorded).toBe(true);
+		mocks.rows = [[{ ...video, uploadPhase: "processing" }]];
+		const preparing = await EditPage(fromRecording);
+		expect(preparing.type).toBe(EditProcessing);
+		expect(preparing.props.justRecorded).toBe(true);
+	});
+
+	test("sends people without an editor to the share page instead of an upgrade wall", async () => {
+		mocks.studioEnabled = false;
+		mocks.pro = false;
+		mocks.rows = [[{ ...video, uploadPhase: "processing" }]];
+		await expect(EditPage(fromRecording)).rejects.toThrow("REDIRECT:/s/video");
+		mocks.rows = [[video], []];
+		expect((await EditPage(params)).type).toBe(EditUpgradeGate);
+	});
+
+	test("Pro accounts outside the pilot still open the existing editor", async () => {
+		mocks.studioEnabled = false;
+		mocks.rows = [[video], []];
+		expect((await EditPage(fromRecording)).type).toBe(EditVideoClient);
+	});
+});

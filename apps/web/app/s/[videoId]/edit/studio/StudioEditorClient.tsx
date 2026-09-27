@@ -16,6 +16,7 @@ import {
 	readEditorLocalDraft,
 } from "@/lib/editor-local-draft";
 import type { WebEditorVideoImportProgress } from "@/lib/editor-video-import-client";
+import { SharedLinkCard } from "../SharedLinkCard";
 import { EditorClipRecorder } from "./EditorClipRecorder";
 import { EditorHostBridge } from "./editor-host";
 
@@ -30,6 +31,7 @@ export function StudioEditorClient(props: {
 	userId: string;
 	captionsEnabled: boolean;
 	savedAt: string | null;
+	justRecorded?: boolean;
 	preparingTitle: string;
 	preparingDuration: number;
 	preparingTracks: Array<"display" | "camera">;
@@ -39,6 +41,7 @@ export function StudioEditorClient(props: {
 		userId,
 		captionsEnabled,
 		savedAt,
+		justRecorded = false,
 		preparingTitle,
 		preparingDuration,
 		preparingTracks,
@@ -56,6 +59,7 @@ export function StudioEditorClient(props: {
 	>(null);
 	const [recordClipOpen, setRecordClipOpen] = useState(false);
 	const [upgradeOpen, setUpgradeOpen] = useState(false);
+	const [sharedNoticeOpen, setSharedNoticeOpen] = useState(justRecorded);
 	const sessionRef = useRef<string | null>(null);
 	const bridgeRef = useRef<EditorHostBridge | null>(null);
 	const iframeRef = useRef<HTMLIFrameElement | null>(null);
@@ -469,6 +473,15 @@ export function StudioEditorClient(props: {
 		if (sessionId && iframeRef.current) onFrameLoad(iframeRef.current);
 	}, [onFrameLoad, sessionId]);
 
+	useEffect(() => {
+		if (!justRecorded) return;
+		// A reload should open the plain editor, not repeat the notice.
+		const url = new URL(window.location.href);
+		if (url.searchParams.get("from") !== "recording") return;
+		url.searchParams.delete("from");
+		window.history.replaceState(window.history.state, "", url);
+	}, [justRecorded]);
+
 	if (error) {
 		return (
 			<div className="relative h-screen w-screen bg-[#f1f1f3]">
@@ -562,6 +575,16 @@ export function StudioEditorClient(props: {
 			)}
 			{upgradeOpen && (
 				<UpgradeModal open={upgradeOpen} onOpenChange={setUpgradeOpen} />
+			)}
+			{sharedNoticeOpen && (
+				<div className="animate-fadeIn absolute right-3 top-[60px] z-50 w-[22rem] max-w-[calc(100vw-1.5rem)] max-[900px]:top-[80px]">
+					<SharedLinkCard
+						videoId={videoId}
+						description="Anyone with the link can watch it now. Edit your tracks here, then Save to update the same link."
+						onDismiss={() => setSharedNoticeOpen(false)}
+						className="shadow-[0_24px_60px_-24px_rgba(0,0,0,0.45)]"
+					/>
+				</div>
 			)}
 			{videoImport && videoImport.stage !== "ready" && (
 				<output className="pointer-events-none absolute bottom-6 right-6 z-50 w-64 rounded-xl border border-white/10 bg-neutral-950/95 px-4 py-3 text-sm text-white shadow-xl">

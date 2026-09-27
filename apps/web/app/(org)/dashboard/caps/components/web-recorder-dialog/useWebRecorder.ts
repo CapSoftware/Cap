@@ -197,6 +197,7 @@ export const useWebRecorder = ({
 	const [completedShareUrl, setCompletedShareUrl] = useState<string | null>(
 		null,
 	);
+	const [completedEditUrl, setCompletedEditUrl] = useState<string | null>(null);
 	const [recoveredDownloads, setRecoveredDownloads] = useState<
 		RecoveredRecordingDownload[]
 	>([]);
@@ -1019,6 +1020,7 @@ export const useWebRecorder = ({
 		replaceCameraErrorDownload(null);
 		replaceAudioErrorDownloads([]);
 		setCompletedShareUrl(null);
+		setCompletedEditUrl(null);
 		shareUrlOpenedRef.current = false;
 
 		const pendingInstantVideoId = pendingInstantVideoIdRef.current;
@@ -2149,15 +2151,20 @@ export const useWebRecorder = ({
 			]);
 
 			setUploadStatus(undefined);
+			// The share link is already live; the editor opens on it so the
+			// separate tracks can be edited straight away.
+			const editUrl = `/s/${encodeURIComponent(creationResult.id)}/edit?from=recording`;
 			setCompletedShareUrl(creationResult.shareUrl);
+			setCompletedEditUrl(editUrl);
 			updatePhase("completed");
-			toast.success(
-				pipeline.mode === "streaming"
-					? "Recording uploaded. Processing will continue shortly."
-					: "Recording uploaded.",
-			);
-			openShareUrl(creationResult.shareUrl);
-			router.refresh();
+			// Everything is uploaded at this point, so a navigation failure must
+			// not fall into the failure path below, which deletes the video.
+			try {
+				router.push(editUrl);
+			} catch (navigationError) {
+				console.error("Failed to open the editor", navigationError);
+				window.location.assign(editUrl);
+			}
 		} catch (err) {
 			console.error("Failed to process recording", err);
 			setUploadStatus(undefined);
@@ -2356,6 +2363,7 @@ export const useWebRecorder = ({
 		cameraErrorDownload,
 		audioErrorDownloads,
 		completedShareUrl,
+		completedEditUrl,
 		recoveredDownloads,
 		isSettingUp,
 		isRecording: isRecordingActive,
