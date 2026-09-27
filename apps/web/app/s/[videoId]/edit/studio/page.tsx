@@ -4,7 +4,8 @@ import { videoEdits, videos, videoUploads } from "@cap/database/schema";
 import { userIsPro } from "@cap/utils";
 import { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
+import { editorSourcesUploaded } from "@/lib/editor-sources-ready";
 import { getEditSourceKey, isEditSourceKey } from "@/lib/video-edit-processing";
 import { isWebStudioEnabledForEmail } from "@/lib/web-studio-rollout";
 import { EditProcessing } from "../EditProcessing";
@@ -66,7 +67,8 @@ export default async function StudioEditorPage(props: {
 		video.uploadPhase &&
 		["uploading", "processing", "generating_thumbnail", "error"].includes(
 			video.uploadPhase,
-		)
+		) &&
+		!editorSourcesUploaded(video.metadata, video.uploadPhase)
 	) {
 		return <EditProcessing videoId={videoId} justRecorded={justRecorded} />;
 	}
@@ -82,9 +84,9 @@ export default async function StudioEditorPage(props: {
 				Boolean(editorSources.display) &&
 				Number.isSafeInteger(editorSources.display.size) &&
 				(editorSources.display.size ?? 0) > 0);
-	if (!video.duration || video.duration <= 0 || !hasStudioSource) {
-		notFound();
-	}
+	if (!video.duration || video.duration <= 0) notFound();
+	// Recordings without separate sources open in the regular editor.
+	if (!hasStudioSource) redirect(`/s/${videoId}/edit`);
 	return (
 		<StudioEditorClient
 			videoId={video.id}

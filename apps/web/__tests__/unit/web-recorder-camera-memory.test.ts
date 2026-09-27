@@ -99,6 +99,7 @@ vi.mock("@cap/recorder-core/instant-mp4-uploader", () => ({
 	InstantRecordingUploader: class {
 		handleChunk = vi.fn();
 		finalize: ReturnType<typeof vi.fn>;
+		uploadRemaining = vi.fn(async () => undefined);
 		cancel = vi.fn(async () => undefined);
 		constructor(options: { subpath: string }) {
 			this.finalize = vi.fn(async () => {

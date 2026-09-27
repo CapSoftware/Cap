@@ -336,6 +336,9 @@ function EditorHome({
 								<button
 									type="button"
 									onClick={() => router.push(`/s/${recording.id}/edit`)}
+									onPointerEnter={() =>
+										router.prefetch(`/s/${recording.id}/edit/studio`)
+									}
 									className="rec-focus group flex w-full flex-col gap-2 rounded-[10px] p-1.5 text-left transition-colors hover:bg-[var(--rec-ctl)]"
 								>
 									<span className="relative block aspect-video w-full overflow-hidden rounded-md bg-[var(--rec-card-2)] shadow-[inset_0_0_0_1px_var(--rec-line)]">

@@ -5,6 +5,7 @@ import { userIsPro } from "@cap/utils";
 import { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { notFound, redirect } from "next/navigation";
+import { editorSourcesUploaded } from "@/lib/editor-sources-ready";
 import { getEditSourceKey, isEditSourceKey } from "@/lib/video-edit-processing";
 import {
 	areEditSpecsEquivalent,
@@ -86,16 +87,6 @@ export default async function EditVideoPage(props: {
 			/>
 		);
 	}
-	if (
-		video.uploadPhase &&
-		["uploading", "processing", "generating_thumbnail", "error"].includes(
-			video.uploadPhase,
-		)
-	) {
-		return <EditProcessing videoId={videoId} justRecorded={justRecorded} />;
-	}
-	if (!video.duration || video.duration <= 0) notFound();
-
 	const [existingEdit] = await db()
 		.select({
 			editSpec: videoEdits.editSpec,
@@ -103,6 +94,27 @@ export default async function EditVideoPage(props: {
 		})
 		.from(videoEdits)
 		.where(eq(videoEdits.videoId, videoId));
+	if (
+		video.uploadPhase &&
+		["uploading", "processing", "generating_thumbnail", "error"].includes(
+			video.uploadPhase,
+		)
+	) {
+		// The studio reads the raw sources, so a recording opens as soon as
+		// they're uploaded rather than after the share video finishes processing.
+		if (
+			!existingEdit &&
+			isWebStudioEnabledForEmail(user.email) &&
+			(video.duration ?? 0) > 0 &&
+			editorSourcesUploaded(video.metadata, video.uploadPhase)
+		) {
+			redirect(
+				`/s/${videoId}/edit/studio${justRecorded ? "?from=recording" : ""}`,
+			);
+		}
+		return <EditProcessing videoId={videoId} justRecorded={justRecorded} />;
+	}
+	if (!video.duration || video.duration <= 0) notFound();
 
 	const hasExistingEdits = existingEdit
 		? !areEditSpecsEquivalent(

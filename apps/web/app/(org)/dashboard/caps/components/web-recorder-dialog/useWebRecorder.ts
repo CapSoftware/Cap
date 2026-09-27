@@ -120,6 +120,8 @@ interface UseWebRecorderOptions {
 	// start; setup keeps running underneath it, so a countdown costs nothing.
 	beforeRecordingStarts?: () => Promise<void>;
 	quality?: RecordingQuality;
+	/** Open the studio editor directly when the recording is done. */
+	studioEnabled?: boolean;
 }
 
 const INSTANT_UPLOAD_REQUEST_INTERVAL_MS = 1000;
@@ -192,6 +194,7 @@ export const useWebRecorder = ({
 	onRecordingStop,
 	beforeRecordingStarts,
 	quality = DEFAULT_RECORDING_QUALITY,
+	studioEnabled = false,
 }: UseWebRecorderOptions) => {
 	const beforeRecordingStartsRef = useRef(beforeRecordingStarts);
 	beforeRecordingStartsRef.current = beforeRecordingStarts;
@@ -1895,7 +1898,10 @@ export const useWebRecorder = ({
 				thumbnailUrl: undefined,
 			});
 
-			if (pairedCameraCapture) {
+			// Camera, mic and the screen's last chunk upload together; the screen
+			// completes last because its completion starts processing and the
+			// styled render.
+			const finalizeCamera = async () => {
 				const cameraUploader = cameraUploaderRef.current;
 				const cameraSubpath = cameraUploadSubpathRef.current;
 				if (
@@ -1927,10 +1933,21 @@ export const useWebRecorder = ({
 					throw new Error("Camera recording is unavailable for paired upload");
 				}
 				cameraUploaderRef.current = null;
-			}
-			for (const audioSidecar of audioSidecars) {
-				await audioSidecar.finalize(durationSeconds);
-			}
+			};
+			const sidecarResults = await Promise.allSettled([
+				pairedCameraCapture ? finalizeCamera() : Promise.resolve(),
+				instantUploader &&
+				(editorSidecarCapture || pipeline.mode === "streaming")
+					? instantUploader.uploadRemaining(rawRecordingBlob ?? null)
+					: Promise.resolve(),
+				...audioSidecars.map((audioSidecar) =>
+					audioSidecar.finalize(durationSeconds),
+				),
+			]);
+			const failedSidecar = sidecarResults.find(
+				(result) => result.status === "rejected",
+			);
+			if (failedSidecar?.status === "rejected") throw failedSidecar.reason;
 			audioSidecarsRef.current = [];
 
 			if (editorSidecarCapture) {
@@ -2201,7 +2218,10 @@ export const useWebRecorder = ({
 			setUploadStatus(undefined);
 			// The share link is already live; the editor opens on it so the
 			// separate tracks can be edited straight away.
-			const editUrl = `/s/${encodeURIComponent(creationResult.id)}/edit?from=recording`;
+			// Studio recordings open the editor itself, skipping the /edit hop.
+			const editUrl = `/s/${encodeURIComponent(creationResult.id)}/edit${
+				studioEnabled && editorSidecarCapture ? "/studio" : ""
+			}?from=recording`;
 			setCompletedShareUrl(creationResult.shareUrl);
 			setCompletedEditUrl(editUrl);
 			updatePhase("completed");
@@ -2295,6 +2315,7 @@ export const useWebRecorder = ({
 		videoInstantCreate,
 		queryClient,
 		router,
+		studioEnabled,
 		stopRecordingInternalWrapper,
 		onRecordingStop,
 		commitPausedDuration,

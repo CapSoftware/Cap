@@ -971,13 +971,31 @@ export class InstantRecordingUploader {
 		});
 	}
 
-	async finalize(options: FinalizeOptions) {
+	/**
+	 * Uploads everything still buffered (or the final blob) without completing
+	 * the multipart upload, so the tail can go up alongside other uploads while
+	 * the completion waits its turn. `finalize` calls it too; a second call
+	 * has nothing left to send.
+	 */
+	uploadRemaining(finalBlob: Blob | null) {
+		if (!this.remainingUpload) {
+			this.remainingUpload = this.sendRemaining(finalBlob).catch((error) => {
+				this.remainingUpload = null;
+				throw error;
+			});
+		}
+		return this.remainingUpload;
+	}
+
+	private remainingUpload: Promise<void> | null = null;
+
+	private async sendRemaining(finalBlob: Blob | null) {
 		if (this.finished) return;
 		if (this.fatalError) {
 			throw this.fatalError;
 		}
 
-		const finalTotalBytes = this.resolveFinalTotalBytes(options.finalBlob);
+		const finalTotalBytes = this.resolveFinalTotalBytes(finalBlob);
 
 		if (this.provider === "googleDrive") {
 			if (finalTotalBytes <= 0) {
@@ -987,9 +1005,9 @@ export class InstantRecordingUploader {
 			}
 			this.finalTotalBytes = finalTotalBytes;
 			this.totalRecordedBytes = finalTotalBytes;
-		} else if (options.finalBlob) {
-			this.finalTotalBytes = options.finalBlob.size;
-			this.totalRecordedBytes = options.finalBlob.size;
+		} else if (finalBlob) {
+			this.finalTotalBytes = finalBlob.size;
+			this.totalRecordedBytes = finalBlob.size;
 		}
 
 		// The tail flush enqueues whatever is still buffered; drain in-flight
@@ -1004,10 +1022,18 @@ export class InstantRecordingUploader {
 		this.flushBuffer(true);
 		await this.waitForPendingUploads();
 
-		if (options.finalBlob && this.parts.length === 0) {
-			await this.uploadFinalBlob(options.finalBlob);
+		if (finalBlob && this.parts.length === 0) {
+			await this.uploadFinalBlob(finalBlob);
+		}
+	}
+
+	async finalize(options: FinalizeOptions) {
+		if (this.finished) return;
+		if (this.fatalError) {
+			throw this.fatalError;
 		}
 
+		await this.uploadRemaining(options.finalBlob ?? null);
 		if (this.parts.length === 0) {
 			throw new Error("No uploaded parts available for completion");
 		}
@@ -1036,7 +1062,13 @@ export class InstantRecordingUploader {
 			progress: 100,
 			thumbnailUrl: undefined,
 		});
-		await this.sendProgressUpdate(this.uploadedBytes, this.uploadedBytes);
+		// The upload is complete; the last progress report needn't hold up
+		// whatever opens next.
+		void this.sendProgressUpdate(this.uploadedBytes, this.uploadedBytes).catch(
+			(error) => {
+				console.error("Failed to send upload progress", error);
+			},
+		);
 	}
 
 	getProcessingStarted() {

@@ -19,6 +19,7 @@ import { stripEditorCaptionContent } from "./editor-caption-access";
 import { MAX_WEB_EDITOR_CLIPS, validWebEditorClip } from "./editor-clips";
 import { normalizeWebEditorImportOrder } from "./editor-imports";
 import { decodeWebEditorProject } from "./editor-project-storage";
+import { editorSourcesUploaded } from "./editor-sources-ready";
 import {
 	MAX_EDITOR_VIDEO_BYTES,
 	MAX_EDITOR_VIDEO_COUNT,
@@ -127,7 +128,8 @@ export const loadEligibleEditorVideo = Effect.fn("loadEligibleEditorVideo")(
 				["uploading", "processing", "generating_thumbnail"].includes(
 					record.uploadPhase,
 				) &&
-				!replacementUpload)
+				!replacementUpload &&
+				!editorSourcesUploaded(record.video.metadata, record.uploadPhase))
 		) {
 			return yield* new HttpApiError.NotFound();
 		}

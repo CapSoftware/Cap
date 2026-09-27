@@ -256,10 +256,31 @@ function prefetchStartup() {
 		.catch(() => undefined);
 }
 
-const container = document.getElementById("editor-root");
+/// A hidden copy of this page loads while someone records or browses their
+/// projects, so the editor code and renderer are cached before it opens.
+function prewarm() {
+	void Promise.allSettled([
+		loadBrowserRenderer(),
+		loadEditorModule(),
+		import("../../../apps/desktop/src/routes/editor/editor-skeleton"),
+		import("../../../apps/desktop/src/routes/editor/preparing-editor-model"),
+	]).then(() =>
+		window.parent.postMessage(
+			{ kind: "cap-editor-prewarmed", version: 1 },
+			window.location.origin,
+		),
+	);
+}
+
+const prewarming =
+	window.parent !== window &&
+	new URLSearchParams(window.location.search).has("prewarm");
+const container = prewarming ? null : document.getElementById("editor-root");
 const root = container ? layer(0) : null;
 const skeletonRoot = container ? layer(1) : null;
-if (container && root && skeletonRoot) {
+if (prewarming) {
+	prewarm();
+} else if (container && root && skeletonRoot) {
 	container.style.cssText =
 		"position:relative;width:100vw;height:100vh;overflow:hidden";
 	container.append(root, skeletonRoot);

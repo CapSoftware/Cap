@@ -20,6 +20,7 @@ import {
 	MonitorIcon,
 	Volume2Icon,
 } from "lucide-react";
+import { useRouter } from "next/navigation";
 import {
 	type CSSProperties,
 	type ReactNode,
@@ -315,7 +316,7 @@ export const WebRecorderDialog = ({
 		[playTick],
 	);
 
-	const { activeOrganization, user } = useDashboardContext();
+	const { activeOrganization, user, webStudioEnabled } = useDashboardContext();
 	const organisationId = activeOrganization?.organization.id;
 	const { devices: availableMics, refresh: refreshMics } =
 		useMicrophoneDevices(open);
@@ -523,6 +524,7 @@ export const WebRecorderDialog = ({
 		onRecordingStop: handleRecordingStopSound,
 		beforeRecordingStarts: runCountdown,
 		quality,
+		studioEnabled: webStudioEnabled,
 	});
 	const activeCameraGetterRef = useRef(getActiveCameraStream);
 	activeCameraGetterRef.current = getActiveCameraStream;
@@ -756,6 +758,13 @@ export const WebRecorderDialog = ({
 			console.error("Failed to save the camera layout", error);
 		});
 	}, [phase, videoId, cameraEnabled, screenMode, cameraLayout]);
+
+	// Fetch the editor route's code while recording so Stop opens it at once.
+	const router = useRouter();
+	useEffect(() => {
+		if (!webStudioEnabled || phase !== "recording" || !videoId) return;
+		router.prefetch(`/s/${encodeURIComponent(videoId)}/edit/studio`);
+	}, [router, webStudioEnabled, phase, videoId]);
 	const [previewFrame, setPreviewFrame] = useState<{
 		width: number;
 		height: number;
