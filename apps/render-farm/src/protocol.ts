@@ -80,7 +80,6 @@ export type TranscodeTask = {
 	keyframeSeconds: number;
 };
 
-/** Anything a worker slot can be handed. */
 export type WorkItem = Task | TranscodeTask;
 
 export type TaskTimings = {

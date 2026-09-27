@@ -48,16 +48,13 @@ export function transcodeArgs(
 	];
 }
 
-/** Seconds of output written so far, from an ffmpeg `-progress` line. */
 export function encodedSeconds(line: string) {
 	const match = line.match(/^out_time_(?:us|ms)=(\d+)$/);
 	return match ? Number(match[1]) / 1_000_000 : null;
 }
 
-/** Longest keyframe gap a source may have and still be remuxed as-is. */
 export const MAX_REMUX_KEYFRAME_GAP_SECONDS = 4;
 
-/** ffprobe arguments listing the video codec and every packet's flags. */
 export function probeArgs(input: string) {
 	return [
 		"-v",
@@ -113,7 +110,6 @@ export function canRemux(probe: string) {
 	return true;
 }
 
-/** ffmpeg arguments that copy the video track into a faststart MP4. */
 export function remuxArgs(input: string, output: string) {
 	return [
 		"-hide_banner",

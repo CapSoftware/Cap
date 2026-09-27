@@ -673,7 +673,6 @@ async function runAudio(task: AudioTask, engine: Engine, queuedMs: number) {
 
 const TRANSCODE_ENCODER = process.env.RF_TRANSCODE_ENCODER ?? "h264_nvenc";
 
-/** Re-encodes `task.source` into `task.output`; returns the stored size. */
 async function runTranscode(task: TranscodeTask, slot: number) {
 	const dir = join(WORK_DIR, `transcode-${randomUUID()}`);
 	mkdirSync(dir, { recursive: true });
