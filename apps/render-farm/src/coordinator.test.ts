@@ -16,7 +16,7 @@ import * as recovery from "./recovery";
 import { pickQueued } from "./scheduler";
 import * as validate from "./validate";
 
-function harness() {
+function harness(env: Record<string, string> = {}) {
 	const objects = new Map<string, Uint8Array>();
 	const writes: string[] = [];
 	const timers: (() => void)[] = [];
@@ -93,6 +93,7 @@ function harness() {
 				RF_LOCAL_AUDIO_SLOTS: "0",
 				RF_HLS: "1",
 				RF_CALLBACK_HOSTS: "cap.test",
+				...env,
 			},
 		},
 		Bun: {
@@ -580,6 +581,7 @@ describe("transcodes", () => {
 
 	test("are queued once, go to a video slot first and settle on the worker's report", async () => {
 		const h = harness();
+		h.objects.set(request.source, new Uint8Array(100));
 		const created = (await (await call(h, "/transcodes", request)).json()) as {
 			id: string;
 			status: string;
@@ -633,6 +635,7 @@ describe("transcodes", () => {
 
 	test("completion requires the active dispatch and matching stored bytes", async () => {
 		const h = harness();
+		h.objects.set(request.source, new Uint8Array(100));
 		const created = (await (await call(h, "/transcodes", request)).json()) as {
 			id: string;
 		};
@@ -669,6 +672,7 @@ describe("transcodes", () => {
 
 	test("a completion cannot settle a dispatch retired during object verification", async () => {
 		const h = harness();
+		h.objects.set(request.source, new Uint8Array(100));
 		const created = (await (await call(h, "/transcodes", request)).json()) as {
 			id: string;
 		};
@@ -696,6 +700,53 @@ describe("transcodes", () => {
 			status: "ready",
 			size: 42,
 		});
+	});
+
+	test("standalone transcodes reject missing and oversized raw sources before dispatch", async () => {
+		const h = harness({ RF_MAX_SOURCE_BYTES: "1000" });
+		for (const size of [0, 1001]) {
+			if (size > 0) h.objects.set(request.source, new Uint8Array(size));
+			expect(
+				await (await call(h, "/transcodes", request)).json(),
+			).toMatchObject({
+				status: "error",
+			});
+		}
+		h.objects.set(request.source, new Uint8Array(1000));
+		expect(await (await call(h, "/transcodes", request)).json()).toMatchObject({
+			status: "queued",
+		});
+	});
+
+	test("manifest quotas count every raw source before scheduling any transcode", async () => {
+		const h = harness({ RF_MAX_SOURCE_BYTES: "1000" });
+		const prefix = "owner/video/project";
+		const files = ["display", "camera"].map((name) => ({
+			path: `${name}.mp4`,
+			key: `${prefix}/${name}.mp4`,
+			transcodeFrom: `owner/video/${name}.webm`,
+		}));
+		for (const file of files) {
+			h.objects.set(file.transcodeFrom, new Uint8Array(501));
+		}
+		for (const size of [undefined, 1]) {
+			h.objects.set(
+				`${prefix}/manifest.json`,
+				new TextEncoder().encode(
+					JSON.stringify({ files: files.map((file) => ({ ...file, size })) }),
+				),
+			);
+			await expect(h.sourceIndex(prefix, "owner/video/")).rejects.toThrow(
+				"1002 bytes (limit 1000)",
+			);
+			for (const file of files) {
+				const id = createHash("sha256")
+					.update(file.key)
+					.digest("hex")
+					.slice(0, 16);
+				expect((await call(h, `/transcodes/${id}`)).status).toBe(404);
+			}
+		}
 	});
 
 	test("must stay inside their source folder", async () => {

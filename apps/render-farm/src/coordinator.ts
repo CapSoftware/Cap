@@ -547,6 +547,20 @@ async function sourceIndex(
 	checkManifest(manifest, prefix, sourceRoot);
 	const keyOf = (file: { path: string; key?: string }) =>
 		file.key ?? `${prefix}/${file.path}`;
+	const sourceFiles = await Promise.all(
+		manifest.files.map(async (file) => ({
+			...file,
+			size:
+				file.transcodeFrom === undefined
+					? file.size
+					: await transcodeSourceSize(file.transcodeFrom),
+		})),
+	);
+	const sourceBounds = checkManifestBounds(
+		{ files: sourceFiles },
+		SOURCE_LIMITS,
+	);
+	if (sourceBounds) throw new Error(sourceBounds);
 	await Promise.all(
 		manifest.files.map(async (file) => {
 			if (file.transcodeFrom === undefined) return;
@@ -1415,6 +1429,21 @@ type Transcode = {
 /** By output key: one transcode per target, shared by every job needing it. */
 const transcodes = new Map<string, Transcode>();
 
+async function transcodeSourceSize(source: string) {
+	const head = await s3.head(source);
+	if (!head || !Number.isSafeInteger(head.size) || head.size <= 0) {
+		throw new Error(
+			`transcode source ${source} is missing or has an invalid size`,
+		);
+	}
+	if (head.size > SOURCE_LIMITS.sourceBytes) {
+		throw new Error(
+			`transcode source ${source} is ${head.size} bytes (limit ${SOURCE_LIMITS.sourceBytes})`,
+		);
+	}
+	return head.size;
+}
+
 async function ensureTranscode(source: string, output: string) {
 	const existing = transcodes.get(output);
 	if (existing && existing.state !== "error") return existing;
@@ -1435,13 +1464,19 @@ async function ensureTranscode(source: string, output: string) {
 		settle: resolve,
 	};
 	transcodes.set(output, transcode);
-	// Made by an earlier export (or a previous coordinator): reuse it.
-	const head = await s3.head(output).catch(() => null);
-	if (head && head.size > 0) {
-		settleTranscode(transcode, "ready", head.size);
-	} else {
-		transcode.state = "queued";
-		dispatch();
+	try {
+		const head = await s3.head(output);
+		if (head && head.size > 0 && head.size <= SOURCE_LIMITS.sourceBytes) {
+			settleTranscode(transcode, "ready", head.size);
+		} else if (head) {
+			throw new Error("stored transcode output has an invalid size");
+		} else {
+			await transcodeSourceSize(source);
+			transcode.state = "queued";
+			dispatch();
+		}
+	} catch (error) {
+		settleTranscode(transcode, "error", String(error));
 	}
 	return transcode;
 }
