@@ -1397,6 +1397,40 @@ async fn export_video_inner(
         .await
 }
 
+async fn normalize_export_loudness(
+    project_path: &Path,
+    settings: &ExportSettings,
+    path: PathBuf,
+) -> PathBuf {
+    if matches!(settings, ExportSettings::Gif(_)) {
+        return path;
+    }
+    let enabled = cap_project::ProjectConfiguration::load(project_path)
+        .map(|config| config.audio.normalize_loudness)
+        .unwrap_or(false);
+    if !enabled {
+        return path;
+    }
+    let target = path.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        cap_export::loudness::normalize_file_loudness(
+            &target,
+            cap_export::loudness::SOCIAL_TARGET_LUFS,
+        )
+    })
+    .await;
+    match result {
+        Ok(Ok(_)) => {}
+        Ok(Err(error)) => {
+            warn!("Loudness normalization failed, keeping the unnormalized export: {error}")
+        }
+        Err(error) => {
+            warn!("Loudness normalization task failed, keeping the unnormalized export: {error}")
+        }
+    }
+    path
+}
+
 async fn export_video_attempts(
     project_path: PathBuf,
     settings: ExportSettings,
@@ -1443,6 +1477,11 @@ async fn export_video_attempts(
             cancel_token.clone(),
         )
         .await
+    };
+
+    let result = match result {
+        Ok(path) => Ok(normalize_export_loudness(&project_path, &settings, path).await),
+        Err(error) => Err(error),
     };
 
     match result {
