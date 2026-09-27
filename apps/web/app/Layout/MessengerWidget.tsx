@@ -870,7 +870,7 @@ export function MessengerWidget() {
 			<button
 				type="button"
 				onClick={togglePanel}
-				className={`fixed bottom-5 right-5 z-[9999] flex h-14 w-14 items-center justify-center rounded-full bg-gray-12 text-gray-1 transition-all duration-200 hover:scale-105 active:scale-95 ${isOpen ? "max-[480px]:hidden" : ""}`}
+				className={`cap-messenger-launcher fixed bottom-5 right-5 z-[9999] flex h-14 w-14 items-center justify-center rounded-full bg-gray-12 text-gray-1 transition-all duration-200 hover:scale-105 active:scale-95 ${isOpen ? "max-[480px]:hidden" : ""}`}
 				style={{
 					boxShadow:
 						"0 4px 14px rgba(0, 0, 0, 0.25), 0 2px 4px rgba(0, 0, 0, 0.1)",

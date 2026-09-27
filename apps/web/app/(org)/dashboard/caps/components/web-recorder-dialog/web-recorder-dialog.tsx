@@ -790,6 +790,8 @@ export const WebRecorderDialog = () => {
 					}}
 				>
 					<DialogTitle className="sr-only">New recording</DialogTitle>
+					{/* A full-screen flow: the support launcher would sit over its controls. */}
+					<style>{".cap-messenger-launcher{display:none!important}"}</style>
 					<WebRecorderDialogHeader
 						isBusy={isBusy || isSettingUp}
 						rememberDevices={rememberDevices}
