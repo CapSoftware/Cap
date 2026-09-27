@@ -63,6 +63,7 @@ import { PlayerContent } from "./Player";
 import { usePreparingEditor } from "./preparing-editor-context";
 import { Timeline } from "./Timeline";
 import { Dialog, DialogContent, EditorButton, Input, Subfield } from "./ui";
+import { WebDropImport } from "./WebDropImport";
 
 // Deferred surfaces: these are not visible at first paint (export mode,
 // transcript panel, clips sidebar), so their code is split out of the editor
@@ -940,6 +941,9 @@ function Inner(props: {
 					registerTitleSave={registerEditorSave}
 					disabled={!editorReady()}
 				/>
+				<Show when={isWebEditor && editorReady()}>
+					<WebDropImport />
+				</Show>
 				<Show when={preparingSession?.handoffFailed()}>
 					<div class="absolute inset-0 top-13 max-[900px]:top-[72px] z-30 flex items-center justify-center p-6">
 						<div

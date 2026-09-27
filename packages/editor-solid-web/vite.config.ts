@@ -27,6 +27,7 @@ const tauriMenu = resolve(import.meta.dirname, "src/tauri-menu.ts");
 const tauriFs = resolve(import.meta.dirname, "src/tauri-fs.ts");
 const tauriOpener = resolve(import.meta.dirname, "src/tauri-opener.ts");
 const tauriClipboard = resolve(import.meta.dirname, "src/tauri-clipboard.ts");
+const droppedFiles = resolve(import.meta.dirname, "src/dropped-files.ts");
 const websocket = resolve(import.meta.dirname, "src/websocket.ts");
 const browserFrameSocket = resolve(
 	import.meta.dirname,
@@ -86,6 +87,7 @@ export default defineConfig({
 			{ find: "@tauri-apps/api/webviewWindow", replacement: tauriWindow },
 			{ find: "@tauri-apps/plugin-os", replacement: tauriOs },
 			{ find: /^~\/utils\/tauri$/, replacement: tauriBridge },
+			{ find: /^~\/utils\/dropped-files$/, replacement: droppedFiles },
 			{ find: /^~\/utils\/socket$/, replacement: browserFrameSocket },
 			{ find: /^\.\/tauri$/, replacement: tauriBridge },
 			{ find: /^~\//, replacement: `${desktopSource}/` },

@@ -1706,10 +1706,13 @@ export class EditorHostBridge {
 					throw new Error("Cap recording import count was invalid");
 				}
 				count = imported.clipCount;
-			} else if (/\.mp4$/i.test(file.name)) {
+			} else if (
+				file.type.startsWith("video/") ||
+				/\.(mp4|mov|m4v|webm|mkv)$/i.test(file.name)
+			) {
 				await this.addRecordedClip(file, null, 0);
 			} else {
-				throw new Error("Select a Cap recording or MP4 file to import");
+				throw new Error("Select a Cap recording or a video file to import");
 			}
 			this.port?.postMessage({ kind: "result", id: message.id, value: count });
 			if (this.onImportNeedsReload) {

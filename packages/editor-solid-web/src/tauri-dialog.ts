@@ -12,6 +12,14 @@ type OpenOptions = {
 
 const selectedFiles = new Map<string, File>();
 
+/** Hands a File to the import commands as a short-lived token path. */
+export function registerEditorFile(file: File) {
+	const token = `cap-web-editor://import/${crypto.randomUUID()}`;
+	selectedFiles.set(token, file);
+	window.setTimeout(() => selectedFiles.delete(token), 60_000);
+	return token;
+}
+
 export function takeEditorSelectedFile(path: string) {
 	const file = selectedFiles.get(path) ?? null;
 	selectedFiles.delete(path);
@@ -123,10 +131,7 @@ export function open(options?: OpenOptions): Promise<string | null> {
 				finish(null);
 				return;
 			}
-			const token = `cap-web-editor://import/${crypto.randomUUID()}`;
-			selectedFiles.set(token, file);
-			window.setTimeout(() => selectedFiles.delete(token), 60_000);
-			finish(token);
+			finish(registerEditorFile(file));
 		});
 		input.addEventListener("cancel", () => finish(null));
 		document.body.append(input);
