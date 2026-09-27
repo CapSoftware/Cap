@@ -42,10 +42,10 @@ describe("encodedSeconds", () => {
 describe("canRemux", () => {
 	const packets = (codec: string, keyframes: number[], end: number) =>
 		[
-			`codec_name=${codec}|pix_fmt=yuv420p`,
+			`codec_name=${codec}|pix_fmt=yuv420p|has_b_frames=0`,
 			...Array.from({ length: end * 10 + 1 }, (_, index) => {
 				const time = index / 10;
-				return `pts_time=${time.toFixed(6)}|flags=${keyframes.includes(time) ? "K__" : "___"}`;
+				return `pts_time=${time.toFixed(6)}|dts_time=${time.toFixed(6)}|flags=${keyframes.includes(time) ? "K__" : "___"}`;
 			}),
 		].join("\n");
 
@@ -64,5 +64,28 @@ describe("canRemux", () => {
 			canRemux(packets("h264", [0, 2], 3).replace("yuv420p", "yuv444p")),
 		).toBe(false);
 		expect(canRemux(packets("h264", [], 3))).toBe(false);
+	});
+
+	test("re-encodes reordered frames even with frequent keyframes", () => {
+		const source = packets("h264", [0, 1, 2], 3);
+		expect(canRemux(source.replace("has_b_frames=0", "has_b_frames=2"))).toBe(
+			false,
+		);
+		expect(canRemux(source.replace("dts_time=0.000000", "dts_time=-0.1"))).toBe(
+			false,
+		);
+	});
+
+	test("unknown stream properties or timestamps cannot bypass re-encoding", () => {
+		const source = packets("h264", [0, 1, 2], 3);
+		for (const field of ["pix_fmt=yuv420p|", "|has_b_frames=0"]) {
+			expect(canRemux(source.replace(field, ""))).toBe(false);
+		}
+		for (const value of ["N/A", "", "NaN"]) {
+			expect(
+				canRemux(source.replace("dts_time=0.100000", `dts_time=${value}`)),
+			).toBe(false);
+		}
+		expect(canRemux(source.replace("dts_time=0.100000|", ""))).toBe(false);
 	});
 });

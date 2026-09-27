@@ -65,7 +65,7 @@ export function probeArgs(input: string) {
 		"-select_streams",
 		"v:0",
 		"-show_entries",
-		"stream=codec_name,pix_fmt:packet=pts_time,flags",
+		"stream=codec_name,pix_fmt,has_b_frames:packet=pts_time,dts_time,flags",
 		"-of",
 		"compact=p=0:nk=0",
 		input,
@@ -80,15 +80,28 @@ export function probeArgs(input: string) {
 export function canRemux(probe: string) {
 	const codec = probe.match(/codec_name=([^|\n]+)/)?.[1];
 	const pixelFormat = probe.match(/pix_fmt=([^|\n]+)/)?.[1];
-	if (codec !== "h264" || (pixelFormat && pixelFormat !== "yuv420p")) {
+	const reorderedFrames = probe.match(/has_b_frames=([^|\n]+)/)?.[1];
+	if (
+		codec !== "h264" ||
+		pixelFormat !== "yuv420p" ||
+		reorderedFrames !== "0"
+	) {
 		return false;
 	}
 	const keyframes: number[] = [];
 	let last = 0;
-	for (const match of probe.matchAll(/pts_time=([0-9.]+)\|flags=([A-Z_]+)/g)) {
-		const time = Number(match[1]);
-		last = Math.max(last, time);
-		if (match[2]?.includes("K")) keyframes.push(time);
+	for (const line of probe.split("\n")) {
+		if (!line.startsWith("pts_time=")) continue;
+		const packet = Object.fromEntries(
+			line.split("|").map((field) => field.split("=")),
+		);
+		const time = Number(packet.pts_time);
+		const decodeTime = Number(packet.dts_time);
+		if (!Number.isFinite(time) || time !== decodeTime || time < last) {
+			return false;
+		}
+		last = time;
+		if (packet.flags?.includes("K")) keyframes.push(time);
 	}
 	if (keyframes.length === 0) return false;
 	keyframes.sort((a, b) => a - b);
