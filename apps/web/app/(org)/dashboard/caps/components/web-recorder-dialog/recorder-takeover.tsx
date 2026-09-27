@@ -317,18 +317,27 @@ const formatMegabytes = (bytes: number) =>
 	`${(bytes / (1024 * 1024)).toFixed(bytes >= 100 * 1024 * 1024 ? 0 : 1)} MB`;
 
 const CAP_BLUE = "#4785FF";
+// The uploader sends a part once this much has been recorded.
+const PART_BYTES = 5 * 1024 * 1024;
 
 // Parts travel from the recorder on the left to the share link on the right:
 // the newest part sits next to the recorder, finished ones reach the link.
 export const UploadStream = ({
 	chunks,
+	recordedBytes = 0,
 	recording,
 	paused = false,
 }: {
 	chunks: ChunkUploadState[];
+	recordedBytes?: number;
 	recording: boolean;
 	paused?: boolean;
 }) => {
+	const bufferedBytes = Math.max(
+		0,
+		recordedBytes - chunks.reduce((total, chunk) => total + chunk.sizeBytes, 0),
+	);
+	const nextPartFill = Math.min(1, bufferedBytes / PART_BYTES);
 	const done = chunks.filter((chunk) => chunk.status === "complete").length;
 	const sentBytes = chunks.reduce(
 		(total, chunk) =>
@@ -354,7 +363,9 @@ export const UploadStream = ({
 				</span>
 				<span className="text-[0.8125rem] tabular-nums text-gray-10">
 					{chunks.length === 0
-						? "First part uploads in a few seconds"
+						? recording
+							? `Recording part 1 · ${formatMegabytes(bufferedBytes)} of ${formatMegabytes(PART_BYTES)}`
+							: "Sending the recording"
 						: `${done} of ${chunks.length} parts sent · ${formatMegabytes(sentBytes)}`}
 				</span>
 			</div>
@@ -369,7 +380,10 @@ export const UploadStream = ({
 				>
 					{recording ? (
 						<>
-							<span className="upload-live-fill absolute inset-x-0 bottom-0 bg-[#e5484d]/20" />
+							<span
+								className="absolute inset-x-0 bottom-0 bg-[#e5484d]/25 transition-[height] duration-700 ease-out"
+								style={{ height: `${Math.round(nextPartFill * 100)}%` }}
+							/>
 							<span className="relative mb-1.5 flex items-center gap-1 text-[0.625rem] font-semibold text-[#e5484d]">
 								<span className="size-1.5 animate-pulse rounded-full bg-[#e5484d] motion-reduce:animate-none" />
 								REC
@@ -469,12 +483,9 @@ export const UploadStream = ({
 					30% { transform: scale(1.08); }
 					100% { box-shadow: 0 0 0 14px rgba(71,133,255,0); transform: scale(1); }
 				}
-				.upload-live-fill { animation: upload-live-fill 7s ease-in-out infinite; }
-				@keyframes upload-live-fill { from { height: 0%; } to { height: 100%; } }
-				.upload-paused .upload-lane, .upload-paused .upload-live-fill { animation-play-state: paused; }
+				.upload-paused .upload-lane { animation-play-state: paused; }
 				@media (prefers-reduced-motion: reduce) {
-					.upload-lane, .upload-tile, .upload-queued, .upload-check, .upload-link, .upload-live-fill { animation: none; }
-					.upload-live-fill { height: 50%; }
+					.upload-lane, .upload-tile, .upload-queued, .upload-check, .upload-link { animation: none; }
 				}
 			`}</style>
 		</section>

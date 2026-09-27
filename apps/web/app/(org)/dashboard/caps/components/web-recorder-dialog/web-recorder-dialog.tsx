@@ -277,6 +277,7 @@ export const WebRecorderDialog = () => {
 		resetState,
 		dismissRecoveredDownload,
 		getActiveCameraStream,
+		recordedBytes,
 	} = useWebRecorder({
 		organisationId,
 		selectedMicId,
@@ -762,7 +763,7 @@ export const WebRecorderDialog = () => {
 							/>
 							{isPaused ? "Paused" : "Recording"}
 							<span className="tabular-nums text-white/80">
-								{formatClock(recordingTimerDisplayMs)}
+								{formatClock(durationMs)}
 							</span>
 						</Overlay>
 						{cameraEnabled && (
@@ -772,7 +773,12 @@ export const WebRecorderDialog = () => {
 						)}
 					</>,
 				)}
-				<UploadStream chunks={chunkUploads} recording paused={isPaused} />
+				<UploadStream
+					chunks={chunkUploads}
+					recordedBytes={recordedBytes}
+					recording
+					paused={isPaused}
+				/>
 			</section>
 			<aside className="flex flex-col gap-6 lg:sticky lg:top-8 lg:self-start">
 				<div className="flex flex-col gap-1">

@@ -190,6 +190,7 @@ export const useWebRecorder = ({
 	const [isSettingUp, setIsSettingUp] = useState(false);
 	const [isRestarting, setIsRestarting] = useState(false);
 	const [chunkUploads, setChunkUploads] = useState<ChunkUploadState[]>([]);
+	const [recordedBytes, setRecordedBytes] = useState(0);
 	const [errorDownload, setErrorDownload] =
 		useState<RecordingFailureDownload | null>(null);
 	const [cameraErrorDownload, setCameraErrorDownload] =
@@ -1021,6 +1022,7 @@ export const useWebRecorder = ({
 		recordingPairIdRef.current = null;
 		setUploadStatus(undefined);
 		setChunkUploads([]);
+		setRecordedBytes(0);
 		setHasAudioTrack(false);
 		replaceErrorDownload(null);
 		replaceCameraErrorDownload(null);
@@ -1089,6 +1091,7 @@ export const useWebRecorder = ({
 						}
 					}
 					persistChunkToRecordingSpool(chunk);
+					setRecordedBytes(totalBytes);
 					try {
 						instantUploaderRef.current?.handleChunk(chunk, totalBytes);
 					} catch (error) {
@@ -1143,6 +1146,7 @@ export const useWebRecorder = ({
 		replaceAudioErrorDownloads([]);
 		shareUrlOpenedRef.current = false;
 		setChunkUploads([]);
+		setRecordedBytes(0);
 		setIsSettingUp(true);
 		cameraRecorderBytesRef.current = 0;
 		cameraRecorderFailedRef.current = false;
@@ -2406,5 +2410,6 @@ export const useWebRecorder = ({
 		supportCheckCompleted,
 		screenCaptureWarning,
 		getActiveCameraStream: () => cameraStreamRef.current,
+		recordedBytes,
 	};
 };
