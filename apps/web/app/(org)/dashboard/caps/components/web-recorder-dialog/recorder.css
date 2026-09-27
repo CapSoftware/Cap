@@ -26,6 +26,7 @@
 	--rec-pop-shadow:
 		0 12px 32px -12px rgba(0, 0, 0, 0.25), 0 0 0 1px var(--rec-line);
 	--rec-scrim: rgba(241, 241, 243, 0.78);
+	--rec-level: #0090ff;
 	--track-screen: #3b82f6;
 	--track-camera: #8b5cf6;
 	--track-mic: #22c55e;
@@ -177,12 +178,13 @@
 	}
 }
 
-.rec-record {
-	background: var(--rec-red);
-	box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16);
+.rec-start {
+	background: linear-gradient(to right, #0588f0, #0588f0 50%, #0d74ce);
 }
-.rec-record:hover:not(:disabled) {
-	background: color-mix(in srgb, var(--rec-red) 90%, black);
+@media (prefers-color-scheme: dark) {
+	.rec-start {
+		background: linear-gradient(to right, #0090ff, #0090ff 50%, #3b9eff);
+	}
 }
 
 /* The monitors stack their 16:9 tiles and size them to the room the card

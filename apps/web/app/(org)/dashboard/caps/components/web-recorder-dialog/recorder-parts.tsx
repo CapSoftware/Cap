@@ -48,6 +48,15 @@ export const useLiveStream = (
 	return stream;
 };
 
+// Same curve as the desktop app's microphone row: a 40 dB window, eased so
+// normal speech fills a good share of the row.
+const DB_WINDOW = 40;
+const levelFromRms = (rms: number) => {
+	const db = 20 * Math.log10(Math.max(rms, 1e-6));
+	const scaled = Math.min(1, Math.max(db + DB_WINDOW, 0) / DB_WINDOW);
+	return 1 - (1 - scaled) ** 0.5;
+};
+
 export const useMicLevel = (deviceId: string | null, enabled: boolean) => {
 	const [level, setLevel] = useState(0);
 
@@ -85,7 +94,7 @@ export const useMicLevel = (deviceId: string | null, enabled: boolean) => {
 					let sum = 0;
 					for (const sample of samples) sum += sample * sample;
 					const rms = Math.sqrt(sum / samples.length);
-					setLevel(Math.min(1, rms * 4));
+					setLevel(levelFromRms(rms));
 				};
 				frame = requestAnimationFrame(tick);
 			} catch {
@@ -362,88 +371,66 @@ export const CountdownDial = ({ value }: { value: number }) => (
 	</span>
 );
 
-export const MicMeter = ({ level }: { level: number }) => (
-	<span className="flex h-3.5 items-end gap-[2px]" aria-hidden>
-		{[0.06, 0.16, 0.3, 0.46, 0.64].map((threshold) => (
-			<span
-				key={threshold}
-				className="w-[3px] rounded-full transition-colors duration-75"
-				style={{
-					height: `${Math.round(30 + threshold * 100)}%`,
-					background:
-						level > threshold ? "var(--track-mic)" : "var(--rec-ctl-active)",
-				}}
-			/>
-		))}
-	</span>
+// The desktop app's device row: the level fills the row from the left with a
+// soft tint and a 2px line along the bottom.
+export const LevelFill = ({ level }: { level: number }) => (
+	<>
+		<span
+			className="pointer-events-none absolute inset-y-0 left-0 bg-[color-mix(in_srgb,var(--rec-level)_12%,transparent)] transition-[width] duration-100"
+			style={{ width: `${level * 100}%` }}
+			aria-hidden
+		/>
+		<span
+			className="pointer-events-none absolute bottom-0 left-0 h-[2px] bg-[var(--rec-level)] transition-[width] duration-100"
+			style={{ width: `${level * 100}%` }}
+			aria-hidden
+		/>
+	</>
 );
 
-export const AudioLevel = ({
+export const LevelRow = ({
 	kind,
 	icon: Icon,
 	label,
 	on,
 	level,
-	note,
-	action,
+	trailing,
 }: {
 	kind: TrackKind;
 	icon: LucideIcon;
 	label: string;
 	on: boolean;
 	level?: number;
-	note?: string;
-	action?: ReactNode;
-}) => {
-	const segments = 24;
-	const lit = Math.round(Math.min(1, (level ?? 0) * 1.4) * segments);
-	return (
-		<div
-			className="rec-track flex min-w-0 flex-col gap-1.5"
-			data-kind={kind}
-			data-on={on}
-		>
-			<span className="flex items-center gap-2 text-[12px]">
-				<span className="rec-track-tile flex size-5 shrink-0 items-center justify-center rounded">
-					<Icon className="size-3" aria-hidden />
-				</span>
-				<span
-					className={clsx(
-						"font-medium",
-						on ? "text-[var(--rec-text-1)]" : "text-[var(--rec-text-2)]",
-					)}
-				>
-					{label}
-				</span>
-				{note && (
-					<span className="truncate text-[var(--rec-text-3)]">{note}</span>
-				)}
-				{action}
-			</span>
-			{level !== undefined && on && (
-				<span className="flex h-3 gap-[3px]" aria-hidden>
-					{Array.from({ length: segments }, (_, index) => (
-						<span
-							// biome-ignore lint/suspicious/noArrayIndexKey: fixed meter segments
-							key={index}
-							className="h-full flex-1 rounded-[1.5px] transition-colors duration-75"
-							style={{
-								background:
-									index < lit
-										? index > segments * 0.85
-											? "var(--rec-red)"
-											: index > segments * 0.65
-												? "#f5a524"
-												: "var(--track-mic)"
-										: "var(--rec-ctl-active)",
-							}}
-						/>
-					))}
-				</span>
+	trailing?: ReactNode;
+}) => (
+	<div
+		className="rec-track relative flex h-10 min-w-0 items-center gap-2.5 overflow-hidden rounded-lg bg-[var(--rec-ctl)] px-3"
+		data-kind={kind}
+		data-on={on}
+	>
+		{on && level !== undefined && <LevelFill level={level} />}
+		<Icon
+			className={clsx(
+				"relative size-4 shrink-0",
+				on ? "text-[var(--rec-text-1)]" : "text-[var(--rec-text-3)]",
 			)}
-		</div>
-	);
-};
+			aria-hidden
+		/>
+		<span
+			className={clsx(
+				"relative min-w-0 flex-1 truncate text-[13px]",
+				on ? "text-[var(--rec-text-1)]" : "text-[var(--rec-text-2)]",
+			)}
+		>
+			{label}
+		</span>
+		{trailing && (
+			<span className="relative flex shrink-0 items-center gap-1.5 text-[12px] text-[var(--rec-text-3)]">
+				{trailing}
+			</span>
+		)}
+	</div>
+);
 
 export const SourceRow = ({
 	kind,
@@ -452,6 +439,7 @@ export const SourceRow = ({
 	on,
 	detail,
 	actions,
+	level,
 }: {
 	kind: TrackKind;
 	icon: LucideIcon;
@@ -459,12 +447,18 @@ export const SourceRow = ({
 	on: boolean;
 	detail: ReactNode;
 	actions: ReactNode;
+	level?: number;
 }) => (
 	<li
-		className="rec-track flex items-center gap-2.5 rounded-lg px-2 py-1.5 transition-colors hover:bg-[var(--rec-ctl)]"
+		className="rec-track relative isolate flex items-center gap-2.5 overflow-hidden rounded-lg px-2 py-1.5 transition-colors hover:bg-[var(--rec-ctl)]"
 		data-kind={kind}
 		data-on={on}
 	>
+		{on && level !== undefined && (
+			<span className="absolute inset-0 -z-10">
+				<LevelFill level={level} />
+			</span>
+		)}
 		<span className="rec-track-tile flex size-7 shrink-0 items-center justify-center rounded-md transition-colors">
 			<Icon className="size-3.5" aria-hidden />
 		</span>

@@ -16,10 +16,8 @@ import {
 	CirclePlayIcon,
 	LoaderCircleIcon,
 	MicIcon,
+	MicOffIcon,
 	MonitorIcon,
-	PauseIcon,
-	PlayIcon,
-	RotateCcwIcon,
 	Volume2Icon,
 } from "lucide-react";
 import {
@@ -38,15 +36,19 @@ import {
 } from "./CameraPreviewWindow";
 import { HowRecordingWorks } from "./how-recording-works";
 import { InProgressRecordingBar } from "./InProgressRecordingBar";
-import { DeviceMenu, OptionsMenu, RecordButton } from "./recorder-dock";
 import {
-	AudioLevel,
+	DeviceMenu,
+	OptionsMenu,
+	RecordingBar,
+	StartRecordingButton,
+} from "./recorder-dock";
+import {
 	BoilFilter,
 	CountdownDial,
 	Doodle,
 	formatClock,
+	LevelRow,
 	LiveVideo,
-	MicMeter,
 	SourceRow,
 	Squiggle,
 	Switch,
@@ -1070,21 +1072,19 @@ export const WebRecorderDialog = () => {
 				icon={MicIcon}
 				label="Microphone"
 				on={micEnabled}
+				level={micLevel}
 				detail={
 					availableMics.length === 0 ? (
 						"Needs permission"
 					) : (
-						<>
-							<DeviceMenu
-								title="Microphone"
-								devices={availableMics}
-								selectedId={selectedMicId ?? lastMicIdRef.current}
-								fallbackName="Microphone"
-								disabled={setupLocked}
-								onSelect={handleMicChange}
-							/>
-							{micEnabled && <MicMeter level={micLevel} />}
-						</>
+						<DeviceMenu
+							title="Microphone"
+							devices={availableMics}
+							selectedId={selectedMicId ?? lastMicIdRef.current}
+							fallbackName="Microphone"
+							disabled={setupLocked}
+							onSelect={handleMicChange}
+						/>
 					)
 				}
 				actions={
@@ -1155,90 +1155,74 @@ export const WebRecorderDialog = () => {
 		</ul>
 	);
 
+	const micName =
+		availableMics
+			.find((mic) => mic.deviceId === selectedMicId)
+			?.label?.replace(/\s*\([0-9a-f]{4}:[0-9a-f]{4}\)$/i, "") || "Microphone";
+	const systemAudioLive = systemAudioOn && (live ? screenMode : true);
+
 	const audioMonitor = (
-		<div className="rec-mon-audio flex min-w-0 flex-col justify-center gap-5 rounded-[10px] bg-[var(--rec-card-2)] px-5 shadow-[inset_0_0_0_1px_var(--rec-line)]">
-			<AudioLevel
+		<div className="rec-mon-audio flex min-w-0 flex-col justify-center gap-2 rounded-[10px] bg-[var(--rec-card-2)] px-4 shadow-[inset_0_0_0_1px_var(--rec-line)]">
+			<span className="px-1 pb-0.5 text-[12px] font-medium text-[var(--rec-text-2)]">
+				Audio
+			</span>
+			<LevelRow
 				kind="mic"
-				icon={MicIcon}
-				label="Microphone"
-				on={micEnabled}
-				level={micEnabled ? micLevel : 0}
-				note={
+				icon={micEnabled ? MicIcon : MicOffIcon}
+				label={
 					micEnabled
-						? undefined
+						? micName
 						: availableMics.length === 0
-							? "Needs permission"
-							: "Muted"
+							? "Microphone needs permission"
+							: "Microphone muted"
 				}
+				on={micEnabled}
+				level={micLevel}
+				trailing={micEnabled ? "Mic" : undefined}
 			/>
 			{screenSupported && (
-				<AudioLevel
+				<LevelRow
 					kind="system"
 					icon={Volume2Icon}
-					label="System audio"
-					on={systemAudioOn && (live ? screenMode : true)}
-					note={
-						systemAudioOn && (live ? screenMode : true)
+					label={systemAudioLive ? "Computer sound" : "System audio off"}
+					on={systemAudioLive}
+					trailing={
+						systemAudioLive
 							? sharedScreen || live
-								? "From your shared screen"
-								: "Captured with your screen"
-							: "Off"
+								? "From your screen"
+								: "With your screen"
+							: !live
+								? showMeHow
+								: undefined
 					}
-					action={!live && !systemAudioOn ? showMeHow : undefined}
 				/>
 			)}
 		</div>
 	);
 
-	const controls = live ? (
-		<section className="rec-card flex flex-col gap-3 p-3">
-			<div className="flex items-center justify-between gap-3 px-1">
-				<span className="flex items-center gap-2 text-[13px] text-[var(--rec-text-2)]">
-					<LiveDot paused={isPaused} />
-					{isPaused ? "Paused" : "Recording"}
-				</span>
-				<span className="text-[24px] font-medium tabular-nums leading-none tracking-[-0.02em]">
-					{formatClock(durationMs)}
-				</span>
-			</div>
-			<RecordButton recording onClick={handleStopClick} />
-			<div className="grid grid-cols-2 gap-2">
-				<button
-					type="button"
-					className="rec-btn"
-					onClick={() => {
-						void (isPaused ? resumeRecording() : pauseRecording());
-					}}
-				>
-					{isPaused ? (
-						<PlayIcon className="size-3.5" aria-hidden />
-					) : (
-						<PauseIcon className="size-3.5" aria-hidden />
-					)}
-					{isPaused ? "Resume" : "Pause"}
-				</button>
-				<button
-					type="button"
-					className="rec-btn"
-					disabled={isRestarting}
-					onClick={() => {
-						void restartRecording();
-					}}
-				>
-					<RotateCcwIcon className="size-3.5" aria-hidden />
-					Start over
-				</button>
-			</div>
+	const footer = live ? (
+		<div className="flex items-center justify-center gap-3">
+			<RecordingBar
+				time={formatClock(durationMs)}
+				paused={isPaused}
+				restarting={isRestarting}
+				onStop={handleStopClick}
+				onPauseToggle={() => {
+					void (isPaused ? resumeRecording() : pauseRecording());
+				}}
+				onRestart={() => {
+					void restartRecording();
+				}}
+			/>
 			{!user.isPro && (
-				<span className="text-center text-[12px] tabular-nums text-[var(--rec-text-3)]">
+				<span className="text-[12px] tabular-nums text-[var(--rec-text-3)]">
 					{formatClock(recordingTimerDisplayMs)} left on Free
 				</span>
 			)}
-		</section>
+		</div>
 	) : (
-		<section className="rec-card flex flex-col gap-2.5 p-3">
-			<RecordButton
-				recording={false}
+		<div className="flex flex-col items-center gap-2">
+			<StartRecordingButton
 				busy={
 					stage === "starting" || stage === "picking" || stage === "countdown"
 				}
@@ -1247,20 +1231,21 @@ export const WebRecorderDialog = () => {
 					sharePending ||
 					(!screenSupported && !cameraEnabled)
 				}
+				detail="Studio Mode"
 				onClick={() => {
 					void handleRecordClick();
 				}}
 			/>
-			<span className="text-center text-[12px] leading-snug text-[var(--rec-text-3)]">
+			<span className="text-[12px] text-[var(--rec-text-3)]">
 				{trackCount === 0
 					? screenSupported
 						? "You'll choose a screen next"
 						: "Turn on your camera to record"
-					: `${joinWords(sourceWords).replace(/^./, (c) => c.toUpperCase())}${
+					: `${joinWords(sourceWords).replace(/^./, (c) => c.toUpperCase())}, each on its own track${
 							user.isPro ? "" : ` · up to ${freeMinutes} min on Free`
 						}`}
 			</span>
-		</section>
+		</div>
 	);
 
 	const steps = live
@@ -1350,7 +1335,6 @@ export const WebRecorderDialog = () => {
 
 	const sidebar = (
 		<aside className="flex shrink-0 flex-col gap-2 lg:min-h-0 lg:overflow-y-auto">
-			{controls}
 			<section className="rec-card flex flex-col">
 				<header className="flex h-10 shrink-0 items-center justify-between pl-4 pr-2">
 					<span className="text-[12px] font-medium text-[var(--rec-text-2)]">
@@ -1503,6 +1487,7 @@ export const WebRecorderDialog = () => {
 						)}
 					</div>
 				)}
+				<footer className="shrink-0 px-4 pb-4 pt-1">{footer}</footer>
 			</section>
 			{sidebar}
 		</main>
