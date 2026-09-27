@@ -388,50 +388,6 @@ export const LevelFill = ({ level }: { level: number }) => (
 	</>
 );
 
-export const LevelRow = ({
-	kind,
-	icon: Icon,
-	label,
-	on,
-	level,
-	trailing,
-}: {
-	kind: TrackKind;
-	icon: LucideIcon;
-	label: string;
-	on: boolean;
-	level?: number;
-	trailing?: ReactNode;
-}) => (
-	<div
-		className="rec-track relative flex h-10 min-w-0 items-center gap-2.5 overflow-hidden rounded-lg bg-[var(--rec-ctl)] px-3"
-		data-kind={kind}
-		data-on={on}
-	>
-		{on && level !== undefined && <LevelFill level={level} />}
-		<Icon
-			className={clsx(
-				"relative size-4 shrink-0",
-				on ? "text-[var(--rec-text-1)]" : "text-[var(--rec-text-3)]",
-			)}
-			aria-hidden
-		/>
-		<span
-			className={clsx(
-				"relative min-w-0 flex-1 truncate text-[13px]",
-				on ? "text-[var(--rec-text-1)]" : "text-[var(--rec-text-2)]",
-			)}
-		>
-			{label}
-		</span>
-		{trailing && (
-			<span className="relative flex shrink-0 items-center gap-1.5 text-[12px] text-[var(--rec-text-3)]">
-				{trailing}
-			</span>
-		)}
-	</div>
-);
-
 export const SourceRow = ({
 	kind,
 	icon: Icon,

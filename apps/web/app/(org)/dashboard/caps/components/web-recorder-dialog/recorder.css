@@ -187,62 +187,24 @@
 	}
 }
 
-/* The monitors stack their 16:9 tiles and size them to the room the card
-   has. */
+/* The stage fits a 16:9 preview frame to whatever room the player has. */
 .rec-stage {
 	container-type: size;
 	display: flex;
 	align-items: center;
 	justify-content: center;
 }
-.rec-tiles {
-	display: flex;
-	flex-direction: column;
-	align-items: center;
-	justify-content: center;
-	gap: 10px;
-}
-.rec-tile {
+.rec-preview {
 	aspect-ratio: 16 / 9;
-	flex-shrink: 0;
-}
-.rec-stage.is-single .rec-tile {
 	width: min(100cqw, 100cqh * 16 / 9);
 }
-/* A monitor wall: the screen on top, the camera and audio meters in a row
-   beneath it, sized together so the block fills the card. */
-.rec-monitors {
-	--cam-h: clamp(110px, 30cqh, 250px);
-	display: flex;
-	flex-direction: column;
-	gap: 10px;
-	width: min(100cqw, (100cqh - 10px - var(--cam-h)) * 16 / 9);
+.rec-bubble {
+	width: 22%;
+	aspect-ratio: 1;
+	border-radius: 22%;
 }
-.rec-monitors .rec-mon-screen {
-	width: 100%;
-}
-.rec-mon-row {
-	display: flex;
-	gap: 10px;
-	height: var(--cam-h);
-}
-.rec-mon-row .rec-mon-cam {
-	height: 100%;
-	width: auto;
-}
-.rec-mon-audio {
-	flex: 1;
-}
-@container (max-width: 560px) {
-	.rec-mon-audio {
-		display: none;
-	}
-	.rec-mon-row {
-		justify-content: center;
-	}
-}
-
-/* Each source keeps its editor track colour. */
+/* Tracks borrow the editor timeline's clip treatment: a tint, a hairline
+   ring and a 3px bar in the track colour. */
 .rec-track {
 	--t: var(--track-screen);
 }
@@ -266,6 +228,18 @@
 .rec-track[data-on="false"] .rec-track-tile {
 	background: var(--rec-ctl);
 	color: var(--rec-text-3);
+}
+.rec-segment {
+	background: color-mix(in srgb, var(--t) var(--rec-seg-tint), var(--rec-card));
+	box-shadow:
+		inset 0 0 0 1px
+		color-mix(in srgb, var(--t) var(--rec-seg-line), transparent),
+		inset 3px 0 0 var(--t);
+	color: color-mix(
+		in srgb,
+		var(--t) var(--rec-seg-label-mix),
+		var(--rec-seg-label)
+	);
 }
 /* Animation language shared with the Chrome extension: strokes that draw
    themselves on, a gentle hand-drawn boil, sparks and marching dashes. */
