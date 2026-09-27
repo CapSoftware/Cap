@@ -85,6 +85,7 @@ function createWaveformPath(
 	waveform: number[] | undefined,
 	targetSamples: number,
 	sourceTimeAt: (outputTime: number) => number | null,
+	offsetSecs = 0,
 ) {
 	if (typeof Path2D === "undefined") return;
 	if (!waveform || waveform.length === 0) return;
@@ -107,7 +108,9 @@ function createWaveformPath(
 	const amplitudeAt = (outputTime: number) => {
 		const time = sourceTimeAt(outputTime);
 		if (time === null) return 0;
-		const index = Math.floor(time * 10);
+		// Playback reads each track at source time + its clip offset
+		// (crates/editor/src/audio.rs), so the waveform must too.
+		const index = Math.floor((time + offsetSecs) * 10);
 		const sample = waveform[index];
 		const db =
 			typeof sample === "number" && Number.isFinite(sample)
@@ -163,6 +166,8 @@ function WaveformCanvas(props: {
 	segment: Pick<TimelineSegment, "start" | "end" | "volume">;
 	segmentOffset: number;
 	holds: ReadonlyArray<[number, number]>;
+	micOffset?: number;
+	systemOffset?: number;
 }) {
 	const { project, editorState } = useEditorContext();
 	const { width } = useSegmentContext();
@@ -269,7 +274,9 @@ function WaveformCanvas(props: {
 		const systemScale = gainToScale(project.audio.systemVolumeDb) * volume;
 
 		const holdsKey = holds.map(([start, end]) => `${start}:${end}`).join(",");
-		const geometryKey = `${canvasWidth}-${props.segment.start}-${renderRange.start}-${renderRange.end}-${holdsKey}`;
+		const micOffset = props.micOffset ?? 0;
+		const systemOffset = props.systemOffset ?? 0;
+		const geometryKey = `${canvasWidth}-${props.segment.start}-${renderRange.start}-${renderRange.end}-${holdsKey}-${micOffset}-${systemOffset}`;
 		const renderKey = `${geometryKey}-${leftOffsetPx}-${renderWidth}-${micScale}-${systemScale}`;
 		const micWaveform = props.micWaveform;
 		const systemWaveform = props.systemWaveform;
@@ -300,6 +307,7 @@ function WaveformCanvas(props: {
 				micWaveform,
 				numSamples,
 				sourceTimeAt,
+				micOffset,
 			);
 			cachedMicWaveform = micWaveform;
 		}
@@ -309,6 +317,7 @@ function WaveformCanvas(props: {
 				systemWaveform,
 				numSamples,
 				sourceTimeAt,
+				systemOffset,
 			);
 			cachedSystemWaveform = systemWaveform;
 		}
@@ -342,6 +351,8 @@ function WaveformCanvas(props: {
 		props.holds;
 		props.micWaveform;
 		props.systemWaveform;
+		props.micOffset;
+		props.systemOffset;
 		project.audio.micVolumeDb;
 		project.audio.systemVolumeDb;
 
@@ -1096,6 +1107,11 @@ export function ClipTrack(
 						return micWaveforms()?.[idx] ?? [];
 					};
 
+					const clipOffsets = () => {
+						const idx = segment().recordingSegment ?? i();
+						return project.clips?.find((clip) => clip.index === idx)?.offsets;
+					};
+
 					const systemAudioWaveform = () => {
 						if (
 							project.audio.systemVolumeDb &&
@@ -1339,6 +1355,8 @@ export function ClipTrack(
 										<WaveformCanvas
 											micWaveform={micWaveform()}
 											systemWaveform={systemAudioWaveform()}
+											micOffset={clipOffsets()?.mic}
+											systemOffset={clipOffsets()?.system_audio}
 											segment={segment()}
 											segmentOffset={relativeSegment().start}
 											holds={segmentHolds()}
