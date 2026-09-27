@@ -59,7 +59,7 @@ export const WebRecorderDialogHeader = ({
 					<span className="truncate text-[0.9375rem] font-semibold leading-tight text-gray-12">
 						Record a Cap
 					</span>
-					<span className="truncate text-[0.75rem] leading-tight text-gray-10">
+					<span className="text-[0.75rem] leading-tight text-gray-10">
 						Screen, camera and audio on separate tracks
 					</span>
 				</div>

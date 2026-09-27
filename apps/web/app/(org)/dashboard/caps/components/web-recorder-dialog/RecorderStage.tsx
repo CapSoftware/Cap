@@ -32,6 +32,7 @@ interface RecorderStageProps {
 	// Off while capturing: a live camera in this dialog would also land in a
 	// full-screen capture and appear twice in the recording.
 	showLiveCamera: boolean;
+	recording: boolean;
 	getCameraStream: () => MediaStream | null;
 }
 
@@ -83,7 +84,7 @@ const CameraFeed = ({
 	}, [stream]);
 
 	return (
-		<div className={clsx("overflow-hidden bg-gray-12/90", className)}>
+		<div className={clsx("overflow-hidden bg-[#1d1f24]", className)}>
 			{stream ? (
 				<video
 					ref={videoRef}
@@ -94,7 +95,7 @@ const CameraFeed = ({
 				/>
 			) : (
 				<div className="flex size-full items-center justify-center">
-					<CameraIcon className="size-5 text-gray-1/60" aria-hidden />
+					<CameraIcon className="size-5 text-white/70" aria-hidden />
 				</div>
 			)}
 		</div>
@@ -107,7 +108,7 @@ const SurfaceSketch = ({ mode }: { mode: RecordingMode }) => {
 			<div className="absolute inset-[9%] flex flex-col overflow-hidden rounded-lg bg-gray-1 shadow-[0_8px_24px_-12px_rgba(0,0,0,0.35)] ring-1 ring-gray-4">
 				<div className="flex h-[18%] items-end gap-1 bg-gray-3 px-2">
 					<div className="h-[70%] w-[28%] rounded-t-md bg-gray-1" />
-					<div className="mb-1 h-[40%] w-[18%] rounded bg-gray-5/70" />
+					<div className="mb-1 h-[40%] w-[18%] rounded bg-gray-5" />
 				</div>
 				<div className="flex flex-1 flex-col gap-[7%] p-[5%]">
 					<div className="h-[12%] w-[46%] rounded bg-gray-5" />
@@ -141,7 +142,7 @@ const SurfaceSketch = ({ mode }: { mode: RecordingMode }) => {
 
 	return (
 		<div className="absolute inset-0">
-			<div className="absolute inset-x-0 top-0 h-[7%] bg-gray-1/70" />
+			<div className="absolute inset-x-0 top-0 h-[7%] bg-gray-1" />
 			<div className="absolute left-[8%] top-[16%] h-[58%] w-[52%] overflow-hidden rounded-md bg-gray-1 shadow-[0_8px_24px_-12px_rgba(0,0,0,0.35)] ring-1 ring-gray-4">
 				<div className="h-[14%] bg-gray-3" />
 				<div className="m-[6%] h-[50%] rounded bg-blue-3" />
@@ -170,7 +171,7 @@ const StageLabel = ({
 }) => (
 	<span
 		className={clsx(
-			"inline-flex items-center gap-1 rounded-full bg-gray-12/75 py-0.5 pl-1.5 pr-2 text-[0.6875rem] font-medium text-gray-1 backdrop-blur-sm",
+			"inline-flex items-center gap-1 rounded-full bg-black/60 py-0.5 pl-1.5 pr-2 text-[0.6875rem] font-medium text-white backdrop-blur-sm",
 			className,
 		)}
 	>
@@ -254,6 +255,7 @@ export const RecorderStage = ({
 	micEnabled,
 	systemAudioEnabled,
 	showLiveCamera,
+	recording,
 	getCameraStream,
 }: RecorderStageProps) => {
 	const stream = useMirroredStream(
@@ -295,6 +297,12 @@ export const RecorderStage = ({
 						</StageLabel>
 					)}
 				</div>
+				{recording && (
+					<span className="absolute right-2.5 top-2.5 inline-flex items-center gap-1.5 rounded-full bg-black/60 py-0.5 pl-2 pr-2.5 text-[0.6875rem] font-medium text-white backdrop-blur-sm">
+						<span className="size-1.5 animate-pulse rounded-full bg-[#ff4d4d] motion-reduce:animate-none" />
+						Recording
+					</span>
+				)}
 				{!cameraOnly && cameraEnabled && (
 					<StageLabel
 						icon={CameraIcon}

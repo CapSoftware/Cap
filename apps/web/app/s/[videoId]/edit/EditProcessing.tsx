@@ -26,10 +26,11 @@ export function EditProcessing({
 		if (ready) router.refresh();
 	}, [ready, router]);
 
-	const percent =
+	const reported =
 		progress && "progress" in progress
 			? Math.max(0, Math.min(100, Math.round(progress.progress)))
-			: null;
+			: 0;
+	const percent = reported > 0 ? reported : null;
 
 	return (
 		<main className="flex min-h-[100dvh] items-center justify-center bg-gray-2 px-4 py-10">

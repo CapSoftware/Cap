@@ -93,7 +93,7 @@ const PickerIllustration = ({ mode }: { mode: DisplayMode }) => {
 							tile === 1 && "picker-guide-target",
 						)}
 					>
-						<div className="absolute inset-[14%] rounded-sm bg-gray-5/70" />
+						<div className="absolute inset-[14%] rounded-sm bg-gray-5" />
 					</div>
 				))}
 			</div>

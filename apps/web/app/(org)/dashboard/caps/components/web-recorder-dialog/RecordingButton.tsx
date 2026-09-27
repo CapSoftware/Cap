@@ -6,6 +6,7 @@ import { LoaderCircleIcon } from "lucide-react";
 interface RecordingButtonProps {
 	isRecording: boolean;
 	isStarting?: boolean;
+	isFinishing?: boolean;
 	disabled?: boolean;
 	onStart: () => void;
 	onStop: () => void;
@@ -14,6 +15,7 @@ interface RecordingButtonProps {
 export const RecordingButton = ({
 	isRecording,
 	isStarting = false,
+	isFinishing = false,
 	disabled = false,
 	onStart,
 	onStop,
@@ -29,7 +31,7 @@ export const RecordingButton = ({
 				: "bg-gradient-to-b from-[#5b92ff] to-[#3a76f5] shadow-[inset_0_1px_0_rgba(255,255,255,0.25),0_6px_16px_-8px_rgba(58,118,245,0.8)] hover:brightness-105",
 		)}
 	>
-		{isStarting ? (
+		{isStarting || isFinishing ? (
 			<LoaderCircleIcon className="size-4 animate-spin" aria-hidden />
 		) : isRecording ? (
 			<span className="size-3 rounded-[3px] bg-[#ff4d4d]" aria-hidden />
@@ -42,10 +44,12 @@ export const RecordingButton = ({
 				<span className="relative size-3.5 rounded-full bg-[#ff4d4d] ring-2 ring-white/70" />
 			</span>
 		)}
-		{isStarting
-			? "Waiting for your browser"
-			: isRecording
-				? "Stop recording"
-				: "Start recording"}
+		{isFinishing
+			? "Finishing upload"
+			: isStarting
+				? "Waiting for your browser"
+				: isRecording
+					? "Stop recording"
+					: "Start recording"}
 	</button>
 );

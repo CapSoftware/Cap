@@ -294,7 +294,10 @@ export const WebRecorderDialog = () => {
 				</DialogTrigger>
 				<DialogContent
 					ref={dialogContentRef}
-					className="w-[calc(100vw-1.5rem)] max-w-[46rem] border-none bg-transparent p-0 shadow-none [&>button]:hidden"
+					className={clsx(
+						"w-[calc(100vw-1.5rem)] max-w-[46rem] border-none bg-transparent p-0 shadow-none transition-opacity duration-200 [&>button]:hidden",
+						guideOpen && "pointer-events-none opacity-0",
+					)}
 					onPointerDownOutside={handlePointerDownOutside}
 					onFocusOutside={handleFocusOutside}
 					onInteractOutside={handleInteractOutside}
@@ -308,8 +311,7 @@ export const WebRecorderDialog = () => {
 								animate="visible"
 								exit="exit"
 								className={clsx(
-									"relative flex max-h-[calc(100dvh-1.5rem)] flex-col gap-4 overflow-y-auto rounded-2xl border border-gray-4 bg-gray-2 p-4 text-[0.875rem] text-gray-12 shadow-[0_30px_80px_-30px_rgba(0,0,0,0.45)] transition-opacity duration-200 sm:p-5",
-									guideOpen && "opacity-0",
+									"relative flex max-h-[calc(100dvh-1.5rem)] flex-col gap-4 overflow-y-auto rounded-2xl border border-gray-4 bg-gray-2 p-4 text-[0.875rem] text-gray-12 shadow-[0_30px_80px_-30px_rgba(0,0,0,0.45)] sm:p-5",
 								)}
 							>
 								<SettingsPanel
@@ -337,6 +339,7 @@ export const WebRecorderDialog = () => {
 											recordingMode !== "camera" && systemAudioEnabled
 										}
 										showLiveCamera={!isSettingUp && !isBusy}
+										recording={isRecording}
 										getCameraStream={getCameraPreviewStream}
 									/>
 									<div className="flex min-w-0 flex-col gap-2.5">
@@ -349,14 +352,10 @@ export const WebRecorderDialog = () => {
 											onModeChange={setRecordingMode}
 										/>
 										{screenCaptureWarning && (
-											<div className="rounded-xl border border-gray-5 bg-gray-3 px-3 py-2 text-xs leading-snug text-gray-12">
-												{screenCaptureWarning}
-											</div>
-										)}
-										{supportCheckCompleted && !supportsDisplayRecording && (
 											<p className="px-1 text-[0.75rem] leading-snug text-gray-10">
-												This browser can only record your camera. Open Cap on a
-												computer to record your screen too.
+												This browser can only record your camera. Use Chrome,
+												Edge or Cap Desktop on a computer to record your screen
+												too.
 											</p>
 										)}
 										<CameraSelector
@@ -401,6 +400,7 @@ export const WebRecorderDialog = () => {
 											<RecordingButton
 												isRecording={isRecording}
 												isStarting={isSettingUp}
+												isFinishing={isBusy && !isRecording}
 												disabled={
 													!canStartRecording || (isBusy && !isRecording)
 												}
@@ -408,9 +408,11 @@ export const WebRecorderDialog = () => {
 												onStop={handleStopClick}
 											/>
 											<p className="text-center text-[0.75rem] leading-snug text-gray-10">
-												{user.isPro
-													? "When you stop, the editor opens and your link is already live."
-													: `Up to ${freeMinutes} minutes on Free. When you stop, the editor opens and your link is already live.`}
+												{isBusy && !isRecording
+													? "Your link is live. The editor opens as soon as the upload finishes."
+													: user.isPro
+														? "When you stop, the editor opens and your link is already live."
+														: `Up to ${freeMinutes} minutes on Free. When you stop, the editor opens and your link is already live.`}
 											</p>
 										</div>
 									</div>

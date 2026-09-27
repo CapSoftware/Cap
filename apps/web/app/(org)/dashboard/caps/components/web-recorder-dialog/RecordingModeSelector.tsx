@@ -57,7 +57,7 @@ export const RecordingModeSelector = ({
 						"flex min-w-0 flex-col items-center justify-center gap-1 rounded-[9px] px-1 py-2 text-[0.75rem] font-medium leading-none transition-[background-color,color,box-shadow] duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-8 disabled:cursor-not-allowed",
 						selected
 							? "bg-gray-1 text-gray-12 shadow-[0_1px_2px_rgba(0,0,0,0.08),0_0_0_1px_var(--gray-4)]"
-							: "text-gray-10 hover:bg-gray-4/60 hover:text-gray-12",
+							: "text-gray-10 hover:bg-gray-4 hover:text-gray-12",
 						unavailable && "opacity-40 hover:bg-transparent",
 					)}
 				>
