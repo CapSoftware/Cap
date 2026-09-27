@@ -366,7 +366,7 @@ export const UploadStream = ({
 						? recording
 							? `Recording part 1 · ${formatMegabytes(bufferedBytes)} of ${formatMegabytes(PART_BYTES)}`
 							: "Sending the recording"
-						: `${done} of ${chunks.length} parts sent · ${formatMegabytes(sentBytes)}`}
+						: `${done} of ${chunks.length} ${chunks.length === 1 ? "part" : "parts"} sent · ${formatMegabytes(sentBytes)}`}
 				</span>
 			</div>
 			<div className="flex items-center gap-3">
