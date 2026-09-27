@@ -6,6 +6,7 @@ import {
 	timingSafeEqual,
 } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { ANNEX_B_PARAMETER_SETS } from "./boxes.test-util";
 import type { Job, TaskState } from "./coordinator";
 import * as fmp4 from "./fmp4";
 import * as hls from "./hls";
@@ -699,6 +700,54 @@ describe("transcodes", () => {
 		expect(await (await call(h, "/transcodes", request)).json()).toMatchObject({
 			status: "ready",
 			size: 42,
+		});
+	});
+
+	test("a fresh index can reuse a retained transcode after its raw upload is removed", async () => {
+		const h = harness();
+		const prefix = "owner/video/project";
+		const header = mp4.buildHeader({
+			width: 128,
+			height: 72,
+			fps: 30,
+			video: {
+				sizes: Uint32Array.of(1),
+				runs: [{ first: 0, count: 1, offset: 0 }],
+				keyframes: Uint32Array.of(0),
+				avcC: mp4.avcC(ANNEX_B_PARAMETER_SETS),
+			},
+			audio: null,
+			payloadSize: 1,
+			minimumSize: 0,
+		});
+		const output = new Uint8Array(header.byteLength + 1);
+		output.set(header);
+		h.objects.set(request.output, output);
+		h.objects.set(
+			`${prefix}/recording-meta.json`,
+			new TextEncoder().encode("{}"),
+		);
+		h.objects.set(
+			`${prefix}/manifest.json`,
+			new TextEncoder().encode(
+				JSON.stringify({
+					files: [
+						{ path: "recording-meta.json", size: 2 },
+						{
+							path: "display.mp4",
+							key: request.output,
+							transcodeFrom: request.source,
+						},
+					],
+				}),
+			),
+		);
+		await expect(
+			h.sourceIndex(prefix, request.sourceRoot),
+		).resolves.toBeDefined();
+		expect(await (await call(h, "/transcodes", request)).json()).toMatchObject({
+			status: "ready",
+			size: output.byteLength,
 		});
 	});
 

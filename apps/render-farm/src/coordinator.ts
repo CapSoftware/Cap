@@ -553,7 +553,8 @@ async function sourceIndex(
 			size:
 				file.transcodeFrom === undefined
 					? file.size
-					: await transcodeSourceSize(file.transcodeFrom),
+					: ((await storedTranscodeSize(keyOf(file))) ??
+						(await transcodeSourceSize(file.transcodeFrom))),
 		})),
 	);
 	const sourceBounds = checkManifestBounds(
@@ -1429,6 +1430,19 @@ type Transcode = {
 /** By output key: one transcode per target, shared by every job needing it. */
 const transcodes = new Map<string, Transcode>();
 
+async function storedTranscodeSize(output: string) {
+	const head = await s3.head(output);
+	if (!head) return null;
+	if (
+		!Number.isSafeInteger(head.size) ||
+		head.size <= 0 ||
+		head.size > SOURCE_LIMITS.sourceBytes
+	) {
+		throw new Error("stored transcode output has an invalid size");
+	}
+	return head.size;
+}
+
 async function transcodeSourceSize(source: string) {
 	const head = await s3.head(source);
 	if (!head || !Number.isSafeInteger(head.size) || head.size <= 0) {
@@ -1465,11 +1479,9 @@ async function ensureTranscode(source: string, output: string) {
 	};
 	transcodes.set(output, transcode);
 	try {
-		const head = await s3.head(output);
-		if (head && head.size > 0 && head.size <= SOURCE_LIMITS.sourceBytes) {
-			settleTranscode(transcode, "ready", head.size);
-		} else if (head) {
-			throw new Error("stored transcode output has an invalid size");
+		const size = await storedTranscodeSize(output);
+		if (size !== null) {
+			settleTranscode(transcode, "ready", size);
 		} else {
 			await transcodeSourceSize(source);
 			transcode.state = "queued";
