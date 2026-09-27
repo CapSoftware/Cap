@@ -1,10 +1,12 @@
 "use client";
 
+import type { ChunkUploadState } from "@cap/recorder-core/recorder-types";
 import clsx from "clsx";
 import {
 	ArrowUpIcon,
 	CameraIcon,
 	CheckIcon,
+	LinkIcon,
 	type LucideIcon,
 	MicIcon,
 	MonitorIcon,
@@ -309,4 +311,223 @@ export const PickingScreen = () => (
 			</p>
 		</div>
 	</div>
+);
+
+const formatMegabytes = (bytes: number) =>
+	`${(bytes / (1024 * 1024)).toFixed(bytes >= 100 * 1024 * 1024 ? 0 : 1)} MB`;
+
+const CAP_BLUE = "#4785FF";
+
+// Parts travel from the recorder on the left to the share link on the right:
+// the newest part sits next to the recorder, finished ones reach the link.
+export const UploadStream = ({
+	chunks,
+	recording,
+	paused = false,
+}: {
+	chunks: ChunkUploadState[];
+	recording: boolean;
+	paused?: boolean;
+}) => {
+	const done = chunks.filter((chunk) => chunk.status === "complete").length;
+	const sentBytes = chunks.reduce(
+		(total, chunk) =>
+			total +
+			(chunk.status === "complete" ? chunk.sizeBytes : chunk.uploadedBytes),
+		0,
+	);
+	const visible = chunks.slice(-12).reverse();
+
+	return (
+		<section
+			aria-label="Upload progress"
+			className={clsx(
+				"flex flex-col gap-4 rounded-2xl border border-gray-4 bg-gray-1 p-4 sm:p-5",
+				paused && "upload-paused",
+			)}
+		>
+			<div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+				<span className="text-[0.9375rem] font-medium text-gray-12">
+					{recording
+						? "Uploading while you record"
+						: "Uploading the last parts"}
+				</span>
+				<span className="text-[0.8125rem] tabular-nums text-gray-10">
+					{chunks.length === 0
+						? "First part uploads in a few seconds"
+						: `${done} of ${chunks.length} parts sent · ${formatMegabytes(sentBytes)}`}
+				</span>
+			</div>
+			<div className="flex items-center gap-3">
+				<div
+					className={clsx(
+						"relative flex h-16 w-12 shrink-0 items-end justify-center overflow-hidden rounded-xl border",
+						recording
+							? "border-[#e5484d]/40 bg-[#e5484d]/5"
+							: "border-gray-4 bg-gray-2",
+					)}
+				>
+					{recording ? (
+						<>
+							<span className="upload-live-fill absolute inset-x-0 bottom-0 bg-[#e5484d]/20" />
+							<span className="relative mb-1.5 flex items-center gap-1 text-[0.625rem] font-semibold text-[#e5484d]">
+								<span className="size-1.5 animate-pulse rounded-full bg-[#e5484d] motion-reduce:animate-none" />
+								REC
+							</span>
+						</>
+					) : (
+						<CheckIcon className="mb-4 size-4 text-gray-10" aria-hidden />
+					)}
+				</div>
+				<div className="relative flex h-16 min-w-0 flex-1 items-center justify-end overflow-hidden">
+					<span className="upload-lane absolute inset-x-0 top-1/2 h-px -translate-y-1/2" />
+					<ol className="relative flex shrink-0 items-center gap-2 pr-1">
+						{visible.map((chunk) => (
+							<li
+								key={chunk.partNumber}
+								className={clsx(
+									"upload-tile relative flex h-14 w-10 shrink-0 items-end justify-center overflow-hidden rounded-lg border transition-colors duration-300",
+									chunk.status === "complete"
+										? "border-transparent"
+										: chunk.status === "error"
+											? "border-red-9 bg-red-3"
+											: chunk.status === "uploading"
+												? "border-blue-7 bg-gray-1"
+												: "upload-queued border-dashed border-gray-6 bg-gray-2",
+								)}
+								style={
+									chunk.status === "complete"
+										? { backgroundColor: CAP_BLUE }
+										: undefined
+								}
+								title={`Part ${chunk.partNumber}`}
+							>
+								{chunk.status === "uploading" && (
+									<span
+										className="absolute inset-x-0 bottom-0 transition-[height] duration-300 ease-out"
+										style={{
+											height: `${Math.max(8, Math.round(chunk.progress * 100))}%`,
+											backgroundColor: "rgba(71,133,255,0.35)",
+										}}
+									/>
+								)}
+								{chunk.status === "complete" ? (
+									<CheckIcon
+										className="upload-check absolute left-1/2 top-1/2 size-4 -translate-x-1/2 -translate-y-1/2 text-white"
+										aria-hidden
+									/>
+								) : null}
+								<span
+									className={clsx(
+										"relative mb-1 text-[0.625rem] font-medium tabular-nums",
+										chunk.status === "complete"
+											? "text-white/80"
+											: "text-gray-10",
+									)}
+								>
+									{chunk.partNumber}
+								</span>
+							</li>
+						))}
+					</ol>
+				</div>
+				<div className="flex shrink-0 flex-col items-center gap-1">
+					<span
+						key={done}
+						className="upload-link flex size-12 items-center justify-center rounded-full text-white"
+						style={{ backgroundColor: CAP_BLUE }}
+					>
+						<LinkIcon className="size-5" aria-hidden />
+					</span>
+					<span className="text-[0.6875rem] font-medium text-gray-10">
+						Your link
+					</span>
+				</div>
+			</div>
+			<style>{`
+				.upload-lane {
+					background-image: linear-gradient(90deg, var(--gray-6) 50%, transparent 0);
+					background-size: 10px 1px;
+					animation: upload-lane .7s linear infinite;
+				}
+				@keyframes upload-lane { to { background-position-x: 10px; } }
+				.upload-tile { animation: upload-tile-in .5s cubic-bezier(.2,.8,.2,1) both; }
+				@keyframes upload-tile-in {
+					from { opacity: 0; transform: translateX(-18px) scale(.8); }
+					to { opacity: 1; transform: none; }
+				}
+				.upload-queued { animation: upload-tile-in .5s cubic-bezier(.2,.8,.2,1) both, upload-wait 1.4s ease-in-out .5s infinite; }
+				@keyframes upload-wait { 50% { opacity: .55; } }
+				.upload-check { animation: upload-check .4s cubic-bezier(.2,1.4,.4,1) both; }
+				@keyframes upload-check {
+					from { opacity: 0; transform: translate(-50%, -50%) scale(.3); }
+					to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+				}
+				.upload-link { animation: upload-link .7s ease-out; }
+				@keyframes upload-link {
+					0% { box-shadow: 0 0 0 0 rgba(71,133,255,.55); transform: scale(1); }
+					30% { transform: scale(1.08); }
+					100% { box-shadow: 0 0 0 14px rgba(71,133,255,0); transform: scale(1); }
+				}
+				.upload-live-fill { animation: upload-live-fill 7s ease-in-out infinite; }
+				@keyframes upload-live-fill { from { height: 0%; } to { height: 100%; } }
+				.upload-paused .upload-lane, .upload-paused .upload-live-fill { animation-play-state: paused; }
+				@media (prefers-reduced-motion: reduce) {
+					.upload-lane, .upload-tile, .upload-queued, .upload-check, .upload-link, .upload-live-fill { animation: none; }
+					.upload-live-fill { height: 50%; }
+				}
+			`}</style>
+		</section>
+	);
+};
+
+export const CountdownDial = ({ value }: { value: number }) => (
+	<span className="relative flex size-44 items-center justify-center sm:size-56">
+		<svg
+			viewBox="0 0 100 100"
+			className="absolute inset-0 size-full -rotate-90"
+		>
+			<title>Countdown</title>
+			<circle
+				cx="50"
+				cy="50"
+				r="46"
+				fill="none"
+				stroke="rgba(255,255,255,0.25)"
+				strokeWidth="3"
+			/>
+			<circle
+				key={value}
+				cx="50"
+				cy="50"
+				r="46"
+				fill="none"
+				stroke="#fff"
+				strokeWidth="3"
+				strokeLinecap="round"
+				strokeDasharray="289"
+				className="countdown-ring"
+			/>
+		</svg>
+		<span
+			key={value}
+			className="countdown-number text-[5.5rem] font-semibold tabular-nums leading-none text-white sm:text-[7rem]"
+		>
+			{value}
+		</span>
+		<style>{`
+			.countdown-ring { animation: countdown-ring 1s linear both; }
+			@keyframes countdown-ring { from { stroke-dashoffset: 0; } to { stroke-dashoffset: 289; } }
+			.countdown-number { animation: countdown-number 1s cubic-bezier(.2,.8,.2,1) both; }
+			@keyframes countdown-number {
+				0% { opacity: 0; transform: scale(1.6); filter: blur(8px); }
+				18% { opacity: 1; transform: scale(1); filter: blur(0); }
+				82% { opacity: 1; transform: scale(.94); }
+				100% { opacity: 0; transform: scale(.7); }
+			}
+			@media (prefers-reduced-motion: reduce) {
+				.countdown-ring, .countdown-number { animation: none; }
+			}
+		`}</style>
+	</span>
 );

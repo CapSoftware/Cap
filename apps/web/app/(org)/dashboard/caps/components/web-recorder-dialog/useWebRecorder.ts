@@ -108,6 +108,9 @@ interface UseWebRecorderOptions {
 	onRecordingSurfaceDetected?: (mode: RecordingMode) => void;
 	onRecordingStart?: () => void;
 	onRecordingStop?: () => void;
+	// Awaited once the capture sources are live and before the recorders
+	// start; setup keeps running underneath it, so a countdown costs nothing.
+	beforeRecordingStarts?: () => Promise<void>;
 }
 
 const INSTANT_UPLOAD_REQUEST_INTERVAL_MS = 1000;
@@ -177,7 +180,10 @@ export const useWebRecorder = ({
 	onRecordingSurfaceDetected,
 	onRecordingStart,
 	onRecordingStop,
+	beforeRecordingStarts,
 }: UseWebRecorderOptions) => {
+	const beforeRecordingStartsRef = useRef(beforeRecordingStarts);
+	beforeRecordingStartsRef.current = beforeRecordingStarts;
 	const [phase, setPhase] = useState<RecorderPhase>("idle");
 	const [videoId, setVideoId] = useState<VideoId | null>(null);
 	const [hasAudioTrack, setHasAudioTrack] = useState(false);
@@ -1191,6 +1197,12 @@ export const useWebRecorder = ({
 						: undefined,
 			};
 
+			const countdownFinished = (
+				beforeRecordingStartsRef.current?.() ?? Promise.resolve()
+			).catch((countdownError) => {
+				console.warn("Recording countdown failed", countdownError);
+			});
+
 			const systemAudioTracks =
 				recordingMode !== "camera" && systemAudioEnabled
 					? (videoStream?.getAudioTracks() ?? [])
@@ -1428,6 +1440,15 @@ export const useWebRecorder = ({
 						}),
 					);
 				}
+			}
+
+			await countdownFinished;
+			if (
+				videoStream
+					.getVideoTracks()
+					.some((track) => track.readyState === "ended")
+			) {
+				throw new Error("Sharing stopped before the recording started");
 			}
 
 			const recorder = new MediaRecorder(

@@ -37,6 +37,7 @@ import {
 	RecordingModeSelector,
 } from "./RecordingModeSelector";
 import {
+	CountdownDial,
 	formatClock,
 	LiveVideo,
 	MicMeter,
@@ -44,6 +45,7 @@ import {
 	PickingScreen,
 	Steps,
 	TrackList,
+	UploadStream,
 	useLiveStream,
 	useMicLevel,
 } from "./recorder-takeover";
@@ -80,24 +82,20 @@ const Label = ({ children }: { children: ReactNode }) => (
 	</h2>
 );
 
-const RoundButton = ({
-	label,
+const SecondaryButton = ({
 	onClick,
 	disabled,
 	children,
 }: {
-	label: string;
 	onClick: () => void;
 	disabled?: boolean;
 	children: ReactNode;
 }) => (
 	<button
 		type="button"
-		aria-label={label}
-		title={label}
 		onClick={onClick}
 		disabled={disabled}
-		className="flex size-14 items-center justify-center rounded-full border border-gray-4 bg-gray-1 text-gray-12 transition-colors hover:bg-gray-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-8 disabled:cursor-not-allowed disabled:opacity-40"
+		className="flex h-11 items-center justify-center gap-2 rounded-xl border border-gray-4 bg-gray-1 text-[0.875rem] font-medium text-gray-12 transition-colors hover:bg-gray-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-8 disabled:cursor-not-allowed disabled:opacity-40"
 	>
 		{children}
 	</button>
@@ -156,6 +154,62 @@ export const WebRecorderDialog = () => {
 	const handleRecordingStopSound = useCallback(() => {
 		playAudio(stopSoundRef.current);
 	}, [playAudio]);
+
+	const [countdown, setCountdown] = useState<number | null>(null);
+	const finishCountdownRef = useRef<(() => void) | null>(null);
+	const tickContextRef = useRef<AudioContext | null>(null);
+	useEffect(
+		() => () => {
+			void tickContextRef.current?.close().catch(() => {});
+		},
+		[],
+	);
+	const playTick = useCallback(() => {
+		try {
+			const context = tickContextRef.current ?? new AudioContext();
+			tickContextRef.current = context;
+			void context.resume();
+			const oscillator = context.createOscillator();
+			const gain = context.createGain();
+			const now = context.currentTime;
+			oscillator.type = "sine";
+			oscillator.frequency.value = 880;
+			gain.gain.setValueAtTime(0.0001, now);
+			gain.gain.exponentialRampToValueAtTime(0.12, now + 0.01);
+			gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.18);
+			oscillator.connect(gain).connect(context.destination);
+			oscillator.start(now);
+			oscillator.stop(now + 0.2);
+		} catch {
+			/* sound is a nicety */
+		}
+	}, []);
+	const runCountdown = useCallback(
+		() =>
+			new Promise<void>((resolve) => {
+				let remaining = 3;
+				let timer = 0;
+				const finish = () => {
+					window.clearTimeout(timer);
+					finishCountdownRef.current = null;
+					setCountdown(null);
+					resolve();
+				};
+				finishCountdownRef.current = finish;
+				const step = () => {
+					if (remaining === 0) {
+						finish();
+						return;
+					}
+					setCountdown(remaining);
+					playTick();
+					remaining -= 1;
+					timer = window.setTimeout(step, 1000);
+				};
+				step();
+			}),
+		[playTick],
+	);
 
 	const { activeOrganization, user } = useDashboardContext();
 	const organisationId = activeOrganization?.organization.id;
@@ -240,7 +294,20 @@ export const WebRecorderDialog = () => {
 		},
 		onRecordingStart: handleRecordingStartSound,
 		onRecordingStop: handleRecordingStopSound,
+		beforeRecordingStarts: runCountdown,
 	});
+	const activeCameraGetterRef = useRef(getActiveCameraStream);
+	activeCameraGetterRef.current = getActiveCameraStream;
+	// Camera-only recordings own their camera stream; screen recordings keep
+	// recording a clone of the preview, so fall back to that.
+	const getLiveCamera = useCallback(
+		() => activeCameraGetterRef.current() ?? getCameraPreviewStream(),
+		[getCameraPreviewStream],
+	);
+
+	useEffect(() => {
+		if (!isSettingUp) finishCountdownRef.current?.();
+	}, [isSettingUp]);
 
 	useEffect(() => {
 		if (
@@ -319,11 +386,13 @@ export const WebRecorderDialog = () => {
 					? "finishing"
 					: isRecording
 						? "recording"
-						: isSettingUp
-							? screenMode
-								? "picking"
-								: "starting"
-							: "setup";
+						: countdown !== null
+							? "countdown"
+							: isSettingUp
+								? screenMode
+									? "picking"
+									: "starting"
+								: "setup";
 	const showCameraPreview =
 		selectedCameraId &&
 		(recordingMode !== "camera" || (!isSettingUp && !isBusy));
@@ -335,9 +404,9 @@ export const WebRecorderDialog = () => {
 		getCameraPreviewStream,
 		open && cameraEnabled && stage === "setup",
 	);
-	const activeCameraStream = useLiveStream(
-		getActiveCameraStream,
-		open && stage === "recording" && !screenMode,
+	const liveCameraStream = useLiveStream(
+		getLiveCamera,
+		open && cameraEnabled && (stage === "recording" || stage === "countdown"),
 	);
 	const micLevel = useMicLevel(selectedMicId, open && stage === "setup");
 
@@ -354,6 +423,15 @@ export const WebRecorderDialog = () => {
 	}, [phase, isSettingUp, recordingMode]);
 
 	useEffect(() => {
+		if (countdown === null) return;
+		const previous = document.title;
+		document.title = `Recording in ${countdown}… · Cap`;
+		return () => {
+			document.title = previous;
+		};
+	}, [countdown]);
+
+	useEffect(() => {
 		if (!isRecording) return;
 		const previous = document.title;
 		document.title = `${isPaused ? "Paused" : "Recording"} ${formatClock(recordingTimerDisplayMs)} · Cap`;
@@ -363,36 +441,38 @@ export const WebRecorderDialog = () => {
 	}, [isRecording, isPaused, recordingTimerDisplayMs]);
 
 	const recordingControls = (
-		<div className="flex items-center justify-center gap-3">
-			<RoundButton
-				label={isPaused ? "Resume recording" : "Pause recording"}
-				onClick={() => {
-					void (isPaused ? resumeRecording() : pauseRecording());
-				}}
-			>
-				{isPaused ? (
-					<PlayIcon className="size-5" aria-hidden />
-				) : (
-					<PauseIcon className="size-5" aria-hidden />
-				)}
-			</RoundButton>
+		<div className="flex flex-col gap-2.5">
 			<button
 				type="button"
 				onClick={handleStopClick}
-				className="flex h-14 items-center gap-3 rounded-full bg-[#e5484d] px-8 text-base font-semibold text-white shadow-[0_10px_24px_-12px_rgba(229,72,77,0.9)] transition-[filter] hover:brightness-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#e5484d] focus-visible:ring-offset-2"
+				className="flex h-14 w-full items-center justify-center gap-3 rounded-2xl bg-[#e5484d] text-base font-semibold text-white shadow-[0_12px_28px_-14px_rgba(229,72,77,0.9)] transition-[filter,transform] hover:brightness-105 active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#e5484d] focus-visible:ring-offset-2"
 			>
 				<span className="size-3.5 rounded-[3px] bg-white" aria-hidden />
 				Stop recording
 			</button>
-			<RoundButton
-				label="Start over"
-				onClick={() => {
-					void restartRecording();
-				}}
-				disabled={isRestarting}
-			>
-				<RotateCcwIcon className="size-5" aria-hidden />
-			</RoundButton>
+			<div className="grid grid-cols-2 gap-2.5">
+				<SecondaryButton
+					onClick={() => {
+						void (isPaused ? resumeRecording() : pauseRecording());
+					}}
+				>
+					{isPaused ? (
+						<PlayIcon className="size-4" aria-hidden />
+					) : (
+						<PauseIcon className="size-4" aria-hidden />
+					)}
+					{isPaused ? "Resume" : "Pause"}
+				</SecondaryButton>
+				<SecondaryButton
+					onClick={() => {
+						void restartRecording();
+					}}
+					disabled={isRestarting}
+				>
+					<RotateCcwIcon className="size-4" aria-hidden />
+					Start over
+				</SecondaryButton>
+			</div>
 		</div>
 	);
 
@@ -619,79 +699,123 @@ export const WebRecorderDialog = () => {
 		</div>
 	);
 
-	const screenRecordingView = (
-		<div className="mx-auto flex w-full max-w-[1000px] flex-col items-center gap-9 px-4 py-10 text-center sm:px-8 sm:py-14">
-			<div className="flex flex-col items-center gap-2">
-				{recordingBadge}
-				<span className="text-6xl font-semibold tabular-nums tracking-tight text-gray-12 sm:text-7xl">
-					{formatClock(recordingTimerDisplayMs)}
-				</span>
-				{!user.isPro && (
-					<span className="text-[0.8125rem] text-gray-10">
-						left on the Free plan
-					</span>
-				)}
-			</div>
-			<div className="flex max-w-2xl flex-col gap-2">
-				<h2 className="text-balance text-2xl font-semibold tracking-tight text-gray-12 sm:text-3xl">
-					Now switch to the screen you're sharing
-				</h2>
-				<p className="text-balance text-base leading-relaxed text-gray-10 sm:text-lg">
-					This tab only holds your recording controls. Present as normal, then
-					come back here and click Stop recording.
-				</p>
-			</div>
-			{recordingControls}
-			<div className="flex flex-col items-center gap-2.5">
-				<TrackList
-					live
-					screen
-					camera={cameraEnabled}
-					mic={micEnabled}
-					systemAudio={systemAudioEnabled}
+	const cameraFrame = (overlay: ReactNode, dim = false) => (
+		<div className={PREVIEW_FRAME}>
+			{cameraEnabled ? (
+				<LiveVideo
+					stream={liveCameraStream}
+					className="absolute inset-0 size-full"
 				/>
-				{cameraEnabled && (
-					<p className="max-w-md text-balance text-[0.8125rem] leading-snug text-gray-10">
-						Your camera isn't shown here so it can't end up inside your screen
-						recording. It's added to your video when you stop.
-					</p>
-				)}
-			</div>
-			<div className="w-full text-left">
-				<Steps current={2} />
+			) : (
+				<div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-white/70">
+					<MonitorIcon className="size-8" aria-hidden />
+					<span className="text-sm">Recording your screen</span>
+				</div>
+			)}
+			{dim && (
+				<div className="absolute inset-0 bg-black/45 backdrop-blur-[2px]" />
+			)}
+			{overlay}
+		</div>
+	);
+
+	const countdownView = (
+		<div className="mx-auto flex w-full max-w-[1100px] flex-col items-center gap-6 px-4 py-6 sm:px-8 lg:py-10">
+			{cameraFrame(
+				<div className="absolute inset-0 flex items-center justify-center">
+					<CountdownDial value={countdown ?? 1} />
+				</div>,
+				true,
+			)}
+			<div className="flex flex-col items-center gap-3 text-center">
+				<h2 className="text-balance text-2xl font-semibold tracking-tight text-gray-12 sm:text-3xl">
+					{screenMode ? "Get ready, you're about to record" : "Get ready"}
+				</h2>
+				<p className="max-w-xl text-balance text-base leading-relaxed text-gray-10">
+					{screenMode
+						? "Recording starts when the countdown ends. Then switch to your screen and present."
+						: "Recording starts when the countdown ends."}
+				</p>
+				<button
+					type="button"
+					onClick={() => finishCountdownRef.current?.()}
+					className="rounded-full border border-gray-4 bg-gray-1 px-4 py-2 text-sm font-medium text-gray-12 transition-colors hover:bg-gray-3"
+				>
+					Start now
+				</button>
 			</div>
 		</div>
 	);
 
-	const cameraRecordingView = (
-		<div className="mx-auto flex w-full max-w-[1240px] flex-col items-center gap-6 px-4 py-6 sm:px-8 lg:py-10">
-			<div className={PREVIEW_FRAME}>
-				<LiveVideo
-					stream={activeCameraStream}
-					className="absolute inset-0 size-full"
-				/>
-				<Overlay className="absolute left-3 top-3">
-					<span
-						className={
-							isPaused
-								? "size-1.5 rounded-full bg-white/60"
-								: "size-1.5 animate-pulse rounded-full bg-[#ff4d4d]"
-						}
-					/>
-					{isPaused ? "Paused" : "Recording"}{" "}
-					<span className="tabular-nums">
+	const recordingView = (
+		<div className="mx-auto grid w-full max-w-[1240px] gap-6 px-4 py-6 sm:px-8 lg:grid-cols-[minmax(0,1fr)_22rem] lg:gap-10 lg:py-10">
+			<section className="flex min-w-0 flex-col gap-5">
+				{cameraFrame(
+					<>
+						<Overlay className="absolute left-3 top-3">
+							<span
+								className={
+									isPaused
+										? "size-1.5 rounded-full bg-white/60"
+										: "size-1.5 animate-pulse rounded-full bg-[#ff4d4d] motion-reduce:animate-none"
+								}
+							/>
+							{isPaused ? "Paused" : "Recording"}
+							<span className="tabular-nums text-white/80">
+								{formatClock(recordingTimerDisplayMs)}
+							</span>
+						</Overlay>
+						{cameraEnabled && (
+							<Overlay className="absolute right-3 top-3">
+								Camera preview
+							</Overlay>
+						)}
+					</>,
+				)}
+				<UploadStream chunks={chunkUploads} recording paused={isPaused} />
+			</section>
+			<aside className="flex flex-col gap-6 lg:sticky lg:top-8 lg:self-start">
+				<div className="flex flex-col gap-1">
+					{recordingBadge}
+					<span className="text-6xl font-semibold tabular-nums tracking-tight text-gray-12">
 						{formatClock(recordingTimerDisplayMs)}
 					</span>
-				</Overlay>
-			</div>
-			{recordingControls}
-			<TrackList
-				live
-				screen={null}
-				camera={cameraEnabled}
-				mic={micEnabled}
-				systemAudio={null}
-			/>
+					{!user.isPro && (
+						<span className="text-[0.8125rem] text-gray-10">
+							left on the Free plan
+						</span>
+					)}
+				</div>
+				{screenMode ? (
+					<div className="flex flex-col gap-2 rounded-2xl border border-blue-6 bg-blue-2 p-4">
+						<span className="text-[1.0625rem] font-semibold leading-snug text-gray-12">
+							Now switch to the screen you're sharing
+						</span>
+						<span className="text-[0.875rem] leading-relaxed text-gray-11">
+							This tab is just your controls and camera preview. Present as
+							normal, then come back here to stop.
+						</span>
+					</div>
+				) : (
+					<p className="text-[0.9375rem] leading-relaxed text-gray-11">
+						You're recording your camera and mic. Stop when you're done and the
+						editor opens.
+					</p>
+				)}
+				{recordingControls}
+				<div className="flex flex-col gap-2">
+					<span className="text-[0.8125rem] text-gray-10">
+						Recording as separate tracks
+					</span>
+					<TrackList
+						live
+						screen={screenMode ? true : null}
+						camera={cameraEnabled}
+						mic={micEnabled}
+						systemAudio={screenMode ? systemAudioEnabled : null}
+					/>
+				</div>
+			</aside>
 		</div>
 	);
 
@@ -728,16 +852,19 @@ export const WebRecorderDialog = () => {
 			</div>
 		) : stage === "starting" ? (
 			statusView("Starting your camera", "Recording begins in a moment.")
+		) : stage === "countdown" ? (
+			countdownView
 		) : stage === "recording" ? (
-			screenMode ? (
-				screenRecordingView
-			) : (
-				cameraRecordingView
-			)
+			recordingView
 		) : stage === "finishing" ? (
 			statusView(
 				"Saving your recording",
-				"Your link is already live. The editor opens as soon as the last pieces finish uploading.",
+				"Your link is already live. The editor opens as soon as the last parts finish uploading.",
+				chunkUploads.length > 0 ? (
+					<div className="w-full max-w-xl text-left">
+						<UploadStream chunks={chunkUploads} recording={false} />
+					</div>
+				) : null,
 			)
 		) : stage === "opening" ? (
 			statusView(

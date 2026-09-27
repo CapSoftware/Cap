@@ -243,8 +243,11 @@ let cameraTrack: FakeTrack;
 let micTrack: FakeTrack;
 let enableMic = false;
 
+let beforeRecordingStarts: (() => Promise<void>) | undefined;
+
 function Harness() {
 	latest = useWebRecorder({
+		beforeRecordingStarts,
 		organisationId: "organisation",
 		selectedMicId: enableMic ? "mic" : null,
 		micEnabled: enableMic,
@@ -314,6 +317,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+	beforeRecordingStarts = undefined;
 	await act(async () => root.unmount());
 	container.remove();
 	vi.unstubAllGlobals();
@@ -527,4 +531,35 @@ test("screen fallback overflow remains visible after the recorder stops", async 
 		await act(async () => setupRoot.unmount());
 		setupContainer.remove();
 	}
+});
+
+test("recording waits for the countdown while setup finishes underneath it", async () => {
+	await act(async () => latest.stopRecording());
+	await act(async () => root.unmount());
+	FakeRecorder.instances = [];
+	mocks.createVideo.mockClear();
+	let finishCountdown = () => {};
+	beforeRecordingStarts = () =>
+		new Promise<void>((resolve) => {
+			finishCountdown = resolve;
+		});
+	root = createRoot(container);
+	await act(async () => root.render(createElement(Harness)));
+	let started: Promise<void> | undefined;
+	await act(async () => {
+		started = latest.startRecording();
+	});
+	await waitFor(() => expect(mocks.createVideo).toHaveBeenCalledOnce());
+	expect(latest.phase).toBe("idle");
+	expect(
+		FakeRecorder.instances.some((recorder) => recorder.state !== "inactive"),
+	).toBe(false);
+	await act(async () => {
+		finishCountdown();
+		await started;
+	});
+	await waitFor(() => expect(latest.phase).toBe("recording"));
+	expect(
+		FakeRecorder.instances.every((recorder) => recorder.state === "recording"),
+	).toBe(true);
 });
