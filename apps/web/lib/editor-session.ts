@@ -4,6 +4,8 @@ import { CAP_BUNDLE_CONTENT_TYPE } from "@cap/editor-cap-bundle";
 import {
 	type EditorDefaultStyle,
 	parseDefaultStyle,
+	parseRecorderCamera,
+	withRecorderCamera,
 } from "@cap/editor-cap-bundle/default-style";
 import { serverEnv } from "@cap/env";
 import { userIsPro } from "@cap/utils";
@@ -136,8 +138,9 @@ export const loadEligibleEditorVideo = Effect.fn("loadEligibleEditorVideo")(
 		return {
 			...record.video,
 			captionsEnabled,
-			defaultStyle: parseDefaultStyle(
-				record.owner.preferences?.editorDefaultStyle,
+			defaultStyle: withRecorderCamera(
+				parseDefaultStyle(record.owner.preferences?.editorDefaultStyle),
+				parseRecorderCamera(record.video.metadata?.recorderCamera),
 			),
 		};
 	},

@@ -108,3 +108,66 @@ export function applyDefaultStyle(
 	}
 	return next;
 }
+
+export type RecorderCameraLayout = {
+	version: 1;
+	position: { x: "left" | "center" | "right"; y: "top" | "bottom" };
+	size: number;
+	mirror: boolean;
+	shape: "round" | "square" | "full";
+};
+
+export const RECORDER_CAMERA_SIZE = { min: 15, max: 50 } as const;
+
+export function parseRecorderCamera(
+	value: unknown,
+): RecorderCameraLayout | null {
+	if (!asRecord(value) || value.version !== 1) return null;
+	const position = asRecord(value.position) ? value.position : null;
+	const x = position?.x;
+	const y = position?.y;
+	if (x !== "left" && x !== "center" && x !== "right") return null;
+	if (y !== "top" && y !== "bottom") return null;
+	if (
+		typeof value.size !== "number" ||
+		!Number.isFinite(value.size) ||
+		value.size < RECORDER_CAMERA_SIZE.min ||
+		value.size > RECORDER_CAMERA_SIZE.max
+	) {
+		return null;
+	}
+	if (typeof value.mirror !== "boolean") return null;
+	const shape = value.shape;
+	if (shape !== "round" && shape !== "square" && shape !== "full") return null;
+	return {
+		version: 1,
+		position: { x, y },
+		size: value.size,
+		mirror: value.mirror,
+		shape,
+	};
+}
+
+/**
+ * The saved style with the camera placed where it was in the browser
+ * recorder. Shapes map the same way as the desktop camera preview.
+ */
+export function withRecorderCamera(
+	style: EditorDefaultStyle | null,
+	layout: RecorderCameraLayout | null,
+): EditorDefaultStyle | null {
+	if (!layout) return style;
+	const base: EditorDefaultStyle = style ?? { version: 1 };
+	return {
+		...base,
+		camera: {
+			...(base.camera ?? {}),
+			position: layout.position,
+			manualPosition: null,
+			size: layout.size,
+			mirror: layout.mirror,
+			shape: layout.shape === "full" ? "source" : "square",
+			rounding: layout.shape === "round" ? 100 : 25,
+		},
+	};
+}

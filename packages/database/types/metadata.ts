@@ -6,6 +6,17 @@
  * Video metadata structure
  */
 export interface VideoMetadata {
+	/** Camera placement chosen in the browser recorder, applied to the project. */
+	recorderCamera?: {
+		version: 1;
+		position: {
+			x: "left" | "center" | "right";
+			y: "top" | "bottom";
+		};
+		size: number;
+		mirror: boolean;
+		shape: "round" | "square" | "full";
+	};
 	webEditorAudioDefault?: {
 		enabledByDefault: boolean;
 		isolation: "light" | "balanced" | "strong";

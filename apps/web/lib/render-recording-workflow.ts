@@ -1,6 +1,10 @@
 import { db } from "@cap/database";
 import { users, videos, videoUploads } from "@cap/database/schema";
-import { parseDefaultStyle } from "@cap/editor-cap-bundle/default-style";
+import {
+	parseDefaultStyle,
+	parseRecorderCamera,
+	withRecorderCamera,
+} from "@cap/editor-cap-bundle/default-style";
 import { userIsPro } from "@cap/utils";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
@@ -55,8 +59,9 @@ async function loadRenderVideo(payload: RecordingRenderPayload) {
 		video: {
 			...row.video,
 			captionsEnabled: userIsPro(row.owner),
-			defaultStyle: parseDefaultStyle(
-				row.owner.preferences?.editorDefaultStyle,
+			defaultStyle: withRecorderCamera(
+				parseDefaultStyle(row.owner.preferences?.editorDefaultStyle),
+				parseRecorderCamera(row.video.metadata?.recorderCamera),
 			),
 		},
 		uploadPhase: row.uploadPhase,
