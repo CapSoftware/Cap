@@ -2588,18 +2588,30 @@ Bun.serve({
 				size?: number;
 				error?: string;
 			};
-			// Outputs are written with If-None-Match, so any attempt that
-			// finished produced the one object there is; failures count only
-			// for the current attempt.
 			if (transcodeMatch[2] === "done") {
-				if (
-					transcode.state !== "ready" &&
-					typeof report.size === "number" &&
-					report.size > 0
-				) {
-					settleTranscode(transcode, "ready", report.size);
-					dispatch();
+				if (transcode.state === "ready") return Response.json({ ok: true });
+				const current = () =>
+					transcodes.get(transcode.task.output) === transcode &&
+					transcode.state === "running" &&
+					transcode.worker === report.worker &&
+					transcode.attempts === report.attempt;
+				if (!current()) {
+					return new Response("stale transcode report", { status: 409 });
 				}
+				if (!Number.isSafeInteger(report.size) || !(Number(report.size) > 0)) {
+					return new Response("invalid transcode size", { status: 400 });
+				}
+				const object = await s3.head(transcode.task.output);
+				if (!current()) {
+					return new Response("stale transcode report", { status: 409 });
+				}
+				if (!object || object.size !== report.size) {
+					return new Response("transcode output does not match report", {
+						status: 409,
+					});
+				}
+				settleTranscode(transcode, "ready", object.size);
+				dispatch();
 			} else if (
 				transcode.state === "running" &&
 				transcode.worker === report.worker &&

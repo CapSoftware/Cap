@@ -22,10 +22,12 @@ function harness() {
 	const timers: (() => void)[] = [];
 	const watchdogs: (() => void)[] = [];
 	let putGate: Promise<void> | undefined;
+	let headGate: Promise<void> | undefined;
 	let failures = 0;
 	const callbacks: { url: string; init: RequestInit }[] = [];
 	const s3 = {
 		async head(key: string) {
+			await headGate;
 			const value = objects.get(key);
 			return value ? { size: value.byteLength } : null;
 		},
@@ -154,6 +156,9 @@ function harness() {
 		fetch: (request: Request) => fetchHandler(request),
 		gate: (gate?: Promise<void>) => {
 			putGate = gate;
+		},
+		gateHead: (gate?: Promise<void>) => {
+			headGate = gate;
 		},
 		fail: (count = 1) => {
 			failures = count;
@@ -615,6 +620,7 @@ describe("transcodes", () => {
 			})
 		).json()) as { cancel: string[] };
 		expect(heartbeat.cancel).toContain(work.task.taskId);
+		h.objects.set(request.output, new Uint8Array(1234));
 		await call(h, `/transcodes/${created.id}/done`, {
 			worker: "gpu-a",
 			attempt: 1,
@@ -623,6 +629,64 @@ describe("transcodes", () => {
 		expect(
 			await (await call(h, `/transcodes/${created.id}`)).json(),
 		).toMatchObject({ status: "ready", size: 1234 });
+	});
+
+	test("completion requires the active dispatch and matching stored bytes", async () => {
+		const h = harness();
+		const created = (await (await call(h, "/transcodes", request)).json()) as {
+			id: string;
+		};
+		const path = `/transcodes/${created.id}/done`;
+		const report = { worker: "gpu-a", attempt: 1, size: 42 };
+		expect((await call(h, path, report)).status).toBe(409);
+		await call(h, "/work", { worker: "gpu-a", slots: 1, cpus: 8 });
+		for (const invalid of [
+			{ ...report, worker: "gpu-b" },
+			{ ...report, attempt: 0 },
+			{ ...report, attempt: undefined },
+		]) {
+			expect((await call(h, path, invalid)).status).toBe(409);
+		}
+		expect((await call(h, path, { ...report, size: 1.5 })).status).toBe(400);
+		expect((await call(h, path, report)).status).toBe(409);
+		h.objects.set(request.output, new Uint8Array(41));
+		expect((await call(h, path, report)).status).toBe(409);
+		expect(
+			await (await call(h, `/transcodes/${created.id}`)).json(),
+		).toMatchObject({
+			status: "running",
+		});
+		h.objects.set(request.output, new Uint8Array(42));
+		expect((await call(h, path, report)).status).toBe(200);
+		expect((await call(h, path, report)).status).toBe(200);
+		expect(
+			await (await call(h, `/transcodes/${created.id}`)).json(),
+		).toMatchObject({
+			status: "ready",
+			size: 42,
+		});
+	});
+
+	test("a completion cannot settle a dispatch retired during object verification", async () => {
+		const h = harness();
+		const created = (await (await call(h, "/transcodes", request)).json()) as {
+			id: string;
+		};
+		await call(h, "/work", { worker: "gpu-a", slots: 1, cpus: 8 });
+		h.objects.set(request.output, new Uint8Array(42));
+		const gate = Promise.withResolvers<void>();
+		h.gateHead(gate.promise);
+		const report = { worker: "gpu-a", attempt: 1, size: 42 };
+		const completing = call(h, `/transcodes/${created.id}/done`, report);
+		for (let i = 0; i < 20; i++) await Promise.resolve();
+		await call(h, `/transcodes/${created.id}/fail`, report);
+		gate.resolve();
+		expect((await completing).status).toBe(409);
+		expect(
+			await (await call(h, `/transcodes/${created.id}`)).json(),
+		).toMatchObject({
+			status: "queued",
+		});
 	});
 
 	test("reuse an output already in the bucket", async () => {
