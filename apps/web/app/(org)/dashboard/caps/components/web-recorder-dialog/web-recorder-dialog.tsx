@@ -88,6 +88,8 @@ const SURFACE_LABELS: Record<Exclude<RecordingMode, "camera">, string> = {
 };
 
 const WAVE_SAMPLE_MS = 150;
+const AUDIO_GUIDE_DISMISSED_KEY = "cap-web-recorder-audio-guide-dismissed";
+const LIVE_PREVIEW_KEY = "cap-web-recorder-live-preview";
 
 type SharedScreen = {
 	stream: MediaStream;
@@ -559,6 +561,7 @@ export const WebRecorderDialog = () => {
 			stopSharing();
 			setHowOpen(false);
 			setAudioGuideOpen(false);
+			setAudioGuide(null);
 			setSelectedCameraId(null);
 			setRecordingMode("fullscreen");
 		}
@@ -571,11 +574,57 @@ export const WebRecorderDialog = () => {
 		});
 	};
 
+	const startRecordingRef = useRef(startRecording);
+	startRecordingRef.current = startRecording;
+
+	const [audioGuide, setAudioGuide] = useState<{
+		thenRecord: boolean;
+	} | null>(null);
+	const [audioGuideDismissed, setAudioGuideDismissed] = useState(false);
+	useEffect(() => {
+		try {
+			setAudioGuideDismissed(
+				window.localStorage.getItem(AUDIO_GUIDE_DISMISSED_KEY) === "true",
+			);
+		} catch {
+			/* the guide just keeps showing */
+		}
+	}, []);
+
+	const shareThenMaybeRecord = async (thenRecord: boolean) => {
+		const shared = await shareScreen();
+		if (shared && thenRecord) await startRecordingRef.current();
+	};
+
+	// Sharing with system audio on goes through the guide first; the popup
+	// covers anything shown while it's open.
+	const beginShare = (thenRecord = false) => {
+		if (systemAudioEnabled && !audioGuideDismissed) {
+			setAudioGuide({ thenRecord });
+			return;
+		}
+		void shareThenMaybeRecord(thenRecord);
+	};
+
+	const continueFromAudioGuide = (dontShowAgain: boolean) => {
+		const thenRecord = audioGuide?.thenRecord ?? false;
+		setAudioGuide(null);
+		if (dontShowAgain) {
+			setAudioGuideDismissed(true);
+			try {
+				window.localStorage.setItem(AUDIO_GUIDE_DISMISSED_KEY, "true");
+			} catch {
+				/* remembered for this visit only */
+			}
+		}
+		void shareThenMaybeRecord(thenRecord);
+	};
+
 	const handleRecordClick = async () => {
-		let screenReady = sharedScreenRef.current !== null;
+		const screenReady = sharedScreenRef.current !== null;
 		if (!screenReady && !cameraEnabled && screenSupported) {
-			screenReady = await shareScreen();
-			if (!screenReady) return;
+			beginShare(true);
+			return;
 		}
 
 		if (!screenReady && recordingMode === "camera") {
@@ -659,6 +708,26 @@ export const WebRecorderDialog = () => {
 		return () => window.clearInterval(interval);
 	}, [isRecording, isPaused, phase]);
 	const [howOpen, setHowOpen] = useState(false);
+	// Watching your own screen while recording it is distracting (and shows up
+	// in the capture), so the preview starts hidden once recording begins.
+	const [livePreview, setLivePreviewState] = useState(false);
+	useEffect(() => {
+		try {
+			setLivePreviewState(
+				window.localStorage.getItem(LIVE_PREVIEW_KEY) === "true",
+			);
+		} catch {
+			/* hidden by default */
+		}
+	}, []);
+	const setLivePreview = useCallback((next: boolean) => {
+		setLivePreviewState(next);
+		try {
+			window.localStorage.setItem(LIVE_PREVIEW_KEY, next ? "true" : "false");
+		} catch {
+			/* remembered for this visit only */
+		}
+	}, []);
 	const [audioGuideOpen, setAudioGuideOpen] = useState(false);
 
 	useEffect(() => {
@@ -699,12 +768,7 @@ export const WebRecorderDialog = () => {
 	const trackCount = sourceWords.length;
 	const recordedWordsRef = useRef<string[]>([]);
 	if (live) recordedWordsRef.current = sourceWords;
-	const recordLabel =
-		sharedScreen || cameraEnabled
-			? "Start recording"
-			: "Choose a screen and start recording";
-	const showAudioGuide =
-		(sharePending && systemAudioEnabled) || (audioGuideOpen && !live);
+
 	const scaleMs = Math.max(
 		60_000,
 		Math.ceil((durationMs + 6_000) / 60_000) * 60_000,
@@ -790,7 +854,7 @@ export const WebRecorderDialog = () => {
 						<button
 							type="button"
 							className="rec-btn mt-1"
-							onClick={() => void shareScreen()}
+							onClick={() => beginShare()}
 							disabled={setupLocked}
 						>
 							Choose what to share
@@ -906,17 +970,20 @@ export const WebRecorderDialog = () => {
 			</div>
 			<RecordButton
 				recording
-				label="Stop recording"
+				elapsed={formatClock(durationMs)}
 				onClick={handleStopClick}
 			/>
 			<div className="flex flex-col items-end gap-0.5">
-				<span className="flex items-center gap-2 text-[17px] font-medium tabular-nums leading-none">
-					<LiveDot paused={isPaused} />
-					{formatClock(recordingTimerDisplayMs)}
-				</span>
-				<span className="text-[12px] leading-none text-[var(--rec-text-3)]">
-					{isPaused ? "Paused" : user.isPro ? "Recording" : "left on Free"}
-				</span>
+				{!user.isPro && (
+					<>
+						<span className="text-[17px] font-medium tabular-nums leading-none">
+							{formatClock(recordingTimerDisplayMs)}
+						</span>
+						<span className="text-[12px] leading-none text-[var(--rec-text-3)]">
+							left on Free
+						</span>
+					</>
+				)}
 			</div>
 		</>
 	) : (
@@ -945,18 +1012,21 @@ export const WebRecorderDialog = () => {
 					sharePending ||
 					(!screenSupported && !cameraEnabled)
 				}
-				label={recordLabel}
 				onClick={() => {
 					void handleRecordClick();
 				}}
 			/>
 			<div className="flex flex-col items-end gap-0.5">
-				<span className="text-[17px] font-medium tabular-nums leading-none text-[var(--rec-text-3)]">
-					{formatClock(user.isPro ? 0 : FREE_PLAN_MAX_RECORDING_MS)}
-				</span>
-				<span className="text-[12px] leading-none text-[var(--rec-text-3)]">
-					{user.isPro ? "Ready" : "on Free"}
-				</span>
+				{!user.isPro && (
+					<>
+						<span className="text-[17px] font-medium tabular-nums leading-none text-[var(--rec-text-3)]">
+							{formatClock(FREE_PLAN_MAX_RECORDING_MS)}
+						</span>
+						<span className="text-[12px] leading-none text-[var(--rec-text-3)]">
+							on Free
+						</span>
+					</>
+				)}
 			</div>
 		</>
 	);
@@ -1036,7 +1106,7 @@ export const WebRecorderDialog = () => {
 										<button
 											type="button"
 											className="rec-btn is-ghost !h-7 !px-2.5 !text-[12px]"
-											onClick={() => void shareScreen()}
+											onClick={() => beginShare()}
 											disabled={setupLocked || sharePending}
 										>
 											Change
@@ -1047,7 +1117,7 @@ export const WebRecorderDialog = () => {
 										on={sharedScreen !== null}
 										disabled={setupLocked || sharePending}
 										onChange={(next) => {
-											if (next) void shareScreen();
+											if (next) beginShare();
 											else stopSharing();
 										}}
 									/>
@@ -1192,7 +1262,7 @@ export const WebRecorderDialog = () => {
 										<button
 											type="button"
 											className="rec-btn !h-7 !px-2.5 !text-[12px]"
-											onClick={() => void shareScreen()}
+											onClick={() => beginShare()}
 											disabled={setupLocked || sharePending}
 										>
 											Choose again
@@ -1210,10 +1280,7 @@ export const WebRecorderDialog = () => {
 										label="System audio"
 										on={systemAudioEnabled}
 										disabled={setupLocked}
-										onChange={(next) => {
-											handleSystemAudioChange(next);
-											if (next && !sharedScreen) setAudioGuideOpen(true);
-										}}
+										onChange={handleSystemAudioChange}
 									/>
 								</>
 							)
@@ -1338,34 +1405,91 @@ export const WebRecorderDialog = () => {
 	const studio = (
 		<main className="relative flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-2 pb-2 sm:px-3 sm:pb-3">
 			<section className="rec-card relative flex min-h-[15rem] flex-1 flex-col overflow-hidden">
-				{live && screenMode && (
-					<div className="pointer-events-none absolute inset-x-3 top-3 z-10 flex justify-center">
-						<div className="rec-rise flex max-w-full items-center gap-2 rounded-full bg-[var(--rec-card)] py-1 pl-1 pr-3.5 text-[13px] shadow-[var(--rec-pop-shadow)]">
-							<span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-[var(--rec-accent)] text-white">
-								<MonitorIcon className="size-3.5" aria-hidden />
-							</span>
+				{live && (
+					<header className="flex h-12 shrink-0 items-center justify-between gap-3 pl-4 pr-2 shadow-[0_1px_0_var(--rec-line)]">
+						<span className="flex min-w-0 items-center gap-2.5 text-[13px]">
+							<LiveDot paused={isPaused} />
 							<span className="truncate">
 								<span className="font-medium">
-									Switch to what you're sharing.
-								</span>{" "}
+									{isPaused
+										? "Paused"
+										: screenMode
+											? "Switch to what you're sharing"
+											: "Recording"}
+								</span>
 								<span className="text-[var(--rec-text-2)]">
-									Come back to this tab to stop.
+									{isPaused
+										? " · Resume when you're ready"
+										: screenMode
+											? " · Come back to this tab to stop"
+											: " · Stop when you're done"}
 								</span>
 							</span>
+						</span>
+						{screenMode && (
+							<span className="flex shrink-0 items-center gap-1 pl-2 text-[13px] text-[var(--rec-text-2)]">
+								Preview
+								<Switch
+									label="Show preview"
+									on={livePreview}
+									onChange={setLivePreview}
+								/>
+							</span>
+						)}
+					</header>
+				)}
+				{live && screenMode && !livePreview ? (
+					<div className="rec-fade flex min-h-0 flex-1 flex-col items-center justify-center gap-5 px-6 py-6 text-center">
+						<span className="relative flex size-20 items-center justify-center">
+							{!isPaused && (
+								<>
+									<span className="rec-ripple absolute inset-0 rounded-full" />
+									<span
+										className="rec-ripple absolute inset-0 rounded-full"
+										style={{ animationDelay: "1.2s" }}
+									/>
+								</>
+							)}
+							<span className="flex size-12 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--rec-red)_14%,transparent)]">
+								<span
+									className={clsx(
+										"size-4 rounded-full",
+										isPaused ? "bg-[var(--rec-text-3)]" : "bg-[var(--rec-red)]",
+									)}
+								/>
+							</span>
+						</span>
+						<div className="flex flex-col items-center gap-1.5">
+							<span className="text-[44px] font-medium tabular-nums leading-none tracking-[-0.02em]">
+								{formatClock(durationMs)}
+							</span>
+							<span className="max-w-sm text-balance text-[14px] leading-relaxed text-[var(--rec-text-2)]">
+								{isPaused
+									? "Paused. Nothing is being recorded until you resume."
+									: `Recording your ${joinWords(recordedWordsRef.current)}. The preview is hidden so it stays out of your way.`}
+							</span>
+						</div>
+						<button
+							type="button"
+							className="rec-btn is-ghost"
+							onClick={() => setLivePreview(true)}
+						>
+							Show preview
+						</button>
+					</div>
+				) : (
+					<div
+						className={clsx(
+							"rec-stage min-h-0 flex-1 p-3 sm:p-4",
+							screenSupported ? "is-pair" : "is-single",
+						)}
+					>
+						<div className="rec-tiles">
+							{screenTile}
+							{cameraTile}
 						</div>
 					</div>
 				)}
-				<div
-					className={clsx(
-						"rec-stage min-h-0 flex-1 p-3 sm:p-4",
-						screenSupported ? "is-pair" : "is-single",
-					)}
-				>
-					<div className="rec-tiles">
-						{screenTile}
-						{cameraTile}
-					</div>
-				</div>
 				<footer className="grid h-16 shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-3 px-4 shadow-[0_-1px_0_var(--rec-line)]">
 					{transport}
 				</footer>
@@ -1539,14 +1663,16 @@ export const WebRecorderDialog = () => {
 						{body}
 						{overlay}
 						{howOpen && <HowRecordingWorks onClose={() => setHowOpen(false)} />}
+						{audioGuide && (
+							<SystemAudioGuide
+								onContinue={continueFromAudioGuide}
+								onClose={() => setAudioGuide(null)}
+							/>
+						)}
+						{audioGuideOpen && !audioGuide && (
+							<SystemAudioGuide onClose={() => setAudioGuideOpen(false)} />
+						)}
 					</div>
-					{showAudioGuide && (
-						<SystemAudioGuide
-							onClose={
-								sharePending ? undefined : () => setAudioGuideOpen(false)
-							}
-						/>
-					)}
 				</DialogContent>
 			</Dialog>
 			{phase === "error" && (

@@ -162,6 +162,49 @@
 	transform: translateX(12px);
 }
 
+.rec-ripple {
+	border: 1.5px solid color-mix(in srgb, var(--rec-red) 55%, transparent);
+	animation: rec-ripple 2.4s ease-out infinite;
+}
+@keyframes rec-ripple {
+	from {
+		opacity: 0.9;
+		transform: scale(0.6);
+	}
+	to {
+		opacity: 0;
+		transform: scale(1.35);
+	}
+}
+
+.rec-record {
+	box-shadow:
+		0 1px 0 rgba(255, 255, 255, 0.18) inset,
+		0 10px 24px -10px color-mix(in srgb, var(--rec-red) 75%, transparent);
+}
+.rec-record.is-idle::before {
+	content: "";
+	position: absolute;
+	inset: -5px;
+	border-radius: inherit;
+	border: 2px solid color-mix(in srgb, var(--rec-red) 45%, transparent);
+	animation: rec-record-halo 2.4s ease-out infinite;
+	pointer-events: none;
+}
+@keyframes rec-record-halo {
+	0% {
+		opacity: 0;
+		transform: scale(0.96);
+	}
+	30% {
+		opacity: 1;
+	}
+	100% {
+		opacity: 0;
+		transform: scale(1.08);
+	}
+}
+
 /* The stage fits its 16:9 tiles to whatever room the card has: side by side
    when wide, stacked when narrow. */
 .rec-stage {
@@ -631,6 +674,8 @@
 		animation-duration: 0.01ms;
 		animation-delay: 0s;
 	}
+	.rec-record.is-idle::before,
+	.rec-ripple,
 	.rec-march,
 	.rec-bob,
 	.rec-pulse,

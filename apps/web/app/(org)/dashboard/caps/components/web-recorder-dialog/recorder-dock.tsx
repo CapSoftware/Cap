@@ -132,37 +132,38 @@ export const RecordButton = ({
 	recording,
 	busy = false,
 	disabled = false,
-	label,
+	elapsed,
 	onClick,
 }: {
 	recording: boolean;
 	busy?: boolean;
 	disabled?: boolean;
-	label: string;
+	elapsed?: string;
 	onClick: () => void;
 }) => (
 	<button
 		type="button"
 		onClick={onClick}
 		disabled={disabled || busy}
-		aria-label={label}
-		title={label}
-		className="rec-focus group relative flex size-12 shrink-0 items-center justify-center rounded-full shadow-[inset_0_0_0_2px_var(--rec-line-strong)] transition-transform duration-150 active:scale-95 disabled:cursor-not-allowed disabled:opacity-45 disabled:active:scale-100"
+		className={clsx(
+			"rec-record rec-focus group relative inline-flex h-12 shrink-0 items-center justify-center gap-2.5 rounded-full bg-[var(--rec-red)] pl-5 pr-6 text-[15px] font-medium text-white transition-[filter,transform] duration-150 hover:brightness-110 active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100",
+			!recording && !busy && !disabled && "is-idle",
+		)}
 	>
-		<span
-			className={clsx(
-				"flex items-center justify-center bg-[var(--rec-red)] transition-all duration-300 ease-[cubic-bezier(.2,.8,.2,1)]",
-				recording
-					? "size-[18px] rounded-[5px]"
-					: "size-9 rounded-full group-hover:size-[38px]",
-			)}
-		>
-			{busy && (
-				<LoaderCircleIcon
-					className="size-4 animate-spin text-white"
-					aria-hidden
-				/>
-			)}
+		{busy ? (
+			<LoaderCircleIcon className="size-4 animate-spin" aria-hidden />
+		) : recording ? (
+			<span className="size-3 rounded-[3px] bg-white" aria-hidden />
+		) : (
+			<span className="size-3 rounded-full bg-white" aria-hidden />
+		)}
+		<span className="whitespace-nowrap">
+			{busy ? "Starting" : recording ? "Stop recording" : "Start recording"}
 		</span>
+		{recording && elapsed && (
+			<span className="-mr-1 rounded-full bg-black/15 px-2 py-0.5 text-[13px] tabular-nums">
+				{elapsed}
+			</span>
+		)}
 	</button>
 );
