@@ -1,4 +1,5 @@
 import { Select as KSelect } from "@kobalte/core/select";
+import { cx } from "cva";
 import { createSignal, Show } from "solid-js";
 import Tooltip from "~/components/Tooltip";
 import IconLucideExternalLink from "~icons/lucide/external-link";
@@ -10,6 +11,8 @@ import {
 	PopperContent,
 	topLeftAnimateClasses,
 } from "./ui";
+
+const isWebEditor = import.meta.env.VITE_CAP_WEB_EDITOR === "true";
 
 function ShareButton() {
 	const {
@@ -59,28 +62,40 @@ function ShareButton() {
 
 					return (
 						<div class="flex gap-1 items-center">
-							<EditorButton
-								class="h-[30px] px-3 text-ed-accent bg-ed-accent/10 border border-ed-accent/25 hover:bg-ed-accent/20"
-								disabled={hasTransparentBackground()}
-								tooltipText={
-									hasTransparentBackground()
-										? "Share links require a background without transparency"
-										: "Upload your latest edit to the same link"
+							<Show
+								when={!isWebEditor}
+								fallback={
+									<Tooltip content="Anyone with the link can watch. Save updates it with your edits.">
+										<span class="flex items-center gap-1.5 pl-1 pr-1.5 text-[12px] font-medium text-ed-text-1">
+											<span class="size-2 rounded-full bg-[#22B07D] shadow-[0_0_0_3px_rgba(34,176,125,0.2)]" />
+											Shared
+										</span>
+									</Tooltip>
 								}
-								onClick={() => {
-									setEditorState("timeline", "selection", null);
-									if (exportState.type === "done")
-										setExportState({ type: "idle" });
-									setDialog({
-										type: "export",
-										open: true,
-										destination: "link",
-									});
-								}}
-								leftIcon={<IconCapUpload />}
 							>
-								Reupload
-							</EditorButton>
+								<EditorButton
+									class="h-[30px] px-3 text-ed-accent bg-ed-accent/10 border border-ed-accent/25 hover:bg-ed-accent/20"
+									disabled={hasTransparentBackground()}
+									tooltipText={
+										hasTransparentBackground()
+											? "Share links require a background without transparency"
+											: "Upload your latest edit to the same link"
+									}
+									onClick={() => {
+										setEditorState("timeline", "selection", null);
+										if (exportState.type === "done")
+											setExportState({ type: "idle" });
+										setDialog({
+											type: "export",
+											open: true,
+											destination: "link",
+										});
+									}}
+									leftIcon={<IconCapUpload />}
+								>
+									Reupload
+								</EditorButton>
+							</Show>
 							<Tooltip content="Open link">
 								<div class="flex flex-row gap-1.5 items-center px-2.5 h-7 rounded-[7px] transition-colors duration-100 bg-ed-ctl hover:bg-ed-ctl-hover">
 									<a
@@ -89,12 +104,31 @@ function ShareButton() {
 										rel="noreferrer"
 										title={linkToDisplay() ?? "Open link"}
 										aria-label="Open recording link"
-										class="w-full truncate max-w-[200px] max-[1400px]:w-4 max-[1400px]:shrink-0"
+										class={cx(
+											"w-full truncate max-w-[200px]",
+											isWebEditor
+												? "max-[1100px]:w-4 max-[1100px]:shrink-0"
+												: "max-[1400px]:w-4 max-[1400px]:shrink-0",
+										)}
 									>
-										<span class="text-xs text-ed-text-2 max-[1400px]:hidden">
+										<span
+											class={cx(
+												"text-xs text-ed-text-2",
+												isWebEditor
+													? "max-[1100px]:hidden"
+													: "max-[1400px]:hidden",
+											)}
+										>
 											{linkToDisplay()}
 										</span>
-										<IconLucideExternalLink class="hidden size-4 text-ed-text-2 max-[1400px]:block" />
+										<IconLucideExternalLink
+											class={cx(
+												"hidden size-4 text-ed-text-2",
+												isWebEditor
+													? "max-[1100px]:block"
+													: "max-[1400px]:block",
+											)}
+										/>
 									</a>
 									<Show
 										when={

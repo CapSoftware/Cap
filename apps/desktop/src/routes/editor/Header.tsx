@@ -122,13 +122,15 @@ export function Header(props: {
 					ostype() === "windows" && "max-[900px]:pr-[146px]",
 				)}
 			>
-				{ostype() === "macos" && (
-					<div data-tauri-drag-region class="h-full w-[92px] shrink-0" />
-				)}
-				{ostype() === "linux" && (
-					<CaptionControlsMacOS class="mr-1 ml-3 shrink-0" />
-				)}
-				{ostype() === "windows" && <div class="w-3 shrink-0" />}
+				<Show when={!isWebEditor} fallback={<BackToSharePage />}>
+					{ostype() === "macos" && (
+						<div data-tauri-drag-region class="h-full w-[92px] shrink-0" />
+					)}
+					{ostype() === "linux" && (
+						<CaptionControlsMacOS class="mr-1 ml-3 shrink-0" />
+					)}
+					{ostype() === "windows" && <div class="w-3 shrink-0" />}
+				</Show>
 
 				<div inert={props.disabled} class="flex gap-1.5 items-center min-w-0">
 					<NameEditor
@@ -283,9 +285,34 @@ export function Header(props: {
 					Export
 				</button>
 			</div>
-			{ostype() === "windows" && (
+			{!isWebEditor && ostype() === "windows" && (
 				<CaptionControlsWindows11 class="shrink-0 max-[900px]:absolute max-[900px]:right-0 max-[900px]:top-0 max-[900px]:h-9" />
 			)}
+		</div>
+	);
+}
+
+function BackToSharePage() {
+	const { meta } = useEditorContext();
+	return (
+		<div class="flex shrink-0 items-center pl-2">
+			<Show when={meta().sharing}>
+				{(sharing) => (
+					<>
+						<EditorButton
+							leftIcon={<IconLucideArrowLeft />}
+							tooltipText="Back to the share page"
+							aria-label="Back to the share page"
+							onClick={() => {
+								(window.top ?? window).location.href = sharing().link;
+							}}
+						>
+							<span class="max-[700px]:hidden">Share page</span>
+						</EditorButton>
+						<div class="mx-1.5 w-px h-4 shrink-0 bg-ed-line-strong" />
+					</>
+				)}
+			</Show>
 		</div>
 	);
 }
