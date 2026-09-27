@@ -15,6 +15,12 @@ export type S3Config = {
 	virtualHost: boolean;
 	/** Use the EC2 instance role (IMDSv2) instead of static keys. */
 	imds?: boolean;
+	/**
+	 * Canned ACL for new objects. Writing into another account's bucket needs
+	 * `bucket-owner-full-control`, or its owner cannot read what we wrote
+	 * unless the bucket enforces bucket ownership.
+	 */
+	acl?: string;
 };
 
 export function s3ConfigFromEnv(env = process.env): S3Config {
@@ -32,6 +38,23 @@ export function s3ConfigFromEnv(env = process.env): S3Config {
 		secretAccessKey: imds ? "" : required("RF_S3_SECRET_ACCESS_KEY"),
 		virtualHost: env.RF_S3_URL_STYLE !== "path",
 		imds,
+	};
+}
+
+/**
+ * The bucket holding recordings and receiving exports. Defaults to the render
+ * farm's own bucket; `RF_MEDIA_S3_*` points it at the product's bucket, which
+ * may belong to another account (same credentials, granted by its policy).
+ */
+export function mediaS3ConfigFromEnv(env = process.env): S3Config {
+	const base = s3ConfigFromEnv(env);
+	if (!env.RF_MEDIA_S3_BUCKET) return base;
+	return {
+		...base,
+		endpoint: env.RF_MEDIA_S3_ENDPOINT || base.endpoint,
+		region: env.RF_MEDIA_S3_REGION || base.region,
+		bucket: env.RF_MEDIA_S3_BUCKET,
+		acl: "bucket-owner-full-control",
 	};
 }
 
@@ -342,17 +365,24 @@ export class S3 {
 		return new Uint8Array(await response.arrayBuffer());
 	}
 
+	private writeHeaders(contentType?: string): Record<string, string> {
+		return {
+			...(contentType ? { "content-type": contentType } : {}),
+			...(this.config.acl ? { "x-amz-acl": this.config.acl } : {}),
+		};
+	}
+
 	async put(key: string, body: Uint8Array | string, contentType?: string) {
 		await this.send("PUT", key, {
 			body,
-			headers: contentType ? { "content-type": contentType } : {},
+			headers: this.writeHeaders(contentType),
 		});
 	}
 
 	async createMultipart(key: string, contentType: string) {
 		const response = await this.send("POST", key, {
 			query: { uploads: "" },
-			headers: { "content-type": contentType },
+			headers: this.writeHeaders(contentType),
 		});
 		const text = await response.text();
 		const match = text.match(/<UploadId>([^<]+)<\/UploadId>/);
@@ -375,10 +405,15 @@ export class S3 {
 		return etag;
 	}
 
+	/**
+	 * With `ifNoneMatch`, S3 refuses to replace an existing object: returns
+	 * false (412, or 409 while another completion races this one).
+	 */
 	async completeMultipart(
 		key: string,
 		uploadId: string,
 		parts: { partNumber: number; etag: string }[],
+		options: { ifNoneMatch?: boolean } = {},
 	) {
 		const body = `<CompleteMultipartUpload>${parts
 			.sort((a, b) => a.partNumber - b.partNumber)
@@ -390,12 +425,18 @@ export class S3 {
 		const response = await this.send("POST", key, {
 			query: { uploadId },
 			body,
-			headers: { "content-type": "application/xml" },
+			headers: {
+				"content-type": "application/xml",
+				...(options.ifNoneMatch ? { "if-none-match": "*" } : {}),
+			},
+			expect: options.ifNoneMatch ? [200, 409, 412] : undefined,
 		});
+		if (response.status === 409 || response.status === 412) return false;
 		const text = await response.text();
 		if (text.includes("<Error>")) {
 			throw new Error(`complete multipart failed: ${text.slice(0, 300)}`);
 		}
+		return true;
 	}
 
 	async listParts(key: string, uploadId: string) {
@@ -423,6 +464,44 @@ export class S3 {
 			marker = next;
 		}
 		return parts;
+	}
+
+	/**
+	 * Streams a local file into `key` in 64 MiB parts. With `ifNoneMatch` an
+	 * object already there wins and is kept. Returns the stored object's size.
+	 */
+	async uploadFile(
+		key: string,
+		path: string,
+		contentType: string,
+		options: { ifNoneMatch?: boolean } = {},
+	) {
+		const file = Bun.file(path);
+		const partSize = 64 << 20;
+		const uploadId = await this.createMultipart(key, contentType);
+		try {
+			const parts: { partNumber: number; etag: string }[] = [];
+			for (let start = 0; start === 0 || start < file.size; start += partSize) {
+				const body = new Uint8Array(
+					await file.slice(start, start + partSize).arrayBuffer(),
+				);
+				const partNumber = parts.length + 1;
+				parts.push({
+					partNumber,
+					etag: await this.uploadPart(key, uploadId, partNumber, body),
+				});
+			}
+			if (await this.completeMultipart(key, uploadId, parts, options)) {
+				return file.size;
+			}
+			await this.abortMultipart(key, uploadId).catch(() => {});
+			const existing = await this.head(key);
+			if (!existing) throw new Error(`${key} was being written concurrently`);
+			return existing.size;
+		} catch (error) {
+			await this.abortMultipart(key, uploadId).catch(() => {});
+			throw error;
+		}
 	}
 
 	async abortMultipart(key: string, uploadId: string) {

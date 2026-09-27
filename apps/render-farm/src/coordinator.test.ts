@@ -1,6 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { randomUUID, timingSafeEqual } from "node:crypto";
+import {
+	createHash,
+	createHmac,
+	randomUUID,
+	timingSafeEqual,
+} from "node:crypto";
 import { readFileSync } from "node:fs";
+import { ANNEX_B_PARAMETER_SETS } from "./boxes.test-util";
 import type { Job, TaskState } from "./coordinator";
 import * as fmp4 from "./fmp4";
 import * as hls from "./hls";
@@ -11,14 +17,21 @@ import * as recovery from "./recovery";
 import { pickQueued } from "./scheduler";
 import * as validate from "./validate";
 
-function harness() {
+function harness(env: Record<string, string> = {}) {
 	const objects = new Map<string, Uint8Array>();
 	const writes: string[] = [];
 	const timers: (() => void)[] = [];
 	const watchdogs: (() => void)[] = [];
 	let putGate: Promise<void> | undefined;
+	let headGate: Promise<void> | undefined;
 	let failures = 0;
+	const callbacks: { url: string; init: RequestInit }[] = [];
 	const s3 = {
+		async head(key: string) {
+			await headGate;
+			const value = objects.get(key);
+			return value ? { size: value.byteLength } : null;
+		},
 		async put(key: string, body: Uint8Array | string) {
 			writes.push(key);
 			await putGate;
@@ -32,6 +45,9 @@ function harness() {
 			const value = objects.get(key);
 			if (!value) throw new Error(`missing ${key}`);
 			return value;
+		},
+		async getRange(key: string, start: number, endInclusive: number) {
+			return (await this.get(key)).subarray(start, endInclusive + 1);
 		},
 		async list() {
 			return [...objects.keys()].map((key) => ({ key }));
@@ -53,6 +69,8 @@ function harness() {
 	const deps = {
 		timingSafeEqual,
 		randomUUID,
+		createHash,
+		createHmac,
 		...validate,
 		...fmp4,
 		...hls,
@@ -67,10 +85,17 @@ function harness() {
 			}
 		},
 		s3ConfigFromEnv: () => ({}),
+		mediaS3ConfigFromEnv: () => ({}),
 		ProbeEngine: class {},
 		Engine: class {},
 		process: {
-			env: { RF_TOKEN: "test", RF_LOCAL_AUDIO_SLOTS: "0", RF_HLS: "1" },
+			env: {
+				RF_TOKEN: "test",
+				RF_LOCAL_AUDIO_SLOTS: "0",
+				RF_HLS: "1",
+				RF_CALLBACK_HOSTS: "cap.test",
+				...env,
+			},
 		},
 		Bun: {
 			serve: (options: { fetch: typeof fetchHandler }) => {
@@ -85,6 +110,10 @@ function harness() {
 			return { unref() {} };
 		},
 		clearTimeout: () => {},
+		fetch: async (url: string, init: RequestInit) => {
+			callbacks.push({ url, init });
+			return new Response("ok");
+		},
 		console: { log() {}, warn() {}, error() {} },
 		mkdirSync: () => {},
 		rmSync: () => {},
@@ -93,9 +122,10 @@ function harness() {
 	const compiled = new Bun.Transpiler({ loader: "ts" }).transformSync(source);
 	const coordinator = new Function(
 		...Object.keys(deps),
-		`${compiled}\nreturn {jobs, queue, straggler, dispatchedTask, onVideoDone, onAudioDone, publishPlaylist, journalJob, resumeJobs, newHlsState, finish, requeue, setPlanner: (fn) => { planJob = fn; }};`,
+		`${compiled}\nreturn {jobs, queue, straggler, dispatchedTask, onVideoDone, onAudioDone, publishPlaylist, journalJob, resumeJobs, newHlsState, finish, requeue, sourceIndex, setPlanner: (fn) => { planJob = fn; }};`,
 	)(...Object.values(deps)) as {
 		setPlanner: (fn: (job: Job) => Promise<void>) => void;
+		sourceIndex: (prefix: string, sourceRoot?: string) => Promise<unknown>;
 		requeue: (state: TaskState, reason: string) => void;
 		jobs: Map<string, Job>;
 		queue: TaskState[];
@@ -122,11 +152,15 @@ function harness() {
 		...coordinator,
 		objects,
 		writes,
+		callbacks,
 		timers,
 		watchdogs,
 		fetch: (request: Request) => fetchHandler(request),
 		gate: (gate?: Promise<void>) => {
 			putGate = gate;
+		},
+		gateHead: (gate?: Promise<void>) => {
+			headGate = gate;
 		},
 		fail: (count = 1) => {
 			failures = count;
@@ -520,4 +554,398 @@ test("job acknowledgement waits for a planning receipt and receipt-only jobs res
 	await h.resumeJobs();
 	expect(planned).toEqual([receipt.id, receipt.id]);
 	expect(h.jobs.get(receipt.id)?.status).toBe("planning");
+});
+
+function call(
+	h: ReturnType<typeof harness>,
+	path: string,
+	body?: Record<string, unknown>,
+) {
+	return h.fetch(
+		new Request(`http://test${path}`, {
+			method: body ? "POST" : "GET",
+			headers: {
+				authorization: "Bearer test",
+				"content-type": "application/json",
+			},
+			body: body ? JSON.stringify(body) : undefined,
+		}),
+	);
+}
+
+describe("transcodes", () => {
+	const request = {
+		sourceRoot: "owner/video/",
+		source: "owner/video/raw-upload.webm",
+		output: "owner/video/.recording/render/sources/display.mp4",
+	};
+
+	test("are queued once, go to a video slot first and settle on the worker's report", async () => {
+		const h = harness();
+		h.objects.set(request.source, new Uint8Array(100));
+		const created = (await (await call(h, "/transcodes", request)).json()) as {
+			id: string;
+			status: string;
+		};
+		expect(created.status).toBe("queued");
+		const again = (await (await call(h, "/transcodes", request)).json()) as {
+			id: string;
+		};
+		expect(again.id).toBe(created.id);
+		const work = (await (
+			await call(h, "/work", {
+				worker: "gpu-a",
+				slots: 1,
+				cpus: 8,
+				kinds: ["video"],
+			})
+		).json()) as { task: protocol.TranscodeTask };
+		expect(work.task).toMatchObject({
+			kind: "transcode",
+			source: request.source,
+			output: request.output,
+			attempt: 1,
+		});
+		const heartbeat = (await (
+			await call(h, "/heartbeat", {
+				worker: "gpu-b",
+				slots: 1,
+				cpus: 8,
+				running: [
+					{
+						taskId: work.task.taskId,
+						attempt: 1,
+						frames: 3,
+						total: 0,
+						elapsedMs: 10,
+					},
+				],
+			})
+		).json()) as { cancel: string[] };
+		expect(heartbeat.cancel).toContain(work.task.taskId);
+		h.objects.set(request.output, new Uint8Array(1234));
+		await call(h, `/transcodes/${created.id}/done`, {
+			worker: "gpu-a",
+			attempt: 1,
+			size: 1234,
+		});
+		expect(
+			await (await call(h, `/transcodes/${created.id}`)).json(),
+		).toMatchObject({ status: "ready", size: 1234 });
+	});
+
+	test("completion requires the active dispatch and matching stored bytes", async () => {
+		const h = harness();
+		h.objects.set(request.source, new Uint8Array(100));
+		const created = (await (await call(h, "/transcodes", request)).json()) as {
+			id: string;
+		};
+		const path = `/transcodes/${created.id}/done`;
+		const report = { worker: "gpu-a", attempt: 1, size: 42 };
+		expect((await call(h, path, report)).status).toBe(409);
+		await call(h, "/work", { worker: "gpu-a", slots: 1, cpus: 8 });
+		for (const invalid of [
+			{ ...report, worker: "gpu-b" },
+			{ ...report, attempt: 0 },
+			{ ...report, attempt: undefined },
+		]) {
+			expect((await call(h, path, invalid)).status).toBe(409);
+		}
+		expect((await call(h, path, { ...report, size: 1.5 })).status).toBe(400);
+		expect((await call(h, path, report)).status).toBe(409);
+		h.objects.set(request.output, new Uint8Array(41));
+		expect((await call(h, path, report)).status).toBe(409);
+		expect(
+			await (await call(h, `/transcodes/${created.id}`)).json(),
+		).toMatchObject({
+			status: "running",
+		});
+		h.objects.set(request.output, new Uint8Array(42));
+		expect((await call(h, path, report)).status).toBe(200);
+		expect((await call(h, path, report)).status).toBe(200);
+		expect(
+			await (await call(h, `/transcodes/${created.id}`)).json(),
+		).toMatchObject({
+			status: "ready",
+			size: 42,
+		});
+	});
+
+	test("a completion cannot settle a dispatch retired during object verification", async () => {
+		const h = harness();
+		h.objects.set(request.source, new Uint8Array(100));
+		const created = (await (await call(h, "/transcodes", request)).json()) as {
+			id: string;
+		};
+		await call(h, "/work", { worker: "gpu-a", slots: 1, cpus: 8 });
+		h.objects.set(request.output, new Uint8Array(42));
+		const gate = Promise.withResolvers<void>();
+		h.gateHead(gate.promise);
+		const report = { worker: "gpu-a", attempt: 1, size: 42 };
+		const completing = call(h, `/transcodes/${created.id}/done`, report);
+		for (let i = 0; i < 20; i++) await Promise.resolve();
+		await call(h, `/transcodes/${created.id}/fail`, report);
+		gate.resolve();
+		expect((await completing).status).toBe(409);
+		expect(
+			await (await call(h, `/transcodes/${created.id}`)).json(),
+		).toMatchObject({
+			status: "queued",
+		});
+	});
+
+	test("reuse an output already in the bucket", async () => {
+		const h = harness();
+		h.objects.set(request.output, new Uint8Array(42));
+		expect(await (await call(h, "/transcodes", request)).json()).toMatchObject({
+			status: "ready",
+			size: 42,
+		});
+	});
+
+	test("a fresh index can reuse a retained transcode after its raw upload is removed", async () => {
+		const h = harness();
+		const prefix = "owner/video/project";
+		const header = mp4.buildHeader({
+			width: 128,
+			height: 72,
+			fps: 30,
+			video: {
+				sizes: Uint32Array.of(1),
+				runs: [{ first: 0, count: 1, offset: 0 }],
+				keyframes: Uint32Array.of(0),
+				avcC: mp4.avcC(ANNEX_B_PARAMETER_SETS),
+			},
+			audio: null,
+			payloadSize: 1,
+			minimumSize: 0,
+		});
+		const output = new Uint8Array(header.byteLength + 1);
+		output.set(header);
+		h.objects.set(request.output, output);
+		h.objects.set(
+			`${prefix}/recording-meta.json`,
+			new TextEncoder().encode("{}"),
+		);
+		h.objects.set(
+			`${prefix}/manifest.json`,
+			new TextEncoder().encode(
+				JSON.stringify({
+					files: [
+						{ path: "recording-meta.json", size: 2 },
+						{
+							path: "display.mp4",
+							key: request.output,
+							transcodeFrom: request.source,
+						},
+					],
+				}),
+			),
+		);
+		await expect(
+			h.sourceIndex(prefix, request.sourceRoot),
+		).resolves.toBeDefined();
+		expect(await (await call(h, "/transcodes", request)).json()).toMatchObject({
+			status: "ready",
+			size: output.byteLength,
+		});
+	});
+
+	test("standalone transcodes reject missing and oversized raw sources before dispatch", async () => {
+		const h = harness({ RF_MAX_SOURCE_BYTES: "1000" });
+		for (const size of [0, 1001]) {
+			if (size > 0) h.objects.set(request.source, new Uint8Array(size));
+			expect(
+				await (await call(h, "/transcodes", request)).json(),
+			).toMatchObject({
+				status: "error",
+			});
+		}
+		h.objects.set(request.source, new Uint8Array(1000));
+		expect(await (await call(h, "/transcodes", request)).json()).toMatchObject({
+			status: "queued",
+		});
+	});
+
+	test("manifest quotas count every raw source before scheduling any transcode", async () => {
+		const h = harness({ RF_MAX_SOURCE_BYTES: "1000" });
+		const prefix = "owner/video/project";
+		const files = ["display", "camera"].map((name) => ({
+			path: `${name}.mp4`,
+			key: `${prefix}/${name}.mp4`,
+			transcodeFrom: `owner/video/${name}.webm`,
+		}));
+		for (const file of files) {
+			h.objects.set(file.transcodeFrom, new Uint8Array(501));
+		}
+		for (const size of [undefined, 1]) {
+			h.objects.set(
+				`${prefix}/manifest.json`,
+				new TextEncoder().encode(
+					JSON.stringify({ files: files.map((file) => ({ ...file, size })) }),
+				),
+			);
+			await expect(h.sourceIndex(prefix, "owner/video/")).rejects.toThrow(
+				"1002 bytes (limit 1000)",
+			);
+			for (const file of files) {
+				const id = createHash("sha256")
+					.update(file.key)
+					.digest("hex")
+					.slice(0, 16);
+				expect((await call(h, `/transcodes/${id}`)).status).toBe(404);
+			}
+		}
+	});
+
+	test("must stay inside their source folder", async () => {
+		const h = harness();
+		for (const body of [
+			{ ...request, source: "other/raw-upload.webm" },
+			{ ...request, output: "owner/other/display.mp4" },
+			{ ...request, output: "owner/video/display.webm" },
+			{ ...request, sourceRoot: "owner/../" },
+		]) {
+			expect((await call(h, "/transcodes", body)).status).toBe(400);
+		}
+	});
+});
+
+describe("jobs for the product", () => {
+	test("cached indexes must satisfy each job's source scope", async () => {
+		const h = harness();
+		const prefix = "owner/video/project";
+		h.objects.set(
+			`${prefix}/manifest.json`,
+			new TextEncoder().encode(
+				JSON.stringify({
+					files: [
+						{
+							path: "recording-meta.json",
+							key: "owner/other/recording-meta.json",
+							size: 2,
+						},
+					],
+				}),
+			),
+		);
+		h.objects.set(
+			"owner/other/recording-meta.json",
+			new TextEncoder().encode("{}"),
+		);
+		const cached = await h.sourceIndex(prefix, "owner/");
+		expect(await h.sourceIndex(prefix, "owner/")).toBe(cached);
+		await expect(h.sourceIndex(prefix, "owner/video/")).rejects.toThrow(
+			"outside the recording",
+		);
+		await expect(h.sourceIndex(prefix)).rejects.toThrow(
+			"outside the recording",
+		);
+	});
+
+	test("write to the requested keys and call back signed when finished", async () => {
+		const h = harness();
+		h.setPlanner(async () => {});
+		const receipt = (await (
+			await call(h, "/jobs", {
+				recording: "owner/video/.recording/render/abc/project",
+				sourceRoot: "owner/video/",
+				output: {
+					key: "owner/video/.recording/render/abc/result.mp4",
+					hlsPrefix: "owner/video/.recording/render/abc/hls",
+				},
+				callbackUrl: "https://preview.cap.test/api/render-farm/callback",
+				reference: "video-1",
+			})
+		).json()) as { id: string };
+		const exported = h.jobs.get(receipt.id) as Job;
+		expect(exported.key).toBe("owner/video/.recording/render/abc/result.mp4");
+		expect(exported.hls?.prefix).toBe(
+			`owner/video/.recording/render/abc/hls/${receipt.id}`,
+		);
+		exported.status = "ready";
+		exported.totalFrames = 60;
+		h.finish(exported);
+		const callback = h.callbacks[0];
+		expect(callback?.init.redirect).toBe("error");
+		expect(callback?.url).toBe(
+			"https://preview.cap.test/api/render-farm/callback",
+		);
+		const body = String(callback?.init.body);
+		expect(JSON.parse(body)).toMatchObject({
+			id: receipt.id,
+			reference: "video-1",
+			status: "ready",
+			key: "owner/video/.recording/render/abc/result.mp4",
+			durationSeconds: 2,
+		});
+		expect(
+			(callback?.init.headers as Record<string, string>)[
+				"x-render-farm-signature"
+			],
+		).toBe(`sha256=${createHmac("sha256", "test").update(body).digest("hex")}`);
+	});
+
+	test("refuse callbacks to hosts that are not allowed", async () => {
+		const h = harness();
+		h.setPlanner(async () => {});
+		const response = await call(h, "/jobs", {
+			recording: "recording",
+			callbackUrl: "https://attacker.example/hook",
+		});
+		expect(response.status).toBe(400);
+	});
+
+	test("existing sources and exports cannot be selected as output keys", async () => {
+		const h = harness();
+		h.setPlanner(async () => {});
+		const key = "owner/video/source.mp4";
+		const bytes = new Uint8Array([1, 2, 3]);
+		h.objects.set(key, bytes);
+		expect(
+			(
+				await call(h, "/jobs", {
+					recording: "owner/video/project",
+					sourceRoot: "owner/video/",
+					output: { key },
+				})
+			).status,
+		).toBe(409);
+		expect(h.jobs.size).toBe(0);
+		expect(h.objects.get(key)).toBe(bytes);
+	});
+
+	test("concurrent jobs using the same HLS prefix write to separate folders", async () => {
+		const h = harness();
+		h.setPlanner(async () => {});
+		const request = {
+			recording: "recording",
+			output: { key: "recording/output.mp4", hlsPrefix: "recording/hls" },
+		};
+		await Promise.all([call(h, "/jobs", request), call(h, "/jobs", request)]);
+		expect(h.jobs.size).toBe(2);
+		const prefixes = [...h.jobs.values()].map((job) => job.hls?.prefix);
+		expect(new Set(prefixes).size).toBe(2);
+		for (const prefix of prefixes) expect(prefix).toStartWith("recording/hls/");
+	});
+
+	test("report the share of frames rendered", async () => {
+		const h = harness();
+		const j = job();
+		h.jobs.set(j.id, j);
+		j.videoResults.set(0, {} as protocol.VideoResult);
+		const running = videoState(j);
+		running.task = { ...running.task, chunk: 1 } as protocol.VideoTask;
+		running.progress = {
+			frames: 15,
+			total: 30,
+			elapsedMs: 100,
+			at: 0,
+			advancedAt: 0,
+		};
+		const summary = (await (await call(h, `/jobs/${j.id}`)).json()) as {
+			progress: number;
+		};
+		expect(summary.progress).toBe(0.75);
+	});
 });

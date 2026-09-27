@@ -108,3 +108,93 @@ describe("checkManifestBounds", () => {
 		expect(parsed.exportSeconds).toBe(4 * 3600);
 	});
 });
+
+describe("product job fields", () => {
+	const base = {
+		recording: "owner/video/.recording/render/abc/project",
+		sourceRoot: "owner/video/",
+	};
+
+	test("accepts outputs and callbacks inside the source folder", () => {
+		expect(
+			typeof validateJobRequest({
+				...base,
+				output: {
+					key: "owner/video/.recording/render/abc/result.mp4",
+					hlsPrefix: "owner/video/.recording/render/abc/hls",
+				},
+				callbackUrl: "https://preview.cap.test/api/render-farm/callback",
+				reference: "video-1",
+			}),
+		).toBe("object");
+	});
+
+	test.each([
+		[{ ...base, sourceRoot: "owner/other/" }, "sourceRoot"],
+		[{ ...base, sourceRoot: "owner/video" }, "sourceRoot"],
+		[{ ...base, output: { key: "owner/other/result.mp4" } }, "output"],
+		[{ ...base, output: { key: "owner/video/result.webm" } }, "output"],
+		[
+			{ ...base, output: { key: "owner/video/result.mp4", hlsPrefix: "hls" } },
+			"output",
+		],
+		[{ ...base, output: { key: "owner/video/../x/result.mp4" } }, "output"],
+		[{ ...base, callbackUrl: "http://preview.cap.test/hook" }, "callbackUrl"],
+		[{ ...base, callbackUrl: "not a url" }, "callbackUrl"],
+		[{ ...base, reference: 7 }, "reference"],
+	])("rejects %j", (body, message) => {
+		expect(validateJobRequest(body)).toContain(message);
+	});
+
+	test("outputs default to the recording's own folder without a sourceRoot", () => {
+		expect(
+			validateJobRequest({
+				recording: "rec",
+				output: { key: "rec/out.mp4" },
+			}),
+		).not.toBeString();
+		expect(
+			validateJobRequest({
+				recording: "rec",
+				output: { key: "other/out.mp4" },
+			}),
+		).toContain("output");
+	});
+});
+
+describe("manifest transcodes", () => {
+	const limits = sourceLimitsFromEnv({});
+
+	test("a source to transcode may omit its size until it exists", () => {
+		expect(
+			checkManifestBounds(
+				{
+					files: [
+						{
+							path: "content/segments/segment-0/display.mp4",
+							key: "owner/video/.recording/render/sources/display.mp4",
+							transcodeFrom: "owner/video/raw-upload.webm",
+						},
+					],
+				},
+				limits,
+			),
+		).toBeNull();
+	});
+
+	test("a transcode must produce an mp4", () => {
+		expect(
+			checkManifestBounds(
+				{
+					files: [
+						{
+							path: "content/segments/segment-0/display.webm",
+							transcodeFrom: "owner/video/raw-upload.webm",
+						},
+					],
+				},
+				limits,
+			),
+		).toContain("transcodeFrom");
+	});
+});
