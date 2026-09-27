@@ -178,35 +178,15 @@
 }
 
 .rec-record {
-	box-shadow:
-		0 1px 0 rgba(255, 255, 255, 0.18) inset,
-		0 10px 24px -10px color-mix(in srgb, var(--rec-red) 75%, transparent);
+	background: var(--rec-red);
+	box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16);
 }
-.rec-record.is-idle::before {
-	content: "";
-	position: absolute;
-	inset: -5px;
-	border-radius: inherit;
-	border: 2px solid color-mix(in srgb, var(--rec-red) 45%, transparent);
-	animation: rec-record-halo 2.4s ease-out infinite;
-	pointer-events: none;
-}
-@keyframes rec-record-halo {
-	0% {
-		opacity: 0;
-		transform: scale(0.96);
-	}
-	30% {
-		opacity: 1;
-	}
-	100% {
-		opacity: 0;
-		transform: scale(1.08);
-	}
+.rec-record:hover:not(:disabled) {
+	background: color-mix(in srgb, var(--rec-red) 90%, black);
 }
 
-/* The stage fits its 16:9 tiles to whatever room the card has: side by side
-   when wide, stacked when narrow. */
+/* The monitors stack their 16:9 tiles and size them to the room the card
+   has. */
 .rec-stage {
 	container-type: size;
 	display: flex;
@@ -227,16 +207,8 @@
 .rec-stage.is-single .rec-tile {
 	width: min(100cqw, 100cqh * 16 / 9);
 }
-.rec-stage.is-pair .rec-tile {
+.rec-stage.is-stack .rec-tile {
 	width: min(100cqw, (50cqh - 5px) * 16 / 9);
-}
-@container (min-aspect-ratio: 2.2 / 1) {
-	.rec-stage.is-pair .rec-tiles {
-		flex-direction: row;
-	}
-	.rec-stage.is-pair .rec-tile {
-		width: min(50cqw - 5px, 100cqh * 16 / 9);
-	}
 }
 
 /* Tracks borrow the editor timeline's segment treatment: a tint, a hairline
@@ -674,7 +646,6 @@
 		animation-duration: 0.01ms;
 		animation-delay: 0s;
 	}
-	.rec-record.is-idle::before,
 	.rec-ripple,
 	.rec-march,
 	.rec-bob,

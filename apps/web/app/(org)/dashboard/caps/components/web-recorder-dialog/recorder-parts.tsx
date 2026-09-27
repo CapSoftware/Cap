@@ -415,45 +415,43 @@ export const Waveform = ({
 	);
 };
 
-export const TrackRow = ({
+export const SourceRow = ({
 	kind,
 	icon: Icon,
 	label,
 	on,
-	children,
+	detail,
 	actions,
 }: {
 	kind: TrackKind;
 	icon: LucideIcon;
 	label: string;
 	on: boolean;
-	children?: ReactNode;
-	actions?: ReactNode;
+	detail: ReactNode;
+	actions: ReactNode;
 }) => (
 	<li
-		className="rec-track flex h-11 items-center gap-2 rounded-lg bg-[var(--rec-ctl)] pl-1.5 pr-1.5"
+		className="rec-track flex items-center gap-2.5 rounded-lg px-2 py-1.5 transition-colors hover:bg-[var(--rec-ctl)]"
 		data-kind={kind}
 		data-on={on}
 	>
-		<span className="flex w-[8.5rem] shrink-0 items-center gap-2 sm:w-[10rem]">
-			<span className="rec-track-tile flex size-[26px] shrink-0 items-center justify-center rounded-md transition-colors">
-				<Icon className="size-3.5" aria-hidden />
-			</span>
+		<span className="rec-track-tile flex size-7 shrink-0 items-center justify-center rounded-md transition-colors">
+			<Icon className="size-3.5" aria-hidden />
+		</span>
+		<span className="flex min-w-0 flex-1 flex-col">
 			<span
 				className={clsx(
-					"truncate text-[13px] font-medium",
+					"truncate text-[13px] font-medium leading-5",
 					on ? "text-[var(--rec-text-1)]" : "text-[var(--rec-text-2)]",
 				)}
 			>
 				{label}
 			</span>
+			<span className="flex min-w-0 items-center gap-1.5 text-[12px] leading-5 text-[var(--rec-text-2)]">
+				{detail}
+			</span>
 		</span>
-		<span className="relative flex h-full min-w-0 flex-1 items-center gap-2 py-1.5">
-			{children}
-		</span>
-		{actions && (
-			<span className="flex shrink-0 items-center gap-1.5">{actions}</span>
-		)}
+		<span className="flex shrink-0 items-center gap-0.5">{actions}</span>
 	</li>
 );
 

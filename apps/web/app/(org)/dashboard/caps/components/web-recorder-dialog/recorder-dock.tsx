@@ -1,7 +1,6 @@
 "use client";
 
 import * as Menu from "@radix-ui/react-dropdown-menu";
-import clsx from "clsx";
 import {
 	CheckIcon,
 	ChevronDownIcon,
@@ -43,13 +42,13 @@ export const DeviceMenu = ({
 			<Menu.Trigger
 				disabled={disabled}
 				aria-label={`Choose ${title.toLowerCase()}`}
-				className="rec-focus group flex h-8 min-w-0 max-w-full items-center gap-1 rounded-md px-2 text-left text-[13px] text-[var(--rec-text-1)] transition-colors hover:bg-[var(--rec-ctl-hover)] disabled:pointer-events-none data-[state=open]:bg-[var(--rec-ctl-hover)]"
+				className="rec-focus group -ml-1 flex h-5 min-w-0 max-w-full items-center gap-0.5 rounded px-1 text-left text-[12px] text-[var(--rec-text-2)] transition-colors hover:bg-[var(--rec-ctl-hover)] hover:text-[var(--rec-text-1)] disabled:pointer-events-none data-[state=open]:bg-[var(--rec-ctl-hover)]"
 			>
 				<span className="truncate">
 					{selected ? deviceName(selected, index, fallbackName) : fallbackName}
 				</span>
 				<ChevronDownIcon
-					className="size-3.5 shrink-0 text-[var(--rec-text-3)] group-hover:text-[var(--rec-text-2)]"
+					className="size-3 shrink-0 text-[var(--rec-text-3)] group-hover:text-[var(--rec-text-2)]"
 					aria-hidden
 				/>
 			</Menu.Trigger>
@@ -132,38 +131,26 @@ export const RecordButton = ({
 	recording,
 	busy = false,
 	disabled = false,
-	elapsed,
 	onClick,
 }: {
 	recording: boolean;
 	busy?: boolean;
 	disabled?: boolean;
-	elapsed?: string;
 	onClick: () => void;
 }) => (
 	<button
 		type="button"
 		onClick={onClick}
 		disabled={disabled || busy}
-		className={clsx(
-			"rec-record rec-focus group relative inline-flex h-12 shrink-0 items-center justify-center gap-2.5 rounded-full bg-[var(--rec-red)] pl-5 pr-6 text-[15px] font-medium text-white transition-[filter,transform] duration-150 hover:brightness-110 active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100",
-			!recording && !busy && !disabled && "is-idle",
-		)}
+		className="rec-record rec-focus inline-flex h-10 w-full items-center justify-center gap-2 rounded-[10px] text-[14px] font-medium text-white transition-[background,transform] duration-150 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100"
 	>
 		{busy ? (
 			<LoaderCircleIcon className="size-4 animate-spin" aria-hidden />
 		) : recording ? (
-			<span className="size-3 rounded-[3px] bg-white" aria-hidden />
+			<span className="size-2.5 rounded-[2px] bg-white" aria-hidden />
 		) : (
-			<span className="size-3 rounded-full bg-white" aria-hidden />
+			<span className="size-2.5 rounded-full bg-white" aria-hidden />
 		)}
-		<span className="whitespace-nowrap">
-			{busy ? "Starting" : recording ? "Stop recording" : "Start recording"}
-		</span>
-		{recording && elapsed && (
-			<span className="-mr-1 rounded-full bg-black/15 px-2 py-0.5 text-[13px] tabular-nums">
-				{elapsed}
-			</span>
-		)}
+		{busy ? "Starting" : recording ? "Stop recording" : "Start recording"}
 	</button>
 );

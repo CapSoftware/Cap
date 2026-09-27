@@ -44,9 +44,10 @@ import {
 	formatClock,
 	LiveVideo,
 	MicMeter,
+	SourceRow,
 	Squiggle,
 	Switch,
-	TrackRow,
+	type TrackKind,
 	useLiveStream,
 	useMicLevel,
 	Waveform,
@@ -792,28 +793,6 @@ export const WebRecorderDialog = () => {
 			? Math.min(0.99, sentBytes / totalBytes)
 			: null;
 
-	const segment = (label: ReactNode) => (
-		<span
-			className="rec-segment absolute inset-y-1.5 left-0 flex items-center overflow-hidden rounded-md pl-2.5 text-[12px] font-medium transition-[width] duration-500 ease-out"
-			style={{ width: `${Math.max(playheadPct, 0.8)}%` }}
-		>
-			<span className="relative truncate">{label}</span>
-		</span>
-	);
-	const notRecording = (
-		<span className="text-[13px] text-[var(--rec-text-3)]">Not recording</span>
-	);
-	const laneText = (text: string) => (
-		<span className="truncate px-2 text-[13px] text-[var(--rec-text-1)]">
-			{text}
-		</span>
-	);
-	const offText = (text = "Off") => (
-		<span className="truncate px-2 text-[13px] text-[var(--rec-text-3)]">
-			{text}
-		</span>
-	);
-
 	const screenTile = screenSupported && (
 		<div
 			className={clsx(
@@ -939,378 +918,6 @@ export const WebRecorderDialog = () => {
 		</div>
 	);
 
-	const transport = live ? (
-		<>
-			<div className="flex items-center gap-1.5">
-				<button
-					type="button"
-					className="rec-btn is-ghost"
-					disabled={isRestarting}
-					onClick={() => {
-						void restartRecording();
-					}}
-				>
-					<RotateCcwIcon className="size-3.5" aria-hidden />
-					<span className="hidden sm:inline">Start over</span>
-				</button>
-				<button
-					type="button"
-					className="rec-btn"
-					onClick={() => {
-						void (isPaused ? resumeRecording() : pauseRecording());
-					}}
-				>
-					{isPaused ? (
-						<PlayIcon className="size-3.5" aria-hidden />
-					) : (
-						<PauseIcon className="size-3.5" aria-hidden />
-					)}
-					{isPaused ? "Resume" : "Pause"}
-				</button>
-			</div>
-			<RecordButton
-				recording
-				elapsed={formatClock(durationMs)}
-				onClick={handleStopClick}
-			/>
-			<div className="flex flex-col items-end gap-0.5">
-				{!user.isPro && (
-					<>
-						<span className="text-[17px] font-medium tabular-nums leading-none">
-							{formatClock(recordingTimerDisplayMs)}
-						</span>
-						<span className="text-[12px] leading-none text-[var(--rec-text-3)]">
-							left on Free
-						</span>
-					</>
-				)}
-			</div>
-		</>
-	) : (
-		<>
-			<div className="min-w-0 text-[13px] leading-snug">
-				<span className="block truncate text-[var(--rec-text-1)]">
-					{trackCount === 0
-						? "Nothing switched on yet"
-						: `${joinWords(sourceWords).replace(/^./, (c) => c.toUpperCase())}`}
-				</span>
-				<span className="block truncate text-[var(--rec-text-3)]">
-					{trackCount === 0
-						? screenSupported
-							? "Press record to choose a screen"
-							: "Turn on your camera to record"
-						: `${trackCount} separate ${trackCount === 1 ? "track" : "tracks"}`}
-				</span>
-			</div>
-			<RecordButton
-				recording={false}
-				busy={
-					stage === "starting" || stage === "picking" || stage === "countdown"
-				}
-				disabled={
-					!canStartRecording ||
-					sharePending ||
-					(!screenSupported && !cameraEnabled)
-				}
-				onClick={() => {
-					void handleRecordClick();
-				}}
-			/>
-			<div className="flex flex-col items-end gap-0.5">
-				{!user.isPro && (
-					<>
-						<span className="text-[17px] font-medium tabular-nums leading-none text-[var(--rec-text-3)]">
-							{formatClock(FREE_PLAN_MAX_RECORDING_MS)}
-						</span>
-						<span className="text-[12px] leading-none text-[var(--rec-text-3)]">
-							on Free
-						</span>
-					</>
-				)}
-			</div>
-		</>
-	);
-
-	const cameraName =
-		availableCameras.find((camera) => camera.deviceId === selectedCameraId)
-			?.label || "Camera";
-
-	const tracks = (
-		<section className="rec-card flex shrink-0 flex-col gap-1.5 p-1.5">
-			<header className="flex h-8 items-center justify-between gap-3 pl-2 pr-0.5">
-				<span className="text-[12px] font-medium text-[var(--rec-text-2)]">
-					Tracks
-				</span>
-				<span className="flex min-w-0 items-center gap-2">
-					{live ? (
-						<span className="flex min-w-0 items-center gap-2 truncate text-[12px] text-[var(--rec-text-2)]">
-							<svg
-								viewBox="0 0 24 8"
-								className="h-2 w-6 shrink-0"
-								aria-hidden="true"
-							>
-								<path
-									d="M 1 4 L 23 4"
-									className="rec-ink rec-march"
-									style={{ strokeWidth: 2, stroke: "var(--rec-accent)" }}
-								/>
-							</svg>
-							<span className="truncate">
-								{partsSent === 0
-									? "Uploading as you record"
-									: `Uploading as you record · ${partsSent} ${partsSent === 1 ? "part" : "parts"} sent`}
-							</span>
-						</span>
-					) : (
-						<span className="hidden truncate text-[12px] text-[var(--rec-text-3)] sm:inline">
-							Each track stays separate in the editor
-						</span>
-					)}
-					{!live && (
-						<OptionsMenu
-							disabled={setupLocked}
-							rememberDevices={rememberDevices}
-							onRememberDevicesChange={handleRememberDevicesChange}
-						/>
-					)}
-				</span>
-			</header>
-			<div
-				className="relative -mb-0.5 h-4 [--gutter:calc(6px+8.5rem+8px)] sm:[--gutter:calc(6px+10rem+8px)]"
-				aria-hidden="true"
-			>
-				{[0, 1, 2, 3, 4].map((tick) => (
-					<span
-						key={tick}
-						className="absolute top-0 flex h-full items-start gap-1 text-[11px] tabular-nums leading-none text-[var(--rec-text-3)]"
-						style={{
-							left: `calc(var(--gutter) + (100% - var(--gutter) - 6px) * ${tick / 4})`,
-						}}
-					>
-						<span className="h-full w-px bg-[var(--rec-line-strong)]" />
-						{tick < 4 && formatClock((scaleMs / 4) * tick)}
-					</span>
-				))}
-			</div>
-			<ul className="relative flex flex-col gap-1.5 [--gutter:calc(6px+8.5rem+8px)] sm:[--gutter:calc(6px+10rem+8px)]">
-				{screenSupported && (
-					<TrackRow
-						kind="screen"
-						icon={MonitorIcon}
-						label="Screen"
-						on={screenOn}
-						actions={
-							!live && (
-								<>
-									{sharedScreen && (
-										<button
-											type="button"
-											className="rec-btn is-ghost !h-7 !px-2.5 !text-[12px]"
-											onClick={() => beginShare()}
-											disabled={setupLocked || sharePending}
-										>
-											Change
-										</button>
-									)}
-									<Switch
-										label="Share screen"
-										on={sharedScreen !== null}
-										disabled={setupLocked || sharePending}
-										onChange={(next) => {
-											if (next) beginShare();
-											else stopSharing();
-										}}
-									/>
-								</>
-							)
-						}
-					>
-						{live
-							? screenMode
-								? segment(SURFACE_LABELS[recordingMode])
-								: notRecording
-							: sharePending
-								? offText("Choose in your browser's popup")
-								: sharedScreen
-									? laneText(SURFACE_LABELS[sharedScreen.surface])
-									: offText("Not shared")}
-					</TrackRow>
-				)}
-				<TrackRow
-					kind="camera"
-					icon={CameraIcon}
-					label="Camera"
-					on={cameraEnabled}
-					actions={
-						!live &&
-						(availableCameras.length === 0 ? (
-							<button
-								type="button"
-								className="rec-btn !h-7 !px-2.5 !text-[12px]"
-								onClick={() => void requestAccess({ video: true, audio: true })}
-								disabled={requestingAccess || setupLocked}
-							>
-								Allow access
-							</button>
-						) : (
-							<Switch
-								label="Camera"
-								on={cameraEnabled}
-								disabled={setupLocked || requestingAccess}
-								onChange={toggleCamera}
-							/>
-						))
-					}
-				>
-					{live ? (
-						cameraEnabled ? (
-							segment(cameraName)
-						) : (
-							notRecording
-						)
-					) : cameraEnabled ? (
-						<DeviceMenu
-							title="Camera"
-							devices={availableCameras}
-							selectedId={selectedCameraId}
-							fallbackName="Camera"
-							disabled={setupLocked}
-							onSelect={handleCameraChange}
-						/>
-					) : (
-						offText(availableCameras.length === 0 ? "Needs permission" : "Off")
-					)}
-				</TrackRow>
-				<TrackRow
-					kind="mic"
-					icon={MicIcon}
-					label="Microphone"
-					on={micEnabled}
-					actions={
-						!live &&
-						(availableMics.length === 0 ? (
-							<button
-								type="button"
-								className="rec-btn !h-7 !px-2.5 !text-[12px]"
-								onClick={() =>
-									void requestAccess({ video: false, audio: true })
-								}
-								disabled={requestingAccess || setupLocked}
-							>
-								Allow access
-							</button>
-						) : (
-							<Switch
-								label="Microphone"
-								on={micEnabled}
-								disabled={setupLocked || requestingAccess}
-								onChange={toggleMic}
-							/>
-						))
-					}
-				>
-					{live ? (
-						micEnabled ? (
-							<>
-								{segment(null)}
-								<span
-									className="pointer-events-none absolute inset-y-0 left-0 overflow-hidden transition-[width] duration-500 ease-out"
-									style={{ width: `${Math.max(playheadPct, 0.8)}%` }}
-								>
-									<span
-										className="absolute inset-y-0 left-0"
-										style={{
-											width: `${10000 / Math.max(playheadPct, 0.8)}%`,
-										}}
-									>
-										<Waveform
-											samples={micSamples}
-											span={scaleMs / WAVE_SAMPLE_MS}
-										/>
-									</span>
-								</span>
-							</>
-						) : (
-							notRecording
-						)
-					) : micEnabled ? (
-						<>
-							<DeviceMenu
-								title="Microphone"
-								devices={availableMics}
-								selectedId={selectedMicId}
-								fallbackName="Microphone"
-								disabled={setupLocked}
-								onSelect={handleMicChange}
-							/>
-							<MicMeter level={micLevel} />
-						</>
-					) : (
-						offText(availableMics.length === 0 ? "Needs permission" : "Muted")
-					)}
-				</TrackRow>
-				{screenSupported && (
-					<TrackRow
-						kind="system"
-						icon={Volume2Icon}
-						label="System audio"
-						on={systemAudioOn && (live ? screenMode : true)}
-						actions={
-							!live && (
-								<>
-									{systemAudioEnabled && sharedScreen && !systemAudioOn ? (
-										<button
-											type="button"
-											className="rec-btn !h-7 !px-2.5 !text-[12px]"
-											onClick={() => beginShare()}
-											disabled={setupLocked || sharePending}
-										>
-											Choose again
-										</button>
-									) : (
-										<button
-											type="button"
-											className="rec-btn is-ghost !h-7 !px-2.5 !text-[12px]"
-											onClick={() => setAudioGuideOpen((value) => !value)}
-										>
-											How to share it
-										</button>
-									)}
-									<Switch
-										label="System audio"
-										on={systemAudioEnabled}
-										disabled={setupLocked}
-										onChange={handleSystemAudioChange}
-									/>
-								</>
-							)
-						}
-					>
-						{live
-							? systemAudioOn && screenMode
-								? segment("Computer sound")
-								: notRecording
-							: systemAudioEnabled
-								? sharedScreen && !systemAudioOn
-									? offText("Choose your screen again to include it")
-									: laneText("Your computer's sound")
-								: offText()}
-					</TrackRow>
-				)}
-				{live && (
-					<span
-						className="rec-playhead pointer-events-none absolute inset-y-0 z-10 w-0.5 -translate-x-1/2 rounded-full bg-[var(--rec-red)] transition-[left] duration-500 ease-out"
-						style={{
-							left: `calc(var(--gutter) + (100% - var(--gutter) - 6px) * ${playheadPct / 100})`,
-						}}
-					>
-						<span className="absolute -top-1 left-1/2 size-2 -translate-x-1/2 rounded-full bg-[var(--rec-red)]" />
-					</span>
-				)}
-			</ul>
-		</section>
-	);
-
 	const notices = (screenCaptureWarning ||
 		(!isBrowserSupported && unsupportedReason) ||
 		recoveredDownloads.length > 0) && (
@@ -1365,6 +972,413 @@ export const WebRecorderDialog = () => {
 		</div>
 	);
 
+	const cameraName =
+		availableCameras.find((camera) => camera.deviceId === selectedCameraId)
+			?.label || "Camera";
+
+	const smallBtn = "rec-btn !h-7 !px-2.5 !text-[12px]";
+
+	const liveBadge = (on: boolean) =>
+		on ? (
+			<span className="flex items-center gap-1.5 pr-2 text-[12px] text-[var(--rec-text-2)]">
+				<LiveDot paused={isPaused} />
+				{isPaused ? "Paused" : "Live"}
+			</span>
+		) : (
+			<span className="pr-2 text-[12px] text-[var(--rec-text-3)]">Off</span>
+		);
+
+	const sources = (
+		<ul className="flex flex-col gap-0.5">
+			{screenSupported && (
+				<SourceRow
+					kind="screen"
+					icon={MonitorIcon}
+					label="Screen"
+					on={live ? screenMode : sharedScreen !== null}
+					detail={
+						live
+							? screenMode
+								? SURFACE_LABELS[recordingMode]
+								: "Not included"
+							: sharePending
+								? "Choose in your browser's popup"
+								: sharedScreen
+									? SURFACE_LABELS[sharedScreen.surface]
+									: "Not shared"
+					}
+					actions={
+						live ? (
+							liveBadge(screenMode)
+						) : (
+							<>
+								{sharedScreen && (
+									<button
+										type="button"
+										className="rec-btn is-ghost !h-7 !px-2 !text-[12px]"
+										onClick={() => beginShare()}
+										disabled={setupLocked || sharePending}
+									>
+										Change
+									</button>
+								)}
+								<Switch
+									label="Share screen"
+									on={sharedScreen !== null}
+									disabled={setupLocked || sharePending}
+									onChange={(next) => {
+										if (next) beginShare();
+										else stopSharing();
+									}}
+								/>
+							</>
+						)
+					}
+				/>
+			)}
+			<SourceRow
+				kind="camera"
+				icon={CameraIcon}
+				label="Camera"
+				on={cameraEnabled}
+				detail={
+					availableCameras.length === 0 ? (
+						"Needs permission"
+					) : (
+						<DeviceMenu
+							title="Camera"
+							devices={availableCameras}
+							selectedId={selectedCameraId ?? lastCameraIdRef.current}
+							fallbackName="Camera"
+							disabled={setupLocked}
+							onSelect={handleCameraChange}
+						/>
+					)
+				}
+				actions={
+					live ? (
+						liveBadge(cameraEnabled)
+					) : availableCameras.length === 0 ? (
+						<button
+							type="button"
+							className={smallBtn}
+							onClick={() => void requestAccess({ video: true, audio: true })}
+							disabled={requestingAccess || setupLocked}
+						>
+							Allow
+						</button>
+					) : (
+						<Switch
+							label="Camera"
+							on={cameraEnabled}
+							disabled={setupLocked || requestingAccess}
+							onChange={toggleCamera}
+						/>
+					)
+				}
+			/>
+			<SourceRow
+				kind="mic"
+				icon={MicIcon}
+				label="Microphone"
+				on={micEnabled}
+				detail={
+					availableMics.length === 0 ? (
+						"Needs permission"
+					) : (
+						<>
+							<DeviceMenu
+								title="Microphone"
+								devices={availableMics}
+								selectedId={selectedMicId ?? lastMicIdRef.current}
+								fallbackName="Microphone"
+								disabled={setupLocked}
+								onSelect={handleMicChange}
+							/>
+							{micEnabled && <MicMeter level={micLevel} />}
+						</>
+					)
+				}
+				actions={
+					live ? (
+						liveBadge(micEnabled)
+					) : availableMics.length === 0 ? (
+						<button
+							type="button"
+							className={smallBtn}
+							onClick={() => void requestAccess({ video: false, audio: true })}
+							disabled={requestingAccess || setupLocked}
+						>
+							Allow
+						</button>
+					) : (
+						<Switch
+							label="Microphone"
+							on={micEnabled}
+							disabled={setupLocked || requestingAccess}
+							onChange={toggleMic}
+						/>
+					)
+				}
+			/>
+			{screenSupported && (
+				<SourceRow
+					kind="system"
+					icon={Volume2Icon}
+					label="System audio"
+					on={live ? systemAudioOn && screenMode : systemAudioEnabled}
+					detail={
+						live ? (
+							systemAudioOn && screenMode ? (
+								"Your computer's sound"
+							) : (
+								"Not included"
+							)
+						) : systemAudioEnabled && sharedScreen && !systemAudioOn ? (
+							<button
+								type="button"
+								className="rec-focus -ml-1 rounded px-1 text-left text-[var(--rec-accent)] hover:underline"
+								onClick={() => beginShare()}
+								disabled={setupLocked || sharePending}
+							>
+								Choose your screen again to include it
+							</button>
+						) : (
+							<button
+								type="button"
+								className="rec-focus -ml-1 rounded px-1 text-left hover:text-[var(--rec-text-1)]"
+								onClick={() => setAudioGuideOpen(true)}
+							>
+								How to share it
+							</button>
+						)
+					}
+					actions={
+						live ? (
+							liveBadge(systemAudioOn && screenMode)
+						) : (
+							<Switch
+								label="System audio"
+								on={systemAudioEnabled}
+								disabled={setupLocked}
+								onChange={handleSystemAudioChange}
+							/>
+						)
+					}
+				/>
+			)}
+		</ul>
+	);
+
+	type Lane = {
+		kind: TrackKind;
+		icon: typeof MonitorIcon;
+		on: boolean;
+		label: string;
+	};
+	const lanes: Lane[] = [
+		...(screenSupported
+			? [
+					{
+						kind: "screen" as const,
+						icon: MonitorIcon,
+						on: live ? screenMode : sharedScreen !== null,
+						label: live
+							? screenMode
+								? SURFACE_LABELS[recordingMode]
+								: ""
+							: "Screen",
+					},
+				]
+			: []),
+		{
+			kind: "camera",
+			icon: CameraIcon,
+			on: cameraEnabled,
+			label: live ? cameraName : "Camera",
+		},
+		{ kind: "mic", icon: MicIcon, on: micEnabled, label: live ? "" : "Mic" },
+		...(screenSupported
+			? [
+					{
+						kind: "system" as const,
+						icon: Volume2Icon,
+						on: systemAudioOn && (live ? screenMode : true),
+						label: live ? "Computer sound" : "System audio",
+					},
+				]
+			: []),
+	];
+
+	const timeline = (
+		<div className="flex flex-col gap-2">
+			<div className="flex items-baseline justify-between gap-3">
+				<span className="text-[12px] font-medium text-[var(--rec-text-2)]">
+					Tracks
+				</span>
+				<span className="truncate text-[12px] text-[var(--rec-text-3)]">
+					{live
+						? partsSent === 0
+							? "Uploading as you record"
+							: `${partsSent} ${partsSent === 1 ? "part" : "parts"} uploaded`
+						: `${trackCount} separate ${trackCount === 1 ? "track" : "tracks"} in the editor`}
+				</span>
+			</div>
+			<div className="relative flex flex-col gap-1 [--gutter:22px]">
+				{lanes.map((lane) => (
+					<div
+						key={lane.kind}
+						className="rec-track flex h-6 items-center gap-1.5"
+						data-kind={lane.kind}
+						data-on={lane.on}
+					>
+						<span className="rec-track-tile flex size-4 shrink-0 items-center justify-center rounded">
+							<lane.icon className="size-2.5" aria-hidden />
+						</span>
+						<span className="relative h-full min-w-0 flex-1 overflow-hidden rounded-[5px] bg-[var(--rec-ctl)]">
+							{live && lane.on ? (
+								<span
+									className="rec-segment absolute inset-y-0 left-0 flex items-center overflow-hidden rounded-[5px] pl-2 text-[11px] font-medium transition-[width] duration-500 ease-out"
+									style={{ width: `${Math.max(playheadPct, 1.5)}%` }}
+								>
+									{lane.kind === "mic" ? (
+										<span
+											className="absolute inset-y-0 left-0"
+											style={{
+												width: `${10000 / Math.max(playheadPct, 1.5)}%`,
+											}}
+										>
+											<Waveform
+												samples={micSamples}
+												span={scaleMs / WAVE_SAMPLE_MS}
+											/>
+										</span>
+									) : (
+										<span className="relative truncate">{lane.label}</span>
+									)}
+								</span>
+							) : !live ? (
+								<span
+									className={clsx(
+										"absolute inset-0 flex items-center pl-2 text-[11px]",
+										lane.on
+											? "text-[var(--rec-text-2)]"
+											: "text-[var(--rec-text-3)]",
+									)}
+								>
+									{lane.on ? `${lane.label} · ready` : `${lane.label} · off`}
+								</span>
+							) : null}
+						</span>
+					</div>
+				))}
+				{live && (
+					<span
+						className="rec-playhead pointer-events-none absolute -inset-y-1 z-10 w-0.5 -translate-x-1/2 rounded-full bg-[var(--rec-red)] transition-[left] duration-500 ease-out"
+						style={{
+							left: `calc(var(--gutter) + (100% - var(--gutter)) * ${playheadPct / 100})`,
+						}}
+					/>
+				)}
+			</div>
+		</div>
+	);
+
+	const controls = live ? (
+		<div className="flex flex-col gap-2">
+			<div className="grid grid-cols-2 gap-2">
+				<button
+					type="button"
+					className="rec-btn"
+					onClick={() => {
+						void (isPaused ? resumeRecording() : pauseRecording());
+					}}
+				>
+					{isPaused ? (
+						<PlayIcon className="size-3.5" aria-hidden />
+					) : (
+						<PauseIcon className="size-3.5" aria-hidden />
+					)}
+					{isPaused ? "Resume" : "Pause"}
+				</button>
+				<button
+					type="button"
+					className="rec-btn"
+					disabled={isRestarting}
+					onClick={() => {
+						void restartRecording();
+					}}
+				>
+					<RotateCcwIcon className="size-3.5" aria-hidden />
+					Start over
+				</button>
+			</div>
+			<RecordButton recording onClick={handleStopClick} />
+			{!user.isPro && (
+				<span className="text-center text-[12px] tabular-nums text-[var(--rec-text-3)]">
+					{formatClock(recordingTimerDisplayMs)} left on Free
+				</span>
+			)}
+		</div>
+	) : (
+		<div className="flex flex-col gap-2">
+			<RecordButton
+				recording={false}
+				busy={
+					stage === "starting" || stage === "picking" || stage === "countdown"
+				}
+				disabled={
+					!canStartRecording ||
+					sharePending ||
+					(!screenSupported && !cameraEnabled)
+				}
+				onClick={() => {
+					void handleRecordClick();
+				}}
+			/>
+			<span className="text-center text-[12px] text-[var(--rec-text-3)]">
+				{trackCount === 0
+					? screenSupported
+						? "You'll choose a screen next"
+						: "Turn on your camera to record"
+					: `${joinWords(sourceWords).replace(/^./, (c) => c.toUpperCase())}${
+							user.isPro ? "" : ` · up to ${freeMinutes} min on Free`
+						}`}
+			</span>
+		</div>
+	);
+
+	const sidebar = (
+		<aside className="rec-card flex shrink-0 flex-col lg:min-h-0">
+			<header className="flex h-11 shrink-0 items-center justify-between pl-4 pr-2">
+				<span className="text-[12px] font-medium text-[var(--rec-text-2)]">
+					Sources
+				</span>
+				{live && (
+					<span className="flex items-center gap-2 pr-2 text-[15px] font-medium tabular-nums">
+						<LiveDot paused={isPaused} />
+						{formatClock(durationMs)}
+					</span>
+				)}
+				{!live && (
+					<OptionsMenu
+						disabled={setupLocked}
+						rememberDevices={rememberDevices}
+						onRememberDevicesChange={handleRememberDevicesChange}
+					/>
+				)}
+			</header>
+			<div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-2 pb-3">
+				{sources}
+				<div className="px-2">{timeline}</div>
+				{!live && notices}
+			</div>
+			<div className="shrink-0 p-3 shadow-[0_-1px_0_var(--rec-line)]">
+				{controls}
+			</div>
+		</aside>
+	);
+
 	const overlay =
 		stage === "countdown" ? (
 			<div className="rec-fade absolute inset-0 z-20 flex flex-col items-center justify-center gap-7 bg-[var(--rec-scrim)] px-4 text-center backdrop-blur-md">
@@ -1403,8 +1417,8 @@ export const WebRecorderDialog = () => {
 		) : null;
 
 	const studio = (
-		<main className="relative flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-2 pb-2 sm:px-3 sm:pb-3">
-			<section className="rec-card relative flex min-h-[15rem] flex-1 flex-col overflow-hidden">
+		<main className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-2 pb-2 sm:px-3 sm:pb-3 lg:grid lg:grid-cols-[minmax(0,1fr)_21rem] lg:overflow-hidden">
+			<section className="rec-card relative flex min-h-[26rem] flex-1 flex-col overflow-hidden lg:min-h-0">
 				{live && (
 					<header className="flex h-12 shrink-0 items-center justify-between gap-3 pl-4 pr-2 shadow-[0_1px_0_var(--rec-line)]">
 						<span className="flex min-w-0 items-center gap-2.5 text-[13px]">
@@ -1481,7 +1495,7 @@ export const WebRecorderDialog = () => {
 					<div
 						className={clsx(
 							"rec-stage min-h-0 flex-1 p-3 sm:p-4",
-							screenSupported ? "is-pair" : "is-single",
+							screenSupported ? "is-stack" : "is-single",
 						)}
 					>
 						<div className="rec-tiles">
@@ -1490,12 +1504,8 @@ export const WebRecorderDialog = () => {
 						</div>
 					</div>
 				)}
-				<footer className="grid h-16 shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-3 px-4 shadow-[0_-1px_0_var(--rec-line)]">
-					{transport}
-				</footer>
 			</section>
-			{tracks}
-			{notices}
+			{sidebar}
 		</main>
 	);
 
