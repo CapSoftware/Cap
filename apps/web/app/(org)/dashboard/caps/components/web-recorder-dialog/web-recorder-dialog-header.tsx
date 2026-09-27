@@ -1,39 +1,38 @@
 "use client";
 
-import clsx from "clsx";
-import { CircleHelpIcon, Settings2Icon, XIcon } from "lucide-react";
-import type { ComponentProps } from "react";
+import { Switch } from "@cap/ui";
+import { XIcon } from "lucide-react";
+import { useId } from "react";
 import { useDashboardContext } from "../../../Contexts";
 
 interface WebRecorderDialogHeaderProps {
 	isBusy: boolean;
+	rememberDevices: boolean;
+	onRememberDevicesChange: (value: boolean) => void;
 	onClose: () => void;
-	onOpenSettings: () => void;
-	onOpenHelp: () => void;
 }
-
-const IconButton = ({ className, ...props }: ComponentProps<"button">) => (
-	<button
-		type="button"
-		className={clsx(
-			"flex size-8 items-center justify-center rounded-lg text-gray-10 transition-colors hover:bg-gray-3 hover:text-gray-12 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-8 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent",
-			className,
-		)}
-		{...props}
-	/>
-);
 
 export const WebRecorderDialogHeader = ({
 	isBusy,
+	rememberDevices,
+	onRememberDevicesChange,
 	onClose,
-	onOpenSettings,
-	onOpenHelp,
 }: WebRecorderDialogHeaderProps) => {
 	const { user, setUpgradeModalOpen } = useDashboardContext();
+	const rememberId = useId();
 
 	return (
-		<div className="flex items-center justify-between gap-3">
-			<div className="flex min-w-0 items-center gap-2.5">
+		<header className="flex h-16 shrink-0 items-center justify-between gap-3 border-b border-gray-3 px-4 sm:px-6">
+			<div className="flex min-w-0 items-center gap-3">
+				<button
+					type="button"
+					aria-label="Close recorder"
+					onClick={onClose}
+					disabled={isBusy}
+					className="flex size-9 items-center justify-center rounded-full text-gray-11 transition-colors hover:bg-gray-3 hover:text-gray-12 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-8 disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent"
+				>
+					<XIcon className="size-5" aria-hidden />
+				</button>
 				<svg
 					className="size-7 shrink-0"
 					xmlns="http://www.w3.org/2000/svg"
@@ -55,43 +54,35 @@ export const WebRecorderDialogHeader = ({
 						d="M20 30c5.523 0 10-4.477 10-10s-4.477-10-10-10-10 4.477-10 10 4.477 10 10 10"
 					/>
 				</svg>
-				<div className="flex min-w-0 flex-col">
-					<span className="truncate text-[0.9375rem] font-semibold leading-tight text-gray-12">
-						Record a Cap
-					</span>
-					<span className="text-[0.75rem] leading-tight text-gray-10">
-						Screen, camera and audio on separate tracks
-					</span>
+				<span className="truncate text-[0.9375rem] font-semibold text-gray-12">
+					New recording
+				</span>
+			</div>
+			<div className="flex shrink-0 items-center gap-4">
+				<div className="hidden items-center gap-2 text-[0.8125rem] text-gray-11 sm:flex">
+					<Switch
+						id={rememberId}
+						checked={rememberDevices}
+						onCheckedChange={onRememberDevicesChange}
+						disabled={isBusy}
+						aria-label="Remember camera and microphone"
+					/>
+					<label htmlFor={rememberId}>Remember devices</label>
 				</div>
 				{user.isPro ? (
-					<span className="ml-1 hidden shrink-0 rounded-full bg-blue-9 px-2 py-0.5 text-[0.6875rem] font-medium text-white sm:inline-flex">
+					<span className="rounded-full bg-blue-9 px-2.5 py-0.5 text-[0.75rem] font-medium text-white">
 						Pro
 					</span>
 				) : (
 					<button
 						type="button"
 						onClick={() => setUpgradeModalOpen(true)}
-						className="ml-1 hidden shrink-0 rounded-full bg-gray-3 px-2 py-0.5 text-[0.6875rem] font-medium text-gray-12 transition-colors hover:bg-gray-4 sm:inline-flex"
+						className="rounded-full bg-gray-3 px-2.5 py-0.5 text-[0.75rem] font-medium text-gray-12 transition-colors hover:bg-gray-4"
 					>
 						Free
 					</button>
 				)}
 			</div>
-			<div className="flex shrink-0 items-center gap-0.5">
-				<IconButton aria-label="How the recorder works" onClick={onOpenHelp}>
-					<CircleHelpIcon className="size-[1.125rem]" aria-hidden />
-				</IconButton>
-				<IconButton aria-label="Recorder settings" onClick={onOpenSettings}>
-					<Settings2Icon className="size-[1.125rem]" aria-hidden />
-				</IconButton>
-				<IconButton
-					aria-label="Close recorder"
-					onClick={onClose}
-					disabled={isBusy}
-				>
-					<XIcon className="size-[1.125rem]" aria-hidden />
-				</IconButton>
-			</div>
-		</div>
+		</header>
 	);
 };

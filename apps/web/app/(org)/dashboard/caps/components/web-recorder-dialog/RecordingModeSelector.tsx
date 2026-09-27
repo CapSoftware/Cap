@@ -1,27 +1,24 @@
 "use client";
 
 import clsx from "clsx";
-import {
-	AppWindowIcon,
-	CameraIcon,
-	Globe,
-	type LucideIcon,
-	MonitorIcon,
-} from "lucide-react";
+import { CameraIcon, type LucideIcon, MonitorIcon } from "lucide-react";
 
 export type RecordingMode = "fullscreen" | "window" | "tab" | "camera";
 
-export const RECORDING_MODE_OPTIONS: Record<
-	RecordingMode,
-	{ label: string; icon: LucideIcon }
-> = {
-	fullscreen: { label: "Screen", icon: MonitorIcon },
-	window: { label: "Window", icon: AppWindowIcon },
-	tab: { label: "This tab", icon: Globe },
-	camera: { label: "Camera only", icon: CameraIcon },
-};
-
-const MODE_ORDER: RecordingMode[] = ["fullscreen", "window", "tab", "camera"];
+const OPTIONS: Array<{
+	value: "fullscreen" | "camera";
+	label: string;
+	hint: string;
+	icon: LucideIcon;
+}> = [
+	{
+		value: "fullscreen",
+		label: "Screen",
+		hint: "Screen, window or tab",
+		icon: MonitorIcon,
+	},
+	{ value: "camera", label: "Camera only", hint: "Just you", icon: CameraIcon },
+];
 
 interface RecordingModeSelectorProps {
 	mode: RecordingMode;
@@ -35,42 +32,47 @@ export const RecordingModeSelector = ({
 	disabled = false,
 	displayRecordingSupported = true,
 	onModeChange,
-}: RecordingModeSelectorProps) => (
-	<fieldset className="grid grid-cols-4 gap-1 rounded-xl bg-gray-3 p-1">
-		<legend className="sr-only">What to record</legend>
-		{MODE_ORDER.map((value) => {
-			const option = RECORDING_MODE_OPTIONS[value];
-			const Icon = option.icon;
-			const selected = value === mode;
-			const unavailable = value !== "camera" && !displayRecordingSupported;
-			return (
-				<button
-					key={value}
-					type="button"
-					aria-pressed={selected}
-					disabled={disabled || unavailable}
-					title={
-						unavailable ? "Screen recording needs a desktop browser" : undefined
-					}
-					onClick={() => onModeChange(value)}
-					className={clsx(
-						"flex min-w-0 flex-col items-center justify-center gap-1 rounded-[9px] px-1 py-2 text-[0.75rem] font-medium leading-none transition-[background-color,color,box-shadow] duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-8 disabled:cursor-not-allowed",
-						selected
-							? "bg-gray-1 text-gray-12 shadow-[0_1px_2px_rgba(0,0,0,0.08),0_0_0_1px_var(--gray-4)]"
-							: "text-gray-10 hover:bg-gray-4 hover:text-gray-12",
-						unavailable && "opacity-40 hover:bg-transparent",
-					)}
-				>
-					<Icon
+}: RecordingModeSelectorProps) => {
+	const current = mode === "camera" ? "camera" : "fullscreen";
+	return (
+		<fieldset className="grid grid-cols-2 gap-2">
+			<legend className="sr-only">What to record</legend>
+			{OPTIONS.map(({ value, label, hint, icon: Icon }) => {
+				const selected = value === current;
+				const unavailable = value !== "camera" && !displayRecordingSupported;
+				return (
+					<button
+						key={value}
+						type="button"
+						aria-pressed={selected}
+						disabled={disabled || unavailable}
+						onClick={() => onModeChange(value)}
 						className={clsx(
-							"size-4 shrink-0",
-							selected ? "text-blue-10" : "text-current",
+							"flex min-w-0 items-center gap-3 rounded-xl border px-3 py-2.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-8 disabled:cursor-not-allowed",
+							selected
+								? "border-blue-9 bg-blue-2 ring-1 ring-blue-9"
+								: "border-gray-4 bg-gray-1 hover:border-gray-6",
+							unavailable && "opacity-40",
 						)}
-						aria-hidden
-					/>
-					<span className="max-w-full truncate">{option.label}</span>
-				</button>
-			);
-		})}
-	</fieldset>
-);
+					>
+						<Icon
+							className={clsx(
+								"size-5 shrink-0",
+								selected ? "text-blue-10" : "text-gray-10",
+							)}
+							aria-hidden
+						/>
+						<span className="flex min-w-0 flex-col">
+							<span className="truncate text-[0.875rem] font-medium text-gray-12">
+								{label}
+							</span>
+							<span className="truncate text-[0.75rem] text-gray-10">
+								{unavailable ? "Needs a computer" : hint}
+							</span>
+						</span>
+					</button>
+				);
+			})}
+		</fieldset>
+	);
+};

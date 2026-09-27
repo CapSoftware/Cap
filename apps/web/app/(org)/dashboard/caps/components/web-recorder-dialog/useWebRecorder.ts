@@ -2384,5 +2384,6 @@ export const useWebRecorder = ({
 		supportsDisplayRecording,
 		supportCheckCompleted,
 		screenCaptureWarning,
+		getActiveCameraStream: () => cameraStreamRef.current,
 	};
 };
