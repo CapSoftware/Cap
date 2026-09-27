@@ -1,35 +1,37 @@
 "use client";
 
-import { ArrowLeftIcon } from "lucide-react";
+import { ArrowLeftIcon, CirclePlayIcon } from "lucide-react";
 import { useDashboardContext } from "../../../Contexts";
 
 interface WebRecorderDialogHeaderProps {
 	isBusy: boolean;
 	freeMinutes: number;
 	onClose: () => void;
+	onShowHowItWorks?: () => void;
 }
 
 export const WebRecorderDialogHeader = ({
 	isBusy,
 	freeMinutes,
 	onClose,
+	onShowHowItWorks,
 }: WebRecorderDialogHeaderProps) => {
 	const { user, setUpgradeModalOpen } = useDashboardContext();
 
 	return (
-		<header className="flex h-14 shrink-0 items-center justify-between gap-3 px-3 sm:px-5">
+		<header className="flex h-[52px] shrink-0 items-center justify-between gap-3 px-2 sm:px-3">
 			<div className="flex min-w-0 items-center gap-2">
 				<button
 					type="button"
 					aria-label="Close recorder"
 					onClick={onClose}
 					disabled={isBusy}
-					className="flex size-9 items-center justify-center rounded-full text-white/60 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#4785FF] disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent"
+					className="rec-btn is-ghost is-icon"
 				>
-					<ArrowLeftIcon className="size-5" aria-hidden />
+					<ArrowLeftIcon className="size-4" aria-hidden />
 				</button>
 				<svg
-					className="size-6 shrink-0"
+					className="size-5 shrink-0"
 					xmlns="http://www.w3.org/2000/svg"
 					fill="none"
 					viewBox="0 0 40 40"
@@ -49,23 +51,34 @@ export const WebRecorderDialogHeader = ({
 						d="M20 30c5.523 0 10-4.477 10-10s-4.477-10-10-10-10 4.477-10 10 4.477 10 10 10"
 					/>
 				</svg>
-				<span className="truncate text-[0.9375rem] font-semibold text-white">
-					New recording
-				</span>
+				<span className="truncate text-[14px] font-medium">New recording</span>
 			</div>
-			{user.isPro ? (
-				<span className="rounded-full bg-[#4785FF]/15 px-2.5 py-1 text-[0.75rem] font-medium text-[#8fb3ff]">
-					Pro
-				</span>
-			) : (
-				<button
-					type="button"
-					onClick={() => setUpgradeModalOpen(true)}
-					className="rounded-full bg-white/[0.08] px-3 py-1 text-[0.75rem] font-medium text-white/70 transition-colors hover:bg-white/[0.14] hover:text-white"
-				>
-					Free · up to {freeMinutes} min
-				</button>
-			)}
+			<div className="flex shrink-0 items-center gap-1.5">
+				{onShowHowItWorks && (
+					<button
+						type="button"
+						className="rec-btn is-ghost max-sm:!w-8 max-sm:!px-0"
+						onClick={onShowHowItWorks}
+						aria-label="How does recording work?"
+					>
+						<CirclePlayIcon className="size-4" aria-hidden />
+						<span className="hidden sm:inline">How does recording work?</span>
+					</button>
+				)}
+				{user.isPro ? (
+					<span className="rounded-md bg-[var(--rec-ctl)] px-2 py-1 text-[12px] font-medium text-[var(--rec-text-2)]">
+						Pro
+					</span>
+				) : (
+					<button
+						type="button"
+						onClick={() => setUpgradeModalOpen(true)}
+						className="rec-btn !h-7 !px-2.5 !text-[12px] text-[var(--rec-text-2)]"
+					>
+						Free · up to {freeMinutes} min
+					</button>
+				)}
+			</div>
 		</header>
 	);
 };

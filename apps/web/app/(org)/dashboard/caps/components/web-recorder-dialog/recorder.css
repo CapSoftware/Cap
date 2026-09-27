@@ -1,0 +1,655 @@
+/* The browser recorder shares the editor's surfaces (the desktop and web
+   editors' --ed-* values) so recording and editing read as one product. It
+   follows the system appearance. */
+.cap-rec {
+	--rec-window: #f1f1f3;
+	--rec-card: #ffffff;
+	--rec-card-2: #f6f6f7;
+	--rec-stage: #e9e9ec;
+	--rec-line: rgba(0, 0, 0, 0.075);
+	--rec-line-strong: rgba(0, 0, 0, 0.12);
+	--rec-text-1: #1c1c1e;
+	--rec-text-2: #6e6e75;
+	--rec-text-3: #a0a0a8;
+	--rec-ctl: rgba(0, 0, 0, 0.045);
+	--rec-ctl-hover: rgba(0, 0, 0, 0.075);
+	--rec-ctl-active: rgba(0, 0, 0, 0.11);
+	--rec-accent: #007aff;
+	--rec-red: #ff3b30;
+	--rec-green: #2f9e69;
+	--rec-media: #101012;
+	--rec-seg-tint: 13%;
+	--rec-seg-line: 34%;
+	--rec-seg-label: #000000;
+	--rec-seg-label-mix: 58%;
+	--rec-card-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 0 0 1px var(--rec-line);
+	--rec-pop-shadow:
+		0 12px 32px -12px rgba(0, 0, 0, 0.25), 0 0 0 1px var(--rec-line);
+	--rec-scrim: rgba(241, 241, 243, 0.78);
+	--track-screen: #3b82f6;
+	--track-camera: #8b5cf6;
+	--track-mic: #22c55e;
+	--track-system: #0ea5e9;
+	color: var(--rec-text-1);
+	color-scheme: light;
+	-webkit-font-smoothing: antialiased;
+}
+
+@media (prefers-color-scheme: dark) {
+	.cap-rec {
+		--rec-window: #131315;
+		--rec-card: #1b1b1e;
+		--rec-card-2: #202024;
+		--rec-stage: #121214;
+		--rec-line: rgba(255, 255, 255, 0.08);
+		--rec-line-strong: rgba(255, 255, 255, 0.13);
+		--rec-text-1: #f4f4f5;
+		--rec-text-2: #9a9aa3;
+		--rec-text-3: #62626a;
+		--rec-ctl: rgba(255, 255, 255, 0.06);
+		--rec-ctl-hover: rgba(255, 255, 255, 0.09);
+		--rec-ctl-active: rgba(255, 255, 255, 0.13);
+		--rec-accent: #0a84ff;
+		--rec-red: #ff453a;
+		--rec-green: #3dd68c;
+		--rec-media: #0b0b0c;
+		--rec-seg-tint: 20%;
+		--rec-seg-line: 42%;
+		--rec-seg-label: #ffffff;
+		--rec-seg-label-mix: 55%;
+		--rec-card-shadow:
+			0 1px 2px rgba(0, 0, 0, 0.3), 0 0 0 1px var(--rec-line), inset 0 1px 0
+			rgba(255, 255, 255, 0.03);
+		--rec-pop-shadow:
+			0 16px 40px -12px rgba(0, 0, 0, 0.7), 0 0 0 1px var(--rec-line);
+		--rec-scrim: rgba(19, 19, 21, 0.78);
+		color-scheme: dark;
+	}
+}
+
+.rec-card {
+	border-radius: 14px;
+	background: var(--rec-card);
+	box-shadow: var(--rec-card-shadow);
+}
+
+.rec-pop {
+	border-radius: 12px;
+	background: var(--rec-card);
+	box-shadow: var(--rec-pop-shadow);
+}
+
+.rec-btn {
+	display: inline-flex;
+	height: 32px;
+	flex-shrink: 0;
+	align-items: center;
+	justify-content: center;
+	gap: 6px;
+	border-radius: 8px;
+	padding: 0 12px;
+	background: var(--rec-ctl);
+	color: var(--rec-text-1);
+	font-size: 13px;
+	font-weight: 500;
+	white-space: nowrap;
+	transition:
+		background 0.15s ease,
+		color 0.15s ease,
+		opacity 0.15s ease;
+}
+.rec-btn:hover:not(:disabled) {
+	background: var(--rec-ctl-hover);
+}
+.rec-btn:active:not(:disabled) {
+	background: var(--rec-ctl-active);
+}
+.rec-btn:disabled {
+	cursor: not-allowed;
+	opacity: 0.45;
+}
+.rec-btn:focus-visible,
+.rec-focus:focus-visible {
+	outline: 2px solid var(--rec-accent);
+	outline-offset: 2px;
+}
+.rec-btn.is-ghost {
+	background: transparent;
+	color: var(--rec-text-2);
+}
+.rec-btn.is-ghost:hover:not(:disabled) {
+	background: var(--rec-ctl);
+	color: var(--rec-text-1);
+}
+.rec-btn.is-accent {
+	background: var(--rec-accent);
+	color: #fff;
+}
+.rec-btn.is-accent:hover:not(:disabled) {
+	background: var(--rec-accent);
+	filter: brightness(1.08);
+}
+.rec-btn.is-icon {
+	width: 32px;
+	padding: 0;
+}
+
+.rec-switch {
+	position: relative;
+	width: 30px;
+	height: 18px;
+	flex-shrink: 0;
+	border-radius: 999px;
+	background: var(--rec-ctl-active);
+	transition: background 0.18s ease;
+}
+.rec-switch::after {
+	content: "";
+	position: absolute;
+	top: 2px;
+	left: 2px;
+	width: 14px;
+	height: 14px;
+	border-radius: 999px;
+	background: #fff;
+	box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+	transition: transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.rec-switch[data-on="true"] {
+	background: var(--rec-accent);
+}
+.rec-switch[data-on="true"]::after {
+	transform: translateX(12px);
+}
+
+/* The stage fits its 16:9 tiles to whatever room the card has: side by side
+   when wide, stacked when narrow. */
+.rec-stage {
+	container-type: size;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+.rec-tiles {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 10px;
+}
+.rec-tile {
+	aspect-ratio: 16 / 9;
+	flex-shrink: 0;
+}
+.rec-stage.is-single .rec-tile {
+	width: min(100cqw, 100cqh * 16 / 9);
+}
+.rec-stage.is-pair .rec-tile {
+	width: min(100cqw, (50cqh - 5px) * 16 / 9);
+}
+@container (min-aspect-ratio: 2.2 / 1) {
+	.rec-stage.is-pair .rec-tiles {
+		flex-direction: row;
+	}
+	.rec-stage.is-pair .rec-tile {
+		width: min(50cqw - 5px, 100cqh * 16 / 9);
+	}
+}
+
+/* Tracks borrow the editor timeline's segment treatment: a tint, a hairline
+   ring and a 3px bar in the track colour. */
+.rec-track {
+	--t: var(--track-screen);
+}
+.rec-track[data-kind="camera"] {
+	--t: var(--track-camera);
+}
+.rec-track[data-kind="mic"] {
+	--t: var(--track-mic);
+}
+.rec-track[data-kind="system"] {
+	--t: var(--track-system);
+}
+.rec-track-tile {
+	background: color-mix(in srgb, var(--t) 18%, transparent);
+	color: color-mix(
+		in srgb,
+		var(--t) var(--rec-seg-label-mix),
+		var(--rec-seg-label)
+	);
+}
+.rec-track[data-on="false"] .rec-track-tile {
+	background: var(--rec-ctl);
+	color: var(--rec-text-3);
+}
+.rec-segment {
+	background: color-mix(in srgb, var(--t) var(--rec-seg-tint), transparent);
+	box-shadow:
+		inset 0 0 0 1px
+		color-mix(in srgb, var(--t) var(--rec-seg-line), transparent),
+		inset 3px 0 0 var(--t);
+	color: color-mix(
+		in srgb,
+		var(--t) var(--rec-seg-label-mix),
+		var(--rec-seg-label)
+	);
+}
+.rec-wave {
+	fill: color-mix(in srgb, var(--t) 70%, transparent);
+}
+
+/* Animation language shared with the Chrome extension: strokes that draw
+   themselves on, a gentle hand-drawn boil, sparks and marching dashes. */
+.rec-boil {
+	filter: url(#rec-boil);
+}
+.rec-ink {
+	fill: none;
+	stroke: var(--rec-text-1);
+	stroke-width: 3;
+	stroke-linecap: round;
+	stroke-linejoin: round;
+}
+.rec-ink.is-accent {
+	stroke: var(--rec-accent);
+}
+.rec-ink.is-red {
+	stroke: var(--rec-red);
+}
+.rec-draw {
+	stroke-dasharray: 1;
+	stroke-dashoffset: 1;
+	animation: rec-draw 0.8s ease var(--d, 0s) forwards;
+}
+.rec-march {
+	stroke-dasharray: 2 4.2;
+	animation: rec-march 1.1s linear infinite;
+}
+.rec-spark {
+	fill: none;
+	stroke: var(--rec-accent);
+	stroke-width: 2.5;
+	stroke-linecap: round;
+	opacity: 0;
+	transform-box: fill-box;
+	transform-origin: center;
+	animation: rec-spark 0.5s ease var(--d, 0.5s) forwards;
+}
+.rec-bob {
+	animation: rec-bob 1.9s ease-in-out infinite;
+}
+.rec-rise {
+	animation: rec-rise 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) var(--d, 0s) both;
+}
+.rec-fade {
+	animation: rec-fade 0.35s ease var(--d, 0s) both;
+}
+.rec-pulse {
+	animation: rec-pulse 1.6s ease-in-out infinite;
+}
+
+.rec-squiggle-track {
+	fill: none;
+	stroke: var(--rec-line-strong);
+	stroke-width: 2.5;
+	stroke-linecap: round;
+	stroke-dasharray: 0.45 1.15;
+}
+.rec-squiggle-progress {
+	fill: none;
+	stroke: var(--rec-accent);
+	stroke-width: 3.2;
+	stroke-linecap: round;
+	stroke-dasharray: 100;
+	transition: stroke-dashoffset 0.6s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.rec-squiggle-progress.is-waiting {
+	stroke: var(--rec-text-3);
+	stroke-dasharray: 2 4.2;
+	stroke-dashoffset: 0;
+	animation: rec-march 1.2s linear infinite;
+}
+
+.rec-countdown-ring {
+	fill: none;
+	stroke: var(--rec-accent);
+	stroke-width: 3;
+	stroke-linecap: round;
+	stroke-dasharray: 340;
+	animation: rec-ring-drain 1s linear both;
+}
+.rec-countdown-number {
+	animation: rec-countdown-pop 1s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.rec-playhead {
+	animation: rec-fade 0.3s ease both;
+}
+
+/* System audio guide: one loop of the picker's audio switch being turned on
+   and Share being clicked. */
+.rec-guide-cursor {
+	animation: rec-guide-cursor 5s cubic-bezier(0.45, 0, 0.2, 1) infinite;
+}
+.rec-guide-switch {
+	animation: rec-guide-switch 5s step-end infinite;
+}
+.rec-guide-knob {
+	animation: rec-guide-knob 5s cubic-bezier(0.2, 0.8, 0.2, 1) infinite;
+}
+.rec-guide-share {
+	transform-box: fill-box;
+	transform-origin: center;
+	animation: rec-guide-share 5s ease infinite;
+}
+.rec-guide-ripple {
+	transform-box: fill-box;
+	transform-origin: center;
+	opacity: 0;
+	animation: rec-guide-ripple 5s ease-out infinite;
+}
+.rec-guide-ripple.is-second {
+	animation-name: rec-guide-ripple-2;
+}
+
+/* How recording works: the track scene loops on a 5.6s cycle. */
+.rec-scene-lane {
+	transform-box: fill-box;
+	transform-origin: left center;
+	animation: rec-lane-grow 5.6s cubic-bezier(0.45, 0, 0.2, 1) infinite;
+}
+.rec-scene-playhead {
+	animation: rec-scene-playhead 5.6s cubic-bezier(0.45, 0, 0.2, 1) infinite;
+}
+.rec-scene-part {
+	offset-rotate: 0deg;
+	animation: rec-scene-part 2.4s cubic-bezier(0.45, 0, 0.2, 1) var(--d, 0s)
+		infinite;
+}
+.rec-scene-link {
+	transform-box: fill-box;
+	transform-origin: center;
+	animation: rec-scene-link 2.4s ease-out 1.6s infinite;
+}
+.rec-scene-switch {
+	animation: rec-scene-switch 0.3s ease var(--d, 0s) both;
+}
+.rec-scene-knob {
+	animation: rec-scene-knob 0.35s cubic-bezier(0.2, 0.8, 0.2, 1) var(--d, 0s)
+		both;
+}
+
+@keyframes rec-draw {
+	to {
+		stroke-dashoffset: 0;
+	}
+}
+@keyframes rec-march {
+	to {
+		stroke-dashoffset: -6.2;
+	}
+}
+@keyframes rec-spark {
+	from {
+		opacity: 0;
+		transform: scale(0.2);
+	}
+	60% {
+		opacity: 1;
+		transform: scale(1.2);
+	}
+	to {
+		opacity: 1;
+		transform: scale(1);
+	}
+}
+@keyframes rec-bob {
+	0%,
+	100% {
+		transform: translateY(0);
+	}
+	50% {
+		transform: translateY(-4px);
+	}
+}
+@keyframes rec-rise {
+	from {
+		opacity: 0;
+		transform: translateY(10px);
+	}
+	to {
+		opacity: 1;
+		transform: none;
+	}
+}
+@keyframes rec-fade {
+	from {
+		opacity: 0;
+	}
+	to {
+		opacity: 1;
+	}
+}
+@keyframes rec-pulse {
+	50% {
+		opacity: 0.35;
+	}
+}
+@keyframes rec-ring-drain {
+	from {
+		stroke-dashoffset: 0;
+	}
+	to {
+		stroke-dashoffset: 340;
+	}
+}
+@keyframes rec-countdown-pop {
+	0% {
+		opacity: 0;
+		transform: scale(1.5);
+		filter: blur(6px);
+	}
+	18% {
+		opacity: 1;
+		transform: scale(1);
+		filter: blur(0);
+	}
+	80% {
+		opacity: 1;
+		transform: scale(0.96);
+	}
+	100% {
+		opacity: 0;
+		transform: scale(0.75);
+	}
+}
+@keyframes rec-guide-cursor {
+	0%,
+	8% {
+		transform: translate(120px, 150px);
+	}
+	28%,
+	40% {
+		transform: translate(275px, 46px);
+	}
+	62%,
+	78% {
+		transform: translate(266px, 106px);
+	}
+	100% {
+		transform: translate(120px, 150px);
+	}
+}
+@keyframes rec-guide-knob {
+	0%,
+	33% {
+		transform: translateX(0);
+	}
+	38%,
+	92% {
+		transform: translateX(12px);
+	}
+	100% {
+		transform: translateX(0);
+	}
+}
+@keyframes rec-guide-switch {
+	0% {
+		fill: var(--rec-ctl-active);
+	}
+	34% {
+		fill: var(--rec-accent);
+	}
+	94% {
+		fill: var(--rec-ctl-active);
+	}
+}
+@keyframes rec-guide-share {
+	0%,
+	66% {
+		transform: scale(1);
+	}
+	70% {
+		transform: scale(0.94);
+	}
+	76%,
+	100% {
+		transform: scale(1);
+	}
+}
+@keyframes rec-guide-ripple {
+	0%,
+	31% {
+		opacity: 0;
+		transform: scale(0.4);
+	}
+	33% {
+		opacity: 0.5;
+	}
+	42%,
+	100% {
+		opacity: 0;
+		transform: scale(1.8);
+	}
+}
+@keyframes rec-guide-ripple-2 {
+	0%,
+	65% {
+		opacity: 0;
+		transform: scale(0.4);
+	}
+	67% {
+		opacity: 0.5;
+	}
+	76%,
+	100% {
+		opacity: 0;
+		transform: scale(1.8);
+	}
+}
+@keyframes rec-lane-grow {
+	0% {
+		transform: scaleX(0);
+	}
+	62%,
+	92% {
+		transform: scaleX(1);
+	}
+	100% {
+		transform: scaleX(1);
+		opacity: 0;
+	}
+}
+@keyframes rec-scene-playhead {
+	0% {
+		transform: translateX(0);
+	}
+	62%,
+	92% {
+		transform: translateX(var(--span, 200px));
+	}
+	100% {
+		transform: translateX(var(--span, 200px));
+		opacity: 0;
+	}
+}
+@keyframes rec-scene-part {
+	0% {
+		offset-distance: 0%;
+		opacity: 0;
+	}
+	12% {
+		opacity: 1;
+	}
+	80% {
+		opacity: 1;
+	}
+	100% {
+		offset-distance: 100%;
+		opacity: 0;
+	}
+}
+@keyframes rec-scene-link {
+	0% {
+		transform: scale(1);
+	}
+	20% {
+		transform: scale(1.12);
+	}
+	50%,
+	100% {
+		transform: scale(1);
+	}
+}
+@keyframes rec-scene-switch {
+	from {
+		fill: var(--rec-ctl-active);
+	}
+	to {
+		fill: var(--rec-accent);
+	}
+}
+@keyframes rec-scene-knob {
+	from {
+		transform: translateX(0);
+	}
+	to {
+		transform: translateX(12px);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.rec-boil {
+		filter: none;
+	}
+	.rec-draw,
+	.rec-spark,
+	.rec-rise,
+	.rec-fade,
+	.rec-scene-switch,
+	.rec-scene-knob {
+		animation-duration: 0.01ms;
+		animation-delay: 0s;
+	}
+	.rec-march,
+	.rec-bob,
+	.rec-pulse,
+	.rec-guide-cursor,
+	.rec-guide-ripple,
+	.rec-guide-share,
+	.rec-scene-lane,
+	.rec-scene-playhead,
+	.rec-scene-part,
+	.rec-scene-link,
+	.rec-squiggle-progress.is-waiting {
+		animation: none;
+	}
+	.rec-guide-knob {
+		animation: none;
+		transform: translateX(12px);
+	}
+	.rec-guide-switch {
+		animation: none;
+		fill: var(--rec-accent);
+	}
+}

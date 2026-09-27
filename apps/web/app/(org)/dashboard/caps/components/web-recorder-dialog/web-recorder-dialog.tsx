@@ -12,16 +12,13 @@ import {
 import clsx from "clsx";
 import {
 	CameraIcon,
-	CameraOffIcon,
 	LoaderCircleIcon,
 	MicIcon,
-	MicOffIcon,
 	MonitorIcon,
-	MonitorOffIcon,
-	MonitorUpIcon,
 	PauseIcon,
 	PlayIcon,
 	RotateCcwIcon,
+	Volume2Icon,
 } from "lucide-react";
 import {
 	type CSSProperties,
@@ -37,27 +34,25 @@ import {
 	CameraPreviewWindow,
 	type CameraPreviewWindowHandle,
 } from "./CameraPreviewWindow";
+import { HowRecordingWorks } from "./how-recording-works";
 import { InProgressRecordingBar } from "./InProgressRecordingBar";
+import { DeviceMenu, OptionsMenu, RecordButton } from "./recorder-dock";
 import {
-	DeviceMenu,
-	DockButton,
-	MoreMenu,
-	RecordButton,
-} from "./recorder-dock";
-import {
+	BoilFilter,
 	CountdownDial,
+	Doodle,
 	formatClock,
-	LiveDot,
 	LiveVideo,
 	MicMeter,
-	PickingScreen,
-	TileLabel,
-	TrackStrip,
-	UploadStream,
+	Squiggle,
+	Switch,
+	TrackRow,
 	useLiveStream,
 	useMicLevel,
-} from "./recorder-takeover";
+	Waveform,
+} from "./recorder-parts";
 import type { RecordingMode } from "./recording-mode";
+import { SystemAudioGuide } from "./system-audio-guide";
 import { useCameraDevices } from "./useCameraDevices";
 import { useDevicePreferences } from "./useDevicePreferences";
 import { useDialogInteractions } from "./useDialogInteractions";
@@ -65,6 +60,7 @@ import { useMicrophoneDevices } from "./useMicrophoneDevices";
 import { useWebRecorder } from "./useWebRecorder";
 import { FREE_PLAN_MAX_RECORDING_MS } from "./web-recorder-constants";
 import { WebRecorderDialogHeader } from "./web-recorder-dialog-header";
+import "./recorder.css";
 
 const recoveredRecordingTimeFormatter = new Intl.DateTimeFormat(undefined, {
 	dateStyle: "medium",
@@ -91,29 +87,45 @@ const SURFACE_LABELS: Record<Exclude<RecordingMode, "camera">, string> = {
 	tab: "Browser tab",
 };
 
+const WAVE_SAMPLE_MS = 150;
+
 type SharedScreen = {
 	stream: MediaStream;
 	surface: Exclude<RecordingMode, "camera">;
 };
 
-const Tile = ({
+const joinWords = (words: string[]) =>
+	words.length <= 1
+		? (words[0] ?? "")
+		: `${words.slice(0, -1).join(", ")} and ${words[words.length - 1]}`;
+
+const MediaLabel = ({
 	children,
 	className,
 }: {
 	children: ReactNode;
 	className?: string;
 }) => (
-	<div
+	<span
 		className={clsx(
-			"relative aspect-video w-full overflow-hidden rounded-[1.25rem] bg-[#18191c] ring-1 ring-inset ring-white/[0.06]",
+			"absolute inline-flex h-6 items-center gap-1.5 rounded-md bg-black/55 px-2 text-[12px] font-medium text-white backdrop-blur-md",
 			className,
 		)}
 	>
 		{children}
-	</div>
+	</span>
 );
 
-const TileMessage = ({
+const LiveDot = ({ paused = false }: { paused?: boolean }) => (
+	<span
+		className={clsx(
+			"size-1.5 shrink-0 rounded-full",
+			paused ? "bg-current opacity-50" : "rec-pulse bg-[var(--rec-red)]",
+		)}
+	/>
+);
+
+const EmptyTile = ({
 	icon,
 	title,
 	body,
@@ -124,42 +136,20 @@ const TileMessage = ({
 	body: string;
 	action?: ReactNode;
 }) => (
-	<div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-6 text-center">
-		<span className="flex size-12 items-center justify-center rounded-full bg-white/[0.06] text-white/70">
+	<div className="absolute inset-0 flex flex-col items-center justify-center gap-2.5 px-6 text-center">
+		<span className="flex size-10 items-center justify-center rounded-full bg-[var(--rec-ctl)] text-[var(--rec-text-2)]">
 			{icon}
 		</span>
-		<div className="flex max-w-xs flex-col gap-1">
-			<span className="text-[0.9375rem] font-semibold text-white">{title}</span>
-			<span className="text-[0.8125rem] leading-snug text-white/50">
+		<div className="flex max-w-[17rem] flex-col gap-0.5">
+			<span className="text-[14px] font-medium text-[var(--rec-text-1)]">
+				{title}
+			</span>
+			<span className="text-[13px] leading-snug text-[var(--rec-text-2)]">
 				{body}
 			</span>
 		</div>
 		{action}
 	</div>
-);
-
-const PillButton = ({
-	onClick,
-	children,
-	tone = "light",
-	disabled,
-}: {
-	onClick: () => void;
-	children: ReactNode;
-	tone?: "light" | "blue";
-	disabled?: boolean;
-}) => (
-	<button
-		type="button"
-		onClick={onClick}
-		disabled={disabled}
-		className={clsx(
-			"mt-1 inline-flex h-9 items-center gap-2 rounded-full px-4 text-[0.8125rem] font-medium transition-[filter,transform] hover:brightness-110 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#4785FF] focus-visible:ring-offset-2 focus-visible:ring-offset-[#18191c] disabled:opacity-50",
-			tone === "blue" ? "bg-[#4785FF] text-white" : "bg-white text-[#111214]",
-		)}
-	>
-		{children}
-	</button>
 );
 
 export const WebRecorderDialog = () => {
@@ -567,6 +557,8 @@ export const WebRecorderDialog = () => {
 		if (!next) {
 			void resetState();
 			stopSharing();
+			setHowOpen(false);
+			setAudioGuideOpen(false);
 			setSelectedCameraId(null);
 			setRecordingMode("fullscreen");
 		}
@@ -646,8 +638,28 @@ export const WebRecorderDialog = () => {
 			: previewStream;
 	const micLevel = useMicLevel(
 		selectedMicId,
-		open && (stage === "setup" || stage === "starting"),
+		open &&
+			(stage === "setup" ||
+				stage === "starting" ||
+				stage === "countdown" ||
+				stage === "recording"),
 	);
+	const [micSamples, setMicSamples] = useState<number[]>([]);
+	const micLevelRef = useRef(micLevel);
+	micLevelRef.current = micLevel;
+	useEffect(() => {
+		if (!isRecording) {
+			if (phase === "idle") setMicSamples([]);
+			return;
+		}
+		if (isPaused) return;
+		const interval = window.setInterval(() => {
+			setMicSamples((samples) => [...samples, micLevelRef.current]);
+		}, WAVE_SAMPLE_MS);
+		return () => window.clearInterval(interval);
+	}, [isRecording, isPaused, phase]);
+	const [howOpen, setHowOpen] = useState(false);
+	const [audioGuideOpen, setAudioGuideOpen] = useState(false);
 
 	useEffect(() => {
 		if (countdown === null) return;
@@ -668,24 +680,81 @@ export const WebRecorderDialog = () => {
 	}, [isRecording, isPaused, recordingTimerDisplayMs]);
 
 	const setupLocked = stage !== "setup";
-	const willRecordScreen = sharedScreen !== null || !cameraEnabled;
-	const recordLabel =
-		sharedScreen || cameraEnabled
-			? "Start recording"
-			: "Choose a screen and start recording";
+	const screenOn = live ? screenMode : sharedScreen !== null;
 	const systemAudioOn =
 		systemAudioEnabled &&
 		(live
 			? screenMode && (recordingScreen?.getAudioTracks().length ?? 0) > 0
 			: sharedScreen
 				? sharedScreen.stream.getAudioTracks().length > 0
-				: willRecordScreen);
+				: true);
+	const sourceWords = [
+		...(screenOn ? ["screen"] : []),
+		...(cameraEnabled ? ["camera"] : []),
+		...(micEnabled ? ["mic"] : []),
+		...(screenSupported && systemAudioOn && (screenOn || !cameraEnabled)
+			? ["computer sound"]
+			: []),
+	];
+	const trackCount = sourceWords.length;
+	const recordLabel =
+		sharedScreen || cameraEnabled
+			? "Start recording"
+			: "Choose a screen and start recording";
+	const showAudioGuide =
+		(sharePending && systemAudioEnabled) || (audioGuideOpen && !live);
+	const scaleMs = Math.max(
+		60_000,
+		Math.ceil((durationMs + 6_000) / 60_000) * 60_000,
+	);
+	const playheadPct = Math.min(100, (durationMs / scaleMs) * 100);
+	const sentBytes = chunkUploads.reduce(
+		(total, chunk) =>
+			total +
+			(chunk.status === "complete" ? chunk.sizeBytes : chunk.uploadedBytes),
+		0,
+	);
+	const partsSent = chunkUploads.filter(
+		(chunk) => chunk.status === "complete",
+	).length;
+	const totalBytes = Math.max(
+		recordedBytes,
+		chunkUploads.reduce((total, chunk) => total + chunk.sizeBytes, 0),
+	);
+	const saveProgress =
+		phase === "uploading" && totalBytes > 0
+			? Math.min(0.99, sentBytes / totalBytes)
+			: null;
+
+	const segment = (label: ReactNode) => (
+		<span
+			className="rec-segment absolute inset-y-1.5 left-0 flex items-center overflow-hidden rounded-md pl-2.5 text-[12px] font-medium transition-[width] duration-500 ease-out"
+			style={{ width: `${Math.max(playheadPct, 0.8)}%` }}
+		>
+			<span className="relative truncate">{label}</span>
+		</span>
+	);
+	const notRecording = (
+		<span className="text-[13px] text-[var(--rec-text-3)]">Not recording</span>
+	);
+	const laneText = (text: string) => (
+		<span className="truncate px-2 text-[13px] text-[var(--rec-text-1)]">
+			{text}
+		</span>
+	);
+	const offText = (text = "Off") => (
+		<span className="truncate px-2 text-[13px] text-[var(--rec-text-3)]">
+			{text}
+		</span>
+	);
 
 	const screenTile = screenSupported && (
-		<Tile
+		<div
 			className={clsx(
-				!screenStream &&
-					"bg-transparent ring-0 [background-image:linear-gradient(135deg,rgba(255,255,255,0.035),rgba(255,255,255,0.01))]",
+				"rec-tile relative overflow-hidden rounded-[10px]",
+				screenStream
+					? "bg-[var(--rec-media)]"
+					: "bg-[var(--rec-card-2)] shadow-[inset_0_0_0_1px_var(--rec-line)]",
 			)}
 		>
 			{screenStream ? (
@@ -693,63 +762,52 @@ export const WebRecorderDialog = () => {
 					<LiveVideo
 						stream={screenStream}
 						mirror={false}
-						className="absolute inset-0 size-full bg-black object-contain"
+						className="absolute inset-0 size-full object-contain"
 					/>
-					<TileLabel className="absolute left-3 top-3">
+					<MediaLabel className="left-2.5 top-2.5">
 						{live ? (
 							<LiveDot paused={isPaused} />
 						) : (
 							<MonitorIcon className="size-3.5" aria-hidden />
 						)}
 						Screen
-						{sharedScreen && (
-							<span className="text-white/55">
-								· {SURFACE_LABELS[sharedScreen.surface]}
-							</span>
-						)}
-					</TileLabel>
-					{stage === "setup" && sharedScreen && (
+					</MediaLabel>
+				</>
+			) : sharePending ? (
+				<EmptyTile
+					icon={<LoaderCircleIcon className="size-[18px] animate-spin" />}
+					title="Pick what to share"
+					body="Choose a screen, window or tab in your browser's popup, then click Share."
+				/>
+			) : (
+				<EmptyTile
+					icon={<MonitorIcon className="size-[18px]" />}
+					title="Share your screen"
+					body="A screen, window or tab. It records on its own track."
+					action={
 						<button
 							type="button"
+							className="rec-btn mt-1"
 							onClick={() => void shareScreen()}
-							className="absolute right-3 top-3 inline-flex h-7 items-center rounded-full bg-black/55 px-3 text-[0.75rem] font-medium text-white backdrop-blur-md transition-colors hover:bg-black/75"
+							disabled={setupLocked}
 						>
-							Change
+							Choose what to share
 						</button>
-					)}
-				</>
-			) : (
-				<>
-					<span className="pointer-events-none absolute inset-0 rounded-[1.25rem] border-[1.5px] border-dashed border-white/15" />
-					{sharePending ? (
-						<TileMessage
-							icon={<LoaderCircleIcon className="size-5 animate-spin" />}
-							title="Pick what to share"
-							body="Choose a screen, window or tab in your browser's popup, then click Share."
-						/>
-					) : (
-						<TileMessage
-							icon={<MonitorUpIcon className="size-5" />}
-							title="Share your screen"
-							body="A screen, window or tab. It records on its own track."
-							action={
-								<PillButton
-									tone="blue"
-									onClick={() => void shareScreen()}
-									disabled={setupLocked}
-								>
-									Choose what to share
-								</PillButton>
-							}
-						/>
-					)}
-				</>
+					}
+				/>
 			)}
-		</Tile>
+		</div>
 	);
 
 	const cameraTile = (
-		<Tile>
+		<div
+			className={clsx(
+				"rec-tile relative overflow-hidden rounded-[10px]",
+				cameraEnabled
+					? "bg-[var(--rec-media)]"
+					: "bg-[var(--rec-card-2)] shadow-[inset_0_0_0_1px_var(--rec-line)]",
+			)}
+		>
 			{cameraEnabled ? (
 				cameraStream ? (
 					<LiveVideo
@@ -759,300 +817,121 @@ export const WebRecorderDialog = () => {
 				) : (
 					<div className="absolute inset-0 flex items-center justify-center">
 						<LoaderCircleIcon
-							className="size-6 animate-spin text-white/50"
+							className="size-5 animate-spin text-white/50"
 							aria-hidden
 						/>
 					</div>
 				)
 			) : availableCameras.length === 0 ? (
-				<TileMessage
-					icon={<CameraIcon className="size-5" />}
+				<EmptyTile
+					icon={<CameraIcon className="size-[18px]" />}
 					title="Show your face"
 					body="Allow your camera and mic to record yourself on separate tracks."
 					action={
-						<PillButton
+						<button
+							type="button"
+							className="rec-btn mt-1"
 							onClick={() => void requestAccess({ video: true, audio: true })}
 							disabled={requestingAccess || setupLocked}
 						>
 							Allow camera and mic
-						</PillButton>
+						</button>
 					}
 				/>
 			) : (
-				<TileMessage
-					icon={<CameraOffIcon className="size-5" />}
+				<EmptyTile
+					icon={<CameraIcon className="size-[18px]" />}
 					title="Camera is off"
 					body="Turn it on to record yourself on a separate track."
 					action={
-						<PillButton onClick={toggleCamera} disabled={setupLocked}>
+						<button
+							type="button"
+							className="rec-btn mt-1"
+							onClick={toggleCamera}
+							disabled={setupLocked}
+						>
 							Turn on camera
-						</PillButton>
+						</button>
 					}
 				/>
 			)}
 			{cameraEnabled && (
-				<TileLabel className="absolute left-3 top-3">
+				<MediaLabel className="left-2.5 top-2.5">
 					{live ? (
 						<LiveDot paused={isPaused} />
 					) : (
 						<CameraIcon className="size-3.5" aria-hidden />
 					)}
 					Camera
-				</TileLabel>
+				</MediaLabel>
 			)}
 			{cameraEnabled && !live && (
-				<TileLabel className="absolute right-3 top-3 bg-black/40 text-white/75">
+				<MediaLabel className="right-2.5 top-2.5 bg-black/35 font-normal text-white/80">
 					Preview
-				</TileLabel>
+				</MediaLabel>
 			)}
-			<TileLabel className="absolute bottom-3 left-3">
-				{micEnabled ? (
-					<>
-						<MicIcon className="size-3.5" aria-hidden />
-						{stage === "setup" || stage === "starting" ? (
-							<MicMeter level={micLevel} />
-						) : (
-							"Mic"
-						)}
-					</>
-				) : (
-					<>
-						<MicOffIcon className="size-3.5 text-[#ff8587]" aria-hidden />
-						Muted
-					</>
-				)}
-			</TileLabel>
-		</Tile>
-	);
-
-	const tiles = (reserve: string) => (
-		<div
-			className={clsx(
-				"grid w-full gap-3",
-				screenSupported
-					? "max-w-[calc((100dvh_-_var(--reserve))_*_0.85)] lg:max-w-[min(1600px,calc((100dvh_-_var(--reserve))_*_3.4))] lg:grid-cols-2"
-					: "max-w-[min(1100px,calc((100dvh_-_var(--reserve))_*_1.77))]",
-			)}
-			style={{ "--reserve": reserve } as CSSProperties}
-		>
-			{screenTile}
-			{cameraTile}
 		</div>
 	);
 
-	const trackStrip = (
-		<TrackStrip
-			live={live}
-			paused={isPaused}
-			screen={
-				screenSupported ? (live ? screenMode : sharedScreen !== null) : null
-			}
-			camera={cameraEnabled}
-			mic={micEnabled}
-			systemAudio={screenSupported ? systemAudioOn : null}
-		/>
-	);
-
-	const notices = (
+	const transport = live ? (
 		<>
-			{screenCaptureWarning && (
-				<p className="max-w-md text-center text-[0.8125rem] leading-snug text-white/50">
-					This browser can only record your camera. Use Chrome, Edge or Cap
-					Desktop on a computer to record your screen too.
-				</p>
-			)}
-			{!isBrowserSupported && unsupportedReason && (
-				<p className="max-w-md rounded-xl bg-[#ff4d4f]/10 px-3 py-2 text-center text-[0.8125rem] leading-snug text-[#ff9a9b]">
-					{unsupportedReason}
-				</p>
-			)}
-			{recoveredDownloads.length > 0 && (
-				<div className="flex w-full max-w-md flex-col gap-1.5 rounded-2xl border border-white/[0.08] bg-white/[0.03] p-2.5">
-					<span className="px-1 text-[0.8125rem] font-medium text-white/85">
-						Recovered recordings
-					</span>
-					{recoveredDownloads.map((download) => (
-						<div
-							key={download.id}
-							className="flex items-center justify-between gap-3 rounded-lg bg-white/[0.04] px-2.5 py-2 text-xs text-white"
-						>
-							<div className="min-w-0">
-								<div className="truncate font-medium">{download.fileName}</div>
-								<div className="text-white/45">
-									{recoveredRecordingTimeFormatter.format(
-										new Date(download.createdAt),
-									)}
-								</div>
-							</div>
-							<div className="flex shrink-0 items-center gap-3">
-								<a
-									href={download.url}
-									download={download.fileName}
-									className="font-medium text-[#7ea8ff] hover:text-white"
-									onClick={() =>
-										setTimeout(() => dismissRecoveredDownload(download.id), 500)
-									}
-								>
-									Download
-								</a>
-								<button
-									type="button"
-									className="text-white/45 hover:text-white"
-									onClick={() => dismissRecoveredDownload(download.id)}
-								>
-									Dismiss
-								</button>
-							</div>
-						</div>
-					))}
-				</div>
-			)}
-		</>
-	);
-
-	const stageOverlay =
-		stage === "countdown" ? (
-			<div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-6 bg-[#0c0c0e]/70 px-4 text-center backdrop-blur-md">
-				<CountdownDial value={countdown ?? 1} />
-				<div className="flex flex-col items-center gap-2">
-					<h2 className="text-balance text-2xl font-semibold tracking-tight text-white sm:text-3xl">
-						Get ready
-					</h2>
-					<p className="max-w-md text-balance text-[0.9375rem] leading-relaxed text-white/60">
-						{screenMode
-							? "When the countdown ends, switch to what you're sharing and start presenting."
-							: "Recording starts when the countdown ends."}
-					</p>
-				</div>
+			<div className="flex items-center gap-1.5">
 				<button
 					type="button"
-					onClick={() => finishCountdownRef.current?.()}
-					className="h-9 rounded-full bg-white/10 px-4 text-[0.8125rem] font-medium text-white transition-colors hover:bg-white/15"
-				>
-					Start now
-				</button>
-			</div>
-		) : stage === "picking" ? (
-			<div className="absolute inset-0 z-10 flex items-start justify-center bg-[#0c0c0e]/80 px-4 pt-[16vh] backdrop-blur-md">
-				<PickingScreen />
-			</div>
-		) : null;
-
-	const studio = (
-		<div className="relative flex min-h-0 flex-1 flex-col">
-			<main className="flex min-h-0 flex-1 flex-col items-center justify-center gap-5 overflow-y-auto px-4 py-5 sm:px-8">
-				{live && screenMode && (
-					<div className="flex max-w-2xl items-center gap-2.5 rounded-full border border-[#4785FF]/30 bg-[#4785FF]/10 py-1.5 pl-2 pr-4 text-[0.8125rem] text-white/85">
-						<span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-[#4785FF] text-white">
-							<MonitorIcon className="size-3.5" aria-hidden />
-						</span>
-						<span>
-							<span className="font-medium text-white">
-								Now switch to what you're sharing.
-							</span>{" "}
-							This tab keeps your controls. Come back here to stop.
-						</span>
-					</div>
-				)}
-				{tiles(live ? "27rem" : "19rem")}
-				{trackStrip}
-				{live && (
-					<div className="w-full max-w-3xl">
-						<UploadStream
-							chunks={chunkUploads}
-							recordedBytes={recordedBytes}
-							recording
-							paused={isPaused}
-						/>
-					</div>
-				)}
-				{!live && notices}
-			</main>
-			{stageOverlay}
-		</div>
-	);
-
-	const dock = live ? (
-		<>
-			<div className="flex items-center justify-end gap-1 sm:gap-2">
-				<DockButton
-					icon={RotateCcwIcon}
-					label="Start over"
-					on
+					className="rec-btn is-ghost"
 					disabled={isRestarting}
 					onClick={() => {
 						void restartRecording();
 					}}
-				/>
-				<DockButton
-					icon={isPaused ? PlayIcon : PauseIcon}
-					label={isPaused ? "Resume" : "Pause"}
-					on
+				>
+					<RotateCcwIcon className="size-3.5" aria-hidden />
+					<span className="hidden sm:inline">Start over</span>
+				</button>
+				<button
+					type="button"
+					className="rec-btn"
 					onClick={() => {
 						void (isPaused ? resumeRecording() : pauseRecording());
 					}}
-				/>
+				>
+					{isPaused ? (
+						<PlayIcon className="size-3.5" aria-hidden />
+					) : (
+						<PauseIcon className="size-3.5" aria-hidden />
+					)}
+					{isPaused ? "Resume" : "Pause"}
+				</button>
 			</div>
 			<RecordButton
 				recording
 				label="Stop recording"
 				onClick={handleStopClick}
 			/>
-			<div className="flex items-center justify-start">
-				<div className="flex min-w-[7.5rem] flex-col gap-1 px-2">
-					<span className="flex items-center gap-2 text-[1.375rem] font-semibold leading-none tabular-nums text-white">
-						<LiveDot paused={isPaused} />
-						{formatClock(recordingTimerDisplayMs)}
-					</span>
-					<span className="text-[0.75rem] leading-none text-white/45">
-						{isPaused ? "Paused" : user.isPro ? "Recording" : "left on Free"}
-					</span>
-				</div>
+			<div className="flex flex-col items-end gap-0.5">
+				<span className="flex items-center gap-2 text-[17px] font-medium tabular-nums leading-none">
+					<LiveDot paused={isPaused} />
+					{formatClock(recordingTimerDisplayMs)}
+				</span>
+				<span className="text-[12px] leading-none text-[var(--rec-text-3)]">
+					{isPaused ? "Paused" : user.isPro ? "Recording" : "left on Free"}
+				</span>
 			</div>
 		</>
 	) : (
 		<>
-			<div className="flex items-center justify-end gap-0.5 sm:gap-1">
-				<DockButton
-					icon={micEnabled ? MicIcon : MicOffIcon}
-					label={micEnabled ? "Mute" : "Unmute"}
-					on={micEnabled}
-					disabled={setupLocked || requestingAccess}
-					onClick={toggleMic}
-					menu={
-						availableMics.length > 0 && (
-							<DeviceMenu
-								title="Microphone"
-								devices={availableMics}
-								selectedId={selectedMicId}
-								fallbackName="Microphone"
-								offLabel="No microphone"
-								disabled={setupLocked}
-								onSelect={handleMicChange}
-							/>
-						)
-					}
-				/>
-				<DockButton
-					icon={cameraEnabled ? CameraIcon : CameraOffIcon}
-					label={cameraEnabled ? "Stop camera" : "Start camera"}
-					on={cameraEnabled}
-					disabled={setupLocked || requestingAccess}
-					onClick={toggleCamera}
-					menu={
-						availableCameras.length > 0 && (
-							<DeviceMenu
-								title="Camera"
-								devices={availableCameras}
-								selectedId={selectedCameraId}
-								fallbackName="Camera"
-								offLabel="No camera"
-								disabled={setupLocked}
-								onSelect={handleCameraChange}
-							/>
-						)
-					}
-				/>
+			<div className="min-w-0 text-[13px] leading-snug">
+				<span className="block truncate text-[var(--rec-text-1)]">
+					{trackCount === 0
+						? "Nothing switched on yet"
+						: `${joinWords(sourceWords).replace(/^./, (c) => c.toUpperCase())}`}
+				</span>
+				<span className="block truncate text-[var(--rec-text-3)]">
+					{trackCount === 0
+						? screenSupported
+							? "Press record to choose a screen"
+							: "Turn on your camera to record"
+						: `${trackCount} separate ${trackCount === 1 ? "track" : "tracks"}`}
+				</span>
 			</div>
 			<RecordButton
 				recording={false}
@@ -1069,116 +948,547 @@ export const WebRecorderDialog = () => {
 					void handleRecordClick();
 				}}
 			/>
-			<div className="flex items-center justify-start gap-0.5 sm:gap-1">
-				{screenSupported && (
-					<DockButton
-						icon={sharedScreen ? MonitorOffIcon : MonitorUpIcon}
-						label={sharedScreen ? "Stop sharing" : "Share screen"}
-						on
-						disabled={setupLocked || sharePending}
-						onClick={() => {
-							if (sharedScreen) stopSharing();
-							else void shareScreen();
-						}}
-					/>
-				)}
-				<MoreMenu
-					disabled={setupLocked}
-					systemAudio={
-						screenSupported
-							? {
-									enabled: systemAudioEnabled,
-									hint: sharedScreen
-										? "Takes effect next time you choose what to share."
-										: null,
-									onChange: handleSystemAudioChange,
-								}
-							: null
-					}
-					rememberDevices={rememberDevices}
-					onRememberDevicesChange={handleRememberDevicesChange}
-				/>
+			<div className="flex flex-col items-end gap-0.5">
+				<span className="text-[17px] font-medium tabular-nums leading-none text-[var(--rec-text-3)]">
+					{formatClock(user.isPro ? 0 : FREE_PLAN_MAX_RECORDING_MS)}
+				</span>
+				<span className="text-[12px] leading-none text-[var(--rec-text-3)]">
+					{user.isPro ? "Ready" : "on Free"}
+				</span>
 			</div>
 		</>
 	);
 
-	const statusView = (
-		title: string,
-		body: string,
-		extra?: ReactNode,
-		spinner = true,
-	) => (
-		<main className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto px-4 py-10">
-			<div className="flex w-full max-w-xl flex-col items-center gap-5 text-center">
-				{spinner && (
-					<LoaderCircleIcon
-						className="size-8 animate-spin text-[#4785FF]"
-						aria-hidden
-					/>
-				)}
-				<h2 className="text-balance text-2xl font-semibold tracking-tight text-white sm:text-3xl">
-					{title}
-				</h2>
-				<p className="text-balance text-[0.9375rem] leading-relaxed text-white/60">
-					{body}
-				</p>
-				{extra}
+	const cameraName =
+		availableCameras.find((camera) => camera.deviceId === selectedCameraId)
+			?.label || "Camera";
+
+	const tracks = (
+		<section className="rec-card flex shrink-0 flex-col gap-1.5 p-1.5">
+			<header className="flex h-8 items-center justify-between gap-3 pl-2 pr-0.5">
+				<span className="text-[12px] font-medium text-[var(--rec-text-2)]">
+					Tracks
+				</span>
+				<span className="flex min-w-0 items-center gap-2">
+					{live ? (
+						<span className="flex min-w-0 items-center gap-2 truncate text-[12px] text-[var(--rec-text-2)]">
+							<svg
+								viewBox="0 0 24 8"
+								className="h-2 w-6 shrink-0"
+								aria-hidden="true"
+							>
+								<path
+									d="M 1 4 L 23 4"
+									className="rec-ink rec-march"
+									style={{ strokeWidth: 2, stroke: "var(--rec-accent)" }}
+								/>
+							</svg>
+							<span className="truncate">
+								{partsSent === 0
+									? "Uploading as you record"
+									: `Uploading as you record · ${partsSent} ${partsSent === 1 ? "part" : "parts"} sent`}
+							</span>
+						</span>
+					) : (
+						<span className="hidden truncate text-[12px] text-[var(--rec-text-3)] sm:inline">
+							Each track stays separate in the editor
+						</span>
+					)}
+					{!live && (
+						<OptionsMenu
+							disabled={setupLocked}
+							rememberDevices={rememberDevices}
+							onRememberDevicesChange={handleRememberDevicesChange}
+						/>
+					)}
+				</span>
+			</header>
+			<div
+				className="relative -mb-0.5 h-4 [--gutter:calc(6px+8.5rem+8px)] sm:[--gutter:calc(6px+10rem+8px)]"
+				aria-hidden="true"
+			>
+				{[0, 1, 2, 3, 4].map((tick) => (
+					<span
+						key={tick}
+						className="absolute top-0 flex h-full items-start gap-1 text-[11px] tabular-nums leading-none text-[var(--rec-text-3)]"
+						style={{
+							left: `calc(var(--gutter) + (100% - var(--gutter) - 6px) * ${tick / 4})`,
+						}}
+					>
+						<span className="h-full w-px bg-[var(--rec-line-strong)]" />
+						{tick < 4 && formatClock((scaleMs / 4) * tick)}
+					</span>
+				))}
 			</div>
+			<ul className="relative flex flex-col gap-1.5 [--gutter:calc(6px+8.5rem+8px)] sm:[--gutter:calc(6px+10rem+8px)]">
+				{screenSupported && (
+					<TrackRow
+						kind="screen"
+						icon={MonitorIcon}
+						label="Screen"
+						on={screenOn}
+						actions={
+							!live && (
+								<>
+									{sharedScreen && (
+										<button
+											type="button"
+											className="rec-btn is-ghost !h-7 !px-2.5 !text-[12px]"
+											onClick={() => void shareScreen()}
+											disabled={setupLocked || sharePending}
+										>
+											Change
+										</button>
+									)}
+									<Switch
+										label="Share screen"
+										on={sharedScreen !== null}
+										disabled={setupLocked || sharePending}
+										onChange={(next) => {
+											if (next) void shareScreen();
+											else stopSharing();
+										}}
+									/>
+								</>
+							)
+						}
+					>
+						{live
+							? screenMode
+								? segment(SURFACE_LABELS[recordingMode])
+								: notRecording
+							: sharePending
+								? offText("Choose in your browser's popup")
+								: sharedScreen
+									? laneText(SURFACE_LABELS[sharedScreen.surface])
+									: offText("Not shared")}
+					</TrackRow>
+				)}
+				<TrackRow
+					kind="camera"
+					icon={CameraIcon}
+					label="Camera"
+					on={cameraEnabled}
+					actions={
+						!live &&
+						(availableCameras.length === 0 ? (
+							<button
+								type="button"
+								className="rec-btn !h-7 !px-2.5 !text-[12px]"
+								onClick={() => void requestAccess({ video: true, audio: true })}
+								disabled={requestingAccess || setupLocked}
+							>
+								Allow access
+							</button>
+						) : (
+							<Switch
+								label="Camera"
+								on={cameraEnabled}
+								disabled={setupLocked || requestingAccess}
+								onChange={toggleCamera}
+							/>
+						))
+					}
+				>
+					{live ? (
+						cameraEnabled ? (
+							segment(cameraName)
+						) : (
+							notRecording
+						)
+					) : cameraEnabled ? (
+						<DeviceMenu
+							title="Camera"
+							devices={availableCameras}
+							selectedId={selectedCameraId}
+							fallbackName="Camera"
+							disabled={setupLocked}
+							onSelect={handleCameraChange}
+						/>
+					) : (
+						offText(availableCameras.length === 0 ? "Needs permission" : "Off")
+					)}
+				</TrackRow>
+				<TrackRow
+					kind="mic"
+					icon={MicIcon}
+					label="Microphone"
+					on={micEnabled}
+					actions={
+						!live &&
+						(availableMics.length === 0 ? (
+							<button
+								type="button"
+								className="rec-btn !h-7 !px-2.5 !text-[12px]"
+								onClick={() =>
+									void requestAccess({ video: false, audio: true })
+								}
+								disabled={requestingAccess || setupLocked}
+							>
+								Allow access
+							</button>
+						) : (
+							<Switch
+								label="Microphone"
+								on={micEnabled}
+								disabled={setupLocked || requestingAccess}
+								onChange={toggleMic}
+							/>
+						))
+					}
+				>
+					{live ? (
+						micEnabled ? (
+							<>
+								{segment(null)}
+								<span className="pointer-events-none absolute inset-y-0 left-0 right-0">
+									<Waveform
+										samples={micSamples}
+										span={scaleMs / WAVE_SAMPLE_MS}
+									/>
+								</span>
+							</>
+						) : (
+							notRecording
+						)
+					) : micEnabled ? (
+						<>
+							<DeviceMenu
+								title="Microphone"
+								devices={availableMics}
+								selectedId={selectedMicId}
+								fallbackName="Microphone"
+								disabled={setupLocked}
+								onSelect={handleMicChange}
+							/>
+							<MicMeter level={micLevel} />
+						</>
+					) : (
+						offText(availableMics.length === 0 ? "Needs permission" : "Muted")
+					)}
+				</TrackRow>
+				{screenSupported && (
+					<TrackRow
+						kind="system"
+						icon={Volume2Icon}
+						label="System audio"
+						on={systemAudioOn && (live ? screenMode : true)}
+						actions={
+							!live && (
+								<>
+									{systemAudioEnabled && sharedScreen && !systemAudioOn ? (
+										<button
+											type="button"
+											className="rec-btn !h-7 !px-2.5 !text-[12px]"
+											onClick={() => void shareScreen()}
+											disabled={setupLocked || sharePending}
+										>
+											Choose again
+										</button>
+									) : (
+										<button
+											type="button"
+											className="rec-btn is-ghost !h-7 !px-2.5 !text-[12px]"
+											onClick={() => setAudioGuideOpen((value) => !value)}
+										>
+											How to share it
+										</button>
+									)}
+									<Switch
+										label="System audio"
+										on={systemAudioEnabled}
+										disabled={setupLocked}
+										onChange={(next) => {
+											handleSystemAudioChange(next);
+											if (next && !sharedScreen) setAudioGuideOpen(true);
+										}}
+									/>
+								</>
+							)
+						}
+					>
+						{live
+							? systemAudioOn && screenMode
+								? segment("Computer sound")
+								: notRecording
+							: systemAudioEnabled
+								? sharedScreen && !systemAudioOn
+									? offText("Choose your screen again to include it")
+									: laneText("Your computer's sound")
+								: offText()}
+					</TrackRow>
+				)}
+				{live && (
+					<span
+						className="rec-playhead pointer-events-none absolute inset-y-0 z-10 w-0.5 -translate-x-1/2 rounded-full bg-[var(--rec-red)] transition-[left] duration-500 ease-out"
+						style={{
+							left: `calc(var(--gutter) + (100% - var(--gutter) - 6px) * ${playheadPct / 100})`,
+						}}
+					>
+						<span className="absolute -top-1 left-1/2 size-2 -translate-x-1/2 rounded-full bg-[var(--rec-red)]" />
+					</span>
+				)}
+			</ul>
+		</section>
+	);
+
+	const notices = (screenCaptureWarning ||
+		(!isBrowserSupported && unsupportedReason) ||
+		recoveredDownloads.length > 0) && (
+		<div className="flex flex-col gap-1.5">
+			{screenCaptureWarning && (
+				<p className="px-2 text-[12px] leading-snug text-[var(--rec-text-2)]">
+					This browser can only record your camera. Use Chrome, Edge or Cap
+					Desktop on a computer to record your screen too.
+				</p>
+			)}
+			{!isBrowserSupported && unsupportedReason && (
+				<p className="px-2 text-[12px] leading-snug text-[var(--rec-red)]">
+					{unsupportedReason}
+				</p>
+			)}
+			{recoveredDownloads.map((download) => (
+				<div
+					key={download.id}
+					className="rec-card flex items-center justify-between gap-3 px-3 py-2 text-[12px]"
+				>
+					<div className="min-w-0">
+						<div className="truncate font-medium">
+							Recovered: {download.fileName}
+						</div>
+						<div className="text-[var(--rec-text-3)]">
+							{recoveredRecordingTimeFormatter.format(
+								new Date(download.createdAt),
+							)}
+						</div>
+					</div>
+					<div className="flex shrink-0 items-center gap-1">
+						<a
+							href={download.url}
+							download={download.fileName}
+							className="rec-btn !h-7 !px-2.5 !text-[12px]"
+							onClick={() =>
+								setTimeout(() => dismissRecoveredDownload(download.id), 500)
+							}
+						>
+							Download
+						</a>
+						<button
+							type="button"
+							className="rec-btn is-ghost !h-7 !px-2.5 !text-[12px]"
+							onClick={() => dismissRecoveredDownload(download.id)}
+						>
+							Dismiss
+						</button>
+					</div>
+				</div>
+			))}
+		</div>
+	);
+
+	const overlay =
+		stage === "countdown" ? (
+			<div className="rec-fade absolute inset-0 z-20 flex flex-col items-center justify-center gap-7 bg-[var(--rec-scrim)] px-4 text-center backdrop-blur-md">
+				<CountdownDial value={countdown ?? 1} />
+				<div className="flex flex-col items-center gap-1.5">
+					<h2 className="text-[20px] font-medium tracking-[-0.01em]">
+						Recording in {countdown}
+					</h2>
+					<p className="max-w-sm text-balance text-[14px] leading-relaxed text-[var(--rec-text-2)]">
+						{screenMode
+							? "When it starts, switch to what you're sharing and present as normal."
+							: "Look at the camera and start talking when it hits zero."}
+					</p>
+				</div>
+				<button
+					type="button"
+					className="rec-btn"
+					onClick={() => finishCountdownRef.current?.()}
+				>
+					Start now
+				</button>
+			</div>
+		) : stage === "picking" ? (
+			<div className="rec-fade absolute inset-0 z-20 flex flex-col items-center justify-center gap-5 bg-[var(--rec-scrim)] px-4 text-center backdrop-blur-md">
+				<Doodle kind="share" />
+				<div className="flex flex-col items-center gap-1.5">
+					<h2 className="text-[20px] font-medium tracking-[-0.01em]">
+						Choose what to share
+					</h2>
+					<p className="max-w-sm text-balance text-[14px] leading-relaxed text-[var(--rec-text-2)]">
+						Pick a screen, window or tab in your browser's popup, then click
+						Share.
+					</p>
+				</div>
+			</div>
+		) : null;
+
+	const studio = (
+		<main className="relative flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-2 pb-2 sm:px-3 sm:pb-3">
+			<section className="rec-card relative flex min-h-[15rem] flex-1 flex-col overflow-hidden">
+				{live && screenMode && (
+					<div className="rec-rise absolute left-1/2 top-3 z-10 flex max-w-[calc(100%-24px)] -translate-x-1/2 items-center gap-2 rounded-full bg-[var(--rec-card)] py-1 pl-1 pr-3.5 text-[13px] shadow-[var(--rec-pop-shadow)]">
+						<span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-[var(--rec-accent)] text-white">
+							<MonitorIcon className="size-3.5" aria-hidden />
+						</span>
+						<span className="truncate">
+							<span className="font-medium">
+								Switch to what you're sharing.
+							</span>{" "}
+							<span className="text-[var(--rec-text-2)]">
+								Come back to this tab to stop.
+							</span>
+						</span>
+					</div>
+				)}
+				<div
+					className={clsx(
+						"rec-stage min-h-0 flex-1 p-3 sm:p-4",
+						screenSupported ? "is-pair" : "is-single",
+					)}
+				>
+					<div className="rec-tiles">
+						{screenTile}
+						{cameraTile}
+					</div>
+				</div>
+				<footer className="grid h-16 shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-3 px-4 shadow-[0_-1px_0_var(--rec-line)]">
+					{transport}
+				</footer>
+			</section>
+			{tracks}
+			{notices}
 		</main>
 	);
 
-	const body =
-		stage === "finishing" ? (
-			statusView(
-				"Saving your recording",
-				"Your link is already live. The editor opens as soon as the last parts finish uploading.",
-				chunkUploads.length > 0 || recordedBytes > 0 ? (
-					<div className="w-full text-left">
-						<UploadStream
-							chunks={chunkUploads}
-							recordedBytes={recordedBytes}
-							recording={false}
+	const statusView = (
+		doodle: "upload" | "done" | "error",
+		title: string,
+		body: string,
+		extra?: ReactNode,
+	) => (
+		<main className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto px-4 pb-16 pt-6 text-center">
+			<Doodle kind={doodle} />
+			<h2
+				key={title}
+				className="rec-rise mt-6 text-balance text-[24px] font-medium tracking-[-0.01em]"
+			>
+				{title}
+			</h2>
+			<p
+				key={body}
+				className="rec-rise mt-2 max-w-md text-balance text-[15px] leading-relaxed text-[var(--rec-text-2)]"
+				style={{ "--d": "0.05s" } as CSSProperties}
+			>
+				{body}
+			</p>
+			{extra}
+		</main>
+	);
+
+	const savedTracks = (done: boolean) => (
+		<ul
+			className="rec-rise mt-8 flex flex-wrap items-center justify-center gap-1.5"
+			style={{ "--d": "0.15s" } as CSSProperties}
+		>
+			{sourceWords.map((word) => (
+				<li
+					key={word}
+					className="rec-track flex h-8 items-center gap-2 rounded-lg bg-[var(--rec-ctl)] pl-1 pr-3 text-[13px]"
+					data-kind={
+						word === "screen"
+							? "screen"
+							: word === "camera"
+								? "camera"
+								: word === "mic"
+									? "mic"
+									: "system"
+					}
+				>
+					<span className="rec-track-tile flex size-6 items-center justify-center rounded-md">
+						{word === "screen" ? (
+							<MonitorIcon className="size-3.5" aria-hidden />
+						) : word === "camera" ? (
+							<CameraIcon className="size-3.5" aria-hidden />
+						) : word === "mic" ? (
+							<MicIcon className="size-3.5" aria-hidden />
+						) : (
+							<Volume2Icon className="size-3.5" aria-hidden />
+						)}
+					</span>
+					{word.replace(/^./, (c) => c.toUpperCase())}
+					{done ? (
+						<svg viewBox="0 0 16 16" className="size-3.5" aria-hidden="true">
+							<path
+								className="rec-ink rec-draw"
+								pathLength={1}
+								style={{ strokeWidth: 2.2, stroke: "var(--rec-green)" }}
+								d="M 3 8.5 L 6.5 12 L 13 4.5"
+							/>
+						</svg>
+					) : (
+						<LoaderCircleIcon
+							className="size-3.5 animate-spin text-[var(--rec-text-3)]"
+							aria-hidden
 						/>
-					</div>
-				) : null,
-			)
-		) : stage === "opening" ? (
-			statusView(
-				"Opening the editor",
-				"Your recording is saved and your link is live. Every track is ready to edit.",
-				completedEditUrl ? (
-					<a
-						href={completedEditUrl}
-						className="rounded-full bg-[#4785FF] px-5 py-2.5 text-sm font-medium text-white hover:brightness-110"
-					>
-						Open the editor
-					</a>
-				) : null,
-			)
-		) : stage === "error" ? (
-			statusView(
-				"Your recording didn't finish saving",
-				"Download the recovered files from the bar at the top of the page, or close this and try again.",
-				<div className="flex gap-3">
-					{completedShareUrl && (
-						<Button variant="blue" size="sm" onClick={openCompletedShareUrl}>
-							Open recording
-						</Button>
 					)}
-					<Button variant="white" size="sm" onClick={handleClose}>
-						Close
-					</Button>
-				</div>,
-				false,
-			)
-		) : (
-			<>
-				{studio}
-				<footer className="grid shrink-0 grid-cols-[1fr_auto_1fr] items-center border-t border-white/[0.06] bg-[#111214] px-2 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 sm:px-6">
-					{dock}
-				</footer>
-			</>
-		);
+				</li>
+			))}
+		</ul>
+	);
+
+	const body =
+		stage === "finishing"
+			? statusView(
+					"upload",
+					"Saving your recording",
+					"Your link is already live. The editor opens as soon as the last parts land.",
+					<>
+						<div className="mt-9">
+							<Squiggle progress={saveProgress} />
+						</div>
+						{savedTracks(false)}
+					</>,
+				)
+			: stage === "opening"
+				? statusView(
+						"done",
+						"Opening the editor",
+						"Your recording is saved and your link is live. Every track is ready to edit.",
+						<>
+							{savedTracks(true)}
+							{completedEditUrl && (
+								<a
+									href={completedEditUrl}
+									className="rec-btn rec-rise mt-7"
+									style={{ "--d": "0.4s" } as CSSProperties}
+								>
+									Open the editor
+								</a>
+							)}
+						</>,
+					)
+				: stage === "error"
+					? statusView(
+							"error",
+							"Your recording didn't finish saving",
+							"Download the recovered files from the bar at the top of the page, or close this and try again.",
+							<div className="mt-7 flex gap-2">
+								{completedShareUrl && (
+									<button
+										type="button"
+										className="rec-btn is-accent"
+										onClick={openCompletedShareUrl}
+									>
+										Open recording
+									</button>
+								)}
+								<button type="button" className="rec-btn" onClick={handleClose}>
+									Close
+								</button>
+							</div>,
+						)
+					: studio;
 
 	return (
 		<>
@@ -1191,23 +1501,38 @@ export const WebRecorderDialog = () => {
 				</DialogTrigger>
 				<DialogContent
 					ref={dialogContentRef}
-					className="flex h-[100dvh] w-screen max-w-none flex-col overflow-hidden rounded-none border-0 bg-[#0c0c0e] p-0 text-white shadow-none [color-scheme:dark] [&>button]:hidden"
+					className="cap-rec flex h-[100dvh] w-screen max-w-none flex-col overflow-hidden rounded-none border-0 bg-[var(--rec-window)] p-0 shadow-none [&>button]:hidden"
 					onPointerDownOutside={handlePointerDownOutside}
 					onFocusOutside={handleFocusOutside}
 					onInteractOutside={handleInteractOutside}
 					onEscapeKeyDown={(event) => {
-						if (isBusy || isSettingUp) event.preventDefault();
+						if (isBusy || isSettingUp || howOpen) event.preventDefault();
 					}}
 				>
 					<DialogTitle className="sr-only">New recording</DialogTitle>
 					{/* A full-screen flow: the support launcher would sit over its controls. */}
 					<style>{".cap-messenger-launcher{display:none!important}"}</style>
+					<BoilFilter />
 					<WebRecorderDialogHeader
 						isBusy={isBusy || isSettingUp}
 						freeMinutes={freeMinutes}
 						onClose={handleClose}
+						onShowHowItWorks={
+							stage === "setup" ? () => setHowOpen(true) : undefined
+						}
 					/>
-					{body}
+					<div className="relative flex min-h-0 flex-1 flex-col">
+						{body}
+						{overlay}
+						{howOpen && <HowRecordingWorks onClose={() => setHowOpen(false)} />}
+					</div>
+					{showAudioGuide && (
+						<SystemAudioGuide
+							onClose={
+								sharePending ? undefined : () => setAudioGuideOpen(false)
+							}
+						/>
+					)}
 				</DialogContent>
 			</Dialog>
 			{phase === "error" && (

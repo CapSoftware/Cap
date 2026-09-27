@@ -4,74 +4,28 @@ import * as Menu from "@radix-ui/react-dropdown-menu";
 import clsx from "clsx";
 import {
 	CheckIcon,
-	ChevronUpIcon,
+	ChevronDownIcon,
 	LoaderCircleIcon,
-	type LucideIcon,
 	MoreHorizontalIcon,
 } from "lucide-react";
-import type { ReactNode } from "react";
 
+// Menus portal out of the recorder, so they carry the theme class themselves.
 const MENU_CONTENT =
-	"z-[1000] min-w-[16rem] max-w-[22rem] rounded-2xl border border-white/10 bg-[#1b1c1f] p-1.5 text-white shadow-[0_24px_48px_-12px_rgba(0,0,0,0.6)] data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:slide-in-from-bottom-2";
+	"cap-rec rec-pop z-[1000] min-w-[15rem] max-w-[22rem] p-1 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95";
 const MENU_ITEM =
-	"relative flex cursor-pointer select-none items-center gap-2.5 rounded-lg py-2 pl-8 pr-3 text-[0.8125rem] text-white/80 outline-none transition-colors data-[highlighted]:bg-white/[0.08] data-[highlighted]:text-white data-[disabled]:pointer-events-none data-[disabled]:opacity-40";
-const MENU_TOGGLE =
-	"flex cursor-pointer select-none items-center gap-4 rounded-lg px-3 py-2.5 text-[0.8125rem] text-white/85 outline-none transition-colors data-[highlighted]:bg-white/[0.06] data-[highlighted]:text-white";
-const MENU_LABEL = "px-3 pb-1.5 pt-2 text-[0.75rem] font-medium text-white/45";
+	"relative flex h-8 cursor-pointer select-none items-center gap-2 rounded-md pl-8 pr-3 text-[13px] text-[var(--rec-text-1)] outline-none data-[highlighted]:bg-[var(--rec-ctl-hover)] data-[disabled]:pointer-events-none data-[disabled]:opacity-40";
+const MENU_LABEL =
+	"px-3 pb-1 pt-2 text-[12px] font-medium text-[var(--rec-text-2)]";
 
-export const DockButton = ({
-	icon: Icon,
-	label,
-	on,
-	onClick,
-	disabled = false,
-	menu,
-	badge,
-}: {
-	icon: LucideIcon;
-	label: string;
-	on: boolean;
-	onClick: () => void;
-	disabled?: boolean;
-	menu?: ReactNode;
-	badge?: ReactNode;
-}) => (
-	<div className="flex items-center">
-		<button
-			type="button"
-			onClick={onClick}
-			disabled={disabled}
-			className="group flex w-[4.5rem] flex-col items-center gap-1.5 rounded-xl py-1.5 text-white/80 transition-colors hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#4785FF] disabled:cursor-not-allowed disabled:opacity-40 sm:w-[5.25rem]"
-		>
-			<span
-				className={clsx(
-					"relative flex size-11 items-center justify-center rounded-full transition-colors",
-					on
-						? "bg-white/[0.08] group-hover:bg-white/[0.14]"
-						: "bg-[#ff4d4f]/15 text-[#ff8587] group-hover:bg-[#ff4d4f]/25",
-				)}
-			>
-				<Icon className="size-5" aria-hidden />
-				{badge && (
-					<span className="absolute -bottom-0.5 left-1/2 -translate-x-1/2">
-						{badge}
-					</span>
-				)}
-			</span>
-			<span className="whitespace-nowrap text-[0.75rem] font-medium leading-none">
-				{label}
-			</span>
-		</button>
-		{menu}
-	</div>
-);
+const deviceName = (device: MediaDeviceInfo, index: number, fallback: string) =>
+	device.label?.trim().replace(/\s*\([0-9a-f]{4}:[0-9a-f]{4}\)$/i, "") ||
+	`${fallback} ${index + 1}`;
 
 export const DeviceMenu = ({
 	title,
 	devices,
 	selectedId,
 	fallbackName,
-	offLabel,
 	disabled = false,
 	onSelect,
 }: {
@@ -79,87 +33,66 @@ export const DeviceMenu = ({
 	devices: MediaDeviceInfo[];
 	selectedId: string | null;
 	fallbackName: string;
-	offLabel: string;
 	disabled?: boolean;
-	onSelect: (deviceId: string | null) => void;
-}) => (
-	<Menu.Root modal={false}>
-		<Menu.Trigger
-			disabled={disabled}
-			aria-label={`Choose ${title.toLowerCase()}`}
-			className="-ml-2 mb-6 flex h-7 w-6 items-center justify-center rounded-md text-white/50 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#4785FF] disabled:pointer-events-none disabled:opacity-30 data-[state=open]:bg-white/10 data-[state=open]:text-white"
-		>
-			<ChevronUpIcon className="size-3.5" aria-hidden />
-		</Menu.Trigger>
-		<Menu.Portal>
-			<Menu.Content
-				data-recorder-menu
-				side="top"
-				align="center"
-				sideOffset={14}
-				collisionPadding={12}
-				className={MENU_CONTENT}
+	onSelect: (deviceId: string) => void;
+}) => {
+	const index = devices.findIndex((device) => device.deviceId === selectedId);
+	const selected = devices[index];
+	return (
+		<Menu.Root modal={false}>
+			<Menu.Trigger
+				disabled={disabled}
+				aria-label={`Choose ${title.toLowerCase()}`}
+				className="rec-focus group flex h-8 min-w-0 max-w-full items-center gap-1 rounded-md px-2 text-left text-[13px] text-[var(--rec-text-1)] transition-colors hover:bg-[var(--rec-ctl-hover)] disabled:pointer-events-none data-[state=open]:bg-[var(--rec-ctl-hover)]"
 			>
-				<Menu.Label className={MENU_LABEL}>{title}</Menu.Label>
-				<Menu.RadioGroup
-					value={selectedId ?? ""}
-					onValueChange={(value) => onSelect(value || null)}
+				<span className="truncate">
+					{selected ? deviceName(selected, index, fallbackName) : fallbackName}
+				</span>
+				<ChevronDownIcon
+					className="size-3.5 shrink-0 text-[var(--rec-text-3)] group-hover:text-[var(--rec-text-2)]"
+					aria-hidden
+				/>
+			</Menu.Trigger>
+			<Menu.Portal>
+				<Menu.Content
+					data-recorder-menu
+					side="bottom"
+					align="start"
+					sideOffset={6}
+					collisionPadding={12}
+					className={MENU_CONTENT}
 				>
-					{devices.map((device, index) => (
-						<Menu.RadioItem
-							key={device.deviceId}
-							value={device.deviceId}
-							className={MENU_ITEM}
-						>
-							<Menu.ItemIndicator className="absolute left-2.5">
-								<CheckIcon className="size-3.5 text-[#4785FF]" />
-							</Menu.ItemIndicator>
-							<span className="truncate">
-								{device.label?.trim() || `${fallbackName} ${index + 1}`}
-							</span>
-						</Menu.RadioItem>
-					))}
-					<Menu.Separator className="my-1 h-px bg-white/[0.08]" />
-					<Menu.RadioItem value="" className={MENU_ITEM}>
-						<Menu.ItemIndicator className="absolute left-2.5">
-							<CheckIcon className="size-3.5 text-[#4785FF]" />
-						</Menu.ItemIndicator>
-						{offLabel}
-					</Menu.RadioItem>
-				</Menu.RadioGroup>
-			</Menu.Content>
-		</Menu.Portal>
-	</Menu.Root>
-);
+					<Menu.Label className={MENU_LABEL}>{title}</Menu.Label>
+					<Menu.RadioGroup
+						value={selectedId ?? ""}
+						onValueChange={(value) => onSelect(value)}
+					>
+						{devices.map((device, deviceIndex) => (
+							<Menu.RadioItem
+								key={device.deviceId}
+								value={device.deviceId}
+								className={MENU_ITEM}
+							>
+								<Menu.ItemIndicator className="absolute left-2.5">
+									<CheckIcon className="size-3.5 text-[var(--rec-accent)]" />
+								</Menu.ItemIndicator>
+								<span className="truncate">
+									{deviceName(device, deviceIndex, fallbackName)}
+								</span>
+							</Menu.RadioItem>
+						))}
+					</Menu.RadioGroup>
+				</Menu.Content>
+			</Menu.Portal>
+		</Menu.Root>
+	);
+};
 
-const MenuSwitch = ({ on }: { on: boolean }) => (
-	<span
-		aria-hidden
-		className={clsx(
-			"relative h-5 w-9 shrink-0 rounded-full transition-colors",
-			on ? "bg-[#4785FF]" : "bg-white/15",
-		)}
-	>
-		<span
-			className={clsx(
-				"absolute top-0.5 size-4 rounded-full bg-white shadow transition-[left]",
-				on ? "left-[1.125rem]" : "left-0.5",
-			)}
-		/>
-	</span>
-);
-
-export const MoreMenu = ({
-	systemAudio,
+export const OptionsMenu = ({
 	rememberDevices,
 	onRememberDevicesChange,
 	disabled = false,
 }: {
-	systemAudio: {
-		enabled: boolean;
-		hint: string | null;
-		onChange: (enabled: boolean) => void;
-	} | null;
 	rememberDevices: boolean;
 	onRememberDevicesChange: (value: boolean) => void;
 	disabled?: boolean;
@@ -167,50 +100,28 @@ export const MoreMenu = ({
 	<Menu.Root modal={false}>
 		<Menu.Trigger
 			disabled={disabled}
-			className="group flex w-[4.5rem] flex-col items-center gap-1.5 rounded-xl py-1.5 text-white/80 transition-colors hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#4785FF] disabled:cursor-not-allowed disabled:opacity-40 sm:w-[5.25rem]"
+			aria-label="Recorder options"
+			className="rec-btn is-ghost is-icon !h-7 !w-7"
 		>
-			<span className="flex size-11 items-center justify-center rounded-full bg-white/[0.08] transition-colors group-hover:bg-white/[0.14] group-data-[state=open]:bg-white/[0.14]">
-				<MoreHorizontalIcon className="size-5" aria-hidden />
-			</span>
-			<span className="text-[0.75rem] font-medium leading-none">More</span>
+			<MoreHorizontalIcon className="size-4" aria-hidden />
 		</Menu.Trigger>
 		<Menu.Portal>
 			<Menu.Content
 				data-recorder-menu
-				side="top"
+				side="bottom"
 				align="end"
-				sideOffset={14}
+				sideOffset={6}
 				collisionPadding={12}
 				className={MENU_CONTENT}
 			>
-				{systemAudio && (
-					<>
-						<Menu.CheckboxItem
-							checked={systemAudio.enabled}
-							onCheckedChange={(checked) => systemAudio.onChange(checked)}
-							onSelect={(event) => event.preventDefault()}
-							className={MENU_TOGGLE}
-						>
-							<span className="flex flex-1 flex-col gap-0.5">
-								<span>Record system audio</span>
-								<span className="text-[0.75rem] leading-snug text-white/45">
-									{systemAudio.hint ??
-										"Sound from your computer, on its own track."}
-								</span>
-							</span>
-							<MenuSwitch on={systemAudio.enabled} />
-						</Menu.CheckboxItem>
-						<Menu.Separator className="my-1 h-px bg-white/[0.08]" />
-					</>
-				)}
 				<Menu.CheckboxItem
 					checked={rememberDevices}
 					onCheckedChange={(checked) => onRememberDevicesChange(checked)}
 					onSelect={(event) => event.preventDefault()}
-					className={MENU_TOGGLE}
+					className="flex h-9 cursor-pointer select-none items-center gap-6 rounded-md px-3 text-[13px] text-[var(--rec-text-1)] outline-none data-[highlighted]:bg-[var(--rec-ctl-hover)]"
 				>
 					<span className="flex-1">Remember my camera and mic</span>
-					<MenuSwitch on={rememberDevices} />
+					<span className="rec-switch" data-on={rememberDevices} />
 				</Menu.CheckboxItem>
 			</Menu.Content>
 		</Menu.Portal>
@@ -236,19 +147,19 @@ export const RecordButton = ({
 		disabled={disabled || busy}
 		aria-label={label}
 		title={label}
-		className="group relative mx-2 flex size-[4.25rem] shrink-0 items-center justify-center rounded-full border-[3px] border-white/85 transition-[border-color,transform] duration-200 hover:border-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#4785FF] focus-visible:ring-offset-4 focus-visible:ring-offset-[#111214] active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100 sm:mx-4"
+		className="rec-focus group relative flex size-12 shrink-0 items-center justify-center rounded-full shadow-[inset_0_0_0_2px_var(--rec-line-strong)] transition-transform duration-150 active:scale-95 disabled:cursor-not-allowed disabled:opacity-45 disabled:active:scale-100"
 	>
 		<span
 			className={clsx(
-				"flex items-center justify-center bg-[#ff4d4f] shadow-[0_0_24px_-4px_rgba(255,77,79,0.8)] transition-all duration-300 ease-[cubic-bezier(.2,.8,.2,1)]",
+				"flex items-center justify-center bg-[var(--rec-red)] transition-all duration-300 ease-[cubic-bezier(.2,.8,.2,1)]",
 				recording
-					? "size-6 rounded-[6px]"
-					: "size-[3.25rem] rounded-full group-hover:size-[3.5rem]",
+					? "size-[18px] rounded-[5px]"
+					: "size-9 rounded-full group-hover:size-[38px]",
 			)}
 		>
 			{busy && (
 				<LoaderCircleIcon
-					className="size-5 animate-spin text-white"
+					className="size-4 animate-spin text-white"
 					aria-hidden
 				/>
 			)}
