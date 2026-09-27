@@ -1,5 +1,7 @@
 "use client";
 
+import { cameraVideoConstraints } from "@cap/recorder-core/capture-streams";
+
 import { LoadingSpinner } from "@cap/ui";
 import clsx from "clsx";
 import {
@@ -91,13 +93,15 @@ export interface CameraPreviewWindowHandle {
 interface CameraPreviewWindowProps {
 	cameraId: string;
 	hidden?: boolean;
+	/** 16:9 capture height. Screen recordings record a copy of this stream. */
+	captureHeight?: number;
 	onClose: () => void;
 }
 
 export const CameraPreviewWindow = forwardRef<
 	CameraPreviewWindowHandle,
 	CameraPreviewWindowProps
->(({ cameraId, hidden = false, onClose }, ref) => {
+>(({ cameraId, hidden = false, captureHeight = 1080, onClose }, ref) => {
 	const [size, setSize] = useState<CameraPreviewSize>("sm");
 	const [shape, setShape] = useState<CameraPreviewShape>("round");
 	const [mirrored, setMirrored] = useState(false);
@@ -227,9 +231,7 @@ export const CameraPreviewWindow = forwardRef<
 		const startCamera = async () => {
 			try {
 				const stream = await navigator.mediaDevices.getUserMedia({
-					video: {
-						deviceId: { exact: cameraId },
-					},
+					video: cameraVideoConstraints(cameraId, { height: captureHeight }),
 				});
 
 				streamRef.current = stream;
@@ -247,7 +249,7 @@ export const CameraPreviewWindow = forwardRef<
 		return () => {
 			stopStream();
 		};
-	}, [cameraId, stopStream]);
+	}, [cameraId, captureHeight, stopStream]);
 
 	useEffect(() => {
 		const metrics = getPreviewMetrics(size, shape, videoDimensions);
