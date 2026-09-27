@@ -7,6 +7,7 @@ import {
 	DialogTitle,
 	DialogTrigger,
 } from "@cap/ui";
+import clsx from "clsx";
 import { AnimatePresence, motion } from "framer-motion";
 import { MonitorIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -17,16 +18,16 @@ import {
 	type CameraPreviewWindowHandle,
 } from "./CameraPreviewWindow";
 import { CameraSelector } from "./CameraSelector";
-import { HowItWorksButton } from "./HowItWorksButton";
 import { HowItWorksPanel } from "./HowItWorksPanel";
 import { InProgressRecordingBar } from "./InProgressRecordingBar";
 import { MicrophoneSelector } from "./MicrophoneSelector";
+import { RecorderStage } from "./RecorderStage";
 import { RecordingButton } from "./RecordingButton";
 import {
 	type RecordingMode,
 	RecordingModeSelector,
 } from "./RecordingModeSelector";
-import { SettingsButton } from "./SettingsButton";
+import { ScreenPickerGuide } from "./ScreenPickerGuide";
 import { SettingsPanel } from "./SettingsPanel";
 import { SystemAudioToggle } from "./SystemAudioToggle";
 import { useCameraDevices } from "./useCameraDevices";
@@ -155,6 +156,7 @@ export const WebRecorderDialog = () => {
 		cameraErrorDownload,
 		audioErrorDownloads,
 		completedShareUrl,
+		completedEditUrl,
 		recoveredDownloads,
 		isSettingUp,
 		isRecording,
@@ -273,9 +275,13 @@ export const WebRecorderDialog = () => {
 	const showCameraPreview =
 		selectedCameraId &&
 		(recordingMode !== "camera" || (!isSettingUp && !isBusy));
+	const freeMinutes = Math.floor(FREE_PLAN_MAX_RECORDING_MS / 60000);
 	const recordingTimerDisplayMs = user.isPro
 		? durationMs
 		: Math.max(0, FREE_PLAN_MAX_RECORDING_MS - durationMs);
+
+	const guideOpen = isSettingUp && recordingMode !== "camera";
+	const cameraEnabled = selectedCameraId !== null;
 
 	return (
 		<>
@@ -288,12 +294,12 @@ export const WebRecorderDialog = () => {
 				</DialogTrigger>
 				<DialogContent
 					ref={dialogContentRef}
-					className="w-[300px] border-none bg-transparent p-0 [&>button]:hidden"
+					className="w-[calc(100vw-1.5rem)] max-w-[46rem] border-none bg-transparent p-0 shadow-none [&>button]:hidden"
 					onPointerDownOutside={handlePointerDownOutside}
 					onFocusOutside={handleFocusOutside}
 					onInteractOutside={handleInteractOutside}
 				>
-					<DialogTitle className="sr-only">Instant Mode Recorder</DialogTitle>
+					<DialogTitle className="sr-only">Record a Cap</DialogTitle>
 					<AnimatePresence mode="wait">
 						{open && (
 							<motion.div
@@ -301,12 +307,11 @@ export const WebRecorderDialog = () => {
 								initial="hidden"
 								animate="visible"
 								exit="exit"
-								className="relative flex justify-center flex-col p-[1rem] pt-[2rem] gap-[0.75rem] text-[0.875rem] font-[400] text-[--text-primary] bg-gray-2 rounded-lg min-h-[350px]"
+								className={clsx(
+									"relative flex max-h-[calc(100dvh-1.5rem)] flex-col gap-4 overflow-y-auto rounded-2xl border border-gray-4 bg-gray-2 p-4 text-[0.875rem] text-gray-12 shadow-[0_30px_80px_-30px_rgba(0,0,0,0.45)] transition-opacity duration-200 sm:p-5",
+									guideOpen && "opacity-0",
+								)}
 							>
-								<SettingsButton
-									visible={!settingsOpen}
-									onClick={handleSettingsOpen}
-								/>
 								<SettingsPanel
 									open={settingsOpen}
 									rememberDevices={rememberDevices}
@@ -320,92 +325,142 @@ export const WebRecorderDialog = () => {
 								<WebRecorderDialogHeader
 									isBusy={isBusy}
 									onClose={handleClose}
+									onOpenSettings={handleSettingsOpen}
+									onOpenHelp={handleHowItWorksOpen}
 								/>
-								<RecordingModeSelector
-									mode={recordingMode}
-									disabled={isBusy}
-									onModeChange={setRecordingMode}
-								/>
-								{screenCaptureWarning && (
-									<div className="rounded-md border border-amber-6 bg-amber-3/60 px-3 py-2 text-xs leading-snug text-amber-12">
-										{screenCaptureWarning}
-									</div>
-								)}
-								<CameraSelector
-									selectedCameraId={selectedCameraId}
-									availableCameras={availableCameras}
-									dialogOpen={open}
-									disabled={isBusy}
-									open={cameraSelectOpen}
-									onOpenChange={(isOpen) => {
-										setCameraSelectOpen(isOpen);
-										if (isOpen) {
-											setMicSelectOpen(false);
+								<div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_17.5rem] md:gap-5">
+									<RecorderStage
+										mode={recordingMode}
+										cameraEnabled={cameraEnabled}
+										micEnabled={micEnabled}
+										systemAudioEnabled={
+											recordingMode !== "camera" && systemAudioEnabled
 										}
-									}}
-									onCameraChange={handleCameraChange}
-									onRefreshDevices={refreshCameras}
-								/>
-								<MicrophoneSelector
-									selectedMicId={selectedMicId}
-									availableMics={availableMics}
-									dialogOpen={open}
-									disabled={isBusy}
-									open={micSelectOpen}
-									onOpenChange={(isOpen) => {
-										setMicSelectOpen(isOpen);
-										if (isOpen) {
-											setCameraSelectOpen(false);
-										}
-									}}
-									onMicChange={handleMicChange}
-									onRefreshDevices={refreshMics}
-								/>
-								{recordingMode !== "camera" && (
-									<SystemAudioToggle
-										enabled={systemAudioEnabled}
-										disabled={isBusy}
-										recordingMode={recordingMode}
-										onToggle={handleSystemAudioChange}
+										getCameraStream={getCameraPreviewStream}
 									/>
-								)}
-								<RecordingButton
-									isRecording={isRecording}
-									disabled={!canStartRecording || (isBusy && !isRecording)}
-									onStart={handleStartClick}
-									onStop={handleStopClick}
-								/>
+									<div className="flex min-w-0 flex-col gap-2.5">
+										<RecordingModeSelector
+											mode={recordingMode}
+											disabled={isBusy}
+											displayRecordingSupported={
+												!supportCheckCompleted || supportsDisplayRecording
+											}
+											onModeChange={setRecordingMode}
+										/>
+										{screenCaptureWarning && (
+											<div className="rounded-xl border border-gray-5 bg-gray-3 px-3 py-2 text-xs leading-snug text-gray-12">
+												{screenCaptureWarning}
+											</div>
+										)}
+										{supportCheckCompleted && !supportsDisplayRecording && (
+											<p className="px-1 text-[0.75rem] leading-snug text-gray-10">
+												This browser can only record your camera. Open Cap on a
+												computer to record your screen too.
+											</p>
+										)}
+										<CameraSelector
+											selectedCameraId={selectedCameraId}
+											availableCameras={availableCameras}
+											dialogOpen={open}
+											disabled={isBusy}
+											open={cameraSelectOpen}
+											onOpenChange={(isOpen) => {
+												setCameraSelectOpen(isOpen);
+												if (isOpen) {
+													setMicSelectOpen(false);
+												}
+											}}
+											onCameraChange={handleCameraChange}
+											onRefreshDevices={refreshCameras}
+										/>
+										<MicrophoneSelector
+											selectedMicId={selectedMicId}
+											availableMics={availableMics}
+											dialogOpen={open}
+											disabled={isBusy}
+											open={micSelectOpen}
+											onOpenChange={(isOpen) => {
+												setMicSelectOpen(isOpen);
+												if (isOpen) {
+													setCameraSelectOpen(false);
+												}
+											}}
+											onMicChange={handleMicChange}
+											onRefreshDevices={refreshMics}
+										/>
+										{recordingMode !== "camera" && (
+											<SystemAudioToggle
+												enabled={systemAudioEnabled}
+												disabled={isBusy}
+												recordingMode={recordingMode}
+												onToggle={handleSystemAudioChange}
+											/>
+										)}
+										<div className="mt-auto flex flex-col gap-2 pt-1">
+											<RecordingButton
+												isRecording={isRecording}
+												isStarting={isSettingUp}
+												disabled={
+													!canStartRecording || (isBusy && !isRecording)
+												}
+												onStart={handleStartClick}
+												onStop={handleStopClick}
+											/>
+											<p className="text-center text-[0.75rem] leading-snug text-gray-10">
+												{user.isPro
+													? "When you stop, the editor opens and your link is already live."
+													: `Up to ${freeMinutes} minutes on Free. When you stop, the editor opens and your link is already live.`}
+											</p>
+										</div>
+									</div>
+								</div>
 								{!isBrowserSupported && unsupportedReason && (
-									<div className="rounded-md border border-red-6 bg-red-3/70 px-3 py-2 text-xs leading-snug text-red-12">
+									<div className="rounded-xl border border-red-6 bg-red-3/70 px-3 py-2 text-xs leading-snug text-red-12">
 										{unsupportedReason}
 									</div>
 								)}
-								{phase === "completed" && completedShareUrl && (
-									<div className="rounded-md border border-green-6 bg-green-3/70 px-3 py-3 text-xs text-green-12">
-										<div className="font-medium">Share link ready</div>
-										<div className="mt-1 leading-snug">
-											If it did not open automatically, open it here.
+								{phase === "completed" && completedEditUrl && (
+									<div className="flex items-center justify-between gap-3 rounded-xl border border-gray-4 bg-gray-1 px-3.5 py-3">
+										<div className="min-w-0">
+											<div className="text-[0.8125rem] font-medium text-gray-12">
+												Your Cap is shared
+											</div>
+											<div className="text-[0.75rem] text-gray-10">
+												Opening the editor…
+											</div>
+										</div>
+										<a
+											href={completedEditUrl}
+											className="shrink-0 rounded-lg bg-blue-9 px-3 py-1.5 text-[0.8125rem] font-medium text-white transition-colors hover:bg-blue-10"
+										>
+											Open editor
+										</a>
+									</div>
+								)}
+								{phase === "error" && completedShareUrl && (
+									<div className="flex items-center justify-between gap-3 rounded-xl border border-gray-4 bg-gray-1 px-3.5 py-3">
+										<div className="text-[0.8125rem] text-gray-12">
+											Check the recording before retrying.
 										</div>
 										<Button
 											variant="blue"
 											size="sm"
-											className="mt-3 w-full"
 											onClick={openCompletedShareUrl}
 										>
-											Open Share Link
+											Open recording
 										</Button>
 									</div>
 								)}
 								{phase === "idle" && recoveredDownloads.length > 0 && (
-									<div className="rounded-md border border-blue-6 bg-blue-3/60 px-3 py-2">
-										<div className="text-xs font-medium text-blue-12">
+									<div className="rounded-xl border border-gray-4 bg-gray-1 px-3.5 py-3">
+										<div className="text-xs font-medium text-gray-12">
 											Recovered recordings
 										</div>
 										<div className="mt-2 flex flex-col gap-2">
 											{recoveredDownloads.map((download) => (
 												<div
 													key={download.id}
-													className="flex items-center justify-between gap-3 rounded-md bg-white/70 px-2.5 py-2 text-xs text-gray-12"
+													className="flex items-center justify-between gap-3 rounded-lg bg-gray-3 px-2.5 py-2 text-xs text-gray-12"
 												>
 													<div className="min-w-0">
 														<div className="truncate font-medium">
@@ -446,12 +501,18 @@ export const WebRecorderDialog = () => {
 										</div>
 									</div>
 								)}
-								<HowItWorksButton onClick={handleHowItWorksOpen} />
 							</motion.div>
 						)}
 					</AnimatePresence>
 				</DialogContent>
 			</Dialog>
+			<ScreenPickerGuide
+				open={open && guideOpen}
+				mode={recordingMode}
+				cameraEnabled={cameraEnabled}
+				micEnabled={micEnabled}
+				systemAudioEnabled={systemAudioEnabled}
+			/>
 			{showInProgressBar && (
 				<InProgressRecordingBar
 					phase={phase}
@@ -472,7 +533,7 @@ export const WebRecorderDialog = () => {
 				<CameraPreviewWindow
 					ref={cameraPreviewRef}
 					cameraId={selectedCameraId}
-					hidden={recordingMode !== "camera" && (isSettingUp || isRecording)}
+					hidden
 					onClose={() => handleCameraChange(null)}
 				/>
 			)}

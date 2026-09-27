@@ -26,7 +26,7 @@ export const SettingsPanel = ({
 					animate={{ opacity: 1, y: 0 }}
 					exit={{ opacity: 0, y: -12 }}
 					transition={{ duration: 0.2, ease: "easeOut" }}
-					className="absolute inset-0 z-40 flex flex-col gap-4 p-4 border border-gray-3 rounded-lg bg-gray-1 shadow-lg dark:bg-gray-2"
+					className="absolute inset-0 z-40 flex flex-col gap-4 rounded-2xl bg-gray-2 p-5"
 				>
 					<div className="flex items-center justify-between">
 						<button

@@ -1,56 +1,51 @@
 "use client";
 
-import { Button } from "@cap/ui";
-import type { SVGProps } from "react";
+import clsx from "clsx";
+import { LoaderCircleIcon } from "lucide-react";
 
 interface RecordingButtonProps {
 	isRecording: boolean;
+	isStarting?: boolean;
 	disabled?: boolean;
 	onStart: () => void;
 	onStop: () => void;
 }
 
-const InstantIcon = ({ className, ...props }: SVGProps<SVGSVGElement>) => (
-	<svg
-		width="152"
-		height="223"
-		viewBox="0 0 152 223"
-		fill="none"
-		xmlns="http://www.w3.org/2000/svg"
-		className={className}
-		{...props}
-	>
-		<path
-			d="M150.167 109.163L53.4283 220.65C52.4032 221.826 51.05 222.613 49.573 222.89C48.0959 223.167 46.5752 222.919 45.2403 222.185C43.9054 221.451 42.8287 220.27 42.1727 218.82C41.5167 217.369 41.317 215.729 41.6038 214.146L54.2661 146.019L4.48901 125.914C3.41998 125.484 2.46665 124.776 1.7142 123.853C0.961745 122.93 0.433602 121.82 0.176954 120.624C-0.0796948 119.428 -0.0568536 118.182 0.243435 116.997C0.543723 115.813 1.1121 114.727 1.8978 113.837L98.6363 2.35043C99.6614 1.17365 101.015 0.387451 102.492 0.110461C103.969 -0.166529 105.489 0.080724 106.824 0.814909C108.159 1.54909 109.236 2.73037 109.892 4.18049C110.548 5.63061 110.748 7.27088 110.461 8.85379L97.7639 77.0554L147.541 97.1322C148.602 97.5652 149.548 98.2727 150.294 99.1922C151.041 100.112 151.566 101.215 151.822 102.404C152.078 103.593 152.058 104.832 151.763 106.011C151.468 107.19 150.908 108.273 150.132 109.163H150.167Z"
-			fill="currentColor"
-		/>
-	</svg>
-);
-
 export const RecordingButton = ({
 	isRecording,
+	isStarting = false,
 	disabled = false,
 	onStart,
 	onStop,
-}: RecordingButtonProps) => {
-	return (
-		<div className="flex items-center space-x-1 w-full">
-			<Button
-				variant="blue"
-				size="md"
-				disabled={disabled}
-				onClick={isRecording ? onStop : onStart}
-				className="flex flex-grow justify-center items-center"
+}: RecordingButtonProps) => (
+	<button
+		type="button"
+		disabled={disabled}
+		onClick={isRecording ? onStop : onStart}
+		className={clsx(
+			"group flex h-12 w-full items-center justify-center gap-2.5 rounded-xl text-[0.9375rem] font-semibold text-white transition-[filter,transform] duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-8 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-2 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100",
+			isRecording
+				? "bg-gray-12 text-gray-1 hover:brightness-110"
+				: "bg-gradient-to-b from-[#5b92ff] to-[#3a76f5] shadow-[inset_0_1px_0_rgba(255,255,255,0.25),0_6px_16px_-8px_rgba(58,118,245,0.8)] hover:brightness-105",
+		)}
+	>
+		{isStarting ? (
+			<LoaderCircleIcon className="size-4 animate-spin" aria-hidden />
+		) : isRecording ? (
+			<span className="size-3 rounded-[3px] bg-[#ff4d4d]" aria-hidden />
+		) : (
+			<span
+				className="relative flex size-3.5 items-center justify-center"
+				aria-hidden
 			>
-				{isRecording ? (
-					"Stop Recording"
-				) : (
-					<>
-						<InstantIcon className="size-[0.8rem] mr-1.5" />
-						Start recording
-					</>
-				)}
-			</Button>
-		</div>
-	);
-};
+				<span className="absolute inset-0 rounded-full bg-[#ff5a5a] opacity-60 group-hover:animate-ping motion-reduce:animate-none" />
+				<span className="relative size-3.5 rounded-full bg-[#ff4d4d] ring-2 ring-white/70" />
+			</span>
+		)}
+		{isStarting
+			? "Waiting for your browser"
+			: isRecording
+				? "Stop recording"
+				: "Start recording"}
+	</button>
+);

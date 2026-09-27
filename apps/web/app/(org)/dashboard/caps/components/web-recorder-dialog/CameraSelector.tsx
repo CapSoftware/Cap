@@ -50,7 +50,7 @@ export const CameraSelector = ({
 	const statusPillDisabled = !shouldRequestPermission && !cameraEnabled;
 
 	const statusPillClassName = clsx(
-		"px-[0.375rem] h-[1.25rem] min-w-[2.5rem] rounded-full text-[0.75rem] leading-[1.25rem] flex items-center justify-center font-normal transition-colors duration-200 disabled:opacity-100 disabled:pointer-events-none focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-offset-1 focus-visible:ring-[var(--blue-8)]",
+		"px-2 h-6 min-w-[2.75rem] rounded-full text-[0.75rem] font-medium leading-[1.25rem] flex items-center justify-center transition-colors duration-200 disabled:opacity-100 disabled:pointer-events-none focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-offset-1 focus-visible:ring-[var(--blue-8)]",
 		statusPillDisabled ? "cursor-default" : "cursor-pointer",
 		shouldRequestPermission
 			? "bg-[var(--red-3)] text-[var(--red-11)] dark:bg-[var(--red-4)] dark:text-[var(--red-12)]"
@@ -109,7 +109,7 @@ export const CameraSelector = ({
 				<div className="relative w-full">
 					<SelectTrigger
 						className={clsx(
-							"relative flex flex-row items-center h-[2rem] pl-[0.375rem] pr-[3.5rem] gap-[0.375rem] border border-gray-3 rounded-lg w-full transition-colors overflow-hidden z-10 font-normal text-[0.875rem] bg-transparent hover:bg-transparent focus:bg-transparent focus:border-gray-3 hover:border-gray-3 text-[--text-primary] disabled:text-gray-11 [&>svg]:hidden",
+							"relative flex flex-row items-center h-11 pl-3 pr-[5.5rem] gap-2 border border-gray-4 rounded-xl w-full transition-colors overflow-hidden z-10 font-normal text-[0.875rem] bg-gray-1 hover:bg-gray-1 focus:bg-gray-1 focus:border-gray-6 hover:border-gray-6 text-gray-12 disabled:text-gray-11 [&>svg]:hidden",
 							disabled || shouldRequestPermission
 								? "cursor-default"
 								: undefined,
@@ -140,7 +140,7 @@ export const CameraSelector = ({
 						type="button"
 						className={clsx(
 							statusPillClassName,
-							"absolute right-[0.375rem] top-1/2 -translate-y-1/2 z-20",
+							"absolute right-2.5 top-1/2 -translate-y-1/2 z-20",
 						)}
 						disabled={statusPillDisabled}
 						aria-disabled={statusPillDisabled}

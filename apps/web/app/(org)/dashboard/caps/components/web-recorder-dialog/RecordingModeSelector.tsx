@@ -1,102 +1,76 @@
 "use client";
 
+import clsx from "clsx";
 import {
-	SelectContent,
-	SelectItem,
-	SelectRoot,
-	SelectTrigger,
-	SelectValue,
-} from "@cap/ui";
-import {
+	AppWindowIcon,
 	CameraIcon,
 	Globe,
 	type LucideIcon,
 	MonitorIcon,
-	RectangleHorizontal,
 } from "lucide-react";
 
 export type RecordingMode = "fullscreen" | "window" | "tab" | "camera";
 
+export const RECORDING_MODE_OPTIONS: Record<
+	RecordingMode,
+	{ label: string; icon: LucideIcon }
+> = {
+	fullscreen: { label: "Screen", icon: MonitorIcon },
+	window: { label: "Window", icon: AppWindowIcon },
+	tab: { label: "This tab", icon: Globe },
+	camera: { label: "Camera only", icon: CameraIcon },
+};
+
+const MODE_ORDER: RecordingMode[] = ["fullscreen", "window", "tab", "camera"];
+
 interface RecordingModeSelectorProps {
 	mode: RecordingMode;
 	disabled?: boolean;
+	displayRecordingSupported?: boolean;
 	onModeChange: (mode: RecordingMode) => void;
 }
 
 export const RecordingModeSelector = ({
 	mode,
 	disabled = false,
+	displayRecordingSupported = true,
 	onModeChange,
-}: RecordingModeSelectorProps) => {
-	const recordingModeOptions: Record<
-		RecordingMode,
-		{
-			label: string;
-			displayLabel: string;
-			icon: LucideIcon;
-		}
-	> = {
-		fullscreen: {
-			label: "Full Screen (Recommended)",
-			displayLabel: "Full Screen",
-			icon: MonitorIcon,
-		},
-		window: {
-			label: "Window",
-			displayLabel: "Window",
-			icon: RectangleHorizontal,
-		},
-		tab: {
-			label: "Current tab",
-			displayLabel: "Current tab",
-			icon: Globe,
-		},
-		camera: {
-			label: "Camera only",
-			displayLabel: "Camera only",
-			icon: CameraIcon,
-		},
-	};
-
-	const selectedOption = mode ? recordingModeOptions[mode] : null;
-	const SelectedIcon = selectedOption?.icon;
-
-	return (
-		<div className="flex flex-col gap-[0.25rem] items-stretch text-[--text-primary] max-w-full">
-			<SelectRoot
-				value={mode}
-				onValueChange={(value) => {
-					onModeChange(value as RecordingMode);
-				}}
-				disabled={disabled}
-			>
-				<SelectTrigger className="relative flex flex-row items-center h-[2rem] px-[0.375rem] border border-gray-3 rounded-lg w-full max-w-[280px] disabled:text-gray-11 transition-colors overflow-hidden z-10 font-normal text-[0.875rem] bg-transparent hover:bg-transparent focus:bg-transparent focus:border-gray-3 hover:border-gray-3 text-[--text-primary] [&>svg]:hidden">
-					<SelectValue
-						placeholder="Select recording mode"
-						className="flex w-full items-center gap-[0.375rem] text-left truncate"
-					>
-						{selectedOption && SelectedIcon && (
-							<span className="flex items-center gap-[0.375rem]">
-								<SelectedIcon className="size-4 text-gray-11 shrink-0" />
-								{selectedOption.displayLabel}
-							</span>
+}: RecordingModeSelectorProps) => (
+	<fieldset className="grid grid-cols-4 gap-1 rounded-xl bg-gray-3 p-1">
+		<legend className="sr-only">What to record</legend>
+		{MODE_ORDER.map((value) => {
+			const option = RECORDING_MODE_OPTIONS[value];
+			const Icon = option.icon;
+			const selected = value === mode;
+			const unavailable = value !== "camera" && !displayRecordingSupported;
+			return (
+				<button
+					key={value}
+					type="button"
+					aria-pressed={selected}
+					disabled={disabled || unavailable}
+					title={
+						unavailable ? "Screen recording needs a desktop browser" : undefined
+					}
+					onClick={() => onModeChange(value)}
+					className={clsx(
+						"flex min-w-0 flex-col items-center justify-center gap-1 rounded-[9px] px-1 py-2 text-[0.75rem] font-medium leading-none transition-[background-color,color,box-shadow] duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-8 disabled:cursor-not-allowed",
+						selected
+							? "bg-gray-1 text-gray-12 shadow-[0_1px_2px_rgba(0,0,0,0.08),0_0_0_1px_var(--gray-4)]"
+							: "text-gray-10 hover:bg-gray-4/60 hover:text-gray-12",
+						unavailable && "opacity-40 hover:bg-transparent",
+					)}
+				>
+					<Icon
+						className={clsx(
+							"size-4 shrink-0",
+							selected ? "text-blue-10" : "text-current",
 						)}
-					</SelectValue>
-				</SelectTrigger>
-				<SelectContent className="z-[502] max-w-[280px]">
-					{Object.entries(recordingModeOptions).map(([value, option]) => {
-						const OptionIcon = option.icon;
-						return (
-							<SelectItem key={value} value={value}>
-								<span className="flex items-center gap-2">
-									<OptionIcon className="size-4 text-gray-11" />
-									{option.label}
-								</span>
-							</SelectItem>
-						);
-					})}
-				</SelectContent>
-			</SelectRoot>
-		</div>
-	);
-};
+						aria-hidden
+					/>
+					<span className="max-w-full truncate">{option.label}</span>
+				</button>
+			);
+		})}
+	</fieldset>
+);

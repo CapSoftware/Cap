@@ -32,15 +32,15 @@ export const SystemAudioToggle = ({
 				disabled={disabled}
 				onClick={() => onToggle(!enabled)}
 				className={clsx(
-					"relative flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border border-gray-3 rounded-lg w-full transition-colors overflow-hidden font-normal text-[0.875rem] text-[--text-primary] disabled:text-gray-11",
-					disabled ? "cursor-default" : "cursor-pointer hover:bg-gray-3/50",
+					"relative flex flex-row items-center h-11 pl-3 pr-2.5 gap-2 border border-gray-4 bg-gray-1 rounded-xl w-full transition-colors overflow-hidden font-normal text-[0.875rem] text-gray-12 disabled:text-gray-11",
+					disabled ? "cursor-default" : "cursor-pointer hover:border-gray-6",
 				)}
 			>
 				<Icon className="size-4 text-gray-11 shrink-0" />
 				<span className="flex-1 text-left truncate">System Audio</span>
 				<span
 					className={clsx(
-						"px-[0.375rem] h-[1.25rem] min-w-[2.5rem] rounded-full text-[0.75rem] leading-[1.25rem] flex items-center justify-center font-normal transition-colors duration-200",
+						"px-2 h-6 min-w-[2.75rem] rounded-full text-[0.75rem] font-medium leading-[1.25rem] flex items-center justify-center transition-colors duration-200",
 						enabled
 							? "bg-[var(--blue-3)] text-[var(--blue-11)] dark:bg-[var(--blue-4)] dark:text-[var(--blue-12)]"
 							: "bg-[var(--red-3)] text-[var(--red-11)] dark:bg-[var(--red-4)] dark:text-[var(--red-12)]",
@@ -50,9 +50,7 @@ export const SystemAudioToggle = ({
 				</span>
 			</button>
 			{hint && (
-				<p className="text-[0.6875rem] leading-snug text-gray-10 px-[0.375rem]">
-					{hint}
-				</p>
+				<p className="text-[0.75rem] leading-snug text-gray-10 px-1">{hint}</p>
 			)}
 		</div>
 	);
