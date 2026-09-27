@@ -63,14 +63,14 @@ export function recorderOptions(
 	mimeType: string,
 	track: MediaStreamTrack | undefined,
 	isSupported: (type: string) => boolean,
+	bitrateScale = 1,
 ): RecorderOptions {
 	const settings = track?.getSettings?.() ?? {};
 	const options: RecorderOptions = {
 		mimeType,
-		videoBitsPerSecond: recordingBitrate(
-			settings.width,
-			settings.height,
-			settings.frameRate,
+		videoBitsPerSecond: Math.round(
+			recordingBitrate(settings.width, settings.height, settings.frameRate) *
+				bitrateScale,
 		),
 		videoKeyFrameIntervalDuration: 2000,
 	};
