@@ -811,7 +811,9 @@ describe("jobs for the product", () => {
 		).json()) as { id: string };
 		const exported = h.jobs.get(receipt.id) as Job;
 		expect(exported.key).toBe("owner/video/.recording/render/abc/result.mp4");
-		expect(exported.hls?.prefix).toBe("owner/video/.recording/render/abc/hls");
+		expect(exported.hls?.prefix).toBe(
+			`owner/video/.recording/render/abc/hls/${receipt.id}`,
+		);
 		exported.status = "ready";
 		exported.totalFrames = 60;
 		h.finish(exported);
@@ -843,6 +845,39 @@ describe("jobs for the product", () => {
 			callbackUrl: "https://attacker.example/hook",
 		});
 		expect(response.status).toBe(400);
+	});
+
+	test("existing sources and exports cannot be selected as output keys", async () => {
+		const h = harness();
+		h.setPlanner(async () => {});
+		const key = "owner/video/source.mp4";
+		const bytes = new Uint8Array([1, 2, 3]);
+		h.objects.set(key, bytes);
+		expect(
+			(
+				await call(h, "/jobs", {
+					recording: "owner/video/project",
+					sourceRoot: "owner/video/",
+					output: { key },
+				})
+			).status,
+		).toBe(409);
+		expect(h.jobs.size).toBe(0);
+		expect(h.objects.get(key)).toBe(bytes);
+	});
+
+	test("concurrent jobs using the same HLS prefix write to separate folders", async () => {
+		const h = harness();
+		h.setPlanner(async () => {});
+		const request = {
+			recording: "recording",
+			output: { key: "recording/output.mp4", hlsPrefix: "recording/hls" },
+		};
+		await Promise.all([call(h, "/jobs", request), call(h, "/jobs", request)]);
+		expect(h.jobs.size).toBe(2);
+		const prefixes = [...h.jobs.values()].map((job) => job.hls?.prefix);
+		expect(new Set(prefixes).size).toBe(2);
+		for (const prefix of prefixes) expect(prefix).toStartWith("recording/hls/");
 	});
 
 	test("report the share of frames rendered", async () => {

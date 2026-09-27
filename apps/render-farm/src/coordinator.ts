@@ -377,7 +377,7 @@ async function newJob(
 		taskStats: [],
 	};
 	if (HLS) {
-		job.hls = await newHlsState(request.output?.hlsPrefix ?? `hls/${id}`);
+		job.hls = await newHlsState(`${request.output?.hlsPrefix ?? "hls"}/${id}`);
 	}
 	return job;
 }
@@ -2815,6 +2815,9 @@ Bun.serve({
 				});
 			}
 			const id = randomUUID().slice(0, 12);
+			if (body.output && (await s3.head(body.output.key))) {
+				return new Response("output key already exists", { status: 409 });
+			}
 			const job = await newJob(id, body);
 
 			jobs.set(id, job);

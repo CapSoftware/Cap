@@ -19,6 +19,7 @@ function store() {
 	let uploaded = 0;
 	let lostResponse = false;
 	let intent = false;
+	let raced = false;
 	const api = {
 		async head() {
 			return object;
@@ -35,7 +36,13 @@ function store() {
 			_key: string,
 			_id: string,
 			parts: { partNumber: number; etag: string }[],
+			options?: { ifNoneMatch?: boolean },
 		) {
+			expect(options?.ifNoneMatch).toBe(true);
+			if (raced) {
+				object = { size: 20 };
+				return false;
+			}
 			expect(parts).toEqual([
 				{ partNumber: 1, etag: "header" },
 				...upload.parts,
@@ -53,6 +60,9 @@ function store() {
 		},
 		loseResponse: () => {
 			lostResponse = true;
+		},
+		race: () => {
+			raced = true;
 		},
 		existing: (size: number, bytes = header) => {
 			object = { size };
@@ -98,5 +108,15 @@ describe("multipart recovery", () => {
 			}),
 		).rejects.toThrow("journal unavailable");
 		expect(s3.counts()).toEqual({ uploaded: 0, completed: 0 });
+	});
+
+	test("an object created after the initial HEAD is never overwritten", async () => {
+		const s3 = store();
+		s3.race();
+		await expect(completeUpload(s3.api, upload, s3.persist)).rejects.toThrow(
+			"does not match",
+		);
+		expect(await s3.api.head()).toEqual({ size: 20 });
+		expect(s3.counts()).toEqual({ uploaded: 1, completed: 0 });
 	});
 });

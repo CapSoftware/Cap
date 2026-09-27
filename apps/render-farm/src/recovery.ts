@@ -60,13 +60,17 @@ export async function completeUpload(
 	await persist(JSON.stringify({ uploadId, size, headerHash }));
 	try {
 		const etag = await s3.uploadPart(key, uploadId, 1, header);
-		await s3.completeMultipart(
+		const accepted = await s3.completeMultipart(
 			key,
 			uploadId,
 			[...parts, { partNumber: 1, etag }].sort(
 				(a, b) => a.partNumber - b.partNumber,
 			),
+			{ ifNoneMatch: true },
 		);
+		if (!accepted && !(await completed())) {
+			throw new Error("output was being written concurrently");
+		}
 	} catch (error) {
 		// Completion can commit in S3 even when its response never reaches us.
 		if (!(await completed())) throw error;

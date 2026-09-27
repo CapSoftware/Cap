@@ -104,7 +104,9 @@ A job can export a recording that lives in the product's bucket:
   keys may point anywhere inside it, so a small render project (manifest,
   project config, cursors) can sit beside the untouched source files.
 - `output: { key, hlsPrefix }` places the MP4 and HLS segments inside that
-  folder instead of `out/` and `hls/`.
+  folder instead of `out/` and `hls/`. The MP4 key must be unused and is
+  committed with a conditional write. HLS files go in `hlsPrefix/<job-id>/`
+  so concurrent exports cannot replace each other's playlists or segments.
 - `callbackUrl` receives the job's outcome once it is ready or failed, signed
   `x-render-farm-signature: sha256=<hex HMAC of the body>`. `GET /jobs/:id`
   reports `progress` (0-1), `hlsSegments` and a freshly signed `hlsUrl`.
