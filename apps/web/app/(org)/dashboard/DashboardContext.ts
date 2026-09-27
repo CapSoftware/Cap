@@ -41,6 +41,8 @@ export type SharedContext = {
 	developerApps: DeveloperApp[] | null;
 	setDeveloperApps: (apps: DeveloperApp[] | null) => void;
 	shareableLinkUsage: { used: number; limit: number } | null;
+	/** The web studio editor (and its Editor page) is on for this user. */
+	webStudioEnabled: boolean;
 };
 
 export type ITheme = "light" | "dark";

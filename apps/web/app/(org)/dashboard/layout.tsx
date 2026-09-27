@@ -9,6 +9,7 @@ import { AuthContextProvider } from "@/app/Layout/AuthContext";
 import { resolveCurrentUser } from "@/app/Layout/current-user";
 import { runPromise } from "@/lib/server";
 import { getShareableLinkUsage } from "@/lib/shareable-link-quota";
+import { isWebStudioEnabledForEmail } from "@/lib/web-studio-rollout";
 import DashboardInner from "./_components/DashboardInner";
 import { DashboardPasteImport } from "./_components/DashboardPasteImport";
 import MobileTab from "./_components/MobileTab";
@@ -116,6 +117,7 @@ export default async function DashboardLayout({
 					userPreferences={userPreferences}
 					referClicked={referClicked === "true"}
 					shareableLinkUsage={shareableLinkUsage}
+					webStudioEnabled={isWebStudioEnabledForEmail(user.email)}
 				>
 					<DashboardPasteImport />
 					<div className="bg-gray-2 dashboard-grid">

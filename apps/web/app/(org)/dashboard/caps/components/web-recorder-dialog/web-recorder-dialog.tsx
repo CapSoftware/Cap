@@ -164,8 +164,17 @@ const LiveDot = ({ paused = false }: { paused?: boolean }) => (
 	/>
 );
 
-export const WebRecorderDialog = () => {
-	const [open, setOpen] = useState(false);
+/**
+ * The browser recorder. By default it's a button that opens the recorder
+ * full screen; `embedded` renders the recorder inline (the Editor page's
+ * Record tab), always open.
+ */
+export const WebRecorderDialog = ({
+	embedded = false,
+}: {
+	embedded?: boolean;
+} = {}) => {
+	const [open, setOpen] = useState(embedded);
 	const [recordingMode, setRecordingMode] =
 		useState<RecordingMode>("fullscreen");
 	const [sharedScreen, setSharedScreen] = useState<SharedScreen | null>(null);
@@ -581,7 +590,7 @@ export const WebRecorderDialog = () => {
 			setSelectedCameraId(null);
 			setRecordingMode("fullscreen");
 		}
-		setOpen(next);
+		setOpen(embedded || next);
 	};
 
 	const handleStopClick = () => {
@@ -2033,6 +2042,63 @@ export const WebRecorderDialog = () => {
 						)
 					: studio;
 
+	const stageArea = (
+		<div className="relative flex min-h-0 flex-1 flex-col">
+			{body}
+			{overlay}
+			{howOpen && <HowRecordingWorks onClose={() => setHowOpen(false)} />}
+			{audioGuide && (
+				<SystemAudioGuide
+					onContinue={continueFromAudioGuide}
+					onClose={() => setAudioGuide(null)}
+				/>
+			)}
+			{audioGuideOpen && !audioGuide && (
+				<SystemAudioGuide onClose={() => setAudioGuideOpen(false)} />
+			)}
+		</div>
+	);
+
+	const outside = (
+		<>
+			{phase === "error" && (
+				<InProgressRecordingBar
+					phase={phase}
+					durationMs={recordingTimerDisplayMs}
+					hasAudioTrack={hasAudioTrack}
+					chunkUploads={chunkUploads}
+					errorDownload={errorDownload}
+					cameraErrorDownload={cameraErrorDownload}
+					audioErrorDownloads={audioErrorDownloads}
+					onStop={handleStopClick}
+					onPause={pauseRecording}
+					onResume={resumeRecording}
+					onRestart={restartRecording}
+					isRestarting={isRestarting}
+				/>
+			)}
+			{showCameraPreview && (
+				<CameraPreviewWindow
+					ref={cameraPreviewRef}
+					captureHeight={quality.cameraHeight}
+					cameraId={selectedCameraId}
+					hidden
+					onClose={() => handleCameraChange(null)}
+				/>
+			)}
+		</>
+	);
+
+	if (embedded) {
+		return (
+			<div className="cap-rec relative flex h-full min-h-0 flex-col bg-[var(--rec-window)]">
+				<BoilFilter />
+				{stageArea}
+				{outside}
+			</div>
+		);
+	}
+
 	return (
 		<>
 			<Dialog open={open} onOpenChange={handleOpenChange}>
@@ -2064,47 +2130,10 @@ export const WebRecorderDialog = () => {
 							stage === "setup" ? () => setHowOpen(true) : undefined
 						}
 					/>
-					<div className="relative flex min-h-0 flex-1 flex-col">
-						{body}
-						{overlay}
-						{howOpen && <HowRecordingWorks onClose={() => setHowOpen(false)} />}
-						{audioGuide && (
-							<SystemAudioGuide
-								onContinue={continueFromAudioGuide}
-								onClose={() => setAudioGuide(null)}
-							/>
-						)}
-						{audioGuideOpen && !audioGuide && (
-							<SystemAudioGuide onClose={() => setAudioGuideOpen(false)} />
-						)}
-					</div>
+					{stageArea}
 				</DialogContent>
 			</Dialog>
-			{phase === "error" && (
-				<InProgressRecordingBar
-					phase={phase}
-					durationMs={recordingTimerDisplayMs}
-					hasAudioTrack={hasAudioTrack}
-					chunkUploads={chunkUploads}
-					errorDownload={errorDownload}
-					cameraErrorDownload={cameraErrorDownload}
-					audioErrorDownloads={audioErrorDownloads}
-					onStop={handleStopClick}
-					onPause={pauseRecording}
-					onResume={resumeRecording}
-					onRestart={restartRecording}
-					isRestarting={isRestarting}
-				/>
-			)}
-			{showCameraPreview && (
-				<CameraPreviewWindow
-					ref={cameraPreviewRef}
-					captureHeight={quality.cameraHeight}
-					cameraId={selectedCameraId}
-					hidden
-					onClose={() => handleCameraChange(null)}
-				/>
-			)}
+			{outside}
 		</>
 	);
 };

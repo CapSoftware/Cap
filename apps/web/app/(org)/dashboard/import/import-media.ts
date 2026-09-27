@@ -13,18 +13,27 @@ import {
 	isSupportedVideoFile,
 } from "./media-file-types";
 
-export { isSupportedMediaFile } from "./media-file-types";
+export {
+	isSupportedEditorFile,
+	isSupportedMediaFile,
+} from "./media-file-types";
 
 export async function importMediaFile({
 	file,
 	folderId,
 	orgId,
 	setUploadStatus,
+	onVideoCreated,
+	quiet = false,
 }: {
 	file: File;
 	folderId?: Folder.FolderId;
 	orgId: Organisation.OrganisationId;
 	setUploadStatus: (state: UploadStatus | undefined) => void;
+	/** Called with the new Cap's id as soon as its record exists. */
+	onVideoCreated?: (videoId: string) => void;
+	/** Skip the "processing in the background" toast when the caller opens it. */
+	quiet?: boolean;
 }) {
 	const imageContentType = getSupportedImageContentType(file);
 
@@ -44,6 +53,8 @@ export async function importMediaFile({
 			folderId,
 			orgId,
 			setUploadStatus,
+			onVideoCreated,
+			quiet,
 		);
 	}
 
@@ -116,6 +127,8 @@ async function uploadVideoForServerProcessing(
 	folderId: Folder.FolderId | undefined,
 	orgId: Organisation.OrganisationId,
 	setUploadStatus: (state: UploadStatus | undefined) => void,
+	onVideoCreated?: (videoId: string) => void,
+	quiet = false,
 ) {
 	try {
 		setUploadStatus({ status: "parsing" });
@@ -155,6 +168,7 @@ async function uploadVideoForServerProcessing(
 		});
 
 		const uploadId = videoData.id;
+		onVideoCreated?.(uploadId);
 
 		setUploadStatus({
 			status: "uploadingVideo",
@@ -265,9 +279,11 @@ async function uploadVideoForServerProcessing(
 		}
 
 		setUploadStatus(undefined);
-		toast.success(
-			"Video uploaded! Processing will continue in the background.",
-		);
+		if (!quiet) {
+			toast.success(
+				"Video uploaded! Processing will continue in the background.",
+			);
+		}
 		return true;
 	} catch (err) {
 		console.error("Video upload failed", err);

@@ -7,6 +7,7 @@ import ClapIcon from "./Clap";
 import CodeIcon from "./Code";
 import CogIcon from "./Cog";
 import DownloadIcon from "./Download";
+import EditorIcon from "./Editor";
 import HomeIcon from "./Home";
 import ImportIcon from "./Import";
 import LayersIcon from "./Layers";
@@ -22,6 +23,7 @@ export {
 	CodeIcon,
 	CogIcon,
 	DownloadIcon,
+	EditorIcon,
 	HomeIcon,
 	ImportIcon,
 	LayersIcon,
