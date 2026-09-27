@@ -188,7 +188,7 @@ const Sparks = ({ delay = 0.5 }: { delay?: number }) => (
 	</>
 );
 
-export type DoodleKind = "upload" | "done" | "error" | "share";
+export type DoodleKind = "upload" | "done" | "error" | "share" | "tracks";
 
 export const Doodle = ({ kind }: { kind: DoodleKind }) => (
 	<svg
@@ -230,6 +230,48 @@ export const Doodle = ({ kind }: { kind: DoodleKind }) => (
 					pathLength={1}
 					d="M 60 24 L 60 60 M 60 75 L 60 75.4"
 				/>
+			)}
+			{kind === "tracks" && (
+				<>
+					{(
+						[
+							["var(--track-screen)", "M 18 30 L 102 30", 0],
+							["var(--track-camera)", "M 18 52 L 84 52", 0.2],
+							["var(--track-mic)", "M 18 74 L 94 74", 0.4],
+						] as const
+					).map(([color, d, delay]) => (
+						<path
+							key={d}
+							className="rec-ink rec-draw"
+							pathLength={1}
+							d={d}
+							style={
+								{
+									stroke: color,
+									strokeWidth: 9,
+									"--d": `${delay}s`,
+								} as CSSProperties
+							}
+						/>
+					))}
+					<g className="rec-fade" style={{ "--d": "0.7s" } as CSSProperties}>
+						<path
+							className="rec-ink is-red"
+							d="M 60 16 L 60 88"
+							style={{ strokeWidth: 2.5 }}
+						>
+							<animateTransform
+								attributeName="transform"
+								type="translate"
+								values="-36 0; 40 0; -36 0"
+								dur="3.2s"
+								repeatCount="indefinite"
+								calcMode="spline"
+								keySplines="0.45 0 0.55 1; 0.45 0 0.55 1"
+							/>
+						</path>
+					</g>
+				</>
 			)}
 			{kind === "share" && (
 				<>

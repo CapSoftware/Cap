@@ -2,8 +2,14 @@
 
 import type { Video } from "@cap/web-domain";
 import { useRouter } from "next/navigation";
-import { useEffect, useState, useTransition } from "react";
+import { type CSSProperties, useEffect, useState, useTransition } from "react";
 import { retryVideoProcessing } from "@/actions/video/retry-processing";
+import {
+	BoilFilter,
+	Doodle,
+	Squiggle,
+} from "@/app/(org)/dashboard/caps/components/web-recorder-dialog/recorder-parts";
+import "@/app/(org)/dashboard/caps/components/web-recorder-dialog/recorder.css";
 import { useUploadProgress } from "../_components/ProgressCircle";
 import { SharedLinkCard } from "./SharedLinkCard";
 
@@ -33,113 +39,88 @@ export function EditProcessing({
 	const percent = reported > 0 ? reported : null;
 
 	return (
-		<main className="flex min-h-[100dvh] items-center justify-center bg-gray-2 px-4 py-10">
-			<div className="flex w-full max-w-md flex-col gap-4">
-				<div className="flex flex-col gap-4 rounded-2xl border border-gray-4 bg-gray-1 p-6">
-					<div className="flex flex-col gap-1.5">
-						<h1 className="text-balance text-xl font-semibold text-gray-12">
-							{failed
-								? "Your recording needs attention"
-								: "Getting the editor ready"}
-						</h1>
-						<output className="block text-sm leading-relaxed text-gray-11">
-							{progress?.status === "failed"
-								? "This recording did not finish uploading. Return to the device and recorder used to make it. In the browser recorder, check Recovered recordings for a download you can upload again."
-								: failed
-									? "Your recording could not finish preparing. Return to the recording for more details, or retry if available below."
-									: "Your screen, camera and audio tracks are being lined up. The editor opens by itself in a moment."}
-						</output>
-					</div>
-					{!failed && (
-						<div className="flex flex-col gap-1.5">
-							<div
-								role="progressbar"
-								aria-label="Recording preparation"
-								aria-valuemin={0}
-								aria-valuemax={100}
-								aria-valuenow={percent ?? undefined}
-								className="relative h-1.5 overflow-hidden rounded-full bg-gray-3"
-							>
-								{percent === null ? (
-									<span className="absolute inset-y-0 w-1/3 animate-[edit-processing_1.4s_ease-in-out_infinite] rounded-full bg-blue-9 motion-reduce:animate-none" />
-								) : (
-									<span
-										className="absolute inset-y-0 left-0 rounded-full bg-blue-9 transition-[width] duration-300"
-										style={{ width: `${percent}%` }}
-									/>
-								)}
-							</div>
-							{percent !== null && (
-								<span className="text-xs tabular-nums text-gray-10">
-									{percent}%
-								</span>
-							)}
-						</div>
-					)}
-					{retryError && (
-						<p role="alert" className="text-sm text-red-11">
-							{retryError}
-						</p>
-					)}
-					<div className="flex flex-wrap items-center gap-3">
-						{canRetry && (
-							<button
-								type="button"
-								disabled={retrying}
-								className="rounded-lg bg-blue-9 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
-								onClick={() => {
-									setRetryError(undefined);
-									startRetry(async () => {
-										try {
-											await retryVideoProcessing({ videoId });
-											router.refresh();
-										} catch (cause) {
-											setRetryError(
-												cause instanceof Error
-													? cause.message
-													: "Processing could not restart. Please try again.",
-											);
-										}
-									});
-								}}
-							>
-								{retrying ? "Retrying…" : "Retry processing"}
-							</button>
-						)}
-						{progress?.status === "failed" && (
-							<a
-								href="/dashboard/caps/record"
-								className="text-sm font-medium text-blue-11 hover:text-blue-12"
-							>
-								Go to recorder
-							</a>
-						)}
-						{failed && (
-							<a
-								href={`/s/${videoId}`}
-								className="text-sm font-medium text-blue-11 hover:text-blue-12"
-							>
-								View recording
-							</a>
-						)}
-					</div>
+		<main className="cap-rec flex min-h-[100dvh] flex-col items-center justify-center bg-[var(--rec-window)] px-4 pb-16 pt-10 text-center">
+			<BoilFilter />
+			<Doodle kind={failed ? "error" : "tracks"} />
+			<h1 className="rec-rise mt-6 text-balance text-[24px] font-medium tracking-[-0.01em]">
+				{failed ? "Your recording needs attention" : "Lining up your tracks"}
+			</h1>
+			<output
+				className="rec-rise mt-2 block max-w-md text-balance text-[15px] leading-relaxed text-[var(--rec-text-2)]"
+				style={{ "--d": "0.05s" } as CSSProperties}
+			>
+				{progress?.status === "failed"
+					? "This recording did not finish uploading. Return to the device and recorder used to make it. In the browser recorder, check Recovered recordings for a download you can upload again."
+					: failed
+						? "Your recording could not finish preparing. Return to the recording for more details, or retry if available below."
+						: "Your screen, camera and audio are being placed on the timeline. The editor opens by itself in a moment."}
+			</output>
+			{!failed && (
+				<div
+					className="rec-rise mt-9"
+					style={{ "--d": "0.1s" } as CSSProperties}
+					role="progressbar"
+					aria-label="Recording preparation"
+					aria-valuemin={0}
+					aria-valuemax={100}
+					aria-valuenow={percent ?? undefined}
+				>
+					<Squiggle progress={percent === null ? null : percent / 100} />
 				</div>
-				{!failed && (
-					<SharedLinkCard
-						videoId={videoId}
-						title={
-							justRecorded ? "Your Cap is already shared" : "Your share link"
-						}
-						description="Anyone with the link can watch it now. When you Save in the editor, the same link updates."
-					/>
-				)}
-			</div>
-			<style>{`
-				@keyframes edit-processing {
-					0% { left: -33%; }
-					100% { left: 100%; }
-				}
-			`}</style>
+			)}
+			{retryError && (
+				<p role="alert" className="mt-4 text-[13px] text-[var(--rec-red)]">
+					{retryError}
+				</p>
+			)}
+			{(canRetry || failed) && (
+				<div className="mt-7 flex flex-wrap items-center justify-center gap-2">
+					{canRetry && (
+						<button
+							type="button"
+							disabled={retrying}
+							className="rec-btn is-accent"
+							onClick={() => {
+								setRetryError(undefined);
+								startRetry(async () => {
+									try {
+										await retryVideoProcessing({ videoId });
+										router.refresh();
+									} catch (cause) {
+										setRetryError(
+											cause instanceof Error
+												? cause.message
+												: "Processing could not restart. Please try again.",
+										);
+									}
+								});
+							}}
+						>
+							{retrying ? "Retrying…" : "Retry processing"}
+						</button>
+					)}
+					{progress?.status === "failed" && (
+						<a href="/dashboard/caps/record" className="rec-btn">
+							Go to recorder
+						</a>
+					)}
+					{failed && (
+						<a href={`/s/${videoId}`} className="rec-btn">
+							View recording
+						</a>
+					)}
+				</div>
+			)}
+			{!failed && (
+				<SharedLinkCard
+					videoId={videoId}
+					title={
+						justRecorded ? "Your Cap is already shared" : "Your share link"
+					}
+					description="Anyone with the link can watch it now. When you save in the editor, the same link updates."
+					className="rec-rise mt-10 w-full max-w-md"
+				/>
+			)}
 		</main>
 	);
 }
