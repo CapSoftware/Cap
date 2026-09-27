@@ -29,6 +29,9 @@ interface RecorderStageProps {
 	cameraEnabled: boolean;
 	micEnabled: boolean;
 	systemAudioEnabled: boolean;
+	// Off while capturing: a live camera in this dialog would also land in a
+	// full-screen capture and appear twice in the recording.
+	showLiveCamera: boolean;
 	getCameraStream: () => MediaStream | null;
 }
 
@@ -250,9 +253,13 @@ export const RecorderStage = ({
 	cameraEnabled,
 	micEnabled,
 	systemAudioEnabled,
+	showLiveCamera,
 	getCameraStream,
 }: RecorderStageProps) => {
-	const stream = useMirroredStream(cameraEnabled, getCameraStream);
+	const stream = useMirroredStream(
+		cameraEnabled && showLiveCamera,
+		getCameraStream,
+	);
 	const cameraOnly = mode === "camera";
 	const screenOption = RECORDING_MODE_OPTIONS[mode];
 

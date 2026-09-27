@@ -336,6 +336,7 @@ export const WebRecorderDialog = () => {
 										systemAudioEnabled={
 											recordingMode !== "camera" && systemAudioEnabled
 										}
+										showLiveCamera={!isSettingUp && !isBusy}
 										getCameraStream={getCameraPreviewStream}
 									/>
 									<div className="flex min-w-0 flex-col gap-2.5">
