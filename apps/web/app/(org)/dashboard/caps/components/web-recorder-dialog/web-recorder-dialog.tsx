@@ -1,5 +1,7 @@
 "use client";
 
+import { acquireDisplayStream } from "@cap/recorder-core/capture-streams";
+import { detectRecordingModeFromTrack } from "@cap/recorder-core/recorder-utils";
 import {
 	Button,
 	Dialog,
@@ -7,15 +9,22 @@ import {
 	DialogTitle,
 	DialogTrigger,
 } from "@cap/ui";
+import clsx from "clsx";
 import {
+	CameraIcon,
 	CameraOffIcon,
 	LoaderCircleIcon,
+	MicIcon,
+	MicOffIcon,
 	MonitorIcon,
+	MonitorOffIcon,
+	MonitorUpIcon,
 	PauseIcon,
 	PlayIcon,
 	RotateCcwIcon,
 } from "lucide-react";
 import {
+	type CSSProperties,
 	type ReactNode,
 	useCallback,
 	useEffect,
@@ -28,28 +37,27 @@ import {
 	CameraPreviewWindow,
 	type CameraPreviewWindowHandle,
 } from "./CameraPreviewWindow";
-import { CameraSelector } from "./CameraSelector";
 import { InProgressRecordingBar } from "./InProgressRecordingBar";
-import { MicrophoneSelector } from "./MicrophoneSelector";
-import { RecordingButton } from "./RecordingButton";
 import {
-	type RecordingMode,
-	RecordingModeSelector,
-} from "./RecordingModeSelector";
+	DeviceMenu,
+	DockButton,
+	MoreMenu,
+	RecordButton,
+} from "./recorder-dock";
 import {
 	CountdownDial,
 	formatClock,
+	LiveDot,
 	LiveVideo,
 	MicMeter,
-	Overlay,
 	PickingScreen,
-	Steps,
-	TrackList,
+	TileLabel,
+	TrackStrip,
 	UploadStream,
 	useLiveStream,
 	useMicLevel,
 } from "./recorder-takeover";
-import { SystemAudioToggle } from "./SystemAudioToggle";
+import type { RecordingMode } from "./recording-mode";
 import { useCameraDevices } from "./useCameraDevices";
 import { useDevicePreferences } from "./useDevicePreferences";
 import { useDialogInteractions } from "./useDialogInteractions";
@@ -73,29 +81,82 @@ const waitForNextFrame = () =>
 		window.requestAnimationFrame(() => resolve());
 	});
 
-const PREVIEW_FRAME =
-	"relative mx-auto aspect-video w-full max-w-[min(100%,calc(62dvh*16/9))] overflow-hidden rounded-2xl bg-[#111214]";
+const stopStream = (stream: MediaStream | null) => {
+	for (const track of stream?.getTracks() ?? []) track.stop();
+};
 
-const Label = ({ children }: { children: ReactNode }) => (
-	<h2 className="flex items-center justify-between text-[0.8125rem] font-medium text-gray-11">
+const SURFACE_LABELS: Record<Exclude<RecordingMode, "camera">, string> = {
+	fullscreen: "Entire screen",
+	window: "Window",
+	tab: "Browser tab",
+};
+
+type SharedScreen = {
+	stream: MediaStream;
+	surface: Exclude<RecordingMode, "camera">;
+};
+
+const Tile = ({
+	children,
+	className,
+}: {
+	children: ReactNode;
+	className?: string;
+}) => (
+	<div
+		className={clsx(
+			"relative aspect-video w-full overflow-hidden rounded-[1.25rem] bg-[#18191c] ring-1 ring-inset ring-white/[0.06]",
+			className,
+		)}
+	>
 		{children}
-	</h2>
+	</div>
 );
 
-const SecondaryButton = ({
+const TileMessage = ({
+	icon,
+	title,
+	body,
+	action,
+}: {
+	icon: ReactNode;
+	title: string;
+	body: string;
+	action?: ReactNode;
+}) => (
+	<div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-6 text-center">
+		<span className="flex size-12 items-center justify-center rounded-full bg-white/[0.06] text-white/70">
+			{icon}
+		</span>
+		<div className="flex max-w-xs flex-col gap-1">
+			<span className="text-[0.9375rem] font-semibold text-white">{title}</span>
+			<span className="text-[0.8125rem] leading-snug text-white/50">
+				{body}
+			</span>
+		</div>
+		{action}
+	</div>
+);
+
+const PillButton = ({
 	onClick,
-	disabled,
 	children,
+	tone = "light",
+	disabled,
 }: {
 	onClick: () => void;
-	disabled?: boolean;
 	children: ReactNode;
+	tone?: "light" | "blue";
+	disabled?: boolean;
 }) => (
 	<button
 		type="button"
 		onClick={onClick}
 		disabled={disabled}
-		className="flex h-11 items-center justify-center gap-2 rounded-xl border border-gray-4 bg-gray-1 text-[0.875rem] font-medium text-gray-12 transition-colors hover:bg-gray-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-8 disabled:cursor-not-allowed disabled:opacity-40"
+		className={clsx(
+			"mt-1 inline-flex h-9 items-center gap-2 rounded-full px-4 text-[0.8125rem] font-medium transition-[filter,transform] hover:brightness-110 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#4785FF] focus-visible:ring-offset-2 focus-visible:ring-offset-[#18191c] disabled:opacity-50",
+			tone === "blue" ? "bg-[#4785FF] text-white" : "bg-white text-[#111214]",
+		)}
 	>
 		{children}
 	</button>
@@ -105,8 +166,9 @@ export const WebRecorderDialog = () => {
 	const [open, setOpen] = useState(false);
 	const [recordingMode, setRecordingMode] =
 		useState<RecordingMode>("fullscreen");
-	const [cameraSelectOpen, setCameraSelectOpen] = useState(false);
-	const [micSelectOpen, setMicSelectOpen] = useState(false);
+	const [sharedScreen, setSharedScreen] = useState<SharedScreen | null>(null);
+	const sharedScreenRef = useRef<SharedScreen | null>(null);
+	const [sharePending, setSharePending] = useState(false);
 	const dialogContentRef = useRef<HTMLDivElement>(null);
 	const startSoundRef = useRef<HTMLAudioElement | null>(null);
 	const stopSoundRef = useRef<HTMLAudioElement | null>(null);
@@ -115,6 +177,35 @@ export const WebRecorderDialog = () => {
 		() => cameraPreviewRef.current?.getVideoStream() ?? null,
 		[],
 	);
+
+	const replaceSharedScreen = useCallback((next: SharedScreen | null) => {
+		sharedScreenRef.current = next;
+		setSharedScreen(next);
+	}, []);
+
+	const stopSharing = useCallback(() => {
+		stopStream(sharedScreenRef.current?.stream ?? null);
+		replaceSharedScreen(null);
+	}, [replaceSharedScreen]);
+
+	useEffect(
+		() => () => {
+			stopStream(sharedScreenRef.current?.stream ?? null);
+			sharedScreenRef.current = null;
+		},
+		[],
+	);
+
+	// The recorder takes ownership of the shared screen when it starts, so the
+	// dialog forgets it rather than stopping it.
+	const takeSharedDisplayStream = useCallback(() => {
+		const shared = sharedScreenRef.current;
+		replaceSharedScreen(null);
+		const live = shared?.stream
+			.getVideoTracks()
+			.some((track) => track.readyState === "live");
+		return live ? (shared?.stream ?? null) : null;
+	}, [replaceSharedScreen]);
 
 	useEffect(() => {
 		if (typeof window === "undefined") {
@@ -235,16 +326,133 @@ export const WebRecorderDialog = () => {
 	});
 
 	const micEnabled = selectedMicId !== null;
+	const cameraEnabled = selectedCameraId !== null;
 
+	// With access already granted, open with the camera and mic on so the
+	// first thing people see is themselves. Remembered choices win.
+	const autoSelectedRef = useRef({ camera: false, mic: false });
 	useEffect(() => {
-		if (
-			recordingMode === "camera" &&
-			!selectedCameraId &&
-			availableCameras.length > 0
-		) {
-			setSelectedCameraId(availableCameras[0]?.deviceId ?? null);
+		const done = autoSelectedRef.current;
+		if (!open) {
+			done.camera = false;
+			done.mic = false;
+			return;
 		}
-	}, [recordingMode, selectedCameraId, availableCameras, setSelectedCameraId]);
+		if (rememberDevices) return;
+		const camera = availableCameras[0];
+		if (!done.camera && camera) {
+			done.camera = true;
+			if (!selectedCameraId) handleCameraChange(camera.deviceId);
+		}
+		const mic = availableMics[0];
+		if (!done.mic && mic) {
+			done.mic = true;
+			if (!selectedMicId) handleMicChange(mic.deviceId);
+		}
+	}, [
+		open,
+		rememberDevices,
+		availableCameras,
+		availableMics,
+		selectedCameraId,
+		selectedMicId,
+		handleCameraChange,
+		handleMicChange,
+	]);
+
+	const lastCameraIdRef = useRef<string | null>(null);
+	const lastMicIdRef = useRef<string | null>(null);
+	if (selectedCameraId) lastCameraIdRef.current = selectedCameraId;
+	if (selectedMicId) lastMicIdRef.current = selectedMicId;
+
+	const [requestingAccess, setRequestingAccess] = useState(false);
+	const requestAccess = useCallback(
+		async (kinds: { video: boolean; audio: boolean }) => {
+			setRequestingAccess(true);
+			try {
+				const stream = await navigator.mediaDevices.getUserMedia(kinds);
+				stopStream(stream);
+				await Promise.all([refreshCameras(), refreshMics()]);
+			} catch {
+				toast.error(
+					"Your browser blocked access. Allow the camera and microphone in the address bar, then try again.",
+				);
+			} finally {
+				setRequestingAccess(false);
+			}
+		},
+		[refreshCameras, refreshMics],
+	);
+
+	const toggleCamera = () => {
+		if (cameraEnabled) {
+			handleCameraChange(null);
+			return;
+		}
+		if (availableCameras.length === 0) {
+			void requestAccess({ video: true, audio: availableMics.length === 0 });
+			return;
+		}
+		const remembered = availableCameras.find(
+			(camera) => camera.deviceId === lastCameraIdRef.current,
+		);
+		handleCameraChange((remembered ?? availableCameras[0])?.deviceId ?? null);
+	};
+
+	const toggleMic = () => {
+		if (micEnabled) {
+			handleMicChange(null);
+			return;
+		}
+		if (availableMics.length === 0) {
+			void requestAccess({
+				video: availableCameras.length === 0,
+				audio: true,
+			});
+			return;
+		}
+		const remembered = availableMics.find(
+			(mic) => mic.deviceId === lastMicIdRef.current,
+		);
+		handleMicChange((remembered ?? availableMics[0])?.deviceId ?? null);
+	};
+
+	const shareScreen = useCallback(async () => {
+		setSharePending(true);
+		try {
+			const stream = await acquireDisplayStream({
+				mode: "fullscreen",
+				systemAudioEnabled,
+				onSystemAudioFallback: () => {
+					toast.warning(
+						"System audio isn't supported in this browser. Recording without it.",
+					);
+				},
+			});
+			await cameraPreviewRef.current?.closePictureInPicture();
+			stopStream(sharedScreenRef.current?.stream ?? null);
+			const track = stream.getVideoTracks()[0] ?? null;
+			const shared: SharedScreen = {
+				stream,
+				surface: detectRecordingModeFromTrack(track) ?? "fullscreen",
+			};
+			track?.addEventListener("ended", () => {
+				if (sharedScreenRef.current === shared) replaceSharedScreen(null);
+			});
+			replaceSharedScreen(shared);
+			return true;
+		} catch (error) {
+			if (
+				!(error instanceof DOMException && error.name === "NotAllowedError")
+			) {
+				console.error("Screen share failed", error);
+				toast.error("Couldn't share your screen. Try again.");
+			}
+			return false;
+		} finally {
+			setSharePending(false);
+		}
+	}, [replaceSharedScreen, systemAudioEnabled]);
 
 	const {
 		phase,
@@ -277,6 +485,7 @@ export const WebRecorderDialog = () => {
 		resetState,
 		dismissRecoveredDownload,
 		getActiveCameraStream,
+		getActiveDisplayStream,
 		recordedBytes,
 	} = useWebRecorder({
 		organisationId,
@@ -289,6 +498,7 @@ export const WebRecorderDialog = () => {
 		onDisplayStreamAcquired: async () => {
 			await cameraPreviewRef.current?.closePictureInPicture();
 		},
+		takeSharedDisplayStream,
 		isProUser: user.isPro,
 		onRecordingSurfaceDetected: (mode) => {
 			setRecordingMode(mode);
@@ -299,28 +509,37 @@ export const WebRecorderDialog = () => {
 	});
 	const activeCameraGetterRef = useRef(getActiveCameraStream);
 	activeCameraGetterRef.current = getActiveCameraStream;
+	const activeDisplayGetterRef = useRef(getActiveDisplayStream);
+	activeDisplayGetterRef.current = getActiveDisplayStream;
 	// Camera-only recordings own their camera stream; screen recordings keep
 	// recording a clone of the preview, so fall back to that.
 	const getLiveCamera = useCallback(
 		() => activeCameraGetterRef.current() ?? getCameraPreviewStream(),
 		[getCameraPreviewStream],
 	);
+	const getRecordingScreen = useCallback(
+		() => activeDisplayGetterRef.current(),
+		[],
+	);
 
 	useEffect(() => {
 		if (!isSettingUp) finishCountdownRef.current?.();
 	}, [isSettingUp]);
 
-	useEffect(() => {
-		if (
-			!supportCheckCompleted ||
-			supportsDisplayRecording ||
-			recordingMode === "camera"
-		) {
-			return;
-		}
+	const screenSupported = !supportCheckCompleted || supportsDisplayRecording;
 
-		setRecordingMode("camera");
-	}, [supportCheckCompleted, supportsDisplayRecording, recordingMode]);
+	// What gets recorded follows what's switched on: a shared screen records
+	// the screen (plus the camera as its own track), otherwise the camera.
+	useEffect(() => {
+		if (phase !== "idle" || isSettingUp) return;
+		setRecordingMode(
+			sharedScreen
+				? sharedScreen.surface
+				: cameraEnabled || !screenSupported
+					? "camera"
+					: "fullscreen",
+		);
+	}, [phase, isSettingUp, sharedScreen, cameraEnabled, screenSupported]);
 
 	const {
 		handlePointerDownOutside,
@@ -347,6 +566,7 @@ export const WebRecorderDialog = () => {
 
 		if (!next) {
 			void resetState();
+			stopSharing();
 			setSelectedCameraId(null);
 			setRecordingMode("fullscreen");
 		}
@@ -359,14 +579,20 @@ export const WebRecorderDialog = () => {
 		});
 	};
 
-	const handleStartClick = useCallback(async () => {
-		if (recordingMode === "camera") {
+	const handleRecordClick = async () => {
+		let screenReady = sharedScreenRef.current !== null;
+		if (!screenReady && !cameraEnabled && screenSupported) {
+			screenReady = await shareScreen();
+			if (!screenReady) return;
+		}
+
+		if (!screenReady && recordingMode === "camera") {
 			cameraPreviewRef.current?.stopStream();
 			await waitForNextFrame();
 		}
 
 		await startRecording();
-	}, [recordingMode, startRecording]);
+	};
 
 	const handleClose = () => {
 		if (!isBusy) {
@@ -375,9 +601,13 @@ export const WebRecorderDialog = () => {
 	};
 
 	const screenMode = recordingMode !== "camera";
-	const cameraEnabled = selectedCameraId !== null;
 	const finishing =
 		phase === "creating" || phase === "converting" || phase === "uploading";
+	const recordingScreen = useLiveStream(
+		getRecordingScreen,
+		open && (isSettingUp || isRecording),
+	);
+	const screenStream = sharedScreen?.stream ?? recordingScreen;
 	const stage =
 		phase === "error"
 			? "error"
@@ -390,10 +620,11 @@ export const WebRecorderDialog = () => {
 						: countdown !== null
 							? "countdown"
 							: isSettingUp
-								? screenMode
+								? screenMode && !screenStream
 									? "picking"
 									: "starting"
 								: "setup";
+	const live = stage === "recording";
 	const showCameraPreview =
 		selectedCameraId &&
 		(recordingMode !== "camera" || (!isSettingUp && !isBusy));
@@ -403,25 +634,20 @@ export const WebRecorderDialog = () => {
 		: Math.max(0, FREE_PLAN_MAX_RECORDING_MS - durationMs);
 	const previewStream = useLiveStream(
 		getCameraPreviewStream,
-		open && cameraEnabled && stage === "setup",
+		open && cameraEnabled && (stage === "setup" || stage === "starting"),
 	);
 	const liveCameraStream = useLiveStream(
 		getLiveCamera,
 		open && cameraEnabled && (stage === "recording" || stage === "countdown"),
 	);
-	const micLevel = useMicLevel(selectedMicId, open && stage === "setup");
-
-	// The picked surface only describes the last capture; the next one starts
-	// from the full picker again.
-	useEffect(() => {
-		if (
-			phase === "idle" &&
-			!isSettingUp &&
-			(recordingMode === "window" || recordingMode === "tab")
-		) {
-			setRecordingMode("fullscreen");
-		}
-	}, [phase, isSettingUp, recordingMode]);
+	const cameraStream =
+		stage === "recording" || stage === "countdown"
+			? liveCameraStream
+			: previewStream;
+	const micLevel = useMicLevel(
+		selectedMicId,
+		open && (stage === "setup" || stage === "starting"),
+	);
 
 	useEffect(() => {
 		if (countdown === null) return;
@@ -441,388 +667,439 @@ export const WebRecorderDialog = () => {
 		};
 	}, [isRecording, isPaused, recordingTimerDisplayMs]);
 
-	const recordingControls = (
-		<div className="flex flex-col gap-2.5">
-			<button
-				type="button"
-				onClick={handleStopClick}
-				className="flex h-14 w-full items-center justify-center gap-3 rounded-2xl bg-[#e5484d] text-base font-semibold text-white shadow-[0_12px_28px_-14px_rgba(229,72,77,0.9)] transition-[filter,transform] hover:brightness-105 active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#e5484d] focus-visible:ring-offset-2"
-			>
-				<span className="size-3.5 rounded-[3px] bg-white" aria-hidden />
-				Stop recording
-			</button>
-			<div className="grid grid-cols-2 gap-2.5">
-				<SecondaryButton
-					onClick={() => {
-						void (isPaused ? resumeRecording() : pauseRecording());
-					}}
-				>
-					{isPaused ? (
-						<PlayIcon className="size-4" aria-hidden />
-					) : (
-						<PauseIcon className="size-4" aria-hidden />
+	const setupLocked = stage !== "setup";
+	const willRecordScreen = sharedScreen !== null || !cameraEnabled;
+	const recordLabel =
+		sharedScreen || cameraEnabled
+			? "Start recording"
+			: "Choose a screen and start recording";
+	const systemAudioOn =
+		systemAudioEnabled &&
+		(live
+			? screenMode && (recordingScreen?.getAudioTracks().length ?? 0) > 0
+			: sharedScreen
+				? sharedScreen.stream.getAudioTracks().length > 0
+				: willRecordScreen);
+
+	const screenTile = screenSupported && (
+		<Tile
+			className={clsx(
+				!screenStream &&
+					"bg-transparent ring-0 [background-image:linear-gradient(135deg,rgba(255,255,255,0.035),rgba(255,255,255,0.01))]",
+			)}
+		>
+			{screenStream ? (
+				<>
+					<LiveVideo
+						stream={screenStream}
+						mirror={false}
+						className="absolute inset-0 size-full bg-black object-contain"
+					/>
+					<TileLabel className="absolute left-3 top-3">
+						{live ? (
+							<LiveDot paused={isPaused} />
+						) : (
+							<MonitorIcon className="size-3.5" aria-hidden />
+						)}
+						Screen
+						{sharedScreen && (
+							<span className="text-white/55">
+								· {SURFACE_LABELS[sharedScreen.surface]}
+							</span>
+						)}
+					</TileLabel>
+					{stage === "setup" && sharedScreen && (
+						<button
+							type="button"
+							onClick={() => void shareScreen()}
+							className="absolute right-3 top-3 inline-flex h-7 items-center rounded-full bg-black/55 px-3 text-[0.75rem] font-medium text-white backdrop-blur-md transition-colors hover:bg-black/75"
+						>
+							Change
+						</button>
 					)}
-					{isPaused ? "Resume" : "Pause"}
-				</SecondaryButton>
-				<SecondaryButton
-					onClick={() => {
-						void restartRecording();
-					}}
-					disabled={isRestarting}
-				>
-					<RotateCcwIcon className="size-4" aria-hidden />
-					Start over
-				</SecondaryButton>
-			</div>
+				</>
+			) : (
+				<>
+					<span className="pointer-events-none absolute inset-0 rounded-[1.25rem] border-[1.5px] border-dashed border-white/15" />
+					{sharePending ? (
+						<TileMessage
+							icon={<LoaderCircleIcon className="size-5 animate-spin" />}
+							title="Pick what to share"
+							body="Choose a screen, window or tab in your browser's popup, then click Share."
+						/>
+					) : (
+						<TileMessage
+							icon={<MonitorUpIcon className="size-5" />}
+							title="Share your screen"
+							body="A screen, window or tab. It records on its own track."
+							action={
+								<PillButton
+									tone="blue"
+									onClick={() => void shareScreen()}
+									disabled={setupLocked}
+								>
+									Choose what to share
+								</PillButton>
+							}
+						/>
+					)}
+				</>
+			)}
+		</Tile>
+	);
+
+	const cameraTile = (
+		<Tile>
+			{cameraEnabled ? (
+				cameraStream ? (
+					<LiveVideo
+						stream={cameraStream}
+						className="absolute inset-0 size-full object-cover"
+					/>
+				) : (
+					<div className="absolute inset-0 flex items-center justify-center">
+						<LoaderCircleIcon
+							className="size-6 animate-spin text-white/50"
+							aria-hidden
+						/>
+					</div>
+				)
+			) : availableCameras.length === 0 ? (
+				<TileMessage
+					icon={<CameraIcon className="size-5" />}
+					title="Show your face"
+					body="Allow your camera and mic to record yourself on separate tracks."
+					action={
+						<PillButton
+							onClick={() => void requestAccess({ video: true, audio: true })}
+							disabled={requestingAccess || setupLocked}
+						>
+							Allow camera and mic
+						</PillButton>
+					}
+				/>
+			) : (
+				<TileMessage
+					icon={<CameraOffIcon className="size-5" />}
+					title="Camera is off"
+					body="Turn it on to record yourself on a separate track."
+					action={
+						<PillButton onClick={toggleCamera} disabled={setupLocked}>
+							Turn on camera
+						</PillButton>
+					}
+				/>
+			)}
+			{cameraEnabled && (
+				<TileLabel className="absolute left-3 top-3">
+					{live ? (
+						<LiveDot paused={isPaused} />
+					) : (
+						<CameraIcon className="size-3.5" aria-hidden />
+					)}
+					Camera
+				</TileLabel>
+			)}
+			{cameraEnabled && !live && (
+				<TileLabel className="absolute right-3 top-3 bg-black/40 text-white/75">
+					Preview
+				</TileLabel>
+			)}
+			<TileLabel className="absolute bottom-3 left-3">
+				{micEnabled ? (
+					<>
+						<MicIcon className="size-3.5" aria-hidden />
+						{stage === "setup" || stage === "starting" ? (
+							<MicMeter level={micLevel} />
+						) : (
+							"Mic"
+						)}
+					</>
+				) : (
+					<>
+						<MicOffIcon className="size-3.5 text-[#ff8587]" aria-hidden />
+						Muted
+					</>
+				)}
+			</TileLabel>
+		</Tile>
+	);
+
+	const tiles = (reserve: string) => (
+		<div
+			className={clsx(
+				"grid w-full gap-3",
+				screenSupported
+					? "max-w-[calc((100dvh_-_var(--reserve))_*_0.85)] lg:max-w-[min(1600px,calc((100dvh_-_var(--reserve))_*_3.4))] lg:grid-cols-2"
+					: "max-w-[min(1100px,calc((100dvh_-_var(--reserve))_*_1.77))]",
+			)}
+			style={{ "--reserve": reserve } as CSSProperties}
+		>
+			{screenTile}
+			{cameraTile}
 		</div>
 	);
 
-	const recordingBadge = (
-		<span className="inline-flex items-center gap-2 text-[0.875rem] font-medium text-gray-12">
-			<span
-				className={
-					isPaused
-						? "size-2.5 rounded-full bg-gray-8"
-						: "size-2.5 animate-pulse rounded-full bg-[#e5484d] motion-reduce:animate-none"
-				}
-			/>
-			{isPaused ? "Paused" : "Recording"}
-		</span>
+	const trackStrip = (
+		<TrackStrip
+			live={live}
+			paused={isPaused}
+			screen={
+				screenSupported ? (live ? screenMode : sharedScreen !== null) : null
+			}
+			camera={cameraEnabled}
+			mic={micEnabled}
+			systemAudio={screenSupported ? systemAudioOn : null}
+		/>
 	);
 
-	const startControls = (
+	const notices = (
 		<>
-			<RecordingButton
-				isRecording={false}
-				disabled={!canStartRecording}
-				onStart={handleStartClick}
-				onStop={handleStopClick}
-			/>
-			<p className="text-center text-[0.8125rem] leading-snug text-gray-10">
-				{screenMode
-					? "Next, your browser asks what to share."
-					: "Recording starts straight away."}
-				{user.isPro ? "" : ` Up to ${freeMinutes} minutes on Free.`}
-			</p>
+			{screenCaptureWarning && (
+				<p className="max-w-md text-center text-[0.8125rem] leading-snug text-white/50">
+					This browser can only record your camera. Use Chrome, Edge or Cap
+					Desktop on a computer to record your screen too.
+				</p>
+			)}
+			{!isBrowserSupported && unsupportedReason && (
+				<p className="max-w-md rounded-xl bg-[#ff4d4f]/10 px-3 py-2 text-center text-[0.8125rem] leading-snug text-[#ff9a9b]">
+					{unsupportedReason}
+				</p>
+			)}
+			{recoveredDownloads.length > 0 && (
+				<div className="flex w-full max-w-md flex-col gap-1.5 rounded-2xl border border-white/[0.08] bg-white/[0.03] p-2.5">
+					<span className="px-1 text-[0.8125rem] font-medium text-white/85">
+						Recovered recordings
+					</span>
+					{recoveredDownloads.map((download) => (
+						<div
+							key={download.id}
+							className="flex items-center justify-between gap-3 rounded-lg bg-white/[0.04] px-2.5 py-2 text-xs text-white"
+						>
+							<div className="min-w-0">
+								<div className="truncate font-medium">{download.fileName}</div>
+								<div className="text-white/45">
+									{recoveredRecordingTimeFormatter.format(
+										new Date(download.createdAt),
+									)}
+								</div>
+							</div>
+							<div className="flex shrink-0 items-center gap-3">
+								<a
+									href={download.url}
+									download={download.fileName}
+									className="font-medium text-[#7ea8ff] hover:text-white"
+									onClick={() =>
+										setTimeout(() => dismissRecoveredDownload(download.id), 500)
+									}
+								>
+									Download
+								</a>
+								<button
+									type="button"
+									className="text-white/45 hover:text-white"
+									onClick={() => dismissRecoveredDownload(download.id)}
+								>
+									Dismiss
+								</button>
+							</div>
+						</div>
+					))}
+				</div>
+			)}
 		</>
 	);
 
-	const setupView = (
-		<div className="mx-auto grid w-full max-w-[1240px] gap-6 px-4 py-6 sm:px-8 lg:grid-cols-[minmax(0,1fr)_22rem] lg:gap-10 lg:py-10">
-			<section className="flex min-w-0 flex-col gap-5">
-				<div className={PREVIEW_FRAME}>
-					{cameraEnabled ? (
-						previewStream ? (
-							<LiveVideo
-								stream={previewStream}
-								className="absolute inset-0 size-full"
-							/>
-						) : (
-							<div className="absolute inset-0 flex items-center justify-center">
-								<LoaderCircleIcon
-									className="size-6 animate-spin text-white/60"
-									aria-hidden
-								/>
-							</div>
-						)
-					) : (
-						<div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-6 text-center text-white">
-							<CameraOffIcon className="size-8 text-white/60" aria-hidden />
-							<div className="flex flex-col gap-1">
-								<span className="text-lg font-semibold">Camera is off</span>
-								<span className="text-sm text-white/60">
-									{screenMode
-										? "Your recording will be your screen only."
-										: "Choose a camera to record."}
-								</span>
-							</div>
-							{availableCameras.length > 0 && (
-								<button
-									type="button"
-									onClick={() =>
-										handleCameraChange(availableCameras[0]?.deviceId ?? null)
-									}
-									className="mt-1 rounded-full bg-white px-4 py-2 text-sm font-medium text-[#111214] transition-colors hover:bg-white/90"
-								>
-									Turn on camera
-								</button>
-							)}
-						</div>
-					)}
-					{cameraEnabled && (
-						<Overlay className="absolute left-3 top-3">
-							<span className="size-1.5 rounded-full bg-[#22B07D]" />
-							Camera preview
-						</Overlay>
-					)}
-				</div>
-				<p className="max-w-[46rem] text-[0.9375rem] leading-relaxed text-gray-11">
-					<span className="font-medium text-gray-12">
-						This is only a preview.
-					</span>{" "}
-					{screenMode
-						? "Your camera records on its own track, separate from your screen, and appears in your video when you stop recording."
-						: "Your camera and mic record on their own tracks, and your video opens in the editor when you stop."}
-				</p>
-				<div className="flex flex-col gap-2.5">
-					<span className="text-[0.8125rem] text-gray-10">
-						Saved as separate tracks you can edit afterwards
-					</span>
-					<TrackList
-						screen={screenMode ? true : null}
-						camera={cameraEnabled}
-						mic={micEnabled}
-						systemAudio={screenMode ? systemAudioEnabled : null}
-					/>
-				</div>
-			</section>
-			<aside className="flex flex-col gap-5 lg:sticky lg:top-8 lg:self-start">
-				<div className="flex flex-col gap-2">
-					<Label>Record</Label>
-					<RecordingModeSelector
-						mode={recordingMode}
-						disabled={isBusy}
-						displayRecordingSupported={
-							!supportCheckCompleted || supportsDisplayRecording
-						}
-						onModeChange={setRecordingMode}
-					/>
-					{screenCaptureWarning && (
-						<p className="px-1 text-[0.8125rem] leading-snug text-gray-10">
-							This browser can only record your camera. Use Chrome, Edge or Cap
-							Desktop on a computer to record your screen too.
-						</p>
-					)}
-				</div>
-				<div className="flex flex-col gap-2">
-					<Label>Camera</Label>
-					<CameraSelector
-						selectedCameraId={selectedCameraId}
-						availableCameras={availableCameras}
-						dialogOpen={open}
-						disabled={isBusy}
-						open={cameraSelectOpen}
-						onOpenChange={(isOpen) => {
-							setCameraSelectOpen(isOpen);
-							if (isOpen) setMicSelectOpen(false);
-						}}
-						onCameraChange={handleCameraChange}
-						onRefreshDevices={refreshCameras}
-					/>
-				</div>
-				<div className="flex flex-col gap-2">
-					<Label>
-						Microphone
-						{micEnabled && <MicMeter level={micLevel} />}
-					</Label>
-					<MicrophoneSelector
-						selectedMicId={selectedMicId}
-						availableMics={availableMics}
-						dialogOpen={open}
-						disabled={isBusy}
-						open={micSelectOpen}
-						onOpenChange={(isOpen) => {
-							setMicSelectOpen(isOpen);
-							if (isOpen) setCameraSelectOpen(false);
-						}}
-						onMicChange={handleMicChange}
-						onRefreshDevices={refreshMics}
-					/>
-					{screenMode && (
-						<SystemAudioToggle
-							enabled={systemAudioEnabled}
-							disabled={isBusy}
-							recordingMode={recordingMode}
-							onToggle={handleSystemAudioChange}
-						/>
-					)}
-				</div>
-				<div className="hidden flex-col gap-2.5 pt-1 lg:flex">
-					{startControls}
-				</div>
-				{!isBrowserSupported && unsupportedReason && (
-					<p className="rounded-xl border border-red-6 bg-red-3 px-3 py-2 text-[0.8125rem] leading-snug text-red-12">
-						{unsupportedReason}
+	const stageOverlay =
+		stage === "countdown" ? (
+			<div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-6 bg-[#0c0c0e]/70 px-4 text-center backdrop-blur-md">
+				<CountdownDial value={countdown ?? 1} />
+				<div className="flex flex-col items-center gap-2">
+					<h2 className="text-balance text-2xl font-semibold tracking-tight text-white sm:text-3xl">
+						Get ready
+					</h2>
+					<p className="max-w-md text-balance text-[0.9375rem] leading-relaxed text-white/60">
+						{screenMode
+							? "When the countdown ends, switch to what you're sharing and start presenting."
+							: "Recording starts when the countdown ends."}
 					</p>
-				)}
-				{recoveredDownloads.length > 0 && (
-					<div className="flex flex-col gap-2 rounded-xl border border-gray-4 bg-gray-1 p-3">
-						<span className="text-[0.8125rem] font-medium text-gray-12">
-							Recovered recordings
-						</span>
-						{recoveredDownloads.map((download) => (
-							<div
-								key={download.id}
-								className="flex items-center justify-between gap-3 rounded-lg bg-gray-2 px-2.5 py-2 text-xs text-gray-12"
-							>
-								<div className="min-w-0">
-									<div className="truncate font-medium">
-										{download.fileName}
-									</div>
-									<div className="text-gray-10">
-										{recoveredRecordingTimeFormatter.format(
-											new Date(download.createdAt),
-										)}
-									</div>
-								</div>
-								<div className="flex shrink-0 items-center gap-3">
-									<a
-										href={download.url}
-										download={download.fileName}
-										className="font-medium text-blue-11 hover:text-blue-12"
-										onClick={() =>
-											setTimeout(
-												() => dismissRecoveredDownload(download.id),
-												500,
-											)
-										}
-									>
-										Download
-									</a>
-									<button
-										type="button"
-										className="text-gray-10 hover:text-gray-12"
-										onClick={() => dismissRecoveredDownload(download.id)}
-									>
-										Dismiss
-									</button>
-								</div>
-							</div>
-						))}
-					</div>
-				)}
-			</aside>
-			{screenMode && (
-				<div className="lg:col-span-2">
-					<Steps current={0} />
 				</div>
-			)}
-		</div>
-	);
-
-	const cameraFrame = (overlay: ReactNode, dim = false) => (
-		<div className={PREVIEW_FRAME}>
-			{cameraEnabled ? (
-				<LiveVideo
-					stream={liveCameraStream}
-					className="absolute inset-0 size-full"
-				/>
-			) : (
-				<div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-white/70">
-					<MonitorIcon className="size-8" aria-hidden />
-					<span className="text-sm">Recording your screen</span>
-				</div>
-			)}
-			{dim && (
-				<div className="absolute inset-0 bg-black/45 backdrop-blur-[2px]" />
-			)}
-			{overlay}
-		</div>
-	);
-
-	const countdownView = (
-		<div className="mx-auto flex w-full max-w-[1100px] flex-col items-center gap-6 px-4 py-6 sm:px-8 lg:py-10">
-			{cameraFrame(
-				<div className="absolute inset-0 flex items-center justify-center">
-					<CountdownDial value={countdown ?? 1} />
-				</div>,
-				true,
-			)}
-			<div className="flex flex-col items-center gap-3 text-center">
-				<h2 className="text-balance text-2xl font-semibold tracking-tight text-gray-12 sm:text-3xl">
-					{screenMode ? "Get ready, you're about to record" : "Get ready"}
-				</h2>
-				<p className="max-w-xl text-balance text-base leading-relaxed text-gray-10">
-					{screenMode
-						? "Recording starts when the countdown ends. Then switch to your screen and present."
-						: "Recording starts when the countdown ends."}
-				</p>
 				<button
 					type="button"
 					onClick={() => finishCountdownRef.current?.()}
-					className="rounded-full border border-gray-4 bg-gray-1 px-4 py-2 text-sm font-medium text-gray-12 transition-colors hover:bg-gray-3"
+					className="h-9 rounded-full bg-white/10 px-4 text-[0.8125rem] font-medium text-white transition-colors hover:bg-white/15"
 				>
 					Start now
 				</button>
 			</div>
+		) : stage === "picking" ? (
+			<div className="absolute inset-0 z-10 flex items-start justify-center bg-[#0c0c0e]/80 px-4 pt-[16vh] backdrop-blur-md">
+				<PickingScreen />
+			</div>
+		) : null;
+
+	const studio = (
+		<div className="relative flex min-h-0 flex-1 flex-col">
+			<main className="flex min-h-0 flex-1 flex-col items-center justify-center gap-5 overflow-y-auto px-4 py-5 sm:px-8">
+				{live && screenMode && (
+					<div className="flex max-w-2xl items-center gap-2.5 rounded-full border border-[#4785FF]/30 bg-[#4785FF]/10 py-1.5 pl-2 pr-4 text-[0.8125rem] text-white/85">
+						<span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-[#4785FF] text-white">
+							<MonitorIcon className="size-3.5" aria-hidden />
+						</span>
+						<span>
+							<span className="font-medium text-white">
+								Now switch to what you're sharing.
+							</span>{" "}
+							This tab keeps your controls. Come back here to stop.
+						</span>
+					</div>
+				)}
+				{tiles(live ? "27rem" : "19rem")}
+				{trackStrip}
+				{live && (
+					<div className="w-full max-w-3xl">
+						<UploadStream
+							chunks={chunkUploads}
+							recordedBytes={recordedBytes}
+							recording
+							paused={isPaused}
+						/>
+					</div>
+				)}
+				{!live && notices}
+			</main>
+			{stageOverlay}
 		</div>
 	);
 
-	const recordingView = (
-		<div className="mx-auto grid w-full max-w-[1240px] gap-6 px-4 py-6 sm:px-8 lg:grid-cols-[minmax(0,1fr)_22rem] lg:gap-10 lg:py-10">
-			<section className="flex min-w-0 flex-col gap-5">
-				{cameraFrame(
-					<>
-						<Overlay className="absolute left-3 top-3">
-							<span
-								className={
-									isPaused
-										? "size-1.5 rounded-full bg-white/60"
-										: "size-1.5 animate-pulse rounded-full bg-[#ff4d4d] motion-reduce:animate-none"
-								}
-							/>
-							{isPaused ? "Paused" : "Recording"}
-							<span className="tabular-nums text-white/80">
-								{formatClock(durationMs)}
-							</span>
-						</Overlay>
-						{cameraEnabled && (
-							<Overlay className="absolute right-3 top-3">
-								Camera preview
-							</Overlay>
-						)}
-					</>,
-				)}
-				<UploadStream
-					chunks={chunkUploads}
-					recordedBytes={recordedBytes}
-					recording
-					paused={isPaused}
+	const dock = live ? (
+		<>
+			<div className="flex items-center justify-end gap-1 sm:gap-2">
+				<DockButton
+					icon={RotateCcwIcon}
+					label="Start over"
+					on
+					disabled={isRestarting}
+					onClick={() => {
+						void restartRecording();
+					}}
 				/>
-			</section>
-			<aside className="flex flex-col gap-6 lg:sticky lg:top-8 lg:self-start">
-				<div className="flex flex-col gap-1">
-					{recordingBadge}
-					<span className="text-6xl font-semibold tabular-nums tracking-tight text-gray-12">
+				<DockButton
+					icon={isPaused ? PlayIcon : PauseIcon}
+					label={isPaused ? "Resume" : "Pause"}
+					on
+					onClick={() => {
+						void (isPaused ? resumeRecording() : pauseRecording());
+					}}
+				/>
+			</div>
+			<RecordButton
+				recording
+				label="Stop recording"
+				onClick={handleStopClick}
+			/>
+			<div className="flex items-center justify-start">
+				<div className="flex min-w-[7.5rem] flex-col gap-1 px-2">
+					<span className="flex items-center gap-2 text-[1.375rem] font-semibold leading-none tabular-nums text-white">
+						<LiveDot paused={isPaused} />
 						{formatClock(recordingTimerDisplayMs)}
 					</span>
-					{!user.isPro && (
-						<span className="text-[0.8125rem] text-gray-10">
-							left on the Free plan
-						</span>
-					)}
-				</div>
-				{screenMode ? (
-					<div className="flex flex-col gap-2 rounded-2xl border border-blue-6 bg-blue-2 p-4">
-						<span className="text-[1.0625rem] font-semibold leading-snug text-gray-12">
-							Now switch to the screen you're sharing
-						</span>
-						<span className="text-[0.875rem] leading-relaxed text-gray-11">
-							This tab is just your controls and camera preview. Present as
-							normal, then come back here to stop.
-						</span>
-					</div>
-				) : (
-					<p className="text-[0.9375rem] leading-relaxed text-gray-11">
-						You're recording your camera and mic. Stop when you're done and the
-						editor opens.
-					</p>
-				)}
-				{recordingControls}
-				<div className="flex flex-col gap-2">
-					<span className="text-[0.8125rem] text-gray-10">
-						Recording as separate tracks
+					<span className="text-[0.75rem] leading-none text-white/45">
+						{isPaused ? "Paused" : user.isPro ? "Recording" : "left on Free"}
 					</span>
-					<TrackList
-						live
-						screen={screenMode ? true : null}
-						camera={cameraEnabled}
-						mic={micEnabled}
-						systemAudio={screenMode ? systemAudioEnabled : null}
-					/>
 				</div>
-			</aside>
-		</div>
+			</div>
+		</>
+	) : (
+		<>
+			<div className="flex items-center justify-end gap-0.5 sm:gap-1">
+				<DockButton
+					icon={micEnabled ? MicIcon : MicOffIcon}
+					label={micEnabled ? "Mute" : "Unmute"}
+					on={micEnabled}
+					disabled={setupLocked || requestingAccess}
+					onClick={toggleMic}
+					menu={
+						availableMics.length > 0 && (
+							<DeviceMenu
+								title="Microphone"
+								devices={availableMics}
+								selectedId={selectedMicId}
+								fallbackName="Microphone"
+								offLabel="No microphone"
+								disabled={setupLocked}
+								onSelect={handleMicChange}
+							/>
+						)
+					}
+				/>
+				<DockButton
+					icon={cameraEnabled ? CameraIcon : CameraOffIcon}
+					label={cameraEnabled ? "Stop camera" : "Start camera"}
+					on={cameraEnabled}
+					disabled={setupLocked || requestingAccess}
+					onClick={toggleCamera}
+					menu={
+						availableCameras.length > 0 && (
+							<DeviceMenu
+								title="Camera"
+								devices={availableCameras}
+								selectedId={selectedCameraId}
+								fallbackName="Camera"
+								offLabel="No camera"
+								disabled={setupLocked}
+								onSelect={handleCameraChange}
+							/>
+						)
+					}
+				/>
+			</div>
+			<RecordButton
+				recording={false}
+				busy={
+					stage === "starting" || stage === "picking" || stage === "countdown"
+				}
+				disabled={
+					!canStartRecording ||
+					sharePending ||
+					(!screenSupported && !cameraEnabled)
+				}
+				label={recordLabel}
+				onClick={() => {
+					void handleRecordClick();
+				}}
+			/>
+			<div className="flex items-center justify-start gap-0.5 sm:gap-1">
+				{screenSupported && (
+					<DockButton
+						icon={sharedScreen ? MonitorOffIcon : MonitorUpIcon}
+						label={sharedScreen ? "Stop sharing" : "Share screen"}
+						on
+						disabled={setupLocked || sharePending}
+						onClick={() => {
+							if (sharedScreen) stopSharing();
+							else void shareScreen();
+						}}
+					/>
+				)}
+				<MoreMenu
+					disabled={setupLocked}
+					systemAudio={
+						screenSupported
+							? {
+									enabled: systemAudioEnabled,
+									hint: sharedScreen
+										? "Takes effect next time you choose what to share."
+										: null,
+									onChange: handleSystemAudioChange,
+								}
+							: null
+					}
+					rememberDevices={rememberDevices}
+					onRememberDevicesChange={handleRememberDevicesChange}
+				/>
+			</div>
+		</>
 	);
 
 	const statusView = (
@@ -831,43 +1108,32 @@ export const WebRecorderDialog = () => {
 		extra?: ReactNode,
 		spinner = true,
 	) => (
-		<div className="mx-auto flex max-w-xl flex-col items-center gap-5 px-4 py-20 text-center">
-			{spinner && (
-				<LoaderCircleIcon
-					className="size-8 animate-spin text-blue-9"
-					aria-hidden
-				/>
-			)}
-			<h2 className="text-balance text-2xl font-semibold tracking-tight text-gray-12 sm:text-3xl">
-				{title}
-			</h2>
-			<p className="text-balance text-base leading-relaxed text-gray-10">
-				{body}
-			</p>
-			{extra}
-		</div>
+		<main className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto px-4 py-10">
+			<div className="flex w-full max-w-xl flex-col items-center gap-5 text-center">
+				{spinner && (
+					<LoaderCircleIcon
+						className="size-8 animate-spin text-[#4785FF]"
+						aria-hidden
+					/>
+				)}
+				<h2 className="text-balance text-2xl font-semibold tracking-tight text-white sm:text-3xl">
+					{title}
+				</h2>
+				<p className="text-balance text-[0.9375rem] leading-relaxed text-white/60">
+					{body}
+				</p>
+				{extra}
+			</div>
+		</main>
 	);
 
-	const stageView =
-		stage === "setup" ? (
-			setupView
-		) : stage === "picking" ? (
-			<div className="mx-auto flex w-full max-w-[1000px] flex-col gap-12 px-4 pb-10 pt-[18vh] sm:px-8">
-				<PickingScreen />
-				<Steps current={1} />
-			</div>
-		) : stage === "starting" ? (
-			statusView("Starting your camera", "Recording begins in a moment.")
-		) : stage === "countdown" ? (
-			countdownView
-		) : stage === "recording" ? (
-			recordingView
-		) : stage === "finishing" ? (
+	const body =
+		stage === "finishing" ? (
 			statusView(
 				"Saving your recording",
 				"Your link is already live. The editor opens as soon as the last parts finish uploading.",
 				chunkUploads.length > 0 || recordedBytes > 0 ? (
-					<div className="w-full max-w-xl text-left">
+					<div className="w-full text-left">
 						<UploadStream
 							chunks={chunkUploads}
 							recordedBytes={recordedBytes}
@@ -879,17 +1145,17 @@ export const WebRecorderDialog = () => {
 		) : stage === "opening" ? (
 			statusView(
 				"Opening the editor",
-				"Your recording is saved and your link is live.",
+				"Your recording is saved and your link is live. Every track is ready to edit.",
 				completedEditUrl ? (
 					<a
 						href={completedEditUrl}
-						className="rounded-full bg-blue-9 px-5 py-2.5 text-sm font-medium text-white hover:bg-blue-10"
+						className="rounded-full bg-[#4785FF] px-5 py-2.5 text-sm font-medium text-white hover:brightness-110"
 					>
 						Open the editor
 					</a>
 				) : null,
 			)
-		) : (
+		) : stage === "error" ? (
 			statusView(
 				"Your recording didn't finish saving",
 				"Download the recovered files from the bar at the top of the page, or close this and try again.",
@@ -899,12 +1165,19 @@ export const WebRecorderDialog = () => {
 							Open recording
 						</Button>
 					)}
-					<Button variant="gray" size="sm" onClick={handleClose}>
+					<Button variant="white" size="sm" onClick={handleClose}>
 						Close
 					</Button>
 				</div>,
 				false,
 			)
+		) : (
+			<>
+				{studio}
+				<footer className="grid shrink-0 grid-cols-[1fr_auto_1fr] items-center border-t border-white/[0.06] bg-[#111214] px-2 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 sm:px-6">
+					{dock}
+				</footer>
+			</>
 		);
 
 	return (
@@ -918,7 +1191,7 @@ export const WebRecorderDialog = () => {
 				</DialogTrigger>
 				<DialogContent
 					ref={dialogContentRef}
-					className="flex h-[100dvh] w-screen max-w-none flex-col overflow-hidden rounded-none border-0 bg-gray-2 p-0 text-gray-12 shadow-none [&>button]:hidden"
+					className="flex h-[100dvh] w-screen max-w-none flex-col overflow-hidden rounded-none border-0 bg-[#0c0c0e] p-0 text-white shadow-none [color-scheme:dark] [&>button]:hidden"
 					onPointerDownOutside={handlePointerDownOutside}
 					onFocusOutside={handleFocusOutside}
 					onInteractOutside={handleInteractOutside}
@@ -931,16 +1204,10 @@ export const WebRecorderDialog = () => {
 					<style>{".cap-messenger-launcher{display:none!important}"}</style>
 					<WebRecorderDialogHeader
 						isBusy={isBusy || isSettingUp}
-						rememberDevices={rememberDevices}
-						onRememberDevicesChange={handleRememberDevicesChange}
+						freeMinutes={freeMinutes}
 						onClose={handleClose}
 					/>
-					<main className="min-h-0 flex-1 overflow-y-auto">{stageView}</main>
-					{stage === "setup" && (
-						<div className="flex flex-col gap-2 border-t border-gray-3 bg-gray-2 px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 lg:hidden">
-							{startControls}
-						</div>
-					)}
+					{body}
 				</DialogContent>
 			</Dialog>
 			{phase === "error" && (

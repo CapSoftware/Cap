@@ -111,9 +111,11 @@ export const useMicLevel = (deviceId: string | null, enabled: boolean) => {
 export const LiveVideo = ({
 	stream,
 	className,
+	mirror = true,
 }: {
 	stream: MediaStream | null;
 	className?: string;
+	mirror?: boolean;
 }) => {
 	const videoRef = useRef<HTMLVideoElement>(null);
 
@@ -130,19 +132,19 @@ export const LiveVideo = ({
 			muted
 			playsInline
 			autoPlay
-			className={clsx("-scale-x-100 object-cover", className)}
+			className={clsx(mirror && "-scale-x-100", className)}
 		/>
 	);
 };
 
 export const MicMeter = ({ level }: { level: number }) => (
-	<span className="flex h-3 items-end gap-[3px]" aria-hidden>
+	<span className="flex h-3 items-end gap-[2px]" aria-hidden>
 		{[0.08, 0.2, 0.35, 0.5, 0.68].map((threshold) => (
 			<span
 				key={threshold}
 				className={clsx(
 					"w-[3px] rounded-full transition-colors duration-75",
-					level > threshold ? "bg-[#22B07D]" : "bg-gray-5",
+					level > threshold ? "bg-[#3dd68c]" : "bg-white/20",
 				)}
 				style={{ height: `${Math.round(30 + threshold * 100)}%` }}
 			/>
@@ -150,7 +152,7 @@ export const MicMeter = ({ level }: { level: number }) => (
 	</span>
 );
 
-export const Overlay = ({
+export const TileLabel = ({
 	children,
 	className,
 }: {
@@ -159,12 +161,23 @@ export const Overlay = ({
 }) => (
 	<span
 		className={clsx(
-			"inline-flex items-center gap-1.5 rounded-full bg-black/60 px-2.5 py-1 text-[0.75rem] font-medium text-white backdrop-blur-md",
+			"inline-flex h-7 items-center gap-1.5 rounded-full bg-black/55 px-2.5 text-[0.75rem] font-medium text-white backdrop-blur-md",
 			className,
 		)}
 	>
 		{children}
 	</span>
+);
+
+export const LiveDot = ({ paused = false }: { paused?: boolean }) => (
+	<span
+		className={clsx(
+			"size-1.5 rounded-full",
+			paused
+				? "bg-white/50"
+				: "animate-pulse bg-[#ff4d4f] motion-reduce:animate-none",
+		)}
+	/>
 );
 
 type Track = {
@@ -174,25 +187,29 @@ type Track = {
 	on: boolean;
 };
 
-export const TrackList = ({
+// One chip per source. Each source becomes its own track in the editor, so
+// the strip doubles as a promise of what the recording will contain.
+export const TrackStrip = ({
 	screen,
 	camera,
 	mic,
 	systemAudio,
 	live = false,
+	paused = false,
 }: {
 	screen: boolean | null;
 	camera: boolean;
 	mic: boolean;
 	systemAudio: boolean | null;
 	live?: boolean;
+	paused?: boolean;
 }) => {
 	const tracks: Track[] = [
 		...(screen === null
 			? []
 			: [{ key: "screen", label: "Screen", icon: MonitorIcon, on: screen }]),
 		{ key: "camera", label: "Camera", icon: CameraIcon, on: camera },
-		{ key: "mic", label: "Microphone", icon: MicIcon, on: mic },
+		{ key: "mic", label: "Mic", icon: MicIcon, on: mic },
 		...(systemAudio === null
 			? []
 			: [
@@ -204,110 +221,52 @@ export const TrackList = ({
 					},
 				]),
 	];
+	const count = tracks.filter((track) => track.on).length;
 
 	return (
-		<ul className="flex flex-wrap gap-2">
-			{tracks.map(({ key, label, icon: Icon, on }) => (
-				<li
-					key={key}
-					className={clsx(
-						"inline-flex items-center gap-2 rounded-full border py-1.5 pl-2.5 pr-3 text-[0.8125rem] font-medium",
-						on
-							? "border-gray-4 bg-gray-1 text-gray-12"
-							: "border-dashed border-gray-4 text-gray-9",
-					)}
-				>
-					<Icon className="size-4" aria-hidden />
-					{label}
-					{on ? (
-						live ? (
-							<span className="size-2 animate-pulse rounded-full bg-[#ff4d4d] motion-reduce:animate-none" />
-						) : (
-							<CheckIcon className="size-3.5 text-[#22B07D]" aria-hidden />
-						)
-					) : (
-						<span className="text-[0.75rem] font-normal">off</span>
-					)}
-				</li>
-			))}
-		</ul>
+		<div className="flex flex-col items-center gap-2.5 text-center">
+			<ul className="flex flex-wrap items-center justify-center gap-1.5">
+				{tracks.map(({ key, label, icon: Icon, on }) => (
+					<li
+						key={key}
+						className={clsx(
+							"inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-[0.8125rem] font-medium transition-colors duration-300",
+							on
+								? "border-white/10 bg-white/[0.07] text-white"
+								: "border-dashed border-white/15 text-white/35",
+						)}
+					>
+						<Icon className="size-3.5" aria-hidden />
+						{label}
+						{on && live && <LiveDot paused={paused} />}
+					</li>
+				))}
+			</ul>
+			<p className="text-[0.8125rem] text-white/50">
+				{live
+					? `Recording ${count} separate ${count === 1 ? "track" : "tracks"}. Change the layout in the editor after.`
+					: count === 0
+						? "Turn on what you want to record. Each source records as its own track."
+						: `${count} separate ${count === 1 ? "track" : "tracks"}. Change the layout in the editor after you stop.`}
+			</p>
+		</div>
 	);
 };
 
-const STEPS = [
-	{
-		title: "Check your camera and mic",
-		body: "Choose them on this page.",
-	},
-	{
-		title: "Pick what to share",
-		body: "Your browser asks for a screen, window or tab.",
-	},
-	{
-		title: "Switch to it and present",
-		body: "This tab keeps your controls. Come back to stop.",
-	},
-] as const;
-
-export const Steps = ({ current }: { current: 0 | 1 | 2 }) => (
-	<ol className="grid gap-3 sm:grid-cols-3">
-		{STEPS.map((step, index) => {
-			const done = index < current;
-			const active = index === current;
-			return (
-				<li
-					key={step.title}
-					className={clsx(
-						"flex items-start gap-3 rounded-xl border p-3.5 transition-colors",
-						active ? "border-blue-7 bg-blue-2" : "border-gray-3 bg-gray-1",
-					)}
-				>
-					<span
-						className={clsx(
-							"flex size-6 shrink-0 items-center justify-center rounded-full text-[0.75rem] font-semibold tabular-nums",
-							active
-								? "bg-blue-9 text-white"
-								: done
-									? "bg-gray-12 text-gray-1"
-									: "bg-gray-3 text-gray-10",
-						)}
-					>
-						{done ? <CheckIcon className="size-3.5" aria-hidden /> : index + 1}
-					</span>
-					<span className="flex min-w-0 flex-col gap-0.5">
-						<span
-							className={clsx(
-								"text-[0.875rem] font-medium",
-								active || done ? "text-gray-12" : "text-gray-10",
-							)}
-						>
-							{step.title}
-						</span>
-						<span className="text-[0.8125rem] leading-snug text-gray-10">
-							{step.body}
-						</span>
-					</span>
-				</li>
-			);
-		})}
-	</ol>
-);
-
 export const PickingScreen = () => (
-	<div className="flex flex-col items-center gap-6 pt-2 text-center">
-		<span className="flex size-14 items-center justify-center rounded-full bg-blue-9 text-white">
+	<div className="flex flex-col items-center gap-5 text-center">
+		<span className="flex size-14 items-center justify-center rounded-full bg-[#4785FF] text-white shadow-[0_0_0_10px_rgba(71,133,255,0.15)]">
 			<ArrowUpIcon
 				className="size-7 animate-bounce motion-reduce:animate-none"
 				aria-hidden
 			/>
 		</span>
-		<div className="flex max-w-xl flex-col gap-2">
-			<h2 className="text-balance text-3xl font-semibold tracking-tight text-gray-12 sm:text-4xl">
+		<div className="flex max-w-md flex-col gap-2">
+			<h2 className="text-balance text-2xl font-semibold tracking-tight text-white sm:text-3xl">
 				Choose what to share
 			</h2>
-			<p className="text-balance text-base leading-relaxed text-gray-10 sm:text-lg">
-				Your browser is asking which screen, window or tab to record. Pick one
-				in the popup, then click Share.
+			<p className="text-balance text-[0.9375rem] leading-relaxed text-white/60">
+				Pick a screen, window or tab in your browser's popup, then click Share.
 			</p>
 		</div>
 	</div>
@@ -351,20 +310,20 @@ export const UploadStream = ({
 		<section
 			aria-label="Upload progress"
 			className={clsx(
-				"flex flex-col gap-4 rounded-2xl border border-gray-4 bg-gray-1 p-4 sm:p-5",
+				"flex w-full flex-col gap-2.5 rounded-2xl border border-white/[0.08] bg-white/[0.03] px-3.5 py-3",
 				paused && "upload-paused",
 			)}
 		>
 			<div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-				<span className="text-[0.9375rem] font-medium text-gray-12">
+				<span className="text-[0.8125rem] font-medium text-white/85">
 					{recording
 						? "Uploading while you record"
 						: "Uploading the last parts"}
 				</span>
-				<span className="text-[0.8125rem] tabular-nums text-gray-10">
+				<span className="text-[0.75rem] tabular-nums text-white/45">
 					{chunks.length === 0
 						? recording
-							? `Recording part 1 · ${formatMegabytes(bufferedBytes)} of ${formatMegabytes(PART_BYTES)}`
+							? `Part 1 · ${formatMegabytes(bufferedBytes)} of ${formatMegabytes(PART_BYTES)}`
 							: "Sending the recording"
 						: `${done} of ${chunks.length} ${chunks.length === 1 ? "part" : "parts"} sent · ${formatMegabytes(sentBytes)}`}
 				</span>
@@ -372,42 +331,41 @@ export const UploadStream = ({
 			<div className="flex items-center gap-3">
 				<div
 					className={clsx(
-						"relative flex h-16 w-12 shrink-0 items-end justify-center overflow-hidden rounded-xl border",
+						"relative flex h-11 w-9 shrink-0 items-end justify-center overflow-hidden rounded-lg border",
 						recording
-							? "border-[#e5484d]/40 bg-[#e5484d]/5"
-							: "border-gray-4 bg-gray-2",
+							? "border-[#ff4d4f]/40 bg-[#ff4d4f]/[0.06]"
+							: "border-white/10 bg-white/[0.04]",
 					)}
 				>
 					{recording ? (
 						<>
 							<span
-								className="absolute inset-x-0 bottom-0 bg-[#e5484d]/25 transition-[height] duration-700 ease-out"
+								className="absolute inset-x-0 bottom-0 bg-[#ff4d4f]/30 transition-[height] duration-700 ease-out"
 								style={{ height: `${Math.round(nextPartFill * 100)}%` }}
 							/>
-							<span className="relative mb-1.5 flex items-center gap-1 text-[0.625rem] font-semibold text-[#e5484d]">
-								<span className="size-1.5 animate-pulse rounded-full bg-[#e5484d] motion-reduce:animate-none" />
+							<span className="relative mb-1 text-[0.5625rem] font-semibold tracking-wide text-[#ff7a7c]">
 								REC
 							</span>
 						</>
 					) : (
-						<CheckIcon className="mb-4 size-4 text-gray-10" aria-hidden />
+						<CheckIcon className="mb-3 size-3.5 text-white/50" aria-hidden />
 					)}
 				</div>
-				<div className="relative flex h-16 min-w-0 flex-1 items-center justify-end overflow-hidden">
+				<div className="relative flex h-11 min-w-0 flex-1 items-center justify-end overflow-hidden">
 					<span className="upload-lane absolute inset-x-0 top-1/2 h-px -translate-y-1/2" />
-					<ol className="relative flex shrink-0 items-center gap-2 pr-1">
+					<ol className="relative flex shrink-0 items-center gap-1.5 pr-1">
 						{visible.map((chunk) => (
 							<li
 								key={chunk.partNumber}
 								className={clsx(
-									"upload-tile relative flex h-14 w-10 shrink-0 items-end justify-center overflow-hidden rounded-lg border transition-colors duration-300",
+									"upload-tile relative flex h-10 w-7 shrink-0 items-end justify-center overflow-hidden rounded-md border transition-colors duration-300",
 									chunk.status === "complete"
 										? "border-transparent"
 										: chunk.status === "error"
-											? "border-red-9 bg-red-3"
+											? "border-[#ff4d4f] bg-[#ff4d4f]/15"
 											: chunk.status === "uploading"
-												? "border-blue-7 bg-gray-1"
-												: "upload-queued border-dashed border-gray-6 bg-gray-2",
+												? "border-[#4785FF]/70 bg-[#0c0c0e]"
+												: "upload-queued border-dashed border-white/20 bg-[#0c0c0e]",
 								)}
 								style={
 									chunk.status === "complete"
@@ -421,22 +379,22 @@ export const UploadStream = ({
 										className="absolute inset-x-0 bottom-0 transition-[height] duration-300 ease-out"
 										style={{
 											height: `${Math.max(8, Math.round(chunk.progress * 100))}%`,
-											backgroundColor: "rgba(71,133,255,0.35)",
+											backgroundColor: "rgba(71,133,255,0.4)",
 										}}
 									/>
 								)}
 								{chunk.status === "complete" ? (
 									<CheckIcon
-										className="upload-check absolute left-1/2 top-1/2 size-4 -translate-x-1/2 -translate-y-1/2 text-white"
+										className="upload-check absolute left-1/2 top-1/2 size-3.5 -translate-x-1/2 -translate-y-1/2 text-white"
 										aria-hidden
 									/>
 								) : null}
 								<span
 									className={clsx(
-										"relative mb-1 text-[0.625rem] font-medium tabular-nums",
+										"relative mb-0.5 text-[0.5625rem] font-medium tabular-nums",
 										chunk.status === "complete"
-											? "text-white/80"
-											: "text-gray-10",
+											? "text-white/75"
+											: "text-white/45",
 									)}
 								>
 									{chunk.partNumber}
@@ -445,22 +403,18 @@ export const UploadStream = ({
 						))}
 					</ol>
 				</div>
-				<div className="flex shrink-0 flex-col items-center gap-1">
-					<span
-						key={done}
-						className="upload-link flex size-12 items-center justify-center rounded-full text-white"
-						style={{ backgroundColor: CAP_BLUE }}
-					>
-						<LinkIcon className="size-5" aria-hidden />
-					</span>
-					<span className="text-[0.6875rem] font-medium text-gray-10">
-						Your link
-					</span>
-				</div>
+				<span
+					key={done}
+					className="upload-link flex h-9 shrink-0 items-center gap-1.5 rounded-full px-3 text-[0.75rem] font-medium text-white"
+					style={{ backgroundColor: CAP_BLUE }}
+				>
+					<LinkIcon className="size-3.5" aria-hidden />
+					Your link
+				</span>
 			</div>
 			<style>{`
 				.upload-lane {
-					background-image: linear-gradient(90deg, var(--gray-6) 50%, transparent 0);
+					background-image: linear-gradient(90deg, rgba(255,255,255,.22) 50%, transparent 0);
 					background-size: 10px 1px;
 					animation: upload-lane .7s linear infinite;
 				}
@@ -480,8 +434,8 @@ export const UploadStream = ({
 				.upload-link { animation: upload-link .7s ease-out; }
 				@keyframes upload-link {
 					0% { box-shadow: 0 0 0 0 rgba(71,133,255,.55); transform: scale(1); }
-					30% { transform: scale(1.08); }
-					100% { box-shadow: 0 0 0 14px rgba(71,133,255,0); transform: scale(1); }
+					30% { transform: scale(1.06); }
+					100% { box-shadow: 0 0 0 12px rgba(71,133,255,0); transform: scale(1); }
 				}
 				.upload-paused .upload-lane { animation-play-state: paused; }
 				@media (prefers-reduced-motion: reduce) {
