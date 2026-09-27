@@ -1,3 +1,4 @@
+import { applyDefaultStyle } from "@cap/editor-cap-bundle/default-style";
 import type {
 	BrowserRecordingTimes,
 	BrowserTimeline,
@@ -285,9 +286,22 @@ export class BrowserLocalPlayback {
 				(total, duration) => total + duration,
 				0,
 			);
+			// The same starting config the editor state uses, saved style and
+			// all, so the first preview frame matches the sidebar.
+			const defaults: unknown = JSON.parse(
+				module.default_project_config_json(),
+			);
 			const config =
 				sources.projectConfig ??
-				JSON.parse(module.default_project_config_json());
+				(sources.defaultStyle &&
+				typeof defaults === "object" &&
+				defaults !== null &&
+				!Array.isArray(defaults)
+					? applyDefaultStyle(
+							defaults as Record<string, unknown>,
+							sources.defaultStyle,
+						)
+					: defaults);
 			const colorHints = new Map<string, Promise<boolean>>();
 			colorHints.set(
 				firstDisplay.url,
