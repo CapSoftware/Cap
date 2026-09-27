@@ -666,6 +666,7 @@ describe("jobs for the product", () => {
 		exported.totalFrames = 60;
 		h.finish(exported);
 		const callback = h.callbacks[0];
+		expect(callback?.init.redirect).toBe("error");
 		expect(callback?.url).toBe(
 			"https://preview.cap.test/api/render-farm/callback",
 		);

@@ -1915,6 +1915,7 @@ function notify(
 		.digest("hex");
 	fetch(url, {
 		method: "POST",
+		redirect: "error",
 		headers: {
 			"content-type": "application/json",
 			"x-render-farm-signature": `sha256=${signature}`,
