@@ -866,9 +866,13 @@ export const WebRecorderDialog = () => {
 			statusView(
 				"Saving your recording",
 				"Your link is already live. The editor opens as soon as the last parts finish uploading.",
-				chunkUploads.length > 0 ? (
+				chunkUploads.length > 0 || recordedBytes > 0 ? (
 					<div className="w-full max-w-xl text-left">
-						<UploadStream chunks={chunkUploads} recording={false} />
+						<UploadStream
+							chunks={chunkUploads}
+							recordedBytes={recordedBytes}
+							recording={false}
+						/>
 					</div>
 				) : null,
 			)
