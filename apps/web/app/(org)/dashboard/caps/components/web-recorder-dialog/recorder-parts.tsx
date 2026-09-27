@@ -5,6 +5,7 @@ import type { LucideIcon } from "lucide-react";
 import {
 	type CSSProperties,
 	type ReactNode,
+	useCallback,
 	useEffect,
 	useRef,
 	useState,
@@ -57,12 +58,49 @@ const levelFromRms = (rms: number) => {
 	return 1 - (1 - scaled) ** 0.5;
 };
 
-export const useMicLevel = (deviceId: string | null, enabled: boolean) => {
-	const [level, setLevel] = useState(0);
+// Meter ballistics: rise quickly, fall away gently, with a peak marker that
+// lingers and sinks slowly. Values land in CSS variables on the meters that
+// bind to it, so the recorder doesn't re-render on every audio frame.
+const ATTACK = 0.35;
+const RELEASE = 0.07;
+const PEAK_HOLD_MS = 700;
+const PEAK_FALL = 0.012;
+
+export type MicLevelBinding = (
+	element: HTMLElement | null,
+) => (() => void) | undefined;
+
+export const useMicLevel = (
+	deviceId: string | null,
+	enabled: boolean,
+): MicLevelBinding => {
+	const elementsRef = useRef(new Set<HTMLElement>());
+	const valuesRef = useRef({ level: 0, peak: 0 });
+
+	const paint = useCallback(() => {
+		const { level, peak } = valuesRef.current;
+		for (const element of elementsRef.current) {
+			element.style.setProperty("--mic-level", level.toFixed(4));
+			element.style.setProperty("--mic-peak", peak.toFixed(4));
+		}
+	}, []);
+
+	const bind = useCallback<MicLevelBinding>(
+		(element) => {
+			if (!element) return;
+			elementsRef.current.add(element);
+			paint();
+			return () => {
+				elementsRef.current.delete(element);
+			};
+		},
+		[paint],
+	);
 
 	useEffect(() => {
 		if (!enabled || !deviceId || typeof window === "undefined") {
-			setLevel(0);
+			valuesRef.current = { level: 0, peak: 0 };
+			paint();
 			return;
 		}
 		let disposed = false;
@@ -81,24 +119,33 @@ export const useMicLevel = (deviceId: string | null, enabled: boolean) => {
 				}
 				context = new AudioContext();
 				const analyser = context.createAnalyser();
-				analyser.fftSize = 512;
+				analyser.fftSize = 2048;
 				context.createMediaStreamSource(stream).connect(analyser);
 				const samples = new Float32Array(analyser.fftSize);
-				let last = 0;
+				let peakAt = 0;
 				const tick = (now: number) => {
 					if (disposed) return;
 					frame = requestAnimationFrame(tick);
-					if (now - last < 60) return;
-					last = now;
 					analyser.getFloatTimeDomainData(samples);
 					let sum = 0;
 					for (const sample of samples) sum += sample * sample;
-					const rms = Math.sqrt(sum / samples.length);
-					setLevel(levelFromRms(rms));
+					const target = levelFromRms(Math.sqrt(sum / samples.length));
+					const values = valuesRef.current;
+					values.level +=
+						(target - values.level) *
+						(target > values.level ? ATTACK : RELEASE);
+					if (values.level >= values.peak) {
+						values.peak = values.level;
+						peakAt = now;
+					} else if (now - peakAt > PEAK_HOLD_MS) {
+						values.peak = Math.max(values.level, values.peak - PEAK_FALL);
+					}
+					paint();
 				};
 				frame = requestAnimationFrame(tick);
 			} catch {
-				setLevel(0);
+				valuesRef.current = { level: 0, peak: 0 };
+				paint();
 			}
 		})();
 
@@ -108,9 +155,9 @@ export const useMicLevel = (deviceId: string | null, enabled: boolean) => {
 			if (stream) for (const track of stream.getTracks()) track.stop();
 			void context?.close().catch(() => {});
 		};
-	}, [deviceId, enabled]);
+	}, [deviceId, enabled, paint]);
 
-	return level;
+	return bind;
 };
 
 export const LiveVideo = ({
@@ -373,20 +420,59 @@ export const CountdownDial = ({ value }: { value: number }) => (
 
 // The desktop app's device row: the level fills the row from the left with a
 // soft tint and a 2px line along the bottom.
-export const LevelFill = ({ level }: { level: number }) => (
-	<>
+export const LevelFill = ({
+	bind,
+	compact = false,
+}: {
+	bind: MicLevelBinding;
+	compact?: boolean;
+}) =>
+	compact ? (
 		<span
-			className="pointer-events-none absolute inset-y-0 left-0 bg-[color-mix(in_srgb,var(--rec-level)_12%,transparent)] transition-[width] duration-100"
-			style={{ width: `${level * 100}%` }}
+			ref={bind}
+			className="pointer-events-none absolute inset-x-2 bottom-0.5 h-[2px] overflow-hidden rounded-full"
 			aria-hidden
-		/>
+		>
+			<span
+				className="absolute inset-y-0 left-0 rounded-full"
+				style={{
+					width: "calc(var(--mic-level, 0) * 100%)",
+					background:
+						"linear-gradient(90deg, color-mix(in srgb, var(--rec-level) 30%, transparent), var(--rec-level))",
+				}}
+			/>
+		</span>
+	) : (
 		<span
-			className="pointer-events-none absolute bottom-0 left-0 h-[2px] bg-[var(--rec-level)] transition-[width] duration-100"
-			style={{ width: `${level * 100}%` }}
+			ref={bind}
+			className="pointer-events-none absolute inset-0"
 			aria-hidden
-		/>
-	</>
-);
+		>
+			<span
+				className="absolute inset-y-0 left-0"
+				style={{
+					width: "calc(var(--mic-level, 0) * 100%)",
+					background:
+						"linear-gradient(90deg, color-mix(in srgb, var(--rec-level) 4%, transparent), color-mix(in srgb, var(--rec-level) 16%, transparent))",
+				}}
+			/>
+			<span
+				className="absolute bottom-0 left-0 h-[2px] rounded-full"
+				style={{
+					width: "calc(var(--mic-level, 0) * 100%)",
+					background:
+						"linear-gradient(90deg, color-mix(in srgb, var(--rec-level) 35%, transparent), var(--rec-level))",
+				}}
+			/>
+			<span
+				className="absolute inset-y-1.5 w-[2px] -translate-x-full rounded-full bg-[var(--rec-level)]"
+				style={{
+					left: "calc(var(--mic-peak, 0) * 100%)",
+					opacity: "calc(min(var(--mic-peak, 0) * 6, 0.55))",
+				}}
+			/>
+		</span>
+	);
 
 export const SourceRow = ({
 	kind,
@@ -403,18 +489,14 @@ export const SourceRow = ({
 	on: boolean;
 	detail: ReactNode;
 	actions: ReactNode;
-	level?: number;
+	level?: MicLevelBinding;
 }) => (
 	<li
 		className="rec-track relative isolate flex items-center gap-2.5 overflow-hidden rounded-lg px-2 py-1.5 transition-colors hover:bg-[var(--rec-ctl)]"
 		data-kind={kind}
 		data-on={on}
 	>
-		{on && level !== undefined && (
-			<span className="absolute inset-0 -z-10">
-				<LevelFill level={level} />
-			</span>
-		)}
+		{on && level && <LevelFill bind={level} compact />}
 		<span className="rec-track-tile flex size-7 shrink-0 items-center justify-center rounded-md transition-colors">
 			<Icon className="size-3.5" aria-hidden />
 		</span>

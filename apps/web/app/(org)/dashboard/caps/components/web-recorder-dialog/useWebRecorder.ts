@@ -62,6 +62,11 @@ import {
 	convertToMp4,
 } from "./recording-conversion";
 import type { RecordingMode } from "./recording-mode";
+import {
+	DEFAULT_RECORDING_QUALITY,
+	qualityBitrateScale,
+	type RecordingQuality,
+} from "./recording-quality";
 import { uploadRecording } from "./recording-upload";
 import {
 	loadRecoveredRecordingSpools,
@@ -114,6 +119,7 @@ interface UseWebRecorderOptions {
 	// Awaited once the capture sources are live and before the recorders
 	// start; setup keeps running underneath it, so a countdown costs nothing.
 	beforeRecordingStarts?: () => Promise<void>;
+	quality?: RecordingQuality;
 }
 
 const INSTANT_UPLOAD_REQUEST_INTERVAL_MS = 1000;
@@ -185,6 +191,7 @@ export const useWebRecorder = ({
 	onRecordingStart,
 	onRecordingStop,
 	beforeRecordingStarts,
+	quality = DEFAULT_RECORDING_QUALITY,
 }: UseWebRecorderOptions) => {
 	const beforeRecordingStartsRef = useRef(beforeRecordingStarts);
 	beforeRecordingStartsRef.current = beforeRecordingStarts;
@@ -1172,7 +1179,9 @@ export const useWebRecorder = ({
 				if (!selectedCameraId) {
 					throw new Error("Camera ID is required for camera-only mode");
 				}
-				videoStream = await acquireCameraStream(selectedCameraId);
+				videoStream = await acquireCameraStream(selectedCameraId, {
+					height: quality.cameraHeight,
+				});
 				cameraStreamRef.current = videoStream;
 				firstTrack = videoStream.getVideoTracks()[0] ?? null;
 			} else {
@@ -1180,6 +1189,10 @@ export const useWebRecorder = ({
 					takeSharedDisplayStream?.() ??
 					(await acquireDisplayStream({
 						mode: recordingMode as DetectedDisplayRecordingMode,
+						quality: {
+							height: quality.screenHeight,
+							frameRate: quality.frameRate,
+						},
 						systemAudioEnabled,
 						onSystemAudioFallback: () => {
 							toast.warning(
@@ -1233,7 +1246,7 @@ export const useWebRecorder = ({
 			let micStream: MediaStream | null = null;
 			if (micEnabled && selectedMicId) {
 				try {
-					micStream = await acquireMicStream(selectedMicId);
+					micStream = await acquireMicStream(selectedMicId, quality.mic);
 				} catch (micError) {
 					console.warn("Microphone permission denied", micError);
 					toast.warning("Microphone unavailable. Recording without audio.");
@@ -1279,7 +1292,9 @@ export const useWebRecorder = ({
 				if (previewTrack?.readyState === "live") {
 					cameraRecordingStream = new MediaStream([previewTrack.clone()]);
 				} else {
-					cameraRecordingStream = await acquireCameraStream(selectedCameraId);
+					cameraRecordingStream = await acquireCameraStream(selectedCameraId, {
+						height: quality.cameraHeight,
+					});
 				}
 				cameraStreamRef.current = cameraRecordingStream;
 				cameraSettingsRef.current = cameraRecordingStream
@@ -1467,6 +1482,7 @@ export const useWebRecorder = ({
 					pipeline.mimeType,
 					mixedStream.getVideoTracks()[0],
 					(type) => MediaRecorder.isTypeSupported(type),
+					qualityBitrateScale(quality),
 				),
 			);
 			let cameraRecorder: MediaRecorder | null = null;
@@ -1480,6 +1496,7 @@ export const useWebRecorder = ({
 						cameraPipeline.mimeType,
 						cameraVideoStream.getVideoTracks()[0],
 						(type) => MediaRecorder.isTypeSupported(type),
+						qualityBitrateScale(quality),
 					),
 				);
 				cameraRecorder.addEventListener("dataavailable", (event) => {

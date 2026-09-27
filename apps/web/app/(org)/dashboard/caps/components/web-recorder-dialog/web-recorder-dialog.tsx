@@ -13,6 +13,7 @@ import clsx from "clsx";
 import {
 	CameraIcon,
 	CheckIcon,
+	ChevronRightIcon,
 	CirclePlayIcon,
 	LoaderCircleIcon,
 	MicIcon,
@@ -51,6 +52,7 @@ import {
 	formatClock,
 	LevelFill,
 	LiveVideo,
+	type MicLevelBinding,
 	SourceRow,
 	Squiggle,
 	Switch,
@@ -59,6 +61,7 @@ import {
 	useMicLevel,
 } from "./recorder-parts";
 import type { RecordingMode } from "./recording-mode";
+import { useRecordingQuality } from "./recording-quality";
 import { SystemAudioGuide } from "./system-audio-guide";
 import { useCameraDevices } from "./useCameraDevices";
 import { useDevicePreferences } from "./useDevicePreferences";
@@ -172,6 +175,8 @@ export const WebRecorderDialog = () => {
 	const startSoundRef = useRef<HTMLAudioElement | null>(null);
 	const stopSoundRef = useRef<HTMLAudioElement | null>(null);
 	const cameraPreviewRef = useRef<CameraPreviewWindowHandle>(null);
+	const [quality, setQuality] = useRecordingQuality();
+	const [qualityOpen, setQualityOpen] = useState(false);
 	const getCameraPreviewStream = useCallback(
 		() => cameraPreviewRef.current?.getVideoStream() ?? null,
 		[],
@@ -421,6 +426,7 @@ export const WebRecorderDialog = () => {
 		try {
 			const stream = await acquireDisplayStream({
 				mode: "fullscreen",
+				quality: { height: quality.screenHeight, frameRate: quality.frameRate },
 				systemAudioEnabled,
 				onSystemAudioFallback: () => {
 					toast.warning(
@@ -452,7 +458,7 @@ export const WebRecorderDialog = () => {
 		} finally {
 			setSharePending(false);
 		}
-	}, [replaceSharedScreen, systemAudioEnabled]);
+	}, [replaceSharedScreen, systemAudioEnabled, quality]);
 
 	const {
 		phase,
@@ -507,6 +513,7 @@ export const WebRecorderDialog = () => {
 		onRecordingStart: handleRecordingStartSound,
 		onRecordingStop: handleRecordingStopSound,
 		beforeRecordingStarts: runCountdown,
+		quality,
 	});
 	const activeCameraGetterRef = useRef(getActiveCameraStream);
 	activeCameraGetterRef.current = getActiveCameraStream;
@@ -1364,7 +1371,7 @@ export const WebRecorderDialog = () => {
 		on: boolean;
 		clip: string;
 		idle: ReactNode;
-		level?: number;
+		level?: MicLevelBinding;
 	};
 	const lanes: Lane[] = [
 		...(screenSupported
@@ -1476,7 +1483,7 @@ export const WebRecorderDialog = () => {
 									>
 										{lane.level !== undefined && (
 											<span className="absolute inset-0 -z-10">
-												<LevelFill level={lane.level} />
+												<LevelFill bind={lane.level} />
 											</span>
 										)}
 										<span className="relative truncate">{lane.clip}</span>
@@ -1486,7 +1493,7 @@ export const WebRecorderDialog = () => {
 								<>
 									{lane.level !== undefined && (
 										<span className="absolute inset-0 -z-10">
-											<LevelFill level={lane.level} />
+											<LevelFill bind={lane.level} />
 										</span>
 									)}
 									<span
@@ -1515,6 +1522,145 @@ export const WebRecorderDialog = () => {
 					</span>
 				)}
 			</div>
+		</section>
+	);
+
+	const qualitySummary = `${quality.screenHeight === 2160 ? "4K" : `${quality.screenHeight}p`} · ${quality.frameRate} fps · ${quality.level === "high" ? "High" : "Standard"}`;
+
+	const segmented = <T extends string | number>(
+		value: T,
+		options: readonly { value: T; label: string }[],
+		onChange: (next: T) => void,
+		name: string,
+	) => (
+		<fieldset className="flex rounded-lg bg-[var(--rec-ctl)] p-0.5">
+			<legend className="sr-only">{name}</legend>
+			{options.map((option) => (
+				<button
+					key={String(option.value)}
+					type="button"
+					aria-pressed={value === option.value}
+					disabled={setupLocked}
+					onClick={() => onChange(option.value)}
+					className={clsx(
+						"rec-focus h-6 rounded-md px-2 text-[12px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50",
+						value === option.value
+							? "bg-[var(--rec-card)] text-[var(--rec-text-1)] shadow-[0_1px_2px_rgba(0,0,0,0.1),0_0_0_1px_var(--rec-line)]"
+							: "text-[var(--rec-text-2)] hover:text-[var(--rec-text-1)]",
+					)}
+				>
+					{option.label}
+				</button>
+			))}
+		</fieldset>
+	);
+
+	const qualityRow = (label: string, control: ReactNode) => (
+		<div className="flex min-h-9 items-center justify-between gap-3 px-2">
+			<span className="text-[13px] text-[var(--rec-text-2)]">{label}</span>
+			{control}
+		</div>
+	);
+
+	const qualitySection = (
+		<section className="flex flex-col">
+			<button
+				type="button"
+				aria-expanded={qualityOpen}
+				onClick={() => setQualityOpen((value) => !value)}
+				className="rec-focus flex h-9 items-center gap-2 rounded-lg px-2 text-left transition-colors hover:bg-[var(--rec-ctl)]"
+			>
+				<ChevronRightIcon
+					className={clsx(
+						"size-3.5 shrink-0 text-[var(--rec-text-3)] transition-transform",
+						qualityOpen && "rotate-90",
+					)}
+					aria-hidden
+				/>
+				<span className="flex-1 text-[13px] font-medium">
+					Recording quality
+				</span>
+				<span className="truncate text-[12px] text-[var(--rec-text-3)]">
+					{qualitySummary}
+				</span>
+			</button>
+			{qualityOpen && (
+				<div className="rec-fade flex flex-col pb-1 pt-1">
+					{qualityRow(
+						"Screen",
+						segmented(
+							quality.screenHeight,
+							[
+								{ value: 1080, label: "1080p" },
+								{ value: 1440, label: "1440p" },
+								{ value: 2160, label: "4K" },
+							] as const,
+							(screenHeight) => setQuality({ screenHeight }),
+							"Screen resolution",
+						),
+					)}
+					{qualityRow(
+						"Frame rate",
+						segmented(
+							quality.frameRate,
+							[
+								{ value: 30, label: "30 fps" },
+								{ value: 60, label: "60 fps" },
+							] as const,
+							(frameRate) => setQuality({ frameRate }),
+							"Frame rate",
+						),
+					)}
+					{qualityRow(
+						"Camera",
+						segmented(
+							quality.cameraHeight,
+							[
+								{ value: 720, label: "720p" },
+								{ value: 1080, label: "1080p" },
+							] as const,
+							(cameraHeight) => setQuality({ cameraHeight }),
+							"Camera resolution",
+						),
+					)}
+					{qualityRow(
+						"Quality",
+						segmented(
+							quality.level,
+							[
+								{ value: "standard", label: "Standard" },
+								{ value: "high", label: "High" },
+							] as const,
+							(level) => setQuality({ level }),
+							"Video quality",
+						),
+					)}
+					{(
+						[
+							["noiseSuppression", "Noise suppression"],
+							["echoCancellation", "Echo cancellation"],
+							["autoGainControl", "Auto gain"],
+						] as const
+					).map(([key, label]) =>
+						qualityRow(
+							label,
+							<Switch
+								label={label}
+								on={quality.mic[key]}
+								disabled={setupLocked}
+								onChange={(next) =>
+									setQuality({ mic: { ...quality.mic, [key]: next } })
+								}
+							/>,
+						),
+					)}
+					<p className="px-2 pt-1 text-[12px] leading-snug text-[var(--rec-text-3)]">
+						Your video uploads while you record, so higher settings need a
+						faster connection. The browser uses the closest size your screen and
+						camera support.
+					</p>
+				</div>
+			)}
 		</section>
 	);
 
@@ -1622,8 +1768,9 @@ export const WebRecorderDialog = () => {
 					/>
 				)}
 			</header>
-			<div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-2">
+			<div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-2 [&>*]:shrink-0">
 				{sources}
+				{qualitySection}
 				<div className="mt-auto">{whatHappens}</div>
 				{notices}
 			</div>
@@ -1952,6 +2099,7 @@ export const WebRecorderDialog = () => {
 			{showCameraPreview && (
 				<CameraPreviewWindow
 					ref={cameraPreviewRef}
+					captureHeight={quality.cameraHeight}
 					cameraId={selectedCameraId}
 					hidden
 					onClose={() => handleCameraChange(null)}
