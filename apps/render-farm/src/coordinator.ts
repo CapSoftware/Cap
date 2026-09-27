@@ -535,7 +535,10 @@ async function sourceIndex(
 ): Promise<SourceIndex> {
 	const cached =
 		process.env.RF_INDEX_CACHE !== "0" ? sourceIndexes.get(prefix) : undefined;
-	if (cached) return cached;
+	if (cached) {
+		checkManifest(cached.manifest, prefix, sourceRoot);
+		return cached;
+	}
 	const manifest = JSON.parse(
 		new TextDecoder().decode(
 			await getBounded(`${prefix}/manifest.json`, SOURCE_LIMITS.metadataBytes),

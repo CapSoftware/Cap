@@ -43,6 +43,9 @@ function harness() {
 			if (!value) throw new Error(`missing ${key}`);
 			return value;
 		},
+		async getRange(key: string, start: number, endInclusive: number) {
+			return (await this.get(key)).subarray(start, endInclusive + 1);
+		},
 		async list() {
 			return [...objects.keys()].map((key) => ({ key }));
 		},
@@ -115,9 +118,10 @@ function harness() {
 	const compiled = new Bun.Transpiler({ loader: "ts" }).transformSync(source);
 	const coordinator = new Function(
 		...Object.keys(deps),
-		`${compiled}\nreturn {jobs, queue, straggler, dispatchedTask, onVideoDone, onAudioDone, publishPlaylist, journalJob, resumeJobs, newHlsState, finish, requeue, setPlanner: (fn) => { planJob = fn; }};`,
+		`${compiled}\nreturn {jobs, queue, straggler, dispatchedTask, onVideoDone, onAudioDone, publishPlaylist, journalJob, resumeJobs, newHlsState, finish, requeue, sourceIndex, setPlanner: (fn) => { planJob = fn; }};`,
 	)(...Object.values(deps)) as {
 		setPlanner: (fn: (job: Job) => Promise<void>) => void;
+		sourceIndex: (prefix: string, sourceRoot?: string) => Promise<unknown>;
 		requeue: (state: TaskState, reason: string) => void;
 		jobs: Map<string, Job>;
 		queue: TaskState[];
@@ -644,6 +648,37 @@ describe("transcodes", () => {
 });
 
 describe("jobs for the product", () => {
+	test("cached indexes must satisfy each job's source scope", async () => {
+		const h = harness();
+		const prefix = "owner/video/project";
+		h.objects.set(
+			`${prefix}/manifest.json`,
+			new TextEncoder().encode(
+				JSON.stringify({
+					files: [
+						{
+							path: "recording-meta.json",
+							key: "owner/other/recording-meta.json",
+							size: 2,
+						},
+					],
+				}),
+			),
+		);
+		h.objects.set(
+			"owner/other/recording-meta.json",
+			new TextEncoder().encode("{}"),
+		);
+		const cached = await h.sourceIndex(prefix, "owner/");
+		expect(await h.sourceIndex(prefix, "owner/")).toBe(cached);
+		await expect(h.sourceIndex(prefix, "owner/video/")).rejects.toThrow(
+			"outside the recording",
+		);
+		await expect(h.sourceIndex(prefix)).rejects.toThrow(
+			"outside the recording",
+		);
+	});
+
 	test("write to the requested keys and call back signed when finished", async () => {
 		const h = harness();
 		h.setPlanner(async () => {});
