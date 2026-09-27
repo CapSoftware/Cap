@@ -115,8 +115,18 @@ function dropJobs(finished: string[]) {
 }
 
 const busy = new Map<number, WorkItem>();
-// Running ffmpeg transcodes, by slot, so cancels and the watchdog can stop them.
-const transcoders = new Map<number, Bun.Subprocess>();
+type TranscodeRun = {
+	controller: AbortController;
+	process?: Bun.Subprocess;
+};
+const transcoders = new Map<number, TranscodeRun>();
+
+function stopTranscode(slot: number) {
+	const run = transcoders.get(slot);
+	if (!run) return;
+	run.controller.abort(new Error("transcode cancelled"));
+	run.process?.kill("SIGKILL");
+}
 const progress = new Map<
 	number,
 	{
@@ -676,17 +686,27 @@ async function runTranscode(task: TranscodeTask, slot: number) {
 		lastProgressAt: Date.now(),
 	};
 	progress.set(slot, entry);
+	const run: TranscodeRun = { controller: new AbortController() };
+	transcoders.set(slot, run);
 	try {
 		const output = join(dir, "output.mp4");
 		const input = await s3.presignFresh("GET", task.source, 6 * 3600);
+		run.controller.signal.throwIfAborted();
 		const probe = Bun.spawn(["ffprobe", ...probeArgs(input)], {
 			stdout: "pipe",
 			stderr: "ignore",
 		});
-		const probed = await new Response(probe.stdout).text();
-		// H.264 with frequent keyframes (Chrome, Edge and Safari recordings)
-		// only needs its container rewritten; anything else is re-encoded.
+		run.process = probe;
+		const probeDecoder = new TextDecoder();
+		let probed = "";
+		for await (const bytes of probe.stdout) {
+			probed += probeDecoder.decode(bytes, { stream: true });
+			entry.lastProgressAt = Date.now();
+		}
+		probed += probeDecoder.decode();
 		const remux = (await probe.exited) === 0 && canRemux(probed);
+		run.controller.signal.throwIfAborted();
+		entry.lastProgressAt = Date.now();
 		console.log(`${task.taskId}: ${remux ? "remuxing" : "transcoding"}`);
 		const ffmpeg = Bun.spawn(
 			[
@@ -702,7 +722,7 @@ async function runTranscode(task: TranscodeTask, slot: number) {
 			],
 			{ stdout: "pipe", stderr: "pipe" },
 		);
-		transcoders.set(slot, ffmpeg);
+		run.process = ffmpeg;
 		const stderr = new Response(ffmpeg.stderr).text();
 		const decoder = new TextDecoder();
 		let buffered = "";
@@ -719,6 +739,7 @@ async function runTranscode(task: TranscodeTask, slot: number) {
 			}
 		}
 		const code = await ffmpeg.exited;
+		run.controller.signal.throwIfAborted();
 		if (code !== 0) {
 			throw new Error(
 				`ffmpeg exited ${code}: ${(await stderr).trim().slice(-500)}`,
@@ -728,6 +749,10 @@ async function runTranscode(task: TranscodeTask, slot: number) {
 			ifNoneMatch: true,
 		});
 	} finally {
+		if (run.process?.exitCode === null) {
+			run.process.kill("SIGKILL");
+			await run.process.exited;
+		}
 		transcoders.delete(slot);
 		progress.delete(slot);
 		rmSync(dir, { recursive: true, force: true });
@@ -963,7 +988,7 @@ function cancel(taskIds: string[]) {
 		if (!taskIds.includes(task.taskId)) continue;
 		console.log(`cancelling ${task.taskId}`);
 		if (task.kind === "transcode") {
-			transcoders.get(slot)?.kill("SIGKILL");
+			stopTranscode(slot);
 			continue;
 		}
 		// SIGKILL: a stopped or wedged engine never acts on SIGTERM and would
@@ -979,9 +1004,9 @@ setInterval(() => {
 			// Decoding a long source can start slowly; a minute without any
 			// output means a wedged ffmpeg.
 			if (now - entry.lastProgressAt >= Math.max(STALL_MS, 60_000)) {
-				console.error(`${entry.taskId}: no progress, killing ffmpeg`);
+				console.error(`${entry.taskId}: no progress, stopping transcode`);
 				entry.lastProgressAt = now;
-				transcoders.get(slot)?.kill("SIGKILL");
+				stopTranscode(slot);
 			}
 			continue;
 		}
