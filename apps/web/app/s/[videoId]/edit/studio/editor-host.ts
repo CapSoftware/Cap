@@ -392,6 +392,7 @@ type BrowserSaveChunks = {
 	durations: number[];
 	/// Chunks uploaded ahead of one still uploading, by number.
 	uploaded: Map<number, number>;
+	uploads: Set<Promise<void>>;
 	initUploaded: boolean;
 	backlog: number;
 	reportedAt: number;
@@ -1556,17 +1557,23 @@ export class EditorHostBridge {
 		if (progress !== null && now - this.browserSaveReportedAt < 3000) return;
 		this.browserSaveReportedAt = progress === null ? 0 : now;
 		if (progress === null) {
+			const chunks = this.browserSaveChunks;
 			const params = new URLSearchParams();
 			if (published) params.set("published", "1");
-			if (this.browserSaveChunks)
-				params.set("saveId", this.browserSaveChunks.saveId);
+			if (chunks) params.set("saveId", chunks.saveId);
 			this.browserSaveChunks = null;
-			this.queueBrowserSave(() =>
-				fetch(`${this.browserSavePath()}?${params}`, {
+			this.queueBrowserSave(async () => {
+				// Every chunk is listed before the Save finishes, so its stream
+				// plays to the end.
+				if (published && chunks) {
+					await Promise.all(chunks.uploads);
+					await this.putBrowserSave(chunks);
+				}
+				await fetch(`${this.browserSavePath()}?${params}`, {
 					method: "DELETE",
 					keepalive: true,
-				}),
-			);
+				});
+			});
 			return;
 		}
 		this.browserSaveProgress = progress;
@@ -1589,6 +1596,7 @@ export class EditorHostBridge {
 				queued: 0,
 				durations: [],
 				uploaded: new Map(),
+				uploads: new Set(),
 				initUploaded: false,
 				backlog: 0,
 				reportedAt: 0,
@@ -1603,16 +1611,20 @@ export class EditorHostBridge {
 		}
 		chunks.backlog += data.byteLength;
 		const index = duration === null ? 0 : ++chunks.queued;
-		void this.putBrowserSaveChunk(chunks.saveId, index, data).then((ok) => {
-			chunks.backlog -= data.byteLength;
-			if (!ok) {
-				chunks.stopped = true;
-				return;
-			}
-			if (duration === null) chunks.initUploaded = true;
-			else chunks.uploaded.set(index, duration);
-			this.listBrowserSaveChunks(chunks);
-		});
+		const upload = this.putBrowserSaveChunk(chunks.saveId, index, data).then(
+			(ok) => {
+				chunks.backlog -= data.byteLength;
+				chunks.uploads.delete(upload);
+				if (!ok) {
+					chunks.stopped = true;
+					return;
+				}
+				if (duration === null) chunks.initUploaded = true;
+				else chunks.uploaded.set(index, duration);
+				this.listBrowserSaveChunks(chunks);
+			},
+		);
+		chunks.uploads.add(upload);
 	}
 
 	/// Adds the chunks uploaded so far, in order and without gaps, to the
@@ -1674,8 +1686,7 @@ export class EditorHostBridge {
 		return `/api/editor/videos/${encodeURIComponent(this.videoId)}/browser-save`;
 	}
 
-	private putBrowserSave() {
-		const chunks = this.browserSaveChunks;
+	private putBrowserSave(chunks = this.browserSaveChunks) {
 		return fetch(this.browserSavePath(), {
 			method: "PUT",
 			headers: { "Content-Type": "application/json" },
