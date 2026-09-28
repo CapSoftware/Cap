@@ -398,7 +398,7 @@ function NameEditor(props: {
 				/>
 				<span
 					ref={prettyNameMeasureRef}
-					class="pointer-events-none max-w-[200px] px-px m-0 peer-focus:opacity-0 border-b border-transparent truncate whitespace-pre"
+					class="pointer-events-none max-w-[480px] px-px m-0 peer-focus:opacity-0 border-b border-transparent truncate whitespace-pre"
 				>
 					{prettyName()}
 				</span>
