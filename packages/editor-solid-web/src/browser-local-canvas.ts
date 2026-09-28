@@ -338,6 +338,11 @@ export class BrowserLocalCanvas {
 		});
 		if (sources.length === 0) return;
 		const signal = this.audioAbort.signal;
+		const retryLater = (failed: typeof sources) => {
+			for (const source of failed) {
+				this.requestedAudioLevels.delete(audioLevelSourceKey(source));
+			}
+		};
 		void loadBrowserRenderer()
 			.then((module) =>
 				loadAudioLevels(
@@ -351,11 +356,7 @@ export class BrowserLocalCanvas {
 					},
 				),
 			)
-			.catch(() => {
-				for (const source of sources) {
-					this.requestedAudioLevels.delete(audioLevelSourceKey(source));
-				}
-			});
+			.then(retryLater, () => retryLater(sources));
 	}
 
 	setProjectConfig(config: unknown) {

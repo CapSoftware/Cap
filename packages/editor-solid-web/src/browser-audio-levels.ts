@@ -159,9 +159,14 @@ export async function loadAudioLevels(
 		decodeAudioLevels(module, url),
 	onLoaded: () => void = () => undefined,
 ) {
+	const failed: BrowserAudioLevelSource[] = [];
 	await Promise.all(
 		sources.map(async (source) => {
-			const levels = await decode(source.url).catch(() => null);
+			const levels = await decode(source.url).catch(() => undefined);
+			if (levels === undefined) {
+				failed.push(source);
+				return;
+			}
 			const renderer = target();
 			if (!levels || !renderer) return;
 			if (source.kind === "timeline") {
@@ -172,4 +177,5 @@ export async function loadAudioLevels(
 			onLoaded();
 		}),
 	);
+	return failed;
 }

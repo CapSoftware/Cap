@@ -113,10 +113,10 @@ test("timeline audio sources skip muted, disabled and unresolved files", () => {
 	);
 });
 
-test("decoded levels reach the renderer and failures are skipped", async () => {
+test("decoded levels reach the renderer and failed decodes are reported for a retry", async () => {
 	const applied: Array<[number | string, string, number]> = [];
 	let loaded = 0;
-	await loadAudioLevels(
+	const failed = await loadAudioLevels(
 		{ BrowserAudioLevelAnalyzer },
 		() => ({
 			set_audio_levels: (clip, source, levels) =>
@@ -141,6 +141,7 @@ test("decoded levels reach the renderer and failures are skipped", async () => {
 		["music.mp3", "timeline", 64],
 	]);
 	expect(loaded).toBe(2);
+	expect(failed).toEqual([{ url: "broken", kind: "display", segment: 1 }]);
 });
 
 test("the wasm analyzer turns PCM into 60 Hz frames of 32 bands", async () => {
