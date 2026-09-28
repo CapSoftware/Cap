@@ -1,14 +1,16 @@
 "use client";
 
 import type { Video } from "@cap/web-domain";
+import * as Popover from "@radix-ui/react-popover";
 import clsx from "clsx";
-import { CheckIcon, CopyIcon } from "lucide-react";
+import { CheckIcon, ClockIcon, CopyIcon } from "lucide-react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { type MouseEvent, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { getEditorSharing } from "@/actions/videos/get-editor-sharing";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
+import { formatTimestamp } from "@/lib/share-link";
 import {
 	copyRichVideoLink,
 	videoPreviewImageUrl,
@@ -35,6 +37,7 @@ export function ShareLinkTab({
 	title,
 	isPublic,
 	active = false,
+	playbackTime,
 	onPrivacyClick,
 	onNavigate,
 }: {
@@ -43,11 +46,14 @@ export function ShareLinkTab({
 	title: string;
 	isPublic: boolean;
 	active?: boolean;
+	/** Where the viewer is in the video, offered as a link to that moment. */
+	playbackTime?: () => number;
 	onPrivacyClick: () => void;
 	onNavigate?: (event: MouseEvent<HTMLAnchorElement>) => void;
 }) {
 	const { webUrl } = usePublicEnv();
 	const [copied, setCopied] = useState(false);
+	const [moment, setMoment] = useState<number | null>(null);
 
 	useEffect(() => {
 		if (!copied) return;
@@ -55,10 +61,11 @@ export function ShareLinkTab({
 		return () => clearTimeout(timer);
 	}, [copied]);
 
-	const copy = async () => {
+	const copy = async (url: string) => {
+		setMoment(null);
 		try {
 			await copyRichVideoLink({
-				url: shareUrl,
+				url,
 				title: title || "Cap Recording",
 				previewImageUrl: videoPreviewImageUrl(webUrl, videoId),
 			});
@@ -98,19 +105,58 @@ export function ShareLinkTab({
 			>
 				{shareUrl.replace(/^https?:\/\//, "")}
 			</Link>
-			<button
-				type="button"
-				onClick={() => void copy()}
-				aria-label="Copy link"
-				title="Copy link"
-				className="rec-focus grid size-7 shrink-0 place-items-center rounded-md hover:text-[var(--rec-text-1)]"
+			<Popover.Root
+				open={moment !== null}
+				onOpenChange={(open) => {
+					if (!open) setMoment(null);
+				}}
 			>
-				{copied ? (
-					<CheckIcon className="size-3.5" aria-hidden />
-				) : (
-					<CopyIcon className="size-3.5" aria-hidden />
-				)}
-			</button>
+				<Popover.Anchor asChild>
+					<button
+						type="button"
+						onClick={() => {
+							const time = Math.floor(playbackTime?.() ?? 0);
+							if (time > 3) setMoment(time);
+							else void copy(shareUrl);
+						}}
+						aria-label="Copy link"
+						title="Copy link"
+						className="rec-focus grid size-7 shrink-0 place-items-center rounded-md hover:text-[var(--rec-text-1)]"
+					>
+						{copied ? (
+							<CheckIcon className="size-3.5" aria-hidden />
+						) : (
+							<CopyIcon className="size-3.5" aria-hidden />
+						)}
+					</button>
+				</Popover.Anchor>
+				<Popover.Portal>
+					<Popover.Content
+						sideOffset={6}
+						align="end"
+						className="cap-rec rec-pop z-[400] flex min-w-44 flex-col p-1 text-[13px]"
+					>
+						<button
+							type="button"
+							onClick={() => void copy(shareUrl)}
+							className="rec-focus flex items-center gap-2 rounded-md px-2.5 py-1.5 text-left hover:bg-[var(--rec-ctl-hover)]"
+						>
+							<CopyIcon className="size-3.5 shrink-0" aria-hidden />
+							Copy link
+						</button>
+						{moment !== null && (
+							<button
+								type="button"
+								onClick={() => void copy(`${shareUrl}?t=${moment}`)}
+								className="rec-focus flex items-center gap-2 rounded-md px-2.5 py-1.5 text-left hover:bg-[var(--rec-ctl-hover)]"
+							>
+								<ClockIcon className="size-3.5 shrink-0" aria-hidden />
+								Copy link at {formatTimestamp(moment)}
+							</button>
+						)}
+					</Popover.Content>
+				</Popover.Portal>
+			</Popover.Root>
 		</div>
 	);
 }

@@ -60,7 +60,7 @@ import { ShareLinkTab } from "@/components/editor-shell/share-link-tab";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { Tooltip } from "@/components/Tooltip";
 import { rememberEntryFrame } from "@/lib/editor-entry-frame";
-import { shareLinkUrl } from "@/lib/share-link";
+import { formatTimestamp, shareLinkUrl } from "@/lib/share-link";
 import {
 	copyRichVideoLink,
 	videoPreviewImageUrl,
@@ -428,15 +428,6 @@ export const ShareHeader = ({
 			return `${customDomain}/s/${data.id}`;
 		}
 		return `${webUrl}/s/${data.id}`;
-	};
-
-	const formatTimestamp = (seconds: number): string => {
-		const h = Math.floor(seconds / 3600);
-		const m = Math.floor((seconds % 3600) / 60);
-		const s = seconds % 60;
-		if (h > 0)
-			return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
-		return `${m}:${String(s).padStart(2, "0")}`;
 	};
 
 	const copyShareLink = (url: string) =>
@@ -837,6 +828,11 @@ export const ShareHeader = ({
 									shareUrl={getVideoLink()}
 									title={displayTitle}
 									isPublic={Boolean(data.public)}
+									playbackTime={() =>
+										document.querySelector<HTMLVideoElement>(
+											"[data-edit-video] video",
+										)?.currentTime ?? 0
+									}
 									onPrivacyClick={() => setIsSharingDialogOpen(true)}
 								/>
 								<EditorShellTab
