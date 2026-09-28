@@ -155,8 +155,9 @@ fn clip_count(meta: &StudioRecordingMeta) -> usize {
 }
 
 /// Band levels for a segment at output `time`, read at the source time each
-/// audio file plays then so trims, cuts and speed changes stay in sync. A
-/// held frame plays silence.
+/// recording file plays then so trims, cuts and speed changes stay in sync. A
+/// held frame plays silence. "Mix" also takes the timeline's audio segments,
+/// placed in output time the way the audio mixer places them.
 fn segment_levels(
     store: &AudioLevelStore,
     meta: &StudioRecordingMeta,
@@ -165,11 +166,19 @@ fn segment_levels(
     segment: &WaveformSegment,
 ) -> [f32; AUDIO_LEVEL_BANDS] {
     let mut bands = [0.0; AUDIO_LEVEL_BANDS];
-    let source = match project
-        .timeline
-        .as_ref()
-        .and_then(|timeline| timeline.get_frame_mapping(time))
-    {
+    let Some(timeline) = &project.timeline else {
+        return bands;
+    };
+    if segment.source == WaveformSource::Mix {
+        for audio in &timeline.audio_segments {
+            if let Some((file_time, gain)) = audio.playback_at(time)
+                && let Some(levels) = store.timeline_audio(&audio.path)
+            {
+                levels.accumulate(file_time, segment.smoothing, gain, &mut bands);
+            }
+        }
+    }
+    let source = match timeline.get_frame_mapping(time) {
         Some(TimelineFrameMapping::Single { source, .. }) => source,
         Some(TimelineFrameMapping::Transition { incoming, .. }) => incoming,
         Some(TimelineFrameMapping::Hold { .. }) | None => return bands,
@@ -205,7 +214,7 @@ fn segment_levels(
                 AudioLevelSource::Mic => f64::from(offsets.mic),
                 AudioLevelSource::System => f64::from(offsets.system_audio),
             };
-        levels.accumulate(file_time, segment.smoothing, &mut bands);
+        levels.accumulate(file_time, segment.smoothing, 1.0, &mut bands);
     }
     bands
 }
@@ -460,6 +469,69 @@ mod tests {
 
         store.set(0, AudioLevelSource::System, crate::AudioLevels::default());
         assert_eq!(level(0.0, WaveformSource::System), 0.0);
+    }
+
+    #[test]
+    fn mix_includes_timeline_audio_as_the_mixer_places_it() {
+        let meta: StudioRecordingMeta = serde_json::from_value(serde_json::json!({
+            "display": { "path": "display.mp4", "fps": 30 }
+        }))
+        .unwrap();
+        let mut project: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "timeline": {
+                "segments": [{ "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 4.0 }],
+                "zoomSegments": [],
+                "audioSegments": [{
+                    "start": 5.0, "end": 7.0, "path": "music.mp3", "trimStart": 1.0
+                }]
+            }
+        }))
+        .unwrap();
+        let mut bytes = vec![0; AUDIO_LEVEL_BANDS * 600];
+        bytes[150 * AUDIO_LEVEL_BANDS] = 255;
+        let store = AudioLevelStore::default();
+        store.set_timeline_audio("music.mp3", crate::AudioLevels::from_bytes(bytes).unwrap());
+        store.set(
+            0,
+            AudioLevelSource::Mic,
+            crate::AudioLevels::from_bytes(vec![255; AUDIO_LEVEL_BANDS * 600]).unwrap(),
+        );
+        let level = |project: &ProjectConfiguration, time: f64, source: WaveformSource| {
+            let waveform = WaveformSegment {
+                source,
+                smoothing: 0.0,
+                ..Default::default()
+            };
+            segment_levels(&store, &meta, project, time, &waveform)[0]
+        };
+
+        assert_eq!(level(&project, 6.5, WaveformSource::Mix), 1.0);
+        assert_eq!(level(&project, 5.5, WaveformSource::Mix), 0.0);
+        assert_eq!(level(&project, 3.0, WaveformSource::Mix), 1.0);
+        assert_eq!(level(&project, 4.5, WaveformSource::Mix), 0.0);
+        assert_eq!(level(&project, 6.5, WaveformSource::Mic), 0.0);
+        assert_eq!(level(&project, 6.5, WaveformSource::System), 0.0);
+
+        let audio = &mut project.timeline.as_mut().unwrap().audio_segments[0];
+        audio.start = 4.5;
+        audio.end = 6.5;
+        assert_eq!(level(&project, 6.0, WaveformSource::Mix), 1.0);
+        assert_eq!(level(&project, 6.5, WaveformSource::Mix), 0.0);
+        let audio = &mut project.timeline.as_mut().unwrap().audio_segments[0];
+        audio.trim_start = 0.5;
+        assert_eq!(level(&project, 6.0, WaveformSource::Mix), 0.0);
+        let audio = &mut project.timeline.as_mut().unwrap().audio_segments[0];
+        audio.trim_start = 1.0;
+        audio.volume_db = -6.0;
+        let quieter = level(&project, 6.0, WaveformSource::Mix);
+        assert!(quieter > 0.8 && quieter < 1.0);
+        let audio = &mut project.timeline.as_mut().unwrap().audio_segments[0];
+        audio.volume_db = cap_project::AudioTrackSegment::SILENT_DB;
+        assert_eq!(level(&project, 6.0, WaveformSource::Mix), 0.0);
+        let audio = &mut project.timeline.as_mut().unwrap().audio_segments[0];
+        audio.volume_db = 0.0;
+        audio.enabled = false;
+        assert_eq!(level(&project, 6.0, WaveformSource::Mix), 0.0);
     }
 
     fn render(style: WaveformStyle, values: &[f32]) -> Option<Vec<u8>> {

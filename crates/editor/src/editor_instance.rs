@@ -613,12 +613,19 @@ impl EditorInstance {
         let constants = this.render_constants.clone();
         let segments = this.segment_medias.clone();
         tokio::spawn(async move {
-            if project_rx
-                .wait_for(crate::has_waveform_segments)
-                .await
-                .is_ok()
-            {
-                crate::load_waveform_levels(&constants, &segments).await;
+            let mut recording_levels_loaded = false;
+            loop {
+                let project = project_rx.borrow_and_update().clone();
+                if crate::has_waveform_segments(&project) {
+                    if !recording_levels_loaded {
+                        crate::load_waveform_levels(&constants, &segments).await;
+                        recording_levels_loaded = true;
+                    }
+                    crate::load_timeline_audio_levels(&constants, &project).await;
+                }
+                if project_rx.changed().await.is_err() {
+                    break;
+                }
             }
         });
 

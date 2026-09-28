@@ -7,7 +7,7 @@ use cap_audio::{AudioData, AudioStream, ChunkRead, DecodedAudio};
 use cap_project::{ProjectConfiguration, RecordingMeta, StudioRecordingMeta};
 use cap_rendering::{AudioLevelAnalyzer, AudioLevelSource, AudioLevels, RenderVideoConstants};
 
-use crate::{AudioLoader, SegmentMedia};
+use crate::{AudioLoader, SegmentMedia, segments::resolve_music_path};
 
 pub fn has_waveform_segments(project: &ProjectConfiguration) -> bool {
     project
@@ -154,6 +154,40 @@ pub async fn load_waveform_levels(constants: &RenderVideoConstants, segments: &[
     }
 }
 
+/// Fills `constants.audio_levels` for each imported audio file the timeline
+/// can play, skipping files whose levels are already loaded.
+pub async fn load_timeline_audio_levels(
+    constants: &RenderVideoConstants,
+    project: &ProjectConfiguration,
+) {
+    let Some(timeline) = &project.timeline else {
+        return;
+    };
+    let mut paths: Vec<&str> = timeline
+        .audio_segments
+        .iter()
+        .filter(|segment| segment.enabled && segment.volume_gain() > 0.0)
+        .map(|segment| segment.path.as_str())
+        .collect();
+    paths.sort_unstable();
+    paths.dedup();
+    for path in paths {
+        if constants.audio_levels.timeline_audio(path).is_some() {
+            continue;
+        }
+        let file = resolve_music_path(&constants.recording_meta.project_path, path);
+        match tokio::task::spawn_blocking(move || analyze_file(&file)).await {
+            Ok(Ok(levels)) => constants.audio_levels.set_timeline_audio(path, levels),
+            Ok(Err(error)) => {
+                tracing::warn!(path, %error, "Timeline audio waveform levels are unavailable");
+            }
+            Err(error) => {
+                tracing::warn!(path, %error, "Timeline audio waveform level task failed");
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -291,6 +325,73 @@ mod tests {
         assert_eq!(sources.len(), 1);
         assert_eq!(sources[0].source, AudioLevelSource::Display);
         assert_eq!(sources[0].path, PathBuf::from("/project/display.mp4"));
+    }
+
+    #[tokio::test]
+    async fn timeline_audio_levels_load_for_audible_segments_only() {
+        let directory = tempfile::tempdir().unwrap();
+        let tone: Vec<i16> = (0..AudioData::SAMPLE_RATE as usize)
+            .map(|index| {
+                let time = index as f64 / f64::from(AudioData::SAMPLE_RATE);
+                (12_000.0 * (std::f64::consts::TAU * 220.0 * time).sin()) as i16
+            })
+            .collect();
+        write_wav(&directory.path().join("display.wav"), &tone);
+        std::fs::create_dir_all(directory.path().join("assets")).unwrap();
+        write_wav(&directory.path().join("assets/music.wav"), &tone);
+        write_wav(&directory.path().join("assets/muted.wav"), &tone);
+        let mut recording: RecordingMeta = serde_json::from_value(serde_json::json!({
+            "pretty_name": "music",
+            "display": { "path": "display.wav", "fps": 1 }
+        }))
+        .unwrap();
+        recording.project_path = directory.path().to_path_buf();
+        let meta = recording.studio_meta().unwrap().clone();
+        let Ok(constants) = RenderVideoConstants::new_with_options(
+            cap_rendering::RenderOptions {
+                screen_size: cap_project::XY::new(16, 16),
+                camera_size: None,
+                preserve_screen_alpha: false,
+            },
+            recording,
+            meta,
+        )
+        .await
+        else {
+            eprintln!("No GPU adapter available; skipping timeline audio level test");
+            return;
+        };
+        let project: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "timeline": {
+                "segments": [{ "timescale": 1.0, "start": 0.0, "end": 1.0 }],
+                "zoomSegments": [],
+                "audioSegments": [
+                    { "start": 2.0, "end": 3.0, "path": "assets/music.wav", "trimStart": 0.5 },
+                    { "start": 0.0, "end": 1.0, "path": "assets/music.wav" },
+                    { "start": 0.0, "end": 1.0, "path": "assets/muted.wav", "volumeDb": -60.0 },
+                    { "start": 0.0, "end": 1.0, "path": "assets/missing.wav" }
+                ]
+            }
+        }))
+        .unwrap();
+        load_timeline_audio_levels(&constants, &project).await;
+        let music = constants
+            .audio_levels
+            .timeline_audio("assets/music.wav")
+            .unwrap();
+        assert_eq!(music.frame_count(), 60);
+        assert!(
+            constants
+                .audio_levels
+                .timeline_audio("assets/muted.wav")
+                .is_none()
+        );
+        assert!(
+            constants
+                .audio_levels
+                .timeline_audio("assets/missing.wav")
+                .is_none()
+        );
     }
 
     #[tokio::test]

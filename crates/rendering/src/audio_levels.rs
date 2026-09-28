@@ -84,12 +84,20 @@ impl AudioLevels {
             .get(index * AUDIO_LEVEL_BANDS..(index + 1) * AUDIO_LEVEL_BANDS)
     }
 
-    /// Raises `out` to this source's levels at `time`, averaged over nearby
-    /// frames with a triangular window that widens with `smoothing` (0-1).
-    pub fn accumulate(&self, time: f64, smoothing: f32, out: &mut [f32; AUDIO_LEVEL_BANDS]) {
-        if !time.is_finite() || self.bands.is_empty() {
+    /// Raises `out` to this source's levels at `time` played at linear
+    /// `gain`, averaged over nearby frames with a triangular window that
+    /// widens with `smoothing` (0-1).
+    pub fn accumulate(
+        &self,
+        time: f64,
+        smoothing: f32,
+        gain: f32,
+        out: &mut [f32; AUDIO_LEVEL_BANDS],
+    ) {
+        if !time.is_finite() || self.bands.is_empty() || gain.is_nan() || gain <= 0.0 {
             return;
         }
+        let gain_offset = 20.0 * f64::from(gain).log10() / (CEILING_DB - FLOOR_DB);
         let position = time * AUDIO_LEVEL_FRAME_RATE;
         let radius = f64::from(smoothing.clamp(0.0, 1.0)) * MAX_SMOOTHING_FRAMES + 1.0;
         let first = (position - radius).ceil() as i64;
@@ -112,7 +120,10 @@ impl AudioLevels {
             return;
         }
         for (level, sum) in out.iter_mut().zip(sums) {
-            *level = level.max((sum / total_weight / 255.0) as f32);
+            let value = sum / total_weight / 255.0;
+            if value > 0.0 {
+                *level = level.max((value + gain_offset).clamp(0.0, 1.0) as f32);
+            }
         }
     }
 }
@@ -120,6 +131,7 @@ impl AudioLevels {
 #[derive(Default)]
 pub struct AudioLevelStore {
     levels: RwLock<HashMap<(u32, AudioLevelSource), Arc<AudioLevels>>>,
+    timeline_audio: RwLock<HashMap<String, Arc<AudioLevels>>>,
 }
 
 impl AudioLevelStore {
@@ -138,11 +150,33 @@ impl AudioLevelStore {
             .cloned()
     }
 
+    /// Levels for an imported audio file placed on the timeline, keyed by the
+    /// `path` its audio segments store.
+    pub fn set_timeline_audio(&self, path: &str, levels: AudioLevels) {
+        self.timeline_audio
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(path.to_string(), Arc::new(levels));
+    }
+
+    pub fn timeline_audio(&self, path: &str) -> Option<Arc<AudioLevels>> {
+        self.timeline_audio
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(path)
+            .cloned()
+    }
+
     pub fn is_empty(&self) -> bool {
         self.levels
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .is_empty()
+            && self
+                .timeline_audio
+                .read()
+                .unwrap_or_else(PoisonError::into_inner)
+                .is_empty()
     }
 }
 
@@ -461,23 +495,32 @@ mod tests {
         assert!(AudioLevels::from_bytes(vec![0; AUDIO_LEVEL_BANDS + 1]).is_none());
 
         let mut exact = [0.0; AUDIO_LEVEL_BANDS];
-        levels.accumulate(1.0 / 60.0, 0.0, &mut exact);
+        levels.accumulate(1.0 / 60.0, 0.0, 1.0, &mut exact);
         assert!((exact[0] - 1.0).abs() < 1.0e-6);
 
         let mut between = [0.0; AUDIO_LEVEL_BANDS];
-        levels.accumulate(1.5 / 60.0, 0.0, &mut between);
+        levels.accumulate(1.5 / 60.0, 0.0, 1.0, &mut between);
         assert!((between[0] - 0.5).abs() < 1.0e-6);
 
         let mut smoothed = [0.0; AUDIO_LEVEL_BANDS];
-        levels.accumulate(1.0 / 60.0, 1.0, &mut smoothed);
+        levels.accumulate(1.0 / 60.0, 1.0, 1.0, &mut smoothed);
         assert!(smoothed[0] > 0.0 && smoothed[0] < 0.5);
 
         let mut outside = [0.25; AUDIO_LEVEL_BANDS];
-        levels.accumulate(10.0, 0.0, &mut outside);
+        levels.accumulate(10.0, 0.0, 1.0, &mut outside);
         assert_eq!(outside[0], 0.25);
-        levels.accumulate(1.0 / 60.0, 0.0, &mut outside);
+        levels.accumulate(1.0 / 60.0, 0.0, 1.0, &mut outside);
         assert_eq!(outside[0], 1.0);
         assert_eq!(outside[1], 0.25);
+
+        let mut quieter = [0.0; AUDIO_LEVEL_BANDS];
+        levels.accumulate(1.0 / 60.0, 0.0, 0.5, &mut quieter);
+        let expected = 1.0 + 20.0 * 0.5_f64.log10() / (CEILING_DB - FLOOR_DB);
+        assert!((f64::from(quieter[0]) - expected).abs() < 1.0e-6);
+        assert_eq!(quieter[1], 0.0);
+        let mut muted = [0.0; AUDIO_LEVEL_BANDS];
+        levels.accumulate(1.0 / 60.0, 0.0, 0.0, &mut muted);
+        assert_eq!(muted[0], 0.0);
     }
 
     #[test]
@@ -503,6 +546,10 @@ mod tests {
     fn store_keys_levels_by_clip_and_source() {
         let store = AudioLevelStore::default();
         assert!(store.is_empty());
+        store.set_timeline_audio("music.mp3", AudioLevels::default());
+        assert!(!store.is_empty());
+        assert!(store.timeline_audio("music.mp3").is_some());
+        assert!(store.timeline_audio("other.mp3").is_none());
         store.set(1, AudioLevelSource::Mic, AudioLevels::default());
         assert!(store.get(1, AudioLevelSource::Mic).is_some());
         assert!(store.get(1, AudioLevelSource::System).is_none());

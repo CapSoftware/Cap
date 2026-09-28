@@ -196,6 +196,7 @@ impl ExporterBuilder {
 
         if cap_editor::has_waveform_segments(&project_config) {
             cap_editor::load_waveform_levels(&render_constants, &segments).await;
+            cap_editor::load_timeline_audio_levels(&render_constants, &project_config).await;
         }
 
         if let Some(parent) = output_path.parent() {
