@@ -2,22 +2,33 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { nanoId } from "@cap/database/helpers";
 import {
 	folders,
 	sharedVideos,
+	spaceMembers,
+	spaces,
 	spaceVideos,
 	videos,
 } from "@cap/database/schema";
 import type { Folder, Video } from "@cap/web-domain";
-import { and, asc, eq, inArray, isNull } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, or } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-import { requireOrganizationSettingsManager } from "@/actions/organization/authorization";
-import { requireSpaceManager } from "@/actions/organization/space-authorization";
+import {
+	requireOrganizationAccess,
+	requireOrganizationSettingsManager,
+} from "@/actions/organization/authorization";
+import {
+	getSpaceAccess,
+	requireSpaceManager,
+} from "@/actions/organization/space-authorization";
 import {
 	MAX_MOVE_ITEMS,
+	type MoveDestinationGroup,
 	type MoveFolderDestination,
 	type MoveLocation,
 } from "@/lib/move-items";
+import { canManageOrganizationSettings } from "@/lib/permissions/roles";
 
 function requireValidLocation(location: MoveLocation) {
 	if (
@@ -111,6 +122,202 @@ export async function getMoveFolderDestinations(
 		.from(folders)
 		.where(getFolderScope(user, location))
 		.orderBy(asc(folders.name));
+}
+
+export async function getOwnedVideoMoveDestinations(): Promise<
+	MoveDestinationGroup[]
+> {
+	const user = await getCurrentUser();
+	if (!user?.activeOrganizationId) throw new Error("Unauthorized");
+	const access = await requireOrganizationAccess(
+		user.id,
+		user.activeOrganizationId,
+	);
+	const availableSpaces = await db()
+		.select({ id: spaces.id, name: spaces.name })
+		.from(spaces)
+		.leftJoin(
+			spaceMembers,
+			and(
+				eq(spaceMembers.spaceId, spaces.id),
+				eq(spaceMembers.userId, user.id),
+			),
+		)
+		.where(
+			and(
+				eq(spaces.organizationId, user.activeOrganizationId),
+				canManageOrganizationSettings(access.role)
+					? undefined
+					: or(
+							eq(spaces.createdById, user.id),
+							eq(spaceMembers.userId, user.id),
+						),
+			),
+		)
+		.orderBy(asc(spaces.name));
+	const organizationFolders = await db()
+		.select({
+			id: folders.id,
+			name: folders.name,
+			parentId: folders.parentId,
+			spaceId: folders.spaceId,
+		})
+		.from(folders)
+		.where(
+			and(
+				eq(folders.organizationId, user.activeOrganizationId),
+				or(
+					and(eq(folders.createdById, user.id), isNull(folders.spaceId)),
+					inArray(folders.spaceId, [
+						user.activeOrganizationId,
+						...availableSpaces.map((space) => space.id),
+					]),
+				),
+			),
+		)
+		.orderBy(asc(folders.name));
+	return [
+		{
+			location: { type: "personal" },
+			name: "My Caps",
+			folders: organizationFolders.filter((folder) => folder.spaceId === null),
+		},
+		{
+			location: { type: "organization" },
+			name: "All team members",
+			folders: organizationFolders.filter(
+				(folder) => folder.spaceId === user.activeOrganizationId,
+			),
+		},
+		...availableSpaces.map(
+			(space): MoveDestinationGroup => ({
+				location: { type: "space", spaceId: space.id },
+				name: space.name,
+				folders: organizationFolders.filter(
+					(folder) => folder.spaceId === space.id,
+				),
+			}),
+		),
+	];
+}
+
+export async function placeOwnedVideos({
+	videoIds,
+	folderId,
+	location,
+}: {
+	videoIds: Video.VideoId[];
+	folderId: Folder.FolderId | null;
+	location: MoveLocation;
+}) {
+	const user = await getCurrentUser();
+	if (!user?.activeOrganizationId) throw new Error("Unauthorized");
+	requireValidLocation(location);
+	const ids = normalizeVideoIds(videoIds).sort();
+	await requireOrganizationAccess(user.id, user.activeOrganizationId);
+	if (location.type === "space") {
+		const access = await getSpaceAccess(user.id, location.spaceId);
+		if (
+			!access ||
+			access.organizationId !== user.activeOrganizationId ||
+			!access.organizationRole ||
+			(!access.canManage && !access.spaceRole)
+		) {
+			throw new Error("Space not found");
+		}
+	}
+	await db().transaction(async (tx) => {
+		const ownedVideos = await tx
+			.select({ id: videos.id })
+			.from(videos)
+			.where(
+				and(
+					inArray(videos.id, ids),
+					eq(videos.ownerId, user.id),
+					eq(videos.orgId, user.activeOrganizationId),
+				),
+			)
+			.orderBy(asc(videos.id))
+			.for("update");
+		if (ownedVideos.length !== ids.length)
+			throw new Error("One or more Caps cannot be moved");
+		if (folderId) {
+			const [folder] = await tx
+				.select({ id: folders.id })
+				.from(folders)
+				.where(and(eq(folders.id, folderId), getFolderScope(user, location)))
+				.limit(1);
+			if (!folder) throw new Error("Destination folder not found");
+		}
+		if (location.type === "personal") {
+			await tx.update(videos).set({ folderId }).where(inArray(videos.id, ids));
+		} else if (location.type === "organization") {
+			const existing = await tx
+				.select({ videoId: sharedVideos.videoId })
+				.from(sharedVideos)
+				.where(
+					and(
+						inArray(sharedVideos.videoId, ids),
+						eq(sharedVideos.organizationId, user.activeOrganizationId),
+					),
+				);
+			const shared = new Set(existing.map((row) => row.videoId));
+			const missing = ids.filter((id) => !shared.has(id));
+			if (missing.length)
+				await tx.insert(sharedVideos).values(
+					missing.map((videoId) => ({
+						id: nanoId(),
+						videoId,
+						folderId,
+						organizationId: user.activeOrganizationId,
+						sharedByUserId: user.id,
+					})),
+				);
+			await tx
+				.update(sharedVideos)
+				.set({ folderId })
+				.where(
+					and(
+						inArray(sharedVideos.videoId, ids),
+						eq(sharedVideos.organizationId, user.activeOrganizationId),
+					),
+				);
+		} else {
+			const existing = await tx
+				.select({ videoId: spaceVideos.videoId })
+				.from(spaceVideos)
+				.where(
+					and(
+						inArray(spaceVideos.videoId, ids),
+						eq(spaceVideos.spaceId, location.spaceId),
+					),
+				);
+			const shared = new Set(existing.map((row) => row.videoId));
+			const missing = ids.filter((id) => !shared.has(id));
+			if (missing.length)
+				await tx.insert(spaceVideos).values(
+					missing.map((videoId) => ({
+						id: nanoId(),
+						videoId,
+						folderId,
+						spaceId: location.spaceId,
+						addedById: user.id,
+					})),
+				);
+			await tx
+				.update(spaceVideos)
+				.set({ folderId })
+				.where(
+					and(
+						inArray(spaceVideos.videoId, ids),
+						eq(spaceVideos.spaceId, location.spaceId),
+					),
+				);
+		}
+	});
+	revalidateMoveLocation(location);
+	revalidatePath("/s/[videoId]", "page");
+	return { moved: ids.length };
 }
 
 export async function moveVideos({
