@@ -1,6 +1,7 @@
 /* The browser recorder shares the editor's surfaces (the desktop and web
    editors' --ed-* values) so recording and editing read as one product. It
-   follows the system appearance. */
+   follows the system appearance, except where data-appearance="light" sits
+   on a page that is always light. */
 .cap-rec {
 	--rec-window: #f1f1f3;
 	--rec-card: #ffffff;
@@ -37,7 +38,7 @@
 }
 
 @media (prefers-color-scheme: dark) {
-	.cap-rec {
+	.cap-rec:not([data-appearance="light"]) {
 		--rec-window: #131315;
 		--rec-card: #1b1b1e;
 		--rec-card-2: #202024;

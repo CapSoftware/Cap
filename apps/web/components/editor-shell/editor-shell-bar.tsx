@@ -12,14 +12,20 @@ export function EditorShellBar({
 	left,
 	center,
 	right,
+	onLightPage = false,
 }: {
 	left: ReactNode;
 	center: ReactNode;
 	right?: ReactNode;
+	onLightPage?: boolean;
 }) {
 	return (
 		<header
-			className="cap-rec grid h-12 shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-3 bg-[var(--rec-window)] px-2 sm:px-3"
+			data-appearance={onLightPage ? "light" : undefined}
+			className={clsx(
+				"cap-rec grid h-12 shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-3 px-2 sm:px-3",
+				onLightPage ? "bg-white" : "bg-[var(--rec-window)]",
+			)}
 			style={{ viewTransitionName: "cap-shell-bar" }}
 		>
 			<div className="flex min-w-0 items-center gap-2">{left}</div>

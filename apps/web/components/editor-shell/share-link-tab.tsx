@@ -134,6 +134,7 @@ export function ShareLinkTab({
 					<Popover.Content
 						sideOffset={6}
 						align="end"
+						data-appearance={active ? "light" : undefined}
 						className="cap-rec rec-pop z-[400] flex min-w-44 flex-col p-1 text-[13px]"
 					>
 						<button

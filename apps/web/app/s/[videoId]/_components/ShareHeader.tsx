@@ -822,6 +822,7 @@ export const ShareHeader = ({
 			{showsEditorBar && (
 				<div className="-mx-4 border-b border-gray-5 lg:-mx-8">
 					<EditorShellBar
+						onLightPage
 						left={
 							<EditorShellBrand title="Dashboard" backHref="/dashboard/caps" />
 						}
