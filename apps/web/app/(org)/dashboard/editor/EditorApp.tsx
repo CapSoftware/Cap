@@ -124,6 +124,13 @@ function EditorHome({
 	const [importing, setImporting] = useState<ImportState | null>(null);
 	const inputRef = useRef<HTMLInputElement>(null);
 	const dragDepth = useRef(0);
+	const mounted = useRef(true);
+	useEffect(() => {
+		mounted.current = true;
+		return () => {
+			mounted.current = false;
+		};
+	}, []);
 
 	const start = useCallback(
 		async (file: File) => {
@@ -168,9 +175,11 @@ function EditorHome({
 				audioOnly,
 				setUploadStatus: (status) => {
 					setUploadStatus(status);
-					setImporting((current) =>
-						current ? { ...current, status } : current,
-					);
+					// The last step stays on screen while the editor opens.
+					if (status)
+						setImporting((current) =>
+							current ? { ...current, status } : current,
+						);
 				},
 				onVideoCreated: (id) => {
 					videoId = id;
@@ -178,7 +187,16 @@ function EditorHome({
 				quiet: true,
 			});
 			if (ok && videoId) {
-				router.push(`/s/${videoId}/edit?from=import`);
+				const editorUrl = `/s/${videoId}/edit?from=import`;
+				// Someone who moved on while it uploaded isn't pulled back to it.
+				if (mounted.current) router.push(editorUrl);
+				else
+					toast.success("Your project is ready", {
+						action: {
+							label: "Open",
+							onClick: () => router.push(editorUrl),
+						},
+					});
 				return;
 			}
 			setImporting(null);
@@ -191,9 +209,27 @@ function EditorHome({
 			dragDepth.current = 0;
 			setDragging(false);
 		};
+		// A file let go outside the drop area would open in the tab instead.
+		const keepPage = (event: globalThis.DragEvent) => {
+			if (event.dataTransfer?.types.includes("Files")) event.preventDefault();
+		};
 		window.addEventListener("dragend", reset);
-		return () => window.removeEventListener("dragend", reset);
+		window.addEventListener("dragover", keepPage);
+		window.addEventListener("drop", keepPage);
+		return () => {
+			window.removeEventListener("dragend", reset);
+			window.removeEventListener("dragover", keepPage);
+			window.removeEventListener("drop", keepPage);
+		};
 	}, []);
+
+	const busy = importing !== null;
+	useEffect(() => {
+		if (!busy) return;
+		const warn = (event: BeforeUnloadEvent) => event.preventDefault();
+		window.addEventListener("beforeunload", warn);
+		return () => window.removeEventListener("beforeunload", warn);
+	}, [busy]);
 
 	const status = importing?.status;
 	const progress =
@@ -227,7 +263,7 @@ function EditorHome({
 				dragDepth.current = 0;
 				setDragging(false);
 				const file = event.dataTransfer.files[0];
-				if (file) void start(file);
+				if (file && !importing) void start(file);
 			}}
 		>
 			<section

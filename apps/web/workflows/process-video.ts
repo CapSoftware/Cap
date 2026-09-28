@@ -40,6 +40,13 @@ interface VideoProcessingResult {
 	};
 }
 
+/** The upload itself can't be read, so processing it again would fail the same way. */
+function isUnreadableInputError(error: Error) {
+	return /media input could not be read|no video stream found/i.test(
+		error.message,
+	);
+}
+
 function getValidDuration(duration: number) {
 	return Number.isFinite(duration) && duration > 0 ? duration : undefined;
 }
@@ -79,6 +86,7 @@ export async function processVideoWorkflow(
 			} catch (error) {
 				if (
 					!(error instanceof VideoProcessingFailedError) ||
+					isUnreadableInputError(error) ||
 					processingAttempt >= 2
 				) {
 					throw error;

@@ -103,6 +103,17 @@ function importedVideo(value: unknown, expectedPath: string) {
 	return { path, name, duration, fps, width, height, hasAudio };
 }
 
+/** Shortens a long file name to what the upload accepts, keeping its extension. */
+function uploadFileName(name: string, extension: string) {
+	const limit = 99 - extension.length;
+	let stem = "";
+	for (const character of name.slice(0, -(extension.length + 1))) {
+		if (stem.length + character.length > limit) break;
+		stem += character;
+	}
+	return `${stem.trim() || "Video"}.${extension}`;
+}
+
 function pollDelay(signal: AbortSignal) {
 	return new Promise<void>((resolve, reject) => {
 		if (signal.aborted) {
@@ -186,13 +197,10 @@ export async function importWebEditorVideo(
 ): Promise<WebEditorImportedVideo> {
 	const extension = /\.([a-z0-9]+)$/i.exec(file.name)?.[1]?.toLowerCase() ?? "";
 	const contentType = VIDEO_TYPES[extension];
-	if (
-		!contentType ||
-		file.size < 1 ||
-		file.size > MAX_VIDEO_BYTES ||
-		file.name.length > 100
-	) {
-		throw new Error("Unsupported video file or file is too large");
+	if (!contentType) throw new Error("This video format isn't supported");
+	if (file.size < 1) throw new Error("This video file is empty");
+	if (file.size > MAX_VIDEO_BYTES) {
+		throw new Error("Videos can be up to 12 GB");
 	}
 	if (signal.aborted) throw new Error("Video import was canceled");
 	onProgress?.({ stage: "uploading", fraction: 0 });
@@ -202,7 +210,7 @@ export async function importWebEditorVideo(
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify({
 			videoId,
-			fileName: file.name,
+			fileName: uploadFileName(file.name, extension),
 			size: file.size,
 			contentType,
 		}),

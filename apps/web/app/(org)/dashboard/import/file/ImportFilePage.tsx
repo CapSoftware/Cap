@@ -5,7 +5,7 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useStore } from "@tanstack/react-store";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { useUploadingContext } from "@/app/(org)/dashboard/caps/UploadingContext";
 import { UpgradeModal } from "@/components/UpgradeModal";
@@ -19,6 +19,21 @@ export const ImportFilePage = () => {
 	const isUploading = useStore(uploadingStore, (s) => !!s.uploadStatus);
 	const [upgradeModalOpen, setUpgradeModalOpen] = useState(!user?.isPro);
 	const [isDragOver, setIsDragOver] = useState(false);
+
+	useEffect(() => {
+		if (!isUploading) return;
+		const warn = (event: BeforeUnloadEvent) => event.preventDefault();
+		// A file dropped anywhere else would open in the tab and end the upload.
+		const keepPage = (event: DragEvent) => event.preventDefault();
+		window.addEventListener("beforeunload", warn);
+		window.addEventListener("dragover", keepPage);
+		window.addEventListener("drop", keepPage);
+		return () => {
+			window.removeEventListener("beforeunload", warn);
+			window.removeEventListener("dragover", keepPage);
+			window.removeEventListener("drop", keepPage);
+		};
+	}, [isUploading]);
 
 	const processFile = useCallback(
 		async (file: File) => {
@@ -52,10 +67,10 @@ export const ImportFilePage = () => {
 			e.preventDefault();
 			setIsDragOver(false);
 			const file = e.dataTransfer.files[0];
-			if (!file) return;
+			if (!file || isUploading) return;
 			await processFile(file);
 		},
-		[processFile],
+		[processFile, isUploading],
 	);
 
 	const handleBrowseClick = () => {

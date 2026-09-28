@@ -1118,6 +1118,87 @@ describe("processVideo integration tests", () => {
 		}
 	}, 120000);
 
+	test("keeps portrait 1080p h264 input at full resolution without re-encoding", async () => {
+		const workDir = mkdtempSync(join(tmpdir(), "cap-portrait-h264-"));
+		try {
+			const portraitPath = join(workDir, "portrait.mp4");
+			execFileSync("ffmpeg", [
+				"-hide_banner",
+				"-loglevel",
+				"error",
+				"-y",
+				"-f",
+				"lavfi",
+				"-i",
+				"testsrc2=size=1080x1920:rate=30",
+				"-t",
+				"1",
+				"-c:v",
+				"libx264",
+				"-preset",
+				"ultrafast",
+				"-pix_fmt",
+				"yuv420p",
+				portraitPath,
+			]);
+			const originalVideoHash = readDecodedStreamHash(portraitPath, "v");
+
+			const metadata = await probeVideo(`file://${portraitPath}`);
+			expect(pickMobileSafeH264Level(metadata).value).toBe(42);
+
+			const tempFile = await processVideo(portraitPath, metadata, {});
+			tempFiles.push(tempFile.path);
+
+			const outputMetadata = await probeVideo(`file://${tempFile.path}`);
+			expect(outputMetadata.width).toBe(1080);
+			expect(outputMetadata.height).toBe(1920);
+			expect(readDecodedStreamHash(tempFile.path, "v")).toBe(originalVideoHash);
+
+			await tempFile.cleanup();
+		} finally {
+			rmSync(workDir, { recursive: true, force: true });
+		}
+	}, 120000);
+
+	test("fits oversized portrait input inside a portrait 1080p box", async () => {
+		const workDir = mkdtempSync(join(tmpdir(), "cap-portrait-4k-"));
+		try {
+			const portraitPath = join(workDir, "portrait-4k.mp4");
+			execFileSync("ffmpeg", [
+				"-hide_banner",
+				"-loglevel",
+				"error",
+				"-y",
+				"-f",
+				"lavfi",
+				"-i",
+				"testsrc2=size=2160x3840:rate=30",
+				"-t",
+				"1",
+				"-c:v",
+				"libx264",
+				"-preset",
+				"ultrafast",
+				"-pix_fmt",
+				"yuv420p",
+				portraitPath,
+			]);
+
+			const metadata = await probeVideo(`file://${portraitPath}`);
+			const tempFile = await processVideo(portraitPath, metadata, {});
+			tempFiles.push(tempFile.path);
+
+			const outputMetadata = await probeVideo(`file://${tempFile.path}`);
+			expect(outputMetadata.width).toBe(1080);
+			expect(outputMetadata.height).toBe(1920);
+			expect(readH264Level(tempFile.path)).toBeLessThanOrEqual(42);
+
+			await tempFile.cleanup();
+		} finally {
+			rmSync(workDir, { recursive: true, force: true });
+		}
+	}, 120000);
+
 	test("transcodes raw webm input into a valid mp4 output", async () => {
 		const workDir = mkdtempSync(join(tmpdir(), "cap-webm-transcode-"));
 		try {

@@ -20,14 +20,15 @@ import {
 const WIDTH = 1280;
 const HEIGHT = 720;
 const MAX_SECONDS = 4 * 60 * 60;
-/** Codecs an MP4 can carry that browsers also play, so the audio is copied as is. */
+/** Codecs an MP4 can carry that browsers also play. */
 const COPYABLE_CODECS: AudioCodec[] = ["aac", "opus", "mp3", "flac"];
 
 /**
  * Wraps an audio file in an MP4 with a still title card, one frame a second,
  * so audio can start a Cap like any recording: the upload, processing and
  * share page all expect a video track. The editor hides that card and draws
- * a live waveform instead. The audio is copied untouched when it can be.
+ * a live waveform instead. AAC is copied untouched; other audio becomes AAC
+ * here, since processing would otherwise re-encode it far more slowly.
  */
 export async function wrapAudioInVideo(
 	file: File,
@@ -55,10 +56,13 @@ export async function wrapAudioInVideo(
 			format: new Mp4OutputFormat({ fastStart: "in-memory" }),
 			target: new BufferTarget(),
 		});
+		// Realtime mode keeps the unchanging frames tiny, so the upload is barely
+		// bigger than the audio.
 		const video = new CanvasSource(canvas, {
 			codec: "avc",
 			bitrate: 150_000,
-			keyFrameInterval: 10,
+			keyFrameInterval: 60,
+			latencyMode: "realtime",
 		});
 		output.addVideoTrack(video, { frameRate: 1 });
 		const audio = await addAudioTrack(output, track);
@@ -68,15 +72,22 @@ export async function wrapAudioInVideo(
 		// muxer can interleave the two tracks.
 		let nextFrame = 0;
 		const addFramesUntil = async (time: number) => {
-			while (nextFrame <= Math.min(time, duration)) {
-				await video.add(nextFrame, 1);
+			while (nextFrame < Math.min(time, duration)) {
+				await video.add(nextFrame, Math.min(1, duration - nextFrame));
 				nextFrame += 1;
 			}
 		};
+		// Progress is reported in whole percents: a callback per packet would
+		// rerender the page tens of thousands of times and stall the encoders.
+		let reported = 0;
 		for await (const timestamp of audio.copy()) {
 			if (signal?.aborted) throw new Error("Audio import was canceled");
 			await addFramesUntil(timestamp + 1);
-			onProgress?.(Math.min(0.99, timestamp / duration));
+			const fraction = Math.min(0.99, timestamp / duration);
+			if (fraction - reported >= 0.01) {
+				reported = fraction;
+				onProgress?.(fraction);
+			}
 		}
 		await addFramesUntil(duration);
 		await output.finalize();
@@ -93,7 +104,14 @@ export async function wrapAudioInVideo(
 /** Adds the audio track, returning an iterator that copies it and yields progress timestamps. */
 async function addAudioTrack(output: Output, track: InputAudioTrack) {
 	const codec = track.codec;
-	if (codec && COPYABLE_CODECS.includes(codec)) {
+	// AAC from phones and encoders starts slightly before zero to prime the
+	// decoder, which an MP4 track can't, so the whole track moves up to zero.
+	const shift = Math.max(0, -(await track.getFirstTimestamp()));
+	const canEncodeAac = await canEncodeAudio("aac");
+	if (
+		codec === "aac" ||
+		(!canEncodeAac && codec && COPYABLE_CODECS.includes(codec))
+	) {
 		const source = new EncodedAudioPacketSource(codec);
 		output.addAudioTrack(source);
 		const decoderConfig = await track.getDecoderConfig();
@@ -101,25 +119,27 @@ async function addAudioTrack(output: Output, track: InputAudioTrack) {
 			async *copy() {
 				let first = true;
 				for await (const packet of new EncodedPacketSink(track).packets()) {
+					const timestamp = packet.timestamp + shift;
 					await source.add(
-						packet,
+						shift ? packet.clone({ timestamp }) : packet,
 						first && decoderConfig ? { decoderConfig } : undefined,
 					);
 					first = false;
-					yield packet.timestamp;
+					yield timestamp;
 				}
 			},
 		};
 	}
 	const source = new AudioSampleSource({
-		codec: (await canEncodeAudio("aac")) ? "aac" : "opus",
+		codec: canEncodeAac ? "aac" : "opus",
 		bitrate: 160_000,
 	});
 	output.addAudioTrack(source);
 	return {
 		async *copy() {
 			for await (const sample of new AudioSampleSink(track).samples()) {
-				const timestamp = sample.timestamp;
+				const timestamp = sample.timestamp + shift;
+				if (shift) sample.setTimestamp(timestamp);
 				await source.add(sample);
 				sample.close();
 				yield timestamp;

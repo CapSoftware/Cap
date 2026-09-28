@@ -144,8 +144,9 @@ async function uploadVideoForServerProcessing(
 		let duration: number | undefined;
 		let resolution: string | undefined;
 
+		let parser: typeof import("@remotion/media-parser") | undefined;
 		try {
-			const parser = await import("@remotion/media-parser");
+			parser = await import("@remotion/media-parser");
 			const metadata = await parser.parseMedia({
 				src: file,
 				fields: {
@@ -161,6 +162,21 @@ async function uploadVideoForServerProcessing(
 				? `${metadata.dimensions.width}x${metadata.dimensions.height}`
 				: undefined;
 		} catch (parseError) {
+			// These containers always parse when intact, so a file that doesn't
+			// would only fail in processing after the whole upload.
+			if (
+				parser &&
+				/\.(mp4|m4v|mov|webm|mkv|avi)$/i.test(file.name) &&
+				(parseError instanceof parser.IsAnUnsupportedFileTypeError ||
+					parseError instanceof parser.IsAPdfError ||
+					parseError instanceof parser.IsAnImageError)
+			) {
+				toast.error(
+					"That file couldn't be read as a video. Try exporting it again as an MP4.",
+				);
+				setUploadStatus(undefined);
+				return false;
+			}
 			console.warn(
 				"Failed to parse video metadata, continuing without it:",
 				parseError,
@@ -267,7 +283,7 @@ async function uploadVideoForServerProcessing(
 		}
 		progressTracker.cleanup();
 		const total = progressTracker.getTotal() || file.size || 1;
-		await sendProgressUpdate(uploadId, total, total);
+		const progressSent = sendProgressUpdate(uploadId, total, total);
 
 		setUploadStatus({
 			status: "serverProcessing",
@@ -280,6 +296,7 @@ async function uploadVideoForServerProcessing(
 				rawFileKey: videoData.rawFileKey,
 				bucketId: videoData.bucketId,
 			});
+			await progressSent;
 		} catch (triggerError) {
 			console.error("Failed to trigger processing:", triggerError);
 			toast.error("Failed to start video processing. Please try again.");

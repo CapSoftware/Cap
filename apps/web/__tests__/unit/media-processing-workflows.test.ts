@@ -258,6 +258,20 @@ describe("media processing workflows", () => {
 		expect(mocks.sleep.mock.calls).toEqual([[15_000], [30_000]]);
 	});
 
+	it("fails an unreadable upload without retrying it", async () => {
+		mocks.rows = [
+			[video],
+			[{ ...pending, rawFileKey: payload.rawFileKey }],
+			[video],
+			[{ ...pending, processingError: "Media input could not be read" }],
+		];
+		await expect(processVideoWorkflow(payload)).rejects.toThrow(
+			"Media input could not be read",
+		);
+		expect(mocks.fetch).toHaveBeenCalledTimes(1);
+		expect(mocks.sleep).not.toHaveBeenCalled();
+	});
+
 	it("recovers from a confirmed worker failure with a bounded durable retry", async () => {
 		mocks.rows = [
 			[video],
