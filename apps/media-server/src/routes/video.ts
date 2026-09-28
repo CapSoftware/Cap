@@ -565,7 +565,8 @@ video.post("/preview-assets", async (c) => {
 		);
 	}
 
-	if (!canAcceptNewVideoProcess()) {
+	const slot = tryAcquireDirectVideoProcessSlot(canAcceptNewVideoProcess);
+	if (!slot) {
 		c.header("Retry-After", VIDEO_BUSY_RETRY_AFTER_SECONDS.toString());
 		return c.json(getBusyResponseBody(getVideoCapacitySnapshot()), 503);
 	}
@@ -637,6 +638,8 @@ video.post("/preview-assets", async (c) => {
 			},
 			500,
 		);
+	} finally {
+		slot.release();
 	}
 });
 
