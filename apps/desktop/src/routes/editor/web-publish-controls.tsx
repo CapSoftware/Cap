@@ -23,6 +23,8 @@ type SaveStatus = {
 	playable: boolean;
 	hlsUrl: string | null;
 	error: string | null;
+	/** The share link shows, or is rendering, the project as saved now. */
+	current?: boolean;
 };
 
 type SaveStart =
@@ -62,8 +64,8 @@ export function WebPublishControls() {
 	const [status, setStatus] = createSignal<SaveStatus | null>(null);
 	const [browserSave, setBrowserSave] =
 		createSignal<BrowserSaveProgress | null>(null);
-	// The revision this session last saved; edits from before the editor opened
-	// may or may not be published, so nothing counts as saved until a Save.
+	// The revision this session last saved. Nothing counts as saved until a
+	// Save, unless the share link already shows the project as it was opened.
 	const [savedRevision, setSavedRevision] = createSignal<number | null>(null);
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	let disposed = false;
@@ -77,8 +79,13 @@ export function WebPublishControls() {
 		clearTimeout(timer);
 		try {
 			const next = await invoke<SaveStatus>("webEditorSaveStatus");
-			if (disposed || (resuming && next.state !== "rendering"))
-				return next.state;
+			if (disposed) return next.state;
+			if (resuming && next.current) {
+				// Opened on what the share link already shows: nothing to save.
+				setSavedRevision(0);
+				setStatus(next);
+			}
+			if (resuming && next.state !== "rendering") return next.state;
 			if (farmSave && !resuming) {
 				const now = Date.now();
 				if (next.progress > farmSave.progress || next.playable) {
@@ -251,7 +258,7 @@ export function WebPublishControls() {
 			>
 				<button
 					type="button"
-					disabled={starting() || rendering()}
+					disabled={starting() || rendering() || upToDate()}
 					onClick={() => void save()}
 					onPointerEnter={prewarmExport}
 					onFocus={prewarmExport}
