@@ -3,7 +3,13 @@
 import type { Video } from "@cap/web-domain";
 import Hls from "hls.js";
 import { useRouter } from "next/navigation";
-import { type ReactNode, type RefObject, useEffect, useState } from "react";
+import {
+	type ReactNode,
+	type RefObject,
+	useEffect,
+	useRef,
+	useState,
+} from "react";
 import { RenderFog } from "@/components/render-fog";
 import { useThumnailQuery } from "@/components/VideoThumbnail";
 import { scheduleReadyRefresh } from "./deferred-ready-refresh";
@@ -135,6 +141,18 @@ export function RenderFarmSaveView({
 	const router = useRouter();
 	const [playlist, setPlaylist] = useState<string | null>(null);
 	const [waiting, setWaiting] = useState(false);
+	const [finishing, setFinishing] = useState(false);
+	const sawRendering = useRef(false);
+
+	// A Save rendered in the owner's browser has no render to stream here: it
+	// replaces the share video, so its end is a cue to load the page again.
+	useEffect(() => {
+		if (status?.state === "rendering") sawRendering.current = true;
+		else if (status?.state === "idle" && sawRendering.current) {
+			setFinishing(true);
+			router.refresh();
+		}
+	}, [status?.state, router]);
 
 	useEffect(() => {
 		if (status?.playable && status.hlsUrl && !playlist) {
@@ -151,7 +169,8 @@ export function RenderFarmSaveView({
 		});
 	}, [status?.state, videoId, videoRef, router]);
 
-	if (status?.state === "error" || status?.state === "idle") return fallback;
+	if (status?.state === "error" || (status?.state === "idle" && !finishing))
+		return fallback;
 	const progress = status?.progress ?? 0;
 	const rendering = status?.state !== "ready";
 	if (!playlist) {
@@ -159,8 +178,8 @@ export function RenderFarmSaveView({
 			<RenderFog
 				poster={poster}
 				className={className}
-				label={renderProgressLabel(progress)}
-				detail="It starts playing here as soon as the first part is ready."
+				label={finishing ? "Finishing up" : renderProgressLabel(progress)}
+				detail="It plays here as soon as it's ready."
 				progress={progress}
 			/>
 		);

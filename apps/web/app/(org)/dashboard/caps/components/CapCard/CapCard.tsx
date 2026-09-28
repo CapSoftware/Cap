@@ -54,6 +54,7 @@ import {
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import type { MoveLocation } from "@/lib/move-items";
 import { ThumbnailRequest } from "@/lib/Requests/ThumbnailRequest";
+import { activeBrowserSave } from "@/lib/render-farm-status";
 import {
 	copyRichVideoLink,
 	videoPreviewImageUrl,
@@ -255,12 +256,12 @@ export const CapCard = ({
 	const hasRawFallback =
 		uploadProgress?.status === "error" && uploadProgress.hasRawFallback;
 	// A render in progress takes the card over, as it does the share page.
-	const renderStatus = useRenderSaveStatus(
-		cap.id,
-		cap.metadata?.renderFarmSave?.status === "rendering",
-	);
+	const renderStarted =
+		cap.metadata?.renderFarmSave?.status === "rendering" ||
+		activeBrowserSave(cap.metadata) !== null;
+	const renderStatus = useRenderSaveStatus(cap.id, renderStarted);
 	const isRendering =
-		cap.metadata?.renderFarmSave?.status === "rendering" &&
+		renderStarted &&
 		(renderStatus === null || renderStatus.state === "rendering");
 	const hasVisibleUploadProgress =
 		!isRendering &&
