@@ -10,6 +10,10 @@ import {
 } from "@effect/platform";
 import { eq } from "drizzle-orm";
 import { Effect, Layer, Schema } from "effect";
+import {
+	browserSavePlaylistUrl,
+	PLAYABLE_BROWSER_SAVE_CHUNKS,
+} from "@/lib/browser-save-chunks";
 import { refreshRenderFarmSave } from "@/lib/render-farm-save";
 import {
 	IDLE_RENDER_SAVE,
@@ -83,6 +87,12 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 											? ("ready" as const)
 											: ("rendering" as const),
 										progress: browserSave.finished ? 1 : browserSave.progress,
+										...(!browserSave.finished &&
+											(browserSave.chunks?.length ?? 0) >=
+												PLAYABLE_BROWSER_SAVE_CHUNKS && {
+												playable: true,
+												hlsUrl: browserSavePlaylistUrl(path.videoId),
+											}),
 									}
 								: status),
 							current: renderFarmSaveIsCurrent(video.metadata),
