@@ -21,7 +21,6 @@ import {
 import { finalizeDesktopSegmentsRecording } from "@/actions/video/finalize-desktop-segments";
 import { Tooltip } from "@/components/Tooltip";
 import { isRetryableDesktopSegmentsFinalizationError } from "@/lib/desktop-segments-retryable-errors";
-import { activeBrowserSave } from "@/lib/render-farm-status";
 import type { VideoData } from "../types";
 import { type CaptionLanguage, useCaptionContext } from "./CaptionContext";
 import {
@@ -494,9 +493,7 @@ export const ShareVideo = forwardRef<
 
 		const renderSaveActive =
 			isMp4Source &&
-			(renderStarting ||
-				data.metadata?.renderFarmSave?.status === "rendering" ||
-				activeBrowserSave(data.metadata) !== null);
+			(renderStarting || data.metadata?.renderFarmSave?.status === "rendering");
 		const capVideoPlayer = (
 			<CapVideoPlayer
 				videoId={data.id}

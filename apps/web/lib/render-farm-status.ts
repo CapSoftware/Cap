@@ -117,17 +117,18 @@ export function publishedRenderFarmUpdate(
 	};
 }
 
-// A tab reports a Save it's rendering every few seconds; one that stops
-// reporting was closed or failed.
-const BROWSER_SAVE_STALE_MS = 30_000;
+// A tab reports a Save it's rendering every few seconds and marks it finished
+// at the end, which a render quicker than a status poll would otherwise hide.
+// A report this old is from a tab that closed or a finish already seen.
+const BROWSER_SAVE_FRESH_MS = 30_000;
 
-/** A Save rendering in its owner's browser, while that tab keeps reporting. */
-export function activeBrowserSave(
+/** A Save its owner's browser is rendering, or has just finished. */
+export function recentBrowserSave(
 	metadata: VideoMetadata | null | undefined,
 	now = Date.now(),
 ) {
 	const save = metadata?.browserSave;
-	return save && now - Date.parse(save.updatedAt) < BROWSER_SAVE_STALE_MS
+	return save && now - Date.parse(save.updatedAt) < BROWSER_SAVE_FRESH_MS
 		? save
 		: null;
 }

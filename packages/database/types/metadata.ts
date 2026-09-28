@@ -171,10 +171,9 @@ export interface VideoMetadata {
 	};
 	/** A Save rendering in its owner's browser, kept fresh while that tab works on it. */
 	browserSave?: {
-		version: 1;
-		startedAt: string;
 		updatedAt: string;
 		progress: number;
+		finished?: boolean;
 	};
 	renderFarmExports?: {
 		version: 1;

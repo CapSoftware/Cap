@@ -71,11 +71,9 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 				.handle("progress", ({ path, payload }) =>
 					Effect.gen(function* () {
 						const video = yield* loadEligibleEditorVideo(path.videoId, true);
-						const now = new Date().toISOString();
-						const startedAt = video.metadata?.browserSave?.startedAt ?? now;
 						yield* writeMetadata(
 							video.id,
-							sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.browserSave', JSON_OBJECT('version', 1, 'startedAt', ${startedAt}, 'updatedAt', ${now}, 'progress', ${payload.progress}))`,
+							sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.browserSave', JSON_OBJECT('updatedAt', ${new Date().toISOString()}, 'progress', ${payload.progress}))`,
 						);
 					}),
 				)
@@ -85,7 +83,7 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 						if (!video.metadata?.browserSave) return;
 						yield* writeMetadata(
 							video.id,
-							sql`JSON_REMOVE(${videos.metadata}, '$.browserSave')`,
+							sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.browserSave', JSON_OBJECT('updatedAt', ${new Date().toISOString()}, 'progress', 1, 'finished', true))`,
 						);
 					}),
 				),

@@ -200,7 +200,11 @@ export function RenderFarmSaveView({
 			<RenderFog
 				poster={poster}
 				className={className}
-				label={finishing ? "Finishing up" : renderProgressLabel(progress)}
+				label={
+					finishing || !rendering
+						? "Finishing up"
+						: renderProgressLabel(progress)
+				}
 				detail="It plays here as soon as it's ready."
 				progress={progress}
 			/>

@@ -12,8 +12,8 @@ import { eq } from "drizzle-orm";
 import { Effect, Layer, Schema } from "effect";
 import { refreshRenderFarmSave } from "@/lib/render-farm-save";
 import {
-	activeBrowserSave,
 	IDLE_RENDER_SAVE,
+	recentBrowserSave,
 	renderFarmSaveIsCurrent,
 } from "@/lib/render-farm-status";
 import { apiToHandler } from "@/lib/server";
@@ -74,13 +74,15 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 						const browserSave =
 							status.state === "rendering"
 								? null
-								: activeBrowserSave(video.metadata);
+								: recentBrowserSave(video.metadata);
 						return {
 							...(browserSave
 								? {
 										...IDLE_RENDER_SAVE,
-										state: "rendering" as const,
-										progress: browserSave.progress,
+										state: browserSave.finished
+											? ("ready" as const)
+											: ("rendering" as const),
+										progress: browserSave.finished ? 1 : browserSave.progress,
 									}
 								: status),
 							current: renderFarmSaveIsCurrent(video.metadata),
