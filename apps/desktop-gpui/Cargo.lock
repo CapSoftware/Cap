@@ -1525,7 +1525,7 @@ dependencies = [
 
 [[package]]
 name = "cap-desktop-gpui"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "anyhow",
  "ashpd 0.11.1",
@@ -1902,6 +1902,7 @@ name = "cap-rendering"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "ash",
  "bezier_easing",
  "build-time",
  "bytemuck",
@@ -1921,6 +1922,7 @@ dependencies = [
  "futures-intrusive",
  "glyphon",
  "image 0.25.10",
+ "libloading 0.8.9",
  "log",
  "metal 0.31.0",
  "objc2 0.6.4",
