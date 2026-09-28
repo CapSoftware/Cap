@@ -152,8 +152,6 @@ export function TemplatesGallery() {
 		};
 	};
 
-	// The whole-video scene the last template added, which a preset replaces.
-	// Scenes the person placed stay.
 	let templateScene: SceneMode | null = null;
 
 	const apply = async (template: EditorTemplate) => {

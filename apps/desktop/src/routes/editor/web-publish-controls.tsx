@@ -46,11 +46,6 @@ const FARM_STALL_MS = 90_000;
 const publishOnOpen =
 	new URLSearchParams(window.location.search).get("publish") === "recording";
 
-/**
- * The web editor's publishing controls. The recording already lives at a share
- * link, so Save publishes these edits to that link and Download renders a
- * file on this computer.
- */
 export function WebPublishControls() {
 	const {
 		flushProjectConfig,
@@ -81,7 +76,6 @@ export function WebPublishControls() {
 			const next = await invoke<SaveStatus>("webEditorSaveStatus");
 			if (disposed) return next.state;
 			if (resuming && next.current) {
-				// Opened on what the share link already shows: nothing to save.
 				setSavedRevision(0);
 				setStatus(next);
 			}
