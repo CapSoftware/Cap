@@ -22,6 +22,7 @@ import {
 	clearEditorImportedImages,
 	serializeEditorProjectSnapshot,
 } from "./editor-file-mapping";
+import { perfMark } from "./editor-perf";
 import {
 	prepareEditorPresetBackground,
 	setEditorPresetAssetBase,
@@ -125,6 +126,7 @@ async function mountEditorSkeleton(element: HTMLElement) {
 			if (skeletonModel === model) skeletonModel = null;
 		});
 		updateSkeletonModel();
+		perfMark("skeleton");
 		return (
 			<div class="flex h-screen w-screen flex-col bg-ed-window text-ed-text-1">
 				<EditorSkeleton model={model} />
@@ -185,6 +187,7 @@ export async function mountEditor(element: HTMLElement) {
 	if (dispose) return;
 	const generation = mountGeneration;
 	const { Editor } = await loadEditorModule();
+	perfMark("editor-module");
 	if (generation !== mountGeneration)
 		throw new Error("Editor mount was canceled");
 	if (dispose) return;
@@ -203,6 +206,7 @@ export async function mountEditor(element: HTMLElement) {
 		),
 		element,
 	);
+	perfMark("editor-mounted");
 }
 
 export function disposeEditor() {
@@ -310,6 +314,7 @@ const skeletonRoot = container ? layer(1) : null;
 if (prewarming) {
 	prewarm();
 } else if (container && root && skeletonRoot) {
+	perfMark("entry");
 	guardPageZoom();
 	container.style.cssText =
 		"position:relative;width:100vw;height:100vh;overflow:hidden";
