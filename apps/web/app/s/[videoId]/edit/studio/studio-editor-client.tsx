@@ -34,7 +34,6 @@ import {
 } from "@/lib/editor-local-draft";
 import type { WebEditorVideoImportProgress } from "@/lib/editor-video-import-client";
 import { navigateWithTransition, nextPageReady } from "@/utils/view-transition";
-import { SharedLinkCard } from "../shared-link-card";
 import type { ClipRecorderContext } from "./clip-recorder-context";
 import { EditorClipRecorder } from "./editor-clip-recorder";
 import { EditorEntryFrame } from "./editor-entry-frame";
@@ -78,7 +77,6 @@ export function StudioEditorClient(props: {
 	userId: string;
 	captionsEnabled: boolean;
 	savedAt: string | null;
-	justRecorded?: boolean;
 	isPublic: boolean;
 	shareUrl: string;
 	preparingTitle: string;
@@ -90,7 +88,6 @@ export function StudioEditorClient(props: {
 		userId,
 		captionsEnabled,
 		savedAt,
-		justRecorded = false,
 		isPublic,
 		shareUrl,
 		preparingTitle,
@@ -98,11 +95,7 @@ export function StudioEditorClient(props: {
 		preparingTracks,
 	} = props;
 	const router = useRouter();
-	// Straight from the recorder, the editor publishes the recording in its
-	// default style if nothing is rendering it yet. Read once, so new props
-	// never reload the editor.
-	const [publishOnOpen] = useState(justRecorded);
-	const editorSrc = `/editor-solid/index.html?videoId=${encodeURIComponent(videoId)}${publishOnOpen ? "&publish=recording" : ""}`;
+	const editorSrc = `/editor-solid/index.html?videoId=${encodeURIComponent(videoId)}`;
 	const [sessionId, setSessionId] = useState<string | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [errorFrameReady, setErrorFrameReady] = useState(false);
@@ -121,7 +114,6 @@ export function StudioEditorClient(props: {
 	const [clipRecorderContext, setClipRecorderContext] =
 		useState<ClipRecorderContext | null>(null);
 	const [upgradeOpen, setUpgradeOpen] = useState(false);
-	const [sharedNoticeOpen, setSharedNoticeOpen] = useState(justRecorded);
 	const sessionRef = useRef<string | null>(null);
 	const bridgeRef = useRef<EditorHostBridge | null>(null);
 	const iframeRef = useRef<HTMLIFrameElement | null>(null);
@@ -569,15 +561,6 @@ export function StudioEditorClient(props: {
 		return () => clearTimeout(timer);
 	}, [editorPainted]);
 
-	useEffect(() => {
-		if (!justRecorded) return;
-		// A reload should open the plain editor, not repeat the notice.
-		const url = new URL(window.location.href);
-		if (url.searchParams.get("from") !== "recording") return;
-		url.searchParams.delete("from");
-		window.history.replaceState(window.history.state, "", url);
-	}, [justRecorded]);
-
 	const confirmLeave = (event: MouseEvent<HTMLAnchorElement>) => {
 		if (
 			hasUnpublishedEdits(iframeRef.current) &&
@@ -739,16 +722,6 @@ export function StudioEditorClient(props: {
 				)}
 				{upgradeOpen && (
 					<UpgradeModal open={upgradeOpen} onOpenChange={setUpgradeOpen} />
-				)}
-				{sharedNoticeOpen && (
-					<div className="animate-fadeIn absolute right-3 top-[60px] z-50 w-[22rem] max-w-[calc(100vw-1.5rem)] max-[900px]:top-[80px]">
-						<SharedLinkCard
-							videoId={videoId}
-							description="Anyone with the link can watch it now. Edit your tracks here, then Save to update the same link."
-							onDismiss={() => setSharedNoticeOpen(false)}
-							className="shadow-[0_24px_60px_-24px_rgba(0,0,0,0.45)]"
-						/>
-					</div>
 				)}
 				{videoImport && videoImport.stage !== "ready" && (
 					<output className="pointer-events-none absolute bottom-6 right-6 z-50 w-64 rounded-xl border border-white/10 bg-neutral-950/95 px-4 py-3 text-sm text-white shadow-xl">

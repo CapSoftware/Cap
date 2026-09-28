@@ -25,10 +25,8 @@ function isMp4BackedVideo(source: typeof videos.$inferSelect.source) {
 
 export default async function EditVideoPage(props: {
 	params: Promise<{ videoId: string }>;
-	searchParams?: Promise<{ from?: string | string[] }>;
 }) {
 	const params = await props.params;
-	const justRecorded = (await props.searchParams)?.from === "recording";
 	const videoId = Video.VideoId.make(params.videoId);
 	const user = await getCurrentUser();
 
@@ -62,16 +60,6 @@ export default async function EditVideoPage(props: {
 	) {
 		notFound();
 	}
-	// Straight after recording, people who can't open the editor land on the
-	// share page rather than an upgrade wall.
-	if (
-		justRecorded &&
-		!isWebStudioEnabledForEmail(user.email) &&
-		!userIsPro(user)
-	) {
-		redirect(`/s/${videoId}`);
-	}
-
 	if (
 		video.uploadPhase &&
 		isEditSourceKey({
@@ -118,11 +106,9 @@ export default async function EditVideoPage(props: {
 			(video.duration ?? 0) > 0 &&
 			editorSourcesUploaded(video.metadata, video.uploadPhase)
 		) {
-			redirect(
-				`/s/${videoId}/edit/studio${justRecorded ? "?from=recording" : ""}`,
-			);
+			redirect(`/s/${videoId}/edit/studio`);
 		}
-		return <EditProcessing videoId={videoId} justRecorded={justRecorded} />;
+		return <EditProcessing videoId={videoId} />;
 	}
 	const duration =
 		video.duration && video.duration > 0
@@ -149,9 +135,7 @@ export default async function EditVideoPage(props: {
 		hasStudioSource &&
 		!video.metadata?.editProcessing
 	) {
-		redirect(
-			`/s/${videoId}/edit/studio${justRecorded ? "?from=recording" : ""}`,
-		);
+		redirect(`/s/${videoId}/edit/studio`);
 	}
 	if (!userIsPro(user)) {
 		return <EditUpgradeGate />;

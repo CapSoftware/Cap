@@ -18,10 +18,8 @@ import { StudioEditorClient } from "./studio-editor-client";
 
 export default async function StudioEditorPage(props: {
 	params: Promise<{ videoId: string }>;
-	searchParams?: Promise<{ from?: string | string[] }>;
 }) {
 	const { videoId: rawVideoId } = await props.params;
-	const justRecorded = (await props.searchParams)?.from === "recording";
 	const videoId = Video.VideoId.make(rawVideoId);
 	const user = await getCurrentUser();
 	if (!user || !isWebStudioEnabledForEmail(user.email)) notFound();
@@ -83,7 +81,7 @@ export default async function StudioEditorPage(props: {
 		) &&
 		!editorSourcesUploaded(video.metadata, video.uploadPhase)
 	) {
-		return <EditProcessing videoId={videoId} justRecorded={justRecorded} />;
+		return <EditProcessing videoId={videoId} />;
 	}
 	const editorSources = video?.metadata?.editorSources;
 	const [existingEdit] = await db()
@@ -114,7 +112,6 @@ export default async function StudioEditorPage(props: {
 			userId={user.id}
 			captionsEnabled={userIsPro(user)}
 			savedAt={video.metadata?.webEditorProject?.savedAt ?? null}
-			justRecorded={justRecorded}
 			isPublic={video.isPublic}
 			shareUrl={shareUrl}
 			preparingTitle={video.name}

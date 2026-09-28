@@ -13,13 +13,7 @@ import "@/app/(org)/dashboard/caps/components/web-recorder-dialog/recorder.css";
 import { useUploadProgress } from "../_components/ProgressCircle";
 import { SharedLinkCard } from "./shared-link-card";
 
-export function EditProcessing({
-	videoId,
-	justRecorded = false,
-}: {
-	videoId: Video.VideoId;
-	justRecorded?: boolean;
-}) {
+export function EditProcessing({ videoId }: { videoId: Video.VideoId }) {
 	const router = useRouter();
 	const progress = useUploadProgress(videoId, true);
 	const [retrying, startRetry] = useTransition();
@@ -114,9 +108,7 @@ export function EditProcessing({
 			{!failed && (
 				<SharedLinkCard
 					videoId={videoId}
-					title={
-						justRecorded ? "Your Cap is already shared" : "Your share link"
-					}
+					title="Your share link"
 					description="Anyone with the link can watch it now. When you save in the editor, the same link updates."
 					className="rec-rise mt-10 w-full max-w-md"
 				/>

@@ -1,7 +1,7 @@
 "use client";
 
 import clsx from "clsx";
-import { CheckIcon, CopyIcon, ExternalLinkIcon, XIcon } from "lucide-react";
+import { CheckIcon, CopyIcon, ExternalLinkIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import "@/app/(org)/dashboard/caps/components/web-recorder-dialog/recorder.css";
 
@@ -17,9 +17,8 @@ export function useShareLink(videoId: string) {
 
 export function SharedLinkCard(props: {
 	videoId: string;
-	title?: string;
+	title: string;
 	description: string;
-	onDismiss?: () => void;
 	className?: string;
 }) {
 	const { path, href, display } = useShareLink(props.videoId);
@@ -61,22 +60,12 @@ export function SharedLinkCard(props: {
 				</span>
 				<div className="flex min-w-0 flex-1 flex-col gap-0.5">
 					<h2 className="text-[14px] font-medium leading-snug text-[var(--rec-text-1)]">
-						{props.title ?? "Your Cap is already shared"}
+						{props.title}
 					</h2>
 					<p className="text-[13px] leading-snug text-[var(--rec-text-2)]">
 						{props.description}
 					</p>
 				</div>
-				{props.onDismiss && (
-					<button
-						type="button"
-						aria-label="Dismiss"
-						onClick={props.onDismiss}
-						className="rec-btn is-ghost is-icon -m-1 !h-7 !w-7"
-					>
-						<XIcon className="size-4" aria-hidden />
-					</button>
-				)}
 			</div>
 			<div className="flex items-center gap-1.5 rounded-[10px] bg-[var(--rec-ctl)] p-1 pl-3">
 				<input
