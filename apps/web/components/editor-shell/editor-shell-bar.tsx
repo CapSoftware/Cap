@@ -144,3 +144,30 @@ export function EditorTabs({
 		</>
 	);
 }
+
+/** The way to the dashboard and to a new recording, beside the toggle. */
+export function EditorShellActions({
+	onNavigate,
+}: {
+	onNavigate?: MouseEventHandler<HTMLAnchorElement>;
+}) {
+	return (
+		<>
+			<Link
+				href="/dashboard/caps"
+				onClick={onNavigate}
+				className="rec-btn is-ghost"
+			>
+				Dashboard
+			</Link>
+			<Link
+				href="/dashboard/editor?tab=record"
+				onClick={onNavigate}
+				className="rec-btn"
+			>
+				<span className="size-2 rounded-full bg-[var(--rec-red)]" />
+				Record a video
+			</Link>
+		</>
+	);
+}

@@ -397,15 +397,15 @@ test("leaving asks first while the share link is missing this session's edits", 
 		window.dispatchEvent(event);
 		return event.defaultPrevented;
 	};
-	const allRecordings = [...container.querySelectorAll("a")].find(
-		(link) => link.textContent === "View all recordings",
+	const dashboard = [...container.querySelectorAll("a")].find(
+		(link) => link.textContent === "Dashboard",
 	);
-	if (!allRecordings) throw new Error("View all recordings was not shown");
+	if (!dashboard) throw new Error("Dashboard was not shown");
 	const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
 
 	expect(leave()).toBe(true);
 	const click = new MouseEvent("click", { bubbles: true, cancelable: true });
-	await act(async () => allRecordings.dispatchEvent(click));
+	await act(async () => dashboard.dispatchEvent(click));
 	expect(confirm).toHaveBeenCalledTimes(1);
 	expect(click.defaultPrevented).toBe(true);
 

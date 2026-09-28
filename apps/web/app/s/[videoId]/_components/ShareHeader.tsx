@@ -39,7 +39,6 @@ import {
 } from "lucide-react";
 import dynamic from "next/dynamic";
 import Image from "next/image";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Suspense, use, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -53,8 +52,8 @@ import { useDashboardContext } from "@/app/(org)/dashboard/DashboardContext";
 import type { Spaces } from "@/app/(org)/dashboard/dashboard-data";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
 import {
+	EditorShellActions,
 	EditorShellBar,
-	EditorShellBrand,
 	EditorShellTab,
 } from "@/components/editor-shell/editor-shell-bar";
 import { ShareLinkTab } from "@/components/editor-shell/share-link-tab";
@@ -829,7 +828,7 @@ export const ShareHeader = ({
 			{showsEditorBar && (
 				<div className="-mx-4 border-b border-gray-5 lg:-mx-8">
 					<EditorShellBar
-						left={<EditorShellBrand title="Dashboard" />}
+						left={null}
 						center={
 							<>
 								<ShareLinkTab
@@ -849,11 +848,7 @@ export const ShareHeader = ({
 								</EditorShellTab>
 							</>
 						}
-						right={
-							<Link href="/dashboard/editor" className="rec-btn is-ghost">
-								View all recordings
-							</Link>
-						}
+						right={<EditorShellActions />}
 					/>
 				</div>
 			)}

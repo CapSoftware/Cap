@@ -3,7 +3,6 @@
 import type { Video } from "@cap/web-domain";
 import clsx from "clsx";
 import dynamic from "next/dynamic";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
 	type MouseEvent,
@@ -13,6 +12,7 @@ import {
 	useState,
 } from "react";
 import {
+	EditorShellActions,
 	EditorShellBar,
 	EditorShellBrand,
 	EditorShellTab,
@@ -673,15 +673,7 @@ export function StudioEditorClient(props: {
 						<EditorShellTab active>Editor</EditorShellTab>
 					</>
 				}
-				right={
-					<Link
-						href="/dashboard/editor"
-						onClick={confirmLeave}
-						className="rec-btn is-ghost"
-					>
-						View all recordings
-					</Link>
-				}
+				right={<EditorShellActions onNavigate={confirmLeave} />}
 			/>
 			<div className="relative min-h-0 flex-1">
 				{!entryFrameGone && <EditorEntryFrame frame={entryFrame ?? null} />}
