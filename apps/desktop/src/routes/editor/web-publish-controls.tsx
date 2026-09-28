@@ -164,9 +164,11 @@ export function WebPublishControls() {
 		!hasUnsavedEdits() && !rendering() && status()?.state === "ready";
 
 	// The page asks before closing while this session has edits its share link
-	// doesn't show yet, or while this tab is still rendering them.
+	// doesn't show yet: not saved, still rendering in this tab, or failed.
 	const unpublishedEdits = () =>
-		projectRevision() !== (savedRevision() ?? 0) || browserSave() !== null;
+		projectRevision() !== (savedRevision() ?? 0) ||
+		browserSave() !== null ||
+		status()?.state === "error";
 	const editorWindow = window as Window & {
 		capWebEditorUnpublishedEdits?: () => boolean;
 	};
