@@ -89,9 +89,8 @@ function visiblePreviewSize(
 }
 
 /// The desktop preview quality presets size frames for a fixed 1080p output.
-/// In the browser the renderer is cheap, so Full and Half render at the
-/// canvas's real device-pixel size (never softer than the preset, capped at
-/// 4K); Quarter stays a deliberate low-detail mode.
+/// In the browser, Full renders at the canvas's real device-pixel size
+/// (capped at 4K) and Half at half of it; Quarter keeps its low preset.
 function previewDetailBase(
 	canvas: HTMLCanvasElement,
 	width: number,
@@ -103,18 +102,19 @@ function previewDetailBase(
 	if (bounds.width < 2 || bounds.height < 2 || !(density > 0)) {
 		return { width, height };
 	}
+	const fraction = width >= 1920 ? 1 : 0.5;
 	const scale = Math.min(
-		Math.max(
-			1,
-			(bounds.width * density) / width,
-			(bounds.height * density) / height,
-		),
+		fraction *
+			Math.max(
+				(bounds.width * density) / width,
+				(bounds.height * density) / height,
+			),
 		3840 / width,
 		2160 / height,
 	);
 	return {
-		width: Math.max(width, Math.round(width * scale)),
-		height: Math.max(height, Math.round(height * scale)),
+		width: Math.max(2, Math.round(width * scale)),
+		height: Math.max(2, Math.round(height * scale)),
 	};
 }
 
