@@ -382,6 +382,9 @@ async function openSocket(credential: SocketCredential, signal: AbortSignal) {
 	}
 }
 
+// Chunk bytes waiting to upload before the stream gives up on keeping up.
+const BROWSER_SAVE_CHUNK_BACKLOG = 64 * 1024 * 1024;
+
 export class EditorHostBridge {
 	private disposed = false;
 	private readonly controller = new AbortController();
@@ -419,6 +422,15 @@ export class EditorHostBridge {
 	private activeSavePublish: AbortController | null = null;
 	private browserSaveReportedAt = 0;
 	private browserSaveReports: Promise<void> = Promise.resolve();
+	private browserSaveProgress = 0;
+	private browserSaveChunks: {
+		saveId: string;
+		queued: number;
+		durations: number[];
+		backlog: number;
+		reportedAt: number;
+		stopped: boolean;
+	} | null = null;
 	private activeCaptions: {
 		language: AiGenerationLanguage;
 		promise: Promise<WebEditorCaptionData>;
@@ -1535,21 +1547,106 @@ export class EditorHostBridge {
 		const now = Date.now();
 		if (progress !== null && now - this.browserSaveReportedAt < 3000) return;
 		this.browserSaveReportedAt = progress === null ? 0 : now;
-		// In order, so a late progress report can't bring back a finished Save.
-		this.browserSaveReports = this.browserSaveReports.then(() =>
-			fetch(
-				`/api/editor/videos/${encodeURIComponent(this.videoId)}/browser-save`,
-				progress === null
-					? { method: "DELETE", keepalive: true }
-					: {
-							method: "PUT",
-							headers: { "Content-Type": "application/json" },
-							body: JSON.stringify({ progress }),
-						},
-			).then(
-				() => undefined,
-				() => undefined,
-			),
+		if (progress === null) {
+			this.browserSaveChunks = null;
+			this.queueBrowserSave(() =>
+				fetch(this.browserSavePath(), { method: "DELETE", keepalive: true }),
+			);
+			return;
+		}
+		this.browserSaveProgress = progress;
+		this.queueBrowserSave(() => this.putBrowserSave());
+	}
+
+	/**
+	 * Uploads a playable chunk of the Save rendering in this tab, so the share
+	 * page can start playing before it's done. A chunk that fails, or an upload
+	 * that falls too far behind the render, ends the stream; the finished video
+	 * still publishes.
+	 */
+	private uploadBrowserSaveChunk(
+		data: ArrayBufferView,
+		duration: number | null,
+	) {
+		if (duration === null) {
+			this.browserSaveChunks = {
+				saveId: crypto.randomUUID(),
+				queued: 0,
+				durations: [],
+				backlog: 0,
+				reportedAt: 0,
+				stopped: false,
+			};
+		}
+		const chunks = this.browserSaveChunks;
+		if (!chunks || chunks.stopped) return;
+		if (chunks.backlog + data.byteLength > BROWSER_SAVE_CHUNK_BACKLOG) {
+			chunks.stopped = true;
+			return;
+		}
+		chunks.backlog += data.byteLength;
+		const file =
+			duration === null ? "init.mp4" : `segment-${++chunks.queued}.m4s`;
+		this.queueBrowserSave(async () => {
+			try {
+				if (chunks.stopped) return;
+				const target = await fetch(this.browserSavePath(), {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ saveId: chunks.saveId, file }),
+				});
+				if (!target.ok) throw new Error("Chunk upload was refused");
+				const { url } = (await target.json()) as { url: string };
+				const uploaded = await fetch(url, {
+					method: "PUT",
+					headers: {
+						"Content-Type":
+							duration === null ? "video/mp4" : "video/iso.segment",
+					},
+					body: data as BodyInit,
+				});
+				if (!uploaded.ok) throw new Error("Chunk upload failed");
+			} catch {
+				chunks.stopped = true;
+				return;
+			} finally {
+				chunks.backlog -= data.byteLength;
+			}
+			if (duration === null || this.browserSaveChunks !== chunks) return;
+			chunks.durations.push(duration);
+			const now = Date.now();
+			if (
+				chunks.durations.length === chunks.queued ||
+				now - chunks.reportedAt > 3000
+			) {
+				chunks.reportedAt = now;
+				await this.putBrowserSave();
+			}
+		});
+	}
+
+	private browserSavePath() {
+		return `/api/editor/videos/${encodeURIComponent(this.videoId)}/browser-save`;
+	}
+
+	private putBrowserSave() {
+		const chunks = this.browserSaveChunks;
+		return fetch(this.browserSavePath(), {
+			method: "PUT",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				progress: this.browserSaveProgress,
+				...(chunks && { saveId: chunks.saveId, chunks: chunks.durations }),
+			}),
+		});
+	}
+
+	// In order, so a late report can't bring back a finished Save or name a
+	// chunk before it's uploaded.
+	private queueBrowserSave(task: () => Promise<unknown>) {
+		this.browserSaveReports = this.browserSaveReports.then(task).then(
+			() => undefined,
+			() => undefined,
 		);
 	}
 
@@ -2433,6 +2530,20 @@ export class EditorHostBridge {
 					? progress
 					: null,
 			);
+			this.port?.postMessage({ kind: "result", id: message.id, value: null });
+			return;
+		}
+		if (
+			message.kind === "invoke" &&
+			message.name === "tauri:webEditorBrowserSaveChunk"
+		) {
+			const [data, duration] = message.args;
+			if (
+				ArrayBuffer.isView(data) &&
+				(duration === null ||
+					(typeof duration === "number" && duration > 0 && duration <= 30))
+			)
+				this.uploadBrowserSaveChunk(data, duration);
 			this.port?.postMessage({ kind: "result", id: message.id, value: null });
 			return;
 		}
