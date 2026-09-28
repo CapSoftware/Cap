@@ -71,6 +71,9 @@ class Api extends HttpApi.make("WebEditorBrowserSaveApi").add(
 		.add(
 			HttpApiEndpoint.del("finish", "/api/editor/videos/:videoId/browser-save")
 				.setPath(path)
+				.setUrlParams(
+					Schema.Struct({ published: Schema.optional(Schema.Literal("1")) }),
+				)
 				.addSuccess(Schema.Void, { status: 204 })
 				.addError(HttpApiError.NotFound)
 				.addError(HttpApiError.Forbidden)
@@ -139,23 +142,10 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 									Effect.fail(new HttpApiError.InternalServerError()),
 								),
 							);
-						return { url };
-					}),
-				)
-				.handle("finish", ({ path }) =>
-					Effect.gen(function* () {
-						const video = yield* loadEligibleEditorVideo(path.videoId, true);
-						const save = video.metadata?.browserSave;
-						if (!save) return;
-						// Keeps its chunks listed, so viewers part way through them finish.
-						yield* writeMetadata(
-							video.id,
-							sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.browserSave', JSON_MERGE_PATCH(COALESCE(JSON_EXTRACT(${videos.metadata}, '$.browserSave'), JSON_OBJECT()), JSON_OBJECT('updatedAt', ${new Date().toISOString()}, 'progress', 1, 'finished', true)))`,
-						);
-						if (save.saveId)
+						if (payload.file === "init.mp4")
 							yield* Effect.promise(() =>
 								start(clearBrowserSaveChunksWorkflow, [
-									{ videoId: video.id },
+									{ videoId: video.id, saveId: payload.saveId },
 								]).catch((error) => {
 									console.error("Failed to queue browser save chunk cleanup", {
 										videoId: video.id,
@@ -163,6 +153,22 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 									});
 								}),
 							);
+						return { url };
+					}),
+				)
+				.handle("finish", ({ path, urlParams }) =>
+					Effect.gen(function* () {
+						const video = yield* loadEligibleEditorVideo(path.videoId, true);
+						if (!video.metadata?.browserSave) return;
+						const finished = sql`JSON_OBJECT('updatedAt', ${new Date().toISOString()}, 'progress', 1, 'finished', true)`;
+						// A published Save keeps its chunks listed, so viewers part way
+						// through them finish; one that wasn't takes them down.
+						yield* writeMetadata(
+							video.id,
+							urlParams.published
+								? sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.browserSave', JSON_MERGE_PATCH(COALESCE(JSON_EXTRACT(${videos.metadata}, '$.browserSave'), JSON_OBJECT()), ${finished}))`
+								: sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.browserSave', ${finished})`,
+						);
 					}),
 				),
 		),

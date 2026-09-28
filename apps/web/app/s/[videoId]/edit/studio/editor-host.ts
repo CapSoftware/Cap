@@ -1485,6 +1485,7 @@ export class EditorHostBridge {
 		this.activeSavePublish = controller;
 		const keepOpen = (event: BeforeUnloadEvent) => event.preventDefault();
 		window.addEventListener("beforeunload", keepOpen);
+		let published = false;
 		try {
 			const signal = AbortSignal.any([
 				controller.signal,
@@ -1513,6 +1514,7 @@ export class EditorHostBridge {
 						});
 				},
 			);
+			published = true;
 			reply({
 				kind: "result",
 				value: {
@@ -1533,7 +1535,7 @@ export class EditorHostBridge {
 							: "The rendered video could not be published",
 			});
 		} finally {
-			this.reportBrowserSave(null);
+			this.reportBrowserSave(null, published);
 			window.removeEventListener("beforeunload", keepOpen);
 			if (this.activeSavePublish === controller) this.activeSavePublish = null;
 		}
@@ -1543,14 +1545,17 @@ export class EditorHostBridge {
 	 * Tells the share page and Cap card how far a Save rendering in this tab has
 	 * got, and clears it with null once the tab is done with it.
 	 */
-	private reportBrowserSave(progress: number | null) {
+	private reportBrowserSave(progress: number | null, published = false) {
 		const now = Date.now();
 		if (progress !== null && now - this.browserSaveReportedAt < 3000) return;
 		this.browserSaveReportedAt = progress === null ? 0 : now;
 		if (progress === null) {
 			this.browserSaveChunks = null;
 			this.queueBrowserSave(() =>
-				fetch(this.browserSavePath(), { method: "DELETE", keepalive: true }),
+				fetch(`${this.browserSavePath()}${published ? "?published=1" : ""}`, {
+					method: "DELETE",
+					keepalive: true,
+				}),
 			);
 			return;
 		}
