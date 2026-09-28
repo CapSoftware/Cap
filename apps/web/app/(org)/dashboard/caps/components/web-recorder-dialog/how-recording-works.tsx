@@ -354,7 +354,7 @@ const STEPS = [
 	},
 	{
 		title: "Stop, then make it look how you want",
-		body: "The editor opens with every track ready. Pick a layout, trim and save, and your link updates.",
+		body: "Your link opens in your default look. In the editor, pick a layout, trim and save, and your link updates.",
 		Scene: LayoutScene,
 	},
 ] as const;

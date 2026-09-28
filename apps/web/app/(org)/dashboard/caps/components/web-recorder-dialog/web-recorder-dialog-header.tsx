@@ -1,35 +1,77 @@
 "use client";
 
 import { ArrowLeftIcon, CirclePlayIcon } from "lucide-react";
+import type { ReactNode } from "react";
+import { EditorShellBar } from "@/components/editor-shell/editor-shell-bar";
 import { useDashboardContext } from "../../../Contexts";
 
 interface WebRecorderDialogHeaderProps {
 	isBusy: boolean;
 	freeMinutes: number;
-	onClose: () => void;
+	onBack: () => void;
 	onShowHowItWorks?: () => void;
+	/** The Editor page's tabs, which take the title's place when embedded. */
+	tabs?: ReactNode;
 }
 
 export const WebRecorderDialogHeader = ({
 	isBusy,
 	freeMinutes,
-	onClose,
+	onBack,
 	onShowHowItWorks,
+	tabs,
 }: WebRecorderDialogHeaderProps) => {
 	const { user, setUpgradeModalOpen } = useDashboardContext();
+
+	const back = (
+		<button
+			type="button"
+			onClick={onBack}
+			disabled={isBusy}
+			className="rec-btn is-ghost"
+		>
+			<ArrowLeftIcon className="size-4" aria-hidden />
+			Dashboard
+		</button>
+	);
+
+	const actions = (
+		<>
+			{onShowHowItWorks && (
+				<button
+					type="button"
+					className="rec-btn is-ghost max-sm:!w-8 max-sm:!px-0"
+					onClick={onShowHowItWorks}
+					aria-label="How does recording work?"
+				>
+					<CirclePlayIcon className="size-4" aria-hidden />
+					<span className="hidden sm:inline">How does recording work?</span>
+				</button>
+			)}
+			{user.isPro ? (
+				<span className="rounded-md bg-[var(--rec-ctl)] px-2 py-1 text-[12px] font-medium text-[var(--rec-text-2)]">
+					Pro
+				</span>
+			) : (
+				<button
+					type="button"
+					onClick={() => setUpgradeModalOpen(true)}
+					className="rec-btn !h-7 !px-2.5 !text-[12px] text-[var(--rec-text-2)]"
+				>
+					Free · up to {freeMinutes} min
+				</button>
+			)}
+		</>
+	);
+
+	if (tabs) {
+		return <EditorShellBar left={back} center={tabs} right={actions} />;
+	}
 
 	return (
 		<header className="flex h-[52px] shrink-0 items-center justify-between gap-3 px-2 sm:px-3">
 			<div className="flex min-w-0 items-center gap-2">
-				<button
-					type="button"
-					aria-label="Close recorder"
-					onClick={onClose}
-					disabled={isBusy}
-					className="rec-btn is-ghost is-icon"
-				>
-					<ArrowLeftIcon className="size-4" aria-hidden />
-				</button>
+				{back}
 				<svg
 					className="size-5 shrink-0"
 					xmlns="http://www.w3.org/2000/svg"
@@ -53,32 +95,7 @@ export const WebRecorderDialogHeader = ({
 				</svg>
 				<span className="truncate text-[14px] font-medium">New recording</span>
 			</div>
-			<div className="flex shrink-0 items-center gap-1.5">
-				{onShowHowItWorks && (
-					<button
-						type="button"
-						className="rec-btn is-ghost max-sm:!w-8 max-sm:!px-0"
-						onClick={onShowHowItWorks}
-						aria-label="How does recording work?"
-					>
-						<CirclePlayIcon className="size-4" aria-hidden />
-						<span className="hidden sm:inline">How does recording work?</span>
-					</button>
-				)}
-				{user.isPro ? (
-					<span className="rounded-md bg-[var(--rec-ctl)] px-2 py-1 text-[12px] font-medium text-[var(--rec-text-2)]">
-						Pro
-					</span>
-				) : (
-					<button
-						type="button"
-						onClick={() => setUpgradeModalOpen(true)}
-						className="rec-btn !h-7 !px-2.5 !text-[12px] text-[var(--rec-text-2)]"
-					>
-						Free · up to {freeMinutes} min
-					</button>
-				)}
-			</div>
+			<div className="flex shrink-0 items-center gap-1.5">{actions}</div>
 		</header>
 	);
 };

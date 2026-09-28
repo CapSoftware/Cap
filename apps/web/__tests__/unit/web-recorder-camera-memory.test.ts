@@ -177,6 +177,12 @@ class FakeTrack extends EventTarget {
 	}
 	readonly readyState = "live";
 	readonly stop = vi.fn();
+	readonly clones: FakeTrack[] = [];
+	clone() {
+		const copy = new FakeTrack(this.kind);
+		this.clones.push(copy);
+		return copy;
+	}
 	getSettings() {
 		return { width: 1280, height: 720, frameRate: 30 };
 	}
@@ -353,7 +359,7 @@ test("microphone capture stays paired with screen and camera through stop", asyn
 	expect(sidecar.resume).toHaveBeenCalledOnce();
 	await act(async () => latest.stopRecording());
 	await waitFor(() => expect(latest.phase).toBe("completed"));
-	expect(mocks.push).toHaveBeenCalledWith("/s/video/edit?from=recording");
+	expect(mocks.push).toHaveBeenCalledWith("/s/video");
 	expect(sidecar.kind).toBe("mic");
 	expect(sidecar.start).toHaveBeenCalledOnce();
 	expect(sidecar.stop).toHaveBeenCalledOnce();
@@ -609,4 +615,44 @@ test("a screen shared before starting records without opening the picker again",
 			recorder.stream.getVideoTracks().includes(sharedTrack),
 		),
 	).toBe(true);
+});
+
+test("restarting records the shared screen again without reopening the picker", async () => {
+	const firstVideo = latest.videoId;
+	mocks.displayStream.mockClear();
+	mocks.deleteVideo.mockClear();
+	mocks.createVideo.mockResolvedValue(
+		Exit.succeed({
+			id: "second-video",
+			shareUrl: "https://cap.example/s/second-video",
+			upload: {},
+		}),
+	);
+	await act(async () => latest.restartRecording());
+	await waitFor(() => expect(latest.phase).toBe("recording"));
+	expect(mocks.displayStream).not.toHaveBeenCalled();
+	expect(mocks.deleteVideo).toHaveBeenCalledOnce();
+	expect(latest.videoId).toBe("second-video");
+	expect(latest.videoId).not.toBe(firstVideo);
+	const [kept] = displayTrack.clones;
+	expect(kept).toBeDefined();
+	expect(displayTrack.stop).toHaveBeenCalled();
+	expect(kept?.stop).not.toHaveBeenCalled();
+	const live = FakeRecorder.instances.filter(
+		(recorder) => recorder.state === "recording",
+	);
+	expect(live).toHaveLength(2);
+	expect(live[0]?.stream.getVideoTracks()).toContain(kept);
+});
+
+test("a restart whose countdown is cancelled releases the kept screen", async () => {
+	beforeRecordingStarts = async () => false;
+	await act(async () => root.render(createElement(Harness)));
+	await act(async () => latest.restartRecording());
+	expect(latest.phase).toBe("idle");
+	expect(latest.isRestarting).toBe(false);
+	expect(
+		FakeRecorder.instances.some((recorder) => recorder.state !== "inactive"),
+	).toBe(false);
+	expect(displayTrack.clones[0]?.stop).toHaveBeenCalled();
 });

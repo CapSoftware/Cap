@@ -12,12 +12,16 @@ import {
 import clsx from "clsx";
 import {
 	CameraIcon,
+	CameraOffIcon,
 	CheckIcon,
 	ChevronRightIcon,
 	CirclePlayIcon,
+	InfoIcon,
 	LoaderCircleIcon,
 	MicIcon,
 	MonitorIcon,
+	SunDimIcon,
+	SunIcon,
 	Volume2Icon,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -45,6 +49,7 @@ import {
 	DeviceMenu,
 	OptionsMenu,
 	RecordingBar,
+	RestartConfirm,
 	StartRecordingButton,
 } from "./recorder-dock";
 import {
@@ -121,7 +126,7 @@ const MediaLabel = ({
 }) => (
 	<span
 		className={clsx(
-			"absolute inline-flex h-6 items-center gap-1.5 rounded-md bg-black/55 px-2 text-[12px] font-medium text-white backdrop-blur-md",
+			"absolute inline-flex h-6 items-center gap-1.5 whitespace-nowrap rounded-md bg-black/55 px-2 text-[12px] font-medium text-white backdrop-blur-md",
 			className,
 		)}
 	>
@@ -141,12 +146,14 @@ const LiveDot = ({ paused = false }: { paused?: boolean }) => (
 /**
  * The browser recorder. By default it's a button that opens the recorder
  * full screen; `embedded` renders the recorder inline (the Editor page's
- * Record tab), always open.
+ * Record tab), always open, with the page's `tabs` in its top bar.
  */
 export const WebRecorderDialog = ({
 	embedded = false,
+	tabs,
 }: {
 	embedded?: boolean;
+	tabs?: ReactNode;
 } = {}) => {
 	const [open, setOpen] = useState(embedded);
 	const [recordingMode, setRecordingMode] =
@@ -453,7 +460,6 @@ export const WebRecorderDialog = ({
 		cameraErrorDownload,
 		audioErrorDownloads,
 		completedShareUrl,
-		completedEditUrl,
 		recoveredDownloads,
 		isSettingUp,
 		isRecording,
@@ -696,6 +702,8 @@ export const WebRecorderDialog = ({
 				stage === "recording"),
 	);
 	const [howOpen, setHowOpen] = useState(false);
+	const [confirmRestart, setConfirmRestart] = useState(false);
+	const [cameraBright, setCameraBright] = useState(false);
 	useEffect(() => {
 		if (open) identifyThisTab();
 	}, [open]);
@@ -716,12 +724,12 @@ export const WebRecorderDialog = ({
 		});
 	}, [phase, videoId, cameraEnabled, screenMode, cameraLayout]);
 
-	// Fetch the editor route's code while recording so Stop opens it at once.
+	// Fetch the share page's code while recording so Stop opens it at once.
 	const router = useRouter();
 	useEffect(() => {
-		if (!webStudioEnabled || phase !== "recording" || !videoId) return;
-		router.prefetch(`/s/${encodeURIComponent(videoId)}/edit/studio`);
-	}, [router, webStudioEnabled, phase, videoId]);
+		if (phase !== "recording" || !videoId) return;
+		router.prefetch(`/s/${encodeURIComponent(videoId)}`);
+	}, [router, phase, videoId]);
 	const [previewFrame, setPreviewFrame] = useState<{
 		width: number;
 		height: number;
@@ -830,12 +838,26 @@ export const WebRecorderDialog = ({
 		[screenStream],
 	);
 	const dimScreen = mirrorRisk && !mirrorPreviewShown;
+	// The camera records as its own track. When the screen capture can see
+	// this tab (the whole screen, or this tab itself), drawing the camera here
+	// would record it a second time inside the screen, so it isn't drawn at
+	// all; dimming would still be captured.
+	const cameraKeptOffScreen = live && screenMode && mirrorRisk;
+	const cameraDimmed = live && screenMode && !cameraBright;
 	const cameraVideo = cameraEnabled ? (
-		cameraStream ? (
+		cameraKeptOffScreen ? (
+			<span className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 px-3 text-center text-[12px] leading-snug text-white/60">
+				<CameraOffIcon className="size-4 shrink-0" aria-hidden />
+				Hidden here so it isn't recorded twice
+			</span>
+		) : cameraStream ? (
 			<LiveVideo
 				stream={cameraStream}
 				mirror={cameraLayout.mirror}
-				className="absolute inset-0 size-full object-cover"
+				className={clsx(
+					"absolute inset-0 size-full object-cover transition-opacity duration-300",
+					cameraDimmed && "opacity-30",
+				)}
 			/>
 		) : (
 			<span className="absolute inset-0 flex items-center justify-center">
@@ -846,6 +868,58 @@ export const WebRecorderDialog = ({
 			</span>
 		)
 	) : null;
+
+	const cameraOverlay = (compact: boolean) => (
+		<>
+			<MediaLabel
+				className={
+					compact
+						? "bottom-2 left-1/2 -translate-x-1/2 !h-5 !px-1.5 !text-[11px]"
+						: "bottom-3 left-3"
+				}
+			>
+				{live ? (
+					<LiveDot paused={isPaused} />
+				) : (
+					<CameraIcon className={compact ? "size-3" : "size-3.5"} aria-hidden />
+				)}
+				Preview only
+				<button
+					type="button"
+					aria-label="How does recording work?"
+					title="How does recording work?"
+					className="rec-focus -mr-0.5 rounded-sm text-white/70 transition-colors hover:text-white"
+					onClick={() => setHowOpen(true)}
+				>
+					<InfoIcon className={compact ? "size-3" : "size-3.5"} aria-hidden />
+				</button>
+			</MediaLabel>
+			{live && screenMode && !cameraKeptOffScreen && (
+				<button
+					type="button"
+					aria-label={
+						cameraBright ? "Dim camera preview" : "Undim camera preview"
+					}
+					aria-pressed={!cameraBright}
+					title={cameraBright ? "Dim" : "Undim"}
+					className={clsx(
+						"rec-focus absolute inline-flex items-center gap-1 rounded-md bg-black/55 font-medium text-white backdrop-blur-md transition-colors hover:bg-black/70",
+						compact
+							? "left-1/2 top-2 size-6 -translate-x-1/2 justify-center"
+							: "right-3 top-3 h-6 px-2 text-[12px]",
+					)}
+					onClick={() => setCameraBright((bright) => !bright)}
+				>
+					{cameraBright ? (
+						<SunDimIcon className="size-3.5" aria-hidden />
+					) : (
+						<SunIcon className="size-3.5" aria-hidden />
+					)}
+					{!compact && (cameraBright ? "Dim" : "Undim")}
+				</button>
+			)}
+		</>
+	);
 
 	// What the editor opens with: the screen, with the camera as a rounded
 	// bubble in the corner, or the camera on its own.
@@ -916,16 +990,7 @@ export const WebRecorderDialog = ({
 							cameraAspect={cameraAspect}
 							locked={setupLocked}
 							onChange={setCameraLayout}
-							label={
-								<MediaLabel className="bottom-2 left-1/2 -translate-x-1/2 !h-5 !px-1.5 !text-[11px]">
-									{live ? (
-										<LiveDot paused={isPaused} />
-									) : (
-										<CameraIcon className="size-3" aria-hidden />
-									)}
-									Camera
-								</MediaLabel>
-							}
+							label={cameraOverlay(true)}
 						>
 							{cameraVideo}
 						</CameraBubble>
@@ -1298,9 +1363,7 @@ export const WebRecorderDialog = ({
 				onPauseToggle={() => {
 					void (isPaused ? resumeRecording() : pauseRecording());
 				}}
-				onRestart={() => {
-					void restartRecording();
-				}}
+				onRestart={() => setConfirmRestart(true)}
 			/>
 			<div className="flex min-w-0 justify-end">
 				{screenMode && (
@@ -1330,7 +1393,6 @@ export const WebRecorderDialog = ({
 					sharePending ||
 					(!screenSupported && !cameraEnabled)
 				}
-				detail="Studio Mode"
 				onClick={() => {
 					void handleRecordClick();
 				}}
@@ -1656,8 +1718,8 @@ export const WebRecorderDialog = ({
 				},
 				{
 					done: false,
-					title: "Stop to open the editor",
-					body: `Your ${trackCount} ${trackCount === 1 ? "track is" : "tracks are"} waiting there, separate.`,
+					title: "Stop to open your link",
+					body: `Your ${trackCount} ${trackCount === 1 ? "track stays" : "tracks stay"} separate to edit.`,
 				},
 			]
 		: [
@@ -1829,34 +1891,44 @@ export const WebRecorderDialog = ({
 								<span className="text-[var(--rec-text-2)]">
 									{" "}
 									· Drag the camera to place it, and hover it to resize or flip.
-									The editor opens the same way.
+									Your video starts the same way.
 								</span>
 							</span>
 						)}
 					</header>
 					{live && screenMode && !livePreview ? (
 						<div className="rec-fade flex min-h-0 flex-1 flex-col items-center justify-center gap-5 px-6 py-6 text-center">
-							<span className="relative flex size-20 items-center justify-center">
-								{!isPaused && (
-									<>
-										<span className="rec-ripple absolute inset-0 rounded-full" />
+							{cameraEnabled ? (
+								<div
+									className="relative w-[min(20rem,100%)] overflow-hidden rounded-xl bg-[var(--rec-media)] shadow-[0_1px_2px_rgba(0,0,0,0.08),0_12px_32px_-16px_rgba(0,0,0,0.35)]"
+									style={{ aspectRatio: cameraAspect }}
+								>
+									{cameraVideo}
+									{cameraOverlay(false)}
+								</div>
+							) : (
+								<span className="relative flex size-20 items-center justify-center">
+									{!isPaused && (
+										<>
+											<span className="rec-ripple absolute inset-0 rounded-full" />
+											<span
+												className="rec-ripple absolute inset-0 rounded-full"
+												style={{ animationDelay: "1.2s" }}
+											/>
+										</>
+									)}
+									<span className="flex size-12 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--rec-red)_14%,transparent)]">
 										<span
-											className="rec-ripple absolute inset-0 rounded-full"
-											style={{ animationDelay: "1.2s" }}
+											className={clsx(
+												"size-4 rounded-full",
+												isPaused
+													? "bg-[var(--rec-text-3)]"
+													: "bg-[var(--rec-red)]",
+											)}
 										/>
-									</>
-								)}
-								<span className="flex size-12 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--rec-red)_14%,transparent)]">
-									<span
-										className={clsx(
-											"size-4 rounded-full",
-											isPaused
-												? "bg-[var(--rec-text-3)]"
-												: "bg-[var(--rec-red)]",
-										)}
-									/>
+									</span>
 								</span>
-							</span>
+							)}
 							<div className="flex flex-col items-center gap-1.5">
 								<span className="text-[44px] font-medium tabular-nums leading-none tracking-[-0.02em]">
 									{formatClock(durationMs)}
@@ -1864,7 +1936,7 @@ export const WebRecorderDialog = ({
 								<span className="max-w-sm text-balance text-[14px] leading-relaxed text-[var(--rec-text-2)]">
 									{isPaused
 										? "Paused. Nothing is being recorded until you resume."
-										: `Recording your ${joinWords(recordedWordsRef.current)}. The preview is hidden so it stays out of your way.`}
+										: `Recording your ${joinWords(recordedWordsRef.current)}. The screen preview is hidden so it stays out of your way.`}
 								</span>
 							</div>
 							<button
@@ -1969,7 +2041,7 @@ export const WebRecorderDialog = ({
 			? statusView(
 					"upload",
 					"Saving your recording",
-					"Your link is already live. The editor opens as soon as the last parts land.",
+					"Your link is already live. It opens as soon as the last parts land.",
 					<>
 						<div className="mt-9">
 							<Squiggle progress={saveProgress} />
@@ -1980,17 +2052,17 @@ export const WebRecorderDialog = ({
 			: stage === "opening"
 				? statusView(
 						"done",
-						"Opening the editor",
+						"Opening your link",
 						"Your recording is saved and your link is live. Every track is ready to edit.",
 						<>
 							{savedTracks(true)}
-							{completedEditUrl && (
+							{completedShareUrl && (
 								<a
-									href={completedEditUrl}
+									href={completedShareUrl}
 									className="rec-btn rec-rise mt-7"
 									style={{ "--d": "0.4s" } as CSSProperties}
 								>
-									Open the editor
+									Open your link
 								</a>
 							)}
 						</>,
@@ -2021,6 +2093,15 @@ export const WebRecorderDialog = ({
 		<div className="relative flex min-h-0 flex-1 flex-col">
 			{body}
 			{overlay}
+			{confirmRestart && isRecording && (
+				<RestartConfirm
+					onCancel={() => setConfirmRestart(false)}
+					onConfirm={() => {
+						setConfirmRestart(false);
+						void restartRecording();
+					}}
+				/>
+			)}
 			{howOpen && <HowRecordingWorks onClose={() => setHowOpen(false)} />}
 			{audioGuide && (
 				<SystemAudioGuide
@@ -2064,10 +2145,22 @@ export const WebRecorderDialog = ({
 		</>
 	);
 
+	const showHowItWorks =
+		stage === "setup" || stage === "recording"
+			? () => setHowOpen(true)
+			: undefined;
+
 	if (embedded) {
 		return (
 			<div className="cap-rec relative flex h-full min-h-0 flex-col bg-[var(--rec-window)]">
 				<BoilFilter />
+				<WebRecorderDialogHeader
+					isBusy={isBusy || isSettingUp}
+					freeMinutes={freeMinutes}
+					onBack={() => router.push("/dashboard/caps")}
+					onShowHowItWorks={showHowItWorks}
+					tabs={tabs}
+				/>
 				{stageArea}
 				{outside}
 			</div>
@@ -2101,10 +2194,8 @@ export const WebRecorderDialog = ({
 					<WebRecorderDialogHeader
 						isBusy={isBusy || isSettingUp}
 						freeMinutes={freeMinutes}
-						onClose={handleClose}
-						onShowHowItWorks={
-							stage === "setup" ? () => setHowOpen(true) : undefined
-						}
+						onBack={handleClose}
+						onShowHowItWorks={showHowItWorks}
 					/>
 					{stageArea}
 				</DialogContent>

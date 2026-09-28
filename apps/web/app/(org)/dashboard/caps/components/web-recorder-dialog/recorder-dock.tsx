@@ -1,6 +1,7 @@
 "use client";
 
 import * as Menu from "@radix-ui/react-dropdown-menu";
+import clsx from "clsx";
 import {
 	CheckIcon,
 	ChevronDownIcon,
@@ -10,6 +11,7 @@ import {
 	PlayIcon,
 	RotateCcwIcon,
 } from "lucide-react";
+import { useEffect, useId, useRef } from "react";
 
 // Menus portal out of the recorder, so they carry the theme class themselves.
 const MENU_CONTENT =
@@ -141,8 +143,8 @@ const FilmCutIcon = ({ className }: { className?: string }) => (
 	</svg>
 );
 
-// The desktop app's Start Recording pill: blue gradient, mode icon, a title
-// and the mode underneath.
+// The desktop app's Start Recording pill: blue gradient, mode icon and a
+// title, with an optional line underneath.
 export const StartRecordingButton = ({
 	busy = false,
 	disabled = false,
@@ -151,7 +153,7 @@ export const StartRecordingButton = ({
 }: {
 	busy?: boolean;
 	disabled?: boolean;
-	detail: string;
+	detail?: string;
 	onClick: () => void;
 }) => (
 	<button
@@ -160,7 +162,12 @@ export const StartRecordingButton = ({
 		disabled={disabled || busy}
 		className="rec-start rec-focus group flex h-11 w-[min(18rem,100%)] items-center overflow-hidden rounded-full text-left text-white transition-transform active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60 disabled:active:scale-100"
 	>
-		<span className="flex h-full flex-1 items-center gap-3 pl-4 pr-5 transition-colors group-hover:bg-white/10 group-disabled:bg-transparent">
+		<span
+			className={clsx(
+				"flex h-full flex-1 items-center gap-3 pl-4 pr-5 transition-colors group-hover:bg-white/10 group-disabled:bg-transparent",
+				!detail && "justify-center",
+			)}
+		>
 			{busy ? (
 				<LoaderCircleIcon className="size-4 shrink-0 animate-spin" />
 			) : (
@@ -170,9 +177,11 @@ export const StartRecordingButton = ({
 				<span className="whitespace-nowrap text-[15px] font-medium leading-tight">
 					{busy ? "Starting" : "Start Recording"}
 				</span>
-				<span className="truncate text-[11px] font-light leading-tight text-white/90">
-					{detail}
-				</span>
+				{detail && (
+					<span className="truncate text-[11px] font-light leading-tight text-white/90">
+						{detail}
+					</span>
+				)}
 			</span>
 		</span>
 	</button>
@@ -212,7 +221,9 @@ export const RecordingBar = ({
 		>
 			<StopCircle />
 			<span className="text-[14px] font-medium tabular-nums">{time}</span>
-			<span className="text-[13px] font-medium">Stop</span>
+			<span className="whitespace-nowrap text-[13px] font-medium">
+				Stop Recording
+			</span>
 		</button>
 		<span className="my-1.5 w-px bg-[var(--rec-line)]" />
 		<button
@@ -242,6 +253,72 @@ export const RecordingBar = ({
 		)}
 	</div>
 );
+
+export const RestartConfirm = ({
+	onConfirm,
+	onCancel,
+}: {
+	onConfirm: () => void;
+	onCancel: () => void;
+}) => {
+	const titleId = useId();
+	const keepRef = useRef<HTMLButtonElement>(null);
+
+	useEffect(() => {
+		keepRef.current?.focus();
+	}, []);
+
+	useEffect(() => {
+		const onKey = (event: KeyboardEvent) => {
+			if (event.key !== "Escape") return;
+			event.preventDefault();
+			event.stopPropagation();
+			onCancel();
+		};
+		window.addEventListener("keydown", onKey, true);
+		return () => window.removeEventListener("keydown", onKey, true);
+	}, [onCancel]);
+
+	return (
+		<div
+			className="rec-fade absolute inset-0 z-30 flex items-center justify-center bg-[var(--rec-scrim)] p-4 backdrop-blur-md"
+			role="alertdialog"
+			aria-modal="true"
+			aria-labelledby={titleId}
+		>
+			<div className="rec-pop rec-rise flex w-[min(400px,100%)] flex-col gap-1.5 p-5">
+				<h2
+					id={titleId}
+					className="text-[16px] font-medium tracking-[-0.01em] text-[var(--rec-text-1)]"
+				>
+					Restart this recording?
+				</h2>
+				<p className="text-[14px] leading-relaxed text-[var(--rec-text-2)]">
+					What you've recorded so far is deleted and a new recording starts
+					after the countdown. Until you choose, this one keeps recording.
+				</p>
+				<div className="mt-3 flex justify-end gap-2">
+					<button
+						ref={keepRef}
+						type="button"
+						className="rec-btn"
+						onClick={onCancel}
+					>
+						Keep recording
+					</button>
+					<button
+						type="button"
+						className="rec-btn is-danger"
+						onClick={onConfirm}
+					>
+						<RotateCcwIcon className="size-3.5" aria-hidden />
+						Restart
+					</button>
+				</div>
+			</div>
+		</div>
+	);
+};
 
 const StopCircle = () => (
 	<svg viewBox="0 0 20 20" className="size-5 shrink-0" aria-hidden="true">

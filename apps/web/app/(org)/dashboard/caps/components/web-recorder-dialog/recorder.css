@@ -130,6 +130,14 @@
 	background: var(--rec-accent);
 	filter: brightness(1.08);
 }
+.rec-btn.is-danger {
+	background: var(--rec-red);
+	color: #fff;
+}
+.rec-btn.is-danger:hover:not(:disabled) {
+	background: var(--rec-red);
+	filter: brightness(1.08);
+}
 .rec-btn.is-icon {
 	width: 32px;
 	padding: 0;

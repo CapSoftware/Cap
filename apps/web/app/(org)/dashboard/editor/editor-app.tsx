@@ -3,6 +3,7 @@
 import type { Video } from "@cap/web-domain";
 import clsx from "clsx";
 import {
+	ArrowLeftIcon,
 	AudioLinesIcon,
 	FilmIcon,
 	LoaderCircleIcon,
@@ -74,22 +75,28 @@ export function EditorApp({ recordings }: { recordings: RecentRecording[] }) {
 		[router],
 	);
 
+	const tabs = <EditorTabs tab={tab} onTabChange={setTab} />;
+
 	return (
 		<div className="cap-rec fixed inset-0 z-[300] flex flex-col bg-[var(--rec-window)] text-[var(--rec-text-1)]">
 			{/* A full-screen app: the support launcher would sit over its controls. */}
 			<style>{".cap-messenger-launcher{display:none!important}"}</style>
-			<EditorShellBar
-				left={null}
-				center={<EditorTabs tab={tab} onTabChange={setTab} />}
-				right={
-					<Link href="/dashboard/caps" className="rec-btn is-ghost">
-						Dashboard
-					</Link>
-				}
-			/>
+			{/* The recorder draws this bar itself so its back button and help sit
+			    with the recording they depend on. */}
+			{tab === "editor" && (
+				<EditorShellBar
+					left={
+						<Link href="/dashboard/caps" className="rec-btn is-ghost">
+							<ArrowLeftIcon className="size-4" aria-hidden />
+							Dashboard
+						</Link>
+					}
+					center={tabs}
+				/>
+			)}
 			<div className="relative flex min-h-0 flex-1 flex-col">
 				{tab === "record" ? (
-					<WebRecorderDialog embedded />
+					<WebRecorderDialog embedded tabs={tabs} />
 				) : (
 					<EditorHome
 						recordings={recordings}

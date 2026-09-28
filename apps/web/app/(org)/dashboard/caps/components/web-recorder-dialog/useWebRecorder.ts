@@ -233,7 +233,6 @@ export const useWebRecorder = ({
 	const [completedShareUrl, setCompletedShareUrl] = useState<string | null>(
 		null,
 	);
-	const [completedEditUrl, setCompletedEditUrl] = useState<string | null>(null);
 	const [recoveredDownloads, setRecoveredDownloads] = useState<
 		RecoveredRecordingDownload[]
 	>([]);
@@ -319,6 +318,7 @@ export const useWebRecorder = ({
 	}>({});
 	const stopRecordingRef = useRef<(() => Promise<void>) | null>(null);
 	const startRecordingRef = useRef<(() => Promise<void>) | null>(null);
+	const restartDisplayStreamRef = useRef<MediaStream | null>(null);
 	const instantUploaderRef = useRef<InstantRecordingUploader | null>(null);
 	const cameraUploaderRef = useRef<InstantRecordingUploader | null>(null);
 	const cameraMediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -1057,7 +1057,6 @@ export const useWebRecorder = ({
 		replaceCameraErrorDownload(null);
 		replaceAudioErrorDownloads([]);
 		setCompletedShareUrl(null);
-		setCompletedEditUrl(null);
 		shareUrlOpenedRef.current = false;
 
 		const pendingInstantVideoId = pendingInstantVideoIdRef.current;
@@ -1202,7 +1201,10 @@ export const useWebRecorder = ({
 				cameraStreamRef.current = videoStream;
 				firstTrack = videoStream.getVideoTracks()[0] ?? null;
 			} else {
+				const restartDisplayStream = restartDisplayStreamRef.current;
+				restartDisplayStreamRef.current = null;
 				videoStream =
+					restartDisplayStream ??
 					takeSharedDisplayStream?.() ??
 					(await acquireDisplayStream({
 						mode: recordingMode as DetectedDisplayRecordingMode,
@@ -2248,25 +2250,26 @@ export const useWebRecorder = ({
 				),
 			]);
 
-			// The share link is already live; the editor opens on it so the
-			// separate tracks can be edited straight away.
-			// Studio recordings open the editor itself, skipping the /edit hop.
-			const editUrl = `/s/${encodeURIComponent(creationResult.id)}/edit${
-				studioEnabled && editorSidecarCapture ? "/studio" : ""
-			}?from=recording`;
+			const studioRecording = studioEnabled && editorSidecarCapture;
+			const videoPath = `/s/${encodeURIComponent(creationResult.id)}`;
+			// The share link is already live, so the recording opens there. A
+			// Studio recording's page publishes it in its default look when
+			// nothing else is rendering it.
+			const shareUrl = studioRecording
+				? `${videoPath}?from=recording`
+				: videoPath;
 			// Everything is uploaded at this point, so a navigation failure must
 			// not fall into the failure path below, which deletes the video. It
-			// starts before the state below re-renders the page, so the editor's
-			// request isn't queued behind that work.
+			// starts before the state below re-renders the page, so the share
+			// page's request isn't queued behind that work.
 			try {
-				router.push(editUrl);
+				router.push(shareUrl);
 			} catch (navigationError) {
-				console.error("Failed to open the editor", navigationError);
-				window.location.assign(editUrl);
+				console.error("Failed to open the share page", navigationError);
+				window.location.assign(shareUrl);
 			}
 			setUploadStatus(undefined);
 			setCompletedShareUrl(creationResult.shareUrl);
-			setCompletedEditUrl(editUrl);
 			updatePhase("completed");
 		} catch (err) {
 			console.error("Failed to process recording", err);
@@ -2406,6 +2409,17 @@ export const useWebRecorder = ({
 
 		setIsRestarting(true);
 
+		// The new take records the screen that's already shared. Asking again
+		// would open the browser's picker after the old take is gone, where
+		// cancelling (or Chrome refusing a click that's a few seconds old)
+		// leaves nothing recording. Clones outlive the teardown below.
+		const display = displayStreamRef.current;
+		restartDisplayStreamRef.current = display
+			?.getVideoTracks()
+			.some((track) => track.readyState === "live")
+			? new MediaStream(display.getTracks().map((track) => track.clone()))
+			: null;
+
 		try {
 			try {
 				await stopCameraRecorder();
@@ -2432,9 +2446,14 @@ export const useWebRecorder = ({
 			await cleanupRecordingState();
 			updatePhase("idle");
 		} finally {
+			for (const track of restartDisplayStreamRef.current?.getTracks() ?? []) {
+				track.stop();
+			}
+			restartDisplayStreamRef.current = null;
 			setIsRestarting(false);
 		}
 	}, [
+		displayStreamRef,
 		cleanupRecordingState,
 		isRestarting,
 		phase,
@@ -2468,7 +2487,6 @@ export const useWebRecorder = ({
 		cameraErrorDownload,
 		audioErrorDownloads,
 		completedShareUrl,
-		completedEditUrl,
 		recoveredDownloads,
 		isSettingUp,
 		isRecording: isRecordingActive,
