@@ -166,7 +166,7 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 						yield* writeMetadata(
 							video.id,
 							urlParams.published
-								? sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.browserSave', JSON_MERGE_PATCH(COALESCE(JSON_EXTRACT(${videos.metadata}, '$.browserSave'), JSON_OBJECT()), ${finished}))`
+								? sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.browserSave', JSON_MERGE_PATCH(COALESCE(JSON_EXTRACT(${videos.metadata}, '$.browserSave'), JSON_OBJECT()), ${finished}), '$.publishedBrowserSaveId', ${video.metadata.browserSave.saveId ?? null})`
 								: sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.browserSave', ${finished})`,
 						);
 					}),

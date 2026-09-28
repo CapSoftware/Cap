@@ -29,7 +29,11 @@ export async function GET(
 		if (Option.isNone(maybeVideo)) return null;
 		const [video] = maybeVideo.value;
 		const metadata = Option.getOrNull(video.metadata) as VideoMetadata | null;
-		if (metadata?.browserSave?.saveId !== saveId) return null;
+		if (
+			metadata?.browserSave?.saveId !== saveId &&
+			metadata?.publishedBrowserSaveId !== saveId
+		)
+			return null;
 		const [bucket] = yield* Storage.getAccessForVideo(video);
 		return yield* bucket.getSignedObjectUrl(
 			browserSaveChunkKey(video.ownerId, video.id, saveId, file),

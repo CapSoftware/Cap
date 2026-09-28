@@ -178,6 +178,8 @@ export interface VideoMetadata {
 		saveId?: string;
 		chunks?: number[];
 	};
+	/** The last browser Save to publish, whose chunks viewers may still be playing. */
+	publishedBrowserSaveId?: string | null;
 	renderFarmExports?: {
 		version: 1;
 		items: {
