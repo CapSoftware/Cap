@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const STREAMED_PART_BYTES = 5 * 1024 * 1024;
 const DRIVE_PART_BYTES = 16 * 1024 * 1024;
-const OVERFLOW_PART_BYTES = 130 * 1024 * 1024;
+const OVERFLOW_PART_BYTES = 129 * 1024 * 1024;
 const FINALIZED_BLOB_BYTES = 129 * 1024 * 1024;
 
 type UploadOutcome =

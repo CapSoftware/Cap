@@ -483,6 +483,17 @@ export class InstantRecordingUploader {
 		this.bufferedChunks.push(blob);
 		this.bufferedBytes += blob.size;
 
+		if (
+			this.pendingUploadBytes + this.bufferedBytes >
+			MAX_PENDING_UPLOAD_BYTES
+		) {
+			const error = this.markFatalError(
+				new Error("Upload could not keep up with recording"),
+			);
+			this.onOverflow?.(error);
+			throw error;
+		}
+
 		if (this.bufferedBytes >= MIN_PART_SIZE_BYTES) {
 			this.flushBuffer();
 		}
