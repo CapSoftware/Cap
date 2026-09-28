@@ -16,7 +16,7 @@ import {
 	EditorShellBrand,
 	EditorShellTab,
 } from "@/components/editor-shell/editor-shell-bar";
-import { ShareLinkTab } from "@/components/editor-shell/share-link-tab";
+import { EditorShareLinkTab } from "@/components/editor-shell/share-link-tab";
 import { useAppPage } from "@/components/editor-shell/use-app-page";
 import type { WebEditorCapImportProgress } from "@/lib/editor-cap-import-client";
 import {
@@ -70,6 +70,7 @@ export function StudioEditorClient(props: {
 	savedAt: string | null;
 	justRecorded?: boolean;
 	isPublic: boolean;
+	shareUrl: string;
 	preparingTitle: string;
 	preparingDuration: number;
 	preparingTracks: Array<"display" | "camera">;
@@ -81,6 +82,7 @@ export function StudioEditorClient(props: {
 		savedAt,
 		justRecorded = false,
 		isPublic,
+		shareUrl,
 		preparingTitle,
 		preparingDuration,
 		preparingTracks,
@@ -619,10 +621,12 @@ export function StudioEditorClient(props: {
 				}
 				center={
 					<>
-						<ShareLinkTab
+						<EditorShareLinkTab
 							videoId={videoId}
-							capName={preparingTitle}
+							shareUrl={shareUrl}
+							title={preparingTitle}
 							initialPublic={isPublic}
+							onNavigate={confirmLeave}
 							onUpgradeRequest={() => setUpgradeOpen(true)}
 						/>
 						<EditorShellTab active>Editor</EditorShellTab>

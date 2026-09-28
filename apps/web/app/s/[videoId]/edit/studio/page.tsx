@@ -8,6 +8,8 @@ import { notFound, redirect } from "next/navigation";
 import { isAbandonedEditorReplacementUpload } from "@/lib/editor-replacement-upload";
 import { editorSourcesUploaded } from "@/lib/editor-sources-ready";
 import { measureMissingVideoDuration } from "@/lib/editor-video-duration";
+import { ownerCustomDomain } from "@/lib/owner-custom-domain";
+import { shareLinkUrl } from "@/lib/share-link";
 import { getEditSourceKey, isEditSourceKey } from "@/lib/video-edit-processing";
 import { isWebStudioEnabledForEmail } from "@/lib/web-studio-rollout";
 import { EditProcessing } from "../edit-processing";
@@ -102,6 +104,10 @@ export default async function StudioEditorPage(props: {
 	if (!duration) notFound();
 	// Recordings without separate sources open in the regular editor.
 	if (!hasStudioSource) redirect(`/s/${videoId}/edit`);
+	const shareUrl = shareLinkUrl(
+		video.id,
+		await ownerCustomDomain(user.activeOrganizationId),
+	);
 	return (
 		<StudioEditorClient
 			videoId={video.id}
@@ -110,6 +116,7 @@ export default async function StudioEditorPage(props: {
 			savedAt={video.metadata?.webEditorProject?.savedAt ?? null}
 			justRecorded={justRecorded}
 			isPublic={video.isPublic}
+			shareUrl={shareUrl}
 			preparingTitle={video.name}
 			preparingDuration={duration}
 			preparingTracks={

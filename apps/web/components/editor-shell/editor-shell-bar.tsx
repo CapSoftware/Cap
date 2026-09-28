@@ -79,6 +79,14 @@ export function EditorShellBrand({
 	);
 }
 
+export const shellTabClass = (active: boolean) =>
+	clsx(
+		"flex h-7 items-center rounded-md text-[13px] font-medium transition-colors",
+		active
+			? "bg-[var(--rec-card)] text-[var(--rec-text-1)] shadow-[0_1px_2px_rgba(0,0,0,0.1),0_0_0_1px_var(--rec-line)]"
+			: "text-[var(--rec-text-2)] hover:text-[var(--rec-text-1)]",
+	);
+
 /** One segment of the bar's centre toggle. */
 export function EditorShellTab({
 	active,
@@ -98,10 +106,8 @@ export function EditorShellTab({
 			disabled={disabled}
 			onClick={onClick}
 			className={clsx(
-				"rec-focus flex h-7 items-center gap-1.5 rounded-md px-3 text-[13px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50",
-				active
-					? "bg-[var(--rec-card)] text-[var(--rec-text-1)] shadow-[0_1px_2px_rgba(0,0,0,0.1),0_0_0_1px_var(--rec-line)]"
-					: "text-[var(--rec-text-2)] hover:text-[var(--rec-text-1)]",
+				shellTabClass(active),
+				"rec-focus gap-1.5 px-3 disabled:cursor-not-allowed disabled:opacity-50",
 			)}
 		>
 			{children}

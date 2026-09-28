@@ -23,7 +23,7 @@ vi.mock("@/app/s/[videoId]/edit/studio/editor-clip-recorder", () => ({
 	EditorClipRecorder: () => null,
 }));
 vi.mock("@/components/editor-shell/share-link-tab", () => ({
-	ShareLinkTab: () => null,
+	EditorShareLinkTab: () => null,
 }));
 vi.mock("@/app/s/[videoId]/edit/studio/editor-host", () => ({
 	EditorHostBridge: class {
@@ -153,6 +153,7 @@ async function openRecoveryConflict() {
 				captionsEnabled: true,
 				savedAt: "newer",
 				isPublic: true,
+				shareUrl: "https://cap.so/s/video",
 				preparingTitle: "Paired replay",
 				preparingDuration: 900,
 				preparingTracks: ["display", "camera"],
@@ -283,6 +284,7 @@ test("an unexpected browser-draft restore failure preserves the draft", async ()
 				captionsEnabled: true,
 				savedAt: "newer",
 				isPublic: true,
+				shareUrl: "https://cap.so/s/video",
 				preparingTitle: "Paired replay",
 				preparingDuration: 900,
 				preparingTracks: ["display", "camera"],
@@ -315,6 +317,7 @@ test("browser Studio keeps the shared editor shell open and connects once when r
 				captionsEnabled: true,
 				savedAt: null,
 				isPublic: true,
+				shareUrl: "https://cap.so/s/video",
 				preparingTitle: "Paired replay",
 				preparingDuration: 900,
 				preparingTracks: ["display", "camera"],
@@ -370,6 +373,7 @@ test("leaving asks first while the share link is missing this session's edits", 
 				captionsEnabled: true,
 				savedAt: null,
 				isPublic: true,
+				shareUrl: "https://cap.so/s/video",
 				preparingTitle: "Paired replay",
 				preparingDuration: 900,
 				preparingTracks: ["display"],
@@ -438,6 +442,7 @@ test("a Free editor lets its owner restore non-caption edits from a Pro browser 
 				captionsEnabled: false,
 				savedAt: "newer",
 				isPublic: true,
+				shareUrl: "https://cap.so/s/video",
 				preparingTitle: "Paired replay",
 				preparingDuration: 900,
 				preparingTracks: ["display", "camera"],
@@ -523,6 +528,7 @@ test("a Pro editor automatically restores a caption browser draft", async () => 
 				captionsEnabled: true,
 				savedAt: "newer",
 				isPublic: true,
+				shareUrl: "https://cap.so/s/video",
 				preparingTitle: "Paired replay",
 				preparingDuration: 900,
 				preparingTracks: ["display", "camera"],

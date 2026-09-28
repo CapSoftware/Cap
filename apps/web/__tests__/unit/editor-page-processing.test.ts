@@ -43,6 +43,12 @@ vi.mock("next/navigation", () => ({
 		throw new Error(`REDIRECT:${url}`);
 	},
 }));
+vi.mock("@/lib/owner-custom-domain", () => ({
+	ownerCustomDomain: async () => null,
+}));
+vi.mock("@/lib/share-link", () => ({
+	shareLinkUrl: (videoId: string) => `https://cap.so/s/${videoId}`,
+}));
 vi.mock("@/lib/web-studio-rollout", () => ({
 	isWebStudioEnabledForEmail: () => mocks.studioEnabled,
 }));
