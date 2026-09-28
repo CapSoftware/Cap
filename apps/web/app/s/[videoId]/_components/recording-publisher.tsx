@@ -3,6 +3,10 @@
 import type { Video } from "@cap/web-domain";
 import { useEffect, useRef } from "react";
 import { EditorHostBridge } from "../edit/studio/editor-host";
+import { useRenderSaveStatus } from "./render-farm-save-view";
+
+// A publish that hasn't started rendering by now isn't going to.
+const START_TIMEOUT_MS = 60_000;
 
 /**
  * Straight after a recording, with nothing rendering it yet, the owner's
@@ -14,14 +18,30 @@ export function RecordingPublisher({
 	userId,
 	captionsEnabled,
 	savedAt,
+	onDone,
 }: {
 	videoId: Video.VideoId;
 	userId: string;
 	captionsEnabled: boolean;
 	savedAt: string | null;
+	onDone: () => void;
 }) {
 	const bridgeRef = useRef<EditorHostBridge | null>(null);
 	const savedAtRef = useRef(savedAt);
+	const started = useRef(false);
+	const status = useRenderSaveStatus(videoId, true, !started.current);
+
+	useEffect(() => {
+		if (status?.state === "rendering") started.current = true;
+		else if (started.current || status?.state === "ready") onDone();
+	}, [status, onDone]);
+
+	useEffect(() => {
+		const timer = setTimeout(() => {
+			if (!started.current) onDone();
+		}, START_TIMEOUT_MS);
+		return () => clearTimeout(timer);
+	}, [onDone]);
 
 	useEffect(() => {
 		// A reload or refresh shows the share page, not another publish. A null

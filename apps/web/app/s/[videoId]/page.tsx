@@ -52,6 +52,7 @@ import {
 } from "@/lib/permissions/roles";
 import { resolveDefaultPlaybackSpeed } from "@/lib/playback-speed";
 import { getPublicShareVideo } from "@/lib/public-share-video";
+import { recentBrowserSave } from "@/lib/render-farm-status";
 import * as EffectRuntime from "@/lib/server";
 import { runPromise } from "@/lib/server";
 import { getSharePageBranding } from "@/lib/share-branding";
@@ -77,7 +78,7 @@ import { optionFromTOrFirst } from "@/utils/effect";
 import { isAiGenerationEnabled } from "@/utils/flags";
 import { PasswordOverlay } from "./_components/PasswordOverlay";
 import { PendingRecordingShare } from "./_components/PendingRecordingShare";
-import { RecordingPublisher } from "./_components/recording-publisher-lazy";
+import { RecordingPublisherSlot } from "./_components/recording-publisher-slot";
 import { ShareHeader } from "./_components/ShareHeader";
 import { Share } from "./Share";
 
@@ -779,15 +780,20 @@ async function AuthorizedContent({
 			rawFileKey: video.activeUploadRawFileKey,
 		}) && !video.isScreenshot;
 
-	const publishesRecording =
-		optionFromTOrFirst(searchParams.from).pipe(Option.getOrNull) ===
-			"recording" &&
+	const ownsStudioRecording =
 		!!user &&
 		user.id === video.owner.id &&
 		isWebStudioEnabledForEmail(user.email) &&
 		video.source.type === "webMP4" &&
-		video.metadata?.editorSources?.version === 1 &&
-		!video.metadata.renderFarmSave;
+		video.metadata?.editorSources?.version === 1;
+	const publishesRecording =
+		ownsStudioRecording &&
+		optionFromTOrFirst(searchParams.from).pipe(Option.getOrNull) ===
+			"recording" &&
+		!video.metadata?.renderFarmSave;
+
+	const browserSave = recentBrowserSave(video.metadata);
+	const browserSaveRendering = !!browserSave && !browserSave.finished;
 
 	const defaultPlaybackSpeed = resolveDefaultPlaybackSpeed(
 		video.videoSettings?.defaultPlaybackSpeed,
@@ -810,8 +816,9 @@ async function AuthorizedContent({
 	// in a container.
 	return (
 		<div className="flex flex-col flex-1 min-h-0">
-			{publishesRecording && user && (
-				<RecordingPublisher
+			{ownsStudioRecording && user && (
+				<RecordingPublisherSlot
+					start={publishesRecording}
 					videoId={video.id}
 					userId={user.id}
 					captionsEnabled={userIsPro(user)}
@@ -860,7 +867,7 @@ async function AuthorizedContent({
 				initialView={initialShareView}
 				canRecordMedia={canRecordMedia}
 				isEditProcessing={isEditProcessing}
-				renderStarting={publishesRecording}
+				renderStarting={publishesRecording || browserSaveRendering}
 				recordingStopped={recordingStopped}
 				defaultPlaybackSpeed={defaultPlaybackSpeed}
 				initialAiData={initialAiData}
