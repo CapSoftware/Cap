@@ -2269,7 +2269,7 @@ export const useWebRecorder = ({
 				window.location.assign(shareUrl);
 			}
 			setUploadStatus(undefined);
-			setCompletedShareUrl(creationResult.shareUrl);
+			setCompletedShareUrl(`${window.location.origin}${shareUrl}`);
 			updatePhase("completed");
 		} catch (err) {
 			console.error("Failed to process recording", err);

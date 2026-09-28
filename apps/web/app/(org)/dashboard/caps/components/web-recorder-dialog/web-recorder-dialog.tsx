@@ -703,6 +703,9 @@ export const WebRecorderDialog = ({
 	);
 	const [howOpen, setHowOpen] = useState(false);
 	const [confirmRestart, setConfirmRestart] = useState(false);
+	useEffect(() => {
+		if (!isRecording) setConfirmRestart(false);
+	}, [isRecording]);
 	const [cameraBright, setCameraBright] = useState(false);
 	useEffect(() => {
 		if (open) identifyThisTab();
