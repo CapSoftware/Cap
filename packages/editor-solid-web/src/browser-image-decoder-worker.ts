@@ -50,8 +50,62 @@ function loadDecoder() {
 	return decoder;
 }
 
+/// The browser's own JPEG/PNG decoder is several times faster than the wasm
+/// one for large wallpapers. Pixels come back unconverted and straight alpha,
+/// like the wasm decoder's, so both paths render the same.
+async function decodeNatively(bytes: ArrayBuffer, maxDimension: number) {
+	if (
+		typeof createImageBitmap !== "function" ||
+		typeof OffscreenCanvas === "undefined"
+	) {
+		return null;
+	}
+	try {
+		const bitmap = await createImageBitmap(new Blob([bytes]), {
+			colorSpaceConversion: "none",
+			premultiplyAlpha: "none",
+		});
+		const scale = Math.min(
+			1,
+			maxDimension / Math.max(bitmap.width, bitmap.height),
+		);
+		const width = Math.max(1, Math.round(bitmap.width * scale));
+		const height = Math.max(1, Math.round(bitmap.height * scale));
+		const context = new OffscreenCanvas(width, height).getContext("2d", {
+			willReadFrequently: true,
+		});
+		if (!context) return null;
+		context.imageSmoothingQuality = "high";
+		context.drawImage(bitmap, 0, 0, width, height);
+		bitmap.close();
+		const pixels = context.getImageData(0, 0, width, height).data.buffer;
+		return { width, height, pixels };
+	} catch {
+		return null;
+	}
+}
+
 scope.addEventListener("message", (event) => {
 	const { id, bytes, maxDimension, kind } = event.data;
+	if (kind === "background") {
+		void decodeNatively(bytes, maxDimension).then((image) => {
+			if (image) {
+				scope.postMessage({ id, ok: true, kind, ...image }, [image.pixels]);
+			} else {
+				decodeWithWasm(id, bytes, maxDimension, kind);
+			}
+		});
+		return;
+	}
+	decodeWithWasm(id, bytes, maxDimension, kind);
+});
+
+function decodeWithWasm(
+	id: number,
+	bytes: ArrayBuffer,
+	maxDimension: number,
+	kind: DecodeRequest["kind"],
+) {
 	void loadDecoder()
 		.then((module) => {
 			if (kind === "overlay") {
@@ -106,4 +160,4 @@ scope.addEventListener("message", (event) => {
 				error: error instanceof Error ? error.message : String(error),
 			});
 		});
-});
+}
