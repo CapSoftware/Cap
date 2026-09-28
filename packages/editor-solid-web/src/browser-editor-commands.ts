@@ -14,6 +14,7 @@ import {
 	browserEditorPreviewConfig,
 	browserEditorPreviewTime,
 } from "./browser-frame-socket";
+import { acquireMediaInput } from "./browser-media-inputs";
 import { probeBrowserMedia } from "./browser-media-probe";
 import { loadBrowserRenderer } from "./browser-renderer";
 import {
@@ -110,7 +111,78 @@ function waveform(url: string, signal: AbortSignal) {
 	});
 }
 
+const WAVEFORM_CACHE = "cap-editor-waveforms-v1";
+const WAVEFORM_CACHE_ENTRIES = 40;
+
+/// A waveform costs a read of the whole audio file and seconds of decoding
+/// (about 15 CPU seconds for two hours). Signed URLs change on every visit, so
+/// the peaks are keyed by object path and exact duration.
+async function cachedWaveform(url: string, signal: AbortSignal) {
+	let cache: Cache | null = null;
+	let key: string | null = null;
+	try {
+		const { duration } = await probeBrowserMedia(url, signal);
+		const { origin, pathname } = new URL(url);
+		key = `${origin}/__cap-waveform${pathname}?duration=${duration}`;
+		cache = await caches.open(WAVEFORM_CACHE);
+		const hit = await cache.match(key);
+		if (hit) return Array.from(new Float32Array(await hit.arrayBuffer()));
+	} catch {
+		if (signal.aborted) throw signal.reason;
+	}
+	const peaks = await waveform(url, signal);
+	if (cache && key && peaks.length > 0) {
+		const store = cache;
+		void store
+			.put(key, new Response(new Float32Array(peaks)))
+			.then(() => store.keys())
+			.then((keys) =>
+				Promise.all(
+					keys
+						.slice(0, Math.max(0, keys.length - WAVEFORM_CACHE_ENTRIES))
+						.map((old) => store.delete(old)),
+				),
+			)
+			.catch(() => undefined);
+	}
+	return peaks;
+}
+
 const THUMBNAIL_WIDTH = 320;
+const THUMBNAIL_CACHE_ENTRIES = 64;
+
+/// A <video> element reads the whole of a fragmented recording before it can
+/// show a frame (over a gigabyte for two hours of screen), so thumbnails
+/// decode from the preview's mediabunny Input. Null when WebCodecs cannot
+/// decode the file.
+async function decodeFrameAt(url: string, time: number) {
+	if (typeof VideoDecoder !== "function") return null;
+	const { VideoSampleSink } = await import("mediabunny");
+	const { input, release } = await acquireMediaInput(url);
+	try {
+		const track = await input.getPrimaryVideoTrack();
+		const config = await track?.getDecoderConfig();
+		if (
+			!track ||
+			!config ||
+			!(await VideoDecoder.isConfigSupported(config)).supported
+		) {
+			return null;
+		}
+		const first = (await track.getFirstTimestamp()) ?? 0;
+		const sample = await new VideoSampleSink(track).getSample(
+			Math.max(time, first),
+		);
+		if (!sample) return null;
+		try {
+			return sample.toVideoFrame();
+		} finally {
+			sample.close();
+		}
+	} finally {
+		release();
+	}
+}
 
 export class BrowserEditorCommands {
 	static supports(name: string) {
@@ -138,6 +210,7 @@ export class BrowserEditorCommands {
 	private readonly catalog: BrowserEditorSourceCatalog;
 	private pending: Promise<BrowserEditorInfo> | null = null;
 	private info: BrowserEditorInfo | null = null;
+	private readonly thumbnails = new Map<string, Promise<string>>();
 
 	constructor(
 		private readonly videoId: string,
@@ -395,20 +468,40 @@ export class BrowserEditorCommands {
 		) {
 			throw new Error("Clip thumbnail request is invalid");
 		}
-		const sources = await this.catalog.snapshot(this.controller.signal);
-		const image = await this.displayFrame(
-			sources,
-			recordingSegment,
-			sourceTime,
-			THUMBNAIL_WIDTH,
-			track,
-		);
-		return await new Promise<string>((resolve, reject) => {
-			const reader = new FileReader();
-			reader.onload = () => resolve(String(reader.result));
-			reader.onerror = () => reject(new Error("Clip thumbnail could not load"));
-			reader.readAsDataURL(image);
+		// The clip strip asks again whenever the timeline re-renders.
+		const key = `${track}:${recordingSegment}:${sourceTime}`;
+		const cached = this.thumbnails.get(key);
+		if (cached) return cached;
+		const thumbnail = this.catalog
+			.snapshot(this.controller.signal)
+			.then((sources) =>
+				this.displayFrame(
+					sources,
+					recordingSegment,
+					sourceTime,
+					THUMBNAIL_WIDTH,
+					track,
+				),
+			)
+			.then(
+				(image) =>
+					new Promise<string>((resolve, reject) => {
+						const reader = new FileReader();
+						reader.onload = () => resolve(String(reader.result));
+						reader.onerror = () =>
+							reject(new Error("Clip thumbnail could not load"));
+						reader.readAsDataURL(image);
+					}),
+			);
+		this.thumbnails.set(key, thumbnail);
+		thumbnail.catch(() => {
+			if (this.thumbnails.get(key) === thumbnail) this.thumbnails.delete(key);
 		});
+		for (const old of this.thumbnails.keys()) {
+			if (this.thumbnails.size <= THUMBNAIL_CACHE_ENTRIES) break;
+			this.thumbnails.delete(old);
+		}
+		return thumbnail;
 	}
 
 	private async displayFrame(
@@ -420,36 +513,48 @@ export class BrowserEditorCommands {
 	) {
 		const source = sources.segments[segmentIndex]?.[track];
 		if (!source) throw new Error(`Editor ${track} source is unavailable`);
-		const pool = new BrowserVideoPool(async (index, requested) =>
-			index === segmentIndex && requested === track ? source : null,
+		const decoded = await decodeFrameAt(source.url, sourceTime).catch(
+			() => null,
 		);
+		const pool = decoded
+			? null
+			: new BrowserVideoPool(async (index, requested) =>
+					index === segmentIndex && requested === track ? source : null,
+				);
 		try {
-			const video = await pool.frame(
-				segmentIndex,
-				track,
-				"primary",
-				sourceTime,
-				false,
-				1,
-				this.controller.signal,
-			);
-			if (!video || video.videoWidth < 1 || video.videoHeight < 1) {
+			const image =
+				decoded ??
+				(await pool?.frame(
+					segmentIndex,
+					track,
+					"primary",
+					sourceTime,
+					false,
+					1,
+					this.controller.signal,
+				));
+			const width =
+				image instanceof VideoFrame ? image.displayWidth : image?.videoWidth;
+			const height =
+				image instanceof VideoFrame ? image.displayHeight : image?.videoHeight;
+			if (!image || !width || !height) {
 				throw new Error("Editor display frame is unavailable");
 			}
-			const scale = maxWidth ? Math.min(1, maxWidth / video.videoWidth) : 1;
+			const scale = maxWidth ? Math.min(1, maxWidth / width) : 1;
 			const canvas = document.createElement("canvas");
-			canvas.width = Math.round(video.videoWidth * scale);
-			canvas.height = Math.round(video.videoHeight * scale);
+			canvas.width = Math.round(width * scale);
+			canvas.height = Math.round(height * scale);
 			const context = canvas.getContext("2d");
 			if (!context) throw new Error("Editor frame canvas is unavailable");
-			context.drawImage(video, 0, 0, canvas.width, canvas.height);
-			const image = await new Promise<Blob | null>((resolve) =>
+			context.drawImage(image, 0, 0, canvas.width, canvas.height);
+			const blob = await new Promise<Blob | null>((resolve) =>
 				canvas.toBlob(resolve, "image/jpeg", 0.86),
 			);
-			if (!image) throw new Error("Editor frame image could not encode");
-			return image;
+			if (!blob) throw new Error("Editor frame image could not encode");
+			return blob;
 		} finally {
-			pool.dispose();
+			decoded?.close();
+			pool?.dispose();
 		}
 	}
 
@@ -483,9 +588,10 @@ export class BrowserEditorCommands {
 					: (sources.systemAudio ??
 						(sources.displayHasAudio ? sources.segments[0]?.display : null));
 			if (source) {
-				tracks[0] = await waveform(source.url, this.controller.signal).catch(
-					() => [],
-				);
+				tracks[0] = await cachedWaveform(
+					source.url,
+					this.controller.signal,
+				).catch(() => []);
 			}
 			return tracks;
 		}
