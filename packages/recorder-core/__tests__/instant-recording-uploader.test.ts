@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
 	InstantRecordingUploader,
 	MultipartCompletionUncertainError,
@@ -5,7 +6,7 @@ import {
 import type { VideoId } from "@cap/recorder-core/recorder-types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const STREAMED_PART_BYTES = 5 * 1024 * 1024 + 128;
+const STREAMED_PART_BYTES = 5 * 1024 * 1024;
 const DRIVE_PART_BYTES = 16 * 1024 * 1024;
 const OVERFLOW_PART_BYTES = 129 * 1024 * 1024;
 const FINALIZED_BLOB_BYTES = 129 * 1024 * 1024;
@@ -19,6 +20,7 @@ class MockXMLHttpRequest {
 	static outcomes: UploadOutcome[] = [];
 	static abortedCount = 0;
 	static recordedHeaders: Array<Map<string, string>> = [];
+	static recordedParts: Blob[] = [];
 
 	upload = {
 		onprogress: null as ((event: ProgressEvent<EventTarget>) => void) | null,
@@ -37,6 +39,7 @@ class MockXMLHttpRequest {
 		MockXMLHttpRequest.outcomes = [...outcomes];
 		MockXMLHttpRequest.abortedCount = 0;
 		MockXMLHttpRequest.recordedHeaders = [];
+		MockXMLHttpRequest.recordedParts = [];
 	}
 
 	open() {}
@@ -51,6 +54,7 @@ class MockXMLHttpRequest {
 
 	send(part: Blob) {
 		MockXMLHttpRequest.recordedHeaders.push(new Map(this.headers));
+		MockXMLHttpRequest.recordedParts.push(part);
 
 		const outcome = MockXMLHttpRequest.outcomes.shift();
 		if (!outcome) {
@@ -114,6 +118,91 @@ describe("InstantRecordingUploader", () => {
 		vi.unstubAllGlobals();
 		vi.useRealTimers();
 	});
+
+	it.each([
+		[
+			STREAMED_PART_BYTES + 128,
+			STREAMED_PART_BYTES + 333,
+			11 * 1024 * 1024 + 777,
+		],
+		[STREAMED_PART_BYTES - 100, 100, STREAMED_PART_BYTES],
+		[123, 456],
+	])(
+		"preserves bytes while aligning variable capture chunks %j for R2",
+		async (...sizes) => {
+			const chunks = sizes.map(
+				(size, index) =>
+					new Blob([new Uint8Array(size).fill(index + 1)], {
+						type: "video/webm",
+					}),
+			);
+			const totalBytes = sizes.reduce((total, size) => total + size, 0);
+			const expectedSizes = Array.from(
+				{ length: Math.ceil(totalBytes / STREAMED_PART_BYTES) },
+				(_, index) =>
+					Math.min(
+						STREAMED_PART_BYTES,
+						totalBytes - index * STREAMED_PART_BYTES,
+					),
+			);
+			let completedParts: unknown;
+			vi.stubGlobal(
+				"fetch",
+				vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+					const body = JSON.parse(String(init?.body));
+					if (input.toString().endsWith("/presign-part")) {
+						return makeJsonResponse({
+							presignedUrl: `https://uploads.example/part-${body.partNumber}`,
+						});
+					}
+					expect(input.toString()).toBe("/api/upload/multipart/complete");
+					completedParts = body.parts;
+					return makeJsonResponse({ success: true });
+				}),
+			);
+			MockXMLHttpRequest.setOutcomes(
+				expectedSizes.map((_, index) => ({
+					type: "success",
+					etag: `etag-${index + 1}`,
+				})),
+			);
+			const uploader = new InstantRecordingUploader({
+				videoId,
+				uploadId: "upload-r2",
+				provider: "s3",
+				mimeType: "video/webm",
+				subpath: "raw-upload.webm",
+				setUploadStatus: vi.fn(),
+				sendProgressUpdate: vi.fn().mockResolvedValue(undefined),
+			});
+			let recordedBytes = 0;
+			for (const chunk of chunks) {
+				recordedBytes += chunk.size;
+				uploader.handleChunk(chunk, recordedBytes);
+			}
+			await uploader.finalize({
+				durationSeconds: 50 * 60,
+				subpath: "raw-upload.webm",
+			});
+			expect(completedParts).toEqual(
+				expectedSizes.map((size, index) => ({
+					partNumber: index + 1,
+					etag: `etag-${index + 1}`,
+					size,
+				})),
+			);
+			expect(MockXMLHttpRequest.recordedParts.map((part) => part.size)).toEqual(
+				expectedSizes,
+			);
+			const digest = async (parts: Blob[]) =>
+				createHash("sha256")
+					.update(new Uint8Array(await new Blob(parts).arrayBuffer()))
+					.digest("hex");
+			expect(await digest(MockXMLHttpRequest.recordedParts)).toBe(
+				await digest(chunks),
+			);
+		},
+	);
 
 	it("uploads streamed chunks and completes multipart with the raw subpath", async () => {
 		const fetchMock = vi.fn(
