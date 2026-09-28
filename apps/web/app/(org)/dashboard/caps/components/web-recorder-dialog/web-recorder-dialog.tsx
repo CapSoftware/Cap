@@ -849,6 +849,10 @@ export const WebRecorderDialog = ({
 	// this tab (the whole screen, or this tab itself), drawing the camera here
 	// would record it a second time inside the screen, so it isn't drawn at
 	// all; dimming would still be captured.
+	// Showing it anyway is a choice for one take; the next starts hidden.
+	useEffect(() => {
+		if (!live) setCameraShownAnyway(false);
+	}, [live]);
 	const cameraKeptOffScreen =
 		live && screenMode && mirrorRisk && !cameraShownAnyway;
 	const cameraDimmed = live && screenMode && !cameraBright;
