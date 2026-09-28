@@ -8,7 +8,6 @@ import "@/app/(org)/dashboard/caps/components/web-recorder-dialog/recorder.css";
 
 export type EditorTab = "editor" | "record";
 
-/** The bar across the top of Cap's editor pages. */
 export function EditorShellBar({
 	left,
 	center,
@@ -37,7 +36,6 @@ export function EditorShellBar({
 	);
 }
 
-/** A back link led by the Cap mark. */
 export function EditorShellBrand({
 	title,
 	backHref,
@@ -90,7 +88,6 @@ export const shellTabClass = (active: boolean) =>
 			: "text-[var(--rec-text-2)] hover:text-[var(--rec-text-1)]",
 	);
 
-/** One segment of the bar's centre toggle. */
 export function EditorShellTab({
 	active,
 	disabled,
@@ -118,7 +115,6 @@ export function EditorShellTab({
 	);
 }
 
-/** The Editor home's Editor / Record toggle. */
 export function EditorTabs({
 	tab,
 	onTabChange,
@@ -145,7 +141,6 @@ export function EditorTabs({
 	);
 }
 
-/** The way to the dashboard and to a new recording, beside the toggle. */
 export function EditorShellActions({
 	onNavigate,
 }: {
