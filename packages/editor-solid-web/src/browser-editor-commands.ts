@@ -490,11 +490,22 @@ export class BrowserEditorCommands {
 			return tracks;
 		}
 		if (name === "getDefaultProjectConfig") {
+			const [module, sources] = await Promise.all([
+				loadBrowserRenderer(),
+				this.catalog.snapshot(this.controller.signal),
+			]);
 			const defaults: unknown = JSON.parse(
-				(await loadBrowserRenderer()).default_project_config_json(),
+				module.default_project_config_json(),
 			);
 			const project = record(defaults);
-			return project ? applyDefaultStyle(project, FULL_BLEED_STYLE) : defaults;
+			// Cap's look for a recording: edge to edge, with its camera where it
+			// was recorded.
+			return project
+				? applyDefaultStyle(project, {
+						...FULL_BLEED_STYLE,
+						camera: sources.defaultStyle?.camera,
+					})
+				: defaults;
 		}
 		if (name === "setWindowTransparent") return null;
 		if (name === "tauri:get_recording_recovery_success") return false;
