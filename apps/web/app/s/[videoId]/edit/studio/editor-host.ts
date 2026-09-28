@@ -418,6 +418,7 @@ export class EditorHostBridge {
 	private activeShare: AbortController | null = null;
 	private activeSavePublish: AbortController | null = null;
 	private browserSaveReportedAt = 0;
+	private browserSaveReports: Promise<void> = Promise.resolve();
 	private activeCaptions: {
 		language: AiGenerationLanguage;
 		promise: Promise<WebEditorCaptionData>;
@@ -1534,16 +1535,22 @@ export class EditorHostBridge {
 		const now = Date.now();
 		if (progress !== null && now - this.browserSaveReportedAt < 3000) return;
 		this.browserSaveReportedAt = progress === null ? 0 : now;
-		void fetch(
-			`/api/editor/videos/${encodeURIComponent(this.videoId)}/browser-save`,
-			progress === null
-				? { method: "DELETE", keepalive: true }
-				: {
-						method: "PUT",
-						headers: { "Content-Type": "application/json" },
-						body: JSON.stringify({ progress }),
-					},
-		).catch(() => undefined);
+		// In order, so a late progress report can't bring back a finished Save.
+		this.browserSaveReports = this.browserSaveReports.then(() =>
+			fetch(
+				`/api/editor/videos/${encodeURIComponent(this.videoId)}/browser-save`,
+				progress === null
+					? { method: "DELETE", keepalive: true }
+					: {
+							method: "PUT",
+							headers: { "Content-Type": "application/json" },
+							body: JSON.stringify({ progress }),
+						},
+			).then(
+				() => undefined,
+				() => undefined,
+			),
+		);
 	}
 
 	private async handleShareExport(message: BridgeRequest) {
