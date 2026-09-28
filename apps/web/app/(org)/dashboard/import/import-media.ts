@@ -25,6 +25,8 @@ export async function importMediaFile({
 	setUploadStatus,
 	onVideoCreated,
 	quiet = false,
+	name,
+	audioOnly = false,
 }: {
 	file: File;
 	folderId?: Folder.FolderId;
@@ -34,6 +36,10 @@ export async function importMediaFile({
 	onVideoCreated?: (videoId: string) => void;
 	/** Skip the "processing in the background" toast when the caller opens it. */
 	quiet?: boolean;
+	/** Title for the new Cap instead of the dated default. */
+	name?: string;
+	/** The video wraps an audio file, which the editor shows as a waveform. */
+	audioOnly?: boolean;
 }) {
 	const imageContentType = getSupportedImageContentType(file);
 
@@ -55,6 +61,7 @@ export async function importMediaFile({
 			setUploadStatus,
 			onVideoCreated,
 			quiet,
+			{ name, audioOnly },
 		);
 	}
 
@@ -129,6 +136,7 @@ async function uploadVideoForServerProcessing(
 	setUploadStatus: (state: UploadStatus | undefined) => void,
 	onVideoCreated?: (videoId: string) => void,
 	quiet = false,
+	details: { name?: string; audioOnly?: boolean } = {},
 ) {
 	try {
 		setUploadStatus({ status: "parsing" });
@@ -165,6 +173,7 @@ async function uploadVideoForServerProcessing(
 			resolution,
 			folderId,
 			orgId,
+			...details,
 		});
 
 		const uploadId = videoData.id;

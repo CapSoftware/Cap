@@ -6,6 +6,8 @@
  * Video metadata structure
  */
 export interface VideoMetadata {
+	/** Imported from an audio file: the video is a title card the editor hides. */
+	audioOnly?: boolean;
 	/** Camera placement chosen in the browser recorder, applied to the project. */
 	recorderCamera?: {
 		version: 1;

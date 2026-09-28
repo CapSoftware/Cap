@@ -638,6 +638,7 @@ export const getSignedEditorSources = Effect.fn("getSignedEditorSources")(
 			...(audience === "browser"
 				? { signedUrlExpiresAt, displayHasAudio: legacySource }
 				: {}),
+			...(video.metadata?.audioOnly === true ? { audioOnly: true } : {}),
 			captionsEnabled,
 			title: video.name?.slice(0, 255) || "Recording",
 			display: {

@@ -35,11 +35,15 @@ export async function createVideoForServerProcessing({
 	resolution,
 	folderId,
 	orgId,
+	name,
+	audioOnly = false,
 }: {
 	duration?: number;
 	resolution?: string;
 	folderId?: Folder.FolderId;
 	orgId: Organisation.OrganisationId;
+	name?: string;
+	audioOnly?: boolean;
 }): Promise<CreateForProcessingResult> {
 	const user = await getCurrentUser();
 
@@ -70,7 +74,8 @@ export async function createVideoForServerProcessing({
 	})} ${date.getFullYear()}`;
 
 	const rawFileKey = `${user.id}/${videoId}/raw-upload.mp4`;
-	const videoTitle = `Cap Upload - ${formattedDate}`;
+	const videoTitle =
+		name?.trim().slice(0, 100) || `Cap Upload - ${formattedDate}`;
 
 	const uploadResult = await StorageService.createUploadTargetForUser(
 		user.id,
@@ -99,6 +104,7 @@ export async function createVideoForServerProcessing({
 			bucket: Option.getOrNull(uploadResult.bucketId),
 			storageIntegrationId: Option.getOrNull(uploadResult.storageIntegrationId),
 			public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
+			...(audioOnly === true ? { metadata: { audioOnly: true } } : {}),
 			...(folderId ? { folderId } : {}),
 		});
 

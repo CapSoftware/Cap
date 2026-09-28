@@ -2,31 +2,34 @@
 
 import {
 	ALL_FORMATS,
-	type AudioSample,
+	type AudioCodec,
 	AudioSampleSink,
 	AudioSampleSource,
 	BlobSource,
 	BufferTarget,
 	CanvasSource,
 	canEncodeAudio,
+	EncodedAudioPacketSource,
+	EncodedPacketSink,
 	Input,
+	type InputAudioTrack,
 	Mp4OutputFormat,
 	Output,
 } from "mediabunny";
 
-const WIDTH = 1920;
-const HEIGHT = 1080;
-const FPS = 15;
-const BARS = 160;
+const WIDTH = 1280;
+const HEIGHT = 720;
 const MAX_SECONDS = 4 * 60 * 60;
+/** Codecs an MP4 can carry that browsers also play, so the audio is copied as is. */
+const COPYABLE_CODECS: AudioCodec[] = ["aac", "opus", "mp3", "flac"];
 
 /**
- * Turns an audio file into an MP4 audiogram (a calm background, the title and
- * the whole waveform lighting up as it plays) so audio can start a Cap like
- * any other video: the upload, processing, share page and editor all expect a
- * video track.
+ * Wraps an audio file in an MP4 with a still title card, one frame a second,
+ * so audio can start a Cap like any recording: the upload, processing and
+ * share page all expect a video track. The editor hides that card and draws
+ * a live waveform instead. The audio is copied untouched when it can be.
  */
-export async function convertAudioToVideo(
+export async function wrapAudioInVideo(
 	file: File,
 	onProgress?: (fraction: number) => void,
 	signal?: AbortSignal,
@@ -42,162 +45,107 @@ export async function convertAudioToVideo(
 		if (!(duration > 0)) throw new Error("This audio file is empty");
 		if (duration > MAX_SECONDS) throw new Error("This audio file is too long");
 
-		const envelope = await loudnessEnvelope(
-			new AudioSampleSink(track),
-			duration,
-			(fraction) => onProgress?.(fraction * 0.25),
-			signal,
-		);
-
+		const title = file.name.replace(/\.[^.]+$/, "") || "Audio";
 		const canvas = new OffscreenCanvas(WIDTH, HEIGHT);
 		const context = canvas.getContext("2d");
 		if (!context) throw new Error("Canvas drawing is unavailable");
-		const title = file.name.replace(/\.[^.]+$/, "");
+		drawTitleCard(context, title);
 
-		const audioCodec = (await canEncodeAudio("aac")) ? "aac" : "opus";
 		const output = new Output({
 			format: new Mp4OutputFormat({ fastStart: "in-memory" }),
 			target: new BufferTarget(),
 		});
 		const video = new CanvasSource(canvas, {
 			codec: "avc",
-			bitrate: 1_200_000,
-			keyFrameInterval: 2,
+			bitrate: 150_000,
+			keyFrameInterval: 10,
 		});
-		const audio = new AudioSampleSource({
-			codec: audioCodec,
-			bitrate: 160_000,
-		});
-		output.addVideoTrack(video, { frameRate: FPS });
-		output.addAudioTrack(audio);
+		output.addVideoTrack(video, { frameRate: 1 });
+		const audio = await addAudioTrack(output, track);
 		await output.start();
 
-		const samples = new AudioSampleSink(track).samples();
-		let pending: AudioSample | null = null;
-		const frames = Math.ceil(duration * FPS);
-		for (let frame = 0; frame < frames; frame++) {
-			if (signal?.aborted) throw new Error("Audio conversion was canceled");
-			const time = frame / FPS;
-			// Keep the audio a step ahead of the picture so the muxer can interleave.
-			while (true) {
-				const next: AudioSample | null =
-					pending ?? (await samples.next()).value ?? null;
-				pending = null;
-				if (!next) break;
-				if (next.timestamp > time + 1 / FPS) {
-					pending = next;
-					break;
-				}
-				await audio.add(next);
-				next.close();
+		// The card is added a second at a time, just ahead of the audio, so the
+		// muxer can interleave the two tracks.
+		let nextFrame = 0;
+		const addFramesUntil = async (time: number) => {
+			while (nextFrame <= Math.min(time, duration)) {
+				await video.add(nextFrame, 1);
+				nextFrame += 1;
 			}
-			drawFrame(context, envelope, time / duration, title);
-			await video.add(time, 1 / FPS);
-			if (frame % FPS === 0) onProgress?.(0.25 + (frame / frames) * 0.73);
+		};
+		for await (const timestamp of audio.copy()) {
+			if (signal?.aborted) throw new Error("Audio import was canceled");
+			await addFramesUntil(timestamp + 1);
+			onProgress?.(Math.min(0.99, timestamp / duration));
 		}
-		while (true) {
-			const next: AudioSample | null =
-				pending ?? (await samples.next()).value ?? null;
-			pending = null;
-			if (!next) break;
-			await audio.add(next);
-			next.close();
-		}
+		await addFramesUntil(duration);
 		await output.finalize();
 		onProgress?.(1);
 
 		const buffer = (output.target as BufferTarget).buffer;
-		if (!buffer) throw new Error("Audio conversion produced no video");
-		return new File([buffer], `${title || "Audio"}.mp4`, { type: "video/mp4" });
+		if (!buffer) throw new Error("Audio import produced no video");
+		return new File([buffer], `${title}.mp4`, { type: "video/mp4" });
 	} finally {
 		input.dispose?.();
 	}
 }
 
-async function loudnessEnvelope(
-	sink: AudioSampleSink,
-	duration: number,
-	onProgress: (fraction: number) => void,
-	signal?: AbortSignal,
-) {
-	const sums = new Float64Array(BARS);
-	const counts = new Uint32Array(BARS);
-	let scratch = new Float32Array(0);
-	for await (const sample of sink.samples()) {
-		if (signal?.aborted) {
-			sample.close();
-			throw new Error("Audio conversion was canceled");
-		}
-		const frames = sample.numberOfFrames;
-		if (scratch.length < frames) scratch = new Float32Array(frames);
-		sample.copyTo(scratch, { planeIndex: 0, format: "f32-planar" });
-		const perFrame = sample.duration / Math.max(1, frames);
-		for (let index = 0; index < frames; index += 32) {
-			const bar = Math.min(
-				BARS - 1,
-				Math.floor(((sample.timestamp + index * perFrame) / duration) * BARS),
-			);
-			const value = scratch[index] ?? 0;
-			sums[bar] = (sums[bar] ?? 0) + value * value;
-			counts[bar] = (counts[bar] ?? 0) + 1;
-		}
-		onProgress(Math.min(1, (sample.timestamp + sample.duration) / duration));
-		sample.close();
+/** Adds the audio track, returning an iterator that copies it and yields progress timestamps. */
+async function addAudioTrack(output: Output, track: InputAudioTrack) {
+	const codec = track.codec;
+	if (codec && COPYABLE_CODECS.includes(codec)) {
+		const source = new EncodedAudioPacketSource(codec);
+		output.addAudioTrack(source);
+		const decoderConfig = await track.getDecoderConfig();
+		return {
+			async *copy() {
+				let first = true;
+				for await (const packet of new EncodedPacketSink(track).packets()) {
+					await source.add(
+						packet,
+						first && decoderConfig ? { decoderConfig } : undefined,
+					);
+					first = false;
+					yield packet.timestamp;
+				}
+			},
+		};
 	}
-	const levels = Array.from(sums, (sum, index) =>
-		Math.sqrt(sum / Math.max(1, counts[index] ?? 0)),
-	);
-	const peak = Math.max(0.0001, ...levels);
-	return levels.map((level) => Math.max(0.04, (level / peak) ** 0.7));
+	const source = new AudioSampleSource({
+		codec: (await canEncodeAudio("aac")) ? "aac" : "opus",
+		bitrate: 160_000,
+	});
+	output.addAudioTrack(source);
+	return {
+		async *copy() {
+			for await (const sample of new AudioSampleSink(track).samples()) {
+				const timestamp = sample.timestamp;
+				await source.add(sample);
+				sample.close();
+				yield timestamp;
+			}
+		},
+	};
 }
 
-function drawFrame(
+function drawTitleCard(
 	context: OffscreenCanvasRenderingContext2D,
-	envelope: number[],
-	progress: number,
 	title: string,
 ) {
 	const background = context.createLinearGradient(0, 0, WIDTH, HEIGHT);
-	background.addColorStop(0, "#15161a");
-	background.addColorStop(1, "#0d0e11");
+	background.addColorStop(0, "#1b1d2a");
+	background.addColorStop(1, "#0e0f14");
 	context.fillStyle = background;
 	context.fillRect(0, 0, WIDTH, HEIGHT);
-
 	context.fillStyle = "rgba(255,255,255,0.92)";
-	context.font = "500 44px ui-sans-serif, system-ui, -apple-system, sans-serif";
-	context.textBaseline = "alphabetic";
-	context.fillText(truncate(context, title, WIDTH - 320), 160, 330);
-
-	const left = 160;
-	const width = WIDTH - 320;
-	const centre = HEIGHT / 2 + 60;
-	const step = width / envelope.length;
-	const barWidth = Math.max(3, step * 0.55);
-	const played = progress * envelope.length;
-	envelope.forEach((level, index) => {
-		const height = Math.max(6, level * 300);
-		context.fillStyle = index < played ? "#3b82f6" : "rgba(255,255,255,0.18)";
-		roundedBar(
-			context,
-			left + index * step + (step - barWidth) / 2,
-			centre - height / 2,
-			barWidth,
-			height,
-		);
-	});
-}
-
-function roundedBar(
-	context: OffscreenCanvasRenderingContext2D,
-	x: number,
-	y: number,
-	width: number,
-	height: number,
-) {
-	const radius = Math.min(width / 2, height / 2);
-	context.beginPath();
-	context.roundRect(x, y, width, height, radius);
-	context.fill();
+	context.font = "500 40px ui-sans-serif, system-ui, -apple-system, sans-serif";
+	context.textAlign = "center";
+	context.textBaseline = "middle";
+	context.fillText(
+		truncate(context, title, WIDTH - 240),
+		WIDTH / 2,
+		HEIGHT / 2,
+	);
 }
 
 function truncate(

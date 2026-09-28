@@ -138,11 +138,13 @@ function EditorHome({
 			}
 			let videoId: string | null = null;
 			let upload = file;
-			if (isSupportedAudioFile(file) && !isSupportedVideoFile(file)) {
+			const audioOnly =
+				isSupportedAudioFile(file) && !isSupportedVideoFile(file);
+			if (audioOnly) {
 				setImporting({ fileName: file.name, status: undefined, converting: 0 });
 				try {
-					const { convertAudioToVideo } = await import("@/lib/audio-to-video");
-					upload = await convertAudioToVideo(file, (converting) =>
+					const { wrapAudioInVideo } = await import("@/lib/audio-to-video");
+					upload = await wrapAudioInVideo(file, (converting) =>
 						setImporting((current) =>
 							current ? { ...current, converting } : current,
 						),
@@ -162,6 +164,8 @@ function EditorHome({
 			const ok = await importMediaFile({
 				file: upload,
 				orgId,
+				name: file.name.replace(/\.[^.]+$/, ""),
+				audioOnly,
 				setUploadStatus: (status) => {
 					setUploadStatus(status);
 					setImporting((current) =>
