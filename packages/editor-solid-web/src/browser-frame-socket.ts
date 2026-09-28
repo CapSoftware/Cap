@@ -258,6 +258,10 @@ class BrowserPreviewController {
 		this.playback?.resize(width, height);
 	}
 
+	private isCurrent(playback: BrowserLocalPlayback) {
+		return this.playback === playback;
+	}
+
 	async render(value: unknown) {
 		const request = frameRequest(value);
 		if (!request) throw new Error("Editor frame request is invalid");
@@ -268,7 +272,18 @@ class BrowserPreviewController {
 			(base.x !== this.previewBase.x || base.y !== this.previewBase.y);
 		if (base) this.previewBase = base;
 		if (!this.playback) {
-			if (this.creating) await this.creating;
+			if (!this.creating) return;
+			const playback = await this.creating;
+			// Creation sized the preview for the base it started with, so a
+			// base that arrived meanwhile still has to be applied.
+			if (
+				this.isCurrent(playback) &&
+				base &&
+				baseChanged &&
+				playback.resizeForBase(base.x, base.y)
+			) {
+				await playback.seek(this.desiredTime);
+			}
 			return;
 		}
 		if (base && baseChanged) this.playback.resizeForBase(base.x, base.y);
