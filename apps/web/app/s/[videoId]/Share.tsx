@@ -15,6 +15,7 @@ import {
 	use,
 	useCallback,
 	useEffect,
+	useId,
 	useMemo,
 	useOptimistic,
 	useRef,
@@ -46,9 +47,6 @@ const TimelineView = dynamic(importTimelineView, { ssr: false });
 // exists, so videos without a summary never download it. SSR still renders
 // the summary into the initial HTML when the data is already there.
 const SummaryChapters = dynamic(() => import("./_components/SummaryChapters"));
-
-/** Whether the viewer last left the comments rail collapsed. */
-const RAIL_COLLAPSED_KEY = "cap_share_rail_collapsed";
 
 /**
  * The interactive walkthrough behind the header's "How does this work?".
@@ -726,31 +724,12 @@ export const Share = ({
 	]);
 
 	const showRail = view === "classic" && !allSettingsDisabled;
+	const sidebarId = useId();
 	const [railCollapsed, setRailCollapsed] = useState(false);
 
-	// Read after mount, not during render: the server has no idea what the
-	// viewer collapsed last time, and guessing would hydrate the wrong width.
-	useEffect(() => {
-		try {
-			setRailCollapsed(
-				window.localStorage.getItem(RAIL_COLLAPSED_KEY) === "true",
-			);
-		} catch {
-			/* private mode; the default (open) is fine */
-		}
-	}, []);
-
 	const toggleRail = useCallback(() => {
-		// Persist outside the updater: React may invoke updater functions more
-		// than once, and localStorage writes don't belong in render-adjacent code.
-		const next = !railCollapsed;
-		setRailCollapsed(next);
-		try {
-			window.localStorage.setItem(RAIL_COLLAPSED_KEY, String(next));
-		} catch {
-			/* not worth failing the toggle over */
-		}
-	}, [railCollapsed]);
+		setRailCollapsed((collapsed) => !collapsed);
+	}, []);
 
 	return (
 		<CaptionProvider
@@ -1034,7 +1013,12 @@ export const Share = ({
 												 * absolute placement (desktop) keeps the toolbar pill
 												 * centred rather than pushed aside.
 												 */}
-												<div className="relative">
+												<div
+													className={clsx(
+														"relative",
+														showRail && railCollapsed && "lg:min-h-10 lg:px-40",
+													)}
+												>
 													{timelineAvailable && (
 														<div className="mb-3 flex justify-start lg:absolute lg:left-0 lg:top-1/2 lg:mb-0 lg:-translate-y-1/2">
 															<ShareViewToggle
@@ -1053,6 +1037,18 @@ export const Share = ({
 														canRecordMedia={canRecordMedia && !isScreenshot}
 														data={data}
 													/>
+													{showRail && railCollapsed && (
+														<button
+															type="button"
+															onClick={toggleRail}
+															aria-controls={sidebarId}
+															aria-expanded={false}
+															className="hidden absolute right-0 top-1/2 items-center justify-center gap-2 -translate-y-1/2 rounded-lg border border-gray-5 bg-white h-10 px-3 text-sm font-medium text-gray-10 shadow-sm transition-colors hover:text-gray-12 lg:flex"
+														>
+															<ChevronGlyph direction="left" />
+															Show sidebar
+														</button>
+													)}
 												</div>
 											</motion.div>
 										) : (
@@ -1157,6 +1153,7 @@ export const Share = ({
 					 */}
 					{showRail && (
 						<aside
+							id={sidebarId}
 							className={clsx(
 								"shrink-0 px-4 pb-8 lg:p-0 lg:h-full lg:border-l lg:border-gray-5 lg:bg-white lg:overflow-hidden",
 								reduceMotion
@@ -1165,10 +1162,6 @@ export const Share = ({
 								railCollapsed ? "lg:w-0" : "lg:w-[22rem] xl:w-[24rem]",
 							)}
 						>
-							{/* Hidden rather than merely clipped while collapsed, so the
-						    panel's inputs leave the tab order. Scoped to lg: the
-						    stored preference is a desktop one and the phone layout
-						    shows the panel regardless. */}
 							<div
 								className={clsx(
 									"lg:h-full lg:w-[22rem] xl:w-[24rem]",
@@ -1176,6 +1169,7 @@ export const Share = ({
 								)}
 							>
 								<Sidebar
+									sidebarId={sidebarId}
 									data={sidebarData}
 									videoSettings={videoSettings}
 									commentsData={commentsData}
@@ -1196,20 +1190,6 @@ export const Share = ({
 								/>
 							</div>
 						</aside>
-					)}
-
-					{/* Only handle back to the panel once it's away. Sits on the edge
-					    it collapsed into, so the gesture reverses itself. */}
-					{showRail && railCollapsed && (
-						<button
-							type="button"
-							onClick={toggleRail}
-							aria-label="Show comments"
-							title="Show comments"
-							className="hidden fixed right-0 top-1/2 z-30 items-center justify-center -translate-y-1/2 rounded-l-lg border border-r-0 border-gray-5 bg-white h-16 w-6 text-gray-10 shadow-sm transition-colors hover:text-gray-12 lg:flex"
-						>
-							<ChevronGlyph direction="left" />
-						</button>
 					)}
 				</div>
 			</PlaybackProvider>
