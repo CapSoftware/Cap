@@ -78,6 +78,7 @@ import { PasswordOverlay } from "./_components/PasswordOverlay";
 import { PendingRecordingShare } from "./_components/PendingRecordingShare";
 import { ShareHeader } from "./_components/ShareHeader";
 import { Share } from "./Share";
+import { isWebStudioEnabledForEmail } from "@/lib/web-studio-rollout";
 
 const VIEW_NOTIFICATION_DELAY_MS = 2 * 60 * 1000;
 const VIDEO_ID_PATTERN = /^[0-9abcdefghjkmnpqrstvwxyz]+$/;
@@ -912,6 +913,7 @@ async function AuthorizedContent({
 						canManageSharePageBranding={canManageSharePageBranding}
 						canDownload={canDownloadVideo}
 						hasEdits={videoHasEdits}
+						opensStudio={!!user && isWebStudioEnabledForEmail(user.email)}
 						// Caught separately from the copy the sidebar consumes: the
 						// header renders for everyone, and a failed count is worth
 						// less than the header it would otherwise take down.

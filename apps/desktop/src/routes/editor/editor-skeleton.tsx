@@ -4,7 +4,11 @@ import { type as ostype } from "@tauri-apps/plugin-os";
 import { createSignal, For, Show } from "solid-js";
 import CaptionControlsMacOS from "~/components/titlebar/controls/CaptionControlsMacOS";
 import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
-import { DEFAULT_TIMELINE_HEIGHT, editorVerticalLayout } from "./editor-layout";
+import {
+	CLIP_STRIP_SPACE,
+	DEFAULT_TIMELINE_HEIGHT,
+	editorVerticalLayout,
+} from "./editor-layout";
 import { usePreparingEditorModel } from "./preparing-editor-context";
 import {
 	type PreparingEditorModel,
@@ -12,6 +16,8 @@ import {
 } from "./preparing-editor-model";
 import { PreparingFrame } from "./preparing-frame";
 import { PreparingTimeline } from "./preparing-timeline";
+
+const isWebEditor = import.meta.env.VITE_CAP_WEB_EDITOR === "true";
 
 const DISABLED_CONTROL =
 	"h-7 px-2 rounded-[7px] text-xs text-ed-text-3 disabled:opacity-50 disabled:cursor-default";
@@ -196,7 +202,7 @@ export function EditorSkeleton(props: { model?: PreparingEditorModel } = {}) {
 	});
 	const layout = () =>
 		editorVerticalLayout(
-			(bounds.height ?? 576) - 16,
+			(bounds.height ?? 576) - 16 - (isWebEditor ? CLIP_STRIP_SPACE : 0),
 			savedHeight() ?? DEFAULT_TIMELINE_HEIGHT,
 		);
 	return (
@@ -220,6 +226,11 @@ export function EditorSkeleton(props: { model?: PreparingEditorModel } = {}) {
 					<PreparingPlayer model={model} />
 					<PreparingSidebar />
 				</div>
+				<Show when={isWebEditor}>
+					<div class="flex-none px-2">
+						<div class="h-[48px] rounded-xl bg-ed-card shadow-ed-card" />
+					</div>
+				</Show>
 				<div
 					class="flex-none min-h-0 px-2 overflow-hidden"
 					style={{ height: `${layout().timelineHeight}px` }}

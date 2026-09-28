@@ -53,6 +53,7 @@ import type { Spaces } from "@/app/(org)/dashboard/dashboard-data";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { Tooltip } from "@/components/Tooltip";
+import { rememberEntryFrame } from "@/lib/editor-entry-frame";
 import {
 	copyRichVideoLink,
 	videoPreviewImageUrl,
@@ -142,6 +143,7 @@ export const ShareHeader = ({
 	canManageSharePageBranding = false,
 	canDownload = false,
 	hasEdits = false,
+	opensStudio = false,
 	views,
 }: {
 	data: VideoData;
@@ -170,6 +172,8 @@ export const ShareHeader = ({
 	canManageSharePageBranding?: boolean;
 	canDownload?: boolean;
 	hasEdits?: boolean;
+	/** The owner edits in the studio editor, which doesn't need Cap Pro to open. */
+	opensStudio?: boolean;
 	/**
 	 * Shown to every viewer, not just the owner. The sidebar's analytics row is
 	 * members-only, which left a shared link with no sense of reach at all.
@@ -564,12 +568,20 @@ export const ShareHeader = ({
 		!data.hasActiveUpload &&
 		(data.source.type === "desktopMP4" || data.source.type === "webMP4");
 	const handleEditVideo = () => {
-		if (userIsOwnerAndNotPro) {
+		if (userIsOwnerAndNotPro && !opensStudio) {
 			setUpgradeModalOpen(true);
 			return;
 		}
 
-		navigateWithTransition("edit-enter", () => push(`/s/${data.id}/edit`));
+		rememberEntryFrame(
+			data.id,
+			document.querySelector<HTMLVideoElement>("[data-edit-video] video"),
+		);
+		navigateWithTransition(
+			"edit-enter",
+			() => push(`/s/${data.id}/edit${opensStudio ? "/studio" : ""}`),
+			{ waitForNextPage: opensStudio },
+		);
 	};
 
 	const handleHideBranding = async () => {

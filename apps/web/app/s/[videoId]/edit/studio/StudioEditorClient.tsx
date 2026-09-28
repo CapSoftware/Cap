@@ -12,6 +12,7 @@ import {
 	stripEditorCaptionContent,
 } from "@/lib/editor-caption-access";
 import type { EditorClipCapture } from "@/lib/editor-clip-recorder";
+import { takeEntryFrame } from "@/lib/editor-entry-frame";
 import {
 	captureEditorLocalDraft,
 	clearEditorLocalDraft,
@@ -19,9 +20,11 @@ import {
 	readEditorLocalDraft,
 } from "@/lib/editor-local-draft";
 import type { WebEditorVideoImportProgress } from "@/lib/editor-video-import-client";
+import { nextPageReady } from "@/utils/view-transition";
 import { SharedLinkCard } from "../SharedLinkCard";
 import type { ClipRecorderContext } from "./clip-recorder-context";
 import { EditorClipRecorder } from "./EditorClipRecorder";
+import { EditorEntryFrame } from "./EditorEntryFrame";
 import { EditorHostBridge } from "./editor-host";
 
 const UpgradeModal = dynamic(
@@ -64,6 +67,8 @@ export function StudioEditorClient(props: {
 	useAppPage();
 	const [recordClipOpen, setRecordClipOpen] = useState(false);
 	const [clipRecorderBusy, setClipRecorderBusy] = useState(false);
+	const [entryFrame, setEntryFrame] = useState<string | null | undefined>();
+	const [editorPainted, setEditorPainted] = useState(false);
 	const [clipRecorderContext, setClipRecorderContext] =
 		useState<ClipRecorderContext | null>(null);
 	const [upgradeOpen, setUpgradeOpen] = useState(false);
@@ -485,6 +490,13 @@ export function StudioEditorClient(props: {
 	}, [onFrameLoad, sessionId]);
 
 	useEffect(() => {
+		setEntryFrame(takeEntryFrame(videoId));
+	}, [videoId]);
+	useEffect(() => {
+		if (entryFrame !== undefined) nextPageReady();
+	}, [entryFrame]);
+
+	useEffect(() => {
 		if (!justRecorded) return;
 		// A reload should open the plain editor, not repeat the notice.
 		const url = new URL(window.location.href);
@@ -573,12 +585,16 @@ export function StudioEditorClient(props: {
 				}
 			/>
 			<div className="relative min-h-0 flex-1">
+				{!editorPainted && <EditorEntryFrame frame={entryFrame ?? null} />}
 				<iframe
 					ref={iframeRef}
 					title="Cap editor"
 					src={editorSrc}
-					className="h-full w-full border-0"
-					onLoad={(event) => onFrameLoad(event.currentTarget)}
+					className="relative h-full w-full border-0"
+					onLoad={(event) => {
+						onFrameLoad(event.currentTarget);
+						setTimeout(() => setEditorPainted(true), 800);
+					}}
 				/>
 				{recordClipOpen && (
 					<EditorClipRecorder

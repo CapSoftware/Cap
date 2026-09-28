@@ -56,7 +56,11 @@ import {
 	useEditorInstanceContext,
 } from "./context";
 import { EditorErrorScreen } from "./EditorErrorScreen";
-import { DEFAULT_TIMELINE_HEIGHT, editorVerticalLayout } from "./editor-layout";
+import {
+	CLIP_STRIP_SPACE,
+	DEFAULT_TIMELINE_HEIGHT,
+	editorVerticalLayout,
+} from "./editor-layout";
 import { EditorSkeleton } from "./editor-skeleton";
 import { Header, type TitleSaveRegistration } from "./Header";
 import { ImportProgress } from "./ImportProgress";
@@ -90,10 +94,11 @@ const MIN_COMPACT_TIMELINE_HEIGHT = 144;
 // reports the height its ruler and rows need inside that box.
 const TIMELINE_CARD_PADDING_Y = 22;
 const DEFAULT_TIMELINE_CONTENT_HEIGHT = 124;
-// Vertical gutter between the player row and the timeline card, plus the
-// gutter below the timeline card; both live inside the measured layout box.
-const LAYOUT_GUTTERS = 16;
 const isWebEditor = import.meta.env.VITE_CAP_WEB_EDITOR === "true";
+// Vertical gutter between the player row and the timeline card, plus the
+// gutter below the timeline card (and the web clip strip); all live inside
+// the measured layout box.
+const LAYOUT_GUTTERS = 16 + (isWebEditor ? CLIP_STRIP_SPACE : 0);
 
 const scheduleIdleWork = (callback: () => void) => {
 	const win = window as Window & {

@@ -534,6 +534,7 @@ export const ShareVideo = forwardRef<
 		return (
 			<>
 				<div
+					data-edit-video
 					className="relative h-full"
 					style={{ viewTransitionName: "cap-edit-video" }}
 				>
