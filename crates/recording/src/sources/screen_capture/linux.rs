@@ -1652,7 +1652,6 @@ impl AudioSource for SystemAudioSource {
         Self: Sized,
     {
         let device_name = config.device_name.clone();
-        let setup = <crate::sources::Microphone as AudioSource>::setup(config.feed_lock, tx, ctx);
         if let Some(route) = config.application_route.clone() {
             let cancel = ctx.stop_token().child_token();
             ctx.tasks()
@@ -1664,6 +1663,7 @@ impl AudioSource for SystemAudioSource {
                     Ok(())
                 });
         }
+        let setup = <crate::sources::Microphone as AudioSource>::setup(config.feed_lock, tx, ctx);
         async move {
             let inner = setup
                 .await
