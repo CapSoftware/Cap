@@ -1,6 +1,9 @@
 use crate::{
     AudioFrame, SetupCtx, output_pipeline,
-    screen_capture::{ScreenCaptureConfig, ScreenCaptureFormat, cadence::FrameCadenceGate},
+    screen_capture::{
+        AudioCaptureSource, ScreenCaptureConfig, ScreenCaptureFormat, ScreenCaptureTarget,
+        cadence::FrameCadenceGate,
+    },
 };
 use ::windows::Win32::Graphics::Direct3D11::{
     D3D11_BIND_SHADER_RESOURCE, D3D11_BOX, D3D11_SUBRESOURCE_DATA, D3D11_TEXTURE2D_DESC,
@@ -16,8 +19,9 @@ use futures::{
     channel::{mpsc, oneshot},
 };
 use scap_ffmpeg::*;
-use scap_targets::{Display, DisplayId};
+use scap_targets::{Display, Window};
 use std::{
+    ffi::c_void,
     sync::{
         Arc, Mutex,
         atomic::{self, AtomicBool, AtomicU32},
@@ -355,9 +359,13 @@ impl ScreenCaptureConfig<Direct3DCapture> {
     pub async fn to_sources(
         &self,
     ) -> anyhow::Result<(VideoSourceConfig, Option<SystemAudioSourceConfig>)> {
+        let crop_bounds = match self.config.target {
+            ScreenCaptureTarget::Area { .. } => self.config.crop_bounds,
+            _ => None,
+        };
         let mut settings = scap_direct3d::Settings {
             pixel_format: Direct3DCapture::PIXEL_FORMAT,
-            crop: self.config.crop_bounds.map(|b| {
+            crop: crop_bounds.map(|b| {
                 let position = b.position();
                 let size = b.size().map(|v| (v / 2.0).floor() * 2.0);
 
@@ -382,8 +390,19 @@ impl ScreenCaptureConfig<Direct3DCapture> {
             settings.is_border_required = Some(false);
         }
 
-        if let Ok(true) = scap_direct3d::Settings::can_is_cursor_capture_enabled() {
-            settings.is_cursor_capture_enabled = Some(self.config.show_cursor);
+        match scap_direct3d::Settings::can_is_cursor_capture_enabled() {
+            Ok(true) => settings.is_cursor_capture_enabled = Some(self.config.show_cursor),
+            Ok(false) if !self.config.show_cursor => {
+                return Err(anyhow!(
+                    "Cursor hiding is not supported by this Windows version"
+                ));
+            }
+            Err(error) if !self.config.show_cursor => {
+                return Err(anyhow!(
+                    "Could not enable cursor visibility control: {error}"
+                ));
+            }
+            _ => {}
         }
 
         if let Ok(true) = scap_direct3d::Settings::can_min_update_interval() {
@@ -393,16 +412,27 @@ impl ScreenCaptureConfig<Direct3DCapture> {
 
         settings.fps = Some(self.config.fps);
 
-        // Store the display ID instead of GraphicsCaptureItem to avoid COM threading issues
-        // The GraphicsCaptureItem will be created on the capture thread
+        let audio_source = match self.audio_source {
+            AudioCaptureSource::None => None,
+            AudioCaptureSource::System => Some(SystemAudioSourceConfig::System),
+            AudioCaptureSource::Application => {
+                let process_id = self.config.target.application_pid().ok_or_else(|| {
+                    anyhow!(
+                        "Application audio requires a live window target with an owning process"
+                    )
+                })?;
+                Some(SystemAudioSourceConfig::Application { process_id })
+            }
+        };
+
         Ok((
             VideoSourceConfig {
                 video_info: self.video_info,
-                display_id: self.config.display.clone(),
+                target: self.config.target.clone(),
                 settings,
                 d3d_device: self.d3d_device.clone(),
             },
-            self.system_audio.then_some(SystemAudioSourceConfig),
+            audio_source,
         ))
     }
 }
@@ -415,7 +445,7 @@ pub enum VideoSourceError {
 
 pub struct VideoSourceConfig {
     video_info: VideoInfo,
-    display_id: DisplayId,
+    target: ScreenCaptureTarget,
     settings: scap_direct3d::Settings,
     pub d3d_device: ID3D11Device,
 }
@@ -486,7 +516,7 @@ struct CaptureClosureEvent {
 }
 
 struct CreateCapturerParams<'a> {
-    display_id: &'a DisplayId,
+    target: &'a ScreenCaptureTarget,
     settings: &'a scap_direct3d::Settings,
     d3d_device: &'a ID3D11Device,
     video_tx: &'a mpsc::Sender<VideoFrame>,
@@ -511,11 +541,23 @@ fn create_d3d_capturer(
     params: &CreateCapturerParams,
     error_tx: &mpsc::Sender<CaptureClosureEvent>,
 ) -> anyhow::Result<scap_direct3d::Capturer> {
-    let capture_item = Display::from_id(params.display_id)
-        .ok_or_else(|| anyhow!("Display not found for ID: {:?}", params.display_id))?
-        .raw_handle()
-        .try_as_capture_item()
-        .map_err(|e| anyhow!("Failed to create GraphicsCaptureItem: {}", e))?;
+    let capture_item = match params.target {
+        ScreenCaptureTarget::Display { id } | ScreenCaptureTarget::Area { screen: id, .. } => {
+            Display::from_id(id)
+                .ok_or_else(|| anyhow!("Display not found for ID: {id:?}"))?
+                .raw_handle()
+                .try_as_capture_item()
+                .map_err(|error| anyhow!("Failed to create display capture item: {error}"))?
+        }
+        ScreenCaptureTarget::Window { id } => Window::from_id(id)
+            .ok_or_else(|| anyhow!("Window not found for ID: {id:?}"))?
+            .raw_handle()
+            .try_as_capture_item()
+            .map_err(|error| anyhow!("Failed to create window capture item: {error}"))?,
+        ScreenCaptureTarget::CameraOnly => {
+            return Err(anyhow!("Camera-only target has no screen capture item"));
+        }
+    };
 
     scap_direct3d::Capturer::new(
         capture_item,
@@ -660,7 +702,7 @@ impl output_pipeline::VideoSource for VideoSource {
     async fn setup(
         VideoSourceConfig {
             video_info,
-            display_id,
+            target,
             settings,
             d3d_device,
         }: Self::Config,
@@ -703,6 +745,7 @@ impl output_pipeline::VideoSource for VideoSource {
         };
 
         let stats_health_tx = ctx.health_tx().clone();
+        let capture_target = target.clone();
         ctx.tasks().spawn_thread("d3d-capture-thread", {
             let restart_counter = restart_counter.clone();
             let frame_scaler = frame_scaler.clone();
@@ -722,7 +765,7 @@ impl output_pipeline::VideoSource for VideoSource {
                 macro_rules! build_params {
                     ($device:expr) => {
                         CreateCapturerParams {
-                            display_id: &display_id,
+                            target: &capture_target,
                             settings: &settings,
                             d3d_device: $device,
                             video_tx: &video_tx,
@@ -969,7 +1012,7 @@ impl output_pipeline::VideoSource for VideoSource {
                         output_pipeline::emit_health(
                             &monitor_health_tx,
                             output_pipeline::PipelineHealthEvent::CaptureTargetLost {
-                                target: "display".to_string(),
+                                target: target.kind_str().to_lowercase(),
                             },
                         );
                         return Err(anyhow!("Windows capture target lost: {}", event.message));
@@ -1066,7 +1109,10 @@ const DEVICE_POLL_INTERVAL: Duration = Duration::from_secs(2);
 const SILENCE_CHUNK_DURATION: Duration = Duration::from_millis(20);
 const SILENCE_CHUNKS_ON_SWITCH: usize = 5;
 
-pub struct SystemAudioSourceConfig;
+pub enum SystemAudioSourceConfig {
+    System,
+    Application { process_id: u32 },
+}
 
 struct CapturerState {
     capturer: Option<scap_cpal::Capturer>,
@@ -1075,9 +1121,155 @@ struct CapturerState {
 }
 
 pub struct SystemAudioSource {
-    state: Arc<std::sync::Mutex<CapturerState>>,
+    state: SystemAudioState,
     cancel_token: CancellationToken,
     audio_info: AudioInfo,
+}
+
+enum SystemAudioState {
+    System(Arc<std::sync::Mutex<CapturerState>>),
+    Application(ProcessLoopbackCapture),
+}
+
+struct ProcessAudioCallbackContext {
+    tx: std::sync::Mutex<mpsc::Sender<AudioFrame>>,
+    health_tx: output_pipeline::HealthSender,
+    captured: AtomicU32,
+    dropped: AtomicU32,
+}
+
+struct ProcessLoopbackCapture {
+    handle: *mut c_void,
+    _callback_context: Box<ProcessAudioCallbackContext>,
+}
+
+unsafe impl Send for ProcessLoopbackCapture {}
+
+unsafe extern "C" {
+    fn cap_process_audio_start(
+        process_id: u32,
+        callback: unsafe extern "C" fn(*const f32, u32, u64, *mut c_void),
+        context: *mut c_void,
+        error: *mut i32,
+    ) -> *mut c_void;
+    fn cap_process_audio_stop(handle: *mut c_void);
+    fn cap_process_audio_play(handle: *mut c_void) -> i32;
+    fn cap_process_audio_pause(handle: *mut c_void) -> i32;
+}
+
+impl ProcessLoopbackCapture {
+    fn new(
+        process_id: u32,
+        tx: mpsc::Sender<AudioFrame>,
+        health_tx: output_pipeline::HealthSender,
+    ) -> anyhow::Result<Self> {
+        let mut callback_context = Box::new(ProcessAudioCallbackContext {
+            tx: std::sync::Mutex::new(tx),
+            health_tx,
+            captured: AtomicU32::new(0),
+            dropped: AtomicU32::new(0),
+        });
+        let context = std::ptr::from_mut(callback_context.as_mut()).cast::<c_void>();
+        let mut error = 0;
+        let handle = unsafe {
+            cap_process_audio_start(process_id, process_audio_callback, context, &mut error)
+        };
+        if handle.is_null() {
+            return Err(anyhow!(
+                "Failed to initialize application audio capture for process {process_id} (HRESULT 0x{:08X}). Application audio requires Windows 10 build 20348 or newer",
+                error as u32
+            ));
+        }
+
+        Ok(Self {
+            handle,
+            _callback_context: callback_context,
+        })
+    }
+
+    fn play(&self) -> anyhow::Result<()> {
+        let result = unsafe { cap_process_audio_play(self.handle) };
+        hresult_result(result, "start")
+    }
+
+    fn pause(&self) -> anyhow::Result<()> {
+        let result = unsafe { cap_process_audio_pause(self.handle) };
+        hresult_result(result, "pause")
+    }
+}
+
+impl Drop for ProcessLoopbackCapture {
+    fn drop(&mut self) {
+        unsafe { cap_process_audio_stop(self.handle) };
+        self.handle = std::ptr::null_mut();
+    }
+}
+
+fn hresult_result(result: i32, operation: &str) -> anyhow::Result<()> {
+    if result >= 0 {
+        Ok(())
+    } else {
+        Err(anyhow!(
+            "Failed to {operation} application audio capture (HRESULT 0x{:08X})",
+            result as u32
+        ))
+    }
+}
+
+unsafe extern "C" fn process_audio_callback(
+    data: *const f32,
+    frames: u32,
+    performance_position: u64,
+    context: *mut c_void,
+) {
+    if data.is_null() || context.is_null() || frames == 0 {
+        return;
+    }
+
+    let _ = std::panic::catch_unwind(|| {
+        let context = unsafe { &*(context.cast::<ProcessAudioCallbackContext>()) };
+        let sample_count = frames as usize * 2;
+        let samples = unsafe { std::slice::from_raw_parts(data, sample_count) };
+        let mut frame = ffmpeg::frame::Audio::new(
+            ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Packed),
+            frames as usize,
+            ffmpeg::util::channel_layout::ChannelLayout::STEREO,
+        );
+        frame.set_rate(48_000);
+        let destination = frame.data_mut(0);
+        let byte_len = sample_count * size_of::<f32>();
+        if destination.len() < byte_len {
+            context.dropped.fetch_add(1, atomic::Ordering::Relaxed);
+            return;
+        }
+        let source = unsafe { std::slice::from_raw_parts(samples.as_ptr().cast::<u8>(), byte_len) };
+        destination[..byte_len].copy_from_slice(source);
+
+        let timestamp = i64::try_from(performance_position)
+            .ok()
+            .filter(|position| *position > 0)
+            .map(PerformanceCounterTimestamp::from_100ns)
+            .unwrap_or_else(PerformanceCounterTimestamp::now);
+        let audio_frame = AudioFrame::new(frame, Timestamp::PerformanceCounter(timestamp));
+        let Ok(mut tx) = context.tx.lock() else {
+            context.dropped.fetch_add(1, atomic::Ordering::Relaxed);
+            return;
+        };
+        match output_pipeline::send_with_stall_budget_futures(
+            &mut tx,
+            audio_frame,
+            "screen-application-audio",
+            &context.health_tx,
+        ) {
+            output_pipeline::StallSendOutcome::Sent => {
+                context.captured.fetch_add(1, atomic::Ordering::Relaxed);
+            }
+            output_pipeline::StallSendOutcome::StalledAndDropped { .. }
+            | output_pipeline::StallSendOutcome::Disconnected => {
+                context.dropped.fetch_add(1, atomic::Ordering::Relaxed);
+            }
+        }
+    });
 }
 
 struct SystemAudioResampler {
@@ -1270,7 +1462,7 @@ impl output_pipeline::AudioSource for SystemAudioSource {
     type Config = SystemAudioSourceConfig;
 
     fn setup(
-        _: Self::Config,
+        config: Self::Config,
         tx: mpsc::Sender<AudioFrame>,
         ctx: &mut SetupCtx,
     ) -> impl Future<Output = anyhow::Result<Self>> + 'static
@@ -1288,6 +1480,22 @@ impl output_pipeline::AudioSource for SystemAudioSource {
         });
 
         let audio_info = crate::sources::audio_mixer::AudioMixer::INFO;
+        if let SystemAudioSourceConfig::Application { process_id } = config {
+            let health_tx = ctx.health_tx().clone();
+            return futures::future::Either::Left(async move {
+                let capture = tokio::task::spawn_blocking(move || {
+                    ProcessLoopbackCapture::new(process_id, tx, health_tx)
+                })
+                .await??;
+                info!(process_id, "Application audio capture initialized");
+                Ok(Self {
+                    state: SystemAudioState::Application(capture),
+                    cancel_token,
+                    audio_info,
+                })
+            });
+        }
+
         let device_name = get_current_device_name();
 
         let frame_counter: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
@@ -1459,7 +1667,7 @@ impl output_pipeline::AudioSource for SystemAudioSource {
 
         let cancel = cancel_token.clone();
 
-        async move {
+        futures::future::Either::Right(async move {
             let capturer = setup_result.map_err(|e| anyhow!("{e}"))?;
             if capturer.has_silence_keepalive() {
                 info!("System audio loopback silence keepalive active");
@@ -1509,11 +1717,11 @@ impl output_pipeline::AudioSource for SystemAudioSource {
             });
 
             Ok(Self {
-                state,
+                state: SystemAudioState::System(state),
                 cancel_token: cancel,
                 audio_info,
             })
-        }
+        })
     }
 
     fn audio_info(&self) -> cap_media_info::AudioInfo {
@@ -1521,28 +1729,37 @@ impl output_pipeline::AudioSource for SystemAudioSource {
     }
 
     fn start(&mut self) -> impl Future<Output = anyhow::Result<()>> {
-        let result = match self.state.lock() {
-            Ok(mut guard) => {
-                guard.is_started = true;
-                match &guard.capturer {
-                    Some(c) => c.play().map_err(|e| anyhow!("{e}")),
-                    None => Ok(()),
+        let result = match &self.state {
+            SystemAudioState::System(state) => match state.lock() {
+                Ok(mut guard) => {
+                    guard.is_started = true;
+                    match &guard.capturer {
+                        Some(c) => c.play().map_err(|e| anyhow!("{e}")),
+                        None => Ok(()),
+                    }
                 }
-            }
-            Err(_) => Err(anyhow!("System audio state lock poisoned")),
+                Err(_) => Err(anyhow!("System audio state lock poisoned")),
+            },
+            SystemAudioState::Application(capture) => capture.play(),
         };
         async move { result }
     }
 
     fn stop(&mut self) -> impl Future<Output = anyhow::Result<()>> {
         self.cancel_token.cancel();
-        if let Ok(guard) = self.state.lock()
-            && let Some(ref capturer) = guard.capturer
-            && let Err(err) = capturer.pause()
-        {
-            warn!("system audio capturer pause failed: {err}");
-        }
-        async { Ok(()) }
+        let result = match &self.state {
+            SystemAudioState::System(state) => {
+                if let Ok(guard) = state.lock()
+                    && let Some(ref capturer) = guard.capturer
+                    && let Err(err) = capturer.pause()
+                {
+                    warn!("system audio capturer pause failed: {err}");
+                }
+                Ok(())
+            }
+            SystemAudioState::Application(capture) => capture.pause(),
+        };
+        async move { result }
     }
 }
 

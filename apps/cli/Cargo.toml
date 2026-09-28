@@ -52,6 +52,7 @@ workspace-hack = { version = "0.1", path = "../../crates/workspace-hack" }
 libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
+scap-direct3d = { path = "../../crates/scap-direct3d" }
 windows = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_Storage_FileSystem",

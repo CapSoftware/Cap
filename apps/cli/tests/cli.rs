@@ -583,7 +583,7 @@ fn guide_json_is_parseable_and_self_describing() {
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let json = parse_json(&output);
     assert_eq!(json["binary"], "cap");
-    assert_eq!(json["schemaVersion"], 3);
+    assert_eq!(json["schemaVersion"], 4);
     assert!(json["commands"].is_array());
     assert!(json["env"].is_array());
     assert!(json["outputConvention"].is_object());
@@ -767,7 +767,9 @@ fn agent_installer_dry_run_is_machine_readable() {
     assert_eq!(json["target"], "codex");
     assert_eq!(json["dryRun"], true);
     assert_eq!(json["applied"], false);
-    assert_eq!(json["changes"].as_array().map(Vec::len), Some(2));
+    let changes = json["changes"].as_array().unwrap();
+    assert!(changes.iter().any(|change| change["component"] == "skill"));
+    assert!(changes.iter().any(|change| change["component"] == "mcp"));
 }
 
 #[test]
@@ -1112,12 +1114,21 @@ fn doctor_check_ids_are_the_pinned_vocabulary() {
             "ffmpeg",
             "screenRecordingPermission",
             "screenCaptureKit",
+            "applicationAudio",
             "cliInstall"
         ]
     );
 
     #[cfg(not(target_os = "macos"))]
-    assert_eq!(ids, ["ffmpeg", "screenRecordingPermission", "cliInstall"]);
+    assert_eq!(
+        ids,
+        [
+            "ffmpeg",
+            "screenRecordingPermission",
+            "applicationAudio",
+            "cliInstall"
+        ]
+    );
 }
 
 #[test]

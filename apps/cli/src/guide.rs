@@ -2,7 +2,7 @@ use serde::Serialize;
 
 use crate::{OutputFormat, write_json};
 
-const GUIDE_SCHEMA_VERSION: u32 = 3;
+const GUIDE_SCHEMA_VERSION: u32 = 4;
 
 /// Machine-readable capability + schema manifest. `cap guide --json` is the single document an agent
 /// can fetch to learn the output convention, env vars, exit codes, and the per-command output shape
@@ -169,7 +169,7 @@ fn build() -> Guide {
             CommandDoc {
                 requires_duration: false,
                 notes: Some(
-                    "The `started` then `stopped` sequence applies to the foreground run. With `--detach` the stream emits only `started` (or `error`) and returns immediately with recordingId+pid; the `stopped` event is delivered by `cap record stop`.",
+                    "Select exactly one screen or window. --hide-cursor disables cursor capture. --audio-source accepts none, system, or application; application requires --window and captures the owning process tree without falling back to the system mix. Linux application audio requires X11 because the Wayland screen-cast portal does not expose process identity. --system-audio remains an alias for --audio-source system. With --detach all capture flags are forwarded to the worker; the stream emits only started (or error) and returns immediately with recordingId+pid, then cap record stop delivers stopped.",
                 ),
                 ..cmd(
                     "record start",

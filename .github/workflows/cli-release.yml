@@ -1,0 +1,264 @@
+name: "cli-release"
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+      sha:
+        required: true
+        type: string
+      release_tag:
+        required: false
+        type: string
+        default: ""
+    secrets:
+      APPLE_API_ISSUER:
+        required: false
+      APPLE_API_KEY:
+        required: false
+      APPLE_API_KEY_FILE:
+        required: false
+      APPLE_CERTIFICATE:
+        required: false
+      APPLE_CERTIFICATE_PASSWORD:
+        required: false
+      APPLE_SIGNING_IDENTITY:
+        required: false
+      SIGNPATH_API_TOKEN:
+        required: false
+      SIGNPATH_ORGANIZATION_ID:
+        required: false
+      SIGNPATH_PROJECT_SLUG:
+        required: false
+      SIGNPATH_SIGNING_POLICY_SLUG:
+        required: false
+      SIGNPATH_ARTIFACT_CONFIGURATION_SLUG:
+        required: false
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version used in artifact names"
+        required: true
+        type: string
+      sha:
+        description: "Commit to build"
+        required: false
+        type: string
+      release_tag:
+        description: "Existing GitHub release tag to receive the archives"
+        required: false
+        type: string
+
+jobs:
+  build:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-pc-windows-msvc
+            runner: windows-2022
+            platform: windows
+            arch: x86_64
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-24.04
+            platform: linux
+            arch: x86_64
+          - target: x86_64-apple-darwin
+            runner: macos-15
+            platform: macos
+            arch: x86_64
+          - target: aarch64-apple-darwin
+            runner: macos-15
+            platform: macos
+            arch: aarch64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha || github.sha }}
+
+      - name: Install Linux dependencies
+        if: ${{ runner.os == 'Linux' }}
+        uses: ./.github/actions/install-desktop-deps
+
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: ${{ matrix.target }}
+          prefix-key: v1-rust-cli-release
+          save-cache: true
+
+      - uses: ./.github/actions/setup-js
+
+      - name: Create Apple API key
+        if: ${{ runner.os == 'macOS' }}
+        shell: bash
+        run: echo "${{ secrets.APPLE_API_KEY_FILE }}" > api.p8
+
+      - uses: apple-actions/import-codesign-certs@8f3fb608891dd2244cdab3d69cd68c0d37a7fe93
+        if: ${{ runner.os == 'macOS' }}
+        with:
+          p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
+          p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+
+      - name: Prepare native dependencies
+        shell: bash
+        env:
+          RUST_TARGET_TRIPLE: ${{ matrix.target }}
+        run: bun run cap-setup
+
+      - name: Build CLI
+        shell: bash
+        env:
+          RUST_TARGET_TRIPLE: ${{ matrix.target }}
+          CAP_BUILD_REVISION: ${{ inputs.sha || github.sha }}
+        run: cargo build --locked --release -p cap --target ${{ matrix.target }}
+
+      - name: Stage Windows CLI for Authenticode signing
+        if: ${{ runner.os == 'Windows' }}
+        shell: pwsh
+        run: ./scripts/windows-release-signing.ps1 -Operation Stage -PayloadKind Cli -Target "${{ matrix.target }}" -WorkspaceRoot "$env:GITHUB_WORKSPACE"
+
+      - name: Upload unsigned Windows CLI
+        if: ${{ runner.os == 'Windows' }}
+        id: upload_unsigned_windows_cli
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: unsigned-windows-cli
+          path: target/${{ matrix.target }}/release/windows-signing-cli/payload
+          if-no-files-found: error
+
+      - name: Submit Windows CLI signing request
+        if: ${{ runner.os == 'Windows' }}
+        timeout-minutes: 90
+        uses: signpath/github-action-submit-signing-request@ced31329c0317e779dad2eec2a7c3bb46ea1343e
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ secrets.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ secrets.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ secrets.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ secrets.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
+          github-artifact-id: ${{ steps.upload_unsigned_windows_cli.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 5400
+          service-unavailable-timeout-in-seconds: 5400
+          output-artifact-directory: signed-windows-payload
+
+      - name: Restore signed Windows CLI
+        if: ${{ runner.os == 'Windows' }}
+        shell: pwsh
+        run: ./scripts/windows-release-signing.ps1 -Operation Restore -PayloadKind Cli -Target "${{ matrix.target }}" -WorkspaceRoot "$env:GITHUB_WORKSPACE"
+
+      - name: Package Windows CLI
+        if: ${{ runner.os == 'Windows' }}
+        shell: pwsh
+        env:
+          VERSION: ${{ inputs.version }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          $archive = "Cap-CLI-$env:VERSION-windows-x86_64.zip"
+          $stage = Join-Path $env:RUNNER_TEMP "cap-cli"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          $binary = "target/$env:TARGET/release/cap.exe"
+          Copy-Item -LiteralPath $binary -Destination (Join-Path $stage "cap.exe")
+          Copy-Item -LiteralPath "LICENSE" -Destination (Join-Path $stage "LICENSE")
+          $queue = [System.Collections.Generic.Queue[string]]::new()
+          $queue.Enqueue((Resolve-Path -LiteralPath $binary).Path)
+          $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+          while ($queue.Count -gt 0) {
+            $file = $queue.Dequeue()
+            $dependencies = & dumpbin /nologo /dependents $file | ForEach-Object {
+              if ($_ -match '^\s+([^\s]+\.dll)\s*$') { $Matches[1] }
+            }
+            foreach ($dependency in $dependencies) {
+              if (-not $seen.Add($dependency)) { continue }
+              $candidate = Get-ChildItem -Path "target/native-deps","target/$env:TARGET/release" -Filter $dependency -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+              if ($null -eq $candidate) { continue }
+              $destination = Join-Path $stage $candidate.Name
+              Copy-Item -LiteralPath $candidate.FullName -Destination $destination
+              $queue.Enqueue($candidate.FullName)
+            }
+          }
+          Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $archive
+          "ARCHIVE=$archive" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Package macOS CLI
+        if: ${{ runner.os == 'macOS' }}
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+          TARGET: ${{ matrix.target }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          archive="Cap-CLI-$VERSION-macos-$ARCH.tar.gz"
+          stage="$RUNNER_TEMP/cap-cli"
+          mkdir -p "$stage"
+          cp "target/$TARGET/release/cap" "$stage/cap"
+          cp LICENSE "$stage/LICENSE"
+          if otool -L "$stage/cap" | grep -q 'Spacedrive.framework'; then
+            cp -R target/native-deps/Spacedrive.framework "$stage/Spacedrive.framework"
+            install_name_tool -add_rpath '@executable_path' "$stage/cap" 2>/dev/null || true
+            codesign --force --options runtime --timestamp --sign "${{ secrets.APPLE_SIGNING_IDENTITY }}" "$stage/Spacedrive.framework"
+          fi
+          codesign --force --options runtime --timestamp --sign "${{ secrets.APPLE_SIGNING_IDENTITY }}" "$stage/cap"
+          codesign --verify --strict "$stage/cap"
+          ditto -c -k --keepParent "$stage" "$RUNNER_TEMP/cap-cli-notary.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/cap-cli-notary.zip" --key api.p8 --key-id "${{ secrets.APPLE_API_KEY }}" --issuer "${{ secrets.APPLE_API_ISSUER }}" --wait
+          tar -C "$stage" -czf "$archive" .
+          echo "ARCHIVE=$archive" >> "$GITHUB_ENV"
+
+      - name: Package Linux CLI
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          archive="Cap-CLI-$VERSION-linux-x86_64.tar.gz"
+          stage="$RUNNER_TEMP/cap-cli"
+          mkdir -p "$stage/lib"
+          cp "target/$TARGET/release/cap" "$stage/cap"
+          cp /usr/bin/pactl "$stage/pactl"
+          cp LICENSE "$stage/LICENSE"
+          ldd "$stage/cap" | awk '/=> \/.*\/target\// { print $3 }' | sort -u | while read -r library; do
+            cp -L "$library" "$stage/lib/"
+          done
+          ldd "$stage/pactl" | awk '/=>/ && /lib(pulse|sndfile|asyncns|FLAC|ogg|vorbis|dbus)/ { print $3 }' | sort -u | while read -r library; do
+            cp -L "$library" "$stage/lib/"
+          done
+          if ! find "$stage/lib" -type f -print -quit | grep -q .; then
+            rmdir "$stage/lib"
+          else
+            patchelf --set-rpath '$ORIGIN/lib' "$stage/cap"
+            patchelf --set-rpath '$ORIGIN/lib' "$stage/pactl"
+            find "$stage/lib" -type f -exec patchelf --set-rpath '$ORIGIN' {} \;
+          fi
+          tar -C "$stage" -czf "$archive" .
+          echo "ARCHIVE=$archive" >> "$GITHUB_ENV"
+
+      - name: Verify packaged CLI
+        shell: bash
+        run: |
+          test -s "$ARCHIVE"
+          "target/${{ matrix.target }}/release/cap${{ runner.os == 'Windows' && '.exe' || '' }}" --version
+          "target/${{ matrix.target }}/release/cap${{ runner.os == 'Windows' && '.exe' || '' }}" --help >/dev/null
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Cap-CLI-${{ inputs.version }}-${{ matrix.platform }}-${{ matrix.arch }}
+          path: ${{ env.ARCHIVE }}
+          if-no-files-found: error
+
+      - name: Attach CLI archive to release
+        if: ${{ inputs.release_tag != '' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ inputs.release_tag }}" "$ARCHIVE" --clobber

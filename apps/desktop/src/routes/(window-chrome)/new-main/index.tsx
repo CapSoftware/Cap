@@ -118,6 +118,7 @@ import {
 } from "../OptionsContext";
 import CameraSelect from "./CameraSelect";
 import ChangelogButton from "./ChangeLogButton";
+import CursorVisibility from "./CursorVisibility";
 import MicrophoneSelect from "./MicrophoneSelect";
 import ModeInfoPanel from "./ModeInfoPanel";
 import SystemAudio from "./SystemAudio";
@@ -2674,7 +2675,7 @@ function Page() {
 					"captureTarget",
 					reconcile({ variant: "cameraOnly" } as ScreenCaptureTarget),
 				);
-				setOptions("captureSystemAudio", false);
+				setOptions("audioSource", "none");
 			}
 			await commands.openTargetSelectOverlays(
 				null,
@@ -2864,6 +2865,9 @@ function Page() {
 			</div>
 			<div>
 				<SystemAudio />
+			</div>
+			<div>
+				<CursorVisibility />
 			</div>
 		</div>
 	);

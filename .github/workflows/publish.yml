@@ -42,3 +42,14 @@ jobs:
       auto_publish: false
       interactionId: ${{ inputs.interactionId }}
     secrets: inherit
+
+  cli:
+    needs: [version, release]
+    permissions:
+      contents: write
+    uses: ./.github/workflows/cli-release.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+      sha: ${{ github.sha }}
+      release_tag: cap-v${{ needs.version.outputs.version }}
+    secrets: inherit

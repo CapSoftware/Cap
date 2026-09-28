@@ -2037,7 +2037,8 @@ pub struct ActorBuilder {
     lifetime: StudioLifetimeOwner,
     output_path: PathBuf,
     capture_target: screen_capture::ScreenCaptureTarget,
-    system_audio: bool,
+    audio_source: screen_capture::AudioCaptureSource,
+    show_cursor: bool,
     mic_feed: Option<Arc<MicrophoneFeedLock>>,
     camera_feed: Option<Arc<CameraFeedLock>>,
     custom_cursor: bool,
@@ -2061,7 +2062,8 @@ impl ActorBuilder {
             },
             output_path: output,
             capture_target,
-            system_audio: false,
+            audio_source: screen_capture::AudioCaptureSource::None,
+            show_cursor: true,
             mic_feed: None,
             camera_feed: None,
             custom_cursor: false,
@@ -2077,7 +2079,21 @@ impl ActorBuilder {
     }
 
     pub fn with_system_audio(mut self, system_audio: bool) -> Self {
-        self.system_audio = system_audio;
+        self.audio_source = if system_audio {
+            screen_capture::AudioCaptureSource::System
+        } else {
+            screen_capture::AudioCaptureSource::None
+        };
+        self
+    }
+
+    pub fn with_audio_source(mut self, audio_source: screen_capture::AudioCaptureSource) -> Self {
+        self.audio_source = audio_source;
+        self
+    }
+
+    pub fn with_show_cursor(mut self, show_cursor: bool) -> Self {
+        self.show_cursor = show_cursor;
         self
     }
 
@@ -2152,13 +2168,15 @@ impl ActorBuilder {
         {
             *lifecycle.0.runtime.lock().unwrap() = Some(tokio::runtime::Handle::current());
         }
+        let custom_cursor = self.custom_cursor && self.show_cursor;
         let startup = spawn_studio_recording_actor(
             #[cfg(target_os = "linux")]
             self.lifetime,
             self.output_path,
             RecordingBaseInputs {
                 capture_target: self.capture_target,
-                capture_system_audio: self.system_audio,
+                audio_source: self.audio_source,
+                show_cursor: self.show_cursor,
                 mic_feed: self.mic_feed,
                 camera_feed: self.camera_feed,
                 start_gate: self.start_gate,
@@ -2167,7 +2185,7 @@ impl ActorBuilder {
                 #[cfg(target_os = "macos")]
                 excluded_windows: self.excluded_windows,
             },
-            self.custom_cursor,
+            custom_cursor,
             self.keyboard_capture,
             self.fragmented,
             self.use_oop_muxer,
@@ -2232,7 +2250,7 @@ async fn spawn_studio_recording_actor(
                 cap_utils::operation_diagnostics::resource_id(&recording_dir),
             ),
             Field::number("requested_fps", max_fps as u64),
-            Field::flag("system_audio", base_inputs.capture_system_audio),
+            Field::label("audio_source", base_inputs.audio_source.as_str()),
             Field::flag("microphone", base_inputs.mic_feed.is_some()),
             Field::flag("camera", base_inputs.camera_feed.is_some()),
             Field::flag("fragmented", fragmented),
@@ -3262,16 +3280,20 @@ async fn create_segment_pipeline(
             max_fps
         };
 
+        #[cfg(target_os = "linux")]
+        let linux_source =
+            sources::screen_capture::LinuxCaptureSource::from_target(&capture_target);
         let screen_config = ScreenCaptureConfig::<ScreenCaptureMethod>::init(
+            capture_target,
             display,
             crop,
-            !custom_cursor_capture,
+            base_inputs.show_cursor && !custom_cursor_capture,
             effective_max_fps,
             max_capture_size,
             start_time.system_time(),
-            base_inputs.capture_system_audio,
+            base_inputs.audio_source,
             #[cfg(target_os = "linux")]
-            sources::screen_capture::LinuxCaptureSource::from_target(&capture_target),
+            linux_source,
             #[cfg(windows)]
             d3d_device,
             #[cfg(target_os = "macos")]
@@ -3803,7 +3825,8 @@ mod tests {
                     root.join("content/cursors"),
                     RecordingBaseInputs {
                         capture_target: screen_capture::ScreenCaptureTarget::CameraOnly,
-                        capture_system_audio: false,
+                        audio_source: screen_capture::AudioCaptureSource::None,
+                        show_cursor: true,
                         mic_feed: None,
                         camera_feed: None,
                         start_gate: None,
@@ -3913,7 +3936,8 @@ mod tests {
             path.join("content/cursors"),
             RecordingBaseInputs {
                 capture_target: target.clone(),
-                capture_system_audio: false,
+                audio_source: screen_capture::AudioCaptureSource::None,
+                show_cursor: true,
                 mic_feed: None,
                 camera_feed: None,
                 start_gate: None,
@@ -4011,7 +4035,8 @@ mod tests {
             path.join("content/cursors"),
             RecordingBaseInputs {
                 capture_target: target.clone(),
-                capture_system_audio: false,
+                audio_source: screen_capture::AudioCaptureSource::None,
+                show_cursor: true,
                 mic_feed: None,
                 camera_feed: None,
                 start_gate: None,
@@ -4148,7 +4173,8 @@ mod tests {
                 path.join("content/cursors"),
                 RecordingBaseInputs {
                     capture_target: target.clone(),
-                    capture_system_audio: false,
+                    audio_source: screen_capture::AudioCaptureSource::None,
+                    show_cursor: true,
                     mic_feed: None,
                     camera_feed: None,
                     start_gate: None,
@@ -4392,7 +4418,8 @@ mod tests {
                 path.join("content/cursors"),
                 RecordingBaseInputs {
                     capture_target: target.clone(),
-                    capture_system_audio: false,
+                    audio_source: screen_capture::AudioCaptureSource::None,
+                    show_cursor: true,
                     mic_feed: None,
                     camera_feed: None,
                     start_gate: None,
@@ -5892,7 +5919,8 @@ mod tests {
             recording_dir.join("content/cursors"),
             RecordingBaseInputs {
                 capture_target: screen_capture::ScreenCaptureTarget::CameraOnly,
-                capture_system_audio: false,
+                audio_source: screen_capture::AudioCaptureSource::None,
+                show_cursor: true,
                 mic_feed: None,
                 camera_feed: None,
                 start_gate: None,
@@ -6139,7 +6167,8 @@ mod windows_cancel_tests {
             PathBuf::new(),
             RecordingBaseInputs {
                 capture_target: screen_capture::ScreenCaptureTarget::CameraOnly,
-                capture_system_audio: false,
+                audio_source: screen_capture::AudioCaptureSource::None,
+                show_cursor: true,
                 mic_feed: None,
                 camera_feed: None,
                 start_gate: None,
