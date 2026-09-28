@@ -385,6 +385,19 @@ async function openSocket(credential: SocketCredential, signal: AbortSignal) {
 // Chunk bytes waiting to upload before the stream gives up on keeping up.
 const BROWSER_SAVE_CHUNK_BACKLOG = 64 * 1024 * 1024;
 
+type BrowserSaveChunks = {
+	saveId: string;
+	queued: number;
+	/// Durations of the chunks in the playlist.
+	durations: number[];
+	/// Chunks uploaded ahead of one still uploading, by number.
+	uploaded: Map<number, number>;
+	initUploaded: boolean;
+	backlog: number;
+	reportedAt: number;
+	stopped: boolean;
+};
+
 export class EditorHostBridge {
 	private disposed = false;
 	private readonly controller = new AbortController();
@@ -423,14 +436,7 @@ export class EditorHostBridge {
 	private browserSaveReportedAt = 0;
 	private browserSaveReports: Promise<void> = Promise.resolve();
 	private browserSaveProgress = 0;
-	private browserSaveChunks: {
-		saveId: string;
-		queued: number;
-		durations: number[];
-		backlog: number;
-		reportedAt: number;
-		stopped: boolean;
-	} | null = null;
+	private browserSaveChunks: BrowserSaveChunks | null = null;
 	private activeCaptions: {
 		language: AiGenerationLanguage;
 		promise: Promise<WebEditorCaptionData>;
@@ -1582,6 +1588,8 @@ export class EditorHostBridge {
 				saveId: crypto.randomUUID(),
 				queued: 0,
 				durations: [],
+				uploaded: new Map(),
+				initUploaded: false,
 				backlog: 0,
 				reportedAt: 0,
 				stopped: false,
@@ -1594,44 +1602,72 @@ export class EditorHostBridge {
 			return;
 		}
 		chunks.backlog += data.byteLength;
-		const file =
-			duration === null ? "init.mp4" : `segment-${++chunks.queued}.m4s`;
-		this.queueBrowserSave(async () => {
-			try {
-				if (chunks.stopped) return;
-				const target = await fetch(this.browserSavePath(), {
-					method: "POST",
-					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({ saveId: chunks.saveId, file }),
-				});
-				if (!target.ok) throw new Error("Chunk upload was refused");
-				const { url } = (await target.json()) as { url: string };
-				const uploaded = await fetch(url, {
-					method: "PUT",
-					headers: {
-						"Content-Type":
-							duration === null ? "video/mp4" : "video/iso.segment",
-					},
-					body: data as BodyInit,
-				});
-				if (!uploaded.ok) throw new Error("Chunk upload failed");
-			} catch {
+		const index = duration === null ? 0 : ++chunks.queued;
+		void this.putBrowserSaveChunk(chunks.saveId, index, data).then((ok) => {
+			chunks.backlog -= data.byteLength;
+			if (!ok) {
 				chunks.stopped = true;
 				return;
-			} finally {
-				chunks.backlog -= data.byteLength;
 			}
-			if (duration === null || this.browserSaveChunks !== chunks) return;
-			chunks.durations.push(duration);
-			const now = Date.now();
-			if (
-				chunks.durations.length === chunks.queued ||
-				now - chunks.reportedAt > 3000
-			) {
-				chunks.reportedAt = now;
-				await this.putBrowserSave();
-			}
+			if (duration === null) chunks.initUploaded = true;
+			else chunks.uploaded.set(index, duration);
+			this.listBrowserSaveChunks(chunks);
 		});
+	}
+
+	/// Adds the chunks uploaded so far, in order and without gaps, to the
+	/// Save's playlist.
+	private listBrowserSaveChunks(chunks: BrowserSaveChunks) {
+		if (!chunks.initUploaded) return;
+		const listed = chunks.durations.length;
+		for (
+			let next = listed + 1, duration = chunks.uploaded.get(next);
+			duration !== undefined;
+			next++, duration = chunks.uploaded.get(next)
+		) {
+			chunks.durations.push(duration);
+			chunks.uploaded.delete(next);
+		}
+		if (chunks.durations.length === listed) return;
+		const now = Date.now();
+		if (
+			chunks.durations.length === chunks.queued ||
+			now - chunks.reportedAt > 3000
+		) {
+			chunks.reportedAt = now;
+			this.queueBrowserSave(async () => {
+				if (this.browserSaveChunks === chunks) await this.putBrowserSave();
+			});
+		}
+	}
+
+	private async putBrowserSaveChunk(
+		saveId: string,
+		index: number,
+		data: ArrayBufferView,
+	) {
+		try {
+			const target = await fetch(this.browserSavePath(), {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					saveId,
+					file: index === 0 ? "init.mp4" : `segment-${index}.m4s`,
+				}),
+			});
+			if (!target.ok) return false;
+			const { url } = (await target.json()) as { url: string };
+			const uploaded = await fetch(url, {
+				method: "PUT",
+				headers: {
+					"Content-Type": index === 0 ? "video/mp4" : "video/iso.segment",
+				},
+				body: data as BodyInit,
+			});
+			return uploaded.ok;
+		} catch {
+			return false;
+		}
 	}
 
 	private browserSavePath() {
