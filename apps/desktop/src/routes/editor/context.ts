@@ -1831,6 +1831,9 @@ export const [EditorContextProvider, useBaseEditorContext] =
 
 			const previewResolutionBase = () =>
 				getPreviewResolution(previewQuality());
+			createEffect(() =>
+				editorInstanceContext.setPreviewBase(previewResolutionBase()),
+			);
 
 			const layoutModeStorageKey = `cap:editor:layoutMode:${props.editorInstance.path}`;
 
@@ -2698,6 +2701,9 @@ const createEditorInstanceContext = () => {
 	const [isWorkerReady, setIsWorkerReady] = createSignal(false);
 	const [canvasControls, setCanvasControls] =
 		createSignal<CanvasControls | null>(null);
+	// Kept in step with the chosen preview quality by the editor context, so
+	// the frame asked for when a worker connects is the right size.
+	let previewBase = getPreviewResolution(DEFAULT_PREVIEW_QUALITY);
 	const [performanceMode, setPerformanceMode] = createSignal(false);
 
 	let disposeWorkerReadyEffect: (() => void) | undefined;
@@ -2762,7 +2768,7 @@ const createEditorInstanceContext = () => {
 				events.renderFrameEvent.emit({
 					frame_number: preparing?.handoffRequestedFrame() ?? 0,
 					fps: FPS,
-					resolution_base: getPreviewResolution(DEFAULT_PREVIEW_QUALITY),
+					resolution_base: previewBase,
 				});
 			};
 
@@ -2826,6 +2832,9 @@ const createEditorInstanceContext = () => {
 		canvasControls,
 		performanceMode,
 		setPerformanceMode,
+		setPreviewBase: (base: XY<number>) => {
+			previewBase = base;
+		},
 	};
 };
 
