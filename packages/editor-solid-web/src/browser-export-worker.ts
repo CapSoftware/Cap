@@ -699,105 +699,62 @@ function chunkPoster() {
 	return { callbacks, finish: post };
 }
 
-const packetCopy = <Meta>(
-	source: {
-		add(packet: EncodedPacket, meta?: Meta): Promise<void>;
-		close(): void;
-	},
-	meta: Meta,
-	next: () => Promise<EncodedPacket | null>,
-) => {
-	let first = true;
-	return {
-		next,
-		close: () => source.close(),
-		add: (packet: EncodedPacket) => {
-			const packetMeta = first ? meta : undefined;
-			first = false;
-			return source.add(packet, packetMeta);
-		},
-	};
-};
-
-/// A fragmented MP4 as a regular one, with an index up front for seeking.
-/// Packets are copied in timestamp order, not encoded again.
-async function remuxToMp4(fragmented: Blob, maxBytes: number) {
+/// The export as fragments for watching while it renders, built from the
+/// packets the export's encoders produce, so nothing is encoded or stored
+/// twice. Streaming stops, and the export carries on, if muxing fails.
+async function chunkStream(fps: number) {
 	const {
-		BlobSource,
-		BufferTarget,
 		EncodedAudioPacketSource,
-		EncodedPacketSink,
 		EncodedVideoPacketSource,
-		Input,
-		MP4,
 		Mp4OutputFormat,
+		NullTarget,
 		Output,
 	} = await import("mediabunny");
-	const input = new Input({
-		source: new BlobSource(fragmented),
-		formats: [MP4],
-	});
-	const file = await openExportFile(maxBytes);
-	const target = file?.target ?? new BufferTarget();
+	const poster = chunkPoster();
 	const output = new Output({
-		format: new Mp4OutputFormat({ fastStart: file ? "reserve" : "in-memory" }),
-		target,
+		format: new Mp4OutputFormat({
+			fastStart: "fragmented",
+			minimumFragmentDuration: CHUNK_SECONDS,
+			...poster.callbacks,
+		}),
+		target: new NullTarget(),
 	});
-	try {
-		const tracks = await Promise.all(
-			(await input.getTracks()).map(async (track) => {
-				const { packetCount } = await track.computePacketStats();
-				const packets = new EncodedPacketSink(track).packets();
-				const next = async () => {
-					const result = await packets.next();
-					return result.done ? null : result.value;
-				};
-				if (track.isVideoTrack()) {
-					const source = new EncodedVideoPacketSource(
-						(await track.getCodec()) ?? "avc",
-					);
-					const decoderConfig = (await track.getDecoderConfig()) ?? undefined;
-					output.addVideoTrack(source, { maximumPacketCount: packetCount });
-					return packetCopy(source, { decoderConfig }, next);
-				}
-				if (!track.isAudioTrack()) throw new Error("Export produced no file");
-				const source = new EncodedAudioPacketSource(
-					(await track.getCodec()) ?? "aac",
-				);
-				const decoderConfig = (await track.getDecoderConfig()) ?? undefined;
-				output.addAudioTrack(source, { maximumPacketCount: packetCount });
-				return packetCopy(source, { decoderConfig }, next);
-			}),
-		);
-		await output.start();
-		const heads = await Promise.all(tracks.map((track) => track.next()));
-		for (;;) {
-			let index = -1;
-			for (const [i, head] of heads.entries()) {
-				if (head && head.timestamp < (heads[index]?.timestamp ?? Infinity))
-					index = i;
+	const video = new EncodedVideoPacketSource("avc");
+	output.addVideoTrack(video, { frameRate: fps });
+	let audio: InstanceType<typeof EncodedAudioPacketSource> | null = null;
+	let queue: Promise<void> = Promise.resolve();
+	let failed = false;
+	const add = (task: () => Promise<void> | undefined) => {
+		queue = queue
+			.then(() => (failed ? undefined : task()))
+			.catch(() => {
+				failed = true;
+			});
+	};
+	return {
+		video: (packet: EncodedPacket, meta?: EncodedVideoChunkMetadata) =>
+			add(() => video.add(packet, meta)),
+		audio: (packet: EncodedPacket, meta?: EncodedAudioChunkMetadata) =>
+			add(() => audio?.add(packet, meta)),
+		async start(audioCodec: "aac" | "opus" | null) {
+			if (audioCodec) {
+				audio = new EncodedAudioPacketSource(audioCodec);
+				output.addAudioTrack(audio);
 			}
-			const packet = heads[index];
-			if (!packet) break;
-			await tracks[index].add(packet);
-			heads[index] = await tracks[index].next();
-		}
-		for (const track of tracks) track.close();
-		await output.finalize();
-	} catch (cause) {
-		await output.cancel().catch(() => undefined);
-		file?.discard();
-		throw cause;
-	} finally {
-		input.dispose();
-	}
-	const data = file
-		? await file.finish()
-		: target instanceof BufferTarget && target.buffer
-			? new Blob([target.buffer], { type: "video/mp4" })
-			: null;
-	if (!data) throw new Error("Export produced no file");
-	return { data, storedFile: file?.name ?? null };
+			await output.start();
+		},
+		async finish(duration: number) {
+			await queue;
+			if (failed) return;
+			video.close();
+			audio?.close();
+			await output.finalize().then(
+				() => poster.finish(duration),
+				() => undefined,
+			);
+		},
+		cancel: () => output.cancel().catch(() => undefined),
+	};
 }
 
 async function runExport(job: BrowserExportJob) {
@@ -816,21 +773,13 @@ async function runExport(job: BrowserExportJob) {
 	if (!(await canEncodeVideo("avc", { width, height, bitrate }))) {
 		throw new Error("This browser cannot encode H.264 video");
 	}
-	const maxBytes =
-		((bitrate + EXPORT_AUDIO_BITRATE) * totalFrames) / job.fps / 8;
-	const file = await openExportFile(maxBytes);
+	const file = await openExportFile(
+		((bitrate + EXPORT_AUDIO_BITRATE) * totalFrames) / job.fps / 8,
+	);
 	const target = file?.target ?? new BufferTarget();
-	const chunks = job.chunked ? chunkPoster() : null;
+	const stream = job.chunked ? await chunkStream(job.fps) : null;
 	const output = new Output({
-		format: new Mp4OutputFormat(
-			chunks
-				? {
-						fastStart: "fragmented",
-						minimumFragmentDuration: CHUNK_SECONDS,
-						...chunks.callbacks,
-					}
-				: { fastStart: file ? "reserve" : "in-memory" },
-		),
+		format: new Mp4OutputFormat({ fastStart: file ? "reserve" : "in-memory" }),
 		target,
 	});
 	try {
@@ -840,6 +789,7 @@ async function runExport(job: BrowserExportJob) {
 			keyFrameInterval: CHUNK_SECONDS,
 			latencyMode: "quality",
 			hardwareAcceleration: "prefer-hardware",
+			onEncodedPacket: stream?.video,
 		});
 		output.addVideoTrack(videoSource, {
 			frameRate: job.fps,
@@ -850,7 +800,9 @@ async function runExport(job: BrowserExportJob) {
 			times,
 			output,
 			totalFrames,
+			stream?.audio,
 		);
+		await stream?.start(audio?.codec ?? null);
 		await output.start();
 		const audioDone = audio?.run() ?? Promise.resolve();
 		audioDone.catch(() => undefined);
@@ -904,23 +856,17 @@ async function runExport(job: BrowserExportJob) {
 		videoSource.close();
 		await audioDone;
 		await output.finalize();
-		chunks?.finish(totalFrames / job.fps);
-		let data: Blob | null = file
+		await stream?.finish(totalFrames / job.fps);
+		const data = file
 			? await file.finish()
 			: target instanceof BufferTarget && target.buffer
 				? new Blob([target.buffer], { type: "video/mp4" })
 				: null;
 		if (!data) throw new Error("Export produced no file");
-		let storedFile = file?.name ?? null;
-		if (chunks) {
-			const fragmented = file;
-			({ data, storedFile } = await remuxToMp4(data, maxBytes));
-			fragmented?.discard();
-		}
 		scope.postMessage({
 			kind: "done",
 			data,
-			storedFile,
+			storedFile: file?.name ?? null,
 			mimeType: "video/mp4",
 			stats: {
 				frames: totalFrames,
@@ -937,6 +883,7 @@ async function runExport(job: BrowserExportJob) {
 		});
 	} catch (cause) {
 		await output.cancel().catch(() => undefined);
+		await stream?.cancel();
 		file?.discard();
 		throw cause;
 	}
