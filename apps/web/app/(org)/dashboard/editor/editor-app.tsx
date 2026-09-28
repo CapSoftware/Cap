@@ -21,7 +21,6 @@ import {
 	EditorShellBar,
 	type EditorTab,
 } from "@/components/editor-shell/editor-shell-bar";
-import { useAppPage } from "@/components/editor-shell/use-app-page";
 import {
 	type ImageLoadingStatus,
 	VideoThumbnail,
@@ -53,7 +52,6 @@ const hasFiles = (event: DragEvent) =>
 	Array.from(event.dataTransfer?.types ?? []).includes("Files");
 
 export function EditorApp({ recordings }: { recordings: RecentRecording[] }) {
-	useAppPage();
 	const router = useRouter();
 	const searchParams = useSearchParams();
 	const tab: EditorTab =
