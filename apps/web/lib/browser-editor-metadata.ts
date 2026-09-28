@@ -172,10 +172,9 @@ export async function probeBrowserEditorMedia(
 				: format === WEBM && !video
 					? webmTailParser
 					: null;
+		// A fragmented MP4's declared duration covers only its first fragment,
+		// so the measured end comes first.
 		const duration =
-			(await input.getDurationFromMetadata(undefined, {
-				skipLiveWait: true,
-			})) ??
 			(tailParser &&
 				(await durationFromTail(url, tailParser, signal).catch(
 					(cause: unknown) => {
@@ -183,6 +182,9 @@ export async function probeBrowserEditorMedia(
 						return null;
 					},
 				))) ??
+			(await input.getDurationFromMetadata(undefined, {
+				skipLiveWait: true,
+			})) ??
 			(await input.computeDuration(undefined, { skipLiveWait: true }));
 		const [width, height, audioChannels, sampleRate] = await Promise.all([
 			video ? video.getDisplayWidth() : Promise.resolve(null),
