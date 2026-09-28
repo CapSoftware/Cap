@@ -86,7 +86,11 @@ export function StudioEditorClient(props: {
 		preparingTracks,
 	} = props;
 	const router = useRouter();
-	const editorSrc = `/editor-solid/index.html?videoId=${encodeURIComponent(videoId)}`;
+	// Straight from the recorder, the editor publishes the recording in its
+	// default style if nothing is rendering it yet. Read once, so new props
+	// never reload the editor.
+	const [publishOnOpen] = useState(justRecorded);
+	const editorSrc = `/editor-solid/index.html?videoId=${encodeURIComponent(videoId)}${publishOnOpen ? "&publish=recording" : ""}`;
 	const [sessionId, setSessionId] = useState<string | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [errorFrameReady, setErrorFrameReady] = useState(false);

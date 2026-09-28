@@ -39,6 +39,10 @@ const FIRST_POLL_MS = 1000;
 // A farm render that shows no progress for this long is treated as stuck and
 // the save renders in the browser instead.
 const FARM_STALL_MS = 90_000;
+// Opened straight from the recorder: the recording publishes in its default
+// style without waiting for a Save when nothing is rendering it yet.
+const publishOnOpen =
+	new URLSearchParams(window.location.search).get("publish") === "recording";
 
 /**
  * The web editor's publishing controls. The recording already lives at a share
@@ -67,11 +71,14 @@ export function WebPublishControls() {
 	// falls back to rendering in the browser.
 	let farmSave: { progress: number; progressAt: number } | null = null;
 
-	const poll = async (resuming = false) => {
+	const poll = async (
+		resuming = false,
+	): Promise<SaveStatus["state"] | undefined> => {
 		clearTimeout(timer);
 		try {
 			const next = await invoke<SaveStatus>("webEditorSaveStatus");
-			if (disposed || (resuming && next.state !== "rendering")) return;
+			if (disposed || (resuming && next.state !== "rendering"))
+				return next.state;
 			if (farmSave && !resuming) {
 				const now = Date.now();
 				if (next.progress > farmSave.progress || next.playable) {
@@ -99,6 +106,7 @@ export function WebPublishControls() {
 				if (next.state === "error" && !resuming)
 					toast.error(next.error ?? "Save failed");
 			}
+			return next.state;
 		} catch {
 			if (!disposed && !resuming) timer = setTimeout(poll, POLL_MS * 2);
 		}
@@ -139,7 +147,11 @@ export function WebPublishControls() {
 		}
 	};
 
-	onMount(() => void poll(true));
+	onMount(() => {
+		void poll(true).then((state) => {
+			if (publishOnOpen && state === "idle") void save(true);
+		});
+	});
 	onCleanup(() => {
 		disposed = true;
 		clearTimeout(timer);
@@ -164,7 +176,7 @@ export function WebPublishControls() {
 			delete editorWindow.capWebEditorUnpublishedEdits;
 	});
 
-	const save = async () => {
+	const save = async (automatic = false) => {
 		if (starting() || rendering()) return;
 		setStarting(true);
 		try {
@@ -190,7 +202,10 @@ export function WebPublishControls() {
 			});
 			timer = setTimeout(poll, FIRST_POLL_MS);
 		} catch (cause) {
-			toast.error(cause instanceof Error ? cause.message : "Save failed");
+			const message = cause instanceof Error ? cause.message : "Save failed";
+			if (automatic)
+				console.warn("Cap could not publish the recording:", message);
+			else toast.error(message);
 		} finally {
 			setStarting(false);
 		}
