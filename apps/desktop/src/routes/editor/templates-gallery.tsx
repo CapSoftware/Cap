@@ -35,7 +35,11 @@ import {
 	applyTemplate,
 	EDITOR_TEMPLATES,
 	type EditorTemplate,
+	fullSpanScene,
+	lookKey,
 	templateBackgroundSource,
+	templateLookKey,
+	withoutFullSpanScenes,
 } from "./templates";
 import {
 	DropdownItem,
@@ -104,7 +108,6 @@ export function TemplatesGallery() {
 	const { project, setProject, presets, setDialog, totalDuration } =
 		useEditorContext();
 	const [open, setOpen] = createSignal(false);
-	const [applied, setApplied] = createSignal<string | null>(null);
 	const [filter, setFilter] = createSignal<Filter>("all");
 	const [defaultConfig] = createResource(open, () =>
 		commands.getDefaultProjectConfig().catch(() => null),
@@ -160,7 +163,6 @@ export function TemplatesGallery() {
 					applyTemplate(draft, template, source, totalDuration()),
 				),
 			);
-			setApplied(template.id);
 		} catch (error) {
 			toast.error(
 				error instanceof Error
@@ -170,7 +172,7 @@ export function TemplatesGallery() {
 		}
 	};
 
-	const applyConfig = async (config: ProjectConfiguration, id: string) => {
+	const applyConfig = async (config: ProjectConfiguration) => {
 		if (isWebEditor) {
 			const prepare = (
 				window as Window & {
@@ -190,23 +192,49 @@ export function TemplatesGallery() {
 				return;
 			}
 		}
+		const timeline = project.timeline;
 		setProject(
 			reconcile(
 				normalizeProject({
 					...config,
-					timeline: project.timeline ?? null,
+					timeline: timeline
+						? {
+								...timeline,
+								sceneSegments: withoutFullSpanScenes(
+									timeline.sceneSegments,
+									totalDuration(),
+								),
+							}
+						: null,
 					overlayOrder: project.overlayOrder ?? [],
 					clips: project.clips,
 				}),
 			),
 		);
-		setApplied(id);
 	};
 
 	const applyPreset = (index: number) => {
 		const preset = presets.query.data?.presets[index];
-		if (preset) return applyConfig(preset.config, `preset-${index}`);
+		if (preset) return applyConfig(preset.config);
 	};
+
+	// A card shows as chosen while the project still looks the way it made it.
+	const currentLook = createMemo(() =>
+		lookKey(
+			project,
+			fullSpanScene(project.timeline?.sceneSegments, totalDuration()),
+		),
+	);
+	const showsConfig = (config: ProjectConfiguration) =>
+		currentLook() === lookKey(config, null);
+	const showsTemplate = (template: EditorTemplate) =>
+		currentLook() ===
+		templateLookKey(
+			template,
+			template.background.type === "wallpaper"
+				? (wallpapers()?.get(template.background.id) ?? null)
+				: null,
+		);
 
 	const saveDefaultStyle = async () => {
 		try {
@@ -323,12 +351,14 @@ export function TemplatesGallery() {
 											<TemplateCard
 												name="Cap default"
 												description={
-													presets.query.data?.default == null
-														? "Your default"
-														: "The standard look"
+													isWebEditor
+														? "Edge to edge, camera as recorded"
+														: presets.query.data?.default == null
+															? "Your default"
+															: "The standard look"
 												}
-												active={applied() === "default"}
-												onSelect={() => void applyConfig(config(), "default")}
+												active={showsConfig(config())}
+												onSelect={() => void applyConfig(config())}
 												preview={
 													<TemplatePreview
 														look={presetLook(config())}
@@ -348,7 +378,7 @@ export function TemplatesGallery() {
 														? "Your default"
 														: "Saved preset"
 												}
-												active={applied() === `preset-${index()}`}
+												active={showsConfig(preset.config)}
 												onSelect={() => void applyPreset(index())}
 												menu={
 													<PresetMenu
@@ -413,7 +443,7 @@ export function TemplatesGallery() {
 												<TemplateCard
 													name={template.name}
 													description={template.description}
-													active={applied() === template.id}
+													active={showsTemplate(template)}
 													onSelect={() => void apply(template)}
 													preview={
 														<TemplatePreview

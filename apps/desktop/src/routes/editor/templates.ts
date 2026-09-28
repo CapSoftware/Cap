@@ -1,8 +1,10 @@
 import type {
 	AspectRatio,
+	BackgroundConfiguration,
 	BackgroundSource,
 	Camera,
 	SceneMode,
+	SceneSegment,
 } from "~/utils/tauri";
 import type { EditorProjectConfiguration } from "./context";
 
@@ -241,8 +243,20 @@ export async function templateBackgroundSource(
 	background: TemplateBackground,
 	resolveWallpaper: (id: string) => Promise<string>,
 ): Promise<BackgroundSource> {
+	return templateSource(
+		background,
+		background.type === "wallpaper"
+			? await resolveWallpaper(background.id)
+			: null,
+	);
+}
+
+export function templateSource(
+	background: TemplateBackground,
+	wallpaperPath: string | null,
+): BackgroundSource {
 	if (background.type === "wallpaper") {
-		return { type: "wallpaper", path: await resolveWallpaper(background.id) };
+		return { type: "wallpaper", path: wallpaperPath };
 	}
 	if (background.type === "color") {
 		return { type: "color", value: background.value };
@@ -276,11 +290,91 @@ export function applyTemplate(
 
 	const timeline = project.timeline;
 	if (!timeline) return;
-	const scenes = (timeline.sceneSegments ?? []).filter(
-		(scene) => !(scene.start <= 0.001 && scene.end >= duration - 0.001),
-	);
+	const scenes = withoutFullSpanScenes(timeline.sceneSegments, duration);
 	if (template.scene && duration > 0) {
 		scenes.push({ start: 0, end: duration, mode: template.scene });
 	}
 	timeline.sceneSegments = scenes;
+}
+
+const spansVideo = (scene: SceneSegment, duration: number) =>
+	scene.start <= 0.001 && scene.end >= duration - 0.001;
+
+/** The scenes a person placed, without any a template laid over everything. */
+export function withoutFullSpanScenes(
+	scenes: SceneSegment[] | undefined,
+	duration: number,
+) {
+	return (scenes ?? []).filter((scene) => !spansVideo(scene, duration));
+}
+
+/** The scene a template laid over the whole video, if there is one. */
+export function fullSpanScene(
+	scenes: SceneSegment[] | undefined,
+	duration: number,
+): SceneMode | null {
+	return scenes?.find((scene) => spansVideo(scene, duration))?.mode ?? null;
+}
+
+type Look = {
+	aspectRatio: AspectRatio | null;
+	background: Pick<
+		BackgroundConfiguration,
+		"source" | "padding" | "rounding" | "shadow"
+	>;
+	camera: EditorTemplate["camera"];
+};
+
+function sourceKey(source: BackgroundSource) {
+	switch (source.type) {
+		case "color":
+			return [source.type, ...source.value, source.alpha ?? 255];
+		case "gradient":
+			return [source.type, ...source.from, ...source.to, source.angle ?? 90];
+		case "animatedGradient":
+			return [source.type, JSON.stringify(source.config)];
+		default:
+			return [source.type, source.path];
+	}
+}
+
+/**
+ * What a template or preset sets, as one comparable value, so the gallery
+ * can tell which one the project still shows.
+ */
+export function lookKey(look: Look, scene: SceneMode | null) {
+	const { background, camera } = look;
+	return JSON.stringify([
+		look.aspectRatio ?? null,
+		sourceKey(background.source),
+		background.padding,
+		background.rounding,
+		background.shadow,
+		camera.hide,
+		camera.position.x,
+		camera.position.y,
+		camera.size,
+		camera.rounding,
+		camera.shape,
+		scene,
+	]);
+}
+
+export function templateLookKey(
+	template: EditorTemplate,
+	wallpaperPath: string | null,
+) {
+	return lookKey(
+		{
+			aspectRatio: template.aspectRatio,
+			background: {
+				source: templateSource(template.background, wallpaperPath),
+				padding: template.padding,
+				rounding: template.rounding,
+				shadow: template.shadow,
+			},
+			camera: template.camera,
+		},
+		template.scene ?? null,
+	);
 }
