@@ -510,8 +510,6 @@ export async function browserLocalExportEstimates(
 	};
 }
 
-/// A playable piece of an export in progress: its init segment (no
-/// duration), then each media segment.
 export type ExportChunkListener = (
 	data: Uint8Array,
 	duration: number | null,

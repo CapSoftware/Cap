@@ -25,7 +25,6 @@ export function browserSavePlaylistUrl(videoId: string) {
 	return `${browserSaveUrl(videoId)}/playlist`;
 }
 
-/** An HLS event playlist of the chunks uploaded so far, closed once the Save ends. */
 export function browserSavePlaylist(
 	videoId: string,
 	saveId: string,

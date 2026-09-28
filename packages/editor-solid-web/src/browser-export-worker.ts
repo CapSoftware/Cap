@@ -691,7 +691,6 @@ function chunkPoster() {
 	return { callbacks, finish: post };
 }
 
-/// Adds packets to `source`, the first with its decoder config.
 const packetCopy = <Meta>(
 	source: {
 		add(packet: EncodedPacket, meta?: Meta): Promise<void>;
