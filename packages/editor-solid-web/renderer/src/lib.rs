@@ -693,6 +693,15 @@ impl BrowserStudioRenderer {
         Ok(())
     }
 
+    /// Levels for an imported audio file, keyed by the `path` the timeline's
+    /// audio segments store.
+    pub fn set_timeline_audio_levels(&self, path: &str, levels: Vec<u8>) -> Result<(), JsValue> {
+        let levels = AudioLevels::from_bytes(levels)
+            .ok_or_else(|| js_error("Editor audio levels are invalid"))?;
+        self.constants.audio_levels.set_timeline_audio(path, levels);
+        Ok(())
+    }
+
     /// Output size the next frame will have for a preview box.
     pub fn output_size(&self, resolution_width: u32, resolution_height: u32) -> Vec<u32> {
         let (width, height) = ProjectUniforms::get_output_size(

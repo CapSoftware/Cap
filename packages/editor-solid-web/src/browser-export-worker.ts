@@ -7,6 +7,7 @@ import {
 	decodeAudioLevels,
 	hasWaveformSegments,
 	loadAudioLevels,
+	timelineAudioLevelSources,
 } from "./browser-audio-levels";
 import { renderBrowserExportAudio } from "./browser-export-audio";
 import { EXPORT_AUDIO_BITRATE, exportBitrate } from "./browser-export-estimate";
@@ -388,7 +389,10 @@ async function renderContext(job: BrowserExportJob): Promise<RenderContext> {
 			await loadAudioLevels(
 				module,
 				() => created,
-				job.audio,
+				[
+					...job.audio,
+					...timelineAudioLevelSources(config, (path) => job.musicUrls[path]),
+				],
 				(url) => workerAudioLevels(module, url),
 			);
 		}

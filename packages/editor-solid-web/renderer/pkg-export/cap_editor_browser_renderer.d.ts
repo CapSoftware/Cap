@@ -76,6 +76,11 @@ export class BrowserStudioRenderer {
    */
   set_audio_levels(recording_clip: number, source: string, levels: Uint8Array): void;
   /**
+   * Levels for an imported audio file, keyed by the `path` the timeline's
+   * audio segments store.
+   */
+  set_timeline_audio_levels(path: string, levels: Uint8Array): void;
+  /**
    * Output size the next frame will have for a preview box.
    */
   output_size(resolution_width: number, resolution_height: number): Uint32Array;
@@ -160,6 +165,7 @@ export interface InitOutput {
   readonly browserstudiorenderer_set_project: (a: number, b: number, c: number) => [number, number];
   readonly browserstudiorenderer_set_cursor: (a: number, b: number, c: number, d: number) => [number, number];
   readonly browserstudiorenderer_set_audio_levels: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
+  readonly browserstudiorenderer_set_timeline_audio_levels: (a: number, b: number, c: number, d: number, e: number) => [number, number];
   readonly browserstudiorenderer_output_size: (a: number, b: number, c: number) => [number, number];
   readonly browserstudiorenderer_render: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: any, i: number, j: any, k: number) => [number, number, number, number];
   readonly browserstudiorenderer_render_transition: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: any, i: number, j: any, k: number, l: number, m: number, n: any, o: number, p: any, q: number, r: number, s: number) => [number, number, number, number];
@@ -188,10 +194,10 @@ export interface InitOutput {
   readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
   readonly __wbindgen_export_6: WebAssembly.Table;
   readonly __externref_table_dealloc: (a: number) => void;
-  readonly closure1252_externref_shim: (a: number, b: number, c: any) => void;
-  readonly closure1636_externref_shim: (a: number, b: number, c: any) => void;
+  readonly closure1638_externref_shim: (a: number, b: number, c: any) => void;
   readonly wasm_bindgen__convert__closures_____invoke__hfa69fcf5a022ebc2: (a: number, b: number) => void;
-  readonly closure2708_externref_shim: (a: number, b: number, c: any, d: any) => void;
+  readonly closure1254_externref_shim: (a: number, b: number, c: any) => void;
+  readonly closure2710_externref_shim: (a: number, b: number, c: any, d: any) => void;
   readonly __wbindgen_start: () => void;
 }
 

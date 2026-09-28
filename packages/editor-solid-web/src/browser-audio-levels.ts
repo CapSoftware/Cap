@@ -1,10 +1,8 @@
 import type { BrowserEditorSources } from "./browser-sources";
 
-export type BrowserAudioLevelSource = {
-	url: string;
-	kind: "mic" | "system" | "display";
-	segment: number;
-};
+export type BrowserAudioLevelSource =
+	| { url: string; kind: "mic" | "system" | "display"; segment: number }
+	| { url: string; kind: "timeline"; path: string };
 
 type LevelAnalyzer = {
 	push(samples: Float32Array): void;
@@ -22,7 +20,10 @@ export type AudioLevelTarget = {
 		source: string,
 		levels: Uint8Array,
 	): void;
+	set_timeline_audio_levels(path: string, levels: Uint8Array): void;
 };
+
+const SILENT_TIMELINE_AUDIO_DB = -60;
 
 function record(value: unknown): Record<string, unknown> | null {
 	return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -49,6 +50,41 @@ export function browserAudioLevelSources(
 			audio.push({ url: segment.display.url, kind: "display", segment: index });
 	});
 	return audio;
+}
+
+/// Imported audio files the timeline can play, as the export mix sees them:
+/// enabled segments above the silence floor, one entry per file.
+export function timelineAudioLevelSources(
+	config: unknown,
+	resolveUrl: (path: string) => string | null | undefined,
+): BrowserAudioLevelSource[] {
+	const segments = record(record(config)?.timeline)?.audioSegments;
+	if (!Array.isArray(segments)) return [];
+	const paths = new Set<string>();
+	for (const value of segments) {
+		const segment = record(value);
+		if (
+			!segment ||
+			typeof segment.path !== "string" ||
+			!segment.path ||
+			segment.enabled === false ||
+			(typeof segment.volumeDb === "number" &&
+				segment.volumeDb <= SILENT_TIMELINE_AUDIO_DB)
+		) {
+			continue;
+		}
+		paths.add(segment.path);
+	}
+	return [...paths].flatMap((path) => {
+		const url = resolveUrl(path);
+		return url ? [{ url, kind: "timeline" as const, path }] : [];
+	});
+}
+
+export function audioLevelSourceKey(source: BrowserAudioLevelSource) {
+	return source.kind === "timeline"
+		? `timeline:${source.path}:${source.url}`
+		: `${source.kind}:${source.segment}`;
 }
 
 /// Decodes a file's primary audio track and analyses it into the renderer's
@@ -128,7 +164,11 @@ export async function loadAudioLevels(
 			const levels = await decode(source.url).catch(() => null);
 			const renderer = target();
 			if (!levels || !renderer) return;
-			renderer.set_audio_levels(source.segment, source.kind, levels);
+			if (source.kind === "timeline") {
+				renderer.set_timeline_audio_levels(source.path, levels);
+			} else {
+				renderer.set_audio_levels(source.segment, source.kind, levels);
+			}
 			onLoaded();
 		}),
 	);

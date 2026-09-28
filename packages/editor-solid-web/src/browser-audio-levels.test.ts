@@ -4,9 +4,11 @@ import {
 	initSync,
 } from "../renderer/pkg/cap_editor_browser_renderer.js";
 import {
+	audioLevelSourceKey,
 	browserAudioLevelSources,
 	hasWaveformSegments,
 	loadAudioLevels,
+	timelineAudioLevelSources,
 } from "./browser-audio-levels";
 import type { BrowserEditorSources } from "./browser-sources";
 
@@ -76,19 +78,57 @@ test("level sources follow the tracks playback hears", () => {
 	]);
 });
 
+test("timeline audio sources skip muted, disabled and unresolved files", () => {
+	const config = {
+		timeline: {
+			audioSegments: [
+				{ path: "music.mp3", start: 4, end: 8, trimStart: 2 },
+				{ path: "music.mp3", start: 10, end: 12 },
+				{ path: "voice.m4a", start: 0, end: 2, volumeDb: -6 },
+				{ path: "muted.mp3", start: 0, end: 2, volumeDb: -60 },
+				{ path: "off.mp3", start: 0, end: 2, enabled: false },
+				{ path: "unknown.mp3", start: 0, end: 2 },
+				{ start: 0, end: 2 },
+			],
+		},
+	};
+	const urls: Record<string, string> = {
+		"music.mp3": "https://assets.example.com/music.mp3",
+		"voice.m4a": "https://assets.example.com/voice.m4a",
+		"muted.mp3": "https://assets.example.com/muted.mp3",
+		"off.mp3": "https://assets.example.com/off.mp3",
+	};
+	const sources = timelineAudioLevelSources(config, (path) => urls[path]);
+	expect(sources).toEqual([
+		{ url: urls["music.mp3"] ?? "", kind: "timeline", path: "music.mp3" },
+		{ url: urls["voice.m4a"] ?? "", kind: "timeline", path: "voice.m4a" },
+	]);
+	expect(timelineAudioLevelSources({}, () => "unused")).toEqual([]);
+	expect(sources.map(audioLevelSourceKey)).toEqual([
+		`timeline:music.mp3:${urls["music.mp3"]}`,
+		`timeline:voice.m4a:${urls["voice.m4a"]}`,
+	]);
+	expect(audioLevelSourceKey({ url: "mic", kind: "mic", segment: 0 })).toBe(
+		"mic:0",
+	);
+});
+
 test("decoded levels reach the renderer and failures are skipped", async () => {
-	const applied: Array<[number, string, number]> = [];
+	const applied: Array<[number | string, string, number]> = [];
 	let loaded = 0;
 	await loadAudioLevels(
 		{ BrowserAudioLevelAnalyzer },
 		() => ({
 			set_audio_levels: (clip, source, levels) =>
 				applied.push([clip, source, levels.length]),
+			set_timeline_audio_levels: (path, levels) =>
+				applied.push([path, "timeline", levels.length]),
 		}),
 		[
 			{ url: "ok", kind: "mic", segment: 0 },
 			{ url: "missing", kind: "system", segment: 0 },
 			{ url: "broken", kind: "display", segment: 1 },
+			{ url: "ok", kind: "timeline", path: "music.mp3" },
 		],
 		async (url) => {
 			if (url === "broken") throw new Error("decode failed");
@@ -96,8 +136,11 @@ test("decoded levels reach the renderer and failures are skipped", async () => {
 		},
 		() => loaded++,
 	);
-	expect(applied).toEqual([[0, "mic", 64]]);
-	expect(loaded).toBe(1);
+	expect(applied).toEqual([
+		[0, "mic", 64],
+		["music.mp3", "timeline", 64],
+	]);
+	expect(loaded).toBe(2);
 });
 
 test("the wasm analyzer turns PCM into 60 Hz frames of 32 bands", async () => {

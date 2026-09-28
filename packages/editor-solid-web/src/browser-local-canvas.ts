@@ -1,9 +1,11 @@
 import type { BrowserStudioRenderer } from "../renderer/pkg/cap_editor_browser_renderer.js";
 import {
+	audioLevelSourceKey,
 	type BrowserAudioLevelSource,
 	decodeAudioLevels,
 	hasWaveformSegments,
 	loadAudioLevels,
+	timelineAudioLevelSources,
 } from "./browser-audio-levels";
 import { browserFrameLayout } from "./browser-frame-layout";
 import { browserWebGpuPresentationWorks } from "./browser-gpu-probe";
@@ -143,7 +145,7 @@ export class BrowserLocalCanvas {
 	private configQueue: Promise<void> = Promise.resolve();
 	private readonly imageAbort = new AbortController();
 	private readonly audioAbort = new AbortController();
-	private audioLevels: Promise<void> | null = null;
+	private readonly requestedAudioLevels = new Set<string>();
 	private readonly loadedAssets = new Map<string, Promise<void>>();
 	private overlaySegments: OverlayImageSegment[] = [];
 	private imageDecoder: BrowserImageDecoder | null = null;
@@ -322,28 +324,38 @@ export class BrowserLocalCanvas {
 	}
 
 	/// Waveform overlays draw from band levels decoded out of the recording's
-	/// audio; they load once in the background and the preview redraws as
-	/// each source lands.
-	private loadAudioLevels() {
-		const sources = this.setup.audio ?? [];
-		if (this.audioLevels || sources.length === 0) return;
-		const signal = this.audioAbort.signal;
-		const load = loadBrowserRenderer().then((module) =>
-			loadAudioLevels(
-				module,
-				() => (this.disposed ? null : this.renderer),
-				sources,
-				(url) => decodeAudioLevels(module, url, signal),
-				() => {
-					this.rendered = false;
-					this.onInvalidate();
-				},
-			),
-		);
-		this.audioLevels = load;
-		load.catch(() => {
-			if (this.audioLevels === load) this.audioLevels = null;
+	/// audio and the timeline's imported audio; each file loads once in the
+	/// background and the preview redraws as it lands.
+	private loadAudioLevels(config: unknown) {
+		const sources = [
+			...(this.setup.audio ?? []),
+			...timelineAudioLevelSources(config, resolveEditorAssetUrl),
+		].filter((source) => {
+			const key = audioLevelSourceKey(source);
+			if (this.requestedAudioLevels.has(key)) return false;
+			this.requestedAudioLevels.add(key);
+			return true;
 		});
+		if (sources.length === 0) return;
+		const signal = this.audioAbort.signal;
+		void loadBrowserRenderer()
+			.then((module) =>
+				loadAudioLevels(
+					module,
+					() => (this.disposed ? null : this.renderer),
+					sources,
+					(url) => decodeAudioLevels(module, url, signal),
+					() => {
+						this.rendered = false;
+						this.onInvalidate();
+					},
+				),
+			)
+			.catch(() => {
+				for (const source of sources) {
+					this.requestedAudioLevels.delete(audioLevelSourceKey(source));
+				}
+			});
 	}
 
 	setProjectConfig(config: unknown) {
@@ -363,7 +375,7 @@ export class BrowserLocalCanvas {
 			this.overlaySegments = overlayImageSegments(config);
 			this.renderer.set_project(JSON.stringify(config));
 			this.rendered = false;
-			if (hasWaveformSegments(config)) this.loadAudioLevels();
+			if (hasWaveformSegments(config)) this.loadAudioLevels(config);
 		});
 		this.configQueue = update.catch(() => undefined);
 		return update;
