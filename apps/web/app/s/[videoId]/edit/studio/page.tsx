@@ -10,9 +10,9 @@ import { editorSourcesUploaded } from "@/lib/editor-sources-ready";
 import { measureMissingVideoDuration } from "@/lib/editor-video-duration";
 import { getEditSourceKey, isEditSourceKey } from "@/lib/video-edit-processing";
 import { isWebStudioEnabledForEmail } from "@/lib/web-studio-rollout";
-import { EditProcessing } from "../EditProcessing";
+import { EditProcessing } from "../edit-processing";
 import { EditRecovery } from "../edit-recovery";
-import { StudioEditorClient } from "./StudioEditorClient";
+import { StudioEditorClient } from "./studio-editor-client";
 
 export default async function StudioEditorPage(props: {
 	params: Promise<{ videoId: string }>;

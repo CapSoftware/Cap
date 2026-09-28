@@ -19,7 +19,7 @@ vi.mock("@/app/s/[videoId]/_components/ProgressCircle", () => ({
 	useUploadProgress: () => mocks.progress,
 }));
 
-import { EditProcessing } from "@/app/s/[videoId]/edit/EditProcessing";
+import { EditProcessing } from "@/app/s/[videoId]/edit/edit-processing";
 
 let root: Root;
 let container: HTMLDivElement;

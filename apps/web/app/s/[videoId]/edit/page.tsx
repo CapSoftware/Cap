@@ -14,9 +14,9 @@ import {
 	createIdentityEditSpec,
 } from "@/lib/video-edits";
 import { isWebStudioEnabledForEmail } from "@/lib/web-studio-rollout";
-import { EditProcessing } from "./EditProcessing";
 import { EditUpgradeGate } from "./EditUpgradeGate";
 import { EditVideoClient } from "./EditVideoClient";
+import { EditProcessing } from "./edit-processing";
 import { EditRecovery } from "./edit-recovery";
 
 function isMp4BackedVideo(source: typeof videos.$inferSelect.source) {

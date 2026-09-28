@@ -59,7 +59,7 @@ vi.mock("@/lib/video-edits", () => ({
 	areEditSpecsEquivalent: () => true,
 	createIdentityEditSpec: vi.fn(),
 }));
-vi.mock("@/app/s/[videoId]/edit/EditProcessing", () => ({
+vi.mock("@/app/s/[videoId]/edit/edit-processing", () => ({
 	EditProcessing: () => null,
 }));
 vi.mock("@/app/s/[videoId]/edit/EditVideoClient", () => ({
@@ -71,17 +71,17 @@ vi.mock("@/app/s/[videoId]/edit/EditUpgradeGate", () => ({
 vi.mock("@/app/s/[videoId]/edit/edit-recovery", () => ({
 	EditRecovery: () => null,
 }));
-vi.mock("@/app/s/[videoId]/edit/studio/StudioEditorClient", () => ({
+vi.mock("@/app/s/[videoId]/edit/studio/studio-editor-client", () => ({
 	StudioEditorClient: () => null,
 }));
 
-import { EditProcessing } from "@/app/s/[videoId]/edit/EditProcessing";
 import { EditUpgradeGate } from "@/app/s/[videoId]/edit/EditUpgradeGate";
 import { EditVideoClient } from "@/app/s/[videoId]/edit/EditVideoClient";
+import { EditProcessing } from "@/app/s/[videoId]/edit/edit-processing";
 import { EditRecovery } from "@/app/s/[videoId]/edit/edit-recovery";
 import EditPage from "@/app/s/[videoId]/edit/page";
 import StudioPage from "@/app/s/[videoId]/edit/studio/page";
-import { StudioEditorClient } from "@/app/s/[videoId]/edit/studio/StudioEditorClient";
+import { StudioEditorClient } from "@/app/s/[videoId]/edit/studio/studio-editor-client";
 
 const params = { params: Promise.resolve({ videoId: "video" }) };
 const video = {

@@ -7,7 +7,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { AuthContextProvider } from "@/app/Layout/AuthContext";
 import { resolveCurrentUser } from "@/app/Layout/current-user";
-import { EditorPrewarm } from "@/components/editor-shell/EditorPrewarm";
+import { EditorPrewarm } from "@/components/editor-shell/editor-prewarm";
 import { runPromise } from "@/lib/server";
 import { getShareableLinkUsage } from "@/lib/shareable-link-quota";
 import { isWebStudioEnabledForEmail } from "@/lib/web-studio-rollout";

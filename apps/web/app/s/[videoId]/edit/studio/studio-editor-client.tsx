@@ -4,7 +4,7 @@ import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { EditorShellBar } from "@/components/editor-shell/EditorShellBar";
+import { EditorShellBar } from "@/components/editor-shell/editor-shell-bar";
 import { useAppPage } from "@/components/editor-shell/use-app-page";
 import type { WebEditorCapImportProgress } from "@/lib/editor-cap-import-client";
 import {
@@ -21,10 +21,10 @@ import {
 } from "@/lib/editor-local-draft";
 import type { WebEditorVideoImportProgress } from "@/lib/editor-video-import-client";
 import { nextPageReady } from "@/utils/view-transition";
-import { SharedLinkCard } from "../SharedLinkCard";
+import { SharedLinkCard } from "../shared-link-card";
 import type { ClipRecorderContext } from "./clip-recorder-context";
-import { EditorClipRecorder } from "./EditorClipRecorder";
-import { EditorEntryFrame } from "./EditorEntryFrame";
+import { EditorClipRecorder } from "./editor-clip-recorder";
+import { EditorEntryFrame } from "./editor-entry-frame";
 import { EditorHostBridge } from "./editor-host";
 
 const UpgradeModal = dynamic(

@@ -20,7 +20,7 @@ import { toast } from "sonner";
 import {
 	EditorShellBar,
 	type EditorTab,
-} from "@/components/editor-shell/EditorShellBar";
+} from "@/components/editor-shell/editor-shell-bar";
 import { useAppPage } from "@/components/editor-shell/use-app-page";
 import {
 	type ImageLoadingStatus,

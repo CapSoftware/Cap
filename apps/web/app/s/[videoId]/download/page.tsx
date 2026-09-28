@@ -4,7 +4,7 @@ import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
 import { loadOwnedRenderExports } from "@/lib/render-farm-download";
 import { pickRenderExport } from "@/lib/render-farm-status";
-import { ExportRefresh } from "./ExportRefresh";
+import { ExportRefresh } from "./export-refresh";
 
 export const dynamic = "force-dynamic";
 

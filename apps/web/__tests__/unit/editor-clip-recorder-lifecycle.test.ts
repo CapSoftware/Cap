@@ -31,7 +31,7 @@ vi.mock("@cap/recorder-core/capture-streams", () => ({
 	}),
 }));
 
-import { EditorClipRecorder } from "@/app/s/[videoId]/edit/studio/EditorClipRecorder";
+import { EditorClipRecorder } from "@/app/s/[videoId]/edit/studio/editor-clip-recorder";
 
 let root: Root | null;
 let container: HTMLDivElement;

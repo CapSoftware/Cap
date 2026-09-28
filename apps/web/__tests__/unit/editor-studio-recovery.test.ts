@@ -18,7 +18,7 @@ vi.mock("next/navigation", () => ({
 	useRouter: () => ({ push: mocks.push }),
 }));
 vi.mock("next/dynamic", () => ({ default: () => () => null }));
-vi.mock("@/app/s/[videoId]/edit/studio/EditorClipRecorder", () => ({
+vi.mock("@/app/s/[videoId]/edit/studio/editor-clip-recorder", () => ({
 	EditorClipRecorder: () => null,
 }));
 vi.mock("@/app/s/[videoId]/edit/studio/editor-host", () => ({
@@ -28,7 +28,7 @@ vi.mock("@/app/s/[videoId]/edit/studio/editor-host", () => ({
 	},
 }));
 
-import { StudioEditorClient } from "@/app/s/[videoId]/edit/studio/StudioEditorClient";
+import { StudioEditorClient } from "@/app/s/[videoId]/edit/studio/studio-editor-client";
 
 let root: Root;
 let container: HTMLDivElement;

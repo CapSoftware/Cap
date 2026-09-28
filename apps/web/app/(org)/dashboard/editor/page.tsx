@@ -5,7 +5,7 @@ import { and, desc, eq, sql } from "drizzle-orm";
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { isWebStudioEnabledForEmail } from "@/lib/web-studio-rollout";
-import { EditorApp, type RecentRecording } from "./EditorApp";
+import { EditorApp, type RecentRecording } from "./editor-app";
 
 export const metadata: Metadata = {
 	title: "Editor",

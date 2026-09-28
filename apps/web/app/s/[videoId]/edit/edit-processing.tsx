@@ -11,7 +11,7 @@ import {
 } from "@/app/(org)/dashboard/caps/components/web-recorder-dialog/recorder-parts";
 import "@/app/(org)/dashboard/caps/components/web-recorder-dialog/recorder.css";
 import { useUploadProgress } from "../_components/ProgressCircle";
-import { SharedLinkCard } from "./SharedLinkCard";
+import { SharedLinkCard } from "./shared-link-card";
 
 export function EditProcessing({
 	videoId,

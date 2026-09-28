@@ -27,7 +27,7 @@ import {
 	PreparingVideoOverlay,
 	RecordingInProgressOverlay,
 } from "./RecordingInProgress";
-import { RenderFarmSaveView } from "./RenderFarmSaveView";
+import { RenderFarmSaveView } from "./render-farm-save-view";
 import { ShareableLinkLimitOverlay } from "./ShareableLinkLimitOverlay";
 import {
 	isRecordingUpload,
