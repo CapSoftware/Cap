@@ -15,6 +15,7 @@ import {
 import { eq, type SQL, sql } from "drizzle-orm";
 import { Effect, Layer, Schema } from "effect";
 import { apiToHandler } from "@/lib/server";
+import { storedUserPreferences } from "@/lib/user-preferences-sql";
 import { isWebStudioEnabledForEmail } from "@/lib/web-studio-rollout";
 
 export const dynamic = "force-dynamic";
@@ -56,10 +57,6 @@ const studioUser = Effect.gen(function* () {
 	}
 	return user;
 });
-
-// Rows created without preferences can hold a JSON null, which JSON_SET and
-// JSON_REMOVE leave untouched, so anything but an object starts over.
-const storedPreferences = sql`IF(JSON_TYPE(${users.preferences}) = 'OBJECT', ${users.preferences}, JSON_OBJECT())`;
 
 const writePreferences = (userId: UserId, preferences: SQL) =>
 	Effect.flatMap(Database, (database) =>
@@ -105,7 +102,7 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 						if (!style) return yield* new HttpApiError.BadRequest();
 						yield* writePreferences(
 							user.id,
-							sql`JSON_SET(${storedPreferences}, '$.editorDefaultStyle', CAST(${JSON.stringify(style)} AS JSON))`,
+							sql`JSON_SET(${storedUserPreferences}, '$.editorDefaultStyle', CAST(${JSON.stringify(style)} AS JSON))`,
 						);
 						return { style };
 					}),
@@ -115,7 +112,7 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 						const user = yield* studioUser;
 						yield* writePreferences(
 							user.id,
-							sql`JSON_REMOVE(${storedPreferences}, '$.editorDefaultStyle')`,
+							sql`JSON_REMOVE(${storedUserPreferences}, '$.editorDefaultStyle')`,
 						);
 						return { style: null };
 					}),

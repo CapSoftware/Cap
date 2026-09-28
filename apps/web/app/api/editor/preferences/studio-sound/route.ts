@@ -11,6 +11,7 @@ import {
 import { eq, sql } from "drizzle-orm";
 import { Effect, Layer } from "effect";
 import { apiToHandler } from "@/lib/server";
+import { storedUserPreferences } from "@/lib/user-preferences-sql";
 import { isWebStudioEnabledForEmail } from "@/lib/web-studio-rollout";
 
 export const dynamic = "force-dynamic";
@@ -73,7 +74,7 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 								client
 									.update(users)
 									.set({
-										preferences: sql`JSON_SET(COALESCE(${users.preferences}, JSON_OBJECT()), '$.studioSound', CAST(${JSON.stringify(payload)} AS JSON))`,
+										preferences: sql`JSON_SET(${storedUserPreferences}, '$.studioSound', CAST(${JSON.stringify(payload)} AS JSON))`,
 									})
 									.where(eq(users.id, user.id)),
 							)
