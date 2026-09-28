@@ -1,4 +1,9 @@
-import { ALL_FORMATS, Input, UrlSource } from "mediabunny";
+import { ALL_FORMATS, Input, MP4, UrlSource, WEBM } from "mediabunny";
+import {
+	fragmentedMp4End,
+	fragmentedMp4Tracks,
+} from "./fragmented-mp4-duration";
+import { webmEnd, webmTimecodeScale } from "./webm-audio-duration";
 
 export type BrowserEditorMediaMetadata = {
 	duration: number;
@@ -29,6 +34,81 @@ function metadataInput(url: string) {
 			fetchFn: boundedMetadataFetch as typeof fetch,
 		}),
 	});
+}
+
+/// Up to `limit` bytes from `start` (open-ended, so the request stays CORS
+/// safelisted), and the file size from Content-Range or Content-Length.
+async function readRange(
+	url: string,
+	start: number,
+	limit: number,
+	signal: AbortSignal,
+) {
+	const response = await fetch(url, {
+		headers: { Range: `bytes=${start}-` },
+		signal,
+	});
+	const range = /\/(\d+)$/.exec(response.headers.get("Content-Range") ?? "");
+	const length = Number(response.headers.get("Content-Length"));
+	const size = range
+		? Number(range[1])
+		: Number.isSafeInteger(length)
+			? start + length
+			: null;
+	if (response.status !== 206 || !response.body || size === null) {
+		await response.body?.cancel();
+		return null;
+	}
+	const reader = response.body.getReader();
+	const bytes = new Uint8Array(Math.min(limit, size - start));
+	let filled = 0;
+	try {
+		while (filled < bytes.length) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			const take = Math.min(value.byteLength, bytes.length - filled);
+			bytes.set(value.subarray(0, take), filled);
+			filled += take;
+		}
+	} finally {
+		await reader.cancel().catch(() => undefined);
+	}
+	return { bytes: bytes.subarray(0, filled), size };
+}
+
+/// Recordings carry no duration: the recorder writes fragmented MP4 without a
+/// fragment index and WebM without Cues, so mediabunny's `computeDuration`
+/// walks every fragment, reading most of the file (gigabytes for a long
+/// recording). The last fragment or cluster gives the same end time from two
+/// small reads.
+async function durationFromTail(
+	url: string,
+	parse: (head: Uint8Array) => ((tail: Uint8Array) => number | null) | null,
+	signal: AbortSignal,
+) {
+	const head = await readRange(url, 0, 256 * 1024, signal);
+	const end = head && parse(head.bytes);
+	if (!head || !end) return null;
+	for (const tailBytes of [2, 8, 32].map((mb) => mb * 1024 * 1024)) {
+		const start = Math.max(0, head.size - tailBytes);
+		const tail = await readRange(url, start, tailBytes, signal);
+		if (!tail || tail.bytes.byteLength !== head.size - start) return null;
+		const duration = end(tail.bytes);
+		if (duration !== null || start === 0) return duration;
+	}
+	return null;
+}
+
+function mp4TailParser(head: Uint8Array) {
+	const tracks = fragmentedMp4Tracks(head);
+	return tracks === null
+		? null
+		: (tail: Uint8Array) => fragmentedMp4End(tail, tracks);
+}
+
+function webmTailParser(head: Uint8Array) {
+	const scale = webmTimecodeScale(head);
+	return scale === null ? null : (tail: Uint8Array) => webmEnd(tail, scale);
 }
 
 async function untaggedSdH264(
@@ -84,10 +164,26 @@ export async function probeBrowserEditorMedia(
 		if (!video && !audio) {
 			throw new Error("Editor media contains no usable tracks");
 		}
+		const format = await input.getFormat();
+		// WebM video blocks carry no durations, so only audio ends are exact.
+		const tailParser =
+			format === MP4
+				? mp4TailParser
+				: format === WEBM && !video
+					? webmTailParser
+					: null;
 		const duration =
 			(await input.getDurationFromMetadata(undefined, {
 				skipLiveWait: true,
-			})) ?? (await input.computeDuration(undefined, { skipLiveWait: true }));
+			})) ??
+			(tailParser &&
+				(await durationFromTail(url, tailParser, signal).catch(
+					(cause: unknown) => {
+						if (signal.aborted) throw cause;
+						return null;
+					},
+				))) ??
+			(await input.computeDuration(undefined, { skipLiveWait: true }));
 		const [width, height, audioChannels, sampleRate] = await Promise.all([
 			video ? video.getDisplayWidth() : Promise.resolve(null),
 			video ? video.getDisplayHeight() : Promise.resolve(null),
