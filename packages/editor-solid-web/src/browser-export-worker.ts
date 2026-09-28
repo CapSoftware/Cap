@@ -2,7 +2,12 @@
 // in a worker: sources decode in presentation order with WebCodecs, frames
 // render into an OffscreenCanvas and go straight to the hardware H.264
 // encoder, so no pixels round-trip through the CPU.
-import type { InputVideoTrack, VideoSample, VideoSampleSink } from "mediabunny";
+import type {
+	EncodedPacket,
+	InputVideoTrack,
+	VideoSample,
+	VideoSampleSink,
+} from "mediabunny";
 import {
 	decodeAudioLevels,
 	hasWaveformSegments,
@@ -40,6 +45,8 @@ export type BrowserExportJob = {
 	fps: number;
 	resolutionBase: { x: number; y: number };
 	bitsPerPixel: number;
+	/** Posts playable chunks while it renders, for watching before it's done. */
+	chunked?: boolean;
 };
 
 export type BrowserExportPreviewRequest = {
@@ -52,6 +59,8 @@ export type BrowserExportPreviewRequest = {
 
 export type BrowserExportMessage =
 	| { kind: "progress"; renderedCount: number; totalFrames: number }
+	| { kind: "chunk-init"; data: Uint8Array }
+	| { kind: "chunk"; data: Uint8Array; duration: number }
 	| {
 			kind: "done";
 			data: Blob;
@@ -635,6 +644,155 @@ async function openExportFile(maxBytes: number) {
 	}
 }
 
+const CHUNK_SECONDS = 2;
+
+const joinBytes = (parts: Uint8Array[]) => {
+	const joined = new Uint8Array(
+		parts.reduce((size, part) => size + part.length, 0),
+	);
+	let offset = 0;
+	for (const part of parts) {
+		joined.set(part, offset);
+		offset += part.length;
+	}
+	return joined;
+};
+
+/// Splits a fragmented MP4 as it's written into its init segment and one
+/// media segment per fragment, each posted once its duration is known.
+function chunkPoster() {
+	const header: Uint8Array[] = [];
+	let pending: { parts: Uint8Array[]; start: number } | null = null;
+	const post = (end: number) => {
+		if (!pending) return;
+		const data = joinBytes(pending.parts);
+		scope.postMessage({ kind: "chunk", data, duration: end - pending.start }, [
+			data.buffer,
+		]);
+		pending = null;
+	};
+	const callbacks = {
+		onFtyp: (data: Uint8Array) => {
+			header.push(data.slice());
+		},
+		onMoov: (data: Uint8Array) => {
+			header.push(data.slice());
+			const init = joinBytes(header);
+			scope.postMessage({ kind: "chunk-init", data: init }, [init.buffer]);
+		},
+		onMoof: (data: Uint8Array, _position: number, timestamp: number) => {
+			post(timestamp);
+			pending = { parts: [data.slice()], start: timestamp };
+		},
+		onMdat: (data: Uint8Array) => {
+			pending?.parts.push(data.slice());
+		},
+	};
+	return { callbacks, finish: post };
+}
+
+/// Adds packets to `source`, the first with its decoder config.
+const packetCopy = <Meta>(
+	source: {
+		add(packet: EncodedPacket, meta?: Meta): Promise<void>;
+		close(): void;
+	},
+	meta: Meta,
+	next: () => Promise<EncodedPacket | null>,
+) => {
+	let first = true;
+	return {
+		next,
+		close: () => source.close(),
+		add: (packet: EncodedPacket) => {
+			const packetMeta = first ? meta : undefined;
+			first = false;
+			return source.add(packet, packetMeta);
+		},
+	};
+};
+
+/// A fragmented MP4 as a regular one, with an index up front for seeking.
+/// Packets are copied in timestamp order, not encoded again.
+async function remuxToMp4(fragmented: Blob, maxBytes: number) {
+	const {
+		BlobSource,
+		BufferTarget,
+		EncodedAudioPacketSource,
+		EncodedPacketSink,
+		EncodedVideoPacketSource,
+		Input,
+		MP4,
+		Mp4OutputFormat,
+		Output,
+	} = await import("mediabunny");
+	const input = new Input({
+		source: new BlobSource(fragmented),
+		formats: [MP4],
+	});
+	const file = await openExportFile(maxBytes);
+	const target = file?.target ?? new BufferTarget();
+	const output = new Output({
+		format: new Mp4OutputFormat({ fastStart: file ? "reserve" : "in-memory" }),
+		target,
+	});
+	try {
+		const tracks = await Promise.all(
+			(await input.getTracks()).map(async (track) => {
+				const { packetCount } = await track.computePacketStats();
+				const packets = new EncodedPacketSink(track).packets();
+				const next = async () => {
+					const result = await packets.next();
+					return result.done ? null : result.value;
+				};
+				if (track.isVideoTrack()) {
+					const source = new EncodedVideoPacketSource(
+						(await track.getCodec()) ?? "avc",
+					);
+					const decoderConfig = (await track.getDecoderConfig()) ?? undefined;
+					output.addVideoTrack(source, { maximumPacketCount: packetCount });
+					return packetCopy(source, { decoderConfig }, next);
+				}
+				if (!track.isAudioTrack()) throw new Error("Export produced no file");
+				const source = new EncodedAudioPacketSource(
+					(await track.getCodec()) ?? "aac",
+				);
+				const decoderConfig = (await track.getDecoderConfig()) ?? undefined;
+				output.addAudioTrack(source, { maximumPacketCount: packetCount });
+				return packetCopy(source, { decoderConfig }, next);
+			}),
+		);
+		await output.start();
+		const heads = await Promise.all(tracks.map((track) => track.next()));
+		for (;;) {
+			let index = -1;
+			for (const [i, head] of heads.entries()) {
+				if (head && head.timestamp < (heads[index]?.timestamp ?? Infinity))
+					index = i;
+			}
+			const packet = heads[index];
+			if (!packet) break;
+			await tracks[index].add(packet);
+			heads[index] = await tracks[index].next();
+		}
+		for (const track of tracks) track.close();
+		await output.finalize();
+	} catch (cause) {
+		await output.cancel().catch(() => undefined);
+		file?.discard();
+		throw cause;
+	} finally {
+		input.dispose();
+	}
+	const data = file
+		? await file.finish()
+		: target instanceof BufferTarget && target.buffer
+			? new Blob([target.buffer], { type: "video/mp4" })
+			: null;
+	if (!data) throw new Error("Export produced no file");
+	return { data, storedFile: file?.name ?? null };
+}
+
 async function runExport(job: BrowserExportJob) {
 	const started = performance.now();
 	const context = await renderContext(job);
@@ -651,19 +809,28 @@ async function runExport(job: BrowserExportJob) {
 	if (!(await canEncodeVideo("avc", { width, height, bitrate }))) {
 		throw new Error("This browser cannot encode H.264 video");
 	}
-	const file = await openExportFile(
-		((bitrate + EXPORT_AUDIO_BITRATE) * totalFrames) / job.fps / 8,
-	);
+	const maxBytes =
+		((bitrate + EXPORT_AUDIO_BITRATE) * totalFrames) / job.fps / 8;
+	const file = await openExportFile(maxBytes);
 	const target = file?.target ?? new BufferTarget();
+	const chunks = job.chunked ? chunkPoster() : null;
 	const output = new Output({
-		format: new Mp4OutputFormat({ fastStart: file ? "reserve" : "in-memory" }),
+		format: new Mp4OutputFormat(
+			chunks
+				? {
+						fastStart: "fragmented",
+						minimumFragmentDuration: CHUNK_SECONDS,
+						...chunks.callbacks,
+					}
+				: { fastStart: file ? "reserve" : "in-memory" },
+		),
 		target,
 	});
 	try {
 		const videoSource = new CanvasSource(canvas, {
 			codec: "avc",
 			bitrate,
-			keyFrameInterval: 2,
+			keyFrameInterval: CHUNK_SECONDS,
 			latencyMode: "quality",
 			hardwareAcceleration: "prefer-hardware",
 		});
@@ -730,16 +897,23 @@ async function runExport(job: BrowserExportJob) {
 		videoSource.close();
 		await audioDone;
 		await output.finalize();
-		const data = file
+		chunks?.finish(totalFrames / job.fps);
+		let data: Blob | null = file
 			? await file.finish()
 			: target instanceof BufferTarget && target.buffer
 				? new Blob([target.buffer], { type: "video/mp4" })
 				: null;
 		if (!data) throw new Error("Export produced no file");
+		let storedFile = file?.name ?? null;
+		if (chunks) {
+			const fragmented = file;
+			({ data, storedFile } = await remuxToMp4(data, maxBytes));
+			fragmented?.discard();
+		}
 		scope.postMessage({
 			kind: "done",
 			data,
-			storedFile: file?.name ?? null,
+			storedFile,
 			mimeType: "video/mp4",
 			stats: {
 				frames: totalFrames,

@@ -510,12 +510,20 @@ export async function browserLocalExportEstimates(
 	};
 }
 
+/// A playable piece of an export in progress: its init segment (no
+/// duration), then each media segment.
+export type ExportChunkListener = (
+	data: Uint8Array,
+	duration: number | null,
+) => void;
+
 /// Renders and encodes the export on this machine. Throws
 /// `BrowserLocalExportUnavailable` before any frame renders when the browser
 /// cannot export locally, so the caller can use the worker instead.
 export async function renderBrowserLocalExport(
 	settings: Record<string, unknown>,
 	onProgress?: (renderedCount: number, totalFrames: number) => void,
+	onChunk?: ExportChunkListener,
 ) {
 	const videoId = localVideoId(settings);
 	if (activeExport)
@@ -543,9 +551,10 @@ export async function renderBrowserLocalExport(
 			exportJob(videoId, settings, controller.signal),
 			cancelled,
 		]);
+		if (onChunk) job.chunked = true;
 		worker = exportWorker();
 		result = await Promise.race([
-			workerExport(worker, job, state, onProgress),
+			workerExport(worker, job, state, onProgress, onChunk),
 			cancelled,
 		]);
 	} finally {
@@ -585,6 +594,7 @@ function workerExport(
 	job: BrowserExportJob,
 	state: { listener: WorkerListener },
 	onProgress?: (renderedCount: number, totalFrames: number) => void,
+	onChunk?: ExportChunkListener,
 ) {
 	let started = false;
 	return new Promise<Extract<BrowserExportMessage, { kind: "done" }>>(
@@ -593,6 +603,10 @@ function workerExport(
 				if (message.kind === "progress") {
 					started = true;
 					onProgress?.(message.renderedCount, message.totalFrames);
+				} else if (message.kind === "chunk-init") {
+					onChunk?.(message.data, null);
+				} else if (message.kind === "chunk") {
+					onChunk?.(message.data, message.duration);
 				} else if (message.kind === "done") {
 					resolve(message);
 				} else if (message.kind === "error" && message.id === undefined) {

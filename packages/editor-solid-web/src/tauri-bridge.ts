@@ -282,6 +282,11 @@ export class PortEditorTransport {
 						report(progress * 0.9);
 					}
 				},
+				(data, duration) =>
+					void this.request("invoke", "tauri:webEditorBrowserSaveChunk", [
+						data,
+						duration,
+					]).catch(() => undefined),
 			);
 		} catch (cause) {
 			report(null);
