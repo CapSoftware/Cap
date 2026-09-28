@@ -397,7 +397,11 @@ export function PlayerContent(props: { compactness?: number }) {
 					</Show>
 				</div>
 				<div class="flex flex-row flex-none gap-2 items-center">
-					<span class="text-xs text-ed-text-2">Preview</span>
+					<Tooltip content="How sharp playback looks while you edit. Exports always render at full quality.">
+						<span class="text-xs text-ed-text-2 cursor-default">
+							Preview quality
+						</span>
+					</Tooltip>
 					<div
 						role="group"
 						aria-label="Preview quality"

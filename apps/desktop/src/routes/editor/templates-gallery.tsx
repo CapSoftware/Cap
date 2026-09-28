@@ -22,9 +22,9 @@ import type {
 } from "~/utils/tauri";
 import { commands } from "~/utils/tauri";
 import IconLucideCheck from "~icons/lucide/check";
-import IconLucideLayoutTemplate from "~icons/lucide/layout-template";
 import IconLucideMoreHorizontal from "~icons/lucide/more-horizontal";
 import IconLucidePlus from "~icons/lucide/plus";
+import IconLucideSwatchBook from "~icons/lucide/swatch-book";
 import { clipDuration } from "./clip-transitions";
 import {
 	normalizeProject,
@@ -255,7 +255,7 @@ export function TemplatesGallery() {
 		>
 			<EditorButton<typeof KPopover.Trigger>
 				as={KPopover.Trigger}
-				leftIcon={<IconLucideLayoutTemplate class="size-4" />}
+				leftIcon={<IconLucideSwatchBook class="size-4" />}
 				tooltipText="Templates and presets"
 			>
 				<span class="max-[1200px]:hidden">Templates</span>
