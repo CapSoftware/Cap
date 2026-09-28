@@ -2,7 +2,7 @@ import { expect, test } from "vitest";
 import {
 	isAbandonedEditorReplacementUpload,
 	isActiveEditorReplacementUpload,
-} from "../lib/editor-session";
+} from "../lib/editor-replacement-upload";
 
 const key =
 	"owner/video/.recording/outputs/reupload-123e4567-e89b-42d3-a456-426614174000/result.mp4";

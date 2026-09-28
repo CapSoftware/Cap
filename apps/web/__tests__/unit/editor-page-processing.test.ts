@@ -46,6 +46,9 @@ vi.mock("next/navigation", () => ({
 vi.mock("@/lib/web-studio-rollout", () => ({
 	isWebStudioEnabledForEmail: () => mocks.studioEnabled,
 }));
+vi.mock("@/lib/editor-video-duration", () => ({
+	measureMissingVideoDuration: async () => null,
+}));
 vi.mock("@/lib/video-edit-processing", () => ({
 	getEditSourceKey: (owner: string, video: string) =>
 		`${owner}/${video}/source/original.mp4`,

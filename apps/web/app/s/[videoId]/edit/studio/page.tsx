@@ -5,7 +5,7 @@ import { userIsPro } from "@cap/utils";
 import { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { notFound, redirect } from "next/navigation";
-import { isAbandonedEditorReplacementUpload } from "@/lib/editor-session";
+import { isAbandonedEditorReplacementUpload } from "@/lib/editor-replacement-upload";
 import { editorSourcesUploaded } from "@/lib/editor-sources-ready";
 import { measureMissingVideoDuration } from "@/lib/editor-video-duration";
 import { getEditSourceKey, isEditSourceKey } from "@/lib/video-edit-processing";
