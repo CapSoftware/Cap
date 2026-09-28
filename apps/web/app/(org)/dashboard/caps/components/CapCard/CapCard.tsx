@@ -41,6 +41,11 @@ import { toast } from "sonner";
 import { ConfirmationDialog } from "@/app/(org)/dashboard/_components/ConfirmationDialog";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { useUploadProgress } from "@/app/s/[videoId]/_components/ProgressCircle";
+import {
+	renderProgressLabel,
+	useRenderSaveStatus,
+} from "@/app/s/[videoId]/_components/render-farm-save-view";
+import { RenderFog } from "@/components/render-fog";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import {
 	type ImageLoadingStatus,
@@ -249,7 +254,16 @@ export const CapCard = ({
 	);
 	const hasRawFallback =
 		uploadProgress?.status === "error" && uploadProgress.hasRawFallback;
+	// A render in progress takes the card over, as it does the share page.
+	const renderStatus = useRenderSaveStatus(
+		cap.id,
+		cap.metadata?.renderFarmSave?.status === "rendering",
+	);
+	const isRendering =
+		cap.metadata?.renderFarmSave?.status === "rendering" &&
+		(renderStatus === null || renderStatus.state === "rendering");
 	const hasVisibleUploadProgress =
+		!isRendering &&
 		uploadProgress !== null &&
 		uploadProgress.status !== "fetching" &&
 		!hasRawFallback;
@@ -704,6 +718,15 @@ export const CapCard = ({
 						}}
 						href={`/s/${cap.id}`}
 					>
+						{isRendering && (
+							<RenderFog
+								overlay
+								compact
+								className="z-20 rounded-t-xl"
+								label={renderProgressLabel(renderStatus?.progress ?? 0)}
+								progress={renderStatus?.progress ?? 0}
+							/>
+						)}
 						{hasVisibleUploadProgress && (
 							<>
 								<div className="absolute inset-0 z-20 transition-all duration-300 bg-black/60 rounded-t-xl" />

@@ -1,10 +1,12 @@
 "use client";
 
+import type { Video } from "@cap/web-domain";
 import Hls from "hls.js";
 import { useRouter } from "next/navigation";
 import { type ReactNode, type RefObject, useEffect, useState } from "react";
+import { RenderFog } from "@/components/render-fog";
+import { useThumnailQuery } from "@/components/VideoThumbnail";
 import { scheduleReadyRefresh } from "./deferred-ready-refresh";
-import { PreparingVideoOverlay } from "./RecordingInProgress";
 
 type RenderSaveStatus = {
 	state: "idle" | "rendering" | "ready" | "error";
@@ -16,9 +18,11 @@ type RenderSaveStatus = {
 
 const POLL_MS = 3000;
 
-function useRenderSaveStatus(videoId: string) {
+/** Polls a render on the render farm while it's running. */
+export function useRenderSaveStatus(videoId: string, enabled = true) {
 	const [status, setStatus] = useState<RenderSaveStatus | null>(null);
 	useEffect(() => {
+		if (!enabled) return;
 		let timer: ReturnType<typeof setTimeout> | undefined;
 		const controller = new AbortController();
 		const poll = async () => {
@@ -42,19 +46,43 @@ function useRenderSaveStatus(videoId: string) {
 			controller.abort();
 			clearTimeout(timer);
 		};
-	}, [videoId]);
+	}, [videoId, enabled]);
 	return status;
+}
+
+/** How far a render has got, worded the same on the share page and dashboard. */
+export function renderProgressLabel(progress: number) {
+	const percent = Math.floor(progress * 100);
+	return percent > 0 ? `Rendering · ${percent}%` : "Getting the video ready";
 }
 
 function RenderPreviewPlayer({
 	src,
 	videoRef,
 	className,
+	onWaitingChange,
 }: {
 	src: string;
 	videoRef: RefObject<HTMLVideoElement | null>;
 	className?: string;
+	onWaitingChange: (waiting: boolean) => void;
 }) {
+	useEffect(() => {
+		const video = videoRef.current;
+		if (!video) return;
+		const waiting = () => onWaitingChange(true);
+		const moving = () => onWaitingChange(false);
+		video.addEventListener("waiting", waiting);
+		video.addEventListener("playing", moving);
+		video.addEventListener("seeking", moving);
+		video.addEventListener("pause", moving);
+		return () => {
+			video.removeEventListener("waiting", waiting);
+			video.removeEventListener("playing", moving);
+			video.removeEventListener("seeking", moving);
+			video.removeEventListener("pause", moving);
+		};
+	}, [videoRef, onWaitingChange]);
 	useEffect(() => {
 		const video = videoRef.current;
 		if (!video) return;
@@ -86,20 +114,27 @@ function RenderPreviewPlayer({
 	);
 }
 
+/**
+ * A video still rendering on the render farm: fog until its first part is
+ * ready, then it plays up to where the render has reached, with fog over the
+ * frame while playback waits for the rest.
+ */
 export function RenderFarmSaveView({
 	videoId,
 	videoRef,
 	fallback,
 	className,
 }: {
-	videoId: string;
+	videoId: Video.VideoId;
 	videoRef: RefObject<HTMLVideoElement | null>;
 	fallback: ReactNode;
 	className?: string;
 }) {
 	const status = useRenderSaveStatus(videoId);
+	const poster = useThumnailQuery(videoId).data;
 	const router = useRouter();
 	const [playlist, setPlaylist] = useState<string | null>(null);
+	const [waiting, setWaiting] = useState(false);
 
 	useEffect(() => {
 		if (status?.playable && status.hlsUrl && !playlist) {
@@ -117,16 +152,16 @@ export function RenderFarmSaveView({
 	}, [status?.state, videoId, videoRef, router]);
 
 	if (status?.state === "error" || status?.state === "idle") return fallback;
-	const percent = Math.floor((status?.progress ?? 0) * 100);
+	const progress = status?.progress ?? 0;
+	const rendering = status?.state !== "ready";
 	if (!playlist) {
 		return (
-			<PreparingVideoOverlay
+			<RenderFog
+				poster={poster}
 				className={className}
-				label={
-					percent > 0
-						? `Rendering the new version… ${percent}%`
-						: "Preparing the new version…"
-				}
+				label={renderProgressLabel(progress)}
+				detail="It starts playing here as soon as the first part is ready."
+				progress={progress}
 			/>
 		);
 	}
@@ -136,11 +171,22 @@ export function RenderFarmSaveView({
 				src={playlist}
 				videoRef={videoRef}
 				className="w-full h-full"
+				onWaitingChange={setWaiting}
 			/>
-			<div className="absolute top-3 right-3 rounded-md bg-black/65 px-2.5 py-1 text-[11px] font-medium text-white backdrop-blur-sm">
-				{status?.state === "ready"
-					? "New version ready"
-					: `Rendering new version · ${percent}%`}
+			{rendering && waiting && (
+				<RenderFog
+					overlay
+					className="pointer-events-none"
+					label="Rendering the rest"
+					detail="Playback carries on as soon as it's ready."
+					progress={progress}
+				/>
+			)}
+			<div className="pointer-events-none absolute top-3 right-3 flex items-center gap-1.5 rounded-md bg-black/65 px-2.5 py-1 text-[11px] font-medium text-white backdrop-blur-sm">
+				{rendering && (
+					<span className="size-1.5 animate-pulse rounded-full bg-white" />
+				)}
+				{rendering ? renderProgressLabel(progress) : "Ready"}
 			</div>
 		</div>
 	);
