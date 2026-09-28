@@ -171,3 +171,21 @@ export function withRecorderCamera(
 		},
 	};
 }
+
+// How a recording looks until its owner saves a style of their own: edge to
+// edge, with no background around it.
+export const FULL_BLEED_STYLE: EditorDefaultStyle = {
+	version: 1,
+	background: { padding: 0, rounding: 0, shadow: 0 },
+};
+
+/** The style a new recording opens and first renders with. */
+export function recordingDefaultStyle(
+	savedStyle: unknown,
+	recorderCamera: unknown,
+): EditorDefaultStyle | null {
+	return withRecorderCamera(
+		parseDefaultStyle(savedStyle) ?? FULL_BLEED_STYLE,
+		parseRecorderCamera(recorderCamera),
+	);
+}

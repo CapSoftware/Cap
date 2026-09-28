@@ -1,4 +1,7 @@
-import { applyDefaultStyle } from "@cap/editor-cap-bundle/default-style";
+import {
+	applyDefaultStyle,
+	FULL_BLEED_STYLE,
+} from "@cap/editor-cap-bundle/default-style";
 import type {
 	Audio,
 	ProjectRecordingsMeta,
@@ -487,9 +490,11 @@ export class BrowserEditorCommands {
 			return tracks;
 		}
 		if (name === "getDefaultProjectConfig") {
-			return JSON.parse(
+			const defaults: unknown = JSON.parse(
 				(await loadBrowserRenderer()).default_project_config_json(),
 			);
+			const project = record(defaults);
+			return project ? applyDefaultStyle(project, FULL_BLEED_STYLE) : defaults;
 		}
 		if (name === "setWindowTransparent") return null;
 		if (name === "tauri:get_recording_recovery_success") return false;

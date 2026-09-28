@@ -1,6 +1,7 @@
 import {
 	applyDefaultStyle,
 	parseRecorderCamera,
+	recordingDefaultStyle,
 	withRecorderCamera,
 } from "@cap/editor-cap-bundle/default-style";
 import { describe, expect, it } from "vitest";
@@ -69,5 +70,16 @@ describe("recorder camera layout", () => {
 			mirror: true,
 			position: { x: "left", y: "top" },
 		});
+	});
+
+	it("opens a new recording edge to edge until its owner saves a style", () => {
+		expect(recordingDefaultStyle(null, layout)).toMatchObject({
+			background: { padding: 0, rounding: 0, shadow: 0 },
+			camera: { position: { x: "left", y: "top" }, size: 40 },
+		});
+		expect(
+			recordingDefaultStyle({ version: 1, background: { padding: 12 } }, null)
+				?.background,
+		).toEqual({ padding: 12 });
 	});
 });
