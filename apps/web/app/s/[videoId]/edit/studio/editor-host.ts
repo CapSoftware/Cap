@@ -417,6 +417,7 @@ export class EditorHostBridge {
 	private canceledExportCleanup: Promise<void> | null = null;
 	private activeShare: AbortController | null = null;
 	private activeSavePublish: AbortController | null = null;
+	private browserSaveReportedAt = 0;
 	private activeCaptions: {
 		language: AiGenerationLanguage;
 		promise: Promise<WebEditorCaptionData>;
@@ -1490,6 +1491,7 @@ export class EditorHostBridge {
 				metadata as WebEditorExportMetadata,
 				signal,
 				(progress) => {
+					this.reportBrowserSave(0.9 + progress.fraction * 0.1);
 					if (channelId !== null)
 						this.port?.postMessage({
 							kind: "channel",
@@ -1518,9 +1520,30 @@ export class EditorHostBridge {
 							: "The rendered video could not be published",
 			});
 		} finally {
+			this.reportBrowserSave(null);
 			window.removeEventListener("beforeunload", keepOpen);
 			if (this.activeSavePublish === controller) this.activeSavePublish = null;
 		}
+	}
+
+	/**
+	 * Tells the share page and Cap card how far a Save rendering in this tab has
+	 * got, and clears it with null once the tab is done with it.
+	 */
+	private reportBrowserSave(progress: number | null) {
+		const now = Date.now();
+		if (progress !== null && now - this.browserSaveReportedAt < 3000) return;
+		this.browserSaveReportedAt = progress === null ? 0 : now;
+		void fetch(
+			`/api/editor/videos/${encodeURIComponent(this.videoId)}/browser-save`,
+			progress === null
+				? { method: "DELETE", keepalive: true }
+				: {
+						method: "PUT",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({ progress }),
+					},
+		).catch(() => undefined);
 	}
 
 	private async handleShareExport(message: BridgeRequest) {
@@ -2364,6 +2387,19 @@ export class EditorHostBridge {
 			} finally {
 				releaseWorkerUse();
 			}
+			return;
+		}
+		if (
+			message.kind === "invoke" &&
+			message.name === "tauri:webEditorBrowserSaveProgress"
+		) {
+			const [progress] = message.args;
+			this.reportBrowserSave(
+				typeof progress === "number" && progress >= 0 && progress <= 1
+					? progress
+					: null,
+			);
+			this.port?.postMessage({ kind: "result", id: message.id, value: null });
 			return;
 		}
 		if (

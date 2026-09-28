@@ -260,19 +260,31 @@ export class PortEditorTransport {
 			typeof channel.id === "number"
 				? channel.id
 				: null;
+		// The share page shows how far along the render is, uploading counting
+		// for the last tenth.
+		let reportedAt = 0;
+		const report = (progress: number | null) =>
+			void this.request("invoke", "tauri:webEditorBrowserSaveProgress", [
+				progress,
+			]).catch(() => undefined);
+		report(0);
 		let rendered: Awaited<ReturnType<typeof renderBrowserLocalExport>>;
 		try {
 			rendered = await renderBrowserLocalExport(
 				BROWSER_SAVE_SETTINGS,
 				(renderedCount, totalFrames) => {
-					if (channelId !== null && totalFrames > 0)
-						emitEditorChannel(channelId, {
-							stage: "rendering",
-							progress: renderedCount / totalFrames,
-						});
+					if (totalFrames <= 0) return;
+					const progress = renderedCount / totalFrames;
+					if (channelId !== null)
+						emitEditorChannel(channelId, { stage: "rendering", progress });
+					if (Date.now() - reportedAt >= 1000) {
+						reportedAt = Date.now();
+						report(progress * 0.9);
+					}
 				},
 			);
 		} catch (cause) {
+			report(null);
 			if (cause instanceof BrowserLocalExportUnavailable)
 				throw new Error(
 					"This browser can't render the video. Try Chrome or Edge, or use Download.",
@@ -280,10 +292,12 @@ export class PortEditorTransport {
 			throw cause;
 		}
 		try {
-			if (rendered.mimeType !== "video/mp4")
+			if (rendered.mimeType !== "video/mp4") {
+				report(null);
 				throw new Error(
 					"The rendered video is not an MP4. Use Download instead.",
 				);
+			}
 			return await this.request("invoke", "tauri:webEditorPublishRendered", [
 				new Blob([rendered.data], { type: "video/mp4" }),
 				{
