@@ -11,7 +11,11 @@ import {
 import { eq } from "drizzle-orm";
 import { Effect, Layer, Schema } from "effect";
 import { refreshRenderFarmSave } from "@/lib/render-farm-save";
-import { renderFarmSaveIsCurrent } from "@/lib/render-farm-status";
+import {
+	activeBrowserSave,
+	IDLE_RENDER_SAVE,
+	renderFarmSaveIsCurrent,
+} from "@/lib/render-farm-status";
 import { apiToHandler } from "@/lib/server";
 
 export const dynamic = "force-dynamic";
@@ -67,8 +71,18 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 							try: () => refreshRenderFarmSave(video),
 							catch: () => new HttpApiError.InternalServerError(),
 						});
+						const browserSave =
+							status.state === "rendering"
+								? null
+								: activeBrowserSave(video.metadata);
 						return {
-							...status,
+							...(browserSave
+								? {
+										...IDLE_RENDER_SAVE,
+										state: "rendering" as const,
+										progress: browserSave.progress,
+									}
+								: status),
 							current: renderFarmSaveIsCurrent(video.metadata),
 						};
 					}).pipe(

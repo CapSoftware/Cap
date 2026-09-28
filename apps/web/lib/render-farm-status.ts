@@ -117,6 +117,21 @@ export function publishedRenderFarmUpdate(
 	};
 }
 
+// A tab reports a Save it's rendering every few seconds; one that stops
+// reporting was closed or failed.
+const BROWSER_SAVE_STALE_MS = 30_000;
+
+/** A Save rendering in its owner's browser, while that tab keeps reporting. */
+export function activeBrowserSave(
+	metadata: VideoMetadata | null | undefined,
+	now = Date.now(),
+) {
+	const save = metadata?.browserSave;
+	return save && now - Date.parse(save.updatedAt) < BROWSER_SAVE_STALE_MS
+		? save
+		: null;
+}
+
 /** Whether the share link shows, or is rendering, the project as saved now. */
 export function renderFarmSaveIsCurrent(metadata: VideoMetadata | null) {
 	const save = metadata?.renderFarmSave;
