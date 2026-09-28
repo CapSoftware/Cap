@@ -57,6 +57,7 @@ import {
 	EditorShellBar,
 	EditorShellBrand,
 	EditorShellTab,
+	EditorTabLabel,
 	RecordVideoLink,
 } from "@/components/editor-shell/editor-shell-bar";
 import { ShareLinkTab } from "@/components/editor-shell/share-link-tab";
@@ -822,7 +823,7 @@ export const ShareHeader = ({
 			{showsEditorBar && (
 				<div className="-mx-4 border-b border-gray-5 lg:-mx-8">
 					<EditorShellBar
-						onLightPage
+						light="white"
 						left={
 							<EditorShellBrand title="Dashboard" backHref="/dashboard/caps" />
 						}
@@ -846,7 +847,7 @@ export const ShareHeader = ({
 									disabled={!canEditVideo}
 									onClick={handleEditVideo}
 								>
-									Editor
+									<EditorTabLabel />
 								</EditorShellTab>
 							</>
 						}
@@ -1117,11 +1118,15 @@ export const ShareHeader = ({
 											<DropdownMenuContent align="end" sideOffset={5}>
 												{/* The header buttons phones don't show. Hidden from
 												    `sm` up so nothing is offered twice. Share isn't
-												    among them: it keeps its own button at every width. */}
+												    among them: it keeps its own button at every width.
+												    With the editor bar, Edit video has no header button. */}
 												{canEditVideo && (
 													<DropdownMenuItem
 														onClick={handleEditVideo}
-														className="flex items-center gap-2 rounded-lg sm:hidden"
+														className={clsx(
+															"flex items-center gap-2 rounded-lg",
+															!showsEditorBar && "sm:hidden",
+														)}
 													>
 														<Scissors className="size-3.5" />
 														<p className="text-sm text-gray-12">Edit video</p>
@@ -1139,7 +1144,13 @@ export const ShareHeader = ({
 													/>
 													<p className="text-sm text-gray-12">View analytics</p>
 												</DropdownMenuItem>
-												<DropdownMenuSeparator className="sm:hidden" />
+												<DropdownMenuSeparator
+													className={
+														showsEditorBar && canEditVideo
+															? undefined
+															: "sm:hidden"
+													}
+												/>
 												<DropdownMenuItem
 													onClick={() => setIsSharingDialogOpen(true)}
 													className="flex items-center gap-2 rounded-lg"

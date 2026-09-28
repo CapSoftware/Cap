@@ -16,6 +16,7 @@ import {
 	EditorShellBar,
 	EditorShellBrand,
 	EditorShellTab,
+	EditorTabLabel,
 } from "@/components/editor-shell/editor-shell-bar";
 import { EditorShareLinkTab } from "@/components/editor-shell/share-link-tab";
 import { useAppPage } from "@/components/editor-shell/use-app-page";
@@ -654,6 +655,7 @@ export function StudioEditorClient(props: {
 	return (
 		<div className="flex h-screen w-screen flex-col bg-[#f1f1f3] dark:bg-[#131315]">
 			<EditorShellBar
+				light="grey"
 				left={
 					<EditorShellBrand
 						title="Back to shareable link"
@@ -671,7 +673,9 @@ export function StudioEditorClient(props: {
 							onNavigate={backToSharePage}
 							onUpgradeRequest={() => setUpgradeOpen(true)}
 						/>
-						<EditorShellTab active>Editor</EditorShellTab>
+						<EditorShellTab active>
+							<EditorTabLabel />
+						</EditorShellTab>
 					</>
 				}
 				right={<EditorShellActions onNavigate={confirmLeave} />}

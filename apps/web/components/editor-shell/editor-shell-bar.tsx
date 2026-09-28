@@ -1,7 +1,7 @@
 "use client";
 
 import clsx from "clsx";
-import { ArrowLeftIcon } from "lucide-react";
+import { ArrowLeftIcon, ScissorsIcon } from "lucide-react";
 import Link from "next/link";
 import type { MouseEventHandler, ReactNode } from "react";
 import "@/app/(org)/dashboard/caps/components/web-recorder-dialog/recorder.css";
@@ -12,19 +12,20 @@ export function EditorShellBar({
 	left,
 	center,
 	right,
-	onLightPage = false,
+	light,
 }: {
 	left: ReactNode;
 	center: ReactNode;
 	right?: ReactNode;
-	onLightPage?: boolean;
+	/** Keeps the bar light over a page that is, on its grey or white. */
+	light?: "grey" | "white";
 }) {
 	return (
 		<header
-			data-appearance={onLightPage ? "light" : undefined}
+			data-appearance={light ? "light" : undefined}
 			className={clsx(
 				"cap-rec grid h-12 shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-3 px-2 sm:px-3",
-				onLightPage ? "bg-white" : "bg-[var(--rec-window)]",
+				light === "white" ? "bg-white" : "bg-[var(--rec-window)]",
 			)}
 			style={{ viewTransitionName: "cap-shell-bar" }}
 		>
@@ -91,8 +92,17 @@ export const shellTabClass = (active: boolean) =>
 		"flex h-7 items-center rounded-md text-[13px] font-medium transition-colors",
 		active
 			? "bg-[var(--rec-card)] text-[var(--rec-text-1)] shadow-[0_1px_2px_rgba(0,0,0,0.1),0_0_0_1px_var(--rec-line)]"
-			: "text-[var(--rec-text-2)] hover:text-[var(--rec-text-1)]",
+			: "text-[var(--rec-text-2)] hover:bg-[var(--rec-ctl-hover)] hover:text-[var(--rec-text-1)]",
 	);
+
+export function EditorTabLabel() {
+	return (
+		<>
+			<ScissorsIcon className="size-3.5" aria-hidden />
+			Editor
+		</>
+	);
+}
 
 export function EditorShellTab({
 	active,
