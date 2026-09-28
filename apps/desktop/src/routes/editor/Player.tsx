@@ -686,11 +686,13 @@ function PreviewCanvas(props: {
 		hasFrame: () => !!latestFrame(),
 		updater: boundsUpdater,
 	});
-	// The web page keeps its snapshot of the video up until the editor has a
-	// frame of its own to show.
+	// The web page keeps its snapshot of the video up until the preview shows
+	// a frame of its own.
+	const previewVisible = () =>
+		preparing?.model.rendered() === true || hasShownFrame();
 	if (import.meta.env.VITE_CAP_WEB_EDITOR === "true")
 		createEffect(() => {
-			if (hasFrame())
+			if (previewVisible())
 				window.parent.postMessage(
 					{ kind: "cap-editor-painted", version: 1 },
 					window.location.origin,
@@ -767,7 +769,7 @@ function PreviewCanvas(props: {
 				class="flex overflow-hidden absolute inset-0 justify-center items-center h-full transition-opacity duration-300 ease-out motion-reduce:transition-none"
 				style={{
 					visibility: hasFrame() ? "visible" : "hidden",
-					opacity: preparing?.model.rendered() || hasShownFrame() ? 1 : 0,
+					opacity: previewVisible() ? 1 : 0,
 				}}
 			>
 				<div
