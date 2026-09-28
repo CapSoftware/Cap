@@ -14,6 +14,7 @@ import { zValidator } from "@hono/zod-validator";
 import { and, eq, sql } from "drizzle-orm";
 import { Effect, Option, Schedule } from "effect";
 import { Hono, type MiddlewareHandler } from "hono";
+import { after } from "next/server";
 import { z } from "zod";
 import { withAuth } from "@/app/api/utils";
 import {
@@ -46,6 +47,17 @@ import {
 	isInputEventsRecorderUpload,
 	isRawRecorderUpload,
 } from "./multipart-utils";
+
+/** Farm transcodes only speed up a later render, so Stop never waits on them. */
+function prewarmAfterResponse(video: Video.Video, key: string) {
+	after(() =>
+		prewarmRenderFarmSource(video, key).pipe(
+			Effect.timeout("30 seconds"),
+			Effect.ignore,
+			runPromise,
+		),
+	);
+}
 
 export const app = new Hono().use(withAuth);
 
@@ -726,10 +738,7 @@ app.post(
 							),
 					);
 					if (cameraSourceUpload && isWebStudioEnabledForEmail(user.email)) {
-						yield* prewarmRenderFarmSource(video, fileKey).pipe(
-							Effect.timeout("5 seconds"),
-							Effect.ignore,
-						);
+						prewarmAfterResponse(video, fileKey);
 					}
 					return c.json({
 						success: true,
@@ -1075,10 +1084,7 @@ app.post(
 						);
 
 						if (retainDisplaySource && isWebStudioEnabledForEmail(user.email)) {
-							yield* prewarmRenderFarmSource(video, fileKey).pipe(
-								Effect.timeout("5 seconds"),
-								Effect.ignore,
-							);
+							prewarmAfterResponse(video, fileKey);
 							yield* Effect.tryPromise(() =>
 								startRecordingRender(
 									Video.VideoId.make(videoId),
