@@ -279,3 +279,22 @@ export async function fetchConvertedVideoViaMediaServer(
 		{ maxRetries: 0 },
 	);
 }
+
+export async function fetchPreviewAssetsViaMediaServer(body: {
+	videoUrl: string;
+	thumbnailPresignedUrl: string;
+	previewGifPresignedUrl: string;
+}): Promise<Response> {
+	const { mediaServerUrl, mediaServerSecret } = getMediaServerConfig();
+
+	return await fetchWithRetry(
+		`${mediaServerUrl}/video/preview-assets`,
+		{
+			method: "POST",
+			headers: getMediaServerHeaders(mediaServerSecret),
+			body: JSON.stringify(body),
+			signal: AbortSignal.timeout(5 * 60 * 1000),
+		},
+		{ maxRetries: 0 },
+	);
+}

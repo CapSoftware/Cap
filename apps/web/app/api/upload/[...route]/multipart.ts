@@ -32,6 +32,7 @@ import {
 	queueVideoTranscription,
 	shouldQueueTranscriptionAfterMultipartComplete,
 } from "@/lib/queue-video-transcription";
+import { enqueuePreviewAssetsRefresh } from "@/lib/refresh-preview-assets";
 import { prewarmRenderFarmSource } from "@/lib/render-farm-start";
 import { startRecordingRender } from "@/lib/render-recording";
 import { runPromise } from "@/lib/server";
@@ -865,6 +866,7 @@ app.post(
 							),
 						),
 					);
+					yield* Effect.promise(() => enqueuePreviewAssetsRefresh(videoId));
 					if (
 						shouldQueueTranscriptionAfterMultipartComplete(
 							video.source.type,

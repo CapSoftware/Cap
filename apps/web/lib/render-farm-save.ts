@@ -14,6 +14,7 @@ import {
 	queueVideoTranscription,
 	shouldQueueTranscriptionAfterMultipartComplete,
 } from "@/lib/queue-video-transcription";
+import { enqueuePreviewAssetsRefresh } from "@/lib/refresh-preview-assets";
 import {
 	mapRenderFarmJob,
 	renderFarmConfig,
@@ -102,6 +103,7 @@ export async function finalizeRenderFarmSave(
 	await invalidateReuploadedVideo(decodeStorageVideo(video)).catch((error) =>
 		console.warn("Could not refresh derived recording assets", error),
 	);
+	await enqueuePreviewAssetsRefresh(videoId);
 	if (
 		save.trigger !== "recording" &&
 		shouldQueueTranscriptionAfterMultipartComplete(video.source.type, false)

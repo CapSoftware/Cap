@@ -247,8 +247,6 @@ describe("desktop reupload target identity", () => {
 					audioLevelOutputKey: "audio-output",
 					audioLevelSourceKey: "audio-source",
 					outputKey: "output",
-					previewKey: "preview",
-					thumbnailKey: "thumbnail",
 					type: "desktopMP4",
 				}),
 			)
@@ -266,13 +264,33 @@ describe("desktop reupload target identity", () => {
 				outputKey: undefined,
 			}),
 		).toBe(desktopReuploadSourceIdentity({ type: "desktopMP4" }));
-		for (const key of Object.keys(source)) {
+		for (const key of [
+			"type",
+			"outputKey",
+			"audioLevelOutputKey",
+			"audioLevelSourceKey",
+		]) {
 			const changed = {
 				...source,
 				[key]: key === "type" ? "webMP4" : "changed",
 			};
 			expect(desktopReuploadSourceIdentity(changed)).not.toBe(expected);
 		}
+	});
+
+	it("survives preview assets remade while a replacement uploads", () => {
+		const published = {
+			type: "webMP4",
+			outputKey: "owner/video/.recording/render/export/result.mp4",
+		};
+		expect(
+			desktopReuploadSourceIdentity({
+				...published,
+				thumbnailKey:
+					"owner/video/.recording/render/export/result/screenshot.jpg",
+				previewKey: "owner/video/.recording/render/export/result/preview.gif",
+			}),
+		).toBe(desktopReuploadSourceIdentity(published));
 	});
 
 	it("rejects malformed known source fields without echoing them", () => {

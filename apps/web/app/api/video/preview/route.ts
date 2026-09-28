@@ -2,6 +2,7 @@ import { provideOptionalAuth, Storage, Videos } from "@cap/web-backend";
 import { Video } from "@cap/web-domain";
 import { Effect, Option } from "effect";
 import { type NextRequest, NextResponse } from "next/server";
+import { getReplacementOutputKey } from "@/lib/published-preview-assets";
 import { runPromise } from "@/lib/server";
 
 export const dynamic = "force-dynamic";
@@ -39,6 +40,10 @@ export async function GET(request: NextRequest) {
 			if (Option.isNone(maybeVideo)) return null;
 
 			const [video] = maybeVideo.value;
+			// Until a GIF is made from a render or reupload, the stored one still
+			// shows the upload it replaced.
+			if (getReplacementOutputKey(video) && !video.source.previewKey)
+				return null;
 			const [bucket] = yield* Storage.getAccessForVideo(video);
 			const previewKey = getPreviewGifKey(video.ownerId, video.id);
 			const hasPreview = yield* bucket.headObject(previewKey).pipe(
@@ -62,7 +67,7 @@ export async function GET(request: NextRequest) {
 	}
 
 	const response = NextResponse.redirect(previewUrl, 302);
-	response.headers.set("Cache-Control", "public, max-age=300");
+	response.headers.set("Cache-Control", "private, max-age=60");
 	return response;
 }
 

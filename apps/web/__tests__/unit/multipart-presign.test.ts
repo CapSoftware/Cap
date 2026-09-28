@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
 	database: vi.fn(),
 	prepareReplacement: vi.fn(),
 	invalidate: vi.fn(),
+	refreshPreviews: vi.fn(),
 	head: vi.fn(),
 	queueTranscription: vi.fn(),
 	shouldQueueTranscription: vi.fn(),
@@ -26,6 +27,9 @@ vi.mock("@cap/env", () => ({
 vi.mock("@/lib/desktop-reupload", () => ({
 	prepareDesktopReupload: mocks.prepareReplacement,
 	invalidateReuploadedVideo: mocks.invalidate,
+}));
+vi.mock("@/lib/refresh-preview-assets", () => ({
+	enqueuePreviewAssetsRefresh: mocks.refreshPreviews,
 }));
 vi.mock("@cap/web-backend", async () => {
 	const { Context, Layer } = await import("effect");
@@ -598,6 +602,9 @@ describe("desktop reupload completion", () => {
 		mocks.invalidate.mockImplementation(async () => {
 			events.push("invalidate");
 		});
+		mocks.refreshPreviews.mockImplementation(async () => {
+			events.push("refresh-previews");
+		});
 		mocks.shouldQueueTranscription.mockReturnValue(false);
 		mocks.queueTranscription.mockResolvedValue({ success: true });
 	});
@@ -675,7 +682,9 @@ describe("desktop reupload completion", () => {
 			"publish",
 			"delete-upload",
 			"invalidate",
+			"refresh-previews",
 		]);
+		expect(mocks.refreshPreviews).toHaveBeenCalledWith("video");
 		expect(mocks.complete).toHaveBeenCalledWith(
 			outputKey,
 			"backend-upload",
@@ -702,6 +711,7 @@ describe("desktop reupload completion", () => {
 			expect(response.status).toBe(200);
 			expect(mocks.prepareReplacement).not.toHaveBeenCalled();
 			expect(mocks.invalidate).not.toHaveBeenCalled();
+			expect(mocks.refreshPreviews).not.toHaveBeenCalled();
 			expect(updates[0]).not.toHaveProperty("source");
 		},
 	);

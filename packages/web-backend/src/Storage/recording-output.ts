@@ -37,7 +37,8 @@ export function resolveRecordingObjectKey(video: RecordingVideo, key: string) {
 				: undefined;
 	if (
 		(video.source.type === "desktopMP4" || video.source.type === "webMP4") &&
-		asset?.startsWith(`${prefix}.recording/outputs/`) &&
+		(asset?.startsWith(`${prefix}.recording/outputs/`) ||
+			asset?.startsWith(`${prefix}.recording/render/`)) &&
 		!asset.includes("..") &&
 		/^[a-zA-Z0-9_./-]+$/.test(asset)
 	) {
