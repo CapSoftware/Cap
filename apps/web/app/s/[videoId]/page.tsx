@@ -47,6 +47,7 @@ import {
 import { isAiConfigured } from "@/lib/ai/provider";
 import { completeDesktopSegmentsManifestAndQueue } from "@/lib/desktop-segments-recovery";
 import { createNotification } from "@/lib/Notification";
+import { ownerCustomDomain } from "@/lib/owner-custom-domain";
 import {
 	canManageOrganizationSettings,
 	getEffectiveOrganizationRole,
@@ -496,30 +497,8 @@ async function AuthorizedContent({
 		if (!user || user.id !== video.owner.id) {
 			return { customDomain: null, domainVerified: false };
 		}
-		const activeOrganizationId = user.activeOrganizationId;
-		if (!activeOrganizationId) {
-			return { customDomain: null, domainVerified: false };
-		}
-
-		// Fetch the active org
-		const orgArr = await db()
-			.select({
-				customDomain: organizations.customDomain,
-				domainVerified: organizations.domainVerified,
-			})
-			.from(organizations)
-			.where(eq(organizations.id, activeOrganizationId))
-			.limit(1);
-
-		const org = orgArr[0];
-		if (
-			org?.customDomain &&
-			org.domainVerified !== null &&
-			user.id === video.owner.id
-		) {
-			return { customDomain: org.customDomain, domainVerified: true };
-		}
-		return { customDomain: null, domainVerified: false };
+		const customDomain = await ownerCustomDomain(user.activeOrganizationId);
+		return { customDomain, domainVerified: customDomain !== null };
 	})();
 
 	const userOrganizationsPromise = (async () => {
