@@ -41,6 +41,7 @@ use std::sync::{
 #[cfg(not(target_arch = "wasm32"))]
 use tokio::sync::mpsc;
 
+mod audio_levels;
 pub mod camera3d;
 pub mod composite_frame;
 mod coord;
@@ -75,6 +76,7 @@ pub mod yuv_converter;
 mod zoom;
 mod zoom_spring;
 
+pub use audio_levels::*;
 pub use coord::*;
 pub use decoder::{DecodedFrame, DecoderStatus, DecoderType, PixelFormat};
 #[cfg(target_os = "macos")]
@@ -2048,6 +2050,7 @@ pub struct RenderVideoConstants {
     pub meta: StudioRecordingMeta,
     pub recording_meta: RecordingMeta,
     pub background_textures: std::sync::Arc<BackgroundTextureCache>,
+    pub audio_levels: AudioLevelStore,
     pub is_software_adapter: bool,
     adapter_name: String,
     frozen_recorded_cursors: Option<FrozenRecordedCursorAssets>,
@@ -2109,6 +2112,7 @@ impl RenderVideoConstants {
             meta,
             recording_meta,
             frozen_recorded_cursors: None,
+            audio_levels: AudioLevelStore::default(),
             is_software_adapter: shared.is_software_adapter,
             adapter_name,
         })
@@ -2139,6 +2143,7 @@ impl RenderVideoConstants {
             meta,
             recording_meta,
             frozen_recorded_cursors: None,
+            audio_levels: AudioLevelStore::default(),
             is_software_adapter: shared.is_software_adapter,
             adapter_name,
         }
@@ -2283,6 +2288,7 @@ impl RenderVideoConstants {
             meta,
             recording_meta,
             frozen_recorded_cursors: None,
+            audio_levels: AudioLevelStore::default(),
             is_software_adapter,
             adapter_name,
         })
@@ -5662,6 +5668,7 @@ mod style_image_tests {
                 .clone(),
             recording_meta,
             frozen_recorded_cursors: None,
+            audio_levels: AudioLevelStore::default(),
             background_textures: Arc::new(BackgroundTextureCache::default()),
             is_software_adapter: false,
         };
@@ -5894,6 +5901,7 @@ mod nv12_flush_tests {
                     .clone(),
                 recording_meta,
                 frozen_recorded_cursors: None,
+                audio_levels: AudioLevelStore::default(),
                 background_textures: Arc::new(BackgroundTextureCache::default()),
                 is_software_adapter: software,
             };
@@ -7273,7 +7281,7 @@ impl RendererLayers {
         self.background_color_grade
             .prepare(&constants.queue, uniforms);
 
-        if render_display {
+        if render_display && !uniforms.project.hide_display {
             self.frame.prepare(constants, uniforms);
             self.notch
                 .prepare(&constants.device, &constants.queue, uniforms.notch);
@@ -7346,6 +7354,7 @@ impl RendererLayers {
 
         if let Some(overlays) = &mut self.overlays {
             overlays.images.prepare(constants, uniforms).await;
+            overlays.waveforms.prepare(constants, uniforms);
 
             if uniforms.project.overlay_order.is_empty() {
                 overlays.text.prepare(
@@ -7438,7 +7447,7 @@ impl RendererLayers {
         timings.background_blur_prepare_duration = start.elapsed();
 
         let start = Instant::now();
-        if render_display {
+        if render_display && !uniforms.project.hide_display {
             self.frame.prepare(constants, uniforms);
             self.notch
                 .prepare(&constants.device, &constants.queue, uniforms.notch);
@@ -7529,6 +7538,7 @@ impl RendererLayers {
         if let Some(overlays) = &mut self.overlays {
             let start = Instant::now();
             overlays.images.prepare(constants, uniforms).await;
+            overlays.waveforms.prepare(constants, uniforms);
 
             if uniforms.project.overlay_order.is_empty() {
                 overlays.text.prepare(
@@ -7601,7 +7611,8 @@ impl RendererLayers {
             };
         }
 
-        if render_display {
+        let display_visible = render_display && !uniforms.project.hide_display;
+        if display_visible {
             self.display.copy_to_texture(encoder);
         }
         self.camera.copy_to_texture(encoder);
@@ -7644,14 +7655,14 @@ impl RendererLayers {
             session.swap_textures();
         }
 
-        let should_render_screen = render_display
+        let should_render_screen = display_visible
             && uniforms.scene.should_render_screen()
             // A fully-faded card (e.g. a held Fullscreen text takeover) draws
             // nothing visible; skip the pass entirely.
             && uniforms.display.opacity > 0.001
             && self.display.has_valid_frame();
         let should_render_cursor = if render_display {
-            uniforms.scene.should_render_screen()
+            display_visible && uniforms.scene.should_render_screen()
         } else {
             true
         };
@@ -7758,6 +7769,11 @@ impl RendererLayers {
                     overlays.images.render(&mut pass);
                 }
 
+                if overlays.waveforms.has_content() {
+                    let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
+                    overlays.waveforms.render(&mut pass);
+                }
+
                 if !uniforms.texts.is_empty() {
                     let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
                     overlays.text.render(&mut pass);
@@ -7787,7 +7803,14 @@ impl RendererLayers {
                             render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
                         overlays.text.render_track(&mut pass, overlay.track);
                     }
-                    OverlayTrackKind::Text | OverlayTrackKind::Image => {}
+                    OverlayTrackKind::Waveform if overlays.waveforms.has_track(overlay.track) => {
+                        let mut pass =
+                            render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
+                        overlays.waveforms.render_track(&mut pass, overlay.track);
+                    }
+                    OverlayTrackKind::Text
+                    | OverlayTrackKind::Image
+                    | OverlayTrackKind::Waveform => {}
                 }
             }
         }

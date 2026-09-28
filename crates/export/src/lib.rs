@@ -194,6 +194,10 @@ impl ExporterBuilder {
             (segments, None)
         };
 
+        if cap_editor::has_waveform_segments(&project_config) {
+            cap_editor::load_waveform_levels(&render_constants, &segments).await;
+        }
+
         if let Some(parent) = output_path.parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|e| ExporterBuildError::IO(parent.to_path_buf(), e))?;
@@ -282,6 +286,7 @@ pub fn synthesize_default_timeline(
             keyboard_segments: Vec::new(),
             audio_segments: Vec::new(),
             camera3d_segments: Vec::new(),
+            waveform_segments: Vec::new(),
         });
     }
 }

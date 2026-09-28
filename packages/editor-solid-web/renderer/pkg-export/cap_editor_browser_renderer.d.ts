@@ -26,6 +26,16 @@ export function remove_asset(path: string): void;
  */
 export function web_input_recording(ndjson: string): string;
 export function webgl2_available(canvas: HTMLCanvasElement): boolean;
+/**
+ * Turns decoded mono PCM into the band levels `set_audio_levels` takes, in
+ * chunks so long recordings never sit in memory whole.
+ */
+export class BrowserAudioLevelAnalyzer {
+  free(): void;
+  constructor(sample_rate: number);
+  push(samples: Float32Array): void;
+  finish(): Uint8Array;
+}
 export class BrowserExportAudio {
   free(): void;
   constructor(config_json: string, total_frames: number);
@@ -60,6 +70,11 @@ export class BrowserStudioRenderer {
   static create(canvas: any, prefer_webgpu: boolean, recording_meta_json: string, screen_width: number, screen_height: number, camera_width: number, camera_height: number): Promise<BrowserStudioRenderer>;
   set_project(config_json: string): void;
   set_cursor(recording_clip: number, cursor_json: string): void;
+  /**
+   * `source` is `display`, `mic` or `system`; `levels` comes from
+   * `BrowserAudioLevelAnalyzer::finish` for that file.
+   */
+  set_audio_levels(recording_clip: number, source: string, levels: Uint8Array): void;
   /**
    * Output size the next frame will have for a preview box.
    */
@@ -122,6 +137,10 @@ export interface InitOutput {
   readonly has_asset: (a: number, b: number) => number;
   readonly remove_asset: (a: number, b: number) => void;
   readonly web_input_recording: (a: number, b: number) => [number, number, number, number];
+  readonly __wbg_browseraudiolevelanalyzer_free: (a: number, b: number) => void;
+  readonly browseraudiolevelanalyzer_new: (a: number) => [number, number, number];
+  readonly browseraudiolevelanalyzer_push: (a: number, b: number, c: number) => void;
+  readonly browseraudiolevelanalyzer_finish: (a: number) => [number, number];
   readonly __wbg_browsertimeline_free: (a: number, b: number) => void;
   readonly browsertimeline_new: (a: number, b: number) => [number, number, number];
   readonly browsertimeline_duration: (a: number) => number;
@@ -140,6 +159,7 @@ export interface InitOutput {
   readonly browserstudiorenderer_max_texture_dimension: (a: number) => number;
   readonly browserstudiorenderer_set_project: (a: number, b: number, c: number) => [number, number];
   readonly browserstudiorenderer_set_cursor: (a: number, b: number, c: number, d: number) => [number, number];
+  readonly browserstudiorenderer_set_audio_levels: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
   readonly browserstudiorenderer_output_size: (a: number, b: number, c: number) => [number, number];
   readonly browserstudiorenderer_render: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: any, i: number, j: any, k: number) => [number, number, number, number];
   readonly browserstudiorenderer_render_transition: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: any, i: number, j: any, k: number, l: number, m: number, n: any, o: number, p: any, q: number, r: number, s: number) => [number, number, number, number];
@@ -168,10 +188,10 @@ export interface InitOutput {
   readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
   readonly __wbindgen_export_6: WebAssembly.Table;
   readonly __externref_table_dealloc: (a: number) => void;
-  readonly wasm_bindgen__convert__closures_____invoke__h9f7756242072ca73: (a: number, b: number) => void;
-  readonly closure1634_externref_shim: (a: number, b: number, c: any) => void;
-  readonly closure1250_externref_shim: (a: number, b: number, c: any) => void;
-  readonly closure2706_externref_shim: (a: number, b: number, c: any, d: any) => void;
+  readonly closure1636_externref_shim: (a: number, b: number, c: any) => void;
+  readonly closure1252_externref_shim: (a: number, b: number, c: any) => void;
+  readonly wasm_bindgen__convert__closures_____invoke__hfa69fcf5a022ebc2: (a: number, b: number) => void;
+  readonly closure2708_externref_shim: (a: number, b: number, c: any, d: any) => void;
   readonly __wbindgen_start: () => void;
 }
 

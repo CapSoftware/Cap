@@ -170,6 +170,14 @@ fn with_overlay(kind: &str, path: &str) -> ProjectConfiguration {
                 .unwrap(),
             );
         }
+        "waveform" => timeline
+            .waveform_segments
+            .push(cap_project::WaveformSegment {
+                start: 0.0,
+                end: 3.0,
+                color: "#FF1020".into(),
+                ..Default::default()
+            }),
         _ => panic!("Unknown test overlay"),
     }
     project
@@ -211,7 +219,7 @@ async fn ordinary_bundle_renders_each_overlay_and_preserves_empty_frame_zero() {
     );
     assert_eq!(pixels(&actual.0), pixels(&expected.0));
     let baseline = render(&constants, &project(), &mut configured, 30).await;
-    for kind in ["image", "text", "captions", "keyboard"] {
+    for kind in ["image", "text", "captions", "keyboard", "waveform"] {
         let project = with_overlay(kind, "overlay.png");
         let actual = render(&constants, &project, &mut configured, 30).await;
         let overlays = configured.overlays.as_ref().unwrap();
@@ -220,6 +228,7 @@ async fn ordinary_bundle_renders_each_overlay_and_preserves_empty_frame_zero() {
             "text" => !uniforms(&constants, &project, 30).texts.is_empty(),
             "captions" => overlays.captions.has_content(),
             "keyboard" => overlays.keyboard.has_content(),
+            "waveform" => overlays.waveforms.has_content(),
             _ => unreachable!(),
         };
         assert!(present, "Ordinary {kind} did not prepare content");
@@ -247,6 +256,52 @@ async fn ordinary_bundle_renders_each_overlay_and_preserves_empty_frame_zero() {
     .await;
     assert!(!configured.overlays.as_ref().unwrap().images.has_content());
     assert_eq!(pixels(&corrupt.0), pixels(&baseline.0));
+}
+
+fn center_pixel(frame: &RenderedFrame) -> [u8; 3] {
+    let pixels = pixels(frame);
+    let index = ((frame.height / 2 * frame.width + frame.width / 2) * 4) as usize;
+    [pixels[index], pixels[index + 1], pixels[index + 2]]
+}
+
+fn near(actual: [u8; 3], expected: [u8; 3]) -> bool {
+    actual
+        .iter()
+        .zip(expected)
+        .all(|(actual, expected)| actual.abs_diff(expected) <= 3)
+}
+
+#[tokio::test]
+async fn hidden_display_keeps_background_and_overlays() {
+    let directory = tempfile::tempdir().unwrap();
+    let constants = constants(directory.path()).await;
+    image::RgbaImage::from_pixel(16, 16, image::Rgba([255, 16, 32, 255]))
+        .save(directory.path().join("overlay.png"))
+        .unwrap();
+    let mut layers = RendererLayers::new(&constants.device, &constants.queue);
+    let display = [17, 43, 89];
+
+    let visible = render(&constants, &project(), &mut layers, 30).await;
+    assert!(near(center_pixel(&visible.0), display));
+
+    let mut hidden_project = project();
+    hidden_project.hide_display = true;
+    let hidden = render(&constants, &hidden_project, &mut layers, 30).await;
+    assert!(
+        pixels(&hidden.0)
+            .chunks_exact(4)
+            .all(|pixel| !near([pixel[0], pixel[1], pixel[2]], display))
+    );
+
+    for kind in ["image", "waveform"] {
+        let mut overlay = with_overlay(kind, "overlay.png");
+        overlay.hide_display = true;
+        let actual = render(&constants, &overlay, &mut layers, 30).await;
+        assert_ne!(pixels(&actual.0), pixels(&hidden.0), "{kind} was hidden");
+        if kind == "image" {
+            assert!(near(center_pixel(&actual.0), [255, 16, 32]));
+        }
+    }
 }
 
 async fn read_session(

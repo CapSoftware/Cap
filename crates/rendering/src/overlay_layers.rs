@@ -1,12 +1,13 @@
 use crate::{
     ProjectConfiguration, RenderingError,
-    layers::{CaptionsLayer, ImageLayer, KeyboardLayer, TextLayer},
+    layers::{CaptionsLayer, ImageLayer, KeyboardLayer, TextLayer, WaveformLayer},
     readiness,
 };
 
 pub(super) struct OverlayLayers {
     pub(super) text: TextLayer,
     pub(super) images: ImageLayer,
+    pub(super) waveforms: WaveformLayer,
     pub(super) captions: CaptionsLayer,
     pub(super) keyboard: KeyboardLayer,
 }
@@ -16,6 +17,7 @@ impl OverlayLayers {
         Self {
             text: readiness::measure("layers.text", || TextLayer::new(device, queue)),
             images: readiness::measure("layers.images", || ImageLayer::new(device)),
+            waveforms: readiness::measure("layers.waveforms", || WaveformLayer::new(device)),
             captions: readiness::measure("layers.captions", || CaptionsLayer::new(device, queue)),
             keyboard: readiness::measure("layers.keyboard", || KeyboardLayer::new(device, queue)),
         }
@@ -34,6 +36,7 @@ impl OverlayLayers {
             || project.timeline.as_ref().is_some_and(|timeline| {
                 !timeline.text_segments.is_empty()
                     || !timeline.image_segments.is_empty()
+                    || !timeline.waveform_segments.is_empty()
                     || !timeline.caption_segments.is_empty()
                     || !timeline.keyboard_segments.is_empty()
             })
@@ -81,7 +84,7 @@ mod tests {
 
     #[test]
     fn every_declared_overlay_source_requires_the_bundle() {
-        let mutations: [fn(&mut ProjectConfiguration); 9] =
+        let mutations: [fn(&mut ProjectConfiguration); 10] =
             [
                 |project| project.captions = Some(Default::default()),
                 |project| project.keyboard = Some(Default::default()),
@@ -116,6 +119,14 @@ mod tests {
                         cap_project::ImageSegment {
                             enabled: false,
                             path: "unopened-overlay.png".into(),
+                            ..Default::default()
+                        },
+                    );
+                },
+                |project| {
+                    project.timeline.as_mut().unwrap().waveform_segments.push(
+                        cap_project::WaveformSegment {
+                            enabled: false,
                             ..Default::default()
                         },
                     );

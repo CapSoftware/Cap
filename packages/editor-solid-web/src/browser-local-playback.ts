@@ -4,6 +4,7 @@ import type {
 	BrowserTimeline,
 	BrowserVisualConfig,
 } from "../renderer/pkg/cap_editor_browser_renderer.js";
+import { browserAudioLevelSources } from "./browser-audio-levels";
 import { BrowserAudioPlayback } from "./browser-audio-playback";
 import { BrowserDecodedVideoPool } from "./browser-decoded-video-pool";
 import {
@@ -349,6 +350,7 @@ export class BrowserLocalPlayback {
 				cursors: sources.segments.map((_, index) =>
 					index === 0 && input ? JSON.stringify(input.cursor) : null,
 				),
+				audio: browserAudioLevelSources(sources),
 			};
 			controls = new BrowserLocalCanvas(setup, width, height, onFrame, () => {
 				const current = playback;

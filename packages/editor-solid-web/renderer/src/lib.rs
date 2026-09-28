@@ -39,9 +39,9 @@ use cap_project::{
     TimelineFrameMapping, TimelineSource, XY,
 };
 use cap_rendering::{
-    DecodedFrame, DecodedSegmentFrames, FrameRenderer, PrecomputedCursorTimeline, ProjectUniforms,
-    RenderOptions, RenderVideoConstants, RendererLayers, SharedWgpuDevice, TransitionRenderInput,
-    ZoomTransformTimeline,
+    AudioLevelAnalyzer, AudioLevelSource, AudioLevels, DecodedFrame, DecodedSegmentFrames,
+    FrameRenderer, PrecomputedCursorTimeline, ProjectUniforms, RenderOptions, RenderVideoConstants,
+    RendererLayers, SharedWgpuDevice, TransitionRenderInput, ZoomTransformTimeline,
     decoder::BrowserFrameSource,
     segment_timing::{SegmentVideoTiming, segment_frame_times, segment_video_timing},
 };
@@ -170,6 +170,34 @@ pub fn web_input_recording(ndjson: &str) -> Result<String, JsValue> {
         "hasKeyboard": !data.keyboard.presses.is_empty(),
     }))
     .map_err(js_error)
+}
+
+/// Turns decoded mono PCM into the band levels `set_audio_levels` takes, in
+/// chunks so long recordings never sit in memory whole.
+#[wasm_bindgen]
+pub struct BrowserAudioLevelAnalyzer {
+    analyzer: AudioLevelAnalyzer,
+}
+
+#[wasm_bindgen]
+impl BrowserAudioLevelAnalyzer {
+    #[wasm_bindgen(constructor)]
+    pub fn new(sample_rate: u32) -> Result<BrowserAudioLevelAnalyzer, JsValue> {
+        if sample_rate == 0 {
+            return Err(js_error("Audio sample rate is invalid"));
+        }
+        Ok(Self {
+            analyzer: AudioLevelAnalyzer::new(sample_rate),
+        })
+    }
+
+    pub fn push(&mut self, samples: &[f32]) {
+        self.analyzer.push(samples);
+    }
+
+    pub fn finish(self) -> Vec<u8> {
+        self.analyzer.finish().into_bytes()
+    }
 }
 
 fn source_values(source: TimelineSource<'_>) -> [f64; 3] {
@@ -644,6 +672,27 @@ impl BrowserStudioRenderer {
         Ok(())
     }
 
+    /// `source` is `display`, `mic` or `system`; `levels` comes from
+    /// `BrowserAudioLevelAnalyzer::finish` for that file.
+    pub fn set_audio_levels(
+        &self,
+        recording_clip: u32,
+        source: &str,
+        levels: Vec<u8>,
+    ) -> Result<(), JsValue> {
+        if recording_clip as usize >= self.cursors.len() {
+            return Err(js_error("Editor recording clip is unavailable"));
+        }
+        let source = AudioLevelSource::from_name(source)
+            .ok_or_else(|| js_error("Editor audio source is invalid"))?;
+        let levels = AudioLevels::from_bytes(levels)
+            .ok_or_else(|| js_error("Editor audio levels are invalid"))?;
+        self.constants
+            .audio_levels
+            .set(recording_clip, source, levels);
+        Ok(())
+    }
+
     /// Output size the next frame will have for a preview box.
     pub fn output_size(&self, resolution_width: u32, resolution_height: u32) -> Vec<u32> {
         let (width, height) = ProjectUniforms::get_output_size(
@@ -784,8 +833,10 @@ impl BrowserStudioRenderer {
             timing.latest_start_time.unwrap_or(0.0),
             offsets,
         );
-        let screen_frame = decoded_frame(&frames.screen, frames.screen_color_fix, max_dimension)?
-            .ok_or_else(|| js_error("Editor display video is unavailable"))?;
+        let screen_frame = decoded_frame(&frames.screen, frames.screen_color_fix, max_dimension)?;
+        if screen_frame.is_none() && !self.project.hide_display {
+            return Err(js_error("Editor display video is unavailable"));
+        }
         let camera_frame = if self.project.requires_camera() {
             decoded_frame(&frames.camera, frames.camera_color_fix, max_dimension)?
         } else {
@@ -794,7 +845,7 @@ impl BrowserStudioRenderer {
         Ok((
             DecodedSegmentFrames {
                 screen_size: self.constants.options.screen_size,
-                screen_frame: Some(screen_frame),
+                screen_frame,
                 camera_frame,
                 segment_time: frames.segment_time,
                 recording_time,

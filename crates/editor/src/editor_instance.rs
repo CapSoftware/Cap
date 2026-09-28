@@ -434,6 +434,7 @@ impl EditorInstance {
                     keyboard_segments: Vec::new(),
                     audio_segments: Vec::new(),
                     camera3d_segments: Vec::new(),
+                    waveform_segments: Vec::new(),
                 });
 
                 if let Err(e) = project.write(&recording_meta.project_path) {
@@ -607,6 +608,19 @@ impl EditorInstance {
 
         this.state.lock().await.preview_task =
             Some(this.clone().spawn_preview_renderer(preview_rx));
+
+        let mut project_rx = this.project_config.1.clone();
+        let constants = this.render_constants.clone();
+        let segments = this.segment_medias.clone();
+        tokio::spawn(async move {
+            if project_rx
+                .wait_for(crate::has_waveform_segments)
+                .await
+                .is_ok()
+            {
+                crate::load_waveform_levels(&constants, &segments).await;
+            }
+        });
 
         Ok(this)
     }

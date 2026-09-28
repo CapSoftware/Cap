@@ -1743,6 +1743,83 @@ impl ImageSegment {
     }
 }
 
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum WaveformStyle {
+    Bars,
+    #[default]
+    Mirrored,
+    Line,
+    Dots,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum WaveformSource {
+    #[default]
+    Mix,
+    Mic,
+    System,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase", default)]
+pub struct WaveformSegment {
+    pub start: f64,
+    pub end: f64,
+    pub track: u32,
+    pub enabled: bool,
+    pub center: XY<f64>,
+    pub size: XY<f64>,
+    pub opacity: f32,
+    pub style: WaveformStyle,
+    pub color: String,
+    pub secondary_color: Option<String>,
+    pub bar_count: u32,
+    pub bar_width: f32,
+    pub rounding: f32,
+    pub sensitivity: f32,
+    pub smoothing: f32,
+    pub source: WaveformSource,
+}
+
+impl Default for WaveformSegment {
+    fn default() -> Self {
+        Self {
+            start: 0.0,
+            end: 0.0,
+            track: 0,
+            enabled: true,
+            center: XY::new(0.5, 0.5),
+            size: XY::new(0.8, 0.3),
+            opacity: 1.0,
+            style: WaveformStyle::default(),
+            color: "#FFFFFF".to_string(),
+            secondary_color: None,
+            bar_count: 64,
+            bar_width: 0.6,
+            rounding: 1.0,
+            sensitivity: 1.0,
+            smoothing: 0.5,
+            source: WaveformSource::default(),
+        }
+    }
+}
+
+impl WaveformSegment {
+    pub const MIN_BAR_COUNT: u32 = 8;
+    pub const MAX_BAR_COUNT: u32 = 256;
+
+    pub fn is_active_at(&self, time: f64) -> bool {
+        self.enabled && is_timeline_interval_active(self.start, self.end, time)
+    }
+
+    pub fn clamped_bar_count(&self) -> u32 {
+        self.bar_count
+            .clamp(Self::MIN_BAR_COUNT, Self::MAX_BAR_COUNT)
+    }
+}
+
 fn is_timeline_interval_active(start: f64, end: f64, time: f64) -> bool {
     time.is_finite()
         && start.is_finite()
@@ -1818,6 +1895,8 @@ pub struct TimelineConfiguration {
     // easy to second-guess, and the editor TypeScript hardcodes this name.
     #[serde(default, rename = "camera3dSegments")]
     pub camera3d_segments: Vec<Camera3DSegment>,
+    #[serde(default)]
+    pub waveform_segments: Vec<WaveformSegment>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -2565,6 +2644,7 @@ pub enum OverlayTrackKind {
     Mask,
     Image,
     Text,
+    Waveform,
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -2586,6 +2666,8 @@ pub struct ProjectConfiguration {
     pub timeline: Option<TimelineConfiguration>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub overlay_order: Vec<OverlayTrack>,
+    #[serde(default)]
+    pub hide_display: bool,
     pub captions: Option<CaptionsData>,
     pub keyboard: Option<KeyboardData>,
     pub clips: Vec<ClipConfiguration>,
@@ -2642,6 +2724,7 @@ impl Default for ProjectConfiguration {
             hotkeys: Default::default(),
             timeline: Default::default(),
             overlay_order: Vec::new(),
+            hide_display: false,
             captions: Default::default(),
             keyboard: Default::default(),
             clips: Default::default(),
@@ -2682,6 +2765,14 @@ impl ProjectConfiguration {
                 OverlayTrackKind::Text,
                 timeline
                     .text_segments
+                    .iter()
+                    .map(|segment| segment.track)
+                    .collect::<Vec<_>>(),
+            ),
+            (
+                OverlayTrackKind::Waveform,
+                timeline
+                    .waveform_segments
                     .iter()
                     .map(|segment| segment.track)
                     .collect::<Vec<_>>(),
@@ -3107,6 +3198,7 @@ mod tests {
             style_segments: Vec::new(),
             image_segments: Vec::new(),
             camera3d_segments: Vec::new(),
+            waveform_segments: Vec::new(),
         }
     }
 
@@ -3140,6 +3232,108 @@ mod tests {
         let json = serde_json::to_value(&config).unwrap();
         assert!(json["timeline"].get("styleSegments").is_none());
         assert!(json["timeline"].get("imageSegments").is_none());
+    }
+
+    #[test]
+    fn old_projects_default_to_visible_display_and_no_waveforms() {
+        let config: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "timeline": {
+                "segments": [{ "timescale": 1.0, "start": 0.0, "end": 4.0 }],
+                "zoomSegments": []
+            }
+        }))
+        .unwrap();
+        assert!(!config.hide_display);
+        assert!(config.timeline.unwrap().waveform_segments.is_empty());
+    }
+
+    #[test]
+    fn waveform_serde_defaults_match_model_defaults() {
+        let waveform: WaveformSegment = serde_json::from_str("{}").unwrap();
+        let json = serde_json::to_value(&waveform).unwrap();
+        assert_eq!(
+            json,
+            serde_json::to_value(WaveformSegment::default()).unwrap()
+        );
+        for (key, value) in [
+            ("start", serde_json::json!(0.0)),
+            ("end", serde_json::json!(0.0)),
+            ("track", serde_json::json!(0)),
+            ("enabled", serde_json::json!(true)),
+            ("center", serde_json::json!({ "x": 0.5, "y": 0.5 })),
+            ("size", serde_json::json!({ "x": 0.8, "y": 0.3 })),
+            ("opacity", serde_json::json!(1.0)),
+            ("style", serde_json::json!("mirrored")),
+            ("color", serde_json::json!("#FFFFFF")),
+            ("secondaryColor", serde_json::Value::Null),
+            ("barCount", serde_json::json!(64)),
+            ("rounding", serde_json::json!(1.0)),
+            ("sensitivity", serde_json::json!(1.0)),
+            ("smoothing", serde_json::json!(0.5)),
+            ("source", serde_json::json!("mix")),
+        ] {
+            assert_eq!(json[key], value, "{key}");
+        }
+        assert!((json["barWidth"].as_f64().unwrap() - 0.6).abs() < 1.0e-6);
+        assert_eq!(json.as_object().unwrap().len(), 16);
+    }
+
+    #[test]
+    fn waveform_segments_round_trip_and_join_overlay_order() {
+        let config: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "hideDisplay": true,
+            "timeline": {
+                "segments": [{ "timescale": 1.0, "start": 0.0, "end": 4.0 }],
+                "zoomSegments": [],
+                "imageSegments": [{ "start": 0.0, "end": 1.0, "path": "a.png", "track": 1 }],
+                "waveformSegments": [{
+                    "start": 0.5, "end": 3.0, "track": 2, "enabled": false,
+                    "center": { "x": 0.25, "y": 0.75 }, "size": { "x": 0.5, "y": 0.25 },
+                    "opacity": 0.5, "style": "dots", "color": "#FF0000",
+                    "secondaryColor": "#0000FF", "barCount": 300, "barWidth": 0.25,
+                    "rounding": 0.5, "sensitivity": 2.0, "smoothing": 0.25, "source": "system"
+                }]
+            }
+        }))
+        .unwrap();
+        assert!(config.hide_display);
+        let waveform = &config.timeline.as_ref().unwrap().waveform_segments[0];
+        assert_eq!(waveform.style, WaveformStyle::Dots);
+        assert_eq!(waveform.source, WaveformSource::System);
+        assert_eq!(waveform.secondary_color.as_deref(), Some("#0000FF"));
+        assert_eq!(waveform.clamped_bar_count(), WaveformSegment::MAX_BAR_COUNT);
+        assert!(!waveform.is_active_at(1.0));
+        assert_eq!(
+            WaveformSegment {
+                bar_count: 1,
+                ..Default::default()
+            }
+            .clamped_bar_count(),
+            WaveformSegment::MIN_BAR_COUNT
+        );
+
+        let json = serde_json::to_value(&config).unwrap();
+        assert_eq!(json["hideDisplay"], true);
+        assert_eq!(json["timeline"]["waveformSegments"][0]["style"], "dots");
+        let round_trip: ProjectConfiguration = serde_json::from_value(json).unwrap();
+        assert_eq!(
+            round_trip.timeline.unwrap().waveform_segments[0].bar_count,
+            300
+        );
+
+        assert_eq!(
+            config.overlay_tracks(),
+            vec![
+                OverlayTrack {
+                    kind: OverlayTrackKind::Waveform,
+                    track: 2
+                },
+                OverlayTrack {
+                    kind: OverlayTrackKind::Image,
+                    track: 1
+                },
+            ]
+        );
     }
 
     #[test]
@@ -4263,6 +4457,7 @@ mod tests {
                 style_segments: Vec::new(),
                 image_segments: Vec::new(),
                 camera3d_segments: Vec::new(),
+                waveform_segments: Vec::new(),
             }),
             ..Default::default()
         };
@@ -4372,6 +4567,7 @@ mod tests {
                 style_segments: Vec::new(),
                 image_segments: Vec::new(),
                 camera3d_segments: Vec::new(),
+                waveform_segments: Vec::new(),
             }),
             ..Default::default()
         };

@@ -3,6 +3,11 @@
 // render into an OffscreenCanvas and go straight to the hardware H.264
 // encoder, so no pixels round-trip through the CPU.
 import type { InputVideoTrack, VideoSample, VideoSampleSink } from "mediabunny";
+import {
+	decodeAudioLevels,
+	hasWaveformSegments,
+	loadAudioLevels,
+} from "./browser-audio-levels";
 import { renderBrowserExportAudio } from "./browser-export-audio";
 import type { BrowserStudioSetup } from "./browser-local-canvas";
 
@@ -302,6 +307,18 @@ function contextKey(job: BrowserExportJob) {
 	]);
 }
 
+const audioLevels = new Map<string, Promise<Uint8Array | null>>();
+
+function workerAudioLevels(module: RendererModule, url: string) {
+	let levels = audioLevels.get(url);
+	if (!levels) {
+		levels = decodeAudioLevels(module, url);
+		audioLevels.set(url, levels);
+		levels.catch(() => audioLevels.delete(url));
+	}
+	return levels;
+}
+
 async function renderContext(job: BrowserExportJob): Promise<RenderContext> {
 	const key = contextKey(job);
 	if (cachedContext?.key === key) return cachedContext;
@@ -364,6 +381,14 @@ async function renderContext(job: BrowserExportJob): Promise<RenderContext> {
 			if (cursor) created.set_cursor(index, cursor);
 		});
 		created.set_project(JSON.stringify(config));
+		if (hasWaveformSegments(config)) {
+			await loadAudioLevels(
+				module,
+				() => created,
+				job.audio,
+				(url) => workerAudioLevels(module, url),
+			);
+		}
 		const cursorFor = (
 			clip: number,
 			track: "display" | "camera",

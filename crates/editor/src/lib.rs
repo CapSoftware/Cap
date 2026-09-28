@@ -16,6 +16,7 @@ mod screen_recording_defaults;
 mod segments;
 mod telemetry;
 mod thumbnail;
+mod waveform_levels;
 
 pub use audio::{AudioRenderer, AudioSegment, MusicTracks};
 pub use audio_output::{
@@ -66,3 +67,4 @@ pub use telemetry::{
     PlaybackFrameSource, PlaybackRenderOutputFormat, PlaybackSkipReason, PlaybackTelemetry,
     PlaybackTelemetryEvent,
 };
+pub use waveform_levels::{has_waveform_segments, load_waveform_levels};

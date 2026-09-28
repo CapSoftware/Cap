@@ -14,6 +14,7 @@ mod keyboard;
 mod mask;
 mod notch;
 mod text;
+mod waveform;
 
 use std::sync::OnceLock;
 
@@ -143,6 +144,7 @@ pub use keyboard::*;
 pub use mask::*;
 pub use notch::*;
 pub use text::*;
+pub use waveform::*;
 
 #[cfg(test)]
 mod font_tests {

@@ -1,4 +1,10 @@
 import type { BrowserStudioRenderer } from "../renderer/pkg/cap_editor_browser_renderer.js";
+import {
+	type BrowserAudioLevelSource,
+	decodeAudioLevels,
+	hasWaveformSegments,
+	loadAudioLevels,
+} from "./browser-audio-levels";
 import { browserFrameLayout } from "./browser-frame-layout";
 import { browserWebGpuPresentationWorks } from "./browser-gpu-probe";
 import { BrowserImageDecoder } from "./browser-image-decoder";
@@ -44,6 +50,7 @@ export type BrowserStudioSetup = {
 	cameraWidth: number;
 	cameraHeight: number;
 	cursors: Array<string | null>;
+	audio?: BrowserAudioLevelSource[];
 };
 
 type OverlayImageSegment = {
@@ -135,6 +142,8 @@ export class BrowserLocalCanvas {
 	private disposed = false;
 	private configQueue: Promise<void> = Promise.resolve();
 	private readonly imageAbort = new AbortController();
+	private readonly audioAbort = new AbortController();
+	private audioLevels: Promise<void> | null = null;
 	private readonly loadedAssets = new Map<string, Promise<void>>();
 	private overlaySegments: OverlayImageSegment[] = [];
 	private imageDecoder: BrowserImageDecoder | null = null;
@@ -312,6 +321,31 @@ export class BrowserLocalCanvas {
 		);
 	}
 
+	/// Waveform overlays draw from band levels decoded out of the recording's
+	/// audio; they load once in the background and the preview redraws as
+	/// each source lands.
+	private loadAudioLevels() {
+		const sources = this.setup.audio ?? [];
+		if (this.audioLevels || sources.length === 0) return;
+		const signal = this.audioAbort.signal;
+		const load = loadBrowserRenderer().then((module) =>
+			loadAudioLevels(
+				module,
+				() => (this.disposed ? null : this.renderer),
+				sources,
+				(url) => decodeAudioLevels(module, url, signal),
+				() => {
+					this.rendered = false;
+					this.onInvalidate();
+				},
+			),
+		);
+		this.audioLevels = load;
+		load.catch(() => {
+			if (this.audioLevels === load) this.audioLevels = null;
+		});
+	}
+
 	setProjectConfig(config: unknown) {
 		const update = this.configQueue.then(async () => {
 			await this.mounted;
@@ -328,6 +362,7 @@ export class BrowserLocalCanvas {
 			this.overlaySegments = overlayImageSegments(config);
 			this.renderer.set_project(JSON.stringify(config));
 			this.rendered = false;
+			if (hasWaveformSegments(config)) this.loadAudioLevels();
 		});
 		this.configQueue = update.catch(() => undefined);
 		return update;
@@ -428,6 +463,7 @@ export class BrowserLocalCanvas {
 		if (this.disposed) return;
 		this.disposed = true;
 		this.imageAbort.abort();
+		this.audioAbort.abort();
 		this.imageDecoder?.dispose();
 		this.imageDecoder = null;
 		this.loadedAssets.clear();
