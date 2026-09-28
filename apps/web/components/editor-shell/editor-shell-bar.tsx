@@ -155,14 +155,24 @@ export function EditorShellActions({
 			>
 				Dashboard
 			</Link>
-			<Link
-				href="/dashboard/editor?tab=record"
-				onClick={onNavigate}
-				className="rec-btn"
-			>
-				<span className="size-2 rounded-full bg-[var(--rec-red)]" />
-				Record a video
-			</Link>
+			<RecordVideoLink onNavigate={onNavigate} />
 		</>
+	);
+}
+
+export function RecordVideoLink({
+	onNavigate,
+}: {
+	onNavigate?: MouseEventHandler<HTMLAnchorElement>;
+}) {
+	return (
+		<Link
+			href="/dashboard/editor?tab=record"
+			onClick={onNavigate}
+			className="rec-btn"
+		>
+			<span className="size-2 rounded-full bg-[var(--rec-red)]" />
+			Record a video
+		</Link>
 	);
 }

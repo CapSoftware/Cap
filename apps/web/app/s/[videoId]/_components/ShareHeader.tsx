@@ -25,6 +25,7 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { skipToken, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import {
+	ArrowLeft,
 	Check,
 	Clock,
 	Copy,
@@ -39,6 +40,7 @@ import {
 } from "lucide-react";
 import dynamic from "next/dynamic";
 import Image from "next/image";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Suspense, use, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -52,9 +54,10 @@ import { useDashboardContext } from "@/app/(org)/dashboard/DashboardContext";
 import type { Spaces } from "@/app/(org)/dashboard/dashboard-data";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
 import {
-	EditorShellActions,
 	EditorShellBar,
+	EditorShellBrand,
 	EditorShellTab,
+	RecordVideoLink,
 } from "@/components/editor-shell/editor-shell-bar";
 import { ShareLinkTab } from "@/components/editor-shell/share-link-tab";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
@@ -819,7 +822,9 @@ export const ShareHeader = ({
 			{showsEditorBar && (
 				<div className="-mx-4 border-b border-gray-5 lg:-mx-8">
 					<EditorShellBar
-						left={null}
+						left={
+							<EditorShellBrand title="Dashboard" backHref="/dashboard/caps" />
+						}
 						center={
 							<>
 								<ShareLinkTab
@@ -844,7 +849,7 @@ export const ShareHeader = ({
 								</EditorShellTab>
 							</>
 						}
-						right={<EditorShellActions />}
+						right={<RecordVideoLink />}
 					/>
 				</div>
 			)}
@@ -858,6 +863,18 @@ export const ShareHeader = ({
 						    both of them truncating at once, so the title ran out of room
 						    while there was still empty header to its right. */}
 						<div className="flex min-w-0 items-center gap-3 lg:min-w-[400px] lg:flex-1">
+							{user && !showsEditorBar && (
+								<>
+									<Link
+										href="/dashboard/caps"
+										className="flex h-8 shrink-0 items-center gap-1.5 rounded-full px-2.5 text-sm text-gray-11 transition-colors hover:bg-gray-3 hover:text-gray-12"
+									>
+										<ArrowLeft className="size-4" aria-hidden />
+										Dashboard
+									</Link>
+									<div className="h-7 w-px shrink-0 bg-gray-6" />
+								</>
+							)}
 							{renderBranding()}
 							{branding && <div className="h-7 w-px shrink-0 bg-gray-6" />}
 							<div className="min-w-0 flex-1">
@@ -1250,15 +1267,6 @@ export const ShareHeader = ({
 													Download
 												</Button>
 											))}
-										<Button
-											size="xs"
-											className="h-8 rounded-full px-2.5 text-xs"
-											onClick={() => {
-												push("/dashboard/caps?page=1");
-											}}
-										>
-											Go to dashboard
-										</Button>
 									</>
 								)}
 							</div>
