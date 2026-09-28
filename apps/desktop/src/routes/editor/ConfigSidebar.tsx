@@ -2855,7 +2855,7 @@ function BackgroundConfig(props: {
 														}}
 													/>
 													<div
-														class="rounded-lg transition-all duration-200 size-8 hover:peer-checked:opacity-100 peer-hover:opacity-70 peer-checked:ring-2 peer-checked:ring-ed-accent peer-checked:ring-offset-2 peer-checked:ring-offset-ed-card"
+														class="rounded-lg shadow-[inset_0_0_0_1px_var(--ed-line-strong)] transition-all duration-200 size-8 hover:peer-checked:opacity-100 peer-hover:opacity-70 peer-checked:ring-2 peer-checked:ring-ed-accent peer-checked:ring-offset-2 peer-checked:ring-offset-ed-card"
 														style={{
 															background:
 																color === "#00000000"
