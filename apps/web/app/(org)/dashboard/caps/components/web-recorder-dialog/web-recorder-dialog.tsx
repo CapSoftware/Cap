@@ -43,7 +43,7 @@ import {
 } from "./CameraPreviewWindow";
 import { CameraBubble, useCameraLayout } from "./camera-layout";
 import { capturesThisTab, identifyThisTab } from "./capture-handle";
-import { HowRecordingWorks } from "./how-recording-works";
+import { CAMERA_STEPS, HowRecordingWorks } from "./how-recording-works";
 import { InProgressRecordingBar } from "./InProgressRecordingBar";
 import {
 	DeviceMenu,
@@ -565,7 +565,7 @@ export const WebRecorderDialog = ({
 		if (!next) {
 			void resetState();
 			stopSharing();
-			setHowOpen(false);
+			setHowTopic(null);
 			setAudioGuideOpen(false);
 			setAudioGuide(null);
 			setSelectedCameraId(null);
@@ -701,7 +701,8 @@ export const WebRecorderDialog = ({
 				stage === "countdown" ||
 				stage === "recording"),
 	);
-	const [howOpen, setHowOpen] = useState(false);
+	const [howTopic, setHowTopic] = useState<"recording" | "camera" | null>(null);
+	const howOpen = howTopic !== null;
 	const [confirmRestart, setConfirmRestart] = useState(false);
 	useEffect(() => {
 		if (!isRecording) setConfirmRestart(false);
@@ -892,7 +893,7 @@ export const WebRecorderDialog = ({
 					aria-label="How does recording work?"
 					title="How does recording work?"
 					className="rec-focus -mr-0.5 rounded-sm text-white/70 transition-colors hover:text-white"
-					onClick={() => setHowOpen(true)}
+					onClick={() => setHowTopic("recording")}
 				>
 					<InfoIcon className={compact ? "size-3" : "size-3.5"} aria-hidden />
 				</button>
@@ -1015,35 +1016,19 @@ export const WebRecorderDialog = ({
 							<CameraIcon className="size-3.5" aria-hidden />
 						)}
 						Camera
+						<button
+							type="button"
+							aria-label="How is the camera recorded?"
+							title="How is the camera recorded?"
+							className="rec-focus -mr-0.5 rounded-sm text-white/70 transition-colors hover:text-white"
+							onClick={() => setHowTopic("camera")}
+						>
+							<InfoIcon className="size-3.5" aria-hidden />
+						</button>
 					</MediaLabel>
 				</>
 			) : (
 				<span className="absolute inset-0 bg-[var(--rec-card-2)]" />
-			)}
-			{!live && !showScreen && screenSupported && (
-				<div className="absolute inset-x-0 bottom-0 flex justify-center p-4">
-					<div className="rec-pop flex items-center gap-3 py-2 pl-3 pr-2 text-[13px]">
-						<MonitorIcon
-							className="size-4 shrink-0 text-[var(--rec-text-2)]"
-							aria-hidden
-						/>
-						<span className="text-[var(--rec-text-1)]">
-							{sharePending
-								? "Pick what to share in your browser's popup"
-								: "Add your screen, a window or a tab"}
-						</span>
-						{!sharePending && (
-							<button
-								type="button"
-								className="rec-btn is-accent !h-7 !px-2.5 !text-[12px]"
-								onClick={() => beginShare()}
-								disabled={setupLocked}
-							>
-								Share screen
-							</button>
-						)}
-					</div>
-				</div>
 			)}
 			{!live && !cameraEnabled && (
 				<div
@@ -1780,7 +1765,7 @@ export const WebRecorderDialog = ({
 				<button
 					type="button"
 					className="rec-btn is-ghost mt-1.5 !h-7 self-start !px-1.5 !text-[12px] text-[var(--rec-accent)]"
-					onClick={() => setHowOpen(true)}
+					onClick={() => setHowTopic("recording")}
 				>
 					<CirclePlayIcon className="size-3.5" aria-hidden />
 					Watch how it works
@@ -1892,9 +1877,9 @@ export const WebRecorderDialog = ({
 							<span className="truncate">
 								<span className="font-medium">Preview</span>
 								<span className="text-[var(--rec-text-2)]">
-									{" "}
-									· Drag the camera to place it, and hover it to resize or flip.
-									Your video starts the same way.
+									{showScreen && cameraEnabled
+										? " · Drag the camera to place it, and hover it to resize or flip. Your video starts the same way."
+										: " · This is what gets recorded."}
 								</span>
 							</span>
 						)}
@@ -1952,6 +1937,42 @@ export const WebRecorderDialog = ({
 						</div>
 					) : (
 						<div className="rec-stage min-h-0 flex-1 p-4">{preview}</div>
+					)}
+					{!live && !showScreen && screenSupported && (
+						<div className="shrink-0 px-4 pb-4">
+							<button
+								type="button"
+								onClick={() => beginShare()}
+								disabled={setupLocked || sharePending}
+								className="rec-focus group flex w-full items-center gap-3 rounded-xl border-2 border-dashed border-[var(--rec-line-strong)] px-4 py-3 text-left transition-colors hover:border-[var(--rec-accent)] hover:bg-[color-mix(in_srgb,var(--rec-accent)_5%,transparent)] disabled:cursor-default disabled:hover:border-[var(--rec-line-strong)] disabled:hover:bg-transparent"
+							>
+								<span
+									className="rec-track flex size-9 shrink-0 items-center justify-center rounded-lg"
+									data-kind="screen"
+								>
+									<span className="rec-track-tile flex size-9 items-center justify-center rounded-lg">
+										<MonitorIcon className="size-4" aria-hidden />
+									</span>
+								</span>
+								<span className="flex min-w-0 flex-1 flex-col">
+									<span className="text-[14px] font-medium text-[var(--rec-text-1)]">
+										{sharePending
+											? "Pick what to share in your browser's popup"
+											: "Add your screen"}
+									</span>
+									<span className="text-[13px] text-[var(--rec-text-2)]">
+										{cameraEnabled
+											? "Your whole screen, a window or a tab. Or record just your camera."
+											: "Your whole screen, a window or a tab."}
+									</span>
+								</span>
+								{!sharePending && (
+									<span className="rec-btn is-accent pointer-events-none !h-8 shrink-0">
+										Share screen
+									</span>
+								)}
+							</button>
+						</div>
 					)}
 					<footer className="grid h-16 shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-3 px-4 shadow-[0_-1px_0_var(--rec-line)]">
 						{transport}
@@ -2105,7 +2126,12 @@ export const WebRecorderDialog = ({
 					}}
 				/>
 			)}
-			{howOpen && <HowRecordingWorks onClose={() => setHowOpen(false)} />}
+			{howTopic && (
+				<HowRecordingWorks
+					steps={howTopic === "camera" ? CAMERA_STEPS : undefined}
+					onClose={() => setHowTopic(null)}
+				/>
+			)}
 			{audioGuide && (
 				<SystemAudioGuide
 					onContinue={continueFromAudioGuide}
@@ -2150,7 +2176,7 @@ export const WebRecorderDialog = ({
 
 	const showHowItWorks =
 		stage === "setup" || stage === "recording"
-			? () => setHowOpen(true)
+			? () => setHowTopic("recording")
 			: undefined;
 
 	if (embedded) {

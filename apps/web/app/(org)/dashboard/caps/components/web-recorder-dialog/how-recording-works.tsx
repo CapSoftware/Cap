@@ -359,13 +359,34 @@ const STEPS = [
 	},
 ] as const;
 
+export const CAMERA_STEPS = [
+	{
+		title: "Your camera records on its own track",
+		body: "It's kept separate from your screen, not baked into it, so nothing about it is final while you record.",
+		Scene: TracksScene,
+	},
+	{
+		title: "Change it after you stop",
+		body: "Once the recording is complete, place, resize or hide the camera in the editor, then save and your link updates.",
+		Scene: LayoutScene,
+	},
+] as const;
+
+type Step = (typeof STEPS)[number] | (typeof CAMERA_STEPS)[number];
+
 const AUTO_ADVANCE_MS = 6000;
 
-export const HowRecordingWorks = ({ onClose }: { onClose: () => void }) => {
+export const HowRecordingWorks = ({
+	steps = STEPS,
+	onClose,
+}: {
+	steps?: readonly [Step, ...Step[]];
+	onClose: () => void;
+}) => {
 	const titleId = useId();
 	const [step, setStep] = useState(0);
 	const [auto, setAuto] = useState(true);
-	const last = STEPS.length - 1;
+	const last = steps.length - 1;
 
 	const go = useCallback(
 		(next: number) => {
@@ -395,7 +416,7 @@ export const HowRecordingWorks = ({ onClose }: { onClose: () => void }) => {
 		return () => window.removeEventListener("keydown", onKey, true);
 	}, [go, onClose, step]);
 
-	const current = STEPS[step] ?? STEPS[0];
+	const current = steps[step] ?? steps[0];
 	const Scene = current.Scene;
 
 	return (
@@ -421,7 +442,7 @@ export const HowRecordingWorks = ({ onClose }: { onClose: () => void }) => {
 				</div>
 				<div className="flex flex-col gap-1.5 px-5 pb-5 pt-4 sm:px-6">
 					<span className="text-[12px] tabular-nums text-[var(--rec-text-3)]">
-						{step + 1} of {STEPS.length}
+						{step + 1} of {steps.length}
 					</span>
 					<h2
 						id={titleId}
@@ -439,7 +460,7 @@ export const HowRecordingWorks = ({ onClose }: { onClose: () => void }) => {
 					</p>
 					<div className="mt-3 flex items-center justify-between gap-3">
 						<div className="flex items-center gap-1.5">
-							{STEPS.map((item, index) => (
+							{steps.map((item, index) => (
 								<button
 									key={item.title}
 									type="button"
