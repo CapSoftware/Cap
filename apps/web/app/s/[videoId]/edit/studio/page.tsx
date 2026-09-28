@@ -5,6 +5,7 @@ import { userIsPro } from "@cap/utils";
 import { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { notFound, redirect } from "next/navigation";
+import { isAbandonedEditorReplacementUpload } from "@/lib/editor-session";
 import { editorSourcesUploaded } from "@/lib/editor-sources-ready";
 import { measureMissingVideoDuration } from "@/lib/editor-video-duration";
 import { getEditSourceKey, isEditSourceKey } from "@/lib/video-edit-processing";
@@ -33,6 +34,7 @@ export default async function StudioEditorPage(props: {
 			metadata: videos.metadata,
 			uploadPhase: videoUploads.phase,
 			rawFileKey: videoUploads.rawFileKey,
+			uploadUpdatedAt: videoUploads.updatedAt,
 		})
 		.from(videos)
 		.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
@@ -68,6 +70,13 @@ export default async function StudioEditorPage(props: {
 		video.uploadPhase &&
 		["uploading", "processing", "generating_thumbnail", "error"].includes(
 			video.uploadPhase,
+		) &&
+		!isAbandonedEditorReplacementUpload(
+			video.ownerId,
+			videoId,
+			video.uploadPhase,
+			video.rawFileKey,
+			video.uploadUpdatedAt,
 		) &&
 		!editorSourcesUploaded(video.metadata, video.uploadPhase)
 	) {

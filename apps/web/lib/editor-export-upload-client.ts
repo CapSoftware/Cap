@@ -99,7 +99,8 @@ async function waitForPublishedReplacement(
 	return false;
 }
 
-export async function uploadWebEditorExport(
+/** Publishes an export the editor worker rendered to the share link. */
+export function uploadWebEditorExport(
 	videoId: string,
 	sessionId: string,
 	exportId: string,
@@ -108,6 +109,74 @@ export async function uploadWebEditorExport(
 	signal: AbortSignal,
 	onProgress?: (progress: WebEditorShareProgress) => void,
 ) {
+	const basePath = `/api/editor/sessions/${encodeURIComponent(sessionId)}/exports/${encodeURIComponent(exportId)}/chunk`;
+	const readChunk = async (offset: number, length: number) => {
+		const search = new URLSearchParams({
+			videoId,
+			offset: String(offset),
+			length: String(length),
+		});
+		const response = await fetch(`${basePath}?${search}`, {
+			signal,
+			cache: "no-store",
+		});
+		if (
+			response.status !== 206 ||
+			response.headers.get("Content-Type") !== "video/mp4" ||
+			response.headers.get("Content-Length") !== String(length) ||
+			response.headers.get("Content-Range") !==
+				`bytes ${offset}-${offset + length - 1}/${size}`
+		) {
+			throw new Error("Rendered recording chunk is unavailable");
+		}
+		return response.blob();
+	};
+	return uploadWebEditorVideo(
+		videoId,
+		sessionId,
+		{ size, readChunk },
+		metadata,
+		signal,
+		onProgress,
+	);
+}
+
+/** Publishes a video rendered in this browser to the share link. */
+export function uploadWebEditorFile(
+	videoId: string,
+	sessionId: string,
+	file: Blob,
+	metadata: WebEditorExportMetadata,
+	signal: AbortSignal,
+	onProgress?: (progress: WebEditorShareProgress) => void,
+) {
+	return uploadWebEditorVideo(
+		videoId,
+		sessionId,
+		{
+			size: file.size,
+			readChunk: async (offset, length) =>
+				file.slice(offset, offset + length, "video/mp4"),
+		},
+		metadata,
+		signal,
+		onProgress,
+	);
+}
+
+/** Replaces the share link's video with `source` as a multipart upload. */
+async function uploadWebEditorVideo(
+	videoId: string,
+	sessionId: string,
+	source: {
+		size: number;
+		readChunk: (offset: number, length: number) => Promise<Blob>;
+	},
+	metadata: WebEditorExportMetadata,
+	signal: AbortSignal,
+	onProgress?: (progress: WebEditorShareProgress) => void,
+) {
+	const { size } = source;
 	if (!validExport(size, metadata))
 		throw new Error("Rendered recording metadata is invalid");
 	if (signal.aborted) throw new Error("Recording upload was canceled");
@@ -161,6 +230,22 @@ export async function uploadWebEditorExport(
 		wake();
 	};
 	signal.addEventListener("abort", canceled, { once: true });
+	// A closed tab can't finish the upload, and a replacement left open would
+	// hold the recording as uploading, so it is abandoned on the way out.
+	const abandon = () => {
+		if (finished || completionUncertain) return;
+		void fetch("/api/upload/multipart/abort", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				videoId,
+				uploadId: target.uploadId,
+				subpath: "result.mp4",
+			}),
+			keepalive: true,
+		}).catch(() => undefined);
+	};
+	window.addEventListener("pagehide", abandon);
 	const waitForProgress = () =>
 		new Promise<void>((resolve, reject) => {
 			const remaining = deadline - Date.now();
@@ -182,7 +267,6 @@ export async function uploadWebEditorExport(
 	try {
 		if (signal.aborted) throw new Error("Recording upload was canceled");
 		onProgress?.({ stage: "uploading", fraction: 0 });
-		const basePath = `/api/editor/sessions/${encodeURIComponent(sessionId)}/exports/${encodeURIComponent(exportId)}/chunk`;
 		for (let offset = 0; offset < size; ) {
 			while (offset - uploadedBytes >= MAX_FETCH_AHEAD_BYTES) {
 				if (signal.aborted) throw new Error("Recording upload was canceled");
@@ -193,25 +277,7 @@ export async function uploadWebEditorExport(
 			if (fatalError) throw fatalError;
 			if (Date.now() >= deadline) throw new Error("Recording upload timed out");
 			const length = Math.min(PART_BYTES, size - offset);
-			const search = new URLSearchParams({
-				videoId,
-				offset: String(offset),
-				length: String(length),
-			});
-			const response = await fetch(`${basePath}?${search}`, {
-				signal,
-				cache: "no-store",
-			});
-			if (
-				response.status !== 206 ||
-				response.headers.get("Content-Type") !== "video/mp4" ||
-				response.headers.get("Content-Length") !== String(length) ||
-				response.headers.get("Content-Range") !==
-					`bytes ${offset}-${offset + length - 1}/${size}`
-			) {
-				throw new Error("Rendered recording chunk is unavailable");
-			}
-			const chunk = await response.blob();
+			const chunk = await source.readChunk(offset, length);
 			if (signal.aborted) throw new Error("Recording upload was canceled");
 			if (chunk.size !== length)
 				throw new Error("Rendered recording chunk was incomplete");
@@ -257,6 +323,7 @@ export async function uploadWebEditorExport(
 		throw error;
 	} finally {
 		signal.removeEventListener("abort", canceled);
+		window.removeEventListener("pagehide", abandon);
 		waiters.clear();
 	}
 }

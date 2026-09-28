@@ -76,6 +76,26 @@ export function isActiveEditorReplacementUpload(
 	);
 }
 
+const ABANDONED_REPLACEMENT_UPLOAD_MS = 10 * 60 * 1000;
+
+/**
+ * A replacement of the share video that stopped moving, e.g. its tab closed
+ * mid-upload. The recording itself is intact, so it no longer blocks editing.
+ */
+export function isAbandonedEditorReplacementUpload(
+	ownerId: string,
+	videoId: string,
+	phase: string | null,
+	key: string | null,
+	updatedAt: Date | null,
+) {
+	return (
+		!!updatedAt &&
+		Date.now() - updatedAt.getTime() > ABANDONED_REPLACEMENT_UPLOAD_MS &&
+		isActiveEditorReplacementUpload(ownerId, videoId, phase, key)
+	);
+}
+
 export const loadEligibleEditorVideo = Effect.fn("loadEligibleEditorVideo")(
 	function* (
 		videoId: Video.VideoId,
@@ -95,6 +115,7 @@ export const loadEligibleEditorVideo = Effect.fn("loadEligibleEditorVideo")(
 						owner: users,
 						uploadPhase: videoUploads.phase,
 						uploadKey: videoUploads.rawFileKey,
+						uploadUpdatedAt: videoUploads.updatedAt,
 					})
 					.from(videos)
 					.innerJoin(users, eq(videos.ownerId, users.id))
@@ -107,14 +128,21 @@ export const loadEligibleEditorVideo = Effect.fn("loadEligibleEditorVideo")(
 				),
 			);
 		const replacementUpload =
-			allowReplacementUpload &&
 			!!record &&
-			isActiveEditorReplacementUpload(
-				record.video.ownerId,
-				record.video.id,
-				record.uploadPhase,
-				record.uploadKey,
-			);
+			((allowReplacementUpload &&
+				isActiveEditorReplacementUpload(
+					record.video.ownerId,
+					record.video.id,
+					record.uploadPhase,
+					record.uploadKey,
+				)) ||
+				isAbandonedEditorReplacementUpload(
+					record.video.ownerId,
+					record.video.id,
+					record.uploadPhase,
+					record.uploadKey,
+					record.uploadUpdatedAt,
+				));
 		if (
 			!record ||
 			record.video.ownerId !== currentUser.id ||

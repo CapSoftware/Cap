@@ -1,5 +1,5 @@
 import { Popover as KPopover } from "@kobalte/core/popover";
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { cx } from "cva";
 import {
 	createMemo,
@@ -31,7 +31,20 @@ type SaveStatus = {
 	error: string | null;
 };
 
+type SaveStart =
+	| { renderer: "farm"; shareUrl: string }
+	| { renderer: "browser"; reason: string };
+
+type BrowserSaveProgress = {
+	stage: "rendering" | "uploading";
+	progress: number;
+};
+
 const POLL_MS = 2000;
+const FIRST_POLL_MS = 1000;
+// A farm render that shows no progress for this long is treated as stuck and
+// the save renders in the browser instead.
+const FARM_STALL_MS = 90_000;
 
 /**
  * The web editor's publishing controls. The recording already lives at a share
@@ -50,23 +63,86 @@ export function WebPublishControls() {
 	} = useEditorContext();
 	const [starting, setStarting] = createSignal(false);
 	const [status, setStatus] = createSignal<SaveStatus | null>(null);
+	const [browserSave, setBrowserSave] =
+		createSignal<BrowserSaveProgress | null>(null);
 	// The revision this session last saved; edits from before the editor opened
 	// may or may not be published, so nothing counts as saved until a Save.
 	const [savedRevision, setSavedRevision] = createSignal<number | null>(null);
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	let disposed = false;
+	// The farm save this editor started, watched so a failed or stuck render
+	// falls back to rendering in the browser.
+	let farmSave: { progress: number; progressAt: number } | null = null;
 
 	const poll = async (resuming = false) => {
 		clearTimeout(timer);
 		try {
 			const next = await invoke<SaveStatus>("webEditorSaveStatus");
 			if (disposed || (resuming && next.state !== "rendering")) return;
+			if (farmSave && !resuming) {
+				const now = Date.now();
+				if (next.progress > farmSave.progress || next.playable) {
+					farmSave = { progress: next.progress, progressAt: now };
+				}
+				if (
+					next.state === "error" ||
+					(next.state === "rendering" &&
+						!next.playable &&
+						now - farmSave.progressAt > FARM_STALL_MS)
+				) {
+					farmSave = null;
+					console.warn(
+						"Cap save renders in this browser:",
+						next.error ?? "the render farm stopped making progress",
+					);
+					await saveInBrowser();
+					return;
+				}
+			}
 			setStatus(next);
 			if (next.state === "rendering") timer = setTimeout(poll, POLL_MS);
-			else if (next.state === "error" && !resuming)
-				toast.error(next.error ?? "Save failed");
+			else {
+				farmSave = null;
+				if (next.state === "error" && !resuming)
+					toast.error(next.error ?? "Save failed");
+			}
 		} catch {
 			if (!disposed && !resuming) timer = setTimeout(poll, POLL_MS * 2);
+		}
+	};
+
+	const saveInBrowser = async () => {
+		setStatus(null);
+		setBrowserSave({ stage: "rendering", progress: 0 });
+		try {
+			await invoke("webEditorSaveInBrowser", {
+				channel: new Channel<BrowserSaveProgress>((progress) => {
+					if (!disposed) setBrowserSave(progress);
+				}),
+			});
+			if (disposed) return;
+			setStatus({
+				state: "ready",
+				exportId: null,
+				progress: 1,
+				playable: false,
+				hlsUrl: null,
+				error: null,
+			});
+		} catch (cause) {
+			if (disposed) return;
+			const error = cause instanceof Error ? cause.message : "Save failed";
+			setStatus({
+				state: "error",
+				exportId: null,
+				progress: 0,
+				playable: false,
+				hlsUrl: null,
+				error,
+			});
+			toast.error(error);
+		} finally {
+			setBrowserSave(null);
 		}
 	};
 
@@ -76,7 +152,8 @@ export function WebPublishControls() {
 		clearTimeout(timer);
 	});
 
-	const rendering = () => status()?.state === "rendering";
+	const rendering = () =>
+		status()?.state === "rendering" || browserSave() !== null;
 	const hasUnsavedEdits = () => projectRevision() !== savedRevision();
 	const upToDate = () =>
 		!hasUnsavedEdits() && !rendering() && status()?.state === "ready";
@@ -88,8 +165,15 @@ export function WebPublishControls() {
 			// Save renders the stored project, so edits still debouncing land first.
 			await flushProjectConfig();
 			const revision = projectRevision();
-			await invoke<{ shareUrl: string }>("webEditorSave");
+			const started = await invoke<SaveStart>("webEditorSave");
 			setSavedRevision(revision);
+			if (started.renderer === "browser") {
+				console.info("Cap save renders in this browser:", started.reason);
+				setStarting(false);
+				await saveInBrowser();
+				return;
+			}
+			farmSave = { progress: 0, progressAt: Date.now() };
 			setStatus({
 				state: "rendering",
 				exportId: null,
@@ -98,7 +182,7 @@ export function WebPublishControls() {
 				hlsUrl: null,
 				error: null,
 			});
-			timer = setTimeout(poll, POLL_MS);
+			timer = setTimeout(poll, FIRST_POLL_MS);
 		} catch (cause) {
 			toast.error(cause instanceof Error ? cause.message : "Save failed");
 		} finally {
@@ -133,11 +217,13 @@ export function WebPublishControls() {
 			</EditorButton>
 			<Tooltip
 				content={
-					status()?.state === "error"
-						? (status()?.error ?? "Save failed")
-						: upToDate()
-							? "Your share link shows this version"
-							: "Update your share link with these edits"
+					browserSave()
+						? "Rendering on this device. Keep this tab open until it finishes."
+						: status()?.state === "error"
+							? (status()?.error ?? "Save failed")
+							: upToDate()
+								? "Your share link shows this version"
+								: "Update your share link with these edits"
 				}
 			>
 				<button
@@ -151,16 +237,21 @@ export function WebPublishControls() {
 							: "bg-linear-to-b from-ed-accent-2 to-ed-accent text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.22),0_1px_2px_rgba(0,60,160,0.25)] hover:brightness-[1.06] active:brightness-[0.96] disabled:cursor-default disabled:hover:brightness-100",
 					)}
 				>
-					<Show when={rendering() && status()?.playable}>
+					<Show when={browserSave() ?? (rendering() && status()?.playable)}>
 						<span
 							aria-hidden="true"
 							class="absolute inset-y-0 left-0 bg-white/20 transition-[width] duration-500"
-							style={{ width: `${(status()?.progress ?? 0) * 100}%` }}
+							style={{
+								width: `${(browserSave()?.progress ?? status()?.progress ?? 0) * 100}%`,
+							}}
 						/>
 					</Show>
 					<span class="relative flex items-center gap-1.5">
 						<Switch fallback="Save">
 							<Match when={starting()}>Saving</Match>
+							<Match when={browserSave()}>
+								{(progress) => <span>{browserSaveLabel(progress())}</span>}
+							</Match>
 							<Match when={rendering()}>
 								{status()?.playable
 									? `Publishing ${Math.floor((status()?.progress ?? 0) * 100)}%`
@@ -177,6 +268,12 @@ export function WebPublishControls() {
 			</Tooltip>
 		</div>
 	);
+}
+
+function browserSaveLabel({ stage, progress }: BrowserSaveProgress) {
+	const percent = Math.floor(progress * 100);
+	if (stage === "uploading") return `Uploading ${percent}%`;
+	return percent > 0 ? `Rendering ${percent}%` : "Rendering";
 }
 
 function ShareMenu(props: { url: string; hasUnsavedEdits: boolean }) {

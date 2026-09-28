@@ -13,6 +13,7 @@ import {
 } from "@/lib/editor-caption-client";
 import {
 	uploadWebEditorExport,
+	uploadWebEditorFile,
 	type WebEditorExportMetadata,
 } from "@/lib/editor-export-upload-client";
 import { startWebEditorPreparation } from "@/lib/editor-preparation-client";
@@ -96,6 +97,7 @@ const TICKET_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const CHANNEL_PATTERN = /^__CHANNEL__:(\d+)$/;
 const EXPORT_START_TIMEOUT_MS = 20_000;
 const EXPORT_CANCEL_TIMEOUT_MS = 10_000;
+const SAVE_CAPACITY_WAIT_MS = 15_000;
 const AUDIO_CONTENT_TYPES: Record<string, string> = {
 	ogg: "audio/ogg",
 	m4a: "audio/mp4",
@@ -403,6 +405,7 @@ export class EditorHostBridge {
 	private preparedExport: PreparedExport | null = null;
 	private canceledExportCleanup: Promise<void> | null = null;
 	private activeShare: AbortController | null = null;
+	private activeSavePublish: AbortController | null = null;
 	private activeCaptions: {
 		language: AiGenerationLanguage;
 		promise: Promise<WebEditorCaptionData>;
@@ -480,13 +483,18 @@ export class EditorHostBridge {
 		return value;
 	}
 
-	private async prepareWorkerSession(captionsEnabled: boolean) {
+	private async prepareWorkerSession(
+		captionsEnabled: boolean,
+		capacityWaitMs?: number,
+	) {
 		const signal = this.controller.signal;
 		const projectSavedAt = this.getProjectSavedAt?.() ?? null;
 		const created = await startWebEditorPreparation(
 			this.videoId,
 			signal,
 			() => undefined,
+			fetch,
+			capacityWaitMs,
 		);
 		this.workerPreparationId = created.id;
 		try {
@@ -525,7 +533,7 @@ export class EditorHostBridge {
 				if (status.status !== "preparing") {
 					throw new Error("Editor export preparation failed");
 				}
-				await new Promise<void>((resolve) => window.setTimeout(resolve, 500));
+				await new Promise<void>((resolve) => window.setTimeout(resolve, 250));
 			}
 			throw new Error(
 				signal.aborted
@@ -769,7 +777,13 @@ export class EditorHostBridge {
 		}
 	}
 
-	private async ensureWorkerSession() {
+	/**
+	 * A worker session for this editor. Save passes `forSave`: it waits for
+	 * capacity only briefly, since it can render in the browser instead, and
+	 * reuses a session prepared before later edits because the save route
+	 * sends the worker the stored project.
+	 */
+	private async ensureWorkerSession(forSave = false) {
 		if (!this.browserOnly) return () => undefined;
 		const previous = this.pendingWorkerAcquisition;
 		let unlock: () => void = () => undefined;
@@ -779,13 +793,13 @@ export class EditorHostBridge {
 		this.cancelWorkerIdleRelease();
 		await previous;
 		try {
-			return await this.acquireWorkerSession();
+			return await this.acquireWorkerSession(forSave);
 		} finally {
 			unlock();
 		}
 	}
 
-	private async acquireWorkerSession() {
+	private async acquireWorkerSession(forSave: boolean) {
 		if (this.disposed) throw new Error("Editor bridge is closed");
 		this.cancelWorkerIdleRelease();
 		await this.pendingWorkerRelease;
@@ -793,7 +807,7 @@ export class EditorHostBridge {
 		const projectSavedAt = this.getProjectSavedAt?.() ?? null;
 		if (
 			this.workerSessionId &&
-			this.workerProjectSavedAt === projectSavedAt &&
+			(forSave || this.workerProjectSavedAt === projectSavedAt) &&
 			this.workerCaptionPlan === captionsEnabled
 		) {
 			this.scheduleWorkerIdleRelease();
@@ -820,8 +834,12 @@ export class EditorHostBridge {
 					}
 					await this.releaseWorkerSession();
 				}
-				await this.prepareWorkerSession(captionsEnabled);
+				await this.prepareWorkerSession(
+					captionsEnabled,
+					forSave ? SAVE_CAPACITY_WAIT_MS : undefined,
+				);
 				if (
+					!forSave &&
 					this.workerProjectSavedAt !== (this.getProjectSavedAt?.() ?? null)
 				) {
 					await this.releaseWorkerSession();
@@ -1317,6 +1335,176 @@ export class EditorHostBridge {
 			if (this.activeExport === active) this.activeExport = null;
 			releaseWorkerUse?.();
 			active.finish();
+		}
+	}
+
+	/**
+	 * Starts a Save on the render farm when it can take one. Otherwise, or
+	 * when the farm or an editor worker can't start it, tells the editor to
+	 * render in the browser and publish the file itself.
+	 */
+	private async startSave(): Promise<
+		| { renderer: "farm"; shareUrl: string }
+		| { renderer: "browser"; reason: string }
+	> {
+		// The render is built from the stored project, so edits still being
+		// written must land first.
+		await Promise.allSettled([...this.pendingConfigWrites]);
+		const savePath = (sessionId: string) =>
+			`/api/editor/sessions/${encodeURIComponent(sessionId)}/save`;
+		let target: Response;
+		try {
+			target = await fetch(
+				`${savePath(this.browserSessionId)}?videoId=${encodeURIComponent(this.videoId)}`,
+				{ cache: "no-store", signal: this.controller.signal },
+			);
+		} catch {
+			throw new Error(
+				"Save could not reach Cap. Check your connection and try again.",
+			);
+		}
+		if (!target.ok) throw new Error(webEditorSaveError(target.status));
+		const plan: unknown = await target.json();
+		if (
+			typeof plan !== "object" ||
+			plan === null ||
+			!("renderer" in plan) ||
+			(plan.renderer !== "farm" && plan.renderer !== "browser")
+		) {
+			throw new Error("Save response was invalid");
+		}
+		if (plan.renderer === "browser") {
+			return {
+				renderer: "browser",
+				reason:
+					"reason" in plan && typeof plan.reason === "string"
+						? plan.reason
+						: "The render farm is unavailable",
+			};
+		}
+		let releaseWorkerUse: () => void = () => undefined;
+		try {
+			// The render project is built from the worker's prepared copy of
+			// the recording, so a browser-only editor starts one first.
+			releaseWorkerUse = await this.ensureWorkerSession(true);
+			const sessionId = this.sessionId;
+			const projectSavedAt = this.getProjectSavedAt?.() ?? null;
+			const response = await fetch(savePath(sessionId), {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ videoId: this.videoId }),
+				cache: "no-store",
+				signal: this.controller.signal,
+			});
+			if (response.status === 403 || response.status === 404)
+				throw new SaveRejected(webEditorSaveError(response.status));
+			if (!response.ok) {
+				return {
+					renderer: "browser",
+					reason: `The render farm could not start the save (${response.status})`,
+				};
+			}
+			const saved: unknown = await response.json();
+			if (
+				typeof saved !== "object" ||
+				saved === null ||
+				!("shareUrl" in saved) ||
+				typeof saved.shareUrl !== "string"
+			) {
+				throw new SaveRejected("Save response was invalid");
+			}
+			// The save route gave the worker the stored project.
+			if (this.workerSessionId === sessionId)
+				this.workerProjectSavedAt = projectSavedAt;
+			return { renderer: "farm", shareUrl: saved.shareUrl };
+		} catch (cause) {
+			if (cause instanceof SaveRejected || this.disposed) throw cause;
+			return {
+				renderer: "browser",
+				reason:
+					cause instanceof Error
+						? cause.message
+						: "The editor worker is unavailable",
+			};
+		} finally {
+			releaseWorkerUse();
+		}
+	}
+
+	/** Publishes a Save the editor rendered in this browser to the share link. */
+	private async publishRenderedSave(message: BridgeRequest) {
+		const [file, metadata, channel] = message.args;
+		const channelId = exportChannelId(channel);
+		const reply = (
+			value:
+				| { kind: "result"; value: unknown }
+				| { kind: "error"; error: string },
+		) => this.port?.postMessage({ ...value, id: message.id });
+		if (
+			!(file instanceof Blob) ||
+			typeof metadata !== "object" ||
+			metadata === null ||
+			this.activeSavePublish
+		) {
+			reply({
+				kind: "error",
+				error: "The rendered video could not be published",
+			});
+			return;
+		}
+		const controller = new AbortController();
+		this.activeSavePublish = controller;
+		const keepOpen = (event: BeforeUnloadEvent) => event.preventDefault();
+		window.addEventListener("beforeunload", keepOpen);
+		try {
+			const signal = AbortSignal.any([
+				controller.signal,
+				this.controller.signal,
+			]);
+			// A farm render still running for an earlier Save must not replace
+			// this one when it finishes.
+			const withdrawn = await fetch(
+				`/api/editor/sessions/${encodeURIComponent(this.browserSessionId)}/save?videoId=${encodeURIComponent(this.videoId)}`,
+				{ method: "DELETE", cache: "no-store", signal },
+			);
+			if (!withdrawn.ok) throw new Error(webEditorSaveError(withdrawn.status));
+			await uploadWebEditorFile(
+				this.videoId,
+				this.browserSessionId,
+				file,
+				metadata as WebEditorExportMetadata,
+				signal,
+				(progress) => {
+					if (channelId !== null)
+						this.port?.postMessage({
+							kind: "channel",
+							id: channelId,
+							value: { stage: "uploading", progress: progress.fraction },
+						});
+				},
+			);
+			reply({
+				kind: "result",
+				value: {
+					shareUrl: new URL(
+						`/s/${encodeURIComponent(this.videoId)}`,
+						window.location.origin,
+					).toString(),
+				},
+			});
+		} catch (cause) {
+			reply({
+				kind: "error",
+				error:
+					this.disposed || controller.signal.aborted
+						? "Save was canceled"
+						: cause instanceof Error
+							? cause.message
+							: "The rendered video could not be published",
+			});
+		} finally {
+			window.removeEventListener("beforeunload", keepOpen);
+			if (this.activeSavePublish === controller) this.activeSavePublish = null;
 		}
 	}
 
@@ -2051,38 +2239,11 @@ export class EditorHostBridge {
 			return;
 		}
 		if (message.kind === "invoke" && message.name === "tauri:webEditorSave") {
-			let releaseWorkerUse: () => void = () => undefined;
 			try {
-				// The render is built from the stored project, so edits still being
-				// written must land before the worker copy is (re)prepared from it.
-				await Promise.allSettled([...this.pendingConfigWrites]);
-				// The render project is built from the worker's prepared copy of
-				// the recording, so a browser-only editor starts one first.
-				releaseWorkerUse = await this.ensureWorkerSession();
-				const response = await fetch(
-					`/api/editor/sessions/${encodeURIComponent(this.sessionId)}/save`,
-					{
-						method: "POST",
-						headers: { "Content-Type": "application/json" },
-						body: JSON.stringify({ videoId: this.videoId }),
-						cache: "no-store",
-						signal: this.controller.signal,
-					},
-				);
-				if (!response.ok) throw new Error(webEditorSaveError(response.status));
-				const saved: unknown = await response.json();
-				if (
-					typeof saved !== "object" ||
-					saved === null ||
-					!("shareUrl" in saved) ||
-					typeof saved.shareUrl !== "string"
-				) {
-					throw new Error("Save response was invalid");
-				}
 				this.port?.postMessage({
 					kind: "result",
 					id: message.id,
-					value: { shareUrl: saved.shareUrl },
+					value: await this.startSave(),
 				});
 			} catch (cause) {
 				this.port?.postMessage({
@@ -2090,9 +2251,14 @@ export class EditorHostBridge {
 					id: message.id,
 					error: cause instanceof Error ? cause.message : "Save failed",
 				});
-			} finally {
-				releaseWorkerUse();
 			}
+			return;
+		}
+		if (
+			message.kind === "invoke" &&
+			message.name === "tauri:webEditorPublishRendered"
+		) {
+			await this.publishRenderedSave(message);
 			return;
 		}
 		if (
@@ -2662,13 +2828,13 @@ export class EditorHostBridge {
 	}
 }
 
+class SaveRejected extends Error {}
+
 function webEditorSaveError(status: number) {
-	if (status === 400)
-		return "This project uses something Save can't render yet. Use Export instead.";
 	if (status === 403)
 		return "Saving recordings of 5 minutes or longer, or with captions, needs Cap Pro";
 	if (status === 404) return "This recording is no longer available";
-	return "Save is unavailable right now. Try again, or use Export.";
+	return "Save is unavailable right now. Try again, or use Download.";
 }
 
 function webEditorBackgroundExportError(status: number) {

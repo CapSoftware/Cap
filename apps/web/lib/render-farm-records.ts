@@ -158,3 +158,21 @@ export function recordRenderFarmExport(
 		upsertRenderFarmExport(items, item),
 	);
 }
+
+/**
+ * Forgets a save the farm has not published, so a render that stalled or
+ * failed can't replace the video the owner is publishing another way.
+ */
+export async function withdrawRenderFarmSave(videoId: Video.VideoId) {
+	await db()
+		.update(videos)
+		.set({
+			metadata: sql`JSON_REMOVE(${videos.metadata}, '$.renderFarmSave')`,
+		})
+		.where(
+			and(
+				eq(videos.id, videoId),
+				sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.renderFarmSave.status')) IN ('rendering', 'error')`,
+			),
+		);
+}

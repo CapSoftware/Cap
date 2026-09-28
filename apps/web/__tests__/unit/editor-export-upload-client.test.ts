@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { uploadWebEditorExport } from "../../lib/editor-export-upload-client";
+import {
+	uploadWebEditorExport,
+	uploadWebEditorFile,
+} from "../../lib/editor-export-upload-client";
 
 const CHUNK_BYTES = 16 * 1024 * 1024;
 const metadata = { duration: 95, width: 1920, height: 1080, fps: 30 };
@@ -60,6 +63,8 @@ beforeEach(() => {
 	MockXMLHttpRequest.parts.clear();
 	MockXMLHttpRequest.aborted = 0;
 	vi.stubGlobal("window", globalThis as typeof globalThis & Window);
+	vi.stubGlobal("addEventListener", vi.fn());
+	vi.stubGlobal("removeEventListener", vi.fn());
 	vi.stubGlobal(
 		"XMLHttpRequest",
 		MockXMLHttpRequest as unknown as typeof XMLHttpRequest,
@@ -274,4 +279,87 @@ test("aborting while a chunk body is read does not publish the recording", async
 	).rejects.toThrow("Recording upload was canceled");
 	expect(requests.some((url) => url.endsWith("/abort"))).toBe(true);
 	expect(requests.some((url) => url.endsWith("/complete"))).toBe(false);
+});
+
+test("a video rendered in the browser is published from its own bytes", async () => {
+	const size = CHUNK_BYTES + 512;
+	const asset = new Uint8Array(size).fill(0x42);
+	const requests: string[] = [];
+	vi.stubGlobal(
+		"fetch",
+		vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+			const url = String(input);
+			requests.push(url);
+			const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+			expect(body.replaceExisting).toBe(true);
+			if (url.endsWith("/initiate"))
+				return Response.json({ uploadId: "upload", provider: "s3" });
+			if (url.endsWith("/presign-part"))
+				return Response.json({
+					presignedUrl: `https://uploads.example/part-${body.partNumber}`,
+					provider: "s3",
+				});
+			if (url.endsWith("/complete"))
+				return Response.json({ success: true, processingStarted: true });
+			throw new Error(`Unexpected request: ${url}`);
+		}),
+	);
+	await uploadWebEditorFile(
+		"video",
+		"session",
+		new Blob([asset], { type: "video/mp4" }),
+		metadata,
+		new AbortController().signal,
+	);
+	expect(requests.some((url) => url.includes("/chunk?"))).toBe(false);
+	const uploaded = new Blob([
+		MockXMLHttpRequest.parts.get(1) ?? new Blob(),
+		MockXMLHttpRequest.parts.get(2) ?? new Blob(),
+	]);
+	const digest = (bytes: ArrayBuffer) =>
+		createHash("sha256").update(Buffer.from(bytes)).digest("hex");
+	expect(uploaded.size).toBe(size);
+	expect(digest(await uploaded.arrayBuffer())).toBe(digest(asset.buffer));
+});
+
+test("closing the page abandons an unfinished replacement upload", async () => {
+	const listeners = new Map<string, () => void>();
+	vi.stubGlobal(
+		"addEventListener",
+		vi.fn((name: string, listener: () => void) =>
+			listeners.set(name, listener),
+		),
+	);
+	const aborts: Array<{ body: unknown; keepalive: boolean | undefined }> = [];
+	vi.stubGlobal(
+		"fetch",
+		vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+			const url = String(input);
+			if (url.endsWith("/initiate"))
+				return Response.json({ uploadId: "upload", provider: "s3" });
+			if (url.endsWith("/abort")) {
+				aborts.push({
+					body: JSON.parse(String(init?.body)),
+					keepalive: init?.keepalive,
+				});
+				return Response.json({ success: true });
+			}
+			return new Promise<Response>(() => undefined);
+		}),
+	);
+	void uploadWebEditorFile(
+		"video",
+		"session",
+		new Blob([new Uint8Array(1024)], { type: "video/mp4" }),
+		metadata,
+		new AbortController().signal,
+	).catch(() => undefined);
+	await vi.waitFor(() => expect(listeners.has("pagehide")).toBe(true));
+	listeners.get("pagehide")?.();
+	expect(aborts).toEqual([
+		{
+			body: { videoId: "video", uploadId: "upload", subpath: "result.mp4" },
+			keepalive: true,
+		},
+	]);
 });

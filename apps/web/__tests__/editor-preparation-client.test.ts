@@ -128,7 +128,7 @@ test("a missing or unhealthy editor worker fails promptly without a busy wait", 
 			onWait,
 			fetcher,
 		),
-	).rejects.toThrow("Editor preparation could not start");
+	).rejects.toThrow("The editor server is unavailable right now");
 	expect(fetcher).toHaveBeenCalledTimes(1);
 	expect(onWait).not.toHaveBeenCalled();
 });
@@ -150,9 +150,34 @@ test("capacity waiting has a deadline rather than retrying forever", async () =>
 		fetcher,
 	);
 	const rejection = expect(pending).rejects.toThrow(
-		"All editors are busy. Please try again in a moment.",
+		"Every editor server is busy right now",
 	);
 	await vi.advanceTimersByTimeAsync(5 * 60 * 1_000 + 20_000);
 	await rejection;
 	expect(fetcher.mock.calls.length).toBeLessThan(30);
+});
+
+test("a caller with somewhere else to go can wait for capacity briefly", async () => {
+	vi.useFakeTimers();
+	vi.setSystemTime(0);
+	vi.spyOn(Math, "random").mockReturnValue(0);
+	const fetcher = vi.fn(async () =>
+		Response.json(
+			{ _tag: "EditorCapacityBusy", retryAfterMs: 8_000 },
+			{ status: 503 },
+		),
+	);
+	const pending = startWebEditorPreparation(
+		"recording",
+		new AbortController().signal,
+		vi.fn(),
+		fetcher,
+		10_000,
+	);
+	const rejection = expect(pending).rejects.toThrow(
+		"Every editor server is busy right now",
+	);
+	await vi.advanceTimersByTimeAsync(10_000);
+	await rejection;
+	expect(fetcher).toHaveBeenCalledTimes(2);
 });

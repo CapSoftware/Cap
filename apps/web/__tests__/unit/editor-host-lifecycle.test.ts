@@ -1,9 +1,13 @@
 import { afterEach, expect, test, vi } from "vitest";
 import { EditorHostBridge } from "../../app/s/[videoId]/edit/studio/editor-host";
-import { uploadWebEditorExport } from "../../lib/editor-export-upload-client";
+import {
+	uploadWebEditorExport,
+	uploadWebEditorFile,
+} from "../../lib/editor-export-upload-client";
 
 vi.mock("@/lib/editor-export-upload-client", () => ({
 	uploadWebEditorExport: vi.fn(async () => undefined),
+	uploadWebEditorFile: vi.fn(async () => undefined),
 }));
 
 const ticket = "a".repeat(43);
@@ -538,7 +542,14 @@ test("both editor folder actions download an owned recording bundle", async () =
 	const click = vi.fn();
 	const remove = vi.fn();
 	const append = vi.fn();
-	const link = { href: "", rel: "", download: "", click, remove };
+	const link = {
+		href: "",
+		rel: "",
+		download: "",
+		click,
+		remove,
+		setAttribute: vi.fn(),
+	};
 	vi.stubGlobal("document", {
 		createElement: vi.fn(() => link),
 		body: { append },
@@ -579,7 +590,8 @@ test("both editor folder actions download an owned recording bundle", async () =
 		expect(click).toHaveBeenCalledTimes(2);
 		expect(link.href).toBe(downloadUrl);
 		expect(link.download).toBe("Cap Recording.capbundle");
-		expect(append).toHaveBeenCalledTimes(2);
+		// The hidden download frame is added once, then each link.
+		expect(append).toHaveBeenCalledTimes(3);
 		expect(remove).toHaveBeenCalledTimes(2);
 		expect(await invoke(3, "cap-web-editor://session/other")).toEqual({
 			kind: "error",
@@ -656,6 +668,7 @@ test("browser Studio reprepares export workers after Cap Pro changes without res
 				downloaded.push(this.href);
 			},
 			remove: vi.fn(),
+			setAttribute: vi.fn(),
 		})),
 		body: { append: vi.fn() },
 	});
@@ -782,6 +795,7 @@ test("a plan change cannot release a worker during another browser Studio operat
 				downloaded.push(this.href);
 			},
 			remove: vi.fn(),
+			setAttribute: vi.fn(),
 		})),
 		body: { append: vi.fn() },
 	});
@@ -2310,4 +2324,200 @@ test("Solid caption commands share one authenticated AssemblyAI request and bypa
 	});
 	port.close();
 	bridge.dispose();
+});
+
+async function browserSaveHost(
+	request: (url: string, init?: RequestInit) => Promise<Response>,
+) {
+	const requests: Array<{ url: string; method: string }> = [];
+	vi.stubGlobal(
+		"fetch",
+		vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+			const url = String(input);
+			requests.push({ url, method: init?.method ?? "GET" });
+			if (url === "/api/editor/videos/video/plan")
+				return Response.json({ pro: true });
+			return request(url, init);
+		}),
+	);
+	vi.stubGlobal("window", {
+		setTimeout,
+		clearTimeout,
+		addEventListener: vi.fn(),
+		removeEventListener: vi.fn(),
+		location: { origin: "http://127.0.0.1:3000" },
+	});
+	const { iframe, postMessage } = frame();
+	const bridge = new EditorHostBridge(
+		"video",
+		"session",
+		"user",
+		vi.fn(),
+		vi.fn(),
+		undefined,
+		undefined,
+		undefined,
+		true,
+		undefined,
+		undefined,
+		() => "saved-revision",
+		true,
+	);
+	await bridge.connect(iframe);
+	const port = postMessage.mock.calls[0]?.[2]?.[0] as MessagePort;
+	port.start();
+	const invoke = (name: string, args: unknown[] = [undefined]) => {
+		const reply = new Promise<unknown>((resolve) => {
+			port.onmessage = (event) => {
+				if (event.data.kind !== "channel") resolve(event.data);
+			};
+		});
+		port.postMessage({ kind: "invoke", id: 1, name, args });
+		return reply;
+	};
+	return { bridge, port, invoke, requests };
+}
+
+test("Save renders in the browser without an editor worker when the farm is unavailable", async () => {
+	const { bridge, port, invoke, requests } = await browserSaveHost(
+		async (url) => {
+			if (url === "/api/editor/sessions/session/save?videoId=video")
+				return Response.json({
+					renderer: "browser",
+					reason: "The render farm is not configured",
+				});
+			throw new Error(`Unexpected editor request ${url}`);
+		},
+	);
+	try {
+		expect(await invoke("tauri:webEditorSave")).toEqual({
+			kind: "result",
+			id: 1,
+			value: {
+				renderer: "browser",
+				reason: "The render farm is not configured",
+			},
+		});
+		expect(requests.some(({ url }) => url.includes("preparations"))).toBe(
+			false,
+		);
+	} finally {
+		port.close();
+		bridge.dispose();
+	}
+});
+
+test("Save falls back to the browser when no editor worker can prepare", async () => {
+	const { bridge, port, invoke, requests } = await browserSaveHost(
+		async (url, init) => {
+			if (url === "/api/editor/sessions/session/save?videoId=video")
+				return Response.json({ renderer: "farm", reason: null });
+			if (url === "/api/editor/preparations" && init?.method === "POST")
+				return Response.json({ _tag: "ServiceUnavailable" }, { status: 503 });
+			throw new Error(`Unexpected editor request ${url}`);
+		},
+	);
+	try {
+		expect(await invoke("tauri:webEditorSave")).toEqual({
+			kind: "result",
+			id: 1,
+			value: {
+				renderer: "browser",
+				reason:
+					"The editor server is unavailable right now. Try again in a moment.",
+			},
+		});
+		expect(
+			requests.some(
+				({ url, method }) => url.endsWith("/save") && method === "POST",
+			),
+		).toBe(false);
+	} finally {
+		port.close();
+		bridge.dispose();
+	}
+});
+
+test("Save starts on the farm through a prepared worker and keeps plan errors", async () => {
+	let saveStatus = 200;
+	const { bridge, port, invoke } = await browserSaveHost(async (url, init) => {
+		if (url === "/api/editor/sessions/session/save?videoId=video")
+			return Response.json({ renderer: "farm", reason: null });
+		if (url === "/api/editor/preparations" && init?.method === "POST")
+			return Response.json({ id: "prep-1", status: "preparing" });
+		if (url.startsWith("/api/editor/preparations/prep-1"))
+			return Response.json({ status: "ready", sessionId: "worker-1" });
+		if (url === "/api/editor/sessions/worker-1/save" && init?.method === "POST")
+			return saveStatus === 200
+				? Response.json({
+						exportId: "export",
+						jobId: "job",
+						shareUrl: "http://127.0.0.1:3000/s/video",
+					})
+				: new Response(null, { status: saveStatus });
+		if (url.startsWith("/api/editor/sessions/worker-1?"))
+			return Response.json({ closed: true });
+		throw new Error(`Unexpected editor request ${url}`);
+	});
+	try {
+		expect(await invoke("tauri:webEditorSave")).toEqual({
+			kind: "result",
+			id: 1,
+			value: { renderer: "farm", shareUrl: "http://127.0.0.1:3000/s/video" },
+		});
+		saveStatus = 403;
+		expect(await invoke("tauri:webEditorSave")).toEqual({
+			kind: "error",
+			id: 1,
+			error:
+				"Saving recordings of 5 minutes or longer, or with captions, needs Cap Pro",
+		});
+	} finally {
+		port.close();
+		bridge.dispose();
+	}
+});
+
+test("a browser-rendered Save withdraws any farm render before publishing the file", async () => {
+	const upload = vi.mocked(uploadWebEditorFile);
+	upload.mockClear();
+	const order: string[] = [];
+	upload.mockImplementation(async () => {
+		order.push("upload");
+	});
+	const { bridge, port, invoke } = await browserSaveHost(async (url, init) => {
+		if (
+			url === "/api/editor/sessions/session/save?videoId=video" &&
+			init?.method === "DELETE"
+		) {
+			order.push("withdraw");
+			return new Response(null, { status: 204 });
+		}
+		throw new Error(`Unexpected editor request ${url}`);
+	});
+	const file = new Blob([new Uint8Array(16)], { type: "video/mp4" });
+	const metadata = { duration: 4, width: 1920, height: 1080, fps: 30 };
+	try {
+		expect(
+			await invoke("tauri:webEditorPublishRendered", [
+				file,
+				metadata,
+				"__CHANNEL__:7",
+			]),
+		).toEqual({
+			kind: "result",
+			id: 1,
+			value: { shareUrl: "http://127.0.0.1:3000/s/video" },
+		});
+		expect(order).toEqual(["withdraw", "upload"]);
+		expect(upload.mock.calls[0]?.slice(0, 4)).toEqual([
+			"video",
+			"session",
+			file,
+			metadata,
+		]);
+	} finally {
+		port.close();
+		bridge.dispose();
+	}
 });

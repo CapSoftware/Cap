@@ -11,10 +11,7 @@ import {
 import { eq } from "drizzle-orm";
 import { Effect, Layer, Schema } from "effect";
 import { decodeDesktopReuploadToken } from "@/lib/desktop-reupload-token";
-import {
-	loadEligibleEditorVideo,
-	verifyOwnedEditorSession,
-} from "@/lib/editor-session";
+import { loadEligibleEditorVideo } from "@/lib/editor-session";
 import { apiToHandler } from "@/lib/server";
 
 export const dynamic = "force-dynamic";
@@ -43,11 +40,10 @@ class Api extends HttpApi.make("WebEditorShareStatusApi").add(
 const ApiLive = HttpApiBuilder.api(Api).pipe(
 	Layer.provide(
 		HttpApiBuilder.group(Api, "root", (handlers) =>
-			handlers.handle("status", ({ path, payload }) =>
+			handlers.handle("status", ({ payload }) =>
 				Effect.gen(function* () {
 					if (payload.uploadId.length < 1 || payload.uploadId.length > 32_768)
 						return yield* new HttpApiError.BadRequest();
-					yield* verifyOwnedEditorSession(payload.videoId, path.id);
 					const video = yield* loadEligibleEditorVideo(payload.videoId, true);
 					const token = yield* Effect.try({
 						try: () => decodeDesktopReuploadToken(payload.uploadId),

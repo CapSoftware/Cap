@@ -10,12 +10,17 @@ import type { Video } from "@cap/web-domain";
 import { HttpApiError } from "@effect/platform";
 import { eq } from "drizzle-orm";
 import { Effect } from "effect";
-import { hasEditorCaptionContent } from "@/lib/editor-caption-access";
+import {
+	hasEditorCaptionContent,
+	stripEditorCaptionContent,
+} from "@/lib/editor-caption-access";
+import { decodeWebEditorProject } from "@/lib/editor-project-storage";
 import {
 	loadEligibleEditorVideo,
 	requestMediaEditor,
 	verifyOwnedEditorSession,
 } from "@/lib/editor-session";
+import { parseEditorWorkerPool } from "@/lib/editor-worker-routing";
 import {
 	type RenderFarmJobKind,
 	renderFarmCallbackUrl,
@@ -142,16 +147,78 @@ const mainSourceKeys = Effect.fn("renderFarmMainSourceKeys")(function* (
 	};
 });
 
+/** Saving recordings of five minutes or longer needs Cap Pro. */
+export function canSaveEditorVideo(video: {
+	duration: number | null;
+	captionsEnabled: boolean;
+}) {
+	return (video.duration ?? 0) < PRO_DURATION_SECONDS || video.captionsEnabled;
+}
+
+const FARM_HEALTH_TTL_MS = 30_000;
+let farmHealth: { checkedAt: number; healthy: Promise<boolean> } | null = null;
+
+function renderFarmHealthy(
+	config: NonNullable<ReturnType<typeof renderFarmConfig>>,
+) {
+	if (farmHealth && Date.now() - farmHealth.checkedAt < FARM_HEALTH_TTL_MS) {
+		return farmHealth.healthy;
+	}
+	const healthy = renderFarmFetch(config, "/health", {
+		signal: AbortSignal.timeout(3_000),
+	})
+		.then(async (response) => {
+			const body: unknown = await response.json().catch(() => null);
+			return (
+				response.ok &&
+				asRecord(body) &&
+				typeof body.workers === "number" &&
+				body.workers > 0
+			);
+		})
+		.catch(() => false);
+	farmHealth = { checkedAt: Date.now(), healthy };
+	return healthy;
+}
+
+/**
+ * Why Save can't render on the farm right now, or null when it can. The
+ * editor renders in the browser instead of waiting on a farm that is not
+ * there.
+ */
+export async function renderFarmSaveUnavailable() {
+	const config = renderFarmConfig();
+	if (!config?.callbackSecret) return "The render farm is not configured";
+	const env = serverEnv();
+	let workers = 0;
+	try {
+		workers = parseEditorWorkerPool(
+			env.CAP_WEB_EDITOR_WORKER_POOL,
+			env.CAP_WEB_EDITOR_WORKER_URL,
+		).length;
+	} catch {}
+	if (!env.MEDIA_SERVER_WEBHOOK_SECRET || workers === 0) {
+		return "No editor worker is configured";
+	}
+	if (!(await renderFarmHealthy(config))) {
+		return "The render farm is not responding";
+	}
+	return null;
+}
+
 export const startRenderFarmSave = Effect.fn("startRenderFarmSave")(function* (
 	videoId: Video.VideoId,
 	sessionId: string,
 	origin: string,
 ) {
-	const sessionPath = yield* verifyOwnedEditorSession(videoId, sessionId);
-	const video = yield* loadEligibleEditorVideo(videoId);
-	if ((video.duration ?? 0) >= PRO_DURATION_SECONDS && !video.captionsEnabled) {
-		return yield* new HttpApiError.Forbidden();
-	}
+	const [sessionPath, video] = yield* Effect.all(
+		[
+			verifyOwnedEditorSession(videoId, sessionId),
+			loadEligibleEditorVideo(videoId),
+		],
+		{ concurrency: 2 },
+	);
+	if (!canSaveEditorVideo(video)) return yield* new HttpApiError.Forbidden();
 	const started = yield* startRenderFarmJob({
 		video,
 		sessionPath,
@@ -272,15 +339,48 @@ export const startRenderFarmJob = Effect.fn("startRenderFarmJob")(function* ({
 			try: () => response.json() as Promise<unknown>,
 			catch: () => new HttpApiError.ServiceUnavailable(),
 		});
-	const listingResponse = yield* requestMediaEditor(
-		`${sessionPath}/render-project`,
+	// The worker may have been prepared before the latest edits, so it gets
+	// the stored project first rather than being prepared again.
+	const savedProject = video.metadata?.webEditorProject
+		? decodeWebEditorProject(video.metadata.webEditorProject)
+		: null;
+	const syncProject = Effect.gen(function* () {
+		if (!savedProject) return;
+		const synced = yield* requestMediaEditor(`${sessionPath}/config`, {
+			method: "PUT",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(
+				video.captionsEnabled
+					? savedProject
+					: stripEditorCaptionContent(savedProject),
+			),
+		});
+		if (synced.status !== 204) {
+			return yield* new HttpApiError.ServiceUnavailable();
+		}
+	});
+	const [listingResponse, configResponse, keys] = yield* Effect.all(
+		[
+			requestMediaEditor(`${sessionPath}/render-project`),
+			syncProject.pipe(
+				Effect.andThen(requestMediaEditor(`${sessionPath}/config`)),
+			),
+			mainSourceKeys(video).pipe(
+				Effect.catchTag("DatabaseError", () =>
+					Effect.fail(new HttpApiError.InternalServerError()),
+				),
+			),
+		],
+		{ concurrency: "unbounded" },
 	);
-	const configResponse = yield* requestMediaEditor(`${sessionPath}/config`);
 	if (!listingResponse.ok || !configResponse.ok) {
 		return yield* new HttpApiError.ServiceUnavailable();
 	}
-	const listing = parseListing(yield* readJson(listingResponse));
-	const sessionConfig = yield* readJson(configResponse);
+	const [listingJson, sessionConfig] = yield* Effect.all(
+		[readJson(listingResponse), readJson(configResponse)],
+		{ concurrency: 2 },
+	);
+	const listing = parseListing(listingJson);
 	if (!listing || !asRecord(sessionConfig)) {
 		return yield* new HttpApiError.ServiceUnavailable();
 	}
@@ -294,11 +394,6 @@ export const startRenderFarmJob = Effect.fn("startRenderFarmJob")(function* ({
 		return yield* new HttpApiError.Forbidden();
 	}
 
-	const keys = yield* mainSourceKeys(video).pipe(
-		Effect.catchTag("DatabaseError", () =>
-			Effect.fail(new HttpApiError.InternalServerError()),
-		),
-	);
 	const firstSegment = Array.isArray(listing.recordingMeta.segments)
 		? listing.recordingMeta.segments[0]
 		: undefined;
