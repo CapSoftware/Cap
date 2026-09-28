@@ -2,9 +2,12 @@ import { describe, expect, it } from "vitest";
 import type { EditorProjectConfiguration } from "./context";
 import {
 	applyTemplate,
+	defaultLookKey,
 	EDITOR_TEMPLATES,
 	fullSpanScene,
 	lookKey,
+	templateDefaultConfig,
+	templateDefaultKey,
 	templateLookKey,
 	templateSource,
 	withoutTemplateScene,
@@ -81,5 +84,71 @@ describe("template looks", () => {
 			{ start: 0, end: 10, mode: "cameraOnly" },
 			{ start: 2, end: 4, mode: "floating" },
 		]);
+	});
+});
+
+// What the server stores: no camera visibility, extra fields, and object keys
+// in whatever order MySQL's JSON column returns them.
+const savedStyle = (config: EditorProjectConfiguration) => {
+	const reversed = (value: unknown): unknown =>
+		typeof value === "object" && value !== null && !Array.isArray(value)
+			? Object.fromEntries(
+					Object.entries(value)
+						.reverse()
+						.map(([key, field]) => [key, reversed(field)]),
+				)
+			: value;
+	const { hide: _hide, ...camera } = config.camera;
+	return reversed({
+		version: 1,
+		aspectRatio: config.aspectRatio,
+		background: { ...config.background, blur: 0 },
+		camera,
+		cursor: { size: 100 },
+	}) as Parameters<typeof defaultLookKey>[0];
+};
+
+describe("default looks", () => {
+	it("recognise the template a saved default came from", () => {
+		for (const template of EDITOR_TEMPLATES.filter((t) => !t.scene)) {
+			const wallpaper =
+				template.background.type === "wallpaper" ? "/wallpaper.jpg" : null;
+			const config = templateDefaultConfig(project(), template, wallpaper);
+			if (!config) throw new Error(`${template.id} has no default config`);
+			expect(defaultLookKey(savedStyle(config))).toBe(
+				templateDefaultKey(template, wallpaper),
+			);
+			for (const other of EDITOR_TEMPLATES.filter(
+				(t) => !t.scene && t !== template,
+			)) {
+				expect(defaultLookKey(savedStyle(config))).not.toBe(
+					templateDefaultKey(other, wallpaper),
+				);
+			}
+		}
+	});
+
+	it("leave out templates whose scene can't reach a new recording", () => {
+		for (const template of EDITOR_TEMPLATES.filter((t) => t.scene)) {
+			expect(templateDefaultConfig(project(), template, null)).toBeNull();
+		}
+	});
+
+	it("ignore camera visibility but not the look", () => {
+		const config = project();
+		const hidden = project();
+		hidden.camera.hide = true;
+		expect(defaultLookKey(hidden)).toBe(defaultLookKey(config));
+		hidden.background.padding = 4;
+		expect(defaultLookKey(hidden)).not.toBe(defaultLookKey(config));
+	});
+
+	it("match animated gradients whatever order their fields come back in", () => {
+		const config = project();
+		config.background.source = {
+			type: "animatedGradient",
+			config: { speed: 1, colors: ["#fff", "#000"] },
+		} as unknown as EditorProjectConfiguration["background"]["source"];
+		expect(defaultLookKey(savedStyle(config))).toBe(defaultLookKey(config));
 	});
 });

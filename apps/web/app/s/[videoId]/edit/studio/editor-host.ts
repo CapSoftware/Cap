@@ -2271,6 +2271,60 @@ export class EditorHostBridge {
 		}
 	}
 
+	private async handleDefaultStyle(message: BridgeRequest) {
+		try {
+			const request = message.args[0];
+			let init: RequestInit = { method: "GET" };
+			if (message.name === "tauri:webEditorSaveDefaultStyle") {
+				if (
+					message.args.length !== 1 ||
+					typeof request !== "object" ||
+					request === null ||
+					!("config" in request)
+				)
+					throw new Error("Default style request was invalid");
+				// A null config goes back to Cap's own look for new recordings.
+				init =
+					request.config === null
+						? { method: "DELETE" }
+						: {
+								method: "PUT",
+								headers: { "Content-Type": "application/json" },
+								body: JSON.stringify({ config: request.config }),
+							};
+			}
+			const response = await fetch("/api/editor/preferences/default-style", {
+				...init,
+				cache: "no-store",
+				signal: this.controller.signal,
+			});
+			if (!response.ok)
+				throw new Error(
+					init.method === "GET"
+						? "Default style could not be loaded."
+						: "Default style could not be saved. Try again.",
+				);
+			const body: unknown = await response.json();
+			this.port?.postMessage({
+				kind: "result",
+				id: message.id,
+				value:
+					typeof body === "object" && body !== null && "style" in body
+						? body.style
+						: null,
+			});
+		} catch (cause) {
+			this.port?.postMessage({
+				kind: "error",
+				id: message.id,
+				error:
+					cause instanceof Error
+						? cause.message
+						: "Default style could not be saved. Try again.",
+			});
+		}
+	}
+
 	private async handleRequest(message: BridgeRequest) {
 		if (!this.port || this.disposed) return;
 		if (
@@ -2308,37 +2362,10 @@ export class EditorHostBridge {
 		}
 		if (
 			message.kind === "invoke" &&
-			message.name === "tauri:webEditorSaveDefaultStyle"
+			(message.name === "tauri:webEditorDefaultStyle" ||
+				message.name === "tauri:webEditorSaveDefaultStyle")
 		) {
-			try {
-				const request = message.args[0];
-				if (
-					message.args.length !== 1 ||
-					typeof request !== "object" ||
-					request === null ||
-					!("config" in request)
-				)
-					throw new Error("Default style request was invalid");
-				const response = await fetch("/api/editor/preferences/default-style", {
-					method: "PUT",
-					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({ config: request.config }),
-					cache: "no-store",
-					signal: this.controller.signal,
-				});
-				if (!response.ok)
-					throw new Error("Default style could not be saved. Try again.");
-				this.port?.postMessage({ kind: "result", id: message.id, value: null });
-			} catch (cause) {
-				this.port?.postMessage({
-					kind: "error",
-					id: message.id,
-					error:
-						cause instanceof Error
-							? cause.message
-							: "Default style could not be saved. Try again.",
-				});
-			}
+			await this.handleDefaultStyle(message);
 			return;
 		}
 		if (

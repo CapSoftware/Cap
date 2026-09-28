@@ -2530,3 +2530,56 @@ test("a browser-rendered Save withdraws any farm render before publishing the fi
 		bridge.dispose();
 	}
 });
+
+test("the default style for new recordings is loaded, saved and cleared through the account", async () => {
+	const style = { version: 1, background: { padding: 10 } };
+	const requests: Array<{ url: string; method?: string; body?: unknown }> = [];
+	const { bridge, port } = await connectedExportHost(async (url, init) => {
+		requests.push({
+			url,
+			method: init?.method,
+			body: init?.body ? JSON.parse(String(init.body)) : undefined,
+		});
+		return Response.json({ style: init?.method === "DELETE" ? null : style });
+	});
+	const invoke = (id: number, name: string, args: unknown[]) =>
+		new Promise<unknown>((resolve) => {
+			port.onmessage = (event) => resolve(event.data);
+			port.postMessage({ kind: "invoke", id, name, args });
+		});
+	try {
+		expect(await invoke(1, "tauri:webEditorDefaultStyle", [])).toEqual({
+			kind: "result",
+			id: 1,
+			value: style,
+		});
+		expect(
+			await invoke(2, "tauri:webEditorSaveDefaultStyle", [
+				{ config: { background: { padding: 10 } } },
+			]),
+		).toEqual({ kind: "result", id: 2, value: style });
+		expect(
+			await invoke(3, "tauri:webEditorSaveDefaultStyle", [{ config: null }]),
+		).toEqual({ kind: "result", id: 3, value: null });
+		expect(requests).toEqual([
+			{
+				url: "/api/editor/preferences/default-style",
+				method: "GET",
+				body: undefined,
+			},
+			{
+				url: "/api/editor/preferences/default-style",
+				method: "PUT",
+				body: { config: { background: { padding: 10 } } },
+			},
+			{
+				url: "/api/editor/preferences/default-style",
+				method: "DELETE",
+				body: undefined,
+			},
+		]);
+	} finally {
+		port.close();
+		bridge.dispose();
+	}
+});

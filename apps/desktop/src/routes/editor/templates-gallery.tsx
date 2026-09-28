@@ -26,18 +26,18 @@ import IconLucideMoreHorizontal from "~icons/lucide/more-horizontal";
 import IconLucidePlus from "~icons/lucide/plus";
 import IconLucideSwatchBook from "~icons/lucide/swatch-book";
 import { clipDuration } from "./clip-transitions";
-import {
-	normalizeProject,
-	serializeProjectConfiguration,
-	useEditorContext,
-} from "./context";
+import { normalizeProject, useEditorContext } from "./context";
 import {
 	applyTemplate,
+	type DefaultLook,
+	defaultLookKey,
 	EDITOR_TEMPLATES,
 	type EditorTemplate,
 	fullSpanScene,
 	lookKey,
 	templateBackgroundSource,
+	templateDefaultConfig,
+	templateDefaultKey,
 	templateLookKey,
 	withoutTemplateScene,
 } from "./templates";
@@ -49,6 +49,8 @@ import {
 } from "./ui";
 
 const isWebEditor = import.meta.env.VITE_CAP_WEB_EDITOR === "true";
+
+const CAP_DEFAULT_KEY = "cap-default";
 
 const GROUPS: Array<{ id: EditorTemplate["group"]; title: string }> = [
 	{ id: "layout", title: "Layouts" },
@@ -102,7 +104,8 @@ function backgroundCss(source: BackgroundSource) {
 
 /**
  * Ready-made looks and layouts, previewed with the person's own recording,
- * next to the presets they've saved.
+ * next to the presets they've saved. Any of them can become the look new
+ * recordings start with.
  */
 export function TemplatesGallery() {
 	const { project, setProject, presets, setDialog, totalDuration } =
@@ -112,6 +115,11 @@ export function TemplatesGallery() {
 	const [defaultConfig] = createResource(open, () =>
 		commands.getDefaultProjectConfig().catch(() => null),
 	);
+	// null is Cap's own look; undefined is not known yet.
+	const [savedStyle, { mutate: setSavedStyle }] = createResource(open, () =>
+		invoke<DefaultLook | null>("webEditorDefaultStyle").catch(() => undefined),
+	);
+	const [pendingDefault, setPendingDefault] = createSignal<string | null>(null);
 
 	const [frames] = createResource(open, async () => {
 		const first = project.timeline?.segments[0];
@@ -235,27 +243,72 @@ export function TemplatesGallery() {
 	const showsConfig = (config: ProjectConfiguration) =>
 		currentLook() === lookKey(config, null);
 	const showsTemplate = (template: EditorTemplate) =>
-		currentLook() ===
-		templateLookKey(
-			template,
-			template.background.type === "wallpaper"
-				? (wallpapers()?.get(template.background.id) ?? null)
-				: null,
-		);
+		currentLook() === templateLookKey(template, wallpaperFor(template));
 
-	const saveDefaultStyle = async () => {
+	const savedPresets = () => presets.query.data?.presets ?? [];
+
+	const defaultKey = () => {
+		const pending = pendingDefault();
+		if (pending) return pending;
+		const style = savedStyle();
+		if (style === undefined) return undefined;
+		return style === null ? CAP_DEFAULT_KEY : defaultLookKey(style);
+	};
+
+	const wallpaperFor = (template: EditorTemplate) =>
+		template.background.type === "wallpaper"
+			? (wallpapers()?.get(template.background.id) ?? null)
+			: null;
+
+	const defaultName = createMemo(() => {
+		const key = defaultKey();
+		if (key === undefined) return undefined;
+		if (key === CAP_DEFAULT_KEY) return "Cap default";
+		const preset = savedPresets().find(
+			(preset) => defaultLookKey(preset.config) === key,
+		);
+		if (preset) return preset.name;
+		const template = EDITOR_TEMPLATES.find(
+			(template) =>
+				!template.scene &&
+				templateDefaultKey(template, wallpaperFor(template)) === key,
+		);
+		return template?.name ?? null;
+	});
+
+	const makeDefault = async (
+		key: string,
+		name: string,
+		config: ProjectConfiguration | null,
+	) => {
+		setPendingDefault(key);
 		try {
-			await invoke("webEditorSaveDefaultStyle", {
-				config: JSON.parse(
-					JSON.stringify(serializeProjectConfiguration(project)),
-				),
-			});
-			toast.success("New recordings will use this style");
+			setSavedStyle(
+				await invoke<DefaultLook | null>("webEditorSaveDefaultStyle", {
+					config: config && JSON.parse(JSON.stringify(config)),
+				}),
+			);
+			toast.success(`New recordings will start with ${name}`);
 		} catch (error) {
 			toast.error(
-				error instanceof Error ? error.message : "Default style was not saved",
+				error instanceof Error ? error.message : "Default was not saved",
 			);
+		} finally {
+			setPendingDefault(null);
 		}
+	};
+
+	const makeTemplateDefault = (template: EditorTemplate) => {
+		const base = defaultConfig();
+		const config =
+			base && templateDefaultConfig(base, template, wallpaperFor(template));
+		if (!config) return undefined;
+		return () =>
+			void makeDefault(
+				templateDefaultKey(template, wallpaperFor(template)),
+				template.name,
+				config,
+			);
 	};
 
 	const presetLook = (config: ProjectConfiguration): PreviewLook => ({
@@ -272,7 +325,6 @@ export function TemplatesGallery() {
 		setDialog({ type: "createPreset", open: true });
 	};
 
-	const savedPresets = () => presets.query.data?.presets ?? [];
 	const visibleGroups = () =>
 		filter() === "all"
 			? GROUPS
@@ -291,9 +343,9 @@ export function TemplatesGallery() {
 			<EditorButton<typeof KPopover.Trigger>
 				as={KPopover.Trigger}
 				leftIcon={<IconLucideSwatchBook class="size-4" />}
-				tooltipText="Templates and presets"
+				tooltipText="Presets"
 			>
-				<span class="max-[1200px]:hidden">Templates</span>
+				<span class="max-[1200px]:hidden">Presets</span>
 			</EditorButton>
 			<KPopover.Portal>
 				<KPopover.Content
@@ -305,11 +357,11 @@ export function TemplatesGallery() {
 					<div class="flex items-start justify-between gap-4 px-5 pb-3 pt-4">
 						<div class="flex flex-col gap-0.5">
 							<KPopover.Title class="text-[15px] font-medium tracking-[-0.01em] text-ed-text-1">
-								Templates
+								Presets
 							</KPopover.Title>
 							<KPopover.Description class="text-[12px] text-ed-text-2">
-								Start from a look. Everything stays editable, and Undo brings
-								back what you had.
+								Start from a look, or make one the default for new recordings.
+								Everything stays editable.
 							</KPopover.Description>
 						</div>
 						<button
@@ -357,15 +409,13 @@ export function TemplatesGallery() {
 										{(config) => (
 											<TemplateCard
 												name="Cap default"
-												description={
-													isWebEditor
-														? "Edge to edge, camera as recorded"
-														: presets.query.data?.default == null
-															? "Your default"
-															: "The standard look"
-												}
+												description="Edge to edge, camera as recorded"
 												active={showsConfig(config())}
+												isDefault={defaultKey() === CAP_DEFAULT_KEY}
 												onSelect={() => void applyConfig(config())}
+												onMakeDefault={() =>
+													void makeDefault(CAP_DEFAULT_KEY, "Cap default", null)
+												}
 												preview={
 													<TemplatePreview
 														look={presetLook(config())}
@@ -380,21 +430,30 @@ export function TemplatesGallery() {
 										{(preset, index) => (
 											<TemplateCard
 												name={preset.name}
-												description={
-													presets.query.data?.default === index()
-														? "Your default"
-														: "Saved preset"
-												}
+												description="Saved preset"
 												active={showsConfig(preset.config)}
+												isDefault={
+													defaultKey() === defaultLookKey(preset.config)
+												}
 												onSelect={() => void applyPreset(index())}
+												onMakeDefault={
+													// Backgrounds from this browser's uploads stay with
+													// the project, so they can't start other recordings.
+													preset.config.background.source.type === "image"
+														? undefined
+														: () =>
+																void makeDefault(
+																	defaultLookKey(preset.config),
+																	preset.name,
+																	preset.config,
+																)
+												}
 												menu={
 													<PresetMenu
-														isDefault={presets.query.data?.default === index()}
 														onSaveHere={async () => {
 															await presets.saveToPreset(index(), project);
 															toast.success(`Saved to "${preset.name}"`);
 														}}
-														onSetDefault={() => presets.setDefault(index())}
 														onRename={() => {
 															setOpen(false);
 															setDialog({
@@ -451,7 +510,16 @@ export function TemplatesGallery() {
 													name={template.name}
 													description={template.description}
 													active={showsTemplate(template)}
+													isDefault={
+														!template.scene &&
+														defaultKey() ===
+															templateDefaultKey(
+																template,
+																wallpaperFor(template),
+															)
+													}
 													onSelect={() => void apply(template)}
+													onMakeDefault={makeTemplateDefault(template)}
 													preview={
 														<TemplatePreview
 															look={templateLook(template)}
@@ -467,18 +535,14 @@ export function TemplatesGallery() {
 							)}
 						</For>
 					</div>
-					<Show when={isWebEditor}>
-						<div class="flex items-center justify-between gap-3 border-t border-ed-line px-5 py-2.5">
-							<span class="text-[12px] text-ed-text-3">
-								New recordings start with your default style.
-							</span>
-							<button
-								type="button"
-								onClick={() => void saveDefaultStyle()}
-								class="shrink-0 rounded-lg px-2.5 py-1 text-[12px] font-medium text-ed-text-2 outline-hidden transition-colors hover:bg-ed-ctl-hover hover:text-ed-text-1"
-							>
-								Use current style for new recordings
-							</button>
+					<Show when={defaultName() !== undefined}>
+						<div class="border-t border-ed-line px-5 py-2.5 text-[12px] text-ed-text-2">
+							New recordings start with{" "}
+							<Show when={defaultName()} fallback="a style you saved earlier">
+								{(name) => (
+									<span class="font-medium text-ed-text-1">{name()}</span>
+								)}
+							</Show>
 						</div>
 					</Show>
 				</KPopover.Content>
@@ -491,9 +555,11 @@ function TemplateCard(props: {
 	name: string;
 	description: string;
 	active: boolean;
+	isDefault: boolean;
 	preview: JSX.Element;
 	menu?: JSX.Element;
 	onSelect: () => void;
+	onMakeDefault?: () => void;
 }) {
 	return (
 		<div class="group relative flex flex-col gap-1.5">
@@ -526,15 +592,36 @@ function TemplateCard(props: {
 					</span>
 				</span>
 			</button>
+			<div class="pointer-events-none absolute inset-x-0 top-0 aspect-video transition-transform duration-200 group-hover:-translate-y-0.5">
+				<Show
+					when={props.isDefault}
+					fallback={
+						<Show when={props.onMakeDefault}>
+							{(makeDefault) => (
+								<button
+									type="button"
+									onClick={() => makeDefault()()}
+									class="pointer-events-auto absolute bottom-1.5 right-1.5 flex h-6 items-center rounded-full bg-black/60 px-2.5 text-[11px] font-medium text-white opacity-0 outline-hidden backdrop-blur-sm transition-[opacity,background-color] duration-150 hover:bg-black/80 focus-visible:opacity-100 group-hover:opacity-100"
+								>
+									Make default
+								</button>
+							)}
+						</Show>
+					}
+				>
+					<span class="absolute bottom-1.5 right-1.5 flex h-6 items-center gap-1 rounded-full bg-white pl-1.5 pr-2.5 text-[11px] font-medium text-[#141416] shadow-[0_1px_4px_rgba(0,0,0,0.25)]">
+						<IconLucideCheck class="size-3 text-ed-accent" />
+						Default
+					</span>
+				</Show>
+			</div>
 			{props.menu}
 		</div>
 	);
 }
 
 function PresetMenu(props: {
-	isDefault: boolean;
 	onSaveHere: () => void;
-	onSetDefault: () => void;
 	onRename: () => void;
 	onDelete: () => void;
 }) {
@@ -553,12 +640,6 @@ function PresetMenu(props: {
 				>
 					<DropdownItem onSelect={props.onSaveHere}>
 						Save current style here
-					</DropdownItem>
-					<DropdownItem
-						disabled={props.isDefault}
-						onSelect={props.onSetDefault}
-					>
-						Set as default
 					</DropdownItem>
 					<DropdownItem onSelect={props.onRename}>Rename</DropdownItem>
 					<DropdownItem onSelect={props.onDelete}>Delete</DropdownItem>

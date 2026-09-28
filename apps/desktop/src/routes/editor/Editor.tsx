@@ -6,7 +6,7 @@ import { createEventListener } from "@solid-primitives/event-listener";
 import { debounce, throttle } from "@solid-primitives/scheduled";
 import { makePersisted } from "@solid-primitives/storage";
 import { createMutation, createQuery, skipToken } from "@tanstack/solid-query";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { LogicalPosition } from "@tauri-apps/api/dpi";
 import { emitTo } from "@tauri-apps/api/event";
 import { Menu } from "@tauri-apps/api/menu";
@@ -1175,6 +1175,23 @@ function Dialogs() {
 								const createPreset = createMutation(() => ({
 									mutationFn: async () => {
 										await presets.createPreset({ ...form, config: project });
+										// The web editor's default lives with the account, where
+										// new recordings read it.
+										if (isWebEditor && form.default) {
+											await invoke("webEditorSaveDefaultStyle", {
+												config: JSON.parse(
+													JSON.stringify(
+														serializeProjectConfiguration(project),
+													),
+												),
+											}).catch((error) =>
+												toast.error(
+													error instanceof Error
+														? error.message
+														: "Default was not saved",
+												),
+											);
+										}
 									},
 									onSuccess: () => {
 										setDialog((d) => ({ ...d, open: false }));

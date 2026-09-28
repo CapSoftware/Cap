@@ -3,6 +3,7 @@ import type {
 	BackgroundConfiguration,
 	BackgroundSource,
 	Camera,
+	ProjectConfiguration,
 	SceneMode,
 	SceneSegment,
 } from "~/utils/tauri";
@@ -329,6 +330,16 @@ type Look = {
 	camera: EditorTemplate["camera"];
 };
 
+// Saved styles come back from MySQL, whose JSON columns reorder object keys.
+const sortedJson = (value: unknown) =>
+	JSON.stringify(value, (_key, field: unknown) =>
+		typeof field === "object" && field !== null && !Array.isArray(field)
+			? Object.fromEntries(
+					Object.entries(field).sort(([a], [b]) => (a < b ? -1 : 1)),
+				)
+			: field,
+	);
+
 function sourceKey(source: BackgroundSource) {
 	switch (source.type) {
 		case "color":
@@ -336,7 +347,7 @@ function sourceKey(source: BackgroundSource) {
 		case "gradient":
 			return [source.type, ...source.from, ...source.to, source.angle ?? 90];
 		case "animatedGradient":
-			return [source.type, JSON.stringify(source.config)];
+			return [source.type, sortedJson(source.config)];
 		default:
 			return [source.type, source.path];
 	}
@@ -364,21 +375,76 @@ export function lookKey(look: Look, scene: SceneMode | null) {
 	]);
 }
 
+function templateLook(template: EditorTemplate, wallpaperPath: string | null) {
+	return {
+		aspectRatio: template.aspectRatio,
+		background: {
+			source: templateSource(template.background, wallpaperPath),
+			padding: template.padding,
+			rounding: template.rounding,
+			shadow: template.shadow,
+		},
+		camera: template.camera,
+	} satisfies Look;
+}
+
 export function templateLookKey(
 	template: EditorTemplate,
 	wallpaperPath: string | null,
 ) {
-	return lookKey(
-		{
-			aspectRatio: template.aspectRatio,
-			background: {
-				source: templateSource(template.background, wallpaperPath),
-				padding: template.padding,
-				rounding: template.rounding,
-				shadow: template.shadow,
-			},
-			camera: template.camera,
-		},
-		template.scene ?? null,
-	);
+	return lookKey(templateLook(template, wallpaperPath), template.scene ?? null);
+}
+
+/** A saved default style, or anything shaped like a project's look. */
+export type DefaultLook = {
+	aspectRatio?: AspectRatio | null;
+	background?: Partial<Look["background"]>;
+	camera?: Partial<Omit<Look["camera"], "position">> & {
+		position?: Partial<Look["camera"]["position"]>;
+	};
+};
+
+/**
+ * What new recordings start with, as one comparable value. A default style
+ * leaves out whether the camera shows and whole-video scenes, since both
+ * belong to one recording.
+ */
+export function defaultLookKey(look: DefaultLook) {
+	const { background, camera } = look;
+	return JSON.stringify([
+		look.aspectRatio ?? null,
+		background?.source ? sourceKey(background.source) : null,
+		background?.padding ?? null,
+		background?.rounding ?? null,
+		background?.shadow ?? null,
+		camera?.position?.x ?? null,
+		camera?.position?.y ?? null,
+		camera?.size ?? null,
+		camera?.rounding ?? null,
+		camera?.shape ?? null,
+	]);
+}
+
+/**
+ * The project config that makes a template the default. Scenes can't carry
+ * over to a new recording, so a template with one can't be a default.
+ */
+export function templateDefaultConfig<
+	T extends Pick<ProjectConfiguration, "aspectRatio" | "background" | "camera">,
+>(base: T, template: EditorTemplate, wallpaperPath: string | null): T | null {
+	if (template.scene) return null;
+	const look = templateLook(template, wallpaperPath);
+	return {
+		...base,
+		aspectRatio: look.aspectRatio,
+		background: { ...base.background, ...look.background },
+		camera: { ...base.camera, ...look.camera, manualPosition: null },
+	};
+}
+
+export function templateDefaultKey(
+	template: EditorTemplate,
+	wallpaperPath: string | null,
+) {
+	return defaultLookKey(templateLook(template, wallpaperPath));
 }
