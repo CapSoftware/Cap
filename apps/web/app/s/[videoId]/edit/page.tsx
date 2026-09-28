@@ -6,6 +6,7 @@ import { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { notFound, redirect } from "next/navigation";
 import { editorSourcesUploaded } from "@/lib/editor-sources-ready";
+import { measureMissingVideoDuration } from "@/lib/editor-video-duration";
 import { getEditSourceKey, isEditSourceKey } from "@/lib/video-edit-processing";
 import {
 	areEditSpecsEquivalent,
@@ -114,7 +115,11 @@ export default async function EditVideoPage(props: {
 		}
 		return <EditProcessing videoId={videoId} justRecorded={justRecorded} />;
 	}
-	if (!video.duration || video.duration <= 0) notFound();
+	const duration =
+		video.duration && video.duration > 0
+			? video.duration
+			: await measureMissingVideoDuration(videoId);
+	if (!duration) notFound();
 
 	const hasExistingEdits = existingEdit
 		? !areEditSpecsEquivalent(
@@ -150,7 +155,7 @@ export default async function EditVideoPage(props: {
 				id: video.id,
 				name: video.name,
 				ownerId: video.ownerId,
-				duration: video.duration,
+				duration,
 				width: video.width,
 				height: video.height,
 				transcriptionStatus: video.transcriptionStatus,

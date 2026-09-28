@@ -6,6 +6,7 @@ import { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { notFound, redirect } from "next/navigation";
 import { editorSourcesUploaded } from "@/lib/editor-sources-ready";
+import { measureMissingVideoDuration } from "@/lib/editor-video-duration";
 import { getEditSourceKey, isEditSourceKey } from "@/lib/video-edit-processing";
 import { isWebStudioEnabledForEmail } from "@/lib/web-studio-rollout";
 import { EditProcessing } from "../EditProcessing";
@@ -84,7 +85,11 @@ export default async function StudioEditorPage(props: {
 				Boolean(editorSources.display) &&
 				Number.isSafeInteger(editorSources.display.size) &&
 				(editorSources.display.size ?? 0) > 0);
-	if (!video.duration || video.duration <= 0) notFound();
+	const duration =
+		video.duration && video.duration > 0
+			? video.duration
+			: await measureMissingVideoDuration(videoId);
+	if (!duration) notFound();
 	// Recordings without separate sources open in the regular editor.
 	if (!hasStudioSource) redirect(`/s/${videoId}/edit`);
 	return (
@@ -95,7 +100,7 @@ export default async function StudioEditorPage(props: {
 			savedAt={video.metadata?.webEditorProject?.savedAt ?? null}
 			justRecorded={justRecorded}
 			preparingTitle={video.name}
-			preparingDuration={video.duration}
+			preparingDuration={duration}
 			preparingTracks={
 				editorSources?.camera ||
 				video.metadata?.webEditorClips?.items.some((clip) => clip.cameraPath)
