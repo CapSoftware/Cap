@@ -624,7 +624,15 @@ async function openExportFile(maxBytes: number) {
 			target: new StreamTarget(
 				new WritableStream({
 					write(chunk) {
-						access.write(chunk.data, { at: chunk.position });
+						// Past the storage quota a write can stop short without failing.
+						if (
+							access.write(chunk.data, { at: chunk.position }) <
+							chunk.data.byteLength
+						) {
+							throw new Error(
+								"There isn't enough free storage in this browser for the export",
+							);
+						}
 					},
 				}),
 				{ chunked: true, chunkSize: 4 * 1024 * 1024 },
