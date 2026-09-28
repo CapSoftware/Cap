@@ -879,7 +879,7 @@ function MediaPlayerRootImpl(props: MediaPlayerRootProps) {
 					onKeyDown={onKeyDown}
 					onKeyUp={onKeyUp}
 					className={cn(
-						"dark relative isolate flex flex-col overflow-visible bg-background outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 data-[disabled]:pointer-events-none data-[disabled]:opacity-50 [&_video]:relative [&_video]:object-contain",
+						"dark relative isolate flex flex-col justify-center overflow-visible bg-background outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 data-[disabled]:pointer-events-none data-[disabled]:opacity-50 [&_video]:relative [&_video]:object-contain",
 						// The root never clips (overlays must escape), so a video whose
 						// aspect exactly fills the box would paint square corners over
 						// the root's radius. Inheriting keeps the video's corners in
