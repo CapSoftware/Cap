@@ -1550,9 +1550,13 @@ export class EditorHostBridge {
 		if (progress !== null && now - this.browserSaveReportedAt < 3000) return;
 		this.browserSaveReportedAt = progress === null ? 0 : now;
 		if (progress === null) {
+			const params = new URLSearchParams();
+			if (published) params.set("published", "1");
+			if (this.browserSaveChunks)
+				params.set("saveId", this.browserSaveChunks.saveId);
 			this.browserSaveChunks = null;
 			this.queueBrowserSave(() =>
-				fetch(`${this.browserSavePath()}${published ? "?published=1" : ""}`, {
+				fetch(`${this.browserSavePath()}?${params}`, {
 					method: "DELETE",
 					keepalive: true,
 				}),

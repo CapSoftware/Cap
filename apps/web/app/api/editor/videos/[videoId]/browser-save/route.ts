@@ -72,7 +72,10 @@ class Api extends HttpApi.make("WebEditorBrowserSaveApi").add(
 			HttpApiEndpoint.del("finish", "/api/editor/videos/:videoId/browser-save")
 				.setPath(path)
 				.setUrlParams(
-					Schema.Struct({ published: Schema.optional(Schema.Literal("1")) }),
+					Schema.Struct({
+						published: Schema.optional(Schema.Literal("1")),
+						saveId: Schema.optional(SaveId),
+					}),
 				)
 				.addSuccess(Schema.Void, { status: 204 })
 				.addError(HttpApiError.NotFound)
@@ -159,15 +162,30 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 				.handle("finish", ({ path, urlParams }) =>
 					Effect.gen(function* () {
 						const video = yield* loadEligibleEditorVideo(path.videoId, true);
-						if (!video.metadata?.browserSave) return;
+						const save = video.metadata?.browserSave;
+						if (!save) return;
 						const finished = sql`JSON_OBJECT('updatedAt', ${new Date().toISOString()}, 'progress', 1, 'finished', true)`;
-						// A published Save keeps its chunks listed, so viewers part way
-						// through them finish; one that wasn't takes them down.
+						const updates = [
+							// Another tab's Save in progress is left to that tab.
+							...(!save.saveId || save.saveId === urlParams.saveId
+								? [
+										// A published Save keeps its chunks listed, so viewers
+										// part way through them finish.
+										sql`'$.browserSave', ${
+											urlParams.published
+												? sql`JSON_MERGE_PATCH(JSON_EXTRACT(${videos.metadata}, '$.browserSave'), ${finished})`
+												: finished
+										}`,
+									]
+								: []),
+							...(urlParams.published
+								? [sql`'$.publishedBrowserSaveId', ${urlParams.saveId ?? null}`]
+								: []),
+						];
+						if (updates.length === 0) return;
 						yield* writeMetadata(
 							video.id,
-							urlParams.published
-								? sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.browserSave', JSON_MERGE_PATCH(COALESCE(JSON_EXTRACT(${videos.metadata}, '$.browserSave'), JSON_OBJECT()), ${finished}), '$.publishedBrowserSaveId', ${video.metadata.browserSave.saveId ?? null})`
-								: sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.browserSave', ${finished})`,
+							sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), ${sql.join(updates, sql`, `)})`,
 						);
 					}),
 				),
