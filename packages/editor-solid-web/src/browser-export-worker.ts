@@ -654,6 +654,12 @@ async function openExportFile(maxBytes: number) {
 
 const CHUNK_SECONDS = 2;
 
+// Safari's H.264 encoder holds frames in quality mode until more arrive,
+// while the export sends the next frame only once the last is encoded.
+const HOLDS_QUALITY_FRAMES =
+	/AppleWebKit/.test(navigator.userAgent) &&
+	!/Chrome|Chromium|Edg/.test(navigator.userAgent);
+
 const joinBytes = (parts: Uint8Array[]) => {
 	const joined = new Uint8Array(
 		parts.reduce((size, part) => size + part.length, 0),
@@ -787,7 +793,7 @@ async function runExport(job: BrowserExportJob) {
 			codec: "avc",
 			bitrate,
 			keyFrameInterval: CHUNK_SECONDS,
-			latencyMode: "quality",
+			latencyMode: HOLDS_QUALITY_FRAMES ? "realtime" : "quality",
 			hardwareAcceleration: "prefer-hardware",
 			onEncodedPacket: stream?.video,
 		});
