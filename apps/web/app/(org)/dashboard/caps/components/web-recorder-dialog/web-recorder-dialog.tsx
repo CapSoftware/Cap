@@ -16,6 +16,7 @@ import {
 	CheckIcon,
 	ChevronRightIcon,
 	CirclePlayIcon,
+	EyeOffIcon,
 	InfoIcon,
 	LoaderCircleIcon,
 	MicIcon,
@@ -436,6 +437,7 @@ export const WebRecorderDialog = ({
 			});
 			replaceSharedScreen(shared);
 			setMirrorPreviewShown(false);
+			setCameraShownAnyway(false);
 			return true;
 		} catch (error) {
 			if (
@@ -755,6 +757,7 @@ export const WebRecorderDialog = ({
 	}, []);
 	const [livePreview, setLivePreviewState] = useState(false);
 	const [mirrorPreviewShown, setMirrorPreviewShown] = useState(false);
+	const [cameraShownAnyway, setCameraShownAnyway] = useState(false);
 	useEffect(() => {
 		try {
 			setLivePreviewState(
@@ -846,13 +849,22 @@ export const WebRecorderDialog = ({
 	// this tab (the whole screen, or this tab itself), drawing the camera here
 	// would record it a second time inside the screen, so it isn't drawn at
 	// all; dimming would still be captured.
-	const cameraKeptOffScreen = live && screenMode && mirrorRisk;
+	const cameraKeptOffScreen =
+		live && screenMode && mirrorRisk && !cameraShownAnyway;
 	const cameraDimmed = live && screenMode && !cameraBright;
 	const cameraVideo = cameraEnabled ? (
 		cameraKeptOffScreen ? (
 			<span className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 px-3 text-center text-[12px] leading-snug text-white/60">
 				<CameraOffIcon className="size-4 shrink-0" aria-hidden />
 				Hidden here so it isn't recorded twice
+				<button
+					type="button"
+					title="It also shows in your screen recording while it's visible"
+					className="h-6 rounded-md bg-white/10 px-2 text-[11px] font-medium text-white transition-colors hover:bg-white/15"
+					onClick={() => setCameraShownAnyway(true)}
+				>
+					Show anyway
+				</button>
 			</span>
 		) : cameraStream ? (
 			<LiveVideo
@@ -899,28 +911,48 @@ export const WebRecorderDialog = ({
 				</button>
 			</MediaLabel>
 			{live && screenMode && !cameraKeptOffScreen && (
-				<button
-					type="button"
-					aria-label={
-						cameraBright ? "Dim camera preview" : "Undim camera preview"
-					}
-					aria-pressed={!cameraBright}
-					title={cameraBright ? "Dim" : "Undim"}
+				<span
 					className={clsx(
-						"rec-focus absolute inline-flex items-center gap-1 rounded-md bg-black/55 font-medium text-white backdrop-blur-md transition-colors hover:bg-black/70",
-						compact
-							? "left-1/2 top-2 size-6 -translate-x-1/2 justify-center"
-							: "right-3 top-3 h-6 px-2 text-[12px]",
+						"absolute flex gap-1",
+						compact ? "left-1/2 top-2 -translate-x-1/2" : "right-3 top-3",
 					)}
-					onClick={() => setCameraBright((bright) => !bright)}
 				>
-					{cameraBright ? (
-						<SunDimIcon className="size-3.5" aria-hidden />
-					) : (
-						<SunIcon className="size-3.5" aria-hidden />
+					<button
+						type="button"
+						aria-label={
+							cameraBright ? "Dim camera preview" : "Undim camera preview"
+						}
+						aria-pressed={!cameraBright}
+						title={cameraBright ? "Dim" : "Undim"}
+						className={clsx(
+							"rec-focus inline-flex items-center gap-1 rounded-md bg-black/55 font-medium text-white backdrop-blur-md transition-colors hover:bg-black/70",
+							compact ? "size-6 justify-center" : "h-6 px-2 text-[12px]",
+						)}
+						onClick={() => setCameraBright((bright) => !bright)}
+					>
+						{cameraBright ? (
+							<SunDimIcon className="size-3.5" aria-hidden />
+						) : (
+							<SunIcon className="size-3.5" aria-hidden />
+						)}
+						{!compact && (cameraBright ? "Dim" : "Undim")}
+					</button>
+					{cameraShownAnyway && mirrorRisk && (
+						<button
+							type="button"
+							aria-label="Hide camera preview"
+							title="Hide"
+							className={clsx(
+								"rec-focus inline-flex items-center gap-1 rounded-md bg-black/55 font-medium text-white backdrop-blur-md transition-colors hover:bg-black/70",
+								compact ? "size-6 justify-center" : "h-6 px-2 text-[12px]",
+							)}
+							onClick={() => setCameraShownAnyway(false)}
+						>
+							<EyeOffIcon className="size-3.5" aria-hidden />
+							{!compact && "Hide"}
+						</button>
 					)}
-					{!compact && (cameraBright ? "Dim" : "Undim")}
-				</button>
+				</span>
 			)}
 		</>
 	);
