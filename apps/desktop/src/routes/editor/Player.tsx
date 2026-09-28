@@ -640,7 +640,9 @@ function PreviewCanvas(props: {
 			capture: true,
 		},
 	);
-	const containerBounds = createElementBounds(canvasContainerRef);
+	const containerBounds = createElementBounds(canvasContainerRef, {
+		trackMutation: false,
+	});
 
 	const [debouncedBounds, setDebouncedBounds] = createSignal({
 		width: 0,

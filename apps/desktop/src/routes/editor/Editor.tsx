@@ -606,7 +606,9 @@ function Inner(props: {
 	});
 
 	const [layoutRef, setLayoutRef] = createSignal<HTMLDivElement>();
-	const layoutBounds = createElementBounds(layoutRef);
+	const layoutBounds = createElementBounds(layoutRef, {
+		trackMutation: false,
+	});
 	const [userTimelineHeight, setUserTimelineHeight] = makePersisted(
 		createSignal<number | null>(null),
 		{ name: "editorTimelineHeightOverride" },

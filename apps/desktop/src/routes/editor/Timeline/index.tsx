@@ -232,7 +232,9 @@ export function Timeline(props: {
 	const [timelineScrollRef, setTimelineScrollRef] =
 		createSignal<HTMLDivElement>();
 	const [timelineRef, setTimelineRef] = createSignal<HTMLDivElement>();
-	const timelineBounds = createElementBounds(timelineRef);
+	const timelineBounds = createElementBounds(timelineRef, {
+		trackMutation: false,
+	});
 
 	const secsPerPixel = () => transform().zoom / (timelineBounds.width ?? 1);
 	const playbackFollow = new PlaybackFollow();

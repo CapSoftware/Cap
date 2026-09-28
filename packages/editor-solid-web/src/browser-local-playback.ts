@@ -186,8 +186,14 @@ export class BrowserLocalPlayback {
 	private averageFrameCostMs = 0;
 	private lastRenderedAt = 0;
 	private playClockAligned = false;
+	private audioClockAligned = false;
+	private audioOffsets: number[] = [];
+	private configJson: string;
 	private slowFrames = 0;
 	private fastFrames = 0;
+	private pendingSeek: number | null = null;
+	private seeking: Promise<boolean | null> | null = null;
+	private renderedTime = -1;
 
 	private constructor(
 		readonly sources: BrowserEditorSources,
@@ -216,7 +222,8 @@ export class BrowserLocalPlayback {
 			JSON.stringify(recordingMeta(sources)),
 			JSON.stringify(record(config)?.clips ?? []),
 		);
-		this.visual = new module.BrowserVisualConfig(JSON.stringify(config));
+		this.configJson = JSON.stringify(config);
+		this.visual = new module.BrowserVisualConfig(this.configJson);
 		this.audio = new BrowserAudioPlayback(catalog, onError);
 		if (unavailableMicUrl) this.audio.markUnavailable(unavailableMicUrl);
 		this.audio.setConfig(config);
@@ -399,6 +406,8 @@ export class BrowserLocalPlayback {
 
 	async setConfig(config: unknown) {
 		if (this.disposed) throw new Error("Editor playback is closed");
+		const json = JSON.stringify(config);
+		if (json === this.configJson) return;
 		const timeline = timelineConfig(config, this.sourceDurations);
 		const segments = segmentSettings(timeline);
 		const nextTimeline = new this.module.BrowserTimeline(
@@ -411,7 +420,7 @@ export class BrowserLocalPlayback {
 				JSON.stringify(recordingMeta(this.sources)),
 				JSON.stringify(record(config)?.clips ?? []),
 			);
-			nextVisual = new this.module.BrowserVisualConfig(JSON.stringify(config));
+			nextVisual = new this.module.BrowserVisualConfig(json);
 			await this.canvas.setProjectConfig(config);
 		} catch (error) {
 			nextTimeline.free();
@@ -428,6 +437,7 @@ export class BrowserLocalPlayback {
 		this.times = nextTimes;
 		this.visual = nextVisual;
 		this.segments = segments;
+		this.configJson = json;
 		this.audio.setConfig(config);
 		this.canvas.resetFrameState();
 		this.lastRequestedFrame = -1;
@@ -519,7 +529,7 @@ export class BrowserLocalPlayback {
 			(segment.timescale === 1 ||
 				segment.speedAudioMode === "maintainPitch" ||
 				segment.speedAudioMode === "matchSpeed");
-		await this.audio.sync(
+		const lag = await this.audio.sync(
 			recordingClip,
 			role,
 			videoTimes[0],
@@ -532,6 +542,23 @@ export class BrowserLocalPlayback {
 			fade * segment.volume,
 			signal,
 		);
+		return lag === null ? null : lag / segment.timescale;
+	}
+
+	/// Audio starts a few tens of milliseconds after the first frame. Once it
+	/// has run for a few frames, the video clock moves onto it so the two
+	/// stay in step for the rest of playback.
+	private followAudio(lag: number | null, time: number) {
+		if (lag === null || !this.playing || this.audioClockAligned) return;
+		const clock =
+			this.playStartedTime + (performance.now() - this.playStartedAt) / 1000;
+		this.audioOffsets.push(clock - (time - lag));
+		if (this.audioOffsets.length < 12) return;
+		this.audioClockAligned = true;
+		const offset = this.audioOffsets.sort((a, b) => a - b)[6] ?? 0;
+		if (Math.abs(offset) > 0.01 && Math.abs(offset) < 0.3) {
+			this.playStartedTime -= offset;
+		}
 	}
 
 	private async fallbackColorFix(url: string, signal: AbortSignal) {
@@ -574,7 +601,6 @@ export class BrowserLocalPlayback {
 				role,
 				sourceTime,
 				signal,
-				playing && !forceSeek,
 				this.width * 2,
 				this.height * 2,
 			);
@@ -812,6 +838,7 @@ export class BrowserLocalPlayback {
 			releasePair(incomingPair);
 			releasePair(outgoingPair);
 		}
+		this.renderedTime = time;
 		if (!transition) {
 			this.pool.releaseOverlaps();
 			this.decodedPool.releaseOverlaps();
@@ -842,10 +869,19 @@ export class BrowserLocalPlayback {
 				playing,
 				gain,
 				controller.signal,
-			).catch((cause: unknown) => {
-				if (controller.signal.aborted || this.disposed) return;
-				this.onError(cause instanceof Error ? cause : new Error(String(cause)));
-			});
+			).then(
+				(lag) => {
+					if (role === "primary" && !controller.signal.aborted) {
+						this.followAudio(lag, time);
+					}
+				},
+				(cause: unknown) => {
+					if (controller.signal.aborted || this.disposed) return;
+					this.onError(
+						cause instanceof Error ? cause : new Error(String(cause)),
+					);
+				},
+			);
 		};
 		sync(incomingClip, incomingSegment, mapped[3], "primary", incomingGain);
 		if (transition && outgoingClip !== null) {
@@ -911,8 +947,39 @@ export class BrowserLocalPlayback {
 			this.playStartedAt = performance.now();
 			this.playStartedTime = time;
 			this.playClockAligned = false;
+			this.audioClockAligned = false;
+			this.audioOffsets = [];
+			return this.renderAt(time, true, true);
 		}
-		return this.renderAt(time, this.playing, true);
+		this.pendingSeek = time;
+		if (this.seeking) return this.seeking;
+		if (time === this.renderedTime && this.canvas.hasRenderedFrame()) {
+			this.pendingSeek = null;
+			return true;
+		}
+		this.seeking = this.drainSeeks();
+		return this.seeking;
+	}
+
+	/// Paused seeks never cancel the frame being drawn: scrubbing asks for a
+	/// new time on every pointer move, faster than a frame can decode, so the
+	/// preview shows each finished frame and then jumps to the latest request.
+	private async drainSeeks() {
+		let result: boolean | null = null;
+		try {
+			while (this.pendingSeek !== null && !this.playing && !this.disposed) {
+				const time = this.pendingSeek;
+				this.pendingSeek = null;
+				if (time === this.renderedTime && this.canvas.hasRenderedFrame()) {
+					result = true;
+					continue;
+				}
+				result = await this.renderAt(time, false, true);
+			}
+			return result;
+		} finally {
+			this.seeking = null;
+		}
 	}
 
 	play() {
@@ -924,6 +991,8 @@ export class BrowserLocalPlayback {
 		this.playStartedTime = this.outputTime;
 		this.lastRequestedFrame = -1;
 		this.playClockAligned = false;
+		this.audioClockAligned = false;
+		this.audioOffsets = [];
 		this.averageFrameCostMs = 0;
 		this.lastRenderedAt = 0;
 		this.slowFrames = 0;

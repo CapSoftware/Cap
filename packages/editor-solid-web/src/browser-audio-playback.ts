@@ -9,6 +9,7 @@ type AudioSlot = {
 	gain: GainNode | null;
 	source: MediaElementAudioSourceNode | null;
 	fade: number;
+	lastTime: number;
 };
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -135,7 +136,7 @@ export class BrowserAudioPlayback {
 		element.crossOrigin = "anonymous";
 		element.src = url;
 		this.host.append(element);
-		slot = { element, url, gain: null, source: null, fade: 1 };
+		slot = { element, url, gain: null, source: null, fade: 1, lastTime: -1 };
 		this.slots.set(key, slot);
 		this.connect(key, slot);
 		return slot;
@@ -150,7 +151,7 @@ export class BrowserAudioPlayback {
 		speed: number,
 		mode: SpeedAudioMode,
 		fade: number,
-	) {
+	): Promise<number | null> {
 		const key = slotKey(role, kind);
 		if (!url || !Number.isFinite(time) || time < 0) {
 			const slot = this.slots.get(key);
@@ -158,9 +159,9 @@ export class BrowserAudioPlayback {
 				releaseSlot(slot);
 				this.slots.delete(key);
 			}
-			return;
+			return null;
 		}
-		if (this.unavailableUrls.has(url)) return;
+		if (this.unavailableUrls.has(url)) return null;
 		const slot = this.slot(role, kind, url);
 		slot.fade = Math.max(0, Math.min(fade, 2));
 		const audio = slot.element;
@@ -168,8 +169,22 @@ export class BrowserAudioPlayback {
 			const clampedTime = Number.isFinite(audio.duration)
 				? Math.min(time, Math.max(audio.duration - 0.001, 0))
 				: time;
+			// Once the element is audibly advancing, how far it trails the
+			// frame being drawn; the video clock follows it from there.
+			const lag =
+				playing &&
+				!audio.paused &&
+				!audio.seeking &&
+				slot.lastTime >= 0 &&
+				audio.currentTime !== slot.lastTime &&
+				clampedTime === time
+					? time - audio.currentTime
+					: null;
+			slot.lastTime = playing ? audio.currentTime : -1;
 			if (Math.abs(audio.currentTime - clampedTime) > (playing ? 0.12 : 0.01)) {
 				audio.currentTime = clampedTime;
+				slot.lastTime = -1;
+				return null;
 			}
 			audio.playbackRate = speed;
 			if ("preservesPitch" in audio) {
@@ -184,13 +199,14 @@ export class BrowserAudioPlayback {
 			} else if (!audio.paused) {
 				audio.pause();
 			}
+			return lag;
 		} catch (cause) {
 			if (
 				audio.error?.code === 4 ||
 				(cause instanceof DOMException && cause.name === "NotSupportedError")
 			) {
 				this.markUnavailable(url);
-				return;
+				return null;
 			}
 			throw cause;
 		}
@@ -208,15 +224,15 @@ export class BrowserAudioPlayback {
 		enabled: boolean,
 		fade: number,
 		signal: AbortSignal,
-	) {
-		if (this.disposed || signal.aborted) return;
+	): Promise<number | null> {
+		if (this.disposed || signal.aborted) return null;
 		const current = await this.catalog.snapshot(signal);
-		if (this.disposed || signal.aborted) return;
+		if (this.disposed || signal.aborted) return null;
 		const segment = current.segments[segmentIndex];
 		if (!segment) throw new Error("Editor audio clip is unavailable");
 		const displayAudio =
 			segmentIndex === 0 ? current.displayHasAudio : segment.hasAudio;
-		await Promise.all([
+		const lags = await Promise.all([
 			this.syncTrack(
 				role,
 				"display",
@@ -250,6 +266,7 @@ export class BrowserAudioPlayback {
 				fade,
 			),
 		]);
+		return lags.find((lag) => lag !== null) ?? null;
 	}
 
 	pause() {

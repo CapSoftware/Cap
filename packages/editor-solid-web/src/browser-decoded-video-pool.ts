@@ -1,4 +1,9 @@
-import type { Input, VideoSample, VideoSampleSink } from "mediabunny";
+import type {
+	EncodedPacketSink,
+	Input,
+	VideoSample,
+	VideoSampleSink,
+} from "mediabunny";
 import type {
 	BrowserVideoRole,
 	BrowserVideoSourceProvider,
@@ -16,11 +21,11 @@ export type BrowserDecodedVideoFrame = {
 type DecodedSlot = {
 	input: Input;
 	sink: VideoSampleSink;
+	packets: EncodedPacketSink;
 	retagBt601: boolean;
 	iterator: AsyncGenerator<VideoSample, void, unknown> | null;
 	current: VideoSample | null;
 	upcoming: VideoSample | null;
-	lastRequestedTime: number;
 	serial: Promise<void>;
 };
 
@@ -64,30 +69,42 @@ async function resetStream(slot: DecodedSlot) {
 	slot.current = null;
 	slot.upcoming?.close();
 	slot.upcoming = null;
-	slot.lastRequestedTime = -1;
 	if (iterator) await iterator.return();
 }
 
-async function sampleAtTime(
+/// Decoding forward from the frame already on screen is cheaper than
+/// restarting at a key frame, unless a key frame sits between the two.
+async function keyFrameBetween(
 	slot: DecodedSlot,
-	sourceTime: number,
-	stream: boolean,
-) {
-	if (!stream) {
-		await resetStream(slot);
-		return slot.sink.getSample(Math.max(sourceTime, 0.0001));
+	from: number,
+	to: number,
+): Promise<boolean> {
+	try {
+		const key = await slot.packets.getKeyPacket(to, { metadataOnly: true });
+		return key !== null && key.timestamp > from + 0.000001;
+	} catch {
+		return true;
 	}
+}
+
+async function sampleAtTime(slot: DecodedSlot, sourceTime: number) {
+	const current = slot.current;
 	if (
 		slot.iterator &&
-		(sourceTime + 0.000001 < slot.lastRequestedTime ||
-			(slot.current && sourceTime + 0.000001 < slot.current.timestamp))
+		current &&
+		(sourceTime + 0.000001 < current.timestamp ||
+			(sourceTime > current.timestamp + 0.5 &&
+				(await keyFrameBetween(slot, current.timestamp, sourceTime))))
 	) {
 		await resetStream(slot);
 	}
 	if (!slot.iterator) {
 		slot.iterator = slot.sink.samples(Math.max(sourceTime, 0.0001));
 		const first = await slot.iterator.next();
-		if (first.done) return null;
+		if (first.done) {
+			await resetStream(slot);
+			return slot.sink.getSample(Math.max(sourceTime, 0.0001));
+		}
 		slot.current = first.value;
 	}
 	if (!slot.current) return null;
@@ -102,7 +119,6 @@ async function sampleAtTime(
 		slot.current = slot.upcoming;
 		slot.upcoming = null;
 	}
-	slot.lastRequestedTime = sourceTime;
 	return slot.current.clone();
 }
 
@@ -115,9 +131,13 @@ export class BrowserDecodedVideoPool {
 
 	private async createSlot(url: string): Promise<DecodedSlot | null> {
 		if (typeof VideoDecoder !== "function") return null;
-		const { ALL_FORMATS, Input, UrlSource, VideoSampleSink } = await import(
-			"mediabunny"
-		);
+		const {
+			ALL_FORMATS,
+			EncodedPacketSink,
+			Input,
+			UrlSource,
+			VideoSampleSink,
+		} = await import("mediabunny");
 		const input = new Input({
 			formats: ALL_FORMATS,
 			source: new UrlSource(url, { maxCacheSize: 8 * 1024 * 1024 }),
@@ -146,10 +166,10 @@ export class BrowserDecodedVideoPool {
 			return {
 				input,
 				sink: new VideoSampleSink(track),
+				packets: new EncodedPacketSink(track),
 				iterator: null,
 				current: null,
 				upcoming: null,
-				lastRequestedTime: -1,
 				serial: Promise.resolve(),
 				retagBt601:
 					config.codec.startsWith("avc1") &&
@@ -169,7 +189,6 @@ export class BrowserDecodedVideoPool {
 		role: BrowserVideoRole,
 		sourceTime: number,
 		signal: AbortSignal,
-		stream = false,
 		maxSourceWidth: number | null = null,
 		maxSourceHeight: number | null = null,
 	): Promise<BrowserDecodedVideoFrame | null | "fallback"> {
@@ -240,7 +259,7 @@ export class BrowserDecodedVideoPool {
 				if (signal.aborted || this.disposed) {
 					throw signal.reason ?? new DOMException("Canceled", "AbortError");
 				}
-				sample = await sampleAtTime(slot, sourceTime, stream);
+				sample = await sampleAtTime(slot, sourceTime);
 			} finally {
 				releaseSerial();
 			}

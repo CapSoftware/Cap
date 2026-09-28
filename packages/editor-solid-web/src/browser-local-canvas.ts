@@ -347,13 +347,14 @@ export class BrowserLocalCanvas {
 	}
 
 	setProjectConfig(config: unknown) {
+		const path = backgroundImagePath(config);
+		const background = path ? this.loadImageAsset(path) : null;
 		const update = this.configQueue.then(async () => {
 			await this.mounted;
 			if (this.disposed || !this.renderer) {
 				throw new Error("Editor canvas is closed");
 			}
-			const path = backgroundImagePath(config);
-			if (path) await this.loadImageAsset(path);
+			await background;
 			this.textRanges = textRanges(config);
 			if (this.textRanges.length > 0 && this.rendered) void this.loadFonts();
 			if (this.disposed || !this.renderer) {

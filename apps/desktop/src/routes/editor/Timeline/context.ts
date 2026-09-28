@@ -86,7 +86,9 @@ export const [TrackContextProvider, useTrackContext] = createContextProvider(
 		const [trackState, setTrackState] = createStore({
 			draggingSegment: false,
 		});
-		const bounds = createElementBounds(() => props.ref());
+		const bounds = createElementBounds(() => props.ref(), {
+			trackMutation: false,
+		});
 
 		const secsPerPixel = () =>
 			state.timeline.transform.zoom / (bounds.width ?? 1);

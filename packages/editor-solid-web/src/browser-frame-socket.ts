@@ -262,17 +262,16 @@ class BrowserPreviewController {
 		const request = frameRequest(value);
 		if (!request) throw new Error("Editor frame request is invalid");
 		this.desiredTime = request.frame_number / request.fps;
-		if (request.resolution_base) this.previewBase = request.resolution_base;
+		const base = request.resolution_base;
+		const baseChanged =
+			base !== null &&
+			(base.x !== this.previewBase.x || base.y !== this.previewBase.y);
+		if (base) this.previewBase = base;
 		if (!this.playback) {
 			if (this.creating) await this.creating;
 			return;
 		}
-		if (request.resolution_base) {
-			this.playback.resizeForBase(
-				request.resolution_base.x,
-				request.resolution_base.y,
-			);
-		}
+		if (base && baseChanged) this.playback.resizeForBase(base.x, base.y);
 		await this.playback.seek(this.desiredTime);
 	}
 

@@ -185,6 +185,11 @@ export function ClipStrip() {
 	};
 
 	const [renaming, setRenaming] = createSignal<number | null>(null);
+	let renameInput: HTMLInputElement | undefined;
+	const focusRenameInput = () => {
+		renameInput?.focus();
+		renameInput?.select();
+	};
 	const rename = (index: number, value: string) => {
 		setRenaming(null);
 		setProject("timeline", "segments", index, "name", value.trim() || null);
@@ -299,7 +304,10 @@ export function ClipStrip() {
 											class="w-full rounded bg-ed-card px-1 text-[12px] text-ed-text-1 outline-hidden ring-1 ring-ed-accent"
 											value={segment.name ?? ""}
 											placeholder={`Clip ${index() + 1}`}
-											ref={(input) => queueMicrotask(() => input.select())}
+											ref={(input) => {
+												renameInput = input;
+												queueMicrotask(focusRenameInput);
+											}}
 											onKeyDown={(event) => {
 												event.stopPropagation();
 												if (event.key === "Enter")
@@ -318,6 +326,7 @@ export function ClipStrip() {
 								<ClipMenu
 									canRemove={segments().length > 1}
 									onRename={() => setRenaming(index())}
+									onRenameFocus={focusRenameInput}
 									onRemove={() => projectActions.deleteClipSegment(index())}
 								/>
 							</div>
@@ -444,8 +453,10 @@ function AddClipItem(props: {
 function ClipMenu(props: {
 	canRemove: boolean;
 	onRename: () => void;
+	onRenameFocus: () => void;
 	onRemove: () => void;
 }) {
+	let renaming = false;
 	return (
 		<KDropdownMenu gutter={6} placement="bottom-end">
 			<KDropdownMenu.Trigger
@@ -458,10 +469,20 @@ function ClipMenu(props: {
 				<PopperContent<typeof KDropdownMenu.Content>
 					as={KDropdownMenu.Content}
 					class={cx("w-44 p-1", topCenterAnimateClasses)}
+					// The menu hands focus back to its button as it closes; the
+					// rename field takes it right after so typing lands there.
+					onCloseAutoFocus={() => {
+						if (!renaming) return;
+						renaming = false;
+						queueMicrotask(props.onRenameFocus);
+					}}
 				>
 					<MenuItem<typeof KDropdownMenu.Item>
 						as={KDropdownMenu.Item}
-						onSelect={props.onRename}
+						onSelect={() => {
+							renaming = true;
+							props.onRename();
+						}}
 					>
 						<IconLucidePencil class="size-3.5" />
 						Rename
