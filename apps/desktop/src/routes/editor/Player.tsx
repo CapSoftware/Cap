@@ -686,6 +686,16 @@ function PreviewCanvas(props: {
 		hasFrame: () => !!latestFrame(),
 		updater: boundsUpdater,
 	});
+	// The web page keeps its snapshot of the video up until the editor has a
+	// frame of its own to show.
+	if (import.meta.env.VITE_CAP_WEB_EDITOR === "true")
+		createEffect(() => {
+			if (hasFrame())
+				window.parent.postMessage(
+					{ kind: "cap-editor-painted", version: 1 },
+					window.location.origin,
+				);
+		});
 
 	createEffect(() => {
 		const canvas = canvasRef();

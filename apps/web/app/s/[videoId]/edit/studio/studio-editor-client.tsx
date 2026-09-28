@@ -1,6 +1,7 @@
 "use client";
 
 import type { Video } from "@cap/web-domain";
+import clsx from "clsx";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -24,7 +25,7 @@ import {
 	stripEditorCaptionContent,
 } from "@/lib/editor-caption-access";
 import type { EditorClipCapture } from "@/lib/editor-clip-recorder";
-import { takeEntryFrame } from "@/lib/editor-entry-frame";
+import { forgetEntryFrame, readEntryFrame } from "@/lib/editor-entry-frame";
 import {
 	captureEditorLocalDraft,
 	clearEditorLocalDraft,
@@ -32,7 +33,7 @@ import {
 	readEditorLocalDraft,
 } from "@/lib/editor-local-draft";
 import type { WebEditorVideoImportProgress } from "@/lib/editor-video-import-client";
-import { nextPageReady } from "@/utils/view-transition";
+import { navigateWithTransition, nextPageReady } from "@/utils/view-transition";
 import { SharedLinkCard } from "../shared-link-card";
 import type { ClipRecorderContext } from "./clip-recorder-context";
 import { EditorClipRecorder } from "./editor-clip-recorder";
@@ -107,6 +108,7 @@ export function StudioEditorClient(props: {
 	const [entryFrame, setEntryFrame] = useState<string | null | undefined>();
 	const [frameLoaded, setFrameLoaded] = useState(false);
 	const [editorPainted, setEditorPainted] = useState(false);
+	const [entryFrameGone, setEntryFrameGone] = useState(false);
 	const [clipRecorderContext, setClipRecorderContext] =
 		useState<ClipRecorderContext | null>(null);
 	const [upgradeOpen, setUpgradeOpen] = useState(false);
@@ -523,17 +525,46 @@ export function StudioEditorClient(props: {
 	}, [onFrameLoad, sessionId]);
 
 	useEffect(() => {
-		setEntryFrame(takeEntryFrame(videoId));
+		setEntryFrame(readEntryFrame(videoId));
 	}, [videoId]);
 	useEffect(() => {
 		if (entryFrame !== undefined) nextPageReady();
 	}, [entryFrame]);
-	// The entry frame stays under the editor until its skeleton has painted.
+	useEffect(() => {
+		const painted = (event: MessageEvent<unknown>) => {
+			const message = event.data;
+			if (
+				event.source === iframeRef.current?.contentWindow &&
+				event.origin === window.location.origin &&
+				typeof message === "object" &&
+				message !== null &&
+				"kind" in message &&
+				message.kind === "cap-editor-painted"
+			)
+				setEditorPainted(true);
+		};
+		window.addEventListener("message", painted);
+		return () => window.removeEventListener("message", painted);
+	}, []);
+	// Arriving with a snapshot of the share page's video, the editor stays
+	// hidden behind it until it shows a frame of its own. Without one, its
+	// skeleton is enough; a project with no frame to show still gets in.
 	useEffect(() => {
 		if (!frameLoaded) return;
-		const timer = setTimeout(() => setEditorPainted(true), 800);
+		const timer = setTimeout(
+			() => setEditorPainted(true),
+			entryFrame ? 4000 : 800,
+		);
 		return () => clearTimeout(timer);
-	}, [frameLoaded]);
+	}, [frameLoaded, entryFrame]);
+	useEffect(() => {
+		if (!editorPainted) return;
+		const timer = setTimeout(() => {
+			setEntryFrameGone(true);
+			forgetEntryFrame(videoId);
+		}, 320);
+		return () => clearTimeout(timer);
+	}, [editorPainted, videoId]);
 
 	useEffect(() => {
 		if (!justRecorded) return;
@@ -552,6 +583,22 @@ export function StudioEditorClient(props: {
 			)
 		)
 			event.preventDefault();
+	};
+
+	const backToSharePage = (event: MouseEvent<HTMLAnchorElement>) => {
+		confirmLeave(event);
+		if (
+			event.defaultPrevented ||
+			event.button !== 0 ||
+			event.metaKey ||
+			event.ctrlKey ||
+			event.shiftKey
+		)
+			return;
+		event.preventDefault();
+		navigateWithTransition("edit-exit", () => router.push(`/s/${videoId}`), {
+			waitForNextPage: true,
+		});
 	};
 
 	if (error) {
@@ -616,7 +663,7 @@ export function StudioEditorClient(props: {
 					<EditorShellBrand
 						title="Back to shareable link"
 						backHref={`/s/${videoId}`}
-						onClick={confirmLeave}
+						onClick={backToSharePage}
 					/>
 				}
 				center={
@@ -626,7 +673,7 @@ export function StudioEditorClient(props: {
 							shareUrl={shareUrl}
 							title={preparingTitle}
 							initialPublic={isPublic}
-							onNavigate={confirmLeave}
+							onNavigate={backToSharePage}
 							onUpgradeRequest={() => setUpgradeOpen(true)}
 						/>
 						<EditorShellTab active>Editor</EditorShellTab>
@@ -643,12 +690,15 @@ export function StudioEditorClient(props: {
 				}
 			/>
 			<div className="relative min-h-0 flex-1">
-				{!editorPainted && <EditorEntryFrame frame={entryFrame ?? null} />}
+				{!entryFrameGone && <EditorEntryFrame frame={entryFrame ?? null} />}
 				<iframe
 					ref={iframeRef}
 					title="Cap editor"
 					src={editorSrc}
-					className="relative h-full w-full border-0"
+					className={clsx(
+						"relative h-full w-full border-0 transition-opacity duration-300",
+						entryFrame && !editorPainted && "opacity-0",
+					)}
 					onLoad={(event) => {
 						onFrameLoad(event.currentTarget);
 						setFrameLoaded(true);

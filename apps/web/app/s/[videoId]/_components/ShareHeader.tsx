@@ -67,7 +67,7 @@ import {
 	videoPreviewImageUrl,
 } from "@/lib/video-share-clipboard";
 import { usePublicEnv } from "@/utils/public-env";
-import { navigateWithTransition } from "@/utils/view-transition";
+import { navigateWithTransition, nextPageReady } from "@/utils/view-transition";
 import type { SharePageBranding, VideoData } from "../types";
 import { describeShareAudience } from "./share-audience";
 import { useVideoDownload } from "./use-video-download";
@@ -260,6 +260,9 @@ export const ShareHeader = ({
 	const titleRevealEndTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
 		null,
 	);
+
+	// Coming back from the editor, its transition waits for this page.
+	useEffect(() => nextPageReady(), []);
 
 	useEffect(() => {
 		if (!showCopyOptions) return;

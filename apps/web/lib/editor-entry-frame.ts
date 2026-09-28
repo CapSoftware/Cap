@@ -25,13 +25,17 @@ export function rememberEntryFrame(
 	}
 }
 
-export function takeEntryFrame(videoId: string) {
+export function readEntryFrame(videoId: string) {
 	try {
-		const key = `${STORAGE_PREFIX}${videoId}`;
-		const frame = sessionStorage.getItem(key);
-		sessionStorage.removeItem(key);
+		const frame = sessionStorage.getItem(`${STORAGE_PREFIX}${videoId}`);
 		return frame?.startsWith("data:image/jpeg;base64,") ? frame : null;
 	} catch {
 		return null;
 	}
+}
+
+export function forgetEntryFrame(videoId: string) {
+	try {
+		sessionStorage.removeItem(`${STORAGE_PREFIX}${videoId}`);
+	} catch {}
 }
