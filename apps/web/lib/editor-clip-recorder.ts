@@ -16,6 +16,8 @@ export type EditorClipCapture = {
 export type EditorClipCaptureOptions = {
 	/** A screen already shared from the recorder, used instead of asking again. */
 	displayStream?: MediaStream | null;
+	/** The camera preview, recorded instead of opening the camera again. */
+	cameraStream?: MediaStream | null;
 	cameraEnabled: boolean;
 	micEnabled: boolean;
 	systemAudioEnabled: boolean;
@@ -40,6 +42,17 @@ function recordingFormat(hasAudio: boolean) {
 	);
 	if (!pipeline) throw new Error("This browser cannot record an editor clip");
 	return pipeline;
+}
+
+const isLive = (stream: MediaStream | null | undefined) =>
+	stream?.getVideoTracks().some((track) => track.readyState === "live") ??
+	false;
+
+async function settleAll(tasks: Promise<unknown>[]) {
+	const failed = (await Promise.allSettled(tasks)).find(
+		(result) => result.status === "rejected",
+	);
+	if (failed?.status === "rejected") throw failed.reason;
 }
 
 function stoppedRecorder(recorder: MediaRecorder) {
@@ -108,14 +121,22 @@ export async function startEditorClipCapture(
 		ensureActive();
 		const displayTrack = displayStream.getVideoTracks()[0];
 		if (!displayTrack) throw new Error("Screen picker returned no video track");
-		if (options.cameraEnabled) {
-			cameraStream = await acquireCameraStream();
-			ensureActive();
+		if (options.cameraEnabled && isLive(options.cameraStream)) {
+			cameraStream = options.cameraStream ?? null;
 		}
-		if (options.micEnabled) {
-			micStream = await acquireMicStream();
-			ensureActive();
-		}
+		await settleAll([
+			options.cameraEnabled && !cameraStream
+				? acquireCameraStream().then((stream) => {
+						cameraStream = stream;
+					})
+				: Promise.resolve(),
+			options.micEnabled
+				? acquireMicStream().then((stream) => {
+						micStream = stream;
+					})
+				: Promise.resolve(),
+		]);
+		ensureActive();
 		if (displayTrack.readyState !== "live")
 			throw new Error("Screen sharing ended before recording started");
 		if (cameraStream?.getVideoTracks()[0]?.readyState === "ended")

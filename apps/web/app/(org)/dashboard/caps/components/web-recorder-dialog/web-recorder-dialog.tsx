@@ -234,7 +234,7 @@ export const WebRecorderDialog = ({
 	}, [playAudio]);
 
 	const [countdown, setCountdown] = useState<number | null>(null);
-	const finishCountdownRef = useRef<(() => void) | null>(null);
+	const finishCountdownRef = useRef<((start?: boolean) => void) | null>(null);
 	const tickContextRef = useRef<AudioContext | null>(null);
 	useEffect(
 		() => () => {
@@ -264,14 +264,14 @@ export const WebRecorderDialog = ({
 	}, []);
 	const runCountdown = useCallback(
 		() =>
-			new Promise<void>((resolve) => {
+			new Promise<boolean>((resolve) => {
 				let remaining = 3;
 				let timer = 0;
-				const finish = () => {
+				const finish = (start = true) => {
 					window.clearTimeout(timer);
 					finishCountdownRef.current = null;
 					setCountdown(null);
-					resolve();
+					resolve(start);
 				};
 				finishCountdownRef.current = finish;
 				const step = () => {
@@ -690,6 +690,7 @@ export const WebRecorderDialog = ({
 		selectedMicId,
 		open &&
 			(stage === "setup" ||
+				stage === "picking" ||
 				stage === "starting" ||
 				stage === "countdown" ||
 				stage === "recording"),
@@ -1450,7 +1451,7 @@ export const WebRecorderDialog = ({
 							{live ? (
 								lane.on && (
 									<span
-										className="rec-segment absolute inset-y-1 left-1 flex items-center overflow-hidden rounded-md pl-2.5 text-[12px] font-medium transition-[width] duration-500 ease-out"
+										className="rec-segment absolute inset-y-1 left-1 flex items-center overflow-hidden rounded-md pl-2.5 text-[12px] font-medium transition-[width] duration-1000 ease-linear"
 										style={{
 											width: `calc((100% - 8px) * ${Math.max(playheadPct, 1) / 100})`,
 										}}
@@ -1487,7 +1488,7 @@ export const WebRecorderDialog = ({
 				))}
 				{live && (
 					<span
-						className="pointer-events-none absolute -top-8 bottom-0 z-10 w-px bg-[var(--rec-red)] transition-[left] duration-500 ease-out"
+						className="pointer-events-none absolute -top-8 bottom-0 z-10 w-px bg-[var(--rec-red)] transition-[left] duration-1000 ease-linear"
 						style={{
 							left: `calc(var(--gutter) + 4px + (100% - var(--gutter) - 8px) * ${playheadPct / 100})`,
 						}}
@@ -1765,13 +1766,22 @@ export const WebRecorderDialog = ({
 							: "Look at the camera and start talking when it hits zero."}
 					</p>
 				</div>
-				<button
-					type="button"
-					className="rec-btn"
-					onClick={() => finishCountdownRef.current?.()}
-				>
-					Start now
-				</button>
+				<div className="flex gap-2">
+					<button
+						type="button"
+						className="rec-btn is-ghost"
+						onClick={() => finishCountdownRef.current?.(false)}
+					>
+						Cancel
+					</button>
+					<button
+						type="button"
+						className="rec-btn"
+						onClick={() => finishCountdownRef.current?.()}
+					>
+						Start now
+					</button>
+				</div>
 			</div>
 		) : stage === "picking" ? (
 			<div className="rec-fade absolute inset-0 z-20 flex flex-col items-center justify-center gap-5 bg-[var(--rec-scrim)] px-4 text-center backdrop-blur-md">
@@ -2081,6 +2091,7 @@ export const WebRecorderDialog = ({
 					onInteractOutside={handleInteractOutside}
 					onEscapeKeyDown={(event) => {
 						if (isBusy || isSettingUp || howOpen) event.preventDefault();
+						if (countdown !== null) finishCountdownRef.current?.(false);
 					}}
 				>
 					<DialogTitle className="sr-only">New recording</DialogTitle>

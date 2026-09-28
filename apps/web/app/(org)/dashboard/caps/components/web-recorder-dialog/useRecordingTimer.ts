@@ -27,22 +27,23 @@ export const useRecordingTimer = () => {
 		pauseStartRef.current = null;
 	}, []);
 
-	const syncDurationFromClock = useCallback((timestamp?: number) => {
+	const elapsedAt = useCallback((now: number) => {
 		const startTime = startTimeRef.current;
-		if (startTime === null) {
-			setDurationMs(0);
-			return 0;
-		}
-
-		const now = timestamp ?? performance.now();
+		if (startTime === null) return 0;
 		const pausedPending =
 			pauseStartRef.current !== null ? now - pauseStartRef.current : 0;
 		const totalPaused = pausedDurationRef.current + pausedPending;
-		const elapsed = Math.max(0, now - startTime - totalPaused);
-
-		setDurationMs(elapsed);
-		return elapsed;
+		return Math.max(0, now - startTime - totalPaused);
 	}, []);
+
+	const syncDurationFromClock = useCallback(
+		(timestamp?: number) => {
+			const elapsed = elapsedAt(timestamp ?? performance.now());
+			setDurationMs(elapsed);
+			return elapsed;
+		},
+		[elapsedAt],
+	);
 
 	const startTimer = useCallback(() => {
 		const now = performance.now();
@@ -56,12 +57,18 @@ export const useRecordingTimer = () => {
 			timerRef.current = null;
 		}
 
+		// The clock shows whole seconds, so the recorder only re-renders when
+		// the second changes.
 		timerRef.current = window.setInterval(() => {
-			if (startTimeRef.current !== null) {
-				syncDurationFromClock();
-			}
+			if (startTimeRef.current === null) return;
+			const elapsed = elapsedAt(performance.now());
+			setDurationMs((shown) =>
+				Math.floor(shown / 1000) === Math.floor(elapsed / 1000)
+					? shown
+					: elapsed,
+			);
 		}, 250);
-	}, [syncDurationFromClock]);
+	}, [elapsedAt]);
 
 	const resetTimer = useCallback(() => {
 		clearTimer();

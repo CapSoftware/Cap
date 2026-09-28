@@ -244,7 +244,7 @@ let cameraTrack: FakeTrack;
 let micTrack: FakeTrack;
 let enableMic = false;
 
-let beforeRecordingStarts: (() => Promise<void>) | undefined;
+let beforeRecordingStarts: (() => Promise<boolean>) | undefined;
 let takeSharedDisplayStream: (() => MediaStream | null) | undefined;
 
 function Harness() {
@@ -544,8 +544,8 @@ test("recording waits for the countdown while setup finishes underneath it", asy
 	mocks.createVideo.mockClear();
 	let finishCountdown = () => {};
 	beforeRecordingStarts = () =>
-		new Promise<void>((resolve) => {
-			finishCountdown = resolve;
+		new Promise<boolean>((resolve) => {
+			finishCountdown = () => resolve(true);
 		});
 	root = createRoot(container);
 	await act(async () => root.render(createElement(Harness)));
@@ -565,6 +565,27 @@ test("recording waits for the countdown while setup finishes underneath it", asy
 	await waitFor(() => expect(latest.phase).toBe("recording"));
 	expect(
 		FakeRecorder.instances.every((recorder) => recorder.state === "recording"),
+	).toBe(true);
+});
+
+test("cancelling the countdown starts nothing and removes the pending video", async () => {
+	await act(async () => latest.stopRecording());
+	await act(async () => root.unmount());
+	FakeRecorder.instances = [];
+	mocks.uploaders.length = 0;
+	mocks.deleteVideo.mockClear();
+	beforeRecordingStarts = async () => false;
+	root = createRoot(container);
+	await act(async () => root.render(createElement(Harness)));
+	await act(async () => latest.startRecording());
+	expect(latest.phase).toBe("idle");
+	expect(
+		FakeRecorder.instances.some((recorder) => recorder.state !== "inactive"),
+	).toBe(false);
+	expect(mocks.deleteVideo).toHaveBeenCalledOnce();
+	expect(mocks.uploaders).not.toHaveLength(0);
+	expect(
+		mocks.uploaders.every((uploader) => uploader.cancel.mock.calls.length > 0),
 	).toBe(true);
 });
 

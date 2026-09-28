@@ -118,7 +118,8 @@ interface UseWebRecorderOptions {
 	onRecordingStop?: () => void;
 	// Awaited once the capture sources are live and before the recorders
 	// start; setup keeps running underneath it, so a countdown costs nothing.
-	beforeRecordingStarts?: () => Promise<void>;
+	// Resolving false cancels the start.
+	beforeRecordingStarts?: () => Promise<boolean>;
 	quality?: RecordingQuality;
 	/** Open the studio editor directly when the recording is done. */
 	studioEnabled?: boolean;
@@ -176,6 +177,20 @@ const triggerBrowserDownload = (url: string, fileName: string) => {
 };
 
 const recoveredToastId = (id: string) => `recovered-${id}`;
+
+class RecordingStartCancelledError extends Error {
+	constructor() {
+		super("Recording start was cancelled");
+		this.name = "RecordingStartCancelledError";
+	}
+}
+
+const settleAll = async (tasks: Promise<unknown>[]) => {
+	const failed = (await Promise.allSettled(tasks)).find(
+		(result) => result.status === "rejected",
+	);
+	if (failed?.status === "rejected") throw failed.reason;
+};
 
 export const useWebRecorder = ({
 	organisationId,
@@ -1105,7 +1120,6 @@ export const useWebRecorder = ({
 						}
 					}
 					persistChunkToRecordingSpool(chunk);
-					setRecordedBytes(totalBytes);
 					try {
 						instantUploaderRef.current?.handleChunk(chunk, totalBytes);
 					} catch (error) {
@@ -1224,9 +1238,10 @@ export const useWebRecorder = ({
 			};
 
 			const countdownFinished = (
-				beforeRecordingStartsRef.current?.() ?? Promise.resolve()
+				beforeRecordingStartsRef.current?.() ?? Promise.resolve(true)
 			).catch((countdownError) => {
 				console.warn("Recording countdown failed", countdownError);
+				return true;
 			});
 
 			const systemAudioTracks =
@@ -1311,44 +1326,47 @@ export const useWebRecorder = ({
 
 			recordedChunksRef.current = [];
 			totalRecordedBytesRef.current = 0;
-			await disposeRecordingSpool();
-			await disposeCameraSpool();
-			if (pipeline.mode === "streaming") {
-				const spool = await createRecordingSpool(
-					pipeline.mimeType,
-					recordingMode === "camera" ? "camera" : "display",
-				);
-				if (spool) {
-					setLocalRecordingStrategy({ mode: "off" });
-				} else {
-					setLocalRecordingStrategy({
-						mode: "capped",
-						maxBytes: MEMORY_BACKUP_MAX_BYTES,
-					});
-					toast.warning(
-						"Durable local backup is unavailable. This recording will use bounded memory recovery.",
-					);
-				}
-			} else {
-				setLocalRecordingStrategy({ mode: "full" });
-			}
-			if (
-				cameraPipeline &&
-				!(await createCameraSpool(cameraPipeline.mimeType))
-			) {
-				toast.warning(
-					"Durable camera backup is unavailable. Camera recovery will use bounded memory.",
-				);
-			}
 			instantUploaderRef.current = null;
 			recordingPipelineRef.current = pipeline;
 
-			if (
+			const prepareLocalBackups = async () => {
+				await disposeRecordingSpool();
+				await disposeCameraSpool();
+				if (pipeline.mode === "streaming") {
+					const spool = await createRecordingSpool(
+						pipeline.mimeType,
+						recordingMode === "camera" ? "camera" : "display",
+					);
+					if (spool) {
+						setLocalRecordingStrategy({ mode: "off" });
+					} else {
+						setLocalRecordingStrategy({
+							mode: "capped",
+							maxBytes: MEMORY_BACKUP_MAX_BYTES,
+						});
+						toast.warning(
+							"Durable local backup is unavailable. This recording will use bounded memory recovery.",
+						);
+					}
+				} else {
+					setLocalRecordingStrategy({ mode: "full" });
+				}
+				if (
+					cameraPipeline &&
+					!(await createCameraSpool(cameraPipeline.mimeType))
+				) {
+					toast.warning(
+						"Durable camera backup is unavailable. Camera recovery will use bounded memory.",
+					);
+				}
+			};
+
+			const needsInstantVideo =
 				pipeline.mode === "streaming" ||
-				cameraPipeline ||
+				cameraPipeline !== null ||
 				hasMicAudio ||
-				hasSystemAudio
-			) {
+				hasSystemAudio;
+			const createInstantVideo = async () => {
 				const width = dimensionsRef.current.width;
 				const height = dimensionsRef.current.height;
 				const resolution = width && height ? `${width}x${height}` : undefined;
@@ -1364,17 +1382,21 @@ export const useWebRecorder = ({
 						supportsUploadProgress: true,
 					}),
 				) as InstantVideoCreation;
-				const creationResult = {
-					id: creation.id,
-					shareUrl: creation.shareUrl,
-					upload: creation.upload,
-				};
-				videoCreationRef.current = creationResult;
+				videoCreationRef.current = creation;
 				setVideoId(creation.id);
 				pendingInstantVideoIdRef.current = creation.id;
+				return creation;
+			};
 
+			const instantVideo = needsInstantVideo
+				? createInstantVideo()
+				: Promise.resolve(null);
+			await settleAll([prepareLocalBackups(), instantVideo]);
+			const creationResult = await instantVideo;
+
+			if (creationResult) {
 				const rawSubpath = `raw-upload.${pipeline.fileExtension}`;
-				if (pipeline.mode === "streaming") {
+				const startScreenUpload = async () => {
 					const uploadSession = await initiateMultipartUpload({
 						videoId: creationResult.id,
 						contentType: pipeline.mimeType,
@@ -1394,9 +1416,15 @@ export const useWebRecorder = ({
 							void stopRecordingRef.current?.();
 						},
 					});
-				}
-
-				if (cameraPipeline) {
+				};
+				const cameraApi: RecorderApiOptions = {
+					extraBody: {
+						screenSubpath: rawSubpath,
+						cameraOffsetMs: 0,
+					},
+				};
+				if (cameraPipeline) cameraUploadApiRef.current = cameraApi;
+				const startCameraUpload = async (cameraPipeline: RecordingPipeline) => {
 					const cameraSubpath = `camera-upload.${cameraPipeline.fileExtension}`;
 					cameraUploadSubpathRef.current = cameraSubpath;
 					const cameraSession = await initiateMultipartUpload({
@@ -1404,13 +1432,6 @@ export const useWebRecorder = ({
 						contentType: cameraPipeline.mimeType,
 						subpath: cameraSubpath,
 					});
-					const cameraApi: RecorderApiOptions = {
-						extraBody: {
-							screenSubpath: rawSubpath,
-							cameraOffsetMs: 0,
-						},
-					};
-					cameraUploadApiRef.current = cameraApi;
 					cameraUploaderRef.current = new InstantRecordingUploader({
 						videoId: creationResult.id,
 						uploadId: cameraSession.uploadId,
@@ -1425,52 +1446,53 @@ export const useWebRecorder = ({
 							void stopRecordingRef.current?.();
 						},
 					});
-				}
-				if (hasMicAudio && micStream) {
-					audioSidecarsRef.current.push(
-						await AudioRecordingSidecar.create({
-							kind: "mic",
-							stream: new MediaStream(micStream.getAudioTracks()),
-							videoId: creationResult.id,
-							screenSubpath: rawSubpath,
-							onFatalError: () => {
-								void stopRecordingRef.current?.();
-							},
-							onBackupFallback: (error, recoveryAvailable) => {
-								console.warn("Microphone backup changed", error);
-								toast.warning(
-									recoveryAvailable
-										? "Microphone backup is limited to memory while recording continues."
-										: "Microphone backup is unavailable. Recording continues, but audio cannot be recovered if upload fails.",
-								);
-							},
-						}),
-					);
-				}
-				if (hasSystemAudio) {
-					audioSidecarsRef.current.push(
-						await AudioRecordingSidecar.create({
-							kind: "systemAudio",
-							stream: new MediaStream(systemAudioTracks),
-							videoId: creationResult.id,
-							screenSubpath: rawSubpath,
-							onFatalError: () => {
-								void stopRecordingRef.current?.();
-							},
-							onBackupFallback: (error, recoveryAvailable) => {
-								console.warn("System audio backup changed", error);
-								toast.warning(
-									recoveryAvailable
-										? "System audio backup is limited to memory while recording continues."
-										: "System audio backup is unavailable. Recording continues, but audio cannot be recovered if upload fails.",
-								);
-							},
-						}),
-					);
-				}
+				};
+				const createAudioSidecar = async (
+					kind: "mic" | "systemAudio",
+					tracks: MediaStreamTrack[],
+				) => {
+					const label = kind === "mic" ? "Microphone" : "System audio";
+					const sidecar = await AudioRecordingSidecar.create({
+						kind,
+						stream: new MediaStream(tracks),
+						videoId: creationResult.id,
+						screenSubpath: rawSubpath,
+						onFatalError: () => {
+							void stopRecordingRef.current?.();
+						},
+						onBackupFallback: (error, recoveryAvailable) => {
+							console.warn(`${label} backup changed`, error);
+							toast.warning(
+								recoveryAvailable
+									? `${label} backup is limited to memory while recording continues.`
+									: `${label} backup is unavailable. Recording continues, but audio cannot be recovered if upload fails.`,
+							);
+						},
+					});
+					audioSidecarsRef.current.push(sidecar);
+				};
+
+				// Every upload session opens at once; each lands in its ref as soon
+				// as it exists, so a failure part way still cleans all of them up.
+				await settleAll([
+					pipeline.mode === "streaming"
+						? startScreenUpload()
+						: Promise.resolve(),
+					cameraPipeline
+						? startCameraUpload(cameraPipeline)
+						: Promise.resolve(),
+					hasMicAudio && micStream
+						? createAudioSidecar("mic", micStream.getAudioTracks())
+						: Promise.resolve(),
+					hasSystemAudio
+						? createAudioSidecar("systemAudio", systemAudioTracks)
+						: Promise.resolve(),
+				]);
 			}
 
-			await countdownFinished;
+			if (!(await countdownFinished)) {
+				throw new RecordingStartCancelledError();
+			}
 			if (
 				videoStream
 					.getVideoTracks()
@@ -1637,13 +1659,15 @@ export const useWebRecorder = ({
 				await deletePendingVideoSafely(orphanVideoId);
 			}
 
-			console.error("Failed to start recording", err);
-			toast.error(
-				getCaptureErrorMessage(
-					err,
-					recordingMode === "camera" ? "camera" : "display",
-				),
-			);
+			if (!(err instanceof RecordingStartCancelledError)) {
+				console.error("Failed to start recording", err);
+				toast.error(
+					getCaptureErrorMessage(
+						err,
+						recordingMode === "camera" ? "camera" : "display",
+					),
+				);
+			}
 			await resetState();
 		} finally {
 			setIsSettingUp(false);
@@ -1799,21 +1823,30 @@ export const useWebRecorder = ({
 
 			const instantUploader = instantUploaderRef.current;
 
-			onRecordingStop?.();
-			updatePhase("creating");
-			if (cameraMediaRecorderRef.current) {
-				try {
-					cameraRecordedBytes = await stopCameraRecorder();
-				} catch (cameraError) {
-					cameraRecorderFailedRef.current = true;
-					console.warn("Failed to stop camera recording", cameraError);
-				}
-			}
-			const audioStopResults = await Promise.allSettled(
+			// Every recorder is told to stop before anything is awaited, so they
+			// finish their last chunks together while the UI updates.
+			const cameraStopped = cameraMediaRecorderRef.current
+				? stopCameraRecorder().then(
+						(bytes) => {
+							cameraRecordedBytes = bytes;
+						},
+						(cameraError) => {
+							cameraRecorderFailedRef.current = true;
+							console.warn("Failed to stop camera recording", cameraError);
+						},
+					)
+				: Promise.resolve();
+			const audioStopped = Promise.allSettled(
 				audioSidecars.map((sidecar) => sidecar.stop()),
 			);
+			const screenStopped = stopRecordingInternalWrapper();
+			onRecordingStop?.();
+			updatePhase("creating");
 
-			rawRecordingBlob = await stopRecordingInternalWrapper();
+			await Promise.allSettled([screenStopped, cameraStopped, audioStopped]);
+			rawRecordingBlob = await screenStopped;
+			setRecordedBytes(totalRecordedBytesRef.current);
+			const audioStopResults = await audioStopped;
 			const failedAudioStop = audioStopResults.find(
 				(result) => result.status === "rejected",
 			);
@@ -2215,24 +2248,26 @@ export const useWebRecorder = ({
 				),
 			]);
 
-			setUploadStatus(undefined);
 			// The share link is already live; the editor opens on it so the
 			// separate tracks can be edited straight away.
 			// Studio recordings open the editor itself, skipping the /edit hop.
 			const editUrl = `/s/${encodeURIComponent(creationResult.id)}/edit${
 				studioEnabled && editorSidecarCapture ? "/studio" : ""
 			}?from=recording`;
-			setCompletedShareUrl(creationResult.shareUrl);
-			setCompletedEditUrl(editUrl);
-			updatePhase("completed");
 			// Everything is uploaded at this point, so a navigation failure must
-			// not fall into the failure path below, which deletes the video.
+			// not fall into the failure path below, which deletes the video. It
+			// starts before the state below re-renders the page, so the editor's
+			// request isn't queued behind that work.
 			try {
 				router.push(editUrl);
 			} catch (navigationError) {
 				console.error("Failed to open the editor", navigationError);
 				window.location.assign(editUrl);
 			}
+			setUploadStatus(undefined);
+			setCompletedShareUrl(creationResult.shareUrl);
+			setCompletedEditUrl(editUrl);
+			updatePhase("completed");
 		} catch (err) {
 			console.error("Failed to process recording", err);
 			setUploadStatus(undefined);
@@ -2332,6 +2367,7 @@ export const useWebRecorder = ({
 		switchCameraBackupToMemory,
 		replaceCameraErrorDownload,
 		replaceAudioErrorDownloads,
+		totalRecordedBytesRef,
 	]);
 
 	useEffect(() => {

@@ -21,7 +21,10 @@ import {
 	useMicLevel,
 } from "@/app/(org)/dashboard/caps/components/web-recorder-dialog/recorder-parts";
 import "@/app/(org)/dashboard/caps/components/web-recorder-dialog/recorder.css";
-import { acquireDisplayStream } from "@cap/recorder-core/capture-streams";
+import {
+	acquireCameraStream,
+	acquireDisplayStream,
+} from "@cap/recorder-core/capture-streams";
 import {
 	capturesThisTab,
 	identifyThisTab,
@@ -56,6 +59,7 @@ export function EditorClipRecorder(props: {
 	const [error, setError] = useState<string | null>(null);
 	const [elapsedMs, setElapsedMs] = useState(0);
 	const [cameraPreview, setCameraPreview] = useState<MediaStream | null>(null);
+	const cameraPreviewRef = useRef<MediaStream | null>(null);
 	const [screen, setScreen] = useState<MediaStream | null>(null);
 	const [sharing, setSharing] = useState(false);
 	const screenRef = useRef<MediaStream | null>(null);
@@ -79,7 +83,10 @@ export function EditorClipRecorder(props: {
 
 	const idle = phase === "idle" || (phase === "error" && !captured);
 	const live = phase === "recording" || phase === "paused";
-	const micLevel = useMicLevel("default", micEnabled && (idle || live));
+	const micLevel = useMicLevel(
+		"default",
+		micEnabled && (idle || live || phase === "starting"),
+	);
 
 	const onBusyChange = props.onBusyChange;
 	useEffect(() => {
@@ -87,7 +94,8 @@ export function EditorClipRecorder(props: {
 	}, [phase, onBusyChange]);
 	useEffect(() => () => onBusyChange?.(false), [onBusyChange]);
 
-	// A camera preview while setting up; the capture opens its own once it starts.
+	// A camera preview while setting up, opened as the capture wants it so
+	// starting records it rather than opening the camera again.
 	useEffect(() => {
 		if (!cameraEnabled || !idle) {
 			setCameraPreview(null);
@@ -95,20 +103,23 @@ export function EditorClipRecorder(props: {
 		}
 		let stream: MediaStream | null = null;
 		let disposed = false;
-		void navigator.mediaDevices
-			?.getUserMedia({ video: { height: { ideal: 720 } } })
+		void acquireCameraStream()
 			.then((next) => {
 				if (disposed) {
 					for (const track of next.getTracks()) track.stop();
 					return;
 				}
 				stream = next;
+				cameraPreviewRef.current = next;
 				setCameraPreview(next);
 			})
 			.catch(() => setCameraPreview(null));
 		return () => {
 			disposed = true;
-			if (stream) for (const track of stream.getTracks()) track.stop();
+			if (stream && cameraPreviewRef.current === stream) {
+				cameraPreviewRef.current = null;
+				for (const track of stream.getTracks()) track.stop();
+			}
 		};
 	}, [cameraEnabled, idle]);
 
@@ -246,11 +257,14 @@ export function EditorClipRecorder(props: {
 		setCaptured(null);
 		setCapturedCanImport(false);
 		setError(null);
+		const cameraStream = cameraPreviewRef.current;
+		cameraPreviewRef.current = null;
 		setPhase("starting");
 		try {
 			updateScreen(null);
 			const session = await startEditorClipCapture({
 				displayStream,
+				cameraStream,
 				cameraEnabled,
 				micEnabled,
 				systemAudioEnabled,

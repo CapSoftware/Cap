@@ -268,3 +268,19 @@ test("a browser encoder error stops both tracks and keeps a downloadable backup"
 	);
 	await session.release();
 });
+
+test("a live camera preview is recorded instead of opening the camera again", async () => {
+	setup();
+	const previewTrack = new FakeTrack("video");
+	const preview = new FakeStream([previewTrack]);
+	const session = await startEditorClipCapture({
+		cameraStream: preview as unknown as MediaStream,
+		cameraEnabled: true,
+		micEnabled: true,
+		systemAudioEnabled: false,
+	});
+	expect(capture.camera).not.toHaveBeenCalled();
+	expect(FakeRecorder.instances[1]?.stream).toBe(preview);
+	await session.stop();
+	expect(previewTrack.stop).toHaveBeenCalled();
+});

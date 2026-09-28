@@ -9,13 +9,14 @@ import type {
 	EditorClipCaptureSession,
 } from "@/lib/editor-clip-recorder";
 
-const capture = vi.hoisted(() => ({ start: vi.fn() }));
+const capture = vi.hoisted(() => ({ start: vi.fn(), camera: vi.fn() }));
 
 vi.mock("@/lib/editor-clip-recorder", () => ({
 	startEditorClipCapture: capture.start,
 }));
 
 vi.mock("@cap/recorder-core/capture-streams", () => ({
+	acquireCameraStream: capture.camera,
 	acquireDisplayStream: vi.fn(async () => {
 		const track = {
 			addEventListener: vi.fn(),
@@ -53,6 +54,8 @@ function session(): EditorClipCaptureSession {
 
 beforeEach(() => {
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+	vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue();
+	capture.camera.mockRejectedValue(new Error("No camera"));
 	container = document.createElement("div");
 	document.body.append(container);
 	root = createRoot(container);
@@ -62,6 +65,8 @@ afterEach(async () => {
 	if (root) await act(async () => root?.unmount());
 	container.remove();
 	capture.start.mockReset();
+	capture.camera.mockReset();
+	vi.restoreAllMocks();
 	vi.unstubAllGlobals();
 });
 
@@ -79,8 +84,8 @@ async function renderRecorder(onCaptured = vi.fn(async () => undefined)) {
 }
 
 async function startRecorder() {
-	const button = [...container.querySelectorAll("button")].find(
-		(candidate) => candidate.textContent?.includes("Start Recording"),
+	const button = [...container.querySelectorAll("button")].find((candidate) =>
+		candidate.textContent?.includes("Start Recording"),
 	);
 	expect(button).toBeDefined();
 	await act(async () => button?.click());
@@ -148,4 +153,23 @@ test("a recording that finishes after the editor closes is not imported", async 
 	);
 	expect(onCaptured).not.toHaveBeenCalled();
 	expect(captured.release).not.toHaveBeenCalled();
+});
+
+test("starting records the camera preview instead of opening the camera again", async () => {
+	const cameraTrack = { stop: vi.fn(), readyState: "live" };
+	const preview = {
+		getTracks: () => [cameraTrack],
+		getVideoTracks: () => [cameraTrack],
+		getAudioTracks: () => [],
+	};
+	capture.camera.mockResolvedValue(preview);
+	capture.start.mockResolvedValue(session());
+	await renderRecorder();
+	await startRecorder();
+	const options = capture.start.mock.calls[0]?.[0] as
+		| EditorClipCaptureOptions
+		| undefined;
+	expect(options?.cameraStream).toBe(preview);
+	expect(capture.camera).toHaveBeenCalledOnce();
+	expect(cameraTrack.stop).not.toHaveBeenCalled();
 });

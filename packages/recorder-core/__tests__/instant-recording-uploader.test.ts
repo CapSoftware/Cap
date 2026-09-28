@@ -101,6 +101,13 @@ const makeBlob = (size: number, type: string) =>
 	new Blob([new Uint8Array(size)], { type });
 const videoId = "video-123" as VideoId;
 
+const presignedPartNumbers = (fetchMock: ReturnType<typeof vi.fn>) =>
+	fetchMock.mock.calls
+		.filter(([input]) => String(input) === "/api/upload/multipart/presign-part")
+		.map(
+			([, init]) => JSON.parse((init as RequestInit).body as string).partNumber,
+		);
+
 describe("InstantRecordingUploader", () => {
 	beforeEach(() => {
 		vi.stubGlobal("window", globalThis as typeof globalThis & Window);
@@ -125,11 +132,10 @@ describe("InstantRecordingUploader", () => {
 					expect(body).toMatchObject({
 						videoId,
 						uploadId: "upload-123",
-						partNumber: 1,
 						subpath: "raw-upload.webm",
 					});
 					return makeJsonResponse({
-						presignedUrl: "https://uploads.example/part-1",
+						presignedUrl: `https://uploads.example/part-${body.partNumber}`,
 					});
 				}
 
@@ -181,7 +187,8 @@ describe("InstantRecordingUploader", () => {
 			subpath: "raw-upload.webm",
 		});
 
-		expect(fetchMock).toHaveBeenCalledTimes(2);
+		expect(presignedPartNumbers(fetchMock)).toEqual([1, 2]);
+		expect(fetchMock).toHaveBeenCalledTimes(3);
 		expect(sendProgressUpdate).toHaveBeenLastCalledWith(chunk.size, chunk.size);
 		expect(setUploadStatus).toHaveBeenLastCalledWith(
 			expect.objectContaining({
@@ -435,6 +442,40 @@ describe("InstantRecordingUploader", () => {
 		});
 	});
 
+	it("signs the first part ahead so the tail uploads without waiting for a signature", async () => {
+		const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+			const url = input.toString();
+			if (url === "/api/upload/multipart/presign-part") {
+				return makeJsonResponse({
+					presignedUrl: "https://uploads.example/part-1",
+				});
+			}
+			if (url === "/api/upload/multipart/complete") {
+				return makeJsonResponse({ success: true });
+			}
+			throw new Error(`Unexpected fetch call: ${url}`);
+		});
+		vi.stubGlobal("fetch", fetchMock);
+		MockXMLHttpRequest.setOutcomes([{ type: "success", etag: "etag-1" }]);
+
+		const uploader = new InstantRecordingUploader({
+			videoId,
+			uploadId: "upload-123",
+			mimeType: "audio/webm",
+			subpath: "mic-upload.webm",
+			setUploadStatus: vi.fn(),
+			sendProgressUpdate: vi.fn().mockResolvedValue(undefined),
+		});
+		expect(presignedPartNumbers(fetchMock)).toEqual([1]);
+
+		const chunk = makeBlob(1024, "audio/webm");
+		uploader.handleChunk(chunk, chunk.size);
+		await uploader.finalize({ durationSeconds: 1, subpath: "mic-upload.webm" });
+
+		expect(presignedPartNumbers(fetchMock)).toEqual([1]);
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+	});
+
 	it("retries a failed part upload before completing", async () => {
 		vi.useFakeTimers();
 
@@ -481,10 +522,7 @@ describe("InstantRecordingUploader", () => {
 		await vi.runAllTimersAsync();
 		await finalizePromise;
 
-		const presignCalls = fetchMock.mock.calls.filter(
-			([input]) => input.toString() === "/api/upload/multipart/presign-part",
-		);
-		expect(presignCalls).toHaveLength(2);
+		expect(presignedPartNumbers(fetchMock)).toEqual([1, 2, 1]);
 	});
 
 	it("retries a stalled part upload before completing", async () => {
@@ -533,10 +571,7 @@ describe("InstantRecordingUploader", () => {
 		await vi.advanceTimersByTimeAsync(30_500);
 		await finalizePromise;
 
-		const presignCalls = fetchMock.mock.calls.filter(
-			([input]) => input.toString() === "/api/upload/multipart/presign-part",
-		);
-		expect(presignCalls).toHaveLength(2);
+		expect(presignedPartNumbers(fetchMock)).toEqual([1, 2, 1]);
 		expect(MockXMLHttpRequest.abortedCount).toBe(1);
 	});
 
@@ -603,11 +638,10 @@ describe("InstantRecordingUploader", () => {
 					expect(body).toMatchObject({
 						videoId,
 						uploadId: "upload-123",
-						partNumber: 1,
 						subpath: "raw-upload.webm",
 					});
 					return makeJsonResponse({
-						presignedUrl: "https://uploads.example/part-1",
+						presignedUrl: `https://uploads.example/part-${body.partNumber}`,
 					});
 				}
 
@@ -658,11 +692,10 @@ describe("InstantRecordingUploader", () => {
 					expect(body).toMatchObject({
 						videoId,
 						uploadId: "upload-123",
-						partNumber: 1,
 						subpath: "raw-upload.webm",
 					});
 					return makeJsonResponse({
-						presignedUrl: "https://uploads.example/part-1",
+						presignedUrl: `https://uploads.example/part-${body.partNumber}`,
 					});
 				}
 
@@ -814,6 +847,12 @@ describe("InstantRecordingUploader", () => {
 					return makeJsonResponse({ success: true });
 				}
 
+				if (url === "/api/upload/multipart/presign-part") {
+					return makeJsonResponse({
+						presignedUrl: "https://uploads.example/part-1",
+					});
+				}
+
 				throw new Error(`Unexpected fetch call: ${url}`);
 			},
 		);
@@ -831,7 +870,11 @@ describe("InstantRecordingUploader", () => {
 
 		await uploader.cancel();
 
-		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(
+			fetchMock.mock.calls.filter(
+				([input]) => String(input) === "/api/upload/multipart/abort",
+			),
+		).toHaveLength(1);
 	});
 
 	it("aborts in-flight part uploads immediately on cancel", async () => {
@@ -948,7 +991,7 @@ describe("InstantRecordingUploader", () => {
 		const chunk = makeBlob(STREAMED_PART_BYTES, "video/webm");
 		uploader.handleChunk(chunk, chunk.size);
 		await new Promise((resolve) => setTimeout(resolve, 0));
-		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(presignedPartNumbers(fetchMock)).toEqual([1, 2, 1]);
 		await expect(
 			uploader.finalize({
 				durationSeconds: 1,
