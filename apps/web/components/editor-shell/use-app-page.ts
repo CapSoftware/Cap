@@ -6,8 +6,9 @@ import { useEffect } from "react";
  * The editor pages behave like an app: pinch or ctrl+scroll never zooms the
  * page and sideways scrolling never swipes back through history.
  */
-export function useAppPage() {
+export function useAppPage(enabled = true) {
 	useEffect(() => {
+		if (!enabled) return;
 		const root = document.documentElement;
 		const previous = root.style.overscrollBehavior;
 		root.style.overscrollBehavior = "none";
@@ -19,5 +20,5 @@ export function useAppPage() {
 			root.style.overscrollBehavior = previous;
 			window.removeEventListener("wheel", preventZoom);
 		};
-	}, []);
+	}, [enabled]);
 }

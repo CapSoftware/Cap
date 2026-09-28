@@ -21,6 +21,7 @@ import {
 	EditorShellBar,
 	type EditorTab,
 } from "@/components/editor-shell/editor-shell-bar";
+import { useAppPage } from "@/components/editor-shell/use-app-page";
 import {
 	type ImageLoadingStatus,
 	VideoThumbnail,
@@ -56,6 +57,9 @@ export function EditorApp({ recordings }: { recordings: RecentRecording[] }) {
 	const searchParams = useSearchParams();
 	const tab: EditorTab =
 		searchParams.get("tab") === "record" ? "record" : "editor";
+	// Browsing projects keeps normal back navigation; a swipe while recording
+	// would leave the recorder.
+	useAppPage(tab === "record");
 	const setTab = useCallback(
 		(next: EditorTab) => {
 			router.replace(
