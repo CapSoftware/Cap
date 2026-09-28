@@ -1476,6 +1476,11 @@ test("caption access follows a changed Cap Pro plan without reconnecting the edi
 	}
 });
 
+/** The hidden frame the host downloads worker exports into. */
+function downloadFrame() {
+	return { name: "", hidden: false, setAttribute: vi.fn(), remove: vi.fn() };
+}
+
 test("Solid export progress is delivered before a verified direct browser download", async () => {
 	const requests: Array<{ url: string; init?: RequestInit }> = [];
 	let polled = 0;
@@ -1491,7 +1496,9 @@ test("Solid export progress is delivered before a verified direct browser downlo
 	};
 	const append = vi.fn();
 	vi.stubGlobal("document", {
-		createElement: vi.fn(() => anchor),
+		createElement: vi.fn((tag: string) =>
+			tag === "iframe" ? downloadFrame() : anchor,
+		),
 		body: { append },
 	});
 	const { bridge, port } = await connectedExportHost(async (url, init) => {
@@ -1646,7 +1653,9 @@ test("canceling a file export acknowledges the dialog and retries after native c
 		remove: vi.fn(),
 	};
 	vi.stubGlobal("document", {
-		createElement: vi.fn(() => anchor),
+		createElement: vi.fn((tag: string) =>
+			tag === "iframe" ? downloadFrame() : anchor,
+		),
 		body: { append: vi.fn() },
 	});
 	const { bridge, port } = await connectedExportHost(async (url, init) => {
