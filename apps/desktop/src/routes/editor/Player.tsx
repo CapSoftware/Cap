@@ -767,7 +767,7 @@ function PreviewCanvas(props: {
 					<Show when={canvasControls()} keyed>
 						{(_controls) => (
 							<canvas
-								class="rounded-md shadow-[0_12px_32px_-8px_rgba(0,0,0,0.35),0_0_0_0.5px_rgba(0,0,0,0.12)]"
+								class="shadow-[0_0_0_1px_var(--ed-line-strong)]"
 								style={{
 									width: `${size().width}px`,
 									height: `${size().height}px`,
