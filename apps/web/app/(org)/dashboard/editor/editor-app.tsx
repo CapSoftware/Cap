@@ -8,6 +8,7 @@ import {
 	LoaderCircleIcon,
 	UploadIcon,
 } from "lucide-react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
 	type DragEvent,
@@ -19,7 +20,6 @@ import {
 import { toast } from "sonner";
 import {
 	EditorShellBar,
-	EditorShellBrand,
 	type EditorTab,
 	EditorTabs,
 } from "@/components/editor-shell/editor-shell-bar";
@@ -79,8 +79,13 @@ export function EditorApp({ recordings }: { recordings: RecentRecording[] }) {
 			{/* A full-screen app: the support launcher would sit over its controls. */}
 			<style>{".cap-messenger-launcher{display:none!important}"}</style>
 			<EditorShellBar
-				left={<EditorShellBrand />}
+				left={null}
 				center={<EditorTabs tab={tab} onTabChange={setTab} />}
+				right={
+					<Link href="/dashboard/caps" className="rec-btn is-ghost">
+						Dashboard
+					</Link>
+				}
 			/>
 			<div className="relative flex min-h-0 flex-1 flex-col">
 				{tab === "record" ? (
@@ -275,7 +280,7 @@ function EditorHome({
 		>
 			<section
 				className={clsx(
-					"rec-card relative flex min-h-[20rem] flex-1 flex-col items-center justify-center overflow-hidden px-6 py-10 text-center transition-shadow",
+					"rec-card relative flex min-h-fit flex-1 flex-col items-center justify-center overflow-hidden px-6 py-8 text-center transition-shadow",
 					dragging &&
 						"shadow-[0_0_0_2px_var(--rec-accent),var(--rec-card-shadow)]",
 				)}
@@ -306,7 +311,14 @@ function EditorHome({
 						</p>
 					</div>
 				) : (
-					<div className="flex max-w-md flex-col items-center">
+					<div
+						className={clsx(
+							"flex w-full max-w-xl flex-col items-center rounded-2xl border-2 border-dashed px-8 py-12 transition-colors",
+							dragging
+								? "border-[var(--rec-accent)] bg-[color-mix(in_srgb,var(--rec-accent)_6%,transparent)]"
+								: "border-[var(--rec-line-strong)]",
+						)}
+					>
 						<div className="flex items-center gap-2" aria-hidden>
 							<span
 								className="rec-track flex size-11 items-center justify-center rounded-xl"

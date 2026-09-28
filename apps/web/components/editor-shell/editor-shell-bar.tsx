@@ -39,12 +39,12 @@ export function EditorShellBar({
 
 /** A back link led by the Cap mark. */
 export function EditorShellBrand({
-	title = "Editor",
-	backHref = "/dashboard/caps",
+	title,
+	backHref,
 	onClick,
 }: {
-	title?: ReactNode;
-	backHref?: string;
+	title: ReactNode;
+	backHref: string;
 	onClick?: MouseEventHandler<HTMLAnchorElement>;
 }) {
 	return (
