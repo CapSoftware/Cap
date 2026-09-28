@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import { Video } from "@cap/web-domain";
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
@@ -20,6 +21,9 @@ vi.mock("next/navigation", () => ({
 vi.mock("next/dynamic", () => ({ default: () => () => null }));
 vi.mock("@/app/s/[videoId]/edit/studio/editor-clip-recorder", () => ({
 	EditorClipRecorder: () => null,
+}));
+vi.mock("@/components/editor-shell/share-link-tab", () => ({
+	ShareLinkTab: () => null,
 }));
 vi.mock("@/app/s/[videoId]/edit/studio/editor-host", () => ({
 	EditorHostBridge: class {
@@ -144,10 +148,11 @@ async function openRecoveryConflict() {
 	await act(async () => {
 		root.render(
 			createElement(StudioEditorClient, {
-				videoId: "video",
+				videoId: Video.VideoId.make("video"),
 				userId: "owner",
 				captionsEnabled: true,
 				savedAt: "newer",
+				isPublic: true,
 				preparingTitle: "Paired replay",
 				preparingDuration: 900,
 				preparingTracks: ["display", "camera"],
@@ -273,10 +278,11 @@ test("an unexpected browser-draft restore failure preserves the draft", async ()
 	await act(async () => {
 		root.render(
 			createElement(StudioEditorClient, {
-				videoId: "video",
+				videoId: Video.VideoId.make("video"),
 				userId: "owner",
 				captionsEnabled: true,
 				savedAt: "newer",
+				isPublic: true,
 				preparingTitle: "Paired replay",
 				preparingDuration: 900,
 				preparingTracks: ["display", "camera"],
@@ -304,10 +310,11 @@ test("browser Studio keeps the shared editor shell open and connects once when r
 	await act(async () => {
 		root.render(
 			createElement(StudioEditorClient, {
-				videoId: "video",
+				videoId: Video.VideoId.make("video"),
 				userId: "owner",
 				captionsEnabled: true,
 				savedAt: null,
+				isPublic: true,
 				preparingTitle: "Paired replay",
 				preparingDuration: 900,
 				preparingTracks: ["display", "camera"],
@@ -354,6 +361,54 @@ test("browser Studio keeps the shared editor shell open and connects once when r
 	expect(mocks.connect).toHaveBeenCalledTimes(1);
 });
 
+test("leaving asks first while the share link is missing this session's edits", async () => {
+	await act(async () => {
+		root.render(
+			createElement(StudioEditorClient, {
+				videoId: Video.VideoId.make("video"),
+				userId: "owner",
+				captionsEnabled: true,
+				savedAt: null,
+				isPublic: true,
+				preparingTitle: "Paired replay",
+				preparingDuration: 900,
+				preparingTracks: ["display"],
+			}),
+		);
+	});
+	const iframe = container.querySelector<HTMLIFrameElement>(
+		"iframe[title='Cap editor']",
+	);
+	const childWindow = iframe?.contentWindow;
+	if (!childWindow) throw new Error("Editor child window was unavailable");
+	let unpublished = true;
+	Object.assign(childWindow, {
+		capSolidEditor: {
+			unsavedProject: () => null,
+			unpublishedEdits: () => unpublished,
+		},
+	});
+	const leave = () => {
+		const event = new Event("beforeunload", { cancelable: true });
+		window.dispatchEvent(event);
+		return event.defaultPrevented;
+	};
+	const allRecordings = [...container.querySelectorAll("a")].find(
+		(link) => link.textContent === "View all recordings",
+	);
+	if (!allRecordings) throw new Error("View all recordings was not shown");
+	const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+
+	expect(leave()).toBe(true);
+	const click = new MouseEvent("click", { bubbles: true, cancelable: true });
+	await act(async () => allRecordings.dispatchEvent(click));
+	expect(confirm).toHaveBeenCalledTimes(1);
+	expect(click.defaultPrevented).toBe(true);
+
+	unpublished = false;
+	expect(leave()).toBe(false);
+});
+
 test("a Free editor lets its owner restore non-caption edits from a Pro browser draft", async () => {
 	const config = {
 		camera: { mirror: true },
@@ -378,10 +433,11 @@ test("a Free editor lets its owner restore non-caption edits from a Pro browser 
 	await act(async () => {
 		root.render(
 			createElement(StudioEditorClient, {
-				videoId: "video",
+				videoId: Video.VideoId.make("video"),
 				userId: "owner",
 				captionsEnabled: false,
 				savedAt: "newer",
+				isPublic: true,
 				preparingTitle: "Paired replay",
 				preparingDuration: 900,
 				preparingTracks: ["display", "camera"],
@@ -462,10 +518,11 @@ test("a Pro editor automatically restores a caption browser draft", async () => 
 	await act(async () => {
 		root.render(
 			createElement(StudioEditorClient, {
-				videoId: "video",
+				videoId: Video.VideoId.make("video"),
 				userId: "owner",
 				captionsEnabled: true,
 				savedAt: "newer",
+				isPublic: true,
 				preparingTitle: "Paired replay",
 				preparingDuration: 900,
 				preparingTracks: ["display", "camera"],

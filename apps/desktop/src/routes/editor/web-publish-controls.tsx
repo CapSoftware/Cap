@@ -1,8 +1,6 @@
-import { Popover as KPopover } from "@kobalte/core/popover";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { cx } from "cva";
 import {
-	createMemo,
 	createSignal,
 	Match,
 	onCleanup,
@@ -14,11 +12,7 @@ import toast from "solid-toast";
 import Tooltip from "~/components/Tooltip";
 import { trackEvent } from "~/utils/analytics";
 import IconLucideCheck from "~icons/lucide/check";
-import IconLucideCopy from "~icons/lucide/copy";
 import IconLucideDownload from "~icons/lucide/download";
-import IconLucideExternalLink from "~icons/lucide/external-link";
-import IconLucideGlobe from "~icons/lucide/globe";
-import IconLucideLink from "~icons/lucide/link";
 import { useEditorContext } from "./context";
 import { EditorButton } from "./ui";
 
@@ -53,7 +47,6 @@ const FARM_STALL_MS = 90_000;
  */
 export function WebPublishControls() {
 	const {
-		meta,
 		flushProjectConfig,
 		projectRevision,
 		exportState,
@@ -158,6 +151,19 @@ export function WebPublishControls() {
 	const upToDate = () =>
 		!hasUnsavedEdits() && !rendering() && status()?.state === "ready";
 
+	// The page asks before closing while this session has edits its share link
+	// doesn't show yet, or while this tab is still rendering them.
+	const unpublishedEdits = () =>
+		projectRevision() !== (savedRevision() ?? 0) || browserSave() !== null;
+	const editorWindow = window as Window & {
+		capWebEditorUnpublishedEdits?: () => boolean;
+	};
+	editorWindow.capWebEditorUnpublishedEdits = unpublishedEdits;
+	onCleanup(() => {
+		if (editorWindow.capWebEditorUnpublishedEdits === unpublishedEdits)
+			delete editorWindow.capWebEditorUnpublishedEdits;
+	});
+
 	const save = async () => {
 		if (starting() || rendering()) return;
 		setStarting(true);
@@ -205,14 +211,6 @@ export function WebPublishControls() {
 
 	return (
 		<div class="flex shrink-0 items-center gap-1.5">
-			<Show when={meta().sharing}>
-				{(sharing) => (
-					<ShareMenu
-						url={sharing().link}
-						hasUnsavedEdits={hasUnsavedEdits() || rendering()}
-					/>
-				)}
-			</Show>
 			<EditorButton
 				variant="text"
 				tooltipText="Render a video file to your computer"
@@ -284,92 +282,4 @@ function browserSaveLabel({ stage, progress }: BrowserSaveProgress) {
 	const percent = Math.floor(progress * 100);
 	if (stage === "uploading") return `Uploading ${percent}%`;
 	return percent > 0 ? `Rendering ${percent}%` : "Rendering";
-}
-
-function ShareMenu(props: { url: string; hasUnsavedEdits: boolean }) {
-	const [copied, setCopied] = createSignal(false);
-	let copiedTimer: ReturnType<typeof setTimeout> | undefined;
-	onCleanup(() => clearTimeout(copiedTimer));
-	const displayUrl = createMemo(() => {
-		const url = new URL(props.url);
-		return `${url.host}${url.pathname}`;
-	});
-
-	const copy = async () => {
-		try {
-			await navigator.clipboard.writeText(props.url);
-			setCopied(true);
-			clearTimeout(copiedTimer);
-			copiedTimer = setTimeout(() => setCopied(false), 1800);
-		} catch {
-			toast.error("Could not copy the link");
-		}
-	};
-
-	return (
-		<KPopover placement="bottom-end" gutter={8} flip fitViewport>
-			<EditorButton<typeof KPopover.Trigger>
-				as={KPopover.Trigger}
-				variant="text"
-				tooltipText="Share link"
-				leftIcon={<IconLucideLink class="size-4" />}
-			>
-				<span class="max-[1100px]:hidden">Share</span>
-			</EditorButton>
-			<KPopover.Portal>
-				<KPopover.Content
-					class={cx(
-						"z-60 flex w-[min(22rem,calc(100vw-1.5rem))] flex-col gap-3 rounded-2xl bg-ed-card p-3 shadow-ed-pop outline-hidden",
-						"origin-[var(--kb-popover-content-transform-origin)] data-expanded:animate-in data-expanded:fade-in data-expanded:zoom-in-95 data-closed:animate-out data-closed:fade-out data-closed:zoom-out-95",
-					)}
-				>
-					<div class="flex items-center gap-2.5 px-0.5">
-						<span class="flex size-8 shrink-0 items-center justify-center rounded-full bg-ed-accent/12 text-ed-accent">
-							<IconLucideGlobe class="size-4" />
-						</span>
-						<div class="flex min-w-0 flex-col">
-							<KPopover.Title class="text-[13px] font-medium text-ed-text-1">
-								Your share link
-							</KPopover.Title>
-							<KPopover.Description class="text-[12px] text-ed-text-2">
-								{props.hasUnsavedEdits
-									? "Viewers see your last save. Save to show these edits."
-									: "Viewers see this version."}
-							</KPopover.Description>
-						</div>
-					</div>
-					<div class="flex h-9 items-center gap-1 rounded-[10px] bg-ed-ctl pl-3 pr-1">
-						<span
-							data-selectable-text
-							class="min-w-0 flex-1 truncate text-[13px] text-ed-text-1"
-						>
-							{displayUrl()}
-						</span>
-						<button
-							type="button"
-							onClick={() => void copy()}
-							class="flex h-7 shrink-0 items-center gap-1.5 rounded-[7px] bg-ed-accent px-2.5 text-[12px] font-medium text-white outline-hidden transition-[filter] hover:brightness-[1.06]"
-						>
-							<Show
-								when={copied()}
-								fallback={<IconLucideCopy class="size-3.5" />}
-							>
-								<IconLucideCheck class="size-3.5" />
-							</Show>
-							{copied() ? "Copied" : "Copy link"}
-						</button>
-					</div>
-					<a
-						href={props.url}
-						target="_blank"
-						rel="noopener noreferrer"
-						class="flex items-center gap-1.5 self-start rounded-md px-0.5 text-[12px] font-medium text-ed-accent hover:underline"
-					>
-						Open share page
-						<IconLucideExternalLink class="size-3.5" />
-					</a>
-				</KPopover.Content>
-			</KPopover.Portal>
-		</KPopover>
-	);
 }

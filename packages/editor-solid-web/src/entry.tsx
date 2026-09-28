@@ -224,8 +224,10 @@ declare global {
 			mount: () => Promise<void>;
 			dispose: () => void;
 			unsavedProject: () => string | null;
+			unpublishedEdits: () => boolean;
 		};
 		capWebEditorUnsavedProjectSnapshot?: () => string | null;
+		capWebEditorUnpublishedEdits?: () => boolean;
 		capWebEditorPreparePresetBackground?: (config: unknown) => Promise<void>;
 	}
 }
@@ -320,6 +322,7 @@ if (prewarming) {
 			const serialized = window.capWebEditorUnsavedProjectSnapshot?.();
 			return serialized ? serializeEditorProjectSnapshot(serialized) : null;
 		},
+		unpublishedEdits: () => window.capWebEditorUnpublishedEdits?.() === true,
 	};
 	window.addEventListener("message", (event: MessageEvent<unknown>) => {
 		if (event.source !== window.parent) return;

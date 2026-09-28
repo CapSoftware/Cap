@@ -19,7 +19,9 @@ import {
 import { toast } from "sonner";
 import {
 	EditorShellBar,
+	EditorShellBrand,
 	type EditorTab,
+	EditorTabs,
 } from "@/components/editor-shell/editor-shell-bar";
 import { useAppPage } from "@/components/editor-shell/use-app-page";
 import {
@@ -76,7 +78,10 @@ export function EditorApp({ recordings }: { recordings: RecentRecording[] }) {
 		<div className="cap-rec fixed inset-0 z-[300] flex flex-col bg-[var(--rec-window)] text-[var(--rec-text-1)]">
 			{/* A full-screen app: the support launcher would sit over its controls. */}
 			<style>{".cap-messenger-launcher{display:none!important}"}</style>
-			<EditorShellBar tab={tab} onTabChange={setTab} />
+			<EditorShellBar
+				left={<EditorShellBrand />}
+				center={<EditorTabs tab={tab} onTabChange={setTab} />}
+			/>
 			<div className="relative flex min-h-0 flex-1 flex-col">
 				{tab === "record" ? (
 					<WebRecorderDialog embedded />

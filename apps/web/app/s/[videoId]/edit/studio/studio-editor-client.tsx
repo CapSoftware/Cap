@@ -1,10 +1,22 @@
 "use client";
 
+import type { Video } from "@cap/web-domain";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { EditorShellBar } from "@/components/editor-shell/editor-shell-bar";
+import {
+	type MouseEvent,
+	useCallback,
+	useEffect,
+	useRef,
+	useState,
+} from "react";
+import {
+	EditorShellBar,
+	EditorShellBrand,
+	EditorShellTab,
+} from "@/components/editor-shell/editor-shell-bar";
+import { ShareLinkTab } from "@/components/editor-shell/share-link-tab";
 import { useAppPage } from "@/components/editor-shell/use-app-page";
 import type { WebEditorCapImportProgress } from "@/lib/editor-cap-import-client";
 import {
@@ -33,12 +45,31 @@ const UpgradeModal = dynamic(
 	{ ssr: false },
 );
 
+type SolidEditorWindow = Window & {
+	capSolidEditor?: {
+		unsavedProject?: () => string | null;
+		unpublishedEdits?: () => boolean;
+	};
+};
+
+const solidEditor = (iframe: HTMLIFrameElement | null) =>
+	(iframe?.contentWindow as SolidEditorWindow | null)?.capSolidEditor;
+
+const hasUnpublishedEdits = (iframe: HTMLIFrameElement | null) => {
+	try {
+		return solidEditor(iframe)?.unpublishedEdits?.() === true;
+	} catch {
+		return false;
+	}
+};
+
 export function StudioEditorClient(props: {
-	videoId: string;
+	videoId: Video.VideoId;
 	userId: string;
 	captionsEnabled: boolean;
 	savedAt: string | null;
 	justRecorded?: boolean;
+	isPublic: boolean;
 	preparingTitle: string;
 	preparingDuration: number;
 	preparingTracks: Array<"display" | "camera">;
@@ -49,6 +80,7 @@ export function StudioEditorClient(props: {
 		captionsEnabled,
 		savedAt,
 		justRecorded = false,
+		isPublic,
 		preparingTitle,
 		preparingDuration,
 		preparingTracks,
@@ -66,7 +98,6 @@ export function StudioEditorClient(props: {
 	>(null);
 	useAppPage();
 	const [recordClipOpen, setRecordClipOpen] = useState(false);
-	const [clipRecorderBusy, setClipRecorderBusy] = useState(false);
 	const [entryFrame, setEntryFrame] = useState<string | null | undefined>();
 	const [frameLoaded, setFrameLoaded] = useState(false);
 	const [editorPainted, setEditorPainted] = useState(false);
@@ -120,12 +151,7 @@ export function StudioEditorClient(props: {
 		const captureDraft = () => {
 			let serialized: string | null;
 			try {
-				const editorWindow = iframeRef.current?.contentWindow as
-					| (Window & {
-							capSolidEditor?: { unsavedProject?: () => string | null };
-					  })
-					| null;
-				serialized = editorWindow?.capSolidEditor?.unsavedProject?.() ?? null;
+				serialized = solidEditor(iframeRef.current)?.unsavedProject?.() ?? null;
 			} catch {
 				return false;
 			}
@@ -150,7 +176,7 @@ export function StudioEditorClient(props: {
 		};
 		captureDraftRef.current = captureDraft;
 		const beforeUnload = (event: BeforeUnloadEvent) => {
-			if (captureDraft()) return;
+			if (captureDraft() && !hasUnpublishedEdits(iframeRef.current)) return;
 			event.preventDefault();
 			event.returnValue = "";
 		};
@@ -512,6 +538,16 @@ export function StudioEditorClient(props: {
 		window.history.replaceState(window.history.state, "", url);
 	}, [justRecorded]);
 
+	const confirmLeave = (event: MouseEvent<HTMLAnchorElement>) => {
+		if (
+			hasUnpublishedEdits(iframeRef.current) &&
+			!window.confirm(
+				"Leave without saving? Your share link won't show your latest edits.",
+			)
+		)
+			event.preventDefault();
+	};
+
 	if (error) {
 		return (
 			<div className="relative h-screen w-screen bg-[#f1f1f3]">
@@ -570,24 +606,31 @@ export function StudioEditorClient(props: {
 	return (
 		<div className="flex h-screen w-screen flex-col bg-[#f1f1f3] dark:bg-[#131315]">
 			<EditorShellBar
-				tab={recordClipOpen ? "record" : "editor"}
-				onTabChange={(next) => {
-					if (clipRecorderBusy) return;
-					if (next === "editor") {
-						setRecordClipOpen(false);
-						bridgeRef.current?.notifyClipRecorderClosed();
-					} else if (bridgeRef.current) {
-						bridgeRef.current.requestClipRecorder();
-					} else {
-						setClipRecorderContext(null);
-						setRecordClipOpen(true);
-					}
-				}}
-				recordLabel="Record a clip"
-				tabsDisabled={clipRecorderBusy}
+				left={
+					<EditorShellBrand
+						title="Back to shareable link"
+						backHref={`/s/${videoId}`}
+						onClick={confirmLeave}
+					/>
+				}
+				center={
+					<>
+						<ShareLinkTab
+							videoId={videoId}
+							capName={preparingTitle}
+							initialPublic={isPublic}
+							onUpgradeRequest={() => setUpgradeOpen(true)}
+						/>
+						<EditorShellTab active>Editor</EditorShellTab>
+					</>
+				}
 				right={
-					<Link href="/dashboard/editor" className="rec-btn is-ghost">
-						All projects
+					<Link
+						href="/dashboard/editor"
+						onClick={confirmLeave}
+						className="rec-btn is-ghost"
+					>
+						View all recordings
 					</Link>
 				}
 			/>
@@ -606,7 +649,6 @@ export function StudioEditorClient(props: {
 				{recordClipOpen && (
 					<EditorClipRecorder
 						context={clipRecorderContext}
-						onBusyChange={setClipRecorderBusy}
 						onCaptured={async (clip: EditorClipCapture) => {
 							const bridge = bridgeRef.current;
 							if (!bridge || closedRef.current)

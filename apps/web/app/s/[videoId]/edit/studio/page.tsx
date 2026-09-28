@@ -28,6 +28,7 @@ export default async function StudioEditorPage(props: {
 			id: videos.id,
 			ownerId: videos.ownerId,
 			name: videos.name,
+			isPublic: videos.public,
 			duration: videos.duration,
 			isScreenshot: videos.isScreenshot,
 			source: videos.source,
@@ -108,6 +109,7 @@ export default async function StudioEditorPage(props: {
 			captionsEnabled={userIsPro(user)}
 			savedAt={video.metadata?.webEditorProject?.savedAt ?? null}
 			justRecorded={justRecorded}
+			isPublic={video.isPublic}
 			preparingTitle={video.name}
 			preparingDuration={duration}
 			preparingTracks={
