@@ -24,7 +24,7 @@ import PresetsDropdown from "./PresetsDropdown";
 import { createRecordingTitleSave } from "./recording-title-save";
 import ShareButton from "./ShareButton";
 import { EditorButton } from "./ui";
-import WebSaveButton from "./WebSaveButton";
+import { WebPublishControls } from "./WebPublishControls";
 
 export type ResolutionOption = {
 	label: string;
@@ -219,22 +219,24 @@ export function Header(props: {
 				<div class="mx-1.5 w-px h-4 shrink-0 bg-ed-line-strong" />
 				<OrganizationDropdown />
 				<PresetsDropdown />
-				<EditorButton
-					title="Clips"
-					aria-label="Clips"
-					class={cx(isClipsOpen() && "bg-ed-ctl-hover text-ed-text-1")}
-					leftIcon={<IconCapClapperboard />}
-					onClick={() => {
-						clearTimelineSelection();
-						if (isClipsOpen()) {
-							setDialog((d) => ({ ...d, open: false }));
-						} else {
-							setDialog({ type: "clips", open: true });
-						}
-					}}
-				>
-					<span class="max-[1200px]:hidden">Clips</span>
-				</EditorButton>
+				<Show when={!isWebEditor}>
+					<EditorButton
+						title="Clips"
+						aria-label="Clips"
+						class={cx(isClipsOpen() && "bg-ed-ctl-hover text-ed-text-1")}
+						leftIcon={<IconCapClapperboard />}
+						onClick={() => {
+							clearTimelineSelection();
+							if (isClipsOpen()) {
+								setDialog((d) => ({ ...d, open: false }));
+							} else {
+								setDialog({ type: "clips", open: true });
+							}
+						}}
+					>
+						<span class="max-[1200px]:hidden">Clips</span>
+					</EditorButton>
+				</Show>
 				<Show when={hasTranscript()}>
 					<EditorButton
 						title={isTranscriptOpen() ? "Back to editor" : "Captions"}
@@ -259,31 +261,30 @@ export function Header(props: {
 						</span>
 					</EditorButton>
 				</Show>
-				<ShareButton />
-				<Show when={isWebEditor}>
-					<WebSaveButton shareUrl={meta().sharing?.link} />
+				<Show when={!isWebEditor} fallback={<WebPublishControls />}>
+					<ShareButton />
+					<button
+						type="button"
+						class={cx(
+							"flex shrink-0 gap-[7px] justify-center items-center pl-3 pr-3.5 ml-1.5 h-[30px] text-[13px] font-medium text-white rounded-lg outline-hidden",
+							"bg-linear-to-b from-ed-accent-2 to-ed-accent",
+							"shadow-[inset_0_1px_0_rgba(255,255,255,0.22),0_1px_2px_rgba(0,60,160,0.25)]",
+							"transition-[filter] duration-150 ease-out",
+							"hover:brightness-[1.06] active:brightness-[0.96]",
+						)}
+						onClick={() => {
+							clearTimelineSelection();
+
+							trackEvent("export_button_clicked");
+							if (exportState.type === "done") setExportState({ type: "idle" });
+
+							setDialog({ type: "export", open: true });
+						}}
+					>
+						<UploadIcon class="size-4" />
+						Export
+					</button>
 				</Show>
-				<button
-					type="button"
-					class={cx(
-						"flex shrink-0 gap-[7px] justify-center items-center pl-3 pr-3.5 ml-1.5 h-[30px] text-[13px] font-medium text-white rounded-lg outline-hidden",
-						"bg-linear-to-b from-ed-accent-2 to-ed-accent",
-						"shadow-[inset_0_1px_0_rgba(255,255,255,0.22),0_1px_2px_rgba(0,60,160,0.25)]",
-						"transition-[filter] duration-150 ease-out",
-						"hover:brightness-[1.06] active:brightness-[0.96]",
-					)}
-					onClick={() => {
-						clearTimelineSelection();
-
-						trackEvent("export_button_clicked");
-						if (exportState.type === "done") setExportState({ type: "idle" });
-
-						setDialog({ type: "export", open: true });
-					}}
-				>
-					<UploadIcon class="size-4" />
-					Export
-				</button>
 			</div>
 			{!isWebEditor && ostype() === "windows" && (
 				<CaptionControlsWindows11 class="shrink-0 max-[900px]:absolute max-[900px]:right-0 max-[900px]:top-0 max-[900px]:h-9" />

@@ -44,6 +44,7 @@ import { Toggle } from "~/components/Toggle";
 import { composeEventHandlers } from "~/utils/composeEventHandlers";
 import { createTauriEventListener } from "~/utils/createEventListener";
 import { commands, events } from "~/utils/tauri";
+import { ClipStrip } from "./ClipStrip";
 import { ConfigSidebar } from "./ConfigSidebar";
 import {
 	EditorContextProvider,
@@ -1057,6 +1058,11 @@ function Inner(props: {
 								</div>
 							</Show>
 						</div>
+						<Show when={isWebEditor && editorReady()}>
+							<div class="flex-none px-2">
+								<ClipStrip />
+							</div>
+						</Show>
 						<div
 							class="relative flex-none px-2 min-h-0"
 							style={{ height: `${timelineHeight()}px` }}

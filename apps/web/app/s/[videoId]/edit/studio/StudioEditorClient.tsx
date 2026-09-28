@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { EditorShellBar } from "@/components/editor-shell/EditorShellBar";
+import { useAppPage } from "@/components/editor-shell/use-app-page";
 import type { WebEditorCapImportProgress } from "@/lib/editor-cap-import-client";
 import {
 	hasEditorCaptionContent,
@@ -19,6 +20,7 @@ import {
 } from "@/lib/editor-local-draft";
 import type { WebEditorVideoImportProgress } from "@/lib/editor-video-import-client";
 import { SharedLinkCard } from "../SharedLinkCard";
+import type { ClipRecorderContext } from "./clip-recorder-context";
 import { EditorClipRecorder } from "./EditorClipRecorder";
 import { EditorHostBridge } from "./editor-host";
 
@@ -59,7 +61,11 @@ export function StudioEditorClient(props: {
 	const [videoImport, setVideoImport] = useState<
 		WebEditorVideoImportProgress | WebEditorCapImportProgress | null
 	>(null);
+	useAppPage();
 	const [recordClipOpen, setRecordClipOpen] = useState(false);
+	const [clipRecorderBusy, setClipRecorderBusy] = useState(false);
+	const [clipRecorderContext, setClipRecorderContext] =
+		useState<ClipRecorderContext | null>(null);
 	const [upgradeOpen, setUpgradeOpen] = useState(false);
 	const [sharedNoticeOpen, setSharedNoticeOpen] = useState(justRecorded);
 	const sessionRef = useRef<string | null>(null);
@@ -436,7 +442,10 @@ export function StudioEditorClient(props: {
 					setError(cause.message);
 				},
 				(progress) => setVideoImport(progress),
-				() => setRecordClipOpen(true),
+				(context) => {
+					setClipRecorderContext(context);
+					setRecordClipOpen(true);
+				},
 				restartAfterImport,
 				captionsEnabled,
 				() => setUpgradeOpen(true),
@@ -544,10 +553,19 @@ export function StudioEditorClient(props: {
 			<EditorShellBar
 				tab={recordClipOpen ? "record" : "editor"}
 				onTabChange={(next) => {
-					if (next === "record") setRecordClipOpen(true);
+					if (clipRecorderBusy) return;
+					if (next === "editor") {
+						setRecordClipOpen(false);
+						bridgeRef.current?.notifyClipRecorderClosed();
+					} else if (bridgeRef.current) {
+						bridgeRef.current.requestClipRecorder();
+					} else {
+						setClipRecorderContext(null);
+						setRecordClipOpen(true);
+					}
 				}}
 				recordLabel="Record a clip"
-				tabsDisabled={recordClipOpen}
+				tabsDisabled={clipRecorderBusy}
 				right={
 					<Link href="/dashboard/editor" className="rec-btn is-ghost">
 						All projects
@@ -564,6 +582,8 @@ export function StudioEditorClient(props: {
 				/>
 				{recordClipOpen && (
 					<EditorClipRecorder
+						context={clipRecorderContext}
+						onBusyChange={setClipRecorderBusy}
 						onCaptured={async (clip: EditorClipCapture) => {
 							const bridge = bridgeRef.current;
 							if (!bridge || closedRef.current)
@@ -576,6 +596,7 @@ export function StudioEditorClient(props: {
 						}}
 						onClose={(imported) => {
 							setRecordClipOpen(false);
+							if (!imported) bridgeRef.current?.notifyClipRecorderClosed();
 							if (imported) {
 								void restartAfterImport().catch((cause) => {
 									captureDraftRef.current();

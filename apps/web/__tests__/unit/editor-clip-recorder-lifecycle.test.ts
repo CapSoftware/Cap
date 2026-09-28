@@ -15,6 +15,21 @@ vi.mock("@/lib/editor-clip-recorder", () => ({
 	startEditorClipCapture: capture.start,
 }));
 
+vi.mock("@cap/recorder-core/capture-streams", () => ({
+	acquireDisplayStream: vi.fn(async () => {
+		const track = {
+			addEventListener: vi.fn(),
+			getSettings: () => ({ displaySurface: "window" }),
+			stop: vi.fn(),
+		};
+		return {
+			getTracks: () => [track],
+			getVideoTracks: () => [track],
+			getAudioTracks: () => [],
+		};
+	}),
+}));
+
 import { EditorClipRecorder } from "@/app/s/[videoId]/edit/studio/EditorClipRecorder";
 
 let root: Root | null;
@@ -54,6 +69,7 @@ async function renderRecorder(onCaptured = vi.fn(async () => undefined)) {
 	await act(async () => {
 		root?.render(
 			createElement(EditorClipRecorder, {
+				context: null,
 				onCaptured,
 				onClose: vi.fn(),
 			}),

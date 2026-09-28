@@ -1,0 +1,18 @@
+/* The editor behaves like an app, not a page: no stray text selection while
+   dragging, and no rubber-banding or swipe-to-go-back from the timeline. */
+html,
+body {
+	overscroll-behavior: none;
+	-webkit-user-select: none;
+	user-select: none;
+	-webkit-touch-callout: none;
+}
+
+input,
+textarea,
+select,
+[contenteditable]:not([contenteditable="false"]),
+[data-selectable-text] {
+	-webkit-user-select: text;
+	user-select: text;
+}

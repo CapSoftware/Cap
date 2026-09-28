@@ -131,6 +131,8 @@ async function waveform(url: string, signal: AbortSignal) {
 	}
 }
 
+const THUMBNAIL_WIDTH = 320;
+
 export class BrowserEditorCommands {
 	static supports(name: string) {
 		return [
@@ -145,6 +147,7 @@ export class BrowserEditorCommands {
 			"getVideoMetadata",
 			"getDefaultProjectConfig",
 			"getDisplayFrameForCropping",
+			"getClipThumbnail",
 			"loadCaptions",
 			"setWindowTransparent",
 			"tauri:get_recording_recovery_success",
@@ -394,8 +397,42 @@ export class BrowserEditorCommands {
 		) {
 			throw new Error("Editor crop source time is unavailable");
 		}
+		const image = await this.displayFrame(sources, segmentIndex, sourceTime);
+		return new Uint8Array(await image.arrayBuffer());
+	}
+
+	private async clipThumbnail(recordingSegment: number, sourceTime: number) {
+		if (
+			!Number.isSafeInteger(recordingSegment) ||
+			recordingSegment < 0 ||
+			!Number.isFinite(sourceTime) ||
+			sourceTime < 0
+		) {
+			throw new Error("Clip thumbnail request is invalid");
+		}
+		const sources = await this.catalog.snapshot(this.controller.signal);
+		const image = await this.displayFrame(
+			sources,
+			recordingSegment,
+			sourceTime,
+			THUMBNAIL_WIDTH,
+		);
+		return await new Promise<string>((resolve, reject) => {
+			const reader = new FileReader();
+			reader.onload = () => resolve(String(reader.result));
+			reader.onerror = () => reject(new Error("Clip thumbnail could not load"));
+			reader.readAsDataURL(image);
+		});
+	}
+
+	private async displayFrame(
+		sources: BrowserEditorSources,
+		segmentIndex: number,
+		sourceTime: number,
+		maxWidth?: number,
+	) {
 		const display = sources.segments[segmentIndex]?.display;
-		if (!display) throw new Error("Editor crop display source is unavailable");
+		if (!display) throw new Error("Editor display source is unavailable");
 		const pool = new BrowserVideoPool(async (index, track) =>
 			index === segmentIndex && track === "display" ? display : null,
 		);
@@ -410,19 +447,20 @@ export class BrowserEditorCommands {
 				this.controller.signal,
 			);
 			if (!video || video.videoWidth < 1 || video.videoHeight < 1) {
-				throw new Error("Editor crop display frame is unavailable");
+				throw new Error("Editor display frame is unavailable");
 			}
+			const scale = maxWidth ? Math.min(1, maxWidth / video.videoWidth) : 1;
 			const canvas = document.createElement("canvas");
-			canvas.width = video.videoWidth;
-			canvas.height = video.videoHeight;
+			canvas.width = Math.round(video.videoWidth * scale);
+			canvas.height = Math.round(video.videoHeight * scale);
 			const context = canvas.getContext("2d");
-			if (!context) throw new Error("Editor crop canvas is unavailable");
-			context.drawImage(video, 0, 0);
+			if (!context) throw new Error("Editor frame canvas is unavailable");
+			context.drawImage(video, 0, 0, canvas.width, canvas.height);
 			const image = await new Promise<Blob | null>((resolve) =>
 				canvas.toBlob(resolve, "image/jpeg", 0.86),
 			);
-			if (!image) throw new Error("Editor crop image could not encode");
-			return new Uint8Array(await image.arrayBuffer());
+			if (!image) throw new Error("Editor frame image could not encode");
+			return image;
 		} finally {
 			pool.dispose();
 		}
@@ -431,6 +469,9 @@ export class BrowserEditorCommands {
 	async invoke(name: string, args: unknown[]): Promise<unknown> {
 		if (name === "getDisplayFrameForCropping") {
 			return this.displayFrameForCropping(Number(args[0]));
+		}
+		if (name === "getClipThumbnail") {
+			return this.clipThumbnail(Number(args[0]), Number(args[1]));
 		}
 		if (name === "animatedGradientCatalog") {
 			return JSON.parse(

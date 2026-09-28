@@ -38,6 +38,7 @@ import {
 	type CameraPreviewWindowHandle,
 } from "./CameraPreviewWindow";
 import { CameraBubble, useCameraLayout } from "./camera-layout";
+import { capturesThisTab, identifyThisTab } from "./capture-handle";
 import { HowRecordingWorks } from "./how-recording-works";
 import { InProgressRecordingBar } from "./InProgressRecordingBar";
 import {
@@ -104,34 +105,6 @@ const LIVE_PREVIEW_KEY = "cap-web-recorder-live-preview";
 type SharedScreen = {
 	stream: MediaStream;
 	surface: Exclude<RecordingMode, "camera">;
-};
-
-// Chrome's Capture Handle lets a capture of this tab identify itself, so
-// sharing some other tab can still preview normally.
-const CAPTURE_HANDLE =
-	typeof crypto !== "undefined" && "randomUUID" in crypto
-		? `cap-recorder-${crypto.randomUUID()}`
-		: `cap-recorder-${Date.now()}`;
-
-type CaptureHandleTrack = MediaStreamTrack & {
-	getCaptureHandle?: () => { handle?: string } | null;
-};
-
-// Showing a capture of the whole screen, or of this very tab, inside this tab
-// repeats the preview inside itself forever.
-const capturesThisTab = (stream: MediaStream | null) => {
-	const track = stream?.getVideoTracks()[0] as CaptureHandleTrack | undefined;
-	if (!track) return false;
-	const surface = (
-		track.getSettings() as MediaTrackSettings & { displaySurface?: string }
-	).displaySurface;
-	if (surface === "monitor") return true;
-	if (surface !== "browser") return false;
-	try {
-		return track.getCaptureHandle?.()?.handle === CAPTURE_HANDLE;
-	} catch {
-		return false;
-	}
 };
 
 const joinWords = (words: string[]) =>
@@ -722,25 +695,8 @@ export const WebRecorderDialog = ({
 				stage === "recording"),
 	);
 	const [howOpen, setHowOpen] = useState(false);
-	// Watching your own screen while recording it is distracting (and shows up
-	// in the capture), so the preview starts hidden once recording begins.
 	useEffect(() => {
-		if (!open) return;
-		const mediaDevices = navigator.mediaDevices as MediaDevices & {
-			setCaptureHandleConfig?: (config: {
-				handle: string;
-				exposeOrigin?: boolean;
-				permittedOrigins: string[];
-			}) => void;
-		};
-		try {
-			mediaDevices.setCaptureHandleConfig?.({
-				handle: CAPTURE_HANDLE,
-				permittedOrigins: [window.location.origin],
-			});
-		} catch {
-			/* older browsers: tab captures just aren't recognised */
-		}
+		if (open) identifyThisTab();
 	}, [open]);
 	const [cameraLayout, setCameraLayout] = useCameraLayout();
 

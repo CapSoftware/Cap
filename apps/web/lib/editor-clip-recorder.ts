@@ -14,6 +14,8 @@ export type EditorClipCapture = {
 };
 
 export type EditorClipCaptureOptions = {
+	/** A screen already shared from the recorder, used instead of asking again. */
+	displayStream?: MediaStream | null;
 	cameraEnabled: boolean;
 	micEnabled: boolean;
 	systemAudioEnabled: boolean;
@@ -98,9 +100,11 @@ export async function startEditorClipCapture(
 	let activeCameraRecorder: MediaRecorder | null = null;
 	try {
 		ensureActive();
-		displayStream = await acquireDisplayStream({
-			systemAudioEnabled: options.systemAudioEnabled,
-		});
+		displayStream =
+			options.displayStream ??
+			(await acquireDisplayStream({
+				systemAudioEnabled: options.systemAudioEnabled,
+			}));
 		ensureActive();
 		const displayTrack = displayStream.getVideoTracks()[0];
 		if (!displayTrack) throw new Error("Screen picker returned no video track");

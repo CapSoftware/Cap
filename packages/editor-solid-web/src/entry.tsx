@@ -3,6 +3,7 @@ import "@fontsource/geist-sans/latin-400.css";
 import "@fontsource/geist-sans/latin-500.css";
 import "@fontsource/geist-sans/latin-700.css";
 import "../../../apps/desktop/src/styles/theme.css";
+import "./web-app.css";
 
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
 import { createSignal, onCleanup } from "solid-js";
@@ -272,6 +273,30 @@ function prewarm() {
 	);
 }
 
+/// Pinch and ctrl+scroll zoom the timeline or the preview, never the page.
+function guardPageZoom() {
+	window.addEventListener(
+		"wheel",
+		(event) => {
+			if (event.ctrlKey) event.preventDefault();
+		},
+		{ passive: false },
+	);
+	for (const type of ["gesturestart", "gesturechange"]) {
+		window.addEventListener(type, (event) => event.preventDefault(), {
+			passive: false,
+		});
+	}
+	window.addEventListener("keydown", (event) => {
+		if (
+			(event.metaKey || event.ctrlKey) &&
+			["=", "+", "-", "0"].includes(event.key)
+		) {
+			event.preventDefault();
+		}
+	});
+}
+
 const prewarming =
 	window.parent !== window &&
 	new URLSearchParams(window.location.search).has("prewarm");
@@ -281,6 +306,7 @@ const skeletonRoot = container ? layer(1) : null;
 if (prewarming) {
 	prewarm();
 } else if (container && root && skeletonRoot) {
+	guardPageZoom();
 	container.style.cssText =
 		"position:relative;width:100vw;height:100vh;overflow:hidden";
 	container.append(root, skeletonRoot);

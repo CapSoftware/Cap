@@ -1372,6 +1372,8 @@ export function Timeline(props: {
 					setEditorState("previewTime", null);
 				}}
 				onWheel={(e) => {
+					// The timeline owns the gesture: no page zoom or swipe-back.
+					e.preventDefault();
 					if (e.ctrlKey) {
 						const zoomDelta = (e.deltaY * Math.sqrt(transform().zoom)) / 30;
 						const origin = editorState.previewTime ?? editorState.playbackTime;

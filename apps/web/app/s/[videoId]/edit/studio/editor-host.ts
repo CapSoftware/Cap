@@ -22,6 +22,10 @@ import {
 	type WebEditorImportedVideo,
 	type WebEditorVideoImportProgress,
 } from "@/lib/editor-video-import-client";
+import {
+	type ClipRecorderContext,
+	parseClipRecorderContext,
+} from "./clip-recorder-context";
 
 type SocketCredential = { url: string; ticket: string };
 
@@ -438,7 +442,9 @@ export class EditorHostBridge {
 				| WebEditorCapImportProgress
 				| null,
 		) => void,
-		private readonly onOpenClipRecorder?: () => void,
+		private readonly onOpenClipRecorder?: (
+			context: ClipRecorderContext | null,
+		) => void,
 		private readonly onImportNeedsReload?: () => Promise<void>,
 		private captionsEnabled = false,
 		private readonly onUpgrade?: () => void,
@@ -1584,6 +1590,18 @@ export class EditorHostBridge {
 		}
 	}
 
+	requestClipRecorder() {
+		this.postEvent("webEditorRequestClipRecorder");
+	}
+
+	notifyClipRecorderClosed() {
+		this.postEvent("webEditorClipRecorderClosed");
+	}
+
+	private postEvent(name: string) {
+		this.port?.postMessage({ kind: "event", name, payload: null });
+	}
+
 	async addRecordedClip(
 		displayFile: File,
 		cameraFile: File | null,
@@ -2326,7 +2344,24 @@ export class EditorHostBridge {
 				});
 				return;
 			}
-			this.onOpenClipRecorder();
+			this.onOpenClipRecorder(null);
+			this.port.postMessage({ kind: "result", id: message.id, value: null });
+			return;
+		}
+		if (
+			message.kind === "invoke" &&
+			message.name === "tauri:webEditorOpenClipRecorder"
+		) {
+			const context = parseClipRecorderContext(message.args[0]);
+			if (!context || !this.onOpenClipRecorder) {
+				this.port.postMessage({
+					kind: "error",
+					id: message.id,
+					error: "Editor recorder is unavailable",
+				});
+				return;
+			}
+			this.onOpenClipRecorder(context);
 			this.port.postMessage({ kind: "result", id: message.id, value: null });
 			return;
 		}
