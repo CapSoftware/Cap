@@ -31,7 +31,8 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 "#;
 
 /// The preview draws into a page canvas; exports draw into an `OffscreenCanvas`
-/// inside a worker and hand each frame to the encoder.
+/// inside a worker and hand each frame to the encoder. Both use WebGPU when the
+/// browser has an adapter and WebGL2 otherwise.
 #[derive(Clone)]
 pub(crate) enum CanvasTarget {
     Html(HtmlCanvasElement),
@@ -89,10 +90,7 @@ pub(crate) async fn create_device(
             }
         }
     }
-    match canvas {
-        CanvasTarget::Html(canvas) => create_webgl(canvas, width, height).await,
-        CanvasTarget::Offscreen(_) => Err(js_error("Offscreen rendering requires WebGPU")),
-    }
+    create_webgl(canvas, width, height).await
 }
 
 async fn create_webgpu(
@@ -149,7 +147,7 @@ async fn create_webgpu(
 }
 
 async fn create_webgl(
-    canvas: &HtmlCanvasElement,
+    canvas: &CanvasTarget,
     width: u32,
     height: u32,
 ) -> Result<
@@ -172,8 +170,15 @@ async fn create_webgl(
         &JsValue::from_str("preserveDrawingBuffer"),
         &JsValue::TRUE,
     )?;
-    let context: WebGl2RenderingContext = canvas
-        .get_context_with_context_options("webgl2", &context_options)?
+    let context = match canvas {
+        CanvasTarget::Html(canvas) => {
+            canvas.get_context_with_context_options("webgl2", &context_options)?
+        }
+        CanvasTarget::Offscreen(canvas) => {
+            canvas.get_context_with_context_options("webgl2", &context_options)?
+        }
+    };
+    let context: WebGl2RenderingContext = context
         .ok_or_else(|| js_error("Browser WebGL2 is unavailable"))?
         .dyn_into()
         .map_err(|_| js_error("Browser WebGL2 context is invalid"))?;
@@ -186,7 +191,7 @@ async fn create_webgl(
     })
     .await;
     let surface = instance
-        .create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone()))
+        .create_surface(canvas.surface_target())
         .map_err(js_error)?;
     let adapter = instance
         .request_adapter(&wgpu::RequestAdapterOptions {

@@ -690,14 +690,31 @@ export function ExportPage() {
 		}
 	});
 
-	createEffect(() => {
-		if (exportState.type !== "idle") {
-			estimateGeneration += 1;
-			pendingEstimate = null;
-			setEstimateLoading(false);
-			void commands.cancelExportEstimates().catch(console.warn);
-		}
-	});
+	createEffect(
+		on(
+			() => exportState.type,
+			(type, previous) => {
+				if (type !== "idle") {
+					estimateGeneration += 1;
+					pendingEstimate = null;
+					setEstimateLoading(false);
+					void commands.cancelExportEstimates().catch(console.warn);
+					return;
+				}
+				// An export that started before its estimate landed cancelled it.
+				const request = latestPreviewRequest;
+				if (
+					previous &&
+					!renderEstimate() &&
+					request &&
+					isPreviewCurrent(request)
+				) {
+					setEstimateLoading(true);
+					void fetchEstimate(request);
+				}
+			},
+		),
+	);
 
 	let cancelCurrentExport: (() => void) | null = null;
 
@@ -808,10 +825,22 @@ export function ExportPage() {
 		},
 	}));
 
+	// The web editor shows why a download failed next to the button rather
+	// than in a browser alert.
+	const [saveError, setSaveError] = createSignal<string | null>(null);
+	createEffect(
+		on(
+			() => JSON.stringify(currentExportSettings()),
+			() => setSaveError(null),
+			{ defer: true },
+		),
+	);
+
 	const save = createMutation(() => ({
 		mutationFn: async () => {
 			setIsCancelled(false);
 			if (exportState.type !== "idle") return;
+			setSaveError(null);
 			const extension = exportFileExtension();
 			const customBpp =
 				advancedMode() && isCustomBpp() ? compressionBpp() : null;
@@ -856,11 +885,12 @@ export function ExportPage() {
 				setExportState({ type: "idle" });
 				return;
 			}
-			commands.globalMessageDialog(
+			const message =
 				error instanceof Error
 					? error.message
-					: `Failed to export recording: ${error}`,
-			);
+					: `Failed to export recording: ${error}`;
+			if (isWebEditor) setSaveError(message);
+			else commands.globalMessageDialog(message);
 			setExportState({ type: "idle" });
 		},
 		onSuccess() {
@@ -1555,6 +1585,16 @@ export function ExportPage() {
 								)}
 							</button>
 						)}
+						<Show when={settings.exportTo === "file" && saveError()}>
+							{(message) => (
+								<p
+									role="alert"
+									class="mt-2 text-[12px] leading-snug text-red-11"
+								>
+									{message()}
+								</p>
+							)}
+						</Show>
 						<Show when={canExportInBackground()}>
 							<button
 								type="button"

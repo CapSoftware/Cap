@@ -9,6 +9,7 @@ import {
 	loadAudioLevels,
 } from "./browser-audio-levels";
 import { renderBrowserExportAudio } from "./browser-export-audio";
+import { EXPORT_AUDIO_BITRATE, exportBitrate } from "./browser-export-estimate";
 import type { BrowserStudioSetup } from "./browser-local-canvas";
 
 export type BrowserExportTrackSource = {
@@ -50,7 +51,13 @@ export type BrowserExportPreviewRequest = {
 
 export type BrowserExportMessage =
 	| { kind: "progress"; renderedCount: number; totalFrames: number }
-	| { kind: "done"; data: ArrayBuffer; mimeType: string; stats: ExportStats }
+	| {
+			kind: "done";
+			data: Blob;
+			storedFile: string | null;
+			mimeType: string;
+			stats: ExportStats;
+	  }
 	| {
 			kind: "preview";
 			id: number;
@@ -72,6 +79,7 @@ export type ExportStats = {
 	totalMs: number;
 	videoCodec: string;
 	audioCodec: string | null;
+	backend: string;
 };
 
 type RendererModule =
@@ -96,18 +104,6 @@ let canceled = false;
 
 function checkCanceled() {
 	if (canceled) throw new Error("Export cancelled");
-}
-
-/// Native H.264 export bitrate: pixels per second (frame rates above 30 count
-/// at 60%) times bits per pixel.
-export function exportBitrate(
-	width: number,
-	height: number,
-	fps: number,
-	bitsPerPixel: number,
-) {
-	const frameRate = Math.max(fps - 30, 0) * 0.6 + 30;
-	return Math.round(width * height * frameRate * bitsPerPixel);
 }
 
 type TrackCursor = {
@@ -272,6 +268,14 @@ let fontsRegistered = false;
 let inputRegistered: string | null = null;
 let cachedContext: RenderContext | null = null;
 
+function rendererModule() {
+	modulePromise ??= loadModule().catch((cause: unknown) => {
+		modulePromise = null;
+		throw cause;
+	});
+	return modulePromise;
+}
+
 async function prepareAssets(module: RendererModule, job: BrowserExportJob) {
 	await Promise.all([
 		...Object.entries(job.assetUrls).map(async ([path, url]) => {
@@ -324,8 +328,7 @@ async function renderContext(job: BrowserExportJob): Promise<RenderContext> {
 	if (cachedContext?.key === key) return cachedContext;
 	cachedContext?.dispose();
 	cachedContext = null;
-	if (!modulePromise) modulePromise = loadModule();
-	const module = await modulePromise;
+	const module = await rendererModule();
 	await prepareAssets(module, job);
 	const timelineConfig = job.config.timeline ?? {
 		segments: job.sourceDurations.map((duration, recordingSegment) => ({
@@ -566,6 +569,68 @@ async function runPreview(request: BrowserExportPreviewRequest) {
 	);
 }
 
+const EXPORT_FILE_PREFIX = "cap-export-";
+
+type ExportDirectory = FileSystemDirectoryHandle & {
+	keys(): AsyncIterable<string>;
+};
+
+type SyncAccessHandle = {
+	write(data: BufferSource, options: { at: number }): number;
+	flush(): void;
+	close(): void;
+};
+
+/// Streams the MP4 into the origin private file system, so a long export
+/// never has to fit in memory. Earlier exports are removed except the newest,
+/// which a download or upload may still be reading. Returns null when there
+/// is no room, and the export is built in memory instead.
+async function openExportFile(maxBytes: number) {
+	try {
+		const root = (await navigator.storage.getDirectory()) as ExportDirectory;
+		const stale: string[] = [];
+		for await (const name of root.keys())
+			if (name.startsWith(EXPORT_FILE_PREFIX)) stale.push(name);
+		stale.sort();
+		stale.pop();
+		await Promise.all(
+			stale.map((name) => root.removeEntry(name).catch(() => undefined)),
+		);
+		const { quota = 0, usage = 0 } = await navigator.storage.estimate();
+		if (quota - usage < maxBytes * 1.2) return null;
+		const name = `${EXPORT_FILE_PREFIX}${Date.now()}.mp4`;
+		const handle = await root.getFileHandle(name, { create: true });
+		const access: SyncAccessHandle = await (
+			handle as FileSystemFileHandle & {
+				createSyncAccessHandle(): Promise<SyncAccessHandle>;
+			}
+		).createSyncAccessHandle();
+		const { StreamTarget } = await import("mediabunny");
+		return {
+			name,
+			target: new StreamTarget(
+				new WritableStream({
+					write(chunk) {
+						access.write(chunk.data, { at: chunk.position });
+					},
+				}),
+				{ chunked: true, chunkSize: 4 * 1024 * 1024 },
+			),
+			async finish() {
+				access.flush();
+				access.close();
+				return handle.getFile();
+			},
+			discard() {
+				access.close();
+				void root.removeEntry(name).catch(() => undefined);
+			},
+		};
+	} catch {
+		return null;
+	}
+}
+
 async function runExport(job: BrowserExportJob) {
 	const started = performance.now();
 	const context = await renderContext(job);
@@ -582,77 +647,95 @@ async function runExport(job: BrowserExportJob) {
 	if (!(await canEncodeVideo("avc", { width, height, bitrate }))) {
 		throw new Error("This browser cannot encode H.264 video");
 	}
-	const output = new Output({
-		format: new Mp4OutputFormat({ fastStart: "in-memory" }),
-		target: new BufferTarget(),
-	});
-	const videoSource = new CanvasSource(canvas, {
-		codec: "avc",
-		bitrate,
-		keyFrameInterval: 2,
-		latencyMode: "quality",
-		hardwareAcceleration: "prefer-hardware",
-	});
-	output.addVideoTrack(videoSource, { frameRate: job.fps });
-	const audio = await renderBrowserExportAudio(job, times, output, totalFrames);
-	await output.start();
-	const audioDone = audio?.run() ?? Promise.resolve();
-
-	// Frame N renders and is handed to the encoder (which captures the canvas
-	// synchronously), then frame N+1 decodes while N encodes.
-	let renderMs = 0;
-	let decodeWaitMs = 0;
-	let encodeWaitMs = 0;
-	let lastProgress = 0;
-	let pendingDecode: Promise<DecodedFrame | null> = decodeFrame(
-		context,
-		job.fps,
-		0,
+	const file = await openExportFile(
+		((bitrate + EXPORT_AUDIO_BITRATE) * totalFrames) / job.fps / 8,
 	);
-	let pendingEncode: Promise<void> = Promise.resolve();
+	const target = file?.target ?? new BufferTarget();
+	const output = new Output({
+		format: new Mp4OutputFormat({ fastStart: file ? "reserve" : "in-memory" }),
+		target,
+	});
 	try {
-		for (let frame = 0; frame < totalFrames; frame++) {
-			checkCanceled();
-			const decodeStart = performance.now();
-			const item = await pendingDecode;
-			decodeWaitMs += performance.now() - decodeStart;
-			if (!item) break;
-			const renderStart = performance.now();
-			renderDecoded(context, job, frame, item);
-			renderMs += performance.now() - renderStart;
-			const encodeStart = performance.now();
-			await pendingEncode;
-			encodeWaitMs += performance.now() - encodeStart;
-			pendingEncode = videoSource.add(frame / job.fps, 1 / job.fps);
-			pendingDecode =
-				frame + 1 < totalFrames
-					? decodeFrame(context, job.fps, frame + 1)
-					: Promise.resolve(null);
-			const now = performance.now();
-			if (now - lastProgress > 100 || frame + 1 === totalFrames) {
-				lastProgress = now;
-				scope.postMessage({
-					kind: "progress",
-					renderedCount: frame + 1,
-					totalFrames,
-				});
+		const videoSource = new CanvasSource(canvas, {
+			codec: "avc",
+			bitrate,
+			keyFrameInterval: 2,
+			latencyMode: "quality",
+			hardwareAcceleration: "prefer-hardware",
+		});
+		output.addVideoTrack(videoSource, {
+			frameRate: job.fps,
+			maximumPacketCount: totalFrames + 16,
+		});
+		const audio = await renderBrowserExportAudio(
+			job,
+			times,
+			output,
+			totalFrames,
+		);
+		await output.start();
+		const audioDone = audio?.run() ?? Promise.resolve();
+		audioDone.catch(() => undefined);
+
+		// Frame N renders and is handed to the encoder (which captures the canvas
+		// synchronously), then frame N+1 decodes while N encodes.
+		let renderMs = 0;
+		let decodeWaitMs = 0;
+		let encodeWaitMs = 0;
+		let lastProgress = 0;
+		let pendingDecode: Promise<DecodedFrame | null> = decodeFrame(
+			context,
+			job.fps,
+			0,
+		);
+		let pendingEncode: Promise<void> = Promise.resolve();
+		try {
+			for (let frame = 0; frame < totalFrames; frame++) {
+				checkCanceled();
+				const decodeStart = performance.now();
+				const item = await pendingDecode;
+				decodeWaitMs += performance.now() - decodeStart;
+				if (!item) break;
+				const renderStart = performance.now();
+				renderDecoded(context, job, frame, item);
+				renderMs += performance.now() - renderStart;
+				const encodeStart = performance.now();
+				await pendingEncode;
+				encodeWaitMs += performance.now() - encodeStart;
+				pendingEncode = videoSource.add(frame / job.fps, 1 / job.fps);
+				pendingDecode =
+					frame + 1 < totalFrames
+						? decodeFrame(context, job.fps, frame + 1)
+						: Promise.resolve(null);
+				const now = performance.now();
+				if (now - lastProgress > 100 || frame + 1 === totalFrames) {
+					lastProgress = now;
+					scope.postMessage({
+						kind: "progress",
+						renderedCount: frame + 1,
+						totalFrames,
+					});
+				}
 			}
+			await pendingEncode;
+		} catch (cause) {
+			void pendingDecode.then(release, () => undefined);
+			throw cause;
 		}
-		await pendingEncode;
-	} catch (cause) {
-		void pendingDecode.then(release, () => undefined);
-		throw cause;
-	}
-	checkCanceled();
-	videoSource.close();
-	await audioDone;
-	await output.finalize();
-	const buffer = output.target.buffer;
-	if (!buffer) throw new Error("Export produced no file");
-	scope.postMessage(
-		{
+		checkCanceled();
+		videoSource.close();
+		await audioDone;
+		await output.finalize();
+		const data = file
+			? await file.finish()
+			: target instanceof BufferTarget && target.buffer
+				? new Blob([target.buffer], { type: "video/mp4" })
+				: null;
+		if (!data) throw new Error("Export produced no file");
+		scope.postMessage({
 			kind: "done",
-			data: buffer,
+			data,
+			storedFile: file?.name ?? null,
 			mimeType: "video/mp4",
 			stats: {
 				frames: totalFrames,
@@ -664,10 +747,14 @@ async function runExport(job: BrowserExportJob) {
 				totalMs: Math.round(performance.now() - started),
 				videoCodec: "avc",
 				audioCodec: audio?.codec ?? null,
+				backend: context.renderer.backend,
 			},
-		},
-		[buffer],
-	);
+		});
+	} catch (cause) {
+		await output.cancel().catch(() => undefined);
+		file?.discard();
+		throw cause;
+	}
 }
 
 // Jobs share one render context, so they run one at a time; a preview that
@@ -678,6 +765,10 @@ let latestPreview = 0;
 function enqueue(run: () => Promise<void>) {
 	queue = queue.then(run, run).catch(() => undefined);
 }
+
+// The renderer module is the slowest part of a first export, so it starts
+// loading as soon as the worker does.
+void rendererModule().catch(() => undefined);
 
 scope.addEventListener("message", (event) => {
 	const message = event.data;

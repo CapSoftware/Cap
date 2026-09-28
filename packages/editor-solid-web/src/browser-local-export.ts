@@ -1,3 +1,8 @@
+import {
+	type ExportBitrateSample,
+	exportBitrateSample,
+	exportSizeRangeMb,
+} from "./browser-export-estimate";
 import type {
 	BrowserExportAudioSource,
 	BrowserExportJob,
@@ -56,7 +61,7 @@ function hasTextOverlays(config: Record<string, unknown>) {
 	].some((value) => Array.isArray(value) && value.length > 0);
 }
 
-/// Local export needs WebGPU and WebCodecs inside a worker.
+/// Local export needs WebCodecs and WebGPU or WebGL2 inside a worker.
 export function browserLocalExportSupported() {
 	return (
 		typeof Worker === "function" &&
@@ -64,7 +69,6 @@ export function browserLocalExportSupported() {
 		typeof VideoEncoder === "function" &&
 		typeof VideoDecoder === "function" &&
 		typeof AudioEncoder === "function" &&
-		"gpu" in navigator &&
 		browserEditorVideoId() !== null
 	);
 }
@@ -106,6 +110,12 @@ function exportWorker() {
 	});
 	workerState = state;
 	return state;
+}
+
+/// Starts the export worker and its renderer module ahead of a first export
+/// or browser save, so it doesn't wait on them.
+export function prewarmBrowserLocalExport() {
+	if (browserLocalExportSupported()) exportWorker();
 }
 
 function resetExportWorker() {
@@ -257,8 +267,22 @@ async function exportJob(
 	}
 }
 
-function download(data: ArrayBuffer, mimeType: string, fileName: string) {
-	const url = URL.createObjectURL(new Blob([data], { type: mimeType }));
+/// A streamed export stays in the origin private file system until the
+/// browser has copied it to the downloads folder.
+const STORED_EXPORT_LIFETIME_MS = 10 * 60_000;
+
+/// Removes a streamed export from the origin private file system once nothing
+/// reads it any more.
+export function discardStoredBrowserExport(storedFile: string | null) {
+	if (!storedFile) return;
+	void navigator.storage
+		.getDirectory()
+		.then((root) => root.removeEntry(storedFile))
+		.catch(() => undefined);
+}
+
+function download(data: Blob, fileName: string, storedFile: string | null) {
+	const url = URL.createObjectURL(data);
 	const link = document.createElement("a");
 	link.href = url;
 	link.download = fileName;
@@ -267,11 +291,13 @@ function download(data: ArrayBuffer, mimeType: string, fileName: string) {
 	link.click();
 	link.remove();
 	window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+	if (storedFile)
+		window.setTimeout(
+			() => discardStoredBrowserExport(storedFile),
+			STORED_EXPORT_LIFETIME_MS,
+		);
 }
 
-/// Renders and encodes the export on this machine and saves it as a download.
-/// Throws `BrowserLocalExportUnavailable` before any frame renders when the
-/// browser cannot export locally, so the caller can use the worker instead.
 function localVideoId(settings: Record<string, unknown>) {
 	const videoId = browserEditorVideoId();
 	if (
@@ -305,14 +331,74 @@ function rememberThroughput(pixelsPerSecond: number) {
 	} catch {}
 }
 
-/// Native export size model (`estimate_export`): video at the settings'
-/// bits per pixel plus 192 kb/s audio, at 50% encoder efficiency.
-function estimatedSizeMb(settings: BrowserExportJob, durationSeconds: number) {
-	const effectiveFps =
-		Math.max(settings.fps - 30, 0) * 0.6 + Math.min(settings.fps, 30);
-	const pixels = settings.resolutionBase.x * settings.resolutionBase.y;
-	const bitrate = pixels * settings.bitsPerPixel * effectiveFps + 192_000;
-	return (bitrate * 0.5 * durationSeconds) / (8 * 1024 * 1024);
+const BITRATE_KEY = "cap-web-editor-export-bitrate";
+
+function bitrateSamples(): Record<string, ExportBitrateSample> {
+	try {
+		return (
+			(record(
+				JSON.parse(window.localStorage.getItem(BITRATE_KEY) ?? "{}"),
+			) as Record<string, ExportBitrateSample> | null) ?? {}
+		);
+	} catch {
+		return {};
+	}
+}
+
+function previousBitrate(videoId: string): ExportBitrateSample | null {
+	const sample = record(bitrateSamples()[videoId]);
+	return sample &&
+		[sample.bitrate, sample.target, sample.pixelRate].every(
+			(value) => typeof value === "number" && Number.isFinite(value),
+		)
+		? (sample as ExportBitrateSample)
+		: null;
+}
+
+function rememberBitrate(videoId: string, sample: ExportBitrateSample) {
+	const samples = bitrateSamples();
+	delete samples[videoId];
+	samples[videoId] = sample;
+	try {
+		window.localStorage.setItem(
+			BITRATE_KEY,
+			JSON.stringify(Object.fromEntries(Object.entries(samples).slice(-50))),
+		);
+	} catch {}
+}
+
+async function outputSize(job: BrowserExportJob) {
+	const module = await loadBrowserRenderer();
+	const visual = new module.BrowserVisualConfig(JSON.stringify(job.config));
+	try {
+		const [width = job.resolutionBase.x, height = job.resolutionBase.y] =
+			visual.output_dimensions(
+				job.setup.screenWidth,
+				job.setup.screenHeight,
+				job.resolutionBase.x,
+				job.resolutionBase.y,
+			);
+		return { width, height };
+	} finally {
+		visual.free();
+	}
+}
+
+function sizeRangeMb(
+	videoId: string,
+	job: BrowserExportJob,
+	width: number,
+	height: number,
+	durationSeconds: number,
+) {
+	return exportSizeRangeMb({
+		width,
+		height,
+		fps: job.fps,
+		bitsPerPixel: job.bitsPerPixel,
+		durationSeconds,
+		previous: previousBitrate(videoId),
+	});
 }
 
 export async function browserLocalExportPreview(
@@ -333,6 +419,7 @@ export async function browserLocalExportPreview(
 		);
 	}
 	const videoId = localVideoId(settings);
+	exportWorker();
 	const job = await exportJob(videoId, settings, new AbortController().signal);
 	const state = exportWorker();
 	const id = nextPreviewId++;
@@ -370,10 +457,16 @@ export async function browserLocalExportPreview(
 	for (let index = 0; index < bytes.length; index += 0x8000) {
 		binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
 	}
-	const durationSeconds = result.totalFrames / job.fps;
+	const [smallest, largest] = sizeRangeMb(
+		videoId,
+		job,
+		result.width,
+		result.height,
+		result.totalFrames / job.fps,
+	);
 	return {
 		jpeg_base64: btoa(binary),
-		estimated_size_mb: estimatedSizeMb(job, durationSeconds),
+		estimated_size_mb: (smallest + largest) / 2,
 		actual_width: result.width,
 		actual_height: result.height,
 		frame_render_time_ms: result.renderMs,
@@ -404,63 +497,61 @@ export async function browserLocalExportEstimates(
 	const durationSeconds = timeline.duration();
 	timeline.free();
 	const frames = Math.ceil(durationSeconds * job.fps);
-	const pixels = job.resolutionBase.x * job.resolutionBase.y;
+	const { width, height } = await outputSize(job);
 	const throughput = measuredThroughput() ?? 500_000_000;
-	const seconds = (frames * pixels) / throughput + 1;
-	const size = estimatedSizeMb(job, durationSeconds);
+	const seconds = (frames * width * height) / throughput + 1;
+	const sizeRange = sizeRangeMb(videoId, job, width, height, durationSeconds);
 	return {
 		duration_seconds: durationSeconds,
 		estimated_time_seconds: seconds,
-		estimated_size_mb: size,
+		estimated_size_mb: (sizeRange[0] + sizeRange[1]) / 2,
 		time_range_seconds: [seconds * 0.7, seconds * 1.4] as [number, number],
-		size_range_mb: [size * 0.6, size * 1.5] as [number, number],
+		size_range_mb: sizeRange,
 	};
 }
 
-/// Renders and encodes the export on this machine and saves it as a download.
-/// Throws `BrowserLocalExportUnavailable` before any frame renders when the
-/// browser cannot export locally, so the caller can use the worker instead.
-export async function runBrowserLocalExport(
+/// Renders and encodes the export on this machine. Throws
+/// `BrowserLocalExportUnavailable` before any frame renders when the browser
+/// cannot export locally, so the caller can use the worker instead.
+export async function renderBrowserLocalExport(
 	settings: Record<string, unknown>,
-	channelId: number | null,
-	fileName: string,
+	onProgress?: (renderedCount: number, totalFrames: number) => void,
 ) {
 	const videoId = localVideoId(settings);
 	if (activeExport)
 		throw new Error("Finish or cancel the current editor export first");
-	const job = await exportJob(videoId, settings, new AbortController().signal);
-	const state = exportWorker();
-	let started = false;
-	let listener: WorkerListener = () => undefined;
-	const result = await new Promise<
-		Extract<BrowserExportMessage, { kind: "done" }>
-	>((resolve, reject) => {
-		activeExport = { reject };
-		listener = (message) => {
-			if (message.kind === "progress") {
-				started = true;
-				if (channelId !== null)
-					emitEditorChannel(channelId, {
-						type: "FramesRendered",
-						renderedCount: message.renderedCount,
-						totalFrames: message.totalFrames,
-					});
-			} else if (message.kind === "done") {
-				resolve(message);
-			} else if (message.kind === "error" && message.id === undefined) {
-				reject(
-					started
-						? new Error(message.message)
-						: new BrowserLocalExportUnavailable(message.message),
-				);
-			}
-		};
-		state.listeners.add(listener);
-		state.worker.postMessage(job);
-	}).finally(() => {
-		state.listeners.delete(listener);
-		activeExport = null;
+	const controller = new AbortController();
+	let cancel: (error: Error) => void = () => undefined;
+	const cancelled = new Promise<never>((_, reject) => {
+		cancel = reject;
 	});
+	cancelled.catch(() => undefined);
+	const current = {
+		reject: (error: Error) => {
+			controller.abort();
+			cancel(error);
+		},
+	};
+	activeExport = current;
+	const state = { listener: (() => undefined) as WorkerListener };
+	let worker: ReturnType<typeof exportWorker> | null = null;
+	let job: BrowserExportJob;
+	let result: Extract<BrowserExportMessage, { kind: "done" }>;
+	try {
+		exportWorker();
+		job = await Promise.race([
+			exportJob(videoId, settings, controller.signal),
+			cancelled,
+		]);
+		worker = exportWorker();
+		result = await Promise.race([
+			workerExport(worker, job, state, onProgress),
+			cancelled,
+		]);
+	} finally {
+		worker?.listeners.delete(state.listener);
+		if (activeExport === current) activeExport = null;
+	}
 	console.info("Cap local export", JSON.stringify(result.stats));
 	const seconds = result.stats.totalMs / 1000;
 	if (seconds > 1)
@@ -468,6 +559,73 @@ export async function runBrowserLocalExport(
 			(result.stats.frames * result.stats.width * result.stats.height) /
 				seconds,
 		);
-	download(result.data, result.mimeType, fileName);
+	const duration = result.stats.frames / job.fps;
+	const sample = exportBitrateSample(
+		result.data.size,
+		duration,
+		result.stats.width,
+		result.stats.height,
+		job.fps,
+		job.bitsPerPixel,
+	);
+	if (sample) rememberBitrate(videoId, sample);
+	return {
+		data: result.data,
+		storedFile: result.storedFile,
+		mimeType: result.mimeType,
+		width: result.stats.width,
+		height: result.stats.height,
+		fps: job.fps,
+		duration,
+	};
+}
+
+function workerExport(
+	worker: ReturnType<typeof exportWorker>,
+	job: BrowserExportJob,
+	state: { listener: WorkerListener },
+	onProgress?: (renderedCount: number, totalFrames: number) => void,
+) {
+	let started = false;
+	return new Promise<Extract<BrowserExportMessage, { kind: "done" }>>(
+		(resolve, reject) => {
+			state.listener = (message) => {
+				if (message.kind === "progress") {
+					started = true;
+					onProgress?.(message.renderedCount, message.totalFrames);
+				} else if (message.kind === "done") {
+					resolve(message);
+				} else if (message.kind === "error" && message.id === undefined) {
+					reject(
+						started
+							? new Error(message.message)
+							: new BrowserLocalExportUnavailable(message.message),
+					);
+				}
+			};
+			worker.listeners.add(state.listener);
+			worker.worker.postMessage(job);
+		},
+	);
+}
+
+/// Renders the export on this machine and saves it as a download.
+export async function runBrowserLocalExport(
+	settings: Record<string, unknown>,
+	channelId: number | null,
+	fileName: string,
+) {
+	const result = await renderBrowserLocalExport(
+		settings,
+		(renderedCount, totalFrames) => {
+			if (channelId !== null)
+				emitEditorChannel(channelId, {
+					type: "FramesRendered",
+					renderedCount,
+					totalFrames,
+				});
+		},
+	);
+	download(result.data, fileName, result.storedFile);
 	return fileName;
 }

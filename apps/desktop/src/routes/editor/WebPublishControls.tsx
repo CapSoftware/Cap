@@ -190,6 +190,12 @@ export function WebPublishControls() {
 		}
 	};
 
+	// Both can render on this device, so the renderer starts loading as soon
+	// as the person reaches for either.
+	const prewarmExport = () => {
+		void invoke("webEditorPrewarmExport").catch(() => undefined);
+	};
+
 	const openDownload = () => {
 		setEditorState("timeline", "selection", null);
 		trackEvent("export_button_clicked");
@@ -212,6 +218,8 @@ export function WebPublishControls() {
 				tooltipText="Render a video file to your computer"
 				leftIcon={<IconLucideDownload class="size-4" />}
 				onClick={openDownload}
+				onPointerEnter={prewarmExport}
+				onFocus={prewarmExport}
 			>
 				<span class="max-[1100px]:hidden">Download</span>
 			</EditorButton>
@@ -230,6 +238,8 @@ export function WebPublishControls() {
 					type="button"
 					disabled={starting() || rendering()}
 					onClick={() => void save()}
+					onPointerEnter={prewarmExport}
+					onFocus={prewarmExport}
 					class={cx(
 						"relative flex h-[30px] min-w-[84px] shrink-0 items-center justify-center gap-1.5 overflow-hidden rounded-lg px-3.5 text-[13px] font-medium outline-hidden transition-[filter,background-color,color] duration-150",
 						upToDate()

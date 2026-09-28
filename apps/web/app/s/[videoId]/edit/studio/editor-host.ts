@@ -224,6 +224,17 @@ function exportFileType(format: string) {
 	return format === "Mp4" ? "mp4" : format === "Gif" ? "gif" : "mov";
 }
 
+/// Why a download that only an editor server can render couldn't start.
+function serverExportUnavailableMessage(settings: Record<string, unknown>) {
+	if (settings.format === "Gif")
+		return "GIF export runs on Cap's servers, which aren't available right now. Export an MP4 instead, or try again in a moment.";
+	if (settings.optimize_filesize === true)
+		return "Optimize file size runs on Cap's servers, which aren't available right now. Turn it off to export in your browser, or try again in a moment.";
+	if (settings.format === "Mov")
+		return "Cursor-only export runs on Cap's servers, which aren't available right now. Try again in a moment.";
+	return "This browser can't render the video and Cap's servers aren't available right now. Try Chrome or Edge, or try again in a moment.";
+}
+
 function waitForExportPoll(signal: AbortSignal) {
 	return new Promise<void>((resolve, reject) => {
 		if (signal.aborted) {
@@ -1100,7 +1111,11 @@ export class EditorHostBridge {
 			) {
 				throw new Error("Editor export request was invalid");
 			}
-			releaseWorkerUse = await this.ensureWorkerSession();
+			releaseWorkerUse = await this.ensureWorkerSession().catch(() => {
+				throw new Error(
+					serverExportUnavailableMessage(settings as Record<string, unknown>),
+				);
+			});
 			await this.renderExport(
 				active,
 				channelId,

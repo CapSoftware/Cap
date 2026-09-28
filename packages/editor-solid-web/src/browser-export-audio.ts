@@ -4,11 +4,94 @@ import type {
 	BrowserExportAudioReply,
 	BrowserExportAudioRequest,
 } from "./browser-export-audio-worker";
+import { EXPORT_AUDIO_BITRATE } from "./browser-export-estimate";
 import type { BrowserExportJob } from "./browser-export-worker";
 
 const SAMPLE_RATE = 48_000;
-const AUDIO_BITRATE = 320_000;
 const PREFETCH_CHUNKS = 40;
+
+/// Frames of priming silence the AAC encoder puts before the audio. MP4s
+/// written here carry no edit list to trim it, so the mix is fed that far
+/// ahead instead of landing late against the video.
+async function aacEncoderDelay() {
+	const frames = 8_192;
+	const impulseAt = 2_048;
+	const chunks: EncodedAudioChunk[] = [];
+	let decoderConfig: AudioDecoderConfig | undefined;
+	const encoder = new AudioEncoder({
+		output: (chunk, meta) => {
+			chunks.push(chunk);
+			decoderConfig ??= meta?.decoderConfig;
+		},
+		error: () => undefined,
+	});
+	const decoded: Float32Array[] = [];
+	const decoder = new AudioDecoder({
+		output: (data) => {
+			const plane = new Float32Array(data.numberOfFrames);
+			data.copyTo(plane, { planeIndex: 0, format: "f32-planar" });
+			decoded.push(plane);
+			data.close();
+		},
+		error: () => undefined,
+	});
+	try {
+		encoder.configure({
+			codec: "mp4a.40.2",
+			sampleRate: SAMPLE_RATE,
+			numberOfChannels: 2,
+			bitrate: EXPORT_AUDIO_BITRATE,
+		});
+		const samples = new Float32Array(frames * 2);
+		for (let index = 0; index < 48; index++) {
+			const value = Math.sin((index / 48) * Math.PI) * 0.9;
+			samples[(impulseAt + index) * 2] = value;
+			samples[(impulseAt + index) * 2 + 1] = value;
+		}
+		const data = new AudioData({
+			format: "f32",
+			sampleRate: SAMPLE_RATE,
+			numberOfChannels: 2,
+			numberOfFrames: frames,
+			timestamp: 0,
+			data: samples,
+		});
+		encoder.encode(data);
+		data.close();
+		await encoder.flush();
+		if (!decoderConfig) return 0;
+		decoder.configure(decoderConfig);
+		for (const chunk of chunks) decoder.decode(chunk);
+		await decoder.flush();
+		let peak = 0;
+		let peakValue = 0;
+		let offset = 0;
+		for (const plane of decoded) {
+			for (let index = 0; index < plane.length; index++) {
+				const value = Math.abs(plane[index] ?? 0);
+				if (value > peakValue) {
+					peakValue = value;
+					peak = offset + index;
+				}
+			}
+			offset += plane.length;
+		}
+		const delay = peak - (impulseAt + 24);
+		return peakValue > 0.1 && delay > 0 && delay < frames / 2 ? delay : 0;
+	} catch {
+		return 0;
+	} finally {
+		if (encoder.state !== "closed") encoder.close();
+		if (decoder.state !== "closed") decoder.close();
+	}
+}
+
+let aacDelay: Promise<number> | null = null;
+
+function aacPrimingFrames() {
+	aacDelay ??= aacEncoderDelay();
+	return aacDelay;
+}
 
 export type BrowserExportAudioTrack = {
 	url: string;
@@ -35,13 +118,19 @@ export async function renderBrowserExportAudio(
 	const codec = (await canEncodeAudio("aac", {
 		numberOfChannels: 2,
 		sampleRate: SAMPLE_RATE,
-		bitrate: AUDIO_BITRATE,
+		bitrate: EXPORT_AUDIO_BITRATE,
 	}))
 		? ("aac" as const)
 		: ("opus" as const);
-	const source = new AudioSampleSource({ codec, bitrate: AUDIO_BITRATE });
-	output.addAudioTrack(source);
+	const primingFrames = codec === "aac" ? await aacPrimingFrames() : 0;
+	const source = new AudioSampleSource({
+		codec,
+		bitrate: EXPORT_AUDIO_BITRATE,
+	});
 	const outputSamples = Math.round((totalFrames / job.fps) * SAMPLE_RATE);
+	output.addAudioTrack(source, {
+		maximumPacketCount: Math.ceil(outputSamples / 960) + 16,
+	});
 	const tracks: BrowserExportAudioTrack[] = job.audio.map((track) => {
 		const clipTimes =
 			track.kind === "display"
@@ -104,10 +193,11 @@ export async function renderBrowserExportAudio(
 			worker.postMessage(request);
 			worker.postMessage({ kind: "pull", chunks: PREFETCH_CHUNKS });
 			let written = 0;
+			let skip = primingFrames * 2;
 			try {
 				while (true) {
 					if (failure) throw failure;
-					const chunk = chunks.shift();
+					let chunk = chunks.shift();
 					if (!chunk) {
 						if (finished) break;
 						await new Promise<void>((resolve) => {
@@ -118,6 +208,12 @@ export async function renderBrowserExportAudio(
 					if (!finished && chunks.length + outstanding < PREFETCH_CHUNKS / 2) {
 						outstanding += PREFETCH_CHUNKS / 2;
 						worker.postMessage({ kind: "pull", chunks: PREFETCH_CHUNKS / 2 });
+					}
+					if (skip > 0) {
+						const skipped = Math.min(skip, chunk.length);
+						skip -= skipped;
+						chunk = chunk.subarray(skipped);
+						if (chunk.length === 0) continue;
 					}
 					const sample = new AudioSample({
 						data: chunk,

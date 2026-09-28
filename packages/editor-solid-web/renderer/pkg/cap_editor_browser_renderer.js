@@ -503,16 +503,16 @@ export function webgl2_available(canvas) {
     return ret !== 0;
 }
 
-function __wbg_adapter_10(arg0, arg1, arg2) {
-    wasm.closure1630_externref_shim(arg0, arg1, arg2);
-}
-
-function __wbg_adapter_29(arg0, arg1) {
+function __wbg_adapter_6(arg0, arg1) {
     wasm.wasm_bindgen__convert__closures_____invoke__hf7fb16afa59e3378(arg0, arg1);
 }
 
-function __wbg_adapter_32(arg0, arg1, arg2) {
+function __wbg_adapter_17(arg0, arg1, arg2) {
     wasm.closure1246_externref_shim(arg0, arg1, arg2);
+}
+
+function __wbg_adapter_24(arg0, arg1, arg2) {
+    wasm.closure1630_externref_shim(arg0, arg1, arg2);
 }
 
 function __wbg_adapter_1232(arg0, arg1, arg2, arg3) {
@@ -3161,7 +3161,7 @@ function __wbg_get_imports() {
     };
     imports.wbg.__wbindgen_cast_302d5a9dcce70f37 = function(arg0, arg1) {
         // Cast intrinsic for `Closure(Closure { dtor_idx: 1629, function: Function { arguments: [Externref], shim_idx: 1630, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-        const ret = makeMutClosure(arg0, arg1, 1629, __wbg_adapter_10);
+        const ret = makeMutClosure(arg0, arg1, 1629, __wbg_adapter_24);
         return ret;
     };
     imports.wbg.__wbindgen_cast_77bc3e92745e9a35 = function(arg0, arg1) {
@@ -3183,7 +3183,7 @@ function __wbg_get_imports() {
     };
     imports.wbg.__wbindgen_cast_aaa93aae03c115ab = function(arg0, arg1) {
         // Cast intrinsic for `Closure(Closure { dtor_idx: 1, function: Function { arguments: [], shim_idx: 2, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-        const ret = makeMutClosure(arg0, arg1, 1, __wbg_adapter_29);
+        const ret = makeMutClosure(arg0, arg1, 1, __wbg_adapter_6);
         return ret;
     };
     imports.wbg.__wbindgen_cast_bbb4883c6389f1de = function(arg0, arg1) {
@@ -3193,7 +3193,7 @@ function __wbg_get_imports() {
     };
     imports.wbg.__wbindgen_cast_c5670384c75ad499 = function(arg0, arg1) {
         // Cast intrinsic for `Closure(Closure { dtor_idx: 1245, function: Function { arguments: [NamedExternref("GPUUncapturedErrorEvent")], shim_idx: 1246, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-        const ret = makeMutClosure(arg0, arg1, 1245, __wbg_adapter_32);
+        const ret = makeMutClosure(arg0, arg1, 1245, __wbg_adapter_17);
         return ret;
     };
     imports.wbg.__wbindgen_cast_cb9088102bce6b30 = function(arg0, arg1) {
