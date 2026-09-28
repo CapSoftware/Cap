@@ -11,6 +11,7 @@ import {
 import { eq } from "drizzle-orm";
 import { Effect, Layer, Schema } from "effect";
 import { refreshRenderFarmSave } from "@/lib/render-farm-save";
+import { renderFarmSaveIsCurrent } from "@/lib/render-farm-status";
 import { apiToHandler } from "@/lib/server";
 
 export const dynamic = "force-dynamic";
@@ -22,6 +23,7 @@ const RenderSaveStatus = Schema.Struct({
 	playable: Schema.Boolean,
 	hlsUrl: Schema.NullOr(Schema.String),
 	error: Schema.NullOr(Schema.String),
+	current: Schema.Boolean,
 });
 
 class Api extends HttpApi.make("RenderSaveStatusApi").add(
@@ -61,10 +63,14 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 								.where(eq(videos.id, path.videoId)),
 						);
 						if (!video) return yield* new HttpApiError.NotFound();
-						return yield* Effect.tryPromise({
+						const status = yield* Effect.tryPromise({
 							try: () => refreshRenderFarmSave(video),
 							catch: () => new HttpApiError.InternalServerError(),
 						});
+						return {
+							...status,
+							current: renderFarmSaveIsCurrent(video.metadata),
+						};
 					}).pipe(
 						provideOptionalAuth,
 						Effect.catchTags({

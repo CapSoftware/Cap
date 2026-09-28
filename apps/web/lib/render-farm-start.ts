@@ -41,7 +41,10 @@ import {
 	recordRenderFarmExport,
 	recordRenderFarmSave,
 } from "@/lib/render-farm-records";
-import { renderExportFileName } from "@/lib/render-farm-status";
+import {
+	renderExportFileName,
+	renderFarmSaveIsCurrent,
+} from "@/lib/render-farm-status";
 import { PRO_DURATION_SECONDS } from "@/lib/render-recording-eligibility";
 import { decodeStorageVideo } from "@/lib/video-storage";
 
@@ -219,6 +222,9 @@ export const startRenderFarmSave = Effect.fn("startRenderFarmSave")(function* (
 		{ concurrency: 2 },
 	);
 	if (!canSaveEditorVideo(video)) return yield* new HttpApiError.Forbidden();
+	if (renderFarmSaveIsCurrent(video.metadata)) {
+		return yield* new HttpApiError.Conflict();
+	}
 	const started = yield* startRenderFarmJob({
 		video,
 		sessionPath,
@@ -232,6 +238,7 @@ export const startRenderFarmSave = Effect.fn("startRenderFarmSave")(function* (
 				exportId: started.exportId,
 				jobId: started.jobId,
 				status: "rendering",
+				projectSavedAt: video.metadata?.webEditorProject?.savedAt ?? null,
 				startedAt: new Date().toISOString(),
 				outputKey: started.target.outputKey,
 				hlsPrefix: started.target.hlsPrefix,

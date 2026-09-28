@@ -51,6 +51,7 @@ export async function startRecordingRender(
 		jobId: "",
 		status: "rendering",
 		trigger: "recording",
+		projectSavedAt: null,
 		startedAt: new Date().toISOString(),
 		outputKey: target.outputKey,
 		hlsPrefix: target.hlsPrefix,

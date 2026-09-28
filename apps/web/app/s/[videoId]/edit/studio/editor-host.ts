@@ -1411,7 +1411,7 @@ export class EditorHostBridge {
 				cache: "no-store",
 				signal: this.controller.signal,
 			});
-			if (response.status === 403 || response.status === 404)
+			if ([403, 404, 409].includes(response.status))
 				throw new SaveRejected(webEditorSaveError(response.status));
 			if (!response.ok) {
 				return {
@@ -2846,6 +2846,7 @@ export class EditorHostBridge {
 class SaveRejected extends Error {}
 
 function webEditorSaveError(status: number) {
+	if (status === 409) return "Your share link already shows this version";
 	if (status === 403)
 		return "Saving recordings of 5 minutes or longer, or with captions, needs Cap Pro";
 	if (status === 404) return "This recording is no longer available";

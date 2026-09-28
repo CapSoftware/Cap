@@ -15,6 +15,7 @@ import {
 	renderFarmSaveUnavailable,
 	startRenderFarmSave,
 } from "@/lib/render-farm-start";
+import { renderFarmSaveIsCurrent } from "@/lib/render-farm-status";
 import { apiToHandler } from "@/lib/server";
 
 export const dynamic = "force-dynamic";
@@ -34,6 +35,7 @@ class Api extends HttpApi.make("WebEditorSaveApi").add(
 				)
 				.addError(HttpApiError.NotFound)
 				.addError(HttpApiError.Forbidden)
+				.addError(HttpApiError.Conflict)
 				.addError(HttpApiError.InternalServerError)
 				.middleware(HttpAuthMiddleware),
 		)
@@ -51,6 +53,7 @@ class Api extends HttpApi.make("WebEditorSaveApi").add(
 				.addError(HttpApiError.BadRequest)
 				.addError(HttpApiError.NotFound)
 				.addError(HttpApiError.Forbidden)
+				.addError(HttpApiError.Conflict)
 				.addError(HttpApiError.ServiceUnavailable)
 				.addError(HttpApiError.InternalServerError)
 				.middleware(HttpAuthMiddleware),
@@ -88,6 +91,10 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 						);
 						if (!canSaveEditorVideo(video)) {
 							return yield* new HttpApiError.Forbidden();
+						}
+						// The share link already shows this project.
+						if (renderFarmSaveIsCurrent(video.metadata)) {
+							return yield* new HttpApiError.Conflict();
 						}
 						const reason = yield* Effect.promise(renderFarmSaveUnavailable);
 						return reason

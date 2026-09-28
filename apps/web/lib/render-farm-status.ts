@@ -117,6 +117,17 @@ export function publishedRenderFarmUpdate(
 	};
 }
 
+/** Whether the share link shows, or is rendering, the project as saved now. */
+export function renderFarmSaveIsCurrent(metadata: VideoMetadata | null) {
+	const save = metadata?.renderFarmSave;
+	return (
+		save !== undefined &&
+		save.status !== "error" &&
+		save.projectSavedAt !== undefined &&
+		save.projectSavedAt === (metadata?.webEditorProject?.savedAt ?? null)
+	);
+}
+
 export function renderSaveStatusFromMetadata(
 	save: RenderFarmSave | undefined,
 ): RenderSaveStatus | null {

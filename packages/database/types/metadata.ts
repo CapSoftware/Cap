@@ -161,6 +161,8 @@ export interface VideoMetadata {
 		status: "rendering" | "error" | "published";
 		/** Absent for editor saves; "recording" renders the finished upload. */
 		trigger?: "recording";
+		/** The `webEditorProject.savedAt` it renders, null for the recording as recorded. */
+		projectSavedAt?: string | null;
 		startedAt: string;
 		outputKey: string;
 		hlsPrefix: string;
