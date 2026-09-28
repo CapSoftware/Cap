@@ -185,10 +185,17 @@ export function Slider(
 	});
 
 	const [dragging, setDragging] = createSignal(false);
+	// A value set elsewhere (e.g. resizing on the canvas) can sit outside the
+	// slider's range; draw it at the nearest end instead of past the track.
+	const value = () =>
+		props.value?.map((v) =>
+			Math.min(Math.max(v, props.minValue ?? 0), props.maxValue ?? 100),
+		);
 
 	return (
 		<KSlider
 			{...props}
+			value={value()}
 			class={cx(
 				"ed-slider relative px-1 h-8 flex flex-row justify-stretch items-center",
 				props.class,
