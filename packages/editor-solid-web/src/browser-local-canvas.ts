@@ -13,9 +13,10 @@ import { BrowserImageDecoder } from "./browser-image-decoder";
 import { loadBrowserRenderer } from "./browser-renderer";
 import { ensureBrowserRendererFonts } from "./browser-renderer-fonts";
 import { resolveEditorAssetUrl } from "./editor-asset-url";
+import { perfSpan, perfStart } from "./editor-perf";
 
 export type BrowserVideoLayer = {
-	source: HTMLVideoElement | ImageBitmap;
+	source: HTMLVideoElement | ImageBitmap | VideoFrame;
 	colorFix: boolean;
 	mediaTime: number;
 	release: () => void;
@@ -400,6 +401,7 @@ export class BrowserLocalCanvas {
 		if (this.disposed || !renderer) {
 			throw new Error("Editor canvas is closed");
 		}
+		const wasmStarted = perfStart();
 		const layout =
 			composition.kind === "single"
 				? renderer.render(
@@ -434,6 +436,7 @@ export class BrowserLocalCanvas {
 						composition.type === "cross-fade" ? 0 : 1,
 						composition.progress,
 					);
+		perfSpan("draw.wasm", wasmStarted);
 		const frameLayout = browserFrameLayout(layout);
 		this.lastSize = {
 			width: frameLayout.output_width,
@@ -443,12 +446,14 @@ export class BrowserLocalCanvas {
 		if (this.textRanges.length > 0 && !this.fontsReady) {
 			void this.loadFonts().catch(() => undefined);
 		}
+		const notifyStarted = perfStart();
 		this.onFrame({
 			width: frameLayout.output_width,
 			height: frameLayout.output_height,
 			renderedFrame: { frameNumber, targetTimeNs },
 			layout: frameLayout,
 		});
+		perfSpan("draw.notify", notifyStarted);
 	}
 
 	captureFrame(): Promise<Blob | null> {

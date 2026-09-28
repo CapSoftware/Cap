@@ -6,7 +6,10 @@ import type {
 } from "../renderer/pkg/cap_editor_browser_renderer.js";
 import { browserAudioLevelSources } from "./browser-audio-levels";
 import { BrowserAudioPlayback } from "./browser-audio-playback";
-import { BrowserDecodedVideoPool } from "./browser-decoded-video-pool";
+import {
+	BrowserDecodedVideoPool,
+	MAX_DECODED_PIXELS,
+} from "./browser-decoded-video-pool";
 import {
 	type BrowserClipFrame,
 	BrowserLocalCanvas,
@@ -25,6 +28,7 @@ import {
 	webInputRecording,
 } from "./browser-studio-setup";
 import { BrowserVideoPool, type BrowserVideoRole } from "./browser-video-pool";
+import { perfCount, perfMark, perfSpan, perfStart } from "./editor-perf";
 
 type RendererModule = Awaited<ReturnType<typeof loadBrowserRenderer>>;
 
@@ -36,7 +40,7 @@ type TimelineSegment = {
 };
 
 type TrackFrame = {
-	source: HTMLVideoElement | ImageBitmap;
+	source: HTMLVideoElement | ImageBitmap | VideoFrame;
 	width: number;
 	height: number;
 	mediaTime: number;
@@ -247,8 +251,8 @@ export class BrowserLocalPlayback {
 		try {
 			const signal = controller.signal;
 			const [sources, module] = await Promise.all([
-				catalog.snapshot(signal),
-				loadBrowserRenderer(),
+				catalog.snapshot(signal).finally(() => perfMark("sources")),
+				loadBrowserRenderer().finally(() => perfMark("renderer-module")),
 			]);
 			const firstSegment = sources.segments[0];
 			if (!firstSegment?.display) {
@@ -265,11 +269,14 @@ export class BrowserLocalPlayback {
 						? probeBrowserMedia(sources.mic.url, signal).catch(() => null)
 						: Promise.resolve(null),
 				]);
+				perfMark("media-probed");
 				return { display, camera, mic };
 			})();
 			const [metadata, input] = await Promise.all([
 				metadataPromise,
-				webInputRecording(sources, module, signal),
+				webInputRecording(sources, module, signal).finally(() =>
+					perfMark("input-recording"),
+				),
 			]);
 			if (metadata.display.width === null || metadata.display.height === null) {
 				throw new Error("Editor recording duration is unavailable");
@@ -387,9 +394,11 @@ export class BrowserLocalPlayback {
 				colorHints,
 			);
 			await controls.setProjectConfig(config);
+			perfMark("renderer-ready");
 			await playback.seek(
 				Math.min(initialTime, Math.max(0, recordingDuration - 1 / 60)),
 			);
+			perfMark("first-frame");
 			return playback;
 		} catch (error) {
 			controller.abort();
@@ -590,10 +599,8 @@ export class BrowserLocalPlayback {
 		forceSeek: boolean,
 	): Promise<TrackFrame | null> {
 		if (
-			this.screenWidth <= 1920 &&
-			this.screenHeight <= 1080 &&
-			typeof VideoDecoder === "function" &&
-			typeof createImageBitmap === "function"
+			this.screenWidth * this.screenHeight <= MAX_DECODED_PIXELS &&
+			typeof VideoDecoder === "function"
 		) {
 			const decoded = await this.decodedPool.frame(
 				recordingClip,
@@ -601,17 +608,15 @@ export class BrowserLocalPlayback {
 				role,
 				sourceTime,
 				signal,
-				this.width * 2,
-				this.height * 2,
 			);
 			if (decoded === null) return null;
 			if (decoded !== "fallback") {
 				return {
-					source: decoded.bitmap,
+					source: decoded.frame,
 					width: decoded.width,
 					height: decoded.height,
 					mediaTime: decoded.mediaTime,
-					release: () => decoded.bitmap.close(),
+					release: () => decoded.frame.close(),
 					sourceColorFix: decoded.sourceColorFix,
 				};
 			}
@@ -685,6 +690,7 @@ export class BrowserLocalPlayback {
 			throw new Error("Editor recording timing is unavailable");
 		}
 		const speed = this.speed(segmentIndex);
+		const started = perfStart();
 		const [screenResult, cameraResult] = await Promise.allSettled([
 			this.trackFrame(
 				recordingClip,
@@ -695,7 +701,7 @@ export class BrowserLocalPlayback {
 				speed,
 				signal,
 				forceSeek,
-			),
+			).finally(() => perfSpan("decode.display", started)),
 			Number.isFinite(sourceTimes[1]) && sourceTimes[1] >= 0
 				? this.trackFrame(
 						recordingClip,
@@ -706,7 +712,7 @@ export class BrowserLocalPlayback {
 						speed,
 						signal,
 						forceSeek,
-					)
+					).finally(() => perfSpan("decode.camera", started))
 				: Promise.resolve(null),
 		]);
 		if (screenResult.status === "rejected") {
@@ -744,6 +750,7 @@ export class BrowserLocalPlayback {
 	}
 
 	private async renderAt(time: number, playing: boolean, forceSeek = false) {
+		const started = perfStart();
 		this.frameController?.abort();
 		const controller = new AbortController();
 		this.frameController = controller;
@@ -802,6 +809,7 @@ export class BrowserLocalPlayback {
 			incoming,
 			outgoing,
 		]);
+		perfSpan("frame.decode", started);
 		if (incomingResult.status === "rejected") {
 			if (outgoingResult.status === "fulfilled")
 				releasePair(outgoingResult.value);
@@ -820,6 +828,7 @@ export class BrowserLocalPlayback {
 			releasePair(outgoingPair);
 			return null;
 		}
+		const drawStarted = perfStart();
 		try {
 			await this.canvas.render(
 				outgoingPair
@@ -838,6 +847,8 @@ export class BrowserLocalPlayback {
 			releasePair(incomingPair);
 			releasePair(outgoingPair);
 		}
+		perfSpan("frame.draw", drawStarted);
+		perfSpan(playing ? "frame.playing" : "frame.paused", started);
 		this.renderedTime = time;
 		if (!transition) {
 			this.pool.releaseOverlaps();
@@ -1001,7 +1012,10 @@ export class BrowserLocalPlayback {
 		const tick = () => {
 			if (!this.playing || this.disposed) return;
 			this.animationFrame = requestAnimationFrame(tick);
-			if (this.frameBusy) return;
+			if (this.frameBusy) {
+				perfCount("tick.busy");
+				return;
+			}
 			if (firstTick) {
 				this.playStartedAt = performance.now();
 				firstTick = false;

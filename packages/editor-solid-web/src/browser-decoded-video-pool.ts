@@ -1,17 +1,22 @@
 import type {
 	EncodedPacketSink,
-	Input,
 	VideoSample,
 	VideoSampleSink,
 } from "mediabunny";
+import { acquireMediaInput } from "./browser-media-inputs";
 import type {
 	BrowserVideoRole,
 	BrowserVideoSourceProvider,
 	BrowserVideoTrack,
 } from "./browser-video-pool";
+import { perfCount, perfSpan, perfStart } from "./editor-perf";
+
+/// Up to 4K (Retina screens included) decodes with WebCodecs; a <video>
+/// element would read the whole fragmented recording before it could seek.
+export const MAX_DECODED_PIXELS = 3840 * 2160;
 
 export type BrowserDecodedVideoFrame = {
-	bitmap: ImageBitmap;
+	frame: VideoFrame;
 	width: number;
 	height: number;
 	mediaTime: number;
@@ -19,7 +24,7 @@ export type BrowserDecodedVideoFrame = {
 };
 
 type DecodedSlot = {
-	input: Input;
+	release: () => void;
 	sink: VideoSampleSink;
 	packets: EncodedPacketSink;
 	retagBt601: boolean;
@@ -56,7 +61,7 @@ function releaseEntry(entry: SlotEntry) {
 				await slot.serial;
 				await resetStream(slot);
 			} finally {
-				slot.input.dispose();
+				slot.release();
 			}
 		})
 		.catch(() => undefined);
@@ -96,6 +101,7 @@ async function sampleAtTime(slot: DecodedSlot, sourceTime: number) {
 			(sourceTime > current.timestamp + 0.5 &&
 				(await keyFrameBetween(slot, current.timestamp, sourceTime))))
 	) {
+		perfCount("decode.restart");
 		await resetStream(slot);
 	}
 	if (!slot.iterator) {
@@ -131,17 +137,8 @@ export class BrowserDecodedVideoPool {
 
 	private async createSlot(url: string): Promise<DecodedSlot | null> {
 		if (typeof VideoDecoder !== "function") return null;
-		const {
-			ALL_FORMATS,
-			EncodedPacketSink,
-			Input,
-			UrlSource,
-			VideoSampleSink,
-		} = await import("mediabunny");
-		const input = new Input({
-			formats: ALL_FORMATS,
-			source: new UrlSource(url, { maxCacheSize: 8 * 1024 * 1024 }),
-		});
+		const { EncodedPacketSink, VideoSampleSink } = await import("mediabunny");
+		const { input, release } = await acquireMediaInput(url);
 		try {
 			const track = await input.getPrimaryVideoTrack();
 			if (!track) throw new Error("Editor video track is unavailable");
@@ -155,16 +152,15 @@ export class BrowserDecodedVideoPool {
 				height === null ||
 				width < 1 ||
 				height < 1 ||
-				width > 1920 ||
-				height > 1080 ||
+				width * height > MAX_DECODED_PIXELS ||
 				!config ||
 				!(await VideoDecoder.isConfigSupported(config)).supported
 			) {
-				input.dispose();
+				release();
 				return null;
 			}
 			return {
-				input,
+				release,
 				sink: new VideoSampleSink(track),
 				packets: new EncodedPacketSink(track),
 				iterator: null,
@@ -178,7 +174,7 @@ export class BrowserDecodedVideoPool {
 					height <= 576,
 			};
 		} catch {
-			input.dispose();
+			release();
 			return null;
 		}
 	}
@@ -189,8 +185,6 @@ export class BrowserDecodedVideoPool {
 		role: BrowserVideoRole,
 		sourceTime: number,
 		signal: AbortSignal,
-		maxSourceWidth: number | null = null,
-		maxSourceHeight: number | null = null,
 	): Promise<BrowserDecodedVideoFrame | null | "fallback"> {
 		if (this.disposed) throw new Error("Editor decoded video pool is closed");
 		if (!Number.isSafeInteger(segmentIndex) || segmentIndex < 0) {
@@ -198,14 +192,6 @@ export class BrowserDecodedVideoPool {
 		}
 		if (!Number.isFinite(sourceTime) || sourceTime < 0) {
 			throw new Error("Editor video time is invalid");
-		}
-		if (
-			(maxSourceWidth !== null &&
-				(!Number.isSafeInteger(maxSourceWidth) || maxSourceWidth < 2)) ||
-			(maxSourceHeight !== null &&
-				(!Number.isSafeInteger(maxSourceHeight) || maxSourceHeight < 2))
-		) {
-			throw new Error("Editor decoded frame size is invalid");
 		}
 		if (signal.aborted) {
 			throw signal.reason ?? new DOMException("Canceled", "AbortError");
@@ -259,13 +245,15 @@ export class BrowserDecodedVideoPool {
 				if (signal.aborted || this.disposed) {
 					throw signal.reason ?? new DOMException("Canceled", "AbortError");
 				}
+				const decodeStarted = perfStart();
 				sample = await sampleAtTime(slot, sourceTime);
+				perfSpan("decode.sample", decodeStarted);
 			} finally {
 				releaseSerial();
 			}
 			if (!sample) throw new Error("Editor decoded frame is unavailable");
 			try {
-				let videoFrame = sample.toVideoFrame();
+				let videoFrame: VideoFrame | null = sample.toVideoFrame();
 				let colorRetagged = false;
 				try {
 					if (
@@ -298,51 +286,27 @@ export class BrowserDecodedVideoPool {
 						videoFrame = tagged;
 						colorRetagged = true;
 					}
-					const scale =
-						maxSourceWidth !== null && maxSourceHeight !== null
-							? Math.min(
-									1,
-									maxSourceWidth / videoFrame.displayWidth,
-									maxSourceHeight / videoFrame.displayHeight,
-								)
-							: 1;
-					let bitmap: ImageBitmap;
-					if (scale < 1) {
-						try {
-							bitmap = await createImageBitmap(videoFrame, {
-								resizeWidth: Math.max(
-									2,
-									Math.round(videoFrame.displayWidth * scale),
-								),
-								resizeHeight: Math.max(
-									2,
-									Math.round(videoFrame.displayHeight * scale),
-								),
-								resizeQuality: "medium",
-							});
-						} catch {
-							bitmap = await createImageBitmap(videoFrame);
-						}
-					} else {
-						bitmap = await createImageBitmap(videoFrame);
-					}
 					if (signal.aborted || this.disposed) {
-						bitmap.close();
 						throw signal.reason ?? new DOMException("Canceled", "AbortError");
 					}
+					// The renderer copies the decoder's frame straight into its
+					// texture; an ImageBitmap or a downscale first would cost the GPU
+					// another copy of every frame.
+					const frame = videoFrame;
+					videoFrame = null;
 					return {
-						bitmap,
-						width: bitmap.width,
-						height: bitmap.height,
+						frame,
+						width: frame.displayWidth,
+						height: frame.displayHeight,
 						mediaTime: sample.timestamp,
 						sourceColorFix:
 							slot.retagBt601 &&
 							!colorRetagged &&
-							videoFrame.colorSpace.matrix !== "bt470bg" &&
+							frame.colorSpace.matrix !== "bt470bg" &&
 							navigator.userAgent.includes("Firefox/"),
 					};
 				} finally {
-					videoFrame.close();
+					videoFrame?.close();
 				}
 			} finally {
 				sample.close();
