@@ -302,6 +302,17 @@ export function applyTemplate(
 const spansVideo = (scene: SceneSegment, duration: number) =>
 	scene.start <= 0.001 && scene.end >= duration - 0.001;
 
+/** The timeline's scenes without the whole-video scene a template added. */
+export function withoutTemplateScene(
+	scenes: SceneSegment[] | undefined,
+	mode: SceneMode,
+	duration: number,
+) {
+	return (scenes ?? []).filter(
+		(scene) => !(spansVideo(scene, duration) && scene.mode === mode),
+	);
+}
+
 /** The scene a template laid over the whole video, if there is one. */
 export function fullSpanScene(
 	scenes: SceneSegment[] | undefined,

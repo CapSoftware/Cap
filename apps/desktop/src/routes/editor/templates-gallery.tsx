@@ -39,6 +39,7 @@ import {
 	lookKey,
 	templateBackgroundSource,
 	templateLookKey,
+	withoutTemplateScene,
 } from "./templates";
 import {
 	DropdownItem,
@@ -151,6 +152,10 @@ export function TemplatesGallery() {
 		};
 	};
 
+	// The whole-video scene the last template added, which a preset replaces.
+	// Scenes the person placed stay.
+	let templateScene: SceneMode | null = null;
+
 	const apply = async (template: EditorTemplate) => {
 		try {
 			const source = await templateBackgroundSource(
@@ -162,6 +167,7 @@ export function TemplatesGallery() {
 					applyTemplate(draft, template, source, totalDuration()),
 				),
 			);
+			templateScene = template.scene ?? null;
 		} catch (error) {
 			toast.error(
 				error instanceof Error
@@ -191,11 +197,24 @@ export function TemplatesGallery() {
 				return;
 			}
 		}
+		const timeline = project.timeline;
+		const scene = templateScene;
+		templateScene = null;
 		setProject(
 			reconcile(
 				normalizeProject({
 					...config,
-					timeline: project.timeline ?? null,
+					timeline:
+						timeline && scene
+							? {
+									...timeline,
+									sceneSegments: withoutTemplateScene(
+										timeline.sceneSegments,
+										scene,
+										totalDuration(),
+									),
+								}
+							: (timeline ?? null),
 					overlayOrder: project.overlayOrder ?? [],
 					clips: project.clips,
 				}),

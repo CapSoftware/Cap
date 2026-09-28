@@ -7,6 +7,7 @@ import {
 	lookKey,
 	templateLookKey,
 	templateSource,
+	withoutTemplateScene,
 } from "./templates";
 
 const project = () =>
@@ -68,5 +69,17 @@ describe("template looks", () => {
 			end: 4,
 			mode: "cameraOnly",
 		});
+	});
+
+	it("drop only the whole-video scene a template added", () => {
+		const scenes = [
+			{ start: 0, end: 10, mode: "floating" as const },
+			{ start: 0, end: 10, mode: "cameraOnly" as const },
+			{ start: 2, end: 4, mode: "floating" as const },
+		];
+		expect(withoutTemplateScene(scenes, "floating", 10)).toEqual([
+			{ start: 0, end: 10, mode: "cameraOnly" },
+			{ start: 2, end: 4, mode: "floating" },
+		]);
 	});
 });
