@@ -174,6 +174,9 @@ export interface VideoMetadata {
 		updatedAt: string;
 		progress: number;
 		finished?: boolean;
+		/** Where its playable chunks are stored, and each one's duration. */
+		saveId?: string;
+		chunks?: number[];
 	};
 	renderFarmExports?: {
 		version: 1;
