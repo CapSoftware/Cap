@@ -57,9 +57,6 @@ const captionsAllowed = () =>
 	!isWebEditor ||
 	(window as Window & { capWebEditorCaptionsEnabled?: boolean })
 		.capWebEditorCaptionsEnabled === true;
-const recordingBundleActionLabel = isWebEditor
-	? "Download recording bundle"
-	: "Open recording bundle";
 
 export function Header(props: {
 	registerTitleSave: RegisterTitleSave;
@@ -123,7 +120,7 @@ export function Header(props: {
 					ostype() === "windows" && "max-[900px]:pr-[146px]",
 				)}
 			>
-				<Show when={!isWebEditor} fallback={<BackToSharePage />}>
+				<Show when={!isWebEditor} fallback={<div class="w-3 shrink-0" />}>
 					{ostype() === "macos" && (
 						<div data-tauri-drag-region class="h-full w-[92px] shrink-0" />
 					)}
@@ -144,32 +141,22 @@ export function Header(props: {
 				</div>
 
 				<div
-					inert={props.disabled && !isWebEditor}
+					inert={props.disabled}
 					class="flex gap-0.5 items-center ml-1.5 shrink-0"
 				>
+					<Show when={!isWebEditor}>
+						<EditorButton
+							onClick={() => {
+								clearTimelineSelection();
+
+								console.log({ path: `${editorInstance.path}/` });
+								revealItemInDir(`${editorInstance.path}/`);
+							}}
+							tooltipText="Open recording bundle"
+							leftIcon={<IconLucideFolder />}
+						/>
+					</Show>
 					<EditorButton
-						onClick={() => {
-							clearTimelineSelection();
-							const path = `${editorInstance.path}/`;
-							if (isWebEditor) {
-								void revealItemInDir(path).catch((error: unknown) => {
-									toast.error(
-										error instanceof Error
-											? error.message
-											: "Unable to download recording bundle",
-									);
-								});
-								return;
-							}
-							console.log({ path });
-							revealItemInDir(path);
-						}}
-						tooltipText={recordingBundleActionLabel}
-						aria-label={recordingBundleActionLabel}
-						leftIcon={<IconLucideFolder />}
-					/>
-					<EditorButton
-						inert={isWebEditor && props.disabled}
 						onClick={async () => {
 							clearTimelineSelection();
 
@@ -218,8 +205,15 @@ export function Header(props: {
 					leftIcon={<IconCapRedo />}
 				/>
 				<div class="mx-1.5 w-px h-4 shrink-0 bg-ed-line-strong" />
-				<OrganizationDropdown />
-				<Show when={isWebEditor} fallback={<PresetsDropdown />}>
+				<Show
+					when={isWebEditor}
+					fallback={
+						<>
+							<OrganizationDropdown />
+							<PresetsDropdown />
+						</>
+					}
+				>
 					<TemplatesGallery />
 				</Show>
 				<Show when={!isWebEditor}>
@@ -292,31 +286,6 @@ export function Header(props: {
 			{!isWebEditor && ostype() === "windows" && (
 				<CaptionControlsWindows11 class="shrink-0 max-[900px]:absolute max-[900px]:right-0 max-[900px]:top-0 max-[900px]:h-9" />
 			)}
-		</div>
-	);
-}
-
-function BackToSharePage() {
-	const { meta } = useEditorContext();
-	return (
-		<div class="flex shrink-0 items-center pl-2">
-			<Show when={meta().sharing}>
-				{(sharing) => (
-					<>
-						<EditorButton
-							leftIcon={<IconLucideArrowLeft />}
-							tooltipText="Back to the share page"
-							aria-label="Back to the share page"
-							onClick={() => {
-								(window.top ?? window).location.href = sharing().link;
-							}}
-						>
-							<span class="max-[700px]:hidden">Share page</span>
-						</EditorButton>
-						<div class="mx-1.5 w-px h-4 shrink-0 bg-ed-line-strong" />
-					</>
-				)}
-			</Show>
 		</div>
 	);
 }
