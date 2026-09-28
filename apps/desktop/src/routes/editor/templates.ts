@@ -26,7 +26,6 @@ export type EditorTemplate = {
 	rounding: number;
 	shadow: number;
 	camera: Pick<Camera, "hide" | "position" | "size" | "rounding" | "shape">;
-	/** A scene that covers the whole video, e.g. side by side. */
 	scene?: SceneMode;
 };
 

@@ -11,5 +11,4 @@ export function editorVerticalLayout(available: number, preferred: number) {
 	};
 }
 
-/** Height of the web editor's clip strip plus the gap above the timeline. */
 export const CLIP_STRIP_SPACE = 56;

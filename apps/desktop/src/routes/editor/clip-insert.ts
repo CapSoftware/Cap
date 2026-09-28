@@ -39,7 +39,6 @@ export function forgetClipInsert() {
 	} catch {}
 }
 
-/** The clips added since the insert was remembered, and where they go. */
 export function takeClipInsert(project: string, clipCount: number) {
 	let stored: Partial<ClipInsert> | null = null;
 	try {
