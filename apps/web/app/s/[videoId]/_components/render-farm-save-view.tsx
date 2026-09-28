@@ -24,8 +24,15 @@ type RenderSaveStatus = {
 
 const POLL_MS = 3000;
 
-/** Polls a render on the render farm while it's running. */
-export function useRenderSaveStatus(videoId: string, enabled = true) {
+/**
+ * Polls a render while it's running, and with `untilStarted`, while one that
+ * is about to start hasn't reported yet.
+ */
+export function useRenderSaveStatus(
+	videoId: string,
+	enabled = true,
+	untilStarted = false,
+) {
 	const [status, setStatus] = useState<RenderSaveStatus | null>(null);
 	useEffect(() => {
 		if (!enabled) return;
@@ -40,7 +47,7 @@ export function useRenderSaveStatus(videoId: string, enabled = true) {
 				if (response.ok) {
 					const next = (await response.json()) as RenderSaveStatus;
 					setStatus(next);
-					if (next.state !== "rendering") return;
+					if (next.state !== "rendering" && !untilStarted) return;
 				}
 			} catch {
 				if (controller.signal.aborted) return;
@@ -52,7 +59,7 @@ export function useRenderSaveStatus(videoId: string, enabled = true) {
 			controller.abort();
 			clearTimeout(timer);
 		};
-	}, [videoId, enabled]);
+	}, [videoId, enabled, untilStarted]);
 	return status;
 }
 
@@ -129,26 +136,38 @@ export function RenderFarmSaveView({
 	videoId,
 	videoRef,
 	fallback,
+	startingRender = false,
 	className,
 }: {
 	videoId: Video.VideoId;
 	videoRef: RefObject<HTMLVideoElement | null>;
 	fallback: ReactNode;
+	/** A render this page is about to start, which may not have reported yet. */
+	startingRender?: boolean;
 	className?: string;
 }) {
-	const status = useRenderSaveStatus(videoId);
+	const [awaitingStart, setAwaitingStart] = useState(startingRender);
+	const status = useRenderSaveStatus(videoId, true, awaitingStart);
 	const poster = useThumnailQuery(videoId).data;
 	const router = useRouter();
 	const [playlist, setPlaylist] = useState<string | null>(null);
 	const [waiting, setWaiting] = useState(false);
 	const [finishing, setFinishing] = useState(false);
+
+	useEffect(() => {
+		if (!awaitingStart) return;
+		const timer = setTimeout(() => setAwaitingStart(false), 30_000);
+		return () => clearTimeout(timer);
+	}, [awaitingStart]);
 	const sawRendering = useRef(false);
 
 	// A Save rendered in the owner's browser has no render to stream here: it
 	// replaces the share video, so its end is a cue to load the page again.
 	useEffect(() => {
-		if (status?.state === "rendering") sawRendering.current = true;
-		else if (status?.state === "idle" && sawRendering.current) {
+		if (status?.state === "rendering") {
+			sawRendering.current = true;
+			setAwaitingStart(false);
+		} else if (status?.state === "idle" && sawRendering.current) {
 			setFinishing(true);
 			router.refresh();
 		}
@@ -169,7 +188,10 @@ export function RenderFarmSaveView({
 		});
 	}, [status?.state, videoId, videoRef, router]);
 
-	if (status?.state === "error" || (status?.state === "idle" && !finishing))
+	if (
+		status?.state === "error" ||
+		(status?.state === "idle" && !finishing && !awaitingStart)
+	)
 		return fallback;
 	const progress = status?.progress ?? 0;
 	const rendering = status?.state !== "ready";

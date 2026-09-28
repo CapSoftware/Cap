@@ -6,8 +6,6 @@ import {
 	organizationMembers,
 	organizations,
 	sharedVideos,
-	spaces,
-	spaceVideos,
 	users,
 	videoEdits,
 	videos,
@@ -79,6 +77,7 @@ import { optionFromTOrFirst } from "@/utils/effect";
 import { isAiGenerationEnabled } from "@/utils/flags";
 import { PasswordOverlay } from "./_components/PasswordOverlay";
 import { PendingRecordingShare } from "./_components/PendingRecordingShare";
+import { RecordingPublisher } from "./_components/recording-publisher-lazy";
 import { ShareHeader } from "./_components/ShareHeader";
 import { Share } from "./Share";
 
@@ -780,6 +779,16 @@ async function AuthorizedContent({
 			rawFileKey: video.activeUploadRawFileKey,
 		}) && !video.isScreenshot;
 
+	const publishesRecording =
+		optionFromTOrFirst(searchParams.from).pipe(Option.getOrNull) ===
+			"recording" &&
+		!!user &&
+		user.id === video.owner.id &&
+		isWebStudioEnabledForEmail(user.email) &&
+		video.source.type === "webMP4" &&
+		video.metadata?.editorSources?.version === 1 &&
+		!video.metadata.renderFarmSave;
+
 	const defaultPlaybackSpeed = resolveDefaultPlaybackSpeed(
 		video.videoSettings?.defaultPlaybackSpeed,
 		video.orgSettings?.defaultPlaybackSpeed,
@@ -801,6 +810,14 @@ async function AuthorizedContent({
 	// in a container.
 	return (
 		<div className="flex flex-col flex-1 min-h-0">
+			{publishesRecording && user && (
+				<RecordingPublisher
+					videoId={video.id}
+					userId={user.id}
+					captionsEnabled={userIsPro(user)}
+					savedAt={video.metadata?.webEditorProject?.savedAt ?? null}
+				/>
+			)}
 			<Share
 				header={
 					<ShareHeader
@@ -843,6 +860,7 @@ async function AuthorizedContent({
 				initialView={initialShareView}
 				canRecordMedia={canRecordMedia}
 				isEditProcessing={isEditProcessing}
+				renderStarting={publishesRecording}
 				recordingStopped={recordingStopped}
 				defaultPlaybackSpeed={defaultPlaybackSpeed}
 				initialAiData={initialAiData}

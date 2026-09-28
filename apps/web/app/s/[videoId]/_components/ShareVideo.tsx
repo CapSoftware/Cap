@@ -97,6 +97,7 @@ export const ShareVideo = forwardRef<
 		canFinalizeDesktopSegments?: boolean;
 		showPlaybackStatusBadge?: boolean;
 		isEditProcessing: boolean;
+		renderStarting?: boolean;
 		recordingStopped?: boolean;
 		defaultPlaybackSpeed?: number;
 		viewerIsOwner?: boolean;
@@ -118,6 +119,7 @@ export const ShareVideo = forwardRef<
 			canFinalizeDesktopSegments = false,
 			showPlaybackStatusBadge = false,
 			isEditProcessing,
+			renderStarting = false,
 			recordingStopped = false,
 			defaultPlaybackSpeed,
 			viewerIsOwner = false,
@@ -492,7 +494,8 @@ export const ShareVideo = forwardRef<
 
 		const renderSaveActive =
 			isMp4Source &&
-			(data.metadata?.renderFarmSave?.status === "rendering" ||
+			(renderStarting ||
+				data.metadata?.renderFarmSave?.status === "rendering" ||
 				activeBrowserSave(data.metadata) !== null);
 		const capVideoPlayer = (
 			<CapVideoPlayer
@@ -590,6 +593,7 @@ export const ShareVideo = forwardRef<
 								videoId={data.id}
 								videoRef={videoRef}
 								fallback={capVideoPlayer}
+								startingRender={renderStarting}
 								className="h-full rounded-xl"
 							/>
 						) : (
