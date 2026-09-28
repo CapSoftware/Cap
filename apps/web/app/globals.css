@@ -1014,63 +1014,33 @@ footer a {
 		mix-blend-mode: normal;
 	}
 
-	html[data-view-transition="edit-enter"]::view-transition-old(root) {
-		animation-name: cap-fade-out-down;
+	/* Share page and editor are two sides of one toggle: the pages cross-fade
+	   under a bar that stays put, and the video morphs between them. */
+	::view-transition-group(cap-shell-bar) {
+		animation-duration: 280ms;
+		animation-timing-function: cubic-bezier(0.32, 0.72, 0, 1);
+		z-index: 60;
 	}
 
-	html[data-view-transition="edit-enter"]::view-transition-new(root) {
-		animation-name: cap-fade-in-up;
-	}
-
+	html[data-view-transition="edit-enter"]::view-transition-old(root),
 	html[data-view-transition="edit-exit"]::view-transition-old(root) {
-		animation-name: cap-fade-out-up;
+		animation: 180ms ease-out both cap-fade-out;
 	}
 
+	html[data-view-transition="edit-enter"]::view-transition-new(root),
 	html[data-view-transition="edit-exit"]::view-transition-new(root) {
-		animation-name: cap-fade-in-down;
+		animation: 320ms cubic-bezier(0.32, 0.72, 0, 1) 60ms both cap-fade-in;
 	}
 
-	@keyframes cap-fade-out-down {
-		from {
-			opacity: 1;
-			transform: scale(1);
-		}
+	@keyframes cap-fade-out {
 		to {
 			opacity: 0;
-			transform: scale(0.96);
 		}
 	}
 
-	@keyframes cap-fade-in-up {
+	@keyframes cap-fade-in {
 		from {
 			opacity: 0;
-			transform: scale(1.04);
-		}
-		to {
-			opacity: 1;
-			transform: scale(1);
-		}
-	}
-
-	@keyframes cap-fade-out-up {
-		from {
-			opacity: 1;
-			transform: scale(1);
-		}
-		to {
-			opacity: 0;
-			transform: scale(1.04);
-		}
-	}
-
-	@keyframes cap-fade-in-down {
-		from {
-			opacity: 0;
-			transform: scale(0.96);
-		}
-		to {
-			opacity: 1;
-			transform: scale(1);
 		}
 	}
 }
