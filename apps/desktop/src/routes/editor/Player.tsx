@@ -761,7 +761,7 @@ function PreviewCanvas(props: {
 					style={{
 						width: `${size().width}px`,
 						height: `${size().height}px`,
-						contain: "strict",
+						contain: "size layout style",
 					}}
 				>
 					<Show when={canvasControls()} keyed>
