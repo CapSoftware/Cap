@@ -170,13 +170,18 @@ export function WebPublishControls() {
 		projectRevision() !== (savedRevision() ?? 0) ||
 		browserSave() !== null ||
 		status()?.state === "error";
+	const savingHere = () => browserSave() !== null;
 	const editorWindow = window as Window & {
 		capWebEditorUnpublishedEdits?: () => boolean;
+		capWebEditorSavingHere?: () => boolean;
 	};
 	editorWindow.capWebEditorUnpublishedEdits = unpublishedEdits;
+	editorWindow.capWebEditorSavingHere = savingHere;
 	onCleanup(() => {
 		if (editorWindow.capWebEditorUnpublishedEdits === unpublishedEdits)
 			delete editorWindow.capWebEditorUnpublishedEdits;
+		if (editorWindow.capWebEditorSavingHere === savingHere)
+			delete editorWindow.capWebEditorSavingHere;
 	});
 
 	const save = async (automatic = false) => {

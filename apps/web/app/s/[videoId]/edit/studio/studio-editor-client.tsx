@@ -50,6 +50,7 @@ type SolidEditorWindow = Window & {
 	capSolidEditor?: {
 		unsavedProject?: () => string | null;
 		unpublishedEdits?: () => boolean;
+		savingHere?: () => boolean;
 	};
 };
 
@@ -59,6 +60,14 @@ const solidEditor = (iframe: HTMLIFrameElement | null) =>
 const hasUnpublishedEdits = (iframe: HTMLIFrameElement | null) => {
 	try {
 		return solidEditor(iframe)?.unpublishedEdits?.() === true;
+	} catch {
+		return false;
+	}
+};
+
+const isSavingHere = (iframe: HTMLIFrameElement | null) => {
+	try {
+		return solidEditor(iframe)?.savingHere?.() === true;
 	} catch {
 		return false;
 	}
@@ -573,13 +582,22 @@ export function StudioEditorClient(props: {
 		if (
 			hasUnpublishedEdits(iframeRef.current) &&
 			!window.confirm(
-				"Leave without saving? Your share link won't show your latest edits.",
+				isSavingHere(iframeRef.current)
+					? "Your save is still rendering in this tab. Leave and stop it?"
+					: "Leave without saving? Your share link won't show your latest edits.",
 			)
 		)
 			event.preventDefault();
 	};
 
 	const backToSharePage = (event: MouseEvent<HTMLAnchorElement>) => {
+		// A save rendering in this tab would stop if it navigated, so the share
+		// page, which shows its progress, opens beside it instead.
+		if (isSavingHere(iframeRef.current)) {
+			event.preventDefault();
+			window.open(`/s/${videoId}`, "_blank", "noopener");
+			return;
+		}
 		confirmLeave(event);
 		if (
 			event.defaultPrevented ||
