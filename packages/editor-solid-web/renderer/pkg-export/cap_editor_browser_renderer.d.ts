@@ -44,6 +44,27 @@ export class BrowserExportAudio {
    * time zero falls in the track (the preview's `audio_times` offset).
    */
   add_track(clip: number, microphone: boolean, channels: number, sample_rate: number, offset_seconds: number, samples: Float32Array): void;
+  /**
+   * Adds a 48 kHz recording track whose samples arrive later in blocks, as
+   * `plan` asks for them. `frames` is its length, or 0 when not yet known.
+   * Returns the id `plan` and `put_block` use for it.
+   */
+  add_streamed_track(clip: number, microphone: boolean, channels: number, frames: number, offset_seconds: number): number;
+  /**
+   * Stores block `block` of a streamed track: `BLOCK_FRAMES` interleaved
+   * frames, fewer at the end of the track.
+   */
+  put_block(track: number, block: number, samples: Float32Array): void;
+  /**
+   * Sets a streamed track's length once its decoder reaches the end.
+   */
+  set_track_frames(track: number, frames: number): void;
+  /**
+   * The streamed blocks the next `next_chunk(frames)` reads that aren't
+   * loaded yet, as `[track, block]` pairs. Blocks it no longer needs are
+   * dropped.
+   */
+  plan(frames: number): Uint32Array;
   add_music(path: string, channels: number, sample_rate: number, samples: Float32Array): void;
   /**
    * Interleaved stereo 48 kHz samples; empty once the timeline is done.
@@ -130,6 +151,10 @@ export interface InitOutput {
   readonly __wbg_browserexportaudio_free: (a: number, b: number) => void;
   readonly browserexportaudio_new: (a: number, b: number, c: number) => [number, number, number];
   readonly browserexportaudio_add_track: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];
+  readonly browserexportaudio_add_streamed_track: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
+  readonly browserexportaudio_put_block: (a: number, b: number, c: number, d: number, e: number) => void;
+  readonly browserexportaudio_set_track_frames: (a: number, b: number, c: number) => void;
+  readonly browserexportaudio_plan: (a: number, b: number) => [number, number];
   readonly browserexportaudio_add_music: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number];
   readonly browserexportaudio_next_chunk: (a: number, b: number) => [number, number];
   readonly start: () => void;
@@ -194,9 +219,9 @@ export interface InitOutput {
   readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
   readonly __wbindgen_export_6: WebAssembly.Table;
   readonly __externref_table_dealloc: (a: number) => void;
-  readonly closure1638_externref_shim: (a: number, b: number, c: any) => void;
   readonly wasm_bindgen__convert__closures_____invoke__hfa69fcf5a022ebc2: (a: number, b: number) => void;
   readonly closure1254_externref_shim: (a: number, b: number, c: any) => void;
+  readonly closure1638_externref_shim: (a: number, b: number, c: any) => void;
   readonly closure2710_externref_shim: (a: number, b: number, c: any, d: any) => void;
   readonly __wbindgen_start: () => void;
 }

@@ -504,19 +504,19 @@ export function webgl2_available(canvas) {
     return ret !== 0;
 }
 
-function __wbg_adapter_18(arg0, arg1, arg2) {
-    wasm.closure1638_externref_shim(arg0, arg1, arg2);
-}
-
-function __wbg_adapter_21(arg0, arg1) {
+function __wbg_adapter_8(arg0, arg1) {
     wasm.wasm_bindgen__convert__closures_____invoke__hfa69fcf5a022ebc2(arg0, arg1);
 }
 
-function __wbg_adapter_28(arg0, arg1, arg2) {
+function __wbg_adapter_15(arg0, arg1, arg2) {
     wasm.closure1254_externref_shim(arg0, arg1, arg2);
 }
 
-function __wbg_adapter_1237(arg0, arg1, arg2, arg3) {
+function __wbg_adapter_26(arg0, arg1, arg2) {
+    wasm.closure1638_externref_shim(arg0, arg1, arg2);
+}
+
+function __wbg_adapter_1241(arg0, arg1, arg2, arg3) {
     wasm.closure2710_externref_shim(arg0, arg1, arg2, arg3);
 }
 
@@ -673,6 +673,57 @@ export class BrowserExportAudio {
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
         }
+    }
+    /**
+     * Adds a 48 kHz recording track whose samples arrive later in blocks, as
+     * `plan` asks for them. `frames` is its length, or 0 when not yet known.
+     * Returns the id `plan` and `put_block` use for it.
+     * @param {number} clip
+     * @param {boolean} microphone
+     * @param {number} channels
+     * @param {number} frames
+     * @param {number} offset_seconds
+     * @returns {number}
+     */
+    add_streamed_track(clip, microphone, channels, frames, offset_seconds) {
+        const ret = wasm.browserexportaudio_add_streamed_track(this.__wbg_ptr, clip, microphone, channels, frames, offset_seconds);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return ret[0] >>> 0;
+    }
+    /**
+     * Stores block `block` of a streamed track: `BLOCK_FRAMES` interleaved
+     * frames, fewer at the end of the track.
+     * @param {number} track
+     * @param {number} block
+     * @param {Float32Array} samples
+     */
+    put_block(track, block, samples) {
+        const ptr0 = passArrayF32ToWasm0(samples, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        wasm.browserexportaudio_put_block(this.__wbg_ptr, track, block, ptr0, len0);
+    }
+    /**
+     * Sets a streamed track's length once its decoder reaches the end.
+     * @param {number} track
+     * @param {number} frames
+     */
+    set_track_frames(track, frames) {
+        wasm.browserexportaudio_set_track_frames(this.__wbg_ptr, track, frames);
+    }
+    /**
+     * The streamed blocks the next `next_chunk(frames)` reads that aren't
+     * loaded yet, as `[track, block]` pairs. Blocks it no longer needs are
+     * dropped.
+     * @param {number} frames
+     * @returns {Uint32Array}
+     */
+    plan(frames) {
+        const ret = wasm.browserexportaudio_plan(this.__wbg_ptr, frames);
+        var v1 = getArrayU32FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v1;
     }
     /**
      * @param {string} path
@@ -2144,7 +2195,7 @@ function __wbg_get_imports() {
                 const a = state0.a;
                 state0.a = 0;
                 try {
-                    return __wbg_adapter_1237(a, state0.b, arg0, arg1);
+                    return __wbg_adapter_1241(a, state0.b, arg0, arg1);
                 } finally {
                     state0.a = a;
                 }
@@ -3274,7 +3325,7 @@ function __wbg_get_imports() {
     };
     imports.wbg.__wbindgen_cast_aaa93aae03c115ab = function(arg0, arg1) {
         // Cast intrinsic for `Closure(Closure { dtor_idx: 1, function: Function { arguments: [], shim_idx: 2, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-        const ret = makeMutClosure(arg0, arg1, 1, __wbg_adapter_21);
+        const ret = makeMutClosure(arg0, arg1, 1, __wbg_adapter_8);
         return ret;
     };
     imports.wbg.__wbindgen_cast_bbb4883c6389f1de = function(arg0, arg1) {
@@ -3284,7 +3335,7 @@ function __wbg_get_imports() {
     };
     imports.wbg.__wbindgen_cast_c3d22d6c8426da85 = function(arg0, arg1) {
         // Cast intrinsic for `Closure(Closure { dtor_idx: 1253, function: Function { arguments: [NamedExternref("GPUUncapturedErrorEvent")], shim_idx: 1254, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-        const ret = makeMutClosure(arg0, arg1, 1253, __wbg_adapter_28);
+        const ret = makeMutClosure(arg0, arg1, 1253, __wbg_adapter_15);
         return ret;
     };
     imports.wbg.__wbindgen_cast_cb9088102bce6b30 = function(arg0, arg1) {
@@ -3299,7 +3350,7 @@ function __wbg_get_imports() {
     };
     imports.wbg.__wbindgen_cast_d4bd1c47d29fbd27 = function(arg0, arg1) {
         // Cast intrinsic for `Closure(Closure { dtor_idx: 1637, function: Function { arguments: [Externref], shim_idx: 1638, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-        const ret = makeMutClosure(arg0, arg1, 1637, __wbg_adapter_18);
+        const ret = makeMutClosure(arg0, arg1, 1637, __wbg_adapter_26);
         return ret;
     };
     imports.wbg.__wbindgen_cast_d6cd19b81560fd6e = function(arg0) {
