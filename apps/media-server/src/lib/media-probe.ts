@@ -1,4 +1,10 @@
-import type { AudioCodec, MediaCodec, VideoCodec } from "mediabunny";
+import {
+	type AudioCodec,
+	type MediaCodec,
+	MP4,
+	QTFF,
+	type VideoCodec,
+} from "mediabunny";
 import type { VideoMetadata } from "./job-manager";
 import {
 	createMediaInput,
@@ -78,10 +84,15 @@ async function probeMedia(path: string): Promise<VideoMetadata> {
 		}
 
 		const audioTrack = await input.getPrimaryAudioTrack();
+		// A fragmented MP4, as the browser recorder writes, declares only its
+		// first fragment's length. MP4 packet tables make the real end cheap.
+		const format = await input.getFormat();
 		const duration =
-			(await input.getDurationFromMetadata(undefined, {
-				skipLiveWait: true,
-			})) ??
+			(format === MP4 || format === QTFF
+				? null
+				: await input.getDurationFromMetadata(undefined, {
+						skipLiveWait: true,
+					})) ??
 			(await input.computeDuration(undefined, {
 				skipLiveWait: true,
 			}));
