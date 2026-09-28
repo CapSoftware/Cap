@@ -44,8 +44,8 @@ import { Toggle } from "~/components/Toggle";
 import { composeEventHandlers } from "~/utils/composeEventHandlers";
 import { createTauriEventListener } from "~/utils/createEventListener";
 import { commands, events } from "~/utils/tauri";
-import { ClipStrip } from "./ClipStrip";
 import { ConfigSidebar } from "./ConfigSidebar";
+import { ClipStrip } from "./clip-strip";
 import {
 	EditorContextProvider,
 	EditorInstanceContextProvider,
@@ -68,8 +68,8 @@ import { PlayerContent } from "./Player";
 import { usePreparingEditor } from "./preparing-editor-context";
 import { Timeline } from "./Timeline";
 import { Dialog, DialogContent, EditorButton, Input, Subfield } from "./ui";
-import { WebDropImport } from "./WebDropImport";
 import { applyAudioOnlySetup, needsAudioOnlySetup } from "./waveform";
+import { WebDropImport } from "./web-drop-import";
 
 // Deferred surfaces: these are not visible at first paint (export mode,
 // transcript panel, clips sidebar), so their code is split out of the editor

@@ -30,7 +30,7 @@ import IconLucidePalette from "~icons/lucide/palette";
 import { stylesRevealCamera } from "../style";
 import { ImageTrack } from "./image-track";
 import { type OverlayDragState, StyleTrack } from "./style-track";
-import { WaveformTrack } from "./WaveformTrack";
+import { WaveformTrack } from "./waveform-track";
 
 import "./styles.css";
 

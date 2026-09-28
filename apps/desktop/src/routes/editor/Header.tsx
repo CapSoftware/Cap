@@ -23,9 +23,9 @@ import OrganizationDropdown from "./OrganizationDropdown";
 import PresetsDropdown from "./PresetsDropdown";
 import { createRecordingTitleSave } from "./recording-title-save";
 import ShareButton from "./ShareButton";
-import { TemplatesGallery } from "./TemplatesGallery";
+import { TemplatesGallery } from "./templates-gallery";
 import { EditorButton } from "./ui";
-import { WebPublishControls } from "./WebPublishControls";
+import { WebPublishControls } from "./web-publish-controls";
 
 export type ResolutionOption = {
 	label: string;
