@@ -14,7 +14,6 @@ use wasm_bindgen::prelude::*;
 use crate::{AudioSampleSource, VoiceEnhancer, VoiceProfile, js_error};
 
 pub const SAMPLE_RATE: u32 = 48_000;
-const MUSIC_SILENCE_DB: f32 = -60.0;
 
 struct Track {
     channels: usize,
@@ -73,14 +72,6 @@ fn samples_at(seconds: f64) -> usize {
 
 fn gain_for_db(db: f32) -> Option<f32> {
     (db > -30.0).then(|| 10.0_f32.powf(db / 20.0))
-}
-
-fn music_gain(volume_db: f32) -> f32 {
-    if volume_db <= MUSIC_SILENCE_DB {
-        0.0
-    } else {
-        10.0_f32.powf(volume_db / 20.0)
-    }
 }
 
 fn gcd(a: u64, b: u64) -> u64 {
@@ -329,7 +320,7 @@ impl BrowserExportAudio {
             if !segment.enabled || segment.end <= segment.start {
                 continue;
             }
-            let gain = music_gain(segment.volume_db);
+            let gain = segment.volume_gain();
             if gain <= 0.0 {
                 continue;
             }

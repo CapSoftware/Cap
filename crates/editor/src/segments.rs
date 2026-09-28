@@ -6,10 +6,10 @@ use tracing::warn;
 
 use crate::{
     SegmentMedia,
-    audio::{AudioSegment, AudioSegmentTrack, MUSIC_SILENCE_DB, MusicTracks},
+    audio::{AudioSegment, AudioSegmentTrack, MusicTracks},
 };
 
-fn resolve_music_path(project_path: &Path, path: &str) -> std::path::PathBuf {
+pub(crate) fn resolve_music_path(project_path: &Path, path: &str) -> std::path::PathBuf {
     let candidate = Path::new(path);
     if candidate.is_absolute() {
         candidate.to_path_buf()
@@ -38,8 +38,7 @@ pub fn load_music_tracks(
     let sample_rate = AudioData::SAMPLE_RATE as f64;
 
     for segment in &timeline.audio_segments {
-        if !segment.enabled || segment.end <= segment.start || segment.volume_db <= MUSIC_SILENCE_DB
-        {
+        if !segment.enabled || segment.end <= segment.start || segment.volume_gain() <= 0.0 {
             continue;
         }
 

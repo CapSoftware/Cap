@@ -1649,8 +1649,36 @@ pub struct AudioTrackSegment {
 }
 
 impl AudioTrackSegment {
+    pub const SILENT_DB: f32 = -60.0;
+
     fn default_enabled() -> bool {
         true
+    }
+
+    pub fn volume_gain(&self) -> f32 {
+        if self.volume_db <= Self::SILENT_DB {
+            0.0
+        } else {
+            10.0_f32.powf(self.volume_db / 20.0)
+        }
+    }
+
+    /// The source-file time the audio mixer reads at output `time` and the
+    /// gain it plays there (volume and fade ramps), or `None` when silent.
+    pub fn playback_at(&self, time: f64) -> Option<(f64, f32)> {
+        if !self.enabled || !time.is_finite() || time < self.start || time >= self.end {
+            return None;
+        }
+        let local = time - self.start;
+        let until_end = self.end - time;
+        let mut gain = self.volume_gain();
+        if self.fade_in > 0.0 && local < self.fade_in {
+            gain *= (local / self.fade_in) as f32;
+        }
+        if self.fade_out > 0.0 && until_end <= self.fade_out {
+            gain *= (until_end / self.fade_out).clamp(0.0, 1.0) as f32;
+        }
+        (gain > 0.0).then_some((self.trim_start.max(0.0) + local, gain))
     }
 }
 
@@ -3232,6 +3260,31 @@ mod tests {
         let json = serde_json::to_value(&config).unwrap();
         assert!(json["timeline"].get("styleSegments").is_none());
         assert!(json["timeline"].get("imageSegments").is_none());
+    }
+
+    #[test]
+    fn audio_track_playback_follows_placement_trim_fades_and_mute() {
+        let mut segment: AudioTrackSegment = serde_json::from_value(serde_json::json!({
+            "start": 2.0, "end": 6.0, "path": "music.mp3", "trimStart": 1.5,
+            "fadeIn": 1.0, "fadeOut": 2.0
+        }))
+        .unwrap();
+        assert_eq!(segment.playback_at(1.99), None);
+        assert_eq!(segment.playback_at(2.0), None);
+        assert_eq!(segment.playback_at(2.5), Some((2.0, 0.5)));
+        assert_eq!(segment.playback_at(3.5), Some((3.0, 1.0)));
+        assert_eq!(segment.playback_at(5.0), Some((4.5, 0.5)));
+        assert_eq!(segment.playback_at(6.0), None);
+        assert_eq!(segment.playback_at(f64::NAN), None);
+
+        segment.volume_db = -6.0;
+        let (_, gain) = segment.playback_at(3.5).unwrap();
+        assert!((gain - 0.501).abs() < 1.0e-3);
+        segment.volume_db = AudioTrackSegment::SILENT_DB;
+        assert_eq!(segment.playback_at(3.5), None);
+        segment.volume_db = 0.0;
+        segment.enabled = false;
+        assert_eq!(segment.playback_at(3.5), None);
     }
 
     #[test]

@@ -1274,17 +1274,6 @@ fn mix_transition_audio_at(
     }
 }
 
-/// Below this volume a music track is treated as silent and skipped entirely.
-pub(crate) const MUSIC_SILENCE_DB: f32 = -60.0;
-
-fn music_gain(volume_db: f32) -> f32 {
-    if volume_db <= MUSIC_SILENCE_DB {
-        0.0
-    } else {
-        10.0_f32.powf(volume_db / 20.0)
-    }
-}
-
 /// Mixes timeline-positioned music tracks into an already-rendered, interleaved
 /// stereo buffer covering output samples `[frame_start, frame_start + samples)`.
 ///
@@ -1311,7 +1300,7 @@ fn mix_music(
             continue;
         }
 
-        let gain = music_gain(segment.volume_db);
+        let gain = segment.volume_gain();
         if gain <= 0.0 {
             continue;
         }
