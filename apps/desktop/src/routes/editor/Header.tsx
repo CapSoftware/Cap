@@ -23,6 +23,7 @@ import OrganizationDropdown from "./OrganizationDropdown";
 import PresetsDropdown from "./PresetsDropdown";
 import { createRecordingTitleSave } from "./recording-title-save";
 import ShareButton from "./ShareButton";
+import { TemplatesGallery } from "./TemplatesGallery";
 import { EditorButton } from "./ui";
 import { WebPublishControls } from "./WebPublishControls";
 
@@ -218,7 +219,9 @@ export function Header(props: {
 				/>
 				<div class="mx-1.5 w-px h-4 shrink-0 bg-ed-line-strong" />
 				<OrganizationDropdown />
-				<PresetsDropdown />
+				<Show when={isWebEditor} fallback={<PresetsDropdown />}>
+					<TemplatesGallery />
+				</Show>
 				<Show when={!isWebEditor}>
 					<EditorButton
 						title="Clips"

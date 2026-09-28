@@ -148,6 +148,7 @@ export class BrowserEditorCommands {
 			"getDefaultProjectConfig",
 			"getDisplayFrameForCropping",
 			"getClipThumbnail",
+			"tauri:webEditorCameraThumbnail",
 			"loadCaptions",
 			"setWindowTransparent",
 			"tauri:get_recording_recovery_success",
@@ -401,7 +402,11 @@ export class BrowserEditorCommands {
 		return new Uint8Array(await image.arrayBuffer());
 	}
 
-	private async clipThumbnail(recordingSegment: number, sourceTime: number) {
+	private async clipThumbnail(
+		recordingSegment: number,
+		sourceTime: number,
+		track: "display" | "camera" = "display",
+	) {
 		if (
 			!Number.isSafeInteger(recordingSegment) ||
 			recordingSegment < 0 ||
@@ -416,6 +421,7 @@ export class BrowserEditorCommands {
 			recordingSegment,
 			sourceTime,
 			THUMBNAIL_WIDTH,
+			track,
 		);
 		return await new Promise<string>((resolve, reject) => {
 			const reader = new FileReader();
@@ -430,16 +436,17 @@ export class BrowserEditorCommands {
 		segmentIndex: number,
 		sourceTime: number,
 		maxWidth?: number,
+		track: "display" | "camera" = "display",
 	) {
-		const display = sources.segments[segmentIndex]?.display;
-		if (!display) throw new Error("Editor display source is unavailable");
-		const pool = new BrowserVideoPool(async (index, track) =>
-			index === segmentIndex && track === "display" ? display : null,
+		const source = sources.segments[segmentIndex]?.[track];
+		if (!source) throw new Error(`Editor ${track} source is unavailable`);
+		const pool = new BrowserVideoPool(async (index, requested) =>
+			index === segmentIndex && requested === track ? source : null,
 		);
 		try {
 			const video = await pool.frame(
 				segmentIndex,
-				"display",
+				track,
 				"primary",
 				sourceTime,
 				false,
@@ -472,6 +479,9 @@ export class BrowserEditorCommands {
 		}
 		if (name === "getClipThumbnail") {
 			return this.clipThumbnail(Number(args[0]), Number(args[1]));
+		}
+		if (name === "tauri:webEditorCameraThumbnail") {
+			return this.clipThumbnail(0, 1, "camera");
 		}
 		if (name === "animatedGradientCatalog") {
 			return JSON.parse(
