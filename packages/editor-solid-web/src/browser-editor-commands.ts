@@ -76,59 +76,35 @@ function path(index: number, kind: "display" | "camera" | "mic" | "system") {
 	return `content/segments/segment-${index}/${kind}.webm`;
 }
 
-async function waveform(url: string, signal: AbortSignal) {
-	const { ALL_FORMATS, AudioBufferSink, Input, UrlSource } = await import(
-		"mediabunny"
-	);
-	const input = new Input({
-		formats: ALL_FORMATS,
-		source: new UrlSource(url, { maxCacheSize: 8 * 1024 * 1024 }),
+function waveform(url: string, signal: AbortSignal) {
+	return new Promise<number[]>((resolve, reject) => {
+		const worker = new Worker(
+			new URL("./browser-waveform-worker.ts", import.meta.url),
+			{ type: "module" },
+		);
+		const finish = () => {
+			signal.removeEventListener("abort", cancel);
+			worker.terminate();
+		};
+		const cancel = () => {
+			finish();
+			reject(new Error("Editor waveform was canceled"));
+		};
+		signal.addEventListener("abort", cancel, { once: true });
+		worker.addEventListener(
+			"message",
+			(event: MessageEvent<{ peaks: number[] } | { error: string }>) => {
+				finish();
+				if ("peaks" in event.data) resolve(event.data.peaks);
+				else reject(new Error(event.data.error));
+			},
+		);
+		worker.addEventListener("error", () => {
+			finish();
+			reject(new Error("Editor waveform could not load"));
+		});
+		worker.postMessage({ url });
 	});
-	const cancel = () => input.dispose();
-	signal.addEventListener("abort", cancel, { once: true });
-	try {
-		const track = await input.getPrimaryAudioTrack();
-		if (!track) return [];
-		const sampleRate = await track.getSampleRate();
-		const channels = await track.getNumberOfChannels();
-		if (!sampleRate || !channels) return [];
-		const blockSamples = Math.max(1, Math.floor(sampleRate / 10) * channels);
-		const peaks: number[] = [];
-		let sum = 0;
-		let count = 0;
-		let lastYieldedPeaks = 0;
-		for await (const { buffer } of new AudioBufferSink(track).buffers()) {
-			if (signal.aborted) throw new Error("Editor waveform was canceled");
-			const planes = Array.from(
-				{ length: buffer.numberOfChannels },
-				(_, index) => buffer.getChannelData(index),
-			);
-			for (let frame = 0; frame < buffer.length; frame++) {
-				for (const plane of planes) {
-					sum += Math.abs(plane[frame] ?? 0);
-					count++;
-				}
-				if (count >= blockSamples) {
-					const mean = sum / count;
-					peaks.push(mean > 0 ? 20 * Math.log10(mean) : -60);
-					sum = 0;
-					count = 0;
-				}
-			}
-			if (peaks.length - lastYieldedPeaks >= 500) {
-				lastYieldedPeaks = peaks.length;
-				await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
-			}
-		}
-		if (count > 0) {
-			const mean = sum / count;
-			peaks.push(mean > 0 ? 20 * Math.log10(mean) : -60);
-		}
-		return peaks;
-	} finally {
-		signal.removeEventListener("abort", cancel);
-		input.dispose();
-	}
 }
 
 const THUMBNAIL_WIDTH = 320;
