@@ -1420,6 +1420,7 @@ impl EditorWindow {
                             }
                         }
                     }
+                    OverlayTrackKind::Waveform => {}
                 }
             }
         }
