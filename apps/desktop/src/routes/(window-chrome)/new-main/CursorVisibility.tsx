@@ -1,7 +1,6 @@
-import { createQuery } from "@tanstack/solid-query";
 import { cx } from "cva";
-import IconPhCursorClickBold from "~icons/ph/cursor-click-bold";
 import { createCurrentRecordingQuery } from "~/utils/queries";
+import IconPhCursorClickBold from "~icons/ph/cursor-click-bold";
 
 import { useRecordingOptions } from "../OptionsContext";
 import {
@@ -14,10 +13,11 @@ import InfoPill from "./InfoPill";
 
 export default function CursorVisibility() {
 	const { rawOptions, setOptions } = useRecordingOptions();
-	const currentRecording = createQuery(createCurrentRecordingQuery);
+	const currentRecording = createCurrentRecordingQuery();
 	const showCursor = () => rawOptions.showCursor !== false;
 	const isDisabled = () =>
-		!!currentRecording.data || rawOptions.captureTarget.variant === "cameraOnly";
+		!!currentRecording.data ||
+		rawOptions.captureTarget.variant === "cameraOnly";
 
 	return (
 		<button

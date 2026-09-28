@@ -2842,11 +2842,10 @@ mod system_audio_tests {
     use super::{
         OwnedSystemAudioFeed, PactlSourceOutput, PulseInputRole, newly_created_source_output,
         pactl_monitor_preference, pactl_source_index, parse_pactl_sink_inputs,
-        preferred_system_audio_device,
-        previous_source_destination, process_source_output_ids, pulse_input_route_destination,
-        retry_system_audio_connection, source_output_needs_move, source_output_route_matches,
-        started_input_source_output, uses_default_pulse_input, wait_for_audio_after_route,
-        wait_for_started_source_output,
+        preferred_system_audio_device, previous_source_destination, process_source_output_ids,
+        pulse_input_route_destination, retry_system_audio_connection, source_output_needs_move,
+        source_output_route_matches, started_input_source_output, uses_default_pulse_input,
+        wait_for_audio_after_route, wait_for_started_source_output,
     };
     use tokio_util::sync::CancellationToken;
 
