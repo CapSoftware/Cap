@@ -1,4 +1,9 @@
-import { ALL_FORMATS, AudioSampleSink, Input, UrlSource } from "mediabunny";
+import {
+	ALL_FORMATS,
+	AudioSampleSink,
+	Input,
+	ReadableStreamSource,
+} from "mediabunny";
 
 type WaveformRequest = { url: string };
 type WaveformResponse = { peaks: number[] } | { error: string };
@@ -13,10 +18,16 @@ const scope = self as unknown as {
 
 /// Mean absolute level in dB for every tenth of a second of the track,
 /// decoded off the main thread so long recordings don't stall the editor.
+/// The file streams through once: ranged reads ahead of a decoder this slow
+/// get dropped and fetched again, several times the file for long audio.
 async function waveform(url: string) {
+	const response = await fetch(url);
+	if (!response.ok || !response.body) {
+		throw new Error("Editor waveform audio could not load");
+	}
 	const input = new Input({
 		formats: ALL_FORMATS,
-		source: new UrlSource(url, { maxCacheSize: 8 * 1024 * 1024 }),
+		source: new ReadableStreamSource(response.body),
 	});
 	try {
 		const track = await input.getPrimaryAudioTrack();
