@@ -137,6 +137,23 @@ export async function abandonRenderFarmSave(
 	};
 }
 
+/** Follows whichever save replaced or withdrew `previous` while it was polled. */
+async function currentRenderFarmSave(
+	videoId: Video.VideoId,
+	previous: NonNullable<VideoMetadata["renderFarmSave"]>,
+): Promise<RenderSaveStatus> {
+	const [current] = await db()
+		.select({ id: videos.id, fps: videos.fps, metadata: videos.metadata })
+		.from(videos)
+		.where(eq(videos.id, videoId));
+	const save = current?.metadata?.renderFarmSave;
+	if (!current || !save) return IDLE_RENDER_SAVE;
+	if (save.jobId === previous.jobId && save.status === previous.status) {
+		return { ...IDLE_RENDER_SAVE, state: "rendering", exportId: save.exportId };
+	}
+	return refreshRenderFarmSave(current);
+}
+
 /**
  * Current state of a video's render-farm save. Polls the farm for renders in
  * flight and publishes or fails them here when the callback has not landed.
@@ -165,13 +182,14 @@ export async function refreshRenderFarmSave(
 	const job = await fetchRenderFarmJob(save.jobId, video.fps ?? 30);
 	if (!job) return rendering;
 	if (job.state === "ready" && job.output) {
-		await finalizeRenderFarmSave(videoId, save.jobId, {
+		const finalized = await finalizeRenderFarmSave(videoId, save.jobId, {
 			width: job.output.width,
 			height: job.output.height,
 			fps: job.output.fps,
 			durationSeconds: job.output.frames / job.output.fps,
 			bytes: job.output.bytes,
 		});
+		if (finalized === "stale") return currentRenderFarmSave(videoId, save);
 		return {
 			...IDLE_RENDER_SAVE,
 			state: "ready",
