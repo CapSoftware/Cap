@@ -1,10 +1,6 @@
 import { db } from "@cap/database";
 import { users, videos, videoUploads } from "@cap/database/schema";
-import {
-	parseDefaultStyle,
-	parseRecorderCamera,
-	withRecorderCamera,
-} from "@cap/editor-cap-bundle/default-style";
+import { recordingDefaultStyle } from "@cap/editor-cap-bundle/default-style";
 import { userIsPro } from "@cap/utils";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
@@ -50,18 +46,21 @@ async function loadRenderVideo(payload: RecordingRenderPayload) {
 		!row ||
 		row.video.ownerId !== payload.ownerId ||
 		save?.exportId !== payload.exportId ||
-		save.status !== "rendering" ||
-		row.video.metadata?.webEditorProject
+		save.status !== "rendering"
 	) {
 		return null;
 	}
+	// The recording renders as it was recorded, in the owner's style. Edits
+	// made in the editor meanwhile reach the share link when they're saved.
+	const { webEditorProject: _edits, ...metadata } = row.video.metadata ?? {};
 	return {
 		video: {
 			...row.video,
+			metadata,
 			captionsEnabled: userIsPro(row.owner),
-			defaultStyle: withRecorderCamera(
-				parseDefaultStyle(row.owner.preferences?.editorDefaultStyle),
-				parseRecorderCamera(row.video.metadata?.recorderCamera),
+			defaultStyle: recordingDefaultStyle(
+				row.owner.preferences?.editorDefaultStyle,
+				row.video.metadata?.recorderCamera,
 			),
 		},
 		uploadPhase: row.uploadPhase,
