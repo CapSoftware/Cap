@@ -11,8 +11,10 @@ import { runWorkflowPromise } from "@/lib/workflow-runtime";
 
 type ClearBrowserSaveChunksInput = { videoId: string; saveId: string };
 
-/// Deletes the video's Save chunks except those of a Save still streaming,
-/// and says whether that's the one given.
+const CHUNK_LIFETIME_MS = 60 * 60 * 1000;
+
+/// Deletes the video's Save chunks older than an hour, except those of a
+/// Save still streaming, and says whether any of the given Save's are left.
 async function clearChunksStep({
 	videoId,
 	saveId,
@@ -27,30 +29,37 @@ async function clearChunksStep({
 	const save = recentBrowserSave(video.metadata);
 	const prefix = browserSaveChunkPrefix(video.ownerId, video.id);
 	const streaming = save && !save.finished && save.saveId;
+	const expired = Date.now() - CHUNK_LIFETIME_MS;
 	const [bucket] = await Storage.getAccessForVideo(
 		decodeStorageVideo(video),
 	).pipe(runWorkflowPromise);
+	let remaining = false;
 	let continuationToken: string | undefined;
 	do {
 		const page = await bucket
 			.listObjects({ prefix, continuationToken })
 			.pipe(runWorkflowPromise);
-		const stale = (page.Contents ?? []).flatMap(({ Key }) =>
-			Key && !(streaming && Key.startsWith(`${prefix}${streaming}/`))
-				? [{ Key }]
-				: [],
-		);
+		const stale: { Key: string }[] = [];
+		for (const { Key, LastModified } of page.Contents ?? []) {
+			if (!Key) continue;
+			if (
+				(LastModified?.getTime() ?? 0) < expired &&
+				!(streaming && Key.startsWith(`${prefix}${streaming}/`))
+			)
+				stale.push({ Key });
+			else if (Key.startsWith(`${prefix}${saveId}/`)) remaining = true;
+		}
 		if (stale.length > 0)
 			await bucket.deleteObjects(stale).pipe(runWorkflowPromise);
 		continuationToken = page.NextContinuationToken;
 	} while (continuationToken);
-	return streaming === saveId;
+	return remaining;
 }
 
 /**
  * Deletes the chunks a Save streamed while it rendered in the owner's
- * browser, an hour after it stops, whether it published, failed or its tab
- * went away.
+ * browser, an hour after they're uploaded and it stops, whether it
+ * published, failed or its tab went away.
  */
 export async function clearBrowserSaveChunksWorkflow(
 	input: ClearBrowserSaveChunksInput,
