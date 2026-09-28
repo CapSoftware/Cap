@@ -290,7 +290,9 @@ export function applyTemplate(
 
 	const timeline = project.timeline;
 	if (!timeline) return;
-	const scenes = withoutFullSpanScenes(timeline.sceneSegments, duration);
+	const scenes = (timeline.sceneSegments ?? []).filter(
+		(scene) => !spansVideo(scene, duration),
+	);
 	if (template.scene && duration > 0) {
 		scenes.push({ start: 0, end: duration, mode: template.scene });
 	}
@@ -299,14 +301,6 @@ export function applyTemplate(
 
 const spansVideo = (scene: SceneSegment, duration: number) =>
 	scene.start <= 0.001 && scene.end >= duration - 0.001;
-
-/** The scenes a person placed, without any a template laid over everything. */
-export function withoutFullSpanScenes(
-	scenes: SceneSegment[] | undefined,
-	duration: number,
-) {
-	return (scenes ?? []).filter((scene) => !spansVideo(scene, duration));
-}
 
 /** The scene a template laid over the whole video, if there is one. */
 export function fullSpanScene(

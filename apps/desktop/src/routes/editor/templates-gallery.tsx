@@ -39,7 +39,6 @@ import {
 	lookKey,
 	templateBackgroundSource,
 	templateLookKey,
-	withoutFullSpanScenes,
 } from "./templates";
 import {
 	DropdownItem,
@@ -192,20 +191,11 @@ export function TemplatesGallery() {
 				return;
 			}
 		}
-		const timeline = project.timeline;
 		setProject(
 			reconcile(
 				normalizeProject({
 					...config,
-					timeline: timeline
-						? {
-								...timeline,
-								sceneSegments: withoutFullSpanScenes(
-									timeline.sceneSegments,
-									totalDuration(),
-								),
-							}
-						: null,
+					timeline: project.timeline ?? null,
 					overlayOrder: project.overlayOrder ?? [],
 					clips: project.clips,
 				}),
