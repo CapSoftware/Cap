@@ -39,6 +39,7 @@ import {
 } from "lucide-react";
 import dynamic from "next/dynamic";
 import Image from "next/image";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Suspense, use, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -51,9 +52,16 @@ import type { VideoStatusResult } from "@/actions/videos/get-status";
 import { useDashboardContext } from "@/app/(org)/dashboard/DashboardContext";
 import type { Spaces } from "@/app/(org)/dashboard/dashboard-data";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
+import {
+	EditorShellBar,
+	EditorShellBrand,
+	EditorShellTab,
+} from "@/components/editor-shell/editor-shell-bar";
+import { ShareLinkTab } from "@/components/editor-shell/share-link-tab";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { Tooltip } from "@/components/Tooltip";
 import { rememberEntryFrame } from "@/lib/editor-entry-frame";
+import { shareLinkUrl } from "@/lib/share-link";
 import {
 	copyRichVideoLink,
 	videoPreviewImageUrl,
@@ -406,16 +414,8 @@ export const ShareHeader = ({
 		}
 	};
 
-	const getVideoLink = () => {
-		if (
-			(NODE_ENV === "development" || buildEnv.NEXT_PUBLIC_IS_CAP) &&
-			customDomain &&
-			domainVerified
-		) {
-			return `https://${customDomain}/s/${data.id}`;
-		}
-		return `${webUrl}/s/${data.id}`;
-	};
+	const getVideoLink = () =>
+		shareLinkUrl(data.id, domainVerified ? (customDomain ?? null) : null);
 
 	const getDisplayLink = () => {
 		if (
@@ -566,6 +566,13 @@ export const ShareHeader = ({
 		isOwner &&
 		!data.isScreenshot &&
 		!data.hasActiveUpload &&
+		(data.source.type === "desktopMP4" || data.source.type === "webMP4");
+	// Owners who edit in Studio get the editor's bar here too: the share link
+	// and the editor as two sides of one toggle.
+	const showsEditorBar =
+		isOwner &&
+		opensStudio &&
+		!data.isScreenshot &&
 		(data.source.type === "desktopMP4" || data.source.type === "webMP4");
 	const handleEditVideo = () => {
 		if (userIsOwnerAndNotPro && !opensStudio) {
@@ -816,6 +823,37 @@ export const ShareHeader = ({
 					)}
 				</>
 			)}
+			{showsEditorBar && (
+				<div className="-mx-4 border-b border-gray-5 lg:-mx-8">
+					<EditorShellBar
+						left={<EditorShellBrand title="Dashboard" />}
+						center={
+							<>
+								<ShareLinkTab
+									active
+									videoId={data.id}
+									shareUrl={getVideoLink()}
+									title={displayTitle}
+									isPublic={Boolean(data.public)}
+									onPrivacyClick={() => setIsSharingDialogOpen(true)}
+								/>
+								<EditorShellTab
+									active={false}
+									disabled={!canEditVideo}
+									onClick={handleEditVideo}
+								>
+									Editor
+								</EditorShellTab>
+							</>
+						}
+						right={
+							<Link href="/dashboard/editor" className="rec-btn is-ghost">
+								View all recordings
+							</Link>
+						}
+					/>
+				</div>
+			)}
 			{/* Sits in the page bar above both panes, so the spacing is the bar's
 			    own padding rather than a top margin against the video. */}
 			<div className="py-4">
@@ -926,42 +964,44 @@ export const ShareHeader = ({
 											icon={faLock}
 										/>
 									)}
-									<div className="relative" ref={copyOptionsRef}>
-										<Button
-											variant="white"
-											className="max-w-full px-3"
-											onClick={handleCopyClick}
-										>
-											<span className="max-w-[70vw] truncate sm:max-w-96">
-												{getDisplayLink()}
-											</span>
-											{linkCopied ? (
-												<Check className="ml-2 w-4 h-4 svgpathanimation" />
-											) : (
-												<Copy className="ml-2 w-4 h-4" />
+									{!showsEditorBar && (
+										<div className="relative" ref={copyOptionsRef}>
+											<Button
+												variant="white"
+												className="max-w-full px-3"
+												onClick={handleCopyClick}
+											>
+												<span className="max-w-[70vw] truncate sm:max-w-96">
+													{getDisplayLink()}
+												</span>
+												{linkCopied ? (
+													<Check className="ml-2 w-4 h-4 svgpathanimation" />
+												) : (
+													<Copy className="ml-2 w-4 h-4" />
+												)}
+											</Button>
+											{showCopyOptions && (
+												<div className="absolute right-0 top-full z-50 mt-1 min-w-full w-max overflow-hidden rounded-lg border border-gray-6 bg-white shadow-lg">
+													<button
+														type="button"
+														className="flex w-full items-center gap-2 px-3 py-2 text-sm text-gray-12 transition-colors hover:bg-gray-3"
+														onClick={() => handleCopyLink(false)}
+													>
+														<Copy className="w-3.5 h-3.5 shrink-0" />
+														Copy link
+													</button>
+													<button
+														type="button"
+														className="flex w-full items-center gap-2 px-3 py-2 text-sm text-gray-12 transition-colors hover:bg-gray-3"
+														onClick={() => handleCopyLink(true)}
+													>
+														<Clock className="w-3.5 h-3.5 shrink-0" />
+														Copy link at {formatTimestamp(capturedTime)}
+													</button>
+												</div>
 											)}
-										</Button>
-										{showCopyOptions && (
-											<div className="absolute right-0 top-full z-50 mt-1 min-w-full w-max overflow-hidden rounded-lg border border-gray-6 bg-white shadow-lg">
-												<button
-													type="button"
-													className="flex w-full items-center gap-2 px-3 py-2 text-sm text-gray-12 transition-colors hover:bg-gray-3"
-													onClick={() => handleCopyLink(false)}
-												>
-													<Copy className="w-3.5 h-3.5 shrink-0" />
-													Copy link
-												</button>
-												<button
-													type="button"
-													className="flex w-full items-center gap-2 px-3 py-2 text-sm text-gray-12 transition-colors hover:bg-gray-3"
-													onClick={() => handleCopyLink(true)}
-												>
-													<Clock className="w-3.5 h-3.5 shrink-0" />
-													Copy link at {formatTimestamp(capturedTime)}
-												</button>
-											</div>
-										)}
-									</div>
+										</div>
+									)}
 								</div>
 								{userIsOwnerAndNotPro && (
 									<button
@@ -1023,7 +1063,7 @@ export const ShareHeader = ({
 							<div className="flex flex-wrap items-center gap-2 ml-auto justify-end">
 								{isOwner && (
 									<>
-										{canEditVideo && (
+										{canEditVideo && !showsEditorBar && (
 											<Button
 												variant="gray"
 												size="xs"
