@@ -29,7 +29,7 @@ import {
 	Suspense,
 	Switch,
 } from "solid-js";
-import { createStore } from "solid-js/store";
+import { createStore, produce } from "solid-js/store";
 import toast from "solid-toast";
 import {
 	COMMON_RATIOS,
@@ -68,6 +68,7 @@ import { PlayerContent } from "./Player";
 import { usePreparingEditor } from "./preparing-editor-context";
 import { Timeline } from "./Timeline";
 import { Dialog, DialogContent, EditorButton, Input, Subfield } from "./ui";
+import { applyAudioOnlySetup, needsAudioOnlySetup } from "./waveform";
 import { WebDropImport } from "./WebDropImport";
 
 // Deferred surfaces: these are not visible at first paint (export mode,
@@ -417,6 +418,10 @@ function Inner(props: {
 }) {
 	const {
 		project,
+		setProject,
+		projectHistory,
+		meta,
+		totalDuration,
 		canvasControls,
 		flushProjectConfig,
 		editorInstance,
@@ -531,6 +536,8 @@ function Inner(props: {
 	});
 
 	onMount(() => {
+		// The web editor manages clips in the clip strip instead.
+		if (isWebEditor) return;
 		const cancel = scheduleIdleWork(() => setClipsSidebarMounted(true));
 		onCleanup(cancel);
 	});
@@ -855,6 +862,32 @@ function Inner(props: {
 			{ defer: true },
 		),
 	);
+
+	onMount(() => {
+		if (!meta().audioOnly || !needsAudioOnlySetup(project)) return;
+		const duration = totalDuration();
+		const resume = projectHistory.pause();
+		setProject(
+			produce((project) => {
+				project.timeline ??= {
+					segments: [{ start: 0, end: duration, timescale: 1 }],
+					zoomSegments: [],
+					sceneSegments: [],
+					maskSegments: [],
+					textSegments: [],
+					styleSegments: [],
+					imageSegments: [],
+					captionSegments: [],
+					keyboardSegments: [],
+					camera3dSegments: [],
+					transitions: [],
+				};
+				applyAudioOnlySetup(project, duration);
+			}),
+		);
+		setEditorState("timeline", "tracks", "waveform", 1);
+		resume();
+	});
 
 	createEffect(
 		on(

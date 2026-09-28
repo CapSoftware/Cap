@@ -68,6 +68,7 @@ export function StudioEditorClient(props: {
 	const [recordClipOpen, setRecordClipOpen] = useState(false);
 	const [clipRecorderBusy, setClipRecorderBusy] = useState(false);
 	const [entryFrame, setEntryFrame] = useState<string | null | undefined>();
+	const [frameLoaded, setFrameLoaded] = useState(false);
 	const [editorPainted, setEditorPainted] = useState(false);
 	const [clipRecorderContext, setClipRecorderContext] =
 		useState<ClipRecorderContext | null>(null);
@@ -495,6 +496,12 @@ export function StudioEditorClient(props: {
 	useEffect(() => {
 		if (entryFrame !== undefined) nextPageReady();
 	}, [entryFrame]);
+	// The entry frame stays under the editor until its skeleton has painted.
+	useEffect(() => {
+		if (!frameLoaded) return;
+		const timer = setTimeout(() => setEditorPainted(true), 800);
+		return () => clearTimeout(timer);
+	}, [frameLoaded]);
 
 	useEffect(() => {
 		if (!justRecorded) return;
@@ -593,7 +600,7 @@ export function StudioEditorClient(props: {
 					className="relative h-full w-full border-0"
 					onLoad={(event) => {
 						onFrameLoad(event.currentTarget);
-						setTimeout(() => setEditorPainted(true), 800);
+						setFrameLoaded(true);
 					}}
 				/>
 				{recordClipOpen && (
