@@ -214,7 +214,7 @@ describe("preview asset refresh workflow", () => {
 		expect(mocks.video?.source).toEqual({ type: "webMP4", outputKey: next });
 	});
 
-	it("retries a busy media server and stops on a refused request", async () => {
+	it("retries only a busy media server", async () => {
 		mocks.fetchPreviewAssets.mockResolvedValueOnce(
 			new Response("busy", { status: 503 }),
 		);
@@ -237,7 +237,7 @@ describe("preview asset refresh workflow", () => {
 			outputKey,
 		});
 		await expect(failure).rejects.toThrow("Preview assets failed (500)");
-		await expect(failure).rejects.not.toBeInstanceOf(FatalError);
+		await expect(failure).rejects.toBeInstanceOf(FatalError);
 		expect(mocks.updates).toEqual([]);
 	});
 

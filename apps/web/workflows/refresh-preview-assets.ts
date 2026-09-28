@@ -77,17 +77,13 @@ async function renderPreviewAssetsStep(input: RefreshPreviewAssetsInput) {
 			retryAfter: "1 minute",
 		});
 	}
-	if (response.status >= 400 && response.status < 500) {
-		throw new FatalError(
-			`Preview assets were refused (${response.status}): ${details.slice(0, 300)}`,
-		);
-	}
-	throw new Error(
+	// Anything else, like a GIF this video can't make, fails the same way again.
+	throw new FatalError(
 		`Preview assets failed (${response.status}): ${details.slice(0, 300)}`,
 	);
 }
 
-renderPreviewAssetsStep.maxRetries = 10;
+renderPreviewAssetsStep.maxRetries = 3;
 
 async function publishPreviewAssetsStep(input: RefreshPreviewAssetsInput) {
 	"use step";
