@@ -1,3 +1,5 @@
+import { useEffect, useState } from "react";
+
 const STORAGE_PREFIX = "cap-editor-entry-frame:";
 const FRAME_WIDTH = 640;
 
@@ -25,17 +27,33 @@ export function rememberEntryFrame(
 	}
 }
 
-export function readEntryFrame(videoId: string) {
+function takeEntryFrame(videoId: string) {
 	try {
-		const frame = sessionStorage.getItem(`${STORAGE_PREFIX}${videoId}`);
+		const key = `${STORAGE_PREFIX}${videoId}`;
+		const frame = sessionStorage.getItem(key);
+		sessionStorage.removeItem(key);
 		return frame?.startsWith("data:image/jpeg;base64,") ? frame : null;
 	} catch {
 		return null;
 	}
 }
 
-export function forgetEntryFrame(videoId: string) {
-	try {
-		sessionStorage.removeItem(`${STORAGE_PREFIX}${videoId}`);
-	} catch {}
+/**
+ * The frame the share page left for this editor, taken once. Undefined until
+ * the page has looked. A second run of the effect, as in development, finds
+ * it already taken and keeps what the first run found.
+ */
+export function useEntryFrame(videoId: string) {
+	const [entry, setEntry] = useState<{
+		videoId: string;
+		frame: string | null;
+	}>();
+	useEffect(() => {
+		const frame = takeEntryFrame(videoId);
+		setEntry((current) => ({
+			videoId,
+			frame: frame ?? (current?.videoId === videoId ? current.frame : null),
+		}));
+	}, [videoId]);
+	return entry?.videoId === videoId ? entry.frame : undefined;
 }

@@ -25,7 +25,7 @@ import {
 	stripEditorCaptionContent,
 } from "@/lib/editor-caption-access";
 import type { EditorClipCapture } from "@/lib/editor-clip-recorder";
-import { forgetEntryFrame, readEntryFrame } from "@/lib/editor-entry-frame";
+import { useEntryFrame } from "@/lib/editor-entry-frame";
 import {
 	captureEditorLocalDraft,
 	clearEditorLocalDraft,
@@ -105,7 +105,7 @@ export function StudioEditorClient(props: {
 	>(null);
 	useAppPage();
 	const [recordClipOpen, setRecordClipOpen] = useState(false);
-	const [entryFrame, setEntryFrame] = useState<string | null | undefined>();
+	const entryFrame = useEntryFrame(videoId);
 	const [frameLoaded, setFrameLoaded] = useState(false);
 	const [editorPainted, setEditorPainted] = useState(false);
 	const [entryFrameGone, setEntryFrameGone] = useState(false);
@@ -525,9 +525,6 @@ export function StudioEditorClient(props: {
 	}, [onFrameLoad, sessionId]);
 
 	useEffect(() => {
-		setEntryFrame(readEntryFrame(videoId));
-	}, [videoId]);
-	useEffect(() => {
 		if (entryFrame !== undefined) nextPageReady();
 	}, [entryFrame]);
 	useEffect(() => {
@@ -559,12 +556,9 @@ export function StudioEditorClient(props: {
 	}, [frameLoaded, entryFrame]);
 	useEffect(() => {
 		if (!editorPainted) return;
-		const timer = setTimeout(() => {
-			setEntryFrameGone(true);
-			forgetEntryFrame(videoId);
-		}, 320);
+		const timer = setTimeout(() => setEntryFrameGone(true), 320);
 		return () => clearTimeout(timer);
-	}, [editorPainted, videoId]);
+	}, [editorPainted]);
 
 	useEffect(() => {
 		if (!justRecorded) return;
