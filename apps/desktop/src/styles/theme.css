@@ -35,6 +35,7 @@
 	--track-scene: #8b5cf6;
 	--track-audio: #22c55e;
 	--track-3d: #6366f1;
+	--track-waveform: #84cc16;
 
 	/* Editor surfaces: a layered, low-contrast system (window < card < control)
 	 * with one accent. Mirrored 1:1 by EditorPalette in

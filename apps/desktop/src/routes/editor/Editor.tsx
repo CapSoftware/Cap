@@ -68,8 +68,8 @@ import { PlayerContent } from "./Player";
 import { usePreparingEditor } from "./preparing-editor-context";
 import { Timeline } from "./Timeline";
 import { Dialog, DialogContent, EditorButton, Input, Subfield } from "./ui";
-import { applyAudioOnlySetup, needsAudioOnlySetup } from "./waveform";
 import { WebDropImport } from "./WebDropImport";
+import { applyAudioOnlySetup, needsAudioOnlySetup } from "./waveform";
 
 // Deferred surfaces: these are not visible at first paint (export mode,
 // transcript panel, clips sidebar), so their code is split out of the editor

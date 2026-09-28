@@ -304,6 +304,7 @@ export class BrowserEditorCommands {
 			})),
 			cursors: {},
 			status: { status: "Complete" },
+			audioOnly: sources.audioOnly,
 		};
 		const instance = {
 			instanceId: crypto.randomUUID(),

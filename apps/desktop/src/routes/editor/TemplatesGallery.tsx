@@ -17,6 +17,7 @@ import type {
 	AspectRatio,
 	BackgroundSource,
 	Camera,
+	ProjectConfiguration,
 	SceneMode,
 } from "~/utils/tauri";
 import { commands } from "~/utils/tauri";
@@ -49,6 +50,14 @@ const GROUPS: Array<{ id: EditorTemplate["group"]; title: string }> = [
 	{ id: "layout", title: "Layouts" },
 	{ id: "look", title: "Looks" },
 	{ id: "social", title: "Social" },
+];
+
+type Filter = "all" | EditorTemplate["group"] | "presets";
+
+const FILTERS: Array<{ id: Filter; title: string }> = [
+	{ id: "all", title: "All" },
+	...GROUPS,
+	{ id: "presets", title: "Your presets" },
 ];
 
 type PreviewLook = {
@@ -96,6 +105,10 @@ export function TemplatesGallery() {
 		useEditorContext();
 	const [open, setOpen] = createSignal(false);
 	const [applied, setApplied] = createSignal<string | null>(null);
+	const [filter, setFilter] = createSignal<Filter>("all");
+	const [defaultConfig] = createResource(open, () =>
+		commands.getDefaultProjectConfig().catch(() => null),
+	);
 
 	const [frames] = createResource(open, async () => {
 		const first = project.timeline?.segments[0];
@@ -157,9 +170,7 @@ export function TemplatesGallery() {
 		}
 	};
 
-	const applyPreset = async (index: number) => {
-		const preset = presets.query.data?.presets[index];
-		if (!preset) return;
+	const applyConfig = async (config: ProjectConfiguration, id: string) => {
 		if (isWebEditor) {
 			const prepare = (
 				window as Window & {
@@ -169,7 +180,7 @@ export function TemplatesGallery() {
 				}
 			).capWebEditorPreparePresetBackground;
 			try {
-				await prepare?.(preset.config);
+				await prepare?.(config);
 			} catch (error) {
 				toast.error(
 					error instanceof Error
@@ -182,14 +193,19 @@ export function TemplatesGallery() {
 		setProject(
 			reconcile(
 				normalizeProject({
-					...preset.config,
+					...config,
 					timeline: project.timeline ?? null,
 					overlayOrder: project.overlayOrder ?? [],
 					clips: project.clips,
 				}),
 			),
 		);
-		setApplied(`preset-${index}`);
+		setApplied(id);
+	};
+
+	const applyPreset = (index: number) => {
+		const preset = presets.query.data?.presets[index];
+		if (preset) return applyConfig(preset.config, `preset-${index}`);
 	};
 
 	const saveDefaultStyle = async () => {
@@ -206,6 +222,27 @@ export function TemplatesGallery() {
 			);
 		}
 	};
+
+	const presetLook = (config: ProjectConfiguration): PreviewLook => ({
+		aspectRatio: config.aspectRatio,
+		background: backgroundCss(config.background.source),
+		padding: config.background.padding,
+		rounding: config.background.rounding,
+		shadow: config.background.shadow,
+		camera: config.camera,
+	});
+
+	const savePreset = () => {
+		setOpen(false);
+		setDialog({ type: "createPreset", open: true });
+	};
+
+	const savedPresets = () => presets.query.data?.presets ?? [];
+	const visibleGroups = () =>
+		filter() === "all"
+			? GROUPS
+			: GROUPS.filter((group) => group.id === filter());
+	const showPresets = () => filter() === "all" || filter() === "presets";
 
 	return (
 		<KPopover
@@ -226,38 +263,147 @@ export function TemplatesGallery() {
 			<KPopover.Portal>
 				<KPopover.Content
 					class={cx(
-						"z-60 flex max-h-[min(40rem,calc(100vh-7rem))] w-[min(46rem,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-2xl bg-ed-card shadow-ed-pop outline-hidden",
+						"z-60 flex h-[min(38rem,calc(100vh-7rem))] w-[min(50rem,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-2xl bg-ed-card shadow-ed-pop outline-hidden",
 						"origin-[var(--kb-popover-content-transform-origin)] data-expanded:animate-in data-expanded:fade-in data-expanded:zoom-in-95 data-closed:animate-out data-closed:fade-out data-closed:zoom-out-95",
 					)}
 				>
-					<div class="flex items-center justify-between gap-3 border-b border-ed-line px-4 py-3">
-						<div class="flex flex-col">
-							<KPopover.Title class="text-[14px] font-medium text-ed-text-1">
+					<div class="flex items-start justify-between gap-4 px-5 pb-3 pt-4">
+						<div class="flex flex-col gap-0.5">
+							<KPopover.Title class="text-[15px] font-medium tracking-[-0.01em] text-ed-text-1">
 								Templates
 							</KPopover.Title>
 							<KPopover.Description class="text-[12px] text-ed-text-2">
-								Pick a starting look. Everything stays editable, and Undo brings
+								Start from a look. Everything stays editable, and Undo brings
 								back what you had.
 							</KPopover.Description>
 						</div>
-						<Show when={isWebEditor}>
-							<button
-								type="button"
-								onClick={() => void saveDefaultStyle()}
-								class="shrink-0 rounded-lg px-2.5 py-1.5 text-[12px] font-medium text-ed-text-2 outline-hidden transition-colors hover:bg-ed-ctl-hover hover:text-ed-text-1"
-							>
-								Use current style for new recordings
-							</button>
-						</Show>
+						<button
+							type="button"
+							onClick={savePreset}
+							class="flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-ed-accent px-3 text-[12px] font-medium text-white outline-hidden transition-[filter] hover:brightness-[1.06]"
+						>
+							<IconLucidePlus class="size-3.5" />
+							Save current style
+						</button>
 					</div>
-					<div class="flex flex-col gap-5 overflow-y-auto p-4">
-						<For each={GROUPS}>
+					<div class="flex gap-1 border-b border-ed-line px-5 pb-3">
+						<For each={FILTERS}>
+							{(item) => (
+								<button
+									type="button"
+									onClick={() => setFilter(item.id)}
+									class={cx(
+										"h-7 rounded-full px-3 text-[12px] font-medium outline-hidden transition-colors",
+										filter() === item.id
+											? "bg-ed-text-1 text-ed-card"
+											: "text-ed-text-2 hover:bg-ed-ctl-hover hover:text-ed-text-1",
+									)}
+								>
+									{item.title}
+									<Show when={item.id === "presets" && savedPresets().length}>
+										{(count) => (
+											<span class="ml-1 tabular-nums opacity-60">
+												{count()}
+											</span>
+										)}
+									</Show>
+								</button>
+							)}
+						</For>
+					</div>
+					<div class="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto px-5 py-4">
+						<Show when={showPresets()}>
+							<section class="flex flex-col gap-3">
+								<h3 class="text-[12px] font-medium text-ed-text-2">
+									Your presets
+								</h3>
+								<div class="grid grid-cols-3 gap-x-3 gap-y-4 max-[640px]:grid-cols-2">
+									<Show when={defaultConfig()}>
+										{(config) => (
+											<TemplateCard
+												name="Cap default"
+												description={
+													presets.query.data?.default == null
+														? "Your default"
+														: "The standard look"
+												}
+												active={applied() === "default"}
+												onSelect={() => void applyConfig(config(), "default")}
+												preview={
+													<TemplatePreview
+														look={presetLook(config())}
+														screen={frames()?.screen ?? null}
+														camera={frames()?.camera ?? null}
+													/>
+												}
+											/>
+										)}
+									</Show>
+									<For each={savedPresets()}>
+										{(preset, index) => (
+											<TemplateCard
+												name={preset.name}
+												description={
+													presets.query.data?.default === index()
+														? "Your default"
+														: "Saved preset"
+												}
+												active={applied() === `preset-${index()}`}
+												onSelect={() => void applyPreset(index())}
+												menu={
+													<PresetMenu
+														isDefault={presets.query.data?.default === index()}
+														onSaveHere={async () => {
+															await presets.saveToPreset(index(), project);
+															toast.success(`Saved to "${preset.name}"`);
+														}}
+														onSetDefault={() => presets.setDefault(index())}
+														onRename={() => {
+															setOpen(false);
+															setDialog({
+																type: "renamePreset",
+																presetIndex: index(),
+																open: true,
+															});
+														}}
+														onDelete={() => {
+															setOpen(false);
+															setDialog({
+																type: "deletePreset",
+																presetIndex: index(),
+																open: true,
+															});
+														}}
+													/>
+												}
+												preview={
+													<TemplatePreview
+														look={presetLook(preset.config)}
+														screen={frames()?.screen ?? null}
+														camera={frames()?.camera ?? null}
+													/>
+												}
+											/>
+										)}
+									</For>
+									<button
+										type="button"
+										onClick={savePreset}
+										class="flex aspect-video flex-col items-center justify-center gap-1.5 rounded-xl border border-dashed border-ed-line-strong text-[12px] font-medium text-ed-text-2 outline-hidden transition-colors hover:border-ed-accent hover:bg-ed-accent/5 hover:text-ed-accent"
+									>
+										<IconLucidePlus class="size-4" />
+										Save current style
+									</button>
+								</div>
+							</section>
+						</Show>
+						<For each={visibleGroups()}>
 							{(group) => (
-								<section class="flex flex-col gap-2.5">
+								<section class="flex flex-col gap-3">
 									<h3 class="text-[12px] font-medium text-ed-text-2">
 										{group.title}
 									</h3>
-									<div class="grid grid-cols-3 gap-3 max-[640px]:grid-cols-2">
+									<div class="grid grid-cols-3 gap-x-3 gap-y-4 max-[640px]:grid-cols-2">
 										<For
 											each={EDITOR_TEMPLATES.filter(
 												(template) => template.group === group.id,
@@ -283,81 +429,21 @@ export function TemplatesGallery() {
 								</section>
 							)}
 						</For>
-						<section class="flex flex-col gap-2.5">
-							<h3 class="text-[12px] font-medium text-ed-text-2">
-								Your presets
-							</h3>
-							<div class="grid grid-cols-3 gap-3 max-[640px]:grid-cols-2">
-								<For each={presets.query.data?.presets ?? []}>
-									{(preset, index) => (
-										<TemplateCard
-											name={preset.name}
-											description={
-												presets.query.data?.default === index()
-													? "Your default"
-													: "Saved preset"
-											}
-											active={applied() === `preset-${index()}`}
-											onSelect={() => void applyPreset(index())}
-											menu={
-												<PresetMenu
-													isDefault={presets.query.data?.default === index()}
-													onSaveHere={async () => {
-														await presets.saveToPreset(index(), project);
-														toast.success(`Saved to "${preset.name}"`);
-													}}
-													onSetDefault={() => presets.setDefault(index())}
-													onRename={() => {
-														setOpen(false);
-														setDialog({
-															type: "renamePreset",
-															presetIndex: index(),
-															open: true,
-														});
-													}}
-													onDelete={() => {
-														setOpen(false);
-														setDialog({
-															type: "deletePreset",
-															presetIndex: index(),
-															open: true,
-														});
-													}}
-												/>
-											}
-											preview={
-												<TemplatePreview
-													look={{
-														aspectRatio: preset.config.aspectRatio,
-														background: backgroundCss(
-															preset.config.background.source,
-														),
-														padding: preset.config.background.padding,
-														rounding: preset.config.background.rounding,
-														shadow: preset.config.background.shadow,
-														camera: preset.config.camera,
-													}}
-													screen={frames()?.screen ?? null}
-													camera={frames()?.camera ?? null}
-												/>
-											}
-										/>
-									)}
-								</For>
-								<button
-									type="button"
-									onClick={() => {
-										setOpen(false);
-										setDialog({ type: "createPreset", open: true });
-									}}
-									class="flex aspect-video flex-col items-center justify-center gap-1.5 rounded-xl border border-dashed border-ed-line-strong text-[12px] font-medium text-ed-text-2 outline-hidden transition-colors hover:border-ed-accent hover:text-ed-accent"
-								>
-									<IconLucidePlus class="size-4" />
-									Save current style
-								</button>
-							</div>
-						</section>
 					</div>
+					<Show when={isWebEditor}>
+						<div class="flex items-center justify-between gap-3 border-t border-ed-line px-5 py-2.5">
+							<span class="text-[12px] text-ed-text-3">
+								New recordings start with your default style.
+							</span>
+							<button
+								type="button"
+								onClick={() => void saveDefaultStyle()}
+								class="shrink-0 rounded-lg px-2.5 py-1 text-[12px] font-medium text-ed-text-2 outline-hidden transition-colors hover:bg-ed-ctl-hover hover:text-ed-text-1"
+							>
+								Use current style for new recordings
+							</button>
+						</div>
+					</Show>
 				</KPopover.Content>
 			</KPopover.Portal>
 		</KPopover>

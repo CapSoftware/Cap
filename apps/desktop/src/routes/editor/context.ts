@@ -141,6 +141,7 @@ import {
 	sortTrackSegments,
 } from "./timelineTracks";
 import { createProgressBar } from "./utils";
+import { defaultWaveformSegment, waveformGapAt } from "./waveform";
 
 export type ModalDialog =
 	| { type: "createPreset" }
@@ -214,6 +215,7 @@ export const getPreviewResolution = (
 export type TimelineTrackType =
 	| "style"
 	| "image"
+	| "waveform"
 	| "clip"
 	| "caption"
 	| "keyboard"
@@ -315,6 +317,9 @@ export function normalizeProject(
 				imageSegments: (config.overlayOrder?.length
 					? sortTrackSegments
 					: normalizeTrackSegments)(config.timeline.imageSegments ?? []),
+				waveformSegments: (config.overlayOrder?.length
+					? sortTrackSegments
+					: normalizeTrackSegments)(config.timeline.waveformSegments ?? []),
 				transitions:
 					(
 						config.timeline as TimelineConfiguration & {
@@ -386,6 +391,7 @@ export function serializeProjectConfiguration(
 				transitions: project.timeline.transitions ?? [],
 				styleSegments: project.timeline.styleSegments ?? [],
 				imageSegments: project.timeline.imageSegments ?? [],
+				waveformSegments: project.timeline.waveformSegments ?? [],
 				captionSegments: project.timeline.captionSegments ?? [],
 				keyboardSegments: project.timeline.keyboardSegments ?? [],
 				maskSegments: project.timeline.maskSegments ?? [],
@@ -470,6 +476,7 @@ export const [EditorContextProvider, useBaseEditorContext] =
 						const tracks = [
 							timeline.styleSegments,
 							timeline.imageSegments,
+							timeline.waveformSegments ?? [],
 							timeline.zoomSegments,
 							timeline.sceneSegments ?? [],
 							timeline.maskSegments,
@@ -580,15 +587,18 @@ export const [EditorContextProvider, useBaseEditorContext] =
 				});
 			};
 
+			const overlaySegments = (type: "style" | "image" | "waveform") =>
+				(type === "style"
+					? project.timeline?.styleSegments
+					: type === "image"
+						? project.timeline?.imageSegments
+						: project.timeline?.waveformSegments) ?? [];
 			const overlayPlacement = (
 				type: "style" | "image",
 				lane: number,
 				time: number,
 			) => {
-				const segments =
-					(type === "style"
-						? project.timeline?.styleSegments
-						: project.timeline?.imageSegments) ?? [];
+				const segments = overlaySegments(type);
 				const length = Math.min(3, totalDuration());
 				if (length <= 0) return null;
 				const requested = placeSegmentAtTime(
@@ -614,14 +624,11 @@ export const [EditorContextProvider, useBaseEditorContext] =
 					: null;
 			};
 			const selectAddedOverlay = (
-				type: "style" | "image",
+				type: "style" | "image" | "waveform",
 				lane: number,
 				start: number,
 			) => {
-				const segments =
-					(type === "style"
-						? project.timeline?.styleSegments
-						: project.timeline?.imageSegments) ?? [];
+				const segments = overlaySegments(type);
 				const index = segments.findIndex(
 					(segment) => segment.track === lane && segment.start === start,
 				);
@@ -1006,22 +1013,28 @@ export const [EditorContextProvider, useBaseEditorContext] =
 					}
 				},
 				splitOverlaySegment: (
-					type: "style" | "image",
+					type: "style" | "image" | "waveform",
 					index: number,
 					time: number,
 				) => {
-					const key = type === "style" ? "styleSegments" : "imageSegments";
 					setProject(
 						produce((value) => {
 							const timeline = value.timeline;
-							if (!timeline || !timeline[key][index]) return;
-							if (type === "style") {
+							if (!timeline) return;
+							if (type === "waveform") {
+								const segment = timeline.waveformSegments?.[index];
+								const parts =
+									segment &&
+									splitOverlaySegment(structuredClone(unwrap(segment)), time);
+								if (parts)
+									timeline.waveformSegments?.splice(index, 1, ...parts);
+							} else if (type === "style") {
 								const parts = splitOverlaySegment(
 									structuredClone(unwrap(timeline.styleSegments[index])),
 									time,
 								);
 								if (parts) timeline.styleSegments.splice(index, 1, ...parts);
-							} else {
+							} else if (timeline.imageSegments[index]) {
 								const parts = splitOverlaySegment(
 									structuredClone(unwrap(timeline.imageSegments[index])),
 									time,
@@ -1033,7 +1046,10 @@ export const [EditorContextProvider, useBaseEditorContext] =
 					setEditorState("timeline", "selection", { type, indices: [index] });
 					if (type === "style") enterStyleScope(index);
 				},
-				deleteOverlaySegments: (type: "style" | "image", indices: number[]) => {
+				deleteOverlaySegments: (
+					type: "style" | "image" | "waveform",
+					indices: number[],
+				) => {
 					const remove = new Set(indices);
 					batch(() => {
 						setProject(
@@ -1044,9 +1060,14 @@ export const [EditorContextProvider, useBaseEditorContext] =
 										value.timeline.styleSegments.filter(
 											(_, index) => !remove.has(index),
 										);
-								else
+								else if (type === "image")
 									value.timeline.imageSegments =
 										value.timeline.imageSegments.filter(
+											(_, index) => !remove.has(index),
+										);
+								else
+									value.timeline.waveformSegments =
+										value.timeline.waveformSegments?.filter(
 											(_, index) => !remove.has(index),
 										);
 							}),
@@ -1073,6 +1094,35 @@ export const [EditorContextProvider, useBaseEditorContext] =
 						}),
 					);
 					selectAddedOverlay("style", placement.lane, placement.start);
+				},
+				addWaveformSegment: (lane: number, time = 0) => {
+					const timeline = project.timeline;
+					if (!timeline) return;
+					const segments = timeline.waveformSegments ?? [];
+					const requested = waveformGapAt(
+						segments.filter((segment) => segment.track === lane),
+						time,
+						totalDuration(),
+					);
+					const placement = requested
+						? { ...requested, lane }
+						: {
+								start: 0,
+								end: totalDuration(),
+								lane: Math.max(getUsedTrackCount(segments), lane + 1),
+							};
+					if (!(placement.end > placement.start)) return;
+					setProject("timeline", "waveformSegments", (segments) =>
+						sortTrackSegments([
+							...(segments ?? []),
+							defaultWaveformSegment(
+								placement.start,
+								placement.end,
+								placement.lane,
+							),
+						]),
+					);
+					selectAddedOverlay("waveform", placement.lane, placement.start);
 				},
 				importImageSegment: async (
 					lane: number,
@@ -1539,6 +1589,7 @@ export const [EditorContextProvider, useBaseEditorContext] =
 							for (const overlay of [
 								...timeline.styleSegments,
 								...timeline.imageSegments,
+								...(timeline.waveformSegments ?? []),
 							]) {
 								overlay.start = mapOutputTime(overlay.start);
 								overlay.end = mapOutputTime(overlay.end);
@@ -1930,6 +1981,7 @@ export const [EditorContextProvider, useBaseEditorContext] =
 						| null
 						| { type: "style"; indices: number[] }
 						| { type: "image"; indices: number[] }
+						| { type: "waveform"; indices: number[] }
 						| { type: "zoom"; indices: number[] }
 						| { type: "clip"; indices: number[] }
 						| { type: "transition"; index: number }
@@ -1979,6 +2031,9 @@ export const [EditorContextProvider, useBaseEditorContext] =
 					tracks: {
 						style: getUsedTrackCount(project.timeline?.styleSegments ?? []),
 						image: getUsedTrackCount(project.timeline?.imageSegments ?? []),
+						waveform: getUsedTrackCount(
+							project.timeline?.waveformSegments ?? [],
+						),
 						clip: true,
 						caption: initialCaptionTrackVisible,
 						keyboard: initialKeyboardTrackVisible,
@@ -2623,6 +2678,7 @@ function transformMeta({ pretty_name, ...rawMeta }: RecordingMeta) {
 			if (meta.type === "single") return !!meta.cursor;
 			return meta.segments.some((s) => !!s.cursor);
 		})(),
+		audioOnly: (rawMeta as { audioOnly?: boolean }).audioOnly === true,
 	};
 }
 

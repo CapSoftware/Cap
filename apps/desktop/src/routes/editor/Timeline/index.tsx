@@ -25,10 +25,12 @@ import {
 } from "solid-js";
 import { produce } from "solid-js/store";
 import toast from "solid-toast";
+import IconLucideAudioWaveform from "~icons/lucide/audio-waveform";
 import IconLucidePalette from "~icons/lucide/palette";
 import { stylesRevealCamera } from "../style";
 import { ImageTrack } from "./image-track";
 import { type OverlayDragState, StyleTrack } from "./style-track";
+import { WaveformTrack } from "./WaveformTrack";
 
 import "./styles.css";
 
@@ -104,6 +106,7 @@ const trackIcons: Record<TimelineTrackType, () => JSX.Element> = {
 	zoom: () => <IconLucideSearch class="size-3" />,
 	scene: () => <IconLucideVideo class="size-3" />,
 	audio: () => <IconLucideMusic class="size-3" />,
+	waveform: () => <IconLucideAudioWaveform class="size-3" />,
 	"3d": () => <IconLucideRotate3d class="size-3" />,
 };
 
@@ -151,6 +154,12 @@ const trackDefinitions: TrackDefinition[] = [
 		type: "audio",
 		label: "Audio",
 		icon: trackIcons.audio,
+		locked: false,
+	},
+	{
+		type: "waveform",
+		label: "Audio waveform",
+		icon: trackIcons.waveform,
 		locked: false,
 	},
 	{
@@ -314,7 +323,9 @@ export function Timeline(props: {
 		trackDefinitions.map((definition) => ({
 			...definition,
 			active:
-				definition.type === "style" || definition.type === "image"
+				definition.type === "style" ||
+				definition.type === "image" ||
+				definition.type === "waveform"
 					? trackState()[definition.type] > 0
 					: definition.type === "caption"
 						? trackState().caption
@@ -340,11 +351,14 @@ export function Timeline(props: {
 			supportsMultiple:
 				definition.type === "style" ||
 				definition.type === "image" ||
+				definition.type === "waveform" ||
 				definition.type === "mask" ||
 				definition.type === "text" ||
 				definition.type === "audio",
 			count:
-				definition.type === "style" || definition.type === "image"
+				definition.type === "style" ||
+				definition.type === "image" ||
+				definition.type === "waveform"
 					? trackState()[definition.type]
 					: definition.type === "mask"
 						? trackState().mask
@@ -373,9 +387,11 @@ export function Timeline(props: {
 			trackState().audio,
 		).reverse(),
 	);
+	const zoomTrackVisible = () => !meta().audioOnly;
 	const visibleTrackCount = createMemo(
 		() =>
-			2 +
+			1 +
+			(zoomTrackVisible() ? 1 : 0) +
 			styleTrackRows().length +
 			overlayTrackRows().length +
 			(captionTrackVisible() ? 1 : 0) +
@@ -527,6 +543,23 @@ export function Timeline(props: {
 			return;
 		}
 
+		if (type === "waveform") {
+			const segments = project.timeline?.waveformSegments ?? [];
+			const laneCount = Math.max(
+				trackState().waveform,
+				getUsedTrackCount(segments),
+			);
+			let lane = laneCount;
+			for (let i = 0; i < laneCount; i++) {
+				if (!segments.some((segment) => getSegmentTrack(segment) === i)) {
+					lane = i;
+					break;
+				}
+			}
+			projectActions.addWaveformSegment(lane);
+			return;
+		}
+
 		if (type === "audio") {
 			const segments = project.timeline?.audioSegments ?? [];
 			const laneCount = Math.max(
@@ -648,15 +681,17 @@ export function Timeline(props: {
 	}
 
 	function handleDeleteTrackLane(
-		type: "text" | "mask" | "audio" | "style" | "image",
+		type: "text" | "mask" | "audio" | "style" | "image" | "waveform",
 		laneIndex: number,
 	) {
-		if (type === "style" || type === "image") {
+		if (type === "style" || type === "image" || type === "waveform") {
 			const resumeHistory = projectHistory.pause();
-			const segments =
+			const segments: Array<{ track: number }> =
 				(type === "style"
 					? project.timeline?.styleSegments
-					: project.timeline?.imageSegments) ?? [];
+					: type === "image"
+						? project.timeline?.imageSegments
+						: project.timeline?.waveformSegments) ?? [];
 			projectActions.deleteOverlaySegments(
 				type,
 				segments.flatMap((segment, index) =>
@@ -665,13 +700,15 @@ export function Timeline(props: {
 			);
 			setProject(
 				produce((project) => {
-					const remaining =
+					const remaining: Array<{ track: number }> | undefined =
 						type === "style"
 							? project.timeline?.styleSegments
-							: project.timeline?.imageSegments;
+							: type === "image"
+								? project.timeline?.imageSegments
+								: project.timeline?.waveformSegments;
 					for (const segment of remaining ?? [])
 						if (segment.track > laneIndex) segment.track -= 1;
-					if (type === "image")
+					if (type !== "style")
 						project.overlayOrder = removeOverlayTrack(
 							project.overlayOrder,
 							type,
@@ -845,7 +882,7 @@ export function Timeline(props: {
 
 	async function handleOpenTrackMenu(
 		e: MouseEvent,
-		type: "text" | "mask" | "audio" | "style" | "image",
+		type: "text" | "mask" | "audio" | "style" | "image" | "waveform",
 		laneIndex: number,
 	) {
 		e.preventDefault();
@@ -948,6 +985,7 @@ export function Timeline(props: {
 
 	let styleSegmentDragState: OverlayDragState = { type: "idle" };
 	let imageSegmentDragState: OverlayDragState = { type: "idle" };
+	let waveformSegmentDragState: OverlayDragState = { type: "idle" };
 	let zoomSegmentDragState = { type: "idle" } as ZoomSegmentDragState;
 	let sceneSegmentDragState = { type: "idle" } as SceneSegmentDragState;
 	let maskSegmentDragState = { type: "idle" } as MaskSegmentDragState;
@@ -1066,6 +1104,7 @@ export function Timeline(props: {
 		if (
 			styleSegmentDragState.type !== "moving" &&
 			imageSegmentDragState.type !== "moving" &&
+			waveformSegmentDragState.type !== "moving" &&
 			zoomSegmentDragState.type !== "moving" &&
 			sceneSegmentDragState.type !== "moving" &&
 			maskSegmentDragState.type !== "moving" &&
@@ -1184,7 +1223,11 @@ export function Timeline(props: {
 			const selection = editorState.timeline.selection;
 			if (!selection) return;
 
-			if (selection.type === "style" || selection.type === "image") {
+			if (
+				selection.type === "style" ||
+				selection.type === "image" ||
+				selection.type === "waveform"
+			) {
 				projectActions.deleteOverlaySegments(selection.type, selection.indices);
 			} else if (selection.type === "zoom") {
 				projectActions.deleteZoomSegments(selection.indices);
@@ -1223,7 +1266,11 @@ export function Timeline(props: {
 			if (time === null || time === undefined) return;
 
 			const selection = editorState.timeline.selection;
-			if (selection?.type === "style" || selection?.type === "image") {
+			if (
+				selection?.type === "style" ||
+				selection?.type === "image" ||
+				selection?.type === "waveform"
+			) {
 				const type = selection.type;
 				const resumeHistory = projectHistory.pause();
 				for (const index of [...selection.indices].sort((a, b) => b - a))
@@ -1263,6 +1310,7 @@ export function Timeline(props: {
 			const segmentCount = {
 				style: timeline?.styleSegments?.length ?? 0,
 				image: timeline?.imageSegments?.length ?? 0,
+				waveform: timeline?.waveformSegments?.length ?? 0,
 				clip: timeline?.segments.length ?? 0,
 				zoom: timeline?.zoomSegments?.length ?? 0,
 				scene: timeline?.sceneSegments?.length ?? 0,
@@ -1582,6 +1630,15 @@ export function Timeline(props: {
 													handleUpdatePlayhead={handleUpdatePlayhead}
 												/>
 											</Match>
+											<Match when={row.kind === "waveform"}>
+												<WaveformTrack
+													laneIndex={row.track}
+													onDragStateChanged={(value) => {
+														waveformSegmentDragState = value;
+													}}
+													handleUpdatePlayhead={handleUpdatePlayhead}
+												/>
+											</Match>
 											<Match when={row.kind === "text"}>
 												<TextTrack
 													laneIndex={row.track}
@@ -1627,25 +1684,27 @@ export function Timeline(props: {
 									</TrackRow>
 								)}
 							</For>
-							<TrackRow
-								icon={trackIcons.zoom}
-								label="Zoom"
-								type="zoom"
-								onDelete={
-									(project.timeline?.zoomSegments?.length ?? 0) > 0
-										? () => handleClearTrackSegments("zoom")
-										: undefined
-								}
-								deleteLabel="Clear all"
-								deleteTitle="Delete all zoom segments"
-							>
-								<ZoomTrack
-									onDragStateChanged={(v) => {
-										zoomSegmentDragState = v;
-									}}
-									handleUpdatePlayhead={handleUpdatePlayhead}
-								/>
-							</TrackRow>
+							<Show when={zoomTrackVisible()}>
+								<TrackRow
+									icon={trackIcons.zoom}
+									label="Zoom"
+									type="zoom"
+									onDelete={
+										(project.timeline?.zoomSegments?.length ?? 0) > 0
+											? () => handleClearTrackSegments("zoom")
+											: undefined
+									}
+									deleteLabel="Clear all"
+									deleteTitle="Delete all zoom segments"
+								>
+									<ZoomTrack
+										onDragStateChanged={(v) => {
+											zoomSegmentDragState = v;
+										}}
+										handleUpdatePlayhead={handleUpdatePlayhead}
+									/>
+								</TrackRow>
+							</Show>
 							<Show when={threeDTrackVisible()}>
 								<TrackRow
 									icon={trackIcons["3d"]}
@@ -1750,6 +1809,8 @@ function TrackRow(props: {
 				return timeline?.styleSegments ?? [];
 			case "image":
 				return timeline?.imageSegments ?? [];
+			case "waveform":
+				return timeline?.waveformSegments ?? [];
 			case "text":
 				return timeline?.textSegments ?? [];
 			case "mask":

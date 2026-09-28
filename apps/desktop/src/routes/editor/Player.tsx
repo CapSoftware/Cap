@@ -43,6 +43,7 @@ import { TextOverlay } from "./TextOverlay";
 import { EditorButton, Slider } from "./ui";
 import { useEditorShortcuts } from "./useEditorShortcuts";
 import { formatTime } from "./utils";
+import { WaveformOverlay } from "./waveform-overlay";
 
 export function PlayerContent(props: { compactness?: number }) {
 	const {
@@ -65,6 +66,7 @@ export function PlayerContent(props: { compactness?: number }) {
 		playbackIntent,
 		requestHandoffPlayback,
 		handoffPlaybackPending,
+		meta,
 	} = useEditorContext();
 
 	let panelRef: HTMLDivElement | undefined;
@@ -382,15 +384,17 @@ export function PlayerContent(props: { compactness?: number }) {
 					<Show when={!selectedStyle()}>
 						<AspectRatioSelect />
 					</Show>
-					<EditorButton
-						variant="text"
-						tooltipText="Crop Video"
-						onClick={cropDialogHandler}
-						leftIcon={<IconCapCrop />}
-					>
-						<span class="max-[1200px]:hidden">Crop</span>
-					</EditorButton>
-					<FrameButton />
+					<Show when={!meta().audioOnly && !project.hideDisplay}>
+						<EditorButton
+							variant="text"
+							tooltipText="Crop Video"
+							onClick={cropDialogHandler}
+							leftIcon={<IconCapCrop />}
+						>
+							<span class="max-[1200px]:hidden">Crop</span>
+						</EditorButton>
+						<FrameButton />
+					</Show>
 				</div>
 				<div class="flex flex-row flex-none gap-2 items-center">
 					<span class="text-xs text-ed-text-2">Preview</span>
@@ -779,6 +783,7 @@ function PreviewCanvas(props: {
 						<div class="absolute inset-0 isolate pointer-events-none">
 							<MaskOverlay size={size()} />
 							<ImageOverlay size={size()} />
+							<WaveformOverlay size={size()} />
 							<TextOverlay size={size()} />
 						</div>
 						<CaptionOverlay size={size()} />

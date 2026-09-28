@@ -27,6 +27,7 @@ export type BrowserEditorSources = {
 	projectConfig: unknown;
 	defaultStyle: EditorDefaultStyle | null;
 	displayHasAudio: boolean;
+	audioOnly: boolean;
 	mic: BrowserAudioTrack | null;
 	systemAudio: BrowserAudioTrack | null;
 	inputEvents: BrowserVideoSource | null;
@@ -206,7 +207,8 @@ export function parseBrowserEditorSources(
 		expiresAt <= Date.now() + 10_000 ||
 		expiresAt > Date.now() + 24 * 60 * 60 * 1000 ||
 		typeof sources.title !== "string" ||
-		typeof sources.captionsEnabled !== "boolean"
+		typeof sources.captionsEnabled !== "boolean" ||
+		(sources.audioOnly !== undefined && typeof sources.audioOnly !== "boolean")
 	) {
 		throw new Error("Editor browser sources are invalid");
 	}
@@ -309,6 +311,7 @@ export function parseBrowserEditorSources(
 		projectConfig: sources.projectConfig ?? null,
 		defaultStyle: parseDefaultStyle(sources.defaultStyle),
 		displayHasAudio: sources.displayHasAudio === true,
+		audioOnly: sources.audioOnly === true,
 		mic,
 		systemAudio,
 		inputEvents: signedInputEvents(sources.inputEvents, expiresAt),

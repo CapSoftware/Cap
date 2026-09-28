@@ -153,6 +153,8 @@ import {
 	topSlideAnimateClasses,
 } from "./ui";
 import { formatTime } from "./utils";
+import type { WaveformSegment } from "./waveform";
+import { WaveformSegmentConfig } from "./waveform-segment-config";
 import { ZoomModeHelper } from "./ZoomModeHelper";
 
 const isWebEditor = import.meta.env.VITE_CAP_WEB_EDITOR === "true";
@@ -725,10 +727,11 @@ function ConfigSidebarContent() {
 						// { id: "hotkeys" as const, icon: IconCapHotkeys },
 					].filter(
 						(item) =>
-							!selectedStyle() ||
-							item.id === "background" ||
-							item.id === "camera" ||
-							item.id === "cursor",
+							!(meta().audioOnly && item.id === "cursor") &&
+							(!selectedStyle() ||
+								item.id === "background" ||
+								item.id === "camera" ||
+								item.id === "cursor"),
 					)}
 				>
 					{(item) => (
@@ -1566,6 +1569,75 @@ function ConfigSidebarContent() {
 							</Show>
 							<Show
 								when={(() => {
+									const waveformSelection = selection();
+									if (waveformSelection.type !== "waveform") return;
+
+									const segments = waveformSelection.indices
+										.map((index) => ({
+											index,
+											segment: project.timeline?.waveformSegments?.[index],
+										}))
+										.filter(
+											(
+												item,
+											): item is { index: number; segment: WaveformSegment } =>
+												item.segment !== undefined,
+										);
+
+									if (segments.length === 0) {
+										setEditorState("timeline", "selection", null);
+										return;
+									}
+									return { selection: waveformSelection, segments };
+								})()}
+							>
+								{(value) => (
+									<div class="space-y-4">
+										<div class="flex flex-row justify-between items-center">
+											<div class="flex gap-2 items-center">
+												<EditorButton
+													onClick={() =>
+														setEditorState("timeline", "selection", null)
+													}
+													leftIcon={<IconLucideCheck />}
+												>
+													Done
+												</EditorButton>
+												<span class="text-[12px] text-ed-text-2">
+													{value().segments.length === 1
+														? "Audio waveform"
+														: `${value().segments.length} waveforms selected`}
+												</span>
+											</div>
+											<EditorButton
+												variant="danger"
+												onClick={() =>
+													projectActions.deleteOverlaySegments(
+														"waveform",
+														value().segments.map((s) => s.index),
+													)
+												}
+												leftIcon={<IconCapTrash />}
+											>
+												Delete
+											</EditorButton>
+										</div>
+										<For each={value().segments}>
+											{(item) => (
+												<div class="p-3.5 rounded-xl bg-ed-card-2">
+													<WaveformSegmentConfig
+														segment={item.segment}
+														segmentIndex={item.index}
+														brandColorSwatches={brandColorSwatches()}
+													/>
+												</div>
+											)}
+										</For>
+									</div>
+								)}
+							</Show>
+							<Show
+								when={(() => {
 									const zoomSelection = selection();
 									if (zoomSelection.type !== "zoom") return;
 
@@ -1848,8 +1920,15 @@ function BackgroundConfig(props: {
 	scrollRef: HTMLDivElement;
 	brandColorSwatches: OrganizationBrandColorSwatch[];
 }) {
-	const { project, setProject, editorInstance, projectHistory, selectedStyle } =
-		useEditorContext();
+	const {
+		project,
+		setProject,
+		editorInstance,
+		projectHistory,
+		selectedStyle,
+		meta,
+	} = useEditorContext();
+	const screenHidden = () => meta().audioOnly || !!project.hideDisplay;
 	const notchXMax = () => {
 		const width =
 			project.background.notch?.width ?? editorInstance.notchBase.width;
@@ -2816,6 +2895,14 @@ function BackgroundConfig(props: {
 				</Section>
 
 				<div class="w-full border-t border-ed-line" />
+				<Show when={!meta().audioOnly && !selectedStyle()}>
+					<Field inline name="Show screen">
+						<Toggle
+							checked={!project.hideDisplay}
+							onChange={(show) => setProject("hideDisplay", !show)}
+						/>
+					</Field>
+				</Show>
 				<SectionLabel name="Layout" />
 				<Field
 					inline
@@ -2831,148 +2918,130 @@ function BackgroundConfig(props: {
 						formatTooltip="%"
 					/>
 				</Field>
-				<Field
-					inline
-					name="Padding"
-					value={`${project.background.padding.toFixed(1)}%`}
-				>
-					<Slider
-						value={[project.background.padding]}
-						onChange={(v) => setBackgroundDimension("padding", v[0])}
-						minValue={0}
-						maxValue={40}
-						step={0.1}
-						formatTooltip="%"
-					/>
-				</Field>
-				<Show when={project.background.displayPosition}>
-					<div class="flex gap-2 justify-between items-center">
-						<span class="text-[11px] text-ed-text-3">
-							Custom screen position (dragged on canvas)
-						</span>
-						<EditorButton
-							size="sm"
-							onClick={() => setProject("background", "displayPosition", null)}
-						>
-							Reset
-						</EditorButton>
-					</div>
-				</Show>
-				<Field
-					inline
-					name="Corners"
-					value={`${project.background.rounding.toFixed(1)}%`}
-				>
-					<Slider
-						value={[project.background.rounding]}
-						onChange={(v) => setBackgroundDimension("rounding", v[0])}
-						minValue={0}
-						maxValue={100}
-						step={0.1}
-						formatTooltip="%"
-					/>
-				</Field>
-				<Field inline name="Corner Style">
-					<CornerStyleSelect
-						value={project.background.roundingType}
-						onChange={(value) =>
-							setProject("background", "roundingType", value)
-						}
-					/>
-				</Field>
-				<Show when={!selectedStyle()}>
+				<Show when={!screenHidden()}>
 					<Field
 						inline
-						name="Motion Blur"
-						value={`${Math.round(
-							(project.screenMotionBlur ??
-								project.cursor.motionBlur ??
-								DEFAULT_MOTION_BLUR) * 100,
-						)}%`}
+						name="Padding"
+						value={`${project.background.padding.toFixed(1)}%`}
 					>
 						<Slider
-							value={[
-								project.screenMotionBlur ??
-									project.cursor.motionBlur ??
-									DEFAULT_MOTION_BLUR,
-							]}
-							onChange={(v) => {
-								const value = v[0] ?? 0;
-								batch(() => {
-									setProject("cursor", "motionBlur", value);
-									setProject("screenMotionBlur", value);
-								});
-							}}
+							value={[project.background.padding]}
+							onChange={(v) => setBackgroundDimension("padding", v[0])}
 							minValue={0}
-							maxValue={1}
-							step={0.01}
-							formatTooltip={(value) => `${Math.round(value * 100)}%`}
+							maxValue={40}
+							step={0.1}
+							formatTooltip="%"
 						/>
 					</Field>
-				</Show>
-				<Field inline name="Border">
-					<Toggle
-						checked={project.background.border?.enabled ?? false}
-						onChange={(enabled) => {
-							const prev = project.background.border ?? {
-								enabled: false,
-								width: 5.0,
-								color: [0, 0, 0],
-								opacity: 50.0,
-							};
-
-							if (props.scrollRef && enabled) {
-								setTimeout(
-									() =>
-										props.scrollRef.scrollTo({
-											top: props.scrollRef.scrollHeight,
-											behavior: "smooth",
-										}),
-									100,
-								);
-							}
-
-							setProject("background", "border", {
-								...prev,
-								enabled,
-							});
-						}}
-					/>
-				</Field>
-				<KCollapsible open={project.background.border?.enabled ?? false}>
-					<KCollapsible.Content class="overflow-hidden opacity-0 transition-opacity animate-collapsible-up data-expanded:animate-collapsible-down data-expanded:opacity-100">
-						<div class="flex flex-col gap-2 pb-4">
-							<Field
-								inline
-								name="Border Width"
-								value={`${(project.background.border?.width ?? 5).toFixed(
-									1,
-								)}px`}
+					<Show when={project.background.displayPosition}>
+						<div class="flex gap-2 justify-between items-center">
+							<span class="text-[11px] text-ed-text-3">
+								Custom screen position (dragged on canvas)
+							</span>
+							<EditorButton
+								size="sm"
+								onClick={() =>
+									setProject("background", "displayPosition", null)
+								}
 							>
-								<Slider
-									value={[project.background.border?.width ?? 5.0]}
-									onChange={(v) =>
-										setProject("background", "border", {
-											...(project.background.border ?? {
-												enabled: true,
-												width: 5.0,
-												color: [0, 0, 0],
-												opacity: 50.0,
+								Reset
+							</EditorButton>
+						</div>
+					</Show>
+					<Field
+						inline
+						name="Corners"
+						value={`${project.background.rounding.toFixed(1)}%`}
+					>
+						<Slider
+							value={[project.background.rounding]}
+							onChange={(v) => setBackgroundDimension("rounding", v[0])}
+							minValue={0}
+							maxValue={100}
+							step={0.1}
+							formatTooltip="%"
+						/>
+					</Field>
+					<Field inline name="Corner Style">
+						<CornerStyleSelect
+							value={project.background.roundingType}
+							onChange={(value) =>
+								setProject("background", "roundingType", value)
+							}
+						/>
+					</Field>
+					<Show when={!selectedStyle()}>
+						<Field
+							inline
+							name="Motion Blur"
+							value={`${Math.round(
+								(project.screenMotionBlur ??
+									project.cursor.motionBlur ??
+									DEFAULT_MOTION_BLUR) * 100,
+							)}%`}
+						>
+							<Slider
+								value={[
+									project.screenMotionBlur ??
+										project.cursor.motionBlur ??
+										DEFAULT_MOTION_BLUR,
+								]}
+								onChange={(v) => {
+									const value = v[0] ?? 0;
+									batch(() => {
+										setProject("cursor", "motionBlur", value);
+										setProject("screenMotionBlur", value);
+									});
+								}}
+								minValue={0}
+								maxValue={1}
+								step={0.01}
+								formatTooltip={(value) => `${Math.round(value * 100)}%`}
+							/>
+						</Field>
+					</Show>
+					<Field inline name="Border">
+						<Toggle
+							checked={project.background.border?.enabled ?? false}
+							onChange={(enabled) => {
+								const prev = project.background.border ?? {
+									enabled: false,
+									width: 5.0,
+									color: [0, 0, 0],
+									opacity: 50.0,
+								};
+
+								if (props.scrollRef && enabled) {
+									setTimeout(
+										() =>
+											props.scrollRef.scrollTo({
+												top: props.scrollRef.scrollHeight,
+												behavior: "smooth",
 											}),
-											width: v[0],
-										})
-									}
-									minValue={1}
-									maxValue={20}
-									step={0.1}
-									formatTooltip="px"
-								/>
-							</Field>
-							<Field name="Border Color">
-								<div class="flex flex-col gap-2">
-									<RgbInput
-										value={project.background.border?.color ?? [0, 0, 0]}
-										onChange={(color) =>
+										100,
+									);
+								}
+
+								setProject("background", "border", {
+									...prev,
+									enabled,
+								});
+							}}
+						/>
+					</Field>
+					<KCollapsible open={project.background.border?.enabled ?? false}>
+						<KCollapsible.Content class="overflow-hidden opacity-0 transition-opacity animate-collapsible-up data-expanded:animate-collapsible-down data-expanded:opacity-100">
+							<div class="flex flex-col gap-2 pb-4">
+								<Field
+									inline
+									name="Border Width"
+									value={`${(project.background.border?.width ?? 5).toFixed(
+										1,
+									)}px`}
+								>
+									<Slider
+										value={[project.background.border?.width ?? 5.0]}
+										onChange={(v) =>
 											setProject("background", "border", {
 												...(project.background.border ?? {
 													enabled: true,
@@ -2980,204 +3049,229 @@ function BackgroundConfig(props: {
 													color: [0, 0, 0],
 													opacity: 50.0,
 												}),
-												color,
+												width: v[0],
 											})
 										}
+										minValue={1}
+										maxValue={20}
+										step={0.1}
+										formatTooltip="px"
 									/>
-									<BrandColorsDropdown
-										swatches={props.brandColorSwatches}
-										onSelect={setBackgroundBorderColor}
-									/>
-								</div>
-							</Field>
-							<Field
-								inline
-								name="Border Opacity"
-								value={`${(project.background.border?.opacity ?? 50).toFixed(
-									1,
-								)}%`}
-							>
-								<Slider
-									value={[project.background.border?.opacity ?? 50.0]}
-									onChange={(v) =>
-										setProject("background", "border", {
-											...(project.background.border ?? {
-												enabled: true,
-												width: 5.0,
-												color: [0, 0, 0],
-												opacity: 50.0,
-											}),
-											opacity: v[0],
-										})
-									}
-									minValue={0}
-									maxValue={100}
-									step={0.1}
-									formatTooltip="%"
-								/>
-							</Field>
-						</div>
-					</KCollapsible.Content>
-				</KCollapsible>
-				<Field inline name="MacBook notch">
-					<Toggle
-						checked={project.background.notch?.enabled ?? false}
-						onChange={(enabled) =>
-							setProject("background", "notch", {
-								...(project.background.notch ?? UNPLACED_NOTCH),
-								enabled,
-							})
-						}
-					/>
-				</Field>
-				<KCollapsible open={project.background.notch?.enabled ?? false}>
-					<KCollapsible.Content class="overflow-hidden opacity-0 transition-opacity animate-collapsible-up data-expanded:animate-collapsible-down data-expanded:opacity-100">
-						<div class="flex flex-col gap-2 pb-4">
-							<p class="text-[11px] text-ed-text-3">
-								Draws a MacBook notch over the recording. Recordings made on a
-								Mac with a notch use their own measurements; otherwise start
-								from the size below and adjust to match.
-							</p>
-							<For
-								each={
-									[
-										{ key: "width", name: "Notch Width", max: 0.4 },
-										{ key: "height", name: "Notch Height", max: 0.15 },
-										{ key: "x", name: "Notch Position", max: 1 },
-									] as const
-								}
-							>
-								{(field) => {
-									const notchValue = () =>
-										field.key === "x"
-											? Math.min(
-													project.background.notch?.x ??
-														editorInstance.notchBase.x,
-													notchXMax(),
-												)
-											: (project.background.notch?.[field.key] ??
-												editorInstance.notchBase[field.key]);
-
-									return (
-										<Field
-											inline
-											name={field.name}
-											value={`${(notchValue() * 100).toFixed(1)}%`}
-										>
-											<Slider
-												value={[notchValue()]}
-												onChange={(v) => {
-													const base = editorInstance.notchBase;
-													const prev =
-														project.background.notch ?? UNPLACED_NOTCH;
-													const next: NotchConfiguration = {
-														...prev,
+								</Field>
+								<Field name="Border Color">
+									<div class="flex flex-col gap-2">
+										<RgbInput
+											value={project.background.border?.color ?? [0, 0, 0]}
+											onChange={(color) =>
+												setProject("background", "border", {
+													...(project.background.border ?? {
 														enabled: true,
-													};
-													if (field.key === "x") {
-														next.x = Math.min(v[0], notchXMax());
-													} else {
-														next[field.key] = v[0];
-													}
+														width: 5.0,
+														color: [0, 0, 0],
+														opacity: 50.0,
+													}),
+													color,
+												})
+											}
+										/>
+										<BrandColorsDropdown
+											swatches={props.brandColorSwatches}
+											onSelect={setBackgroundBorderColor}
+										/>
+									</div>
+								</Field>
+								<Field
+									inline
+									name="Border Opacity"
+									value={`${(project.background.border?.opacity ?? 50).toFixed(
+										1,
+									)}%`}
+								>
+									<Slider
+										value={[project.background.border?.opacity ?? 50.0]}
+										onChange={(v) =>
+											setProject("background", "border", {
+												...(project.background.border ?? {
+													enabled: true,
+													width: 5.0,
+													color: [0, 0, 0],
+													opacity: 50.0,
+												}),
+												opacity: v[0],
+											})
+										}
+										minValue={0}
+										maxValue={100}
+										step={0.1}
+										formatTooltip="%"
+									/>
+								</Field>
+							</div>
+						</KCollapsible.Content>
+					</KCollapsible>
+					<Field inline name="MacBook notch">
+						<Toggle
+							checked={project.background.notch?.enabled ?? false}
+							onChange={(enabled) =>
+								setProject("background", "notch", {
+									...(project.background.notch ?? UNPLACED_NOTCH),
+									enabled,
+								})
+							}
+						/>
+					</Field>
+					<KCollapsible open={project.background.notch?.enabled ?? false}>
+						<KCollapsible.Content class="overflow-hidden opacity-0 transition-opacity animate-collapsible-up data-expanded:animate-collapsible-down data-expanded:opacity-100">
+							<div class="flex flex-col gap-2 pb-4">
+								<p class="text-[11px] text-ed-text-3">
+									Draws a MacBook notch over the recording. Recordings made on a
+									Mac with a notch use their own measurements; otherwise start
+									from the size below and adjust to match.
+								</p>
+								<For
+									each={
+										[
+											{ key: "width", name: "Notch Width", max: 0.4 },
+											{ key: "height", name: "Notch Height", max: 0.15 },
+											{ key: "x", name: "Notch Position", max: 1 },
+										] as const
+									}
+								>
+									{(field) => {
+										const notchValue = () =>
+											field.key === "x"
+												? Math.min(
+														project.background.notch?.x ??
+															editorInstance.notchBase.x,
+														notchXMax(),
+													)
+												: (project.background.notch?.[field.key] ??
+													editorInstance.notchBase[field.key]);
 
-													if (field.key === "width") {
-														// Resize about the centre rather than dragging the
-														// left edge along with the width.
-														const centre =
-															(prev.x ?? base.x) +
-															(prev.width ?? base.width) / 2;
-														next.x = Math.min(
-															Math.max(centre - v[0] / 2, 0),
-															1 - v[0],
-														);
-													}
+										return (
+											<Field
+												inline
+												name={field.name}
+												value={`${(notchValue() * 100).toFixed(1)}%`}
+											>
+												<Slider
+													value={[notchValue()]}
+													onChange={(v) => {
+														const base = editorInstance.notchBase;
+														const prev =
+															project.background.notch ?? UNPLACED_NOTCH;
+														const next: NotchConfiguration = {
+															...prev,
+															enabled: true,
+														};
+														if (field.key === "x") {
+															next.x = Math.min(v[0], notchXMax());
+														} else {
+															next[field.key] = v[0];
+														}
 
-													setProject("background", "notch", next);
-												}}
-												minValue={0}
-												maxValue={field.key === "x" ? notchXMax() : field.max}
-												step={0.001}
-												formatTooltip={(value) =>
-													`${(value * 100).toFixed(1)}%`
-												}
-											/>
-										</Field>
-									);
-								}}
-							</For>
-						</div>
-					</KCollapsible.Content>
-				</KCollapsible>
-				<Field
-					inline
-					name="Shadow"
-					value={`${(project.background.shadow ?? 0).toFixed(1)}%`}
-				>
-					<Slider
-						value={[project.background.shadow ?? 0]}
-						onChange={(v) => {
-							batch(() => {
-								setProject("background", "shadow", v[0]);
-								// Initialize advanced shadow settings if they don't exist and shadow is enabled
-								if (v[0] > 0 && !project.background.advancedShadow) {
-									setProject("background", "advancedShadow", {
+														if (field.key === "width") {
+															// Resize about the centre rather than dragging the
+															// left edge along with the width.
+															const centre =
+																(prev.x ?? base.x) +
+																(prev.width ?? base.width) / 2;
+															next.x = Math.min(
+																Math.max(centre - v[0] / 2, 0),
+																1 - v[0],
+															);
+														}
+
+														setProject("background", "notch", next);
+													}}
+													minValue={0}
+													maxValue={field.key === "x" ? notchXMax() : field.max}
+													step={0.001}
+													formatTooltip={(value) =>
+														`${(value * 100).toFixed(1)}%`
+													}
+												/>
+											</Field>
+										);
+									}}
+								</For>
+							</div>
+						</KCollapsible.Content>
+					</KCollapsible>
+					<Field
+						inline
+						name="Shadow"
+						value={`${(project.background.shadow ?? 0).toFixed(1)}%`}
+					>
+						<Slider
+							value={[project.background.shadow ?? 0]}
+							onChange={(v) => {
+								batch(() => {
+									setProject("background", "shadow", v[0]);
+									// Initialize advanced shadow settings if they don't exist and shadow is enabled
+									if (v[0] > 0 && !project.background.advancedShadow) {
+										setProject("background", "advancedShadow", {
+											size: 50,
+											opacity: 18,
+											blur: 50,
+										});
+									}
+								});
+							}}
+							minValue={0}
+							maxValue={100}
+							step={0.1}
+							formatTooltip="%"
+						/>
+					</Field>
+					<ShadowSettings
+						scrollRef={props.scrollRef}
+						size={{
+							value: [project.background.advancedShadow?.size ?? 50],
+							onChange: (v) => {
+								setProject("background", "advancedShadow", {
+									...(project.background.advancedShadow ?? {
 										size: 50,
 										opacity: 18,
 										blur: 50,
-									});
-								}
-							});
+									}),
+									size: v[0],
+								});
+							},
 						}}
-						minValue={0}
-						maxValue={100}
-						step={0.1}
-						formatTooltip="%"
+						opacity={{
+							value: [project.background.advancedShadow?.opacity ?? 18],
+							onChange: (v) => {
+								setProject("background", "advancedShadow", {
+									...(project.background.advancedShadow ?? {
+										size: 50,
+										opacity: 18,
+										blur: 50,
+									}),
+									opacity: v[0],
+								});
+							},
+						}}
+						blur={{
+							value: [project.background.advancedShadow?.blur ?? 50],
+							onChange: (v) => {
+								setProject("background", "advancedShadow", {
+									...(project.background.advancedShadow ?? {
+										size: 50,
+										opacity: 18,
+										blur: 50,
+									}),
+									blur: v[0],
+								});
+							},
+						}}
 					/>
-				</Field>
-				<ShadowSettings
-					scrollRef={props.scrollRef}
-					size={{
-						value: [project.background.advancedShadow?.size ?? 50],
-						onChange: (v) => {
-							setProject("background", "advancedShadow", {
-								...(project.background.advancedShadow ?? {
-									size: 50,
-									opacity: 18,
-									blur: 50,
-								}),
-								size: v[0],
-							});
-						},
-					}}
-					opacity={{
-						value: [project.background.advancedShadow?.opacity ?? 18],
-						onChange: (v) => {
-							setProject("background", "advancedShadow", {
-								...(project.background.advancedShadow ?? {
-									size: 50,
-									opacity: 18,
-									blur: 50,
-								}),
-								opacity: v[0],
-							});
-						},
-					}}
-					blur={{
-						value: [project.background.advancedShadow?.blur ?? 50],
-						onChange: (v) => {
-							setProject("background", "advancedShadow", {
-								...(project.background.advancedShadow ?? {
-									size: 50,
-									opacity: 18,
-									blur: 50,
-								}),
-								blur: v[0],
-							});
-						},
-					}}
-				/>
-				<Show when={!selectedStyle()}>
-					<ColorCorrectionSection target="screen" scrollRef={props.scrollRef} />
+					<Show when={!selectedStyle()}>
+						<ColorCorrectionSection
+							target="screen"
+							scrollRef={props.scrollRef}
+						/>
+					</Show>
 				</Show>
 				{/* <ComingSoonTooltip>
             <Field name="Inset" icon={<IconCapInset />}>

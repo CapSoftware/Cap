@@ -58,6 +58,7 @@ export function moveTimelineClip(
 		for (const track of [
 			timeline.styleSegments,
 			timeline.imageSegments,
+			timeline.waveformSegments ?? [],
 			timeline.zoomSegments,
 			timeline.sceneSegments ?? [],
 			timeline.maskSegments,

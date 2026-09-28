@@ -57,6 +57,10 @@ const TRACK_META: Record<TimelineTrackType, TrackMeta> = {
 		description: "Add background music or import your own audio.",
 		unavailableHint: "",
 	},
+	waveform: {
+		description: "Show a live waveform that moves with your audio.",
+		unavailableHint: "",
+	},
 	scene: {
 		description: "Switch layouts between your screen and camera.",
 		unavailableHint: "Record with a camera to use scenes.",
@@ -111,7 +115,7 @@ function TrackTile(props: {
 				"--tray-index": props.index,
 			}}
 			class={cx(
-				"cap-track-tray-tile group/tile flex w-16 shrink-0 flex-col items-center gap-1.5 rounded-lg pt-2 pb-1.5 outline-hidden transition-[background-color,transform] duration-150",
+				"cap-track-tray-tile group/tile flex min-w-16 shrink-0 px-1 flex-col items-center gap-1.5 rounded-lg pt-2 pb-1.5 outline-hidden transition-[background-color,transform] duration-150",
 				available()
 					? "cursor-default hover:bg-ed-ctl focus-visible:bg-ed-ctl active:scale-95"
 					: "cursor-not-allowed opacity-45",

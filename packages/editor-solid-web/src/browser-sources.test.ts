@@ -63,6 +63,23 @@ test("keeps screen and camera as separate sources across an imported clip", () =
 	expect(sources.captionsEnabled).toBe(true);
 });
 
+test("marks audio-only recordings only when the server says so", () => {
+	const value = bootstrap();
+	expect(parseBrowserEditorSources(value, "recording-1").audioOnly).toBe(false);
+	expect(
+		parseBrowserEditorSources(
+			{ ...value, sources: { ...value.sources, audioOnly: true } },
+			"recording-1",
+		).audioOnly,
+	).toBe(true);
+	expect(() =>
+		parseBrowserEditorSources(
+			{ ...value, sources: { ...value.sources, audioOnly: "yes" } },
+			"recording-1",
+		),
+	).toThrow();
+});
+
 test("keeps separately signed mic and system audio with their recording offsets", () => {
 	const value = bootstrap();
 	const sources = parseBrowserEditorSources(
