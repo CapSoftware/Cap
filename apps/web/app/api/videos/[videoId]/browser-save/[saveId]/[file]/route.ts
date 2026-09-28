@@ -1,3 +1,4 @@
+import type { VideoMetadata } from "@cap/database/types";
 import { provideOptionalAuth, Storage, Videos } from "@cap/web-backend";
 import { Video } from "@cap/web-domain";
 import { Effect, Option, Schema } from "effect";
@@ -27,6 +28,8 @@ export async function GET(
 		);
 		if (Option.isNone(maybeVideo)) return null;
 		const [video] = maybeVideo.value;
+		const metadata = Option.getOrNull(video.metadata) as VideoMetadata | null;
+		if (metadata?.browserSave?.saveId !== saveId) return null;
 		const [bucket] = yield* Storage.getAccessForVideo(video);
 		return yield* bucket.getSignedObjectUrl(
 			browserSaveChunkKey(video.ownerId, video.id, saveId, file),
