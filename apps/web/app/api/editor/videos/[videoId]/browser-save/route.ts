@@ -162,30 +162,17 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 				.handle("finish", ({ path, urlParams }) =>
 					Effect.gen(function* () {
 						const video = yield* loadEligibleEditorVideo(path.videoId, true);
-						const save = video.metadata?.browserSave;
-						if (!save) return;
+						if (!video.metadata?.browserSave) return;
+						const current = sql`JSON_EXTRACT(${videos.metadata}, '$.browserSave')`;
 						const finished = sql`JSON_OBJECT('updatedAt', ${new Date().toISOString()}, 'progress', 1, 'finished', true)`;
-						const updates = [
-							// Another tab's Save in progress is left to that tab.
-							...(!save.saveId || save.saveId === urlParams.saveId
-								? [
-										// A published Save keeps its chunks listed, so viewers
-										// part way through them finish.
-										sql`'$.browserSave', ${
-											urlParams.published
-												? sql`JSON_MERGE_PATCH(JSON_EXTRACT(${videos.metadata}, '$.browserSave'), ${finished})`
-												: finished
-										}`,
-									]
-								: []),
-							...(urlParams.published
-								? [sql`'$.publishedBrowserSaveId', ${urlParams.saveId ?? null}`]
-								: []),
-						];
-						if (updates.length === 0) return;
+						const saveId = urlParams.saveId ?? "";
 						yield* writeMetadata(
 							video.id,
-							sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), ${sql.join(updates, sql`, `)})`,
+							sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.browserSave', IF(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(${current}, '$.saveId')), ${saveId}) = ${saveId}, ${urlParams.published ? sql`JSON_MERGE_PATCH(${current}, ${finished})` : finished}, ${current})${
+								urlParams.published && urlParams.saveId
+									? sql`, '$.publishedBrowserSaveId', ${urlParams.saveId}`
+									: sql``
+							})`,
 						);
 					}),
 				),
