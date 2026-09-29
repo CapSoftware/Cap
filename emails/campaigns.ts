@@ -1,4 +1,4 @@
-import { condition } from "./audiences";
+import { condition, signedUpBefore } from "./audiences";
 import { customerCaseStudy } from "./marketing/customer-case-study";
 import { customerUpdate } from "./marketing/customer-update";
 import { freeUpdate } from "./marketing/free-update";
@@ -27,5 +27,6 @@ export const campaignTemplates: Campaign[] = [
 			condition("capTeammate", false),
 			condition("capMultiSeatOwner", true),
 		],
+		campaignConditions: [signedUpBefore("2026-08-30T00:00:00.000Z")],
 	},
 ];
