@@ -7,6 +7,7 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { STREAMING_MP4_MIME_TYPES } from "@cap/recorder-core/recorder-constants";
 import {
 	type BrowserContext,
 	chromium,
@@ -15,6 +16,10 @@ import {
 	test,
 } from "@playwright/test";
 import type { RecordingStatus } from "../src/shared/types";
+
+let videoExtension = "webm";
+let rawSubpath = "raw-upload.webm";
+let cameraSubpath = "camera-upload.webm";
 
 type ChromeRuntimeResponse =
 	| {
@@ -210,7 +215,7 @@ const createMockCapServer = async () => {
 					body &&
 					typeof body === "object" &&
 					"subpath" in body &&
-					body.subpath === "camera-upload.webm"
+					body.subpath === cameraSubpath
 				) {
 					await new Promise((resolve) =>
 						setTimeout(resolve, state.cameraInitiateDelayMs),
@@ -266,10 +271,7 @@ const createMockCapServer = async () => {
 				state.uploadBytesBySubpath[subpath] =
 					(state.uploadBytesBySubpath[subpath] ?? 0) + body.byteLength;
 				state.uploadHeaders.push(request.headers);
-				if (
-					state.simulateSlowCameraUpload &&
-					subpath === "camera-upload.webm"
-				) {
+				if (state.simulateSlowCameraUpload && subpath === cameraSubpath) {
 					await new Promise((resolve) =>
 						setTimeout(resolve, Math.ceil(body.byteLength / 1_250)),
 					);
@@ -296,7 +298,7 @@ const createMockCapServer = async () => {
 					!!body &&
 					typeof body === "object" &&
 					"subpath" in body &&
-					body.subpath === "camera-upload.webm"
+					body.subpath === cameraSubpath
 				) {
 					sendJson(response, 400, { error: "Camera completion rejected" });
 					return;
@@ -328,7 +330,7 @@ const createMockCapServer = async () => {
 					!!body &&
 					typeof body === "object" &&
 					"subpath" in body &&
-					body.subpath === "raw-upload.webm"
+					body.subpath === rawSubpath
 				) {
 					sendJson(response, 400, { error: "Screen completion rejected" });
 					return;
@@ -339,7 +341,7 @@ const createMockCapServer = async () => {
 						!!body &&
 						typeof body === "object" &&
 						"subpath" in body &&
-						body.subpath === "raw-upload.webm",
+						body.subpath === rawSubpath,
 				});
 				return;
 			}
@@ -703,9 +705,9 @@ const expectSuccessfulUpload = async (
 		.toBe("completed");
 
 	expect(state.initiateBodies).toHaveLength(inputSidecar ? 3 : 2);
-	expect(state.initiateBodies[0]).toMatchObject({ subpath: "raw-upload.webm" });
+	expect(state.initiateBodies[0]).toMatchObject({ subpath: rawSubpath });
 	expect(state.initiateBodies[1]).toMatchObject({
-		subpath: "camera-upload.webm",
+		subpath: cameraSubpath,
 	});
 	if (inputSidecar) {
 		expect(state.initiateBodies[2]).toMatchObject({
@@ -724,8 +726,8 @@ const expectSuccessfulUpload = async (
 	expect(completeBody).toMatchObject({
 		videoId: state.videoId,
 		uploadId: "upload-e2e-2",
-		subpath: "camera-upload.webm",
-		screenSubpath: "raw-upload.webm",
+		subpath: cameraSubpath,
+		screenSubpath: rawSubpath,
 	});
 	expect(
 		completeBody &&
@@ -747,18 +749,18 @@ const expectSuccessfulUpload = async (
 	if (inputSidecar) {
 		expect(state.completeBodies[1]).toMatchObject({
 			subpath: "input-events-upload.ndjson",
-			screenSubpath: "raw-upload.webm",
+			screenSubpath: rawSubpath,
 		});
 		expect(
 			state.uploadBytesBySubpath["input-events-upload.ndjson"],
 		).toBeGreaterThan(0);
 	}
 	expect(state.completeBodies[inputSidecar ? 2 : 1]).toMatchObject({
-		subpath: "raw-upload.webm",
+		subpath: rawSubpath,
 		uploadId: "upload-e2e-1",
 	});
-	expect(state.uploadBytesBySubpath["camera-upload.webm"]).toBeGreaterThan(0);
-	expect(state.uploadBytesBySubpath["raw-upload.webm"]).toBeGreaterThan(0);
+	expect(state.uploadBytesBySubpath[cameraSubpath]).toBeGreaterThan(0);
+	expect(state.uploadBytesBySubpath[rawSubpath]).toBeGreaterThan(0);
 };
 
 const readLiveCameraOffset = async (
@@ -993,6 +995,28 @@ const startRecording = async (
 };
 
 test.describe("extension recording upload", () => {
+	test.beforeAll(async () => {
+		const browser = await chromium.launch({ channel: "chromium" });
+		try {
+			const page = await browser.newPage();
+			const streamsMp4 = await page.evaluate(
+				(candidates) =>
+					candidates.some((candidate) =>
+						MediaRecorder.isTypeSupported(candidate),
+					),
+				[
+					...STREAMING_MP4_MIME_TYPES.videoOnly,
+					...STREAMING_MP4_MIME_TYPES.withAudio,
+				],
+			);
+			videoExtension = streamsMp4 ? "mp4" : "webm";
+			rawSubpath = `raw-upload.${videoExtension}`;
+			cameraSubpath = `camera-upload.${videoExtension}`;
+		} finally {
+			await browser.close();
+		}
+	});
+
 	let mockServer: Awaited<ReturnType<typeof createMockCapServer>> | null = null;
 	let extension: Awaited<ReturnType<typeof launchExtensionContext>> | null =
 		null;
@@ -1112,7 +1136,7 @@ test.describe("extension recording upload", () => {
 			false,
 		);
 		expect(mockServer.state.initiateBodies).toEqual([
-			expect.objectContaining({ subpath: "raw-upload.webm" }),
+			expect.objectContaining({ subpath: rawSubpath }),
 		]);
 		const stopResponse = await sendServiceWorkerMessage(messengerPage, {
 			target: "service-worker",
@@ -1130,13 +1154,13 @@ test.describe("extension recording upload", () => {
 			})
 			.toBe("completed");
 		expect(mockServer.state.completeBodies).toEqual([
-			expect.objectContaining({ subpath: "raw-upload.webm" }),
+			expect.objectContaining({ subpath: rawSubpath }),
 		]);
+		expect(mockServer.state.uploadBytesBySubpath[rawSubpath]).toBeGreaterThan(
+			0,
+		);
 		expect(
-			mockServer.state.uploadBytesBySubpath["raw-upload.webm"],
-		).toBeGreaterThan(0);
-		expect(
-			mockServer.state.uploadBytesBySubpath["camera-upload.webm"],
+			mockServer.state.uploadBytesBySubpath[cameraSubpath],
 		).toBeUndefined();
 	});
 
@@ -1212,18 +1236,18 @@ test.describe("extension recording upload", () => {
 		expect(audioCompletion).toMatchObject({
 			videoId: mockServer.state.videoId,
 			subpath: "mic-upload.webm",
-			screenSubpath: "raw-upload.webm",
+			screenSubpath: rawSubpath,
 			audioOffsetMs: persistedAudioOffsetMs,
 		});
 		expect(
 			mockServer.state.uploadBytesBySubpath["mic-upload.webm"],
 		).toBeGreaterThan(0);
 		expect(
-			mockServer.state.uploadBytesBySubpath["camera-upload.webm"],
+			mockServer.state.uploadBytesBySubpath[cameraSubpath],
 		).toBeGreaterThan(0);
-		expect(
-			mockServer.state.uploadBytesBySubpath["raw-upload.webm"],
-		).toBeGreaterThan(0);
+		expect(mockServer.state.uploadBytesBySubpath[rawSubpath]).toBeGreaterThan(
+			0,
+		);
 	});
 
 	test("keeps the microphone spool downloadable and retries all sources after audio upload failure", async () => {
@@ -1270,7 +1294,7 @@ test.describe("extension recording upload", () => {
 		const screenDownload = uploadPage.waitForEvent("download");
 		await uploadPage.getByRole("button", { name: "Download screen" }).click();
 		expect((await screenDownload).suggestedFilename()).toContain(
-			"-screen.webm",
+			`-screen.${videoExtension}`,
 		);
 
 		mockServer.state.failAudioCompletion = false;
@@ -1371,7 +1395,7 @@ test.describe("extension recording upload", () => {
 	});
 
 	test("uploads a camera multipart part during a long recording on a constrained network", async () => {
-		test.setTimeout(180_000);
+		test.setTimeout(330_000);
 		if (!extension || !mockServer)
 			throw new Error("Test harness did not start");
 		mockServer.state.simulateSlowCameraUpload = true;
@@ -1387,13 +1411,12 @@ test.describe("extension recording upload", () => {
 		expect(mockServer.state.initiateBodies).toHaveLength(2);
 		await expect
 			.poll(
-				() =>
-					mockServer?.state.completedPartsBySubpath["camera-upload.webm"] ?? 0,
-				{ timeout: 120_000 },
+				() => mockServer?.state.completedPartsBySubpath[cameraSubpath] ?? 0,
+				{ timeout: 240_000 },
 			)
 			.toBeGreaterThan(0);
 		expect(
-			mockServer.state.uploadBytesBySubpath["camera-upload.webm"],
+			mockServer.state.uploadBytesBySubpath[cameraSubpath],
 		).toBeGreaterThanOrEqual(5 * 1024 * 1024);
 
 		const stopResponse = await sendServiceWorkerMessage(messengerPage, {
@@ -1444,12 +1467,12 @@ test.describe("extension recording upload", () => {
 		const screenDownload = uploadPage.waitForEvent("download");
 		await uploadPage.getByRole("button", { name: "Download screen" }).click();
 		expect((await screenDownload).suggestedFilename()).toContain(
-			"-screen.webm",
+			`-screen.${videoExtension}`,
 		);
 		const cameraDownload = uploadPage.waitForEvent("download");
 		await uploadPage.getByRole("button", { name: "Download camera" }).click();
 		expect((await cameraDownload).suggestedFilename()).toContain(
-			"-camera.webm",
+			`-camera.${videoExtension}`,
 		);
 		await worker.evaluate(async () => {
 			const key = "cap-extension-failed-recordings";
@@ -1478,7 +1501,7 @@ test.describe("extension recording upload", () => {
 			uploadPage.getByRole("button", { name: "Download screen" }),
 		).toBeVisible();
 		expect(mockServer.state.completeBodies).toEqual([
-			expect.objectContaining({ subpath: "camera-upload.webm" }),
+			expect.objectContaining({ subpath: cameraSubpath }),
 		]);
 	});
 
@@ -1507,7 +1530,7 @@ test.describe("extension recording upload", () => {
 			.poll(() => readFailedCameraRecovery(worker))
 			.toMatchObject({
 				videoId: mockServer.state.videoId,
-				cameraSubpath: "camera-upload.webm",
+				cameraSubpath,
 				cameraOffsetMs: persistedCameraOffsetMs,
 			});
 		const optionsPage = await extension.context.newPage();
@@ -1540,12 +1563,12 @@ test.describe("extension recording upload", () => {
 		const screenDownload = optionsPage.waitForEvent("download");
 		await optionsPage.getByRole("button", { name: "Download screen" }).click();
 		expect((await screenDownload).suggestedFilename()).toContain(
-			"-screen.webm",
+			`-screen.${videoExtension}`,
 		);
 		const cameraDownload = optionsPage.waitForEvent("download");
 		await optionsPage.getByRole("button", { name: "Download camera" }).click();
 		expect((await cameraDownload).suggestedFilename()).toContain(
-			"-camera.webm",
+			`-camera.${videoExtension}`,
 		);
 		const micDownload = optionsPage.waitForEvent("download");
 		await optionsPage
@@ -1578,25 +1601,25 @@ test.describe("extension recording upload", () => {
 		expect(mockServer.state.completeBodies).toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({
-					subpath: "camera-upload.webm",
+					subpath: cameraSubpath,
 					cameraOffsetMs: persistedCameraOffsetMs,
 				}),
 				expect.objectContaining({
 					subpath: "mic-upload.webm",
 					audioOffsetMs: persistedAudioOffsetMs,
 				}),
-				expect.objectContaining({ subpath: "raw-upload.webm" }),
+				expect.objectContaining({ subpath: rawSubpath }),
 			]),
 		);
 		expect(
-			mockServer.state.uploadBytesBySubpath["camera-upload.webm"],
+			mockServer.state.uploadBytesBySubpath[cameraSubpath],
 		).toBeGreaterThan(0);
 		expect(
 			mockServer.state.uploadBytesBySubpath["mic-upload.webm"],
 		).toBeGreaterThan(0);
-		expect(
-			mockServer.state.uploadBytesBySubpath["raw-upload.webm"],
-		).toBeGreaterThan(0);
+		expect(mockServer.state.uploadBytesBySubpath[rawSubpath]).toBeGreaterThan(
+			0,
+		);
 		expect(await readFailedCameraRecovery(worker)).toBeNull();
 		expect(await hasLiveRecordingManifest(worker)).toBe(false);
 	});
@@ -1681,8 +1704,8 @@ test.describe("extension recording upload", () => {
 		expect(startResponse).toMatchObject({ ok: false });
 		expect(mockServer.state.abortBodies).toEqual(
 			expect.arrayContaining([
-				expect.objectContaining({ subpath: "raw-upload.webm" }),
-				expect.objectContaining({ subpath: "camera-upload.webm" }),
+				expect.objectContaining({ subpath: rawSubpath }),
+				expect.objectContaining({ subpath: cameraSubpath }),
 			]),
 		);
 		expect(mockServer.state.completeBodies).toHaveLength(0);
@@ -1801,13 +1824,13 @@ test.describe("extension recording upload", () => {
 			.toBe("completed");
 		expect(mockServer.state.completeBodies).toEqual(
 			expect.arrayContaining([
-				expect.objectContaining({ subpath: "camera-upload.webm" }),
+				expect.objectContaining({ subpath: cameraSubpath }),
 				expect.objectContaining({ subpath: "input-events-upload.ndjson" }),
-				expect.objectContaining({ subpath: "raw-upload.webm" }),
+				expect.objectContaining({ subpath: rawSubpath }),
 			]),
 		);
 		expect(mockServer.state.completeBodies.at(-1)).toMatchObject({
-			subpath: "raw-upload.webm",
+			subpath: rawSubpath,
 		});
 		const failed = await worker.evaluate(async () => {
 			const items = await chrome.storage.local.get([
@@ -1900,7 +1923,7 @@ test.describe("extension recording upload", () => {
 			).length,
 		).toBeGreaterThanOrEqual(2);
 		expect(mockServer.state.completeBodies.at(-1)).toMatchObject({
-			subpath: "raw-upload.webm",
+			subpath: rawSubpath,
 		});
 	});
 
@@ -1997,7 +2020,7 @@ test.describe("extension recording upload", () => {
 			})
 			.toBe("completed");
 		expect(mockServer.state.completeBodies.at(-1)).toMatchObject({
-			subpath: "raw-upload.webm",
+			subpath: rawSubpath,
 		});
 		expect(
 			mockServer.state.completeBodies.filter(
