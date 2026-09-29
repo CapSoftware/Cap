@@ -1903,13 +1903,14 @@ export const [EditorContextProvider, useBaseEditorContext] =
 					: undefined,
 			);
 
-			const totalDuration = () =>
+			const totalDuration = createMemo(() =>
 				project.timeline
 					? clipTimelineDuration(
 							project.timeline.segments,
 							project.timeline.transitions ?? [],
 						) + totalHeldDuration(holdWindows(project.timeline.textSegments))
-					: props.editorInstance.recordingDuration;
+					: props.editorInstance.recordingDuration,
+			);
 
 			type State = {
 				zoom: number;

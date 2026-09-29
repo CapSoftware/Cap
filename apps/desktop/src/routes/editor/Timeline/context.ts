@@ -3,7 +3,7 @@ import {
 	type NullableBounds,
 } from "@solid-primitives/bounds";
 import { createContextProvider } from "@solid-primitives/context";
-import { type Accessor, createMemo } from "solid-js";
+import { type Accessor, createMemo, createSignal } from "solid-js";
 import { createStore } from "solid-js/store";
 
 import { useEditorContext } from "../context";
@@ -15,6 +15,10 @@ const TIMELINE_MARKING_RESOLUTIONS = [
 
 const SEGMENT_RENDER_PADDING = 2;
 
+/// Narrower than this, a segment is drawn as part of its track's runs
+/// instead of as its own element.
+const MIN_SEGMENT_PX = 2;
+
 type TimelineContextValue = {
 	duration: Accessor<number>;
 	secsPerPixel: Accessor<number>;
@@ -22,6 +26,13 @@ type TimelineContextValue = {
 	markingResolution: Accessor<number>;
 	visibleTimeRange: Accessor<{ start: number; end: number }>;
 	isSegmentVisible(segmentStart: number, segmentEnd: number): boolean;
+};
+
+/// A segment too narrow to render on its own; the track draws these as runs.
+export type CompactSegment = {
+	start: number;
+	end: number;
+	color: string | undefined;
 };
 
 type TrackContextValue = {
@@ -33,6 +44,10 @@ type TrackContextValue = {
 	setTrackState: ReturnType<
 		typeof createStore<{ draggingSegment: boolean }>
 	>[1];
+	compactSegments: Accessor<ReadonlySet<CompactSegment>>;
+	registerCompactSegment(segment: CompactSegment): () => void;
+	/// Segments shorter than this many seconds are compact.
+	compactBelow: Accessor<number>;
 };
 
 type SegmentContextValue = {
@@ -56,13 +71,24 @@ export const [TimelineContextProvider, useTimelineContext] =
 					) ?? 3600,
 			);
 
-			const visibleTimeRange = createMemo(() => {
-				const { transform } = state.timeline;
-				const start = transform.position - SEGMENT_RENDER_PADDING;
-				const end =
-					transform.position + transform.zoom + SEGMENT_RENDER_PADDING;
-				return { start: Math.max(0, start), end };
-			});
+			// Snapped outwards to a power-of-two step of about a quarter screen,
+			// so segments check whether they're on screen when a scroll or pinch
+			// crosses a step, not every frame.
+			const visibleTimeRange = createMemo(
+				() => {
+					const { position, zoom } = state.timeline.transform;
+					const step =
+						2 **
+						Math.floor(Math.log2(Math.max(zoom / 4, SEGMENT_RENDER_PADDING)));
+					const start =
+						Math.floor((position - SEGMENT_RENDER_PADDING) / step) * step;
+					const end =
+						Math.ceil((position + zoom + SEGMENT_RENDER_PADDING) / step) * step;
+					return { start: Math.max(0, start), end };
+				},
+				undefined,
+				{ equals: (a, b) => a.start === b.start && a.end === b.end },
+			);
 
 			const isSegmentVisible = (segmentStart: number, segmentEnd: number) => {
 				const range = visibleTimeRange();
@@ -95,11 +121,33 @@ export const [TrackContextProvider, useTrackContext] = createContextProvider(
 		const secsPerPixel = () =>
 			state.timeline.transform.zoom / (bounds.width ?? 1);
 
+		// Quarter-octave steps: segments recheck a few dozen times across a
+		// full pinch rather than every frame.
+		const compactBelow = createMemo(
+			() =>
+				2 ** (Math.round(Math.log2(MIN_SEGMENT_PX * secsPerPixel()) * 4) / 4),
+		);
+
+		const compact = new Set<CompactSegment>();
+		const [compactSegments, setCompactSegments] = createSignal<
+			ReadonlySet<CompactSegment>
+		>(compact, { equals: false });
+
 		return {
 			secsPerPixel,
 			trackBounds: bounds,
 			trackState,
 			setTrackState,
+			compactSegments,
+			compactBelow,
+			registerCompactSegment(segment: CompactSegment) {
+				compact.add(segment);
+				setCompactSegments(compact);
+				return () => {
+					compact.delete(segment);
+					setCompactSegments(compact);
+				};
+			},
 		};
 	},
 	null as unknown as TrackContextValue,
