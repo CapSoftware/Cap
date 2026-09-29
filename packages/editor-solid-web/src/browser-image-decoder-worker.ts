@@ -1,3 +1,5 @@
+import { readImageHeader } from "./image-header";
+
 type DecodeRequest = {
 	id: number;
 	bytes: ArrayBuffer;
@@ -52,11 +54,24 @@ function loadDecoder() {
 
 /// The browser's own JPEG/PNG decoder is several times faster than the wasm
 /// one for large wallpapers. Pixels come back unconverted and straight alpha,
-/// like the wasm decoder's, so both paths render the same.
+/// like the wasm decoder's. Images that need downscaling or carry an EXIF
+/// rotation stay on the wasm decoder: the browser resamples differently from
+/// native's filter and rotates JPEGs whatever `imageOrientation` says, while
+/// native draws the stored pixels.
 async function decodeNatively(bytes: ArrayBuffer, maxDimension: number) {
 	if (
 		typeof createImageBitmap !== "function" ||
 		typeof OffscreenCanvas === "undefined"
+	) {
+		return null;
+	}
+	const header = readImageHeader(
+		new Uint8Array(bytes, 0, Math.min(bytes.byteLength, 1024 * 1024)),
+	);
+	if (
+		header &&
+		(header.orientation !== 1 ||
+			Math.max(header.width, header.height) > maxDimension)
 	) {
 		return null;
 	}
@@ -65,18 +80,19 @@ async function decodeNatively(bytes: ArrayBuffer, maxDimension: number) {
 			colorSpaceConversion: "none",
 			premultiplyAlpha: "none",
 		});
-		const scale = Math.min(
-			1,
-			maxDimension / Math.max(bitmap.width, bitmap.height),
-		);
-		const width = Math.max(1, Math.round(bitmap.width * scale));
-		const height = Math.max(1, Math.round(bitmap.height * scale));
+		const { width, height } = bitmap;
+		if (Math.max(width, height) > maxDimension) {
+			bitmap.close();
+			return null;
+		}
 		const context = new OffscreenCanvas(width, height).getContext("2d", {
 			willReadFrequently: true,
 		});
-		if (!context) return null;
-		context.imageSmoothingQuality = "high";
-		context.drawImage(bitmap, 0, 0, width, height);
+		if (!context) {
+			bitmap.close();
+			return null;
+		}
+		context.drawImage(bitmap, 0, 0);
 		bitmap.close();
 		const pixels = context.getImageData(0, 0, width, height).data.buffer;
 		return { width, height, pixels };
