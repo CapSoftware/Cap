@@ -23,6 +23,10 @@ describe("email library", () => {
 		expect(
 			catalogExcerpt("<Paragraph>Record & share<Br />Next step</Paragraph>"),
 		).toBe("Record &amp; share\nNext step");
+		expect(catalogExcerpt("<Paragraph>Q&amp;A</Paragraph>")).toBe("Q&amp;A");
+		expect(catalogExcerpt("<Paragraph>&amp;lt;b&amp;gt;</Paragraph>")).toBe(
+			"&amp;lt;b&amp;gt;",
+		);
 	});
 	test("every template and known application send source is registered", async () => {
 		expect(await validateCatalog()).toEqual([]);

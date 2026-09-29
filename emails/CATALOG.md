@@ -619,7 +619,7 @@ We're adding a logo wall to the Cap website to show the teams using Cap, and I'd
 
 We're also putting together case studies, and it'd be great to feature your team in one of those too.
 
-If you're enjoying Cap and would like to be featured, just reply and let me know if you're happy to be on the logo wall, do a case study, or both. For a case study, I'll send you a short Q&amp;amp;A to fill in.
+If you're enjoying Cap and would like to be featured, just reply and let me know if you're happy to be on the logo wall, do a case study, or both. For a case study, I'll send you a short Q&amp;A to fill in.
 
 It'd really help Cap move into the next stage of our growth, and help us tell other great teams like yours all about Cap.
 
