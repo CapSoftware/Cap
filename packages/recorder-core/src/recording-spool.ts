@@ -426,6 +426,12 @@ export class RecordingSpool {
 	}
 
 	private async readPersistedBlob() {
+		// Nothing was confirmed written, so a store that can no longer be read
+		// must not block recovering the unwritten chunks.
+		if (this.session.chunkCount === 0) {
+			return null;
+		}
+
 		const chunks = await this.backend.readChunks(this.session.sessionId);
 		if (chunks.length === 0) {
 			return null;

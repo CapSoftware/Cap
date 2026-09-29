@@ -388,6 +388,57 @@ describe("RecordingSpool", () => {
 		).toEqual(["chunk-2|", "chunk-3"]);
 	});
 
+	it("recovers every chunk from memory when the store fails before any write lands", async () => {
+		const backend = new MemoryRecordingSpoolBackend({
+			failureAtIndex: 0,
+			readFailureSessionId: "session-unwritable",
+		});
+		const spool = await RecordingSpool.create(
+			{
+				mimeType: "video/mp4",
+				sessionId: "session-unwritable",
+			},
+			backend,
+		);
+
+		const firstWrite = spool.appendChunk(
+			new Blob(["chunk-1|"], { type: "video/mp4" }),
+		);
+		const secondWrite = spool.appendChunk(
+			new Blob(["chunk-2"], { type: "video/mp4" }),
+		);
+		await expect(firstWrite).rejects.toThrow("Failed to persist chunk 0");
+		await expect(secondWrite).rejects.toThrow("Failed to persist chunk 0");
+
+		const blob = await spool.recoverBlob();
+
+		expect(await blobToText(blob as Blob)).toBe("chunk-1|chunk-2");
+		expect(await spool.recoverPersistedBlob()).toBeNull();
+	});
+
+	it("still fails recovery when persisted chunks cannot be read back", async () => {
+		const backend = new MemoryRecordingSpoolBackend({
+			failureAtIndex: 1,
+			readFailureSessionId: "session-unreadable",
+		});
+		const spool = await RecordingSpool.create(
+			{
+				mimeType: "video/mp4",
+				sessionId: "session-unreadable",
+			},
+			backend,
+		);
+
+		await spool.appendChunk(new Blob(["chunk-1|"], { type: "video/mp4" }));
+		await expect(
+			spool.appendChunk(new Blob(["chunk-2"], { type: "video/mp4" })),
+		).rejects.toThrow("Failed to persist chunk 1");
+
+		await expect(spool.recoverBlob()).rejects.toThrow(
+			"Failed to read chunks for session-unreadable",
+		);
+	});
+
 	it("cleans up persisted state after a write failure", async () => {
 		const backend = new MemoryRecordingSpoolBackend({ failureAtIndex: 1 });
 		const spool = await RecordingSpool.create(
