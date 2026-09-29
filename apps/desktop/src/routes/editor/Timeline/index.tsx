@@ -22,6 +22,7 @@ import {
 	onMount,
 	Show,
 	Switch,
+	untrack,
 } from "solid-js";
 import { produce } from "solid-js/store";
 import toast from "solid-toast";
@@ -238,9 +239,18 @@ export function Timeline(props: {
 	});
 
 	const secsPerPixel = () => transform().zoom / (timelineBounds.width ?? 1);
+	// Snapped to device pixels, so a slow playhead on a long timeline restyles
+	// only when it visibly moves.
+	const playheadX = createMemo(() => {
+		const dpr = window.devicePixelRatio || 1;
+		const x = Math.min(
+			(editorState.playbackTime - transform().position) / secsPerPixel(),
+			timelineBounds.width ?? 0,
+		);
+		return Math.round(x * dpr) / dpr;
+	});
 	const playbackFollow = new PlaybackFollow();
 	const playbackDuration = createMemo(totalDuration);
-	let followRafId: number | null = null;
 	let timelinePointerDown = false;
 
 	createEventListener(
@@ -263,40 +273,29 @@ export function Timeline(props: {
 		},
 	});
 
-	function cancelPlaybackFollow() {
-		if (followRafId !== null) cancelAnimationFrame(followRafId);
-		followRafId = null;
-		playbackFollow.reset();
-	}
-
 	createEffect(
 		on(
 			[() => editorState.playing, () => editorState.playbackTime],
-			([playing]) => {
+			([playing, playbackTime]) => {
 				if (!playing) {
-					cancelPlaybackFollow();
+					playbackFollow.reset();
 					return;
 				}
-				if (followRafId !== null) return;
-				followRafId = requestAnimationFrame(() => {
-					followRafId = null;
-					if (!editorState.playing || !timelineBounds.width) return;
-					const viewport = transform();
-					const position = playbackFollow.update(
-						viewport,
-						editorState.playbackTime,
-						playbackDuration(),
-						performance.now(),
-						timelinePointerDown,
-					);
-					if (position !== viewport.position) {
-						setEditorState("timeline", "transform", "position", position);
-					}
-				});
+				if (!timelineBounds.width) return;
+				const viewport = untrack(transform);
+				const position = playbackFollow.update(
+					{ position: viewport.position, zoom: viewport.zoom },
+					playbackTime,
+					untrack(playbackDuration),
+					performance.now(),
+					timelinePointerDown,
+				);
+				if (position !== viewport.position) {
+					setEditorState("timeline", "transform", "position", position);
+				}
 			},
 		),
 	);
-	onCleanup(cancelPlaybackFollow);
 
 	const openAudioPicker = (laneIndex: number) => {
 		batch(() => {
@@ -1494,11 +1493,7 @@ export function Timeline(props: {
 					style={{
 						left: `${TRACK_GUTTER}px`,
 						top: `${PLAYHEAD_TOP_OFFSET}px`,
-						transform: `translateX(${Math.min(
-							(editorState.playbackTime - transform().position) /
-								secsPerPixel(),
-							timelineBounds.width ?? 0,
-						)}px)`,
+						transform: `translateX(${playheadX()}px)`,
 					}}
 				>
 					<div class="size-3 rounded-full bg-ed-playhead ring-2 ring-ed-card -mt-1.5 -ml-[5.5px]" />
