@@ -50,6 +50,7 @@ import IconLucideGem from "~icons/lucide/gem";
 import IconLucideSlidersHorizontal from "~icons/lucide/sliders-horizontal";
 import { type RenderState, useEditorContext } from "./context";
 import { formatEstimatedSize, formatEstimatedTime } from "./export-estimates";
+import { serverExport } from "./export-location";
 import { RESOLUTION_OPTIONS } from "./Header";
 import { Dialog } from "./ui";
 
@@ -2125,6 +2126,9 @@ function ActiveExport(props: {
 							{rendered().totalFrames.toLocaleString()} frames
 						</p>
 					)}
+				</Show>
+				<Show when={serverExport()}>
+					<p class="text-[12px] text-ed-text-2">Rendering on Cap's servers</p>
 				</Show>
 			</div>
 			<Show when={props.onCancel}>

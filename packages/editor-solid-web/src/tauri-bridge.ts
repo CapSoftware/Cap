@@ -1,3 +1,4 @@
+import { setServerExport } from "../../../apps/desktop/src/routes/editor/export-location";
 import type {
 	commands as desktopCommands,
 	events as desktopEvents,
@@ -333,6 +334,7 @@ export class PortEditorTransport {
 				settings !== null &&
 				typeof fileName === "string"
 			) {
+				setServerExport(false);
 				try {
 					return await runBrowserLocalExport(
 						settings as Record<string, unknown>,
@@ -342,6 +344,7 @@ export class PortEditorTransport {
 				} catch (cause) {
 					if (!(cause instanceof BrowserLocalExportUnavailable)) throw cause;
 					console.warn("Cap local export unavailable, using the worker", cause);
+					setServerExport(true);
 				}
 			}
 		}
