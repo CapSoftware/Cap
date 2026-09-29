@@ -1596,7 +1596,9 @@ export function Timeline(props: {
 					const hoverTime = transform().position + secsPerPixel() * offsetX;
 					setEditorState(
 						"previewTime",
-						hoverTime / secsPerPixel() <= START_SNAP_PX ? 0 : hoverTime,
+						hoverTime / secsPerPixel() <= START_SNAP_PX
+							? 0
+							: Math.min(hoverTime, totalDuration()),
 					);
 				}}
 				onMouseEnter={() => setEditorState("timeline", "hoveredTrack", null)}

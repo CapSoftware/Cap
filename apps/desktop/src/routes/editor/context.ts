@@ -17,6 +17,7 @@ import {
 	on,
 	onCleanup,
 	onMount,
+	untrack,
 	useContext,
 } from "solid-js";
 import { createStore, produce, reconcile, unwrap } from "solid-js/store";
@@ -2080,6 +2081,23 @@ export const [EditorContextProvider, useBaseEditorContext] =
 						});
 					},
 				),
+			);
+
+			// Deleting or trimming the clip under the playhead or the hover point
+			// can leave them past the new end, where the readout and preview would
+			// show time that no longer exists.
+			createEffect(
+				on(totalDuration, (end) => {
+					untrack(() => {
+						if (
+							editorState.previewTime !== null &&
+							editorState.previewTime > end
+						)
+							setEditorState("previewTime", end);
+						if (!editorState.playing && editorState.playbackTime > end)
+							setEditorState("playbackTime", end);
+					});
+				}),
 			);
 
 			// "Play shot" plays one segment and stops on its last frame. The guard
