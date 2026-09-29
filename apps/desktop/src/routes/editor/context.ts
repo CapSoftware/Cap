@@ -100,8 +100,9 @@ import { createPreparingPlaybackHandoff } from "./preparing-playback-handoff";
 import { createProjectConfigSave } from "./project-config-save";
 import type { SnapGuide } from "./snapping";
 import {
+	activeStyleSegments,
+	applyStyleSegments,
 	defaultStyleSegment,
-	resolveStyle,
 	type StyleGroup,
 	type StyleSegment,
 	splitOverlaySegment,
@@ -2213,12 +2214,27 @@ export const [EditorContextProvider, useBaseEditorContext] =
 					if (editorState.timeline.selection?.type === "style")
 						setEditorState("timeline", "selection", null);
 				});
+			// The active segments change far less often than the playhead, which
+			// moves every frame; the style is only rebuilt when they change.
+			const activePreviewStyles = createMemo(
+				() =>
+					activeStyleSegments(
+						project.timeline?.styleSegments ?? [],
+						editorState.previewTime ?? editorState.playbackTime,
+					),
+				undefined,
+				{
+					equals: (previous, next) =>
+						previous.length === next.length &&
+						previous.every(
+							(entry, index) =>
+								entry.index === next[index]?.index &&
+								entry.segment === next[index]?.segment,
+						),
+				},
+			);
 			const previewStyle = createMemo(() =>
-				resolveStyle(
-					project,
-					project.timeline?.styleSegments ?? [],
-					editorState.previewTime ?? editorState.playbackTime,
-				),
+				applyStyleSegments(project, activePreviewStyles()),
 			);
 			// Active smart-guide lines while an overlay drag is snapping; published
 			// by whichever overlay owns the drag, rendered once above the canvas.
