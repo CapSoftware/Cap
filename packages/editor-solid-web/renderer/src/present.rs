@@ -249,6 +249,10 @@ pub(crate) struct SurfacePresenter {
     sampler: wgpu::Sampler,
     last_frame: Option<(wgpu::Texture, wgpu::BindGroup)>,
     pending: Option<wgpu::SurfaceTexture>,
+    max_texture_dimension: u32,
+    /// Bind groups for the render session's two ping-pong textures, so a
+    /// frame reuses one instead of creating it.
+    bind_groups: Vec<(wgpu::Texture, wgpu::BindGroup)>,
 }
 
 impl SurfacePresenter {
@@ -326,6 +330,8 @@ impl SurfacePresenter {
             sampler,
             last_frame: None,
             pending: None,
+            max_texture_dimension: device.limits().max_texture_dimension_2d,
+            bind_groups: Vec::new(),
         }
     }
 
@@ -339,7 +345,7 @@ impl SurfacePresenter {
         width: u32,
         height: u32,
     ) -> Result<(), JsValue> {
-        let max = device.limits().max_texture_dimension_2d;
+        let max = self.max_texture_dimension;
         if width < 1 || height < 1 || width > max || height > max {
             return Err(js_error("Editor canvas size is invalid"));
         }
@@ -399,20 +405,34 @@ impl SurfacePresenter {
         texture: &wgpu::Texture,
         view: &wgpu::TextureView,
     ) {
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Browser present blit bind group"),
-            layout: &self.layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
-                },
-            ],
-        });
+        let bind_group = match self
+            .bind_groups
+            .iter()
+            .find(|(cached, _)| cached == texture)
+        {
+            Some((_, bind_group)) => bind_group.clone(),
+            None => {
+                let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("Browser present blit bind group"),
+                    layout: &self.layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::Sampler(&self.sampler),
+                        },
+                    ],
+                });
+                if self.bind_groups.len() >= 2 {
+                    self.bind_groups.remove(0);
+                }
+                self.bind_groups.push((texture.clone(), bind_group.clone()));
+                bind_group
+            }
+        };
         self.pending = self.blit(encoder, &bind_group);
         self.last_frame = Some((texture.clone(), bind_group));
     }

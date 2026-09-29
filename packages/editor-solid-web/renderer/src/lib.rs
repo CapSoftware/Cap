@@ -541,6 +541,7 @@ pub struct BrowserStudioRenderer {
     cursors: Vec<Arc<CursorEvents>>,
     backend: String,
     last_layout: Option<[f64; 10]>,
+    max_texture_dimension: u32,
     constants: Box<RenderVideoConstants>,
 }
 
@@ -638,6 +639,7 @@ impl BrowserStudioRenderer {
                 .collect(),
             backend,
             last_layout: None,
+            max_texture_dimension: constants.device.limits().max_texture_dimension_2d,
             constants,
         })
     }
@@ -649,7 +651,7 @@ impl BrowserStudioRenderer {
 
     #[wasm_bindgen(getter)]
     pub fn max_texture_dimension(&self) -> u32 {
-        self.constants.device.limits().max_texture_dimension_2d
+        self.max_texture_dimension
     }
 
     pub fn set_project(&mut self, config_json: &str) -> Result<(), JsValue> {
@@ -822,7 +824,7 @@ impl BrowserStudioRenderer {
         &self,
         frames: &TrackFrames,
     ) -> Result<(DecodedSegmentFrames, Arc<CursorEvents>), JsValue> {
-        let max_dimension = self.constants.device.limits().max_texture_dimension_2d;
+        let max_dimension = self.max_texture_dimension;
         let clip = frames.recording_clip as usize;
         let cursor = self
             .cursors
