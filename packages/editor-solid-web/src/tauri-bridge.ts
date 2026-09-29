@@ -29,6 +29,7 @@ import {
 	cancelBrowserLocalExport,
 	discardStoredBrowserExport,
 	prewarmBrowserLocalExport,
+	removeLeftoverBrowserExports,
 	renderBrowserLocalExport,
 	runBrowserLocalExport,
 } from "./browser-local-export";
@@ -121,6 +122,7 @@ export class PortEditorTransport {
 					browserSession.sessionId,
 				)
 			: null;
+		if (browserSession) removeLeftoverBrowserExports();
 		port.onmessage = (event: MessageEvent<unknown>) => {
 			if (!isBridgeReply(event.data)) return;
 			const message = event.data;

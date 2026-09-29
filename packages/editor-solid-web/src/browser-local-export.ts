@@ -3,6 +3,12 @@ import {
 	exportBitrateSample,
 	exportSizeRangeMb,
 } from "./browser-export-estimate";
+import {
+	exportDirectory,
+	holdExportFile,
+	newExportFileName,
+	removeUnusedExportFiles,
+} from "./browser-export-storage";
 import type {
 	BrowserExportAudioSource,
 	BrowserExportJob,
@@ -232,6 +238,7 @@ async function exportJob(
 		}
 		return {
 			kind: "export",
+			outputFile: "",
 			config,
 			setup: {
 				recordingMeta: studioRecordingMeta(sources, input),
@@ -271,16 +278,31 @@ async function exportJob(
 }
 
 /// A streamed export stays in the origin private file system until the
-/// browser has copied it to the downloads folder.
+/// browser has copied it to the downloads folder. The page learns nothing of
+/// when that is: removing it any sooner cancels a download still copying, or
+/// one waiting on the user to choose where to save it. If the tab closes
+/// first, the next editor or export removes it.
 const STORED_EXPORT_LIFETIME_MS = 10 * 60_000;
+
+/// Locks held on this page's export files; see `browser-export-storage`.
+const heldExportFiles = new Map<string, () => void>();
 
 /// Removes a streamed export from the origin private file system once nothing
 /// reads it any more.
 export function discardStoredBrowserExport(storedFile: string | null) {
 	if (!storedFile) return;
-	void navigator.storage
-		.getDirectory()
+	const release = heldExportFiles.get(storedFile);
+	heldExportFiles.delete(storedFile);
+	void exportDirectory()
 		.then((root) => root.removeEntry(storedFile))
+		.catch(() => undefined)
+		.finally(() => release?.());
+}
+
+/// Removes export files that earlier tabs left behind, once the editor opens.
+export function removeLeftoverBrowserExports() {
+	void exportDirectory()
+		.then((root) => removeUnusedExportFiles(root))
 		.catch(() => undefined);
 }
 
@@ -544,7 +566,7 @@ export async function renderBrowserLocalExport(
 	activeExport = current;
 	const state = { listener: (() => undefined) as WorkerListener };
 	let worker: ReturnType<typeof exportWorker> | null = null;
-	let job: BrowserExportJob;
+	let job: BrowserExportJob | undefined;
 	let result: Extract<BrowserExportMessage, { kind: "done" }>;
 	try {
 		exportWorker();
@@ -553,15 +575,24 @@ export async function renderBrowserLocalExport(
 			cancelled,
 		]);
 		if (onChunk) job.chunked = true;
+		job.outputFile = newExportFileName();
+		const release = await holdExportFile(job.outputFile);
+		if (release) heldExportFiles.set(job.outputFile, release);
 		worker = exportWorker();
 		result = await Promise.race([
 			workerExport(worker, job, state, onProgress, onChunk),
 			cancelled,
 		]);
+	} catch (cause) {
+		discardStoredBrowserExport(job?.outputFile ?? null);
+		throw cause;
 	} finally {
 		worker?.listeners.delete(state.listener);
 		if (activeExport === current) activeExport = null;
 	}
+	// Built in memory for want of room: the file it would have used is empty.
+	if (result.storedFile !== job.outputFile)
+		discardStoredBrowserExport(job.outputFile);
 	console.info("Cap local export", JSON.stringify(result.stats));
 	const seconds = result.stats.totalMs / 1000;
 	if (seconds > 1)

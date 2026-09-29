@@ -21,6 +21,10 @@ import {
 	keyframeGroup,
 } from "./browser-export-encoder";
 import { EXPORT_AUDIO_BITRATE, exportBitrate } from "./browser-export-estimate";
+import {
+	exportDirectory,
+	removeUnusedExportFiles,
+} from "./browser-export-storage";
 import type { BrowserStudioSetup } from "./browser-local-canvas";
 
 export type BrowserExportTrackSource = {
@@ -52,6 +56,8 @@ export type BrowserExportJob = {
 	bitsPerPixel: number;
 	/** Posts playable chunks while it renders, for watching before it's done. */
 	chunked?: boolean;
+	/** The file the export streams into, whose lock the page already holds. */
+	outputFile: string;
 };
 
 export type BrowserExportPreviewRequest = {
@@ -587,12 +593,6 @@ async function runPreview(request: BrowserExportPreviewRequest) {
 	);
 }
 
-const EXPORT_FILE_PREFIX = "cap-export-";
-
-type ExportDirectory = FileSystemDirectoryHandle & {
-	keys(): AsyncIterable<string>;
-};
-
 type SyncAccessHandle = {
 	write(data: BufferSource, options: { at: number }): number;
 	flush(): void;
@@ -600,23 +600,15 @@ type SyncAccessHandle = {
 };
 
 /// Streams the MP4 into the origin private file system, so a long export
-/// never has to fit in memory. Earlier exports are removed except the newest,
-/// which a download or upload may still be reading. Returns null when there
-/// is no room, and the export is built in memory instead.
-async function openExportFile(maxBytes: number) {
+/// never has to fit in memory. Returns null when there is no room, and the
+/// export is built in memory instead.
+async function openExportFile(maxBytes: number, name: string) {
+	if (!name) return null;
 	try {
-		const root = (await navigator.storage.getDirectory()) as ExportDirectory;
-		const stale: string[] = [];
-		for await (const name of root.keys())
-			if (name.startsWith(EXPORT_FILE_PREFIX)) stale.push(name);
-		stale.sort();
-		stale.pop();
-		await Promise.all(
-			stale.map((name) => root.removeEntry(name).catch(() => undefined)),
-		);
+		const root = await exportDirectory();
+		await removeUnusedExportFiles(root);
 		const { quota = 0, usage = 0 } = await navigator.storage.estimate();
 		if (quota - usage < maxBytes * 1.2) return null;
-		const name = `${EXPORT_FILE_PREFIX}${Date.now()}.mp4`;
 		const handle = await root.getFileHandle(name, { create: true });
 		const access: SyncAccessHandle = await (
 			handle as FileSystemFileHandle & {
@@ -871,6 +863,7 @@ async function runExport(job: BrowserExportJob) {
 	}
 	const file = await openExportFile(
 		((bitrate + EXPORT_AUDIO_BITRATE) * totalFrames) / job.fps / 8,
+		job.outputFile,
 	);
 	const target = file?.target ?? new BufferTarget();
 	const stream = job.chunked ? await chunkStream(job.fps) : null;
