@@ -496,13 +496,23 @@ export const ShareVideo = forwardRef<
 		const renderSaveActive =
 			isMp4Source &&
 			(renderStarting || data.metadata?.renderFarmSave?.status === "rendering");
-		const sourceRevision = isMp4Source ? shareVideoRevision(data.source) : null;
+		const publishedRevision = shareVideoRevision(data.source);
+		const sourceRevision = isMp4Source ? publishedRevision : null;
+		// Only a web editor Save replaces a published video, so public pages
+		// watch just the videos that have one; the owner can Save any of them.
+		const savedFromWebEditor = !!(
+			data.metadata?.renderFarmSave ||
+			data.metadata?.browserSave ||
+			data.metadata?.publishedBrowserSaveId
+		);
 		const { updateAvailable, showLatest } = useShareVideoUpdates({
 			videoId: data.id,
-			revision: sourceRevision,
+			revision: publishedRevision,
 			videoRef,
 			enabled:
-				viewerIsOwner && isMp4Source && !renderSaveActive && !isOverShareLimit,
+				(viewerIsOwner || savedFromWebEditor) &&
+				!renderSaveActive &&
+				!isOverShareLimit,
 		});
 		const capVideoPlayer = (
 			<CapVideoPlayer
@@ -640,7 +650,7 @@ export const ShareVideo = forwardRef<
 							canRetryProcessing={canRetryProcessing}
 						/>
 					)}
-					{updateAvailable && isMp4Source && !renderSaveActive && (
+					{updateAvailable && !renderSaveActive && (
 						<div className="absolute top-3 left-1/2 z-30 flex -translate-x-1/2 items-center gap-2 rounded-full border border-white/15 bg-black/70 py-1 pr-1 pl-3 text-[12px] font-medium text-white shadow-sm backdrop-blur-sm">
 							<span>This video was updated</span>
 							<button

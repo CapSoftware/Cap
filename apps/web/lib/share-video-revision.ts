@@ -4,9 +4,13 @@
  * older version. Hashed so the status endpoint doesn't hand out storage keys.
  */
 export function shareVideoRevision(source: unknown): string | null {
-	if (typeof source !== "object" || source === null || !("type" in source))
+	if (
+		typeof source !== "object" ||
+		source === null ||
+		!("type" in source) ||
+		typeof source.type !== "string"
+	)
 		return null;
-	if (source.type !== "webMP4" && source.type !== "desktopMP4") return null;
 	const outputKey =
 		"outputKey" in source && typeof source.outputKey === "string"
 			? source.outputKey

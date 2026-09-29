@@ -71,8 +71,10 @@ describe("share video revision", () => {
 	});
 
 	it("leaves sources a Save never replaces unwatched", () => {
-		expect(shareVideoRevision({ type: "desktopSegments" })).toBeNull();
-		expect(shareVideoRevision({ type: "MediaConvert" })).toBeNull();
+		expect(shareVideoRevision({ type: "MediaConvert" })).toBeTruthy();
+		expect(shareVideoRevision({ type: "MediaConvert" })).not.toBe(
+			shareVideoRevision({ type: "webMP4" }),
+		);
 		expect(shareVideoRevision(null)).toBeNull();
 	});
 });
