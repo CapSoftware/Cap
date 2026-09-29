@@ -436,17 +436,24 @@ function bootstrapResponse(videoId: string) {
 	});
 }
 
-function sharedSourceRequest(
+/// Signed URLs closer than this to expiring are fetched again.
+const SOURCE_RENEW_MARGIN_MS = 60_000;
+
+async function parseSourcesResponse(
+	response: Response,
 	videoId: string,
-	prefetch = false,
-	minValidityMs = 0,
-) {
+): Promise<BrowserEditorSources> {
+	if (!response.ok) throw new Error("Editor browser sources are unavailable");
+	return parseBrowserEditorSources(await response.json(), videoId);
+}
+
+function sharedSourceRequest(videoId: string, prefetch = false) {
 	const cached = sharedSourceRequests.get(videoId);
 	if (
 		cached &&
 		cached.expiresAt > Date.now() &&
 		(cached.value === null ||
-			cached.value.expiresAt >= Date.now() + minValidityMs)
+			cached.value.expiresAt >= Date.now() + SOURCE_RENEW_MARGIN_MS)
 	) {
 		if (!prefetch && cached.prefetched) {
 			cached.prefetched = false;
@@ -459,12 +466,7 @@ function sharedSourceRequest(
 	}
 	const entry: SharedSourceRequest = {
 		promise: bootstrapResponse(videoId)
-			.then(async (response) => {
-				if (!response.ok)
-					throw new Error("Editor browser sources are unavailable");
-				const body: unknown = await response.json();
-				return parseBrowserEditorSources(body, videoId);
-			})
+			.then((response) => parseSourcesResponse(response, videoId))
 			.then(
 				(value) => {
 					if (sharedSourceRequests.get(videoId) === entry) {
@@ -506,21 +508,26 @@ export class BrowserEditorSourceCatalog {
 	private readonly controller = new AbortController();
 	private current: BrowserEditorSources | null = null;
 	private pending: Promise<BrowserEditorSources> | null = null;
-	private readonly minValidityMs: number;
+	private readonly fresh: boolean;
 
-	/// `minValidityMs` is how long the signed URLs must stay valid when handed
-	/// out; work that reads the sources for a long time (an export) asks for
-	/// more than the preview, which refetches as they near expiry.
+	/// A `fresh` catalog fetches its own sources rather than the editor's
+	/// shared set, for work like an export that must see the recording as it
+	/// is now and holds the signed URLs for its whole run.
 	constructor(
 		private readonly videoId: string,
-		options: { minValidityMs?: number } = {},
+		options: { fresh?: boolean } = {},
 	) {
-		this.minValidityMs = Math.max(60_000, options.minValidityMs ?? 0);
+		this.fresh = options.fresh ?? false;
 	}
 
 	private async load() {
 		return waitWithAbort(
-			sharedSourceRequest(this.videoId, false, this.minValidityMs),
+			this.fresh
+				? fetch(
+						`/api/editor/videos/${encodeURIComponent(this.videoId)}/bootstrap`,
+						{ credentials: "same-origin", cache: "no-store" },
+					).then((response) => parseSourcesResponse(response, this.videoId))
+				: sharedSourceRequest(this.videoId),
 			this.controller.signal,
 		);
 	}
@@ -531,7 +538,7 @@ export class BrowserEditorSourceCatalog {
 		}
 		if (
 			this.current &&
-			this.current.expiresAt > Date.now() + this.minValidityMs
+			this.current.expiresAt > Date.now() + SOURCE_RENEW_MARGIN_MS
 		) {
 			return this.current;
 		}

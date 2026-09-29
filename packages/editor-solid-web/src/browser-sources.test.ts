@@ -221,18 +221,14 @@ test("carries the owner's saved style for a project nobody has edited", () => {
 	).toBeNull();
 });
 
-test("gives long-running work freshly signed sources instead of the editor's older ones", async () => {
+test("gives an export its own fresh sources, leaving the editor's shared ones", async () => {
 	const originalFetch = globalThis.fetch;
-	const expiries: number[] = [];
+	let fetches = 0;
 	globalThis.fetch = Object.assign(
 		async () => {
+			fetches++;
 			const value = bootstrap();
-			const expiresAt =
-				expiries.length === 0
-					? Date.now() + 5 * 60 * 1000
-					: Date.now() + 20 * 60 * 1000;
-			expiries.push(expiresAt);
-			value.sources.signedUrlExpiresAt = expiresAt;
+			value.sources.signedUrlExpiresAt = Date.now() + 20 * 60 * 1000;
 			return new Response(JSON.stringify(value), { status: 200 });
 		},
 		{ preconnect: originalFetch.preconnect },
@@ -240,25 +236,19 @@ test("gives long-running work freshly signed sources instead of the editor's old
 	const preview = new BrowserEditorSourceCatalog("recording-1");
 	const later = new BrowserEditorSourceCatalog("recording-1");
 	const exporter = new BrowserEditorSourceCatalog("recording-1", {
-		minValidityMs: 18 * 60 * 1000,
+		fresh: true,
 	});
 	const controller = new AbortController();
 	try {
 		preview.invalidate();
 		const first = await preview.snapshot(controller.signal);
-		expect(expiries).toHaveLength(1);
-		expect((await later.snapshot(controller.signal)).expiresAt).toBe(
-			first.expiresAt,
-		);
-		expect(expiries).toHaveLength(1);
+		expect(await later.snapshot(controller.signal)).toBe(first);
+		expect(fetches).toBe(1);
 		const exported = await exporter.snapshot(controller.signal);
-		expect(expiries).toHaveLength(2);
-		expect(exported.expiresAt).toBeGreaterThanOrEqual(
-			Date.now() + 18 * 60 * 1000,
-		);
-		expect((await preview.snapshot(controller.signal)).expiresAt).toBe(
-			first.expiresAt,
-		);
+		expect(fetches).toBe(2);
+		expect(exported).not.toBe(first);
+		expect(await preview.snapshot(controller.signal)).toBe(first);
+		expect(fetches).toBe(2);
 	} finally {
 		preview.dispose();
 		later.dispose();

@@ -131,10 +131,6 @@ export function cancelBrowserLocalExport() {
 	return true;
 }
 
-/// Signed source URLs last 20 minutes; an export reads them for its whole run,
-/// so it takes freshly signed ones rather than the editor's older set.
-const EXPORT_SOURCE_VALIDITY_MS = 18 * 60_000;
-
 async function exportJob(
 	videoId: string,
 	settings: Record<string, unknown>,
@@ -143,9 +139,7 @@ async function exportJob(
 	const config = record(browserEditorPreviewConfig());
 	if (!config)
 		throw new BrowserLocalExportUnavailable("Editor project is loading");
-	const catalog = new BrowserEditorSourceCatalog(videoId, {
-		minValidityMs: EXPORT_SOURCE_VALIDITY_MS,
-	});
+	const catalog = new BrowserEditorSourceCatalog(videoId, { fresh: true });
 	try {
 		const [sources, module] = await Promise.all([
 			catalog.snapshot(signal),
