@@ -170,6 +170,7 @@ Campaigns are manually scheduled product updates, with no automatic enrollment. 
 | --- | --- | --- | --- |
 | Cap v0.6 launch \| Customers | customer | [Meet Cap v0.6, our biggest update yet](../emails/marketing/customer-update.ts) | `cmtvpmfxc01ls0j0nnlffombv` |
 | Cap v0.6 launch \| Noncustomers | free | [Meet Cap v0.6, our biggest update yet](../emails/marketing/free-update.ts) | `cmtvpmjej01kr0j18cxoz2n0y` |
+| Case study and logo wall invite \| Cap Pro multi-seat org owners | customer | [Could we feature your team on the Cap website?](../emails/marketing/customer-case-study.ts) | `cmumrftj50y4j0jy2giifxlnk` |
 
 ## Branding and personalization
 
@@ -599,6 +600,30 @@ There's also Studio Sound to reduce microphone noise, plus faster exports. Wheth
 The release video is the best way to see what's new:
 
 See Cap v0.6 in action →
+
+### customer-case-study
+
+Invite named Cap Pro organisation owners with more than one seat to reply if they'd like their team on the website logo wall, in a case study, or both.
+
+**Subject:** Could we feature your team on the Cap website?
+
+**Preview:** A spot on our new logo wall, and a case study if you're up for it.
+
+**Variables:** `contact.capGreeting` (fallback: Hey,)
+
+**Edit:** [emails/marketing/customer-case-study.ts](../emails/marketing/customer-case-study.ts)
+
+{contact.capGreeting}
+
+We're adding a logo wall to the Cap website to show the teams using Cap, and I'd love to include yours.
+
+We're also putting together case studies, and it'd be great to feature your team in one of those too.
+
+If you're enjoying Cap and would like to be featured, just reply and let me know if you're happy to be on the logo wall, do a case study, or both. For a case study, I'll send you a short Q&amp;amp;A to fill in.
+
+It'd really help Cap move into the next stage of our growth, and help us tell other great teams like yours all about Cap.
+
+Thanks so much for supporting us :)
 
 ## Application emails
 
