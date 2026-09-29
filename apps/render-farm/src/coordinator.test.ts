@@ -853,7 +853,7 @@ describe("jobs for the product", () => {
 		);
 	});
 
-	test("sources index in one round trip and a new project folder reuses an unchanged source's moov", async () => {
+	test("a new project folder reuses an unchanged source's moov", async () => {
 		const h = harness();
 		const source = "owner/video/display.mp4";
 		// Cap's recorder writes the moov after the media, past the head the
@@ -928,16 +928,12 @@ describe("jobs for the product", () => {
 			moov: [2 * 1024 * 1024, small.byteLength],
 			reads: 2,
 		});
+		expect(await indexOf(small)).toMatchObject({ frames: 3, reads: 1 });
 
-		// A moov larger than the tail read needs a third request, once.
-		const large = fileOf(300_000);
-		expect(await indexOf(large)).toMatchObject({ frames: 300_000, reads: 3 });
-		expect(await indexOf(large)).toMatchObject({ frames: 300_000, reads: 2 });
-
-		const replaced = fileOf(300_001);
+		const replaced = fileOf(300_000);
 		expect(await indexOf(replaced)).toMatchObject({
-			frames: 300_001,
-			reads: 3,
+			frames: 300_000,
+			reads: 2,
 		});
 	});
 

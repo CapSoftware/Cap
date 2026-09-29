@@ -424,17 +424,8 @@ type Mp4Meta = {
 // source index never hits; the parsed moov of an unchanged source file can.
 const mp4Metas = new Map<string, Mp4Meta>();
 const MP4_META_CACHE_ENTRIES = 16;
-/** Bytes read from each end of a source to find its moov in one round trip. */
-const MOOV_HEAD_READ = 512 * 1024;
-const MOOV_TAIL_READ = 1024 * 1024;
-
 async function mp4MetaRanges(key: string, size: number): Promise<Mp4Meta> {
-	const headEnd = Math.min(size, MOOV_HEAD_READ);
-	// Cap's recorder writes the moov after the media: read the tail alongside
-	// the head instead of after it.
-	const tailStart = Math.max(headEnd, size - MOOV_TAIL_READ);
-	const tail = tailStart < size ? s3.getRange(key, tailStart, size - 1) : null;
-	tail?.catch(() => {});
+	const headEnd = Math.min(size, 128 * 1024);
 	const { bytes: head, etag } = await s3.getRangeTagged(key, 0, headEnd - 1);
 	const cacheKey =
 		etag && process.env.RF_INDEX_CACHE !== "0"
@@ -446,7 +437,7 @@ async function mp4MetaRanges(key: string, size: number): Promise<Mp4Meta> {
 		mp4Metas.set(cacheKey, cached);
 		return cached;
 	}
-	const meta = await readMp4Meta(key, size, head, tail, tailStart);
+	const meta = await readMp4Meta(key, size, head);
 	if (cacheKey) {
 		mp4Metas.set(cacheKey, meta);
 		if (mp4Metas.size > MP4_META_CACHE_ENTRIES)
@@ -459,8 +450,6 @@ async function readMp4Meta(
 	key: string,
 	size: number,
 	head: Uint8Array,
-	tail: Promise<Uint8Array> | null,
-	tailStart: number,
 ): Promise<Mp4Meta> {
 	const location = locateMoov(head, size);
 	let moovStart: number;
@@ -479,19 +468,17 @@ async function readMp4Meta(
 						location.start + location.size - 1,
 					);
 	} else if (location && "next" in location && location.next !== undefined) {
+		// Moov after mdat (Cap's recorder): fetch the tail in one request.
 		if (size - location.next > SOURCE_LIMITS.moovBytes) {
 			throw new Error(`${key} has ${size - location.next} bytes after mdat`);
 		}
-		const after =
-			tail && location.next >= tailStart
-				? (await tail).subarray(location.next - tailStart)
-				: await s3.getRange(key, location.next, size - 1);
-		const found = locateMoov(after, after.byteLength);
+		const tail = await s3.getRange(key, location.next, size - 1);
+		const found = locateMoov(tail, tail.byteLength);
 		if (!found || !("start" in found) || found.start === undefined) {
 			throw new Error(`no moov in ${key}`);
 		}
 		moovStart = location.next + found.start;
-		moovBytes = after.subarray(found.start, found.start + found.size);
+		moovBytes = tail.subarray(found.start, found.start + found.size);
 	} else {
 		throw new Error(`no moov in ${key}`);
 	}
@@ -739,14 +726,15 @@ async function planJob(job: Job) {
 		};
 	};
 
-	try {
-		await Promise.all([
-			baseFetch ?? cache.materialize(baseSpecs("probe")),
-			cache.materialize(mediaFiles.map((file) => mediaSpec(file.path, []))),
-		]);
-	} catch (error) {
+	// Both downloads write through the cache, so neither may outlive it.
+	const fetched = await Promise.allSettled([
+		baseFetch ?? cache.materialize(baseSpecs("probe")),
+		cache.materialize(mediaFiles.map((file) => mediaSpec(file.path, []))),
+	]);
+	const failed = fetched.find((result) => result.status === "rejected");
+	if (failed) {
 		cache.close();
-		throw error;
+		throw failed.reason;
 	}
 	job.t.materialized = now();
 
