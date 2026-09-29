@@ -43,6 +43,7 @@ import {
 	type CameraPreviewWindowHandle,
 } from "./CameraPreviewWindow";
 import { CameraBubble, useCameraLayout } from "./camera-layout";
+import { CameraOnlyPrompt } from "./camera-only-prompt";
 import { capturesThisTab, identifyThisTab } from "./capture-handle";
 import { CAMERA_STEPS, HowRecordingWorks } from "./how-recording-works";
 import { InProgressRecordingBar } from "./InProgressRecordingBar";
@@ -70,10 +71,16 @@ import {
 } from "./recorder-parts";
 import type { RecordingMode } from "./recording-mode";
 import { useRecordingQuality } from "./recording-quality";
+import {
+	CAMERA_ONLY_PROMPT_DISMISSED_KEY,
+	canRecordMicOnly,
+	startRecordingChoice,
+} from "./recording-sources";
 import { SystemAudioGuide } from "./system-audio-guide";
 import { useCameraDevices } from "./useCameraDevices";
 import { useDevicePreferences } from "./useDevicePreferences";
 import { useDialogInteractions } from "./useDialogInteractions";
+import { useMicOnlyRecorder } from "./useMicOnlyRecorder";
 import { useMicrophoneDevices } from "./useMicrophoneDevices";
 import { useWebRecorder } from "./useWebRecorder";
 import { FREE_PLAN_MAX_RECORDING_MS } from "./web-recorder-constants";
@@ -452,6 +459,41 @@ export const WebRecorderDialog = ({
 		}
 	}, [replaceSharedScreen, systemAudioEnabled, quality]);
 
+	const webRecorder = useWebRecorder({
+		organisationId,
+		selectedMicId,
+		micEnabled,
+		systemAudioEnabled,
+		recordingMode,
+		selectedCameraId,
+		getCameraPreviewStream,
+		onDisplayStreamAcquired: async () => {
+			await cameraPreviewRef.current?.closePictureInPicture();
+		},
+		takeSharedDisplayStream,
+		isProUser: user.isPro,
+		onRecordingSurfaceDetected: (mode) => {
+			setRecordingMode(mode);
+		},
+		onRecordingStart: handleRecordingStartSound,
+		onRecordingStop: handleRecordingStopSound,
+		beforeRecordingStarts: runCountdown,
+		quality,
+		studioEnabled: webStudioEnabled,
+	});
+	const micOnly = useMicOnlyRecorder({
+		organisationId,
+		selectedMicId,
+		quality,
+		isProUser: user.isPro,
+		editorEnabled: webStudioEnabled,
+		beforeRecordingStarts: runCountdown,
+		onRecordingStart: handleRecordingStartSound,
+		onRecordingStop: handleRecordingStopSound,
+	});
+	const micOnlyActive = micOnly.active;
+	// A microphone-only take runs outside the screen and camera recorder, so
+	// while it does, everything below follows its state instead.
 	const {
 		phase,
 		videoId,
@@ -480,33 +522,42 @@ export const WebRecorderDialog = ({
 		stopRecording,
 		openCompletedShareUrl,
 		restartRecording,
-		resetState,
 		dismissRecoveredDownload,
 		getActiveCameraStream,
 		getActiveDisplayStream,
 		recordedBytes,
-	} = useWebRecorder({
-		organisationId,
-		selectedMicId,
-		micEnabled,
-		systemAudioEnabled,
-		recordingMode,
-		selectedCameraId,
-		getCameraPreviewStream,
-		onDisplayStreamAcquired: async () => {
-			await cameraPreviewRef.current?.closePictureInPicture();
-		},
-		takeSharedDisplayStream,
-		isProUser: user.isPro,
-		onRecordingSurfaceDetected: (mode) => {
-			setRecordingMode(mode);
-		},
-		onRecordingStart: handleRecordingStartSound,
-		onRecordingStop: handleRecordingStopSound,
-		beforeRecordingStarts: runCountdown,
-		quality,
-		studioEnabled: webStudioEnabled,
-	});
+	} = micOnlyActive
+		? {
+				...webRecorder,
+				phase: micOnly.phase,
+				videoId: null,
+				durationMs: micOnly.durationMs,
+				hasAudioTrack: true,
+				chunkUploads: [],
+				errorDownload: micOnly.errorDownload,
+				cameraErrorDownload: null,
+				audioErrorDownloads: [],
+				completedShareUrl: micOnly.completedShareUrl,
+				isSettingUp: micOnly.isSettingUp,
+				isRecording: micOnly.isRecording,
+				isPaused: micOnly.isPaused,
+				isBusy: micOnly.isBusy,
+				isRestarting: micOnly.isRestarting,
+				pauseRecording: micOnly.pause,
+				resumeRecording: micOnly.resume,
+				stopRecording: micOnly.stop,
+				openCompletedShareUrl: () => {
+					if (micOnly.completedShareUrl)
+						window.open(micOnly.completedShareUrl, "_blank", "noopener");
+				},
+				restartRecording: micOnly.restart,
+				recordedBytes: micOnly.recordedBytes,
+			}
+		: webRecorder;
+	const resetState = async () => {
+		await micOnly.reset();
+		await webRecorder.resetState();
+	};
 	const activeCameraGetterRef = useRef(getActiveCameraStream);
 	activeCameraGetterRef.current = getActiveCameraStream;
 	const activeDisplayGetterRef = useRef(getActiveDisplayStream);
@@ -570,6 +621,8 @@ export const WebRecorderDialog = ({
 			setHowTopic(null);
 			setAudioGuideOpen(false);
 			setAudioGuide(null);
+			setCameraOnlyPrompt(false);
+			setRecordAfterShare(false);
 			setSelectedCameraId(null);
 			setRecordingMode("fullscreen");
 		}
@@ -599,9 +652,19 @@ export const WebRecorderDialog = ({
 		}
 	}, []);
 
+	// Recording starts once the shared screen is in state, so the recorder
+	// sees the screen and not the camera-only mode from before sharing.
+	const [recordAfterShare, setRecordAfterShare] = useState(false);
+	useEffect(() => {
+		if (!recordAfterShare || !sharedScreen || recordingMode === "camera")
+			return;
+		setRecordAfterShare(false);
+		void startRecordingRef.current();
+	}, [recordAfterShare, sharedScreen, recordingMode]);
+
 	const shareThenMaybeRecord = async (thenRecord: boolean) => {
 		const shared = await shareScreen();
-		if (shared && thenRecord) await startRecordingRef.current();
+		if (shared && thenRecord) setRecordAfterShare(true);
 	};
 
 	// Sharing with system audio on goes through the guide first; the popup
@@ -628,19 +691,54 @@ export const WebRecorderDialog = ({
 		void shareThenMaybeRecord(thenRecord);
 	};
 
-	const handleRecordClick = async () => {
-		const screenReady = sharedScreenRef.current !== null;
-		if (!screenReady && !cameraEnabled && screenSupported) {
-			beginShare(true);
-			return;
+	const [cameraOnlyPrompt, setCameraOnlyPrompt] = useState(false);
+	const [cameraOnlyPromptDismissed, setCameraOnlyPromptDismissed] =
+		useState(false);
+	useEffect(() => {
+		try {
+			setCameraOnlyPromptDismissed(
+				window.localStorage.getItem(CAMERA_ONLY_PROMPT_DISMISSED_KEY) ===
+					"true",
+			);
+		} catch {
+			/* the prompt just keeps showing */
 		}
+	}, []);
+	const rememberCameraOnlyChoice = (dontShowAgain: boolean) => {
+		if (!dontShowAgain) return;
+		setCameraOnlyPromptDismissed(true);
+		try {
+			window.localStorage.setItem(CAMERA_ONLY_PROMPT_DISMISSED_KEY, "true");
+		} catch {
+			/* remembered for this visit only */
+		}
+	};
 
-		if (!screenReady && recordingMode === "camera") {
+	const recordNow = async () => {
+		if (sharedScreenRef.current === null && recordingMode === "camera") {
 			cameraPreviewRef.current?.stopStream();
 			await waitForNextFrame();
 		}
 
 		await startRecording();
+	};
+
+	const handleRecordClick = async () => {
+		const choice = startRecordingChoice({
+			screenShared: sharedScreenRef.current !== null,
+			cameraEnabled,
+			screenSupported,
+			cameraOnlyPromptDismissed,
+		});
+		if (choice === "share-then-record") {
+			beginShare(true);
+			return;
+		}
+		if (choice === "confirm-camera-only") {
+			setCameraOnlyPrompt(true);
+			return;
+		}
+		await recordNow();
 	};
 
 	const handleClose = () => {
@@ -649,7 +747,7 @@ export const WebRecorderDialog = ({
 		}
 	};
 
-	const screenMode = recordingMode !== "camera";
+	const screenMode = !micOnlyActive && recordingMode !== "camera";
 
 	const finishing =
 		phase === "creating" || phase === "converting" || phase === "uploading";
@@ -796,6 +894,12 @@ export const WebRecorderDialog = ({
 	}, [isRecording, isPaused, recordingTimerDisplayMs]);
 
 	const setupLocked = stage !== "setup";
+	const micOnlyAvailable = canRecordMicOnly({
+		screenShared: sharedScreen !== null,
+		cameraEnabled,
+		micEnabled,
+		idle: stage === "setup",
+	});
 	const screenOn = live ? screenMode : sharedScreen !== null;
 	const systemAudioOn =
 		systemAudioEnabled &&
@@ -829,8 +933,9 @@ export const WebRecorderDialog = ({
 		recordedBytes,
 		chunkUploads.reduce((total, chunk) => total + chunk.sizeBytes, 0),
 	);
-	const saveProgress =
-		phase === "uploading" && totalBytes > 0
+	const saveProgress = micOnlyActive
+		? micOnly.saveProgress
+		: phase === "uploading" && totalBytes > 0
 			? Math.min(0.99, sentBytes / totalBytes)
 			: null;
 
@@ -1421,7 +1526,21 @@ export const WebRecorderDialog = ({
 					void handleRecordClick();
 				}}
 			/>
-			<div />
+			<div className="flex min-w-0 justify-end">
+				{micOnlyAvailable && (
+					<button
+						type="button"
+						className="rec-btn is-ghost !h-8 !px-2.5 !text-[13px]"
+						disabled={!canStartRecording || sharePending}
+						onClick={() => {
+							void micOnly.start();
+						}}
+					>
+						<MicIcon className="size-3.5" aria-hidden />
+						<span className="truncate">Record microphone only</span>
+					</button>
+				)}
+			</div>
 		</>
 	);
 
@@ -1726,26 +1845,46 @@ export const WebRecorderDialog = ({
 	);
 
 	const steps = live
-		? [
-				{
-					done: true,
-					title: "Your link is live",
-					body: "Anyone with it can watch as soon as you stop.",
-				},
-				{
-					done: partsSent > 0,
-					title:
-						partsSent === 0
-							? "Uploading as you record"
-							: `${partsSent} ${partsSent === 1 ? "part" : "parts"} uploaded`,
-					body: "No export to wait for at the end.",
-				},
-				{
-					done: false,
-					title: "Stop to open your link",
-					body: `Your ${trackCount} ${trackCount === 1 ? "track stays" : "tracks stay"} separate to edit.`,
-				},
-			]
+		? micOnlyActive
+			? [
+					{
+						done: true,
+						title: "Recording your microphone",
+						body: "Your screen and camera aren't included.",
+					},
+					{
+						done: false,
+						title: "Uploads when you stop",
+						body: "It's saved as an audio recording.",
+					},
+					{
+						done: false,
+						title: "Stop to open it",
+						body: webStudioEnabled
+							? "It opens in the editor with a waveform."
+							: "It opens as soon as it's saved.",
+					},
+				]
+			: [
+					{
+						done: true,
+						title: "Your link is live",
+						body: "Anyone with it can watch as soon as you stop.",
+					},
+					{
+						done: partsSent > 0,
+						title:
+							partsSent === 0
+								? "Uploading as you record"
+								: `${partsSent} ${partsSent === 1 ? "part" : "parts"} uploaded`,
+						body: "No export to wait for at the end.",
+					},
+					{
+						done: false,
+						title: "Stop to open your link",
+						body: `Your ${trackCount} ${trackCount === 1 ? "track stays" : "tracks stay"} separate to edit.`,
+					},
+				]
 		: [
 				{
 					done: false,
@@ -1920,7 +2059,7 @@ export const WebRecorderDialog = ({
 							</span>
 						)}
 					</header>
-					{live && screenMode && !livePreview ? (
+					{live && ((screenMode && !livePreview) || micOnlyActive) ? (
 						<div className="rec-fade flex min-h-0 flex-1 flex-col items-center justify-center gap-5 px-6 py-6 text-center">
 							{cameraEnabled ? (
 								<div
@@ -1960,16 +2099,20 @@ export const WebRecorderDialog = ({
 								<span className="max-w-sm text-balance text-[14px] leading-relaxed text-[var(--rec-text-2)]">
 									{isPaused
 										? "Paused. Nothing is being recorded until you resume."
-										: `Recording your ${joinWords(recordedWordsRef.current)}. The screen preview is hidden so it stays out of your way.`}
+										: micOnlyActive
+											? "Recording your microphone. It opens as an audio recording when you stop."
+											: `Recording your ${joinWords(recordedWordsRef.current)}. The screen preview is hidden so it stays out of your way.`}
 								</span>
 							</div>
-							<button
-								type="button"
-								className="rec-btn is-ghost"
-								onClick={() => setLivePreview(true)}
-							>
-								Show preview
-							</button>
+							{!micOnlyActive && (
+								<button
+									type="button"
+									className="rec-btn is-ghost"
+									onClick={() => setLivePreview(true)}
+								>
+									Show preview
+								</button>
+							)}
 						</div>
 					) : (
 						<div className="rec-stage min-h-0 flex-1 p-4">{preview}</div>
@@ -2101,7 +2244,9 @@ export const WebRecorderDialog = ({
 			? statusView(
 					"upload",
 					"Saving your recording",
-					"Your link is already live. It opens as soon as the last parts land.",
+					micOnlyActive
+						? "Your audio is being uploaded. It opens as soon as it's saved."
+						: "Your link is already live. It opens as soon as the last parts land.",
 					<>
 						<div className="mt-9">
 							<Squiggle progress={saveProgress} />
@@ -2166,6 +2311,21 @@ export const WebRecorderDialog = ({
 				<HowRecordingWorks
 					steps={howTopic === "camera" ? CAMERA_STEPS : undefined}
 					onClose={() => setHowTopic(null)}
+				/>
+			)}
+			{cameraOnlyPrompt && (
+				<CameraOnlyPrompt
+					onClose={() => setCameraOnlyPrompt(false)}
+					onAddScreen={(dontShowAgain) => {
+						setCameraOnlyPrompt(false);
+						rememberCameraOnlyChoice(dontShowAgain);
+						beginShare(true);
+					}}
+					onRecordCameraOnly={(dontShowAgain) => {
+						setCameraOnlyPrompt(false);
+						rememberCameraOnlyChoice(dontShowAgain);
+						void recordNow();
+					}}
 				/>
 			)}
 			{audioGuide && (
