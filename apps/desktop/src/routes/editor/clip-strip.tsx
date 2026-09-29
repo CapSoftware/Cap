@@ -38,15 +38,14 @@ import { clipDuration, clipTimelineOffsets } from "./clip-transitions";
 import { type EditorTimelineSegment, useEditorContext } from "./context";
 import { effectiveToOutput, holdWindows } from "./timeline-holds";
 import { MenuItem, PopperContent, topCenterAnimateClasses } from "./ui";
+import { formatTime } from "./utils";
 import { createWebMediaImport } from "./web-media-import";
 
 const VIDEO_EXTENSIONS = ["mp4", "mov", "m4v", "webm", "mkv", "capbundle"];
 const AUDIO_EXTENSIONS = ["mp3", "wav", "m4a", "aac", "ogg", "opus", "flac"];
 
-const formatTime = (seconds: number) => {
-	const total = Math.max(0, Math.round(seconds));
-	return `${Math.floor(total / 60)}:${(total % 60).toString().padStart(2, "0")}`;
-};
+const formatDuration = (seconds: number) =>
+	formatTime(Math.max(0, Math.round(seconds)));
 
 /**
  * The web editor's clips, in order, above the timeline: jump to one, drag to
@@ -250,7 +249,7 @@ export function ClipStrip() {
 			<div class="flex shrink-0 items-baseline gap-1.5">
 				<span class="text-[13px] font-medium text-ed-text-1">Clips</span>
 				<span class="text-[12px] tabular-nums text-ed-text-3">
-					{formatTime(total())}
+					{formatDuration(total())}
 				</span>
 			</div>
 			<div
@@ -320,7 +319,7 @@ export function ClipStrip() {
 										/>
 									</Show>
 									<span class="tabular-nums text-ed-text-3">
-										{formatTime(clipDuration(segment))}
+										{formatDuration(clipDuration(segment))}
 									</span>
 								</div>
 								<ClipMenu
