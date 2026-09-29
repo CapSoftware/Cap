@@ -8,7 +8,17 @@ type RenderSaveStatus = {
 	error: string | null;
 };
 
-const POLL_MS = 3000;
+/**
+ * How long to wait before the next poll. A render normally reports within a
+ * minute or two; one that runs on keeps being watched, but less often, and a
+ * page left open on a render that never ends stops asking.
+ */
+export function renderStatusPollDelay(elapsedMs: number): number | null {
+	if (elapsedMs < 2 * 60_000) return 3000;
+	if (elapsedMs < 10 * 60_000) return 6000;
+	if (elapsedMs < 60 * 60_000) return 15_000;
+	return null;
+}
 
 /**
  * Polls a render while it's running, and with `untilStarted`, while one that
@@ -24,6 +34,7 @@ export function useRenderSaveStatus(
 		if (!enabled) return;
 		let timer: ReturnType<typeof setTimeout> | undefined;
 		const controller = new AbortController();
+		const startedAt = Date.now();
 		const poll = async () => {
 			try {
 				const response = await fetch(
@@ -38,7 +49,8 @@ export function useRenderSaveStatus(
 			} catch {
 				if (controller.signal.aborted) return;
 			}
-			timer = setTimeout(poll, POLL_MS);
+			const delay = renderStatusPollDelay(Date.now() - startedAt);
+			if (delay !== null) timer = setTimeout(poll, delay);
 		};
 		void poll();
 		return () => {
