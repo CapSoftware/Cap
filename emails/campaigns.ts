@@ -26,7 +26,6 @@ export const campaignTemplates: Campaign[] = [
 			condition("capPlanName", "Cap Pro"),
 			condition("capTeammate", false),
 			condition("capMultiSeatOwner", true),
-			condition("capHasFirstName", true),
 		],
 	},
 ];

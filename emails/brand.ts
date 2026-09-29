@@ -65,6 +65,7 @@ export const sender = {
 
 export const contactFallbacks = {
 	capGreeting: "Hey,",
+	capTeamGreeting: "Hey team,",
 	capPlanName: "Cap",
 	capCustomerWelcome:
 		"If you need a hand getting set up, just reply and I'll help you sort it.",

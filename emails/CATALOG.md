@@ -603,17 +603,17 @@ See Cap v0.6 in action →
 
 ### customer-case-study
 
-Invite named Cap Pro organisation owners with more than one seat to reply if they'd like their team on the website logo wall, in a case study, or both.
+Invite Cap Pro organisation owners with more than one seat to reply if they'd like their team on the website logo wall, in a case study, or both.
 
 **Subject:** Could we feature your team on the Cap website?
 
 **Preview:** A spot on our new logo wall, and a case study if you're up for it.
 
-**Variables:** `contact.capGreeting` (fallback: Hey,)
+**Variables:** `contact.capTeamGreeting` (fallback: Hey team,)
 
 **Edit:** [emails/marketing/customer-case-study.ts](../emails/marketing/customer-case-study.ts)
 
-{contact.capGreeting}
+{contact.capTeamGreeting}
 
 We're adding a logo wall to the Cap website to show the teams using Cap, and I'd love to include yours.
 

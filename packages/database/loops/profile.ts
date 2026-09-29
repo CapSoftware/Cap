@@ -182,8 +182,10 @@ export function classifyProfile(
 		userId: user?.id ?? `bento:${emailHash(source.email)}`,
 		firstName,
 		capGreeting: firstName ? `Hey ${firstName},` : "Hey,",
-		capHasFirstName:
-			Boolean(firstName) && !roleNames.has(firstName.toLowerCase()),
+		capTeamGreeting:
+			firstName && !roleNames.has(firstName.toLowerCase())
+				? `Hey ${firstName},`
+				: "Hey team,",
 		lastName:
 			[source.last_name, source.lastname, user?.lastName]
 				.map((value) => value?.trim())

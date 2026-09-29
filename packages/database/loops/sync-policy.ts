@@ -27,7 +27,7 @@ export function profileFingerprint(profile: ContactProfile) {
 		capVerifiedAt: _verified,
 		capImportedAt: _imported,
 		capMultiSeatOwner,
-		capHasFirstName,
+		capTeamGreeting,
 		...stable
 	} = profile;
 	// Case-study targeting only forces a sync for multi-seat owners, so adding
@@ -36,7 +36,7 @@ export function profileFingerprint(profile: ContactProfile) {
 		.update(
 			JSON.stringify(
 				capMultiSeatOwner
-					? { ...stable, capMultiSeatOwner, capHasFirstName }
+					? { ...stable, capMultiSeatOwner, capTeamGreeting }
 					: stable,
 			),
 		)

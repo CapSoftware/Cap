@@ -7,7 +7,7 @@ export const contactProperties = {
 	capCustomer: "boolean",
 	capPlanName: "string",
 	capMultiSeatOwner: "boolean",
-	capHasFirstName: "boolean",
+	capTeamGreeting: "string",
 	capCustomerWelcome: "string",
 	capPromotionalEligible: "boolean",
 	capOnboardingEligible: "boolean",

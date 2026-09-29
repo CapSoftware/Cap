@@ -4,13 +4,13 @@ export const customerCaseStudy = {
 	id: "customer-case-study",
 	key: "customer-case-study",
 	purpose:
-		"Invite named Cap Pro organisation owners with more than one seat to reply if they'd like their team on the website logo wall, in a case study, or both.",
+		"Invite Cap Pro organisation owners with more than one seat to reply if they'd like their team on the website logo wall, in a case study, or both.",
 	subject: "Could we feature your team on the Cap website?",
 	previewText:
 		"A spot on our new logo wall, and a case study if you're up for it.",
-	variables: ["capGreeting"],
+	variables: ["capTeamGreeting"],
 	body: [
-		"<Paragraph>{contact.capGreeting}</Paragraph>",
+		"<Paragraph>{contact.capTeamGreeting}</Paragraph>",
 		"<Paragraph>We're adding a logo wall to the Cap website to show the teams using Cap, and I'd love to include yours.</Paragraph>",
 		"<Paragraph>We're also putting together case studies, and it'd be great to feature your team in one of those too.</Paragraph>",
 		"<Paragraph>If you're enjoying Cap and would like to be featured, just reply and let me know if you're happy to be on the logo wall, do a case study, or both. For a case study, I'll send you a short Q&amp;A to fill in.</Paragraph>",

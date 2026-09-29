@@ -71,14 +71,14 @@ test("greetings include a name only when a nonblank name is known", () => {
 	}
 });
 
-test("first-name targeting follows the same nonblank rule as the greeting", () => {
+test("team greetings use a real first name and fall back to the team", () => {
 	const fixture = input();
-	assert.equal(classifyProfile(fixture).capHasFirstName, true);
+	assert.equal(classifyProfile(fixture).capTeamGreeting, "Hey Taylor,");
 	fixture.user = undefined;
 	for (const firstName of [undefined, "", "   ", "null"]) {
 		if (firstName === undefined) delete fixture.source.first_name;
 		else fixture.source.first_name = firstName;
-		assert.equal(classifyProfile(fixture).capHasFirstName, false);
+		assert.equal(classifyProfile(fixture).capTeamGreeting, "Hey team,");
 	}
 	for (const roleName of [
 		"Admin",
@@ -91,7 +91,7 @@ test("first-name targeting follows the same nonblank rule as the greeting", () =
 		"account",
 	]) {
 		fixture.source.first_name = roleName;
-		assert.equal(classifyProfile(fixture).capHasFirstName, false);
+		assert.equal(classifyProfile(fixture).capTeamGreeting, "Hey team,");
 	}
 });
 
@@ -101,7 +101,7 @@ test("case-study targeting leaves other contacts' sync fingerprints unchanged", 
 		capVerifiedAt: _verified,
 		capImportedAt: _imported,
 		capMultiSeatOwner: _owner,
-		capHasFirstName: _name,
+		capTeamGreeting: _greeting,
 		...legacy
 	} = profile;
 	assert.equal(
@@ -117,7 +117,7 @@ test("case-study targeting leaves other contacts' sync fingerprints unchanged", 
 		profileFingerprint({
 			...profile,
 			capMultiSeatOwner: true,
-			capHasFirstName: false,
+			capTeamGreeting: "Hey team,",
 		}),
 	);
 });
