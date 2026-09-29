@@ -21,6 +21,7 @@ import {
 	renderFarmSaveIsCurrent,
 } from "@/lib/render-farm-status";
 import { apiToHandler } from "@/lib/server";
+import { shareVideoRevision } from "@/lib/share-video-revision";
 
 export const dynamic = "force-dynamic";
 
@@ -32,6 +33,7 @@ const RenderSaveStatus = Schema.Struct({
 	hlsUrl: Schema.NullOr(Schema.String),
 	error: Schema.NullOr(Schema.String),
 	current: Schema.Boolean,
+	revision: Schema.NullOr(Schema.String),
 });
 
 class Api extends HttpApi.make("RenderSaveStatusApi").add(
@@ -66,6 +68,7 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 									id: videos.id,
 									fps: videos.fps,
 									metadata: videos.metadata,
+									source: videos.source,
 								})
 								.from(videos)
 								.where(eq(videos.id, path.videoId)),
@@ -96,6 +99,7 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 									}
 								: status),
 							current: renderFarmSaveIsCurrent(video.metadata),
+							revision: shareVideoRevision(video.source),
 						};
 					}).pipe(
 						provideOptionalAuth,
