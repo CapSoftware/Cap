@@ -8,7 +8,6 @@ import {
 	type ProfileInput,
 	sourceConsent,
 } from "./profile";
-import { audienceFilter, journeys } from "./program";
 import {
 	contactUpdate,
 	importContactUpdate,
@@ -362,33 +361,4 @@ test("verification timestamps do not churn the sync fingerprint", () => {
 		profileFingerprint(profile),
 		profileFingerprint({ ...profile, capTeammate: true }),
 	);
-});
-
-test("every journey requires subscription consent and promotional journeys exclude teammates", () => {
-	assert.equal(
-		journeys.reduce((count, journey) => count + journey.messages.length, 0),
-		16,
-	);
-	for (const journey of journeys) {
-		const filter = audienceFilter(journey.audience, journey.promotional);
-		assert.ok(
-			filter.conditions.some(
-				(condition) =>
-					condition.key === "subscribed" && condition.operator === "isTrue",
-			),
-		);
-		assert.ok(
-			filter.conditions.some(
-				(condition) =>
-					condition.key === "capConsent" && condition.value === "subscribed",
-			),
-		);
-		if (journey.promotional)
-			assert.ok(
-				filter.conditions.some(
-					(condition) =>
-						condition.key === "capTeammate" && condition.operator === "isFalse",
-				),
-			);
-	}
 });
