@@ -111,7 +111,9 @@ fn main() {
     };
 
     if logs_dir.is_none() {
-        eprintln!("Log directory is unavailable; file logging and persistent crash detection are disabled; console logging remains enabled");
+        eprintln!(
+            "Log directory is unavailable; file logging and persistent crash detection are disabled; console logging remains enabled"
+        );
     }
 
     let (info_file_writer, _info_logger_guard) = match (

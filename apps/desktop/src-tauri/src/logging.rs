@@ -180,10 +180,11 @@ pub(crate) async fn upload_log_file_inner(
         .logs_dir
         .clone();
     let log_bundle = tokio::task::spawn_blocking(move || {
-        logs_dir.as_deref().map_or_else(
-            cap_utils::log_upload::LogBundle::unavailable,
-            |directory| cap_utils::log_upload::collect(directory, "cap-desktop.log"),
-        )
+        logs_dir
+            .as_deref()
+            .map_or_else(cap_utils::log_upload::LogBundle::unavailable, |directory| {
+                cap_utils::log_upload::collect(directory, "cap-desktop.log")
+            })
     })
     .await
     .map_err(|_| "Log collection could not finish".to_string())?;
