@@ -177,6 +177,25 @@ describe("RemoteMedia", () => {
 		expect(probes).toBeLessThan(12);
 	});
 
+	test("keeps scanning past a probe window that ends inside a fragment", async () => {
+		// Fragments bigger than a probe window: a probe can land inside one,
+		// and the next window starts at the edge of the one just read.
+		const parts = [init()];
+		for (let index = 0; index < 120; index++) {
+			parts.push(fragment(index * 2 * 15360, { payload: 700_000 }));
+		}
+		serve(concat(...parts));
+		const media = new RemoteMedia(URL_, file.length);
+		media.warm();
+		await media.locate(220);
+		await media.locate(20);
+		const point = await media.locate(90);
+		expect(point).not.toBeNull();
+		if (!point) return;
+		expect(point.time).toBeLessThanOrEqual(90);
+		expect(90 - point.time).toBeLessThan(10);
+	});
+
 	test("maps a region layout onto the init bytes and the fragment", async () => {
 		serve(longRecording(100));
 		const media = new RemoteMedia(URL_, file.length);

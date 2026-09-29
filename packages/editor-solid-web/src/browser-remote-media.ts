@@ -395,6 +395,21 @@ export class RemoteMedia {
 		return this.network(start, stop, signal);
 	}
 
+	/// All of `start` to `end`: `read` answers with whatever one cached window
+	/// or request covers, which can be only a few bytes at a window's edge.
+	private async readFully(start: number, end: number) {
+		const out = new Uint8Array(end - start);
+		let filled = 0;
+		while (start + filled < end) {
+			const response = await this.read(start + filled, end);
+			const bytes = await readAll(response.body, response.end - start - filled);
+			if (bytes.byteLength === 0) break;
+			out.set(bytes, filled);
+			filled += bytes.byteLength;
+		}
+		return out.subarray(0, filled);
+	}
+
 	/// What seeking needs: the video track's timing and whether the file can
 	/// take an empty `mfra` trailer (fragmented, ends in a whole fragment, no
 	/// index of its own). Null for anything else, which reads as before.
@@ -534,8 +549,10 @@ export class RemoteMedia {
 			let at = step.probeAt;
 			let grew = false;
 			while (at < size && at - step.probeAt < MAX_PROBE_SCAN) {
-				const response = await this.read(at, Math.min(size, at + PROBE_WINDOW));
-				const window = await readAll(response.body, response.end - at);
+				const window = await this.readFully(
+					at,
+					Math.min(size, at + PROBE_WINDOW),
+				);
 				this.recent.unshift({ start: at, bytes: window });
 				this.recent.length = Math.min(this.recent.length, RECENT_WINDOWS);
 				const { points, resumeAt } = scanner.scan(window, at);
