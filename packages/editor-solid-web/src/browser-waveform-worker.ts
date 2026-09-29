@@ -1,9 +1,12 @@
 import {
 	ALL_FORMATS,
 	AudioSampleSink,
+	CustomSource,
 	Input,
 	ReadableStreamSource,
+	type Source,
 } from "mediabunny";
+import { type ByteRange, sparseAudioPlan } from "./mp4-audio-ranges";
 
 type WaveformRequest = { url: string };
 type WaveformResponse = { peaks: number[] } | { error: string };
@@ -21,14 +24,21 @@ const scope = self as unknown as {
 /// The file streams through once: ranged reads ahead of a decoder this slow
 /// get dropped and fetched again, several times the file for long audio.
 async function waveform(url: string) {
+	const ranged = await rangedAudioSource(url).catch(() => null);
+	if (ranged) {
+		try {
+			return await peaksFrom(ranged);
+		} catch {}
+	}
 	const response = await fetch(url, { priority: "low" });
 	if (!response.ok || !response.body) {
 		throw new Error("Editor waveform audio could not load");
 	}
-	const input = new Input({
-		formats: ALL_FORMATS,
-		source: new ReadableStreamSource(response.body),
-	});
+	return peaksFrom(new ReadableStreamSource(response.body));
+}
+
+async function peaksFrom(source: Source) {
+	const input = new Input({ formats: ALL_FORMATS, source });
 	try {
 		const track = await input.getPrimaryAudioTrack();
 		if (!track) return [];
@@ -70,6 +80,161 @@ async function waveform(url: string) {
 	} finally {
 		input.dispose();
 	}
+}
+
+const HEAD_BYTES = 64 * 1024;
+const MAX_MOOV_BYTES = 64 * 1024 * 1024;
+const MAX_TOP_LEVEL_BOXES = 64;
+const IN_FLIGHT = 6;
+const WINDOW_BYTES = 4 * 1024 * 1024;
+
+function copyOverlap(
+	out: Uint8Array,
+	outStart: number,
+	start: number,
+	bytes: Uint8Array,
+) {
+	const from = Math.max(outStart, start);
+	const to = Math.min(outStart + out.byteLength, start + bytes.byteLength);
+	if (from < to)
+		out.set(bytes.subarray(from - start, to - start), from - outStart);
+}
+
+function windows(range: ByteRange, bytes: number) {
+	const out: ByteRange[] = [];
+	for (let start = range.start; start < range.end; start += bytes)
+		out.push({ start, end: Math.min(range.end, start + bytes) });
+	return out;
+}
+
+async function fetchRange(url: string, start: number, end: number) {
+	const response = await fetch(url, {
+		headers: { Range: `bytes=${start}-${end - 1}` },
+		priority: "low",
+	});
+	if (response.status !== 206)
+		throw new Error("Editor waveform audio needs ranged reads");
+	const size = Number(
+		/\/(\d+)$/.exec(response.headers.get("Content-Range") ?? "")?.[1],
+	);
+	const bytes = new Uint8Array(await response.arrayBuffer());
+	if (bytes.byteLength !== Math.min(end, size) - start)
+		throw new Error("Editor waveform audio read was short");
+	return { bytes, size };
+}
+
+/// A ranged source for an MP4: only its audio chunks when the audio sits in
+/// large enough runs between the video, or its media in order when the index
+/// comes after it, which a stream can't go back for. Null leaves the file to
+/// the plain stream: most muxers interleave a little audio per video frame,
+/// so reading around the video costs more than reading it.
+async function rangedAudioSource(url: string): Promise<Source | null> {
+	const head = await fetchRange(url, 0, HEAD_BYTES);
+	const size = head.size;
+	if (!Number.isSafeInteger(size) || size <= head.bytes.byteLength) return null;
+	const headerAt = async (offset: number) =>
+		offset + 16 <= head.bytes.byteLength
+			? head.bytes.subarray(offset, offset + 16)
+			: (await fetchRange(url, offset, Math.min(size, offset + 16))).bytes;
+	let offset = 0;
+	let moov: { start: number; bytes: Uint8Array } | null = null;
+	let mdat: ByteRange | null = null;
+	for (
+		let count = 0;
+		offset + 8 <= size && count < MAX_TOP_LEVEL_BOXES;
+		count++
+	) {
+		const header = await headerAt(offset);
+		const view = new DataView(
+			header.buffer,
+			header.byteOffset,
+			header.byteLength,
+		);
+		let boxSize = view.getUint32(0);
+		if (boxSize === 1 && header.byteLength >= 16)
+			boxSize = Number(view.getBigUint64(8));
+		else if (boxSize === 0) boxSize = size - offset;
+		const type = String.fromCharCode(...header.subarray(4, 8));
+		if (boxSize < 8 || type === "moof" || (offset === 0 && type !== "ftyp"))
+			return null;
+		if (type === "mdat" && !mdat)
+			mdat = { start: offset, end: Math.min(size, offset + boxSize) };
+		if (type === "moov") {
+			if (boxSize > MAX_MOOV_BYTES) return null;
+			moov = {
+				start: offset,
+				bytes:
+					offset + boxSize <= head.bytes.byteLength
+						? head.bytes.subarray(offset, offset + boxSize)
+						: (await fetchRange(url, offset, offset + boxSize)).bytes,
+			};
+			break;
+		}
+		offset += boxSize;
+	}
+	if (!moov) return null;
+	const plan =
+		sparseAudioPlan(moov.bytes, size) ??
+		(mdat && mdat.start < moov.start ? windows(mdat, WINDOW_BYTES) : null);
+	if (!plan) return null;
+	const known = [
+		{ start: 0, bytes: head.bytes },
+		{ start: moov.start, bytes: moov.bytes },
+	];
+	const groups = plan.map((range) => ({
+		...range,
+		bytes: null as Promise<Uint8Array> | null,
+	}));
+	let next = 0;
+	const load = (index: number) => {
+		const group = groups[index];
+		if (!group) return;
+		group.bytes ??= fetchRange(url, group.start, group.end).then(
+			(read) => read.bytes,
+		);
+	};
+	return new CustomSource({
+		getSize: () => size,
+		prefetchProfile: "none",
+		read: async (start, end) => {
+			for (const piece of known) {
+				if (start >= piece.start && end <= piece.start + piece.bytes.byteLength)
+					return piece.bytes.slice(start - piece.start, end - piece.start);
+			}
+			let first = 0;
+			let last = groups.length;
+			while (first < last) {
+				const mid = (first + last) >>> 1;
+				if ((groups[mid]?.end ?? 0) <= start) first = mid + 1;
+				else last = mid;
+			}
+			if ((groups[first]?.start ?? end) >= end)
+				return (await fetchRange(url, start, end)).bytes;
+			for (let index = next; index < first; index++) {
+				const done = groups[index];
+				if (done) done.bytes = null;
+			}
+			next = Math.max(next, first);
+			// A read can run on from the previous one across the video between
+			// two audio chunks. Only the audio packets in it are used, so the
+			// bytes around them stay zero instead of being downloaded.
+			const out = new Uint8Array(end - start);
+			for (const piece of known)
+				copyOverlap(out, start, piece.start, piece.bytes);
+			for (let index = first; index < first + IN_FLIGHT; index++) load(index);
+			for (
+				let index = first;
+				index < groups.length && (groups[index]?.start ?? end) < end;
+				index++
+			) {
+				load(index);
+				const group = groups[index];
+				if (group?.bytes)
+					copyOverlap(out, start, group.start, await group.bytes);
+			}
+			return out;
+		},
+	});
 }
 
 scope.addEventListener("message", (event) => {

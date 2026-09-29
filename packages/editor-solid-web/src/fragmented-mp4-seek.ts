@@ -7,7 +7,7 @@ import { fragmentedMp4Init } from "../../../apps/web/lib/fragmented-mp4-duration
 /// downloads half a gigabyte. Here a fragment near the target is found from a
 /// few small reads, and the decoder gets a virtual file that starts there.
 
-type Box = { type: string; start: number; end: number; body: number };
+export type Box = { type: string; start: number; end: number; body: number };
 
 function type4(bytes: Uint8Array, at: number) {
 	return String.fromCharCode(
@@ -18,7 +18,7 @@ function type4(bytes: Uint8Array, at: number) {
 	);
 }
 
-function boxAt(view: DataView, offset: number, end: number): Box | null {
+export function boxAt(view: DataView, offset: number, end: number): Box | null {
 	if (offset + 8 > end) return null;
 	let size = view.getUint32(offset);
 	let body = offset + 8;
@@ -41,7 +41,7 @@ function boxAt(view: DataView, offset: number, end: number): Box | null {
 	};
 }
 
-function children(view: DataView, parent: Box) {
+export function children(view: DataView, parent: Box) {
 	const out: Box[] = [];
 	let offset = parent.body;
 	while (offset < parent.end) {
