@@ -15,6 +15,11 @@ import {
 	timelineAudioLevelSources,
 } from "./browser-audio-levels";
 import { renderBrowserExportAudio } from "./browser-export-audio";
+import {
+	avcCodecString,
+	ExportEncoder,
+	keyframeGroup,
+} from "./browser-export-encoder";
 import { EXPORT_AUDIO_BITRATE, exportBitrate } from "./browser-export-estimate";
 import type { BrowserStudioSetup } from "./browser-local-canvas";
 
@@ -763,14 +768,84 @@ async function chunkStream(fps: number) {
 	};
 }
 
+type LoopTimings = {
+	renderMs: number;
+	decodeWaitMs: number;
+	encodeWaitMs: number;
+};
+
+/// Frame N renders and is handed to the encoder (which captures the canvas
+/// synchronously), then frame N+1 decodes while N encodes; finished packets
+/// are written between frames.
+async function encodeFrames(
+	context: RenderContext,
+	job: BrowserExportJob,
+	encoder: ExportEncoder,
+	write: (
+		packet: EncodedPacket,
+		meta?: EncodedVideoChunkMetadata,
+	) => Promise<void>,
+): Promise<LoopTimings> {
+	const { canvas, totalFrames } = context;
+	const timings = { renderMs: 0, decodeWaitMs: 0, encodeWaitMs: 0 };
+	let pendingDecode: Promise<DecodedFrame | null> = decodeFrame(
+		context,
+		job.fps,
+		0,
+	);
+	let lastProgress = 0;
+	let lastGroup = -1;
+	const writeReady = async () => {
+		for (const { packet, meta } of encoder.take()) await write(packet, meta);
+	};
+	try {
+		for (let frame = 0; frame < totalFrames; frame++) {
+			checkCanceled();
+			const decodeStart = performance.now();
+			const item = await pendingDecode;
+			timings.decodeWaitMs += performance.now() - decodeStart;
+			if (!item) break;
+			const renderStart = performance.now();
+			renderDecoded(context, job, frame, item);
+			timings.renderMs += performance.now() - renderStart;
+			pendingDecode =
+				frame + 1 < totalFrames
+					? decodeFrame(context, job.fps, frame + 1)
+					: Promise.resolve(null);
+			const group = keyframeGroup(frame, job.fps, CHUNK_SECONDS);
+			const encodeStart = performance.now();
+			await encoder.encode(frame, group !== lastGroup, canvas);
+			timings.encodeWaitMs += performance.now() - encodeStart;
+			lastGroup = group;
+			await writeReady();
+			const now = performance.now();
+			if (now - lastProgress > 100 || frame + 1 === totalFrames) {
+				lastProgress = now;
+				scope.postMessage({
+					kind: "progress",
+					renderedCount: frame + 1,
+					totalFrames,
+				});
+			}
+		}
+		await encoder.flush();
+		await writeReady();
+	} catch (cause) {
+		void pendingDecode.then(release, () => undefined);
+		throw cause;
+	}
+	return timings;
+}
+
 async function runExport(job: BrowserExportJob) {
 	const started = performance.now();
 	const context = await renderContext(job);
 	checkCanceled();
-	const { canvas, width, height, totalFrames, times } = context;
+	const { width, height, totalFrames, times } = context;
 	const {
 		BufferTarget,
-		CanvasSource,
+		EncodedPacket,
+		EncodedVideoPacketSource,
 		Mp4OutputFormat,
 		Output,
 		canEncodeVideo,
@@ -778,6 +853,21 @@ async function runExport(job: BrowserExportJob) {
 	const bitrate = exportBitrate(width, height, job.fps, job.bitsPerPixel);
 	if (!(await canEncodeVideo("avc", { width, height, bitrate }))) {
 		throw new Error("This browser cannot encode H.264 video");
+	}
+	const encoderConfig: VideoEncoderConfig = {
+		codec: avcCodecString(width, height, bitrate),
+		width,
+		height,
+		bitrate,
+		framerate: job.fps,
+		latencyMode: HOLDS_QUALITY_FRAMES ? "realtime" : "quality",
+		hardwareAcceleration: "prefer-hardware",
+		alpha: "discard",
+		avc: { format: "avc" },
+	};
+	const support = await VideoEncoder.isConfigSupported(encoderConfig);
+	if (!support.supported) {
+		throw new Error("This browser cannot encode H.264 video at this size");
 	}
 	const file = await openExportFile(
 		((bitrate + EXPORT_AUDIO_BITRATE) * totalFrames) / job.fps / 8,
@@ -788,15 +878,18 @@ async function runExport(job: BrowserExportJob) {
 		format: new Mp4OutputFormat({ fastStart: file ? "reserve" : "in-memory" }),
 		target,
 	});
+	const encoder = new ExportEncoder(
+		encoderConfig,
+		job.fps,
+		(chunk, frame, key) =>
+			EncodedPacket.fromEncodedChunk(chunk).clone({
+				timestamp: frame / job.fps,
+				duration: 1 / job.fps,
+				type: key ? "key" : "delta",
+			}),
+	);
 	try {
-		const videoSource = new CanvasSource(canvas, {
-			codec: "avc",
-			bitrate,
-			keyFrameInterval: CHUNK_SECONDS,
-			latencyMode: HOLDS_QUALITY_FRAMES ? "realtime" : "quality",
-			hardwareAcceleration: "prefer-hardware",
-			onEncodedPacket: stream?.video,
-		});
+		const videoSource = new EncodedVideoPacketSource("avc");
 		output.addVideoTrack(videoSource, {
 			frameRate: job.fps,
 			maximumPacketCount: totalFrames + 16,
@@ -812,53 +905,17 @@ async function runExport(job: BrowserExportJob) {
 		await output.start();
 		const audioDone = audio?.run() ?? Promise.resolve();
 		audioDone.catch(() => undefined);
-
-		// Frame N renders and is handed to the encoder (which captures the canvas
-		// synchronously), then frame N+1 decodes while N encodes.
-		let renderMs = 0;
-		let decodeWaitMs = 0;
-		let encodeWaitMs = 0;
-		let lastProgress = 0;
-		let pendingDecode: Promise<DecodedFrame | null> = decodeFrame(
+		const timings = await encodeFrames(
 			context,
-			job.fps,
-			0,
+			job,
+			encoder,
+			async (packet, meta) => {
+				stream?.video(packet, meta);
+				await videoSource.add(packet, meta);
+			},
 		);
-		let pendingEncode: Promise<void> = Promise.resolve();
-		try {
-			for (let frame = 0; frame < totalFrames; frame++) {
-				checkCanceled();
-				const decodeStart = performance.now();
-				const item = await pendingDecode;
-				decodeWaitMs += performance.now() - decodeStart;
-				if (!item) break;
-				const renderStart = performance.now();
-				renderDecoded(context, job, frame, item);
-				renderMs += performance.now() - renderStart;
-				const encodeStart = performance.now();
-				await pendingEncode;
-				encodeWaitMs += performance.now() - encodeStart;
-				pendingEncode = videoSource.add(frame / job.fps, 1 / job.fps);
-				pendingDecode =
-					frame + 1 < totalFrames
-						? decodeFrame(context, job.fps, frame + 1)
-						: Promise.resolve(null);
-				const now = performance.now();
-				if (now - lastProgress > 100 || frame + 1 === totalFrames) {
-					lastProgress = now;
-					scope.postMessage({
-						kind: "progress",
-						renderedCount: frame + 1,
-						totalFrames,
-					});
-				}
-			}
-			await pendingEncode;
-		} catch (cause) {
-			void pendingDecode.then(release, () => undefined);
-			throw cause;
-		}
 		checkCanceled();
+		encoder.close();
 		videoSource.close();
 		await audioDone;
 		await output.finalize();
@@ -878,9 +935,9 @@ async function runExport(job: BrowserExportJob) {
 				frames: totalFrames,
 				width,
 				height,
-				renderMs: Math.round(renderMs),
-				decodeWaitMs: Math.round(decodeWaitMs),
-				encodeWaitMs: Math.round(encodeWaitMs),
+				renderMs: Math.round(timings.renderMs),
+				decodeWaitMs: Math.round(timings.decodeWaitMs),
+				encodeWaitMs: Math.round(timings.encodeWaitMs),
 				totalMs: Math.round(performance.now() - started),
 				videoCodec: "avc",
 				audioCodec: audio?.codec ?? null,
@@ -888,6 +945,7 @@ async function runExport(job: BrowserExportJob) {
 			},
 		});
 	} catch (cause) {
+		encoder.close();
 		await output.cancel().catch(() => undefined);
 		await stream?.cancel();
 		file?.discard();
