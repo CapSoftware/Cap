@@ -43,17 +43,13 @@ export function RecordingPublisher({
 		return () => clearTimeout(timer);
 	}, [onDone]);
 
-	useEffect(() => {
-		// A reload or refresh shows the share page, not another publish. A null
-		// state is what lets the router adopt the new URL.
-		const url = new URL(window.location.href);
-		url.searchParams.delete("from");
-		window.history.replaceState(null, "", url);
-		return () => {
+	useEffect(
+		() => () => {
 			bridgeRef.current?.dispose();
 			bridgeRef.current = null;
-		};
-	}, []);
+		},
+		[],
+	);
 
 	const connect = (iframe: HTMLIFrameElement) => {
 		const frameDocument = iframe.contentDocument;
