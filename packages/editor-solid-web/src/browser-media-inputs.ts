@@ -246,8 +246,6 @@ export function warmMediaSource(url: string, size: number | null) {
 	remoteMedia(url, size)?.warm();
 }
 
-/// Drops every file's reader and idle input when the editor is torn down;
-/// inputs still in use keep their own reference until released.
 export function releaseMediaSources() {
 	for (const list of [...shared.values()]) {
 		for (const entry of [...list]) {

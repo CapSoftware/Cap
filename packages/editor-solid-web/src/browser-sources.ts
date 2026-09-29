@@ -436,7 +436,6 @@ function bootstrapResponse(videoId: string) {
 	});
 }
 
-/// Signed URLs closer than this to expiring are fetched again.
 const SOURCE_RENEW_MARGIN_MS = 60_000;
 
 async function parseSourcesResponse(
