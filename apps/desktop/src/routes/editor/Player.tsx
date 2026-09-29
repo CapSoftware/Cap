@@ -273,12 +273,21 @@ export function PlayerContent(props: { compactness?: number }) {
 		await commands.setPlaybackRate(rate);
 	};
 
+	let playbackQueue: Promise<unknown> = Promise.resolve();
+	const serialized =
+		<T,>(task: () => Promise<T>) =>
+		() => {
+			const run = playbackQueue.then(task);
+			playbackQueue = run.catch(() => undefined);
+			return run;
+		};
+
 	const shuttle = async (rate: number) => {
 		if (isAtEnd()) return;
 		const pending = requestHandoffPlayback(true);
 		if (pending) {
 			await pending;
-			return;
+			if (rate === 1) return;
 		}
 		const time = editorState.previewTime ?? editorState.playbackTime;
 		const frame = Math.max(Math.floor(time * FPS), 0);
@@ -299,19 +308,19 @@ export function PlayerContent(props: { compactness?: number }) {
 		}
 	};
 
-	const shuttleFaster = () => {
+	const shuttleFaster = serialized(() => {
 		const current = playbackIntent() ? playbackRate() : 0;
 		const next = SHUTTLE_RATES.find((rate) => rate > current && rate >= 1);
 		return shuttle(next ?? SHUTTLE_RATES[SHUTTLE_RATES.length - 1]);
-	};
+	});
 
-	const shuttleSlower = () => {
+	const shuttleSlower = serialized(() => {
 		const current = playbackIntent() ? playbackRate() : 1;
 		const next = [...SHUTTLE_RATES].reverse().find((rate) => rate < current);
 		return shuttle(next ?? SHUTTLE_RATES[0]);
-	};
+	});
 
-	const shuttleStop = async () => {
+	const shuttleStop = serialized(async () => {
 		const pending = requestHandoffPlayback(false);
 		if (pending) await pending;
 		else if (playbackIntent()) {
@@ -319,9 +328,9 @@ export function PlayerContent(props: { compactness?: number }) {
 			setEditorState("playing", false);
 		}
 		await applyPlaybackRate(1);
-	};
+	});
 
-	const handlePlayPauseClick = async () => {
+	const handlePlayPauseClick = serialized(async () => {
 		await applyPlaybackRate(1);
 		const pending = requestHandoffPlayback(
 			isAtEnd() || !playbackIntent(),
@@ -351,7 +360,7 @@ export function PlayerContent(props: { compactness?: number }) {
 			console.error("Error handling play/pause:", error);
 			setEditorState("playing", false);
 		}
-	};
+	});
 
 	if (import.meta.env.DEV) {
 		createTauriEventListener<boolean>(
