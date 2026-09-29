@@ -319,7 +319,7 @@ jobs:
         run: |
           export PATH="$(cygpath "$GITHUB_WORKSPACE/target/debug"):$PATH"
           cargo test --locked -p cap-desktop --target ${{ matrix.settings.target }} --bin cap-desktop logging_tests
-          cargo test --locked -p cap-desktop --target ${{ matrix.settings.target }} --lib crash_sentinel::tests
+          cargo test --locked -p cap-desktop --target ${{ matrix.settings.target }} --test crash_sentinel
 
       - name: Test Linux desktop regressions
         if: ${{ runner.os == 'Linux' }}
