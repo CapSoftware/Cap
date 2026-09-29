@@ -181,6 +181,5 @@ export function ClipThumbnail(props: {
 	);
 }
 
-/** A loaded thumbnail for this clip start, if one is cached. */
 export const cachedClipThumbnail = (key: string) =>
 	thumbnailCache.get(key) ?? null;
