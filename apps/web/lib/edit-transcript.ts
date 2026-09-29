@@ -126,6 +126,33 @@ export function isFillerWord(text: string) {
 	return isExactFillerToken(normalizeToken(text));
 }
 
+const STORED_DURATION_TOLERANCE_MS = 2000;
+
+/**
+ * The timeline a fresh transcript is clamped to. A stored duration far
+ * shorter than the transcribed audio is bad metadata (a fragmented MP4 header
+ * declares only its first fragment), and clamping to it would drop every word.
+ */
+export function transcriptTimelineDurationMs(
+	storedDurationMs: number,
+	audioDurationSeconds: number | null | undefined,
+) {
+	const audioMs =
+		typeof audioDurationSeconds === "number" &&
+		Number.isFinite(audioDurationSeconds) &&
+		audioDurationSeconds > 0
+			? audioDurationSeconds * 1000
+			: 0;
+	if (
+		Number.isFinite(storedDurationMs) &&
+		storedDurationMs > 0 &&
+		storedDurationMs + STORED_DURATION_TOLERANCE_MS >= audioMs
+	) {
+		return storedDurationMs;
+	}
+	return audioMs;
+}
+
 export function createEditTranscript(
 	result: AssemblyAIEditResult,
 	durationMs: number,

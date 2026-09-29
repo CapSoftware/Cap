@@ -13,6 +13,7 @@ import {
 	planTranscriptCut,
 	remapEditTranscriptThroughSpec,
 	serializeEditTranscript,
+	transcriptTimelineDurationMs,
 } from "@/lib/edit-transcript";
 import { createIdentityEditSpec } from "@/lib/video-edits";
 import {
@@ -546,5 +547,34 @@ describe("editTranscriptWordsToCaptionVtt", () => {
 
 	it("returns a header-only VTT when there are no words", () => {
 		expect(editTranscriptWordsToCaptionVtt([])).toBe("WEBVTT\n\n");
+	});
+
+	it("keeps the stored duration when it covers the transcribed audio", () => {
+		expect(transcriptTimelineDurationMs(16_417, 17)).toBe(16_417);
+		expect(transcriptTimelineDurationMs(16_417, 18)).toBe(16_417);
+		expect(transcriptTimelineDurationMs(20_000, 17)).toBe(20_000);
+		expect(transcriptTimelineDurationMs(16_417, null)).toBe(16_417);
+	});
+
+	it("uses the audio length when the stored duration is bad metadata", () => {
+		expect(transcriptTimelineDurationMs(102, 17)).toBe(17_000);
+		expect(transcriptTimelineDurationMs(0, 17)).toBe(17_000);
+		expect(transcriptTimelineDurationMs(Number.NaN, 17)).toBe(17_000);
+		expect(transcriptTimelineDurationMs(0, null)).toBe(0);
+	});
+
+	it("keeps every word of a take whose stored duration was one fragment", () => {
+		const words = [
+			{ text: "The", start: 514, end: 594, confidence: 0.94 },
+			{ text: "dog.", start: 16_263, end: 16_311, confidence: 0.99 },
+		];
+		const transcript = createEditTranscript(
+			{ words, speech_model_used: "universal", language_code: "en" },
+			transcriptTimelineDurationMs(102.45, 17),
+		);
+		expect(transcript.words.map((word) => word.text)).toEqual(["The", "dog."]);
+		expect(editTranscriptWordsToCaptionVtt(transcript.words)).not.toBe(
+			"WEBVTT\n\n",
+		);
 	});
 });
