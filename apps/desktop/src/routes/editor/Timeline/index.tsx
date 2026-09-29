@@ -72,6 +72,7 @@ import { type MaskSegmentDragState, MaskTrack } from "./MaskTrack";
 import { Minimap } from "./Minimap";
 import { PlaybackFollow } from "./playback-follow";
 import { type SceneSegmentDragState, SceneTrack } from "./SceneTrack";
+import { snapGuideTime } from "./segment-snapping";
 import { type TextSegmentDragState, TextTrack } from "./TextTrack";
 import { type ThreeDSegmentDragState, ThreeDTrack } from "./ThreeDTrack";
 import { TrackIcon, TrackManager } from "./TrackManager";
@@ -1463,6 +1464,22 @@ export function Timeline(props: {
 							<Show when={preview().snapped}>
 								<div class="absolute top-0 left-1/2 size-2 -translate-x-1/2 -translate-y-1/2 rotate-45 rounded-[1px] bg-ed-accent" />
 							</Show>
+						</div>
+					)}
+				</Show>
+				<Show when={snapGuideTime()}>
+					{(time) => (
+						<div
+							class="absolute bottom-0 z-20 w-px pointer-events-none bg-ed-accent"
+							style={{
+								left: `${TRACK_GUTTER}px`,
+								top: `${PLAYHEAD_TOP_OFFSET}px`,
+								transform: `translateX(${
+									(time() - transform().position) / secsPerPixel()
+								}px)`,
+							}}
+						>
+							<div class="absolute top-0 left-1/2 size-2 -translate-x-1/2 -translate-y-1/2 rotate-45 rounded-[1px] bg-ed-accent" />
 						</div>
 					)}
 				</Show>

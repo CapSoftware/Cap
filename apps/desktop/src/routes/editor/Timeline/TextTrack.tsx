@@ -8,6 +8,12 @@ import { autoTextColorAt, defaultTextSegment } from "../text";
 import { getSegmentTrack, sortTrackSegments } from "../timelineTracks";
 import { useTimelineContext } from "./context";
 import {
+	clearSnapGuide,
+	snapEdgeTime,
+	snapMoveDelta,
+	timelineSnapTargets,
+} from "./segment-snapping";
+import {
 	SegmentContent,
 	SegmentHandle,
 	SegmentLabel,
@@ -39,6 +45,11 @@ export function TextTrack(props: {
 		projectActions,
 		canvasControls,
 	} = useEditorContext();
+	const snapTargetsFor = (index: number) =>
+		timelineSnapTargets(project.timeline, editorState.playbackTime, {
+			type: "text",
+			index,
+		});
 	const { secsPerPixel, timelineBounds } = useTimelineContext();
 	const [draggingSegment, setDraggingSegment] = createSignal(false);
 	const [hoveringTrack, setHoveringTrack] = createSignal(false);
@@ -256,6 +267,7 @@ export function TextTrack(props: {
 					}
 					props.handleUpdatePlayhead(e);
 				}
+				clearSnapGuide();
 				props.onDragStateChanged({ type: "idle" });
 				setDraggingSegment(false);
 			}
@@ -389,7 +401,14 @@ export function TextTrack(props: {
 										return { start, minValue, maxValue };
 									},
 									(e, value, initialMouseX) => {
-										const delta = (e.clientX - initialMouseX) * secsPerPixel();
+										const delta =
+											snapEdgeTime(
+												value.start +
+													(e.clientX - initialMouseX) * secsPerPixel(),
+												e,
+												snapTargetsFor(index),
+												secsPerPixel(),
+											) - value.start;
 										const next = Math.max(
 											value.minValue,
 											Math.min(value.maxValue, value.start + delta),
@@ -428,7 +447,13 @@ export function TextTrack(props: {
 										};
 									},
 									(e, value, initialMouseX) => {
-										const delta = (e.clientX - initialMouseX) * secsPerPixel();
+										const delta = snapMoveDelta(
+											value.original,
+											(e.clientX - initialMouseX) * secsPerPixel(),
+											e,
+											snapTargetsFor(index),
+											secsPerPixel(),
+										);
 										const lowerBound = Math.min(value.minDelta, value.maxDelta);
 										const upperBound = Math.max(value.minDelta, value.maxDelta);
 										const clampedDelta = Math.min(
@@ -482,7 +507,14 @@ export function TextTrack(props: {
 										return { end, minValue, maxValue };
 									},
 									(e, value, initialMouseX) => {
-										const delta = (e.clientX - initialMouseX) * secsPerPixel();
+										const delta =
+											snapEdgeTime(
+												value.end +
+													(e.clientX - initialMouseX) * secsPerPixel(),
+												e,
+												snapTargetsFor(index),
+												secsPerPixel(),
+											) - value.end;
 										const next = Math.max(
 											value.minValue,
 											Math.min(value.maxValue, value.end + delta),
