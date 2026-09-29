@@ -12,6 +12,7 @@ export type CapUser = {
 	lastName: string | null;
 	stripeSubscriptionStatus: string | null;
 	thirdPartyStripeSubscriptionId: string | null;
+	inviteQuota?: number | null;
 	created_at: string;
 	defaultOrgId: string | null;
 	marketingOrigin?: string;
@@ -46,6 +47,24 @@ export type ProfileInput = {
 	hasPendingUpload?: boolean;
 	now: Date;
 };
+
+const roleNames = new Set([
+	"accounts",
+	"admin",
+	"billing",
+	"contact",
+	"finance",
+	"hello",
+	"info",
+	"marketing",
+	"office",
+	"operations",
+	"ops",
+	"post",
+	"sales",
+	"support",
+	"team",
+]);
 
 export const normalizeEmail = (email: string) => email.trim().toLowerCase();
 export const emailHash = (email: string) =>
@@ -159,6 +178,8 @@ export function classifyProfile(
 		userId: user?.id ?? `bento:${emailHash(source.email)}`,
 		firstName,
 		capGreeting: firstName ? `Hey ${firstName},` : "Hey,",
+		capHasFirstName:
+			Boolean(firstName) && !roleNames.has(firstName.toLowerCase()),
 		lastName:
 			[source.last_name, source.lastname, user?.lastName]
 				.map((value) => value?.trim())
@@ -172,6 +193,13 @@ export function classifyProfile(
 		capCustomer: customer,
 		capPlanName: copy.plan,
 		capCustomerWelcome: copy.welcome,
+		capMultiSeatOwner:
+			directCustomer &&
+			!user?.thirdPartyStripeSubscriptionId &&
+			Number(user?.inviteQuota ?? 1) > 1 &&
+			memberships.some(
+				(member) => !member.tombstoneAt && member.ownerId === user?.id,
+			),
 		capPromotionalEligible:
 			consent === "subscribed" &&
 			!teammate &&

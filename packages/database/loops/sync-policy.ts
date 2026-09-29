@@ -26,9 +26,21 @@ export function profileFingerprint(profile: ContactProfile) {
 	const {
 		capVerifiedAt: _verified,
 		capImportedAt: _imported,
+		capMultiSeatOwner,
+		capHasFirstName,
 		...stable
 	} = profile;
-	return createHash("sha256").update(JSON.stringify(stable)).digest("hex");
+	// Case-study targeting only forces a sync for multi-seat owners, so adding
+	// it does not re-push every contact through the rate-limited queue.
+	return createHash("sha256")
+		.update(
+			JSON.stringify(
+				capMultiSeatOwner
+					? { ...stable, capMultiSeatOwner, capHasFirstName }
+					: stable,
+			),
+		)
+		.digest("hex");
 }
 
 export function contactUpdate(
