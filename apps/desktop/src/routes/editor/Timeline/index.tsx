@@ -1494,6 +1494,7 @@ export function Timeline(props: {
 						left: `${TRACK_GUTTER}px`,
 						top: `${PLAYHEAD_TOP_OFFSET}px`,
 						transform: `translateX(${playheadX()}px)`,
+						"will-change": "transform",
 					}}
 				>
 					<div class="size-3 rounded-full bg-ed-playhead ring-2 ring-ed-card -mt-1.5 -ml-[5.5px]" />
