@@ -23,6 +23,7 @@ import {
 	type WebEditorImportedVideo,
 	type WebEditorVideoImportProgress,
 } from "@/lib/editor-video-import-client";
+import { announceShareVideoUpdate } from "@/lib/share-video-updates";
 import {
 	type ClipRecorderContext,
 	parseClipRecorderContext,
@@ -438,6 +439,7 @@ export class EditorHostBridge {
 	private browserSaveReports: Promise<void> = Promise.resolve();
 	private browserSaveProgress = 0;
 	private browserSaveChunks: BrowserSaveChunks | null = null;
+	private saveStatusRevision: string | null | undefined;
 	private activeCaptions: {
 		language: AiGenerationLanguage;
 		promise: Promise<WebEditorCaptionData>;
@@ -1522,6 +1524,7 @@ export class EditorHostBridge {
 				},
 			);
 			published = true;
+			announceShareVideoUpdate(this.videoId);
 			reply({
 				kind: "result",
 				value: {
@@ -2613,10 +2616,26 @@ export class EditorHostBridge {
 					{ cache: "no-store", signal: this.controller.signal },
 				);
 				if (!response.ok) throw new Error("Save status is unavailable");
+				const value: unknown = await response.json();
+				const revision =
+					typeof value === "object" &&
+					value !== null &&
+					"revision" in value &&
+					typeof value.revision === "string"
+						? value.revision
+						: null;
+				// A farm render publishes on the server; its status is the first
+				// this tab hears of it.
+				if (
+					this.saveStatusRevision !== undefined &&
+					revision !== this.saveStatusRevision
+				)
+					announceShareVideoUpdate(this.videoId);
+				this.saveStatusRevision = revision;
 				this.port?.postMessage({
 					kind: "result",
 					id: message.id,
-					value: await response.json(),
+					value,
 				});
 			} catch (cause) {
 				this.port?.postMessage({
