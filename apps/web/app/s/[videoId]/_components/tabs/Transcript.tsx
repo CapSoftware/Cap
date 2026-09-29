@@ -625,10 +625,10 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 						<MessageSquare className="size-[18px]" />
 					</div>
 					<p className="text-[13px] font-semibold text-gray-12">
-						No audio track detected
+						No speech detected
 					</p>
 					<p className="mt-1.5 text-[11px] leading-[18px] text-gray-9">
-						This video doesn't contain audio for transcription
+						There's no spoken audio in this video to transcribe
 					</p>
 					{canEdit && (
 						<>
