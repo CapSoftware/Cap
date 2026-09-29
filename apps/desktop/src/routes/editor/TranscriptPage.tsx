@@ -750,7 +750,6 @@ function TranscriptEditor(props: {
 	);
 	const [anchorIndex, setAnchorIndex] = createSignal<number>(-1);
 	const [editingIndex, setEditingIndex] = createSignal<number>(-1);
-	// Only the words entering and leaving a state update, not every word.
 	const isActiveWord = createSelector(() => props.activeWordIndex);
 	const isEditingWord = createSelector(editingIndex);
 	let scrollContainerRef: HTMLDivElement | undefined;

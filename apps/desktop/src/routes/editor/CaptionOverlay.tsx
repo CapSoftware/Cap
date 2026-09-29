@@ -66,8 +66,6 @@ export function CaptionOverlay(props: CaptionOverlayProps) {
 
 	const captionSegments = () => project.timeline?.captionSegments ?? [];
 
-	// Checked once per edit, so playback can binary search the captions
-	// instead of scanning them every frame.
 	const captionsInOrder = createMemo(() => spansInOrder(captionSegments()));
 
 	const activeCaption = createMemo(

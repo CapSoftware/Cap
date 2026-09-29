@@ -1,6 +1,5 @@
 type Span = { start: number; end: number };
 
-/** Whether each span starts at or after the previous one ends. */
 export function spansInOrder(spans: readonly Span[]) {
 	for (let index = 1; index < spans.length; index++) {
 		const previous = spans[index - 1];
@@ -10,10 +9,6 @@ export function spansInOrder(spans: readonly Span[]) {
 	return true;
 }
 
-/**
- * Index of the first span covering `time`, or -1. Spans known to be in order
- * are binary searched; anything else is scanned.
- */
 export function spanIndexAt(
 	spans: readonly Span[],
 	time: number,
