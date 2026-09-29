@@ -22,6 +22,12 @@ const MIN_SEGMENT_PX = 2;
 type TimelineContextValue = {
 	duration: Accessor<number>;
 	secsPerPixel: Accessor<number>;
+	/// The scroll position the tracks and ruler are laid out at. While the
+	/// timeline follows playback it moves in steps, and the rest of the scroll
+	/// is a translate on their content (see `timeline-follow-shift`).
+	renderPosition: Accessor<number>;
+	/// How far past the view, in seconds, that content must reach meanwhile.
+	followExtent: Accessor<number>;
 	timelineBounds: Readonly<NullableBounds>;
 	markingResolution: Accessor<number>;
 	visibleTimeRange: Accessor<{ start: number; end: number }>;
@@ -61,6 +67,8 @@ export const [TimelineContextProvider, useTimelineContext] =
 			duration: number;
 			secsPerPixel: number;
 			timelineBounds: Readonly<NullableBounds>;
+			renderPosition: number;
+			followExtent: number;
 		}) => {
 			const { editorState: state } = useEditorContext();
 
@@ -76,14 +84,18 @@ export const [TimelineContextProvider, useTimelineContext] =
 			// crosses a step, not every frame.
 			const visibleTimeRange = createMemo(
 				() => {
-					const { position, zoom } = state.timeline.transform;
+					const { zoom } = state.timeline.transform;
+					const position = props.renderPosition;
 					const step =
 						2 **
 						Math.floor(Math.log2(Math.max(zoom / 4, SEGMENT_RENDER_PADDING)));
 					const start =
 						Math.floor((position - SEGMENT_RENDER_PADDING) / step) * step;
 					const end =
-						Math.ceil((position + zoom + SEGMENT_RENDER_PADDING) / step) * step;
+						Math.ceil(
+							(position + zoom + props.followExtent + SEGMENT_RENDER_PADDING) /
+								step,
+						) * step;
 					return { start: Math.max(0, start), end };
 				},
 				undefined,
@@ -98,6 +110,8 @@ export const [TimelineContextProvider, useTimelineContext] =
 			return {
 				duration: () => props.duration,
 				secsPerPixel: () => props.secsPerPixel,
+				renderPosition: () => props.renderPosition,
+				followExtent: () => props.followExtent,
 				timelineBounds: props.timelineBounds,
 				markingResolution,
 				visibleTimeRange,

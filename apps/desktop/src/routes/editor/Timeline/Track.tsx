@@ -40,9 +40,12 @@ export function TrackRoot(props: ComponentProps<"div">) {
 				ref={mergeRefs(setRef, props.ref)}
 				class={cx("flex flex-row relative", props.class)}
 				style={style}
+				data-track-root
 			>
-				<CompactSegmentRuns />
-				{props.children}
+				<div class="timeline-follow-shift absolute inset-0 flex flex-row">
+					<CompactSegmentRuns />
+					{props.children}
+				</div>
 			</div>
 		</TrackContextProvider>
 	);
@@ -61,11 +64,13 @@ const RUN_HIT_SLOP_PX = 2;
 function CompactSegmentRuns() {
 	const { editorState } = useEditorContext();
 	const { secsPerPixel, trackBounds, compactSegments } = useTrackContext();
+	const { renderPosition, followExtent } = useTimelineContext();
 	let canvas: HTMLCanvasElement | undefined;
 	let runs: [number, number][] = [];
 
+	const trackRoot = () => canvas?.closest<HTMLElement>("[data-track-root]");
 	const runAt = (event: MouseEvent) => {
-		const track = canvas?.parentElement;
+		const track = trackRoot();
 		if (!canvas || event.target !== track) return null;
 		const x = event.clientX - canvas.getBoundingClientRect().left;
 		return runs.some(
@@ -77,7 +82,7 @@ function CompactSegmentRuns() {
 	};
 
 	onMount(() => {
-		const track = canvas?.parentElement;
+		const track = trackRoot();
 		if (!track) return;
 		let hovering = false;
 		const onMouseDown = (event: MouseEvent) => {
@@ -89,7 +94,7 @@ function CompactSegmentRuns() {
 			const { transform } = editorState.timeline;
 			transform.updateZoom(
 				transform.zoom / RUN_ZOOM_STEP,
-				transform.position + x * secsPerPixel(),
+				renderPosition() + x * secsPerPixel(),
 			);
 		};
 		const onMouseMove = (event: MouseEvent) => {
@@ -111,7 +116,9 @@ function CompactSegmentRuns() {
 		const ctx = canvas?.getContext("2d");
 		runs = [];
 		if (!canvas || !ctx) return;
-		const width = trackBounds.width ?? 0;
+		const width =
+			(trackBounds.width ?? 0) +
+			(trackBounds.width ? followExtent() / secsPerPixel() : 0);
 		const height = trackBounds.height ?? 0;
 		if (segments.size === 0 || width <= 0 || height <= 0) {
 			ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -125,7 +132,7 @@ function CompactSegmentRuns() {
 		ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 		ctx.clearRect(0, 0, width, height);
 
-		const position = editorState.timeline.transform.position;
+		const position = renderPosition();
 		const perPixel = secsPerPixel();
 		const byColor = new Map<string | undefined, [number, number][]>();
 		for (const segment of segments) {
@@ -187,7 +194,13 @@ function CompactSegmentRuns() {
 		<canvas
 			ref={canvas}
 			aria-hidden="true"
-			class="absolute inset-0 size-full pointer-events-none rounded-lg"
+			class="absolute inset-y-0 left-0 h-full pointer-events-none rounded-lg"
+			style={{
+				width:
+					followExtent() > 0
+						? `calc(100% + ${followExtent() / secsPerPixel()}px)`
+						: "100%",
+			}}
 		/>
 	);
 }
@@ -195,11 +208,11 @@ function CompactSegmentRuns() {
 export function useSegmentTranslateX(
 	segment: () => { start: number; end: number },
 ) {
-	const { editorState: state } = useEditorContext();
 	const { secsPerPixel } = useTrackContext();
+	const { renderPosition } = useTimelineContext();
 
 	return createMemo(() => {
-		const base = state.timeline.transform.position;
+		const base = renderPosition();
 
 		const delta = segment().start;
 

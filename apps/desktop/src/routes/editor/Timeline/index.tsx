@@ -29,6 +29,7 @@ import toast from "solid-toast";
 import IconLucideAudioWaveform from "~icons/lucide/audio-waveform";
 import IconLucidePalette from "~icons/lucide/palette";
 import { stylesRevealCamera } from "../style";
+import { FOLLOW_STEPS, nextFollowAnchor } from "./follow-anchor";
 import { ImageTrack } from "./image-track";
 import {
 	playheadMotion,
@@ -376,6 +377,75 @@ export function Timeline(props: {
 	const playbackFollow = new PlaybackFollow();
 	const playbackDuration = createMemo(totalDuration);
 	let timelinePointerDown = false;
+
+	// While playback scrolls the timeline, the tracks and ruler are laid out at
+	// a position that moves an eighth of a view at a time, and the rest of the
+	// scroll is one translate on their content: a frame restyles nothing inside
+	// them. Anything that touches the timeline first puts them back at the
+	// exact position.
+	const [followAnchor, setFollowAnchor] = createSignal<number | null>(null);
+	const renderPosition = () => followAnchor() ?? transform().position;
+	const followExtent = () =>
+		followAnchor() === null ? 0 : transform().zoom / FOLLOW_STEPS;
+	let followZoom = Number.NaN;
+	let followPrevious = Number.NaN;
+	createEffect(() => {
+		const { position, zoom } = transform();
+		const playing = editorState.playing;
+		untrack(() => {
+			const scrolled =
+				!Number.isNaN(followPrevious) && position !== followPrevious;
+			followPrevious = position;
+			const zoomChanged = zoom !== followZoom;
+			followZoom = zoom;
+			setFollowAnchor(
+				nextFollowAnchor({
+					anchor: followAnchor(),
+					position,
+					zoom,
+					playing,
+					scrolled,
+					zoomChanged,
+				}),
+			);
+		});
+	});
+	// Set every frame rather than animated: a compositor animation runs
+	// smoothly between the playback updates the content otherwise steps with.
+	const setFollowShift = (root: HTMLElement, shift: number | null) => {
+		const transform = shift === null ? "" : `translateX(${-shift}px)`;
+		for (const wrapper of root.getElementsByClassName(
+			"timeline-follow-shift",
+		) as HTMLCollectionOf<HTMLElement>)
+			if (wrapper.style.transform !== transform)
+				wrapper.style.transform = transform;
+	};
+	createEffect(() => {
+		const root = timelineContainerRef();
+		if (!root) return;
+		const anchor = followAnchor();
+		setFollowShift(
+			root,
+			anchor === null ? null : (transform().position - anchor) / secsPerPixel(),
+		);
+	});
+	onCleanup(() => {
+		const root = timelineContainerRef();
+		if (root) setFollowShift(root, null);
+	});
+	const settleFollow = (event: Event) => {
+		if (
+			followAnchor() !== null &&
+			event.target instanceof Node &&
+			timelineContainerRef()?.contains(event.target)
+		)
+			setFollowAnchor(null);
+	};
+	createEventListenerMap(
+		window,
+		{ pointerdown: settleFollow, wheel: settleFollow },
+		{ capture: true, passive: true },
+	);
 
 	createEventListener(
 		window,
@@ -1493,6 +1563,8 @@ export function Timeline(props: {
 			duration={duration()}
 			secsPerPixel={secsPerPixel()}
 			timelineBounds={timelineBounds}
+			renderPosition={renderPosition()}
+			followExtent={followExtent()}
 		>
 			<div
 				ref={setTimelineContainerRef}
@@ -2281,57 +2353,62 @@ function TrackRow(props: {
 
 function TimelineMarkings() {
 	const { editorState } = useEditorContext();
-	const { secsPerPixel, markingResolution } = useTimelineContext();
+	const { secsPerPixel, markingResolution, renderPosition, followExtent } =
+		useTimelineContext();
 	const transform = () => editorState.timeline.transform;
 
 	const markingCount = () =>
-		Math.ceil(2 + (transform().zoom + 5) / markingResolution());
+		Math.ceil(
+			2 + (transform().zoom + followExtent() + 5) / markingResolution(),
+		);
 
-	const markingOffset = () => transform().position % markingResolution();
+	const markingOffset = () => renderPosition() % markingResolution();
 
 	const getMarkingTime = (index: number) =>
-		transform().position - markingOffset() + index * markingResolution();
+		renderPosition() - markingOffset() + index * markingResolution();
 
 	return (
 		<div
 			class="relative flex-1 h-full overflow-hidden"
 			style={{ "margin-left": `${TRACK_GUTTER}px` }}
 		>
-			<Index each={Array.from({ length: markingCount() })}>
-				{(_, index) => {
-					const second = () => getMarkingTime(index);
-					const isVisible = () => second() >= 0;
-					const isMajor = () => second() % 1 === 0;
-					const translateX = () =>
-						(second() - transform().position) / secsPerPixel();
+			<div class="timeline-follow-shift absolute inset-0">
+				<Index each={Array.from({ length: markingCount() })}>
+					{(_, index) => {
+						const second = () => getMarkingTime(index);
+						const isVisible = () => second() >= 0;
+						const isMajor = () => second() % 1 === 0;
+						const translateX = () =>
+							(second() - renderPosition()) / secsPerPixel();
 
-					return (
-						<div
-							class={cx(
-								"absolute left-0 bottom-0 w-px bg-ed-line-strong",
-								isMajor() ? "h-2" : "h-[5px]",
-							)}
-							style={{
-								transform: `translateX(${translateX()}px)`,
-								visibility: isVisible() ? "visible" : "hidden",
-							}}
-						>
-							<Show when={isMajor()}>
-								<div
-									class={cx(
-										"absolute bottom-2.5 left-0 text-[11px] leading-none tabular-nums whitespace-nowrap text-ed-text-3",
-										// Left-anchor the origin label so it doesn't overhang
-										// into the track icon gutter and get covered
-										second() !== 0 && "-translate-x-1/2",
-									)}
-								>
-									{formatTime(second())}
-								</div>
-							</Show>
-						</div>
-					);
-				}}
-			</Index>
+						return (
+							<div
+								class={cx(
+									"absolute left-0 bottom-0 w-px bg-ed-line-strong",
+									isMajor() ? "h-2" : "h-[5px]",
+								)}
+								style={{
+									transform: `translateX(${translateX()}px)`,
+									visibility: isVisible() ? "visible" : "hidden",
+								}}
+							>
+								<Show when={isMajor()}>
+									<div
+										class={cx(
+											"absolute bottom-2.5 left-0 text-[11px] leading-none tabular-nums whitespace-nowrap text-ed-text-3",
+											// Left-anchor the origin label so it doesn't overhang
+											// into the track icon gutter and get covered
+											second() !== 0 && "-translate-x-1/2",
+										)}
+									>
+										{formatTime(second())}
+									</div>
+								</Show>
+							</div>
+						);
+					}}
+				</Index>
+			</div>
 		</div>
 	);
 }

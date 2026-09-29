@@ -339,3 +339,17 @@ button.cap-empty-lane-action:hover:not(:disabled) {
 .cap-pose-dot[data-active="true"] {
 	background-color: var(--ed-accent);
 }
+
+/* Wraps the content of each track and the ruler. It lets pointer events
+   through to the track itself, and carries the scroll while the timeline
+   follows playback (see `followAnchor` in Timeline). In the base layer so
+   utilities such as pointer-events-none still apply to its children. */
+@layer base {
+	.timeline-follow-shift {
+		pointer-events: none;
+	}
+
+	.timeline-follow-shift > * {
+		pointer-events: auto;
+	}
+}
