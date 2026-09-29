@@ -126,6 +126,7 @@ async function mountEditorSkeleton(element: HTMLElement) {
 	if (generation !== mountGeneration || dispose || skeletonDispose) return;
 	element.style.display = "";
 	element.style.pointerEvents = "";
+	element.removeAttribute("aria-hidden");
 	skeletonDispose = render(() => {
 		const model = createPreparingEditorModel();
 		skeletonModel = model;
@@ -158,9 +159,12 @@ function disposeSkeleton() {
 }
 
 /// Keeps the loading skeleton over the mounted editor until the preview has
-/// painted, so opening shows one loader instead of two.
+/// painted, so opening shows one loader instead of two. The skeleton is hidden
+/// from assistive tech meanwhile so its disabled controls don't shadow the
+/// editor's.
 function handOffSkeletonWhenPreviewSettles(generation: number) {
 	skeletonHandoff?.();
+	skeletonRoot?.setAttribute("aria-hidden", "true");
 	let timer = 0;
 	const finish = () => {
 		window.clearTimeout(timer);
