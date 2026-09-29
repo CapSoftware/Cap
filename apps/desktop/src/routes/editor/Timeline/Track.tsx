@@ -9,6 +9,7 @@ import {
 	type JSX,
 	Match,
 	onCleanup,
+	onMount,
 	Show,
 	Switch,
 	splitProps,
@@ -49,18 +50,66 @@ export function TrackRoot(props: ComponentProps<"div">) {
 
 /// Compact segments closer than this merge into one run.
 const RUN_GAP_PX = 1;
+/// Pressing a run zooms in this far around it, enough for its segments to
+/// render and be edited.
+const RUN_ZOOM_STEP = 8;
+const RUN_HIT_SLOP_PX = 2;
 
 /// Draws the track's compact segments, merged into runs, on one canvas: a
 /// zoomed out timeline shows where thousands of short segments are without an
-/// element for each.
+/// element for each. Pressing a run zooms in on it.
 function CompactSegmentRuns() {
 	const { editorState } = useEditorContext();
 	const { secsPerPixel, trackBounds, compactSegments } = useTrackContext();
 	let canvas: HTMLCanvasElement | undefined;
+	let runs: [number, number][] = [];
+
+	const runAt = (event: MouseEvent) => {
+		const track = canvas?.parentElement;
+		if (!canvas || event.target !== track) return null;
+		const x = event.clientX - canvas.getBoundingClientRect().left;
+		return runs.some(
+			([start, end]) =>
+				x >= start - RUN_HIT_SLOP_PX && x <= end + RUN_HIT_SLOP_PX,
+		)
+			? x
+			: null;
+	};
+
+	onMount(() => {
+		const track = canvas?.parentElement;
+		if (!track) return;
+		let hovering = false;
+		const onMouseDown = (event: MouseEvent) => {
+			if (event.button !== 0) return;
+			const x = runAt(event);
+			if (x === null) return;
+			event.stopPropagation();
+			event.preventDefault();
+			const { transform } = editorState.timeline;
+			transform.updateZoom(
+				transform.zoom / RUN_ZOOM_STEP,
+				transform.position + x * secsPerPixel(),
+			);
+		};
+		const onMouseMove = (event: MouseEvent) => {
+			const over = runAt(event) !== null;
+			if (over === hovering) return;
+			hovering = over;
+			track.style.cursor = over ? "zoom-in" : "";
+		};
+		track.addEventListener("mousedown", onMouseDown, { capture: true });
+		track.addEventListener("mousemove", onMouseMove);
+		onCleanup(() => {
+			track.removeEventListener("mousedown", onMouseDown, { capture: true });
+			track.removeEventListener("mousemove", onMouseMove);
+		});
+	});
 
 	createEffect(() => {
 		const segments = compactSegments();
 		const ctx = canvas?.getContext("2d");
+		runs = [];
 		if (!canvas || !ctx) return;
 		const width = trackBounds.width ?? 0;
 		const height = trackBounds.height ?? 0;
@@ -108,6 +157,7 @@ function CompactSegmentRuns() {
 			const fill = () => {
 				const x = Math.max(runStart, 0);
 				const w = Math.max(Math.min(runEnd, width) - x, 1);
+				runs.push([x, x + w]);
 				if (w < 4) {
 					ctx.globalAlpha = 0.5;
 					ctx.fillRect(x, 2, w, height - 4);
