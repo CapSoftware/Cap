@@ -79,6 +79,7 @@ type ExportJob = {
 	task: Promise<void>;
 	startedAt: number;
 	finishedAt: number | null;
+	lastSeenAt: number;
 };
 
 const jobs = new Map<string, ExportJob>();
@@ -201,6 +202,7 @@ export async function beginEditorExport(
 		task: Promise.resolve(),
 		startedAt: Date.now(),
 		finishedAt: null,
+		lastSeenAt: Date.now(),
 	};
 	jobs.set(id, job);
 	child.stdin.end();
@@ -276,6 +278,7 @@ export async function beginEditorExport(
 export function getEditorExport(sessionId: string, id: string) {
 	const job = jobs.get(id);
 	if (!job || job.sessionId !== sessionId) return null;
+	job.lastSeenAt = Date.now();
 	return {
 		id: job.id,
 		status: job.status,
@@ -289,14 +292,21 @@ export function getEditorExport(sessionId: string, id: string) {
 	};
 }
 
-export function editorExportActivityAt(sessionId: string, now: number) {
+/// When the session's export last showed signs of a client: a running export
+/// counts only while someone polls it, so a closed browser doesn't hold the
+/// worker until the export finishes.
+export function editorExportActivity(sessionId: string) {
 	const job = [...jobs.values()].find(
 		(candidate) => candidate.sessionId === sessionId,
 	);
 	if (!job) return null;
-	return job.status === "running" || job.finishedAt === null
-		? now
-		: job.finishedAt;
+	const running = job.status === "running" || job.finishedAt === null;
+	return {
+		at: running
+			? job.lastSeenAt
+			: Math.max(job.finishedAt ?? 0, job.lastSeenAt),
+		running,
+	};
 }
 
 export function getEditorExportFile(sessionId: string, id: string) {

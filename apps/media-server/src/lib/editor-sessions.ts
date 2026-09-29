@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { stripEditorCaptionContent } from "../../../web/lib/editor-caption-access";
 import type { EditorAudioAsset } from "./editor-assets";
 import { closeEditorCapImports } from "./editor-cap-imports";
-import { closeEditorExports, editorExportActivityAt } from "./editor-exports";
+import { closeEditorExports, editorExportActivity } from "./editor-exports";
 import type { EditorImageAsset } from "./editor-image-assets";
 import {
 	downloadEditorMedia,
@@ -23,8 +23,25 @@ import { closeEditorVideoImports } from "./editor-video-imports";
 
 const IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 const SESSION_ATTACH_TIMEOUT_MS = 2 * 60 * 1000;
+// A client polls a running export every few seconds, and a background tab's
+// timers still run at least once a minute.
+const EXPORT_LEASE_MS = 3 * 60 * 1000;
+const DETACHED_TIMEOUT_MS = 2 * 60 * 1000;
 const PREPARATION_RETENTION_MS = 30 * 60 * 1000;
-const MAX_ACTIVE_SESSIONS = 1;
+const MAX_ACTIVE_SESSIONS = editorSessionLimit(
+	process.env.CAP_WEB_EDITOR_MAX_SESSIONS,
+);
+
+/// Each session runs a native renderer, so one per worker unless the
+/// deployment sizes the instance for more.
+export function editorSessionLimit(value: string | undefined) {
+	if (value === undefined || value === "") return 1;
+	const limit = Number(value);
+	if (!Number.isInteger(limit) || limit < 1 || limit > 16) {
+		throw new Error("Invalid CAP_WEB_EDITOR_MAX_SESSIONS");
+	}
+	return limit;
+}
 
 function newEditorSessionId() {
 	const workerId = process.env.CAP_WEB_EDITOR_WORKER_ID;
@@ -80,19 +97,49 @@ type Session = {
 	lastActive: number;
 	readyAt: number;
 	attached: boolean;
+	sockets: number;
+	detachedAt: number | null;
 };
 
 const sessions = new Map<string, Session>();
 const closingSessions = new Map<string, Promise<boolean>>();
 
-function editorSessionExpired(session: Session, now: number) {
-	const lastActive = Math.max(
-		session.lastActive,
-		editorExportActivityAt(session.id, now) ?? 0,
-	);
+export type EditorSessionActivity = {
+	lastActive: number;
+	readyAt: number;
+	attached: boolean;
+	sockets: number;
+	detachedAt: number | null;
+	exportRunning: boolean;
+};
+
+/// A session ends when nobody has used it for a while, when it was never
+/// picked up, when the client stopped polling its running export, or when
+/// every socket it had closed and no request followed.
+export function editorSessionIdle(session: EditorSessionActivity, now: number) {
 	return (
-		now - lastActive > IDLE_TIMEOUT_MS ||
-		(!session.attached && now - session.readyAt > SESSION_ATTACH_TIMEOUT_MS)
+		now - session.lastActive >
+			(session.exportRunning ? EXPORT_LEASE_MS : IDLE_TIMEOUT_MS) ||
+		(!session.attached && now - session.readyAt > SESSION_ATTACH_TIMEOUT_MS) ||
+		(session.sockets === 0 &&
+			session.detachedAt !== null &&
+			now - Math.max(session.lastActive, session.detachedAt) >
+				DETACHED_TIMEOUT_MS)
+	);
+}
+
+function editorSessionExpired(session: Session, now: number) {
+	const activity = editorExportActivity(session.id);
+	return editorSessionIdle(
+		{
+			lastActive: Math.max(session.lastActive, activity?.at ?? 0),
+			readyAt: session.readyAt,
+			attached: session.attached,
+			sockets: session.sockets,
+			detachedAt: session.detachedAt,
+			exportRunning: activity?.running ?? false,
+		},
+		now,
 	);
 }
 
@@ -309,6 +356,8 @@ export async function createEditorSession(
 			lastActive: readyAt,
 			readyAt,
 			attached: false,
+			sockets: 0,
+			detachedAt: null,
 		};
 		sessions.set(session.id, session);
 		return session.id;
@@ -415,6 +464,22 @@ export function attachEditorSession(id: string) {
 	if (!session) return false;
 	session.attached = true;
 	return true;
+}
+
+export function openEditorSessionSocket(id: string) {
+	if (!attachEditorSession(id)) return false;
+	const session = sessions.get(id);
+	if (!session) return false;
+	session.sockets++;
+	session.detachedAt = null;
+	return true;
+}
+
+export function closeEditorSessionSocket(id: string) {
+	const session = sessions.get(id);
+	if (!session || session.sockets === 0) return;
+	session.sockets--;
+	if (session.sockets === 0) session.detachedAt = Date.now();
 }
 
 export async function closeEditorSession(id: string) {

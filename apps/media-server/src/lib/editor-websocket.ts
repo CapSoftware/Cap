@@ -16,7 +16,11 @@ import {
 	getEditorExportEstimate,
 } from "./editor-export-estimates";
 import { renderEditorExportPreview } from "./editor-export-previews";
-import { attachEditorSession, getEditorSession } from "./editor-sessions";
+import {
+	closeEditorSessionSocket,
+	getEditorSession,
+	openEditorSessionSocket,
+} from "./editor-sessions";
 import {
 	consumeEditorSocketTicket,
 	type EditorSocketScope,
@@ -34,6 +38,7 @@ export type EditorSocketConnection = {
 	frameMode: "png" | "h264" | "png-fallback";
 	reducedBitrate: boolean;
 	bandwidthProbeUsed: boolean;
+	sessionSocketOpen: boolean;
 };
 
 const SOCKET_PATH =
@@ -94,6 +99,7 @@ export function handleEditorSocketUpgrade(
 			frameMode: h264Hint ? "h264" : "png",
 			reducedBitrate: h264Hint,
 			bandwidthProbeUsed: false,
+			sessionSocketOpen: false,
 		},
 		headers: { "Sec-WebSocket-Protocol": "cap-editor-v1" },
 	});
@@ -463,15 +469,20 @@ export const editorWebSocketHandler: Bun.WebSocketHandler<EditorSocketConnection
 			if (!parallelRead) ws.data.commandQueue = commandTask;
 		},
 		open(ws) {
-			if (!attachEditorSession(ws.data.sessionId)) {
+			if (!openEditorSessionSocket(ws.data.sessionId)) {
 				ws.close(1011, "Editor session closed");
 				return;
 			}
+			ws.data.sessionSocketOpen = true;
 			if (ws.data.scope === "commands") return;
 			if (ws.data.upstream) return;
 			connectEditorUpstream(ws, ws.data.upstreamUrl);
 		},
 		close(ws) {
+			if (ws.data.sessionSocketOpen) {
+				ws.data.sessionSocketOpen = false;
+				closeEditorSessionSocket(ws.data.sessionId);
+			}
 			ws.data.abort.abort();
 			const upstream = ws.data.upstream;
 			ws.data.upstream = null;
