@@ -417,6 +417,41 @@ export class S3 {
 	}
 
 	/**
+	 * A part copied server side from another object; `source` must be readable
+	 * with this client's credentials.
+	 */
+	async uploadPartCopy(
+		key: string,
+		uploadId: string,
+		partNumber: number,
+		source: { bucket: string; key: string },
+	) {
+		const response = await this.send("PUT", key, {
+			query: { partNumber: String(partNumber), uploadId },
+			headers: {
+				"x-amz-copy-source": `/${source.bucket}/${encodeKey(source.key)}`,
+			},
+		});
+		// A copy can fail after S3 has already answered 200.
+		const text = await response.text();
+		const etag = text.match(/<ETag>([^<]+)<\/ETag>/)?.[1];
+		if (!etag || text.includes("<Error>")) {
+			throw new Error(
+				`S3 copy of ${source.key} into part ${partNumber} failed: ${text.slice(0, 200)}`,
+			);
+		}
+		return decodeXml(etag);
+	}
+
+	/** Whether this client can copy objects from `other` server side. */
+	sharesStoreWith(other: S3) {
+		return (
+			this.config.endpoint === other.config.endpoint &&
+			this.config.region === other.config.region
+		);
+	}
+
+	/**
 	 * With `ifNoneMatch`, S3 refuses to replace an existing object: returns
 	 * false (412, or 409 while another completion races this one).
 	 */
