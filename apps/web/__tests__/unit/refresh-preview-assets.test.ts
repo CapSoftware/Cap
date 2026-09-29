@@ -214,7 +214,7 @@ describe("preview asset refresh workflow", () => {
 		expect(mocks.video?.source).toEqual({ type: "webMP4", outputKey: next });
 	});
 
-	it("retries only a busy media server", async () => {
+	it("retries a busy media server and one that predates the route", async () => {
 		mocks.fetchPreviewAssets.mockResolvedValueOnce(
 			new Response("busy", { status: 503 }),
 		);
@@ -223,7 +223,14 @@ describe("preview asset refresh workflow", () => {
 		).rejects.toBeInstanceOf(RetryableError);
 
 		mocks.fetchPreviewAssets.mockResolvedValueOnce(
-			new Response("missing", { status: 404 }),
+			new Response("Not Found", { status: 404 }),
+		);
+		await expect(
+			refreshPreviewAssetsWorkflow({ videoId: "video", outputKey }),
+		).rejects.toBeInstanceOf(RetryableError);
+
+		mocks.fetchPreviewAssets.mockResolvedValueOnce(
+			new Response("bad request", { status: 400 }),
 		);
 		await expect(
 			refreshPreviewAssetsWorkflow({ videoId: "video", outputKey }),

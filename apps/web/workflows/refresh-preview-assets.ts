@@ -77,6 +77,13 @@ async function renderPreviewAssetsStep(input: RefreshPreviewAssetsInput) {
 			retryAfter: "1 minute",
 		});
 	}
+	// The route never answers 404 itself: a media server deployed before it
+	// existed does, until the rollout reaches it.
+	if (response.status === 404) {
+		throw new RetryableError("Media server cannot make preview assets yet", {
+			retryAfter: "15 minutes",
+		});
+	}
 	// Anything else, like a GIF this video can't make, fails the same way again.
 	throw new FatalError(
 		`Preview assets failed (${response.status}): ${details.slice(0, 300)}`,
