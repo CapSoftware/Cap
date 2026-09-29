@@ -89,22 +89,18 @@ fn main() {
 
     let logs_dir = {
         #[cfg(target_os = "macos")]
-        let path = dirs::home_dir()
-            .unwrap()
-            .join("Library/Logs")
-            .join("so.cap.desktop");
+        let base_directory = dirs::home_dir();
 
         #[cfg(not(target_os = "macos"))]
-        let path = dirs::data_local_dir()
-            .unwrap()
-            .join("so.cap.desktop")
-            .join("logs");
+        let base_directory = dirs::data_local_dir();
+
+        let path = resolve_log_directory(base_directory);
 
         #[cfg(debug_assertions)]
         let path =
             match cap_desktop_lib::initialize_stop_editor_benchmark(create_benchmark_log_directory)
             {
-                Ok(directory) => directory.unwrap_or(path),
+                Ok(directory) => directory.or(path),
                 Err(error) => {
                     eprintln!("Invalid Stop benchmark invocation: {error}");
                     std::process::exit(2);
@@ -114,40 +110,46 @@ fn main() {
         path
     };
 
-    let (info_file_writer, _info_logger_guard) =
-        match create_log_appender(&logs_dir, "cap-desktop.log") {
-            Some(appender) => {
-                let (writer, guard) = tracing_appender::non_blocking(
-                    cap_utils::diagnostic_writer::DiagnosticWriter::new(
-                        appender,
-                        &logs_dir,
-                        "cap-desktop.log",
-                    ),
-                );
-                let queue_errors = writer.error_counter();
-                cap_utils::operation_diagnostics::install_queue_loss_counter(move || {
-                    queue_errors.dropped_lines()
-                });
-                let diagnostic_writer = writer.clone();
-                cap_utils::operation_diagnostics::install_sink(
-                    cap_utils::operation_diagnostics::AppInfo {
-                        flavor: "tauri",
-                        version: env!("CARGO_PKG_VERSION"),
-                        source_revision: option_env!("CAP_BUILD_REVISION"),
-                        debug_build: cfg!(debug_assertions),
-                        source_dirty: option_env!("CAP_BUILD_DIRTY").map(|value| value == "true"),
-                    },
-                    move |bytes| {
-                        use std::io::Write;
-                        let _ = diagnostic_writer.clone().write_all(bytes);
-                    },
-                );
-                (Some(writer), Some(guard))
-            }
-            None => (None, None),
-        };
+    if logs_dir.is_none() {
+        eprintln!("Log directory is unavailable; file logging and persistent crash detection are disabled; console logging remains enabled");
+    }
 
-    let errors_file_appender = create_log_appender(&logs_dir, "cap-desktop-errors.log");
+    let (info_file_writer, _info_logger_guard) = match (
+        logs_dir.as_deref(),
+        create_log_appender(logs_dir.as_deref(), "cap-desktop.log"),
+    ) {
+        (Some(logs_dir), Some(appender)) => {
+            let (writer, guard) = tracing_appender::non_blocking(
+                cap_utils::diagnostic_writer::DiagnosticWriter::new(
+                    appender,
+                    logs_dir,
+                    "cap-desktop.log",
+                ),
+            );
+            let queue_errors = writer.error_counter();
+            cap_utils::operation_diagnostics::install_queue_loss_counter(move || {
+                queue_errors.dropped_lines()
+            });
+            let diagnostic_writer = writer.clone();
+            cap_utils::operation_diagnostics::install_sink(
+                cap_utils::operation_diagnostics::AppInfo {
+                    flavor: "tauri",
+                    version: env!("CARGO_PKG_VERSION"),
+                    source_revision: option_env!("CAP_BUILD_REVISION"),
+                    debug_build: cfg!(debug_assertions),
+                    source_dirty: option_env!("CAP_BUILD_DIRTY").map(|value| value == "true"),
+                },
+                move |bytes| {
+                    use std::io::Write;
+                    let _ = diagnostic_writer.clone().write_all(bytes);
+                },
+            );
+            (Some(writer), Some(guard))
+        }
+        _ => (None, None),
+    };
+
+    let errors_file_appender = create_log_appender(logs_dir.as_deref(), "cap-desktop-errors.log");
 
     let (otel_layer, _tracer) = if cfg!(debug_assertions) {
         use opentelemetry::trace::TracerProvider;
@@ -234,12 +236,23 @@ fn main() {
         });
 }
 
+fn resolve_log_directory(base_directory: Option<std::path::PathBuf>) -> Option<std::path::PathBuf> {
+    base_directory.map(|directory| {
+        #[cfg(target_os = "macos")]
+        let directory = directory.join("Library/Logs").join("so.cap.desktop");
+        #[cfg(not(target_os = "macos"))]
+        let directory = directory.join("so.cap.desktop").join("logs");
+        directory
+    })
+}
+
 fn create_log_appender(
-    directory: &std::path::Path,
+    directory: Option<&std::path::Path>,
     prefix: &str,
 ) -> Option<tracing_appender::rolling::RollingFileAppender> {
     use std::io::Write;
 
+    let directory = directory?;
     match tracing_appender::rolling::RollingFileAppender::builder()
         .rotation(tracing_appender::rolling::Rotation::DAILY)
         .filename_prefix(prefix)
@@ -317,9 +330,9 @@ fn create_benchmark_log_directory(
     Ok(directory.to_path_buf())
 }
 
-fn install_panic_hook(logs_dir: std::path::PathBuf) {
+fn install_panic_hook(logs_dir: Option<std::path::PathBuf>) {
     let prev = std::panic::take_hook();
-    let panics_log = logs_dir.join("panics.log");
+    let panics_log = logs_dir.map(|directory| directory.join("panics.log"));
     std::panic::set_hook(Box::new(move |info| {
         let location = info
             .location()
@@ -338,7 +351,7 @@ fn install_panic_hook(logs_dir: std::path::PathBuf) {
         let pid = std::process::id();
 
         write_panic_record(
-            &panics_log,
+            panics_log.as_deref(),
             &timestamp,
             pid,
             &thread_name,
@@ -363,7 +376,7 @@ fn install_panic_hook(logs_dir: std::path::PathBuf) {
 }
 
 fn write_panic_record(
-    path: &std::path::Path,
+    path: Option<&std::path::Path>,
     timestamp: &str,
     pid: u32,
     thread_name: &str,
@@ -372,6 +385,9 @@ fn write_panic_record(
     backtrace: &std::backtrace::Backtrace,
 ) {
     use std::io::Write;
+    let Some(path) = path else {
+        return;
+    };
     let Ok(mut file) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -388,7 +404,7 @@ fn write_panic_record(
 
 #[cfg(test)]
 mod logging_tests {
-    use super::create_log_appender;
+    use super::{create_log_appender, resolve_log_directory, write_panic_record};
     use std::{io::Write, path::PathBuf};
 
     struct LogDirectory(PathBuf);
@@ -415,11 +431,58 @@ mod logging_tests {
     }
 
     #[test]
+    fn missing_base_directory_disables_file_logging_without_a_fallback() {
+        let directory = resolve_log_directory(None);
+        assert!(directory.is_none());
+        assert!(create_log_appender(directory.as_deref(), "cap-desktop.log").is_none());
+        assert!(create_log_appender(directory.as_deref(), "cap-desktop-errors.log").is_none());
+        write_panic_record(
+            None,
+            "timestamp",
+            1,
+            "test",
+            "test:1",
+            "synthetic panic",
+            &std::backtrace::Backtrace::disabled(),
+        );
+    }
+
+    #[test]
+    fn available_base_directory_preserves_the_platform_log_path() {
+        let base = LogDirectory::new();
+        #[cfg(target_os = "macos")]
+        let expected = base.0.join("Library/Logs/so.cap.desktop");
+        #[cfg(not(target_os = "macos"))]
+        let expected = base.0.join("so.cap.desktop/logs");
+        assert_eq!(resolve_log_directory(Some(base.0.clone())), Some(expected));
+        assert!(std::fs::read_dir(&base.0).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn available_panic_log_preserves_existing_records() {
+        let directory = LogDirectory::new();
+        let path = directory.0.join("panics.log");
+        std::fs::write(&path, "existing record\n").unwrap();
+        write_panic_record(
+            Some(&path),
+            "timestamp",
+            1,
+            "test",
+            "test:1",
+            "synthetic panic",
+            &std::backtrace::Backtrace::disabled(),
+        );
+        let records = std::fs::read_to_string(path).unwrap();
+        assert!(records.starts_with("existing record\n"));
+        assert!(records.contains("synthetic panic"));
+    }
+
+    #[test]
     fn healthy_log_destination_preserves_existing_records() {
         let directory = LogDirectory::new();
         let destination = directory.0.join("nested");
         for record in ["first\n", "second\n"] {
-            let mut appender = create_log_appender(&destination, "cap.log").unwrap();
+            let mut appender = create_log_appender(Some(&destination), "cap.log").unwrap();
             appender.write_all(record.as_bytes()).unwrap();
             appender.flush().unwrap();
         }
@@ -436,7 +499,7 @@ mod logging_tests {
         let directory = LogDirectory::new();
         let destination = directory.0.join("blocked");
         std::fs::write(&destination, "existing file").unwrap();
-        assert!(create_log_appender(&destination, "cap.log").is_none());
+        assert!(create_log_appender(Some(&destination), "cap.log").is_none());
         assert_eq!(
             std::fs::read_to_string(destination).unwrap(),
             "existing file"
@@ -451,8 +514,8 @@ mod logging_tests {
             let date = today + chrono::Duration::days(days);
             std::fs::create_dir(directory.0.join(format!("cap.log.{date}"))).unwrap();
         }
-        assert!(create_log_appender(&directory.0, "cap.log").is_none());
-        assert!(create_log_appender(&directory.0, "other.log").is_some());
+        assert!(create_log_appender(Some(&directory.0), "cap.log").is_none());
+        assert!(create_log_appender(Some(&directory.0), "other.log").is_some());
     }
 }
 
