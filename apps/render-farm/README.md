@@ -85,6 +85,7 @@ expires `hls/` and `jobs/` objects.
 | `RF_SLOT_MEGAPIXELS_PER_SEC` | `450` | Planning estimate of one slot's throughput |
 | `RF_HLS` / `RF_HLS_SEGMENT_SECONDS` | on / `2` | Progressive HLS output |
 | `RF_LEAD_IN_SECONDS` | `4` | Length of the lead-in chunk |
+| `RF_MIN_AUDIO_SECTION_SECONDS` | `10` | Shortest audio section; shorter sections spread a short export's audio over more lanes |
 | `RF_JOURNAL` | on | Resume unfinished jobs after a coordinator restart |
 | `RF_MAX_ACTIVE_JOBS` | `32` | Further `POST /jobs` get `429` |
 | `RF_MAX_SOURCE_FILES` / `RF_MAX_SOURCE_BYTES` | `4096` / 256 GiB | Largest recording manifest a job accepts |

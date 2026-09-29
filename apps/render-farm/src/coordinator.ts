@@ -89,6 +89,14 @@ const HLS_SEGMENT_SECONDS = Number(process.env.RF_HLS_SEGMENT_SECONDS ?? 2);
 /** Unfinished chunks per job (from the front) that outrank other work. */
 const HEAD_CHUNKS = Number(process.env.RF_HEAD_CHUNKS ?? 2);
 const LEAD_IN_SECONDS = Number(process.env.RF_LEAD_IN_SECONDS ?? 4);
+/**
+ * Shortest audio section. Each one after the first also renders a 10 s
+ * preroll, but a short export's audio is what its video chunks wait on, so
+ * spreading it over every lane finishes sooner than fewer, longer sections.
+ */
+const MIN_AUDIO_SECTION_SECONDS = Number(
+	process.env.RF_MIN_AUDIO_SECTION_SECONDS ?? 10,
+);
 const SLOT_MEGAPIXELS_PER_SEC = Number(
 	process.env.RF_SLOT_MEGAPIXELS_PER_SEC ?? 450,
 );
@@ -907,7 +915,7 @@ async function planJob(job: Job) {
 				? LOCAL_AUDIO_SLOTS + fleetAudio
 				: Math.max(8, slots);
 		const target = Math.max(
-			20 * SAMPLE_RATE,
+			MIN_AUDIO_SECTION_SECONDS * SAMPLE_RATE,
 			Math.ceil(total / Math.min(64, audioLanes)),
 		);
 		const cuts = probe.audio_cuts;
