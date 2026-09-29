@@ -250,8 +250,6 @@ pub(crate) struct SurfacePresenter {
     last_frame: Option<(wgpu::Texture, wgpu::BindGroup)>,
     pending: Option<wgpu::SurfaceTexture>,
     max_texture_dimension: u32,
-    /// Bind groups for the render session's two ping-pong textures, so a
-    /// frame reuses one instead of creating it.
     bind_groups: Vec<(wgpu::Texture, wgpu::BindGroup)>,
 }
 
