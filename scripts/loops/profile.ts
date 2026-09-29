@@ -1,4 +1,4 @@
-import { customerCopy } from "../../emails/customer-copy";
+import { customerCopy } from "../../packages/database/loops/customer-copy";
 import {
 	classifyProfile as classify,
 	type ProfileInput,
