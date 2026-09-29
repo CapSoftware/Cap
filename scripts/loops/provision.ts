@@ -471,7 +471,11 @@ try {
 				name: segmentName,
 				description:
 					"Managed by Cap lifecycle v1. Verify current consent and entitlements before scheduling.",
-				filter: audienceFilter(template.audience, template.promotional),
+				filter: audienceFilter(
+					template.audience,
+					template.promotional,
+					template.audienceConditions,
+				),
 			} as { name: string },
 			`segment:${template.key}`,
 		);

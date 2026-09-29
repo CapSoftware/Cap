@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { test } from "node:test";
 import {
 	classifyProfile,
@@ -68,6 +69,81 @@ test("greetings include a name only when a nonblank name is known", () => {
 		else fixture.source.first_name = firstName;
 		assert.equal(classifyProfile(fixture).capGreeting, "Hey,");
 	}
+});
+
+test("team greetings use a real first name and fall back to the team", () => {
+	const fixture = input();
+	assert.equal(classifyProfile(fixture).capTeamGreeting, "Hey Taylor,");
+	fixture.user = undefined;
+	for (const firstName of [undefined, "", "   ", "null"]) {
+		if (firstName === undefined) delete fixture.source.first_name;
+		else fixture.source.first_name = firstName;
+		assert.equal(classifyProfile(fixture).capTeamGreeting, "Hey team,");
+	}
+	for (const roleName of [
+		"Admin",
+		"Operations",
+		"Team",
+		"post",
+		"Owner",
+		"USER",
+		"Test",
+		"account",
+	]) {
+		fixture.source.first_name = roleName;
+		assert.equal(classifyProfile(fixture).capTeamGreeting, "Hey team,");
+	}
+});
+
+test("case-study targeting leaves other contacts' sync fingerprints unchanged", () => {
+	const profile = classifyProfile(input());
+	const {
+		capVerifiedAt: _verified,
+		capImportedAt: _imported,
+		capMultiSeatOwner: _owner,
+		capTeamGreeting: _greeting,
+		...legacy
+	} = profile;
+	assert.equal(
+		profileFingerprint(profile),
+		createHash("sha256").update(JSON.stringify(legacy)).digest("hex"),
+	);
+	assert.notEqual(
+		profileFingerprint(profile),
+		profileFingerprint({ ...profile, capMultiSeatOwner: true }),
+	);
+	assert.notEqual(
+		profileFingerprint({ ...profile, capMultiSeatOwner: true }),
+		profileFingerprint({
+			...profile,
+			capMultiSeatOwner: true,
+			capTeamGreeting: "Hey team,",
+		}),
+	);
+});
+
+test("only organisation owners paying for more than one seat are multi-seat owners", () => {
+	const value = input();
+	if (!value.user) throw new Error("Missing fixture user");
+	value.user.stripeSubscriptionStatus = "active";
+	value.user.inviteQuota = 1;
+	assert.equal(classifyProfile(value).capMultiSeatOwner, false);
+	value.user.inviteQuota = 3;
+	assert.equal(classifyProfile(value).capMultiSeatOwner, true);
+	value.memberships[0].tombstoneAt = "2026-09-01T00:00:00.000Z";
+	assert.equal(classifyProfile(value).capMultiSeatOwner, false);
+	value.memberships[0].tombstoneAt = null;
+	value.memberships[0].ownerId = "someone-else";
+	assert.equal(classifyProfile(value).capMultiSeatOwner, false);
+	value.memberships[0].ownerId = "cap-user";
+	value.user.thirdPartyStripeSubscriptionId = "sub_team";
+	assert.equal(classifyProfile(value).capMultiSeatOwner, false);
+	value.user.thirdPartyStripeSubscriptionId = null;
+	value.user.stripeSubscriptionStatus = "canceled";
+	assert.equal(classifyProfile(value).capMultiSeatOwner, false);
+	value.user.stripeSubscriptionStatus = null;
+	value.user.inviteQuota = undefined;
+	assert.equal(classifyProfile(value).capMultiSeatOwner, false);
 });
 
 test("an explicit source opt-out always wins over a positive custom flag", () => {

@@ -16,7 +16,7 @@ export async function readSources(capUrl: string, licenseUrl: string) {
 		try {
 			const users = await rows<CapUser>(
 				cap,
-				"SELECT id,email,name,lastName,stripeSubscriptionStatus,thirdPartyStripeSubscriptionId,created_at,defaultOrgId,marketingOrigin FROM users",
+				"SELECT id,email,name,lastName,stripeSubscriptionStatus,thirdPartyStripeSubscriptionId,inviteQuota,created_at,defaultOrgId,marketingOrigin FROM users",
 			);
 			const memberships = await rows<Membership>(
 				cap,
