@@ -48,6 +48,7 @@ const Analytics = (props: {
 			totalComments={totalComments}
 			totalReactions={totalReactions}
 			isOwner={props.isOwner}
+			prefetchOnHover
 		/>
 	);
 };

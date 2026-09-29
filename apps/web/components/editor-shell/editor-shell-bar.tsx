@@ -5,6 +5,7 @@ import { ArrowLeftIcon, ScissorsIcon } from "lucide-react";
 import Link from "next/link";
 import type { MouseEventHandler, ReactNode } from "react";
 import "@/app/(org)/dashboard/caps/components/web-recorder-dialog/recorder.css";
+import { HoverPrefetchLink } from "@/components/hover-prefetch-link";
 
 export type EditorTab = "editor" | "record";
 
@@ -47,13 +48,17 @@ export function EditorShellBrand({
 	title,
 	backHref,
 	onClick,
+	prefetchOnHover = false,
 }: {
 	title: ReactNode;
 	backHref: string;
 	onClick?: MouseEventHandler<HTMLAnchorElement>;
+	/** Prefetch the dashboard on hover, not as soon as the bar renders. */
+	prefetchOnHover?: boolean;
 }) {
+	const BackLink = prefetchOnHover ? HoverPrefetchLink : Link;
 	return (
-		<Link
+		<BackLink
 			href={backHref}
 			onClick={onClick}
 			className="rec-focus group flex min-w-0 items-center gap-2 rounded-md py-1 pl-1 pr-2 text-[var(--rec-text-1)]"
@@ -83,7 +88,7 @@ export function EditorShellBrand({
 				/>
 			</svg>
 			<span className="truncate text-[14px] font-medium">{title}</span>
-		</Link>
+		</BackLink>
 	);
 }
 
@@ -178,17 +183,21 @@ export function EditorShellActions({
 
 export function RecordVideoLink({
 	onNavigate,
+	prefetchOnHover = false,
 }: {
 	onNavigate?: MouseEventHandler<HTMLAnchorElement>;
+	/** Prefetch the recorder on hover, not as soon as the link renders. */
+	prefetchOnHover?: boolean;
 }) {
+	const RecordLink = prefetchOnHover ? HoverPrefetchLink : Link;
 	return (
-		<Link
+		<RecordLink
 			href="/dashboard/editor?tab=record"
 			onClick={onNavigate}
 			className="rec-btn"
 		>
 			<span className="size-2 rounded-full bg-[var(--rec-red)]" />
 			Record a video
-		</Link>
+		</RecordLink>
 	);
 }

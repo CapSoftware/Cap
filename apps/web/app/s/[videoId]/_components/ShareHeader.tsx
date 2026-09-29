@@ -961,6 +961,7 @@ export const ShareHeader = ({
 								title="Dashboard"
 								backHref={dashboardBackHref}
 								onClick={(event) => void handleEditorBarBack(event)}
+								prefetchOnHover
 							/>
 						}
 						center={
@@ -987,7 +988,7 @@ export const ShareHeader = ({
 								</EditorShellTab>
 							</>
 						}
-						right={<RecordVideoLink />}
+						right={<RecordVideoLink prefetchOnHover />}
 					/>
 				</div>
 			)}
