@@ -38,7 +38,11 @@ export const condition = (key: string, value: string | boolean): Condition =>
 		? { type: "property", key, operator: value ? "isTrue" : "isFalse" }
 		: { type: "property", key, operator: "equals", value };
 
-export const audienceFilter = (audience: string, promotional: boolean) => ({
+export const audienceFilter = (
+	audience: string,
+	promotional: boolean,
+	additionalConditions: Condition[] = [],
+) => ({
 	match: "all" as const,
 	conditions: [
 		condition("subscribed", true),
@@ -50,5 +54,6 @@ export const audienceFilter = (audience: string, promotional: boolean) => ({
 					condition("capPromotionalEligible", true),
 				]
 			: []),
+		...additionalConditions,
 	],
 });

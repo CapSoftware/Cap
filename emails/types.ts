@@ -1,3 +1,4 @@
+import type { Condition } from "./audiences";
 import type { contactFallbacks } from "./brand";
 
 export type Audience = "free" | "customer" | "teammate" | "former";
@@ -26,4 +27,5 @@ export type Campaign = EmailDefinition & {
 	name: string;
 	audience: Audience;
 	promotional: boolean;
+	audienceConditions?: Condition[];
 };

@@ -286,7 +286,11 @@ for (const template of selectedCampaigns) {
 	);
 	assert.deepEqual(
 		segment.filter,
-		audienceFilter(template.audience, template.promotional),
+		audienceFilter(
+			template.audience,
+			template.promotional,
+			template.audienceConditions,
+		),
 	);
 	await verifyEmail(campaign.emailMessageId, template);
 }
