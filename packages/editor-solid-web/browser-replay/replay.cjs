@@ -442,6 +442,7 @@ async function replay(forceWebGl, forceWebGpu = false) {
 						(error) => errors.push(error.message),
 					);
 					console.info("Cap replay stage: local renderer created");
+					if (playback.resizeForBase(1920, 1080)) await playback.seek(0);
 				} catch (error) {
 					const probe = document.createElement("canvas");
 					const mediaProbe = await new Promise((resolve) => {
@@ -1153,8 +1154,8 @@ async function replay(forceWebGl, forceWebGpu = false) {
 								if (!decoded || decoded === "fallback") {
 									throw new Error("Indexed decoded source is unavailable");
 								}
-								sourceContext.drawImage(decoded.bitmap, 0, 0, 8, 1);
-								decoded.bitmap.close();
+								sourceContext.drawImage(decoded.frame, 0, 0, 8, 1);
+								decoded.frame.close();
 							} else {
 								const screenSlot = playback.pool.slots.get("0:display:primary");
 								if (!screenSlot) {
@@ -1214,7 +1215,7 @@ async function replay(forceWebGl, forceWebGpu = false) {
 						playback.decodedPool.frame = async (...args) => {
 							const frame = await originalDecodedFrame(...args);
 							if (frame && frame !== "fallback") {
-								sourceContext.drawImage(frame.bitmap, 0, 0, 8, 1);
+								sourceContext.drawImage(frame.frame, 0, 0, 8, 1);
 								const observed = readIndex(
 									(x, y) => sourceContext.getImageData(x, y, 1, 1).data,
 									8,
@@ -1360,7 +1361,7 @@ async function replay(forceWebGl, forceWebGpu = false) {
 							try {
 								if (!colorContext)
 									throw new Error("Decoded color inspection failed");
-								colorContext.drawImage(decoded.bitmap, 0, 0);
+								colorContext.drawImage(decoded.frame, 0, 0);
 								colorSample = Array.from(
 									colorContext.getImageData(
 										decoded.width / 2,
@@ -1370,7 +1371,7 @@ async function replay(forceWebGl, forceWebGpu = false) {
 									).data,
 								);
 							} finally {
-								decoded.bitmap.close();
+								decoded.frame.close();
 							}
 						}
 					} finally {
