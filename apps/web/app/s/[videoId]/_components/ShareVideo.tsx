@@ -29,7 +29,6 @@ import {
 	PreparingVideoOverlay,
 	RecordingInProgressOverlay,
 } from "./RecordingInProgress";
-import { RenderFarmSaveView } from "./render-farm-save-view";
 import { ShareableLinkLimitOverlay } from "./ShareableLinkLimitOverlay";
 import {
 	isRecordingUpload,
@@ -59,6 +58,11 @@ const HLSVideoPlayer = dynamic(() =>
 // Both ride outside the first paint: the tracker only mounts mid-upload (its
 // RPC client drags the Effect runtime along), and the upgrade modal — which
 // carries the Rive animation runtime — mounts on the first upgrade prompt.
+// Only mounted while a Save renders; it brings hls.js and the thumbnail query
+// with it, which no other viewer needs.
+const RenderFarmSaveView = dynamic(() =>
+	import("./render-farm-save-view").then((m) => m.RenderFarmSaveView),
+);
 const UploadProgressTracker = dynamic(() => import("./UploadProgressTracker"), {
 	ssr: false,
 });

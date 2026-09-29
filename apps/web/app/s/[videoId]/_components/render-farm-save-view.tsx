@@ -1,7 +1,6 @@
 "use client";
 
 import type { Video } from "@cap/web-domain";
-import Hls from "hls.js";
 import { useRouter } from "next/navigation";
 import {
 	type ReactNode,
@@ -13,61 +12,7 @@ import {
 import { RenderFog } from "@/components/render-fog";
 import { useThumnailQuery } from "@/components/VideoThumbnail";
 import { scheduleReadyRefresh } from "./deferred-ready-refresh";
-
-type RenderSaveStatus = {
-	state: "idle" | "rendering" | "ready" | "error";
-	progress: number;
-	playable: boolean;
-	hlsUrl: string | null;
-	error: string | null;
-};
-
-const POLL_MS = 3000;
-
-/**
- * Polls a render while it's running, and with `untilStarted`, while one that
- * is about to start hasn't reported yet.
- */
-export function useRenderSaveStatus(
-	videoId: string,
-	enabled = true,
-	untilStarted = false,
-) {
-	const [status, setStatus] = useState<RenderSaveStatus | null>(null);
-	useEffect(() => {
-		if (!enabled) return;
-		let timer: ReturnType<typeof setTimeout> | undefined;
-		const controller = new AbortController();
-		const poll = async () => {
-			try {
-				const response = await fetch(
-					`/api/videos/${encodeURIComponent(videoId)}/render-status`,
-					{ cache: "no-store", signal: controller.signal },
-				);
-				if (response.ok) {
-					const next = (await response.json()) as RenderSaveStatus;
-					setStatus(next);
-					if (next.state !== "rendering" && !untilStarted) return;
-				}
-			} catch {
-				if (controller.signal.aborted) return;
-			}
-			timer = setTimeout(poll, POLL_MS);
-		};
-		void poll();
-		return () => {
-			controller.abort();
-			clearTimeout(timer);
-		};
-	}, [videoId, enabled, untilStarted]);
-	return status;
-}
-
-/** How far a render has got, worded the same on the share page and dashboard. */
-export function renderProgressLabel(progress: number) {
-	const percent = Math.floor(progress * 100);
-	return percent > 0 ? `Rendering · ${percent}%` : "Getting the video ready";
-}
+import { renderProgressLabel, useRenderSaveStatus } from "./render-save-status";
 
 function RenderPreviewPlayer({
 	src,
@@ -99,26 +44,34 @@ function RenderPreviewPlayer({
 	useEffect(() => {
 		const video = videoRef.current;
 		if (!video) return;
-		if (Hls.isSupported()) {
-			// The render's playlist grows from the start while it renders; begin
-			// there rather than at the live edge.
-			const hls = new Hls({
-				startPosition: 0,
-				manifestLoadingMaxRetry: 30,
-				levelLoadingMaxRetry: 30,
-				fragLoadingMaxRetry: 30,
-			});
-			hls.loadSource(src);
-			hls.attachMedia(video);
-			return () => hls.destroy();
-		}
-		if (video.canPlayType("application/vnd.apple.mpegurl")) {
-			video.src = src;
-			return () => {
-				video.removeAttribute("src");
-				video.load();
-			};
-		}
+		let cancelled = false;
+		let release: (() => void) | undefined;
+		void import("hls.js").then(({ default: Hls }) => {
+			if (cancelled) return;
+			if (Hls.isSupported()) {
+				// The render's playlist grows from the start while it renders; begin
+				// there rather than at the live edge.
+				const hls = new Hls({
+					startPosition: 0,
+					manifestLoadingMaxRetry: 30,
+					levelLoadingMaxRetry: 30,
+					fragLoadingMaxRetry: 30,
+				});
+				hls.loadSource(src);
+				hls.attachMedia(video);
+				release = () => hls.destroy();
+			} else if (video.canPlayType("application/vnd.apple.mpegurl")) {
+				video.src = src;
+				release = () => {
+					video.removeAttribute("src");
+					video.load();
+				};
+			}
+		});
+		return () => {
+			cancelled = true;
+			release?.();
+		};
 	}, [src, videoRef]);
 	return (
 		<video ref={videoRef} controls playsInline className={className}>

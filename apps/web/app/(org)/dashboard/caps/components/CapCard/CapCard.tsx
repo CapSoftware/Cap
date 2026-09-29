@@ -44,7 +44,7 @@ import { useUploadProgress } from "@/app/s/[videoId]/_components/ProgressCircle"
 import {
 	renderProgressLabel,
 	useRenderSaveStatus,
-} from "@/app/s/[videoId]/_components/render-farm-save-view";
+} from "@/app/s/[videoId]/_components/render-save-status";
 import { RenderFog } from "@/components/render-fog";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import {

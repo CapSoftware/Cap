@@ -3,7 +3,7 @@
 import type { Video } from "@cap/web-domain";
 import { useEffect, useRef } from "react";
 import { EditorHostBridge } from "../edit/studio/editor-host";
-import { useRenderSaveStatus } from "./render-farm-save-view";
+import { useRenderSaveStatus } from "./render-save-status";
 
 // A publish that hasn't started rendering by now isn't going to.
 const START_TIMEOUT_MS = 60_000;
