@@ -77,6 +77,7 @@ import {
 	tryAcquireDirectVideoProcessSlot,
 	type VideoProcessSlot,
 } from "../lib/video-capacity";
+import { validateVideoInput } from "../lib/video-input-validation";
 
 const video = new Hono();
 const PROCESSING_HEARTBEAT_MS = 60 * 1000;
@@ -1431,6 +1432,12 @@ async function processVideoAsync(
 		}
 
 		const isWebm = isWebmInput(options.inputExtension);
+		if (isWebm) {
+			updateJob(jobId, { message: "Checking the original recording..." });
+			await withJobHeartbeat(jobId, () =>
+				validateVideoInput(inputTempFile.path, abortController.signal),
+			);
+		}
 
 		updateJob(jobId, {
 			phase: "probing",

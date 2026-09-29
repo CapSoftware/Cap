@@ -16,6 +16,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
 import { retryVideoProcessing } from "@/actions/video/retry-processing";
+import type { ShareCallToAction } from "@/lib/share-call-to-action";
+import { CallToActionOverlay } from "./call-to-action/CallToActionOverlay";
 import { bindCaptionTrackCueText } from "./caption-tracks";
 import { scheduleReadyRefresh } from "./deferred-ready-refresh";
 import { waitForSegmentPlayback } from "./segment-playback-probe";
@@ -99,6 +101,7 @@ interface Props {
 	videoRef: React.RefObject<HTMLVideoElement | null>;
 	mediaPlayerClassName?: string;
 	disableCaptions?: boolean;
+	captionsInitiallyOff?: boolean;
 	autoplay?: boolean;
 	hasActiveUpload?: boolean;
 	isLiveSegments?: boolean;
@@ -123,6 +126,7 @@ interface Props {
 	 * timeline strip replaces the seek slider, everything else comes along.
 	 */
 	controlsPortalEl?: HTMLElement | null;
+	callToAction?: ShareCallToAction | null;
 }
 
 export function HLSVideoPlayer({
@@ -138,6 +142,7 @@ export function HLSVideoPlayer({
 	allowSegmentProbeDuringUpload = false,
 	onSourceComplete,
 	disableCaptions,
+	captionsInitiallyOff = false,
 	enhancedAudioUrl: _enhancedAudioUrl,
 	enhancedAudioStatus: _enhancedAudioStatus,
 	captionLanguage,
@@ -151,11 +156,12 @@ export function HLSVideoPlayer({
 	previewMode,
 	externalTimeline = false,
 	controlsPortalEl = null,
+	callToAction = null,
 }: Props) {
 	const hlsInstance = useRef<Hls | null>(null);
 	const [currentCue, setCurrentCue] = useState<string>("");
 	const [controlsVisible, setControlsVisible] = useState(false);
-	const [toggleCaptions, setToggleCaptions] = useState(true);
+	const [toggleCaptions, setToggleCaptions] = useState(!captionsInitiallyOff);
 	const [showPlayButton, setShowPlayButton] = useState(false);
 	const [videoLoaded, setVideoLoaded] = useState(false);
 	const [hlsInitFailed, setHlsInitFailed] = useState(false);
@@ -821,6 +827,18 @@ export function HLSVideoPlayer({
 			<MediaPlayerLoading />
 			<MediaPlayerError />
 			<MediaPlayerVolumeIndicator />
+			{callToAction &&
+				videoLoaded &&
+				!hasActiveProgress &&
+				!hasFailedOrError &&
+				!hlsInitFailed &&
+				!isBackgroundPreview && (
+					<CallToActionOverlay
+						cta={callToAction}
+						videoId={videoId}
+						controlsDocked={externalTimeline && controlsPortalEl !== null}
+					/>
+				)}
 			{(() => {
 				// Docked: the bar renders into the timeline deck's slot through a
 				// portal. Same tree, same store; only where it paints changes. The

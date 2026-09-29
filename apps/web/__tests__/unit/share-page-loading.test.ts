@@ -5,9 +5,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
 	select: vi.fn(),
 	policy: vi.fn(),
+	thumbnailUrl: vi.fn(),
 	playbackUrl: vi.fn(),
 	quota: vi.fn(),
 	user: vi.fn(),
+	authenticated: false,
+	ownerIsPro: false,
 	sharedOrganizations: [] as {
 		id: string;
 		name: string;
@@ -22,12 +25,17 @@ vi.mock("@cap/env", () => ({
 	serverEnv: () => ({}),
 }));
 vi.mock("@cap/ui", () => ({ Logo: () => null }));
-vi.mock("@cap/utils", () => ({ userIsPro: () => false }));
+vi.mock("@cap/utils", () => ({ userIsPro: () => mocks.ownerIsPro }));
 vi.mock("@cap/web-backend", () => ({
 	Database: Context.GenericTag("ShareTestDatabase"),
 	ImageUploads: Context.GenericTag("ShareTestImages"),
 	Videos: Context.GenericTag("ShareTestVideos"),
-	provideOptionalAuth: <A, E, R>(effect: Effect.Effect<A, E, R>) => effect,
+	provideOptionalAuth: <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+		mocks.authenticated
+			? Effect.provideService(Context.GenericTag("CurrentUser"), {
+					id: "owner",
+				})(effect)
+			: effect,
 	resolveEffectiveVideoRules: () => ({
 		settings: {},
 		hasInheritedPassword: false,
@@ -51,8 +59,7 @@ vi.mock("@/lib/server", () => ({
 				resolveImageUrl: (url: string) => Effect.succeed(url),
 			}),
 			Effect.provideService(Context.GenericTag("ShareTestVideos"), {
-				getThumbnailURL: () =>
-					Effect.succeed(Option.some("https://media.example.com/image.jpg")),
+				getThumbnailURL: mocks.thumbnailUrl,
 			}),
 			Effect.runPromise,
 		),
@@ -115,6 +122,9 @@ const createVideo = () => ({
 	activeUploadRawFileKey: null as string | null,
 	organizationTombstoneAt: null as Date | null,
 	metadata: null,
+	videoSettings: {
+		callToAction: { label: "Book a call", url: "https://example.com/" },
+	},
 	transcriptionStatus: "COMPLETE",
 	createdAt: new Date("2026-09-01T00:00:00.000Z"),
 	updatedAt: new Date("2026-09-01T00:00:00.000Z"),
@@ -159,19 +169,45 @@ async function renderAuthorizedContent() {
 	if (!share) throw new Error("Expected the share page");
 	return share as ReactElement<{
 		initialPlaybackUrl?: Promise<string | null>;
-		data: { sharedOrganizations: unknown[]; ownerIsOverShareLimit: boolean };
+		screenshotImageUrl?: string | null;
+		data: {
+			sharedOrganizations: unknown[];
+			ownerIsOverShareLimit: boolean;
+			callToAction: { label: string; url: string } | null;
+		};
 	}>;
 }
 
 describe("share page loading", () => {
 	beforeEach(() => {
 		mocks.policy.mockReturnValue(Effect.void);
+		mocks.thumbnailUrl.mockReturnValue(
+			Effect.succeed(Option.some("https://media.example.com/image.jpg")),
+		);
 		mocks.playbackUrl.mockResolvedValue("https://media.example.com/result.mp4");
 		mocks.quota.mockResolvedValue(false);
 		mocks.user.mockResolvedValue(null);
+		mocks.authenticated = false;
+		mocks.ownerIsPro = false;
 		mocks.sharedOrganizations = [];
 		arrangeRows([createVideo()]);
 	});
+
+	it.each([false, true])(
+		"serves a saved call to action only when the owner has Pro: %s",
+		async (ownerIsPro) => {
+			mocks.ownerIsPro = ownerIsPro;
+			const content = await renderAuthorizedContent();
+			const callToAction = content.props.data.callToAction;
+			if (ownerIsPro) {
+				expect(callToAction).toMatchObject(
+					createVideo().videoSettings.callToAction,
+				);
+			} else {
+				expect(callToAction).toBeNull();
+			}
+		},
+	);
 
 	it("reuses the organization sharing query for the header and video data", async () => {
 		mocks.sharedOrganizations = [
@@ -275,5 +311,24 @@ describe("share page loading", () => {
 		const content = await renderAuthorizedContent();
 		expect(content.props.initialPlaybackUrl).toBeUndefined();
 		expect(mocks.playbackUrl).not.toHaveBeenCalled();
+	});
+
+	it("keeps the owner's auth context when loading a private screenshot", async () => {
+		mocks.authenticated = true;
+		arrangeRows([{ ...createVideo(), public: false, isScreenshot: true }]);
+		mocks.thumbnailUrl.mockImplementation(() =>
+			Effect.flatMap(Effect.context<never>(), (context) =>
+				Option.isSome(
+					Context.getOption(context, Context.GenericTag("CurrentUser")),
+				)
+					? Effect.succeed(Option.some("https://media.example.com/image.jpg"))
+					: Effect.fail({ _tag: "PolicyDenied" }),
+			),
+		);
+
+		const content = await renderAuthorizedContent();
+		expect(content.props.screenshotImageUrl).toBe(
+			"https://media.example.com/image.jpg",
+		);
 	});
 });

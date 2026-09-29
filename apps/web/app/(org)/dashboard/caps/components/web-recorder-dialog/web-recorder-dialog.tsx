@@ -47,6 +47,7 @@ import { CameraOnlyPrompt } from "./camera-only-prompt";
 import { capturesThisTab, identifyThisTab } from "./capture-handle";
 import { CAMERA_STEPS, HowRecordingWorks } from "./how-recording-works";
 import { InProgressRecordingBar } from "./InProgressRecordingBar";
+import { MicrophoneUnavailablePrompt } from "./MicrophoneUnavailablePrompt";
 import {
 	DeviceMenu,
 	OptionsMenu,
@@ -505,9 +506,14 @@ export const WebRecorderDialog = ({
 		errorDownload,
 		cameraErrorDownload,
 		audioErrorDownloads,
+		canRetryUpload,
+		retryUpload,
+		prepareNewRecording,
 		completedShareUrl,
 		recoveredDownloads,
 		isSettingUp,
+		isMicrophoneUnavailable,
+		respondToMicrophoneFailure,
 		isRecording,
 		isPaused,
 		isBusy,
@@ -553,6 +559,11 @@ export const WebRecorderDialog = ({
 						window.open(micOnly.completedShareUrl, "_blank", "noopener");
 				},
 				restartRecording: micOnly.restart,
+				canRetryUpload: false,
+				prepareNewRecording: async () => {
+					await micOnly.reset();
+					return true;
+				},
 				recordedBytes: micOnly.recordedBytes,
 			}
 		: webRecorder;
@@ -1244,9 +1255,6 @@ export const WebRecorderDialog = ({
 							href={download.url}
 							download={download.fileName}
 							className="rec-btn !h-7 !px-2.5 !text-[12px]"
-							onClick={() =>
-								setTimeout(() => dismissRecoveredDownload(download.id), 500)
-							}
 						>
 							Download
 						</a>
@@ -2282,12 +2290,34 @@ export const WebRecorderDialog = ({
 					? statusView(
 							"error",
 							"Your recording didn't finish saving",
-							"Download the recovered files from the bar at the top of the page, or close this and try again.",
+							canRetryUpload
+								? "It's kept here, so you can retry the upload without recording again. The recovered files are also in the bar at the top of the page."
+								: "Download the recovered files from the bar at the top of the page, or start a new recording.",
 							<div className="mt-7 flex gap-2">
-								{completedShareUrl && (
+								{canRetryUpload && (
 									<button
 										type="button"
 										className="rec-btn is-accent"
+										onClick={() => {
+											void retryUpload();
+										}}
+									>
+										Retry upload
+									</button>
+								)}
+								<button
+									type="button"
+									className="rec-btn"
+									onClick={() => {
+										void prepareNewRecording();
+									}}
+								>
+									New recording
+								</button>
+								{completedShareUrl && (
+									<button
+										type="button"
+										className="rec-btn"
 										onClick={openCompletedShareUrl}
 									>
 										Open recording
@@ -2334,6 +2364,15 @@ export const WebRecorderDialog = ({
 					}}
 				/>
 			)}
+			{isMicrophoneUnavailable && (
+				<div className="absolute inset-0 z-40 flex items-center justify-center bg-black/20 p-4">
+					<div className="w-[min(22rem,100%)]">
+						<MicrophoneUnavailablePrompt
+							onRespond={respondToMicrophoneFailure}
+						/>
+					</div>
+				</div>
+			)}
 			{audioGuide && (
 				<SystemAudioGuide
 					onContinue={continueFromAudioGuide}
@@ -2357,6 +2396,11 @@ export const WebRecorderDialog = ({
 					errorDownload={errorDownload}
 					cameraErrorDownload={cameraErrorDownload}
 					audioErrorDownloads={audioErrorDownloads}
+					onRetryUpload={canRetryUpload ? retryUpload : undefined}
+					onNewRecording={async () => {
+						if (await prepareNewRecording()) setOpen(true);
+					}}
+					shareUrl={completedShareUrl}
 					onStop={handleStopClick}
 					onPause={pauseRecording}
 					onResume={resumeRecording}

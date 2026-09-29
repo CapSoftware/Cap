@@ -44,7 +44,10 @@ describe("moveRecordingSpoolToInMemoryBackup", () => {
 		];
 
 		releaseRecovery?.();
-		await transitionPromise;
+		expect(await transitionPromise).toEqual({
+			recovered: true,
+			overflowed: false,
+		});
 
 		expect(replaceLocalRecording).toHaveBeenCalledTimes(1);
 		expect(retainedChunks).toHaveLength(2);
@@ -56,7 +59,7 @@ describe("moveRecordingSpoolToInMemoryBackup", () => {
 		const replaceLocalRecording = vi.fn(() => true);
 		const strategy = { mode: "capped" as const, maxBytes: 10 };
 
-		const overflowed = await moveRecordingSpoolToInMemoryBackup({
+		const result = await moveRecordingSpoolToInMemoryBackup({
 			spool: { totalBytes: 11, recoverBlob },
 			strategy,
 			setLocalRecordingStrategy: vi.fn(),
@@ -65,7 +68,7 @@ describe("moveRecordingSpoolToInMemoryBackup", () => {
 			replaceLocalRecording,
 		});
 
-		expect(overflowed).toBe(true);
+		expect(result).toEqual({ recovered: true, overflowed: true });
 		expect(recoverBlob).not.toHaveBeenCalled();
 		expect(replaceLocalRecording).toHaveBeenCalledWith([], strategy, true);
 	});
@@ -111,8 +114,30 @@ describe("moveRecordingSpoolToInMemoryBackup", () => {
 		state = appendLocalRecordingChunk(state, new Blob(["later2"]), strategy);
 		expect(state.overflowed).toBe(true);
 		releaseRecovery?.();
-		expect(await transition).toBe(true);
+		expect(await transition).toEqual({ recovered: true, overflowed: true });
 		expect(replaceLocalRecording).toHaveBeenCalledWith([], strategy, true);
 		expect(finalizeLocalRecording(state)).toBeNull();
+	});
+
+	it("reports a backup it cannot read back so the caller keeps it", async () => {
+		const strategy = { mode: "capped" as const, maxBytes: 10 };
+		const replaceLocalRecording = vi.fn(() => true);
+
+		const result = await moveRecordingSpoolToInMemoryBackup({
+			spool: {
+				totalBytes: 5,
+				recoverBlob: async () => {
+					throw new Error("storage unavailable");
+				},
+			},
+			strategy,
+			setLocalRecordingStrategy: vi.fn(),
+			getRetainedChunks: () => [new Blob(["tail"])],
+			getLocalRecordingOverflowed: () => false,
+			replaceLocalRecording,
+		});
+
+		expect(result).toEqual({ recovered: false, overflowed: true });
+		expect(replaceLocalRecording).toHaveBeenCalledWith([], strategy, true);
 	});
 });

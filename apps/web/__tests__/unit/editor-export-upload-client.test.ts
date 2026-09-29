@@ -6,6 +6,28 @@ import {
 } from "../../lib/editor-export-upload-client";
 
 const CHUNK_BYTES = 16 * 1024 * 1024;
+// Storage parts are uniform (R2 requires it), whatever size the chunks come in.
+const PART_BYTES = 5 * 1024 * 1024;
+
+function expectedParts(total: number) {
+	const sizes: number[] = Array(Math.floor(total / PART_BYTES)).fill(
+		PART_BYTES,
+	);
+	if (total % PART_BYTES) sizes.push(total % PART_BYTES);
+	return sizes.map((size, index) => ({
+		partNumber: index + 1,
+		etag: `etag-${index + 1}`,
+		size,
+	}));
+}
+
+function uploadedBytes() {
+	return new Blob(
+		[...MockXMLHttpRequest.parts.entries()]
+			.sort(([left], [right]) => left - right)
+			.map(([, part]) => part),
+	);
+}
 const metadata = { duration: 95, width: 1920, height: 1080, fps: 30 };
 
 class MockXMLHttpRequest {
@@ -150,15 +172,9 @@ test("a two-chunk MP4 reaches multipart publication with identical bytes and sou
 		width: metadata.width,
 		height: metadata.height,
 		fps: metadata.fps,
-		parts: [
-			{ partNumber: 1, etag: "etag-1", size: CHUNK_BYTES },
-			{ partNumber: 2, etag: "etag-2", size: size - CHUNK_BYTES },
-		],
+		parts: expectedParts(size),
 	});
-	const uploaded = new Blob([
-		MockXMLHttpRequest.parts.get(1) ?? new Blob(),
-		MockXMLHttpRequest.parts.get(2) ?? new Blob(),
-	]);
+	const uploaded = uploadedBytes();
 	expect(uploaded.size).toBe(size);
 	const digest = (bytes: ArrayBuffer) =>
 		createHash("sha256").update(Buffer.from(bytes)).digest("hex");
@@ -312,10 +328,7 @@ test("a video rendered in the browser is published from its own bytes", async ()
 		new AbortController().signal,
 	);
 	expect(requests.some((url) => url.includes("/chunk?"))).toBe(false);
-	const uploaded = new Blob([
-		MockXMLHttpRequest.parts.get(1) ?? new Blob(),
-		MockXMLHttpRequest.parts.get(2) ?? new Blob(),
-	]);
+	const uploaded = uploadedBytes();
 	const digest = (bytes: ArrayBuffer) =>
 		createHash("sha256").update(Buffer.from(bytes)).digest("hex");
 	expect(uploaded.size).toBe(size);

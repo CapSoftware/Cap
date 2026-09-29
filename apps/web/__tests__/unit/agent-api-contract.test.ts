@@ -16,6 +16,26 @@ const status = {
 };
 
 describe("agent API contract", () => {
+	it("accepts omitted and null Loom import options from installed clients", () => {
+		const loomUrl = "https://www.loom.com/share/synthetic";
+		const decode = Schema.decodeUnknownSync(Agent.AgentLoomImportInput);
+
+		expect(decode({ loomUrl })).toEqual({ loomUrl });
+		expect(decode({ loomUrl, ownerEmail: null, spaceName: null })).toEqual({
+			loomUrl,
+			ownerEmail: null,
+			spaceName: null,
+		});
+		expect(
+			decode({
+				loomUrl,
+				ownerEmail: "owner@example.com",
+				spaceName: "Team",
+			}),
+		).toEqual({ loomUrl, ownerEmail: "owner@example.com", spaceName: "Team" });
+		expect(() => decode({ loomUrl, ownerEmail: 42 })).toThrow();
+	});
+
 	it("verifies credentials online and rate limits authorization boundaries", () => {
 		const contract = readFileSync(
 			join(process.cwd(), "../../packages/web-domain/src/Agent.ts"),

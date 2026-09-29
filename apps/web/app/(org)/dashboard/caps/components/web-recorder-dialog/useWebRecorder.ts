@@ -1,6 +1,9 @@
 "use client";
 
-import { AudioRecordingSidecar } from "@cap/recorder-core";
+import {
+	AudioRecordingSidecar,
+	uploadRecoveredAudioSidecar,
+} from "@cap/recorder-core";
 import {
 	acquireCameraStream,
 	acquireDisplayStream,
@@ -44,33 +47,23 @@ import {
 } from "@cap/recorder-core/recording-spool";
 import { moveRecordingSpoolToInMemoryBackup } from "@cap/recorder-core/recording-spool-fallback";
 import { Organisation } from "@cap/web-domain";
-import { useQueryClient } from "@tanstack/react-query";
 import { Cause, Exit, Option } from "effect";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { triggerInstantRecordingProcessing } from "@/actions/video/trigger-instant-recording-processing";
-import { createVideoAndGetUploadUrl } from "@/actions/video/upload";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
-import { ThumbnailRequest } from "@/lib/Requests/ThumbnailRequest";
-import { uploadWithTarget } from "@/utils/upload-target";
 import { useUploadingContext } from "../../UploadingContext";
 import { sendProgressUpdate } from "../sendProgressUpdate";
-import {
-	canConvertToMp4InBrowser,
-	captureThumbnail,
-	convertToMp4,
-} from "./recording-conversion";
 import type { RecordingMode } from "./recording-mode";
 import {
 	DEFAULT_RECORDING_QUALITY,
 	qualityBitrateScale,
 	type RecordingQuality,
 } from "./recording-quality";
-import { uploadRecording } from "./recording-upload";
 import {
 	loadRecoveredRecordingSpools,
 	removeRecoveredRecordingSpoolFromCache,
+	resetRecoveredRecordingSpoolsCache,
 } from "./recovered-recording-cache";
 import { useMediaRecorderSetup } from "./useMediaRecorderSetup";
 import { useRecordingTimer } from "./useRecordingTimer";
@@ -178,6 +171,27 @@ const triggerBrowserDownload = (url: string, fileName: string) => {
 
 const recoveredToastId = (id: string) => `recovered-${id}`;
 
+/**
+ * A take the browser has finished, kept until it uploads so a failed upload
+ * can be retried without recording again.
+ */
+type StoppedRecording = {
+	blob: Blob | null;
+	totalBytes: number;
+	durationSeconds: number;
+	captureFailed: boolean;
+	completionUncertain: boolean;
+	pairedCameraCapture: boolean;
+	cameraRecordedBytes: number;
+	cameraSettings: MediaTrackSettings | undefined;
+	audioSidecars: AudioRecordingSidecar[];
+	// Set once a failed attempt aborted the sidecars' live uploads, so a
+	// retry sends their backups instead.
+	audioLiveUploadsAborted: boolean;
+	uploadedAudio: Set<AudioRecordingSidecar>;
+	cameraUploaded: boolean;
+};
+
 class RecordingStartCancelledError extends Error {
 	constructor() {
 		super("Recording start was cancelled");
@@ -214,11 +228,17 @@ export const useWebRecorder = ({
 	const beforeRecordingStartsRef = useRef(beforeRecordingStarts);
 	beforeRecordingStartsRef.current = beforeRecordingStarts;
 	const [phase, setPhase] = useState<RecorderPhase>("idle");
+	const phaseRef = useRef<RecorderPhase>("idle");
 	const [videoId, setVideoId] = useState<VideoId | null>(null);
 	const [hasAudioTrack, setHasAudioTrack] = useState(false);
 	const [isSettingUp, setIsSettingUp] = useState(false);
+	const [isMicrophoneUnavailable, setIsMicrophoneUnavailable] = useState(false);
+	const microphoneDecisionRef = useRef<((proceed: boolean) => void) | null>(
+		null,
+	);
 	const [isRestarting, setIsRestarting] = useState(false);
 	const [chunkUploads, setChunkUploads] = useState<ChunkUploadState[]>([]);
+	const [canRetryUpload, setCanRetryUpload] = useState(false);
 	const [recordedBytes, setRecordedBytes] = useState(0);
 	const [errorDownload, setErrorDownload] =
 		useState<RecordingFailureDownload | null>(null);
@@ -264,6 +284,8 @@ export const useWebRecorder = ({
 
 	const {
 		mediaRecorderRef,
+		recorderError,
+		getRecoveryBlob,
 		recordedChunksRef,
 		totalRecordedBytesRef,
 		localRecordingOverflowedRef,
@@ -317,6 +339,7 @@ export const useWebRecorder = ({
 		fps?: number;
 	}>({});
 	const stopRecordingRef = useRef<(() => Promise<void>) | null>(null);
+	const startInFlightRef = useRef(false);
 	const startRecordingRef = useRef<(() => Promise<void>) | null>(null);
 	const restartDisplayStreamRef = useRef<MediaStream | null>(null);
 	const instantUploaderRef = useRef<InstantRecordingUploader | null>(null);
@@ -334,6 +357,7 @@ export const useWebRecorder = ({
 	const cameraSettingsRef = useRef<MediaTrackSettings | undefined>(undefined);
 	const cameraUploadApiRef = useRef<RecorderApiOptions | null>(null);
 	const cameraUploadSubpathRef = useRef<string | null>(null);
+	const cameraMimeTypeRef = useRef<string | null>(null);
 	const cameraOffsetMsRef = useRef(0);
 	const recordingPipelineRef = useRef<RecordingPipeline | null>(null);
 	const videoCreationRef = useRef<{
@@ -352,6 +376,11 @@ export const useWebRecorder = ({
 	const cameraErrorDownloadUrlRef = useRef<string | null>(null);
 	const audioErrorDownloadUrlsRef = useRef<string[]>([]);
 	const stopInFlightRef = useRef(false);
+	const stoppedRecordingRef = useRef<StoppedRecording | null>(null);
+	const uploadCancellationRef = useRef<Promise<unknown> | null>(null);
+	const automaticUploadRetriesRef = useRef(0);
+	const spoolFallbackRef = useRef<Promise<unknown> | null>(null);
+	const setupGenerationRef = useRef(0);
 	const recordingSpoolRef = useRef<RecordingSpool | null>(null);
 	const degradedRecordingSpoolRef = useRef<RecordingSpool | null>(null);
 	const recordingSpoolDegradingRef = useRef(false);
@@ -359,6 +388,8 @@ export const useWebRecorder = ({
 	const recordingSpoolHeartbeatRef = useRef<number | null>(null);
 	const cameraSpoolHeartbeatRef = useRef<number | null>(null);
 	const recoveredDownloadUrlsRef = useRef(new Map<string, string>());
+	const memoryRecoveredRecordingsRef = useRef(new Set<string>());
+	const dismissedRecoveredIdsRef = useRef(new Set<string>());
 
 	const isStreamingPipelineActive = useCallback(
 		() => recordingPipelineRef.current?.mode === "streaming",
@@ -497,6 +528,8 @@ export const useWebRecorder = ({
 
 	const dismissRecoveredDownload = useCallback((id: string) => {
 		toast.dismiss(recoveredToastId(id));
+		memoryRecoveredRecordingsRef.current.delete(id);
+		dismissedRecoveredIdsRef.current.add(id);
 		const url = recoveredDownloadUrlsRef.current.get(id);
 		if (url) {
 			URL.revokeObjectURL(url);
@@ -539,65 +572,81 @@ export const useWebRecorder = ({
 
 		let cancelled = false;
 
-		void loadRecoveredRecordingSpools()
-			.then((recovered) => {
-				if (
-					cancelled ||
-					recovered.length === 0 ||
-					typeof window === "undefined"
-				) {
-					return;
-				}
+		const refreshRecoveredRecordings = () =>
+			void loadRecoveredRecordingSpools()
+				.then((recovered) => {
+					if (
+						cancelled ||
+						recovered.length === 0 ||
+						typeof window === "undefined"
+					) {
+						return;
+					}
 
-				const nextDownloads = recovered.map((item) => {
-					const url = URL.createObjectURL(item.blob);
-					recoveredDownloadUrlsRef.current.set(item.sessionId, url);
-					return {
-						id: item.sessionId,
-						url,
-						fileName: createRecordingDownloadName(
-							item.createdAt,
-							item.blob.type || item.mimeType,
-							item.sessionId.endsWith("-camera")
-								? "camera"
-								: item.sessionId.endsWith("-display")
-									? "screen"
-									: item.sessionId.endsWith("-microphone")
-										? "microphone"
-										: undefined,
+					const previousIds = new Set(recoveredDownloadUrlsRef.current.keys());
+					const nextDownloads = recovered
+						.filter(
+							(item) => !dismissedRecoveredIdsRef.current.has(item.sessionId),
+						)
+						.map((item) => {
+							const url =
+								recoveredDownloadUrlsRef.current.get(item.sessionId) ??
+								URL.createObjectURL(item.blob);
+							recoveredDownloadUrlsRef.current.set(item.sessionId, url);
+							return {
+								id: item.sessionId,
+								url,
+								fileName: createRecordingDownloadName(
+									item.createdAt,
+									item.blob.type || item.mimeType,
+									item.sessionId.endsWith("-camera")
+										? "camera"
+										: item.sessionId.endsWith("-display")
+											? "screen"
+											: item.sessionId.endsWith("-microphone")
+												? "microphone"
+												: undefined,
+								),
+								createdAt: item.createdAt,
+							} satisfies RecoveredRecordingDownload;
+						});
+
+					setRecoveredDownloads((current) => [
+						...current.filter(
+							(download) =>
+								!nextDownloads.some((next) => next.id === download.id),
 						),
-						createdAt: item.createdAt,
-					} satisfies RecoveredRecordingDownload;
+						...nextDownloads,
+					]);
+					for (const download of nextDownloads) {
+						if (previousIds.has(download.id)) continue;
+						toast.info("Recovered an unfinished recording", {
+							id: recoveredToastId(download.id),
+							duration: Infinity,
+							description: new Date(download.createdAt).toLocaleString(),
+							action: {
+								label: "Download",
+								onClick: () => {
+									triggerBrowserDownload(download.url, download.fileName);
+								},
+							},
+							cancel: {
+								label: "Dismiss",
+								onClick: () => {
+									dismissRecoveredDownload(download.id);
+								},
+							},
+						});
+					}
+				})
+				.catch((error) => {
+					console.error("Failed to recover orphaned recording spools", error);
 				});
-
-				setRecoveredDownloads(nextDownloads);
-				for (const download of nextDownloads) {
-					toast.info("Recovered an unfinished recording", {
-						id: recoveredToastId(download.id),
-						duration: Infinity,
-						description: new Date(download.createdAt).toLocaleString(),
-						action: {
-							label: "Download",
-							onClick: () => {
-								triggerBrowserDownload(download.url, download.fileName);
-								setTimeout(() => dismissRecoveredDownload(download.id), 500);
-							},
-						},
-						cancel: {
-							label: "Dismiss",
-							onClick: () => {
-								dismissRecoveredDownload(download.id);
-							},
-						},
-					});
-				}
-			})
-			.catch((error) => {
-				console.error("Failed to recover orphaned recording spools", error);
-			});
-
+		refreshRecoveredRecordings();
+		const interval = window.setInterval(refreshRecoveredRecordings, 60_000);
 		return () => {
 			cancelled = true;
+			window.clearInterval(interval);
 		};
 	}, [dismissRecoveredDownload]);
 
@@ -673,13 +722,6 @@ export const useWebRecorder = ({
 		}
 		await dispose();
 	}, [stopCameraSpoolHeartbeat]);
-
-	const retainFailedRecordingSpools = useCallback(() => {
-		recordingSpoolRef.current = null;
-		cameraSpoolRef.current = null;
-		stopRecordingSpoolHeartbeat();
-		stopCameraSpoolHeartbeat();
-	}, [stopCameraSpoolHeartbeat, stopRecordingSpoolHeartbeat]);
 
 	const createRecordingSpool = useCallback(
 		async (mimeType: string, role: "display" | "camera") => {
@@ -801,7 +843,7 @@ export const useWebRecorder = ({
 				recordingSpoolRef.current = null;
 				degradedRecordingSpoolRef.current = spool;
 				stopRecordingSpoolHeartbeat();
-				const backupOverflowed = await moveRecordingSpoolToInMemoryBackup({
+				const fallback = moveRecordingSpoolToInMemoryBackup({
 					spool,
 					strategy: {
 						mode: "capped",
@@ -813,7 +855,30 @@ export const useWebRecorder = ({
 						localRecordingOverflowedRef.current,
 					replaceLocalRecording,
 				});
+				spoolFallbackRef.current = fallback;
+				const { recovered, overflowed: backupOverflowed } = await fallback;
+				spoolFallbackRef.current = null;
 				recordingSpoolDegradingRef.current = false;
+				// The spool still holds the only copy of the recording's start,
+				// so it stays on disk for recovery instead of being disposed.
+				if (!recovered) {
+					toast.error(
+						"Local storage became unavailable. Stopping to protect the available recording.",
+					);
+					void stopRecordingRef.current?.();
+					return;
+				}
+
+				// The memory backup couldn't take what the spool held, so the spool
+				// stays for recovery until the upload succeeds.
+				if (backupOverflowed) {
+					recordingSpoolWarningShownRef.current = true;
+					toast.warning(
+						"Recording memory backup reached its limit. Finishing now.",
+					);
+					void stopRecordingRef.current?.();
+					return;
+				}
 
 				try {
 					await spool.dispose();
@@ -827,14 +892,6 @@ export const useWebRecorder = ({
 					);
 				}
 
-				if (backupOverflowed) {
-					recordingSpoolWarningShownRef.current = true;
-					toast.warning(
-						"Recording memory backup reached its limit. Finishing now.",
-					);
-					void stopRecordingRef.current?.();
-				}
-
 				if (recordingSpoolWarningShownRef.current) {
 					return;
 				}
@@ -843,6 +900,9 @@ export const useWebRecorder = ({
 				toast.warning(
 					"Local recovery switched to a bounded memory backup. Recording will finish if it fills.",
 				);
+				if (!instantUploaderRef.current && isStreamingPipelineActive()) {
+					void stopRecordingRef.current?.();
+				}
 			});
 		},
 		[
@@ -851,26 +911,33 @@ export const useWebRecorder = ({
 			replaceLocalRecording,
 			setLocalRecordingStrategy,
 			stopRecordingSpoolHeartbeat,
+			isStreamingPipelineActive,
 		],
 	);
 
-	const resolveFailureBlob = useCallback(async (blob: Blob | null) => {
-		if (blob) {
-			return blob;
-		}
+	const resolveFailureBlob = useCallback(
+		async (blob: Blob | null) => {
+			if (blob) {
+				return blob;
+			}
 
-		const spool = recordingSpoolRef.current;
-		if (!spool) {
-			return null;
-		}
+			const spool = recordingSpoolRef.current;
+			if (!spool) {
+				return getRecoveryBlob();
+			}
 
-		try {
-			return await spool.recoverBlob();
-		} catch (error) {
-			console.error("Failed to reconstruct recording from local spool", error);
-			return null;
-		}
-	}, []);
+			try {
+				return await spool.recoverBlob();
+			} catch (error) {
+				console.error(
+					"Failed to reconstruct recording from local spool",
+					error,
+				);
+				return getRecoveryBlob();
+			}
+		},
+		[getRecoveryBlob],
+	);
 
 	const resolveCameraFailureBlob = useCallback(async () => {
 		const spool = cameraSpoolRef.current;
@@ -918,7 +985,6 @@ export const useWebRecorder = ({
 		if (!openShareUrlInNewTab(shareUrl)) return;
 		shareUrlOpenedRef.current = true;
 	}, []);
-	const queryClient = useQueryClient();
 	const deleteVideo = useEffectMutation({
 		mutationFn: (id: VideoId) => rpc.VideoDelete(id),
 	});
@@ -990,111 +1056,221 @@ export const useWebRecorder = ({
 
 	const updatePhase = useCallback(
 		(newPhase: RecorderPhase) => {
+			phaseRef.current = newPhase;
 			setPhase(newPhase);
 			onPhaseChange?.(newPhase);
 		},
 		[onPhaseChange],
 	);
 
-	const cleanupRecordingState = useCallback(async () => {
-		const audioSidecars = audioSidecarsRef.current;
-		audioSidecarsRef.current = [];
-		await Promise.all(
-			audioSidecars.map((sidecar) =>
-				sidecar.cancel().catch((error) => {
-					console.error("Failed to cancel audio sidecar", error);
-				}),
-			),
-		);
+	const stopRecordingInternalWrapper = useCallback(async () => {
+		let blob: Blob | null;
 		try {
-			await stopCameraRecorder();
-		} catch {
-			cameraMediaRecorderRef.current = null;
+			blob = await stopRecordingInternal(cleanupStreams, clearTimer);
+		} finally {
+			await spoolFallbackRef.current;
+			await recordingSpoolRef.current?.flush();
 		}
-		cleanupStreams();
-		clearTimer();
-		resetRecorder();
-		resetTimer();
-		stopInstantChunkInterval();
-		clearInstantChunkGuard();
-		instantChunkModeRef.current = null;
-		lastInstantChunkAtRef.current = null;
-		recordingPipelineRef.current = null;
-		await disposeRecordingSpool();
-		await disposeCameraSpool();
-		const instantUploader = instantUploaderRef.current;
-		instantUploaderRef.current = null;
-		if (instantUploader) {
-			try {
-				await instantUploader.cancel();
-			} catch (error) {
-				console.error(
-					"Failed to cancel multipart upload during cleanup",
-					error,
-				);
-			}
-		}
-		const cameraUploader = cameraUploaderRef.current;
-		cameraUploaderRef.current = null;
-		if (cameraUploader) {
-			try {
-				await cameraUploader.cancel();
-			} catch (error) {
-				console.error("Failed to cancel camera upload during cleanup", error);
-			}
-		}
-		cameraUploadApiRef.current = null;
-		cameraUploadSubpathRef.current = null;
-		audioSidecarsRef.current = [];
-		cameraRecorderBytesRef.current = 0;
-		cameraRecorderFailedRef.current = false;
-		cameraSettingsRef.current = undefined;
-		cameraOffsetMsRef.current = 0;
-		recordingPairIdRef.current = null;
-		setUploadStatus(undefined);
-		setChunkUploads([]);
-		setRecordedBytes(0);
-		setHasAudioTrack(false);
-		replaceErrorDownload(null);
-		replaceCameraErrorDownload(null);
-		replaceAudioErrorDownloads([]);
-		setCompletedShareUrl(null);
-		shareUrlOpenedRef.current = false;
+		return getRecoveryBlob() ?? blob;
+	}, [stopRecordingInternal, cleanupStreams, clearTimer, getRecoveryBlob]);
 
-		const pendingInstantVideoId = pendingInstantVideoIdRef.current;
-		pendingInstantVideoIdRef.current = null;
-		videoCreationRef.current = null;
-		setVideoId(null);
-		if (pendingInstantVideoId) {
-			await deletePendingVideoSafely(pendingInstantVideoId);
-		}
-	}, [
-		cleanupStreams,
-		stopCameraRecorder,
-		clearTimer,
-		resetRecorder,
-		resetTimer,
-		stopInstantChunkInterval,
-		clearInstantChunkGuard,
-		disposeRecordingSpool,
-		disposeCameraSpool,
-		deletePendingVideoSafely,
-		setUploadStatus,
-		replaceErrorDownload,
-		replaceCameraErrorDownload,
-		replaceAudioErrorDownloads,
-	]);
+	const respondToMicrophoneFailure = useCallback((proceed: boolean) => {
+		microphoneDecisionRef.current?.(proceed);
+	}, []);
+
+	// `preserveRecording` keeps what a take already captured: local backups
+	// stay on disk for recovery and remote uploads are suspended rather than
+	// aborted.
+	const cleanupRecordingState = useCallback(
+		async (preserveRecording = false) => {
+			setupGenerationRef.current += 1;
+			respondToMicrophoneFailure(false);
+			if (preserveRecording) {
+				await stopRecordingInternalWrapper().catch(() => {});
+			}
+			const audioSidecars = [
+				...new Set([
+					...audioSidecarsRef.current,
+					...(stoppedRecordingRef.current?.audioSidecars ?? []),
+				]),
+			];
+			audioSidecarsRef.current = [];
+			await Promise.all(
+				audioSidecars.map((sidecar) =>
+					(preserveRecording ? sidecar.stop() : sidecar.cancel()).catch(
+						(error) => {
+							console.error("Failed to stop audio sidecar", error);
+						},
+					),
+				),
+			);
+			try {
+				await stopCameraRecorder();
+			} catch {
+				cameraMediaRecorderRef.current = null;
+			}
+			cleanupStreams();
+			clearTimer();
+			resetRecorder();
+			resetTimer();
+			stopInstantChunkInterval();
+			clearInstantChunkGuard();
+			instantChunkModeRef.current = null;
+			lastInstantChunkAtRef.current = null;
+			recordingPipelineRef.current = null;
+			if (preserveRecording) {
+				const spool = recordingSpoolRef.current;
+				recordingSpoolRef.current = null;
+				stopRecordingSpoolHeartbeat();
+				await spool?.flush().catch(() => {});
+				const cameraSpool = cameraSpoolRef.current;
+				cameraSpoolRef.current = null;
+				stopCameraSpoolHeartbeat();
+				await cameraSpool?.flush().catch(() => {});
+				resetRecoveredRecordingSpoolsCache();
+			} else {
+				await disposeRecordingSpool();
+				await disposeCameraSpool();
+			}
+			stoppedRecordingRef.current = null;
+			automaticUploadRetriesRef.current = 0;
+			setCanRetryUpload(false);
+			const instantUploader = instantUploaderRef.current;
+			instantUploaderRef.current = null;
+			if (instantUploader) {
+				try {
+					if (preserveRecording) instantUploader.suspend();
+					else await instantUploader.cancel();
+				} catch (error) {
+					console.error(
+						"Failed to cancel multipart upload during cleanup",
+						error,
+					);
+				}
+			}
+			const cameraUploader = cameraUploaderRef.current;
+			cameraUploaderRef.current = null;
+			if (cameraUploader) {
+				try {
+					if (preserveRecording) cameraUploader.suspend();
+					else await cameraUploader.cancel();
+				} catch (error) {
+					console.error("Failed to cancel camera upload during cleanup", error);
+				}
+			}
+			cameraUploadApiRef.current = null;
+			cameraUploadSubpathRef.current = null;
+			cameraMimeTypeRef.current = null;
+			cameraRecorderBytesRef.current = 0;
+			cameraRecorderFailedRef.current = false;
+			cameraSettingsRef.current = undefined;
+			cameraOffsetMsRef.current = 0;
+			recordingPairIdRef.current = null;
+			setUploadStatus(undefined);
+			setChunkUploads([]);
+			setRecordedBytes(0);
+			setHasAudioTrack(false);
+			replaceErrorDownload(null);
+			replaceCameraErrorDownload(null);
+			replaceAudioErrorDownloads([]);
+			setCompletedShareUrl(null);
+			shareUrlOpenedRef.current = false;
+
+			const pendingInstantVideoId = pendingInstantVideoIdRef.current;
+			pendingInstantVideoIdRef.current = null;
+			videoCreationRef.current = null;
+			setVideoId(null);
+			if (pendingInstantVideoId && !preserveRecording) {
+				await deletePendingVideoSafely(pendingInstantVideoId);
+			}
+		},
+		[
+			cleanupStreams,
+			stopCameraRecorder,
+			clearTimer,
+			resetRecorder,
+			resetTimer,
+			stopInstantChunkInterval,
+			clearInstantChunkGuard,
+			disposeRecordingSpool,
+			disposeCameraSpool,
+			deletePendingVideoSafely,
+			setUploadStatus,
+			replaceErrorDownload,
+			replaceCameraErrorDownload,
+			replaceAudioErrorDownloads,
+			stopRecordingSpoolHeartbeat,
+			stopCameraSpoolHeartbeat,
+			stopRecordingInternalWrapper,
+			respondToMicrophoneFailure,
+		],
+	);
 
 	const resetState = useCallback(async () => {
+		// A stopped take waiting to upload survives closing the recorder; it
+		// is only let go by uploading it or starting a new recording.
+		if (stoppedRecordingRef.current !== null) return;
 		await cleanupRecordingState();
 		updatePhase("idle");
 	}, [cleanupRecordingState, updatePhase]);
 
-	const resetStateRef = useRef(resetState);
+	const prepareNewRecording = useCallback(async () => {
+		if (phaseRef.current !== "error" || stopInFlightRef.current) return false;
+		const recording = stoppedRecordingRef.current;
+		if (!recording) return false;
+		stopInFlightRef.current = true;
+		const generation = setupGenerationRef.current;
+		try {
+			await stopRecordingInternalWrapper().catch(() => {});
+			if (generation !== setupGenerationRef.current) return false;
+			const recovered = await resolveFailureBlob(null);
+			const blob =
+				recording.blob && (!recovered || recording.blob.size > recovered.size)
+					? recording.blob
+					: recovered;
+			if (generation !== setupGenerationRef.current) return false;
+			if (blob?.size) {
+				const id = recordingSpoolRef.current?.sessionId ?? crypto.randomUUID();
+				const url =
+					recoveredDownloadUrlsRef.current.get(id) ?? URL.createObjectURL(blob);
+				recoveredDownloadUrlsRef.current.set(id, url);
+				if (!recordingSpoolRef.current || blob !== recovered)
+					memoryRecoveredRecordingsRef.current.add(id);
+				const createdAt = Date.now();
+				setRecoveredDownloads((current) => [
+					...current.filter((download) => download.id !== id),
+					{
+						id,
+						url,
+						createdAt,
+						fileName: createRecordingDownloadName(createdAt, blob.type),
+					},
+				]);
+			}
+			await cleanupRecordingState(true);
+			updatePhase("idle");
+			return true;
+		} catch (error) {
+			console.error("Failed to preserve the previous recording", error);
+			toast.error(
+				"Could not prepare a new recording. Your previous recording is still available.",
+			);
+			return false;
+		} finally {
+			stopInFlightRef.current = false;
+		}
+	}, [
+		cleanupRecordingState,
+		resolveFailureBlob,
+		stopRecordingInternalWrapper,
+		updatePhase,
+	]);
+
+	const unmountCleanupRef = useRef(cleanupRecordingState);
 
 	useEffect(() => {
-		resetStateRef.current = resetState;
-	}, [resetState]);
+		unmountCleanupRef.current = cleanupRecordingState;
+	}, [cleanupRecordingState]);
 
 	useEffect(() => {
 		setCapabilities(detectCapabilities());
@@ -1102,8 +1278,30 @@ export const useWebRecorder = ({
 
 	useEffect(() => {
 		return () => {
-			void resetStateRef.current();
+			void unmountCleanupRef.current(true);
 		};
+	}, []);
+
+	// The screen keeps recording to its local backup when its live upload
+	// fails; stopping then uploads the complete backup instead.
+	const handleLiveUploadFailure = useCallback(() => {
+		if (stopInFlightRef.current) return;
+		const spool = recordingSpoolRef.current;
+		const uploader = instantUploaderRef.current;
+		if (spool) {
+			if (uploader) {
+				instantUploaderRef.current = null;
+				uploadCancellationRef.current = uploader.cancel();
+				toast.info(
+					"Recording continues. We'll retry the upload when you stop.",
+				);
+			}
+			return;
+		}
+		toast.error(
+			"Upload could not keep up with recording. Stopping to protect the recording.",
+		);
+		void stopRecordingRef.current?.();
 	}, []);
 
 	const handleRecorderDataAvailable = useCallback(
@@ -1125,10 +1323,7 @@ export const useWebRecorder = ({
 						instantUploaderRef.current?.handleChunk(chunk, totalBytes);
 					} catch (error) {
 						console.error("Failed to upload recording chunk", error);
-						toast.error(
-							"Upload could not keep up with recording. Stopping to protect the recording.",
-						);
-						void stopRecordingRef.current?.();
+						handleLiveUploadFailure();
 					}
 				},
 			);
@@ -1144,14 +1339,19 @@ export const useWebRecorder = ({
 			clearInstantChunkGuard,
 			isStreamingPipelineActive,
 			persistChunkToRecordingSpool,
+			handleLiveUploadFailure,
 		],
 	);
 
-	const stopRecordingInternalWrapper = useCallback(async () => {
-		return stopRecordingInternal(cleanupStreams, clearTimer);
-	}, [stopRecordingInternal, cleanupStreams, clearTimer]);
-
 	const startRecording = async () => {
+		if (
+			(phaseRef.current !== "idle" && phaseRef.current !== "completed") ||
+			startInFlightRef.current ||
+			stopInFlightRef.current ||
+			(mediaRecorderRef.current &&
+				mediaRecorderRef.current.state !== "inactive")
+		)
+			return;
 		if (!organisationId) {
 			toast.error("Select an organization before recording.");
 			return;
@@ -1173,10 +1373,21 @@ export const useWebRecorder = ({
 		replaceErrorDownload(null);
 		replaceCameraErrorDownload(null);
 		replaceAudioErrorDownloads([]);
+		setCompletedShareUrl(null);
+		startInFlightRef.current = true;
 		shareUrlOpenedRef.current = false;
 		setChunkUploads([]);
 		setRecordedBytes(0);
 		setIsSettingUp(true);
+		automaticUploadRetriesRef.current = 0;
+		stoppedRecordingRef.current = null;
+		setCanRetryUpload(false);
+		const generation = ++setupGenerationRef.current;
+		const assertSetupActive = () => {
+			if (generation !== setupGenerationRef.current) {
+				throw new DOMException("Recording setup was cancelled", "AbortError");
+			}
+		};
 		cameraRecorderBytesRef.current = 0;
 		cameraRecorderFailedRef.current = false;
 		cameraSpoolFailedRef.current = false;
@@ -1185,6 +1396,7 @@ export const useWebRecorder = ({
 		cameraOffsetMsRef.current = 0;
 		cameraUploadApiRef.current = null;
 		cameraUploadSubpathRef.current = null;
+		cameraMimeTypeRef.current = null;
 
 		try {
 			recordingPairIdRef.current = createRecordingSessionId();
@@ -1226,6 +1438,7 @@ export const useWebRecorder = ({
 				firstTrack = videoStream.getVideoTracks()[0] ?? null;
 			}
 
+			assertSetupActive();
 			const settings = firstTrack?.getSettings();
 
 			if (recordingMode !== "camera") {
@@ -1241,11 +1454,17 @@ export const useWebRecorder = ({
 						: undefined,
 			};
 
-			const countdownFinished = (
-				beforeRecordingStartsRef.current?.() ?? Promise.resolve(true)
-			).catch((countdownError) => {
-				console.warn("Recording countdown failed", countdownError);
-				return true;
+			const runCountdown = () =>
+				(beforeRecordingStartsRef.current?.() ?? Promise.resolve(true)).catch(
+					(countdownError) => {
+						console.warn("Recording countdown failed", countdownError);
+						return true;
+					},
+				);
+			let countdownFinished = runCountdown();
+			let countdownSettled = false;
+			void countdownFinished.then(() => {
+				countdownSettled = true;
 			});
 
 			const systemAudioTracks =
@@ -1270,15 +1489,41 @@ export const useWebRecorder = ({
 				try {
 					micStream = await acquireMicStream(selectedMicId, quality.mic);
 				} catch (micError) {
-					console.warn("Microphone permission denied", micError);
-					toast.warning("Microphone unavailable. Recording without audio.");
-					micStream = null;
+					assertSetupActive();
+					const captureTrack = firstTrack;
+					if (!captureTrack || captureTrack.readyState === "ended") {
+						throw micError;
+					}
+					const proceed = await new Promise<boolean>((resolve) => {
+						const handleCaptureEnded = () => respondToMicrophoneFailure(false);
+						microphoneDecisionRef.current = (decision) => {
+							microphoneDecisionRef.current = null;
+							captureTrack.removeEventListener("ended", handleCaptureEnded);
+							setIsMicrophoneUnavailable(false);
+							resolve(decision);
+						};
+						captureTrack.addEventListener("ended", handleCaptureEnded, {
+							once: true,
+						});
+						setIsMicrophoneUnavailable(true);
+					});
+					if (!proceed) {
+						await resetState();
+						return;
+					}
+					// A countdown that ran out behind the prompt counts down again
+					// from the answer.
+					if (countdownSettled && (await countdownFinished)) {
+						countdownFinished = runCountdown();
+					}
 				}
 			}
 
 			if (micStream) {
 				micStreamRef.current = micStream;
 			}
+
+			assertSetupActive();
 
 			let audioTracks: MediaStreamTrack[] = [];
 			const hasSystemAudio = systemAudioTracks.length > 0;
@@ -1319,6 +1564,7 @@ export const useWebRecorder = ({
 					});
 				}
 				cameraStreamRef.current = cameraRecordingStream;
+				assertSetupActive();
 				cameraSettingsRef.current = cameraRecordingStream
 					.getVideoTracks()[0]
 					?.getSettings();
@@ -1326,6 +1572,7 @@ export const useWebRecorder = ({
 				if (!cameraPipeline) {
 					throw new Error("No supported camera recording pipeline available");
 				}
+				cameraMimeTypeRef.current = cameraPipeline.mimeType;
 			}
 
 			recordedChunksRef.current = [];
@@ -1336,23 +1583,23 @@ export const useWebRecorder = ({
 			const prepareLocalBackups = async () => {
 				await disposeRecordingSpool();
 				await disposeCameraSpool();
-				if (pipeline.mode === "streaming") {
-					const spool = await createRecordingSpool(
-						pipeline.mimeType,
-						recordingMode === "camera" ? "camera" : "display",
+				const spool = await createRecordingSpool(
+					pipeline.mimeType,
+					recordingMode === "camera" ? "camera" : "display",
+				);
+				if (spool) {
+					setLocalRecordingStrategy({ mode: "off" });
+				} else if (pipeline.mode === "streaming") {
+					setLocalRecordingStrategy({
+						mode: "capped",
+						maxBytes: MEMORY_BACKUP_MAX_BYTES,
+					});
+					toast.warning(
+						"Durable local backup is unavailable. This recording will use bounded memory recovery.",
 					);
-					if (spool) {
-						setLocalRecordingStrategy({ mode: "off" });
-					} else {
-						setLocalRecordingStrategy({
-							mode: "capped",
-							maxBytes: MEMORY_BACKUP_MAX_BYTES,
-						});
-						toast.warning(
-							"Durable local backup is unavailable. This recording will use bounded memory recovery.",
-						);
-					}
 				} else {
+					// A buffered capture uploads after Stop, so without a disk
+					// backup memory holds the only copy.
 					setLocalRecordingStrategy({ mode: "full" });
 				}
 				if (
@@ -1365,11 +1612,6 @@ export const useWebRecorder = ({
 				}
 			};
 
-			const needsInstantVideo =
-				pipeline.mode === "streaming" ||
-				cameraPipeline !== null ||
-				hasMicAudio ||
-				hasSystemAudio;
 			const createInstantVideo = async () => {
 				const width = dimensionsRef.current.width;
 				const height = dimensionsRef.current.height;
@@ -1392,10 +1634,9 @@ export const useWebRecorder = ({
 				return creation;
 			};
 
-			const instantVideo = needsInstantVideo
-				? createInstantVideo()
-				: Promise.resolve(null);
+			const instantVideo = createInstantVideo();
 			await settleAll([prepareLocalBackups(), instantVideo]);
+			assertSetupActive();
 			const creationResult = await instantVideo;
 
 			if (creationResult) {
@@ -1416,9 +1657,7 @@ export const useWebRecorder = ({
 						sendProgressUpdate: (uploaded, total) =>
 							sendProgressUpdate(creationResult.id, uploaded, total),
 						onChunkStateChange: setChunkUploads,
-						onFatalError: () => {
-							void stopRecordingRef.current?.();
-						},
+						onFatalError: handleLiveUploadFailure,
 					});
 				};
 				const cameraApi: RecorderApiOptions = {
@@ -1492,11 +1731,13 @@ export const useWebRecorder = ({
 						? createAudioSidecar("systemAudio", systemAudioTracks)
 						: Promise.resolve(),
 				]);
+				assertSetupActive();
 			}
 
 			if (!(await countdownFinished)) {
 				throw new RecordingStartCancelledError();
 			}
+			assertSetupActive();
 			if (
 				videoStream
 					.getVideoTracks()
@@ -1663,7 +1904,10 @@ export const useWebRecorder = ({
 				await deletePendingVideoSafely(orphanVideoId);
 			}
 
-			if (!(err instanceof RecordingStartCancelledError)) {
+			if (
+				!(err instanceof RecordingStartCancelledError) &&
+				generation === setupGenerationRef.current
+			) {
 				console.error("Failed to start recording", err);
 				toast.error(
 					getCaptureErrorMessage(
@@ -1674,6 +1918,7 @@ export const useWebRecorder = ({
 			}
 			await resetState();
 		} finally {
+			startInFlightRef.current = false;
 			setIsSettingUp(false);
 		}
 	};
@@ -1790,68 +2035,396 @@ export const useWebRecorder = ({
 		startInstantChunkInterval,
 	]);
 
+	const uploadStoppedRecording = useCallback(async () => {
+		const recording = stoppedRecordingRef.current;
+		const pipeline = recordingPipelineRef.current;
+		const orgId = organisationId;
+		if (!recording || !pipeline || stopInFlightRef.current) return;
+		stopInFlightRef.current = true;
+		const generation = setupGenerationRef.current;
+		setCanRetryUpload(false);
+		const {
+			durationSeconds,
+			audioSidecars,
+			pairedCameraCapture,
+			cameraSettings,
+		} = recording;
+		const editorSidecarCapture =
+			pairedCameraCapture || audioSidecars.length > 0;
+		const width = dimensionsRef.current.width;
+		const height = dimensionsRef.current.height;
+		const fps = dimensionsRef.current.fps;
+		const resolution = width && height ? `${width}x${height}` : undefined;
+		const rawSubpath = `raw-upload.${pipeline.fileExtension}`;
+
+		try {
+			await uploadCancellationRef.current?.catch(() => {});
+			if (generation !== setupGenerationRef.current) return;
+			uploadCancellationRef.current = null;
+			setUploadStatus({ status: "creating" });
+
+			let creationResult = videoCreationRef.current;
+			if (!creationResult) {
+				if (!orgId) throw new Error("No organization selected");
+				const result = unwrapExitOrThrow(
+					await videoInstantCreate.mutateAsync({
+						orgId: Organisation.OrganisationId.make(orgId),
+						folderId: Option.none(),
+						resolution,
+						durationSeconds,
+						width,
+						height,
+						videoCodec: "h264",
+						audioCodec: hasAudioTrack ? "aac" : undefined,
+						supportsUploadProgress: true,
+					}),
+				) as InstantVideoCreation;
+				creationResult = {
+					id: result.id,
+					shareUrl: result.shareUrl,
+					upload: result.upload,
+				};
+				videoCreationRef.current = creationResult;
+				setVideoId(result.id);
+				pendingInstantVideoIdRef.current = result.id;
+			}
+			if (generation !== setupGenerationRef.current) return;
+			const creation = creationResult;
+
+			updatePhase("uploading");
+			setCompletedShareUrl(creation.shareUrl);
+			setUploadStatus({
+				status: "uploadingVideo",
+				capId: creation.id,
+				progress: 0,
+				thumbnailUrl: undefined,
+			});
+
+			// Without a live upload (it failed while recording, or an earlier
+			// attempt aborted it) the screen goes up from its local backup,
+			// which must hold the whole take.
+			let uploader = instantUploaderRef.current;
+			if (!uploader) {
+				recording.blob = await resolveFailureBlob(recording.blob);
+				if (generation !== setupGenerationRef.current) return;
+				if (!recording.blob?.size) throw new Error("No recording available");
+				if (recording.blob.size !== recording.totalBytes) {
+					throw new Error(
+						"The local backup is incomplete. The available data has been preserved.",
+					);
+				}
+				const uploadSession = await initiateMultipartUpload({
+					videoId: creation.id,
+					contentType: pipeline.mimeType,
+					subpath: rawSubpath,
+				});
+				uploader = new InstantRecordingUploader({
+					videoId: creation.id,
+					uploadId: uploadSession.uploadId,
+					provider: uploadSession.provider,
+					mimeType: pipeline.mimeType,
+					subpath: rawSubpath,
+					setUploadStatus,
+					sendProgressUpdate: (uploaded, total) =>
+						sendProgressUpdate(creation.id, uploaded, total),
+					onChunkStateChange: setChunkUploads,
+				});
+				if (generation !== setupGenerationRef.current) {
+					await uploader.cancel();
+					return;
+				}
+				instantUploaderRef.current = uploader;
+			}
+			const screenFinalBlob =
+				recording.blob?.size === recording.totalBytes ? recording.blob : null;
+
+			// Camera, mic and the screen's last chunk upload together; the screen
+			// completes last because its completion starts processing and the
+			// styled render.
+			const finalizeCamera = async () => {
+				if (recording.cameraUploaded) return;
+				const cameraSubpath = cameraUploadSubpathRef.current;
+				if (!cameraSubpath || cameraRecorderFailedRef.current) {
+					throw new Error("Camera recording is unavailable for paired upload");
+				}
+				const cameraFinalize = {
+					durationSeconds,
+					width: cameraSettings?.width,
+					height: cameraSettings?.height,
+					fps:
+						typeof cameraSettings?.frameRate === "number"
+							? Math.round(cameraSettings.frameRate)
+							: undefined,
+					subpath: cameraSubpath,
+				};
+				let cameraUploader = cameraUploaderRef.current;
+				if (cameraUploader) {
+					if (recording.cameraRecordedBytes <= 0) {
+						throw new Error(
+							"Camera recording is unavailable for paired upload",
+						);
+					}
+					await cameraUploader.finalize({ ...cameraFinalize, finalBlob: null });
+				} else {
+					const cameraBlob = await resolveCameraFailureBlob();
+					const mimeType = cameraMimeTypeRef.current;
+					if (!cameraBlob?.size || !mimeType) {
+						throw new Error("The camera backup is incomplete.");
+					}
+					const cameraApi = cameraUploadApiRef.current ?? undefined;
+					const session = await initiateMultipartUpload({
+						videoId: creation.id,
+						contentType: mimeType,
+						subpath: cameraSubpath,
+						api: cameraApi,
+					});
+					cameraUploader = new InstantRecordingUploader({
+						videoId: creation.id,
+						uploadId: session.uploadId,
+						provider: session.provider,
+						mimeType,
+						subpath: cameraSubpath,
+						setUploadStatus,
+						sendProgressUpdate: (uploaded, total) =>
+							sendProgressUpdate(creation.id, uploaded, total),
+						api: cameraApi,
+					});
+					cameraUploaderRef.current = cameraUploader;
+					await cameraUploader.finalize({
+						...cameraFinalize,
+						finalBlob: cameraBlob,
+					});
+				}
+				cameraUploaderRef.current = null;
+				recording.cameraUploaded = true;
+			};
+			const finalizeAudio = async (sidecar: AudioRecordingSidecar) => {
+				if (sidecar.isUploadCompleted || recording.uploadedAudio.has(sidecar))
+					return;
+				if (!recording.audioLiveUploadsAborted) {
+					await sidecar.finalize(durationSeconds);
+					return;
+				}
+				const blob = await sidecar.recoverBlob();
+				if (!blob) throw new Error("An audio backup is incomplete.");
+				await uploadRecoveredAudioSidecar({
+					videoId: creation.id,
+					source: sidecar.metadata,
+					blob,
+					screenSubpath: rawSubpath,
+					durationSeconds,
+				});
+				recording.uploadedAudio.add(sidecar);
+			};
+			const sidecarResults = await Promise.allSettled([
+				pairedCameraCapture ? finalizeCamera() : Promise.resolve(),
+				uploader.uploadRemaining(screenFinalBlob),
+				...audioSidecars.map(finalizeAudio),
+			]);
+			const failedSidecar = sidecarResults.find(
+				(result) => result.status === "rejected",
+			);
+			if (failedSidecar?.status === "rejected") throw failedSidecar.reason;
+			if (generation !== setupGenerationRef.current) return;
+			audioSidecarsRef.current = [];
+
+			await uploader.finalize({
+				finalBlob: screenFinalBlob,
+				durationSeconds,
+				width,
+				height,
+				fps,
+				subpath: rawSubpath,
+			});
+			if (generation !== setupGenerationRef.current) return;
+
+			if (!uploader.getProcessingStarted()) {
+				toast.warning(
+					"Recording uploaded. Processing did not start yet, but the original recording is available.",
+				);
+			}
+
+			instantUploaderRef.current = null;
+			cameraUploadApiRef.current = null;
+			cameraUploadSubpathRef.current = null;
+			cameraMimeTypeRef.current = null;
+			cameraOffsetMsRef.current = 0;
+			cameraRecorderBytesRef.current = 0;
+			cameraRecorderFailedRef.current = false;
+			cameraSettingsRef.current = undefined;
+			recordingPipelineRef.current = null;
+			pendingInstantVideoIdRef.current = null;
+			stoppedRecordingRef.current = null;
+			automaticUploadRetriesRef.current = 0;
+			recordingSpoolRef.current?.markUploaded();
+			degradedRecordingSpoolRef.current?.markUploaded();
+			degradedRecordingSpoolRef.current = null;
+			cameraSpoolRef.current?.markUploaded();
+			for (const sidecar of audioSidecars) sidecar.markUploadedBackup();
+			void Promise.all([
+				disposeRecordingSpool(),
+				disposeCameraSpool(),
+				...audioSidecars.map((sidecar) =>
+					sidecar.disposeBackup().catch((error) => {
+						console.error("Failed to remove uploaded audio backup", error);
+					}),
+				),
+			]);
+			resetRecorder();
+			replaceErrorDownload(null);
+			replaceCameraErrorDownload(null);
+			replaceAudioErrorDownloads([]);
+
+			const studioRecording = studioEnabled && editorSidecarCapture;
+			const videoPath = `/s/${encodeURIComponent(creation.id)}`;
+			// The share link is already live, so the recording opens there. A
+			// Studio recording's page publishes it in its default look when
+			// nothing else is rendering it.
+			const shareUrl = studioRecording
+				? `${videoPath}?from=recording`
+				: videoPath;
+			// Everything is uploaded at this point, so a navigation failure must
+			// not fall into the failure path below. It starts before the state
+			// below re-renders the page, so the share page's request isn't
+			// queued behind that work.
+			try {
+				router.push(shareUrl);
+			} catch (navigationError) {
+				console.error("Failed to open the share page", navigationError);
+				window.location.assign(shareUrl);
+			}
+			setUploadStatus(undefined);
+			setCompletedShareUrl(`${window.location.origin}${shareUrl}`);
+			updatePhase("completed");
+		} catch (err) {
+			if (generation !== setupGenerationRef.current) return;
+			console.error("Failed to upload recording", err);
+			setUploadStatus(undefined);
+			recording.blob = await resolveFailureBlob(recording.blob);
+			if (generation !== setupGenerationRef.current) return;
+			const cameraFailureBlob = pairedCameraCapture
+				? await resolveCameraFailureBlob()
+				: null;
+			const audioFailureSources = await Promise.all(
+				audioSidecars.map(async (sidecar) => ({
+					kind: sidecar.metadata.kind,
+					blob: await sidecar.recoverBlob(),
+				})),
+			);
+			if (generation !== setupGenerationRef.current) return;
+			recording.completionUncertain =
+				err instanceof MultipartCompletionUncertainError;
+			// An uncertain completion keeps its upload so a retry checks the same
+			// one; anything else is aborted and a retry sends the backups.
+			if (!recording.completionUncertain) {
+				const cancellations: Promise<unknown>[] = [];
+				const screenUploader = instantUploaderRef.current;
+				instantUploaderRef.current = null;
+				if (screenUploader) cancellations.push(screenUploader.cancel());
+				const cameraUploader = cameraUploaderRef.current;
+				cameraUploaderRef.current = null;
+				if (cameraUploader) cancellations.push(cameraUploader.cancel());
+				for (const sidecar of audioSidecars) {
+					if (sidecar.isUploadCompleted) continue;
+					cancellations.push(sidecar.abortUploadRetainSpool());
+				}
+				if (audioSidecars.length > 0) recording.audioLiveUploadsAborted = true;
+				uploadCancellationRef.current = Promise.allSettled(cancellations);
+			}
+			replaceErrorDownload(recording.blob);
+			replaceCameraErrorDownload(cameraFailureBlob);
+			replaceAudioErrorDownloads(audioFailureSources);
+			setCanRetryUpload(true);
+			updatePhase("error");
+			toast.error(
+				recording.completionUncertain
+					? "Upload confirmation was interrupted. Your recording is kept here. Retry to check the same upload."
+					: "Upload interrupted. Your recording is kept here. Retry without recording again.",
+			);
+		} finally {
+			stopInFlightRef.current = false;
+		}
+	}, [
+		organisationId,
+		hasAudioTrack,
+		updatePhase,
+		setUploadStatus,
+		videoInstantCreate,
+		router,
+		studioEnabled,
+		replaceErrorDownload,
+		resolveFailureBlob,
+		resolveCameraFailureBlob,
+		disposeRecordingSpool,
+		disposeCameraSpool,
+		replaceCameraErrorDownload,
+		replaceAudioErrorDownloads,
+		resetRecorder,
+	]);
+
 	const stopRecording = useCallback(async () => {
+		if (
+			(phaseRef.current !== "recording" && phaseRef.current !== "paused") ||
+			stopInFlightRef.current
+		)
+			return;
+		const generation = setupGenerationRef.current;
+		stopInFlightRef.current = true;
 		stopInstantChunkInterval();
 		clearInstantChunkGuard();
 		instantChunkModeRef.current = null;
 		lastInstantChunkAtRef.current = null;
 		replaceErrorDownload(null);
-		if (phase !== "recording" && phase !== "paused") return;
-		if (stopInFlightRef.current) return;
-		stopInFlightRef.current = true;
-		let createdVideoId: VideoId | null = videoCreationRef.current?.id ?? null;
-		let rawRecordingBlob: Blob | null = null;
+		const timestamp = performance.now();
+		commitPausedDuration(timestamp);
 		const audioSidecars = [...audioSidecarsRef.current];
 		const pairedCameraCapture = cameraUploadApiRef.current !== null;
-		const editorSidecarCapture =
-			pairedCameraCapture || audioSidecars.length > 0;
-		let cameraRecordedBytes = 0;
-		const cameraSettings = cameraSettingsRef.current;
+		const recording: StoppedRecording = {
+			blob: null,
+			totalBytes: 0,
+			durationSeconds: Math.max(
+				1,
+				Math.round(syncDurationFromClock(timestamp) / 1000),
+			),
+			captureFailed: false,
+			completionUncertain: false,
+			pairedCameraCapture,
+			cameraRecordedBytes: 0,
+			cameraSettings: cameraSettingsRef.current,
+			audioSidecars,
+			audioLiveUploadsAborted: false,
+			uploadedAudio: new Set(),
+			cameraUploaded: false,
+		};
+		stoppedRecordingRef.current = recording;
+
+		// Every recorder is told to stop before anything is awaited, so they
+		// finish their last chunks together while the UI updates.
+		const cameraStopped = cameraMediaRecorderRef.current
+			? stopCameraRecorder().then(
+					(bytes) => {
+						recording.cameraRecordedBytes = bytes;
+					},
+					(cameraError) => {
+						cameraRecorderFailedRef.current = true;
+						console.warn("Failed to stop camera recording", cameraError);
+					},
+				)
+			: Promise.resolve();
+		const audioStopped = Promise.allSettled(
+			audioSidecars.map((sidecar) => sidecar.stop()),
+		);
+		const screenStopped = stopRecordingInternalWrapper();
+		onRecordingStop?.();
+		updatePhase("creating");
+		setCompletedShareUrl(videoCreationRef.current?.shareUrl ?? null);
 
 		try {
-			const orgId = organisationId;
-			if (!orgId) {
-				updatePhase("error");
-				return;
-			}
-
-			const timestamp = performance.now();
-			commitPausedDuration(timestamp);
-			const recordedDurationMs = syncDurationFromClock(timestamp);
-
-			const pipeline = recordingPipelineRef.current;
-			if (!pipeline) {
-				updatePhase("error");
-				return;
-			}
-
-			const instantUploader = instantUploaderRef.current;
-
-			// Every recorder is told to stop before anything is awaited, so they
-			// finish their last chunks together while the UI updates.
-			const cameraStopped = cameraMediaRecorderRef.current
-				? stopCameraRecorder().then(
-						(bytes) => {
-							cameraRecordedBytes = bytes;
-						},
-						(cameraError) => {
-							cameraRecorderFailedRef.current = true;
-							console.warn("Failed to stop camera recording", cameraError);
-						},
-					)
-				: Promise.resolve();
-			const audioStopped = Promise.allSettled(
-				audioSidecars.map((sidecar) => sidecar.stop()),
-			);
-			const screenStopped = stopRecordingInternalWrapper();
-			onRecordingStop?.();
-			updatePhase("creating");
-
 			await Promise.allSettled([screenStopped, cameraStopped, audioStopped]);
-			rawRecordingBlob = await screenStopped;
+			recording.blob = await screenStopped;
+			if (generation !== setupGenerationRef.current) return;
 			setRecordedBytes(totalRecordedBytesRef.current);
-			const audioStopResults = await audioStopped;
-			const failedAudioStop = audioStopResults.find(
+			const failedAudioStop = (await audioStopped).find(
 				(result) => result.status === "rejected",
 			);
 			if (failedAudioStop?.status === "rejected") {
@@ -1885,398 +2458,12 @@ export const useWebRecorder = ({
 					);
 				}
 			}
-			if (pipeline.mode === "buffered-raw" && !rawRecordingBlob) {
-				throw new Error("No recording available");
-			}
-
-			const durationSeconds = Math.max(
-				1,
-				Math.round(recordedDurationMs / 1000),
-			);
-			const width = dimensionsRef.current.width;
-			const height = dimensionsRef.current.height;
-			const fps = dimensionsRef.current.fps;
-			const resolution = width && height ? `${width}x${height}` : undefined;
-
-			setUploadStatus({ status: "creating" });
-
-			let creationResult = videoCreationRef.current;
-			if (!creationResult) {
-				const result = unwrapExitOrThrow(
-					await videoInstantCreate.mutateAsync({
-						orgId: Organisation.OrganisationId.make(orgId),
-						folderId: Option.none(),
-						resolution,
-						durationSeconds,
-						width,
-						height,
-						videoCodec: "h264",
-						audioCodec: hasAudioTrack ? "aac" : undefined,
-						supportsUploadProgress: true,
-					}),
-				) as InstantVideoCreation;
-				creationResult = {
-					id: result.id,
-					shareUrl: result.shareUrl,
-					upload: result.upload,
-				};
-				videoCreationRef.current = creationResult;
-				setVideoId(result.id);
-				pendingInstantVideoIdRef.current = result.id;
-			}
-
-			createdVideoId = creationResult.id;
-
-			updatePhase("uploading");
-			setUploadStatus({
-				status: "uploadingVideo",
-				capId: creationResult.id,
-				progress: 0,
-				thumbnailUrl: undefined,
-			});
-
-			// Camera, mic and the screen's last chunk upload together; the screen
-			// completes last because its completion starts processing and the
-			// styled render.
-			const finalizeCamera = async () => {
-				const cameraUploader = cameraUploaderRef.current;
-				const cameraSubpath = cameraUploadSubpathRef.current;
-				if (
-					cameraUploader &&
-					cameraSubpath &&
-					cameraRecordedBytes > 0 &&
-					!cameraRecorderFailedRef.current
-				) {
-					try {
-						await cameraUploader.finalize({
-							finalBlob: null,
-							durationSeconds,
-							width: cameraSettings?.width,
-							height: cameraSettings?.height,
-							fps:
-								typeof cameraSettings?.frameRate === "number"
-									? Math.round(cameraSettings.frameRate)
-									: undefined,
-							subpath: cameraSubpath,
-						});
-					} catch (cameraUploadError) {
-						console.error(
-							"Failed to upload camera recording",
-							cameraUploadError,
-						);
-						throw cameraUploadError;
-					}
-				} else {
-					throw new Error("Camera recording is unavailable for paired upload");
-				}
-				cameraUploaderRef.current = null;
-			};
-			const sidecarResults = await Promise.allSettled([
-				pairedCameraCapture ? finalizeCamera() : Promise.resolve(),
-				instantUploader &&
-				(editorSidecarCapture || pipeline.mode === "streaming")
-					? instantUploader.uploadRemaining(rawRecordingBlob ?? null)
-					: Promise.resolve(),
-				...audioSidecars.map((audioSidecar) =>
-					audioSidecar.finalize(durationSeconds),
-				),
-			]);
-			const failedSidecar = sidecarResults.find(
-				(result) => result.status === "rejected",
-			);
-			if (failedSidecar?.status === "rejected") throw failedSidecar.reason;
-			audioSidecarsRef.current = [];
-
-			if (editorSidecarCapture) {
-				let uploader = instantUploader;
-				const rawSubpath = `raw-upload.${pipeline.fileExtension}`;
-				if (!uploader) {
-					const uploadSession = await initiateMultipartUpload({
-						videoId: creationResult.id,
-						contentType: pipeline.mimeType,
-						subpath: rawSubpath,
-					});
-					uploader = new InstantRecordingUploader({
-						videoId: creationResult.id,
-						uploadId: uploadSession.uploadId,
-						provider: uploadSession.provider,
-						mimeType: pipeline.mimeType,
-						subpath: rawSubpath,
-						setUploadStatus,
-						sendProgressUpdate: (uploaded, total) =>
-							sendProgressUpdate(creationResult.id, uploaded, total),
-						onChunkStateChange: setChunkUploads,
-						onFatalError: () => {
-							void stopRecordingRef.current?.();
-						},
-					});
-					instantUploaderRef.current = uploader;
-				}
-
-				await uploader.finalize({
-					finalBlob: rawRecordingBlob,
-					durationSeconds,
-					width,
-					height,
-					fps,
-					subpath: rawSubpath,
-				});
-
-				if (!uploader.getProcessingStarted()) {
-					toast.warning(
-						"Recording uploaded. Processing did not start yet, but the original recording is available.",
-					);
-				}
-			} else if (pipeline.mode === "streaming") {
-				let uploader = instantUploader;
-				const rawSubpath = `raw-upload.${pipeline.fileExtension}`;
-
-				if (!uploader) {
-					const uploadSession = await initiateMultipartUpload({
-						videoId: creationResult.id,
-						contentType: pipeline.mimeType,
-						subpath: rawSubpath,
-					});
-					uploader = new InstantRecordingUploader({
-						videoId: creationResult.id,
-						uploadId: uploadSession.uploadId,
-						provider: uploadSession.provider,
-						mimeType: pipeline.mimeType,
-						subpath: rawSubpath,
-						setUploadStatus,
-						sendProgressUpdate: (uploaded, total) =>
-							sendProgressUpdate(creationResult.id, uploaded, total),
-						onChunkStateChange: setChunkUploads,
-						onFatalError: () => {
-							void stopRecordingRef.current?.();
-						},
-					});
-					instantUploaderRef.current = uploader;
-				}
-
-				await uploader.finalize({
-					finalBlob: rawRecordingBlob,
-					durationSeconds,
-					width,
-					height,
-					fps,
-					subpath: rawSubpath,
-				});
-
-				if (!uploader.getProcessingStarted()) {
-					toast.warning(
-						"Recording uploaded. Processing did not start yet, but the original recording is available.",
-					);
-				}
-			} else {
-				let processedRecordingBlob: Blob | null = null;
-				let conversionFailed = false;
-
-				if (pipeline.fileExtension === "mp4") {
-					processedRecordingBlob = rawRecordingBlob;
-				} else if (await canConvertToMp4InBrowser(hasAudioTrack)) {
-					try {
-						processedRecordingBlob = await convertToMp4(
-							rawRecordingBlob as Blob,
-							hasAudioTrack,
-							creationResult.id,
-							setUploadStatus,
-							() => updatePhase("converting"),
-						);
-					} catch (conversionError) {
-						// The browser claimed it could encode MP4 but the conversion
-						// still failed (e.g. a stalled decoder). Rather than discarding
-						// the recording, upload the raw WebM and let the media server
-						// transcode it, mirroring the streaming upload's server path.
-						console.warn(
-							"In-browser conversion failed; falling back to server-side processing",
-							conversionError,
-						);
-						conversionFailed = true;
-					}
-				} else {
-					// This browser's WebCodecs can't encode the MP4 (e.g. Firefox has
-					// no AAC/H.264 encoder), so skip the conversion that would always
-					// fail and let the media server transcode the raw recording.
-					conversionFailed = true;
-				}
-
-				if (conversionFailed) {
-					updatePhase("uploading");
-					const rawSubpath = `raw-upload.${pipeline.fileExtension}`;
-					const uploadSession = await initiateMultipartUpload({
-						videoId: creationResult.id,
-						contentType: pipeline.mimeType,
-						subpath: rawSubpath,
-					});
-					const fallbackUploader = new InstantRecordingUploader({
-						videoId: creationResult.id,
-						uploadId: uploadSession.uploadId,
-						provider: uploadSession.provider,
-						mimeType: pipeline.mimeType,
-						subpath: rawSubpath,
-						setUploadStatus,
-						sendProgressUpdate: (uploaded, total) =>
-							sendProgressUpdate(creationResult.id, uploaded, total),
-						onChunkStateChange: setChunkUploads,
-						onFatalError: () => {
-							void stopRecordingRef.current?.();
-						},
-					});
-					instantUploaderRef.current = fallbackUploader;
-
-					await fallbackUploader.finalize({
-						finalBlob: rawRecordingBlob,
-						durationSeconds,
-						width,
-						height,
-						fps,
-						subpath: rawSubpath,
-					});
-
-					if (!fallbackUploader.getProcessingStarted()) {
-						toast.warning(
-							"Recording uploaded. Processing did not start yet, but the original recording is available.",
-						);
-					}
-				} else {
-					if (!processedRecordingBlob) {
-						throw new Error("Failed to prepare recording for upload");
-					}
-
-					const thumbnailBlob = await captureThumbnail(processedRecordingBlob, {
-						width,
-						height,
-					});
-					const thumbnailPreviewUrl = thumbnailBlob
-						? URL.createObjectURL(thumbnailBlob)
-						: undefined;
-
-					try {
-						setUploadStatus({
-							status: "uploadingVideo",
-							capId: creationResult.id,
-							progress: 0,
-							thumbnailUrl: thumbnailPreviewUrl,
-						});
-
-						await uploadRecording(
-							processedRecordingBlob,
-							creationResult.upload,
-							creationResult.id,
-							thumbnailPreviewUrl,
-							setUploadStatus,
-						);
-
-						try {
-							await triggerInstantRecordingProcessing({
-								videoId: creationResult.id,
-							});
-						} catch (processingError) {
-							console.error(
-								"Failed to start video processing",
-								processingError,
-							);
-							toast.warning(
-								"Recording uploaded. Processing did not start yet, but the original recording is available.",
-							);
-						}
-
-						if (thumbnailBlob) {
-							try {
-								const screenshotData = await createVideoAndGetUploadUrl({
-									videoId: creationResult.id,
-									isScreenshot: true,
-									orgId: Organisation.OrganisationId.make(orgId),
-								});
-
-								setUploadStatus({
-									status: "uploadingThumbnail",
-									capId: creationResult.id,
-									progress: 90,
-								});
-
-								await uploadWithTarget({
-									target: screenshotData.uploadTarget,
-									body: thumbnailBlob,
-									fileName: "screen-capture.jpg",
-									onProgress: ({ loaded, total }) => {
-										const percent = 90 + (loaded / total) * 10;
-										setUploadStatus({
-											status: "uploadingThumbnail",
-											capId: creationResult.id,
-											progress: percent,
-										});
-									},
-								});
-
-								queryClient.refetchQueries({
-									queryKey: ThumbnailRequest.queryKey(creationResult.id),
-								});
-							} catch (thumbnailError) {
-								console.error("Failed to upload thumbnail", thumbnailError);
-								toast.warning(
-									"Recording uploaded, but thumbnail failed to upload.",
-								);
-							}
-						}
-					} finally {
-						if (thumbnailPreviewUrl) {
-							URL.revokeObjectURL(thumbnailPreviewUrl);
-						}
-					}
-				}
-			}
-
-			instantUploaderRef.current = null;
-			cameraUploadApiRef.current = null;
-			cameraUploadSubpathRef.current = null;
-			cameraOffsetMsRef.current = 0;
-			cameraRecorderBytesRef.current = 0;
-			cameraRecorderFailedRef.current = false;
-			cameraSettingsRef.current = undefined;
-			recordingPipelineRef.current = null;
-			pendingInstantVideoIdRef.current = null;
-			recordingSpoolRef.current?.markUploaded();
-			degradedRecordingSpoolRef.current?.markUploaded();
-			degradedRecordingSpoolRef.current = null;
-			cameraSpoolRef.current?.markUploaded();
-			for (const sidecar of audioSidecars) sidecar.markUploadedBackup();
-			void Promise.all([
-				disposeRecordingSpool(),
-				disposeCameraSpool(),
-				...audioSidecars.map((sidecar) =>
-					sidecar.disposeBackup().catch((error) => {
-						console.error("Failed to remove uploaded audio backup", error);
-					}),
-				),
-			]);
-
-			const studioRecording = studioEnabled && editorSidecarCapture;
-			const videoPath = `/s/${encodeURIComponent(creationResult.id)}`;
-			// The share link is already live, so the recording opens there. A
-			// Studio recording's page publishes it in its default look when
-			// nothing else is rendering it.
-			const shareUrl = studioRecording
-				? `${videoPath}?from=recording`
-				: videoPath;
-			// Everything is uploaded at this point, so a navigation failure must
-			// not fall into the failure path below, which deletes the video. It
-			// starts before the state below re-renders the page, so the share
-			// page's request isn't queued behind that work.
-			try {
-				router.push(shareUrl);
-			} catch (navigationError) {
-				console.error("Failed to open the share page", navigationError);
-				window.location.assign(shareUrl);
-			}
-			setUploadStatus(undefined);
-			setCompletedShareUrl(`${window.location.origin}${shareUrl}`);
-			updatePhase("completed");
-		} catch (err) {
-			console.error("Failed to process recording", err);
-			setUploadStatus(undefined);
-			const failureBlob = await resolveFailureBlob(rawRecordingBlob);
+		} catch (error) {
+			if (generation !== setupGenerationRef.current) return;
+			console.error("Browser failed to finish recording", error);
+			recording.captureFailed = true;
+			recording.blob = await resolveFailureBlob(recording.blob);
+			if (generation !== setupGenerationRef.current) return;
 			const cameraFailureBlob = pairedCameraCapture
 				? await resolveCameraFailureBlob()
 				: null;
@@ -2286,98 +2473,91 @@ export const useWebRecorder = ({
 					blob: await sidecar.recoverBlob(),
 				})),
 			);
-			if (err instanceof MultipartCompletionUncertainError) {
-				instantUploaderRef.current = null;
-				cameraUploaderRef.current = null;
-				audioSidecarsRef.current = [];
-				cameraUploadApiRef.current = null;
-				cameraUploadSubpathRef.current = null;
-				recordingPipelineRef.current = null;
-				pendingInstantVideoIdRef.current = null;
-				replaceErrorDownload(failureBlob);
-				replaceCameraErrorDownload(cameraFailureBlob);
-				replaceAudioErrorDownloads(audioFailureSources);
-				retainFailedRecordingSpools();
-				updatePhase("error");
-				toast.error(
-					"Upload confirmation was interrupted. Open the video to verify processing before retrying.",
-				);
-				openShareUrl(videoCreationRef.current?.shareUrl ?? null);
-				setCompletedShareUrl(videoCreationRef.current?.shareUrl ?? null);
-				router.refresh();
-				return;
-			}
-			updatePhase("error");
-			replaceErrorDownload(failureBlob);
+			if (generation !== setupGenerationRef.current) return;
+			replaceErrorDownload(recording.blob);
 			replaceCameraErrorDownload(cameraFailureBlob);
 			replaceAudioErrorDownloads(audioFailureSources);
-			if (instantUploaderRef.current) {
-				await instantUploaderRef.current.cancel();
-				instantUploaderRef.current = null;
-			}
-			if (cameraUploaderRef.current) {
-				try {
-					await cameraUploaderRef.current.cancel();
-				} catch (cameraCancelError) {
-					console.error("Failed to cancel camera upload", cameraCancelError);
-				}
-				cameraUploaderRef.current = null;
-			}
-			await Promise.all(
-				audioSidecars.map((sidecar) =>
-					sidecar.abortUploadRetainSpool().catch((error) => {
-						console.error("Failed to abort audio sidecar upload", error);
-					}),
-				),
+			// A paired take whose camera clip broke can't be published whole.
+			setCanRetryUpload(
+				Boolean(recording.blob?.size) && !cameraRecorderFailedRef.current,
 			);
-			audioSidecarsRef.current = [];
-			retainFailedRecordingSpools();
-
-			const idToDelete = createdVideoId ?? videoId;
-			if (idToDelete) {
-				await deletePendingVideoSafely(idToDelete);
-				if (pendingInstantVideoIdRef.current === idToDelete) {
-					pendingInstantVideoIdRef.current = null;
-				}
-			}
+			setUploadStatus(undefined);
+			updatePhase("error");
+			toast.error(
+				"The browser stopped recording early. You can save or upload the available recording.",
+			);
 		} finally {
+			if (generation === setupGenerationRef.current) {
+				recording.totalBytes = totalRecordedBytesRef.current;
+			}
 			stopInFlightRef.current = false;
 		}
+		if (!recording.captureFailed) await uploadStoppedRecording();
 	}, [
 		stopInstantChunkInterval,
-		phase,
-		organisationId,
-		hasAudioTrack,
-		videoId,
-		updatePhase,
-		setUploadStatus,
-		deletePendingVideoSafely,
-		videoInstantCreate,
-		queryClient,
-		router,
-		studioEnabled,
-		stopRecordingInternalWrapper,
-		onRecordingStop,
+		clearInstantChunkGuard,
+		replaceErrorDownload,
 		commitPausedDuration,
 		syncDurationFromClock,
-		openShareUrl,
-		replaceErrorDownload,
+		stopCameraRecorder,
+		stopRecordingInternalWrapper,
+		onRecordingStop,
+		updatePhase,
+		switchCameraBackupToMemory,
 		resolveFailureBlob,
 		resolveCameraFailureBlob,
-		disposeRecordingSpool,
-		disposeCameraSpool,
-		retainFailedRecordingSpools,
-		clearInstantChunkGuard,
-		stopCameraRecorder,
-		switchCameraBackupToMemory,
 		replaceCameraErrorDownload,
 		replaceAudioErrorDownloads,
+		setUploadStatus,
+		uploadStoppedRecording,
 		totalRecordedBytesRef,
 	]);
 
 	useEffect(() => {
+		if (phase !== "error" || !canRetryUpload) return;
+		const recording = stoppedRecordingRef.current;
+		if (!recording || recording.captureFailed || recording.completionUncertain)
+			return;
+		const retryOnReconnect = () => {
+			automaticUploadRetriesRef.current = 0;
+			void uploadStoppedRecording();
+		};
+		const retryTimer = window.setTimeout(() => {
+			if (!navigator.onLine || automaticUploadRetriesRef.current >= 3) return;
+			automaticUploadRetriesRef.current += 1;
+			void uploadStoppedRecording();
+		}, 10_000);
+		window.addEventListener("online", retryOnReconnect);
+		return () => {
+			window.clearTimeout(retryTimer);
+			window.removeEventListener("online", retryOnReconnect);
+		};
+	}, [phase, canRetryUpload, uploadStoppedRecording]);
+
+	useEffect(() => {
+		if (
+			(phase === "idle" || phase === "completed") &&
+			!recoveredDownloads.some((download) =>
+				memoryRecoveredRecordingsRef.current.has(download.id),
+			)
+		)
+			return;
+		const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+			event.preventDefault();
+		};
+		window.addEventListener("beforeunload", handleBeforeUnload);
+		return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+	}, [phase, recoveredDownloads]);
+
+	useEffect(() => {
 		stopRecordingRef.current = stopRecording;
 	}, [stopRecording]);
+
+	useEffect(() => {
+		if (!recorderError || (phase !== "recording" && phase !== "paused")) return;
+		console.error("Browser recording stopped unexpectedly", recorderError);
+		void stopRecording();
+	}, [recorderError, phase, stopRecording]);
 
 	useEffect(() => {
 		if (!isFreePlan) {
@@ -2466,6 +2646,7 @@ export const useWebRecorder = ({
 
 	const canStartRecording =
 		Boolean(organisationId) &&
+		(phase === "idle" || phase === "completed") &&
 		!isSettingUp &&
 		!isRestarting &&
 		isBrowserSupported;
@@ -2477,7 +2658,7 @@ export const useWebRecorder = ({
 		phase === "creating" ||
 		phase === "converting" ||
 		phase === "uploading";
-	const isBusyState = isBusyPhase || isRestarting;
+	const isBusyState = isBusyPhase || isRestarting || isSettingUp;
 
 	return {
 		phase,
@@ -2488,9 +2669,14 @@ export const useWebRecorder = ({
 		errorDownload,
 		cameraErrorDownload,
 		audioErrorDownloads,
+		canRetryUpload,
+		retryUpload: uploadStoppedRecording,
+		prepareNewRecording,
 		completedShareUrl,
 		recoveredDownloads,
 		isSettingUp,
+		isMicrophoneUnavailable,
+		respondToMicrophoneFailure,
 		isRecording: isRecordingActive,
 		isPaused,
 		isBusy: isBusyState,

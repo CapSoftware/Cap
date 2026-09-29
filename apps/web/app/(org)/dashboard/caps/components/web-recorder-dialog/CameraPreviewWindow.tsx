@@ -228,11 +228,16 @@ export const CameraPreviewWindow = forwardRef<
 	}, []);
 
 	useEffect(() => {
+		let cancelled = false;
 		const startCamera = async () => {
 			try {
 				const stream = await navigator.mediaDevices.getUserMedia({
 					video: cameraVideoConstraints(cameraId, { height: captureHeight }),
 				});
+				if (cancelled) {
+					for (const track of stream.getTracks()) track.stop();
+					return;
+				}
 
 				streamRef.current = stream;
 
@@ -247,6 +252,7 @@ export const CameraPreviewWindow = forwardRef<
 		startCamera();
 
 		return () => {
+			cancelled = true;
 			stopStream();
 		};
 	}, [cameraId, captureHeight, stopStream]);

@@ -1132,8 +1132,8 @@ export const AgentUploadCompleteResponse = Schema.Struct({
 
 export const AgentLoomImportInput = Schema.Struct({
 	loomUrl: Schema.String,
-	ownerEmail: Schema.optional(Schema.String),
-	spaceName: Schema.optional(Schema.String),
+	ownerEmail: Schema.optional(Schema.NullOr(Schema.String)),
+	spaceName: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
 export const AgentProfileUpdateInput = Schema.Struct({

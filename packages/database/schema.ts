@@ -35,7 +35,11 @@ import {
 import { relations } from "drizzle-orm/relations";
 
 import { nanoIdLength } from "./helpers.ts";
-import type { VideoEditSpec, VideoMetadata } from "./types/index.ts";
+import type {
+	VideoCallToAction,
+	VideoEditSpec,
+	VideoMetadata,
+} from "./types/index.ts";
 
 export type AuthApiKeySource = "desktop" | "extension" | "mobile" | "unknown";
 
@@ -229,6 +233,9 @@ export const organizations = mysqlTable(
 		metadata: json("metadata"),
 		tombstoneAt: timestamp("tombstoneAt"),
 		allowedEmailDomain: varchar("allowedEmailDomain", { length: 255 }),
+		defaultVideoVisibility: varchar("defaultVideoVisibility", {
+			length: 7,
+		}).$type<"private">(),
 		customDomain: varchar("customDomain", { length: 255 }),
 		domainVerified: timestamp("domainVerified"),
 		settings: json("settings").$type<{
@@ -447,6 +454,7 @@ export const videos = mysqlTable(
 			disableTranscript?: boolean;
 			disableComments?: boolean;
 			defaultPlaybackSpeed?: number;
+			callToAction?: VideoCallToAction;
 		}>(),
 		transcriptionStatus: varchar("transcriptionStatus", { length: 255 }).$type<
 			"PROCESSING" | "COMPLETE" | "ERROR" | "SKIPPED" | "NO_AUDIO"
@@ -559,6 +567,27 @@ export const sharedVideos = mysqlTable(
 		videoIdFolderIdIndex: index("video_id_folder_id_idx").on(
 			table.videoId,
 			table.folderId,
+		),
+	}),
+);
+
+export const videoViewerGrants = mysqlTable(
+	"video_viewer_grants",
+	{
+		id: nanoId("id").notNull().primaryKey(),
+		videoId: nanoId("videoId")
+			.notNull()
+			.$type<Video.VideoId>()
+			.references(() => videos.id, { onDelete: "cascade" }),
+		email: varchar("email", { length: 255 }).notNull(),
+		invitedByUserId: nanoId("invitedByUserId").notNull().$type<User.UserId>(),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+		revokedAt: timestamp("revokedAt"),
+	},
+	(table) => ({
+		videoEmailUnique: uniqueIndex("video_email_idx").on(
+			table.videoId,
+			table.email,
 		),
 	}),
 );

@@ -23,6 +23,7 @@ on:
       - "crates/enc-mediafoundation/**"
       - "crates/timestamp/**"
       - "crates/rendering/**"
+      - "crates/render-farm/**"
       - "crates/editor/**"
       - "crates/export/**"
       - "crates/audio/**"
@@ -156,6 +157,10 @@ jobs:
           cargo test --locked -p cap-editor --lib audio::tests::
           cargo test --locked -p cap-editor --lib audio_output::tests::
           cargo test --locked -p cap-editor --lib playback::tests::
+
+      - name: Render farm engine
+        shell: bash
+        run: cargo test --locked -p cap-render-farm
 
       # Real encoders + DASH muxer + remux/validation over full instant-mode
       # scenarios: pause/resume excision, stall-recovery bursts with

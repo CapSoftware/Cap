@@ -178,6 +178,7 @@ function makeFixture({
 		metadata: null,
 		tombstoneAt: null,
 		allowedEmailDomain: null,
+		defaultVideoVisibility: null,
 		customDomain: null,
 		domainVerified: null,
 		settings: null,

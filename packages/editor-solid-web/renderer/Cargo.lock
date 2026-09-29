@@ -672,6 +672,7 @@ name = "cap-rendering"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "ash",
  "bezier_easing",
  "build-time",
  "bytemuck",
@@ -692,6 +693,7 @@ dependencies = [
  "glyphon",
  "image",
  "js-sys",
+ "libloading 0.8.9",
  "log",
  "metal",
  "objc2",
