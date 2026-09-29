@@ -6700,6 +6700,7 @@ fn apply_recording_camera_preview_state(
         CameraPreviewShape::Round => {
             config.camera.shape = CameraShape::Square;
             config.camera.rounding = 100.0;
+            config.camera.rounding_type = cap_project::CornerStyle::Rounded;
         }
         CameraPreviewShape::Square => {
             config.camera.shape = CameraShape::Square;
