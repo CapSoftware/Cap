@@ -229,7 +229,12 @@ export function CaptionsTrack(props: {
 												bounds.nextStart - minDuration(),
 											),
 										);
-										return { start, minValue, maxValue };
+										return {
+											start,
+											minValue,
+											maxValue,
+											targets: snapTargetsFor(i()),
+										};
 									},
 									(e, value, initialMouseX) => {
 										const delta =
@@ -237,8 +242,9 @@ export function CaptionsTrack(props: {
 												value.start +
 													(e.clientX - initialMouseX) * secsPerPixel(),
 												e,
-												snapTargetsFor(i()),
+												value.targets,
 												secsPerPixel(),
+												{ min: value.minValue, max: value.maxValue },
 											) - value.start;
 										const next = Math.max(
 											value.minValue,
@@ -263,15 +269,24 @@ export function CaptionsTrack(props: {
 										const bounds = neighborBounds(i());
 										const minDelta = bounds.prevEnd - original.start;
 										const maxDelta = bounds.nextStart - original.end;
-										return { original, minDelta, maxDelta };
+										return {
+											original,
+											minDelta,
+											maxDelta,
+											targets: snapTargetsFor(i()),
+										};
 									},
 									(e, value, initialMouseX) => {
 										const delta = snapMoveDelta(
 											value.original,
 											(e.clientX - initialMouseX) * secsPerPixel(),
 											e,
-											snapTargetsFor(i()),
+											value.targets,
 											secsPerPixel(),
+											{
+												min: Math.min(value.minDelta, value.maxDelta),
+												max: Math.max(value.minDelta, value.maxDelta),
+											},
 										);
 										const lowerBound = Math.min(value.minDelta, value.maxDelta);
 										const upperBound = Math.max(value.minDelta, value.maxDelta);
@@ -302,7 +317,12 @@ export function CaptionsTrack(props: {
 										const end = segment.end;
 										const minValue = segment.start + minDuration();
 										const maxValue = Math.max(minValue, bounds.nextStart);
-										return { end, minValue, maxValue };
+										return {
+											end,
+											minValue,
+											maxValue,
+											targets: snapTargetsFor(i()),
+										};
 									},
 									(e, value, initialMouseX) => {
 										const delta =
@@ -310,8 +330,9 @@ export function CaptionsTrack(props: {
 												value.end +
 													(e.clientX - initialMouseX) * secsPerPixel(),
 												e,
-												snapTargetsFor(i()),
+												value.targets,
 												secsPerPixel(),
+												{ min: value.minValue, max: value.maxValue },
 											) - value.end;
 										const next = Math.max(
 											value.minValue,

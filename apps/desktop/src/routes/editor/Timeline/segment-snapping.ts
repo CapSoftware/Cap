@@ -24,6 +24,7 @@ export type SnapTimeline = {
 };
 
 export type SnapExclusion = { type: TimelineTrackType; index: number };
+export type SnapBounds = { min: number; max: number };
 
 const readSnappingPreference = () => {
 	try {
@@ -43,6 +44,7 @@ export { snapGuideTime, snappingEnabled };
 export function toggleSnapping() {
 	const next = !snappingEnabled();
 	setSnappingEnabledSignal(next);
+	if (!next) setSnapGuideTime(null);
 	try {
 		localStorage.setItem(SNAPPING_STORAGE_KEY, next ? "on" : "off");
 	} catch {}
@@ -51,6 +53,9 @@ export function toggleSnapping() {
 export function clearSnapGuide() {
 	setSnapGuideTime(null);
 }
+
+if (typeof window !== "undefined")
+	window.addEventListener("blur", clearSnapGuide);
 
 export function timelineSnapTargets(
 	timeline: SnapTimeline | null | undefined,
@@ -94,10 +99,18 @@ export function timelineSnapTargets(
 	return targets;
 }
 
-function nearestTarget(time: number, targets: number[], threshold: number) {
+function nearestTarget(
+	time: number,
+	targets: number[],
+	threshold: number,
+	offset = 0,
+	bounds?: SnapBounds,
+) {
 	let best: number | null = null;
 	let bestDistance = threshold;
 	for (const target of targets) {
+		const landing = target - offset;
+		if (bounds && (landing < bounds.min || landing > bounds.max)) continue;
 		const distance = Math.abs(target - time);
 		if (distance <= bestDistance) {
 			best = target;
@@ -115,12 +128,19 @@ export function snapEdgeTime(
 	event: MouseEvent,
 	targets: number[],
 	secsPerPixel: number,
+	bounds?: SnapBounds,
 ): number {
 	if (!snappingActive(event)) {
 		setSnapGuideTime(null);
 		return time;
 	}
-	const hit = nearestTarget(time, targets, SEGMENT_SNAP_PX * secsPerPixel);
+	const hit = nearestTarget(
+		time,
+		targets,
+		SEGMENT_SNAP_PX * secsPerPixel,
+		0,
+		bounds,
+	);
 	setSnapGuideTime(hit?.target ?? null);
 	return hit?.target ?? time;
 }
@@ -131,14 +151,27 @@ export function snapMoveDelta(
 	event: MouseEvent,
 	targets: number[],
 	secsPerPixel: number,
+	deltaBounds?: SnapBounds,
 ): number {
 	if (!snappingActive(event)) {
 		setSnapGuideTime(null);
 		return delta;
 	}
 	const threshold = SEGMENT_SNAP_PX * secsPerPixel;
-	const startHit = nearestTarget(span.start + delta, targets, threshold);
-	const endHit = nearestTarget(span.end + delta, targets, threshold);
+	const startHit = nearestTarget(
+		span.start + delta,
+		targets,
+		threshold,
+		span.start,
+		deltaBounds,
+	);
+	const endHit = nearestTarget(
+		span.end + delta,
+		targets,
+		threshold,
+		span.end,
+		deltaBounds,
+	);
 	const useStart =
 		startHit && (!endHit || startHit.distance <= endHit.distance);
 	if (useStart) {
@@ -176,6 +209,18 @@ if (import.meta.vitest) {
 		expect(
 			snapEdgeTime(10.05, { altKey: true } as MouseEvent, targets, 0.01),
 		).toBe(10.05);
+	});
+
+	it("ignores targets outside the allowed range", () => {
+		expect(
+			snapEdgeTime(9.96, event, [10, 9.9], 0.01, { min: 0, max: 9.95 }),
+		).toBe(9.9);
+		expect(
+			snapMoveDelta({ start: 3, end: 7 }, 2.96, event, [10], 0.01, {
+				min: -3,
+				max: 2,
+			}),
+		).toBe(2.96);
 	});
 
 	it("moves a segment so its nearest edge lands on the target", () => {

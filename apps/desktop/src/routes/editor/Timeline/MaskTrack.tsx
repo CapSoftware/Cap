@@ -418,7 +418,12 @@ export function MaskTrack(props: {
 												bounds.nextStart - minDuration(),
 											),
 										);
-										return { start, minValue, maxValue };
+										return {
+											start,
+											minValue,
+											maxValue,
+											targets: snapTargetsFor(index),
+										};
 									},
 									(e, value, initialMouseX) => {
 										const delta =
@@ -426,8 +431,9 @@ export function MaskTrack(props: {
 												value.start +
 													(e.clientX - initialMouseX) * secsPerPixel(),
 												e,
-												snapTargetsFor(index),
+												value.targets,
 												secsPerPixel(),
+												{ min: value.minValue, max: value.maxValue },
 											) - value.start;
 										const next = Math.max(
 											value.minValue,
@@ -464,6 +470,7 @@ export function MaskTrack(props: {
 											original,
 											minDelta,
 											maxDelta,
+											targets: snapTargetsFor(index),
 										};
 									},
 									(e, value, initialMouseX) => {
@@ -471,8 +478,12 @@ export function MaskTrack(props: {
 											value.original,
 											(e.clientX - initialMouseX) * secsPerPixel(),
 											e,
-											snapTargetsFor(index),
+											value.targets,
 											secsPerPixel(),
+											{
+												min: Math.min(value.minDelta, value.maxDelta),
+												max: Math.max(value.minDelta, value.maxDelta),
+											},
 										);
 										const lowerBound = Math.min(value.minDelta, value.maxDelta);
 										const upperBound = Math.max(value.minDelta, value.maxDelta);
@@ -520,7 +531,12 @@ export function MaskTrack(props: {
 										const end = segment.end;
 										const minValue = segment.start + minDuration();
 										const maxValue = Math.max(minValue, bounds.nextStart);
-										return { end, minValue, maxValue };
+										return {
+											end,
+											minValue,
+											maxValue,
+											targets: snapTargetsFor(index),
+										};
 									},
 									(e, value, initialMouseX) => {
 										const delta =
@@ -528,8 +544,9 @@ export function MaskTrack(props: {
 												value.end +
 													(e.clientX - initialMouseX) * secsPerPixel(),
 												e,
-												snapTargetsFor(index),
+												value.targets,
 												secsPerPixel(),
+												{ min: value.minValue, max: value.maxValue },
 											) - value.end;
 										const next = Math.max(
 											value.minValue,

@@ -490,6 +490,7 @@ export function SceneTrack(props: {
 											e,
 											value.targets,
 											secsPerPixel(),
+											{ min: value.minValue, max: value.maxValue },
 										);
 										const nextStart = Math.min(
 											value.maxValue,
@@ -543,6 +544,10 @@ export function SceneTrack(props: {
 											e,
 											value.targets,
 											secsPerPixel(),
+											{
+												min: value.minStart - value.original.start,
+												max: value.maxEnd - value.original.end,
+											},
 										);
 
 										const newStart = value.original.start + rawDelta;
@@ -625,6 +630,7 @@ export function SceneTrack(props: {
 											e,
 											value.targets,
 											secsPerPixel(),
+											{ min: value.minValue, max: value.maxValue },
 										);
 										const nextEnd = Math.min(
 											value.maxValue,

@@ -481,7 +481,13 @@ export function AudioTrack(props: {
 											minValue,
 											segment.end - minDuration(),
 										);
-										return { start, trimStart, minValue, maxValue };
+										return {
+											start,
+											trimStart,
+											minValue,
+											maxValue,
+											targets: snapTargetsFor(index),
+										};
 									},
 									(e, value, initialMouseX) => {
 										const delta =
@@ -489,8 +495,9 @@ export function AudioTrack(props: {
 												value.start +
 													(e.clientX - initialMouseX) * secsPerPixel(),
 												e,
-												snapTargetsFor(index),
+												value.targets,
 												secsPerPixel(),
+												{ min: value.minValue, max: value.maxValue },
 											) - value.start;
 										const next = Math.max(
 											value.minValue,
@@ -516,14 +523,21 @@ export function AudioTrack(props: {
 								class="relative z-0 flex items-center cursor-grab overflow-hidden"
 								onMouseDown={createMouseDownDrag(
 									() => index,
-									() => ({ original: { ...segment } }),
+									() => ({
+										original: { ...segment },
+										targets: snapTargetsFor(index),
+									}),
 									(e, value, initialMouseX) => {
 										const delta = snapMoveDelta(
 											value.original,
 											(e.clientX - initialMouseX) * secsPerPixel(),
 											e,
-											snapTargetsFor(index),
+											value.targets,
 											secsPerPixel(),
+											{
+												min: -value.original.start,
+												max: totalDuration() - value.original.end,
+											},
 										);
 										const next = computeMovedAudioSegment(
 											value.original,
@@ -578,7 +592,12 @@ export function AudioTrack(props: {
 											minValue,
 											Math.min(totalDuration(), sourceLimit),
 										);
-										return { end, minValue, maxValue };
+										return {
+											end,
+											minValue,
+											maxValue,
+											targets: snapTargetsFor(index),
+										};
 									},
 									(e, value, initialMouseX) => {
 										const delta =
@@ -586,8 +605,9 @@ export function AudioTrack(props: {
 												value.end +
 													(e.clientX - initialMouseX) * secsPerPixel(),
 												e,
-												snapTargetsFor(index),
+												value.targets,
 												secsPerPixel(),
+												{ min: value.minValue, max: value.maxValue },
 											) - value.end;
 										const next = Math.max(
 											value.minValue,

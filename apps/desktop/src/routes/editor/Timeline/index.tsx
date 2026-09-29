@@ -1467,21 +1467,19 @@ export function Timeline(props: {
 						</div>
 					)}
 				</Show>
-				<Show when={snapGuideTime()}>
-					{(time) => (
-						<div
-							class="absolute bottom-0 z-20 w-px pointer-events-none bg-ed-accent"
-							style={{
-								left: `${TRACK_GUTTER}px`,
-								top: `${PLAYHEAD_TOP_OFFSET}px`,
-								transform: `translateX(${
-									(time() - transform().position) / secsPerPixel()
-								}px)`,
-							}}
-						>
-							<div class="absolute top-0 left-1/2 size-2 -translate-x-1/2 -translate-y-1/2 rotate-45 rounded-[1px] bg-ed-accent" />
-						</div>
-					)}
+				<Show when={snapGuideTime() !== null}>
+					<div
+						class="absolute bottom-0 z-20 w-px pointer-events-none bg-ed-accent"
+						style={{
+							left: `${TRACK_GUTTER}px`,
+							top: `${PLAYHEAD_TOP_OFFSET}px`,
+							transform: `translateX(${
+								((snapGuideTime() ?? 0) - transform().position) / secsPerPixel()
+							}px)`,
+						}}
+					>
+						<div class="absolute top-0 left-1/2 size-2 -translate-x-1/2 -translate-y-1/2 rotate-45 rounded-[1px] bg-ed-accent" />
+					</div>
 				</Show>
 				<div class="overflow-hidden relative flex-1 min-h-0">
 					<div
