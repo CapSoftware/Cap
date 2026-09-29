@@ -432,6 +432,9 @@ export function CaptionsTab(props: {
 	const setIsGenerating = (value: boolean) =>
 		setEditorState("captions", "isGenerating", value);
 	const [hasAudio, setHasAudio] = createSignal(false);
+	const [generationError, setGenerationError] = createSignal<string | null>(
+		null,
+	);
 	const availableModelOptions = createMemo(() =>
 		supportsParakeetTranscription()
 			? MODEL_OPTIONS
@@ -768,6 +771,7 @@ export function CaptionsTab(props: {
 		}
 
 		setIsGenerating(true);
+		setGenerationError(null);
 
 		try {
 			const result = await transcribeEditorCaptions(
@@ -792,13 +796,15 @@ export function CaptionsTab(props: {
 
 				toast.success("Captions generated successfully!");
 			} else {
-				toast.error(
-					"No captions were generated. The audio might be too quiet or unclear.",
-				);
+				const message =
+					"No captions were generated. The audio might be too quiet or unclear.";
+				setGenerationError(message);
+				toast.error(message);
 			}
 		} catch (error) {
 			console.error("Error generating captions:", error);
 			const errorMessage = getCaptionGenerationErrorMessage(error);
+			setGenerationError(errorMessage);
 			toast.error(`Failed to generate captions: ${errorMessage}`);
 		} finally {
 			setIsGenerating(false);
@@ -898,6 +904,13 @@ export function CaptionsTab(props: {
 									? "Regenerate Captions"
 									: "Generate Captions"}
 						</Button>
+						<Show when={generationError()}>
+							{(message) => (
+								<p role="alert" class="text-[11px] leading-relaxed text-red-11">
+									{message()}
+								</p>
+							)}
+						</Show>
 					</Show>
 				</div>
 			</Show>
@@ -1134,6 +1147,16 @@ export function CaptionsTab(props: {
 											? "Regenerate Captions"
 											: "Generate Captions"}
 								</Button>
+							</Show>
+							<Show when={generationError()}>
+								{(message) => (
+									<p
+										role="alert"
+										class="text-[11px] leading-relaxed text-red-11"
+									>
+										{message()}
+									</p>
+								)}
 							</Show>
 							<div class="flex gap-2 justify-between items-center text-[11px] text-ed-text-3">
 								<span class="flex gap-1.5 items-center min-w-0">
