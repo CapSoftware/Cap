@@ -488,6 +488,7 @@ export class EditorHostBridge {
 		private readonly onProjectSaved?: (savedAt: string) => void,
 		private readonly getProjectSavedAt?: () => string | null,
 		private readonly browserOnly = false,
+		private readonly onCapacityWait?: (waiting: boolean) => void,
 	) {
 		this.editorPath = `cap-web-editor://session/${sessionId}`;
 		this.browserSessionId = sessionId;
@@ -523,13 +524,22 @@ export class EditorHostBridge {
 	) {
 		const signal = this.controller.signal;
 		const projectSavedAt = this.getProjectSavedAt?.() ?? null;
-		const created = await startWebEditorPreparation(
-			this.videoId,
-			signal,
-			() => undefined,
-			fetch,
-			capacityWaitMs,
-		);
+		const reportCapacityWait = (waiting: boolean) => {
+			if (!this.disposed) this.onCapacityWait?.(waiting);
+		};
+		let created: Awaited<ReturnType<typeof startWebEditorPreparation>>;
+		try {
+			created = await startWebEditorPreparation(
+				this.videoId,
+				signal,
+				reportCapacityWait,
+				fetch,
+				capacityWaitMs,
+			);
+		} catch (error) {
+			reportCapacityWait(false);
+			throw error;
+		}
 		this.workerPreparationId = created.id;
 		try {
 			const deadline = Date.now() + 5 * 60 * 1000;

@@ -34,6 +34,7 @@ import {
 	readEditorLocalDraft,
 } from "@/lib/editor-local-draft";
 import type { WebEditorVideoImportProgress } from "@/lib/editor-video-import-client";
+import { openWorkerEditorSession } from "@/lib/editor-worker-session-client";
 import { navigateWithTransition, nextPageReady } from "@/utils/view-transition";
 import type { ClipRecorderContext } from "./clip-recorder-context";
 import { EditorClipRecorder } from "./editor-clip-recorder";
@@ -106,6 +107,8 @@ export function StudioEditorClient(props: {
 	const [videoImport, setVideoImport] = useState<
 		WebEditorVideoImportProgress | WebEditorCapImportProgress | null
 	>(null);
+	const [workerBusy, setWorkerBusy] = useState(false);
+	const [workerPreviewPending, setWorkerPreviewPending] = useState(false);
 	useAppPage();
 	const [recordClipOpen, setRecordClipOpen] = useState(false);
 	const entryFrame = useEntryFrame(videoId);
@@ -127,6 +130,7 @@ export function StudioEditorClient(props: {
 	const savedAtRef = useRef(savedAt);
 	const captureDraftRef = useRef<() => boolean>(() => true);
 	const closedRef = useRef(false);
+	const workerPreviewRef = useRef<((message: string) => boolean) | null>(null);
 	const restartAfterImport = useCallback(async () => {
 		const activeSession = sessionRef.current;
 		if (activeSession && !activeSession.startsWith("browser-")) {
@@ -206,6 +210,39 @@ export function StudioEditorClient(props: {
 				).catch(() => undefined);
 			}
 		};
+		// A browser with no WebGPU or WebGL2 can't draw the preview, so a worker
+		// renders it instead. GPU browsers never reach this.
+		let workerPreviewTried = false;
+		workerPreviewRef.current = (message) => {
+			if (
+				workerPreviewTried ||
+				closedRef.current ||
+				!sessionRef.current?.startsWith("browser-")
+			)
+				return false;
+			workerPreviewTried = true;
+			setWorkerPreviewPending(true);
+			void openWorkerEditorSession(videoId, controller.signal, setWorkerBusy)
+				.then((workerSession) => {
+					if (controller.signal.aborted || closedRef.current) {
+						void fetch(
+							`/api/editor/sessions/${encodeURIComponent(workerSession)}?videoId=${encodeURIComponent(videoId)}`,
+							{ method: "DELETE", keepalive: true },
+						).catch(() => undefined);
+						return;
+					}
+					sessionRef.current = workerSession;
+					setSessionId(workerSession);
+				})
+				.catch(() => {
+					if (!controller.signal.aborted) setError(message);
+				})
+				.finally(() => {
+					setWorkerBusy(false);
+					setWorkerPreviewPending(false);
+				});
+			return true;
+		};
 		const open = async () => {
 			try {
 				const browserSessionId = `browser-${videoId}`;
@@ -279,6 +316,7 @@ export function StudioEditorClient(props: {
 			window.removeEventListener("pagehide", close);
 			close();
 			captureDraftRef.current = () => true;
+			workerPreviewRef.current = null;
 		};
 	}, [captionsEnabled, savedAt, userId, videoId]);
 
@@ -495,7 +533,8 @@ export function StudioEditorClient(props: {
 					savedAtRef.current = nextSavedAt;
 				},
 				() => savedAtRef.current,
-				true,
+				sessionId.startsWith("browser-"),
+				setWorkerBusy,
 			);
 			bridgeRef.current = bridge;
 			void bridge.connect(iframe).catch((cause) => {
@@ -546,8 +585,12 @@ export function StudioEditorClient(props: {
 					typeof message.message === "string" &&
 					message.message.length > 0 &&
 					message.message.length <= 1000
-				)
-					setError(message.message);
+				) {
+					const gpuUnavailable =
+						"reason" in message && message.reason === "gpu-unavailable";
+					if (!(gpuUnavailable && workerPreviewRef.current?.(message.message)))
+						setError(message.message);
+				}
 			}
 		};
 		window.addEventListener("message", onFrameMessage);
@@ -735,30 +778,45 @@ export function StudioEditorClient(props: {
 				{upgradeOpen && (
 					<UpgradeModal open={upgradeOpen} onOpenChange={setUpgradeOpen} />
 				)}
-				{videoImport && videoImport.stage !== "ready" && (
-					<output className="pointer-events-none absolute bottom-6 right-6 z-50 w-64 rounded-xl border border-white/10 bg-neutral-950/95 px-4 py-3 text-sm text-white shadow-xl">
-						{videoImport.stage === "uploading" ? (
-							<>
+				<div className="pointer-events-none absolute bottom-6 right-6 z-50 flex w-64 flex-col gap-2">
+					{workerPreviewPending && (
+						<output className="rounded-xl border border-white/10 bg-neutral-950/95 px-4 py-3 text-sm text-white shadow-xl">
+							This browser can't draw the preview itself, so Cap is preparing it
+							on its servers. This takes a moment.
+						</output>
+					)}
+					{workerBusy && (
+						<output className="rounded-xl border border-white/10 bg-neutral-950/95 px-4 py-3 text-sm text-white shadow-xl">
+							Editor servers are busy. Your request will start as soon as one is
+							free.
+						</output>
+					)}
+					{videoImport && videoImport.stage !== "ready" && (
+						<output className="rounded-xl border border-white/10 bg-neutral-950/95 px-4 py-3 text-sm text-white shadow-xl">
+							{videoImport.stage === "uploading" ? (
+								<>
+									<p>
+										Uploading{" "}
+										{"kind" in videoImport ? "Cap recording" : "video"}{" "}
+										{Math.round(videoImport.fraction * 100)}%
+									</p>
+									<div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/20">
+										<div
+											className="h-full rounded-full bg-blue-400 transition-[width] duration-150"
+											style={{ width: `${videoImport.fraction * 100}%` }}
+										/>
+									</div>
+								</>
+							) : (
 								<p>
-									Uploading {"kind" in videoImport ? "Cap recording" : "video"}{" "}
-									{Math.round(videoImport.fraction * 100)}%
+									{videoImport.stage === "importing"
+										? "Importing Cap recording…"
+										: "Preparing video…"}
 								</p>
-								<div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/20">
-									<div
-										className="h-full rounded-full bg-blue-400 transition-[width] duration-150"
-										style={{ width: `${videoImport.fraction * 100}%` }}
-									/>
-								</div>
-							</>
-						) : (
-							<p>
-								{videoImport.stage === "importing"
-									? "Importing Cap recording…"
-									: "Preparing video…"}
-							</p>
-						)}
-					</output>
-				)}
+							)}
+						</output>
+					)}
+				</div>
 			</div>
 		</div>
 	);

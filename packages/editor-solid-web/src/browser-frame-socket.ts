@@ -10,10 +10,14 @@ import { BrowserLocalPlayback } from "./browser-local-playback";
 /// The message the page shows when the preview can't start. Without WebGPU or
 /// WebGL2 (no GPU, or one the browser blocks) nothing can draw it.
 export function previewFailureMessage(error: unknown) {
-	const detail = error instanceof Error ? error.message : String(error);
-	return /WebGL2 is unavailable/i.test(detail)
+	return previewNeedsGpu(error)
 		? "This browser can't draw the editor preview. Turn on hardware acceleration in its settings, or try Chrome or Edge."
 		: "The editor preview couldn't start. Try again.";
+}
+
+export function previewNeedsGpu(error: unknown) {
+	const detail = error instanceof Error ? error.message : String(error);
+	return /WebGL2 is unavailable/i.test(detail);
 }
 
 function reportPreviewFailure(error: unknown) {
@@ -23,6 +27,7 @@ function reportPreviewFailure(error: unknown) {
 			kind: "cap-editor-preview-failed",
 			version: 1,
 			message: previewFailureMessage(error),
+			...(previewNeedsGpu(error) ? { reason: "gpu-unavailable" } : {}),
 		},
 		window.location.origin,
 	);
