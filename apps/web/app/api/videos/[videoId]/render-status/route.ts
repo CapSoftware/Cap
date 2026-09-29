@@ -78,6 +78,17 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 							try: () => refreshRenderFarmSave(video),
 							catch: () => new HttpApiError.InternalServerError(),
 						});
+						const published =
+							video.metadata?.renderFarmSave?.status === "rendering" &&
+							status.state === "ready";
+						const [current] = published
+							? yield* database.use((client) =>
+									client
+										.select({ source: videos.source })
+										.from(videos)
+										.where(eq(videos.id, path.videoId)),
+								)
+							: [video];
 						const browserSave =
 							status.state === "rendering"
 								? null
@@ -99,7 +110,7 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 									}
 								: status),
 							current: renderFarmSaveIsCurrent(video.metadata),
-							revision: shareVideoRevision(video.source),
+							revision: shareVideoRevision((current ?? video).source),
 						};
 					}).pipe(
 						provideOptionalAuth,
