@@ -1,7 +1,6 @@
 export const CAMERA_ONLY_PROMPT_DISMISSED_KEY =
 	"cap-web-recorder-camera-only-prompt-dismissed";
 
-/** What someone chose when they turned the camera-only question off. */
 export type CameraOnlyChoice = "camera" | "screen";
 
 export function parseCameraOnlyChoice(
