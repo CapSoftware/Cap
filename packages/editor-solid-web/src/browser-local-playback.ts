@@ -94,27 +94,28 @@ function visiblePreviewSize(
 
 /// The desktop preview quality presets size frames for a fixed 1080p output.
 /// In the browser, Full renders at the canvas's real device-pixel size
-/// (capped at 4K) and Half at half of it; Quarter keeps its low preset.
-function previewDetailBase(
-	canvas: HTMLCanvasElement,
+/// (capped at 4K), Half at half of it and Quarter at a quarter, never above
+/// its own low preset, so a smaller preset never renders more pixels.
+export function previewDetailBase(
+	canvas: Pick<HTMLCanvasElement, "getBoundingClientRect">,
 	width: number,
 	height: number,
+	density = window.devicePixelRatio,
 ) {
-	if (width < 960) return { width, height };
 	const bounds = canvas.getBoundingClientRect();
-	const density = window.devicePixelRatio;
 	if (bounds.width < 2 || bounds.height < 2 || !(density > 0)) {
 		return { width, height };
 	}
-	const fraction = width >= 1920 ? 1 : 0.5;
+	const quarter = width < 960;
+	const fraction = width >= 1920 ? 1 : quarter ? 0.25 : 0.5;
 	const scale = Math.min(
 		fraction *
 			Math.max(
 				(bounds.width * density) / width,
 				(bounds.height * density) / height,
 			),
-		3840 / width,
-		2160 / height,
+		quarter ? 1 : 3840 / width,
+		quarter ? 1 : 2160 / height,
 	);
 	return {
 		width: Math.max(2, Math.round(width * scale)),
