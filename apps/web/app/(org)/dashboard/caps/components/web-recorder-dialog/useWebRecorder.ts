@@ -2217,7 +2217,15 @@ export const useWebRecorder = ({
 				recording.uploadedAudio.add(sidecar);
 			};
 			const sidecarResults = await Promise.allSettled([
-				pairedCameraCapture ? finalizeCamera() : Promise.resolve(),
+				pairedCameraCapture
+					? finalizeCamera().catch((cameraUploadError) => {
+							console.error(
+								"Failed to upload camera recording",
+								cameraUploadError,
+							);
+							throw cameraUploadError;
+						})
+					: Promise.resolve(),
 				uploader.uploadRemaining(screenFinalBlob),
 				...audioSidecars.map(finalizeAudio),
 			]);
