@@ -15,6 +15,7 @@ import { Organisation } from "@cap/web-domain";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { MAX_AUDIO_VIDEO_SECONDS } from "@/lib/audio-video-limits";
 import { importMediaFile } from "../../../import/import-media";
 import { useUploadingContext } from "../../UploadingContext";
 import type { RecordingQuality } from "./recording-quality";
@@ -31,6 +32,8 @@ const CONVERT_SHARE = 0.2;
 // The upload is refused once its rounded duration passes the free limit, so
 // a free take stops a second early to leave room for the encoder's tail.
 const FREE_PLAN_STOP_AT_MS = FREE_PLAN_MAX_RECORDING_MS - 1000;
+// The take is turned into a video to share, which caps its length.
+const MAX_STOP_AT_MS = MAX_AUDIO_VIDEO_SECONDS * 1000 - 1000;
 
 /**
  * Records just the microphone. The recording can't stream to storage like a
@@ -200,8 +203,18 @@ export function useMicOnlyRecorder({
 				if (event.data.size === 0) return;
 				chunksRef.current.push(event.data);
 				setRecordedBytes((bytes) => bytes + event.data.size);
-				spoolRef.current?.appendChunk(event.data).catch((error: unknown) => {
-					console.warn("Microphone backup write failed", error);
+				const spool = spoolRef.current;
+				spool?.appendChunk(event.data).catch((error: unknown) => {
+					if (spoolRef.current !== spool) return;
+					// The take is still whole in memory; a backup missing a chunk
+					// would only offer a broken recovery later.
+					console.error("Microphone backup write failed", error);
+					spoolRef.current = null;
+					stopHeartbeat();
+					void spool.dispose().catch(() => undefined);
+					toast.warning(
+						"This recording is no longer backed up on this device. Keep this tab open until it saves.",
+					);
 				});
 			};
 			stream.getAudioTracks()[0]?.addEventListener("ended", () => {
@@ -235,6 +248,7 @@ export function useMicOnlyRecorder({
 		discard,
 		releaseStream,
 		replaceErrorDownload,
+		stopHeartbeat,
 	]);
 
 	const save = useCallback(
@@ -409,11 +423,13 @@ export function useMicOnlyRecorder({
 	}, [discard, replaceErrorDownload]);
 
 	useEffect(() => {
-		if (isProUser) return;
 		if (phase !== "recording" && phase !== "paused") return;
-		if (durationMs < FREE_PLAN_STOP_AT_MS) return;
+		if (durationMs < (isProUser ? MAX_STOP_AT_MS : FREE_PLAN_STOP_AT_MS))
+			return;
 		toast.info(
-			"Free plan recordings are limited to 5 minutes. Recording stopped automatically.",
+			isProUser
+				? "Microphone recordings are limited to 4 hours. Recording stopped automatically."
+				: "Free plan recordings are limited to 5 minutes. Recording stopped automatically.",
 		);
 		void stopRef.current();
 	}, [durationMs, isProUser, phase]);

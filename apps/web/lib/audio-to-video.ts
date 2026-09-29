@@ -16,10 +16,10 @@ import {
 	Mp4OutputFormat,
 	Output,
 } from "mediabunny";
+import { MAX_AUDIO_VIDEO_SECONDS } from "./audio-video-limits";
 
 const WIDTH = 1280;
 const HEIGHT = 720;
-const MAX_SECONDS = 4 * 60 * 60;
 /** Codecs an MP4 can carry that browsers also play. */
 const COPYABLE_CODECS: AudioCodec[] = ["aac", "opus", "mp3", "flac"];
 
@@ -44,7 +44,8 @@ export async function wrapAudioInVideo(
 		if (!track) throw new Error("This file has no audio in it");
 		const duration = await input.computeDuration();
 		if (!(duration > 0)) throw new Error("This audio file is empty");
-		if (duration > MAX_SECONDS) throw new Error("This audio file is too long");
+		if (duration > MAX_AUDIO_VIDEO_SECONDS)
+			throw new Error("This audio file is too long");
 
 		const title = file.name.replace(/\.[^.]+$/, "") || "Audio";
 		const canvas = new OffscreenCanvas(WIDTH, HEIGHT);
