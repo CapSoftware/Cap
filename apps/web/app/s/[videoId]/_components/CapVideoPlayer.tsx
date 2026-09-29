@@ -95,6 +95,8 @@ interface CaptionOption {
 interface Props {
 	videoSrc: string;
 	initialPlaybackUrl?: Promise<string | null>;
+	/** Changes when a Save publishes a new file behind the same `videoSrc`. */
+	sourceRevision?: string | null;
 	rawFallbackSrc?: string;
 	videoId: Video.VideoId;
 	chaptersSrc: string;
@@ -144,6 +146,7 @@ interface Props {
 export function CapVideoPlayer({
 	videoSrc,
 	initialPlaybackUrl,
+	sourceRevision = null,
 	rawFallbackSrc,
 	videoId,
 	chaptersSrc,
@@ -243,6 +246,7 @@ export function CapVideoPlayer({
 			rawFallbackSrc,
 			enableCrossOrigin,
 			preferredSource,
+			sourceRevision,
 		],
 		queryFn: shouldDeferResolvedSource
 			? skipToken
@@ -270,12 +274,13 @@ export function CapVideoPlayer({
 	useEffect(() => {
 		void videoSrc;
 		void rawFallbackSrc;
+		void sourceRevision;
 		setVideoLoaded(false);
 		setHasError(false);
 		setShowPlayButton(false);
 		setPreferredSource("mp4");
 		setHasTriedRawFallback(false);
-	}, [videoSrc, rawFallbackSrc]);
+	}, [videoSrc, rawFallbackSrc, sourceRevision]);
 
 	useEffect(() => {
 		const resolvedUrl = resolvedSrc.data?.url;
@@ -580,6 +585,7 @@ export function CapVideoPlayer({
 					rawFallbackSrc,
 					enableCrossOrigin,
 					preferredSource,
+					sourceRevision,
 				],
 			});
 			onUploadComplete?.();
@@ -591,6 +597,7 @@ export function CapVideoPlayer({
 		preferredSource,
 		queryClient,
 		rawFallbackSrc,
+		sourceRevision,
 		uploadProgressRaw,
 		videoSrc,
 	]);

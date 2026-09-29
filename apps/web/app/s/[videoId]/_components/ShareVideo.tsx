@@ -21,6 +21,7 @@ import {
 import { finalizeDesktopSegmentsRecording } from "@/actions/video/finalize-desktop-segments";
 import { Tooltip } from "@/components/Tooltip";
 import { isRetryableDesktopSegmentsFinalizationError } from "@/lib/desktop-segments-retryable-errors";
+import { shareVideoRevision } from "@/lib/share-video-revision";
 import type { VideoData } from "../types";
 import { type CaptionLanguage, useCaptionContext } from "./CaptionContext";
 import {
@@ -34,6 +35,7 @@ import {
 	shouldDeferPlaybackSource,
 	type UploadProgress,
 } from "./upload-progress";
+import { useShareVideoUpdates } from "./use-share-video-updates";
 import { formatChaptersAsVTT } from "./utils/transcript-utils";
 
 type CommentWithAuthor = typeof commentsSchema.$inferSelect & {
@@ -494,6 +496,14 @@ export const ShareVideo = forwardRef<
 		const renderSaveActive =
 			isMp4Source &&
 			(renderStarting || data.metadata?.renderFarmSave?.status === "rendering");
+		const sourceRevision = isMp4Source ? shareVideoRevision(data.source) : null;
+		const { updateAvailable, showLatest } = useShareVideoUpdates({
+			videoId: data.id,
+			revision: sourceRevision,
+			videoRef,
+			enabled:
+				viewerIsOwner && isMp4Source && !renderSaveActive && !isOverShareLimit,
+		});
 		const capVideoPlayer = (
 			<CapVideoPlayer
 				videoId={data.id}
@@ -506,6 +516,7 @@ export const ShareVideo = forwardRef<
 				videoSrc={videoSrc}
 				rawFallbackSrc={rawFallbackSrc}
 				initialPlaybackUrl={initialPlaybackUrl}
+				sourceRevision={sourceRevision}
 				duration={data.duration}
 				defaultPlaybackSpeed={defaultPlaybackSpeed}
 				showPlaybackStatusBadge={showPlaybackStatusBadge}
@@ -628,6 +639,18 @@ export const ShareVideo = forwardRef<
 							}
 							canRetryProcessing={canRetryProcessing}
 						/>
+					)}
+					{updateAvailable && isMp4Source && !renderSaveActive && (
+						<div className="absolute top-3 left-1/2 z-30 flex -translate-x-1/2 items-center gap-2 rounded-full border border-white/15 bg-black/70 py-1 pr-1 pl-3 text-[12px] font-medium text-white shadow-sm backdrop-blur-sm">
+							<span>This video was updated</span>
+							<button
+								type="button"
+								onClick={showLatest}
+								className="h-6 rounded-full bg-white px-2.5 text-[11.5px] font-medium text-black transition-colors hover:bg-white/85"
+							>
+								Show latest
+							</button>
+						</div>
 					)}
 					{showFinalizeRecordingControl && (
 						<div className="absolute bottom-3 left-3 z-30 flex max-w-[calc(100%-1.5rem)] flex-col items-start gap-1.5">
