@@ -417,7 +417,10 @@ function EditorHome({
 										<span className="truncate text-[13px] font-medium">
 											{recording.name}
 										</span>
-										<span className="text-[12px] text-[var(--rec-text-3)]">
+										<span
+											className="text-[12px] text-[var(--rec-text-3)]"
+											suppressHydrationWarning
+										>
 											{dateFormatter.format(new Date(recording.createdAt))}
 										</span>
 									</span>
