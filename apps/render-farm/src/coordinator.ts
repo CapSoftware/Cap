@@ -406,9 +406,54 @@ type RecordingMeta = {
 	audio?: { path: string };
 };
 
-async function mp4MetaRanges(key: string, size: number) {
-	const headEnd = Math.min(size, 128 * 1024);
-	const head = await s3.getRange(key, 0, headEnd - 1);
+type Mp4Meta = {
+	head: [number, number];
+	moov: [number, number];
+	index: ReturnType<typeof indexVideoTrack>;
+};
+
+// Every web Save renders from a new project folder, so the per-recording
+// source index never hits; the parsed moov of an unchanged source file can.
+const mp4Metas = new Map<string, Mp4Meta>();
+const MP4_META_CACHE_ENTRIES = 16;
+/** Bytes read from each end of a source to find its moov in one round trip. */
+const MOOV_HEAD_READ = 512 * 1024;
+const MOOV_TAIL_READ = 1024 * 1024;
+
+async function mp4MetaRanges(key: string, size: number): Promise<Mp4Meta> {
+	const headEnd = Math.min(size, MOOV_HEAD_READ);
+	// Cap's recorder writes the moov after the media: read the tail alongside
+	// the head instead of after it.
+	const tailStart = Math.max(headEnd, size - MOOV_TAIL_READ);
+	const tail = tailStart < size ? s3.getRange(key, tailStart, size - 1) : null;
+	tail?.catch(() => {});
+	const { bytes: head, etag } = await s3.getRangeTagged(key, 0, headEnd - 1);
+	const cacheKey =
+		etag && process.env.RF_INDEX_CACHE !== "0"
+			? `${key}\n${size}\n${etag}`
+			: null;
+	const cached = cacheKey ? mp4Metas.get(cacheKey) : undefined;
+	if (cacheKey && cached) {
+		mp4Metas.delete(cacheKey);
+		mp4Metas.set(cacheKey, cached);
+		return cached;
+	}
+	const meta = await readMp4Meta(key, size, head, tail, tailStart);
+	if (cacheKey) {
+		mp4Metas.set(cacheKey, meta);
+		if (mp4Metas.size > MP4_META_CACHE_ENTRIES)
+			mp4Metas.delete(mp4Metas.keys().next().value as string);
+	}
+	return meta;
+}
+
+async function readMp4Meta(
+	key: string,
+	size: number,
+	head: Uint8Array,
+	tail: Promise<Uint8Array> | null,
+	tailStart: number,
+): Promise<Mp4Meta> {
 	const location = locateMoov(head, size);
 	let moovStart: number;
 	let moovBytes: Uint8Array;
@@ -426,23 +471,25 @@ async function mp4MetaRanges(key: string, size: number) {
 						location.start + location.size - 1,
 					);
 	} else if (location && "next" in location && location.next !== undefined) {
-		// Moov after mdat (Cap's recorder): fetch the tail in one request.
 		if (size - location.next > SOURCE_LIMITS.moovBytes) {
 			throw new Error(`${key} has ${size - location.next} bytes after mdat`);
 		}
-		const tail = await s3.getRange(key, location.next, size - 1);
-		const found = locateMoov(tail, tail.byteLength);
+		const after =
+			tail && location.next >= tailStart
+				? (await tail).subarray(location.next - tailStart)
+				: await s3.getRange(key, location.next, size - 1);
+		const found = locateMoov(after, after.byteLength);
 		if (!found || !("start" in found) || found.start === undefined) {
 			throw new Error(`no moov in ${key}`);
 		}
 		moovStart = location.next + found.start;
-		moovBytes = tail.subarray(found.start, found.start + found.size);
+		moovBytes = after.subarray(found.start, found.start + found.size);
 	} else {
 		throw new Error(`no moov in ${key}`);
 	}
 	return {
-		head: [0, headEnd] as [number, number],
-		moov: [moovStart, moovStart + moovBytes.byteLength] as [number, number],
+		head: [0, Math.min(size, 128 * 1024)],
+		moov: [moovStart, moovStart + moovBytes.byteLength],
 		index: indexVideoTrack(moovBytes),
 	};
 }
@@ -532,11 +579,13 @@ function checkManifest(
 async function sourceIndex(
 	prefix: string,
 	sourceRoot?: string,
+	onManifest?: (manifest: Manifest) => void,
 ): Promise<SourceIndex> {
 	const cached =
 		process.env.RF_INDEX_CACHE !== "0" ? sourceIndexes.get(prefix) : undefined;
 	if (cached) {
 		checkManifest(cached.manifest, prefix, sourceRoot);
+		onManifest?.(cached.manifest);
 		return cached;
 	}
 	const manifest = JSON.parse(
@@ -545,6 +594,7 @@ async function sourceIndex(
 		),
 	) as Manifest;
 	checkManifest(manifest, prefix, sourceRoot);
+	onManifest?.(manifest);
 	const keyOf = (file: { path: string; key?: string }) =>
 		file.key ?? `${prefix}/${file.path}`;
 	const sourceFiles = await Promise.all(
@@ -576,14 +626,12 @@ async function sourceIndex(
 		(file) => file.path === "recording-meta.json",
 	);
 	if (!metaFile) throw new Error("recording has no recording-meta.json");
-	const recordingMeta = JSON.parse(
-		new TextDecoder().decode(
-			await getBounded(keyOf(metaFile), SOURCE_LIMITS.metadataBytes),
-		),
-	) as RecordingMeta;
 	const mediaMeta: SourceIndex["mediaMeta"] = new Map();
-	await Promise.all(
-		manifest.files
+	const [recordingMeta] = await Promise.all([
+		getBounded(keyOf(metaFile), SOURCE_LIMITS.metadataBytes).then(
+			(bytes) => JSON.parse(new TextDecoder().decode(bytes)) as RecordingMeta,
+		),
+		...manifest.files
 			.filter((file) => file.path.endsWith(".mp4"))
 			.map(async (file) => {
 				const meta = await mp4MetaRanges(keyOf(file), file.size);
@@ -593,7 +641,7 @@ async function sourceIndex(
 					key: keyOf(file),
 				});
 			}),
-	);
+	]);
 	const index = { manifest, recordingMeta, mediaMeta };
 	sourceIndexes.set(prefix, index);
 	if (sourceIndexes.size > 32)
@@ -601,17 +649,7 @@ async function sourceIndex(
 	return index;
 }
 
-async function planJob(job: Job) {
-	const request = job.request;
-	const prefix = request.recording.replace(/\/$/, "");
-	const { manifest, recordingMeta, mediaMeta } = await sourceIndex(
-		prefix,
-		request.sourceRoot,
-	);
-
-	const keyOf = (file: { path: string; key?: string }) =>
-		file.key ?? `${prefix}/${file.path}`;
-
+function manifestFiles(manifest: Manifest) {
 	const mediaFiles = manifest.files.filter((file) =>
 		file.path.endsWith(".mp4"),
 	);
@@ -621,10 +659,19 @@ async function planJob(job: Job) {
 	const smallFiles = manifest.files.filter(
 		(file) => !mediaFiles.includes(file) && !audioFiles.includes(file),
 	);
+	return { mediaFiles, audioFiles, smallFiles };
+}
 
-	job.t.indexed = now();
-
-	const baseSpecs = (audioMode: "probe" | "all"): FileSpec[] => [
+/** Every file but the videos: whole small files, and audio whole or just its ends. */
+function baseFileSpecs(
+	manifest: Manifest,
+	prefix: string,
+	audioMode: "probe" | "all",
+): FileSpec[] {
+	const { audioFiles, smallFiles } = manifestFiles(manifest);
+	const keyOf = (file: { path: string; key?: string }) =>
+		file.key ?? `${prefix}/${file.path}`;
+	return [
 		...smallFiles.map((file) => ({
 			path: file.path,
 			key: keyOf(file),
@@ -644,6 +691,35 @@ async function planJob(job: Job) {
 						]),
 		})),
 	];
+}
+
+async function planJob(job: Job) {
+	const request = job.request;
+	const prefix = request.recording.replace(/\/$/, "");
+	const probeDir = join(WORK_DIR, job.id);
+	mkdirSync(probeDir, { recursive: true });
+	const cache = new ProjectCache(s3, probeDir);
+	// The probe's small files and audio ends need only the manifest, so they
+	// download while the videos are indexed.
+	let baseFetch = null as Promise<unknown> | null;
+	let index: SourceIndex;
+	try {
+		index = await sourceIndex(prefix, request.sourceRoot, (manifest) => {
+			baseFetch = cache.materialize(baseFileSpecs(manifest, prefix, "probe"));
+			baseFetch.catch(() => {});
+		});
+	} catch (error) {
+		await baseFetch?.catch(() => {});
+		cache.close();
+		throw error;
+	}
+	const { manifest, recordingMeta, mediaMeta } = index;
+	const { mediaFiles, audioFiles } = manifestFiles(manifest);
+
+	job.t.indexed = now();
+
+	const baseSpecs = (audioMode: "probe" | "all") =>
+		baseFileSpecs(manifest, prefix, audioMode);
 	const mediaSpec = (path: string, extra: [number, number][]): FileSpec => {
 		const meta = mediaMeta.get(path);
 		if (!meta) throw new Error(`no index for ${path}`);
@@ -655,13 +731,15 @@ async function planJob(job: Job) {
 		};
 	};
 
-	const probeDir = join(WORK_DIR, job.id);
-	mkdirSync(probeDir, { recursive: true });
-	const cache = new ProjectCache(s3, probeDir);
-	await cache.materialize([
-		...baseSpecs("probe"),
-		...mediaFiles.map((file) => mediaSpec(file.path, [])),
-	]);
+	try {
+		await Promise.all([
+			baseFetch ?? cache.materialize(baseSpecs("probe")),
+			cache.materialize(mediaFiles.map((file) => mediaSpec(file.path, []))),
+		]);
+	} catch (error) {
+		cache.close();
+		throw error;
+	}
 	job.t.materialized = now();
 
 	const gop = job.fps * 2;

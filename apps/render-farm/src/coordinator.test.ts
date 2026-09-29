@@ -20,6 +20,7 @@ import * as validate from "./validate";
 function harness(env: Record<string, string> = {}) {
 	const objects = new Map<string, Uint8Array>();
 	const writes: string[] = [];
+	const ranges: string[] = [];
 	const timers: (() => void)[] = [];
 	const watchdogs: (() => void)[] = [];
 	let putGate: Promise<void> | undefined;
@@ -47,7 +48,15 @@ function harness(env: Record<string, string> = {}) {
 			return value;
 		},
 		async getRange(key: string, start: number, endInclusive: number) {
+			ranges.push(`${key}:${start}`);
 			return (await this.get(key)).subarray(start, endInclusive + 1);
+		},
+		async getRangeTagged(key: string, start: number, endInclusive: number) {
+			const bytes = await this.getRange(key, start, endInclusive);
+			const etag = `"${createHash("md5")
+				.update(await this.get(key))
+				.digest("hex")}"`;
+			return { bytes, etag };
 		},
 		async list() {
 			return [...objects.keys()].map((key) => ({ key }));
@@ -152,6 +161,7 @@ function harness(env: Record<string, string> = {}) {
 		...coordinator,
 		objects,
 		writes,
+		ranges,
 		callbacks,
 		timers,
 		watchdogs,
@@ -841,6 +851,94 @@ describe("jobs for the product", () => {
 		await expect(h.sourceIndex(prefix)).rejects.toThrow(
 			"outside the recording",
 		);
+	});
+
+	test("sources index in one round trip and a new project folder reuses an unchanged source's moov", async () => {
+		const h = harness();
+		const source = "owner/video/display.mp4";
+		// Cap's recorder writes the moov after the media, past the head the
+		// index reads first.
+		const fileOf = (frames: number) => {
+			const header = mp4.buildHeader({
+				width: 128,
+				height: 72,
+				fps: 30,
+				video: {
+					sizes: new Uint32Array(frames).fill(1),
+					runs: [{ first: 0, count: frames, offset: 0 }],
+					keyframes: Uint32Array.of(0),
+					avcC: mp4.avcC(ANNEX_B_PARAMETER_SETS),
+				},
+				audio: null,
+				payloadSize: frames,
+				minimumSize: 0,
+			});
+			const at = mp4.locateMoov(header, header.byteLength) as {
+				start: number;
+				size: number;
+			};
+			const mdat = 2 * 1024 * 1024;
+			const bytes = new Uint8Array(mdat + at.size);
+			new DataView(bytes.buffer).setUint32(0, mdat);
+			bytes.set(new TextEncoder().encode("mdat"), 4);
+			bytes.set(header.subarray(at.start, at.start + at.size), mdat);
+			return bytes;
+		};
+		let folder = 0;
+		const indexOf = async (bytes: Uint8Array) => {
+			h.objects.set(source, bytes);
+			const prefix = `owner/video/.recording/render/${folder++}/project`;
+			h.objects.set(
+				`${prefix}/recording-meta.json`,
+				new TextEncoder().encode("{}"),
+			);
+			h.objects.set(
+				`${prefix}/manifest.json`,
+				new TextEncoder().encode(
+					JSON.stringify({
+						files: [
+							{ path: "recording-meta.json", size: 2 },
+							{ path: "display.mp4", key: source, size: bytes.byteLength },
+						],
+					}),
+				),
+			);
+			const before = h.ranges.filter((range) =>
+				range.startsWith(`${source}:`),
+			).length;
+			const index = (await h.sourceIndex(prefix, "owner/video/")) as {
+				mediaMeta: Map<
+					string,
+					{ moov: [number, number]; index: { sizes: Uint32Array } }
+				>;
+			};
+			const meta = index.mediaMeta.get("display.mp4");
+			return {
+				frames: meta?.index.sizes.length,
+				moov: meta?.moov,
+				reads:
+					h.ranges.filter((range) => range.startsWith(`${source}:`)).length -
+					before,
+			};
+		};
+
+		const small = fileOf(3);
+		expect(await indexOf(small)).toEqual({
+			frames: 3,
+			moov: [2 * 1024 * 1024, small.byteLength],
+			reads: 2,
+		});
+
+		// A moov larger than the tail read needs a third request, once.
+		const large = fileOf(300_000);
+		expect(await indexOf(large)).toMatchObject({ frames: 300_000, reads: 3 });
+		expect(await indexOf(large)).toMatchObject({ frames: 300_000, reads: 2 });
+
+		const replaced = fileOf(300_001);
+		expect(await indexOf(replaced)).toMatchObject({
+			frames: 300_001,
+			reads: 3,
+		});
 	});
 
 	test("write to the requested keys and call back signed when finished", async () => {
