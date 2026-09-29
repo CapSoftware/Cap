@@ -562,6 +562,12 @@ pub struct Camera {
     pub scale_during_zoom: f32,
     #[serde(default)]
     pub background_blur: BackgroundBlurConfig,
+    #[serde(default)]
+    pub rotation: u16,
+}
+
+pub fn normalize_camera_rotation(degrees: u16) -> u16 {
+    ((degrees % 360 + 45) / 90 % 4) * 90
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Type, Default)]
@@ -583,6 +589,14 @@ impl Camera {
 
     fn default_scale_during_zoom() -> f32 {
         0.7
+    }
+
+    pub fn rotation_degrees(&self) -> u16 {
+        normalize_camera_rotation(self.rotation)
+    }
+
+    pub fn swaps_axes(&self) -> bool {
+        matches!(self.rotation_degrees(), 90 | 270)
     }
 }
 
@@ -606,6 +620,7 @@ impl Default for Camera {
             rounding_type: CornerStyle::default(),
             scale_during_zoom: Self::default_scale_during_zoom(),
             background_blur: BackgroundBlurConfig::default(),
+            rotation: 0,
         }
     }
 }
@@ -4459,6 +4474,21 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(segment.background_color.as_deref(), Some("#102030"));
+    }
+
+    #[test]
+    fn camera_rotation_normalizes_to_quarter_turns() {
+        assert_eq!(normalize_camera_rotation(0), 0);
+        assert_eq!(normalize_camera_rotation(90), 90);
+        assert_eq!(normalize_camera_rotation(100), 90);
+        assert_eq!(normalize_camera_rotation(270), 270);
+        assert_eq!(normalize_camera_rotation(360), 0);
+        assert_eq!(normalize_camera_rotation(450), 90);
+        assert_eq!(normalize_camera_rotation(u16::MAX), 0);
+
+        let legacy: Camera = serde_json::from_str(r#"{ "mirror": true }"#).unwrap();
+        assert_eq!(legacy.rotation_degrees(), 0);
+        assert!(!legacy.swaps_axes());
     }
 
     #[test]

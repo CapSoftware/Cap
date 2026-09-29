@@ -174,6 +174,26 @@ pub struct CameraPreviewState {
     pub mirrored: bool,
     #[serde(default)]
     pub background_blur: cap_project::BackgroundBlurMode,
+    #[serde(default)]
+    pub rotation: u16,
+}
+
+impl CameraPreviewState {
+    pub fn rotation_degrees(&self) -> u16 {
+        cap_project::normalize_camera_rotation(self.rotation)
+    }
+
+    fn swaps_axes(&self) -> bool {
+        matches!(self.rotation_degrees(), 90 | 270)
+    }
+
+    fn oriented_aspect(&self, source_aspect: f32) -> f32 {
+        if self.swaps_axes() {
+            1.0 / source_aspect
+        } else {
+            source_aspect
+        }
+    }
 }
 
 impl Default for CameraPreviewState {
@@ -183,6 +203,7 @@ impl Default for CameraPreviewState {
             shape: CameraPreviewShape::default(),
             mirrored: false,
             background_blur: cap_project::BackgroundBlurMode::Off,
+            rotation: 0,
         }
     }
 }
@@ -827,7 +848,7 @@ struct Renderer {
     camera_uniform_buffer: wgpu::Buffer,
     uniform_bind_group: wgpu::BindGroup,
     texture: Cached<(u32, u32), PreparedTexture>,
-    aspect_ratio: Cached<f32>,
+    aspect_ratio: Cached<(f32, u16)>,
     blur_processor: Option<cap_camera_effects::BlurProcessor>,
     blur_processor_init_attempted: bool,
     blur_source_texture: Option<wgpu::Texture>,
@@ -948,13 +969,15 @@ impl Renderer {
                 }
                 source_dimensions = Cached::default();
                 last_render_at = None;
-                let aspect_ratio = self.aspect_ratio.get_latest_key().copied().unwrap_or(
-                    if state.shape == CameraPreviewShape::Full {
+                let aspect_ratio = self
+                    .aspect_ratio
+                    .get_latest_key()
+                    .map(|(aspect, _)| *aspect)
+                    .unwrap_or(if state.shape == CameraPreviewShape::Full {
                         WIDE_CAMERA_ASPECT_RATIO
                     } else {
                         1.0
-                    },
-                );
+                    });
                 self.aspect_ratio = Cached::default();
                 if let Ok((width, height, scale)) =
                     resize_window(&window, &state, aspect_ratio, false)
@@ -1055,6 +1078,11 @@ impl Renderer {
                         let region_height =
                             self.surface_config.height.saturating_sub(toolbar_px).max(1);
                         let blur_mode = blur_mode_from_project(state.background_blur);
+                        let (region_width, region_height) = if state.swaps_axes() {
+                            (region_height, region_width)
+                        } else {
+                            (region_width, region_height)
+                        };
                         let (output_width, output_height) = camera_preview_texture_dimensions(
                             source_width,
                             source_height,
@@ -1131,13 +1159,15 @@ impl Renderer {
 
                     state = new_state;
 
-                    let aspect_ratio = self.aspect_ratio.get_latest_key().copied().unwrap_or(
-                        if state.shape == CameraPreviewShape::Full {
+                    let aspect_ratio = self
+                        .aspect_ratio
+                        .get_latest_key()
+                        .map(|(aspect, _)| *aspect)
+                        .unwrap_or(if state.shape == CameraPreviewShape::Full {
                             WIDE_CAMERA_ASPECT_RATIO
                         } else {
                             1.0
-                        },
-                    );
+                        });
 
                     self.sync_ratio_uniform_and_resize_window_to_it(&window, &state, aspect_ratio)
                         .await;
@@ -1648,7 +1678,7 @@ impl Renderer {
             },
             size: normalized_size,
             mirrored: if state.mirrored { 1.0 } else { 0.0 },
-            _padding: 0.0,
+            rotation: f32::from(state.rotation_degrees()),
         };
         self.queue.write_buffer(
             &self.state_uniform_buffer,
@@ -1663,9 +1693,12 @@ impl Renderer {
         state: &CameraPreviewState,
         aspect_ratio: f32,
     ) {
-        if self.aspect_ratio.update_key_and_should_init(aspect_ratio) {
+        if self
+            .aspect_ratio
+            .update_key_and_should_init((aspect_ratio, state.rotation_degrees()))
+        {
             let camera_uniforms = CameraUniforms {
-                camera_aspect_ratio: aspect_ratio,
+                camera_aspect_ratio: state.oriented_aspect(aspect_ratio),
                 _padding: 0.0,
             };
             self.queue.write_buffer(
@@ -1695,12 +1728,21 @@ async fn resize_window(
 
     let base = clamp_size(state.size);
     let aspect = if state.shape == CameraPreviewShape::Full {
-        aspect.max(WIDE_CAMERA_ASPECT_RATIO)
+        let oriented = state.oriented_aspect(aspect);
+        if oriented >= 1.0 {
+            oriented.max(WIDE_CAMERA_ASPECT_RATIO)
+        } else {
+            oriented.min(1.0 / WIDE_CAMERA_ASPECT_RATIO)
+        }
     } else {
         1.0
     };
-    let window_width = base * aspect;
-    let window_height = base + TOOLBAR_HEIGHT;
+    let (window_width, content_height) = if aspect >= 1.0 {
+        (base * aspect, base)
+    } else {
+        (base, base / aspect)
+    };
+    let window_height = content_height + TOOLBAR_HEIGHT;
 
     let window_width = window_width as u32;
     let window_height = window_height as u32;
@@ -2106,7 +2148,7 @@ struct StateUniforms {
     shape: f32,
     size: f32,
     mirrored: f32,
-    _padding: f32,
+    rotation: f32,
 }
 
 #[repr(C)]

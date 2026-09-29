@@ -16,6 +16,7 @@ export type CameraWindowState = {
 	shape: CameraPreviewShape;
 	mirrored: boolean;
 	backgroundBlur: BackgroundBlurMode | boolean;
+	rotation?: number;
 };
 
 export const CAMERA_MIN_SIZE = 150;
@@ -44,7 +45,27 @@ export const getDefaultCameraWindowState = (): CameraWindowState => ({
 	shape: "round",
 	mirrored: false,
 	backgroundBlur: "off",
+	rotation: 0,
 });
+
+export const normalizeCameraRotation = (rotation: number | undefined) => {
+	const quarterTurns = Math.round((rotation ?? 0) / 90);
+	return (((quarterTurns % 4) + 4) % 4) * 90;
+};
+
+export const cameraRotationSwapsAxes = (rotation: number | undefined) =>
+	normalizeCameraRotation(rotation) % 180 !== 0;
+
+export const orientedCameraAspectRatio = (
+	frameAspectRatio: number,
+	rotation: number | undefined,
+) =>
+	cameraRotationSwapsAxes(rotation) ? 1 / frameAspectRatio : frameAspectRatio;
+
+export const cameraFrameTransform = (state: CameraWindowState) => {
+	const rotation = normalizeCameraRotation(state.rotation);
+	return `${state.mirrored ? "scaleX(-1)" : "scaleX(1)"} rotate(${rotation}deg)`;
+};
 
 export const clampCameraSize = (size: number) =>
 	Math.max(CAMERA_MIN_SIZE, Math.min(CAMERA_MAX_SIZE, size));
@@ -52,29 +73,36 @@ export const clampCameraSize = (size: number) =>
 export const cameraPreviewAspectRatio = (
 	shape: CameraPreviewShape,
 	frameAspectRatio?: number | null,
+	rotation?: number,
 ) => {
 	if (shape !== "full") return 1;
-	if (
+	const sourceAspectRatio =
 		typeof frameAspectRatio === "number" &&
 		Number.isFinite(frameAspectRatio) &&
 		frameAspectRatio > 0
-	) {
-		return Math.max(frameAspectRatio, CAMERA_WIDE_ASPECT_RATIO);
-	}
-	return CAMERA_WIDE_ASPECT_RATIO;
+			? frameAspectRatio
+			: CAMERA_WIDE_ASPECT_RATIO;
+	const aspectRatio = orientedCameraAspectRatio(sourceAspectRatio, rotation);
+	return aspectRatio >= 1
+		? Math.max(aspectRatio, CAMERA_WIDE_ASPECT_RATIO)
+		: Math.min(aspectRatio, 1 / CAMERA_WIDE_ASPECT_RATIO);
 };
 
 export const cameraPreviewDimensions = (
 	size: number,
 	shape: CameraPreviewShape,
 	frameAspectRatio?: number | null,
+	rotation?: number,
 ) => {
 	const base = clampCameraSize(size);
-	const aspectRatio = cameraPreviewAspectRatio(shape, frameAspectRatio);
-	return {
-		height: base,
-		width: base * aspectRatio,
-	};
+	const aspectRatio = cameraPreviewAspectRatio(
+		shape,
+		frameAspectRatio,
+		rotation,
+	);
+	return aspectRatio >= 1
+		? { height: base, width: base * aspectRatio }
+		: { height: base / aspectRatio, width: base };
 };
 
 export const normalizeBackgroundBlurMode = (
@@ -180,7 +208,12 @@ export function CameraPreviewToolbar(props: {
 				{props.state.shape === "round" && <IconCapCircle class="size-5.5" />}
 				{props.state.shape === "square" && <IconCapSquare class="size-5.5" />}
 				{props.state.shape === "full" && (
-					<IconLucideRectangleHorizontal class="size-5.5" />
+					<IconLucideRectangleHorizontal
+						class={cx(
+							"size-5.5",
+							cameraRotationSwapsAxes(props.state.rotation) && "rotate-90",
+						)}
+					/>
 				)}
 			</ControlButton>
 			<ControlButton
@@ -188,6 +221,16 @@ export function CameraPreviewToolbar(props: {
 				onClick={() => props.setState("mirrored", (mirrored) => !mirrored)}
 			>
 				<IconCapArrows class="size-5.5" />
+			</ControlButton>
+			<ControlButton
+				pressed={normalizeCameraRotation(props.state.rotation) !== 0}
+				onClick={() =>
+					props.setState("rotation", (rotation) =>
+						normalizeCameraRotation((rotation ?? 0) + 90),
+					)
+				}
+			>
+				<IconLucideRotateCw class="size-5.5" />
 			</ControlButton>
 			<ControlButton
 				pressed={

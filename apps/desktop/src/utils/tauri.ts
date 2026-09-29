@@ -761,7 +761,7 @@ export type Camera = { hide: boolean; mirror: boolean; position: CameraPosition;
  * Normalized (0-1) center of the camera rect in output-frame space.
  * Overrides `position` when set.
  */
-manualPosition: XY<number> | null; size: number; zoomSize: number | null; rounding: number; shadow: number; advancedShadow: ShadowConfiguration | null; shape: CameraShape; roundingType: CornerStyle; scaleDuringZoom?: number; backgroundBlur?: BackgroundBlurConfig }
+manualPosition: XY<number> | null; size: number; zoomSize: number | null; rounding: number; shadow: number; advancedShadow: ShadowConfiguration | null; shape: CameraShape; roundingType: CornerStyle; scaleDuringZoom?: number; backgroundBlur?: BackgroundBlurConfig; rotation?: number }
 /**
  * Screen-space focus blur applied over the composed frame while a 3d segment
  * is active (a UV-mask variable blur, not a depth-of-field). `strength` is a
@@ -877,7 +877,7 @@ export type CameraPosition = { x: CameraXPosition; y: CameraYPosition }
 export type CameraPresentationInput = { viewportWidth: number; viewportHeight: number; left: number; top: number; width: number; height: number; radius: number; layoutRevision: number; state: CameraPreviewState }
 export type CameraPresentationRequested = { nonce: string; generation: number; cameraRevision: string }
 export type CameraPreviewShape = "round" | "square" | "full"
-export type CameraPreviewState = { size: number; shape: CameraPreviewShape; mirrored: boolean; background_blur?: BackgroundBlurMode }
+export type CameraPreviewState = { size: number; shape: CameraPreviewShape; mirrored: boolean; background_blur?: BackgroundBlurMode; rotation?: number }
 export type CameraShape = "square" | "source"
 export type CameraWithFormats = { deviceId: string; displayName: string; modelId: string | null; formats: CameraFormatInfo[]; bestFormat: CameraFormatInfo | null }
 export type CameraXPosition = "left" | "center" | "right"
