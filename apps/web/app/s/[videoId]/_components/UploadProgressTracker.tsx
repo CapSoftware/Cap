@@ -1,9 +1,9 @@
 "use client";
 
 import type { Video } from "@cap/web-domain";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useUploadProgress } from "./ProgressCircle";
-import type { UploadProgress } from "./upload-progress";
+import { type UploadProgress, uploadProgressKey } from "./upload-progress";
 
 /**
  * Headless bridge around `useUploadProgress`. The hook's RPC client pulls the
@@ -19,10 +19,16 @@ export default function UploadProgressTracker({
 	onChange: (progress: UploadProgress | null) => void;
 }) {
 	const progress = useUploadProgress(videoId, true);
+	const latest = useRef(progress);
+	latest.current = progress;
+	// The hook returns a new object every render; passing each one on would
+	// re-render the player, and with it this tracker, forever.
+	const key = uploadProgressKey(progress);
 
 	useEffect(() => {
-		onChange(progress);
-	}, [progress, onChange]);
+		void key;
+		onChange(latest.current);
+	}, [key, onChange]);
 
 	return null;
 }
