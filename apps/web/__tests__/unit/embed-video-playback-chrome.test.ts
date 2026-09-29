@@ -244,6 +244,38 @@ describe("EmbedVideo playback chrome", () => {
 		},
 	);
 
+	it("starts a lazily loaded HLS embed at its start time", async () => {
+		const container = document.createElement("div");
+		document.body.append(container);
+		const root = createRoot(container);
+
+		await act(async () => {
+			root.render(
+				createElement(EmbedVideo, {
+					...createProps({ type: "MediaConvert" }),
+					startTime: 30,
+				}),
+			);
+		});
+		const video = container.querySelector("video");
+		if (!video) throw new Error("Expected the HLS player to mount");
+		let currentTime = 0;
+		Object.defineProperty(video, "duration", { value: 60 });
+		Object.defineProperty(video, "currentTime", {
+			get: () => currentTime,
+			set: (value: number) => {
+				currentTime = value;
+			},
+		});
+
+		await act(async () => {
+			video.dispatchEvent(new Event("loadedmetadata"));
+		});
+		expect(currentTime).toBe(30);
+
+		await act(async () => root.unmount());
+	});
+
 	it.each([
 		["an asynchronously mounted MP4", { type: "desktopMP4" } as const],
 		["an HLS video", { type: "MediaConvert" } as const],

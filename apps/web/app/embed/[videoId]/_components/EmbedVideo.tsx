@@ -11,6 +11,7 @@ import dynamic from "next/dynamic";
 import Image from "next/image";
 import {
 	forwardRef,
+	useCallback,
 	useEffect,
 	useImperativeHandle,
 	useRef,
@@ -244,10 +245,8 @@ export const EmbedVideo = forwardRef<
 			videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=video`;
 		}
 
-		useEffect(() => {
-			if (!videoRef.current) return;
-			const player = videoRef.current;
-			const handleLoadedMetadata = () => {
+		const applyStartTime = useCallback(
+			(player: HTMLVideoElement) => {
 				setLongestDuration(player.duration);
 
 				// Once only. HLS level switches and source swaps fire this again, and
@@ -263,18 +262,16 @@ export const EmbedVideo = forwardRef<
 				} catch (error) {
 					console.warn("Failed to seek embed to start time", error);
 				}
-			};
+			},
+			[startTime],
+		);
 
-			if (player.readyState >= 1) {
-				handleLoadedMetadata();
-			} else {
-				player.addEventListener("loadedmetadata", handleLoadedMetadata);
-			}
-
-			return () => {
-				player.removeEventListener("loadedmetadata", handleLoadedMetadata);
-			};
-		}, [startTime]);
+		// Metadata that loads later is handled by the container's capture
+		// listener below, which also reaches a player that mounts after this.
+		useEffect(() => {
+			const player = videoRef.current;
+			if (player && player.readyState >= 1) applyStartTime(player);
+		}, [applyStartTime]);
 
 		return (
 			<>
@@ -287,6 +284,10 @@ export const EmbedVideo = forwardRef<
 				<div
 					ref={playerContainerRef}
 					className="relative w-screen h-screen rounded-xl"
+					onLoadedMetadataCapture={(event) => {
+						const player = videoRef.current;
+						if (player && event.target === player) applyStartTime(player);
+					}}
 					onPlayCapture={() => setIsPlaying(true)}
 					onPauseCapture={() => setIsPlaying(false)}
 					onEndedCapture={() => setIsPlaying(false)}
