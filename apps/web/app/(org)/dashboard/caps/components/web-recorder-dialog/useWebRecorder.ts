@@ -562,7 +562,9 @@ export const useWebRecorder = ({
 								? "camera"
 								: item.sessionId.endsWith("-display")
 									? "screen"
-									: undefined,
+									: item.sessionId.endsWith("-microphone")
+										? "microphone"
+										: undefined,
 						),
 						createdAt: item.createdAt,
 					} satisfies RecoveredRecordingDownload;
