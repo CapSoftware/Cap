@@ -124,6 +124,39 @@ describe("an open share page after a Save", () => {
 		expect(fetchImpl).toHaveBeenCalledTimes(1);
 	});
 
+	it("checks a page left and returned to soon after it loaded", async () => {
+		let now = 0;
+		const fetchImpl = statusFetch(() => "new");
+		const onNewer = vi.fn();
+		stops.push(
+			watchShareVideoUpdates({
+				videoId: "video",
+				revision: "old",
+				onNewer,
+				fetchImpl,
+				now: () => now,
+				open: bus().open,
+			}),
+		);
+		window.dispatchEvent(new Event("focus"));
+		await flush();
+		expect(fetchImpl).not.toHaveBeenCalled();
+
+		now = 5_000;
+		window.dispatchEvent(new Event("blur"));
+		now = 10_000;
+		window.dispatchEvent(new Event("focus"));
+		await flush();
+		expect(fetchImpl).toHaveBeenCalledTimes(1);
+		expect(onNewer).toHaveBeenCalledWith("new");
+
+		now = 15_000;
+		window.dispatchEvent(new Event("blur"));
+		window.dispatchEvent(new Event("focus"));
+		await flush();
+		expect(fetchImpl).toHaveBeenCalledTimes(1);
+	});
+
 	it("stays put while the server still publishes the version shown", async () => {
 		const fetchImpl = statusFetch(() => "same");
 		const onNewer = vi.fn();

@@ -59,6 +59,10 @@ export function watchShareVideoUpdates(options: {
 	} = options;
 	const controller = new AbortController();
 	let checkedAt = now();
+	let checked = false;
+	// The interval also covers the page load, which can deliver a focus event
+	// of its own; a page left and then returned to has really been away.
+	let away = false;
 	let checking = false;
 	// An announcement during a check may be for a Save that check started too
 	// early to see.
@@ -69,8 +73,14 @@ export function watchShareVideoUpdates(options: {
 			recheck ||= announced;
 			return;
 		}
-		if (!announced && now() - checkedAt < CHECK_INTERVAL_MS) return;
+		if (
+			!announced &&
+			!(away && !checked) &&
+			now() - checkedAt < CHECK_INTERVAL_MS
+		)
+			return;
 		checking = true;
+		checked = true;
 		checkedAt = now();
 		try {
 			const response = await fetchImpl(
@@ -100,8 +110,12 @@ export function watchShareVideoUpdates(options: {
 
 	const onVisibility = () => {
 		if (document.visibilityState === "visible") void check(false);
+		else away = true;
 	};
 	const onFocus = () => void check(false);
+	const onBlur = () => {
+		away = true;
+	};
 	const onMessage = (event: MessageEvent) => {
 		const data: unknown = event.data;
 		if (
@@ -114,6 +128,7 @@ export function watchShareVideoUpdates(options: {
 	};
 	document.addEventListener("visibilitychange", onVisibility);
 	window.addEventListener("focus", onFocus);
+	window.addEventListener("blur", onBlur);
 	const channel = open();
 	channel?.addEventListener("message", onMessage);
 
@@ -121,6 +136,7 @@ export function watchShareVideoUpdates(options: {
 		controller.abort();
 		document.removeEventListener("visibilitychange", onVisibility);
 		window.removeEventListener("focus", onFocus);
+		window.removeEventListener("blur", onBlur);
 		channel?.removeEventListener("message", onMessage);
 		channel?.close();
 	};
