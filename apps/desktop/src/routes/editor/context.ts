@@ -4,8 +4,6 @@ import {
 } from "@solid-primitives/bounds";
 import { createContextProvider } from "@solid-primitives/context";
 import { trackStore } from "@solid-primitives/deep";
-import { createEventListener } from "@solid-primitives/event-listener";
-import { createUndoHistory } from "@solid-primitives/history";
 import { createQuery, skipToken } from "@tanstack/solid-query";
 import {
 	type Accessor,
@@ -98,6 +96,7 @@ import type { MaskSegment } from "./masks";
 import { usePreparingEditor } from "./preparing-editor-context";
 import { createPreparingPlaybackHandoff } from "./preparing-playback-handoff";
 import { createProjectConfigSave } from "./project-config-save";
+import { createStoreHistory, withEditorTimeline } from "./project-history";
 import type { SnapGuide } from "./snapping";
 import {
 	activeStyleSegments,
@@ -425,7 +424,10 @@ export const [EditorContextProvider, useBaseEditorContext] =
 		}) => {
 			const editorInstanceContext = useEditorInstanceContext();
 			const [project, setProject] = createStore<EditorProjectConfiguration>(
-				normalizeProject(props.editorInstance.savedProjectConfig),
+				withEditorTimeline(
+					normalizeProject(props.editorInstance.savedProjectConfig),
+					props.editorInstance.recordingDuration,
+				),
 			);
 
 			const setClipTransition = (
@@ -2860,69 +2862,6 @@ export const [EditorInstanceContextProvider, useEditorInstanceContext] =
 		createEditorInstanceContext,
 		null as unknown as ReturnType<typeof createEditorInstanceContext>,
 	);
-
-function createStoreHistory<T extends Static>(
-	state: T,
-	setState: ReturnType<typeof createStore<T>>[1],
-	onRestore?: () => void,
-) {
-	// not working properly yet
-	// const getDelta = captureStoreUpdates(state);
-
-	const [pauseCount, setPauseCount] = createSignal(0);
-
-	const history = createUndoHistory(() => {
-		if (pauseCount() > 0) return;
-
-		trackStore(state);
-
-		const copy = structuredClone(unwrap(state));
-
-		return () => {
-			onRestore?.();
-			setState(reconcile(copy));
-		};
-	});
-
-	createEventListener(window, "keydown", (e) => {
-		switch (e.code) {
-			case "KeyZ": {
-				if (!(e.ctrlKey || e.metaKey)) return;
-				if (e.shiftKey) history.redo();
-				else history.undo();
-				break;
-			}
-			case "KeyY": {
-				if (!(e.ctrlKey || e.metaKey)) return;
-				history.redo();
-				break;
-			}
-			default: {
-				return;
-			}
-		}
-
-		e.preventDefault();
-		e.stopPropagation();
-	});
-
-	return Object.assign(history, {
-		pause() {
-			setPauseCount(pauseCount() + 1);
-
-			return () => {
-				setPauseCount(pauseCount() - 1);
-			};
-		},
-		isPaused: () => pauseCount() > 0,
-	});
-}
-
-type Static<T = unknown> =
-	| {
-			[K in number | string]: T;
-	  }
-	| T[];
 
 type TimelineContextValue = {
 	duration: Accessor<number>;
