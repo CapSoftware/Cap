@@ -632,7 +632,8 @@ export const getSignedEditorSources = Effect.fn("getSignedEditorSources")(
 			...(audience === "browser"
 				? {
 						signedUrlExpiresAt,
-						displayHasAudio: legacySource,
+						displayHasAudio:
+							legacySource || sources?.display?.embeddedAudio === true,
 						// Sizes the first read of each source's tail; the exact
 						// duration still comes from the media.
 						...(typeof video.duration === "number" &&

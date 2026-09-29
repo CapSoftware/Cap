@@ -105,6 +105,8 @@ export interface VideoMetadata {
 			size?: number;
 			fps?: number;
 			objectIdentity?: string | null;
+			/** An imported video's own audio, which the editor plays with it. */
+			embeddedAudio?: true;
 		};
 		camera?: {
 			key: string;

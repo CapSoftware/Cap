@@ -34,11 +34,15 @@ function video(metadata: unknown): EditorVideo {
 	} as EditorVideo;
 }
 
-function signedSources(editorVideo: EditorVideo) {
+function signedSources(
+	editorVideo: EditorVideo,
+	audience: "worker" | "browser" = "worker",
+) {
 	const access = {
 		headObject: (key: string) => Effect.succeed(storage.head(key)),
 		getInternalSignedObjectUrl: (key: string) =>
 			Effect.succeed(storage.signed(key)),
+		getSignedObjectUrl: (key: string) => Effect.succeed(storage.signed(key)),
 	};
 	const service = {
 		getAccessForVideo: (_video: unknown, options: unknown) => {
@@ -60,7 +64,7 @@ function signedSources(editorVideo: EditorVideo) {
 			),
 	});
 	return Effect.runPromise(
-		getSignedEditorSources(editorVideo).pipe(
+		getSignedEditorSources(editorVideo, audience).pipe(
 			Effect.provideService(Storage, service),
 			Effect.provideService(Database, database),
 		),
@@ -214,4 +218,38 @@ test("Free preparation keeps the video edits but removes saved Pro captions", as
 	expect(pro.projectConfig).toMatchObject({
 		captions: { segments: [{ text: "Paid" }] },
 	});
+});
+
+test("the browser plays an import's own audio but not a recording screen's", async () => {
+	const key = "owner/video/raw-upload.mp4";
+	storage.head.mockReturnValue({
+		ContentLength: 1234,
+		ETag: JSON.stringify("upload"),
+	});
+	storage.signed.mockReturnValue("https://storage.example/upload");
+	const display = {
+		key,
+		contentType: "video/mp4",
+		size: 1234,
+		fps: 30,
+		objectIdentity: JSON.stringify("upload"),
+	};
+	const imported = await signedSources(
+		video({
+			editorSources: {
+				version: 1,
+				display: { ...display, embeddedAudio: true },
+			},
+		}),
+		"browser",
+	);
+	expect(imported).toMatchObject({
+		displayHasAudio: true,
+		display: { url: "https://storage.example/upload", size: 1234, fps: 30 },
+	});
+	const recorded = await signedSources(
+		video({ editorSources: { version: 1, display } }),
+		"browser",
+	);
+	expect(recorded).toMatchObject({ displayHasAudio: false });
 });
