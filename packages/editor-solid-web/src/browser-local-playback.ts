@@ -137,6 +137,92 @@ function timelineConfig(config: unknown, sourceDurations: number[]) {
 	};
 }
 
+export type MotionRanges = { always: boolean; ranges: Array<[number, number]> };
+
+/// Zoom springs keep settling after a zoom segment ends.
+const ZOOM_SETTLE_SECS = 3;
+const OVERLAY_MARGIN_SECS = 1;
+
+/// Where the preview changes over time even while the recording's frames stay
+/// the same: every timed timeline item except clips and audio (zooms, scenes,
+/// overlays, style changes), captions, and anything animated throughout (a
+/// moving background, film grain, a recorded cursor). Elsewhere a later frame
+/// only looks different once a source frame changes.
+export function motionRanges(
+	config: unknown,
+	hasCursor: boolean,
+): MotionRanges {
+	const project = record(config);
+	const source = record(record(project?.background)?.source);
+	const grades = record(project?.colorCorrection);
+	const graded = [grades?.screen, grades?.camera].some((value) => {
+		const grade = record(value);
+		return (
+			grade !== null &&
+			((typeof grade.preset === "string" && grade.preset !== "none") ||
+				numeric(grade.grain, 0) !== 0)
+		);
+	});
+	const always =
+		source?.type === "animatedGradient" ||
+		(source?.type === "gradient" && source.animated === true) ||
+		graded ||
+		(hasCursor && record(project?.cursor)?.hide !== true);
+	const ranges: Array<[number, number]> = [];
+	const timeline = record(project?.timeline);
+	const add = (items: unknown, before: number, after: number) => {
+		if (!Array.isArray(items)) return items !== undefined && items !== null;
+		for (const value of items) {
+			const item = record(value);
+			const start = item?.start;
+			const end = item?.end;
+			if (typeof start !== "number" || typeof end !== "number") return true;
+			ranges.push([start - before, end + after]);
+		}
+		return false;
+	};
+	let unknown = false;
+	for (const [key, items] of Object.entries(timeline ?? {})) {
+		if (key === "segments" || key === "transitions" || key === "audioSegments")
+			continue;
+		unknown =
+			add(
+				items,
+				OVERLAY_MARGIN_SECS,
+				key === "zoomSegments" ? ZOOM_SETTLE_SECS : OVERLAY_MARGIN_SECS,
+			) || unknown;
+	}
+	unknown =
+		add(
+			record(project?.captions)?.segments,
+			OVERLAY_MARGIN_SECS,
+			OVERLAY_MARGIN_SECS,
+		) || unknown;
+	ranges.sort((a, b) => a[0] - b[0]);
+	const merged: Array<[number, number]> = [];
+	for (const range of ranges) {
+		const last = merged[merged.length - 1];
+		if (last && range[0] <= last[1]) last[1] = Math.max(last[1], range[1]);
+		else merged.push([range[0], range[1]]);
+	}
+	return { always: always || unknown, ranges: merged };
+}
+
+export function inMotion(motion: MotionRanges, time: number) {
+	if (motion.always) return true;
+	let lo = 0;
+	let hi = motion.ranges.length - 1;
+	while (lo <= hi) {
+		const mid = (lo + hi) >>> 1;
+		const range = motion.ranges[mid];
+		if (!range) return true;
+		if (time < range[0]) hi = mid - 1;
+		else if (time > range[1]) lo = mid + 1;
+		else return true;
+	}
+	return false;
+}
+
 function segmentSettings(config: Record<string, unknown>) {
 	const segments = config.segments;
 	if (!Array.isArray(segments)) {
@@ -198,6 +284,9 @@ export class BrowserLocalPlayback {
 	private pendingSeek: number | null = null;
 	private seeking: Promise<boolean | null> | null = null;
 	private renderedTime = -1;
+	private motion: MotionRanges;
+	private drawnFrameKey: string | null = null;
+	private lastRenderRepeated = false;
 
 	private constructor(
 		readonly sources: BrowserEditorSources,
@@ -218,6 +307,7 @@ export class BrowserLocalPlayback {
 		private readonly screenHeight: number,
 		private previewBase: { width: number; height: number } | null,
 		private readonly colorHints: Map<string, Promise<boolean>>,
+		private readonly hasCursor: boolean,
 	) {
 		const timeline = timelineConfig(config, sourceDurations);
 		this.segments = segmentSettings(timeline);
@@ -228,6 +318,7 @@ export class BrowserLocalPlayback {
 		);
 		this.configJson = JSON.stringify(config);
 		this.visual = new module.BrowserVisualConfig(this.configJson);
+		this.motion = motionRanges(config, hasCursor);
 		this.audio = new BrowserAudioPlayback(catalog, onError);
 		if (unavailableMicUrl) this.audio.markUnavailable(unavailableMicUrl);
 		this.audio.setConfig(config);
@@ -392,6 +483,7 @@ export class BrowserLocalPlayback {
 				display.videoHeight,
 				previewBase,
 				colorHints,
+				input !== null,
 			);
 			await controls.setProjectConfig(config);
 			perfMark("renderer-ready");
@@ -447,6 +539,8 @@ export class BrowserLocalPlayback {
 		this.visual = nextVisual;
 		this.segments = segments;
 		this.configJson = json;
+		this.motion = motionRanges(config, this.hasCursor);
+		this.drawnFrameKey = null;
 		this.audio.setConfig(config);
 		this.canvas.resetFrameState();
 		this.lastRequestedFrame = -1;
@@ -828,24 +922,46 @@ export class BrowserLocalPlayback {
 			releasePair(outgoingPair);
 			return null;
 		}
-		const drawStarted = perfStart();
-		try {
-			await this.canvas.render(
-				outgoingPair
-					? {
-							kind: "transition",
-							outgoing: outgoingPair,
-							incoming: incomingPair,
-							type: mapped[8] === 1 ? "fade-through-black" : "cross-fade",
-							progress: mapped[9],
-						}
-					: { kind: "single", frame: incomingPair },
+		// A 30 fps recording plays on a 60 Hz loop, so every other frame shows
+		// the same source frames and, unless something on the timeline moves,
+		// would draw the same pixels again.
+		const frameKey =
+			playing && !transition
+				? `${incomingPair.recordingClip}:${incomingPair.screen.mediaTime}:${incomingPair.camera?.mediaTime ?? "-"}`
+				: null;
+		const repeated =
+			frameKey !== null &&
+			frameKey === this.drawnFrameKey &&
+			!inMotion(this.motion, time) &&
+			this.canvas.repeatFrame(
 				Math.round(time * 60),
 				BigInt(Math.round(time * 1_000_000_000)),
 			);
-		} finally {
+		this.lastRenderRepeated = repeated;
+		const drawStarted = perfStart();
+		if (repeated) {
 			releasePair(incomingPair);
-			releasePair(outgoingPair);
+			perfCount("frame.repeated");
+		} else {
+			try {
+				await this.canvas.render(
+					outgoingPair
+						? {
+								kind: "transition",
+								outgoing: outgoingPair,
+								incoming: incomingPair,
+								type: mapped[8] === 1 ? "fade-through-black" : "cross-fade",
+								progress: mapped[9],
+							}
+						: { kind: "single", frame: incomingPair },
+					Math.round(time * 60),
+					BigInt(Math.round(time * 1_000_000_000)),
+				);
+			} finally {
+				releasePair(incomingPair);
+				releasePair(outgoingPair);
+			}
+			this.drawnFrameKey = frameKey;
 		}
 		perfSpan("frame.draw", drawStarted);
 		perfSpan(playing ? "frame.playing" : "frame.paused", started);
@@ -915,6 +1031,10 @@ export class BrowserLocalPlayback {
 
 	private samplePlaybackFrameCost(elapsedMs: number, now = performance.now()) {
 		if (!this.previewBase || !this.playing) return;
+		if (this.lastRenderRepeated) {
+			this.lastRenderedAt = now;
+			return;
+		}
 		const cost = Math.max(
 			elapsedMs,
 			this.lastRenderedAt > 0 ? now - this.lastRenderedAt : elapsedMs,

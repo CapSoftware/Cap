@@ -1,5 +1,9 @@
 import { expect, test } from "bun:test";
-import { BrowserLocalPlayback } from "./browser-local-playback";
+import {
+	BrowserLocalPlayback,
+	inMotion,
+	motionRanges,
+} from "./browser-local-playback";
 
 test("adaptive preview returns to full resolution after a 60 Hz load spike", () => {
 	const playback = Object.create(
@@ -67,4 +71,42 @@ test("paused seeks draw the frame in flight, then only the latest request", asyn
 	expect(await Promise.all([first, second, third])).toEqual([true, true, true]);
 	expect(await playback.seek(3)).toBe(true);
 	expect(rendered).toEqual([1, 3]);
+});
+
+test("only timed visuals and animated styles keep the preview redrawing", () => {
+	const plain = motionRanges(
+		{
+			background: { source: { type: "color", value: [0, 0, 0] } },
+			timeline: {
+				segments: [{ start: 0, end: 60, timescale: 1 }],
+				transitions: [],
+				zoomSegments: [{ start: 10, end: 12 }],
+				textSegments: [{ start: 30, end: 31 }],
+				audioSegments: [{ start: 0, end: 60 }],
+			},
+			captions: { segments: [{ start: 40, end: 41 }] },
+		},
+		false,
+	);
+	expect(plain.always).toBe(false);
+	expect(inMotion(plain, 5)).toBe(false);
+	expect(inMotion(plain, 9.5)).toBe(true);
+	expect(inMotion(plain, 14.5)).toBe(true);
+	expect(inMotion(plain, 15.5)).toBe(false);
+	expect(inMotion(plain, 29.5)).toBe(true);
+	expect(inMotion(plain, 40.5)).toBe(true);
+	expect(inMotion(plain, 50)).toBe(false);
+
+	const animated = [
+		{ background: { source: { type: "animatedGradient" } } },
+		{ background: { source: { type: "gradient", animated: true } } },
+		{ colorCorrection: { screen: { preset: "none", grain: 0.2 } } },
+		{ colorCorrection: { camera: { preset: "film" } } },
+		{ timeline: { segments: [], futureSegments: [{ at: 3 }] } },
+	];
+	for (const config of animated) {
+		expect(motionRanges(config, false).always).toBe(true);
+	}
+	expect(motionRanges({ cursor: { hide: false } }, true).always).toBe(true);
+	expect(motionRanges({ cursor: { hide: true } }, true).always).toBe(false);
 });

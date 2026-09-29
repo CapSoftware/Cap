@@ -154,6 +154,7 @@ export class BrowserLocalCanvas {
 	private fonts: Promise<void> | null = null;
 	private fontsReady = false;
 	private lastSize = { width: 0, height: 0 };
+	private lastLayout: ReturnType<typeof browserFrameLayout> | null = null;
 
 	constructor(
 		private readonly setup: BrowserStudioSetup,
@@ -438,6 +439,7 @@ export class BrowserLocalCanvas {
 					);
 		perfSpan("draw.wasm", wasmStarted);
 		const frameLayout = browserFrameLayout(layout);
+		this.lastLayout = frameLayout;
 		this.lastSize = {
 			width: frameLayout.output_width,
 			height: frameLayout.output_height,
@@ -454,6 +456,19 @@ export class BrowserLocalCanvas {
 			layout: frameLayout,
 		});
 		perfSpan("draw.notify", notifyStarted);
+	}
+
+	/// Reports the frame on screen as the frame for a later time, for when
+	/// drawing that time would produce the same pixels.
+	repeatFrame(frameNumber: number, targetTimeNs: bigint) {
+		if (this.disposed || !this.rendered || !this.lastLayout) return false;
+		this.onFrame({
+			width: this.lastLayout.output_width,
+			height: this.lastLayout.output_height,
+			renderedFrame: { frameNumber, targetTimeNs },
+			layout: this.lastLayout,
+		});
+		return true;
 	}
 
 	captureFrame(): Promise<Blob | null> {
