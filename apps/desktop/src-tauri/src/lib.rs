@@ -50,6 +50,7 @@ mod recording_telemetry;
 mod recordings_locations;
 mod recovery;
 mod render_frame_event;
+mod screen_studio_import;
 mod screenshot_editor;
 mod startup;
 #[cfg(debug_assertions)]
@@ -6822,6 +6823,7 @@ fn specta_builder() -> tauri_specta::Builder {
             export::generate_export_preview,
             export::generate_export_preview_fast,
             import::start_video_import,
+            screen_studio_import::import_screen_studio_project,
             import::add_existing_recording_to_editor,
             import::start_image_import,
             import::check_import_ready,

@@ -25,7 +25,11 @@ import CapTooltip from "~/components/Tooltip";
 import { Input } from "~/routes/editor/ui";
 import { trackEvent } from "~/utils/analytics";
 import { createTauriEventListener } from "~/utils/createEventListener";
-import { importVideoFromPicker, showImportError } from "~/utils/importMedia";
+import {
+	importScreenStudioFromPicker,
+	importVideoFromPicker,
+	showImportError,
+} from "~/utils/importMedia";
 import { openRecordingFolder } from "~/utils/recording";
 import { createRecordingThumbnail } from "~/utils/recording-thumbnail";
 import {
@@ -196,6 +200,15 @@ export default function Recordings() {
 		}
 	};
 
+	const handleScreenStudioImport = async () => {
+		try {
+			await importScreenStudioFromPicker();
+		} catch (e) {
+			console.error("Failed to import Screen Studio project:", e);
+			await showImportError("Screen Studio project", e);
+		}
+	};
+
 	return (
 		<div class="cap-settings-page flex relative flex-col w-full h-full custom-scroll">
 			<SettingsPageContent class="max-w-none space-y-4">
@@ -203,15 +216,26 @@ export default function Recordings() {
 					title="Recordings"
 					description="Manage your recordings and perform actions."
 					right={
-						<Button
-							variant="gray"
-							size="sm"
-							class="h-[36px] px-3 shrink-0 flex items-center gap-1.5"
-							onClick={handleVideoImport}
-						>
-							<IconLucideImport class="size-3.5" />
-							<span>Import</span>
-						</Button>
+						<div class="flex gap-2">
+							<Button
+								variant="gray"
+								size="sm"
+								class="h-[36px] px-3 shrink-0 flex items-center gap-1.5"
+								onClick={handleVideoImport}
+							>
+								<IconLucideImport class="size-3.5" />
+								<span>Import</span>
+							</Button>
+							<Button
+								variant="gray"
+								size="sm"
+								class="h-[36px] px-3 shrink-0 flex items-center gap-1.5"
+								onClick={handleScreenStudioImport}
+							>
+								<IconLucideImport class="size-3.5" />
+								<span>Import from Screen Studio</span>
+							</Button>
+						</div>
 					}
 				>
 					<Show
