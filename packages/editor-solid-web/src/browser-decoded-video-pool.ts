@@ -27,6 +27,8 @@ export type BrowserDecodedVideoFrame = {
 	sourceColorFix: boolean;
 };
 
+const PARSED_URL_LIMIT = 16;
+
 type DecodedSlot = {
 	lease: MediaInputLease;
 	sink: VideoSampleSink;
@@ -224,6 +226,20 @@ export class BrowserDecodedVideoPool {
 		}
 	}
 
+	/// Every frame asks for the same few URLs; parsing one is a measurable
+	/// part of a frame's work.
+	private parsedUrls = new Map<string, { href: string; protocol: string }>();
+	private parsedUrl(source: string) {
+		let parsed = this.parsedUrls.get(source);
+		if (!parsed) {
+			const url = new URL(source, window.location.href);
+			parsed = { href: url.href, protocol: url.protocol };
+			if (this.parsedUrls.size >= PARSED_URL_LIMIT) this.parsedUrls.clear();
+			this.parsedUrls.set(source, parsed);
+		}
+		return parsed;
+	}
+
 	async frame(
 		segmentIndex: number,
 		track: BrowserVideoTrack,
@@ -246,7 +262,7 @@ export class BrowserDecodedVideoPool {
 			if (track === "camera") return null;
 			throw new Error("Editor display video is unavailable");
 		}
-		const url = new URL(source.url, window.location.href);
+		const url = this.parsedUrl(source.url);
 		if (
 			(url.protocol !== "https:" &&
 				url.protocol !== "http:" &&
