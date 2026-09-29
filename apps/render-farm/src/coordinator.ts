@@ -89,6 +89,14 @@ const HLS_SEGMENT_SECONDS = Number(process.env.RF_HLS_SEGMENT_SECONDS ?? 2);
 /** Unfinished chunks per job (from the front) that outrank other work. */
 const HEAD_CHUNKS = Number(process.env.RF_HEAD_CHUNKS ?? 2);
 const LEAD_IN_SECONDS = Number(process.env.RF_LEAD_IN_SECONDS ?? 4);
+/**
+ * Shortest audio section. Each one after the first also renders a 10 s
+ * preroll, but a short export's audio is what its video chunks wait on, so
+ * spreading it over every lane finishes sooner than fewer, longer sections.
+ */
+const MIN_AUDIO_SECTION_SECONDS = Number(
+	process.env.RF_MIN_AUDIO_SECTION_SECONDS ?? 10,
+);
 const SLOT_MEGAPIXELS_PER_SEC = Number(
 	process.env.RF_SLOT_MEGAPIXELS_PER_SEC ?? 450,
 );
@@ -406,9 +414,64 @@ type RecordingMeta = {
 	audio?: { path: string };
 };
 
-async function mp4MetaRanges(key: string, size: number) {
+type Mp4Meta = {
+	head: [number, number];
+	moov: [number, number];
+	index: ReturnType<typeof indexVideoTrack>;
+};
+
+// Every web Save renders from a new project folder, so the per-recording
+// source index never hits; the parsed moov of an unchanged source file can.
+const mp4Metas = new Map<string, Mp4Meta>();
+const MP4_META_CACHE_ENTRIES = 16;
+// A manifest can list thousands of videos; their index reads share this many
+// slots across every job so one can't flood storage or the coordinator.
+const INDEX_READ_CONCURRENCY = Math.max(
+	1,
+	Math.floor(Number(process.env.RF_INDEX_READ_CONCURRENCY)) || 16,
+);
+let indexReadsActive = 0;
+const indexReadQueue: (() => void)[] = [];
+
+async function withIndexRead<T>(run: () => Promise<T>): Promise<T> {
+	if (indexReadsActive < INDEX_READ_CONCURRENCY) indexReadsActive++;
+	else await new Promise<void>((resolve) => indexReadQueue.push(resolve));
+	try {
+		return await run();
+	} finally {
+		const next = indexReadQueue.shift();
+		if (next) next();
+		else indexReadsActive--;
+	}
+}
+
+async function mp4MetaRanges(key: string, size: number): Promise<Mp4Meta> {
 	const headEnd = Math.min(size, 128 * 1024);
-	const head = await s3.getRange(key, 0, headEnd - 1);
+	const { bytes: head, etag } = await s3.getRangeTagged(key, 0, headEnd - 1);
+	const cacheKey =
+		etag && process.env.RF_INDEX_CACHE !== "0"
+			? `${key}\n${size}\n${etag}`
+			: null;
+	const cached = cacheKey ? mp4Metas.get(cacheKey) : undefined;
+	if (cacheKey && cached) {
+		mp4Metas.delete(cacheKey);
+		mp4Metas.set(cacheKey, cached);
+		return cached;
+	}
+	const meta = await readMp4Meta(key, size, head);
+	if (cacheKey) {
+		mp4Metas.set(cacheKey, meta);
+		if (mp4Metas.size > MP4_META_CACHE_ENTRIES)
+			mp4Metas.delete(mp4Metas.keys().next().value as string);
+	}
+	return meta;
+}
+
+async function readMp4Meta(
+	key: string,
+	size: number,
+	head: Uint8Array,
+): Promise<Mp4Meta> {
 	const location = locateMoov(head, size);
 	let moovStart: number;
 	let moovBytes: Uint8Array;
@@ -441,8 +504,8 @@ async function mp4MetaRanges(key: string, size: number) {
 		throw new Error(`no moov in ${key}`);
 	}
 	return {
-		head: [0, headEnd] as [number, number],
-		moov: [moovStart, moovStart + moovBytes.byteLength] as [number, number],
+		head: [0, Math.min(size, 128 * 1024)],
+		moov: [moovStart, moovStart + moovBytes.byteLength],
 		index: indexVideoTrack(moovBytes),
 	};
 }
@@ -532,11 +595,13 @@ function checkManifest(
 async function sourceIndex(
 	prefix: string,
 	sourceRoot?: string,
+	onManifest?: (manifest: Manifest) => void,
 ): Promise<SourceIndex> {
 	const cached =
 		process.env.RF_INDEX_CACHE !== "0" ? sourceIndexes.get(prefix) : undefined;
 	if (cached) {
 		checkManifest(cached.manifest, prefix, sourceRoot);
+		onManifest?.(cached.manifest);
 		return cached;
 	}
 	const manifest = JSON.parse(
@@ -545,6 +610,7 @@ async function sourceIndex(
 		),
 	) as Manifest;
 	checkManifest(manifest, prefix, sourceRoot);
+	onManifest?.(manifest);
 	const keyOf = (file: { path: string; key?: string }) =>
 		file.key ?? `${prefix}/${file.path}`;
 	const sourceFiles = await Promise.all(
@@ -576,24 +642,24 @@ async function sourceIndex(
 		(file) => file.path === "recording-meta.json",
 	);
 	if (!metaFile) throw new Error("recording has no recording-meta.json");
-	const recordingMeta = JSON.parse(
-		new TextDecoder().decode(
-			await getBounded(keyOf(metaFile), SOURCE_LIMITS.metadataBytes),
-		),
-	) as RecordingMeta;
 	const mediaMeta: SourceIndex["mediaMeta"] = new Map();
-	await Promise.all(
-		manifest.files
+	const [recordingMeta] = await Promise.all([
+		getBounded(keyOf(metaFile), SOURCE_LIMITS.metadataBytes).then(
+			(bytes) => JSON.parse(new TextDecoder().decode(bytes)) as RecordingMeta,
+		),
+		...manifest.files
 			.filter((file) => file.path.endsWith(".mp4"))
 			.map(async (file) => {
-				const meta = await mp4MetaRanges(keyOf(file), file.size);
+				const meta = await withIndexRead(() =>
+					mp4MetaRanges(keyOf(file), file.size),
+				);
 				mediaMeta.set(file.path, {
 					...meta,
 					size: file.size,
 					key: keyOf(file),
 				});
 			}),
-	);
+	]);
 	const index = { manifest, recordingMeta, mediaMeta };
 	sourceIndexes.set(prefix, index);
 	if (sourceIndexes.size > 32)
@@ -601,17 +667,7 @@ async function sourceIndex(
 	return index;
 }
 
-async function planJob(job: Job) {
-	const request = job.request;
-	const prefix = request.recording.replace(/\/$/, "");
-	const { manifest, recordingMeta, mediaMeta } = await sourceIndex(
-		prefix,
-		request.sourceRoot,
-	);
-
-	const keyOf = (file: { path: string; key?: string }) =>
-		file.key ?? `${prefix}/${file.path}`;
-
+function manifestFiles(manifest: Manifest) {
 	const mediaFiles = manifest.files.filter((file) =>
 		file.path.endsWith(".mp4"),
 	);
@@ -621,10 +677,19 @@ async function planJob(job: Job) {
 	const smallFiles = manifest.files.filter(
 		(file) => !mediaFiles.includes(file) && !audioFiles.includes(file),
 	);
+	return { mediaFiles, audioFiles, smallFiles };
+}
 
-	job.t.indexed = now();
-
-	const baseSpecs = (audioMode: "probe" | "all"): FileSpec[] => [
+/** Every file but the videos: whole small files, and audio whole or just its ends. */
+function baseFileSpecs(
+	manifest: Manifest,
+	prefix: string,
+	audioMode: "probe" | "all",
+): FileSpec[] {
+	const { audioFiles, smallFiles } = manifestFiles(manifest);
+	const keyOf = (file: { path: string; key?: string }) =>
+		file.key ?? `${prefix}/${file.path}`;
+	return [
 		...smallFiles.map((file) => ({
 			path: file.path,
 			key: keyOf(file),
@@ -644,6 +709,35 @@ async function planJob(job: Job) {
 						]),
 		})),
 	];
+}
+
+async function planJob(job: Job) {
+	const request = job.request;
+	const prefix = request.recording.replace(/\/$/, "");
+	const probeDir = join(WORK_DIR, job.id);
+	mkdirSync(probeDir, { recursive: true });
+	const cache = new ProjectCache(s3, probeDir);
+	// The probe's small files and audio ends need only the manifest, so they
+	// download while the videos are indexed.
+	let baseFetch = null as Promise<unknown> | null;
+	let index: SourceIndex;
+	try {
+		index = await sourceIndex(prefix, request.sourceRoot, (manifest) => {
+			baseFetch = cache.materialize(baseFileSpecs(manifest, prefix, "probe"));
+			baseFetch.catch(() => {});
+		});
+	} catch (error) {
+		await baseFetch?.catch(() => {});
+		cache.close();
+		throw error;
+	}
+	const { manifest, recordingMeta, mediaMeta } = index;
+	const { mediaFiles, audioFiles } = manifestFiles(manifest);
+
+	job.t.indexed = now();
+
+	const baseSpecs = (audioMode: "probe" | "all") =>
+		baseFileSpecs(manifest, prefix, audioMode);
 	const mediaSpec = (path: string, extra: [number, number][]): FileSpec => {
 		const meta = mediaMeta.get(path);
 		if (!meta) throw new Error(`no index for ${path}`);
@@ -655,13 +749,16 @@ async function planJob(job: Job) {
 		};
 	};
 
-	const probeDir = join(WORK_DIR, job.id);
-	mkdirSync(probeDir, { recursive: true });
-	const cache = new ProjectCache(s3, probeDir);
-	await cache.materialize([
-		...baseSpecs("probe"),
-		...mediaFiles.map((file) => mediaSpec(file.path, [])),
+	// Both downloads write through the cache, so neither may outlive it.
+	const fetched = await Promise.allSettled([
+		baseFetch ?? cache.materialize(baseSpecs("probe")),
+		cache.materialize(mediaFiles.map((file) => mediaSpec(file.path, []))),
 	]);
+	const failed = fetched.find((result) => result.status === "rejected");
+	if (failed) {
+		cache.close();
+		throw failed.reason;
+	}
 	job.t.materialized = now();
 
 	const gop = job.fps * 2;
@@ -829,7 +926,7 @@ async function planJob(job: Job) {
 				? LOCAL_AUDIO_SLOTS + fleetAudio
 				: Math.max(8, slots);
 		const target = Math.max(
-			20 * SAMPLE_RATE,
+			MIN_AUDIO_SECTION_SECONDS * SAMPLE_RATE,
 			Math.ceil(total / Math.min(64, audioLanes)),
 		);
 		const cuts = probe.audio_cuts;
