@@ -204,6 +204,7 @@ function EditorHome({
 					videoId = id;
 				},
 				quiet: true,
+				openInEditor: true,
 			});
 			if (ok && videoId) {
 				const editorUrl = `/s/${videoId}/edit?from=import`;

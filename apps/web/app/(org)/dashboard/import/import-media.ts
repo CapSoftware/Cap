@@ -27,6 +27,7 @@ export async function importMediaFile({
 	quiet = false,
 	name,
 	audioOnly = false,
+	openInEditor = false,
 }: {
 	file: File;
 	folderId?: Folder.FolderId;
@@ -40,6 +41,8 @@ export async function importMediaFile({
 	name?: string;
 	/** The video wraps an audio file, which the editor shows as a waveform. */
 	audioOnly?: boolean;
+	/** The editor opens next and reads the upload itself when it can. */
+	openInEditor?: boolean;
 }) {
 	const imageContentType = getSupportedImageContentType(file);
 
@@ -62,6 +65,7 @@ export async function importMediaFile({
 			onVideoCreated,
 			quiet,
 			{ name, audioOnly },
+			openInEditor,
 		);
 	}
 
@@ -137,7 +141,13 @@ async function uploadVideoForServerProcessing(
 	onVideoCreated?: (videoId: string) => void,
 	quiet = false,
 	details: { name?: string; audioOnly?: boolean } = {},
+	openInEditor = false,
 ) {
+	const editorSource = openInEditor
+		? import("@/lib/import-editor-probe")
+				.then(({ probeImportEditorSource }) => probeImportEditorSource(file))
+				.catch(() => null)
+		: Promise.resolve(null);
 	try {
 		setUploadStatus({ status: "parsing" });
 
@@ -295,6 +305,7 @@ async function uploadVideoForServerProcessing(
 				videoId: uploadId,
 				rawFileKey: videoData.rawFileKey,
 				bucketId: videoData.bucketId,
+				editorSource: await editorSource,
 			});
 			await progressSent;
 		} catch (triggerError) {
