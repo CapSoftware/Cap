@@ -220,3 +220,50 @@ test("carries the owner's saved style for a project nobody has edited", () => {
 		).defaultStyle,
 	).toBeNull();
 });
+
+test("gives long-running work freshly signed sources instead of the editor's older ones", async () => {
+	const originalFetch = globalThis.fetch;
+	const expiries: number[] = [];
+	globalThis.fetch = Object.assign(
+		async () => {
+			const value = bootstrap();
+			const expiresAt =
+				expiries.length === 0
+					? Date.now() + 5 * 60 * 1000
+					: Date.now() + 20 * 60 * 1000;
+			expiries.push(expiresAt);
+			value.sources.signedUrlExpiresAt = expiresAt;
+			return new Response(JSON.stringify(value), { status: 200 });
+		},
+		{ preconnect: originalFetch.preconnect },
+	);
+	const preview = new BrowserEditorSourceCatalog("recording-1");
+	const later = new BrowserEditorSourceCatalog("recording-1");
+	const exporter = new BrowserEditorSourceCatalog("recording-1", {
+		minValidityMs: 18 * 60 * 1000,
+	});
+	const controller = new AbortController();
+	try {
+		preview.invalidate();
+		const first = await preview.snapshot(controller.signal);
+		expect(expiries).toHaveLength(1);
+		expect((await later.snapshot(controller.signal)).expiresAt).toBe(
+			first.expiresAt,
+		);
+		expect(expiries).toHaveLength(1);
+		const exported = await exporter.snapshot(controller.signal);
+		expect(expiries).toHaveLength(2);
+		expect(exported.expiresAt).toBeGreaterThanOrEqual(
+			Date.now() + 18 * 60 * 1000,
+		);
+		expect((await preview.snapshot(controller.signal)).expiresAt).toBe(
+			first.expiresAt,
+		);
+	} finally {
+		preview.dispose();
+		later.dispose();
+		exporter.dispose();
+		preview.invalidate();
+		globalThis.fetch = originalFetch;
+	}
+});

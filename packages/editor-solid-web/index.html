@@ -4,6 +4,21 @@
 		<meta charset="UTF-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<title>Cap Editor</title>
+		<script>
+			// Starts loading the recording's sources while the editor code downloads.
+			(function () {
+				var params = new URLSearchParams(location.search);
+				var videoId = params.get("videoId");
+				if (params.has("prewarm") || !videoId || !/^[A-Za-z0-9_-]{1,255}$/.test(videoId)) return;
+				window.__capEditorBootstrap = {
+					videoId: videoId,
+					response: fetch("/api/editor/videos/" + encodeURIComponent(videoId) + "/bootstrap", {
+						credentials: "same-origin",
+						cache: "no-store",
+					}),
+				};
+			})();
+		</script>
 	</head>
 	<body>
 		<div id="editor-root"></div>

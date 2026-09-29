@@ -4,6 +4,7 @@ export type BrowserVideoRole = "primary" | "overlap";
 export type BrowserVideoSource = {
 	url: string;
 	expiresAt: number | null;
+	size?: number | null;
 };
 
 export type BrowserVideoSourceProvider = (

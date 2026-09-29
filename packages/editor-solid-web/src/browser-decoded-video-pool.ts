@@ -1,9 +1,13 @@
 import type {
 	EncodedPacketSink,
+	Input,
 	VideoSample,
 	VideoSampleSink,
 } from "mediabunny";
-import { acquireMediaInput } from "./browser-media-inputs";
+import {
+	acquireMediaInputAt,
+	type MediaInputLease,
+} from "./browser-media-inputs";
 import type {
 	BrowserVideoRole,
 	BrowserVideoSourceProvider,
@@ -24,7 +28,7 @@ export type BrowserDecodedVideoFrame = {
 };
 
 type DecodedSlot = {
-	release: () => void;
+	lease: MediaInputLease;
 	sink: VideoSampleSink;
 	packets: EncodedPacketSink;
 	retagBt601: boolean;
@@ -61,7 +65,7 @@ function releaseEntry(entry: SlotEntry) {
 				await slot.serial;
 				await resetStream(slot);
 			} finally {
-				slot.release();
+				slot.lease.release();
 			}
 		})
 		.catch(() => undefined);
@@ -128,6 +132,45 @@ async function sampleAtTime(slot: DecodedSlot, sourceTime: number) {
 	return slot.current.clone();
 }
 
+async function videoSinks(input: Input) {
+	const { EncodedPacketSink, VideoSampleSink } = await import("mediabunny");
+	const track = await input.getPrimaryVideoTrack();
+	if (!track) throw new Error("Editor video track is unavailable");
+	return {
+		track,
+		sink: new VideoSampleSink(track),
+		packets: new EncodedPacketSink(track),
+	};
+}
+
+/// Moves a slot onto an input that reaches `sourceTime` without walking the
+/// whole recording before it (see `acquireMediaInputAt`).
+async function reachTime(
+	slot: DecodedSlot,
+	url: string,
+	sourceTime: number,
+	signal: AbortSignal,
+) {
+	if (await slot.lease.covers(sourceTime)) return;
+	const next = await acquireMediaInputAt(url, sourceTime, signal);
+	if (next.input === slot.lease.input) {
+		next.release();
+		return;
+	}
+	try {
+		const { sink, packets } = await videoSinks(next.input);
+		await resetStream(slot);
+		slot.lease.release();
+		slot.lease = next;
+		slot.sink = sink;
+		slot.packets = packets;
+		perfCount("decode.region");
+	} catch (cause) {
+		next.release();
+		throw cause;
+	}
+}
+
 export class BrowserDecodedVideoPool {
 	private readonly slots = new Map<string, SlotEntry>();
 	private retainedKeys: Set<string> | null = null;
@@ -135,13 +178,15 @@ export class BrowserDecodedVideoPool {
 
 	constructor(private readonly sourceProvider: BrowserVideoSourceProvider) {}
 
-	private async createSlot(url: string): Promise<DecodedSlot | null> {
+	private async createSlot(
+		url: string,
+		sourceTime: number,
+	): Promise<DecodedSlot | null> {
 		if (typeof VideoDecoder !== "function") return null;
-		const { EncodedPacketSink, VideoSampleSink } = await import("mediabunny");
-		const { input, release } = await acquireMediaInput(url);
+		const lease = await acquireMediaInputAt(url, sourceTime);
+		const release = lease.release;
 		try {
-			const track = await input.getPrimaryVideoTrack();
-			if (!track) throw new Error("Editor video track is unavailable");
+			const { track, sink, packets } = await videoSinks(lease.input);
 			const [width, height, config] = await Promise.all([
 				track.getDisplayWidth(),
 				track.getDisplayHeight(),
@@ -160,9 +205,9 @@ export class BrowserDecodedVideoPool {
 				return null;
 			}
 			return {
-				release,
-				sink: new VideoSampleSink(track),
-				packets: new EncodedPacketSink(track),
+				lease,
+				sink,
+				packets,
 				iterator: null,
 				current: null,
 				upcoming: null,
@@ -220,7 +265,7 @@ export class BrowserDecodedVideoPool {
 		if (!entry) {
 			entry = {
 				url: url.href,
-				promise: this.createSlot(url.href),
+				promise: this.createSlot(url.href, sourceTime),
 				activeCalls: 0,
 				retired: false,
 				released: false,
@@ -246,7 +291,9 @@ export class BrowserDecodedVideoPool {
 					throw signal.reason ?? new DOMException("Canceled", "AbortError");
 				}
 				const decodeStarted = perfStart();
+				await reachTime(slot, url.href, sourceTime, signal);
 				sample = await sampleAtTime(slot, sourceTime);
+				if (sample) slot.lease.reached(sample.timestamp);
 				perfSpan("decode.sample", decodeStarted);
 			} finally {
 				releaseSerial();

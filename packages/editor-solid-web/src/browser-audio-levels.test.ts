@@ -66,8 +66,12 @@ test("level sources follow the tracks playback hears", () => {
 		browserAudioLevelSources(
 			sources({
 				displayHasAudio: true,
-				mic: { ...video("mic"), offsetMs: 0 },
-				systemAudio: { ...video("system"), offsetMs: 0 },
+				mic: { ...video("mic"), offsetMs: 0, contentType: "audio/webm" },
+				systemAudio: {
+					...video("system"),
+					offsetMs: 0,
+					contentType: "audio/webm",
+				},
 			}),
 		),
 	).toEqual([

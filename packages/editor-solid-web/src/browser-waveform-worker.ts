@@ -21,7 +21,7 @@ const scope = self as unknown as {
 /// The file streams through once: ranged reads ahead of a decoder this slow
 /// get dropped and fetched again, several times the file for long audio.
 async function waveform(url: string) {
-	const response = await fetch(url);
+	const response = await fetch(url, { priority: "low" });
 	if (!response.ok || !response.body) {
 		throw new Error("Editor waveform audio could not load");
 	}

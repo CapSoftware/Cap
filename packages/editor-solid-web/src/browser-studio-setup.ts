@@ -65,6 +65,41 @@ export function studioRecordingMeta(
 	};
 }
 
+const inputTexts = new Map<string, Promise<string | null>>();
+
+function inputEventsText(url: string) {
+	let text = inputTexts.get(url);
+	if (!text) {
+		text = fetch(url, { credentials: "omit" }).then((response) => {
+			const size = Number(response.headers.get("content-length") ?? 0);
+			if (!response.ok || size > 64 * 1024 * 1024) {
+				void response.body?.cancel();
+				return null;
+			}
+			return response.text();
+		});
+		inputTexts.set(url, text);
+		text.catch(() => {
+			if (inputTexts.get(url) === text) inputTexts.delete(url);
+		});
+	}
+	return text;
+}
+
+/// Drops pointer input downloaded for an editor that has been torn down.
+export function releaseWebInputRecordings() {
+	inputTexts.clear();
+}
+
+/// Starts downloading the recording's pointer input with the other startup
+/// reads; a long recording's input runs to megabytes and the first frame
+/// waits for it.
+export function prefetchWebInputRecording(sources: BrowserEditorSources) {
+	if (sources.inputEvents) {
+		void inputEventsText(sources.inputEvents.url).catch(() => undefined);
+	}
+}
+
 /// Pointer input recorded by the browser recorder or Chrome extension, parsed
 /// by the same code the web export worker uses. Missing input only drops the
 /// cursor layer, so failures are not fatal.
@@ -75,16 +110,22 @@ export async function webInputRecording(
 ): Promise<WebInputRecording | null> {
 	if (!sources.inputEvents) return null;
 	try {
-		const response = await fetch(sources.inputEvents.url, {
-			signal,
-			credentials: "omit",
+		const url = sources.inputEvents.url;
+		const text = await new Promise<string | null>((resolve, reject) => {
+			if (signal.aborted) {
+				reject(signal.reason);
+				return;
+			}
+			const onAbort = () => reject(signal.reason);
+			signal.addEventListener("abort", onAbort, { once: true });
+			inputEventsText(url)
+				.then(resolve, reject)
+				.finally(() => signal.removeEventListener("abort", onAbort));
 		});
-		if (!response.ok) return null;
-		const size = Number(response.headers.get("content-length") ?? 0);
-		if (size > 64 * 1024 * 1024) return null;
-		const parsed: unknown = JSON.parse(
-			module.web_input_recording(await response.text()),
-		);
+		// The text can run to tens of megabytes; once parsed it is not kept.
+		inputTexts.delete(url);
+		if (text === null) return null;
+		const parsed: unknown = JSON.parse(module.web_input_recording(text));
 		const value = record(parsed);
 		if (!value || typeof value.platform !== "string" || !record(value.cursors))
 			return null;

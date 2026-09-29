@@ -2,6 +2,7 @@ import {
 	type EditorDefaultStyle,
 	parseDefaultStyle,
 } from "@cap/editor-cap-bundle/default-style";
+import { mediaSource } from "./browser-media-inputs";
 import type {
 	BrowserVideoSource,
 	BrowserVideoSourceProvider,
@@ -37,11 +38,21 @@ export type BrowserEditorSources = {
 
 export type BrowserAudioTrack = BrowserVideoSource & {
 	offsetMs: number;
+	contentType: "audio/webm" | "audio/mp4";
 };
 
 function record(value: unknown): Record<string, unknown> | null {
 	return typeof value === "object" && value !== null && !Array.isArray(value)
 		? (value as Record<string, unknown>)
+		: null;
+}
+
+/// Object size from the sources response, so reads of the file's head and tail
+/// can start together instead of the tail waiting for the size.
+function sourceSize(source: Record<string, unknown>) {
+	const size = source.size;
+	return typeof size === "number" && Number.isSafeInteger(size) && size > 0
+		? size
 		: null;
 }
 
@@ -70,7 +81,11 @@ function signedVideo(value: unknown, expiresAt: number) {
 	) {
 		return null;
 	}
-	return { url: url.href, expiresAt } satisfies BrowserVideoSource;
+	return {
+		url: url.href,
+		expiresAt,
+		size: sourceSize(source),
+	} satisfies BrowserVideoSource;
 }
 
 function signedInputEvents(value: unknown, expiresAt: number) {
@@ -144,7 +159,9 @@ function signedAudio(
 	return {
 		url: url.href,
 		expiresAt,
+		size: sourceSize(source),
 		offsetMs: source.offsetMs,
+		contentType: source.contentType,
 	};
 }
 
@@ -304,6 +321,23 @@ export function parseBrowserEditorSources(
 			segments.push(clipSegment(clip, assets));
 		}
 	}
+	const durationHint =
+		typeof sources.durationHint === "number" &&
+		Number.isFinite(sources.durationHint) &&
+		sources.durationHint > 0 &&
+		sources.durationHint <= 86_400
+			? sources.durationHint
+			: null;
+	for (const [index, segment] of segments.entries()) {
+		for (const source of [segment.display, segment.camera]) {
+			if (source?.size) {
+				mediaSource(source.url, source.size, index === 0 ? durationHint : null);
+			}
+		}
+	}
+	for (const source of [mic, systemAudio]) {
+		if (source?.size) mediaSource(source.url, source.size, durationHint);
+	}
 	return {
 		videoId: expectedVideoId,
 		title: sources.title,
@@ -354,32 +388,77 @@ type SharedSourceRequest = {
 	promise: Promise<BrowserEditorSources>;
 	expiresAt: number;
 	prefetched: boolean;
-	settled: boolean;
+	value: BrowserEditorSources | null;
 };
 
 const sharedSourceRequests = new Map<string, SharedSourceRequest>();
 const PREFETCH_TTL_MS = 60_000;
-const SHARED_TTL_MS = 3000;
+const URL_EXPIRY_MARGIN_MS = 60_000;
 
-function sharedSourceRequest(videoId: string, prefetch = false) {
+/// Once an editor session uses the sources, every part of it (commands,
+/// preview, audio) shares them until the editor is torn down or the signed
+/// URLs near expiry; a later part asking for them again must not refetch.
+function sessionExpiry(value: BrowserEditorSources) {
+	return value.expiresAt - URL_EXPIRY_MARGIN_MS;
+}
+
+function expireLater(videoId: string, entry: SharedSourceRequest) {
+	globalThis.setTimeout(
+		() => {
+			if (
+				sharedSourceRequests.get(videoId) === entry &&
+				entry.expiresAt <= Date.now()
+			)
+				sharedSourceRequests.delete(videoId);
+		},
+		Math.max(0, entry.expiresAt - Date.now()),
+	);
+}
+
+declare global {
+	interface Window {
+		__capEditorBootstrap?: { videoId: string; response: Promise<Response> };
+	}
+}
+
+/// The request index.html starts before the editor code loads, used once;
+/// later loads fetch again.
+function bootstrapResponse(videoId: string) {
+	const early =
+		typeof window === "undefined" ? undefined : window.__capEditorBootstrap;
+	if (early?.videoId === videoId) {
+		window.__capEditorBootstrap = undefined;
+		return early.response;
+	}
+	return fetch(`/api/editor/videos/${encodeURIComponent(videoId)}/bootstrap`, {
+		credentials: "same-origin",
+		cache: "no-store",
+	});
+}
+
+function sharedSourceRequest(
+	videoId: string,
+	prefetch = false,
+	minValidityMs = 0,
+) {
 	const cached = sharedSourceRequests.get(videoId);
-	if (cached && cached.expiresAt > Date.now()) {
+	if (
+		cached &&
+		cached.expiresAt > Date.now() &&
+		(cached.value === null ||
+			cached.value.expiresAt >= Date.now() + minValidityMs)
+	) {
 		if (!prefetch && cached.prefetched) {
 			cached.prefetched = false;
-			if (cached.settled) {
-				cached.expiresAt = Math.min(
-					cached.expiresAt,
-					Date.now() + SHARED_TTL_MS,
-				);
+			if (cached.value) {
+				cached.expiresAt = sessionExpiry(cached.value);
+				expireLater(videoId, cached);
 			}
 		}
 		return cached.promise;
 	}
 	const entry: SharedSourceRequest = {
-		promise: fetch(
-			`/api/editor/videos/${encodeURIComponent(videoId)}/bootstrap`,
-			{ credentials: "same-origin", cache: "no-store" },
-		)
+		promise: bootstrapResponse(videoId)
 			.then(async (response) => {
 				if (!response.ok)
 					throw new Error("Editor browser sources are unavailable");
@@ -389,16 +468,11 @@ function sharedSourceRequest(videoId: string, prefetch = false) {
 			.then(
 				(value) => {
 					if (sharedSourceRequests.get(videoId) === entry) {
-						entry.settled = true;
-						const ttl = entry.prefetched ? PREFETCH_TTL_MS : SHARED_TTL_MS;
-						entry.expiresAt = Date.now() + ttl;
-						globalThis.setTimeout(() => {
-							if (
-								sharedSourceRequests.get(videoId) === entry &&
-								entry.expiresAt <= Date.now()
-							)
-								sharedSourceRequests.delete(videoId);
-						}, ttl);
+						entry.value = value;
+						entry.expiresAt = entry.prefetched
+							? Math.min(Date.now() + PREFETCH_TTL_MS, sessionExpiry(value))
+							: sessionExpiry(value);
+						expireLater(videoId, entry);
 					}
 					return value;
 				},
@@ -410,10 +484,16 @@ function sharedSourceRequest(videoId: string, prefetch = false) {
 			),
 		expiresAt: Number.POSITIVE_INFINITY,
 		prefetched: prefetch,
-		settled: false,
+		value: null,
 	};
 	sharedSourceRequests.set(videoId, entry);
 	return entry.promise;
+}
+
+/// Forgets the loaded sources when the editor is torn down, so the next mount
+/// reads the recording's current state (new clips, saved project).
+export function releaseBrowserEditorSources() {
+	sharedSourceRequests.clear();
 }
 
 /// Starts loading the recording's sources while the editor UI is still
@@ -426,12 +506,21 @@ export class BrowserEditorSourceCatalog {
 	private readonly controller = new AbortController();
 	private current: BrowserEditorSources | null = null;
 	private pending: Promise<BrowserEditorSources> | null = null;
+	private readonly minValidityMs: number;
 
-	constructor(private readonly videoId: string) {}
+	/// `minValidityMs` is how long the signed URLs must stay valid when handed
+	/// out; work that reads the sources for a long time (an export) asks for
+	/// more than the preview, which refetches as they near expiry.
+	constructor(
+		private readonly videoId: string,
+		options: { minValidityMs?: number } = {},
+	) {
+		this.minValidityMs = Math.max(60_000, options.minValidityMs ?? 0);
+	}
 
 	private async load() {
 		return waitWithAbort(
-			sharedSourceRequest(this.videoId),
+			sharedSourceRequest(this.videoId, false, this.minValidityMs),
 			this.controller.signal,
 		);
 	}
@@ -440,7 +529,10 @@ export class BrowserEditorSourceCatalog {
 		if (this.controller.signal.aborted) {
 			throw new Error("Editor browser sources are closed");
 		}
-		if (this.current && this.current.expiresAt > Date.now() + 60_000) {
+		if (
+			this.current &&
+			this.current.expiresAt > Date.now() + this.minValidityMs
+		) {
 			return this.current;
 		}
 		if (!this.pending) {

@@ -15,9 +15,17 @@ import {
 	setBrowserEditorVideoId,
 } from "./browser-frame-socket";
 import { browserWebGpuPresentationWorks } from "./browser-gpu-probe";
+import { releaseMediaSources, warmMediaSource } from "./browser-media-inputs";
 import { probeBrowserMedia } from "./browser-media-probe";
 import { loadBrowserRenderer } from "./browser-renderer";
-import { prefetchBrowserEditorSources } from "./browser-sources";
+import {
+	prefetchBrowserEditorSources,
+	releaseBrowserEditorSources,
+} from "./browser-sources";
+import {
+	prefetchWebInputRecording,
+	releaseWebInputRecordings,
+} from "./browser-studio-setup";
 import {
 	clearEditorImportedImages,
 	serializeEditorProjectSnapshot,
@@ -213,6 +221,7 @@ export function disposeEditor() {
 	mountGeneration++;
 	dispose?.();
 	dispose = null;
+	releaseRecordingData();
 	disposeSkeleton();
 	errorDispose?.();
 	errorDispose = null;
@@ -238,6 +247,14 @@ declare global {
 	}
 }
 
+/// Everything loaded for the editor's recording, dropped when it is torn down
+/// so a long-lived frame does not keep another recording's bytes.
+function releaseRecordingData() {
+	releaseBrowserEditorSources();
+	releaseMediaSources();
+	releaseWebInputRecordings();
+}
+
 function layer(zIndex: number) {
 	const element = document.createElement("div");
 	element.style.cssText = `position:absolute;inset:0;z-index:${zIndex}`;
@@ -253,13 +270,17 @@ function prefetchStartup() {
 	if (!videoId || !/^[A-Za-z0-9_-]{1,255}$/.test(videoId)) return;
 	void prefetchBrowserEditorSources(videoId)
 		.then((sources) => {
+			prefetchWebInputRecording(sources);
 			const first = sources.segments[0];
-			for (const url of [
-				first?.display?.url,
-				first?.camera?.url,
-				sources.mic?.url,
+			for (const source of [
+				first?.display,
+				first?.camera,
+				sources.mic,
+				sources.systemAudio,
 			]) {
-				if (url) void probeBrowserMedia(url).catch(() => undefined);
+				if (!source) continue;
+				warmMediaSource(source.url, source.size ?? null);
+				void probeBrowserMedia(source.url).catch(() => undefined);
 			}
 		})
 		.catch(() => undefined);
@@ -361,6 +382,7 @@ if (prewarming) {
 			const generation = ++mountGeneration;
 			dispose?.();
 			dispose = null;
+			releaseRecordingData();
 			disposeSkeleton();
 			setEditorTransport(null);
 			setBrowserEditorVideoId(null);

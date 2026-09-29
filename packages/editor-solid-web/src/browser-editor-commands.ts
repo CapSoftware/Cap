@@ -13,8 +13,9 @@ import type { BrowserEditorMediaMetadata } from "../../../apps/web/lib/browser-e
 import {
 	browserEditorPreviewConfig,
 	browserEditorPreviewTime,
+	onBrowserPreviewSettled,
 } from "./browser-frame-socket";
-import { acquireMediaInput } from "./browser-media-inputs";
+import { acquireMediaInputAt } from "./browser-media-inputs";
 import { probeBrowserMedia } from "./browser-media-probe";
 import { loadBrowserRenderer } from "./browser-renderer";
 import {
@@ -130,6 +131,32 @@ async function cachedWaveform(url: string, signal: AbortSignal) {
 	} catch {
 		if (signal.aborted) throw signal.reason;
 	}
+	// Streaming the whole audio file would compete with the first preview
+	// frame's reads, so it starts once the preview has painted.
+	await new Promise<void>((resolve, reject) => {
+		let settled = false;
+		let unsubscribe: (() => void) | null = null;
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const finish = (error?: unknown) => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			unsubscribe?.();
+			signal.removeEventListener("abort", abort);
+			if (error === undefined) resolve();
+			else reject(error);
+		};
+		const abort = () =>
+			finish(signal.reason ?? new DOMException("Canceled", "AbortError"));
+		if (signal.aborted) {
+			abort();
+			return;
+		}
+		signal.addEventListener("abort", abort, { once: true });
+		timer = setTimeout(() => finish(), 10_000);
+		unsubscribe = onBrowserPreviewSettled(() => finish());
+		if (settled) unsubscribe();
+	});
 	const peaks = await waveform(url, signal);
 	if (cache && key && peaks.length > 0) {
 		const store = cache;
@@ -158,7 +185,7 @@ const THUMBNAIL_CACHE_ENTRIES = 64;
 async function decodeFrameAt(url: string, time: number) {
 	if (typeof VideoDecoder !== "function") return null;
 	const { VideoSampleSink } = await import("mediabunny");
-	const { input, release } = await acquireMediaInput(url);
+	const { input, release } = await acquireMediaInputAt(url, time);
 	try {
 		const track = await input.getPrimaryVideoTrack();
 		const config = await track?.getDecoderConfig();

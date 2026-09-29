@@ -1,3 +1,10 @@
+import {
+	canStreamAudio,
+	STREAMED_AUDIO_MIN_BYTES,
+	StreamedAudio,
+} from "./browser-audio-stream";
+import { mediaSource } from "./browser-media-inputs";
+import { probedBrowserMedia } from "./browser-media-probe";
 import type { BrowserEditorSourceCatalog } from "./browser-sources";
 
 type AudioKind = "mic" | "system" | "display";
@@ -5,6 +12,7 @@ type AudioRole = "primary" | "overlap";
 type SpeedAudioMode = "maintainPitch" | "matchSpeed" | "mute" | null;
 type AudioSlot = {
 	element: HTMLAudioElement;
+	stream: StreamedAudio | null;
 	url: string;
 	gain: GainNode | null;
 	source: MediaElementAudioSourceNode | null;
@@ -31,6 +39,7 @@ function slotKey(role: AudioRole, kind: AudioKind) {
 }
 
 function releaseSlot(slot: AudioSlot) {
+	slot.stream?.dispose();
 	slot.element.pause();
 	slot.element.removeAttribute("src");
 	slot.element.load();
@@ -126,7 +135,40 @@ export class BrowserAudioPlayback {
 		slot.source = source;
 	}
 
-	private slot(role: AudioRole, kind: AudioKind, url: string) {
+	/// Long WebM recordings stream through a MediaSource (see StreamedAudio);
+	/// anything else, or a stream that fails, plays the file directly.
+	private streamFor(
+		element: HTMLAudioElement,
+		url: string,
+		contentType: string | null,
+	) {
+		const media = mediaSource(url);
+		const duration = probedBrowserMedia(url)?.duration ?? null;
+		if (
+			!media?.size ||
+			media.size < STREAMED_AUDIO_MIN_BYTES ||
+			duration === null ||
+			!canStreamAudio(contentType)
+		) {
+			return null;
+		}
+		return new StreamedAudio(media, element, duration, () => {
+			if (this.disposed) return;
+			const time = element.currentTime;
+			element.src = url;
+			element.currentTime = time;
+			for (const slot of this.slots.values()) {
+				if (slot.element === element) slot.stream = null;
+			}
+		});
+	}
+
+	private slot(
+		role: AudioRole,
+		kind: AudioKind,
+		url: string,
+		contentType: string | null,
+	) {
 		const key = slotKey(role, kind);
 		let slot = this.slots.get(key);
 		if (slot?.url === url) return slot;
@@ -134,9 +176,18 @@ export class BrowserAudioPlayback {
 		const element = document.createElement("audio");
 		element.preload = "auto";
 		element.crossOrigin = "anonymous";
-		element.src = url;
+		const stream = this.streamFor(element, url, contentType);
+		if (!stream) element.src = url;
 		this.host.append(element);
-		slot = { element, url, gain: null, source: null, fade: 1, lastTime: -1 };
+		slot = {
+			element,
+			stream,
+			url,
+			gain: null,
+			source: null,
+			fade: 1,
+			lastTime: -1,
+		};
 		this.slots.set(key, slot);
 		this.connect(key, slot);
 		return slot;
@@ -146,6 +197,7 @@ export class BrowserAudioPlayback {
 		role: AudioRole,
 		kind: AudioKind,
 		url: string | null,
+		contentType: string | null,
 		time: number,
 		playing: boolean,
 		speed: number,
@@ -162,7 +214,7 @@ export class BrowserAudioPlayback {
 			return null;
 		}
 		if (this.unavailableUrls.has(url)) return null;
-		const slot = this.slot(role, kind, url);
+		const slot = this.slot(role, kind, url, contentType);
 		slot.fade = Math.max(0, Math.min(fade, 2));
 		const audio = slot.element;
 		try {
@@ -237,6 +289,7 @@ export class BrowserAudioPlayback {
 				role,
 				"display",
 				enabled && displayAudio ? (segment.display?.url ?? null) : null,
+				null,
 				displayTime,
 				playing,
 				speed,
@@ -247,6 +300,7 @@ export class BrowserAudioPlayback {
 				role,
 				"mic",
 				enabled && segmentIndex === 0 ? (current.mic?.url ?? null) : null,
+				current.mic?.contentType ?? null,
 				micTime,
 				playing,
 				speed,
@@ -259,6 +313,7 @@ export class BrowserAudioPlayback {
 				enabled && segmentIndex === 0
 					? (current.systemAudio?.url ?? null)
 					: null,
+				current.systemAudio?.contentType ?? null,
 				systemTime,
 				playing,
 				speed,
