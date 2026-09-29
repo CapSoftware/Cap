@@ -4569,6 +4569,7 @@ function ZoomSegmentConfig(props: {
 									video.onerror = (e) => {
 										console.error("Failed to load video for zoom preview:", e);
 										if (retries >= ZOOM_PREVIEW_MAX_RETRIES) {
+											setLoaded(false);
 											setFailed(true);
 											return;
 										}
@@ -4613,7 +4614,9 @@ function ZoomSegmentConfig(props: {
 													"Failed to load frame for zoom preview:",
 													error,
 												);
-												if (!webFrame) setFailed(true);
+												webFrame = undefined;
+												setLoaded(false);
+												setFailed(true);
 											});
 									});
 								}
