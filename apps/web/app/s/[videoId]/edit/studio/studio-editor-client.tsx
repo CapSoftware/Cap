@@ -530,20 +530,28 @@ export function StudioEditorClient(props: {
 		if (entryFrame !== undefined) nextPageReady();
 	}, [entryFrame]);
 	useEffect(() => {
-		const painted = (event: MessageEvent<unknown>) => {
+		const onFrameMessage = (event: MessageEvent<unknown>) => {
 			const message = event.data;
 			if (
 				event.source === iframeRef.current?.contentWindow &&
 				event.origin === window.location.origin &&
 				typeof message === "object" &&
 				message !== null &&
-				"kind" in message &&
-				message.kind === "cap-editor-painted"
-			)
-				setEditorPainted(true);
+				"kind" in message
+			) {
+				if (message.kind === "cap-editor-painted") setEditorPainted(true);
+				else if (
+					message.kind === "cap-editor-preview-failed" &&
+					"message" in message &&
+					typeof message.message === "string" &&
+					message.message.length > 0 &&
+					message.message.length <= 1000
+				)
+					setError(message.message);
+			}
 		};
-		window.addEventListener("message", painted);
-		return () => window.removeEventListener("message", painted);
+		window.addEventListener("message", onFrameMessage);
+		return () => window.removeEventListener("message", onFrameMessage);
 	}, []);
 	// Arriving with a snapshot of the share page's video, the editor stays
 	// hidden behind it until it shows a frame of its own. Without one, its

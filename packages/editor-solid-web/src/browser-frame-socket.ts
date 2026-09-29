@@ -7,6 +7,27 @@ import type {
 import type { FrameLayoutEvent } from "../../../apps/desktop/src/utils/tauri";
 import { BrowserLocalPlayback } from "./browser-local-playback";
 
+/// The message the page shows when the preview can't start. Without WebGPU or
+/// WebGL2 (no GPU, or one the browser blocks) nothing can draw it.
+export function previewFailureMessage(error: unknown) {
+	const detail = error instanceof Error ? error.message : String(error);
+	return /WebGL2 is unavailable/i.test(detail)
+		? "This browser can't draw the editor preview. Turn on hardware acceleration in its settings, or try Chrome or Edge."
+		: "The editor preview couldn't start. Try again.";
+}
+
+function reportPreviewFailure(error: unknown) {
+	if (window.parent === window) return;
+	window.parent.postMessage(
+		{
+			kind: "cap-editor-preview-failed",
+			version: 1,
+			message: previewFailureMessage(error),
+		},
+		window.location.origin,
+	);
+}
+
 export type {
 	CanvasControls,
 	FrameData,
@@ -251,6 +272,7 @@ class BrowserPreviewController {
 				settlePreview();
 				this.socket.dispatchEvent(new ErrorEvent("error", { error }));
 				this.dispose();
+				reportPreviewFailure(error);
 			});
 	}
 
