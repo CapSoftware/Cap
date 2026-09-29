@@ -28,6 +28,11 @@ import {
 	type TempFileHandle,
 } from "./temp-files";
 
+// Keep audio in runs of up to a second rather than a slice per video frame:
+// the editor reads a video's audio alone for its waveform, which interleaving
+// at every frame turns into reading the whole file.
+const AUDIO_RUN_ARGS = ["-chunk_duration", "1000000"];
+
 const PROCESS_TIMEOUT_PER_SECOND_MS = 20_000;
 const MAX_PROCESS_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 // HLS/DASH sources are pulled as many sequential segment requests rather than
@@ -1584,6 +1589,7 @@ export async function processVideo(
 	ffmpegArgs.push(
 		"-movflags",
 		"+faststart",
+		...(metadata.audioCodec ? AUDIO_RUN_ARGS : []),
 		...extraOutputArgs,
 		"-progress",
 		"pipe:2",
@@ -2585,6 +2591,7 @@ export async function muxMediaTracksToMp4(
 				"1000000",
 				"-movflags",
 				"+faststart",
+				...AUDIO_RUN_ARGS,
 				outputPath,
 			]
 		: [
