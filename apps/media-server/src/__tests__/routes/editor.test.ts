@@ -1942,15 +1942,16 @@ test.skipIf(!hasNativeBinaries)(
 				"running",
 			);
 			const exportStartedAt = Date.now();
-			const laterClock = spyOn(Date, "now").mockReturnValue(
-				exportStartedAt + 11 * 60 * 1000,
-			);
+			const laterClock = spyOn(Date, "now").mockReturnValue(exportStartedAt);
 			try {
-				const runningAfterIdle = await app.request(
-					`/editor/sessions/${sessionId}/exports/${backgroundExportId}`,
-					{ headers },
-				);
-				expect(runningAfterIdle.status).toBe(200);
+				for (let minute = 2; minute <= 12; minute += 2) {
+					laterClock.mockReturnValue(exportStartedAt + minute * 60 * 1000);
+					const runningAfterIdle = await app.request(
+						`/editor/sessions/${sessionId}/exports/${backgroundExportId}`,
+						{ headers },
+					);
+					expect(runningAfterIdle.status).toBe(200);
+				}
 				laterClock.mockReturnValue(exportStartedAt + 12 * 60 * 1000);
 				const exportDeadline = performance.now() + 10_000;
 				let completedExport = false;
