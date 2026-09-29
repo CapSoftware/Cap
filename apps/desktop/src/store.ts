@@ -56,9 +56,18 @@ const store = () => {
 	return _store;
 };
 
-function declareStore<T extends object>(name: string, defaults?: T) {
+function declareStore<T extends object>(
+	name: string,
+	defaults?: T,
+	normalize?: (value: T) => T,
+) {
 	const withDefaults = (value?: T) =>
-		defaults ? { ...defaults, ...(value ?? {}) } : value;
+		defaults
+			? (normalize?.({ ...defaults, ...(value ?? {}) }) ?? {
+					...defaults,
+					...(value ?? {}),
+				})
+			: value;
 	const get = async () => {
 		const s = await store();
 		return withDefaults(await s.get<T>(name));
@@ -132,7 +141,11 @@ export const recordingStartSafetyStore =
 		"recording_start_safety",
 		RECORDING_START_SAFETY_DEFAULTS,
 	);
-export const recordingSettingsStore = declareStore<RecordingSettingsStore>(
+type StoredRecordingSettings = RecordingSettingsStore & {
+	systemAudio?: boolean;
+};
+
+const storedRecordingSettings = declareStore<StoredRecordingSettings>(
 	"recording_settings",
 	{
 		target: null,
@@ -145,7 +158,20 @@ export const recordingSettingsStore = declareStore<RecordingSettingsStore>(
 		cameraDeviceSettings: {},
 		microphoneDeviceSettings: {},
 	},
+	(settings) =>
+		settings.systemAudio && settings.audioSource === "none"
+			? { ...settings, audioSource: "system" }
+			: settings,
 );
+export const recordingSettingsStore = {
+	...storedRecordingSettings,
+	set: (value?: Partial<RecordingSettingsStore>) =>
+		storedRecordingSettings.set(
+			value?.audioSource === undefined
+				? value
+				: { ...value, systemAudio: false },
+		),
+};
 export const teleprompterStore = declareStore<TeleprompterStore>(
 	"teleprompter",
 	teleprompterDefaults,

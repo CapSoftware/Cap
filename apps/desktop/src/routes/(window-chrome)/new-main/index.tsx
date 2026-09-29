@@ -118,7 +118,7 @@ import {
 } from "../OptionsContext";
 import CameraSelect from "./CameraSelect";
 import ChangelogButton from "./ChangeLogButton";
-import CursorVisibility from "./CursorVisibility";
+import CursorVisibility from "./cursor-visibility";
 import MicrophoneSelect from "./MicrophoneSelect";
 import ModeInfoPanel from "./ModeInfoPanel";
 import SystemAudio from "./SystemAudio";

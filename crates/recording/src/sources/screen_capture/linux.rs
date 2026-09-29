@@ -1656,8 +1656,17 @@ impl AudioSource for SystemAudioSource {
             let cancel = ctx.stop_token().child_token();
             ctx.tasks()
                 .spawn_thread("application-audio-route-watcher", move || {
+                    let mut last_error = None;
                     while !cancel.is_cancelled() {
-                        route.reconcile()?;
+                        if let Err(error) = route.reconcile() {
+                            let message = error.to_string();
+                            if last_error.as_ref() != Some(&message) {
+                                tracing::warn!(%error, "Linux application-audio routing reconciliation failed; retrying");
+                            }
+                            last_error = Some(message);
+                        } else if last_error.take().is_some() {
+                            tracing::info!("Linux application-audio routing reconciliation recovered");
+                        }
                         std::thread::sleep(Duration::from_millis(250));
                     }
                     Ok(())

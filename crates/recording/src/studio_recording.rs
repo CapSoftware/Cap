@@ -3117,8 +3117,6 @@ fn completion_rx_to_done_fut(
 pub enum CreateSegmentPipelineError {
     #[error("NoDisplay")]
     NoDisplay,
-    #[error("NoBounds")]
-    NoBounds,
     #[error("PipelineBuild/{0}")]
     PipelineBuild(MediaError),
     #[error("PipelinePlay/{0}")]
@@ -3502,11 +3500,6 @@ async fn create_segment_pipeline(
     } else {
         (custom_cursor_capture || keyboard_capture)
             .then(move || {
-                let cursor_crop_bounds = base_inputs
-                    .capture_target
-                    .cursor_crop()
-                    .ok_or(CreateSegmentPipelineError::NoBounds)?;
-
                 let cursor_output_path = dir.join("cursor.json");
                 let keyboard_output_path = dir.join(cap_project::KEYBOARD_EVENTS_FILE_NAME);
                 let incremental_output = if fragmented && custom_cursor_capture {
@@ -3520,14 +3513,11 @@ async fn create_segment_pipeline(
                     None
                 };
 
-                let cursor_display = cursor_display.ok_or(CreateSegmentPipelineError::NoDisplay)?;
+                cursor_display.ok_or(CreateSegmentPipelineError::NoDisplay)?;
 
                 let cursor = spawn_cursor_recorder(
                     crate::cursor::CursorCaptureTarget {
-                        crop_bounds: cursor_crop_bounds,
-                        display: cursor_display,
-                        #[cfg(target_os = "linux")]
-                        window: base_inputs.capture_target.window(),
+                        capture_target: base_inputs.capture_target.clone(),
                     },
                     cursors_dir.to_path_buf(),
                     prev_cursors,

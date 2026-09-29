@@ -247,8 +247,14 @@ jobs:
         shell: bash
         run: |
           test -s "$ARCHIVE"
-          "target/${{ matrix.target }}/release/cap${{ runner.os == 'Windows' && '.exe' || '' }}" --version
-          "target/${{ matrix.target }}/release/cap${{ runner.os == 'Windows' && '.exe' || '' }}" --help >/dev/null
+          verify_dir="$RUNNER_TEMP/cap-cli-verify"
+          mkdir -p "$verify_dir"
+          case "$RUNNER_OS" in
+            Windows) unzip -q "$ARCHIVE" -d "$verify_dir" ;;
+            *) tar -xzf "$ARCHIVE" -C "$verify_dir" ;;
+          esac
+          "$verify_dir/cap${{ runner.os == 'Windows' && '.exe' || '' }}" --version
+          "$verify_dir/cap${{ runner.os == 'Windows' && '.exe' || '' }}" --help >/dev/null
 
       - uses: actions/upload-artifact@v4
         with:
@@ -261,4 +267,5 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ inputs.release_tag }}" "$ARCHIVE" --clobber
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: gh release upload "$RELEASE_TAG" "$ARCHIVE" --clobber
