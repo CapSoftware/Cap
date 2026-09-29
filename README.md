@@ -100,9 +100,7 @@ docker compose logs cap-web
 | Coolify | Self-hosted PaaS deployments with `docker-compose.coolify.yml` |
 | [ZopDay](https://zop.dev/zopday/app/deploy?image=ghcr.io/capsoftware/cap-web:latest&port=3000) | One-click deploy to ZopCloud or into your own AWS or GCP account |
 
-[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new/template/PwpGcf)
-
-[![Deploy on ZopDay](https://zop.dev/deploytozopday-inkhard.svg)](https://zop.dev/zopday/app/deploy?image=ghcr.io/capsoftware/cap-web:latest&port=3000)
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new/template/PwpGcf) [![Deploy on ZopDay](https://zop.dev/deploytozopday-inkhard.svg)](https://zop.dev/zopday/app/deploy?image=ghcr.io/capsoftware/cap-web:latest&port=3000)
 
 For production, configure public URLs and replace the default secrets before exposing the deployment to the internet:
 
