@@ -34,7 +34,7 @@ import {
 const AUDIO_RUN_ARGS = ["-chunk_duration", "1000000"];
 
 const PROCESS_TIMEOUT_PER_SECOND_MS = 20_000;
-const MAX_PROCESS_TIMEOUT_MS = 2 * 60 * 60 * 1000;
+export const MAX_PROCESS_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 // HLS/DASH sources are pulled as many sequential segment requests rather than
 // one streamed fetch, so per-request overhead scales with video length. A
 // flat 10-minute budget is enough for typical short recordings but not for a

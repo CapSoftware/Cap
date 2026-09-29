@@ -54,6 +54,7 @@ import {
 	downloadVideoToTemp,
 	generatePreviewGif,
 	generateThumbnail,
+	MAX_PROCESS_TIMEOUT_MS,
 	muxMediaTracksToMp4,
 	processVideo,
 	repairContainer,
@@ -1434,8 +1435,14 @@ async function processVideoAsync(
 		const isWebm = isWebmInput(options.inputExtension);
 		if (isWebm) {
 			updateJob(jobId, { message: "Checking the original recording..." });
+			// Streamed recordings often carry no duration to size this by, so it
+			// gets the longest time a transcode of the same file may take.
 			await withJobHeartbeat(jobId, () =>
-				validateVideoInput(inputTempFile.path, abortController.signal),
+				validateVideoInput(
+					inputTempFile.path,
+					abortController.signal,
+					MAX_PROCESS_TIMEOUT_MS,
+				),
 			);
 		}
 
