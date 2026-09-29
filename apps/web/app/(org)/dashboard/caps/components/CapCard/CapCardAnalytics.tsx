@@ -20,7 +20,6 @@ interface CapCardAnalyticsProps {
 	isLoadingAnalytics: boolean;
 	totalReactions: number;
 	isOwner?: boolean;
-	/** Prefetch analytics on hover, not as soon as the card renders. */
 	prefetchOnHover?: boolean;
 }
 

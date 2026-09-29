@@ -53,7 +53,6 @@ export function EditorShellBrand({
 	title: ReactNode;
 	backHref: string;
 	onClick?: MouseEventHandler<HTMLAnchorElement>;
-	/** Prefetch the dashboard on hover, not as soon as the bar renders. */
 	prefetchOnHover?: boolean;
 }) {
 	const BackLink = prefetchOnHover ? HoverPrefetchLink : Link;
@@ -186,7 +185,6 @@ export function RecordVideoLink({
 	prefetchOnHover = false,
 }: {
 	onNavigate?: MouseEventHandler<HTMLAnchorElement>;
-	/** Prefetch the recorder on hover, not as soon as the link renders. */
 	prefetchOnHover?: boolean;
 }) {
 	const RecordLink = prefetchOnHover ? HoverPrefetchLink : Link;
