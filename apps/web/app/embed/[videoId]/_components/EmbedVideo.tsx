@@ -7,6 +7,7 @@ import { Avatar, Logo } from "@cap/ui";
 import type { ViewerSettings } from "@cap/web-backend";
 import { AnimatePresence, motion } from "framer-motion";
 import { useTranscript } from "hooks/use-transcript";
+import dynamic from "next/dynamic";
 import Image from "next/image";
 import {
 	forwardRef,
@@ -16,12 +17,11 @@ import {
 	useState,
 } from "react";
 import { CapVideoPlayer } from "@/app/s/[videoId]/_components/CapVideoPlayer";
-import { HLSVideoPlayer } from "@/app/s/[videoId]/_components/HLSVideoPlayer";
-import { useUploadProgress } from "@/app/s/[videoId]/_components/ProgressCircle";
 import {
 	PreparingVideoOverlay,
 	RecordingInProgressOverlay,
 } from "@/app/s/[videoId]/_components/RecordingInProgress";
+import type { UploadProgress } from "@/app/s/[videoId]/_components/upload-progress";
 import {
 	formatChaptersAsVTT,
 	formatTranscriptAsVTT,
@@ -31,6 +31,19 @@ import {
 import type { SharePageBranding } from "@/lib/share-branding";
 import type { ShareCallToAction } from "@/lib/share-call-to-action";
 import { usePlayerJsReceiver } from "./use-player-js-receiver";
+
+// Only non-MP4 sources play through it, and it brings hls.js.
+const HLSVideoPlayer = dynamic(() =>
+	import("@/app/s/[videoId]/_components/HLSVideoPlayer").then(
+		(m) => m.HLSVideoPlayer,
+	),
+);
+// Mounted only while a recording uploads: its RPC client brings the Effect
+// runtime, which no finished embed needs.
+const UploadProgressTracker = dynamic(
+	() => import("@/app/s/[videoId]/_components/UploadProgressTracker"),
+	{ ssr: false },
+);
 
 declare global {
 	interface Window {
@@ -107,10 +120,17 @@ export const EmbedVideo = forwardRef<
 		);
 		const [isPlaying, setIsPlaying] = useState(false);
 		const [userConfirmedStopped, setUserConfirmedStopped] = useState(false);
-		const segmentUploadProgress = useUploadProgress(
-			data.id,
-			data.source.type === "desktopSegments" && (data.hasActiveUpload ?? false),
-		);
+		const trackUploadProgress =
+			data.source.type === "desktopSegments" && (data.hasActiveUpload ?? false);
+		const [segmentUploadProgress, setSegmentUploadProgress] =
+			useState<UploadProgress | null>(
+				trackUploadProgress ? { status: "fetching" } : null,
+			);
+		useEffect(() => {
+			setSegmentUploadProgress(
+				trackUploadProgress ? { status: "fetching" } : null,
+			);
+		}, [trackUploadProgress]);
 		const [subtitleUrl, setSubtitleUrl] = useState<string | null>(null);
 		const [chaptersUrl, setChaptersUrl] = useState<string | null>(null);
 		const captionsDisabled = viewerSettings?.disableCaptions ?? false;
@@ -258,6 +278,12 @@ export const EmbedVideo = forwardRef<
 
 		return (
 			<>
+				{trackUploadProgress && (
+					<UploadProgressTracker
+						videoId={data.id}
+						onChange={setSegmentUploadProgress}
+					/>
+				)}
 				<div
 					ref={playerContainerRef}
 					className="relative w-screen h-screen rounded-xl"

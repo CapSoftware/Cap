@@ -26,6 +26,27 @@ import {
 
 vi.mock("@cap/env", () => ({ NODE_ENV: "test" }));
 
+// next/dynamic's loader relies on Next's own React context; resolve the
+// (mocked) modules through React.lazy instead.
+vi.mock("next/dynamic", async () => {
+	const { createElement, lazy, Suspense } = await import("react");
+	return {
+		default: (
+			loader: () => Promise<
+				| ((props: object) => ReactNode)
+				| { default: (props: object) => ReactNode }
+			>,
+		) => {
+			const Lazy = lazy(async () => {
+				const loaded = await loader();
+				return { default: "default" in loaded ? loaded.default : loaded };
+			});
+			return (props: object) =>
+				createElement(Suspense, { fallback: null }, createElement(Lazy, props));
+		},
+	};
+});
+
 vi.mock("@cap/ui", async () => {
 	const { createElement } = await import("react");
 	return {
