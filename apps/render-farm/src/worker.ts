@@ -18,7 +18,8 @@ import {
 	type VideoTask,
 	type WorkItem,
 } from "./protocol";
-import { mediaS3ConfigFromEnv, S3 } from "./s3";
+import { mediaS3ConfigFromEnv, S3, s3ConfigFromEnv } from "./s3";
+import { stashBytes } from "./stitch";
 import {
 	canRemux,
 	encodedSeconds,
@@ -28,6 +29,8 @@ import {
 } from "./transcode";
 
 const s3 = new S3(mediaS3ConfigFromEnv());
+/** The farm's own bucket, for chunk stashes (see stitch.ts). */
+const stashS3 = new S3(s3ConfigFromEnv());
 const COORDINATOR = (
 	process.env.RF_COORDINATOR_URL ?? "http://127.0.0.1:8080"
 ).replace(/\/$/, "");
@@ -398,16 +401,7 @@ async function uploadLayout(
 	let pendingBytes = 0;
 	let nextPart = upload.firstPart;
 	const inflight = new Set<Promise<void>>();
-	const send = async (body: Uint8Array) => {
-		if (nextPart >= upload.firstPart + upload.partLimit) {
-			throw new Error("chunk needs more parts than reserved");
-		}
-		const partNumber = nextPart++;
-		const promise = s3
-			.uploadPart(upload.key, upload.uploadId, partNumber, body)
-			.then((etag) => {
-				parts.push({ partNumber, etag, size: body.byteLength });
-			});
+	const track = async (promise: Promise<void>) => {
 		inflight.add(promise);
 		// Handle both outcomes here: a bare .finally() re-rejects unhandled and
 		// kills the whole worker (e.g. a hedge loser hitting NoSuchUpload after
@@ -415,6 +409,19 @@ async function uploadLayout(
 		const forget = () => inflight.delete(promise);
 		promise.then(forget, forget);
 		if (inflight.size >= 4) await Promise.race(inflight);
+	};
+	const send = (body: Uint8Array) => {
+		if (nextPart >= upload.firstPart + upload.partLimit) {
+			throw new Error("chunk needs more parts than reserved");
+		}
+		const partNumber = nextPart++;
+		return track(
+			s3
+				.uploadPart(upload.key, upload.uploadId, partNumber, body)
+				.then((etag) => {
+					parts.push({ partNumber, etag, size: body.byteLength });
+				}),
+		);
 	};
 	const take = (count: number) => {
 		const out = new Uint8Array(count);
@@ -431,6 +438,10 @@ async function uploadLayout(
 		pendingBytes -= count;
 		return out;
 	};
+	// The opening bytes go to the stash, which the coordinator joins to its
+	// neighbours; everything after them is a part of at least 5 MiB.
+	const stashSize = stashBytes(bytes);
+	let stashed = false;
 	const files = new Map<string, ReturnType<typeof Bun.file>>();
 	for (const segment of segments) {
 		let data: Uint8Array;
@@ -447,24 +458,25 @@ async function uploadLayout(
 		} else continue;
 		pending.push(data);
 		pendingBytes += data.byteLength;
+		if (!stashed && pendingBytes >= stashSize) {
+			stashed = true;
+			await track(stashS3.put(upload.stashKey, take(stashSize)));
+		}
 		// Always keep >= 5 MiB back so the chunk's last part is never too small.
-		while (pendingBytes >= upload.partTarget + MIN_PART)
+		while (stashed && pendingBytes >= upload.partTarget + MIN_PART)
 			await send(take(upload.partTarget));
 	}
-	let padded = 0;
-	if (!upload.isLast && pendingBytes < MIN_PART) {
-		// Unreferenced bytes inside mdat are legal; they keep S3's 5 MiB rule.
-		padded = MIN_PART - pendingBytes;
-		pending.push(new Uint8Array(padded));
-		pendingBytes += padded;
-	}
+	if (!stashed) throw new Error("chunk ended before its stash filled");
 	if (pendingBytes > 0) await send(take(pendingBytes));
 	await Promise.all(inflight);
 	pending = [];
-	if (parts.reduce((sum, part) => sum + part.size, 0) !== bytes + padded) {
+	if (parts.reduce((sum, part) => sum + part.size, 0) + stashSize !== bytes) {
 		throw new Error("uploaded byte count mismatch");
 	}
-	return { parts: parts.sort((a, b) => a.partNumber - b.partNumber), padded };
+	return {
+		parts: parts.sort((a, b) => a.partNumber - b.partNumber),
+		stash: { key: upload.stashKey, bytes: stashSize },
+	};
 }
 
 async function runVideo(
@@ -546,7 +558,7 @@ async function runVideo(
 	const audioWaitMs = performance.now() - waitStarted;
 	const uploadStarted = performance.now();
 	const plan = layout(task, out, result.sizes, audio);
-	const [{ parts, padded }, segments] = await Promise.all([
+	const [{ parts, stash }, segments] = await Promise.all([
 		uploadLayout(task, plan.segments, plan.bytes),
 		segmentsDone ?? Promise.resolve(0),
 	]);
@@ -583,9 +595,10 @@ async function runVideo(
 		height: result.height,
 		videoRuns: plan.videoRuns,
 		audioRuns: plan.audioRuns,
+		firstPart: task.upload.firstPart,
+		stash,
 		parts,
 		bytes: plan.bytes,
-		paddedBytes: padded,
 		timings,
 	};
 }

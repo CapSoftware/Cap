@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { TranscodeTask, WorkItem } from "./protocol";
+import * as stitch from "./stitch";
 import * as transcode from "./transcode";
 
 function harness(
@@ -26,6 +27,8 @@ function harness(
 		mkdirSync: () => {},
 		rmSync: (path: string) => removed.push(path),
 		mediaS3ConfigFromEnv: () => ({}),
+		s3ConfigFromEnv: () => ({}),
+		...stitch,
 		S3: class {
 			async presignFresh() {
 				await options.presignGate;

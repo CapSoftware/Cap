@@ -12,6 +12,14 @@ const upload = {
 	],
 };
 
+/** The upload as the coordinator passes it: its own part is the header. */
+function uploadFor(s3: ReturnType<typeof store>) {
+	return {
+		...upload,
+		prepare: async () => [{ partNumber: 1, etag: await s3.api.uploadPart() }],
+	};
+}
+
 function store() {
 	let object: { size: number } | null = null;
 	let header = upload.header;
@@ -84,26 +92,26 @@ describe("multipart recovery", () => {
 	test("lost completion response is reconciled and a restart does not upload part 1 again", async () => {
 		const s3 = store();
 		s3.loseResponse();
-		expect(await completeUpload(s3.api, upload, s3.persist)).toBe(10);
-		expect(await completeUpload(s3.api, upload, s3.persist)).toBe(10);
+		expect(await completeUpload(s3.api, uploadFor(s3), s3.persist)).toBe(10);
+		expect(await completeUpload(s3.api, uploadFor(s3), s3.persist)).toBe(10);
 		expect(s3.counts()).toEqual({ uploaded: 1, completed: 1 });
 	});
 	test("an existing object must match both accepted byte count and header", async () => {
 		const s3 = store();
 		s3.existing(11);
-		await expect(completeUpload(s3.api, upload, s3.persist)).rejects.toThrow(
-			"does not match",
-		);
+		await expect(
+			completeUpload(s3.api, uploadFor(s3), s3.persist),
+		).rejects.toThrow("does not match");
 		s3.existing(10, new Uint8Array([3, 2, 1]));
-		await expect(completeUpload(s3.api, upload, s3.persist)).rejects.toThrow(
-			"does not match",
-		);
+		await expect(
+			completeUpload(s3.api, uploadFor(s3), s3.persist),
+		).rejects.toThrow("does not match");
 		expect(s3.counts()).toEqual({ uploaded: 0, completed: 0 });
 	});
 	test("an undurable assembly intent cannot consume the upload", async () => {
 		const s3 = store();
 		await expect(
-			completeUpload(s3.api, upload, async () => {
+			completeUpload(s3.api, uploadFor(s3), async () => {
 				throw new Error("journal unavailable");
 			}),
 		).rejects.toThrow("journal unavailable");
@@ -113,9 +121,9 @@ describe("multipart recovery", () => {
 	test("an object created after the initial HEAD is never overwritten", async () => {
 		const s3 = store();
 		s3.race();
-		await expect(completeUpload(s3.api, upload, s3.persist)).rejects.toThrow(
-			"does not match",
-		);
+		await expect(
+			completeUpload(s3.api, uploadFor(s3), s3.persist),
+		).rejects.toThrow("does not match");
 		expect(await s3.api.head()).toEqual({ size: 20 });
 		expect(s3.counts()).toEqual({ uploaded: 1, completed: 0 });
 	});

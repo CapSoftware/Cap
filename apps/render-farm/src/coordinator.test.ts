@@ -15,12 +15,16 @@ import * as planning from "./planning";
 import * as protocol from "./protocol";
 import * as recovery from "./recovery";
 import { pickQueued } from "./scheduler";
+import * as stitch from "./stitch";
 import * as validate from "./validate";
 
 function harness(env: Record<string, string> = {}) {
 	const objects = new Map<string, Uint8Array>();
 	const writes: string[] = [];
 	const ranges: string[] = [];
+	const uploadedParts = new Map<string, Uint8Array>();
+	const copies: string[] = [];
+	const completedParts: number[][] = [];
 	const timers: (() => void)[] = [];
 	const watchdogs: (() => void)[] = [];
 	let putGate: Promise<void> | undefined;
@@ -58,11 +62,58 @@ function harness(env: Record<string, string> = {}) {
 				.digest("hex")}"`;
 			return { bytes, etag };
 		},
-		async list() {
-			return [...objects.keys()].map((key) => ({ key }));
+		async list(prefix = "") {
+			return [...objects.keys()]
+				.filter((key) => key.startsWith(prefix))
+				.map((key) => ({ key }));
 		},
 		async presignFresh(_method: string, key: string) {
 			return `https://media.test/${key}`;
+		},
+		config: { bucket: "farm" },
+		sharesStoreWith: () => true,
+		async ready() {},
+		async uploadPart(key: string, _id: string, n: number, body: Uint8Array) {
+			uploadedParts.set(`${key}#${n}`, body.slice());
+			return `etag-${n}`;
+		},
+		async uploadPartCopy(
+			key: string,
+			_id: string,
+			n: number,
+			source: { key: string },
+		) {
+			const value = objects.get(source.key);
+			if (!value) throw new Error(`missing ${source.key}`);
+			copies.push(source.key);
+			uploadedParts.set(`${key}#${n}`, value.slice());
+			return `etag-${n}`;
+		},
+		async completeMultipart(
+			key: string,
+			_id: string,
+			list: { partNumber: number; etag: string }[],
+		) {
+			const bodies = list.map((part) => {
+				const body = uploadedParts.get(`${key}#${part.partNumber}`);
+				if (!body)
+					throw new Error(`part ${part.partNumber} was never uploaded`);
+				return body;
+			});
+			completedParts.push(bodies.map((body) => body.byteLength));
+			const out = new Uint8Array(
+				bodies.reduce((sum, b) => sum + b.byteLength, 0),
+			);
+			let offset = 0;
+			for (const body of bodies) {
+				out.set(body, offset);
+				offset += body.byteLength;
+			}
+			objects.set(key, out);
+			return true;
+		},
+		async delete(key: string) {
+			objects.delete(key);
 		},
 		async abortMultipart() {},
 	};
@@ -87,6 +138,7 @@ function harness(env: Record<string, string> = {}) {
 		...planning,
 		...protocol,
 		...recovery,
+		...stitch,
 		pickQueuedTask: pickQueued,
 		S3: class {
 			constructor() {
@@ -131,10 +183,12 @@ function harness(env: Record<string, string> = {}) {
 	const compiled = new Bun.Transpiler({ loader: "ts" }).transformSync(source);
 	const coordinator = new Function(
 		...Object.keys(deps),
-		`${compiled}\nreturn {jobs, queue, straggler, dispatchedTask, onVideoDone, onAudioDone, publishPlaylist, journalJob, resumeJobs, newHlsState, finish, requeue, sourceIndex, setPlanner: (fn) => { planJob = fn; }};`,
+		`${compiled}\nreturn {jobs, queue, straggler, dispatchedTask, onVideoDone, onAudioDone, publishPlaylist, journalJob, resumeJobs, newHlsState, finish, requeue, sourceIndex, assemble, stitchAhead, setPlanner: (fn) => { planJob = fn; }};`,
 	)(...Object.values(deps)) as {
 		setPlanner: (fn: (job: Job) => Promise<void>) => void;
 		sourceIndex: (prefix: string, sourceRoot?: string) => Promise<unknown>;
+		assemble: (job: Job) => Promise<void>;
+		stitchAhead: (job: Job) => void;
 		requeue: (state: TaskState, reason: string) => void;
 		jobs: Map<string, Job>;
 		queue: TaskState[];
@@ -162,6 +216,9 @@ function harness(env: Record<string, string> = {}) {
 		objects,
 		writes,
 		ranges,
+		uploadedParts,
+		copies,
+		completedParts,
 		callbacks,
 		timers,
 		watchdogs,
@@ -198,7 +255,7 @@ function job(): Job {
 			frames: [index * 30, (index + 1) * 30],
 			packets: [0, 0],
 			files: [],
-			firstPart: 2 + index * 60,
+			firstPart: 3 + index * 60,
 			partLimit: 10,
 			dispatches: 0,
 		})),
@@ -231,10 +288,10 @@ function videoState(job: Job, duplicate = false): TaskState {
 		upload: {
 			key: job.key,
 			uploadId: "upload",
-			firstPart: 2,
+			firstPart: 3,
 			partLimit: 10,
 			partTarget: 16 << 20,
-			isLast: false,
+			stashKey: `jobs/${job.id}/stash/c0-p3`,
 		},
 		audio: null,
 		hls: null,
@@ -272,9 +329,13 @@ function result(state: TaskState): protocol.VideoResult {
 		height: 1080,
 		videoRuns: [],
 		audioRuns: [],
+		firstPart: state.firstPart ?? 3,
+		stash: {
+			key: `jobs/job/stash/c0-p${state.firstPart ?? 3}`,
+			bytes: 100,
+		},
 		parts: [],
 		bytes: 100,
-		paddedBytes: 0,
 		timings,
 	};
 }
@@ -294,6 +355,132 @@ function heartbeat(worker: string, taskId: string, attempt: number) {
 		}),
 	});
 }
+
+describe("assembly", () => {
+	const MB = 1024 * 1024;
+	/**
+	 * Chunk `index` of `bytes`, filled with `fill`, stored the way a worker
+	 * stores it: its stash in the farm bucket, any rest as uploaded parts.
+	 */
+	function stored(
+		h: ReturnType<typeof harness>,
+		j: Job,
+		index: number,
+		bytes: number,
+		fill: number,
+	): protocol.VideoResult {
+		const chunk = j.chunks[index] as NonNullable<Job["chunks"][number]>;
+		const data = new Uint8Array(bytes).fill(fill);
+		const stashKey = `jobs/${j.id}/stash/c${index}-p${chunk.firstPart}`;
+		const stash = stitch.stashBytes(bytes);
+		h.objects.set(stashKey, data.subarray(0, stash));
+		const parts: protocol.VideoResult["parts"] = [];
+		if (bytes > stash) {
+			h.uploadedParts.set(`${j.key}#${chunk.firstPart}`, data.subarray(stash));
+			parts.push({
+				partNumber: chunk.firstPart,
+				etag: "worker",
+				size: bytes - stash,
+			});
+		}
+		const frames = chunk.frames[1] - chunk.frames[0];
+		const sizes = Array.from({ length: frames }, (_, i) =>
+			i < frames - 1
+				? Math.floor(bytes / frames)
+				: bytes - Math.floor(bytes / frames) * (frames - 1),
+		);
+		return {
+			taskId: `job:v${index}`,
+			worker: "worker",
+			sizes,
+			keyframes: [0],
+			extradata: Buffer.from(ANNEX_B_PARAMETER_SETS).toString("base64"),
+			width: 1920,
+			height: 1080,
+			videoRuns: [{ first: chunk.frames[0], count: frames, offset: 0 }],
+			audioRuns: [],
+			firstPart: chunk.firstPart,
+			stash: { key: stashKey, bytes: stash },
+			parts,
+			bytes,
+			timings,
+		};
+	}
+
+	for (const [label, sizes] of [
+		["short chunks", [220_000, 180_000]],
+		["a small chunk before a large one", [220_000, 12 * MB]],
+		["large chunks", [11 * MB, 13 * MB]],
+	] as const) {
+		test(`${label}: the file is the header then every sample, with no padding`, async () => {
+			const h = harness();
+			const j = job();
+			const results = sizes.map((bytes, index) =>
+				stored(h, j, index, bytes, index + 1),
+			);
+			results.forEach((result, index) => j.videoResults.set(index, result));
+			await h.assemble(j);
+			const file = h.objects.get(j.key) as Uint8Array;
+			const moov = mp4.locateMoov(file, file.byteLength) as {
+				start: number;
+				size: number;
+			};
+			const moovEnd = moov.start + moov.size;
+			// The moov is followed directly by the mdat that holds every byte.
+			const view = new DataView(file.buffer, file.byteOffset);
+			expect(
+				String.fromCharCode(...file.subarray(moovEnd + 4, moovEnd + 8)),
+			).toBe("mdat");
+			const mdatHeader = view.getUint32(moovEnd) === 1 ? 16 : 8;
+			expect(file.byteLength).toBe(moovEnd + mdatHeader + sizes[0] + sizes[1]);
+			const index = mp4.indexVideoTrack(file.subarray(moov.start, moovEnd));
+			for (let sample = 0; sample < index.sizes.length; sample++) {
+				const offset = index.offsets[sample] ?? 0;
+				const chunk = sample < 30 ? 0 : 1;
+				expect(file[offset]).toBe(chunk + 1);
+				expect(file[offset + (index.sizes[sample] ?? 1) - 1]).toBe(chunk + 1);
+			}
+			for (const size of (h.completedParts[0] ?? []).slice(0, -1)) {
+				expect(size).toBeGreaterThanOrEqual(protocol.MIN_PART);
+			}
+		});
+	}
+
+	test("large stashes are copied server side instead of passing through the coordinator", async () => {
+		const h = harness();
+		const j = job();
+		[11 * MB, 13 * MB].forEach((bytes, index) =>
+			j.videoResults.set(index, stored(h, j, index, bytes, index + 1)),
+		);
+		await h.assemble(j);
+		expect(h.copies).toEqual(["jobs/job/stash/c1-p63"]);
+	});
+
+	test("parts written while chunks render are reused, not written again", async () => {
+		const h = harness();
+		const j = job();
+		[11 * MB, 13 * MB].forEach((bytes, index) =>
+			j.videoResults.set(index, stored(h, j, index, bytes, index + 1)),
+		);
+		h.stitchAhead(j);
+		await Promise.all(j.stitchParts?.values() ?? []);
+		expect(h.copies).toEqual(["jobs/job/stash/c1-p63"]);
+		await h.assemble(j);
+		expect(h.copies).toEqual(["jobs/job/stash/c1-p63"]);
+		const file = h.objects.get(j.key) as Uint8Array;
+		expect(file[file.byteLength - 1]).toBe(2);
+	});
+
+	test("a result whose parts leave a gap in the chunk is refused", async () => {
+		const h = harness();
+		const j = job();
+		const state = videoState(j);
+		const padded = { ...stored(h, j, 0, 220_000, 1) };
+		padded.parts = [{ partNumber: 3, etag: "pad", size: protocol.MIN_PART }];
+		await expect(h.onVideoDone(j, state, padded)).rejects.toThrow("add up");
+		expect(j.videoResults.size).toBe(0);
+	});
+});
 
 describe("coordinator recovery", () => {
 	test("a later dispatch waits for its reservation, resume preserves original and hedge ranges", async () => {
@@ -322,7 +509,7 @@ describe("coordinator recovery", () => {
 		await h.fetch(heartbeat("worker-b", hedge.task.taskId, 1));
 		expect(resumed.tasks.get(hedge.task.taskId)?.state).toBe("running");
 		const next = await h.dispatchedTask(resumed, original);
-		expect(next.kind === "video" && next.upload.firstPart).toBe(22);
+		expect(next.kind === "video" && next.upload.firstPart).toBe(23);
 	});
 
 	test("a first dispatch writes nothing, stays retired after resume and any worker can re-attach it", async () => {
@@ -520,12 +707,12 @@ test("segment reports only list objects the reporting dispatch wrote", async () 
 			),
 		);
 	expect((await report("media/private.mp4")).status).toBe(400);
-	expect((await report("hls/job/c0-p12-0.m4s")).status).toBe(400);
-	expect((await report("hls/job/c0-p2-0.m4s", hedge)).status).toBe(400);
+	expect((await report("hls/job/c0-p13-0.m4s")).status).toBe(400);
+	expect((await report("hls/job/c0-p3-0.m4s", hedge)).status).toBe(400);
 	expect(j.hls.segments.size).toBe(0);
-	expect((await report("hls/job/c0-p12-0.m4s", hedge)).status).toBe(200);
-	expect((await report("hls/job/c0-p2-0.m4s")).status).toBe(200);
-	expect(j.hls.segments.get(0)?.get(0)?.key).toBe("hls/job/c0-p12-0.m4s");
+	expect((await report("hls/job/c0-p13-0.m4s", hedge)).status).toBe(200);
+	expect((await report("hls/job/c0-p3-0.m4s")).status).toBe(200);
+	expect(j.hls.segments.get(0)?.get(0)?.key).toBe("hls/job/c0-p13-0.m4s");
 });
 
 test("job acknowledgement waits for a planning receipt and receipt-only jobs resume", async () => {
