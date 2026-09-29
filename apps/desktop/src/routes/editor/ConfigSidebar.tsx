@@ -59,6 +59,7 @@ import {
 	type AnimatedGradientLibrary,
 	type BackgroundBlurMode,
 	type BackgroundSource,
+	type CameraCrop,
 	type CameraShape,
 	type CameraXPosition,
 	type CameraYPosition,
@@ -3271,6 +3272,42 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
 								onChange={(mirror) => setProject("camera", "mirror", mirror)}
 							/>
 						</Subfield>
+						<div class="flex flex-col gap-1">
+							<div class="flex justify-between items-center">
+								<span class="text-xs text-ed-text-2">Crop Camera</span>
+								<Show when={project.camera.crop}>
+									<EditorButton
+										size="sm"
+										onClick={() => setProject("camera", "crop", null)}
+									>
+										Reset
+									</EditorButton>
+								</Show>
+							</div>
+							<For each={CAMERA_CROP_EDGES}>
+								{(edge) => (
+									<Field
+										inline
+										name={edge.label}
+										value={`${Math.round((project.camera.crop?.[edge.key] ?? 0) * 100)}%`}
+									>
+										<Slider
+											value={[(project.camera.crop?.[edge.key] ?? 0) * 100]}
+											onChange={(v) =>
+												setProject("camera", "crop", {
+													...(project.camera.crop ?? EMPTY_CAMERA_CROP),
+													[edge.key]: v[0] / 100,
+												})
+											}
+											minValue={0}
+											maxValue={45}
+											step={0.5}
+											formatTooltip="%"
+										/>
+									</Field>
+								)}
+							</For>
+						</div>
 						<Subfield name="Background">
 							<KSelect<{ name: string; value: BackgroundBlurMode }>
 								options={cameraBackgroundOptions(ostype() === "macos")}
@@ -5199,5 +5236,14 @@ function SceneSegmentConfig(props: {
 		</>
 	);
 }
+
+const EMPTY_CAMERA_CROP: CameraCrop = { left: 0, top: 0, right: 0, bottom: 0 };
+
+const CAMERA_CROP_EDGES: { key: keyof CameraCrop; label: string }[] = [
+	{ key: "left", label: "Left" },
+	{ key: "right", label: "Right" },
+	{ key: "top", label: "Top" },
+	{ key: "bottom", label: "Bottom" },
+];
 
 const CHECKERED_BUTTON_BACKGROUND = `url("data:image/svg+xml,%3Csvg width='16' height='16' xmlns='http://www.w3.org/2000/svg'%3E%3Crect width='8' height='8' fill='%23a0a0a0'/%3E%3Crect x='8' y='8' width='8' height='8' fill='%23a0a0a0'/%3E%3C/svg%3E")`;
