@@ -138,11 +138,23 @@ export const blurModeLabel = (mode: BackgroundBlurMode | boolean): string => {
 	}
 };
 
+const CAMERA_TOOLBAR_MAX_BUTTONS = 6;
+const CAMERA_TOOLBAR_BUTTON_WIDTH = 38;
+const CAMERA_TOOLBAR_GAP = 4;
+const CAMERA_TOOLBAR_INSET = 10;
+const CAMERA_TOOLBAR_MARGIN = 8;
+
+export const CAMERA_TOOLBAR_WIDTH =
+	CAMERA_TOOLBAR_MAX_BUTTONS * CAMERA_TOOLBAR_BUTTON_WIDTH +
+	(CAMERA_TOOLBAR_MAX_BUTTONS - 1) * CAMERA_TOOLBAR_GAP +
+	CAMERA_TOOLBAR_INSET;
+
 export const cameraToolbarScale = (size: number) => {
+	const clamped = clampCameraSize(size);
 	const normalized =
-		(clampCameraSize(size) - CAMERA_MIN_SIZE) /
-		(CAMERA_MAX_SIZE - CAMERA_MIN_SIZE);
-	return 0.7 + normalized * 0.3;
+		(clamped - CAMERA_MIN_SIZE) / (CAMERA_MAX_SIZE - CAMERA_MIN_SIZE);
+	const fit = (clamped - CAMERA_TOOLBAR_MARGIN) / CAMERA_TOOLBAR_WIDTH;
+	return Math.min(0.7 + normalized * 0.3, fit);
 };
 
 export function cameraBorderRadius(state: CameraWindowState) {
