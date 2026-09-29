@@ -8,6 +8,7 @@ import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
 import {
 	createEffect,
+	createMemo,
 	createSignal,
 	For,
 	on,
@@ -194,10 +195,10 @@ export function PlayerContent(props: { compactness?: number }) {
 		}
 	});
 
-	const isAtEnd = () => {
+	const isAtEnd = createMemo(() => {
 		const total = totalDuration();
 		return total > 0 && total - editorState.playbackTime <= 0.1;
-	};
+	});
 
 	const cropDialogHandler = async () => {
 		const background = selectedStyle()

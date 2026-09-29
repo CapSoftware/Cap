@@ -4,7 +4,6 @@ import { DropdownMenu } from "@kobalte/core/dropdown-menu";
 import { Polymorphic, type PolymorphicProps } from "@kobalte/core/polymorphic";
 import { Slider as KSlider } from "@kobalte/core/slider";
 import { Tooltip as KTooltip } from "@kobalte/core/tooltip";
-import { createElementBounds } from "@solid-primitives/bounds";
 import { createEventListener } from "@solid-primitives/event-listener";
 import { cva, cx, type VariantProps } from "cva";
 
@@ -168,22 +167,6 @@ export function Slider(
 
 	const [thumbRef, setThumbRef] = createSignal<HTMLDivElement>();
 
-	let boundsFrame: number | undefined;
-	const deferBoundsUpdate = (update: () => void) => () => {
-		if (boundsFrame !== undefined) return;
-		boundsFrame = requestAnimationFrame(() => {
-			boundsFrame = undefined;
-			update();
-		});
-	};
-	onCleanup(() => {
-		if (boundsFrame !== undefined) cancelAnimationFrame(boundsFrame);
-	});
-	const thumbBounds = createElementBounds(thumbRef, {
-		trackResize: deferBoundsUpdate,
-		trackMutation: deferBoundsUpdate,
-	});
-
 	const [dragging, setDragging] = createSignal(false);
 	// A value set elsewhere (e.g. resizing on the canvas) can sit outside the
 	// slider's range; draw it at the nearest end instead of past the track.
@@ -225,13 +208,19 @@ export function Slider(
 				<KSlider.Fill class="absolute -ml-2 h-full rounded-full bg-ed-accent data-disabled:bg-ed-ctl-active" />
 				<Tooltip
 					open={dragging() ? true : undefined}
+					// Measured on demand: tracking the thumb's bounds would put a
+					// document-wide mutation observer on every slider, firing on each
+					// playback frame.
 					getAnchorRect={() => {
-						return {
-							x: thumbBounds.left ?? undefined,
-							y: thumbBounds.top ?? undefined,
-							width: thumbBounds.width ?? undefined,
-							height: thumbBounds.height ?? undefined,
-						};
+						const rect = thumbRef()?.getBoundingClientRect();
+						return rect
+							? {
+									x: rect.left,
+									y: rect.top,
+									width: rect.width,
+									height: rect.height,
+								}
+							: undefined;
 					}}
 					content={
 						props.value?.[0] !== undefined
