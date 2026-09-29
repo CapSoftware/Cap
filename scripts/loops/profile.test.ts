@@ -80,7 +80,16 @@ test("first-name targeting follows the same nonblank rule as the greeting", () =
 		else fixture.source.first_name = firstName;
 		assert.equal(classifyProfile(fixture).capHasFirstName, false);
 	}
-	for (const roleName of ["Admin", "Operations", "Team", "post"]) {
+	for (const roleName of [
+		"Admin",
+		"Operations",
+		"Team",
+		"post",
+		"Owner",
+		"USER",
+		"Test",
+		"account",
+	]) {
 		fixture.source.first_name = roleName;
 		assert.equal(classifyProfile(fixture).capHasFirstName, false);
 	}

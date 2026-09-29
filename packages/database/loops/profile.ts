@@ -49,6 +49,7 @@ export type ProfileInput = {
 };
 
 const roleNames = new Set([
+	"account",
 	"accounts",
 	"admin",
 	"billing",
@@ -60,10 +61,13 @@ const roleNames = new Set([
 	"office",
 	"operations",
 	"ops",
+	"owner",
 	"post",
 	"sales",
 	"support",
 	"team",
+	"test",
+	"user",
 ]);
 
 export const normalizeEmail = (email: string) => email.trim().toLowerCase();
