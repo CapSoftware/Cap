@@ -42,11 +42,14 @@ import {
 	CameraResizeHandles,
 	type CameraWindowState,
 	cameraBorderRadius,
+	cameraFrameTransform,
 	cameraPreviewDimensions,
+	cameraRotationSwapsAxes,
 	cameraToolbarScale,
 	clampCameraSize,
 	getDefaultCameraWindowState,
 	normalizeBackgroundBlurMode,
+	normalizeCameraRotation,
 } from "~/components/CameraPreviewChrome";
 import {
 	CROP_ZERO,
@@ -1627,6 +1630,7 @@ function CameraPreviewInline() {
 			shape: state.shape,
 			mirrored: state.mirrored,
 			background_blur: normalizeBackgroundBlurMode(state.backgroundBlur),
+			rotation: normalizeCameraRotation(state.rotation),
 		});
 	});
 
@@ -1756,6 +1760,7 @@ function CameraPreviewInline() {
 			state.size,
 			state.shape,
 			dimensions ? dimensions.width / dimensions.height : undefined,
+			state.rotation,
 		);
 		const viewport = viewportSize();
 		const maxWidth = Math.max(160, viewport.width - 48);
@@ -1778,11 +1783,24 @@ function CameraPreviewInline() {
 	};
 
 	const canvasStyle = () => {
+		if (cameraRotationSwapsAxes(state.rotation)) {
+			const dimensions = previewDimensions();
+			return {
+				height: `${dimensions.width}px`,
+				inset: "auto",
+				left: "50%",
+				"object-fit": "cover" as const,
+				opacity: hasFrame() ? "1" : "0",
+				top: "50%",
+				transform: `translate(-50%, -50%) ${cameraFrameTransform(state)}`,
+				width: `${dimensions.height}px`,
+			};
+		}
 		return {
 			height: "100%",
 			"object-fit": "cover" as const,
 			opacity: hasFrame() ? "1" : "0",
-			transform: state.mirrored ? "scaleX(-1)" : "scaleX(1)",
+			transform: cameraFrameTransform(state),
 			width: "100%",
 		};
 	};
