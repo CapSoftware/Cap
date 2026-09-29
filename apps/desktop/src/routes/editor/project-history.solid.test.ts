@@ -12,6 +12,11 @@ function setup() {
 	});
 }
 
+const pointer = (type: string, pointerId: number, buttons = 0) =>
+	window.dispatchEvent(Object.assign(new Event(type), { pointerId, buttons }));
+
+const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+
 const edit = (ctx: ReturnType<typeof setup>, change: () => void) => {
 	change();
 	ctx.history.canUndo();
@@ -70,6 +75,39 @@ describe("project history", () => {
 		expect(ctx.history.isPaused()).toBe(true);
 		resumeB();
 		expect(ctx.history.isPaused()).toBe(false);
+		ctx.dispose();
+	});
+
+	it("keeps a pointer pause until every pointer is released", async () => {
+		const ctx = setup();
+		pointer("pointerdown", 1, 1);
+		ctx.history.pause();
+		pointer("pointerdown", 2, 1);
+		expect(ctx.history.isPaused()).toBe(true);
+		pointer("pointerup", 2);
+		await tick();
+		expect(ctx.history.isPaused()).toBe(true);
+		pointer("pointerup", 1);
+		await tick();
+		expect(ctx.history.isPaused()).toBe(false);
+		ctx.dispose();
+	});
+
+	it("ends a pointer pause whose release happened outside the window", () => {
+		const ctx = setup();
+		pointer("pointerdown", 1, 1);
+		ctx.history.pause();
+		pointer("pointermove", 1, 0);
+		expect(ctx.history.isPaused()).toBe(false);
+		ctx.dispose();
+	});
+
+	it("only offers undo during a pause once something changed", () => {
+		const ctx = setup();
+		ctx.history.pause();
+		expect(ctx.history.canUndo()).toBe(false);
+		ctx.setState("zooms", 3);
+		expect(ctx.history.canUndo()).toBe(true);
 		ctx.dispose();
 	});
 });
