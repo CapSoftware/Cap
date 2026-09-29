@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { STREAMING_MP4_MIME_TYPES } from "@cap/recorder-core/recorder-constants";
 import { chromium, webkit } from "@playwright/test";
 import { build } from "esbuild";
 
@@ -53,12 +54,8 @@ const mockSources = new Map([
 		"export async function canConvertToMp4InBrowser(){return false}export async function captureThumbnail(){return null}export async function convertToMp4(){throw new Error('Unused conversion path')}",
 	],
 	[
-		"./recording-upload",
-		"export async function uploadRecording(blob){window.capRecorderBufferedUploads.push({bytes:blob.size,type:blob.type})}",
-	],
-	[
 		"./recovered-recording-cache",
-		"export async function loadRecoveredRecordingSpools(){return []}export function removeRecoveredRecordingSpoolFromCache(){}",
+		"export async function loadRecoveredRecordingSpools(){return []}export function removeRecoveredRecordingSpoolFromCache(){}export function resetRecoveredRecordingSpoolsCache(){}",
 	],
 ]);
 
@@ -153,7 +150,6 @@ async function replayPairedCapture(
 				window.capRecorderMediaRecorders = [];
 				window.capRecorderCanvasSources = [];
 				window.capRecorderAudioContexts = [];
-				window.capRecorderBufferedUploads = [];
 				const recorderStart = MediaRecorder.prototype.start;
 				MediaRecorder.prototype.start = function (...args) {
 					const stats = {
@@ -596,22 +592,6 @@ async function replayPairedCapture(
 		} else {
 			assert.deepEqual(browserErrors, []);
 		}
-		if (engine.name === "WebKit" && !cameraEnabled) {
-			const bufferedUploads = await page.evaluate(
-				() => window.capRecorderBufferedUploads,
-			);
-			assert.equal(bufferedUploads.length, 1);
-			assert.ok(bufferedUploads[0].bytes > 0);
-			assert.ok(bufferedUploads[0].type.startsWith("video/mp4"));
-			assert.deepEqual(requests, []);
-			assert.deepEqual(parts, []);
-			return {
-				engine: engine.name,
-				cameraEnabled,
-				pauseResume,
-				bufferedBytes: bufferedUploads[0].bytes,
-			};
-		}
 		if (failCameraSpool) {
 			assert.ok(
 				(await page.evaluate(() => window.capRecorderCameraSpoolFailures)) > 0,
@@ -679,7 +659,7 @@ async function replayPairedCapture(
 		}
 		if (cameraEnabled)
 			assert.notEqual(cameraParts[0].sha256, screenParts[0].sha256);
-		if (engine.extension === "webm" && cameraEnabled) {
+		if (engine.streamingDisplay && cameraEnabled) {
 			const cameraPart = parts.find((part) =>
 				part.path.includes(cameraSubpath),
 			);
@@ -727,21 +707,19 @@ async function replayPairedCapture(
 					key.startsWith("cap-recording-spool-uploaded:"),
 				),
 			);
-			assert.equal(markers.length, engine.extension === "webm" ? 2 : 1);
-			if (engine.extension === "webm") {
-				assert.deepEqual(
-					await page.evaluate(() => window.capRecorderRecoverOrphans()),
-					[],
-				);
-				await page.waitForFunction(
-					() =>
-						Object.keys(localStorage).every(
-							(key) => !key.startsWith("cap-recording-spool-uploaded:"),
-						),
-					null,
-					{ timeout: 5000 },
-				);
-			}
+			assert.equal(markers.length, 2);
+			assert.deepEqual(
+				await page.evaluate(() => window.capRecorderRecoverOrphans()),
+				[],
+			);
+			await page.waitForFunction(
+				() =>
+					Object.keys(localStorage).every(
+						(key) => !key.startsWith("cap-recording-spool-uploaded:"),
+					),
+				null,
+				{ timeout: 5000 },
+			);
 		}
 		return {
 			engine: engine.name,
@@ -761,10 +739,28 @@ async function replayPairedCapture(
 }
 
 const bundle = await readFile(artifact, "utf8");
+
+async function supportsStreamingMp4(browser) {
+	const page = await browser.newPage();
+	try {
+		return await page.evaluate(
+			(candidates) =>
+				candidates.some((candidate) =>
+					MediaRecorder.isTypeSupported(candidate),
+				),
+			[
+				...STREAMING_MP4_MIME_TYPES.videoOnly,
+				...STREAMING_MP4_MIME_TYPES.withAudio,
+			],
+		);
+	} finally {
+		await page.close();
+	}
+}
 const requestedEngine = process.argv[2]?.toLowerCase();
 const engines = [
-	{ name: "Chromium", browserType: chromium, extension: "webm" },
-	{ name: "WebKit", browserType: webkit, extension: "mp4" },
+	{ name: "Chromium", browserType: chromium, streamingDisplay: true },
+	{ name: "WebKit", browserType: webkit, streamingDisplay: false },
 ].filter(
 	(engine) => !requestedEngine || engine.name.toLowerCase() === requestedEngine,
 );
@@ -775,6 +771,11 @@ try {
 		const browser = await engine.browserType.launch({
 			headless: process.env.CAP_REPLAY_HEADED !== "true",
 		});
+		engine.extension = engine.streamingDisplay
+			? (await supportsStreamingMp4(browser))
+				? "mp4"
+				: "webm"
+			: "mp4";
 		try {
 			for (const pauseResume of [false, true]) {
 				results.push(
