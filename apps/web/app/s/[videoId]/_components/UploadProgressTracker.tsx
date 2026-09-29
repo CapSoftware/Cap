@@ -19,16 +19,17 @@ export default function UploadProgressTracker({
 	onChange: (progress: UploadProgress | null) => void;
 }) {
 	const progress = useUploadProgress(videoId, true);
-	const latest = useRef(progress);
-	latest.current = progress;
-	// The hook returns a new object every render; passing each one on would
-	// re-render the player, and with it this tracker, forever.
 	const key = uploadProgressKey(progress);
+	const sent = useRef<{ key: string; onChange: typeof onChange } | null>(null);
 
+	// The hook returns a new object every render; passing each one on would
+	// re-render the player, and with it this tracker, forever. Only a committed
+	// render reaches here, so what is sent is always what is on screen.
 	useEffect(() => {
-		void key;
-		onChange(latest.current);
-	}, [key, onChange]);
+		if (sent.current?.key === key && sent.current.onChange === onChange) return;
+		sent.current = { key, onChange };
+		onChange(progress);
+	});
 
 	return null;
 }
