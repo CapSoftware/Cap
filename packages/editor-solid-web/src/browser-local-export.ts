@@ -136,7 +136,10 @@ async function exportJob(
 	settings: Record<string, unknown>,
 	signal: AbortSignal,
 ): Promise<BrowserExportJob> {
-	const config = record(browserEditorPreviewConfig());
+	// The preview holds the editor's reactive project store, which a worker
+	// cannot be sent; the job carries a plain copy.
+	const live = browserEditorPreviewConfig();
+	const config = record(live == null ? null : JSON.parse(JSON.stringify(live)));
 	if (!config)
 		throw new BrowserLocalExportUnavailable("Editor project is loading");
 	const catalog = new BrowserEditorSourceCatalog(videoId, { fresh: true });
