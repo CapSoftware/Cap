@@ -29,6 +29,7 @@ import {
 	parseVTT,
 	type TranscriptEntry,
 } from "@/app/s/[videoId]/_components/utils/transcript-utils";
+import { awaitsReplacementPreviewGif } from "@/lib/published-output";
 import type { SharePageBranding } from "@/lib/share-branding";
 import type { ShareCallToAction } from "@/lib/share-call-to-action";
 import { usePlayerJsReceiver } from "./use-player-js-receiver";
@@ -307,6 +308,11 @@ export const EmbedVideo = forwardRef<
 							rawFallbackSrc={rawFallbackSrc}
 							initialPlaybackUrl={initialPlaybackUrl}
 							initialPlaybackTrusted={initialPlaybackTrusted}
+							disablePreviewGif={awaitsReplacementPreviewGif({
+								id: data.id,
+								ownerId: data.ownerId,
+								source: data.source,
+							})}
 							duration={data.duration}
 							showPlaybackStatusBadge={showPlaybackStatusBadge}
 							disableCaptions={captionsDisabled}

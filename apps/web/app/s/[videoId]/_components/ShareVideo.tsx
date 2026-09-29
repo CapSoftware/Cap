@@ -21,6 +21,7 @@ import {
 import { finalizeDesktopSegmentsRecording } from "@/actions/video/finalize-desktop-segments";
 import { Tooltip } from "@/components/Tooltip";
 import { isRetryableDesktopSegmentsFinalizationError } from "@/lib/desktop-segments-retryable-errors";
+import { awaitsReplacementPreviewGif } from "@/lib/published-output";
 import type { ShareCallToAction } from "@/lib/share-call-to-action";
 import { shareVideoRevision } from "@/lib/share-video-revision";
 import type { VideoData } from "../types";
@@ -539,6 +540,11 @@ export const ShareVideo = forwardRef<
 				initialPlaybackUrl={initialPlaybackUrl}
 				initialPlaybackTrusted={initialPlaybackTrusted}
 				sourceRevision={sourceRevision}
+				disablePreviewGif={awaitsReplacementPreviewGif({
+					id: data.id,
+					ownerId: data.owner.id,
+					source: data.source,
+				})}
 				duration={data.duration}
 				defaultPlaybackSpeed={defaultPlaybackSpeed}
 				showPlaybackStatusBadge={showPlaybackStatusBadge}

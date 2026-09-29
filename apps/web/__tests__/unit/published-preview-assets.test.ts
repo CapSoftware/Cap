@@ -8,6 +8,7 @@ const {
 	getReplacementAwaitingPreviewAssets,
 	getReplacementOutputKey,
 } = await import("@/lib/published-preview-assets");
+const { awaitsReplacementPreviewGif } = await import("@/lib/published-output");
 
 const render =
 	"owner/video/.recording/render/11111111-1111-4111-8111-111111111111/result.mp4";
@@ -73,5 +74,29 @@ describe("published output preview assets", () => {
 				video({ outputKey: render, ...keys }),
 			),
 		).toBeNull();
+	});
+
+	it("knows a replacement has no preview GIF until its own is made", () => {
+		expect(awaitsReplacementPreviewGif(video({ outputKey: render }))).toBe(
+			true,
+		);
+		expect(awaitsReplacementPreviewGif(video({ outputKey: reupload }))).toBe(
+			true,
+		);
+		expect(
+			awaitsReplacementPreviewGif(
+				video({
+					outputKey: render,
+					previewKey:
+						"owner/video/.recording/render/11111111-1111-4111-8111-111111111111/result/preview.gif",
+				}),
+			),
+		).toBe(false);
+		expect(awaitsReplacementPreviewGif(video({}))).toBe(false);
+		expect(
+			awaitsReplacementPreviewGif(
+				video({ outputKey: "owner/video/.recording/outputs/gen/attempt.mp4" }),
+			),
+		).toBe(false);
 	});
 });
