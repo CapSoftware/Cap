@@ -176,6 +176,8 @@ function WaveformCanvas(props: {
 	let systemPath: Path2D | undefined;
 	let cachedMicWaveform: number[] | undefined;
 	let cachedSystemWaveform: number[] | undefined;
+	let following = false;
+	let followedPosition = Number.NaN;
 
 	const renderCanvas = () => {
 		rafId = null;
@@ -221,11 +223,26 @@ function WaveformCanvas(props: {
 		if (useVirtualization) {
 			const viewportWidth = timelineBounds.width ?? 800;
 			const transform = editorState.timeline.transform;
-			const viewStart = transform.position;
-			const viewEnd = viewStart + transform.zoom;
+			let viewStart = transform.position;
+			let viewEnd = viewStart + transform.zoom;
 
 			const segStart = props.segmentOffset;
 			const segEnd = segStart + outputDuration;
+
+			// A timeline following playback scrolls every frame. The canvas then
+			// covers a wider window that moves in steps, so the waveform is
+			// redrawn a few times a screen rather than every frame. Once the view
+			// stops moving it is redrawn for the exact view.
+			const marginPx = following
+				? Math.min(viewportWidth / 4, (MAX_CANVAS_WIDTH - viewportWidth) / 2)
+				: 0;
+			if (marginPx >= 1) {
+				const secsPerPx = outputDuration / fullSegmentWidth;
+				const step = marginPx * secsPerPx;
+				viewStart =
+					segStart + Math.floor((viewStart - segStart - step) / step) * step;
+				viewEnd = viewStart + transform.zoom + 2 * step;
+			}
 
 			const visibleStart = Math.max(viewStart, segStart);
 			const visibleEnd = Math.min(viewEnd, segEnd);
@@ -244,7 +261,7 @@ function WaveformCanvas(props: {
 			const pxPerSec = fullSegmentWidth / outputDuration;
 			const visibleWidthPx = Math.min(
 				(visibleEndInSegment - visibleStartInSegment) * pxPerSec,
-				viewportWidth + 200,
+				viewportWidth + Math.max(200, 2 * marginPx),
 			);
 
 			canvasWidth = Math.min(
@@ -333,7 +350,12 @@ function WaveformCanvas(props: {
 	createEffect(() => {
 		width();
 		timelineBounds.width;
-		editorState.timeline.transform.position;
+		const position = editorState.timeline.transform.position;
+		following =
+			editorState.playing &&
+			(following ||
+				(!Number.isNaN(followedPosition) && position !== followedPosition));
+		followedPosition = position;
 		editorState.timeline.transform.zoom;
 		props.segment.start;
 		props.segment.end;
