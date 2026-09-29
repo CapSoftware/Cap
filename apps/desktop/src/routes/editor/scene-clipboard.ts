@@ -1,5 +1,5 @@
 import { createSignal } from "solid-js";
-import type { SceneSegment } from "~/utils/tauri";
+import type { SceneSegment, SplitLayout } from "~/utils/tauri";
 
 export type SceneSettings = Pick<
 	SceneSegment,
@@ -11,12 +11,20 @@ const [copiedSceneSettings, setCopiedSceneSettings] =
 
 export { copiedSceneSettings };
 
+function cloneSplitLayout(layout: SplitLayout | null | undefined) {
+	if (!layout) return null;
+	return {
+		screenZoom: layout.screenZoom,
+		screenPosition: { ...layout.screenPosition },
+		cameraZoom: layout.cameraZoom,
+		cameraPosition: { ...layout.cameraPosition },
+	};
+}
+
 export function copySceneSettings(segment: SceneSegment) {
 	setCopiedSceneSettings({
 		mode: segment.mode,
-		splitLayout: segment.splitLayout
-			? structuredClone(segment.splitLayout)
-			: null,
+		splitLayout: cloneSplitLayout(segment.splitLayout),
 		transitionIn: segment.transitionIn,
 		transitionOut: segment.transitionOut,
 	});
@@ -29,9 +37,7 @@ export function withSceneSettings(
 	return {
 		...segment,
 		mode: settings.mode,
-		splitLayout: settings.splitLayout
-			? structuredClone(settings.splitLayout)
-			: null,
+		splitLayout: cloneSplitLayout(settings.splitLayout),
 		transitionIn: settings.transitionIn,
 		transitionOut: settings.transitionOut,
 	};
@@ -75,5 +81,23 @@ if (import.meta.vitest) {
 		expect(pasted.transitionOut).toBe(0.5);
 		if (pasted.splitLayout) pasted.splitLayout.cameraPosition.x = 0.9;
 		expect(source.splitLayout?.cameraPosition.x).toBe(0.3);
+	});
+
+	it("copies a scene whose layout is a store proxy", () => {
+		const layout: SplitLayout = {
+			screenZoom: 1.2,
+			screenPosition: { x: 0.5, y: 0.5 },
+			cameraZoom: 1,
+			cameraPosition: { x: 0.2, y: 0.8 },
+		};
+		const proxied = new Proxy(layout, {});
+		expect(() => structuredClone(proxied)).toThrow();
+		copySceneSettings({
+			start: 0,
+			end: 1,
+			mode: "splitScreen",
+			splitLayout: proxied,
+		});
+		expect(copiedSceneSettings()?.splitLayout).toEqual(layout);
 	});
 }
