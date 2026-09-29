@@ -732,8 +732,10 @@ function PreviewCanvas(props: {
 	});
 
 	const padding = 16;
-	const frameWidth = () => latestFrame()?.width ?? 1920;
-	const frameHeight = () => latestFrame()?.height ?? 1080;
+	// Every frame arrives as a new object; the preview's size only changes
+	// with its dimensions.
+	const frameWidth = createMemo(() => latestFrame()?.width ?? 1920);
+	const frameHeight = createMemo(() => latestFrame()?.height ?? 1080);
 
 	const availableWidth = () =>
 		Math.max(debouncedBounds().width - padding * 2, 0);
@@ -754,19 +756,26 @@ function PreviewCanvas(props: {
 		return width / height;
 	};
 
-	const size = () => {
-		let width: number;
-		let height: number;
-		if (frameAspect() < containerAspect()) {
-			height = availableHeight();
-			width = height * frameAspect();
-		} else {
-			width = availableWidth();
-			height = width / frameAspect();
-		}
+	const size = createMemo(
+		() => {
+			let width: number;
+			let height: number;
+			if (frameAspect() < containerAspect()) {
+				height = availableHeight();
+				width = height * frameAspect();
+			} else {
+				width = availableWidth();
+				height = width / frameAspect();
+			}
 
-		return { width, height };
-	};
+			return { width, height };
+		},
+		undefined,
+		{
+			equals: (previous, next) =>
+				previous?.width === next.width && previous?.height === next.height,
+		},
+	);
 
 	createEffect(() => {
 		const frame = latestFrame();
