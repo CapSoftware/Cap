@@ -70,6 +70,8 @@ export const EmbedVideo = forwardRef<
 		viewerSettings?: ViewerSettings | null;
 		showPlaybackStatusBadge?: boolean;
 		callToAction?: ShareCallToAction | null;
+		initialPlaybackUrl?: Promise<string | null>;
+		initialPlaybackTrusted?: boolean;
 	}
 >(
 	(
@@ -88,6 +90,8 @@ export const EmbedVideo = forwardRef<
 			viewerSettings,
 			showPlaybackStatusBadge = false,
 			callToAction = null,
+			initialPlaybackUrl,
+			initialPlaybackTrusted = false,
 		},
 		ref,
 	) => {
@@ -274,6 +278,8 @@ export const EmbedVideo = forwardRef<
 							mediaPlayerClassName="w-full h-full"
 							videoSrc={videoSrc}
 							rawFallbackSrc={rawFallbackSrc}
+							initialPlaybackUrl={initialPlaybackUrl}
+							initialPlaybackTrusted={initialPlaybackTrusted}
 							duration={data.duration}
 							showPlaybackStatusBadge={showPlaybackStatusBadge}
 							disableCaptions={captionsDisabled}

@@ -37,6 +37,7 @@ import type { Metadata } from "next";
 import { headers } from "next/headers";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { preconnect } from "react-dom";
 import { getVideoAnalytics } from "@/actions/videos/get-analytics";
 import {
 	getDashboardSpacesData,
@@ -61,7 +62,7 @@ import { parseShareCallToAction } from "@/lib/share-call-to-action";
 import { getShareDashboardDestination } from "@/lib/share-dashboard-destination";
 import { getSharePlaybackUrl } from "@/lib/share-playback";
 import { buildShareVideoMetadata } from "@/lib/share-video-metadata";
-import { resolveShareWebUrl } from "@/lib/share-web-url";
+import { isDefaultShareRequest, resolveShareWebUrl } from "@/lib/share-web-url";
 import { isVideoOverShareableLinkLimit } from "@/lib/shareable-link-quota";
 import {
 	isIframelyCrawlerUserAgent,
@@ -749,6 +750,25 @@ async function AuthorizedContent({
 		viewNotificationPromise,
 	]);
 
+	// Cap's own storage answers its own hosts' CORS requests, so the player can
+	// start on the signed URL without probing it first; a custom bucket or a
+	// custom domain keeps the probe, which falls back when CORS refuses.
+	const initialPlaybackTrusted =
+		initialPlaybackUrlPromise !== undefined &&
+		video.bucket === null &&
+		video.storageIntegrationId === null &&
+		isDefaultShareRequest(await headers());
+	if (initialPlaybackTrusted) {
+		const initialPlaybackUrl = await initialPlaybackUrlPromise;
+		if (initialPlaybackUrl) {
+			try {
+				preconnect(new URL(initialPlaybackUrl).origin, {
+					crossOrigin: "anonymous",
+				});
+			} catch {}
+		}
+	}
+
 	const rules = resolveEffectiveVideoRules({
 		videoSettings: video.videoSettings,
 		organizationSettings: video.orgSettings,
@@ -908,6 +928,7 @@ async function AuthorizedContent({
 				dashboardDestination={dashboardDestination}
 				data={videoWithOrganizationInfo}
 				initialPlaybackUrl={initialPlaybackUrlPromise}
+				initialPlaybackTrusted={initialPlaybackTrusted}
 				screenshotImageUrl={screenshotImageUrl}
 				videoSettings={videoWithOrganizationInfo.settings}
 				comments={commentsPromise}

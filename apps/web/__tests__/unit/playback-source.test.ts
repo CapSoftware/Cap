@@ -514,3 +514,62 @@ describe("shouldFallbackToRawPlaybackSource", () => {
 		);
 	});
 });
+
+describe("resolvePlaybackSource with a trusted initial URL", () => {
+	const initialUrl =
+		"https://bucket.s3.us-east-1.amazonaws.com/o/v/result.mp4?sig";
+
+	it("starts on it without a probe request", async () => {
+		const fetchImpl = vi.fn();
+		const source = await resolvePlaybackSource({
+			videoSrc: "/api/playlist?videoType=mp4",
+			initialUrl,
+			enableCrossOrigin: true,
+			trustInitialUrl: true,
+			fetchImpl,
+		});
+
+		expect(fetchImpl).not.toHaveBeenCalled();
+		expect(source).toEqual({
+			url: initialUrl,
+			type: "mp4",
+			supportsCrossOrigin: true,
+			unprobed: true,
+		});
+	});
+
+	it("still probes when the initial URL isn't trusted", async () => {
+		const fetchImpl = vi.fn(async () =>
+			createResponse(initialUrl, { status: 206 }),
+		);
+		const source = await resolvePlaybackSource({
+			videoSrc: "/api/playlist?videoType=mp4",
+			initialUrl,
+			enableCrossOrigin: true,
+			fetchImpl: fetchImpl as unknown as typeof fetch,
+		});
+
+		expect(fetchImpl).toHaveBeenCalledTimes(1);
+		expect(source?.unprobed).toBeUndefined();
+	});
+
+	it("ignores trust once the player has moved to the raw upload", async () => {
+		const fetchImpl = vi.fn(async () =>
+			createResponse("/api/playlist?videoType=raw-preview", {
+				status: 206,
+				headers: { "content-type": "video/mp4" },
+			}),
+		);
+		const source = await resolvePlaybackSource({
+			videoSrc: "/api/playlist?videoType=mp4",
+			initialUrl,
+			rawFallbackSrc: "/api/playlist?videoType=raw-preview",
+			preferredSource: "raw",
+			trustInitialUrl: true,
+			fetchImpl: fetchImpl as unknown as typeof fetch,
+		});
+
+		expect(source?.type).toBe("raw");
+		expect(source?.unprobed).toBeUndefined();
+	});
+});

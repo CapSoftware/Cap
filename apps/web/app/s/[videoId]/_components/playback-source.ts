@@ -4,6 +4,8 @@ export type ResolvedPlaybackSource = {
 	url: string;
 	type: "mp4" | "raw";
 	supportsCrossOrigin: boolean;
+	/** Handed to the player without a probe; if it fails, resolve again. */
+	unprobed?: true;
 };
 
 type ProbeResult = {
@@ -27,6 +29,12 @@ type ResolvePlaybackSourceInput = {
 	now?: () => number;
 	createVideoElement?: () => Pick<HTMLVideoElement, "canPlayType">;
 	preferredSource?: "mp4" | "raw";
+	/**
+	 * The initial URL is known to serve this page (Cap's own storage on one of
+	 * its own hosts), so the player can start on it straight away instead of
+	 * waiting for a probe round trip.
+	 */
+	trustInitialUrl?: boolean;
 };
 
 function appendCacheBust(url: string, timestamp: number): string {
@@ -140,6 +148,7 @@ export async function resolvePlaybackSource({
 	now = () => Date.now(),
 	createVideoElement,
 	preferredSource = "mp4",
+	trustInitialUrl = false,
 }: ResolvePlaybackSourceInput): Promise<ResolvedPlaybackSource | null> {
 	const resolveRaw = async (): Promise<ResolvedPlaybackSource | null> => {
 		if (!rawFallbackSrc) {
@@ -172,6 +181,14 @@ export async function resolvePlaybackSource({
 	if (preferredSource === "raw") {
 		const rawSource = await resolveRaw();
 		if (rawSource) return rawSource;
+	}
+	if (preferredSource === "mp4" && initialUrl && trustInitialUrl) {
+		return {
+			url: initialUrl,
+			type: "mp4",
+			supportsCrossOrigin: enableCrossOrigin,
+			unprobed: true,
+		};
 	}
 	if (preferredSource === "mp4" && initialUrl) {
 		const initialResult = await probePlaybackSource(
