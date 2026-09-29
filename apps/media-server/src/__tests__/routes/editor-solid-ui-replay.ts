@@ -942,32 +942,62 @@ try {
 	}
 	if (browserEngine.name() === "firefox" && proCaptions) {
 		await page.addInitScript(() => {
-			const original = window.createImageBitmap;
-			window.createImageBitmap = new Proxy(original, {
-				apply(target, thisArg, args) {
-					const source: unknown = args[0];
-					const browserWindow = window as typeof window & {
-						capTestColorPath?: Record<string, unknown>;
+			const browserWindow = window as typeof window & {
+				capTestColorPath?: Record<string, unknown>;
+			};
+			const record = (source: unknown) => {
+				if (browserWindow.capTestColorPath) return;
+				if (typeof VideoFrame === "function" && source instanceof VideoFrame) {
+					browserWindow.capTestColorPath = {
+						kind: "VideoFrame",
+						format: source.format,
+						matrix: source.colorSpace.matrix,
 					};
-					if (!browserWindow.capTestColorPath) {
-						if (
-							typeof VideoFrame === "function" &&
-							source instanceof VideoFrame
-						) {
-							browserWindow.capTestColorPath = {
-								kind: "VideoFrame",
-								format: source.format,
-								matrix: source.colorSpace.matrix,
-							};
-						} else if (source instanceof HTMLVideoElement) {
-							browserWindow.capTestColorPath = {
-								kind: "HTMLVideoElement",
-							};
-						}
-					}
-					return Reflect.apply(target, thisArg, args);
+				} else if (source instanceof HTMLVideoElement) {
+					browserWindow.capTestColorPath = { kind: "HTMLVideoElement" };
+				}
+			};
+			const watch = <T extends object>(
+				owner: T | undefined,
+				name: keyof T & string,
+				sourceOf: (args: unknown[]) => unknown,
+			) => {
+				const original = owner?.[name];
+				if (!owner || typeof original !== "function") return;
+				Object.defineProperty(owner, name, {
+					configurable: true,
+					writable: true,
+					value: new Proxy(original, {
+						apply(target, thisArg, args: unknown[]) {
+							record(sourceOf(args));
+							return Reflect.apply(target, thisArg, args);
+						},
+					}),
+				});
+			};
+			// Decoded frames reach the renderer's texture uploads directly; a
+			// bitmap is only made on the fallback paths.
+			watch(window, "createImageBitmap", (args) => args[0]);
+			for (const context of [
+				window.WebGL2RenderingContext?.prototype,
+				window.WebGLRenderingContext?.prototype,
+			]) {
+				watch(context, "texImage2D", (args) => args.at(-1));
+				watch(context, "texSubImage2D", (args) => args.at(-1));
+			}
+			const queue: unknown = Reflect.get(window, "GPUQueue");
+			watch(
+				typeof queue === "function"
+					? (queue.prototype as { copyExternalImageToTexture?: unknown })
+					: undefined,
+				"copyExternalImageToTexture",
+				(args) => {
+					const source = args[0];
+					return typeof source === "object" && source !== null
+						? Reflect.get(source, "source")
+						: null;
 				},
-			});
+			);
 		});
 	}
 	await page.addInitScript(() => {
