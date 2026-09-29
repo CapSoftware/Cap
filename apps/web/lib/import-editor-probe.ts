@@ -15,9 +15,13 @@ export async function probeImportEditorSource(
 	file: Blob,
 ): Promise<ImportEditorSource | null> {
 	try {
-		const { ALL_FORMATS, BlobSource, Input, MP4, QTFF } = await import(
-			"mediabunny"
-		);
+		const {
+			ALL_FORMATS,
+			BlobSource,
+			Input,
+			Mp4InputFormat,
+			QuickTimeInputFormat,
+		} = await import("mediabunny");
 		const input = new Input({
 			formats: ALL_FORMATS,
 			source: new BlobSource(file),
@@ -25,7 +29,11 @@ export async function probeImportEditorSource(
 		try {
 			const format = await input.getFormat();
 			const container =
-				format === MP4 ? "mp4" : format === QTFF ? "quicktime" : "other";
+				format instanceof Mp4InputFormat
+					? "mp4"
+					: format instanceof QuickTimeInputFormat
+						? "quicktime"
+						: "other";
 			if (container === "other") return null;
 			const layout = await isobmffLayout(
 				async (start, end) =>
