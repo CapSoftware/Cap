@@ -318,6 +318,17 @@ try {
 				return new Response(null, { status: 204 });
 			if (url.pathname === "/api/desktop/organizations")
 				return Response.json([]);
+			if (url.pathname === `/api/videos/${videoId}/render-status`)
+				return Response.json({
+					state: "idle",
+					exportId: null,
+					progress: 0,
+					playable: false,
+					hlsUrl: null,
+					error: null,
+					current: false,
+					revision: null,
+				});
 			if (url.pathname === "/test-host.js")
 				return new Response(hostCode, {
 					headers: { "Content-Type": "text/javascript; charset=utf-8" },
@@ -564,7 +575,7 @@ try {
 		{ recordingId: videoId, ownerId: userId },
 	);
 	const editor = page.frameLocator("#editor");
-	await editor.getByRole("button", { name: "Export", exact: true }).waitFor({
+	await editor.getByRole("button", { name: "Download", exact: true }).waitFor({
 		state: "visible",
 		timeout: 20_000,
 	});
@@ -980,8 +991,16 @@ try {
 	});
 	process.env.CAP_WEB_EDITOR_PUBLIC_ORIGIN = `http://127.0.0.1:${socketServer.port}`;
 	workerFixtureEnabled = true;
+	// Browsers with WebCodecs encoders export locally; this stage covers the
+	// worker that browsers without them prepare on demand.
+	await editor.locator("html").evaluate(() => {
+		Object.defineProperty(window, "VideoEncoder", {
+			configurable: true,
+			value: undefined,
+		});
+	});
 	const exportPreviewStartedAt = Date.now();
-	await editor.getByRole("button", { name: "Export", exact: true }).click();
+	await editor.getByRole("button", { name: "Download", exact: true }).click();
 	await editor.getByRole("button", { name: "Back to editor" }).waitFor({
 		state: "visible",
 		timeout: 20_000,

@@ -4,11 +4,6 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import {
-	CAP_BUNDLE_HEADER_BYTES,
-	parseCapBundleManifest,
-	readCapBundleManifestLength,
-} from "@cap/editor-cap-bundle";
-import {
 	type Browser,
 	chromium,
 	type Download,
@@ -405,6 +400,17 @@ try {
 				});
 			if (url.pathname === "/api/desktop/organizations")
 				return Response.json([]);
+			if (url.pathname === `/api/videos/${videoId}/render-status`)
+				return Response.json({
+					state: "idle",
+					exportId: null,
+					progress: 0,
+					playable: false,
+					hlsUrl: null,
+					error: null,
+					current: false,
+					revision: null,
+				});
 			if (url.pathname === "/favicon.ico")
 				return new Response(null, { status: 204 });
 			if (url.pathname === "/test-editor")
@@ -1197,10 +1203,12 @@ try {
 			assert.equal(delayedEditorRequests, 1);
 		}
 		await connecting;
-		await editor.getByRole("button", { name: "Export", exact: true }).waitFor({
-			state: "visible",
-			timeout: 20_000,
-		});
+		await editor
+			.getByRole("button", { name: "Download", exact: true })
+			.waitFor({
+				state: "visible",
+				timeout: 20_000,
+			});
 		await editor.getByRole("tab", { name: "Camera" }).waitFor({
 			state: "visible",
 			timeout: 20_000,
@@ -1241,6 +1249,25 @@ try {
 			matrix: string | null;
 		} | null = null;
 		if (!cursorMovReplay && !canvasFallbackReplay) {
+			const halfWidth = await editor
+				.locator("#canvas")
+				.evaluate((canvas) => (canvas as HTMLCanvasElement).width);
+			await editor
+				.getByRole("button", { name: "Full preview quality" })
+				.click();
+			await editor.locator("#canvas").evaluate(async (canvas, before) => {
+				const element = canvas as HTMLCanvasElement;
+				const deadline = performance.now() + 10_000;
+				while (element.width <= before) {
+					if (performance.now() > deadline)
+						throw new Error("Full preview quality did not resize the preview");
+					await new Promise((resolve) => setTimeout(resolve, 25));
+				}
+			}, halfWidth);
+			await editor.locator("[aria-busy='false']").waitFor({
+				state: "attached",
+				timeout: 20_000,
+			});
 			await editor.locator("#canvas").evaluate(async (canvas) => {
 				const previewSurface = canvas.parentElement?.parentElement;
 				if (!previewSurface) throw new Error("Preview surface is unavailable");
@@ -1557,48 +1584,9 @@ try {
 				.evaluate((root) => root.classList.remove("dark"));
 			await editor.getByRole("button", { name: "Cancel", exact: true }).click();
 		}
-		const bundleDownload = page.waitForEvent("download");
-		await editor
-			.getByRole("button", { name: "Download recording bundle" })
-			.click();
-		let bundle: Awaited<typeof bundleDownload>;
-		try {
-			bundle = await bundleDownload;
-		} catch (cause) {
-			throw new Error(
-				`Recording bundle download failed: ${JSON.stringify({ bundleTicketRequests, pageErrors, failedResponses, pageText: (await editor.locator("body").innerText()).slice(0, 2_000) })}`,
-				{ cause },
-			);
-		}
-		assert.equal(bundle.suggestedFilename(), "Cap Recording.capbundle");
-		assert.equal(await bundle.failure(), null);
-		assert.equal(bundleTicketRequests, 1);
-		const bundleBytes = Buffer.from(
-			await Bun.file(await bundle.path()).arrayBuffer(),
-		);
-		const bundleManifestLength = readCapBundleManifestLength(
-			bundleBytes.subarray(0, CAP_BUNDLE_HEADER_BYTES),
-		);
-		assert.ok(bundleManifestLength);
-		const bundleManifest = parseCapBundleManifest(
-			bundleBytes.subarray(
-				CAP_BUNDLE_HEADER_BYTES,
-				CAP_BUNDLE_HEADER_BYTES + bundleManifestLength,
-			),
-			bundleBytes.byteLength,
-		);
-		assert.ok(bundleManifest);
-		assert.ok(
-			bundleManifest.files.some((file) =>
-				file.path.startsWith("content/segments/segment-0/display."),
-			),
-			JSON.stringify(bundleManifest.files.map((file) => file.path)),
-		);
-		assert.ok(
-			bundleManifest.files.some((file) =>
-				file.path.startsWith("content/segments/segment-0/camera."),
-			),
-			JSON.stringify(bundleManifest.files.map((file) => file.path)),
+		assert.equal(
+			await editor.getByRole("button", { name: /recording bundle/i }).count(),
+			0,
 		);
 		await editor.getByRole("tab", { name: "Captions" }).click();
 		if (proCaptions) {
@@ -1968,7 +1956,7 @@ try {
 				state: "visible",
 			});
 		}
-		await editor.getByRole("button", { name: "Export", exact: true }).click();
+		await editor.getByRole("button", { name: "Download", exact: true }).click();
 		await editor.getByRole("button", { name: "Back to editor" }).waitFor({
 			state: "visible",
 			timeout: 20_000,
@@ -2197,7 +2185,7 @@ try {
 				cropFrameSize,
 				cropFrameLoadMs,
 				cropRatiosAndThemesVerified: !shareReplay && !cursorMovReplay,
-				recordingBundleDownloaded: bundleTicketRequests === 1,
+				recordingBundleActionAbsent: bundleTicketRequests === 0,
 				freeCaptionsUpgradeVisible: !proCaptions,
 				proCaptionGenerationVisible: proCaptions,
 				proCaptionGenerationApplied: proCaptions && captionRequests === 1,
