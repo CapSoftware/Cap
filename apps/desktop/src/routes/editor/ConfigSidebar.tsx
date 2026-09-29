@@ -4395,11 +4395,23 @@ function ZoomSegmentPreview(props: {
 	);
 }
 
+function createAutoZoomBlocker() {
+	const generalSettings = generalSettingsStore.createQuery();
+	const { meta } = useEditorContext();
+	return () => {
+		if (!meta().hasRecordedCursorData)
+			return "Auto mode follows the cursor, and this recording has no cursor data.";
+		if (!generalSettings.data?.custom_cursor_capture2)
+			return 'Auto mode needs cursor capture. Enable "Custom cursor capture (Studio)" in Settings → General.';
+		return null;
+	};
+}
+
 function ZoomSegmentConfig(props: {
 	segmentIndex: number;
 	segment: ZoomSegment;
 }) {
-	const generalSettings = generalSettingsStore.createQuery();
+	const autoZoomBlocker = createAutoZoomBlocker();
 	const { project, setProject, editorInstance, projectHistory } =
 		useEditorContext();
 
@@ -4452,7 +4464,7 @@ function ZoomSegmentConfig(props: {
 						<KTabs.Trigger
 							value="auto"
 							class="z-10 flex-1 h-[26px] rounded-md text-[11.5px] font-medium text-ed-text-2 transition-colors duration-100 outline-hidden data-selected:text-ed-text-1 peer"
-							disabled={!generalSettings.data?.custom_cursor_capture2}
+							disabled={autoZoomBlocker() !== null}
 						>
 							Auto
 						</KTabs.Trigger>
@@ -4467,11 +4479,8 @@ function ZoomSegmentConfig(props: {
 						</KTabs.Indicator>
 					</KTabs.List>
 					<div class="space-y-3">
-						<Show when={!generalSettings.data?.custom_cursor_capture2}>
-							<p class="text-[11px] text-ed-text-3">
-								Auto mode needs cursor capture. Enable "Custom cursor capture
-								(Studio)" in Settings → General.
-							</p>
+						<Show when={autoZoomBlocker()}>
+							{(reason) => <p class="text-[11px] text-ed-text-3">{reason()}</p>}
 						</Show>
 						<ZoomModeHelper
 							mode={props.segment.mode === "auto" ? "auto" : "manual"}
@@ -4704,7 +4713,7 @@ function ZoomSegmentConfig(props: {
 function ZoomMultiSegmentConfig(props: {
 	segments: { index: number; segment: ZoomSegment }[];
 }) {
-	const generalSettings = generalSettingsStore.createQuery();
+	const autoZoomBlocker = createAutoZoomBlocker();
 	const { setProject, setEditorState } = useEditorContext();
 
 	const amounts = () => props.segments.map((s) => s.segment.amount);
@@ -4815,7 +4824,7 @@ function ZoomMultiSegmentConfig(props: {
 					<div class="flex flex-row gap-0.5 items-center p-0.5 rounded-lg bg-ed-ctl">
 						<button
 							type="button"
-							disabled={!generalSettings.data?.custom_cursor_capture2}
+							disabled={autoZoomBlocker() !== null}
 							data-selected={sharedMode() === "auto"}
 							onClick={() => setAllModes("auto")}
 							class={modeButtonClass}
@@ -4831,11 +4840,8 @@ function ZoomMultiSegmentConfig(props: {
 							Manual
 						</button>
 					</div>
-					<Show when={!generalSettings.data?.custom_cursor_capture2}>
-						<p class="text-[11px] text-ed-text-3">
-							Auto mode needs cursor capture. Enable "Custom cursor capture
-							(Studio)" in Settings → General.
-						</p>
+					<Show when={autoZoomBlocker()}>
+						{(reason) => <p class="text-[11px] text-ed-text-3">{reason()}</p>}
 					</Show>
 					<Show
 						when={(() => {
