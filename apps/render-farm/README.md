@@ -94,7 +94,7 @@ expires `hls/` and `jobs/` objects.
 | `RF_JOB_STALL_MS` / `RF_JOB_RETENTION_MS` | 10 min / 1 h | Job watchdog and summary retention |
 | `RF_STALL_MS` | `30000` | Worker engine watchdog |
 | `RF_DRAIN_MS` | 15 min | Longest a `SIGTERM` drain may take |
-| `CAP_DECODER_READAHEAD` | `8` | Frames each decoder decodes ahead of the renderer |
+| `CAP_DECODER_READAHEAD` | `0` | Frames each decoder decodes ahead of the renderer. Leave off until the decoder's readahead keeps the first frames of a clip (see the worker's `engineEnv`) |
 | `RF_HOT_SWAP` | off | Development: pull the engine, app and tuning from the bucket's `bin/` pointers |
 
 ## Product integration

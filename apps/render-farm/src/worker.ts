@@ -60,18 +60,28 @@ const headers = {
 	...(TOKEN ? { authorization: `Bearer ${TOKEN}` } : {}),
 };
 
+/**
+ * Engine environment. Decoder readahead stays off by default: with it on,
+ * the first chunk of a clip can hold the recording's opening frame for
+ * seconds, because the readahead window overfills the decoder's frame cache
+ * before the first request and every later request falls behind it.
+ */
+function engineEnv(env: Record<string, string | undefined>) {
+	return {
+		LP_NUM_THREADS: String(THREADS),
+		RAYON_NUM_THREADS: String(THREADS),
+		CAP_EXPORT_DISABLE_ZERO_COPY: "1",
+		CAP_RENDER_LOOP_STATS: "1",
+		CAP_DECODER_READAHEAD: env.CAP_DECODER_READAHEAD ?? "0",
+	};
+}
+
 const engines = Array.from(
 	{ length: SLOTS + AUDIO_SLOTS },
 	(_, slot) =>
 		new Engine(
 			ENGINE_BIN,
-			{
-				LP_NUM_THREADS: String(THREADS),
-				RAYON_NUM_THREADS: String(THREADS),
-				CAP_EXPORT_DISABLE_ZERO_COPY: "1",
-				CAP_RENDER_LOOP_STATS: "1",
-				CAP_DECODER_READAHEAD: process.env.CAP_DECODER_READAHEAD ?? "8",
-			},
+			engineEnv(process.env),
 			`slot${slot}`,
 			// Studio Sound lanes are CPU-heavy; on a 4 vCPU host they would
 			// otherwise starve the render slots' decode/encode threads.

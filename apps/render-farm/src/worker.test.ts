@@ -81,13 +81,16 @@ function harness(
 	const compiled = new Bun.Transpiler({ loader: "ts" }).transformSync(source);
 	const worker = new Function(
 		...Object.keys(deps),
-		`${compiled}\nreturn {runTranscode, cancel, busy, progress, transcoders};`,
+		`${compiled}\nreturn {runTranscode, cancel, busy, progress, transcoders, engineEnv};`,
 	)(...Object.values(deps)) as {
 		runTranscode: (task: TranscodeTask, slot: number) => Promise<number>;
 		cancel: (taskIds: string[]) => void;
 		busy: Map<number, WorkItem>;
 		progress: Map<number, { lastProgressAt: number }>;
 		transcoders: Map<number, unknown>;
+		engineEnv: (
+			env: Record<string, string | undefined>,
+		) => Record<string, string>;
 	};
 	return {
 		...worker,
@@ -158,5 +161,15 @@ describe("transcode cancellation", () => {
 		expect(h.uploads()).toBe(1);
 		expect(h.transcoders.size).toBe(0);
 		expect(h.progress.size).toBe(0);
+	});
+});
+
+describe("engine environment", () => {
+	test("keeps decoder readahead off unless the deployment sets it", () => {
+		const h = harness();
+		expect(h.engineEnv({}).CAP_DECODER_READAHEAD).toBe("0");
+		expect(
+			h.engineEnv({ CAP_DECODER_READAHEAD: "4" }).CAP_DECODER_READAHEAD,
+		).toBe("4");
 	});
 });
