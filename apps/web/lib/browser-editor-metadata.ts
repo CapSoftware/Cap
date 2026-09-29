@@ -76,25 +76,56 @@ async function readRange(
 	return { bytes: bytes.subarray(0, filled), size };
 }
 
+/// Reads of a recording's first and last bytes. The editor passes its shared
+/// reader, which already holds both from opening the file.
+export type BrowserEditorMediaBytes = {
+	head: (signal: AbortSignal) => Promise<Uint8Array | null>;
+	tail: (
+		length: number,
+		signal: AbortSignal,
+	) => Promise<{ bytes: Uint8Array; size: number } | null>;
+};
+
+function rangeBytes(url: string): BrowserEditorMediaBytes {
+	let size: number | null = null;
+	return {
+		head: async (signal) => {
+			const head = await readRange(url, 0, 256 * 1024, signal);
+			size = head?.size ?? null;
+			return head?.bytes ?? null;
+		},
+		tail: async (length, signal) => {
+			size ??= (await readRange(url, 0, 1, signal))?.size ?? null;
+			if (size === null) return null;
+			const start = Math.max(0, size - length);
+			const tail = await readRange(url, start, length, signal);
+			return tail && tail.bytes.byteLength === size - start
+				? { bytes: tail.bytes, size }
+				: null;
+		},
+	};
+}
+
 /// Recordings carry no duration: the recorder writes fragmented MP4 without a
 /// fragment index and WebM without Cues, so mediabunny's `computeDuration`
 /// walks every fragment, reading most of the file (gigabytes for a long
 /// recording). The last fragment or cluster gives the same end time from two
 /// small reads.
 async function durationFromTail(
-	url: string,
+	bytes: BrowserEditorMediaBytes,
 	parse: (head: Uint8Array) => ((tail: Uint8Array) => number | null) | null,
 	signal: AbortSignal,
 ) {
-	const head = await readRange(url, 0, 256 * 1024, signal);
-	const end = head && parse(head.bytes);
-	if (!head || !end) return null;
-	for (const tailBytes of [2, 8, 32].map((mb) => mb * 1024 * 1024)) {
-		const start = Math.max(0, head.size - tailBytes);
-		const tail = await readRange(url, start, tailBytes, signal);
-		if (!tail || tail.bytes.byteLength !== head.size - start) return null;
+	const head = await bytes.head(signal);
+	const end = head && parse(head);
+	if (!end) return null;
+	for (const tailBytes of [0.25, 2, 8, 32].map((mb) => mb * 1024 * 1024)) {
+		const tail = await bytes.tail(tailBytes, signal);
+		if (!tail) return null;
 		const duration = end(tail.bytes);
-		if (duration !== null || start === 0) return duration;
+		if (duration !== null || tail.bytes.byteLength >= tail.size) {
+			return duration;
+		}
 	}
 	return null;
 }
@@ -146,15 +177,22 @@ export async function probeBrowserEditorColor(
 	}
 }
 
+/// Duration, dimensions and audio format of an editor source. `shared` lets the
+/// caller supply an Input and byte reader it already has open for the file;
+/// otherwise the probe opens its own and closes it when done.
 export async function probeBrowserEditorMedia(
 	url: string,
 	signal: AbortSignal,
+	shared?: { input: Input; bytes: BrowserEditorMediaBytes },
 ): Promise<BrowserEditorMediaMetadata> {
 	if (signal.aborted) {
 		throw signal.reason ?? new DOMException("Canceled", "AbortError");
 	}
-	const input = metadataInput(url);
-	const onAbort = () => input.dispose();
+	const input = shared?.input ?? metadataInput(url);
+	const bytes = shared?.bytes ?? rangeBytes(url);
+	const onAbort = () => {
+		if (!shared) input.dispose();
+	};
 	signal.addEventListener("abort", onAbort, { once: true });
 	try {
 		const [video, audio] = await Promise.all([
@@ -176,7 +214,7 @@ export async function probeBrowserEditorMedia(
 		// so the measured end comes first.
 		const duration =
 			(tailParser &&
-				(await durationFromTail(url, tailParser, signal).catch(
+				(await durationFromTail(bytes, tailParser, signal).catch(
 					(cause: unknown) => {
 						if (signal.aborted) throw cause;
 						return null;
@@ -218,6 +256,6 @@ export async function probeBrowserEditorMedia(
 		throw cause;
 	} finally {
 		signal.removeEventListener("abort", onAbort);
-		input.dispose();
+		if (!shared) input.dispose();
 	}
 }

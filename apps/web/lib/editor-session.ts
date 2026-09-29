@@ -630,7 +630,17 @@ export const getSignedEditorSources = Effect.fn("getSignedEditorSources")(
 		return {
 			videoId: video.id,
 			...(audience === "browser"
-				? { signedUrlExpiresAt, displayHasAudio: legacySource }
+				? {
+						signedUrlExpiresAt,
+						displayHasAudio: legacySource,
+						// Sizes the first read of each source's tail; the exact
+						// duration still comes from the media.
+						...(typeof video.duration === "number" &&
+						Number.isFinite(video.duration) &&
+						video.duration > 0
+							? { durationHint: video.duration }
+							: {}),
+					}
 				: {}),
 			...(video.metadata?.audioOnly === true ? { audioOnly: true } : {}),
 			captionsEnabled,

@@ -31,10 +31,17 @@ const child = (view: DataView, box: Box, type: string) =>
 
 type TrackTiming = { timescale: number; defaultDuration: number };
 
-/// Track timescales and `trex` default sample durations from the start of a
-/// fragmented MP4, or null when the bytes do not hold a complete fragmented
-/// `moov`.
-export function fragmentedMp4Tracks(head: Uint8Array) {
+export type FragmentedMp4Track = TrackTiming & {
+	/// `trex` default sample flags.
+	defaultSampleFlags: number;
+	/// `hdlr` handler type ("vide", "soun"), or null when the track has none.
+	handler: string | null;
+};
+
+/// The `moov` of a fragmented MP4 from its first bytes: where it ends and each
+/// track's timing, or null when the bytes do not hold a complete fragmented
+/// `moov` without edit lists.
+export function fragmentedMp4Init(head: Uint8Array) {
 	const view = new DataView(head.buffer, head.byteOffset, head.byteLength);
 	const moov = boxes(view, 0, head.byteLength).find(
 		(box) => box.type === "moov",
@@ -43,11 +50,12 @@ export function fragmentedMp4Tracks(head: Uint8Array) {
 	const children = boxes(view, moov.body, moov.end);
 	const mvex = children.find((box) => box.type === "mvex");
 	if (!mvex) return null;
-	const tracks = new Map<number, TrackTiming>();
+	const tracks = new Map<number, FragmentedMp4Track>();
 	for (const trak of children.filter((box) => box.type === "trak")) {
 		const tkhd = child(view, trak, "tkhd");
 		const mdia = child(view, trak, "mdia");
 		const mdhd = mdia && child(view, mdia, "mdhd");
+		const hdlr = mdia && child(view, mdia, "hdlr");
 		// Edit lists shift presentation times; leave those files to mediabunny.
 		if (!tkhd || !mdhd || child(view, trak, "edts")) return null;
 		const trackId = view.getUint32(
@@ -57,14 +65,39 @@ export function fragmentedMp4Tracks(head: Uint8Array) {
 			mdhd.body + (view.getUint8(mdhd.body) === 1 ? 20 : 12),
 		);
 		if (timescale < 1) return null;
-		tracks.set(trackId, { timescale, defaultDuration: 0 });
+		const handler =
+			hdlr && hdlr.body + 12 <= hdlr.end
+				? String.fromCharCode(
+						view.getUint8(hdlr.body + 8),
+						view.getUint8(hdlr.body + 9),
+						view.getUint8(hdlr.body + 10),
+						view.getUint8(hdlr.body + 11),
+					)
+				: null;
+		tracks.set(trackId, {
+			timescale,
+			defaultDuration: 0,
+			defaultSampleFlags: 0,
+			handler,
+		});
 	}
 	for (const trex of boxes(view, mvex.body, mvex.end)) {
-		if (trex.type !== "trex") continue;
+		if (trex.type !== "trex" || trex.body + 16 > trex.end) continue;
 		const track = tracks.get(view.getUint32(trex.body + 4));
-		if (track) track.defaultDuration = view.getUint32(trex.body + 12);
+		if (!track) continue;
+		track.defaultDuration = view.getUint32(trex.body + 12);
+		if (trex.body + 24 <= trex.end) {
+			track.defaultSampleFlags = view.getUint32(trex.body + 20);
+		}
 	}
-	return tracks.size > 0 ? tracks : null;
+	return tracks.size > 0 ? { moovEnd: moov.end, tracks } : null;
+}
+
+/// Track timescales and `trex` default sample durations from the start of a
+/// fragmented MP4, or null when the bytes do not hold a complete fragmented
+/// `moov`.
+export function fragmentedMp4Tracks(head: Uint8Array) {
+	return fragmentedMp4Init(head)?.tracks ?? null;
 }
 
 /// End time in seconds of the fragmented MP4 whose last bytes are `tail`: the
