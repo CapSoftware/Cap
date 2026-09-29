@@ -118,6 +118,7 @@ async function replayPairedCapture(
 	failBackupDeletion = false,
 	stallAudioSpool = false,
 	cameraEnabled = true,
+	unwritableBackupStore = false,
 ) {
 	const requests = [];
 	const parts = [];
@@ -126,7 +127,17 @@ async function replayPairedCapture(
 	const cameraExtension = engine.name === "WebKit" ? "webm" : engine.extension;
 	const cameraSubpath = `camera-upload.${cameraExtension}`;
 	const screenSubpath = `raw-upload.${engine.extension}`;
-	const context = await browser.newContext();
+	// A profile on disk gives IndexedDB the durable storage a normal browser
+	// window has. WebKit's ephemeral contexts refuse to store Blobs, which is
+	// how a backup store fails in Safari private browsing.
+	const profileDirectory = unwritableBackupStore
+		? null
+		: await mkdtemp(join(tmpdir(), "cap-web-recorder-profile-"));
+	const context = profileDirectory
+		? await engine.browserType.launchPersistentContext(profileDirectory, {
+				headless: process.env.CAP_REPLAY_HEADED !== "true",
+			})
+		: await browser.newContext();
 	try {
 		await context.addInitScript(
 			(options) => {
@@ -589,6 +600,17 @@ async function replayPairedCapture(
 					error.includes("Failed to dispose camera recording spool"),
 				),
 			);
+		} else if (unwritableBackupStore) {
+			assert.ok(
+				browserErrors.length > 0,
+				"The ephemeral context stored the backup, so the failing store was not exercised",
+			);
+			assert.ok(
+				browserErrors.every((error) =>
+					error.startsWith("Failed to persist recording chunk locally"),
+				),
+				JSON.stringify(browserErrors),
+			);
 		} else {
 			assert.deepEqual(browserErrors, []);
 		}
@@ -729,12 +751,14 @@ async function replayPairedCapture(
 			failBackupDeletion,
 			failCameraSpool,
 			stallAudioSpool,
+			unwritableBackupStore,
 			cameraBytes,
 			screenBytes,
 			cameraOffsetMs: cameraComplete?.body.cameraOffsetMs ?? null,
 		};
 	} finally {
 		await context.close();
+		if (profileDirectory) await rm(profileDirectory, { recursive: true });
 	}
 }
 
@@ -825,6 +849,23 @@ try {
 			if (engine.name === "Chromium") {
 				results.push(
 					await replayPairedCapture(browser, bundle, false, engine, true),
+				);
+			}
+			if (engine.name === "WebKit") {
+				results.push(
+					await replayPairedCapture(
+						browser,
+						bundle,
+						false,
+						engine,
+						false,
+						false,
+						false,
+						false,
+						false,
+						true,
+						true,
+					),
 				);
 			}
 			if (engine.name === "WebKit") {
