@@ -158,6 +158,7 @@ import { WaveformSegmentConfig } from "./waveform-segment-config";
 import { ZoomModeHelper } from "./ZoomModeHelper";
 
 const isWebEditor = import.meta.env.VITE_CAP_WEB_EDITOR === "true";
+const ZOOM_PREVIEW_MAX_RETRIES = 4;
 
 // Split out of the sidebar chunk: the captions tab is not visible at first
 // paint (Kobalte only mounts the selected tab), and its code is heavy. The
@@ -4514,34 +4515,108 @@ function ZoomSegmentConfig(props: {
 									{ equals: zoomPreviewSourceEquals },
 								);
 
-								const video = document.createElement("video");
-								createEffect(() => {
-									const path = convertFileSrc(
-										`${editorInstance.path}/content/segments/segment-${
-											source().recordingSegment
-										}/display.mp4`,
-									);
-									video.src = path;
-									video.preload = "auto";
-									// Force reload if video fails to load
-									video.load();
-								});
+								// A <video> reads the whole of a fragmented web recording before
+								// it can show a frame, so the web host decodes one frame instead.
+								const video = isWebEditor
+									? undefined
+									: document.createElement("video");
+								let webFrame: HTMLImageElement | undefined;
+								const [loaded, setLoaded] = createSignal(false);
+								const [failed, setFailed] = createSignal(false);
 
-								createEffect(() => {
-									const t = source().sourceTime;
+								if (video) {
+									let retries = 0;
+									let retryTimer: ReturnType<typeof setTimeout> | undefined;
+									onCleanup(() => clearTimeout(retryTimer));
 
-									// Ensure video is ready before seeking
-									if (video.readyState >= 2) {
-										video.currentTime = t;
-									} else {
-										// Wait for video to be ready, then seek
-										const handleCanPlay = () => {
+									createEffect(() => {
+										const path = convertFileSrc(
+											`${editorInstance.path}/content/segments/segment-${
+												source().recordingSegment
+											}/display.mp4`,
+										);
+										retries = 0;
+										clearTimeout(retryTimer);
+										setFailed(false);
+										video.src = path;
+										video.preload = "auto";
+										// Force reload if video fails to load
+										video.load();
+									});
+
+									createEffect(() => {
+										const t = source().sourceTime;
+
+										// Ensure video is ready before seeking
+										if (video.readyState >= 2) {
 											video.currentTime = t;
-											video.removeEventListener("canplay", handleCanPlay);
-										};
-										video.addEventListener("canplay", handleCanPlay);
-									}
-								});
+										} else {
+											// Wait for video to be ready, then seek
+											const handleCanPlay = () => {
+												video.currentTime = t;
+												video.removeEventListener("canplay", handleCanPlay);
+											};
+											video.addEventListener("canplay", handleCanPlay);
+										}
+									});
+
+									video.onloadeddata = () => {
+										setLoaded(true);
+										render();
+									};
+									video.onseeked = () => render();
+
+									video.onerror = (e) => {
+										console.error("Failed to load video for zoom preview:", e);
+										if (retries >= ZOOM_PREVIEW_MAX_RETRIES) {
+											setFailed(true);
+											return;
+										}
+										retryTimer = setTimeout(
+											() => video.load(),
+											100 * 2 ** retries++,
+										);
+									};
+								} else {
+									createEffect(() => {
+										const { recordingSegment, sourceTime } = source();
+										let current = true;
+										onCleanup(() => {
+											current = false;
+										});
+										invoke<string>("webEditorZoomPreviewFrame", {
+											recordingSegment,
+											sourceTime,
+										})
+											.then(
+												(url) =>
+													new Promise<HTMLImageElement>((resolve, reject) => {
+														const image = new Image();
+														image.onload = () => resolve(image);
+														image.onerror = () =>
+															reject(
+																new Error("Zoom preview frame could not load"),
+															);
+														image.src = url;
+													}),
+											)
+											.then((image) => {
+												if (!current) return;
+												webFrame = image;
+												setFailed(false);
+												setLoaded(true);
+												render();
+											})
+											.catch((error) => {
+												if (!current) return;
+												console.error(
+													"Failed to load frame for zoom preview:",
+													error,
+												);
+												if (!webFrame) setFailed(true);
+											});
+									});
+								}
 
 								createEffect(
 									on(
@@ -4558,7 +4633,19 @@ function ZoomSegmentConfig(props: {
 								);
 
 								const render = () => {
-									if (!canvasRef || video.readyState < 2) return;
+									if (!canvasRef) return;
+									const image =
+										webFrame ??
+										(video && video.readyState >= 2 ? video : undefined);
+									if (!image) return;
+									// The web frame is decoded at a reduced width, so the crop
+									// rectangle scales from recording pixels to frame pixels.
+									const scaleX = webFrame
+										? webFrame.naturalWidth / rawSize().x
+										: 1;
+									const scaleY = webFrame
+										? webFrame.naturalHeight / rawSize().y
+										: 1;
 
 									const ctx = canvasRef.getContext("2d");
 									if (!ctx) return;
@@ -4568,32 +4655,16 @@ function ZoomSegmentConfig(props: {
 									ctx.clearRect(0, 0, canvasRef.width, canvasRef.height);
 									// Draw video frame
 									ctx.drawImage(
-										video,
-										croppedPosition().x,
-										croppedPosition().y,
-										croppedSize().x,
-										croppedSize().y,
+										image,
+										croppedPosition().x * scaleX,
+										croppedPosition().y * scaleY,
+										croppedSize().x * scaleX,
+										croppedSize().y * scaleY,
 										0,
 										0,
 										canvasRef.width,
 										canvasRef.height,
 									);
-								};
-
-								const [loaded, setLoaded] = createSignal(false);
-								video.onloadeddata = () => {
-									setLoaded(true);
-									render();
-								};
-								video.onseeked = render;
-
-								// Add error handling
-								video.onerror = (e) => {
-									console.error("Failed to load video for zoom preview:", e);
-									// Try to reload after a short delay
-									setTimeout(() => {
-										video.load();
-									}, 100);
 								};
 
 								let canvasRef!: HTMLCanvasElement;
@@ -4691,7 +4762,9 @@ function ZoomSegmentConfig(props: {
 											<Show when={!loaded()}>
 												<div class="flex absolute inset-0 justify-center items-center bg-gray-2">
 													<div class="text-sm text-gray-11">
-														Loading preview...
+														{failed()
+															? "Preview unavailable"
+															: "Loading preview..."}
 													</div>
 												</div>
 											</Show>

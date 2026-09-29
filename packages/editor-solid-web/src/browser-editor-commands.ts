@@ -176,6 +176,7 @@ async function cachedWaveform(url: string, signal: AbortSignal) {
 }
 
 const THUMBNAIL_WIDTH = 320;
+const ZOOM_PREVIEW_WIDTH = 1280;
 const THUMBNAIL_CACHE_ENTRIES = 64;
 
 /// A <video> element reads the whole of a fragmented recording before it can
@@ -227,6 +228,7 @@ export class BrowserEditorCommands {
 			"getDisplayFrameForCropping",
 			"getClipThumbnail",
 			"tauri:webEditorCameraThumbnail",
+			"tauri:webEditorZoomPreviewFrame",
 			"loadCaptions",
 			"setWindowTransparent",
 			"tauri:get_recording_recovery_success",
@@ -486,6 +488,7 @@ export class BrowserEditorCommands {
 		recordingSegment: number,
 		sourceTime: number,
 		track: "display" | "camera" = "display",
+		width = THUMBNAIL_WIDTH,
 	) {
 		if (
 			!Number.isSafeInteger(recordingSegment) ||
@@ -496,19 +499,13 @@ export class BrowserEditorCommands {
 			throw new Error("Clip thumbnail request is invalid");
 		}
 		// The clip strip asks again whenever the timeline re-renders.
-		const key = `${track}:${recordingSegment}:${sourceTime}`;
+		const key = `${track}:${width}:${recordingSegment}:${sourceTime}`;
 		const cached = this.thumbnails.get(key);
 		if (cached) return cached;
 		const thumbnail = this.catalog
 			.snapshot(this.controller.signal)
 			.then((sources) =>
-				this.displayFrame(
-					sources,
-					recordingSegment,
-					sourceTime,
-					THUMBNAIL_WIDTH,
-					track,
-				),
+				this.displayFrame(sources, recordingSegment, sourceTime, width, track),
 			)
 			.then(
 				(image) =>
@@ -594,6 +591,15 @@ export class BrowserEditorCommands {
 		}
 		if (name === "tauri:webEditorCameraThumbnail") {
 			return this.clipThumbnail(0, 1, "camera");
+		}
+		if (name === "tauri:webEditorZoomPreviewFrame") {
+			const request = record(args[0]);
+			return this.clipThumbnail(
+				Number(request?.recordingSegment),
+				Number(request?.sourceTime),
+				"display",
+				ZOOM_PREVIEW_WIDTH,
+			);
 		}
 		if (name === "animatedGradientCatalog") {
 			return JSON.parse(
