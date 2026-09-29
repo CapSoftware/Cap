@@ -170,7 +170,7 @@ Campaigns are manually scheduled product updates, with no automatic enrollment. 
 | --- | --- | --- | --- |
 | Cap v0.6 launch \| Customers | customer | [Meet Cap v0.6, our biggest update yet](../emails/marketing/customer-update.ts) | `cmtvpmfxc01ls0j0nnlffombv` |
 | Cap v0.6 launch \| Noncustomers | free | [Meet Cap v0.6, our biggest update yet](../emails/marketing/free-update.ts) | `cmtvpmjej01kr0j18cxoz2n0y` |
-| Case study and logo wall invite \| Cap Pro multi-seat org owners | customer | [Could we feature your team on the Cap website?](../emails/marketing/customer-case-study.ts) | `cmumrftj50y4j0jy2giifxlnk` |
+| Case study and logo wall invite \| Cap Pro multi-seat org owners | customer | [Could we feature your team in a Cap case study?](../emails/marketing/customer-case-study.ts) | `cmumrftj50y4j0jy2giifxlnk` |
 
 ## Branding and personalization
 
@@ -603,11 +603,11 @@ See Cap v0.6 in action →
 
 ### customer-case-study
 
-Invite Cap Pro organisation owners with more than one seat to reply if they'd like their team on the website logo wall, in a case study, or both.
+Invite Cap Pro organisation owners with more than one seat to reply if they'd like their team featured in a website case study.
 
-**Subject:** Could we feature your team on the Cap website?
+**Subject:** Could we feature your team in a Cap case study?
 
-**Preview:** A spot on our new logo wall, and a case study if you're up for it.
+**Preview:** Reply and I'll send over a short Q&A.
 
 **Variables:** `contact.capTeamGreeting` (fallback: Hey team,)
 
@@ -615,11 +615,9 @@ Invite Cap Pro organisation owners with more than one seat to reply if they'd li
 
 {contact.capTeamGreeting}
 
-We're adding a logo wall to the Cap website to show the teams using Cap, and I'd love to include yours.
+We're putting together case studies for the Cap website, and I'd love to feature your team in one.
 
-We're also putting together case studies, and it'd be great to feature your team in one of those too.
-
-If you're enjoying Cap and would like to be featured, just reply and let me know if you're happy to be on the logo wall, do a case study, or both. For a case study, I'll send you a short Q&amp;A to fill in.
+If you're enjoying Cap and would like to be involved, just reply to this email and I'll send you a short Q&amp;A to fill in.
 
 It'd really help Cap move into the next stage of our growth, and help us tell other great teams like yours all about Cap.
 
