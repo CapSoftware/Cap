@@ -9,7 +9,9 @@ import { createStore } from "solid-js/store";
 import { useEditorContext } from "../context";
 
 export const MAX_TIMELINE_MARKINGS = 20;
-const TIMELINE_MARKING_RESOLUTIONS = [0.5, 1, 2.5, 5, 10, 30];
+const TIMELINE_MARKING_RESOLUTIONS = [
+	0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600, 900, 1800, 3600,
+];
 
 const SEGMENT_RENDER_PADDING = 2;
 
@@ -51,7 +53,7 @@ export const [TimelineContextProvider, useTimelineContext] =
 				() =>
 					TIMELINE_MARKING_RESOLUTIONS.find(
 						(r) => state.timeline.transform.zoom / r <= MAX_TIMELINE_MARKINGS,
-					) ?? 30,
+					) ?? 3600,
 			);
 
 			const visibleTimeRange = createMemo(() => {

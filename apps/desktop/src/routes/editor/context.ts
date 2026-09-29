@@ -1916,7 +1916,7 @@ export const [EditorContextProvider, useBaseEditorContext] =
 				position: number;
 			};
 
-			const zoomOutLimit = () => Math.min(totalDuration(), 60 * 10);
+			const zoomOutLimit = totalDuration;
 
 			function updateZoom(
 				state: State,

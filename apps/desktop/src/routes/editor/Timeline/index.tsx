@@ -31,6 +31,7 @@ import { stylesRevealCamera } from "../style";
 import { ImageTrack } from "./image-track";
 import { type OverlayDragState, StyleTrack } from "./style-track";
 import { WaveformTrack } from "./waveform-track";
+import { pinchZoomFactor } from "./zoom";
 
 import "./styles.css";
 
@@ -926,22 +927,6 @@ export function Timeline(props: {
 			});
 			resume();
 		}
-
-		const checkBounds = () => {
-			if (timelineBounds.width && timelineBounds.width > 0) {
-				const minSegmentPixels = 80;
-				const secondsPerPixel = 1 / minSegmentPixels;
-				const desiredZoom = timelineBounds.width * secondsPerPixel;
-
-				if (transform().zoom > desiredZoom) {
-					transform().updateZoom(desiredZoom, 0);
-				}
-			} else {
-				setTimeout(checkBounds, 10);
-			}
-		};
-
-		checkBounds();
 	});
 
 	if (
@@ -997,7 +982,7 @@ export function Timeline(props: {
 	let keyboardSegmentDragState = { type: "idle" } as KeyboardSegmentDragState;
 	let threeDSegmentDragState = { type: "idle" } as ThreeDSegmentDragState;
 
-	let pendingZoomDelta = 0;
+	let pendingZoomFactor = 1;
 	let pendingZoomOrigin: number | null = null;
 	let zoomRafId: number | null = null;
 
@@ -1005,15 +990,17 @@ export function Timeline(props: {
 	let scrollRafId: number | null = null;
 
 	function flushPendingZoom() {
-		if (pendingZoomDelta === 0 || pendingZoomOrigin === null) {
+		if (pendingZoomFactor === 1 || pendingZoomOrigin === null) {
 			zoomRafId = null;
 			return;
 		}
 
-		const newZoom = transform().zoom + pendingZoomDelta;
-		transform().updateZoom(newZoom, pendingZoomOrigin);
+		transform().updateZoom(
+			transform().zoom * pendingZoomFactor,
+			pendingZoomOrigin,
+		);
 
-		pendingZoomDelta = 0;
+		pendingZoomFactor = 1;
 		pendingZoomOrigin = null;
 		zoomRafId = null;
 	}
@@ -1031,8 +1018,8 @@ export function Timeline(props: {
 		scrollRafId = null;
 	}
 
-	function scheduleZoomUpdate(delta: number, origin: number) {
-		pendingZoomDelta += delta;
+	function scheduleZoomUpdate(factor: number, origin: number) {
+		pendingZoomFactor *= factor;
 		pendingZoomOrigin = origin;
 
 		if (zoomRafId === null) {
@@ -1425,9 +1412,8 @@ export function Timeline(props: {
 					// The timeline owns the gesture: no page zoom or swipe-back.
 					e.preventDefault();
 					if (e.ctrlKey) {
-						const zoomDelta = (e.deltaY * Math.sqrt(transform().zoom)) / 30;
 						const origin = editorState.previewTime ?? editorState.playbackTime;
-						scheduleZoomUpdate(zoomDelta, origin);
+						scheduleZoomUpdate(pinchZoomFactor(e.deltaY), origin);
 					} else {
 						let delta: number = 0;
 

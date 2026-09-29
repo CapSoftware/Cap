@@ -27,7 +27,12 @@ import {
 import { CaptionOverlay } from "./CaptionOverlay";
 import { CaptionsRegenerateBadge } from "./CaptionsRegenerateBadge";
 import { createCaptionTrackSegments } from "./captions";
-import { type EditorPreviewQuality, FPS, useEditorContext } from "./context";
+import {
+	type EditorPreviewQuality,
+	FPS,
+	MAX_ZOOM_IN,
+	useEditorContext,
+} from "./context";
 import { FrameButton } from "./FrameButton";
 import { ImageOverlay } from "./image-overlay";
 import { MaskOverlay } from "./MaskOverlay";
@@ -40,6 +45,7 @@ import {
 } from "./preview-bounds";
 import { SplitScreenOverlay } from "./SplitScreenOverlay";
 import { TextOverlay } from "./TextOverlay";
+import { sliderToZoom, ZOOM_STEP, zoomToSlider } from "./Timeline/zoom";
 import { EditorButton, Slider } from "./ui";
 import { useEditorShortcuts } from "./useEditorShortcuts";
 import { formatTime } from "./utils";
@@ -336,7 +342,7 @@ export function PlayerContent(props: { compactness?: number }) {
 			combo: "Mod+=",
 			handler: () =>
 				editorState.timeline.transform.updateZoom(
-					editorState.timeline.transform.zoom / 1.1,
+					editorState.timeline.transform.zoom / ZOOM_STEP,
 					editorState.playbackTime,
 				),
 		},
@@ -344,9 +350,16 @@ export function PlayerContent(props: { compactness?: number }) {
 			combo: "Mod+-",
 			handler: () =>
 				editorState.timeline.transform.updateZoom(
-					editorState.timeline.transform.zoom * 1.1,
+					editorState.timeline.transform.zoom * ZOOM_STEP,
 					editorState.playbackTime,
 				),
+		},
+		{
+			combo: "Mod+Digit0",
+			handler: () => {
+				editorState.timeline.transform.updateZoom(zoomOutLimit(), 0);
+				editorState.timeline.transform.setPosition(0);
+			},
 		},
 		{
 			combo: "Space",
@@ -523,7 +536,7 @@ export function PlayerContent(props: { compactness?: number }) {
 							kbd={["meta", "-"]}
 							onClick={() => {
 								editorState.timeline.transform.updateZoom(
-									editorState.timeline.transform.zoom * 1.1,
+									editorState.timeline.transform.zoom * ZOOM_STEP,
 									editorState.playbackTime,
 								);
 							}}
@@ -536,17 +549,15 @@ export function PlayerContent(props: { compactness?: number }) {
 							maxValue={1}
 							step={0.001}
 							value={[
-								Math.min(
-									Math.max(
-										1 - editorState.timeline.transform.zoom / zoomOutLimit(),
-										0,
-									),
-									1,
+								zoomToSlider(
+									editorState.timeline.transform.zoom,
+									MAX_ZOOM_IN,
+									zoomOutLimit(),
 								),
 							]}
 							onChange={([v]) => {
 								editorState.timeline.transform.updateZoom(
-									(1 - v) * zoomOutLimit(),
+									sliderToZoom(v ?? 0, MAX_ZOOM_IN, zoomOutLimit()),
 									editorState.playbackTime,
 								);
 							}}
@@ -561,7 +572,7 @@ export function PlayerContent(props: { compactness?: number }) {
 							kbd={["meta", "+"]}
 							onClick={() => {
 								editorState.timeline.transform.updateZoom(
-									editorState.timeline.transform.zoom / 1.1,
+									editorState.timeline.transform.zoom / ZOOM_STEP,
 									editorState.playbackTime,
 								);
 							}}
