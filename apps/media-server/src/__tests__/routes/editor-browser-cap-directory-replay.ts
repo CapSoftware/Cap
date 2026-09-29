@@ -9,6 +9,7 @@ type DialogModule =
 type DialogWindow = Window & {
 	editorDialog?: DialogModule;
 	editorOpenPromise?: Promise<string | null>;
+	editorAlerts?: string[];
 };
 
 const entrypoint = resolve(
@@ -64,6 +65,15 @@ async function createPage(browser: Browser) {
 		}),
 	);
 	await page.goto(url);
+	// A native alert opening while WebKit is still reporting the folder upload
+	// can stall Playwright's upload on Linux, so the page records its alerts.
+	await page.evaluate(() => {
+		const browserWindow = window as DialogWindow;
+		browserWindow.editorAlerts = [];
+		window.alert = (message?: unknown) => {
+			browserWindow.editorAlerts?.push(String(message));
+		};
+	});
 	await page.evaluate(async (code) => {
 		const moduleUrl = URL.createObjectURL(
 			new Blob([code], { type: "text/javascript" }),
@@ -102,12 +112,23 @@ async function selectFolder(
 
 async function replay(browser: Browser, name: string) {
 	const page = await createPage(browser);
-	const alerts: string[] = [];
+	const nativeDialogs: string[] = [];
 	const dialogAccepts: Promise<void>[] = [];
 	page.on("dialog", (dialog) => {
-		alerts.push(dialog.message());
+		nativeDialogs.push(dialog.message());
 		dialogAccepts.push(dialog.accept());
 	});
+	const alerts = () =>
+		page.evaluate(() => [...((window as DialogWindow).editorAlerts ?? [])]);
+	const nextAlert = async (count: number) => {
+		await page.waitForFunction(
+			(expected) =>
+				((window as DialogWindow).editorAlerts?.length ?? 0) >= expected,
+			count,
+			{ timeout: 10_000 },
+		);
+		return (await alerts()).at(-1) ?? "";
+	};
 	try {
 		const token = await selectFolder(page, good);
 		assert.ok(token);
@@ -153,19 +174,20 @@ async function replay(browser: Browser, name: string) {
 			new Map(result.entries.map((entry) => [entry.path, entry.content])),
 			expected,
 		);
-		assert.equal(alerts.length, 0);
-		const missingDialog = page.waitForEvent("dialog", { timeout: 10_000 });
+		assert.deepEqual(await alerts(), []);
 		const missingToken = await selectFolder(page, missingMedia);
-		await missingDialog;
 		assert.equal(missingToken, null);
-		assert.match(alerts.at(-1) ?? "", /missing Cap recording media/);
-		const wrongRootDialog = page.waitForEvent("dialog", { timeout: 10_000 });
+		assert.match(await nextAlert(1), /missing Cap recording media/);
 		const wrongRootToken = await selectFolder(page, wrongRoot);
-		await wrongRootDialog;
 		assert.equal(wrongRootToken, null);
-		assert.match(alerts.at(-1) ?? "", /Select a \.cap recording folder/);
+		assert.match(await nextAlert(2), /Select a \.cap recording folder/);
+		assert.deepEqual(nativeDialogs, []);
 		console.log(
-			JSON.stringify({ name, entries: result.entries.length, alerts }),
+			JSON.stringify({
+				name,
+				entries: result.entries.length,
+				alerts: await alerts(),
+			}),
 		);
 	} finally {
 		await Promise.all(dialogAccepts);
