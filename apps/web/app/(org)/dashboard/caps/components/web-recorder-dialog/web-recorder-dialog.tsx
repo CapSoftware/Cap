@@ -73,7 +73,9 @@ import type { RecordingMode } from "./recording-mode";
 import { useRecordingQuality } from "./recording-quality";
 import {
 	CAMERA_ONLY_PROMPT_DISMISSED_KEY,
+	type CameraOnlyChoice,
 	canRecordMicOnly,
+	parseCameraOnlyChoice,
 	startRecordingChoice,
 } from "./recording-sources";
 import { SystemAudioGuide } from "./system-audio-guide";
@@ -692,23 +694,27 @@ export const WebRecorderDialog = ({
 	};
 
 	const [cameraOnlyPrompt, setCameraOnlyPrompt] = useState(false);
-	const [cameraOnlyPromptDismissed, setCameraOnlyPromptDismissed] =
-		useState(false);
+	const [cameraOnlyChoice, setCameraOnlyChoice] =
+		useState<CameraOnlyChoice | null>(null);
 	useEffect(() => {
 		try {
-			setCameraOnlyPromptDismissed(
-				window.localStorage.getItem(CAMERA_ONLY_PROMPT_DISMISSED_KEY) ===
-					"true",
+			setCameraOnlyChoice(
+				parseCameraOnlyChoice(
+					window.localStorage.getItem(CAMERA_ONLY_PROMPT_DISMISSED_KEY),
+				),
 			);
 		} catch {
 			/* the prompt just keeps showing */
 		}
 	}, []);
-	const rememberCameraOnlyChoice = (dontShowAgain: boolean) => {
+	const rememberCameraOnlyChoice = (
+		dontShowAgain: boolean,
+		choice: CameraOnlyChoice,
+	) => {
 		if (!dontShowAgain) return;
-		setCameraOnlyPromptDismissed(true);
+		setCameraOnlyChoice(choice);
 		try {
-			window.localStorage.setItem(CAMERA_ONLY_PROMPT_DISMISSED_KEY, "true");
+			window.localStorage.setItem(CAMERA_ONLY_PROMPT_DISMISSED_KEY, choice);
 		} catch {
 			/* remembered for this visit only */
 		}
@@ -728,7 +734,7 @@ export const WebRecorderDialog = ({
 			screenShared: sharedScreenRef.current !== null,
 			cameraEnabled,
 			screenSupported,
-			cameraOnlyPromptDismissed,
+			cameraOnlyChoice,
 		});
 		if (choice === "share-then-record") {
 			beginShare(true);
@@ -2318,12 +2324,12 @@ export const WebRecorderDialog = ({
 					onClose={() => setCameraOnlyPrompt(false)}
 					onAddScreen={(dontShowAgain) => {
 						setCameraOnlyPrompt(false);
-						rememberCameraOnlyChoice(dontShowAgain);
+						rememberCameraOnlyChoice(dontShowAgain, "screen");
 						beginShare(true);
 					}}
 					onRecordCameraOnly={(dontShowAgain) => {
 						setCameraOnlyPrompt(false);
-						rememberCameraOnlyChoice(dontShowAgain);
+						rememberCameraOnlyChoice(dontShowAgain, "camera");
 						void recordNow();
 					}}
 				/>
