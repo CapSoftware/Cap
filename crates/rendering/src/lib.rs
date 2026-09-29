@@ -2612,22 +2612,6 @@ impl MotionBounds {
             ((point.y - self.start.coord.y) / size.y.max(f64::EPSILON)) as f32,
         )
     }
-
-    fn top_left(&self) -> XY<f64> {
-        self.start.coord
-    }
-
-    fn top_right(&self) -> XY<f64> {
-        XY::new(self.end.coord.x, self.start.coord.y)
-    }
-
-    fn bottom_left(&self) -> XY<f64> {
-        XY::new(self.start.coord.x, self.end.coord.y)
-    }
-
-    fn bottom_right(&self) -> XY<f64> {
-        self.end.coord
-    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -2718,35 +2702,36 @@ fn analyze_motion(current: &MotionBounds, previous: &MotionBounds) -> MotionAnal
     analysis
 }
 
+/// The point that stays still while the bounds scale, solved per axis.
+/// Intersecting the corner paths instead breaks down when the zoom target is on
+/// the frame's diagonal (the center included): the paths are collinear and
+/// rounding picks a different point each frame.
 fn zoom_vanishing_point(current: &MotionBounds, previous: &MotionBounds) -> Option<XY<f64>> {
-    line_intersection(
-        previous.top_left(),
-        current.top_left(),
-        previous.bottom_right(),
-        current.bottom_right(),
-    )
-    .or_else(|| {
-        line_intersection(
-            previous.top_right(),
-            current.top_right(),
-            previous.bottom_left(),
-            current.bottom_left(),
-        )
-    })
-}
-
-fn line_intersection(a1: XY<f64>, a2: XY<f64>, b1: XY<f64>, b2: XY<f64>) -> Option<XY<f64>> {
-    let denom = (a1.x - a2.x) * (b1.y - b2.y) - (a1.y - a2.y) * (b1.x - b2.x);
-    if denom.abs() <= f64::EPSILON {
+    let fixed = |current_start: f64, current_end: f64, previous_start: f64, previous_end: f64| {
+        let shrink = (previous_end - previous_start) - (current_end - current_start);
+        (shrink.abs() > ZOOM_FIXED_POINT_MIN_DELTA_PX)
+            .then(|| (current_start * previous_end - current_end * previous_start) / shrink)
+    };
+    let x = fixed(
+        current.start.coord.x,
+        current.end.coord.x,
+        previous.start.coord.x,
+        previous.end.coord.x,
+    );
+    let y = fixed(
+        current.start.coord.y,
+        current.end.coord.y,
+        previous.start.coord.y,
+        previous.end.coord.y,
+    );
+    if x.is_none() && y.is_none() {
         return None;
     }
-
-    let a_det = a1.x * a2.y - a1.y * a2.x;
-    let b_det = b1.x * b2.y - b1.y * b2.x;
-    let x = (a_det * (b1.x - b2.x) - (a1.x - a2.x) * b_det) / denom;
-    let y = (a_det * (b1.y - b2.y) - (a1.y - a2.y) * b_det) / denom;
-    Some(XY::new(x, y))
+    let center = previous.center();
+    Some(XY::new(x.unwrap_or(center.x), y.unwrap_or(center.y)))
 }
+
+const ZOOM_FIXED_POINT_MIN_DELTA_PX: f64 = 1e-6;
 
 fn clamp_vector(vec: XY<f32>, max_len: f32) -> XY<f32> {
     let len = (vec.x * vec.x + vec.y * vec.y).sqrt();
@@ -5389,6 +5374,50 @@ mod tests {
         let blur =
             ProjectUniforms::compute_display_motion_blur(current, previous, true, 1.0, 0.0, 1.0);
         assert_eq!(blur.descriptor.mode, MotionBlurMode::Movement);
+    }
+
+    #[test]
+    fn display_zoom_blur_centers_on_the_zoom_target() {
+        let frame = XY::new(1920.0, 1080.0);
+        let zoomed = |target: XY<f64>, scale: f64| {
+            let point = XY::new(target.x * frame.x, target.y * frame.y);
+            motion_bounds(
+                XY::new(point.x * (1.0 - scale), point.y * (1.0 - scale)),
+                XY::new(
+                    point.x + (frame.x - point.x) * scale,
+                    point.y + (frame.y - point.y) * scale,
+                ),
+            )
+        };
+
+        for target in [
+            XY::new(0.5, 0.5),
+            XY::new(0.3, 0.3),
+            XY::new(0.8, 0.2),
+            XY::new(0.25, 0.7),
+        ] {
+            for step in 0..40 {
+                let scale = 1.0 + step as f64 * 0.025;
+                let blur = ProjectUniforms::compute_display_motion_blur(
+                    zoomed(target, scale + 0.025),
+                    zoomed(target, scale),
+                    true,
+                    1.0,
+                    0.0,
+                    1.0,
+                );
+                assert_eq!(blur.descriptor.mode, MotionBlurMode::Zoom);
+                let [x, y] = blur.descriptor.zoom_center_uv;
+                assert!(
+                    (x as f64 - target.x).abs() < 1e-4,
+                    "{target:?} {scale}: x {x}"
+                );
+                assert!(
+                    (y as f64 - target.y).abs() < 1e-4,
+                    "{target:?} {scale}: y {y}"
+                );
+            }
+        }
     }
 
     #[test]
