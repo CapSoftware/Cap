@@ -729,7 +729,6 @@ test("a failed recording start shows the error on the recorded tab", async () =>
 		expect(startResponse.ok).toBe(false);
 		expect(startResponse.canceled).toBeFalsy();
 
-		// The status should be a visible error, not a silent reset to idle.
 		const statusResponse = (await sendServiceWorkerMessage(messengerPage, {
 			target: "service-worker",
 			type: "get-recording-status",
