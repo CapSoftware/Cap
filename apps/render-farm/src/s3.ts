@@ -349,6 +349,17 @@ export class S3 {
 		return new Uint8Array(await response.arrayBuffer());
 	}
 
+	/** `getRange` plus the ETag, which S3 reports for the whole object. */
+	async getRangeTagged(key: string, start: number, endInclusive: number) {
+		const response = await this.send("GET", key, {
+			headers: { range: `bytes=${start}-${endInclusive}` },
+		});
+		return {
+			bytes: new Uint8Array(await response.arrayBuffer()),
+			etag: response.headers.get("etag"),
+		};
+	}
+
 	async getStream(key: string, start?: number, endInclusive?: number) {
 		const response = await this.send("GET", key, {
 			headers:
