@@ -52,6 +52,8 @@ import { useEditorShortcuts } from "./useEditorShortcuts";
 import { formatTime } from "./utils";
 import { WaveformOverlay } from "./waveform-overlay";
 
+const READOUT_INTERVAL_MS = 100;
+
 export function PlayerContent(props: { compactness?: number }) {
 	const {
 		previewStyle,
@@ -199,6 +201,21 @@ export function PlayerContent(props: { compactness?: number }) {
 		const total = totalDuration();
 		return total > 0 && total - editorState.playbackTime <= 0.1;
 	});
+
+	// While playing, the readout's frame digits change faster than they can be
+	// read, and each change costs the page a layout; it keeps up at 10 Hz.
+	let readoutAt = 0;
+	const readoutSeconds = createMemo((shown: number) => {
+		const seconds = Math.max(
+			editorState.previewTime ?? editorState.playbackTime,
+			0,
+		);
+		if (!editorState.playing) return seconds;
+		const now = performance.now();
+		if (now - readoutAt < READOUT_INTERVAL_MS) return shown;
+		readoutAt = now;
+		return seconds;
+	}, 0);
 
 	const cropDialogHandler = async () => {
 		const background = selectedStyle()
@@ -456,13 +473,7 @@ export function PlayerContent(props: { compactness?: number }) {
 				style={{ height: `${48 - 4 * (props.compactness ?? 0)}px` }}
 			>
 				<div class="flex flex-1 items-center min-w-fit whitespace-nowrap">
-					<Time
-						class="font-medium text-ed-text-1"
-						seconds={Math.max(
-							editorState.previewTime ?? editorState.playbackTime,
-							0,
-						)}
-					/>
+					<Time class="font-medium text-ed-text-1" seconds={readoutSeconds()} />
 					<span class="text-[13px] tabular-nums text-ed-text-3"> / </span>
 					<Time seconds={totalDuration()} />
 				</div>
