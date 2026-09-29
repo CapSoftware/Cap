@@ -151,6 +151,17 @@ export function Subfield(
 	);
 }
 
+const SLIDER_KEYS = new Set([
+	"ArrowLeft",
+	"ArrowRight",
+	"ArrowUp",
+	"ArrowDown",
+	"Home",
+	"End",
+	"PageUp",
+	"PageDown",
+]);
+
 export function Slider(
 	_props: ComponentProps<typeof KSlider> & {
 		formatTooltip?: string | ((v: number) => string);
@@ -169,9 +180,6 @@ export function Slider(
 		resumeHistory = null;
 	};
 	onCleanup(endHistoryPause);
-	// Kobalte only reports the end of a keyboard change on blur (and never for
-	// Home/End), which left history paused while a dragged slider kept focus.
-	createEventListener(window, "keyup", endHistoryPause);
 
 	const [thumbRef, setThumbRef] = createSignal<HTMLDivElement>();
 
@@ -192,6 +200,11 @@ export function Slider(
 	});
 
 	const [dragging, setDragging] = createSignal(false);
+	// Kobalte only reports the end of a keyboard change on blur (and never for
+	// Home/End), which left history paused while a dragged slider kept focus.
+	createEventListener(window, "keyup", (e) => {
+		if (!dragging() && SLIDER_KEYS.has(e.key)) endHistoryPause();
+	});
 
 	return (
 		<KSlider
