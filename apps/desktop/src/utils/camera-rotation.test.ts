@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+	CAMERA_MIN_SIZE,
+	CAMERA_TOOLBAR_WIDTH,
 	cameraFrameTransform,
 	cameraPreviewDimensions,
 	cameraRotationSwapsAxes,
+	cameraToolbarScale,
 	getDefaultCameraWindowState,
 	normalizeCameraRotation,
 } from "../components/CameraPreviewChrome";
@@ -38,5 +41,10 @@ describe("camera rotation", () => {
 				rotation: 90,
 			}),
 		).toBe("scaleX(-1) rotate(90deg)");
+	});
+
+	it("fits the toolbar inside the smallest preview", () => {
+		const scale = cameraToolbarScale(CAMERA_MIN_SIZE);
+		expect(CAMERA_TOOLBAR_WIDTH * scale).toBeLessThanOrEqual(CAMERA_MIN_SIZE);
 	});
 });
