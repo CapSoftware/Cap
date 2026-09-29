@@ -238,13 +238,20 @@ export class BrowserAudioPlayback {
 				slot.lastTime = -1;
 				return null;
 			}
-			audio.playbackRate = speed;
-			if ("preservesPitch" in audio) {
-				audio.preservesPitch = mode !== "matchSpeed";
+			// Runs every frame: unchanged values are left alone, since each
+			// write reaches the media element or schedules a gain change.
+			if (audio.playbackRate !== speed) audio.playbackRate = speed;
+			const preservesPitch = mode !== "matchSpeed";
+			if (
+				"preservesPitch" in audio &&
+				audio.preservesPitch !== preservesPitch
+			) {
+				audio.preservesPitch = preservesPitch;
 			}
 			const baseGain = kind === "mic" ? this.micGain : this.systemGain;
-			if (slot.gain) {
-				slot.gain.gain.value = this.muted ? 0 : baseGain * slot.fade;
+			const gain = this.muted ? 0 : baseGain * slot.fade;
+			if (slot.gain && slot.gain.gain.value !== Math.fround(gain)) {
+				slot.gain.gain.value = gain;
 			}
 			if (playing) {
 				if (audio.paused) await audio.play();
