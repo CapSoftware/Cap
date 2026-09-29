@@ -1144,7 +1144,11 @@ export const ShareHeader = ({
 									<p className="truncate text-sm text-gray-12">
 										{data.owner.name}
 									</p>
-									<p className="truncate text-xs text-gray-10">
+									{/* Relative to now, so the server's render can be a unit behind. */}
+									<p
+										className="truncate text-xs text-gray-10"
+										suppressHydrationWarning
+									>
 										{fromNow(data.createdAt)}
 										{views !== undefined && (
 											<Suspense fallback={null}>
