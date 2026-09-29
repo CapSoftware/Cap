@@ -17,6 +17,8 @@ import {
 } from "solid-js";
 import type { FrameLayoutEvent } from "~/utils/tauri";
 import { FPS, useEditorContext } from "./context";
+import { gridVisible, rulersVisible } from "./preview-guides";
+import { guides } from "./ruler-guides";
 import {
 	buildSnapTargets,
 	type NormRect,
@@ -153,6 +155,8 @@ export function useCanvasSnapTargets() {
 		const wantsMargin = exclude === "camera" || exclude === "display";
 		return buildSnapTargets(rects, {
 			margin: layout && wantsMargin ? classicMargin(layout) : undefined,
+			thirds: gridVisible(),
+			guides: rulersVisible() ? guides() : undefined,
 		});
 	};
 }
