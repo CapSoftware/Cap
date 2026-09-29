@@ -44,6 +44,8 @@ import { EditorButton, Slider } from "./ui";
 import { useEditorShortcuts } from "./useEditorShortcuts";
 import { formatTime } from "./utils";
 
+const SHUTTLE_RATES = [0.5, 1, 1.5, 2, 3, 4];
+
 export function PlayerContent(props: { compactness?: number }) {
 	const {
 		previewStyle,
@@ -263,7 +265,64 @@ export function PlayerContent(props: { compactness?: number }) {
 		}
 	});
 
+	const [playbackRate, setPlaybackRate] = createSignal(1);
+
+	const applyPlaybackRate = async (rate: number) => {
+		if (rate === playbackRate()) return;
+		setPlaybackRate(rate);
+		await commands.setPlaybackRate(rate);
+	};
+
+	const shuttle = async (rate: number) => {
+		if (isAtEnd()) return;
+		const pending = requestHandoffPlayback(true);
+		if (pending) {
+			await pending;
+			return;
+		}
+		const time = editorState.previewTime ?? editorState.playbackTime;
+		const frame = Math.max(Math.floor(time * FPS), 0);
+		try {
+			await applyPlaybackRate(rate);
+			if (playbackIntent()) {
+				await commands.stopPlayback();
+				setEditorState("playing", false);
+			}
+			setEditorState("playbackTime", time);
+			await commands.seekTo(frame);
+			await commands.startPlayback(FPS, previewResolutionBase());
+			setEditorState("playing", true);
+			setEditorState("previewTime", null);
+		} catch (error) {
+			console.error("Error changing playback speed:", error);
+			setEditorState("playing", false);
+		}
+	};
+
+	const shuttleFaster = () => {
+		const current = playbackIntent() ? playbackRate() : 0;
+		const next = SHUTTLE_RATES.find((rate) => rate > current && rate >= 1);
+		return shuttle(next ?? SHUTTLE_RATES[SHUTTLE_RATES.length - 1]);
+	};
+
+	const shuttleSlower = () => {
+		const current = playbackIntent() ? playbackRate() : 1;
+		const next = [...SHUTTLE_RATES].reverse().find((rate) => rate < current);
+		return shuttle(next ?? SHUTTLE_RATES[0]);
+	};
+
+	const shuttleStop = async () => {
+		const pending = requestHandoffPlayback(false);
+		if (pending) await pending;
+		else if (playbackIntent()) {
+			await commands.stopPlayback();
+			setEditorState("playing", false);
+		}
+		await applyPlaybackRate(1);
+	};
+
 	const handlePlayPauseClick = async () => {
+		await applyPlaybackRate(1);
 		const pending = requestHandoffPlayback(
 			isAtEnd() || !playbackIntent(),
 			isAtEnd() ? 0 : undefined,
@@ -330,6 +389,13 @@ export function PlayerContent(props: { compactness?: number }) {
 					editorState.timeline.interactMode === "split" ? "seek" : "split",
 				),
 		},
+		{
+			combo: "V",
+			handler: () => setEditorState("timeline", "interactMode", "seek"),
+		},
+		{ combo: "L", handler: shuttleFaster },
+		{ combo: "J", handler: shuttleSlower },
+		{ combo: "K", handler: shuttleStop },
 		{
 			combo: "Mod+=",
 			handler: () =>
@@ -463,6 +529,11 @@ export function PlayerContent(props: { compactness?: number }) {
 					>
 						<IconCapPrev class="size-3.5" />
 					</button>
+					<Show when={playbackIntent() && playbackRate() !== 1}>
+						<span class="px-1.5 py-0.5 text-[11px] font-medium tabular-nums rounded-md bg-ed-ctl text-ed-text-1">
+							{playbackRate()}×
+						</span>
+					</Show>
 					<Tooltip kbd={["Space"]} content="Play/Pause video">
 						<button
 							type="button"

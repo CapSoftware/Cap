@@ -13,6 +13,7 @@ mod preparing_preview;
 mod segments;
 mod telemetry;
 mod thumbnail;
+mod time_stretch;
 
 pub use audio::{AudioRenderer, AudioSegment, MusicTracks};
 pub use audio_output::{

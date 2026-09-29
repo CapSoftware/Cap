@@ -53,6 +53,9 @@ pub struct PlaySpec {
     pub duration_secs: f64,
     pub start_playhead_secs: f64,
     pub playhead_rx: watch::Receiver<f64>,
+    /// Source seconds consumed per output second (J/K/L shuttle). Non-1x
+    /// rates are time-stretched on f32 devices, keeping the original pitch.
+    pub playback_rate: f64,
 }
 
 enum ControlMsg {
@@ -512,6 +515,11 @@ struct ActiveSource<T: FromSampleBytes> {
     refresh_revision: u64,
     buffer: ActiveSourceBuffer<T>,
     playhead_rx: watch::Receiver<f64>,
+    playback_rate: f64,
+    channels: usize,
+    sample_rate: u32,
+    rate_scratch: Vec<T>,
+    stretch: Option<crate::time_stretch::TimeStretch>,
     ack: Option<SourceAcknowledgement>,
     preparing_request: Option<Arc<PreparingAudioRequest>>,
     #[cfg(not(target_os = "windows"))]
@@ -782,16 +790,39 @@ fn render_source_block<T: FromSampleBytes + cpal::FromSample<f32>>(
     }
     match &mut source.buffer {
         ActiveSourceBuffer::Ordinary(audio) => {
+            let rate = source.playback_rate;
+            // Audio the stretcher already pulled from the buffer but has not
+            // played yet sits between the buffer's read position and the ear.
+            let pending_secs = source.stretch.as_ref().map_or(0.0, |stretch| {
+                stretch.pending_source_secs(source.sample_rate)
+            });
+            let source_latency_secs = latency_secs * rate;
             if source.playhead_rx.has_changed().unwrap_or(false) {
                 let video_playhead = *source.playhead_rx.borrow_and_update();
-                let audible_playhead = audio.current_audible_playhead(latency_secs);
+                let audible_playhead =
+                    audio.current_audible_playhead(source_latency_secs + pending_secs);
                 let drift = (video_playhead - audible_playhead).abs();
 
-                if drift > 0.04 {
-                    audio.set_playhead(video_playhead + latency_secs);
+                if drift > 0.04 * rate.max(1.0) {
+                    audio.set_playhead(video_playhead + source_latency_secs);
+                    if let Some(stretch) = &mut source.stretch {
+                        stretch.reset();
+                    }
                 }
             }
-            audio.fill(buffer);
+            if (rate - 1.0).abs() < 1e-3 {
+                audio.fill(buffer);
+            } else if let Some(stretch) = &mut source.stretch {
+                fill_stretched(audio, buffer, stretch, &mut source.rate_scratch);
+            } else {
+                fill_at_rate(
+                    audio,
+                    buffer,
+                    rate,
+                    source.channels,
+                    &mut source.rate_scratch,
+                );
+            }
         }
         ActiveSourceBuffer::Preparing(audio) => {
             if audio.fill(buffer, latency_secs) == 0 {
@@ -819,6 +850,62 @@ fn render_source_block<T: FromSampleBytes + cpal::FromSample<f32>>(
     }
 }
 
+/// Pitch-preserving shuttle audio via WSOLA. Only built for f32 streams (what
+/// macOS output devices use); other formats fall back to `fill_at_rate`.
+fn fill_stretched<T: FromSampleBytes + cpal::FromSample<f32>>(
+    audio: &mut crate::audio::PrerenderedAudioBuffer<T>,
+    buffer: &mut [T],
+    stretch: &mut crate::time_stretch::TimeStretch,
+    scratch: &mut Vec<T>,
+) {
+    while stretch.ready_samples() < buffer.len() {
+        let shortfall = stretch.input_shortfall();
+        if shortfall > 0 {
+            scratch.resize((shortfall + 1024) * stretch.channels(), T::EQUILIBRIUM);
+            audio.fill(scratch);
+            let Some(samples) = (scratch as &mut dyn std::any::Any).downcast_mut::<Vec<f32>>()
+            else {
+                buffer.fill(T::EQUILIBRIUM);
+                return;
+            };
+            stretch.push_input(samples);
+        }
+        stretch.hop();
+    }
+    for slot in buffer.iter_mut() {
+        *slot = <T as cpal::Sample>::from_sample(stretch.pop_ready().unwrap_or(0.0));
+    }
+}
+
+/// Reads `rate` times as many source frames as the block holds and keeps
+/// the nearest one per output frame. Crude (no filtering or pitch
+/// correction) but cheap enough for the audio callback, and it only runs
+/// while shuttling.
+fn fill_at_rate<T: FromSampleBytes + cpal::FromSample<f32>>(
+    audio: &mut crate::audio::PrerenderedAudioBuffer<T>,
+    buffer: &mut [T],
+    rate: f64,
+    channels: usize,
+    scratch: &mut Vec<T>,
+) {
+    let channels = channels.max(1);
+    let out_frames = buffer.len() / channels;
+    if out_frames == 0 {
+        buffer.fill(T::EQUILIBRIUM);
+        return;
+    }
+    let in_frames = ((out_frames as f64) * rate).round().max(1.0) as usize;
+    scratch.resize(in_frames * channels, T::EQUILIBRIUM);
+    audio.fill(scratch);
+    for frame in 0..out_frames {
+        let source_frame = ((frame as f64 * rate) as usize).min(in_frames - 1);
+        let out = frame * channels;
+        let src = source_frame * channels;
+        buffer[out..out + channels].copy_from_slice(&scratch[src..src + channels]);
+    }
+    buffer[out_frames * channels..].fill(T::EQUILIBRIUM);
+}
+
 /// Builds the per-playback source from a play spec and hands it to the
 /// output via `install_tx`. `use_device_latency_hint` is false for the
 /// headless sink, which models a zero-latency device.
@@ -844,7 +931,9 @@ fn install_source<T: FromSampleBytes + cpal::FromSample<f32>>(
         duration_secs,
         start_playhead_secs,
         playhead_rx,
+        playback_rate,
     } = *spec;
+    let output_channels = output_info.channels;
 
     if !(duration_secs.is_finite() && duration_secs > 0.0) {
         return Err(format!(
@@ -930,6 +1019,19 @@ fn install_source<T: FromSampleBytes + cpal::FromSample<f32>>(
         refresh_revision,
         buffer: ActiveSourceBuffer::Ordinary(buffer),
         playhead_rx,
+        playback_rate: if playback_rate.is_finite() && playback_rate > 0.0 {
+            playback_rate
+        } else {
+            1.0
+        },
+        channels: output_channels,
+        sample_rate: output_info.sample_rate,
+        rate_scratch: Vec::new(),
+        stretch: (std::any::TypeId::of::<T>() == std::any::TypeId::of::<f32>()
+            && playback_rate.is_finite()
+            && playback_rate > 0.0
+            && (playback_rate - 1.0).abs() >= 1e-3)
+            .then(|| crate::time_stretch::TimeStretch::new(output_channels, playback_rate)),
         ack: Some(ack),
         preparing_request,
         #[cfg(not(target_os = "windows"))]
@@ -994,6 +1096,11 @@ fn install_progressive_source<T: FromSampleBytes + cpal::FromSample<f32>>(
             refresh_revision: 0,
             buffer: ActiveSourceBuffer::Preparing(buffer),
             playhead_rx,
+            playback_rate: 1.0,
+            channels: 1,
+            sample_rate: 48_000,
+            rate_scratch: Vec::new(),
+            stretch: None,
             ack: Some(SourceAcknowledgement::Preparing(request.clone())),
             preparing_request: Some(request.clone()),
             #[cfg(not(target_os = "windows"))]
@@ -1371,6 +1478,7 @@ mod tests {
                 duration_secs: 2.0,
                 start_playhead_secs: 0.0,
                 playhead_rx,
+                playback_rate: 1.0,
             }),
             0,
             SourceAcknowledgement::Ordinary(ack_tx),
