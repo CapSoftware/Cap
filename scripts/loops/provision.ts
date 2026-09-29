@@ -8,6 +8,7 @@ import { normalizeLmx } from "../emails/content";
 import { LoopsApi, LoopsApiError } from "./api";
 import {
 	audienceFilter,
+	campaignFilter,
 	campaignTemplates,
 	components,
 	condition,
@@ -494,6 +495,7 @@ try {
 					name: template.name,
 					mailingListId: listId,
 					audienceSegmentId: segmentId,
+					audienceFilter: campaignFilter(template.campaignConditions),
 				});
 		const current = await api.request<{ status: string }>(
 			`campaigns/${campaign.id}`,
@@ -504,6 +506,7 @@ try {
 			await api.request(`campaigns/${campaign.id}`, "POST", {
 				mailingListId: listId,
 				audienceSegmentId: segmentId,
+				audienceFilter: campaignFilter(template.campaignConditions),
 			});
 		receipt.resources[template.key] = campaign.id;
 		await save();

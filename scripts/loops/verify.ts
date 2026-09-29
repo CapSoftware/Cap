@@ -12,6 +12,7 @@ import { assertEmailContent, normalizeLmx } from "../emails/content";
 import { LoopsApi, LoopsApiError } from "./api";
 import {
 	audienceFilter,
+	campaignFilter,
 	campaignTemplates,
 	condition,
 	journeys,
@@ -273,6 +274,7 @@ for (const template of selectedCampaigns) {
 		status: string;
 		mailingListId: string;
 		audienceSegmentId: string;
+		audienceFilter: unknown;
 		emailMessageId: string;
 	}>(`campaigns/${receipt.resources[template.key]}`);
 	assert.equal(campaign.status, "Draft");
@@ -280,6 +282,10 @@ for (const template of selectedCampaigns) {
 	assert.equal(
 		campaign.audienceSegmentId,
 		receipt.resources[`segment:${template.key}`],
+	);
+	assert.deepEqual(
+		campaign.audienceFilter,
+		campaignFilter(template.campaignConditions),
 	);
 	const segment = await api.request<{ filter: unknown }>(
 		`audience-segments/${campaign.audienceSegmentId}`,

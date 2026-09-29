@@ -28,4 +28,5 @@ export type Campaign = EmailDefinition & {
 	audience: Audience;
 	promotional: boolean;
 	audienceConditions?: Condition[];
+	campaignConditions?: Condition[];
 };

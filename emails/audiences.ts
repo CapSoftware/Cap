@@ -31,7 +31,7 @@ export const contactProperties = {
 export type Condition = {
 	type: "property";
 	key: string;
-	operator: "equals" | "isTrue" | "isFalse";
+	operator: "equals" | "isTrue" | "isFalse" | "before";
 	value?: string;
 };
 
@@ -39,6 +39,16 @@ export const condition = (key: string, value: string | boolean): Condition =>
 	typeof value === "boolean"
 		? { type: "property", key, operator: value ? "isTrue" : "isFalse" }
 		: { type: "property", key, operator: "equals", value };
+
+export const signedUpBefore = (date: string): Condition => ({
+	type: "property",
+	key: "capSignupAt",
+	operator: "before",
+	value: date,
+});
+
+export const campaignFilter = (conditions: Condition[] = []) =>
+	conditions.length ? { match: "all" as const, conditions } : null;
 
 export const audienceFilter = (
 	audience: string,

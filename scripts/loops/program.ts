@@ -1,5 +1,6 @@
 export {
 	audienceFilter,
+	campaignFilter,
 	campaignTemplates,
 	components,
 	condition,
