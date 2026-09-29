@@ -426,8 +426,9 @@ const mp4Metas = new Map<string, Mp4Meta>();
 const MP4_META_CACHE_ENTRIES = 16;
 // A manifest can list thousands of videos; their index reads share this many
 // slots across every job so one can't flood storage or the coordinator.
-const INDEX_READ_CONCURRENCY = Number(
-	process.env.RF_INDEX_READ_CONCURRENCY ?? 16,
+const INDEX_READ_CONCURRENCY = Math.max(
+	1,
+	Math.floor(Number(process.env.RF_INDEX_READ_CONCURRENCY)) || 16,
 );
 let indexReadsActive = 0;
 const indexReadQueue: (() => void)[] = [];
