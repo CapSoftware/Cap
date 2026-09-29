@@ -280,8 +280,11 @@ export function CanvasElementsOverlay(props: { size: Size }) {
 	// The rendered display rect is zoom-transformed while a zoom segment is
 	// active, but drags write base-layout config — lock it to avoid a
 	// mismatched pointer feel. Camera placement is not zoom-transformed.
+	const fillFrameActive = () =>
+		!!project.aspectRatio && (project.background.fillFrame ?? false);
 	const displayDraggable = () =>
 		!zoomActive() &&
+		!fillFrameActive() &&
 		(!selectedStyle() || selectedStyle()?.overrides.background != null);
 	const cameraDraggable = () =>
 		!selectedStyle() || selectedStyle()?.overrides.camera != null;
@@ -523,11 +526,16 @@ export function CanvasElementsOverlay(props: { size: Size }) {
 				const newSize = clamp(
 					(((minDim0 * scale - camPad) / minAxis) * 100) as number,
 					20,
-					80,
+					100,
 				);
 				setProject("camera", "size", newSize);
 
-				const applied = ((newSize / 100) * minAxis + camPad) / minDim0;
+				const requested = ((newSize / 100) * minAxis + camPad) / minDim0;
+				const applied = Math.min(
+					requested,
+					1 / Math.max(state.rect.w, 1e-6),
+					1 / Math.max(state.rect.h, 1e-6),
+				);
 				const w = state.rect.w * applied;
 				const h = state.rect.h * applied;
 				const x = clamp(
@@ -705,11 +713,19 @@ export function CanvasElementsOverlay(props: { size: Size }) {
 										}
 									: displayDraggable()
 										? null
-										: {
-												message: "Screen is locked while a zoom is active",
-												actionLabel: "Edit zoom",
-												onAction: selectActiveZoom,
-											}
+										: fillFrameActive()
+											? {
+													message:
+														"Fill Frame positions the screen: set Follow Cursor or Screen Position in Background",
+													actionLabel: "Turn off Fill Frame",
+													onAction: () =>
+														setProject("background", "fillFrame", false),
+												}
+											: {
+													message: "Screen is locked while a zoom is active",
+													actionLabel: "Edit zoom",
+													onAction: selectActiveZoom,
+												}
 							}
 							onMouseDown={(e) => {
 								if (e.button !== 0) return;

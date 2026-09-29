@@ -369,6 +369,16 @@ pub struct BackgroundConfiguration {
     /// from `frame`: the decorative MacBook style is a mockup, this restores
     /// something the capture really did hide, and the two are independent.
     pub notch: Option<NotchConfiguration>,
+    /// With a fixed aspect ratio, scale the recording to cover the whole
+    /// output instead of fitting inside it, panning to the zoom focus (or the
+    /// smoothed cursor when no zoom is active).
+    pub fill_frame: bool,
+    /// Fill-frame pan source when no zoom is active: the smoothed cursor, or
+    /// the fixed `fill_frame_position`.
+    pub fill_frame_follow_cursor: bool,
+    /// Normalized point of the recording kept centered in the output while
+    /// fill frame is not following the cursor.
+    pub fill_frame_position: XY<f64>,
 }
 
 impl Default for BorderConfiguration {
@@ -398,6 +408,9 @@ impl Default for BackgroundConfiguration {
             border: None, // Border is disabled by default for backwards compatibility
             frame: None,  // No decorative frame by default
             notch: None,
+            fill_frame: false,
+            fill_frame_follow_cursor: true,
+            fill_frame_position: XY::new(0.5, 0.5),
         }
     }
 }
@@ -4459,6 +4472,14 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(segment.background_color.as_deref(), Some("#102030"));
+    }
+
+    #[test]
+    fn fill_frame_follows_cursor_unless_saved_otherwise() {
+        let legacy: BackgroundConfiguration =
+            serde_json::from_str(r#"{ "fillFrame": true }"#).unwrap();
+        assert!(legacy.fill_frame_follow_cursor);
+        assert_eq!(legacy.fill_frame_position, XY::new(0.5, 0.5));
     }
 
     #[test]
