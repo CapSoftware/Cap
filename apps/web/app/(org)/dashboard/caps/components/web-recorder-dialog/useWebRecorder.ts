@@ -1069,7 +1069,11 @@ export const useWebRecorder = ({
 			blob = await stopRecordingInternal(cleanupStreams, clearTimer);
 		} finally {
 			await spoolFallbackRef.current;
-			await recordingSpoolRef.current?.flush();
+			// A failed spool write moves the backup to memory rather than failing
+			// the take; the upload still checks the recovered size against what
+			// was recorded.
+			await recordingSpoolRef.current?.flush().catch(() => {});
+			await spoolFallbackRef.current;
 		}
 		return getRecoveryBlob() ?? blob;
 	}, [stopRecordingInternal, cleanupStreams, clearTimer, getRecoveryBlob]);
