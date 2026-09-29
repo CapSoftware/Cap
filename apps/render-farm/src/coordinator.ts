@@ -424,6 +424,26 @@ type Mp4Meta = {
 // source index never hits; the parsed moov of an unchanged source file can.
 const mp4Metas = new Map<string, Mp4Meta>();
 const MP4_META_CACHE_ENTRIES = 16;
+// A manifest can list thousands of videos; their index reads share this many
+// slots across every job so one can't flood storage or the coordinator.
+const INDEX_READ_CONCURRENCY = Number(
+	process.env.RF_INDEX_READ_CONCURRENCY ?? 16,
+);
+let indexReadsActive = 0;
+const indexReadQueue: (() => void)[] = [];
+
+async function withIndexRead<T>(run: () => Promise<T>): Promise<T> {
+	if (indexReadsActive < INDEX_READ_CONCURRENCY) indexReadsActive++;
+	else await new Promise<void>((resolve) => indexReadQueue.push(resolve));
+	try {
+		return await run();
+	} finally {
+		const next = indexReadQueue.shift();
+		if (next) next();
+		else indexReadsActive--;
+	}
+}
+
 async function mp4MetaRanges(key: string, size: number): Promise<Mp4Meta> {
 	const headEnd = Math.min(size, 128 * 1024);
 	const { bytes: head, etag } = await s3.getRangeTagged(key, 0, headEnd - 1);
@@ -629,7 +649,9 @@ async function sourceIndex(
 		...manifest.files
 			.filter((file) => file.path.endsWith(".mp4"))
 			.map(async (file) => {
-				const meta = await mp4MetaRanges(keyOf(file), file.size);
+				const meta = await withIndexRead(() =>
+					mp4MetaRanges(keyOf(file), file.size),
+				);
 				mediaMeta.set(file.path, {
 					...meta,
 					size: file.size,
