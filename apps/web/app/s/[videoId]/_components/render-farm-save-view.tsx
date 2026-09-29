@@ -14,6 +14,8 @@ import { useThumnailQuery } from "@/components/VideoThumbnail";
 import { scheduleReadyRefresh } from "./deferred-ready-refresh";
 import { renderProgressLabel, useRenderSaveStatus } from "./render-save-status";
 
+const FINISHING_TIMEOUT_MS = 15_000;
+
 function RenderPreviewPlayer({
 	src,
 	videoRef,
@@ -112,6 +114,13 @@ export function RenderFarmSaveView({
 		const timer = setTimeout(() => setAwaitingStart(false), 30_000);
 		return () => clearTimeout(timer);
 	}, [awaitingStart]);
+	// A render that published swaps this view out on the refresh. One that
+	// ended without publishing leaves it here, and the upload plays instead.
+	useEffect(() => {
+		if (!finishing) return;
+		const timer = setTimeout(() => setFinishing(false), FINISHING_TIMEOUT_MS);
+		return () => clearTimeout(timer);
+	}, [finishing]);
 	const sawRendering = useRef(false);
 
 	// A Save rendered in the owner's browser has no render to stream here: it
