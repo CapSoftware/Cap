@@ -117,6 +117,10 @@ export async function startCursorReconstruction(
 				video.metadata?.cursorReconstruction
 					? runMatches(video.metadata.cursorReconstruction.runId)
 					: sql`JSON_EXTRACT(${videos.metadata}, '$.cursorReconstruction') IS NULL`,
+				sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.editorSources.display.key')) = ${sourceKey}`,
+				source.size === undefined
+					? sql`JSON_EXTRACT(${videos.metadata}, '$.editorSources.display.size') IS NULL`
+					: sql`CAST(JSON_EXTRACT(${videos.metadata}, '$.editorSources.display.size') AS UNSIGNED) = ${source.size}`,
 			),
 		);
 	if (affectedRows(recorded) !== 1) return null;
