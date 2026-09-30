@@ -58,10 +58,11 @@ one S3 multipart upload.
 docker build -f apps/render-farm/Dockerfile -t cap-render-farm .
 ```
 
-Before upgrading from the initial unversioned journal format, stop accepting new
-exports and let the active jobs finish. That format did not durably reserve upload
-ranges, so version 2 refuses to resume those unfinished uploads and aborts them.
-Jobs created with version 2 can resume across subsequent coordinator restarts.
+The journal format is versioned. On restart the coordinator resumes only jobs
+written in its own version and aborts the uploads of any others, so before
+deploying a version that changes it, stop sending exports and let the active
+jobs finish. Version 3 (stashed chunk openings instead of padded parts)
+replaces version 2.
 
 Run workers with the NVIDIA container toolkit (`--gpus all`) and `--init`.
 Give the coordinator a bucket-scoped IAM role (or keys), a shared `RF_TOKEN`,
