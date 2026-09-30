@@ -23,6 +23,8 @@ export function renderStatusPollDelay(
 	return null;
 }
 
+const MAX_UNANSWERED_POLLS = 20;
+
 /**
  * Polls a render while it's running, and with `untilStarted`, while one that
  * is about to start hasn't reported yet.
@@ -39,7 +41,9 @@ export function useRenderSaveStatus(
 		const controller = new AbortController();
 		const startedAt = Date.now();
 		let rendering = false;
+		let failures = 0;
 		const poll = async () => {
+			let answered = false;
 			try {
 				const response = await fetch(
 					`/api/videos/${encodeURIComponent(videoId)}/render-status`,
@@ -47,6 +51,7 @@ export function useRenderSaveStatus(
 				);
 				if (response.ok) {
 					const next = (await response.json()) as RenderSaveStatus;
+					answered = true;
 					setStatus(next);
 					rendering = next.state === "rendering";
 					if (!rendering && !untilStarted) return;
@@ -54,6 +59,10 @@ export function useRenderSaveStatus(
 			} catch {
 				if (controller.signal.aborted) return;
 			}
+			failures = answered ? 0 : failures + 1;
+			// A render last seen running stays watched only while the status
+			// route answers; one that has gone unreachable falls under the cutoff.
+			if (failures >= MAX_UNANSWERED_POLLS) rendering = false;
 			const delay = renderStatusPollDelay(Date.now() - startedAt, rendering);
 			if (delay !== null) timer = setTimeout(poll, delay);
 		};
