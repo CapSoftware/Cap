@@ -402,13 +402,20 @@ async function uploadLayout(
 	let pendingBytes = 0;
 	let nextPart = upload.firstPart;
 	const inflight = new Set<Promise<void>>();
+	let failure: unknown = null;
 	const track = async (promise: Promise<void>) => {
 		inflight.add(promise);
 		// Handle both outcomes here: a bare .finally() re-rejects unhandled and
 		// kills the whole worker (e.g. a hedge loser hitting NoSuchUpload after
-		// the job completed). The failure still surfaces via race/all below.
-		const forget = () => inflight.delete(promise);
-		promise.then(forget, forget);
+		// the job completed). An upload can settle and leave the set before
+		// anything awaits it, so its failure is kept to be thrown below.
+		promise.then(
+			() => inflight.delete(promise),
+			(error) => {
+				failure ??= error;
+				inflight.delete(promise);
+			},
+		);
 		if (inflight.size >= 4) await Promise.race(inflight);
 	};
 	const send = (body: Uint8Array) => {
@@ -470,6 +477,7 @@ async function uploadLayout(
 	if (!stashed) throw new Error("chunk ended before its stash filled");
 	if (pendingBytes > 0) await send(take(pendingBytes));
 	await Promise.all(inflight);
+	if (failure) throw failure;
 	pending = [];
 	if (parts.reduce((sum, part) => sum + part.size, 0) + stashSize !== bytes) {
 		throw new Error("uploaded byte count mismatch");

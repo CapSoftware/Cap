@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { TranscodeTask, WorkItem } from "./protocol";
+import { MIN_PART, type TranscodeTask, type WorkItem } from "./protocol";
 import * as stitch from "./stitch";
 import * as transcode from "./transcode";
 
@@ -13,6 +13,7 @@ function harness(
 		probeStalls?: boolean;
 		/** Each ranged read waits for the next gate, when given. */
 		rangeGates?: Promise<void>[];
+		stashFails?: boolean;
 	} = {},
 ) {
 	const spawned: string[] = [];
@@ -48,6 +49,7 @@ function harness(
 		mediaS3ConfigFromEnv: () => ({}),
 		s3ConfigFromEnv: () => ({}),
 		...stitch,
+		MIN_PART,
 		S3: class {
 			async head() {
 				await options.presignGate;
@@ -60,6 +62,14 @@ function harness(
 			async uploadFile() {
 				uploads++;
 				return 42;
+			}
+			put() {
+				return options.stashFails
+					? Promise.reject(new Error("stash upload failed"))
+					: Promise.resolve();
+			}
+			async uploadPart() {
+				return "etag";
 			}
 		},
 		process: {
@@ -107,7 +117,7 @@ function harness(
 	const compiled = new Bun.Transpiler({ loader: "ts" }).transformSync(source);
 	const worker = new Function(
 		...Object.keys(deps),
-		`${compiled}\nreturn {runTranscode, cancel, busy, progress, transcoders, engineEnv};`,
+		`${compiled}\nreturn {runTranscode, cancel, busy, progress, transcoders, engineEnv, uploadLayout};`,
 	)(...Object.values(deps)) as {
 		runTranscode: (task: TranscodeTask, slot: number) => Promise<number>;
 		cancel: (taskIds: string[]) => void;
@@ -117,6 +127,11 @@ function harness(
 		engineEnv: (
 			env: Record<string, string | undefined>,
 		) => Record<string, string>;
+		uploadLayout: (
+			task: unknown,
+			segments: { bytes: Uint8Array }[],
+			bytes: number,
+		) => Promise<unknown>;
 	};
 	return {
 		...worker,
@@ -225,5 +240,38 @@ describe("engine environment", () => {
 		expect(
 			h.engineEnv({ CAP_DECODER_READAHEAD: "4" }).CAP_DECODER_READAHEAD,
 		).toBe("4");
+	});
+});
+
+describe("chunk upload", () => {
+	const upload = {
+		key: "out/job.mp4",
+		uploadId: "upload",
+		firstPart: 2,
+		partLimit: 3,
+		partTarget: MIN_PART,
+		stashKey: "stash/job/0",
+	};
+	const chunk = new Uint8Array(1024);
+
+	test("a stash that failed before the final wait fails the chunk", async () => {
+		const worker = harness({ stashFails: true });
+		await expect(
+			worker.uploadLayout({ upload }, [{ bytes: chunk }], chunk.byteLength),
+		).rejects.toThrow("stash upload failed");
+	});
+
+	test("a stored stash reports the chunk's bytes", async () => {
+		const worker = harness();
+		expect(
+			await worker.uploadLayout(
+				{ upload },
+				[{ bytes: chunk }],
+				chunk.byteLength,
+			),
+		).toEqual({
+			parts: [],
+			stash: { key: "stash/job/0", bytes: chunk.byteLength },
+		});
 	});
 });
