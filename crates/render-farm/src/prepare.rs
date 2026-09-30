@@ -24,6 +24,10 @@ pub struct PrepareRequest {
     /// the length of a never-edited recording's timeline.
     display_source: String,
     display_content_type: String,
+    /// The recording was never edited, so the project opens with the
+    /// timeline and clip offsets an editor session fills in.
+    #[serde(default)]
+    session_defaults: bool,
 }
 
 fn written_files(root: &Path, dir: &Path, files: &mut Vec<Value>) -> Result<()> {
@@ -60,20 +64,24 @@ pub fn prepare(request: PrepareRequest) -> Result<Value> {
         .map_err(|error| anyhow!("input events: {error}"))?;
     write_web_project(&request.project, request.sources, input.as_ref())
         .map_err(|error| anyhow!("prepare: {error}"))?;
-    fill_session_defaults(
-        &request.project,
-        &request.display_source,
-        &request.display_content_type,
-    )?;
+    // A saved project is rendered as saved: the web app re-applies it to the
+    // worker session, overwriting what opening the session filled in.
+    if request.session_defaults {
+        fill_session_defaults(
+            &request.project,
+            &request.display_source,
+            &request.display_content_type,
+        )?;
+    }
     let mut files = Vec::new();
     written_files(&request.project, &request.project, &mut files)?;
     files.sort_by(|a, b| a["path"].as_str().cmp(&b["path"].as_str()));
     Ok(json!({ "files": files }))
 }
 
-/// What an editor session adds when it opens a project: a timeline covering
-/// the display video as recorded, and the clips' audio offsets. The worker's
-/// render config carries both, so the farm's must too.
+/// What an editor session adds when it opens a never-edited project: a
+/// timeline covering the display video as recorded, and the clips' audio
+/// offsets. The worker's render config carries both, so the farm's must too.
 fn fill_session_defaults(
     project: &Path,
     display_source: &str,
@@ -165,6 +173,7 @@ mod tests {
             "input_events": input,
             "display_source": display,
             "display_content_type": content_type,
+            "session_defaults": true,
         }))
         .unwrap()
     }
@@ -214,7 +223,7 @@ mod tests {
     }
 
     #[test]
-    fn a_saved_project_keeps_its_timeline() {
+    fn a_saved_project_is_rendered_as_saved() {
         let dir = std::env::temp_dir().join(format!("rf-prepare-saved-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         let mut saved = default_web_project_config();
@@ -230,10 +239,12 @@ mod tests {
             None,
         );
         request.sources.initial_project_config = Some(saved);
+        request.session_defaults = false;
         prepare(request).unwrap();
         let config = ProjectConfiguration::load(dir.join("project")).unwrap();
         let segment = &config.timeline.unwrap().segments[0];
         assert_eq!((segment.start, segment.end), (1.0, 2.0));
+        assert!(config.clips.is_empty());
         let _ = fs::remove_dir_all(&dir);
     }
 
