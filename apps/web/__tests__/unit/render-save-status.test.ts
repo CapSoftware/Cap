@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { renderStatusPollDelay } from "@/app/s/[videoId]/_components/render-save-status";
+import {
+	renderStatusPollDelay,
+	unansweredPollDelay,
+} from "@/app/s/[videoId]/_components/render-save-status";
 
 describe("render status polling", () => {
 	it("polls quickly while a render normally reports", () => {
@@ -31,5 +34,10 @@ describe("render status polling", () => {
 			elapsed += delay;
 		}
 		expect(requests).toBeLessThan(400);
+	});
+
+	it("checks rarely while the status route keeps failing, then stops", () => {
+		expect(unansweredPollDelay(90 * 60_000)).toBe(60_000);
+		expect(unansweredPollDelay(4 * 60 * 60_000)).toBeNull();
 	});
 });

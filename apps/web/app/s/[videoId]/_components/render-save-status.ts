@@ -26,6 +26,14 @@ export function renderStatusPollDelay(
 const MAX_UNANSWERED_POLLS = 20;
 
 /**
+ * While the status route keeps failing, check rarely instead of either
+ * hammering it or giving up on a render that finishes once it recovers.
+ */
+export function unansweredPollDelay(elapsedMs: number): number | null {
+	return elapsedMs < 4 * 60 * 60_000 ? 60_000 : null;
+}
+
+/**
  * Polls a render while it's running, and with `untilStarted`, while one that
  * is about to start hasn't reported yet.
  */
@@ -60,10 +68,11 @@ export function useRenderSaveStatus(
 				if (controller.signal.aborted) return;
 			}
 			failures = answered ? 0 : failures + 1;
-			// A render last seen running stays watched only while the status
-			// route answers; one that has gone unreachable falls under the cutoff.
-			if (failures >= MAX_UNANSWERED_POLLS) rendering = false;
-			const delay = renderStatusPollDelay(Date.now() - startedAt, rendering);
+			const elapsed = Date.now() - startedAt;
+			const delay =
+				failures >= MAX_UNANSWERED_POLLS
+					? unansweredPollDelay(elapsed)
+					: renderStatusPollDelay(elapsed, rendering);
 			if (delay !== null) timer = setTimeout(poll, delay);
 		};
 		void poll();
