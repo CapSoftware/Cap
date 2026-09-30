@@ -281,6 +281,7 @@ export class BrowserLocalPlayback {
 	private audioOffsets: number[] = [];
 	private configJson: string;
 	private slowFrames = 0;
+	private slowStreakMs = 0;
 	private fastFrames = 0;
 	private pendingSeek: number | null = null;
 	private seeking: Promise<boolean | null> | null = null;
@@ -1045,17 +1046,21 @@ export class BrowserLocalPlayback {
 			this.averageFrameCostMs === 0
 				? cost
 				: this.averageFrameCostMs * 0.85 + cost * 0.15;
-		this.slowFrames =
-			this.averageFrameCostMs > (this.previewScale === 1 ? 21 : 32)
-				? this.slowFrames + 1
-				: 0;
+		const budget = this.previewScale === 1 ? 21 : 32;
+		const slow = this.averageFrameCostMs > budget;
+		this.slowFrames = slow ? this.slowFrames + 1 : 0;
+		this.slowStreakMs = slow ? this.slowStreakMs + cost : 0;
 		this.fastFrames =
-			elapsedMs < 13 &&
-			this.averageFrameCostMs < (this.previewScale === 1 ? 21 : 32)
+			elapsedMs < 13 && this.averageFrameCostMs < budget
 				? this.fastFrames + 1
 				: 0;
 		let nextScale: 1 | 0.75 | 0.5 = this.previewScale;
-		if (this.slowFrames >= 18) {
+		// A software GPU can take a second or more per frame, where 18 frames
+		// would leave the preview stuck at full size for most of a minute.
+		if (
+			this.slowFrames >= 18 ||
+			(this.slowFrames >= 2 && this.slowStreakMs >= 1000)
+		) {
 			nextScale = this.previewScale === 1 ? 0.75 : 0.5;
 		} else if (this.fastFrames >= 180) {
 			nextScale = this.previewScale === 0.5 ? 0.75 : 1;
@@ -1065,6 +1070,7 @@ export class BrowserLocalPlayback {
 		this.averageFrameCostMs = 0;
 		this.lastRenderedAt = 0;
 		this.slowFrames = 0;
+		this.slowStreakMs = 0;
 		this.fastFrames = 0;
 		this.resizeForBase(this.previewBase.width, this.previewBase.height);
 	}
@@ -1128,6 +1134,7 @@ export class BrowserLocalPlayback {
 		this.averageFrameCostMs = 0;
 		this.lastRenderedAt = 0;
 		this.slowFrames = 0;
+		this.slowStreakMs = 0;
 		this.fastFrames = 0;
 		let firstTick = true;
 		const tick = () => {
@@ -1183,6 +1190,7 @@ export class BrowserLocalPlayback {
 			this.averageFrameCostMs = 0;
 			this.lastRenderedAt = 0;
 			this.slowFrames = 0;
+			this.slowStreakMs = 0;
 			this.fastFrames = 0;
 			if (this.previewBase) {
 				this.resizeForBase(this.previewBase.width, this.previewBase.height);

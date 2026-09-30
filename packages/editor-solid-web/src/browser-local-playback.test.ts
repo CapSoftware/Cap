@@ -38,6 +38,73 @@ test("adaptive preview returns to full resolution after a 60 Hz load spike", () 
 	expect(changes).toEqual([0.75, 0.5, 0.75, 1]);
 });
 
+test("adaptive preview steps down within a few frames on a very slow GPU", () => {
+	const playback = Object.create(
+		BrowserLocalPlayback.prototype,
+	) as BrowserLocalPlayback;
+	const changes: number[] = [];
+	Reflect.set(playback, "previewBase", { width: 1248, height: 702 });
+	Reflect.set(playback, "playing", true);
+	Reflect.set(playback, "previewScale", 1);
+	Reflect.set(playback, "averageFrameCostMs", 0);
+	Reflect.set(playback, "lastRenderedAt", 0);
+	Reflect.set(playback, "slowFrames", 0);
+	Reflect.set(playback, "slowStreakMs", 0);
+	Reflect.set(playback, "fastFrames", 0);
+	playback.resizeForBase = () => {
+		changes.push(Number(Reflect.get(playback, "previewScale")));
+		return true;
+	};
+	const sample = Reflect.get(playback, "samplePlaybackFrameCost") as (
+		elapsedMs: number,
+		now: number,
+	) => void;
+	let now = 0;
+	now += 1600;
+	sample.call(playback, 1600, now);
+	expect(changes).toEqual([]);
+	now += 1600;
+	sample.call(playback, 1600, now);
+	expect(changes).toEqual([0.75]);
+	for (let frame = 0; frame < 2; frame++) {
+		now += 900;
+		sample.call(playback, 900, now);
+	}
+	expect(changes).toEqual([0.75, 0.5]);
+});
+
+test("adaptive preview keeps the 18 frame rule for moderately slow frames", () => {
+	const playback = Object.create(
+		BrowserLocalPlayback.prototype,
+	) as BrowserLocalPlayback;
+	const changes: number[] = [];
+	Reflect.set(playback, "previewBase", { width: 1248, height: 702 });
+	Reflect.set(playback, "playing", true);
+	Reflect.set(playback, "previewScale", 1);
+	Reflect.set(playback, "averageFrameCostMs", 0);
+	Reflect.set(playback, "lastRenderedAt", 0);
+	Reflect.set(playback, "slowFrames", 0);
+	Reflect.set(playback, "slowStreakMs", 0);
+	Reflect.set(playback, "fastFrames", 0);
+	playback.resizeForBase = () => {
+		changes.push(Number(Reflect.get(playback, "previewScale")));
+		return true;
+	};
+	const sample = Reflect.get(playback, "samplePlaybackFrameCost") as (
+		elapsedMs: number,
+		now: number,
+	) => void;
+	let now = 0;
+	for (let frame = 0; frame < 17; frame++) {
+		now += 50;
+		sample.call(playback, 50, now);
+	}
+	expect(changes).toEqual([]);
+	now += 50;
+	sample.call(playback, 50, now);
+	expect(changes).toEqual([0.75]);
+});
+
 test("paused seeks draw the frame in flight, then only the latest request", async () => {
 	const playback = Object.create(
 		BrowserLocalPlayback.prototype,
