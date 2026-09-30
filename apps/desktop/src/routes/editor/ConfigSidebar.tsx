@@ -4554,18 +4554,15 @@ function ZoomSegmentConfig(props: {
 										setFailed(false);
 										video.src = path;
 										video.preload = "auto";
-										// Force reload if video fails to load
 										video.load();
 									});
 
 									createEffect(() => {
 										const t = source().sourceTime;
 
-										// Ensure video is ready before seeking
 										if (video.readyState >= 2) {
 											video.currentTime = t;
 										} else {
-											// Wait for video to be ready, then seek
 											const handleCanPlay = () => {
 												video.currentTime = t;
 												video.removeEventListener("canplay", handleCanPlay);

@@ -536,7 +536,6 @@ function Inner(props: {
 	});
 
 	onMount(() => {
-		// The web editor manages clips in the clip strip instead.
 		if (isWebEditor) return;
 		const cancel = scheduleIdleWork(() => setClipsSidebarMounted(true));
 		onCleanup(cancel);
