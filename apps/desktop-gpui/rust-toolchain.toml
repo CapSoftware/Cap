@@ -1,0 +1,6 @@
+# The root repo pins 1.88.0 for the Tauri app; gpui's dependency tree needs
+# newer (smol_str 0.3.6 / cosmic-text 0.19 declare rust-version 1.89). The
+# nearest toolchain file wins, so this only affects apps/desktop-gpui.
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy"]

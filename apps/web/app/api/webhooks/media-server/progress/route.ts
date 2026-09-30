@@ -3,16 +3,32 @@ import { db } from "@cap/database";
 import { videos, videoUploads } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import type { Video } from "@cap/web-domain";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { type NextRequest, NextResponse } from "next/server";
+import { handleAudioLevelPublication } from "@/lib/audio-level-publication";
+import { SourceCommitPendingError } from "@/lib/desktop-recording-jobs";
+import { applyDesktopRecordingProgress } from "@/lib/desktop-recording-publication";
+import { createVerifiedRecordingReceipt } from "@/lib/desktop-recording-upload-status";
+import {
+	type RecordingVerification,
+	recordingVerificationSchema,
+} from "@/lib/desktop-recording-verification";
+import { queueDesktopSegmentsFinalization } from "@/lib/desktop-segments-finalization";
 import { invalidateGoogleDriveStorageQuotaCache } from "@/lib/google-drive-storage-quota";
 import {
 	queueVideoTranscription,
 	shouldQueueTranscriptionAfterMediaComplete,
 } from "@/lib/queue-video-transcription";
 import { isEditSourceKey } from "@/lib/video-edit-processing";
+import { applyEditProgress } from "@/lib/video-edit-progress";
 
 interface ProgressWebhookPayload {
+	manifestSha256?: string;
+	recordingVerification?: {
+		request: RecordingVerification;
+		fullDecode: boolean;
+		objectIdentity?: string;
+	};
 	jobId: string;
 	videoId: string;
 	phase:
@@ -86,7 +102,48 @@ export async function POST(request: NextRequest) {
 			return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 		}
 
-		const payload: ProgressWebhookPayload = await request.json();
+		const body: unknown = await request.json();
+		if (
+			body &&
+			typeof body === "object" &&
+			"kind" in body &&
+			body.kind === "audio-levels"
+		)
+			return NextResponse.json(await handleAudioLevelPublication(body));
+		const payload = body as ProgressWebhookPayload;
+		if (
+			await applyEditProgress(
+				payload,
+				request.nextUrl.searchParams.get("editOperation"),
+				request.nextUrl.searchParams.get("editStartedAt"),
+			)
+		) {
+			return NextResponse.json({ success: true });
+		}
+		const recordingProgress = await applyDesktopRecordingProgress(payload);
+		if (recordingProgress.handled) {
+			if (recordingProgress.published) {
+				try {
+					await queueVideoTranscription(payload.videoId as Video.VideoId);
+				} catch {
+					console.warn(
+						"[media-server-webhook] Transcription queue unavailable",
+						{
+							videoId: payload.videoId,
+						},
+					);
+				}
+			}
+			return NextResponse.json(
+				{
+					success: recordingProgress.status === 200,
+					...(recordingProgress.recordingWorker
+						? { recordingWorker: recordingProgress.recordingWorker }
+						: {}),
+				},
+				{ status: recordingProgress.status ?? 200 },
+			);
+		}
 		const isRetryableWorkflowError =
 			request.nextUrl.searchParams.get("retryable") === "true" &&
 			payload.phase === "error";
@@ -101,6 +158,63 @@ export async function POST(request: NextRequest) {
 		const dbPhase = mapPhaseToDbPhase(payload.phase);
 
 		if (dbPhase === "complete") {
+			const [currentVideo] = await db()
+				.select()
+				.from(videos)
+				.where(eq(videos.id, payload.videoId as Video.VideoId));
+			const [currentUpload] = await db()
+				.select({ rawFileKey: videoUploads.rawFileKey })
+				.from(videoUploads)
+				.where(eq(videoUploads.videoId, payload.videoId as Video.VideoId));
+			const isEditUpload =
+				currentVideo &&
+				isEditSourceKey({
+					ownerId: currentVideo.ownerId,
+					videoId: payload.videoId,
+					rawFileKey: currentUpload?.rawFileKey,
+				});
+			const proof = payload.recordingVerification;
+			if (
+				!isEditUpload &&
+				!recordingProgress.allowLegacyProcessing &&
+				(currentVideo?.source.type === "desktopSegments" ||
+					currentVideo?.source.type === "desktopMP4")
+			) {
+				try {
+					await queueDesktopSegmentsFinalization({
+						videoId: currentVideo.id,
+						userId: currentVideo.ownerId,
+						verification: proof
+							? recordingVerificationSchema.parse(proof.request)
+							: undefined,
+					});
+				} catch (error) {
+					if (!(error instanceof SourceCommitPendingError)) throw error;
+				}
+				return NextResponse.json({
+					success: true,
+					status: "queued-for-verification",
+				});
+			}
+			const receipt = proof
+				? currentVideo && payload.metadata
+					? await createVerifiedRecordingReceipt(
+							currentVideo,
+							recordingVerificationSchema.parse(proof.request),
+							payload.metadata,
+							proof.fullDecode,
+							proof.objectIdentity,
+						)
+					: null
+				: undefined;
+			if (receipt === null) {
+				return NextResponse.json(
+					{
+						error: "Recording completion is missing required verification data",
+					},
+					{ status: 503 },
+				);
+			}
 			if (payload.metadata) {
 				const duration = getValidDuration(payload.metadata.duration);
 				await db()
@@ -114,29 +228,19 @@ export async function POST(request: NextRequest) {
 					.where(eq(videos.id, payload.videoId as Video.VideoId));
 			}
 
-			const [currentVideo] = await db()
-				.select()
-				.from(videos)
-				.where(eq(videos.id, payload.videoId as Video.VideoId));
-			const [currentUpload] = await db()
-				.select({ rawFileKey: videoUploads.rawFileKey })
-				.from(videoUploads)
-				.where(eq(videoUploads.videoId, payload.videoId as Video.VideoId));
-
-			if (currentVideo?.source?.type === "desktopSegments") {
+			if (receipt) {
 				await db()
 					.update(videos)
-					.set({ source: { type: "desktopMP4" as const } })
+					.set({
+						source: { type: "desktopMP4" as const },
+						...(receipt
+							? {
+									metadata: sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.desktopRecordingUpload', JSON_OBJECT('version', ${receipt.version}, 'artifact', JSON_EXTRACT(${JSON.stringify(receipt.artifact)}, '$'), 'fileSize', ${receipt.fileSize}, 'duration', ${receipt.duration}, 'hasAudio', JSON_EXTRACT(${JSON.stringify(receipt.hasAudio)}, '$'), 'fullDecode', JSON_EXTRACT('true', '$'), 'requiredAudioVerified', JSON_EXTRACT(${JSON.stringify(receipt.requiredAudioVerified)}, '$'), 'objectIdentity', ${receipt.objectIdentity}))`,
+								}
+							: {}),
+					})
 					.where(eq(videos.id, payload.videoId as Video.VideoId));
 			}
-
-			const isEditUpload =
-				currentVideo &&
-				isEditSourceKey({
-					ownerId: currentVideo.ownerId,
-					videoId: payload.videoId,
-					rawFileKey: currentUpload?.rawFileKey,
-				});
 
 			if (isEditUpload) {
 				await db()

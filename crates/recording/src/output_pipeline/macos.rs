@@ -1,7 +1,8 @@
 use crate::{
     output_pipeline::{
-        AudioFrame, AudioMuxer, BlockingThreadFinish, HealthSender, Muxer, PipelineHealthEvent,
-        TaskPool, VideoFrame, VideoMuxer, emit_health, wait_for_blocking_thread_finish,
+        AudioFrame, AudioMuxer, BlockingThreadFinish, DiskSpaceMonitor, DiskSpacePollResult,
+        HealthSender, Muxer, PipelineHealthEvent, SharedHealthSender, TaskPool, VideoFrame,
+        VideoMuxer, emit_health, wait_for_blocking_thread_finish,
     },
     sources::screen_capture,
 };
@@ -28,9 +29,7 @@ const DEFAULT_MP4_MUXER_BUFFER_SIZE_INSTANT: usize = 240;
 const DEFAULT_MP4_AUDIO_FINISH_TIMEOUT: Duration = Duration::from_secs(2);
 const DEFAULT_MP4_AUDIO_FINISH_TIMEOUT_INSTANT: Duration = Duration::from_secs(8);
 
-const DISK_SPACE_MIN_START_MB: u64 = 500;
-const DISK_SPACE_CRITICAL_MB: u64 = 200;
-const DISK_SPACE_CHECK_INTERVAL: Duration = Duration::from_secs(10);
+const DISK_SPACE_MIN_START_BYTES: u64 = 500 * 1024 * 1024;
 
 fn boost_encoder_thread_qos() {
     let result = set_current_thread_qos(MacOsQosClass::UserInitiated);
@@ -39,15 +38,29 @@ fn boost_encoder_thread_qos() {
     }
 }
 
-fn get_available_disk_space_mb(path: &std::path::Path) -> Option<u64> {
-    use std::ffi::CString;
-    let c_path = CString::new(path.parent().unwrap_or(path).to_str()?).ok()?;
-    let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
-    let result = unsafe { libc::statvfs(c_path.as_ptr(), &mut stat) };
-    if result != 0 {
-        return None;
+// Refuse to start any AVAssetWriter recording (studio, instant, camera)
+// without headroom: a writer that dies on a failed async write mid-recording
+// loses its moov, so the clean refusal up front is strictly better.
+fn check_disk_space_to_start(output_path: &std::path::Path) -> anyhow::Result<()> {
+    match cap_utils::disk_space::free_bytes_for_path(output_path) {
+        Ok(available) => {
+            info!(
+                available_mb = available / (1024 * 1024),
+                "Disk space check before recording start"
+            );
+            if available < DISK_SPACE_MIN_START_BYTES {
+                return Err(anyhow!(
+                    "Insufficient disk space to start recording: {}MB available, {}MB required",
+                    available / (1024 * 1024),
+                    DISK_SPACE_MIN_START_BYTES / (1024 * 1024)
+                ));
+            }
+        }
+        Err(err) => {
+            debug!(error = %err, "Disk space preflight probe failed; starting anyway");
+        }
     }
-    Some((stat.f_bavail as u64).saturating_mul(stat.f_frsize) / (1024 * 1024))
+    Ok(())
 }
 
 fn get_mp4_muxer_buffer_size(instant_mode: bool) -> usize {
@@ -273,6 +286,7 @@ pub struct AVFoundationMp4Muxer {
     audio_channel_pressure: Option<ChannelPressureTracker>,
     was_paused: bool,
     fatal_error: SharedFatalError,
+    health_tx: SharedHealthSender,
 }
 
 #[derive(Default)]
@@ -297,18 +311,7 @@ impl Muxer for AVFoundationMp4Muxer {
         let video_config =
             video_config.ok_or_else(|| anyhow!("Invariant: No video source provided"))?;
 
-        if config.instant_mode
-            && let Some(available_mb) = get_available_disk_space_mb(&output_path)
-        {
-            info!(available_mb, "Disk space check before recording start");
-            if available_mb < DISK_SPACE_MIN_START_MB {
-                return Err(anyhow!(
-                    "Insufficient disk space to start recording: {}MB available, {}MB required",
-                    available_mb,
-                    DISK_SPACE_MIN_START_MB
-                ));
-            }
-        }
+        check_disk_space_to_start(&output_path)?;
 
         let buffer_size = get_mp4_muxer_buffer_size(config.instant_mode);
         debug!(
@@ -356,6 +359,8 @@ impl Muxer for AVFoundationMp4Muxer {
         let fatal_error = Arc::new(Mutex::new(None));
         let video_fatal_error = fatal_error.clone();
         let disk_check_path = output_path.clone();
+        let health_tx = SharedHealthSender::new();
+        let video_health_tx = health_tx.clone();
         let is_instant = config.instant_mode;
 
         let (channel_pressure, channel_depth) = if is_instant {
@@ -386,7 +391,7 @@ impl Muxer for AVFoundationMp4Muxer {
                 }
 
                 let mut encoder_busy_count = 0u64;
-                let mut last_disk_check = std::time::Instant::now();
+                let mut disk_monitor = DiskSpaceMonitor::new();
 
                 while let Ok(Some(msg)) = video_rx.recv() {
                     if let Some(ref depth) = channel_depth {
@@ -396,17 +401,23 @@ impl Muxer for AVFoundationMp4Muxer {
                         break;
                     }
 
-                    if is_instant && last_disk_check.elapsed() >= DISK_SPACE_CHECK_INTERVAL {
-                        last_disk_check = std::time::Instant::now();
-                        if let Some(available_mb) = get_available_disk_space_mb(&disk_check_path)
-                            && available_mb < DISK_SPACE_CRITICAL_MB
-                        {
-                            let message = format!(
-                                "Disk space critically low ({available_mb}MB), stopping recording to preserve output"
-                            );
-                            set_fatal_error(&video_fatal_error, message.clone());
-                            return Err(anyhow!(message));
-                        }
+                    // All modes, not just instant: if the disk fills, the
+                    // AVAssetWriter dies asynchronously mid-write and the
+                    // non-fragmented output loses its moov (unrecoverable).
+                    // Stopping while the writer is alive lets finish() write
+                    // the moov and preserves the recording up to this point.
+                    // DiskSpaceMonitor carries the platform-wide thresholds
+                    // (warn 200MB / stop 50MB) and emits DiskSpaceLow /
+                    // DiskSpaceExhausted so the user sees the real cause.
+                    if let DiskSpacePollResult::Exhausted { bytes_remaining } =
+                        disk_monitor.poll(&disk_check_path, &video_health_tx)
+                    {
+                        let message = format!(
+                            "Disk space exhausted ({}MB left), stopping recording to preserve output",
+                            bytes_remaining / (1024 * 1024)
+                        );
+                        set_fatal_error(&video_fatal_error, message.clone());
+                        return Err(anyhow!(message));
                     }
 
                     match msg {
@@ -447,7 +458,7 @@ impl Muxer for AVFoundationMp4Muxer {
                                         let total = video_count_thread
                                             .load(std::sync::atomic::Ordering::Relaxed);
                                         let message = format!(
-                                            "Failed to encode video frame: WriterFailed/{err} \
+                                            "Failed to encode video frame: WriterFailed/{err:?} \
                                              (frame #{total}, ts={timestamp:?})"
                                         );
                                         set_fatal_error(&video_fatal_error, message.clone());
@@ -576,7 +587,7 @@ impl Muxer for AVFoundationMp4Muxer {
                                             let total = audio_count_thread
                                                 .load(std::sync::atomic::Ordering::Relaxed);
                                             let message = format!(
-                                                "Failed to encode audio frame: WriterFailed/{err} \
+                                                "Failed to encode audio frame: WriterFailed/{err:?} \
                                                  (frame #{total}, ts={timestamp:?})"
                                             );
                                             set_fatal_error(&audio_fatal_error, message.clone());
@@ -650,6 +661,7 @@ impl Muxer for AVFoundationMp4Muxer {
             audio_channel_pressure,
             was_paused: false,
             fatal_error,
+            health_tx,
         })
     }
 
@@ -667,6 +679,7 @@ impl Muxer for AVFoundationMp4Muxer {
     }
 
     fn set_health_sender(&mut self, tx: HealthSender) {
+        self.health_tx.set(tx.clone());
         self.frame_drops.health_tx = Some(tx);
     }
 
@@ -920,6 +933,7 @@ pub struct AVFoundationCameraMuxer {
     audio_channel_pressure: Option<ChannelPressureTracker>,
     was_paused: bool,
     fatal_error: SharedFatalError,
+    health_tx: SharedHealthSender,
 }
 
 #[derive(Default)]
@@ -942,6 +956,8 @@ impl Muxer for AVFoundationCameraMuxer {
     ) -> anyhow::Result<Self> {
         let video_config =
             video_config.ok_or_else(|| anyhow!("Invariant: No video source provided"))?;
+
+        check_disk_space_to_start(&output_path)?;
 
         let is_instant = config.instant_mode;
         let buffer_size = get_mp4_muxer_buffer_size(is_instant);
@@ -982,6 +998,9 @@ impl Muxer for AVFoundationCameraMuxer {
         let encoder_clone = encoder.clone();
         let fatal_error = Arc::new(Mutex::new(None));
         let video_fatal_error = fatal_error.clone();
+        let disk_check_path = output_path.clone();
+        let health_tx = SharedHealthSender::new();
+        let video_health_tx = health_tx.clone();
 
         let encoder_handle = std::thread::Builder::new()
             .name("mp4-camera-encoder".to_string())
@@ -994,10 +1013,27 @@ impl Muxer for AVFoundationCameraMuxer {
 
                 let mut total_frames = 0u64;
                 let mut encoder_busy_count = 0u64;
+                let mut disk_monitor = DiskSpaceMonitor::new();
 
                 while let Ok(Some(msg)) = video_rx.recv() {
                     if fatal_error_message(&video_fatal_error).is_some() {
                         break;
+                    }
+
+                    // Same rationale as the screen writer above: stop while
+                    // the AVAssetWriter is still alive so the camera file
+                    // keeps its moov instead of dying on a failed async write
+                    // (finish() runs because the thread exits cleanly with an
+                    // error rather than timing out).
+                    if let DiskSpacePollResult::Exhausted { bytes_remaining } =
+                        disk_monitor.poll(&disk_check_path, &video_health_tx)
+                    {
+                        let message = format!(
+                            "Disk space exhausted ({}MB left), stopping camera recording to preserve output",
+                            bytes_remaining / (1024 * 1024)
+                        );
+                        set_fatal_error(&video_fatal_error, message.clone());
+                        return Err(anyhow!(message));
                     }
 
                     match msg {
@@ -1037,7 +1073,7 @@ impl Muxer for AVFoundationCameraMuxer {
                                     }
                                     Err(QueueFrameError::WriterFailed(err)) => {
                                         let message = format!(
-                                            "Failed to encode camera frame: WriterFailed/{err}"
+                                            "Failed to encode camera frame: WriterFailed/{err:?}"
                                         );
                                         set_fatal_error(&video_fatal_error, message.clone());
                                         return Err(anyhow!(message));
@@ -1161,7 +1197,7 @@ impl Muxer for AVFoundationCameraMuxer {
                                         }
                                         Err(QueueFrameError::WriterFailed(err)) => {
                                             let message = format!(
-                                                "Failed to encode camera audio frame: WriterFailed/{err} \
+                                                "Failed to encode camera audio frame: WriterFailed/{err:?} \
                                                  (frame #{total_frames}, ts={timestamp:?})"
                                             );
                                             set_fatal_error(&audio_fatal_error, message.clone());
@@ -1227,6 +1263,7 @@ impl Muxer for AVFoundationCameraMuxer {
             audio_channel_pressure,
             was_paused: false,
             fatal_error,
+            health_tx,
         })
     }
 
@@ -1241,6 +1278,11 @@ impl Muxer for AVFoundationCameraMuxer {
                 trace!("Camera MP4 audio encoder channel already closed during stop: {e}");
             }
         }
+    }
+
+    fn set_health_sender(&mut self, tx: HealthSender) {
+        self.health_tx.set(tx.clone());
+        self.frame_drops.health_tx = Some(tx);
     }
 
     fn finish(&mut self, timestamp: Duration) -> anyhow::Result<anyhow::Result<()>> {
@@ -1258,14 +1300,37 @@ impl Muxer for AVFoundationCameraMuxer {
 
             let mut can_finish_encoder = true;
 
-            if let Some(handle) = state.encoder_handle.take()
-                && let Err(e) =
-                    wait_for_worker(handle, Duration::from_secs(5), "Camera MP4 encoder thread")
-            {
-                warn!("{e:#}");
-                can_finish_encoder = false;
-                if finish_error.is_none() {
-                    finish_error = Some(e);
+            if let Some(handle) = state.encoder_handle.take() {
+                match wait_for_blocking_thread_finish(
+                    handle,
+                    Duration::from_secs(5),
+                    "Camera MP4 encoder thread",
+                ) {
+                    BlockingThreadFinish::Clean => {}
+                    // The thread exited with an error: the encoder mutex is
+                    // free, so fall through to encoder.finish() below. When
+                    // the writer is still alive (disk-exhaustion stop, mutex
+                    // poison) finalizing is what preserves the moov —
+                    // skipping it here used to leave camera.mp4 headerless
+                    // on every encoder thread error. When the writer itself
+                    // died (WriterFailed) finish_writing cannot salvage the
+                    // file, but the attempt is harmless and surfaces the
+                    // writer's NSError.
+                    BlockingThreadFinish::Failed(error) => {
+                        warn!("{error:#}");
+                        if finish_error.is_none() {
+                            finish_error = Some(error);
+                        }
+                    }
+                    // The thread is still alive and may hold the encoder
+                    // mutex; locking it for finish() could block forever.
+                    BlockingThreadFinish::TimedOut(error) => {
+                        warn!("{error:#}");
+                        can_finish_encoder = false;
+                        if finish_error.is_none() {
+                            finish_error = Some(error);
+                        }
+                    }
                 }
             }
 

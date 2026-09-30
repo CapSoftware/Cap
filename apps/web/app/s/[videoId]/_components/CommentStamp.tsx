@@ -30,6 +30,7 @@ const CommentStamp: React.FC<CommentStampsProps> = ({
 	return (
 		<div
 			key={comment.id}
+			data-comment-stamp=""
 			className="absolute z-[50]"
 			style={{
 				left: adjustedPosition,

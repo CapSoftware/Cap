@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Script from "next/script";
 import { AgenciesPage } from "@/components/pages/seo/AgenciesPage";
+import { PRICING } from "@/data/pricing";
 import { ogImageUrl } from "@/lib/og/url";
 
 // Create FAQ structured data for SEO
@@ -23,8 +24,7 @@ const createFaqStructuredData = () => {
 		},
 		{
 			question: "How long can we record on the free version?",
-			answer:
-				"The free version supports recordings up to 5 minutes. For longer client presentations and unlimited recording time, upgrade to Cap Pro at $8.16/month (billed annually).",
+			answer: `The free version supports recordings up to 5 minutes. For longer client presentations and unlimited recording time, upgrade to Cap Pro at $${PRICING.pro.annualPerMonth}/month (billed annually).`,
 		},
 		{
 			question: "Is Cap secure enough for confidential client work?",
@@ -38,8 +38,7 @@ const createFaqStructuredData = () => {
 		},
 		{
 			question: "How does Cap pricing work for agency teams?",
-			answer:
-				"Cap Pro is $8.16/month per user (billed annually) and includes unlimited cloud storage, custom domains, team workspaces, and all collaboration features. Volume discounts are available for teams over 10 users.",
+			answer: `Cap Pro is $${PRICING.pro.annualPerMonth}/month per user (billed annually) and includes unlimited cloud storage, custom domains, team workspaces, and all collaboration features. Volume discounts are available for teams over 10 users.`,
 		},
 	];
 

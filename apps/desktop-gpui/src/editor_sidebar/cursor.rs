@@ -1,0 +1,468 @@
+use cap_cursor_info::{CursorFamily, CursorShape};
+use cap_project::CursorType;
+
+use super::*;
+use crate::editor_tabs::CursorSlider;
+
+const CARD_GAP: f32 = 8.;
+const TILE_HEIGHT: f32 = 60.;
+const TILE_RADIUS: f32 = 10.;
+const ARROW_BOX: f32 = 34.;
+const CIRCLE_DISC: f32 = 28.;
+const CARD_GROUP: &str = "cursor-style-card";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CursorCard {
+    Default,
+    Family(CursorFamily),
+    Circle,
+}
+
+impl CursorCard {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Default => "Default",
+            Self::Family(CursorFamily::MacOS) => "macOS",
+            Self::Family(CursorFamily::MacOSTahoe) => "macOS Tahoe",
+            Self::Family(CursorFamily::Windows) => "Windows",
+            Self::Circle => "Circle",
+        }
+    }
+
+    fn key(self) -> &'static str {
+        match self {
+            Self::Default => "auto",
+            Self::Family(CursorFamily::MacOS) => "macos",
+            Self::Family(CursorFamily::MacOSTahoe) => "tahoe",
+            Self::Family(CursorFamily::Windows) => "windows",
+            Self::Circle => "circle",
+        }
+    }
+
+    fn cursor_type(self) -> CursorType {
+        match self {
+            Self::Default => CursorType::Auto,
+            Self::Family(CursorFamily::MacOS) => CursorType::MacOS,
+            Self::Family(CursorFamily::MacOSTahoe) => CursorType::MacOSTahoe,
+            Self::Family(CursorFamily::Windows) => CursorType::Windows,
+            Self::Circle => CursorType::Circle,
+        }
+    }
+}
+
+fn cursor_cards() -> [CursorCard; 5] {
+    if cfg!(target_os = "windows") {
+        [
+            CursorCard::Default,
+            CursorCard::Family(CursorFamily::Windows),
+            CursorCard::Family(CursorFamily::MacOS),
+            CursorCard::Family(CursorFamily::MacOSTahoe),
+            CursorCard::Circle,
+        ]
+    } else {
+        [
+            CursorCard::Default,
+            CursorCard::Family(CursorFamily::MacOS),
+            CursorCard::Family(CursorFamily::MacOSTahoe),
+            CursorCard::Family(CursorFamily::Windows),
+            CursorCard::Circle,
+        ]
+    }
+}
+
+fn selected_card(cursor_type: &CursorType) -> CursorCard {
+    if *cursor_type == CursorType::Circle {
+        return CursorCard::Circle;
+    }
+    match cursor_type.family() {
+        Some(family) => CursorCard::Family(family),
+        None => CursorCard::Default,
+    }
+}
+
+fn host_cursor_family() -> CursorFamily {
+    if cfg!(target_os = "windows") {
+        CursorFamily::Windows
+    } else {
+        CursorFamily::MacOS
+    }
+}
+
+fn white(alpha: f32) -> Hsla {
+    gpui::hsla(0., 0., 1., alpha)
+}
+
+fn black(alpha: f32) -> Hsla {
+    gpui::hsla(0., 0., 0., alpha)
+}
+
+fn rasterize_cursor(shape: CursorShape, width: u32, height: u32) -> Option<Arc<RenderImage>> {
+    let raw = shape.resolve()?.raw;
+    let tree = resvg::usvg::Tree::from_str(raw, &resvg::usvg::Options::default()).ok()?;
+    let size = tree.size();
+    let scale = (width as f32 / size.width()).min(height as f32 / size.height());
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(width, height)?;
+    let transform = resvg::tiny_skia::Transform::from_translate(
+        (width as f32 - size.width() * scale) / 2.,
+        (height as f32 - size.height() * scale) / 2.,
+    )
+    .pre_scale(scale, scale);
+    resvg::render(&tree, transform, &mut pixmap.as_mut());
+
+    let mut buffer = image::RgbaImage::from_raw(width, height, pixmap.take())?;
+    // tiny-skia hands back premultiplied RGBA and gpui's atlas takes straight
+    // BGRA -- the same conversion `gpui::SvgRenderer::render_single_frame` does
+    // on its own pixmap. Skipping it darkens every antialiased edge.
+    for pixel in buffer.chunks_exact_mut(4) {
+        gpui::swap_rgba_pa_to_bgra(pixel);
+    }
+    Some(Arc::new(RenderImage::new(smallvec::smallvec![
+        image::Frame::new(buffer)
+    ])))
+}
+
+fn circle_art() -> AnyElement {
+    div()
+        .size(px(CIRCLE_DISC))
+        .rounded_full()
+        .bg(white(0.15))
+        .border_1()
+        .border_color(black(0.38))
+        .shadow(vec![gpui::BoxShadow {
+            color: black(0.16),
+            offset: gpui::point(px(0.), px(0.)),
+            blur_radius: px(5.),
+            spread_radius: px(0.),
+            inset: false,
+        }])
+        .child(
+            div()
+                .size_full()
+                .rounded_full()
+                .border_1()
+                .border_color(white(0.42)),
+        )
+        .into_any_element()
+}
+
+impl EditorWindow {
+    pub(crate) fn prepare_cursor_fields(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.sidebar.tab != SidebarTab::Cursor {
+            return;
+        }
+        self.sidebar.cursor_scale = window.scale_factor();
+        self.ensure_hex_input(ColorTarget::CursorRipple, window, cx);
+    }
+
+    fn selected_cursor_card(&self) -> CursorCard {
+        selected_card(self.style_control_project().cursor.cursor_type())
+    }
+
+    fn cursor_preview(&self, shape: CursorShape, size: f32) -> Option<Arc<RenderImage>> {
+        let scale = self.sidebar.cursor_scale.max(1.);
+        let side = (size * scale).round() as u32;
+        let key = (shape, side, side);
+        if let Some(image) = self.sidebar.cursor_previews.borrow().get(&key) {
+            return Some(image.clone());
+        }
+        let image = rasterize_cursor(shape, side, side)?;
+        self.sidebar
+            .cursor_previews
+            .borrow_mut()
+            .insert(key, image.clone());
+        Some(image)
+    }
+
+    fn cursor_art(&self, shape: CursorShape, size: f32) -> AnyElement {
+        div()
+            .size(px(size))
+            .flex()
+            .items_center()
+            .justify_center()
+            .children(
+                self.cursor_preview(shape, size)
+                    .map(|image| img(image).size(px(size))),
+            )
+            .into_any_element()
+    }
+
+    fn render_cursor_tile(&self, card: CursorCard, selected: bool, recorded: bool) -> AnyElement {
+        let theme = self.theme;
+        let art = match card {
+            CursorCard::Default => div()
+                .flex()
+                .items_center()
+                .gap(px(12.))
+                .child(
+                    self.cursor_art(
+                        self.recorded_cursor_family
+                            .unwrap_or(host_cursor_family())
+                            .arrow(),
+                        ARROW_BOX,
+                    ),
+                )
+                .child(div().text_size(px(12.)).child("Default"))
+                .child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(Hsla::from(theme.gray_11))
+                        .child("Recorded cursors"),
+                )
+                .into_any_element(),
+            CursorCard::Family(family) => self.cursor_art(family.arrow(), ARROW_BOX),
+            CursorCard::Circle => circle_art(),
+        };
+
+        div()
+            .id(SharedString::from(format!("cursor-tile-{}", card.key())))
+            .w_full()
+            .h(px(TILE_HEIGHT))
+            .rounded(px(TILE_RADIUS))
+            .flex()
+            .items_center()
+            .justify_center()
+            .map(|this| {
+                if selected {
+                    this.border_2()
+                        .border_color(Hsla::from(theme.blue_8))
+                        .bg(with_alpha(theme.blue_3, 0.4))
+                } else {
+                    this.border_1()
+                        .border_color(Hsla::from(theme.gray_3))
+                        .bg(Hsla::from(theme.gray_2))
+                        .group_hover(CARD_GROUP, |this| {
+                            this.border_color(Hsla::from(theme.gray_5))
+                        })
+                }
+            })
+            .when(recorded, |this| {
+                this.tooltip(move |_window, cx| {
+                    ui::Tooltip::new(&theme, "Recorded with this cursor").view(cx)
+                })
+            })
+            .child(art)
+            .into_any_element()
+    }
+
+    fn render_cursor_card(
+        &self,
+        card: CursorCard,
+        selected: bool,
+        recorded: Option<CursorFamily>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let theme = self.theme;
+        let cursor_type = card.cursor_type();
+        let is_recorded = matches!(card, CursorCard::Family(family) if recorded == Some(family));
+
+        div()
+            .id(SharedString::from(format!("cursor-card-{}", card.key())))
+            .group(CARD_GROUP)
+            .flex_1()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .items_center()
+            .gap(px(6.))
+            .cursor_pointer()
+            .child(self.render_cursor_tile(card, selected, is_recorded))
+            .when(card != CursorCard::Default, |this| {
+                this.child(
+                    div()
+                        .max_w_full()
+                        .whitespace_nowrap()
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .text_size(px(11.))
+                        .line_height(px(11.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(Hsla::from(if selected {
+                            theme.gray_12
+                        } else {
+                            theme.gray_11
+                        }))
+                        .when(!selected, |this| {
+                            this.group_hover(CARD_GROUP, |this| {
+                                this.text_color(Hsla::from(theme.gray_12))
+                            })
+                        })
+                        .child(card.label()),
+                )
+            })
+            .on_click(cx.listener(move |this, _, window, cx| {
+                let cursor_type = cursor_type.clone();
+                this.edit_project("cursor-type", window, cx, move |project| {
+                    if *project.cursor.cursor_type() == cursor_type {
+                        return false;
+                    }
+                    project.cursor.set_cursor_type(cursor_type);
+                    true
+                });
+            }))
+            .into_any_element()
+    }
+
+    pub(crate) fn render_cursor_style_picker(&self, cx: &mut Context<Self>) -> AnyElement {
+        let selected = self.selected_cursor_card();
+        let recorded = self.recorded_cursor_family;
+
+        let description = match selected {
+            CursorCard::Default => "Keeps the cursor shapes and appearance from your recording.",
+            CursorCard::Family(CursorFamily::MacOS) => {
+                "Classic macOS appearance. Custom cursors keep their recorded shape."
+            }
+            CursorCard::Family(CursorFamily::MacOSTahoe) => {
+                "macOS Tahoe appearance. Custom cursors keep their recorded shape."
+            }
+            CursorCard::Family(CursorFamily::Windows) => {
+                "Windows appearance. Custom cursors keep their recorded shape."
+            }
+            CursorCard::Circle => "Replaces all cursor shapes with a circle.",
+        };
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(CARD_GAP))
+            .child(self.render_cursor_card(
+                CursorCard::Default,
+                selected == CursorCard::Default,
+                recorded,
+                cx,
+            ))
+            .child(
+                div().flex().flex_row().gap(px(CARD_GAP)).children(
+                    cursor_cards()
+                        .into_iter()
+                        .filter(|card| *card != CursorCard::Default)
+                        .map(|card| self.render_cursor_card(card, selected == card, recorded, cx)),
+                ),
+            )
+            .child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(Hsla::from(self.theme.gray_11))
+                    .child(description),
+            )
+            .into_any_element()
+    }
+
+    pub(crate) fn render_cursor_ripple(&self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = self.theme;
+        let project = self.style_control_project();
+        let ripple = &project.cursor.ripple;
+        let enabled = ripple.enabled;
+        let color = ripple.color;
+
+        div()
+            .flex()
+            .flex_col()
+            .child(
+                ui::Field::inline(&theme, "Click Ripple").value(
+                    ui::Toggle::plain(&theme, "cursor-ripple", enabled)
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            let next = !this.style_control_project().cursor.ripple.enabled;
+                            this.sidebar.cursor_ripple_open.set_open(next);
+                            this.animate_collapsibles(window, cx);
+                            this.edit_project("cursor-ripple", window, cx, move |project| {
+                                project.cursor.ripple.enabled = next;
+                                true
+                            });
+                        }))
+                        .into_any_element(),
+                ),
+            )
+            .child(collapsible(
+                &self.sidebar.cursor_ripple_open,
+                div()
+                    .flex()
+                    .flex_col()
+                    .pt(px(4.))
+                    .pb(px(8.))
+                    .child(
+                        ui::Subfield::plain(&theme, "Color").child(self.render_rgb_input(
+                            "cursor-ripple-color",
+                            ColorTarget::CursorRipple,
+                            color,
+                            cx,
+                        )),
+                    )
+                    .child(self.slider_field(
+                        "Strength",
+                        SliderKey::Cursor(CursorSlider::RippleStrength),
+                        "%",
+                        cx,
+                    ))
+                    .child(self.slider_field(
+                        "Size",
+                        SliderKey::Cursor(CursorSlider::RippleSize),
+                        "%",
+                        cx,
+                    ))
+                    .child(self.slider_field(
+                        "Duration",
+                        SliderKey::Cursor(CursorSlider::RippleDuration),
+                        "secs",
+                        cx,
+                    ))
+                    .into_any_element(),
+            ))
+            .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cards_offer_default_before_the_host_family() {
+        let cards = cursor_cards();
+        assert_eq!(cards[0], CursorCard::Default);
+        assert_eq!(cards[1], CursorCard::Family(host_cursor_family()));
+        assert_eq!(cards[4], CursorCard::Circle);
+        for family in [
+            CursorFamily::MacOS,
+            CursorFamily::MacOSTahoe,
+            CursorFamily::Windows,
+        ] {
+            assert!(cards.contains(&CursorCard::Family(family)), "{family:?}");
+        }
+    }
+
+    #[test]
+    fn every_card_round_trips_through_its_type() {
+        for card in cursor_cards() {
+            let written = card.cursor_type();
+            assert_eq!(selected_card(&written), card, "{:?}", card.label());
+        }
+    }
+
+    #[test]
+    fn auto_and_legacy_pointer_select_default() {
+        assert_eq!(selected_card(&CursorType::Auto), CursorCard::Default);
+        assert_eq!(selected_card(&CursorType::Pointer), CursorCard::Default);
+    }
+
+    #[test]
+    fn every_arrow_rasterises() {
+        for family in [
+            CursorFamily::MacOS,
+            CursorFamily::MacOSTahoe,
+            CursorFamily::Windows,
+        ] {
+            let shape = family.arrow();
+            for side in [ARROW_BOX as u32, (ARROW_BOX * 2.) as u32] {
+                let image = rasterize_cursor(shape, side, side)
+                    .unwrap_or_else(|| panic!("{shape} at {side}px"));
+                let size = image.size(0);
+                assert_eq!(size.width.0 as u32, side);
+                assert_eq!(size.height.0 as u32, side);
+                let bytes = image.as_bytes(0).expect("one frame");
+                assert!(
+                    bytes.chunks_exact(4).any(|pixel| pixel[3] > 0),
+                    "{shape} rasterised to nothing"
+                );
+            }
+        }
+    }
+}

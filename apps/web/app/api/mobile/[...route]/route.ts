@@ -6,6 +6,7 @@ import { sendEmail } from "@cap/database/emails/config";
 import { OTPEmail } from "@cap/database/emails/otp-email";
 import { nanoId } from "@cap/database/helpers";
 import * as Db from "@cap/database/schema";
+import { getNewVideoPublic } from "@cap/database/video-sharing-default";
 import { serverEnv } from "@cap/env";
 import { userIsPro } from "@cap/utils";
 import {
@@ -17,6 +18,7 @@ import {
 	Videos,
 	VideosRepo,
 } from "@cap/web-backend";
+import { getPublishedRecordingThumbnailKey } from "@cap/web-backend/src/Storage/recording-output";
 import {
 	Comment,
 	CurrentUser,
@@ -63,6 +65,7 @@ import {
 import { createNotification } from "@/lib/Notification";
 import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 import { apiToHandler } from "@/lib/server";
+import { enqueueVideoStorageNameSync } from "@/lib/sync-video-storage-names";
 import { startVideoProcessingWorkflow } from "@/lib/video-processing";
 import { importLoomVideoWorkflow } from "@/workflows/import-loom-video";
 
@@ -388,6 +391,10 @@ const getMobileThumbnailUrl = Effect.fn("Mobile.getThumbnailUrl")(function* (
 
 	const [video] = maybeVideo.value;
 	const [bucket] = yield* storage.getAccessForVideo(video);
+	const publishedThumbnail = getPublishedRecordingThumbnailKey(video);
+	if (publishedThumbnail) {
+		return yield* bucket.getSignedObjectUrl(publishedThumbnail);
+	}
 	const response = yield* bucket.listObjects({
 		prefix: `${video.ownerId}/${video.id}/`,
 	});
@@ -1978,9 +1985,17 @@ const getComments = Effect.fn("Mobile.getComments")(function* (
 			.from(Db.comments)
 			.leftJoin(Db.users, eq(Db.comments.authorId, Db.users.id))
 			.where(
-				commentId
-					? and(eq(Db.comments.videoId, videoId), eq(Db.comments.id, commentId))
-					: eq(Db.comments.videoId, videoId),
+				and(
+					// MobileComment's response schema only decodes text/emoji; a media
+					// comment row here would ParseError the whole response.
+					inArray(Db.comments.type, ["text", "emoji"]),
+					commentId
+						? and(
+								eq(Db.comments.videoId, videoId),
+								eq(Db.comments.id, commentId),
+							)
+						: eq(Db.comments.videoId, videoId),
+				),
 			)
 			.orderBy(Db.comments.createdAt),
 	);
@@ -2010,7 +2025,9 @@ const getComments = Effect.fn("Mobile.getComments")(function* (
 	return visibleRows.map((row) => ({
 		id: row.id,
 		videoId: row.videoId,
-		type: row.type,
+		// Safe: the query filters to these two types (media comments are hidden
+		// from the mobile API until its schema learns about them).
+		type: row.type as "text" | "emoji",
 		content: row.content,
 		timestamp: row.timestamp,
 		parentCommentId: row.parentCommentId,
@@ -2374,7 +2391,7 @@ const importLoom = Effect.fn("Mobile.importLoom")(function* (
 				source: { type: "webMP4" },
 				bucket: Option.getOrNull(writable.bucketId),
 				storageIntegrationId: Option.getOrNull(writable.storageIntegrationId),
-				public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
+				public: await getNewVideoPublic(user.activeOrganizationId),
 				duration: download.durationSeconds,
 				width: download.width,
 				height: download.height,
@@ -2461,7 +2478,7 @@ const createUpload = Effect.fn("Mobile.createUpload")(function* (
 		ownerId: user.id,
 		orgId: organizationId,
 		name: getUploadTitle(input.fileName),
-		public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
+		public: yield* Effect.tryPromise(() => getNewVideoPublic(organizationId)),
 		source: { type: "webMP4" },
 		bucketId: writable.bucketId,
 		storageIntegrationId: writable.storageIntegrationId,
@@ -2556,7 +2573,7 @@ const createRecording = Effect.fn("Mobile.createRecording")(function* (
 		ownerId: user.id,
 		orgId: organizationId,
 		name: getUploadTitle(input.fileName),
-		public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
+		public: yield* Effect.tryPromise(() => getNewVideoPublic(organizationId)),
 		source: { type: "desktopSegments" },
 		bucketId: writable.bucketId,
 		storageIntegrationId: writable.storageIntegrationId,
@@ -2756,14 +2773,16 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 								serverEnv().APPLE_CLIENT_ID && serverEnv().APPLE_CLIENT_SECRET,
 							),
 							googleAuthAvailable: Boolean(serverEnv().GOOGLE_CLIENT_ID),
-							workosAuthAvailable: Boolean(serverEnv().WORKOS_CLIENT_ID),
+							workosAuthAvailable: Boolean(
+								serverEnv().WORKOS_CLIENT_ID && serverEnv().WORKOS_API_KEY,
+							),
 						}),
 					)
 					.handle("requestSession", ({ request, urlParams }) =>
 						withMappedErrors(
 							Effect.gen(function* () {
 								const user = yield* getCurrentUser;
-								if (Option.isNone(user)) {
+								if (Option.isNone(user) || urlParams.provider === "workos") {
 									const loginRedirectUrl =
 										Mobile.createMobileSessionLoginRedirectUrl({
 											deploymentOrigin: getDeploymentOrigin(),
@@ -2922,13 +2941,19 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 								yield* database.use((db) =>
 									db
 										.update(Db.videos)
-										.set({ name: title })
+										.set({
+											name: title,
+											metadata: sql`JSON_SET(COALESCE(${Db.videos.metadata}, JSON_OBJECT()), '$.titleManuallyEdited', true)`,
+										})
 										.where(
 											and(
 												eq(Db.videos.id, path.id),
 												eq(Db.videos.ownerId, user.id),
 											),
 										),
+								);
+								yield* Effect.promise(() =>
+									enqueueVideoStorageNameSync(path.id),
 								);
 								yield* Effect.sync(() => {
 									revalidatePath("/dashboard/caps");

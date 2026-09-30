@@ -1,5 +1,10 @@
 import { db } from "@cap/database";
-import { users, videos, videoUploads } from "@cap/database/schema";
+import {
+	importedVideos,
+	users,
+	videos,
+	videoUploads,
+} from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import { buildEnv } from "@cap/env";
 import type { User, Video } from "@cap/web-domain";
@@ -19,6 +24,7 @@ import { start } from "workflow/api";
 import { isAiGenerationEnabledForUser } from "@/lib/ai-generation-entitlement";
 import { startAiGeneration } from "@/lib/generate-ai";
 import { transcribeVideo } from "@/lib/transcribe";
+import { importLoomVideoWorkflow } from "@/workflows/import-loom-video";
 import { processVideoWorkflow } from "@/workflows/process-video";
 
 export const STALLED_PIPELINE_MIN_AGE_MS = 60 * 60 * 1000;
@@ -26,6 +32,15 @@ export const STALLED_PIPELINE_MAX_AGE_MS = 48 * 60 * 60 * 1000;
 export const STALLED_MEDIA_RECOVERY_BATCH_SIZE = 50;
 export const STALLED_TRANSCRIPTION_RECOVERY_BATCH_SIZE = 50;
 export const STALLED_AI_RECOVERY_BATCH_SIZE = 25;
+
+const STALLED_MEDIA_PROCESSING_MESSAGES = [
+	"Starting video processing...",
+	"Downloading video...",
+	"Retrying video processing...",
+	"Queued for video processing...",
+	"Queued for Loom import processing...",
+	"Processing recovery will retry automatically",
+] as const;
 
 type PipelineRecoveryStatus =
 	| "started"
@@ -112,6 +127,8 @@ type MediaCandidate = {
 	userId: User.UserId;
 	bucketId: string | null;
 	rawFileKey: string;
+	loomVideoId: string | null;
+	processingMessage: string;
 	updatedAt: Date;
 };
 
@@ -131,7 +148,7 @@ async function recoverMediaCandidate(
 				eq(videoUploads.videoId, candidate.videoId),
 				eq(videoUploads.phase, "processing"),
 				eq(videoUploads.processingProgress, 0),
-				eq(videoUploads.processingMessage, "Starting video processing..."),
+				eq(videoUploads.processingMessage, candidate.processingMessage),
 				eq(videoUploads.rawFileKey, candidate.rawFileKey),
 				eq(videoUploads.updatedAt, candidate.updatedAt),
 			),
@@ -140,14 +157,27 @@ async function recoverMediaCandidate(
 	if (getAffectedRows(claimResult) === 0) return "already-claimed";
 
 	try {
-		await start(processVideoWorkflow, [
-			{
-				videoId: candidate.videoId,
-				userId: candidate.userId,
-				rawFileKey: candidate.rawFileKey,
-				bucketId: candidate.bucketId,
-			},
-		]);
+		if (candidate.loomVideoId) {
+			await start(importLoomVideoWorkflow, [
+				{
+					videoId: candidate.videoId,
+					userId: candidate.userId,
+					rawFileKey: candidate.rawFileKey,
+					bucketId: candidate.bucketId,
+					loomVideoId: candidate.loomVideoId,
+					reuseExistingRawUpload: true,
+				},
+			]);
+		} else {
+			await start(processVideoWorkflow, [
+				{
+					videoId: candidate.videoId,
+					userId: candidate.userId,
+					rawFileKey: candidate.rawFileKey,
+					bucketId: candidate.bucketId,
+				},
+			]);
+		}
 
 		return "started";
 	} catch {
@@ -269,15 +299,28 @@ export async function recoverStalledVideoPipeline({
 			userId: videos.ownerId,
 			bucketId: videos.bucket,
 			rawFileKey: videoUploads.rawFileKey,
+			loomVideoId: importedVideos.sourceId,
+			processingMessage: videoUploads.processingMessage,
 			updatedAt: videoUploads.updatedAt,
 		})
 		.from(videos)
 		.innerJoin(videoUploads, eq(videos.id, videoUploads.videoId))
+		.leftJoin(
+			importedVideos,
+			and(
+				eq(importedVideos.orgId, videos.orgId),
+				eq(importedVideos.source, "loom"),
+				eq(importedVideos.id, videos.id),
+			),
+		)
 		.where(
 			and(
 				eq(videoUploads.phase, "processing"),
 				eq(videoUploads.processingProgress, 0),
-				eq(videoUploads.processingMessage, "Starting video processing..."),
+				inArray(
+					videoUploads.processingMessage,
+					STALLED_MEDIA_PROCESSING_MESSAGES,
+				),
 				isNotNull(videoUploads.rawFileKey),
 				lte(videoUploads.updatedAt, staleBefore),
 				gte(videoUploads.startedAt, recentBefore),

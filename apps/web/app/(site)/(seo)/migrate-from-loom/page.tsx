@@ -1,45 +1,71 @@
+import { getCurrentUser } from "@cap/database/auth/session";
 import type { Metadata } from "next";
 import { MigrateFromLoomPage } from "@/components/pages/seo/MigrateFromLoomPage";
-import { ogImageUrl } from "@/lib/og/url";
-
-const ogImage = ogImageUrl({
-	title: "Migrate from Loom to Cap",
-	tag: "Compare",
-});
+import {
+	importSteps,
+	migrateFaqs,
+	migrateFromLoomSeo,
+} from "@/components/pages/seo/migrate-from-loom-content";
+import { buildMarketingMetadata } from "@/lib/og/url";
+import {
+	createBreadcrumbSchema,
+	createFAQSchema,
+	createHowToSchema,
+} from "@/utils/web-schema";
 
 export const metadata: Metadata = {
-	title: "Migrate from Loom to Cap | Import Your Loom Videos in Minutes",
-	description:
-		"Switching from Loom? Cap's built-in importer brings your existing Loom videos across. Paste a single share link or bulk import your whole library from a CSV. Open source, privacy-first, and half the price of Loom.",
-	openGraph: {
-		title: "Migrate from Loom to Cap | Import Your Loom Videos in Minutes",
-		description:
-			"Cap's built-in Loom importer brings your existing recordings across, from a single share link or bulk import from CSV. Open source and half the price of Loom.",
-		url: "https://cap.so/migrate-from-loom",
-		siteName: "Cap",
-		images: [
-			{
-				url: ogImage,
-				width: 1200,
-				height: 630,
-				alt: "Migrate from Loom to Cap",
-			},
-		],
-		locale: "en_US",
-		type: "website",
-	},
-	twitter: {
-		card: "summary_large_image",
-		title: "Migrate from Loom to Cap",
-		description:
-			"Switching from Loom? Cap's built-in importer brings your existing Loom videos across in minutes.",
-		images: [ogImage],
-	},
-	alternates: {
-		canonical: "https://cap.so/migrate-from-loom",
+	...buildMarketingMetadata({
+		title: migrateFromLoomSeo.title,
+		description: migrateFromLoomSeo.description,
+		path: migrateFromLoomSeo.path,
+		ogTitle: "Import your Loom videos into Cap",
+		ogDescription: "Paste a link or upload a CSV. Cap does the rest.",
+		ogTag: "Migrate",
+	}),
+	keywords: [...migrateFromLoomSeo.keywords],
+	robots: {
+		index: true,
+		follow: true,
+		googleBot: {
+			index: true,
+			follow: true,
+			"max-image-preview": "large",
+			"max-snippet": -1,
+		},
 	},
 };
 
-export default function Page() {
-	return <MigrateFromLoomPage />;
+const schemas = [
+	createBreadcrumbSchema([
+		{ name: "Home", url: "https://cap.so" },
+		{ name: "Migrate from Loom", url: migrateFromLoomSeo.url },
+	]),
+	createHowToSchema({
+		name: "How to import Loom videos into Cap",
+		description:
+			"Move a single Loom video or your whole Loom library into Cap with the built-in importer.",
+		totalTime: "PT5M",
+		steps: importSteps.map((step) => ({ name: step.name, text: step.text })),
+	}),
+	createFAQSchema(
+		migrateFaqs.map((faq) => ({
+			question: faq.question,
+			answer: faq.answer,
+		})),
+	),
+];
+
+export default async function Page() {
+	const user = await getCurrentUser();
+
+	return (
+		<>
+			{schemas.map((schema) => (
+				<script key={schema["@type"]} type="application/ld+json">
+					{JSON.stringify(schema).replace(/</g, "\\u003c")}
+				</script>
+			))}
+			<MigrateFromLoomPage signedIn={Boolean(user)} />
+		</>
+	);
 }

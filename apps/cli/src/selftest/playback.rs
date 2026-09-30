@@ -869,6 +869,7 @@ mod fixture {
             }),
             cursor: None,
             keyboard: None,
+            display_notch: None,
         };
         // Clip offsets exactly as the studio recorder persists them.
         let offsets = segment.calculate_audio_offsets();
@@ -902,15 +903,20 @@ mod fixture {
                     timescale: 1.0,
                     name: None,
                     speed_audio_mode: None,
+                    hide_cursor: None,
+                    volume: None,
                 }],
                 transitions: Vec::new(),
                 zoom_segments: Vec::new(),
                 scene_segments: Vec::new(),
+                style_segments: Vec::new(),
+                image_segments: Vec::new(),
                 mask_segments: Vec::new(),
                 text_segments: Vec::new(),
                 caption_segments: Vec::new(),
                 keyboard_segments: Vec::new(),
                 audio_segments: Vec::new(),
+                camera3d_segments: Vec::new(),
             }),
             clips: vec![ClipConfiguration {
                 index: 0,

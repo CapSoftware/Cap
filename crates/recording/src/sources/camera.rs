@@ -103,7 +103,7 @@ impl VideoSource for Camera {
         let scaled_frame_count = Arc::new(AtomicU64::new(0));
         let scaled_count_clone = scaled_frame_count.clone();
 
-        tokio::spawn(async move {
+        crate::output_pipeline::spawn_capture_task(async move {
             tracing::debug!(
                 original_width,
                 original_height,

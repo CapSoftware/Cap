@@ -118,7 +118,13 @@ pub enum AnalyticsEvent {
 fn truncate_reason(mut s: String) -> String {
     const MAX_LEN: usize = 240;
     if s.len() > MAX_LEN {
-        s.truncate(MAX_LEN);
+        // Reasons carry NSError debug strings whose localized text is
+        // multi-byte; String::truncate panics off a char boundary.
+        let end = (0..=MAX_LEN)
+            .rev()
+            .find(|&i| s.is_char_boundary(i))
+            .unwrap_or(0);
+        s.truncate(end);
         s.push('…');
     }
     s

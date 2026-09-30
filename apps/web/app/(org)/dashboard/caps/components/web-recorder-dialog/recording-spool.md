@@ -1,27 +1,25 @@
-# Recording Spool
+# Recording spool and upload recovery
 
-The streaming recorder now keeps a durable local spool in browser storage while it uploads raw chunks.
+All web recording pipelines keep a local IndexedDB spool when browser storage is available. Captured chunks are persisted in order, and the in-memory backup is disabled while the spool is healthy. A storage failure falls back to an in-memory backup. A browser may deny or evict local storage, so this is recovery protection rather than a guarantee against data loss.
 
-This exists to keep three properties aligned:
+The video and its share URL are created before capture starts. Chromium's streaming WebM path uploads multipart chunks during capture. Buffered browsers retain their existing capture format and upload the original WebM or MP4 through multipart upload after Stop. The media server prepares playback and thumbnails; browser-side conversion is no longer required to finish a web recording.
 
-- progressive multipart upload stays fast
-- the browser tab does not retain the whole recording in RAM
-- failures after capture can still recover a full local recording
+Stop waits for the recorder's final data and stop events and flushes pending local writes before completing the upload. A missing stop event has a 30-second deadline and leaves available data recoverable. The share URL is exposed while the upload finishes, and opens automatically after the server confirms receipt. Playback can still be processing at that point.
 
-The current lifecycle is:
+## Failure handling
 
-1. `useWebRecorder` creates a `RecordingSpool` for the `streaming-webm` pipeline before `MediaRecorder.start`.
-2. Each `dataavailable` chunk is sent to both the multipart uploader and the local spool.
-3. The streaming path disables the in-memory recorder backup once the durable spool is available.
-4. On upload or processing failure, the recorder rebuilds a local blob from the spool for the error download.
-5. On success or explicit cleanup, the spool is deleted.
+- A failed live upload can switch to the durable recording and continue capture. Stop then uploads the full saved recording to the same video.
+- Failed uploads retain the spool, available download, and video URL. The open dashboard retries on reconnect and makes up to three additional attempts at ten-second intervals. The user can also retry without recording again.
+- An uncertain completion retains the original uploader. A manual retry checks that same multipart upload; it does not create a replacement or delete the remote object. A later missing-session response remains uncertain. The server can reconcile S3 completion against the exact ordered part ETags and total byte count. If the provider uses an incompatible ETag format, or processing has already removed the raw source, an unconfirmed completion remains recoverable rather than being guessed successful.
+- Encoder failures expose the available recording for download or explicit upload, without automatically presenting a partial recording as successful capture.
+- New recording releases a failed attempt for a fresh take while retaining its available download and disk backup. An uncertain remote upload is left intact.
+- Closing the dialog after an upload error retains the retry state. Leaving the page preserves the disk spool and suspends local uploads without aborting a possibly completed remote object. A before-unload prompt protects active capture and unsent recordings where the browser supports it.
+- Successful, confirmed uploads delete the spool. Explicitly restarting an active recording discards that recording. Downloading a recovered recording does not delete its backup; dismissal does.
 
-This keeps the recorder biased toward reliability without pushing long recordings back into an unbounded memory path.
+## Recovery after reload
 
-The spool now also handles orphan recovery after a tab crash or reload:
+Recovery scans run when the dashboard recorder mounts and once per minute. Sessions updated within three minutes are excluded because they may still belong to a live or paused recording in another tab; active sessions send a heartbeat every fifteen seconds. Recovery retains disk data until explicit dismissal.
 
-1. Sessions are listed from IndexedDB when the dialog hook initializes.
-2. Each orphaned session is rebuilt into a blob and immediately removed from storage.
-3. The dialog exposes the recovered downloads while idle so the user can save them before starting again.
+Recovered recordings are currently offered as downloads. Resuming the same video upload after a page reload still requires persisted upload metadata and ownership coordination between tabs. In-session retries preserve the video URL.
 
-Deleting recovered sessions during discovery is intentional. The spool is a crash-recovery handoff, not a permanent browser archive, so we prefer one clear recovery opportunity over accumulating stale local recordings indefinitely.
+Multipart S3 reconciliation follows the [AWS composite ETag definition](https://docs.aws.amazon.com/AmazonS3/latest/userguide/checking-object-integrity-upload.html). The raw upload endpoint also rejects missing or repeated part numbers and checks the stored object size before acknowledging success.

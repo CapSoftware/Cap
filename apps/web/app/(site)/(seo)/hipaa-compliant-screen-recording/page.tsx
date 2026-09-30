@@ -15,7 +15,7 @@ export const metadata: Metadata = {
 	title:
 		"HIPAA-Compliant Screen Recording — Secure Healthcare Recordings | Cap",
 	description:
-		"Cap enables HIPAA-compliant screen recording for healthcare teams. Self-host recordings on your own AWS S3 bucket, keep PHI off third-party servers, and audit every line of open-source code.",
+		"Cap is a HIPAA-compliant screen recorder for healthcare teams. Sign a BAA in minutes on the Pro plan, SOC 2 Type II and ISO 27001 certified, plus self-hosting to keep PHI on your own storage.",
 	alternates: {
 		canonical: "https://cap.so/hipaa-compliant-screen-recording",
 	},
@@ -23,7 +23,7 @@ export const metadata: Metadata = {
 		title:
 			"HIPAA-Compliant Screen Recording — Secure Healthcare Recordings | Cap",
 		description:
-			"Cap enables HIPAA-compliant screen recording for healthcare teams. Self-host recordings on your own AWS S3 bucket, keep PHI off third-party servers, and audit every line of open-source code.",
+			"Cap is a HIPAA-compliant screen recorder for healthcare teams. Sign a BAA in minutes on the Pro plan, SOC 2 Type II and ISO 27001 certified, plus self-hosting to keep PHI on your own storage.",
 		url: "https://cap.so/hipaa-compliant-screen-recording",
 		siteName: "Cap",
 		images: [
@@ -42,7 +42,7 @@ export const metadata: Metadata = {
 		title:
 			"HIPAA-Compliant Screen Recording — Secure Healthcare Recordings | Cap",
 		description:
-			"Cap enables HIPAA-compliant screen recording for healthcare teams. Self-host recordings on your own AWS S3 bucket, keep PHI off third-party servers.",
+			"Cap is a HIPAA-compliant screen recorder. Sign a BAA in minutes on the Pro plan, plus self-hosting to keep PHI on your own storage.",
 		images: [ogImage],
 	},
 };

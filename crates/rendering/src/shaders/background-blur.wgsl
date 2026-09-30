@@ -1,7 +1,15 @@
+// Background blur: separable gaussian, run twice (horizontal then vertical).
+//
+// The kernel always spans the full blur radius with evenly spaced taps; when
+// the radius exceeds the tap budget the spacing widens instead of leaving
+// gaps, and linear filtering interpolates between texels. Spacing stays well
+// under sigma, so the widened kernel cannot alias into the comb/grid pattern
+// the old single-pass sparse kernel produced.
+
 struct Uniforms {
     output_size: vec2<f32>,
     blur_strength: f32,
-    _padding: f32,
+    direction: f32, // 0 = horizontal, 1 = vertical
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -25,34 +33,35 @@ fn vs_main(@builtin(vertex_index) in_vertex_index: u32) -> VertexOutput {
 
 @fragment
 fn fs_main(@location(0) tex_coords: vec2<f32>) -> @location(0) vec4<f32> {
-    // Early return if no blur
-    if (u.blur_strength <= 0.01) {
-        return textureSample(t_background, s_background, tex_coords);
+    if (u.blur_strength <= 0.001) {
+        return textureSampleLevel(t_background, s_background, tex_coords, 0.0);
     }
 
-    // Use smaller kernel for light blur
-    let radius = u.blur_strength * 16.0;
-    let sigma = radius * 0.5;
-    let samples = min(16, max(4, i32(radius * 0.3)));
-    
-    var color = vec4<f32>(0.0);
-    var total_weight = 0.0;
-    
-    for (var y = -samples; y <= samples; y++) {
-        for (var x = -samples; x <= samples; x++) {
-            let offset = vec2<f32>(
-                f32(x) * radius / u.output_size.x,
-                f32(y) * radius / u.output_size.y
-            );
-            
-            let sample_pos = tex_coords + offset;
-            let dist = f32(x * x + y * y);
-            let weight = exp(-dist / (2.0 * sigma * sigma));
-            
-            color += textureSample(t_background, s_background, sample_pos) * weight;
-            total_weight += weight;
-        }
+    // Sigma scales with output height so preview and export look identical;
+    // full strength blurs with a sigma of 2.5% of the frame height.
+    let sigma = u.blur_strength * u.output_size.y * 0.025;
+    let radius = sigma * 3.0;
+    let taps = min(24.0, ceil(radius));
+    let spacing = radius / taps;
+
+    var step = vec2<f32>(spacing / u.output_size.x, 0.0);
+    if (u.direction > 0.5) {
+        step = vec2<f32>(0.0, spacing / u.output_size.y);
     }
-    
+
+    var color = textureSampleLevel(t_background, s_background, tex_coords, 0.0);
+    var total_weight = 1.0;
+    let inv_sigma2 = 1.0 / (2.0 * sigma * sigma);
+    let n = i32(taps);
+
+    for (var i = 1; i <= n; i++) {
+        let dist = f32(i) * spacing;
+        let weight = exp(-dist * dist * inv_sigma2);
+        let offset = step * f32(i);
+        color += textureSampleLevel(t_background, s_background, tex_coords + offset, 0.0) * weight;
+        color += textureSampleLevel(t_background, s_background, tex_coords - offset, 0.0) * weight;
+        total_weight += 2.0 * weight;
+    }
+
     return color / total_weight;
-} 
+}

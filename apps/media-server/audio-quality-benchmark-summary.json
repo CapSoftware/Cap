@@ -1,0 +1,85 @@
+{
+	"baseline": {
+		"count": 60,
+		"hours": 4.463996666666667,
+		"medianLufs": -29.205,
+		"belowMinus24": 40,
+		"peakAboveZero": 9,
+		"alreadyLoud": 9
+	},
+	"voice": {
+		"count": 60,
+		"passing": 42,
+		"rejected": 1,
+		"unchanged": 17,
+		"errors": [],
+		"skipReasons": {
+			"unsafe-levels": 12,
+			"already-loud": 5
+		},
+		"medianInputLufs": -31.744999999999997,
+		"medianOutputLufs": -16.84,
+		"medianGain": 14.495,
+		"maxTruePeak": -1.34,
+		"maxDurationDeltaMs": 20.999999999958163,
+		"sampleCountsExact": true,
+		"medianRealtimeFactor": 0.08116900157594112
+	},
+	"levels": {
+		"count": 60,
+		"passing": 40,
+		"rejected": 0,
+		"unchanged": 20,
+		"errors": [],
+		"skipReasons": {
+			"unsafe-levels": 12,
+			"already-loud": 5,
+			"insufficient-headroom": 3
+		},
+		"medianInputLufs": -32.07,
+		"medianOutputLufs": -23.08,
+		"medianGain": 10.64,
+		"maxTruePeak": -1.95,
+		"maxDurationDeltaMs": 20.999999999958163,
+		"sampleCountsExact": true,
+		"medianRealtimeFactor": 0.09984551719406805
+	},
+	"holdoutVoice": {
+		"count": 21,
+		"passing": 15,
+		"rejected": 1,
+		"unchanged": 5,
+		"errors": [],
+		"skipReasons": {
+			"unsafe-levels": 2,
+			"already-loud": 3
+		},
+		"medianInputLufs": -30.92,
+		"medianOutputLufs": -16.78,
+		"medianGain": 13.339999999999998,
+		"maxTruePeak": -1.34,
+		"maxDurationDeltaMs": 20.999999999958163,
+		"sampleCountsExact": true,
+		"medianRealtimeFactor": 0.08261003124306479
+	},
+	"codeHash": "40ef7500ef8643decd898509879bfe0293ced1f5d124f8a93535f9080f1bf609",
+	"scope": "Offline public/transcribed cohort; passing technical gates does not establish perceptual quality or production eligibility.",
+	"productionEnabled": false,
+	"reviewValidation": {
+		"workerCodeHash": "d1dbc4b3be3ff1b833b51a5a87b0933b2b7c82eb0816e7eba690fee12c7a7cf1",
+		"existingCohortRetested": 60,
+		"existingOutputHashesIdentical": true,
+		"additionalProductionFiles": 16,
+		"additionalProductionFilesUnchanged": 16,
+		"additionalProductionOriginalHashesPreserved": true,
+		"localTests": 46,
+		"localAssertions": 148,
+		"alignmentUnitTests": 2,
+		"alignedIntelligibility": {
+			"count": 39,
+			"medianStoiDelta": -0.00025973077349839,
+			"worstStoiDelta": -0.005509516622390076,
+			"belowMinusPointZeroOne": 0
+		}
+	}
+}

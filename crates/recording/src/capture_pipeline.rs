@@ -60,6 +60,7 @@ pub trait MakeCapturePipeline: ScreenCaptureFormat + std::fmt::Debug + 'static {
         screen_capture: screen_capture::VideoSourceConfig,
         output_path: PathBuf,
         start_time: Timestamps,
+        start_gate: Option<RecordingStartGate>,
         fragmented: bool,
         use_oop_muxer: bool,
         shared_pause_state: Option<SharedPauseState>,
@@ -75,6 +76,7 @@ pub trait MakeCapturePipeline: ScreenCaptureFormat + std::fmt::Debug + 'static {
         segments_dir: PathBuf,
         output_size: (u32, u32),
         start_time: Timestamps,
+        start_gate: Option<RecordingStartGate>,
         segment_tx: Option<std::sync::mpsc::Sender<SegmentCompletedEvent>>,
     ) -> anyhow::Result<OutputPipeline>
     where
@@ -89,6 +91,7 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
         screen_capture: screen_capture::VideoSourceConfig,
         output_path: PathBuf,
         start_time: Timestamps,
+        start_gate: Option<RecordingStartGate>,
         fragmented: bool,
         use_oop_muxer: bool,
         shared_pause_state: Option<SharedPauseState>,
@@ -159,6 +162,7 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
                 OutputPipeline::builder(fragments_dir)
                     .with_video::<screen_capture::VideoSource>(screen_capture)
                     .with_timestamps(start_time)
+                    .with_start_gate(start_gate.clone())
                     .build::<OutOfProcessFragmentedM4SMuxer>(OutOfProcessFragmentedM4SMuxerConfig {
                         preset,
                         bpp,
@@ -171,6 +175,7 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
                 OutputPipeline::builder(fragments_dir)
                     .with_video::<screen_capture::VideoSource>(screen_capture)
                     .with_timestamps(start_time)
+                    .with_start_gate(start_gate.clone())
                     .build::<MacOSFragmentedM4SMuxer>(MacOSFragmentedM4SMuxerConfig {
                         preset,
                         bpp,
@@ -189,6 +194,7 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
             OutputPipeline::builder(output_path.clone())
                 .with_video::<screen_capture::VideoSource>(screen_capture)
                 .with_timestamps(start_time)
+                .with_start_gate(start_gate.clone())
                 .build::<AVFoundationMp4Muxer>(AVFoundationMp4MuxerConfig {
                     output_height: output_size.map(|(_, h)| h),
                     instant_mode: false,
@@ -204,11 +210,13 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
         segments_dir: PathBuf,
         output_size: (u32, u32),
         start_time: Timestamps,
+        start_gate: Option<RecordingStartGate>,
         segment_tx: Option<std::sync::mpsc::Sender<SegmentCompletedEvent>>,
     ) -> anyhow::Result<OutputPipeline> {
         OutputPipeline::builder(segments_dir)
             .with_video::<screen_capture::VideoSource>(screen_capture)
             .with_timestamps(start_time)
+            .with_start_gate(start_gate.clone())
             .build::<MacOSFragmentedM4SMuxer>(MacOSFragmentedM4SMuxerConfig {
                 bpp: H264EncoderBuilder::INSTANT_MODE_BPP,
                 output_size: Some(output_size),
@@ -226,6 +234,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
         screen_capture: screen_capture::VideoSourceConfig,
         output_path: PathBuf,
         start_time: Timestamps,
+        start_gate: Option<RecordingStartGate>,
         fragmented: bool,
         use_oop_muxer: bool,
         shared_pause_state: Option<SharedPauseState>,
@@ -283,6 +292,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                 OutputPipeline::builder(fragments_dir)
                     .with_video::<screen_capture::VideoSource>(screen_capture)
                     .with_timestamps(start_time)
+                    .with_start_gate(start_gate.clone())
                     .build::<WindowsOOPFragmentedM4SMuxer>(WindowsOOPFragmentedM4SMuxerConfig {
                         segment_duration: std::time::Duration::from_secs(2),
                         preset,
@@ -298,6 +308,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                 OutputPipeline::builder(fragments_dir)
                     .with_video::<screen_capture::VideoSource>(screen_capture)
                     .with_timestamps(start_time)
+                    .with_start_gate(start_gate.clone())
                     .build::<WindowsFragmentedM4SMuxer>(WindowsFragmentedM4SMuxerConfig {
                         segment_duration: std::time::Duration::from_secs(2),
                         preset,
@@ -316,6 +327,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
             OutputPipeline::builder(output_path.clone())
                 .with_video::<screen_capture::VideoSource>(screen_capture)
                 .with_timestamps(start_time)
+                .with_start_gate(start_gate.clone())
                 .build::<WindowsMuxer>(WindowsMuxerConfig {
                     pixel_format: screen_capture::Direct3DCapture::PIXEL_FORMAT.as_dxgi(),
                     d3d_device,
@@ -338,11 +350,13 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
         segments_dir: PathBuf,
         output_size: (u32, u32),
         start_time: Timestamps,
+        start_gate: Option<RecordingStartGate>,
         segment_tx: Option<std::sync::mpsc::Sender<SegmentCompletedEvent>>,
     ) -> anyhow::Result<OutputPipeline> {
         OutputPipeline::builder(segments_dir)
             .with_video::<screen_capture::VideoSource>(screen_capture)
             .with_timestamps(start_time)
+            .with_start_gate(start_gate.clone())
             .build::<WindowsFragmentedM4SMuxer>(WindowsFragmentedM4SMuxerConfig {
                 segment_duration: std::time::Duration::from_secs(2),
                 preset: H264Preset::Ultrafast,
@@ -362,6 +376,7 @@ impl MakeCapturePipeline for screen_capture::X11Capture {
         screen_capture: screen_capture::VideoSourceConfig,
         output_path: PathBuf,
         start_time: Timestamps,
+        start_gate: Option<RecordingStartGate>,
         _fragmented: bool,
         _use_oop_muxer: bool,
         shared_pause_state: Option<SharedPauseState>,
@@ -377,6 +392,7 @@ impl MakeCapturePipeline for screen_capture::X11Capture {
         OutputPipeline::builder(fragments_dir)
             .with_video::<screen_capture::VideoSource>(screen_capture)
             .with_timestamps(start_time)
+            .with_start_gate(start_gate.clone())
             .build::<crate::ffmpeg::SegmentedVideoMuxer>(crate::ffmpeg::SegmentedVideoMuxerConfig {
                 segment_duration: std::time::Duration::from_secs(2),
                 preset: if ultra {
@@ -386,6 +402,7 @@ impl MakeCapturePipeline for screen_capture::X11Capture {
                 },
                 output_size,
                 shared_pause_state,
+                segment_tx: None,
             })
             .await
     }
@@ -395,16 +412,19 @@ impl MakeCapturePipeline for screen_capture::X11Capture {
         segments_dir: PathBuf,
         output_size: (u32, u32),
         start_time: Timestamps,
-        _segment_tx: Option<std::sync::mpsc::Sender<SegmentCompletedEvent>>,
+        start_gate: Option<RecordingStartGate>,
+        segment_tx: Option<std::sync::mpsc::Sender<SegmentCompletedEvent>>,
     ) -> anyhow::Result<OutputPipeline> {
         OutputPipeline::builder(segments_dir)
             .with_video::<screen_capture::VideoSource>(screen_capture)
             .with_timestamps(start_time)
+            .with_start_gate(start_gate.clone())
             .build::<crate::ffmpeg::SegmentedVideoMuxer>(crate::ffmpeg::SegmentedVideoMuxerConfig {
                 segment_duration: std::time::Duration::from_secs(2),
                 preset: H264Preset::Ultrafast,
                 output_size: Some(output_size),
                 shared_pause_state: None,
+                segment_tx,
             })
             .await
     }
@@ -544,6 +564,115 @@ pub fn target_to_display_and_crop(
     };
 
     Ok((display, crop_bounds))
+}
+
+/// Locates the recording display's physical notch within the frames this target
+/// will produce.
+///
+/// Window captures get `None`: they record the window's own surface rather than
+/// a screen region, and the window moves, so there is no stable position.
+/// Area captures also return `None` when they contain only part of the notch,
+/// because `DisplayNotch` cannot encode a cropped source shape.
+pub fn resolve_display_notch(target: &ScreenCaptureTarget) -> Option<cap_project::DisplayNotch> {
+    let display = target.display()?;
+    let notch = display.notch()?;
+
+    match target {
+        ScreenCaptureTarget::Display { .. } => Some(cap_project::DisplayNotch {
+            x: notch.x,
+            width: notch.width,
+            height: notch.height,
+        }),
+        ScreenCaptureTarget::Area { bounds, .. } => {
+            let display_size = display.logical_size()?;
+            resolve_area_display_notch(notch, display_size, *bounds)
+        }
+        ScreenCaptureTarget::Window { .. } | ScreenCaptureTarget::CameraOnly => None,
+    }
+}
+
+fn resolve_area_display_notch(
+    notch: scap_targets::NotchGeometry,
+    display_size: scap_targets::bounds::LogicalSize,
+    bounds: scap_targets::bounds::LogicalBounds,
+) -> Option<cap_project::DisplayNotch> {
+    let area_left = bounds.position().x();
+    let area_top = bounds.position().y();
+    let area_width = bounds.size().width();
+    let area_height = bounds.size().height();
+    if area_width <= 0.0 || area_height <= 0.0 || area_top != 0.0 {
+        return None;
+    }
+
+    let notch_left = notch.x * display_size.width();
+    let notch_width = notch.width * display_size.width();
+    let notch_right = notch_left + notch_width;
+    let notch_height = notch.height * display_size.height();
+    let area_right = area_left + area_width;
+    let area_bottom = area_height;
+    if area_left > notch_left || area_right < notch_right || area_bottom < notch_height {
+        return None;
+    }
+
+    Some(cap_project::DisplayNotch {
+        x: (notch_left - area_left) / area_width,
+        width: notch_width / area_width,
+        height: notch_height / area_height,
+    })
+}
+
+#[cfg(test)]
+mod display_notch_tests {
+    use super::*;
+    use scap_targets::bounds::{LogicalBounds, LogicalPosition, LogicalSize};
+
+    const NOTCH: scap_targets::NotchGeometry = scap_targets::NotchGeometry {
+        x: 0.4,
+        width: 0.2,
+        height: 0.1,
+    };
+
+    fn display_size() -> LogicalSize {
+        LogicalSize::new(1_000.0, 800.0)
+    }
+
+    #[test]
+    fn area_containing_the_full_notch_rebases_it() {
+        let bounds = LogicalBounds::new(
+            LogicalPosition::new(300.0, 0.0),
+            LogicalSize::new(400.0, 200.0),
+        );
+
+        assert_eq!(
+            resolve_area_display_notch(NOTCH, display_size(), bounds),
+            Some(cap_project::DisplayNotch {
+                x: 0.25,
+                width: 0.5,
+                height: 0.4,
+            })
+        );
+    }
+
+    #[test]
+    fn partially_intersected_notches_are_omitted() {
+        let horizontal = LogicalBounds::new(
+            LogicalPosition::new(500.0, 0.0),
+            LogicalSize::new(200.0, 200.0),
+        );
+        let vertical = LogicalBounds::new(
+            LogicalPosition::new(300.0, 40.0),
+            LogicalSize::new(400.0, 200.0),
+        );
+
+        assert_eq!(
+            resolve_area_display_notch(NOTCH, display_size(), horizontal),
+            None
+        );
+        assert_eq!(
+            resolve_area_display_notch(NOTCH, display_size(), vertical),
+            None
+        );
+    }
 }
 
 #[cfg(windows)]

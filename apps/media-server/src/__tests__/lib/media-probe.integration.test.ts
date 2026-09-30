@@ -67,6 +67,23 @@ describe("mediaProbe integration tests", () => {
 			);
 		});
 
+		test("rejects missing remote media before starting MediaBunny workers", async () => {
+			const server = Bun.serve({
+				port: 0,
+				fetch() {
+					return new Response("Not found", { status: 404 });
+				},
+			});
+
+			try {
+				await expect(probeVideo(`${server.url}missing.mp4`)).rejects.toThrow(
+					"Media input is not accessible",
+				);
+			} finally {
+				await server.stop(true);
+			}
+		});
+
 		test("probes media when HEAD is forbidden but GET is allowed", async () => {
 			const videoData = readFileSync(TEST_VIDEO_WITH_AUDIO_PATH);
 			const server = Bun.serve({
@@ -113,6 +130,7 @@ describe("mediaProbe integration tests", () => {
 
 				expect(metadata.duration).toBeGreaterThan(0);
 				expect(metadata.videoCodec).toBeTruthy();
+				expect(metadata.fileSize).toBe(videoData.length);
 			} finally {
 				await server.stop(true);
 			}

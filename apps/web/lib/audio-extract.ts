@@ -22,12 +22,7 @@ export function getFfmpegPath(): string {
 	const candidatePaths = [
 		ffmpegStaticPath,
 		resolve(process.cwd(), "node_modules/ffmpeg-static/ffmpeg"),
-		resolve(
-			process.cwd(),
-			"node_modules/.pnpm/ffmpeg-static@5.3.0/node_modules/ffmpeg-static/ffmpeg",
-		),
 		"/var/task/node_modules/ffmpeg-static/ffmpeg",
-		"/var/task/node_modules/.pnpm/ffmpeg-static@5.3.0/node_modules/ffmpeg-static/ffmpeg",
 		process.env.FFMPEG_PATH,
 		"/opt/homebrew/bin/ffmpeg",
 		"/usr/local/bin/ffmpeg",
@@ -74,7 +69,9 @@ export async function extractAudioFromUrl(
 	];
 
 	return new Promise((resolve, reject) => {
-		const proc = spawn(ffmpeg, ffmpegArgs, { stdio: ["pipe", "pipe", "pipe"] });
+		const proc = spawn(/*turbopackIgnore: true*/ ffmpeg, ffmpegArgs, {
+			stdio: ["pipe", "pipe", "pipe"],
+		});
 
 		let stderr = "";
 
@@ -124,7 +121,9 @@ export async function extractAudioToBuffer(videoUrl: string): Promise<Buffer> {
 	];
 
 	return new Promise((resolve, reject) => {
-		const proc = spawn(ffmpeg, ffmpegArgs, { stdio: ["pipe", "pipe", "pipe"] });
+		const proc = spawn(/*turbopackIgnore: true*/ ffmpeg, ffmpegArgs, {
+			stdio: ["pipe", "pipe", "pipe"],
+		});
 
 		const chunks: Buffer[] = [];
 		let stderr = "";
@@ -168,7 +167,9 @@ export async function convertWavToMp3(wavBuffer: Buffer): Promise<Buffer> {
 	];
 
 	return new Promise((resolve, reject) => {
-		const proc = spawn(ffmpeg, ffmpegArgs, { stdio: ["pipe", "pipe", "pipe"] });
+		const proc = spawn(/*turbopackIgnore: true*/ ffmpeg, ffmpegArgs, {
+			stdio: ["pipe", "pipe", "pipe"],
+		});
 
 		const chunks: Buffer[] = [];
 		let stderr = "";
@@ -216,7 +217,7 @@ export async function checkHasAudioTrack(videoUrl: string): Promise<boolean> {
 	const ffmpegArgs = ["-i", videoUrl, "-hide_banner"];
 
 	return new Promise((resolve, reject) => {
-		const proc = spawn(ffmpeg, ffmpegArgs, {
+		const proc = spawn(/*turbopackIgnore: true*/ ffmpeg, ffmpegArgs, {
 			stdio: ["pipe", "pipe", "pipe"],
 		});
 

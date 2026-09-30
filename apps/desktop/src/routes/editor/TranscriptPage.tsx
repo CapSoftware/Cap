@@ -1,6 +1,5 @@
 import { createEventListener } from "@solid-primitives/event-listener";
 import { makePersisted } from "@solid-primitives/storage";
-import { save } from "@tauri-apps/plugin-dialog";
 import { writeTextFile } from "@tauri-apps/plugin-fs";
 import { cx } from "cva";
 import {
@@ -35,6 +34,7 @@ import {
 	rangeIntersectsClipTransition,
 } from "./clip-transitions";
 import { FPS, useEditorContext } from "./context";
+import { routeEditorPlaybackIntent } from "./playback-intent-routing";
 import { rippleDeleteAllTracks } from "./timeline-utils";
 
 function formatTimePrecise(secs: number) {
@@ -74,6 +74,8 @@ export function TranscriptPanel() {
 		meta,
 		totalDuration,
 		previewResolutionBase,
+		playbackIntent,
+		requestHandoffPlayback,
 	} = useEditorContext();
 
 	const recordingSegments = () => editorInstance.recordings.segments;
@@ -90,6 +92,7 @@ export function TranscriptPanel() {
 			project.timeline?.segments ?? [],
 			recordingSegments(),
 			project.timeline?.transitions ?? [],
+			project.timeline?.textSegments,
 		),
 	);
 
@@ -189,6 +192,7 @@ export function TranscriptPanel() {
 				project.timeline?.transitions ?? [],
 				undefined,
 				"incoming",
+				project.timeline?.textSegments,
 			) ?? outputStart;
 		const end = start + defaultDuration;
 		const text = "New caption";
@@ -212,8 +216,11 @@ export function TranscriptPanel() {
 					sceneSegments: [],
 					maskSegments: [],
 					textSegments: [],
+					styleSegments: [],
+					imageSegments: [],
 					captionSegments: [],
 					keyboardSegments: [],
+					camera3dSegments: [],
 					transitions: [],
 				};
 
@@ -240,15 +247,10 @@ export function TranscriptPanel() {
 
 		setExportingFormat(format);
 		try {
-			const path = await save({
-				defaultPath: captionExportDefaultPath(meta().prettyName, format),
-				filters: [
-					{
-						name: format === "srt" ? "SubRip Subtitle" : "WebVTT",
-						extensions: [format],
-					},
-				],
-			});
+			const path = await commands.saveFileDialog(
+				captionExportDefaultPath(meta().prettyName, format),
+				format,
+			);
 			if (!path) return;
 
 			await writeTextFile(path, formatCaptionCues(cues, format));
@@ -272,6 +274,7 @@ export function TranscriptPanel() {
 			project.timeline?.transitions ?? [],
 			undefined,
 			"incoming",
+			project.timeline?.textSegments,
 		);
 		if (sourceTime === null) return -1;
 
@@ -297,14 +300,22 @@ export function TranscriptPanel() {
 				project.timeline?.segments ?? [],
 				recordingSegments(),
 				project.timeline?.transitions ?? [],
+				project.timeline?.textSegments,
 			);
 			if (outputTime === null) return;
-			if (editorState.playing) {
-				await commands.stopPlayback();
-				setEditorState("playing", false);
-			}
-			const frame = Math.max(Math.floor(outputTime * FPS), 0);
-			await commands.seekTo(frame);
+			const accepted = await routeEditorPlaybackIntent(
+				requestHandoffPlayback,
+				{ playing: false, seconds: outputTime },
+				async () => {
+					if (editorState.playing) {
+						await commands.stopPlayback();
+						setEditorState("playing", false);
+					}
+					const frame = Math.max(Math.floor(outputTime * FPS), 0);
+					await commands.seekTo(frame);
+				},
+			);
+			if (!accepted) return;
 			batch(() => {
 				setEditorState("previewTime", null);
 				setEditorState("playbackTime", outputTime);
@@ -433,6 +444,7 @@ export function TranscriptPanel() {
 				}
 			}),
 		);
+		setEditorState("styleEditIndex", null);
 		setEditorState("timeline", "selection", null);
 
 		setEditorState("captions", "isStale", false);
@@ -458,21 +470,30 @@ export function TranscriptPanel() {
 
 	const handlePlayPause = async () => {
 		try {
-			if (isAtEnd()) {
-				await commands.stopPlayback();
-				setEditorState("playbackTime", 0);
-				await commands.seekTo(0);
-				await commands.startPlayback(FPS, previewResolutionBase());
-				setEditorState("playing", true);
-			} else if (editorState.playing) {
-				await commands.stopPlayback();
-				setEditorState("playing", false);
-			} else {
-				await commands.seekTo(Math.floor(editorState.playbackTime * FPS));
-				await commands.startPlayback(FPS, previewResolutionBase());
-				setEditorState("playing", true);
-			}
-			if (editorState.playing) setEditorState("previewTime", null);
+			await routeEditorPlaybackIntent(
+				requestHandoffPlayback,
+				{
+					playing: isAtEnd() || !playbackIntent(),
+					seconds: isAtEnd() ? 0 : editorState.playbackTime,
+				},
+				async () => {
+					if (isAtEnd()) {
+						await commands.stopPlayback();
+						setEditorState("playbackTime", 0);
+						await commands.seekTo(0);
+						await commands.startPlayback(FPS, previewResolutionBase());
+						setEditorState("playing", true);
+					} else if (editorState.playing) {
+						await commands.stopPlayback();
+						setEditorState("playing", false);
+					} else {
+						await commands.seekTo(Math.floor(editorState.playbackTime * FPS));
+						await commands.startPlayback(FPS, previewResolutionBase());
+						setEditorState("playing", true);
+					}
+					if (editorState.playing) setEditorState("previewTime", null);
+				},
+			);
 		} catch (error) {
 			console.error("Error handling play/pause:", error);
 			setEditorState("playing", false);
@@ -480,16 +501,18 @@ export function TranscriptPanel() {
 	};
 
 	createEffect(() => {
-		if (isAtEnd() && editorState.playing) {
-			void commands
-				.stopPlayback()
-				.then(() => {
+		if (isAtEnd() && playbackIntent()) {
+			void routeEditorPlaybackIntent(
+				requestHandoffPlayback,
+				{ playing: false },
+				async () => {
+					await commands.stopPlayback();
 					setEditorState("playing", false);
-				})
-				.catch((error) => {
-					console.error("Error stopping playback:", error);
-					setEditorState("playing", false);
-				});
+				},
+			).catch((error) => {
+				console.error("Error stopping playback:", error);
+				setEditorState("playing", false);
+			});
 		}
 	});
 
@@ -505,9 +528,9 @@ export function TranscriptPanel() {
 	});
 
 	return (
-		<div class="flex flex-col min-h-0 h-full">
-			<div class="px-3 py-2 border-b border-gray-3 flex items-center justify-between shrink-0">
-				<span class="text-xs font-medium text-gray-12">Captions</span>
+		<div class="flex overflow-hidden flex-col min-h-0 h-full rounded-xl">
+			<div class="px-3 py-2 border-b border-ed-line flex items-center justify-between shrink-0">
+				<span class="text-xs font-medium text-ed-text-1">Captions</span>
 				<div class="flex items-center gap-1">
 					<button
 						type="button"

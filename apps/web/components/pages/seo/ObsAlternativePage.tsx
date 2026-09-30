@@ -1,4 +1,5 @@
 import { Clapperboard, Zap } from "lucide-react";
+import { PRICING } from "@/data/pricing";
 import { SeoPageTemplate } from "../../seo/SeoPageTemplate";
 import type { SeoPageContent } from "../../seo/types";
 
@@ -181,8 +182,7 @@ export const obsAlternativeContent: SeoPageContent = {
 		},
 		{
 			title: "Cap vs Loom for Screen Sharing",
-			description:
-				"Both Cap and Loom are built for async screen sharing with instant links. Cap is open source, supports self-hosted storage, and starts at $9.99/month versus Loom's $18/month — with Studio Mode completely free. <a href='/loom-alternative'>See the full Cap vs Loom comparison</a>.",
+			description: `Both Cap and Loom are built for async screen sharing with instant links. Cap is open source, supports self-hosted storage, and starts at $${PRICING.pro.annualPerMonth}/month versus Loom's $18/month — with Studio Mode completely free. <a href='/loom-alternative'>See the full Cap vs Loom comparison</a>.`,
 		},
 	],
 
@@ -245,8 +245,7 @@ export const obsAlternativeContent: SeoPageContent = {
 		},
 		{
 			question: "Is Cap free like OBS?",
-			answer:
-				"Yes. Cap's Studio Mode is completely free for personal use with no time limits and no watermarks. Instant Mode on the free plan supports recordings up to 5 minutes. Cap Pro ($9.99/month) removes Instant Mode time limits and adds team features. The core software is open source and free to use, just like OBS.",
+			answer: `Yes. Cap's Studio Mode is completely free for personal use with no time limits and no watermarks. Instant Mode on the free plan supports recordings up to 5 minutes. Cap Pro ($${PRICING.pro.annualPerMonth}/month) removes Instant Mode time limits and adds team features. The core software is open source and free to use, just like OBS.`,
 		},
 		{
 			question: "Is Cap open source like OBS?",
@@ -281,9 +280,10 @@ export const obsAlternativeContent: SeoPageContent = {
 	],
 
 	video: {
-		url: "/videos/cap-demo.mp4",
-		thumbnail: "/videos/cap-demo-thumbnail.png",
-		alt: "Cap OBS alternative demo showing instant recording and sharing",
+		iframe: {
+			src: "https://www.rend.so/embed/10512af0-b922-4efa-8974-f8f14fc1886a?accent=3e63dd",
+			title: "Cap OBS alternative demo showing instant recording and sharing",
+		},
 	},
 
 	cta: {

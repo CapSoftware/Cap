@@ -1,4 +1,5 @@
 use bytemuck::{Pod, Zeroable};
+use cap_project::XY;
 use wgpu::{include_wgsl, util::DeviceExt};
 
 pub struct CompositeVideoFramePipeline {
@@ -92,6 +93,14 @@ pub struct CompositeVideoFrameUniforms {
     /// squares its top corners against decorative frame chrome with
     /// `[0, 0, 1, 1]`.
     pub corner_radii: [f32; 4],
+    /// (exposure stops, contrast, saturation, temperature).
+    pub color_adjust_a: [f32; 4],
+    /// (tint, fade, split_tone, vignette).
+    pub color_adjust_b: [f32; 4],
+    /// (grain amount, grain seed, grade-active flag, full-frame vignette
+    /// flag). The active flag gates the shader's whole color pass in one
+    /// uniform branch, keeping ungraded layers bit-identical to before.
+    pub grain_params: [f32; 4],
 }
 
 impl Default for CompositeVideoFrameUniforms {
@@ -119,11 +128,139 @@ impl Default for CompositeVideoFrameUniforms {
             _padding1: [0.0; 3],
             border_color: [0.0, 0.0, 0.0, 0.0],
             corner_radii: [1.0; 4],
+            color_adjust_a: [0.0; 4],
+            color_adjust_b: [0.0; 4],
+            grain_params: [0.0; 4],
+        }
+    }
+}
+
+/// Intensity scaling and range clamping happen here, Rust-side, so the
+/// shader never sees unscaled values and a hand-edited config can't push it
+/// outside its designed ranges.
+#[derive(Debug, Clone, Copy)]
+pub struct ColorGradeUniformParams {
+    pub color_adjust_a: [f32; 4],
+    pub color_adjust_b: [f32; 4],
+    pub grain_params: [f32; 4],
+}
+
+impl ColorGradeUniformParams {
+    pub const IDENTITY: Self = Self {
+        color_adjust_a: [0.0; 4],
+        color_adjust_b: [0.0; 4],
+        grain_params: [0.0; 4],
+    };
+
+    /// Must mirror the shader's own gate on `grain_params.z`.
+    pub fn is_active(&self) -> bool {
+        self.grain_params[2] > 0.5
+    }
+
+    /// `full_frame_vignette` selects the vignette's coordinate space: full
+    /// output frame for the screen (one continuous field across card and
+    /// backdrop), card-local for the camera.
+    pub fn from_config(
+        config: &cap_project::ColorCorrection,
+        frame_number: u32,
+        full_frame_vignette: bool,
+    ) -> Self {
+        let intensity = config.intensity.clamp(0.0, 1.0);
+        let exposure_stops = config.exposure.clamp(-1.0, 1.0) * 1.5 * intensity;
+        let contrast = config.contrast.clamp(-1.0, 1.0) * intensity;
+        let saturation = config.saturation.clamp(-1.0, 1.0) * intensity;
+        let temperature = config.temperature.clamp(-1.0, 1.0) * intensity;
+        let tint = config.tint.clamp(-1.0, 1.0) * intensity;
+        let fade = config.fade.clamp(0.0, 1.0) * intensity;
+        let split_tone = config.split_tone.clamp(-1.0, 1.0) * intensity;
+        let vignette = config.vignette.clamp(0.0, 1.0) * intensity;
+        let grain = config.grain.clamp(0.0, 1.0);
+
+        let active = [
+            exposure_stops,
+            contrast,
+            saturation,
+            temperature,
+            tint,
+            fade,
+            split_tone,
+            vignette,
+            grain,
+        ]
+        .iter()
+        .any(|v| v.abs() > 1e-4);
+
+        // Seed is deterministic per frame number so preview and export match.
+        let grain_seed = (frame_number % 600) as f32;
+
+        Self {
+            color_adjust_a: [exposure_stops, contrast, saturation, temperature],
+            color_adjust_b: [tint, fade, split_tone, vignette],
+            grain_params: [
+                grain,
+                grain_seed,
+                if active { 1.0 } else { 0.0 },
+                if full_frame_vignette { 1.0 } else { 0.0 },
+            ],
         }
     }
 }
 
 impl CompositeVideoFrameUniforms {
+    pub(crate) fn for_source_frame(mut self, source_size: XY<u32>) -> Self {
+        let scale_x = source_size.x as f32 / self.frame_size[0].max(1.0);
+        let scale_y = source_size.y as f32 / self.frame_size[1].max(1.0);
+
+        self.crop_bounds = [
+            self.crop_bounds[0] * scale_x,
+            self.crop_bounds[1] * scale_y,
+            self.crop_bounds[2] * scale_x,
+            self.crop_bounds[3] * scale_y,
+        ];
+        self.frame_size = [source_size.x as f32, source_size.y as f32];
+
+        let crop_w = self.crop_bounds[2] - self.crop_bounds[0];
+        let crop_h = self.crop_bounds[3] - self.crop_bounds[1];
+        let target_w = self.target_bounds[2] - self.target_bounds[0];
+        let target_h = self.target_bounds[3] - self.target_bounds[1];
+
+        if crop_w > 0.0 && crop_h > 0.0 && target_w > 0.0 && target_h > 0.0 {
+            let source_aspect = crop_w / crop_h;
+            let target_aspect = target_w / target_h;
+
+            if (source_aspect - target_aspect).abs() > 0.001 {
+                let scale = (target_w / crop_w).min(target_h / crop_h);
+                let fitted_w = crop_w * scale;
+                let fitted_h = crop_h * scale;
+                let new_x0 = self.target_bounds[0] + (target_w - fitted_w) * 0.5;
+                let new_y0 = self.target_bounds[1] + (target_h - fitted_h) * 0.5;
+
+                self.target_bounds = [new_x0, new_y0, new_x0 + fitted_w, new_y0 + fitted_h];
+                self.target_size = [fitted_w, fitted_h];
+            }
+        }
+
+        self
+    }
+
+    pub(crate) fn source_uv_to_target(&self, position: XY<f64>) -> XY<f64> {
+        let crop_size = XY::new(
+            (self.crop_bounds[2] - self.crop_bounds[0]).max(f32::EPSILON) as f64,
+            (self.crop_bounds[3] - self.crop_bounds[1]).max(f32::EPSILON) as f64,
+        );
+        let source_position =
+            position * XY::new(self.frame_size[0] as f64, self.frame_size[1] as f64);
+        let mut position_in_crop = (source_position
+            - XY::new(self.crop_bounds[0] as f64, self.crop_bounds[1] as f64))
+            / crop_size;
+        if self.mirror_x != 0.0 {
+            position_in_crop.x = 1.0 - position_in_crop.x;
+        }
+
+        XY::new(self.target_bounds[0] as f64, self.target_bounds[1] as f64)
+            + position_in_crop * XY::new(self.target_size[0] as f64, self.target_size[1] as f64)
+    }
+
     pub fn to_buffer(self, device: &wgpu::Device) -> wgpu::Buffer {
         device.create_buffer_init(
             &(wgpu::util::BufferInitDescriptor {

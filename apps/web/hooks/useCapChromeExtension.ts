@@ -3,6 +3,7 @@ import {
 	CAP_CHROME_EXTENSION_INSTALLED_ATTRIBUTE,
 	CAP_CHROME_EXTENSION_OPEN_EVENT,
 	CAP_CHROME_EXTENSION_READY_EVENT,
+	isGoogleChromeBrowser,
 } from "@/lib/chrome-extension";
 
 const isCapChromeExtensionInstalled = () =>
@@ -12,8 +13,11 @@ const isCapChromeExtensionInstalled = () =>
 
 export const useCapChromeExtension = () => {
 	const [isInstalled, setIsInstalled] = useState(false);
+	const [isChromeBrowser, setIsChromeBrowser] = useState(false);
 
 	useEffect(() => {
+		setIsChromeBrowser(isGoogleChromeBrowser());
+
 		const detect = () => setIsInstalled(isCapChromeExtensionInstalled());
 
 		detect();
@@ -28,5 +32,5 @@ export const useCapChromeExtension = () => {
 		window.dispatchEvent(new CustomEvent(CAP_CHROME_EXTENSION_OPEN_EVENT));
 	}, []);
 
-	return { isInstalled, openRecorder };
+	return { isChromeBrowser, isInstalled, openRecorder };
 };

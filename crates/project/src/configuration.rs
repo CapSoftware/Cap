@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     collections::BTreeMap,
     fmt,
     ops::{Add, Div, Mul, Sub, SubAssign},
@@ -6,9 +7,12 @@ use std::{
     sync::LazyLock,
 };
 
+use cap_cursor_info::CursorFamily;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use specta::Type;
+
+use crate::DisplayNotch;
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
@@ -50,6 +54,10 @@ pub enum BackgroundSource {
         animated: Option<bool>,
         #[serde(default)]
         animation_speed: Option<f32>,
+    },
+    AnimatedGradient {
+        #[serde(deserialize_with = "crate::animated_gradient::deserialize_config")]
+        config: crate::AnimatedGradientConfig,
     },
 }
 
@@ -290,6 +298,53 @@ impl FrameConfiguration {
     }
 }
 
+/// Draws a MacBook notch over the recording. Nothing here is inferred from the
+/// video: a finished recording carries no evidence of the panel it came from.
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct NotchConfiguration {
+    pub enabled: bool,
+    /// Manual placement, as fractions of the video. Each `None` falls back to
+    /// the geometry measured at capture time, else [`DEFAULT_MACBOOK_NOTCH`].
+    pub x: Option<f64>,
+    pub width: Option<f64>,
+    pub height: Option<f64>,
+}
+
+/// Notch of a 14" MacBook Pro, measured via `NSScreen` on a 1512x982pt display.
+///
+/// Only a starting point for placing one by hand on recordings that carry no
+/// measurements of their own. The cutout is physically the same size across
+/// MacBook models but the panels are not, so this reads a little wide on
+/// 15"/16" machines until adjusted.
+pub const DEFAULT_MACBOOK_NOTCH: DisplayNotch = DisplayNotch {
+    x: 0.438_492_063_492_063_5,
+    width: 0.122_354_497_354_497_35,
+    height: 0.032_586_558_044_806_514,
+};
+
+impl NotchConfiguration {
+    /// Notch rect to draw, in fractions of the recorded video, or `None` when
+    /// the overlay is switched off.
+    pub fn resolve(&self, recorded: Option<DisplayNotch>) -> Option<DisplayNotch> {
+        if !self.enabled {
+            return None;
+        }
+
+        let base = recorded.unwrap_or(DEFAULT_MACBOOK_NOTCH);
+
+        let width = self.width.unwrap_or(base.width).clamp(0.0, 1.0);
+        let height = self.height.unwrap_or(base.height).clamp(0.0, 1.0);
+        if width <= 0.0 || height <= 0.0 {
+            return None;
+        }
+
+        let x = self.x.unwrap_or(base.x).clamp(0.0, 1.0 - width);
+
+        Some(DisplayNotch { x, width, height })
+    }
+}
+
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase", default)]
 pub struct BackgroundConfiguration {
@@ -310,6 +365,10 @@ pub struct BackgroundConfiguration {
     /// Decorative frame around the recording. `None` (or `FrameStyle::None`)
     /// renders the bare video exactly as before the feature existed.
     pub frame: Option<FrameConfiguration>,
+    /// Redraws the recording device's physical notch over the capture. Distinct
+    /// from `frame`: the decorative MacBook style is a mockup, this restores
+    /// something the capture really did hide, and the two are independent.
+    pub notch: Option<NotchConfiguration>,
 }
 
 impl Default for BorderConfiguration {
@@ -338,6 +397,7 @@ impl Default for BackgroundConfiguration {
             advanced_shadow: Some(ShadowConfiguration::default()),
             border: None, // Border is disabled by default for backwards compatibility
             frame: None,  // No decorative frame by default
+            notch: None,
         }
     }
 }
@@ -373,6 +433,7 @@ pub enum BackgroundBlurMode {
     Off,
     Light,
     Heavy,
+    Remove,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -382,8 +443,15 @@ pub struct BackgroundBlurConfig {
 }
 
 impl BackgroundBlurConfig {
+    pub fn removes_background(&self) -> bool {
+        cfg!(target_os = "macos") && self.mode == BackgroundBlurMode::Remove
+    }
+
     pub fn is_active(&self) -> bool {
-        self.mode != BackgroundBlurMode::Off
+        matches!(
+            self.mode,
+            BackgroundBlurMode::Light | BackgroundBlurMode::Heavy
+        ) || self.removes_background()
     }
 }
 
@@ -391,6 +459,82 @@ impl Default for BackgroundBlurConfig {
     fn default() -> Self {
         Self {
             mode: BackgroundBlurMode::Off,
+        }
+    }
+}
+
+/// Parametric color grade for a single layer (screen or camera). Every field
+/// except `intensity` has 0 as its identity, so a default struct renders
+/// exactly like no grade at all. Adjustment fields are normalized: -1..1 for
+/// bipolar controls, 0..1 for unipolar ones.
+#[derive(Type, Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ColorCorrection {
+    /// UI preset id ("none", "cinematic", ..., or "custom"). The renderer
+    /// ignores this; the numeric fields below are the source of truth.
+    pub preset: String,
+    /// 0..1 master strength applied to every adjustment except `grain`,
+    /// which has its own dedicated control.
+    pub intensity: f32,
+    /// -1..1, full scale is ±1.5 stops.
+    pub exposure: f32,
+    /// -1..1 around a mid-gray pivot.
+    pub contrast: f32,
+    /// -1..1; -1 is grayscale.
+    pub saturation: f32,
+    /// -1..1; positive warms, negative cools.
+    pub temperature: f32,
+    /// -1..1; positive shifts magenta, negative green.
+    pub tint: f32,
+    /// 0..1 lifted-blacks film fade.
+    pub fade: f32,
+    /// -1..1 teal-shadows/orange-highlights split toning (negative reverses).
+    pub split_tone: f32,
+    /// 0..1 edge darkening within the layer's own rect.
+    pub vignette: f32,
+    /// 0..1 animated film grain.
+    pub grain: f32,
+}
+
+impl ColorCorrection {
+    pub const PRESET_NONE: &'static str = "none";
+}
+
+impl Default for ColorCorrection {
+    fn default() -> Self {
+        Self {
+            preset: Self::PRESET_NONE.to_string(),
+            intensity: 1.0,
+            exposure: 0.0,
+            contrast: 0.0,
+            saturation: 0.0,
+            temperature: 0.0,
+            tint: 0.0,
+            fade: 0.0,
+            split_tone: 0.0,
+            vignette: 0.0,
+            grain: 0.0,
+        }
+    }
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ColorCorrectionConfiguration {
+    pub screen: ColorCorrection,
+    pub camera: ColorCorrection,
+    /// Whether the screen grade also covers the rendered cursor. On by
+    /// default so the pointer reads as part of the graded footage; off keeps
+    /// it crisp for legibility over vignettes and grain.
+    pub grade_cursor: bool,
+}
+
+impl Default for ColorCorrectionConfiguration {
+    fn default() -> Self {
+        Self {
+            screen: ColorCorrection::default(),
+            camera: ColorCorrection::default(),
+            grade_cursor: true,
         }
     }
 }
@@ -485,11 +629,31 @@ pub enum StereoMode {
     MonoR,
 }
 
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum VoiceIsolation {
+    Light,
+    #[default]
+    Balanced,
+    Strong,
+}
+
+impl VoiceIsolation {
+    pub fn strength(self) -> f32 {
+        match self {
+            Self::Light => 0.7,
+            Self::Balanced => 0.9,
+            Self::Strong => 0.98,
+        }
+    }
+}
+
 #[derive(Type, Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AudioConfiguration {
     pub mute: bool,
     pub improve: bool,
+    pub isolation: VoiceIsolation,
     pub mic_volume_db: f32,
     pub mic_stereo_mode: StereoMode,
     pub system_volume_db: f32,
@@ -500,6 +664,7 @@ impl Default for AudioConfiguration {
         Self {
             mute: false,
             improve: false,
+            isolation: VoiceIsolation::default(),
             mic_volume_db: 0.0,
             mic_stereo_mode: StereoMode::default(),
             system_volume_db: 0.0,
@@ -512,8 +677,79 @@ impl Default for AudioConfiguration {
 pub enum CursorType {
     #[default]
     Auto,
+    // Legacy, unused by the renderer; kept so old configs keep loading.
     Pointer,
     Circle,
+    #[serde(rename = "macos")]
+    MacOS,
+    #[serde(rename = "tahoe")]
+    MacOSTahoe,
+    Windows,
+}
+
+impl CursorType {
+    /// The asset family an explicit selection forces; `None` renders exactly
+    /// what was recorded.
+    pub fn family(&self) -> Option<CursorFamily> {
+        match self {
+            Self::MacOS => Some(CursorFamily::MacOS),
+            Self::MacOSTahoe => Some(CursorFamily::MacOSTahoe),
+            Self::Windows => Some(CursorFamily::Windows),
+            Self::Auto | Self::Pointer | Self::Circle => None,
+        }
+    }
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct CursorRippleConfig {
+    pub enabled: bool,
+    pub color: Color,
+    pub strength: f32,
+    pub size: f32,
+    pub duration: f32,
+}
+
+impl Default for CursorRippleConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            color: [71, 133, 255],
+            strength: Self::DEFAULT_STRENGTH,
+            size: Self::DEFAULT_SIZE,
+            duration: Self::DEFAULT_DURATION,
+        }
+    }
+}
+
+impl CursorRippleConfig {
+    pub const DEFAULT_STRENGTH: f32 = 0.7;
+    pub const DEFAULT_SIZE: f32 = 1.0;
+    pub const DEFAULT_DURATION: f32 = 0.6;
+
+    pub const STRENGTH_RANGE: (f32, f32) = (0.0, 1.0);
+    pub const SIZE_RANGE: (f32, f32) = (0.25, 3.0);
+    pub const DURATION_RANGE: (f32, f32) = (0.2, 1.5);
+
+    pub fn strength_clamped(&self) -> f32 {
+        clamp_finite(self.strength, Self::STRENGTH_RANGE, Self::DEFAULT_STRENGTH)
+    }
+
+    pub fn size_clamped(&self) -> f32 {
+        clamp_finite(self.size, Self::SIZE_RANGE, Self::DEFAULT_SIZE)
+    }
+
+    pub fn duration_clamped(&self) -> f32 {
+        clamp_finite(self.duration, Self::DURATION_RANGE, Self::DEFAULT_DURATION)
+    }
+}
+
+fn clamp_finite(value: f32, range: (f32, f32), fallback: f32) -> f32 {
+    if value.is_finite() {
+        value.clamp(range.0, range.1)
+    } else {
+        fallback
+    }
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -622,6 +858,8 @@ pub struct CursorConfiguration {
     pub click_spring: Option<ClickSpringConfig>,
     #[serde(default)]
     pub stop_movement_in_last_seconds: Option<f32>,
+    #[serde(default)]
+    pub ripple: CursorRippleConfig,
 }
 
 impl Default for CursorConfiguration {
@@ -646,6 +884,7 @@ impl Default for CursorConfiguration {
             base_rotation: 0.0,
             click_spring: None,
             stop_movement_in_last_seconds: None,
+            ripple: CursorRippleConfig::default(),
         };
 
         if let Some(preset) = animation_style.preset() {
@@ -668,6 +907,10 @@ impl CursorConfiguration {
 
     pub fn cursor_type(&self) -> &CursorType {
         &self.r#type
+    }
+
+    pub fn set_cursor_type(&mut self, cursor_type: CursorType) {
+        self.r#type = cursor_type;
     }
 
     pub fn click_spring_config(&self) -> ClickSpringConfig {
@@ -693,6 +936,10 @@ pub struct TimelineSegment {
     pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speed_audio_mode: Option<ClipSpeedAudioMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub volume: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hide_cursor: Option<bool>,
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -705,6 +952,17 @@ pub enum ClipSpeedAudioMode {
 }
 
 impl TimelineSegment {
+    pub fn hides_cursor(&self) -> bool {
+        self.hide_cursor.unwrap_or(false)
+    }
+
+    pub fn volume(&self) -> f64 {
+        self.volume
+            .filter(|volume| volume.is_finite())
+            .unwrap_or(1.0)
+            .clamp(0.0, 2.0)
+    }
+
     fn interpolate_time(&self, tick: f64) -> Option<f64> {
         if tick > self.duration() {
             None
@@ -859,6 +1117,64 @@ impl MaskSegment {
     }
 }
 
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum TextAlign {
+    Left,
+    #[default]
+    Center,
+    Right,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum TextAnimation {
+    None,
+    #[default]
+    Fade,
+    SlideUp,
+    SlideDown,
+    SlideLeft,
+    SlideRight,
+    Pop,
+    Zoom,
+    Bounce,
+    Wipe,
+    Words,
+    Letters,
+    Tracking,
+    Typewriter,
+}
+
+/// How a text segment's optional background hugs the text.
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum TextBackgroundStyle {
+    /// One rounded rectangle behind the whole block.
+    #[default]
+    Box,
+    /// A capsule: half-height radius and wider side padding.
+    Pill,
+    /// A marker stroke per laid-out line, hugging each line's ink.
+    Highlight,
+}
+
+/// How a text segment shares the frame with the display recording. The
+/// variants name where the TEXT sits; the display card makes room for it.
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum TextLayout {
+    /// Text draws over the untouched display (the original behavior).
+    #[default]
+    Overlay,
+    /// The display card shrinks and fades away; text owns the frame.
+    Fullscreen,
+    /// Text in the left half, display card contained in the right half.
+    SplitLeft,
+    /// Text in the right half, display card contained in the left half.
+    SplitRight,
+}
+
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct TextSegment {
@@ -884,8 +1200,53 @@ pub struct TextSegment {
     pub italic: bool,
     #[serde(default = "TextSegment::default_color")]
     pub color: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background_color: Option<String>,
+    #[serde(default)]
+    pub background_style: TextBackgroundStyle,
+    #[serde(default)]
+    pub uppercase: bool,
+    /// Outline px at the 1080p reference height, like `font_size`; 0 disables.
+    #[serde(default)]
+    pub stroke_width: f32,
+    #[serde(default = "TextSegment::default_stroke_color")]
+    pub stroke_color: String,
+    /// Second colour of a horizontal gradient that starts at `color`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gradient_color: Option<String>,
+    /// 0..1 soft halo strength in the text colour.
+    #[serde(default)]
+    pub glow: f32,
+    /// Legacy symmetric fade. Superseded by the animation fields below; kept
+    /// so configs written by new builds still fade in old builds. The
+    /// `text_anim_version` migration seeds the animation durations from it.
     #[serde(default = "TextSegment::default_fade_duration")]
     pub fade_duration: f64,
+    #[serde(default)]
+    pub align: TextAlign,
+    /// Px at the 1080p reference height, like `font_size`.
+    #[serde(default)]
+    pub letter_spacing: f32,
+    #[serde(default = "TextSegment::default_line_height")]
+    pub line_height: f32,
+    #[serde(default = "TextSegment::default_opacity")]
+    pub opacity: f32,
+    #[serde(default)]
+    pub shadow: f32,
+    #[serde(default)]
+    pub animation_in: TextAnimation,
+    #[serde(default)]
+    pub animation_out: TextAnimation,
+    #[serde(default = "TextSegment::default_fade_duration")]
+    pub animation_in_duration: f64,
+    #[serde(default = "TextSegment::default_fade_duration")]
+    pub animation_out_duration: f64,
+    #[serde(default)]
+    pub layout: TextLayout,
+    /// Seconds the display card takes to morph aside (and back) at the
+    /// segment edges when `layout` is not `Overlay`.
+    #[serde(default = "TextSegment::default_layout_transition")]
+    pub layout_transition: f64,
 }
 
 impl TextSegment {
@@ -921,8 +1282,24 @@ impl TextSegment {
         "#ffffff".to_string()
     }
 
+    fn default_stroke_color() -> String {
+        "#000000".to_string()
+    }
+
     fn default_fade_duration() -> f64 {
         0.15
+    }
+
+    fn default_line_height() -> f32 {
+        1.2
+    }
+
+    fn default_opacity() -> f32 {
+        1.0
+    }
+
+    fn default_layout_transition() -> f64 {
+        0.5
     }
 }
 
@@ -979,6 +1356,264 @@ pub struct SceneSegment {
     pub transition_out: f64,
 }
 
+// Shots cut straight into the pose; easing in and out is opt-in.
+fn default_camera3d_transition() -> f64 {
+    0.0
+}
+
+/// A 3D camera pose for the composed content plane. Angles are degrees.
+///
+/// Geometry: the content plane's longest side spans 2 world units, centered at
+/// the origin facing +Z. `tilt_x`/`tilt_y`/`roll` orbit the CAMERA (Euler YXZ,
+/// roll innermost); `rotate_x`/`rotate_y` rotate the CONTENT plane itself.
+/// `zoom` is the camera DISTANCE in world units (larger = further = smaller on
+/// screen); `fov` is the vertical field of view with no size compensation, so
+/// apparent size ∝ 1 / (zoom · tan(fov/2)). `pan_x`/`pan_y` truck the camera in
+/// its own plane (world units; +x moves the subject right, +y up).
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Camera3DProperties {
+    /// Camera orbit pitch.
+    #[serde(default)]
+    pub tilt_x: f64,
+    /// Camera orbit yaw.
+    #[serde(default)]
+    pub tilt_y: f64,
+    /// Camera roll (innermost camera rotation).
+    #[serde(default)]
+    pub roll: f64,
+    /// Content plane pitch.
+    #[serde(default)]
+    pub rotate_x: f64,
+    /// Content plane yaw.
+    #[serde(default)]
+    pub rotate_y: f64,
+    #[serde(default = "Camera3DProperties::default_fov")]
+    pub fov: f64,
+    /// Camera distance in world units.
+    #[serde(default = "Camera3DProperties::default_zoom")]
+    pub zoom: f64,
+    #[serde(default)]
+    pub pan_x: f64,
+    #[serde(default)]
+    pub pan_y: f64,
+}
+
+impl Camera3DProperties {
+    fn default_fov() -> f64 {
+        45.0
+    }
+
+    fn default_zoom() -> f64 {
+        2.0
+    }
+}
+
+impl Default for Camera3DProperties {
+    fn default() -> Self {
+        Self {
+            tilt_x: 0.0,
+            tilt_y: 0.0,
+            roll: 0.0,
+            rotate_x: 0.0,
+            rotate_y: 0.0,
+            fov: Self::default_fov(),
+            zoom: Self::default_zoom(),
+            pan_x: 0.0,
+            pan_y: 0.0,
+        }
+    }
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum Camera3DBlurMode {
+    #[default]
+    None,
+    Radial,
+    Directional,
+    TiltShift,
+}
+
+/// Screen-space focus blur applied over the composed frame while a 3d segment
+/// is active (a UV-mask variable blur, not a depth-of-field). `strength` is a
+/// blur radius in pixels at 1080p output height; the renderer scales it with
+/// output size so preview and export match.
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Camera3DBlur {
+    #[serde(default)]
+    pub mode: Camera3DBlurMode,
+    #[serde(default)]
+    pub strength: f64,
+    /// Widens and flattens the sharp-to-blurred transition (0..1).
+    #[serde(default)]
+    pub falloff: f64,
+    /// Focus center in screen UV (radial mode).
+    #[serde(default = "Camera3DBlur::default_focus_x")]
+    pub focus_x: f64,
+    #[serde(default = "Camera3DBlur::default_focus_y")]
+    pub focus_y: f64,
+    /// Sharp region size: radius (radial) or band width (tilt-shift).
+    #[serde(default = "Camera3DBlur::default_focus_size")]
+    pub focus_size: f64,
+    /// Degrees; blur direction (directional) or band angle (tilt-shift).
+    #[serde(default)]
+    pub angle: f64,
+    /// Where the directional blur begins along its axis (0..1).
+    #[serde(default = "Camera3DBlur::default_dir_position")]
+    pub dir_position: f64,
+    /// Swaps the gaussian kernel for a ring-disc bokeh kernel with highlight
+    /// gain. Strength is capped at 20 while enabled.
+    #[serde(default)]
+    pub bokeh: bool,
+}
+
+impl Camera3DBlur {
+    fn default_focus_x() -> f64 {
+        0.37
+    }
+
+    fn default_focus_y() -> f64 {
+        0.5
+    }
+
+    fn default_focus_size() -> f64 {
+        0.5
+    }
+
+    fn default_dir_position() -> f64 {
+        0.5
+    }
+}
+
+impl Default for Camera3DBlur {
+    fn default() -> Self {
+        Self {
+            mode: Camera3DBlurMode::None,
+            strength: 0.0,
+            falloff: 0.0,
+            focus_x: Self::default_focus_x(),
+            focus_y: Self::default_focus_y(),
+            focus_size: Self::default_focus_size(),
+            angle: 0.0,
+            dir_position: Self::default_dir_position(),
+            bokeh: false,
+        }
+    }
+}
+
+/// One scalar keyframe on a per-property track. Interpolation between two
+/// keyframes is a linear value lerp with time remapped by a cubic bezier whose
+/// P1 comes from the left keyframe's `out_easing` and P2 from the right one's
+/// `in_easing` (a split-handle model). Absent handles default to cubic
+/// ease-in-out: P1 [0.65, 0], P2 [0.35, 1].
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Camera3DKeyframe {
+    /// Seconds relative to the segment start.
+    pub time: f64,
+    pub value: f64,
+    /// Bezier P1 for the track segment leaving this keyframe.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub out_easing: Option<[f64; 2]>,
+    /// Bezier P2 for the track segment entering this keyframe.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub in_easing: Option<[f64; 2]>,
+}
+
+/// Per-property keyframe tracks. A property with an empty track holds the
+/// segment's base value; each track holds independently before its first and
+/// after its last keyframe.
+#[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Camera3DTracks {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tilt_x: Vec<Camera3DKeyframe>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tilt_y: Vec<Camera3DKeyframe>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub roll: Vec<Camera3DKeyframe>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rotate_x: Vec<Camera3DKeyframe>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rotate_y: Vec<Camera3DKeyframe>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fov: Vec<Camera3DKeyframe>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub zoom: Vec<Camera3DKeyframe>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pan_x: Vec<Camera3DKeyframe>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pan_y: Vec<Camera3DKeyframe>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blur_strength: Vec<Camera3DKeyframe>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blur_falloff: Vec<Camera3DKeyframe>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blur_focus_size: Vec<Camera3DKeyframe>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blur_focus_x: Vec<Camera3DKeyframe>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blur_focus_y: Vec<Camera3DKeyframe>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blur_angle: Vec<Camera3DKeyframe>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blur_dir_position: Vec<Camera3DKeyframe>,
+}
+
+impl Camera3DTracks {
+    /// Every track, for whole-timeline operations like time remapping.
+    pub fn all_tracks_mut(&mut self) -> [&mut Vec<Camera3DKeyframe>; 16] {
+        [
+            &mut self.tilt_x,
+            &mut self.tilt_y,
+            &mut self.roll,
+            &mut self.rotate_x,
+            &mut self.rotate_y,
+            &mut self.fov,
+            &mut self.zoom,
+            &mut self.pan_x,
+            &mut self.pan_y,
+            &mut self.blur_strength,
+            &mut self.blur_falloff,
+            &mut self.blur_focus_size,
+            &mut self.blur_focus_x,
+            &mut self.blur_focus_y,
+            &mut self.blur_angle,
+            &mut self.blur_dir_position,
+        ]
+    }
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct Camera3DSegment {
+    pub start: f64,
+    pub end: f64,
+    #[serde(default = "Camera3DSegment::default_enabled")]
+    pub enabled: bool,
+    /// Base pose; per-property tracks override individual values.
+    #[serde(default)]
+    pub properties: Camera3DProperties,
+    #[serde(default)]
+    pub blur: Camera3DBlur,
+    #[serde(default)]
+    pub tracks: Camera3DTracks,
+    /// Seconds to ease from the flat frame into the pose at the segment start.
+    #[serde(default = "default_camera3d_transition")]
+    pub transition_in: f64,
+    /// Seconds to ease back to the flat frame before the segment end.
+    #[serde(default = "default_camera3d_transition")]
+    pub transition_out: f64,
+}
+
+impl Camera3DSegment {
+    fn default_enabled() -> bool {
+        true
+    }
+}
+
 /// A timeline-positioned audio clip (background music or imported audio).
 ///
 /// Unlike the recording's mic/system audio (which is keyed to recording clips),
@@ -1018,7 +1653,109 @@ impl AudioTrackSegment {
     }
 }
 
+#[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct StyleOverrides {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background: Option<BackgroundConfiguration>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub camera: Option<Camera>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<CursorConfiguration>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub camera_only_padding: Option<f64>,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase", default)]
+pub struct StyleSegment {
+    pub start: f64,
+    pub end: f64,
+    pub track: u32,
+    pub enabled: bool,
+    pub name: String,
+    pub overrides: StyleOverrides,
+}
+
+impl Default for StyleSegment {
+    fn default() -> Self {
+        Self {
+            start: 0.0,
+            end: 0.0,
+            track: 0,
+            enabled: true,
+            name: "Style".to_string(),
+            overrides: StyleOverrides::default(),
+        }
+    }
+}
+
+impl StyleSegment {
+    pub fn is_active_at(&self, time: f64) -> bool {
+        self.enabled && is_timeline_interval_active(self.start, self.end, time)
+    }
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ImageSegment {
+    pub start: f64,
+    pub end: f64,
+    pub track: u32,
+    pub enabled: bool,
+    pub path: String,
+    pub name: String,
+    pub center: XY<f64>,
+    pub size: XY<f64>,
+    pub opacity: f32,
+    pub rotation: f32,
+    pub rounding: f32,
+    pub flip_x: bool,
+    pub flip_y: bool,
+    pub lock_aspect: bool,
+}
+
+impl Default for ImageSegment {
+    fn default() -> Self {
+        Self {
+            start: 0.0,
+            end: 0.0,
+            track: 0,
+            enabled: true,
+            path: String::new(),
+            name: "Image".to_string(),
+            center: XY::new(0.5, 0.5),
+            size: XY::new(0.3, 0.3),
+            opacity: 1.0,
+            rotation: 0.0,
+            rounding: 0.0,
+            flip_x: false,
+            flip_y: false,
+            lock_aspect: true,
+        }
+    }
+}
+
+impl ImageSegment {
+    pub fn is_active_at(&self, time: f64) -> bool {
+        self.enabled && is_timeline_interval_active(self.start, self.end, time)
+    }
+}
+
+fn is_timeline_interval_active(start: f64, end: f64, time: f64) -> bool {
+    time.is_finite()
+        && start.is_finite()
+        && end.is_finite()
+        && start >= 0.0
+        && end > start
+        && time >= start
+        && time < end
+}
+
 pub const MIN_CLIP_TRANSITION_DURATION: f64 = 0.05;
+/// How long the cursor takes to fade out after entering a clip that hides it
+/// (and to fade back in before leaving the hidden run).
+pub const CLIP_CURSOR_FADE_SECS: f64 = 0.3;
 
 #[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -1072,6 +1809,14 @@ pub struct TimelineConfiguration {
     pub keyboard_segments: Vec<crate::KeyboardTrackSegment>,
     #[serde(default)]
     pub audio_segments: Vec<AudioTrackSegment>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub style_segments: Vec<StyleSegment>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub image_segments: Vec<ImageSegment>,
+    // Explicit rename: the digit boundary makes rename_all's camelCase output
+    // easy to second-guess, and the editor TypeScript hardcodes this name.
+    #[serde(default, rename = "camera3dSegments")]
+    pub camera3d_segments: Vec<Camera3DSegment>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1093,6 +1838,14 @@ pub enum TimelineFrameMapping<'a> {
         kind: ClipTransitionType,
         progress: f64,
         duration: f64,
+        output_end: f64,
+    },
+    /// The recording clock is paused under a fullscreen text segment: the
+    /// frozen `source` frame stands until `output_end` (the hold's end in
+    /// output time). Video shows the frozen frame (hidden behind the takeover
+    /// anyway); audio renders silence.
+    Hold {
+        source: TimelineSource<'a>,
         output_end: f64,
     },
 }
@@ -1159,7 +1912,93 @@ impl TimelineConfiguration {
         })
     }
 
+    /// Output-time windows where a fullscreen text segment pauses the
+    /// recording clock, sorted and merged. Empty for every project without
+    /// fullscreen text — the mapping below then short-circuits to the exact
+    /// pre-hold arithmetic.
+    pub fn hold_windows(&self) -> Vec<(f64, f64)> {
+        let mut windows: Vec<(f64, f64)> = self
+            .text_segments
+            .iter()
+            .filter(|s| s.enabled && s.layout == TextLayout::Fullscreen && s.end > s.start)
+            .map(|s| (s.start, s.end))
+            .collect();
+        if windows.is_empty() {
+            return windows;
+        }
+        windows.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut merged: Vec<(f64, f64)> = Vec::with_capacity(windows.len());
+        for window in windows {
+            match merged.last_mut() {
+                Some(last) if window.0 <= last.1 => last.1 = last.1.max(window.1),
+                _ => merged.push(window),
+            }
+        }
+        merged
+    }
+
+    /// Total output seconds inserted by fullscreen text holds.
+    pub fn held_duration(&self) -> f64 {
+        self.hold_windows().iter().map(|(s, e)| e - s).sum()
+    }
+
     pub fn get_frame_mapping(&self, frame_time: f64) -> Option<TimelineFrameMapping<'_>> {
+        let holds = self.hold_windows();
+        if holds.is_empty() {
+            return self.get_frame_mapping_unheld(frame_time);
+        }
+
+        if let Some((hold_start, hold_end)) = active_hold_window(&holds, frame_time) {
+            let effective = hold_start - held_time_before(&holds, hold_start);
+            let source = match self.get_frame_mapping_unheld(effective)? {
+                TimelineFrameMapping::Single { source, .. }
+                | TimelineFrameMapping::Hold { source, .. } => source,
+                TimelineFrameMapping::Transition { incoming, .. } => incoming,
+            };
+            return Some(TimelineFrameMapping::Hold {
+                source,
+                output_end: hold_end,
+            });
+        }
+
+        let effective = frame_time - held_time_before(&holds, frame_time);
+        let next_hold_start = holds
+            .iter()
+            .map(|(start, _)| *start)
+            .find(|start| *start > frame_time);
+        // The base mapping's output_end is in the un-held (gapless) domain;
+        // put it back into output time and stop at the next hold so consumers
+        // (audio chunking) never render contiguous recording samples across a
+        // pause.
+        let clamp_end = |output_end: f64| {
+            let output_end = effective_to_output(&holds, output_end);
+            next_hold_start.map_or(output_end, |hold| output_end.min(hold))
+        };
+        Some(match self.get_frame_mapping_unheld(effective)? {
+            TimelineFrameMapping::Single { source, output_end } => TimelineFrameMapping::Single {
+                source,
+                output_end: clamp_end(output_end),
+            },
+            TimelineFrameMapping::Transition {
+                outgoing,
+                incoming,
+                kind,
+                progress,
+                duration,
+                output_end,
+            } => TimelineFrameMapping::Transition {
+                outgoing,
+                incoming,
+                kind,
+                progress,
+                duration,
+                output_end: clamp_end(output_end),
+            },
+            hold @ TimelineFrameMapping::Hold { .. } => hold,
+        })
+    }
+
+    fn get_frame_mapping_unheld(&self, frame_time: f64) -> Option<TimelineFrameMapping<'_>> {
         if self.transitions.is_empty() {
             return self.get_segment_time_without_transitions(frame_time).map(
                 |(source_time, segment, segment_index, output_end)| TimelineFrameMapping::Single {
@@ -1232,19 +2071,15 @@ impl TimelineConfiguration {
     }
 
     pub fn get_segment_time(&self, frame_time: f64) -> Option<(f64, &TimelineSegment)> {
-        if !self.transitions.is_empty() {
-            return match self.get_frame_mapping(frame_time)? {
-                TimelineFrameMapping::Single { source, .. } => {
-                    Some((source.source_time, source.segment))
-                }
-                TimelineFrameMapping::Transition { incoming, .. } => {
-                    Some((incoming.source_time, incoming.segment))
-                }
-            };
+        match self.get_frame_mapping(frame_time)? {
+            TimelineFrameMapping::Single { source, .. }
+            | TimelineFrameMapping::Hold { source, .. } => {
+                Some((source.source_time, source.segment))
+            }
+            TimelineFrameMapping::Transition { incoming, .. } => {
+                Some((incoming.source_time, incoming.segment))
+            }
         }
-
-        self.get_segment_time_without_transitions(frame_time)
-            .map(|(source_time, segment, _, _)| (source_time, segment))
     }
 
     fn get_segment_time_without_transitions(
@@ -1274,17 +2109,107 @@ impl TimelineConfiguration {
     }
 
     pub fn duration(&self) -> f64 {
-        let segment_duration = self.segments.iter().map(TimelineSegment::duration).sum();
-        if self.transitions.is_empty() {
-            return segment_duration;
-        }
+        let segment_duration: f64 = self.segments.iter().map(TimelineSegment::duration).sum();
+        let segment_duration = if self.transitions.is_empty() {
+            segment_duration
+        } else {
+            segment_duration
+                - (1..self.segments.len())
+                    .filter_map(|segment_index| self.effective_transition(segment_index))
+                    .map(|transition| transition.duration)
+                    .sum::<f64>()
+        };
 
-        segment_duration
-            - (1..self.segments.len())
-                .filter_map(|segment_index| self.effective_transition(segment_index))
-                .map(|transition| transition.duration)
-                .sum::<f64>()
+        segment_duration + self.held_duration()
     }
+
+    /// Gapless-time windows covered by clips that hide the cursor, with
+    /// touching windows merged so a run of hidden clips fades once at each
+    /// end rather than at every boundary. A window opens where its clip's
+    /// incoming transition starts and closes where the next transition
+    /// starts, matching the frame mapping above.
+    fn hidden_cursor_windows(&self) -> (Vec<(f64, f64)>, f64) {
+        let mut windows: Vec<(f64, f64)> = Vec::new();
+        let mut segment_start = 0.0;
+        for (index, segment) in self.segments.iter().enumerate() {
+            let next_duration = self
+                .effective_transition(index + 1)
+                .map_or(0.0, |transition| transition.duration);
+            let end = segment_start + segment.duration() - next_duration;
+            if segment.hides_cursor() {
+                match windows.last_mut() {
+                    Some(last) if (last.1 - segment_start).abs() < 1e-9 => last.1 = end,
+                    _ => windows.push((segment_start, end)),
+                }
+            }
+            segment_start = end;
+        }
+        (windows, segment_start)
+    }
+
+    /// 0..1 multiplier for the cursor (and its click ripples) at an output
+    /// time: 1 on ordinary clips, 0 inside a clip that hides the cursor, with
+    /// a [`CLIP_CURSOR_FADE_SECS`] smoothstep ramp just inside each end of the
+    /// hidden run. The ramp is skipped at the timeline's own start and end so
+    /// the cursor never blinks in for a hidden first or last clip.
+    pub fn cursor_visibility_at(&self, output_time: f64) -> f64 {
+        if !self.segments.iter().any(TimelineSegment::hides_cursor) {
+            return 1.0;
+        }
+        let holds = self.hold_windows();
+        let time = output_time - held_time_before(&holds, output_time);
+        let (windows, total) = self.hidden_cursor_windows();
+        for (start, end) in windows {
+            if time < start || time >= end {
+                continue;
+            }
+            let from_start = if start <= 1e-9 {
+                f64::INFINITY
+            } else {
+                time - start
+            };
+            let from_end = if end >= total - 1e-9 {
+                f64::INFINITY
+            } else {
+                end - time
+            };
+            let edge = from_start.min(from_end);
+            if edge >= CLIP_CURSOR_FADE_SECS {
+                return 0.0;
+            }
+            let t = (edge / CLIP_CURSOR_FADE_SECS).clamp(0.0, 1.0);
+            return 1.0 - t * t * (3.0 - 2.0 * t);
+        }
+        1.0
+    }
+}
+
+fn active_hold_window(windows: &[(f64, f64)], time: f64) -> Option<(f64, f64)> {
+    windows
+        .iter()
+        .find(|(start, end)| time >= *start && time < *end)
+        .copied()
+}
+
+fn held_time_before(windows: &[(f64, f64)], time: f64) -> f64 {
+    windows
+        .iter()
+        .map(|(start, end)| (time.min(*end) - start).max(0.0))
+        .sum()
+}
+
+/// Inverse of the held-output -> gapless transform: places a gapless
+/// timestamp back into output time, landing after every hold it passed.
+fn effective_to_output(windows: &[(f64, f64)], effective: f64) -> f64 {
+    let mut output = effective;
+    for (start, end) in windows {
+        if output >= *start {
+            output += end - start;
+        } else {
+            break;
+        }
+    }
+    output
 }
 
 pub const WALLPAPERS_PATH: &str = "assets/backgrounds/macOS";
@@ -1517,6 +2442,7 @@ pub enum AnnotationType {
     Rectangle,
     Text,
     Mask,
+    Draw,
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
@@ -1589,6 +2515,8 @@ pub struct Annotation {
     pub mask_type: Option<MaskType>,
     #[serde(default)]
     pub mask_level: Option<f64>,
+    #[serde(default)]
+    pub points: Option<Vec<[f64; 2]>>,
 }
 
 impl Annotation {
@@ -1630,6 +2558,21 @@ impl Annotation {
     }
 }
 
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[serde(rename_all = "camelCase")]
+pub enum OverlayTrackKind {
+    Mask,
+    Image,
+    Text,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[serde(rename_all = "camelCase")]
+pub struct OverlayTrack {
+    pub kind: OverlayTrackKind,
+    pub track: u32,
+}
+
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ProjectConfiguration {
@@ -1640,6 +2583,8 @@ pub struct ProjectConfiguration {
     pub cursor: CursorConfiguration,
     pub hotkeys: HotkeysConfiguration,
     pub timeline: Option<TimelineConfiguration>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub overlay_order: Vec<OverlayTrack>,
     pub captions: Option<CaptionsData>,
     pub keyboard: Option<KeyboardData>,
     pub clips: Vec<ClipConfiguration>,
@@ -1650,6 +2595,11 @@ pub struct ProjectConfiguration {
     pub screen_motion_blur: f32,
     #[serde(default)]
     pub screen_movement_spring: ScreenMovementSpring,
+    /// Per-layer cinematic color grades. Field-level default keeps old
+    /// project files (and old saved presets) deserializing to the identity
+    /// grade.
+    #[serde(default)]
+    pub color_correction: ColorCorrectionConfiguration,
     /// How text segment font sizes are interpreted. 0 (legacy): the renderer
     /// multiplied `font_size` by `size.y / 0.2`, coupling glyph size to the
     /// box. 1: `font_size` alone determines glyph size (1080p-relative);
@@ -1658,9 +2608,16 @@ pub struct ProjectConfiguration {
     /// `Default::default()` produces the current version.
     #[serde(default)]
     pub text_size_version: u32,
+    /// 0 (legacy): text segments animate with the single symmetric
+    /// `fade_duration`. 1: the enter/exit animation fields drive timing;
+    /// legacy configs are migrated on load by seeding both animation
+    /// durations from `fade_duration`.
+    #[serde(default)]
+    pub text_anim_version: u32,
 }
 
 pub const TEXT_SIZE_VERSION: u32 = 1;
+pub const TEXT_ANIM_VERSION: u32 = 1;
 
 fn camera_config_needs_migration(value: &Value) -> bool {
     value
@@ -1683,6 +2640,7 @@ impl Default for ProjectConfiguration {
             cursor: Default::default(),
             hotkeys: Default::default(),
             timeline: Default::default(),
+            overlay_order: Vec::new(),
             captions: Default::default(),
             keyboard: Default::default(),
             clips: Default::default(),
@@ -1690,12 +2648,146 @@ impl Default for ProjectConfiguration {
             hidden_text_segments: Default::default(),
             screen_motion_blur: Self::default_screen_motion_blur(),
             screen_movement_spring: Default::default(),
+            color_correction: Default::default(),
             text_size_version: TEXT_SIZE_VERSION,
+            text_anim_version: TEXT_ANIM_VERSION,
         }
     }
 }
 
 impl ProjectConfiguration {
+    pub fn resolved_overlay_order(&self, available: &[OverlayTrack]) -> Vec<OverlayTrack> {
+        let mut ordered = Vec::with_capacity(available.len());
+        for track in available {
+            if !self.overlay_order.contains(track) && !ordered.contains(track) {
+                ordered.push(*track);
+            }
+        }
+        for track in &self.overlay_order {
+            if available.contains(track) && !ordered.contains(track) {
+                ordered.push(*track);
+            }
+        }
+        ordered
+    }
+
+    pub fn overlay_tracks(&self) -> Vec<OverlayTrack> {
+        let Some(timeline) = &self.timeline else {
+            return Vec::new();
+        };
+        let mut available = Vec::new();
+        for (kind, mut tracks) in [
+            (
+                OverlayTrackKind::Text,
+                timeline
+                    .text_segments
+                    .iter()
+                    .map(|segment| segment.track)
+                    .collect::<Vec<_>>(),
+            ),
+            (
+                OverlayTrackKind::Image,
+                timeline
+                    .image_segments
+                    .iter()
+                    .map(|segment| segment.track)
+                    .collect::<Vec<_>>(),
+            ),
+            (
+                OverlayTrackKind::Mask,
+                timeline
+                    .mask_segments
+                    .iter()
+                    .map(|segment| segment.track)
+                    .collect::<Vec<_>>(),
+            ),
+        ] {
+            tracks.sort_unstable();
+            tracks.dedup();
+            available.extend(
+                tracks
+                    .into_iter()
+                    .rev()
+                    .map(|track| OverlayTrack { kind, track }),
+            );
+        }
+        self.resolved_overlay_order(&available)
+    }
+
+    fn style_override_at<T>(
+        &self,
+        time: f64,
+        select: impl Fn(&StyleOverrides) -> Option<&T>,
+    ) -> Option<&T> {
+        self.timeline
+            .as_ref()?
+            .style_segments
+            .iter()
+            .enumerate()
+            .filter(|(_, segment)| segment.is_active_at(time))
+            .filter_map(|(index, segment)| {
+                select(&segment.overrides).map(|value| (index, segment, value))
+            })
+            .max_by(|(left_index, left, _), (right_index, right, _)| {
+                left.track
+                    .cmp(&right.track)
+                    .then_with(|| {
+                        left.start
+                            .partial_cmp(&right.start)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
+                    .then_with(|| left_index.cmp(right_index))
+            })
+            .map(|(_, _, value)| value)
+    }
+
+    pub fn cursor_at(&self, time: f64) -> &CursorConfiguration {
+        self.style_override_at(time, |overrides| overrides.cursor.as_ref())
+            .unwrap_or(&self.cursor)
+    }
+
+    pub fn style_at(&self, time: f64) -> Cow<'_, Self> {
+        let mut configuration = Cow::Borrowed(self);
+        if let Some(background) =
+            self.style_override_at(time, |overrides| overrides.background.as_ref())
+        {
+            configuration.to_mut().background = background.clone();
+        }
+        if let Some(camera) = self.style_override_at(time, |overrides| overrides.camera.as_ref()) {
+            configuration.to_mut().camera = camera.clone();
+        }
+        if let Some(cursor) = self.style_override_at(time, |overrides| overrides.cursor.as_ref()) {
+            configuration.to_mut().cursor = cursor.clone();
+        }
+        configuration
+    }
+
+    pub fn camera_only_padding_at(&self, time: f64) -> f64 {
+        self.style_override_at(time, |overrides| {
+            overrides
+                .camera_only_padding
+                .as_ref()
+                .filter(|padding| padding.is_finite())
+        })
+        .copied()
+        .unwrap_or(0.0)
+        .clamp(0.0, 40.0)
+    }
+
+    pub fn requires_camera(&self) -> bool {
+        !self.camera.hide
+            || self.timeline.as_ref().is_some_and(|timeline| {
+                timeline.style_segments.iter().any(|segment| {
+                    segment.is_active_at(segment.start)
+                        && segment
+                            .overrides
+                            .camera
+                            .as_ref()
+                            .is_some_and(|camera| !camera.hide)
+                })
+            })
+    }
+
     fn default_screen_motion_blur() -> f32 {
         // Screen Studio's default blur amount is 1.0; with length-based blur
         // semantics (amount scales the smear length, output fully blurred)
@@ -1759,6 +2851,21 @@ impl ProjectConfiguration {
             config.text_size_version = TEXT_SIZE_VERSION;
         }
 
+        if config.text_anim_version == 0 {
+            if let Some(timeline) = config.timeline.as_mut() {
+                for segment in &mut timeline.text_segments {
+                    let fade = segment.fade_duration.max(0.0);
+                    segment.animation_in_duration = fade;
+                    segment.animation_out_duration = fade;
+                    if fade == 0.0 {
+                        segment.animation_in = TextAnimation::None;
+                        segment.animation_out = TextAnimation::None;
+                    }
+                }
+            }
+            config.text_anim_version = TEXT_ANIM_VERSION;
+        }
+
         config
             .validate()
             .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
@@ -1805,6 +2912,12 @@ impl ProjectConfiguration {
             .as_ref()
             .and_then(|t| t.get_segment_time(frame_time))
     }
+
+    pub fn cursor_visibility_at(&self, output_time: f64) -> f64 {
+        self.timeline
+            .as_ref()
+            .map_or(1.0, |timeline| timeline.cursor_visibility_at(output_time))
+    }
 }
 
 pub const SLOW_SMOOTHING_SAMPLES: usize = 24;
@@ -1816,8 +2929,147 @@ pub const REGULAR_VELOCITY_THRESHOLD: f64 = 0.008;
 pub const FAST_VELOCITY_THRESHOLD: f64 = 0.015;
 
 #[cfg(test)]
+mod notch_tests {
+    use super::*;
+
+    const RECORDED: DisplayNotch = DisplayNotch {
+        x: 0.4,
+        width: 0.2,
+        height: 0.04,
+    };
+
+    fn enabled() -> NotchConfiguration {
+        NotchConfiguration {
+            enabled: true,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn disabled_by_default() {
+        assert_eq!(NotchConfiguration::default().resolve(Some(RECORDED)), None);
+    }
+
+    #[test]
+    fn prefers_geometry_measured_at_capture_time() {
+        assert_eq!(enabled().resolve(Some(RECORDED)), Some(RECORDED));
+    }
+
+    /// Recordings the recorder could not measure still get a notch on request;
+    /// it just starts from the stock MacBook rect for the user to adjust.
+    #[test]
+    fn unmeasured_recordings_start_from_the_default_rect() {
+        assert_eq!(enabled().resolve(None), Some(DEFAULT_MACBOOK_NOTCH));
+    }
+
+    /// Each field falls back independently, so resizing without repositioning
+    /// leaves the notch where it was measured. Keeping the notch centred as it
+    /// resizes is the editor's job, which lets its sliders show the real value.
+    #[test]
+    fn each_field_falls_back_on_its_own() {
+        let resolved = NotchConfiguration {
+            enabled: true,
+            x: None,
+            width: Some(0.1),
+            height: Some(0.02),
+        }
+        .resolve(Some(RECORDED))
+        .unwrap();
+
+        assert_eq!(resolved.width, 0.1);
+        assert_eq!(resolved.height, 0.02);
+        assert_eq!(resolved.x, RECORDED.x);
+    }
+
+    #[test]
+    fn explicit_x_overrides_the_centring() {
+        let resolved = NotchConfiguration {
+            enabled: true,
+            x: Some(0.1),
+            width: Some(0.2),
+            height: None,
+        }
+        .resolve(Some(RECORDED))
+        .unwrap();
+
+        assert_eq!(resolved.x, 0.1);
+    }
+
+    #[test]
+    fn placement_stays_inside_the_video() {
+        let resolved = NotchConfiguration {
+            enabled: true,
+            x: Some(0.95),
+            width: Some(0.2),
+            height: None,
+        }
+        .resolve(Some(RECORDED))
+        .unwrap();
+
+        assert!(resolved.x + resolved.width <= 1.0, "{resolved:?}");
+    }
+
+    #[test]
+    fn zero_sized_override_draws_nothing() {
+        let config = NotchConfiguration {
+            enabled: true,
+            x: None,
+            width: Some(0.0),
+            height: None,
+        };
+
+        assert_eq!(config.resolve(Some(RECORDED)), None);
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn studio_sound_defaults_old_projects_to_balanced_and_round_trips_tiers() {
+        let legacy: AudioConfiguration =
+            serde_json::from_str(r#"{"improve":true,"micVolumeDb":-3.0}"#).unwrap();
+        assert!(legacy.improve);
+        assert_eq!(legacy.isolation, VoiceIsolation::Balanced);
+        assert_eq!(legacy.mic_volume_db, -3.0);
+        for isolation in [
+            VoiceIsolation::Light,
+            VoiceIsolation::Balanced,
+            VoiceIsolation::Strong,
+        ] {
+            let audio = AudioConfiguration {
+                isolation,
+                ..legacy.clone()
+            };
+            let restored: AudioConfiguration =
+                serde_json::from_slice(&serde_json::to_vec(&audio).unwrap()).unwrap();
+            assert_eq!(audio, restored);
+        }
+    }
+
+    #[test]
+    fn camera_background_removal_round_trips_without_rewriting_framing() {
+        let camera: Camera = serde_json::from_value(serde_json::json!({
+            "backgroundBlur": { "mode": "remove" },
+            "rounding": 100.0,
+            "shadow": 65.0,
+            "shape": "square"
+        }))
+        .unwrap();
+        let round_trip: Camera =
+            serde_json::from_slice(&serde_json::to_vec(&camera).unwrap()).unwrap();
+        assert_eq!(round_trip.background_blur.mode, BackgroundBlurMode::Remove);
+        assert_eq!(round_trip.rounding, 100.0);
+        assert_eq!(round_trip.shadow, 65.0);
+        assert!(matches!(round_trip.shape, CameraShape::Square));
+        let legacy: Camera = serde_json::from_str("{}").unwrap();
+        assert_eq!(legacy.background_blur.mode, BackgroundBlurMode::Off);
+        assert_eq!(
+            round_trip.background_blur.is_active(),
+            cfg!(target_os = "macos")
+        );
+    }
 
     fn timeline_with_transitions(transitions: Vec<ClipTransition>) -> TimelineConfiguration {
         TimelineConfiguration {
@@ -1829,6 +3081,8 @@ mod tests {
                     end: 4.0,
                     name: None,
                     speed_audio_mode: None,
+                    volume: None,
+                    hide_cursor: None,
                 },
                 TimelineSegment {
                     recording_clip: 1,
@@ -1837,6 +3091,8 @@ mod tests {
                     end: 16.0,
                     name: None,
                     speed_audio_mode: None,
+                    volume: None,
+                    hide_cursor: None,
                 },
             ],
             transitions,
@@ -1847,7 +3103,620 @@ mod tests {
             caption_segments: Vec::new(),
             keyboard_segments: Vec::new(),
             audio_segments: Vec::new(),
+            style_segments: Vec::new(),
+            image_segments: Vec::new(),
+            camera3d_segments: Vec::new(),
         }
+    }
+
+    fn project_with_styles(style_segments: Vec<StyleSegment>) -> ProjectConfiguration {
+        ProjectConfiguration {
+            timeline: Some(TimelineConfiguration {
+                style_segments,
+                ..timeline_with_transitions(Vec::new())
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn legacy_project_json_defaults_to_no_style_or_image_segments() {
+        let config: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "timeline": {
+                "segments": [{ "timescale": 1.0, "start": 0.0, "end": 4.0 }],
+                "zoomSegments": []
+            }
+        }))
+        .unwrap();
+
+        let timeline = config.timeline.as_ref().unwrap();
+        assert!(timeline.style_segments.is_empty());
+        assert!(timeline.image_segments.is_empty());
+        assert_eq!(timeline.duration(), 4.0);
+        assert!(matches!(config.style_at(2.0), Cow::Borrowed(_)));
+        assert_eq!(config.camera_only_padding_at(2.0), 0.0);
+
+        let json = serde_json::to_value(&config).unwrap();
+        assert!(json["timeline"].get("styleSegments").is_none());
+        assert!(json["timeline"].get("imageSegments").is_none());
+    }
+
+    #[test]
+    fn style_and_image_serde_defaults_match_model_defaults() {
+        let style: StyleSegment = serde_json::from_str("{}").unwrap();
+        let style_json = serde_json::to_value(&style).unwrap();
+        assert_eq!(
+            style_json,
+            serde_json::json!({
+                "start": 0.0, "end": 0.0, "track": 0, "enabled": true,
+                "name": "Style", "overrides": {}
+            })
+        );
+        assert_eq!(
+            style_json,
+            serde_json::to_value(StyleSegment::default()).unwrap()
+        );
+        assert!(style.overrides.background.is_none());
+        assert!(style.overrides.camera.is_none());
+        assert!(style.overrides.cursor.is_none());
+        assert!(style.overrides.camera_only_padding.is_none());
+
+        let image: ImageSegment = serde_json::from_str("{}").unwrap();
+        let image_json = serde_json::to_value(&image).unwrap();
+        assert_eq!(
+            image_json,
+            serde_json::json!({
+                "start": 0.0, "end": 0.0, "track": 0, "enabled": true,
+                "path": "", "name": "Image", "center": { "x": 0.5, "y": 0.5 },
+                "size": { "x": 0.3, "y": 0.3 }, "opacity": 1.0,
+                "rotation": 0.0, "rounding": 0.0, "flipX": false,
+                "flipY": false, "lockAspect": true
+            })
+        );
+        assert_eq!(
+            image_json,
+            serde_json::to_value(ImageSegment::default()).unwrap()
+        );
+        assert!(!style.is_active_at(0.0));
+        assert!(!image.is_active_at(0.0));
+    }
+
+    #[test]
+    fn style_and_image_segments_round_trip_all_fields() {
+        let config: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "timeline": {
+                "segments": [], "zoomSegments": [],
+                "styleSegments": [{
+                    "start": 1.0, "end": 4.0, "track": 2, "enabled": false,
+                    "name": "Focus", "overrides": {
+                        "background": { "padding": 17.0 },
+                        "camera": { "hide": true, "size": 45.0 },
+                        "cursor": { "hide": true, "size": 150 },
+                        "cameraOnlyPadding": 12.0
+                    }
+                }],
+                "imageSegments": [{
+                    "start": 2.0, "end": 5.0, "track": 3, "enabled": false,
+                    "path": "content/images/logo.png", "name": "Logo",
+                    "center": { "x": 0.25, "y": 0.75 },
+                    "size": { "x": 0.4, "y": 0.2 }, "opacity": 0.5,
+                    "rotation": 45.0, "rounding": 25.0, "flipX": true,
+                    "flipY": true, "lockAspect": false
+                }]
+            }
+        }))
+        .unwrap();
+        let json = serde_json::to_value(&config).unwrap();
+        let reloaded: ProjectConfiguration =
+            serde_json::from_str(&serde_json::to_string(&config).unwrap()).unwrap();
+        assert_eq!(serde_json::to_value(&reloaded).unwrap(), json);
+
+        let timeline = reloaded.timeline.as_ref().unwrap();
+        let style = &timeline.style_segments[0];
+        assert_eq!((style.start, style.end, style.track), (1.0, 4.0, 2));
+        assert!(!style.enabled);
+        assert_eq!(style.name, "Focus");
+        assert_eq!(style.overrides.background.as_ref().unwrap().padding, 17.0);
+        let camera = style.overrides.camera.as_ref().unwrap();
+        assert!(camera.hide);
+        assert_eq!(camera.size, 45.0);
+        let cursor = style.overrides.cursor.as_ref().unwrap();
+        assert!(cursor.hide);
+        assert_eq!(cursor.size, 150);
+        assert_eq!(style.overrides.camera_only_padding, Some(12.0));
+
+        let image = &timeline.image_segments[0];
+        assert_eq!((image.start, image.end, image.track), (2.0, 5.0, 3));
+        assert!(!image.enabled);
+        assert_eq!(image.path, "content/images/logo.png");
+        assert_eq!(image.name, "Logo");
+        assert_eq!(image.center, XY::new(0.25, 0.75));
+        assert_eq!(image.size, XY::new(0.4, 0.2));
+        assert_eq!(image.opacity, 0.5);
+        assert_eq!(image.rotation, 45.0);
+        assert_eq!(image.rounding, 25.0);
+        assert!(image.flip_x);
+        assert!(image.flip_y);
+        assert!(!image.lock_aspect);
+        assert_eq!(
+            json["timeline"]["styleSegments"][0]["overrides"]["cameraOnlyPadding"],
+            12.0
+        );
+        assert_eq!(json["timeline"]["imageSegments"][0]["lockAspect"], false);
+    }
+
+    #[test]
+    fn styles_respect_boundaries_disabled_clips_and_group_inheritance() {
+        let style = StyleSegment {
+            start: 1.0,
+            end: 3.0,
+            overrides: StyleOverrides {
+                background: Some(BackgroundConfiguration {
+                    padding: 20.0,
+                    ..Default::default()
+                }),
+                camera_only_padding: Some(15.0),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut disabled = style.clone();
+        disabled.track = 10;
+        disabled.enabled = false;
+        disabled.overrides.background.as_mut().unwrap().padding = 99.0;
+        disabled.overrides.camera_only_padding = Some(39.0);
+        let mut config = project_with_styles(vec![style, disabled]);
+        config.background.padding = 5.0;
+        config.background.shadow = 12.0;
+        config.camera.size = 55.0;
+        config.cursor.size = 175;
+        let original = serde_json::to_value(&config).unwrap();
+
+        for time in [0.0, 0.999, 3.0, 4.0] {
+            assert!(matches!(config.style_at(time), Cow::Borrowed(_)));
+            assert_eq!(config.camera_only_padding_at(time), 0.0);
+        }
+        for time in [1.0, 2.0, 2.999] {
+            let resolved = config.style_at(time);
+            assert!(matches!(resolved, Cow::Owned(_)));
+            assert_eq!(resolved.background.padding, 20.0);
+            assert_eq!(
+                resolved.background.shadow,
+                BackgroundConfiguration::default().shadow
+            );
+            assert_eq!(resolved.camera.size, 55.0);
+            assert_eq!(resolved.cursor.size, 175);
+            assert_eq!(resolved.camera_only_padding_at(time), 15.0);
+            let mut expected = original.clone();
+            expected["background"] = serde_json::to_value(&resolved.background).unwrap();
+            assert_eq!(serde_json::to_value(resolved.as_ref()).unwrap(), expected);
+        }
+        assert_eq!(serde_json::to_value(&config).unwrap(), original);
+    }
+
+    #[test]
+    fn styles_use_track_then_start_then_original_index_precedence() {
+        let make_style =
+            |track, start, padding, camera_size: Option<f32>, cursor_size: Option<u32>| {
+                StyleSegment {
+                    start,
+                    end: 6.0,
+                    track,
+                    overrides: StyleOverrides {
+                        background: Some(BackgroundConfiguration {
+                            padding,
+                            ..Default::default()
+                        }),
+                        camera: camera_size.map(|size| Camera {
+                            size,
+                            ..Default::default()
+                        }),
+                        cursor: cursor_size.map(|size| CursorConfiguration {
+                            size,
+                            ..Default::default()
+                        }),
+                        camera_only_padding: Some(padding),
+                    },
+                    ..Default::default()
+                }
+            };
+        let config = project_with_styles(vec![
+            make_style(2, 2.0, 20.0, Some(20.0), None),
+            make_style(0, 4.0, 39.0, Some(39.0), Some(190)),
+            make_style(2, 1.0, 10.0, None, None),
+            make_style(2, 2.0, 30.0, None, None),
+            make_style(2, 0.0, 5.0, Some(5.0), None),
+        ]);
+        let original = serde_json::to_value(&config).unwrap();
+        for (time, padding, camera_size, cursor_size) in [
+            (0.0, 5.0, 5.0, 100),
+            (1.0, 10.0, 5.0, 100),
+            (2.0, 30.0, 20.0, 100),
+            (4.0, 30.0, 20.0, 190),
+        ] {
+            let resolved = config.style_at(time);
+            assert_eq!(resolved.background.padding, padding);
+            assert_eq!(resolved.camera.size, camera_size);
+            assert_eq!(resolved.cursor.size, cursor_size);
+            assert_eq!(config.camera_only_padding_at(time), padding);
+            let expected_cursor = if time >= 4.0 {
+                config.timeline.as_ref().unwrap().style_segments[1]
+                    .overrides
+                    .cursor
+                    .as_ref()
+                    .unwrap()
+            } else {
+                &config.cursor
+            };
+            assert!(std::ptr::eq(config.cursor_at(time), expected_cursor));
+        }
+        assert!(matches!(config.style_at(6.0), Cow::Borrowed(_)));
+        assert!(std::ptr::eq(config.cursor_at(6.0), &config.cursor));
+        assert_eq!(serde_json::to_value(&config).unwrap(), original);
+    }
+
+    #[test]
+    fn style_precedence_treats_signed_zero_start_times_as_equal() {
+        let config = project_with_styles(
+            [(0.0, 10.0), (-0.0, 20.0)]
+                .into_iter()
+                .map(|(start, padding)| StyleSegment {
+                    start,
+                    end: 5.0,
+                    overrides: StyleOverrides {
+                        background: Some(BackgroundConfiguration {
+                            padding,
+                            ..Default::default()
+                        }),
+                        camera_only_padding: Some(padding),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                })
+                .collect(),
+        );
+        assert_eq!(config.style_at(0.0).background.padding, 20.0);
+        assert_eq!(config.camera_only_padding_at(0.0), 20.0);
+    }
+
+    #[test]
+    fn styles_borrow_the_base_when_no_configuration_group_is_overridden() {
+        let without_timeline = ProjectConfiguration::default();
+        assert!(matches!(without_timeline.style_at(1.0), Cow::Borrowed(_)));
+        assert_eq!(without_timeline.camera_only_padding_at(1.0), 0.0);
+
+        let config = project_with_styles(vec![
+            StyleSegment {
+                end: 5.0,
+                ..Default::default()
+            },
+            StyleSegment {
+                end: 5.0,
+                overrides: StyleOverrides {
+                    camera_only_padding: Some(15.0),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        ]);
+        let Cow::Borrowed(resolved) = config.style_at(1.0) else {
+            panic!("Empty and padding-only styles must preserve the borrowed configuration");
+        };
+        assert!(std::ptr::eq(resolved, &config));
+        assert_eq!(config.camera_only_padding_at(1.0), 15.0);
+    }
+
+    #[test]
+    fn requires_camera_includes_a_style_that_reveals_a_hidden_base() {
+        let config = ProjectConfiguration {
+            camera: Camera {
+                hide: true,
+                ..Default::default()
+            },
+            ..project_with_styles(vec![StyleSegment {
+                start: 10.0,
+                end: 20.0,
+                overrides: StyleOverrides {
+                    camera: Some(Camera::default()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }])
+        };
+
+        assert!(config.requires_camera());
+        assert!(config.camera.hide);
+        assert!(config.style_at(0.0).camera.hide);
+        assert!(!config.style_at(10.0).camera.hide);
+    }
+
+    #[test]
+    fn requires_camera_ignores_disabled_and_invalid_revealing_styles() {
+        for (start, end, enabled) in [
+            (1.0, 5.0, false),
+            (-1.0, 5.0, true),
+            (1.0, 1.0, true),
+            (5.0, 1.0, true),
+            (f64::NAN, 5.0, true),
+            (1.0, f64::NAN, true),
+            (f64::NEG_INFINITY, 5.0, true),
+            (1.0, f64::INFINITY, true),
+        ] {
+            let config = ProjectConfiguration {
+                camera: Camera {
+                    hide: true,
+                    ..Default::default()
+                },
+                ..project_with_styles(vec![StyleSegment {
+                    start,
+                    end,
+                    enabled,
+                    overrides: StyleOverrides {
+                        camera: Some(Camera::default()),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }])
+            };
+
+            assert!(
+                !config.requires_camera(),
+                "{start}..{end}, enabled={enabled}"
+            );
+        }
+    }
+
+    #[test]
+    fn requires_camera_inherits_the_base_without_a_revealing_style() {
+        let mut config = ProjectConfiguration::default();
+        assert!(config.requires_camera());
+        config.camera.hide = true;
+        assert!(!config.requires_camera());
+
+        config.timeline = project_with_styles(vec![
+            StyleSegment {
+                end: 5.0,
+                overrides: StyleOverrides {
+                    background: Some(BackgroundConfiguration::default()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            StyleSegment {
+                end: 5.0,
+                overrides: StyleOverrides {
+                    camera: Some(Camera {
+                        hide: true,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        ])
+        .timeline;
+        assert!(!config.requires_camera());
+        config.camera.hide = false;
+        assert!(config.requires_camera());
+    }
+
+    #[test]
+    fn camera_only_padding_clamps_finite_values_and_inherits_past_invalid_values() {
+        for (padding, expected) in [
+            (None, 12.0),
+            (Some(f64::NAN), 12.0),
+            (Some(f64::INFINITY), 12.0),
+            (Some(f64::NEG_INFINITY), 12.0),
+            (Some(-10.0), 0.0),
+            (Some(0.0), 0.0),
+            (Some(25.0), 25.0),
+            (Some(40.0), 40.0),
+            (Some(60.0), 40.0),
+        ] {
+            let config = project_with_styles(vec![
+                StyleSegment {
+                    end: 5.0,
+                    track: 1,
+                    overrides: StyleOverrides {
+                        camera_only_padding: padding,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                StyleSegment {
+                    end: 5.0,
+                    overrides: StyleOverrides {
+                        camera_only_padding: Some(12.0),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            ]);
+            assert_eq!(config.camera_only_padding_at(1.0), expected);
+            assert!(matches!(config.style_at(1.0), Cow::Borrowed(_)));
+        }
+    }
+
+    #[test]
+    fn style_and_image_segments_ignore_invalid_intervals_and_query_times() {
+        for (start, end) in [
+            (f64::NAN, 3.0),
+            (0.0, f64::NAN),
+            (0.0, f64::INFINITY),
+            (f64::NEG_INFINITY, 3.0),
+            (f64::INFINITY, f64::INFINITY),
+            (-1.0, 3.0),
+            (3.0, 2.0),
+            (2.0, 2.0),
+            (0.0, -1.0),
+            (0.0, f64::NEG_INFINITY),
+        ] {
+            let config = project_with_styles(vec![StyleSegment {
+                start,
+                end,
+                overrides: StyleOverrides {
+                    background: Some(BackgroundConfiguration::default()),
+                    camera_only_padding: Some(20.0),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }]);
+            let image = ImageSegment {
+                start,
+                end,
+                ..Default::default()
+            };
+            for time in [
+                -1.0,
+                0.0,
+                1.0,
+                2.0,
+                3.0,
+                f64::NAN,
+                f64::INFINITY,
+                f64::NEG_INFINITY,
+            ] {
+                assert!(matches!(config.style_at(time), Cow::Borrowed(_)));
+                assert_eq!(config.camera_only_padding_at(time), 0.0);
+                assert!(!image.is_active_at(time));
+            }
+        }
+
+        let config = project_with_styles(vec![StyleSegment {
+            end: 5.0,
+            overrides: StyleOverrides {
+                camera: Some(Camera::default()),
+                camera_only_padding: Some(20.0),
+                ..Default::default()
+            },
+            ..Default::default()
+        }]);
+        let mut image = ImageSegment {
+            end: 5.0,
+            ..Default::default()
+        };
+        for time in [-1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(matches!(config.style_at(time), Cow::Borrowed(_)));
+            assert_eq!(config.camera_only_padding_at(time), 0.0);
+            assert!(!image.is_active_at(time));
+        }
+        assert!(image.is_active_at(0.0));
+        assert!(image.is_active_at(4.999));
+        assert!(!image.is_active_at(5.0));
+        image.enabled = false;
+        assert!(!image.is_active_at(1.0));
+    }
+
+    fn fullscreen_text(start: f64, end: f64) -> TextSegment {
+        TextSegment {
+            start,
+            end,
+            track: 0,
+            enabled: true,
+            content: "Title".to_string(),
+            center: XY::new(0.5, 0.5),
+            size: XY::new(0.35, 0.2),
+            font_family: "sans-serif".to_string(),
+            font_size: 48.0,
+            font_weight: 700.0,
+            italic: false,
+            color: "#ffffff".to_string(),
+            background_color: None,
+            background_style: TextBackgroundStyle::Box,
+            uppercase: false,
+            stroke_width: 0.0,
+            stroke_color: "#000000".to_string(),
+            gradient_color: None,
+            glow: 0.0,
+            fade_duration: 0.15,
+            align: TextAlign::Center,
+            letter_spacing: 0.0,
+            line_height: 1.2,
+            opacity: 1.0,
+            shadow: 0.0,
+            animation_in: TextAnimation::Fade,
+            animation_out: TextAnimation::Fade,
+            animation_in_duration: 0.15,
+            animation_out_duration: 0.15,
+            layout: TextLayout::Fullscreen,
+            layout_transition: 0.5,
+        }
+    }
+
+    #[test]
+    fn fullscreen_text_inserts_output_time() {
+        let mut timeline = timeline_with_transitions(Vec::new());
+        timeline.text_segments = vec![fullscreen_text(2.0, 5.0)];
+
+        assert_eq!(timeline.duration(), 13.0);
+
+        // Before the hold: unchanged mapping, but the chunk ends at the hold.
+        assert!(matches!(
+            timeline.get_frame_mapping(1.0),
+            Some(TimelineFrameMapping::Single { source, output_end })
+                if source.source_time == 1.0 && output_end == 2.0
+        ));
+
+        // Inside the hold: frozen at the recording instant where it started.
+        assert!(matches!(
+            timeline.get_frame_mapping(3.5),
+            Some(TimelineFrameMapping::Hold { source, output_end })
+                if source.source_time == 2.0 && output_end == 5.0
+        ));
+        let (frozen, _) = timeline.get_segment_time(3.5).unwrap();
+        assert_eq!(frozen, 2.0);
+
+        // After the hold: resumes exactly where it paused.
+        let (resumed, _) = timeline.get_segment_time(5.0).unwrap();
+        assert_eq!(resumed, 2.0);
+        let (later, segment) = timeline.get_segment_time(7.5).unwrap();
+        assert_eq!(later, 10.5);
+        assert_eq!(segment.recording_clip, 1);
+    }
+
+    #[test]
+    fn overlay_and_disabled_texts_do_not_hold() {
+        let mut timeline = timeline_with_transitions(Vec::new());
+        let mut overlay = fullscreen_text(2.0, 5.0);
+        overlay.layout = TextLayout::Overlay;
+        let mut disabled = fullscreen_text(6.0, 8.0);
+        disabled.enabled = false;
+        timeline.text_segments = vec![overlay, disabled];
+
+        assert_eq!(timeline.duration(), 10.0);
+        assert!(timeline.hold_windows().is_empty());
+        let (time, _) = timeline.get_segment_time(4.5).unwrap();
+        assert_eq!(time, 10.5);
+    }
+
+    #[test]
+    fn overlapping_fullscreen_texts_merge_into_one_hold() {
+        let mut timeline = timeline_with_transitions(Vec::new());
+        timeline.text_segments = vec![fullscreen_text(2.0, 5.0), fullscreen_text(4.0, 6.0)];
+
+        assert_eq!(timeline.hold_windows(), vec![(2.0, 6.0)]);
+        assert_eq!(timeline.duration(), 14.0);
+        let (frozen, _) = timeline.get_segment_time(5.5).unwrap();
+        assert_eq!(frozen, 2.0);
+        let (after, _) = timeline.get_segment_time(6.5).unwrap();
+        assert_eq!(after, 2.5);
+    }
+
+    #[test]
+    fn holds_compose_with_transitions() {
+        let mut timeline = timeline_with_transitions(vec![ClipTransition {
+            segment_index: 1,
+            kind: ClipTransitionType::CrossFade,
+            duration: 1.0,
+        }]);
+        timeline.text_segments = vec![fullscreen_text(1.0, 2.0)];
+
+        assert_eq!(timeline.duration(), 10.0);
+        // 6.0 output = 5.0 effective = 2.0s into the second clip (whose
+        // output start is 3.0 after the 1s cross-fade overlap).
+        let (time, segment) = timeline.get_segment_time(6.0).unwrap();
+        assert_eq!(segment.recording_clip, 1);
+        assert_eq!(time, 12.0);
     }
 
     #[test]
@@ -1899,6 +3768,39 @@ mod tests {
                 && incoming.source_time == 10.5
                 && progress == 0.5
         ));
+    }
+
+    #[test]
+    fn timeline_segment_volume_is_backward_compatible_and_bounded() {
+        let mut segment: TimelineSegment = serde_json::from_value(serde_json::json!({
+            "recordingSegment": 0,
+            "timescale": 1.0,
+            "start": 0.0,
+            "end": 4.0
+        }))
+        .unwrap();
+        assert_eq!(segment.volume(), 1.0);
+        assert!(
+            serde_json::to_value(&segment)
+                .unwrap()
+                .get("volume")
+                .is_none()
+        );
+        segment.volume = Some(0.35);
+        let saved = serde_json::to_string(&segment).unwrap();
+        let restored: TimelineSegment = serde_json::from_str(&saved).unwrap();
+        assert_eq!(restored.volume(), 0.35);
+        for (volume, expected) in [
+            (-1.0, 0.0),
+            (0.0, 0.0),
+            (2.0, 2.0),
+            (3.0, 2.0),
+            (f64::NAN, 1.0),
+            (f64::INFINITY, 1.0),
+        ] {
+            segment.volume = Some(volume);
+            assert_eq!(segment.volume(), expected);
+        }
     }
 
     #[test]
@@ -1954,6 +3856,196 @@ mod tests {
 
         assert!(timeline.transitions.is_empty());
         assert_eq!(timeline.duration(), 4.0);
+    }
+
+    /// The editor TypeScript hardcodes these field names; the serialized
+    /// form is a compatibility contract, not an implementation detail.
+    #[test]
+    fn camera3d_segments_serialize_with_stable_field_names() {
+        let mut timeline = timeline_with_transitions(Vec::new());
+        timeline.camera3d_segments = vec![Camera3DSegment {
+            start: 1.0,
+            end: 3.0,
+            enabled: true,
+            properties: Camera3DProperties {
+                tilt_x: -28.0,
+                tilt_y: 26.0,
+                roll: 5.0,
+                zoom: 1.59,
+                pan_x: 0.37,
+                pan_y: -0.15,
+                ..Default::default()
+            },
+            blur: Camera3DBlur {
+                mode: Camera3DBlurMode::Radial,
+                strength: 19.0,
+                falloff: 0.62,
+                bokeh: true,
+                ..Default::default()
+            },
+            tracks: Camera3DTracks {
+                zoom: vec![
+                    Camera3DKeyframe {
+                        time: 0.0,
+                        value: 0.715,
+                        out_easing: Some([0.0, 0.0]),
+                        in_easing: None,
+                    },
+                    Camera3DKeyframe {
+                        time: 2.0,
+                        value: 2.1,
+                        out_easing: None,
+                        in_easing: Some([1.0, 1.0]),
+                    },
+                ],
+                ..Default::default()
+            },
+            transition_in: 0.3,
+            transition_out: 0.3,
+        }];
+
+        let json = serde_json::to_value(&timeline).unwrap();
+        let segment = &json["camera3dSegments"][0];
+        assert_eq!(segment["start"], 1.0);
+        assert_eq!(segment["properties"]["tiltX"], -28.0);
+        assert_eq!(segment["properties"]["tiltY"], 26.0);
+        assert_eq!(segment["properties"]["panX"], 0.37);
+        assert_eq!(segment["properties"]["fov"], 45.0);
+        assert_eq!(segment["properties"]["rotateX"], 0.0);
+        assert_eq!(segment["blur"]["mode"], "radial");
+        assert_eq!(segment["blur"]["strength"], 19.0);
+        assert_eq!(segment["blur"]["focusX"], 0.37);
+        assert_eq!(segment["blur"]["dirPosition"], 0.5);
+        assert_eq!(segment["blur"]["bokeh"], true);
+        assert_eq!(segment["tracks"]["zoom"][0]["time"], 0.0);
+        assert_eq!(segment["tracks"]["zoom"][0]["value"], 0.715);
+        assert_eq!(segment["tracks"]["zoom"][0]["outEasing"][1], 0.0);
+        assert!(segment["tracks"]["zoom"][0].get("inEasing").is_none());
+        assert!(segment["tracks"].get("tiltX").is_none());
+        assert_eq!(segment["transitionIn"], 0.3);
+        assert_eq!(
+            serde_json::to_value(Camera3DBlurMode::TiltShift).unwrap(),
+            serde_json::json!("tiltShift")
+        );
+
+        // Old configs without the field still load, and the loaded form
+        // round-trips.
+        let legacy: TimelineConfiguration = serde_json::from_value(serde_json::json!({
+            "segments": [
+                { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 4.0 }
+            ],
+            "zoomSegments": []
+        }))
+        .unwrap();
+        assert!(legacy.camera3d_segments.is_empty());
+
+        let reloaded: TimelineConfiguration = serde_json::from_value(json).unwrap();
+        assert_eq!(reloaded.camera3d_segments.len(), 1);
+        assert_eq!(reloaded.camera3d_segments[0].tracks.zoom.len(), 2);
+        assert_eq!(
+            reloaded.camera3d_segments[0].tracks.zoom[0].out_easing,
+            Some([0.0, 0.0])
+        );
+        assert_eq!(
+            reloaded.camera3d_segments[0].blur.mode,
+            Camera3DBlurMode::Radial
+        );
+    }
+
+    fn clip(start: f64, end: f64, hide_cursor: bool) -> TimelineSegment {
+        TimelineSegment {
+            recording_clip: 0,
+            timescale: 1.0,
+            start,
+            end,
+            name: None,
+            speed_audio_mode: None,
+            volume: None,
+            hide_cursor: hide_cursor.then_some(true),
+        }
+    }
+
+    fn cursor_timeline(segments: Vec<TimelineSegment>) -> TimelineConfiguration {
+        TimelineConfiguration {
+            segments,
+            ..timeline_with_transitions(Vec::new())
+        }
+    }
+
+    #[test]
+    fn hide_cursor_is_omitted_from_json_unless_set() {
+        let visible = serde_json::to_value(clip(0.0, 1.0, false)).unwrap();
+        assert!(visible.get("hideCursor").is_none());
+        let hidden = serde_json::to_value(clip(0.0, 1.0, true)).unwrap();
+        assert_eq!(hidden["hideCursor"], serde_json::Value::Bool(true));
+        let legacy: TimelineSegment =
+            serde_json::from_str(r#"{"timescale":1.0,"start":0.0,"end":1.0}"#).unwrap();
+        assert!(!legacy.hides_cursor());
+    }
+
+    #[test]
+    fn cursor_visibility_is_full_without_hidden_clips() {
+        let timeline = cursor_timeline(vec![clip(0.0, 4.0, false), clip(4.0, 8.0, false)]);
+        for time in [0.0, 3.9, 4.0, 7.9] {
+            assert_eq!(timeline.cursor_visibility_at(time), 1.0);
+        }
+    }
+
+    #[test]
+    fn cursor_fades_at_both_edges_of_a_hidden_middle_clip() {
+        let timeline = cursor_timeline(vec![
+            clip(0.0, 4.0, false),
+            clip(4.0, 8.0, true),
+            clip(8.0, 12.0, false),
+        ]);
+        assert_eq!(timeline.cursor_visibility_at(3.99), 1.0);
+        assert_eq!(timeline.cursor_visibility_at(4.0), 1.0);
+        let half = timeline.cursor_visibility_at(4.0 + CLIP_CURSOR_FADE_SECS / 2.0);
+        assert!((half - 0.5).abs() < 1e-9, "{half}");
+        assert_eq!(
+            timeline.cursor_visibility_at(4.0 + CLIP_CURSOR_FADE_SECS),
+            0.0
+        );
+        assert_eq!(timeline.cursor_visibility_at(6.0), 0.0);
+        let back = timeline.cursor_visibility_at(8.0 - CLIP_CURSOR_FADE_SECS / 2.0);
+        assert!((back - 0.5).abs() < 1e-9, "{back}");
+        assert_eq!(timeline.cursor_visibility_at(8.0), 1.0);
+        assert_eq!(timeline.cursor_visibility_at(10.0), 1.0);
+    }
+
+    #[test]
+    fn cursor_never_fades_in_at_the_timeline_ends() {
+        let timeline = cursor_timeline(vec![clip(0.0, 4.0, true), clip(4.0, 8.0, true)]);
+        assert_eq!(timeline.cursor_visibility_at(0.0), 0.0);
+        assert_eq!(timeline.cursor_visibility_at(0.1), 0.0);
+        assert_eq!(timeline.cursor_visibility_at(4.0), 0.0);
+        assert_eq!(timeline.cursor_visibility_at(7.95), 0.0);
+    }
+
+    #[test]
+    fn adjacent_hidden_clips_fade_as_one_run() {
+        let timeline = cursor_timeline(vec![
+            clip(0.0, 2.0, false),
+            clip(2.0, 4.0, true),
+            clip(4.0, 6.0, true),
+            clip(6.0, 8.0, false),
+        ]);
+        assert_eq!(timeline.cursor_visibility_at(3.9), 0.0);
+        assert_eq!(timeline.cursor_visibility_at(4.0), 0.0);
+        assert_eq!(timeline.cursor_visibility_at(4.1), 0.0);
+        assert!(timeline.cursor_visibility_at(5.9) > 0.0);
+    }
+
+    #[test]
+    fn cursor_visibility_follows_held_output_time() {
+        let mut timeline = cursor_timeline(vec![clip(0.0, 4.0, false), clip(4.0, 8.0, true)]);
+        timeline.text_segments = vec![fullscreen_text(1.0, 3.0)];
+        assert_eq!(timeline.cursor_visibility_at(5.0), 1.0);
+        assert_eq!(timeline.cursor_visibility_at(6.0), 1.0);
+        assert_eq!(
+            timeline.cursor_visibility_at(6.0 + CLIP_CURSOR_FADE_SECS),
+            0.0
+        );
     }
 
     #[test]
@@ -2144,11 +4236,32 @@ mod tests {
                     font_weight: 700.0,
                     italic: false,
                     color: "#ffffff".to_string(),
+                    background_color: None,
+                    background_style: TextBackgroundStyle::Box,
+                    uppercase: false,
+                    stroke_width: 0.0,
+                    stroke_color: "#000000".to_string(),
+                    gradient_color: None,
+                    glow: 0.0,
                     fade_duration: 0.15,
+                    align: TextAlign::Center,
+                    letter_spacing: 0.0,
+                    line_height: 1.2,
+                    opacity: 1.0,
+                    shadow: 0.0,
+                    animation_in: TextAnimation::Fade,
+                    animation_out: TextAnimation::Fade,
+                    animation_in_duration: 0.15,
+                    animation_out_duration: 0.15,
+                    layout: TextLayout::Overlay,
+                    layout_transition: 0.5,
                 }],
                 caption_segments: Vec::new(),
                 keyboard_segments: Vec::new(),
                 audio_segments: Vec::new(),
+                style_segments: Vec::new(),
+                image_segments: Vec::new(),
+                camera3d_segments: Vec::new(),
             }),
             ..Default::default()
         };
@@ -2209,6 +4322,143 @@ mod tests {
 
         let segment = &config.timeline.as_ref().unwrap().text_segments[0];
         assert_eq!(segment.font_size, 96.0);
+    }
+
+    fn write_config_with_text_fade(project_path: &std::path::Path, fade_duration: f64) {
+        let mut config = ProjectConfiguration {
+            timeline: Some(TimelineConfiguration {
+                segments: Vec::new(),
+                transitions: Vec::new(),
+                zoom_segments: Vec::new(),
+                scene_segments: Vec::new(),
+                mask_segments: Vec::new(),
+                text_segments: vec![TextSegment {
+                    start: 0.0,
+                    end: 1.0,
+                    track: 0,
+                    enabled: true,
+                    content: "Text".to_string(),
+                    center: XY::new(0.5, 0.5),
+                    size: XY::new(0.35, 0.2),
+                    font_family: "sans-serif".to_string(),
+                    font_size: 48.0,
+                    font_weight: 700.0,
+                    italic: false,
+                    color: "#ffffff".to_string(),
+                    background_color: None,
+                    background_style: TextBackgroundStyle::Box,
+                    uppercase: false,
+                    stroke_width: 0.0,
+                    stroke_color: "#000000".to_string(),
+                    gradient_color: None,
+                    glow: 0.0,
+                    fade_duration,
+                    align: TextAlign::Center,
+                    letter_spacing: 0.0,
+                    line_height: 1.2,
+                    opacity: 1.0,
+                    shadow: 0.0,
+                    animation_in: TextAnimation::Fade,
+                    animation_out: TextAnimation::Fade,
+                    animation_in_duration: 0.15,
+                    animation_out_duration: 0.15,
+                    layout: TextLayout::Overlay,
+                    layout_transition: 0.5,
+                }],
+                caption_segments: Vec::new(),
+                keyboard_segments: Vec::new(),
+                audio_segments: Vec::new(),
+                style_segments: Vec::new(),
+                image_segments: Vec::new(),
+                camera3d_segments: Vec::new(),
+            }),
+            ..Default::default()
+        };
+        config.text_anim_version = 0;
+
+        let mut value = serde_json::to_value(&config).unwrap();
+        let object = value.as_object_mut().unwrap();
+        object.remove("textAnimVersion");
+        // A legacy file predates the animation fields entirely.
+        if let Some(segments) = value
+            .pointer_mut("/timeline/textSegments")
+            .and_then(Value::as_array_mut)
+        {
+            for segment in segments {
+                let object = segment.as_object_mut().unwrap();
+                for key in [
+                    "align",
+                    "letterSpacing",
+                    "lineHeight",
+                    "opacity",
+                    "shadow",
+                    "animationIn",
+                    "animationOut",
+                    "animationInDuration",
+                    "animationOutDuration",
+                ] {
+                    object.remove(key);
+                }
+            }
+        }
+        std::fs::write(
+            project_path.join("project-config.json"),
+            serde_json::to_string(&value).unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn legacy_text_fade_seeds_animation_durations() {
+        let dir = tempfile::tempdir().unwrap();
+        write_config_with_text_fade(dir.path(), 0.5);
+
+        let config = ProjectConfiguration::load(dir.path()).unwrap();
+
+        let segment = &config.timeline.as_ref().unwrap().text_segments[0];
+        assert_eq!(segment.animation_in, TextAnimation::Fade);
+        assert_eq!(segment.animation_out, TextAnimation::Fade);
+        assert_eq!(segment.animation_in_duration, 0.5);
+        assert_eq!(segment.animation_out_duration, 0.5);
+        assert_eq!(config.text_anim_version, TEXT_ANIM_VERSION);
+    }
+
+    #[test]
+    fn legacy_text_zero_fade_disables_animation() {
+        let dir = tempfile::tempdir().unwrap();
+        write_config_with_text_fade(dir.path(), 0.0);
+
+        let config = ProjectConfiguration::load(dir.path()).unwrap();
+
+        let segment = &config.timeline.as_ref().unwrap().text_segments[0];
+        assert_eq!(segment.animation_in, TextAnimation::None);
+        assert_eq!(segment.animation_out, TextAnimation::None);
+        assert_eq!(segment.animation_in_duration, 0.0);
+        assert_eq!(segment.animation_out_duration, 0.0);
+    }
+
+    #[test]
+    fn text_background_color_is_optional_and_omitted_when_unset() {
+        let segment: TextSegment = serde_json::from_value(serde_json::json!({
+            "start": 0.0,
+            "end": 1.0,
+        }))
+        .unwrap();
+        assert_eq!(segment.background_color, None);
+        assert!(
+            serde_json::to_value(segment)
+                .unwrap()
+                .get("backgroundColor")
+                .is_none()
+        );
+
+        let segment: TextSegment = serde_json::from_value(serde_json::json!({
+            "start": 0.0,
+            "end": 1.0,
+            "backgroundColor": "#102030",
+        }))
+        .unwrap();
+        assert_eq!(segment.background_color.as_deref(), Some("#102030"));
     }
 
     #[test]
@@ -2292,5 +4542,155 @@ mod tests {
         assert_eq!(spring.stiffness, default_spring.stiffness);
         assert_eq!(spring.damping, default_spring.damping);
         assert_eq!(spring.mass, default_spring.mass);
+    }
+
+    #[test]
+    fn legacy_cursor_config_loads_with_ripple_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("project-config.json"),
+            r#"{ "cursor": { "type": "auto", "size": 120 } }"#,
+        )
+        .unwrap();
+
+        let config = ProjectConfiguration::load(dir.path()).unwrap();
+
+        assert_eq!(*config.cursor.cursor_type(), CursorType::Auto);
+        assert_eq!(config.cursor.size, 120);
+        assert_eq!(config.cursor.ripple, CursorRippleConfig::default());
+        assert!(!config.cursor.ripple.enabled);
+        assert_eq!(config.cursor.ripple.color, [71, 133, 255]);
+    }
+
+    #[test]
+    fn cursor_type_families_round_trip() {
+        for (token, expected, family) in [
+            ("macos", CursorType::MacOS, Some(CursorFamily::MacOS)),
+            (
+                "tahoe",
+                CursorType::MacOSTahoe,
+                Some(CursorFamily::MacOSTahoe),
+            ),
+            ("windows", CursorType::Windows, Some(CursorFamily::Windows)),
+            ("circle", CursorType::Circle, None),
+            ("pointer", CursorType::Pointer, None),
+            ("auto", CursorType::Auto, None),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(
+                dir.path().join("project-config.json"),
+                format!(r#"{{ "cursor": {{ "type": "{token}" }} }}"#),
+            )
+            .unwrap();
+
+            let config = ProjectConfiguration::load(dir.path()).unwrap();
+            assert_eq!(*config.cursor.cursor_type(), expected, "{token}");
+            assert_eq!(config.cursor.cursor_type().family(), family, "{token}");
+
+            let json = serde_json::to_value(&config.cursor).unwrap();
+            assert_eq!(json["type"], token, "{token} does not re-serialise");
+        }
+    }
+
+    #[test]
+    fn set_cursor_type_replaces_the_private_field() {
+        let mut cursor = CursorConfiguration::default();
+        assert_eq!(*cursor.cursor_type(), CursorType::Auto);
+
+        cursor.set_cursor_type(CursorType::MacOSTahoe);
+
+        assert_eq!(*cursor.cursor_type(), CursorType::MacOSTahoe);
+    }
+
+    #[test]
+    fn ripple_config_clamps_hand_edited_values() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("project-config.json"),
+            r#"{ "cursor": { "ripple": {
+                "enabled": true,
+                "color": [10, 20, 30],
+                "strength": 9.0,
+                "size": 0.0,
+                "duration": 40.0
+            } } }"#,
+        )
+        .unwrap();
+
+        let config = ProjectConfiguration::load(dir.path()).unwrap();
+        let ripple = &config.cursor.ripple;
+
+        assert!(ripple.enabled);
+        assert_eq!(ripple.color, [10, 20, 30]);
+        assert_eq!(ripple.strength_clamped(), 1.0);
+        assert_eq!(ripple.size_clamped(), 0.25);
+        assert_eq!(ripple.duration_clamped(), 1.5);
+
+        let nonfinite = CursorRippleConfig {
+            strength: f32::NAN,
+            size: f32::INFINITY,
+            duration: f32::NEG_INFINITY,
+            ..Default::default()
+        };
+        assert_eq!(
+            nonfinite.strength_clamped(),
+            CursorRippleConfig::DEFAULT_STRENGTH
+        );
+        assert_eq!(nonfinite.size_clamped(), CursorRippleConfig::DEFAULT_SIZE);
+        assert_eq!(
+            nonfinite.duration_clamped(),
+            CursorRippleConfig::DEFAULT_DURATION
+        );
+    }
+}
+
+#[cfg(test)]
+mod overlay_order_tests {
+    use super::{OverlayTrack, OverlayTrackKind, ProjectConfiguration};
+
+    fn layer(kind: OverlayTrackKind, track: u32) -> OverlayTrack {
+        OverlayTrack { kind, track }
+    }
+
+    #[test]
+    fn old_projects_keep_the_default_stack() {
+        let project: ProjectConfiguration = serde_json::from_str("{}").unwrap();
+        let available = [
+            layer(OverlayTrackKind::Text, 0),
+            layer(OverlayTrackKind::Image, 0),
+            layer(OverlayTrackKind::Mask, 0),
+        ];
+        assert_eq!(project.resolved_overlay_order(&available), available);
+    }
+
+    #[test]
+    fn custom_stack_roundtrips_and_ignores_stale_duplicate_entries() {
+        let text = layer(OverlayTrackKind::Text, 0);
+        let image = layer(OverlayTrackKind::Image, 0);
+        let project = ProjectConfiguration {
+            overlay_order: vec![image, image, layer(OverlayTrackKind::Mask, 9), text],
+            ..Default::default()
+        };
+        let restored: ProjectConfiguration =
+            serde_json::from_str(&serde_json::to_string(&project).unwrap()).unwrap();
+        assert_eq!(
+            restored.resolved_overlay_order(&[text, image]),
+            [image, text]
+        );
+    }
+
+    #[test]
+    fn new_layers_appear_above_the_saved_stack() {
+        let text = layer(OverlayTrackKind::Text, 0);
+        let image = layer(OverlayTrackKind::Image, 0);
+        let new_image = layer(OverlayTrackKind::Image, 1);
+        let project = ProjectConfiguration {
+            overlay_order: vec![image, text],
+            ..Default::default()
+        };
+        assert_eq!(
+            project.resolved_overlay_order(&[text, new_image, image]),
+            [new_image, image, text]
+        );
     }
 }

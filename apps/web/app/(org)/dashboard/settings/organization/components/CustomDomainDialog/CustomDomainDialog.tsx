@@ -466,7 +466,7 @@ const CustomDomainDialog = ({
 											handleClose();
 										}}
 									>
-										Upgrade To Cap Pro
+										Upgrade to Cap Pro
 									</Button>
 								))}
 						</DialogFooter>

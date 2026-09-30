@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { LoomDownloader } from "@/components/tools/LoomDownloader";
 import { ToolsPageTemplate } from "@/components/tools/ToolsPageTemplate";
 import type { ToolPageContent } from "@/components/tools/types";
+import { PRICING } from "@/data/pricing";
 import { ogImageUrl } from "@/lib/og/url";
 import { createBreadcrumbSchema } from "@/utils/web-schema";
 
@@ -67,7 +68,7 @@ const pageContent: ToolPageContent = {
 		"Download any public Loom video as an MP4 — or skip the one-by-one downloads and migrate your whole Loom library to Cap with 20% off using code MIGRATE20.",
 	featuresTitle: "Download Loom videos, then move your whole library to Cap",
 	featuresDescription:
-		"Cap's Loom downloader is free, fast, and requires zero setup. When you're ready to leave Loom for good, Cap Pro's built-in <a href=\"/loom-alternative\">Loom video importer</a> moves your entire workspace in one click.",
+		"Cap's Loom downloader is free, fast, and requires zero setup. When you're ready to leave Loom for good, Cap Pro's built-in <a href=\"/migrate-from-loom\">Loom video importer</a> moves your entire workspace in one click.",
 	features: [
 		{
 			title: "Instant Downloads",
@@ -91,8 +92,7 @@ const pageContent: ToolPageContent = {
 		},
 		{
 			title: "Half the Price of Loom",
-			description:
-				"Cap Pro starts from just $8.16/user/month vs Loom's $18/user/month. Use code <strong>MIGRATE20</strong> at checkout for an extra 20% off your first year.",
+			description: `Cap Pro starts from just $${PRICING.pro.annualPerMonth}/user/month vs Loom's $18/user/month. Use code <strong>MIGRATE20</strong> at checkout for an extra 20% off your first year.`,
 		},
 		{
 			title: "Open Source & Privacy-First",
@@ -123,8 +123,7 @@ const pageContent: ToolPageContent = {
 		},
 		{
 			question: "Why migrate from Loom to Cap?",
-			answer:
-				"Cap is the open source Loom alternative built for teams that care about data ownership and price. You get unlimited cloud storage, instant shareable links, AI captions, custom domains, and your own S3 bucket — all from $8.16/user/month vs Loom's $18/user/month. Use MIGRATE20 for an additional 20% off.",
+			answer: `Cap is the open source Loom alternative built for teams that care about data ownership and price. You get unlimited cloud storage, instant shareable links, AI captions, custom domains, and your own S3 bucket — all from $${PRICING.pro.annualPerMonth}/user/month vs Loom's $18/user/month. Use MIGRATE20 for an additional 20% off.`,
 		},
 		{
 			question: "Can I download private Loom videos?",

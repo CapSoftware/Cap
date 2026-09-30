@@ -49,7 +49,7 @@ export const Testimonials = ({
 			<div className="gap-3 mt-8 space-y-3 columns-1 md:columns-2 lg:columns-3">
 				{displayedTestimonials.map((testimonial) => (
 					<motion.div
-						key={testimonial.url}
+						key={`${testimonial.name}:${testimonial.url}`}
 						className="mb-3 break-inside-avoid"
 						initial={{ opacity: 0, y: 10 }}
 						animate={{ opacity: 1, y: 0 }}

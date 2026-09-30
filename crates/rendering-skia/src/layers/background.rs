@@ -30,6 +30,14 @@ impl From<BackgroundSource> for Background {
             BackgroundSource::Gradient {
                 from, to, angle, ..
             } => Background::Gradient { from, to, angle },
+            BackgroundSource::AnimatedGradient { config } => {
+                let config = config.normalized();
+                Background::Gradient {
+                    from: config.color_stops[0].color,
+                    to: config.color_stops[config.color_stops.len() - 1].color,
+                    angle: config.direction.round() as u16,
+                }
+            }
             BackgroundSource::Image { path } => {
                 if let Some(path) = path {
                     Background::Image {
@@ -325,6 +333,21 @@ impl Default for BackgroundLayer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn animated_gradient_has_a_static_palette_fallback() {
+        let source = BackgroundSource::AnimatedGradient {
+            config: cap_project::AnimatedGradientConfig::default(),
+        };
+        assert!(matches!(
+            Background::from(source),
+            Background::Gradient {
+                from: [255, 107, 53],
+                to: [26, 26, 46],
+                angle: 45
+            }
+        ));
+    }
 
     #[test]
     fn test_background_from_source() {

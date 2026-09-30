@@ -8,7 +8,9 @@ import {
 	createMemo,
 	createRoot,
 	createSignal,
+	For,
 	Index,
+	type JSX,
 	Match,
 	onCleanup,
 	onMount,
@@ -16,8 +18,19 @@ import {
 	Switch,
 } from "solid-js";
 import { produce } from "solid-js/store";
-
 import type { TimelineSegment } from "~/utils/tauri";
+import IconLucideArrowLeftToLine from "~icons/lucide/arrow-left-to-line";
+import IconLucideArrowRightToLine from "~icons/lucide/arrow-right-to-line";
+import IconLucideMousePointerBan from "~icons/lucide/mouse-pointer-ban";
+import IconLucideScissors from "~icons/lucide/scissors";
+import IconLucideTrash2 from "~icons/lucide/trash-2";
+import IconLucideVolumeX from "~icons/lucide/volume-x";
+import { clipAudioMuted, clipVolume } from "../clip-audio";
+import {
+	type ClipMergeDirection,
+	clipMergeBlocker,
+	clipMergeBlockerHint,
+} from "../clip-merge";
 import {
 	clampTransitionDuration,
 	clipTimelineDuration,
@@ -29,11 +42,16 @@ import {
 	maxTransitionDuration,
 } from "../clip-transitions";
 import { useEditorContext } from "../context";
+import { TextInput } from "../TextInput";
+import { effectiveToOutput, holdWindows } from "../timeline-holds";
+import { Slider } from "../ui";
 import { useSegmentContext, useTimelineContext } from "./context";
 import { getSectionMarker } from "./sectionMarker";
+import { SPLIT_SNAP_PX, snapSplitTime } from "./split-snapping";
 import {
 	SegmentContent,
 	SegmentHandle,
+	SegmentLabel,
 	SegmentRoot,
 	TrackRoot,
 	useSegmentTranslateX,
@@ -59,15 +77,19 @@ function gainToScale(gain?: number) {
 
 const MAX_WAVEFORM_SAMPLES = 6000;
 
+// `range` is in output (timeline) time; `sourceTimeAt` maps an output time to
+// recording time, or null while a fullscreen-text hold has the clock paused —
+// the mixer renders silence there, so the waveform drops to the baseline.
 function createWaveformPath(
-	segment: { start: number; end: number },
+	range: { start: number; end: number },
 	waveform: number[] | undefined,
 	targetSamples: number,
+	sourceTimeAt: (outputTime: number) => number | null,
 ) {
 	if (typeof Path2D === "undefined") return;
 	if (!waveform || waveform.length === 0) return;
 
-	const duration = Math.max(segment.end - segment.start, WAVEFORM_SAMPLE_STEP);
+	const duration = Math.max(range.end - range.start, WAVEFORM_SAMPLE_STEP);
 	if (!Number.isFinite(duration) || duration <= 0) return;
 
 	const nativeSamples = Math.ceil(duration / WAVEFORM_SAMPLE_STEP) + 1;
@@ -82,7 +104,9 @@ function createWaveformPath(
 	const path = new Path2D();
 	path.moveTo(0, 1);
 
-	const amplitudeAt = (time: number) => {
+	const amplitudeAt = (outputTime: number) => {
+		const time = sourceTimeAt(outputTime);
+		if (time === null) return 0;
 		const index = Math.floor(time * 10);
 		const sample = waveform[index];
 		const db =
@@ -97,10 +121,10 @@ function createWaveformPath(
 	const controlStep = Math.min(WAVEFORM_CONTROL_STEP / duration, 0.25);
 
 	for (let i = 0; i <= numSamples; i++) {
-		const time = segment.start + i * timeStep;
-		const normalizedX = (time - segment.start) / duration;
+		const time = range.start + i * timeStep;
+		const normalizedX = (time - range.start) / duration;
 		const prevTime = time - timeStep;
-		const prevX = Math.max(0, (prevTime - segment.start) / duration);
+		const prevX = Math.max(0, (prevTime - range.start) / duration);
 		const y = 1 - amplitudeAt(time);
 		const prevY = 1 - amplitudeAt(prevTime);
 		const cpX1 = prevX + controlStep / 2;
@@ -109,7 +133,7 @@ function createWaveformPath(
 	}
 
 	const closingX =
-		(segment.end + WAVEFORM_PADDING_SECONDS - segment.start) / duration;
+		(range.end + WAVEFORM_PADDING_SECONDS - range.start) / duration;
 	path.lineTo(closingX, 1);
 	path.closePath();
 
@@ -136,8 +160,9 @@ const SAMPLES_PER_PIXEL = 2;
 function WaveformCanvas(props: {
 	systemWaveform?: number[];
 	micWaveform?: number[];
-	segment: { start: number; end: number };
+	segment: Pick<TimelineSegment, "start" | "end" | "volume">;
 	segmentOffset: number;
+	holds: ReadonlyArray<[number, number]>;
 }) {
 	const { project, editorState } = useEditorContext();
 	const { width } = useSegmentContext();
@@ -146,6 +171,11 @@ function WaveformCanvas(props: {
 	let canvas: HTMLCanvasElement | undefined;
 	let rafId: number | null = null;
 	let lastRenderKey = "";
+	let pathKey = "";
+	let micPath: Path2D | undefined;
+	let systemPath: Path2D | undefined;
+	let cachedMicWaveform: number[] | undefined;
+	let cachedSystemWaveform: number[] | undefined;
 
 	const renderCanvas = () => {
 		rafId = null;
@@ -153,19 +183,40 @@ function WaveformCanvas(props: {
 		const ctx = canvas.getContext("2d");
 		if (!ctx) return;
 
-		const segmentDuration = props.segment.end - props.segment.start;
+		// Hold windows relative to the clip's box; the box is stretched across
+		// them, so the canvas spans output time, not source time.
+		const holds = props.holds.map(([start, end]): [number, number] => [
+			start - props.segmentOffset,
+			end - props.segmentOffset,
+		]);
+		const heldDuration = holds.reduce(
+			(sum, [start, end]) => sum + end - start,
+			0,
+		);
+		const outputDuration =
+			props.segment.end - props.segment.start + heldDuration;
 		const fullSegmentWidth = width();
 
-		if (fullSegmentWidth < 1 || segmentDuration <= 0) {
+		if (fullSegmentWidth < 1 || outputDuration <= 0) {
 			return;
 		}
+
+		const sourceTimeAt = (outputTime: number): number | null => {
+			let held = 0;
+			for (const [start, end] of holds) {
+				if (outputTime >= end) held += end - start;
+				else if (outputTime > start) return null;
+				else break;
+			}
+			return props.segment.start + outputTime - held;
+		};
 
 		const useVirtualization = fullSegmentWidth > MAX_CANVAS_WIDTH;
 
 		let canvasWidth: number;
 		let leftOffsetPx: number;
 		let renderWidth: number;
-		let renderSegment: { start: number; end: number };
+		let renderRange: { start: number; end: number };
 
 		if (useVirtualization) {
 			const viewportWidth = timelineBounds.width ?? 800;
@@ -174,7 +225,7 @@ function WaveformCanvas(props: {
 			const viewEnd = viewStart + transform.zoom;
 
 			const segStart = props.segmentOffset;
-			const segEnd = segStart + segmentDuration;
+			const segEnd = segStart + outputDuration;
 
 			const visibleStart = Math.max(viewStart, segStart);
 			const visibleEnd = Math.min(viewEnd, segEnd);
@@ -183,13 +234,14 @@ function WaveformCanvas(props: {
 				canvas.width = 1;
 				canvas.style.left = "0px";
 				canvas.style.width = "1px";
+				lastRenderKey = "";
 				return;
 			}
 
 			const visibleStartInSegment = visibleStart - segStart;
 			const visibleEndInSegment = visibleEnd - segStart;
 
-			const pxPerSec = fullSegmentWidth / segmentDuration;
+			const pxPerSec = fullSegmentWidth / outputDuration;
 			const visibleWidthPx = Math.min(
 				(visibleEndInSegment - visibleStartInSegment) * pxPerSec,
 				viewportWidth + 200,
@@ -201,32 +253,38 @@ function WaveformCanvas(props: {
 			);
 			leftOffsetPx = visibleStartInSegment * pxPerSec;
 			renderWidth = visibleWidthPx;
-			renderSegment = {
-				start: props.segment.start + visibleStartInSegment,
-				end: props.segment.start + visibleEndInSegment,
+			renderRange = {
+				start: visibleStartInSegment,
+				end: visibleEndInSegment,
 			};
 		} else {
 			canvasWidth = Math.max(Math.ceil(fullSegmentWidth), 1);
 			leftOffsetPx = 0;
 			renderWidth = fullSegmentWidth;
-			renderSegment = {
-				start: props.segment.start,
-				end: props.segment.end,
-			};
+			renderRange = { start: 0, end: outputDuration };
 		}
 
-		const micScale = gainToScale(project.audio.micVolumeDb);
-		const systemScale = gainToScale(project.audio.systemVolumeDb);
+		const volume = clipVolume(props.segment);
+		const micScale = gainToScale(project.audio.micVolumeDb) * volume;
+		const systemScale = gainToScale(project.audio.systemVolumeDb) * volume;
 
-		const renderKey = `${canvasWidth}-${renderSegment.start.toFixed(2)}-${renderSegment.end.toFixed(2)}-${micScale.toFixed(2)}-${systemScale.toFixed(2)}`;
-		if (renderKey === lastRenderKey) {
+		const holdsKey = holds.map(([start, end]) => `${start}:${end}`).join(",");
+		const geometryKey = `${canvasWidth}-${props.segment.start}-${renderRange.start}-${renderRange.end}-${holdsKey}`;
+		const renderKey = `${geometryKey}-${leftOffsetPx}-${renderWidth}-${micScale}-${systemScale}`;
+		const micWaveform = props.micWaveform;
+		const systemWaveform = props.systemWaveform;
+		const micChanged = cachedMicWaveform !== micWaveform;
+		const systemChanged = cachedSystemWaveform !== systemWaveform;
+		if (renderKey === lastRenderKey && !micChanged && !systemChanged) {
 			return;
 		}
 		lastRenderKey = renderKey;
 
-		canvas.width = canvasWidth;
-		canvas.style.left = `${leftOffsetPx}px`;
-		canvas.style.width = `${renderWidth}px`;
+		if (canvas.width !== canvasWidth) canvas.width = canvasWidth;
+		const left = `${leftOffsetPx}px`;
+		const cssWidth = `${renderWidth}px`;
+		if (canvas.style.left !== left) canvas.style.left = left;
+		if (canvas.style.width !== cssWidth) canvas.style.width = cssWidth;
 
 		const canvasHeight = canvas.height;
 		ctx.clearRect(0, 0, canvasWidth, canvasHeight);
@@ -236,33 +294,40 @@ function WaveformCanvas(props: {
 			MAX_WAVEFORM_SAMPLES,
 		);
 
-		const drawWaveform = (
-			waveform: number[] | undefined,
-			color: string,
-			gain?: number,
-		) => {
-			const path = createWaveformPath(renderSegment, waveform, numSamples);
-			if (!path) return;
-			const scale = gainToScale(gain);
-			if (scale <= 0) return;
+		if (pathKey !== geometryKey || micChanged) {
+			micPath = createWaveformPath(
+				renderRange,
+				micWaveform,
+				numSamples,
+				sourceTimeAt,
+			);
+			cachedMicWaveform = micWaveform;
+		}
+		if (pathKey !== geometryKey || systemChanged) {
+			systemPath = createWaveformPath(
+				renderRange,
+				systemWaveform,
+				numSamples,
+				sourceTimeAt,
+			);
+			cachedSystemWaveform = systemWaveform;
+		}
+		pathKey = geometryKey;
+
+		const drawWaveform = (path: Path2D | undefined, scale: number) => {
+			if (!path || scale <= 0) return;
 			ctx.save();
 			ctx.translate(0, canvasHeight * (1 - scale));
 			ctx.scale(canvasWidth, canvasHeight * scale);
-			ctx.fillStyle = color;
 			ctx.fill(path);
 			ctx.restore();
 		};
 
-		drawWaveform(
-			props.micWaveform,
-			"rgba(255,255,255,0.4)",
-			project.audio.micVolumeDb,
-		);
-		drawWaveform(
-			props.systemWaveform,
-			"rgba(255,150,0,0.5)",
-			project.audio.systemVolumeDb,
-		);
+		ctx.fillStyle = getComputedStyle(canvas).color;
+		ctx.globalAlpha = 0.55;
+		drawWaveform(micPath, micScale);
+		drawWaveform(systemPath, systemScale);
+		ctx.globalAlpha = 1;
 	};
 
 	createEffect(() => {
@@ -272,6 +337,9 @@ function WaveformCanvas(props: {
 		editorState.timeline.transform.zoom;
 		props.segment.start;
 		props.segment.end;
+		props.segment.volume;
+		props.segmentOffset;
+		props.holds;
 		props.micWaveform;
 		props.systemWaveform;
 		project.audio.micVolumeDb;
@@ -284,13 +352,14 @@ function WaveformCanvas(props: {
 	});
 
 	onMount(() => {
-		setTimeout(() => {
+		const timeout = setTimeout(() => {
 			lastRenderKey = "";
 			if (rafId !== null) {
 				cancelAnimationFrame(rafId);
 			}
 			rafId = requestAnimationFrame(renderCanvas);
 		}, 300);
+		onCleanup(() => clearTimeout(timeout));
 	});
 
 	onCleanup(() => {
@@ -304,10 +373,415 @@ function WaveformCanvas(props: {
 			ref={(el) => {
 				canvas = el;
 			}}
-			class="absolute top-0 h-full pointer-events-none"
-			style={{ left: "0px" }}
+			class="absolute bottom-0 h-[18px] pointer-events-none"
+			style={{ left: "0px", color: "var(--track-clip)" }}
 			height={CANVAS_HEIGHT}
 		/>
+	);
+}
+
+const CLIP_SPEEDS = [0.25, 0.5, 1, 1.5, 2, 4, 8] as const;
+
+type ClipMenuAnchor = { x: number; y: number };
+
+function ClipMenuSection(props: { name: string; children: JSX.Element }) {
+	return (
+		<div class="flex flex-col gap-1">
+			<span class="px-2 text-[10px] font-medium uppercase tracking-[0.08em] text-ed-text-3">
+				{props.name}
+			</span>
+			{props.children}
+		</div>
+	);
+}
+
+function ClipMenuChips<T extends string | number>(props: {
+	options: ReadonlyArray<readonly [T, string]>;
+	value: T;
+	onChange: (value: T) => void;
+	label: string;
+}) {
+	return (
+		<div
+			role="radiogroup"
+			aria-label={props.label}
+			class="flex items-center gap-0.5 rounded-lg bg-ed-ctl p-0.5"
+		>
+			<For each={props.options}>
+				{([value, label]) => (
+					<button
+						type="button"
+						role="radio"
+						aria-checked={props.value === value}
+						class={cx(
+							"flex-1 rounded-md px-1.5 py-1 text-[11.5px] whitespace-nowrap tabular-nums transition-colors outline-hidden focus-visible:ring-1 focus-visible:ring-ed-accent",
+							props.value === value
+								? "bg-ed-ctl-active text-ed-text-1"
+								: "text-ed-text-2 hover:text-ed-text-1",
+						)}
+						onClick={() => props.onChange(value)}
+					>
+						{label}
+					</button>
+				)}
+			</For>
+		</div>
+	);
+}
+
+function ClipMenuToggleRow(props: {
+	icon: JSX.Element;
+	label: string;
+	description: string;
+	checked: boolean;
+	onChange: (checked: boolean) => void;
+}) {
+	return (
+		<button
+			type="button"
+			role="switch"
+			aria-checked={props.checked}
+			class="flex h-10 w-full items-center gap-2.5 rounded-lg px-2 text-left transition-colors outline-hidden hover:bg-ed-ctl-hover focus-visible:bg-ed-ctl-hover"
+			onClick={() => props.onChange(!props.checked)}
+		>
+			<span
+				class={cx(
+					"flex size-4 shrink-0 items-center justify-center [&_svg]:size-3.5",
+					props.checked ? "text-ed-accent" : "text-ed-text-2",
+				)}
+			>
+				{props.icon}
+			</span>
+			<span class="flex min-w-0 flex-1 flex-col leading-tight">
+				<span class="truncate text-[12.5px] text-ed-text-1">{props.label}</span>
+				<span class="truncate text-[10.5px] text-ed-text-3">
+					{props.description}
+				</span>
+			</span>
+			<span
+				aria-hidden
+				class={cx(
+					"cap-toggle relative h-5 w-9 shrink-0 rounded-full p-0.5 transition-colors",
+					props.checked ? "bg-ed-accent" : "bg-ed-ctl-active",
+				)}
+			>
+				<span
+					class={cx(
+						"cap-toggle-thumb block size-4 rounded-full bg-white shadow-[0_1px_3px_rgba(0,0,0,0.22)] transition-transform",
+						props.checked && "translate-x-full",
+					)}
+				/>
+			</span>
+		</button>
+	);
+}
+
+function ClipMenuRow(props: {
+	icon: JSX.Element;
+	label: string;
+	hint?: string;
+	kbd?: string;
+	disabled?: boolean;
+	danger?: boolean;
+	onClick: () => void;
+}) {
+	return (
+		<button
+			type="button"
+			disabled={props.disabled}
+			title={props.disabled ? props.hint : undefined}
+			class={cx(
+				"flex h-8 w-full items-center gap-2.5 rounded-lg px-2 text-left text-[12.5px] transition-colors outline-hidden disabled:cursor-default disabled:text-ed-text-3",
+				props.danger
+					? "text-red-400 enabled:hover:bg-red-500/10 focus-visible:bg-red-500/10"
+					: "text-ed-text-1 enabled:hover:bg-ed-ctl-hover focus-visible:bg-ed-ctl-hover",
+			)}
+			onClick={() => props.onClick()}
+		>
+			<span
+				class={cx(
+					"flex size-4 shrink-0 items-center justify-center [&_svg]:size-3.5",
+					!props.danger && !props.disabled && "text-ed-text-2",
+				)}
+			>
+				{props.icon}
+			</span>
+			<span class="min-w-0 flex-1 truncate">{props.label}</span>
+			<Show when={props.disabled && props.hint}>
+				<span class="shrink-0 text-[10.5px] text-ed-text-3">{props.hint}</span>
+			</Show>
+			<Show when={!props.disabled && props.kbd}>
+				<kbd class="shrink-0 rounded-[4px] bg-ed-ctl px-1 font-sans text-[10px] text-ed-text-3">
+					{props.kbd}
+				</kbd>
+			</Show>
+		</button>
+	);
+}
+
+function ClipSettingsControl(props: {
+	index: number;
+	segment: TimelineSegment;
+	label: string;
+	defaultLabel: string;
+	box: { start: number; end: number };
+	open: boolean;
+	anchor: ClipMenuAnchor | null;
+	onOpenChange: (open: boolean) => void;
+	triggerClass?: string;
+}) {
+	const { project, projectActions, editorState } = useEditorContext();
+	const [renaming, setRenaming] = createSignal(false);
+	const [draftName, setDraftName] = createSignal("");
+
+	const segments = () => project.timeline?.segments ?? [];
+	const muted = () => clipAudioMuted(props.segment);
+	const silent = () => muted() || clipVolume(props.segment) === 0;
+	const cursorHidden = () => props.segment.hideCursor === true;
+	const normalSpeed = () => props.segment.timescale === 1;
+
+	const playheadTime = () =>
+		editorState.previewTime ?? editorState.playbackTime;
+	const canSplitAtPlayhead = () => {
+		const time = playheadTime();
+		return time > props.box.start && time < props.box.end;
+	};
+	const mergeBlocker = (direction: ClipMergeDirection) =>
+		clipMergeBlocker(segments(), props.index, direction);
+	const mergeHint = (direction: ClipMergeDirection) => {
+		const blocker = mergeBlocker(direction);
+		return blocker ? clipMergeBlockerHint(blocker) : undefined;
+	};
+	const canDelete = () => segments().length > 1;
+
+	const close = () => props.onOpenChange(false);
+
+	createEffect(() => {
+		if (!props.open) setRenaming(false);
+	});
+
+	const startRename = () => {
+		setDraftName(props.segment.name?.trim() ?? "");
+		setRenaming(true);
+	};
+	const commitRename = () => {
+		if (!renaming()) return;
+		projectActions.setClipSegmentName(props.index, draftName());
+		setRenaming(false);
+	};
+
+	return (
+		<Popover
+			placement={props.anchor ? "bottom-start" : "top"}
+			gutter={props.anchor ? 4 : 8}
+			open={props.open}
+			onOpenChange={props.onOpenChange}
+			getAnchorRect={() =>
+				props.anchor
+					? { x: props.anchor.x, y: props.anchor.y, width: 0, height: 0 }
+					: undefined
+			}
+		>
+			<Popover.Trigger
+				class={cx(
+					"pointer-events-auto flex items-center gap-0.5 rounded-full bg-ed-ctl-active px-1.5 py-0.5 text-[10px] font-medium text-ed-text-2 transition-colors hover:bg-ed-ctl-hover hover:text-ed-text-1",
+					props.triggerClass,
+				)}
+				aria-label="Clip settings"
+				onMouseDown={(event) => event.stopPropagation()}
+			>
+				<IconLucideSettings class="size-3" />
+				<Show
+					when={silent()}
+					fallback={<span>{props.segment.timescale}x</span>}
+				>
+					<IconLucideVolumeX class="size-3" />
+				</Show>
+				<Show when={cursorHidden()}>
+					<IconLucideMousePointerBan class="size-3" />
+				</Show>
+			</Popover.Trigger>
+			<Popover.Portal>
+				<Popover.Content
+					onMouseDown={(event) => event.stopPropagation()}
+					class="z-50 flex w-[300px] max-w-[calc(100vw-16px)] flex-col gap-2 rounded-xl bg-ed-card p-1.5 text-ed-text-1 shadow-ed-pop outline-hidden animate-in fade-in zoom-in-95 duration-100"
+				>
+					<div class="flex items-center gap-2 px-2 pt-1">
+						<span class="min-w-0 flex-1 truncate text-[12px] font-medium text-ed-text-1">
+							{props.label}
+						</span>
+						<span class="shrink-0 text-[11px] tabular-nums text-ed-text-3">
+							{formatTime(props.segment.end - props.segment.start)}
+							<Show when={!normalSpeed()}>
+								{" · "}
+								{props.segment.timescale}x
+							</Show>
+						</span>
+					</div>
+
+					<ClipMenuSection name="Speed">
+						<ClipMenuChips
+							label="Clip speed"
+							options={CLIP_SPEEDS.map((mult) => [mult, `${mult}x`] as const)}
+							value={props.segment.timescale}
+							onChange={(mult) =>
+								projectActions.setClipSegmentTimescale(props.index, mult)
+							}
+						/>
+					</ClipMenuSection>
+
+					<ClipMenuSection name="Audio">
+						<div class="flex h-7 items-center gap-2 px-2 text-[11.5px]">
+							<span class="w-12 shrink-0 text-ed-text-2">Volume</span>
+							<Slider
+								class="min-w-0 flex-1"
+								aria-label="Clip volume"
+								value={[Math.round(clipVolume(props.segment) * 100)]}
+								minValue={0}
+								maxValue={200}
+								step={1}
+								disabled={muted()}
+								onChange={([value]) =>
+									projectActions.setClipSegmentVolume(props.index, value / 100)
+								}
+								formatTooltip={(value) => `${value}%`}
+							/>
+							<span class="w-9 shrink-0 text-right tabular-nums text-ed-text-2">
+								{Math.round(clipVolume(props.segment) * 100)}%
+							</span>
+						</div>
+						<Show
+							when={!normalSpeed()}
+							fallback={
+								<ClipMenuToggleRow
+									icon={<IconLucideVolumeX />}
+									label="Mute clip"
+									description="Silence this clip's audio"
+									checked={muted()}
+									onChange={(checked) =>
+										projectActions.setClipSegmentMuted(props.index, checked)
+									}
+								/>
+							}
+						>
+							<ClipMenuChips
+								label="Audio at this speed"
+								options={
+									[
+										["mute", "Mute"],
+										["maintainPitch", "Keep pitch"],
+										["matchSpeed", "Match speed"],
+									] as const
+								}
+								value={props.segment.speedAudioMode ?? "mute"}
+								onChange={(mode) =>
+									projectActions.setClipSegmentSpeedAudioMode(props.index, mode)
+								}
+							/>
+						</Show>
+					</ClipMenuSection>
+
+					<ClipMenuSection name="Cursor">
+						<ClipMenuToggleRow
+							icon={<IconLucideMousePointerBan />}
+							label="Hide cursor"
+							description="Fades out while this clip plays"
+							checked={cursorHidden()}
+							onChange={(checked) =>
+								projectActions.setClipSegmentHideCursor(props.index, checked)
+							}
+						/>
+					</ClipMenuSection>
+
+					<div class="h-px bg-ed-line" />
+
+					<div class="flex flex-col gap-0.5">
+						<ClipMenuRow
+							icon={<IconLucideScissors />}
+							label="Split at playhead"
+							kbd="C"
+							hint="Move the playhead into this clip"
+							disabled={!canSplitAtPlayhead()}
+							onClick={() => {
+								projectActions.splitClipSegment(playheadTime(), props.index);
+								close();
+							}}
+						/>
+						<ClipMenuRow
+							icon={<IconLucideArrowLeftToLine />}
+							label="Merge with previous clip"
+							hint={mergeHint("previous")}
+							disabled={mergeBlocker("previous") !== null}
+							onClick={() => {
+								projectActions.mergeClipSegment(props.index, "previous");
+								close();
+							}}
+						/>
+						<ClipMenuRow
+							icon={<IconLucideArrowRightToLine />}
+							label="Merge with next clip"
+							hint={mergeHint("next")}
+							disabled={mergeBlocker("next") !== null}
+							onClick={() => {
+								projectActions.mergeClipSegment(props.index, "next");
+								close();
+							}}
+						/>
+						<Show
+							when={renaming()}
+							fallback={
+								<ClipMenuRow
+									icon={<IconLucidePencil />}
+									label="Rename clip"
+									onClick={startRename}
+								/>
+							}
+						>
+							<div class="flex items-center gap-1.5 px-1 py-0.5">
+								<TextInput
+									ref={(el) => {
+										queueMicrotask(() => {
+											el.focus();
+											el.select();
+										});
+									}}
+									class="h-7 min-w-0 flex-1 px-2 text-[12px]"
+									value={draftName()}
+									placeholder={props.defaultLabel}
+									aria-label="Clip name"
+									onInput={(event) => setDraftName(event.currentTarget.value)}
+									onKeyDown={(event) => {
+										if (event.key === "Enter") {
+											event.preventDefault();
+											commitRename();
+										} else if (event.key === "Escape") {
+											event.preventDefault();
+											setRenaming(false);
+										}
+									}}
+									onBlur={commitRename}
+								/>
+							</div>
+						</Show>
+					</div>
+
+					<div class="h-px bg-ed-line" />
+
+					<ClipMenuRow
+						icon={<IconLucideTrash2 />}
+						label="Delete clip"
+						kbd="⌫"
+						hint="Can't delete the only clip"
+						disabled={!canDelete()}
+						danger
+						onClick={() => {
+							projectActions.deleteClipSegment(props.index);
+							close();
+						}}
+					/>
+				</Popover.Content>
+			</Popover.Portal>
+		</Popover>
 	);
 }
 
@@ -381,15 +855,42 @@ export function ClipTrack(
 		};
 	};
 
+	// Fullscreen text segments pause the recording clock, stretching the clip
+	// that contains them across the held window on the output timeline.
+	const heldWindows = createMemo(() =>
+		holdWindows(project.timeline?.textSegments),
+	);
+
+	const selectedHoldWindows = createMemo(() => {
+		const selection = editorState.timeline.selection;
+		if (selection?.type !== "text") return null;
+		const texts = project.timeline?.textSegments;
+		if (!texts) return null;
+		const windows = selection.indices
+			.map((index) => texts[index])
+			.filter(
+				(segment) =>
+					segment &&
+					segment.enabled !== false &&
+					segment.layout === "fullscreen",
+			)
+			.map((segment): [number, number] => [segment.start, segment.end]);
+		return windows.length > 0 ? windows : null;
+	});
+
 	const visibleSegmentIndices = createMemo(() => {
 		const segs = segments();
 		const offsets = segmentOffsets();
+		const holds = heldWindows();
 		const draggedIndex = transitionDrag()?.index;
 		const visible: number[] = [];
 		for (let i = 0; i < segs.length; i++) {
 			const seg = segs[i];
-			const segStart = offsets[i];
-			const segEnd = segStart + (seg.end - seg.start) / seg.timescale;
+			const segStart = effectiveToOutput(holds, offsets[i]);
+			const segEnd = effectiveToOutput(
+				holds,
+				offsets[i] + (seg.end - seg.start) / seg.timescale,
+			);
 			if (i === draggedIndex || isSegmentVisible(segStart, segEnd)) {
 				visible.push(i);
 			}
@@ -413,6 +914,10 @@ export function ClipTrack(
 		editorInstance.recordings.segments.length > 1;
 
 	const split = () => editorState.timeline.interactMode === "split";
+
+	createEffect(() => {
+		if (!split()) setEditorState("timeline", "splitPreview", null);
+	});
 
 	function selectClip(currentIndex: number, event: MouseEvent) {
 		const selection = editorState.timeline.selection;
@@ -450,12 +955,55 @@ export function ClipTrack(
 		<TrackRoot
 			ref={props.ref}
 			onMouseEnter={() => setEditorState("timeline", "hoveredTrack", "clip")}
-			onMouseLeave={() => setEditorState("timeline", "hoveredTrack", null)}
+			onMouseLeave={() => {
+				setEditorState("timeline", "hoveredTrack", null);
+				setEditorState("timeline", "splitPreview", null);
+			}}
 		>
 			<Index each={visibleSegmentIndices()}>
 				{(segmentIndex) => {
 					const i = segmentIndex;
 					const segment = () => segments()[i()];
+					const [speedOpen, setSpeedOpen] = createSignal(false);
+					const [menuAnchor, setMenuAnchor] =
+						createSignal<ClipMenuAnchor | null>(null);
+					const setMenuOpen = (open: boolean) => {
+						setSpeedOpen(open);
+						if (!open) setMenuAnchor(null);
+					};
+
+					const defaultClipName = () =>
+						hasMultipleRecordingSegments()
+							? `Clip ${segment().recordingSegment}`
+							: "Clip";
+					const clipName = () => segment().name?.trim() || defaultClipName();
+
+					const speedControl = (triggerClass?: string) => (
+						<ClipSettingsControl
+							index={i()}
+							segment={segment()}
+							label={clipName()}
+							defaultLabel={defaultClipName()}
+							box={relativeSegment()}
+							open={speedOpen()}
+							anchor={menuAnchor()}
+							onOpenChange={setMenuOpen}
+							triggerClass={triggerClass}
+						/>
+					);
+
+					const clipTitle = () => {
+						const seg = segment();
+						const parts = [clipName(), formatTime(seg.end - seg.start)];
+						if (seg.timescale !== 1) parts.push(`${seg.timescale}x`);
+						if (clipAudioMuted(seg) || clipVolume(seg) === 0)
+							parts.push("Muted");
+						else if (clipVolume(seg) !== 1)
+							parts.push(`${Math.round(clipVolume(seg) * 100)}% volume`);
+						if (seg.hideCursor) parts.push("Cursor hidden");
+						return parts.join(" · ");
+					};
+
 					const [startHandleDrag, setStartHandleDrag] = createSignal<null | {
 						offset: number;
 						initialStart: number;
@@ -467,19 +1015,55 @@ export function ClipTrack(
 						const ds = startHandleDrag();
 						const offset = ds?.offset ?? 0;
 						const seg = segment();
+						const holds = heldWindows();
 
 						return {
-							start: Math.max(prevDuration() + offset, 0),
-							end:
+							start: Math.max(
+								effectiveToOutput(holds, prevDuration() + offset),
+								0,
+							),
+							end: effectiveToOutput(
+								holds,
 								prevDuration() +
-								(offset + (seg.end - seg.start)) / seg.timescale,
+									(offset + (seg.end - seg.start)) / seg.timescale,
+							),
 							timescale: seg.timescale,
 							recordingSegment: seg.recordingSegment,
 						};
 					});
 
+					// Held (paused) windows inside this clip's on-screen box.
+					const segmentHolds = createMemo(() => {
+						const { start, end } = relativeSegment();
+						return heldWindows()
+							.map(([holdStart, holdEnd]): [number, number] => [
+								Math.max(holdStart, start),
+								Math.min(holdEnd, end),
+							])
+							.filter(([holdStart, holdEnd]) => holdEnd > holdStart);
+					});
+
 					const segmentX = useSegmentTranslateX(relativeSegment);
 					const segmentWidth = useSegmentWidth(relativeSegment);
+
+					const splitTimeAt = (e: {
+						clientX: number;
+						altKey: boolean;
+						currentTarget: HTMLDivElement;
+					}) => {
+						const rect = e.currentTarget.getBoundingClientRect();
+						const seg = relativeSegment();
+						const raw = seg.start + (e.clientX - rect.left) * secsPerPixel();
+						if (e.altKey) return { time: raw, snapped: null };
+						return snapSplitTime(
+							raw,
+							seg.start,
+							seg.end,
+							SPLIT_SNAP_PX * secsPerPixel(),
+							project.timeline,
+							editorState.playbackTime,
+						);
+					};
 
 					const segmentRecording = (s = i()) =>
 						editorInstance.recordings.segments[
@@ -612,12 +1196,40 @@ export function ClipTrack(
 							</Show>
 							<SegmentRoot
 								segColor="var(--track-clip)"
-								class={cx(
-									"border transition-colors duration-200 group",
-									isSelected() ? "border-gray-12" : "border-transparent",
-								)}
-								innerClass="ring-blue-9"
+								class="group"
+								selected={isSelected()}
+								title={clipTitle()}
 								segment={relativeSegment()}
+								onMouseMove={(e) => {
+									if (editorState.timeline.interactMode !== "split") return;
+									const result = splitTimeAt(e);
+									setEditorState("timeline", "splitPreview", {
+										time: result.time,
+										snapped: result.snapped !== null,
+									});
+								}}
+								onMouseLeave={() => {
+									if (editorState.timeline.splitPreview)
+										setEditorState("timeline", "splitPreview", null);
+								}}
+								onContextMenu={(e) => {
+									e.preventDefault();
+									e.stopPropagation();
+									if (split()) return;
+									const index = i();
+									const selection = editorState.timeline.selection;
+									if (
+										selection?.type !== "clip" ||
+										!selection.indices.includes(index)
+									) {
+										setEditorState("timeline", "selection", {
+											type: "clip",
+											indices: [index],
+										});
+									}
+									setMenuAnchor({ x: e.clientX, y: e.clientY });
+									setSpeedOpen(true);
+								}}
 								onMouseDown={(e) => {
 									e.stopPropagation();
 									if (e.button !== 0) return;
@@ -629,17 +1241,10 @@ export function ClipTrack(
 										return;
 
 									if (editorState.timeline.interactMode === "split") {
-										const rect = e.currentTarget.getBoundingClientRect();
-										const fraction = (e.clientX - rect.left) / rect.width;
-										const seg = segment();
-
-										const splitTime =
-											(fraction * (seg.end - seg.start)) / seg.timescale;
-
-										projectActions.splitClipSegment(
-											prevDuration() + splitTime,
-											i(),
-										);
+										// The box is in output time (it stretches across any
+										// held windows); splitClipSegment converts back to the
+										// recording-flow domain itself.
+										projectActions.splitClipSegment(splitTimeAt(e).time, i());
 									} else {
 										const index = i();
 										const initialTransition = getClipTransition(
@@ -728,22 +1333,80 @@ export function ClipTrack(
 									}
 								}}
 							>
-								{segment().timescale === 1 && (
-									<WaveformCanvas
-										micWaveform={micWaveform()}
-										systemWaveform={systemAudioWaveform()}
-										segment={segment()}
-										segmentOffset={prevDuration()}
-									/>
-								)}
+								{segment().timescale === 1 &&
+									!clipAudioMuted(segment()) &&
+									clipVolume(segment()) > 0 && (
+										<WaveformCanvas
+											micWaveform={micWaveform()}
+											systemWaveform={systemAudioWaveform()}
+											segment={segment()}
+											segmentOffset={relativeSegment().start}
+											holds={segmentHolds()}
+										/>
+									)}
 
-								<Markings segment={segment()} prevDuration={prevDuration()} />
+								<Markings
+									segment={segment()}
+									prevDuration={relativeSegment().start}
+									holds={segmentHolds()}
+								/>
+
+								<For each={segmentHolds()}>
+									{(hold) => {
+										// Light up when the fullscreen text causing this hold
+										// is selected, so cause and effect read as one thing.
+										const causeSelected = () =>
+											selectedHoldWindows()?.some(
+												([start, end]) => start < hold[1] && end > hold[0],
+											) ?? false;
+										const holdWidth = () =>
+											(hold[1] - hold[0]) / secsPerPixel();
+										return (
+											<div
+												class={cx(
+													"absolute inset-y-0 z-[3] flex items-center justify-center gap-1 overflow-hidden bg-ed-card/75 backdrop-saturate-50 border-x transition-colors",
+													causeSelected()
+														? "border-ed-accent"
+														: "border-ed-line-strong",
+												)}
+												style={{
+													left: `${(hold[0] - relativeSegment().start) / secsPerPixel()}px`,
+													width: `${holdWidth()}px`,
+													"background-image":
+														"repeating-linear-gradient(-45deg, rgba(127,127,127,0.12) 0px, rgba(127,127,127,0.12) 4px, transparent 4px, transparent 8px)",
+												}}
+												title="Video paused while the fullscreen text is shown"
+											>
+												<IconLucidePause
+													class={cx(
+														"size-3 shrink-0",
+														causeSelected()
+															? "text-ed-accent"
+															: "text-ed-text-3",
+													)}
+												/>
+												<Show when={holdWidth() >= 64}>
+													<span
+														class={cx(
+															"text-[10px] font-medium whitespace-nowrap",
+															causeSelected()
+																? "text-ed-accent"
+																: "text-ed-text-3",
+														)}
+													>
+														Paused
+													</span>
+												</Show>
+											</div>
+										);
+									}}
+								</For>
 
 								<Show when={i() > 0 && !transitionAt(i())}>
 									<button
 										type="button"
 										data-transition
-										class="absolute inset-y-0 left-0 z-[4] grid w-4 -translate-x-1/2 place-items-center bg-blue-9/40 text-xs text-white opacity-0 transition-opacity hover:bg-blue-9/60 group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-blue-9"
+										class="absolute inset-y-0 left-0 z-[4] grid w-4 -translate-x-1/2 place-items-center bg-ed-accent/40 text-xs text-white opacity-0 transition-opacity hover:bg-ed-accent/60 group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-ed-accent"
 										aria-label={`Add transition before clip ${i() + 1}`}
 										onClick={(event) => {
 											event.stopPropagation();
@@ -781,11 +1444,11 @@ export function ClipTrack(
 											<Popover.Trigger
 												data-transition
 												class={cx(
-													"absolute inset-y-0 left-0 z-[5] overflow-hidden border-x border-blue-7/80 bg-blue-9/25 text-white transition-colors hover:bg-blue-9/40",
+													"absolute inset-y-0 left-0 z-[5] overflow-hidden border-x border-ed-accent/60 bg-ed-accent/20 transition-colors hover:bg-ed-accent/35",
 													editorState.timeline.selection?.type ===
 														"transition" &&
 														editorState.timeline.selection.index === i() &&
-														"bg-blue-9/50 ring-1 ring-inset ring-blue-10",
+														"bg-ed-accent/45 ring-1 ring-inset ring-ed-accent",
 												)}
 												style={{
 													width: `${transition().duration / secsPerPixel()}px`,
@@ -800,7 +1463,7 @@ export function ClipTrack(
 											<Popover.Portal>
 												<Popover.Content
 													onMouseDown={(event) => event.stopPropagation()}
-													class="z-50 flex w-64 flex-col gap-3 rounded-xl border border-gray-3 bg-gray-1 p-3 text-gray-12 shadow-xl outline-hidden"
+													class="z-50 flex w-64 flex-col gap-3 rounded-xl bg-ed-card p-3 text-ed-text-1 shadow-ed-pop outline-hidden"
 												>
 													<div class="flex items-center justify-between">
 														<span class="text-sm font-medium">
@@ -872,7 +1535,6 @@ export function ClipTrack(
 								<SegmentHandle
 									position="start"
 									data-clip-handle
-									class="opacity-0 group-hover:opacity-100"
 									onMouseDown={(downEvent) => {
 										if (split()) return;
 										const seg = segment();
@@ -969,37 +1631,31 @@ export function ClipTrack(
 										});
 									}}
 								/>
-								<SegmentContent class="relative justify-center items-center">
-									{(() => {
-										const ctx = useSegmentContext();
-										const seg = segment();
-
-										return (
-											<Show when={ctx.width() > 100}>
-												<div class="flex flex-col gap-1 justify-center items-center text-xs whitespace-nowrap text-gray-12">
-													<span class="text-white/70">
-														{hasMultipleRecordingSegments()
-															? `Clip ${seg.recordingSegment}`
-															: "Clip"}
-													</span>
-													<div class="flex gap-1 items-center text-md dark:text-gray-12 text-gray-1">
-														<IconLucideClock class="size-3.5" />{" "}
-														{formatTime(seg.end - seg.start)}
-														<Show when={seg.timescale !== 1}>
-															<div class="w-0.5" />
-															<IconLucideFastForward class="size-3" />
-															{seg.timescale}x
-														</Show>
-													</div>
-												</div>
-											</Show>
-										);
-									})()}
+								<SegmentContent class="relative items-center">
+									<SegmentLabel
+										full={() => (
+											<div class="cap-seg-labels">
+												<span class="cap-seg-label truncate">{clipName()}</span>
+												<span class="cap-seg-sublabel">
+													{formatTime(segment().end - segment().start)}
+												</span>
+												{speedControl("shrink-0")}
+											</div>
+										)}
+										compact={() => (
+											<div class="cap-seg-labels">
+												{speedControl("shrink-0")}
+												<span class="cap-seg-sublabel truncate">
+													{formatTime(segment().end - segment().start)}
+												</span>
+											</div>
+										)}
+										glyph={() => speedControl("shrink-0")}
+									/>
 								</SegmentContent>
 								<SegmentHandle
 									position="end"
 									data-clip-handle
-									class="opacity-0 group-hover:opacity-100"
 									onMouseDown={(downEvent) => {
 										const seg = segment();
 										const end = seg.end;
@@ -1138,7 +1794,11 @@ export function ClipTrack(
 	);
 }
 
-function Markings(props: { segment: TimelineSegment; prevDuration: number }) {
+function Markings(props: {
+	segment: TimelineSegment;
+	prevDuration: number;
+	holds: ReadonlyArray<[number, number]>;
+}) {
 	const { editorState } = useEditorContext();
 	const { secsPerPixel, markingResolution } = useTimelineContext();
 
@@ -1163,15 +1823,23 @@ function Markings(props: { segment: TimelineSegment; prevDuration: number }) {
 		<Index each={Array.from({ length: markingParams().count })}>
 			{(_, index) => {
 				const marking = () => getMarkingTime(index);
-				const translateX = () =>
-					(marking() - props.segment.start) / secsPerPixel();
+				// Markings live in recording time; push each past the holds the
+				// stretched box inserts before it.
+				const translateX = () => {
+					const holdsRel = props.holds.map(([start, end]): [number, number] => [
+						start - props.prevDuration,
+						end - props.prevDuration,
+					]);
+					const effective = marking() - props.segment.start;
+					return effectiveToOutput(holdsRel, effective) / secsPerPixel();
+				};
 
 				return (
 					<div
 						style={{
 							transform: `translateX(${translateX()}px)`,
 						}}
-						class="absolute z-10 w-px h-12 bg-linear-to-b from-transparent to-transparent via-white-transparent-40 dark:via-black-transparent-60"
+						class="absolute inset-y-0 z-10 w-px bg-linear-to-b from-transparent to-transparent via-ed-line-strong"
 					/>
 				);
 			}}

@@ -14,6 +14,10 @@ pub async fn capture_window_thumbnail(window: &scap_targets::Window) -> Option<S
 }
 
 async fn capture_target_thumbnail(target: ScreenCaptureTarget) -> Option<String> {
+    if cap_recording::screenshot::uses_wayland_portal() {
+        return None;
+    }
+
     let image = match capture_screenshot(target).await {
         Ok(image) => image,
         Err(error) => {

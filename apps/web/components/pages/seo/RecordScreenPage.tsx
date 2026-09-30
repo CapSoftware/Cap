@@ -1,4 +1,5 @@
 import { Clapperboard, Zap } from "lucide-react";
+import { PRICING } from "@/data/pricing";
 import { SeoPageTemplate } from "../../seo/SeoPageTemplate";
 import type { SeoPageContent } from "../../seo/types";
 
@@ -143,8 +144,7 @@ export const recordScreenContent: SeoPageContent = {
 	comparison: [
 		{
 			title: "Cap vs Loom",
-			description:
-				"Both Cap and Loom let you record your screen and share with a link, but Cap is significantly more affordable — starting at $9.99/month versus Loom's $18/month. Cap's Studio Mode is completely free for personal use with no watermarks, and Cap is fully open-source. <a href='/loom-alternative'>See the full Cap vs Loom comparison</a>.",
+			description: `Both Cap and Loom let you record your screen and share with a link, but Cap is significantly more affordable — starting at $${PRICING.pro.annualPerMonth}/month versus Loom's $18/month. Cap's Studio Mode is completely free for personal use with no watermarks, and Cap is fully open-source. <a href='/loom-alternative'>See the full Cap vs Loom comparison</a>.`,
 		},
 		{
 			title: "Cap vs OBS Studio",
@@ -245,9 +245,11 @@ export const recordScreenContent: SeoPageContent = {
 	],
 
 	video: {
-		url: "/videos/cap-demo.mp4",
-		thumbnail: "/videos/cap-demo-thumbnail.png",
-		alt: "Cap screen recording demo showing one-click capture, webcam overlay, and instant sharing",
+		iframe: {
+			src: "https://www.rend.so/embed/10512af0-b922-4efa-8974-f8f14fc1886a?accent=3e63dd",
+			title:
+				"Cap screen recording demo showing one-click capture, webcam overlay, and instant sharing",
+		},
 	},
 
 	cta: {

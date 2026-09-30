@@ -7,11 +7,14 @@ import {
 	RECORDING_START_SAFETY_DEFAULTS,
 	type RecordingStartSafetySettings,
 } from "~/utils/general-settings";
+import { createSerializedStore } from "~/utils/serialized-store";
 import type {
+	AnimatedGradientLibrary,
 	AuthStore,
 	HotkeysStore,
 	PresetsStore,
 	RecordingSettingsStore,
+	VoiceIsolation,
 } from "~/utils/tauri";
 
 export type TeleprompterStore = {
@@ -42,10 +45,6 @@ export type UserProfileStore = {
 		imageUrl: string | null;
 	};
 	updatedAt: number;
-};
-
-export type MainWindowUIStore = {
-	expanded: boolean;
 };
 
 let _store: Promise<Store> | undefined;
@@ -100,14 +99,31 @@ function declareStore<T extends object>(name: string, defaults?: T) {
 	};
 }
 
+export const audioEnhancementStore = declareStore<{
+	enabledByDefault: boolean;
+	isolation: VoiceIsolation;
+}>("audio_enhancement", { enabledByDefault: true, isolation: "balanced" });
+
 export const presetsStore = declareStore<PresetsStore>("presets");
+const animatedGradientDefaults: AnimatedGradientLibrary = {
+	presets: [],
+	lastUsed: null,
+	selected: false,
+};
+const animatedGradientStore = declareStore<AnimatedGradientLibrary>(
+	"animated_gradients",
+	animatedGradientDefaults,
+);
+export const animatedGradientsStore = {
+	...animatedGradientStore,
+	...createSerializedStore<AnimatedGradientLibrary>(
+		animatedGradientStore,
+		animatedGradientDefaults,
+	),
+};
 export const authStore = declareStore<AuthStore>("auth");
 export const automationsStore = declareStore<AutomationsStore>("automations");
 export const userProfileStore = declareStore<UserProfileStore>("user_profile");
-export const mainWindowUIStore = declareStore<MainWindowUIStore>(
-	"main_window_ui",
-	{ expanded: false },
-);
 export const hotkeysStore = declareStore<HotkeysStore>("hotkeys");
 export const generalSettingsStore =
 	declareStore<GeneralSettingsStore>("general_settings");

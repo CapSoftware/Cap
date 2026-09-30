@@ -17,7 +17,10 @@ const buttonVariants = cva(
 					"border border-input bg-background shadow-sm hover:bg-white/50 hover:text-white",
 				secondary:
 					"bg-secondary text-secondary-foreground shadow-sm hover:bg-secondary/80",
-				ghost: "hover:bg-white/20 hover:text-white",
+				// Gray-scale rather than literal white: the controls scope themselves
+				// `dark` over video (where gray-12 is near-white) but drop it when the
+				// bar is docked into the timeline card's light row.
+				ghost: "hover:bg-gray-12/15 hover:text-gray-12",
 				link: "text-primary underline-offset-4 hover:underline",
 			},
 			size: {

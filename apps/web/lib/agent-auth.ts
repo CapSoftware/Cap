@@ -27,6 +27,57 @@ export const agentScopes = [
 	"developer:secrets",
 ] as const satisfies readonly Agent.AgentScope[];
 
+// Mirrors the CLI's `cap auth login --profile` scope sets (apps/cli/src/agent_auth.rs) so a key
+// minted from the dashboard grants exactly what the equivalent browser login would.
+const creatorProfileScopes: Agent.AgentScope[] = [
+	"caps:read",
+	"caps:comment",
+	"caps:write",
+	"profile:read",
+	"profile:write",
+	"caps:upload",
+	"caps:process",
+	"caps:delete",
+	"library:read",
+	"library:write",
+	"analytics:read",
+	"notifications:read",
+	"notifications:write",
+];
+
+const adminProfileScopes: Agent.AgentScope[] = [
+	...creatorProfileScopes,
+	"organizations:read",
+	"organizations:manage",
+	"organizations:members",
+	"integrations:read",
+	"integrations:write",
+	"billing:read",
+	"billing:write",
+];
+
+const fullProfileScopes: Agent.AgentScope[] = [
+	...adminProfileScopes,
+	"developer:read",
+	"developer:write",
+	"developer:secrets",
+];
+
+const canonicalScopeOrder = (scopes: Agent.AgentScope[]) =>
+	agentScopes.filter((scope) => scopes.includes(scope));
+
+export const agentScopeProfiles = {
+	creator: canonicalScopeOrder(creatorProfileScopes),
+	admin: canonicalScopeOrder(adminProfileScopes),
+	full: canonicalScopeOrder(fullProfileScopes),
+} as const;
+
+export type AgentScopeProfile = keyof typeof agentScopeProfiles;
+
+export const isAgentScopeProfile = (
+	value: string,
+): value is AgentScopeProfile => Object.hasOwn(agentScopeProfiles, value);
+
 export type AgentAuthorizationRequest = {
 	clientId: "cap-cli";
 	redirectUri: string;

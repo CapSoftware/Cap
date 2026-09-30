@@ -200,6 +200,11 @@ export function AnnotationLayer(props: {
 
 		setIsDrawing(true);
 		const id = crypto.randomUUID();
+		const styleSource =
+			tool === "draw"
+				? (annotations.find((a) => a.id === selectedAnnotationId()) ??
+					[...annotations].reverse().find((a) => a.type === "draw"))
+				: undefined;
 		const newAnn: Annotation = {
 			id,
 			type: tool as AnnotationType,
@@ -207,14 +212,18 @@ export function AnnotationLayer(props: {
 			y: startY,
 			width: 0,
 			height: 0,
-			strokeColor: tool === "mask" ? "transparent" : "#F05656",
-			strokeWidth: tool === "mask" ? 0 : 4,
+			strokeColor:
+				tool === "mask"
+					? "transparent"
+					: (styleSource?.strokeColor ?? "#F05656"),
+			strokeWidth: tool === "mask" ? 0 : (styleSource?.strokeWidth ?? 4),
 			fillColor: "transparent",
-			opacity: 1,
+			opacity: styleSource?.opacity ?? 1,
 			rotation: 0,
 			text: tool === "text" ? "Text" : null,
 			maskType: tool === "mask" ? "pixelate" : null,
 			maskLevel: tool === "mask" ? 7 : null,
+			points: tool === "draw" ? [[startX, startY]] : null,
 		};
 
 		if (tool === "text") {
@@ -237,6 +246,32 @@ export function AnnotationLayer(props: {
 			const temp = tempAnnotation();
 			if (!temp) return;
 			if (temp.type === "text") return;
+
+			if (temp.type === "draw" && temp.points) {
+				const last = temp.points[temp.points.length - 1];
+				const dx2 = point.x - last[0];
+				const dy2 = point.y - last[1];
+				if (dx2 * dx2 + dy2 * dy2 < 4) return;
+				const newPoints: [number, number][] = [
+					...temp.points,
+					[point.x, point.y],
+				];
+				const xs = newPoints.map((p) => p[0]);
+				const ys = newPoints.map((p) => p[1]);
+				const minX = Math.min(...xs);
+				const minY = Math.min(...ys);
+				const maxX = Math.max(...xs);
+				const maxY = Math.max(...ys);
+				setTempAnnotation({
+					...temp,
+					points: newPoints,
+					x: minX,
+					y: minY,
+					width: maxX - minX,
+					height: maxY - minY,
+				});
+				return;
+			}
 
 			const currentX =
 				temp.type === "mask"
@@ -403,6 +438,28 @@ export function AnnotationLayer(props: {
 		const tempAnn = tempAnnotation();
 		if (isDrawing() && tempAnn) {
 			const ann = { ...tempAnn };
+
+			if (ann.type === "draw") {
+				if (!ann.points || ann.points.length < 2) {
+					setTempAnnotation(null);
+					setIsDrawing(false);
+					drawSnapshot = null;
+					return;
+				}
+				const w = ann.width || 1;
+				const h = ann.height || 1;
+				ann.points = ann.points.map(
+					(p) => [(p[0] - ann.x) / w, (p[1] - ann.y) / h] as [number, number],
+				);
+				if (drawSnapshot) projectHistory.push(drawSnapshot);
+				drawSnapshot = null;
+				setAnnotations((prev) => [...prev, ann]);
+				setTempAnnotation(null);
+				setIsDrawing(false);
+				setSelectedAnnotationId(ann.id);
+				return;
+			}
+
 			if (
 				ann.type === "rectangle" ||
 				ann.type === "circle" ||
@@ -472,12 +529,33 @@ export function AnnotationLayer(props: {
 		}
 
 		if (dragState()) {
-			// Commit history if changed
-			// We can check if current annotations differ from snapshot, but that's expensive.
-			// Instead, we assume if we dragged, we changed.
-			// We need to know if we actually moved.
-			// But we don't have "current" vs "original" easily without checking.
-			// Simpler: always push if dragSnapshot exists.
+			const state = dragState();
+			if (state?.action === "resize") {
+				const ann = annotations.find((a) => a.id === state.id);
+				if (
+					ann &&
+					ann.type === "draw" &&
+					ann.points &&
+					(ann.width < 0 || ann.height < 0)
+				) {
+					const flipX = ann.width < 0;
+					const flipY = ann.height < 0;
+					const points = ann.points;
+					setAnnotations((a) => a.id === state.id, {
+						x: flipX ? ann.x + ann.width : ann.x,
+						y: flipY ? ann.y + ann.height : ann.y,
+						width: Math.abs(ann.width),
+						height: Math.abs(ann.height),
+						points: points.map(
+							(p) =>
+								[flipX ? 1 - p[0] : p[0], flipY ? 1 - p[1] : p[1]] as [
+									number,
+									number,
+								],
+						),
+					});
+				}
+			}
 			if (dragSnapshot) {
 				projectHistory.push(dragSnapshot);
 			}
@@ -488,9 +566,9 @@ export function AnnotationLayer(props: {
 	};
 
 	const startDrag = (e: MouseEvent, id: string, handle?: string) => {
+		if (activeTool() !== "select") return;
 		e.preventDefault();
 		e.stopPropagation();
-		if (activeTool() !== "select") return;
 		window.getSelection()?.removeAllRanges();
 
 		const svg = (e.currentTarget as Element).closest("svg");
@@ -672,7 +750,13 @@ export function AnnotationLayer(props: {
 							/>
 						</Show>
 
-						<Show when={selectedAnnotationId() === ann.id && !textEditingId()}>
+						<Show
+							when={
+								selectedAnnotationId() === ann.id &&
+								!textEditingId() &&
+								activeTool() === "select"
+							}
+						>
 							<SelectionHandles
 								annotation={ann}
 								handleSize={handleSize()}
@@ -683,10 +767,47 @@ export function AnnotationLayer(props: {
 				)}
 			</For>
 			<Show when={tempAnnotation()}>
-				{(ann) => <RenderAnnotation annotation={ann()} />}
+				{(ann) => {
+					const livePoints = () =>
+						ann().type === "draw" ? (ann().points ?? []) : [];
+					return (
+						<Show
+							when={livePoints().length >= 2}
+							fallback={<RenderAnnotation annotation={ann()} />}
+						>
+							<path
+								d={smoothPathFromPoints(livePoints())}
+								fill="none"
+								stroke={ann().strokeColor}
+								stroke-width={ann().strokeWidth}
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								opacity={ann().opacity}
+							/>
+						</Show>
+					);
+				}}
 			</Show>
 		</svg>
 	);
+}
+
+function smoothPathFromPoints(points: [number, number][]): string {
+	if (points.length < 2) return "";
+	if (points.length === 2) {
+		return `M ${points[0][0]},${points[0][1]} L ${points[1][0]},${points[1][1]}`;
+	}
+	let d = `M ${points[0][0]},${points[0][1]}`;
+	for (let i = 0; i < points.length - 1; i++) {
+		const p0 = points[i];
+		const p1 = points[i + 1];
+		const mx = (p0[0] + p1[0]) / 2;
+		const my = (p0[1] + p1[1]) / 2;
+		d += ` Q ${p0[0]},${p0[1]} ${mx},${my}`;
+	}
+	const last = points[points.length - 1];
+	d += ` L ${last[0]},${last[1]}`;
+	return d;
 }
 
 function RenderAnnotation(props: { annotation: Annotation }) {
@@ -786,6 +907,27 @@ function RenderAnnotation(props: { annotation: Annotation }) {
 					style={{ "pointer-events": "all" }}
 				/>
 			)}
+			{props.annotation.type === "draw" &&
+				props.annotation.points &&
+				props.annotation.points.length >= 2 && (
+					<path
+						d={smoothPathFromPoints(
+							props.annotation.points.map(
+								(p) =>
+									[
+										props.annotation.x + p[0] * (props.annotation.width || 1),
+										props.annotation.y + p[1] * (props.annotation.height || 1),
+									] as [number, number],
+							),
+						)}
+						fill="none"
+						stroke={props.annotation.strokeColor}
+						stroke-width={props.annotation.strokeWidth}
+						stroke-linecap="round"
+						stroke-linejoin="round"
+						opacity={props.annotation.opacity}
+					/>
+				)}
 		</>
 	);
 }

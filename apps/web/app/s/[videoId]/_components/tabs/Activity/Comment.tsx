@@ -4,7 +4,7 @@ import { faReply, faTrash } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 
 import clsx from "clsx";
-import { motion } from "framer-motion";
+import { motion } from "motion/react";
 import { useSearchParams } from "next/navigation";
 import type React from "react";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
@@ -12,6 +12,8 @@ import { LinkifiedText } from "@/components/LinkifiedText";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { Tooltip } from "@/components/Tooltip";
 import type { CommentType } from "../../../Share";
+import { MediaCommentBody } from "../../media-comment/MediaCommentBody";
+import { isMediaComment } from "../../media-comment/media-comment-types";
 import CommentInput from "./CommentInput";
 import { formatTimeAgo, formatTimestamp } from "./utils";
 
@@ -67,11 +69,18 @@ const CommentComponent: React.FC<{
 	return (
 		<div
 			id={`comment-${comment.id}`}
-			key={`comment-${comment.id}`}
+			// No key here: the list already keys this component by clientKey, and
+			// an id-derived key would force a remount at the optimistic→saved swap
+			// (the id changes) — restarting any playing media in the card.
 			className={clsx(
 				`space-y-3`,
 				level > 0 ? "ml-8 border-l-2 border-gray-100 pl-4" : "",
-				comment.sending ? "opacity-20" : "opacity-100",
+				// A media comment uploads for a while and carries its own progress
+				// ring — ghosting it out for the duration would read as broken. Text
+				// keeps the classic dim for its sub-second round trip.
+				comment.sending && !isMediaComment(comment)
+					? "opacity-20"
+					: "opacity-100",
 			)}
 		>
 			<div className="flex items-start space-x-2.5">
@@ -127,9 +136,20 @@ const CommentComponent: React.FC<{
 							)}
 						</div>
 					</div>
-					<p className="mt-2 text-sm text-gray-11">
-						<LinkifiedText text={comment.content} />
-					</p>
+					{isMediaComment(comment) ? (
+						<div className="mt-2 space-y-2">
+							<MediaCommentBody comment={comment} compact />
+							{comment.content && (
+								<p className="text-sm text-gray-11">
+									<LinkifiedText text={comment.content} />
+								</p>
+							)}
+						</div>
+					) : (
+						<p className="mt-2 text-sm text-gray-11">
+							<LinkifiedText text={comment.content} />
+						</p>
+					)}
 					<div className="flex items-center pt-2 mt-2.5 space-x-3 border-t border-gray-3">
 						{user && !isReplying && canReply && (
 							<Tooltip content="Reply">
@@ -177,7 +197,7 @@ const CommentComponent: React.FC<{
 				<div className="mt-3 space-y-3">
 					{nestedReplies.map((reply) => (
 						<CommentComponent
-							key={reply.id}
+							key={reply.clientKey ?? reply.id}
 							comment={reply}
 							replies={replies}
 							onReply={onReply}

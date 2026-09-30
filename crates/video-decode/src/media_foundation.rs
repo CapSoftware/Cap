@@ -144,7 +144,7 @@ pub struct MFDecodedFrame {
 }
 
 pub struct NV12Data {
-    pub data: Vec<u8>,
+    pub data: Arc<Vec<u8>>,
     pub y_stride: u32,
     pub uv_stride: u32,
 }
@@ -551,14 +551,20 @@ pub struct MediaFoundationDecoder {
     frame_pool: FramePool,
     plane_converter: Nv12PlaneConverter,
     capabilities: MFDecoderCapabilities,
+    // COM can unload the decoder DLL, so release every COM field before its apartment shuts down.
+    _init_guard: MFInitGuard,
 }
 
-struct MFInitGuard;
+struct MFInitGuard {
+    media_foundation_started: bool,
+}
 
 impl Drop for MFInitGuard {
     fn drop(&mut self) {
         unsafe {
-            let _ = MFShutdown();
+            if self.media_foundation_started {
+                let _ = MFShutdown();
+            }
             CoUninitialize();
         }
     }
@@ -574,12 +580,15 @@ impl MediaFoundationDecoder {
             CoInitializeEx(None, COINIT_MULTITHREADED)
                 .ok()
                 .map_err(|e| format!("Failed to initialize COM: {e:?}"))?;
-
+        }
+        let mut guard = MFInitGuard {
+            media_foundation_started: false,
+        };
+        unsafe {
             MFStartup(MF_API_VERSION, MFSTARTUP_NOSOCKET)
                 .map_err(|e| format!("Failed to start Media Foundation: {e:?}"))?;
         }
-
-        let guard = MFInitGuard;
+        guard.media_foundation_started = true;
 
         let (d3d11_device, d3d11_context) = unsafe { create_d3d11_device()? };
         let device_manager = unsafe { create_dxgi_device_manager(&d3d11_device)? };
@@ -615,8 +624,6 @@ impl MediaFoundationDecoder {
             "MediaFoundation decoder initialized"
         );
 
-        std::mem::forget(guard);
-
         Ok(Self {
             source_reader,
             d3d11_device,
@@ -632,6 +639,7 @@ impl MediaFoundationDecoder {
             frame_pool: FramePool::new(),
             plane_converter,
             capabilities,
+            _init_guard: guard,
         })
     }
 
@@ -731,7 +739,7 @@ impl MediaFoundationDecoder {
         }
 
         Ok(NV12Data {
-            data,
+            data: Arc::new(data),
             y_stride,
             uv_stride: y_stride,
         })
@@ -825,12 +833,14 @@ impl MediaFoundationDecoder {
                 None,
             );
 
-            self.plane_converter.convert(
-                &frame_textures.nv12.texture,
-                &frame_textures,
-                self.width,
-                self.height,
-            )?;
+            if !frame_textures.y.handle.0.is_null() && !frame_textures.uv.handle.0.is_null() {
+                self.plane_converter.convert(
+                    &frame_textures.nv12.texture,
+                    &frame_textures,
+                    self.width,
+                    self.height,
+                )?;
+            }
         }
 
         let plane_time = plane_start.elapsed();
@@ -863,15 +873,6 @@ impl MediaFoundationDecoder {
         }
 
         Ok(())
-    }
-}
-
-impl Drop for MediaFoundationDecoder {
-    fn drop(&mut self) {
-        unsafe {
-            let _ = MFShutdown();
-            CoUninitialize();
-        }
     }
 }
 
@@ -1031,11 +1032,7 @@ unsafe fn create_source_reader(
             .map_err(|e| format!("SetUINT32 ENABLE_ADVANCED_VIDEO_PROCESSING failed: {e:?}"))?;
     }
 
-    let path_wide: Vec<u16> = path
-        .to_string_lossy()
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
+    let path_wide = media_foundation_path(path);
 
     let source_reader = unsafe {
         MFCreateSourceReaderFromURL(PCWSTR(path_wide.as_ptr()), &attributes)
@@ -1043,6 +1040,23 @@ unsafe fn create_source_reader(
     };
 
     Ok(source_reader)
+}
+
+fn media_foundation_path(path: &Path) -> Vec<u16> {
+    use std::os::windows::ffi::OsStrExt;
+
+    let mut path: Vec<u16> = path.as_os_str().encode_wide().collect();
+    let extended_unc = [92, 92, 63, 92, 85, 78, 67, 92];
+    let extended_drive = [92, 92, 63, 92];
+
+    if path.starts_with(&extended_unc) {
+        path.splice(..extended_unc.len(), [92, 92]);
+    } else if path.starts_with(&extended_drive) {
+        path.drain(..extended_drive.len());
+    }
+
+    path.push(0);
+    path
 }
 
 unsafe fn configure_output_type(source_reader: &IMFSourceReader) -> Result<(), String> {
@@ -1099,3 +1113,49 @@ unsafe fn get_video_info(source_reader: &IMFSourceReader) -> Result<(u32, u32, u
 }
 
 unsafe impl Send for MediaFoundationDecoder {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "requires a Windows D3D11 device"]
+    fn repeatedly_releases_decoder_objects_before_com_shutdown() {
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/h264-decoder-lifecycle.mp4");
+        for _ in 0..20 {
+            let mut decoder = MediaFoundationDecoder::new(&path).unwrap();
+            for _ in 0..5 {
+                assert!(decoder.read_sample().unwrap().is_some());
+            }
+            drop(decoder);
+        }
+    }
+
+    fn normalized(path: &str) -> String {
+        let encoded = media_foundation_path(Path::new(path));
+        assert_eq!(encoded.last(), Some(&0));
+        String::from_utf16(&encoded[..encoded.len().saturating_sub(1)]).unwrap()
+    }
+
+    #[test]
+    fn removes_extended_drive_prefix_for_media_foundation() {
+        assert_eq!(
+            normalized(r"\\?\C:\Recordings\clip.mp4"),
+            r"C:\Recordings\clip.mp4"
+        );
+    }
+
+    #[test]
+    fn restores_unc_prefix_for_media_foundation() {
+        assert_eq!(
+            normalized(r"\\?\UNC\server\recordings\clip.mp4"),
+            r"\\server\recordings\clip.mp4"
+        );
+    }
+
+    #[test]
+    fn preserves_regular_unicode_paths() {
+        assert_eq!(normalized(r"C:\Vidéos\录制.mp4"), r"C:\Vidéos\录制.mp4");
+    }
+}

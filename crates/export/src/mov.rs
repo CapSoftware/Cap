@@ -21,6 +21,40 @@ impl MovExportSettings {
     pub async fn export(
         self,
         base: ExporterBase,
+        on_progress: impl FnMut(u32) -> bool + Send + 'static,
+    ) -> Result<PathBuf, String> {
+        use cap_utils::operation_diagnostics::{Field, observe};
+        observe(
+            "export_mov",
+            &[
+                Field::number("requested_fps", self.fps as u64),
+                Field::number("requested_width", self.resolution_base.x as u64),
+                Field::number("requested_height", self.resolution_base.y as u64),
+                Field::identifier(
+                    "resource",
+                    cap_utils::operation_diagnostics::resource_id(&base.project_path),
+                ),
+                Field::number(
+                    "source_width",
+                    base.render_constants.options.screen_size.x as u64,
+                ),
+                Field::number(
+                    "source_height",
+                    base.render_constants.options.screen_size.y as u64,
+                ),
+                Field::number("source_segments", base.segments.len() as u64),
+                Field::number("clips", base.project_config.clips.len() as u64),
+                Field::flag("captions", base.project_config.captions.is_some()),
+                Field::flag("streaming_audio", base.streaming_audio.is_some()),
+            ],
+            self.export_inner(base, on_progress),
+        )
+        .await
+    }
+
+    async fn export_inner(
+        self,
+        base: ExporterBase,
         mut on_progress: impl FnMut(u32) -> bool + Send + 'static,
     ) -> Result<PathBuf, String> {
         let meta = &base.studio_meta;
@@ -46,6 +80,7 @@ impl MovExportSettings {
         let video_info =
             VideoInfo::from_raw(RawVideoFormat::Rgba, output_size.0, output_size.1, fps);
 
+        let sample_timing = base.sample_timing.clone();
         let encoder_thread = tokio::task::spawn_blocking(move || {
             let mut mov_encoder = MOVFile::init(mov_output_path.clone(), |output| {
                 ProResEncoder::builder(video_info).build(output)
@@ -66,13 +101,27 @@ impl MovExportSettings {
 
                 fill_rgba_frame(&mut reusable_frame, &frame)
                     .map_err(|e| ExportError::Other(format!("Failed to prepare frame: {e}")))?;
-                let timestamp = Duration::from_secs_f64(frame_number as f64 / fps as f64);
+                let encoded_frame = if sample_timing.is_some() {
+                    frame_count
+                } else {
+                    frame_number
+                };
+                let timestamp = Duration::from_secs_f64(encoded_frame as f64 / fps as f64);
 
                 mov_encoder
                     .queue_video_frame(&mut reusable_frame, timestamp)
                     .map_err(|e| ExportError::Other(format!("Failed to encode MOV frame: {e}")))?;
 
+                if sample_timing
+                    .as_ref()
+                    .is_some_and(|timing| timing.is_cancelled())
+                {
+                    return Err(ExportError::Other("Export cancelled".into()));
+                }
                 frame_count += 1;
+                if let Some(timing) = &sample_timing {
+                    timing.record_frame(frame.frame_number);
+                }
             }
 
             mov_encoder
@@ -104,6 +153,7 @@ impl MovExportSettings {
             fps,
             self.resolution_base,
             &base.recordings,
+            base.sample_windows.clone(),
         )
         .then(|f| async { f.map_err(|v| v.to_string()) });
 

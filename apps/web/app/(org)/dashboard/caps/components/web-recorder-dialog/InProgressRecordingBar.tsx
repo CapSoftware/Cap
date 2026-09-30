@@ -61,6 +61,9 @@ interface InProgressRecordingBarProps {
 	onRestart?: () => void | Promise<void>;
 	isRestarting?: boolean;
 	errorDownload?: RecordingFailureDownload | null;
+	onRetryUpload?: () => Promise<void>;
+	onNewRecording?: () => Promise<void>;
+	shareUrl?: string | null;
 }
 
 const DRAG_PADDING = 12;
@@ -76,6 +79,9 @@ export const InProgressRecordingBar = ({
 	onRestart,
 	isRestarting = false,
 	errorDownload,
+	onRetryUpload,
+	onNewRecording,
+	shareUrl,
 }: InProgressRecordingBarProps) => {
 	const [mounted, setMounted] = useState(false);
 	const [position, setPosition] = useState({ x: 0, y: 24 });
@@ -274,7 +280,7 @@ export const InProgressRecordingBar = ({
 					>
 						<div className="flex flex-col text-left">
 							<span className="text-[0.95rem] font-semibold text-red-11">
-								Recording failed.
+								Recording needs attention.
 							</span>
 							{errorDownload ? (
 								<a
@@ -290,18 +296,33 @@ export const InProgressRecordingBar = ({
 								</span>
 							)}
 						</div>
-						{Boolean(onRestart) && (canRestart || phase === "error") && (
-							<ActionButton
-								data-no-drag
-								onClick={handleRestart}
-								disabled={!(canRestart || phase === "error")}
-								aria-label="Restart recording"
-								aria-busy={isRestarting}
+						{onRetryUpload && (
+							<button
+								type="button"
+								onClick={() => void onRetryUpload()}
+								className="rounded-md bg-blue-9 px-3 py-2 text-sm font-medium text-white"
 							>
-								<RotateCcw
-									className={clsx("size-5", isRestarting && "animate-spin")}
-								/>
-							</ActionButton>
+								Retry upload
+							</button>
+						)}
+						{onNewRecording && (
+							<button
+								type="button"
+								onClick={() => void onNewRecording()}
+								className="rounded-md px-3 py-2 text-sm font-medium text-gray-12"
+							>
+								New recording
+							</button>
+						)}
+						{shareUrl && (
+							<a
+								href={shareUrl}
+								target="_blank"
+								rel="noopener noreferrer"
+								className="text-sm text-blue-11 underline"
+							>
+								Open video
+							</a>
 						)}
 					</div>
 				) : (
@@ -321,6 +342,16 @@ export const InProgressRecordingBar = ({
 
 						<div className="flex gap-3 items-center" data-no-drag>
 							<InlineChunkProgress chunkUploads={chunkUploads} />
+							{shareUrl && (
+								<a
+									href={shareUrl}
+									target="_blank"
+									rel="noopener noreferrer"
+									className="text-sm text-blue-11 underline"
+								>
+									Open video
+								</a>
+							)}
 							<div className="flex relative justify-center items-center w-8 h-8">
 								{hasAudioTrack ? (
 									<>

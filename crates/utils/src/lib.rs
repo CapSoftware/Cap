@@ -9,9 +9,20 @@ use std::{
 use aho_corasick::{AhoCorasickBuilder, MatchKind};
 use tracing::Instrument;
 
+pub mod diagnostic_writer;
 pub mod disk_space;
+pub mod export_resources;
+#[cfg(any(target_os = "linux", test))]
+pub mod linux_package;
+#[cfg(target_os = "linux")]
+pub mod linux_recording_stop;
+#[cfg(any(target_os = "linux", test))]
+pub mod linux_runtime;
+pub mod local_captions;
+pub mod log_upload;
 #[cfg(target_os = "macos")]
 pub mod macos_qos;
+pub mod operation_diagnostics;
 
 /// Wrapper around tokio::spawn that inherits the current tracing subscriber and span.
 pub fn spawn_actor<F>(future: F) -> tokio::task::JoinHandle<F::Output>
@@ -45,10 +56,13 @@ pub fn ensure_dir(path: &PathBuf) -> Result<PathBuf, std::io::Error> {
 /// # Example
 ///
 /// ```rust
+/// use cap_utils::ensure_unique_filename;
+/// let recordings_dir = std::path::Path::new("recordings");
 /// let unique_name = ensure_unique_filename("My Recording.cap", &recordings_dir,);
 /// // If "My Recording.cap" exists, returns "My Recording (1).cap"
 /// // If that exists too, returns "My Recording (2).cap", etc.
 ///
+/// let documents_dir = std::path::Path::new("documents");
 /// let unique_name = ensure_unique_filename("document.pdf", &documents_dir);
 /// // If "document.pdf" exists, returns "document (1).pdf"
 /// ```
@@ -161,7 +175,7 @@ pub fn ensure_unique_filename_with_attempts(
 ///
 /// ## Examples
 ///
-/// ```
+/// ```text
 /// // Basic formats
 /// YYYY-MM-DD HH:mm → %Y-%m-%d %H:%M
 /// // Output: "2025-01-15 14:30"

@@ -2,6 +2,7 @@ import type { videos } from "@cap/database/schema";
 import type { SpaceRuleSource, ViewerSettingKey } from "@cap/web-backend";
 import type { ImageUpload, Organisation, User } from "@cap/web-domain";
 import type { OrganizationSettings } from "@/app/(org)/dashboard/dashboard-data";
+import type { ShareCallToAction } from "@/lib/share-call-to-action";
 
 export type VideoData = Omit<typeof videos.$inferSelect, "ownerId"> & {
 	owner: VideoOwner;
@@ -19,6 +20,8 @@ export type VideoData = Omit<typeof videos.$inferSelect, "ownerId"> & {
 	shareableLinkIconUrl?: ImageUpload.ImageUrl | null;
 	hasActiveUpload?: boolean;
 	activeUploadRawFileKey?: string | null;
+	ownerIsOverShareLimit?: boolean;
+	callToAction?: ShareCallToAction | null;
 };
 
 export type VideoOwner = {

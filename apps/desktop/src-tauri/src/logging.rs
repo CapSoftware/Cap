@@ -7,35 +7,8 @@ use cap_recording::diagnostics::{
     StorageInfo,
 };
 use serde::Serialize;
-use std::{fs, path::PathBuf};
+
 use tauri::{AppHandle, Manager};
-
-async fn get_latest_log_file(app: &AppHandle) -> Option<PathBuf> {
-    let logs_dir = app
-        .state::<ArcLock<crate::App>>()
-        .read()
-        .await
-        .logs_dir
-        .clone();
-
-    let entries = fs::read_dir(&logs_dir).ok()?;
-    let mut log_files: Vec<_> = entries
-        .filter_map(|entry| {
-            let entry = entry.ok()?;
-            let path = entry.path();
-            if path.is_file() && path.file_name()?.to_str()?.contains("cap-desktop.log") {
-                let metadata = fs::metadata(&path).ok()?;
-                let modified = metadata.modified().ok()?;
-                Some((path, modified))
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    log_files.sort_by_key(|b| std::cmp::Reverse(b.1));
-    log_files.first().map(|(path, _)| path.clone())
-}
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -82,6 +55,7 @@ fn collect_cameras(has_permission: bool) -> Vec<CameraDiagnostics> {
                     width: f.width(),
                     height: f.height(),
                     frame_rate: f.frame_rate(),
+                    pixel_format: f.pixel_format_name(),
                 })
                 .collect();
 
@@ -107,6 +81,13 @@ fn collect_microphones(has_permission: bool) -> Vec<MicrophoneDiagnostics> {
             sample_rate: config.sample_rate().0,
             channels: config.channels(),
             sample_format: format!("{:?}", config.sample_format()),
+            // The richer capability/heuristic fields belong to the diagnostic
+            // report; the log upload keeps its existing shape.
+            is_default: None,
+            is_bluetooth: None,
+            is_usb: None,
+            is_builtin: None,
+            supported_configs: None,
         })
         .collect()
 }
@@ -127,10 +108,23 @@ fn collect_storage_info(recordings_path: &std::path::Path) -> Option<StorageInfo
     }
 
     best_match.map(|(disk, _)| StorageInfo {
-        recordings_path: recordings_path.display().to_string(),
+        // The diagnostic report redacts these same paths, and both fields ride
+        // in one upload -- leaving this one raw defeats the redaction.
+        recordings_path: cap_recording::diagnostics::redact_home_paths(
+            &recordings_path.display().to_string(),
+        ),
         available_space_mb: disk.available_space() / (1024 * 1024),
         total_space_mb: disk.total_space() / (1024 * 1024),
     })
+}
+
+pub(crate) fn permission_status_str(status: &permissions::OSPermissionStatus) -> &'static str {
+    match status {
+        permissions::OSPermissionStatus::NotNeeded => "not_needed",
+        permissions::OSPermissionStatus::Empty => "not_requested",
+        permissions::OSPermissionStatus::Granted => "granted",
+        permissions::OSPermissionStatus::Denied => "denied",
+    }
 }
 
 fn collect_diagnostics_for_upload(
@@ -147,13 +141,6 @@ fn collect_diagnostics_for_upload(
     let microphones = collect_microphones(permissions.microphone.permitted());
     let storage = collect_storage_info(recordings_dir);
 
-    let perm_status = |p: &permissions::OSPermissionStatus| match p {
-        permissions::OSPermissionStatus::NotNeeded => "not_needed",
-        permissions::OSPermissionStatus::Empty => "not_requested",
-        permissions::OSPermissionStatus::Granted => "granted",
-        permissions::OSPermissionStatus::Denied => "denied",
-    };
-
     LogUploadDiagnostics {
         hardware,
         system,
@@ -162,50 +149,41 @@ fn collect_diagnostics_for_upload(
         microphones,
         storage,
         permissions: PermissionsInfo {
-            screen_recording: perm_status(&permissions.screen_recording).to_string(),
-            camera: perm_status(&permissions.camera).to_string(),
-            microphone: perm_status(&permissions.microphone).to_string(),
+            screen_recording: permission_status_str(&permissions.screen_recording).to_string(),
+            camera: permission_status_str(&permissions.camera).to_string(),
+            microphone: permission_status_str(&permissions.microphone).to_string(),
         },
         app_state: AppStateInfo {
             is_recording,
-            recordings_dir: recordings_dir.display().to_string(),
-            app_data_dir: app_data_dir.display().to_string(),
+            recordings_dir: cap_recording::diagnostics::redact_home_paths(
+                &recordings_dir.display().to_string(),
+            ),
+            app_data_dir: cap_recording::diagnostics::redact_home_paths(
+                &app_data_dir.display().to_string(),
+            ),
         },
     }
 }
 
 pub async fn upload_log_file(app: &AppHandle) -> Result<(), String> {
-    let log_file = get_latest_log_file(app).await.ok_or("No log file found")?;
+    upload_log_file_inner(app, None).await
+}
 
-    let metadata =
-        fs::metadata(&log_file).map_err(|e| format!("Failed to read log file metadata: {e}"))?;
-    let file_size = metadata.len();
-
-    const MAX_SIZE: u64 = 1024 * 1024;
-
-    let log_content = if file_size > MAX_SIZE {
-        let content =
-            fs::read_to_string(&log_file).map_err(|e| format!("Failed to read log file: {e}"))?;
-
-        let header = format!(
-            "⚠️ Log file truncated (original size: {file_size} bytes, showing last ~1MB)\n\n"
-        );
-        let max_content_size = (MAX_SIZE as usize) - header.len();
-
-        if content.len() > max_content_size {
-            let start_pos = content.len() - max_content_size;
-            let truncated = &content[start_pos..];
-            if let Some(newline_pos) = truncated.find('\n') {
-                format!("{}{}", header, &truncated[newline_pos + 1..])
-            } else {
-                format!("{header}{truncated}")
-            }
-        } else {
-            content
-        }
-    } else {
-        fs::read_to_string(&log_file).map_err(|e| format!("Failed to read log file: {e}"))?
-    };
+pub(crate) async fn upload_log_file_inner(
+    app: &AppHandle,
+    report: Option<String>,
+) -> Result<(), String> {
+    let logs_dir = app
+        .state::<ArcLock<crate::App>>()
+        .read()
+        .await
+        .logs_dir
+        .clone();
+    let log_bundle = tokio::task::spawn_blocking(move || {
+        cap_utils::log_upload::collect(&logs_dir, "cap-desktop.log")
+    })
+    .await
+    .map_err(|_| "Log collection could not finish".to_string())?;
 
     let app_data_dir = app
         .path()
@@ -222,14 +200,53 @@ pub async fn upload_log_file(app: &AppHandle) -> Result<(), String> {
         )
     };
 
-    let diagnostics = collect_diagnostics_for_upload(&recordings_dir, &app_data_dir, is_recording);
+    let diagnostics = tokio::task::spawn_blocking(move || {
+        collect_diagnostics_for_upload(&recordings_dir, &app_data_dir, is_recording)
+    })
+    .await
+    .ok();
     let diagnostics_json = serde_json::to_string(&diagnostics).unwrap_or_else(|_| "{}".to_string());
+    let context = serde_json::json!({
+        "schemaVersion": 1,
+        "app": {
+            "flavor": "tauri",
+            "version": env!("CARGO_PKG_VERSION"),
+            "os": std::env::consts::OS,
+            "binaryArchitecture": std::env::consts::ARCH,
+            "debugBuild": cfg!(debug_assertions),
+            "sourceRevision": option_env!("CAP_BUILD_REVISION"),
+            "sourceDirty": option_env!("CAP_BUILD_DIRTY").and_then(|value| value.parse::<bool>().ok()),
+        },
+        "operations": cap_utils::operation_diagnostics::snapshot(),
+        "logCoverage": &log_bundle,
+        "environmentCollectedAt": "upload_time",
+        "mediaIncluded": false,
+    });
 
-    let form = reqwest::multipart::Form::new()
-        .text("log", log_content)
+    // Everything leaving the machine goes through the redactor. Logs record
+    // whole URLs on failure (reqwest's Display and Debug both append the URL),
+    // and an upload failure logs a presigned S3 PUT, whose query string is a
+    // live write credential for up to an hour.
+    use cap_recording::log_redaction::scrub_log_text;
+
+    let upload = cap_utils::log_upload::prepare_upload(
+        log_bundle,
+        context,
+        Some(&diagnostics_json),
+        report.as_deref(),
+        scrub_log_text,
+    );
+    let mut form = reqwest::multipart::Form::new()
+        .text("log", upload.log)
         .text("os", std::env::consts::OS)
         .text("version", env!("CARGO_PKG_VERSION"))
-        .text("diagnostics", diagnostics_json);
+        .text("context", upload.context);
+    if let Some(diagnostics) = upload.diagnostics {
+        form = form.text("diagnostics", diagnostics);
+    }
+    if let Some(report) = upload.report {
+        form = form.text("report", report);
+    }
 
     let response = app
         .api_request("/api/desktop/logs", |client, url| {

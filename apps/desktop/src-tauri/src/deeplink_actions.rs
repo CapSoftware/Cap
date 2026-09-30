@@ -58,6 +58,20 @@ pub enum DeepLinkAction {
     SetCameraPreviewState {
         state: CameraPreviewState,
     },
+    #[cfg(debug_assertions)]
+    SetRecordingInputs {
+        camera: Option<DeviceOrModelID>,
+        mic_label: Option<String>,
+    },
+    #[cfg(debug_assertions)]
+    SetEditorPlayback {
+        project_path: PathBuf,
+        playing: bool,
+    },
+    #[cfg(debug_assertions)]
+    CloseEditor {
+        project_path: PathBuf,
+    },
     OpenEditor {
         project_path: PathBuf,
     },
@@ -77,17 +91,19 @@ impl DeepLinkActionExecutor {
         let runtime = tokio::runtime::Handle::current();
 
         trace!("Starting deep link action executor");
-        let thread_result = std::thread::Builder::new()
-            .name("deep-link-action-executor".to_string())
-            .spawn(move || {
-                trace!("Deep link action executor started");
-                for action in rx {
-                    trace!(?action, "Executing deep link action");
-                    if let Err(err) = runtime.block_on(action.execute(&app_handle)) {
-                        eprintln!("Failed to handle deep link action: {err}");
-                    }
+        let thread = std::thread::Builder::new().name("deep-link-action-executor".to_string());
+        // Debug recording futures overflow the default thread stack; match Tauri's worker stack.
+        #[cfg(debug_assertions)]
+        let thread = thread.stack_size(16 * 1024 * 1024);
+        let thread_result = thread.spawn(move || {
+            trace!("Deep link action executor started");
+            for action in rx {
+                trace!(?action, "Executing deep link action");
+                if let Err(err) = runtime.block_on(action.execute(&app_handle)) {
+                    eprintln!("Failed to handle deep link action: {err}");
                 }
-            });
+            }
+        });
 
         if let Err(err) = thread_result {
             eprintln!("Failed to start deep link action executor: {err}");
@@ -195,7 +211,7 @@ impl DeepLinkAction {
                 let state = app.state::<ArcLock<App>>();
 
                 crate::set_camera_input(app.clone(), state.clone(), camera, None).await?;
-                crate::set_mic_input(state.clone(), mic_label).await?;
+                crate::set_mic_input(app.clone(), state.clone(), mic_label).await?;
 
                 let capture_target: ScreenCaptureTarget = match capture_mode {
                     CaptureMode::Screen(name) => cap_recording::screen_capture::list_displays()
@@ -285,6 +301,34 @@ impl DeepLinkAction {
             #[cfg(debug_assertions)]
             DeepLinkAction::SetCameraPreviewState { state } => {
                 crate::set_camera_preview_state(app.state(), state).await
+            }
+            #[cfg(debug_assertions)]
+            DeepLinkAction::SetRecordingInputs { camera, mic_label } => {
+                crate::set_camera_input(app.clone(), app.state(), camera, None).await?;
+                crate::set_mic_input(app.clone(), app.state(), mic_label).await
+            }
+            #[cfg(debug_assertions)]
+            DeepLinkAction::SetEditorPlayback {
+                project_path,
+                playing,
+            } => {
+                let window = crate::windows::editor_window_for_path(app, &project_path)
+                    .ok_or("Editor window is not open")?;
+                window
+                    .emit_to(
+                        tauri::EventTarget::WebviewWindow {
+                            label: window.label().to_string(),
+                        },
+                        "cap-dev-set-editor-playback",
+                        playing,
+                    )
+                    .map_err(|error| error.to_string())
+            }
+            #[cfg(debug_assertions)]
+            DeepLinkAction::CloseEditor { project_path } => {
+                let window = crate::windows::editor_window_for_path(app, &project_path)
+                    .ok_or("Editor window is not open")?;
+                window.close().map_err(|error| error.to_string())
             }
             DeepLinkAction::OpenEditor { project_path } => {
                 crate::open_project_from_path(Path::new(&project_path), app.clone())

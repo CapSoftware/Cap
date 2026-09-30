@@ -10,6 +10,12 @@ vi.mock("@cap/database", () => ({
 }));
 
 vi.mock("@cap/database/schema", () => ({
+	importedVideos: {
+		id: "importedVideos.id",
+		orgId: "importedVideos.orgId",
+		source: "importedVideos.source",
+		sourceId: "importedVideos.sourceId",
+	},
 	users: {
 		id: "users.id",
 		stripeSubscriptionStatus: "users.stripeSubscriptionStatus",
@@ -18,6 +24,7 @@ vi.mock("@cap/database/schema", () => ({
 	videos: {
 		id: "videos.id",
 		ownerId: "videos.ownerId",
+		orgId: "videos.orgId",
 		bucket: "videos.bucket",
 		source: "videos.source",
 		metadata: "videos.metadata",
@@ -72,6 +79,10 @@ vi.mock("@/lib/generate-ai", () => ({
 
 vi.mock("@/workflows/process-video", () => ({
 	processVideoWorkflow: vi.fn(),
+}));
+
+vi.mock("@/workflows/import-loom-video", () => ({
+	importLoomVideoWorkflow: vi.fn(),
 }));
 
 vi.mock("@/workflows/finalize-desktop-recording", () => ({
@@ -133,6 +144,8 @@ describe("recoverStalledVideoPipeline", () => {
 			userId: "user-1",
 			bucketId: null,
 			rawFileKey: "user-1/video-media/raw.mp4",
+			loomVideoId: null,
+			processingMessage: "Starting video processing...",
 			sourceType: "webMP4",
 			updatedAt: staleAt,
 		};
@@ -181,6 +194,8 @@ describe("recoverStalledVideoPipeline", () => {
 			userId: "user-1",
 			bucketId: null,
 			rawFileKey: "user-1/video-media/raw.mp4",
+			loomVideoId: null,
+			processingMessage: "Starting video processing...",
 			sourceType: "webMP4",
 			updatedAt: staleAt,
 		};
@@ -201,6 +216,48 @@ describe("recoverStalledVideoPipeline", () => {
 		expect(mockStart).not.toHaveBeenCalled();
 		expect(result.media.statuses).toEqual({ "already-claimed": 1 });
 	});
+
+	it.each(["Downloading video...", "Queued for Loom import processing..."])(
+		"restarts orphaned Loom jobs in the %s state through the bulk import workflow",
+		async (processingMessage) => {
+			const mediaCandidate = {
+				videoId: "video-loom",
+				userId: "user-1",
+				bucketId: null,
+				rawFileKey: "user-1/video-loom/raw.mp4",
+				loomVideoId: "loom-video-1",
+				processingMessage,
+				updatedAt: staleAt,
+			};
+
+			let dbCall = 0;
+			mockDb.mockImplementation(() => {
+				dbCall++;
+				if (dbCall === 1) return makeSelectChain([mediaCandidate]);
+				if (dbCall <= 3) return makeSelectChain([]);
+				return makeUpdateChain(1);
+			});
+
+			const { recoverStalledVideoPipeline } = await import(
+				"@/lib/video-pipeline-recovery"
+			);
+			const result = await recoverStalledVideoPipeline({ now, concurrency: 1 });
+			const { inArray } = await import("drizzle-orm");
+
+			expect(inArray).toHaveBeenCalledWith(
+				"videoUploads.processingMessage",
+				expect.arrayContaining([processingMessage]),
+			);
+			expect(mockStart).toHaveBeenCalledWith(expect.any(Function), [
+				expect.objectContaining({
+					videoId: "video-loom",
+					loomVideoId: "loom-video-1",
+					reuseExistingRawUpload: true,
+				}),
+			]);
+			expect(result.media.statuses).toEqual({ started: 1 });
+		},
+	);
 
 	it("starts eligible AI generation when legacy metadata is null", async () => {
 		const aiCandidate = {

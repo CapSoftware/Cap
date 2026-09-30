@@ -27,7 +27,7 @@ import { CapCard } from "./components/CapCard/CapCard";
 import { CapPagination } from "./components/CapPagination";
 import { EmptyCapState } from "./components/EmptyCapState";
 import type { FolderDataType } from "./components/Folder";
-import Folder from "./components/Folder";
+import { FoldersSection } from "./components/FoldersSection";
 import { useUploadingStatus } from "./UploadingContext";
 
 export type VideoData = {
@@ -271,23 +271,13 @@ export const Caps = ({
 					className={`${CHROME_EXTENSION_BUTTON_CLASS} font-medium`}
 				/>
 			</div>
-			{folders.length > 0 && (
-				<>
-					<div className="flex gap-3 items-center mb-6 w-full">
-						<h1 className="text-2xl font-medium text-gray-12">Folders</h1>
-					</div>
-					<div className="grid grid-cols-[repeat(auto-fill,minmax(250px,1fr))] gap-4 mb-10">
-						{folders.map((folder) => (
-							<Folder
-								key={folder.id}
-								{...folder}
-								canMove
-								moveRootLabel="My Caps"
-							/>
-						))}
-					</div>
-				</>
-			)}
+			<FoldersSection
+				title="Folders"
+				scope="personal"
+				folders={folders}
+				canMove
+				moveRootLabel="My Caps"
+			/>
 			{visibleVideos.length > 0 && (
 				<>
 					<div className="flex justify-between items-center mb-6 w-full">

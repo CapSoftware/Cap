@@ -8,6 +8,7 @@ export type GeneralSettingsStore = TauriGeneralSettingsStore & {
 	transcriptionHints?: string[];
 	enableTelemetry?: boolean;
 	outOfProcessMuxer?: boolean;
+	enableGpuiApp?: boolean;
 };
 
 export const DEFAULT_TRANSCRIPTION_HINTS = [
@@ -45,6 +46,8 @@ export function createDefaultGeneralSettings(): GeneralSettingsStore {
 		enableNotifications: true,
 		enableNativeCameraPreview: false,
 		autoZoomOnClicks: false,
+		// Off until the backend seeds it from whether this machine has a notch.
+		macbookNotchOverlay: false,
 		captureKeyboardEvents: true,
 		custom_cursor_capture2: true,
 		excludedWindows: [],

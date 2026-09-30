@@ -7,6 +7,7 @@ import type { OrganizationBrandColorSwatch } from "~/utils/organization-branding
 import { BrandColorsDropdown } from "./BrandColorsDropdown";
 import { getColorPreviewBorderColor } from "./color-utils";
 import { TextInput } from "./TextInput";
+import type { TextAnimation, TextBackgroundStyle } from "./text";
 
 export const FONT_OPTIONS = [
 	{ value: "System Sans-Serif", label: "System Sans-Serif" },
@@ -37,6 +38,45 @@ export const TEXT_WEIGHT_OPTIONS = [
 	{ label: "Normal", value: 400 },
 	{ label: "Medium", value: 500 },
 	{ label: "Bold", value: 700 },
+];
+
+export const TEXT_SEGMENT_WEIGHT_OPTIONS = [
+	{ label: "Light", value: 300 },
+	{ label: "Regular", value: 400 },
+	{ label: "Medium", value: 500 },
+	{ label: "Semibold", value: 600 },
+	{ label: "Bold", value: 700 },
+	{ label: "Extra Bold", value: 800 },
+	{ label: "Black", value: 900 },
+];
+
+export const TEXT_ANIMATION_OPTIONS: {
+	value: TextAnimation;
+	label: string;
+}[] = [
+	{ value: "none", label: "None" },
+	{ value: "fade", label: "Fade" },
+	{ value: "slideUp", label: "Slide up" },
+	{ value: "slideDown", label: "Slide down" },
+	{ value: "slideLeft", label: "Slide left" },
+	{ value: "slideRight", label: "Slide right" },
+	{ value: "pop", label: "Pop" },
+	{ value: "zoom", label: "Zoom" },
+	{ value: "bounce", label: "Bounce" },
+	{ value: "wipe", label: "Wipe" },
+	{ value: "words", label: "Words" },
+	{ value: "letters", label: "Letters" },
+	{ value: "tracking", label: "Tracking" },
+	{ value: "typewriter", label: "Typewriter" },
+];
+
+export const TEXT_BACKGROUND_STYLE_OPTIONS: {
+	value: TextBackgroundStyle;
+	label: string;
+}[] = [
+	{ value: "box", label: "Box" },
+	{ value: "pill", label: "Pill" },
+	{ value: "highlight", label: "Highlight" },
 ];
 
 export const CAPTION_ANIMATION_OPTIONS = [
@@ -84,10 +124,10 @@ export function HexColorInput(props: {
 
 	return (
 		<div class="flex flex-col gap-2">
-			<div class="flex flex-row items-center gap-[0.75rem] relative">
+			<div class="flex relative flex-row gap-2 items-center">
 				<button
 					type="button"
-					class="size-[2rem] rounded-[0.5rem]"
+					class="size-[30px] shrink-0 rounded-[7px]"
 					style={{
 						"background-color": text(),
 						"box-shadow": `inset 0 0 0 1px ${getColorPreviewBorderColor(
@@ -99,7 +139,7 @@ export function HexColorInput(props: {
 				<input
 					ref={colorInput}
 					type="color"
-					class="absolute left-0 bottom-0 size-[2rem] opacity-0"
+					class="absolute bottom-0 left-0 opacity-0 size-[30px]"
 					value={text()}
 					onChange={(e) => {
 						setText(e.target.value);
@@ -107,7 +147,7 @@ export function HexColorInput(props: {
 					}}
 				/>
 				<TextInput
-					class="w-[5rem] p-[0.375rem] border border-gray-3 text-gray-12 rounded-[0.5rem] bg-gray-2"
+					class="h-[30px] min-w-0 flex-1 rounded-[7px] border-0 bg-ed-ctl px-2 text-[12px] text-ed-text-1 caret-ed-accent outline-hidden transition-colors duration-150 hover:bg-ed-ctl-hover focus:bg-ed-ctl-hover focus:ring-1 focus:ring-ed-accent"
 					value={text()}
 					onFocus={() => {
 						prevColor = props.value;

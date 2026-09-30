@@ -60,6 +60,24 @@
 
 	--color-transparent: rgba(0, 0, 0, 0);
 	--color-solid-white: #ffffff;
+	--color-ed-window: var(--ed-window);
+	--color-ed-card: var(--ed-card);
+	--color-ed-card-2: var(--ed-card-2);
+	--color-ed-stage: var(--ed-stage);
+	--color-ed-line: var(--ed-line);
+	--color-ed-line-strong: var(--ed-line-strong);
+	--color-ed-text-1: var(--ed-text-1);
+	--color-ed-text-2: var(--ed-text-2);
+	--color-ed-text-3: var(--ed-text-3);
+	--color-ed-ctl: var(--ed-ctl);
+	--color-ed-ctl-hover: var(--ed-ctl-hover);
+	--color-ed-ctl-active: var(--ed-ctl-active);
+	--color-ed-accent: var(--ed-accent);
+	--color-ed-accent-2: var(--ed-accent-2);
+	--color-ed-playhead: var(--ed-playhead);
+	--color-ed-thumb: var(--ed-thumb);
+	--shadow-ed-card: var(--ed-card-shadow);
+	--shadow-ed-pop: var(--ed-pop-shadow);
 	--color-transparent-window: var(--transparent-window);
 
 	--color-gray-1: var(--gray-1);

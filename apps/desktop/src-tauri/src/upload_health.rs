@@ -1,3 +1,5 @@
+mod probe;
+
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -5,6 +7,8 @@ use specta::Type;
 use tauri::{AppHandle, Manager, State};
 use tokio::sync::Mutex;
 use tracing::{debug, warn};
+
+use self::probe::{ProbeCoordinator, measure_warm_rtt, upload_elapsed_after_rtt};
 
 use crate::{
     App, MutableState,
@@ -86,7 +90,7 @@ impl UploadHealthSnapshot {
 #[derive(Default)]
 pub struct UploadHealthCache {
     snapshot: Mutex<UploadHealthSnapshot>,
-    probe: Mutex<()>,
+    probe: ProbeCoordinator,
 }
 
 impl UploadHealthCache {
@@ -146,7 +150,7 @@ fn probe_payload() -> Vec<u8> {
     vec![0x63; PROBE_BYTES]
 }
 
-async fn measure_probe_rtt(app: &AppHandle) -> Option<Duration> {
+async fn measure_probe_round_trip(app: &AppHandle) -> Option<Duration> {
     let started = Instant::now();
     let response = app
         .authed_api_request("/api/desktop/upload-health", |client, url| {
@@ -168,25 +172,12 @@ async fn measure_probe_rtt(app: &AppHandle) -> Option<Duration> {
     }
 }
 
-fn upload_elapsed_after_rtt(total_elapsed: Duration, rtt_elapsed: Option<Duration>) -> Duration {
-    let total_elapsed = total_elapsed.max(Duration::from_millis(1));
-
-    let Some(rtt_elapsed) = rtt_elapsed else {
-        return total_elapsed;
-    };
-
-    match total_elapsed.checked_sub(rtt_elapsed) {
-        Some(adjusted_elapsed) if adjusted_elapsed >= Duration::from_millis(50) => adjusted_elapsed,
-        _ => total_elapsed,
-    }
-}
-
 fn upload_mbps_for_bytes(byte_count: usize, elapsed: Duration) -> f64 {
     (byte_count as f64 * 8.0) / elapsed.max(Duration::from_millis(1)).as_secs_f64() / 1_000_000.0
 }
 
 async fn run_probe(app: &AppHandle) -> UploadHealthSnapshot {
-    let rtt_elapsed = measure_probe_rtt(app).await;
+    let rtt_elapsed = measure_warm_rtt(|| measure_probe_round_trip(app)).await;
     let payload = probe_payload();
     let payload_len = payload.len();
 
@@ -311,16 +302,29 @@ pub async fn refresh_upload_health_status(
     app_state: MutableState<'_, App>,
     cache: State<'_, UploadHealthCache>,
 ) -> Result<UploadHealthStatus, String> {
-    if app_state.read().await.is_recording_active_or_pending() {
-        return Ok(cache.status().await);
+    let status = cache
+        .probe
+        .run_if_idle(
+            async { app_state.read().await.is_recording_active_or_pending() },
+            async { cache.update(run_probe(&app).await).await },
+        )
+        .await;
+    Ok(match status {
+        Some(status) => status,
+        None => cache.status().await,
+    })
+}
+
+pub fn cancel_probe_for_recording(app: &AppHandle) {
+    if let Some(cache) = app.try_state::<UploadHealthCache>() {
+        cache.probe.cancel();
     }
+}
 
-    let Ok(_probe_guard) = cache.probe.try_lock() else {
-        return Ok(cache.status().await);
-    };
-
-    let snapshot = run_probe(&app).await;
-    Ok(cache.update(snapshot).await)
+pub async fn wait_for_probe_to_stop(app: &AppHandle) {
+    if let Some(cache) = app.try_state::<UploadHealthCache>() {
+        cache.probe.wait_for_idle().await;
+    }
 }
 
 pub async fn cached_instant_resolution_cap(app: &AppHandle) -> Option<u32> {
@@ -348,10 +352,14 @@ mod tests {
                 upload_mbps: Some(50.0),
                 max_instant_resolution: Some(3840),
                 checked_at_unix_ms: Some(now_unix_ms()),
-                recorded_at: Some(Instant::now() - HEALTH_FRESH_FOR - Duration::from_secs(1)),
+                recorded_at: Some(
+                    Instant::now()
+                        .checked_sub(HEALTH_FRESH_FOR + Duration::from_secs(1))
+                        .unwrap(),
+                ),
                 message: "old".to_string(),
             }),
-            probe: Mutex::new(()),
+            probe: ProbeCoordinator::default(),
         };
 
         assert_eq!(cache.fresh_instant_resolution_cap().await, None);
@@ -368,25 +376,9 @@ mod tests {
                 recorded_at: Some(Instant::now()),
                 message: "slow".to_string(),
             }),
-            probe: Mutex::new(()),
+            probe: ProbeCoordinator::default(),
         };
 
         assert_eq!(cache.fresh_instant_resolution_cap().await, Some(1280));
-    }
-
-    #[test]
-    fn subtracts_rtt_from_probe_elapsed_when_safe() {
-        assert_eq!(
-            upload_elapsed_after_rtt(Duration::from_millis(700), Some(Duration::from_millis(500))),
-            Duration::from_millis(200)
-        );
-    }
-
-    #[test]
-    fn keeps_total_elapsed_when_rtt_would_overcorrect() {
-        assert_eq!(
-            upload_elapsed_after_rtt(Duration::from_millis(520), Some(Duration::from_millis(500))),
-            Duration::from_millis(520)
-        );
     }
 }

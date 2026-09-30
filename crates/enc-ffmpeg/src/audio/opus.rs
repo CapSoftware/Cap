@@ -121,6 +121,14 @@ impl AudioEncoder for OpusEncoder {
         let _ = self.queue_frame(frame, Duration::MAX, output);
     }
 
+    fn try_send_frame(
+        &mut self,
+        frame: frame::Audio,
+        output: &mut format::context::Output,
+    ) -> Result<(), ffmpeg::Error> {
+        self.queue_frame(frame, Duration::MAX, output)
+    }
+
     fn flush(&mut self, output: &mut format::context::Output) -> Result<(), ffmpeg::Error> {
         self.flush(output)
     }

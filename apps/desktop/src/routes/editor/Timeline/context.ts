@@ -35,6 +35,7 @@ type TrackContextValue = {
 
 type SegmentContextValue = {
 	width: Accessor<number>;
+	segment: Accessor<{ start: number; end: number }>;
 };
 
 export const [TimelineContextProvider, useTimelineContext] =
@@ -102,7 +103,10 @@ export const [TrackContextProvider, useTrackContext] = createContextProvider(
 
 export const [SegmentContextProvider, useSegmentContext] =
 	createContextProvider(
-		(props: { width: Accessor<number> }) => {
+		(props: {
+			width: Accessor<number>;
+			segment: Accessor<{ start: number; end: number }>;
+		}) => {
 			return props;
 		},
 		null as unknown as SegmentContextValue,

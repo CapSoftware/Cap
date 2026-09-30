@@ -1,5 +1,8 @@
 import { createElementBounds } from "@solid-primitives/bounds";
-import { createEventListener } from "@solid-primitives/event-listener";
+import {
+	createEventListener,
+	createEventListenerMap,
+} from "@solid-primitives/event-listener";
 import { LogicalPosition } from "@tauri-apps/api/dpi";
 import { Menu, MenuItem } from "@tauri-apps/api/menu";
 import { platform } from "@tauri-apps/plugin-os";
@@ -13,12 +16,19 @@ import {
 	For,
 	Index,
 	type JSX,
+	Match,
+	on,
 	onCleanup,
 	onMount,
 	Show,
+	Switch,
 } from "solid-js";
 import { produce } from "solid-js/store";
 import toast from "solid-toast";
+import IconLucidePalette from "~icons/lucide/palette";
+import { stylesRevealCamera } from "../style";
+import { ImageTrack } from "./image-track";
+import { type OverlayDragState, StyleTrack } from "./style-track";
 
 import "./styles.css";
 
@@ -32,15 +42,25 @@ import {
 	getSelectedTranscriptionSettings,
 	transcribeEditorCaptions,
 } from "../captions";
+import { clipDuration, clipTimelineOffsets } from "../clip-transitions";
 import { FPS, type TimelineTrackType, useEditorContext } from "../context";
 import { defaultMaskSegment, type MaskSegment } from "../masks";
 import { autoTextColorAt, defaultTextSegment, type TextSegment } from "../text";
+import { effectiveToOutput, holdWindows } from "../timeline-holds";
 import {
+	getOverlayTrackRows,
 	getSegmentTrack,
 	getTrackRowsWithCount,
 	getUsedTrackCount,
+	isOverlayTrackKind,
+	moveOverlayTrack,
+	moveTrackLane,
+	type OverlayTrack,
 	placeSegmentAtTime,
+	removeOverlayTrack,
+	sameOverlayTrack,
 	sortTrackSegments,
+	trackInsertionIndex,
 } from "../timelineTracks";
 import { formatTime } from "../utils";
 import { type AudioSegmentDragState, AudioTrack } from "./AudioTrack";
@@ -49,28 +69,42 @@ import { ClipTrack } from "./ClipTrack";
 import { TimelineContextProvider, useTimelineContext } from "./context";
 import { type KeyboardSegmentDragState, KeyboardTrack } from "./KeyboardTrack";
 import { type MaskSegmentDragState, MaskTrack } from "./MaskTrack";
+import { Minimap } from "./Minimap";
+import { PlaybackFollow } from "./playback-follow";
 import { type SceneSegmentDragState, SceneTrack } from "./SceneTrack";
 import { type TextSegmentDragState, TextTrack } from "./TextTrack";
+import { type ThreeDSegmentDragState, ThreeDTrack } from "./ThreeDTrack";
 import { TrackIcon, TrackManager } from "./TrackManager";
 import { type ZoomSegmentDragState, ZoomTrack } from "./ZoomTrack";
 
-const TIMELINE_PADDING = 16;
-const TRACK_GUTTER_GAP = 8;
-const TRACK_GUTTER = 112;
-const TRACK_ICON_WIDTH = TRACK_GUTTER - TRACK_GUTTER_GAP;
-const TIMELINE_HEADER_HEIGHT = 32;
-const PLAYHEAD_TOP_OFFSET = 24;
+// The timeline renders inside the editor's timeline card, which supplies the
+// 10px 12px 12px padding; these constants describe the geometry inside it.
+// 104 is the narrowest gutter that fits the "Add track" pill without
+// truncating its label on the widest system UI font (Segoe UI on Windows).
+const TRACK_GUTTER = 104;
+const TRACK_ICON_WIDTH = TRACK_GUTTER;
+const TRACK_GUTTER_INSET = 4;
+const TIMELINE_HEADER_HEIGHT = 26;
+const TIMELINE_HEADER_GAP = 4;
+const PLAYHEAD_TOP_OFFSET = TIMELINE_HEADER_HEIGHT - 12;
+const TRACK_ROW_HEIGHT = 44;
+const TRACK_ROW_GAP = 6;
+const TRACK_HEIGHT = `${TRACK_ROW_HEIGHT}px`;
 const START_SNAP_PX = 10;
+const RULER_SCRUB_OVERHANG_PX = 4;
 
 const trackIcons: Record<TimelineTrackType, () => JSX.Element> = {
-	clip: () => <IconLucideClapperboard class="size-4" />,
-	caption: () => <IconCapCaptions class="size-4" />,
-	keyboard: () => <IconLucideKeyboard class="size-4" />,
-	text: () => <IconLucideType class="size-4" />,
-	mask: () => <IconLucideBoxSelect class="size-4" />,
-	zoom: () => <IconLucideSearch class="size-4" />,
-	scene: () => <IconLucideVideo class="size-4" />,
-	audio: () => <IconLucideMusic class="size-4" />,
+	style: () => <IconLucidePalette class="size-3" />,
+	image: () => <IconCapImage class="size-3" />,
+	clip: () => <IconLucideClapperboard class="size-3" />,
+	caption: () => <IconCapCaptions class="size-3" />,
+	keyboard: () => <IconLucideKeyboard class="size-3" />,
+	text: () => <IconLucideType class="size-3" />,
+	mask: () => <IconLucideBoxSelect class="size-3" />,
+	zoom: () => <IconLucideSearch class="size-3" />,
+	scene: () => <IconLucideVideo class="size-3" />,
+	audio: () => <IconLucideMusic class="size-3" />,
+	"3d": () => <IconLucideRotate3d class="size-3" />,
 };
 
 type TrackDefinition = {
@@ -81,6 +115,8 @@ type TrackDefinition = {
 };
 
 const trackDefinitions: TrackDefinition[] = [
+	{ type: "style", label: "Style", icon: trackIcons.style, locked: false },
+	{ type: "image", label: "Image", icon: trackIcons.image, locked: false },
 	{
 		type: "clip",
 		label: "Clip",
@@ -129,6 +165,12 @@ const trackDefinitions: TrackDefinition[] = [
 		icon: trackIcons.scene,
 		locked: false,
 	},
+	{
+		type: "3d",
+		label: "3D",
+		icon: trackIcons["3d"],
+		locked: false,
+	},
 ];
 
 function deleteTrackLane<T extends { track?: number }>(
@@ -149,6 +191,7 @@ export function Timeline(props: {
 		overflow: number;
 		visibleTrackCount: number;
 	}) => void;
+	onContentHeightChange?: (height: number) => void;
 }) {
 	const {
 		project,
@@ -162,6 +205,8 @@ export function Timeline(props: {
 		meta,
 		previewResolutionBase,
 		canvasControls,
+		playbackIntent,
+		requestHandoffPlayback,
 	} = useEditorContext();
 
 	const duration = () => editorInstance.recordingDuration;
@@ -175,6 +220,65 @@ export function Timeline(props: {
 	const timelineBounds = createElementBounds(timelineRef);
 
 	const secsPerPixel = () => transform().zoom / (timelineBounds.width ?? 1);
+	const playbackFollow = new PlaybackFollow();
+	const playbackDuration = createMemo(totalDuration);
+	let followRafId: number | null = null;
+	let timelinePointerDown = false;
+
+	createEventListener(
+		window,
+		"mousedown",
+		(event) => {
+			if (event.button === 0 && event.target instanceof Node) {
+				timelinePointerDown =
+					timelineContainerRef()?.contains(event.target) ?? false;
+			}
+		},
+		{ capture: true },
+	);
+	createEventListenerMap(window, {
+		mouseup: () => {
+			timelinePointerDown = false;
+		},
+		blur: () => {
+			timelinePointerDown = false;
+		},
+	});
+
+	function cancelPlaybackFollow() {
+		if (followRafId !== null) cancelAnimationFrame(followRafId);
+		followRafId = null;
+		playbackFollow.reset();
+	}
+
+	createEffect(
+		on(
+			[() => editorState.playing, () => editorState.playbackTime],
+			([playing]) => {
+				if (!playing) {
+					cancelPlaybackFollow();
+					return;
+				}
+				if (followRafId !== null) return;
+				followRafId = requestAnimationFrame(() => {
+					followRafId = null;
+					if (!editorState.playing || !timelineBounds.width) return;
+					const viewport = transform();
+					const position = playbackFollow.update(
+						viewport,
+						editorState.playbackTime,
+						playbackDuration(),
+						performance.now(),
+						timelinePointerDown,
+					);
+					if (position !== viewport.position) {
+						setEditorState("timeline", "transform", "position", position);
+					}
+				});
+			},
+		),
+	);
+	onCleanup(cancelPlaybackFollow);
 
 	const openAudioPicker = (laneIndex: number) => {
 		batch(() => {
@@ -184,73 +288,97 @@ export function Timeline(props: {
 	};
 
 	const trackState = () => editorState.timeline.tracks;
-	const sceneAvailable = () => meta().hasCamera && !project.camera.hide;
+	const sceneAvailable = () =>
+		meta().hasCamera &&
+		(!project.camera.hide ||
+			stylesRevealCamera(project.timeline?.styleSegments ?? []) ||
+			!!project.timeline?.sceneSegments?.length);
 	const captionTrackVisible = () => trackState().caption;
 	const keyboardTrackVisible = () => trackState().keyboard;
+	const threeDTrackVisible = () => trackState()["3d"];
 	const trackOptions = createMemo(() =>
 		trackDefinitions.map((definition) => ({
 			...definition,
 			active:
-				definition.type === "caption"
-					? trackState().caption
-					: definition.type === "keyboard"
-						? trackState().keyboard
-						: definition.type === "scene"
-							? trackState().scene
-							: definition.type === "mask"
-								? trackState().mask > 0
-								: definition.type === "text"
-									? trackState().text > 0
-									: definition.type === "audio"
-										? trackState().audio > 0
-										: true,
+				definition.type === "style" || definition.type === "image"
+					? trackState()[definition.type] > 0
+					: definition.type === "caption"
+						? trackState().caption
+						: definition.type === "keyboard"
+							? trackState().keyboard
+							: definition.type === "scene"
+								? trackState().scene
+								: definition.type === "3d"
+									? trackState()["3d"]
+									: definition.type === "mask"
+										? trackState().mask > 0
+										: definition.type === "text"
+											? trackState().text > 0
+											: definition.type === "audio"
+												? trackState().audio > 0
+												: true,
 			available: definition.type === "scene" ? sceneAvailable() : true,
 			supportsMultiple:
+				definition.type === "style" ||
+				definition.type === "image" ||
 				definition.type === "mask" ||
 				definition.type === "text" ||
 				definition.type === "audio",
 			count:
-				definition.type === "mask"
-					? trackState().mask
-					: definition.type === "text"
-						? trackState().text
-						: definition.type === "audio"
-							? trackState().audio
-							: 0,
+				definition.type === "style" || definition.type === "image"
+					? trackState()[definition.type]
+					: definition.type === "mask"
+						? trackState().mask
+						: definition.type === "text"
+							? trackState().text
+							: definition.type === "audio"
+								? trackState().audio
+								: 0,
 		})),
 	);
 	const sceneTrackVisible = () => trackState().scene && sceneAvailable();
-	const textTrackRows = createMemo(() =>
+	const styleTrackRows = createMemo(() =>
 		getTrackRowsWithCount(
-			project.timeline?.textSegments ?? [],
-			trackState().text,
-		),
+			project.timeline?.styleSegments ?? [],
+			trackState().style,
+		).reverse(),
 	);
-	const maskTrackRows = createMemo(() =>
-		getTrackRowsWithCount(
-			project.timeline?.maskSegments ?? [],
-			trackState().mask,
+	const overlayTrackRows = createMemo<OverlayTrack[]>((previous) =>
+		getOverlayTrackRows(project, trackState()).map(
+			(row) => previous?.find((item) => sameOverlayTrack(item, row)) ?? row,
 		),
 	);
 	const audioTrackRows = createMemo(() =>
 		getTrackRowsWithCount(
 			project.timeline?.audioSegments ?? [],
 			trackState().audio,
-		),
+		).reverse(),
 	);
 	const visibleTrackCount = createMemo(
 		() =>
 			2 +
+			styleTrackRows().length +
+			overlayTrackRows().length +
 			(captionTrackVisible() ? 1 : 0) +
 			(keyboardTrackVisible() ? 1 : 0) +
-			textTrackRows().length +
-			maskTrackRows().length +
 			audioTrackRows().length +
+			(threeDTrackVisible() ? 1 : 0) +
 			(sceneTrackVisible() ? 1 : 0),
 	);
-	const trackHeight = createMemo(() =>
-		visibleTrackCount() > 2 ? "3rem" : "3.25rem",
-	);
+
+	const contentHeight = createMemo(() => {
+		const rows = Math.max(visibleTrackCount(), 1);
+		return (
+			TIMELINE_HEADER_HEIGHT +
+			TIMELINE_HEADER_GAP +
+			rows * TRACK_ROW_HEIGHT +
+			(rows - 1) * TRACK_ROW_GAP
+		);
+	});
+
+	createEffect(() => {
+		props.onContentHeightChange?.(contentHeight());
+	});
 
 	createEffect(() => {
 		const visibleTracks = visibleTrackCount();
@@ -316,6 +444,18 @@ export function Timeline(props: {
 			return;
 		}
 
+		if (type === "3d") {
+			// Turning the track on just shows the lane: the lane itself offers the
+			// auto scene and the first shot.
+			batch(() => {
+				setEditorState("timeline", "tracks", "3d", next);
+				if (!next && editorState.timeline.selection?.type === "3d") {
+					setEditorState("timeline", "selection", null);
+				}
+			});
+			return;
+		}
+
 		if (type === "text") {
 			setEditorState(
 				"timeline",
@@ -351,11 +491,29 @@ export function Timeline(props: {
 	// existing lane with room at the playhead is reused, otherwise a new lane
 	// is stacked on. Same 1s / 80px sizing as the tracks' click-to-add.
 	function handleAddTrack(type: TimelineTrackType) {
+		if (type === "style" || type === "image") {
+			const segments =
+				(type === "style"
+					? project.timeline?.styleSegments
+					: project.timeline?.imageSegments) ?? [];
+			const lane = Math.max(
+				getUsedTrackCount<{ start: number; end: number; track?: number }>(
+					segments,
+				),
+				trackState()[type],
+			);
+			if (type === "style") projectActions.addStyleSegment(lane);
+			else void projectActions.importImageSegment(lane);
+			return;
+		}
+
 		if (type === "audio") {
 			const segments = project.timeline?.audioSegments ?? [];
 			const laneCount = Math.max(
 				trackState().audio,
-				getUsedTrackCount(segments),
+				getUsedTrackCount<{ start: number; end: number; track?: number }>(
+					segments,
+				),
 			);
 			let lane = laneCount;
 			for (let i = 0; i < laneCount; i++) {
@@ -384,7 +542,12 @@ export function Timeline(props: {
 				: project.timeline?.maskSegments) ?? [];
 		const length = Math.min(Math.max(1, secsPerPixel() * 80), totalDuration());
 		const time = editorState.playbackTime ?? 0;
-		const laneCount = Math.max(trackState()[type], getUsedTrackCount(segments));
+		const laneCount = Math.max(
+			trackState()[type],
+			getUsedTrackCount<{ start: number; end: number; track?: number }>(
+				segments,
+			),
+		);
 
 		let lane = laneCount;
 		let placement: { start: number; end: number } | null = null;
@@ -465,9 +628,46 @@ export function Timeline(props: {
 	}
 
 	function handleDeleteTrackLane(
-		type: "text" | "mask" | "audio",
+		type: "text" | "mask" | "audio" | "style" | "image",
 		laneIndex: number,
 	) {
+		if (type === "style" || type === "image") {
+			const resumeHistory = projectHistory.pause();
+			const segments =
+				(type === "style"
+					? project.timeline?.styleSegments
+					: project.timeline?.imageSegments) ?? [];
+			projectActions.deleteOverlaySegments(
+				type,
+				segments.flatMap((segment, index) =>
+					segment.track === laneIndex ? [index] : [],
+				),
+			);
+			setProject(
+				produce((project) => {
+					const remaining =
+						type === "style"
+							? project.timeline?.styleSegments
+							: project.timeline?.imageSegments;
+					for (const segment of remaining ?? [])
+						if (segment.track > laneIndex) segment.track -= 1;
+					if (type === "image")
+						project.overlayOrder = removeOverlayTrack(
+							project.overlayOrder,
+							type,
+							laneIndex,
+						);
+				}),
+			);
+			setEditorState(
+				"timeline",
+				"tracks",
+				type,
+				Math.max(0, trackState()[type] - 1),
+			);
+			resumeHistory();
+			return;
+		}
 		const resumeHistory = projectHistory.pause();
 		const currentTrackCount = trackState()[type];
 		const nextTextSegments =
@@ -516,6 +716,12 @@ export function Timeline(props: {
 					} else if (nextAudioSegments) {
 						timeline.audioSegments = nextAudioSegments;
 					}
+					if (isOverlayTrackKind(type))
+						project.overlayOrder = removeOverlayTrack(
+							project.overlayOrder,
+							type,
+							laneIndex,
+						);
 				}),
 			);
 			setEditorState("timeline", "tracks", type, nextTrackCount);
@@ -549,8 +755,11 @@ export function Timeline(props: {
 							sceneSegments: [],
 							maskSegments: [],
 							textSegments: [],
+							styleSegments: [],
+							imageSegments: [],
 							captionSegments: [],
 							keyboardSegments: [],
+							camera3dSegments: [],
 							transitions: [],
 						};
 						project.timeline.captionSegments = [];
@@ -573,8 +782,11 @@ export function Timeline(props: {
 							sceneSegments: [],
 							maskSegments: [],
 							textSegments: [],
+							styleSegments: [],
+							imageSegments: [],
 							captionSegments: [],
 							keyboardSegments: [],
+							camera3dSegments: [],
 							transitions: [],
 						};
 						project.timeline.keyboardSegments = [];
@@ -587,9 +799,9 @@ export function Timeline(props: {
 		resumeHistory();
 	}
 
-	// Zoom and Scene are permanent tracks — deleting from them clears every
-	// segment on the track instead of hiding the track row itself.
-	function handleClearTrackSegments(type: "zoom" | "scene") {
+	// Zoom, Scene and 3D keep their row once shown, so deleting from them
+	// clears every segment on the track instead of hiding the row itself.
+	function handleClearTrackSegments(type: "zoom" | "scene" | "3d") {
 		const resumeHistory = projectHistory.pause();
 
 		batch(() => {
@@ -602,6 +814,7 @@ export function Timeline(props: {
 					const timeline = project.timeline;
 					if (!timeline) return;
 					if (type === "zoom") timeline.zoomSegments = [];
+					else if (type === "3d") timeline.camera3dSegments = [];
 					else timeline.sceneSegments = [];
 				}),
 			);
@@ -612,7 +825,7 @@ export function Timeline(props: {
 
 	async function handleOpenTrackMenu(
 		e: MouseEvent,
-		type: "text" | "mask" | "audio",
+		type: "text" | "mask" | "audio" | "style" | "image",
 		laneIndex: number,
 	) {
 		e.preventDefault();
@@ -645,8 +858,11 @@ export function Timeline(props: {
 				sceneSegments: [],
 				maskSegments: [],
 				textSegments: [],
+				styleSegments: [],
+				imageSegments: [],
 				captionSegments: [],
 				keyboardSegments: [],
+				camera3dSegments: [],
 				transitions: [],
 			});
 			resume();
@@ -673,7 +889,8 @@ export function Timeline(props: {
 		!project.timeline?.zoomSegments ||
 		project.timeline.zoomSegments.length < 1 ||
 		!project.timeline?.maskSegments ||
-		!project.timeline?.textSegments
+		!project.timeline?.textSegments ||
+		!project.timeline?.camera3dSegments
 	) {
 		setProject(
 			produce((project) => {
@@ -689,8 +906,11 @@ export function Timeline(props: {
 					sceneSegments: [],
 					maskSegments: [],
 					textSegments: [],
+					styleSegments: [],
+					imageSegments: [],
 					captionSegments: [],
 					keyboardSegments: [],
+					camera3dSegments: [],
 					transitions: [],
 				};
 				project.timeline.sceneSegments ??= [];
@@ -699,10 +919,15 @@ export function Timeline(props: {
 				project.timeline.maskSegments ??= [];
 				project.timeline.textSegments ??= [];
 				project.timeline.zoomSegments ??= [];
+				project.timeline.camera3dSegments ??= [];
+				project.timeline.styleSegments ??= [];
+				project.timeline.imageSegments ??= [];
 			}),
 		);
 	}
 
+	let styleSegmentDragState: OverlayDragState = { type: "idle" };
+	let imageSegmentDragState: OverlayDragState = { type: "idle" };
 	let zoomSegmentDragState = { type: "idle" } as ZoomSegmentDragState;
 	let sceneSegmentDragState = { type: "idle" } as SceneSegmentDragState;
 	let maskSegmentDragState = { type: "idle" } as MaskSegmentDragState;
@@ -710,6 +935,7 @@ export function Timeline(props: {
 	let audioSegmentDragState = { type: "idle" } as AudioSegmentDragState;
 	let captionSegmentDragState = { type: "idle" } as CaptionSegmentDragState;
 	let keyboardSegmentDragState = { type: "idle" } as KeyboardSegmentDragState;
+	let threeDSegmentDragState = { type: "idle" } as ThreeDSegmentDragState;
 
 	let pendingZoomDelta = 0;
 	let pendingZoomOrigin: number | null = null;
@@ -769,59 +995,159 @@ export function Timeline(props: {
 		const rect = container.getBoundingClientRect();
 
 		return {
-			left: rect.left + TIMELINE_PADDING + TRACK_GUTTER,
-			width: Math.max(
-				timelineBounds.width ??
-					rect.width - TIMELINE_PADDING * 2 - TRACK_GUTTER,
-				0,
-			),
+			left: rect.left + TRACK_GUTTER,
+			width: Math.max(timelineBounds.width ?? rect.width - TRACK_GUTTER, 0),
 		};
 	}
 
-	async function handleUpdatePlayhead(e: MouseEvent) {
+	function timelineTimeFromClientX(clientX: number) {
 		const metrics = getTimelineContentMetrics();
+		if (!metrics) return null;
+		const rawTime =
+			secsPerPixel() * (clientX - metrics.left) + transform().position;
+		// Snap to the very start when the cursor lands within a few pixels
+		// of the timeline origin so hitting exactly 0:00 isn't a battle
+		const snappedTime = rawTime / secsPerPixel() <= START_SNAP_PX ? 0 : rawTime;
+		return Math.min(Math.max(0, snappedTime), totalDuration());
+	}
+
+	async function seekPlayheadTo(newTime: number) {
+		const pending = requestHandoffPlayback(playbackIntent(), newTime);
+		if (pending) {
+			await pending;
+			return;
+		}
+		// If playing, some backends require restart to seek reliably
+		if (editorState.playing) {
+			try {
+				await commands.stopPlayback();
+
+				// Round to nearest frame to prevent off-by-one drift
+				const targetFrame = Math.round(newTime * FPS);
+				await commands.seekTo(targetFrame);
+
+				// If the user paused during these async ops, bail out without restarting
+				if (!editorState.playing) {
+					setEditorState("playbackTime", newTime);
+					return;
+				}
+
+				await commands.startPlayback(FPS, previewResolutionBase());
+				setEditorState("playing", true);
+			} catch (err) {
+				console.error("Failed to seek during playback:", err);
+			}
+		}
+
+		setEditorState("playbackTime", newTime);
+	}
+
+	async function handleUpdatePlayhead(e: MouseEvent) {
 		if (
+			styleSegmentDragState.type !== "moving" &&
+			imageSegmentDragState.type !== "moving" &&
 			zoomSegmentDragState.type !== "moving" &&
 			sceneSegmentDragState.type !== "moving" &&
 			maskSegmentDragState.type !== "moving" &&
 			textSegmentDragState.type !== "moving" &&
 			audioSegmentDragState.type !== "moving" &&
 			captionSegmentDragState.type !== "moving" &&
-			keyboardSegmentDragState.type !== "moving"
+			keyboardSegmentDragState.type !== "moving" &&
+			threeDSegmentDragState.type !== "moving"
 		) {
-			if (!metrics) return;
-			const rawTime =
-				secsPerPixel() * (e.clientX - metrics.left) + transform().position;
-			// Snap to the very start when the cursor lands within a few pixels
-			// of the timeline origin so hitting exactly 0:00 isn't a battle
-			const snappedTime =
-				rawTime / secsPerPixel() <= START_SNAP_PX ? 0 : rawTime;
-			const newTime = Math.min(Math.max(0, snappedTime), totalDuration());
-
-			// If playing, some backends require restart to seek reliably
-			if (editorState.playing) {
-				try {
-					await commands.stopPlayback();
-
-					// Round to nearest frame to prevent off-by-one drift
-					const targetFrame = Math.round(newTime * FPS);
-					await commands.seekTo(targetFrame);
-
-					// If the user paused during these async ops, bail out without restarting
-					if (!editorState.playing) {
-						setEditorState("playbackTime", newTime);
-						return;
-					}
-
-					await commands.startPlayback(FPS, previewResolutionBase());
-					setEditorState("playing", true);
-				} catch (err) {
-					console.error("Failed to seek during playback:", err);
-				}
-			}
-
-			setEditorState("playbackTime", newTime);
+			const newTime = timelineTimeFromClientX(e.clientX);
+			if (newTime === null) return;
+			await seekPlayheadTo(newTime);
 		}
+	}
+
+	function beginRulerScrub(downEvent: MouseEvent) {
+		if (downEvent.button !== 0) return;
+		downEvent.stopPropagation();
+
+		let lastClientX = downEvent.clientX;
+		let seekInFlight = false;
+		let seekQueued = false;
+		let panRafId: number | null = null;
+
+		const contentEdges = () => {
+			const metrics = getTimelineContentMetrics();
+			if (!metrics || metrics.width <= 0) return null;
+			return { left: metrics.left, right: metrics.left + metrics.width };
+		};
+
+		// While playing, each seek is a stop/seek/restart round-trip, so scrub
+		// updates are coalesced to one in-flight seek with the latest position
+		// applied once it settles.
+		const applyScrub = () => {
+			const edges = contentEdges();
+			const clientX = edges
+				? Math.min(Math.max(lastClientX, edges.left), edges.right)
+				: lastClientX;
+			const newTime = timelineTimeFromClientX(clientX);
+			if (newTime === null) return;
+			if (seekInFlight) {
+				seekQueued = true;
+				return;
+			}
+			seekInFlight = true;
+			void seekPlayheadTo(newTime).finally(() => {
+				seekInFlight = false;
+				if (seekQueued) {
+					seekQueued = false;
+					applyScrub();
+				}
+			});
+		};
+
+		const stepEdgePan = () => {
+			panRafId = null;
+			const edges = contentEdges();
+			if (!edges) return;
+			const overshoot =
+				lastClientX < edges.left
+					? lastClientX - edges.left
+					: lastClientX > edges.right
+						? lastClientX - edges.right
+						: 0;
+			if (overshoot === 0) return;
+			const panPx =
+				Math.sign(overshoot) * Math.min(Math.abs(overshoot) * 0.2, 12);
+			transform().setPosition(transform().position + panPx * secsPerPixel());
+			applyScrub();
+			panRafId = requestAnimationFrame(stepEdgePan);
+		};
+
+		const ensureEdgePan = () => {
+			if (panRafId === null) panRafId = requestAnimationFrame(stepEdgePan);
+		};
+
+		applyScrub();
+		ensureEdgePan();
+
+		createRoot((dispose) => {
+			onCleanup(() => {
+				if (panRafId !== null) {
+					cancelAnimationFrame(panRafId);
+					panRafId = null;
+				}
+			});
+			createEventListenerMap(window, {
+				mousemove: (event) => {
+					lastClientX = event.clientX;
+					applyScrub();
+					ensureEdgePan();
+				},
+				mouseup: () => {
+					batch(() => {
+						setEditorState("timeline", "selection", null);
+						setEditorState("timeline", "audioPicker", null);
+					});
+					dispose();
+				},
+				blur: () => dispose(),
+			});
+		});
 	}
 
 	createEventListener(window, "keydown", (e) => {
@@ -838,7 +1164,9 @@ export function Timeline(props: {
 			const selection = editorState.timeline.selection;
 			if (!selection) return;
 
-			if (selection.type === "zoom") {
+			if (selection.type === "style" || selection.type === "image") {
+				projectActions.deleteOverlaySegments(selection.type, selection.indices);
+			} else if (selection.type === "zoom") {
 				projectActions.deleteZoomSegments(selection.indices);
 			} else if (selection.type === "caption") {
 				projectActions.deleteCaptionSegments(selection.indices);
@@ -850,6 +1178,8 @@ export function Timeline(props: {
 				projectActions.deleteTextSegments(selection.indices);
 			} else if (selection.type === "audio") {
 				projectActions.deleteAudioSegments(selection.indices);
+			} else if (selection.type === "3d") {
+				projectActions.deleteCamera3DSegments(selection.indices);
 			} else if (selection.type === "transition") {
 				projectActions.deleteClipTransition(selection.index);
 			} else if (selection.type === "clip") {
@@ -872,11 +1202,64 @@ export function Timeline(props: {
 			const time = editorState.previewTime ?? editorState.playbackTime;
 			if (time === null || time === undefined) return;
 
-			projectActions.splitClipSegment(time);
+			const selection = editorState.timeline.selection;
+			if (selection?.type === "style" || selection?.type === "image") {
+				const type = selection.type;
+				const resumeHistory = projectHistory.pause();
+				for (const index of [...selection.indices].sort((a, b) => b - a))
+					projectActions.splitOverlaySegment(type, index, time);
+				resumeHistory();
+			} else if (selection?.type === "3d") {
+				// Only a selected shot the playhead is actually inside can be cut;
+				// anything else falls through to cutting the clip underneath.
+				const segments = project.timeline?.camera3dSegments ?? [];
+				const index = [...selection.indices]
+					.sort((a, b) => b - a)
+					.find((idx) => {
+						const segment = segments[idx];
+						return !!segment && time > segment.start && time < segment.end;
+					});
+				const segment = index === undefined ? undefined : segments[index];
+				if (index !== undefined && segment)
+					projectActions.splitCamera3DSegment(index, time - segment.start);
+				else projectActions.splitClipSegment(time);
+			} else projectActions.splitClipSegment(time);
 		} else if (e.code === "Escape" && hasNoModifiers) {
 			// Deselect all selected segments
 			setEditorState("timeline", "selection", null);
 			setEditorState("timeline", "audioPicker", null);
+		} else if (
+			e.code === "KeyA" &&
+			(e.metaKey || e.ctrlKey) &&
+			!e.shiftKey &&
+			!e.altKey
+		) {
+			// Cmd/Ctrl+A expands the current selection to every segment on the
+			// same track.
+			const selection = editorState.timeline.selection;
+			if (!selection || selection.type === "transition") return;
+
+			const timeline = project.timeline;
+			const segmentCount = {
+				style: timeline?.styleSegments?.length ?? 0,
+				image: timeline?.imageSegments?.length ?? 0,
+				clip: timeline?.segments.length ?? 0,
+				zoom: timeline?.zoomSegments?.length ?? 0,
+				scene: timeline?.sceneSegments?.length ?? 0,
+				mask: timeline?.maskSegments?.length ?? 0,
+				caption: timeline?.captionSegments?.length ?? 0,
+				keyboard: timeline?.keyboardSegments?.length ?? 0,
+				text: timeline?.textSegments?.length ?? 0,
+				audio: timeline?.audioSegments?.length ?? 0,
+				"3d": timeline?.camera3dSegments?.length ?? 0,
+			}[selection.type];
+			if (!segmentCount) return;
+
+			e.preventDefault();
+			setEditorState("timeline", "selection", {
+				type: selection.type,
+				indices: Array.from({ length: segmentCount }, (_, i) => i),
+			});
 		}
 	});
 
@@ -925,50 +1308,6 @@ export function Timeline(props: {
 
 	const split = () => editorState.timeline.interactMode === "split";
 
-	const maskImage = () => {
-		const pos = transform().position;
-		const zoom = transform().zoom;
-		const total = totalDuration();
-		const secPerPx = secsPerPixel();
-
-		const FADE_WIDTH = 32;
-		const FADE_RAMP_PX = 50;
-		const LEFT_OFFSET = TRACK_GUTTER;
-		const RIGHT_PADDING = 0;
-
-		// Calculate alpha for left fade (0 = fully faded, 1 = no fade)
-		// When pos is 0, we are at start -> no fade needed -> strength 0
-		// When pos increases, we want fade to appear -> strength 1
-		const scrollLeftPx = pos / secPerPx;
-		const leftFadeStrength = Math.min(1, scrollLeftPx / FADE_RAMP_PX);
-
-		// Calculate alpha for right fade
-		// When at end, right scroll is 0 -> no fade -> strength 0
-		const scrollRightPx = (total - (pos + zoom)) / secPerPx;
-		const rightFadeStrength = Math.min(1, scrollRightPx / FADE_RAMP_PX);
-
-		const leftStartColor = `rgba(0, 0, 0, ${1 - leftFadeStrength})`;
-		const rightEndColor = `rgba(0, 0, 0, ${1 - rightFadeStrength})`;
-
-		// Left stops:
-		// 0px to LEFT_OFFSET: Always black (icons area)
-		// LEFT_OFFSET: Starts fading. If strength is 0 (start), it's black. If strength is 1, it's transparent.
-		// LEFT_OFFSET + FADE_WIDTH: Always black (content fully visible)
-		const leftStops = `black 0px, black ${LEFT_OFFSET}px, ${leftStartColor} ${LEFT_OFFSET}px, black ${
-			LEFT_OFFSET + FADE_WIDTH
-		}px`;
-
-		// Right stops:
-		// calc(100% - (RIGHT_PADDING + FADE_WIDTH)): Always black (content fully visible)
-		// calc(100% - RIGHT_PADDING): Ends fading. If strength is 0 (end), it's black. If strength is 1, it's transparent.
-		// 100%: Transparent
-		const rightStops = `black calc(100% - ${
-			RIGHT_PADDING + FADE_WIDTH
-		}px), ${rightEndColor} calc(100% - ${RIGHT_PADDING}px), transparent 100%`;
-
-		return `linear-gradient(to right, ${leftStops}, ${rightStops})`;
-	};
-
 	return (
 		<TimelineContextProvider
 			duration={duration()}
@@ -977,12 +1316,8 @@ export function Timeline(props: {
 		>
 			<div
 				ref={setTimelineContainerRef}
-				class="pt-8 relative overflow-hidden flex flex-col gap-2 h-full"
-				style={{
-					"padding-left": `${TIMELINE_PADDING}px`,
-					"padding-right": `${TIMELINE_PADDING}px`,
-					"--track-height": trackHeight(),
-				}}
+				class="relative overflow-hidden flex flex-col gap-1 h-full"
+				style={{ "--track-height": TRACK_HEIGHT }}
 				onMouseDown={(e) => {
 					createRoot((dispose) => {
 						createEventListener(e.currentTarget, "mouseup", () => {
@@ -999,7 +1334,7 @@ export function Timeline(props: {
 				}}
 				onMouseMove={(e) => {
 					const metrics = getTimelineContentMetrics();
-					if (editorState.playing) return;
+					if (playbackIntent()) return;
 					if (!metrics || metrics.width <= 0) return;
 					const offsetX = e.clientX - metrics.left;
 					if (offsetX < 0 || offsetX > metrics.width) {
@@ -1036,16 +1371,22 @@ export function Timeline(props: {
 					}
 				}}
 			>
+				<div class="absolute bottom-0 right-0 z-30 h-1 w-[78px]">
+					<Minimap />
+				</div>
 				<div
-					class="relative z-20"
+					class="relative z-20 shrink-0"
 					style={{ height: `${TIMELINE_HEADER_HEIGHT}px` }}
 				>
 					<div class="absolute inset-0 flex items-end">
 						<TimelineMarkings />
 					</div>
 					<div
-						class="absolute bottom-0 left-0 z-30"
-						style={{ width: `${TRACK_ICON_WIDTH}px` }}
+						class="absolute inset-y-0 left-0 z-30 flex items-center"
+						style={{
+							width: `${TRACK_ICON_WIDTH}px`,
+							"padding-left": `${TRACK_GUTTER_INSET}px`,
+						}}
 					>
 						<TrackManager
 							options={trackOptions()}
@@ -1053,22 +1394,29 @@ export function Timeline(props: {
 							onAdd={handleAddTrack}
 						/>
 					</div>
+					{/* Scrub surface for the ruler. It overhangs the timeline origin so
+					    the snap-to-zero zone places the playhead instead of hitting the
+					    "Add track" trigger beneath, without swallowing that trigger. */}
+					<div
+						class="absolute inset-y-0 right-0 z-40"
+						style={{ left: `${TRACK_GUTTER - RULER_SCRUB_OVERHANG_PX}px` }}
+						onMouseDown={beginRulerScrub}
+					/>
 				</div>
 				<Show
 					when={
-						!editorState.playing && editorState.previewTime !== null
+						!playbackIntent() &&
+						editorState.previewTime !== null &&
+						editorState.timeline.splitPreview === null
 							? { time: editorState.previewTime }
 							: null
 					}
 				>
 					{(preview) => (
 						<div
-							class={cx(
-								"flex absolute bottom-0 z-20 justify-center items-center w-px pointer-events-none bg-linear-to-b to-120%",
-								split() ? "from-red-300" : "from-gray-400",
-							)}
+							class="absolute bottom-0 z-20 w-px pointer-events-none bg-ed-text-3/50"
 							style={{
-								left: `${TIMELINE_PADDING + TRACK_GUTTER}px`,
+								left: `${TRACK_GUTTER}px`,
 								top: `${PLAYHEAD_TOP_OFFSET}px`,
 								transform: `translateX(${
 									((preview().time ?? 0) - transform().position) /
@@ -1076,22 +1424,17 @@ export function Timeline(props: {
 								}px)`,
 							}}
 						>
-							<div
-								class={cx(
-									"absolute left-1/2 top-0 size-3 -translate-x-1/2 -translate-y-2 rounded-full",
-									split() ? "bg-red-300" : "bg-gray-10",
-								)}
-							/>
+							<div class="absolute top-0 left-1/2 size-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-ed-text-3/50" />
 						</div>
 					)}
 				</Show>
 				<div
 					class={cx(
-						"absolute bottom-0 rounded-full z-20 w-px pointer-events-none bg-linear-to-b to-120% from-[rgb(226,64,64)]",
+						"absolute bottom-0 z-20 w-px pointer-events-none bg-ed-playhead",
 						split() && "opacity-50",
 					)}
 					style={{
-						left: `${TIMELINE_PADDING + TRACK_GUTTER}px`,
+						left: `${TRACK_GUTTER}px`,
 						top: `${PLAYHEAD_TOP_OFFSET}px`,
 						transform: `translateX(${Math.min(
 							(editorState.playbackTime - transform().position) /
@@ -1100,17 +1443,33 @@ export function Timeline(props: {
 						)}px)`,
 					}}
 				>
-					<div class="size-3 bg-[rgb(226,64,64)] rounded-full -mt-2 -ml-[calc(0.37rem-0.5px)]" />
+					<div class="size-3 rounded-full bg-ed-playhead ring-2 ring-ed-card -mt-1.5 -ml-[5.5px]" />
 				</div>
-				<div
-					class="relative flex-1 min-h-0"
-					style={{
-						"mask-image": maskImage(),
-						"-webkit-mask-image": maskImage(),
-					}}
-				>
+				<Show when={split() ? editorState.timeline.splitPreview : null}>
+					{(preview) => (
+						<div
+							class={cx(
+								"absolute bottom-0 z-20 w-px pointer-events-none",
+								preview().snapped ? "bg-ed-accent" : "bg-ed-text-3/70",
+							)}
+							style={{
+								left: `${TRACK_GUTTER}px`,
+								top: `${PLAYHEAD_TOP_OFFSET}px`,
+								transform: `translateX(${
+									(preview().time - transform().position) / secsPerPixel()
+								}px)`,
+							}}
+						>
+							<Show when={preview().snapped}>
+								<div class="absolute top-0 left-1/2 size-2 -translate-x-1/2 -translate-y-1/2 rotate-45 rounded-[1px] bg-ed-accent" />
+							</Show>
+						</div>
+					)}
+				</Show>
+				<div class="overflow-hidden relative flex-1 min-h-0">
 					<div
 						ref={setTimelineScrollRef}
+						data-track-scroll
 						class="absolute inset-0 overflow-y-auto overflow-x-hidden pr-1"
 						onWheel={(e) => {
 							if (!e.ctrlKey && Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
@@ -1118,7 +1477,7 @@ export function Timeline(props: {
 							}
 						}}
 					>
-						<div class="flex flex-col gap-2 min-h-full">
+						<div class="flex flex-col gap-1.5 min-h-full">
 							<TrackRow icon={trackIcons.clip} label="Video" type="clip">
 								<ClipTrack
 									ref={setTimelineRef}
@@ -1157,45 +1516,69 @@ export function Timeline(props: {
 									/>
 								</TrackRow>
 							</Show>
-							<For each={textTrackRows()}>
+							<For each={styleTrackRows()}>
 								{(laneIndex) => (
 									<TrackRow
-										icon={trackIcons.text}
-										label="Text"
-										type="text"
-										onDelete={() => handleDeleteTrackLane("text", laneIndex)}
-										onContextMenu={(e) =>
-											handleOpenTrackMenu(e, "text", laneIndex)
+										icon={trackIcons.style}
+										label={`Style ${laneIndex + 1}`}
+										type="style"
+										laneIndex={laneIndex}
+										onDelete={() => handleDeleteTrackLane("style", laneIndex)}
+										onContextMenu={(event) =>
+											handleOpenTrackMenu(event, "style", laneIndex)
 										}
 									>
-										<TextTrack
+										<StyleTrack
 											laneIndex={laneIndex}
-											onDragStateChanged={(v) => {
-												textSegmentDragState = v;
+											onDragStateChanged={(value) => {
+												styleSegmentDragState = value;
 											}}
 											handleUpdatePlayhead={handleUpdatePlayhead}
 										/>
 									</TrackRow>
 								)}
 							</For>
-							<For each={maskTrackRows()}>
-								{(laneIndex) => (
+							<For each={overlayTrackRows()}>
+								{(row) => (
 									<TrackRow
-										icon={trackIcons.mask}
-										label="Mask"
-										type="mask"
-										onDelete={() => handleDeleteTrackLane("mask", laneIndex)}
-										onContextMenu={(e) =>
-											handleOpenTrackMenu(e, "mask", laneIndex)
+										icon={trackIcons[row.kind]}
+										label={`${row.kind[0].toUpperCase()}${row.kind.slice(1)} ${row.track + 1}`}
+										type={row.kind}
+										laneIndex={row.track}
+										onDelete={() => handleDeleteTrackLane(row.kind, row.track)}
+										onContextMenu={(event) =>
+											handleOpenTrackMenu(event, row.kind, row.track)
 										}
 									>
-										<MaskTrack
-											laneIndex={laneIndex}
-											onDragStateChanged={(v) => {
-												maskSegmentDragState = v;
-											}}
-											handleUpdatePlayhead={handleUpdatePlayhead}
-										/>
+										<Switch>
+											<Match when={row.kind === "image"}>
+												<ImageTrack
+													laneIndex={row.track}
+													onDragStateChanged={(value) => {
+														imageSegmentDragState = value;
+													}}
+													handleUpdatePlayhead={handleUpdatePlayhead}
+												/>
+											</Match>
+											<Match when={row.kind === "text"}>
+												<TextTrack
+													laneIndex={row.track}
+													onDragStateChanged={(value) => {
+														textSegmentDragState = value;
+													}}
+													handleUpdatePlayhead={handleUpdatePlayhead}
+												/>
+											</Match>
+											<Match when={row.kind === "mask"}>
+												<MaskTrack
+													laneIndex={row.track}
+													onDragStateChanged={(value) => {
+														maskSegmentDragState = value;
+													}}
+													handleUpdatePlayhead={handleUpdatePlayhead}
+												/>
+											</Match>
+										</Switch>
 									</TrackRow>
 								)}
 							</For>
@@ -1203,8 +1586,9 @@ export function Timeline(props: {
 								{(laneIndex) => (
 									<TrackRow
 										icon={trackIcons.audio}
-										label="Audio"
+										label={`Audio ${laneIndex + 1}`}
 										type="audio"
+										laneIndex={laneIndex}
 										onDelete={() => handleDeleteTrackLane("audio", laneIndex)}
 										onContextMenu={(e) =>
 											handleOpenTrackMenu(e, "audio", laneIndex)
@@ -1240,6 +1624,27 @@ export function Timeline(props: {
 									handleUpdatePlayhead={handleUpdatePlayhead}
 								/>
 							</TrackRow>
+							<Show when={threeDTrackVisible()}>
+								<TrackRow
+									icon={trackIcons["3d"]}
+									label="3D"
+									type="3d"
+									onDelete={
+										(project.timeline?.camera3dSegments?.length ?? 0) > 0
+											? () => handleClearTrackSegments("3d")
+											: undefined
+									}
+									deleteLabel="Clear all"
+									deleteTitle="Delete all 3D shots"
+								>
+									<ThreeDTrack
+										onDragStateChanged={(v) => {
+											threeDSegmentDragState = v;
+										}}
+										handleUpdatePlayhead={handleUpdatePlayhead}
+									/>
+								</TrackRow>
+							</Show>
 							<Show when={sceneTrackVisible()}>
 								<TrackRow
 									icon={trackIcons.scene}
@@ -1273,30 +1678,398 @@ function TrackRow(props: {
 	icon: () => JSX.Element;
 	label?: string;
 	type: TimelineTrackType;
+	laneIndex?: number;
 	children: JSX.Element;
 	onDelete?: () => void;
 	deleteLabel?: string;
 	deleteTitle?: string;
 	onContextMenu?: (e: MouseEvent) => void;
 }) {
+	const { project, setProject, editorState, setEditorState } =
+		useEditorContext();
+	const [dragging, setDragging] = createSignal(false);
+	let suppressClick = false;
+	let finishDrag: (() => void) | undefined;
+	onCleanup(() => finishDrag?.());
+	const overlayRows = () =>
+		getOverlayTrackRows(project, editorState.timeline.tracks);
+	const moveToSlot = (slot: number) => {
+		const from = props.laneIndex;
+		if (from === undefined) return;
+		if (isOverlayTrackKind(props.type)) {
+			const order = overlayRows();
+			const source = { kind: props.type, track: from };
+			if (order.findIndex((item) => sameOverlayTrack(item, source)) === slot)
+				return;
+			setProject("overlayOrder", moveOverlayTrack(order, source, slot));
+			return;
+		}
+		const to = laneCount() - 1 - slot;
+		if (from === to) return;
+		setProject(
+			"timeline",
+			produce((timeline) => {
+				if (!timeline) return;
+				if (props.type === "style")
+					moveTrackLane(timeline.styleSegments, from, to);
+				else if (props.type === "audio")
+					moveTrackLane(timeline.audioSegments ?? [], from, to);
+			}),
+		);
+	};
+	const trackSegments = (): Array<{
+		start: number;
+		end: number;
+		track?: number;
+	}> => {
+		const timeline = project.timeline;
+		switch (props.type) {
+			case "style":
+				return timeline?.styleSegments ?? [];
+			case "image":
+				return timeline?.imageSegments ?? [];
+			case "text":
+				return timeline?.textSegments ?? [];
+			case "mask":
+				return timeline?.maskSegments ?? [];
+			case "audio":
+				return timeline?.audioSegments ?? [];
+			case "caption":
+				return timeline?.captionSegments ?? [];
+			case "keyboard":
+				return timeline?.keyboardSegments ?? [];
+			case "zoom":
+				return timeline?.zoomSegments ?? [];
+			case "3d":
+				return timeline?.camera3dSegments ?? [];
+			case "scene":
+				return timeline?.sceneSegments ?? [];
+			case "clip": {
+				const segments = timeline?.segments ?? [];
+				const offsets = clipTimelineOffsets(
+					segments,
+					timeline?.transitions ?? [],
+				);
+				const holds = holdWindows(timeline?.textSegments);
+				return segments.map((segment, index) => ({
+					start: effectiveToOutput(holds, offsets[index]),
+					end: effectiveToOutput(holds, offsets[index] + clipDuration(segment)),
+				}));
+			}
+		}
+	};
+	const laneCount = () => {
+		const count = editorState.timeline.tracks[props.type];
+		return Math.max(
+			typeof count === "number" ? count : 0,
+			getUsedTrackCount(trackSegments()),
+		);
+	};
+	const active = () => {
+		const selection = editorState.timeline.selection;
+		if (
+			!selection ||
+			selection.type !== props.type ||
+			!("indices" in selection)
+		)
+			return false;
+		if (props.laneIndex === undefined) return true;
+		const segments = trackSegments();
+		return selection.indices.some((index) => {
+			const segment = segments[index];
+			return (
+				segment !== undefined && getSegmentTrack(segment) === props.laneIndex
+			);
+		});
+	};
+	const selectTrack = () => {
+		const segments = trackSegments();
+		const items = segments
+			.map((segment, index) => ({ segment, index }))
+			.filter(
+				({ segment }) =>
+					props.laneIndex === undefined ||
+					getSegmentTrack(segment) === props.laneIndex,
+			);
+		const time = editorState.playbackTime;
+		const activeItems = props.type === "clip" ? [...items].reverse() : items;
+		const item =
+			activeItems.find(
+				({ segment }) => time >= segment.start && time < segment.end,
+			) ?? items[0];
+		batch(() => {
+			setEditorState("timeline", "audioPicker", null);
+			setEditorState("timeline", "audioReplace", null);
+			setEditorState(
+				"timeline",
+				"selection",
+				item ? { type: props.type, indices: [item.index] } : null,
+			);
+			if (item) {
+				setEditorState("previewTime", null);
+				setEditorState(
+					"playbackTime",
+					Math.max(
+						item.segment.start,
+						Math.min(time, item.segment.end - 0.001),
+					),
+				);
+			}
+		});
+	};
+
+	const canReorder = () =>
+		props.laneIndex !== undefined &&
+		(isOverlayTrackKind(props.type) ? overlayRows().length : laneCount()) > 1;
+	const reorderWithKeyboard = (event: KeyboardEvent) => {
+		if (
+			!canReorder() ||
+			!event.altKey ||
+			!["ArrowUp", "ArrowDown"].includes(event.key)
+		)
+			return;
+		event.preventDefault();
+		event.stopPropagation();
+		const kind = props.type;
+		const visual = isOverlayTrackKind(kind);
+		const count = visual ? overlayRows().length : laneCount();
+		const from = visual
+			? overlayRows().findIndex(
+					(item) => item.kind === kind && item.track === props.laneIndex,
+				)
+			: count - 1 - (props.laneIndex ?? 0);
+		const to = Math.max(
+			0,
+			Math.min(count - 1, from + (event.key === "ArrowUp" ? -1 : 1)),
+		);
+		const rows = (event.currentTarget as HTMLElement).closest(
+			"[data-track-lane]",
+		)?.parentElement;
+		moveToSlot(to);
+		if (!visual)
+			rows
+				?.querySelector<HTMLButtonElement>(
+					`[data-track-type="${kind}"][data-track-lane="${count - 1 - to}"] [data-track-reorder]`,
+				)
+				?.focus();
+	};
+	const startReorder = (event: MouseEvent) => {
+		if (event.button !== 0) return;
+		event.preventDefault();
+		event.stopPropagation();
+		(event.currentTarget as HTMLElement).focus({ preventScroll: true });
+		if (!canReorder()) return;
+		finishDrag?.();
+		suppressClick = false;
+		const header = event.currentTarget as HTMLElement;
+		const row = header.closest<HTMLElement>("[data-track-lane]");
+		const scroll = row?.closest<HTMLElement>("[data-track-scroll]");
+		if (!row || !scroll) return;
+		const visual = isOverlayTrackKind(props.type);
+		const allRows = Array.from(
+			row.parentElement?.querySelectorAll<HTMLElement>("[data-track-lane]") ??
+				[],
+		).filter((item) =>
+			visual
+				? isOverlayTrackKind(item.dataset.trackType ?? "")
+				: item.dataset.trackType === props.type,
+		);
+		const rows = allRows.filter((item) => item !== row);
+		let target: number | null = null;
+		let pointer = { x: event.clientX, y: event.clientY };
+		let ghost: HTMLElement | undefined;
+		let indicator: HTMLElement | undefined;
+		let frame = 0;
+		let lastFrame = 0;
+		const previousCursor = document.body.style.cursor;
+		const updateTarget = () => {
+			if (!ghost || !indicator) return;
+			ghost.style.transform = `translate(${pointer.x + 14}px, ${pointer.y - 22}px)`;
+			const bounds = scroll.getBoundingClientRect();
+			const hoveredRow = document
+				.elementFromPoint(pointer.x, pointer.y)
+				?.closest<HTMLElement>("[data-track-type]");
+			if (
+				(hoveredRow && !allRows.includes(hoveredRow)) ||
+				allRows.some((item) => !item.isConnected) ||
+				pointer.x < bounds.left ||
+				pointer.x > bounds.right ||
+				pointer.y < bounds.top ||
+				pointer.y > bounds.bottom
+			) {
+				target = null;
+				indicator.style.display = "none";
+				return;
+			}
+			const rects = rows.map((item) => item.getBoundingClientRect());
+			target = trackInsertionIndex(
+				rects.map((rect) => rect.top + rect.height / 2),
+				pointer.y,
+			);
+			const after = rects[target];
+			const before = rects[target - 1];
+			const top = after
+				? before
+					? (before.bottom + after.top) / 2
+					: after.top - 4
+				: before.bottom + 4;
+			indicator.style.display = "block";
+			indicator.style.left = `${bounds.left}px`;
+			indicator.style.top = `${Math.max(bounds.top + 1, Math.min(bounds.bottom - 3, top - 1))}px`;
+			indicator.style.width = `${bounds.width - 4}px`;
+			indicator.textContent = visual
+				? target === 0
+					? "Front"
+					: target === rows.length
+						? "Back"
+						: "Place here"
+				: "Place here";
+		};
+		const tick = (now: number) => {
+			const bounds = scroll.getBoundingClientRect();
+			const elapsed = Math.min(32, lastFrame ? now - lastFrame : 16);
+			lastFrame = now;
+			if (
+				pointer.x >= bounds.left &&
+				pointer.x <= bounds.right &&
+				pointer.y >= bounds.top - 24 &&
+				pointer.y <= bounds.bottom + 24
+			) {
+				const edge = Math.min(40, bounds.height / 3);
+				const velocity =
+					pointer.y < bounds.top + edge
+						? -Math.min(1, (bounds.top + edge - pointer.y) / edge)
+						: pointer.y > bounds.bottom - edge
+							? Math.min(1, (pointer.y - bounds.bottom + edge) / edge)
+							: 0;
+				scroll.scrollTop += velocity * elapsed * 0.55;
+			}
+			updateTarget();
+			frame = requestAnimationFrame(tick);
+		};
+		const move = (next: MouseEvent) => {
+			pointer = { x: next.clientX, y: next.clientY };
+			if (
+				!dragging() &&
+				Math.hypot(pointer.x - event.clientX, pointer.y - event.clientY) < 4
+			)
+				return;
+			next.preventDefault();
+			next.stopPropagation();
+			if (!dragging()) {
+				setDragging(true);
+				suppressClick = true;
+				document.body.style.cursor = "grabbing";
+				ghost = header.cloneNode(true) as HTMLElement;
+				ghost.removeAttribute("data-track-reorder");
+				ghost.setAttribute("aria-hidden", "true");
+				ghost.style.cssText = `position:fixed;left:0;top:0;width:${header.offsetWidth}px;pointer-events:none;z-index:2147483647;opacity:.95;filter:drop-shadow(0 8px 16px #0006);`;
+				indicator = document.createElement("div");
+				indicator.style.cssText =
+					"position:fixed;height:2px;background:var(--blue-9);color:var(--blue-9);font-size:10px;font-weight:600;line-height:22px;pointer-events:none;z-index:2147483646;text-align:right;";
+				document.body.append(ghost, indicator);
+				frame = requestAnimationFrame(tick);
+			}
+			updateTarget();
+		};
+		const finish = (commit: boolean) => {
+			window.removeEventListener("mousemove", move, true);
+			window.removeEventListener("mouseup", drop, true);
+			window.removeEventListener("blur", cancel);
+			window.removeEventListener("keydown", keydown, true);
+			cancelAnimationFrame(frame);
+			ghost?.remove();
+			indicator?.remove();
+			document.body.style.cursor = previousCursor;
+			const shouldCommit =
+				commit &&
+				dragging() &&
+				target !== null &&
+				allRows.every((item) => item.isConnected);
+			setDragging(false);
+			finishDrag = undefined;
+			if (shouldCommit && target !== null) moveToSlot(target);
+		};
+		const drop = (next: MouseEvent) => {
+			move(next);
+			finish(true);
+		};
+		const cancel = () => finish(false);
+		const keydown = (next: KeyboardEvent) => {
+			if (next.key === "Escape") {
+				next.preventDefault();
+				next.stopImmediatePropagation();
+				cancel();
+			}
+		};
+		finishDrag = cancel;
+		window.addEventListener("mousemove", move, true);
+		window.addEventListener("mouseup", drop, true);
+		window.addEventListener("blur", cancel);
+		window.addEventListener("keydown", keydown, true);
+	};
+
 	return (
-		<div class="flex items-stretch gap-2" onContextMenu={props.onContextMenu}>
+		<div
+			class={cx(
+				"group/row relative flex items-stretch rounded-lg transition-[background-color,opacity] duration-150",
+				active() ? "bg-ed-ctl-hover" : "bg-ed-ctl hover:bg-ed-ctl-hover",
+			)}
+			classList={{ "opacity-35": dragging() }}
+			data-track-type={props.type}
+			data-track-lane={props.laneIndex}
+			onContextMenu={props.onContextMenu}
+		>
 			<div
 				class="group/icon relative shrink-0"
 				style={{ width: `${TRACK_ICON_WIDTH}px` }}
 			>
-				<TrackIcon icon={props.icon()} label={props.label} type={props.type} />
+				<button
+					type="button"
+					class="relative flex h-full w-full items-center gap-1.5 rounded-md pl-1 text-left focus-visible:outline-2 focus-visible:outline-ed-accent"
+					classList={{ "cursor-grab active:cursor-grabbing": canReorder() }}
+					data-track-reorder={canReorder() ? "" : undefined}
+					title={
+						canReorder()
+							? "Drag this header to reorder. Higher visual layers appear in front. Alt + Up or Down also moves the track."
+							: undefined
+					}
+					onMouseDown={startReorder}
+					onKeyDown={reorderWithKeyboard}
+					aria-label={`Select ${props.label ?? props.type} track`}
+					onClick={(event) => {
+						event.stopPropagation();
+						if (suppressClick) {
+							suppressClick = false;
+							return;
+						}
+						selectTrack();
+					}}
+				>
+					<TrackIcon
+						icon={props.icon()}
+						showGrip={canReorder()}
+						type={props.type}
+					/>
+					<Show when={props.label}>
+						<span
+							class={cx(
+								"min-w-0 flex-1 truncate text-[11px] font-medium leading-none transition-[padding,color] duration-150",
+								active()
+									? "text-ed-text-1"
+									: "text-ed-text-2 group-hover/row:text-ed-text-1",
+							)}
+							classList={{ "group-hover/icon:pr-5": !!props.onDelete }}
+						>
+							{props.label}
+						</span>
+					</Show>
+				</button>
 				<Show when={props.onDelete}>
 					<button
 						type="button"
-						class={cx(
-							"absolute inset-x-0 top-0 z-20 flex h-13 flex-col items-center justify-center gap-0.5 rounded-xl text-white",
-							"bg-linear-to-b from-red-500 to-red-600",
-							"shadow-[0_2px_8px_-4px_rgba(220,38,38,0.55),inset_0_1px_0_0_rgba(255,255,255,0.2)]",
-							"pointer-events-none opacity-0 transition-opacity duration-150",
-							"group-hover/icon:pointer-events-auto group-hover/icon:opacity-100",
-							"hover:brightness-[1.06] active:brightness-95",
-						)}
+						class="absolute right-0 top-1/2 z-30 flex size-5 -translate-y-1/2 items-center justify-center rounded-md text-ed-text-3 opacity-0 transition-opacity hover:bg-ed-ctl-active hover:text-red-9 group-hover/icon:opacity-100 focus-visible:opacity-100"
+						aria-label={props.deleteTitle ?? "Delete track"}
 						onClick={(e) => {
 							e.stopPropagation();
 							props.onDelete?.();
@@ -1304,14 +2077,11 @@ function TrackRow(props: {
 						onMouseDown={(e) => e.stopPropagation()}
 						title={props.deleteTitle ?? "Delete track"}
 					>
-						<IconCapTrash class="size-4" />
-						<span class="text-[0.625rem] leading-none font-medium">
-							{props.deleteLabel ?? "Delete"}
-						</span>
+						<IconCapTrash class="size-3.5" />
 					</button>
 				</Show>
 			</div>
-			<div class="flex-1 relative overflow-hidden min-w-0">
+			<div class="flex-1 relative overflow-hidden min-w-0 rounded-r-lg">
 				{props.children}
 			</div>
 		</div>
@@ -1333,29 +2103,32 @@ function TimelineMarkings() {
 
 	return (
 		<div
-			class="relative flex-1 h-4 text-xs text-gray-9"
+			class="relative flex-1 h-full overflow-hidden"
 			style={{ "margin-left": `${TRACK_GUTTER}px` }}
 		>
 			<Index each={Array.from({ length: markingCount() })}>
 				{(_, index) => {
 					const second = () => getMarkingTime(index);
 					const isVisible = () => second() >= 0;
-					const showLabel = () => second() % 1 === 0;
+					const isMajor = () => second() % 1 === 0;
 					const translateX = () =>
-						(second() - transform().position) / secsPerPixel() - 1;
+						(second() - transform().position) / secsPerPixel();
 
 					return (
 						<div
-							class="absolute left-0 bottom-1 w-1 h-1 text-center bg-current rounded-full"
+							class={cx(
+								"absolute left-0 bottom-0 w-px bg-ed-line-strong",
+								isMajor() ? "h-2" : "h-[5px]",
+							)}
 							style={{
 								transform: `translateX(${translateX()}px)`,
 								visibility: isVisible() ? "visible" : "hidden",
 							}}
 						>
-							<Show when={showLabel()}>
+							<Show when={isMajor()}>
 								<div
 									class={cx(
-										"absolute -top-4.5",
+										"absolute bottom-2.5 left-0 text-[11px] leading-none tabular-nums whitespace-nowrap text-ed-text-3",
 										// Left-anchor the origin label so it doesn't overhang
 										// into the track icon gutter and get covered
 										second() !== 0 && "-translate-x-1/2",

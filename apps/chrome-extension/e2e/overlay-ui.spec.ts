@@ -759,6 +759,90 @@ test("the countdown appears while recording setup is still pending", async () =>
 	}
 });
 
+test("camera preview recovers when ICE gathering never reports completion", async () => {
+	test.setTimeout(60_000);
+	const mockServer = await createMockCapServer();
+	const extension = await launchExtensionContext();
+
+	try {
+		const worker = await getServiceWorker(extension.context);
+		await configureExtension(worker, mockServer.origin);
+
+		const messengerPage = await extension.context.newPage();
+		await messengerPage.goto(
+			`chrome-extension://${new URL(worker.url()).host}/popup.html`,
+		);
+
+		const targetPage = await extension.context.newPage();
+		await targetPage.addInitScript(() => {
+			if (!window.location.pathname.endsWith("/camera-preview.html")) return;
+			const NativePeerConnection = window.RTCPeerConnection;
+			window.RTCPeerConnection = class extends NativePeerConnection {
+				get iceGatheringState(): RTCIceGatheringState {
+					return "gathering";
+				}
+			};
+		});
+		await targetPage.goto(`${mockServer.origin}/capture.html`);
+		await targetPage.bringToFront();
+
+		await sendServiceWorkerMessage(messengerPage, {
+			target: "service-worker",
+			type: "bootstrap",
+		});
+		await sendServiceWorkerMessage(messengerPage, {
+			target: "service-worker",
+			type: "open-recorder-panel",
+		});
+
+		await expect
+			.poll(() => frameWithUrl(targetPage, "camera-preview.html") !== null, {
+				timeout: 10_000,
+			})
+			.toBe(true);
+
+		const previewFrame = frameWithUrl(targetPage, "camera-preview.html");
+		if (!previewFrame) throw new Error("camera preview frame missing");
+		expect(
+			await previewFrame.evaluate(() => {
+				const peer = new RTCPeerConnection();
+				const state = peer.iceGatheringState;
+				peer.close();
+				return state;
+			}),
+		).toBe("gathering");
+
+		await expect
+			.poll(
+				() =>
+					previewFrame.evaluate(() => {
+						const video = document.querySelector("video");
+						return Boolean(
+							video && video.videoWidth > 0 && video.readyState >= 2,
+						);
+					}),
+				{ timeout: 8_000 },
+			)
+			.toBe(true);
+
+		const devtools = await extension.context.newCDPSession(targetPage);
+		await expect
+			.poll(
+				async () =>
+					(await getClosedShadowNodeId(
+						devtools,
+						"class",
+						"cap-extension-camera-loading",
+					)) === null,
+				{ timeout: 5_000 },
+			)
+			.toBe(true);
+	} finally {
+		await extension.cleanup();
+		await mockServer.close();
+	}
+});
+
 test("recording controls stay stable and the camera resizes directly", async () => {
 	test.setTimeout(120_000);
 	const mockServer = await createMockCapServer();

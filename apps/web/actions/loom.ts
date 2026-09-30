@@ -5,8 +5,10 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
 import {
+	folders,
 	importedVideos,
 	organizationMembers,
+	sharedVideos,
 	spaceMembers,
 	spaces,
 	spaceVideos,
@@ -14,6 +16,7 @@ import {
 	videos,
 	videoUploads,
 } from "@cap/database/schema";
+import { getNewVideoPublic } from "@cap/database/video-sharing-default";
 import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
 import { dub, userIsPro } from "@cap/utils";
 import { Storage } from "@cap/web-backend";
@@ -24,16 +27,17 @@ import {
 	type User,
 	Video,
 } from "@cap/web-domain";
-import { checkRateLimit } from "@vercel/firewall";
-import { and, eq } from "drizzle-orm";
+import { and, asc, eq, isNull } from "drizzle-orm";
 import { Option } from "effect";
 import { revalidatePath } from "next/cache";
-import { headers } from "next/headers";
 import { start } from "workflow/api";
 import {
 	getOrganizationAccess,
 	requireOrganizationAccess,
+	requireOrganizationSettingsManager,
 } from "@/actions/organization/authorization";
+import { requireSpaceManager } from "@/actions/organization/space-authorization";
+import type { LoomImportDestination } from "@/lib/loom-import-destination";
 import { provisionOrganizationInvitee } from "@/lib/organization-provisioning";
 import { canManageOrganizationSettings } from "@/lib/permissions/roles";
 import { runPromise } from "@/lib/server";
@@ -90,30 +94,9 @@ export interface LoomCsvImportResult {
 
 const MAX_LOOM_CSV_ROWS = 500;
 const MAX_LOOM_SPACE_NAME_LENGTH = 255;
-const LOOM_IMPORT_RATE_LIMIT_ID = "rl_loom_import_per_user";
-const LOOM_IMPORT_RATE_LIMIT_ERROR =
-	"Too many Loom imports started. Please wait a few minutes, then try again.";
 const LOOM_CSV_LIMIT_ERROR = `CSV imports are limited to ${MAX_LOOM_CSV_ROWS} rows at a time. Contact support to raise this limit.`;
 const LOOM_CSV_PERMISSION_ERROR =
 	"Only organization admins and owners can import Loom videos from a CSV.";
-
-async function createLoomImportRateLimitCheck(userId: User.UserId) {
-	if (NODE_ENV !== "production") return async () => false;
-
-	const headersList = await headers();
-	const request = new Request("https://cap.so/api/loom-import-rate-limit", {
-		method: "POST",
-		headers: headersList,
-	});
-
-	return async () => {
-		const { rateLimited } = await checkRateLimit(LOOM_IMPORT_RATE_LIMIT_ID, {
-			request,
-			rateLimitKey: `loom-import:${userId}`,
-		});
-		return rateLimited;
-	};
-}
 
 function extractLoomVideoId(url: string): string | null {
 	try {
@@ -317,12 +300,12 @@ async function importLoomVideoForOwner({
 	loomUrl,
 	orgId,
 	ownerId,
-	isRateLimited,
+	destination = {},
 }: {
 	loomUrl: string;
 	orgId: Organisation.OrganisationId;
 	ownerId: User.UserId;
-	isRateLimited?: () => Promise<boolean>;
+	destination?: LoomImportDestination;
 }): Promise<LoomImportResult> {
 	const loomVideoId = extractLoomVideoId(loomUrl.trim());
 	if (!loomVideoId) {
@@ -360,13 +343,6 @@ async function importLoomVideoForOwner({
 		};
 	}
 
-	if (isRateLimited && (await isRateLimited())) {
-		return {
-			success: false,
-			error: LOOM_IMPORT_RATE_LIMIT_ERROR,
-		};
-	}
-
 	if (existing.length > 0) {
 		await db()
 			.delete(importedVideos)
@@ -393,43 +369,79 @@ async function importLoomVideoForOwner({
 		fetchLoomOEmbed(loomVideoId),
 	]);
 
-	const writable = await Storage.getWritableAccessForUser(ownerId, orgId).pipe(
-		runPromise,
-	);
+	const writableResult = await Storage.getWritableAccessForUser(ownerId, orgId)
+		.pipe(runPromise)
+		.then(
+			(value) => ({ ok: true as const, value }),
+			(error) => ({ ok: false as const, error }),
+		);
+
+	if (!writableResult.ok) {
+		console.error(
+			`Loom import: failed to resolve storage access for user ${ownerId} in org ${orgId}:`,
+			writableResult.error,
+		);
+		return {
+			success: false,
+			error:
+				"Could not prepare storage for this import. Please try again or contact support.",
+		};
+	}
+
+	const writable = writableResult.value;
 
 	const videoId = Video.VideoId.make(nanoId());
 	const name =
 		videoName ||
 		`Loom Import - ${new Date().toLocaleDateString("en-US", { day: "numeric", month: "long", year: "numeric" })}`;
 
-	await db()
-		.insert(videos)
-		.values({
+	await db().transaction(async (tx) => {
+		await tx.insert(videos).values({
 			id: videoId,
 			name,
 			ownerId,
 			orgId,
+			folderId: destination.spaceId ? undefined : destination.folderId,
 			source: { type: "webMP4" as const },
 			bucket: Option.getOrNull(writable.bucketId),
 			storageIntegrationId: Option.getOrNull(writable.storageIntegrationId),
-			public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
+			public: await getNewVideoPublic(orgId),
 			...(oembedMeta?.duration ? { duration: oembedMeta.duration } : {}),
 			...(oembedMeta?.width ? { width: oembedMeta.width } : {}),
 			...(oembedMeta?.height ? { height: oembedMeta.height } : {}),
 		});
 
-	await db().insert(videoUploads).values({
-		videoId,
-		phase: "uploading",
-		processingProgress: 0,
-		processingMessage: "Importing from Loom...",
-	});
+		await tx.insert(videoUploads).values({
+			videoId,
+			phase: "uploading",
+			processingProgress: 0,
+			processingMessage: "Importing from Loom...",
+		});
 
-	await db().insert(importedVideos).values({
-		id: videoId,
-		orgId,
-		source: "loom",
-		sourceId: loomVideoId,
+		await tx.insert(importedVideos).values({
+			id: videoId,
+			orgId,
+			source: "loom",
+			sourceId: loomVideoId,
+		});
+
+		if (destination.spaceId === orgId) {
+			await tx.insert(sharedVideos).values({
+				id: nanoId(),
+				videoId,
+				organizationId: orgId,
+				sharedByUserId: ownerId,
+				folderId: destination.folderId,
+			});
+		} else if (destination.spaceId) {
+			await tx.insert(spaceVideos).values({
+				id: nanoId(),
+				videoId,
+				spaceId: destination.spaceId,
+				addedById: ownerId,
+				folderId: destination.folderId,
+			});
+		}
 	});
 
 	const rawFileKey = `${ownerId}/${videoId}/raw-upload.mp4`;
@@ -455,17 +467,69 @@ async function importLoomVideoForOwner({
 	]);
 
 	revalidatePath("/dashboard/caps");
+	if (destination.folderId) revalidatePath("/dashboard/folder/[id]", "page");
+	if (destination.spaceId) {
+		revalidatePath("/dashboard/spaces/[spaceId]", "page");
+		revalidatePath("/dashboard/spaces/[spaceId]/folder/[folderId]", "page");
+	}
 
 	return { success: true, videoId };
+}
+
+async function requireLoomImportLocationAccess(
+	userId: User.UserId,
+	orgId: Organisation.OrganisationId,
+	spaceId?: Space.SpaceIdOrOrganisationId,
+) {
+	await requireOrganizationAccess(userId, orgId);
+	if (!spaceId) return;
+	if (spaceId === orgId) {
+		await requireOrganizationSettingsManager(userId, orgId);
+		return;
+	}
+	const access = await requireSpaceManager(userId, spaceId);
+	if (access.organizationId !== orgId) throw new Error("Space not found");
+}
+
+function loomImportFolderScope(
+	userId: User.UserId,
+	orgId: Organisation.OrganisationId,
+	spaceId?: Space.SpaceIdOrOrganisationId,
+) {
+	return and(
+		eq(folders.organizationId, orgId),
+		spaceId
+			? eq(folders.spaceId, spaceId)
+			: and(isNull(folders.spaceId), eq(folders.createdById, userId)),
+	);
+}
+
+export async function getLoomImportFolders({
+	orgId,
+	spaceId,
+}: {
+	orgId: Organisation.OrganisationId;
+	spaceId?: Space.SpaceIdOrOrganisationId;
+}) {
+	const user = await getCurrentUser();
+	if (!user) throw new Error("Unauthorized");
+	await requireLoomImportLocationAccess(user.id, orgId, spaceId);
+	return db()
+		.select({ id: folders.id, name: folders.name, parentId: folders.parentId })
+		.from(folders)
+		.where(loomImportFolderScope(user.id, orgId, spaceId))
+		.orderBy(asc(folders.name));
 }
 
 export async function importFromLoom({
 	loomUrl,
 	orgId,
+	folderId,
+	spaceId,
 }: {
 	loomUrl: string;
 	orgId: Organisation.OrganisationId;
-}): Promise<LoomImportResult> {
+} & LoomImportDestination): Promise<LoomImportResult> {
 	const user = await getCurrentUser();
 	if (!user) return { success: false, error: "Unauthorized" };
 
@@ -476,20 +540,31 @@ export async function importFromLoom({
 		};
 	}
 
-	await requireOrganizationAccess(user.id, orgId);
-
-	const isRateLimited = await createLoomImportRateLimitCheck(user.id);
-	if (await isRateLimited()) {
-		return {
-			success: false,
-			error: LOOM_IMPORT_RATE_LIMIT_ERROR,
-		};
+	await requireLoomImportLocationAccess(user.id, orgId, spaceId);
+	if (folderId) {
+		const [folder] = await db()
+			.select({ id: folders.id })
+			.from(folders)
+			.where(
+				and(
+					eq(folders.id, folderId),
+					loomImportFolderScope(user.id, orgId, spaceId),
+				),
+			)
+			.limit(1);
+		if (!folder)
+			return {
+				success: false,
+				error:
+					"Destination folder not found. Choose another folder and try again.",
+			};
 	}
 
 	return importLoomVideoForOwner({
 		loomUrl,
 		orgId,
 		ownerId: user.id,
+		destination: { folderId, spaceId },
 	});
 }
 
@@ -738,7 +813,6 @@ export async function importFromLoomCsv({
 	const results: LoomCsvImportRowResult[] = [];
 	const spaceCache = new Map<string, ImportSpaceCacheValue>();
 	const touchedSpaceIds = new Set<Space.SpaceIdOrOrganisationId>();
-	const isRateLimited = await createLoomImportRateLimitCheck(user.id);
 
 	for (const row of normalizedRows) {
 		if (!row.loomUrl) {
@@ -805,7 +879,6 @@ export async function importFromLoomCsv({
 				loomUrl: row.loomUrl,
 				orgId,
 				ownerId: member.userId,
-				isRateLimited,
 			});
 
 			let spaceName = row.spaceName || undefined;

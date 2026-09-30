@@ -21,17 +21,32 @@ const DialogOverlay = React.forwardRef<
 ));
 DialogOverlay.displayName = DialogPrimitive.Overlay.displayName;
 
+type DialogContentProps = React.ComponentPropsWithoutRef<
+	typeof DialogPrimitive.Content
+> & {
+	/**
+	 * Suppress the built-in corner close button. For dialogs whose header packs
+	 * its own controls onto that row and needs the close to sit with them rather
+	 * than floating above.
+	 */
+	hideCloseButton?: boolean;
+};
+
 const DialogContent = React.forwardRef<
 	React.ElementRef<typeof DialogPrimitive.Content>,
-	React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content>
->(({ className, children, ...props }, ref) => (
+	DialogContentProps
+>(({ className, children, hideCloseButton = false, ...props }, ref) => (
 	<DialogPortal>
-		<DialogOverlay className="animate-fadeIn" />
+		<DialogOverlay className="data-[state=open]:animate-fadeIn data-[state=closed]:animate-fadeOut motion-reduce:animate-none" />
 		<div className="flex fixed inset-0 z-[501] justify-center items-center">
 			<DialogPrimitive.Content
 				ref={ref}
+				// A plain fade, on the same keyframes as the overlay, so the two
+				// read as one surface appearing rather than a panel travelling
+				// into place. Keyed off data-state so closing animates too:
+				// Radix keeps the node mounted while a CSS animation runs.
 				className={classNames(
-					"relative p-0 w-full max-w-md rounded-xl border shadow-lg bg-gray-2 border-gray-4 animate-contentShow",
+					"relative p-0 w-full max-w-md rounded-xl border shadow-lg bg-gray-2 border-gray-4 data-[state=open]:animate-fadeIn data-[state=closed]:animate-fadeOut motion-reduce:animate-none",
 					className,
 				)}
 				style={{
@@ -43,10 +58,12 @@ const DialogContent = React.forwardRef<
 				{...props}
 			>
 				{children}
-				<DialogPrimitive.Close className="absolute right-4 top-4 rounded-xs opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-hidden focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-accent data-[state=open]:text-muted-foreground">
-					<X className="w-5 h-5 text-gray-9" />
-					<span className="sr-only">Close</span>
-				</DialogPrimitive.Close>
+				{!hideCloseButton && (
+					<DialogPrimitive.Close className="absolute right-4 top-4 rounded-xs opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-hidden focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-accent data-[state=open]:text-muted-foreground">
+						<X className="w-5 h-5 text-gray-9" />
+						<span className="sr-only">Close</span>
+					</DialogPrimitive.Close>
+				)}
 			</DialogPrimitive.Content>
 		</div>
 	</DialogPortal>

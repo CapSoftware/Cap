@@ -14,6 +14,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { Effect, Schedule, Schema } from "effect";
 import { revalidatePath } from "next/cache";
 import { createNotification } from "@/lib/Notification";
+import { enqueueVideoStorageNameSync } from "@/lib/sync-video-storage-names";
 
 type TransactionCallback = Parameters<DbClient["transaction"]>[0];
 type Transaction = Parameters<TransactionCallback>[0];
@@ -623,6 +624,9 @@ export const updateAgentCap = Effect.fn("Agent.updateCap")(function* (input: {
 		return yield* temporarilyUnavailable(input.requestId);
 	}
 	if (result.state === "not_found") return yield* notFound(input.requestId);
+	if (title !== undefined) {
+		yield* Effect.promise(() => enqueueVideoStorageNameSync(input.videoId));
+	}
 	yield* Effect.try(() => {
 		revalidatePath("/dashboard/caps");
 		revalidatePath("/dashboard/shared-caps");

@@ -366,11 +366,11 @@ impl LogoutArgs {
         let credentials = credentials::resolve_agent()?;
         if !is_agent_credential_source(credentials.source) {
             return Err(
-                "No Cap CLI agent credential is stored. CAP_API_KEY and Cap Desktop login are not changed by `cap auth logout`."
+                "No Cap CLI agent credential is stored. A legacy CAP_API_KEY and Cap Desktop login are not changed by `cap auth logout`."
                     .to_string(),
             );
         }
-        let revocable = credentials.access_token.starts_with("cap_cli_");
+        let revocable = credentials::is_agent_api_key(&credentials.access_token);
         let revoked = if revocable {
             let response = auth_client()?
                 .post(format!("{}/api/v1/auth/revoke", credentials.server))
@@ -407,7 +407,9 @@ impl LogoutArgs {
                 if credentials.source == AgentCredentialSource::Env {
                     println!("Cap CLI environment credential revoked.");
                     if std::io::stdin().is_terminal() {
-                        println!("Unset CAP_AGENT_TOKEN to remove it from this shell.");
+                        let variable =
+                            credentials::agent_env_var_name().unwrap_or("CAP_AGENT_TOKEN");
+                        println!("Unset {variable} to remove it from this shell.");
                     }
                 } else {
                     println!("Cap CLI credential removed.");

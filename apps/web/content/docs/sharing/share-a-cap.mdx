@@ -23,10 +23,14 @@ After Cap finishes the required upload and processing, copy the returned link fr
 Cap supports different access states:
 
 - **Public:** anyone with the link can watch in a browser without an account.
-- **Private:** the viewer must sign in and have access through the owner, organization, space, or folder rules.
+- **Private:** the viewer must sign in and have access through the owner, organization, space, folder, or a recording-specific email invitation.
 - **Password protected:** the viewer must enter the recording or effective space password before playback.
 
 Sharing a link does not bypass private, organization, space, or password rules. If a Cap belongs to several containers, Cap resolves the effective viewer settings for those locations.
+
+The recording owner can open **Manage access** and invite a viewer by email. The viewer opens the usual Cap link and signs in with a Cap account using the invited address. An external viewer does not need to join the owner's organization or use a Pro seat. The owner can remove that invitation later. Access through a public link or a shared organization or space still applies independently.
+
+Owners and admins can turn on **Start new recordings private** under **Dashboard → Settings → Organization → Preferences**. This changes how new recordings start in that organization. Existing recordings keep their current access setting, and the allowed email domain setting continues to govern link access separately. Review existing public recordings before removing an allowed domain restriction.
 
 ## What appears on the share page
 

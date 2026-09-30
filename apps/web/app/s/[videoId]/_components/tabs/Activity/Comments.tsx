@@ -1,11 +1,12 @@
-import { Button } from "@cap/ui";
-import { Comment, User, type Video } from "@cap/web-domain";
+// type-only on purpose: a value import of @cap/web-domain drags the whole
+// effect runtime (~250 KB gz) into the share page's entry chunk. The branded
+// ids carry no constraints, so plain casts replace `.make()` losslessly.
+import type { Comment, User, Video } from "@cap/web-domain";
 import { faCommentSlash } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useSearchParams } from "next/navigation";
 import type React from "react";
 import {
-	type ComponentProps,
 	forwardRef,
 	type PropsWithChildren,
 	startTransition,
@@ -19,8 +20,8 @@ import { deleteComment } from "@/actions/videos/delete-comment";
 import { newComment } from "@/actions/videos/new-comment";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
 import type { CommentType } from "../../../Share";
+import { ActivityComposer } from "./ActivityComposer";
 import CommentComponent from "./Comment";
-import CommentInput from "./CommentInput";
 import EmptyState from "./EmptyState";
 
 export const Comments = Object.assign(
@@ -35,6 +36,8 @@ export const Comments = Object.assign(
 			onSeek?: (time: number) => void;
 			setShowAuthOverlay: (v: boolean) => void;
 			commentsDisabled: boolean;
+			ownerName?: string | null;
+			canRecordMedia?: boolean;
 		}
 	>((props, ref) => {
 		const {
@@ -86,17 +89,20 @@ export const Comments = Object.assign(
 			const currentTime = videoElement?.currentTime || 0;
 
 			const optimisticComment: CommentType = {
-				id: Comment.CommentId.make(`temp-${Date.now()}`),
-				authorId: User.UserId.make(user.id),
+				id: `temp-${Date.now()}` as Comment.CommentId,
+				authorId: user.id as User.UserId,
 				authorName: user?.name,
 				authorImage: user.imageUrl,
 				content,
 				createdAt: new Date(),
 				videoId: props.videoId,
-				parentCommentId: Comment.CommentId.make(""),
+				parentCommentId: "" as Comment.CommentId,
 				type: "text",
 				timestamp: currentTime,
 				updatedAt: new Date(),
+				mediaKey: null,
+				mediaDuration: null,
+				mediaMeta: null,
 				sending: true,
 			};
 
@@ -109,7 +115,7 @@ export const Comments = Object.assign(
 					content,
 					videoId: props.videoId,
 					authorImage: user.imageUrl,
-					parentCommentId: Comment.CommentId.make(""),
+					parentCommentId: "" as Comment.CommentId,
 					type: "text",
 					timestamp: currentTime,
 				});
@@ -131,7 +137,7 @@ export const Comments = Object.assign(
 				: replyingTo;
 
 			const optimisticReply: CommentType = {
-				id: Comment.CommentId.make(`temp-reply-${Date.now()}`),
+				id: `temp-reply-${Date.now()}` as Comment.CommentId,
 				authorId: user.id,
 				authorName: user.name,
 				authorImage: user.imageUrl,
@@ -142,6 +148,9 @@ export const Comments = Object.assign(
 				type: "text",
 				timestamp: currentTime,
 				updatedAt: new Date(),
+				mediaKey: null,
+				mediaDuration: null,
+				mediaMeta: null,
 				sending: true,
 			};
 
@@ -202,6 +211,15 @@ export const Comments = Object.assign(
 				}}
 				setShowAuthOverlay={props.setShowAuthOverlay}
 				commentsContainerRef={commentsContainerRef}
+				videoId={props.videoId}
+				ownerName={props.ownerName}
+				canRecordMedia={props.canRecordMedia}
+				onOptimisticComment={(comment) => {
+					startTransition(() => {
+						setOptimisticComments(comment);
+					});
+				}}
+				onCommentSuccess={handleCommentSuccess}
 			>
 				{commentsDisabled ? (
 					<div className="p-4 space-y-6 h-full">
@@ -216,7 +234,9 @@ export const Comments = Object.assign(
 					<div className="p-4 space-y-6">
 						{rootComments.map((comment) => (
 							<CommentComponent
-								key={comment.id}
+								// clientKey pins a just-uploaded comment to its optimistic
+								// card's mount, so the settle can't restart its playback.
+								key={comment.clientKey ?? comment.id}
 								comment={comment}
 								replies={optimisticComments}
 								onReply={(id) => {
@@ -242,46 +262,44 @@ export const Comments = Object.assign(
 		Shell: (
 			props: PropsWithChildren<{
 				setShowAuthOverlay: (v: boolean) => void;
-				commentInputProps?: Omit<
-					ComponentProps<typeof CommentInput>,
-					"user" | "placholder" | "buttonLabel"
-				>;
+				commentInputProps?: {
+					onSubmit?: (content: string) => void;
+					disabled?: boolean;
+				};
 				commentsContainerRef?: React.RefObject<HTMLDivElement | null>;
+				videoId?: Video.VideoId;
+				/** Whose video this is, for the composer's placeholder. */
+				ownerName?: string | null;
+				canRecordMedia?: boolean;
+				onOptimisticComment?: (comment: CommentType) => void;
+				onCommentSuccess?: (comment: CommentType) => void;
 			}>,
-		) => {
-			const user = useCurrentUser();
+		) => (
+			<>
+				<div
+					ref={props.commentsContainerRef}
+					className="overflow-y-auto flex-1 min-h-0"
+				>
+					{props.children}
+				</div>
 
-			return (
-				<>
-					<div
-						ref={props.commentsContainerRef}
-						className="overflow-y-auto flex-1 min-h-0"
-					>
-						{props.children}
+				{!props.commentInputProps?.disabled && props.videoId && (
+					<div className="flex-none p-2 border-t border-gray-5 bg-gray-2">
+						<ActivityComposer
+							videoId={props.videoId}
+							ownerName={props.ownerName}
+							onSubmit={(content) =>
+								props.commentInputProps?.onSubmit?.(content)
+							}
+							setShowAuthOverlay={props.setShowAuthOverlay}
+							canRecordMedia={props.canRecordMedia}
+							onOptimisticComment={props.onOptimisticComment}
+							onCommentSuccess={props.onCommentSuccess}
+						/>
 					</div>
-
-					{!props.commentInputProps?.disabled && (
-						<div className="flex-none p-2 border-t border-gray-5 bg-gray-2">
-							{user ? (
-								<CommentInput
-									{...props.commentInputProps}
-									placeholder="Leave a comment"
-									buttonLabel="Comment"
-								/>
-							) : (
-								<Button
-									className="min-w-full"
-									variant="primary"
-									onClick={() => props.setShowAuthOverlay(true)}
-								>
-									Sign in to leave a comment
-								</Button>
-							)}
-						</div>
-					)}
-				</>
-			);
-		},
+				)}
+			</>
+		),
 		Skeleton: (props: { setShowAuthOverlay: (v: boolean) => void }) => (
 			<Comments.Shell {...props} commentInputProps={{ disabled: true }} />
 		),

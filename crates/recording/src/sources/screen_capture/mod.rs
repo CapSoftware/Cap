@@ -73,10 +73,10 @@ pub enum ScreenCaptureTarget {
 }
 
 #[cfg(target_os = "linux")]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub enum LinuxCaptureSource {
     Display,
-    Window,
+    Window { id: WindowId },
     Area,
 }
 
@@ -84,7 +84,7 @@ pub enum LinuxCaptureSource {
 impl LinuxCaptureSource {
     pub fn from_target(target: &ScreenCaptureTarget) -> Self {
         match target {
-            ScreenCaptureTarget::Window { .. } => Self::Window,
+            ScreenCaptureTarget::Window { id } => Self::Window { id: id.clone() },
             ScreenCaptureTarget::Area { .. } => Self::Area,
             ScreenCaptureTarget::Display { .. } | ScreenCaptureTarget::CameraOnly => Self::Display,
         }
@@ -715,6 +715,18 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(target_os = "linux")]
+    fn linux_window_source_preserves_selected_window_id() {
+        let id: WindowId = "247".parse().unwrap();
+        let target = ScreenCaptureTarget::Window { id: id.clone() };
+        let LinuxCaptureSource::Window { id: selected } = LinuxCaptureSource::from_target(&target)
+        else {
+            panic!("window target must retain a window source");
+        };
+        assert_eq!(selected, id);
+    }
+
+    #[test]
     fn logical_area_to_physical_bounds_scales_each_axis() {
         let bounds = LogicalBounds::new(
             LogicalPosition::new(120.0, 80.0),
@@ -854,7 +866,7 @@ mod tests {
                 PhysicalSize::new(1920.0, 1080.0),
             ), // 150%
             (
-                LogicalSize::new(1097.142_857_142_857, 617.142_857_142_857),
+                LogicalSize::new(1_097.142_857_142_857, 617.142_857_142_857),
                 PhysicalSize::new(1920.0, 1080.0),
             ), // 175%
             (

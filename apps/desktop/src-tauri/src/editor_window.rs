@@ -1,5 +1,15 @@
-use std::{collections::HashMap, ops::Deref, path::PathBuf, sync::Arc, time::Instant};
-use tauri::{AppHandle, Listener, Manager, Runtime, Window, ipc::CommandArg};
+use std::{
+    collections::HashMap,
+    ops::Deref,
+    path::PathBuf,
+    str::FromStr,
+    sync::{
+        Arc,
+        atomic::{AtomicU8, Ordering},
+    },
+    time::Instant,
+};
+use tauri::{AppHandle, Emitter, Listener, Manager, Runtime, Window, ipc::CommandArg};
 use tokio::sync::{RwLock, watch};
 use tokio_util::sync::CancellationToken;
 
@@ -9,6 +19,7 @@ use tauri_specta::Event;
 use crate::{
     FrameLayoutEvent, create_editor_instance_impl,
     frame_ws::{WSFrame, WSFrameFormat, create_watch_frame_ws},
+    windows::{CapWindowId, EditorWindowIds},
 };
 
 /// Forwards rendered frames to the preview websocket and mirrors each frame's
@@ -19,33 +30,8 @@ fn make_frame_callback(
     frame_tx: watch::Sender<Option<Arc<WSFrame>>>,
 ) -> cap_editor::EditorFrameCallback {
     Box::new(move |output, layout| {
-        let ws_frame = match output {
-            cap_editor::EditorFrameOutput::Nv12(frame) => {
-                let ws_format = match frame.format {
-                    GpuOutputFormat::Nv12 => WSFrameFormat::Nv12 { full_range: false },
-                    GpuOutputFormat::Rgba => WSFrameFormat::Rgba,
-                };
-                WSFrame {
-                    data: Arc::new(frame.data.into_vec()),
-                    width: frame.width,
-                    height: frame.height,
-                    stride: frame.y_stride,
-                    frame_number: frame.frame_number,
-                    target_time_ns: frame.target_time_ns,
-                    format: ws_format,
-                    created_at: Instant::now(),
-                }
-            }
-            cap_editor::EditorFrameOutput::Rgba(frame) => WSFrame {
-                data: frame.data,
-                width: frame.width,
-                height: frame.height,
-                stride: frame.padded_bytes_per_row,
-                frame_number: frame.frame_number,
-                target_time_ns: frame.target_time_ns,
-                format: WSFrameFormat::Rgba,
-                created_at: Instant::now(),
-            },
+        let Some(ws_frame) = frame_for_websocket(output) else {
+            return;
         };
         let _ = frame_tx.send(Some(std::sync::Arc::new(ws_frame)));
 
@@ -56,34 +42,224 @@ fn make_frame_callback(
     })
 }
 
+pub(crate) fn frame_for_websocket(output: cap_editor::EditorFrameOutput) -> Option<WSFrame> {
+    let frame = match output {
+        cap_editor::EditorFrameOutput::Nv12(frame) => {
+            let ws_format = match frame.format {
+                GpuOutputFormat::Nv12 => WSFrameFormat::Nv12 { full_range: false },
+                GpuOutputFormat::Rgba => WSFrameFormat::Rgba,
+            };
+            WSFrame {
+                data: Arc::new(frame.data.into_vec()).into(),
+                width: frame.width,
+                height: frame.height,
+                stride: frame.y_stride,
+                frame_number: frame.frame_number,
+                target_time_ns: frame.target_time_ns,
+                format: ws_format,
+                created_at: Instant::now(),
+            }
+        }
+        cap_editor::EditorFrameOutput::Rgba(frame) => WSFrame {
+            data: frame.data.into(),
+            width: frame.width,
+            height: frame.height,
+            stride: frame.padded_bytes_per_row,
+            frame_number: frame.frame_number,
+            target_time_ns: frame.target_time_ns,
+            format: WSFrameFormat::Rgba,
+            created_at: Instant::now(),
+        },
+        // The Tauri editor transports frames over a websocket, so it never
+        // requests the gpui-only zero-copy surface format.
+        #[cfg(target_os = "macos")]
+        cap_editor::EditorFrameOutput::Surface(_) => return None,
+    };
+    Some(frame.into_packed())
+}
+
 pub struct EditorInstance {
     inner: Arc<cap_editor::EditorInstance>,
+    pub instance_id: uuid::Uuid,
+    handoff_playback: tokio::sync::Mutex<Option<(uuid::Uuid, cap_editor::PlaybackHandle)>>,
+    disposed: std::sync::atomic::AtomicBool,
     pub ws_port: u16,
     pub ws_shutdown_token: CancellationToken,
     app_handle: AppHandle,
     render_frame_event_id: tauri::EventId,
 }
 
-type PendingResult = Result<Arc<EditorInstance>, String>;
+type PendingResult = Result<Arc<EditorInstanceDelivery>, String>;
 type PendingReceiver = tokio::sync::watch::Receiver<Option<PendingResult>>;
+
+pub(crate) struct EditorInstanceDelivery {
+    instance: Arc<EditorInstance>,
+    cleanup_runtime: tokio::runtime::Handle,
+    state: AtomicU8,
+}
+
+impl EditorInstanceDelivery {
+    const PENDING: u8 = 0;
+    const ADOPTED: u8 = 1;
+    const RETIRED: u8 = 2;
+
+    fn new(instance: Arc<EditorInstance>, cleanup_runtime: tokio::runtime::Handle) -> Arc<Self> {
+        Arc::new(Self {
+            instance,
+            cleanup_runtime,
+            state: AtomicU8::new(Self::PENDING),
+        })
+    }
+
+    fn adopt_into(
+        &self,
+        instances: &mut HashMap<String, Arc<EditorInstance>>,
+        window_label: &str,
+    ) -> Result<Arc<EditorInstance>, String> {
+        self.state
+            .compare_exchange(
+                Self::PENDING,
+                Self::ADOPTED,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .map_err(|_| "Editor instance delivery is no longer pending".to_string())?;
+        let instance = self.instance.clone();
+        let _ = instances.insert(window_label.to_string(), instance.clone());
+        Ok(instance)
+    }
+
+    fn retire(&self) -> Option<tokio::task::JoinHandle<()>> {
+        self.state
+            .compare_exchange(
+                Self::PENDING,
+                Self::RETIRED,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .ok()?;
+        let instance = self.instance.clone();
+        Some(self.cleanup_runtime.spawn(async move {
+            instance.dispose().await;
+        }))
+    }
+
+    async fn dispose(&self) {
+        if let Some(cleanup) = self.retire() {
+            let _ = cleanup.await;
+        }
+    }
+}
+
+impl Drop for EditorInstanceDelivery {
+    fn drop(&mut self) {
+        drop(self.retire());
+    }
+}
 
 #[derive(Clone, Default)]
 pub struct PendingEditorInstances(Arc<RwLock<HashMap<String, PendingReceiver>>>);
 
-async fn do_prewarm(app: AppHandle, path: PathBuf) -> PendingResult {
+async fn do_prewarm(app: AppHandle, path: PathBuf) -> Result<Arc<EditorInstance>, String> {
     let (frame_tx, frame_rx) = watch::channel(None);
 
     let (ws_port, ws_shutdown_token) = create_watch_frame_ws(frame_rx, Default::default()).await;
+    let ws_guard = ws_shutdown_token.clone().drop_guard();
     let (inner, render_frame_event_id) =
         create_editor_instance_impl(&app, path, make_frame_callback(app.clone(), frame_tx)).await?;
 
-    Ok(Arc::new(EditorInstance {
+    let instance = Arc::new(EditorInstance {
         inner,
+        instance_id: uuid::Uuid::new_v4(),
+        handoff_playback: Default::default(),
+        disposed: Default::default(),
         ws_port,
         ws_shutdown_token,
         app_handle: app,
         render_frame_event_id,
-    }))
+    });
+    ws_guard.disarm();
+    Ok(instance)
+}
+
+async fn recreate_preparing_instance(
+    app: AppHandle,
+    previous: &Arc<EditorInstance>,
+) -> Result<Arc<EditorInstance>, String> {
+    let (frame_tx, frame_rx) = watch::channel(None);
+    let (ws_port, ws_shutdown_token) = create_watch_frame_ws(frame_rx, Default::default()).await;
+    let ws_guard = ws_shutdown_token.clone().drop_guard();
+    let state_app = app.clone();
+    let inner = previous
+        .inner
+        .recreate_preparing_candidate(
+            move |state| {
+                let _ = crate::EditorStateChanged::new(state).emit(&state_app);
+            },
+            make_frame_callback(app.clone(), frame_tx),
+            cap_editor::EditorFrameFormat::Rgba,
+        )
+        .await?;
+    let render_frame_event_id = crate::RenderFrameEvent::listen_any(&app, {
+        let preview_tx = inner.preview_tx.clone();
+        move |event| {
+            preview_tx.send_modify(|request| {
+                *request = Some((
+                    event.payload.frame_number,
+                    event.payload.fps,
+                    event.payload.resolution_base,
+                ))
+            });
+        }
+    });
+    let instance = Arc::new(EditorInstance {
+        inner,
+        instance_id: uuid::Uuid::new_v4(),
+        handoff_playback: Default::default(),
+        disposed: Default::default(),
+        ws_port,
+        ws_shutdown_token,
+        app_handle: app,
+        render_frame_event_id,
+    });
+    let fps = crate::EDITOR_PREVIEW_FPS;
+    let resolution = crate::default_editor_preview_resolution();
+    let started = match instance
+        .inner
+        .start_preparing_handoff(fps, resolution)
+        .await
+    {
+        Ok(started) => started,
+        Err(error) => {
+            instance.dispose().await;
+            return Err(format!("Preparing handoff start failed: {error:?}"));
+        }
+    };
+    if !started {
+        let frame = instance
+            .inner
+            .preparing_adoption()
+            .and_then(|adoption| adoption.frame_number(fps))
+            .unwrap_or(0);
+        instance
+            .inner
+            .preview_tx
+            .send_modify(|request| *request = Some((frame, fps, resolution)));
+    }
+    ws_guard.disarm();
+    Ok(instance)
+}
+
+fn with_registered_editor<T>(
+    window_ids: &EditorWindowIds,
+    id: u32,
+    action: impl FnOnce() -> T,
+) -> Result<T, String> {
+    let ids = window_ids.ids.lock().map_err(|error| error.to_string())?;
+    if !ids.iter().any(|(_, registered_id)| *registered_id == id) {
+        return Err("Editor window is no longer registered".to_string());
+    }
+    Ok(action())
 }
 
 impl PendingEditorInstances {
@@ -92,32 +268,47 @@ impl PendingEditorInstances {
             Some(s) => (*s).clone(),
             None => {
                 let pending = Self::default();
-                app.manage(pending.clone());
-                pending
+                app.manage(pending);
+                (*app.state::<Self>()).clone()
             }
         }
     }
 
     pub async fn start_prewarm(app: &AppHandle, window_label: String, path: PathBuf) {
+        let Ok(CapWindowId::Editor { id }) = CapWindowId::from_str(&window_label) else {
+            return;
+        };
+        let window_ids = EditorWindowIds::get(app);
         let pending = Self::get(app);
         let app = app.clone();
-
-        {
-            let instances = pending.0.read().await;
-            if instances.contains_key(&window_label) {
-                return;
-            }
-        }
-
-        let (tx, rx) = tokio::sync::watch::channel(None);
-
-        {
+        let tx = {
             let mut instances = pending.0.write().await;
-            instances.insert(window_label.clone(), rx);
-        }
+            let admitted = with_registered_editor(&window_ids, id, || {
+                use std::collections::hash_map::Entry;
+                match instances.entry(window_label) {
+                    Entry::Vacant(entry) => {
+                        let (tx, rx) = watch::channel(None);
+                        entry.insert(rx);
+                        Some(tx)
+                    }
+                    Entry::Occupied(_) => None,
+                }
+            });
+            match admitted {
+                Ok(Some(tx)) => tx,
+                Ok(None) => return,
+                Err(error) => {
+                    tracing::debug!(%error, "Skipping prewarm for a retired editor");
+                    return;
+                }
+            }
+        };
 
+        let cleanup_runtime = tokio::runtime::Handle::current();
         tokio::spawn(async move {
-            let result = do_prewarm(app, path).await;
+            let result = do_prewarm(app, path)
+                .await
+                .map(|instance| EditorInstanceDelivery::new(instance, cleanup_runtime));
             tx.send(Some(result)).ok();
         });
     }
@@ -209,10 +400,115 @@ impl PendingEditorInstances {
 
 impl EditorInstance {
     pub async fn dispose(&self) {
-        self.inner.dispose().await;
+        self.dispose_inner(false).await;
+    }
+
+    async fn dispose_inner(&self, refresh_thumbnail: bool) {
+        self.disposed.store(true, Ordering::Release);
+        let mut handoff = self.handoff_playback.lock().await;
+        if let Some((_, playback)) = handoff.take() {
+            playback.stop();
+        }
+        if refresh_thumbnail {
+            if self.inner.dispose_with_thumbnail().await {
+                let _ = self
+                    .app_handle
+                    .emit("recording-thumbnail-changed", &self.project_path);
+            }
+        } else {
+            self.inner.dispose().await;
+        }
 
         self.ws_shutdown_token.cancel();
         self.app_handle.unlisten(self.render_frame_event_id);
+    }
+
+    fn validate_handoff(&self, expected: &str) -> Result<(), String> {
+        if expected != self.instance_id.to_string() || self.disposed.load(Ordering::Acquire) {
+            Err("The handoff editor instance has ended".into())
+        } else {
+            Ok(())
+        }
+    }
+
+    pub(crate) fn commit_preparing_frame(
+        &self,
+        expected: &str,
+        frame: u32,
+        fps: u32,
+    ) -> Result<bool, String> {
+        self.validate_handoff(expected)?;
+        if self
+            .inner
+            .preparing_adoption()
+            .is_some_and(|adoption| adoption.is_owner())
+        {
+            return Ok(true);
+        }
+        if self
+            .inner
+            .preparing_adoption()
+            .is_some_and(|adoption| adoption.invalidated())
+        {
+            return Err("Preparing handoff candidate was superseded".into());
+        }
+        Ok(self
+            .inner
+            .preparing_adoption()
+            .is_none_or(|adoption| adoption.try_commit(frame, fps)))
+    }
+
+    pub(crate) async fn start_handoff_playback(
+        &self,
+        expected: &str,
+        frame_number: u32,
+        fps: u32,
+        resolution: cap_project::XY<u32>,
+    ) -> Result<String, String> {
+        let mut handoff = self.handoff_playback.lock().await;
+        self.validate_handoff(expected)?;
+        if self
+            .inner
+            .preparing_adoption()
+            .is_some_and(|adoption| adoption.is_owner())
+            && let Some(playback) = self.inner.state.lock().await.playback_task.clone()
+        {
+            let playback_id = uuid::Uuid::new_v4();
+            *handoff = Some((playback_id, playback));
+            return Ok(playback_id.to_string());
+        }
+        self.inner
+            .modify_and_emit_state(|state| state.playhead_position = frame_number)
+            .await;
+        let playback = self
+            .inner
+            .start_playback_with_handle(fps, resolution, Some(frame_number))
+            .await
+            .map_err(|error| format!("The handoff playback could not start: {error:?}"))?;
+        if let Err(error) = self.validate_handoff(expected) {
+            playback.stop();
+            return Err(error);
+        }
+        let playback_id = uuid::Uuid::new_v4();
+        *handoff = Some((playback_id, playback));
+        Ok(playback_id.to_string())
+    }
+
+    pub(crate) async fn stop_handoff_playback(
+        &self,
+        expected: &str,
+        playback_id: &str,
+    ) -> Result<(), String> {
+        let mut handoff = self.handoff_playback.lock().await;
+        self.validate_handoff(expected)?;
+        if handoff
+            .as_ref()
+            .is_some_and(|(id, _)| id.to_string() == playback_id)
+            && let Some((_, playback)) = handoff.take()
+        {
+            playback.stop();
+        }
+        Ok(())
     }
 }
 
@@ -323,75 +619,117 @@ impl EditorInstances {
         window: &Window,
         path: PathBuf,
     ) -> Result<Arc<EditorInstance>, String> {
+        let CapWindowId::Editor { id } =
+            CapWindowId::from_str(window.label()).map_err(|error| error.to_string())?
+        else {
+            return Err("Invalid editor window".to_string());
+        };
+        let window_ids = EditorWindowIds::get(window.app_handle());
+        with_registered_editor(&window_ids, id, || ())?;
         let instances = match window.try_state::<EditorInstances>() {
             Some(s) => (*s).clone(),
             None => {
-                let instances = Self(Arc::new(RwLock::new(HashMap::new())));
-                window.manage(instances.clone());
-                instances
+                window.manage(Self(Arc::new(RwLock::new(HashMap::new()))));
+                (*window.state::<Self>()).clone()
             }
         };
-
         let mut instances = instances.0.write().await;
+        if let Some(instance) =
+            with_registered_editor(&window_ids, id, || instances.get(window.label()).cloned())?
+        {
+            if !instance
+                .inner
+                .preparing_adoption()
+                .is_some_and(|adoption| adoption.invalidated())
+            {
+                return Ok(instance);
+            }
+            let replacement =
+                recreate_preparing_instance(window.app_handle().clone(), &instance).await?;
+            if let Err(error) = with_registered_editor(&window_ids, id, || ()) {
+                replacement.dispose().await;
+                return Err(error);
+            }
+            let _ = instances.insert(window.label().to_string(), replacement.clone());
+            instance.dispose().await;
+            return Ok(replacement);
+        }
 
-        use std::collections::hash_map::Entry;
-
-        match instances.entry(window.label().to_string()) {
-            Entry::Vacant(entry) => {
-                let requested_at = Instant::now();
-                let pending = PendingEditorInstances::get(window.app_handle());
-
-                if let Some(mut prewarmed_rx) = pending.take_prewarmed(window.label()).await {
-                    loop {
-                        if let Some(result) = prewarmed_rx.borrow_and_update().clone() {
-                            let instance = result?;
-                            entry.insert(instance.clone());
-                            tracing::info!(
-                                wait_ms = requested_at.elapsed().as_millis() as u64,
-                                "Editor open: instance served from prewarm"
-                            );
-                            return Ok(instance);
-                        }
-                        if prewarmed_rx.changed().await.is_err() {
-                            break;
-                        }
-                    }
-                    tracing::warn!(
-                        "Editor open: prewarm channel closed without a result, building on demand"
-                    );
+        let requested_at = Instant::now();
+        let pending = PendingEditorInstances::get(window.app_handle());
+        let mut prewarmed = None;
+        if let Some(mut prewarmed_rx) = pending.take_prewarmed(window.label()).await {
+            loop {
+                let result = prewarmed_rx.borrow_and_update().clone();
+                if let Some(result) = result {
+                    prewarmed = Some(result?);
+                    break;
                 }
-
+                if prewarmed_rx.changed().await.is_err() {
+                    break;
+                }
+            }
+            if prewarmed.is_none() {
+                tracing::warn!(
+                    "Editor open: prewarm channel closed without a result, building on demand"
+                );
+            }
+        }
+        let was_prewarmed = prewarmed.is_some();
+        let instance = match prewarmed {
+            Some(instance) => instance,
+            None => {
+                with_registered_editor(&window_ids, id, || ())?;
+                let cleanup_runtime = tokio::runtime::Handle::current();
                 let (frame_tx, frame_rx) = watch::channel(None);
-
                 let (ws_port, ws_shutdown_token) =
                     create_watch_frame_ws(frame_rx, Default::default()).await;
+                let ws_guard = ws_shutdown_token.clone().drop_guard();
                 let app_handle = window.app_handle().clone();
                 let (inner, render_frame_event_id) = create_editor_instance_impl(
                     window.app_handle(),
-                    path,
+                    path.clone(),
                     make_frame_callback(app_handle.clone(), frame_tx),
                 )
                 .await?;
-
                 let instance = Arc::new(EditorInstance {
                     inner,
+                    instance_id: uuid::Uuid::new_v4(),
+                    handoff_playback: Default::default(),
+                    disposed: Default::default(),
                     ws_port,
                     ws_shutdown_token,
                     app_handle,
                     render_frame_event_id,
                 });
-
-                entry.insert(instance.clone());
-
-                tracing::info!(
-                    build_ms = requested_at.elapsed().as_millis() as u64,
-                    "Editor open: instance built on demand (no prewarm hit)"
-                );
-
-                Ok(instance)
+                ws_guard.disarm();
+                EditorInstanceDelivery::new(instance, cleanup_runtime)
             }
-            Entry::Occupied(entry) => Ok(entry.get().clone()),
+        };
+
+        let published = with_registered_editor(&window_ids, id, || {
+            instance.adopt_into(&mut instances, window.label())
+        });
+        drop(instances);
+        let instance = match published {
+            Ok(Ok(instance)) => instance,
+            Ok(Err(error)) | Err(error) => {
+                instance.dispose().await;
+                return Err(error);
+            }
+        };
+        if was_prewarmed {
+            tracing::info!(
+                wait_ms = requested_at.elapsed().as_millis() as u64,
+                "Editor open: instance served from prewarm"
+            );
+        } else {
+            tracing::info!(
+                build_ms = requested_at.elapsed().as_millis() as u64,
+                "Editor open: instance built on demand (no prewarm hit)"
+            );
         }
+        Ok(instance)
     }
 
     /// Project paths of every currently open editor. Used to avoid touching
@@ -414,9 +752,9 @@ impl EditorInstances {
             return;
         };
 
-        let mut instances = instances.0.write().await;
-        if let Some(instance) = instances.remove(window.label()) {
-            instance.dispose().await;
+        let instance = instances.0.write().await.remove(window.label());
+        if let Some(instance) = instance {
+            instance.dispose_inner(true).await;
         }
     }
 

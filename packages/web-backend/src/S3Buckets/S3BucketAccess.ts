@@ -328,7 +328,20 @@ export const createS3BucketAccess = Effect.gen(function* () {
 						),
 					),
 				),
-			).pipe(Effect.when(() => objects.length > 0)),
+			).pipe(
+				Effect.flatMap((response) =>
+					response.Errors?.length
+						? Effect.fail(
+								new S3Error({
+									cause: new Error(
+										`S3 rejected deletion of ${response.Errors.length} objects`,
+									),
+								}),
+							)
+						: Effect.succeed(response),
+				),
+				Effect.when(() => objects.length > 0),
+			),
 		getPresignedPutUrl: (
 			key: string,
 			args?: Omit<S3.PutObjectRequest, "Key" | "Bucket">,
@@ -436,6 +449,30 @@ export const createS3BucketAccess = Effect.gen(function* () {
 									Bucket: provider.bucket,
 									Key: key,
 									UploadId: uploadId,
+									...args,
+								}),
+							),
+						),
+					),
+				),
+			copyPart: (
+				key: string,
+				uploadId: string,
+				partNumber: number,
+				args: Omit<
+					S3.UploadPartCopyCommandInput,
+					"Key" | "Bucket" | "UploadId" | "PartNumber"
+				>,
+			) =>
+				wrapS3Promise(
+					provider.getInternal.pipe(
+						Effect.map((client) =>
+							client.send(
+								new S3.UploadPartCopyCommand({
+									Bucket: provider.bucket,
+									Key: key,
+									UploadId: uploadId,
+									PartNumber: partNumber,
 									...args,
 								}),
 							),

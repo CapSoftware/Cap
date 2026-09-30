@@ -484,6 +484,41 @@ System Audio ────┘                       ├─► MP4 (macos.rs) ─�
 
 ---
 
+### Session 2026-08-18 (Zero-Copy VideoToolbox Encoder Input for Fragmented Recording)
+
+**Goal**: Eliminate the per-frame CPU plane copy (`fill_frame_from_sample_buf`) on the fragmented M4S display path — the default studio-without-camera path and every instant-mode display recording.
+
+**What was done**:
+1. Added `cap_enc_ffmpeg::video::videotoolbox_hw::VideoToolboxHwFrames` — an `AVHWFramesContext` (format VIDEOTOOLBOX, sw_format NV12) that wraps externally-owned CVPixelBuffers as `AV_PIX_FMT_VIDEOTOOLBOX` frames (CFRetain for the frame's lifetime, released by the backing `AVBufferRef`).
+2. Added `H264EncoderBuilder::build_videotoolbox_hw_input` — opens `h264_videotoolbox` with the hardware frames context so the encoder reads the IOSurface directly. Refuses (for caller fallback) on non-NV12 input, scaling, CRF, or frame rates beyond the VT capability estimate.
+3. `SegmentedVideoEncoderConfig.prefer_videotoolbox_hw_input`: `SegmentedVideoEncoder::init` tries the hw encoder first and falls back to the software-frame path on any error.
+4. `MacOSFragmentedM4SMuxer` (display) enables it; in hw mode the encode thread queues the SCK sample buffer's CVPixelBuffer via `queue_hw_pixel_buffer` — no IOSurface lock, no memcpy, no `FramePool` allocation.
+
+**Benchmark** (`vt-hwframe-encode-benchmark`, M4 Max, release, paced at capture fps, 300 frames after 30 warmup, process-CPU per frame via getrusage; identical synthetic IOSurface-backed 420v frames both paths):
+
+| Config | sw CPU/frame | hw CPU/frame | Delta | Encoded outputs |
+|--------|--------------|--------------|-------|-----------------|
+| 1920x1080@30 | 1191us | 763us | -36% | byte-identical size, decoded max channel delta 0 |
+| 3840x2160@30 | 2232us | 1108us | -50% | byte-identical size, decoded max channel delta 0 |
+| 3840x2160@60 | 45226us (libx264) | hw refused -> sw fallback | n/a | control delta 0 |
+
+The saving exceeds the removed memcpy alone because VideoToolbox's own software-frame ingest copy also disappears. Determinism control: the sw path run twice decodes byte-identically, so the hw/sw delta-0 comparison is meaningful.
+
+**Verification**:
+- `vt-hwframe-real-capture-check`: real ScreenCaptureKit 1920x1080 area capture through the real instant pipeline engaged the hw path ("Selected hardware H264 encoder with zero-copy VideoToolbox input"), 235 frames in 8s at 30fps, segments assemble and decode.
+- 5120x1440 ultrawide display (real hardware test): hw init correctly refuses (VT cannot encode >4096-wide H.264 at all — that display already used libx264 before this change), full fallback chain intact.
+- `cinder test -p cap-recording` (358 tests incl. real hardware instant + studio recordings) and `-p cap-enc-ffmpeg` (52) all pass.
+- `leaks --atExit` over ~2000 wrap/encode cycles: 0 leaks.
+- `cinder check --all-targets` on cap-enc-ffmpeg + cap-recording, `cap-desktop`, and the desktop-gpui workspace all compile.
+
+**Notes**:
+- The camera fragmented muxer (unreachable in production: a live camera forces the AVFoundation muxer) and the OOP muxer keep the software path; both are candidates for the same treatment if they ever ship.
+- The zero-copy path retains SCK pool buffers slightly longer (VT holds frames in flight instead of an immediate copy-and-release); the AVFoundation studio muxer has always worked this way, and the real-capture check sustained full frame rate.
+
+**Stopping point**: Default fragmented display recordings (studio no-camera, all instant display) now feed VideoToolbox IOSurfaces directly. Next candidate for the same primitive: export's NV12 readback -> AVFrame path (needs a GPU NV12-into-IOSurface blit first).
+
+---
+
 ## References
 
 - `BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)

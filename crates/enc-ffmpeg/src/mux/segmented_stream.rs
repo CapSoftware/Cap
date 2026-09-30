@@ -1,3 +1,4 @@
+use super::fragment_metadata::read_fragment_metadata;
 use cap_media_info::VideoInfo;
 use ffmpeg::{format, frame};
 use serde::Serialize;
@@ -50,9 +51,7 @@ fn atomic_write_json<T: Serialize>(path: &Path, data: &T) -> std::io::Result<()>
 }
 
 fn sync_file(path: &Path) {
-    if let Ok(file) = std::fs::File::open(path)
-        && let Err(e) = file.sync_all()
-    {
+    if let Err(e) = crate::sync_media_file(path) {
         tracing::warn!("File fsync failed for {}: {e}", path.display());
     }
 }
@@ -81,14 +80,10 @@ pub struct SegmentedVideoEncoder {
 
     current_index: u32,
     segment_duration: Duration,
-    segment_start_time: Option<Duration>,
-    last_frame_timestamp: Option<Duration>,
-    frames_in_segment: u32,
 
     completed_segments: Vec<VideoSegmentInfo>,
 
-    pending_segment_indices: Vec<(u32, Duration)>,
-    frames_since_pending_flush: u32,
+    frames_since_segment_scan: u32,
 
     codec_info: CodecInfo,
 
@@ -169,6 +164,8 @@ pub enum QueueFrameError {
 pub enum FinishError {
     #[error("FFmpeg: {0}")]
     FFmpeg(#[from] ffmpeg::Error),
+    #[error("IO: {0}")]
+    Io(#[from] std::io::Error),
 }
 
 pub struct SegmentedVideoEncoderConfig {
@@ -176,6 +173,11 @@ pub struct SegmentedVideoEncoderConfig {
     pub preset: H264Preset,
     pub bpp: f32,
     pub output_size: Option<(u32, u32)>,
+    /// On macOS, try to open the encoder for zero-copy VideoToolbox input
+    /// (IOSurface-backed NV12 CVPixelBuffers queued via
+    /// [`SegmentedVideoEncoder::queue_hw_pixel_buffer`]) before falling back
+    /// to the software-frame path. Ignored on other platforms.
+    pub prefer_videotoolbox_hw_input: bool,
 }
 
 impl Default for SegmentedVideoEncoderConfig {
@@ -185,6 +187,7 @@ impl Default for SegmentedVideoEncoderConfig {
             preset: H264Preset::Ultrafast,
             bpp: H264EncoderBuilder::QUALITY_BPP,
             output_size: None,
+            prefer_videotoolbox_hw_input: false,
         }
     }
 }
@@ -204,7 +207,7 @@ impl SegmentedVideoEncoder {
         #[cfg(not(target_os = "windows"))]
         let manifest_path_str = manifest_path.to_string_lossy().to_string();
 
-        let mut output = format::output_as(&manifest_path_str, "dash")?;
+        let mut output = super::dash_output::create(&manifest_path_str)?;
 
         let init_seg_str = INIT_SEGMENT_NAME;
         let media_seg_str = "segment_$Number%03d$.m4s";
@@ -238,7 +241,28 @@ impl SegmentedVideoEncoder {
             builder = builder.with_output_size(width, height)?;
         }
 
-        let encoder = builder.build(&mut output)?;
+        #[cfg(target_os = "macos")]
+        let hw_attempt = if config.prefer_videotoolbox_hw_input {
+            match builder.clone().build_videotoolbox_hw_input(&mut output) {
+                Ok(encoder) => Some(encoder),
+                Err(error) => {
+                    tracing::info!(
+                        %error,
+                        "VideoToolbox zero-copy input unavailable, using software frame path"
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        #[cfg(not(target_os = "macos"))]
+        let hw_attempt: Option<H264Encoder> = None;
+
+        let encoder = match hw_attempt {
+            Some(encoder) => encoder,
+            None => builder.build(&mut output)?,
+        };
 
         output.write_header()?;
 
@@ -277,12 +301,8 @@ impl SegmentedVideoEncoder {
             output,
             current_index: 1,
             segment_duration: config.segment_duration,
-            segment_start_time: None,
-            last_frame_timestamp: None,
-            frames_in_segment: 0,
             completed_segments: Vec::new(),
-            pending_segment_indices: Vec::new(),
-            frames_since_pending_flush: 0,
+            frames_since_segment_scan: 0,
             codec_info,
             disk_space_callback: None,
             segment_tx: None,
@@ -323,45 +343,51 @@ impl SegmentedVideoEncoder {
         }
     }
 
+    /// Whether frames should be queued as CVPixelBuffers via
+    /// [`Self::queue_hw_pixel_buffer`] instead of software frames.
+    #[cfg(target_os = "macos")]
+    pub fn is_videotoolbox_hw_input(&self) -> bool {
+        self.encoder.is_videotoolbox_hw_input()
+    }
+
+    /// Queues an IOSurface-backed NV12 `CVPixelBufferRef` without copying its
+    /// planes. Only valid when [`Self::is_videotoolbox_hw_input`] is true.
+    ///
+    /// # Safety
+    /// `pixel_buffer` must be a valid `CVPixelBufferRef` matching the
+    /// encoder's dimensions with a biplanar 4:2:0 pixel format.
+    #[cfg(target_os = "macos")]
+    pub unsafe fn queue_hw_pixel_buffer(
+        &mut self,
+        pixel_buffer: *mut std::ffi::c_void,
+        timestamp: Duration,
+    ) -> Result<(), QueueFrameError> {
+        let frame = unsafe { self.encoder.wrap_videotoolbox_pixel_buffer(pixel_buffer) }
+            .map_err(InitError::Encoder)?;
+        self.queue_frame(frame, timestamp)
+    }
+
     pub fn queue_frame(
         &mut self,
         frame: frame::Video,
         timestamp: Duration,
     ) -> Result<(), QueueFrameError> {
-        let segment_start = match self.segment_start_time {
-            Some(start) => start,
-            None => {
-                self.segment_start_time = Some(timestamp);
-                timestamp
-            }
-        };
-
-        self.last_frame_timestamp = Some(timestamp);
-
         // Encode with the frame's real capture-derived timestamp. The encoder
         // anchors pts at the first frame, so capture gaps (static content,
         // stream restarts, dropped frames) stay in the timeline instead of
         // compressing it and drifting video ahead of audio.
         self.encoder
             .queue_frame(frame, timestamp, &mut self.output)?;
-        self.frames_in_segment += 1;
 
         // The encoder holds one packet back to stamp real durations, so the
         // init segment materializes a frame later than the first queue call;
         // keep trying until it lands (no-op once notified).
         self.try_notify_init_segment();
 
-        if !self.pending_segment_indices.is_empty() {
-            self.frames_since_pending_flush += 1;
-            if self.frames_since_pending_flush >= 10 {
-                self.frames_since_pending_flush = 0;
-                self.flush_pending_segments();
-            }
-        }
-
-        let elapsed_in_segment = timestamp.saturating_sub(segment_start);
-        if elapsed_in_segment >= self.segment_duration {
-            self.on_segment_boundary(self.current_index, timestamp);
+        self.frames_since_segment_scan += 1;
+        if self.frames_since_segment_scan >= 10 {
+            self.frames_since_segment_scan = 0;
+            self.flush_pending_segments();
         }
 
         Ok(())
@@ -375,142 +401,39 @@ impl SegmentedVideoEncoder {
         }
     }
 
-    fn on_segment_boundary(&mut self, completed_index: u32, timestamp: Duration) {
-        self.try_notify_init_segment();
-
-        let segment_start = self.segment_start_time.unwrap_or(Duration::ZERO);
-        let segment_duration = timestamp.saturating_sub(segment_start);
-
-        let segment_path = self
-            .base_path
-            .join(format!("segment_{completed_index:03}.m4s"));
-
-        tracing::debug!(
-            segment_index = completed_index,
-            duration_secs = segment_duration.as_secs_f64(),
-            frames = self.frames_in_segment,
-            "Segment boundary reached (time-based)"
-        );
-
-        self.current_index = completed_index + 1;
-        self.segment_start_time = Some(timestamp);
-        self.frames_in_segment = 0;
-
-        let tmp_path = self
-            .base_path
-            .join(format!("segment_{completed_index:03}.m4s.tmp"));
-
-        let (resolved_path, file_size) = if segment_path.exists() {
-            let size = std::fs::metadata(&segment_path)
-                .ok()
-                .map(|m| m.len())
-                .unwrap_or(0);
-            (segment_path.clone(), size)
-        } else if tmp_path.exists() {
-            let size = std::fs::metadata(&tmp_path)
-                .ok()
-                .map(|m| m.len())
-                .unwrap_or(0);
-            (tmp_path, size)
-        } else {
-            (segment_path.clone(), 0)
-        };
-
-        let file_found = resolved_path.exists();
-
-        if file_found && file_size > 0 {
-            self.completed_segments.push(VideoSegmentInfo {
-                path: segment_path.clone(),
-                index: completed_index,
-                duration: segment_duration,
-                file_size: Some(file_size),
-            });
-
-            self.write_in_progress_manifest();
-
-            self.notify_segment(SegmentCompletedEvent {
-                path: resolved_path,
-                index: completed_index,
-                duration: segment_duration.as_secs_f64(),
-                file_size,
-                is_init: false,
-                media_type: SegmentMediaType::Video,
-            });
-        } else {
-            tracing::debug!(
-                segment_index = completed_index,
-                file_exists = file_found,
-                file_size,
-                "Segment file not ready yet, deferring notification"
-            );
-            self.pending_segment_indices
-                .push((completed_index, segment_duration));
-            self.write_in_progress_manifest();
-        }
-    }
-
     fn flush_pending_segments(&mut self) {
-        if self.pending_segment_indices.is_empty() {
-            return;
-        }
-
-        let taken = std::mem::take(&mut self.pending_segment_indices);
-        let taken_len = taken.len();
-        let mut still_pending = Vec::new();
-
-        for (index, duration) in taken {
+        let first_index = self.current_index;
+        loop {
+            let index = self.current_index;
             let segment_path = self.base_path.join(format!("segment_{index:03}.m4s"));
-            let tmp_path = self.base_path.join(format!("segment_{index:03}.m4s.tmp"));
-
-            let (resolved_path, file_size) = if segment_path.exists() {
-                let size = std::fs::metadata(&segment_path)
-                    .ok()
-                    .map(|m| m.len())
-                    .unwrap_or(0);
-                (segment_path.clone(), size)
-            } else if tmp_path.exists() {
-                let size = std::fs::metadata(&tmp_path)
-                    .ok()
-                    .map(|m| m.len())
-                    .unwrap_or(0);
-                (tmp_path, size)
-            } else {
-                still_pending.push((index, duration));
-                continue;
+            let metadata = match read_fragment_metadata(&segment_path) {
+                Ok(metadata) => metadata,
+                Err(error) => {
+                    if error.kind() != std::io::ErrorKind::NotFound {
+                        tracing::debug!(index, %error, "Waiting for finalized segment media");
+                    }
+                    break;
+                }
             };
 
-            if file_size == 0 {
-                still_pending.push((index, duration));
-                continue;
-            }
-
-            tracing::debug!(
-                segment_index = index,
-                file_size,
-                "Flushing previously pending segment"
-            );
-
             self.completed_segments.push(VideoSegmentInfo {
+                path: segment_path.clone(),
+                index,
+                duration: metadata.duration,
+                file_size: Some(metadata.file_size),
+            });
+            self.notify_segment(SegmentCompletedEvent {
                 path: segment_path,
                 index,
-                duration,
-                file_size: Some(file_size),
-            });
-
-            self.notify_segment(SegmentCompletedEvent {
-                path: resolved_path,
-                index,
-                duration: duration.as_secs_f64(),
-                file_size,
+                duration: metadata.duration.as_secs_f64(),
+                file_size: metadata.file_size,
                 is_init: false,
                 media_type: SegmentMediaType::Video,
             });
+            self.current_index += 1;
         }
 
-        let flushed_any = still_pending.len() < taken_len;
-        self.pending_segment_indices = still_pending;
-
-        if flushed_any {
+        if self.current_index != first_index {
             self.write_in_progress_manifest();
         }
     }
@@ -571,57 +494,34 @@ impl SegmentedVideoEncoder {
     }
 
     pub fn finish(&mut self) -> Result<(), FinishError> {
-        let segment_start = self.segment_start_time;
-        let last_timestamp = self.last_frame_timestamp;
-        let frames_before_flush = self.frames_in_segment;
-
-        if let Err(e) = self.encoder.flush(&mut self.output) {
-            tracing::warn!("Video encoder flush warning: {e}");
-        }
-
-        if let Err(e) = self.output.write_trailer() {
-            tracing::warn!("Video write_trailer warning: {e}");
-        }
+        let flush_result = self.encoder.flush(&mut self.output).inspect_err(|error| {
+            tracing::warn!(%error, "Video encoder flush failed");
+        });
+        let trailer_result = self.output.write_trailer().inspect_err(|error| {
+            tracing::warn!(%error, "Video trailer publication failed");
+        });
 
         self.try_notify_init_segment();
         self.finalize_pending_tmp_files();
         self.flush_pending_segments();
 
-        let end_timestamp =
-            last_timestamp.unwrap_or_else(|| segment_start.unwrap_or(Duration::ZERO));
-        self.collect_orphaned_segments(segment_start, end_timestamp, frames_before_flush);
+        self.collect_orphaned_segments();
 
-        self.finalize_manifest();
+        if let Err(error) = flush_result.and(trailer_result) {
+            self.write_in_progress_manifest();
+            return Err(error.into());
+        }
+        if let Err(error) = super::dash_output::verify_final_manifest(&self.base_path) {
+            self.write_in_progress_manifest();
+            return Err(error.into());
+        }
+        self.finalize_manifest()?;
 
         Ok(())
     }
 
-    pub fn finish_with_timestamp(&mut self, timestamp: Duration) -> Result<(), FinishError> {
-        let segment_start = self.segment_start_time;
-        let frames_before_flush = self.frames_in_segment;
-
-        if let Err(e) = self.encoder.flush(&mut self.output) {
-            tracing::warn!("Video encoder flush warning: {e}");
-        }
-
-        if let Err(e) = self.output.write_trailer() {
-            tracing::warn!("Video write_trailer warning: {e}");
-        }
-
-        self.try_notify_init_segment();
-        self.finalize_pending_tmp_files();
-        self.flush_pending_segments();
-
-        let effective_end_timestamp = self
-            .last_frame_timestamp
-            .map(|last| last.max(timestamp))
-            .unwrap_or(timestamp);
-
-        self.collect_orphaned_segments(segment_start, effective_end_timestamp, frames_before_flush);
-
-        self.finalize_manifest();
-
-        Ok(())
+    pub fn finish_with_timestamp(&mut self, _timestamp: Duration) -> Result<(), FinishError> {
+        self.finish()
     }
 
     fn finalize_pending_tmp_files(&self) {
@@ -634,12 +534,11 @@ impl SegmentedVideoEncoder {
             if let Some(name) = path.file_name().and_then(|n| n.to_str())
                 && name.starts_with("segment_")
                 && name.ends_with(".m4s.tmp")
-                && let Ok(metadata) = std::fs::metadata(&path)
-                && metadata.len() > 0
+                && let Ok(metadata) = read_fragment_metadata(&path)
             {
                 let final_name = name.trim_end_matches(".tmp");
                 let final_path = self.base_path.join(final_name);
-                let file_size = metadata.len();
+                let file_size = metadata.file_size;
 
                 let rename_result = Self::rename_with_retry(&path, &final_path);
 
@@ -702,12 +601,7 @@ impl SegmentedVideoEncoder {
         std::fs::rename(from, to)
     }
 
-    fn collect_orphaned_segments(
-        &mut self,
-        segment_start: Option<Duration>,
-        end_timestamp: Duration,
-        frames_before_flush: u32,
-    ) {
+    fn collect_orphaned_segments(&mut self) {
         let completed_indices: std::collections::HashSet<u32> =
             self.completed_segments.iter().map(|s| s.index).collect();
 
@@ -736,59 +630,34 @@ impl SegmentedVideoEncoder {
         orphaned.sort_by_key(|(idx, _)| *idx);
 
         for (index, segment_path) in orphaned {
-            if let Ok(metadata) = std::fs::metadata(&segment_path) {
-                let file_size = metadata.len();
-
-                if file_size < 100 {
-                    tracing::debug!(
-                        "Skipping tiny unlisted segment {} ({} bytes)",
-                        segment_path.display(),
-                        file_size
-                    );
+            let metadata = match read_fragment_metadata(&segment_path) {
+                Ok(metadata) => metadata,
+                Err(error) => {
+                    tracing::warn!(index, %error, "Cannot finalize invalid segment media");
                     continue;
                 }
-
-                sync_file(&segment_path);
-
-                let duration = if index == self.current_index && frames_before_flush > 0 {
-                    if let Some(start) = segment_start {
-                        end_timestamp.saturating_sub(start)
-                    } else {
-                        self.segment_duration
-                    }
-                } else {
-                    self.segment_duration
-                };
-
-                tracing::info!(
-                    "Finalized unlisted segment {} with {} bytes, estimated duration {:?}",
-                    segment_path.display(),
-                    file_size,
-                    duration
-                );
-
-                self.completed_segments.push(VideoSegmentInfo {
-                    path: segment_path.clone(),
-                    index,
-                    duration,
-                    file_size: Some(file_size),
-                });
-
-                self.notify_segment(SegmentCompletedEvent {
-                    path: segment_path,
-                    index,
-                    duration: duration.as_secs_f64(),
-                    file_size,
-                    is_init: false,
-                    media_type: SegmentMediaType::Video,
-                });
-            }
+            };
+            sync_file(&segment_path);
+            self.completed_segments.push(VideoSegmentInfo {
+                path: segment_path.clone(),
+                index,
+                duration: metadata.duration,
+                file_size: Some(metadata.file_size),
+            });
+            self.notify_segment(SegmentCompletedEvent {
+                path: segment_path,
+                index,
+                duration: metadata.duration.as_secs_f64(),
+                file_size: metadata.file_size,
+                is_init: false,
+                media_type: SegmentMediaType::Video,
+            });
         }
 
         self.completed_segments.sort_by_key(|s| s.index);
     }
 
-    fn finalize_manifest(&self) {
+    fn finalize_manifest(&self) -> std::io::Result<()> {
         let total_duration: Duration = self.completed_segments.iter().map(|s| s.duration).sum();
 
         let manifest = Manifest {
@@ -817,12 +686,7 @@ impl SegmentedVideoEncoder {
         };
 
         let manifest_path = self.base_path.join("manifest.json");
-        if let Err(e) = atomic_write_json(&manifest_path, &manifest) {
-            tracing::warn!(
-                "Failed to write final manifest to {}: {e}",
-                manifest_path.display()
-            );
-        }
+        atomic_write_json(&manifest_path, &manifest)
     }
 
     pub fn completed_segments(&self) -> &[VideoSegmentInfo] {
@@ -909,6 +773,119 @@ mod tests {
             }
         }
         frame
+    }
+
+    #[test]
+    fn video_manifest_and_events_match_muxer_playlist() {
+        ffmpeg::init().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let base_path = temp.path().to_path_buf();
+        let mut encoder = SegmentedVideoEncoder::init(
+            base_path.clone(),
+            test_video_info(),
+            SegmentedVideoEncoderConfig::default(),
+        )
+        .unwrap();
+        let (tx, rx) = mpsc::channel();
+        encoder.set_segment_callback(tx);
+        let mut snapshots = Vec::new();
+        for i in 0..200 {
+            encoder
+                .queue_frame(
+                    create_test_frame(320, 240),
+                    Duration::from_micros(i * 33_320),
+                )
+                .unwrap();
+            for event in rx.try_iter().filter(|event| !event.is_init) {
+                assert_eq!(event.path.extension().unwrap(), "m4s");
+                let bytes = std::fs::read(&event.path).unwrap();
+                snapshots.push((event, bytes));
+            }
+        }
+        encoder
+            .finish_with_timestamp(Duration::from_secs(9))
+            .unwrap();
+        for event in rx.try_iter().filter(|event| !event.is_init) {
+            let bytes = std::fs::read(&event.path).unwrap();
+            snapshots.push((event, bytes));
+        }
+
+        let playlist = std::fs::read_to_string(base_path.join("media_0.m3u8")).unwrap();
+        let durations: Vec<f64> = playlist
+            .lines()
+            .filter_map(|line| line.strip_prefix("#EXTINF:"))
+            .map(|line| line.trim_end_matches(',').parse().unwrap())
+            .collect();
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(base_path.join("manifest.json")).unwrap())
+                .unwrap();
+        let segments = manifest["segments"].as_array().unwrap();
+        assert!(durations.len() >= 2);
+        assert_eq!(snapshots.len(), durations.len());
+        assert_eq!(segments.len(), durations.len());
+        for ((event, bytes), (segment, duration)) in
+            snapshots.iter().zip(segments.iter().zip(&durations))
+        {
+            assert_eq!(*bytes, std::fs::read(&event.path).unwrap());
+            assert_eq!(event.file_size, bytes.len() as u64);
+            assert_eq!(event.index, segment["index"].as_u64().unwrap() as u32);
+            assert!((event.duration - duration).abs() <= 1e-6);
+            assert!((segment["duration"].as_f64().unwrap() - duration).abs() <= 1e-6);
+        }
+        assert!(
+            (manifest["total_duration"].as_f64().unwrap() - durations.iter().sum::<f64>()).abs()
+                <= 1e-5
+        );
+    }
+
+    #[test]
+    fn failed_dash_manifest_publication_retains_video_without_claiming_completion() {
+        ffmpeg::init().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let base_path = directory.path().to_path_buf();
+        let mut encoder = SegmentedVideoEncoder::init(
+            base_path.clone(),
+            test_video_info(),
+            SegmentedVideoEncoderConfig::default(),
+        )
+        .unwrap();
+        for i in 0..600 {
+            encoder
+                .queue_frame(
+                    create_test_frame(320, 240),
+                    Duration::from_secs_f64(f64::from(i) / 30.0),
+                )
+                .unwrap();
+            if !encoder.completed_segments().is_empty() {
+                break;
+            }
+        }
+        let retained_segments: Vec<_> = encoder
+            .completed_segments()
+            .iter()
+            .map(|segment| (segment.path.clone(), std::fs::read(&segment.path).unwrap()))
+            .collect();
+        assert!(
+            !retained_segments.is_empty(),
+            "Video encoder did not publish a complete segment within 600 frames"
+        );
+        let manifest_path = base_path.join("dash_manifest.mpd");
+        if manifest_path.exists() {
+            std::fs::remove_file(&manifest_path).unwrap();
+        }
+        std::fs::create_dir(&manifest_path).unwrap();
+
+        assert!(encoder.finish().is_err());
+
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(base_path.join("manifest.json")).unwrap())
+                .unwrap();
+        assert_eq!(manifest["is_complete"], false);
+        assert!(!encoder.completed_segments().is_empty());
+        assert!(encoder.init_segment_path().is_file());
+        for (path, bytes) in retained_segments {
+            assert_eq!(std::fs::read(path).unwrap(), bytes);
+        }
     }
 
     #[test]
@@ -1343,5 +1320,173 @@ mod tests {
         .unwrap();
 
         assert!(crate::remux::probe_video_can_decode(&output_path).unwrap_or(false));
+    }
+
+    #[test]
+    fn stall_recovery_burst_with_same_microsecond_timestamps_survives() {
+        // Replays the 0.5.8 field-failure timeline shape end to end: normal
+        // cadence with nanosecond-fraction timestamps, a multi-second system
+        // stall, then a recovery burst of backlogged frames landing hundreds
+        // of nanoseconds apart (same microsecond, same 90kHz tick), plus an
+        // exact duplicate and a backwards blip. The instant-mode encoder must
+        // accept every frame, keep encoded PTS strictly monotonic, and the
+        // production remux + decode of the segments must succeed.
+        ffmpeg::init().ok();
+
+        let temp = tempfile::tempdir().unwrap();
+        let base_path = temp.path().to_path_buf();
+
+        let mut encoder = SegmentedVideoEncoder::init(
+            base_path.clone(),
+            test_video_info(),
+            SegmentedVideoEncoderConfig {
+                segment_duration: Duration::from_millis(500),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let frame_ns = 33_333_333u64;
+        let mut timestamps: Vec<Duration> = Vec::new();
+        for i in 0..60u64 {
+            timestamps.push(Duration::from_nanos(i * frame_ns + 400));
+        }
+        let stall_end = 60 * frame_ns + 2_000_000_000;
+        for i in 0..12u64 {
+            timestamps.push(Duration::from_nanos(stall_end + i * 300));
+        }
+        timestamps.push(Duration::from_nanos(stall_end + 11 * 300));
+        timestamps.push(Duration::from_nanos(stall_end.saturating_sub(5_000_000)));
+        for i in 1..=60u64 {
+            timestamps.push(Duration::from_nanos(stall_end + i * frame_ns));
+        }
+
+        for (i, &ts) in timestamps.iter().enumerate() {
+            let frame = create_test_frame(320, 240);
+            encoder
+                .queue_frame(frame, ts)
+                .unwrap_or_else(|e| panic!("frame {i} at {ts:?} rejected: {e}"));
+        }
+
+        encoder.finish().unwrap();
+
+        let mut segment_paths: Vec<PathBuf> = std::fs::read_dir(&base_path)
+            .unwrap()
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.extension().is_some_and(|ext| ext == "m4s"))
+            .collect();
+        segment_paths.sort();
+        assert!(
+            segment_paths.len() >= 3,
+            "expected multiple media segments, got {segment_paths:?}"
+        );
+
+        let concat_path = base_path.join("concat_test.mp4");
+        let mut concatenated = std::fs::read(base_path.join(INIT_SEGMENT_NAME)).unwrap();
+        for segment in &segment_paths {
+            concatenated.extend(std::fs::read(segment).unwrap());
+        }
+        std::fs::write(&concat_path, concatenated).unwrap();
+
+        let mut input = format::input(&concat_path).unwrap();
+        let stream_index = input
+            .streams()
+            .best(ffmpeg::media::Type::Video)
+            .unwrap()
+            .index();
+
+        let mut pts_ticks: Vec<i64> = input
+            .packets()
+            .filter_map(|(stream, packet)| {
+                (stream.index() == stream_index)
+                    .then_some(packet.pts())
+                    .flatten()
+            })
+            .collect();
+        pts_ticks.sort_unstable();
+
+        assert_eq!(
+            pts_ticks.len(),
+            timestamps.len(),
+            "every queued frame must be encoded (ties bumped, never dropped)"
+        );
+        for pair in pts_ticks.windows(2) {
+            assert!(
+                pair[1] > pair[0],
+                "encoded pts must be strictly monotonic, found {} then {} (duplicate PTS is the \
+                 -16364 failure class)",
+                pair[0],
+                pair[1]
+            );
+        }
+
+        let remuxed_path = temp.path().join("stall-burst-output.mp4");
+        crate::remux::concatenate_m4s_segments_with_init(
+            &base_path.join(INIT_SEGMENT_NAME),
+            &segment_paths,
+            &remuxed_path,
+        )
+        .unwrap();
+        assert!(crate::remux::probe_video_can_decode(&remuxed_path).unwrap_or(false));
+    }
+
+    #[test]
+    fn default_config_cuts_segments_from_encoder_keyframe_cadence() {
+        // Production always runs segment_duration == the encoder GOP
+        // (DEFAULT_KEYFRAME_INTERVAL_SECS), so segment cuts depend on the
+        // encoder emitting keyframes at its configured cadence — no caller
+        // forces I-frames. Pin that contract: if the GOP options regress
+        // (g/keyint_min or the default interval), segments stop cutting and
+        // this fails. Test helpers that force I-frames at shorter cadences
+        // cannot catch that.
+        ffmpeg::init().ok();
+
+        let temp = tempfile::tempdir().unwrap();
+        let base_path = temp.path().to_path_buf();
+
+        let mut encoder = SegmentedVideoEncoder::init(
+            base_path.clone(),
+            test_video_info(),
+            SegmentedVideoEncoderConfig::default(),
+        )
+        .unwrap();
+
+        // 6.6s at 30fps with untouched frame kinds.
+        for i in 0..200u64 {
+            let frame = create_test_frame(320, 240);
+            encoder
+                .queue_frame(frame, Duration::from_nanos(i * 33_333_333))
+                .unwrap();
+        }
+        encoder.finish().unwrap();
+
+        let mut segment_paths: Vec<PathBuf> = std::fs::read_dir(&base_path)
+            .unwrap()
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.extension().is_some_and(|ext| ext == "m4s"))
+            .collect();
+        segment_paths.sort();
+        assert!(
+            (2..=5).contains(&segment_paths.len()),
+            "6.6s at the default 2s segment/GOP cadence must cut ~3 media segments \
+             from the encoder's own keyframes, got {}: {segment_paths:?}",
+            segment_paths.len()
+        );
+
+        let remuxed_path = temp.path().join("default-cadence-output.mp4");
+        crate::remux::concatenate_m4s_segments_with_init(
+            &base_path.join(INIT_SEGMENT_NAME),
+            &segment_paths,
+            &remuxed_path,
+        )
+        .unwrap();
+        let duration = crate::remux::get_media_duration(&remuxed_path)
+            .expect("assembled duration readable")
+            .as_secs_f64();
+        assert!(
+            (6.0..=7.2).contains(&duration),
+            "assembled output must carry the full 6.6s of content, got {duration:.2}s"
+        );
+        assert!(crate::remux::probe_video_can_decode(&remuxed_path).unwrap_or(false));
     }
 }

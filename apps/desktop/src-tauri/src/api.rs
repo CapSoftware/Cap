@@ -21,6 +21,7 @@ pub struct MultipartUploadInitiateResponse {
 pub async fn upload_multipart_initiate(
     app: &AppHandle,
     video_id: &str,
+    replace_existing: bool,
 ) -> Result<MultipartUploadInitiateResponse, AuthedApiError> {
     let resp = app
         .authed_api_request("/api/upload/multipart/initiate", |c, url| {
@@ -28,7 +29,8 @@ pub async fn upload_multipart_initiate(
                 .header("Content-Type", "application/json")
                 .json(&serde_json::json!({
                     "videoId": video_id,
-                    "contentType": "video/mp4"
+                    "contentType": "video/mp4",
+                    "replaceExisting": replace_existing
                 }))
         })
         .await
@@ -90,8 +92,8 @@ pub async fn upload_multipart_presign_part(
         return Err(format!("api/upload_multipart_presign_part/{status}: {error_body}").into());
     }
 
-    resp.json::<Response>()
-        .await
+    crate::upload::lifecycle::cancellable(resp.json::<Response>())
+        .await?
         .map_err(|err| format!("api/upload_multipart_presign_part/response: {err}").into())
         .map(|data| data.presigned_url)
 }
@@ -104,6 +106,8 @@ pub struct UploadedPart {
     pub size: usize,
     #[serde(skip)]
     pub total_size: u64,
+    #[serde(skip)]
+    pub object_identity: Option<String>,
 }
 
 #[derive(Serialize, Debug, Clone)]
@@ -117,6 +121,24 @@ pub struct S3VideoMeta {
     pub fps: Option<f32>,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum MultipartCompletion {
+    Completed(Option<String>),
+    ReplacementRestartRequired,
+}
+
+fn replacement_restart_required(status: u16, body: &str, replace_existing: bool) -> bool {
+    #[derive(Deserialize)]
+    struct ErrorBody {
+        code: String,
+    }
+
+    replace_existing
+        && status == 409
+        && serde_json::from_str::<ErrorBody>(body)
+            .is_ok_and(|body| body.code == "REPLACEMENT_RESTART_REQUIRED")
+}
+
 #[instrument(skip_all)]
 pub async fn upload_multipart_complete(
     app: &AppHandle,
@@ -124,7 +146,27 @@ pub async fn upload_multipart_complete(
     upload_id: &str,
     parts: &[UploadedPart],
     meta: Option<S3VideoMeta>,
+    replace_existing: bool,
 ) -> Result<Option<String>, AuthedApiError> {
+    match upload_multipart_complete_outcome(app, video_id, upload_id, parts, meta, replace_existing)
+        .await?
+    {
+        MultipartCompletion::Completed(identity) => Ok(identity),
+        MultipartCompletion::ReplacementRestartRequired => {
+            Err("Replacement upload must be restarted; local files retained".into())
+        }
+    }
+}
+
+#[instrument(skip_all)]
+pub(crate) async fn upload_multipart_complete_outcome(
+    app: &AppHandle,
+    video_id: &str,
+    upload_id: &str,
+    parts: &[UploadedPart],
+    meta: Option<S3VideoMeta>,
+    replace_existing: bool,
+) -> Result<MultipartCompletion, AuthedApiError> {
     #[derive(Serialize)]
     #[serde(rename_all = "camelCase")]
     pub struct MultipartCompleteRequest<'a> {
@@ -133,11 +175,13 @@ pub async fn upload_multipart_complete(
         parts: &'a [UploadedPart],
         #[serde(flatten)]
         meta: Option<S3VideoMeta>,
+        replace_existing: bool,
     }
 
     #[derive(Deserialize)]
     pub struct Response {
-        location: Option<String>,
+        #[serde(rename = "objectIdentity")]
+        object_identity: Option<String>,
     }
 
     trace!("Completing multipart upload");
@@ -151,6 +195,7 @@ pub async fn upload_multipart_complete(
                     upload_id,
                     parts,
                     meta,
+                    replace_existing,
                 })
         })
         .await
@@ -158,17 +203,19 @@ pub async fn upload_multipart_complete(
 
     if !resp.status().is_success() {
         let status = resp.status().as_u16();
-        let error_body = resp
-            .text()
-            .await
+        let error_body = crate::upload::lifecycle::cancellable(resp.text())
+            .await?
             .unwrap_or_else(|_| "<no response body>".to_string());
+        if replacement_restart_required(status, &error_body, replace_existing) {
+            return Ok(MultipartCompletion::ReplacementRestartRequired);
+        }
         return Err(format!("api/upload_multipart_complete/{status}: {error_body}").into());
     }
 
-    resp.json::<Response>()
-        .await
+    crate::upload::lifecycle::cancellable(resp.json::<Response>())
+        .await?
         .map_err(|err| format!("api/upload_multipart_complete/response: {err}").into())
-        .map(|data| data.location)
+        .map(|data| MultipartCompletion::Completed(data.object_identity))
 }
 
 #[derive(Debug, Serialize)]
@@ -224,8 +271,8 @@ pub async fn upload_signed(
         return Err(format!("api/upload_signed/{status}: {error_body}").into());
     }
 
-    resp.json::<Response>()
-        .await
+    crate::upload::lifecycle::cancellable(resp.json::<Response>())
+        .await?
         .map_err(|err| format!("api/upload_signed/response: {err}").into())
         .map(|data| data.presigned_put_data)
 }
@@ -260,8 +307,8 @@ pub async fn upload_signed_batch(
         return Err(format!("api/upload_signed_batch/{status}: {error_body}").into());
     }
 
-    resp.json::<Response>()
-        .await
+    crate::upload::lifecycle::cancellable(resp.json::<Response>())
+        .await?
         .map_err(|err| format!("api/upload_signed_batch/response: {err}").into())
         .map(|data| data.urls)
 }
@@ -326,32 +373,75 @@ pub struct Organization {
     pub brand_colors: OrganizationBrandColors,
 }
 
-pub async fn signal_recording_complete(
+pub(crate) async fn prepare_recording_segments(
     app: &AppHandle,
     video_id: &str,
-) -> Result<(), AuthedApiError> {
-    let resp = app
+    segments: &[crate::upload::preparation::Segment],
+) -> Result<Option<Vec<crate::upload::preparation::Segment>>, AuthedApiError> {
+    #[derive(Deserialize)]
+    struct Response {
+        version: u32,
+        prepared: Vec<crate::upload::preparation::Segment>,
+    }
+
+    let response = app
+        .authed_api_request("/api/recording/prepare", |client, url| {
+            client
+                .post(url)
+                .timeout(std::time::Duration::from_secs(20))
+                .json(&serde_json::json!({ "videoId": video_id, "segments": segments }))
+        })
+        .await?;
+    if matches!(response.status().as_u16(), 404 | 405) {
+        return Ok(None);
+    }
+    if !response.status().is_success() {
+        return Err(format!(
+            "Optional recording preparation unavailable ({})",
+            response.status()
+        )
+        .into());
+    }
+    let response: Response = crate::upload::lifecycle::cancellable(response.json()).await??;
+    if response.version != 1 || response.prepared.len() > 32 {
+        return Ok(None);
+    }
+    Ok(Some(response.prepared))
+}
+
+pub async fn verify_recording_complete(
+    app: &AppHandle,
+    video_id: &str,
+    verification: &cap_recording::upload_verification::UploadVerification,
+) -> Result<Option<cap_recording::upload_verification::VerifiedUploadReceipt>, AuthedApiError> {
+    let response = app
         .authed_api_request("/api/upload/recording-complete", |client, url| {
             client
                 .post(url)
-                .header("Content-Type", "application/json")
+                .timeout(std::time::Duration::from_secs(45))
                 .json(&serde_json::json!({
                     "videoId": video_id,
+                    "verification": verification,
                 }))
         })
-        .await
-        .map_err(|err| format!("api/signal_recording_complete/request: {err}"))?;
-
-    if !resp.status().is_success() {
-        let status = resp.status().as_u16();
-        let error_body = resp
-            .text()
-            .await
-            .unwrap_or_else(|_| "<no response body>".to_string());
-        return Err(format!("api/signal_recording_complete/{status}: {error_body}").into());
+        .await?;
+    let status = response.status();
+    let response: serde_json::Value =
+        crate::upload::lifecycle::cancellable(response.json()).await??;
+    if status == reqwest::StatusCode::CONFLICT
+        && response.get("status").and_then(serde_json::Value::as_str) == Some("reupload-required")
+    {
+        return Err(AuthedApiError::ReuploadRequired);
     }
-
-    Ok(())
+    if !status.is_success() {
+        return Err(format!(
+            "Recording verification is unavailable ({status}); local recording retained"
+        )
+        .into());
+    }
+    verification
+        .verified_receipt(video_id, &response)
+        .map_err(AuthedApiError::from)
 }
 
 pub async fn fetch_organizations(app: &AppHandle) -> Result<Vec<Organization>, AuthedApiError> {
@@ -372,4 +462,31 @@ pub async fn fetch_organizations(app: &AppHandle) -> Result<Vec<Organization>, A
     resp.json()
         .await
         .map_err(|err| format!("api/fetch_organizations/response: {err}").into())
+}
+
+#[cfg(test)]
+mod replacement_completion_tests {
+    use super::*;
+
+    #[test]
+    fn restart_requires_replacement_conflict_and_exact_structured_code() {
+        let restart = r#"{"code":"REPLACEMENT_RESTART_REQUIRED","error":"Restart upload"}"#;
+        assert!(replacement_restart_required(409, restart, true));
+        assert!(!replacement_restart_required(409, restart, false));
+        for status in [200, 400, 401, 403, 404, 500, 503] {
+            assert!(!replacement_restart_required(status, restart, true));
+        }
+        for body in [
+            "REPLACEMENT_RESTART_REQUIRED",
+            r#"{"error":"REPLACEMENT_RESTART_REQUIRED"}"#,
+            r#"{"code":"OTHER_CONFLICT"}"#,
+            r#"{"code":"replacement_restart_required"}"#,
+            r#"{"code":null}"#,
+            r#"{"code":1}"#,
+            "{}",
+            "invalid JSON",
+        ] {
+            assert!(!replacement_restart_required(409, body, true));
+        }
+    }
 }
