@@ -25,6 +25,11 @@ type SharedInput = {
 /// long one at the same size: playback reads forward through the file and
 /// would otherwise fill a bigger cache with bytes already shown.
 const CACHE_BYTES = 16 * 1024 * 1024;
+/// How far past its latest read an input may fetch. mediabunny doubles its
+/// read-ahead up to 8 MB at a time, so a paused seek could fetch more than the
+/// cache holds and evict the start of what it fetched: the fragments the next
+/// seek along the timeline walks, one round trip each.
+const READ_AHEAD_BYTES = CACHE_BYTES / 4;
 /// The probe and the preview open the same file a moment apart; the input
 /// outlives its last user briefly so the second one reuses what the first
 /// read.
@@ -40,6 +45,30 @@ export function layoutRetryDelay(attempts: number, error: unknown) {
 	if (error instanceof MediaStorageError || attempts > 3) return null;
 	if (error instanceof DOMException && error.name === "AbortError") return null;
 	return 0.5 * attempts;
+}
+
+type PrefetchProfile = (
+	start: number,
+	end: number,
+	workers: unknown,
+) => { start: number; end: number };
+
+/// Caps the read-ahead of a mediabunny UrlSource at `READ_AHEAD_BYTES` past
+/// each read. The profile is internal to mediabunny; a source without one is
+/// left as it is.
+export function limitReadAhead(source: object) {
+	const options = (
+		source as { _orchestrator?: { options?: { prefetchProfile?: unknown } } }
+	)._orchestrator?.options;
+	const profile = options?.prefetchProfile;
+	if (!options || typeof profile !== "function") return;
+	options.prefetchProfile = ((start, end, workers) => {
+		const range = (profile as PrefetchProfile)(start, end, workers);
+		return {
+			start: range.start,
+			end: Math.max(end, Math.min(range.end, end + READ_AHEAD_BYTES)),
+		};
+	}) satisfies PrefetchProfile;
 }
 
 async function readsInRanges(media: RemoteMedia) {
@@ -59,14 +88,13 @@ function openInput(url: string, media: RemoteMedia | null, from: number) {
 				});
 			}
 			const layout = await media.layout(from > 0 ? from : null);
-			return new Input({
-				formats: ALL_FORMATS,
-				source: new UrlSource(url, {
-					maxCacheSize: CACHE_BYTES,
-					fetchFn: layoutFetch(media, layout) as typeof fetch,
-					getRetryDelay: layoutRetryDelay,
-				}),
+			const source = new UrlSource(url, {
+				maxCacheSize: CACHE_BYTES,
+				fetchFn: layoutFetch(media, layout) as typeof fetch,
+				getRetryDelay: layoutRetryDelay,
 			});
+			limitReadAhead(source);
+			return new Input({ formats: ALL_FORMATS, source });
 		},
 	);
 }

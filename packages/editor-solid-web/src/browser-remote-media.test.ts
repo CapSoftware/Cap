@@ -10,7 +10,7 @@ import {
 	Output,
 	UrlSource,
 } from "mediabunny";
-import { layoutRetryDelay } from "./browser-media-inputs";
+import { layoutRetryDelay, limitReadAhead } from "./browser-media-inputs";
 import {
 	firstTailBytes,
 	layoutFetch,
@@ -245,6 +245,35 @@ describe("RemoteMedia", () => {
 				new Uint8Array(await trailer.arrayBuffer()).subarray(4, 8),
 			),
 		).toBe("mfra");
+	});
+});
+
+describe("limitReadAhead", () => {
+	test("keeps mediabunny's read-ahead within a few megabytes of the read", () => {
+		type Profile = (
+			start: number,
+			end: number,
+			workers: { startPos: number; targetPos: number }[],
+		) => { start: number; end: number };
+		const profileOf = (source: UrlSource) =>
+			(
+				source as unknown as {
+					_orchestrator: { options: { prefetchProfile: Profile } };
+				}
+			)._orchestrator.options.prefetchProfile;
+		const MB = 1024 * 1024;
+		// A read in the last 8 MB of a long sequential run, where mediabunny
+		// extends the run by up to 8 MB.
+		const worker = { startPos: 0, targetPos: 24 * MB };
+		const read = [17 * MB, 17 * MB + 16] as const;
+		const plain = new UrlSource(URL_);
+		expect(profileOf(plain)(read[0], read[1], [worker]).end).toBe(32 * MB);
+		const limited = new UrlSource(URL_);
+		limitReadAhead(limited);
+		const range = profileOf(limited)(read[0], read[1], [worker]);
+		expect(range.start).toBeLessThanOrEqual(read[0]);
+		expect(range.end).toBe(read[1] + 4 * MB);
+		expect(profileOf(limited)(0, 16, []).end).toBe(512 * 1024);
 	});
 });
 
