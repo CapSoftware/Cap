@@ -5,8 +5,10 @@ import type { VideoMetadata } from "@cap/database/types";
 import type { Video } from "@cap/web-domain";
 import { and, eq, sql } from "drizzle-orm";
 import {
+	CURSOR_RECONSTRUCTION_START_TIMEOUT_MS,
 	CURSOR_RECONSTRUCTION_TIMEOUT_MS,
 	type CursorReconstruction,
+	cursorReconstructionAbandoned,
 	cursorReconstructionPrefix,
 	cursorReconstructionReference,
 } from "@/lib/cursor-reconstruction";
@@ -31,8 +33,16 @@ const runMatches = (runId: string) =>
 const jobMatches = (jobId: string) =>
 	sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.cursorReconstruction.jobId')) = ${jobId}`;
 const processing = sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.cursorReconstruction.status')) = 'processing'`;
-const abandonedBefore = (cutoff: string) =>
-	sql`(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.cursorReconstruction.status')), '') <> 'processing' OR JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.cursorReconstruction.startedAt')) < ${cutoff})`;
+const replaceable = (now: number) => {
+	const startedAt = sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.cursorReconstruction.startedAt'))`;
+	const started = new Date(
+		now - CURSOR_RECONSTRUCTION_START_TIMEOUT_MS,
+	).toISOString();
+	const expired = new Date(
+		now - CURSOR_RECONSTRUCTION_TIMEOUT_MS,
+	).toISOString();
+	return sql`(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.cursorReconstruction.status')), '') <> 'processing' OR ${startedAt} < ${expired} OR (JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.cursorReconstruction.jobId')) = '' AND ${startedAt} < ${started}))`;
+};
 
 export type CursorJobSummary = {
 	id: string;
@@ -91,8 +101,9 @@ export async function startCursorReconstruction(
 	config: RenderFarmConfig,
 	origin: string,
 ) {
-	const sourceKey = video.metadata?.editorSources?.display.key;
-	if (!sourceKey) throw new Error("The recording has no display source");
+	const source = video.metadata?.editorSources?.display;
+	if (!source) throw new Error("The recording has no display source");
+	const sourceKey = source.key;
 	const runId = randomBytes(8).toString("hex");
 	const run: CursorReconstruction = {
 		version: 1,
@@ -101,6 +112,8 @@ export async function startCursorReconstruction(
 		status: "processing",
 		enabled: true,
 		sourceKey,
+		sourceSize: source.size,
+		sourceIdentity: source.objectIdentity ?? null,
 		startedAt: new Date().toISOString(),
 		progress: 0,
 	};
@@ -109,14 +122,7 @@ export async function startCursorReconstruction(
 		.set({
 			metadata: sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.cursorReconstruction', CAST(${JSON.stringify(run)} AS JSON))`,
 		})
-		.where(
-			and(
-				eq(videos.id, video.id),
-				abandonedBefore(
-					new Date(Date.now() - CURSOR_RECONSTRUCTION_TIMEOUT_MS).toISOString(),
-				),
-			),
-		);
+		.where(and(eq(videos.id, video.id), replaceable(Date.now())));
 	if (affectedRows(recorded) !== 1) return null;
 	try {
 		const response = await renderFarmFetch(config, "/cursor-jobs", {
@@ -203,23 +209,27 @@ export async function refreshCursorReconstruction(
 ) {
 	const run = video.metadata?.cursorReconstruction;
 	if (run?.status !== "processing") return;
-	if (
-		Date.now() - Date.parse(run.startedAt) >
-		CURSOR_RECONSTRUCTION_TIMEOUT_MS
-	) {
-		await db()
+	const abandon = () =>
+		db()
 			.update(videos)
 			.set({
 				metadata: sql`JSON_SET(${videos.metadata}, '$.cursorReconstruction.status', 'error', '$.cursorReconstruction.error', 'Processing timed out')`,
 			})
 			.where(and(eq(videos.id, video.id), runMatches(run.runId), processing));
+	// The farm's own status decides a run it accepted; waiting behind other
+	// work is not a failure. Age only settles runs the farm can't speak for.
+	if (!run.jobId) {
+		if (cursorReconstructionAbandoned(run)) await abandon();
 		return;
 	}
-	if (!run.jobId) return;
 	const response = await renderFarmFetch(
 		config,
 		`/cursor-jobs/${encodeURIComponent(run.jobId)}`,
-	);
+	).catch(() => null);
+	if (!response) {
+		if (cursorReconstructionAbandoned(run)) await abandon();
+		return;
+	}
 	if (response.status === 404) {
 		await settleCursorReconstruction(video.id, {
 			id: run.jobId,
@@ -232,10 +242,12 @@ export async function refreshCursorReconstruction(
 		return;
 	}
 	const summary = parseCursorJobSummary(
-		response.ok ? await response.json() : null,
+		response.ok ? await response.json().catch(() => null) : null,
 	);
 	if (summary && summary.id === run.jobId) {
 		await settleCursorReconstruction(video.id, summary);
+	} else if (cursorReconstructionAbandoned(run)) {
+		await abandon();
 	}
 }
 

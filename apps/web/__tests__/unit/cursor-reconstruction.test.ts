@@ -1,6 +1,9 @@
 import type { VideoMetadata } from "@cap/database/types";
 import { describe, expect, it } from "vitest";
 import {
+	CURSOR_RECONSTRUCTION_START_TIMEOUT_MS,
+	CURSOR_RECONSTRUCTION_TIMEOUT_MS,
+	cursorReconstructionAbandoned,
 	cursorReconstructionBlocker,
 	cursorReconstructionPrefix,
 	cursorReconstructionView,
@@ -42,6 +45,8 @@ function metadata(
 						status: "ready",
 						enabled: true,
 						sourceKey: displayKey,
+						sourceSize: 1000,
+						sourceIdentity: "etag",
 						startedAt: "2026-09-30T00:00:00.000Z",
 						display: { key: `${prefix}display.mp4`, size: 500 },
 						inputEvents: { key: `${prefix}input-events.ndjson`, size: 20 },
@@ -76,6 +81,8 @@ describe("effectiveEditorSources", () => {
 			metadata({ status: "processing" }),
 			metadata({ status: "error" }),
 			metadata({ sourceKey: `${owner}/${video}/older.webm` }),
+			metadata({ sourceIdentity: "an-earlier-upload" }),
+			metadata({ sourceSize: 999 }),
 			metadata({ runId: "../other" }),
 			metadata({ display: { key: `${owner}/other/display.mp4`, size: 500 } }),
 			metadata({
@@ -210,5 +217,40 @@ describe("parseCursorJobSummary", () => {
 		).not.toHaveProperty("bytes");
 		expect(parseCursorJobSummary({ id: "abc", status: "done" })).toBeNull();
 		expect(parseCursorJobSummary(null)).toBeNull();
+	});
+});
+
+describe("cursorReconstructionAbandoned", () => {
+	const startedAt = "2026-09-30T00:00:00.000Z";
+	const at = (ms: number) => Date.parse(startedAt) + ms;
+
+	it("gives a run the farm never accepted a short start window", () => {
+		const run = { jobId: "", startedAt };
+		expect(cursorReconstructionAbandoned(run, at(60_000))).toBe(false);
+		expect(
+			cursorReconstructionAbandoned(
+				run,
+				at(CURSOR_RECONSTRUCTION_START_TIMEOUT_MS + 1),
+			),
+		).toBe(true);
+	});
+
+	it("lets an accepted run wait behind farm work until the hard limit", () => {
+		const run = { jobId: "job", startedAt };
+		expect(
+			cursorReconstructionAbandoned(
+				run,
+				at(CURSOR_RECONSTRUCTION_START_TIMEOUT_MS + 1),
+			),
+		).toBe(false);
+		expect(
+			cursorReconstructionAbandoned(
+				run,
+				at(CURSOR_RECONSTRUCTION_TIMEOUT_MS + 1),
+			),
+		).toBe(true);
+		expect(
+			cursorReconstructionAbandoned({ jobId: "job", startedAt: "invalid" }),
+		).toBe(true);
 	});
 });

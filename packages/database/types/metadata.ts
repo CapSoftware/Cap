@@ -151,6 +151,8 @@ export interface VideoMetadata {
 		enabled: boolean;
 		/** The display source the job reads; a new recording invalidates it. */
 		sourceKey: string;
+		sourceSize?: number;
+		sourceIdentity?: string | null;
 		startedAt: string;
 		progress?: number;
 		completedAt?: string;

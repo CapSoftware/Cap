@@ -13,7 +13,7 @@ import {
 import { eq } from "drizzle-orm";
 import { Effect, Layer, Schema } from "effect";
 import {
-	CURSOR_RECONSTRUCTION_TIMEOUT_MS,
+	cursorReconstructionAbandoned,
 	cursorReconstructionView,
 } from "@/lib/cursor-reconstruction";
 import {
@@ -138,8 +138,7 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 							view.status === "ready" ||
 							(view.status === "processing" &&
 								run &&
-								Date.now() - Date.parse(run.startedAt) <
-									CURSOR_RECONSTRUCTION_TIMEOUT_MS)
+								!cursorReconstructionAbandoned(run))
 						) {
 							return view;
 						}

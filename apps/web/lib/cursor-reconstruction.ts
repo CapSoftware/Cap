@@ -8,8 +8,36 @@ type EditorSources = NonNullable<VideoMetadata["editorSources"]>;
 /** Experimental: the render farm job is slow enough to keep recordings short. */
 export const CURSOR_RECONSTRUCTION_MAX_SECONDS = 5 * 60;
 export const CURSOR_RECONSTRUCTION_FPS = 30;
-/** A run still processing after this is abandoned and can be started again. */
-export const CURSOR_RECONSTRUCTION_TIMEOUT_MS = 30 * 60_000;
+/** A run the farm never accepted within this is abandoned. */
+export const CURSOR_RECONSTRUCTION_START_TIMEOUT_MS = 10 * 60_000;
+/** A run still processing after this is abandoned even if the farm is unreachable. */
+export const CURSOR_RECONSTRUCTION_TIMEOUT_MS = 3 * 60 * 60_000;
+
+/** Whether a processing run can be replaced by a new one. */
+export function cursorReconstructionAbandoned(
+	run: Pick<CursorReconstruction, "jobId" | "startedAt">,
+	now = Date.now(),
+) {
+	const age = now - Date.parse(run.startedAt);
+	return (
+		!(age >= 0) ||
+		age > CURSOR_RECONSTRUCTION_TIMEOUT_MS ||
+		(!run.jobId && age > CURSOR_RECONSTRUCTION_START_TIMEOUT_MS)
+	);
+}
+
+/** Whether the run was made from exactly this display, not only its key. */
+function madeFrom(
+	run: CursorReconstruction,
+	display: EditorSources["display"] | undefined,
+) {
+	return (
+		!!display &&
+		run.sourceKey === display.key &&
+		(run.sourceSize ?? null) === (display.size ?? null) &&
+		(run.sourceIdentity ?? null) === (display.objectIdentity ?? null)
+	);
+}
 const MAX_OUTPUT_BYTES = 4 * 1024 * 1024 * 1024;
 const MAX_INPUT_EVENTS_BYTES = 64 * 1024 * 1024;
 const RUN_ID = /^[a-z0-9]{8,32}$/;
@@ -100,7 +128,7 @@ export function effectiveEditorSources(
 		reconstruction.version !== 1 ||
 		!reconstruction.enabled ||
 		reconstruction.status !== "ready" ||
-		reconstruction.sourceKey !== sources.display.key ||
+		!madeFrom(reconstruction, sources.display) ||
 		!outputsValid(reconstruction, ownerId, videoId)
 	) {
 		return sources;
@@ -148,7 +176,7 @@ export function cursorReconstructionView(video: {
 	const reconstruction = video.metadata?.cursorReconstruction;
 	const current =
 		reconstruction &&
-		reconstruction.sourceKey === video.metadata?.editorSources?.display.key
+		madeFrom(reconstruction, video.metadata?.editorSources?.display)
 			? reconstruction
 			: null;
 	return {
