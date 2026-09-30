@@ -63,4 +63,39 @@ describe("uploadFile", () => {
 			"DELETE ?uploadId=u1",
 		]);
 	});
+
+	test("cleanup after a cancelled upload runs with its own deadline", async () => {
+		const controller = new AbortController();
+		let cleanup: AbortSignal | undefined;
+		globalThis.fetch = (async (input: string | URL, init?: RequestInit) => {
+			const url = new URL(String(input));
+			if (url.searchParams.has("uploads")) {
+				return new Response("<UploadId>u1</UploadId>");
+			}
+			if (init?.method === "DELETE") {
+				cleanup = init.signal ?? undefined;
+				return new Response("", { status: 204 });
+			}
+			controller.abort(new Error("cancelled"));
+			init?.signal?.throwIfAborted();
+			return new Response("", { status: 204 });
+		}) as typeof fetch;
+		const path = join(tmpdir(), `s3-cleanup-${Date.now()}.bin`);
+		await Bun.write(path, new Uint8Array(16));
+		const s3 = new S3({
+			endpoint: "https://s3.test",
+			region: "us-east-1",
+			bucket: "bucket",
+			accessKeyId: "a",
+			secretAccessKey: "b",
+			virtualHost: false,
+		});
+		const upload = s3.uploadFile("out/file.mp4", path, "video/mp4", {
+			signal: controller.signal,
+		});
+		await expect(upload).rejects.toThrow("cancelled");
+		expect(cleanup).toBeInstanceOf(AbortSignal);
+		expect(cleanup?.aborted).toBe(false);
+		expect(cleanup).not.toBe(controller.signal);
+	});
 });

@@ -71,6 +71,10 @@ function hmac(key: Buffer | string, value: string) {
 	return createHmac("sha256", key).update(value).digest();
 }
 
+// Aborting a multipart upload is cleanup; an unresponsive store must not hold
+// the caller, and the bucket's lifecycle rule removes whatever is left.
+const cleanupSignal = () => AbortSignal.timeout(30_000);
+
 export class S3 {
 	private expiresAt = 0;
 	private fetchedAt = 0;
@@ -563,20 +567,21 @@ export class S3 {
 			if (await this.completeMultipart(key, uploadId, parts, options)) {
 				return file.size;
 			}
-			await this.abortMultipart(key, uploadId).catch(() => {});
+			await this.abortMultipart(key, uploadId, cleanupSignal()).catch(() => {});
 			const existing = await this.head(key);
 			if (!existing) throw new Error(`${key} was being written concurrently`);
 			return existing.size;
 		} catch (error) {
-			await this.abortMultipart(key, uploadId).catch(() => {});
+			await this.abortMultipart(key, uploadId, cleanupSignal()).catch(() => {});
 			throw error;
 		}
 	}
 
-	async abortMultipart(key: string, uploadId: string) {
+	async abortMultipart(key: string, uploadId: string, signal?: AbortSignal) {
 		await this.send("DELETE", key, {
 			query: { uploadId },
 			expect: [204, 200, 404],
+			signal,
 		});
 	}
 
