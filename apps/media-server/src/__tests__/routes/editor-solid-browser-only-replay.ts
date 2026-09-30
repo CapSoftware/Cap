@@ -801,10 +801,21 @@ try {
 		visibleDifferentPixels < browserInfo.width * browserInfo.height * 0.05,
 	);
 	await editor.getByRole("button", { name: "Play video" }).click();
-	await editor.getByRole("button", { name: "Pause video" }).waitFor({
-		state: "visible",
-		timeout: 10_000,
-	});
+	await editor
+		.getByRole("button", { name: "Pause video" })
+		.waitFor({ state: "visible", timeout: 10_000 })
+		.catch(async (error: unknown) => {
+			await reportStageFailure(
+				"first-playback",
+				page,
+				editor,
+				error,
+				pageErrors,
+				pageWarnings,
+				failedResponses,
+			);
+			throw error;
+		});
 	await editor
 		.getByText(/^0:(?:00\.(?:0[1-9]|[1-9]\d)|01\.\d\d)$/)
 		.first()
@@ -1081,10 +1092,21 @@ try {
 	assert.ok(visibleRemountedPixels > remountedPixels.length / 12);
 	await editor.getByRole("button", { name: "Full preview quality" }).click();
 	await editor.getByRole("button", { name: "Play video" }).click();
-	await editor.getByRole("button", { name: "Pause video" }).waitFor({
-		state: "visible",
-		timeout: 10_000,
-	});
+	await editor
+		.getByRole("button", { name: "Pause video" })
+		.waitFor({ state: "visible", timeout: 10_000 })
+		.catch(async (error: unknown) => {
+			await reportStageFailure(
+				"full-quality-playback",
+				page,
+				editor,
+				error,
+				pageErrors,
+				pageWarnings,
+				failedResponses,
+			);
+			throw error;
+		});
 	const playbackOpacities = await editor
 		.locator("#canvas")
 		.evaluate(async (canvas) => {
