@@ -17,28 +17,31 @@ export type CursorReplacementView = {
 };
 
 const POLL_MS = 3000;
+// A reload that lands on the same sources again must not repeat forever.
+const RELOAD_GUARD_MS = 30_000;
 
-function endpoint() {
-	const videoId = new URLSearchParams(window.location.search).get("videoId");
-	return videoId && /^[A-Za-z0-9_-]{1,255}$/.test(videoId)
-		? `/api/editor/videos/${encodeURIComponent(videoId)}/cursor-reconstruction`
-		: null;
+function videoId() {
+	const id = new URLSearchParams(window.location.search).get("videoId");
+	return id && /^[A-Za-z0-9_-]{1,255}$/.test(id) ? id : null;
 }
 
 async function request(method: "GET" | "POST" | "PATCH", enabled?: boolean) {
-	const url = endpoint();
-	if (!url) throw new Error("This recording cannot replace its cursor");
-	const response = await fetch(url, {
-		method,
-		credentials: "same-origin",
-		cache: "no-store",
-		...(enabled === undefined
-			? {}
-			: {
-					headers: { "content-type": "application/json" },
-					body: JSON.stringify({ enabled }),
-				}),
-	});
+	const id = videoId();
+	if (!id) throw new Error("This recording cannot replace its cursor");
+	const response = await fetch(
+		`/api/editor/videos/${encodeURIComponent(id)}/cursor-reconstruction`,
+		{
+			method,
+			credentials: "same-origin",
+			cache: "no-store",
+			...(enabled === undefined
+				? {}
+				: {
+						headers: { "content-type": "application/json" },
+						body: JSON.stringify({ enabled }),
+					}),
+		},
+	);
 	if (!response.ok) {
 		throw new Error(
 			response.status === 503
@@ -49,15 +52,28 @@ async function request(method: "GET" | "POST" | "PATCH", enabled?: boolean) {
 	return (await response.json()) as CursorReplacementView;
 }
 
+function reloadedRecently(id: string) {
+	try {
+		const key = `cap-cursor-replacement-reload:${id}`;
+		const last = Number(sessionStorage.getItem(key));
+		if (Number.isFinite(last) && Date.now() - last < RELOAD_GUARD_MS) {
+			return true;
+		}
+		sessionStorage.setItem(key, String(Date.now()));
+	} catch {}
+	return false;
+}
+
 /**
  * Experimental: browser recordings have their cursor burned in. Processing
  * removes it and reconstructs its path, which the editor then draws as a
- * Studio cursor; switching reloads the editor onto the other sources.
+ * Studio cursor. The editor reloads whenever the sources the server would
+ * now hand it differ from the ones it opened with, so this lives for the
+ * whole sidebar rather than the Cursor tab.
  */
-export function WebCursorReplacement(props: {
-	onView: (view: CursorReplacementView) => void;
-}) {
+export function createWebCursorReplacement() {
 	const {
+		meta,
 		flushProjectConfig,
 		editorState,
 		setEditorState,
@@ -67,16 +83,42 @@ export function WebCursorReplacement(props: {
 	const [busy, setBusy] = createSignal(false);
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	let disposed = false;
-	// Whether the sources this editor opened with had the replacement on.
-	let loadedEnabled: boolean | undefined;
 
-	const apply = (next: CursorReplacementView) => {
-		loadedEnabled ??= next.enabled;
-		setView(next);
-		props.onView(next);
+	const loadedCursorData = () =>
+		meta().hasRecordedCursorData ||
+		(window as Window & { capWebEditorPointerInput?: boolean })
+			.capWebEditorPointerInput === true;
+
+	const schedule = () => {
+		if (!disposed && view()?.status === "processing" && !timer) {
+			timer = setTimeout(poll, POLL_MS);
+		}
 	};
 
+	const poll = async () => {
+		timer = undefined;
+		try {
+			const next = await request("GET");
+			if (disposed) return;
+			setView(next);
+		} catch {
+			if (disposed) return;
+		}
+		schedule();
+	};
+
+	onMount(() => void poll());
+	onCleanup(() => {
+		disposed = true;
+		if (timer) clearTimeout(timer);
+	});
+
 	const reloadOntoSources = async () => {
+		const id = videoId();
+		if (!id || reloadedRecently(id)) {
+			toast("Reload the editor to apply the cursor change");
+			return;
+		}
 		const paused = await routeEditorPlaybackIntent(
 			requestHandoffPlayback,
 			{ playing: false },
@@ -87,44 +129,16 @@ export function WebCursorReplacement(props: {
 				}
 			},
 		);
-		if (!paused) return false;
+		if (!paused) return;
 		await flushProjectConfig();
 		window.location.reload();
-		return true;
 	};
-
-	const poll = async () => {
-		timer = undefined;
-		try {
-			const next = await request("GET");
-			if (disposed) return;
-			apply(next);
-		} catch {
-			if (disposed) return;
-		}
-		schedule();
-	};
-
-	const schedule = () => {
-		if (!disposed && view()?.status === "processing" && !timer) {
-			timer = setTimeout(poll, POLL_MS);
-		}
-	};
-
-	onMount(() => void poll());
-	onCleanup(() => {
-		disposed = true;
-		if (timer) clearTimeout(timer);
-	});
 
 	createEffect(() => {
 		const current = view();
-		if (
-			current?.status === "ready" &&
-			loadedEnabled !== undefined &&
-			current.enabled !== loadedEnabled
-		) {
-			if (current.enabled) toast.success("Smooth cursor is ready");
+		if (!current || current.status === "processing") return;
+		if (current.cursorData !== loadedCursorData()) {
+			if (current.cursorData) toast.success("Smooth cursor is ready");
 			void reloadOntoSources();
 		}
 	});
@@ -135,10 +149,10 @@ export function WebCursorReplacement(props: {
 		setBusy(true);
 		try {
 			if (enabled && current.status !== "ready") {
-				apply(await request("POST"));
+				setView(await request("POST"));
 				schedule();
 			} else {
-				apply(await request("PATCH", enabled));
+				setView(await request("PATCH", enabled));
 			}
 		} catch (error) {
 			toast.error(error instanceof Error ? error.message : String(error));
@@ -147,8 +161,14 @@ export function WebCursorReplacement(props: {
 		}
 	};
 
+	return { view, busy, toggle };
+}
+
+export function WebCursorReplacement(props: {
+	controller: ReturnType<typeof createWebCursorReplacement>;
+}) {
 	return (
-		<Show when={view()}>
+		<Show when={props.controller.view()}>
 			{(current) => (
 				<div class="flex flex-col gap-1.5">
 					<Field inline name="Replace cursor" badge="Experimental">
@@ -158,11 +178,11 @@ export function WebCursorReplacement(props: {
 								(current().status === "ready" && current().enabled)
 							}
 							disabled={
-								busy() ||
+								props.controller.busy() ||
 								current().status === "processing" ||
 								(!current().eligible && current().status !== "ready")
 							}
-							onChange={(value) => void toggle(value)}
+							onChange={(value) => void props.controller.toggle(value)}
 						/>
 					</Field>
 					<p class="text-[11px] leading-4 text-ed-text-3">

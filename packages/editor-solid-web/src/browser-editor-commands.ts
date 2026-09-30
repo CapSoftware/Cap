@@ -308,6 +308,7 @@ export class BrowserEditorCommands {
 
 	private async load(): Promise<BrowserEditorInfo> {
 		const sources = await this.catalog.snapshot(this.controller.signal);
+		window.capWebEditorPointerInput = sources.inputEvents !== null;
 		const [media, config] = await Promise.all([
 			this.media(sources),
 			sources.projectConfig ??

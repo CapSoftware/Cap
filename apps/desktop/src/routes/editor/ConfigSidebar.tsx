@@ -154,7 +154,7 @@ import {
 } from "./ui";
 import { formatTime } from "./utils";
 import {
-	type CursorReplacementView,
+	createWebCursorReplacement,
 	WebCursorReplacement,
 } from "./WebCursorReplacement";
 import type { WaveformSegment } from "./waveform";
@@ -595,13 +595,11 @@ function ConfigSidebarContent() {
 		editorState,
 		meta,
 	} = useEditorContext();
-	const [webCursor, setWebCursor] = createSignal<CursorReplacementView | null>(
-		null,
-	);
+	const webCursor = isWebEditor ? createWebCursorReplacement() : null;
 	const cursorControlsShown = () =>
-		!isWebEditor ||
+		!webCursor ||
 		meta().hasRecordedCursorData ||
-		webCursor()?.cursorData === true;
+		webCursor.view()?.cursorData === true;
 	const organizationSelection = createSelectedOrganization();
 	const brandColorSwatches = createMemo(() =>
 		getOrganizationBrandColorSwatches(
@@ -916,8 +914,8 @@ function ConfigSidebarContent() {
 					value="cursor"
 					class="flex flex-col flex-1 gap-3.5 pt-3.5 px-4 pb-4 min-h-0"
 				>
-					<Show when={isWebEditor}>
-						<WebCursorReplacement onView={setWebCursor} />
+					<Show when={webCursor}>
+						{(controller) => <WebCursorReplacement controller={controller()} />}
 					</Show>
 					<Show when={cursorControlsShown()}>
 						<StyleGroupToggle group="cursor" />
