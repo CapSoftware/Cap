@@ -92,6 +92,22 @@ function visiblePreviewSize(
 	] as const;
 }
 
+/// Resolves once the page has laid out and delivered resize observations,
+/// so a canvas mounted in the same turn has the size its layout gives it and
+/// the first frame isn't drawn at a stale size and then redrawn. Falls back
+/// to a timer where animation frames don't run (a hidden tab).
+function layoutSettled() {
+	return new Promise<void>((resolve) => {
+		const timer = setTimeout(resolve, 100);
+		requestAnimationFrame(() =>
+			setTimeout(() => {
+				clearTimeout(timer);
+				resolve();
+			}, 0),
+		);
+	});
+}
+
 /// The desktop preview quality presets size frames for a fixed 1080p output.
 /// In the browser, Full renders at the canvas's real device-pixel size
 /// (capped at 4K), Half at half of it and Quarter at a quarter, never above
@@ -289,6 +305,8 @@ export class BrowserLocalPlayback {
 	private motion: MotionRanges;
 	private drawnFrameKey: string | null = null;
 	private lastRenderRepeated = false;
+	private settleResizes = 0;
+	private settleTimer: ReturnType<typeof setTimeout> | undefined;
 
 	private constructor(
 		readonly sources: BrowserEditorSources,
@@ -341,6 +359,7 @@ export class BrowserLocalPlayback {
 		let controls: BrowserLocalCanvas | null = null;
 		let playback: BrowserLocalPlayback | null = null;
 		const controller = new AbortController();
+		const laidOut = width === 0 && height === 0 ? layoutSettled() : null;
 		try {
 			const signal = controller.signal;
 			const [sources, module] = await Promise.all([
@@ -427,6 +446,7 @@ export class BrowserLocalPlayback {
 				throw new Error("Editor canvas dimensions are invalid");
 			}
 			if (previewBase) {
+				await laidOut;
 				const visual = new module.BrowserVisualConfig(JSON.stringify(config));
 				try {
 					const detail = previewDetailBase(
@@ -570,17 +590,79 @@ export class BrowserLocalPlayback {
 			size[1],
 			this.previewScale,
 		);
+		const offWidth = Math.abs(this.width - visibleWidth);
+		const offHeight = Math.abs(this.height - visibleHeight);
 		// The layout sizes the canvas from the frame's aspect, and even-pixel
 		// rounding shifts that aspect slightly; ignoring few-pixel changes keeps
 		// the two from resizing each other forever.
-		if (
-			Math.abs(this.width - visibleWidth) > 4 ||
-			Math.abs(this.height - visibleHeight) > 4
-		) {
+		if (offWidth > 4 || offHeight > 4) {
+			this.settleResizes = 0;
 			this.resize(visibleWidth, visibleHeight);
 			return true;
 		}
+		// Within those few pixels the canvas can still be scaled a little from
+		// its box, which blurs it; once the layout has stayed put, match the box
+		// itself, whose aspect the layout already uses, at most twice in a row.
+		if (this.settleResizes < 2) {
+			clearTimeout(this.settleTimer);
+			this.settleTimer = setTimeout(() => this.settleSize(), 150);
+		}
 		return false;
+	}
+
+	/// The backing size that matches the canvas's box pixel for pixel at the
+	/// detail the preview is drawing, or null when the box isn't laid out.
+	private boxSize() {
+		if (!this.previewBase) return null;
+		const bounds = this.visibleCanvas.getBoundingClientRect();
+		const density = window.devicePixelRatio;
+		if (bounds.width < 2 || bounds.height < 2 || !(density > 0)) return null;
+		const detail = previewDetailBase(
+			this.visibleCanvas,
+			this.previewBase.width,
+			this.previewBase.height,
+		);
+		const size = this.visual.output_dimensions(
+			this.screenWidth,
+			this.screenHeight,
+			detail.width,
+			detail.height,
+		);
+		if (size.length !== 2 || size[0] < 2 || size[1] < 2) return null;
+		const [width, height] = visiblePreviewSize(
+			this.visibleCanvas,
+			size[0],
+			size[1],
+			this.previewScale,
+		);
+		const boxWidth = bounds.width * density;
+		const boxHeight = bounds.height * density;
+		const detailScale = Math.max(width / boxWidth, height / boxHeight);
+		return [
+			Math.max(2, Math.round((boxWidth * detailScale) / 2) * 2),
+			Math.max(2, Math.round((boxHeight * detailScale) / 2) * 2),
+		] as const;
+	}
+
+	private settleSize() {
+		if (this.disposed) return;
+		const box = this.boxSize();
+		if (
+			!box ||
+			(box[0] === this.width && box[1] === this.height) ||
+			Math.abs(box[0] - this.width) > 4 ||
+			Math.abs(box[1] - this.height) > 4
+		) {
+			return;
+		}
+		this.settleResizes++;
+		this.resize(box[0], box[1]);
+		if (!this.playing) {
+			void this.seek(this.outputTime).catch((cause: unknown) => {
+				if (this.disposed) return;
+				this.onError(cause instanceof Error ? cause : new Error(String(cause)));
+			});
+		}
 	}
 
 	resize(width: number, height: number) {
@@ -1206,6 +1288,7 @@ export class BrowserLocalPlayback {
 		if (this.disposed) return;
 		this.pause();
 		this.disposed = true;
+		clearTimeout(this.settleTimer);
 		this.frameController?.abort();
 		this.canvas.dispose();
 		this.audio.dispose();
