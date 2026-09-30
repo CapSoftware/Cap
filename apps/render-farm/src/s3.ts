@@ -281,6 +281,7 @@ export class S3 {
 			headers?: Record<string, string>;
 			body?: Uint8Array | string;
 			expect?: number[];
+			signal?: AbortSignal;
 		} = {},
 	) {
 		const payloadHash =
@@ -291,6 +292,7 @@ export class S3 {
 					: "UNSIGNED-PAYLOAD";
 		await this.ready();
 		for (let attempt = 0; ; attempt++) {
+			options.signal?.throwIfAborted();
 			const signed = this.sign(
 				method,
 				key,
@@ -304,8 +306,10 @@ export class S3 {
 					method,
 					headers: signed.headers,
 					body: options.body as BodyInit | undefined,
+					signal: options.signal,
 				});
 			} catch (error) {
+				if (options.signal?.aborted) throw error;
 				// Object stores drop connections under bursty fan-out; back off
 				// with jitter rather than failing the chunk.
 				if (attempt < 8) {
@@ -390,10 +394,15 @@ export class S3 {
 		});
 	}
 
-	async createMultipart(key: string, contentType: string) {
+	async createMultipart(
+		key: string,
+		contentType: string,
+		signal?: AbortSignal,
+	) {
 		const response = await this.send("POST", key, {
 			query: { uploads: "" },
 			headers: this.writeHeaders(contentType),
+			signal,
 		});
 		const text = await response.text();
 		const match = text.match(/<UploadId>([^<]+)<\/UploadId>/);
@@ -406,10 +415,12 @@ export class S3 {
 		uploadId: string,
 		partNumber: number,
 		body: Uint8Array,
+		signal?: AbortSignal,
 	) {
 		const response = await this.send("PUT", key, {
 			query: { partNumber: String(partNumber), uploadId },
 			body,
+			signal,
 		});
 		const etag = response.headers.get("etag");
 		if (!etag) throw new Error(`no ETag for part ${partNumber}`);
@@ -458,7 +469,7 @@ export class S3 {
 		key: string,
 		uploadId: string,
 		parts: { partNumber: number; etag: string }[],
-		options: { ifNoneMatch?: boolean } = {},
+		options: { ifNoneMatch?: boolean; signal?: AbortSignal } = {},
 	) {
 		const body = `<CompleteMultipartUpload>${parts
 			.sort((a, b) => a.partNumber - b.partNumber)
@@ -475,6 +486,7 @@ export class S3 {
 				...(options.ifNoneMatch ? { "if-none-match": "*" } : {}),
 			},
 			expect: options.ifNoneMatch ? [200, 409, 412] : undefined,
+			signal: options.signal,
 		});
 		if (response.status === 409 || response.status === 412) return false;
 		const text = await response.text();
@@ -519,23 +531,35 @@ export class S3 {
 		key: string,
 		path: string,
 		contentType: string,
-		options: { ifNoneMatch?: boolean } = {},
+		options: { ifNoneMatch?: boolean; signal?: AbortSignal } = {},
 	) {
 		const file = Bun.file(path);
 		const partSize = 64 << 20;
-		const uploadId = await this.createMultipart(key, contentType);
+		const uploadId = await this.createMultipart(
+			key,
+			contentType,
+			options.signal,
+		);
 		try {
 			const parts: { partNumber: number; etag: string }[] = [];
 			for (let start = 0; start === 0 || start < file.size; start += partSize) {
+				options.signal?.throwIfAborted();
 				const body = new Uint8Array(
 					await file.slice(start, start + partSize).arrayBuffer(),
 				);
 				const partNumber = parts.length + 1;
 				parts.push({
 					partNumber,
-					etag: await this.uploadPart(key, uploadId, partNumber, body),
+					etag: await this.uploadPart(
+						key,
+						uploadId,
+						partNumber,
+						body,
+						options.signal,
+					),
 				});
 			}
+			options.signal?.throwIfAborted();
 			if (await this.completeMultipart(key, uploadId, parts, options)) {
 				return file.size;
 			}
