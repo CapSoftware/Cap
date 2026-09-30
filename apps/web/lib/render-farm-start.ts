@@ -204,10 +204,6 @@ function renderFarmHealth(
 	return health;
 }
 
-/**
- * The farm's own project preparation, when it has it and is up: renders then
- * need no editor worker session.
- */
 export async function renderFarmPrepareSupport() {
 	const config = renderFarmConfig();
 	if (!config?.callbackSecret) return null;
@@ -240,7 +236,6 @@ export async function renderFarmSaveUnavailable() {
 	return null;
 }
 
-/** The session id a browser-only editor uses before it has a worker. */
 export function browserEditorSessionId(videoId: string) {
 	return `browser-${videoId}`;
 }
@@ -641,7 +636,6 @@ export const startRenderFarmJob = Effect.fn("startRenderFarmJob")(function* ({
 	return { exportId, ...started, target, projectConfig };
 });
 
-/** Asks the farm to render a project whose files are already in storage. */
 const postRenderFarmJob = Effect.fn("postRenderFarmJob")(function* ({
 	config,
 	video,

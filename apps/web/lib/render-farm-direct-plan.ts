@@ -43,7 +43,6 @@ export function parseRenderFarmPrepareSupport(
 type SourceMedia = { contentType: string; fps?: number; offsetMs?: number };
 type SourceAsset = { path: string; size: number };
 
-/** The fields of the sources an editor worker is sent that shape its project. */
 export type DirectRenderSources = {
 	title: string;
 	display: SourceMedia;
@@ -110,7 +109,7 @@ function asRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** The frame rate the worker takes from metadata without probing the file. */
+/** An editor worker probes the file for any other frame rate. */
 function reportedFps(fps: number | undefined) {
 	return Number.isInteger(fps) && fps !== undefined && fps >= 1 && fps <= 120
 		? fps
@@ -137,11 +136,6 @@ function musicTracks(config: Record<string, unknown>) {
 	return [...ids];
 }
 
-/**
- * The project configuration a worker session opens with: the saved project,
- * or for a never-edited recording the default one with the owner's Studio
- * Sound preference.
- */
 function sessionConfig(
 	sources: SignedSources,
 	support: RenderFarmPrepareSupport,
@@ -164,7 +158,6 @@ type SourceHead = { size: number; etag: string };
 export type DirectRenderInput = {
 	sources: SignedSources;
 	editorSources: EditorSources;
-	/** HEAD results for the main sources, by storage key. */
 	heads: Map<string, SourceHead | null>;
 	savedAssets: {
 		path: string;
@@ -200,7 +193,6 @@ export function directRenderLikely(metadata: VideoMetadata | null | undefined) {
 	);
 }
 
-/** Why only an editor worker can prepare these sources, or null. */
 export function directRenderBlocker(sources: SignedSources) {
 	if (sources.legacyEditSpec) return "The recording has a legacy edit";
 	if ("clips" in sources || "imports" in sources || "videoAssets" in sources) {
@@ -215,14 +207,12 @@ export function directRenderBlocker(sources: SignedSources) {
 	return null;
 }
 
-/** Whether the worker would have to look inside the display for audio. */
 export function directRenderProbesDisplayAudio(sources: SignedSources) {
 	return !sources.mic && !sources.systemAudio;
 }
 
 const SEGMENT = "content/segments/segment-0";
 
-/** The main media, where a worker stages each one, and its storage key. */
 export function directRenderMedia(
 	sources: SignedSources,
 	editorSources: DirectRenderInput["editorSources"],

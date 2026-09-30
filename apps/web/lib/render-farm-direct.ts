@@ -14,11 +14,6 @@ import {
 import { RenderProjectError } from "./render-farm-project";
 import { decodeStorageVideo } from "./video-storage";
 
-/**
- * Loads what `planDirectRenderProject` needs: the sources a worker would get,
- * HEADs of the main media and, when the worker would probe for it, whether
- * the display carries audio.
- */
 export const planDirectRender = Effect.fn("planDirectRender")(function* (
 	video: Parameters<typeof getSignedEditorSources>[0] & {
 		captionsEnabled: boolean;
