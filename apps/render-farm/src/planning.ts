@@ -25,7 +25,7 @@ export type ChunkPlanInput = {
  */
 /** Part numbers an export's chunks share: S3's 10,000 less the header's part 1 and a spare. */
 const UPLOAD_PARTS = 9998;
-/** Fewest parts a dispatch range may hold. */
+/** Part size is planned over all but two of a range's parts (see planJob). */
 export const MIN_RANGE_PARTS = 3;
 
 /**

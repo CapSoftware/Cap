@@ -12,7 +12,6 @@ const upload = {
 	],
 };
 
-/** The upload as the coordinator passes it: its own part is the header. */
 function uploadFor(s3: ReturnType<typeof store>) {
 	return {
 		...upload,

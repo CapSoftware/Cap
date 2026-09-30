@@ -10,7 +10,6 @@ import {
 
 const MB = 1024 * 1024;
 
-/** A chunk of `bytes`, split the way a worker splits it. */
 function chunk(index: number, bytes: number): StashedChunk {
 	const slot = 2 + index * 100;
 	const stash = stashBytes(bytes);
