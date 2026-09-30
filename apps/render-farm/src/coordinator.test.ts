@@ -183,12 +183,13 @@ function harness(env: Record<string, string> = {}) {
 	const compiled = new Bun.Transpiler({ loader: "ts" }).transformSync(source);
 	const coordinator = new Function(
 		...Object.keys(deps),
-		`${compiled}\nreturn {jobs, queue, straggler, dispatchedTask, onVideoDone, onAudioDone, publishPlaylist, journalJob, resumeJobs, newHlsState, finish, requeue, sourceIndex, assemble, stitchAhead, setPlanner: (fn) => { planJob = fn; }};`,
+		`${compiled}\nreturn {jobs, queue, straggler, dispatchedTask, onVideoDone, onAudioDone, publishPlaylist, journalJob, resumeJobs, newHlsState, finish, requeue, sourceIndex, assemble, stitchAhead, sweepStashes, setPlanner: (fn) => { planJob = fn; }};`,
 	)(...Object.values(deps)) as {
 		setPlanner: (fn: (job: Job) => Promise<void>) => void;
 		sourceIndex: (prefix: string, sourceRoot?: string) => Promise<unknown>;
 		assemble: (job: Job) => Promise<void>;
 		stitchAhead: (job: Job) => void;
+		sweepStashes: () => Promise<void>;
 		requeue: (state: TaskState, reason: string) => void;
 		jobs: Map<string, Job>;
 		queue: TaskState[];
@@ -291,7 +292,7 @@ function videoState(job: Job, duplicate = false): TaskState {
 			firstPart: 3,
 			partLimit: 10,
 			partTarget: 16 << 20,
-			stashKey: `jobs/${job.id}/stash/c0-p3`,
+			stashKey: `stash/${job.id}/c0-p3`,
 		},
 		audio: null,
 		hls: null,
@@ -331,7 +332,7 @@ function result(state: TaskState): protocol.VideoResult {
 		audioRuns: [],
 		firstPart: state.firstPart ?? 3,
 		stash: {
-			key: `jobs/job/stash/c0-p${state.firstPart ?? 3}`,
+			key: `stash/job/c0-p${state.firstPart ?? 3}`,
 			bytes: 100,
 		},
 		parts: [],
@@ -371,7 +372,7 @@ describe("assembly", () => {
 	): protocol.VideoResult {
 		const chunk = j.chunks[index] as NonNullable<Job["chunks"][number]>;
 		const data = new Uint8Array(bytes).fill(fill);
-		const stashKey = `jobs/${j.id}/stash/c${index}-p${chunk.firstPart}`;
+		const stashKey = `stash/${j.id}/c${index}-p${chunk.firstPart}`;
 		const stash = stitch.stashBytes(bytes);
 		h.objects.set(stashKey, data.subarray(0, stash));
 		const parts: protocol.VideoResult["parts"] = [];
@@ -453,7 +454,7 @@ describe("assembly", () => {
 		for (const [index, bytes] of [11 * MB, 13 * MB].entries())
 			j.videoResults.set(index, stored(h, j, index, bytes, index + 1));
 		await h.assemble(j);
-		expect(h.copies).toEqual(["jobs/job/stash/c1-p63"]);
+		expect(h.copies).toEqual(["stash/job/c1-p63"]);
 	});
 
 	test("parts written while chunks render are reused, not written again", async () => {
@@ -463,11 +464,34 @@ describe("assembly", () => {
 			j.videoResults.set(index, stored(h, j, index, bytes, index + 1));
 		h.stitchAhead(j);
 		await Promise.all(j.stitchParts?.values() ?? []);
-		expect(h.copies).toEqual(["jobs/job/stash/c1-p63"]);
+		expect(h.copies).toEqual(["stash/job/c1-p63"]);
 		await h.assemble(j);
-		expect(h.copies).toEqual(["jobs/job/stash/c1-p63"]);
+		expect(h.copies).toEqual(["stash/job/c1-p63"]);
 		const file = h.objects.get(j.key) as Uint8Array;
 		expect(file[file.byteLength - 1]).toBe(2);
+	});
+
+	test("stashes outlive neither their job nor a restart", async () => {
+		const h = harness();
+		const live = job();
+		const done = { ...job(), id: "done", status: "ready" as const };
+		h.jobs.set(live.id, live);
+		h.jobs.set(done.id, done);
+		for (const key of [
+			"stash/job/c0-p3",
+			"stash/done/c0-p3",
+			"stash/gone/c1-p63",
+		])
+			h.objects.set(key, new Uint8Array(1));
+		// A sweep before the journal is resumed would take jobs about to be
+		// resumed for finished ones.
+		await h.sweepStashes();
+		expect(h.objects.has("stash/gone/c1-p63")).toBe(true);
+		await h.resumeJobs();
+		await h.sweepStashes();
+		expect(
+			[...h.objects.keys()].filter((key) => key.startsWith("stash/")),
+		).toEqual(["stash/job/c0-p3"]);
 	});
 
 	test("a result whose parts leave a gap in the chunk is refused", async () => {

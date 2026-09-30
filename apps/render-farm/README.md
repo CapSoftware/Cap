@@ -66,7 +66,9 @@ Jobs created with version 2 can resume across subsequent coordinator restarts.
 Run workers with the NVIDIA container toolkit (`--gpus all`) and `--init`.
 Give the coordinator a bucket-scoped IAM role (or keys), a shared `RF_TOKEN`,
 and a lifecycle rule on the bucket that aborts incomplete multipart uploads and
-expires `hls/` and `jobs/` objects.
+expires `hls/`, `jobs/` and `stash/` objects. The coordinator deletes each
+export's `stash/` objects when it ends and sweeps any it missed, so a day's
+expiry there is only a backstop.
 
 | Variable | Default | Role |
 | --- | --- | --- |

@@ -1098,9 +1098,12 @@ const JOURNAL = process.env.RF_JOURNAL !== "0";
 // Workers heartbeat every 3 s; this is enough for all of them to report in.
 const RESUME_HOLD_MS = 10_000;
 const journalKey = (id: string, name: string) => `jobs/${id}/${name}`;
-/** Where a dispatch stores its chunk's opening bytes (see stitch.ts). */
+/**
+ * Where a dispatch stores its chunk's opening bytes (see stitch.ts). Outside
+ * `jobs/` so a sweep can list every stash without reading journals.
+ */
 const stashKey = (id: string, chunk: number, firstPart: number) =>
-	journalKey(id, `stash/c${chunk}-p${firstPart}`);
+	`stash/${id}/c${chunk}-p${firstPart}`;
 
 async function journalPut(key: string, body: Uint8Array | string) {
 	if (!JOURNAL) return;
@@ -1204,6 +1207,17 @@ function segmentsFromResult(
 }
 
 async function resumeJobs() {
+	try {
+		await resumeJournal();
+	} finally {
+		journalResumed = true;
+		sweepStashes().catch((error) =>
+			console.error(`stash sweep failed: ${error}`),
+		);
+	}
+}
+
+async function resumeJournal() {
 	if (!JOURNAL) return;
 	const keys = await journalS3.list("jobs/");
 	const byJob = new Map<string, Set<string>>();
@@ -2534,9 +2548,33 @@ async function writeStitchParts(
 }
 
 async function dropStashes(id: string) {
-	const keys = await journalS3.list(journalKey(id, "stash/"));
+	const keys = await journalS3.list(`stash/${id}/`);
 	await Promise.all(keys.map(({ key }) => journalS3.delete(key)));
 }
+
+const STASH_SWEEP_MS = 10 * 60_000;
+let journalResumed = false;
+
+/**
+ * Deletes the stashes of every job not rendering or assembling. A job's own
+ * cleanup misses those a losing copy writes after it, and any left when the
+ * coordinator stops mid-cleanup; restart never reopens a finished job.
+ */
+async function sweepStashes() {
+	// Before resume, jobs about to be resumed are not in memory yet.
+	if (!journalResumed) return;
+	const stale = (await journalS3.list("stash/")).filter(({ key }) => {
+		const job = jobs.get(key.split("/")[1] ?? "");
+		return job?.status !== "rendering" && job?.status !== "assembling";
+	});
+	await Promise.all(stale.map(({ key }) => journalS3.delete(key)));
+}
+
+setInterval(() => {
+	sweepStashes().catch((error) =>
+		console.error(`stash sweep failed: ${error}`),
+	);
+}, STASH_SWEEP_MS);
 
 async function verifyPlayable(job: Job) {
 	if (!job.url) return;
