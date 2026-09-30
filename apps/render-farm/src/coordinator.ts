@@ -2416,6 +2416,12 @@ async function acceptVideo(job: Job, state: TaskState, result: VideoResult) {
 				)
 			: "result is not from this chunk's dispatch";
 	if (problem) throw new Error(`chunk ${chunk}: ${problem}`);
+	// A worker that lost its stash upload must not be credited with the chunk:
+	// assembly could only fail later, with nothing left to re-render it.
+	const stored = await journalS3.head(result.stash.key);
+	if (stored?.size !== result.stash.bytes) {
+		throw new Error(`chunk ${chunk}: stash ${result.stash.key} is not stored`);
+	}
 	await journalPut(
 		journalKey(job.id, `v/${chunk}.json`),
 		JSON.stringify(result),

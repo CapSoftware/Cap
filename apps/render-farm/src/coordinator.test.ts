@@ -624,6 +624,26 @@ describe("assembly", () => {
 		await expect(h.onVideoDone(j, state, padded)).rejects.toThrow("add up");
 		expect(j.videoResults.size).toBe(0);
 	});
+
+	test("a result whose stash was never stored is refused", async () => {
+		const h = harness();
+		const j = job();
+		const state = videoState(j);
+		const lost = stored(h, j, 0, 220_000, 1);
+		h.objects.delete(lost.stash.key);
+		await expect(h.onVideoDone(j, state, lost)).rejects.toThrow(
+			"is not stored",
+		);
+		expect(j.videoResults.size).toBe(0);
+		expect(state.state).toBe("running");
+		h.objects.set(lost.stash.key, new Uint8Array(lost.stash.bytes - 1));
+		await expect(h.onVideoDone(j, state, lost)).rejects.toThrow(
+			"is not stored",
+		);
+		h.objects.set(lost.stash.key, new Uint8Array(lost.stash.bytes));
+		await h.onVideoDone(j, state, lost);
+		expect(j.videoResults.size).toBe(1);
+	});
 });
 
 describe("coordinator recovery", () => {
@@ -700,8 +720,10 @@ describe("coordinator recovery", () => {
 		h.gate(gate.promise);
 		const first = result(original);
 		const second = result(hedge);
+		h.objects.set(first.stash.key, new Uint8Array(first.stash.bytes));
 		const accepted = h.onVideoDone(j, original, first);
 		const duplicate = h.onVideoDone(j, hedge, second);
+		await Bun.sleep(0);
 		expect(j.videoResults.size).toBe(0);
 		expect(h.writes).toEqual(["jobs/job/v/0.json"]);
 		gate.resolve();
