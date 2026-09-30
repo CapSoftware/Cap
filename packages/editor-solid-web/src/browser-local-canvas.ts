@@ -7,7 +7,10 @@ import {
 	loadAudioLevels,
 	timelineAudioLevelSources,
 } from "./browser-audio-levels";
-import { frameDisplayGamma } from "./browser-color-calibration";
+import {
+	type FrameDisplayGamma,
+	frameDisplayGamma,
+} from "./browser-color-calibration";
 import { browserFrameLayout } from "./browser-frame-layout";
 import { browserWebGpuPresentationWorks } from "./browser-gpu-probe";
 import { BrowserImageDecoder } from "./browser-image-decoder";
@@ -196,6 +199,13 @@ export class BrowserLocalCanvas {
 	private fonts: Promise<void> | null = null;
 	private fontsReady = false;
 	private lastSize = { width: 0, height: 0 };
+	private pendingDisplayGamma: FrameDisplayGamma | null = null;
+	private settleDisplayGamma: () => void = () => undefined;
+	/// Settles once the colour check has answered or given up, for callers that
+	/// compare frames drawn before and after it.
+	readonly displayGammaSettled = new Promise<void>((resolve) => {
+		this.settleDisplayGamma = resolve;
+	});
 	private lastLayout: ReturnType<typeof browserFrameLayout> | null = null;
 
 	constructor(
@@ -240,6 +250,8 @@ export class BrowserLocalCanvas {
 				}
 				if (renderer.backend === "BrowserWebGpu") {
 					this.applyDisplayGamma(renderer);
+				} else {
+					this.settleDisplayGamma();
 				}
 				this.setup.cursors.forEach((cursor, index) => {
 					if (cursor) renderer.set_cursor(index, cursor);
@@ -250,6 +262,7 @@ export class BrowserLocalCanvas {
 				this.rejectMount = null;
 			})
 			.catch((error: unknown) => {
+				this.settleDisplayGamma();
 				this.rejectMount?.(
 					error instanceof Error ? error : new Error(String(error)),
 				);
@@ -258,24 +271,27 @@ export class BrowserLocalCanvas {
 			});
 	}
 
-	/// The first frame doesn't wait for the colour check; frames drawn before
-	/// it answers are redrawn with its correction.
+	/// The first frame doesn't wait for the colour check. Its answer is applied
+	/// at the start of the next frame drawn, never between the renderer's own
+	/// calls, so a frame already shown is invalidated rather than redrawn here.
 	private applyDisplayGamma(renderer: BrowserStudioRenderer) {
 		void Promise.race([
 			frameDisplayGamma(),
 			new Promise<null>((resolve) =>
 				setTimeout(() => resolve(null), DISPLAY_GAMMA_TIMEOUT_MS),
 			),
-		]).then((displayGamma) => {
-			if (!displayGamma || this.disposed || this.renderer !== renderer) {
-				return;
-			}
-			renderer.set_frame_display_gamma(displayGamma.kind, displayGamma.gamma);
-			if (this.rendered) {
-				this.rendered = false;
-				this.onInvalidate();
-			}
-		});
+		])
+			.then((displayGamma) => {
+				if (!displayGamma || this.disposed || this.renderer !== renderer) {
+					return;
+				}
+				this.pendingDisplayGamma = displayGamma;
+				if (this.rendered) {
+					this.rendered = false;
+					this.onInvalidate();
+				}
+			})
+			.finally(() => this.settleDisplayGamma());
 	}
 
 	initCanvas(_canvas: OffscreenCanvas) {
@@ -474,6 +490,13 @@ export class BrowserLocalCanvas {
 		if (this.disposed) throw new Error("Editor canvas is closed");
 		const source = (layer: BrowserVideoLayer | null) =>
 			(layer && planes?.get(layer)) ?? layer?.source ?? null;
+		if (this.pendingDisplayGamma) {
+			renderer.set_frame_display_gamma(
+				this.pendingDisplayGamma.kind,
+				this.pendingDisplayGamma.gamma,
+			);
+			this.pendingDisplayGamma = null;
+		}
 		const wasmStarted = perfStart();
 		const layout =
 			composition.kind === "single"
@@ -568,6 +591,7 @@ export class BrowserLocalCanvas {
 	dispose() {
 		if (this.disposed) return;
 		this.disposed = true;
+		this.settleDisplayGamma();
 		this.imageAbort.abort();
 		this.audioAbort.abort();
 		this.imageDecoder?.dispose();
