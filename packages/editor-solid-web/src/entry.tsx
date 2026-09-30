@@ -10,6 +10,7 @@ import { createSignal, onCleanup } from "solid-js";
 import { render } from "solid-js/web";
 import { Toaster } from "solid-toast";
 import type { PreparingEditorModel } from "../../../apps/desktop/src/routes/editor/preparing-editor-model";
+import { frameDisplayGamma } from "./browser-color-calibration";
 import {
 	onBrowserPreviewSettled,
 	setBrowserEditorVideoId,
@@ -269,7 +270,11 @@ function layer(zIndex: number) {
 /// the renderer module, the GPU check, the recording sources and media probes.
 function prefetchStartup() {
 	void loadBrowserRenderer().catch(() => undefined);
-	void browserWebGpuPresentationWorks().catch(() => undefined);
+	void browserWebGpuPresentationWorks()
+		.then((works) => {
+			if (works) void frameDisplayGamma();
+		})
+		.catch(() => undefined);
 	const videoId = new URLSearchParams(window.location.search).get("videoId");
 	if (!videoId || !/^[A-Za-z0-9_-]{1,255}$/.test(videoId)) return;
 	void prefetchBrowserEditorSources(videoId)

@@ -81,8 +81,9 @@ async function measure(): Promise<FrameDisplayGamma | null> {
 	const adapter = await navigator.gpu.requestAdapter();
 	if (!adapter) return null;
 	const device = await adapter.requestDevice();
-	const frame = await decodeGreyBars();
+	let frame: VideoFrame | null = null;
 	try {
+		frame = await decodeGreyBars();
 		if (!frame?.format) return null;
 		const width = frame.displayWidth;
 		const height = frame.displayHeight;

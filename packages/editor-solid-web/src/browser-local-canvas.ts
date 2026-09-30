@@ -136,6 +136,8 @@ function textRanges(config: unknown): TimedSegment[] {
 	];
 }
 
+const DISPLAY_GAMMA_TIMEOUT_MS = 5000;
+
 export class BrowserLocalCanvas {
 	private canvas: HTMLCanvasElement | null = null;
 	private renderer: BrowserStudioRenderer | null = null;
@@ -182,29 +184,23 @@ export class BrowserLocalCanvas {
 		canvas.height = this.height;
 		void Promise.all([loadBrowserRenderer(), browserWebGpuPresentationWorks()])
 			.then(([module, webgpuReady]) =>
-				Promise.all([
-					module.BrowserStudioRenderer.create(
-						canvas,
-						webgpuReady,
-						JSON.stringify(this.setup.recordingMeta),
-						this.setup.screenWidth,
-						this.setup.screenHeight,
-						this.setup.cameraWidth,
-						this.setup.cameraHeight,
-					),
-					webgpuReady ? frameDisplayGamma() : null,
-				]),
+				module.BrowserStudioRenderer.create(
+					canvas,
+					webgpuReady,
+					JSON.stringify(this.setup.recordingMeta),
+					this.setup.screenWidth,
+					this.setup.screenHeight,
+					this.setup.cameraWidth,
+					this.setup.cameraHeight,
+				),
 			)
-			.then(([renderer, displayGamma]) => {
+			.then((renderer) => {
 				if (this.disposed) {
 					renderer.free();
 					return;
 				}
-				if (displayGamma && renderer.backend === "BrowserWebGpu") {
-					renderer.set_frame_display_gamma(
-						displayGamma.kind,
-						displayGamma.gamma,
-					);
+				if (renderer.backend === "BrowserWebGpu") {
+					this.applyDisplayGamma(renderer);
 				}
 				this.setup.cursors.forEach((cursor, index) => {
 					if (cursor) renderer.set_cursor(index, cursor);
@@ -221,6 +217,26 @@ export class BrowserLocalCanvas {
 				this.resolveMount = null;
 				this.rejectMount = null;
 			});
+	}
+
+	/// The first frame doesn't wait for the colour check; frames drawn before
+	/// it answers are redrawn with its correction.
+	private applyDisplayGamma(renderer: BrowserStudioRenderer) {
+		void Promise.race([
+			frameDisplayGamma(),
+			new Promise<null>((resolve) =>
+				setTimeout(() => resolve(null), DISPLAY_GAMMA_TIMEOUT_MS),
+			),
+		]).then((displayGamma) => {
+			if (!displayGamma || this.disposed || this.renderer !== renderer) {
+				return;
+			}
+			renderer.set_frame_display_gamma(displayGamma.kind, displayGamma.gamma);
+			if (this.rendered) {
+				this.rendered = false;
+				this.onInvalidate();
+			}
+		});
 	}
 
 	initCanvas(_canvas: OffscreenCanvas) {
