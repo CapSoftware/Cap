@@ -418,7 +418,8 @@ describe("assembly", () => {
 			const results = sizes.map((bytes, index) =>
 				stored(h, j, index, bytes, index + 1),
 			);
-			results.forEach((result, index) => j.videoResults.set(index, result));
+			for (const [index, result] of results.entries())
+				j.videoResults.set(index, result);
 			await h.assemble(j);
 			const file = h.objects.get(j.key) as Uint8Array;
 			const moov = mp4.locateMoov(file, file.byteLength) as {
@@ -449,9 +450,8 @@ describe("assembly", () => {
 	test("large stashes are copied server side instead of passing through the coordinator", async () => {
 		const h = harness();
 		const j = job();
-		[11 * MB, 13 * MB].forEach((bytes, index) =>
-			j.videoResults.set(index, stored(h, j, index, bytes, index + 1)),
-		);
+		for (const [index, bytes] of [11 * MB, 13 * MB].entries())
+			j.videoResults.set(index, stored(h, j, index, bytes, index + 1));
 		await h.assemble(j);
 		expect(h.copies).toEqual(["jobs/job/stash/c1-p63"]);
 	});
@@ -459,9 +459,8 @@ describe("assembly", () => {
 	test("parts written while chunks render are reused, not written again", async () => {
 		const h = harness();
 		const j = job();
-		[11 * MB, 13 * MB].forEach((bytes, index) =>
-			j.videoResults.set(index, stored(h, j, index, bytes, index + 1)),
-		);
+		for (const [index, bytes] of [11 * MB, 13 * MB].entries())
+			j.videoResults.set(index, stored(h, j, index, bytes, index + 1));
 		h.stitchAhead(j);
 		await Promise.all(j.stitchParts?.values() ?? []);
 		expect(h.copies).toEqual(["jobs/job/stash/c1-p63"]);
