@@ -47,17 +47,38 @@ export async function holdExportFile(
 	return release;
 }
 
-/// Removes every export file no page holds. Without Web Locks nothing can
-/// tell a left-over file from one another tab is using, so none is removed.
+/// Without Web Locks nothing tells a left-over file from one another tab is
+/// using, so only files older than any export or download could run are
+/// removed, judged by the time in their name.
+const UNLOCKED_FILE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+function exportFileCreatedAt(name: string) {
+	const digits = /^\d+/.exec(name.slice(EXPORT_FILE_PREFIX.length));
+	return digits ? Number(digits[0]) : null;
+}
+
+/// Removes every export file no page holds.
 export async function removeUnusedExportFiles(
 	root: ExportDirectoryLike,
 	locks: LockManagerLike | null = lockManager(),
+	now = Date.now(),
 ): Promise<string[]> {
-	if (!locks) return [];
 	const names: string[] = [];
 	for await (const name of root.keys())
 		if (name.startsWith(EXPORT_FILE_PREFIX)) names.push(name);
 	const removed: string[] = [];
+	if (!locks) {
+		for (const name of names) {
+			const created = exportFileCreatedAt(name);
+			if (created === null || now - created < UNLOCKED_FILE_MAX_AGE_MS)
+				continue;
+			await root.removeEntry(name).then(
+				() => removed.push(name),
+				() => undefined,
+			);
+		}
+		return removed;
+	}
 	for (const name of names) {
 		await locks.request(
 			exportFileLock(name),

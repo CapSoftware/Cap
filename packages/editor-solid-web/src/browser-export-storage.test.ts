@@ -88,11 +88,18 @@ describe("removeUnusedExportFiles", () => {
 		expect(root.files.size).toBe(0);
 	});
 
-	test("removes nothing without Web Locks, since nothing shows a file is unused", async () => {
-		const root = fakeDirectory(["cap-export-1.mp4"]);
-		expect(await removeUnusedExportFiles(root, null)).toEqual([]);
-		expect(await holdExportFile("cap-export-1.mp4", null)).toBeNull();
-		expect(root.files.size).toBe(1);
+	test("without Web Locks removes only files older than a day", async () => {
+		const now = 10 * 24 * 60 * 60 * 1000;
+		const fresh = `cap-export-${now - 60_000}-a.mp4`;
+		const old = `cap-export-${now - 25 * 60 * 60 * 1000}-b.mp4`;
+		const legacy = `cap-export-${now - 48 * 60 * 60 * 1000}.mp4`;
+		const root = fakeDirectory([fresh, old, legacy, "cap-export-x.mp4"]);
+		expect(await removeUnusedExportFiles(root, null, now)).toEqual([
+			old,
+			legacy,
+		]);
+		expect(await holdExportFile(fresh, null)).toBeNull();
+		expect([...root.files].sort()).toEqual([fresh, "cap-export-x.mp4"].sort());
 	});
 
 	test("carries on past a file that can't be removed", async () => {
