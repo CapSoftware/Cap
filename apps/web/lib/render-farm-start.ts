@@ -30,6 +30,11 @@ import {
 	renderFarmReference,
 	renderFarmTranscodeKey,
 } from "@/lib/render-farm";
+import { planDirectRender } from "@/lib/render-farm-direct";
+import {
+	parseRenderFarmPrepareSupport,
+	type RenderFarmPrepareSupport,
+} from "@/lib/render-farm-direct-plan";
 import {
 	buildRenderProject,
 	finishRenderManifest,
@@ -159,29 +164,55 @@ export function canSaveEditorVideo(video: {
 }
 
 const FARM_HEALTH_TTL_MS = 30_000;
-let farmHealth: { checkedAt: number; healthy: Promise<boolean> } | null = null;
 
-function renderFarmHealthy(
+type RenderFarmHealth = {
+	healthy: boolean;
+	prepare: RenderFarmPrepareSupport | null;
+};
+
+let farmHealth: {
+	checkedAt: number;
+	health: Promise<RenderFarmHealth>;
+} | null = null;
+
+function renderFarmHealth(
 	config: NonNullable<ReturnType<typeof renderFarmConfig>>,
 ) {
 	if (farmHealth && Date.now() - farmHealth.checkedAt < FARM_HEALTH_TTL_MS) {
-		return farmHealth.healthy;
+		return farmHealth.health;
 	}
-	const healthy = renderFarmFetch(config, "/health", {
+	const health = renderFarmFetch(config, "/health", {
 		signal: AbortSignal.timeout(3_000),
 	})
-		.then(async (response) => {
+		.then(async (response): Promise<RenderFarmHealth> => {
 			const body: unknown = await response.json().catch(() => null);
-			return (
+			const healthy =
 				response.ok &&
 				asRecord(body) &&
 				typeof body.workers === "number" &&
-				body.workers > 0
-			);
+				body.workers > 0;
+			return {
+				healthy,
+				prepare:
+					healthy && asRecord(body)
+						? parseRenderFarmPrepareSupport(body.prepare)
+						: null,
+			};
 		})
-		.catch(() => false);
-	farmHealth = { checkedAt: Date.now(), healthy };
-	return healthy;
+		.catch(() => ({ healthy: false, prepare: null }));
+	farmHealth = { checkedAt: Date.now(), health };
+	return health;
+}
+
+/**
+ * The farm's own project preparation, when it has it and is up: renders then
+ * need no editor worker session.
+ */
+export async function renderFarmPrepareSupport() {
+	const config = renderFarmConfig();
+	if (!config?.callbackSecret) return null;
+	const health = await renderFarmHealth(config);
+	return health.healthy ? health.prepare : null;
 }
 
 /**
@@ -192,6 +223,9 @@ function renderFarmHealthy(
 export async function renderFarmSaveUnavailable() {
 	const config = renderFarmConfig();
 	if (!config?.callbackSecret) return "The render farm is not configured";
+	const health = await renderFarmHealth(config);
+	if (!health.healthy) return "The render farm is not responding";
+	if (health.prepare) return null;
 	const env = serverEnv();
 	let workers = 0;
 	try {
@@ -203,31 +237,80 @@ export async function renderFarmSaveUnavailable() {
 	if (!env.MEDIA_SERVER_WEBHOOK_SECRET || workers === 0) {
 		return "No editor worker is configured";
 	}
-	if (!(await renderFarmHealthy(config))) {
-		return "The render farm is not responding";
-	}
 	return null;
 }
+
+/** The session id a browser-only editor uses before it has a worker. */
+export function browserEditorSessionId(videoId: string) {
+	return `browser-${videoId}`;
+}
+
+/**
+ * Starts a farm job the farm prepares itself when it can, otherwise from the
+ * editor worker session. A browser-only editor without a worker session gets
+ * ServiceUnavailable back and prepares one.
+ */
+const startRenderFarmJobForSession = Effect.fn("startRenderFarmJobForSession")(
+	function* ({
+		video,
+		sessionId,
+		origin,
+		kind,
+		settings,
+	}: {
+		video: Effect.Effect.Success<ReturnType<typeof loadEligibleEditorVideo>>;
+		sessionId: string;
+		origin: string;
+		kind: RenderFarmJobKind;
+		settings?: RenderFarmJobSettings;
+	}) {
+		const support = yield* Effect.promise(renderFarmPrepareSupport);
+		if (support) {
+			const direct = yield* startRenderFarmJobDirect({
+				video,
+				origin,
+				kind,
+				support,
+				settings,
+			});
+			if (!("unsupported" in direct)) {
+				console.info(`[renderFarm] ${kind} ${video.id} prepared by the farm`);
+				return direct;
+			}
+			console.info(
+				`[renderFarm] ${kind} ${video.id} needs an editor worker: ${direct.unsupported}`,
+			);
+		}
+		if (sessionId === browserEditorSessionId(video.id)) {
+			return yield* new HttpApiError.ServiceUnavailable();
+		}
+		const sessionPath = yield* verifyOwnedEditorSession(video.id, sessionId);
+		console.info(
+			`[renderFarm] ${kind} ${video.id} prepared by an editor worker`,
+		);
+		return yield* startRenderFarmJob({
+			video,
+			sessionPath,
+			origin,
+			kind,
+			settings,
+		});
+	},
+);
 
 export const startRenderFarmSave = Effect.fn("startRenderFarmSave")(function* (
 	videoId: Video.VideoId,
 	sessionId: string,
 	origin: string,
 ) {
-	const [sessionPath, video] = yield* Effect.all(
-		[
-			verifyOwnedEditorSession(videoId, sessionId),
-			loadEligibleEditorVideo(videoId),
-		],
-		{ concurrency: 2 },
-	);
+	const video = yield* loadEligibleEditorVideo(videoId);
 	if (!canSaveEditorVideo(video)) return yield* new HttpApiError.Forbidden();
 	if (renderFarmSaveIsCurrent(video.metadata)) {
 		return yield* new HttpApiError.Conflict();
 	}
-	const started = yield* startRenderFarmJob({
+	const started = yield* startRenderFarmJobForSession({
 		video,
-		sessionPath,
+		sessionId,
 		origin,
 		kind: "save",
 	});
@@ -263,7 +346,6 @@ export const startRenderFarmExport = Effect.fn("startRenderFarmExport")(
 		origin: string,
 		settings: RenderFarmJobSettings,
 	) {
-		const sessionPath = yield* verifyOwnedEditorSession(videoId, sessionId);
 		const video = yield* loadEligibleEditorVideo(videoId);
 		if (
 			(video.duration ?? 0) >= PRO_DURATION_SECONDS &&
@@ -271,9 +353,9 @@ export const startRenderFarmExport = Effect.fn("startRenderFarmExport")(
 		) {
 			return yield* new HttpApiError.Forbidden();
 		}
-		const started = yield* startRenderFarmJob({
+		const started = yield* startRenderFarmJobForSession({
 			video,
-			sessionPath,
+			sessionId,
 			origin,
 			kind: "export",
 			settings,
@@ -547,6 +629,37 @@ export const startRenderFarmJob = Effect.fn("startRenderFarmJob")(function* ({
 		),
 	);
 
+	const started = yield* postRenderFarmJob({
+		config,
+		video,
+		target,
+		kind,
+		origin,
+		settings,
+		prepare: false,
+	});
+	return { exportId, ...started, target, projectConfig };
+});
+
+/** Asks the farm to render a project whose files are already in storage. */
+const postRenderFarmJob = Effect.fn("postRenderFarmJob")(function* ({
+	config,
+	video,
+	target,
+	kind,
+	origin,
+	settings,
+	prepare,
+}: {
+	config: NonNullable<ReturnType<typeof renderFarmConfig>>;
+	video: DbVideo;
+	target: ReturnType<typeof renderFarmKeys>;
+	kind: RenderFarmJobKind;
+	origin: string;
+	settings?: RenderFarmJobSettings;
+	/** The farm writes the project files from `prepare.json` first. */
+	prepare: boolean;
+}) {
 	const jobSettings: RenderFarmJobSettings = settings ?? {
 		resolution: SAVE_RESOLUTION,
 		fps: Math.min(60, Math.max(24, Math.round(video.fps ?? 30))),
@@ -568,22 +681,123 @@ export const startRenderFarmJob = Effect.fn("startRenderFarmJob")(function* ({
 					resolution: jobSettings.resolution,
 					fps: jobSettings.fps,
 					compression: jobSettings.compression,
+					...(prepare ? { prepare: "prepare.json" } : {}),
 				}),
 			}),
 		catch: () => new HttpApiError.ServiceUnavailable(),
 	});
-	const job = yield* readJson(jobResponse);
+	const job: unknown = yield* Effect.tryPromise({
+		try: () => jobResponse.json() as Promise<unknown>,
+		catch: () => new HttpApiError.ServiceUnavailable(),
+	});
 	if (!jobResponse.ok || !asRecord(job) || typeof job.id !== "string") {
 		return yield* new HttpApiError.ServiceUnavailable();
 	}
-	return {
-		exportId,
-		jobId: job.id,
-		target,
-		settings: jobSettings,
-		projectConfig,
-	};
+	return { jobId: job.id, settings: jobSettings };
 });
+
+async function displayHasAudio(url: string) {
+	const { ALL_FORMATS, Input, UrlSource } = await import("mediabunny");
+	const input = new Input({ formats: ALL_FORMATS, source: new UrlSource(url) });
+	try {
+		return (await input.getAudioTracks()).length > 0;
+	} finally {
+		input.dispose();
+	}
+}
+
+/**
+ * Starts a render the farm prepares itself, with no editor worker session:
+ * writes what the worker would have staged as `prepare.json` and a manifest
+ * of the recording's own files. Returns why not when only a worker can
+ * prepare this recording.
+ */
+export const startRenderFarmJobDirect = Effect.fn("startRenderFarmJobDirect")(
+	function* ({
+		video,
+		origin,
+		kind,
+		support,
+		exportId = randomUUID(),
+		settings,
+	}: {
+		video: DbVideo & {
+			captionsEnabled: boolean;
+			defaultStyle?: EditorDefaultStyle | null;
+		};
+		origin: string;
+		kind: RenderFarmJobKind;
+		support: RenderFarmPrepareSupport;
+		exportId?: string;
+		settings?: RenderFarmJobSettings;
+	}) {
+		const config = renderFarmConfig();
+		if (!config?.callbackSecret) {
+			return yield* new HttpApiError.ServiceUnavailable();
+		}
+		const [storage] = yield* Storage.getAccessForVideo(
+			decodeStorageVideo(video),
+			{ resolvePublishedOutput: false },
+		).pipe(
+			Effect.catchTag("StorageError", () =>
+				Effect.fail(new HttpApiError.ServiceUnavailable()),
+			),
+		);
+		if (
+			storage.provider !== "s3" ||
+			storage.bucketName !== serverEnv().CAP_AWS_BUCKET
+		) {
+			return { unsupported: "The recording is not in Cap's storage" } as const;
+		}
+		const target = renderFarmKeys(
+			video.ownerId,
+			video.id,
+			exportId,
+			kind === "export" ? "export" : "result",
+		);
+		const planned = yield* planDirectRender(
+			video,
+			target,
+			support,
+			displayHasAudio,
+		);
+		if ("unsupported" in planned) return planned;
+		yield* Effect.all(
+			[
+				storage.putObject(
+					`${target.recording}/prepare.json`,
+					JSON.stringify(planned.prepare),
+					{ contentType: "application/json" },
+				),
+				storage.putObject(
+					`${target.recording}/manifest.json`,
+					JSON.stringify({ files: planned.entries }),
+					{ contentType: "application/json" },
+				),
+			],
+			{ concurrency: 2 },
+		).pipe(
+			Effect.catchTag("StorageError", () =>
+				Effect.fail(new HttpApiError.ServiceUnavailable()),
+			),
+		);
+		const started = yield* postRenderFarmJob({
+			config,
+			video,
+			target,
+			kind,
+			origin,
+			settings,
+			prepare: true,
+		});
+		return {
+			exportId,
+			...started,
+			target,
+			projectConfig: planned.config,
+		};
+	},
+);
 
 /**
  * Starts the farm transcoding one of a recording's videos, so a later render

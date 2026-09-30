@@ -28,6 +28,8 @@ export type RenderManifestEntry = {
 	size?: number;
 	key?: string;
 	transcodeFrom?: string;
+	/** A file the farm ships in its image (a wallpaper or library track). */
+	builtin?: string;
 };
 
 export type RenderProjectPlan = {

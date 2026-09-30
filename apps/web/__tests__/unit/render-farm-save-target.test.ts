@@ -29,14 +29,29 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 test("Save renders in the browser when the farm or an editor worker is not configured", async () => {
-	const health = vi.fn();
+	const health = vi.fn(async () => Response.json({ ok: true, workers: 3 }));
 	vi.stubGlobal("fetch", health);
 	expect(await saveTarget()).toBe("The render farm is not configured");
+	expect(health).not.toHaveBeenCalled();
 	env.value = { ...farm };
 	expect(await saveTarget()).toBe("No editor worker is configured");
 	env.value = { ...farm, CAP_WEB_EDITOR_WORKER_POOL: "not json" };
 	expect(await saveTarget()).toBe("No editor worker is configured");
-	expect(health).not.toHaveBeenCalled();
+});
+
+test("Save needs no editor worker when the farm prepares projects itself", async () => {
+	env.value = { ...farm };
+	vi.stubGlobal(
+		"fetch",
+		vi.fn(async () =>
+			Response.json({
+				ok: true,
+				workers: 3,
+				prepare: { version: 1, defaultConfig: { audio: {} }, music: [] },
+			}),
+		),
+	);
+	expect(await saveTarget()).toBeNull();
 });
 
 test("Save uses the farm only while its health check reports workers", async () => {

@@ -1430,28 +1430,15 @@ export class EditorHostBridge {
 						: "The render farm is unavailable",
 			};
 		}
-		let releaseWorkerUse: () => void = () => undefined;
-		try {
-			// The render project is built from the worker's prepared copy of
-			// the recording, so a browser-only editor starts one first.
-			releaseWorkerUse = await this.ensureWorkerSession(true);
-			const sessionId = this.sessionId;
-			const projectSavedAt = this.getProjectSavedAt?.() ?? null;
-			const response = await fetch(savePath(sessionId), {
+		const post = (sessionId: string) =>
+			fetch(savePath(sessionId), {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({ videoId: this.videoId }),
 				cache: "no-store",
 				signal: this.controller.signal,
 			});
-			if ([403, 404, 409].includes(response.status))
-				throw new SaveRejected(webEditorSaveError(response.status));
-			if (!response.ok) {
-				return {
-					renderer: "browser",
-					reason: `The render farm could not start the save (${response.status})`,
-				};
-			}
+		const farmSave = async (response: Response) => {
 			const saved: unknown = await response.json();
 			if (
 				typeof saved !== "object" ||
@@ -1461,10 +1448,41 @@ export class EditorHostBridge {
 			) {
 				throw new SaveRejected("Save response was invalid");
 			}
+			return { renderer: "farm" as const, shareUrl: saved.shareUrl };
+		};
+		if ("direct" in plan && plan.direct === true) {
+			// The farm prepares the stored project itself, so no worker
+			// session is needed. It falls back to one when it can't.
+			try {
+				const response = await post(this.browserSessionId);
+				if ([403, 404, 409].includes(response.status))
+					throw new SaveRejected(webEditorSaveError(response.status));
+				if (response.ok) return await farmSave(response);
+			} catch (cause) {
+				if (cause instanceof SaveRejected || this.disposed) throw cause;
+			}
+		}
+		let releaseWorkerUse: () => void = () => undefined;
+		try {
+			// The render project is built from the worker's prepared copy of
+			// the recording, so a browser-only editor starts one first.
+			releaseWorkerUse = await this.ensureWorkerSession(true);
+			const sessionId = this.sessionId;
+			const projectSavedAt = this.getProjectSavedAt?.() ?? null;
+			const response = await post(sessionId);
+			if ([403, 404, 409].includes(response.status))
+				throw new SaveRejected(webEditorSaveError(response.status));
+			if (!response.ok) {
+				return {
+					renderer: "browser",
+					reason: `The render farm could not start the save (${response.status})`,
+				};
+			}
+			const saved = await farmSave(response);
 			// The save route gave the worker the stored project.
 			if (this.workerSessionId === sessionId)
 				this.workerProjectSavedAt = projectSavedAt;
-			return { renderer: "farm", shareUrl: saved.shareUrl };
+			return saved;
 		} catch (cause) {
 			if (cause instanceof SaveRejected || this.disposed) throw cause;
 			return {

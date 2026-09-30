@@ -9,9 +9,11 @@ import {
 } from "@effect/platform";
 import { Effect, Layer, Schema } from "effect";
 import { loadEligibleEditorVideo } from "@/lib/editor-session";
+import { directRenderLikely } from "@/lib/render-farm-direct-plan";
 import { withdrawRenderFarmSave } from "@/lib/render-farm-records";
 import {
 	canSaveEditorVideo,
+	renderFarmPrepareSupport,
 	renderFarmSaveUnavailable,
 	startRenderFarmSave,
 } from "@/lib/render-farm-start";
@@ -31,6 +33,8 @@ class Api extends HttpApi.make("WebEditorSaveApi").add(
 					Schema.Struct({
 						renderer: Schema.Literal("farm", "browser"),
 						reason: Schema.NullOr(Schema.String),
+						/** The farm prepares this project itself: no worker session. */
+						direct: Schema.Boolean,
 					}),
 				)
 				.addError(HttpApiError.NotFound)
@@ -96,10 +100,19 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 						if (renderFarmSaveIsCurrent(video.metadata)) {
 							return yield* new HttpApiError.Conflict();
 						}
-						const reason = yield* Effect.promise(renderFarmSaveUnavailable);
+						const [reason, support] = yield* Effect.promise(() =>
+							Promise.all([
+								renderFarmSaveUnavailable(),
+								renderFarmPrepareSupport(),
+							]),
+						);
 						return reason
-							? { renderer: "browser" as const, reason }
-							: { renderer: "farm" as const, reason: null };
+							? { renderer: "browser" as const, reason, direct: false }
+							: {
+									renderer: "farm" as const,
+									reason: null,
+									direct: !!support && directRenderLikely(video.metadata),
+								};
 					}),
 				)
 				.handle("save", ({ path, payload }) =>

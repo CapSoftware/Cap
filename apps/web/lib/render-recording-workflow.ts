@@ -12,7 +12,11 @@ import {
 	attachRenderFarmJob,
 	clearRecordingRender,
 } from "./render-farm-records";
-import { startRenderFarmJob } from "./render-farm-start";
+import {
+	renderFarmPrepareSupport,
+	startRenderFarmJob,
+	startRenderFarmJobDirect,
+} from "./render-farm-start";
 import { recordingRenderSourcesReady } from "./render-recording-eligibility";
 import { runWorkflowPromise } from "./workflow-runtime";
 
@@ -79,6 +83,35 @@ async function checkRecordingSources(payload: RecordingRenderPayload) {
 	)
 		? ("ready" as const)
 		: ("waiting" as const);
+}
+
+/**
+ * Starts the render with the farm preparing the recording itself, when the
+ * farm can and the recording needs nothing only an editor worker does.
+ */
+async function startDirectRecordingRender(payload: RecordingRenderPayload) {
+	"use step";
+
+	const support = await renderFarmPrepareSupport();
+	if (!support) return "unsupported" as const;
+	const loaded = await loadRenderVideo(payload);
+	if (!loaded) return "superseded" as const;
+	const started = await startRenderFarmJobDirect({
+		video: loaded.video,
+		origin: payload.origin,
+		kind: "recording",
+		exportId: payload.exportId,
+		support,
+	}).pipe(runWorkflowPromise);
+	if ("unsupported" in started) {
+		console.info(
+			`[renderRecording] ${payload.videoId} needs an editor worker: ${started.unsupported}`,
+		);
+		return "unsupported" as const;
+	}
+	await attachRenderFarmJob(loaded.video.id, payload.exportId, started.jobId);
+	console.info(`[renderRecording] ${payload.videoId} prepared by the farm`);
+	return "started" as const;
 }
 
 async function requestRecordingPreparation(payload: RecordingRenderPayload) {
@@ -203,8 +236,8 @@ async function waitForRecordingSession(preparationId: string): Promise<string> {
 
 /**
  * Renders a finished recording on the render farm: waits for its sources,
- * prepares it on an editor worker, uploads the render project and starts
- * the job. The farm's callback publishes the result like a Save.
+ * then has the farm prepare it, or prepares it on an editor worker when only
+ * a worker can, and starts the job. The farm's callback publishes the result like a Save.
  */
 export async function renderRecordingWorkflow(payload: RecordingRenderPayload) {
 	"use workflow";
@@ -213,6 +246,12 @@ export async function renderRecordingWorkflow(payload: RecordingRenderPayload) {
 	let sessionId: string | null = null;
 	try {
 		if (!(await waitForRecordingSources(payload))) {
+			await abandonRecordingRender(payload);
+			return { started: false };
+		}
+		const direct = await startDirectRecordingRender(payload);
+		if (direct === "started") return { started: true };
+		if (direct === "superseded") {
 			await abandonRecordingRender(payload);
 			return { started: false };
 		}
