@@ -714,8 +714,13 @@ async function runTranscode(task: TranscodeTask, slot: number) {
 	try {
 		const output = join(dir, "output.mp4");
 		const input = join(dir, "source");
+		// Each range that lands counts as progress, so a long download isn't
+		// taken for a stalled transcode, while one that stops still is.
 		await downloadSource(s3, task.source, input, {
 			signal: run.controller.signal,
+			onProgress: () => {
+				entry.lastProgressAt = Date.now();
+			},
 		});
 		entry.lastProgressAt = Date.now();
 		run.controller.signal.throwIfAborted();

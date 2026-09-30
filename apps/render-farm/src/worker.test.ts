@@ -8,7 +8,12 @@ import * as stitch from "./stitch";
 import * as transcode from "./transcode";
 
 function harness(
-	options: { presignGate?: Promise<void>; probeStalls?: boolean } = {},
+	options: {
+		presignGate?: Promise<void>;
+		probeStalls?: boolean;
+		/** Each ranged read waits for the next gate, when given. */
+		rangeGates?: Promise<void>[];
+	} = {},
 ) {
 	const spawned: string[] = [];
 	const killed: string[] = [];
@@ -28,13 +33,13 @@ function harness(
 			s3: transcode.RangeSource,
 			key: string,
 			_path: string,
-			options: { signal?: AbortSignal },
+			options: { signal?: AbortSignal; onProgress?: (bytes: number) => void },
 		) =>
 			transcode.downloadSource(
 				s3,
 				key,
 				join(mkdtempSync(join(tmpdir(), "rf-worker-")), "source"),
-				options,
+				{ ...options, piece: 4, concurrency: 1 },
 			),
 		availableParallelism: () => 1,
 		hostname: () => "worker-test",
@@ -46,9 +51,10 @@ function harness(
 		S3: class {
 			async head() {
 				await options.presignGate;
-				return { size: 4 };
+				return { size: options.rangeGates ? options.rangeGates.length * 4 : 4 };
 			}
 			async getRange() {
+				await options.rangeGates?.shift();
 				return new Uint8Array(4);
 			}
 			async uploadFile() {
@@ -163,6 +169,29 @@ describe("transcode cancellation", () => {
 		await expect(pending).rejects.toThrow("transcode cancelled");
 		expect(h.killed).toEqual(["ffprobe:SIGKILL"]);
 		expect(h.spawned).toEqual(["ffprobe"]);
+		expect(h.transcoders.size).toBe(0);
+	});
+
+	test("a download that keeps landing ranges is not taken for a stalled transcode", async () => {
+		const gates = [0, 1, 2].map(() => Promise.withResolvers<void>());
+		const h = harness({ rangeGates: gates.map((gate) => gate.promise) });
+		const pending = h.runTranscode(task, 0);
+		await until(() => h.progress.has(0));
+		const progress = h.progress.get(0);
+		if (!progress) throw new Error("missing progress");
+		for (const gate of gates.slice(0, 2)) {
+			progress.lastProgressAt = 0;
+			gate.resolve();
+			await until(() => progress.lastProgressAt > 0);
+			h.intervals[0]?.();
+			expect(h.transcoders.size).toBe(1);
+		}
+		// The last range never lands: the watchdog stops it.
+		progress.lastProgressAt = 0;
+		h.intervals[0]?.();
+		gates[2]?.resolve();
+		await expect(pending).rejects.toThrow("transcode cancelled");
+		expect(h.spawned).toEqual([]);
 		expect(h.transcoders.size).toBe(0);
 	});
 

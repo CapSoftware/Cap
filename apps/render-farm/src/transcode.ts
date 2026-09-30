@@ -153,7 +153,13 @@ export async function downloadSource(
 	s3: RangeSource,
 	key: string,
 	path: string,
-	options: { concurrency?: number; piece?: number; signal?: AbortSignal } = {},
+	options: {
+		concurrency?: number;
+		piece?: number;
+		signal?: AbortSignal;
+		/** Called with the bytes written so far after each range lands. */
+		onProgress?: (bytes: number) => void;
+	} = {},
 ) {
 	const head = await s3.head(key);
 	if (!head) throw new Error(`${key} is missing`);
@@ -161,6 +167,7 @@ export async function downloadSource(
 	const pieces = Math.ceil(head.size / piece);
 	const file = Bun.file(path);
 	const handle = await (await import("node:fs/promises")).open(path, "w");
+	let written = 0;
 	try {
 		await handle.truncate(head.size);
 		let next = 0;
@@ -178,6 +185,8 @@ export async function downloadSource(
 							throw new Error(`short read ${key} ${start}-${end}`);
 						}
 						await handle.write(bytes, 0, bytes.byteLength, start);
+						written += bytes.byteLength;
+						options.onProgress?.(written);
 					}
 				},
 			),

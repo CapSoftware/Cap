@@ -120,6 +120,24 @@ describe("downloadSource", () => {
 		expect(reads).toHaveLength(8);
 	});
 
+	test("reports progress as each range lands", async () => {
+		const progress: number[] = [];
+		await downloadSource(
+			{
+				head: async () => ({ size: 300 }),
+				getRange: async (_key, start, end) => new Uint8Array(end - start + 1),
+			},
+			"k",
+			join(mkdtempSync(join(tmpdir(), "rf-dl-")), "source"),
+			{
+				piece: 100,
+				concurrency: 1,
+				onProgress: (bytes) => progress.push(bytes),
+			},
+		);
+		expect(progress).toEqual([100, 200, 300]);
+	});
+
 	test("refuses a short read", async () => {
 		const path = join(mkdtempSync(join(tmpdir(), "rf-dl-")), "source");
 		await expect(
