@@ -13,7 +13,6 @@ import { MIN_PART } from "./protocol";
  */
 
 export type StashedChunk = {
-	/** Part number reserved for the coordinator, below the chunk's own parts. */
 	slot: number;
 	stash: { key: string; bytes: number };
 	parts: { partNumber: number; etag: string; size: number }[];

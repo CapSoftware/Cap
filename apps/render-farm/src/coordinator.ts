@@ -297,9 +297,7 @@ type HlsState = {
 type Job = {
 	verified?: boolean;
 	acceptances: Map<string, Promise<void>>;
-	/** Coordinator parts written ahead of assembly, by `stitchPartKey`. */
 	stitchParts?: Map<string, Promise<{ partNumber: number; etag: string }>>;
-	/** Stashes the header's part will carry, read ahead of assembly. */
 	headerStashes?: Map<string, Promise<Uint8Array>>;
 	/** Summary frozen when the job ends; the job's media data is released then. */
 	final?: ReturnType<typeof summary>;
