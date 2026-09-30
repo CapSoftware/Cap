@@ -456,7 +456,6 @@ describe("assembly", () => {
 				size: number;
 			};
 			const moovEnd = moov.start + moov.size;
-			// The moov is followed directly by the mdat that holds every byte.
 			const view = new DataView(file.buffer, file.byteOffset);
 			expect(
 				String.fromCharCode(...file.subarray(moovEnd + 4, moovEnd + 8)),

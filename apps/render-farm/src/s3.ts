@@ -443,7 +443,6 @@ export class S3 {
 		return decodeXml(etag);
 	}
 
-	/** Whether this client can copy objects from `other` server side. */
 	sharesStoreWith(other: S3) {
 		return (
 			this.config.endpoint === other.config.endpoint &&
