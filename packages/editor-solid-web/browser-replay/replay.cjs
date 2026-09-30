@@ -442,6 +442,7 @@ async function replay(forceWebGl, forceWebGpu = false) {
 						(error) => errors.push(error.message),
 					);
 					console.info("Cap replay stage: local renderer created");
+					await playback.canvas.displayGammaSettled;
 					if (playback.resizeForBase(1920, 1080)) await playback.seek(0);
 				} catch (error) {
 					const probe = document.createElement("canvas");
