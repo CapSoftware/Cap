@@ -9,7 +9,6 @@ use serde_json::{Value, json};
 use std::{
     fs,
     path::{Path, PathBuf},
-    process::Command,
 };
 
 #[derive(Deserialize)]
@@ -122,19 +121,49 @@ fn recorded_display_duration(project: &Path, source: &str, content_type: &str) -
         return display_video_duration(Path::new(source));
     }
     let finalized = project.parent()?.join("display.finalized.webm");
-    let status = Command::new("ffmpeg")
-        .args(["-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i"])
-        .arg(source)
-        .args(["-map", "0", "-c", "copy", "-f", "webm"])
-        .arg(&finalized)
-        .status()
-        .ok()?;
-    let duration = status
-        .success()
-        .then(|| display_video_duration(&finalized))
-        .flatten();
+    let duration = rewrite_webm(source, &finalized)
+        .inspect_err(|error| tracing::warn!("WebM rewrite failed: {error:#}"))
+        .ok()
+        .and_then(|()| display_video_duration(&finalized));
     let _ = fs::remove_file(&finalized);
     duration
+}
+
+/// `ffmpeg -i <source> -map 0 -c copy -f webm <output>`, in process: the
+/// editor worker's rewrite, which gives a browser WebM the duration its header
+/// lacks.
+fn rewrite_webm(source: &str, output: &Path) -> Result<()> {
+    let mut input = ffmpeg::format::input(&source).context("open WebM")?;
+    let mut muxer = ffmpeg::format::output_as(output, "webm").context("create WebM")?;
+    let mut streams = Vec::new();
+    for stream in input.streams() {
+        let mut copy = muxer.add_stream(ffmpeg::encoder::find(ffmpeg::codec::Id::None))?;
+        copy.set_parameters(stream.parameters());
+        // SAFETY: the codec tag of a copied stream must be reset so the muxer
+        // picks the tag for its own container, as ffmpeg's stream copy does.
+        unsafe {
+            (*copy.parameters().as_mut_ptr()).codec_tag = 0;
+        }
+        streams.push((stream.index(), stream.time_base()));
+    }
+    muxer.write_header().context("write WebM header")?;
+    let output_bases: Vec<_> = muxer.streams().map(|stream| stream.time_base()).collect();
+    for (stream, mut packet) in input.packets() {
+        let Some(position) = streams
+            .iter()
+            .position(|(index, _)| *index == stream.index())
+        else {
+            continue;
+        };
+        packet.rescale_ts(streams[position].1, output_bases[position]);
+        packet.set_position(-1);
+        packet.set_stream(position);
+        packet
+            .write_interleaved(&mut muxer)
+            .context("write WebM packet")?;
+    }
+    muxer.write_trailer().context("write WebM trailer")?;
+    Ok(())
 }
 
 pub fn default_config() -> Result<Value> {
