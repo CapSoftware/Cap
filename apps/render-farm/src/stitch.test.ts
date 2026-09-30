@@ -25,7 +25,6 @@ function chunk(index: number, bytes: number): StashedChunk {
 	return { slot, stash: { key: `s/${index}`, bytes: stash }, parts };
 }
 
-/** The whole file as S3 will join it: header, then every chunk in order. */
 function layout(header: number, chunks: StashedChunk[]) {
 	const plan = planStitch(header, chunks);
 	const all = [
