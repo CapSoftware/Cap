@@ -1111,6 +1111,11 @@ try {
 	}
 	assert.ok(visibleRemountedPixels > remountedPixels.length / 12);
 	await editor.getByRole("button", { name: "Full preview quality" }).click();
+	await editor.getByRole("button", { name: "Skip to start" }).click();
+	await editor
+		.getByText(/^0:00\.00$/)
+		.first()
+		.waitFor({ state: "visible", timeout: 10_000 });
 	await editor.getByRole("button", { name: "Play video" }).click();
 	await editor
 		.getByRole("button", { name: "Pause video" })
