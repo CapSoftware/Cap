@@ -91,7 +91,6 @@ const HLS_SEGMENT_SECONDS = Number(process.env.RF_HLS_SEGMENT_SECONDS ?? 2);
 /** Unfinished chunks per job (from the front) that outrank other work. */
 const HEAD_CHUNKS = Number(process.env.RF_HEAD_CHUNKS ?? 2);
 const LEAD_IN_SECONDS = Number(process.env.RF_LEAD_IN_SECONDS ?? 4);
-/** Coordinator-owned parts uploaded or copied at once during assembly. */
 const STITCH_CONCURRENCY = 16;
 /**
  * Shortest audio section. Each one after the first also renders a 10 s
