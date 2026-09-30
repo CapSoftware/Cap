@@ -35,6 +35,8 @@ import {
 	type AudioResultMeta,
 	type AudioTask,
 	COMPRESSION_BPP,
+	CURSOR_OUTPUTS,
+	type CursorTask,
 	type JobRequest,
 	MIN_PART,
 	type SegmentReport,
@@ -58,6 +60,7 @@ import {
 	checkManifestBounds,
 	isKey,
 	sourceLimitsFromEnv,
+	validateCursorJobRequest,
 	validateJobRequest,
 } from "./validate";
 
@@ -1789,6 +1792,140 @@ setInterval(() => {
 	}
 }, 5_000);
 
+// ------------------------------------------------------------ cursor jobs ---
+
+const CURSOR_ATTEMPTS = 2;
+
+type CursorJob = {
+	id: string;
+	task: CursorTask;
+	state: "queued" | "running" | "ready" | "error";
+	worker?: string;
+	attempts: number;
+	lastReportedAt?: number;
+	notBefore?: number;
+	/** Thousandths of the whole job, from the worker's heartbeat. */
+	progress: number;
+	error?: string;
+	callbackUrl?: string;
+	reference?: string;
+	settledAt?: number;
+	bytes?: { display: number; inputEvents: number };
+};
+
+/** By output prefix: one reconstruction per target. */
+const cursorJobs = new Map<string, CursorJob>();
+
+function ensureCursorJob(request: {
+	source: string;
+	outputPrefix: string;
+	callbackUrl?: string;
+	reference?: string;
+}) {
+	const existing = cursorJobs.get(request.outputPrefix);
+	if (existing && existing.state !== "error") return existing;
+	const id = createHash("sha256")
+		.update(request.outputPrefix)
+		.digest("hex")
+		.slice(0, 16);
+	const job: CursorJob = {
+		id,
+		task: {
+			kind: "cursor",
+			taskId: `cr:${id}`,
+			source: request.source,
+			outputPrefix: request.outputPrefix,
+		},
+		state: "queued",
+		attempts: 0,
+		progress: 0,
+		callbackUrl: request.callbackUrl,
+		reference: request.reference,
+	};
+	cursorJobs.set(request.outputPrefix, job);
+	dispatch();
+	return job;
+}
+
+function nextCursorJob() {
+	const at = Date.now();
+	for (const job of cursorJobs.values()) {
+		if (job.state === "queued" && (job.notBefore ?? 0) <= at) return job;
+	}
+}
+
+function cursorJobById(id: string) {
+	for (const job of cursorJobs.values()) {
+		if (job.id === id) return job;
+	}
+}
+
+function cursorJobSummary(job: CursorJob) {
+	return {
+		id: job.id,
+		reference: job.reference,
+		status: job.state,
+		progress: job.progress / 1000,
+		error: job.error,
+		display: `${job.task.outputPrefix}${CURSOR_OUTPUTS.display}`,
+		inputEvents: `${job.task.outputPrefix}${CURSOR_OUTPUTS.inputEvents}`,
+		bytes: job.bytes,
+	};
+}
+
+function settleCursorJob(
+	job: CursorJob,
+	state: "ready" | "error",
+	error?: string,
+) {
+	job.state = state;
+	job.worker = undefined;
+	job.error = error;
+	if (state === "ready") job.progress = 1000;
+	job.settledAt = Date.now();
+	if (job.callbackUrl) {
+		postSigned(
+			job.callbackUrl,
+			JSON.stringify(cursorJobSummary(job)),
+			`cursor job ${job.id}`,
+		);
+	}
+}
+
+function requeueCursorJob(job: CursorJob, reason: string) {
+	console.warn(`requeue ${job.task.taskId}: ${reason}`);
+	if (job.attempts >= CURSOR_ATTEMPTS) {
+		settleCursorJob(job, "error", reason);
+		return;
+	}
+	const delay = 1000 * 2 ** job.attempts;
+	job.state = "queued";
+	job.worker = undefined;
+	job.notBefore = Date.now() + delay;
+	setTimeout(dispatch, delay + 50).unref();
+}
+
+setInterval(() => {
+	const cutoff = Date.now() - 30_000;
+	for (const [prefix, job] of cursorJobs) {
+		if (job.state === "running") {
+			const worker = job.worker ? workers.get(job.worker) : null;
+			if (
+				!worker ||
+				worker.lastSeen < cutoff ||
+				(job.lastReportedAt ?? 0) < cutoff
+			) {
+				requeueCursorJob(job, "worker stopped reporting it");
+			}
+		} else if (
+			job.settledAt !== undefined &&
+			Date.now() - job.settledAt > JOB_RETENTION_MS
+		) {
+			cursorJobs.delete(prefix);
+		}
+	}
+}, 5_000);
+
 function dispatch() {
 	pumpLocalAudio();
 	for (let p = 0; p < pollers.length; ) {
@@ -1816,6 +1953,20 @@ function dispatch() {
 			state = straggler();
 		}
 		if (!state) {
+			// Reconstruction is CPU work that no export waits on, so it only
+			// takes a slot nothing else wants.
+			const cursorJob =
+				accepts("video") && !poller.prefetch ? nextCursorJob() : undefined;
+			if (cursorJob) {
+				pollers.splice(p, 1);
+				cursorJob.state = "running";
+				cursorJob.worker = poller.worker;
+				cursorJob.attempts++;
+				cursorJob.lastReportedAt = Date.now();
+				cursorJob.progress = 0;
+				poller.resolve({ ...cursorJob.task, attempt: cursorJob.attempts });
+				continue;
+			}
 			p++;
 			continue;
 		}
@@ -2163,14 +2314,14 @@ function callbackPayload(job: Job) {
 	};
 }
 
-/** Posts the outcome, signed `sha256=<hex hmac of the body>`, with retries. */
-function notify(
-	job: Job,
-	body = JSON.stringify(callbackPayload(job)),
-	attempt = 0,
-) {
+function notify(job: Job) {
 	const url = job.request.callbackUrl;
 	if (!url) return;
+	postSigned(url, JSON.stringify(callbackPayload(job)), `job ${job.id}`);
+}
+
+/** Posts a callback body, signed `sha256=<hex hmac of the body>`, with retries. */
+function postSigned(url: string, body: string, label: string, attempt = 0) {
 	const signature = createHmac("sha256", CALLBACK_SECRET)
 		.update(body)
 		.digest("hex");
@@ -2189,11 +2340,11 @@ function notify(
 		})
 		.catch((error) => {
 			if (attempt >= 8) {
-				console.error(`job ${job.id} callback gave up: ${error}`);
+				console.error(`${label} callback gave up: ${error}`);
 				return;
 			}
 			setTimeout(
-				() => notify(job, body, attempt + 1),
+				() => postSigned(url, body, label, attempt + 1),
 				Math.min(60_000, 1000 * 2 ** attempt),
 			).unref();
 		});
@@ -2898,6 +3049,20 @@ Bun.serve({
 			};
 			const staleTranscodes: string[] = [];
 			for (const entry of body.running ?? []) {
+				if (entry.taskId.startsWith("cr:")) {
+					const job = cursorJobById(entry.taskId.slice(3));
+					if (
+						job?.state === "running" &&
+						job.worker === body.worker &&
+						job.attempts === entry.attempt
+					) {
+						job.lastReportedAt = Date.now();
+						job.progress = Math.min(999, Math.max(0, entry.frames));
+					} else {
+						staleTranscodes.push(entry.taskId);
+					}
+					continue;
+				}
 				if (entry.taskId.startsWith("tc:")) {
 					const transcode = transcodeById(entry.taskId.slice(3));
 					if (
@@ -3002,6 +3167,68 @@ Bun.serve({
 			// First copy wins; other copies wrote their own objects.
 			if (!chunk.has(report.index)) chunk.set(report.index, report);
 			publishPlaylist(job);
+			return Response.json({ ok: true });
+		}
+
+		if (url.pathname === "/cursor-jobs" && request.method === "POST") {
+			const parsed = validateCursorJobRequest(
+				await request.json().catch(() => null),
+			);
+			if (typeof parsed === "string")
+				return new Response(parsed, { status: 400 });
+			if (parsed.callbackUrl && !callbackAllowed(parsed.callbackUrl)) {
+				return new Response("callbackUrl host is not in RF_CALLBACK_HOSTS", {
+					status: 400,
+				});
+			}
+			return Response.json(cursorJobSummary(ensureCursorJob(parsed)));
+		}
+		const cursorMatch = url.pathname.match(
+			/^\/cursor-jobs\/([0-9a-f]{16})(?:\/(done|fail))?$/,
+		);
+		if (cursorMatch) {
+			const job = cursorJobById(cursorMatch[1] ?? "");
+			if (!job) return new Response("unknown cursor job", { status: 404 });
+			if (!cursorMatch[2] && request.method === "GET") {
+				return Response.json(cursorJobSummary(job));
+			}
+			if (request.method !== "POST") {
+				return new Response("method not allowed", { status: 405 });
+			}
+			const report = (await request.json()) as {
+				worker: string;
+				attempt?: number;
+				error?: string;
+			};
+			const current = () =>
+				cursorJobs.get(job.task.outputPrefix) === job &&
+				job.state === "running" &&
+				job.worker === report.worker &&
+				job.attempts === report.attempt;
+			if (cursorMatch[2] === "done") {
+				if (job.state === "ready") return Response.json({ ok: true });
+				if (!current()) {
+					return new Response("stale cursor job report", { status: 409 });
+				}
+				const summary = cursorJobSummary(job);
+				const [display, inputEvents] = await Promise.all([
+					s3.head(summary.display),
+					s3.head(summary.inputEvents),
+				]);
+				if (!current()) {
+					return new Response("stale cursor job report", { status: 409 });
+				}
+				if (!display?.size || !inputEvents?.size) {
+					return new Response("cursor job outputs are missing", {
+						status: 409,
+					});
+				}
+				job.bytes = { display: display.size, inputEvents: inputEvents.size };
+				settleCursorJob(job, "ready");
+				dispatch();
+			} else if (current()) {
+				requeueCursorJob(job, report.error ?? "failed");
+			}
 			return Response.json({ ok: true });
 		}
 

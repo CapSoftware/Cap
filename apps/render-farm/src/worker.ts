@@ -1,7 +1,8 @@
-import { randomUUID } from "node:crypto";
-import { mkdirSync, rmSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { chmodSync, mkdirSync, renameSync, rmSync } from "node:fs";
 import { availableParallelism, hostname } from "node:os";
 import { join } from "node:path";
+import { cursorProgress } from "./cursor";
 import { Engine, processCpuSeconds, sampleThreads } from "./engine";
 import { segmentHeader } from "./fmp4";
 import { closesSegment, segmentKey } from "./hls";
@@ -10,6 +11,8 @@ import type { Run } from "./mp4";
 import {
 	type AudioResultMeta,
 	type AudioTask,
+	CURSOR_OUTPUTS,
+	type CursorTask,
 	MIN_PART,
 	type SegmentReport,
 	type TaskTimings,
@@ -117,9 +120,7 @@ function dropJobs(finished: string[]) {
 		const cache = caches.get(jobId);
 		if (!cache) continue;
 		if (
-			[...busy.values()].some(
-				(task) => task.kind !== "transcode" && task.jobId === jobId,
-			)
+			[...busy.values()].some((task) => "jobId" in task && task.jobId === jobId)
 		)
 			continue;
 		cache.close();
@@ -145,7 +146,7 @@ const progress = new Map<
 	number,
 	{
 		taskId: string;
-		kind: "video" | "audio" | "transcode";
+		kind: "video" | "audio" | "transcode" | "cursor";
 		frames: number;
 		total: number;
 		startedAt: number;
@@ -799,6 +800,164 @@ async function runTranscode(task: TranscodeTask, slot: number) {
 	}
 }
 
+// The reconstruction service is private: its binary, ONNX Runtime and model
+// live in the farm bucket under RF_CURSOR_BUNDLE, listed with their SHA-256
+// in the bundle's manifest.json.
+const CURSOR_BUNDLE = process.env.RF_CURSOR_BUNDLE?.replace(/\/?$/, "/");
+const CURSOR_THREADS = Number(
+	process.env.RF_CURSOR_THREADS ?? Math.max(2, Math.floor(CPUS / 2)),
+);
+let cursorBundle: Promise<string> | null = null;
+
+async function fetchCursorBundle(prefix: string) {
+	const manifest = JSON.parse(
+		new TextDecoder().decode(await stashS3.get(`${prefix}manifest.json`)),
+	) as { files: Record<string, string> };
+	const dir = join(
+		WORK_DIR,
+		"cursor-service",
+		createHash("sha256").update(prefix).digest("hex").slice(0, 16),
+	);
+	mkdirSync(dir, { recursive: true });
+	for (const name of [
+		"cap-cursor-service",
+		"libonnxruntime.so",
+		"model.onnx",
+	]) {
+		const expected = manifest.files[name];
+		if (!expected) throw new Error(`cursor bundle manifest lacks ${name}`);
+		const path = join(dir, name);
+		const existing = Bun.file(path);
+		if (
+			(await existing.exists()) &&
+			createHash("sha256")
+				.update(new Uint8Array(await existing.arrayBuffer()))
+				.digest("hex") === expected
+		) {
+			continue;
+		}
+		const partial = `${path}.partial`;
+		await downloadSource(stashS3, `${prefix}${name}`, partial);
+		const actual = createHash("sha256")
+			.update(new Uint8Array(await Bun.file(partial).arrayBuffer()))
+			.digest("hex");
+		if (actual !== expected) {
+			rmSync(partial, { force: true });
+			throw new Error(`cursor bundle ${name} does not match its manifest`);
+		}
+		chmodSync(partial, 0o755);
+		renameSync(partial, path);
+	}
+	return dir;
+}
+
+function cursorBundleDir() {
+	if (!CURSOR_BUNDLE) {
+		return Promise.reject(
+			new Error("cursor reconstruction is not configured on this worker"),
+		);
+	}
+	cursorBundle ??= fetchCursorBundle(CURSOR_BUNDLE).catch((error) => {
+		cursorBundle = null;
+		throw error;
+	});
+	return cursorBundle;
+}
+
+async function runCursor(task: CursorTask, slot: number) {
+	const dir = join(WORK_DIR, `cursor-${randomUUID()}`);
+	mkdirSync(dir, { recursive: true });
+	const entry = {
+		taskId: task.taskId,
+		kind: "cursor" as const,
+		frames: 0,
+		total: 1000,
+		startedAt: Date.now(),
+		lastProgressAt: Date.now(),
+	};
+	progress.set(slot, entry);
+	const run: TranscodeRun = { controller: new AbortController() };
+	transcoders.set(slot, run);
+	try {
+		const bundle = await cursorBundleDir();
+		entry.lastProgressAt = Date.now();
+		const input = join(dir, "source");
+		await downloadSource(s3, task.source, input, {
+			signal: run.controller.signal,
+			onProgress: () => {
+				entry.lastProgressAt = Date.now();
+			},
+		});
+		run.controller.signal.throwIfAborted();
+		const output = join(dir, "output");
+		const service = Bun.spawn(
+			[
+				join(bundle, "cap-cursor-service"),
+				"process",
+				input,
+				"--model",
+				join(bundle, "model.onnx"),
+				"--output",
+				output,
+				"--inference-threads",
+				String(CURSOR_THREADS),
+			],
+			{
+				stdout: "ignore",
+				stderr: "pipe",
+				env: {
+					...process.env,
+					ORT_DYLIB_PATH: join(bundle, "libonnxruntime.so"),
+					ORT_DISABLE_TELEMETRY: "1",
+				},
+			},
+		);
+		run.process = service;
+		const decoder = new TextDecoder();
+		let buffered = "";
+		let tail = "";
+		for await (const bytes of service.stderr) {
+			buffered += decoder.decode(bytes, { stream: true });
+			const lines = buffered.split("\n");
+			buffered = lines.pop() ?? "";
+			for (const line of lines) {
+				const value = cursorProgress(line.trim());
+				if (value === null) {
+					tail = `${tail}\n${line}`.slice(-2000);
+					continue;
+				}
+				entry.lastProgressAt = Date.now();
+				if (value > entry.frames) entry.frames = value;
+			}
+		}
+		const code = await service.exited;
+		run.controller.signal.throwIfAborted();
+		if (code !== 0) {
+			throw new Error(
+				`cursor service exited ${code}: ${`${tail}${buffered}`.trim().slice(-500)}`,
+			);
+		}
+		await s3.uploadFile(
+			`${task.outputPrefix}${CURSOR_OUTPUTS.inputEvents}`,
+			join(output, "input-events.ndjson"),
+			"application/x-ndjson",
+		);
+		await s3.uploadFile(
+			`${task.outputPrefix}${CURSOR_OUTPUTS.display}`,
+			join(output, "reconstructed.cap/content/display.mp4"),
+			"video/mp4",
+		);
+	} finally {
+		if (run.process?.exitCode === null) {
+			run.process.kill("SIGKILL");
+			await run.process.exited;
+		}
+		transcoders.delete(slot);
+		progress.delete(slot);
+		rmSync(dir, { recursive: true, force: true });
+	}
+}
+
 async function poll(kinds: string[] | undefined, prefetch = false) {
 	const controller = new AbortController();
 	openPolls.add(controller);
@@ -884,7 +1043,7 @@ async function slotLoop(slot: number) {
 				.then((upcoming) => {
 					if (upcoming) {
 						reserved.set(slot, upcoming);
-						if (upcoming.kind !== "transcode") {
+						if ("jobId" in upcoming) {
 							cacheFor(upcoming.jobId)
 								.materialize(upcoming.files)
 								.catch(() => {});
@@ -905,7 +1064,13 @@ async function slotLoop(slot: number) {
 				);
 				engines[slot] = engine;
 			}
-			if (task.kind === "transcode") {
+			if (task.kind === "cursor") {
+				await runCursor(task, slot);
+				await post(`/cursor-jobs/${task.taskId.slice(3)}/done`, {
+					worker: WORKER_ID,
+					attempt: task.attempt,
+				});
+			} else if (task.kind === "transcode") {
 				const size = await runTranscode(task, slot);
 				await post(`/transcodes/${task.taskId.slice(3)}/done`, {
 					worker: WORKER_ID,
@@ -960,9 +1125,11 @@ async function slotLoop(slot: number) {
 				error: String(error instanceof Error ? error.message : error),
 			};
 			await post(
-				task.kind === "transcode"
-					? `/transcodes/${task.taskId.slice(3)}/fail`
-					: `/tasks/${encodeURIComponent(task.taskId)}/fail`,
+				task.kind === "cursor"
+					? `/cursor-jobs/${task.taskId.slice(3)}/fail`
+					: task.kind === "transcode"
+						? `/transcodes/${task.taskId.slice(3)}/fail`
+						: `/tasks/${encodeURIComponent(task.taskId)}/fail`,
 				failure,
 			).catch(() => {});
 		} finally {
@@ -1027,7 +1194,7 @@ function cancel(taskIds: string[]) {
 	for (const [slot, task] of busy) {
 		if (!taskIds.includes(task.taskId)) continue;
 		console.log(`cancelling ${task.taskId}`);
-		if (task.kind === "transcode") {
+		if (task.kind === "transcode" || task.kind === "cursor") {
 			stopTranscode(slot);
 			continue;
 		}
@@ -1040,7 +1207,7 @@ function cancel(taskIds: string[]) {
 setInterval(() => {
 	const now = Date.now();
 	for (const [slot, entry] of progress) {
-		if (entry.kind === "transcode") {
+		if (entry.kind === "transcode" || entry.kind === "cursor") {
 			// Decoding a long source can start slowly; a minute without any
 			// output means a wedged ffmpeg.
 			if (now - entry.lastProgressAt >= Math.max(STALL_MS, 60_000)) {

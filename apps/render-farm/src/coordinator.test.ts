@@ -914,6 +914,141 @@ function call(
 	);
 }
 
+describe("cursor jobs", () => {
+	const request = {
+		sourceRoot: "owner/video/",
+		source: "owner/video/raw-upload.webm",
+		outputPrefix: "owner/video/.recording/cursor/run1/",
+		callbackUrl: "https://app.cap.test/api/render-farm/callback",
+		reference: "cursor:video",
+	};
+	const display = `${request.outputPrefix}display.mp4`;
+	const inputEvents = `${request.outputPrefix}input-events.ndjson`;
+
+	test("are queued once, wait for chunk work and settle with a signed callback", async () => {
+		const h = harness();
+		const created = (await (await call(h, "/cursor-jobs", request)).json()) as {
+			id: string;
+			status: string;
+		};
+		expect(created).toMatchObject({ status: "queued", display, inputEvents });
+		const again = (await (await call(h, "/cursor-jobs", request)).json()) as {
+			id: string;
+		};
+		expect(again.id).toBe(created.id);
+		const work = (await (
+			await call(h, "/work", {
+				worker: "gpu-a",
+				slots: 1,
+				cpus: 8,
+				kinds: ["video"],
+			})
+		).json()) as { task: protocol.CursorTask };
+		expect(work.task).toMatchObject({
+			kind: "cursor",
+			source: request.source,
+			outputPrefix: request.outputPrefix,
+			attempt: 1,
+		});
+		await call(h, "/heartbeat", {
+			worker: "gpu-a",
+			slots: 1,
+			cpus: 8,
+			running: [
+				{
+					taskId: work.task.taskId,
+					attempt: 1,
+					frames: 420,
+					total: 1000,
+					elapsedMs: 10,
+				},
+			],
+		});
+		expect(
+			await (await call(h, `/cursor-jobs/${created.id}`)).json(),
+		).toMatchObject({ status: "running", progress: 0.42 });
+		const done = `/cursor-jobs/${created.id}/done`;
+		const report = { worker: "gpu-a", attempt: 1 };
+		expect((await call(h, done, { ...report, worker: "gpu-b" })).status).toBe(
+			409,
+		);
+		h.objects.set(display, new Uint8Array(10));
+		expect((await call(h, done, report)).status).toBe(409);
+		h.objects.set(inputEvents, new Uint8Array(10));
+		expect((await call(h, done, report)).status).toBe(200);
+		expect(
+			await (await call(h, `/cursor-jobs/${created.id}`)).json(),
+		).toMatchObject({
+			status: "ready",
+			progress: 1,
+			bytes: { display: 10, inputEvents: 10 },
+		});
+		const callback = h.callbacks.find(
+			(entry) => entry.url === request.callbackUrl,
+		);
+		const body = String(callback?.init.body);
+		expect(JSON.parse(body)).toMatchObject({
+			id: created.id,
+			reference: request.reference,
+			status: "ready",
+			display,
+			inputEvents,
+		});
+		const signature = createHmac("sha256", "test").update(body).digest("hex");
+		expect(
+			(callback?.init.headers as Record<string, string>)[
+				"x-render-farm-signature"
+			],
+		).toBe(`sha256=${signature}`);
+	});
+
+	test("a failed dispatch is retried once after a backoff, then reported as an error", async () => {
+		const h = harness();
+		const created = (await (await call(h, "/cursor-jobs", request)).json()) as {
+			id: string;
+		};
+		for (const attempt of [1, 2]) {
+			const work = (await (
+				await call(h, "/work", { worker: "gpu-a", slots: 1, cpus: 8 })
+			).json()) as { task: protocol.CursorTask };
+			expect(work.task.attempt).toBe(attempt);
+			await call(h, `/cursor-jobs/${created.id}/fail`, {
+				worker: "gpu-a",
+				attempt,
+				error: "service exited 1",
+			});
+			if (attempt === 1) {
+				expect(
+					await (await call(h, `/cursor-jobs/${created.id}`)).json(),
+				).toMatchObject({ status: "queued" });
+				await Bun.sleep(2100);
+			}
+		}
+		expect(
+			await (await call(h, `/cursor-jobs/${created.id}`)).json(),
+		).toMatchObject({ status: "error", error: "service exited 1" });
+		const callback = h.callbacks.find(
+			(entry) => entry.url === request.callbackUrl,
+		);
+		expect(JSON.parse(String(callback?.init.body))).toMatchObject({
+			status: "error",
+		});
+	}, 10_000);
+
+	test("reject sources and outputs outside the recording folder", async () => {
+		const h = harness();
+		for (const invalid of [
+			{ ...request, source: "other/video/raw-upload.webm" },
+			{ ...request, outputPrefix: "other/video/cursor/" },
+			{ ...request, outputPrefix: "owner/video/.recording/cursor/run1" },
+			{ ...request, outputPrefix: "owner/video/" },
+			{ ...request, callbackUrl: "https://evil.example/callback" },
+		]) {
+			expect((await call(h, "/cursor-jobs", invalid)).status).toBe(400);
+		}
+	});
+});
+
 describe("transcodes", () => {
 	const request = {
 		sourceRoot: "owner/video/",
