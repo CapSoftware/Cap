@@ -310,6 +310,10 @@ export function planDirectRenderProject(
 	if (!input.captionsEnabled && hasEditorCaptionContent(projectConfig)) {
 		throw new DirectRenderForbidden();
 	}
+	const tracks = musicTracks(projectConfig);
+	if (tracks.some((id) => !support.music.includes(id))) {
+		return { unsupported: "A library track isn't on the render farm" };
+	}
 
 	const plan = buildRenderProject({
 		root: input.target.root,
@@ -348,9 +352,6 @@ export function planDirectRenderProject(
 	const renderCamera = renderPath("camera");
 	const renderMic = renderPath("mic");
 	const renderSystemAudio = renderPath("system_audio");
-	const tracks = musicTracks(projectConfig).filter((id) =>
-		support.music.includes(id),
-	);
 
 	return {
 		prepare: {

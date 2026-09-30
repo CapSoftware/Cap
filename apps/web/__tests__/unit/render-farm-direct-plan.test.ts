@@ -307,10 +307,7 @@ describe("planDirectRenderProject", () => {
 						},
 					},
 					timeline: {
-						audioSegments: [
-							{ path: "assets/audio/library-calm-1.mp3" },
-							{ path: "assets/audio/library-gone.mp3" },
-						],
+						audioSegments: [{ path: "assets/audio/library-calm-1.mp3" }],
 					},
 				},
 				imageAssets: [{ path: image.path, size: image.size }],
@@ -331,15 +328,35 @@ describe("planDirectRenderProject", () => {
 			path: "assets/audio/library-calm-1.mp3",
 			builtin: "music/calm-1.mp3",
 		});
-		expect(entries.some((entry) => entry.path.includes("library-gone"))).toBe(
-			false,
-		);
+
 		expect(config.background).toEqual({
 			source: {
 				type: "wallpaper",
 				path: "$RF_PROJECT/assets/backgrounds/macOS/sequoia-dark.jpg",
 			},
 		});
+	});
+
+	it("leaves a project using a library track the farm lacks to the worker", () => {
+		expect(
+			planDirectRenderProject(
+				input({
+					sources: {
+						...input().sources,
+						projectConfig: {
+							...defaultConfig,
+							timeline: {
+								audioSegments: [
+									{ path: "assets/audio/library-calm-1.mp3" },
+									{ path: "assets/audio/library-gone.mp3" },
+								],
+							},
+						},
+					},
+					hasSavedProject: true,
+				}),
+			),
+		).toEqual({ unsupported: "A library track isn't on the render farm" });
 	});
 
 	it("refuses captions the plan doesn't include", () => {
