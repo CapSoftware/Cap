@@ -1,0 +1,51 @@
+/// A decoded frame as NV12 planes for the renderer's own YUV to RGB
+/// conversion; see `nv12_frame` in the renderer.
+export type Nv12Planes = {
+	nv12: Uint8Array;
+	width: number;
+	height: number;
+	yStride: number;
+	uvStride: number;
+	fullRange: boolean;
+	close(): void;
+};
+
+// Safari copies a decoded frame into a texture several times slower than it
+// copies its planes out. The renderer's conversion needs compute, so only its
+// WebGPU backend takes planes. Exports keep whole frames: fed that much faster,
+// Safari's realtime H.264 encoder drops frames of busy footage.
+export const UPLOADS_NV12_PLANES =
+	typeof navigator !== "undefined" &&
+	/AppleWebKit/.test(navigator.userAgent) &&
+	!/Chrome|Chromium|Edg/.test(navigator.userAgent);
+
+export function takesNv12Planes(frame: VideoFrame) {
+	return frame.format === "NV12";
+}
+
+export async function nv12Planes(frame: VideoFrame): Promise<Nv12Planes> {
+	const { width, height } = frame.visibleRect ?? {
+		width: frame.displayWidth,
+		height: frame.displayHeight,
+	};
+	const uvStride = width + (width % 2);
+	const nv12 = new Uint8Array(
+		width * height + uvStride * Math.ceil(height / 2),
+	);
+	await frame.copyTo(nv12, {
+		layout: [
+			{ offset: 0, stride: width },
+			{ offset: width * height, stride: uvStride },
+		],
+	});
+	return {
+		nv12,
+		width,
+		height,
+		yStride: width,
+		uvStride,
+		// Safari's decoder expands video range to full range and says so.
+		fullRange: frame.colorSpace.fullRange === true,
+		close() {},
+	};
+}

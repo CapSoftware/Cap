@@ -11,6 +11,12 @@ import { frameDisplayGamma } from "./browser-color-calibration";
 import { browserFrameLayout } from "./browser-frame-layout";
 import { browserWebGpuPresentationWorks } from "./browser-gpu-probe";
 import { BrowserImageDecoder } from "./browser-image-decoder";
+import {
+	type Nv12Planes,
+	nv12Planes,
+	takesNv12Planes,
+	UPLOADS_NV12_PLANES,
+} from "./browser-nv12-planes";
 import { loadBrowserRenderer } from "./browser-renderer";
 import { ensureBrowserRendererFonts } from "./browser-renderer-fonts";
 import { resolveEditorAssetUrl } from "./editor-asset-url";
@@ -56,6 +62,39 @@ export type BrowserStudioSetup = {
 	cursors: Array<string | null>;
 	audio?: BrowserAudioLevelSource[];
 };
+
+async function layerPlanes(composition: BrowserComposition) {
+	const started = perfStart();
+	const layers = (
+		composition.kind === "single"
+			? [composition.frame.screen, composition.frame.camera]
+			: [
+					composition.outgoing.screen,
+					composition.outgoing.camera,
+					composition.incoming.screen,
+					composition.incoming.camera,
+				]
+	).filter(
+		(layer): layer is BrowserVideoLayer & { source: VideoFrame } =>
+			!!layer &&
+			!layer.colorFix &&
+			typeof VideoFrame === "function" &&
+			layer.source instanceof VideoFrame &&
+			takesNv12Planes(layer.source),
+	);
+	if (layers.length === 0) return null;
+	const planes = new Map<BrowserVideoLayer, Nv12Planes>();
+	await Promise.all(
+		layers.map((layer) =>
+			nv12Planes(layer.source).then(
+				(copied) => planes.set(layer, copied),
+				() => undefined,
+			),
+		),
+	);
+	perfSpan("draw.planes", started);
+	return planes;
+}
 
 type OverlayImageSegment = {
 	path: string;
@@ -428,6 +467,13 @@ export class BrowserLocalCanvas {
 		if (this.disposed || !renderer) {
 			throw new Error("Editor canvas is closed");
 		}
+		const planes =
+			UPLOADS_NV12_PLANES && renderer.backend === "BrowserWebGpu"
+				? await layerPlanes(composition)
+				: null;
+		if (this.disposed) throw new Error("Editor canvas is closed");
+		const source = (layer: BrowserVideoLayer | null) =>
+			(layer && planes?.get(layer)) ?? layer?.source ?? null;
 		const wasmStarted = perfStart();
 		const layout =
 			composition.kind === "single"
@@ -438,9 +484,9 @@ export class BrowserLocalCanvas {
 						this.height,
 						composition.frame.recordingClip,
 						composition.frame.segmentTime,
-						composition.frame.screen.source,
+						source(composition.frame.screen),
 						composition.frame.screen.colorFix,
-						composition.frame.camera?.source ?? null,
+						source(composition.frame.camera),
 						composition.frame.camera?.colorFix ?? false,
 					)
 				: renderer.render_transition(
@@ -450,15 +496,15 @@ export class BrowserLocalCanvas {
 						this.height,
 						composition.outgoing.recordingClip,
 						composition.outgoing.segmentTime,
-						composition.outgoing.screen.source,
+						source(composition.outgoing.screen),
 						composition.outgoing.screen.colorFix,
-						composition.outgoing.camera?.source ?? null,
+						source(composition.outgoing.camera),
 						composition.outgoing.camera?.colorFix ?? false,
 						composition.incoming.recordingClip,
 						composition.incoming.segmentTime,
-						composition.incoming.screen.source,
+						source(composition.incoming.screen),
 						composition.incoming.screen.colorFix,
-						composition.incoming.camera?.source ?? null,
+						source(composition.incoming.camera),
 						composition.incoming.camera?.colorFix ?? false,
 						composition.type === "cross-fade" ? 0 : 1,
 						composition.progress,

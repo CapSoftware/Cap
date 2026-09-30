@@ -518,6 +518,45 @@ fn video_frame_kind(frame: &web_sys::VideoFrame) -> Option<String> {
     ))
 }
 
+/// A decoded frame the page copied out as NV12 planes (`{ nv12, width, height,
+/// yStride, uvStride, fullRange }`, the UV plane straight after the Y plane). It goes
+/// through the same YUV to RGB conversion as native playback instead of the
+/// browser's own, which Safari takes several milliseconds a frame over.
+fn nv12_frame(value: &JsValue, max_dimension: u32) -> Result<Option<DecodedFrame>, JsValue> {
+    if !value.is_object() || value.dyn_ref::<web_sys::VideoFrame>().is_some() {
+        return Ok(None);
+    }
+    let get = |name: &str| js_sys::Reflect::get(value, &JsValue::from_str(name));
+    let Ok(planes) = get("nv12")?.dyn_into::<js_sys::Uint8Array>() else {
+        return Ok(None);
+    };
+    let dimension = |name: &str| -> Result<u32, JsValue> {
+        get(name)?
+            .as_f64()
+            .filter(|value| value.fract() == 0.0 && *value > 0.0 && *value <= u32::MAX as f64)
+            .map(|value| value as u32)
+            .ok_or_else(|| js_error("Video frame planes are invalid"))
+    };
+    let (width, height) = (dimension("width")?, dimension("height")?);
+    let (y_stride, uv_stride) = (dimension("yStride")?, dimension("uvStride")?);
+    if width > max_dimension || height > max_dimension {
+        return Err(js_error("Video exceeds the browser GPU texture limit"));
+    }
+    let needed = u64::from(y_stride) * u64::from(height)
+        + u64::from(uv_stride) * u64::from(height.div_ceil(2));
+    if y_stride < width || uv_stride < width || u64::from(planes.length()) < needed {
+        return Err(js_error("Video frame planes are invalid"));
+    }
+    Ok(Some(DecodedFrame::from_browser_nv12(
+        planes.to_vec(),
+        width,
+        height,
+        y_stride,
+        uv_stride,
+        get("fullRange")?.is_truthy(),
+    )))
+}
+
 fn decoded_frame(
     value: &JsValue,
     color_fix: bool,
@@ -526,6 +565,9 @@ fn decoded_frame(
 ) -> Result<Option<DecodedFrame>, JsValue> {
     if value.is_null() || value.is_undefined() {
         return Ok(None);
+    }
+    if let Some(frame) = nv12_frame(value, max_dimension)? {
+        return Ok(Some(frame));
     }
     let (source, width, height) = browser_source(value)?;
     if width == 0 || height == 0 {
