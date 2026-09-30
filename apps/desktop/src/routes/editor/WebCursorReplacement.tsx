@@ -52,14 +52,24 @@ async function request(method: "GET" | "POST" | "PATCH", enabled?: boolean) {
 	return (await response.json()) as CursorReplacementView;
 }
 
-function reloadedRecently(id: string) {
+/**
+ * Whether the editor already reloaded toward the same sources moments ago:
+ * reaching them again means the reload did not take, so it must not repeat.
+ */
+function reloadedRecently(id: string, cursorData: boolean) {
 	try {
 		const key = `cap-cursor-replacement-reload:${id}`;
-		const last = Number(sessionStorage.getItem(key));
-		if (Number.isFinite(last) && Date.now() - last < RELOAD_GUARD_MS) {
+		const last = JSON.parse(sessionStorage.getItem(key) ?? "null") as {
+			at: number;
+			cursorData: boolean;
+		} | null;
+		if (
+			last?.cursorData === cursorData &&
+			Date.now() - last.at < RELOAD_GUARD_MS
+		) {
 			return true;
 		}
-		sessionStorage.setItem(key, String(Date.now()));
+		sessionStorage.setItem(key, JSON.stringify({ at: Date.now(), cursorData }));
 	} catch {}
 	return false;
 }
@@ -113,9 +123,9 @@ export function createWebCursorReplacement() {
 		if (timer) clearTimeout(timer);
 	});
 
-	const reloadOntoSources = async () => {
+	const reloadOntoSources = async (cursorData: boolean) => {
 		const id = videoId();
-		if (!id || reloadedRecently(id)) {
+		if (!id || reloadedRecently(id, cursorData)) {
 			toast("Reload the editor to apply the cursor change");
 			return;
 		}
@@ -139,7 +149,7 @@ export function createWebCursorReplacement() {
 		if (!current || current.status === "processing") return;
 		if (current.cursorData !== loadedCursorData()) {
 			if (current.cursorData) toast.success("Smooth cursor is ready");
-			void reloadOntoSources();
+			void reloadOntoSources(current.cursorData);
 		}
 	});
 
@@ -161,7 +171,7 @@ export function createWebCursorReplacement() {
 		}
 	};
 
-	return { view, busy, toggle };
+	return { view, busy, toggle, loadedCursorData };
 }
 
 export function WebCursorReplacement(props: {

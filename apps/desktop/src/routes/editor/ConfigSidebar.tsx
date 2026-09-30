@@ -596,10 +596,7 @@ function ConfigSidebarContent() {
 		meta,
 	} = useEditorContext();
 	const webCursor = isWebEditor ? createWebCursorReplacement() : null;
-	const cursorControlsShown = () =>
-		!webCursor ||
-		meta().hasRecordedCursorData ||
-		webCursor.view()?.cursorData === true;
+	const cursorControlsShown = () => !webCursor || webCursor.loadedCursorData();
 	const organizationSelection = createSelectedOrganization();
 	const brandColorSwatches = createMemo(() =>
 		getOrganizationBrandColorSwatches(
