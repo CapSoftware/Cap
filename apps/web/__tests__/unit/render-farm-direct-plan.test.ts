@@ -87,6 +87,7 @@ describe("planDirectRenderProject", () => {
 			key: key("raw-upload.mp4"),
 			contentType: "video/mp4",
 		});
+		expect(prepare.sessionDefaults).toBe(true);
 		expect(prepare.sources).toMatchObject({
 			title: "Take",
 			display: {
@@ -195,6 +196,14 @@ describe("planDirectRenderProject", () => {
 			defaultStyle: { version: 1, aspectRatio: "square" },
 		});
 		expect(config.aspectRatio).toBe("wide");
+		expect(
+			planDirectRenderProject(
+				input({
+					sources: { ...input().sources, projectConfig: saved },
+					hasSavedProject: true,
+				}),
+			),
+		).toMatchObject({ prepare: { sessionDefaults: false } });
 	});
 
 	it("plays mixed display audio from the display, as a worker does", () => {

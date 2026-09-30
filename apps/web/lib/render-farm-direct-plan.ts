@@ -87,6 +87,12 @@ export type RenderFarmPrepare = {
 	sources: RenderFarmPrepareSources;
 	/** The display as recorded, which sets a never-edited timeline's length. */
 	display: { key: string; contentType: string };
+	/**
+	 * Never edited: the farm fills in what opening an editor session does
+	 * (a whole-recording timeline, clip audio offsets). A saved project is
+	 * rendered as saved.
+	 */
+	sessionDefaults: boolean;
 	inputEvents: { key: string; size: number } | null;
 };
 
@@ -388,6 +394,7 @@ export function planDirectRenderProject(
 				key: editorSources.display.key,
 				contentType: sources.display.contentType,
 			},
+			sessionDefaults: !sources.projectConfig,
 			inputEvents:
 				sources.inputEvents && editorSources.inputEvents
 					? {
