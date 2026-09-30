@@ -558,17 +558,22 @@ export class S3 {
 	}
 
 	async list(prefix: string) {
-		const keys: { key: string; size: number }[] = [];
+		const keys: { key: string; size: number; modifiedAt: number }[] = [];
 		let token: string | undefined;
 		do {
 			const query: Record<string, string> = { "list-type": "2", prefix };
 			if (token) query["continuation-token"] = token;
 			const response = await this.send("GET", "", { query });
 			const text = await response.text();
-			for (const match of text.matchAll(
-				/<Key>([^<]+)<\/Key>[\s\S]*?<Size>(\d+)<\/Size>/g,
-			)) {
-				keys.push({ key: decodeXml(match[1] ?? ""), size: Number(match[2]) });
+			for (const match of text.matchAll(/<Contents>([\s\S]*?)<\/Contents>/g)) {
+				const body = match[1] ?? "";
+				keys.push({
+					key: decodeXml(body.match(/<Key>([^<]+)<\/Key>/)?.[1] ?? ""),
+					size: Number(body.match(/<Size>(\d+)<\/Size>/)?.[1]),
+					modifiedAt: Date.parse(
+						body.match(/<LastModified>([^<]+)<\/LastModified>/)?.[1] ?? "",
+					),
+				});
 			}
 			token = text.match(
 				/<NextContinuationToken>([^<]+)<\/NextContinuationToken>/,

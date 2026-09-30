@@ -70,6 +70,8 @@ const MAX_ACTIVE_JOBS = Number(process.env.RF_MAX_ACTIVE_JOBS ?? 32);
 const JOB_STALL_MS = Number(process.env.RF_JOB_STALL_MS ?? 10 * 60_000);
 // Finished jobs stay queryable this long, as a summary without media data.
 const JOB_RETENTION_MS = Number(process.env.RF_JOB_RETENTION_MS ?? 60 * 60_000);
+/** Presigned segment and playlist URLs last 6 h; older jobs are abandoned. */
+const JOB_LIFETIME_MS = 5 * 3600_000;
 const SAMPLE_RATE = 48_000;
 const PACKET = 1024;
 
@@ -1207,14 +1209,23 @@ function segmentsFromResult(
 }
 
 async function resumeJobs() {
-	try {
-		await resumeJournal();
-	} finally {
-		journalResumed = true;
-		sweepStashes().catch((error) =>
-			console.error(`stash sweep failed: ${error}`),
-		);
+	// The stash sweep stays off until every journaled job is back in memory:
+	// until then it would take a resumable job for a finished one.
+	for (let attempt = 0; ; attempt++) {
+		try {
+			await resumeJournal();
+			break;
+		} catch (error) {
+			console.error(`resume failed: ${error}`);
+			await new Promise((resolve) =>
+				setTimeout(resolve, Math.min(60_000, 1000 * 2 ** attempt)),
+			);
+		}
 	}
+	journalResumed = true;
+	await sweepStashes().catch((error) =>
+		console.error(`stash sweep failed: ${error}`),
+	);
 }
 
 async function resumeJournal() {
@@ -1238,7 +1249,7 @@ async function resumeJournal() {
 						await journalS3.get(journalKey(id, "request.json")),
 					),
 				) as { request: JobRequest; requestedAt: number };
-				if (Date.now() - receipt.requestedAt > 5 * 3600_000) {
+				if (Date.now() - receipt.requestedAt > JOB_LIFETIME_MS) {
 					await journalPut(journalKey(id, "done"), "expired");
 					continue;
 				}
@@ -1252,8 +1263,7 @@ async function resumeJournal() {
 					await journalS3.get(journalKey(id, "job.json")),
 				),
 			) as JournaledJob;
-			// Presigned segment/playlist URLs last 6 h; older jobs are abandoned.
-			if (Date.now() - (record.t.requested ?? 0) > 5 * 3600_000) {
+			if (Date.now() - (record.t.requested ?? 0) > JOB_LIFETIME_MS) {
 				await journalPut(journalKey(id, "done"), "expired");
 				continue;
 			}
@@ -2029,7 +2039,7 @@ async function publishPlaylist(job: Job) {
 		} while (hls.dirty && !hls.ended);
 	} catch (error) {
 		console.error(`job ${job.id} playlist: ${error}`);
-		if (now() - (job.t.requested ?? 0) < 5 * 3600_000) {
+		if (now() - (job.t.requested ?? 0) < JOB_LIFETIME_MS) {
 			hls.retry = setTimeout(() => publishPlaylist(job), 1000);
 			hls.retry.unref();
 		}
@@ -2556,17 +2566,20 @@ const STASH_SWEEP_MS = 10 * 60_000;
 let journalResumed = false;
 
 /**
- * Deletes the stashes of every job not rendering or assembling. A job's own
- * cleanup misses those a losing copy writes after it, and any left when the
- * coordinator stops mid-cleanup; restart never reopens a finished job.
+ * Deletes stashes a job's own cleanup missed: those a losing copy writes after
+ * it, and any left when the coordinator stops mid-cleanup (restart never
+ * reopens a finished job). A stash of a job this process doesn't know is
+ * kept until the job could no longer be resumed.
  */
 async function sweepStashes() {
-	// Before resume, jobs about to be resumed are not in memory yet.
 	if (!journalResumed) return;
-	const stale = (await journalS3.list("stash/")).filter(({ key }) => {
-		const job = jobs.get(key.split("/")[1] ?? "");
-		return job?.status !== "rendering" && job?.status !== "assembling";
-	});
+	const stale = (await journalS3.list("stash/")).filter(
+		({ key, modifiedAt }) => {
+			const job = jobs.get(key.split("/")[1] ?? "");
+			if (!job) return Date.now() - modifiedAt > JOB_LIFETIME_MS;
+			return job.status === "ready" || job.status === "error";
+		},
+	);
 	await Promise.all(stale.map(({ key }) => journalS3.delete(key)));
 }
 

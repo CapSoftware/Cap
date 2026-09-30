@@ -23,6 +23,8 @@ function harness(env: Record<string, string> = {}) {
 	const writes: string[] = [];
 	const ranges: string[] = [];
 	const uploadedParts = new Map<string, Uint8Array>();
+	const modifiedAt = new Map<string, number>();
+	let listFailures = 0;
 	const copies: string[] = [];
 	const completedParts: number[][] = [];
 	const timers: (() => void)[] = [];
@@ -63,9 +65,10 @@ function harness(env: Record<string, string> = {}) {
 			return { bytes, etag };
 		},
 		async list(prefix = "") {
+			if (listFailures-- > 0) throw new Error("injected listing failure");
 			return [...objects.keys()]
 				.filter((key) => key.startsWith(prefix))
-				.map((key) => ({ key }));
+				.map((key) => ({ key, modifiedAt: modifiedAt.get(key) ?? Date.now() }));
 		},
 		async presignFresh(_method: string, key: string) {
 			return `https://media.test/${key}`;
@@ -220,6 +223,10 @@ function harness(env: Record<string, string> = {}) {
 		uploadedParts,
 		copies,
 		completedParts,
+		modifiedAt,
+		failListing: (count = 1) => {
+			listFailures = count;
+		},
 		callbacks,
 		timers,
 		watchdogs,
@@ -471,27 +478,43 @@ describe("assembly", () => {
 		expect(file[file.byteLength - 1]).toBe(2);
 	});
 
-	test("stashes outlive neither their job nor a restart", async () => {
+	test("the sweep deletes finished and abandoned jobs' stashes only", async () => {
 		const h = harness();
 		const live = job();
 		const done = { ...job(), id: "done", status: "ready" as const };
 		h.jobs.set(live.id, live);
 		h.jobs.set(done.id, done);
+		const old = Date.now() - 6 * 3600_000;
 		for (const key of [
 			"stash/job/c0-p3",
 			"stash/done/c0-p3",
-			"stash/gone/c1-p63",
+			"stash/abandoned/c0-p3",
+			"stash/unknown/c0-p3",
 		])
 			h.objects.set(key, new Uint8Array(1));
-		// A sweep before the journal is resumed would take jobs about to be
-		// resumed for finished ones.
-		await h.sweepStashes();
-		expect(h.objects.has("stash/gone/c1-p63")).toBe(true);
+		h.modifiedAt.set("stash/job/c0-p3", old);
+		h.modifiedAt.set("stash/abandoned/c0-p3", old);
 		await h.resumeJobs();
-		await h.sweepStashes();
 		expect(
 			[...h.objects.keys()].filter((key) => key.startsWith("stash/")),
-		).toEqual(["stash/job/c0-p3"]);
+		).toEqual(["stash/job/c0-p3", "stash/unknown/c0-p3"]);
+	});
+
+	test("a failed journal listing retries and keeps the sweep off until it succeeds", async () => {
+		const h = harness();
+		const old = Date.now() - 6 * 3600_000;
+		h.objects.set("stash/gone/c0-p3", new Uint8Array(1));
+		h.modifiedAt.set("stash/gone/c0-p3", old);
+		h.failListing(1);
+		const resumed = h.resumeJobs();
+		await Promise.resolve();
+		await Promise.resolve();
+		expect(h.timers).toHaveLength(1);
+		await h.sweepStashes();
+		expect(h.objects.has("stash/gone/c0-p3")).toBe(true);
+		h.timers.shift()?.();
+		await resumed;
+		expect(h.objects.has("stash/gone/c0-p3")).toBe(false);
 	});
 
 	test("a result whose parts leave a gap in the chunk is refused", async () => {
