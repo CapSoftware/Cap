@@ -330,6 +330,7 @@ type Job = {
 	headerStashes?: Map<string, Promise<Uint8Array>>;
 	/** Summary frozen when the job ends; the job's media data is released then. */
 	final?: ReturnType<typeof summary>;
+	unservableSince?: number;
 	hls?: HlsState;
 	id: string;
 	request: JobRequest;
@@ -651,8 +652,17 @@ async function sourceIndex(
 	sourceRoot?: string,
 	onManifest?: (manifest: Manifest) => void,
 ): Promise<SourceIndex> {
-	const cached =
+	let cached =
 		process.env.RF_INDEX_CACHE !== "0" ? sourceIndexes.get(prefix) : undefined;
+	// An index of in-place sources is only usable while every worker is.
+	if (
+		cached &&
+		!workersTakePrefixes() &&
+		[...cached.mediaMeta.values()].some((meta) => meta.prefix)
+	) {
+		sourceIndexes.delete(prefix);
+		cached = undefined;
+	}
 	if (cached) {
 		checkManifest(cached.manifest, prefix, sourceRoot);
 		onManifest?.(cached.manifest);
@@ -1561,7 +1571,10 @@ function enqueue(job: Job, task: Task, duplicateOf?: string) {
 	queue.push(state);
 }
 
-function pickQueued(accepts: (kind: string) => boolean) {
+function pickQueued(
+	accepts: (kind: string) => boolean,
+	canTake?: (state: TaskState) => boolean,
+) {
 	for (const state of [...queue]) {
 		const job = jobs.get(state.task.jobId);
 		if (job && taskAccepted(job, state.task)) retireTask(state);
@@ -1584,6 +1597,7 @@ function pickQueued(accepts: (kind: string) => boolean) {
 		headChunks: HEAD_CHUNKS,
 		fifo: process.env.RF_SCHEDULER === "fifo",
 		now: Date.now(),
+		canTake,
 	});
 }
 
@@ -1674,6 +1688,58 @@ const PLACEMENT_CACHE_ENTRIES = 64;
 
 const prefixKeyFor = (output: string) =>
 	`${output.replace(/\.mp4$/, "")}.prefix-v${PREFIX_VERSION}`;
+
+/**
+ * Worker features a task's inputs need. A worker from before prefixed files
+ * would read their ranges from the raw recording at the wrong offsets.
+ */
+function taskNeeds(task: Task): string[] {
+	return "files" in task && task.files.some((file) => file.prefix)
+		? ["prefix"]
+		: [];
+}
+
+function workerCanTake(worker: string, task: Task) {
+	const needs = taskNeeds(task);
+	if (needs.length === 0) return true;
+	const features = workers.get(worker)?.features ?? [];
+	return needs.every((need) => features.includes(need));
+}
+
+// Long enough for a rolling restart to bring a capable worker back.
+const UNSERVABLE_GRACE_MS = Number(
+	process.env.RF_UNSERVABLE_GRACE_MS ?? 60_000,
+);
+
+/**
+ * Fails a job whose queued work needs a feature no live worker has (the
+ * fleet was rolled back under it) once that has lasted a grace period, so it
+ * doesn't sit until the stall timeout. Its retry plans with the transcode,
+ * since placements need every live worker to take prefixes.
+ */
+function failUnservable(job: Job) {
+	const cutoff = Date.now() - 30_000;
+	const live = [...workers.values()].filter(
+		(worker) => worker.lastSeen >= cutoff,
+	);
+	const stuck = [...job.tasks.values()].some(
+		(state) =>
+			state.state === "queued" &&
+			taskNeeds(state.task).length > 0 &&
+			!live.some((worker) => workerCanTake(worker.id, state.task)),
+	);
+	if (!stuck) {
+		job.unservableSince = undefined;
+		return;
+	}
+	job.unservableSince ??= Date.now();
+	if (Date.now() - job.unservableSince >= UNSERVABLE_GRACE_MS) {
+		failJob(
+			job,
+			new Error("no live worker can read this job's in-place sources"),
+		);
+	}
+}
 
 /** Workers from before prefixed files would write the source at offset 0. */
 function workersTakePrefixes() {
@@ -2118,12 +2184,14 @@ function dispatch() {
 			poller.resolve({ ...transcode.task, attempt: transcode.attempts });
 			continue;
 		}
-		const next = pickQueued(accepts);
+		const canTake = (candidate: TaskState) =>
+			workerCanTake(poller.worker, candidate.task);
+		const next = pickQueued(accepts, canTake);
 		let state: TaskState | undefined;
 		if (next >= 0) {
 			state = queue.splice(next, 1)[0];
 		} else if (accepts("video") && !poller.prefetch) {
-			state = straggler();
+			state = straggler(canTake);
 		}
 		if (!state) {
 			// Reconstruction is CPU work that no export waits on, so it only
@@ -2182,7 +2250,9 @@ function dispatch() {
  */
 const FROZEN_MS = 5_000;
 
-function straggler(): TaskState | undefined {
+function straggler(
+	canTake: (state: TaskState) => boolean = () => true,
+): TaskState | undefined {
 	let best: { state: TaskState; gain: number } | undefined;
 	for (const job of jobs.values()) {
 		if (job.status !== "rendering" || job.request.duplicateStragglers === false)
@@ -2209,6 +2279,7 @@ function straggler(): TaskState | undefined {
 				state.state !== "running" ||
 				state.duplicated ||
 				state.duplicateOf ||
+				!canTake(state) ||
 				(state.prefetched && !state.progress) ||
 				job.videoResults.has(state.task.chunk)
 			) {
@@ -2326,6 +2397,8 @@ setInterval(() => {
 			);
 			continue;
 		}
+		failUnservable(job);
+		if (job.status !== "rendering") continue;
 		for (const state of job.tasks.values()) {
 			if (
 				state.state !== "running" ||

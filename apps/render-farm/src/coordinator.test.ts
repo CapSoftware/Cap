@@ -1410,6 +1410,150 @@ describe("placements", () => {
 		]).toEqual([...(meta?.index.offsets ?? [])]);
 	});
 
+	function prefixedTask(h: ReturnType<typeof harness>) {
+		const j = job();
+		h.jobs.set(j.id, j);
+		const state = videoState(j);
+		state.state = "queued";
+		state.worker = undefined;
+		state.attempts = 0;
+		(state.task as protocol.VideoTask).files = [
+			{
+				path: "display.mp4",
+				key: source,
+				size: 1100,
+				ranges: [[0, 600]],
+				prefix: { key: prefixKey, size: 100 },
+			},
+		];
+		h.queue.push(state);
+		return { j, state };
+	}
+
+	const answered = (poll: Promise<Response>) =>
+		Promise.race([
+			poll.then(() => "answered"),
+			Bun.sleep(20).then(() => "waiting"),
+		]);
+
+	test("a task with a prefix only goes to a worker that takes prefixes", async () => {
+		const h = harness();
+		// Planned while every live worker took prefixes (this one only runs
+		// audio, so it leaves the chunk queued)...
+		void call(h, "/work", {
+			worker: "gpu-new-audio",
+			slots: 1,
+			cpus: 8,
+			kinds: ["audio"],
+			features: ["prefix"],
+		});
+		const { state } = prefixedTask(h);
+		// ...then an older worker registers and asks for work.
+		const old = call(h, "/work", {
+			worker: "gpu-old",
+			slots: 1,
+			cpus: 8,
+			kinds: ["video"],
+		});
+		expect(await answered(old)).toBe("waiting");
+		expect(state.state).toBe("queued");
+		const work = (await (
+			await call(h, "/work", {
+				worker: "gpu-new",
+				slots: 1,
+				cpus: 8,
+				kinds: ["video"],
+				features: ["prefix"],
+			})
+		).json()) as { task: protocol.VideoTask };
+		expect(work.task.taskId).toBe(state.task.taskId);
+		expect(state.worker).toBe("gpu-new");
+	});
+
+	test("an older worker is not sent a hedge of a task with a prefix", async () => {
+		const h = harness();
+		const j = job();
+		h.jobs.set(j.id, j);
+		for (let index = 0; index < 3; index++) {
+			j.taskStats.push({ kind: "video", frames: 30, engineRenderMs: 1000 });
+		}
+		const original = videoState(j);
+		(original.task as protocol.VideoTask).files = [
+			{
+				path: "display.mp4",
+				key: source,
+				size: 1100,
+				ranges: [[0, 600]],
+				prefix: { key: prefixKey, size: 100 },
+			},
+		];
+		original.progress = {
+			frames: 27,
+			total: 30,
+			elapsedMs: 900,
+			at: 0,
+			advancedAt: Number.NEGATIVE_INFINITY,
+		};
+		const old = call(h, "/work", {
+			worker: "gpu-old",
+			slots: 1,
+			cpus: 8,
+			kinds: ["video"],
+		});
+		expect(await answered(old)).toBe("waiting");
+		expect(original.duplicated).toBeFalsy();
+		const work = (await (
+			await call(h, "/work", {
+				worker: "gpu-new",
+				slots: 1,
+				cpus: 8,
+				kinds: ["video"],
+				features: ["prefix"],
+			})
+		).json()) as { task: protocol.VideoTask };
+		expect(work.task.chunk).toBe(
+			original.task.kind === "video" ? original.task.chunk : -1,
+		);
+		expect(original.duplicated).toBe(true);
+	});
+
+	test("with no worker left that takes prefixes, the job fails for a retry", async () => {
+		const h = harness({ RF_UNSERVABLE_GRACE_MS: "0" });
+		void call(h, "/work", {
+			worker: "gpu-old",
+			slots: 1,
+			cpus: 8,
+			kinds: ["video"],
+		});
+		const { j } = prefixedTask(h);
+		for (const watchdog of h.watchdogs) {
+			try {
+				await watchdog();
+			} catch {}
+		}
+		expect(j.status).toBe("error");
+		expect(j.error).toContain("in-place sources");
+		expect(h.queue).toHaveLength(0);
+
+		// A capable worker keeps the job waiting instead.
+		const kept = harness({ RF_UNSERVABLE_GRACE_MS: "0" });
+		void call(kept, "/work", {
+			worker: "gpu-new-audio",
+			slots: 1,
+			cpus: 8,
+			kinds: ["audio"],
+			features: ["prefix"],
+		});
+		const waiting = prefixedTask(kept);
+		for (const watchdog of kept.watchdogs) {
+			try {
+				await watchdog();
+			} catch {}
+		}
+		expect(waiting.j.status).toBe("rendering");
+		expect(waiting.state.state).toBe("queued");
+	});
+
 	test("older workers, other sources and finished transcodes keep the transcode", async () => {
 		const recording = fragmentedRecording({ frames: 60, gop: 30, mfra: true });
 		const request = { sourceRoot: root, source, output };
