@@ -5,8 +5,6 @@ import type { VideoMetadata } from "@cap/database/types";
 import type { Video } from "@cap/web-domain";
 import { and, eq, sql } from "drizzle-orm";
 import {
-	CURSOR_RECONSTRUCTION_START_TIMEOUT_MS,
-	CURSOR_RECONSTRUCTION_TIMEOUT_MS,
 	type CursorReconstruction,
 	cursorReconstructionAbandoned,
 	cursorReconstructionPrefix,
@@ -33,16 +31,6 @@ const runMatches = (runId: string) =>
 const jobMatches = (jobId: string) =>
 	sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.cursorReconstruction.jobId')) = ${jobId}`;
 const processing = sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.cursorReconstruction.status')) = 'processing'`;
-const replaceable = (now: number) => {
-	const startedAt = sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.cursorReconstruction.startedAt'))`;
-	const started = new Date(
-		now - CURSOR_RECONSTRUCTION_START_TIMEOUT_MS,
-	).toISOString();
-	const expired = new Date(
-		now - CURSOR_RECONSTRUCTION_TIMEOUT_MS,
-	).toISOString();
-	return sql`(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.cursorReconstruction.status')), '') <> 'processing' OR ${startedAt} < ${expired} OR (JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.cursorReconstruction.jobId')) = '' AND ${startedAt} < ${started}))`;
-};
 
 export type CursorJobSummary = {
 	id: string;
@@ -94,7 +82,8 @@ export function parseCursorJobSummary(body: unknown): CursorJobSummary | null {
 /**
  * Records a new run and hands it to the render farm. Enabling is the owner's
  * request, so the replacement turns on by itself once the run is ready.
- * Returns null when another run is already processing.
+ * The caller decides the run it read may be replaced; returns null when
+ * another start replaced it first.
  */
 export async function startCursorReconstruction(
 	video: { id: Video.VideoId; ownerId: string; metadata: VideoMetadata | null },
@@ -122,7 +111,14 @@ export async function startCursorReconstruction(
 		.set({
 			metadata: sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.cursorReconstruction', CAST(${JSON.stringify(run)} AS JSON))`,
 		})
-		.where(and(eq(videos.id, video.id), replaceable(Date.now())));
+		.where(
+			and(
+				eq(videos.id, video.id),
+				video.metadata?.cursorReconstruction
+					? runMatches(video.metadata.cursorReconstruction.runId)
+					: sql`JSON_EXTRACT(${videos.metadata}, '$.cursorReconstruction') IS NULL`,
+			),
+		);
 	if (affectedRows(recorded) !== 1) return null;
 	try {
 		const response = await renderFarmFetch(config, "/cursor-jobs", {
