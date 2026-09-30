@@ -32,7 +32,7 @@ export type VideoTask = {
 		firstPart: number;
 		partLimit: number;
 		partTarget: number;
-		/** Journal-bucket object for the chunk's opening bytes (see stitch.ts). */
+		/** In the farm's own bucket, not the media bucket (see stitch.ts). */
 		stashKey: string;
 	};
 	audio: { first: number; end: number; coordinator: string } | null;
@@ -104,11 +104,9 @@ export type VideoResult = {
 	/** Runs relative to the chunk's first byte; `first` is a global sample index. */
 	videoRuns: Run[];
 	audioRuns: Run[];
-	/** First part number of this dispatch's range (names its HLS segments). */
+	/** Names the dispatch's HLS segments even when the chunk uploaded no parts. */
 	firstPart: number;
-	/** The chunk's opening bytes, stored at `upload.stashKey`. */
 	stash: { key: string; bytes: number };
-	/** The rest of the chunk, each part at least 5 MiB. */
 	parts: { partNumber: number; etag: string; size: number }[];
 	bytes: number;
 	timings: TaskTimings;
