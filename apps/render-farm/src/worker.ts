@@ -808,6 +808,7 @@ const CURSOR_BUNDLE = process.env.RF_CURSOR_BUNDLE?.replace(/\/?$/, "/");
 const CURSOR_THREADS = Number(
 	process.env.RF_CURSOR_THREADS ?? Math.max(2, Math.floor(CPUS / 2)),
 );
+const CURSOR_TRANSFER_LIMIT_MS = 10 * 60_000;
 let cursorBundle: Promise<string> | null = null;
 
 async function fetchCursorBundle(prefix: string) {
@@ -881,17 +882,27 @@ async function runCursor(task: CursorTask, slot: number) {
 	transcoders.set(slot, run);
 	try {
 		// Fetching the bundle and uploading the outputs report no progress of
-		// their own; neither is a stalled reconstruction.
-		const alive = <T>(work: Promise<T>) => {
+		// their own; neither is a stalled reconstruction unless it outlasts
+		// its limit, which fails the task for a retry.
+		const alive = <T>(work: Promise<T>, what: string) => {
 			const keepAlive = setInterval(() => {
 				entry.lastProgressAt = Date.now();
 			}, 5_000);
-			return work.finally(() => {
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			const limit = new Promise<never>((_, reject) => {
+				timer = setTimeout(
+					() => reject(new Error(`${what} took over 10 minutes`)),
+					CURSOR_TRANSFER_LIMIT_MS,
+				);
+			});
+			work.catch(() => {});
+			return Promise.race([work, limit]).finally(() => {
 				clearInterval(keepAlive);
+				clearTimeout(timer);
 				entry.lastProgressAt = Date.now();
 			});
 		};
-		const bundle = await alive(cursorBundleDir());
+		const bundle = await alive(cursorBundleDir(), "Fetching the bundle");
 		const input = join(dir, "source");
 		await downloadSource(s3, task.source, input, {
 			signal: run.controller.signal,
@@ -954,6 +965,7 @@ async function runCursor(task: CursorTask, slot: number) {
 				join(output, "input-events.ndjson"),
 				"application/x-ndjson",
 			),
+			"Uploading the pointer input",
 		);
 		await alive(
 			s3.uploadFile(
@@ -961,6 +973,7 @@ async function runCursor(task: CursorTask, slot: number) {
 				join(output, "reconstructed.cap/content/display.mp4"),
 				"video/mp4",
 			),
+			"Uploading the cleaned display",
 		);
 	} finally {
 		if (run.process?.exitCode === null) {
