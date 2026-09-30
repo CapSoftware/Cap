@@ -227,49 +227,69 @@ async function reportStageFailure(
 	failedResponses: string[],
 ) {
 	try {
+		// A frame that stopped answering must not hold back the failure itself.
+		const bounded = <T>(read: Promise<T>) =>
+			Promise.race([
+				read,
+				new Promise<null>((resolve) => setTimeout(() => resolve(null), 5_000)),
+			]);
+		const [body, canvas, videos, hostError] = await Promise.all([
+			bounded(
+				editor
+					.locator("body")
+					.innerText()
+					.catch(() => null),
+			),
+			bounded(
+				editor
+					.locator("#canvas")
+					.evaluate((element) => {
+						const canvas = element as HTMLCanvasElement;
+						return {
+							width: canvas.width,
+							height: canvas.height,
+							busy: canvas.getAttribute("aria-busy"),
+							opacity: getComputedStyle(canvas).opacity,
+						};
+					})
+					.catch(() => null),
+			),
+			bounded(
+				editor
+					.locator("video")
+					.evaluateAll((elements) =>
+						elements.map((element) => {
+							const video = element as HTMLVideoElement;
+							return {
+								readyState: video.readyState,
+								networkState: video.networkState,
+								currentTime: video.currentTime,
+								videoWidth: video.videoWidth,
+								videoHeight: video.videoHeight,
+								error: video.error?.message ?? null,
+							};
+						}),
+					)
+					.catch(() => null),
+			),
+			bounded(
+				page
+					.evaluate(
+						() =>
+							(window as typeof window & { capTestError?: string })
+								.capTestError ?? null,
+					)
+					.catch(() => null),
+			),
+		]);
 		const diagnostics = {
 			stage,
 			browserEngine: engine.name(),
 			error: cause instanceof Error ? cause.message : String(cause),
-			body: await editor
-				.locator("body")
-				.innerText()
-				.catch(() => null),
-			canvas: await editor
-				.locator("#canvas")
-				.evaluate((element) => {
-					const canvas = element as HTMLCanvasElement;
-					return {
-						width: canvas.width,
-						height: canvas.height,
-						busy: canvas.getAttribute("aria-busy"),
-						opacity: getComputedStyle(canvas).opacity,
-					};
-				})
-				.catch(() => null),
-			videos: await editor
-				.locator("video")
-				.evaluateAll((elements) =>
-					elements.map((element) => {
-						const video = element as HTMLVideoElement;
-						return {
-							readyState: video.readyState,
-							networkState: video.networkState,
-							currentTime: video.currentTime,
-							videoWidth: video.videoWidth,
-							videoHeight: video.videoHeight,
-							error: video.error?.message ?? null,
-						};
-					}),
-				)
-				.catch(() => null),
-			hostError: await page
-				.evaluate(
-					() =>
-						(window as typeof window & { capTestError?: string })
-							.capTestError ?? null,
-				)
-				.catch(() => null),
+			body,
+			canvas,
+			videos,
+			hostError,
 			pageErrors,
 			pageWarnings,
 			failedResponses,
