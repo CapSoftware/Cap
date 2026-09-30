@@ -132,3 +132,59 @@ export function remuxArgs(input: string, output: string) {
 		output,
 	];
 }
+
+export type RangeSource = {
+	head(key: string): Promise<{ size: number } | null>;
+	getRange(
+		key: string,
+		start: number,
+		endInclusive: number,
+	): Promise<Uint8Array>;
+};
+
+const DOWNLOAD_PIECE = 16 << 20;
+
+/**
+ * Copies a source to local disk with parallel ranged reads. ffmpeg reading a
+ * fragmented recording over HTTP seeks per fragment: a 2 h camera took 208 s
+ * that way, against about 2 s to download it and 2 s to remux it locally.
+ */
+export async function downloadSource(
+	s3: RangeSource,
+	key: string,
+	path: string,
+	options: { concurrency?: number; piece?: number; signal?: AbortSignal } = {},
+) {
+	const head = await s3.head(key);
+	if (!head) throw new Error(`${key} is missing`);
+	const piece = options.piece ?? DOWNLOAD_PIECE;
+	const pieces = Math.ceil(head.size / piece);
+	const file = Bun.file(path);
+	const handle = await (await import("node:fs/promises")).open(path, "w");
+	try {
+		await handle.truncate(head.size);
+		let next = 0;
+		await Promise.all(
+			Array.from(
+				{ length: Math.min(options.concurrency ?? 8, pieces) },
+				async () => {
+					while (next < pieces) {
+						options.signal?.throwIfAborted();
+						const index = next++;
+						const start = index * piece;
+						const end = Math.min(head.size, start + piece);
+						const bytes = await s3.getRange(key, start, end - 1);
+						if (bytes.byteLength !== end - start) {
+							throw new Error(`short read ${key} ${start}-${end}`);
+						}
+						await handle.write(bytes, 0, bytes.byteLength, start);
+					}
+				},
+			),
+		);
+	} finally {
+		await handle.close();
+	}
+	if (file.size !== head.size) throw new Error(`${key} downloaded short`);
+	return head.size;
+}

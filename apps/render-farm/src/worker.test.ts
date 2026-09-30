@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { TranscodeTask, WorkItem } from "./protocol";
 import * as stitch from "./stitch";
@@ -22,6 +23,19 @@ function harness(
 		randomUUID,
 		join,
 		...transcode,
+		// Sources download to a real temporary file.
+		downloadSource: (
+			s3: transcode.RangeSource,
+			key: string,
+			_path: string,
+			options: { signal?: AbortSignal },
+		) =>
+			transcode.downloadSource(
+				s3,
+				key,
+				join(mkdtempSync(join(tmpdir(), "rf-worker-")), "source"),
+				options,
+			),
 		availableParallelism: () => 1,
 		hostname: () => "worker-test",
 		mkdirSync: () => {},
@@ -30,9 +44,12 @@ function harness(
 		s3ConfigFromEnv: () => ({}),
 		...stitch,
 		S3: class {
-			async presignFresh() {
+			async head() {
 				await options.presignGate;
-				return "https://media.test/source";
+				return { size: 4 };
+			}
+			async getRange() {
+				return new Uint8Array(4);
 			}
 			async uploadFile() {
 				uploads++;
@@ -113,12 +130,17 @@ const task: TranscodeTask = {
 	keyframeSeconds: 1,
 };
 
+/** Waits for the source download (real file I/O) to reach the probe. */
+async function until(condition: () => boolean) {
+	for (let i = 0; i < 200 && !condition(); i++) await Bun.sleep(5);
+}
+
 describe("transcode cancellation", () => {
 	test("cancelling a stalled probe kills it and prevents the encoder from starting", async () => {
 		const h = harness();
 		h.busy.set(0, task);
 		const pending = h.runTranscode(task, 0);
-		for (let i = 0; i < 20; i++) await Promise.resolve();
+		await until(() => h.spawned.length > 0);
 		expect(h.spawned).toEqual(["ffprobe"]);
 		h.cancel([task.taskId]);
 		await expect(pending).rejects.toThrow("transcode cancelled");
@@ -133,7 +155,7 @@ describe("transcode cancellation", () => {
 	test("the watchdog releases a stalled probe without waiting for cancellation", async () => {
 		const h = harness();
 		const pending = h.runTranscode(task, 0);
-		for (let i = 0; i < 20; i++) await Promise.resolve();
+		await until(() => h.spawned.length > 0);
 		const progress = h.progress.get(0);
 		if (!progress) throw new Error("missing progress");
 		progress.lastProgressAt = 0;

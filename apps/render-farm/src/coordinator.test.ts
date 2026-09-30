@@ -168,6 +168,12 @@ function harness(env: Record<string, string> = {}) {
 		mediaS3ConfigFromEnv: () => ({}),
 		ProbeEngine: class {},
 		Engine: class {},
+		prepareSupport: () => new Promise(() => {}),
+		prepareRecording: async () => false,
+		builtinPath: () => null,
+		builtinSize: () => {
+			throw new Error("no built-in assets in tests");
+		},
 		process: {
 			env: {
 				RF_TOKEN: "test",

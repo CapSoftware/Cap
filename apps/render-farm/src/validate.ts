@@ -112,6 +112,13 @@ export function validateJobRequest(body: unknown): JobRequest | string {
 	) {
 		return "reference must be a string of at most 200 characters";
 	}
+	if (
+		request.prepare !== undefined &&
+		(typeof request.prepare !== "string" ||
+			!/^[a-z0-9-]{1,40}\.json$/.test(request.prepare))
+	) {
+		return "prepare must name a JSON file in the recording";
+	}
 	return request as JobRequest;
 }
 

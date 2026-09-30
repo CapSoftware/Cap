@@ -149,4 +149,9 @@ export type JobRequest = {
 	callbackUrl?: string;
 	/** Opaque, echoed in callbacks. */
 	reference?: string;
+	/**
+	 * A file in `recording` (e.g. `prepare.json`) from which the engine writes
+	 * the project files before planning; the manifest lists only the media.
+	 */
+	prepare?: string;
 };

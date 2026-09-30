@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { canRemux, encodedSeconds, transcodeArgs } from "./transcode";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+	canRemux,
+	downloadSource,
+	encodedSeconds,
+	transcodeArgs,
+} from "./transcode";
 
 describe("transcodeArgs", () => {
 	test("NVENC keeps frames on the GPU and forces one-second IDR frames", () => {
@@ -87,5 +95,42 @@ describe("canRemux", () => {
 			).toBe(false);
 		}
 		expect(canRemux(source.replace("dts_time=0.100000|", ""))).toBe(false);
+	});
+});
+
+describe("downloadSource", () => {
+	test("reassembles a source from parallel ranged reads", async () => {
+		const data = new Uint8Array(1000).map((_, index) => index % 251);
+		const reads: [number, number][] = [];
+		const path = join(mkdtempSync(join(tmpdir(), "rf-dl-")), "source");
+		const size = await downloadSource(
+			{
+				head: async () => ({ size: data.byteLength }),
+				getRange: async (_key, start, end) => {
+					reads.push([start, end]);
+					return data.slice(start, end + 1);
+				},
+			},
+			"k",
+			path,
+			{ piece: 128, concurrency: 3 },
+		);
+		expect(size).toBe(1000);
+		expect(new Uint8Array(readFileSync(path))).toEqual(data);
+		expect(reads).toHaveLength(8);
+	});
+
+	test("refuses a short read", async () => {
+		const path = join(mkdtempSync(join(tmpdir(), "rf-dl-")), "source");
+		await expect(
+			downloadSource(
+				{
+					head: async () => ({ size: 100 }),
+					getRange: async () => new Uint8Array(10),
+				},
+				"k",
+				path,
+			),
+		).rejects.toThrow("short read");
 	});
 });

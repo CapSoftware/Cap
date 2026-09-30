@@ -22,6 +22,7 @@ import { mediaS3ConfigFromEnv, S3, s3ConfigFromEnv } from "./s3";
 import { stashBytes } from "./stitch";
 import {
 	canRemux,
+	downloadSource,
 	encodedSeconds,
 	probeArgs,
 	remuxArgs,
@@ -712,7 +713,11 @@ async function runTranscode(task: TranscodeTask, slot: number) {
 	transcoders.set(slot, run);
 	try {
 		const output = join(dir, "output.mp4");
-		const input = await s3.presignFresh("GET", task.source, 6 * 3600);
+		const input = join(dir, "source");
+		await downloadSource(s3, task.source, input, {
+			signal: run.controller.signal,
+		});
+		entry.lastProgressAt = Date.now();
 		run.controller.signal.throwIfAborted();
 		const probe = Bun.spawn(["ffprobe", ...probeArgs(input)], {
 			stdout: "pipe",

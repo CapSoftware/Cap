@@ -23,6 +23,8 @@ export type FileSpec = {
 	size: number;
 	/** Byte ranges [start, end) to fetch, or "all". */
 	ranges: [number, number][] | "all";
+	/** Copy this file from the machine (a built-in asset) instead of S3. */
+	local?: string;
 };
 
 const PIECE = 4 << 20;
@@ -124,6 +126,15 @@ export class ProjectCache {
 		const stats: FetchStats = { bytes: 0, requests: 0, ms: 0 };
 		const work: Promise<void>[] = [];
 		for (const spec of specs) {
+			if (spec.local) {
+				const file = this.open(spec);
+				const bytes = readFileSync(spec.local);
+				if (bytes.byteLength !== spec.size) {
+					throw new Error(`${spec.local} changed size`);
+				}
+				writeSync(file.fd, bytes, 0, bytes.byteLength, 0);
+				continue;
+			}
 			if (spec.size === 0) {
 				this.open(spec);
 				continue;

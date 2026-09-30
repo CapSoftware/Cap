@@ -24,6 +24,12 @@ import {
 	MIN_RANGE_PARTS,
 	planChunkBoundaries,
 } from "./planning";
+import {
+	builtinPath,
+	builtinSize,
+	prepareRecording,
+	prepareSupport,
+} from "./prepare";
 import { ProbeEngine } from "./probe-engine";
 import {
 	type AudioResultMeta,
@@ -83,6 +89,15 @@ const PACKET = 1024;
 const probeEngine = new ProbeEngine(
 	() => new Engine(ENGINE_BIN, {}, "coordinator-engine"),
 );
+
+// Advertised only once this engine can prepare projects, so the web app keeps
+// preparing on editor workers until a farm build that can is running.
+let prepareCapability: Awaited<ReturnType<typeof prepareSupport>> | null = null;
+prepareSupport((op, body) => probeEngine.request(body, op))
+	.then((capability) => {
+		prepareCapability = capability;
+	})
+	.catch((error) => console.warn(`project preparation unavailable: ${error}`));
 
 // Audio sections (Studio Sound) are CPU work. These lanes render them on the
 // coordinator's cores, pulling from the same queue as workers' audio lanes.
@@ -413,6 +428,8 @@ type Manifest = {
 		key?: string;
 		/** Transcode this source to `key` first (see TranscodeTask). */
 		transcodeFrom?: string;
+		/** A wallpaper or library track this image ships (see prepare.ts). */
+		builtin?: string;
 	}[];
 };
 
@@ -603,6 +620,14 @@ function checkManifest(
 		if (file.transcodeFrom !== undefined && file.key === undefined) {
 			throw new Error(`manifest transcode for ${file.path} names no key`);
 		}
+		if (
+			file.builtin !== undefined &&
+			(file.key !== undefined ||
+				file.transcodeFrom !== undefined ||
+				builtinPath(file.builtin) === null)
+		) {
+			throw new Error(`manifest built-in for ${file.path} is invalid`);
+		}
 	}
 }
 
@@ -624,6 +649,9 @@ async function sourceIndex(
 		),
 	) as Manifest;
 	checkManifest(manifest, prefix, sourceRoot);
+	for (const file of manifest.files) {
+		if (file.builtin !== undefined) file.size = builtinSize(file.builtin).size;
+	}
 	onManifest?.(manifest);
 	const keyOf = (file: { path: string; key?: string }) =>
 		file.key ?? `${prefix}/${file.path}`;
@@ -709,25 +737,67 @@ function baseFileSpecs(
 			key: keyOf(file),
 			size: file.size,
 			ranges: "all" as const,
+			...(file.builtin !== undefined
+				? { local: builtinSize(file.builtin).path }
+				: {}),
 		})),
-		...audioFiles.map((file) => ({
-			path: file.path,
-			key: keyOf(file),
-			size: file.size,
-			ranges:
-				audioMode === "all"
-					? ("all" as const)
-					: mergeRanges([
-							[0, Math.min(file.size, 256 * 1024)],
-							[Math.max(0, file.size - 256 * 1024), file.size],
-						]),
-		})),
+		...audioFiles.map((file) =>
+			file.builtin !== undefined
+				? {
+						path: file.path,
+						key: "",
+						size: file.size,
+						ranges: "all" as const,
+						local: builtinSize(file.builtin).path,
+					}
+				: {
+						path: file.path,
+						key: keyOf(file),
+						size: file.size,
+						ranges:
+							audioMode === "all"
+								? ("all" as const)
+								: mergeRanges([
+										[0, Math.min(file.size, 256 * 1024)],
+										[Math.max(0, file.size - 256 * 1024), file.size],
+									]),
+					},
+		),
 	];
 }
 
 async function planJob(job: Job) {
 	const request = job.request;
 	const prefix = request.recording.replace(/\/$/, "");
+	if (request.prepare) {
+		await prepareRecording(
+			prefix,
+			request.prepare,
+			join(WORK_DIR, `${job.id}-prepare`),
+			{
+				getBounded,
+				put: (key, body, contentType) => s3.put(key, body, contentType),
+				presignGet: (key) => s3.presignFresh("GET", key, 6 * 3600),
+				inScope: (key) =>
+					isKey(key) &&
+					(key.startsWith(`${prefix}/`) ||
+						(request.sourceRoot !== undefined &&
+							key.startsWith(request.sourceRoot))),
+				engine: (op, body) => probeEngine.request(body, op),
+				// Measuring a never-edited recording reads its display video
+				// through, as the transcodes do, so they run side by side.
+				onManifest: (manifest) => {
+					checkManifest(manifest as Manifest, prefix, request.sourceRoot);
+					for (const file of (manifest as Manifest).files) {
+						if (file.transcodeFrom !== undefined && file.key !== undefined) {
+							void ensureTranscode(file.transcodeFrom, file.key);
+						}
+					}
+				},
+			},
+		);
+		job.t.prepared = now();
+	}
 	const probeDir = join(WORK_DIR, job.id);
 	mkdirSync(probeDir, { recursive: true });
 	const cache = new ProjectCache(s3, probeDir);
@@ -2751,7 +2821,11 @@ Bun.serve({
 	async fetch(request) {
 		const url = new URL(request.url);
 		if (url.pathname === "/health")
-			return Response.json({ ok: true, ...liveSlots() });
+			return Response.json({
+				ok: true,
+				...liveSlots(),
+				...(prepareCapability ? { prepare: prepareCapability } : {}),
+			});
 		if (!authorized(request))
 			return new Response("unauthorized", { status: 401 });
 
