@@ -127,6 +127,14 @@ function checkCanceled() {
 	if (canceled) throw new Error("Export cancelled");
 }
 
+// Chrome colour-manages hardware-decoded frames when they're copied into a
+// texture: BT.709 video comes out re-encoded for an sRGB display (brighter
+// shadows), where the native renderer and Safari apply the plain YUV to RGB
+// matrix. Frames Chrome decodes in software keep their plain values.
+const COLOR_MANAGES_HARDWARE_FRAMES = /Chrome|Chromium|Edg/.test(
+	navigator.userAgent,
+);
+
 type TrackCursor = {
 	sink: VideoSampleSink;
 	retagBt601: boolean;
@@ -155,7 +163,12 @@ async function openCursor(url: string): Promise<TrackCursor | null> {
 		track.getDecoderConfig(),
 	]);
 	const cursor: TrackCursor = {
-		sink: new VideoSampleSink(track),
+		sink: new VideoSampleSink(
+			track,
+			COLOR_MANAGES_HARDWARE_FRAMES
+				? { hardwareAcceleration: "prefer-software" }
+				: undefined,
+		),
 		retagBt601:
 			!!config &&
 			config.codec.startsWith("avc1") &&
