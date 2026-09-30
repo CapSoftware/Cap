@@ -12,7 +12,10 @@ import {
 } from "@effect/platform";
 import { eq } from "drizzle-orm";
 import { Effect, Layer, Schema } from "effect";
-import { cursorReconstructionView } from "@/lib/cursor-reconstruction";
+import {
+	CURSOR_RECONSTRUCTION_TIMEOUT_MS,
+	cursorReconstructionView,
+} from "@/lib/cursor-reconstruction";
 import {
 	refreshCursorReconstruction,
 	setCursorReconstructionEnabled,
@@ -25,9 +28,6 @@ import { decodeStorageVideo } from "@/lib/video-storage";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
-
-/** A start that never reached the farm stops blocking a retry after this. */
-const STALE_START_MS = 30 * 60_000;
 
 const View = Schema.Struct({
 	eligible: Schema.Boolean,
@@ -138,7 +138,8 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 							view.status === "ready" ||
 							(view.status === "processing" &&
 								run &&
-								Date.now() - Date.parse(run.startedAt) < STALE_START_MS)
+								Date.now() - Date.parse(run.startedAt) <
+									CURSOR_RECONSTRUCTION_TIMEOUT_MS)
 						) {
 							return view;
 						}

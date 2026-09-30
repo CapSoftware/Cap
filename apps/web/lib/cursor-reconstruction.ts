@@ -8,6 +8,8 @@ type EditorSources = NonNullable<VideoMetadata["editorSources"]>;
 /** Experimental: the render farm job is slow enough to keep recordings short. */
 export const CURSOR_RECONSTRUCTION_MAX_SECONDS = 5 * 60;
 export const CURSOR_RECONSTRUCTION_FPS = 30;
+/** A run still processing after this is abandoned and can be started again. */
+export const CURSOR_RECONSTRUCTION_TIMEOUT_MS = 30 * 60_000;
 const MAX_OUTPUT_BYTES = 4 * 1024 * 1024 * 1024;
 const MAX_INPUT_EVENTS_BYTES = 64 * 1024 * 1024;
 const RUN_ID = /^[a-z0-9]{8,32}$/;

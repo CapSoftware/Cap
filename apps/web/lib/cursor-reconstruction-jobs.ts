@@ -5,6 +5,7 @@ import type { VideoMetadata } from "@cap/database/types";
 import type { Video } from "@cap/web-domain";
 import { and, eq, sql } from "drizzle-orm";
 import {
+	CURSOR_RECONSTRUCTION_TIMEOUT_MS,
 	type CursorReconstruction,
 	cursorReconstructionPrefix,
 	cursorReconstructionReference,
@@ -30,6 +31,8 @@ const runMatches = (runId: string) =>
 const jobMatches = (jobId: string) =>
 	sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.cursorReconstruction.jobId')) = ${jobId}`;
 const processing = sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.cursorReconstruction.status')) = 'processing'`;
+const abandonedBefore = (cutoff: string) =>
+	sql`(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.cursorReconstruction.status')), '') <> 'processing' OR JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.cursorReconstruction.startedAt')) < ${cutoff})`;
 
 export type CursorJobSummary = {
 	id: string;
@@ -81,6 +84,7 @@ export function parseCursorJobSummary(body: unknown): CursorJobSummary | null {
 /**
  * Records a new run and hands it to the render farm. Enabling is the owner's
  * request, so the replacement turns on by itself once the run is ready.
+ * Returns null when another run is already processing.
  */
 export async function startCursorReconstruction(
 	video: { id: Video.VideoId; ownerId: string; metadata: VideoMetadata | null },
@@ -100,12 +104,20 @@ export async function startCursorReconstruction(
 		startedAt: new Date().toISOString(),
 		progress: 0,
 	};
-	await db()
+	const recorded = await db()
 		.update(videos)
 		.set({
 			metadata: sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.cursorReconstruction', CAST(${JSON.stringify(run)} AS JSON))`,
 		})
-		.where(eq(videos.id, video.id));
+		.where(
+			and(
+				eq(videos.id, video.id),
+				abandonedBefore(
+					new Date(Date.now() - CURSOR_RECONSTRUCTION_TIMEOUT_MS).toISOString(),
+				),
+			),
+		);
+	if (affectedRows(recorded) !== 1) return null;
 	try {
 		const response = await renderFarmFetch(config, "/cursor-jobs", {
 			method: "POST",
@@ -190,7 +202,20 @@ export async function refreshCursorReconstruction(
 	config: RenderFarmConfig,
 ) {
 	const run = video.metadata?.cursorReconstruction;
-	if (run?.status !== "processing" || !run.jobId) return;
+	if (run?.status !== "processing") return;
+	if (
+		Date.now() - Date.parse(run.startedAt) >
+		CURSOR_RECONSTRUCTION_TIMEOUT_MS
+	) {
+		await db()
+			.update(videos)
+			.set({
+				metadata: sql`JSON_SET(${videos.metadata}, '$.cursorReconstruction.status', 'error', '$.cursorReconstruction.error', 'Processing timed out')`,
+			})
+			.where(and(eq(videos.id, video.id), runMatches(run.runId), processing));
+		return;
+	}
+	if (!run.jobId) return;
 	const response = await renderFarmFetch(
 		config,
 		`/cursor-jobs/${encodeURIComponent(run.jobId)}`,
