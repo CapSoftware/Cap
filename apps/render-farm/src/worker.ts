@@ -880,14 +880,18 @@ async function runCursor(task: CursorTask, slot: number) {
 	const run: TranscodeRun = { controller: new AbortController() };
 	transcoders.set(slot, run);
 	try {
-		// The first task on a worker fetches the bundle; that is progress too.
-		const keepAlive = setInterval(() => {
-			entry.lastProgressAt = Date.now();
-		}, 5_000);
-		const bundle = await cursorBundleDir().finally(() =>
-			clearInterval(keepAlive),
-		);
-		entry.lastProgressAt = Date.now();
+		// Fetching the bundle and uploading the outputs report no progress of
+		// their own; neither is a stalled reconstruction.
+		const alive = <T>(work: Promise<T>) => {
+			const keepAlive = setInterval(() => {
+				entry.lastProgressAt = Date.now();
+			}, 5_000);
+			return work.finally(() => {
+				clearInterval(keepAlive);
+				entry.lastProgressAt = Date.now();
+			});
+		};
+		const bundle = await alive(cursorBundleDir());
 		const input = join(dir, "source");
 		await downloadSource(s3, task.source, input, {
 			signal: run.controller.signal,
@@ -944,15 +948,19 @@ async function runCursor(task: CursorTask, slot: number) {
 				`cursor service exited ${code}: ${`${tail}${buffered}`.trim().slice(-500)}`,
 			);
 		}
-		await s3.uploadFile(
-			`${task.outputPrefix}${CURSOR_OUTPUTS.inputEvents}`,
-			join(output, "input-events.ndjson"),
-			"application/x-ndjson",
+		await alive(
+			s3.uploadFile(
+				`${task.outputPrefix}${CURSOR_OUTPUTS.inputEvents}`,
+				join(output, "input-events.ndjson"),
+				"application/x-ndjson",
+			),
 		);
-		await s3.uploadFile(
-			`${task.outputPrefix}${CURSOR_OUTPUTS.display}`,
-			join(output, "reconstructed.cap/content/display.mp4"),
-			"video/mp4",
+		await alive(
+			s3.uploadFile(
+				`${task.outputPrefix}${CURSOR_OUTPUTS.display}`,
+				join(output, "reconstructed.cap/content/display.mp4"),
+				"video/mp4",
+			),
 		);
 	} finally {
 		if (run.process?.exitCode === null) {
