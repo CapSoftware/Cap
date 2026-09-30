@@ -1,0 +1,135 @@
+[package]
+edition = "2021"
+name = "tauri-plugin-opener"
+version = "2.5.0"
+authors = ["Tauri Programme within The Commons Conservancy"]
+build = "build.rs"
+links = "tauri-plugin-opener"
+autolib = false
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
+description = "Open files and URLs using their default application."
+readme = "README.md"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/tauri-apps/plugins-workspace"
+
+[package.metadata.docs.rs]
+rustc-args = [
+    "--cfg",
+    "docsrs",
+]
+rustdoc-args = [
+    "--cfg",
+    "docsrs",
+]
+
+[package.metadata.platforms.support.android]
+level = "partial"
+notes = "Only allows to open URLs via `open`"
+
+[package.metadata.platforms.support.ios]
+level = "partial"
+notes = "Only allows to open URLs via `open`"
+
+[package.metadata.platforms.support.linux]
+level = "full"
+notes = ""
+
+[package.metadata.platforms.support.macos]
+level = "full"
+notes = ""
+
+[package.metadata.platforms.support.windows]
+level = "full"
+notes = ""
+
+[lib]
+name = "tauri_plugin_opener"
+path = "src/lib.rs"
+
+[dependencies.dunce]
+version = "1"
+
+[dependencies.glob]
+version = "0.3"
+
+[dependencies.open]
+version = "5"
+features = ["shellexecute-on-windows"]
+
+[dependencies.serde]
+version = "1"
+features = ["derive"]
+
+[dependencies.serde_json]
+version = "1"
+
+[dependencies.tauri]
+version = "2.8.2"
+default-features = false
+
+[dependencies.thiserror]
+version = "2"
+
+[build-dependencies.schemars]
+version = "0.8"
+
+[build-dependencies.serde]
+version = "1"
+features = ["derive"]
+
+[build-dependencies.tauri-plugin]
+version = "2.4"
+features = ["build"]
+
+[target.'cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd"))'.dependencies.url]
+version = "2"
+
+[target.'cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd"))'.dependencies.zbus]
+version = "5.9"
+
+[target.'cfg(target_os = "ios")'.dependencies.tauri]
+version = "2.8.2"
+features = ["wry"]
+default-features = false
+
+[target.'cfg(target_os = "macos")'.dependencies.objc2-app-kit]
+version = "0.3"
+features = [
+    "std",
+    "NSWorkspace",
+]
+default-features = false
+
+[target.'cfg(target_os = "macos")'.dependencies.objc2-foundation]
+version = "0.3"
+features = [
+    "std",
+    "NSURL",
+    "NSArray",
+    "NSString",
+]
+default-features = false
+
+[target."cfg(windows)".dependencies.windows]
+version = "0.61"
+features = [
+    "Win32_Foundation",
+    "Win32_UI_Shell_Common",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_Com",
+    "Win32_System_Registry",
+]
+
+[dev-dependencies.tokio]
+version = "1"
+features = ["macros", "rt-multi-thread"]
+
+[dev-dependencies.tempfile]
+version = "3"
+
+[target.'cfg(target_os = "linux")'.dev-dependencies.zbus]
+version = "5.9"
+features = ["tokio"]

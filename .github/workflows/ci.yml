@@ -51,6 +51,7 @@ jobs:
               - 'scripts/run-gpui-build*'
               - 'scripts/sync-desktop-versions.mjs'
               - 'scripts/verify-gpui-release-inputs.mjs'
+              - 'vendor/tauri-plugin-opener/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
               - 'bun.lock'
@@ -63,6 +64,7 @@ jobs:
               - 'apps/desktop-gpui/**'
               - 'crates/**'
               - 'apps/desktop/src-tauri/**'
+              - 'vendor/tauri-plugin-opener/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
             tauri-plugins:
@@ -222,7 +224,7 @@ jobs:
 
       - name: Test desktop installation and storage helpers
         shell: bash
-        run: cargo test --locked -p cap-utils -p cap-cli-install --lib
+        run: cargo test --locked -p cap-utils -p cap-cli-install -p tauri-plugin-opener --lib
 
       - name: Build desktop binaries
         shell: bash
@@ -318,7 +320,7 @@ jobs:
         run: |
           node --test scripts/linux-bundle-config.test.mjs scripts/finalize-linux-appimage.test.mjs
           bun run --cwd apps/desktop vitest run scripts/prepare.test.js
-          cargo test --locked -p cap-utils -p cap-cli-install --lib
+          cargo test --locked -p cap-utils -p cap-cli-install -p tauri-plugin-opener --lib
           cargo test --locked -p cap --bin cap record::tests
           cargo test --locked -p cap-recording --lib -- --test-threads=1
           cargo test --locked -p cap-enc-ffmpeg

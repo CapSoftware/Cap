@@ -1,0 +1,17 @@
+"$schema" = "schemas/schema.json"
+
+[[permission]]
+identifier = "allow-default-urls"
+description = "This enables opening `mailto:`, `tel:`, `https://` and `http://` urls using their default application."
+
+[[permission.scope.allow]]
+url = "mailto:*"
+
+[[permission.scope.allow]]
+url = "tel:*"
+
+[[permission.scope.allow]]
+url = "http://*"
+
+[[permission.scope.allow]]
+url = "https://*"

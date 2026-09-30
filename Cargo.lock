@@ -10802,8 +10802,6 @@ dependencies = [
 [[package]]
 name = "tauri-plugin-opener"
 version = "2.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "786156aa8e89e03d271fbd3fe642207da8e65f3c961baa9e2930f332bf80a1f5"
 dependencies = [
  "dunce",
  "glob",
@@ -10815,7 +10813,9 @@ dependencies = [
  "serde_json",
  "tauri",
  "tauri-plugin",
+ "tempfile",
  "thiserror 2.0.16",
+ "tokio",
  "url",
  "windows 0.61.3",
  "zbus",
