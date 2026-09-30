@@ -1098,9 +1098,18 @@ function Inner(props: {
 								</div>
 							</Show>
 						</div>
-						<Show when={isWebEditor && editorReady()}>
+						<Show when={isWebEditor}>
+							{/* The strip's slot is there from the start, so the preview
+							    doesn't shrink and redraw once the editor is ready. */}
 							<div class="flex-none px-2">
-								<ClipStrip />
+								<Show
+									when={editorReady()}
+									fallback={
+										<div class="h-[48px] rounded-xl bg-ed-card shadow-ed-card" />
+									}
+								>
+									<ClipStrip />
+								</Show>
 							</div>
 						</Show>
 						<div
