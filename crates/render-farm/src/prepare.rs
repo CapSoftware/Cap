@@ -37,11 +37,17 @@ fn written_files(root: &Path, dir: &Path, files: &mut Vec<Value>) -> Result<()> 
         if kind.is_dir() {
             written_files(root, &path, files)?;
         } else if kind.is_file() {
+            // Manifest paths are keys: always `/`, whatever the OS uses.
             let relative = path
                 .strip_prefix(root)?
-                .to_str()
-                .context("project file name is not UTF-8")?
-                .to_owned();
+                .components()
+                .map(|part| {
+                    part.as_os_str()
+                        .to_str()
+                        .context("project file name is not UTF-8")
+                })
+                .collect::<Result<Vec<_>>>()?
+                .join("/");
             files.push(json!({ "path": relative, "size": entry.metadata()?.len() }));
         }
     }
