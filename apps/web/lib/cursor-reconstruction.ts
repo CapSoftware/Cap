@@ -19,7 +19,7 @@ export function cursorReconstructionPrefix(
 	videoId: string,
 	runId: string,
 ) {
-	return `${ownerId}/${videoId}/.recording/cursor/${runId}/`;
+	return `${ownerId}/${videoId}/.recording/render/cursor-${runId}/`;
 }
 
 export function cursorReconstructionReference(videoId: string) {
