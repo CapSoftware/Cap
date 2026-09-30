@@ -35,8 +35,8 @@ pub use editor::{
 };
 pub use editor_instance::{
     AudioLoader, EditorInstance, EditorStartupInputs, EditorState, SegmentAudioTimingRepair,
-    SegmentMedia, create_segments, create_segments_without_audio, initial_clip_configuration,
-    segment_audio_timing_repairs,
+    SegmentMedia, create_segments, create_segments_without_audio, display_video_duration,
+    initial_clip_configuration, initial_timeline, segment_audio_timing_repairs,
 };
 pub use existing_recording_import::{
     append_instant_cap_project_to_editor_project, append_studio_cap_project_to_editor_project,
