@@ -4,12 +4,15 @@ import { nv12Planes, takesNv12Planes } from "./browser-nv12-planes";
 function fakeFrame(
 	width: number,
 	height: number,
-	options: { format?: string; fullRange?: boolean } = {},
+	options: { format?: string; fullRange?: boolean; matrix?: string } = {},
 ) {
 	const copies: Array<{ length: number; layout: unknown }> = [];
 	const frame = {
 		format: options.format ?? "NV12",
-		colorSpace: { fullRange: options.fullRange ?? false },
+		colorSpace: {
+			fullRange: options.fullRange ?? false,
+			matrix: options.matrix ?? null,
+		},
 		visibleRect: { x: 0, y: 0, width, height },
 		displayWidth: width,
 		displayHeight: height,
@@ -27,6 +30,15 @@ describe("takesNv12Planes", () => {
 		expect(takesNv12Planes(fakeFrame(4, 4, { format: "I420" }).frame)).toBe(
 			false,
 		);
+	});
+
+	test("leaves frames tagged with another matrix to the browser", () => {
+		expect(takesNv12Planes(fakeFrame(4, 4, { matrix: "bt709" }).frame)).toBe(
+			true,
+		);
+		for (const matrix of ["bt470bg", "smpte170m", "rgb"]) {
+			expect(takesNv12Planes(fakeFrame(4, 4, { matrix }).frame)).toBe(false);
+		}
 	});
 });
 

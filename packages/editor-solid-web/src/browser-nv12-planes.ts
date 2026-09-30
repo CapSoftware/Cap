@@ -19,8 +19,11 @@ export const UPLOADS_NV12_PLANES =
 	/AppleWebKit/.test(navigator.userAgent) &&
 	!/Chrome|Chromium|Edg/.test(navigator.userAgent);
 
+// The renderer converts with BT.709 only; frames tagged with another matrix
+// (e.g. BT.601 standard definition H.264) keep the browser's conversion.
 export function takesNv12Planes(frame: VideoFrame) {
-	return frame.format === "NV12";
+	const matrix = frame.colorSpace.matrix;
+	return frame.format === "NV12" && (matrix == null || matrix === "bt709");
 }
 
 export async function nv12Planes(frame: VideoFrame): Promise<Nv12Planes> {
