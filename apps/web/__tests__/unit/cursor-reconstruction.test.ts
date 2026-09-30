@@ -98,6 +98,16 @@ describe("effectiveEditorSources", () => {
 		).toBe(displayKey);
 	});
 
+	it("matches runs recorded before size and identity by their key", () => {
+		const legacy = metadata({
+			sourceSize: undefined,
+			sourceIdentity: undefined,
+		});
+		expect(effectiveEditorSources(legacy, owner, video)?.display.key).toBe(
+			`${prefix}display.mp4`,
+		);
+	});
+
 	it("never replaces pointer input a recording captured itself", () => {
 		const input = metadata(
 			{},

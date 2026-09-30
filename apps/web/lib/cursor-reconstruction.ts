@@ -26,14 +26,19 @@ export function cursorReconstructionAbandoned(
 	);
 }
 
-/** Whether the run was made from exactly this display, not only its key. */
+/**
+ * Whether the run was made from exactly this display, not only its key.
+ * Runs recorded before size and identity were kept can only match the key.
+ */
 function madeFrom(
 	run: CursorReconstruction,
 	display: EditorSources["display"] | undefined,
 ) {
+	if (!display || run.sourceKey !== display.key) return false;
+	if (run.sourceSize === undefined && run.sourceIdentity === undefined) {
+		return true;
+	}
 	return (
-		!!display &&
-		run.sourceKey === display.key &&
 		(run.sourceSize ?? null) === (display.size ?? null) &&
 		(run.sourceIdentity ?? null) === (display.objectIdentity ?? null)
 	);
