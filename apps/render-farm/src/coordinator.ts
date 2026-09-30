@@ -19,7 +19,11 @@ import {
 	type Run,
 	type TrackIndex,
 } from "./mp4";
-import { planChunkBoundaries } from "./planning";
+import {
+	chunkPartLayout,
+	MIN_RANGE_PARTS,
+	planChunkBoundaries,
+} from "./planning";
 import { ProbeEngine } from "./probe-engine";
 import {
 	type AudioResultMeta,
@@ -34,14 +38,15 @@ import {
 	type VideoTask,
 	type WorkItem,
 } from "./protocol";
-import {
-	acceptOnce,
-	completeUpload,
-	PART_RANGES,
-	reservePartRange,
-} from "./recovery";
+import { acceptOnce, completeUpload, reservePartRange } from "./recovery";
 import { mediaS3ConfigFromEnv, S3, s3ConfigFromEnv } from "./s3";
 import { pickQueued as pickQueuedTask } from "./scheduler";
+import {
+	planStitch,
+	StitchLimiter,
+	type StitchPart,
+	uploadProblem,
+} from "./stitch";
 import {
 	AUDIO_FILE,
 	checkManifestBounds,
@@ -70,6 +75,8 @@ const MAX_ACTIVE_JOBS = Number(process.env.RF_MAX_ACTIVE_JOBS ?? 32);
 const JOB_STALL_MS = Number(process.env.RF_JOB_STALL_MS ?? 10 * 60_000);
 // Finished jobs stay queryable this long, as a summary without media data.
 const JOB_RETENTION_MS = Number(process.env.RF_JOB_RETENTION_MS ?? 60 * 60_000);
+/** Presigned segment and playlist URLs last 6 h; older jobs are abandoned. */
+const JOB_LIFETIME_MS = 5 * 3600_000;
 const SAMPLE_RATE = 48_000;
 const PACKET = 1024;
 
@@ -89,6 +96,11 @@ const HLS_SEGMENT_SECONDS = Number(process.env.RF_HLS_SEGMENT_SECONDS ?? 2);
 /** Unfinished chunks per job (from the front) that outrank other work. */
 const HEAD_CHUNKS = Number(process.env.RF_HEAD_CHUNKS ?? 2);
 const LEAD_IN_SECONDS = Number(process.env.RF_LEAD_IN_SECONDS ?? 4);
+const stitchLimiter = new StitchLimiter({
+	total: 16,
+	ahead: 8,
+	aheadPerJob: 4,
+});
 /**
  * Shortest audio section. Each one after the first also renders a 10 s
  * preroll, but a short export's audio is what its video chunks wait on, so
@@ -285,6 +297,8 @@ type HlsState = {
 type Job = {
 	verified?: boolean;
 	acceptances: Map<string, Promise<void>>;
+	stitchParts?: Map<string, Promise<{ partNumber: number; etag: string }>>;
+	headerStashes?: Map<string, Promise<Uint8Array>>;
 	/** Summary frozen when the job ends; the job's media data is released then. */
 	final?: ReturnType<typeof summary>;
 	hls?: HlsState;
@@ -855,9 +869,8 @@ async function planJob(job: Job) {
 		leadInFrames: job.hls ? LEAD_IN_SECONDS * job.fps : 0,
 	});
 	const chunkCount = boundaries.length - 1;
-	const partsPerChunk = Math.floor(9998 / chunkCount);
-	const partLimit = Math.floor(partsPerChunk / PART_RANGES);
-	if (partLimit < 3) {
+	const { partsPerChunk, partLimit } = chunkPartLayout(chunkCount);
+	if (partLimit < MIN_RANGE_PARTS) {
 		throw new Error("too many chunks for one multipart upload");
 	}
 	const samplesPerFrame = SAMPLE_RATE / job.fps;
@@ -907,7 +920,7 @@ async function planJob(job: Job) {
 					mediaSpec(file.path, perFile.get(file.path) ?? []),
 				),
 			],
-			firstPart: 2 + index * partsPerChunk,
+			firstPart: 2 + index * partsPerChunk + 1,
 			partLimit,
 			dispatches: 0,
 		});
@@ -1059,7 +1072,7 @@ async function planJob(job: Job) {
 				firstPart: chunk.firstPart,
 				partLimit: chunk.partLimit,
 				partTarget,
-				isLast: chunk.index === job.chunks.length - 1,
+				stashKey: stashKey(job.id, chunk.index, chunk.firstPart),
 			},
 			audio: hasAudio
 				? {
@@ -1093,6 +1106,12 @@ const JOURNAL = process.env.RF_JOURNAL !== "0";
 // Workers heartbeat every 3 s; this is enough for all of them to report in.
 const RESUME_HOLD_MS = 10_000;
 const journalKey = (id: string, name: string) => `jobs/${id}/${name}`;
+/**
+ * Where a dispatch stores its chunk's opening bytes (see stitch.ts). Outside
+ * `jobs/` so a sweep can list every stash without reading journals.
+ */
+const stashKey = (id: string, chunk: number, firstPart: number) =>
+	`stash/${id}/c${chunk}-p${firstPart}`;
 
 async function journalPut(key: string, body: Uint8Array | string) {
 	if (!JOURNAL) return;
@@ -1117,11 +1136,11 @@ type JournaledJob = Pick<
 	| "sections"
 	| "plan"
 	| "probe"
-> & { version: 2; tasks: Task[]; hls: { prefix: string } | null };
+> & { version: 3; tasks: Task[]; hls: { prefix: string } | null };
 
 function journalJob(job: Job) {
 	const record: JournaledJob = {
-		version: 2,
+		version: 3,
 		id: job.id,
 		request: job.request,
 		key: job.key,
@@ -1179,8 +1198,7 @@ function segmentsFromResult(
 	result: VideoResult,
 ): SegmentReport[] {
 	if (!job.hls) return [];
-	// Parts are numbered from the dispatch's first part, which names its segments.
-	const firstPart = Math.min(...result.parts.map((part) => part.partNumber));
+	const firstPart = result.firstPart;
 	const cuts = segmentCuts(
 		result.keyframes,
 		result.sizes.length,
@@ -1197,6 +1215,26 @@ function segmentsFromResult(
 }
 
 async function resumeJobs() {
+	// The stash sweep stays off until every journaled job is back in memory:
+	// until then it would take a resumable job for a finished one.
+	for (let attempt = 0; ; attempt++) {
+		try {
+			await resumeJournal();
+			break;
+		} catch (error) {
+			console.error(`resume failed: ${error}`);
+			await new Promise((resolve) =>
+				setTimeout(resolve, Math.min(60_000, 1000 * 2 ** attempt)),
+			);
+		}
+	}
+	journalResumed = true;
+	await sweepStashes().catch((error) =>
+		console.error(`stash sweep failed: ${error}`),
+	);
+}
+
+async function resumeJournal() {
 	if (!JOURNAL) return;
 	const keys = await journalS3.list("jobs/");
 	const byJob = new Map<string, Set<string>>();
@@ -1217,7 +1255,7 @@ async function resumeJobs() {
 						await journalS3.get(journalKey(id, "request.json")),
 					),
 				) as { request: JobRequest; requestedAt: number };
-				if (Date.now() - receipt.requestedAt > 5 * 3600_000) {
+				if (Date.now() - receipt.requestedAt > JOB_LIFETIME_MS) {
 					await journalPut(journalKey(id, "done"), "expired");
 					continue;
 				}
@@ -1231,12 +1269,13 @@ async function resumeJobs() {
 					await journalS3.get(journalKey(id, "job.json")),
 				),
 			) as JournaledJob;
-			// Presigned segment/playlist URLs last 6 h; older jobs are abandoned.
-			if (Date.now() - (record.t.requested ?? 0) > 5 * 3600_000) {
+			if (Date.now() - (record.t.requested ?? 0) > JOB_LIFETIME_MS) {
 				await journalPut(journalKey(id, "done"), "expired");
 				continue;
 			}
-			if (record.version !== 2) {
+			// Version 3 numbers parts around the coordinator's stash parts;
+			// earlier journals' uploads cannot be completed with it.
+			if (record.version !== 3) {
 				if (record.uploadId)
 					await s3.abortMultipart(record.key, record.uploadId);
 				await journalPut(
@@ -1457,7 +1496,12 @@ async function dispatchedTask(
 	const dispatched = {
 		...task,
 		attempt: state.attempts,
-		upload: { ...task.upload, firstPart, partLimit: chunk.partLimit },
+		upload: {
+			...task.upload,
+			firstPart,
+			partLimit: chunk.partLimit,
+			stashKey: stashKey(job.id, chunk.index, firstPart),
+		},
 	};
 	// The journaled plan already reserves every chunk's first range (a resumed
 	// coordinator never reuses it), so first dispatches skip this write; it
@@ -2001,7 +2045,7 @@ async function publishPlaylist(job: Job) {
 		} while (hls.dirty && !hls.ended);
 	} catch (error) {
 		console.error(`job ${job.id} playlist: ${error}`);
-		if (now() - (job.t.requested ?? 0) < 5 * 3600_000) {
+		if (now() - (job.t.requested ?? 0) < JOB_LIFETIME_MS) {
 			hls.retry = setTimeout(() => publishPlaylist(job), 1000);
 			hls.retry.unref();
 		}
@@ -2107,6 +2151,12 @@ function finish(job: Job) {
 	finishedJobs.push(job.id);
 	if (finishedJobs.length > 50) finishedJobs.shift();
 	rmSync(join(WORK_DIR, job.id), { recursive: true, force: true });
+	stitchLimiter.cancel(job.id);
+	job.headerStashes = undefined;
+	job.stitchParts = undefined;
+	dropStashes(job.id).catch((error) =>
+		console.error(`job ${job.id}: stash cleanup failed: ${error}`),
+	);
 }
 
 function recordStat(
@@ -2131,6 +2181,20 @@ async function acceptVideo(job: Job, state: TaskState, result: VideoResult) {
 	if (state.task.kind !== "video") return;
 	const chunk = state.task.chunk;
 	if (job.videoResults.has(chunk) || job.status !== "rendering") return;
+	const plan = job.chunks[chunk];
+	const firstPart = state.firstPart ?? plan?.firstPart;
+	const problem =
+		plan && firstPart !== undefined && result.firstPart === firstPart
+			? uploadProblem(
+					{
+						stashKey: stashKey(job.id, chunk, firstPart),
+						firstPart,
+						partLimit: plan.partLimit,
+					},
+					result,
+				)
+			: "result is not from this chunk's dispatch";
+	if (problem) throw new Error(`chunk ${chunk}: ${problem}`);
 	await journalPut(
 		journalKey(job.id, `v/${chunk}.json`),
 		JSON.stringify(result),
@@ -2166,6 +2230,7 @@ async function acceptVideo(job: Job, state: TaskState, result: VideoResult) {
 	}
 	job.videoResults.set(chunk, result);
 	job.t.lastProgress = now();
+	stitchAhead(job);
 	// Segments reported to a previous coordinator process (before a restart)
 	// are not reported again; derive any missing ones from the result.
 	const chunkPlan = job.chunks[chunk];
@@ -2262,6 +2327,7 @@ async function assemble(job: Job) {
 	const videoRuns: Run[] = [];
 	const audioRuns: Run[] = [];
 	const parts: { partNumber: number; etag: string }[] = [];
+	const stashed: Parameters<typeof planStitch>[1] = [];
 	let base = 0;
 	job.chunks.forEach((chunk, index) => {
 		const result = results[index] as VideoResult;
@@ -2272,7 +2338,12 @@ async function assemble(job: Job) {
 		for (const run of result.audioRuns)
 			audioRuns.push({ ...run, offset: run.offset + base });
 		for (const part of result.parts) parts.push(part);
-		base += result.bytes + result.paddedBytes;
+		stashed.push({
+			slot: chunk.firstPart - 1,
+			stash: result.stash,
+			parts: result.parts,
+		});
+		base += result.bytes;
 	});
 	const payloadSize = base;
 
@@ -2316,18 +2387,21 @@ async function assemble(job: Job) {
 		},
 		audio,
 		payloadSize,
-		minimumSize: MIN_PART + 64 * 1024,
+		minimumSize: 0,
 	});
 	job.t.headerBuilt = now();
 	if (!job.uploadId) throw new Error("no upload");
+	const uploadId = job.uploadId;
+	const stitch = planStitch(header.byteLength, stashed);
 	job.outputBytes = await completeUpload(
 		s3,
 		{
 			key: job.key,
-			uploadId: job.uploadId,
+			uploadId,
 			header,
 			payloadSize,
 			parts,
+			prepare: () => writeStitchParts(job, uploadId, header, stitch),
 		},
 		(intent) => journalPut(journalKey(job.id, "assembly.json"), intent),
 	);
@@ -2358,6 +2432,172 @@ async function assemble(job: Job) {
 	);
 	finish(job);
 }
+
+const stitchPartKey = (part: StitchPart) =>
+	`${part.partNumber}:${part.sources
+		.map((source) => (source.kind === "header" ? "header" : source.key))
+		.join(",")}`;
+
+/**
+ * Uploads a part the coordinator owns: a stash that stands alone is copied
+ * server side; the header and runs of small stashes are joined and uploaded.
+ */
+async function writeStitchPart(
+	key: string,
+	uploadId: string,
+	header: Uint8Array | null,
+	part: StitchPart,
+	readStash: (key: string) => Promise<Uint8Array> = (stash) =>
+		journalS3.get(stash),
+) {
+	const [only] = part.sources;
+	if (
+		part.sources.length === 1 &&
+		only?.kind === "stash" &&
+		s3.sharesStoreWith(journalS3)
+	) {
+		return {
+			partNumber: part.partNumber,
+			etag: await s3.uploadPartCopy(key, uploadId, part.partNumber, {
+				bucket: journalS3.config.bucket,
+				key: only.key,
+			}),
+		};
+	}
+	const pieces = await Promise.all(
+		part.sources.map(async (source) => {
+			if (source.kind === "stash") return readStash(source.key);
+			if (!header) throw new Error("the header part waits for assembly");
+			return header;
+		}),
+	);
+	const body = new Uint8Array(part.bytes);
+	let offset = 0;
+	for (const [index, piece] of pieces.entries()) {
+		if (piece.byteLength !== part.sources[index]?.bytes) {
+			throw new Error(`stash for part ${part.partNumber} is incomplete`);
+		}
+		body.set(piece, offset);
+		offset += piece.byteLength;
+	}
+	return {
+		partNumber: part.partNumber,
+		etag: await s3.uploadPart(key, uploadId, part.partNumber, body),
+	};
+}
+
+/**
+ * While chunks render, writes every coordinator part whose chunks are all in:
+ * the plan for an accepted run of chunks never changes as later chunks
+ * arrive, except for the part holding the header and the part still open at
+ * the run's end. Assembly then only writes those.
+ */
+function stitchAhead(job: Job) {
+	if (!job.uploadId) return;
+	const accepted: Parameters<typeof planStitch>[1] = [];
+	for (const chunk of job.chunks) {
+		const result = job.videoResults.get(chunk.index);
+		if (!result) break;
+		accepted.push({
+			slot: chunk.firstPart - 1,
+			stash: result.stash,
+			parts: result.parts,
+		});
+	}
+	if (accepted.length === 0) return;
+	// The header's part is the one assembly must write; read its stashes now
+	// so that write is only an upload.
+	job.headerStashes ??= new Map();
+	let carried = 0;
+	for (const chunk of accepted) {
+		if (!job.headerStashes.has(chunk.stash.key)) {
+			const read = stitchLimiter.run(job.id, true, () =>
+				journalS3.get(chunk.stash.key),
+			);
+			read.catch(() => job.headerStashes?.delete(chunk.stash.key));
+			job.headerStashes.set(chunk.stash.key, read);
+		}
+		carried += chunk.stash.bytes;
+		if (chunk.parts.length > 0 || carried >= MIN_PART) break;
+	}
+	const complete = accepted.length === job.chunks.length;
+	const plan = planStitch(0, accepted, { partial: !complete });
+	job.stitchParts ??= new Map();
+	for (const part of plan) {
+		if (part.sources.some((source) => source.kind === "header")) continue;
+		const key = stitchPartKey(part);
+		if (job.stitchParts.has(key)) continue;
+		const uploadId = job.uploadId;
+		const written = stitchLimiter.run(job.id, true, () =>
+			writeStitchPart(job.key, uploadId, null, part),
+		);
+		written.catch(() => job.stitchParts?.delete(key));
+		job.stitchParts.set(key, written);
+	}
+}
+
+async function writeStitchParts(
+	job: Job,
+	uploadId: string,
+	header: Uint8Array,
+	plan: StitchPart[],
+) {
+	const ahead = job.stitchParts ?? new Map();
+	stitchLimiter.promote(job.id);
+	// A part written ahead under a grouping the final plan changed must land
+	// before the plan rewrites its number. Header reads are awaited here too,
+	// not inside a stitch slot, so assembly never holds slots while waiting.
+	await Promise.allSettled([
+		...ahead.values(),
+		...(job.headerStashes?.values() ?? []),
+	]);
+	const readStash = (key: string) =>
+		(job.headerStashes?.get(key) ?? Promise.reject()).catch(() =>
+			journalS3.get(key),
+		);
+	return Promise.all(
+		plan.map((part) => {
+			const write = () =>
+				stitchLimiter.run(job.id, false, () =>
+					writeStitchPart(job.key, uploadId, header, part, readStash),
+				);
+			const early = ahead.get(stitchPartKey(part));
+			return early ? early.catch(write) : write();
+		}),
+	);
+}
+
+async function dropStashes(id: string) {
+	const keys = await journalS3.list(`stash/${id}/`);
+	await Promise.all(keys.map(({ key }) => journalS3.delete(key)));
+}
+
+const STASH_SWEEP_MS = 10 * 60_000;
+let journalResumed = false;
+
+/**
+ * Deletes stashes a job's own cleanup missed: those a losing copy writes after
+ * it, and any left when the coordinator stops mid-cleanup (restart never
+ * reopens a finished job). A stash of a job this process doesn't know is
+ * kept until the job could no longer be resumed.
+ */
+async function sweepStashes() {
+	if (!journalResumed) return;
+	const stale = (await journalS3.list("stash/")).filter(
+		({ key, modifiedAt }) => {
+			const job = jobs.get(key.split("/")[1] ?? "");
+			if (!job) return Date.now() - modifiedAt > JOB_LIFETIME_MS;
+			return job.status === "ready" || job.status === "error";
+		},
+	);
+	await Promise.all(stale.map(({ key }) => journalS3.delete(key)));
+}
+
+setInterval(() => {
+	sweepStashes().catch((error) =>
+		console.error(`stash sweep failed: ${error}`),
+	);
+}, STASH_SWEEP_MS);
 
 async function verifyPlayable(job: Job) {
 	if (!job.url) return;
