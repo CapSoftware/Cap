@@ -23,7 +23,30 @@ export type ChunkPlanInput = {
  * Boundaries sit on GOP edges when chunks are long enough, else on whole
  * seconds; every chunk opens with its own IDR either way.
  */
-export const MAX_CHUNKS = Math.floor(9998 / (PART_RANGES * 3)) - 1;
+/** Part numbers an export's chunks share: S3's 10,000 less the header's part 1 and a spare. */
+const UPLOAD_PARTS = 9998;
+/** Fewest parts a dispatch range may hold. */
+export const MIN_RANGE_PARTS = 3;
+
+/**
+ * How an export's part numbers divide between its chunks: each chunk's block
+ * opens with one part the coordinator fills from the chunk's stash (see
+ * stitch.ts), followed by `PART_RANGES` dispatch ranges of `partLimit` parts.
+ */
+export function chunkPartLayout(chunkCount: number) {
+	const partsPerChunk = Math.floor(UPLOAD_PARTS / Math.max(1, chunkCount));
+	return {
+		partsPerChunk,
+		partLimit: Math.floor((partsPerChunk - 1) / PART_RANGES),
+	};
+}
+
+/**
+ * Most chunks the planner makes before the lead-in split, which can add one:
+ * every count up to `MAX_CHUNKS + 1` leaves each range `MIN_RANGE_PARTS`.
+ */
+export const MAX_CHUNKS =
+	Math.floor(UPLOAD_PARTS / (PART_RANGES * MIN_RANGE_PARTS + 1)) - 1;
 
 export function planChunkBoundaries(input: ChunkPlanInput) {
 	const { totalFrames, fps } = input;

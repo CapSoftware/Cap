@@ -19,7 +19,11 @@ import {
 	type Run,
 	type TrackIndex,
 } from "./mp4";
-import { planChunkBoundaries } from "./planning";
+import {
+	chunkPartLayout,
+	MIN_RANGE_PARTS,
+	planChunkBoundaries,
+} from "./planning";
 import { ProbeEngine } from "./probe-engine";
 import {
 	type AudioResultMeta,
@@ -34,12 +38,7 @@ import {
 	type VideoTask,
 	type WorkItem,
 } from "./protocol";
-import {
-	acceptOnce,
-	completeUpload,
-	PART_RANGES,
-	reservePartRange,
-} from "./recovery";
+import { acceptOnce, completeUpload, reservePartRange } from "./recovery";
 import { mediaS3ConfigFromEnv, S3, s3ConfigFromEnv } from "./s3";
 import { pickQueued as pickQueuedTask } from "./scheduler";
 import { planStitch, type StitchPart, uploadProblem } from "./stitch";
@@ -862,11 +861,8 @@ async function planJob(job: Job) {
 		leadInFrames: job.hls ? LEAD_IN_SECONDS * job.fps : 0,
 	});
 	const chunkCount = boundaries.length - 1;
-	const partsPerChunk = Math.floor(9998 / chunkCount);
-	// Each chunk's block opens with a part number the coordinator fills from
-	// the chunk's stash (see stitch.ts); its dispatch ranges follow.
-	const partLimit = Math.floor((partsPerChunk - 1) / PART_RANGES);
-	if (partLimit < 3) {
+	const { partsPerChunk, partLimit } = chunkPartLayout(chunkCount);
+	if (partLimit < MIN_RANGE_PARTS) {
 		throw new Error("too many chunks for one multipart upload");
 	}
 	const samplesPerFrame = SAMPLE_RATE / job.fps;
