@@ -1,28 +1,30 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashSet,
     env,
     error::Error,
     ffi::OsString,
     fs::{self, File, OpenOptions},
-    io::{self, BufReader, Write},
+    io::{self, Write},
     path::{Path, PathBuf},
     sync::{Arc, atomic::AtomicBool},
 };
 
 use base64::{Engine, engine::general_purpose::STANDARD};
-use cap_editor::{AudioOutput, EditorInstance, default_screen_recording_project_config};
+use cap_editor::{AudioOutput, EditorInstance};
 use cap_export::{
     ExporterBase,
     estimates::estimate_export_web,
     make_cursor_only_project,
     preview::{ExportPreviewSettings, render_preview_with_config},
     settings::ExportSettings,
+    web_project::{
+        LegacyEditSpec, WebEditorAudioDefault, WebProjectAudio, WebProjectSources, WebProjectVideo,
+        invalid_input, load_web_input_events, write_web_project,
+    },
 };
 use cap_project::{
-    AudioMeta, ClipConfiguration, CursorMeta, Cursors, InstantRecordingMeta, KeyboardEvents,
-    MultipleSegment, MultipleSegments, ProjectConfiguration, RecordingMeta, RecordingMetaInner,
-    StudioRecordingMeta, StudioRecordingStatus, TimelineConfiguration, VideoMeta, VoiceIsolation,
-    web_input::{MAX_WEB_INPUT_BYTES, WebInputData, parse_web_input_events, web_cursor_asset},
+    AudioMeta, ClipConfiguration, InstantRecordingMeta, MultipleSegment, ProjectConfiguration,
+    RecordingMeta, RecordingMetaInner, StudioRecordingMeta, VideoMeta,
 };
 use image::ImageDecoder;
 use serde::Deserialize;
@@ -50,45 +52,6 @@ struct WebEditorSourceManifest {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct WebEditorAudioDefault {
-    enabled_by_default: bool,
-    isolation: VoiceIsolation,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct LegacyEditSpec {
-    version: u8,
-    source_duration: f64,
-    keep_ranges: Vec<LegacyKeepRange>,
-}
-
-#[derive(Deserialize)]
-struct LegacyKeepRange {
-    start: f64,
-    end: f64,
-}
-
-#[derive(Default)]
-struct StagedWebInput {
-    cursor_path: Option<String>,
-    keyboard_path: Option<String>,
-    cursors: Cursors,
-}
-
-fn load_web_input_events(path: &Path) -> Result<WebInputData, Box<dyn Error>> {
-    if path.extension().and_then(|value| value.to_str()) != Some("ndjson") {
-        return Err(invalid_input("Input event source must be NDJSON").into());
-    }
-    let metadata = fs::symlink_metadata(path)?;
-    if !metadata.is_file() || !(1..=MAX_WEB_INPUT_BYTES).contains(&metadata.len()) {
-        return Err(invalid_input("Input event source exceeds the supported size").into());
-    }
-    Ok(parse_web_input_events(BufReader::new(File::open(path)?))?)
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct WebEditorClipManifest {
     version: u8,
     clips: Vec<WebEditorClipSource>,
@@ -104,10 +67,6 @@ struct WebEditorClipSource {
     camera_path: Option<PathBuf>,
     camera_fps: Option<u32>,
     camera_offset_ms: Option<i64>,
-}
-
-fn invalid_input(message: impl Into<String>) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidInput, message.into())
 }
 
 fn next_path(args: &mut impl Iterator<Item = OsString>, name: &str) -> io::Result<PathBuf> {
@@ -154,62 +113,14 @@ fn stage_audio(
     segment_dir: &Path,
     name: &str,
     offset_ms: i64,
-) -> io::Result<AudioMeta> {
+) -> io::Result<WebProjectAudio> {
     let extension = media_extension(source, &["webm", "mp4", "wav", "ogg", "m4a", "mp3"])?;
     let file_name = format!("{name}.{extension}");
     stage_media(source, &segment_dir.join(&file_name))?;
-    Ok(AudioMeta {
-        path: format!("content/segments/segment-0/{file_name}").into(),
-        start_time: Some(offset_ms as f64 / 1000.0),
-        device_id: None,
-        gap_summary: None,
+    Ok(WebProjectAudio {
+        path: format!("content/segments/segment-0/{file_name}"),
+        offset_ms,
     })
-}
-
-fn stage_web_input(
-    project_path: &Path,
-    segment_dir: &Path,
-    data: &WebInputData,
-) -> Result<StagedWebInput, Box<dyn Error>> {
-    if !data.cursor.moves.is_empty() || !data.cursor.clicks.is_empty() {
-        let cursor_dir = project_path.join("content/cursors");
-        fs::create_dir_all(&cursor_dir)?;
-        let mut cursors = HashMap::new();
-        for &style in &data.styles {
-            let (image, shape_name, hotspot) = web_cursor_asset(&data.platform, style)?;
-            let image_name = format!("web-{style}.png");
-            fs::write(cursor_dir.join(&image_name), image)?;
-            let shape = serde_json::from_value(serde_json::Value::String(shape_name.to_owned()))?;
-            cursors.insert(
-                format!("web-{style}"),
-                CursorMeta {
-                    image_path: format!("content/cursors/{image_name}").into(),
-                    hotspot,
-                    shape: Some(shape),
-                },
-            );
-        }
-        serde_json::to_writer(File::create(segment_dir.join("cursor.json"))?, &data.cursor)?;
-        return Ok(StagedWebInput {
-            cursor_path: Some("content/segments/segment-0/cursor.json".to_owned()),
-            keyboard_path: stage_web_keyboard(segment_dir, &data.keyboard)?,
-            cursors: Cursors::Correct(cursors),
-        });
-    }
-    Ok(StagedWebInput {
-        keyboard_path: stage_web_keyboard(segment_dir, &data.keyboard)?,
-        ..Default::default()
-    })
-}
-
-fn stage_web_keyboard(segment_dir: &Path, keyboard: &KeyboardEvents) -> io::Result<Option<String>> {
-    if keyboard.presses.is_empty() {
-        return Ok(None);
-    }
-    keyboard
-        .write_to_file(&segment_dir.join("keyboard.bin"))
-        .map_err(invalid_input)?;
-    Ok(Some("content/segments/segment-0/keyboard.bin".to_owned()))
 }
 
 fn prepare(project_path: &Path, manifest_path: &Path) -> Result<(), Box<dyn Error>> {
@@ -281,11 +192,10 @@ fn prepare(project_path: &Path, manifest_path: &Path) -> Result<(), Box<dyn Erro
         let extension = media_extension(source, &["webm", "mp4"])?;
         let file_name = format!("camera.{extension}");
         stage_media(source, &segment_dir.join(&file_name))?;
-        Some(VideoMeta {
-            path: format!("content/segments/segment-0/{file_name}").into(),
+        Some(WebProjectVideo {
+            path: format!("content/segments/segment-0/{file_name}"),
             fps: manifest.camera_fps.unwrap_or(manifest.display_fps),
-            start_time: Some(manifest.camera_offset_ms.unwrap_or(0) as f64 / 1000.0),
-            device_id: None,
+            offset_ms: manifest.camera_offset_ms.unwrap_or(0),
         })
     } else {
         None
@@ -303,11 +213,9 @@ fn prepare(project_path: &Path, manifest_path: &Path) -> Result<(), Box<dyn Erro
         })
         .transpose()?;
     let system_audio = if manifest.mixed_audio_in_display {
-        Some(AudioMeta {
-            path: display_relative.clone().into(),
-            start_time: Some(0.0),
-            device_id: None,
-            gap_summary: None,
+        Some(WebProjectAudio {
+            path: display_relative.clone(),
+            offset_ms: 0,
         })
     } else {
         manifest
@@ -323,85 +231,24 @@ fn prepare(project_path: &Path, manifest_path: &Path) -> Result<(), Box<dyn Erro
             })
             .transpose()?
     };
-    let staged_input = input_data
-        .as_ref()
-        .map(|data| stage_web_input(project_path, &segment_dir, data))
-        .transpose()?
-        .unwrap_or_default();
-
-    let recording_meta = RecordingMeta {
-        platform: input_data.as_ref().map(|data| data.platform.clone()),
-        project_path: project_path.to_path_buf(),
-        pretty_name: manifest.title,
-        sharing: None,
-        inner: RecordingMetaInner::Studio(Box::new(StudioRecordingMeta::MultipleSegments {
-            inner: MultipleSegments {
-                segments: vec![MultipleSegment {
-                    display: VideoMeta {
-                        path: display_relative.into(),
-                        fps: manifest.display_fps,
-                        start_time: Some(0.0),
-                        device_id: None,
-                    },
-                    camera,
-                    mic,
-                    system_audio,
-                    cursor: staged_input.cursor_path.map(Into::into),
-                    keyboard: staged_input.keyboard_path.map(Into::into),
-                    display_notch: None,
-                }],
-                cursors: staged_input.cursors,
-                status: Some(StudioRecordingStatus::Complete),
+    write_web_project(
+        project_path,
+        WebProjectSources {
+            title: manifest.title,
+            display: WebProjectVideo {
+                path: display_relative,
+                fps: manifest.display_fps,
+                offset_ms: 0,
             },
-        })),
-        upload: None,
-    };
-    if manifest.initial_project_config.is_some() && manifest.legacy_edit_spec.is_some() {
-        return Err(invalid_input("Legacy edits cannot replace a saved editor project").into());
-    }
-    let saved_config = manifest.initial_project_config.is_some();
-    let mut config = manifest
-        .initial_project_config
-        .unwrap_or_else(default_screen_recording_project_config);
-    if !saved_config && let Some(audio_default) = manifest.audio_default {
-        config.audio.improve = audio_default.enabled_by_default;
-        config.audio.isolation = audio_default.isolation;
-    }
-    if let Some(spec) = manifest.legacy_edit_spec {
-        if spec.version != 1
-            || !spec.source_duration.is_finite()
-            || !(0.0..=86_400.0).contains(&spec.source_duration)
-            || spec.source_duration == 0.0
-            || spec.keep_ranges.is_empty()
-            || spec.keep_ranges.len() > 1000
-        {
-            return Err(invalid_input("Invalid legacy editor timeline").into());
-        }
-        let mut previous_end = 0.0;
-        let mut segments = Vec::with_capacity(spec.keep_ranges.len());
-        for range in spec.keep_ranges {
-            if !range.start.is_finite()
-                || !range.end.is_finite()
-                || range.start < previous_end
-                || range.end - range.start < 0.05
-                || range.end > spec.source_duration + 0.001
-            {
-                return Err(invalid_input("Invalid legacy editor keep range").into());
-            }
-            segments.push(serde_json::json!({
-                "recordingSegment": 0,
-                "timescale": 1.0,
-                "start": range.start,
-                "end": range.end,
-            }));
-            previous_end = range.end;
-        }
-        config.timeline = Some(serde_json::from_value::<TimelineConfiguration>(
-            serde_json::json!({"segments": segments, "zoomSegments": []}),
-        )?);
-    }
-    config.write(project_path)?;
-    recording_meta.save_for_project()?;
+            camera,
+            mic,
+            system_audio,
+            audio_default: manifest.audio_default,
+            initial_project_config: manifest.initial_project_config,
+            legacy_edit_spec: manifest.legacy_edit_spec,
+        },
+        input_data.as_ref(),
+    )?;
     println!(
         "{}",
         serde_json::json!({

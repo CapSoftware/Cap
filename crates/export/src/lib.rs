@@ -4,6 +4,7 @@ pub mod mov;
 pub mod mp4;
 pub mod preview;
 pub mod settings;
+pub mod web_project;
 
 use cap_editor::{ExportAudioPreparation, ExportAudioRenderer, SegmentMedia};
 use cap_project::{
