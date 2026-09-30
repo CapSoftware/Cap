@@ -96,6 +96,21 @@ function createServerEnv() {
 
 			/// AI providers
 			ASSEMBLY_API_KEY: z.string().optional().describe("Audio transcription"),
+			STT_BASE_URL: z
+				.string()
+				.url()
+				.optional()
+				.describe(
+					"OpenAI-compatible transcription endpoint (eg. whisper.cpp, faster-whisper-server, speaches). Takes precedence over AssemblyAI for recorded videos. Must return word timestamps.",
+				),
+			STT_MODEL: z
+				.string()
+				.optional()
+				.describe("Model for STT_BASE_URL (eg. large-v3-turbo)"),
+			STT_API_KEY: z
+				.string()
+				.optional()
+				.describe("API key for STT_BASE_URL, if the endpoint requires one"),
 			ANTHROPIC_API_KEY: z.string().optional().describe("AI chat"),
 			OPENAI_API_KEY: z.string().optional().describe("AI summaries"),
 			GROQ_API_KEY: z.string().optional().describe("AI summaries"),

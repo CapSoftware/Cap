@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { assemblyAIEditResponse } from "../fixtures/assemblyai-edit-response";
+import { whisperCppVerboseResponse } from "../fixtures/whisper-cpp-verbose-response";
 
 const mocks = vi.hoisted(() => ({
 	transcribe: vi.fn(),
@@ -43,12 +44,17 @@ const videoRow = vi.hoisted(() => ({
 	},
 }));
 
-const state = vi.hoisted(() => ({ editRows: [] as unknown[] }));
+const state = vi.hoisted(() => ({
+	editRows: [] as unknown[],
+	sttBaseUrl: undefined as string | undefined,
+}));
 
 vi.mock("@cap/env", () => ({
 	serverEnv: () => ({
 		ASSEMBLY_API_KEY: "test-assembly-api-key",
 		NEXTAUTH_SECRET: "test-secret-with-enough-entropy",
+		STT_BASE_URL: state.sttBaseUrl,
+		STT_MODEL: "large-v3-turbo",
 	}),
 }));
 
@@ -177,6 +183,7 @@ describe("transcribeVideoWorkflow", () => {
 	beforeEach(() => {
 		mocks.updates.length = 0;
 		state.editRows = [];
+		state.sttBaseUrl = undefined;
 		mocks.transcribe.mockResolvedValue({
 			...assemblyAIEditResponse,
 			audio_duration: 4,
@@ -246,6 +253,83 @@ describe("transcribeVideoWorkflow", () => {
 		expect(stored?.words).toHaveLength(9);
 
 		expect(mocks.updates.at(-1)).toEqual({ transcriptionStatus: "COMPLETE" });
+	});
+
+	it("transcribes through an OpenAI-compatible STT endpoint when configured", async () => {
+		state.sttBaseUrl = "http://whisper:9000/v1";
+		const fetchMock = vi.fn(async (input: string | URL | Request) =>
+			String(input).startsWith("http://whisper:9000")
+				? new Response(JSON.stringify(whisperCppVerboseResponse))
+				: new Response(new ArrayBuffer(8), {
+						headers: { "content-type": "audio/mpeg" },
+					}),
+		);
+		vi.stubGlobal("fetch", fetchMock);
+
+		const { transcribeVideoWorkflow } = await import("@/workflows/transcribe");
+		const result = await transcribeVideoWorkflow({
+			videoId: "video-123",
+			userId: "user-456",
+			aiGenerationEnabled: false,
+		});
+
+		expect(result.success).toBe(true);
+		expect(mocks.transcribe).not.toHaveBeenCalled();
+		expect(fetchMock).toHaveBeenCalledWith(
+			"http://whisper:9000/v1/audio/transcriptions",
+			expect.objectContaining({ method: "POST" }),
+		);
+
+		const writes = new Map(
+			mocks.putObject.mock.calls.map((call) => [call[0] as string, call[1]]),
+		);
+		const vtt = writes.get("user-456/video-123/transcription.vtt") as string;
+		expect(vtt.startsWith("WEBVTT")).toBe(true);
+		expect(vtt).toContain("transcription server.");
+		expect(vtt).not.toContain("Um,");
+
+		const { parseEditTranscript } = await import("@/lib/edit-transcript");
+		const { decryptEditTranscriptObject } = await import(
+			"@/lib/edit-transcript-storage"
+		);
+		const stored = parseEditTranscript(
+			decryptEditTranscriptObject(
+				writes.get("user-456/video-123/transcription.edit.v3.json") as string,
+				"user-456",
+				"video-123",
+			) ?? "",
+		);
+		expect(stored).toMatchObject({
+			speechModelUsed: "large-v3-turbo",
+			languageCode: "en",
+		});
+		expect(stored?.words.map((word) => word.text)).toContain("Hello,");
+		expect(mocks.updates.at(-1)).toEqual({ transcriptionStatus: "COMPLETE" });
+	});
+
+	it("marks silent audio from the STT endpoint as NO_AUDIO", async () => {
+		state.sttBaseUrl = "http://whisper:9000/v1";
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (input: string | URL | Request) =>
+				String(input).startsWith("http://whisper:9000")
+					? new Response(JSON.stringify({ text: "", segments: [] }))
+					: new Response(new ArrayBuffer(8)),
+			),
+		);
+
+		const { transcribeVideoWorkflow } = await import("@/workflows/transcribe");
+		const result = await transcribeVideoWorkflow({
+			videoId: "video-123",
+			userId: "user-456",
+			aiGenerationEnabled: true,
+		});
+
+		expect(result.message).toBe(
+			"Video has no spoken audio - skipped transcription",
+		);
+		expect(mocks.updates).toContainEqual({ transcriptionStatus: "NO_AUDIO" });
+		expect(mocks.startAiGeneration).not.toHaveBeenCalled();
 	});
 
 	it("handles no-speech errors across workflow realms without retrying transcription", async () => {

@@ -36,6 +36,7 @@ import {
 	reserveMediaProcessingBudget,
 } from "@/lib/media-processing-budget";
 import { getMediaServerCapacityDelay } from "@/lib/media-server-backpressure";
+import { isTranscriptionConfigured } from "@/lib/stt";
 import { transcribeVideo } from "@/lib/transcribe";
 import { decodeStorageVideo } from "@/lib/video-storage";
 import { runWorkflowPromise } from "@/lib/workflow-runtime";
@@ -751,7 +752,7 @@ async function queueFinalizedRecordingTranscription(
 ): Promise<boolean> {
 	"use step";
 
-	if (!serverEnv().ASSEMBLY_API_KEY) return true;
+	if (!isTranscriptionConfigured()) return true;
 	try {
 		const [[owner], [video]] = await Promise.all([
 			db()
