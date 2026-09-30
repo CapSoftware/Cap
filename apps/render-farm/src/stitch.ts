@@ -31,7 +31,10 @@ export type StitchPart = {
 
 export const HEADER_PART = 1;
 
-/** Bytes of a chunk that go into its stash rather than its own parts. */
+/**
+ * A chunk under two minimum parts can't stash one and still upload a valid
+ * part from the rest, so all of it is stashed.
+ */
 export function stashBytes(chunkBytes: number) {
 	return chunkBytes < 2 * MIN_PART ? chunkBytes : MIN_PART;
 }
