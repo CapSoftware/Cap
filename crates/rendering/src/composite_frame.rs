@@ -5,7 +5,23 @@ use wgpu::{include_wgsl, util::DeviceExt};
 pub struct CompositeVideoFramePipeline {
     pub bind_group_layout: wgpu::BindGroupLayout,
     pub render_pipeline: wgpu::RenderPipeline,
+    #[cfg(target_arch = "wasm32")]
+    still_pipeline: wgpu::RenderPipeline,
     sampler: wgpu::Sampler,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+const MOTION_BLUR_GATE: &str = "let blur_active = blur_mode >= 0.5 && blur_strength >= 0.001;";
+
+/// The composite shader with its motion blur branch switched off, which is
+/// what it computes anyway whenever the uniforms leave motion blur off.
+#[cfg(any(target_arch = "wasm32", test))]
+fn still_shader_source() -> String {
+    include_str!("shaders/composite-video-frame.wgsl").replacen(
+        MOTION_BLUR_GATE,
+        "let blur_active = false;",
+        1,
+    )
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -286,6 +302,94 @@ impl CompositeVideoFrameUniforms {
     pub fn write_to_buffer(&self, queue: &wgpu::Queue, buffer: &wgpu::Buffer) {
         queue.write_buffer(buffer, 0, bytemuck::bytes_of(self));
     }
+
+    /// Mirrors the shader's `blur_active`.
+    pub fn motion_blur_active(&self) -> bool {
+        let [blur_mode, blur_strength, ..] = self.motion_blur_params;
+        blur_mode >= 0.5 && blur_strength >= 0.001
+    }
+
+    /// The output pixels this layer's draw can change, as a scissor rect
+    /// (x, y, width, height), or `None` for the whole output. Past the card's
+    /// shadow reach and edge padding the shader returns transparent black,
+    /// which alpha blending leaves untouched, so drawing inside the rect alone
+    /// gives the same frame. Motion blur can smear the card anywhere.
+    pub fn scissor_rect(&self) -> Option<[u32; 4]> {
+        if self.motion_blur_active() {
+            return None;
+        }
+        if !(self.shadow >= 0.0 && self.shadow_size >= 0.0 && self.shadow_blur >= 0.0)
+            || !self
+                .target_bounds
+                .iter()
+                .chain(&self.output_size)
+                .chain([&self.border_width])
+                .all(|value| value.is_finite())
+        {
+            return None;
+        }
+        let [left, top, right, bottom] = self.target_bounds;
+        let half_extent = (right - left).min(bottom - top) * 0.5;
+        let strength = self.shadow / 100.0;
+        // The shader's shadow alpha is exactly zero once the card's distance
+        // passes `shadow_size + shadow_blur`; the distance is never less than
+        // how far a pixel sits outside the card's bounding box.
+        let shadow_reach = if self.shadow > 0.0 {
+            strength * (self.shadow_size + self.shadow_blur) / 100.0 * half_extent
+        } else {
+            0.0
+        };
+        let edge_padding = (self.border_width + 2.0).max(2.0);
+        let margin = shadow_reach + edge_padding + 2.0;
+        let [width, height] = self.output_size;
+        let x0 = (left - margin).floor().max(0.0);
+        let y0 = (top - margin).floor().max(0.0);
+        let x1 = (right + margin).ceil().min(width);
+        let y1 = (bottom + margin).ceil().min(height);
+        if !(x0 < x1 && y0 < y1) || (x0 <= 0.0 && y0 <= 0.0 && x1 >= width && y1 >= height) {
+            return None;
+        }
+        Some([x0 as u32, y0 as u32, (x1 - x0) as u32, (y1 - y0) as u32])
+    }
+}
+
+/// How a layer issues its composite draw for the frame it last prepared.
+#[derive(Clone, Copy, Default)]
+pub struct CompositeDraw {
+    #[cfg(target_arch = "wasm32")]
+    scissor: Option<[u32; 4]>,
+    #[cfg(target_arch = "wasm32")]
+    still: bool,
+}
+
+impl CompositeDraw {
+    pub fn new(uniforms: &CompositeVideoFrameUniforms) -> Self {
+        let _ = uniforms;
+        Self {
+            #[cfg(target_arch = "wasm32")]
+            scissor: uniforms.scissor_rect(),
+            #[cfg(target_arch = "wasm32")]
+            still: !uniforms.motion_blur_active(),
+        }
+    }
+
+    /// In the browser, a software GPU shades every pixel a draw covers with
+    /// every branch of the shader, so the draw is limited to the pixels it can
+    /// change and skips the motion blur code when blur is off. Both leave the
+    /// frame the same.
+    pub fn bind(&self, pipeline: &CompositeVideoFramePipeline, pass: &mut wgpu::RenderPass<'_>) {
+        #[cfg(target_arch = "wasm32")]
+        {
+            if let Some([x, y, width, height]) = self.scissor {
+                pass.set_scissor_rect(x, y, width, height);
+            }
+            if self.still {
+                pass.set_pipeline(&pipeline.still_pipeline);
+                return;
+            }
+        }
+        pass.set_pipeline(&pipeline.render_pipeline);
+    }
 }
 
 // pub struct CompositeFrameResources {
@@ -312,49 +416,61 @@ impl CompositeVideoFramePipeline {
             push_constant_ranges: &[],
         });
 
-        let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Composite Render Pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: &[],
-                compilation_options: wgpu::PipelineCompilationOptions {
-                    constants: &[],
-                    zero_initialize_workgroup_memory: false,
+        let create_pipeline = |shader: &wgpu::ShaderModule| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("Composite Render Pipeline"),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &[],
+                    compilation_options: wgpu::PipelineCompilationOptions {
+                        constants: &[],
+                        zero_initialize_workgroup_memory: false,
+                    },
                 },
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: output_format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: wgpu::PipelineCompilationOptions {
-                    constants: &[],
-                    zero_initialize_workgroup_memory: false,
+                fragment: Some(wgpu::FragmentState {
+                    module: shader,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: output_format,
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: wgpu::PipelineCompilationOptions {
+                        constants: &[],
+                        zero_initialize_workgroup_memory: false,
+                    },
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    strip_index_format: None,
+                    front_face: wgpu::FrontFace::Ccw,
+                    cull_mode: Some(wgpu::Face::Back),
+                    polygon_mode: wgpu::PolygonMode::Fill,
+                    unclipped_depth: false,
+                    conservative: false,
                 },
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: Some(wgpu::Face::Back),
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState {
-                count: 1,
-                mask: !0,
-                alpha_to_coverage_enabled: false,
-            },
-            multiview: None,
-            cache: pipeline_cache.as_ref(),
-        });
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState {
+                    count: 1,
+                    mask: !0,
+                    alpha_to_coverage_enabled: false,
+                },
+                multiview: None,
+                cache: pipeline_cache.as_ref(),
+            })
+        };
+        let render_pipeline = create_pipeline(&shader);
+        // Browsers without a GPU run every branch of a shader this size at
+        // full cost, motion blur loops included; frames without blur draw
+        // with them compiled out.
+        #[cfg(target_arch = "wasm32")]
+        let still_pipeline =
+            create_pipeline(&device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("composite-video-frame.wgsl without motion blur"),
+                source: wgpu::ShaderSource::Wgsl(still_shader_source().into()),
+            }));
 
         if let Some(cache) = &pipeline_cache {
             save_pipeline_cache(cache);
@@ -373,6 +489,8 @@ impl CompositeVideoFramePipeline {
         Self {
             bind_group_layout,
             render_pipeline,
+            #[cfg(target_arch = "wasm32")]
+            still_pipeline,
             sampler,
         }
     }
@@ -456,5 +574,54 @@ impl CompositeVideoFramePipeline {
                 view_formats: &[],
             }),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn camera_card() -> CompositeVideoFrameUniforms {
+        CompositeVideoFrameUniforms {
+            target_bounds: [1100.0, 520.0, 1340.0, 760.0],
+            output_size: [1384.0, 778.0],
+            shadow: 62.5,
+            shadow_size: 33.9,
+            shadow_blur: 10.5,
+            border_width: 5.0,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn still_shader_switches_off_the_motion_blur_gate() {
+        let source = still_shader_source();
+        assert!(!source.contains(MOTION_BLUR_GATE));
+        assert!(source.contains("let blur_active = false;"));
+    }
+
+    #[test]
+    fn scissor_covers_the_card_its_shadow_and_edge_padding() {
+        // reach = 0.625 * (33.9 + 10.5) / 100 * 120 = 33.3; margin 33.3 + 7 + 2
+        assert_eq!(camera_card().scissor_rect(), Some([1057, 477, 326, 301]));
+    }
+
+    #[test]
+    fn scissor_is_skipped_when_the_draw_can_reach_the_whole_frame() {
+        let mut blurred = camera_card();
+        blurred.motion_blur_params = [1.0, 0.5, 0.0, 0.0];
+        assert_eq!(blurred.scissor_rect(), None);
+
+        let mut full = camera_card();
+        full.target_bounds = [0.0, 0.0, 1384.0, 778.0];
+        assert_eq!(full.scissor_rect(), None);
+
+        let mut invalid = camera_card();
+        invalid.target_bounds[0] = f32::NAN;
+        assert_eq!(invalid.scissor_rect(), None);
+
+        let mut negative = camera_card();
+        negative.shadow = -10.0;
+        assert_eq!(negative.scissor_rect(), None);
     }
 }

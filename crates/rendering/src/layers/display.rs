@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use crate::{
     DecodedSegmentFrames, PixelFormat,
-    composite_frame::{CompositeVideoFramePipeline, CompositeVideoFrameUniforms},
+    composite_frame::{CompositeDraw, CompositeVideoFramePipeline, CompositeVideoFrameUniforms},
     decoder::DecodedFrameStorageIdentity,
     yuv_converter::{YuvConverterPipelines, YuvToRgbaConverter},
 };
@@ -28,6 +28,7 @@ pub struct DisplayLayer {
     pending_copy: Option<PendingTextureCopy>,
     prefer_cpu_conversion: bool,
     has_valid_frame: bool,
+    draw: CompositeDraw,
 }
 
 impl DisplayLayer {
@@ -89,6 +90,7 @@ impl DisplayLayer {
             pending_copy: None,
             prefer_cpu_conversion,
             has_valid_frame: false,
+            draw: CompositeDraw::default(),
         }
     }
 
@@ -156,6 +158,7 @@ impl DisplayLayer {
                 "DisplayLayer::prepare - screen_frame is None, skipping display rendering"
             );
             uniforms.write_to_buffer(queue, &self.uniforms_buffer);
+            self.draw = CompositeDraw::new(&uniforms);
             return (false, frame_size.x, frame_size.y);
         };
         let mut uniforms = uniforms;
@@ -555,6 +558,7 @@ impl DisplayLayer {
         }
 
         uniforms.write_to_buffer(queue, &self.uniforms_buffer);
+        self.draw = CompositeDraw::new(&uniforms);
         (
             (skipped && self.has_valid_frame) || frame_uploaded,
             actual_width,
@@ -577,6 +581,7 @@ impl DisplayLayer {
                 "DisplayLayer::prepare_with_encoder - screen_frame is None, skipping display rendering"
             );
             uniforms.write_to_buffer(queue, &self.uniforms_buffer);
+            self.draw = CompositeDraw::new(&uniforms);
             return false;
         };
         let mut uniforms = uniforms;
@@ -948,6 +953,7 @@ impl DisplayLayer {
         }
 
         uniforms.write_to_buffer(queue, &self.uniforms_buffer);
+        self.draw = CompositeDraw::new(&uniforms);
         (skipped && self.has_valid_frame) || frame_uploaded
     }
 
@@ -988,7 +994,7 @@ impl DisplayLayer {
         }
 
         if let Some(bind_group) = &self.bind_groups[self.current_texture] {
-            pass.set_pipeline(&self.pipeline.render_pipeline);
+            self.draw.bind(&self.pipeline, pass);
             pass.set_bind_group(0, bind_group, &[]);
             pass.draw(0..3, 0..1);
         } else {

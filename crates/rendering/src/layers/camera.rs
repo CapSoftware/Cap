@@ -4,7 +4,7 @@ use wgpu::util::DeviceExt;
 
 use crate::{
     CompositeVideoFrameUniforms, DecodedFrame, PixelFormat,
-    composite_frame::CompositeVideoFramePipeline,
+    composite_frame::{CompositeDraw, CompositeVideoFramePipeline},
     decoder::DecodedFrameStorageIdentity,
     yuv_converter::{YuvConverterPipelines, YuvToRgbaConverter},
 };
@@ -23,6 +23,7 @@ pub struct CameraLayer {
     blur_bind_group: Option<wgpu::BindGroup>,
     blur_active: bool,
     blur_cache: Option<BlurCacheEntry>,
+    draw: CompositeDraw,
 }
 
 #[derive(Clone, Copy)]
@@ -91,6 +92,7 @@ impl CameraLayer {
             blur_bind_group: None,
             blur_active: false,
             blur_cache: None,
+            draw: CompositeDraw::default(),
         }
     }
 
@@ -116,6 +118,7 @@ impl CameraLayer {
         self.hidden = frame_data.is_none() && !has_previous_frame;
 
         queue.write_buffer(&self.uniforms_buffer, 0, bytemuck::cast_slice(&[uniforms]));
+        self.draw = CompositeDraw::new(&uniforms);
 
         let Some((frame_size, camera_frame, recording_time)) = frame_data else {
             return;
@@ -408,6 +411,7 @@ impl CameraLayer {
         self.hidden = frame_data.is_none() && !has_previous_frame;
 
         queue.write_buffer(&self.uniforms_buffer, 0, bytemuck::cast_slice(&[uniforms]));
+        self.draw = CompositeDraw::new(&uniforms);
 
         let Some((frame_size, camera_frame, recording_time)) = frame_data else {
             return;
@@ -644,7 +648,7 @@ impl CameraLayer {
         };
 
         if let Some(bind_group) = bind_group {
-            pass.set_pipeline(&self.pipeline.render_pipeline);
+            self.draw.bind(&self.pipeline, pass);
             pass.set_bind_group(0, bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
