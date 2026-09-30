@@ -879,7 +879,13 @@ async function runCursor(task: CursorTask, slot: number) {
 	const run: TranscodeRun = { controller: new AbortController() };
 	transcoders.set(slot, run);
 	try {
-		const bundle = await cursorBundleDir();
+		// The first task on a worker fetches the bundle; that is progress too.
+		const keepAlive = setInterval(() => {
+			entry.lastProgressAt = Date.now();
+		}, 5_000);
+		const bundle = await cursorBundleDir().finally(() =>
+			clearInterval(keepAlive),
+		);
 		entry.lastProgressAt = Date.now();
 		const input = join(dir, "source");
 		await downloadSource(s3, task.source, input, {
