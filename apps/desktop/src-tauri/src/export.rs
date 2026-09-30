@@ -2542,6 +2542,8 @@ async fn generate_export_preview_fast_inner(
 
     let _preview_guard = ExportPreviewActiveGuard::try_new(&editor.export_preview_active)?;
 
+    crate::gpu_context::ensure_shared_device_available()?;
+
     let mut project_config =
         load_export_preview_config(editor.project_path.clone(), settings.cursor_only).await?;
     let meta = editor.meta().clone();
@@ -2626,6 +2628,7 @@ async fn generate_export_preview_fast_inner(
         &zoom_timeline,
     );
 
+    crate::gpu_context::ensure_shared_device_available()?;
     let mut frame_renderer = FrameRenderer::new(&editor.render_constants);
     let mut layers = RendererLayers::new_with_options(
         &editor.render_constants.device,
