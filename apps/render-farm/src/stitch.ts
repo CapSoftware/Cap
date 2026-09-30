@@ -186,10 +186,9 @@ export class StitchLimiter {
 		this.pump();
 	}
 
+	/** Called once a job has ended: none of its queued work is still wanted. */
 	cancel(job: string) {
-		const cancelled = this.waiting.filter(
-			(waiter) => waiter.job === job && waiter.ahead,
-		);
+		const cancelled = this.waiting.filter((waiter) => waiter.job === job);
 		this.waiting = this.waiting.filter((waiter) => !cancelled.includes(waiter));
 		for (const waiter of cancelled) {
 			waiter.cancel(new Error(`job ${job} ended before its stitch ran`));

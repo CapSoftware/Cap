@@ -244,16 +244,25 @@ describe("stitch limiter", () => {
 		await blocking;
 	});
 
-	test("cancelling a job drops its queued ahead work only", async () => {
+	test("cancelling an ended job drops all its queued work, promoted too", async () => {
 		const limiter = new StitchLimiter({ total: 1, ahead: 1, aheadPerJob: 1 });
 		const busy = held();
-		const blocking = limiter.run("a", true, () => busy.done);
+		const blocking = limiter.run("b", false, () => busy.done);
 		const aheadWork = limiter.run("a", true, async () => "ran");
+		const promoted = limiter.run("a", true, async () => "ran");
+		limiter.promote("a");
 		const assembly = limiter.run("a", false, async () => "assembled");
+		const other = limiter.run("b", false, async () => "other");
 		limiter.cancel("a");
-		await expect(aheadWork).rejects.toThrow("ended before its stitch ran");
+		const settled = await Promise.allSettled([aheadWork, promoted, assembly]);
+		for (const outcome of settled) {
+			expect(outcome.status).toBe("rejected");
+			expect(String((outcome as PromiseRejectedResult).reason)).toContain(
+				"ended before its stitch ran",
+			);
+		}
 		busy.release();
 		await blocking;
-		expect(await assembly).toBe("assembled");
+		expect(await other).toBe("other");
 	});
 });
