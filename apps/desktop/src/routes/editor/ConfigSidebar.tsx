@@ -153,6 +153,10 @@ import {
 	topSlideAnimateClasses,
 } from "./ui";
 import { formatTime } from "./utils";
+import {
+	type CursorReplacementView,
+	WebCursorReplacement,
+} from "./WebCursorReplacement";
 import type { WaveformSegment } from "./waveform";
 import { WaveformSegmentConfig } from "./waveform-segment-config";
 import { ZoomModeHelper } from "./ZoomModeHelper";
@@ -591,6 +595,13 @@ function ConfigSidebarContent() {
 		editorState,
 		meta,
 	} = useEditorContext();
+	const [webCursor, setWebCursor] = createSignal<CursorReplacementView | null>(
+		null,
+	);
+	const cursorControlsShown = () =>
+		!isWebEditor ||
+		meta().hasRecordedCursorData ||
+		webCursor()?.cursorData === true;
 	const organizationSelection = createSelectedOrganization();
 	const brandColorSwatches = createMemo(() =>
 		getOrganizationBrandColorSwatches(
@@ -715,7 +726,7 @@ function ConfigSidebarContent() {
 						{
 							id: TAB_IDS.cursor,
 							icon: IconCapCursor,
-							disabled: !meta().hasRecordedCursorData,
+							disabled: !isWebEditor && !meta().hasRecordedCursorData,
 						},
 						{
 							id: TAB_IDS.keyboard,
@@ -905,9 +916,17 @@ function ConfigSidebarContent() {
 					value="cursor"
 					class="flex flex-col flex-1 gap-3.5 pt-3.5 px-4 pb-4 min-h-0"
 				>
-					<StyleGroupToggle group="cursor" />
+					<Show when={isWebEditor}>
+						<WebCursorReplacement onView={setWebCursor} />
+					</Show>
+					<Show when={cursorControlsShown()}>
+						<StyleGroupToggle group="cursor" />
+					</Show>
 					<Show
-						when={!selectedStyle() || selectedStyle()?.overrides.cursor != null}
+						when={
+							cursorControlsShown() &&
+							(!selectedStyle() || selectedStyle()?.overrides.cursor != null)
+						}
 					>
 						<Field inline name="Show cursor">
 							<Toggle
