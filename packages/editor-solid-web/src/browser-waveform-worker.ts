@@ -1,8 +1,11 @@
 import {
 	ALL_FORMATS,
+	AudioSample,
 	AudioSampleSink,
 	CustomSource,
+	EncodedPacketSink,
 	Input,
+	type InputAudioTrack,
 	ReadableStreamSource,
 	type Source,
 } from "mediabunny";
@@ -18,6 +21,76 @@ const scope = self as unknown as {
 	) => void;
 	postMessage: (message: WaveformResponse) => void;
 };
+
+/// Hands every decoded sample of the track to `onSample`, in order, as
+/// mediabunny's `AudioSampleSink` would. Its sample iterator trims a one
+/// second window of packet times with `Array.shift` on every packet, which is
+/// quadratic at the tens of thousands of packets a second a long recording
+/// decodes at: most of the worker's time for two hours of audio. False when
+/// the track needs one of mediabunny's own decoders.
+async function decodeEach(
+	track: InputAudioTrack,
+	onSample: (sample: AudioSample) => void,
+) {
+	if (typeof AudioDecoder !== "function" || track.codec?.startsWith("pcm")) {
+		return false;
+	}
+	const config = await track.getDecoderConfig();
+	if (!config || !(await AudioDecoder.isConfigSupported(config)).supported) {
+		return false;
+	}
+	let failure: unknown = null;
+	const decoder = new AudioDecoder({
+		output: (data) => {
+			const sample = new AudioSample(data);
+			if (failure || sample.numberOfFrames === 0) {
+				sample.close();
+				return;
+			}
+			try {
+				onSample(sample);
+			} catch (cause) {
+				failure = cause;
+			}
+		},
+		error: (cause) => {
+			failure ??= cause;
+		},
+	});
+	try {
+		decoder.configure(config);
+		const packets = new EncodedPacketSink(track);
+		const options = { verifyKeyPackets: true };
+		for (
+			let packet = await packets.getFirstPacket(options);
+			packet;
+			packet = await packets.getNextPacket(packet, options)
+		) {
+			if (failure) throw failure;
+			decoder.decode(packet.toEncodedAudioChunk());
+			if (decoder.decodeQueueSize <= 32) continue;
+			// Polls too: an error closes the decoder without a dequeue event.
+			while (decoder.decodeQueueSize > 8 && !failure) {
+				await new Promise<void>((resolve) => {
+					const timer = setTimeout(resolve, 5);
+					decoder.addEventListener(
+						"dequeue",
+						() => {
+							clearTimeout(timer);
+							resolve();
+						},
+						{ once: true },
+					);
+				});
+			}
+		}
+		await decoder.flush();
+		if (failure) throw failure;
+		return true;
+	} finally {
+		if (decoder.state !== "closed") decoder.close();
+	}
+}
 
 /// Mean absolute level in dB for every tenth of a second of the track,
 /// decoded off the main thread so long recordings don't stall the editor.
@@ -48,12 +121,17 @@ async function peaksFrom(source: Source) {
 		const blockSamples = Math.max(1, Math.floor(sampleRate / 10) * channels);
 		const peaks: number[] = [];
 		let plane = new Float32Array(0);
+		let sums = new Float64Array(0);
 		let sum = 0;
 		let count = 0;
-		for await (const sample of new AudioSampleSink(track).samples()) {
+		const add = (sample: AudioSample) => {
 			const frames = sample.numberOfFrames;
-			if (plane.length < frames) plane = new Float32Array(frames);
-			const sums = new Float64Array(frames);
+			if (plane.length < frames) {
+				plane = new Float32Array(frames);
+				sums = new Float64Array(frames);
+			} else {
+				sums.fill(0, 0, frames);
+			}
 			for (let channel = 0; channel < sample.numberOfChannels; channel++) {
 				sample.copyTo(plane, { planeIndex: channel, format: "f32-planar" });
 				for (let frame = 0; frame < frames; frame++) {
@@ -70,6 +148,11 @@ async function peaksFrom(source: Source) {
 					sum = 0;
 					count = 0;
 				}
+			}
+		};
+		if (!(await decodeEach(track, add))) {
+			for await (const sample of new AudioSampleSink(track).samples()) {
+				add(sample);
 			}
 		}
 		if (count > 0) {
