@@ -134,6 +134,39 @@ async function sampleAtTime(slot: DecodedSlot, sourceTime: number) {
 	return slot.current.clone();
 }
 
+/// How far ahead of the frame on screen the exact frame is still only a few
+/// decodes away, as when stepping frame by frame.
+const NEAR_DECODE_SECS = 0.1;
+
+/// The key frame at or before `sourceTime`: a single decode, where the exact
+/// frame can take up to a key interval of them. The exact frame a few decodes
+/// ahead of the stream, or a frame it already decoded between the two, is
+/// closer and about as cheap.
+async function keyFrameAtTime(slot: DecodedSlot, sourceTime: number) {
+	const current = slot.current;
+	if (
+		slot.iterator &&
+		current &&
+		sourceTime + 0.000001 >= current.timestamp &&
+		sourceTime <= current.timestamp + NEAR_DECODE_SECS
+	) {
+		return sampleAtTime(slot, sourceTime);
+	}
+	const key = await slot.packets
+		.getKeyPacket(Math.max(sourceTime, 0.0001), { metadataOnly: true })
+		.catch(() => null);
+	if (!key) return sampleAtTime(slot, sourceTime);
+	if (
+		slot.iterator &&
+		current &&
+		current.timestamp >= key.timestamp - 0.000001 &&
+		current.timestamp <= sourceTime + 0.000001
+	) {
+		return current.clone();
+	}
+	return slot.sink.getSample(key.timestamp);
+}
+
 async function videoSinks(input: Input) {
 	const { EncodedPacketSink, VideoSampleSink } = await import("mediabunny");
 	const track = await input.getPrimaryVideoTrack();
@@ -152,9 +185,10 @@ async function reachTime(
 	url: string,
 	sourceTime: number,
 	signal: AbortSignal,
+	scrubbing: boolean,
 ) {
 	if (await slot.lease.covers(sourceTime)) return;
-	const next = await acquireMediaInputAt(url, sourceTime, signal);
+	const next = await acquireMediaInputAt(url, sourceTime, signal, scrubbing);
 	if (next.input === slot.lease.input) {
 		next.release();
 		return;
@@ -246,6 +280,7 @@ export class BrowserDecodedVideoPool {
 		role: BrowserVideoRole,
 		sourceTime: number,
 		signal: AbortSignal,
+		keyFrame = false,
 	): Promise<BrowserDecodedVideoFrame | null | "fallback"> {
 		if (this.disposed) throw new Error("Editor decoded video pool is closed");
 		if (!Number.isSafeInteger(segmentIndex) || segmentIndex < 0) {
@@ -307,9 +342,11 @@ export class BrowserDecodedVideoPool {
 					throw signal.reason ?? new DOMException("Canceled", "AbortError");
 				}
 				const decodeStarted = perfStart();
-				await reachTime(slot, url.href, sourceTime, signal);
-				sample = await sampleAtTime(slot, sourceTime);
-				if (sample) slot.lease.reached(sample.timestamp);
+				await reachTime(slot, url.href, sourceTime, signal, keyFrame);
+				sample = keyFrame
+					? await keyFrameAtTime(slot, sourceTime)
+					: await sampleAtTime(slot, sourceTime);
+				if (sample && !keyFrame) slot.lease.reached(sample.timestamp);
 				perfSpan("decode.sample", decodeStarted);
 			} finally {
 				releaseSerial();

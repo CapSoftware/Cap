@@ -156,6 +156,14 @@ function timelineConfig(config: unknown, sourceDurations: number[]) {
 
 export type MotionRanges = { always: boolean; ranges: Array<[number, number]> };
 
+/// A drag that has caught up with the pointer is still one if its next seek
+/// comes within this long of the last key frame drawn.
+const SCRUB_SEEK_GAP_MS = 150;
+/// How long the playhead rests before a scrub's exact frame replaces its key
+/// frame.
+const SCRUB_REFINE_MS = 40;
+const KEY_FRAME_TIME_OFFSET = 0.002;
+
 /// Zoom springs keep settling after a zoom segment ends.
 const ZOOM_SETTLE_SECS = 3;
 const OVERLAY_MARGIN_SECS = 1;
@@ -302,6 +310,10 @@ export class BrowserLocalPlayback {
 	private pendingSeek: number | null = null;
 	private seeking: Promise<boolean | null> | null = null;
 	private renderedTime = -1;
+	private scrubbing = false;
+	private drawingSeek: number | null = null;
+	private lastKeyFrameAt = 0;
+	private refineTimer: ReturnType<typeof setTimeout> | undefined;
 	private motion: MotionRanges;
 	private drawnFrameKey: string | null = null;
 	private lastRenderRepeated = false;
@@ -760,6 +772,7 @@ export class BrowserLocalPlayback {
 		speed: number,
 		signal: AbortSignal,
 		forceSeek: boolean,
+		keyFrame = false,
 	): Promise<TrackFrame | null> {
 		if (
 			this.screenWidth * this.screenHeight <= MAX_DECODED_PIXELS &&
@@ -771,6 +784,7 @@ export class BrowserLocalPlayback {
 				role,
 				sourceTime,
 				signal,
+				keyFrame,
 			);
 			if (decoded === null) return null;
 			if (decoded !== "fallback") {
@@ -847,6 +861,7 @@ export class BrowserLocalPlayback {
 		playing: boolean,
 		signal: AbortSignal,
 		forceSeek: boolean,
+		keyFrame = false,
 	): Promise<BrowserClipFrame> {
 		const sourceTimes = this.times.source_times(recordingClip, sourceTime);
 		if (sourceTimes.length !== 2 || !Number.isFinite(sourceTimes[0])) {
@@ -864,6 +879,7 @@ export class BrowserLocalPlayback {
 				speed,
 				signal,
 				forceSeek,
+				keyFrame,
 			).finally(() => perfSpan("decode.display", started)),
 			Number.isFinite(sourceTimes[1]) && sourceTimes[1] >= 0
 				? this.trackFrame(
@@ -875,6 +891,7 @@ export class BrowserLocalPlayback {
 						speed,
 						signal,
 						forceSeek,
+						keyFrame,
 					).finally(() => perfSpan("decode.camera", started))
 				: Promise.resolve(null),
 		]);
@@ -912,13 +929,23 @@ export class BrowserLocalPlayback {
 		};
 	}
 
-	private async renderAt(time: number, playing: boolean, forceSeek = false) {
+	private async renderAt(
+		time: number,
+		playing: boolean,
+		forceSeek = false,
+		keyFrame = false,
+	) {
 		const started = perfStart();
 		this.frameController?.abort();
 		const controller = new AbortController();
 		this.frameController = controller;
 		const sequence = ++this.frameSequence;
-		const mapped = this.timeline.map_frame(time);
+		// The renderer keeps the frame it last uploaded while the recording time
+		// repeats, so a key frame is drawn a hair later than its time and the
+		// exact frame that replaces it still uploads.
+		const mapped = this.timeline.map_frame(
+			keyFrame ? time + KEY_FRAME_TIME_OFFSET : time,
+		);
 		if (mapped.length !== 11) return false;
 		const kind = mapped[0];
 		const incomingClip = mapped[2];
@@ -953,6 +980,7 @@ export class BrowserLocalPlayback {
 			playing,
 			controller.signal,
 			forceSeek,
+			keyFrame,
 		);
 		const outgoing =
 			transition && outgoingClip !== null
@@ -964,6 +992,7 @@ export class BrowserLocalPlayback {
 						playing,
 						controller.signal,
 						forceSeek,
+						keyFrame,
 					)
 				: Promise.resolve(null);
 		let incomingPair: BrowserClipFrame;
@@ -1034,7 +1063,7 @@ export class BrowserLocalPlayback {
 		}
 		perfSpan("frame.draw", drawStarted);
 		perfSpan(playing ? "frame.playing" : "frame.paused", started);
-		this.renderedTime = time;
+		this.renderedTime = keyFrame ? -1 : time;
 		if (!transition) {
 			this.pool.releaseOverlaps();
 			this.decodedPool.releaseOverlaps();
@@ -1157,12 +1186,25 @@ export class BrowserLocalPlayback {
 			this.audioOffsets = [];
 			return this.renderAt(time, true, true);
 		}
+		clearTimeout(this.refineTimer);
+		// A new time while one is still drawing means the requests are outrunning
+		// the preview. The timeline asks for each time twice, so a repeat of the
+		// one drawing or waiting doesn't count.
+		if (
+			this.seeking &&
+			time !== this.drawingSeek &&
+			time !== this.pendingSeek
+		) {
+			this.scrubbing = true;
+		}
 		this.pendingSeek = time;
 		if (this.seeking) return this.seeking;
 		if (time === this.renderedTime && this.canvas.hasRenderedFrame()) {
 			this.pendingSeek = null;
 			return true;
 		}
+		this.scrubbing &&=
+			performance.now() - this.lastKeyFrameAt < SCRUB_SEEK_GAP_MS;
 		this.seeking = this.drainSeeks();
 		return this.seeking;
 	}
@@ -1170,8 +1212,13 @@ export class BrowserLocalPlayback {
 	/// Paused seeks never cancel the frame being drawn: scrubbing asks for a
 	/// new time on every pointer move, faster than a frame can decode, so the
 	/// preview shows each finished frame and then jumps to the latest request.
+	/// Once the requests outrun it, a frame shows the key frame at or before
+	/// its time, one decode instead of up to a key interval of them, and the
+	/// exact frame follows once the playhead rests. Seeks that wait for each
+	/// other always draw exactly.
 	private async drainSeeks() {
 		let result: boolean | null = null;
+		let keyFrame = false;
 		try {
 			while (this.pendingSeek !== null && !this.playing && !this.disposed) {
 				const time = this.pendingSeek;
@@ -1180,11 +1227,29 @@ export class BrowserLocalPlayback {
 					result = true;
 					continue;
 				}
-				result = await this.renderAt(time, false, true);
+				keyFrame = this.scrubbing;
+				this.drawingSeek = time;
+				result = await this.renderAt(time, false, true, keyFrame);
+				if (keyFrame) this.lastKeyFrameAt = performance.now();
 			}
 			return result;
 		} finally {
 			this.seeking = null;
+			this.drawingSeek = null;
+			if (keyFrame && !this.playing && !this.disposed) {
+				this.refineTimer = setTimeout(() => {
+					if (this.playing || this.disposed || this.seeking) return;
+					this.scrubbing = false;
+					this.pendingSeek = this.outputTime;
+					this.seeking = this.drainSeeks();
+					this.seeking.catch((cause: unknown) => {
+						if (this.disposed) return;
+						this.onError(
+							cause instanceof Error ? cause : new Error(String(cause)),
+						);
+					});
+				}, SCRUB_REFINE_MS);
+			}
 		}
 	}
 
@@ -1274,6 +1339,7 @@ export class BrowserLocalPlayback {
 		if (this.disposed) return;
 		this.pause();
 		this.disposed = true;
+		clearTimeout(this.refineTimer);
 		this.frameController?.abort();
 		this.canvas.dispose();
 		this.audio.dispose();

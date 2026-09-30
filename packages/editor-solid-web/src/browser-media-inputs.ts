@@ -205,6 +205,7 @@ export async function acquireMediaInputAt(
 	url: string,
 	time: number,
 	signal?: AbortSignal,
+	scrubbing = false,
 ): Promise<MediaInputLease> {
 	const media = remoteMedia(url);
 	// A file that fits in the decoder's cache is read once by the first walk
@@ -224,10 +225,12 @@ export async function acquireMediaInputAt(
 			return lease(entry, media);
 		}
 	}
-	const point = await media.locate(time, signal).catch((cause: unknown) => {
-		if (signal?.aborted) throw cause;
-		return null;
-	});
+	const point = await media
+		.locate(time, signal, "mp4", scrubbing)
+		.catch((cause: unknown) => {
+			if (signal?.aborted) throw cause;
+			return null;
+		});
 	const first = await media.firstFragment().catch(() => null);
 	if (
 		!point ||
