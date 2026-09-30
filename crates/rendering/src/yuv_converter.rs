@@ -261,6 +261,9 @@ use std::sync::Arc;
 
 pub struct YuvConverterPipelines {
     pub nv12_pipeline: wgpu::ComputePipeline,
+    /// Limited and full range BT.709; see `browser_nv12_to_rgba.wgsl`.
+    #[cfg(target_arch = "wasm32")]
+    pub browser_nv12_pipelines: [wgpu::ComputePipeline; 2],
     pub yuv420p_pipeline: wgpu::ComputePipeline,
     pub nv12_bind_group_layout: wgpu::BindGroupLayout,
     pub yuv420p_bind_group_layout: wgpu::BindGroupLayout,
@@ -390,6 +393,29 @@ impl YuvConverterPipelines {
             cache: None,
         });
 
+        #[cfg(target_arch = "wasm32")]
+        let browser_nv12_pipelines = {
+            let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("Browser NV12 to RGBA Converter"),
+                source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(include_str!(
+                    "shaders/browser_nv12_to_rgba.wgsl"
+                ))),
+            });
+            [0.0, 1.0].map(|full_range| {
+                device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some("Browser NV12 Converter Pipeline"),
+                    layout: Some(&nv12_pipeline_layout),
+                    module: &module,
+                    entry_point: Some("main"),
+                    compilation_options: wgpu::PipelineCompilationOptions {
+                        constants: &[("FULL_RANGE", full_range)],
+                        ..Default::default()
+                    },
+                    cache: None,
+                })
+            })
+        };
+
         let yuv420p_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("YUV420P Converter Pipeline"),
             layout: Some(&yuv420p_pipeline_layout),
@@ -403,6 +429,8 @@ impl YuvConverterPipelines {
 
         Self {
             nv12_pipeline,
+            #[cfg(target_arch = "wasm32")]
+            browser_nv12_pipelines,
             yuv420p_pipeline,
             nv12_bind_group_layout,
             yuv420p_bind_group_layout,
@@ -441,6 +469,8 @@ pub struct YuvToRgbaConverter {
     d3d11_interop: D3D11WgpuInterop,
     #[cfg(target_os = "linux")]
     cuda_staging: Option<crate::linux_gpu::SharedRing>,
+    #[cfg(target_arch = "wasm32")]
+    nv12_full_range: bool,
 }
 
 impl YuvToRgbaConverter {
@@ -501,7 +531,16 @@ impl YuvToRgbaConverter {
             d3d11_interop: D3D11WgpuInterop::new(),
             #[cfg(target_os = "linux")]
             cuda_staging: None,
+            #[cfg(target_arch = "wasm32")]
+            nv12_full_range: false,
         }
+    }
+
+    /// Whether the browser NV12 planes converted next are full range; see
+    /// `DecodedFrame::from_browser_nv12`.
+    #[cfg(target_arch = "wasm32")]
+    pub fn set_nv12_full_range(&mut self, full_range: bool) {
+        self.nv12_full_range = full_range;
     }
 
     /// NV12 straight from NVDEC: device-to-device into a Vulkan-shared
@@ -912,6 +951,11 @@ impl YuvToRgbaConverter {
                 label: Some("NV12 Conversion Pass"),
                 ..Default::default()
             });
+            #[cfg(target_arch = "wasm32")]
+            compute_pass.set_pipeline(
+                &self.pipelines.browser_nv12_pipelines[usize::from(self.nv12_full_range)],
+            );
+            #[cfg(not(target_arch = "wasm32"))]
             compute_pass.set_pipeline(&self.pipelines.nv12_pipeline);
             compute_pass.set_bind_group(0, bind_group, &[]);
             compute_pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
@@ -997,6 +1041,11 @@ impl YuvToRgbaConverter {
                 label: Some("NV12 Conversion Pass (Batched)"),
                 ..Default::default()
             });
+            #[cfg(target_arch = "wasm32")]
+            compute_pass.set_pipeline(
+                &self.pipelines.browser_nv12_pipelines[usize::from(self.nv12_full_range)],
+            );
+            #[cfg(not(target_arch = "wasm32"))]
             compute_pass.set_pipeline(&self.pipelines.nv12_pipeline);
             compute_pass.set_bind_group(0, bind_group, &[]);
             compute_pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);

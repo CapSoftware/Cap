@@ -170,6 +170,8 @@ pub struct DecodedFrame {
     d3d11_texture_backing: Option<Arc<SendableD3D11Texture>>,
     #[cfg(target_arch = "wasm32")]
     browser_image: Option<browser::BrowserFrameImage>,
+    #[cfg(target_arch = "wasm32")]
+    nv12_full_range: bool,
     #[cfg(target_os = "linux")]
     cuda_nv12: Option<Arc<crate::linux_gpu::CudaNv12Frame>>,
 }
@@ -297,6 +299,8 @@ impl DecodedFrame {
             d3d11_texture_backing: None,
             #[cfg(target_arch = "wasm32")]
             browser_image: None,
+            #[cfg(target_arch = "wasm32")]
+            nv12_full_range: false,
             #[cfg(target_os = "linux")]
             cuda_nv12: None,
         }
@@ -316,6 +320,8 @@ impl DecodedFrame {
             d3d11_texture_backing: None,
             #[cfg(target_arch = "wasm32")]
             browser_image: None,
+            #[cfg(target_arch = "wasm32")]
+            nv12_full_range: false,
             #[cfg(target_os = "linux")]
             cuda_nv12: None,
         }
@@ -359,6 +365,8 @@ impl DecodedFrame {
             d3d11_texture_backing: None,
             #[cfg(target_arch = "wasm32")]
             browser_image: None,
+            #[cfg(target_arch = "wasm32")]
+            nv12_full_range: false,
             #[cfg(target_os = "linux")]
             cuda_nv12: None,
         }
@@ -384,6 +392,8 @@ impl DecodedFrame {
             d3d11_texture_backing: None,
             #[cfg(target_arch = "wasm32")]
             browser_image: None,
+            #[cfg(target_arch = "wasm32")]
+            nv12_full_range: false,
             #[cfg(target_os = "linux")]
             cuda_nv12: None,
         }
@@ -428,6 +438,8 @@ impl DecodedFrame {
             d3d11_texture_backing: None,
             #[cfg(target_arch = "wasm32")]
             browser_image: None,
+            #[cfg(target_arch = "wasm32")]
+            nv12_full_range: false,
             #[cfg(target_os = "linux")]
             cuda_nv12: None,
         }
@@ -453,6 +465,8 @@ impl DecodedFrame {
             d3d11_texture_backing: None,
             #[cfg(target_arch = "wasm32")]
             browser_image: None,
+            #[cfg(target_arch = "wasm32")]
+            nv12_full_range: false,
             #[cfg(target_os = "linux")]
             cuda_nv12: None,
         }

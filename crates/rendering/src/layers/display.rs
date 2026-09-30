@@ -168,6 +168,9 @@ impl DisplayLayer {
         let actual_height = screen_frame.height();
         let source_size = XY::new(actual_width, actual_height);
         let format = screen_frame.format();
+        #[cfg(target_arch = "wasm32")]
+        self.yuv_converter
+            .set_nv12_full_range(screen_frame.nv12_full_range());
         let current_recording_time = segment_frames.recording_time;
         let frame_storage = screen_frame.storage_identity();
 
@@ -591,6 +594,9 @@ impl DisplayLayer {
         let actual_height = screen_frame.height();
         let source_size = XY::new(actual_width, actual_height);
         let format = screen_frame.format();
+        #[cfg(target_arch = "wasm32")]
+        self.yuv_converter
+            .set_nv12_full_range(screen_frame.nv12_full_range());
         let current_recording_time = segment_frames.recording_time;
         let frame_storage = screen_frame.storage_identity();
 

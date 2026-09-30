@@ -84,7 +84,27 @@ impl DecodedFrame {
                 source_color_fix,
                 source_display_gamma,
             }),
+            nv12_full_range: false,
         }
+    }
+
+    /// NV12 planes the page copied out of a browser decoder. Safari hands them
+    /// over expanded to full range, where native decoders keep video range.
+    pub fn from_browser_nv12(
+        data: Vec<u8>,
+        width: u32,
+        height: u32,
+        y_stride: u32,
+        uv_stride: u32,
+        full_range: bool,
+    ) -> Self {
+        let mut frame = Self::new_nv12(data, width, height, y_stride, uv_stride);
+        frame.nv12_full_range = full_range;
+        frame
+    }
+
+    pub fn nv12_full_range(&self) -> bool {
+        self.nv12_full_range
     }
 
     pub fn browser_image(&self) -> Option<&BrowserFrameImage> {

@@ -125,6 +125,9 @@ impl CameraLayer {
         };
 
         let format = camera_frame.format();
+        #[cfg(target_arch = "wasm32")]
+        self.yuv_converter
+            .set_nv12_full_range(camera_frame.nv12_full_range());
         let frame_storage = camera_frame.storage_identity();
 
         let is_same_frame = self
@@ -418,6 +421,9 @@ impl CameraLayer {
         };
 
         let format = camera_frame.format();
+        #[cfg(target_arch = "wasm32")]
+        self.yuv_converter
+            .set_nv12_full_range(camera_frame.nv12_full_range());
         let frame_storage = camera_frame.storage_identity();
 
         let is_same_frame = self
