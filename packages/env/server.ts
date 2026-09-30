@@ -100,13 +100,16 @@ function createServerEnv() {
 				.string()
 				.url()
 				.optional()
+				.or(z.literal(""))
 				.describe(
 					"OpenAI-compatible transcription endpoint (eg. whisper.cpp, faster-whisper-server, speaches). Takes precedence over AssemblyAI for recorded videos. Must return word timestamps.",
 				),
 			STT_MODEL: z
 				.string()
 				.optional()
-				.describe("Model for STT_BASE_URL (eg. large-v3-turbo)"),
+				.describe(
+					"Model for STT_BASE_URL (default whisper-1). whisper.cpp ignores it; speaches needs a full id (eg. Systran/faster-whisper-large-v3)",
+				),
 			STT_API_KEY: z
 				.string()
 				.optional()

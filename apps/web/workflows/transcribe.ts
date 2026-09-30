@@ -262,7 +262,9 @@ async function validateVideo(videoId: string): Promise<VideoData> {
 	"use step";
 
 	if (!isTranscriptionConfigured()) {
-		throw new FatalError("No transcription provider configured");
+		throw new FatalError(
+			"No transcription provider configured: set STT_BASE_URL or ASSEMBLY_API_KEY",
+		);
 	}
 
 	const query = await db()
@@ -337,7 +339,9 @@ async function validateEditTranscriptBackfill(
 	"use step";
 
 	if (!isTranscriptionConfigured()) {
-		throw new FatalError("No transcription provider configured");
+		throw new FatalError(
+			"No transcription provider configured: set STT_BASE_URL or ASSEMBLY_API_KEY",
+		);
 	}
 
 	const [video] = await db()

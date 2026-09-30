@@ -2,7 +2,9 @@ import { serverEnv } from "@cap/env";
 import {
 	AI_GENERATION_LANGUAGE_AUTO,
 	type AiGenerationLanguage,
+	SUPPORTED_LANGUAGES,
 } from "@cap/web-domain";
+import { FatalError } from "workflow";
 import type { AssemblyAIEditResult } from "@/lib/edit-transcript";
 
 export type TranscriptionProvider = "openai-compatible" | "assemblyai";
@@ -13,6 +15,7 @@ export type OpenAICompatibleTranscription = AssemblyAIEditResult & {
 
 const DEFAULT_STT_MODEL = "whisper-1";
 const STT_TIMEOUT_MS = 30 * 60 * 1000;
+const ZERO_LENGTH_WORD_SPAN_MS = 200;
 
 export function getTranscriptionProvider(): TranscriptionProvider | null {
 	const env = serverEnv();
@@ -54,56 +57,88 @@ function toSttWord(raw: Record<string, unknown>): SttWord | null {
 }
 
 const PUNCTUATION_ONLY = /^[\p{P}\p{S}]+$/u;
+const UNSPACED_SCRIPT =
+	/^[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Thai}\p{Script=Lao}\p{Script=Khmer}\p{Script=Myanmar}]/u;
 
 // whisper.cpp reports BPE tokens as "words" (" timest" + "amps", " Hello" + ","),
-// so tokens without a leading space are folded into the previous word. Scripts
-// written without spaces (CJK) only fold punctuation.
+// marking word starts with a leading space. Unspaced scripts (CJK, Thai) only
+// fold punctuation.
 function mergeSegmentTokens(segment: Record<string, unknown>): SttWord[] {
 	if (!Array.isArray(segment.words)) return [];
-	const segmentText = typeof segment.text === "string" ? segment.text : "";
-	const spaceDelimited = /\s/.test(segmentText.trim());
+	const tokens = segment.words
+		.filter(isRecord)
+		.map(toSttWord)
+		.filter((word): word is SttWord => word !== null);
+	const marksWordStarts = tokens.some((token) => /^\s/.test(token.text));
 	const merged: SttWord[] = [];
 
-	for (const raw of segment.words.filter(isRecord)) {
-		const word = toSttWord(raw);
-		if (!word) continue;
+	for (const token of tokens) {
 		const previous = merged.at(-1);
 		const continuesPrevious =
 			previous !== undefined &&
-			!/^\s/.test(word.text) &&
-			(spaceDelimited || PUNCTUATION_ONLY.test(word.text));
+			!/^\s/.test(token.text) &&
+			(PUNCTUATION_ONLY.test(token.text) ||
+				(marksWordStarts && !UNSPACED_SCRIPT.test(token.text)));
 
 		if (previous && continuesPrevious) {
-			previous.text += word.text;
-			previous.end = Math.max(previous.end, word.end);
+			previous.text += token.text;
+			previous.end = Math.max(previous.end, token.end);
 			previous.confidence =
-				previous.confidence === undefined || word.confidence === undefined
-					? (previous.confidence ?? word.confidence)
-					: Math.min(previous.confidence, word.confidence);
+				previous.confidence === undefined || token.confidence === undefined
+					? (previous.confidence ?? token.confidence)
+					: Math.min(previous.confidence, token.confidence);
 		} else {
-			merged.push(word);
+			merged.push(token);
 		}
 	}
 
 	return merged;
 }
 
-function collectWords(body: Record<string, unknown>): SttWord[] {
-	if (Array.isArray(body.words) && body.words.length > 0) {
-		return body.words
-			.filter(isRecord)
-			.map(toSttWord)
-			.filter((word): word is SttWord => word !== null);
-	}
-	if (!Array.isArray(body.segments)) return [];
-	return body.segments.filter(isRecord).flatMap(mergeSegmentTokens);
+// whisper.cpp gives short fillers ("Um", "Uh") start == end, which
+// createEditTranscript would drop; stretch them toward the next word.
+function withMinimumSpan(words: SttWord[]): SttWord[] {
+	return words.map((word, index) => {
+		if (word.end > word.start) return word;
+		const nextStart = words[index + 1]?.start;
+		const limit = word.start + ZERO_LENGTH_WORD_SPAN_MS;
+		const end =
+			nextStart !== undefined && nextStart > word.start
+				? Math.min(nextStart, limit)
+				: limit;
+		return { ...word, end };
+	});
 }
 
-function detectLanguageCode(body: Record<string, unknown>) {
-	if (typeof body.language === "string" && /^[a-z]{2,3}$/.test(body.language)) {
-		return body.language;
+function collectWords(body: Record<string, unknown>): SttWord[] {
+	if (Array.isArray(body.words) && body.words.length > 0) {
+		return withMinimumSpan(
+			body.words
+				.filter(isRecord)
+				.map(toSttWord)
+				.filter((word): word is SttWord => word !== null),
+		);
 	}
-	// whisper.cpp reports full names ("english") plus a code-keyed map.
+	if (!Array.isArray(body.segments)) return [];
+	return withMinimumSpan(
+		body.segments.filter(isRecord).flatMap(mergeSegmentTokens),
+	);
+}
+
+const LANGUAGE_CODES_BY_NAME = new Map<string, string>(
+	Object.entries(SUPPORTED_LANGUAGES).map(([code, name]) => [
+		name.toLowerCase(),
+		code,
+	]),
+);
+
+function detectLanguageCode(body: Record<string, unknown>) {
+	if (typeof body.language === "string") {
+		const language = body.language.toLowerCase();
+		if (/^[a-z]{2,3}$/.test(language)) return language;
+		const code = LANGUAGE_CODES_BY_NAME.get(language);
+		if (code) return code;
+	}
 	if (isRecord(body.language_probabilities)) {
 		const [best] = Object.entries(body.language_probabilities)
 			.filter(
@@ -120,7 +155,7 @@ export function parseOpenAICompatibleTranscription(
 	model: string,
 ): OpenAICompatibleTranscription {
 	if (!isRecord(body)) {
-		throw new Error("STT response is not a JSON object");
+		throw new FatalError("STT response is not a JSON object");
 	}
 
 	const words = collectWords(body).map((word) => ({
@@ -130,7 +165,7 @@ export function parseOpenAICompatibleTranscription(
 
 	const text = typeof body.text === "string" ? body.text.trim() : "";
 	if (words.length === 0 && text.length > 0) {
-		throw new Error(
+		throw new FatalError(
 			"STT response has text but no word timestamps; the endpoint must support response_format=verbose_json with timestamp_granularities[]=word",
 		);
 	}
@@ -139,7 +174,11 @@ export function parseOpenAICompatibleTranscription(
 		words,
 		language_code: detectLanguageCode(body),
 		speech_model_used: model,
-		audio_duration: finiteNumber(body.duration),
+		audio_duration:
+			finiteNumber(body.duration) ??
+			(words.length > 0
+				? Math.max(...words.map((word) => word.end)) / 1000
+				: null),
 	};
 }
 
@@ -167,24 +206,42 @@ export async function transcribeWithOpenAICompatible(
 		form.append("language", language);
 	}
 
-	const response = await fetch(
-		`${env.STT_BASE_URL.replace(/\/+$/, "")}/audio/transcriptions`,
-		{
+	const endpoint = `${env.STT_BASE_URL.replace(/\/+$/, "")}/audio/transcriptions`;
+	let response: Response;
+	try {
+		response = await fetch(endpoint, {
 			method: "POST",
 			headers: env.STT_API_KEY
 				? { Authorization: `Bearer ${env.STT_API_KEY}` }
 				: undefined,
 			body: form,
+			redirect: "error",
 			signal: AbortSignal.timeout(STT_TIMEOUT_MS),
-		},
-	);
+		});
+	} catch (error) {
+		const cause = error instanceof Error ? error.message : String(error);
+		throw new Error(`STT endpoint ${endpoint} unreachable: ${cause}`);
+	}
 
 	if (!response.ok) {
 		const detail = (await response.text().catch(() => "")).slice(0, 500);
-		throw new Error(
-			`STT request failed: ${response.status} ${response.statusText} ${detail}`.trim(),
+		const message =
+			`STT request failed: ${response.status} ${response.statusText} ${detail}`.trim();
+		const retryable =
+			response.status >= 500 ||
+			response.status === 408 ||
+			response.status === 429;
+		throw retryable ? new Error(message) : new FatalError(message);
+	}
+
+	let body: unknown;
+	try {
+		body = await response.json();
+	} catch {
+		throw new FatalError(
+			`STT endpoint ${endpoint} did not return JSON; check STT_BASE_URL`,
 		);
 	}
 
-	return parseOpenAICompatibleTranscription(await response.json(), model);
+	return parseOpenAICompatibleTranscription(body, model);
 }

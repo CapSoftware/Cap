@@ -412,6 +412,7 @@ describe("transcribeVideoWorkflow", () => {
 describe("backfillEditTranscriptWorkflow", () => {
 	beforeEach(() => {
 		state.editRows = [];
+		state.sttBaseUrl = undefined;
 		videoRow.metadata = {
 			editTranscriptBackfill: {
 				status: "processing",
@@ -483,6 +484,50 @@ describe("backfillEditTranscriptWorkflow", () => {
 		expect(mocks.deleteObject).not.toHaveBeenCalledWith(
 			"user-456/video-123/transcription.edit.v3.status.json",
 		);
+	});
+
+	it("backfills the editable transcript through the STT endpoint", async () => {
+		state.sttBaseUrl = "http://whisper:9000/v1";
+		const fetchMock = vi.fn(
+			async (input: string | URL | Request, _init?: RequestInit) =>
+				String(input).startsWith("http://whisper:9000")
+					? new Response(JSON.stringify(whisperCppVerboseResponse))
+					: new Response(new ArrayBuffer(8)),
+		);
+		vi.stubGlobal("fetch", fetchMock);
+
+		const { backfillEditTranscriptWorkflow } = await import(
+			"@/workflows/transcribe"
+		);
+		const result = await backfillEditTranscriptWorkflow({
+			videoId: "video-123",
+			userId: "user-456",
+			requestId: "request-1",
+		});
+
+		expect(result.success).toBe(true);
+		expect(mocks.transcribe).not.toHaveBeenCalled();
+		const sttCall = fetchMock.mock.calls.find(([input]) =>
+			String(input).startsWith("http://whisper:9000"),
+		);
+		expect((sttCall?.[1]?.body as FormData).has("language")).toBe(false);
+
+		const { parseEditTranscript } = await import("@/lib/edit-transcript");
+		const { decryptEditTranscriptObject } = await import(
+			"@/lib/edit-transcript-storage"
+		);
+		const write = mocks.putObject.mock.calls.find(
+			(call) => call[0] === "user-456/video-123/transcription.edit.v3.json",
+		);
+		expect(
+			parseEditTranscript(
+				decryptEditTranscriptObject(
+					write?.[1] as string,
+					"user-456",
+					"video-123",
+				) ?? "",
+			),
+		).toMatchObject({ speechModelUsed: "large-v3-turbo" });
 	});
 
 	it("does not run a backfill after its database claim is replaced", async () => {
