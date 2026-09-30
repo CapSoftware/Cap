@@ -393,8 +393,11 @@ impl KeyboardLayer {
             parse_color_component(bg_color_hex, 2),
         ];
 
-        let background_alpha =
-            ((settings.background_opacity as f32 / 100.0) * fade_opacity).clamp(0.0, 1.0);
+        let background_alpha = if settings.keycap_mode && !settings.show_chassis {
+            0.0
+        } else {
+            ((settings.background_opacity as f32 / 100.0) * fade_opacity).clamp(0.0, 1.0)
+        };
 
         let font_size_base = active.segment.font_size_override.unwrap_or(settings.size) as f32;
         let font_size = font_size_base * (height as f32 / 1080.0);
@@ -447,8 +450,19 @@ impl KeyboardLayer {
         }
 
         let available_width = (width as f32 - margin * 2.0).max(1.0);
-        let padding = font_size * 0.45;
-        let corner_radius = font_size * 0.5;
+        let padding = if settings.keycap_mode {
+            font_size * 0.55
+        } else {
+            font_size * 0.45
+        };
+
+        let corner_radius = match settings.style.as_str() {
+            "minimal" => font_size * 0.9,
+            "apple" => font_size * 0.55,
+            "pbt" => font_size * 0.45,
+            "retro" | "m0116" => font_size * 0.35,
+            _ => font_size * 0.5,
+        };
         let text_width = layout_width.min(available_width);
         let text_height = layout_height;
         let box_width = (text_width + padding * 2.0).min(available_width).max(1.0);
