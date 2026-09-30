@@ -156,11 +156,7 @@ function timelineConfig(config: unknown, sourceDurations: number[]) {
 
 export type MotionRanges = { always: boolean; ranges: Array<[number, number]> };
 
-/// A drag that has caught up with the pointer is still one if its next seek
-/// comes within this long of the last key frame drawn.
 const SCRUB_SEEK_GAP_MS = 150;
-/// How long the playhead rests before a scrub's exact frame replaces its key
-/// frame.
 const SCRUB_REFINE_MS = 40;
 const KEY_FRAME_TIME_OFFSET = 0.002;
 
