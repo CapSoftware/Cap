@@ -1021,6 +1021,7 @@ async function poll(kinds: string[] | undefined, prefetch = false) {
 			audioSlots: AUDIO_SLOTS,
 			prefetch,
 			draining,
+			features: ["prefix"],
 		},
 		controller.signal,
 	).finally(() => openPolls.delete(controller));

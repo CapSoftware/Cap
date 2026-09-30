@@ -6,9 +6,10 @@ import {
 	timingSafeEqual,
 } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { ANNEX_B_PARAMETER_SETS } from "./boxes.test-util";
+import { ANNEX_B_PARAMETER_SETS, fragmentedRecording } from "./boxes.test-util";
 import type { Job, TaskState } from "./coordinator";
 import * as fmp4 from "./fmp4";
+import * as fragmentIndex from "./fragment-index";
 import * as hls from "./hls";
 import * as mp4 from "./mp4";
 import * as planning from "./planning";
@@ -152,6 +153,7 @@ function harness(env: Record<string, string> = {}) {
 		createHmac,
 		...validate,
 		...fmp4,
+		...fragmentIndex,
 		...hls,
 		...mp4,
 		...planning,
@@ -1306,6 +1308,146 @@ describe("transcodes", () => {
 		]) {
 			expect((await call(h, "/transcodes", body)).status).toBe(400);
 		}
+	});
+});
+
+describe("placements", () => {
+	const root = "owner/video/";
+	const source = `${root}raw-upload.mp4`;
+	const output = `${root}.recording/render/sources/display.mp4`;
+	const prefixKey = `${root}.recording/render/sources/display.prefix-v1`;
+	let folder = 0;
+
+	function project(h: ReturnType<typeof harness>) {
+		const prefix = `${root}.recording/render/${folder++}/project`;
+		h.objects.set(
+			`${prefix}/recording-meta.json`,
+			new TextEncoder().encode("{}"),
+		);
+		h.objects.set(
+			`${prefix}/manifest.json`,
+			new TextEncoder().encode(
+				JSON.stringify({
+					files: [
+						{ path: "recording-meta.json", size: 2 },
+						{ path: "display.mp4", key: output, transcodeFrom: source },
+					],
+				}),
+			),
+		);
+		return prefix;
+	}
+
+	function worker(h: ReturnType<typeof harness>, features?: string[]) {
+		// The poll waits for work; registering is all these tests need.
+		void call(h, "/work", {
+			worker: `gpu-${features ? "new" : "old"}`,
+			slots: 1,
+			cpus: 8,
+			kinds: ["video"],
+			...(features ? { features } : {}),
+		});
+	}
+
+	const sourceReads = (h: ReturnType<typeof harness>) =>
+		h.ranges.filter((range) => range.startsWith(`${source}:`)).length;
+
+	test("a fragmented recording is read in place, with no transcode", async () => {
+		const h = harness();
+		worker(h, ["prefix"]);
+		const recording = fragmentedRecording({
+			frames: 300,
+			gop: 30,
+			audio: true,
+			mfra: true,
+		});
+		h.objects.set(source, recording.bytes);
+		const index = (await h.sourceIndex(project(h), root)) as {
+			manifest: { files: { path: string; size: number }[] };
+			mediaMeta: Map<
+				string,
+				{
+					key: string;
+					size: number;
+					prefix?: { key: string; size: number };
+					index: { sizes: Uint32Array; offsets: Float64Array };
+				}
+			>;
+		};
+		const meta = index.mediaMeta.get("display.mp4");
+		const prefix = h.objects.get(prefixKey) as Uint8Array;
+		expect(meta).toMatchObject({
+			key: source,
+			size: prefix.byteLength + recording.bytes.byteLength,
+			prefix: { key: prefixKey, size: prefix.byteLength },
+		});
+		expect(meta?.index.sizes.length).toBe(300);
+		expect(meta?.index.offsets[0]).toBeGreaterThan(prefix.byteLength);
+		expect(h.objects.has(output)).toBe(false);
+		expect(
+			await (
+				await call(h, "/transcodes", { sourceRoot: root, source, output })
+			).json(),
+		).toMatchObject({ status: "ready", placed: true });
+
+		// Another Save reuses the placement without touching the recording.
+		const reads = sourceReads(h);
+		await h.sourceIndex(project(h), root);
+		expect(sourceReads(h)).toBe(reads);
+
+		// So does a restarted coordinator, from the stored prefix.
+		const restarted = harness();
+		worker(restarted, ["prefix"]);
+		restarted.objects.set(source, recording.bytes);
+		restarted.objects.set(prefixKey, prefix);
+		const again = (await restarted.sourceIndex(
+			project(restarted),
+			root,
+		)) as typeof index;
+		expect(sourceReads(restarted)).toBe(0);
+		expect([
+			...(again.mediaMeta.get("display.mp4")?.index.offsets ?? []),
+		]).toEqual([...(meta?.index.offsets ?? [])]);
+	});
+
+	test("older workers, other sources and finished transcodes keep the transcode", async () => {
+		const recording = fragmentedRecording({ frames: 60, gop: 30, mfra: true });
+		const request = { sourceRoot: root, source, output };
+		// Transcoding: queued, or already handed to the registered worker.
+		const transcoding = async (h: ReturnType<typeof harness>) =>
+			(
+				(await (await call(h, "/transcodes", request)).json()) as {
+					status: string;
+				}
+			).status;
+
+		const old = harness();
+		worker(old);
+		old.objects.set(source, recording.bytes);
+		expect(["queued", "running"]).toContain(await transcoding(old));
+		expect(old.objects.has(prefixKey)).toBe(false);
+
+		const webm = harness();
+		worker(webm, ["prefix"]);
+		webm.objects.set(
+			source,
+			Uint8Array.of(0x1a, 0x45, 0xdf, 0xa3, 0, 0, 0, 0, 0),
+		);
+		expect(["queued", "running"]).toContain(await transcoding(webm));
+
+		const done = harness();
+		worker(done, ["prefix"]);
+		done.objects.set(source, recording.bytes);
+		done.objects.set(output, new Uint8Array(42));
+		expect(
+			await (await call(done, "/transcodes", request)).json(),
+		).toMatchObject({ status: "ready", size: 42 });
+		expect(done.objects.has(prefixKey)).toBe(false);
+
+		const off = harness({ RF_FRAGMENT_INDEX: "0" });
+		worker(off, ["prefix"]);
+		off.objects.set(source, recording.bytes);
+		expect(["queued", "running"]).toContain(await transcoding(off));
 	});
 });
 
