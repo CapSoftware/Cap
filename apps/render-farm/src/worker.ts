@@ -883,11 +883,19 @@ async function runCursor(task: CursorTask, slot: number) {
 	try {
 		// Fetching the bundle and uploading the outputs report no progress of
 		// their own; neither is a stalled reconstruction unless it outlasts
-		// its limit, which fails the task for a retry.
-		const alive = <T>(work: Promise<T>, what: string) => {
-			const keepAlive = setInterval(() => {
+		// its limit. An upload past it is cancelled and settles before the
+		// task fails, so it cannot land after a retry wrote the same keys.
+		const keepAlive = () => {
+			const timer = setInterval(() => {
 				entry.lastProgressAt = Date.now();
 			}, 5_000);
+			return () => {
+				clearInterval(timer);
+				entry.lastProgressAt = Date.now();
+			};
+		};
+		const alive = <T>(work: Promise<T>, what: string) => {
+			const stop = keepAlive();
 			let timer: ReturnType<typeof setTimeout> | undefined;
 			const limit = new Promise<never>((_, reject) => {
 				timer = setTimeout(
@@ -897,10 +905,29 @@ async function runCursor(task: CursorTask, slot: number) {
 			});
 			work.catch(() => {});
 			return Promise.race([work, limit]).finally(() => {
-				clearInterval(keepAlive);
 				clearTimeout(timer);
-				entry.lastProgressAt = Date.now();
+				stop();
 			});
+		};
+		const upload = async (key: string, path: string, contentType: string) => {
+			const stop = keepAlive();
+			const controller = new AbortController();
+			const timer = setTimeout(
+				() =>
+					controller.abort(new Error(`Uploading ${key} took over 10 minutes`)),
+				CURSOR_TRANSFER_LIMIT_MS,
+			);
+			const cancel = () => controller.abort(run.controller.signal.reason);
+			run.controller.signal.addEventListener("abort", cancel, { once: true });
+			try {
+				return await s3.uploadFile(key, path, contentType, {
+					signal: controller.signal,
+				});
+			} finally {
+				clearTimeout(timer);
+				run.controller.signal.removeEventListener("abort", cancel);
+				stop();
+			}
 		};
 		const bundle = await alive(cursorBundleDir(), "Fetching the bundle");
 		const input = join(dir, "source");
@@ -959,21 +986,15 @@ async function runCursor(task: CursorTask, slot: number) {
 				`cursor service exited ${code}: ${`${tail}${buffered}`.trim().slice(-500)}`,
 			);
 		}
-		await alive(
-			s3.uploadFile(
-				`${task.outputPrefix}${CURSOR_OUTPUTS.inputEvents}`,
-				join(output, "input-events.ndjson"),
-				"application/x-ndjson",
-			),
-			"Uploading the pointer input",
+		await upload(
+			`${task.outputPrefix}${CURSOR_OUTPUTS.inputEvents}`,
+			join(output, "input-events.ndjson"),
+			"application/x-ndjson",
 		);
-		await alive(
-			s3.uploadFile(
-				`${task.outputPrefix}${CURSOR_OUTPUTS.display}`,
-				join(output, "reconstructed.cap/content/display.mp4"),
-				"video/mp4",
-			),
-			"Uploading the cleaned display",
+		await upload(
+			`${task.outputPrefix}${CURSOR_OUTPUTS.display}`,
+			join(output, "reconstructed.cap/content/display.mp4"),
+			"video/mp4",
 		);
 	} finally {
 		if (run.process?.exitCode === null) {
