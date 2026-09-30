@@ -494,10 +494,35 @@ fn browser_source(value: &JsValue) -> Result<(BrowserFrameSource, u32, u32), JsV
     Err(js_error("Video frame source is invalid"))
 }
 
+/// Pixel format and colour space, as `browser-color-calibration.ts` keys them.
+fn video_frame_kind(frame: &web_sys::VideoFrame) -> Option<String> {
+    let get =
+        |target: &JsValue, name: &str| js_sys::Reflect::get(target, &JsValue::from_str(name)).ok();
+    let format = get(frame, "format")?.as_string()?;
+    let space = get(frame, "colorSpace")?;
+    let field = |name: &str| {
+        get(&space, name)
+            .and_then(|value| {
+                value
+                    .as_string()
+                    .or_else(|| value.as_bool().map(|flag| flag.to_string()))
+            })
+            .unwrap_or_default()
+    };
+    Some(format!(
+        "{format}|{}|{}|{}|{}",
+        field("primaries"),
+        field("transfer"),
+        field("matrix"),
+        field("fullRange")
+    ))
+}
+
 fn decoded_frame(
     value: &JsValue,
     color_fix: bool,
     max_dimension: u32,
+    display_gamma: Option<&(String, f32)>,
 ) -> Result<Option<DecodedFrame>, JsValue> {
     if value.is_null() || value.is_undefined() {
         return Ok(None);
@@ -509,8 +534,20 @@ fn decoded_frame(
     if width > max_dimension || height > max_dimension {
         return Err(js_error("Video exceeds the browser GPU texture limit"));
     }
+    let display_gamma = match (&source, display_gamma) {
+        (BrowserFrameSource::VideoFrame(frame), Some((kind, gamma)))
+            if video_frame_kind(frame).is_some_and(|value| value == *kind) =>
+        {
+            *gamma
+        }
+        _ => 0.0,
+    };
     Ok(Some(DecodedFrame::from_browser_source(
-        source, width, height, color_fix,
+        source,
+        width,
+        height,
+        color_fix,
+        display_gamma,
     )))
 }
 
@@ -542,6 +579,7 @@ pub struct BrowserStudioRenderer {
     backend: String,
     last_layout: Option<[f64; 10]>,
     max_texture_dimension: u32,
+    frame_display_gamma: Option<(String, f32)>,
     constants: Box<RenderVideoConstants>,
 }
 
@@ -640,6 +678,7 @@ impl BrowserStudioRenderer {
             backend,
             last_layout: None,
             max_texture_dimension: constants.device.limits().max_texture_dimension_2d,
+            frame_display_gamma: None,
             constants,
         })
     }
@@ -652,6 +691,14 @@ impl BrowserStudioRenderer {
     #[wasm_bindgen(getter)]
     pub fn max_texture_dimension(&self) -> u32 {
         self.max_texture_dimension
+    }
+
+    /// Decoded video frames of `kind` reach this renderer's textures encoded
+    /// for a display with `gamma` (see `browser-color-calibration.ts`), which
+    /// the composite shader undoes. A gamma of 0 clears it.
+    pub fn set_frame_display_gamma(&mut self, kind: &str, gamma: f32) {
+        self.frame_display_gamma =
+            (gamma > 0.0 && gamma.is_finite()).then(|| (kind.to_owned(), gamma));
     }
 
     pub fn set_project(&mut self, config_json: &str) -> Result<(), JsValue> {
@@ -844,12 +891,22 @@ impl BrowserStudioRenderer {
             timing.latest_start_time.unwrap_or(0.0),
             offsets,
         );
-        let screen_frame = decoded_frame(&frames.screen, frames.screen_color_fix, max_dimension)?;
+        let screen_frame = decoded_frame(
+            &frames.screen,
+            frames.screen_color_fix,
+            max_dimension,
+            self.frame_display_gamma.as_ref(),
+        )?;
         if screen_frame.is_none() && !self.project.hide_display {
             return Err(js_error("Editor display video is unavailable"));
         }
         let camera_frame = if self.project.requires_camera() {
-            decoded_frame(&frames.camera, frames.camera_color_fix, max_dimension)?
+            decoded_frame(
+                &frames.camera,
+                frames.camera_color_fix,
+                max_dimension,
+                self.frame_display_gamma.as_ref(),
+            )?
         } else {
             None
         };

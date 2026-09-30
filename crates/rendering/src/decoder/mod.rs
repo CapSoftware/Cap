@@ -702,6 +702,10 @@ impl DecodedFrame {
         if self.browser_source_color_fix() {
             uniforms._padding1[0] = 1.0;
         }
+        #[cfg(target_arch = "wasm32")]
+        if let Some(image) = &self.browser_image {
+            uniforms._padding1[1] = image.source_display_gamma;
+        }
         let _ = uniforms;
     }
 }

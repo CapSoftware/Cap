@@ -54,6 +54,12 @@ export class BrowserStudioRenderer {
    * `cursors_json` an array with one `CursorEvents` per recording clip.
    */
   static create(canvas: any, prefer_webgpu: boolean, recording_meta_json: string, screen_width: number, screen_height: number, camera_width: number, camera_height: number): Promise<BrowserStudioRenderer>;
+  /**
+   * Decoded video frames of `kind` reach this renderer's textures encoded
+   * for a display with `gamma` (see `browser-color-calibration.ts`), which
+   * the composite shader undoes. A gamma of 0 clears it.
+   */
+  set_frame_display_gamma(kind: string, gamma: number): void;
   set_project(config_json: string): void;
   set_cursor(recording_clip: number, cursor_json: string): void;
   /**
@@ -140,6 +146,7 @@ export interface InitOutput {
   readonly browserstudiorenderer_create: (a: any, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => any;
   readonly browserstudiorenderer_backend: (a: number) => [number, number];
   readonly browserstudiorenderer_max_texture_dimension: (a: number) => number;
+  readonly browserstudiorenderer_set_frame_display_gamma: (a: number, b: number, c: number, d: number) => void;
   readonly browserstudiorenderer_set_project: (a: number, b: number, c: number) => [number, number];
   readonly browserstudiorenderer_set_cursor: (a: number, b: number, c: number, d: number) => [number, number];
   readonly browserstudiorenderer_set_audio_levels: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];

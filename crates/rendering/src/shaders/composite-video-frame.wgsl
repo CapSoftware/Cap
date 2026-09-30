@@ -19,7 +19,7 @@ struct Uniforms {
     border_width: f32,
     preserve_source_alpha: f32,
     source_color_fix: f32,
-    _padding1b: f32,
+    source_display_gamma: f32,
     _padding1c: f32,
     border_color: vec4<f32>,
     // Per-corner multipliers on rounding_px: (tl, tr, bl, br). All 1s keeps
@@ -153,6 +153,21 @@ fn apply_color_grade(color: vec4<f32>, target_uv: vec2<f32>, frag_pos: vec2<f32>
             -0.1483 * color.r + 1.2201 * color.g - 0.0718 * color.b,
             0.0,
             1.0,
+        );
+    }
+    // Chrome colour-manages hardware-decoded frames as it copies them into a
+    // texture, as if BT.709 video were shown on an sRGB display; this undoes
+    // the display gamma it measured.
+    if uniforms.source_display_gamma > 0.0 {
+        let encoded = corrected.rgb;
+        let linear = select(
+            pow((encoded + 0.055) / 1.055, vec3<f32>(2.4)),
+            encoded / 12.92,
+            encoded <= vec3<f32>(0.04045),
+        );
+        corrected = vec4<f32>(
+            pow(linear, vec3<f32>(1.0 / uniforms.source_display_gamma)),
+            corrected.a,
         );
     }
     if uniforms.grain_params.z < 0.5 {

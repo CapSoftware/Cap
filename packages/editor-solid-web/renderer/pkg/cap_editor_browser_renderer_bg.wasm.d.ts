@@ -31,6 +31,7 @@ export const __wbg_browserstudiorenderer_free: (a: number, b: number) => void;
 export const browserstudiorenderer_create: (a: any, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => any;
 export const browserstudiorenderer_backend: (a: number) => [number, number];
 export const browserstudiorenderer_max_texture_dimension: (a: number) => number;
+export const browserstudiorenderer_set_frame_display_gamma: (a: number, b: number, c: number, d: number) => void;
 export const browserstudiorenderer_set_project: (a: number, b: number, c: number) => [number, number];
 export const browserstudiorenderer_set_cursor: (a: number, b: number, c: number, d: number) => [number, number];
 export const browserstudiorenderer_set_audio_levels: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];

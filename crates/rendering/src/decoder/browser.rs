@@ -16,6 +16,7 @@ pub enum BrowserFrameSource {
 pub struct BrowserFrameImage {
     source: BrowserFrameSource,
     pub(crate) source_color_fix: bool,
+    pub(crate) source_display_gamma: f32,
 }
 
 // SAFETY: wasm32-unknown-unknown without the atomics target feature has a
@@ -69,6 +70,7 @@ impl DecodedFrame {
         width: u32,
         height: u32,
         source_color_fix: bool,
+        source_display_gamma: f32,
     ) -> Self {
         Self {
             data: Arc::new(Vec::new()),
@@ -80,6 +82,7 @@ impl DecodedFrame {
             browser_image: Some(BrowserFrameImage {
                 source,
                 source_color_fix,
+                source_display_gamma,
             }),
         }
     }

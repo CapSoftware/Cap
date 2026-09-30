@@ -7,6 +7,7 @@ import {
 	loadAudioLevels,
 	timelineAudioLevelSources,
 } from "./browser-audio-levels";
+import { frameDisplayGamma } from "./browser-color-calibration";
 import { browserFrameLayout } from "./browser-frame-layout";
 import { browserWebGpuPresentationWorks } from "./browser-gpu-probe";
 import { BrowserImageDecoder } from "./browser-image-decoder";
@@ -181,20 +182,29 @@ export class BrowserLocalCanvas {
 		canvas.height = this.height;
 		void Promise.all([loadBrowserRenderer(), browserWebGpuPresentationWorks()])
 			.then(([module, webgpuReady]) =>
-				module.BrowserStudioRenderer.create(
-					canvas,
-					webgpuReady,
-					JSON.stringify(this.setup.recordingMeta),
-					this.setup.screenWidth,
-					this.setup.screenHeight,
-					this.setup.cameraWidth,
-					this.setup.cameraHeight,
-				),
+				Promise.all([
+					module.BrowserStudioRenderer.create(
+						canvas,
+						webgpuReady,
+						JSON.stringify(this.setup.recordingMeta),
+						this.setup.screenWidth,
+						this.setup.screenHeight,
+						this.setup.cameraWidth,
+						this.setup.cameraHeight,
+					),
+					webgpuReady ? frameDisplayGamma() : null,
+				]),
 			)
-			.then((renderer) => {
+			.then(([renderer, displayGamma]) => {
 				if (this.disposed) {
 					renderer.free();
 					return;
+				}
+				if (displayGamma && renderer.backend === "BrowserWebGpu") {
+					renderer.set_frame_display_gamma(
+						displayGamma.kind,
+						displayGamma.gamma,
+					);
 				}
 				this.setup.cursors.forEach((cursor, index) => {
 					if (cursor) renderer.set_cursor(index, cursor);
