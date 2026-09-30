@@ -480,6 +480,7 @@ export function PlayerContent(props: { compactness?: number }) {
 				<div class="flex flex-row flex-none gap-3.5 items-center">
 					<button
 						type="button"
+						aria-label="Skip to start"
 						class="text-ed-text-2 transition-opacity hover:opacity-70 will-change-[opacity]"
 						onClick={async () => {
 							const pending = requestHandoffPlayback(false, 0);
