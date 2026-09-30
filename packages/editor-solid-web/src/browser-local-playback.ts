@@ -306,7 +306,6 @@ export class BrowserLocalPlayback {
 	private drawnFrameKey: string | null = null;
 	private lastRenderRepeated = false;
 	private settleResizes = 0;
-	private settleTimer: ReturnType<typeof setTimeout> | undefined;
 
 	private constructor(
 		readonly sources: BrowserEditorSources,
@@ -601,11 +600,18 @@ export class BrowserLocalPlayback {
 			return true;
 		}
 		// Within those few pixels the canvas can still be scaled a little from
-		// its box, which blurs it; once the layout has stayed put, match the box
-		// itself, whose aspect the layout already uses, at most twice in a row.
-		if (this.settleResizes < 2) {
-			clearTimeout(this.settleTimer);
-			this.settleTimer = setTimeout(() => this.settleSize(), 150);
+		// its box, which blurs it, so it matches the box itself, whose aspect
+		// the layout already uses, at most twice in a row.
+		const box = this.settleResizes < 2 ? this.boxSize() : null;
+		if (
+			box &&
+			(box[0] !== this.width || box[1] !== this.height) &&
+			Math.abs(box[0] - this.width) <= 4 &&
+			Math.abs(box[1] - this.height) <= 4
+		) {
+			this.settleResizes++;
+			this.resize(box[0], box[1]);
+			return true;
 		}
 		return false;
 	}
@@ -642,27 +648,6 @@ export class BrowserLocalPlayback {
 			Math.max(2, Math.round((boxWidth * detailScale) / 2) * 2),
 			Math.max(2, Math.round((boxHeight * detailScale) / 2) * 2),
 		] as const;
-	}
-
-	private settleSize() {
-		if (this.disposed) return;
-		const box = this.boxSize();
-		if (
-			!box ||
-			(box[0] === this.width && box[1] === this.height) ||
-			Math.abs(box[0] - this.width) > 4 ||
-			Math.abs(box[1] - this.height) > 4
-		) {
-			return;
-		}
-		this.settleResizes++;
-		this.resize(box[0], box[1]);
-		if (!this.playing) {
-			void this.seek(this.outputTime).catch((cause: unknown) => {
-				if (this.disposed) return;
-				this.onError(cause instanceof Error ? cause : new Error(String(cause)));
-			});
-		}
 	}
 
 	resize(width: number, height: number) {
@@ -1131,14 +1116,15 @@ export class BrowserLocalPlayback {
 		const budget = this.previewScale === 1 ? 21 : 32;
 		const slow = this.averageFrameCostMs > budget;
 		this.slowFrames = slow ? this.slowFrames + 1 : 0;
-		this.slowStreakMs = slow ? this.slowStreakMs + cost : 0;
+		this.slowStreakMs = slow ? this.slowStreakMs + elapsedMs : 0;
 		this.fastFrames =
 			elapsedMs < 13 && this.averageFrameCostMs < budget
 				? this.fastFrames + 1
 				: 0;
 		let nextScale: 1 | 0.75 | 0.5 = this.previewScale;
-		// A software GPU can take a second or more per frame, where 18 frames
-		// would leave the preview stuck at full size for most of a minute.
+		// A software GPU can take a second or more to draw a frame, where 18
+		// frames would leave the preview stuck at full size for most of a
+		// minute. Only drawing time counts, so a stall between frames doesn't.
 		if (
 			this.slowFrames >= 18 ||
 			(this.slowFrames >= 2 && this.slowStreakMs >= 1000)
@@ -1288,7 +1274,6 @@ export class BrowserLocalPlayback {
 		if (this.disposed) return;
 		this.pause();
 		this.disposed = true;
-		clearTimeout(this.settleTimer);
 		this.frameController?.abort();
 		this.canvas.dispose();
 		this.audio.dispose();

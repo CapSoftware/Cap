@@ -177,3 +177,32 @@ test("only timed visuals and animated styles keep the preview redrawing", () => 
 	expect(motionRanges({ cursor: { hide: false } }, true).always).toBe(true);
 	expect(motionRanges({ cursor: { hide: true } }, true).always).toBe(false);
 });
+
+test("adaptive preview ignores idle gaps between quick frames", () => {
+	const playback = Object.create(
+		BrowserLocalPlayback.prototype,
+	) as BrowserLocalPlayback;
+	const changes: number[] = [];
+	Reflect.set(playback, "previewBase", { width: 1248, height: 702 });
+	Reflect.set(playback, "playing", true);
+	Reflect.set(playback, "previewScale", 1);
+	Reflect.set(playback, "averageFrameCostMs", 0);
+	Reflect.set(playback, "lastRenderedAt", 0);
+	Reflect.set(playback, "slowFrames", 0);
+	Reflect.set(playback, "slowStreakMs", 0);
+	Reflect.set(playback, "fastFrames", 0);
+	playback.resizeForBase = () => {
+		changes.push(Number(Reflect.get(playback, "previewScale")));
+		return true;
+	};
+	const sample = Reflect.get(playback, "samplePlaybackFrameCost") as (
+		elapsedMs: number,
+		now: number,
+	) => void;
+	let now = 0;
+	for (let frame = 0; frame < 3; frame++) {
+		now += 800;
+		sample.call(playback, 10, now);
+	}
+	expect(changes).toEqual([]);
+});
