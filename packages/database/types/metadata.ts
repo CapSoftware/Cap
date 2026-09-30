@@ -137,6 +137,27 @@ export interface VideoMetadata {
 			objectIdentity: string | null;
 		};
 	};
+	/**
+	 * Experimental cursor replacement for browser recordings: a render farm job
+	 * removes the recorded cursor from the display and reconstructs its path,
+	 * which the editor draws as a Studio cursor while `enabled`.
+	 */
+	cursorReconstruction?: {
+		version: 1;
+		runId: string;
+		/** Empty until the render farm accepts the job. */
+		jobId: string;
+		status: "processing" | "ready" | "error";
+		enabled: boolean;
+		/** The display source the job reads; a new recording invalidates it. */
+		sourceKey: string;
+		startedAt: string;
+		progress?: number;
+		completedAt?: string;
+		error?: string;
+		display?: { key: string; size: number };
+		inputEvents?: { key: string; size: number };
+	};
 	editProcessing?: {
 		token: string;
 		startedAt: string;

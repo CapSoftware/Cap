@@ -52,6 +52,7 @@ import {
 } from "@/lib/render-farm-status";
 import { PRO_DURATION_SECONDS } from "@/lib/render-recording-eligibility";
 import { decodeStorageVideo } from "@/lib/video-storage";
+import { effectiveEditorSources } from "./cursor-reconstruction";
 
 type DbVideo = typeof videos.$inferSelect;
 
@@ -140,7 +141,11 @@ const mainSourceKeys = Effect.fn("renderFarmMainSourceKeys")(function* (
 			.from(videoEdits)
 			.where(eq(videoEdits.videoId, video.id)),
 	);
-	const sources = video.metadata?.editorSources;
+	const sources = effectiveEditorSources(
+		video.metadata,
+		video.ownerId,
+		video.id,
+	);
 	if (legacyEdit || !sources || sources.version !== 1) {
 		return {
 			display:

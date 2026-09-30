@@ -13,6 +13,7 @@ import { CurrentUser, StudioSound, type Video } from "@cap/web-domain";
 import { HttpApiError } from "@effect/platform";
 import { eq } from "drizzle-orm";
 import { Effect } from "effect";
+import { effectiveEditorSources } from "./cursor-reconstruction";
 import { stripEditorCaptionContent } from "./editor-caption-access";
 import { MAX_WEB_EDITOR_CLIPS, validWebEditorClip } from "./editor-clips";
 import { normalizeWebEditorImportOrder } from "./editor-imports";
@@ -296,7 +297,12 @@ export const getSignedEditorSources = Effect.fn("getSignedEditorSources")(
 		) {
 			return yield* new HttpApiError.ServiceUnavailable();
 		}
-		const sources: EditorSource = video.metadata?.editorSources;
+		const sources: EditorSource = effectiveEditorSources(
+			video.metadata,
+			video.ownerId,
+			video.id,
+		);
+		const cursorReplaced = sources !== video.metadata?.editorSources;
 		const legacySource =
 			legacyEdit !== undefined || sources === undefined || sources === null;
 		const displaySource = legacySource
@@ -324,7 +330,9 @@ export const getSignedEditorSources = Effect.fn("getSignedEditorSources")(
 			(micSource && !validAudioSource(micSource, video, "mic")) ||
 			(systemAudioSource &&
 				!validAudioSource(systemAudioSource, video, "system-audio")) ||
-			(inputEventsSource && !validInputEventsSource(inputEventsSource, video))
+			(inputEventsSource &&
+				!cursorReplaced &&
+				!validInputEventsSource(inputEventsSource, video))
 		) {
 			return yield* new HttpApiError.NotFound();
 		}

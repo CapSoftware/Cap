@@ -1,5 +1,9 @@
 import type { Video } from "@cap/web-domain";
 import {
+	parseCursorJobSummary,
+	settleCursorReconstruction,
+} from "@/lib/cursor-reconstruction-jobs";
+import {
 	parseRenderFarmReference,
 	renderFarmConfig,
 	verifyRenderFarmSignature,
@@ -45,6 +49,23 @@ export async function POST(request: Request) {
 	const { id, reference, status } = payload;
 	if (typeof id !== "string" || typeof reference !== "string") {
 		return Response.json({ error: "Invalid callback" }, { status: 400 });
+	}
+	if (reference.startsWith("cursor:")) {
+		const videoId = reference.slice("cursor:".length);
+		const summary = parseCursorJobSummary(payload);
+		if (!/^[A-Za-z0-9_-]{1,64}$/.test(videoId) || !summary) {
+			return Response.json({ error: "Invalid callback" }, { status: 400 });
+		}
+		try {
+			await settleCursorReconstruction(videoId as Video.VideoId, summary);
+		} catch (error) {
+			console.error(
+				"Cursor reconstruction callback could not be applied",
+				error,
+			);
+			return Response.json({ error: "Retry later" }, { status: 503 });
+		}
+		return Response.json({ ok: true });
 	}
 	const target = parseRenderFarmReference(reference);
 	if (!target) {

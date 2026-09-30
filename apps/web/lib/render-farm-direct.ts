@@ -2,6 +2,7 @@ import type { EditorDefaultStyle } from "@cap/editor-cap-bundle/default-style";
 import { Storage } from "@cap/web-backend";
 import { HttpApiError } from "@effect/platform";
 import { Effect } from "effect";
+import { effectiveEditorSources } from "./cursor-reconstruction";
 import { getSignedEditorSources } from "./editor-session";
 import {
 	DirectRenderForbidden,
@@ -23,7 +24,11 @@ export const planDirectRender = Effect.fn("planDirectRender")(function* (
 	support: RenderFarmPrepareSupport,
 	displayHasAudio: (url: string) => Promise<boolean>,
 ) {
-	const editorSources = video.metadata?.editorSources;
+	const editorSources = effectiveEditorSources(
+		video.metadata,
+		video.ownerId,
+		video.id,
+	);
 	if (!editorSources || editorSources.version !== 1) {
 		return { unsupported: "The recording has no editor sources" } as const;
 	}
