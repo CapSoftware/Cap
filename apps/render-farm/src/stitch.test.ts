@@ -4,6 +4,7 @@ import {
 	HEADER_PART,
 	planStitch,
 	type StashedChunk,
+	StitchLimiter,
 	stashBytes,
 	uploadProblem,
 } from "./stitch";
@@ -154,5 +155,105 @@ describe("planStitch ahead of assembly", () => {
 				expect(finalKeys.has(key(part))).toBe(true);
 			}
 		}
+	});
+});
+
+describe("stitch limiter", () => {
+	function held() {
+		let release = () => {};
+		const done = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		return { done, release };
+	}
+	const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+	test("never runs more than its limits, in total, ahead and per job", async () => {
+		const limiter = new StitchLimiter({ total: 6, ahead: 4, aheadPerJob: 2 });
+		let running = 0;
+		let ahead = 0;
+		const perJob = new Map<string, number>();
+		const peaks = { running: 0, ahead: 0, perJob: 0 };
+		const work = (job: string, isAhead: boolean) =>
+			limiter.run(job, isAhead, async () => {
+				running++;
+				if (isAhead) {
+					ahead++;
+					perJob.set(job, (perJob.get(job) ?? 0) + 1);
+				}
+				peaks.running = Math.max(peaks.running, running);
+				peaks.ahead = Math.max(peaks.ahead, ahead);
+				peaks.perJob = Math.max(peaks.perJob, perJob.get(job) ?? 0);
+				await new Promise((resolve) => setTimeout(resolve, Math.random() * 3));
+				running--;
+				if (isAhead) {
+					ahead--;
+					perJob.set(job, (perJob.get(job) ?? 1) - 1);
+				}
+			});
+		await Promise.all(
+			Array.from({ length: 200 }, (_, index) =>
+				work(`j${index % 5}`, index % 3 !== 0),
+			),
+		);
+		expect(peaks).toEqual({ running: 6, ahead: 4, perJob: 2 });
+	});
+
+	test("assembly is admitted before queued ahead work", async () => {
+		const limiter = new StitchLimiter({ total: 2, ahead: 2, aheadPerJob: 2 });
+		const order: string[] = [];
+		const first = held();
+		const second = held();
+		const running = [
+			limiter.run("a", true, () => first.done),
+			limiter.run("a", true, () => second.done),
+		];
+		const queued = [
+			limiter.run("b", true, async () => {
+				order.push("b ahead");
+			}),
+			limiter.run("c", false, async () => {
+				order.push("c assembly");
+			}),
+		];
+		await tick();
+		expect(order).toEqual([]);
+		first.release();
+		await Promise.all(queued);
+		expect(order).toEqual(["c assembly", "b ahead"]);
+		second.release();
+		await Promise.all(running);
+	});
+
+	test("promoting a job lifts its queued work past the ahead limits", async () => {
+		const limiter = new StitchLimiter({ total: 3, ahead: 1, aheadPerJob: 1 });
+		const busy = held();
+		const blocking = limiter.run("a", true, () => busy.done);
+		let started = 0;
+		const queued = [1, 2].map(() =>
+			limiter.run("a", true, async () => {
+				started++;
+			}),
+		);
+		await tick();
+		expect(started).toBe(0);
+		limiter.promote("a");
+		await Promise.all(queued);
+		expect(started).toBe(2);
+		busy.release();
+		await blocking;
+	});
+
+	test("cancelling a job drops its queued ahead work only", async () => {
+		const limiter = new StitchLimiter({ total: 1, ahead: 1, aheadPerJob: 1 });
+		const busy = held();
+		const blocking = limiter.run("a", true, () => busy.done);
+		const aheadWork = limiter.run("a", true, async () => "ran");
+		const assembly = limiter.run("a", false, async () => "assembled");
+		limiter.cancel("a");
+		await expect(aheadWork).rejects.toThrow("ended before its stitch ran");
+		busy.release();
+		await blocking;
+		expect(await assembly).toBe("assembled");
 	});
 });

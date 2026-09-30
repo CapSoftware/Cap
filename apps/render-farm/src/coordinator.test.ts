@@ -26,6 +26,9 @@ function harness(env: Record<string, string> = {}) {
 	const modifiedAt = new Map<string, number>();
 	let listFailures = 0;
 	const copies: string[] = [];
+	const copying = new Map<string, number>();
+	const copyPeaks = { total: 0, byJob: new Map<string, number>() };
+	let copyGate: (source: string) => Promise<void> | undefined = () => undefined;
 	const completedParts: number[][] = [];
 	const timers: (() => void)[] = [];
 	const watchdogs: (() => void)[] = [];
@@ -88,8 +91,21 @@ function harness(env: Record<string, string> = {}) {
 		) {
 			const value = objects.get(source.key);
 			if (!value) throw new Error(`missing ${source.key}`);
+			const job = source.key.split("/")[1] ?? "";
+			copying.set(job, (copying.get(job) ?? 0) + 1);
+			const total = [...copying.values()].reduce((sum, n) => sum + n, 0);
+			copyPeaks.total = Math.max(copyPeaks.total, total);
+			copyPeaks.byJob.set(
+				job,
+				Math.max(copyPeaks.byJob.get(job) ?? 0, copying.get(job) ?? 0),
+			);
+			try {
+				await copyGate(source.key);
+			} finally {
+				copying.set(job, (copying.get(job) ?? 1) - 1);
+			}
 			copies.push(source.key);
-			uploadedParts.set(`${key}#${n}`, value.slice());
+			uploadedParts.set(`${key}#${n}`, value);
 			return `etag-${n}`;
 		},
 		async completeMultipart(
@@ -222,6 +238,11 @@ function harness(env: Record<string, string> = {}) {
 		ranges,
 		uploadedParts,
 		copies,
+		copying,
+		copyPeaks,
+		gateCopies: (gate: (source: string) => Promise<void> | undefined) => {
+			copyGate = gate;
+		},
 		completedParts,
 		modifiedAt,
 		failListing: (count = 1) => {
@@ -476,6 +497,78 @@ describe("assembly", () => {
 		expect(h.copies).toEqual(["stash/job/c1-p63"]);
 		const file = h.objects.get(j.key) as Uint8Array;
 		expect(file[file.byteLength - 1]).toBe(2);
+	});
+
+	function longJob(id: string, count: number): Job {
+		const base = job();
+		const first = base.chunks[0] as NonNullable<Job["chunks"][number]>;
+		return {
+			...base,
+			id,
+			key: `out/${id}.mp4`,
+			totalFrames: count * 30,
+			chunks: Array.from({ length: count }, (_, index) => ({
+				...first,
+				index,
+				frames: [index * 30, (index + 1) * 30] as [number, number],
+				firstPart: 3 + index * 60,
+			})),
+		};
+	}
+
+	test("stitching ahead stays within its share across jobs and assembly reuses it", async () => {
+		const h = harness();
+		const jobs = [longJob("a", 12), longJob("b", 12), longJob("c", 12)];
+		let open = () => {};
+		const gate = new Promise<void>((resolve) => {
+			open = resolve;
+		});
+		h.gateCopies(() => gate);
+		for (const j of jobs) {
+			for (const [index] of j.chunks.entries())
+				j.videoResults.set(
+					index,
+					stored(h, j, index, 2 * protocol.MIN_PART, 1),
+				);
+			h.stitchAhead(j);
+		}
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(h.copyPeaks.total).toBe(8);
+		for (const j of jobs)
+			expect(h.copyPeaks.byJob.get(j.id) ?? 0).toBeLessThanOrEqual(4);
+		open();
+		for (const j of jobs) {
+			await Promise.all(j.stitchParts?.values() ?? []);
+			await h.assemble(j);
+			const file = h.objects.get(j.key) as Uint8Array;
+			expect(file.byteLength).toBeGreaterThan(12 * 2 * protocol.MIN_PART);
+		}
+		expect(h.copyPeaks.total).toBe(8);
+		expect(h.copies.length).toBe(3 * 11);
+		expect(new Set(h.copies).size).toBe(3 * 11);
+	});
+
+	test("assembly does not wait behind another job's queued ahead work", async () => {
+		const h = harness();
+		const busy = longJob("busy", 12);
+		const ready = longJob("ready", 3);
+		h.gateCopies((source) =>
+			source.startsWith("stash/busy/") ? new Promise(() => {}) : undefined,
+		);
+		for (const [index] of busy.chunks.entries())
+			busy.videoResults.set(
+				index,
+				stored(h, busy, index, 2 * protocol.MIN_PART, 1),
+			);
+		h.stitchAhead(busy);
+		for (const [index] of ready.chunks.entries())
+			ready.videoResults.set(
+				index,
+				stored(h, ready, index, 2 * protocol.MIN_PART, 2),
+			);
+		await h.assemble(ready);
+		expect(h.objects.has(ready.key)).toBe(true);
+		expect(h.copying.get("busy")).toBe(4);
 	});
 
 	test("the sweep deletes finished and abandoned jobs' stashes only", async () => {

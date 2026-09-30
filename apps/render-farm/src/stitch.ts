@@ -126,3 +126,103 @@ export function uploadProblem(
 	}
 	return null;
 }
+
+type StitchWaiter = {
+	job: string;
+	ahead: boolean;
+	start: () => void;
+	cancel: (error: Error) => void;
+};
+
+/**
+ * Bounds the coordinator's stitch requests across jobs. Assembly is on the
+ * user's path, so it is admitted first and may use every slot; work done ahead
+ * of assembly gets a share of them, and less per job, so one long export
+ * can't hold the rest.
+ */
+export class StitchLimiter {
+	private running = 0;
+	private aheadRunning = 0;
+	private aheadByJob = new Map<string, number>();
+	private waiting: StitchWaiter[] = [];
+
+	constructor(
+		private limits: { total: number; ahead: number; aheadPerJob: number },
+	) {}
+
+	async run<T>(job: string, ahead: boolean, work: () => Promise<T>) {
+		let admittedAhead = false;
+		await new Promise<void>((resolve, reject) => {
+			const waiter: StitchWaiter = {
+				job,
+				ahead,
+				start: () => {
+					admittedAhead = waiter.ahead;
+					resolve();
+				},
+				cancel: reject,
+			};
+			this.waiting.push(waiter);
+			this.pump();
+		});
+		try {
+			return await work();
+		} finally {
+			this.running--;
+			if (admittedAhead) {
+				this.aheadRunning--;
+				const left = (this.aheadByJob.get(job) ?? 1) - 1;
+				if (left > 0) this.aheadByJob.set(job, left);
+				else this.aheadByJob.delete(job);
+			}
+			this.pump();
+		}
+	}
+
+	/** A job's queued ahead work, which its assembly now waits on. */
+	promote(job: string) {
+		for (const waiter of this.waiting) {
+			if (waiter.job === job) waiter.ahead = false;
+		}
+		this.pump();
+	}
+
+	cancel(job: string) {
+		const cancelled = this.waiting.filter(
+			(waiter) => waiter.job === job && waiter.ahead,
+		);
+		this.waiting = this.waiting.filter((waiter) => !cancelled.includes(waiter));
+		for (const waiter of cancelled) {
+			waiter.cancel(new Error(`job ${job} ended before its stitch ran`));
+		}
+	}
+
+	private pump() {
+		while (this.running < this.limits.total) {
+			const index = this.next();
+			if (index < 0) return;
+			const [waiter] = this.waiting.splice(index, 1);
+			if (!waiter) return;
+			this.running++;
+			if (waiter.ahead) {
+				this.aheadRunning++;
+				this.aheadByJob.set(
+					waiter.job,
+					(this.aheadByJob.get(waiter.job) ?? 0) + 1,
+				);
+			}
+			waiter.start();
+		}
+	}
+
+	private next() {
+		const assembly = this.waiting.findIndex((waiter) => !waiter.ahead);
+		if (assembly >= 0 || this.aheadRunning >= this.limits.ahead) {
+			return assembly;
+		}
+		return this.waiting.findIndex(
+			(waiter) =>
+				(this.aheadByJob.get(waiter.job) ?? 0) < this.limits.aheadPerJob,
+		);
+	}
+}

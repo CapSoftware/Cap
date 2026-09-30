@@ -41,7 +41,12 @@ import {
 import { acceptOnce, completeUpload, reservePartRange } from "./recovery";
 import { mediaS3ConfigFromEnv, S3, s3ConfigFromEnv } from "./s3";
 import { pickQueued as pickQueuedTask } from "./scheduler";
-import { planStitch, type StitchPart, uploadProblem } from "./stitch";
+import {
+	planStitch,
+	StitchLimiter,
+	type StitchPart,
+	uploadProblem,
+} from "./stitch";
 import {
 	AUDIO_FILE,
 	checkManifestBounds,
@@ -91,7 +96,11 @@ const HLS_SEGMENT_SECONDS = Number(process.env.RF_HLS_SEGMENT_SECONDS ?? 2);
 /** Unfinished chunks per job (from the front) that outrank other work. */
 const HEAD_CHUNKS = Number(process.env.RF_HEAD_CHUNKS ?? 2);
 const LEAD_IN_SECONDS = Number(process.env.RF_LEAD_IN_SECONDS ?? 4);
-const STITCH_CONCURRENCY = 16;
+const stitchLimiter = new StitchLimiter({
+	total: 16,
+	ahead: 8,
+	aheadPerJob: 4,
+});
 /**
  * Shortest audio section. Each one after the first also renders a 10 s
  * preroll, but a short export's audio is what its video chunks wait on, so
@@ -2144,6 +2153,7 @@ function finish(job: Job) {
 	finishedJobs.push(job.id);
 	if (finishedJobs.length > 50) finishedJobs.shift();
 	rmSync(join(WORK_DIR, job.id), { recursive: true, force: true });
+	stitchLimiter.cancel(job.id);
 	job.headerStashes = undefined;
 	job.stitchParts = undefined;
 	dropStashes(job.id).catch((error) =>
@@ -2503,7 +2513,9 @@ function stitchAhead(job: Job) {
 	let carried = 0;
 	for (const chunk of accepted) {
 		if (!job.headerStashes.has(chunk.stash.key)) {
-			const read = journalS3.get(chunk.stash.key);
+			const read = stitchLimiter.run(job.id, true, () =>
+				journalS3.get(chunk.stash.key),
+			);
 			read.catch(() => job.headerStashes?.delete(chunk.stash.key));
 			job.headerStashes.set(chunk.stash.key, read);
 		}
@@ -2517,7 +2529,10 @@ function stitchAhead(job: Job) {
 		if (part.sources.some((source) => source.kind === "header")) continue;
 		const key = stitchPartKey(part);
 		if (job.stitchParts.has(key)) continue;
-		const written = writeStitchPart(job.key, job.uploadId, null, part);
+		const uploadId = job.uploadId;
+		const written = stitchLimiter.run(job.id, true, () =>
+			writeStitchPart(job.key, uploadId, null, part),
+		);
 		written.catch(() => job.stitchParts?.delete(key));
 		job.stitchParts.set(key, written);
 	}
@@ -2530,30 +2545,28 @@ async function writeStitchParts(
 	plan: StitchPart[],
 ) {
 	const ahead = job.stitchParts ?? new Map();
+	stitchLimiter.promote(job.id);
 	// A part written ahead under a grouping the final plan changed must land
-	// before the plan rewrites its number.
-	await Promise.allSettled(ahead.values());
-	const written: { partNumber: number; etag: string }[] = [];
+	// before the plan rewrites its number. Header reads are awaited here too,
+	// not inside a stitch slot, so assembly never holds slots while waiting.
+	await Promise.allSettled([
+		...ahead.values(),
+		...(job.headerStashes?.values() ?? []),
+	]);
 	const readStash = (key: string) =>
 		(job.headerStashes?.get(key) ?? Promise.reject()).catch(() =>
 			journalS3.get(key),
 		);
-	const pending = plan.map((part) => () => {
-		const write = () =>
-			writeStitchPart(job.key, uploadId, header, part, readStash);
-		const early = ahead.get(stitchPartKey(part));
-		return early ? early.catch(write) : write();
-	});
-	for (let index = 0; index < pending.length; index += STITCH_CONCURRENCY) {
-		written.push(
-			...(await Promise.all(
-				pending
-					.slice(index, index + STITCH_CONCURRENCY)
-					.map((write) => write()),
-			)),
-		);
-	}
-	return written;
+	return Promise.all(
+		plan.map((part) => {
+			const write = () =>
+				stitchLimiter.run(job.id, false, () =>
+					writeStitchPart(job.key, uploadId, header, part, readStash),
+				);
+			const early = ahead.get(stitchPartKey(part));
+			return early ? early.catch(write) : write();
+		}),
+	);
 }
 
 async function dropStashes(id: string) {
