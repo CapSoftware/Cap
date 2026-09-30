@@ -318,14 +318,14 @@ impl CompositeVideoFrameUniforms {
         if self.motion_blur_active() {
             return None;
         }
-        if !(self.shadow >= 0.0 && self.shadow_size >= 0.0 && self.shadow_blur >= 0.0)
-            || !self
-                .target_bounds
-                .iter()
-                .chain(&self.output_size)
-                .chain([&self.border_width])
-                .all(|value| value.is_finite())
-        {
+        let shadow_valid = self.shadow >= 0.0 && self.shadow_size >= 0.0 && self.shadow_blur >= 0.0;
+        let geometry_finite = self
+            .target_bounds
+            .iter()
+            .chain(&self.output_size)
+            .chain([&self.border_width])
+            .all(|value| value.is_finite());
+        if !(shadow_valid && geometry_finite) {
             return None;
         }
         let [left, top, right, bottom] = self.target_bounds;
