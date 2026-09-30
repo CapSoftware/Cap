@@ -15,6 +15,8 @@ export type S3Config = {
 	virtualHost: boolean;
 	/** Use the EC2 instance role (IMDSv2) instead of static keys. */
 	imds?: boolean;
+	/** Deadline for aborting a multipart upload after a failed one. */
+	cleanupTimeoutMs?: number;
 	/**
 	 * Canned ACL for new objects. Writing into another account's bucket needs
 	 * `bucket-owner-full-control`, or its owner cannot read what we wrote
@@ -71,16 +73,20 @@ function hmac(key: Buffer | string, value: string) {
 	return createHmac("sha256", key).update(value).digest();
 }
 
-// Aborting a multipart upload is cleanup; an unresponsive store must not hold
-// the caller, and the bucket's lifecycle rule removes whatever is left.
-const cleanupSignal = () => AbortSignal.timeout(30_000);
-
 export class S3 {
 	private expiresAt = 0;
 	private fetchedAt = 0;
 	private refreshing: Promise<void> | null = null;
 
 	constructor(readonly config: S3Config) {}
+
+	/**
+	 * Aborting a multipart upload is cleanup; an unresponsive store must not
+	 * hold the caller, and the bucket's lifecycle rule removes what is left.
+	 */
+	private cleanupSignal() {
+		return AbortSignal.timeout(this.config.cleanupTimeoutMs ?? 30_000);
+	}
 
 	/** Refresh instance-role credentials from IMDSv2 when close to expiry. */
 	/**
@@ -567,12 +573,16 @@ export class S3 {
 			if (await this.completeMultipart(key, uploadId, parts, options)) {
 				return file.size;
 			}
-			await this.abortMultipart(key, uploadId, cleanupSignal()).catch(() => {});
+			await this.abortMultipart(key, uploadId, this.cleanupSignal()).catch(
+				() => {},
+			);
 			const existing = await this.head(key);
 			if (!existing) throw new Error(`${key} was being written concurrently`);
 			return existing.size;
 		} catch (error) {
-			await this.abortMultipart(key, uploadId, cleanupSignal()).catch(() => {});
+			await this.abortMultipart(key, uploadId, this.cleanupSignal()).catch(
+				() => {},
+			);
 			throw error;
 		}
 	}

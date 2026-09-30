@@ -64,17 +64,21 @@ describe("uploadFile", () => {
 		]);
 	});
 
-	test("cleanup after a cancelled upload runs with its own deadline", async () => {
+	test("cleanup after a cancelled upload gives up on an unresponsive store", async () => {
 		const controller = new AbortController();
-		let cleanup: AbortSignal | undefined;
+		let cleanupAborted = false;
 		globalThis.fetch = (async (input: string | URL, init?: RequestInit) => {
 			const url = new URL(String(input));
 			if (url.searchParams.has("uploads")) {
 				return new Response("<UploadId>u1</UploadId>");
 			}
 			if (init?.method === "DELETE") {
-				cleanup = init.signal ?? undefined;
-				return new Response("", { status: 204 });
+				return new Promise<Response>((_, reject) => {
+					init.signal?.addEventListener("abort", () => {
+						cleanupAborted = true;
+						reject(init.signal?.reason);
+					});
+				});
 			}
 			controller.abort(new Error("cancelled"));
 			init?.signal?.throwIfAborted();
@@ -89,13 +93,15 @@ describe("uploadFile", () => {
 			accessKeyId: "a",
 			secretAccessKey: "b",
 			virtualHost: false,
+			cleanupTimeoutMs: 50,
 		});
-		const upload = s3.uploadFile("out/file.mp4", path, "video/mp4", {
-			signal: controller.signal,
-		});
-		await expect(upload).rejects.toThrow("cancelled");
-		expect(cleanup).toBeInstanceOf(AbortSignal);
-		expect(cleanup?.aborted).toBe(false);
-		expect(cleanup).not.toBe(controller.signal);
+		const started = performance.now();
+		await expect(
+			s3.uploadFile("out/file.mp4", path, "video/mp4", {
+				signal: controller.signal,
+			}),
+		).rejects.toThrow("cancelled");
+		expect(cleanupAborted).toBe(true);
+		expect(performance.now() - started).toBeLessThan(5_000);
 	});
 });
