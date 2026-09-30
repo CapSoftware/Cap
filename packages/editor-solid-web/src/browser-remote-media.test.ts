@@ -177,6 +177,27 @@ describe("RemoteMedia", () => {
 		expect(probes).toBeLessThan(12);
 	});
 
+	test("reads past the target only while scrubbing", async () => {
+		const probeLengths = () =>
+			requests.flatMap((range) => {
+				const match = /^bytes=(\d+)-(\d+)$/.exec(range);
+				if (!match) return [];
+				const start = Number(match[1]);
+				const end = Number(match[2]);
+				return start > 0 && end < file.length - 1 ? [end - start + 1] : [];
+			});
+		serve(longRecording(3600));
+		const seek = new RemoteMedia(URL_, file.length);
+		seek.warm();
+		expect(await seek.locate(5000)).not.toBeNull();
+		expect(Math.max(...probeLengths())).toBe(256 * 1024);
+		serve(longRecording(3600));
+		const scrub = new RemoteMedia(URL_, file.length);
+		scrub.warm();
+		expect(await scrub.locate(5000, undefined, "mp4", true)).not.toBeNull();
+		expect(Math.max(...probeLengths())).toBe(1024 * 1024);
+	});
+
 	test("keeps scanning past a probe window that ends inside a fragment", async () => {
 		// Fragments bigger than a probe window: a probe can land inside one,
 		// and the next window starts at the edge of the one just read.

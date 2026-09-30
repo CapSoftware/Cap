@@ -502,12 +502,17 @@ export class RemoteMedia {
 	/// between entry points already seen and reading small windows. Null when
 	/// the file cannot be entered part-way (the caller then reads it from the
 	/// start).
-	locate(time: number, signal?: AbortSignal, kind: SeekKind = "mp4") {
+	locate(
+		time: number,
+		signal?: AbortSignal,
+		kind: SeekKind = "mp4",
+		scrubbing = false,
+	) {
 		const index = this.index(kind);
 		const key = time;
 		let pending = index.locating.get(key);
 		if (!pending) {
-			pending = this.search(kind, time);
+			pending = this.search(kind, time, scrubbing);
 			index.locating.set(key, pending);
 			const settled = () => {
 				if (index.locating.get(key) === pending) index.locating.delete(key);
@@ -533,7 +538,7 @@ export class RemoteMedia {
 		});
 	}
 
-	private async search(kind: SeekKind, time: number) {
+	private async search(kind: SeekKind, time: number, scrubbing: boolean) {
 		const index = this.index(kind);
 		index.scanner ??= this.scanner(kind);
 		const scanner = await index.scanner.catch(() => null);
@@ -549,9 +554,20 @@ export class RemoteMedia {
 			let at = step.probeAt;
 			let grew = false;
 			while (at < size && at - step.probeAt < MAX_PROBE_SCAN) {
+				// A probe aims up to half the near distance before its estimate, so
+				// while scrubbing a window that long reaches past the target too,
+				// and the next key frames along the drag are already in memory. A
+				// lone seek keeps the short window: those extra bytes cost more than
+				// they save on a slow link.
 				const window = await this.readFully(
 					at,
-					Math.min(size, at + PROBE_WINDOW),
+					Math.min(
+						size,
+						at +
+							(scrubbing
+								? Math.max(PROBE_WINDOW, scanner.nearBytes)
+								: PROBE_WINDOW),
+					),
 				);
 				this.recent.unshift({ start: at, bytes: window });
 				this.recent.length = Math.min(this.recent.length, RECENT_WINDOWS);
