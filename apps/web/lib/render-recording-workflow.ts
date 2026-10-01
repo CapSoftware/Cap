@@ -20,7 +20,7 @@ import {
 import { recordingRenderSourcesReady } from "./render-recording-eligibility";
 import { runWorkflowPromise } from "./workflow-runtime";
 
-type RecordingRenderPayload = {
+export type RecordingRenderPayload = {
 	videoId: string;
 	ownerId: string;
 	exportId: string;
@@ -74,6 +74,11 @@ async function loadRenderVideo(payload: RecordingRenderPayload) {
 async function checkRecordingSources(payload: RecordingRenderPayload) {
 	"use step";
 
+	return await recordingSourcesState(payload);
+}
+
+/** Whether the render can start: its sources are in, or it was replaced. */
+export async function recordingSourcesState(payload: RecordingRenderPayload) {
 	const loaded = await loadRenderVideo(payload);
 	if (!loaded) return "superseded" as const;
 	return recordingRenderSourcesReady(
@@ -92,6 +97,13 @@ async function checkRecordingSources(payload: RecordingRenderPayload) {
 async function startDirectRecordingRender(payload: RecordingRenderPayload) {
 	"use step";
 
+	return await startRecordingRenderDirectly(payload);
+}
+
+/** The farm-prepared start, run by the workflow or by the finished upload. */
+export async function startRecordingRenderDirectly(
+	payload: RecordingRenderPayload,
+) {
 	const support = await renderFarmPrepareSupport();
 	if (!support) return "unsupported" as const;
 	const loaded = await loadRenderVideo(payload);
