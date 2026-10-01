@@ -257,6 +257,7 @@ type Worker = {
 	usage?: Usage | null;
 	/** What the worker's build understands, e.g. "prefix" file specs. */
 	features?: string[];
+	kinds?: string[] | "any";
 };
 
 type Section = {
@@ -1699,11 +1700,21 @@ function taskNeeds(task: Task): string[] {
 		: [];
 }
 
-function workerCanTake(worker: string, task: Task) {
-	const needs = taskNeeds(task);
-	if (needs.length === 0) return true;
-	const features = workers.get(worker)?.features ?? [];
-	return needs.every((need) => features.includes(need));
+/**
+ * Whether a slot polling for `kinds` on a worker with `features` can run the
+ * task. Dispatch and the unservable check both ask this, so a worker counts
+ * as able to serve a task only if it would be handed it.
+ */
+function canRun(
+	kinds: readonly string[] | "any" | undefined,
+	features: readonly string[] | undefined,
+	task: Task,
+) {
+	return (
+		kinds !== undefined &&
+		(kinds === "any" || kinds.includes(task.kind)) &&
+		taskNeeds(task).every((need) => features?.includes(need))
+	);
 }
 
 // Long enough for a rolling restart to bring a capable worker back.
@@ -1726,7 +1737,7 @@ function failUnservable(job: Job) {
 		(state) =>
 			state.state === "queued" &&
 			taskNeeds(state.task).length > 0 &&
-			!live.some((worker) => workerCanTake(worker.id, state.task)),
+			!live.some((worker) => canRun(worker.kinds, worker.features, state.task)),
 	);
 	if (!stuck) {
 		job.unservableSince = undefined;
@@ -2185,7 +2196,11 @@ function dispatch() {
 			continue;
 		}
 		const canTake = (candidate: TaskState) =>
-			workerCanTake(poller.worker, candidate.task);
+			canRun(
+				poller.kinds ?? "any",
+				workers.get(poller.worker)?.features,
+				candidate.task,
+			);
 		const next = pickQueued(accepts, canTake);
 		let state: TaskState | undefined;
 		if (next >= 0) {
@@ -3255,6 +3270,10 @@ Bun.serve({
 			worker.slots = body.slots;
 			worker.audioSlots = body.audioSlots ?? 0;
 			worker.features = body.features ?? [];
+			worker.kinds =
+				!body.kinds || worker.kinds === "any"
+					? "any"
+					: [...new Set([...(worker.kinds ?? []), ...body.kinds])];
 			supersede(body.worker);
 			workers.set(body.worker, worker);
 			if (body.draining)

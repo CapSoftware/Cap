@@ -1517,6 +1517,14 @@ describe("placements", () => {
 		expect(original.duplicated).toBe(true);
 	});
 
+	async function runWatchdogs(h: ReturnType<typeof harness>) {
+		for (const watchdog of h.watchdogs) {
+			try {
+				await watchdog();
+			} catch {}
+		}
+	}
+
 	test("with no worker left that takes prefixes, the job fails for a retry", async () => {
 		const h = harness({ RF_UNSERVABLE_GRACE_MS: "0" });
 		void call(h, "/work", {
@@ -1526,32 +1534,41 @@ describe("placements", () => {
 			kinds: ["video"],
 		});
 		const { j } = prefixedTask(h);
-		for (const watchdog of h.watchdogs) {
-			try {
-				await watchdog();
-			} catch {}
-		}
+		await runWatchdogs(h);
 		expect(j.status).toBe("error");
 		expect(j.error).toContain("in-place sources");
 		expect(h.queue).toHaveLength(0);
 
-		// A capable worker keeps the job waiting instead.
+		// A worker that takes prefixes and video keeps the job going instead.
 		const kept = harness({ RF_UNSERVABLE_GRACE_MS: "0" });
-		void call(kept, "/work", {
+		const poll = call(kept, "/work", {
+			worker: "gpu-new",
+			slots: 1,
+			cpus: 8,
+			kinds: ["video"],
+			features: ["prefix"],
+		});
+		const waiting = prefixedTask(kept);
+		await runWatchdogs(kept);
+		expect(waiting.j.status).toBe("rendering");
+		await poll;
+		expect(waiting.state.worker).toBe("gpu-new");
+	});
+
+	test("a worker that takes prefixes only for audio can't serve a video task", async () => {
+		const h = harness({ RF_UNSERVABLE_GRACE_MS: "0" });
+		void call(h, "/work", {
 			worker: "gpu-new-audio",
 			slots: 1,
 			cpus: 8,
 			kinds: ["audio"],
 			features: ["prefix"],
 		});
-		const waiting = prefixedTask(kept);
-		for (const watchdog of kept.watchdogs) {
-			try {
-				await watchdog();
-			} catch {}
-		}
-		expect(waiting.j.status).toBe("rendering");
-		expect(waiting.state.state).toBe("queued");
+		const { j, state } = prefixedTask(h);
+		await runWatchdogs(h);
+		expect(state.worker).toBeUndefined();
+		expect(j.status).toBe("error");
+		expect(j.error).toContain("in-place sources");
 	});
 
 	test("older workers, other sources and finished transcodes keep the transcode", async () => {
