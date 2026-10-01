@@ -221,6 +221,12 @@ class SegmentStream {
 	private index = 0;
 	private extradata = "";
 	private uploads: Promise<void>[] = [];
+	/**
+	 * Segments wait for their audio one after another: each wait is a long
+	 * poll to the coordinator, and a chunk's 40 segments all waiting at once,
+	 * on every chunk a worker was finishing, starved its heartbeats.
+	 */
+	private audioTurn: Promise<unknown> = Promise.resolve();
 	private failed: unknown = null;
 	firstUploadedMs: number | null = null;
 
@@ -297,7 +303,11 @@ class SegmentStream {
 					last ? task.audio.end : this.packetAt(first + b),
 				]
 			: [0, 0];
-		const audio = await fetchAudioRange(task.jobId, packets[0], packets[1]);
+		const audioReady = this.audioTurn.then(() =>
+			fetchAudioRange(task.jobId, packets[0], packets[1]),
+		);
+		this.audioTurn = audioReady.catch(() => {});
+		const audio = await audioReady;
 		const header = segmentHeader({
 			sequence: first + a + 1,
 			firstFrame: first + a,
@@ -495,6 +505,8 @@ async function runVideo(
 	engine: Engine,
 	queuedMs: number,
 	nearEnd: () => void = () => {},
+	/** Called once the engine is done with the chunk, with its VRAM samples. */
+	onRendered: (gpuMem: number[][] | undefined) => void = () => {},
 ): Promise<VideoResult> {
 	const started = performance.now();
 	const cpuBefore = await processCpuSeconds(engine.pid);
@@ -560,6 +572,7 @@ async function runVideo(
 		progress.delete(slot);
 	});
 	nearEnd();
+	onRendered((result.timings as unknown as { gpu_mem?: number[][] }).gpu_mem);
 	const segmentsDone = stream?.finish(result.sizes, result.extradata);
 	segmentsDone?.catch(() => {});
 	const engineMs = performance.now() - engineStarted;
@@ -1043,8 +1056,68 @@ let draining = false;
 const reserved = new Map<number, WorkItem | null>();
 const busySince = new Map<number, number>();
 
+/**
+ * Video chunks whose engine work is done, still waiting for their audio or
+ * uploading. Listed in heartbeats as fully rendered, so the coordinator
+ * neither requeues nor hedges a chunk that is only waiting on audio.
+ */
+const finishing = new Map<
+	string,
+	{
+		task: VideoTask;
+		slot: number;
+		/** When the slot took it: heartbeats report time on the whole task. */
+		since: number;
+		done: Promise<unknown>;
+	}
+>();
+/**
+ * Chunks a slot may have finishing at once before it waits for one. Long
+ * exports render ahead of their audio (a 2 h export's ~10 min sections take
+ * about a minute each), so this bounds disk use rather than pacing work.
+ */
+const MAX_FINISHING_PER_SLOT = 8;
+
+async function finishInBackground(
+	slot: number,
+	task: VideoTask,
+	since: number,
+	done: Promise<unknown>,
+) {
+	const rendered = Date.now();
+	finishing.set(task.taskId, { task, slot, since, done });
+	done
+		.then(
+			() =>
+				console.log(
+					`${task.taskId} done ${Date.now() - rendered}ms after rendering`,
+				),
+			async (error) => {
+				console.error(`${task.taskId} failed: ${error}`);
+				await post(`/tasks/${encodeURIComponent(task.taskId)}/fail`, {
+					worker: WORKER_ID,
+					attempt: task.attempt,
+					error: String(error instanceof Error ? error.message : error),
+				}).catch(() => {});
+			},
+		)
+		.finally(() => {
+			finishing.delete(task.taskId);
+			exitWhenIdle();
+		});
+	const own = [...finishing.values()].filter((entry) => entry.slot === slot);
+	if (own.length > MAX_FINISHING_PER_SLOT) {
+		await Promise.race(own.map((entry) => entry.done.catch(() => {})));
+	}
+}
+
 function exitWhenIdle() {
-	if (draining && busy.size === 0 && reserved.size === 0) {
+	if (
+		draining &&
+		busy.size === 0 &&
+		reserved.size === 0 &&
+		finishing.size === 0
+	) {
 		console.log("drained; exiting");
 		process.exit(0);
 	}
@@ -1128,11 +1201,33 @@ async function slotLoop(slot: number) {
 					size,
 				});
 			} else if (task.kind === "video") {
-				const result = await runVideo(task, engine, 0, prefetchNext);
-				await post(`/tasks/${encodeURIComponent(task.taskId)}/done`, result);
-				const vram = (
-					result.timings.engine as unknown as { gpu_mem?: number[][] }
-				).gpu_mem;
+				// The chunk's wait for its audio and its upload don't need the
+				// engine: once the engine is done the slot takes its next task
+				// and the rest finishes alongside (see finishInBackground).
+				let rendered!: (gpuMem: number[][] | undefined) => void;
+				const engineDone = new Promise<number[][] | undefined>((resolve) => {
+					rendered = resolve;
+				});
+				const completion = runVideo(
+					task,
+					engine,
+					0,
+					prefetchNext,
+					rendered,
+				).then((result) =>
+					post(`/tasks/${encodeURIComponent(task.taskId)}/done`, result),
+				);
+				completion.catch(() => {});
+				const vram = await Promise.race([
+					engineDone,
+					completion.then(() => undefined),
+				]);
+				await finishInBackground(
+					slot,
+					task,
+					busySince.get(slot) ?? Date.now(),
+					completion,
+				);
 				const freeMb = vram?.[vram.length - 1]?.[2];
 				if (freeMb !== undefined && freeMb > 0 && freeMb < MIN_FREE_VRAM_MB) {
 					console.warn(
@@ -1149,7 +1244,7 @@ async function slotLoop(slot: number) {
 				await runAudio(task, engine, 0);
 			}
 			console.log(
-				`${task.taskId} done in ${Math.round(performance.now() - received)}ms`,
+				`${task.taskId} ${task.kind === "video" ? "rendered" : "done"} in ${Math.round(performance.now() - received)}ms`,
 			);
 		} catch (error) {
 			console.error(`${task.taskId} failed: ${error}`);
@@ -1291,6 +1386,17 @@ setInterval(async () => {
 			frames: entry?.taskId === task.taskId ? entry.frames : 0,
 			total: entry?.taskId === task.taskId ? entry.total : 0,
 			elapsedMs: Date.now() - (busySince.get(slot) ?? Date.now()),
+		});
+	}
+	for (const { task, since } of finishing.values()) {
+		const total = task.frames[1] - task.frames[0];
+		running.push({
+			taskId: task.taskId,
+			attempt: task.attempt,
+			phase: "running",
+			frames: total,
+			total,
+			elapsedMs: Date.now() - since,
 		});
 	}
 	for (const task of reserved.values()) {
