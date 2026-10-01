@@ -306,14 +306,23 @@ export class BrowserVideoPool {
 		slot.activeCalls++;
 		try {
 			if (slot.element.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
-				const loaded = waitForVideo(slot.element, "loadeddata", signal, 15_000);
 				if (
 					created ||
 					slot.element.networkState === HTMLMediaElement.NETWORK_EMPTY
 				) {
+					const loaded = waitForVideo(
+						slot.element,
+						"loadeddata",
+						signal,
+						15_000,
+					);
 					slot.element.load();
+					await loaded;
+				} else {
+					// A loaded element drops below current data while it seeks
+					// for another call, and `loadeddata` never fires again.
+					await waitForDecodedVideoFrame(slot.element, signal, 15_000);
 				}
-				await loaded;
 			}
 			if (this.disposed) throw new Error("Editor video pool is closed");
 			return slot;
