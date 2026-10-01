@@ -112,6 +112,15 @@ import {
 import { GradientEditor } from "./GradientEditor";
 import { ImageSegmentConfig } from "./image-segment-config";
 import { KeyboardTab } from "./KeyboardTab";
+import { KeycapPreviewCluster } from "./KeycapRenderer";
+import {
+	defaultKeyboardSettings,
+	KEYCAP_STYLE_OPTIONS,
+	KEYCAP_THEME_OPTIONS,
+	type KeycapStyle,
+	type KeycapTheme,
+	type KeyboardSettings,
+} from "~/store/keyboard";
 import {
 	encodeMaskEffect,
 	getMaskEffect,
@@ -684,6 +693,9 @@ function ConfigSidebarContent() {
 					? undefined
 					: state.selectedTab
 			}
+			onChange={(v) => {
+				if (v) setState("selectedTab", v as any);
+			}}
 			class="flex overflow-hidden z-10 flex-col flex-1 min-h-0 max-w-104 rounded-xl shrink-0 bg-ed-card shadow-ed-card"
 		>
 			<KTabs.List class="flex sticky top-0 z-60 flex-row justify-around items-center px-2.5 h-[46px] border-b border-ed-line shrink-0 bg-ed-card">
@@ -3735,7 +3747,7 @@ function KeyboardSegmentConfig(props: {
 	segmentIndex: number;
 	segment: KeyboardTrackSegment;
 }) {
-	const { setProject } = useEditorContext();
+	const { project, setProject } = useEditorContext();
 
 	const updateSegment = (fn: (segment: KeyboardTrackSegment) => void) => {
 		setProject(
@@ -3749,8 +3761,59 @@ function KeyboardSegmentConfig(props: {
 		);
 	};
 
+	const getSetting = <K extends keyof KeyboardSettings>(
+		key: K,
+	): NonNullable<KeyboardSettings[K]> => {
+		const settings = project?.keyboard?.settings;
+		if (settings && key in settings) {
+			return (settings as Record<string, unknown>)[
+				key as string
+			] as NonNullable<KeyboardSettings[K]>;
+		}
+		return defaultKeyboardSettings[key] as NonNullable<KeyboardSettings[K]>;
+	};
+
+	const updateSetting = <K extends keyof KeyboardSettings>(
+		key: K,
+		value: KeyboardSettings[K],
+	) => {
+		if (!project?.keyboard) {
+			setProject("keyboard", {
+				settings: { ...defaultKeyboardSettings, [key]: value },
+			});
+			return;
+		}
+		setProject("keyboard", "settings", key, value);
+	};
+
+	const previewKeys = createMemo(() => {
+		const text = props.segment.displayText || "";
+		if (!text) return ["⌨"];
+		if (text.includes("+")) {
+			return text.split("+").map((s) => s.trim()).filter(Boolean);
+		}
+		if (text.includes(" ")) {
+			return text.split(" ").map((s) => s.trim()).filter(Boolean);
+		}
+		return [text];
+	});
+
 	return (
 		<div class="space-y-4">
+			{/* Live 3D Keycap Preview for Selected Key */}
+			<div class="flex flex-col items-center justify-center p-3 rounded-xl bg-ed-ctl/50 border border-ed-line overflow-hidden">
+				<div class="text-[10px] font-semibold text-ed-text-3 mb-2.5 tracking-wider uppercase">
+					Keycap Preview (Key23)
+				</div>
+				<KeycapPreviewCluster
+					keys={previewKeys()}
+					style={getSetting("style")}
+					theme={getSetting("theme")}
+					showChassis={getSetting("showChassis")}
+					scale={0.9}
+				/>
+			</div>
+
 			<Section name={`Keyboard ${props.segmentIndex + 1}`}>
 				<Input
 					type="text"
@@ -3762,6 +3825,123 @@ function KeyboardSegmentConfig(props: {
 					}
 				/>
 			</Section>
+
+			<Section name="Keycap Design (Key23)">
+				<div class="flex flex-col gap-2">
+					<Field name="Keycap Style" inline>
+						<KSelect<KeycapStyle>
+							options={KEYCAP_STYLE_OPTIONS.map((s) => s.value)}
+							value={getSetting("style")}
+							onChange={(value) => {
+								if (value === null) return;
+								updateSetting("style", value);
+							}}
+							itemComponent={(p) => (
+								<MenuItem<typeof KSelect.Item>
+									as={KSelect.Item}
+									item={p.item}
+								>
+									<KSelect.ItemLabel class="flex-1">
+										{
+											KEYCAP_STYLE_OPTIONS.find(
+												(s) => s.value === p.item.rawValue,
+											)?.label
+										}
+									</KSelect.ItemLabel>
+								</MenuItem>
+							)}
+						>
+							<KSelect.Trigger class="flex flex-row gap-1.5 items-center px-2 h-7 max-w-full rounded-[7px] text-[13px] transition-colors outline-hidden bg-ed-ctl text-ed-text-1 hover:bg-ed-ctl-hover focus-visible:ring-1 focus-visible:ring-ed-accent">
+								<KSelect.Value<KeycapStyle> class="truncate">
+									{(state) =>
+										KEYCAP_STYLE_OPTIONS.find(
+											(s) => s.value === state.selectedOption(),
+										)?.label
+									}
+								</KSelect.Value>
+								<KSelect.Icon>
+									<IconCapChevronDown class="shrink-0 size-3.5 text-ed-text-3" />
+								</KSelect.Icon>
+							</KSelect.Trigger>
+							<KSelect.Portal>
+								<PopperContent<typeof KSelect.Content>
+									as={KSelect.Content}
+									class={topSlideAnimateClasses}
+								>
+									<MenuItemList<typeof KSelect.Listbox>
+										class="overflow-y-auto max-h-48"
+										as={KSelect.Listbox}
+									/>
+								</PopperContent>
+							</KSelect.Portal>
+						</KSelect>
+					</Field>
+
+					<Field name="Color Theme" inline>
+						<KSelect<KeycapTheme>
+							options={KEYCAP_THEME_OPTIONS.map((t) => t.value)}
+							value={getSetting("theme")}
+							onChange={(value) => {
+								if (value === null) return;
+								updateSetting("theme", value);
+							}}
+							itemComponent={(p) => (
+								<MenuItem<typeof KSelect.Item>
+									as={KSelect.Item}
+									item={p.item}
+								>
+									<KSelect.ItemLabel class="flex-1">
+										{
+											KEYCAP_THEME_OPTIONS.find(
+												(t) => t.value === p.item.rawValue,
+											)?.label
+										}
+									</KSelect.ItemLabel>
+								</MenuItem>
+							)}
+						>
+							<KSelect.Trigger class="flex flex-row gap-1.5 items-center px-2 h-7 max-w-full rounded-[7px] text-[13px] transition-colors outline-hidden bg-ed-ctl text-ed-text-1 hover:bg-ed-ctl-hover focus-visible:ring-1 focus-visible:ring-ed-accent">
+								<KSelect.Value<KeycapTheme> class="truncate">
+									{(state) =>
+										KEYCAP_THEME_OPTIONS.find(
+											(t) => t.value === state.selectedOption(),
+										)?.label
+									}
+								</KSelect.Value>
+								<KSelect.Icon>
+									<IconCapChevronDown class="shrink-0 size-3.5 text-ed-text-3" />
+								</KSelect.Icon>
+							</KSelect.Trigger>
+							<KSelect.Portal>
+								<PopperContent<typeof KSelect.Content>
+									as={KSelect.Content}
+									class={topSlideAnimateClasses}
+								>
+									<MenuItemList<typeof KSelect.Listbox>
+										class="overflow-y-auto max-h-48"
+										as={KSelect.Listbox}
+									/>
+								</PopperContent>
+							</KSelect.Portal>
+						</KSelect>
+					</Field>
+
+					<Field name="3D Keycaps Mode" inline>
+						<Toggle
+							checked={getSetting("keycapMode")}
+							onChange={(checked) => updateSetting("keycapMode", checked)}
+						/>
+					</Field>
+
+					<Field name="Floating Pod Chassis" inline>
+						<Toggle
+							checked={getSetting("showChassis")}
+							onChange={(checked) => updateSetting("showChassis", checked)}
+						/>
+					</Field>
+				</div>
+			</Section>
+
 			<Field name="Timing">
 				<div class="rounded-xl bg-ed-card-2 p-3 space-y-3">
 					<div class="grid grid-cols-[1fr_auto_1fr] gap-2 items-start">

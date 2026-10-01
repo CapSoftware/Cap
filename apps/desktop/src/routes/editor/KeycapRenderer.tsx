@@ -154,13 +154,18 @@ export const THEME_PALETTES: Record<KeycapTheme, { alpha: KeycapColorPalette; mo
 	},
 };
 
+export const KeycapUnit = (props: any) => SingleKeycap(props);
+
 export function SingleKeycap(props: {
-	keyText: string;
+	keyText?: string;
+	label?: string;
 	isModifier?: boolean;
 	style?: KeycapStyle;
 	theme?: KeycapTheme;
 	scale?: number;
+	is3D?: boolean;
 }) {
+	const text = () => props.keyText ?? props.label ?? "A";
 	const style = () => props.style || "pbt";
 	const theme = () => props.theme || "white";
 	const scale = () => props.scale || 1.0;
@@ -171,11 +176,11 @@ export function SingleKeycap(props: {
 		return isMod() ? themeData.mod : themeData.alpha;
 	});
 
-	const uid = () => `cap_${style()}_${props.keyText.replace(/[^a-zA-Z0-9]/g, "")}_${isMod() ? "m" : "a"}`;
+	const uid = () => `cap_${style()}_${text().replace(/[^a-zA-Z0-9]/g, "")}_${isMod() ? "m" : "a"}`;
 
 	// Label formatting
 	const displayLabel = () => {
-		const k = props.keyText;
+		const k = text();
 		const lower = k.toLowerCase();
 		if (lower === "command" || lower === "cmd" || lower === "meta" || lower === "lmeta" || lower === "rmeta") return "⌘";
 		if (lower === "control" || lower === "ctrl" || lower === "lcontrol" || lower === "rcontrol") return "Ctrl";

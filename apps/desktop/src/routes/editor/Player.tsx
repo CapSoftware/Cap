@@ -25,6 +25,7 @@ import {
 	SnapGuidesOverlay,
 } from "./CanvasElementsOverlay";
 import { CaptionOverlay } from "./CaptionOverlay";
+import { KeyboardOverlay } from "./KeyboardOverlay";
 import { CaptionsRegenerateBadge } from "./CaptionsRegenerateBadge";
 import { createCaptionTrackSegments } from "./captions";
 import { type EditorPreviewQuality, FPS, useEditorContext } from "./context";
@@ -585,6 +586,7 @@ function PreviewCanvas(props: {
 		performanceMode,
 		setPerformanceMode,
 		editorState,
+		setEditorState,
 	} = useEditorContext();
 
 	const hasRenderedFrame = () => canvasControls()?.hasRenderedFrame() ?? false;
@@ -785,6 +787,7 @@ function PreviewCanvas(props: {
 							<TextOverlay size={size()} />
 						</div>
 						<CaptionOverlay size={size()} />
+						<KeyboardOverlay size={size()} />
 						<SplitScreenOverlay size={size()} />
 						<SnapGuidesOverlay size={size()} />
 						<PerformanceOverlay size={size()} />
