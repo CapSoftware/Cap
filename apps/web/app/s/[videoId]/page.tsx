@@ -344,6 +344,7 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 			db()
 				.select({
 					id: videos.id,
+					folderId: videos.folderId,
 					name: videos.name,
 					orgId: videos.orgId,
 					createdAt: videos.createdAt,
@@ -440,7 +441,7 @@ async function AuthorizedContent({
 }: {
 	video: Omit<
 		InferSelectModel<typeof videos>,
-		"folderId" | "password" | "settings" | "ownerId"
+		"password" | "settings" | "ownerId"
 	> & {
 		owner: InferSelectModel<typeof users>;
 		sharedOrganization: { organizationId: Organisation.OrganisationId } | null;
@@ -897,7 +898,7 @@ async function AuthorizedContent({
 		},
 		sharedOrganizations: sharedOrganizations,
 		password: null,
-		folderId: null,
+		folderId: user?.id === video.owner.id ? video.folderId : null,
 		orgSettings: video.orgSettings || null,
 		organizationName: video.organizationName,
 		organizationIconUrl: resolvedImages.organization,
@@ -943,6 +944,10 @@ async function AuthorizedContent({
 			<Share
 				header={
 					<ShareHeader
+						canMoveToFolder={
+							user?.id === video.owner.id &&
+							user?.activeOrganizationId === video.orgId
+						}
 						data={{
 							...videoWithOrganizationInfo,
 							createdAt: video.metadata?.customCreatedAt
