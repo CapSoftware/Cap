@@ -10390,6 +10390,9 @@ mod preparing_presentation_parity_tests {
                 let mut expected = config.clone();
                 expected.camera.shape = expected_shape;
                 expected.camera.rounding = rounding;
+                if shape == CameraPreviewShape::Round {
+                    expected.camera.rounding_type = cap_project::CornerStyle::Rounded;
+                }
                 expected.camera.background_blur.mode = blur;
                 apply_recording_camera_preview_state(
                     &mut config,
