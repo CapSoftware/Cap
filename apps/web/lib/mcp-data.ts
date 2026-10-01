@@ -1,3 +1,4 @@
+import { directoryAccessAllowed } from "@cap/database/directory-sync/access";
 import "server-only";
 
 import { db } from "@cap/database";
@@ -51,7 +52,10 @@ export const listMcpCaps = async (
 		.innerJoin(organizations, eq(videos.orgId, organizations.id))
 		.where(
 			and(
-				eq(videos.ownerId, userId),
+				and(
+					eq(videos.ownerId, userId),
+					directoryAccessAllowed(userId, videos.orgId),
+				),
 				isNull(organizations.tombstoneAt),
 				search
 					? sql`${videos.name} LIKE ${`%${escapeAgentLikePattern(search)}%`} ESCAPE '!'`
@@ -111,7 +115,10 @@ const getOwnedCap = async (userId: User.UserId, id: string) => {
 		.where(
 			and(
 				eq(videos.id, Video.VideoId.make(id)),
-				eq(videos.ownerId, userId),
+				and(
+					eq(videos.ownerId, userId),
+					directoryAccessAllowed(userId, videos.orgId),
+				),
 				isNull(organizations.tombstoneAt),
 			),
 		)

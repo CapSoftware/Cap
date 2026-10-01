@@ -2,6 +2,7 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { directoryAccessAllowed } from "@cap/database/directory-sync/access";
 import { videos } from "@cap/database/schema";
 import type { Video } from "@cap/web-domain";
 import { and, eq, sql } from "drizzle-orm";
@@ -71,7 +72,15 @@ export async function editAiContent(
 					transcriptionStatus: videos.transcriptionStatus,
 				})
 				.from(videos)
-				.where(and(eq(videos.id, videoId), eq(videos.ownerId, user.id)))
+				.where(
+					and(
+						eq(videos.id, videoId),
+						and(
+							eq(videos.ownerId, user.id),
+							directoryAccessAllowed(user.id, videos.orgId),
+						),
+					),
+				)
 				.for("update");
 			if (!video) {
 				return {
@@ -121,7 +130,15 @@ export async function editAiContent(
 				await tx
 					.update(videos)
 					.set({ metadata: updatedMetadata })
-					.where(and(eq(videos.id, videoId), eq(videos.ownerId, user.id)));
+					.where(
+						and(
+							eq(videos.id, videoId),
+							and(
+								eq(videos.ownerId, user.id),
+								directoryAccessAllowed(user.id, videos.orgId),
+							),
+						),
+					);
 			}
 			return { success: true, data: next };
 		});

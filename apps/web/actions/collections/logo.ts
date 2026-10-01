@@ -2,6 +2,7 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { hasDirectoryAccess } from "@cap/database/directory-sync/access";
 import { folders, spaces } from "@cap/database/schema";
 import { ImageUploads } from "@cap/web-backend";
 import {
@@ -168,7 +169,8 @@ async function setFolderLogo(
 	// management; folders in the org-wide area (spaceId === organizationId)
 	// require org management; personal folders are creator-only.
 	const canManage = !folder.spaceId
-		? folder.createdById === userId
+		? folder.createdById === userId &&
+			(await hasDirectoryAccess(userId, folder.organizationId))
 		: folder.spaceId === folder.organizationId
 			? canManageSpace({
 					organizationRole: (

@@ -1,5 +1,6 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { directoryAccessAllowed } from "@cap/database/directory-sync/access";
 import {
 	comments,
 	folders,
@@ -144,7 +145,10 @@ export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
 		.leftJoin(organizations, eq(videos.orgId, organizations.id))
 		.where(
 			and(
-				eq(videos.ownerId, userId),
+				and(
+					eq(videos.ownerId, userId),
+					directoryAccessAllowed(userId, videos.orgId),
+				),
 				eq(organizations.id, user.activeOrganizationId),
 				isNull(organizations.tombstoneAt),
 			),
@@ -197,7 +201,10 @@ export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
 		.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
 		.where(
 			and(
-				eq(videos.ownerId, userId),
+				and(
+					eq(videos.ownerId, userId),
+					directoryAccessAllowed(userId, videos.orgId),
+				),
 				eq(videos.orgId, user.activeOrganizationId),
 				isNull(videos.folderId),
 				isNull(organizations.tombstoneAt),
@@ -238,7 +245,10 @@ export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
 		.where(
 			and(
 				eq(folders.organizationId, user.activeOrganizationId),
-				eq(folders.createdById, user.id),
+				and(
+					eq(folders.createdById, user.id),
+					directoryAccessAllowed(user.id, folders.organizationId),
+				),
 				isNull(folders.parentId),
 				isNull(folders.spaceId),
 			),

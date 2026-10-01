@@ -1,5 +1,6 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { hasDirectoryAccess } from "@cap/database/directory-sync/access";
 import { videos } from "@cap/database/schema";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
@@ -32,7 +33,11 @@ export async function POST(
 		}
 
 		const video = videoQuery[0];
-		if (!video || video.ownerId !== user.id) {
+		if (
+			!video ||
+			video.ownerId !== user.id ||
+			!(await hasDirectoryAccess(user.id, video.orgId))
+		) {
 			return Response.json({ error: "Unauthorized" }, { status: 403 });
 		}
 

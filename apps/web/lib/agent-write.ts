@@ -1,3 +1,4 @@
+import { directoryAccessAllowed } from "@cap/database/directory-sync/access";
 import "server-only";
 
 import { createHash } from "node:crypto";
@@ -578,7 +579,10 @@ export const updateAgentCap = Effect.fn("Agent.updateCap")(function* (input: {
 				.where(
 					and(
 						eq(Db.videos.id, input.videoId),
-						eq(Db.videos.ownerId, input.principal.id),
+						and(
+							eq(Db.videos.ownerId, input.principal.id),
+							directoryAccessAllowed(input.principal.id, Db.videos.orgId),
+						),
 					),
 				)
 				.limit(1)

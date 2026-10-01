@@ -13,13 +13,17 @@ import {
 	type MySqlTable,
 } from "drizzle-orm/mysql-core";
 import { Effect, Option } from "effect";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
 	Database,
 	type DbClient,
 } from "../../../../packages/web-backend/src/Database";
 import { ImageUploads } from "../../../../packages/web-backend/src/ImageUploads";
 import { UsersOnboarding } from "../../../../packages/web-backend/src/Users/UsersOnboarding";
+
+vi.mock("@cap/database/directory-sync/access", () => ({
+	directoryAccessAllowed: () => undefined,
+}));
 
 const USER_ID = User.UserId.make("onboarding-user");
 const OTHER_USER_ID = User.UserId.make("different-owner");

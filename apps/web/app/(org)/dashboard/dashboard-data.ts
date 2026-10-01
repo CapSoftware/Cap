@@ -1,6 +1,8 @@
 import { db } from "@cap/database";
 import type { userSelectProps } from "@cap/database/auth/session";
+import { directoryAccessAllowed } from "@cap/database/directory-sync/access";
 import {
+	directoryUsers,
 	notifications,
 	organizationInvites,
 	organizationMembers,
@@ -36,6 +38,7 @@ export type Organization = {
 		shareableLinkIconUrl: ImageUpload.ImageUrl | null;
 	};
 	members: (typeof organizationMembers.$inferSelect & {
+		directoryManaged?: boolean;
 		user: Pick<
 			typeof users.$inferSelect,
 			"id" | "name" | "email" | "lastName"
@@ -97,7 +100,10 @@ async function loadUserOrganizations(user: typeof userSelectProps) {
 			.where(
 				and(
 					isNull(organizations.tombstoneAt),
-					eq(organizations.ownerId, user.id),
+					and(
+						eq(organizations.ownerId, user.id),
+						directoryAccessAllowed(user.id, organizations.id),
+					),
 				),
 			),
 		db()
@@ -109,7 +115,10 @@ async function loadUserOrganizations(user: typeof userSelectProps) {
 			)
 			.where(
 				and(
-					eq(organizationMembers.userId, user.id),
+					and(
+						eq(organizationMembers.userId, user.id),
+						directoryAccessAllowed(user.id, organizationMembers.organizationId),
+					),
 					isNull(organizations.tombstoneAt),
 				),
 			),
@@ -153,7 +162,10 @@ async function loadActiveOrganizationRole(
 		.where(
 			and(
 				eq(organizationMembers.organizationId, activeOrganizationId),
-				eq(organizationMembers.userId, user.id),
+				and(
+					eq(organizationMembers.userId, user.id),
+					directoryAccessAllowed(user.id, organizationMembers.organizationId),
+				),
 			),
 		)
 		.limit(1);
@@ -207,7 +219,10 @@ function loadSpaces(
 						and(
 							eq(spaces.organizationId, activeOrganizationId),
 							or(
-								eq(spaces.createdById, user.id),
+								and(
+									eq(spaces.createdById, user.id),
+									directoryAccessAllowed(user.id, spaces.organizationId),
+								),
 								eq(spaces.privacy, "Public"),
 								sql`EXISTS (
           SELECT 1 FROM space_members 
@@ -351,7 +366,10 @@ async function loadActiveOrganizationData(
 					.where(
 						and(
 							eq(videos.orgId, activeOrgInfo.id),
-							eq(videos.ownerId, user.id),
+							and(
+								eq(videos.ownerId, user.id),
+								directoryAccessAllowed(user.id, videos.orgId),
+							),
 						),
 					)
 			: Promise.resolve<{ value: number }[]>([]),
@@ -403,6 +421,10 @@ export async function getDashboardData(user: typeof userSelectProps) {
 								db
 									.select({
 										member: organizationMembers,
+										directoryManaged:
+											sql<boolean>`EXISTS (SELECT 1 FROM ${directoryUsers} WHERE ${directoryUsers.organizationId} = ${organizationMembers.organizationId} AND ${directoryUsers.userId} = ${organizationMembers.userId})`.mapWith(
+												Boolean,
+											),
 										user: {
 											id: users.id,
 											name: users.name,
@@ -516,6 +538,7 @@ export async function getDashboardData(user: typeof userSelectProps) {
 									}
 									return {
 										...m.member,
+										directoryManaged: m.directoryManaged,
 										user: {
 											...m.user,
 											image: m.user.image

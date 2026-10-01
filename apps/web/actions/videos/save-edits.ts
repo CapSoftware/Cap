@@ -3,6 +3,7 @@
 import { randomUUID } from "node:crypto";
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { hasDirectoryAccess } from "@cap/database/directory-sync/access";
 import { videoEdits, videos, videoUploads } from "@cap/database/schema";
 import type { VideoEditSpec } from "@cap/database/types";
 import { serverEnv } from "@cap/env";
@@ -188,7 +189,11 @@ async function loadEditableVideo(
 		.where(eq(videos.id, videoId));
 
 	if (!video) throw new Error("Video not found");
-	if (video.ownerId !== user.id) throw new Error("Forbidden");
+	if (
+		video.ownerId !== user.id ||
+		!(await hasDirectoryAccess(user.id, video.orgId))
+	)
+		throw new Error("Forbidden");
 	if (video.isScreenshot) throw new Error("Screenshots cannot be edited");
 	if (!isMp4BackedVideo(video.source)) {
 		throw new Error("Only processed MP4 videos can be edited");

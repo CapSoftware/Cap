@@ -1,4 +1,5 @@
 import { updateIfDefined } from "@cap/database";
+import { directoryAccessAllowed } from "@cap/database/directory-sync/access";
 import * as Db from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import { userIsPro } from "@cap/utils";
@@ -646,7 +647,10 @@ app.post(
 								.where(
 									and(
 										eq(Db.videos.id, videoId),
-										eq(Db.videos.ownerId, user.id),
+										and(
+											eq(Db.videos.ownerId, user.id),
+											directoryAccessAllowed(user.id, Db.videos.orgId),
+										),
 									),
 								);
 							await tx
@@ -843,7 +847,10 @@ app.post(
 								.where(
 									and(
 										eq(Db.videos.id, Video.VideoId.make(videoId)),
-										eq(Db.videos.ownerId, user.id),
+										and(
+											eq(Db.videos.ownerId, user.id),
+											directoryAccessAllowed(user.id, Db.videos.orgId),
+										),
 									),
 								),
 						);
@@ -926,7 +933,10 @@ app.post(
 								.where(
 									and(
 										eq(Db.videos.id, Video.VideoId.make(videoId)),
-										eq(Db.videos.ownerId, user.id),
+										and(
+											eq(Db.videos.ownerId, user.id),
+											directoryAccessAllowed(user.id, Db.videos.orgId),
+										),
 									),
 								);
 							await tx

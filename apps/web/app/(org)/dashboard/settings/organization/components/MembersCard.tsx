@@ -285,19 +285,28 @@ export const MembersCard = ({ setIsInviteDialogOpen }: MembersCardProps) => {
 								targetRole: memberRole,
 								nextRole: assignableRole,
 							});
-							const canRemoveMember = canRemoveOrganizationMember({
-								actorRole: currentRole,
-								actorUserId: user.id,
-								targetUserId: member.user.id,
-								ownerId: activeOrganization.organization.ownerId,
-								targetRole: memberRole,
-							});
+							const canRemoveMember =
+								!member.directoryManaged &&
+								canRemoveOrganizationMember({
+									actorRole: currentRole,
+									actorUserId: user.id,
+									targetUserId: member.user.id,
+									ownerId: activeOrganization.organization.ownerId,
+									targetRole: memberRole,
+								});
 							const roleUpdating =
 								updateRoleMutation.isPending &&
 								updateRoleMutation.variables?.memberId === member.id;
 							return (
 								<TableRow key={member.id}>
-									<TableCell>{member.user.name}</TableCell>
+									<TableCell>
+										{member.user.name}
+										{member.directoryManaged ? (
+											<span className="block text-xs text-gray-10">
+												Managed by your identity provider
+											</span>
+										) : null}
+									</TableCell>
 									<TableCell>{member.user.email}</TableCell>
 									<TableCell>
 										{memberIsOwner || memberRole === "owner" ? (

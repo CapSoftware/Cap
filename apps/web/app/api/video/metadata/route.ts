@@ -1,5 +1,6 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { hasDirectoryAccess } from "@cap/database/directory-sync/access";
 import { videos } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
 import type { NextRequest } from "next/server";
@@ -26,7 +27,10 @@ export async function PUT(request: NextRequest) {
 		return Response.json({ error: true }, { status: 401 });
 	}
 
-	if (result.ownerId !== userId) {
+	if (
+		result.ownerId !== userId ||
+		!(await hasDirectoryAccess(userId, result.orgId))
+	) {
 		return Response.json({ error: true }, { status: 401 });
 	}
 

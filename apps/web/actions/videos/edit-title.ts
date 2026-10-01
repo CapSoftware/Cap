@@ -2,6 +2,7 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { hasDirectoryAccess } from "@cap/database/directory-sync/access";
 import { videos } from "@cap/database/schema";
 import type { Video } from "@cap/web-domain";
 import { eq, sql } from "drizzle-orm";
@@ -27,7 +28,10 @@ export async function editTitle(videoId: Video.VideoId, title: string) {
 		throw new Error("Video not found");
 	}
 
-	if (video.ownerId !== userId) {
+	if (
+		video.ownerId !== userId ||
+		!(await hasDirectoryAccess(userId, video.orgId))
+	) {
 		throw new Error("You don't have permission to update this video");
 	}
 

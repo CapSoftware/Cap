@@ -2,6 +2,7 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { hasDirectoryAccess } from "@cap/database/directory-sync/access";
 import { videos } from "@cap/database/schema";
 import { Storage } from "@cap/web-backend";
 import type { Video } from "@cap/web-domain";
@@ -48,7 +49,11 @@ export async function triggerVideoProcessing({
 		.where(eq(videos.id, videoId));
 
 	if (!video) throw new Error("Video not found");
-	if (video.ownerId !== user.id) throw new Error("Unauthorized");
+	if (
+		video.ownerId !== user.id ||
+		!(await hasDirectoryAccess(user.id, video.orgId))
+	)
+		throw new Error("Unauthorized");
 
 	await verifyRawFileUploaded(video, rawFileKey);
 

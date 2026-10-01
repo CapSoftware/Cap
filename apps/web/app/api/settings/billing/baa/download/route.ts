@@ -1,5 +1,6 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { hasDirectoryAccess } from "@cap/database/directory-sync/access";
 import { organizations, signedBaas } from "@cap/database/schema";
 import { Organisation } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
@@ -25,7 +26,11 @@ export async function GET(request: NextRequest) {
 		.where(eq(organizations.id, organizationId))
 		.limit(1);
 
-	if (!organization || organization.ownerId !== user.id) {
+	if (
+		!organization ||
+		organization.ownerId !== user.id ||
+		!(await hasDirectoryAccess(user.id, organizationId))
+	) {
 		return Response.json({ error: "Not found" }, { status: 404 });
 	}
 

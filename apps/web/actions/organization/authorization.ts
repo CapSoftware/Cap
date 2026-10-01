@@ -1,4 +1,5 @@
 import { db } from "@cap/database";
+import { directoryAccessAllowed } from "@cap/database/directory-sync/access";
 import { organizationMembers, organizations } from "@cap/database/schema";
 import type { Organisation, User } from "@cap/web-domain";
 import { and, eq, isNull, or } from "drizzle-orm";
@@ -34,7 +35,10 @@ export async function getOrganizationAccess(
 			organizationMembers,
 			and(
 				eq(organizationMembers.organizationId, organizations.id),
-				eq(organizationMembers.userId, userId),
+				and(
+					eq(organizationMembers.userId, userId),
+					directoryAccessAllowed(userId, organizationMembers.organizationId),
+				),
 			),
 		)
 		.where(
@@ -42,8 +46,14 @@ export async function getOrganizationAccess(
 				eq(organizations.id, organizationId),
 				isNull(organizations.tombstoneAt),
 				or(
-					eq(organizations.ownerId, userId),
-					eq(organizationMembers.userId, userId),
+					and(
+						eq(organizations.ownerId, userId),
+						directoryAccessAllowed(userId, organizations.id),
+					),
+					and(
+						eq(organizationMembers.userId, userId),
+						directoryAccessAllowed(userId, organizationMembers.organizationId),
+					),
 				),
 			),
 		)

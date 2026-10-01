@@ -2,6 +2,7 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { directoryAccessAllowed } from "@cap/database/directory-sync/access";
 import { nanoId } from "@cap/database/helpers";
 import {
 	agentApiKeys,
@@ -59,15 +60,30 @@ export async function patchAccountSettings(
 				organizationMembers,
 				and(
 					eq(organizations.id, organizationMembers.organizationId),
-					eq(organizationMembers.userId, currentUser.id),
+					and(
+						eq(organizationMembers.userId, currentUser.id),
+						directoryAccessAllowed(
+							currentUser.id,
+							organizationMembers.organizationId,
+						),
+					),
 				),
 			)
 			.where(
 				and(
 					eq(organizations.id, defaultOrgId),
 					or(
-						eq(organizations.ownerId, currentUser.id),
-						eq(organizationMembers.userId, currentUser.id),
+						and(
+							eq(organizations.ownerId, currentUser.id),
+							directoryAccessAllowed(currentUser.id, organizations.id),
+						),
+						and(
+							eq(organizationMembers.userId, currentUser.id),
+							directoryAccessAllowed(
+								currentUser.id,
+								organizationMembers.organizationId,
+							),
+						),
 					),
 				),
 			)

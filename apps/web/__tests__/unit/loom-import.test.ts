@@ -745,6 +745,7 @@ describe("importFromLoom", () => {
 	it("provisions missing CSV users and starts imports for them", async () => {
 		whereMock
 			.mockReturnValueOnce(withLimit([]))
+			.mockReturnValueOnce({ for: vi.fn().mockResolvedValue([]) })
 			.mockReturnValueOnce(withLimit([]))
 			.mockReturnValueOnce(withLimit([]))
 			.mockReturnValueOnce(withLimit([]))
@@ -1157,3 +1158,10 @@ describe("importFromLoom", () => {
 		expect(revalidatePathMock).toHaveBeenCalledWith("/dashboard");
 	});
 });
+
+vi.mock("@cap/database/directory-sync/access", () => ({
+	directoryAccessAllowed: () => undefined,
+	directorySpaceAccessAllowed: () => undefined,
+	hasDirectoryAccess: async () => true,
+	requireDirectoryMembership: async () => undefined,
+}));

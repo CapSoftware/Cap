@@ -74,12 +74,17 @@ vi.mock("@cap/database/emails/video-viewer-invite", () => ({
 }));
 vi.mock("@cap/database/helpers", () => ({
 	nanoId: () => "grant-1",
+	nanoIdLength: 15,
 }));
-vi.mock("@cap/database/schema", () => schema);
+vi.mock("@cap/database/schema", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@cap/database/schema")>()),
+	...schema,
+}));
 vi.mock("@cap/env", () => ({
 	serverEnv: () => ({ WEB_URL: "https://cap.test" }),
 }));
-vi.mock("drizzle-orm", () => ({
+vi.mock("drizzle-orm", async (importOriginal) => ({
+	...(await importOriginal<typeof import("drizzle-orm")>()),
 	and: vi.fn((...parts: unknown[]) => parts),
 	eq: vi.fn((column: unknown, value: unknown) => ({ column, value })),
 	isNull: vi.fn((column: unknown) => ({ column })),

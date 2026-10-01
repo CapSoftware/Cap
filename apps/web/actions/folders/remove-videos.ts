@@ -2,6 +2,7 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { directoryAccessAllowed } from "@cap/database/directory-sync/access";
 import {
 	folders,
 	sharedVideos,
@@ -44,7 +45,15 @@ export async function removeVideosFromFolder(
 		const userVideos = await db()
 			.select({ id: videos.id })
 			.from(videos)
-			.where(and(eq(videos.ownerId, user.id), inArray(videos.id, videoIds)));
+			.where(
+				and(
+					and(
+						eq(videos.ownerId, user.id),
+						directoryAccessAllowed(user.id, videos.orgId),
+					),
+					inArray(videos.id, videoIds),
+				),
+			);
 
 		const validVideoIds = userVideos.map((v) => v.id);
 
