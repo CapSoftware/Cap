@@ -75,6 +75,12 @@ function createServerEnv() {
 			WORKOS_CLIENT_ID: z.string().optional(),
 			WORKOS_API_KEY: z.string().optional(),
 
+			/// Generic OIDC
+			OIDC_ISSUER: z.string().optional(),
+			OIDC_CLIENT_ID: z.string().optional(),
+			OIDC_CLIENT_SECRET: z.string().optional(),
+			OIDC_NAME: z.string().optional(),
+
 			/// Settings
 			CAP_VIDEOS_DEFAULT_PUBLIC: boolString(true).describe(
 				"Should videos be public or private by default",
