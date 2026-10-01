@@ -49,6 +49,7 @@ mod recording_settings;
 mod recording_telemetry;
 mod recordings_locations;
 mod recovery;
+mod render_frame_event;
 mod screenshot_editor;
 mod startup;
 #[cfg(debug_assertions)]
@@ -8815,15 +8816,11 @@ async fn create_editor_instance_impl(
         instance.install_preparing_handoff(handoff).await?;
     }
 
-    let event_id = RenderFrameEvent::listen_any(&app, {
+    let event_id = RenderFrameEvent::listen_checked(&app, {
         let preview_tx = instance.preview_tx.clone();
         move |e| {
             preview_tx.send_modify(|v| {
-                *v = Some((
-                    e.payload.frame_number,
-                    e.payload.fps,
-                    e.payload.resolution_base,
-                ));
+                *v = Some((e.frame_number, e.fps, e.resolution_base));
             });
         }
     });
