@@ -1332,6 +1332,8 @@ async fn build_instant_recording_actor(
                 max_capture_size,
                 timestamps.system_time(),
                 inputs.capture_system_audio,
+                #[cfg(windows)]
+                inputs.capture_target.window(),
                 #[cfg(target_os = "linux")]
                 crate::sources::screen_capture::LinuxCaptureSource::from_target(
                     &inputs.capture_target,

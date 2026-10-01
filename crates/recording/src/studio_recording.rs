@@ -3270,6 +3270,8 @@ async fn create_segment_pipeline(
             max_capture_size,
             start_time.system_time(),
             base_inputs.capture_system_audio,
+            #[cfg(windows)]
+            capture_target.window(),
             #[cfg(target_os = "linux")]
             sources::screen_capture::LinuxCaptureSource::from_target(&capture_target),
             #[cfg(windows)]
