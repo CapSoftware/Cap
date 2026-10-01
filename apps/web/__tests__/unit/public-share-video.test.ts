@@ -9,8 +9,9 @@ const candidate = (
 	id: Video.VideoId.make("video123"),
 	name: "Demo",
 	ownerId: "owner123",
-	ownerName: "Richie",
+	ownerName: "Example Owner",
 	public: true,
+	videoSharingRestrictedToOrg: false,
 	hasPassword: false,
 	hasInheritedPassword: false,
 	allowedEmailDomain: null,
@@ -32,6 +33,7 @@ describe("public share video eligibility", () => {
 
 	it.each([
 		{ public: false },
+		{ videoSharingRestrictedToOrg: true },
 		{ hasPassword: true },
 		{ hasInheritedPassword: true },
 		{ allowedEmailDomain: "@cap.so" },

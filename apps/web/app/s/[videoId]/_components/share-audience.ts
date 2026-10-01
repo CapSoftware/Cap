@@ -18,6 +18,7 @@ export interface ShareAudience {
 export interface ShareAudienceInput {
 	isPublic: boolean;
 	allowedEmailDomain?: string | null;
+	videoSharingRestrictedToOrg?: boolean;
 	/** Includes an inherited password from a space or organization. */
 	passwordProtected: boolean;
 	/**
@@ -43,10 +44,19 @@ const listNames = (names: string[], total: number): string => {
 export const describeShareAudience = ({
 	isPublic,
 	allowedEmailDomain,
+	videoSharingRestrictedToOrg = false,
 	passwordProtected,
 	audienceNames,
 	viewerCount = 0,
 }: ShareAudienceInput): ShareAudience => {
+	if (videoSharingRestrictedToOrg) {
+		return {
+			kind: "spaces",
+			label: "Organization only",
+			tooltip:
+				"Only signed-in members of this recording’s organization can view it. This organization setting overrides individual sharing settings.",
+		};
+	}
 	if (isPublic) {
 		if (allowedEmailDomain?.trim()) {
 			return {

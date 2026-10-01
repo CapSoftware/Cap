@@ -1,3 +1,4 @@
+import { organizationVideoAccessCondition } from "@cap/database/video-organization-access";
 import "server-only";
 
 import {
@@ -175,6 +176,7 @@ export const getVideosByFolderId = Effect.fn(function* (
 ) {
 	if (!folderId) throw new Error("Folder ID is required");
 	const db = yield* Database;
+	const user = yield* CurrentUser;
 	const imageUploads = yield* ImageUploads;
 
 	const videoData = yield* db.use((db) =>
@@ -231,17 +233,20 @@ export const getVideosByFolderId = Effect.fn(function* (
 			.leftJoin(users, eq(videos.ownerId, users.id))
 			.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
 			.where(
-				root.variant === "space"
-					? and(
-							eq(spaceVideos.folderId, folderId),
-							isNull(organizations.tombstoneAt),
-						)
-					: root.variant === "org"
+				and(
+					organizationVideoAccessCondition(user.id),
+					root.variant === "space"
 						? and(
-								eq(sharedVideos.folderId, folderId),
+								eq(spaceVideos.folderId, folderId),
 								isNull(organizations.tombstoneAt),
 							)
-						: eq(videos.folderId, folderId),
+						: root.variant === "org"
+							? and(
+									eq(sharedVideos.folderId, folderId),
+									isNull(organizations.tombstoneAt),
+								)
+							: eq(videos.folderId, folderId),
+				),
 			)
 			.groupBy(
 				videos.id,

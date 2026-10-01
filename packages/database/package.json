@@ -65,6 +65,7 @@
 		"./auth/sso-state": "./auth/sso-state.ts",
 		"./schema": "./schema.ts",
 		"./video-sharing-default": "./video-sharing-default.ts",
+		"./video-organization-access": "./video-organization-access.ts",
 		"./loops/*": "./loops/*.ts",
 		"./crypto": "./crypto.ts",
 		"./helpers": "./helpers.ts",

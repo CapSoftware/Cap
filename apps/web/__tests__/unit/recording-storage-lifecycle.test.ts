@@ -158,6 +158,11 @@ function databaseFixture(video = recording()) {
 	const mutations: DatabaseMutation[] = [];
 	const events: string[] = [];
 	const objectDeleteConditions: SQL[] = [];
+	const organization = {
+		allowedEmailDomain: null,
+		videoSharingRestrictedToOrg: false,
+		tombstoneAt: null,
+	};
 	let beforeJobDelete: (() => Promise<void>) | undefined;
 	let beforePrepareDelete: (() => Promise<void>) | undefined;
 	let loseNextCreateResponse = false;
@@ -167,6 +172,7 @@ function databaseFixture(video = recording()) {
 		return id;
 	};
 	const read = (table: unknown, condition: SQL) => {
+		if (table === Db.organizations) return [organization];
 		const source =
 			table === Db.videos
 				? rows
@@ -275,18 +281,36 @@ function databaseFixture(video = recording()) {
 	mocks.database.mockReturnValue({
 		select: () => ({
 			from: (table: unknown) => ({
-				where: async (condition: SQL) => read(table, condition),
-				leftJoin: (joined: unknown) => ({
-					where: async (condition: SQL) => {
-						if (table !== Db.videoUploads || joined !== Db.videoProcessingJobs)
-							throw new Error("Unexpected joined progress read");
-						const id = idFrom(condition);
-						const upload = uploads.get(id);
-						return upload
-							? [{ ...upload, processingJobState: jobs.get(id)?.state ?? null }]
-							: [];
-					},
-				}),
+				where: (condition: SQL) => {
+					const result = read(table, condition);
+					return Object.assign(Promise.resolve(result), {
+						limit: async () => result,
+					});
+				},
+				leftJoin: (joined: unknown) =>
+					table === Db.organizations
+						? {
+								where: async () => [],
+							}
+						: {
+								where: async (condition: SQL) => {
+									if (
+										table !== Db.videoUploads ||
+										joined !== Db.videoProcessingJobs
+									)
+										throw new Error("Unexpected joined progress read");
+									const id = idFrom(condition);
+									const upload = uploads.get(id);
+									return upload
+										? [
+												{
+													...upload,
+													processingJobState: jobs.get(id)?.state ?? null,
+												},
+											]
+										: [];
+								},
+							},
 			}),
 		}),
 		delete: (table: unknown) => ({
@@ -300,6 +324,7 @@ function databaseFixture(video = recording()) {
 		transaction,
 	});
 	return {
+		organization,
 		rows,
 		jobs,
 		uploads,
@@ -797,6 +822,31 @@ afterEach(() => {
 });
 
 describe("recording storage lifecycle", () => {
+	it.each(["thumbnail", "upload-status"] as const)(
+		"denies a former owner access to %s when the organization is locked",
+		async (operation) => {
+			const database = databaseFixture();
+			database.organization.videoSharingRestrictedToOrg = true;
+			const storage = await storageFixture([]);
+			const result = await Effect.runPromiseExit(
+				Effect.gen(function* () {
+					const videos = yield* Videos;
+					if (operation === "thumbnail") yield* videos.getThumbnailURL(videoId);
+					else yield* videos.getUploadProgress(videoId);
+				}).pipe(
+					Effect.provide(Videos.Default),
+					Effect.provideService(CurrentUser, currentUser),
+					Effect.provide(Logger.remove(Logger.defaultLogger)),
+				),
+			);
+			expect(Exit.isFailure(result)).toBe(true);
+			if (Exit.isFailure(result))
+				expect(Cause.pretty(result.cause)).toContain(
+					"organization_only_denied",
+				);
+			expect(storage.requests).toEqual([]);
+		},
+	);
 	it.each(["desktopMP4", "webMP4"] as const)(
 		"uses the published %s thumbnail without discovering older objects",
 		async (type) => {

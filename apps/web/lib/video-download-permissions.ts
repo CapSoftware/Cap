@@ -5,6 +5,7 @@ import {
 	spaceMembers,
 	spaceVideos,
 } from "@cap/database/schema";
+import { getVideoOrganizationAccess } from "@cap/database/video-organization-access";
 import type { User, Video } from "@cap/web-domain";
 import { and, eq, inArray } from "drizzle-orm";
 
@@ -22,6 +23,9 @@ export async function canUserDownloadVideo({
 	ownerId: User.UserId;
 	videoId: Video.VideoId;
 }): Promise<boolean> {
+	const organizationAccess = await getVideoOrganizationAccess(videoId, userId);
+	if (!organizationAccess?.allowed) return false;
+	if (organizationAccess.restricted) return true;
 	if (userId === ownerId) return true;
 
 	const sharedOrgs = await db()

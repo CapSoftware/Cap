@@ -1,10 +1,14 @@
 import { db } from "@cap/database";
 import { users, videos } from "@cap/database/schema";
-import { findScreenshotObjectKey, Storage } from "@cap/web-backend";
+import {
+	findScreenshotObjectKey,
+	Storage,
+	VideosPolicy,
+} from "@cap/web-backend";
 import { getPublishedRecordingThumbnailKey } from "@cap/web-backend/src/Storage/recording-output";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
-import { Effect } from "effect";
+import { Effect, Option } from "effect";
 import { extractPosterFrameDataUri } from "@/lib/og/poster-frame";
 import { renderVideoOg } from "@/lib/og/video-og";
 import { runPromise } from "@/lib/server";
@@ -16,9 +20,17 @@ export async function generateVideoOgImage(videoId: Video.VideoId) {
 	if (!videoData) return renderVideoOg({ kind: "not-found" });
 
 	const { video, ownerName } = videoData;
-
 	if (video.password) return renderVideoOg({ kind: "password" });
 	if (video.public === false) return renderVideoOg({ kind: "locked" });
+	const publiclyViewable = await Effect.gen(function* () {
+		const policy = yield* VideosPolicy;
+		yield* policy.canViewLoaded(video, Option.fromNullable(video.password));
+		return true;
+	}).pipe(
+		Effect.catchAll(() => Effect.succeed(false)),
+		runPromise,
+	);
+	if (!publiclyViewable) return renderVideoOg({ kind: "locked" });
 
 	let screenshotUrl: string | undefined;
 

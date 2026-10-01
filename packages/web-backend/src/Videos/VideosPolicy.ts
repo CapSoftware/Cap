@@ -37,9 +37,21 @@ export type VideosPolicyDeps = {
 			userId: User.UserId,
 			videoId: Video.VideoId,
 		) => Effect.Effect<readonly { membershipId: string }[], DatabaseError>;
-		allowedEmailDomain: (
+		videoSharingSettings: (orgId: Organisation.OrganisationId) => Effect.Effect<
+			Option.Option<{
+				allowedEmailDomain: string | null;
+				videoSharingRestrictedToOrg: boolean;
+				tombstoneAt: Date | null;
+			}>,
+			DatabaseError
+		>;
+		membership: (
+			userId: User.UserId,
 			orgId: Organisation.OrganisationId,
-		) => Effect.Effect<Option.Option<string>, DatabaseError>;
+		) => Effect.Effect<
+			Option.Option<{ membershipId: string | null }>,
+			DatabaseError
+		>;
 	};
 	spacesRepo: {
 		membershipForVideo: (
@@ -64,6 +76,28 @@ const decideCanView = (
 	password: Option.Option<string>,
 ) =>
 	Effect.gen(function* () {
+		const organization = yield* orgsRepo.videoSharingSettings(video.orgId);
+		if (Option.isSome(organization)) {
+			if (organization.value.tombstoneAt) return false;
+			if (organization.value.videoSharingRestrictedToOrg) {
+				if (Option.isNone(user)) {
+					return yield* new Policy.PolicyDeniedError({
+						reason: "organization_only_login_required",
+					});
+				}
+				const membership = yield* orgsRepo.membership(
+					user.value.id,
+					video.orgId,
+				);
+				if (Option.isNone(membership)) {
+					return yield* new Policy.PolicyDeniedError({
+						reason: "organization_only_denied",
+					});
+				}
+				return true;
+			}
+		}
+
 		if (Option.isSome(user)) {
 			const userId = user.value.id;
 			if (userId === video.ownerId) return true;
@@ -114,9 +148,8 @@ const decideCanView = (
 			return true;
 		}
 
-		const allowedEmails = yield* orgsRepo.allowedEmailDomain(video.orgId);
-		const restriction = Option.isSome(allowedEmails)
-			? allowedEmails.value.trim()
+		const restriction = Option.isSome(organization)
+			? (organization.value.allowedEmailDomain?.trim() ?? "")
 			: "";
 
 		if (restriction.length > 0) {
