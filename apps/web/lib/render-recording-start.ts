@@ -56,7 +56,6 @@ export async function loadRenderVideo(payload: RecordingRenderPayload) {
 	};
 }
 
-/** Whether the render can start: its sources are in, or it was replaced. */
 export async function recordingSourcesState(payload: RecordingRenderPayload) {
 	const loaded = await loadRenderVideo(payload);
 	if (!loaded) return "superseded" as const;
@@ -69,7 +68,6 @@ export async function recordingSourcesState(payload: RecordingRenderPayload) {
 		: ("waiting" as const);
 }
 
-/** The farm-prepared start, run by the workflow or by the finished upload. */
 export async function startRecordingRenderDirectly(
 	payload: RecordingRenderPayload,
 ) {

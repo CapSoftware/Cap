@@ -15,8 +15,6 @@ const TIMELINE_MARKING_RESOLUTIONS = [
 
 const SEGMENT_RENDER_PADDING = 2;
 
-/// Narrower than this, a segment is drawn as part of its track's runs
-/// instead of as its own element.
 const MIN_SEGMENT_PX = 2;
 
 type TimelineContextValue = {
