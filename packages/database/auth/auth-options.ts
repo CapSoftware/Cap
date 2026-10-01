@@ -60,6 +60,17 @@ export async function decodeSessionToken(
 	return token;
 }
 
+const OIDC_PROVIDER_ID = "oidc";
+
+type OidcClaims = {
+	sub: string;
+	email?: string;
+	email_verified?: boolean;
+	name?: string;
+	preferred_username?: string;
+	picture?: string;
+};
+
 export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 	let _adapter: Adapter | undefined;
 	let _providers: Provider[] | undefined;
@@ -94,13 +105,10 @@ export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 			const oidcClientId = serverEnv().OIDC_CLIENT_ID;
 			const oidcClientSecret = serverEnv().OIDC_CLIENT_SECRET;
 			_providers = [
-				// Any OpenID Connect provider, described by its discovery document.
-				// Email linking matches the WorkOS provider below: an operator who
-				// configures this controls the issuer and its email claim.
 				...(oidcIssuer && oidcClientId && oidcClientSecret
 					? [
 							{
-								id: "oidc",
+								id: OIDC_PROVIDER_ID,
 								name: serverEnv().OIDC_NAME || "SSO",
 								type: "oauth" as const,
 								wellKnown: `${oidcIssuer.replace(/\/$/, "")}/.well-known/openid-configuration`,
@@ -110,16 +118,19 @@ export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 								idToken: true,
 								checks: ["state" as const, "pkce" as const],
 								authorization: { params: { scope: "openid email profile" } },
+								// Linking is gated on a verified email in the signIn callback,
+								// because a generic issuer is not known to verify addresses.
 								allowDangerousEmailAccountLinking: true,
-								profile(profile: Record<string, any>) {
+								profile(profile: OidcClaims) {
+									const email = profile.email?.trim().toLowerCase();
 									return {
 										id: profile.sub,
 										name:
 											profile.name ||
 											profile.preferred_username ||
-											profile.email?.split("@")[0] ||
+											email?.split("@")[0] ||
 											profile.sub,
-										email: profile.email?.trim().toLowerCase(),
+										email,
 										image: profile.picture ?? null,
 									};
 								},
@@ -245,6 +256,12 @@ export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 		},
 		callbacks: {
 			async signIn({ user, email, credentials, account, profile }) {
+				if (account?.provider === OIDC_PROVIDER_ID) {
+					const claims = profile as OidcClaims | undefined;
+					if (!claims?.email || claims.email_verified !== true) {
+						return "/login?error=OidcEmailUnverified";
+					}
+				}
 				if (account?.provider === "workos") {
 					validatedSsoIdentity = null;
 					try {

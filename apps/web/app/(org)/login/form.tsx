@@ -442,6 +442,7 @@ export function LoginForm() {
 											loading={loading}
 											oauthError={oauthError}
 											handleGoogleSignIn={handleGoogleSignIn}
+											handleOidcSignIn={handleOidcSignIn}
 										/>
 									</motion.form>
 								)}
@@ -542,6 +543,7 @@ const NormalLogin = ({
 	loading,
 	oauthError,
 	handleGoogleSignIn,
+	handleOidcSignIn,
 }: {
 	setShowOrgInput: (show: boolean) => void;
 	email: string;
@@ -550,6 +552,7 @@ const NormalLogin = ({
 	loading: boolean;
 	oauthError: boolean;
 	handleGoogleSignIn: () => void;
+	handleOidcSignIn: () => void;
 }) => {
 	const publicEnv = usePublicEnv();
 	const emailInputId = useId();
