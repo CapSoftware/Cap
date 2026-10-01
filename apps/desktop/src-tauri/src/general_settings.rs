@@ -661,8 +661,6 @@ fn machine_has_notched_display() -> bool {
 }
 
 pub fn init(app: &AppHandle) {
-    println!("Initializing GeneralSettingsStore");
-
     let mut store = match GeneralSettingsStore::get(app) {
         Ok(Some(store)) => store,
         Ok(None) => GeneralSettingsStore::default(),
@@ -711,8 +709,6 @@ pub fn init(app: &AppHandle) {
 
     #[cfg(target_os = "macos")]
     crate::permissions::sync_macos_dock_visibility(app);
-
-    println!("GeneralSettingsState managed");
 }
 
 fn register_bundled_muxer_binary(_app: &AppHandle) {
