@@ -137,18 +137,6 @@ impl CursorShapeWindows {
                 raw: include_str!("../assets/windows/pen.svg"),
                 hotspot: (0.055, 0.945),
             },
-            // Self::ScrolNS => todo!(),
-            // Self::ScrollWE => todo!(),
-            // Self::ScrollNSEW => todo!(),
-            // Self::ScrollN => todo!(),
-            // Self::ScrollS => todo!(),
-            // Self::ScrollW => todo!(),
-            // Self::ScrollE => todo!(),
-            // Self::ScrollNW => todo!(),
-            // Self::ScrollNE => todo!(),
-            // Self::ScrollSW => todo!(),
-            // Self::ScrollSE => todo!(),
-            // Self::ArrowCD => todo!(),
             _ => return None,
         })
     }

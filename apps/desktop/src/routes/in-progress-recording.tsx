@@ -71,8 +71,6 @@ const NO_WEBCAM = "No Webcam";
 const FAKE_WINDOW_BOUNDS_NAME = "recording-controls-interactive-area";
 
 export default function () {
-	console.log("[in-progress-recording] Wrapper rendering");
-
 	document.documentElement.setAttribute("data-transparent-window", "true");
 	document.body.style.background = "transparent";
 
@@ -80,8 +78,6 @@ export default function () {
 }
 
 function InProgressRecordingInner() {
-	console.log("[in-progress-recording] Inner component rendering");
-
 	const [state, setState] = createSignal<State>(
 		window.COUNTDOWN === 0
 			? { variant: "initializing" }

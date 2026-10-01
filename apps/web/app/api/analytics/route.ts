@@ -50,9 +50,7 @@ export async function GET(request: NextRequest) {
 	}
 
 	try {
-		console.log("videoId", videoId);
 		const result = await getVideoAnalytics(videoId, { rangeDays });
-		console.log("result", result);
 		return Response.json({ count: result.count }, { status: 200 });
 	} catch (error) {
 		console.error("Error fetching video analytics:", error);

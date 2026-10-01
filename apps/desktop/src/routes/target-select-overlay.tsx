@@ -1268,15 +1268,6 @@ function Inner() {
 							persistLockedSelection();
 							if (options.mode === "screenshot" && isValid()) {
 								const cropBounds = crop();
-								const displayInfo = areaDisplayInfo.data;
-								console.log("[Screenshot Debug] crop bounds:", cropBounds);
-								console.log("[Screenshot Debug] display info:", displayInfo);
-								console.log(
-									"[Screenshot Debug] window.innerWidth/Height:",
-									window.innerWidth,
-									window.innerHeight,
-								);
-
 								const target: ScreenCaptureTarget = {
 									variant: "area",
 									screen: displayId(),
@@ -1291,11 +1282,6 @@ function Inner() {
 										},
 									},
 								};
-
-								console.log(
-									"[Screenshot Debug] target being sent:",
-									JSON.stringify(target, null, 2),
-								);
 
 								try {
 									await commands.suspendTargetSelectOverlays();

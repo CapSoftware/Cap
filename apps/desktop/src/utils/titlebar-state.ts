@@ -33,7 +33,6 @@ const [state, setState] = createStore<TitlebarState>({
 });
 
 async function initializeTitlebar(): Promise<UnlistenFn | undefined> {
-	console.log("initailizing titlebar");
 	if (ostype() === "macos") return;
 	const currentWindow = getCurrentWindow();
 	const resizable = await currentWindow.isResizable();

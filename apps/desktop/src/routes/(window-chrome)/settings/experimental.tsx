@@ -137,8 +137,6 @@ function Inner(props: {
 		key: K,
 		value: (typeof settings)[K],
 	) => {
-		console.log(`Handling settings change for ${key}: ${value}`);
-
 		const previousValue = settings[key];
 		setSettings(key as keyof GeneralSettingsStore, value);
 		try {

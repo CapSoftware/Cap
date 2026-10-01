@@ -192,10 +192,6 @@ export default function () {
 									const { duration, size } = result;
 									// Calculate estimated export time (rough estimation: 1.5x real-time for 1080p)
 									const estimatedExportTime = Math.ceil(duration * 1.5);
-									console.log(
-										`Metadata for ${media.path}: duration=${duration}, size=${size}, estimatedExport=${estimatedExportTime}`,
-									);
-
 									return { duration, size, estimatedExportTime };
 								});
 
@@ -789,7 +785,6 @@ function createRecordingMutations(
 			}
 
 			const uploadChannel = new Channel<UploadProgress>((progress) => {
-				console.log("Upload progress:", progress);
 				setActionState(
 					produce((actionState) => {
 						if (
