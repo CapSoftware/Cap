@@ -238,8 +238,6 @@ declare global {
 	interface Window {
 		capWebEditorCaptionsEnabled?: boolean;
 		capWebEditorUserId?: string;
-		/** The loaded sources carry pointer input, so the canvas draws a cursor. */
-		capWebEditorPointerInput?: boolean;
 		capSolidEditor?: {
 			mount: () => Promise<void>;
 			dispose: () => void;
