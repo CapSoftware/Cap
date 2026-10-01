@@ -34,7 +34,7 @@ services:
   # Local S3 Strorage
   minio:
     container_name: minio-storage
-    image: "minio/minio:latest"
+    image: "pgsty/minio:latest"
     restart: unless-stopped
     ports:
       - "9000:9000"
@@ -48,7 +48,7 @@ services:
 
   createbuckets:
     container_name: minio-bucket-creation
-    image: minio/mc
+    image: pgsty/mc:latest
     depends_on:
       - minio
     entrypoint: >
