@@ -1,0 +1,10 @@
+"$schema" = "schemas/schema.json"
+
+[default]
+description = """This permission set allows opening `mailto:`, `tel:`, `https://` and `http://` urls using their default application
+as well as reveal file in directories using default file explorer"""
+permissions = [
+  "allow-open-url",
+  "allow-reveal-item-in-dir",
+  "allow-default-urls",
+]

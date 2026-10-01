@@ -548,8 +548,9 @@ pub async fn upload_diagnostic_report(app: AppHandle, report_path: String) -> Re
 pub async fn reveal_diagnostic_report(app: AppHandle, report_path: String) -> Result<(), String> {
     let path = validate_report_path(&app, &report_path)?;
 
-    app.opener()
-        .reveal_item_in_dir(&path)
+    tokio::task::spawn_blocking(move || app.opener().reveal_item_in_dir(&path))
+        .await
+        .map_err(|e| format!("Failed to reveal diagnostic report: {e}"))?
         .map_err(|e| format!("Failed to reveal diagnostic report: {e}"))
 }
 

@@ -5,6 +5,7 @@ members = [
     "apps/desktop/src-tauri",
     "crates/*",
     "crates/workspace-hack",
+    "vendor/tauri-plugin-opener",
 ]
 
 [workspace.dependencies]
@@ -132,6 +133,7 @@ cidre = { git = "https://github.com/CapSoftware/cidre", rev = "bf84b67079a8" }
 # wgpu = { git = "https://github.com/gfx-rs/wgpu", rev = "cd41a6e32a6239b65d1cecbeccde6a43a100914a" }
 wgpu-hal = { path = "vendor/wgpu-hal" }
 tao = { path = "vendor/tao" }
+tauri-plugin-opener = { path = "vendor/tauri-plugin-opener" }
 
 # https://github.com/CapSoftware/reqwest/commit/9b5ecbd5210a9510fde766015cabb724c1e70d2e
 reqwest = { git = "https://github.com/CapSoftware/reqwest", rev = "9b5ecbd5210a9510fde766015cabb724c1e70d2e" }
