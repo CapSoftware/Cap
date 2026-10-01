@@ -45,6 +45,7 @@ import {
 import { clipDuration, clipTimelineOffsets } from "../clip-transitions";
 import { FPS, type TimelineTrackType, useEditorContext } from "../context";
 import { defaultMaskSegment, type MaskSegment } from "../masks";
+import { copySceneSettings } from "../scene-clipboard";
 import { autoTextColorAt, defaultTextSegment, type TextSegment } from "../text";
 import { effectiveToOutput, holdWindows } from "../timeline-holds";
 import {
@@ -1224,6 +1225,21 @@ export function Timeline(props: {
 					projectActions.splitCamera3DSegment(index, time - segment.start);
 				else projectActions.splitClipSegment(time);
 			} else projectActions.splitClipSegment(time);
+		} else if (
+			(e.code === "KeyC" || e.code === "KeyV") &&
+			e.shiftKey &&
+			(e.metaKey || e.ctrlKey) &&
+			!e.altKey
+		) {
+			const selection = editorState.timeline.selection;
+			if (selection?.type !== "scene" || selection.indices.length === 0) return;
+			e.preventDefault();
+			if (e.code === "KeyC") {
+				const segment = project.timeline?.sceneSegments?.[selection.indices[0]];
+				if (segment) copySceneSettings(segment);
+			} else {
+				projectActions.pasteSceneSettings(selection.indices);
+			}
 		} else if (e.code === "Escape" && hasNoModifiers) {
 			// Deselect all selected segments
 			setEditorState("timeline", "selection", null);

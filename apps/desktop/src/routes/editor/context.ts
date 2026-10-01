@@ -97,6 +97,7 @@ import type { MaskSegment } from "./masks";
 import { usePreparingEditor } from "./preparing-editor-context";
 import { createPreparingPlaybackHandoff } from "./preparing-playback-handoff";
 import { createProjectConfigSave } from "./project-config-save";
+import { copiedSceneSettings, withSceneSettings } from "./scene-clipboard";
 import type { SnapGuide } from "./snapping";
 import {
 	defaultStyleSegment,
@@ -1477,6 +1478,28 @@ export const [EditorContextProvider, useBaseEditorContext] =
 						);
 						setEditorState("timeline", "selection", null);
 					});
+				},
+				pasteSceneSettings: (segmentIndices: number[]) => {
+					const settings = copiedSceneSettings();
+					if (!settings) return;
+					const selection = editorState.timeline.selection;
+					const targets =
+						selection?.type === "scene" &&
+						segmentIndices.every((index) => selection.indices.includes(index))
+							? selection.indices
+							: segmentIndices;
+					setProject(
+						"timeline",
+						"sceneSegments",
+						produce((segments) => {
+							if (!segments) return;
+							for (const index of targets) {
+								const segment = segments[index];
+								if (segment)
+									segments[index] = withSceneSettings(segment, settings);
+							}
+						}),
+					);
 				},
 				setClipSegmentTimescale: (index: number, timescale: number) => {
 					setProject(
