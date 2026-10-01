@@ -593,6 +593,7 @@ async fn main() {
             music: cap_editor::MusicTracks::new(),
             audio_output: audio_output.clone(),
             telemetry: Some(telemetry.clone()),
+            playback_rate: 1.0,
         };
 
         let press_instant = Instant::now();
