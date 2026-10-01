@@ -160,8 +160,6 @@ const SCRUB_SEEK_GAP_MS = 150;
 const SCRUB_REFINE_MS = 40;
 const KEY_FRAME_TIME_OFFSET = 0.002;
 
-/// Long enough for playback that can't keep up at full resolution to have
-/// stepped down.
 const PLAYBACK_SCALE_SETTLED_MS = 3000;
 
 /// Zoom springs keep settling after a zoom segment ends.
@@ -298,8 +296,9 @@ export class BrowserLocalPlayback {
 	private playStartedTime = 0;
 	private lastRequestedFrame = -1;
 	private previewScale: 1 | 0.75 | 0.5 = 1;
-	/// The resolution the last playback settled at, where the next one starts
-	/// instead of spending its first seconds stepping down again.
+	/// A play that stayed at full resolution for less than
+	/// PLAYBACK_SCALE_SETTLED_MS ended before it could have stepped down, so it
+	/// doesn't reset where the next play starts.
 	private playbackScale: 1 | 0.75 | 0.5 = 1;
 	private playbackBegan = 0;
 	private averageFrameCostMs = 0;
@@ -1325,7 +1324,6 @@ export class BrowserLocalPlayback {
 		cancelAnimationFrame(this.animationFrame);
 		this.pool.pause();
 		this.audio.pause();
-		// A short play may end before the resolution has adapted.
 		if (
 			this.previewScale !== 1 ||
 			performance.now() - this.playbackBegan >= PLAYBACK_SCALE_SETTLED_MS
