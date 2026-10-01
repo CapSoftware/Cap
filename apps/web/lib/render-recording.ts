@@ -90,7 +90,8 @@ export async function startRecordingRender(
 	after(async () => {
 		const started = await startRecordingRenderInline(payload).catch((error) => {
 			console.error(
-				`[renderRecording] ${videoId} did not start inline, handing over`,
+				"[renderRecording] Render did not start inline, handing over",
+				videoId,
 				error,
 			);
 			return false;
@@ -99,10 +100,7 @@ export async function startRecordingRender(
 		// Waiting on slow sources, an editor worker preparing the recording,
 		// and retries are the workflow's.
 		await start(renderRecordingWorkflow, [payload]).catch(async (error) => {
-			console.error(
-				`[renderRecording] Render did not start for ${videoId}`,
-				error,
-			);
+			console.error("[renderRecording] Render did not start", videoId, error);
 			await clearRecordingRender(videoId, { exportId }).catch(() => undefined);
 		});
 	});
