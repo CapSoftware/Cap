@@ -233,8 +233,13 @@ export class RemoteMedia {
 	private async network(start: number, end: number, signal?: AbortSignal) {
 		let response: Response;
 		try {
+			// Chrome's HTTP cache lets one request at a time use a URL's entry,
+			// so a second range of the same file waits for the first to finish.
+			// Each editor session signs its URLs afresh, so nothing a later
+			// visit could reuse is lost by skipping the cache.
 			response = await fetch(this.url, {
 				headers: { Range: `bytes=${start}-${end - 1}` },
+				cache: "no-store",
 				signal,
 			});
 		} catch (cause) {

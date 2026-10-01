@@ -103,7 +103,7 @@ async function waveform(url: string) {
 			return await peaksFrom(ranged);
 		} catch {}
 	}
-	const response = await fetch(url, { priority: "low" });
+	const response = await fetch(url, { priority: "low", cache: "no-store" });
 	if (!response.ok || !response.body) {
 		throw new Error("Editor waveform audio could not load");
 	}
@@ -194,6 +194,7 @@ async function fetchRange(url: string, start: number, end: number) {
 	const response = await fetch(url, {
 		headers: { Range: `bytes=${start}-${end - 1}` },
 		priority: "low",
+		cache: "no-store",
 	});
 	if (response.status !== 206)
 		throw new Error("Editor waveform audio needs ranged reads");
