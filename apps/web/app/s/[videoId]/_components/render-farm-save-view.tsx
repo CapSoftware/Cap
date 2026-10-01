@@ -102,7 +102,7 @@ export function RenderFarmSaveView({
 	className?: string;
 }) {
 	const [awaitingStart, setAwaitingStart] = useState(startingRender);
-	const status = useRenderSaveStatus(videoId, true, awaitingStart);
+	const status = useRenderSaveStatus(videoId, true, awaitingStart, true);
 	const poster = useThumnailQuery(videoId).data;
 	const router = useRouter();
 	const [playlist, setPlaylist] = useState<string | null>(null);

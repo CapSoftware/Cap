@@ -29,7 +29,7 @@ export function RecordingPublisher({
 	const bridgeRef = useRef<EditorHostBridge | null>(null);
 	const savedAtRef = useRef(savedAt);
 	const started = useRef(false);
-	const status = useRenderSaveStatus(videoId, true, !started.current);
+	const status = useRenderSaveStatus(videoId, true, !started.current, true);
 
 	useEffect(() => {
 		if (status?.state === "rendering") started.current = true;

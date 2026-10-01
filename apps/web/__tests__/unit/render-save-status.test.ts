@@ -10,6 +10,19 @@ describe("render status polling", () => {
 		expect(renderStatusPollDelay(119_000, true)).toBe(3000);
 	});
 
+	it("polls often for a page showing the render, most often near the end", () => {
+		const watching = { progress: 0, playable: false };
+		expect(renderStatusPollDelay(0, false, watching)).toBe(1000);
+		expect(renderStatusPollDelay(5_000, true, watching)).toBe(1000);
+		expect(
+			renderStatusPollDelay(5_000, true, { progress: 0.99, playable: true }),
+		).toBe(500);
+		expect(
+			renderStatusPollDelay(59_000, true, { progress: 0.6, playable: false }),
+		).toBe(500);
+		expect(renderStatusPollDelay(60_000, true, watching)).toBe(3000);
+	});
+
 	it("backs off for a render that runs on", () => {
 		expect(renderStatusPollDelay(2 * 60_000, true)).toBe(6000);
 		expect(renderStatusPollDelay(10 * 60_000, true)).toBe(15_000);
