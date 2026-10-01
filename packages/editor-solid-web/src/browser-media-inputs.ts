@@ -56,7 +56,7 @@ type PrefetchProfile = (
 /// Caps the read-ahead of a mediabunny UrlSource at `READ_AHEAD_BYTES` past
 /// each read. The profile is internal to mediabunny; a source without one is
 /// left as it is.
-export function limitReadAhead(source: object) {
+export function limitReadAhead(source: object, bytes = READ_AHEAD_BYTES) {
 	const options = (
 		source as { _orchestrator?: { options?: { prefetchProfile?: unknown } } }
 	)._orchestrator?.options;
@@ -66,7 +66,7 @@ export function limitReadAhead(source: object) {
 		const range = (profile as PrefetchProfile)(start, end, workers);
 		return {
 			start: range.start,
-			end: Math.max(end, Math.min(range.end, end + READ_AHEAD_BYTES)),
+			end: Math.max(end, Math.min(range.end, end + bytes)),
 		};
 	}) satisfies PrefetchProfile;
 }
@@ -93,7 +93,7 @@ function openInput(url: string, media: RemoteMedia | null, from: number) {
 				fetchFn: layoutFetch(media, layout) as typeof fetch,
 				getRetryDelay: layoutRetryDelay,
 			});
-			limitReadAhead(source);
+			limitReadAhead(source, media.readAhead ?? READ_AHEAD_BYTES);
 			return new Input({ formats: ALL_FORMATS, source });
 		},
 	);
@@ -292,6 +292,7 @@ export function mediaSource(
 	url: string,
 	size?: number | null,
 	durationHint?: number | null,
+	contentType?: string | null,
 ) {
-	return remoteMedia(url, size, durationHint);
+	return remoteMedia(url, size, durationHint, contentType);
 }

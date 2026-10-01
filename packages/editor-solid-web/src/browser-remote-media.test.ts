@@ -149,6 +149,27 @@ describe("RemoteMedia", () => {
 		expect(requests.length).toBe(before);
 	});
 
+	test("opens WebM audio with small reads at either end", async () => {
+		serve(new Uint8Array(4 * 1024 * 1024));
+		const audio = new RemoteMedia(URL_, file.length);
+		audio.learnContentType("audio/webm");
+		audio.warm();
+		await Promise.all([audio.head(), audio.tail(audio.pinnedTailBytes())]);
+		expect(requests).toEqual([
+			"bytes=0-65535",
+			`bytes=${file.length - 65536}-${file.length - 1}`,
+		]);
+		serve(new Uint8Array(4 * 1024 * 1024));
+		const video = new RemoteMedia(URL_, file.length);
+		video.learnContentType("video/mp4");
+		video.warm();
+		await Promise.all([video.head(), video.tail(video.pinnedTailBytes())]);
+		expect(requests).toEqual([
+			"bytes=0-524287",
+			`bytes=${file.length - 262144}-${file.length - 1}`,
+		]);
+	});
+
 	test("stops a network read at the start of a pinned block", async () => {
 		serve(longRecording(40));
 		const media = new RemoteMedia(URL_, file.length);

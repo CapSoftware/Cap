@@ -16,6 +16,10 @@ import { clustersIn, webmSeekInfo } from "./webm-cluster-seek";
 /// mediabunny's first read of a file covers half a megabyte, which holds the
 /// `moov` and the first fragments of a recording.
 const HEAD_BYTES = 512 * 1024;
+/// WebM audio keeps its headers in the first few hundred bytes and writes a
+/// cluster about every second, so this much of its start or end holds what
+/// the probe, the audio stream and a seek need.
+const AUDIO_WEBM_BYTES = 64 * 1024;
 const MIN_TAIL = 256 * 1024;
 const MAX_FIRST_TAIL = 4 * 1024 * 1024;
 const TAIL_STEPS = [2 * 1024 * 1024, 8 * 1024 * 1024];
@@ -196,6 +200,7 @@ export class RemoteMedia {
 	private readonly indexes = new Map<SeekKind, SeekIndex>();
 	private rate: number | null | undefined;
 	private durationHint: number | null = null;
+	private audioWebm = false;
 	lastUsed = Date.now();
 
 	constructor(
@@ -210,8 +215,24 @@ export class RemoteMedia {
 			this.durationHint = duration;
 	}
 
-	private pinnedTailBytes() {
-		return firstTailBytes(this.sizeValue, this.durationHint);
+	/// Sizes the first reads of the file for its format; only before they start.
+	learnContentType(contentType: string) {
+		if (this.headPromise || this.pinnedTail) return;
+		this.audioWebm = contentType.startsWith("audio/webm");
+	}
+
+	/// How many bytes mediabunny may read past what it asked for, for a file
+	/// it reads only to find its format, or null for the default.
+	get readAhead() {
+		return this.audioWebm ? AUDIO_WEBM_BYTES : null;
+	}
+
+	/// The length of the first tail read, which later reads of that length or
+	/// less reuse.
+	pinnedTailBytes() {
+		return this.audioWebm
+			? AUDIO_WEBM_BYTES
+			: firstTailBytes(this.sizeValue, this.durationHint);
 	}
 
 	get size() {
@@ -293,10 +314,9 @@ export class RemoteMedia {
 
 	head() {
 		if (!this.headPromise) {
+			const bytes = this.audioWebm ? AUDIO_WEBM_BYTES : HEAD_BYTES;
 			const end =
-				this.sizeValue === null
-					? HEAD_BYTES
-					: Math.min(HEAD_BYTES, this.sizeValue);
+				this.sizeValue === null ? bytes : Math.min(bytes, this.sizeValue);
 			const head = this.pin(0, end);
 			this.headPromise = head;
 			const forget = () => {
@@ -639,6 +659,7 @@ export function remoteMedia(
 	url: string,
 	size?: number | null,
 	duration?: number | null,
+	contentType?: string | null,
 ) {
 	if (!remoteUrl(url)) return null;
 	let entry = entries.get(url);
@@ -654,6 +675,7 @@ export function remoteMedia(
 	}
 	if (size) entry.learnSize(size);
 	if (duration) entry.learnDuration(duration);
+	if (contentType) entry.learnContentType(contentType);
 	entry.lastUsed = Date.now();
 	return entry;
 }

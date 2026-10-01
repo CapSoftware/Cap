@@ -336,7 +336,9 @@ export function parseBrowserEditorSources(
 		}
 	}
 	for (const source of [mic, systemAudio]) {
-		if (source?.size) mediaSource(source.url, source.size, durationHint);
+		if (source?.size) {
+			mediaSource(source.url, source.size, durationHint, source.contentType);
+		}
 	}
 	return {
 		videoId: expectedVideoId,

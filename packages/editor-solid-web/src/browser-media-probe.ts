@@ -23,14 +23,21 @@ async function probe(url: string, signal: AbortSignal) {
 	if (!media) return probeBrowserEditorMedia(url, signal);
 	// The preview decodes from this same Input, so its metadata is read once.
 	const lease = await acquireMediaInput(url);
+	// The first tail read reuses the one opening the file made, which a
+	// compact format keeps shorter than the probe's first guess.
+	let firstTail = true;
 	try {
 		return await probeBrowserEditorMedia(url, signal, {
 			input: lease.input,
 			bytes: {
 				head: () => media.head(),
 				tail: async (length) => {
+					const wanted = firstTail
+						? Math.min(length, media.pinnedTailBytes())
+						: length;
+					firstTail = false;
 					const [bytes, size] = await Promise.all([
-						media.tail(length),
+						media.tail(wanted),
 						media.fileSize(),
 					]);
 					return bytes ? { bytes, size } : null;
