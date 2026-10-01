@@ -32,9 +32,10 @@ const repairedSlugs = [
 	"solutions/remote-team-collaboration",
 ];
 const pagesDirectory = join(process.cwd(), "components/pages");
-const pageFiles = readdirSync(pagesDirectory, { recursive: true }).filter(
-	(file) => /\.[jt]sx?$/.test(file),
-);
+const pageFiles = readdirSync(pagesDirectory, {
+	recursive: true,
+	encoding: "utf8",
+}).filter((file) => /\.[jt]sx?$/.test(file));
 
 const renderDemo = (video: SeoPageContent["video"], showVideo = true) => {
 	const page = seoPages["screen-recorder"];
