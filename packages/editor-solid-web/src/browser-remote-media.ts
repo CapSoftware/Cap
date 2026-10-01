@@ -16,9 +16,10 @@ import { clustersIn, webmSeekInfo } from "./webm-cluster-seek";
 /// mediabunny's first read of a file covers half a megabyte, which holds the
 /// `moov` and the first fragments of a recording.
 const HEAD_BYTES = 512 * 1024;
-/// WebM audio keeps its headers in the first few hundred bytes and writes a
-/// cluster about every second, so this much of its start or end holds what
-/// the probe, the audio stream and a seek need.
+/// WebM audio keeps its headers in the first few hundred bytes and usually
+/// writes a cluster about every second, so this much of its start or end holds
+/// what the probe, the audio stream and a seek need. A seek reads more of the
+/// end when the last cluster starts further back.
 const AUDIO_WEBM_BYTES = 64 * 1024;
 const MIN_TAIL = 256 * 1024;
 const MAX_FIRST_TAIL = 4 * 1024 * 1024;
@@ -509,17 +510,23 @@ export class RemoteMedia {
 		}
 		const info = webmSeekInfo(head);
 		if (!info) return null;
-		const tail = await this.tail(this.pinnedTailBytes());
-		if (!tail) return null;
 		const scan: Scanner["scan"] = (window, start) =>
 			clustersIn(window, start, info);
-		const tailPoints = scan(tail, size - tail.byteLength).points;
-		if (tailPoints.length === 0) return null;
-		return {
-			nearBytes: NEAR_AUDIO_BYTES,
-			scan,
-			seeds: [...scan(head, 0).points, ...tailPoints],
-		};
+		for (const length of [this.pinnedTailBytes(), MIN_TAIL, ...TAIL_STEPS]) {
+			const tail = await this.tail(length);
+			if (!tail) return null;
+			const tailStart = size - tail.byteLength;
+			const tailPoints = scan(tail, tailStart).points;
+			if (tailPoints.length > 0) {
+				return {
+					nearBytes: NEAR_AUDIO_BYTES,
+					scan,
+					seeds: [...scan(head, 0).points, ...tailPoints],
+				};
+			}
+			if (tailStart === 0) return null;
+		}
+		return null;
 	}
 
 	/// Keyframe fragment (MP4) or cluster (WebM) at or before `time` from which

@@ -19,6 +19,7 @@ import {
 	rangeResponseExtent,
 } from "./browser-remote-media";
 import { concat, fragment, init } from "./fragmented-mp4-fixtures";
+import { recording as webmRecording } from "./webm-fixtures";
 
 const URL_ = "https://storage.test/recording.mp4";
 let file: Uint8Array<ArrayBuffer> = new Uint8Array(0);
@@ -168,6 +169,14 @@ describe("RemoteMedia", () => {
 			"bytes=0-524287",
 			`bytes=${file.length - 262144}-${file.length - 1}`,
 		]);
+	});
+
+	test("seeks WebM audio whose last cluster starts before the small tail", async () => {
+		serve(webmRecording(8, false, 25, 4000));
+		const media = new RemoteMedia(URL_, file.length);
+		media.learnContentType("audio/webm");
+		const point = await media.locate(20, undefined, "webm");
+		expect(point?.time).toBe(20);
 	});
 
 	test("stops a network read at the start of a pinned block", async () => {
