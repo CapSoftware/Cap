@@ -2383,6 +2383,10 @@ pub struct KeyboardSettings {
     pub show_modifiers: bool,
     pub show_special_keys: bool,
     pub uppercase: bool,
+    pub style: String,
+    pub theme: String,
+    pub keycap_mode: bool,
+    pub show_chassis: bool,
 }
 
 impl Default for KeyboardSettings {
@@ -2402,6 +2406,10 @@ impl Default for KeyboardSettings {
             show_modifiers: true,
             show_special_keys: true,
             uppercase: false,
+            style: "pbt".to_string(),
+            theme: "white".to_string(),
+            keycap_mode: true,
+            show_chassis: true,
         }
     }
 }

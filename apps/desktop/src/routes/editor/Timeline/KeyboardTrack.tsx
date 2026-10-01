@@ -228,6 +228,14 @@ export function KeyboardTrack(props: {
 							/>
 							<SegmentContent
 								class="flex items-center cursor-grab overflow-hidden"
+								onClick={(e) => {
+									e.stopPropagation();
+									if (e.ctrlKey || e.metaKey) return;
+									setEditorState("timeline", "selection", {
+										type: "keyboard",
+										indices: [i()],
+									});
+								}}
 								onMouseDown={createMouseDownDrag(
 									i,
 									() => {
