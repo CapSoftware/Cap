@@ -5,7 +5,9 @@ param(
 	[string] $Operation,
 	[string] $Target = $env:RUST_TARGET_TRIPLE,
 	[string] $WorkspaceRoot = $env:GITHUB_WORKSPACE,
-	[string] $InstallerPath
+	[string] $InstallerPath,
+	[ValidateSet("Desktop", "Cli")]
+	[string] $PayloadKind = "Desktop"
 )
 
 Set-StrictMode -Version Latest
@@ -21,11 +23,19 @@ if ([string]::IsNullOrWhiteSpace($Target)) {
 }
 
 $releaseRoot = Join-Path $WorkspaceRoot "target/$Target/release"
-$signingRoot = Join-Path $releaseRoot "windows-signing"
+$signingRoot = Join-Path $releaseRoot $(if ($PayloadKind -eq "Cli") { "windows-signing-cli" } else { "windows-signing" })
 $payloadRoot = Join-Path $signingRoot "payload"
 $manifestPath = Join-Path $signingRoot "payload-manifest.json"
 
 function Get-PayloadDefinitions {
+	if ($PayloadKind -eq "Cli") {
+		return @(
+			[pscustomobject]@{
+				Name = "cap-cli.exe"
+				Path = Join-Path $releaseRoot "cap.exe"
+			}
+		)
+	}
 	return @(
 		[pscustomobject]@{
 			Name = "Cap.exe"
@@ -76,7 +86,7 @@ function Read-Manifest {
 		throw "Payload manifest '$manifestPath' does not exist."
 	}
 	$manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-	if ($manifest.schemaVersion -ne 1 -or $manifest.target -ne $Target -or @($manifest.entries).Count -ne 5) {
+	if ($manifest.schemaVersion -ne 1 -or $manifest.target -ne $Target -or @($manifest.entries).Count -ne @(Get-PayloadDefinitions).Count) {
 		throw "Payload manifest '$manifestPath' has an unexpected schema."
 	}
 	$expectedNames = @(Get-PayloadDefinitions | ForEach-Object Name | Sort-Object)

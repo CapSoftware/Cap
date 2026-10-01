@@ -5,7 +5,7 @@ use cap_recording::{
     CameraFeed, DoneFut, MicrophoneFeed, PipelineStoppedByUser,
     feeds::{camera, microphone},
     instant_recording,
-    screen_capture::ScreenCaptureTarget,
+    screen_capture::{AudioCaptureSource, ScreenCaptureTarget},
     studio_recording::{self, ActorHandle as StudioActorHandle},
     upload_resume::UploadLock,
 };
@@ -48,9 +48,15 @@ pub struct RecordParams {
     /// Capture from the microphone with this device name (see `cap targets mics`)
     #[arg(long)]
     mic: Option<String>,
-    /// Whether to capture system audio
+    /// Capture the full system mix (alias for --audio-source system)
     #[arg(long)]
     system_audio: bool,
+    /// Audio to capture with the recording
+    #[arg(long, value_enum)]
+    audio_source: Option<AudioSourceArg>,
+    /// Exclude the cursor from the captured video
+    #[arg(long)]
+    hide_cursor: bool,
     #[arg(
         long,
         help = "New '.cap' project path (defaults to <recordingId>.cap in the working directory). The path must not already exist, including an empty directory."
@@ -75,7 +81,37 @@ impl RecordParams {
         if self.fps == Some(0) {
             return Err("--fps must be greater than 0".to_string());
         }
+        if self.system_audio
+            && self
+                .audio_source
+                .is_some_and(|source| source != AudioSourceArg::System)
+        {
+            return Err(
+                "--system-audio conflicts with --audio-source none/application; use one audio selection"
+                    .to_string(),
+            );
+        }
+        if self.resolved_audio_source() == AudioCaptureSource::Application
+            && self.target.window.is_none()
+        {
+            return Err(
+                "--audio-source application requires --window <id> so Cap can identify the selected application"
+                    .to_string(),
+            );
+        }
         Ok(())
+    }
+
+    fn resolved_audio_source(&self) -> AudioCaptureSource {
+        self.audio_source
+            .map(AudioCaptureSource::from)
+            .unwrap_or_else(|| {
+                if self.system_audio {
+                    AudioCaptureSource::System
+                } else {
+                    AudioCaptureSource::None
+                }
+            })
     }
 
     fn to_cli_args(&self) -> Vec<String> {
@@ -101,6 +137,13 @@ impl RecordParams {
         if self.system_audio {
             args.push("--system-audio".to_string());
         }
+        if let Some(audio_source) = self.audio_source {
+            args.push("--audio-source".to_string());
+            args.push(audio_source.to_string());
+        }
+        if self.hide_cursor {
+            args.push("--hide-cursor".to_string());
+        }
         if let Some(path) = &self.path {
             args.push("--path".to_string());
             args.push(path.display().to_string());
@@ -121,6 +164,33 @@ impl RecordParams {
 pub enum RecordMode {
     Studio,
     Instant,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum AudioSourceArg {
+    None,
+    System,
+    Application,
+}
+
+impl From<AudioSourceArg> for AudioCaptureSource {
+    fn from(value: AudioSourceArg) -> Self {
+        match value {
+            AudioSourceArg::None => Self::None,
+            AudioSourceArg::System => Self::System,
+            AudioSourceArg::Application => Self::Application,
+        }
+    }
+}
+
+impl std::fmt::Display for AudioSourceArg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::None => f.write_str("none"),
+            Self::System => f.write_str("system"),
+            Self::Application => f.write_str("application"),
+        }
+    }
 }
 
 impl std::fmt::Display for RecordMode {
@@ -746,18 +816,21 @@ async fn start_recording(
     target: ScreenCaptureTarget,
     path: PathBuf,
 ) -> Result<ActorHandle, String> {
+    let audio_source = params.resolved_audio_source();
     let upload_lock = prepare_recording_project(
         &path,
         params.mode,
-        params.mic.is_some() || params.system_audio,
+        params.mic.is_some() || audio_source.is_enabled(),
     )?;
 
     #[cfg(target_os = "macos")]
     let target_for_shareable_content = target.clone();
     let mut studio_builder = studio_recording::Actor::builder(path.clone(), target.clone())
-        .with_system_audio(params.system_audio);
-    let mut instant_builder =
-        instant_recording::Actor::builder(path, target).with_system_audio(params.system_audio);
+        .with_audio_source(audio_source)
+        .with_show_cursor(!params.hide_cursor);
+    let mut instant_builder = instant_recording::Actor::builder(path, target)
+        .with_audio_source(audio_source)
+        .with_show_cursor(!params.hide_cursor);
     let mut camera_active = false;
 
     // Feeds must be locked and attached before build(); the lock keeps the device open for the whole
@@ -1316,6 +1389,60 @@ fn emit_record_event(format: OutputFormat, event: &RecordEvent<'_>) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn params(window: bool) -> RecordParams {
+        RecordParams {
+            target: RecordTargets {
+                screen: None,
+                window: window.then(|| "1".parse().unwrap()),
+            },
+            mode: RecordMode::Studio,
+            camera: None,
+            mic: None,
+            system_audio: false,
+            audio_source: None,
+            hide_cursor: false,
+            path: None,
+            fps: None,
+            duration: Some(1.0),
+        }
+    }
+
+    #[test]
+    fn application_audio_requires_window_target() {
+        let mut params = params(false);
+        params.audio_source = Some(AudioSourceArg::Application);
+        assert!(params.validate().unwrap_err().contains("requires --window"));
+
+        params.target.window = Some("1".parse().unwrap());
+        assert!(params.validate().is_ok());
+        assert_eq!(
+            params.resolved_audio_source(),
+            AudioCaptureSource::Application
+        );
+    }
+
+    #[test]
+    fn legacy_system_audio_alias_rejects_conflicting_source() {
+        let mut params = params(true);
+        params.system_audio = true;
+        params.audio_source = Some(AudioSourceArg::None);
+        assert!(params.validate().unwrap_err().contains("conflicts"));
+    }
+
+    #[test]
+    fn detached_worker_preserves_audio_and_cursor_flags() {
+        let mut params = params(true);
+        params.audio_source = Some(AudioSourceArg::Application);
+        params.hide_cursor = true;
+        let args = params.to_cli_args();
+
+        assert!(
+            args.windows(2)
+                .any(|args| args == ["--audio-source", "application"])
+        );
+        assert!(args.iter().any(|arg| arg == "--hide-cursor"));
+    }
 
     #[test]
     fn instant_project_is_discoverable_before_capture_with_required_audio_intent() {

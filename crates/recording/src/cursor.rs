@@ -1,5 +1,4 @@
 use crate::RecordingStartGate;
-use cap_cursor_capture::CursorCropBounds;
 use cap_cursor_info::CursorShape;
 use cap_project::{
     CursorClickEvent, CursorEvents, CursorMoveEvent, KeyPressEvent, KeyboardEvents, XY,
@@ -46,10 +45,7 @@ pub struct IncrementalCaptureOutputs {
 }
 
 pub struct CursorCaptureTarget {
-    pub crop_bounds: CursorCropBounds,
-    pub display: scap_targets::Display,
-    #[cfg(target_os = "linux")]
-    pub window: Option<scap_targets::WindowId>,
+    pub capture_target: crate::sources::screen_capture::ScreenCaptureTarget,
 }
 
 #[cfg(target_os = "linux")]
@@ -350,16 +346,15 @@ pub fn spawn_cursor_recorder(
     let stop_token_child = stop_token.child_token();
     let thread = std::thread::spawn(move || {
         let _completion = completion;
-        let crop_bounds = target.crop_bounds;
-        let display = target.display;
         #[cfg(target_os = "linux")]
-        let window_cursor = target.window.as_ref().and_then(|id| {
+        let window_cursor = target.capture_target.window().as_ref().and_then(|id| {
             X11WindowCursor::new(id)
                 .inspect_err(|error| tracing::error!(%error, "X11 window cursor setup failed"))
                 .ok()
         });
         #[cfg(target_os = "linux")]
         let mut last_window_position = None;
+        let mut last_window_crop = None;
         let device_state = DeviceState::new();
         let mut last_mouse_state = device_state.get_mouse();
         let mut last_keys: Vec<device_query::Keycode> = device_state.get_keys();
@@ -410,11 +405,19 @@ pub fn spawn_cursor_recorder(
             if position_changed {
                 last_position = position;
             }
+            let current_crop = target.capture_target.cursor_crop();
+            let current_window_crop =
+                current_crop.map(|crop| (crop.x(), crop.y(), crop.width(), crop.height()));
+            let position_changed = position_changed
+                || (target.capture_target.window().is_some()
+                    && current_window_crop != last_window_crop);
+            last_window_crop = current_window_crop;
             #[cfg(target_os = "linux")]
             let window_position = window_cursor.as_ref().and_then(X11WindowCursor::position);
             #[cfg(target_os = "linux")]
             let position_changed = position_changed
-                || (target.window.is_some() && window_position != last_window_position);
+                || (target.capture_target.window().is_some()
+                    && window_position != last_window_position);
             #[cfg(target_os = "linux")]
             {
                 last_window_position = window_position;
@@ -468,13 +471,16 @@ pub fn spawn_cursor_recorder(
             };
 
             if position_changed {
-                let cropped_norm_pos = position
-                    .relative_to_display(display)
+                let cropped_norm_pos = target
+                    .capture_target
+                    .display()
+                    .and_then(|display| position.relative_to_display(display))
                     .and_then(|p| p.normalize())
-                    .map(|p| p.with_crop(crop_bounds))
+                    .zip(current_crop)
+                    .map(|(p, crop)| p.with_crop(crop))
                     .map(|p| (p.x(), p.y()));
                 #[cfg(target_os = "linux")]
-                let cropped_norm_pos = if target.window.is_some() {
+                let cropped_norm_pos = if target.capture_target.window().is_some() {
                     window_position
                 } else {
                     cropped_norm_pos

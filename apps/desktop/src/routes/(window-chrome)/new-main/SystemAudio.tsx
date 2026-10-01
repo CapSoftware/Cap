@@ -1,4 +1,5 @@
 import { createQuery } from "@tanstack/solid-query";
+import { CheckMenuItem, Menu } from "@tauri-apps/api/menu";
 import { cx } from "cva";
 import type { Component, ComponentProps, JSX } from "solid-js";
 import { Dynamic } from "solid-js/web";
@@ -7,6 +8,7 @@ import {
 	createCurrentRecordingQuery,
 	isSystemAudioSupported,
 } from "~/utils/queries";
+import type { AudioCaptureSource } from "~/utils/tauri";
 import { useRecordingOptions } from "../OptionsContext";
 import {
 	DEVICE_ROW_CLASS,
@@ -44,6 +46,46 @@ export function SystemAudioToggleRoot(
 
 	const isDisabled = () =>
 		!!currentRecording.data || systemAudioSupported.data === false;
+	const audioSource = () => rawOptions.audioSource ?? "none";
+	const applicationAvailable = () =>
+		rawOptions.captureTarget.variant === "window";
+	const sourceLabel = () => {
+		switch (audioSource()) {
+			case "system":
+				return "System audio";
+			case "application":
+				return "Selected application";
+			default:
+				return "No audio";
+		}
+	};
+	const selectSource = (source: AudioCaptureSource) => {
+		setOptions({ audioSource: source });
+	};
+	const openMenu = async () => {
+		if (!rawOptions || isDisabled()) return;
+		const menu = await Menu.new({
+			items: [
+				await CheckMenuItem.new({
+					text: "None",
+					checked: audioSource() === "none",
+					action: () => selectSource("none"),
+				}),
+				await CheckMenuItem.new({
+					text: "System audio",
+					checked: audioSource() === "system",
+					action: () => selectSource("system"),
+				}),
+				await CheckMenuItem.new({
+					text: "Selected application",
+					checked: audioSource() === "application",
+					enabled: applicationAvailable(),
+					action: () => selectSource("application"),
+				}),
+			],
+		});
+		await menu.popup();
+	};
 	const tooltipMessage = () => {
 		if (systemAudioSupported.data === false) {
 			return "System audio capture requires macOS 13.0 or later";
@@ -56,25 +98,18 @@ export function SystemAudioToggleRoot(
 			{...props}
 			type="button"
 			title={tooltipMessage()}
-			onClick={() => {
-				if (!rawOptions || isDisabled()) return;
-				setOptions({ captureSystemAudio: !rawOptions.captureSystemAudio });
-			}}
+			onClick={() => void openMenu()}
 			disabled={isDisabled()}
-			aria-pressed={rawOptions.captureSystemAudio ? "true" : "false"}
+			aria-haspopup="menu"
 		>
 			{props.icon}
-			<p class={DEVICE_ROW_LABEL_CLASS}>
-				{rawOptions.captureSystemAudio
-					? "Record System Audio"
-					: "No System Audio"}
-			</p>
+			<p class={DEVICE_ROW_LABEL_CLASS}>{sourceLabel()}</p>
 			<div class={DEVICE_ROW_TRAILING_CLASS}>
 				<Dynamic
 					component={props.PillComponent}
-					variant={rawOptions.captureSystemAudio ? "blue" : "gray"}
+					variant={audioSource() === "none" ? "gray" : "blue"}
 				>
-					{rawOptions.captureSystemAudio ? "On" : "Off"}
+					{audioSource() === "none" ? "Off" : "On"}
 				</Dynamic>
 			</div>
 		</button>

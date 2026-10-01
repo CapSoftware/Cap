@@ -7497,7 +7497,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                             }
                         }),
                         mode: event.mode,
-                        capture_system_audio: settings.system_audio,
+                        audio_source: settings.audio_source,
+                        show_cursor: settings.show_cursor,
                         organization_id: settings.organization_id,
                     }
                 })

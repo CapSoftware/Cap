@@ -17,10 +17,11 @@ use kameo::{Actor as _, actor::ActorRef};
 use pipewire as pw;
 use pw::{properties::properties, spa};
 use std::{
+    collections::{HashMap, HashSet},
     os::fd::OwnedFd,
     process::Command,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, Instant},
@@ -33,6 +34,14 @@ use x11rb::protocol::xproto::{
     ChangeWindowAttributesAux, ConnectionExt as _, EventMask, ImageFormat, ImageOrder, MapState,
 };
 use x11rb::rust_connection::RustConnection;
+
+fn pactl_command() -> Command {
+    let bundled = std::env::current_exe()
+        .ok()
+        .and_then(|executable| executable.parent().map(|parent| parent.join("pactl")))
+        .filter(|path| path.is_file());
+    Command::new(bundled.unwrap_or_else(|| "pactl".into()))
+}
 
 #[derive(Debug)]
 pub struct X11Capture;
@@ -165,10 +174,17 @@ impl ScreenCaptureConfig<X11Capture> {
                 }),
             }
         };
-        let system_audio = if self.system_audio {
-            Some(create_system_audio_source_config().await?)
-        } else {
-            None
+        let system_audio = match self.audio_source {
+            AudioCaptureSource::None => None,
+            AudioCaptureSource::System => Some(create_system_audio_source_config().await?),
+            AudioCaptureSource::Application => {
+                let process_id = self.config.target.application_pid().ok_or_else(|| {
+                    anyhow!(
+                        "Application audio requires an X11 window with an owning process; the Wayland portal does not expose process identity"
+                    )
+                })?;
+                Some(create_application_audio_source_config(process_id).await?)
+            }
         };
 
         Ok((source, system_audio))
@@ -902,12 +918,14 @@ pub struct SystemAudioSourceConfig {
     feed_lock: Arc<MicrophoneFeedLock>,
     device_name: String,
     monitor_route: Option<PactlMonitorRoute>,
+    application_route: Option<Arc<ApplicationAudioRoute>>,
     feed: OwnedSystemAudioFeed,
 }
 
 pub struct SystemAudioSource {
     inner: crate::sources::Microphone,
     monitor_route: Option<PactlMonitorRoute>,
+    application_route: Option<Arc<ApplicationAudioRoute>>,
     feed: OwnedSystemAudioFeed,
 }
 
@@ -938,6 +956,7 @@ impl Drop for OwnedSystemAudioFeed {
 impl Drop for SystemAudioSource {
     fn drop(&mut self) {
         drop(self.monitor_route.take());
+        drop(self.application_route.take());
     }
 }
 
@@ -979,6 +998,300 @@ impl Drop for PactlMonitorRoute {
             tracing::warn!(%error, "Could not restore the Linux system-audio input route");
         }
     }
+}
+
+struct ApplicationAudioRouteState {
+    routed_inputs: HashMap<u32, u32>,
+    playback_sink: Option<u32>,
+    loopback_module: Option<u32>,
+}
+
+struct ApplicationAudioRoute {
+    process_id: u32,
+    sink_name: String,
+    sink_index: u32,
+    null_sink_module: u32,
+    state: Mutex<ApplicationAudioRouteState>,
+}
+
+impl ApplicationAudioRoute {
+    fn create(process_id: u32) -> anyhow::Result<Self> {
+        let sink_name = format!(
+            "cap_application_{}_{}",
+            std::process::id(),
+            uuid::Uuid::new_v4().simple()
+        );
+        let null_sink_module = load_pactl_module(&[
+            "module-null-sink",
+            &format!("sink_name={sink_name}"),
+            "rate=48000",
+            "channels=2",
+            "sink_properties=device.description=Cap_Application_Audio",
+        ])
+        .context("create isolated Linux application-audio sink")?;
+        let sink_index = wait_for_pactl_sink(&sink_name).inspect_err(|_| {
+            let _ = unload_pactl_module(null_sink_module);
+        })?;
+
+        Ok(Self {
+            process_id,
+            sink_name,
+            sink_index,
+            null_sink_module,
+            state: Mutex::new(ApplicationAudioRouteState {
+                routed_inputs: HashMap::new(),
+                playback_sink: None,
+                loopback_module: None,
+            }),
+        })
+    }
+
+    fn monitor_source(&self) -> String {
+        format!("{}.monitor", self.sink_name)
+    }
+
+    fn reconcile(&self) -> anyhow::Result<()> {
+        let process_ids = process_tree_ids(self.process_id)?;
+        let inputs = pactl_sink_inputs()?;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| anyhow!("Application audio route state lock poisoned"))?;
+
+        let active_ids = inputs.iter().map(|input| input.id).collect::<HashSet<_>>();
+        let restore = state
+            .routed_inputs
+            .iter()
+            .filter_map(|(id, original_sink)| {
+                inputs
+                    .iter()
+                    .find(|input| input.id == *id)
+                    .filter(|input| {
+                        !input
+                            .process_id
+                            .is_some_and(|pid| process_ids.contains(&pid))
+                    })
+                    .map(|_| (*id, *original_sink))
+            })
+            .collect::<Vec<_>>();
+        for (id, original_sink) in restore {
+            move_pactl_sink_input(id, original_sink)?;
+            state.routed_inputs.remove(&id);
+        }
+        state.routed_inputs.retain(|id, _| active_ids.contains(id));
+        if state.routed_inputs.is_empty()
+            && let Some(loopback_module) = state.loopback_module
+        {
+            unload_pactl_module(loopback_module)?;
+            state.loopback_module = None;
+            state.playback_sink = None;
+        }
+
+        for input in inputs {
+            if state.routed_inputs.contains_key(&input.id)
+                || !input
+                    .process_id
+                    .is_some_and(|pid| process_ids.contains(&pid))
+            {
+                continue;
+            }
+            if input.sink == self.sink_index {
+                continue;
+            }
+
+            if let Some(playback_sink) = state.playback_sink {
+                anyhow::ensure!(
+                    playback_sink == input.sink,
+                    "Selected application is playing through multiple Linux audio outputs; isolated capture cannot preserve playback routing safely"
+                );
+            } else {
+                let loopback_module = load_pactl_module(&[
+                    "module-loopback",
+                    &format!("source={}.monitor", self.sink_name),
+                    &format!("sink={}", input.sink),
+                    "latency_msec=20",
+                    "source_dont_move=true",
+                    "sink_dont_move=true",
+                ])
+                .context("preserve application playback while capturing its audio")?;
+                state.playback_sink = Some(input.sink);
+                state.loopback_module = Some(loopback_module);
+            }
+
+            move_pactl_sink_input(input.id, self.sink_index)?;
+            state.routed_inputs.insert(input.id, input.sink);
+        }
+
+        Ok(())
+    }
+}
+
+impl Drop for ApplicationAudioRoute {
+    fn drop(&mut self) {
+        let Ok(mut state) = self.state.lock() else {
+            tracing::warn!("Could not lock Linux application-audio routes during cleanup");
+            return;
+        };
+        for (input, original_sink) in state.routed_inputs.drain() {
+            if let Err(error) = move_pactl_sink_input(input, original_sink) {
+                tracing::warn!(%error, input, "Could not restore application audio stream");
+            }
+        }
+        if let Some(module) = state.loopback_module.take()
+            && let Err(error) = unload_pactl_module(module)
+        {
+            tracing::warn!(%error, "Could not unload application audio playback loopback");
+        }
+        if let Err(error) = unload_pactl_module(self.null_sink_module) {
+            tracing::warn!(%error, "Could not unload application audio capture sink");
+        }
+    }
+}
+
+struct PactlSinkInput {
+    id: u32,
+    sink: u32,
+    process_id: Option<u32>,
+}
+
+fn pactl_sink_inputs() -> anyhow::Result<Vec<PactlSinkInput>> {
+    let output = pactl_command()
+        .args(["-f", "json", "list", "sink-inputs"])
+        .output()
+        .context("list Linux application playback streams")?;
+    anyhow::ensure!(
+        output.status.success(),
+        "Could not inspect Linux application playback streams"
+    );
+    parse_pactl_sink_inputs(&output.stdout)
+}
+
+fn parse_pactl_sink_inputs(output: &[u8]) -> anyhow::Result<Vec<PactlSinkInput>> {
+    let inputs: Vec<serde_json::Value> =
+        serde_json::from_slice(output).context("parse Linux playback streams")?;
+    inputs
+        .into_iter()
+        .map(|input| {
+            let id = input["index"]
+                .as_u64()
+                .and_then(|value| u32::try_from(value).ok())
+                .ok_or_else(|| anyhow!("Linux playback stream has an invalid index"))?;
+            let sink = input["sink"]
+                .as_u64()
+                .and_then(|value| u32::try_from(value).ok())
+                .ok_or_else(|| anyhow!("Linux playback stream has an invalid sink"))?;
+            let process_id = input["properties"]["application.process.id"]
+                .as_str()
+                .and_then(|value| value.parse().ok());
+            Ok(PactlSinkInput {
+                id,
+                sink,
+                process_id,
+            })
+        })
+        .collect()
+}
+
+fn process_tree_ids(root: u32) -> anyhow::Result<HashSet<u32>> {
+    let mut parents = HashMap::new();
+    for entry in std::fs::read_dir("/proc").context("inspect Linux process tree")? {
+        let entry = entry?;
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        let Ok(process_id) = name.parse::<u32>() else {
+            continue;
+        };
+        let Ok(status) = std::fs::read_to_string(entry.path().join("status")) else {
+            continue;
+        };
+        let parent = status.lines().find_map(|line| {
+            line.strip_prefix("PPid:")
+                .and_then(|value| value.trim().parse::<u32>().ok())
+        });
+        if let Some(parent) = parent {
+            parents.insert(process_id, parent);
+        }
+    }
+
+    let mut tree = HashSet::from([root]);
+    loop {
+        let before = tree.len();
+        for (process_id, parent) in &parents {
+            if tree.contains(parent) {
+                tree.insert(*process_id);
+            }
+        }
+        if tree.len() == before {
+            break;
+        }
+    }
+    Ok(tree)
+}
+
+fn load_pactl_module(arguments: &[&str]) -> anyhow::Result<u32> {
+    let output = pactl_command()
+        .arg("load-module")
+        .args(arguments)
+        .output()
+        .context("load PulseAudio/PipeWire compatibility module")?;
+    anyhow::ensure!(
+        output.status.success(),
+        "PulseAudio/PipeWire rejected module '{}': {}",
+        arguments.first().copied().unwrap_or_default(),
+        String::from_utf8_lossy(&output.stderr).trim()
+    );
+    String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse()
+        .context("parse PulseAudio/PipeWire module id")
+}
+
+fn unload_pactl_module(module: u32) -> anyhow::Result<()> {
+    let status = pactl_command()
+        .args(["unload-module", &module.to_string()])
+        .status()
+        .context("unload PulseAudio/PipeWire compatibility module")?;
+    anyhow::ensure!(
+        status.success(),
+        "Could not unload Linux audio module {module}"
+    );
+    Ok(())
+}
+
+fn wait_for_pactl_sink(name: &str) -> anyhow::Result<u32> {
+    let started = Instant::now();
+    while started.elapsed() < Duration::from_secs(3) {
+        let output = pactl_command()
+            .args(["list", "short", "sinks"])
+            .output()
+            .context("find isolated Linux application-audio sink")?;
+        if output.status.success()
+            && let Some(index) = String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .find_map(|line| {
+                    let mut fields = line.split_whitespace();
+                    let index = fields.next()?.parse::<u32>().ok()?;
+                    (fields.next()? == name).then_some(index)
+                })
+        {
+            return Ok(index);
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    bail!("Isolated Linux application-audio sink did not appear within three seconds")
+}
+
+fn move_pactl_sink_input(input: u32, sink: u32) -> anyhow::Result<()> {
+    let status = pactl_command()
+        .args(["move-sink-input", &input.to_string(), &sink.to_string()])
+        .status()
+        .context("route Linux application playback stream")?;
+    anyhow::ensure!(
+        status.success(),
+        "Could not route Linux application playback stream {input}"
+    );
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -1207,7 +1520,7 @@ impl PulseInputRoute {
             return Ok(None);
         }
         let default_sink = pactl_default_sink();
-        let sources = Command::new("pactl")
+        let sources = pactl_command()
             .args(["list", "short", "sources"])
             .output()
             .context("inspect the default PulseAudio/PipeWire input")?;
@@ -1339,6 +1652,26 @@ impl AudioSource for SystemAudioSource {
         Self: Sized,
     {
         let device_name = config.device_name.clone();
+        if let Some(route) = config.application_route.clone() {
+            let cancel = ctx.stop_token().child_token();
+            ctx.tasks()
+                .spawn_thread("application-audio-route-watcher", move || {
+                    let mut last_error = None;
+                    while !cancel.is_cancelled() {
+                        if let Err(error) = route.reconcile() {
+                            let message = error.to_string();
+                            if last_error.as_ref() != Some(&message) {
+                                tracing::warn!(%error, "Linux application-audio routing reconciliation failed; retrying");
+                            }
+                            last_error = Some(message);
+                        } else if last_error.take().is_some() {
+                            tracing::info!("Linux application-audio routing reconciliation recovered");
+                        }
+                        std::thread::sleep(Duration::from_millis(250));
+                    }
+                    Ok(())
+                });
+        }
         let setup = <crate::sources::Microphone as AudioSource>::setup(config.feed_lock, tx, ctx);
         async move {
             let inner = setup
@@ -1352,6 +1685,7 @@ impl AudioSource for SystemAudioSource {
             Ok(Self {
                 inner,
                 monitor_route: config.monitor_route,
+                application_route: config.application_route,
                 feed: config.feed,
             })
         }
@@ -1363,6 +1697,7 @@ impl AudioSource for SystemAudioSource {
 
     async fn stop(&mut self) -> anyhow::Result<()> {
         drop(self.monitor_route.take());
+        drop(self.application_route.take());
         self.inner.stop().await?;
         self.feed.actor.kill();
         self.feed.actor.wait_for_stop().await;
@@ -1435,6 +1770,88 @@ async fn create_system_audio_source_config() -> anyhow::Result<SystemAudioSource
         feed_lock: Arc::new(lock),
         device_name,
         monitor_route,
+        application_route: None,
+        feed: owned_feed,
+    })
+}
+
+async fn create_application_audio_source_config(
+    process_id: u32,
+) -> anyhow::Result<SystemAudioSourceConfig> {
+    let application_route = Arc::new(ApplicationAudioRoute::create(process_id)?);
+    let devices = MicrophoneFeed::list();
+    let available = devices.keys().cloned().collect::<Vec<_>>();
+    let device_name = pulse_cpal_device_name(&available).ok_or_else(|| {
+        anyhow!(
+            "Linux application audio requires a PulseAudio/PipeWire-compatible CPAL input. Available input devices: {available:?}"
+        )
+    })?;
+    let sources = pactl_command()
+        .args(["list", "short", "sources"])
+        .output()
+        .context("inspect Linux application-audio monitor source")?;
+    anyhow::ensure!(
+        sources.status.success(),
+        "Could not inspect Linux application-audio monitor source"
+    );
+    let monitor_source = application_route.monitor_source();
+    let monitor_source_index =
+        pactl_source_index(&String::from_utf8_lossy(&sources.stdout), &monitor_source)
+            .ok_or_else(|| anyhow!("Linux application-audio monitor source did not appear"))?;
+    let default_source = pactl_default_source();
+    let default_source_index = default_source
+        .as_deref()
+        .and_then(|source| pactl_source_index(&String::from_utf8_lossy(&sources.stdout), source));
+    let previous_process_source_outputs = current_process_source_outputs()?;
+
+    let (error_tx, _error_rx) = flume::bounded(16);
+    let feed = MicrophoneFeed::spawn(MicrophoneFeed::new_system_audio(error_tx));
+    let owned_feed = OwnedSystemAudioFeed {
+        actor: feed.clone(),
+        build_scope: crate::output_pipeline::PipelineBuildScope::current(),
+        stopped: false,
+    };
+    feed.ask(microphone::SetInput {
+        label: device_name.clone(),
+        settings: None,
+    })
+    .await
+    .map_err(|error| anyhow!("Failed to set Linux application-audio input: {error}"))?
+    .await
+    .with_context(|| format!("Linux application-audio input '{device_name}' failed to connect"))?;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let source_output = newly_created_source_output(
+        &previous_process_source_outputs,
+        &current_process_source_outputs()?,
+    )?;
+    let original_source = current_process_source_outputs()?
+        .into_iter()
+        .find(|output| output.id == source_output)
+        .ok_or_else(|| anyhow!("Linux application-audio capture stream disappeared"))?
+        .source;
+    let monitor_route = PactlMonitorRoute {
+        monitor_source,
+        monitor_source_index,
+        default_source,
+        default_source_index,
+        source_output,
+        original_source,
+        previous_process_source_outputs,
+    };
+    apply_pactl_monitor_route(&monitor_route)?;
+    application_route.reconcile()?;
+
+    let lock = feed
+        .ask(microphone::Lock)
+        .await
+        .map_err(|error| anyhow!("Failed to lock Linux application-audio input: {error}"))?;
+
+    Ok(SystemAudioSourceConfig {
+        feed_lock: Arc::new(lock),
+        device_name,
+        monitor_route: Some(monitor_route),
+        application_route: Some(application_route),
         feed: owned_feed,
     })
 }
@@ -1644,10 +2061,7 @@ fn system_audio_device_rank(name: &str) -> Option<u8> {
 fn select_pactl_monitor_source(
     available_devices: &[String],
 ) -> anyhow::Result<Option<SelectedSystemAudioInput>> {
-    let output = match Command::new("pactl")
-        .args(["list", "short", "sources"])
-        .output()
-    {
+    let output = match pactl_command().args(["list", "short", "sources"]).output() {
         Ok(output) if output.status.success() => output,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Err(anyhow!(
@@ -1725,7 +2139,7 @@ fn previous_source_destination(
 }
 
 fn current_process_source_outputs() -> anyhow::Result<Vec<PactlSourceOutput>> {
-    let output = Command::new("pactl")
+    let output = pactl_command()
         .args(["-f", "json", "list", "source-outputs"])
         .output()
         .context("list PulseAudio/PipeWire source outputs")?;
@@ -1793,7 +2207,7 @@ fn move_pactl_source_output(source_output: u32, source: &str) -> anyhow::Result<
     let source_index = match source.parse::<u32>() {
         Ok(index) => index,
         Err(_) => {
-            let sources = Command::new("pactl")
+            let sources = pactl_command()
                 .args(["list", "short", "sources"])
                 .output()
                 .context("resolve PulseAudio/PipeWire routing destination")?;
@@ -1805,7 +2219,7 @@ fn move_pactl_source_output(source_output: u32, source: &str) -> anyhow::Result<
             )?
         }
     };
-    let status = Command::new("pactl")
+    let status = pactl_command()
         .args(["move-source-output", &source_output.to_string(), source])
         .status()
         .context("move PulseAudio/PipeWire system-audio stream")?;
@@ -1892,7 +2306,7 @@ fn pactl_default_source() -> Option<String> {
 }
 
 fn pactl_default_device(command: &str) -> Option<String> {
-    let output = Command::new("pactl").arg(command).output().ok()?;
+    let output = pactl_command().arg(command).output().ok()?;
 
     output
         .status
@@ -2436,13 +2850,26 @@ fn x11_source_pixel(
 mod system_audio_tests {
     use super::{
         OwnedSystemAudioFeed, PactlSourceOutput, PulseInputRole, newly_created_source_output,
-        pactl_monitor_preference, pactl_source_index, preferred_system_audio_device,
-        previous_source_destination, process_source_output_ids, pulse_input_route_destination,
-        retry_system_audio_connection, source_output_needs_move, source_output_route_matches,
-        started_input_source_output, uses_default_pulse_input, wait_for_audio_after_route,
-        wait_for_started_source_output,
+        pactl_monitor_preference, pactl_source_index, parse_pactl_sink_inputs,
+        preferred_system_audio_device, previous_source_destination, process_source_output_ids,
+        pulse_input_route_destination, retry_system_audio_connection, source_output_needs_move,
+        source_output_route_matches, started_input_source_output, uses_default_pulse_input,
+        wait_for_audio_after_route, wait_for_started_source_output,
     };
     use tokio_util::sync::CancellationToken;
+
+    #[test]
+    fn application_audio_reads_sink_and_process_identity_from_pactl_json() {
+        let inputs = parse_pactl_sink_inputs(
+            br#"[{"index":17,"sink":4,"properties":{"application.process.id":"812"}}]"#,
+        )
+        .unwrap();
+
+        assert_eq!(inputs.len(), 1);
+        assert_eq!(inputs[0].id, 17);
+        assert_eq!(inputs[0].sink, 4);
+        assert_eq!(inputs[0].process_id, Some(812));
+    }
 
     #[test]
     fn cancelled_system_route_does_not_probe_or_publish_a_stream() {

@@ -846,7 +846,8 @@ impl Actor {
 pub struct ActorBuilder {
     output_path: PathBuf,
     capture_target: ScreenCaptureTarget,
-    system_audio: bool,
+    audio_source: crate::screen_capture::AudioCaptureSource,
+    show_cursor: bool,
     mic_feed: Option<Arc<MicrophoneFeedLock>>,
     camera_feed: Option<Arc<crate::feeds::camera::CameraFeedLock>>,
     #[cfg(target_os = "linux")]
@@ -871,7 +872,8 @@ impl ActorBuilder {
         Self {
             output_path: output,
             capture_target,
-            system_audio: false,
+            audio_source: crate::screen_capture::AudioCaptureSource::None,
+            show_cursor: true,
             mic_feed: None,
             camera_feed: None,
             #[cfg(target_os = "linux")]
@@ -905,7 +907,24 @@ impl ActorBuilder {
     }
 
     pub fn with_system_audio(mut self, system_audio: bool) -> Self {
-        self.system_audio = system_audio;
+        self.audio_source = if system_audio {
+            crate::screen_capture::AudioCaptureSource::System
+        } else {
+            crate::screen_capture::AudioCaptureSource::None
+        };
+        self
+    }
+
+    pub fn with_audio_source(
+        mut self,
+        audio_source: crate::screen_capture::AudioCaptureSource,
+    ) -> Self {
+        self.audio_source = audio_source;
+        self
+    }
+
+    pub fn with_show_cursor(mut self, show_cursor: bool) -> Self {
+        self.show_cursor = show_cursor;
         self
     }
 
@@ -973,7 +992,8 @@ impl ActorBuilder {
             self.output_path,
             RecordingBaseInputs {
                 capture_target: self.capture_target,
-                capture_system_audio: self.system_audio,
+                audio_source: self.audio_source,
+                show_cursor: self.show_cursor,
                 mic_feed: self.mic_feed,
                 camera_feed: self.camera_feed,
                 start_gate: self.start_gate,
@@ -1140,7 +1160,7 @@ async fn build_instant_recording_actor(
                 cap_utils::operation_diagnostics::resource_id(&recording_dir),
             ),
             Field::number("requested_fps", max_fps as u64),
-            Field::flag("system_audio", inputs.capture_system_audio),
+            Field::label("audio_source", inputs.audio_source.as_str()),
             Field::flag("microphone", inputs.mic_feed.is_some()),
             Field::flag("camera", inputs.camera_feed.is_some()),
         ],
@@ -1175,8 +1195,8 @@ async fn build_instant_recording_actor(
     #[cfg(target_os = "linux")]
     anyhow::ensure!(
         !matches!(inputs.capture_target, ScreenCaptureTarget::CameraOnly)
-            || !inputs.capture_system_audio,
-        "System audio is not supported for Linux Instant CameraOnly recordings. Disable system audio or choose a screen target."
+            || !inputs.audio_source.is_enabled(),
+        "Audio capture is not supported for Linux Instant CameraOnly recordings. Disable audio capture or choose a screen target."
     );
     #[cfg(target_os = "linux")]
     let LinuxCameraConfig {
@@ -1325,13 +1345,14 @@ async fn build_instant_recording_actor(
             let max_capture_size = None;
 
             let screen_source = ScreenCaptureConfig::<ScreenCaptureMethod>::init(
+                inputs.capture_target.clone(),
                 display,
                 crop_bounds,
-                true,
+                inputs.show_cursor,
                 max_fps,
                 max_capture_size,
                 timestamps.system_time(),
-                inputs.capture_system_audio,
+                inputs.audio_source,
                 #[cfg(target_os = "linux")]
                 crate::sources::screen_capture::LinuxCaptureSource::from_target(
                     &inputs.capture_target,

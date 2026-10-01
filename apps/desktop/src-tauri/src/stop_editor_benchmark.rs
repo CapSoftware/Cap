@@ -224,7 +224,12 @@ async fn measure(
         state.clone(),
         crate::recording::StartRecordingInputs {
             capture_target,
-            capture_system_audio: config.system_audio,
+            audio_source: if config.system_audio {
+                cap_recording::screen_capture::AudioCaptureSource::System
+            } else {
+                cap_recording::screen_capture::AudioCaptureSource::None
+            },
+            show_cursor: true,
             mode: cap_recording::RecordingMode::Studio,
             organization_id: None,
         },

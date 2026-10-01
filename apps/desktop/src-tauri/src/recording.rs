@@ -22,7 +22,7 @@ use cap_recording::{
     sources::MicrophoneSourceError,
     sources::{
         screen_capture,
-        screen_capture::{CaptureDisplay, CaptureWindow, ScreenCaptureTarget},
+        screen_capture::{AudioCaptureSource, CaptureDisplay, CaptureWindow, ScreenCaptureTarget},
     },
     studio_recording,
 };
@@ -1158,11 +1158,21 @@ where
 #[derive(Deserialize, Type, Clone, Debug)]
 pub struct StartRecordingInputs {
     pub capture_target: ScreenCaptureTarget,
-    #[serde(default)]
-    pub capture_system_audio: bool,
+    #[serde(
+        default,
+        alias = "capture_system_audio",
+        deserialize_with = "screen_capture::deserialize_audio_capture_source"
+    )]
+    pub audio_source: AudioCaptureSource,
+    #[serde(default = "default_show_cursor")]
+    pub show_cursor: bool,
     pub mode: RecordingMode,
     #[serde(default)]
     pub organization_id: Option<String>,
+}
+
+fn default_show_cursor() -> bool {
+    true
 }
 
 fn desktop_recording_defaults(
@@ -2025,12 +2035,17 @@ async fn start_recording_prepared(
     }
 
     let is_camera_only = matches!(inputs.capture_target, ScreenCaptureTarget::CameraOnly);
+    if inputs.audio_source == AudioCaptureSource::Application
+        && !matches!(inputs.capture_target, ScreenCaptureTarget::Window { .. })
+    {
+        return Err("Application audio requires a window capture target".to_string());
+    }
 
     #[cfg(target_os = "linux")]
     linux_instant::validate_inputs(&inputs)?;
 
     if is_camera_only {
-        inputs.capture_system_audio = false;
+        inputs.audio_source = AudioCaptureSource::None;
     }
 
     {
@@ -2684,7 +2699,8 @@ async fn start_recording_prepared(
                                     recording_dir.clone(),
                                     inputs.capture_target.clone(),
                                 )
-                                .with_system_audio(inputs.capture_system_audio),
+                                .with_audio_source(inputs.audio_source)
+                                .with_show_cursor(inputs.show_cursor),
                                 camera_feed.is_some(),
                                 None,
                             );
@@ -2733,7 +2749,8 @@ async fn start_recording_prepared(
                                 recording_dir.clone(),
                                 inputs.capture_target.clone(),
                             )
-                            .with_system_audio(inputs.capture_system_audio)
+                            .with_audio_source(inputs.audio_source)
+                            .with_show_cursor(inputs.show_cursor)
                             .with_max_output_size(instant_mode_max_resolution);
 
                             builder = builder.with_start_gate(start_gate.clone());
@@ -2787,7 +2804,7 @@ async fn start_recording_prepared(
                                 &app_handle,
                                 &recording_dir,
                                 &video_upload_info.id,
-                                inputs.capture_system_audio || mic_feed.is_some(),
+                                inputs.audio_source.is_enabled() || mic_feed.is_some(),
                             )
                             .await
                             .map_err(anyhow::Error::from)?;
@@ -2821,7 +2838,7 @@ async fn start_recording_prepared(
                                         video_upload_info.clone(),
                                         events,
                                         attempt.upload(),
-                                        inputs.capture_system_audio || mic_feed.is_some(),
+                                        inputs.audio_source.is_enabled() || mic_feed.is_some(),
                                     ),
                                 ))
                             };
@@ -2836,7 +2853,7 @@ async fn start_recording_prepared(
                                         Some(finish_upload_rx.clone()),
                                         upload_session,
                                         video_upload_info.clone(),
-                                        inputs.capture_system_audio || mic_feed.is_some(),
+                                        inputs.audio_source.is_enabled() || mic_feed.is_some(),
                                     )
                                 } else {
                                     let progressive_upload = InstantMultipartUpload::spawn(
@@ -2845,7 +2862,7 @@ async fn start_recording_prepared(
                                         video_upload_info.clone(),
                                         upload_session,
                                         Some(finish_upload_rx.clone()),
-                                        inputs.capture_system_audio || mic_feed.is_some(),
+                                        inputs.audio_source.is_enabled() || mic_feed.is_some(),
                                     );
                                     SegmentUploader {
                                         handle: progressive_upload.handle,
@@ -7037,7 +7054,7 @@ async fn emit_recording_started_telemetry(app: &AppHandle, state_mtx: &MutableSt
             target_kind,
             has_camera,
             state.selected_mic_label.is_some(),
-            inputs.capture_system_audio,
+            inputs.audio_source.is_enabled(),
         )
     };
 
@@ -8068,7 +8085,7 @@ pub(crate) mod linux_instant {
     pub fn validate_inputs(inputs: &StartRecordingInputs) -> Result<(), String> {
         if inputs.mode == RecordingMode::Instant
             && matches!(inputs.capture_target, ScreenCaptureTarget::CameraOnly)
-            && inputs.capture_system_audio
+            && inputs.audio_source.is_enabled()
         {
             Err("System audio is not supported for Linux Instant CameraOnly. Disable it before recording.".into())
         } else {
@@ -8968,7 +8985,8 @@ pub(crate) mod linux_instant {
                 capture_target: ScreenCaptureTarget::Window {
                     id: "1".parse().unwrap(),
                 },
-                capture_system_audio: false,
+                audio_source: AudioCaptureSource::None,
+                show_cursor: true,
                 mode: RecordingMode::Instant,
                 organization_id: None,
             };
@@ -9079,15 +9097,16 @@ pub(crate) mod linux_instant {
         fn explicit_camera_only_system_audio_request_is_rejected_before_normalization() {
             let mut inputs = StartRecordingInputs {
                 capture_target: ScreenCaptureTarget::CameraOnly,
-                capture_system_audio: true,
+                audio_source: AudioCaptureSource::System,
+                show_cursor: true,
                 mode: RecordingMode::Instant,
                 organization_id: None,
             };
             assert!(validate_inputs(&inputs).is_err());
-            assert!(inputs.capture_system_audio);
-            inputs.capture_system_audio = false;
+            assert!(inputs.audio_source.is_enabled());
+            inputs.audio_source = AudioCaptureSource::None;
             assert!(validate_inputs(&inputs).is_ok());
-            inputs.capture_system_audio = true;
+            inputs.audio_source = AudioCaptureSource::System;
             inputs.mode = RecordingMode::Studio;
             assert!(validate_inputs(&inputs).is_ok());
         }

@@ -178,6 +178,98 @@ pub enum SourceError {
     NoDisplay(DisplayId),
     #[error("AsContentFilter")]
     AsContentFilter,
+    #[error("NoWindow: Id '{0}'")]
+    NoWindow(WindowId),
+}
+
+fn content_filter_for_target(
+    target: &ScreenCaptureTarget,
+    content: arc::R<sc::ShareableContent>,
+    excluded_windows: &[WindowId],
+    capture_phase: &'static str,
+) -> Result<arc::R<sc::ContentFilter>, SourceError> {
+    match target {
+        ScreenCaptureTarget::Window { id } => {
+            let window = Window::from_id(id).ok_or_else(|| SourceError::NoWindow(id.clone()))?;
+            let sc_window = window
+                .raw_handle()
+                .as_sc(content)
+                .ok_or_else(|| SourceError::NoWindow(id.clone()))?;
+            Ok(sc::ContentFilter::with_desktop_independent_window(
+                sc_window.as_ref(),
+            ))
+        }
+        ScreenCaptureTarget::Display { id } | ScreenCaptureTarget::Area { screen: id, .. } => {
+            let display = Display::from_id(id).ok_or_else(|| SourceError::NoDisplay(id.clone()))?;
+            let excluded_sc_windows =
+                excluded_shareable_windows(excluded_windows, &content, capture_phase);
+            display
+                .raw_handle()
+                .as_content_filter_excluding_windows(content, excluded_sc_windows)
+                .ok_or(SourceError::AsContentFilter)
+        }
+        ScreenCaptureTarget::CameraOnly => Err(SourceError::AsContentFilter),
+    }
+}
+
+fn forward_audio_sample_buffer(
+    sample_buffer: &cm::SampleBuf,
+    audio_tx: &mut mpsc::Sender<AudioFrame>,
+    frame_counter: &AtomicU64,
+    drop_counter: &AtomicU64,
+    stall_health_tx: &output_pipeline::HealthSender,
+    source_label: &'static str,
+) {
+    use ffmpeg::ChannelLayout;
+
+    let Ok(buf_list) = sample_buffer.audio_buf_list::<2>() else {
+        warn!("Failed to extract audio buffer list from sample, dropping audio chunk");
+        return;
+    };
+    let Ok(slice) = buf_list.block().as_slice() else {
+        warn!("Failed to get audio buffer slice, dropping audio chunk");
+        return;
+    };
+
+    let mut frame = ffmpeg::frame::Audio::new(
+        ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Planar),
+        sample_buffer.num_samples() as usize,
+        ChannelLayout::STEREO,
+    );
+    frame.set_rate(48_000);
+    let data_bytes_size = buf_list.list().buffers[0].data_bytes_size as usize;
+    for i in 0..frame.planes() {
+        let start = i.saturating_mul(data_bytes_size);
+        let end = start.saturating_add(data_bytes_size);
+        let Some(source) = slice.get(start..end) else {
+            warn!("Audio buffer slice too small for plane data, dropping audio chunk");
+            return;
+        };
+        let destination = frame.data_mut(i);
+        if destination.len() != source.len() {
+            warn!("Audio frame plane size mismatch, dropping audio chunk");
+            return;
+        }
+        destination.copy_from_slice(source);
+    }
+
+    let mach_timestamp = cm::Clock::convert_host_time_to_sys_units(sample_buffer.pts());
+    let timestamp =
+        Timestamp::MachAbsoluteTime(cap_timestamp::MachAbsoluteTimestamp::new(mach_timestamp));
+    match output_pipeline::send_with_stall_budget_futures(
+        audio_tx,
+        AudioFrame::new(frame, timestamp),
+        source_label,
+        stall_health_tx,
+    ) {
+        output_pipeline::StallSendOutcome::Sent => {
+            frame_counter.fetch_add(1, atomic::Ordering::Relaxed);
+        }
+        output_pipeline::StallSendOutcome::StalledAndDropped { .. }
+        | output_pipeline::StallSendOutcome::Disconnected => {
+            drop_counter.fetch_add(1, atomic::Ordering::Relaxed);
+        }
+    }
 }
 
 pub struct VideoFrame {
@@ -207,7 +299,15 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
         debug!(buffer_size = buffer_size, "Screen capture buffer size");
         let (video_tx, video_rx) = flume::bounded(buffer_size);
         let drop_counter: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
-        let (mut audio_tx, audio_rx) = if self.system_audio {
+        let separate_system_audio = matches!(
+            (&self.audio_source, &self.config.target),
+            (
+                AudioCaptureSource::System,
+                ScreenCaptureTarget::Window { .. }
+            )
+        );
+        let captures_audio = self.audio_source.is_enabled() && !separate_system_audio;
+        let (audio_tx, audio_rx) = if self.audio_source.is_enabled() {
             let (tx, rx) = mpsc::channel(128);
             (Some(tx), Some(rx))
         } else {
@@ -216,19 +316,12 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
         let system_audio_drop_counter: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
         let system_audio_frame_counter: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
 
-        let display = Display::from_id(&self.config.display)
-            .ok_or_else(|| SourceError::NoDisplay(self.config.display.clone()))?;
-
-        let excluded_sc_windows =
-            excluded_shareable_windows(&self.excluded_windows, &self.shareable_content, "initial");
-
-        let content_filter = display
-            .raw_handle()
-            .as_content_filter_excluding_windows(
-                self.shareable_content.clone(),
-                excluded_sc_windows,
-            )
-            .ok_or(SourceError::AsContentFilter)?;
+        let content_filter = content_filter_for_target(
+            &self.config.target,
+            self.shareable_content.clone(),
+            &self.excluded_windows,
+            "initial",
+        )?;
 
         debug!("SCK content filter: {:?}", content_filter);
 
@@ -250,14 +343,16 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
             .with_height(size.height() as usize)
             .with_fps(self.config.fps as f32)
             .with_shows_cursor(self.config.show_cursor)
-            .with_captures_audio(self.system_audio)
+            .with_captures_audio(captures_audio)
             .with_queue_depth(queue_depth)
             .build();
 
         settings.set_pixel_format(cv::PixelFormat::_420V);
         settings.set_color_space_name(cg::color_space::names::srgb());
 
-        if let Some(crop_bounds) = self.config.crop_bounds {
+        if matches!(self.config.target, ScreenCaptureTarget::Area { .. })
+            && let Some(crop_bounds) = self.config.crop_bounds
+        {
             debug!("crop bounds: {:?}", crop_bounds);
             settings.set_src_rect(cg::Rect::new(
                 crop_bounds.position().x(),
@@ -283,9 +378,9 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
             tokio::sync::mpsc::channel::<output_pipeline::PipelineHealthEvent>(32);
 
         let rebuild_params = Arc::new(CapturerRebuildParams {
-            display_id: self.config.display.clone(),
+            target: self.config.target.clone(),
             config: self.config.clone(),
-            system_audio: self.system_audio,
+            system_audio: captures_audio,
             excluded_windows: self.excluded_windows.clone(),
             video_info: self.video_info,
             video_tx: video_tx.clone(),
@@ -301,6 +396,11 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
             stall_health_tx: stall_health_tx.clone(),
         });
 
+        let mut video_audio_tx = if captures_audio {
+            audio_tx.clone()
+        } else {
+            None
+        };
         let builder = scap_screencapturekit::Capturer::builder(content_filter, settings)
             .with_output_sample_buf_cb({
                 let video_frame_count = video_frame_counter.clone();
@@ -412,62 +512,19 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
                             }
                         }
                         scap_screencapturekit::Frame::Audio(_) => {
-                            use ffmpeg::ChannelLayout;
-
                             cap_fail::fail_ret!("screen_capture audio frame skip");
 
-                            let Some(audio_tx) = &mut audio_tx else {
+                            let Some(audio_tx) = &mut video_audio_tx else {
                                 return;
                             };
-
-                            let Ok(buf_list) = sample_buffer.audio_buf_list::<2>() else {
-                                warn!("Failed to extract audio buffer list from sample, dropping audio chunk");
-                                return;
-                            };
-                            let Ok(slice) = buf_list.block().as_slice() else {
-                                warn!("Failed to get audio buffer slice, dropping audio chunk");
-                                return;
-                            };
-
-                            let mut frame = ffmpeg::frame::Audio::new(
-                                ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Planar),
-                                sample_buffer.num_samples() as usize,
-                                ChannelLayout::STEREO,
-                            );
-                            frame.set_rate(48_000);
-                            let data_bytes_size =
-                                buf_list.list().buffers[0].data_bytes_size as usize;
-                            for i in 0..frame.planes() {
-                                let start = i.saturating_mul(data_bytes_size);
-                                let end = start.saturating_add(data_bytes_size);
-                                let Some(source) = slice.get(start..end) else {
-                                    warn!("Audio buffer slice too small for plane data, dropping audio chunk");
-                                    return;
-                                };
-                                let destination = frame.data_mut(i);
-                                if destination.len() != source.len() {
-                                    warn!("Audio frame plane size mismatch, dropping audio chunk");
-                                    return;
-                                }
-                                destination.copy_from_slice(source);
-                            }
-
-                            match output_pipeline::send_with_stall_budget_futures(
+                            forward_audio_sample_buffer(
+                                sample_buffer,
                                 audio_tx,
-                                AudioFrame::new(frame, timestamp),
-                                "screen-system-audio",
+                                &sys_audio_frame_counter,
+                                &sys_audio_drop_counter,
                                 &stall_health_tx,
-                            ) {
-                                output_pipeline::StallSendOutcome::Sent => {
-                                    sys_audio_frame_counter
-                                        .fetch_add(1, atomic::Ordering::Relaxed);
-                                }
-                                output_pipeline::StallSendOutcome::StalledAndDropped { .. }
-                                | output_pipeline::StallSendOutcome::Disconnected => {
-                                    sys_audio_drop_counter
-                                        .fetch_add(1, atomic::Ordering::Relaxed);
-                                }
-                            }
+                                "screen-system-audio",
+                            );
                         }
                         _ => {}
                     }
@@ -488,12 +545,25 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
 
         let cancel_token = CancellationToken::new();
         let capturer = Capturer::new(Arc::new(builder.build()?));
+        let video_error_rx = error_rx.resubscribe();
+        let (system_audio_capturer, system_audio_error_rx, restart_managed) =
+            if separate_system_audio {
+                let separate_audio_tx = audio_tx
+                    .clone()
+                    .ok_or_else(|| anyhow!("System audio channel was not initialized"))?;
+                let (audio_capturer, audio_error_rx) =
+                    create_separate_system_audio_capturer(&rebuild_params, separate_audio_tx)
+                        .await?;
+                (audio_capturer, audio_error_rx, false)
+            } else {
+                (capturer.clone(), error_rx, true)
+            };
 
         Ok((
             VideoSourceConfig {
                 inner: ChannelVideoSourceConfig::new(self.video_info, video_rx),
                 capturer: capturer.clone(),
-                error_rx: error_rx.resubscribe(),
+                error_rx: video_error_rx,
                 video_frame_counter: video_frame_counter.clone(),
                 drop_counter,
                 cancel_token: cancel_token.clone(),
@@ -504,11 +574,13 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
             audio_rx.map(|rx| {
                 SystemAudioSourceConfig(
                     ChannelAudioSourceConfig::new(self.audio_info(), rx),
-                    capturer,
-                    error_rx,
+                    system_audio_capturer,
+                    system_audio_error_rx,
                     system_audio_frame_counter,
                     system_audio_drop_counter,
                     rebuild_params,
+                    restart_managed,
+                    audio_tx,
                 )
             }),
         ))
@@ -737,20 +809,20 @@ impl output_pipeline::VideoSource for VideoSource {
                                 break Ok(());
                             }
 
-                            if Display::from_id(&rebuild_params.display_id).is_none() {
+                            if !rebuild_params.target.is_available() {
                                 error!(
-                                    display_id = ?rebuild_params.display_id,
-                                    "Capture target display is gone; aborting restart"
+                                    target = rebuild_params.target.kind_str(),
+                                    "Capture target is gone; aborting restart"
                                 );
                                 output_pipeline::emit_health(
                                     &health_tx,
                                     output_pipeline::PipelineHealthEvent::CaptureTargetLost {
-                                        target: "display".to_string(),
+                                        target: rebuild_params.target.kind_str().to_lowercase(),
                                     },
                                 );
                                 return Err(anyhow!(
-                                    "Capture target display disappeared: {:?}",
-                                    rebuild_params.display_id
+                                    "Capture target {} disappeared",
+                                    rebuild_params.target.kind_str()
                                 ));
                             }
 
@@ -919,7 +991,7 @@ fn system_stop_message() -> &'static str {
 }
 
 struct CapturerRebuildParams {
-    display_id: DisplayId,
+    target: ScreenCaptureTarget,
     config: Config,
     system_audio: bool,
     excluded_windows: Vec<WindowId>,
@@ -945,16 +1017,13 @@ async fn rebuild_capturer(params: &CapturerRebuildParams) -> anyhow::Result<Capt
         .await
         .map_err(|e| anyhow!("Failed to get shareable content during restart: {e}"))?;
 
-    let display = Display::from_id(&params.display_id)
-        .ok_or_else(|| anyhow!("Display not found during restart: {:?}", params.display_id))?;
-
-    let excluded_sc_windows =
-        excluded_shareable_windows(&params.excluded_windows, &shareable_content, "restart");
-
-    let content_filter = display
-        .raw_handle()
-        .as_content_filter_excluding_windows(shareable_content, excluded_sc_windows)
-        .ok_or_else(|| anyhow!("Failed to create content filter during restart"))?;
+    let content_filter = content_filter_for_target(
+        &params.target,
+        shareable_content,
+        &params.excluded_windows,
+        "restart",
+    )
+    .context("create content filter during restart")?;
 
     let size = PhysicalSize::new(
         params.video_info.width as f64,
@@ -977,7 +1046,9 @@ async fn rebuild_capturer(params: &CapturerRebuildParams) -> anyhow::Result<Capt
     settings.set_pixel_format(cv::PixelFormat::_420V);
     settings.set_color_space_name(cg::color_space::names::srgb());
 
-    if let Some(crop_bounds) = params.config.crop_bounds {
+    if matches!(params.config.target, ScreenCaptureTarget::Area { .. })
+        && let Some(crop_bounds) = params.config.crop_bounds
+    {
         settings.set_src_rect(cg::Rect::new(
             crop_bounds.position().x(),
             crop_bounds.position().y(),
@@ -1173,6 +1244,50 @@ async fn rebuild_capturer(params: &CapturerRebuildParams) -> anyhow::Result<Capt
     Ok(capturer)
 }
 
+async fn create_separate_system_audio_capturer(
+    params: &CapturerRebuildParams,
+    mut audio_tx: mpsc::Sender<AudioFrame>,
+) -> anyhow::Result<(Capturer, broadcast::Receiver<arc::R<ns::Error>>)> {
+    let shareable_content = sc::ShareableContent::current()
+        .await
+        .map_err(|error| anyhow!("Failed to get shareable content for system audio: {error}"))?;
+    let display = params
+        .target
+        .display()
+        .ok_or_else(|| anyhow!("Selected window is no longer attached to a display"))?;
+    let filter = content_filter_for_target(
+        &ScreenCaptureTarget::Display { id: display.id() },
+        shareable_content,
+        &[],
+        "system-audio",
+    )?;
+    let settings = scap_screencapturekit::StreamCfgBuilder::default()
+        .with_captures_audio(true)
+        .build();
+    let (error_tx, error_rx) = broadcast::channel(1);
+    let frame_counter = params.system_audio_frame_counter.clone();
+    let drop_counter = params.system_audio_drop_counter.clone();
+    let health_tx = params.stall_health_tx.clone();
+    let builder = scap_screencapturekit::Capturer::builder(filter, settings)
+        .with_captures_screen(false)
+        .with_output_sample_buf_cb(move |frame| {
+            if let scap_screencapturekit::Frame::Audio(audio_frame) = frame {
+                forward_audio_sample_buffer(
+                    audio_frame.sample_buf(),
+                    &mut audio_tx,
+                    &frame_counter,
+                    &drop_counter,
+                    &health_tx,
+                    "screen-system-audio",
+                );
+            }
+        })
+        .with_stop_with_err_cb(move |_, error| {
+            let _ = error_tx.send(error.retained());
+        });
+    Ok((Capturer::new(Arc::new(builder.build()?)), error_rx))
+}
+
 pub struct SystemAudioSourceConfig(
     ChannelAudioSourceConfig,
     Capturer,
@@ -1180,12 +1295,15 @@ pub struct SystemAudioSourceConfig(
     Arc<AtomicU64>,
     Arc<AtomicU64>,
     Arc<CapturerRebuildParams>,
+    bool,
+    Option<mpsc::Sender<AudioFrame>>,
 );
 
 pub struct SystemAudioSource {
     inner: ChannelAudioSource,
     capturer: Capturer,
     cancel_token: CancellationToken,
+    active_capturer: Arc<Mutex<Option<Capturer>>>,
 }
 
 impl output_pipeline::AudioSource for SystemAudioSource {
@@ -1205,13 +1323,17 @@ impl output_pipeline::AudioSource for SystemAudioSource {
             mut error_rx,
             frame_counter,
             drop_counter,
-            _rebuild_params,
+            rebuild_params,
+            restart_managed,
+            audio_tx,
         ) = config;
 
         let cancel_token = CancellationToken::new();
         let pipeline_cancel = ctx.stop_token();
         let stop_signal = ctx.stop_signal();
         let capturer_for_monitor = capturer.clone();
+        let active_capturer = Arc::new(Mutex::new(None));
+        let active_capturer_for_monitor = active_capturer.clone();
 
         ctx.tasks().spawn("system-audio", {
             let cancel = cancel_token.child_token();
@@ -1235,6 +1357,37 @@ impl output_pipeline::AudioSource for SystemAudioSource {
                                         break;
                                     }
                                     if is_system_stop_error(err.as_ref()) {
+                                        if !restart_managed {
+                                            capturer_for_monitor.mark_stopped();
+                                            system_stop_count += 1;
+                                            if system_stop_count > MAX_CAPTURE_RESTARTS {
+                                                return Err(anyhow!(system_stop_message()));
+                                            }
+                                            warn!(
+                                                system_stop_count,
+                                                "Screen capture audio stream stopped by system, attempting restart"
+                                            );
+                                            tokio::time::sleep(RESTART_DELAY).await;
+                                            let sender = audio_tx
+                                                .clone()
+                                                .ok_or_else(|| anyhow!("System audio channel was not initialized"))?;
+                                            let (new_capturer, new_error_rx) =
+                                                create_separate_system_audio_capturer(
+                                                    &rebuild_params,
+                                                    sender,
+                                                )
+                                                .await?;
+                                            new_capturer.start().await?;
+                                            if let Ok(mut guard) = active_capturer_for_monitor.lock() {
+                                                *guard = Some(new_capturer);
+                                            }
+                                            error_rx = new_error_rx;
+                                            info!(
+                                                system_stop_count,
+                                                "macOS system audio capture restarted successfully"
+                                            );
+                                            continue;
+                                        }
                                         system_stop_count += 1;
                                         if system_stop_count > MAX_CAPTURE_RESTARTS {
                                             warn!("Screen capture audio stream stopped by the system (exhausted restarts)");
@@ -1297,11 +1450,13 @@ impl output_pipeline::AudioSource for SystemAudioSource {
 
         ChannelAudioSource::setup(channel_config, tx, ctx).map({
             let cancel_token = cancel_token.clone();
+            let active_capturer = active_capturer.clone();
             move |v| {
                 v.map(|source| Self {
                     inner: source,
                     capturer,
                     cancel_token,
+                    active_capturer,
                 })
             }
         })
@@ -1315,7 +1470,16 @@ impl output_pipeline::AudioSource for SystemAudioSource {
 
     async fn stop(&mut self) -> anyhow::Result<()> {
         self.cancel_token.cancel();
-        self.capturer.stop().await?;
+        let active_capturer = self
+            .active_capturer
+            .lock()
+            .ok()
+            .and_then(|mut guard| guard.take());
+        active_capturer
+            .as_ref()
+            .unwrap_or(&self.capturer)
+            .stop()
+            .await?;
 
         Ok(())
     }

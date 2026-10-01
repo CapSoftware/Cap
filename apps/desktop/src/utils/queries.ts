@@ -18,6 +18,7 @@ import {
 import { createQueryInvalidate } from "./events";
 import {
 	type CameraInfo,
+	type AudioCaptureSource,
 	commands,
 	type DeviceOrModelID,
 	type RecordingMode,
@@ -190,7 +191,8 @@ export function createOptionsQuery() {
 		captureTarget: CameraCaptureTarget;
 		micName: string | null;
 		mode: RecordingMode;
-		captureSystemAudio?: boolean;
+		audioSource?: AudioCaptureSource;
+		showCursor?: boolean;
 		targetMode?: ExtendedRecordingTargetMode;
 		targetModeSource?: RecordingTargetModeSource;
 		targetModeDismissal?: TargetModeDismissal | null;
@@ -203,6 +205,8 @@ export function createOptionsQuery() {
 		micName: null,
 		cameraLabel: null,
 		mode: "studio",
+		audioSource: "none",
+		showCursor: true,
 		organizationId: null,
 	});
 
@@ -259,8 +263,11 @@ export function createOptionsQuery() {
 			if (data?.mode && data.mode !== _state.mode) {
 				_setState("mode", data.mode);
 			}
-			if (data?.systemAudio !== undefined) {
-				_setState("captureSystemAudio", data.systemAudio);
+			if (data?.audioSource !== undefined) {
+				_setState("audioSource", data.audioSource);
+			}
+			if (data?.showCursor !== undefined) {
+				_setState("showCursor", data.showCursor);
 			}
 			if (data?.organizationId !== undefined) {
 				_setState("organizationId", data.organizationId);
@@ -275,7 +282,8 @@ export function createOptionsQuery() {
 			micName: _state.micName,
 			cameraId: _state.cameraID,
 			mode: _state.mode,
-			systemAudio: _state.captureSystemAudio,
+			audioSource: _state.audioSource ?? "none",
+			showCursor: _state.showCursor !== false,
 			organizationId: _state.organizationId,
 		};
 
@@ -297,6 +305,14 @@ export function createOptionsQuery() {
 	if (state.cameraID !== undefined && !isStoredCameraId(state.cameraID)) {
 		setState("cameraID", null);
 	}
+	createEffect(() => {
+		if (
+			state.audioSource === "application" &&
+			state.captureTarget.variant !== "window"
+		) {
+			setState("audioSource", "none");
+		}
+	});
 
 	const setOptions = new Proxy(setState, {
 		apply(target, thisArg, args) {
