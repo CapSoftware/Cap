@@ -6714,6 +6714,7 @@ fn apply_recording_camera_preview_state(
     config.camera.background_blur = cap_project::BackgroundBlurConfig {
         mode: camera_preview_state.background_blur,
     };
+    config.camera.rotation = camera_preview_state.rotation_degrees();
 }
 
 fn should_enable_notch_overlay(
@@ -10372,7 +10373,7 @@ mod preparing_presentation_parity_tests {
     }
 
     #[test]
-    fn ordinary_late_camera_state_changes_only_the_three_existing_camera_fields() {
+    fn ordinary_late_camera_state_changes_only_the_preview_owned_camera_fields() {
         for (shape, expected_shape, rounding) in [
             (CameraPreviewShape::Round, CameraShape::Square, 100.0),
             (CameraPreviewShape::Square, CameraShape::Square, 25.0),
@@ -10390,6 +10391,7 @@ mod preparing_presentation_parity_tests {
                 expected.camera.shape = expected_shape;
                 expected.camera.rounding = rounding;
                 expected.camera.background_blur.mode = blur;
+                expected.camera.rotation = 90;
                 apply_recording_camera_preview_state(
                     &mut config,
                     &crate::camera::CameraPreviewState {
@@ -10397,6 +10399,7 @@ mod preparing_presentation_parity_tests {
                         shape: shape.clone(),
                         mirrored: false,
                         background_blur: blur,
+                        rotation: 90,
                     },
                 );
                 assert_eq!(value(&config), value(&expected));

@@ -3746,6 +3746,13 @@ impl ProjectUniforms {
         let base_padding = project.background.padding;
         let styled_project = project.style_at(timeline_time);
         let project = styled_project.as_ref();
+        let oriented_camera_size = options.camera_size.map(|size| {
+            if project.camera.swaps_axes() {
+                XY::new(size.y, size.x)
+            } else {
+                size
+            }
+        });
         let styled_crop = Self::get_crop(options, project);
         let has_layout_override =
             base_crop.size != styled_crop.size || base_padding != project.background.padding;
@@ -3876,8 +3883,7 @@ impl ProjectUniforms {
         // camera and cursor layers. Only engages when a camera actually exists;
         // otherwise the layers render normally (graceful full-screen fallback).
         let split_layout: Option<SplitLayoutComputed> = if scene.is_split() {
-            options
-                .camera_size
+            oriented_camera_size
                 .filter(|_| !project.camera.hide)
                 .map(|camera_size| {
                     let out_w = output_size.0 as f32;
@@ -4050,7 +4056,7 @@ impl ProjectUniforms {
             let (prev_start, prev_end) =
                 Self::display_bounds(&motion_prev_zoom, display_offset, display_size);
 
-            let scene_blur_strength = if options.camera_size.is_some() && !project.camera.hide {
+            let scene_blur_strength = if oriented_camera_size.is_some() && !project.camera.hide {
                 scene.camera_only_motion(&prev_scene)
             } else {
                 0.0
@@ -4260,7 +4266,8 @@ impl ProjectUniforms {
                         border_enabled: if decorated && border_on { 1.0 } else { 0.0 },
                         border_width: project.background.border.as_ref().map_or(5.0, |b| b.width),
                         preserve_source_alpha: 1.0,
-                        _padding1: [0.0; 3],
+                        frame_rotation: 0.0,
+                        _padding1: [0.0; 2],
                         border_color,
                         corner_radii: [1.0; 4],
                         // Chrome is decoration, not video: never graded.
@@ -4328,7 +4335,8 @@ impl ProjectUniforms {
                                 * takeover_accessory_fade,
                             border_enabled: 0.0,
                             border_width: 0.0,
-                            _padding1: [0.0; 3],
+                            frame_rotation: 0.0,
+                            _padding1: [0.0; 2],
                             border_color: [0.0; 4],
                             frame_size: [1.0, 1.0],
                             crop_bounds: [0.0, 0.0, 1.0, 1.0],
@@ -4390,7 +4398,8 @@ impl ProjectUniforms {
                     } else {
                         0.0
                     },
-                    _padding1: [0.0; 3],
+                    frame_rotation: 0.0,
+                    _padding1: [0.0; 2],
                     border_color,
                     corner_radii: display_corner_radii,
                     color_adjust_a: screen_color_grade.color_adjust_a,
@@ -4425,8 +4434,7 @@ impl ProjectUniforms {
             display_outer_bounds
         };
 
-        let camera = options
-            .camera_size
+        let camera = oriented_camera_size
             .filter(|_| !project.camera.hide && scene.should_render_camera())
             .map(|camera_size| {
                 let output_size = [output_size.0 as f32, output_size.1 as f32];
@@ -4626,7 +4634,8 @@ impl ProjectUniforms {
                     border_enabled: 0.0,
                     border_width: 0.0,
                     preserve_source_alpha: 0.0,
-                    _padding1: [0.0; 3],
+                    frame_rotation: f32::from(project.camera.rotation_degrees()),
+                    _padding1: [0.0; 2],
                     border_color: [0.0, 0.0, 0.0, 0.0],
                     corner_radii: [1.0; 4],
                     color_adjust_a: camera_color_grade.color_adjust_a,
@@ -4635,8 +4644,7 @@ impl ProjectUniforms {
                 }
             });
 
-        let camera_only = options
-            .camera_size
+        let camera_only = oriented_camera_size
             .filter(|_| !project.camera.hide && scene.is_transitioning_camera_only())
             .map(|camera_size| {
                 let output_size = [output_size.0 as f32, output_size.1 as f32];
@@ -4753,7 +4761,8 @@ impl ProjectUniforms {
                     border_enabled: 0.0,
                     border_width: 0.0,
                     preserve_source_alpha: 0.0,
-                    _padding1: [0.0; 3],
+                    frame_rotation: f32::from(project.camera.rotation_degrees()),
+                    _padding1: [0.0; 2],
                     border_color: [0.0, 0.0, 0.0, 0.0],
                     corner_radii: [1.0; 4],
                     color_adjust_a: camera_color_grade.color_adjust_a,
