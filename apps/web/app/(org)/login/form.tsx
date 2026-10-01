@@ -177,6 +177,18 @@ export function LoginForm() {
 		});
 	}, [getNextPath]);
 
+	const handleOidcSignIn = useCallback(() => {
+		const nextPath = getNextPath();
+		trackEvent("auth_started", {
+			method: "oidc",
+			is_signup: false,
+			auth_surface: "login",
+		});
+		signIn("oidc", {
+			...(nextPath ? { callbackUrl: nextPath } : {}),
+		});
+	}, [getNextPath]);
+
 	const handleWorkosSignIn = useCallback(
 		(identifier: string, connectionId?: string) => {
 			if (workosSignInPending.current) return;
@@ -596,7 +608,9 @@ const NormalLogin = ({
 				</Link>
 			</motion.p>
 
-			{(publicEnv.googleAuthAvailable || publicEnv.workosAuthAvailable) && (
+			{(publicEnv.googleAuthAvailable ||
+				publicEnv.workosAuthAvailable ||
+				publicEnv.oidcAuthAvailable) && (
 				<>
 					<div className="flex gap-4 items-center mt-4 mb-4">
 						<span className="flex-1 h-px bg-gray-5" />
@@ -631,6 +645,19 @@ const NormalLogin = ({
 									email login. Please enter your email.
 								</p>
 							</div>
+						)}
+						{publicEnv.oidcAuthAvailable && (
+							<MotionButton
+								variant="gray"
+								type="button"
+								className="w-full"
+								layout
+								onClick={handleOidcSignIn}
+								disabled={loading || emailSent}
+							>
+								<LucideArrowUpRight size={20} />
+								Login with {publicEnv.oidcName}
+							</MotionButton>
 						)}
 						{publicEnv.workosAuthAvailable && (
 							<MotionButton

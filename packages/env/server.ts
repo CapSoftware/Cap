@@ -75,6 +75,16 @@ function createServerEnv() {
 			WORKOS_CLIENT_ID: z.string().optional(),
 			WORKOS_API_KEY: z.string().optional(),
 
+			/// Generic OIDC
+			// Provide all three to add a sign-in button for any OpenID Connect
+			// provider. OIDC_ISSUER is the base URL whose
+			// /.well-known/openid-configuration describes the endpoints.
+			OIDC_ISSUER: z.string().optional(),
+			OIDC_CLIENT_ID: z.string().optional(),
+			OIDC_CLIENT_SECRET: z.string().optional(),
+			// Label for the sign-in button. Defaults to "SSO".
+			OIDC_NAME: z.string().optional(),
+
 			/// Settings
 			CAP_VIDEOS_DEFAULT_PUBLIC: boolString(true).describe(
 				"Should videos be public or private by default",

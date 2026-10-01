@@ -90,7 +90,42 @@ export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 			if (_providers) return _providers;
 			const appleClientId = serverEnv().APPLE_CLIENT_ID;
 			const appleClientSecret = serverEnv().APPLE_CLIENT_SECRET;
+			const oidcIssuer = serverEnv().OIDC_ISSUER;
+			const oidcClientId = serverEnv().OIDC_CLIENT_ID;
+			const oidcClientSecret = serverEnv().OIDC_CLIENT_SECRET;
 			_providers = [
+				// Any OpenID Connect provider, described by its discovery document.
+				// Email linking matches the WorkOS provider below: an operator who
+				// configures this controls the issuer and its email claim.
+				...(oidcIssuer && oidcClientId && oidcClientSecret
+					? [
+							{
+								id: "oidc",
+								name: serverEnv().OIDC_NAME || "SSO",
+								type: "oauth" as const,
+								wellKnown: `${oidcIssuer.replace(/\/$/, "")}/.well-known/openid-configuration`,
+								issuer: oidcIssuer,
+								clientId: oidcClientId,
+								clientSecret: oidcClientSecret,
+								idToken: true,
+								checks: ["state" as const, "pkce" as const],
+								authorization: { params: { scope: "openid email profile" } },
+								allowDangerousEmailAccountLinking: true,
+								profile(profile: Record<string, any>) {
+									return {
+										id: profile.sub,
+										name:
+											profile.name ||
+											profile.preferred_username ||
+											profile.email?.split("@")[0] ||
+											profile.sub,
+										email: profile.email?.trim().toLowerCase(),
+										image: profile.picture ?? null,
+									};
+								},
+							},
+						]
+					: []),
 				...(appleClientId && appleClientSecret
 					? [
 							AppleProvider({
