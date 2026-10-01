@@ -153,12 +153,12 @@ import {
 	topSlideAnimateClasses,
 } from "./ui";
 import { formatTime } from "./utils";
+import type { WaveformSegment } from "./waveform";
+import { WaveformSegmentConfig } from "./waveform-segment-config";
 import {
 	createWebCursorReplacement,
 	WebCursorReplacement,
-} from "./WebCursorReplacement";
-import type { WaveformSegment } from "./waveform";
-import { WaveformSegmentConfig } from "./waveform-segment-config";
+} from "./web-cursor-replacement";
 import { ZoomModeHelper } from "./ZoomModeHelper";
 
 const isWebEditor = import.meta.env.VITE_CAP_WEB_EDITOR === "true";
