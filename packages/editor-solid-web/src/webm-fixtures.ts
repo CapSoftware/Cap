@@ -1,5 +1,3 @@
-/// Builders for small WebM files used by the seek tests.
-
 const UNKNOWN = [0x01, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff];
 
 function id(value: number) {
