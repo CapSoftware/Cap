@@ -15,9 +15,9 @@ import { recordingRenderEligible } from "./render-recording-eligibility";
 import {
 	type RecordingRenderPayload,
 	recordingSourcesState,
-	renderRecordingWorkflow,
 	startRecordingRenderDirectly,
-} from "./render-recording-workflow";
+} from "./render-recording-start";
+import { renderRecordingWorkflow } from "./render-recording-workflow";
 import { isWebStudioEnabledForEmail } from "./web-studio-rollout";
 
 // The last source normally lands within a second of the one that finished

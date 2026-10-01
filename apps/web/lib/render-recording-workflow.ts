@@ -1,9 +1,4 @@
-import { db } from "@cap/database";
-import { users, videos, videoUploads } from "@cap/database/schema";
-import { recordingDefaultStyle } from "@cap/editor-cap-bundle/default-style";
-import { userIsPro } from "@cap/utils";
 import type { Video } from "@cap/web-domain";
-import { eq } from "drizzle-orm";
 import { FatalError, sleep } from "workflow";
 import { requestEditorPreparation } from "./editor-preparation";
 import { getSignedEditorSources, requestMediaEditor } from "./editor-session";
@@ -12,20 +7,14 @@ import {
 	attachRenderFarmJob,
 	clearRecordingRender,
 } from "./render-farm-records";
+import { startRenderFarmJob } from "./render-farm-start";
 import {
-	renderFarmPrepareSupport,
-	startRenderFarmJob,
-	startRenderFarmJobDirect,
-} from "./render-farm-start";
-import { recordingRenderSourcesReady } from "./render-recording-eligibility";
+	loadRenderVideo,
+	type RecordingRenderPayload,
+	recordingSourcesState,
+	startRecordingRenderDirectly,
+} from "./render-recording-start";
 import { runWorkflowPromise } from "./workflow-runtime";
-
-export type RecordingRenderPayload = {
-	videoId: string;
-	ownerId: string;
-	exportId: string;
-	origin: string;
-};
 
 const SOURCE_WAIT_ATTEMPTS = 480;
 const CAPACITY_WAIT_ATTEMPTS = 40;
@@ -38,56 +27,10 @@ function pollDelay(attempt: number) {
 	return attempt < 30 ? "1s" : "5s";
 }
 
-async function loadRenderVideo(payload: RecordingRenderPayload) {
-	const [row] = await db()
-		.select({ video: videos, owner: users, uploadPhase: videoUploads.phase })
-		.from(videos)
-		.innerJoin(users, eq(videos.ownerId, users.id))
-		.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
-		.where(eq(videos.id, payload.videoId as Video.VideoId));
-	const save = row?.video.metadata?.renderFarmSave;
-	if (
-		!row ||
-		row.video.ownerId !== payload.ownerId ||
-		save?.exportId !== payload.exportId ||
-		save.status !== "rendering"
-	) {
-		return null;
-	}
-	// The recording renders as it was recorded, in the owner's style. Edits
-	// made in the editor meanwhile reach the share link when they're saved.
-	const { webEditorProject: _edits, ...metadata } = row.video.metadata ?? {};
-	return {
-		video: {
-			...row.video,
-			metadata,
-			captionsEnabled: userIsPro(row.owner),
-			defaultStyle: recordingDefaultStyle(
-				row.owner.preferences?.editorDefaultStyle,
-				row.video.metadata?.recorderCamera,
-			),
-		},
-		uploadPhase: row.uploadPhase,
-	};
-}
-
 async function checkRecordingSources(payload: RecordingRenderPayload) {
 	"use step";
 
 	return await recordingSourcesState(payload);
-}
-
-/** Whether the render can start: its sources are in, or it was replaced. */
-export async function recordingSourcesState(payload: RecordingRenderPayload) {
-	const loaded = await loadRenderVideo(payload);
-	if (!loaded) return "superseded" as const;
-	return recordingRenderSourcesReady(
-		loaded.video.metadata,
-		loaded.video.duration,
-		loaded.uploadPhase,
-	)
-		? ("ready" as const)
-		: ("waiting" as const);
 }
 
 /**
@@ -98,32 +41,6 @@ async function startDirectRecordingRender(payload: RecordingRenderPayload) {
 	"use step";
 
 	return await startRecordingRenderDirectly(payload);
-}
-
-/** The farm-prepared start, run by the workflow or by the finished upload. */
-export async function startRecordingRenderDirectly(
-	payload: RecordingRenderPayload,
-) {
-	const support = await renderFarmPrepareSupport();
-	if (!support) return "unsupported" as const;
-	const loaded = await loadRenderVideo(payload);
-	if (!loaded) return "superseded" as const;
-	const started = await startRenderFarmJobDirect({
-		video: loaded.video,
-		origin: payload.origin,
-		kind: "recording",
-		exportId: payload.exportId,
-		support,
-	}).pipe(runWorkflowPromise);
-	if ("unsupported" in started) {
-		console.info(
-			`[renderRecording] ${payload.videoId} needs an editor worker: ${started.unsupported}`,
-		);
-		return "unsupported" as const;
-	}
-	await attachRenderFarmJob(loaded.video.id, payload.exportId, started.jobId);
-	console.info(`[renderRecording] ${payload.videoId} prepared by the farm`);
-	return "started" as const;
 }
 
 async function requestRecordingPreparation(payload: RecordingRenderPayload) {

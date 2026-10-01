@@ -71,6 +71,8 @@ vi.mock("@/lib/web-studio-rollout", () => ({
 }));
 vi.mock("@/lib/render-recording-workflow", () => ({
 	renderRecordingWorkflow: () => undefined,
+}));
+vi.mock("@/lib/render-recording-start", () => ({
 	recordingSourcesState: async () => state.sources.shift() ?? "ready",
 	startRecordingRenderDirectly: async () => {
 		if (state.direct instanceof Error) throw state.direct;
