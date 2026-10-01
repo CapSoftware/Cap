@@ -133,10 +133,15 @@ fn binary_path(app: &AppHandle) -> Option<PathBuf> {
     None
 }
 
-/// Mirror of `store::app_data_dir` in `apps/desktop-gpui`: the pidfile and the
-/// handoff marker live under the shared production identifier
-/// (`so.cap.desktop`), not this app's possibly-`.dev` one.
+/// Mirror of `store::app_data_dir` in `apps/desktop-gpui`: both handoff sides
+/// must use the same explicit sandbox directory when one is supplied.
 fn shared_data_dir() -> PathBuf {
+    if let Ok(dir) = std::env::var("CAP_GPUI_APP_DATA_DIR")
+        && !dir.trim().is_empty()
+    {
+        return PathBuf::from(dir);
+    }
+
     #[cfg(target_os = "macos")]
     let base = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into()))
         .join("Library/Application Support/so.cap.desktop");

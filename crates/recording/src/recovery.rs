@@ -2350,6 +2350,16 @@ impl RecoveryManager {
             }
             Err(error) => return Err(error.into()),
         };
+        let (image_segments, video_segments) = config
+            .timeline
+            .as_ref()
+            .map(|timeline| {
+                (
+                    timeline.image_segments.clone(),
+                    timeline.video_segments.clone(),
+                )
+            })
+            .unwrap_or_default();
 
         config.timeline = Some(TimelineConfiguration {
             segments: timeline_segments,
@@ -2357,7 +2367,8 @@ impl RecoveryManager {
             zoom_segments: Vec::new(),
             scene_segments: Vec::new(),
             style_segments: Vec::new(),
-            image_segments: Vec::new(),
+            image_segments,
+            video_segments,
             mask_segments: Vec::new(),
             text_segments: Vec::new(),
             caption_segments: Vec::new(),

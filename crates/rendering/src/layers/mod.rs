@@ -14,6 +14,7 @@ mod keyboard;
 mod mask;
 mod notch;
 mod text;
+mod video;
 
 use std::sync::OnceLock;
 
@@ -92,6 +93,7 @@ pub use keyboard::*;
 pub use mask::*;
 pub use notch::*;
 pub use text::*;
+pub use video::*;
 
 #[cfg(test)]
 mod font_tests {

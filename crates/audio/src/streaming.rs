@@ -135,6 +135,23 @@ impl AudioStream {
                 user: cancellation,
                 abort: None,
             },
+            crate::AudioData::SAMPLE_RATE,
+            false,
+        )
+    }
+
+    pub fn open_waveform(
+        path: &Path,
+        cancellation: Arc<AtomicBool>,
+    ) -> Result<Self, AudioStreamError> {
+        Self::open_controlled(
+            path,
+            StreamCancellation {
+                user: cancellation,
+                abort: None,
+            },
+            crate::AudioData::SAMPLE_RATE,
+            true,
         )
     }
 
@@ -149,16 +166,23 @@ impl AudioStream {
                 user,
                 abort: Some(abort),
             },
+            crate::AudioData::SAMPLE_RATE,
+            false,
         )
     }
 
     fn open_controlled(
         path: &Path,
         cancellation: StreamCancellation,
+        sample_rate: u32,
+        mono: bool,
     ) -> Result<Self, AudioStreamError> {
-        Self::open_from(cancellation, |cancellation| {
-            open_input(path, cancellation).map(StreamInput::File)
-        })
+        Self::open_from(
+            cancellation,
+            |cancellation| open_input(path, cancellation).map(StreamInput::File),
+            sample_rate,
+            mono,
+        )
     }
 
     pub fn open_relocatable<'a>(
@@ -190,21 +214,28 @@ impl AudioStream {
         paths: impl IntoIterator<Item = &'a Path>,
         cancellation: StreamCancellation,
     ) -> Result<Self, AudioStreamError> {
-        Self::open_from(cancellation, |cancellation| {
-            let cancellation = cancellation.clone();
-            cap_enc_ffmpeg::SegmentedInput::open_relocatable_interruptible(
-                source,
-                paths,
-                Arc::new(move || cancellation.is_cancelled()),
-            )
-            .map(StreamInput::Relocatable)
-            .map_err(|error| error.to_string())
-        })
+        Self::open_from(
+            cancellation,
+            |cancellation| {
+                let cancellation = cancellation.clone();
+                cap_enc_ffmpeg::SegmentedInput::open_relocatable_interruptible(
+                    source,
+                    paths,
+                    Arc::new(move || cancellation.is_cancelled()),
+                )
+                .map(StreamInput::Relocatable)
+                .map_err(|error| error.to_string())
+            },
+            crate::AudioData::SAMPLE_RATE,
+            false,
+        )
     }
 
     fn open_from(
         cancellation: StreamCancellation,
         open: impl FnOnce(&Arc<StreamCancellation>) -> Result<StreamInput, String>,
+        sample_rate: u32,
+        mono: bool,
     ) -> Result<Self, AudioStreamError> {
         let cancellation = Arc::new(cancellation);
         let at_open = |stage, detail: String| {
@@ -238,9 +269,9 @@ impl AudioStream {
             decoder.set_channel_layout(ChannelLayout::default(source_channels as i32));
         }
         decoder.set_packet_time_base(stream.time_base());
-        let channels = if source_channels <= 1 { 1 } else { 2 };
+        let channels = if mono || source_channels <= 1 { 1 } else { 2 };
         let mut options = ffmpeg::Dictionary::new();
-        options.set("filter_size", "128");
+        options.set("filter_size", if mono { "16" } else { "128" });
         options.set("cutoff", "0.97");
         let resampler = resampling::Context::get_with(
             decoder.format(),
@@ -248,7 +279,7 @@ impl AudioStream {
             decoder.rate(),
             crate::AudioData::SAMPLE_FORMAT,
             ChannelLayout::default(channels as i32),
-            crate::AudioData::SAMPLE_RATE,
+            sample_rate,
             options,
         )
         .map_err(|e| at_open("resampler-open", e.to_string()))?;

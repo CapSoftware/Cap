@@ -1830,6 +1830,7 @@ dependencies = [
  "cpal 0.15.3 (git+https://github.com/CapSoftware/cpal?rev=6013cb5f8bd3)",
  "ffmpeg-next",
  "thiserror 1.0.69",
+ "uuid",
  "workspace-hack",
 ]
 

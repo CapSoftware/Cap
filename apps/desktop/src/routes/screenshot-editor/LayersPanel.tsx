@@ -29,7 +29,7 @@ const ANNOTATION_TYPE_LABELS = {
 	draw: "Draw",
 };
 
-export function LayersPanel() {
+export function LayersPanel(props: { sidebar?: boolean }) {
 	const {
 		annotations,
 		setAnnotations,
@@ -200,7 +200,14 @@ export function LayersPanel() {
 	);
 
 	return (
-		<div class="flex flex-col h-full w-56 border-r border-gray-3 bg-gray-1 dark:bg-gray-2 select-none z-20">
+		<div
+			class={cx(
+				"flex flex-col select-none",
+				props.sidebar
+					? "min-h-40 max-h-72 w-full rounded-lg border border-ed-line bg-ed-ctl"
+					: "h-full w-56 border-r border-gray-3 bg-gray-1 dark:bg-gray-2 z-20",
+			)}
+		>
 			<div class="flex items-center justify-between px-3 h-10 border-b border-gray-3">
 				<div class="flex items-center gap-2 text-sm font-medium text-gray-12">
 					<IconLucideLayers class="size-4" />

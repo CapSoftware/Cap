@@ -29,6 +29,10 @@ const TRACK_META: Record<TimelineTrackType, TrackMeta> = {
 		description: "Place images and logos on your video.",
 		unavailableHint: "",
 	},
+	video: {
+		description: "Add imported videos on their own editable tracks.",
+		unavailableHint: "",
+	},
 	clip: {
 		description: "Your recorded screen footage.",
 		unavailableHint: "",

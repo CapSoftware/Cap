@@ -1,7 +1,12 @@
-use std::{collections::HashMap, path::Path, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    path::Path,
+    sync::Arc,
+};
 
 use cap_audio::AudioData;
-use cap_project::ProjectConfiguration;
+use cap_project::{AudioTrackSegment, ProjectConfiguration, TimelineConfiguration};
+use cap_rendering::media_project::checked_project_video_source;
 use tracing::warn;
 
 use crate::{
@@ -16,6 +21,33 @@ fn resolve_music_path(project_path: &Path, path: &str) -> std::path::PathBuf {
     } else {
         project_path.join(candidate)
     }
+}
+
+pub(crate) fn mixed_audio_segments(
+    timeline: &TimelineConfiguration,
+) -> impl Iterator<Item = AudioTrackSegment> + '_ {
+    timeline
+        .audio_segments
+        .iter()
+        .cloned()
+        .chain(
+            timeline
+                .video_segments
+                .iter()
+                .map(|video| AudioTrackSegment {
+                    start: video.start,
+                    end: video.end,
+                    track: video.track,
+                    path: video.path.clone(),
+                    name: Some(video.name.clone()),
+                    enabled: video.enabled && !video.muted,
+                    trim_start: video.source_start,
+                    volume_db: video.volume_db,
+                    fade_in: 0.0,
+                    fade_out: 0.0,
+                    duration: Some(video.source_duration),
+                }),
+        )
 }
 
 /// Decodes every distinct music/imported-audio file referenced by the project's
@@ -34,10 +66,10 @@ pub fn load_music_tracks(
         return result;
     };
 
-    let mut ranges: HashMap<&str, (usize, usize)> = HashMap::new();
+    let mut ranges: HashMap<String, (usize, usize)> = HashMap::new();
     let sample_rate = AudioData::SAMPLE_RATE as f64;
 
-    for segment in &timeline.audio_segments {
+    for segment in mixed_audio_segments(timeline) {
         if !segment.enabled || segment.end <= segment.start || segment.volume_db <= MUSIC_SILENCE_DB
         {
             continue;
@@ -53,7 +85,7 @@ pub fn load_music_tracks(
 
         let trim_end = trim_start.saturating_add(duration);
         ranges
-            .entry(segment.path.as_str())
+            .entry(segment.path)
             .and_modify(|(source_start, source_end)| {
                 *source_start = (*source_start).min(trim_start);
                 *source_end = (*source_end).max(trim_end);
@@ -61,20 +93,35 @@ pub fn load_music_tracks(
             .or_insert((trim_start, trim_end));
     }
 
+    let video_paths: HashSet<_> = timeline
+        .video_segments
+        .iter()
+        .map(|video| video.path.as_str())
+        .collect();
     for (path, (source_start, source_end)) in ranges {
-        if let Some(data) = cache.get(path)
+        let resolved = if video_paths.contains(path.as_str()) {
+            match checked_project_video_source(project_path, &path) {
+                Ok((_, resolved)) => resolved,
+                Err(error) => {
+                    warn!(path, %error, "Failed to load imported video audio; skipping");
+                    continue;
+                }
+            }
+        } else {
+            resolve_music_path(project_path, &path)
+        };
+        if let Some(data) = cache.get(&path)
             && data.covers_source_range(source_start, source_end)
         {
-            result.insert(path.to_string(), Arc::clone(data));
+            result.insert(path, Arc::clone(data));
             continue;
         }
 
-        let resolved = resolve_music_path(project_path, path);
         match AudioData::from_file_range(&resolved, source_start, source_end) {
             Ok(data) => {
                 let data = Arc::new(data);
-                cache.insert(path.to_string(), Arc::clone(&data));
-                result.insert(path.to_string(), data);
+                cache.insert(path.clone(), Arc::clone(&data));
+                result.insert(path, data);
             }
             Err(error) => {
                 warn!(
@@ -97,6 +144,40 @@ pub fn load_music_tracks_uncached(
 ) -> MusicTracks {
     let mut cache = MusicTracks::new();
     load_music_tracks(project, project_path, &mut cache)
+}
+
+#[cfg(test)]
+mod imported_video_path_tests {
+    use super::*;
+    use cap_project::VideoSegment;
+
+    #[test]
+    fn video_audio_loader_skips_a_path_outside_the_project() {
+        let _ = ffmpeg::init();
+        let root = tempfile::tempdir().unwrap();
+        let project_path = root.path().join("project");
+        std::fs::create_dir(&project_path).unwrap();
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../apps/media-server/src/__tests__/fixtures/test-with-audio.mp4");
+        std::fs::copy(fixture, root.path().join("outside.mp4")).unwrap();
+        let project = ProjectConfiguration {
+            timeline: Some(TimelineConfiguration {
+                video_segments: vec![VideoSegment {
+                    start: 0.0,
+                    end: 0.5,
+                    source_duration: 1.0,
+                    path: "../outside.mp4".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let mut cache = MusicTracks::new();
+
+        assert!(load_music_tracks(&project, &project_path, &mut cache).is_empty());
+        assert!(cache.is_empty());
+    }
 }
 
 /// Waits for a segment track's background decode, degrading a failed track to

@@ -62,6 +62,7 @@ type SnapExclude =
 	| { text: number }
 	| { mask: number }
 	| { image: number }
+	| { video: number }
 	| null;
 
 /**
@@ -120,33 +121,40 @@ export function useCanvasSnapTargets() {
 			});
 		});
 
-		project.timeline?.imageSegments?.forEach((segment, index) => {
-			if (
-				typeof exclude === "object" &&
-				exclude !== null &&
-				"image" in exclude &&
-				exclude.image === index
-			)
-				return;
-			if (!segment.enabled || t < segment.start || t >= segment.end) return;
-			const angle = (segment.rotation * Math.PI) / 180;
-			const outputWidth = layout?.output_width ?? 1920;
-			const outputHeight = layout?.output_height ?? 1080;
-			const w =
-				(Math.abs(segment.size.x * outputWidth * Math.cos(angle)) +
-					Math.abs(segment.size.y * outputHeight * Math.sin(angle))) /
-				outputWidth;
-			const h =
-				(Math.abs(segment.size.x * outputWidth * Math.sin(angle)) +
-					Math.abs(segment.size.y * outputHeight * Math.cos(angle))) /
-				outputHeight;
-			rects.push({
-				x: segment.center.x - w / 2,
-				y: segment.center.y - h / 2,
-				w,
-				h,
+		for (const [kind, segments] of [
+			["image", project.timeline?.imageSegments ?? []],
+			["video", project.timeline?.videoSegments ?? []],
+		] as const) {
+			segments.forEach((segment, index) => {
+				if (
+					typeof exclude === "object" &&
+					exclude !== null &&
+					((kind === "image" &&
+						"image" in exclude &&
+						exclude.image === index) ||
+						(kind === "video" && "video" in exclude && exclude.video === index))
+				)
+					return;
+				if (!segment.enabled || t < segment.start || t >= segment.end) return;
+				const angle = (segment.rotation * Math.PI) / 180;
+				const outputWidth = layout?.output_width ?? 1920;
+				const outputHeight = layout?.output_height ?? 1080;
+				const w =
+					(Math.abs(segment.size.x * outputWidth * Math.cos(angle)) +
+						Math.abs(segment.size.y * outputHeight * Math.sin(angle))) /
+					outputWidth;
+				const h =
+					(Math.abs(segment.size.x * outputWidth * Math.sin(angle)) +
+						Math.abs(segment.size.y * outputHeight * Math.cos(angle))) /
+					outputHeight;
+				rects.push({
+					x: segment.center.x - w / 2,
+					y: segment.center.y - h / 2,
+					w,
+					h,
+				});
 			});
-		});
+		}
 		// The classic camera-inset margin lines only make sense for the camera
 		// and display; for text/mask boxes they just cause spurious re-snaps
 		// right next to the frame-edge lines.

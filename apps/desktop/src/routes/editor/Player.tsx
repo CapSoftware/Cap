@@ -43,6 +43,7 @@ import { TextOverlay } from "./TextOverlay";
 import { EditorButton, Slider } from "./ui";
 import { useEditorShortcuts } from "./useEditorShortcuts";
 import { formatTime } from "./utils";
+import { VideoOverlay } from "./video-overlay";
 
 export function PlayerContent(props: { compactness?: number }) {
 	const {
@@ -143,6 +144,7 @@ export function PlayerContent(props: { compactness?: number }) {
 							textSegments: [],
 							styleSegments: [],
 							imageSegments: [],
+							videoSegments: [],
 							camera3dSegments: [],
 							transitions: [],
 						}),
@@ -782,6 +784,7 @@ function PreviewCanvas(props: {
 						<div class="absolute inset-0 isolate pointer-events-none">
 							<MaskOverlay size={size()} />
 							<ImageOverlay size={size()} />
+							<VideoOverlay size={size()} />
 							<TextOverlay size={size()} />
 						</div>
 						<CaptionOverlay size={size()} />

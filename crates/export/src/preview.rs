@@ -4,8 +4,9 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use cap_editor::EditorInstance;
 use cap_project::{CursorEvents, ProjectConfiguration, RecordingMeta, TimelineFrameMapping, XY};
 use cap_rendering::{
-    FrameRenderer, ProjectUniforms, RecordingSegmentDecoders, RenderVideoConstants, RenderedFrame,
-    RendererLayers, TransitionRenderInput, ZoomTransformTimeline,
+    DecodedSegmentFrames, FrameRenderer, ProjectUniforms, RecordingSegmentDecoders,
+    RenderVideoConstants, RenderedFrame, RendererLayers, TransitionRenderInput,
+    ZoomTransformTimeline,
 };
 use image::{
     Rgba,
@@ -26,6 +27,54 @@ pub struct ExportPreviewSettings {
     pub compression_bpp: f32,
     #[serde(default)]
     pub cursor_only: bool,
+}
+
+#[cfg(test)]
+mod media_only_preview_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn image_only_project_has_export_preview() {
+        let directory = tempfile::tempdir().unwrap();
+        let bundle = cap_project::create_media_project(directory.path(), "Image preview").unwrap();
+        let images = bundle.join("content/images");
+        std::fs::create_dir_all(&images).unwrap();
+        image::RgbaImage::from_pixel(640, 360, Rgba([20, 80, 220, 255]))
+            .save(images.join("source.png"))
+            .unwrap();
+        let mut config = ProjectConfiguration::load(&bundle).unwrap();
+        config
+            .timeline
+            .as_mut()
+            .unwrap()
+            .image_segments
+            .push(cap_project::ImageSegment {
+                end: 3.0,
+                path: "content/images/source.png".to_string(),
+                size: XY::new(1.0, 1.0),
+                ..Default::default()
+            });
+        config.write(&bundle).unwrap();
+        let preview = render_preview_with_config(
+            bundle,
+            config,
+            0.5,
+            ExportPreviewSettings {
+                fps: 30,
+                resolution_base: XY::new(640, 360),
+                compression_bpp: 0.15,
+                cursor_only: false,
+            },
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(preview.total_frames, 90);
+        let jpeg = STANDARD.decode(preview.jpeg_base64).unwrap();
+        let frame = image::load_from_memory(&jpeg).unwrap().to_rgb8();
+        let pixel = frame.get_pixel(frame.width() / 2, frame.height() / 2);
+        assert!(pixel[2] > pixel[0] + 50);
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -220,6 +269,15 @@ async fn render_preview_frame(
         segments,
         total_duration,
     } = source;
+    if !frame_time.is_finite()
+        || frame_time < 0.0
+        || frame_time >= total_duration
+        || settings.fps == 0
+    {
+        return Err(ExportError::Other(
+            "Frame time is outside video duration".to_string(),
+        ));
+    }
     let transition_mapping = project_config.timeline.as_ref().and_then(|timeline| {
         if timeline.transitions.is_empty() {
             return None;
@@ -235,9 +293,14 @@ async fn render_preview_frame(
         }
     });
     let Some((segment_time, segment)) = project_config.get_segment_time(frame_time) else {
-        return Err(ExportError::Other(
-            "Frame time is outside video duration".to_string(),
-        ));
+        return render_blank_preview_frame(
+            project_config,
+            render_constants,
+            total_duration,
+            frame_time,
+            settings,
+        )
+        .await;
     };
 
     let segment_media = segments
@@ -364,7 +427,68 @@ async fn render_preview_frame(
             .await?
     };
 
-    let frame_render_time_ms = render_start.elapsed().as_secs_f64() * 1000.0;
+    preview_result_from_frame(
+        frame,
+        render_start.elapsed().as_secs_f64() * 1000.0,
+        total_duration,
+        settings,
+    )
+}
+
+async fn render_blank_preview_frame(
+    project_config: &ProjectConfiguration,
+    render_constants: &RenderVideoConstants,
+    total_duration: f64,
+    frame_time: f64,
+    settings: ExportPreviewSettings,
+) -> Result<ExportPreviewResult, ExportError> {
+    let render_start = std::time::Instant::now();
+    let frame_number = (frame_time * f64::from(settings.fps)).floor() as u32;
+    let size = render_constants.options.screen_size;
+    let frames = DecodedSegmentFrames {
+        screen_size: size,
+        screen_frame: None,
+        camera_frame: None,
+        segment_time: frame_time as f32,
+        recording_time: frame_time as f32,
+        segment_has_camera: false,
+    };
+    let cursor = CursorEvents::default();
+    let zoom = ZoomTransformTimeline::from_project(project_config, &cursor, total_duration, size);
+    let uniforms = ProjectUniforms::new(
+        render_constants,
+        project_config,
+        frame_number,
+        settings.fps,
+        settings.resolution_base,
+        &cursor,
+        &frames,
+        total_duration,
+        &zoom,
+    );
+    let mut renderer = FrameRenderer::new(render_constants);
+    let mut layers = RendererLayers::new_with_options(
+        &render_constants.device,
+        &render_constants.queue,
+        render_constants.is_software_adapter,
+    );
+    let frame = renderer
+        .render_immediate(frames, uniforms, &cursor, false, &mut layers)
+        .await?;
+    preview_result_from_frame(
+        frame,
+        render_start.elapsed().as_secs_f64() * 1000.0,
+        total_duration,
+        settings,
+    )
+}
+
+fn preview_result_from_frame(
+    frame: RenderedFrame,
+    frame_render_time_ms: f64,
+    total_duration: f64,
+    settings: ExportPreviewSettings,
+) -> Result<ExportPreviewResult, ExportError> {
     let width = frame.width;
     let height = frame.height;
 

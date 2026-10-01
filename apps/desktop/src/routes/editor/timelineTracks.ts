@@ -125,12 +125,15 @@ type OverlayProject = {
 	timeline?: {
 		textSegments?: TrackSegment[];
 		imageSegments?: TrackSegment[];
+		videoSegments?: TrackSegment[];
 		maskSegments?: TrackSegment[];
 	} | null;
 };
 
 export function isOverlayTrackKind(kind: string): kind is OverlayTrackKind {
-	return kind === "text" || kind === "image" || kind === "mask";
+	return (
+		kind === "text" || kind === "image" || kind === "video" || kind === "mask"
+	);
 }
 
 export function sameOverlayTrack(a: OverlayTrack, b: OverlayTrack) {
@@ -165,7 +168,7 @@ export function getOverlayTrackRows(
 ) {
 	const timeline = project.timeline;
 	const available: OverlayTrack[] = [];
-	for (const kind of ["text", "image", "mask"] as const) {
+	for (const kind of ["text", "image", "video", "mask"] as const) {
 		const segments = timeline?.[`${kind}Segments`] ?? [];
 		for (const track of getTrackRowsWithCount(
 			segments,

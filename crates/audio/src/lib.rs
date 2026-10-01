@@ -1,5 +1,6 @@
 mod audio_data;
 mod calibration_store;
+mod imported_waveform;
 mod latency;
 mod progressive;
 mod renderer;
@@ -11,6 +12,7 @@ mod voice_level;
 
 pub use audio_data::*;
 pub use calibration_store::*;
+pub use imported_waveform::*;
 pub use latency::*;
 pub use progressive::*;
 pub use renderer::*;

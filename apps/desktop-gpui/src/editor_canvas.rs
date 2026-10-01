@@ -448,6 +448,7 @@ pub enum CanvasSelection {
     Mask(usize),
     Text(usize),
     Image(usize),
+    Video(usize),
 }
 
 impl CanvasSelection {
@@ -458,6 +459,7 @@ impl CanvasSelection {
             Self::Mask(_) => "Mask".into(),
             Self::Text(_) => "Text".into(),
             Self::Image(_) => "Image".into(),
+            Self::Video(_) => "Video".into(),
         }
     }
 
@@ -468,6 +470,7 @@ impl CanvasSelection {
             Self::Mask(index) => format!("canvas-mask-{index}").into(),
             Self::Text(index) => format!("canvas-text-{index}").into(),
             Self::Image(index) => format!("canvas-image-{index}").into(),
+            Self::Video(index) => format!("canvas-video-{index}").into(),
         }
     }
 
@@ -476,6 +479,7 @@ impl CanvasSelection {
             Self::Mask(index) => Some((TrackKind::Mask, index)),
             Self::Text(index) => Some((TrackKind::Text, index)),
             Self::Image(index) => Some((TrackKind::Image, index)),
+            Self::Video(index) => Some((TrackKind::Video, index)),
             _ => None,
         }
     }
@@ -601,6 +605,24 @@ impl EditorWindow {
         }
         let t = self.preview_or_playhead();
         if let Some(timeline) = self.project.timeline.as_ref() {
+            for (index, segment) in timeline.video_segments.iter().enumerate() {
+                if exclude == CanvasSelection::Video(index)
+                    || !segment.is_active_at(t)
+                    || segment.opacity <= 0.
+                {
+                    continue;
+                }
+                if let Some(rect) = self.element_rect(CanvasSelection::Video(index)) {
+                    rects.push(image_axis_bounds(
+                        rect,
+                        (
+                            f64::from(layout.output_size[0]),
+                            f64::from(layout.output_size[1]),
+                        ),
+                        f64::from(segment.rotation),
+                    ));
+                }
+            }
             for (index, segment) in timeline.image_segments.iter().enumerate() {
                 if exclude == CanvasSelection::Image(index)
                     || !segment.is_active_at(t)
@@ -684,6 +706,7 @@ impl EditorWindow {
             | CanvasSelection::Mask(_)
             | CanvasSelection::Text(_)
             | CanvasSelection::Image(_) => true,
+            CanvasSelection::Video(_) => true,
         };
         if !draggable {
             cx.notify();
@@ -717,7 +740,10 @@ impl EditorWindow {
         let resizable = match element {
             CanvasSelection::Display => self.display_draggable(),
             CanvasSelection::Camera => self.camera_resizable(),
-            CanvasSelection::Mask(_) | CanvasSelection::Text(_) | CanvasSelection::Image(_) => true,
+            CanvasSelection::Mask(_)
+            | CanvasSelection::Text(_)
+            | CanvasSelection::Image(_)
+            | CanvasSelection::Video(_) => true,
         };
         if !resizable {
             return;
@@ -893,14 +919,28 @@ impl EditorWindow {
                         cx,
                     );
                 }
-                CanvasSelection::Mask(_) | CanvasSelection::Text(_) | CanvasSelection::Image(_) => {
-                    let (rect, guides) = if let CanvasSelection::Image(index) = element {
-                        let Some(segment) = self
-                            .project
-                            .timeline
-                            .as_ref()
-                            .and_then(|timeline| timeline.image_segments.get(index))
-                        else {
+                CanvasSelection::Mask(_)
+                | CanvasSelection::Text(_)
+                | CanvasSelection::Image(_)
+                | CanvasSelection::Video(_) => {
+                    let (rect, guides) = if let CanvasSelection::Image(index)
+                    | CanvasSelection::Video(index) = element
+                    {
+                        let Some(timeline) = self.project.timeline.as_ref() else {
+                            return;
+                        };
+                        let media = match element {
+                            CanvasSelection::Image(_) => timeline
+                                .image_segments
+                                .get(index)
+                                .map(|segment| (segment.rotation, segment.lock_aspect)),
+                            CanvasSelection::Video(_) => timeline
+                                .video_segments
+                                .get(index)
+                                .map(|segment| (segment.rotation, segment.lock_aspect)),
+                            _ => None,
+                        };
+                        let Some((rotation, lock_aspect)) = media else {
                             return;
                         };
                         (
@@ -909,8 +949,8 @@ impl EditorWindow {
                                 size,
                                 delta,
                                 (dir_x, dir_y),
-                                f64::from(segment.rotation),
-                                segment.lock_aspect,
+                                f64::from(rotation),
+                                lock_aspect,
                             ),
                             Vec::new(),
                         )
@@ -928,14 +968,29 @@ impl EditorWindow {
         let (center, guides) = match element {
             CanvasSelection::Display => display_drag_center(start, size, delta, &targets, shift),
             CanvasSelection::Camera => camera_drag_center(start, size, delta, &targets, shift),
-            CanvasSelection::Mask(_) | CanvasSelection::Text(_) | CanvasSelection::Image(_) => {
-                let bounds = if let CanvasSelection::Image(index) = element {
+            CanvasSelection::Mask(_)
+            | CanvasSelection::Text(_)
+            | CanvasSelection::Image(_)
+            | CanvasSelection::Video(_) => {
+                let bounds = if let CanvasSelection::Image(index) | CanvasSelection::Video(index) =
+                    element
+                {
                     let rotation = self
                         .project
                         .timeline
                         .as_ref()
-                        .and_then(|timeline| timeline.image_segments.get(index))
-                        .map_or(0., |segment| f64::from(segment.rotation));
+                        .and_then(|timeline| match element {
+                            CanvasSelection::Image(_) => timeline
+                                .image_segments
+                                .get(index)
+                                .map(|segment| segment.rotation),
+                            CanvasSelection::Video(_) => timeline
+                                .video_segments
+                                .get(index)
+                                .map(|segment| segment.rotation),
+                            _ => None,
+                        })
+                        .map_or(0., f64::from);
                     image_axis_bounds(start, size, rotation)
                 } else {
                     start
@@ -958,7 +1013,10 @@ impl EditorWindow {
                 self.canvas_drag_camera_rect = Some(optimistic);
                 self.write_camera_position(center, cx);
             }
-            CanvasSelection::Mask(_) | CanvasSelection::Text(_) | CanvasSelection::Image(_) => {
+            CanvasSelection::Mask(_)
+            | CanvasSelection::Text(_)
+            | CanvasSelection::Image(_)
+            | CanvasSelection::Video(_) => {
                 self.canvas_overlay_rect = Some(optimistic);
                 self.write_overlay_rect(element, optimistic, cx);
             }
@@ -1010,6 +1068,9 @@ impl EditorWindow {
                 CanvasSelection::Image(index) => {
                     tracing::info!(index, "canvas image drag");
                 }
+                CanvasSelection::Video(index) => {
+                    tracing::info!(index, "canvas video drag");
+                }
             }
         }
         cx.notify();
@@ -1041,6 +1102,18 @@ impl EditorWindow {
         {
             return false;
         }
+        if let CanvasSelection::Video(index) = selected
+            && !self
+                .project
+                .timeline
+                .as_ref()
+                .and_then(|timeline| timeline.video_segments.get(index))
+                .is_some_and(|segment| {
+                    segment.is_active_at(self.preview_or_playhead()) && segment.opacity > 0.
+                })
+        {
+            return false;
+        }
         let (Some(canvas), Some(rect)) = (self.canvas_bounds(), self.element_rect(selected)) else {
             return false;
         };
@@ -1059,9 +1132,10 @@ impl EditorWindow {
         let center = match selected {
             CanvasSelection::Display => display_nudge_center(rect, size, direction, shift),
             CanvasSelection::Camera => camera_nudge_center(rect, size, direction, shift),
-            CanvasSelection::Mask(_) | CanvasSelection::Text(_) | CanvasSelection::Image(_) => {
-                overlay_nudge_center(rect, direction, shift)
-            }
+            CanvasSelection::Mask(_)
+            | CanvasSelection::Text(_)
+            | CanvasSelection::Image(_)
+            | CanvasSelection::Video(_) => overlay_nudge_center(rect, direction, shift),
         };
         let optimistic = NormRect {
             x: center.x - rect.w / 2.,
@@ -1077,7 +1151,10 @@ impl EditorWindow {
                 self.canvas_drag_camera_rect = Some(optimistic);
                 self.write_camera_position(center, cx);
             }
-            CanvasSelection::Mask(_) | CanvasSelection::Text(_) | CanvasSelection::Image(_) => {
+            CanvasSelection::Mask(_)
+            | CanvasSelection::Text(_)
+            | CanvasSelection::Image(_)
+            | CanvasSelection::Video(_) => {
                 self.canvas_overlay_rect = Some(optimistic);
                 self.write_overlay_rect(selected, optimistic, cx);
             }
@@ -1178,6 +1255,23 @@ impl EditorWindow {
                     h: segment.size.y,
                 })
             }
+            CanvasSelection::Video(index) => {
+                if self
+                    .canvas_drag
+                    .as_ref()
+                    .is_some_and(|drag| drag.element == element)
+                    && let Some(rect) = self.canvas_overlay_rect
+                {
+                    return Some(rect);
+                }
+                let segment = self.project.timeline.as_ref()?.video_segments.get(index)?;
+                Some(NormRect {
+                    x: segment.center.x - segment.size.x / 2.,
+                    y: segment.center.y - segment.size.y / 2.,
+                    w: segment.size.x,
+                    h: segment.size.y,
+                })
+            }
             CanvasSelection::Mask(index) => {
                 if self
                     .canvas_drag
@@ -1231,6 +1325,13 @@ impl EditorWindow {
         match element {
             CanvasSelection::Image(index) => {
                 let Some(segment) = timeline.image_segments.get_mut(index) else {
+                    return;
+                };
+                segment.center = center;
+                segment.size = size;
+            }
+            CanvasSelection::Video(index) => {
+                let Some(segment) = timeline.video_segments.get_mut(index) else {
                     return;
                 };
                 segment.center = center;
@@ -1394,8 +1495,37 @@ impl EditorWindow {
                                 })
                         {
                             if let Some(rect) = self.element_rect(CanvasSelection::Image(index)) {
-                                layer =
-                                    layer.child(self.render_image_box(index, rect, (cw, ch), cx));
+                                layer = layer.child(self.render_media_box(
+                                    CanvasSelection::Image(index),
+                                    rect,
+                                    f64::from(timeline.image_segments[index].rotation),
+                                    (cw, ch),
+                                    cx,
+                                ));
+                            }
+                        }
+                    }
+                    OverlayTrackKind::Video => {
+                        for (index, segment) in
+                            timeline
+                                .video_segments
+                                .iter()
+                                .enumerate()
+                                .filter(|(_, segment)| {
+                                    segment.track == track.track
+                                        && segment.is_active_at(time)
+                                        && segment.opacity > 0.
+                                })
+                        {
+                            let element = CanvasSelection::Video(index);
+                            if let Some(rect) = self.element_rect(element) {
+                                layer = layer.child(self.render_media_box(
+                                    element,
+                                    rect,
+                                    f64::from(segment.rotation),
+                                    (cw, ch),
+                                    cx,
+                                ));
                             }
                         }
                     }
@@ -1472,9 +1602,10 @@ impl EditorWindow {
                 self.camera_resizable(),
                 (!self.camera_resizable()).then_some("Camera size follows the zoom — drag to move"),
             ),
-            CanvasSelection::Mask(_) | CanvasSelection::Text(_) | CanvasSelection::Image(_) => {
-                (true, true, None)
-            }
+            CanvasSelection::Mask(_)
+            | CanvasSelection::Text(_)
+            | CanvasSelection::Image(_)
+            | CanvasSelection::Video(_) => (true, true, None),
         };
 
         let left = rect.x as f32 * canvas.0;
@@ -2262,20 +2393,14 @@ fn image_resize_rect(
 }
 
 impl EditorWindow {
-    fn render_image_box(
+    fn render_media_box(
         &self,
-        index: usize,
+        element: CanvasSelection,
         rect: NormRect,
+        rotation: f64,
         canvas: (f32, f32),
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let element = CanvasSelection::Image(index);
-        let rotation = self
-            .project
-            .timeline
-            .as_ref()
-            .and_then(|timeline| timeline.image_segments.get(index))
-            .map_or(0., |segment| f64::from(segment.rotation));
         let size = (f64::from(canvas.0), f64::from(canvas.1));
         let corners = image_corners(rect, size, rotation);
         let show = self.canvas_selection == Some(element) || self.hovered_canvas == Some(element);
@@ -2343,7 +2468,8 @@ impl EditorWindow {
                 layer = layer.child(
                     div()
                         .id(SharedString::from(format!(
-                            "image-handle-{index}-{dx}-{dy}"
+                            "{}-handle-{dx}-{dy}",
+                            element.element_id()
                         )))
                         .absolute()
                         .left(px(x as f32 - 6.))

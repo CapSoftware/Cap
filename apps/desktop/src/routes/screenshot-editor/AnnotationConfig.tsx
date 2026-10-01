@@ -6,7 +6,7 @@ import { BACKGROUND_COLORS, hexToRgb, RgbInput, rgbToHex } from "./ColorPicker";
 import { type Annotation, useScreenshotEditorContext } from "./context";
 import { Slider } from "./ui";
 
-export function AnnotationConfigBar() {
+export function AnnotationConfigBar(props: { sidebar?: boolean }) {
 	const {
 		annotations,
 		selectedAnnotationId,
@@ -38,11 +38,20 @@ export function AnnotationConfigBar() {
 				return (
 					<div
 						class={cx(
-							"absolute top-14 right-0 z-10 border-b border-gray-3 bg-gray-1 dark:bg-gray-2 animate-in fade-in slide-in-from-top-1 duration-150 transition-[left]",
-							layersPanelOpen() ? "left-56" : "left-0",
+							props.sidebar
+								? "rounded-lg border border-ed-line bg-ed-ctl"
+								: "absolute top-14 right-0 z-10 border-b border-gray-3 bg-gray-1 dark:bg-gray-2 animate-in fade-in slide-in-from-top-1 duration-150 transition-[left]",
+							!props.sidebar && (layersPanelOpen() ? "left-56" : "left-0"),
 						)}
 					>
-						<div class="flex items-center justify-center gap-6 px-4 h-11">
+						<div
+							class={cx(
+								"flex items-center",
+								props.sidebar
+									? "flex-col items-stretch gap-3 px-3 py-3 [&_.w-20]:w-28"
+									: "justify-center gap-6 px-4 h-11",
+							)}
+						>
 							<Show when={!isMask()}>
 								<ConfigItem label={type() === "text" ? "Color" : "Stroke"}>
 									<ColorPickerButton
@@ -157,7 +166,13 @@ export function AnnotationConfigBar() {
 								</ConfigItem>
 							</Show>
 
-							<div class="w-px h-5 bg-gray-4" />
+							<div
+								class={
+									props.sidebar
+										? "h-px w-full bg-ed-line"
+										: "w-px h-5 bg-gray-4"
+								}
+							/>
 
 							<button
 								type="button"

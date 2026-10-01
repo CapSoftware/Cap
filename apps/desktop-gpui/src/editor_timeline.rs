@@ -31,7 +31,7 @@
 //!   A segment wider than the viewport has its true centre off screen, so
 //!   [`visible_box`] clamps it (`useSegmentVisibleBox`, `TL/Track.tsx:147-181`).
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 mod playback_follow;
 
@@ -176,6 +176,7 @@ pub const MINIMAP_MAX_WIDTH: f32 = 78.;
 /// (`apps/desktop/src/styles/theme.css`).
 pub mod track_color {
     pub const CLIP: u32 = 0x3b82f6;
+    pub const VIDEO: u32 = 0x2563eb;
     pub const ZOOM: u32 = 0x64748b;
     pub const CAPTION: u32 = 0x0ea5e9;
     pub const KEYBOARD: u32 = 0xf97316;
@@ -578,23 +579,6 @@ pub fn waveform_path(
     if peaks.is_empty() || scale <= 0. {
         return None;
     }
-    let duration = (range.1 - range.0).max(WAVEFORM_SAMPLE_STEP);
-    if !duration.is_finite() || duration <= 0. {
-        return None;
-    }
-
-    let native_samples = (duration / WAVEFORM_SAMPLE_STEP).ceil() as usize + 1;
-    let num_samples = target_samples
-        .clamp(50, MAX_WAVEFORM_SAMPLES)
-        .min(native_samples);
-    if num_samples == 0 {
-        return None;
-    }
-    let time_step = duration / num_samples as f64;
-
-    // `sourceTimeAt` (`TL/ClipTrack.tsx:185-193`): output time back to
-    // recording time, or `null` inside a hold -- the mixer renders silence
-    // there, so the waveform drops to the baseline.
     let source_time_at = |output_time: f64| -> Option<f64> {
         let mut held = 0.;
         for (start, end) in holds {
@@ -608,6 +592,40 @@ pub fn waveform_path(
         }
         Some(segment_start + output_time - held)
     };
+    build_waveform_path(
+        range,
+        target_samples,
+        origin,
+        size,
+        scale,
+        clip_bounds,
+        |time, _| waveform_amplitude(peaks, source_time_at(time)),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_waveform_path(
+    range: (f64, f64),
+    target_samples: usize,
+    origin: gpui::Point<Pixels>,
+    size: gpui::Size<Pixels>,
+    scale: f64,
+    clip_bounds: gpui::Bounds<Pixels>,
+    amplitude_at: impl Fn(f64, f64) -> f64,
+) -> Option<gpui::Path<Pixels>> {
+    let duration = (range.1 - range.0).max(WAVEFORM_SAMPLE_STEP);
+    if !duration.is_finite() || duration <= 0. {
+        return None;
+    }
+
+    let native_samples = (duration / WAVEFORM_SAMPLE_STEP).ceil() as usize + 1;
+    let num_samples = target_samples
+        .clamp(50, MAX_WAVEFORM_SAMPLES)
+        .min(native_samples);
+    if num_samples == 0 {
+        return None;
+    }
+    let time_step = duration / num_samples as f64;
 
     let width = f32::from(size.width) as f64;
     let height = f32::from(size.height) as f64;
@@ -640,8 +658,8 @@ pub fn waveform_path(
         let normalized_x = (time - range.0) / duration;
         let prev_time = time - time_step;
         let prev_x = ((prev_time - range.0) / duration).max(0.);
-        let y = 1. - waveform_amplitude(peaks, source_time_at(time));
-        let prev_y = 1. - waveform_amplitude(peaks, source_time_at(prev_time));
+        let y = 1. - amplitude_at(time, time_step);
+        let prev_y = 1. - amplitude_at(prev_time, time_step);
         let cp_x1 = prev_x + control_step / 2.;
         let cp_x2 = normalized_x - control_step / 2.;
         builder.cubic_bezier_to(map(normalized_x, y), map(cp_x1, prev_y), map(cp_x2, y));
@@ -667,6 +685,88 @@ pub fn waveform_path(
     ));
     builder.close();
     builder.build().ok()
+}
+
+#[derive(Debug)]
+pub struct ImportedWaveform {
+    levels: Vec<Arc<[u8]>>,
+}
+
+impl ImportedWaveform {
+    pub fn new(peaks: Arc<[u8]>) -> Self {
+        let mut levels = vec![peaks];
+        while levels.last().is_some_and(|level| level.len() > 1) {
+            let previous = levels.last().unwrap();
+            let mut next = Vec::with_capacity(previous.len().div_ceil(2));
+            for pair in previous.chunks(2) {
+                next.push(pair.iter().copied().max().unwrap_or(0));
+            }
+            levels.push(next.into());
+        }
+        Self { levels }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.levels[0].is_empty()
+    }
+
+    fn range_max(&self, start: f64, end: f64) -> f64 {
+        let length = self.levels[0].len();
+        let first = (start.floor().max(0.) as usize).min(length);
+        if first >= length {
+            return 0.;
+        }
+        let last = (end.ceil().max(0.) as usize).min(length).max(first + 1);
+        let mut peak = 0u8;
+        let mut left = first;
+        let mut right = last;
+        for level in &self.levels {
+            if left >= right {
+                break;
+            }
+            if !left.is_multiple_of(2) {
+                peak = peak.max(level.get(left).copied().unwrap_or(0));
+                left += 1;
+            }
+            if !right.is_multiple_of(2) {
+                right -= 1;
+                peak = peak.max(level.get(right).copied().unwrap_or(0));
+            }
+            left /= 2;
+            right /= 2;
+        }
+        f64::from(peak) / 255.
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn imported_waveform_path(
+    waveform: &ImportedWaveform,
+    range: (f64, f64),
+    target_samples: usize,
+    source_start: f64,
+    origin: gpui::Point<Pixels>,
+    size: gpui::Size<Pixels>,
+    scale: f64,
+    clip_bounds: gpui::Bounds<Pixels>,
+) -> Option<gpui::Path<Pixels>> {
+    if waveform.is_empty() || scale <= 0. {
+        return None;
+    }
+    build_waveform_path(
+        range,
+        target_samples,
+        origin,
+        size,
+        scale,
+        clip_bounds,
+        |time, step| {
+            waveform.range_max(
+                (source_start + time) * 10.,
+                (source_start + time + step) * 10.,
+            )
+        },
+    )
 }
 
 fn rounded_corner_inset(x: f64, width: f64, radius: f64) -> f64 {
@@ -701,6 +801,7 @@ pub fn waveform_color(color: Hsla) -> Hsla {
 pub enum TrackKind {
     Style,
     Image,
+    Video,
     Clip,
     Caption,
     Keyboard,
@@ -716,11 +817,10 @@ impl TrackKind {
     /// `trackDefinitions` (`TL/index.tsx:89-144`) and `trackIcons` (`:70-80`).
     pub fn label(self) -> &'static str {
         match self {
-            // The clip row's gutter label is "Video", not the definition's
-            // "Clip" (`TL/index.tsx:1334`).
-            Self::Clip => "Video",
+            Self::Clip => "Recording",
             Self::Style => "Style",
             Self::Image => "Image",
+            Self::Video => "Video",
             Self::Caption => "Captions",
             Self::Keyboard => "Keyboard",
             Self::Text => "Text",
@@ -737,6 +837,7 @@ impl TrackKind {
             Self::Clip => "icons/clapperboard.svg",
             Self::Style => "icons/palette.svg",
             Self::Image => "icons/image.svg",
+            Self::Video => "icons/video.svg",
             Self::Caption => "icons/captions.svg",
             Self::Keyboard => "icons/keyboard.svg",
             Self::Text => "icons/type.svg",
@@ -751,6 +852,7 @@ impl TrackKind {
     pub fn color(self) -> Hsla {
         gpui::rgb(match self {
             Self::Clip => track_color::CLIP,
+            Self::Video => track_color::VIDEO,
             Self::Style => track_color::STYLE,
             Self::Image => track_color::IMAGE,
             Self::Caption => track_color::CAPTION,
@@ -768,6 +870,7 @@ impl TrackKind {
     pub fn picker_label(self) -> &'static str {
         match self {
             Self::Clip => "Clip",
+            Self::Video => "Video",
             other => other.label(),
         }
     }
@@ -775,6 +878,7 @@ impl TrackKind {
     pub fn picker_description(self) -> &'static str {
         match self {
             Self::Clip => "Your recorded screen footage.",
+            Self::Video => "Add a video file to the timeline.",
             Self::Style => "Change background, camera and cursor settings over time.",
             Self::Image => "Add an image to your recording.",
             Self::Zoom => "Smooth zoom-ins that follow the action.",
@@ -798,7 +902,7 @@ impl TrackKind {
     pub fn supports_multiple(self) -> bool {
         matches!(
             self,
-            Self::Text | Self::Mask | Self::Audio | Self::Style | Self::Image
+            Self::Text | Self::Mask | Self::Audio | Self::Style | Self::Image | Self::Video
         )
     }
 
@@ -806,6 +910,7 @@ impl TrackKind {
         let kind = match self {
             Self::Mask => OverlayTrackKind::Mask,
             Self::Image => OverlayTrackKind::Image,
+            Self::Video => OverlayTrackKind::Video,
             Self::Text => OverlayTrackKind::Text,
             _ => return None,
         };
@@ -816,6 +921,7 @@ impl TrackKind {
 pub const ADD_TRACK_OPTIONS: &[TrackKind] = &[
     TrackKind::Style,
     TrackKind::Image,
+    TrackKind::Video,
     TrackKind::Caption,
     TrackKind::Keyboard,
     TrackKind::Text,
@@ -829,6 +935,7 @@ pub const ADD_TRACK_OPTIONS: &[TrackKind] = &[
 pub struct TrackLanes {
     pub style: u32,
     pub image: u32,
+    pub video: u32,
     pub caption: bool,
     pub keyboard: bool,
     pub scene: bool,
@@ -856,6 +963,9 @@ impl TrackLanes {
             }),
             image: timeline.map_or(0, |timeline| {
                 used_config_lane_count(timeline.image_segments.iter().map(|segment| segment.track))
+            }),
+            video: timeline.map_or(0, |timeline| {
+                used_config_lane_count(timeline.video_segments.iter().map(|segment| segment.track))
             }),
             caption: config
                 .captions
@@ -890,6 +1000,7 @@ impl TrackLanes {
             TrackKind::ThreeD => self.three_d,
             TrackKind::Style => self.style > 0,
             TrackKind::Image => self.image > 0,
+            TrackKind::Video => self.video > 0,
             TrackKind::Text => self.text > 0,
             TrackKind::Mask => self.mask > 0,
             TrackKind::Audio => self.audio > 0,
@@ -901,6 +1012,7 @@ impl TrackLanes {
         match kind {
             TrackKind::Style => self.style,
             TrackKind::Image => self.image,
+            TrackKind::Video => self.video,
             TrackKind::Text => self.text,
             TrackKind::Mask => self.mask,
             TrackKind::Audio => self.audio,
@@ -937,6 +1049,14 @@ pub enum SegmentDetail {
     Image {
         name: SharedString,
         enabled: bool,
+    },
+    Video {
+        name: SharedString,
+        enabled: bool,
+        path: SharedString,
+        source_start: f64,
+        muted: bool,
+        volume_db: f64,
     },
     /// `TL/ClipTrack.tsx`. `start`/`end` above are the **output-time** box;
     /// these carry the recording-domain numbers the label reads.
@@ -989,6 +1109,9 @@ pub enum SegmentDetail {
     Audio {
         name: SharedString,
         enabled: bool,
+        path: SharedString,
+        trim_start: f64,
+        volume_db: f64,
         fade_in: f64,
         fade_out: f64,
     },
@@ -1027,6 +1150,7 @@ impl TrackRow {
         let kind = match track.kind {
             OverlayTrackKind::Mask => TrackKind::Mask,
             OverlayTrackKind::Image => TrackKind::Image,
+            OverlayTrackKind::Video => TrackKind::Video,
             OverlayTrackKind::Text => TrackKind::Text,
         };
         Self {
@@ -1041,6 +1165,7 @@ impl TrackRow {
 pub struct TimelineModel {
     pub style: Vec<Segment>,
     pub image: Vec<Segment>,
+    pub video: Vec<Segment>,
     pub rows: Vec<TrackRow>,
     pub clips: Vec<Segment>,
     pub zoom: Vec<Segment>,
@@ -1063,6 +1188,7 @@ pub struct TimelineModel {
     /// (`TL/ClipTrack.tsx:713-730`).
     pub mic_waveforms: Vec<Arc<Vec<f32>>>,
     pub system_waveforms: Vec<Arc<Vec<f32>>>,
+    pub imported_waveforms: HashMap<String, Arc<ImportedWaveform>>,
     /// The span a live ghost trim is removing, in output time. Drawn as a gap
     /// with a red duration badge, the way Blip's ghost resize marks the cut.
     pub clip_ghost_gap: Option<(f64, f64)>,
@@ -1084,6 +1210,7 @@ impl TimelineModel {
         match kind {
             TrackKind::Style => &self.style,
             TrackKind::Image => &self.image,
+            TrackKind::Video => &self.video,
             TrackKind::Clip => &self.clips,
             TrackKind::Caption => &self.caption,
             TrackKind::Keyboard => &self.keyboard,
@@ -1205,6 +1332,9 @@ impl TimelineModel {
                         .filter(|name| !name.is_empty())
                         .map_or_else(|| SharedString::new_static("Audio"), SharedString::from),
                     enabled: segment.enabled,
+                    path: segment.path.clone().into(),
+                    trim_start: segment.trim_start,
+                    volume_db: f64::from(segment.volume_db),
                     fade_in: segment.fade_in,
                     fade_out: segment.fade_out,
                 },
@@ -1273,9 +1403,27 @@ impl TimelineModel {
                 },
             })
             .collect();
+        let video = timeline
+            .video_segments
+            .iter()
+            .map(|segment| Segment {
+                start: segment.start,
+                end: segment.end,
+                lane: segment.track,
+                detail: SegmentDetail::Video {
+                    name: segment.name.clone().into(),
+                    enabled: segment.enabled,
+                    path: segment.path.clone().into(),
+                    source_start: segment.source_start,
+                    muted: segment.muted,
+                    volume_db: f64::from(segment.volume_db),
+                },
+            })
+            .collect();
         let mut model = Self {
             style,
             image,
+            video,
             rows: Vec::new(),
             clips,
             zoom,
@@ -1292,6 +1440,7 @@ impl TimelineModel {
             system_volume_db: config.audio.system_volume_db as f64,
             mic_waveforms: Vec::new(),
             system_waveforms: Vec::new(),
+            imported_waveforms: HashMap::new(),
             clip_ghost_gap: None,
         };
         model.rows = build_rows(
@@ -1331,10 +1480,13 @@ fn build_rows(
     has_camera: bool,
     lanes: &TrackLanes,
 ) -> Vec<TrackRow> {
-    let mut rows = vec![TrackRow {
-        kind: TrackKind::Clip,
-        lane: 0,
-    }];
+    let mut rows = Vec::new();
+    if !model.clips.is_empty() {
+        rows.push(TrackRow {
+            kind: TrackKind::Clip,
+            lane: 0,
+        });
+    }
     if lanes.caption {
         rows.push(TrackRow {
             kind: TrackKind::Caption,
@@ -1357,6 +1509,7 @@ fn build_rows(
     for (kind, segments, count) in [
         (TrackKind::Text, &model.text, lanes.text),
         (TrackKind::Image, &model.image, lanes.image),
+        (TrackKind::Video, &model.video, lanes.video),
         (TrackKind::Mask, &model.mask, lanes.mask),
     ] {
         overlay_tracks.extend(
@@ -1377,10 +1530,12 @@ fn build_rows(
             lane,
         });
     }
-    rows.push(TrackRow {
-        kind: TrackKind::Zoom,
-        lane: 0,
-    });
+    if !model.clips.is_empty() {
+        rows.push(TrackRow {
+            kind: TrackKind::Zoom,
+            lane: 0,
+        });
+    }
     if lanes.three_d {
         rows.push(TrackRow {
             kind: TrackKind::ThreeD,
@@ -2469,6 +2624,7 @@ fn render_segment(
         SegmentDetail::Text { enabled, .. }
         | SegmentDetail::Style { enabled, .. }
         | SegmentDetail::Image { enabled, .. }
+        | SegmentDetail::Video { enabled, .. }
             if !enabled =>
         {
             Some(0.6)
@@ -2531,6 +2687,39 @@ fn render_segment(
             let hold_width = ((hold_end - hold_start) / secs_per_pixel) as f32;
             fill = fill.child(render_hold(theme, color, hold_x, hold_width, width, height));
         }
+    }
+
+    let imported = match &segment.detail {
+        SegmentDetail::Video {
+            path,
+            source_start,
+            volume_db,
+            enabled: true,
+            muted: false,
+            ..
+        } => Some((path.as_ref(), *source_start, *volume_db)),
+        SegmentDetail::Audio {
+            path,
+            trim_start,
+            volume_db,
+            enabled: true,
+            ..
+        } => Some((path.as_ref(), *trim_start, *volume_db)),
+        _ => None,
+    };
+    if let Some((path, source_start, volume_db)) = imported
+        && let Some(waveform) = model.imported_waveforms.get(path)
+    {
+        fill = fill.child(render_imported_waveform(
+            waveform.clone(),
+            segment,
+            source_start,
+            volume_db,
+            view,
+            width,
+            height,
+            color,
+        ));
     }
 
     fill = fill.child(render_label(
@@ -3093,6 +3282,68 @@ fn render_waveform(
     .into_any_element()
 }
 
+#[allow(clippy::too_many_arguments)]
+fn render_imported_waveform(
+    waveform: Arc<ImportedWaveform>,
+    segment: &Segment,
+    source_start: f64,
+    volume_db: f64,
+    view: TimelineView,
+    width: f32,
+    height: f32,
+    color: Hsla,
+) -> impl IntoElement {
+    let timeline_start = segment.start;
+    let duration = (segment.end - segment.start).max(0.0001);
+    let transform = view.transform;
+    let full_width = width.max(1.) as f64;
+    let wave_height = height.min(WAVEFORM_MAX_HEIGHT);
+    let wave_color = waveform_color(color);
+    let scale = gain_to_scale(volume_db);
+    gpui::canvas(
+        |bounds, _window, _cx| bounds,
+        move |_, bounds, window, _cx| {
+            let visible_start = transform.position.max(timeline_start) - timeline_start;
+            let visible_end = (transform.position + transform.zoom).min(timeline_start + duration)
+                - timeline_start;
+            if visible_end <= visible_start {
+                return;
+            }
+            let pixels_per_second = full_width / duration;
+            let origin = gpui::point(
+                bounds.origin.x + px((visible_start * pixels_per_second) as f32),
+                bounds.origin.y,
+            );
+            let slice_width = ((visible_end - visible_start) * pixels_per_second) as f32;
+            let size = gpui::size(px(slice_width), px(wave_height));
+            let samples = waveform_sample_count(f64::from(slice_width));
+            if let Some(path) = imported_waveform_path(
+                &waveform,
+                (visible_start, visible_end),
+                samples,
+                source_start,
+                origin,
+                size,
+                scale,
+                gpui::Bounds {
+                    origin: gpui::point(bounds.origin.x, bounds.bottom() - px(height)),
+                    size: gpui::size(px(width), px(height)),
+                },
+            ) {
+                window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
+                    window.paint_path(path, wave_color)
+                });
+            }
+        },
+    )
+    .absolute()
+    .bottom_0()
+    .left_0()
+    .w(px(width))
+    .h(px(wave_height))
+    .into_any_element()
+}
+
 /// `SegmentLabel` (`TL/Track.tsx:186-220`): full, compact and glyph tiers,
 /// anchored to the visible box and left-aligned inside the segment's own
 /// `0 10px 0 13px` content padding.
@@ -3207,7 +3458,9 @@ fn label_body(
 ) -> Option<AnyElement> {
     Some(match (&segment.detail, tier) {
         (
-            SegmentDetail::Style { name, .. } | SegmentDetail::Image { name, .. },
+            SegmentDetail::Style { name, .. }
+            | SegmentDetail::Image { name, .. }
+            | SegmentDetail::Video { name, .. },
             LabelTier::Full | LabelTier::Compact,
         ) => label_row()
             .child(label_primary(theme, color).child(name.clone()))
@@ -3217,6 +3470,9 @@ fn label_body(
         }
         (SegmentDetail::Image { .. }, LabelTier::Glyph) => {
             label_glyph(theme, color, "icons/image.svg", 12.)
+        }
+        (SegmentDetail::Video { .. }, LabelTier::Glyph) => {
+            label_glyph(theme, color, "icons/video.svg", 12.)
         }
 
         // -- Clip (`TL/ClipTrack.tsx:1255-1279`) --------------------------
