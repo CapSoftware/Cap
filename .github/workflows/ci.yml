@@ -313,6 +313,10 @@ jobs:
         shell: bash
         run: ./scripts/build-desktop-binaries.sh ${{ matrix.settings.target }}
 
+      - name: Test export preview device-loss handling
+        shell: bash
+        run: cargo test --locked -p cap-desktop --test gpu_device_health
+
       - name: Test Linux desktop regressions
         if: ${{ runner.os == 'Linux' }}
         shell: bash
