@@ -50,6 +50,14 @@ import {
 	generalSettingsStore,
 } from "~/store";
 import {
+	defaultKeyboardSettings,
+	KEYCAP_STYLE_OPTIONS,
+	KEYCAP_THEME_OPTIONS,
+	type KeyboardSettings,
+	type KeycapStyle,
+	type KeycapTheme,
+} from "~/store/keyboard";
+import {
 	createSelectedOrganization,
 	getOrganizationBrandColorSwatches,
 	type OrganizationBrandColorSwatch,
@@ -111,16 +119,8 @@ import {
 } from "./context";
 import { GradientEditor } from "./GradientEditor";
 import { ImageSegmentConfig } from "./image-segment-config";
-import { KeyboardTab } from "./KeyboardTab";
-import { KeycapPreviewCluster } from "./KeycapRenderer";
-import {
-	defaultKeyboardSettings,
-	KEYCAP_STYLE_OPTIONS,
-	KEYCAP_THEME_OPTIONS,
-	type KeycapStyle,
-	type KeycapTheme,
-	type KeyboardSettings,
-} from "~/store/keyboard";
+import { KeyboardTab } from "./keyboard-tab";
+import { KeycapPreviewCluster, parseShortcutKeys } from "./keycap-renderer";
 import {
 	encodeMaskEffect,
 	getMaskEffect,
@@ -634,16 +634,18 @@ function ConfigSidebarContent() {
 		});
 	};
 
+	type ConfigSidebarTab =
+		| "background"
+		| "camera"
+		| "transcript"
+		| "audio"
+		| "cursor"
+		| "keyboard"
+		| "hotkeys"
+		| "captions";
+
 	const [state, setState] = createStore({
-		selectedTab: "background" as
-			| "background"
-			| "camera"
-			| "transcript"
-			| "audio"
-			| "cursor"
-			| "keyboard"
-			| "hotkeys"
-			| "captions",
+		selectedTab: "background" as ConfigSidebarTab,
 	});
 
 	// Clip selection is a timeline-only affordance (highlight, Delete key,
@@ -694,7 +696,7 @@ function ConfigSidebarContent() {
 					: state.selectedTab
 			}
 			onChange={(v) => {
-				if (v) setState("selectedTab", v as any);
+				if (v) setState("selectedTab", v as ConfigSidebarTab);
 			}}
 			class="flex overflow-hidden z-10 flex-col flex-1 min-h-0 max-w-104 rounded-xl shrink-0 bg-ed-card shadow-ed-card"
 		>
@@ -3789,18 +3791,11 @@ function KeyboardSegmentConfig(props: {
 	const previewKeys = createMemo(() => {
 		const text = props.segment.displayText || "";
 		if (!text) return ["⌨"];
-		if (text.includes("+")) {
-			return text.split("+").map((s) => s.trim()).filter(Boolean);
-		}
-		if (text.includes(" ")) {
-			return text.split(" ").map((s) => s.trim()).filter(Boolean);
-		}
-		return [text];
+		return parseShortcutKeys(text);
 	});
 
 	return (
 		<div class="space-y-4">
-			{/* Live 3D Keycap Preview for Selected Key */}
 			<div class="flex flex-col items-center justify-center p-3 rounded-xl bg-ed-ctl/50 border border-ed-line overflow-hidden">
 				<div class="text-[10px] font-semibold text-ed-text-3 mb-2.5 tracking-wider uppercase">
 					Keycap Preview (Key23)
@@ -3810,6 +3805,7 @@ function KeyboardSegmentConfig(props: {
 					style={getSetting("style")}
 					theme={getSetting("theme")}
 					showChassis={getSetting("showChassis")}
+					use3D={getSetting("keycapMode")}
 					scale={0.9}
 				/>
 			</div>
@@ -3837,10 +3833,7 @@ function KeyboardSegmentConfig(props: {
 								updateSetting("style", value);
 							}}
 							itemComponent={(p) => (
-								<MenuItem<typeof KSelect.Item>
-									as={KSelect.Item}
-									item={p.item}
-								>
+								<MenuItem<typeof KSelect.Item> as={KSelect.Item} item={p.item}>
 									<KSelect.ItemLabel class="flex-1">
 										{
 											KEYCAP_STYLE_OPTIONS.find(
@@ -3886,10 +3879,7 @@ function KeyboardSegmentConfig(props: {
 								updateSetting("theme", value);
 							}}
 							itemComponent={(p) => (
-								<MenuItem<typeof KSelect.Item>
-									as={KSelect.Item}
-									item={p.item}
-								>
+								<MenuItem<typeof KSelect.Item> as={KSelect.Item} item={p.item}>
 									<KSelect.ItemLabel class="flex-1">
 										{
 											KEYCAP_THEME_OPTIONS.find(

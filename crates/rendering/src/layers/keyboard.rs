@@ -371,11 +371,24 @@ impl KeyboardLayer {
 
         let margin = width as f32 * 0.05;
 
+        let (theme_bg_hex, theme_text_hex) = match settings.theme.as_str() {
+            "black" | "dark" => ("#1A1A1E", "#F5F5F7"),
+            "retro_beige" | "retro" => ("#DCD6C8", "#2A2A2A"),
+            "white" => ("#EFEFEF", "#1A1A1A"),
+            "ocean" => ("#2563EB", "#FFFFFF"),
+            "emerald" => ("#059669", "#FFFFFF"),
+            "amber" => ("#D97706", "#FFFFFF"),
+            "rose" => ("#E11D48", "#FFFFFF"),
+            "purple" => ("#7C3AED", "#FFFFFF"),
+            "cyberpunk" => ("#0D0D15", "#00FFA3"),
+            _ => (settings.background_color.as_str(), settings.color.as_str()),
+        };
+
         let color_hex = active
             .segment
             .color_override
             .as_deref()
-            .unwrap_or(&settings.color);
+            .unwrap_or(theme_text_hex);
         let text_color = [
             parse_color_component(color_hex, 0),
             parse_color_component(color_hex, 1),
@@ -386,7 +399,7 @@ impl KeyboardLayer {
             .segment
             .background_color_override
             .as_deref()
-            .unwrap_or(&settings.background_color);
+            .unwrap_or(theme_bg_hex);
         let background_color_rgb = [
             parse_color_component(bg_color_hex, 0),
             parse_color_component(bg_color_hex, 1),

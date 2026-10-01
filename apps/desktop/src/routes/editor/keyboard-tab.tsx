@@ -8,20 +8,20 @@ import {
 	defaultKeyboardSettings,
 	KEYCAP_STYLE_OPTIONS,
 	KEYCAP_THEME_OPTIONS,
+	type KeyboardSettings,
 	type KeycapStyle,
 	type KeycapTheme,
-	type KeyboardSettings,
 } from "~/store/keyboard";
 import type { OrganizationBrandColorSwatch } from "~/utils/organization-branding";
 import { commands } from "~/utils/tauri";
 import IconCapChevronDown from "~icons/cap/chevron-down";
 import IconCapCircleCheck from "~icons/cap/circle-check";
-import { KeycapPreviewCluster } from "./KeycapRenderer";
 import { useEditorContext } from "./context";
 import {
 	generateForStableKeyboardTimeline,
 	keyboardTimelineSignature,
 } from "./keyboard-timing";
+import { KeycapPreviewCluster } from "./keycap-renderer";
 import {
 	FONT_OPTIONS,
 	getTextWeightLabel,
@@ -191,7 +191,6 @@ export function KeyboardTab(props: {
 					!getSetting("enabled") && "opacity-50 pointer-events-none",
 				)}
 			>
-				{/* Live Keycap Preview Card */}
 				<div class="flex flex-col items-center justify-center p-3 rounded-xl bg-ed-ctl/50 border border-ed-line overflow-hidden">
 					<div class="text-[10px] font-semibold text-ed-text-3 mb-2.5 tracking-wider uppercase">
 						Keycap Preview (Key23)
@@ -201,6 +200,7 @@ export function KeyboardTab(props: {
 						style={getSetting("style")}
 						theme={getSetting("theme")}
 						showChassis={getSetting("showChassis")}
+						use3D={getSetting("keycapMode")}
 						scale={0.85}
 					/>
 				</div>

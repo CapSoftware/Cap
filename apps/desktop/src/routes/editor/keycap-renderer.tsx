@@ -1,4 +1,4 @@
-import { For, Show, createMemo } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
 import type { KeycapStyle, KeycapTheme } from "~/store/keyboard";
 
 export interface KeycapColorPalette {
@@ -11,7 +11,10 @@ export interface KeycapColorPalette {
 	textColor: string;
 }
 
-export const THEME_PALETTES: Record<KeycapTheme, { alpha: KeycapColorPalette; mod: KeycapColorPalette }> = {
+export const THEME_PALETTES: Record<
+	KeycapTheme,
+	{ alpha: KeycapColorPalette; mod: KeycapColorPalette }
+> = {
 	white: {
 		alpha: {
 			surfaceTop: "#F8F8F8",
@@ -154,9 +157,7 @@ export const THEME_PALETTES: Record<KeycapTheme, { alpha: KeycapColorPalette; mo
 	},
 };
 
-export const KeycapUnit = (props: any) => SingleKeycap(props);
-
-export function SingleKeycap(props: {
+export interface SingleKeycapProps {
 	keyText?: string;
 	label?: string;
 	isModifier?: boolean;
@@ -164,28 +165,85 @@ export function SingleKeycap(props: {
 	theme?: KeycapTheme;
 	scale?: number;
 	is3D?: boolean;
-}) {
+}
+
+export function parseShortcutKeys(text: string): string[] {
+	if (!text) return [];
+	if (text.includes("+")) {
+		return text
+			.split("+")
+			.map((s) => s.trim())
+			.filter(Boolean);
+	}
+	if (text.includes(" ")) {
+		return text
+			.split(" ")
+			.map((s) => s.trim())
+			.filter(Boolean);
+	}
+	const modifierSymbols = ["⌘", "⌃", "⌥", "⇧"];
+	const result: string[] = [];
+	let remaining = text;
+	while (remaining.length > 0) {
+		const matchedModifier = modifierSymbols.find((mod) =>
+			remaining.startsWith(mod),
+		);
+		if (matchedModifier) {
+			result.push(matchedModifier);
+			remaining = remaining.slice(matchedModifier.length);
+		} else {
+			result.push(remaining);
+			break;
+		}
+	}
+	return result.filter(Boolean);
+}
+
+export const KeycapUnit = (props: SingleKeycapProps) => SingleKeycap(props);
+
+export function SingleKeycap(props: SingleKeycapProps) {
 	const text = () => props.keyText ?? props.label ?? "A";
 	const style = () => props.style || "pbt";
 	const theme = () => props.theme || "white";
 	const scale = () => props.scale || 1.0;
 	const isMod = () => props.isModifier || false;
+	const is3D = () => props.is3D ?? true;
 
 	const palette = createMemo(() => {
 		const themeData = THEME_PALETTES[theme()] || THEME_PALETTES.white;
 		return isMod() ? themeData.mod : themeData.alpha;
 	});
 
-	const uid = () => `cap_${style()}_${text().replace(/[^a-zA-Z0-9]/g, "")}_${isMod() ? "m" : "a"}`;
+	const uid = () =>
+		`cap_${style()}_${text().replace(/[^a-zA-Z0-9]/g, "")}_${isMod() ? "m" : "a"}`;
 
-	// Label formatting
 	const displayLabel = () => {
 		const k = text();
 		const lower = k.toLowerCase();
-		if (lower === "command" || lower === "cmd" || lower === "meta" || lower === "lmeta" || lower === "rmeta") return "⌘";
-		if (lower === "control" || lower === "ctrl" || lower === "lcontrol" || lower === "rcontrol") return "Ctrl";
-		if (lower === "alt" || lower === "option" || lower === "lalt" || lower === "ralt") return "Alt";
-		if (lower === "shift" || lower === "lshift" || lower === "rshift") return "⇧";
+		if (
+			lower === "command" ||
+			lower === "cmd" ||
+			lower === "meta" ||
+			lower === "lmeta" ||
+			lower === "rmeta"
+		)
+			return "⌘";
+		if (
+			lower === "control" ||
+			lower === "ctrl" ||
+			lower === "lcontrol" ||
+			lower === "rcontrol"
+		)
+			return "Ctrl";
+		if (
+			lower === "alt" ||
+			lower === "option" ||
+			lower === "lalt" ||
+			lower === "ralt"
+		)
+			return "Alt";
+		if (lower === "shift" || lower === "lshift" || lower === "rshift")
+			return "⇧";
 		if (lower === "return" || lower === "enter") return "⏎";
 		if (lower === "backspace" || lower === "delete") return "⌫";
 		if (lower === "escape" || lower === "esc") return "Esc";
@@ -193,28 +251,59 @@ export function SingleKeycap(props: {
 		return k.toUpperCase();
 	};
 
-	// 1. PBT Mechanical Style
 	const renderPBT = () => {
 		const w = displayLabel().length > 2 ? 88 : 68;
 		const h = 68;
 		return (
-			<svg width={w * scale()} height={h * scale()} viewBox={`0 0 ${w} ${h}`} class="select-none overflow-visible">
+			<svg
+				width={w * scale()}
+				height={h * scale()}
+				viewBox={`0 0 ${w} ${h}`}
+				class="select-none overflow-visible"
+			>
 				<defs>
-					<linearGradient id={`${uid()}_skirt`} x1="0%" y1="0%" x2="0%" y2="100%">
+					<linearGradient
+						id={`${uid()}_skirt`}
+						x1="0%"
+						y1="0%"
+						x2="0%"
+						y2="100%"
+					>
 						<stop offset="0%" stop-color={palette().surfaceTop} />
 						<stop offset="45%" stop-color={palette().surfaceMid} />
 						<stop offset="100%" stop-color={palette().surfaceBottom} />
 					</linearGradient>
-					<linearGradient id={`${uid()}_dish`} x1="0%" y1="0%" x2="0%" y2="100%">
+					<linearGradient
+						id={`${uid()}_dish`}
+						x1="0%"
+						y1="0%"
+						x2="0%"
+						y2="100%"
+					>
 						<stop offset="0%" stop-color={palette().dishTop} />
 						<stop offset="100%" stop-color={palette().dishBottom} />
 					</linearGradient>
 				</defs>
-				{/* Keycap Outer Skirt with depth */}
-				<rect x="2" y="2" width={w - 4} height={h - 4} rx="12" ry="12" fill={`url(#${uid()}_skirt)`} stroke={palette().surfaceStroke} stroke-width="1.2" />
-				{/* Top Sculpted Dish */}
-				<rect x="7" y="5" width={w - 14} height={h - 14} rx="8" ry="8" fill={`url(#${uid()}_dish)`} />
-				{/* Keycap Legend */}
+				<rect
+					x="2"
+					y="2"
+					width={w - 4}
+					height={h - 4}
+					rx="12"
+					ry="12"
+					fill={is3D() ? `url(#${uid()}_skirt)` : palette().surfaceMid}
+					stroke={palette().surfaceStroke}
+					stroke-width="1.2"
+				/>
+				<rect
+					x="7"
+					y="5"
+					width={w - 14}
+					height={h - 14}
+					rx="8"
+					ry="8"
+					fill={is3D() ? `url(#${uid()}_dish)` : palette().surfaceTop}
+				/>
 				<text
 					x={w / 2}
 					y={h / 2 + 1}
@@ -231,22 +320,50 @@ export function SingleKeycap(props: {
 		);
 	};
 
-	// 2. Apple Modern Rounded Style
 	const renderApple = () => {
 		const w = displayLabel().length > 2 ? 82 : 62;
 		const h = 62;
 		return (
-			<svg width={w * scale()} height={h * scale()} viewBox={`0 0 ${w} ${h}`} class="select-none overflow-visible">
+			<svg
+				width={w * scale()}
+				height={h * scale()}
+				viewBox={`0 0 ${w} ${h}`}
+				class="select-none overflow-visible"
+			>
 				<defs>
-					<linearGradient id={`${uid()}_apple`} x1="0%" y1="0%" x2="0%" y2="100%">
+					<linearGradient
+						id={`${uid()}_apple`}
+						x1="0%"
+						y1="0%"
+						x2="0%"
+						y2="100%"
+					>
 						<stop offset="0%" stop-color={palette().dishTop} />
 						<stop offset="100%" stop-color={palette().dishBottom} />
 					</linearGradient>
 				</defs>
-				{/* 3D Underside Shelf */}
-				<rect x="2" y="6" width={w - 4} height={h - 8} rx="14" ry="14" fill={palette().surfaceBottom} />
-				{/* Modern Glass Face */}
-				<rect x="2" y="2" width={w - 4} height={h - 8} rx="14" ry="14" fill={`url(#${uid()}_apple)`} stroke={palette().surfaceStroke} stroke-width="1" />
+				<Show when={is3D()}>
+					<rect
+						x="2"
+						y="6"
+						width={w - 4}
+						height={h - 8}
+						rx="14"
+						ry="14"
+						fill={palette().surfaceBottom}
+					/>
+				</Show>
+				<rect
+					x="2"
+					y="2"
+					width={w - 4}
+					height={h - 8}
+					rx="14"
+					ry="14"
+					fill={is3D() ? `url(#${uid()}_apple)` : palette().surfaceMid}
+					stroke={palette().surfaceStroke}
+					stroke-width="1"
+				/>
 				<text
 					x={w / 2}
 					y={(h - 6) / 2 + 2}
@@ -263,13 +380,27 @@ export function SingleKeycap(props: {
 		);
 	};
 
-	// 3. Minimal Pill Style
 	const renderMinimal = () => {
 		const w = displayLabel().length > 2 ? 76 : 56;
 		const h = 56;
 		return (
-			<svg width={w * scale()} height={h * scale()} viewBox={`0 0 ${w} ${h}`} class="select-none overflow-visible">
-				<rect x="1.5" y="1.5" width={w - 3} height={h - 3} rx="14" ry="14" fill={palette().dishBottom} stroke={palette().surfaceStroke} stroke-width="1.2" />
+			<svg
+				width={w * scale()}
+				height={h * scale()}
+				viewBox={`0 0 ${w} ${h}`}
+				class="select-none overflow-visible"
+			>
+				<rect
+					x="1.5"
+					y="1.5"
+					width={w - 3}
+					height={h - 3}
+					rx="14"
+					ry="14"
+					fill={palette().dishBottom}
+					stroke={palette().surfaceStroke}
+					stroke-width="1.2"
+				/>
 				<text
 					x={w / 2}
 					y={h / 2}
@@ -286,15 +417,47 @@ export function SingleKeycap(props: {
 		);
 	};
 
-	// 4. Retro Vintage Style
 	const renderRetro = () => {
 		const w = displayLabel().length > 2 ? 86 : 66;
 		const h = 66;
 		return (
-			<svg width={w * scale()} height={h * scale()} viewBox={`0 0 ${w} ${h}`} class="select-none overflow-visible">
-				<rect x="2" y="4" width={w - 4} height={h - 6} rx="16" ry="16" fill={palette().surfaceBottom} />
-				<rect x="3" y="2" width={w - 6} height={h - 8} rx="14" ry="14" fill={palette().surfaceMid} stroke={palette().surfaceStroke} stroke-width="1.2" />
-				<rect x="8" y="6" width={w - 16} height={h - 16} rx="10" ry="10" fill={palette().dishTop} />
+			<svg
+				width={w * scale()}
+				height={h * scale()}
+				viewBox={`0 0 ${w} ${h}`}
+				class="select-none overflow-visible"
+			>
+				<Show when={is3D()}>
+					<rect
+						x="2"
+						y="4"
+						width={w - 4}
+						height={h - 6}
+						rx="16"
+						ry="16"
+						fill={palette().surfaceBottom}
+					/>
+				</Show>
+				<rect
+					x="3"
+					y="2"
+					width={w - 6}
+					height={h - 8}
+					rx="14"
+					ry="14"
+					fill={palette().surfaceMid}
+					stroke={palette().surfaceStroke}
+					stroke-width="1.2"
+				/>
+				<rect
+					x="8"
+					y="6"
+					width={w - 16}
+					height={h - 16}
+					rx="10"
+					ry="10"
+					fill={palette().dishTop}
+				/>
 				<text
 					x={w / 2}
 					y={h / 2 - 1}
@@ -311,7 +474,6 @@ export function SingleKeycap(props: {
 		);
 	};
 
-	// 5. Classic Subtitle Box fallback
 	const renderClassicBox = () => {
 		return (
 			<span class="inline-flex items-center justify-center px-2.5 py-1 text-sm font-semibold rounded bg-black/80 text-white border border-white/20">
@@ -326,7 +488,9 @@ export function SingleKeycap(props: {
 				<Show when={style() === "pbt"}>{renderPBT()}</Show>
 				<Show when={style() === "apple"}>{renderApple()}</Show>
 				<Show when={style() === "minimal"}>{renderMinimal()}</Show>
-				<Show when={style() === "retro" || style() === "m0116"}>{renderRetro()}</Show>
+				<Show when={style() === "retro" || style() === "m0116"}>
+					{renderRetro()}
+				</Show>
 			</div>
 		</Show>
 	);
@@ -337,10 +501,12 @@ export function KeycapPreviewCluster(props: {
 	style?: KeycapStyle;
 	theme?: KeycapTheme;
 	showChassis?: boolean;
+	use3D?: boolean;
 	scale?: number;
 }) {
 	const keys = () => props.keys || ["⌘", "K"];
 	const showChassis = () => props.showChassis ?? true;
+	const use3D = () => props.use3D ?? true;
 	const style = () => props.style || "pbt";
 	const theme = () => props.theme || "white";
 	const scale = () => props.scale || 1.0;
@@ -355,7 +521,8 @@ export function KeycapPreviewCluster(props: {
 							padding: "10px 14px",
 							"border-radius": "18px",
 							border: "1.5px solid rgba(255, 255, 255, 0.14)",
-							"box-shadow": "0 14px 28px rgba(0,0,0,0.55), 0 4px 10px rgba(0,0,0,0.35)",
+							"box-shadow":
+								"0 14px 28px rgba(0,0,0,0.55), 0 4px 10px rgba(0,0,0,0.35)",
 						}
 					: {
 							padding: "6px",
@@ -370,6 +537,7 @@ export function KeycapPreviewCluster(props: {
 						style={style()}
 						theme={theme()}
 						scale={scale()}
+						is3D={use3D()}
 					/>
 				)}
 			</For>
