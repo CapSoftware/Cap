@@ -21,25 +21,41 @@ export default async function StudioEditorPage(props: {
 }) {
 	const { videoId: rawVideoId } = await props.params;
 	const videoId = Video.VideoId.make(rawVideoId);
+	// The lookups below don't depend on each other, so they run alongside the
+	// sign-in check instead of one after another; nothing is shown until it
+	// passes.
+	const videoRows = Promise.resolve(
+		db()
+			.select({
+				id: videos.id,
+				ownerId: videos.ownerId,
+				name: videos.name,
+				isPublic: videos.public,
+				duration: videos.duration,
+				isScreenshot: videos.isScreenshot,
+				source: videos.source,
+				metadata: videos.metadata,
+				uploadPhase: videoUploads.phase,
+				rawFileKey: videoUploads.rawFileKey,
+				uploadUpdatedAt: videoUploads.updatedAt,
+			})
+			.from(videos)
+			.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
+			.where(eq(videos.id, videoId)),
+	);
+	const editRows = Promise.resolve(
+		db()
+			.select({ sourceKey: videoEdits.sourceKey })
+			.from(videoEdits)
+			.where(eq(videoEdits.videoId, videoId)),
+	);
+	videoRows.catch(() => undefined);
+	editRows.catch(() => undefined);
 	const user = await getCurrentUser();
 	if (!user || !isWebStudioEnabledForEmail(user.email)) notFound();
-	const [video] = await db()
-		.select({
-			id: videos.id,
-			ownerId: videos.ownerId,
-			name: videos.name,
-			isPublic: videos.public,
-			duration: videos.duration,
-			isScreenshot: videos.isScreenshot,
-			source: videos.source,
-			metadata: videos.metadata,
-			uploadPhase: videoUploads.phase,
-			rawFileKey: videoUploads.rawFileKey,
-			uploadUpdatedAt: videoUploads.updatedAt,
-		})
-		.from(videos)
-		.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
-		.where(eq(videos.id, videoId));
+	const customDomain = ownerCustomDomain(user.activeOrganizationId);
+	customDomain.catch(() => undefined);
+	const [video] = await videoRows;
 	if (
 		!video ||
 		video.ownerId !== user.id ||
@@ -84,10 +100,7 @@ export default async function StudioEditorPage(props: {
 		return <EditProcessing videoId={videoId} />;
 	}
 	const editorSources = video?.metadata?.editorSources;
-	const [existingEdit] = await db()
-		.select({ sourceKey: videoEdits.sourceKey })
-		.from(videoEdits)
-		.where(eq(videoEdits.videoId, videoId));
+	const [existingEdit] = await editRows;
 	const hasStudioSource = existingEdit
 		? existingEdit.sourceKey === getEditSourceKey(user.id, videoId)
 		: editorSources == null ||
@@ -102,10 +115,7 @@ export default async function StudioEditorPage(props: {
 	if (!duration) notFound();
 	// Recordings without separate sources open in the regular editor.
 	if (!hasStudioSource) redirect(`/s/${videoId}/edit`);
-	const shareUrl = shareLinkUrl(
-		video.id,
-		await ownerCustomDomain(user.activeOrganizationId),
-	);
+	const shareUrl = shareLinkUrl(video.id, await customDomain);
 	return (
 		<StudioEditorClient
 			videoId={video.id}

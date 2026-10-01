@@ -8,6 +8,8 @@ const mocks = vi.hoisted(() => ({
 	} | null,
 	studioEnabled: true,
 	pro: true,
+	queries: 0,
+	signedIn: Promise.resolve(),
 }));
 
 vi.mock("@cap/database", () => ({
@@ -16,14 +18,20 @@ vi.mock("@cap/database", () => ({
 			const query = {
 				from: () => query,
 				leftJoin: () => query,
-				where: async () => mocks.rows.shift() ?? [],
+				where: async () => {
+					mocks.queries++;
+					return mocks.rows.shift() ?? [];
+				},
 			};
 			return query;
 		},
 	}),
 }));
 vi.mock("@cap/database/auth/session", () => ({
-	getCurrentUser: async () => mocks.user,
+	getCurrentUser: async () => {
+		await mocks.signedIn;
+		return mocks.user;
+	},
 }));
 vi.mock("@cap/database/schema", () => ({
 	videos: {},
@@ -107,6 +115,8 @@ beforeEach(() => {
 	mocks.user = { id: "owner", email: "richie@mcilroy.co" };
 	mocks.studioEnabled = true;
 	mocks.pro = true;
+	mocks.queries = 0;
+	mocks.signedIn = Promise.resolve();
 });
 
 for (const [name, page] of [
@@ -161,6 +171,19 @@ test("completed pilot recordings redirect to Studio", async () => {
 test("completed Studio recordings mount the editor", async () => {
 	mocks.rows = [[video], []];
 	expect((await StudioPage(params)).type).toBe(StudioEditorClient);
+});
+
+test("Studio looks up the recording while the sign-in check runs", async () => {
+	let signIn: () => void = () => {};
+	mocks.signedIn = new Promise<void>((resolve) => {
+		signIn = resolve;
+	});
+	mocks.rows = [[video], []];
+	const page = StudioPage(params);
+	await new Promise((resolve) => setTimeout(resolve, 0));
+	expect(mocks.queries).toBe(2);
+	signIn();
+	expect((await page).type).toBe(StudioEditorClient);
 });
 
 test("the existing editor and upgrade gate remain available outside the pilot", async () => {
