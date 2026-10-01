@@ -160,6 +160,10 @@ const SCRUB_SEEK_GAP_MS = 150;
 const SCRUB_REFINE_MS = 40;
 const KEY_FRAME_TIME_OFFSET = 0.002;
 
+/// Long enough for playback that can't keep up at full resolution to have
+/// stepped down.
+const PLAYBACK_SCALE_SETTLED_MS = 3000;
+
 /// Zoom springs keep settling after a zoom segment ends.
 const ZOOM_SETTLE_SECS = 3;
 const OVERLAY_MARGIN_SECS = 1;
@@ -294,6 +298,10 @@ export class BrowserLocalPlayback {
 	private playStartedTime = 0;
 	private lastRequestedFrame = -1;
 	private previewScale: 1 | 0.75 | 0.5 = 1;
+	/// The resolution the last playback settled at, where the next one starts
+	/// instead of spending its first seconds stepping down again.
+	private playbackScale: 1 | 0.75 | 0.5 = 1;
+	private playbackBegan = 0;
 	private averageFrameCostMs = 0;
 	private lastRenderedAt = 0;
 	private playClockAligned = false;
@@ -1265,6 +1273,11 @@ export class BrowserLocalPlayback {
 		this.slowFrames = 0;
 		this.slowStreakMs = 0;
 		this.fastFrames = 0;
+		this.playbackBegan = performance.now();
+		if (this.playbackScale !== 1 && this.previewBase) {
+			this.previewScale = this.playbackScale;
+			this.resizeForBase(this.previewBase.width, this.previewBase.height);
+		}
 		let firstTick = true;
 		const tick = () => {
 			if (!this.playing || this.disposed) return;
@@ -1312,6 +1325,13 @@ export class BrowserLocalPlayback {
 		cancelAnimationFrame(this.animationFrame);
 		this.pool.pause();
 		this.audio.pause();
+		// A short play may end before the resolution has adapted.
+		if (
+			this.previewScale !== 1 ||
+			performance.now() - this.playbackBegan >= PLAYBACK_SCALE_SETTLED_MS
+		) {
+			this.playbackScale = this.previewScale;
+		}
 		// Playback may have lowered the resolution to keep up; a paused frame
 		// always renders at full detail.
 		if (this.previewScale !== 1) {

@@ -206,3 +206,55 @@ test("adaptive preview ignores idle gaps between quick frames", () => {
 	}
 	expect(changes).toEqual([]);
 });
+
+test("playback starts at the resolution the previous playback settled at", () => {
+	const playback = Object.create(
+		BrowserLocalPlayback.prototype,
+	) as BrowserLocalPlayback;
+	const sizes: number[] = [];
+	Reflect.set(playback, "previewBase", { width: 1248, height: 702 });
+	Reflect.set(playback, "playing", false);
+	Reflect.set(playback, "disposed", false);
+	Reflect.set(playback, "previewScale", 1);
+	Reflect.set(playback, "playbackScale", 1);
+	Reflect.set(playback, "outputTime", 0);
+	Reflect.set(playback, "audio", { resume() {}, pause() {} });
+	Reflect.set(playback, "pool", { pause() {} });
+	playback.resizeForBase = () => {
+		sizes.push(Number(Reflect.get(playback, "previewScale")));
+		return true;
+	};
+	playback.seek = async () => true;
+	const frames = globalThis as {
+		requestAnimationFrame?: unknown;
+		cancelAnimationFrame?: unknown;
+	};
+	const raf = frames.requestAnimationFrame;
+	const caf = frames.cancelAnimationFrame;
+	frames.requestAnimationFrame = () => 1;
+	frames.cancelAnimationFrame = () => undefined;
+	const realNow = performance.now.bind(performance);
+	let now = 0;
+	performance.now = () => now;
+	try {
+		playback.play();
+		expect(sizes).toEqual([]);
+		// The adaptive preview stepped down while it played.
+		Reflect.set(playback, "previewScale", 0.5);
+		now += 5000;
+		playback.pause();
+		expect(sizes).toEqual([1]);
+		playback.play();
+		expect(sizes).toEqual([1, 0.5]);
+		// A play too short to have adapted keeps what the last one learned.
+		Reflect.set(playback, "previewScale", 1);
+		now += 500;
+		playback.pause();
+		playback.play();
+		expect(sizes).toEqual([1, 0.5, 0.5]);
+	} finally {
+		performance.now = realNow;
+		frames.requestAnimationFrame = raf;
+		frames.cancelAnimationFrame = caf;
+	}
+});
