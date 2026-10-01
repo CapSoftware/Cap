@@ -241,7 +241,8 @@ impl AudioStream {
         let channels = if source_channels <= 1 { 1 } else { 2 };
         let mut options = ffmpeg::Dictionary::new();
         options.set("filter_size", "128");
-        options.set("cutoff", "0.97");
+        // FFmpeg parses decimal options using LC_NUMERIC, so use a locale-neutral ratio.
+        options.set("cutoff", "97/100");
         let resampler = resampling::Context::get_with(
             decoder.format(),
             decoder.channel_layout(),

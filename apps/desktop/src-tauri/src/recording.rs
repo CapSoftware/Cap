@@ -4,10 +4,10 @@ use cap_media_info::ffmpeg_sample_format_for;
 use cap_project::CursorMoveEvent;
 use cap_project::cursor::SHORT_CURSOR_SHAPE_DEBOUNCE_MS;
 use cap_project::{
-    CameraShape, CursorClickEvent, GlideDirection, InstantRecordingMeta, MultipleSegments,
-    Platform, ProjectConfiguration, RecordingMeta, RecordingMetaInner, SharingMeta,
-    StudioRecordingMeta, StudioRecordingStatus, TimelineConfiguration, TimelineSegment, ZoomMode,
-    ZoomSegment, cursor::CursorEvents,
+    CameraShape, CornerStyle, CursorClickEvent, GlideDirection, InstantRecordingMeta,
+    MultipleSegments, Platform, ProjectConfiguration, RecordingMeta, RecordingMetaInner,
+    SharingMeta, StudioRecordingMeta, StudioRecordingStatus, TimelineConfiguration,
+    TimelineSegment, ZoomMode, ZoomSegment, cursor::CursorEvents,
 };
 #[cfg(target_os = "macos")]
 use cap_recording::SendableShareableContent;
@@ -6700,6 +6700,7 @@ fn apply_recording_camera_preview_state(
         CameraPreviewShape::Round => {
             config.camera.shape = CameraShape::Square;
             config.camera.rounding = 100.0;
+            config.camera.rounding_type = CornerStyle::Rounded;
         }
         CameraPreviewShape::Square => {
             config.camera.shape = CameraShape::Square;
@@ -10372,7 +10373,7 @@ mod preparing_presentation_parity_tests {
     }
 
     #[test]
-    fn ordinary_late_camera_state_changes_only_the_three_existing_camera_fields() {
+    fn ordinary_late_camera_state_preserves_unrelated_camera_fields() {
         for (shape, expected_shape, rounding) in [
             (CameraPreviewShape::Round, CameraShape::Square, 100.0),
             (CameraPreviewShape::Square, CameraShape::Square, 25.0),
@@ -10389,6 +10390,9 @@ mod preparing_presentation_parity_tests {
                 let mut expected = config.clone();
                 expected.camera.shape = expected_shape;
                 expected.camera.rounding = rounding;
+                if shape == CameraPreviewShape::Round {
+                    expected.camera.rounding_type = CornerStyle::Rounded;
+                }
                 expected.camera.background_blur.mode = blur;
                 apply_recording_camera_preview_state(
                     &mut config,
