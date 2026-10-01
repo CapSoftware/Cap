@@ -195,6 +195,9 @@ const trackDefinitions: TrackDefinition[] = [
 ];
 
 const isWebEditor = import.meta.env.VITE_CAP_WEB_EDITOR === "true";
+const availableTrackDefinitions = isWebEditor
+	? trackDefinitions.filter((definition) => definition.type !== "keyboard")
+	: trackDefinitions;
 const captionsAllowed = () =>
 	!isWebEditor ||
 	(window as Window & { capWebEditorCaptionsEnabled?: boolean })
@@ -513,10 +516,10 @@ export function Timeline(props: {
 			!!project.timeline?.sceneSegments?.length);
 	const captionTrackVisible = () =>
 		captionPlanAllowed() && trackState().caption;
-	const keyboardTrackVisible = () => trackState().keyboard;
+	const keyboardTrackVisible = () => !isWebEditor && trackState().keyboard;
 	const threeDTrackVisible = () => trackState()["3d"];
 	const trackOptions = createMemo(() =>
-		trackDefinitions.map((definition) => ({
+		availableTrackDefinitions.map((definition) => ({
 			...definition,
 			active:
 				definition.type === "style" ||

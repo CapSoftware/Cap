@@ -715,12 +715,11 @@ function ConfigSidebarContent() {
 						{
 							id: TAB_IDS.cursor,
 							icon: IconCapCursor,
-							disabled: !isWebEditor && !meta().hasRecordedCursorData,
+							disabled: !meta().hasRecordedCursorData,
 						},
-						{
-							id: TAB_IDS.keyboard,
-							icon: IconLucideKeyboard,
-						},
+						...(isWebEditor
+							? []
+							: [{ id: TAB_IDS.keyboard, icon: IconLucideKeyboard }]),
 						{
 							id: TAB_IDS.captions,
 							icon: IconCapMessageBubble,
