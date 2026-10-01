@@ -1,6 +1,7 @@
 "use client";
 
 import type { Video } from "@cap/web-domain";
+import clsx from "clsx";
 import { useRouter } from "next/navigation";
 import {
 	type ReactNode,
@@ -13,6 +14,23 @@ import { RenderFog } from "@/components/render-fog";
 import { useThumnailQuery } from "@/components/VideoThumbnail";
 import { scheduleReadyRefresh } from "./deferred-ready-refresh";
 import { renderProgressLabel, useRenderSaveStatus } from "./render-save-status";
+import {
+	MediaPlayer,
+	MediaPlayerControls,
+	MediaPlayerControlsOverlay,
+	MediaPlayerError,
+	MediaPlayerFullscreen,
+	MediaPlayerLoading,
+	MediaPlayerPiP,
+	MediaPlayerPlay,
+	MediaPlayerSeek,
+	MediaPlayerSeekBackward,
+	MediaPlayerSeekForward,
+	MediaPlayerTime,
+	MediaPlayerVideo,
+	MediaPlayerVolume,
+	MediaPlayerVolumeIndicator,
+} from "./video/media-player";
 
 const FINISHING_TIMEOUT_MS = 15_000;
 
@@ -76,9 +94,37 @@ function RenderPreviewPlayer({
 		};
 	}, [src, videoRef]);
 	return (
-		<video ref={videoRef} controls playsInline className={className}>
-			<track kind="captions" />
-		</video>
+		<MediaPlayer
+			autoHide
+			className={clsx(
+				className,
+				"[&::-webkit-media-text-track-display]:!hidden",
+			)}
+		>
+			<MediaPlayerVideo ref={videoRef} playsInline preload="auto">
+				<track kind="captions" />
+			</MediaPlayerVideo>
+			<MediaPlayerLoading />
+			<MediaPlayerError />
+			<MediaPlayerVolumeIndicator />
+			<MediaPlayerControls className="flex-col items-start gap-2.5">
+				<MediaPlayerControlsOverlay />
+				<MediaPlayerSeek />
+				<div className="flex gap-2 items-center w-full">
+					<div className="flex flex-1 gap-2 items-center">
+						<MediaPlayerPlay />
+						<MediaPlayerSeekBackward className="hidden sm:inline-flex" />
+						<MediaPlayerSeekForward className="hidden sm:inline-flex" />
+						<MediaPlayerVolume expandable />
+						<MediaPlayerTime />
+					</div>
+					<div className="flex gap-2 items-center">
+						<MediaPlayerPiP />
+						<MediaPlayerFullscreen />
+					</div>
+				</div>
+			</MediaPlayerControls>
+		</MediaPlayer>
 	);
 }
 
