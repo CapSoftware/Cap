@@ -4,6 +4,12 @@ import { createMemo, createRoot, For } from "solid-js";
 import { useEditorContext } from "../context";
 import { useTimelineContext } from "./context";
 import {
+	clearSnapGuide,
+	snapEdgeTime,
+	snapMoveDelta,
+	timelineSnapTargets,
+} from "./segment-snapping";
+import {
 	SegmentContent,
 	SegmentHandle,
 	SegmentLabel,
@@ -34,6 +40,11 @@ export function CaptionsTrack(props: {
 		projectHistory,
 		projectActions,
 	} = useEditorContext();
+	const snapTargetsFor = (index: number) =>
+		timelineSnapTargets(project.timeline, editorState.playbackTime, {
+			type: "caption",
+			index,
+		});
 	const { secsPerPixel } = useTimelineContext();
 
 	const minDuration = () =>
@@ -107,6 +118,7 @@ export function CaptionsTrack(props: {
 					}
 					props.handleUpdatePlayhead(e);
 				}
+				clearSnapGuide();
 				props.onDragStateChanged({ type: "idle" });
 			}
 
@@ -217,10 +229,23 @@ export function CaptionsTrack(props: {
 												bounds.nextStart - minDuration(),
 											),
 										);
-										return { start, minValue, maxValue };
+										return {
+											start,
+											minValue,
+											maxValue,
+											targets: snapTargetsFor(i()),
+										};
 									},
 									(e, value, initialMouseX) => {
-										const delta = (e.clientX - initialMouseX) * secsPerPixel();
+										const delta =
+											snapEdgeTime(
+												value.start +
+													(e.clientX - initialMouseX) * secsPerPixel(),
+												e,
+												value.targets,
+												secsPerPixel(),
+												{ min: value.minValue, max: value.maxValue },
+											) - value.start;
 										const next = Math.max(
 											value.minValue,
 											Math.min(value.maxValue, value.start + delta),
@@ -244,10 +269,25 @@ export function CaptionsTrack(props: {
 										const bounds = neighborBounds(i());
 										const minDelta = bounds.prevEnd - original.start;
 										const maxDelta = bounds.nextStart - original.end;
-										return { original, minDelta, maxDelta };
+										return {
+											original,
+											minDelta,
+											maxDelta,
+											targets: snapTargetsFor(i()),
+										};
 									},
 									(e, value, initialMouseX) => {
-										const delta = (e.clientX - initialMouseX) * secsPerPixel();
+										const delta = snapMoveDelta(
+											value.original,
+											(e.clientX - initialMouseX) * secsPerPixel(),
+											e,
+											value.targets,
+											secsPerPixel(),
+											{
+												min: Math.min(value.minDelta, value.maxDelta),
+												max: Math.max(value.minDelta, value.maxDelta),
+											},
+										);
 										const lowerBound = Math.min(value.minDelta, value.maxDelta);
 										const upperBound = Math.max(value.minDelta, value.maxDelta);
 										const clampedDelta = Math.min(
@@ -277,10 +317,23 @@ export function CaptionsTrack(props: {
 										const end = segment.end;
 										const minValue = segment.start + minDuration();
 										const maxValue = Math.max(minValue, bounds.nextStart);
-										return { end, minValue, maxValue };
+										return {
+											end,
+											minValue,
+											maxValue,
+											targets: snapTargetsFor(i()),
+										};
 									},
 									(e, value, initialMouseX) => {
-										const delta = (e.clientX - initialMouseX) * secsPerPixel();
+										const delta =
+											snapEdgeTime(
+												value.end +
+													(e.clientX - initialMouseX) * secsPerPixel(),
+												e,
+												value.targets,
+												secsPerPixel(),
+												{ min: value.minValue, max: value.maxValue },
+											) - value.end;
 										const next = Math.max(
 											value.minValue,
 											Math.min(value.maxValue, value.end + delta),

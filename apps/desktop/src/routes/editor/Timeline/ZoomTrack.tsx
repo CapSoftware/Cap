@@ -18,6 +18,12 @@ import { commands } from "~/utils/tauri";
 import { useEditorContext } from "../context";
 import { useTimelineContext, useTrackContext } from "./context";
 import {
+	clearSnapGuide,
+	snapEdgeTime,
+	snapMoveDelta,
+	timelineSnapTargets,
+} from "./segment-snapping";
+import {
 	SegmentContent,
 	SegmentHandle,
 	SegmentLabel,
@@ -406,6 +412,12 @@ export function ZoomTrack(props: {
 							setPreviewTime(maxValue);
 						};
 
+						const zoomSnapTargets = () =>
+							timelineSnapTargets(project.timeline, editorState.playbackTime, {
+								type: "zoom",
+								index: i,
+							});
+
 						function createMouseDownDrag<T>(
 							setup: () => T,
 							_update: (e: MouseEvent, v: T, initialMouseX: number) => void,
@@ -513,6 +525,7 @@ export function ZoomTrack(props: {
 									onCleanup(() => {
 										cancelDrag = undefined;
 										resumeHistory();
+										clearSnapGuide();
 										props.onDragStateChanged({ type: "idle" });
 										setTrackState("draggingSegment", false);
 									});
@@ -647,12 +660,22 @@ export function ZoomTrack(props: {
 												}
 											}
 
-											return { start, minValue, maxValue };
+											return {
+												start,
+												minValue,
+												maxValue,
+												targets: zoomSnapTargets(),
+											};
 										},
 										(e, value, initialMouseX) => {
-											const newStart =
+											const newStart = snapEdgeTime(
 												value.start +
-												(e.clientX - initialMouseX) * secsPerPixel();
+													(e.clientX - initialMouseX) * secsPerPixel(),
+												e,
+												value.targets,
+												secsPerPixel(),
+												{ min: value.minValue, max: value.maxValue },
+											);
 											const nextStart = Math.min(
 												value.maxValue,
 												Math.max(value.minValue, newStart),
@@ -693,11 +716,21 @@ export function ZoomTrack(props: {
 												original,
 												minStart,
 												maxEnd,
+												targets: zoomSnapTargets(),
 											};
 										},
 										(e, value, initialMouseX) => {
-											const rawDelta =
-												(e.clientX - initialMouseX) * secsPerPixel();
+											const rawDelta = snapMoveDelta(
+												value.original,
+												(e.clientX - initialMouseX) * secsPerPixel(),
+												e,
+												value.targets,
+												secsPerPixel(),
+												{
+													min: value.minStart - value.original.start,
+													max: value.maxEnd - value.original.end,
+												},
+											);
 
 											const newStart = value.original.start + rawDelta;
 											const newEnd = value.original.end + rawDelta;
@@ -777,12 +810,22 @@ export function ZoomTrack(props: {
 												}
 											}
 
-											return { end, minValue, maxValue };
+											return {
+												end,
+												minValue,
+												maxValue,
+												targets: zoomSnapTargets(),
+											};
 										},
 										(e, value, initialMouseX) => {
-											const newEnd =
+											const newEnd = snapEdgeTime(
 												value.end +
-												(e.clientX - initialMouseX) * secsPerPixel();
+													(e.clientX - initialMouseX) * secsPerPixel(),
+												e,
+												value.targets,
+												secsPerPixel(),
+												{ min: value.minValue, max: value.maxValue },
+											);
 											const nextEnd = Math.min(
 												value.maxValue,
 												Math.max(value.minValue, newEnd),
