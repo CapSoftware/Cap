@@ -69,4 +69,61 @@ describe("syncCaptionSourceFromTrack", () => {
 			"third",
 		]);
 	});
+
+	it("keeps the other piece of a caption a cut split in two", () => {
+		const recordings = [{ display: { duration: 10 } } as SegmentRecordings];
+		const segments = [
+			{ start: 0, end: 1.9, timescale: 1, recordingSegment: 0 },
+			{ start: 2.1, end: 10, timescale: 1, recordingSegment: 0 },
+		] as TimelineSegment[];
+		const sources = [
+			{
+				id: "a",
+				start: 0,
+				end: 4,
+				text: "one two three four",
+				words: [
+					{ text: "one", start: 0, end: 1 },
+					{ text: "two", start: 1, end: 1.8 },
+					{ text: "three", start: 2.2, end: 3 },
+					{ text: "four", start: 3, end: 4 },
+				],
+			} as CaptionSegment,
+		];
+		const project = {
+			captions: { segments: sources },
+			timeline: {
+				segments,
+				captionSegments: deriveCaptionTrackSegments(
+					sources,
+					segments,
+					recordings,
+				),
+			},
+		};
+		const track = project.timeline.captionSegments;
+		expect(track.map((segment) => segment.text)).toEqual([
+			"one two",
+			"three four",
+		]);
+
+		track[1].text = "three five";
+		syncCaptionSourceFromTrack(project, 1, recordings);
+
+		const [source] = project.captions.segments;
+		expect(source.text).toBe("one two three five");
+		expect(source.start).toBe(0);
+		expect(source.words?.slice(0, 2)).toEqual([
+			{ text: "one", start: 0, end: 1 },
+			{ text: "two", start: 1, end: 1.8 },
+		]);
+		expect(
+			deriveCaptionTrackSegments(
+				project.captions.segments,
+				segments,
+				recordings,
+				track,
+			).map((segment) => segment.text),
+		).toEqual(["one two", "three five"]);
+	});
 });

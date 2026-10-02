@@ -504,6 +504,14 @@ export function syncCaptionSourceFromTrack(
 		);
 	const start = toSource(track.start);
 	const end = toSource(track.end);
+	if (track.id !== sourceId) {
+		syncSplitCaptionPiece(source, track, timeline, recordingSegments, {
+			start,
+			end,
+			toSource,
+		});
+		return;
+	}
 	if (start !== null) source.start = start;
 	if (end !== null) source.end = end;
 	source.text = track.text;
@@ -513,6 +521,76 @@ export function syncCaptionSourceFromTrack(
 		source.start,
 		source.end,
 	);
+}
+
+/// A caption a cut split into pieces shares one source caption, so an edit
+/// to one piece rewrites only the source words that piece shows; the others
+/// keep their words and timing.
+function syncSplitCaptionPiece(
+	source: CaptionSegment,
+	track: CaptionTrackSegment,
+	timeline: {
+		segments: TimelineSegment[];
+		transitions?: ClipTransition[] | null;
+		textSegments?: TextSegment[] | null;
+	},
+	recordingSegments: SegmentRecordings[],
+	mapped: {
+		start: number | null;
+		end: number | null;
+		toSource: (time: number) => number | null;
+	},
+) {
+	const words = source.words ?? [];
+	const pieceIndex = Number(
+		track.id.slice(
+			track.id.lastIndexOf(CAPTION_EDL_SEPARATOR) +
+				CAPTION_EDL_SEPARATOR.length,
+		),
+	);
+	const piece = mapCaptionsToEditedTimeline(
+		[source],
+		timeline.segments,
+		recordingSegments,
+		timeline.transitions ?? [],
+		timeline.textSegments ?? undefined,
+	)[pieceIndex];
+	const shown = new Set<number>();
+	for (const word of piece?.words ?? []) {
+		const time = mapped.toSource((word.start + word.end) / 2);
+		if (time === null) continue;
+		const index = words.findIndex(
+			(candidate) => candidate.start <= time && time <= candidate.end,
+		);
+		if (index !== -1) shown.add(index);
+	}
+	if (shown.size === 0) {
+		if (words.length === 0) source.text = track.text;
+		return;
+	}
+	const first = Math.min(...shown);
+	const last = Math.max(...shown);
+	const before = words.slice(0, first);
+	const after = words.slice(last + 1);
+	const floor = before.at(-1)?.end ?? Number.NEGATIVE_INFINITY;
+	const ceiling = after[0]?.start ?? Number.POSITIVE_INFINITY;
+	const runStart = Math.max(mapped.start ?? words[first].start, floor);
+	const runEnd = Math.max(
+		runStart,
+		Math.min(mapped.end ?? words[last].end, ceiling),
+	);
+	const run = syncCaptionWordsWithText(
+		track.text,
+		words.slice(first, last + 1),
+		runStart,
+		runEnd,
+	);
+	source.words = [...before, ...run, ...after];
+	source.text = getCaptionTextFromWords(source.words);
+	if (before.length === 0 && run[0]) source.start = run[0].start;
+	if (after.length === 0 && run.length > 0) {
+		source.end = run[run.length - 1].end;
+	}
 }
 
 export function applyCaptionResultToProject<
