@@ -548,39 +548,64 @@ function syncSplitCaptionPiece(
 				CAPTION_EDL_SEPARATOR.length,
 		),
 	);
-	const piece = mapCaptionsToEditedTimeline(
+	const pieces = mapCaptionsToEditedTimeline(
 		[source],
 		timeline.segments,
 		recordingSegments,
 		timeline.transitions ?? [],
 		timeline.textSegments ?? undefined,
-	)[pieceIndex];
-	const shown = new Set<number>();
-	for (const word of piece?.words ?? []) {
-		const time = mapped.toSource((word.start + word.end) / 2);
-		if (time === null) continue;
-		const index = words.findIndex(
-			(candidate) => candidate.start <= time && time <= candidate.end,
-		);
-		if (index !== -1) shown.add(index);
-	}
+	);
+	const shownBy = (piece: CaptionSegment | undefined) => {
+		const shown = new Set<number>();
+		for (const word of piece?.words ?? []) {
+			const time = mapped.toSource((word.start + word.end) / 2);
+			if (time === null) continue;
+			const index = words.findIndex(
+				(candidate) => candidate.start <= time && time <= candidate.end,
+			);
+			if (index !== -1) shown.add(index);
+		}
+		return shown;
+	};
+	const shown = shownBy(pieces[pieceIndex]);
 	if (shown.size === 0) {
 		if (words.length === 0) source.text = track.text;
 		return;
 	}
-	const first = Math.min(...shown);
-	const last = Math.max(...shown);
+	const elsewhere = new Set(
+		pieces.flatMap((piece, index) =>
+			index === pieceIndex ? [] : [...shownBy(piece)],
+		),
+	);
+	let first = Math.min(...shown);
+	let last = Math.max(...shown);
+	let tokens = track.text.trim().split(/\s+/).filter(Boolean);
+	// A word a cut runs through shows in both pieces; unless this edit changed
+	// it, it stays as it is so the other piece doesn't change too.
+	const kept = (index: number, token: string | undefined) =>
+		elsewhere.has(index) && token === words[index]?.text;
+	while (first <= last && tokens.length > 0 && kept(first, tokens[0])) {
+		first++;
+		tokens = tokens.slice(1);
+	}
+	while (first <= last && tokens.length > 0 && kept(last, tokens.at(-1))) {
+		last--;
+		tokens = tokens.slice(0, -1);
+	}
 	const before = words.slice(0, first);
 	const after = words.slice(last + 1);
 	const floor = before.at(-1)?.end ?? Number.NEGATIVE_INFINITY;
 	const ceiling = after[0]?.start ?? Number.POSITIVE_INFINITY;
-	const runStart = Math.max(mapped.start ?? words[first].start, floor);
+	const runStart = Math.max(
+		mapped.start ?? words[first]?.start ?? floor,
+		floor,
+	);
 	const runEnd = Math.max(
 		runStart,
-		Math.min(mapped.end ?? words[last].end, ceiling),
+		Math.min(mapped.end ?? words[last]?.end ?? ceiling, ceiling),
 	);
 	const run = syncCaptionWordsWithText(
-		track.text,
+		tokens.join(" "),
 		words.slice(first, last + 1),
 		runStart,
 		runEnd,

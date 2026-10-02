@@ -126,4 +126,58 @@ describe("syncCaptionSourceFromTrack", () => {
 			).map((segment) => segment.text),
 		).toEqual(["one two", "three five"]);
 	});
+
+	it("leaves a word a cut runs through alone when the other piece is edited", () => {
+		const recordings = [{ display: { duration: 10 } } as SegmentRecordings];
+		const segments = [
+			{ start: 0, end: 1.5, timescale: 1, recordingSegment: 0 },
+			{ start: 1.7, end: 10, timescale: 1, recordingSegment: 0 },
+		] as TimelineSegment[];
+		const source = () =>
+			[
+				{
+					id: "a",
+					start: 0,
+					end: 3,
+					text: "one two three",
+					words: [
+						{ text: "one", start: 0, end: 1 },
+						{ text: "two", start: 1, end: 2 },
+						{ text: "three", start: 2, end: 3 },
+					],
+				},
+			] as CaptionSegment[];
+		const edit = (text: string, piece = 1) => {
+			const sources = source();
+			const project = {
+				captions: { segments: sources },
+				timeline: {
+					segments,
+					captionSegments: deriveCaptionTrackSegments(
+						sources,
+						segments,
+						recordings,
+					),
+				},
+			};
+			const track = project.timeline.captionSegments;
+			expect(track.map((segment) => segment.text)).toEqual([
+				"one two",
+				"two three",
+			]);
+			track[piece].text = text;
+			syncCaptionSourceFromTrack(project, piece, recordings);
+			return deriveCaptionTrackSegments(
+				project.captions.segments,
+				segments,
+				recordings,
+				track,
+			).map((segment) => segment.text);
+		};
+
+		expect(edit("two three four")).toEqual(["one two", "two three four"]);
+		expect(edit("two tree")).toEqual(["one two", "two tree"]);
+		expect(edit("too three")).toEqual(["one too", "too three"]);
+		expect(edit("one extra two", 0)).toEqual(["one extra two", "two three"]);
+	});
 });
