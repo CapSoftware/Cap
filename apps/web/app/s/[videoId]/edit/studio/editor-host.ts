@@ -829,7 +829,9 @@ export class EditorHostBridge {
 	 * reuses a session prepared before later edits because the save route
 	 * sends the worker the stored project.
 	 */
-	private async ensureWorkerSession(forSave = false) {
+	/// `forCaptions` is the caption request that is itself `activeCaptions`,
+	/// which must not count as work blocking a stale session's replacement.
+	private async ensureWorkerSession(forSave = false, forCaptions = false) {
 		if (!this.browserOnly) return () => undefined;
 		const previous = this.pendingWorkerAcquisition;
 		let unlock: () => void = () => undefined;
@@ -839,13 +841,13 @@ export class EditorHostBridge {
 		this.cancelWorkerIdleRelease();
 		await previous;
 		try {
-			return await this.acquireWorkerSession(forSave);
+			return await this.acquireWorkerSession(forSave, forCaptions);
 		} finally {
 			unlock();
 		}
 	}
 
-	private async acquireWorkerSession(forSave: boolean) {
+	private async acquireWorkerSession(forSave: boolean, forCaptions = false) {
 		if (this.disposed) throw new Error("Editor bridge is closed");
 		this.cancelWorkerIdleRelease();
 		await this.pendingWorkerRelease;
@@ -863,7 +865,7 @@ export class EditorHostBridge {
 			const pending = (async () => {
 				if (this.workerSessionId) {
 					if (
-						this.activeCaptions ||
+						(this.activeCaptions && !forCaptions) ||
 						this.activeVideoImport ||
 						this.activeCapImport ||
 						this.activeAssetImports > 0 ||
@@ -2262,7 +2264,7 @@ export class EditorHostBridge {
 							!(cause instanceof EditorCaptionsNeedSessionError)
 						)
 							throw cause;
-						releaseWorkerUse = await this.ensureWorkerSession();
+						releaseWorkerUse = await this.ensureWorkerSession(false, true);
 						return generateWebEditorCaptions(
 							this.videoId,
 							this.sessionId,
