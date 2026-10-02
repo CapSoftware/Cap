@@ -7,30 +7,45 @@ import { Avatar, Logo } from "@cap/ui";
 import type { ViewerSettings } from "@cap/web-backend";
 import { AnimatePresence, motion } from "framer-motion";
 import { useTranscript } from "hooks/use-transcript";
+import dynamic from "next/dynamic";
 import Image from "next/image";
 import {
 	forwardRef,
+	useCallback,
 	useEffect,
 	useImperativeHandle,
 	useRef,
 	useState,
 } from "react";
 import { CapVideoPlayer } from "@/app/s/[videoId]/_components/CapVideoPlayer";
-import { HLSVideoPlayer } from "@/app/s/[videoId]/_components/HLSVideoPlayer";
-import { useUploadProgress } from "@/app/s/[videoId]/_components/ProgressCircle";
 import {
 	PreparingVideoOverlay,
 	RecordingInProgressOverlay,
 } from "@/app/s/[videoId]/_components/RecordingInProgress";
+import type { UploadProgress } from "@/app/s/[videoId]/_components/upload-progress";
 import {
 	formatChaptersAsVTT,
 	formatTranscriptAsVTT,
 	parseVTT,
 	type TranscriptEntry,
 } from "@/app/s/[videoId]/_components/utils/transcript-utils";
+import { awaitsReplacementPreviewGif } from "@/lib/published-output";
 import type { SharePageBranding } from "@/lib/share-branding";
 import type { ShareCallToAction } from "@/lib/share-call-to-action";
 import { usePlayerJsReceiver } from "./use-player-js-receiver";
+
+// Only non-MP4 sources play through it, and it brings hls.js.
+const HLSVideoPlayer = dynamic(() =>
+	import("@/app/s/[videoId]/_components/HLSVideoPlayer").then(
+		(m) => m.HLSVideoPlayer,
+	),
+);
+// Mounted only while a recording uploads: its RPC client brings the Effect
+// runtime, which no finished embed needs.
+const UploadProgressTracker = dynamic(
+	() => import("@/app/s/[videoId]/_components/UploadProgressTracker"),
+	{ ssr: false },
+);
 
 declare global {
 	interface Window {
@@ -70,6 +85,8 @@ export const EmbedVideo = forwardRef<
 		viewerSettings?: ViewerSettings | null;
 		showPlaybackStatusBadge?: boolean;
 		callToAction?: ShareCallToAction | null;
+		initialPlaybackUrl?: Promise<string | null>;
+		initialPlaybackTrusted?: boolean;
 	}
 >(
 	(
@@ -88,6 +105,8 @@ export const EmbedVideo = forwardRef<
 			viewerSettings,
 			showPlaybackStatusBadge = false,
 			callToAction = null,
+			initialPlaybackUrl,
+			initialPlaybackTrusted = false,
 		},
 		ref,
 	) => {
@@ -103,10 +122,17 @@ export const EmbedVideo = forwardRef<
 		);
 		const [isPlaying, setIsPlaying] = useState(false);
 		const [userConfirmedStopped, setUserConfirmedStopped] = useState(false);
-		const segmentUploadProgress = useUploadProgress(
-			data.id,
-			data.source.type === "desktopSegments" && (data.hasActiveUpload ?? false),
-		);
+		const trackUploadProgress =
+			data.source.type === "desktopSegments" && (data.hasActiveUpload ?? false);
+		const [segmentUploadProgress, setSegmentUploadProgress] =
+			useState<UploadProgress | null>(
+				trackUploadProgress ? { status: "fetching" } : null,
+			);
+		useEffect(() => {
+			setSegmentUploadProgress(
+				trackUploadProgress ? { status: "fetching" } : null,
+			);
+		}, [trackUploadProgress]);
 		const [subtitleUrl, setSubtitleUrl] = useState<string | null>(null);
 		const [chaptersUrl, setChaptersUrl] = useState<string | null>(null);
 		const captionsDisabled = viewerSettings?.disableCaptions ?? false;
@@ -220,10 +246,8 @@ export const EmbedVideo = forwardRef<
 			videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=video`;
 		}
 
-		useEffect(() => {
-			if (!videoRef.current) return;
-			const player = videoRef.current;
-			const handleLoadedMetadata = () => {
+		const applyStartTime = useCallback(
+			(player: HTMLVideoElement) => {
 				setLongestDuration(player.duration);
 
 				// Once only. HLS level switches and source swaps fire this again, and
@@ -239,24 +263,32 @@ export const EmbedVideo = forwardRef<
 				} catch (error) {
 					console.warn("Failed to seek embed to start time", error);
 				}
-			};
+			},
+			[startTime],
+		);
 
-			if (player.readyState >= 1) {
-				handleLoadedMetadata();
-			} else {
-				player.addEventListener("loadedmetadata", handleLoadedMetadata);
-			}
-
-			return () => {
-				player.removeEventListener("loadedmetadata", handleLoadedMetadata);
-			};
-		}, [startTime]);
+		// Metadata that loads later is handled by the container's capture
+		// listener below, which also reaches a player that mounts after this.
+		useEffect(() => {
+			const player = videoRef.current;
+			if (player && player.readyState >= 1) applyStartTime(player);
+		}, [applyStartTime]);
 
 		return (
 			<>
+				{trackUploadProgress && (
+					<UploadProgressTracker
+						videoId={data.id}
+						onChange={setSegmentUploadProgress}
+					/>
+				)}
 				<div
 					ref={playerContainerRef}
 					className="relative w-screen h-screen rounded-xl"
+					onLoadedMetadataCapture={(event) => {
+						const player = videoRef.current;
+						if (player && event.target === player) applyStartTime(player);
+					}}
 					onPlayCapture={() => setIsPlaying(true)}
 					onPauseCapture={() => setIsPlaying(false)}
 					onEndedCapture={() => setIsPlaying(false)}
@@ -274,6 +306,13 @@ export const EmbedVideo = forwardRef<
 							mediaPlayerClassName="w-full h-full"
 							videoSrc={videoSrc}
 							rawFallbackSrc={rawFallbackSrc}
+							initialPlaybackUrl={initialPlaybackUrl}
+							initialPlaybackTrusted={initialPlaybackTrusted}
+							disablePreviewGif={awaitsReplacementPreviewGif({
+								id: data.id,
+								ownerId: data.ownerId,
+								source: data.source,
+							})}
 							duration={data.duration}
 							showPlaybackStatusBadge={showPlaybackStatusBadge}
 							disableCaptions={captionsDisabled}

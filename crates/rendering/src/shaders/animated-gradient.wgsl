@@ -165,7 +165,7 @@ fn grain_value(uv: vec2<f32>) -> f32 {
 	let seed = seed_low | (seed_high << 16u);
 	let time_cell = u32(max(floor(abs(u.motion.x) * 24.0), 0.0));
 	let hash = hash_u32(
-		pixel.x * 0x9e3779b9u ^ pixel.y * 0x85ebca6bu ^ seed ^ time_cell * 0xc2b2ae35u,
+		(pixel.x * 0x9e3779b9u) ^ (pixel.y * 0x85ebca6bu) ^ seed ^ (time_cell * 0xc2b2ae35u),
 	);
 	return f32(hash & 0x00ffffffu) / 16777215.0;
 }

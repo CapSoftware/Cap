@@ -35,6 +35,7 @@ import {
 	getEditTranscriptBackfillStatus,
 	getEditTranscriptObjectKey,
 	serializeEditTranscript,
+	transcriptTimelineDurationMs,
 } from "@/lib/edit-transcript";
 import { encryptEditTranscriptObject } from "@/lib/edit-transcript-storage";
 import { startAiGeneration } from "@/lib/generate-ai";
@@ -809,11 +810,10 @@ async function transcribeWithAssemblyAI(
 
 	// One paid pass produces both artifacts: the immutable word transcript (in
 	// the original media timeline) and the caption VTT derived from those words.
-	const durationMs =
-		videoDurationMs > 0
-			? videoDurationMs
-			: (transcript.audio_duration ?? 0) * 1000;
-	const editTranscript = createEditTranscript(transcript, durationMs);
+	const editTranscript = createEditTranscript(
+		transcript,
+		transcriptTimelineDurationMs(videoDurationMs, transcript.audio_duration),
+	);
 
 	return {
 		vtt: editTranscriptWordsToCaptionVtt(editTranscript.words),
@@ -854,11 +854,15 @@ async function transcribeEditTranscriptWithAssemblyAI(
 		);
 	}
 
-	const durationMs =
-		videoDurationSeconds > 0
-			? videoDurationSeconds * 1000
-			: (transcript.audio_duration ?? 0) * 1000;
-	return serializeEditTranscript(createEditTranscript(transcript, durationMs));
+	return serializeEditTranscript(
+		createEditTranscript(
+			transcript,
+			transcriptTimelineDurationMs(
+				videoDurationSeconds * 1000,
+				transcript.audio_duration,
+			),
+		),
+	);
 }
 
 async function saveTranscription(

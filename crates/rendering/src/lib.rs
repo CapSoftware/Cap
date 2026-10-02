@@ -1,15 +1,18 @@
 use anyhow::Result;
 use cap_project::{
-    AspectRatio, Camera, CameraShape, CameraXPosition, CameraYPosition, ClipOffsets,
-    ClipTransitionType, CornerStyle, Crop, CursorEvents, CursorType, FrameConfiguration,
-    FrameStyle, OverlayTrackKind, ProjectConfiguration, RecordingMeta, SceneMode,
-    StudioRecordingMeta, TimelineFrameMapping, TimelineSource, XY,
+    AspectRatio, Camera, CameraShape, CameraXPosition, CameraYPosition, ClipTransitionType,
+    CornerStyle, Crop, CursorEvents, CursorType, FrameConfiguration, FrameStyle, OverlayTrackKind,
+    ProjectConfiguration, RecordingMeta, SceneMode, StudioRecordingMeta, XY,
 };
+#[cfg(not(target_arch = "wasm32"))]
+use cap_project::{ClipOffsets, TimelineFrameMapping, TimelineSource};
 use composite_frame::{ColorGradeUniformParams, CompositeVideoFrameUniforms};
 use core::f64;
 use cursor_interpolation::{
     InterpolatedCursorPosition, interpolate_cursor, interpolate_cursor_with_click_spring,
 };
+use decoder::DecodedFrameStorageIdentity;
+#[cfg(not(target_arch = "wasm32"))]
 use decoder::{AsyncVideoDecoderHandle, spawn_decoder};
 #[cfg(target_os = "macos")]
 use frame_pipeline::finish_encoder_bgra_surface;
@@ -17,21 +20,28 @@ use frame_pipeline::{
     NV12BufferPool, RenderSession, finish_encoder_nv12_pooled, finish_encoder_timed,
     flush_pending_readback,
 };
+#[cfg(not(target_arch = "wasm32"))]
 use futures::future::OptionFuture;
 use layers::{
     Background, BackgroundLayer, BlurLayer, Camera3DBlurKind, Camera3DLayer, CameraLayer,
     ClickRippleLayer, ColorGradeLayer, CursorLayer, DisplayLayer, FrameLayer, MaskLayer,
     NotchLayer, NotchUniforms,
 };
+use platform::{Instant, sleep};
 use specta::Type;
 use spring_mass_damper::SpringMassDamperSimulationConfig;
+#[cfg(not(target_arch = "wasm32"))]
+use std::path::PathBuf;
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::Mutex;
 use std::sync::{
-    Arc, Mutex,
+    Arc,
     atomic::{AtomicBool, Ordering},
 };
-use std::{path::PathBuf, time::Instant};
+#[cfg(not(target_arch = "wasm32"))]
 use tokio::sync::mpsc;
 
+mod audio_levels;
 pub mod camera3d;
 pub mod composite_frame;
 mod coord;
@@ -48,15 +58,18 @@ pub mod iosurface_texture;
 mod layers;
 #[cfg(target_os = "linux")]
 pub mod linux_gpu;
+#[cfg(not(target_arch = "wasm32"))]
 mod managed_segment;
 mod mask;
 pub mod notch_shape;
 mod overlay_layers;
+mod platform;
+#[cfg(not(target_arch = "wasm32"))]
 mod project_recordings;
 mod readiness;
 mod recorded_cursor_assets;
 mod scene;
-mod segment_timing;
+pub mod segment_timing;
 pub mod spring_mass_damper;
 mod takeover;
 mod text;
@@ -65,6 +78,7 @@ pub mod yuv_converter;
 mod zoom;
 mod zoom_spring;
 
+pub use audio_levels::*;
 pub use coord::*;
 pub use decoder::{DecodedFrame, DecoderStatus, DecoderType, PixelFormat};
 #[cfg(target_os = "macos")]
@@ -75,13 +89,19 @@ pub use frame_pipeline::{GpuOutputFormat, Nv12RenderedFrame, RenderedFrame, Shar
 #[cfg(target_os = "macos")]
 pub use frame_pipeline::{PendingSurface, RgbaToBgraSurfaceConverter};
 pub use frame_windows::FrameWindows;
+#[cfg(target_arch = "wasm32")]
+pub use layers::register_browser_font;
 pub use layers::{BackgroundTextureCache, clean_background_path};
+#[cfg(not(target_arch = "wasm32"))]
 pub use managed_segment::{
     ManagedRecordingSegmentDecoders, ManagedSegmentDecoderStatus, ManagedSegmentStopHandles,
     ManagedSegmentVideoError, ManagedSegmentVideoExit, ManagedSegmentVideoInput,
     ManagedVideoTrackInput,
 };
 use overlay_layers::OverlayLayers;
+#[cfg(target_arch = "wasm32")]
+pub use platform::{browser_assets, browser_sleep};
+#[cfg(not(target_arch = "wasm32"))]
 pub use project_recordings::{ProjectRecordingsMeta, SegmentRecordings, Video};
 pub use recorded_cursor_assets::{FrozenCursorAssetError, FrozenRecordedCursorAssets};
 use transition::{TransitionCompositor, TransitionParameters};
@@ -155,6 +175,7 @@ pub struct Nv12RenderStartupBreakdownMs {
 }
 
 impl Nv12RenderStartupBreakdownMs {
+    #[cfg(not(target_arch = "wasm32"))]
     fn new_header(
         ffmpeg_init_ms: u64,
         zoom_focus_interpolators_construct_ms: u64,
@@ -342,6 +363,7 @@ pub struct PreparedMask {
     pub output_size: XY<u32>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone)]
 pub struct RecordingSegmentDecoders {
     screen: AsyncVideoDecoderHandle,
@@ -349,14 +371,18 @@ pub struct RecordingSegmentDecoders {
     pub segment_offset: f64,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 const SCREEN_MAX_FALLBACK_DISTANCE: u32 = 4;
+#[cfg(not(target_arch = "wasm32"))]
 const CAMERA_MAX_FALLBACK_DISTANCE: u32 = 2;
 
+#[cfg(not(target_arch = "wasm32"))]
 pub struct SegmentVideoPaths {
     pub display: PathBuf,
     pub camera: Option<PathBuf>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl RecordingSegmentDecoders {
     pub async fn new(
         _recording_meta: &RecordingMeta,
@@ -585,8 +611,10 @@ pub enum RenderingError {
     BufferMapWaitingFailed,
     #[error(transparent)]
     BufferMapFailed(#[from] wgpu::BufferAsyncError),
+    #[cfg(not(target_arch = "wasm32"))]
     #[error("Sending frame to channel failed")]
     ChannelSendFrameFailed(#[from] mpsc::error::SendError<(RenderedFrame, u32)>),
+    #[cfg(not(target_arch = "wasm32"))]
     #[error("Sending NV12 frame to channel failed")]
     ChannelSendNv12FrameFailed(#[from] mpsc::error::SendError<(Nv12RenderedFrame, u32)>),
     #[error("Failed to load image: {0}")]
@@ -613,6 +641,7 @@ pub enum RenderingError {
     },
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub struct RenderSegment {
     pub cursor: Arc<CursorEvents>,
     pub keyboard: Arc<cap_project::KeyboardEvents>,
@@ -620,6 +649,7 @@ pub struct RenderSegment {
     pub render_display: bool,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[allow(clippy::too_many_arguments)]
 pub async fn render_video_to_channel(
     constants: &RenderVideoConstants,
@@ -1063,6 +1093,7 @@ pub async fn render_video_to_channel(
     Ok(())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[allow(clippy::too_many_arguments)]
 /// Escape hatch for the export zero-copy VideoToolbox path: when set, the
 /// renderer reads NV12 frames back to CPU and the encoder consumes software
@@ -1130,10 +1161,13 @@ fn blur_result_cache_enabled() -> bool {
 /// next render with the same key on the same device. Layers cache per-project
 /// assets (cursor images, backgrounds) under ids that are only unique within
 /// a recording, so they are never shared across keys.
+#[cfg(not(target_arch = "wasm32"))]
 static LAYERS_REUSE_KEY: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+#[cfg(not(target_arch = "wasm32"))]
 static LAYERS_POOL: std::sync::Mutex<Vec<(wgpu::Device, String, RendererLayers)>> =
     std::sync::Mutex::new(Vec::new());
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn set_layers_reuse_key(key: Option<String>) {
     if let Ok(mut current) = LAYERS_REUSE_KEY.lock() {
         *current = key;
@@ -1142,8 +1176,10 @@ pub fn set_layers_reuse_key(key: Option<String>) {
 
 /// Key of never-used layers: they hold no project state, so any project
 /// may take them.
+#[cfg(not(target_arch = "wasm32"))]
 const SPARE_LAYERS: &str = "\0spare";
 
+#[cfg(not(target_arch = "wasm32"))]
 fn take_pooled_layers(device: &wgpu::Device, key: &str) -> Option<RendererLayers> {
     let mut pool = LAYERS_POOL.lock().ok()?;
     // Layers for other projects will not be asked for again.
@@ -1157,6 +1193,7 @@ fn take_pooled_layers(device: &wgpu::Device, key: &str) -> Option<RendererLayers
 
 /// Builds a fresh set of layers for the next project's first render, off
 /// its critical path (an idle engine calls this between tasks).
+#[cfg(not(target_arch = "wasm32"))]
 pub fn prebuild_spare_layers(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -1173,12 +1210,14 @@ pub fn prebuild_spare_layers(
     return_pooled_layers(device.clone(), SPARE_LAYERS.to_string(), layers);
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn return_pooled_layers(device: wgpu::Device, key: String, layers: RendererLayers) {
     if let Ok(mut pool) = LAYERS_POOL.lock() {
         pool.push((device, key, layers));
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[allow(clippy::too_many_arguments)]
 pub async fn render_video_to_channel_nv12(
     constants: &RenderVideoConstants,
@@ -1818,6 +1857,7 @@ pub async fn render_video_to_channel_nv12(
     Ok(())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 struct TransitionExportContext<'a> {
     constants: &'a RenderVideoConstants,
     project: &'a ProjectConfiguration,
@@ -1830,6 +1870,7 @@ struct TransitionExportContext<'a> {
     duration: f64,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 async fn decode_timeline_source_frames(
     project: &ProjectConfiguration,
     render_segments: &[RenderSegment],
@@ -1857,6 +1898,7 @@ async fn decode_timeline_source_frames(
     .await
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 async fn render_transition_rgba(
     context: TransitionExportContext<'_>,
     frame_renderer: &mut FrameRenderer<'_>,
@@ -1916,6 +1958,7 @@ async fn render_transition_rgba(
         .await
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 async fn render_transition_nv12_export(
     context: TransitionExportContext<'_>,
     frame_renderer: &mut FrameRenderer<'_>,
@@ -1975,11 +2018,16 @@ async fn render_transition_nv12_export(
         .await
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 const DECODE_MAX_RETRIES_INITIAL: u32 = 5;
+#[cfg(not(target_arch = "wasm32"))]
 const DECODE_MAX_RETRIES_STEADY: u32 = 2;
+#[cfg(not(target_arch = "wasm32"))]
 const MAX_INITIAL_CONSECUTIVE_FAILURES: u32 = 8;
+#[cfg(not(target_arch = "wasm32"))]
 const INITIAL_FRAME_BACKTRACK_FRAMES: [u32; 12] = [1, 2, 4, 8, 12, 16, 24, 32, 48, 64, 96, 128];
 
+#[cfg(not(target_arch = "wasm32"))]
 fn initial_decode_recovery_times(segment_time: f32, fps: u32) -> Vec<f32> {
     if segment_time <= 0.0 || fps == 0 {
         return Vec::new();
@@ -1994,6 +2042,7 @@ fn initial_decode_recovery_times(segment_time: f32, fps: u32) -> Vec<f32> {
         .collect()
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 async fn recover_initial_frames_with_backtrack(
     decoders: &RecordingSegmentDecoders,
     segment_time: f64,
@@ -2030,6 +2079,7 @@ async fn recover_initial_frames_with_backtrack(
     None
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[allow(clippy::too_many_arguments)]
 async fn decode_segment_frames_with_retry(
     decoders: &RecordingSegmentDecoders,
@@ -2056,7 +2106,7 @@ async fn decode_segment_frames_with_retry(
             } else {
                 10
             };
-            tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+            sleep(std::time::Duration::from_millis(delay)).await;
         }
 
         result = if is_initial_frame {
@@ -2099,6 +2149,7 @@ async fn decode_segment_frames_with_retry(
     result
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn get_duration(
     recordings: &ProjectRecordingsMeta,
     recording_meta: &RecordingMeta,
@@ -2136,6 +2187,7 @@ pub struct RenderVideoConstants {
     pub meta: StudioRecordingMeta,
     pub recording_meta: RecordingMeta,
     pub background_textures: std::sync::Arc<BackgroundTextureCache>,
+    pub audio_levels: AudioLevelStore,
     pub is_software_adapter: bool,
     adapter_name: String,
     frozen_recorded_cursors: Option<FrozenRecordedCursorAssets>,
@@ -2144,7 +2196,6 @@ pub struct RenderVideoConstants {
 /// Instance, adapter and device the way every renderer creates them. A
 /// long-lived process can make one up front and hand it to
 /// [`RenderVideoConstants::new_with_device`].
-#[cfg(not(target_arch = "wasm32"))]
 pub async fn create_shared_device() -> Result<SharedWgpuDevice, RenderingError> {
     let instance_phase = readiness::Phase::start("wgpu.instance");
     let instance = create_wgpu_instance().await;
@@ -2266,6 +2317,7 @@ impl RenderVideoConstants {
             .and_then(FrozenRecordedCursorAssets::first_error)
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn new_with_device(
         shared: SharedWgpuDevice,
         segments: &[SegmentRecordings],
@@ -2301,6 +2353,7 @@ impl RenderVideoConstants {
             meta,
             recording_meta,
             frozen_recorded_cursors: None,
+            audio_levels: AudioLevelStore::default(),
             is_software_adapter: shared.is_software_adapter,
             adapter_name,
         })
@@ -2331,11 +2384,13 @@ impl RenderVideoConstants {
             meta,
             recording_meta,
             frozen_recorded_cursors: None,
+            audio_levels: AudioLevelStore::default(),
             is_software_adapter: shared.is_software_adapter,
             adapter_name,
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub async fn new(
         segments: &[SegmentRecordings],
         recording_meta: RecordingMeta,
@@ -2392,6 +2447,7 @@ impl RenderVideoConstants {
             meta,
             recording_meta,
             frozen_recorded_cursors: None,
+            audio_levels: AudioLevelStore::default(),
             is_software_adapter,
             adapter_name,
         })
@@ -2715,22 +2771,6 @@ impl MotionBounds {
             ((point.y - self.start.coord.y) / size.y.max(f64::EPSILON)) as f32,
         )
     }
-
-    fn top_left(&self) -> XY<f64> {
-        self.start.coord
-    }
-
-    fn top_right(&self) -> XY<f64> {
-        XY::new(self.end.coord.x, self.start.coord.y)
-    }
-
-    fn bottom_left(&self) -> XY<f64> {
-        XY::new(self.start.coord.x, self.end.coord.y)
-    }
-
-    fn bottom_right(&self) -> XY<f64> {
-        self.end.coord
-    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -2821,35 +2861,36 @@ fn analyze_motion(current: &MotionBounds, previous: &MotionBounds) -> MotionAnal
     analysis
 }
 
+/// The point that stays still while the bounds scale, solved per axis.
+/// Intersecting the corner paths instead breaks down when the zoom target is on
+/// the frame's diagonal (the center included): the paths are collinear and
+/// rounding picks a different point each frame.
 fn zoom_vanishing_point(current: &MotionBounds, previous: &MotionBounds) -> Option<XY<f64>> {
-    line_intersection(
-        previous.top_left(),
-        current.top_left(),
-        previous.bottom_right(),
-        current.bottom_right(),
-    )
-    .or_else(|| {
-        line_intersection(
-            previous.top_right(),
-            current.top_right(),
-            previous.bottom_left(),
-            current.bottom_left(),
-        )
-    })
-}
-
-fn line_intersection(a1: XY<f64>, a2: XY<f64>, b1: XY<f64>, b2: XY<f64>) -> Option<XY<f64>> {
-    let denom = (a1.x - a2.x) * (b1.y - b2.y) - (a1.y - a2.y) * (b1.x - b2.x);
-    if denom.abs() <= f64::EPSILON {
+    let fixed = |current_start: f64, current_end: f64, previous_start: f64, previous_end: f64| {
+        let shrink = (previous_end - previous_start) - (current_end - current_start);
+        (shrink.abs() > ZOOM_FIXED_POINT_MIN_DELTA_PX)
+            .then(|| (current_start * previous_end - current_end * previous_start) / shrink)
+    };
+    let x = fixed(
+        current.start.coord.x,
+        current.end.coord.x,
+        previous.start.coord.x,
+        previous.end.coord.x,
+    );
+    let y = fixed(
+        current.start.coord.y,
+        current.end.coord.y,
+        previous.start.coord.y,
+        previous.end.coord.y,
+    );
+    if x.is_none() && y.is_none() {
         return None;
     }
-
-    let a_det = a1.x * a2.y - a1.y * a2.x;
-    let b_det = b1.x * b2.y - b1.y * b2.x;
-    let x = (a_det * (b1.x - b2.x) - (a1.x - a2.x) * b_det) / denom;
-    let y = (a_det * (b1.y - b2.y) - (a1.y - a2.y) * b_det) / denom;
-    Some(XY::new(x, y))
+    let center = previous.center();
+    Some(XY::new(x.unwrap_or(center.x), y.unwrap_or(center.y)))
 }
+
+const ZOOM_FIXED_POINT_MIN_DELTA_PX: f64 = 1e-6;
 
 fn clamp_vector(vec: XY<f32>, max_len: f32) -> XY<f32> {
     let len = (vec.x * vec.x + vec.y * vec.y).sqrt();
@@ -5348,7 +5389,11 @@ mod tests {
                             ..Default::default()
                         };
                         camera.background_blur.mode = cap_project::BackgroundBlurMode::Remove;
-                        let padding = if cfg!(target_os = "macos") { 0.0 } else { 50.0 };
+                        let padding = if camera.background_blur.removes_background() {
+                            0.0
+                        } else {
+                            50.0
+                        };
                         let expected_x = match x {
                             CameraXPosition::Left => padding,
                             CameraXPosition::Center => (output[0] - subject[0]) / 2.0,
@@ -5488,6 +5533,50 @@ mod tests {
         let blur =
             ProjectUniforms::compute_display_motion_blur(current, previous, true, 1.0, 0.0, 1.0);
         assert_eq!(blur.descriptor.mode, MotionBlurMode::Movement);
+    }
+
+    #[test]
+    fn display_zoom_blur_centers_on_the_zoom_target() {
+        let frame = XY::new(1920.0, 1080.0);
+        let zoomed = |target: XY<f64>, scale: f64| {
+            let point = XY::new(target.x * frame.x, target.y * frame.y);
+            motion_bounds(
+                XY::new(point.x * (1.0 - scale), point.y * (1.0 - scale)),
+                XY::new(
+                    point.x + (frame.x - point.x) * scale,
+                    point.y + (frame.y - point.y) * scale,
+                ),
+            )
+        };
+
+        for target in [
+            XY::new(0.5, 0.5),
+            XY::new(0.3, 0.3),
+            XY::new(0.8, 0.2),
+            XY::new(0.25, 0.7),
+        ] {
+            for step in 0..40 {
+                let scale = 1.0 + step as f64 * 0.025;
+                let blur = ProjectUniforms::compute_display_motion_blur(
+                    zoomed(target, scale + 0.025),
+                    zoomed(target, scale),
+                    true,
+                    1.0,
+                    0.0,
+                    1.0,
+                );
+                assert_eq!(blur.descriptor.mode, MotionBlurMode::Zoom);
+                let [x, y] = blur.descriptor.zoom_center_uv;
+                assert!(
+                    (x as f64 - target.x).abs() < 1e-4,
+                    "{target:?} {scale}: x {x}"
+                );
+                assert!(
+                    (y as f64 - target.y).abs() < 1e-4,
+                    "{target:?} {scale}: y {y}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -5659,13 +5748,14 @@ mod style_image_tests {
         for frame in [60, 108, 288, 330] {
             let uniforms = at(&project, frame);
             let camera = uniforms.camera.expect("overlay");
+            let removal_enabled = project.camera.background_blur.removes_background();
             assert_eq!(
                 camera.preserve_source_alpha,
-                if cfg!(target_os = "macos") { 1.0 } else { 0.0 }
+                if removal_enabled { 1.0 } else { 0.0 }
             );
             assert_eq!(
                 uniforms.camera_background_effect_mode(),
-                cfg!(target_os = "macos").then_some(cap_camera_effects::BlurMode::Remove)
+                removal_enabled.then_some(cap_camera_effects::BlurMode::Remove)
             );
             if let Some(camera_only) = uniforms.camera_only {
                 assert_eq!(camera_only.preserve_source_alpha, 0.0);
@@ -5766,6 +5856,7 @@ mod style_image_tests {
                 .clone(),
             recording_meta,
             frozen_recorded_cursors: None,
+            audio_levels: AudioLevelStore::default(),
             background_textures: Arc::new(BackgroundTextureCache::default()),
             is_software_adapter: false,
         };
@@ -5998,6 +6089,7 @@ mod nv12_flush_tests {
                     .clone(),
                 recording_meta,
                 frozen_recorded_cursors: None,
+                audio_levels: AudioLevelStore::default(),
                 background_textures: Arc::new(BackgroundTextureCache::default()),
                 is_software_adapter: software,
             };
@@ -6188,8 +6280,7 @@ impl<'a> FrameRenderer<'a> {
                     "Retrying frame render after GPU error"
                 );
                 self.reset_session();
-                tokio::time::sleep(std::time::Duration::from_millis(100 * (attempt as u64 + 1)))
-                    .await;
+                sleep(std::time::Duration::from_millis(100 * (attempt as u64 + 1))).await;
             }
 
             let session = self.session.get_or_insert_with(|| {
@@ -6265,8 +6356,7 @@ impl<'a> FrameRenderer<'a> {
                     "Retrying transition frame render after GPU error"
                 );
                 self.reset_session();
-                tokio::time::sleep(std::time::Duration::from_millis(100 * (attempt as u64 + 1)))
-                    .await;
+                sleep(std::time::Duration::from_millis(100 * (attempt as u64 + 1))).await;
             }
 
             let session = self.session.get_or_insert_with(|| {
@@ -6386,6 +6476,103 @@ impl<'a> FrameRenderer<'a> {
         Ok((frame, timings))
     }
 
+    /// Renders a frame into the session texture, then lets `present` record its
+    /// own passes (e.g. a blit into a canvas surface) in the same submission.
+    /// Nothing is read back to the CPU.
+    pub async fn render_and_present(
+        &mut self,
+        segment_frames: DecodedSegmentFrames,
+        uniforms: ProjectUniforms,
+        cursor: &CursorEvents,
+        render_display: bool,
+        layers: &mut RendererLayers,
+        present: impl FnOnce(&mut wgpu::CommandEncoder, &wgpu::Texture, &wgpu::TextureView),
+    ) -> Result<(), RenderingError> {
+        let constants = self.constants;
+        let session = self.session.get_or_insert_with(|| {
+            RenderSession::new(
+                &constants.device,
+                uniforms.output_size.0,
+                uniforms.output_size.1,
+            )
+        });
+        session.update_texture_size(
+            &constants.device,
+            uniforms.output_size.0,
+            uniforms.output_size.1,
+        );
+        let mut encoder =
+            constants
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("Present Render Encoder"),
+                });
+        layers
+            .prepare_with_encoder(
+                constants,
+                &uniforms,
+                &segment_frames,
+                cursor,
+                &mut encoder,
+                render_display,
+            )
+            .await?;
+        layers.render(
+            &constants.device,
+            &constants.queue,
+            &mut encoder,
+            session,
+            &uniforms,
+            render_display,
+        )?;
+        present(
+            &mut encoder,
+            session.current_texture(),
+            session.current_texture_view(),
+        );
+        constants.queue.submit(std::iter::once(encoder.finish()));
+        Ok(())
+    }
+
+    /// Transition counterpart of [`Self::render_and_present`].
+    pub async fn render_transition_and_present(
+        &mut self,
+        outgoing: TransitionRenderInput<'_>,
+        incoming: TransitionRenderInput<'_>,
+        kind: ClipTransitionType,
+        progress: f32,
+        layers: &mut RendererLayers,
+        present: impl FnOnce(&mut wgpu::CommandEncoder, &wgpu::Texture, &wgpu::TextureView),
+    ) -> Result<(), RenderingError> {
+        let constants = self.constants;
+        let (width, height) = incoming.uniforms.output_size;
+        let session = self
+            .session
+            .get_or_insert_with(|| RenderSession::new(&constants.device, width, height));
+        session.update_texture_size(&constants.device, width, height);
+        let compositor = self
+            .transition_compositor
+            .get_or_insert_with(|| TransitionCompositor::new(&constants.device));
+        compositor.ensure_size(&constants.device, width, height);
+        let mut encoder = produce_transition_texture(
+            constants,
+            &outgoing,
+            &incoming,
+            (kind, progress),
+            layers,
+            session,
+            compositor,
+        )
+        .await?;
+        present(
+            &mut encoder,
+            session.current_texture(),
+            session.current_texture_view(),
+        );
+        constants.queue.submit(std::iter::once(encoder.finish()));
+        Ok(())
+    }
+
     pub async fn flush_pipeline(&mut self) -> Option<Result<RenderedFrame, RenderingError>> {
         if let Some(session) = &mut self.session {
             flush_pending_readback(session, &self.constants.device).await
@@ -6433,8 +6620,7 @@ impl<'a> FrameRenderer<'a> {
                     "Retrying BGRA surface frame render after GPU error"
                 );
                 self.reset_session();
-                tokio::time::sleep(std::time::Duration::from_millis(100 * (attempt as u64 + 1)))
-                    .await;
+                sleep(std::time::Duration::from_millis(100 * (attempt as u64 + 1))).await;
             }
             if self.bgra_surface_converter.is_none() {
                 self.bgra_surface_converter =
@@ -6570,8 +6756,7 @@ impl<'a> FrameRenderer<'a> {
                 );
                 self.reset_session();
                 self.nv12_converter = None;
-                tokio::time::sleep(std::time::Duration::from_millis(100 * (attempt as u64 + 1)))
-                    .await;
+                sleep(std::time::Duration::from_millis(100 * (attempt as u64 + 1))).await;
             }
 
             if self.nv12_converter.is_none() {
@@ -6655,8 +6840,7 @@ impl<'a> FrameRenderer<'a> {
                     "Retrying BGRA surface transition frame after GPU error"
                 );
                 self.reset_session();
-                tokio::time::sleep(std::time::Duration::from_millis(100 * (attempt as u64 + 1)))
-                    .await;
+                sleep(std::time::Duration::from_millis(100 * (attempt as u64 + 1))).await;
             }
             if self.bgra_surface_converter.is_none() {
                 self.bgra_surface_converter =
@@ -6850,8 +7034,7 @@ impl<'a> FrameRenderer<'a> {
                 );
                 self.reset_session();
                 self.nv12_converter = None;
-                tokio::time::sleep(std::time::Duration::from_millis(100 * (attempt as u64 + 1)))
-                    .await;
+                sleep(std::time::Duration::from_millis(100 * (attempt as u64 + 1))).await;
             }
 
             if self.nv12_converter.is_none() {
@@ -6947,11 +7130,17 @@ pub struct RendererLayers {
     overlays: Option<OverlayLayers>,
     camera3d: Camera3DLayer,
     camera_blur_processor: Option<cap_camera_effects::BlurProcessor>,
+    camera_blur_input: Option<(
+        DecodedFrameStorageIdentity,
+        cap_camera_effects::BlurMode,
+        (u32, u32),
+    )>,
     camera_blur_init_failed: bool,
     camera_blur_unavailable: bool,
 }
 
 impl RendererLayers {
+    #[cfg(not(target_arch = "wasm32"))]
     fn reset_frame_state(&mut self) {
         self.display.reset_frame_state();
         self.camera.reset_frame_state();
@@ -7043,6 +7232,7 @@ impl RendererLayers {
             overlays: include_overlays.then(|| OverlayLayers::new(device, queue)),
             camera3d: readiness::measure("layers.camera3d", || Camera3DLayer::new(device)),
             camera_blur_processor: None,
+            camera_blur_input: None,
             camera_blur_init_failed: false,
             camera_blur_unavailable: false,
         };
@@ -7077,6 +7267,7 @@ impl RendererLayers {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         mode: cap_camera_effects::BlurMode,
+        frame_storage: Option<&DecodedFrameStorageIdentity>,
     ) {
         if self.camera.source_texture_for_blur().is_none()
             && self.camera_only.source_texture_for_blur().is_none()
@@ -7099,17 +7290,46 @@ impl RendererLayers {
         };
 
         let dimensions = (source_texture.width(), source_texture.height());
-        reset_camera_blur_for_dimensions(processor, dimensions);
-        if let Some(time) = self
-            .camera
-            .source_time_for_blur()
-            .or_else(|| self.camera_only.source_time_for_blur())
+        let reused_input = cfg!(feature = "web-editor-camera-removal")
+            && frame_storage.is_some_and(|storage| {
+                self.camera_blur_input.as_ref().is_some_and(
+                    |(previous, previous_mode, previous_dimensions)| {
+                        previous.matches(storage)
+                            && *previous_mode == mode
+                            && *previous_dimensions == dimensions
+                    },
+                )
+            });
+        if !reused_input
+            || !camera_blur_output_is_available(
+                processor.output_status().as_ref(),
+                mode,
+                dimensions,
+            )
         {
-            processor.set_frame_time(time);
+            reset_camera_blur_for_dimensions(processor, dimensions);
+            if let Some(time) = self
+                .camera
+                .source_time_for_blur()
+                .or_else(|| self.camera_only.source_time_for_blur())
+            {
+                processor.set_frame_time(time);
+            }
+            let _ = processor.process(device, queue, source_texture, mode);
+            self.camera_blur_unavailable = !camera_blur_output_is_available(
+                processor.output_status().as_ref(),
+                mode,
+                dimensions,
+            );
+            self.camera_blur_input =
+                if self.camera_blur_unavailable || !cfg!(feature = "web-editor-camera-removal") {
+                    None
+                } else {
+                    frame_storage.map(|storage| (storage.clone(), mode, dimensions))
+                };
+        } else {
+            self.camera_blur_unavailable = false;
         }
-        let _ = processor.process(device, queue, source_texture, mode);
-        self.camera_blur_unavailable =
-            !camera_blur_output_is_available(processor.output_status().as_ref(), mode, dimensions);
 
         let processor: &cap_camera_effects::BlurProcessor = processor;
         self.camera.attach_shared_blur(device, processor, mode);
@@ -7124,6 +7344,7 @@ impl RendererLayers {
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         mode: cap_camera_effects::BlurMode,
+        frame_storage: Option<&DecodedFrameStorageIdentity>,
     ) {
         if self.camera.source_texture_for_blur().is_none()
             && self.camera_only.source_texture_for_blur().is_none()
@@ -7146,25 +7367,54 @@ impl RendererLayers {
         };
 
         let dimensions = (source_texture.width(), source_texture.height());
-        reset_camera_blur_for_dimensions(processor, dimensions);
-        if let Some(time) = self
-            .camera
-            .source_time_for_blur()
-            .or_else(|| self.camera_only.source_time_for_blur())
+        let reused_input = cfg!(feature = "web-editor-camera-removal")
+            && frame_storage.is_some_and(|storage| {
+                self.camera_blur_input.as_ref().is_some_and(
+                    |(previous, previous_mode, previous_dimensions)| {
+                        previous.matches(storage)
+                            && *previous_mode == mode
+                            && *previous_dimensions == dimensions
+                    },
+                )
+            });
+        if !reused_input
+            || !camera_blur_output_is_available(
+                processor.output_status().as_ref(),
+                mode,
+                dimensions,
+            )
         {
-            processor.set_frame_time(time);
+            reset_camera_blur_for_dimensions(processor, dimensions);
+            if let Some(time) = self
+                .camera
+                .source_time_for_blur()
+                .or_else(|| self.camera_only.source_time_for_blur())
+            {
+                processor.set_frame_time(time);
+            }
+            // YUV conversion in the caller's encoder must complete before segmentation reads this frame.
+            let pending = std::mem::replace(
+                encoder,
+                device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("Camera effects and composition"),
+                }),
+            );
+            queue.submit([pending.finish()]);
+            processor.process_into_encoder(device, queue, source_texture, encoder, mode);
+            self.camera_blur_unavailable = !camera_blur_output_is_available(
+                processor.output_status().as_ref(),
+                mode,
+                dimensions,
+            );
+            self.camera_blur_input =
+                if self.camera_blur_unavailable || !cfg!(feature = "web-editor-camera-removal") {
+                    None
+                } else {
+                    frame_storage.map(|storage| (storage.clone(), mode, dimensions))
+                };
+        } else {
+            self.camera_blur_unavailable = false;
         }
-        // YUV conversion in the caller's encoder must complete before segmentation reads this frame.
-        let pending = std::mem::replace(
-            encoder,
-            device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Camera effects and composition"),
-            }),
-        );
-        queue.submit([pending.finish()]);
-        processor.process_into_encoder(device, queue, source_texture, encoder, mode);
-        self.camera_blur_unavailable =
-            !camera_blur_output_is_available(processor.output_status().as_ref(), mode, dimensions);
 
         let processor: &cap_camera_effects::BlurProcessor = processor;
         self.camera.attach_shared_blur(device, processor, mode);
@@ -7236,7 +7486,7 @@ impl RendererLayers {
         self.background_color_grade
             .prepare(&constants.queue, uniforms);
 
-        if render_display {
+        if render_display && !uniforms.project.hide_display {
             self.frame.prepare(constants, uniforms);
             self.notch
                 .prepare(&constants.device, &constants.queue, uniforms.notch);
@@ -7296,11 +7546,20 @@ impl RendererLayers {
         );
 
         if let Some(mode) = uniforms.camera_background_effect_mode() {
-            self.run_shared_camera_blur(&constants.device, &constants.queue, mode);
+            let frame_storage = camera_frame_data
+                .as_ref()
+                .map(|(_, frame, _)| frame.storage_identity());
+            self.run_shared_camera_blur(
+                &constants.device,
+                &constants.queue,
+                mode,
+                frame_storage.as_ref(),
+            );
         }
 
         if let Some(overlays) = &mut self.overlays {
             overlays.images.prepare(constants, uniforms).await;
+            overlays.waveforms.prepare(constants, uniforms);
 
             if uniforms.project.overlay_order.is_empty() {
                 overlays.text.prepare(
@@ -7393,7 +7652,7 @@ impl RendererLayers {
         timings.background_blur_prepare_duration = start.elapsed();
 
         let start = Instant::now();
-        if render_display {
+        if render_display && !uniforms.project.hide_display {
             self.frame.prepare(constants, uniforms);
             self.notch
                 .prepare(&constants.device, &constants.queue, uniforms.notch);
@@ -7468,11 +7727,15 @@ impl RendererLayers {
 
         let start = Instant::now();
         if let Some(mode) = uniforms.camera_background_effect_mode() {
+            let frame_storage = camera_frame_data
+                .as_ref()
+                .map(|(_, frame, _)| frame.storage_identity());
             self.run_shared_camera_blur_with_encoder(
                 &constants.device,
                 &constants.queue,
                 encoder,
                 mode,
+                frame_storage.as_ref(),
             );
         }
         timings.camera_blur_prepare_duration = start.elapsed();
@@ -7480,6 +7743,7 @@ impl RendererLayers {
         if let Some(overlays) = &mut self.overlays {
             let start = Instant::now();
             overlays.images.prepare(constants, uniforms).await;
+            overlays.waveforms.prepare(constants, uniforms);
 
             if uniforms.project.overlay_order.is_empty() {
                 overlays.text.prepare(
@@ -7552,7 +7816,8 @@ impl RendererLayers {
             };
         }
 
-        if render_display {
+        let display_visible = render_display && !uniforms.project.hide_display;
+        if display_visible {
             self.display.copy_to_texture(encoder);
         }
         self.camera.copy_to_texture(encoder);
@@ -7623,14 +7888,14 @@ impl RendererLayers {
             session.swap_textures();
         }
 
-        let should_render_screen = render_display
+        let should_render_screen = display_visible
             && uniforms.scene.should_render_screen()
             // A fully-faded card (e.g. a held Fullscreen text takeover) draws
             // nothing visible; skip the pass entirely.
             && uniforms.display.opacity > 0.001
             && self.display.has_valid_frame();
         let should_render_cursor = if render_display {
-            uniforms.scene.should_render_screen()
+            display_visible && uniforms.scene.should_render_screen()
         } else {
             true
         };
@@ -7737,6 +8002,11 @@ impl RendererLayers {
                     overlays.images.render(&mut pass);
                 }
 
+                if overlays.waveforms.has_content() {
+                    let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
+                    overlays.waveforms.render(&mut pass);
+                }
+
                 if !uniforms.texts.is_empty() {
                     let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
                     overlays.text.render(&mut pass);
@@ -7766,7 +8036,14 @@ impl RendererLayers {
                             render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
                         overlays.text.render_track(&mut pass, overlay.track);
                     }
-                    OverlayTrackKind::Text | OverlayTrackKind::Image => {}
+                    OverlayTrackKind::Waveform if overlays.waveforms.has_track(overlay.track) => {
+                        let mut pass =
+                            render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
+                        overlays.waveforms.render_track(&mut pass, overlay.track);
+                    }
+                    OverlayTrackKind::Text
+                    | OverlayTrackKind::Image
+                    | OverlayTrackKind::Waveform => {}
                 }
             }
         }
@@ -7957,9 +8234,9 @@ fn blur_mode_from_config(
         cap_project::BackgroundBlurMode::Off => None,
         cap_project::BackgroundBlurMode::Light => Some(cap_camera_effects::BlurMode::Light),
         cap_project::BackgroundBlurMode::Heavy => Some(cap_camera_effects::BlurMode::Heavy),
-        cap_project::BackgroundBlurMode::Remove => {
-            cfg!(target_os = "macos").then_some(cap_camera_effects::BlurMode::Remove)
-        }
+        cap_project::BackgroundBlurMode::Remove => config
+            .removes_background()
+            .then_some(cap_camera_effects::BlurMode::Remove),
     }
 }
 

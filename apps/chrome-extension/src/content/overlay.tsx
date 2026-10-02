@@ -17,6 +17,7 @@ import {
 	loadSharedUiState,
 	loadWebcamPreviewDismissed,
 	OVERLAY_UI_STATE_KEY,
+	RECORDING_STATE_KEY,
 	SETTINGS_KEY,
 	SHARED_UI_STATE_KEY,
 	saveLastWebcamPreviewFrame,
@@ -30,6 +31,7 @@ import type {
 	ExtensionSettings,
 	OverlayPosition,
 	RecordingStatus,
+	SharedRecordingState,
 	WebcamPosition,
 	WebcamPreviewFrame,
 	WebcamSettings,
@@ -43,6 +45,7 @@ import { ConfirmOverlay } from "./confirm-overlay";
 import { CountdownOverlay } from "./countdown-overlay";
 import overlayCss from "./overlay.css?inline";
 import { RecordingBarOverlay } from "./recording-bar";
+import recordingErrorCss from "./recording-error-toast.css?inline";
 import { replayStartupMessages, setStartupMessages } from "./startup-messages";
 
 const ROOT_ID = "cap-extension-recorder-overlay";
@@ -157,6 +160,11 @@ type PreviewParentMessage =
 			source: "cap-extension-overlay";
 			token: string;
 			type: "stop";
+	  }
+	| {
+			source: "cap-extension-overlay";
+			token: string;
+			type: "stop-for-capture";
 	  };
 
 const classNames = (...values: Array<string | false | null | undefined>) =>
@@ -339,6 +347,7 @@ function OverlayApp() {
 	const [previewPointerInside, setPreviewPointerInside] = useState(false);
 	const [recordingPreviewActive, setRecordingPreviewActive] = useState(false);
 	const [recorderPanelOpen, setRecorderPanelOpen] = useState(false);
+	const [recordingError, setRecordingError] = useState<string | null>(null);
 	const [previewTokenReady, setPreviewTokenReady] = useState(false);
 	const iframeRef = useRef<HTMLIFrameElement>(null);
 	const windowRef = useRef<HTMLDivElement>(null);
@@ -348,6 +357,8 @@ function OverlayApp() {
 	const pipPeerRef = useRef<RTCPeerConnection | null>(null);
 	const pipStreamRef = useRef<MediaStream | null>(null);
 	const pipSettingsRef = useRef<WebcamSettings | null>(null);
+	const parentPictureInPictureRequestRef =
+		useRef<Promise<PictureInPictureWindow> | null>(null);
 	const previewSessionIdRef = useRef<string | null>(null);
 	const webcamRef = useRef<WebcamSettings | null>(null);
 	const settingsRef = useRef<ExtensionSettings | null>(null);
@@ -382,6 +393,28 @@ function OverlayApp() {
 			void chrome.runtime.lastError;
 		});
 	}, []);
+
+	const requestParentPictureInPicture = useCallback(
+		async (video: HTMLVideoElement) => {
+			if (recordingPreviewActiveRef.current) return;
+			const request = video.requestPictureInPicture();
+			parentPictureInPictureRequestRef.current = request;
+			try {
+				await request;
+				if (
+					recordingPreviewActiveRef.current &&
+					document.pictureInPictureElement === video
+				) {
+					await document.exitPictureInPicture();
+				}
+			} finally {
+				if (parentPictureInPictureRequestRef.current === request) {
+					parentPictureInPictureRequestRef.current = null;
+				}
+			}
+		},
+		[],
+	);
 
 	const persistPreviewFrame = useCallback(
 		(frame: WebcamPreviewFrame | null, force: boolean) => {
@@ -452,6 +485,67 @@ function OverlayApp() {
 		persistPreviewFrame,
 		postPreviewMessage,
 	]);
+
+	const stopFramePictureInPictureForCapture = useCallback(
+		() =>
+			new Promise<boolean>((resolve) => {
+				if (!iframeRef.current || !previewOpenRef.current || !iframeReady) {
+					resolve(true);
+					return;
+				}
+
+				let settled = false;
+				const finish = (ok: boolean) => {
+					if (settled) return;
+					settled = true;
+					window.clearTimeout(timeout);
+					resolve(ok);
+				};
+				const timeout = window.setTimeout(() => finish(false), 3000);
+				chrome.runtime.sendMessage(
+					{
+						source: "cap-extension-overlay",
+						token: PREVIEW_TOKEN,
+						type: "stop-for-capture",
+					} satisfies PreviewParentMessage,
+					(response: unknown) => {
+						const responseOk =
+							!chrome.runtime.lastError &&
+							response !== null &&
+							typeof response === "object" &&
+							"ok" in response &&
+							response.ok === true;
+						finish(responseOk);
+					},
+				);
+			}),
+		[iframeReady],
+	);
+
+	const prepareCameraForCapture = useCallback(async () => {
+		recordingPreviewActiveRef.current = true;
+		setRecordingPreviewActive(true);
+		const video = pipVideoRef.current;
+		const pendingParentRequest = parentPictureInPictureRequestRef.current;
+		const [frameResult, parentResult] = await Promise.allSettled([
+			stopFramePictureInPictureForCapture(),
+			(async () => {
+				if (pendingParentRequest) {
+					await pendingParentRequest.catch(() => undefined);
+				}
+				if (video && document.pictureInPictureElement === video) {
+					await document.exitPictureInPicture();
+				}
+			})(),
+		]);
+		stopLocalPreview();
+		return (
+			frameResult.status === "fulfilled" &&
+			frameResult.value &&
+			parentResult.status === "fulfilled" &&
+			(!video || document.pictureInPictureElement !== video)
+		);
+	}, [stopFramePictureInPictureForCapture, stopLocalPreview]);
 
 	const applyWebcamSettings = useCallback(
 		(getNext: (current: WebcamSettings) => WebcamSettings) => {
@@ -604,6 +698,19 @@ function OverlayApp() {
 	}, [stopLocalPreview]);
 
 	useEffect(() => {
+		if (!recordingPreviewActive) return;
+		const video = pipVideoRef.current;
+		if (video && document.pictureInPictureElement === video) {
+			void document.exitPictureInPicture().catch(() => undefined);
+		}
+		postPreviewMessage({
+			source: "cap-extension-overlay",
+			token: PREVIEW_TOKEN,
+			type: "exit-auto-pip",
+		});
+	}, [postPreviewMessage, recordingPreviewActive]);
+
+	useEffect(() => {
 		let disposed = false;
 		Promise.all([
 			sendServiceWorkerMessage({
@@ -639,13 +746,33 @@ function OverlayApp() {
 				})
 				.catch(() => undefined);
 		};
+		const syncRecordingError = () => {
+			loadSharedRecordingState()
+				.then((state) => {
+					if (!disposed) {
+						setRecordingError(
+							state?.status.phase === "error" ? state.status.message : null,
+						);
+					}
+				})
+				.catch(() => undefined);
+		};
 		syncSharedUi();
+		syncRecordingError();
 		const handleStorageChange = (
 			changes: Record<string, chrome.storage.StorageChange>,
 			areaName: string,
 		) => {
 			if (areaName === "session" && changes[SHARED_UI_STATE_KEY]) {
 				syncSharedUi();
+			}
+			if (areaName === "session" && changes[RECORDING_STATE_KEY]) {
+				const state = changes[RECORDING_STATE_KEY].newValue as
+					| SharedRecordingState
+					| undefined;
+				setRecordingError(
+					state?.status.phase === "error" ? state.status.message : null,
+				);
 			}
 		};
 		chrome.storage.onChanged.addListener(handleStorageChange);
@@ -708,12 +835,66 @@ function OverlayApp() {
 	}, [stopLocalPreview]);
 
 	useEffect(() => {
+		let disposed = false;
+		const applyPreviewSettings = (message: {
+			settings: WebcamSettings;
+			recording: boolean;
+		}) => {
+			if (disposed) return;
+			const webcamSettings = message.settings;
+			const sameLivePreview =
+				previewOpenRef.current &&
+				livePreviewReadyRef.current &&
+				isSameWebcamSettings(webcamRef.current, webcamSettings);
+			if (!sameLivePreview) {
+				setLivePreviewReady(false);
+			} else {
+				// A restarted service worker loses which tab owns the live preview,
+				// so re-announce readiness whenever it pushes the same settings.
+				void sendServiceWorkerMessage({
+					target: "service-worker",
+					type: "webcam-preview-ready",
+				}).catch(() => undefined);
+			}
+			setPreviewError(null);
+			setShowPreviewError(false);
+			setPreviewOpen(true);
+			recordingPreviewActiveRef.current = message.recording;
+			setRecordingPreviewActive(message.recording);
+			if (settingsRef.current) {
+				setExtensionSettings({
+					...settingsRef.current,
+					webcam: webcamSettings,
+				});
+			} else {
+				sendServiceWorkerMessage({
+					target: "service-worker",
+					type: "get-overlay-settings",
+				})
+					.then((response) => {
+						if (!disposed && response.ok && response.settings) {
+							setExtensionSettings({
+								...response.settings,
+								webcam: webcamSettings,
+							});
+						}
+					})
+					.catch(() => undefined);
+			}
+		};
+
 		const handleMessage = (
 			message: unknown,
 			_sender: chrome.runtime.MessageSender,
 			sendResponse: (response?: unknown) => void,
 		) => {
 			if (!isOverlayMessage(message)) return false;
+			if (message.type === "overlay-settings" && message.recording) {
+				void prepareCameraForCapture()
+					.then((ok) => sendResponse({ ok }))
+					.catch(() => sendResponse({ ok: false }));
+				return true;
+			}
 
 			sendResponse({ ok: true });
 
@@ -750,6 +931,7 @@ function OverlayApp() {
 			}
 
 			if (message.type === "overlay-enter-auto-pip") {
+				if (recordingPreviewActiveRef.current) return false;
 				// Only one Picture in Picture surface may drive at a time; racing
 				// the parent fallback video against the preview iframe flips PiP
 				// on and off and leaves the badge state inconsistent.
@@ -770,7 +952,7 @@ function OverlayApp() {
 				if (video && parentPipSupported) {
 					void video
 						.play()
-						.then(() => video.requestPictureInPicture())
+						.then(() => requestParentPictureInPicture(video))
 						.catch(() => undefined);
 				}
 				return false;
@@ -791,48 +973,13 @@ function OverlayApp() {
 
 			if (message.type !== "overlay-settings") return false;
 
-			if (previewDismissedRef.current) return false;
-
-			const webcamSettings = message.settings;
-			const sameLivePreview =
-				previewOpenRef.current &&
-				livePreviewReadyRef.current &&
-				isSameWebcamSettings(webcamRef.current, webcamSettings);
-			if (!sameLivePreview) {
-				setLivePreviewReady(false);
-			} else {
-				// A restarted service worker loses which tab owns the live preview,
-				// so re-announce readiness whenever it pushes the same settings.
-				void sendServiceWorkerMessage({
-					target: "service-worker",
-					type: "webcam-preview-ready",
-				}).catch(() => undefined);
-			}
-			setPreviewError(null);
-			setShowPreviewError(false);
-			setPreviewOpen(true);
-			recordingPreviewActiveRef.current = message.recording;
-			setRecordingPreviewActive(message.recording);
-			if (settingsRef.current) {
-				setExtensionSettings({
-					...settingsRef.current,
-					webcam: webcamSettings,
-				});
-			} else {
-				sendServiceWorkerMessage({
-					target: "service-worker",
-					type: "get-overlay-settings",
+			void loadWebcamPreviewDismissed()
+				.then((dismissed) => {
+					if (disposed) return;
+					previewDismissedRef.current = dismissed;
+					if (!dismissed) applyPreviewSettings(message);
 				})
-					.then((response) => {
-						if (response.ok && response.settings) {
-							setExtensionSettings({
-								...response.settings,
-								webcam: webcamSettings,
-							});
-						}
-					})
-					.catch(() => undefined);
-			}
+				.catch(() => undefined);
 			return false;
 		};
 
@@ -841,8 +988,17 @@ function OverlayApp() {
 			startupReplayedRef.current = true;
 			replayStartupMessages(handleMessage);
 		}
-		return () => chrome.runtime.onMessage.removeListener(handleMessage);
-	}, [parentPipSupported, postPreviewMessage, stopLocalPreview]);
+		return () => {
+			disposed = true;
+			chrome.runtime.onMessage.removeListener(handleMessage);
+		};
+	}, [
+		parentPipSupported,
+		postPreviewMessage,
+		prepareCameraForCapture,
+		requestParentPictureInPicture,
+		stopLocalPreview,
+	]);
 
 	const beginDrag = useCallback((clientX: number, clientY: number) => {
 		isDraggingRef.current = true;
@@ -1082,7 +1238,11 @@ function OverlayApp() {
 			if (event.type === "ready") {
 				setIframeReady(true);
 				const current = webcamRef.current;
-				if (current?.enabled && current.deviceId) {
+				if (
+					!recordingPreviewActiveRef.current &&
+					current?.enabled &&
+					current.deviceId
+				) {
 					postPreviewMessage({
 						source: "cap-extension-overlay",
 						token: PREVIEW_TOKEN,
@@ -1430,6 +1590,7 @@ function OverlayApp() {
 	}, [applyWebcamSettings]);
 
 	const handleTogglePictureInPicture = useCallback(() => {
+		if (recordingPreviewActiveRef.current) return;
 		const video = pipVideoRef.current;
 		if (video && document.pictureInPictureElement === video) {
 			void document.exitPictureInPicture().catch(() => undefined);
@@ -1454,10 +1615,10 @@ function OverlayApp() {
 		void (async () => {
 			try {
 				await video.play().catch(() => undefined);
-				await video.requestPictureInPicture();
+				await requestParentPictureInPicture(video);
 			} catch {}
 		})();
-	}, [parentPipSupported, postPreviewMessage]);
+	}, [parentPipSupported, postPreviewMessage, requestParentPictureInPicture]);
 
 	const handlePreviewLoad = useCallback(() => {
 		const current = webcamRef.current;
@@ -1511,6 +1672,7 @@ function OverlayApp() {
 					width: `${metrics.width}px`,
 					height: `${totalHeight}px`,
 					borderRadius,
+					visibility: recordingPreviewActive ? "hidden" : "visible",
 				}}
 				onPointerDown={handlePointerDown}
 			>
@@ -1671,6 +1833,12 @@ function OverlayApp() {
 					}).catch(() => undefined);
 				}}
 			/>
+			{recordingError && recorderPanelOpen ? (
+				<div className="cap-extension-recording-error-toast" role="alert">
+					<strong>Recording failed.</strong>
+					<span>{recordingError}</span>
+				</div>
+			) : null}
 			<CountdownOverlay />
 			<ConfirmOverlay />
 			{isDragging ? (
@@ -1726,7 +1894,7 @@ const mountOverlay = () => {
 	root.dataset.capMounted = "true";
 	const shadow = root.attachShadow({ mode: "closed" });
 	const style = document.createElement("style");
-	style.textContent = overlayCss;
+	style.textContent = `${overlayCss}\n${recordingErrorCss}`;
 	const app = document.createElement("div");
 	shadow.append(style, app);
 	document.documentElement.append(root);

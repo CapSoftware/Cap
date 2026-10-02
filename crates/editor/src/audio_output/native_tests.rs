@@ -420,6 +420,7 @@ fn preparing_test_sources(
             style_segments: Vec::new(),
             image_segments: Vec::new(),
             camera3d_segments: Vec::new(),
+            waveform_segments: Vec::new(),
             transitions: Vec::new(),
         }),
         clips: vec![cap_project::ClipConfiguration::default()],

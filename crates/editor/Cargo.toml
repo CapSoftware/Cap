@@ -6,6 +6,12 @@ edition = "2024"
 [lints]
 workspace = true
 
+[features]
+web-editor-camera-removal = [
+    "cap-project/web-editor-camera-removal",
+    "cap-rendering/web-editor-camera-removal",
+]
+
 [[example]]
 name = "decode-benchmark"
 path = "examples/decode-benchmark.rs"
@@ -29,6 +35,7 @@ cap-project = { path = "../project" }
 cap-rendering = { path = "../rendering" }
 cap-audio = { path = "../audio" }
 cap-media-info = { path = "../media-info" }
+cap-enc-ffmpeg = { path = "../enc-ffmpeg" }
 
 tokio = { workspace = true, features = ["macros", "process", "fs"] }
 cpal.workspace = true
@@ -37,6 +44,8 @@ ffmpeg.workspace = true
 specta.workspace = true
 serde = { workspace = true }
 serde_json = "1.0"
+relative-path = { version = "1.9.3", features = ["serde"] }
+uuid = { version = "1.18.1", features = ["v4"] }
 image = "0.25.2"
 tempfile = "3"
 sentry.workspace = true
@@ -54,4 +63,3 @@ windows = { workspace = true, features = ["Win32_Media"] }
 
 [dev-dependencies]
 cap-audio = { path = "../audio", features = ["test-support"] }
-cap-enc-ffmpeg = { path = "../enc-ffmpeg" }

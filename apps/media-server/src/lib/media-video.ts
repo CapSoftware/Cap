@@ -28,8 +28,13 @@ import {
 	type TempFileHandle,
 } from "./temp-files";
 
+// Keep audio in runs of up to a second rather than a slice per video frame:
+// the editor reads a video's audio alone for its waveform, which interleaving
+// at every frame turns into reading the whole file.
+const AUDIO_RUN_ARGS = ["-chunk_duration", "1000000"];
+
 const PROCESS_TIMEOUT_PER_SECOND_MS = 20_000;
-const MAX_PROCESS_TIMEOUT_MS = 2 * 60 * 60 * 1000;
+export const MAX_PROCESS_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 // HLS/DASH sources are pulled as many sequential segment requests rather than
 // one streamed fetch, so per-request overhead scales with video length. A
 // flat 10-minute budget is enough for typical short recordings but not for a
@@ -1285,13 +1290,26 @@ export async function downloadVideoToTemp(
 	}
 }
 
+/** The size limits turned to match the video, so portrait video keeps its resolution. */
+function getOrientedLimits(
+	metadata: VideoMetadata,
+	options: VideoProcessingOptions,
+) {
+	const maxWidth = options.maxWidth ?? DEFAULT_OPTIONS.maxWidth;
+	const maxHeight = options.maxHeight ?? DEFAULT_OPTIONS.maxHeight;
+	const longEdge = Math.max(maxWidth, maxHeight);
+	const shortEdge = Math.min(maxWidth, maxHeight);
+	return metadata.height > metadata.width
+		? { maxWidth: shortEdge, maxHeight: longEdge }
+		: { maxWidth: longEdge, maxHeight: shortEdge };
+}
+
 function needsVideoTranscode(
 	metadata: VideoMetadata,
 	options: VideoProcessingOptions,
 	sourceH264Level: number | null,
 ): boolean {
-	const maxWidth = options.maxWidth ?? DEFAULT_OPTIONS.maxWidth;
-	const maxHeight = options.maxHeight ?? DEFAULT_OPTIONS.maxHeight;
+	const { maxWidth, maxHeight } = getOrientedLimits(metadata, options);
 	return (
 		metadata.width > maxWidth ||
 		metadata.height > maxHeight ||
@@ -1393,8 +1411,7 @@ function getTargetVideoDimensions(
 	metadata: VideoMetadata,
 	options: VideoProcessingOptions,
 ) {
-	const maxWidth = options.maxWidth ?? DEFAULT_OPTIONS.maxWidth;
-	const maxHeight = options.maxHeight ?? DEFAULT_OPTIONS.maxHeight;
+	const { maxWidth, maxHeight } = getOrientedLimits(metadata, options);
 
 	return {
 		width: Math.min(metadata.width, maxWidth),
@@ -1407,12 +1424,14 @@ export function pickMobileSafeH264Level(
 	options: VideoProcessingOptions = {},
 ): H264Level {
 	const { width, height } = getTargetVideoDimensions(metadata, options);
+	const longEdge = Math.max(width, height);
+	const shortEdge = Math.min(width, height);
 
-	if (width <= MAX_LEVEL_4_2_WIDTH && height <= MAX_LEVEL_4_2_HEIGHT) {
+	if (longEdge <= MAX_LEVEL_4_2_WIDTH && shortEdge <= MAX_LEVEL_4_2_HEIGHT) {
 		return { value: 42, ffmpegValue: "4.2" };
 	}
 
-	if (width <= MAX_LEVEL_5_1_WIDTH && height <= MAX_LEVEL_5_1_HEIGHT) {
+	if (longEdge <= MAX_LEVEL_5_1_WIDTH && shortEdge <= MAX_LEVEL_5_1_HEIGHT) {
 		return { value: 51, ffmpegValue: "5.1" };
 	}
 
@@ -1500,13 +1519,14 @@ export async function processVideo(
 			? await probeH264Level(inputPath, abortSignal)
 			: null;
 	const targetH264Level = pickMobileSafeH264Level(metadata, opts);
+	const limits = getOrientedLimits(metadata, opts);
 	const normalizeH264Level =
 		opts.normalizeH264Level &&
 		metadata.videoCodec === "h264" &&
 		sourceH264Level !== null &&
 		sourceH264Level > targetH264Level.value &&
-		metadata.width <= opts.maxWidth &&
-		metadata.height <= opts.maxHeight;
+		metadata.width <= limits.maxWidth &&
+		metadata.height <= limits.maxHeight;
 	const videoTranscode = remuxOnly
 		? false
 		: needsVideoTranscode(metadata, opts, sourceH264Level);
@@ -1546,7 +1566,7 @@ export async function processVideo(
 			"-crf",
 			opts.crf.toString(),
 			"-vf",
-			`scale='min(${opts.maxWidth},iw)':'min(${opts.maxHeight},ih)':force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2`,
+			`scale='min(${limits.maxWidth},iw)':'min(${limits.maxHeight},ih)':force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2`,
 			"-pix_fmt",
 			"yuv420p",
 			"-level:v",
@@ -1573,6 +1593,7 @@ export async function processVideo(
 	ffmpegArgs.push(
 		"-movflags",
 		"+faststart",
+		...(metadata.audioCodec ? AUDIO_RUN_ARGS : []),
 		...extraOutputArgs,
 		"-progress",
 		"pipe:2",
@@ -2574,6 +2595,7 @@ export async function muxMediaTracksToMp4(
 				"1000000",
 				"-movflags",
 				"+faststart",
+				...AUDIO_RUN_ARGS,
 				outputPath,
 			]
 		: [

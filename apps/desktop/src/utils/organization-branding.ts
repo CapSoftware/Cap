@@ -180,6 +180,16 @@ function normalizeDesktopOrganizations(values: unknown) {
 	});
 }
 
+const [webOrganizations, setWebOrganizations] = createSignal<
+	DesktopOrganization[]
+>([]);
+const [webAvailability, setWebAvailability] =
+	createSignal<OrganizationAvailability>("loading");
+const [webRefreshing, setWebRefreshing] = createSignal(false);
+let webOrganizationRefreshPromise: Promise<void> | null = null;
+let webOrganizationUserId = "";
+let webOrganizationGeneration = 0;
+
 function hasLocalOrganizationAuth(
 	auth: CachedAuthStore | null | undefined,
 ): auth is CachedAuthWithLocalSession {
@@ -261,7 +271,73 @@ export function hasAvailableOrganizationCache(
 	return hasCompleteOrganizationCache(auth, organizations, now);
 }
 
+function createWebOrganizationsQuery() {
+	const userId =
+		(window as Window & { capWebEditorUserId?: string }).capWebEditorUserId ??
+		"";
+	if (userId !== webOrganizationUserId) {
+		webOrganizationUserId = userId;
+		webOrganizationGeneration++;
+		webOrganizationRefreshPromise = null;
+		setWebOrganizations([]);
+		setWebAvailability("loading");
+	}
+	const refresh = async () => {
+		if (webOrganizationRefreshPromise) return webOrganizationRefreshPromise;
+		const generation = webOrganizationGeneration;
+		setWebRefreshing(true);
+		const promise = (async () => {
+			const response = await fetch("/api/desktop/organizations", {
+				credentials: "same-origin",
+				cache: "no-store",
+			});
+			if (response.status === 401) {
+				if (generation !== webOrganizationGeneration) return;
+				setWebOrganizations([]);
+				setWebAvailability("signed-out");
+				return;
+			}
+			if (!response.ok) throw new Error("Unable to load organizations");
+			const result: unknown = await response.json();
+			if (!Array.isArray(result))
+				throw new Error("Organization list was invalid");
+			if (generation !== webOrganizationGeneration) return;
+			setWebOrganizations(normalizeDesktopOrganizations(result));
+			setWebAvailability("available");
+		})()
+			.catch((error: unknown) => {
+				if (generation === webOrganizationGeneration)
+					setWebAvailability("unavailable");
+				throw error;
+			})
+			.finally(() => {
+				if (generation === webOrganizationGeneration) setWebRefreshing(false);
+				if (webOrganizationRefreshPromise === promise)
+					webOrganizationRefreshPromise = null;
+			});
+		webOrganizationRefreshPromise = promise;
+		setWebAvailability("loading");
+		return promise;
+	};
+
+	createEffect(() => {
+		if (webAvailability() !== "loading" || webOrganizationRefreshPromise)
+			return;
+		void refresh().catch(console.error);
+	});
+
+	return {
+		availability: webAvailability,
+		organizations: webOrganizations,
+		refresh,
+		refreshing: webRefreshing,
+		signedIn: () => webAvailability() === "available",
+	};
+}
+
 export function createDesktopOrganizationsQuery() {
+	if (import.meta.env.VITE_CAP_WEB_EDITOR === "true")
+		return createWebOrganizationsQuery();
 	const auth = authStore.createQuery();
 	const [refreshing, setRefreshing] = createSignal(false);
 
@@ -438,6 +514,40 @@ export async function updateOrganizationBranding(
 	organizationId: string,
 	body: OrganizationBrandingPatchBody,
 ) {
+	if (import.meta.env.VITE_CAP_WEB_EDITOR === "true") {
+		const generation = webOrganizationGeneration;
+		const response = await fetch(
+			`/api/desktop/organizations/${encodeURIComponent(organizationId)}/branding`,
+			{
+				method: "PATCH",
+				headers: { "Content-Type": "application/json" },
+				credentials: "same-origin",
+				body: JSON.stringify(body),
+			},
+		);
+		const result: unknown = response.headers
+			.get("Content-Type")
+			?.startsWith("application/json")
+			? await response.json()
+			: {
+					error:
+						response.status === 401
+							? "Please sign in to continue"
+							: "Failed to update organization branding",
+				};
+		if (!response.ok) throw new Error(getResponseError(result));
+		const organization = normalizeDesktopOrganization(result);
+		if (!organization || organization.id !== organizationId)
+			throw new Error("Organization branding response was invalid");
+		if (generation === webOrganizationGeneration) {
+			setWebOrganizations((current) =>
+				current.map((existing) =>
+					existing.id === organization.id ? organization : existing,
+				),
+			);
+		}
+		return organization;
+	}
 	const response = await apiClient.desktop.updateOrganizationBranding({
 		params: { organizationId },
 		headers: await protectedHeaders(),

@@ -14,7 +14,7 @@ export function Minimap() {
 	const transform = () => editorState.timeline.transform;
 
 	const [barRef, setBarRef] = createSignal<HTMLDivElement>();
-	const barBounds = createElementBounds(barRef);
+	const barBounds = createElementBounds(barRef, { trackMutation: false });
 
 	const total = () => Math.max(totalDuration(), 0.001);
 	const barWidth = () => Math.max(barBounds.width ?? 0, 1);

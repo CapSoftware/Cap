@@ -4,14 +4,19 @@ import { videoEdits, videos, videoUploads } from "@cap/database/schema";
 import { userIsPro } from "@cap/utils";
 import { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
-import { notFound } from "next/navigation";
-import { isEditSourceKey } from "@/lib/video-edit-processing";
+import { notFound, redirect } from "next/navigation";
+import { isAbandonedEditorReplacementUpload } from "@/lib/editor-replacement-upload";
+import { editorSourcesUploaded } from "@/lib/editor-sources-ready";
+import { measureMissingVideoDuration } from "@/lib/editor-video-duration";
+import { getEditSourceKey, isEditSourceKey } from "@/lib/video-edit-processing";
 import {
 	areEditSpecsEquivalent,
 	createIdentityEditSpec,
 } from "@/lib/video-edits";
+import { isWebStudioEnabledForEmail } from "@/lib/web-studio-rollout";
 import { EditUpgradeGate } from "./EditUpgradeGate";
 import { EditVideoClient } from "./EditVideoClient";
+import { EditProcessing } from "./edit-processing";
 import { EditRecovery } from "./edit-recovery";
 
 function isMp4BackedVideo(source: typeof videos.$inferSelect.source) {
@@ -41,6 +46,7 @@ export default async function EditVideoPage(props: {
 			transcriptionStatus: videos.transcriptionStatus,
 			uploadPhase: videoUploads.phase,
 			rawFileKey: videoUploads.rawFileKey,
+			uploadUpdatedAt: videoUploads.updatedAt,
 		})
 		.from(videos)
 		.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
@@ -50,17 +56,10 @@ export default async function EditVideoPage(props: {
 		!video ||
 		video.ownerId !== user.id ||
 		video.isScreenshot ||
-		!isMp4BackedVideo(video.source) ||
-		!video.duration ||
-		video.duration <= 0
+		!isMp4BackedVideo(video.source)
 	) {
 		notFound();
 	}
-
-	if (!userIsPro(user)) {
-		return <EditUpgradeGate />;
-	}
-
 	if (
 		video.uploadPhase &&
 		isEditSourceKey({
@@ -79,19 +78,43 @@ export default async function EditVideoPage(props: {
 			/>
 		);
 	}
-	if (
-		video.uploadPhase &&
-		["uploading", "processing", "generating_thumbnail"].includes(
-			video.uploadPhase,
-		)
-	) {
-		notFound();
-	}
-
 	const [existingEdit] = await db()
-		.select({ editSpec: videoEdits.editSpec })
+		.select({
+			editSpec: videoEdits.editSpec,
+			sourceKey: videoEdits.sourceKey,
+		})
 		.from(videoEdits)
 		.where(eq(videoEdits.videoId, videoId));
+	if (
+		video.uploadPhase &&
+		["uploading", "processing", "generating_thumbnail", "error"].includes(
+			video.uploadPhase,
+		) &&
+		!isAbandonedEditorReplacementUpload(
+			video.ownerId,
+			videoId,
+			video.uploadPhase,
+			video.rawFileKey,
+			video.uploadUpdatedAt,
+		)
+	) {
+		// The studio reads the raw sources, so a recording opens as soon as
+		// they're uploaded rather than after the share video finishes processing.
+		if (
+			!existingEdit &&
+			isWebStudioEnabledForEmail(user.email) &&
+			(video.duration ?? 0) > 0 &&
+			editorSourcesUploaded(video.metadata, video.uploadPhase)
+		) {
+			redirect(`/s/${videoId}/edit/studio`);
+		}
+		return <EditProcessing videoId={videoId} />;
+	}
+	const duration =
+		video.duration && video.duration > 0
+			? video.duration
+			: await measureMissingVideoDuration(videoId);
+	if (!duration) notFound();
 
 	const hasExistingEdits = existingEdit
 		? !areEditSpecsEquivalent(
@@ -99,6 +122,24 @@ export default async function EditVideoPage(props: {
 				createIdentityEditSpec(existingEdit.editSpec.sourceDuration),
 			)
 		: false;
+	const editorSources = video.metadata?.editorSources;
+	const hasStudioSource = existingEdit
+		? existingEdit.sourceKey === getEditSourceKey(video.ownerId, videoId)
+		: editorSources == null ||
+			(editorSources.version === 1 &&
+				Boolean(editorSources.display) &&
+				Number.isSafeInteger(editorSources.display.size) &&
+				(editorSources.display.size ?? 0) > 0);
+	if (
+		isWebStudioEnabledForEmail(user.email) &&
+		hasStudioSource &&
+		!video.metadata?.editProcessing
+	) {
+		redirect(`/s/${videoId}/edit/studio`);
+	}
+	if (!userIsPro(user)) {
+		return <EditUpgradeGate />;
+	}
 
 	return (
 		<EditVideoClient
@@ -107,7 +148,7 @@ export default async function EditVideoPage(props: {
 				id: video.id,
 				name: video.name,
 				ownerId: video.ownerId,
-				duration: video.duration,
+				duration,
 				width: video.width,
 				height: video.height,
 				transcriptionStatus: video.transcriptionStatus,

@@ -1,7 +1,8 @@
-import { randomUUID } from "node:crypto";
-import { mkdirSync, rmSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { chmodSync, mkdirSync, renameSync, rmSync } from "node:fs";
 import { availableParallelism, hostname } from "node:os";
 import { join } from "node:path";
+import { cursorProgress } from "./cursor";
 import { Engine, processCpuSeconds, sampleThreads } from "./engine";
 import { segmentHeader } from "./fmp4";
 import { closesSegment, segmentKey } from "./hls";
@@ -10,6 +11,8 @@ import type { Run } from "./mp4";
 import {
 	type AudioResultMeta,
 	type AudioTask,
+	CURSOR_OUTPUTS,
+	type CursorTask,
 	MIN_PART,
 	type SegmentReport,
 	type TaskTimings,
@@ -22,6 +25,7 @@ import { mediaS3ConfigFromEnv, S3, s3ConfigFromEnv } from "./s3";
 import { stashBytes } from "./stitch";
 import {
 	canRemux,
+	downloadSource,
 	encodedSeconds,
 	probeArgs,
 	remuxArgs,
@@ -116,9 +120,7 @@ function dropJobs(finished: string[]) {
 		const cache = caches.get(jobId);
 		if (!cache) continue;
 		if (
-			[...busy.values()].some(
-				(task) => task.kind !== "transcode" && task.jobId === jobId,
-			)
+			[...busy.values()].some((task) => "jobId" in task && task.jobId === jobId)
 		)
 			continue;
 		cache.close();
@@ -144,7 +146,7 @@ const progress = new Map<
 	number,
 	{
 		taskId: string;
-		kind: "video" | "audio" | "transcode";
+		kind: "video" | "audio" | "transcode" | "cursor";
 		frames: number;
 		total: number;
 		startedAt: number;
@@ -219,6 +221,12 @@ class SegmentStream {
 	private index = 0;
 	private extradata = "";
 	private uploads: Promise<void>[] = [];
+	/**
+	 * Segments wait for their audio one after another: each wait is a long
+	 * poll to the coordinator, and a chunk's 40 segments all waiting at once,
+	 * on every chunk a worker was finishing, starved its heartbeats.
+	 */
+	private audioTurn: Promise<unknown> = Promise.resolve();
 	private failed: unknown = null;
 	firstUploadedMs: number | null = null;
 
@@ -295,7 +303,11 @@ class SegmentStream {
 					last ? task.audio.end : this.packetAt(first + b),
 				]
 			: [0, 0];
-		const audio = await fetchAudioRange(task.jobId, packets[0], packets[1]);
+		const audioReady = this.audioTurn.then(() =>
+			fetchAudioRange(task.jobId, packets[0], packets[1]),
+		);
+		this.audioTurn = audioReady.catch(() => {});
+		const audio = await audioReady;
 		const header = segmentHeader({
 			sequence: first + a + 1,
 			firstFrame: first + a,
@@ -401,21 +413,22 @@ async function uploadLayout(
 	let pendingBytes = 0;
 	let nextPart = upload.firstPart;
 	const inflight = new Set<Promise<void>>();
-	let failure: unknown = null;
+	let failure: { error: unknown } | undefined;
 	const track = async (promise: Promise<void>) => {
 		inflight.add(promise);
-		// Handle both outcomes here: a bare .finally() re-rejects unhandled and
-		// kills the whole worker (e.g. a hedge loser hitting NoSuchUpload after
-		// the job completed). An upload can settle and leave the set before
-		// anything awaits it, so its failure is kept to be thrown below.
+		// Record every failure here: an unhandled rejection kills the worker
+		// (e.g. a hedge loser hitting NoSuchUpload after the job completed), and
+		// an upload that fails and leaves the set before a race or the final
+		// wait sees it would otherwise go unnoticed.
 		promise.then(
 			() => inflight.delete(promise),
 			(error) => {
-				failure ??= error;
 				inflight.delete(promise);
+				failure ??= { error };
 			},
 		);
-		if (inflight.size >= 4) await Promise.race(inflight);
+		if (inflight.size >= 4) await Promise.race(inflight).catch(() => {});
+		if (failure) throw failure.error;
 	};
 	const send = (body: Uint8Array) => {
 		if (nextPart >= upload.firstPart + upload.partLimit) {
@@ -475,8 +488,8 @@ async function uploadLayout(
 	}
 	if (!stashed) throw new Error("chunk ended before its stash filled");
 	if (pendingBytes > 0) await send(take(pendingBytes));
-	await Promise.all(inflight);
-	if (failure) throw failure;
+	await Promise.allSettled(inflight);
+	if (failure) throw failure.error;
 	pending = [];
 	if (parts.reduce((sum, part) => sum + part.size, 0) + stashSize !== bytes) {
 		throw new Error("uploaded byte count mismatch");
@@ -492,6 +505,8 @@ async function runVideo(
 	engine: Engine,
 	queuedMs: number,
 	nearEnd: () => void = () => {},
+	/** Called once the engine is done with the chunk, with its VRAM samples. */
+	onRendered: (gpuMem: number[][] | undefined) => void = () => {},
 ): Promise<VideoResult> {
 	const started = performance.now();
 	const cpuBefore = await processCpuSeconds(engine.pid);
@@ -557,6 +572,7 @@ async function runVideo(
 		progress.delete(slot);
 	});
 	nearEnd();
+	onRendered((result.timings as unknown as { gpu_mem?: number[][] }).gpu_mem);
 	const segmentsDone = stream?.finish(result.sizes, result.extradata);
 	segmentsDone?.catch(() => {});
 	const engineMs = performance.now() - engineStarted;
@@ -720,7 +736,16 @@ async function runTranscode(task: TranscodeTask, slot: number) {
 	transcoders.set(slot, run);
 	try {
 		const output = join(dir, "output.mp4");
-		const input = await s3.presignFresh("GET", task.source, 6 * 3600);
+		const input = join(dir, "source");
+		// Each range that lands counts as progress, so a long download isn't
+		// taken for a stalled transcode, while one that stops still is.
+		await downloadSource(s3, task.source, input, {
+			signal: run.controller.signal,
+			onProgress: () => {
+				entry.lastProgressAt = Date.now();
+			},
+		});
+		entry.lastProgressAt = Date.now();
 		run.controller.signal.throwIfAborted();
 		const probe = Bun.spawn(["ffprobe", ...probeArgs(input)], {
 			stdout: "pipe",
@@ -789,6 +814,212 @@ async function runTranscode(task: TranscodeTask, slot: number) {
 	}
 }
 
+// The reconstruction service is private: its binary, ONNX Runtime and model
+// live in the farm bucket under RF_CURSOR_BUNDLE, listed with their SHA-256
+// in the bundle's manifest.json.
+const CURSOR_BUNDLE = process.env.RF_CURSOR_BUNDLE?.replace(/\/?$/, "/");
+const CURSOR_THREADS = Number(
+	process.env.RF_CURSOR_THREADS ?? Math.max(2, Math.floor(CPUS / 2)),
+);
+const CURSOR_TRANSFER_LIMIT_MS = 10 * 60_000;
+let cursorBundle: Promise<string> | null = null;
+
+async function fetchCursorBundle(prefix: string) {
+	const manifest = JSON.parse(
+		new TextDecoder().decode(await stashS3.get(`${prefix}manifest.json`)),
+	) as { files: Record<string, string> };
+	const dir = join(
+		WORK_DIR,
+		"cursor-service",
+		createHash("sha256").update(prefix).digest("hex").slice(0, 16),
+	);
+	mkdirSync(dir, { recursive: true });
+	for (const name of [
+		"cap-cursor-service",
+		"libonnxruntime.so",
+		"model.onnx",
+	]) {
+		const expected = manifest.files[name];
+		if (!expected) throw new Error(`cursor bundle manifest lacks ${name}`);
+		const path = join(dir, name);
+		const existing = Bun.file(path);
+		if (
+			(await existing.exists()) &&
+			createHash("sha256")
+				.update(new Uint8Array(await existing.arrayBuffer()))
+				.digest("hex") === expected
+		) {
+			continue;
+		}
+		const partial = `${path}.partial`;
+		await downloadSource(stashS3, `${prefix}${name}`, partial);
+		const actual = createHash("sha256")
+			.update(new Uint8Array(await Bun.file(partial).arrayBuffer()))
+			.digest("hex");
+		if (actual !== expected) {
+			rmSync(partial, { force: true });
+			throw new Error(`cursor bundle ${name} does not match its manifest`);
+		}
+		chmodSync(partial, 0o755);
+		renameSync(partial, path);
+	}
+	return dir;
+}
+
+function cursorBundleDir() {
+	if (!CURSOR_BUNDLE) {
+		return Promise.reject(
+			new Error("cursor reconstruction is not configured on this worker"),
+		);
+	}
+	cursorBundle ??= fetchCursorBundle(CURSOR_BUNDLE).catch((error) => {
+		cursorBundle = null;
+		throw error;
+	});
+	return cursorBundle;
+}
+
+async function runCursor(task: CursorTask, slot: number) {
+	const dir = join(WORK_DIR, `cursor-${randomUUID()}`);
+	mkdirSync(dir, { recursive: true });
+	const entry = {
+		taskId: task.taskId,
+		kind: "cursor" as const,
+		frames: 0,
+		total: 1000,
+		startedAt: Date.now(),
+		lastProgressAt: Date.now(),
+	};
+	progress.set(slot, entry);
+	const run: TranscodeRun = { controller: new AbortController() };
+	transcoders.set(slot, run);
+	try {
+		// Fetching the bundle and uploading the outputs report no progress of
+		// their own; neither is a stalled reconstruction unless it outlasts
+		// its limit. An upload past it is cancelled and settles before the
+		// task fails, so it cannot land after a retry wrote the same keys.
+		const keepAlive = () => {
+			const timer = setInterval(() => {
+				entry.lastProgressAt = Date.now();
+			}, 5_000);
+			return () => {
+				clearInterval(timer);
+				entry.lastProgressAt = Date.now();
+			};
+		};
+		const alive = <T>(work: Promise<T>, what: string) => {
+			const stop = keepAlive();
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			const limit = new Promise<never>((_, reject) => {
+				timer = setTimeout(
+					() => reject(new Error(`${what} took over 10 minutes`)),
+					CURSOR_TRANSFER_LIMIT_MS,
+				);
+			});
+			work.catch(() => {});
+			return Promise.race([work, limit]).finally(() => {
+				clearTimeout(timer);
+				stop();
+			});
+		};
+		const upload = async (key: string, path: string, contentType: string) => {
+			const stop = keepAlive();
+			const controller = new AbortController();
+			const timer = setTimeout(
+				() =>
+					controller.abort(new Error(`Uploading ${key} took over 10 minutes`)),
+				CURSOR_TRANSFER_LIMIT_MS,
+			);
+			const cancel = () => controller.abort(run.controller.signal.reason);
+			run.controller.signal.addEventListener("abort", cancel, { once: true });
+			try {
+				return await s3.uploadFile(key, path, contentType, {
+					signal: controller.signal,
+				});
+			} finally {
+				clearTimeout(timer);
+				run.controller.signal.removeEventListener("abort", cancel);
+				stop();
+			}
+		};
+		const bundle = await alive(cursorBundleDir(), "Fetching the bundle");
+		const input = join(dir, "source");
+		await downloadSource(s3, task.source, input, {
+			signal: run.controller.signal,
+			onProgress: () => {
+				entry.lastProgressAt = Date.now();
+			},
+		});
+		run.controller.signal.throwIfAborted();
+		const output = join(dir, "output");
+		const service = Bun.spawn(
+			[
+				join(bundle, "cap-cursor-service"),
+				"process",
+				input,
+				"--model",
+				join(bundle, "model.onnx"),
+				"--output",
+				output,
+				"--inference-threads",
+				String(CURSOR_THREADS),
+			],
+			{
+				stdout: "ignore",
+				stderr: "pipe",
+				env: {
+					...process.env,
+					ORT_DYLIB_PATH: join(bundle, "libonnxruntime.so"),
+					ORT_DISABLE_TELEMETRY: "1",
+				},
+			},
+		);
+		run.process = service;
+		const decoder = new TextDecoder();
+		let buffered = "";
+		let tail = "";
+		for await (const bytes of service.stderr) {
+			buffered += decoder.decode(bytes, { stream: true });
+			const lines = buffered.split("\n");
+			buffered = lines.pop() ?? "";
+			for (const line of lines) {
+				const value = cursorProgress(line.trim());
+				if (value === null) {
+					tail = `${tail}\n${line}`.slice(-2000);
+					continue;
+				}
+				entry.lastProgressAt = Date.now();
+				if (value > entry.frames) entry.frames = value;
+			}
+		}
+		const code = await service.exited;
+		run.controller.signal.throwIfAborted();
+		if (code !== 0) {
+			throw new Error(
+				`cursor service exited ${code}: ${`${tail}${buffered}`.trim().slice(-500)}`,
+			);
+		}
+		await upload(
+			`${task.outputPrefix}${CURSOR_OUTPUTS.inputEvents}`,
+			join(output, "input-events.ndjson"),
+			"application/x-ndjson",
+		);
+		await upload(
+			`${task.outputPrefix}${CURSOR_OUTPUTS.display}`,
+			join(output, "reconstructed.cap/content/display.mp4"),
+			"video/mp4",
+		);
+	} finally {
+		if (run.process?.exitCode === null) {
+			run.process.kill("SIGKILL");
+			await run.process.exited;
+		}
+		transcoders.delete(slot);
+		progress.delete(slot);
+		rmSync(dir, { recursive: true, force: true });
+	}
+}
+
 async function poll(kinds: string[] | undefined, prefetch = false) {
 	const controller = new AbortController();
 	openPolls.add(controller);
@@ -803,6 +1034,7 @@ async function poll(kinds: string[] | undefined, prefetch = false) {
 			audioSlots: AUDIO_SLOTS,
 			prefetch,
 			draining,
+			features: ["prefix"],
 		},
 		controller.signal,
 	).finally(() => openPolls.delete(controller));
@@ -824,8 +1056,68 @@ let draining = false;
 const reserved = new Map<number, WorkItem | null>();
 const busySince = new Map<number, number>();
 
+/**
+ * Video chunks whose engine work is done, still waiting for their audio or
+ * uploading. Listed in heartbeats as fully rendered, so the coordinator
+ * neither requeues nor hedges a chunk that is only waiting on audio.
+ */
+const finishing = new Map<
+	string,
+	{
+		task: VideoTask;
+		slot: number;
+		/** When the slot took it: heartbeats report time on the whole task. */
+		since: number;
+		done: Promise<unknown>;
+	}
+>();
+/**
+ * Chunks a slot may have finishing at once before it waits for one. Long
+ * exports render ahead of their audio (a 2 h export's ~10 min sections take
+ * about a minute each), so this bounds disk use rather than pacing work.
+ */
+const MAX_FINISHING_PER_SLOT = 8;
+
+async function finishInBackground(
+	slot: number,
+	task: VideoTask,
+	since: number,
+	done: Promise<unknown>,
+) {
+	const rendered = Date.now();
+	finishing.set(task.taskId, { task, slot, since, done });
+	done
+		.then(
+			() =>
+				console.log(
+					`${task.taskId} done ${Date.now() - rendered}ms after rendering`,
+				),
+			async (error) => {
+				console.error(`${task.taskId} failed: ${error}`);
+				await post(`/tasks/${encodeURIComponent(task.taskId)}/fail`, {
+					worker: WORKER_ID,
+					attempt: task.attempt,
+					error: String(error instanceof Error ? error.message : error),
+				}).catch(() => {});
+			},
+		)
+		.finally(() => {
+			finishing.delete(task.taskId);
+			exitWhenIdle();
+		});
+	const own = [...finishing.values()].filter((entry) => entry.slot === slot);
+	if (own.length > MAX_FINISHING_PER_SLOT) {
+		await Promise.race(own.map((entry) => entry.done.catch(() => {})));
+	}
+}
+
 function exitWhenIdle() {
-	if (draining && busy.size === 0 && reserved.size === 0) {
+	if (
+		draining &&
+		busy.size === 0 &&
+		reserved.size === 0 &&
+		finishing.size === 0
+	) {
 		console.log("drained; exiting");
 		process.exit(0);
 	}
@@ -874,7 +1166,7 @@ async function slotLoop(slot: number) {
 				.then((upcoming) => {
 					if (upcoming) {
 						reserved.set(slot, upcoming);
-						if (upcoming.kind !== "transcode") {
+						if ("jobId" in upcoming) {
 							cacheFor(upcoming.jobId)
 								.materialize(upcoming.files)
 								.catch(() => {});
@@ -895,7 +1187,13 @@ async function slotLoop(slot: number) {
 				);
 				engines[slot] = engine;
 			}
-			if (task.kind === "transcode") {
+			if (task.kind === "cursor") {
+				await runCursor(task, slot);
+				await post(`/cursor-jobs/${task.taskId.slice(3)}/done`, {
+					worker: WORKER_ID,
+					attempt: task.attempt,
+				});
+			} else if (task.kind === "transcode") {
 				const size = await runTranscode(task, slot);
 				await post(`/transcodes/${task.taskId.slice(3)}/done`, {
 					worker: WORKER_ID,
@@ -903,11 +1201,33 @@ async function slotLoop(slot: number) {
 					size,
 				});
 			} else if (task.kind === "video") {
-				const result = await runVideo(task, engine, 0, prefetchNext);
-				await post(`/tasks/${encodeURIComponent(task.taskId)}/done`, result);
-				const vram = (
-					result.timings.engine as unknown as { gpu_mem?: number[][] }
-				).gpu_mem;
+				// The chunk's wait for its audio and its upload don't need the
+				// engine: once the engine is done the slot takes its next task
+				// and the rest finishes alongside (see finishInBackground).
+				let rendered!: (gpuMem: number[][] | undefined) => void;
+				const engineDone = new Promise<number[][] | undefined>((resolve) => {
+					rendered = resolve;
+				});
+				const completion = runVideo(
+					task,
+					engine,
+					0,
+					prefetchNext,
+					rendered,
+				).then((result) =>
+					post(`/tasks/${encodeURIComponent(task.taskId)}/done`, result),
+				);
+				completion.catch(() => {});
+				const vram = await Promise.race([
+					engineDone,
+					completion.then(() => undefined),
+				]);
+				await finishInBackground(
+					slot,
+					task,
+					busySince.get(slot) ?? Date.now(),
+					completion,
+				);
 				const freeMb = vram?.[vram.length - 1]?.[2];
 				if (freeMb !== undefined && freeMb > 0 && freeMb < MIN_FREE_VRAM_MB) {
 					console.warn(
@@ -924,7 +1244,7 @@ async function slotLoop(slot: number) {
 				await runAudio(task, engine, 0);
 			}
 			console.log(
-				`${task.taskId} done in ${Math.round(performance.now() - received)}ms`,
+				`${task.taskId} ${task.kind === "video" ? "rendered" : "done"} in ${Math.round(performance.now() - received)}ms`,
 			);
 		} catch (error) {
 			console.error(`${task.taskId} failed: ${error}`);
@@ -950,9 +1270,11 @@ async function slotLoop(slot: number) {
 				error: String(error instanceof Error ? error.message : error),
 			};
 			await post(
-				task.kind === "transcode"
-					? `/transcodes/${task.taskId.slice(3)}/fail`
-					: `/tasks/${encodeURIComponent(task.taskId)}/fail`,
+				task.kind === "cursor"
+					? `/cursor-jobs/${task.taskId.slice(3)}/fail`
+					: task.kind === "transcode"
+						? `/transcodes/${task.taskId.slice(3)}/fail`
+						: `/tasks/${encodeURIComponent(task.taskId)}/fail`,
 				failure,
 			).catch(() => {});
 		} finally {
@@ -1017,7 +1339,7 @@ function cancel(taskIds: string[]) {
 	for (const [slot, task] of busy) {
 		if (!taskIds.includes(task.taskId)) continue;
 		console.log(`cancelling ${task.taskId}`);
-		if (task.kind === "transcode") {
+		if (task.kind === "transcode" || task.kind === "cursor") {
 			stopTranscode(slot);
 			continue;
 		}
@@ -1030,7 +1352,7 @@ function cancel(taskIds: string[]) {
 setInterval(() => {
 	const now = Date.now();
 	for (const [slot, entry] of progress) {
-		if (entry.kind === "transcode") {
+		if (entry.kind === "transcode" || entry.kind === "cursor") {
 			// Decoding a long source can start slowly; a minute without any
 			// output means a wedged ffmpeg.
 			if (now - entry.lastProgressAt >= Math.max(STALL_MS, 60_000)) {
@@ -1064,6 +1386,17 @@ setInterval(async () => {
 			frames: entry?.taskId === task.taskId ? entry.frames : 0,
 			total: entry?.taskId === task.taskId ? entry.total : 0,
 			elapsedMs: Date.now() - (busySince.get(slot) ?? Date.now()),
+		});
+	}
+	for (const { task, since } of finishing.values()) {
+		const total = task.frames[1] - task.frames[0];
+		running.push({
+			taskId: task.taskId,
+			attempt: task.attempt,
+			phase: "running",
+			frames: total,
+			total,
+			elapsedMs: Date.now() - since,
 		});
 	}
 	for (const task of reserved.values()) {

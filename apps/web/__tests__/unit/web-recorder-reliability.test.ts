@@ -15,11 +15,17 @@ const mocks = vi.hoisted(() => ({
 	finalize: vi.fn(),
 	open: vi.fn(),
 	refresh: vi.fn(),
+	push: vi.fn(),
 	status: vi.fn(),
 	spoolCreate: vi.fn(),
 	recovered: vi.fn(),
+	recoveredAudio: vi.fn(async () => {}),
+	sidecars: [] as Array<{
+		abortUploadRetainSpool: ReturnType<typeof vi.fn>;
+		recoverBlob: ReturnType<typeof vi.fn>;
+	}>,
 	pipeline: {
-		mode: "streaming-webm",
+		mode: "streaming",
 		mimeType: "video/webm",
 		fileExtension: "webm",
 	},
@@ -32,6 +38,41 @@ const mocks = vi.hoisted(() => ({
 	}>,
 }));
 
+// The branch records the microphone and system audio as their own tracks;
+// these tests cover the screen and camera recording, so audio tracks are stubs.
+vi.mock("@cap/recorder-core", async (original) => ({
+	...(await original<object>()),
+	uploadRecoveredAudioSidecar: mocks.recoveredAudio,
+	AudioRecordingSidecar: {
+		create: vi.fn(async ({ kind }: { kind: "mic" | "systemAudio" }) => {
+			const sidecar = {
+				metadata: {
+					kind,
+					sessionId: `audio-${kind}`,
+					mimeType: "audio/webm",
+					subpath: `${kind}.webm`,
+					offsetMs: 0,
+					recordedBytes: 1,
+				},
+				isUploadCompleted: false,
+				start: vi.fn(),
+				pause: vi.fn(),
+				resume: vi.fn(),
+				stop: vi.fn(async () => 1),
+				finalize: vi.fn(async () => {}),
+				cancel: vi.fn(async () => {}),
+				abortUploadRetainSpool: vi.fn(async () => {}),
+				recoverBlob: vi.fn(
+					async () => new Blob([kind], { type: "audio/webm" }),
+				),
+				markUploadedBackup: vi.fn(),
+				disposeBackup: vi.fn(async () => {}),
+			};
+			mocks.sidecars.push(sidecar);
+			return sidecar;
+		}),
+	},
+}));
 vi.mock("@cap/recorder-core/capture-streams", () => ({
 	acquireCameraStream: mocks.acquire,
 	acquireDisplayStream: mocks.acquire,
@@ -60,6 +101,7 @@ vi.mock("@cap/recorder-core/instant-mp4-uploader", async (original) => ({
 	initiateMultipartUpload: mocks.initiate,
 	InstantRecordingUploader: class {
 		handleChunk = vi.fn();
+		uploadRemaining = vi.fn(async () => {});
 		finalize = mocks.finalize;
 		cancel = vi.fn(async () => {});
 		suspend = vi.fn();
@@ -81,7 +123,7 @@ vi.mock("@/lib/EffectRuntime", () => ({
 	}) => ({ mutateAsync: mutationFn }),
 }));
 vi.mock("next/navigation", () => ({
-	useRouter: () => ({ refresh: mocks.refresh }),
+	useRouter: () => ({ refresh: mocks.refresh, push: mocks.push }),
 }));
 vi.mock("sonner", () => ({
 	toast: {
@@ -109,7 +151,7 @@ vi.mock(
 
 import { MultipartCompletionUncertainError } from "@cap/recorder-core/instant-mp4-uploader";
 import { MicrophoneUnavailablePrompt } from "@/app/(org)/dashboard/caps/components/web-recorder-dialog/MicrophoneUnavailablePrompt";
-import type { RecordingMode } from "@/app/(org)/dashboard/caps/components/web-recorder-dialog/RecordingModeSelector";
+import type { RecordingMode } from "@/app/(org)/dashboard/caps/components/web-recorder-dialog/recording-mode";
 import { useWebRecorder } from "@/app/(org)/dashboard/caps/components/web-recorder-dialog/useWebRecorder";
 
 class Track extends EventTarget {
@@ -146,6 +188,9 @@ class Recorder extends EventTarget {
 		});
 		Object.defineProperty(event, "target", { value: this });
 		this.ondataavailable?.(event as BlobEvent);
+		this.dispatchEvent(
+			Object.assign(new Event("dataavailable"), { data: event.data }),
+		);
 	}
 	stop() {
 		this.state = "inactive";
@@ -154,6 +199,7 @@ class Recorder extends EventTarget {
 			const event = new Event("stop");
 			Object.defineProperty(event, "target", { value: this });
 			this.onstop?.(event);
+			this.dispatchEvent(new Event("stop"));
 		});
 	}
 }
@@ -181,6 +227,16 @@ const makeSpool = () => {
 		),
 		touch: vi.fn(async () => {}),
 		dispose: vi.fn(async () => {}),
+		markUploaded: vi.fn(),
+		getUnwrittenChunks: vi.fn(() => []),
+		recoverPersistedBlob: vi.fn(async () =>
+			chunks.length
+				? new Blob(chunks, { type: mocks.pipeline.mimeType })
+				: null,
+		),
+		get totalBytes() {
+			return chunks.reduce((total, chunk) => total + chunk.size, 0);
+		},
 	};
 };
 
@@ -192,6 +248,7 @@ describe("web recording upload recovery", () => {
 	let track: Track;
 	let micEnabled: boolean;
 	let recordingMode: RecordingMode;
+	let selectedCameraId: string | null;
 	let systemAudioEnabled: boolean;
 	let rerender: () => Promise<void>;
 
@@ -200,12 +257,14 @@ describe("web recording upload recovery", () => {
 		vi.useFakeTimers();
 		micEnabled = false;
 		recordingMode = "camera";
+		selectedCameraId = "camera";
 		systemAudioEnabled = false;
 		mocks.mic.mockReset();
 		mocks.uploaders.length = 0;
+		mocks.sidecars.length = 0;
 		Recorder.instances = [];
 		mocks.pipeline = {
-			mode: "streaming-webm",
+			mode: "streaming",
 			mimeType: "video/webm",
 			fileExtension: "webm",
 		};
@@ -241,7 +300,8 @@ describe("web recording upload recovery", () => {
 				micEnabled,
 				systemAudioEnabled,
 				recordingMode,
-				selectedCameraId: "camera",
+				selectedCameraId,
+				getCameraPreviewStream: () => null,
 				isProUser: true,
 			});
 			return recorder.isMicrophoneUnavailable
@@ -301,7 +361,7 @@ describe("web recording upload recovery", () => {
 			});
 			expect(recorder.phase).toBe("completed");
 			expect(spool.dispose).toHaveBeenCalledOnce();
-			expect(mocks.open).toHaveBeenCalledWith("https://cap.so/s/video");
+			expect(mocks.push).toHaveBeenCalledWith("/s/video");
 		},
 	);
 
@@ -571,6 +631,8 @@ describe("web recording upload recovery", () => {
 		"continues the same %s capture only after choosing to record without a microphone",
 		async (mode) => {
 			recordingMode = mode;
+			// A screen recording would also record the selected camera.
+			if (mode === "tab") selectedCameraId = null;
 			const { starting } = await startWithUnavailableMicrophone();
 			await act(async () => recorder.startRecording());
 			expect(mocks.acquire).toHaveBeenCalledOnce();
@@ -585,12 +647,112 @@ describe("web recording upload recovery", () => {
 			expect(Recorder.instances[0]?.stream.getVideoTracks()).toEqual([track]);
 			await act(async () => recorder.stopRecording());
 			expect(recorder.phase).toBe("completed");
-			expect(recorder.completedShareUrl).toBe("https://cap.so/s/video");
+			expect(mocks.push).toHaveBeenCalledWith("/s/video");
+			expect(recorder.completedShareUrl).toBe(
+				`${window.location.origin}/s/video`,
+			);
 		},
 	);
 
+	it("retries a paired take from its camera and microphone backups after the upload fails", async () => {
+		recordingMode = "tab";
+		micEnabled = true;
+		const mic = new Track();
+		mic.kind = "audio";
+		mocks.mic.mockResolvedValue(new Stream([mic]));
+		mocks.acquire
+			.mockResolvedValueOnce(new Stream([track]))
+			.mockResolvedValueOnce(new Stream([new Track()]));
+		const cameraSpool = makeSpool();
+		mocks.spoolCreate
+			.mockResolvedValueOnce(spool)
+			.mockResolvedValueOnce(cameraSpool);
+		await rerender();
+		await act(async () => recorder.startRecording());
+		expect(recorder.phase).toBe("recording");
+		const [screenRecorder, cameraRecorder] = Recorder.instances;
+		screenRecorder?.chunk("first");
+		cameraRecorder?.chunk("face");
+		expect(mocks.uploaders).toHaveLength(2);
+		expect(mocks.sidecars).toHaveLength(1);
+
+		mocks.finalize.mockRejectedValueOnce(new Error("Network failed"));
+		await act(async () => recorder.stopRecording());
+		expect(recorder.phase).toBe("error");
+		expect(recorder.canRetryUpload).toBe(true);
+		expect(mocks.delete).not.toHaveBeenCalled();
+		expect(mocks.uploaders[0]?.cancel).toHaveBeenCalled();
+		expect(mocks.uploaders[1]?.cancel).toHaveBeenCalled();
+		expect(mocks.sidecars[0]?.abortUploadRetainSpool).toHaveBeenCalled();
+		expect(cameraSpool.dispose).not.toHaveBeenCalled();
+
+		mocks.finalize.mockResolvedValue(undefined);
+		await act(async () => recorder.retryUpload());
+		expect(recorder.phase).toBe("completed");
+		expect(mocks.uploaders).toHaveLength(4);
+		const retried = mocks.finalize.mock.calls
+			.slice(-2)
+			.map(([options]) => options as { finalBlob: Blob; subpath: string });
+		expect(
+			await Promise.all(
+				retried.map(async ({ finalBlob, subpath }) => [
+					subpath,
+					await finalBlob.text(),
+				]),
+			),
+		).toEqual([
+			["camera-upload.webm", "facetail"],
+			["raw-upload.webm", "firsttail"],
+		]);
+		expect(mocks.recoveredAudio).toHaveBeenCalledWith(
+			expect.objectContaining({
+				videoId: "video",
+				screenSubpath: "raw-upload.webm",
+			}),
+		);
+		expect(cameraSpool.dispose).toHaveBeenCalledOnce();
+	});
+
+	it("retries only the screen when the paired camera already uploaded", async () => {
+		recordingMode = "tab";
+		micEnabled = true;
+		const mic = new Track();
+		mic.kind = "audio";
+		mocks.mic.mockResolvedValue(new Stream([mic]));
+		mocks.acquire
+			.mockResolvedValueOnce(new Stream([track]))
+			.mockResolvedValueOnce(new Stream([new Track()]));
+		const cameraSpool = makeSpool();
+		mocks.spoolCreate
+			.mockResolvedValueOnce(spool)
+			.mockResolvedValueOnce(cameraSpool);
+		await rerender();
+		await act(async () => recorder.startRecording());
+		const [screenRecorder, cameraRecorder] = Recorder.instances;
+		screenRecorder?.chunk("first");
+		cameraRecorder?.chunk("face");
+
+		mocks.finalize
+			.mockResolvedValueOnce(undefined)
+			.mockRejectedValueOnce(new Error("Network failed"));
+		await act(async () => recorder.stopRecording());
+		expect(recorder.phase).toBe("error");
+		expect(recorder.canRetryUpload).toBe(true);
+		const attempted = mocks.finalize.mock.calls.length;
+
+		mocks.finalize.mockResolvedValue(undefined);
+		await act(async () => recorder.retryUpload());
+		expect(recorder.phase).toBe("completed");
+		expect(
+			mocks.finalize.mock.calls
+				.slice(attempted)
+				.map(([options]) => (options as { subpath: string }).subpath),
+		).toEqual(["raw-upload.webm"]);
+	});
+
 	it("retains captured system audio when continuing without the microphone", async () => {
 		recordingMode = "tab";
+		selectedCameraId = null;
 		systemAudioEnabled = true;
 		const systemAudio = new Track();
 		systemAudio.kind = "audio";
@@ -714,7 +876,9 @@ describe("web recording upload recovery", () => {
 	it("clears the previous share link when starting the next recording", async () => {
 		await start();
 		await act(async () => recorder.stopRecording());
-		expect(recorder.completedShareUrl).toBe("https://cap.so/s/video");
+		expect(recorder.completedShareUrl).toBe(
+			`${window.location.origin}/s/video`,
+		);
 		mocks.acquire.mockResolvedValue(new Stream([new Track()]));
 		mocks.spoolCreate.mockResolvedValue(makeSpool());
 		await act(async () => recorder.startRecording());

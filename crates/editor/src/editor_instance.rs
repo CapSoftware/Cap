@@ -161,7 +161,7 @@ fn get_video_duration_fallback(path: &Path) -> Option<f64> {
     }
 }
 
-fn display_video_duration(path: &Path) -> Option<f64> {
+pub fn display_video_duration(path: &Path) -> Option<f64> {
     match Video::new(path, 0.0) {
         Ok(v) => Some(v.duration),
         Err(e) => {
@@ -367,74 +367,10 @@ impl EditorInstance {
 
         if project.timeline.is_none() {
             warn!("Project config has no timeline, creating one from recording segments");
-            let timeline_segments = match meta.as_ref() {
-                StudioRecordingMeta::SingleSegment { segment } => {
-                    let display_path = recording_meta.path(&segment.display.path);
-                    match display_video_duration(&display_path) {
-                        Some(duration) if duration > 0.0 => vec![TimelineSegment {
-                            recording_clip: 0,
-                            start: 0.0,
-                            end: duration,
-                            timescale: 1.0,
-                            name: None,
-                            speed_audio_mode: None,
-                            hide_cursor: None,
-                            volume: None,
-                        }],
-                        _ => {
-                            warn!(
-                                "Failed to determine display duration for {}, leaving timeline unset",
-                                display_path.display()
-                            );
-                            Vec::new()
-                        }
-                    }
-                }
-                StudioRecordingMeta::MultipleSegments { inner } => inner
-                    .segments
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, segment)| {
-                        let display_path = recording_meta.path(&segment.display.path);
-                        tracing::debug!(
-                            "Attempting to get duration for segment {}: {:?}",
-                            i,
-                            display_path
-                        );
-                        let duration = display_video_duration(&display_path)?;
-                        tracing::debug!("Final duration for segment {}: {}", i, duration);
-                        if duration <= 0.0 {
-                            return None;
-                        }
-                        Some(TimelineSegment {
-                            recording_clip: i as u32,
-                            start: 0.0,
-                            end: duration,
-                            timescale: 1.0,
-                            name: None,
-                            speed_audio_mode: None,
-                            hide_cursor: None,
-                            volume: None,
-                        })
-                    })
-                    .collect(),
-            };
-
-            if !timeline_segments.is_empty() {
-                project.timeline = Some(TimelineConfiguration {
-                    segments: timeline_segments,
-                    transitions: Vec::new(),
-                    zoom_segments: Vec::new(),
-                    scene_segments: Vec::new(),
-                    style_segments: Vec::new(),
-                    image_segments: Vec::new(),
-                    mask_segments: Vec::new(),
-                    text_segments: Vec::new(),
-                    caption_segments: Vec::new(),
-                    keyboard_segments: Vec::new(),
-                    audio_segments: Vec::new(),
-                    camera3d_segments: Vec::new(),
-                });
+            if let Some(timeline) =
+                initial_timeline(&recording_meta, meta.as_ref(), display_video_duration)
+            {
+                project.timeline = Some(timeline);
 
                 if let Err(e) = project.write(&recording_meta.project_path) {
                     warn!("Failed to save auto-generated timeline: {}", e);
@@ -607,6 +543,26 @@ impl EditorInstance {
 
         this.state.lock().await.preview_task =
             Some(this.clone().spawn_preview_renderer(preview_rx));
+
+        let mut project_rx = this.project_config.1.clone();
+        let constants = this.render_constants.clone();
+        let segments = this.segment_medias.clone();
+        tokio::spawn(async move {
+            let mut recording_levels_loaded = false;
+            loop {
+                let project = project_rx.borrow_and_update().clone();
+                if crate::has_waveform_segments(&project) {
+                    if !recording_levels_loaded {
+                        crate::load_waveform_levels(&constants, &segments).await;
+                        recording_levels_loaded = true;
+                    }
+                    crate::load_timeline_audio_levels(&constants, &project).await;
+                }
+                if project_rx.changed().await.is_err() {
+                    break;
+                }
+            }
+        });
 
         Ok(this)
     }
@@ -1785,6 +1741,83 @@ async fn create_segments_with_audio(
             futures::future::try_join_all(segment_futures).await
         }
     }
+}
+
+/// The timeline a recording without one opens with: each segment's display
+/// video, whole. None when no display duration can be read.
+pub fn initial_timeline(
+    recording_meta: &RecordingMeta,
+    meta: &StudioRecordingMeta,
+    display_duration: impl Fn(&Path) -> Option<f64>,
+) -> Option<TimelineConfiguration> {
+    let timeline_segments = match meta {
+        StudioRecordingMeta::SingleSegment { segment } => {
+            let display_path = recording_meta.path(&segment.display.path);
+            match display_duration(&display_path) {
+                Some(duration) if duration > 0.0 => vec![TimelineSegment {
+                    recording_clip: 0,
+                    start: 0.0,
+                    end: duration,
+                    timescale: 1.0,
+                    name: None,
+                    speed_audio_mode: None,
+                    hide_cursor: None,
+                    volume: None,
+                }],
+                _ => {
+                    warn!(
+                        "Failed to determine display duration for {}, leaving timeline unset",
+                        display_path.display()
+                    );
+                    Vec::new()
+                }
+            }
+        }
+        StudioRecordingMeta::MultipleSegments { inner } => inner
+            .segments
+            .iter()
+            .enumerate()
+            .filter_map(|(i, segment)| {
+                let display_path = recording_meta.path(&segment.display.path);
+                tracing::debug!(
+                    "Attempting to get duration for segment {}: {:?}",
+                    i,
+                    display_path
+                );
+                let duration = display_duration(&display_path)?;
+                tracing::debug!("Final duration for segment {}: {}", i, duration);
+                if duration <= 0.0 {
+                    return None;
+                }
+                Some(TimelineSegment {
+                    recording_clip: i as u32,
+                    start: 0.0,
+                    end: duration,
+                    timescale: 1.0,
+                    name: None,
+                    speed_audio_mode: None,
+                    hide_cursor: None,
+                    volume: None,
+                })
+            })
+            .collect(),
+    };
+
+    (!timeline_segments.is_empty()).then(|| TimelineConfiguration {
+        segments: timeline_segments,
+        transitions: Vec::new(),
+        zoom_segments: Vec::new(),
+        scene_segments: Vec::new(),
+        style_segments: Vec::new(),
+        image_segments: Vec::new(),
+        mask_segments: Vec::new(),
+        text_segments: Vec::new(),
+        caption_segments: Vec::new(),
+        keyboard_segments: Vec::new(),
+        audio_segments: Vec::new(),
+        camera3d_segments: Vec::new(),
+        waveform_segments: Vec::new(),
+    })
 }
 
 pub fn initial_clip_configuration(

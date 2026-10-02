@@ -3,7 +3,7 @@ import { createElementBounds } from "@solid-primitives/bounds";
 import { debounce } from "@solid-primitives/scheduled";
 import { makePersisted } from "@solid-primitives/storage";
 import { createMutation } from "@tanstack/solid-query";
-import { Channel } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { CheckMenuItem, Menu } from "@tauri-apps/api/menu";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { remove } from "@tauri-apps/plugin-fs";
@@ -50,10 +50,12 @@ import IconLucideGem from "~icons/lucide/gem";
 import IconLucideSlidersHorizontal from "~icons/lucide/sliders-horizontal";
 import { type RenderState, useEditorContext } from "./context";
 import { formatEstimatedSize, formatEstimatedTime } from "./export-estimates";
+import { serverExport } from "./export-location";
 import { RESOLUTION_OPTIONS } from "./Header";
 import { Dialog } from "./ui";
 
 class SilentError extends Error {}
+const isWebEditor = import.meta.env.VITE_CAP_WEB_EDITOR === "true";
 
 const EXPORT_CTA_CLASS =
 	"flex w-full h-10 items-center justify-center gap-2 rounded-[10px] text-[13px] font-medium transition-colors outline-hidden focus-visible:ring-2 focus-visible:ring-ed-accent/40 disabled:opacity-50 disabled:cursor-not-allowed";
@@ -269,6 +271,8 @@ export function ExportPage() {
 
 		if (disablesLinkExport() && _settings.exportTo === "link")
 			ret.exportTo = "file";
+		if (isWebEditor && _settings.exportTo === "clipboard")
+			ret.exportTo = "file";
 
 		if (shouldUseGifMode()) {
 			if (!["720p", "1080p"].includes(_settings.resolution.value)) {
@@ -351,6 +355,40 @@ export function ExportPage() {
 		return !COMPRESSION_OPTIONS.some(
 			(opt) => Math.abs(opt.bpp - currentBpp) < 0.001,
 		);
+	};
+
+	const canExportInBackground = () =>
+		isWebEditor &&
+		settings.exportTo === "file" &&
+		settings.format === "Mp4" &&
+		!cursorOnly() &&
+		!hasTransparentBackground() &&
+		!(advancedMode() && isCustomBpp());
+	const [backgroundExportStarting, setBackgroundExportStarting] =
+		createSignal(false);
+	const exportInBackground = async () => {
+		if (backgroundExportStarting()) return;
+		setBackgroundExportStarting(true);
+		try {
+			// The render is built from the stored project, so pending edits go first.
+			await flushProjectConfig();
+			await invoke("webEditorBackgroundExport", {
+				resolution: [settings.resolution.width, settings.resolution.height],
+				fps: settings.fps,
+				compression: settings.compression,
+			});
+			toast.success(
+				"Exporting in the background. We'll email you a download link when it's ready.",
+			);
+		} catch (error) {
+			toast.error(
+				error instanceof Error
+					? error.message
+					: "Background export could not start",
+			);
+		} finally {
+			setBackgroundExportStarting(false);
+		}
 	};
 
 	const _matchingPreset = () => {
@@ -653,14 +691,31 @@ export function ExportPage() {
 		}
 	});
 
-	createEffect(() => {
-		if (exportState.type !== "idle") {
-			estimateGeneration += 1;
-			pendingEstimate = null;
-			setEstimateLoading(false);
-			void commands.cancelExportEstimates().catch(console.warn);
-		}
-	});
+	createEffect(
+		on(
+			() => exportState.type,
+			(type, previous) => {
+				if (type !== "idle") {
+					estimateGeneration += 1;
+					pendingEstimate = null;
+					setEstimateLoading(false);
+					void commands.cancelExportEstimates().catch(console.warn);
+					return;
+				}
+				// An export that started before its estimate landed cancelled it.
+				const request = latestPreviewRequest;
+				if (
+					previous &&
+					!renderEstimate() &&
+					request &&
+					isPreviewCurrent(request)
+				) {
+					setEstimateLoading(true);
+					void fetchEstimate(request);
+				}
+			},
+		),
+	);
 
 	let cancelCurrentExport: (() => void) | null = null;
 
@@ -771,10 +826,22 @@ export function ExportPage() {
 		},
 	}));
 
+	// The web editor shows why a download failed next to the button rather
+	// than in a browser alert.
+	const [saveError, setSaveError] = createSignal<string | null>(null);
+	createEffect(
+		on(
+			() => JSON.stringify(currentExportSettings()),
+			() => setSaveError(null),
+			{ defer: true },
+		),
+	);
+
 	const save = createMutation(() => ({
 		mutationFn: async () => {
 			setIsCancelled(false);
 			if (exportState.type !== "idle") return;
+			setSaveError(null);
 			const extension = exportFileExtension();
 			const customBpp =
 				advancedMode() && isCustomBpp() ? compressionBpp() : null;
@@ -819,11 +886,12 @@ export function ExportPage() {
 				setExportState({ type: "idle" });
 				return;
 			}
-			commands.globalMessageDialog(
+			const message =
 				error instanceof Error
 					? error.message
-					: `Failed to export recording: ${error}`,
-			);
+					: `Failed to export recording: ${error}`;
+			if (isWebEditor) setSaveError(message);
+			else commands.globalMessageDialog(message);
 			setExportState({ type: "idle" });
 		},
 		onSuccess() {
@@ -842,8 +910,10 @@ export function ExportPage() {
 				await refetchMeta();
 				setReuploading(!!meta().sharing);
 
-				const existingAuth = await authStore.get();
-				if (!existingAuth) createSignInMutation();
+				const existingAuth = isWebEditor
+					? { user_id: "web" }
+					: await authStore.get();
+				if (!existingAuth && !isWebEditor) createSignInMutation();
 				trackEvent("create_shareable_link_clicked", {
 					resolution: settings.resolution,
 					fps: settings.fps,
@@ -962,13 +1032,21 @@ export function ExportPage() {
 			label:
 				option.value === "link" && meta().sharing ? "Reupload" : option.label,
 			icon: option.icon,
-			disabled: option.value === "link" && disablesLinkExport(),
+			disabled:
+				(option.value === "link" && disablesLinkExport()) ||
+				(isWebEditor && option.value === "clipboard"),
 			disabledReason:
-				option.value === "link" && disablesLinkExport()
-					? cursorOnly()
-						? "Cursor-only exports can only be saved to a file or clipboard"
-						: "Transparent exports can only be saved to a file or clipboard"
-					: undefined,
+				isWebEditor && option.value === "clipboard"
+					? "Use File to download. Browser clipboard cannot paste exports as files"
+					: option.value === "link" && disablesLinkExport()
+						? cursorOnly()
+							? isWebEditor
+								? "Cursor-only exports can only be saved to a file"
+								: "Cursor-only exports can only be saved to a file or clipboard"
+							: isWebEditor
+								? "Transparent exports can only be saved to a file"
+								: "Transparent exports can only be saved to a file or clipboard"
+						: undefined,
 		}));
 
 	const formatOptions = () =>
@@ -1446,7 +1524,7 @@ export function ExportPage() {
 					</div>
 
 					<div class="px-4 pt-3 pb-4 border-t border-ed-line">
-						{settings.exportTo === "link" && !auth.data ? (
+						{settings.exportTo === "link" && !auth.data && !isWebEditor ? (
 							<button
 								type="button"
 								class={cx(
@@ -1508,6 +1586,31 @@ export function ExportPage() {
 								)}
 							</button>
 						)}
+						<Show when={settings.exportTo === "file" && saveError()}>
+							{(message) => (
+								<p
+									role="alert"
+									class="mt-2 text-[12px] leading-snug text-red-11"
+								>
+									{message()}
+								</p>
+							)}
+						</Show>
+						<Show when={canExportInBackground()}>
+							<button
+								type="button"
+								class={cx(
+									EXPORT_CTA_CLASS,
+									"mt-2 h-9 bg-transparent text-ed-text-2 hover:bg-ed-ctl hover:text-ed-text-1",
+								)}
+								disabled={backgroundExportStarting()}
+								onClick={() => void exportInBackground()}
+							>
+								{backgroundExportStarting()
+									? "Starting…"
+									: "Export in background"}
+							</button>
+						</Show>
 					</div>
 				</div>
 			</div>
@@ -1751,7 +1854,7 @@ export function ExportPage() {
 										)}
 									</Show>
 
-									<Show when={exportState.action === "save"}>
+									<Show when={exportState.action === "save" && !isWebEditor}>
 										<div class="flex gap-3">
 											<Button
 												variant="dark"
@@ -2023,6 +2126,9 @@ function ActiveExport(props: {
 							{rendered().totalFrames.toLocaleString()} frames
 						</p>
 					)}
+				</Show>
+				<Show when={serverExport()}>
+					<p class="text-[12px] text-ed-text-2">Rendering on Cap's servers</p>
 				</Show>
 			</div>
 			<Show when={props.onCancel}>

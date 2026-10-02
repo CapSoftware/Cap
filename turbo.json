@@ -12,6 +12,15 @@
 			"dependsOn": ["^build"],
 			"outputs": [".output/**"]
 		},
+		"@cap/editor-solid-web#build": {
+			"cache": false,
+			"outputs": []
+		},
+		"@cap/web#build": {
+			"cache": false,
+			"dependsOn": ["^build"],
+			"outputs": [".next/**", "!.next/cache/**"]
+		},
 		"@cap/chrome-extension#build": {
 			"inputs": [
 				"**/*.ts",

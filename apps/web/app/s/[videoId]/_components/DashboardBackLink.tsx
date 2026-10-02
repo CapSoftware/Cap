@@ -3,11 +3,11 @@
 import type { Organisation } from "@cap/web-domain";
 import clsx from "clsx";
 import { ChevronLeft, Folder, LayoutGrid, Users } from "lucide-react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
 import { updateActiveOrganization } from "@/app/(org)/dashboard/_components/Navbar/server";
+import { HoverPrefetchLink } from "@/components/hover-prefetch-link";
 import type { ShareDashboardDestination } from "@/lib/share-dashboard-destination";
 
 const DESTINATION_ICONS = {
@@ -86,13 +86,13 @@ export function DashboardBackLink({
 	}
 
 	return (
-		<Link
+		<HoverPrefetchLink
 			href={destination.href}
 			aria-label={accessibleLabel}
 			title={compact ? accessibleLabel : undefined}
 			className={classes}
 		>
 			{content}
-		</Link>
+		</HoverPrefetchLink>
 	);
 }

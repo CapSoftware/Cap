@@ -185,6 +185,7 @@ type TranscriptionStatus =
 interface ShareProps {
 	data: VideoData;
 	initialPlaybackUrl?: Promise<string | null>;
+	initialPlaybackTrusted?: boolean;
 	comments: MaybePromise<CommentWithAuthor[]>;
 	views: MaybePromise<number>;
 	screenshotImageUrl?: string | null;
@@ -194,6 +195,7 @@ interface ShareProps {
 	userOrganizations?: { id: string; name: string }[];
 	viewerId?: string | null;
 	isEditProcessing: boolean;
+	renderStarting?: boolean;
 	recordingStopped?: boolean;
 	defaultPlaybackSpeed?: number;
 	initialAiData?: {
@@ -324,6 +326,7 @@ const useVideoStatus = (
 export const Share = ({
 	data,
 	initialPlaybackUrl,
+	initialPlaybackTrusted = false,
 	comments,
 	views,
 	screenshotImageUrl,
@@ -331,6 +334,7 @@ export const Share = ({
 	videoSettings,
 	viewerId,
 	isEditProcessing,
+	renderStarting = false,
 	recordingStopped = false,
 	defaultPlaybackSpeed,
 	aiGenerationAvailable,
@@ -954,6 +958,7 @@ export const Share = ({
 												) : (
 													<ShareVideo
 														initialPlaybackUrl={initialPlaybackUrl}
+														initialPlaybackTrusted={initialPlaybackTrusted}
 														data={shareVideoData}
 														comments={comments}
 														areChaptersDisabled={areChaptersDisabled}
@@ -987,6 +992,7 @@ export const Share = ({
 														}
 														showPlaybackStatusBadge={viewerId === data.owner.id}
 														isEditProcessing={isEditProcessing}
+														renderStarting={renderStarting}
 														recordingStopped={recordingStopped}
 														defaultPlaybackSpeed={defaultPlaybackSpeed}
 														viewerIsOwner={viewerId === data.owner.id}

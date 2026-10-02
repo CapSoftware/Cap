@@ -330,6 +330,7 @@ export function rippleDeleteAllTracks(
 		transitions?: ClipTransition[] | null;
 		styleSegments?: Array<{ start: number; end: number }> | null;
 		imageSegments?: Array<{ start: number; end: number }> | null;
+		waveformSegments?: Array<{ start: number; end: number }> | null;
 		zoomSegments?: Array<{ start: number; end: number }> | null;
 		sceneSegments?: Array<{ start: number; end: number }> | null;
 		maskSegments?: RippleMaskSegment[] | null;
@@ -408,7 +409,11 @@ export function rippleDeleteAllTracks(
 	const overlayShift =
 		shiftDuration +
 		(overlayCutEnd - overlayCutStart - (trackCutEnd - trackCutStart));
-	for (const track of [timeline.styleSegments, timeline.imageSegments]) {
+	for (const track of [
+		timeline.styleSegments,
+		timeline.imageSegments,
+		timeline.waveformSegments,
+	]) {
 		if (track)
 			rippleDeleteFromTrack(
 				track,

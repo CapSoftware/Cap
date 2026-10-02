@@ -91,6 +91,16 @@ export const MP4_MIME_TYPES = {
 	],
 } as const;
 
+// Streamed during recording where the browser can: H.264 needs no re-encode
+// before rendering (the level is set from the capture size at start).
+export const STREAMING_MP4_MIME_TYPES = {
+	withAudio: [
+		'video/mp4;codecs="avc1.64002A,mp4a.40.2"',
+		'video/mp4;codecs="avc1.64002A,opus"',
+	],
+	videoOnly: ['video/mp4;codecs="avc1.64002A"'],
+} as const;
+
 export const WEBM_MIME_TYPES = {
 	withAudio: ["video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus"],
 	videoOnly: ["video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm"],

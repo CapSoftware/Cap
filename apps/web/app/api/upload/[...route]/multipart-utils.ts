@@ -44,3 +44,21 @@ export const getMultipartFileKey = (
 
 export const isRawRecorderUpload = (subpath: string) =>
 	subpath.startsWith("raw-upload.");
+
+export const isDisplayRecorderUpload = (subpath: string) =>
+	/^raw-upload\.(webm|mp4)$/.test(subpath);
+
+export const isCameraRecorderUpload = (subpath: string) =>
+	/^camera-upload\.(webm|mp4)$/.test(subpath);
+
+export const isInputEventsRecorderUpload = (subpath: string) =>
+	subpath === "input-events-upload.ndjson";
+
+export const getAudioRecorderUploadKind = (
+	subpath: string,
+): "mic" | "systemAudio" | null => {
+	const match = /^(mic|system-audio)-upload\.(webm|mp4)$/.exec(subpath);
+	if (match?.[1] === "mic") return "mic";
+	if (match?.[1] === "system-audio") return "systemAudio";
+	return null;
+};

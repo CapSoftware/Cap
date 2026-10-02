@@ -1,0 +1,9 @@
+[build]
+dockerfilePath = "apps/media-server/Dockerfile.editor"
+
+[deploy]
+startCommand = "bun run src/editor-worker.ts"
+healthcheckPath = "/health"
+healthcheckTimeout = 60
+restartPolicyType = "ALWAYS"
+restartPolicyMaxRetries = 50

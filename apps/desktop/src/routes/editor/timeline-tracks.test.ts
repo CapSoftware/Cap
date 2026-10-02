@@ -111,6 +111,25 @@ describe("mixed visual layers", () => {
 		);
 	});
 
+	it("stacks waveform lanes between text and images like the renderer", () => {
+		const lane = [{ track: 0, start: 0, end: 4 }];
+		expect(
+			getOverlayTrackRows({
+				timeline: {
+					textSegments: lane,
+					waveformSegments: lane,
+					imageSegments: lane,
+					maskSegments: lane,
+				},
+			}),
+		).toEqual([
+			{ kind: "text", track: 0 },
+			{ kind: "waveform", track: 0 },
+			{ kind: "image", track: 0 },
+			{ kind: "mask", track: 0 },
+		]);
+	});
+
 	it("remaps references when an entire lane is deleted", () => {
 		const order: OverlayTrack[] = [{ kind: "image", track: 2 }, ...visualStack];
 		expect(removeOverlayTrack(order, "image", 0)).toEqual([

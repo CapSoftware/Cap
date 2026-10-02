@@ -11,6 +11,7 @@ import {
 	Logo,
 } from "@cap/ui";
 import type { ViewerSettingKey } from "@cap/web-backend";
+import type { Organisation } from "@cap/web-domain";
 import {
 	faChartSimple,
 	faChevronDown,
@@ -40,7 +41,14 @@ import {
 import dynamic from "next/dynamic";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
-import { Suspense, use, useEffect, useRef, useState } from "react";
+import {
+	type MouseEvent as ReactMouseEvent,
+	Suspense,
+	use,
+	useEffect,
+	useRef,
+	useState,
+} from "react";
 import { toast } from "sonner";
 import {
 	hideShareableLinkCapLogo,
@@ -48,18 +56,29 @@ import {
 } from "@/actions/organization/shareable-link-icon";
 import { editTitle } from "@/actions/videos/edit-title";
 import type { VideoStatusResult } from "@/actions/videos/get-status";
+import { updateActiveOrganization } from "@/app/(org)/dashboard/_components/Navbar/server";
 import { useDashboardContext } from "@/app/(org)/dashboard/DashboardContext";
 import type { Spaces } from "@/app/(org)/dashboard/dashboard-data";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
+import {
+	EditorShellBar,
+	EditorShellBrand,
+	EditorShellTab,
+	EditorTabLabel,
+	RecordVideoLink,
+} from "@/components/editor-shell/editor-shell-bar";
+import { ShareLinkTab } from "@/components/editor-shell/share-link-tab";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { Tooltip } from "@/components/Tooltip";
+import { rememberEntryFrame } from "@/lib/editor-entry-frame";
 import type { ShareDashboardDestination } from "@/lib/share-dashboard-destination";
+import { formatTimestamp, shareLinkUrl } from "@/lib/share-link";
 import {
 	copyRichVideoLink,
 	videoPreviewImageUrl,
 } from "@/lib/video-share-clipboard";
 import { usePublicEnv } from "@/utils/public-env";
-import { navigateWithTransition } from "@/utils/view-transition";
+import { navigateWithTransition, nextPageReady } from "@/utils/view-transition";
 import type { SharePageBranding, VideoData } from "../types";
 import { DashboardBackLink } from "./DashboardBackLink";
 import { describeShareAudience } from "./share-audience";
@@ -156,6 +175,7 @@ export const ShareHeader = ({
 	canManageSharePageBranding = false,
 	canDownload = false,
 	hasEdits = false,
+	opensStudio = false,
 	views,
 	dashboardDestination = null,
 }: {
@@ -187,6 +207,8 @@ export const ShareHeader = ({
 	canManageSharePageBranding?: boolean;
 	canDownload?: boolean;
 	hasEdits?: boolean;
+	/** The owner edits in the studio editor, which doesn't need Cap Pro to open. */
+	opensStudio?: boolean;
 	/**
 	 * Shown to every viewer, not just the owner. The sidebar's analytics row is
 	 * members-only, which left a shared link with no sense of reach at all.
@@ -271,6 +293,9 @@ export const ShareHeader = ({
 	const titleRevealEndTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
 		null,
 	);
+
+	// Coming back from the editor, its transition waits for this page.
+	useEffect(() => nextPageReady(), []);
 
 	useEffect(() => {
 		if (!showCopyOptions) return;
@@ -428,16 +453,8 @@ export const ShareHeader = ({
 		}
 	};
 
-	const getVideoLink = () => {
-		if (
-			(NODE_ENV === "development" || buildEnv.NEXT_PUBLIC_IS_CAP) &&
-			customDomain &&
-			domainVerified
-		) {
-			return `https://${customDomain}/s/${data.id}`;
-		}
-		return `${webUrl}/s/${data.id}`;
-	};
+	const getVideoLink = () =>
+		shareLinkUrl(data.id, domainVerified ? (customDomain ?? null) : null);
 
 	const getDisplayLink = () => {
 		if (
@@ -448,15 +465,6 @@ export const ShareHeader = ({
 			return `${customDomain}/s/${data.id}`;
 		}
 		return `${webUrl}/s/${data.id}`;
-	};
-
-	const formatTimestamp = (seconds: number): string => {
-		const h = Math.floor(seconds / 3600);
-		const m = Math.floor((seconds % 3600) / 60);
-		const s = seconds % 60;
-		if (h > 0)
-			return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
-		return `${m}:${String(s).padStart(2, "0")}`;
 	};
 
 	const copyShareLink = (url: string) =>
@@ -656,13 +664,49 @@ export const ShareHeader = ({
 		!data.isScreenshot &&
 		!data.hasActiveUpload &&
 		(data.source.type === "desktopMP4" || data.source.type === "webMP4");
+	// Owners who edit in Studio get the editor's bar here too: the share link
+	// and the editor as two sides of one toggle.
+	const showsEditorBar =
+		isOwner &&
+		opensStudio &&
+		!data.isScreenshot &&
+		(data.source.type === "desktopMP4" || data.source.type === "webMP4");
 	const handleEditVideo = () => {
-		if (userIsOwnerAndNotPro) {
+		if (userIsOwnerAndNotPro && !opensStudio) {
 			setUpgradeModalOpen(true);
 			return;
 		}
 
-		navigateWithTransition("edit-enter", () => push(`/s/${data.id}/edit`));
+		rememberEntryFrame(
+			data.id,
+			document.querySelector<HTMLVideoElement>("[data-edit-video] video"),
+		);
+		navigateWithTransition(
+			"edit-enter",
+			() => push(`/s/${data.id}/edit${opensStudio ? "/studio" : ""}`),
+			{ waitForNextPage: opensStudio },
+		);
+	};
+
+	// The editor bar's way back goes where the dashboard link would, switching
+	// to the Cap's organization first like it does.
+	const dashboardBackHref = dashboardDestination?.href ?? "/dashboard/caps";
+	const handleEditorBarBack = async (
+		event: ReactMouseEvent<HTMLAnchorElement>,
+	) => {
+		const organizationId = dashboardDestination?.switchOrganizationId;
+		if (!organizationId) return;
+		event.preventDefault();
+		try {
+			await updateActiveOrganization(
+				organizationId as Organisation.OrganisationId,
+			);
+		} catch (error) {
+			console.error("Failed to switch organization", error);
+			toast.error("Couldn't open your dashboard. Please try again.");
+			return;
+		}
+		push(dashboardBackHref);
 	};
 
 	const handleHideBranding = async () => {
@@ -908,10 +952,56 @@ export const ShareHeader = ({
 					)}
 				</>
 			)}
+			{showsEditorBar && (
+				<div className="-mx-4 border-b border-gray-5 lg:-mx-8">
+					<EditorShellBar
+						light="white"
+						left={
+							<EditorShellBrand
+								title="Dashboard"
+								backHref={dashboardBackHref}
+								onClick={(event) => void handleEditorBarBack(event)}
+								prefetchOnHover
+							/>
+						}
+						center={
+							<>
+								<ShareLinkTab
+									active
+									videoId={data.id}
+									shareUrl={getVideoLink()}
+									title={displayTitle}
+									isPublic={Boolean(data.public)}
+									playbackTime={() =>
+										document.querySelector<HTMLVideoElement>(
+											"[data-edit-video] video",
+										)?.currentTime ?? 0
+									}
+									onPrivacyClick={() => setIsSharingDialogOpen(true)}
+								/>
+								<EditorShellTab
+									active={false}
+									disabled={!canEditVideo}
+									onClick={handleEditVideo}
+								>
+									<EditorTabLabel />
+								</EditorShellTab>
+							</>
+						}
+						right={<RecordVideoLink prefetchOnHover />}
+					/>
+				</div>
+			)}
 			{/* Sits in the page bar above both panes, so the spacing is the bar's
-			    own padding rather than a top margin against the video. */}
-			<div className={clsx("pb-4", dashboardDestination ? "pt-2" : "pt-4")}>
-				{dashboardDestination && (
+			    own padding rather than a top margin against the video. The editor
+			    bar has its own way back to the dashboard. */}
+			<div
+				className={clsx(
+					"pb-4",
+					dashboardDestination && !showsEditorBar ? "pt-2" : "pt-4",
+				)}
+			>
+				{dashboardDestination && !showsEditorBar && (
 					<DashboardBackLink
 						destination={dashboardDestination}
 						className="-ml-1.5 mb-1.5"
@@ -1024,7 +1114,7 @@ export const ShareHeader = ({
 											icon={faLock}
 										/>
 									)}
-									{renderCopyLinkControl("link")}
+									{!showsEditorBar && renderCopyLinkControl("link")}
 								</div>
 								{userIsOwnerAndNotPro && (
 									<button
@@ -1055,7 +1145,11 @@ export const ShareHeader = ({
 									<p className="truncate text-sm text-gray-12">
 										{data.owner.name}
 									</p>
-									<p className="truncate text-xs text-gray-10">
+									{/* Relative to now, so the server's render can be a unit behind. */}
+									<p
+										className="truncate text-xs text-gray-10"
+										suppressHydrationWarning
+									>
 										{fromNow(data.createdAt)}
 										{views !== undefined && (
 											<Suspense fallback={null}>
@@ -1076,13 +1170,15 @@ export const ShareHeader = ({
 						{user !== null && (
 							<div className="grid auto-cols-fr grid-flow-col gap-2 sm:flex sm:items-center lg:flex-1">
 								{renderShareButton(ACTION_BAR_BUTTON_CLASS)}
-								<div className="min-w-0 lg:hidden">
-									{renderCopyLinkControl("button")}
-								</div>
+								{!showsEditorBar && (
+									<div className="min-w-0 lg:hidden">
+										{renderCopyLinkControl("button")}
+									</div>
+								)}
 								<div className="contents sm:ml-auto sm:flex sm:items-center sm:gap-2">
 									{isOwner && (
 										<>
-											{canEditVideo && (
+											{canEditVideo && !showsEditorBar && (
 												<Button
 													variant="gray"
 													size="xs"
@@ -1136,11 +1232,15 @@ export const ShareHeader = ({
 												>
 													{/* The header buttons phones don't show. Hidden from
 												    `sm` up so nothing is offered twice. Share and copy
-												    link keep their own buttons at every width. */}
+												    link keep their own buttons at every width. With the
+												    editor bar, Edit video has no header button. */}
 													{canEditVideo && (
 														<DropdownMenuItem
 															onClick={handleEditVideo}
-															className="flex items-center gap-2 rounded-lg sm:hidden"
+															className={clsx(
+																"flex items-center gap-2 rounded-lg",
+																!showsEditorBar && "sm:hidden",
+															)}
 														>
 															<Scissors className="size-3.5" />
 															<p className="text-sm text-gray-12">Edit video</p>
@@ -1160,7 +1260,13 @@ export const ShareHeader = ({
 															View analytics
 														</p>
 													</DropdownMenuItem>
-													<DropdownMenuSeparator className="sm:hidden" />
+													<DropdownMenuSeparator
+														className={
+															showsEditorBar && canEditVideo
+																? undefined
+																: "sm:hidden"
+														}
+													/>
 													<DropdownMenuItem
 														onClick={() => setIsSharingDialogOpen(true)}
 														className="flex items-center gap-2 rounded-lg"

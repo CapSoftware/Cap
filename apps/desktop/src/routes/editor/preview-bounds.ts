@@ -54,6 +54,13 @@ export function createPreviewBoundsUpdater(options: {
 				}
 				return;
 			}
+			// Until the first frame the preview is hidden and sizes the canvas
+			// it will first draw into, so it follows the layout without delay.
+			if (!hasFrame) {
+				options.cancel();
+				options.commit(bounds);
+				return;
+			}
 			const current = options.current();
 			if (current.width === 0 && current.height === 0) {
 				options.commit(bounds);

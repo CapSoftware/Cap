@@ -199,6 +199,10 @@ body {
 	cursor: pointer;
 }
 
+.action-button[hidden] {
+	display: none;
+}
+
 .action-button:hover:not(:disabled) {
 	background: var(--ink);
 	color: var(--paper);

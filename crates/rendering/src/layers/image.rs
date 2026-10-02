@@ -1,9 +1,13 @@
 use std::{
     collections::{HashMap, HashSet},
-    fs::{File, Metadata},
-    io::{BufReader, ErrorKind},
+    io::ErrorKind,
     path::{Path, PathBuf},
     time::SystemTime,
+};
+#[cfg(not(target_arch = "wasm32"))]
+use std::{
+    fs::{File, Metadata},
+    io::BufReader,
 };
 
 use bytemuck::{Pod, Zeroable};
@@ -30,12 +34,16 @@ enum FileVersion {
         created: Option<SystemTime>,
         #[cfg(unix)]
         identity: (u64, u64, i64, i64),
+        #[cfg(target_arch = "wasm32")]
+        generation: u64,
     },
     Unavailable(ErrorKind),
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     NotFile,
 }
 
 impl FileVersion {
+    #[cfg(not(target_arch = "wasm32"))]
     fn from_metadata(metadata: &Metadata) -> Self {
         if !metadata.is_file() {
             return Self::NotFile;
@@ -57,10 +65,24 @@ impl FileVersion {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn read(path: &Path) -> Self {
         match std::fs::metadata(path) {
             Ok(metadata) => Self::from_metadata(&metadata),
             Err(error) => Self::Unavailable(error.kind()),
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn read(path: &Path) -> Self {
+        match crate::platform::browser_assets::get(path) {
+            Some(asset) => Self::File {
+                length: asset.byte_len() as u64,
+                modified: None::<SystemTime>,
+                created: None,
+                generation: asset.generation,
+            },
+            None => Self::Unavailable(ErrorKind::NotFound),
         }
     }
 }
@@ -216,11 +238,11 @@ fn premultiplied_mips(mut rgba: RgbaImage, max_dimension: u32) -> Vec<RgbaImage>
     levels
 }
 
-fn decode_image(
+#[cfg(not(target_arch = "wasm32"))]
+fn image_source_reader(
     path: &Path,
     expected: &FileVersion,
-    max_dimension: u32,
-) -> anyhow::Result<Vec<RgbaImage>> {
+) -> anyhow::Result<image::ImageReader<BufReader<File>>> {
     let file = File::open(path)?;
     let metadata = file.metadata()?;
     anyhow::ensure!(
@@ -231,7 +253,56 @@ fn decode_image(
         metadata.is_file() && metadata.len() <= MAX_IMAGE_SOURCE_BYTES,
         "Image file exceeds the decode limit"
     );
-    let mut reader = image::ImageReader::new(BufReader::new(file)).with_guessed_format()?;
+    Ok(image::ImageReader::new(BufReader::new(file)).with_guessed_format()?)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn image_source_reader(
+    path: &Path,
+    expected: &FileVersion,
+) -> anyhow::Result<image::ImageReader<std::io::Cursor<std::sync::Arc<[u8]>>>> {
+    let asset = crate::platform::browser_assets::get(path)
+        .ok_or_else(|| anyhow::anyhow!("Image is not loaded"))?;
+    anyhow::ensure!(
+        FileVersion::read(path) == *expected,
+        "Image changed before decoding"
+    );
+    let crate::platform::browser_assets::BrowserAssetData::Encoded(bytes) = asset.data else {
+        anyhow::bail!("Image is already decoded");
+    };
+    anyhow::ensure!(
+        bytes.len() as u64 <= MAX_IMAGE_SOURCE_BYTES,
+        "Image file exceeds the decode limit"
+    );
+    Ok(image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format()?)
+}
+
+/// Pixels the page already decoded off the main thread.
+#[cfg(target_arch = "wasm32")]
+fn decoded_browser_image(path: &Path, expected: &FileVersion) -> anyhow::Result<Option<RgbaImage>> {
+    let Some(asset) = crate::platform::browser_assets::get(path) else {
+        return Ok(None);
+    };
+    let Some(image) = asset.rgba_image() else {
+        return Ok(None);
+    };
+    anyhow::ensure!(
+        FileVersion::read(path) == *expected,
+        "Image changed before decoding"
+    );
+    Ok(Some(image))
+}
+
+fn decode_image(
+    path: &Path,
+    expected: &FileVersion,
+    max_dimension: u32,
+) -> anyhow::Result<Vec<RgbaImage>> {
+    #[cfg(target_arch = "wasm32")]
+    if let Some(image) = decoded_browser_image(path, expected)? {
+        return Ok(premultiplied_mips(image, max_dimension));
+    }
+    let mut reader = image_source_reader(path, expected)?;
     let mut limits = image::Limits::default();
     limits.max_image_width = Some(MAX_IMAGE_SOURCE_DIMENSION);
     limits.max_image_height = Some(MAX_IMAGE_SOURCE_DIMENSION);
@@ -430,12 +501,12 @@ impl ImageLayer {
         let decode_path = path.to_path_buf();
         let decode_version = version.clone();
         let max_dimension = device.limits().max_texture_dimension_2d;
-        let decoded = tokio::task::spawn_blocking(move || {
+        let decoded = crate::platform::run_blocking(move || {
             decode_image(&decode_path, &decode_version, max_dimension)
         })
         .await;
         let levels = match decoded
-            .map_err(anyhow::Error::from)
+            .map_err(anyhow::Error::msg)
             .and_then(|result| result)
         {
             Ok(levels) => levels,
@@ -566,7 +637,7 @@ impl ImageLayer {
             .iter()
             .map(|(segment, _)| project_path.join(&segment.path))
             .collect();
-        let versions = match tokio::task::spawn_blocking(move || {
+        let versions = match crate::platform::run_blocking(move || {
             paths
                 .into_iter()
                 .map(|path| {

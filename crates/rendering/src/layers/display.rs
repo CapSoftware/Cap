@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use crate::{
     DecodedSegmentFrames, PixelFormat,
-    composite_frame::{CompositeVideoFramePipeline, CompositeVideoFrameUniforms},
+    composite_frame::{CompositeDraw, CompositeVideoFramePipeline, CompositeVideoFrameUniforms},
     decoder::DecodedFrameStorageIdentity,
     yuv_converter::{YuvConverterPipelines, YuvToRgbaConverter},
 };
@@ -28,10 +28,12 @@ pub struct DisplayLayer {
     pending_copy: Option<PendingTextureCopy>,
     prefer_cpu_conversion: bool,
     has_valid_frame: bool,
+    draw: CompositeDraw,
 }
 
 impl DisplayLayer {
     /// Forget the last frame shown, as a new layer would.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn reset_frame_state(&mut self) {
         self.last_recording_time = None;
         self.last_frame_storage = None;
@@ -88,6 +90,7 @@ impl DisplayLayer {
             pending_copy: None,
             prefer_cpu_conversion,
             has_valid_frame: false,
+            draw: CompositeDraw::default(),
         }
     }
 
@@ -155,13 +158,19 @@ impl DisplayLayer {
                 "DisplayLayer::prepare - screen_frame is None, skipping display rendering"
             );
             uniforms.write_to_buffer(queue, &self.uniforms_buffer);
+            self.draw = CompositeDraw::new(&uniforms);
             return (false, frame_size.x, frame_size.y);
         };
+        let mut uniforms = uniforms;
+        screen_frame.apply_source_color_fix(&mut uniforms);
 
         let actual_width = screen_frame.width();
         let actual_height = screen_frame.height();
         let source_size = XY::new(actual_width, actual_height);
         let format = screen_frame.format();
+        #[cfg(target_arch = "wasm32")]
+        self.yuv_converter
+            .set_browser_nv12(screen_frame.browser_nv12());
         let current_recording_time = segment_frames.recording_time;
         let frame_storage = screen_frame.storage_identity();
 
@@ -199,28 +208,31 @@ impl DisplayLayer {
 
             frame_uploaded = match format {
                 PixelFormat::Rgba => {
-                    let frame_data = screen_frame.data();
-                    let src_bytes_per_row = source_size.x * 4;
+                    if !screen_frame.upload_browser_frame(queue, &self.frame_textures[next_texture])
+                    {
+                        let frame_data = screen_frame.data();
+                        let src_bytes_per_row = source_size.x * 4;
 
-                    queue.write_texture(
-                        wgpu::TexelCopyTextureInfo {
-                            texture: &self.frame_textures[next_texture],
-                            mip_level: 0,
-                            origin: wgpu::Origin3d::ZERO,
-                            aspect: wgpu::TextureAspect::All,
-                        },
-                        frame_data,
-                        wgpu::TexelCopyBufferLayout {
-                            offset: 0,
-                            bytes_per_row: Some(src_bytes_per_row),
-                            rows_per_image: Some(source_size.y),
-                        },
-                        wgpu::Extent3d {
-                            width: source_size.x,
-                            height: source_size.y,
-                            depth_or_array_layers: 1,
-                        },
-                    );
+                        queue.write_texture(
+                            wgpu::TexelCopyTextureInfo {
+                                texture: &self.frame_textures[next_texture],
+                                mip_level: 0,
+                                origin: wgpu::Origin3d::ZERO,
+                                aspect: wgpu::TextureAspect::All,
+                            },
+                            frame_data,
+                            wgpu::TexelCopyBufferLayout {
+                                offset: 0,
+                                bytes_per_row: Some(src_bytes_per_row),
+                                rows_per_image: Some(source_size.y),
+                            },
+                            wgpu::Extent3d {
+                                width: source_size.x,
+                                height: source_size.y,
+                                depth_or_array_layers: 1,
+                            },
+                        );
+                    }
                     true
                 }
                 PixelFormat::Nv12 => {
@@ -549,6 +561,7 @@ impl DisplayLayer {
         }
 
         uniforms.write_to_buffer(queue, &self.uniforms_buffer);
+        self.draw = CompositeDraw::new(&uniforms);
         (
             (skipped && self.has_valid_frame) || frame_uploaded,
             actual_width,
@@ -571,13 +584,19 @@ impl DisplayLayer {
                 "DisplayLayer::prepare_with_encoder - screen_frame is None, skipping display rendering"
             );
             uniforms.write_to_buffer(queue, &self.uniforms_buffer);
+            self.draw = CompositeDraw::new(&uniforms);
             return false;
         };
+        let mut uniforms = uniforms;
+        screen_frame.apply_source_color_fix(&mut uniforms);
 
         let actual_width = screen_frame.width();
         let actual_height = screen_frame.height();
         let source_size = XY::new(actual_width, actual_height);
         let format = screen_frame.format();
+        #[cfg(target_arch = "wasm32")]
+        self.yuv_converter
+            .set_browser_nv12(screen_frame.browser_nv12());
         let current_recording_time = segment_frames.recording_time;
         let frame_storage = screen_frame.storage_identity();
 
@@ -615,28 +634,31 @@ impl DisplayLayer {
 
             frame_uploaded = match format {
                 PixelFormat::Rgba => {
-                    let frame_data = screen_frame.data();
-                    let src_bytes_per_row = source_size.x * 4;
+                    if !screen_frame.upload_browser_frame(queue, &self.frame_textures[next_texture])
+                    {
+                        let frame_data = screen_frame.data();
+                        let src_bytes_per_row = source_size.x * 4;
 
-                    queue.write_texture(
-                        wgpu::TexelCopyTextureInfo {
-                            texture: &self.frame_textures[next_texture],
-                            mip_level: 0,
-                            origin: wgpu::Origin3d::ZERO,
-                            aspect: wgpu::TextureAspect::All,
-                        },
-                        frame_data,
-                        wgpu::TexelCopyBufferLayout {
-                            offset: 0,
-                            bytes_per_row: Some(src_bytes_per_row),
-                            rows_per_image: Some(source_size.y),
-                        },
-                        wgpu::Extent3d {
-                            width: source_size.x,
-                            height: source_size.y,
-                            depth_or_array_layers: 1,
-                        },
-                    );
+                        queue.write_texture(
+                            wgpu::TexelCopyTextureInfo {
+                                texture: &self.frame_textures[next_texture],
+                                mip_level: 0,
+                                origin: wgpu::Origin3d::ZERO,
+                                aspect: wgpu::TextureAspect::All,
+                            },
+                            frame_data,
+                            wgpu::TexelCopyBufferLayout {
+                                offset: 0,
+                                bytes_per_row: Some(src_bytes_per_row),
+                                rows_per_image: Some(source_size.y),
+                            },
+                            wgpu::Extent3d {
+                                width: source_size.x,
+                                height: source_size.y,
+                                depth_or_array_layers: 1,
+                            },
+                        );
+                    }
                     true
                 }
                 PixelFormat::Nv12 => {
@@ -937,6 +959,7 @@ impl DisplayLayer {
         }
 
         uniforms.write_to_buffer(queue, &self.uniforms_buffer);
+        self.draw = CompositeDraw::new(&uniforms);
         (skipped && self.has_valid_frame) || frame_uploaded
     }
 
@@ -977,7 +1000,7 @@ impl DisplayLayer {
         }
 
         if let Some(bind_group) = &self.bind_groups[self.current_texture] {
-            pass.set_pipeline(&self.pipeline.render_pipeline);
+            self.draw.bind(&self.pipeline, pass);
             pass.set_bind_group(0, bind_group, &[]);
             pass.draw(0..3, 0..1);
         } else {

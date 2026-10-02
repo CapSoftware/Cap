@@ -95,9 +95,9 @@ const FaqAccordion = () => {
 			a: "We recommend Google Chrome or other Chromium‑based browsers for the most reliable recording and upload behavior. Most modern browsers are supported, but capabilities can vary.",
 		},
 		{
-			id: "pip",
-			q: "How do I keep my webcam visible?",
-			a: "On compatible browsers, selecting a camera opens a picture‑in‑picture window that’s captured when you record fullscreen. We recommend recording fullscreen to keep it on top. If PiP capture isn’t supported, your camera stays within the Cap recorder tab.",
+			id: "webcam",
+			q: "What happens to my webcam when I record my screen?",
+			a: "Cap records your screen and webcam as separate clips. You can move, resize, or remove the webcam in the editor. The camera preview closes during screen capture so it stays out of the screen clip.",
 		},
 		{
 			id: "what-can-i-record",
@@ -112,7 +112,7 @@ const FaqAccordion = () => {
 		{
 			id: "install",
 			q: "Do I need to install the app?",
-			a: `No. You can record in your browser. For longer recordings, system audio, and advanced editing, use Cap Desktop. The Free plan supports up to ${freeMinutes} minutes per recording in the browser.`,
+			a: `No. You can record and edit in your browser. Cap Desktop offers OS-level capture controls. The Free plan supports up to ${freeMinutes} minutes per recording in the browser.`,
 		},
 	];
 

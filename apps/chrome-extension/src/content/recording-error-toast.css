@@ -1,0 +1,27 @@
+.cap-extension-recording-error-toast {
+	position: fixed;
+	top: 20px;
+	left: 50%;
+	z-index: 2147483647;
+	display: flex;
+	max-width: min(440px, calc(100vw - 40px));
+	flex-direction: column;
+	gap: 5px;
+	padding: 12px 16px;
+	border: 1px solid #f1c1c4;
+	border-radius: 12px;
+	background: #fff;
+	box-shadow: 0 12px 40px rgba(0, 0, 0, 0.16);
+	color: #3f171b;
+	font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+	font-size: 12px;
+	line-height: 1.35;
+	pointer-events: auto;
+	transform: translateX(-50%);
+}
+
+.cap-extension-recording-error-toast strong {
+	color: #c9343e;
+	font-size: 13px;
+	font-weight: 600;
+}

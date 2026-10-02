@@ -15,6 +15,8 @@ export type S3Config = {
 	virtualHost: boolean;
 	/** Use the EC2 instance role (IMDSv2) instead of static keys. */
 	imds?: boolean;
+	/** Deadline for aborting a multipart upload after a failed one. */
+	cleanupTimeoutMs?: number;
 	/**
 	 * Canned ACL for new objects. Writing into another account's bucket needs
 	 * `bucket-owner-full-control`, or its owner cannot read what we wrote
@@ -77,6 +79,14 @@ export class S3 {
 	private refreshing: Promise<void> | null = null;
 
 	constructor(readonly config: S3Config) {}
+
+	/**
+	 * Aborting a multipart upload is cleanup; an unresponsive store must not
+	 * hold the caller, and the bucket's lifecycle rule removes what is left.
+	 */
+	private cleanupSignal() {
+		return AbortSignal.timeout(this.config.cleanupTimeoutMs ?? 30_000);
+	}
 
 	/** Refresh instance-role credentials from IMDSv2 when close to expiry. */
 	/**
@@ -281,6 +291,7 @@ export class S3 {
 			headers?: Record<string, string>;
 			body?: Uint8Array | string;
 			expect?: number[];
+			signal?: AbortSignal;
 		} = {},
 	) {
 		const payloadHash =
@@ -291,6 +302,7 @@ export class S3 {
 					: "UNSIGNED-PAYLOAD";
 		await this.ready();
 		for (let attempt = 0; ; attempt++) {
+			options.signal?.throwIfAborted();
 			const signed = this.sign(
 				method,
 				key,
@@ -304,8 +316,10 @@ export class S3 {
 					method,
 					headers: signed.headers,
 					body: options.body as BodyInit | undefined,
+					signal: options.signal,
 				});
 			} catch (error) {
+				if (options.signal?.aborted) throw error;
 				// Object stores drop connections under bursty fan-out; back off
 				// with jitter rather than failing the chunk.
 				if (attempt < 8) {
@@ -390,10 +404,15 @@ export class S3 {
 		});
 	}
 
-	async createMultipart(key: string, contentType: string) {
+	async createMultipart(
+		key: string,
+		contentType: string,
+		signal?: AbortSignal,
+	) {
 		const response = await this.send("POST", key, {
 			query: { uploads: "" },
 			headers: this.writeHeaders(contentType),
+			signal,
 		});
 		const text = await response.text();
 		const match = text.match(/<UploadId>([^<]+)<\/UploadId>/);
@@ -406,10 +425,12 @@ export class S3 {
 		uploadId: string,
 		partNumber: number,
 		body: Uint8Array,
+		signal?: AbortSignal,
 	) {
 		const response = await this.send("PUT", key, {
 			query: { partNumber: String(partNumber), uploadId },
 			body,
+			signal,
 		});
 		const etag = response.headers.get("etag");
 		if (!etag) throw new Error(`no ETag for part ${partNumber}`);
@@ -458,7 +479,7 @@ export class S3 {
 		key: string,
 		uploadId: string,
 		parts: { partNumber: number; etag: string }[],
-		options: { ifNoneMatch?: boolean } = {},
+		options: { ifNoneMatch?: boolean; signal?: AbortSignal } = {},
 	) {
 		const body = `<CompleteMultipartUpload>${parts
 			.sort((a, b) => a.partNumber - b.partNumber)
@@ -475,6 +496,7 @@ export class S3 {
 				...(options.ifNoneMatch ? { "if-none-match": "*" } : {}),
 			},
 			expect: options.ifNoneMatch ? [200, 409, 412] : undefined,
+			signal: options.signal,
 		});
 		if (response.status === 409 || response.status === 412) return false;
 		const text = await response.text();
@@ -519,40 +541,57 @@ export class S3 {
 		key: string,
 		path: string,
 		contentType: string,
-		options: { ifNoneMatch?: boolean } = {},
+		options: { ifNoneMatch?: boolean; signal?: AbortSignal } = {},
 	) {
 		const file = Bun.file(path);
 		const partSize = 64 << 20;
-		const uploadId = await this.createMultipart(key, contentType);
+		const uploadId = await this.createMultipart(
+			key,
+			contentType,
+			options.signal,
+		);
 		try {
 			const parts: { partNumber: number; etag: string }[] = [];
 			for (let start = 0; start === 0 || start < file.size; start += partSize) {
+				options.signal?.throwIfAborted();
 				const body = new Uint8Array(
 					await file.slice(start, start + partSize).arrayBuffer(),
 				);
 				const partNumber = parts.length + 1;
 				parts.push({
 					partNumber,
-					etag: await this.uploadPart(key, uploadId, partNumber, body),
+					etag: await this.uploadPart(
+						key,
+						uploadId,
+						partNumber,
+						body,
+						options.signal,
+					),
 				});
 			}
+			options.signal?.throwIfAborted();
 			if (await this.completeMultipart(key, uploadId, parts, options)) {
 				return file.size;
 			}
-			await this.abortMultipart(key, uploadId).catch(() => {});
+			await this.abortMultipart(key, uploadId, this.cleanupSignal()).catch(
+				() => {},
+			);
 			const existing = await this.head(key);
 			if (!existing) throw new Error(`${key} was being written concurrently`);
 			return existing.size;
 		} catch (error) {
-			await this.abortMultipart(key, uploadId).catch(() => {});
+			await this.abortMultipart(key, uploadId, this.cleanupSignal()).catch(
+				() => {},
+			);
 			throw error;
 		}
 	}
 
-	async abortMultipart(key: string, uploadId: string) {
+	async abortMultipart(key: string, uploadId: string, signal?: AbortSignal) {
 		await this.send("DELETE", key, {
 			query: { uploadId },
 			expect: [204, 200, 404],
+			signal,
 		});
 	}
 

@@ -1,5 +1,7 @@
 "use client";
 
+import { cameraVideoConstraints } from "@cap/recorder-core/capture-streams";
+
 import { LoadingSpinner } from "@cap/ui";
 import clsx from "clsx";
 import {
@@ -84,17 +86,22 @@ const getPreviewMetrics = (
 
 export interface CameraPreviewWindowHandle {
 	stopStream: () => void;
+	getVideoStream: () => MediaStream | null;
+	closePictureInPicture: () => Promise<void>;
 }
 
 interface CameraPreviewWindowProps {
 	cameraId: string;
+	hidden?: boolean;
+	/** 16:9 capture height. Screen recordings record a copy of this stream. */
+	captureHeight?: number;
 	onClose: () => void;
 }
 
 export const CameraPreviewWindow = forwardRef<
 	CameraPreviewWindowHandle,
 	CameraPreviewWindowProps
->(({ cameraId, onClose }, ref) => {
+>(({ cameraId, hidden = false, captureHeight = 1080, onClose }, ref) => {
 	const [size, setSize] = useState<CameraPreviewSize>("sm");
 	const [shape, setShape] = useState<CameraPreviewShape>("round");
 	const [mirrored, setMirrored] = useState(false);
@@ -150,14 +157,33 @@ export const CameraPreviewWindow = forwardRef<
 			videoRef.current.srcObject = null;
 		}
 	}, []);
+	const getVideoStream = useCallback(() => streamRef.current, []);
+	const closePictureInPicture = useCallback(async () => {
+		const video = videoRef.current as AutoPictureInPictureVideo | null;
+		if (video && "autoPictureInPicture" in video) {
+			video.autoPictureInPicture = false;
+		}
+		autoPictureInPictureRef.current = false;
+		if (video && document.pictureInPictureElement === video) {
+			await document.exitPictureInPicture();
+		}
+	}, []);
 
 	useImperativeHandle(
 		ref,
 		() => ({
 			stopStream,
+			getVideoStream,
+			closePictureInPicture,
 		}),
-		[stopStream],
+		[stopStream, getVideoStream, closePictureInPicture],
 	);
+
+	useEffect(() => {
+		if (hidden && document.pictureInPictureElement === videoRef.current) {
+			void document.exitPictureInPicture().catch(() => {});
+		}
+	}, [hidden]);
 
 	useEffect(() => {
 		if (!canUseAutoPiPAttribute) {
@@ -178,7 +204,7 @@ export const CameraPreviewWindow = forwardRef<
 			}
 
 			pipVideo = maybeVideo;
-			pipVideo.autoPictureInPicture = true;
+			pipVideo.autoPictureInPicture = !hidden;
 		};
 
 		attachAttribute();
@@ -192,7 +218,7 @@ export const CameraPreviewWindow = forwardRef<
 				pipVideo.autoPictureInPicture = false;
 			}
 		};
-	}, [canUseAutoPiPAttribute]);
+	}, [canUseAutoPiPAttribute, hidden]);
 
 	useEffect(() => {
 		setMounted(true);
@@ -206,9 +232,7 @@ export const CameraPreviewWindow = forwardRef<
 		const startCamera = async () => {
 			try {
 				const stream = await navigator.mediaDevices.getUserMedia({
-					video: {
-						deviceId: { exact: cameraId },
-					},
+					video: cameraVideoConstraints(cameraId, { height: captureHeight }),
 				});
 				if (cancelled) {
 					for (const track of stream.getTracks()) track.stop();
@@ -231,7 +255,7 @@ export const CameraPreviewWindow = forwardRef<
 			cancelled = true;
 			stopStream();
 		};
-	}, [cameraId, stopStream]);
+	}, [cameraId, captureHeight, stopStream]);
 
 	useEffect(() => {
 		const metrics = getPreviewMetrics(size, shape, videoDimensions);
@@ -372,7 +396,7 @@ export const CameraPreviewWindow = forwardRef<
 			return;
 		}
 
-		if (!isPictureInPictureSupported || canUseAutoPiPAttribute) {
+		if (!isPictureInPictureSupported || canUseAutoPiPAttribute || hidden) {
 			return;
 		}
 
@@ -448,7 +472,12 @@ export const CameraPreviewWindow = forwardRef<
 		return () => {
 			document.removeEventListener("visibilitychange", handleVisibilityChange);
 		};
-	}, [videoDimensions, isPictureInPictureSupported, canUseAutoPiPAttribute]);
+	}, [
+		videoDimensions,
+		isPictureInPictureSupported,
+		canUseAutoPiPAttribute,
+		hidden,
+	]);
 
 	useEffect(() => {
 		return () => {
@@ -485,7 +514,10 @@ export const CameraPreviewWindow = forwardRef<
 		<div
 			ref={containerRef}
 			data-camera-preview
-			className="fixed z-[600] group cursor-move pointer-events-auto"
+			className={clsx(
+				"fixed z-[600] group cursor-move pointer-events-auto",
+				hidden && "hidden",
+			)}
 			role="dialog"
 			style={{
 				left: `${position.x}px`,

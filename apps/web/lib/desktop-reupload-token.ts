@@ -49,8 +49,13 @@ export function desktopReuploadSourceIdentity(source: unknown): string {
 	} catch {
 		throw new Error("Invalid recording source");
 	}
+	// Preview assets are remade from a published output while a later
+	// replacement may be uploading; they don't change which recording it shows.
+	const fields = Object.keys(normalized)
+		.filter((key) => key !== "thumbnailKey" && key !== "previewKey")
+		.sort();
 	return createHash("sha256")
-		.update(JSON.stringify(normalized, Object.keys(normalized).sort()))
+		.update(JSON.stringify(normalized, fields))
 		.digest("hex");
 }
 

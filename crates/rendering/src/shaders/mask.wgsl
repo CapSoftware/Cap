@@ -9,6 +9,7 @@ struct Uniforms {
     padding0: u32,
     output_size: vec2<f32>,
     padding1: vec2<f32>,
+    padding2: vec2<f32>,
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;

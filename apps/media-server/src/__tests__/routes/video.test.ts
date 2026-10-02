@@ -278,6 +278,124 @@ describe("POST /video/thumbnail", () => {
 	});
 });
 
+describe("POST /video/preview-assets", () => {
+	beforeEach(() => {
+		mock.restore();
+		spyOn(jobManager, "canAcceptNewVideoProcess").mockReturnValue(true);
+	});
+
+	test("returns 401 without media server secret", async () => {
+		const response = await app.fetch(
+			unauthenticatedVideoPostRequest("/video/preview-assets", {
+				videoUrl: "https://example.com/video.mp4",
+				previewGifPresignedUrl: "https://storage.example/preview.gif",
+			}),
+		);
+
+		expect(response.status).toBe(401);
+	});
+
+	test("returns 400 when no asset is requested", async () => {
+		const response = await app.fetch(
+			videoPostRequest("/video/preview-assets", {
+				videoUrl: "https://example.com/video.mp4",
+			}),
+		);
+
+		expect(response.status).toBe(400);
+		const data = await response.json();
+		expect(data.code).toBe("INVALID_REQUEST");
+	});
+
+	test("returns 503 when video capacity is exhausted", async () => {
+		spyOn(jobManager, "canAcceptNewVideoProcess").mockReturnValue(false);
+
+		const response = await app.fetch(
+			videoPostRequest("/video/preview-assets", {
+				videoUrl: "https://example.com/video.mp4",
+				previewGifPresignedUrl: "https://storage.example/preview.gif",
+			}),
+		);
+
+		expect(response.status).toBe(503);
+		expect(response.headers.get("Retry-After")).toBe("15");
+	});
+
+	test("generates both assets from the video URL and uploads them", async () => {
+		const thumbnail = new Uint8Array([0xff, 0xd8, 0xff]);
+		const uploads: Array<{ url: string; contentType: string }> = [];
+		const cleanup = mock(async () => {});
+
+		mock.module("../../lib/media-probe", () => ({
+			...mediaProbe,
+			probeVideo: async () => ({ duration: 12 }),
+		}));
+		mock.module("../../lib/media-video", () => ({
+			...mediaVideo,
+			generateThumbnail: async (input: string, duration: number) => {
+				expect(input).toBe("https://example.com/video.mp4");
+				expect(duration).toBe(12);
+				return thumbnail;
+			},
+			generatePreviewGif: async (input: string, duration: number) => {
+				expect(input).toBe("https://example.com/video.mp4");
+				expect(duration).toBe(12);
+				return { path: "/tmp/preview.gif", cleanup };
+			},
+			uploadToS3: async (data: Uint8Array, url: string, type: string) => {
+				expect(data).toBe(thumbnail);
+				uploads.push({ url, contentType: type });
+			},
+			uploadFileToS3: async (_path: string, url: string, type: string) => {
+				uploads.push({ url, contentType: type });
+				return {};
+			},
+		}));
+
+		const { default: appWithMock } = await import("../../app");
+		const response = await appWithMock.fetch(
+			videoPostRequest("/video/preview-assets", {
+				videoUrl: "https://example.com/video.mp4",
+				thumbnailPresignedUrl: "https://storage.example/screenshot.jpg",
+				previewGifPresignedUrl: "https://storage.example/preview.gif",
+			}),
+		);
+
+		expect(response.status).toBe(200);
+		expect(uploads).toEqual([
+			{
+				url: "https://storage.example/screenshot.jpg",
+				contentType: "image/jpeg",
+			},
+			{ url: "https://storage.example/preview.gif", contentType: "image/gif" },
+		]);
+		expect(cleanup).toHaveBeenCalledTimes(1);
+	});
+
+	test("fails when a requested asset cannot be generated", async () => {
+		mock.module("../../lib/media-probe", () => ({
+			...mediaProbe,
+			probeVideo: async () => ({ duration: 12 }),
+		}));
+		mock.module("../../lib/media-video", () => ({
+			...mediaVideo,
+			generatePreviewGif: async () => {
+				throw new Error("broken input");
+			},
+		}));
+
+		const { default: appWithMock } = await import("../../app");
+		const response = await appWithMock.fetch(
+			videoPostRequest("/video/preview-assets", {
+				videoUrl: "https://example.com/video.mp4",
+				previewGifPresignedUrl: "https://storage.example/preview.gif",
+			}),
+		);
+
+		expect(response.status).toBe(500);
+	});
+});
+
 describe("POST /video/convert", () => {
 	beforeEach(() => {
 		mock.restore();

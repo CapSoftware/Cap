@@ -128,6 +128,21 @@ const nextConfig = {
 			},
 		];
 	},
+	async headers() {
+		return [
+			{
+				// The web editor's build output is content-hashed, so repeat opens
+				// read it straight from the browser cache without revalidating.
+				source: "/editor-solid/assets/:file([^/]+)",
+				headers: [
+					{
+						key: "Cache-Control",
+						value: "public, max-age=31536000, immutable",
+					},
+				],
+			},
+		];
+	},
 	async redirects() {
 		return [
 			{

@@ -97,6 +97,10 @@ interface CaptionOption {
 interface Props {
 	videoSrc: string;
 	initialPlaybackUrl?: Promise<string | null>;
+	/** The initial URL can start playback without a probe; see resolvePlaybackSource. */
+	initialPlaybackTrusted?: boolean;
+	/** Changes when a Save publishes a new file behind the same `videoSrc`. */
+	sourceRevision?: string | null;
 	rawFallbackSrc?: string;
 	videoId: Video.VideoId;
 	chaptersSrc: string;
@@ -148,6 +152,8 @@ interface Props {
 export function CapVideoPlayer({
 	videoSrc,
 	initialPlaybackUrl,
+	initialPlaybackTrusted = false,
+	sourceRevision = null,
 	rawFallbackSrc,
 	videoId,
 	chaptersSrc,
@@ -196,6 +202,7 @@ export function CapVideoPlayer({
 	const [playerDuration, setPlayerDuration] = useState(fallbackDuration ?? 0);
 	const [preferredSource, setPreferredSource] = useState<"mp4" | "raw">("mp4");
 	const [hasTriedRawFallback, setHasTriedRawFallback] = useState(false);
+	const [unprobedSourceFailed, setUnprobedSourceFailed] = useState(false);
 	const [iosLevelPatchedUrl, setIosLevelPatchedUrl] = useState<string | null>(
 		null,
 	);
@@ -249,6 +256,8 @@ export function CapVideoPlayer({
 			rawFallbackSrc,
 			enableCrossOrigin,
 			preferredSource,
+			sourceRevision,
+			unprobedSourceFailed,
 		],
 		queryFn: shouldDeferResolvedSource
 			? skipToken
@@ -266,6 +275,7 @@ export function CapVideoPlayer({
 						rawFallbackSrc,
 						enableCrossOrigin,
 						preferredSource,
+						trustInitialUrl: initialPlaybackTrusted && !unprobedSourceFailed,
 					});
 				},
 		refetchOnWindowFocus: false,
@@ -276,12 +286,14 @@ export function CapVideoPlayer({
 	useEffect(() => {
 		void videoSrc;
 		void rawFallbackSrc;
+		void sourceRevision;
 		setVideoLoaded(false);
 		setHasError(false);
 		setShowPlayButton(false);
 		setPreferredSource("mp4");
 		setHasTriedRawFallback(false);
-	}, [videoSrc, rawFallbackSrc]);
+		setUnprobedSourceFailed(false);
+	}, [videoSrc, rawFallbackSrc, sourceRevision]);
 
 	useEffect(() => {
 		const resolvedUrl = resolvedSrc.data?.url;
@@ -448,6 +460,15 @@ export function CapVideoPlayer({
 		};
 
 		const handleError = () => {
+			// An unprobed start that fails resolves again the way it used to: probe
+			// the playlist route, which falls back for storage that refuses CORS.
+			if (resolvedSrc.data?.unprobed) {
+				setUnprobedSourceFailed(true);
+				setVideoLoaded(false);
+				setHasError(false);
+				setShowPlayButton(false);
+				return;
+			}
 			if (
 				shouldFallbackToRawPlaybackSource(
 					resolvedSrc.data?.type,
@@ -502,6 +523,7 @@ export function CapVideoPlayer({
 		hasTriedRawFallback,
 		rawFallbackSrc,
 		resolvedSrc.data?.type,
+		resolvedSrc.data?.unprobed,
 		resolvedSrc.isPending,
 		videoRef.current,
 	]);
@@ -586,6 +608,7 @@ export function CapVideoPlayer({
 					rawFallbackSrc,
 					enableCrossOrigin,
 					preferredSource,
+					sourceRevision,
 				],
 			});
 			onUploadComplete?.();
@@ -597,6 +620,7 @@ export function CapVideoPlayer({
 		preferredSource,
 		queryClient,
 		rawFallbackSrc,
+		sourceRevision,
 		uploadProgressRaw,
 		videoSrc,
 	]);

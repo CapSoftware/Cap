@@ -424,6 +424,10 @@ const makeS3Access = (s3: S3BucketAccess) => ({
 		key: string,
 		signingArgs?: Parameters<S3BucketAccess["getSignedObjectUrl"]>[1],
 	) => mapStorageError(s3.getSignedObjectUrl(key, signingArgs)),
+	getSignedDownloadUrl: (
+		key: string,
+		download: Parameters<S3BucketAccess["getSignedDownloadUrl"]>[1],
+	) => mapStorageError(s3.getSignedDownloadUrl(key, download)),
 	getInternalSignedObjectUrl: (
 		key: string,
 		signingArgs?: Parameters<S3BucketAccess["getInternalSignedObjectUrl"]>[1],
@@ -817,6 +821,10 @@ const makeGoogleDriveAccess = ({
 			key: string,
 			signingArgs?: Parameters<S3BucketAccess["getSignedObjectUrl"]>[1],
 		) => createDriveObjectUrl(key, signingArgs?.expiresIn),
+		getSignedDownloadUrl: (
+			key: string,
+			download: Parameters<S3BucketAccess["getSignedDownloadUrl"]>[1],
+		) => createDriveObjectUrl(key, download.expiresIn),
 		getInternalSignedObjectUrl: (
 			key: string,
 			signingArgs?: Parameters<S3BucketAccess["getInternalSignedObjectUrl"]>[1],

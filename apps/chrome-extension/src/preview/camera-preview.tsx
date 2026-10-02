@@ -44,6 +44,11 @@ type ParentMessage =
 			source: "cap-extension-overlay";
 			token: string;
 			type: "stop";
+	  }
+	| {
+			source: "cap-extension-overlay";
+			token: string;
+			type: "stop-for-capture";
 	  };
 
 const token = decodeURIComponent(window.location.hash.slice(1));
@@ -247,6 +252,9 @@ function App() {
 	const sessionCounterRef = useRef(0);
 	const autoPictureInPictureRef = useRef(false);
 	const autoPictureInPictureEnabledRef = useRef(false);
+	const captureBlockedRef = useRef(false);
+	const pictureInPictureRequestRef =
+		useRef<Promise<PictureInPictureWindow> | null>(null);
 	const previewEnabled = Boolean(settings?.enabled);
 	const isPictureInPictureSupported =
 		typeof document !== "undefined" && document.pictureInPictureEnabled;
@@ -275,12 +283,24 @@ function App() {
 				enabled
 					? async () => {
 							const video = videoRef.current;
-							if (!video || document.pictureInPictureElement) return;
+							if (
+								!video ||
+								captureBlockedRef.current ||
+								document.pictureInPictureElement
+							)
+								return;
 							try {
 								autoPictureInPictureRef.current = true;
-								await video.requestPictureInPicture();
+								const request = video.requestPictureInPicture();
+								pictureInPictureRequestRef.current = request;
+								await request;
+								if (captureBlockedRef.current) {
+									await document.exitPictureInPicture();
+								}
 							} catch {
 								autoPictureInPictureRef.current = false;
+							} finally {
+								pictureInPictureRequestRef.current = null;
 							}
 						}
 					: null,
@@ -318,6 +338,7 @@ function App() {
 	const enterPictureInPicture = useCallback(
 		async (auto: boolean) => {
 			const currentVideo = videoRef.current;
+			if (captureBlockedRef.current) return;
 			if (auto) {
 				setAutomaticPictureInPicture(true);
 			}
@@ -329,10 +350,18 @@ function App() {
 					return;
 				}
 				if (document.pictureInPictureElement) return;
-				await currentVideo.requestPictureInPicture();
+				const request = currentVideo.requestPictureInPicture();
+				pictureInPictureRequestRef.current = request;
+				await request;
+				if (captureBlockedRef.current) {
+					await document.exitPictureInPicture();
+					return;
+				}
 				autoPictureInPictureRef.current = auto;
 			} catch {
 				autoPictureInPictureRef.current = false;
+			} finally {
+				pictureInPictureRequestRef.current = null;
 			}
 		},
 		[isPictureInPictureSupported, setAutomaticPictureInPicture],
@@ -358,7 +387,12 @@ function App() {
 
 	const togglePictureInPicture = useCallback(async () => {
 		const currentVideo = videoRef.current;
-		if (!currentVideo || !isPictureInPictureSupported) return;
+		if (
+			!currentVideo ||
+			!isPictureInPictureSupported ||
+			captureBlockedRef.current
+		)
+			return;
 
 		try {
 			setAutomaticPictureInPicture(false);
@@ -366,12 +400,34 @@ function App() {
 			if (document.pictureInPictureElement === currentVideo) {
 				await document.exitPictureInPicture();
 			} else {
-				await currentVideo.requestPictureInPicture();
+				const request = currentVideo.requestPictureInPicture();
+				pictureInPictureRequestRef.current = request;
+				await request;
+				if (captureBlockedRef.current) {
+					await document.exitPictureInPicture();
+				}
 			}
 		} catch {
 			autoPictureInPictureRef.current = false;
+		} finally {
+			pictureInPictureRequestRef.current = null;
 		}
 	}, [isPictureInPictureSupported, setAutomaticPictureInPicture]);
+
+	const stopForCapture = useCallback(async () => {
+		captureBlockedRef.current = true;
+		setAutomaticPictureInPicture(false);
+		const pendingRequest = pictureInPictureRequestRef.current;
+		if (pendingRequest) {
+			await pendingRequest.catch(() => undefined);
+		}
+		const video = videoRef.current;
+		if (video && document.pictureInPictureElement === video) {
+			await document.exitPictureInPicture();
+		}
+		stopPreview();
+		return !video || document.pictureInPictureElement !== video;
+	}, [setAutomaticPictureInPicture, stopPreview]);
 
 	useEffect(() => {
 		postParent({
@@ -389,10 +445,22 @@ function App() {
 		// other extensions) cannot speak — window messages were forgeable since
 		// the token is readable from the iframe src in the page DOM. The token
 		// check scopes the runtime broadcast to this tab's preview.
-		const handleMessage = (message: unknown) => {
+		const handleMessage = (
+			message: unknown,
+			_sender: chrome.runtime.MessageSender,
+			sendResponse: (response?: unknown) => void,
+		) => {
 			if (!isParentMessage(message)) return false;
 
+			if (message.type === "stop-for-capture") {
+				void stopForCapture()
+					.then((ok) => sendResponse({ ok }))
+					.catch(() => sendResponse({ ok: false }));
+				return true;
+			}
+
 			if (message.type === "settings") {
+				if (captureBlockedRef.current) return false;
 				const nextSettings = message.settings;
 				setSettings((current) =>
 					isSameWebcamSettings(current, nextSettings) ? current : nextSettings,
@@ -427,6 +495,7 @@ function App() {
 		enterPictureInPicture,
 		exitAutoPictureInPicture,
 		publishPreviewFrame,
+		stopForCapture,
 		stopPreview,
 		togglePictureInPicture,
 	]);

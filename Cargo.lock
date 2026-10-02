@@ -1406,6 +1406,7 @@ dependencies = [
  "ort",
  "tokio",
  "tracing",
+ "web-time",
  "wgpu",
  "workspace-hack",
 ]
@@ -1657,6 +1658,7 @@ dependencies = [
  "futures",
  "image 0.25.8",
  "lru",
+ "relative-path",
  "ringbuf",
  "sentry",
  "serde",
@@ -1667,6 +1669,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "uuid",
  "windows 0.60.0",
  "workspace-hack",
 ]
@@ -2027,6 +2030,7 @@ dependencies = [
  "futures-intrusive",
  "glyphon",
  "image 0.25.8",
+ "js-sys",
  "libloading 0.8.8",
  "log",
  "metal 0.31.0",
@@ -2044,6 +2048,10 @@ dependencies = [
  "tiny-skia",
  "tokio",
  "tracing",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "web-time",
  "wgpu",
  "wgpu-core",
  "wgpu-hal",
@@ -2073,6 +2081,7 @@ name = "cap-rnnoise"
 version = "0.1.0"
 dependencies = [
  "cc",
+ "libm",
  "workspace-hack",
 ]
 

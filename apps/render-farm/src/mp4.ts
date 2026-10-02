@@ -75,7 +75,7 @@ export type TrackIndex = {
 
 // Sources are user uploads: a sample count drives several allocations, so it
 // is capped (about 23 h at 60 fps) and every table must fit inside its box.
-const MAX_SAMPLES = 5_000_000;
+export const MAX_SAMPLES = 5_000_000;
 
 /** Index the first video track of a moov box (bytes = the whole moov). */
 export function indexVideoTrack(moov: Uint8Array): TrackIndex {
@@ -431,11 +431,13 @@ export type TrackTable = {
 	runs: Run[];
 };
 
-function sampleTable(
+export function sampleTable(
 	table: TrackTable,
 	stsd: Uint8Array,
 	stts: [number, number][],
 	sync: Uint32Array | null,
+	/** Composition offsets as [count, offset] runs; negative ones need v1. */
+	ctts: [number, number][] | null = null,
 ) {
 	const parts: Uint8Array[] = [stsd];
 	parts.push(
@@ -452,6 +454,22 @@ function sampleTable(
 			}),
 		),
 	);
+	if (ctts) {
+		parts.push(
+			fullBox(
+				"ctts",
+				ctts.some(([, offset]) => offset < 0) ? 1 : 0,
+				0,
+				build((writer) => {
+					writer.u32(ctts.length);
+					for (const [count, offset] of ctts) {
+						writer.u32(count);
+						writer.u32(offset);
+					}
+				}),
+			),
+		);
+	}
 	if (sync) {
 		parts.push(
 			fullBox(

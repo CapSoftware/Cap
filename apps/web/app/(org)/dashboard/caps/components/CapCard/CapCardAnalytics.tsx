@@ -10,6 +10,7 @@ import {
 	forwardRef,
 	type PropsWithChildren,
 } from "react";
+import { HoverPrefetchLink } from "@/components/hover-prefetch-link";
 import { Tooltip } from "@/components/Tooltip";
 
 interface CapCardAnalyticsProps {
@@ -19,6 +20,7 @@ interface CapCardAnalyticsProps {
 	isLoadingAnalytics: boolean;
 	totalReactions: number;
 	isOwner?: boolean;
+	prefetchOnHover?: boolean;
 }
 
 export const CapCardAnalytics = Object.assign(
@@ -29,8 +31,10 @@ export const CapCardAnalytics = Object.assign(
 		totalReactions,
 		isLoadingAnalytics,
 		isOwner = true,
-	}: CapCardAnalyticsProps) =>
-		isLoadingAnalytics ? (
+		prefetchOnHover = false,
+	}: CapCardAnalyticsProps) => {
+		const AnalyticsLink = prefetchOnHover ? HoverPrefetchLink : Link;
+		return isLoadingAnalytics ? (
 			<CapCardAnalytics.Skeleton />
 		) : (
 			<Shell>
@@ -40,56 +44,57 @@ export const CapCardAnalytics = Object.assign(
 						className="bg-gray-12 text-gray-1 border-gray-11 shadow-lg"
 						delayDuration={100}
 					>
-						<Link
+						<AnalyticsLink
 							href={`/dashboard/analytics?capId=${capId}`}
 							className="inline-flex cursor-pointer"
 						>
 							<IconItem icon={faEye}>
 								<span className="text-sm text-gray-12">{displayCount}</span>
 							</IconItem>
-						</Link>
+						</AnalyticsLink>
 					</Tooltip>
 					<Tooltip
 						content="View analytics"
 						className="bg-gray-12 text-gray-1 border-gray-11 shadow-lg"
 						delayDuration={100}
 					>
-						<Link
+						<AnalyticsLink
 							href={`/dashboard/analytics?capId=${capId}`}
 							className="inline-flex cursor-pointer"
 						>
 							<IconItem icon={faComment}>
 								<span className="text-sm text-gray-12">{totalComments}</span>
 							</IconItem>
-						</Link>
+						</AnalyticsLink>
 					</Tooltip>
 					<Tooltip
 						content="View analytics"
 						className="bg-gray-12 text-gray-1 border-gray-11 shadow-lg"
 						delayDuration={100}
 					>
-						<Link
+						<AnalyticsLink
 							href={`/dashboard/analytics?capId=${capId}`}
 							className="inline-flex cursor-pointer"
 						>
 							<IconItem icon={faSmile}>
 								<span className="text-sm text-gray-12">{totalReactions}</span>
 							</IconItem>
-						</Link>
+						</AnalyticsLink>
 					</Tooltip>
 				</div>
 				{isOwner && (
-					<Link
+					<AnalyticsLink
 						href={`/dashboard/analytics?capId=${capId}`}
 						target="_blank"
 						rel="noopener noreferrer"
 						className="text-xs text-blue-600 hover:underline"
 					>
 						View analytics
-					</Link>
+					</AnalyticsLink>
 				)}
 			</Shell>
-		),
+		);
+	},
 	{
 		Skeleton: () => (
 			<Shell>

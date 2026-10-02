@@ -6,7 +6,7 @@ import { createEventListener } from "@solid-primitives/event-listener";
 import { debounce, throttle } from "@solid-primitives/scheduled";
 import { makePersisted } from "@solid-primitives/storage";
 import { createMutation, createQuery, skipToken } from "@tanstack/solid-query";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { LogicalPosition } from "@tauri-apps/api/dpi";
 import { emitTo } from "@tauri-apps/api/event";
 import { Menu } from "@tauri-apps/api/menu";
@@ -29,7 +29,7 @@ import {
 	Suspense,
 	Switch,
 } from "solid-js";
-import { createStore } from "solid-js/store";
+import { createStore, produce } from "solid-js/store";
 import toast from "solid-toast";
 import {
 	COMMON_RATIOS,
@@ -45,6 +45,7 @@ import { composeEventHandlers } from "~/utils/composeEventHandlers";
 import { createTauriEventListener } from "~/utils/createEventListener";
 import { commands, events } from "~/utils/tauri";
 import { ConfigSidebar } from "./ConfigSidebar";
+import { ClipStrip } from "./clip-strip";
 import {
 	EditorContextProvider,
 	EditorInstanceContextProvider,
@@ -55,14 +56,21 @@ import {
 	useEditorInstanceContext,
 } from "./context";
 import { EditorErrorScreen } from "./EditorErrorScreen";
-import { DEFAULT_TIMELINE_HEIGHT, editorVerticalLayout } from "./editor-layout";
+import {
+	CLIP_STRIP_SPACE,
+	DEFAULT_TIMELINE_HEIGHT,
+	editorVerticalLayout,
+} from "./editor-layout";
 import { EditorSkeleton } from "./editor-skeleton";
+import { createFocusMode } from "./focus-mode";
 import { Header, type TitleSaveRegistration } from "./Header";
 import { ImportProgress } from "./ImportProgress";
 import { PlayerContent } from "./Player";
 import { usePreparingEditor } from "./preparing-editor-context";
 import { Timeline } from "./Timeline";
 import { Dialog, DialogContent, EditorButton, Input, Subfield } from "./ui";
+import { applyAudioOnlySetup, needsAudioOnlySetup } from "./waveform";
+import { WebDropImport } from "./web-drop-import";
 
 // Deferred surfaces: these are not visible at first paint (export mode,
 // transcript panel, clips sidebar), so their code is split out of the editor
@@ -88,9 +96,12 @@ const MIN_COMPACT_TIMELINE_HEIGHT = 144;
 // reports the height its ruler and rows need inside that box.
 const TIMELINE_CARD_PADDING_Y = 22;
 const DEFAULT_TIMELINE_CONTENT_HEIGHT = 124;
+const isWebEditor = import.meta.env.VITE_CAP_WEB_EDITOR === "true";
 // Vertical gutter between the player row and the timeline card, plus the
-// gutter below the timeline card; both live inside the measured layout box.
-const LAYOUT_GUTTERS = 16;
+// gutter below the timeline card (and the web clip strip, which focus mode
+// hides); all live inside the measured layout box.
+const layoutGutters = (focused: boolean) =>
+	16 + (isWebEditor && !focused ? CLIP_STRIP_SPACE : 0);
 
 const scheduleIdleWork = (callback: () => void) => {
 	const win = window as Window & {
@@ -268,6 +279,7 @@ export function Editor() {
 		if (lockedToImporting()) return "importing" as const;
 		return rawImportStatus();
 	};
+	const initialLoadError = () => projectPath.error ?? rawMetaQuery.error;
 
 	const [importAborted, setImportAborted] = createSignal(false);
 
@@ -298,6 +310,19 @@ export function Editor() {
 
 	return (
 		<Switch fallback={<EditorSkeleton />}>
+			<Match when={initialLoadError()}>
+				{(error) => (
+					<div class="flex h-full min-h-0 flex-col items-center justify-center gap-4 bg-ed-window px-6 text-center text-ed-text-1">
+						<h2 class="text-xl font-semibold">Unable to Open Recording</h2>
+						<p class="max-w-md text-sm text-ed-text-2">
+							{getEditorErrorMessage(error())}
+						</p>
+						<EditorButton onClick={() => window.location.reload()}>
+							Try again
+						</EditorButton>
+					</div>
+				)}
+			</Match>
 			<Match
 				when={importStatus() === "importing" ? (projectPath() ?? null) : null}
 			>
@@ -395,6 +420,10 @@ function Inner(props: {
 }) {
 	const {
 		project,
+		setProject,
+		projectHistory,
+		meta,
+		totalDuration,
 		canvasControls,
 		flushProjectConfig,
 		editorInstance,
@@ -402,16 +431,61 @@ function Inner(props: {
 		setEditorState,
 		previewResolutionBase,
 		dialog,
+		setDialog,
 		exportState,
 		requestHandoffPlayback,
 		handoffPlaybackPending,
 	} = useEditorContext();
 
 	const preparingSession = usePreparingEditor();
-	const editorReady = () =>
+	const firstFrameShown = () =>
 		preparingSession?.ordinaryReady() ??
 		canvasControls()?.hasRenderedFrame() ??
 		false;
+	// Ready from the first frame on. The canvas's own flag dips while it
+	// redraws at a new size, and the layout's bindings (which this shares an
+	// update with) re-run whenever the layout moves, so reading the flag live
+	// could grey the editor out mid-playback until some other change.
+	const [editorOpened, setEditorOpened] = createSignal(false);
+	createEffect(() => {
+		if (!editorOpened() && firstFrameShown()) setEditorOpened(true);
+	});
+	const editorReady = () => editorOpened() || firstFrameShown();
+
+	const focusMode = isWebEditor ? createFocusMode() : undefined;
+	const focused = () => focusMode?.active() ?? false;
+	// Capture phase, so Esc is judged before the timeline and canvas clear the
+	// selection it would otherwise dismiss first.
+	createEventListener(
+		window,
+		"keydown",
+		(event: KeyboardEvent) => {
+			if (!focusMode || !editorReady() || event.repeat) return;
+			if (event.metaKey || event.ctrlKey || event.altKey) return;
+			const target = event.target instanceof HTMLElement ? event.target : null;
+			if (
+				target &&
+				(target.isContentEditable ||
+					target.closest(
+						"input, textarea, select, [role='dialog'], [role='alertdialog'], [role='menu'], [role='listbox']",
+					))
+			)
+				return;
+			if (isModalDialog(dialog())) return;
+			if (event.code === "KeyF" && !event.shiftKey) {
+				event.preventDefault();
+				focusMode.toggle();
+			} else if (
+				event.key === "Escape" &&
+				focusMode.active() &&
+				!editorState.timeline.selection &&
+				!editorState.canvasSelection
+			) {
+				focusMode.exit();
+			}
+		},
+		{ capture: true },
+	);
 	onMount(() => {
 		const blockPreparingKeys = (event: KeyboardEvent) => {
 			if (editorReady()) return;
@@ -508,6 +582,7 @@ function Inner(props: {
 	});
 
 	onMount(() => {
+		if (isWebEditor) return;
 		const cancel = scheduleIdleWork(() => setClipsSidebarMounted(true));
 		onCleanup(cancel);
 	});
@@ -576,10 +651,18 @@ function Inner(props: {
 	});
 
 	const [layoutRef, setLayoutRef] = createSignal<HTMLDivElement>();
-	const layoutBounds = createElementBounds(layoutRef);
+	const layoutBounds = createElementBounds(layoutRef, {
+		trackMutation: false,
+	});
 	const [userTimelineHeight, setUserTimelineHeight] = makePersisted(
 		createSignal<number | null>(null),
 		{ name: "editorTimelineHeightOverride" },
+	);
+	// Focus mode keeps its own timeline height, hugging the rows until the
+	// timeline is dragged, so the preview gets the room.
+	const [focusTimelineHeight, setFocusTimelineHeight] = makePersisted(
+		createSignal<number | null>(null),
+		{ name: "editorFocusTimelineHeight" },
 	);
 	const [isResizingTimeline, setIsResizingTimeline] = createSignal(false);
 	const [timelineContentHeight, setTimelineContentHeight] = createSignal(
@@ -603,7 +686,8 @@ function Inner(props: {
 	const layoutLimits = createMemo(() => {
 		const fullHeight = MIN_PLAYER_HEIGHT + MIN_TIMELINE_HEIGHT;
 		const available = Math.max(
-			(layoutBounds.height ?? fullHeight + LAYOUT_GUTTERS) - LAYOUT_GUTTERS,
+			(layoutBounds.height ?? fullHeight + layoutGutters(focused())) -
+				layoutGutters(focused()),
 			0,
 		);
 		const { minPlayerHeight } = editorVerticalLayout(
@@ -645,10 +729,12 @@ function Inner(props: {
 	const timelineHeight = createMemo(() =>
 		Math.round(
 			clampTimelineHeight(
-				userTimelineHeight() ??
-					DEFAULT_TIMELINE_HEIGHT +
-						timelineContentHeight() -
-						(initialTimelineContentHeight() ?? timelineContentHeight()),
+				focused()
+					? (focusTimelineHeight() ?? huggedTimelineHeight())
+					: (userTimelineHeight() ??
+							DEFAULT_TIMELINE_HEIGHT +
+								timelineContentHeight() -
+								(initialTimelineContentHeight() ?? timelineContentHeight())),
 			),
 		),
 	);
@@ -660,9 +746,13 @@ function Inner(props: {
 		const startHeight = timelineHeight();
 		setIsResizingTimeline(true);
 
+		const setHeight = focused()
+			? setFocusTimelineHeight
+			: setUserTimelineHeight;
+
 		const handleMove = (moveEvent: MouseEvent) => {
 			const delta = moveEvent.clientY - startY;
-			setUserTimelineHeight(clampTimelineHeight(startHeight - delta));
+			setHeight(clampTimelineHeight(startHeight - delta));
 		};
 
 		const handleUp = () => {
@@ -678,6 +768,7 @@ function Inner(props: {
 	createEffect(
 		on(timelineViewportOverflow, (next, prev) => {
 			if (
+				!focused() &&
 				userTimelineHeight() !== null &&
 				next &&
 				prev &&
@@ -790,6 +881,27 @@ function Inner(props: {
 		throttledConfigUpdate(time);
 		trailingConfigUpdate(time);
 	};
+	if (isWebEditor) {
+		const refreshCaptionPlan = () => {
+			void commands.checkUpgradedAndUpdate().catch(() => undefined);
+		};
+		onMount(refreshCaptionPlan);
+		createEventListener(window, "focus", refreshCaptionPlan);
+		createEventListener(document, "visibilitychange", () => {
+			if (!document.hidden) refreshCaptionPlan();
+		});
+		createEventListener(window, "cap-web-editor-captions-plan", () => {
+			if (
+				(window as Window & { capWebEditorCaptionsEnabled?: boolean })
+					.capWebEditorCaptionsEnabled !== true
+			) {
+				if (isTranscriptMode()) setDialog((d) => ({ ...d, open: false }));
+				if (editorState.timeline.selection?.type === "caption")
+					setEditorState("timeline", "selection", null);
+			}
+			doConfigUpdate(frameNumberToRender());
+		});
+	}
 
 	createEffect(
 		on(
@@ -811,6 +923,32 @@ function Inner(props: {
 			{ defer: true },
 		),
 	);
+
+	onMount(() => {
+		if (!meta().audioOnly || !needsAudioOnlySetup(project)) return;
+		const duration = totalDuration();
+		const resume = projectHistory.pause();
+		setProject(
+			produce((project) => {
+				project.timeline ??= {
+					segments: [{ start: 0, end: duration, timescale: 1 }],
+					zoomSegments: [],
+					sceneSegments: [],
+					maskSegments: [],
+					textSegments: [],
+					styleSegments: [],
+					imageSegments: [],
+					captionSegments: [],
+					keyboardSegments: [],
+					camera3dSegments: [],
+					transitions: [],
+				};
+				applyAudioOnlySetup(project, duration);
+			}),
+		);
+		setEditorState("timeline", "tracks", "waveform", 1);
+		resume();
+	});
 
 	createEffect(
 		on(
@@ -843,6 +981,10 @@ function Inner(props: {
 		if (isExportMode()) return "export" as const;
 		return null;
 	};
+
+	createEffect(() => {
+		if (isExportMode()) focusMode?.exit();
+	});
 
 	const MIN_SPLIT_RATIO = 0.25;
 	const MAX_SPLIT_RATIO = 0.75;
@@ -899,10 +1041,17 @@ function Inner(props: {
 				class="relative flex flex-col flex-1 min-h-0"
 				aria-busy={!editorReady() && !preparingSession?.handoffFailed()}
 			>
-				<Header
-					registerTitleSave={registerEditorSave}
-					disabled={!editorReady()}
-				/>
+				{/* Hidden rather than unmounted, so a title edit and its save
+				    registration survive focus mode. */}
+				<div classList={{ contents: !focused(), hidden: focused() }}>
+					<Header
+						registerTitleSave={registerEditorSave}
+						disabled={!editorReady()}
+					/>
+				</div>
+				<Show when={isWebEditor && editorReady()}>
+					<WebDropImport />
+				</Show>
 				<Show when={preparingSession?.handoffFailed()}>
 					<div class="absolute inset-0 top-13 max-[900px]:top-[72px] z-30 flex items-center justify-center p-6">
 						<div
@@ -945,6 +1094,7 @@ function Inner(props: {
 					<div
 						ref={setLayoutRef}
 						class="flex overflow-hidden flex-col flex-1 gap-2 pb-2 min-h-0"
+						classList={{ "pt-2": focused() }}
 					>
 						<div
 							ref={setSplitContainerRef}
@@ -956,16 +1106,23 @@ function Inner(props: {
 							<div
 								class="flex overflow-hidden flex-col rounded-xl bg-ed-card shadow-ed-card"
 								style={{
-									flex: isTranscriptMode()
-										? `0 0 ${splitRatio() * 100}%`
-										: "1 1 0%",
+									flex:
+										isTranscriptMode() && !focused()
+											? `0 0 ${splitRatio() * 100}%`
+											: "1 1 0%",
 									"min-width": "0",
 								}}
 							>
-								<PlayerContent compactness={layoutLimits().compactness} />
+								<PlayerContent
+									compactness={layoutLimits().compactness}
+									focusMode={focusMode}
+								/>
 							</div>
 							<Show when={!isTranscriptMode()}>
-								<div class="ml-2 flex min-h-0 w-104 min-w-104 flex-none overflow-hidden">
+								<div
+									class="ml-2 flex min-h-0 w-104 min-w-104 flex-none overflow-hidden"
+									classList={{ hidden: focused() }}
+								>
 									<div
 										class="overflow-hidden min-h-0"
 										classList={{
@@ -988,6 +1145,7 @@ function Inner(props: {
 							<Show when={isTranscriptMode()}>
 								<div
 									class="flex-none flex items-center justify-center cursor-col-resize select-none group z-10"
+									classList={{ hidden: focused() }}
 									style={{ width: "12px" }}
 									onMouseDown={handleSplitResizeStart}
 									aria-label="Resize captions panel"
@@ -1003,6 +1161,7 @@ function Inner(props: {
 								</div>
 								<div
 									class="flex overflow-hidden flex-col min-h-0 rounded-xl duration-150 bg-ed-card shadow-ed-card animate-in fade-in"
+									classList={{ hidden: focused() }}
 									style={{
 										flex: isResizingSplit()
 											? `0 0 calc(${(1 - splitRatio()) * 100}% - 12px)`
@@ -1016,6 +1175,20 @@ function Inner(props: {
 								</div>
 							</Show>
 						</div>
+						<Show when={isWebEditor}>
+							{/* The strip's slot is there from the start, so the preview
+							    doesn't shrink and redraw once the editor is ready. */}
+							<div class="flex-none px-2" classList={{ hidden: focused() }}>
+								<Show
+									when={editorReady()}
+									fallback={
+										<div class="h-[48px] rounded-xl bg-ed-card shadow-ed-card" />
+									}
+								>
+									<ClipStrip />
+								</Show>
+							</div>
+						</Show>
 						<div
 							class="relative flex-none px-2 min-h-0"
 							style={{ height: `${timelineHeight()}px` }}
@@ -1088,6 +1261,23 @@ function Dialogs() {
 								const createPreset = createMutation(() => ({
 									mutationFn: async () => {
 										await presets.createPreset({ ...form, config: project });
+										// The web editor's default lives with the account, where
+										// new recordings read it.
+										if (isWebEditor && form.default) {
+											await invoke("webEditorSaveDefaultStyle", {
+												config: JSON.parse(
+													JSON.stringify(
+														serializeProjectConfiguration(project),
+													),
+												),
+											}).catch((error) =>
+												toast.error(
+													error instanceof Error
+														? error.message
+														: "Default was not saved",
+												),
+											);
+										}
 									},
 									onSuccess: () => {
 										setDialog((d) => ({ ...d, open: false }));

@@ -109,6 +109,18 @@ opt-level = 2
 [profile.dev.package.cap-audio]
 opt-level = 2
 
+[profile.dev.package.cap-editor]
+opt-level = 3
+
+[profile.dev.package.image]
+opt-level = 3
+
+[profile.dev.package.png]
+opt-level = 3
+
+[profile.dev.package.flate2]
+opt-level = 3
+
 # Optimize for smaller binary size
 [profile.release]
 panic = "unwind"

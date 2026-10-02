@@ -49,6 +49,10 @@ ENV NVIDIA_VISIBLE_DEVICES=all \
 	RF_REQUIRE_GPU=1
 COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun
 COPY --from=engine /out/cap-render-farm /usr/local/bin/cap-render-farm
+# Wallpapers and library music, the same files the editor worker ships, so a
+# recording the farm prepares itself renders with them (see src/prepare.ts).
+COPY apps/desktop/src-tauri/assets/backgrounds /opt/cap/backgrounds
+COPY apps/desktop/src/assets/music /opt/cap/music
 WORKDIR /app
 COPY apps/render-farm/src ./src
 CMD ["bun", "/app/src/boot.ts"]

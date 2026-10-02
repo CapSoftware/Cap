@@ -1445,6 +1445,7 @@ dependencies = [
  "ndarray 0.16.1",
  "ort",
  "tracing",
+ "web-time",
  "wgpu 25.0.2",
  "workspace-hack",
 ]
@@ -1600,6 +1601,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "cap-audio",
+ "cap-enc-ffmpeg",
  "cap-media",
  "cap-media-info",
  "cap-project",
@@ -1611,6 +1613,7 @@ dependencies = [
  "futures",
  "image 0.25.10",
  "lru",
+ "relative-path",
  "ringbuf",
  "sentry",
  "serde",
@@ -1621,6 +1624,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "uuid",
  "windows 0.60.0",
  "workspace-hack",
 ]
@@ -1922,6 +1926,7 @@ dependencies = [
  "futures-intrusive",
  "glyphon",
  "image 0.25.10",
+ "js-sys",
  "libloading 0.8.9",
  "log",
  "metal 0.31.0",
@@ -1936,6 +1941,10 @@ dependencies = [
  "tiny-skia",
  "tokio",
  "tracing",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "web-time",
  "wgpu 25.0.2",
  "wgpu-core 25.0.2",
  "wgpu-hal 25.0.2",
@@ -1949,6 +1958,7 @@ name = "cap-rnnoise"
 version = "0.1.0"
 dependencies = [
  "cc",
+ "libm",
  "workspace-hack",
 ]
 

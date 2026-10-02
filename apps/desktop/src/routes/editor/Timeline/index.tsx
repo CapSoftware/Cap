@@ -22,13 +22,23 @@ import {
 	onMount,
 	Show,
 	Switch,
+	untrack,
 } from "solid-js";
 import { produce } from "solid-js/store";
 import toast from "solid-toast";
+import IconLucideAudioWaveform from "~icons/lucide/audio-waveform";
 import IconLucidePalette from "~icons/lucide/palette";
 import { stylesRevealCamera } from "../style";
+import { FOLLOW_STEPS, nextFollowAnchor } from "./follow-anchor";
 import { ImageTrack } from "./image-track";
+import {
+	playheadMotion,
+	playheadMotionOffsetMs,
+	playheadMotionX,
+} from "./playhead-motion";
 import { type OverlayDragState, StyleTrack } from "./style-track";
+import { WaveformTrack } from "./waveform-track";
+import { pinchZoomFactor } from "./zoom";
 
 import "./styles.css";
 
@@ -82,6 +92,10 @@ import { type ZoomSegmentDragState, ZoomTrack } from "./ZoomTrack";
 // 104 is the narrowest gutter that fits the "Add track" pill without
 // truncating its label on the widest system UI font (Segoe UI on Windows).
 const TRACK_GUTTER = 104;
+const PLAYHEAD_STALL_MS = 250;
+// Playback settles its clock just after it starts; the playhead follows it
+// directly until then.
+const PLAYHEAD_SETTLE_MS = 300;
 const TRACK_ICON_WIDTH = TRACK_GUTTER;
 const TRACK_GUTTER_INSET = 4;
 const TIMELINE_HEADER_HEIGHT = 26;
@@ -104,6 +118,7 @@ const trackIcons: Record<TimelineTrackType, () => JSX.Element> = {
 	zoom: () => <IconLucideSearch class="size-3" />,
 	scene: () => <IconLucideVideo class="size-3" />,
 	audio: () => <IconLucideMusic class="size-3" />,
+	waveform: () => <IconLucideAudioWaveform class="size-3" />,
 	"3d": () => <IconLucideRotate3d class="size-3" />,
 };
 
@@ -154,6 +169,12 @@ const trackDefinitions: TrackDefinition[] = [
 		locked: false,
 	},
 	{
+		type: "waveform",
+		label: "Audio waveform",
+		icon: trackIcons.waveform,
+		locked: false,
+	},
+	{
 		type: "zoom",
 		label: "Zoom",
 		icon: trackIcons.zoom,
@@ -172,6 +193,15 @@ const trackDefinitions: TrackDefinition[] = [
 		locked: false,
 	},
 ];
+
+const isWebEditor = import.meta.env.VITE_CAP_WEB_EDITOR === "true";
+const availableTrackDefinitions = isWebEditor
+	? trackDefinitions.filter((definition) => definition.type !== "keyboard")
+	: trackDefinitions;
+const captionsAllowed = () =>
+	!isWebEditor ||
+	(window as Window & { capWebEditorCaptionsEnabled?: boolean })
+		.capWebEditorCaptionsEnabled === true;
 
 function deleteTrackLane<T extends { track?: number }>(
 	segments: T[],
@@ -217,13 +247,208 @@ export function Timeline(props: {
 	const [timelineScrollRef, setTimelineScrollRef] =
 		createSignal<HTMLDivElement>();
 	const [timelineRef, setTimelineRef] = createSignal<HTMLDivElement>();
-	const timelineBounds = createElementBounds(timelineRef);
+	const timelineBounds = createElementBounds(timelineRef, {
+		trackMutation: false,
+	});
 
 	const secsPerPixel = () => transform().zoom / (timelineBounds.width ?? 1);
+	// Snapped to device pixels, so a slow playhead on a long timeline restyles
+	// only when it visibly moves.
+	const playheadX = createMemo(() => {
+		const dpr = window.devicePixelRatio || 1;
+		const x = Math.min(
+			(editorState.playbackTime - transform().position) / secsPerPixel(),
+			timelineBounds.width ?? 0,
+		);
+		return Math.round(x * dpr) / dpr;
+	});
+	// During playback the compositor moves the playhead: restyling it each time
+	// it moves a pixel costs the page a compositing update, the most expensive
+	// thing it does per frame. The animation is re-aimed whenever it drifts
+	// from the playback time, and a stalled playback stops it where it is.
+	let playheadRef: HTMLDivElement | undefined;
+	const [playheadRestX, setPlayheadRestX] = createSignal(0);
+	let playheadAnimation: {
+		animation: Animation;
+		motion: NonNullable<ReturnType<typeof playheadMotion>>;
+		position: number;
+		secsPerPixel: number;
+	} | null = null;
+	let playheadStallCheck: ReturnType<typeof setInterval> | undefined;
+	let playheadMovedAt = 0;
+	let playheadPreviousPosition = Number.NaN;
+	let playingSince = 0;
+	// Playback time against the wall clock, measured between re-aims.
+	let playheadClock: { at: number; time: number; rate: number } | null = null;
+	const stopPlayheadAnimation = () => {
+		playheadAnimation?.animation.cancel();
+		playheadAnimation = null;
+		clearInterval(playheadStallCheck);
+		playheadStallCheck = undefined;
+	};
+	onCleanup(stopPlayheadAnimation);
+	createEffect(() => {
+		void editorState.playbackTime;
+		playheadMovedAt = performance.now();
+	});
+	createEffect(() => {
+		const x = playheadX();
+		const playing = editorState.playing;
+		const position = transform().position;
+		const pixelSecs = secsPerPixel();
+		const width = timelineBounds.width ?? 0;
+		untrack(() => {
+			if (!playing) playingSince = 0;
+			else if (playingSince === 0) playingSince = performance.now();
+			const scrolled = position !== playheadPreviousPosition;
+			playheadPreviousPosition = position;
+			const dpr = window.devicePixelRatio || 1;
+			const current = playheadAnimation;
+			if (
+				playing &&
+				!scrolled &&
+				current &&
+				current.position === position &&
+				current.secsPerPixel === pixelSecs &&
+				Math.abs(
+					playheadMotionX(
+						current.motion,
+						Number(current.animation.currentTime ?? 0),
+						dpr,
+					) - x,
+				) <=
+					1 / dpr + 1e-6
+			)
+				return;
+			const now = performance.now();
+			const time = editorState.playbackTime;
+			if (!playing || scrolled) playheadClock = null;
+			else if (playheadClock && now - playheadClock.at >= 1000) {
+				const rate =
+					(time - playheadClock.time) / ((now - playheadClock.at) / 1000);
+				playheadClock = {
+					at: now,
+					time,
+					rate: rate > 0.9 && rate < 1.1 ? rate : playheadClock.rate,
+				};
+			} else playheadClock ??= { at: now, time, rate: 1 };
+			stopPlayheadAnimation();
+			setPlayheadRestX(x);
+			// A follow scroll moves the timeline under a fixed playhead.
+			if (
+				!playing ||
+				scrolled ||
+				performance.now() - playingSince < PLAYHEAD_SETTLE_MS ||
+				typeof playheadRef?.animate !== "function"
+			)
+				return;
+			const planned = playheadMotion(x, width, pixelSecs, dpr);
+			if (!planned) return;
+			const motion = {
+				...planned,
+				durationMs: planned.durationMs / (playheadClock?.rate ?? 1),
+			};
+			const animation = playheadRef.animate(
+				[
+					{ transform: `translateX(${motion.from}px)` },
+					{ transform: `translateX(${motion.to}px)` },
+				],
+				{
+					duration: motion.durationMs,
+					easing: `steps(${motion.steps}, end)`,
+					fill: "forwards",
+				},
+			);
+			animation.currentTime = playheadMotionOffsetMs(
+				motion,
+				(time - position) / pixelSecs,
+				dpr,
+			);
+			playheadAnimation = {
+				animation,
+				motion,
+				position,
+				secsPerPixel: pixelSecs,
+			};
+			playheadStallCheck = setInterval(() => {
+				if (performance.now() - playheadMovedAt < PLAYHEAD_STALL_MS) return;
+				stopPlayheadAnimation();
+				setPlayheadRestX(untrack(playheadX));
+			}, PLAYHEAD_STALL_MS);
+		});
+	});
 	const playbackFollow = new PlaybackFollow();
 	const playbackDuration = createMemo(totalDuration);
-	let followRafId: number | null = null;
 	let timelinePointerDown = false;
+
+	// While playback scrolls the timeline, the tracks and ruler are laid out at
+	// a position that moves an eighth of a view at a time, and the rest of the
+	// scroll is one translate on their content: a frame restyles nothing inside
+	// them. Anything that touches the timeline first puts them back at the
+	// exact position.
+	const [followAnchor, setFollowAnchor] = createSignal<number | null>(null);
+	const renderPosition = () => followAnchor() ?? transform().position;
+	const followExtent = () =>
+		followAnchor() === null ? 0 : transform().zoom / FOLLOW_STEPS;
+	let followZoom = Number.NaN;
+	let followPrevious = Number.NaN;
+	createEffect(() => {
+		const { position, zoom } = transform();
+		const playing = editorState.playing;
+		untrack(() => {
+			const scrolled =
+				!Number.isNaN(followPrevious) && position !== followPrevious;
+			followPrevious = position;
+			const zoomChanged = zoom !== followZoom;
+			followZoom = zoom;
+			setFollowAnchor(
+				nextFollowAnchor({
+					anchor: followAnchor(),
+					position,
+					zoom,
+					playing,
+					scrolled,
+					zoomChanged,
+				}),
+			);
+		});
+	});
+	// Set every frame rather than animated: a compositor animation runs
+	// smoothly between the playback updates the content otherwise steps with.
+	const setFollowShift = (root: HTMLElement, shift: number | null) => {
+		const transform = shift === null ? "" : `translateX(${-shift}px)`;
+		for (const wrapper of root.getElementsByClassName(
+			"timeline-follow-shift",
+		) as HTMLCollectionOf<HTMLElement>)
+			if (wrapper.style.transform !== transform)
+				wrapper.style.transform = transform;
+	};
+	createEffect(() => {
+		const root = timelineContainerRef();
+		if (!root) return;
+		const anchor = followAnchor();
+		setFollowShift(
+			root,
+			anchor === null ? null : (transform().position - anchor) / secsPerPixel(),
+		);
+	});
+	onCleanup(() => {
+		const root = timelineContainerRef();
+		if (root) setFollowShift(root, null);
+	});
+	const settleFollow = (event: Event) => {
+		if (
+			followAnchor() !== null &&
+			event.target instanceof Node &&
+			timelineContainerRef()?.contains(event.target)
+		)
+			setFollowAnchor(null);
+	};
+	createEventListenerMap(
+		window,
+		{ pointerdown: settleFollow, wheel: settleFollow },
+		{ capture: true, passive: true },
+	);
 
 	createEventListener(
 		window,
@@ -245,40 +470,29 @@ export function Timeline(props: {
 		},
 	});
 
-	function cancelPlaybackFollow() {
-		if (followRafId !== null) cancelAnimationFrame(followRafId);
-		followRafId = null;
-		playbackFollow.reset();
-	}
-
 	createEffect(
 		on(
 			[() => editorState.playing, () => editorState.playbackTime],
-			([playing]) => {
+			([playing, playbackTime]) => {
 				if (!playing) {
-					cancelPlaybackFollow();
+					playbackFollow.reset();
 					return;
 				}
-				if (followRafId !== null) return;
-				followRafId = requestAnimationFrame(() => {
-					followRafId = null;
-					if (!editorState.playing || !timelineBounds.width) return;
-					const viewport = transform();
-					const position = playbackFollow.update(
-						viewport,
-						editorState.playbackTime,
-						playbackDuration(),
-						performance.now(),
-						timelinePointerDown,
-					);
-					if (position !== viewport.position) {
-						setEditorState("timeline", "transform", "position", position);
-					}
-				});
+				if (!timelineBounds.width) return;
+				const viewport = untrack(transform);
+				const position = playbackFollow.update(
+					{ position: viewport.position, zoom: viewport.zoom },
+					playbackTime,
+					untrack(playbackDuration),
+					performance.now(),
+					timelinePointerDown,
+				);
+				if (position !== viewport.position) {
+					setEditorState("timeline", "transform", "position", position);
+				}
 			},
 		),
 	);
-	onCleanup(cancelPlaybackFollow);
 
 	const openAudioPicker = (laneIndex: number) => {
 		batch(() => {
@@ -288,19 +502,29 @@ export function Timeline(props: {
 	};
 
 	const trackState = () => editorState.timeline.tracks;
+	const [captionPlanAllowed, setCaptionPlanAllowed] = createSignal(
+		captionsAllowed(),
+	);
+	if (isWebEditor)
+		createEventListener(window, "cap-web-editor-captions-plan", () =>
+			setCaptionPlanAllowed(captionsAllowed()),
+		);
 	const sceneAvailable = () =>
 		meta().hasCamera &&
 		(!project.camera.hide ||
 			stylesRevealCamera(project.timeline?.styleSegments ?? []) ||
 			!!project.timeline?.sceneSegments?.length);
-	const captionTrackVisible = () => trackState().caption;
-	const keyboardTrackVisible = () => trackState().keyboard;
+	const captionTrackVisible = () =>
+		captionPlanAllowed() && trackState().caption;
+	const keyboardTrackVisible = () => !isWebEditor && trackState().keyboard;
 	const threeDTrackVisible = () => trackState()["3d"];
 	const trackOptions = createMemo(() =>
-		trackDefinitions.map((definition) => ({
+		availableTrackDefinitions.map((definition) => ({
 			...definition,
 			active:
-				definition.type === "style" || definition.type === "image"
+				definition.type === "style" ||
+				definition.type === "image" ||
+				definition.type === "waveform"
 					? trackState()[definition.type] > 0
 					: definition.type === "caption"
 						? trackState().caption
@@ -317,15 +541,23 @@ export function Timeline(props: {
 											: definition.type === "audio"
 												? trackState().audio > 0
 												: true,
-			available: definition.type === "scene" ? sceneAvailable() : true,
+			available:
+				definition.type === "caption"
+					? captionPlanAllowed()
+					: definition.type === "scene"
+						? sceneAvailable()
+						: true,
 			supportsMultiple:
 				definition.type === "style" ||
 				definition.type === "image" ||
+				definition.type === "waveform" ||
 				definition.type === "mask" ||
 				definition.type === "text" ||
 				definition.type === "audio",
 			count:
-				definition.type === "style" || definition.type === "image"
+				definition.type === "style" ||
+				definition.type === "image" ||
+				definition.type === "waveform"
 					? trackState()[definition.type]
 					: definition.type === "mask"
 						? trackState().mask
@@ -354,9 +586,11 @@ export function Timeline(props: {
 			trackState().audio,
 		).reverse(),
 	);
+	const zoomTrackVisible = () => !meta().audioOnly;
 	const visibleTrackCount = createMemo(
 		() =>
-			2 +
+			1 +
+			(zoomTrackVisible() ? 1 : 0) +
 			styleTrackRows().length +
 			overlayTrackRows().length +
 			(captionTrackVisible() ? 1 : 0) +
@@ -405,6 +639,7 @@ export function Timeline(props: {
 
 	function handleToggleTrack(type: TimelineTrackType, next: boolean) {
 		if (type === "caption") {
+			if (!captionsAllowed()) return;
 			batch(() => {
 				if (!project.captions) {
 					setProject("captions", {
@@ -504,6 +739,23 @@ export function Timeline(props: {
 			);
 			if (type === "style") projectActions.addStyleSegment(lane);
 			else void projectActions.importImageSegment(lane);
+			return;
+		}
+
+		if (type === "waveform") {
+			const segments = project.timeline?.waveformSegments ?? [];
+			const laneCount = Math.max(
+				trackState().waveform,
+				getUsedTrackCount(segments),
+			);
+			let lane = laneCount;
+			for (let i = 0; i < laneCount; i++) {
+				if (!segments.some((segment) => getSegmentTrack(segment) === i)) {
+					lane = i;
+					break;
+				}
+			}
+			projectActions.addWaveformSegment(lane);
 			return;
 		}
 
@@ -628,15 +880,17 @@ export function Timeline(props: {
 	}
 
 	function handleDeleteTrackLane(
-		type: "text" | "mask" | "audio" | "style" | "image",
+		type: "text" | "mask" | "audio" | "style" | "image" | "waveform",
 		laneIndex: number,
 	) {
-		if (type === "style" || type === "image") {
+		if (type === "style" || type === "image" || type === "waveform") {
 			const resumeHistory = projectHistory.pause();
-			const segments =
+			const segments: Array<{ track: number }> =
 				(type === "style"
 					? project.timeline?.styleSegments
-					: project.timeline?.imageSegments) ?? [];
+					: type === "image"
+						? project.timeline?.imageSegments
+						: project.timeline?.waveformSegments) ?? [];
 			projectActions.deleteOverlaySegments(
 				type,
 				segments.flatMap((segment, index) =>
@@ -645,13 +899,15 @@ export function Timeline(props: {
 			);
 			setProject(
 				produce((project) => {
-					const remaining =
+					const remaining: Array<{ track: number }> | undefined =
 						type === "style"
 							? project.timeline?.styleSegments
-							: project.timeline?.imageSegments;
+							: type === "image"
+								? project.timeline?.imageSegments
+								: project.timeline?.waveformSegments;
 					for (const segment of remaining ?? [])
 						if (segment.track > laneIndex) segment.track -= 1;
-					if (type === "image")
+					if (type !== "style")
 						project.overlayOrder = removeOverlayTrack(
 							project.overlayOrder,
 							type,
@@ -825,7 +1081,7 @@ export function Timeline(props: {
 
 	async function handleOpenTrackMenu(
 		e: MouseEvent,
-		type: "text" | "mask" | "audio" | "style" | "image",
+		type: "text" | "mask" | "audio" | "style" | "image" | "waveform",
 		laneIndex: number,
 	) {
 		e.preventDefault();
@@ -867,22 +1123,6 @@ export function Timeline(props: {
 			});
 			resume();
 		}
-
-		const checkBounds = () => {
-			if (timelineBounds.width && timelineBounds.width > 0) {
-				const minSegmentPixels = 80;
-				const secondsPerPixel = 1 / minSegmentPixels;
-				const desiredZoom = timelineBounds.width * secondsPerPixel;
-
-				if (transform().zoom > desiredZoom) {
-					transform().updateZoom(desiredZoom, 0);
-				}
-			} else {
-				setTimeout(checkBounds, 10);
-			}
-		};
-
-		checkBounds();
 	});
 
 	if (
@@ -928,6 +1168,7 @@ export function Timeline(props: {
 
 	let styleSegmentDragState: OverlayDragState = { type: "idle" };
 	let imageSegmentDragState: OverlayDragState = { type: "idle" };
+	let waveformSegmentDragState: OverlayDragState = { type: "idle" };
 	let zoomSegmentDragState = { type: "idle" } as ZoomSegmentDragState;
 	let sceneSegmentDragState = { type: "idle" } as SceneSegmentDragState;
 	let maskSegmentDragState = { type: "idle" } as MaskSegmentDragState;
@@ -937,7 +1178,7 @@ export function Timeline(props: {
 	let keyboardSegmentDragState = { type: "idle" } as KeyboardSegmentDragState;
 	let threeDSegmentDragState = { type: "idle" } as ThreeDSegmentDragState;
 
-	let pendingZoomDelta = 0;
+	let pendingZoomFactor = 1;
 	let pendingZoomOrigin: number | null = null;
 	let zoomRafId: number | null = null;
 
@@ -945,15 +1186,17 @@ export function Timeline(props: {
 	let scrollRafId: number | null = null;
 
 	function flushPendingZoom() {
-		if (pendingZoomDelta === 0 || pendingZoomOrigin === null) {
+		if (pendingZoomFactor === 1 || pendingZoomOrigin === null) {
 			zoomRafId = null;
 			return;
 		}
 
-		const newZoom = transform().zoom + pendingZoomDelta;
-		transform().updateZoom(newZoom, pendingZoomOrigin);
+		transform().updateZoom(
+			transform().zoom * pendingZoomFactor,
+			pendingZoomOrigin,
+		);
 
-		pendingZoomDelta = 0;
+		pendingZoomFactor = 1;
 		pendingZoomOrigin = null;
 		zoomRafId = null;
 	}
@@ -971,8 +1214,8 @@ export function Timeline(props: {
 		scrollRafId = null;
 	}
 
-	function scheduleZoomUpdate(delta: number, origin: number) {
-		pendingZoomDelta += delta;
+	function scheduleZoomUpdate(factor: number, origin: number) {
+		pendingZoomFactor *= factor;
 		pendingZoomOrigin = origin;
 
 		if (zoomRafId === null) {
@@ -1046,6 +1289,7 @@ export function Timeline(props: {
 		if (
 			styleSegmentDragState.type !== "moving" &&
 			imageSegmentDragState.type !== "moving" &&
+			waveformSegmentDragState.type !== "moving" &&
 			zoomSegmentDragState.type !== "moving" &&
 			sceneSegmentDragState.type !== "moving" &&
 			maskSegmentDragState.type !== "moving" &&
@@ -1164,7 +1408,11 @@ export function Timeline(props: {
 			const selection = editorState.timeline.selection;
 			if (!selection) return;
 
-			if (selection.type === "style" || selection.type === "image") {
+			if (
+				selection.type === "style" ||
+				selection.type === "image" ||
+				selection.type === "waveform"
+			) {
 				projectActions.deleteOverlaySegments(selection.type, selection.indices);
 			} else if (selection.type === "zoom") {
 				projectActions.deleteZoomSegments(selection.indices);
@@ -1203,7 +1451,11 @@ export function Timeline(props: {
 			if (time === null || time === undefined) return;
 
 			const selection = editorState.timeline.selection;
-			if (selection?.type === "style" || selection?.type === "image") {
+			if (
+				selection?.type === "style" ||
+				selection?.type === "image" ||
+				selection?.type === "waveform"
+			) {
 				const type = selection.type;
 				const resumeHistory = projectHistory.pause();
 				for (const index of [...selection.indices].sort((a, b) => b - a))
@@ -1243,6 +1495,7 @@ export function Timeline(props: {
 			const segmentCount = {
 				style: timeline?.styleSegments?.length ?? 0,
 				image: timeline?.imageSegments?.length ?? 0,
+				waveform: timeline?.waveformSegments?.length ?? 0,
 				clip: timeline?.segments.length ?? 0,
 				zoom: timeline?.zoomSegments?.length ?? 0,
 				scene: timeline?.sceneSegments?.length ?? 0,
@@ -1313,6 +1566,8 @@ export function Timeline(props: {
 			duration={duration()}
 			secsPerPixel={secsPerPixel()}
 			timelineBounds={timelineBounds}
+			renderPosition={renderPosition()}
+			followExtent={followExtent()}
 		>
 			<div
 				ref={setTimelineContainerRef}
@@ -1344,7 +1599,9 @@ export function Timeline(props: {
 					const hoverTime = transform().position + secsPerPixel() * offsetX;
 					setEditorState(
 						"previewTime",
-						hoverTime / secsPerPixel() <= START_SNAP_PX ? 0 : hoverTime,
+						hoverTime / secsPerPixel() <= START_SNAP_PX
+							? 0
+							: Math.min(hoverTime, totalDuration()),
 					);
 				}}
 				onMouseEnter={() => setEditorState("timeline", "hoveredTrack", null)}
@@ -1352,10 +1609,11 @@ export function Timeline(props: {
 					setEditorState("previewTime", null);
 				}}
 				onWheel={(e) => {
+					// The timeline owns the gesture: no page zoom or swipe-back.
+					e.preventDefault();
 					if (e.ctrlKey) {
-						const zoomDelta = (e.deltaY * Math.sqrt(transform().zoom)) / 30;
 						const origin = editorState.previewTime ?? editorState.playbackTime;
-						scheduleZoomUpdate(zoomDelta, origin);
+						scheduleZoomUpdate(pinchZoomFactor(e.deltaY), origin);
 					} else {
 						let delta: number = 0;
 
@@ -1436,12 +1694,9 @@ export function Timeline(props: {
 					style={{
 						left: `${TRACK_GUTTER}px`,
 						top: `${PLAYHEAD_TOP_OFFSET}px`,
-						transform: `translateX(${Math.min(
-							(editorState.playbackTime - transform().position) /
-								secsPerPixel(),
-							timelineBounds.width ?? 0,
-						)}px)`,
+						transform: `translateX(${playheadRestX()}px)`,
 					}}
+					ref={playheadRef}
 				>
 					<div class="size-3 rounded-full bg-ed-playhead ring-2 ring-ed-card -mt-1.5 -ml-[5.5px]" />
 				</div>
@@ -1560,6 +1815,15 @@ export function Timeline(props: {
 													handleUpdatePlayhead={handleUpdatePlayhead}
 												/>
 											</Match>
+											<Match when={row.kind === "waveform"}>
+												<WaveformTrack
+													laneIndex={row.track}
+													onDragStateChanged={(value) => {
+														waveformSegmentDragState = value;
+													}}
+													handleUpdatePlayhead={handleUpdatePlayhead}
+												/>
+											</Match>
 											<Match when={row.kind === "text"}>
 												<TextTrack
 													laneIndex={row.track}
@@ -1605,25 +1869,27 @@ export function Timeline(props: {
 									</TrackRow>
 								)}
 							</For>
-							<TrackRow
-								icon={trackIcons.zoom}
-								label="Zoom"
-								type="zoom"
-								onDelete={
-									(project.timeline?.zoomSegments?.length ?? 0) > 0
-										? () => handleClearTrackSegments("zoom")
-										: undefined
-								}
-								deleteLabel="Clear all"
-								deleteTitle="Delete all zoom segments"
-							>
-								<ZoomTrack
-									onDragStateChanged={(v) => {
-										zoomSegmentDragState = v;
-									}}
-									handleUpdatePlayhead={handleUpdatePlayhead}
-								/>
-							</TrackRow>
+							<Show when={zoomTrackVisible()}>
+								<TrackRow
+									icon={trackIcons.zoom}
+									label="Zoom"
+									type="zoom"
+									onDelete={
+										(project.timeline?.zoomSegments?.length ?? 0) > 0
+											? () => handleClearTrackSegments("zoom")
+											: undefined
+									}
+									deleteLabel="Clear all"
+									deleteTitle="Delete all zoom segments"
+								>
+									<ZoomTrack
+										onDragStateChanged={(v) => {
+											zoomSegmentDragState = v;
+										}}
+										handleUpdatePlayhead={handleUpdatePlayhead}
+									/>
+								</TrackRow>
+							</Show>
 							<Show when={threeDTrackVisible()}>
 								<TrackRow
 									icon={trackIcons["3d"]}
@@ -1728,6 +1994,8 @@ function TrackRow(props: {
 				return timeline?.styleSegments ?? [];
 			case "image":
 				return timeline?.imageSegments ?? [];
+			case "waveform":
+				return timeline?.waveformSegments ?? [];
 			case "text":
 				return timeline?.textSegments ?? [];
 			case "mask":
@@ -2090,57 +2358,62 @@ function TrackRow(props: {
 
 function TimelineMarkings() {
 	const { editorState } = useEditorContext();
-	const { secsPerPixel, markingResolution } = useTimelineContext();
+	const { secsPerPixel, markingResolution, renderPosition, followExtent } =
+		useTimelineContext();
 	const transform = () => editorState.timeline.transform;
 
 	const markingCount = () =>
-		Math.ceil(2 + (transform().zoom + 5) / markingResolution());
+		Math.ceil(
+			2 + (transform().zoom + followExtent() + 5) / markingResolution(),
+		);
 
-	const markingOffset = () => transform().position % markingResolution();
+	const markingOffset = () => renderPosition() % markingResolution();
 
 	const getMarkingTime = (index: number) =>
-		transform().position - markingOffset() + index * markingResolution();
+		renderPosition() - markingOffset() + index * markingResolution();
 
 	return (
 		<div
 			class="relative flex-1 h-full overflow-hidden"
 			style={{ "margin-left": `${TRACK_GUTTER}px` }}
 		>
-			<Index each={Array.from({ length: markingCount() })}>
-				{(_, index) => {
-					const second = () => getMarkingTime(index);
-					const isVisible = () => second() >= 0;
-					const isMajor = () => second() % 1 === 0;
-					const translateX = () =>
-						(second() - transform().position) / secsPerPixel();
+			<div class="timeline-follow-shift absolute inset-0">
+				<Index each={Array.from({ length: markingCount() })}>
+					{(_, index) => {
+						const second = () => getMarkingTime(index);
+						const isVisible = () => second() >= 0;
+						const isMajor = () => second() % 1 === 0;
+						const translateX = () =>
+							(second() - renderPosition()) / secsPerPixel();
 
-					return (
-						<div
-							class={cx(
-								"absolute left-0 bottom-0 w-px bg-ed-line-strong",
-								isMajor() ? "h-2" : "h-[5px]",
-							)}
-							style={{
-								transform: `translateX(${translateX()}px)`,
-								visibility: isVisible() ? "visible" : "hidden",
-							}}
-						>
-							<Show when={isMajor()}>
-								<div
-									class={cx(
-										"absolute bottom-2.5 left-0 text-[11px] leading-none tabular-nums whitespace-nowrap text-ed-text-3",
-										// Left-anchor the origin label so it doesn't overhang
-										// into the track icon gutter and get covered
-										second() !== 0 && "-translate-x-1/2",
-									)}
-								>
-									{formatTime(second())}
-								</div>
-							</Show>
-						</div>
-					);
-				}}
-			</Index>
+						return (
+							<div
+								class={cx(
+									"absolute left-0 bottom-0 w-px bg-ed-line-strong",
+									isMajor() ? "h-2" : "h-[5px]",
+								)}
+								style={{
+									transform: `translateX(${translateX()}px)`,
+									visibility: isVisible() ? "visible" : "hidden",
+								}}
+							>
+								<Show when={isMajor()}>
+									<div
+										class={cx(
+											"absolute bottom-2.5 left-0 text-[11px] leading-none tabular-nums whitespace-nowrap text-ed-text-3",
+											// Left-anchor the origin label so it doesn't overhang
+											// into the track icon gutter and get covered
+											second() !== 0 && "-translate-x-1/2",
+										)}
+									>
+										{formatTime(second())}
+									</div>
+								</Show>
+							</div>
+						);
+					}}
+				</Index>
+			</div>
 		</div>
 	);
 }

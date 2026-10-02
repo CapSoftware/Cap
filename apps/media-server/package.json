@@ -7,9 +7,15 @@
 		"start": "bun src/index.ts",
 		"build": "echo 'No build step needed for Bun'",
 		"test": "bun test",
+		"test:browser-cap-import": "bun src/__tests__/routes/editor-browser-cap-directory-replay.ts",
+		"test:native-editor-clips": "bun src/__tests__/routes/editor-clips-replay.ts",
+		"test:native-editor-ui": "bun src/__tests__/routes/editor-solid-ui-replay.ts",
+		"bench:native-editor-clips": "bun src/__tests__/routes/editor-clips-benchmark.ts",
+		"bench:native-editor-camera-effects": "bun src/__tests__/routes/editor-camera-effects-benchmark.ts",
 		"test:watch": "bun test --watch"
 	},
 	"dependencies": {
+		"@cap/editor-cap-bundle": "workspace:*",
 		"@mediabunny/server": "^1.45.2",
 		"hono": "^4.12.12",
 		"mediabunny": "^1.45.2",
@@ -17,6 +23,7 @@
 		"zod": "^3.24.2"
 	},
 	"devDependencies": {
+		"@playwright/test": "^1.51.1",
 		"@types/bun": "latest"
 	},
 	"trustedDependencies": [

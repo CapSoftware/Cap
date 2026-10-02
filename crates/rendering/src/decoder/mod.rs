@@ -1,11 +1,14 @@
+#[cfg(not(target_arch = "wasm32"))]
 use ::ffmpeg::Rational;
 use std::{
     fmt,
-    path::PathBuf,
-    sync::{Arc, Weak, mpsc},
-    time::Duration,
+    sync::{Arc, Weak},
 };
+#[cfg(not(target_arch = "wasm32"))]
+use std::{path::PathBuf, sync::mpsc, time::Duration};
+#[cfg(not(target_arch = "wasm32"))]
 use tokio::sync::oneshot;
+#[cfg(not(target_arch = "wasm32"))]
 use tracing::info;
 
 #[cfg(target_os = "macos")]
@@ -15,7 +18,13 @@ use std::sync::{Mutex, OnceLock};
 
 #[cfg(target_os = "macos")]
 mod avassetreader;
+#[cfg(target_arch = "wasm32")]
+mod browser;
+#[cfg(target_arch = "wasm32")]
+pub use browser::{BrowserFrameImage, BrowserFrameSource, BrowserNv12};
+#[cfg(not(target_arch = "wasm32"))]
 mod ffmpeg;
+#[cfg(not(target_arch = "wasm32"))]
 mod frame_converter;
 #[cfg(target_os = "windows")]
 mod media_foundation;
@@ -159,6 +168,10 @@ pub struct DecodedFrame {
     image_buf_backing: Option<Arc<SendableImageBuf>>,
     #[cfg(target_os = "windows")]
     d3d11_texture_backing: Option<Arc<SendableD3D11Texture>>,
+    #[cfg(target_arch = "wasm32")]
+    browser_image: Option<browser::BrowserFrameImage>,
+    #[cfg(target_arch = "wasm32")]
+    browser_nv12: browser::BrowserNv12,
     #[cfg(target_os = "linux")]
     cuda_nv12: Option<Arc<crate::linux_gpu::CudaNv12Frame>>,
 }
@@ -284,6 +297,10 @@ impl DecodedFrame {
             image_buf_backing: None,
             #[cfg(target_os = "windows")]
             d3d11_texture_backing: None,
+            #[cfg(target_arch = "wasm32")]
+            browser_image: None,
+            #[cfg(target_arch = "wasm32")]
+            browser_nv12: browser::BrowserNv12::default(),
             #[cfg(target_os = "linux")]
             cuda_nv12: None,
         }
@@ -301,6 +318,10 @@ impl DecodedFrame {
             image_buf_backing: None,
             #[cfg(target_os = "windows")]
             d3d11_texture_backing: None,
+            #[cfg(target_arch = "wasm32")]
+            browser_image: None,
+            #[cfg(target_arch = "wasm32")]
+            browser_nv12: browser::BrowserNv12::default(),
             #[cfg(target_os = "linux")]
             cuda_nv12: None,
         }
@@ -342,6 +363,10 @@ impl DecodedFrame {
             image_buf_backing: None,
             #[cfg(target_os = "windows")]
             d3d11_texture_backing: None,
+            #[cfg(target_arch = "wasm32")]
+            browser_image: None,
+            #[cfg(target_arch = "wasm32")]
+            browser_nv12: browser::BrowserNv12::default(),
             #[cfg(target_os = "linux")]
             cuda_nv12: None,
         }
@@ -365,6 +390,10 @@ impl DecodedFrame {
             image_buf_backing: None,
             #[cfg(target_os = "windows")]
             d3d11_texture_backing: None,
+            #[cfg(target_arch = "wasm32")]
+            browser_image: None,
+            #[cfg(target_arch = "wasm32")]
+            browser_nv12: browser::BrowserNv12::default(),
             #[cfg(target_os = "linux")]
             cuda_nv12: None,
         }
@@ -407,6 +436,10 @@ impl DecodedFrame {
             image_buf_backing: None,
             #[cfg(target_os = "windows")]
             d3d11_texture_backing: None,
+            #[cfg(target_arch = "wasm32")]
+            browser_image: None,
+            #[cfg(target_arch = "wasm32")]
+            browser_nv12: browser::BrowserNv12::default(),
             #[cfg(target_os = "linux")]
             cuda_nv12: None,
         }
@@ -430,6 +463,10 @@ impl DecodedFrame {
             image_buf_backing: None,
             #[cfg(target_os = "windows")]
             d3d11_texture_backing: None,
+            #[cfg(target_arch = "wasm32")]
+            browser_image: None,
+            #[cfg(target_arch = "wasm32")]
+            browser_nv12: browser::BrowserNv12::default(),
             #[cfg(target_os = "linux")]
             cuda_nv12: None,
         }
@@ -654,20 +691,56 @@ impl DecodedFrame {
     pub fn uv_stride(&self) -> u32 {
         self.uv_stride
     }
+
+    /// Copies a browser-decoded frame into `texture` on the GPU. Returns false
+    /// for CPU-resident frames, which the caller uploads itself.
+    pub(crate) fn upload_browser_frame(
+        &self,
+        queue: &wgpu::Queue,
+        texture: &wgpu::Texture,
+    ) -> bool {
+        #[cfg(target_arch = "wasm32")]
+        if let Some(image) = &self.browser_image {
+            image.copy_to_texture(queue, texture);
+            return true;
+        }
+        let _ = (queue, texture);
+        false
+    }
+
+    pub(crate) fn apply_source_color_fix(
+        &self,
+        uniforms: &mut crate::composite_frame::CompositeVideoFrameUniforms,
+    ) {
+        #[cfg(target_arch = "wasm32")]
+        if self.browser_source_color_fix() {
+            uniforms._padding1[0] = 1.0;
+        }
+        #[cfg(target_arch = "wasm32")]
+        if let Some(image) = &self.browser_image {
+            uniforms._padding1[1] = image.source_display_gamma;
+        }
+        let _ = uniforms;
+    }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub enum VideoDecoderMessage {
     GetFrame(f32, u32, tokio::sync::oneshot::Sender<DecodedFrame>),
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn pts_to_frame(pts: i64, time_base: Rational, fps: u32) -> u32 {
     (fps as f64 * ((pts as f64 * time_base.numerator() as f64) / (time_base.denominator() as f64)))
         .round() as u32
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub const FRAME_CACHE_SIZE: usize = 90;
+#[cfg(not(target_arch = "wasm32"))]
 const DEFAULT_MAX_FALLBACK_DISTANCE: u32 = 90;
 
+#[cfg(not(target_arch = "wasm32"))]
 /// Records a pts hole discovered from a decode-order vend jump (frames vend
 /// in pts order, so a jump means no samples exist in between). The map stays
 /// bounded by dropping the narrowest hole — wide static-screen holds matter
@@ -689,6 +762,7 @@ pub(super) fn record_pts_hole(
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone)]
 pub struct AsyncVideoDecoderHandle {
     sender: mpsc::Sender<VideoDecoderMessage>,
@@ -707,6 +781,7 @@ struct MacOsDecoderFallback {
     decoder: tokio::sync::OnceCell<Result<AsyncVideoDecoderHandle, String>>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl AsyncVideoDecoderHandle {
     const INITIAL_SEEK_TIMEOUT_MS: u64 = 10000;
     const INITIAL_MAX_FALLBACK_DISTANCE: u32 = 2;
@@ -874,6 +949,7 @@ impl AsyncVideoDecoderHandle {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum ManagedVideoError {
     #[error("Managed video initialization failed: {0}")]
@@ -898,23 +974,27 @@ pub enum ManagedVideoError {
     FrameTimeout,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Debug)]
 pub struct ManagedVideoExit {
     pub terminal: ManagedVideoError,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Default)]
 struct ManagedVideoState {
     terminal: Option<ManagedVideoError>,
     exit: Option<ManagedVideoExit>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 struct ManagedVideoControl {
     cancelled: std::sync::atomic::AtomicBool,
     state: tokio::sync::watch::Sender<ManagedVideoState>,
     join: std::sync::Mutex<Option<std::thread::JoinHandle<()>>>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl ManagedVideoControl {
     fn new() -> Arc<Self> {
         let (state, _) = tokio::sync::watch::channel(ManagedVideoState::default());
@@ -979,12 +1059,14 @@ impl ManagedVideoControl {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone)]
 pub struct ManagedVideoStopHandle {
     control: Arc<ManagedVideoControl>,
     wake: mpsc::Sender<VideoDecoderMessage>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl ManagedVideoStopHandle {
     pub fn cancel(&self) {
         self.control.cancel();
@@ -1038,8 +1120,10 @@ impl ManagedVideoStopHandle {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 struct CancelManagedReadiness(Option<ManagedVideoStopHandle>);
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Drop for CancelManagedReadiness {
     fn drop(&mut self) {
         if let Some(worker) = self.0.take() {
@@ -1048,11 +1132,13 @@ impl Drop for CancelManagedReadiness {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 struct ManagedVideoInput {
     source: cap_enc_ffmpeg::RelocatableSource,
     paths: Vec<PathBuf>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub struct ManagedVideoDecoder {
     worker: ManagedVideoStopHandle,
     ready: Option<oneshot::Receiver<Result<DecoderInitResult, String>>>,
@@ -1061,6 +1147,7 @@ pub struct ManagedVideoDecoder {
     max_fallback_distance: u32,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl ManagedVideoDecoder {
     pub fn with_max_fallback_distance(mut self, max_fallback_distance: u32) -> Self {
         self.max_fallback_distance = max_fallback_distance.min(DEFAULT_MAX_FALLBACK_DISTANCE);
@@ -1222,12 +1309,14 @@ impl ManagedVideoDecoder {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Drop for ManagedVideoDecoder {
     fn drop(&mut self) {
         self.worker.cancel();
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn spawn_managed_decoder<'a>(
     name: &'static str,
     source: cap_enc_ffmpeg::RelocatableSource,
@@ -1273,6 +1362,7 @@ pub fn spawn_managed_decoder<'a>(
     })
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[cfg(target_os = "macos")]
 async fn spawn_ffmpeg_decoder(
     name: &'static str,
@@ -1320,6 +1410,7 @@ async fn spawn_ffmpeg_decoder(
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub async fn spawn_decoder(
     name: &'static str,
     path: PathBuf,

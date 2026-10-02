@@ -20,6 +20,12 @@ const MAX_PENDING_UPLOAD_BYTES = 128 * 1024 * 1024;
 const FINAL_BLOB_PART_SIZE_BYTES = 16 * 1024 * 1024;
 const DRIVE_PART_SIZE_BYTES = 16 * 1024 * 1024;
 const PART_UPLOAD_STALL_TIMEOUT_MS = 30_000;
+// Byte progress re-renders whoever listens, so it is reported at most this
+// often per part; status changes are always reported.
+const PART_PROGRESS_INTERVAL_MS = 250;
+// Part URLs are signed an hour ahead; one signed in advance is only trusted
+// for half of that.
+const PRESIGNED_PART_REUSE_MS = 30 * 60 * 1000;
 const PART_UPLOAD_REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
 // JSON control-plane calls (initiate/presign/complete/abort) are always
 // timed: a lost response would otherwise wedge the pipeline — a hung presign
@@ -354,6 +360,14 @@ export class InstantRecordingUploader {
 	private completionUncertain = false;
 	private queuedBytes = 0;
 	private readonly partOffsets = new Map<number, number>();
+	private sendingRemaining = false;
+	private readonly presignedAhead = new Map<
+		number,
+		{
+			signedAt: number;
+			upload: Promise<{ url: string; provider: "s3" | "googleDrive" } | null>;
+		}
+	>();
 
 	constructor(options: {
 		videoId: VideoId;
@@ -381,6 +395,33 @@ export class InstantRecordingUploader {
 		this.api = options.api ?? {};
 		this.availableUploadSlots =
 			this.provider === "googleDrive" ? 1 : MAX_PARALLEL_PART_UPLOADS;
+		this.presignAhead(1);
+	}
+
+	// Signing the next part while the current one records keeps the request
+	// off the path between Stop and the finished upload.
+	private presignAhead(partNumber: number) {
+		if (this.provider !== "s3" || this.finished || this.sendingRemaining)
+			return;
+		this.presignedAhead.set(partNumber, {
+			signedAt: Date.now(),
+			upload: presignMultipartPart(
+				this.videoId,
+				this.uploadId,
+				partNumber,
+				this.subpath,
+				this.api,
+			).catch(() => null),
+		});
+	}
+
+	private takePresignedAhead(partNumber: number) {
+		const ahead = this.presignedAhead.get(partNumber);
+		if (!ahead) return null;
+		this.presignedAhead.delete(partNumber);
+		return Date.now() - ahead.signedAt < PRESIGNED_PART_REUSE_MS
+			? ahead.upload
+			: null;
 	}
 
 	private markFatalError(error: Error) {
@@ -574,6 +615,7 @@ export class InstantRecordingUploader {
 		}
 
 		const partNumber = this.nextPartNumber++;
+		this.presignAhead(this.nextPartNumber);
 		this.partOffsets.set(partNumber, this.queuedBytes);
 		this.queuedBytes += part.size;
 		this.pendingUploadBytes += part.size;
@@ -808,13 +850,15 @@ export class InstantRecordingUploader {
 	}
 
 	private async uploadPart(partNumber: number, part: Blob) {
-		const upload = await presignMultipartPart(
-			this.videoId,
-			this.uploadId,
-			partNumber,
-			this.subpath,
-			this.api,
-		);
+		const upload =
+			(await this.takePresignedAhead(partNumber)) ??
+			(await presignMultipartPart(
+				this.videoId,
+				this.uploadId,
+				partNumber,
+				this.subpath,
+				this.api,
+			));
 
 		const etag = await this.uploadBlobWithProgress({
 			url: upload.url,
@@ -895,8 +939,12 @@ export class InstantRecordingUploader {
 			};
 			refreshStallTimeout();
 
+			let progressReportedAt = 0;
 			xhr.upload.onprogress = (event) => {
 				refreshStallTimeout();
+				const now = performance.now();
+				if (now - progressReportedAt < PART_PROGRESS_INTERVAL_MS) return;
+				progressReportedAt = now;
 				const uploaded = event.lengthComputable
 					? event.loaded
 					: Math.min(part.size, event.loaded);
@@ -972,14 +1020,33 @@ export class InstantRecordingUploader {
 		});
 	}
 
-	async finalize(options: FinalizeOptions) {
+	/**
+	 * Uploads everything still buffered (or the final blob) without completing
+	 * the multipart upload, so the tail can go up alongside other uploads while
+	 * the completion waits its turn. `finalize` calls it too; a second call
+	 * has nothing left to send.
+	 */
+	uploadRemaining(finalBlob: Blob | null) {
+		if (!this.remainingUpload) {
+			this.remainingUpload = this.sendRemaining(finalBlob).catch((error) => {
+				this.remainingUpload = null;
+				throw error;
+			});
+		}
+		return this.remainingUpload;
+	}
+
+	private remainingUpload: Promise<void> | null = null;
+
+	private async sendRemaining(finalBlob: Blob | null) {
 		if (this.cancelled) throw new CancelledUploadError();
 		if (this.finished) return;
 		if (this.fatalError) {
 			throw this.fatalError;
 		}
+		this.sendingRemaining = true;
 
-		const finalTotalBytes = this.resolveFinalTotalBytes(options.finalBlob);
+		const finalTotalBytes = this.resolveFinalTotalBytes(finalBlob);
 
 		if (this.provider === "googleDrive") {
 			if (finalTotalBytes <= 0) {
@@ -989,9 +1056,9 @@ export class InstantRecordingUploader {
 			}
 			this.finalTotalBytes = finalTotalBytes;
 			this.totalRecordedBytes = finalTotalBytes;
-		} else if (options.finalBlob) {
-			this.finalTotalBytes = options.finalBlob.size;
-			this.totalRecordedBytes = options.finalBlob.size;
+		} else if (finalBlob) {
+			this.finalTotalBytes = finalBlob.size;
+			this.totalRecordedBytes = finalBlob.size;
 		}
 
 		// The tail flush enqueues whatever is still buffered; drain in-flight
@@ -1006,10 +1073,22 @@ export class InstantRecordingUploader {
 		this.flushBuffer(true);
 		await this.waitForPendingUploads();
 
-		if (options.finalBlob && this.parts.length === 0) {
-			await this.uploadFinalBlob(options.finalBlob);
+		if (finalBlob && this.parts.length === 0) {
+			await this.uploadFinalBlob(finalBlob);
+		}
+	}
+
+	async finalize(options: FinalizeOptions) {
+		if (this.cancelled) throw new CancelledUploadError();
+		if (this.finished) return;
+		if (this.fatalError) {
+			throw this.fatalError;
 		}
 
+		await this.uploadRemaining(options.finalBlob ?? null);
+		const finalTotalBytes =
+			this.finalTotalBytes ??
+			this.resolveFinalTotalBytes(options.finalBlob ?? null);
 		if (this.parts.length === 0) {
 			throw new Error("No uploaded parts available for completion");
 		}
