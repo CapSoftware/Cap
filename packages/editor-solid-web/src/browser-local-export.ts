@@ -68,7 +68,6 @@ function hasTextOverlays(config: Record<string, unknown>) {
 	].some((value) => Array.isArray(value) && value.length > 0);
 }
 
-/// Local export needs WebCodecs and WebGPU or WebGL2 inside a worker.
 export function browserLocalExportSupported() {
 	return (
 		typeof Worker === "function" &&
@@ -289,8 +288,6 @@ const STORED_EXPORT_LIFETIME_MS = 10 * 60_000;
 /// Locks held on this page's export files; see `browser-export-storage`.
 const heldExportFiles = new Map<string, () => void>();
 
-/// Removes a streamed export from the origin private file system once nothing
-/// reads it any more.
 export function discardStoredBrowserExport(storedFile: string | null) {
 	if (!storedFile) return;
 	const release = heldExportFiles.get(storedFile);
@@ -657,7 +654,6 @@ function workerExport(
 	);
 }
 
-/// Renders the export on this machine and saves it as a download.
 export async function runBrowserLocalExport(
 	settings: Record<string, unknown>,
 	channelId: number | null,
