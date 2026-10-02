@@ -2702,3 +2702,37 @@ test("browser Studio caption jobs report an unavailable worker instead of hangin
 		bridge.dispose();
 	}
 });
+
+test("browser Studio captions move to a worker session when the recording comes to need one", async () => {
+	const requests: string[] = [];
+	const { bridge, port, transcribe } = await browserCaptionHost(
+		async (url, init) => {
+			requests.push(`${init?.method ?? "GET"} ${url}`);
+			if (url === "/api/editor/videos/video/plan")
+				return Response.json({ pro: true });
+			if (url === "/api/editor/videos/video/captions?language=auto")
+				return Response.json({
+					status: "missing",
+					captions: null,
+					message: null,
+				});
+			if (url === "/api/editor/videos/video/captions")
+				return new Response(null, { status: 409 });
+			if (url === "/api/editor/preparations" && init?.method === "POST")
+				return new Response(null, { status: 502 });
+			throw new Error(`Unexpected editor request ${url}`);
+		},
+	);
+	try {
+		expect(await transcribe(1)).toEqual({
+			kind: "error",
+			id: 1,
+			error:
+				"The editor server is unavailable right now. Try again in a moment.",
+		});
+		expect(requests).toContain("POST /api/editor/preparations");
+	} finally {
+		port.close();
+		bridge.dispose();
+	}
+});

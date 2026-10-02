@@ -8,6 +8,7 @@ import {
 	type WebEditorImportedCap,
 } from "@/lib/editor-cap-import-client";
 import {
+	EditorCaptionsNeedSessionError,
 	generateWebEditorCaptions,
 	type WebEditorCaptionData,
 	webEditorCaptionsNeedSession,
@@ -2245,12 +2246,32 @@ export class EditorHostBridge {
 				releaseWorkerUse();
 				if (otherLanguageRunning()) return;
 			} else {
-				const pending = generateWebEditorCaptions(
-					this.videoId,
-					sessionId,
-					this.controller.signal,
-					language,
-				);
+				// The recording can come to need a caption job between the check
+				// and the request, as when another tab saves a clip meanwhile.
+				const generate = async () => {
+					try {
+						return await generateWebEditorCaptions(
+							this.videoId,
+							sessionId,
+							this.controller.signal,
+							language,
+						);
+					} catch (cause) {
+						if (
+							sessionId !== null ||
+							!(cause instanceof EditorCaptionsNeedSessionError)
+						)
+							throw cause;
+						releaseWorkerUse = await this.ensureWorkerSession();
+						return generateWebEditorCaptions(
+							this.videoId,
+							this.sessionId,
+							this.controller.signal,
+							language,
+						);
+					}
+				};
+				const pending = generate();
 				const settle = () => {
 					if (this.activeCaptions?.promise === pending)
 						this.activeCaptions = null;
