@@ -1,3 +1,4 @@
+import { exportCaptionSettings } from "./browser-export-captions";
 import {
 	type ExportBitrateSample,
 	exportBitrateSample,
@@ -145,9 +146,10 @@ async function exportJob(
 	// The preview holds the editor's reactive project store, which a worker
 	// cannot be sent; the job carries a plain copy.
 	const live = browserEditorPreviewConfig();
-	const config = record(live == null ? null : JSON.parse(JSON.stringify(live)));
-	if (!config)
+	const copy = record(live == null ? null : JSON.parse(JSON.stringify(live)));
+	if (!copy)
 		throw new BrowserLocalExportUnavailable("Editor project is loading");
+	const config = exportCaptionSettings(copy);
 	const catalog = new BrowserEditorSourceCatalog(videoId, { fresh: true });
 	try {
 		const [sources, module] = await Promise.all([
