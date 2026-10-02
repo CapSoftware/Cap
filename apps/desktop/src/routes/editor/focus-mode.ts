@@ -37,15 +37,13 @@ export type FocusMode = {
 	onBeforeChange: (callback: () => void) => void;
 };
 
-/// Focus mode gives the preview and timeline the whole editor. Where the page
-/// may go fullscreen it does, so the browser's own chrome goes too; elsewhere
-/// (iOS Safari) the editor only drops its own chrome, and asks the page that
-/// embeds it to drop its bar as well.
 export function createFocusMode(): FocusMode {
 	const [active, setActive] = createSignal(false);
 	const [fullscreen, setFullscreen] = createSignal(false);
 	const beforeChange = new Set<() => void>();
 	let changing = false;
+	// A request to leave that arrives mid-change runs once the change settles.
+	let exitQueued = false;
 
 	const notifyBeforeChange = () => {
 		for (const callback of beforeChange) callback();
@@ -73,6 +71,10 @@ export function createFocusMode(): FocusMode {
 				changing = false;
 				setFullscreen(fullscreenElement() !== null);
 				announce();
+				if (exitQueued) {
+					exitQueued = false;
+					exit();
+				}
 			});
 	};
 
@@ -98,7 +100,11 @@ export function createFocusMode(): FocusMode {
 	};
 
 	const exit = () => {
-		if (!active() || changing) return;
+		if (!active()) return;
+		if (changing) {
+			exitQueued = true;
+			return;
+		}
 		changing = true;
 		notifyBeforeChange();
 		setActive(false);
@@ -118,7 +124,10 @@ export function createFocusMode(): FocusMode {
 	// never sees that key) or the tab is switched; focus mode follows it out.
 	const onFullscreenChange = () => {
 		const inFullscreen = fullscreenElement() !== null;
-		if (changing) return;
+		if (changing) {
+			if (!inFullscreen && active()) exitQueued = true;
+			return;
+		}
 		if (inFullscreen) {
 			setFullscreen(true);
 			announce();
