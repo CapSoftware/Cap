@@ -118,8 +118,6 @@ export function StudioEditorClient(props: {
 	const [clipRecorderContext, setClipRecorderContext] =
 		useState<ClipRecorderContext | null>(null);
 	const [upgradeOpen, setUpgradeOpen] = useState(false);
-	// The editor's focus mode fills the screen where the browser allows it;
-	// where it can't (iOS Safari), this bar steps aside instead.
 	const [editorFocused, setEditorFocused] = useState(false);
 	const sessionRef = useRef<string | null>(null);
 	const bridgeRef = useRef<EditorHostBridge | null>(null);
