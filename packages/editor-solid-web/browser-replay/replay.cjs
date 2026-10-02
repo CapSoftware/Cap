@@ -581,16 +581,33 @@ async function replay(forceWebGl, forceWebGpu = false) {
 							args[5] <= 4
 						) {
 							trackPresentation(video);
-							videoSourceDrifts.push({
-								track: args[1],
-								absoluteMs: Math.abs(video.currentTime - args[3]) * 1000,
-							});
-							const presented = presentedTimes.get(video);
-							if (Number.isFinite(presented)) {
-								videoPresentedDrifts.push({
+							// Only a playing element's clock is compared: one still seeking
+							// or waiting for play() to start is catching up by design. A
+							// request past the end of the file is held at its last frame.
+							if (!video.paused && !video.seeking) {
+								const target = Number.isFinite(video.duration)
+									? Math.min(args[3], video.duration)
+									: args[3];
+								const state = {
+									currentTime: Math.round(video.currentTime * 1000) / 1000,
+									sourceTime: Math.round(args[3] * 1000) / 1000,
+									duration: video.duration,
+									readyState: video.readyState,
+									segment: args[0],
+								};
+								videoSourceDrifts.push({
 									track: args[1],
-									absoluteMs: Math.abs(presented - args[3]) * 1000,
+									absoluteMs: Math.abs(video.currentTime - target) * 1000,
+									state,
 								});
+								const presented = presentedTimes.get(video);
+								if (Number.isFinite(presented)) {
+									videoPresentedDrifts.push({
+										track: args[1],
+										absoluteMs: Math.abs(presented - target) * 1000,
+										state: { ...state, presented },
+									});
+								}
 							}
 						}
 						return video;
@@ -989,6 +1006,18 @@ async function replay(forceWebGl, forceWebGpu = false) {
 									.map((sample) => sample.absoluteMs),
 							),
 						},
+						worstVideoDrift: Object.fromEntries(
+							["display", "camera"].map((track) => [
+								track,
+								[
+									...videoSourceDrifts.slice(beforeVideoSourceDrifts),
+									...videoPresentedDrifts.slice(beforeVideoPresentedDrifts),
+								]
+									.filter((sample) => sample.track === track)
+									.sort((a, b) => b.absoluteMs - a.absoluteMs)[0]?.state ??
+									null,
+							]),
+						),
 						videoSourceDriftMs: {
 							display: costSummary(
 								videoSourceDrifts
@@ -1077,6 +1106,26 @@ async function replay(forceWebGl, forceWebGpu = false) {
 								playedFrames: frames.length - beforeSlowPlay,
 								outputTime: playback.outputTime,
 							};
+							// Playback that resumes below full resolution redraws at full
+							// detail on pause, while a config change seeks the same video.
+							playback.playbackScale = 0.5;
+							playback.play();
+							await new Promise((resolve) => setTimeout(resolve, 400));
+							playback.pause();
+							const padding = config.background.padding;
+							config.background.padding = padding + 1;
+							const redrawStarted = performance.now();
+							slowHtmlPlayback.pauseRedraw = await Promise.race([
+								playback
+									.setConfig(config)
+									.then(() => playback.seek(playback.outputTime))
+									.then(() => Math.round(performance.now() - redrawStarted)),
+								new Promise((resolve) =>
+									setTimeout(() => resolve("hung"), 5000),
+								),
+							]);
+							config.background.padding = padding;
+							await playback.setConfig(config);
 						} finally {
 							playback.pause();
 							Object.defineProperty(
@@ -1506,8 +1555,9 @@ async function replay(forceWebGl, forceWebGpu = false) {
 		if (slowHtml) {
 			assert(
 				result.slowHtmlPlayback?.playedFrames >= 2 &&
-					result.slowHtmlPlayback.seekCount <= 3,
-				`Slow HTML playback sought too often: ${JSON.stringify(result.slowHtmlPlayback)}`,
+					result.slowHtmlPlayback.seekCount <= 3 &&
+					typeof result.slowHtmlPlayback.pauseRedraw === "number",
+				`Slow HTML playback sought too often or its pause redraw hung: ${JSON.stringify(result.slowHtmlPlayback)}`,
 			);
 		}
 		for (const track of ["display", "camera"]) {
@@ -1532,11 +1582,11 @@ async function replay(forceWebGl, forceWebGpu = false) {
 					result.playbackMetrics.videoPresentedDriftMs[track].maxMs;
 				assert(
 					sourceDrift <= 75,
-					`${track} media clock drifted ${sourceDrift} ms from the export timeline`,
+					`${track} media clock drifted ${sourceDrift} ms from the export timeline: ${JSON.stringify(result.playbackMetrics.worstVideoDrift[track])}`,
 				);
 				assert(
 					presentedDrift <= 75,
-					`${track} presented frame drifted ${presentedDrift} ms from the export timeline`,
+					`${track} presented frame drifted ${presentedDrift} ms from the export timeline: ${JSON.stringify(result.playbackMetrics.worstVideoDrift[track])}`,
 				);
 			}
 		}
