@@ -62,6 +62,7 @@ import {
 	editorVerticalLayout,
 } from "./editor-layout";
 import { EditorSkeleton } from "./editor-skeleton";
+import { createFocusMode } from "./focus-mode";
 import { Header, type TitleSaveRegistration } from "./Header";
 import { ImportProgress } from "./ImportProgress";
 import { PlayerContent } from "./Player";
@@ -97,9 +98,10 @@ const TIMELINE_CARD_PADDING_Y = 22;
 const DEFAULT_TIMELINE_CONTENT_HEIGHT = 124;
 const isWebEditor = import.meta.env.VITE_CAP_WEB_EDITOR === "true";
 // Vertical gutter between the player row and the timeline card, plus the
-// gutter below the timeline card (and the web clip strip); all live inside
-// the measured layout box.
-const LAYOUT_GUTTERS = 16 + (isWebEditor ? CLIP_STRIP_SPACE : 0);
+// gutter below the timeline card (and the web clip strip, which focus mode
+// hides); all live inside the measured layout box.
+const layoutGutters = (focused: boolean) =>
+	16 + (isWebEditor && !focused ? CLIP_STRIP_SPACE : 0);
 
 const scheduleIdleWork = (callback: () => void) => {
 	const win = window as Window & {
@@ -449,6 +451,41 @@ function Inner(props: {
 		if (!editorOpened() && firstFrameShown()) setEditorOpened(true);
 	});
 	const editorReady = () => editorOpened() || firstFrameShown();
+
+	const focusMode = isWebEditor ? createFocusMode() : undefined;
+	const focused = () => focusMode?.active() ?? false;
+	// Capture phase, so Esc is judged before the timeline and canvas clear the
+	// selection it would otherwise dismiss first.
+	createEventListener(
+		window,
+		"keydown",
+		(event: KeyboardEvent) => {
+			if (!focusMode || !editorReady() || event.repeat) return;
+			if (event.metaKey || event.ctrlKey || event.altKey) return;
+			const target = event.target instanceof HTMLElement ? event.target : null;
+			if (
+				target &&
+				(target.isContentEditable ||
+					target.closest(
+						"input, textarea, select, [role='dialog'], [role='alertdialog'], [role='menu'], [role='listbox']",
+					))
+			)
+				return;
+			if (isModalDialog(dialog())) return;
+			if (event.code === "KeyF" && !event.shiftKey) {
+				event.preventDefault();
+				focusMode.toggle();
+			} else if (
+				event.key === "Escape" &&
+				focusMode.active() &&
+				!editorState.timeline.selection &&
+				!editorState.canvasSelection
+			) {
+				focusMode.exit();
+			}
+		},
+		{ capture: true },
+	);
 	onMount(() => {
 		const blockPreparingKeys = (event: KeyboardEvent) => {
 			if (editorReady()) return;
@@ -621,6 +658,12 @@ function Inner(props: {
 		createSignal<number | null>(null),
 		{ name: "editorTimelineHeightOverride" },
 	);
+	// Focus mode keeps its own timeline height, hugging the rows until the
+	// timeline is dragged, so the preview gets the room.
+	const [focusTimelineHeight, setFocusTimelineHeight] = makePersisted(
+		createSignal<number | null>(null),
+		{ name: "editorFocusTimelineHeight" },
+	);
 	const [isResizingTimeline, setIsResizingTimeline] = createSignal(false);
 	const [timelineContentHeight, setTimelineContentHeight] = createSignal(
 		DEFAULT_TIMELINE_CONTENT_HEIGHT,
@@ -643,7 +686,8 @@ function Inner(props: {
 	const layoutLimits = createMemo(() => {
 		const fullHeight = MIN_PLAYER_HEIGHT + MIN_TIMELINE_HEIGHT;
 		const available = Math.max(
-			(layoutBounds.height ?? fullHeight + LAYOUT_GUTTERS) - LAYOUT_GUTTERS,
+			(layoutBounds.height ?? fullHeight + layoutGutters(focused())) -
+				layoutGutters(focused()),
 			0,
 		);
 		const { minPlayerHeight } = editorVerticalLayout(
@@ -685,10 +729,12 @@ function Inner(props: {
 	const timelineHeight = createMemo(() =>
 		Math.round(
 			clampTimelineHeight(
-				userTimelineHeight() ??
-					DEFAULT_TIMELINE_HEIGHT +
-						timelineContentHeight() -
-						(initialTimelineContentHeight() ?? timelineContentHeight()),
+				focused()
+					? (focusTimelineHeight() ?? huggedTimelineHeight())
+					: (userTimelineHeight() ??
+							DEFAULT_TIMELINE_HEIGHT +
+								timelineContentHeight() -
+								(initialTimelineContentHeight() ?? timelineContentHeight())),
 			),
 		),
 	);
@@ -700,9 +746,13 @@ function Inner(props: {
 		const startHeight = timelineHeight();
 		setIsResizingTimeline(true);
 
+		const setHeight = focused()
+			? setFocusTimelineHeight
+			: setUserTimelineHeight;
+
 		const handleMove = (moveEvent: MouseEvent) => {
 			const delta = moveEvent.clientY - startY;
-			setUserTimelineHeight(clampTimelineHeight(startHeight - delta));
+			setHeight(clampTimelineHeight(startHeight - delta));
 		};
 
 		const handleUp = () => {
@@ -718,6 +768,7 @@ function Inner(props: {
 	createEffect(
 		on(timelineViewportOverflow, (next, prev) => {
 			if (
+				!focused() &&
 				userTimelineHeight() !== null &&
 				next &&
 				prev &&
@@ -931,6 +982,10 @@ function Inner(props: {
 		return null;
 	};
 
+	createEffect(() => {
+		if (isExportMode()) focusMode?.exit();
+	});
+
 	const MIN_SPLIT_RATIO = 0.25;
 	const MAX_SPLIT_RATIO = 0.75;
 	const DEFAULT_SPLIT_RATIO = 0.5;
@@ -986,10 +1041,14 @@ function Inner(props: {
 				class="relative flex flex-col flex-1 min-h-0"
 				aria-busy={!editorReady() && !preparingSession?.handoffFailed()}
 			>
-				<Header
-					registerTitleSave={registerEditorSave}
-					disabled={!editorReady()}
-				/>
+				{/* Hidden rather than unmounted, so a title edit and its save
+				    registration survive focus mode. */}
+				<div classList={{ contents: !focused(), hidden: focused() }}>
+					<Header
+						registerTitleSave={registerEditorSave}
+						disabled={!editorReady()}
+					/>
+				</div>
 				<Show when={isWebEditor && editorReady()}>
 					<WebDropImport />
 				</Show>
@@ -1035,6 +1094,7 @@ function Inner(props: {
 					<div
 						ref={setLayoutRef}
 						class="flex overflow-hidden flex-col flex-1 gap-2 pb-2 min-h-0"
+						classList={{ "pt-2": focused() }}
 					>
 						<div
 							ref={setSplitContainerRef}
@@ -1046,16 +1106,23 @@ function Inner(props: {
 							<div
 								class="flex overflow-hidden flex-col rounded-xl bg-ed-card shadow-ed-card"
 								style={{
-									flex: isTranscriptMode()
-										? `0 0 ${splitRatio() * 100}%`
-										: "1 1 0%",
+									flex:
+										isTranscriptMode() && !focused()
+											? `0 0 ${splitRatio() * 100}%`
+											: "1 1 0%",
 									"min-width": "0",
 								}}
 							>
-								<PlayerContent compactness={layoutLimits().compactness} />
+								<PlayerContent
+									compactness={layoutLimits().compactness}
+									focusMode={focusMode}
+								/>
 							</div>
 							<Show when={!isTranscriptMode()}>
-								<div class="ml-2 flex min-h-0 w-104 min-w-104 flex-none overflow-hidden">
+								<div
+									class="ml-2 flex min-h-0 w-104 min-w-104 flex-none overflow-hidden"
+									classList={{ hidden: focused() }}
+								>
 									<div
 										class="overflow-hidden min-h-0"
 										classList={{
@@ -1078,6 +1145,7 @@ function Inner(props: {
 							<Show when={isTranscriptMode()}>
 								<div
 									class="flex-none flex items-center justify-center cursor-col-resize select-none group z-10"
+									classList={{ hidden: focused() }}
 									style={{ width: "12px" }}
 									onMouseDown={handleSplitResizeStart}
 									aria-label="Resize captions panel"
@@ -1093,6 +1161,7 @@ function Inner(props: {
 								</div>
 								<div
 									class="flex overflow-hidden flex-col min-h-0 rounded-xl duration-150 bg-ed-card shadow-ed-card animate-in fade-in"
+									classList={{ hidden: focused() }}
 									style={{
 										flex: isResizingSplit()
 											? `0 0 calc(${(1 - splitRatio()) * 100}% - 12px)`
@@ -1109,7 +1178,7 @@ function Inner(props: {
 						<Show when={isWebEditor}>
 							{/* The strip's slot is there from the start, so the preview
 							    doesn't shrink and redraw once the editor is ready. */}
-							<div class="flex-none px-2">
+							<div class="flex-none px-2" classList={{ hidden: focused() }}>
 								<Show
 									when={editorReady()}
 									fallback={

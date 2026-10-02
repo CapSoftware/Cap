@@ -118,6 +118,9 @@ export function StudioEditorClient(props: {
 	const [clipRecorderContext, setClipRecorderContext] =
 		useState<ClipRecorderContext | null>(null);
 	const [upgradeOpen, setUpgradeOpen] = useState(false);
+	// The editor's focus mode fills the screen where the browser allows it;
+	// where it can't (iOS Safari), this bar steps aside instead.
+	const [editorFocused, setEditorFocused] = useState(false);
 	const sessionRef = useRef<string | null>(null);
 	const bridgeRef = useRef<EditorHostBridge | null>(null);
 	const iframeRef = useRef<HTMLIFrameElement | null>(null);
@@ -579,6 +582,12 @@ export function StudioEditorClient(props: {
 				"kind" in message
 			) {
 				if (message.kind === "cap-editor-painted") setEditorPainted(true);
+				else if (message.kind === "cap-editor-focus")
+					setEditorFocused(
+						"active" in message &&
+							message.active === true &&
+							!("fullscreen" in message && message.fullscreen === true),
+					);
 				else if (
 					message.kind === "cap-editor-preview-failed" &&
 					"message" in message &&
@@ -705,38 +714,41 @@ export function StudioEditorClient(props: {
 	}
 	return (
 		<div className="flex h-screen w-screen flex-col bg-[#f1f1f3] dark:bg-[#131315]">
-			<EditorShellBar
-				light="grey"
-				left={
-					<EditorShellBrand
-						title="Back to shareable link"
-						backHref={`/s/${videoId}`}
-						onClick={backToSharePage}
-					/>
-				}
-				center={
-					<>
-						<EditorShareLinkTab
-							videoId={videoId}
-							shareUrl={shareUrl}
-							title={preparingTitle}
-							initialPublic={isPublic}
-							onNavigate={backToSharePage}
-							onUpgradeRequest={() => setUpgradeOpen(true)}
+			<div className={editorFocused ? "hidden" : "contents"}>
+				<EditorShellBar
+					light="grey"
+					left={
+						<EditorShellBrand
+							title="Back to shareable link"
+							backHref={`/s/${videoId}`}
+							onClick={backToSharePage}
 						/>
-						<EditorShellTab active>
-							<EditorTabLabel />
-						</EditorShellTab>
-					</>
-				}
-				right={<EditorShellActions onNavigate={confirmLeave} />}
-			/>
+					}
+					center={
+						<>
+							<EditorShareLinkTab
+								videoId={videoId}
+								shareUrl={shareUrl}
+								title={preparingTitle}
+								initialPublic={isPublic}
+								onNavigate={backToSharePage}
+								onUpgradeRequest={() => setUpgradeOpen(true)}
+							/>
+							<EditorShellTab active>
+								<EditorTabLabel />
+							</EditorShellTab>
+						</>
+					}
+					right={<EditorShellActions onNavigate={confirmLeave} />}
+				/>
+			</div>
 			<div className="relative min-h-0 flex-1">
 				{!entryFrameGone && <EditorEntryFrame frame={entryFrame ?? null} />}
 				<iframe
 					ref={iframeRef}
 					title="Cap editor"
 					src={editorSrc}
+					allow="fullscreen"
 					className={clsx(
 						"relative h-full w-full border-0 transition-opacity duration-300",
 						entryFrame && !editorPainted && "opacity-0",

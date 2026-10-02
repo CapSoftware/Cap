@@ -35,6 +35,7 @@ import {
 	useEditorContext,
 } from "./context";
 import { FrameButton } from "./FrameButton";
+import type { FocusMode } from "./focus-mode";
 import { ImageOverlay } from "./image-overlay";
 import { MaskOverlay } from "./MaskOverlay";
 import { PerformanceOverlay } from "./PerformanceOverlay";
@@ -54,7 +55,10 @@ import { WaveformOverlay } from "./waveform-overlay";
 
 const READOUT_INTERVAL_MS = 100;
 
-export function PlayerContent(props: { compactness?: number }) {
+export function PlayerContent(props: {
+	compactness?: number;
+	focusMode?: FocusMode;
+}) {
 	const {
 		previewStyle,
 		selectedStyle,
@@ -464,6 +468,7 @@ export function PlayerContent(props: { compactness?: number }) {
 				</div>
 			</div>
 			<PreviewCanvas
+				focusMode={props.focusMode}
 				onPreviewMouseDown={(event) => {
 					if (event.button === 0) setPreviewPointerDown(true);
 				}}
@@ -610,8 +615,36 @@ const gridStyle = {
 	"background-color": "rgba(200,200,200,0.08)",
 };
 
+const prefersReducedMotion = () =>
+	window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+
+function FocusModeIcon(props: { active: boolean }) {
+	return (
+		<svg
+			viewBox="0 0 16 16"
+			fill="none"
+			stroke="currentColor"
+			stroke-width="1.6"
+			stroke-linecap="round"
+			stroke-linejoin="round"
+			class="size-4"
+			aria-hidden="true"
+		>
+			<Show
+				when={props.active}
+				fallback={
+					<path d="M2.75 6V4.25c0-.83.67-1.5 1.5-1.5H6M10 2.75h1.75c.83 0 1.5.67 1.5 1.5V6M13.25 10v1.75c0 .83-.67 1.5-1.5 1.5H10M6 13.25H4.25c-.83 0-1.5-.67-1.5-1.5V10" />
+				}
+			>
+				<path d="M6 2.75V4.5c0 .83-.67 1.5-1.5 1.5H2.75M10 2.75V4.5c0 .83.67 1.5 1.5 1.5h1.75M13.25 10H11.5c-.83 0-1.5.67-1.5 1.5v1.75M2.75 10H4.5c.83 0 1.5.67 1.5 1.5v1.75" />
+			</Show>
+		</svg>
+	);
+}
+
 function PreviewCanvas(props: {
 	onPreviewMouseDown: (event: MouseEvent) => void;
+	focusMode?: FocusMode;
 }) {
 	const preparing = usePreparingEditor();
 	const {
@@ -785,6 +818,120 @@ function PreviewCanvas(props: {
 		}
 	});
 
+	// Entering or leaving focus mode resizes the preview at once rather than
+	// after the resize debounce, and glides it from where it was to where it
+	// lands. The layout can move again while the glide runs (the browser
+	// going fullscreen a moment later, the page's bar stepping aside), so for
+	// a short while each move restarts the glide from wherever the preview is
+	// shown. Positions are kept in the embedding page's coordinates, so the
+	// glide holds still on screen when this frame itself moves. The canvas
+	// measures its box under the glide's transform, so it measures again once
+	// the glide ends to stay sharp.
+	let frameRef: HTMLDivElement | undefined;
+	let focusFrom: DOMRect | undefined;
+	let focusGlide: Animation | undefined;
+	// Where the preview's box last landed, untransformed.
+	let focusTarget: DOMRect | undefined;
+	let focusSettlesAt = 0;
+	let focusGlideRun = 0;
+	const onPage = (rect: DOMRect) => {
+		let host: DOMRect | undefined;
+		try {
+			host = window.frameElement?.getBoundingClientRect();
+		} catch {}
+		return new DOMRect(
+			rect.left + (host?.left ?? 0),
+			rect.top + (host?.top ?? 0),
+			rect.width,
+			rect.height,
+		);
+	};
+	// Once the layout has moved the box no longer says where the preview is
+	// shown, so that comes from the last landing spot and the glide's current
+	// transform instead.
+	const shownRect = (layoutMoved: boolean) => {
+		if (!frameRef) return;
+		if (focusGlide && focusTarget) {
+			const transform = getComputedStyle(frameRef).transform;
+			const matrix = new DOMMatrixReadOnly(
+				transform === "none" ? undefined : transform,
+			);
+			const width = focusTarget.width * matrix.a;
+			const height = focusTarget.height * matrix.d;
+			return new DOMRect(
+				focusTarget.left + focusTarget.width / 2 + matrix.e - width / 2,
+				focusTarget.top + focusTarget.height / 2 + matrix.f - height / 2,
+				width,
+				height,
+			);
+		}
+		return layoutMoved ? focusTarget : onPage(frameRef.getBoundingClientRect());
+	};
+	const glideFrom = (from: DOMRect | undefined) => {
+		const container = canvasContainerRef();
+		if (!container?.isConnected || !hasFrame()) return;
+		const { width, height } = container.getBoundingClientRect();
+		if (width <= 0 || height <= 0) return;
+		focusGlide?.cancel();
+		focusGlide = undefined;
+		updateDebouncedBounds.clear();
+		setDebouncedBounds({ width, height });
+		const run = ++focusGlideRun;
+		// The new size reaches the page once this update finishes, still
+		// before the next frame is drawn.
+		queueMicrotask(() => {
+			if (run !== focusGlideRun || !frameRef?.isConnected) return;
+			const to = onPage(frameRef.getBoundingClientRect());
+			focusTarget = to;
+			if (!from || from.width < 2 || to.width < 2 || prefersReducedMotion())
+				return;
+			const scale = from.width / to.width;
+			const dx = from.left + from.width / 2 - (to.left + to.width / 2);
+			const dy = from.top + from.height / 2 - (to.top + to.height / 2);
+			if (Math.abs(scale - 1) < 0.005 && Math.hypot(dx, dy) < 1) return;
+			const glide = frameRef.animate(
+				[
+					{ transform: `translate(${dx}px, ${dy}px) scale(${scale})` },
+					{ transform: "none" },
+				],
+				{ duration: 380, easing: "cubic-bezier(0.32, 0.72, 0, 1)" },
+			);
+			// Resolved now, so the frame being drawn already starts where the
+			// preview was rather than at its new size.
+			glide.currentTime = 0;
+			focusGlide = glide;
+			glide.onfinish = () => {
+				if (focusGlide !== glide) return;
+				focusGlide = undefined;
+				window.dispatchEvent(new Event("resize"));
+			};
+		});
+	};
+	props.focusMode?.onBeforeChange(() => {
+		focusFrom = shownRect(false);
+	});
+	createEffect(
+		on(
+			() => props.focusMode?.active(),
+			() => {
+				const from = focusFrom;
+				focusFrom = undefined;
+				focusSettlesAt = performance.now() + 900;
+				glideFrom(from);
+			},
+			{ defer: true },
+		),
+	);
+	createEffect(
+		on(
+			() => [containerBounds.width, containerBounds.height],
+			() => {
+				if (performance.now() < focusSettlesAt) glideFrom(shownRect(true));
+			},
+			{ defer: true },
+		),
+	);
+
 	return (
 		<div
 			ref={setCanvasContainerRef}
@@ -806,6 +953,7 @@ function PreviewCanvas(props: {
 				}}
 			>
 				<div
+					ref={frameRef}
 					class="relative"
 					style={{
 						width: `${size().width}px`,
@@ -841,6 +989,30 @@ function PreviewCanvas(props: {
 						<SplitScreenOverlay size={size()} />
 						<SnapGuidesOverlay size={size()} />
 						<PerformanceOverlay size={size()} />
+						<Show when={size().width >= 160 && props.focusMode}>
+							{(focusMode) => {
+								const label = () =>
+									focusMode().active() ? "Exit focus mode" : "Focus mode";
+								return (
+									<div
+										class="absolute right-2.5 bottom-2.5 z-30 transition-opacity duration-200 ease-out has-[:focus-visible]:opacity-100! [@media(hover:none)]:opacity-100!"
+										style={{ opacity: "var(--preview-controls-opacity, 0)" }}
+									>
+										<Tooltip content={label()} kbd={["F"]} placement="top">
+											<button
+												type="button"
+												aria-label={label()}
+												data-editor-focus-toggle
+												onClick={() => focusMode().toggle()}
+												class="flex justify-center items-center rounded-lg size-8 text-white/90 bg-black/45 backdrop-blur-md shadow-[0_0_0_0.5px_rgba(255,255,255,0.16),0_6px_16px_-4px_rgba(0,0,0,0.4)] transition-[background-color,color,transform] duration-150 ease-out hover:bg-black/60 hover:text-white active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ed-accent"
+											>
+												<FocusModeIcon active={focusMode().active()} />
+											</button>
+										</Tooltip>
+									</div>
+								);
+							}}
+						</Show>
 					</Show>
 				</div>
 			</div>
