@@ -26,6 +26,12 @@ import {
 	removeUnusedExportFiles,
 } from "./browser-export-storage";
 import type { BrowserStudioSetup } from "./browser-local-canvas";
+import {
+	type Nv12Planes,
+	nv12Planes,
+	takesNv12Planes,
+	UPLOADS_NV12_PLANES,
+} from "./browser-nv12-planes";
 
 export type BrowserExportTrackSource = {
 	display: string | null;
@@ -228,10 +234,23 @@ async function sampleAt(cursor: TrackCursor, time: number) {
 	return cursor.current;
 }
 
-async function frameFor(cursor: TrackCursor, time: number) {
+type ExportFrame = VideoFrame | Nv12Planes;
+
+async function frameFor(
+	cursor: TrackCursor,
+	time: number,
+	planes: boolean,
+): Promise<ExportFrame | null> {
 	const sample = await sampleAt(cursor, time);
 	if (!sample) return null;
 	const frame = sample.toVideoFrame();
+	if (planes && takesNv12Planes(frame)) {
+		const copied = await nv12Planes(frame, true).catch(() => null);
+		if (copied) {
+			frame.close();
+			return copied;
+		}
+	}
 	if (
 		!cursor.retagBt601 ||
 		frame.colorSpace.matrix === "bt470bg" ||
@@ -275,7 +294,7 @@ async function fetchBytes(url: string) {
 type Renderer =
 	import("../renderer/pkg-export/cap_editor_browser_renderer.js").BrowserStudioRenderer;
 
-type ClipFrames = { display: VideoFrame; camera: VideoFrame | null };
+type ClipFrames = { display: ExportFrame; camera: ExportFrame | null };
 
 /// Everything needed to render any output frame of one export configuration.
 type RenderContext = {
@@ -443,6 +462,7 @@ async function renderContext(job: BrowserExportJob): Promise<RenderContext> {
 			}
 			return cursor;
 		};
+		const planes = UPLOADS_NV12_PLANES && created.backend === "BrowserWebGpu";
 		const clipFrames = async (
 			clip: number,
 			sourceTime: number,
@@ -453,11 +473,11 @@ async function renderContext(job: BrowserExportJob): Promise<RenderContext> {
 			const cameraTime = sourceTimes[1] ?? Number.NaN;
 			const [display, camera] = await Promise.all([
 				cursorFor(clip, "display", role).then((cursor) =>
-					cursor ? frameFor(cursor, displayTime) : null,
+					cursor ? frameFor(cursor, displayTime, planes) : null,
 				),
 				Number.isFinite(cameraTime) && cameraTime >= 0
 					? cursorFor(clip, "camera", role).then((cursor) =>
-							cursor ? frameFor(cursor, cameraTime) : null,
+							cursor ? frameFor(cursor, cameraTime, planes) : null,
 						)
 					: Promise.resolve(null),
 			]);
@@ -670,6 +690,17 @@ const HOLDS_QUALITY_FRAMES =
 	/AppleWebKit/.test(navigator.userAgent) &&
 	!/Chrome|Chromium|Edg/.test(navigator.userAgent);
 
+// Safari's realtime encoder, fed faster than real time, silently drops
+// frames after keyframes that come every few seconds; one every five seconds
+// keeps them all. Streamed fragments start at keyframes, so they grow to
+// match.
+const KEYFRAME_SECONDS = HOLDS_QUALITY_FRAMES ? 5 : CHUNK_SECONDS;
+
+// The same encoder spends fewer bits the faster frames arrive; asking for
+// more keeps its quality where it was at the slower pace, at about the same
+// file size.
+const BITRATE_SCALE = HOLDS_QUALITY_FRAMES ? 1.35 : 1;
+
 const joinBytes = (parts: Uint8Array[]) => {
 	const joined = new Uint8Array(
 		parts.reduce((size, part) => size + part.length, 0),
@@ -817,7 +848,7 @@ async function encodeFrames(
 				frame + 1 < totalFrames
 					? decodeFrame(context, job.fps, frame + 1)
 					: Promise.resolve(null);
-			const group = keyframeGroup(frame, job.fps, CHUNK_SECONDS);
+			const group = keyframeGroup(frame, job.fps, KEYFRAME_SECONDS);
 			const encodeStart = performance.now();
 			await encoder.encode(frame, group !== lastGroup, canvas);
 			timings.encodeWaitMs += performance.now() - encodeStart;
@@ -855,7 +886,9 @@ async function runExport(job: BrowserExportJob) {
 		Output,
 		canEncodeVideo,
 	} = await import("mediabunny");
-	const bitrate = exportBitrate(width, height, job.fps, job.bitsPerPixel);
+	const bitrate = Math.round(
+		exportBitrate(width, height, job.fps, job.bitsPerPixel) * BITRATE_SCALE,
+	);
 	if (!(await canEncodeVideo("avc", { width, height, bitrate }))) {
 		throw new Error("This browser cannot encode H.264 video");
 	}
