@@ -436,10 +436,19 @@ function Inner(props: {
 	} = useEditorContext();
 
 	const preparingSession = usePreparingEditor();
-	const editorReady = () =>
+	const firstFrameShown = () =>
 		preparingSession?.ordinaryReady() ??
 		canvasControls()?.hasRenderedFrame() ??
 		false;
+	// Ready from the first frame on. The canvas's own flag dips while it
+	// redraws at a new size, and the layout's bindings (which this shares an
+	// update with) re-run whenever the layout moves, so reading the flag live
+	// could grey the editor out mid-playback until some other change.
+	const [editorOpened, setEditorOpened] = createSignal(false);
+	createEffect(() => {
+		if (!editorOpened() && firstFrameShown()) setEditorOpened(true);
+	});
+	const editorReady = () => editorOpened() || firstFrameShown();
 	onMount(() => {
 		const blockPreparingKeys = (event: KeyboardEvent) => {
 			if (editorReady()) return;
