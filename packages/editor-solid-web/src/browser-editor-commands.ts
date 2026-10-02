@@ -382,6 +382,9 @@ export class BrowserEditorCommands {
 							},
 						}
 					: {}),
+				...(index === 0 && sources.inputEvents
+					? { cursor: `content/segments/segment-${index}/input-events.ndjson` }
+					: {}),
 			})),
 			cursors: {},
 			status: { status: "Complete" },
