@@ -1,5 +1,9 @@
 import { afterEach, expect, test, vi } from "vitest";
-import { generateWebEditorCaptions } from "../lib/editor-caption-client";
+import {
+	EditorCaptionsNeedSessionError,
+	generateWebEditorCaptions,
+	webEditorCaptionsNeedSession,
+} from "../lib/editor-caption-client";
 
 const captions = {
 	settings: null,
@@ -157,4 +161,45 @@ test("closing the editor cancels a pending caption poll", async () => {
 	await Promise.resolve();
 	controller.abort();
 	await expect(generated).rejects.toThrow("Caption generation cancelled");
+});
+
+test("browser editor captions use the recording's route without a session", async () => {
+	vi.useFakeTimers();
+	const fetchMock = vi
+		.fn()
+		.mockResolvedValueOnce(
+			Response.json({ status: "processing", captions: null, message: null }),
+		)
+		.mockResolvedValueOnce(
+			Response.json({ status: "ready", captions, message: null }),
+		);
+	vi.stubGlobal("fetch", fetchMock);
+	const generated = generateWebEditorCaptions(
+		"video",
+		null,
+		new AbortController().signal,
+	);
+	await vi.advanceTimersByTimeAsync(2000);
+	expect(await generated).toEqual(captions);
+	expect(fetchMock.mock.calls[0]?.[0]).toBe(
+		"/api/editor/videos/video/captions",
+	);
+	expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
+		language: "auto",
+	});
+	expect(fetchMock.mock.calls[1]?.[0]).toBe(
+		"/api/editor/videos/video/captions?language=auto",
+	);
+});
+
+test("a recording that needs a caption job asks for an editor session", async () => {
+	vi.stubGlobal(
+		"fetch",
+		vi.fn(async () => new Response(null, { status: 409 })),
+	);
+	const signal = new AbortController().signal;
+	expect(await webEditorCaptionsNeedSession("video", "es", signal)).toBe(true);
+	await expect(
+		generateWebEditorCaptions("video", null, signal, "es"),
+	).rejects.toBeInstanceOf(EditorCaptionsNeedSessionError);
 });

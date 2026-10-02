@@ -120,34 +120,66 @@ function waitForCaptionPoll(signal: AbortSignal) {
 	});
 }
 
+export class EditorCaptionsNeedSessionError extends Error {
+	constructor() {
+		super("Caption transcription needs an editor session");
+		this.name = "EditorCaptionsNeedSessionError";
+	}
+}
+
+export async function webEditorCaptionsNeedSession(
+	videoId: string,
+	language: AiGenerationLanguage,
+	signal: AbortSignal,
+) {
+	const response = await fetch(
+		`/api/editor/videos/${encodeURIComponent(videoId)}/captions?language=${encodeURIComponent(language)}`,
+		{ cache: "no-store", signal },
+	);
+	await response.body?.cancel();
+	return response.status === 409;
+}
+
+/// With no session, captions come from the share video's transcript and the
+/// server answers 409 when the recording needs a session's caption job.
 export async function generateWebEditorCaptions(
 	videoId: string,
-	sessionId: string,
+	sessionId: string | null,
 	signal: AbortSignal,
 	language: AiGenerationLanguage = "auto",
 ): Promise<WebEditorCaptionData> {
-	const path = `/api/editor/sessions/${encodeURIComponent(sessionId)}/captions`;
+	const path =
+		sessionId === null
+			? `/api/editor/videos/${encodeURIComponent(videoId)}/captions`
+			: `/api/editor/sessions/${encodeURIComponent(sessionId)}/captions`;
+	const query =
+		sessionId === null
+			? `language=${encodeURIComponent(language)}`
+			: `videoId=${encodeURIComponent(videoId)}&language=${encodeURIComponent(language)}`;
 	const request = async (method: "GET" | "POST") => {
-		const response = await fetch(
-			method === "GET"
-				? `${path}?videoId=${encodeURIComponent(videoId)}&language=${encodeURIComponent(language)}`
-				: path,
-			{
-				method,
-				headers:
-					method === "POST" ? { "Content-Type": "application/json" } : {},
-				body:
-					method === "POST" ? JSON.stringify({ videoId, language }) : undefined,
-				cache: "no-store",
-				signal,
-			},
-		);
+		const response = await fetch(method === "GET" ? `${path}?${query}` : path, {
+			method,
+			headers: method === "POST" ? { "Content-Type": "application/json" } : {},
+			body:
+				method === "POST"
+					? JSON.stringify(
+							sessionId === null ? { language } : { videoId, language },
+						)
+					: undefined,
+			cache: "no-store",
+			signal,
+		});
+		if (response.status === 409 && sessionId === null) {
+			throw new EditorCaptionsNeedSessionError();
+		}
 		if (!response.ok) {
 			throw new Error(
 				response.status === 403
 					? "Cap Pro is required for web editor captions"
 					: response.status === 404
-						? "Editor session is unavailable"
+						? sessionId === null
+							? "Recording is unavailable"
+							: "Editor session is unavailable"
 						: "Caption transcription is unavailable",
 			);
 		}

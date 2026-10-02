@@ -1,5 +1,4 @@
 import {
-	type AiGenerationLanguage,
 	HttpAuthMiddleware,
 	isAiGenerationLanguage,
 	Video,
@@ -13,18 +12,11 @@ import {
 } from "@effect/platform";
 import { Effect, Layer, Schema } from "effect";
 import {
-	generateEditorCaptionJob,
-	inspectEditorCaptionJob,
-} from "@/lib/editor-caption-job";
-import {
 	readShareTranscriptCaptions,
 	requestShareTranscriptCaptions,
 	usesEditorCaptionJob,
 } from "@/lib/editor-caption-snapshot";
-import {
-	loadEligibleEditorVideo,
-	verifyOwnedEditorSession,
-} from "@/lib/editor-session";
+import { loadEligibleEditorVideo } from "@/lib/editor-session";
 import { apiToHandler } from "@/lib/server";
 
 export const dynamic = "force-dynamic";
@@ -41,10 +33,6 @@ const CaptionSegment = Schema.Struct({
 	text: Schema.String,
 	words: Schema.Array(CaptionWord),
 });
-const CaptionData = Schema.Struct({
-	segments: Schema.Array(CaptionSegment),
-	settings: Schema.Null,
-});
 const CaptionSnapshot = Schema.Struct({
 	status: Schema.Literal(
 		"ready",
@@ -54,58 +42,58 @@ const CaptionSnapshot = Schema.Struct({
 		"no_audio",
 		"disabled",
 	),
-	captions: Schema.NullOr(CaptionData),
+	captions: Schema.NullOr(
+		Schema.Struct({
+			segments: Schema.Array(CaptionSegment),
+			settings: Schema.Null,
+		}),
+	),
 	message: Schema.NullOr(Schema.String),
 });
 const CaptionRequest = Schema.Struct({
-	videoId: Video.VideoId,
 	language: Schema.optional(Schema.String),
 });
 
-class Api extends HttpApi.make("WebEditorCaptionsApi").add(
+class Api extends HttpApi.make("WebEditorBrowserCaptionsApi").add(
 	HttpApiGroup.make("root")
 		.add(
-			HttpApiEndpoint.get("status", "/api/editor/sessions/:id/captions")
-				.setPath(Schema.Struct({ id: Schema.String }))
+			HttpApiEndpoint.get("status", "/api/editor/videos/:videoId/captions")
+				.setPath(Schema.Struct({ videoId: Video.VideoId }))
 				.setUrlParams(CaptionRequest)
 				.addSuccess(CaptionSnapshot)
 				.addError(HttpApiError.BadRequest)
 				.addError(HttpApiError.NotFound)
 				.addError(HttpApiError.Forbidden)
+				.addError(HttpApiError.Conflict)
 				.addError(HttpApiError.ServiceUnavailable)
 				.addError(HttpApiError.InternalServerError)
 				.middleware(HttpAuthMiddleware),
 		)
 		.add(
-			HttpApiEndpoint.post("generate", "/api/editor/sessions/:id/captions")
-				.setPath(Schema.Struct({ id: Schema.String }))
+			HttpApiEndpoint.post("generate", "/api/editor/videos/:videoId/captions")
+				.setPath(Schema.Struct({ videoId: Video.VideoId }))
 				.setPayload(CaptionRequest)
 				.addSuccess(CaptionSnapshot)
 				.addError(HttpApiError.BadRequest)
 				.addError(HttpApiError.NotFound)
 				.addError(HttpApiError.Forbidden)
+				.addError(HttpApiError.Conflict)
 				.addError(HttpApiError.ServiceUnavailable)
 				.addError(HttpApiError.InternalServerError)
 				.middleware(HttpAuthMiddleware),
 		),
 ) {}
 
-const readSnapshot = Effect.fn("WebEditorCaptions.readSnapshot")(function* (
-	videoId: Video.VideoId,
-	sessionId: string,
-	language: AiGenerationLanguage,
-) {
+// Conflict tells the editor to transcribe through a worker session instead.
+const shareTranscriptVideo = Effect.fn(
+	"WebEditorCaptions.shareTranscriptVideo",
+)(function* (videoId: Video.VideoId, language: string) {
+	if (!isAiGenerationLanguage(language))
+		return yield* new HttpApiError.BadRequest();
 	const video = yield* loadEligibleEditorVideo(videoId, false, true);
-	const sessionPath = yield* verifyOwnedEditorSession(videoId, sessionId);
-	if (usesEditorCaptionJob(video, language)) {
-		const inspected = yield* inspectEditorCaptionJob(
-			video,
-			sessionPath,
-			language,
-		);
-		return inspected.snapshot;
-	}
-	return yield* readShareTranscriptCaptions(video);
+	if (usesEditorCaptionJob(video, language))
+		return yield* new HttpApiError.Conflict();
+	return video;
 });
 
 const ApiLive = HttpApiBuilder.api(Api).pipe(
@@ -114,45 +102,22 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 			handlers
 				.handle("status", ({ path, urlParams }) =>
 					Effect.gen(function* () {
-						const language = urlParams.language ?? "auto";
-						if (!isAiGenerationLanguage(language))
-							return yield* new HttpApiError.BadRequest();
-						return yield* readSnapshot(urlParams.videoId, path.id, language);
+						const video = yield* shareTranscriptVideo(
+							path.videoId,
+							urlParams.language ?? "auto",
+						);
+						return yield* readShareTranscriptCaptions(video);
 					}),
 				)
 				.handle("generate", ({ path, payload }) =>
 					Effect.gen(function* () {
-						const language = payload.language ?? "auto";
-						if (!isAiGenerationLanguage(language))
-							return yield* new HttpApiError.BadRequest();
-						const current = yield* readSnapshot(
-							payload.videoId,
-							path.id,
-							language,
+						const video = yield* shareTranscriptVideo(
+							path.videoId,
+							payload.language ?? "auto",
 						);
-						if (
-							current.status === "ready" ||
-							current.status === "processing" ||
-							current.status === "no_audio" ||
-							current.status === "disabled"
-						) {
+						const current = yield* readShareTranscriptCaptions(video);
+						if (current.status !== "missing" && current.status !== "error") {
 							return current;
-						}
-						const video = yield* loadEligibleEditorVideo(
-							payload.videoId,
-							false,
-							true,
-						);
-						if (usesEditorCaptionJob(video, language)) {
-							const sessionPath = yield* verifyOwnedEditorSession(
-								payload.videoId,
-								path.id,
-							);
-							return yield* generateEditorCaptionJob(
-								video,
-								sessionPath,
-								language,
-							);
 						}
 						return yield* requestShareTranscriptCaptions(video);
 					}),

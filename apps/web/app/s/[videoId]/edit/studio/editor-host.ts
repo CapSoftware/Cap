@@ -10,6 +10,7 @@ import {
 import {
 	generateWebEditorCaptions,
 	type WebEditorCaptionData,
+	webEditorCaptionsNeedSession,
 } from "@/lib/editor-caption-client";
 import {
 	uploadWebEditorExport,
@@ -2170,7 +2171,23 @@ export class EditorHostBridge {
 	}
 
 	private async handleCaptionTranscription(message: BridgeRequest) {
-		if (!(await this.currentPlan())) {
+		const fail = (cause: unknown) =>
+			this.port?.postMessage({
+				kind: "error",
+				id: message.id,
+				error:
+					cause instanceof Error
+						? cause.message
+						: "Caption transcription failed",
+			});
+		let pro: boolean;
+		try {
+			pro = await this.currentPlan();
+		} catch (cause) {
+			fail(cause);
+			return;
+		}
+		if (!pro) {
 			this.port?.postMessage({
 				kind: "error",
 				id: message.id,
@@ -2192,52 +2209,71 @@ export class EditorHostBridge {
 			return;
 		}
 		const language = message.args[2];
-		if (this.activeCaptions && this.activeCaptions.language !== language) {
+		const otherLanguageRunning = () => {
+			if (!this.activeCaptions || this.activeCaptions.language === language)
+				return false;
 			this.port?.postMessage({
 				kind: "error",
 				id: message.id,
 				error: "Caption transcription is already running in another language",
 			});
+			return true;
+		};
+		if (otherLanguageRunning()) return;
+		if (!this.activeCaptions) {
+			// Browser-only editors read the share transcript without taking the
+			// worker's session slot; only a caption job needs a worker session.
+			let sessionId: string | null = this.browserOnly ? null : this.sessionId;
+			let releaseWorkerUse: () => void = () => undefined;
+			try {
+				if (
+					sessionId === null &&
+					(await webEditorCaptionsNeedSession(
+						this.videoId,
+						language,
+						this.controller.signal,
+					))
+				) {
+					releaseWorkerUse = await this.ensureWorkerSession();
+					sessionId = this.sessionId;
+				}
+			} catch (cause) {
+				fail(cause);
+				return;
+			}
+			if (this.activeCaptions) {
+				releaseWorkerUse();
+				if (otherLanguageRunning()) return;
+			} else {
+				const pending = generateWebEditorCaptions(
+					this.videoId,
+					sessionId,
+					this.controller.signal,
+					language,
+				);
+				const settle = () => {
+					if (this.activeCaptions?.promise === pending)
+						this.activeCaptions = null;
+					releaseWorkerUse();
+				};
+				this.activeCaptions = { language, promise: pending };
+				void pending.then(settle, settle);
+			}
+		}
+		const active = this.activeCaptions;
+		if (!active) {
+			fail(null);
 			return;
 		}
-		if (!this.activeCaptions) {
-			const releaseWorkerUse = await this.ensureWorkerSession();
-			const pending = generateWebEditorCaptions(
-				this.videoId,
-				this.sessionId,
-				this.controller.signal,
-				language,
-			);
-			this.activeCaptions = { language, promise: pending };
-			void pending.then(
-				() => {
-					if (this.activeCaptions?.promise === pending)
-						this.activeCaptions = null;
-					releaseWorkerUse();
-				},
-				() => {
-					if (this.activeCaptions?.promise === pending)
-						this.activeCaptions = null;
-					releaseWorkerUse();
-				},
-			);
-		}
 		try {
-			const captions = await this.activeCaptions.promise;
+			const captions = await active.promise;
 			this.port?.postMessage({
 				kind: "result",
 				id: message.id,
 				value: captions,
 			});
 		} catch (cause) {
-			this.port?.postMessage({
-				kind: "error",
-				id: message.id,
-				error:
-					cause instanceof Error
-						? cause.message
-						: "Caption transcription failed",
-			});
+			fail(cause);
 		}
 	}
 

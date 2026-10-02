@@ -2583,3 +2583,122 @@ test("the default style for new recordings is loaded, saved and cleared through 
 		bridge.dispose();
 	}
 });
+
+async function browserCaptionHost(
+	request: (url: string, init?: RequestInit) => Promise<Response>,
+) {
+	vi.stubGlobal(
+		"fetch",
+		vi.fn((input: RequestInfo | URL, init?: RequestInit) =>
+			request(String(input), init),
+		),
+	);
+	vi.stubGlobal("window", {
+		setTimeout,
+		clearTimeout,
+		location: { origin: "http://127.0.0.1:3000" },
+	});
+	const { iframe, postMessage } = frame();
+	const bridge = new EditorHostBridge(
+		"video",
+		"session",
+		"user",
+		vi.fn(),
+		vi.fn(),
+		undefined,
+		undefined,
+		undefined,
+		true,
+		undefined,
+		undefined,
+		() => "saved-revision",
+		true,
+	);
+	await bridge.connect(iframe);
+	const port = postMessage.mock.calls[0]?.[2]?.[0] as MessagePort;
+	port.start();
+	const transcribe = (id: number) => {
+		const reply = new Promise<unknown>((resolve) => {
+			port.onmessage = (event: MessageEvent<unknown>) => resolve(event.data);
+		});
+		port.postMessage({
+			kind: "invoke",
+			id,
+			name: "transcribeAudio",
+			args: [
+				"cap-web-editor://session/session",
+				"cap-web-editor://app-local-data/transcription_models/best.bin",
+				"auto",
+				"Parakeet",
+			],
+		});
+		return reply;
+	};
+	return { bridge, port, transcribe };
+}
+
+test("browser Studio captions read the share transcript without a worker session", async () => {
+	const captions = {
+		settings: null,
+		segments: [
+			{
+				id: "segment-0",
+				text: "Hello",
+				start: 0.1,
+				end: 0.4,
+				words: [{ text: "Hello", start: 0.1, end: 0.4 }],
+			},
+		],
+	};
+	const requests: string[] = [];
+	const { bridge, port, transcribe } = await browserCaptionHost(
+		async (url, init) => {
+			requests.push(`${init?.method ?? "GET"} ${url}`);
+			if (url === "/api/editor/videos/video/plan")
+				return Response.json({ pro: true });
+			if (url.startsWith("/api/editor/videos/video/captions"))
+				return Response.json({ status: "ready", captions, message: null });
+			throw new Error(`Unexpected editor request ${url}`);
+		},
+	);
+	try {
+		expect(await transcribe(1)).toEqual({
+			kind: "result",
+			id: 1,
+			value: captions,
+		});
+		expect(requests).toEqual([
+			"GET /api/editor/videos/video/plan",
+			"GET /api/editor/videos/video/captions?language=auto",
+			"POST /api/editor/videos/video/captions",
+		]);
+	} finally {
+		port.close();
+		bridge.dispose();
+	}
+});
+
+test("browser Studio caption jobs report an unavailable worker instead of hanging", async () => {
+	const { bridge, port, transcribe } = await browserCaptionHost(
+		async (url, init) => {
+			if (url === "/api/editor/videos/video/plan")
+				return Response.json({ pro: true });
+			if (url === "/api/editor/videos/video/captions?language=auto")
+				return new Response(null, { status: 409 });
+			if (url === "/api/editor/preparations" && init?.method === "POST")
+				return new Response(null, { status: 502 });
+			throw new Error(`Unexpected editor request ${url}`);
+		},
+	);
+	try {
+		expect(await transcribe(1)).toEqual({
+			kind: "error",
+			id: 1,
+			error:
+				"The editor server is unavailable right now. Try again in a moment.",
+		});
+	} finally {
+		port.close();
+		bridge.dispose();
+	}
+});
