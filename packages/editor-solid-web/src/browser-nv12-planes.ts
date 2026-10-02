@@ -7,13 +7,16 @@ export type Nv12Planes = {
 	yStride: number;
 	uvStride: number;
 	fullRange: boolean;
+	/// Interpolate chroma, which exports want: the browser encoder takes the
+	/// rendered frame's chroma back without filtering. The preview repeats
+	/// each chroma sample, as native playback does.
+	smoothChroma: boolean;
 	close(): void;
 };
 
 // Safari copies a decoded frame into a texture several times slower than it
 // copies its planes out. The renderer's conversion needs compute, so only its
-// WebGPU backend takes planes. Exports keep whole frames: fed that much faster,
-// Safari's realtime H.264 encoder drops frames of busy footage.
+// WebGPU backend takes planes.
 export const UPLOADS_NV12_PLANES =
 	typeof navigator !== "undefined" &&
 	/AppleWebKit/.test(navigator.userAgent) &&
@@ -26,7 +29,10 @@ export function takesNv12Planes(frame: VideoFrame) {
 	return frame.format === "NV12" && (matrix == null || matrix === "bt709");
 }
 
-export async function nv12Planes(frame: VideoFrame): Promise<Nv12Planes> {
+export async function nv12Planes(
+	frame: VideoFrame,
+	smoothChroma = false,
+): Promise<Nv12Planes> {
 	const { width, height } = frame.visibleRect ?? {
 		width: frame.displayWidth,
 		height: frame.displayHeight,
@@ -49,6 +55,7 @@ export async function nv12Planes(frame: VideoFrame): Promise<Nv12Planes> {
 		uvStride,
 		// Safari's decoder expands video range to full range and says so.
 		fullRange: frame.colorSpace.fullRange === true,
+		smoothChroma,
 		close() {},
 	};
 }

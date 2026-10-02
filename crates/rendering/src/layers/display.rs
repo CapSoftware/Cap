@@ -170,7 +170,7 @@ impl DisplayLayer {
         let format = screen_frame.format();
         #[cfg(target_arch = "wasm32")]
         self.yuv_converter
-            .set_nv12_full_range(screen_frame.nv12_full_range());
+            .set_browser_nv12(screen_frame.browser_nv12());
         let current_recording_time = segment_frames.recording_time;
         let frame_storage = screen_frame.storage_identity();
 
@@ -596,7 +596,7 @@ impl DisplayLayer {
         let format = screen_frame.format();
         #[cfg(target_arch = "wasm32")]
         self.yuv_converter
-            .set_nv12_full_range(screen_frame.nv12_full_range());
+            .set_browser_nv12(screen_frame.browser_nv12());
         let current_recording_time = segment_frames.recording_time;
         let frame_storage = screen_frame.storage_identity();
 

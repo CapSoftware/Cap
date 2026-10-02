@@ -42,7 +42,7 @@ use cap_rendering::{
     AudioLevelAnalyzer, AudioLevelSource, AudioLevels, DecodedFrame, DecodedSegmentFrames,
     FrameRenderer, PrecomputedCursorTimeline, ProjectUniforms, RenderOptions, RenderVideoConstants,
     RendererLayers, SharedWgpuDevice, TransitionRenderInput, ZoomTransformTimeline,
-    decoder::BrowserFrameSource,
+    decoder::{BrowserFrameSource, BrowserNv12},
     segment_timing::{SegmentVideoTiming, segment_frame_times, segment_video_timing},
 };
 use present::SurfacePresenter;
@@ -519,7 +519,7 @@ fn video_frame_kind(frame: &web_sys::VideoFrame) -> Option<String> {
 }
 
 /// A decoded frame the page copied out as NV12 planes (`{ nv12, width, height,
-/// yStride, uvStride, fullRange }`, the UV plane straight after the Y plane). It goes
+/// yStride, uvStride, fullRange, smoothChroma }`, the UV plane straight after the Y plane). It goes
 /// through the same YUV to RGB conversion as native playback instead of the
 /// browser's own, which Safari takes several milliseconds a frame over.
 fn nv12_frame(value: &JsValue, max_dimension: u32) -> Result<Option<DecodedFrame>, JsValue> {
@@ -553,7 +553,10 @@ fn nv12_frame(value: &JsValue, max_dimension: u32) -> Result<Option<DecodedFrame
         height,
         y_stride,
         uv_stride,
-        get("fullRange")?.is_truthy(),
+        BrowserNv12 {
+            full_range: get("fullRange")?.is_truthy(),
+            smooth_chroma: get("smoothChroma")?.is_truthy(),
+        },
     )))
 }
 

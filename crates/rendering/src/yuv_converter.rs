@@ -261,9 +261,9 @@ use std::sync::Arc;
 
 pub struct YuvConverterPipelines {
     pub nv12_pipeline: wgpu::ComputePipeline,
-    /// Limited and full range BT.709; see `browser_nv12_to_rgba.wgsl`.
+    /// BT.709 by `[full range][smooth chroma]`; see `browser_nv12_to_rgba.wgsl`.
     #[cfg(target_arch = "wasm32")]
-    pub browser_nv12_pipelines: [wgpu::ComputePipeline; 2],
+    pub browser_nv12_pipelines: [[wgpu::ComputePipeline; 2]; 2],
     pub yuv420p_pipeline: wgpu::ComputePipeline,
     pub nv12_bind_group_layout: wgpu::BindGroupLayout,
     pub yuv420p_bind_group_layout: wgpu::BindGroupLayout,
@@ -402,16 +402,21 @@ impl YuvConverterPipelines {
                 ))),
             });
             [0.0, 1.0].map(|full_range| {
-                device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                    label: Some("Browser NV12 Converter Pipeline"),
-                    layout: Some(&nv12_pipeline_layout),
-                    module: &module,
-                    entry_point: Some("main"),
-                    compilation_options: wgpu::PipelineCompilationOptions {
-                        constants: &[("FULL_RANGE", full_range)],
-                        ..Default::default()
-                    },
-                    cache: None,
+                [0.0, 1.0].map(|smooth_chroma| {
+                    device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                        label: Some("Browser NV12 Converter Pipeline"),
+                        layout: Some(&nv12_pipeline_layout),
+                        module: &module,
+                        entry_point: Some("main"),
+                        compilation_options: wgpu::PipelineCompilationOptions {
+                            constants: &[
+                                ("FULL_RANGE", full_range),
+                                ("SMOOTH_CHROMA", smooth_chroma),
+                            ],
+                            ..Default::default()
+                        },
+                        cache: None,
+                    })
                 })
             })
         };
@@ -470,7 +475,7 @@ pub struct YuvToRgbaConverter {
     #[cfg(target_os = "linux")]
     cuda_staging: Option<crate::linux_gpu::SharedRing>,
     #[cfg(target_arch = "wasm32")]
-    nv12_full_range: bool,
+    browser_nv12: crate::decoder::BrowserNv12,
 }
 
 impl YuvToRgbaConverter {
@@ -532,15 +537,15 @@ impl YuvToRgbaConverter {
             #[cfg(target_os = "linux")]
             cuda_staging: None,
             #[cfg(target_arch = "wasm32")]
-            nv12_full_range: false,
+            browser_nv12: Default::default(),
         }
     }
 
-    /// Whether the browser NV12 planes converted next are full range; see
+    /// How to read the browser NV12 planes converted next; see
     /// `DecodedFrame::from_browser_nv12`.
     #[cfg(target_arch = "wasm32")]
-    pub fn set_nv12_full_range(&mut self, full_range: bool) {
-        self.nv12_full_range = full_range;
+    pub fn set_browser_nv12(&mut self, nv12: crate::decoder::BrowserNv12) {
+        self.browser_nv12 = nv12;
     }
 
     /// NV12 straight from NVDEC: device-to-device into a Vulkan-shared
@@ -953,7 +958,8 @@ impl YuvToRgbaConverter {
             });
             #[cfg(target_arch = "wasm32")]
             compute_pass.set_pipeline(
-                &self.pipelines.browser_nv12_pipelines[usize::from(self.nv12_full_range)],
+                &self.pipelines.browser_nv12_pipelines[usize::from(self.browser_nv12.full_range)]
+                    [usize::from(self.browser_nv12.smooth_chroma)],
             );
             #[cfg(not(target_arch = "wasm32"))]
             compute_pass.set_pipeline(&self.pipelines.nv12_pipeline);
@@ -1043,7 +1049,8 @@ impl YuvToRgbaConverter {
             });
             #[cfg(target_arch = "wasm32")]
             compute_pass.set_pipeline(
-                &self.pipelines.browser_nv12_pipelines[usize::from(self.nv12_full_range)],
+                &self.pipelines.browser_nv12_pipelines[usize::from(self.browser_nv12.full_range)]
+                    [usize::from(self.browser_nv12.smooth_chroma)],
             );
             #[cfg(not(target_arch = "wasm32"))]
             compute_pass.set_pipeline(&self.pipelines.nv12_pipeline);

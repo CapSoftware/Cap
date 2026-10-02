@@ -21,7 +21,7 @@ mod avassetreader;
 #[cfg(target_arch = "wasm32")]
 mod browser;
 #[cfg(target_arch = "wasm32")]
-pub use browser::{BrowserFrameImage, BrowserFrameSource};
+pub use browser::{BrowserFrameImage, BrowserFrameSource, BrowserNv12};
 #[cfg(not(target_arch = "wasm32"))]
 mod ffmpeg;
 #[cfg(not(target_arch = "wasm32"))]
@@ -171,7 +171,7 @@ pub struct DecodedFrame {
     #[cfg(target_arch = "wasm32")]
     browser_image: Option<browser::BrowserFrameImage>,
     #[cfg(target_arch = "wasm32")]
-    nv12_full_range: bool,
+    browser_nv12: browser::BrowserNv12,
     #[cfg(target_os = "linux")]
     cuda_nv12: Option<Arc<crate::linux_gpu::CudaNv12Frame>>,
 }
@@ -300,7 +300,7 @@ impl DecodedFrame {
             #[cfg(target_arch = "wasm32")]
             browser_image: None,
             #[cfg(target_arch = "wasm32")]
-            nv12_full_range: false,
+            browser_nv12: browser::BrowserNv12::default(),
             #[cfg(target_os = "linux")]
             cuda_nv12: None,
         }
@@ -321,7 +321,7 @@ impl DecodedFrame {
             #[cfg(target_arch = "wasm32")]
             browser_image: None,
             #[cfg(target_arch = "wasm32")]
-            nv12_full_range: false,
+            browser_nv12: browser::BrowserNv12::default(),
             #[cfg(target_os = "linux")]
             cuda_nv12: None,
         }
@@ -366,7 +366,7 @@ impl DecodedFrame {
             #[cfg(target_arch = "wasm32")]
             browser_image: None,
             #[cfg(target_arch = "wasm32")]
-            nv12_full_range: false,
+            browser_nv12: browser::BrowserNv12::default(),
             #[cfg(target_os = "linux")]
             cuda_nv12: None,
         }
@@ -393,7 +393,7 @@ impl DecodedFrame {
             #[cfg(target_arch = "wasm32")]
             browser_image: None,
             #[cfg(target_arch = "wasm32")]
-            nv12_full_range: false,
+            browser_nv12: browser::BrowserNv12::default(),
             #[cfg(target_os = "linux")]
             cuda_nv12: None,
         }
@@ -439,7 +439,7 @@ impl DecodedFrame {
             #[cfg(target_arch = "wasm32")]
             browser_image: None,
             #[cfg(target_arch = "wasm32")]
-            nv12_full_range: false,
+            browser_nv12: browser::BrowserNv12::default(),
             #[cfg(target_os = "linux")]
             cuda_nv12: None,
         }
@@ -466,7 +466,7 @@ impl DecodedFrame {
             #[cfg(target_arch = "wasm32")]
             browser_image: None,
             #[cfg(target_arch = "wasm32")]
-            nv12_full_range: false,
+            browser_nv12: browser::BrowserNv12::default(),
             #[cfg(target_os = "linux")]
             cuda_nv12: None,
         }

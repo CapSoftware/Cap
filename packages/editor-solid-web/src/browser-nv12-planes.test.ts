@@ -52,12 +52,18 @@ describe("nv12Planes", () => {
 			yStride: 1920,
 			uvStride: 1920,
 			fullRange: false,
+			smoothChroma: false,
 		});
 		expect(planes.nv12.length).toBe(1920 * 1080 * 1.5);
 		expect(copies[0]?.layout).toEqual([
 			{ offset: 0, stride: 1920 },
 			{ offset: 1920 * 1080, stride: 1920 },
 		]);
+	});
+
+	test("marks export planes for smooth chroma", async () => {
+		const planes = await nv12Planes(fakeFrame(4, 4).frame, true);
+		expect(planes.smoothChroma).toBe(true);
 	});
 
 	test("passes the decoder's range on", async () => {

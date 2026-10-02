@@ -9,6 +9,17 @@ pub enum BrowserFrameSource {
     VideoFrame(web_sys::VideoFrame),
 }
 
+/// How to read NV12 planes a page copied out of a browser decoder.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BrowserNv12 {
+    /// Safari hands planes over expanded to full range, where native decoders
+    /// keep video range.
+    pub full_range: bool,
+    /// Interpolate chroma between samples, as browsers and encoders expect,
+    /// rather than repeat each sample as native playback does.
+    pub smooth_chroma: bool,
+}
+
 /// A decoded browser frame that stays on the GPU side of the page: layers copy
 /// it straight into their frame texture with `copy_external_image_to_texture`
 /// instead of uploading CPU pixels.
@@ -84,27 +95,26 @@ impl DecodedFrame {
                 source_color_fix,
                 source_display_gamma,
             }),
-            nv12_full_range: false,
+            browser_nv12: BrowserNv12::default(),
         }
     }
 
-    /// NV12 planes the page copied out of a browser decoder. Safari hands them
-    /// over expanded to full range, where native decoders keep video range.
+    /// NV12 planes the page copied out of a browser decoder.
     pub fn from_browser_nv12(
         data: Vec<u8>,
         width: u32,
         height: u32,
         y_stride: u32,
         uv_stride: u32,
-        full_range: bool,
+        nv12: BrowserNv12,
     ) -> Self {
         let mut frame = Self::new_nv12(data, width, height, y_stride, uv_stride);
-        frame.nv12_full_range = full_range;
+        frame.browser_nv12 = nv12;
         frame
     }
 
-    pub fn nv12_full_range(&self) -> bool {
-        self.nv12_full_range
+    pub fn browser_nv12(&self) -> BrowserNv12 {
+        self.browser_nv12
     }
 
     pub fn browser_image(&self) -> Option<&BrowserFrameImage> {
