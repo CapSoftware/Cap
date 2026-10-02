@@ -466,6 +466,55 @@ export function mapEditedTimeToSource(
 	return fallback;
 }
 
+/// Carries an edit made on caption track segment `trackIndex` (output time)
+/// back onto its source-timed caption, found by id: track pieces are
+/// re-derived from the sources on every clip change, and a cut can drop or
+/// split captions so track and source indices differ.
+export function syncCaptionSourceFromTrack(
+	project: {
+		captions?: { segments: CaptionSegment[] } | null;
+		timeline?: {
+			segments: TimelineSegment[];
+			captionSegments?: CaptionTrackSegment[] | null;
+			transitions?: ClipTransition[] | null;
+			textSegments?: TextSegment[] | null;
+		} | null;
+	},
+	trackIndex: number,
+	recordingSegments: SegmentRecordings[],
+) {
+	const timeline = project.timeline;
+	const track = timeline?.captionSegments?.[trackIndex];
+	if (!timeline || !track) return;
+	const sourceId = sourceCaptionId(track.id);
+	const source = project.captions?.segments?.find(
+		(segment) => segment.id === sourceId,
+	);
+	if (!source) return;
+	const sourceRange = { start: source.start, end: source.end };
+	const toSource = (time: number) =>
+		mapEditedTimeToSource(
+			time,
+			timeline.segments,
+			recordingSegments,
+			timeline.transitions ?? [],
+			sourceRange,
+			"outgoing",
+			timeline.textSegments ?? undefined,
+		);
+	const start = toSource(track.start);
+	const end = toSource(track.end);
+	if (start !== null) source.start = start;
+	if (end !== null) source.end = end;
+	source.text = track.text;
+	source.words = syncCaptionWordsWithText(
+		source.text,
+		source.words,
+		source.start,
+		source.end,
+	);
+}
+
 export function applyCaptionResultToProject<
 	T extends {
 		captions?:

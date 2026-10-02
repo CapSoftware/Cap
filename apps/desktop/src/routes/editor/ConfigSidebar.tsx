@@ -103,7 +103,10 @@ import {
 	CursorStylePicker,
 	isExplicitCursorFamily,
 } from "./CursorStylePicker";
-import { syncCaptionWordsWithText } from "./captions";
+import {
+	syncCaptionSourceFromTrack,
+	syncCaptionWordsWithText,
+} from "./captions";
 import { type ClipTransition, clipSourceTimeAt } from "./clip-transitions";
 import { hexToRgb, RgbInput } from "./color-utils";
 import {
@@ -3960,7 +3963,7 @@ function CaptionSegmentConfig(props: {
 	segmentIndex: number;
 	segment: CaptionTrackSegment;
 }) {
-	const { setProject } = useEditorContext();
+	const { setProject, editorInstance } = useEditorContext();
 
 	const updateSegment = (fn: (segment: CaptionTrackSegment) => void) => {
 		setProject(
@@ -3970,16 +3973,11 @@ function CaptionSegmentConfig(props: {
 				if (!timelineSegment) return;
 
 				fn(timelineSegment);
-
-				const captionSegment = project.captions?.segments?.[props.segmentIndex];
-				if (!captionSegment) return;
-
-				captionSegment.start = timelineSegment.start;
-				captionSegment.end = timelineSegment.end;
-				captionSegment.text = timelineSegment.text;
-				captionSegment.words = timelineSegment.words?.map((word) => ({
-					...word,
-				}));
+				syncCaptionSourceFromTrack(
+					project,
+					props.segmentIndex,
+					editorInstance.recordings.segments,
+				);
 			}),
 		);
 	};

@@ -39,11 +39,10 @@ import {
 	DEFAULT_WHISPER_CAPTION_MODEL,
 	getCaptionGenerationErrorMessage,
 	getModelPath,
-	mapEditedTimeToSource,
 	PARAKEET_DIR_MODELS,
 	resolveCaptionModel,
-	sourceCaptionId,
 	supportsParakeetTranscription,
+	syncCaptionSourceFromTrack,
 	syncCaptionWordsWithText,
 	transcribeEditorCaptions,
 } from "./captions";
@@ -294,40 +293,10 @@ export function CaptionsTab(props: {
 				// Route content/timing onto the source-time caption master so the
 				// edit persists across future clip changes. Style overrides stay on
 				// the track and are carried across by source id when re-derived.
-				const sourceId = sourceCaptionId(timelineSegment.id);
-				const source = currentProject.captions?.segments?.find(
-					(segment) => segment.id === sourceId,
-				);
-				if (!source) return;
-
-				const recordingSegments = editorInstance.recordings.segments;
-				const sourceRange = { start: source.start, end: source.end };
-				const start = mapEditedTimeToSource(
-					timelineSegment.start,
-					timeline.segments,
-					recordingSegments,
-					timeline.transitions ?? [],
-					sourceRange,
-					"outgoing",
-					timeline.textSegments,
-				);
-				const end = mapEditedTimeToSource(
-					timelineSegment.end,
-					timeline.segments,
-					recordingSegments,
-					timeline.transitions ?? [],
-					sourceRange,
-					"outgoing",
-					timeline.textSegments,
-				);
-				if (start !== null) source.start = start;
-				if (end !== null) source.end = end;
-				source.text = timelineSegment.text;
-				source.words = syncCaptionWordsWithText(
-					source.text,
-					source.words,
-					source.start,
-					source.end,
+				syncCaptionSourceFromTrack(
+					currentProject,
+					index,
+					editorInstance.recordings.segments,
 				);
 			}),
 		);
