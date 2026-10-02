@@ -244,7 +244,7 @@ async function frameFor(
 	const sample = await sampleAt(cursor, time);
 	if (!sample) return null;
 	const frame = sample.toVideoFrame();
-	if (planes && takesNv12Planes(frame)) {
+	if (planes && !cursor.retagBt601 && takesNv12Planes(frame)) {
 		const copied = await nv12Planes(frame, true).catch(() => null);
 		if (copied) {
 			frame.close();
