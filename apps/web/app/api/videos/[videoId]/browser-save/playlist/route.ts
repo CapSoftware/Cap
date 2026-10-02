@@ -3,14 +3,17 @@ import { provideOptionalAuth, Videos } from "@cap/web-backend";
 import { Video } from "@cap/web-domain";
 import { Effect, Option } from "effect";
 import { NextResponse } from "next/server";
-import { browserSavePlaylist } from "@/lib/browser-save-chunks";
+import {
+	browserSaveMultivariantPlaylist,
+	browserSavePlaylist,
+} from "@/lib/browser-save-chunks";
 import { recentBrowserSave } from "@/lib/render-farm-status";
 import { runPromise } from "@/lib/server";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(
-	_request: Request,
+	request: Request,
 	props: { params: Promise<{ videoId: string }> },
 ) {
 	const videoId = Video.VideoId.make((await props.params).videoId);
@@ -31,10 +34,14 @@ export async function GET(
 		promise.catch(() => null),
 	);
 	if (!playlist) return new NextResponse(null, { status: 404 });
-	return new NextResponse(playlist, {
-		headers: {
-			"Content-Type": "application/vnd.apple.mpegurl",
-			"Cache-Control": "private, no-store",
+	const media = new URL(request.url).searchParams.has("media");
+	return new NextResponse(
+		media ? playlist : browserSaveMultivariantPlaylist(videoId),
+		{
+			headers: {
+				"Content-Type": "application/vnd.apple.mpegurl",
+				"Cache-Control": "private, no-store",
+			},
 		},
-	});
+	);
 }

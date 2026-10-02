@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
 	BROWSER_SAVE_CHUNK_FILE,
 	browserSaveChunkKey,
+	browserSaveMultivariantPlaylist,
+	browserSavePlayable,
 	browserSavePlaylist,
 } from "@/lib/browser-save-chunks";
 
@@ -47,5 +49,30 @@ describe("browser save chunks", () => {
 		expect(browserSavePlaylist("abc", "save", [6.2], false)).toContain(
 			"#EXT-X-TARGETDURATION:7",
 		);
+	});
+
+	it("starts playback after two chunks, as with 2 s chunks", () => {
+		expect(browserSavePlayable([])).toBe(false);
+		expect(browserSavePlayable([2])).toBe(false);
+		expect(browserSavePlayable([2, 2])).toBe(true);
+		expect(browserSavePlayable([1.9853, 2])).toBe(true);
+		expect(browserSavePlayable([2, 0.05])).toBe(true);
+	});
+
+	it("starts playback once one longer chunk covers 4 s", () => {
+		expect(browserSavePlayable([3.5])).toBe(false);
+		expect(browserSavePlayable([4])).toBe(true);
+		expect(browserSavePlayable([5])).toBe(true);
+		expect(browserSavePlayable([10])).toBe(true);
+	});
+
+	it("wraps the media playlist in a multivariant playlist", () => {
+		expect(browserSaveMultivariantPlaylist("abc").split("\n")).toEqual([
+			"#EXTM3U",
+			"#EXT-X-VERSION:7",
+			"#EXT-X-STREAM-INF:BANDWIDTH=8000000",
+			"/api/videos/abc/browser-save/playlist?media",
+			"",
+		]);
 	});
 });
