@@ -204,6 +204,7 @@ export function TextOverlay(props: TextOverlayProps) {
 		if (!dir) return;
 
 		e.preventDefault();
+		e.stopPropagation();
 		const px = e.shiftKey ? 10 : 1;
 		updateSegmentByIndex(index, (s) => {
 			s.center.x = clamp(
