@@ -43,6 +43,7 @@ import { SplitScreenOverlay } from "./SplitScreenOverlay";
 import { PreviewSafeZoneOverlay } from "./safe-zone-overlay";
 import {
 	cycleSafeZonePlatform,
+	isPortraitOutput,
 	SAFE_ZONE_LABELS,
 	safeZonePlatform,
 } from "./safe-zones";
@@ -72,7 +73,15 @@ export function PlayerContent(props: { compactness?: number }) {
 		playbackIntent,
 		requestHandoffPlayback,
 		handoffPlaybackPending,
+		latestFrameLayout,
 	} = useEditorContext();
+
+	const portraitOutput = () => {
+		const layout = latestFrameLayout();
+		return (
+			!!layout && isPortraitOutput(layout.output_width, layout.output_height)
+		);
+	};
 
 	let panelRef: HTMLDivElement | undefined;
 	const [panelHovered, setPanelHovered] = createSignal(false);
@@ -398,18 +407,20 @@ export function PlayerContent(props: { compactness?: number }) {
 						<span class="max-[1200px]:hidden">Crop</span>
 					</EditorButton>
 					<FrameButton />
-					<EditorButton
-						tooltipText="Safe zones: Off / Reels / TikTok / Shorts (portrait only)"
-						onClick={() => cycleSafeZonePlatform()}
-						variant="text"
-						leftIcon={<IconLucideSmartphone />}
-					>
-						<span class="max-[1200px]:hidden">
-							{safeZonePlatform()
-								? SAFE_ZONE_LABELS[safeZonePlatform() ?? "reels"]
-								: "Safe zones"}
-						</span>
-					</EditorButton>
+					<Show when={portraitOutput()}>
+						<EditorButton
+							tooltipText="Safe zones: Off / Reels / TikTok / Shorts"
+							onClick={() => cycleSafeZonePlatform()}
+							variant="text"
+							leftIcon={<IconLucideSmartphone />}
+						>
+							<span class="max-[1200px]:hidden">
+								{safeZonePlatform()
+									? SAFE_ZONE_LABELS[safeZonePlatform() ?? "reels"]
+									: "Safe zones"}
+							</span>
+						</EditorButton>
+					</Show>
 				</div>
 				<div class="flex flex-row flex-none gap-2 items-center">
 					<span class="text-xs text-ed-text-2">Preview</span>

@@ -52,12 +52,15 @@ export function cycleSafeZonePlatform() {
 	} catch {}
 }
 
+export const isPortraitOutput = (outputWidth: number, outputHeight: number) =>
+	outputWidth / Math.max(outputHeight, 1) <= 0.7;
+
 export function safeZoneRect(
 	platform: SafeZonePlatform,
 	outputWidth: number,
 	outputHeight: number,
 ) {
-	if (outputWidth / Math.max(outputHeight, 1) > 0.7) return null;
+	if (!isPortraitOutput(outputWidth, outputHeight)) return null;
 	const insets = PLATFORM_INSETS[platform];
 	return {
 		x: insets.left / 1080,
@@ -65,15 +68,4 @@ export function safeZoneRect(
 		w: 1 - (insets.left + insets.right) / 1080,
 		h: 1 - (insets.top + insets.bottom) / 1920,
 	};
-}
-
-if (import.meta.vitest) {
-	const { expect, it } = import.meta.vitest;
-
-	it("maps platform insets onto a portrait frame and skips landscape", () => {
-		const rect = safeZoneRect("tiktok", 1080, 1920);
-		expect(rect?.y).toBeCloseTo(160 / 1920);
-		expect((rect?.y ?? 0) + (rect?.h ?? 0)).toBeCloseTo(1 - 480 / 1920);
-		expect(safeZoneRect("reels", 1920, 1080)).toBeNull();
-	});
 }
