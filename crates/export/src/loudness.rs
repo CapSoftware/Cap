@@ -92,17 +92,32 @@ fn audio_decoder(
     Ok(Some((stream.index(), stream.time_base(), decoder)))
 }
 
-pub fn measure_integrated_loudness(path: &Path) -> Result<Option<f32>, LoudnessError> {
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Loudness {
+    pub integrated_lufs: f32,
+    pub true_peak: f32,
+}
+
+pub fn measure_loudness(path: &Path) -> Result<Option<Loudness>, LoudnessError> {
     let mut input = format::input(&path)?;
     let Some((index, time_base, mut decoder)) = audio_decoder(&input)? else {
         return Ok(None);
     };
-    let mut graph = filter_graph(&decoder, time_base, "ebur128=metadata=1")?;
+    let mut graph = filter_graph(&decoder, time_base, "ebur128=metadata=1:peak=true")?;
     let mut level = None;
+    let mut true_peak = 0.0f32;
     let mut decoded = frame::Audio::empty();
     let mut read_level = |frame: &frame::Audio| {
-        if let Some(value) = frame.metadata().get("lavfi.r128.I") {
+        let metadata = frame.metadata();
+        if let Some(value) = metadata.get("lavfi.r128.I") {
             level = value.parse::<f32>().ok().filter(|v| v.is_finite());
+        }
+        if let Some(peak) = metadata
+            .get("lavfi.r128.true_peak")
+            .and_then(|value| value.parse::<f32>().ok())
+            .filter(|v| v.is_finite())
+        {
+            true_peak = true_peak.max(peak);
         }
         Ok(())
     };
@@ -122,12 +137,17 @@ pub fn measure_integrated_loudness(path: &Path) -> Result<Option<f32>, LoudnessE
     }
     graph.get("in").unwrap().source().flush()?;
     drain_graph(&mut graph, &mut read_level)?;
-    Ok(level.filter(|level| *level > -70.0))
+    Ok(level
+        .filter(|level| *level > -70.0)
+        .map(|integrated_lufs| Loudness {
+            integrated_lufs,
+            true_peak,
+        }))
 }
 
-pub fn normalization_gain_db(measured_lufs: f32, target_lufs: f32) -> Option<f32> {
-    let gain = (target_lufs - measured_lufs).clamp(-MAX_GAIN_DB, MAX_GAIN_DB);
-    (gain.abs() >= MIN_ADJUSTMENT_DB).then_some(gain)
+pub fn normalization_gain_db(measured: Loudness, target_lufs: f32) -> Option<f32> {
+    let gain = (target_lufs - measured.integrated_lufs).clamp(-MAX_GAIN_DB, MAX_GAIN_DB);
+    (gain.abs() >= MIN_ADJUSTMENT_DB || measured.true_peak > TRUE_PEAK_LIMIT).then_some(gain)
 }
 
 fn rewrite_audio(path: &Path, temp_path: &Path, gain_db: f32) -> Result<(), LoudnessError> {
@@ -270,13 +290,20 @@ pub fn normalize_file_loudness(
     path: &Path,
     target_lufs: f32,
 ) -> Result<Option<f32>, LoudnessError> {
-    let Some(measured) = measure_integrated_loudness(path)? else {
+    let Some(measured) = measure_loudness(path)? else {
         return Ok(None);
     };
     let Some(mut gain) = normalization_gain_db(measured, target_lufs) else {
         return Ok(None);
     };
-    tracing::info!(measured, target_lufs, gain, path = %path.display(), "Normalizing export loudness");
+    tracing::info!(
+        measured = measured.integrated_lufs,
+        true_peak = measured.true_peak,
+        target_lufs,
+        gain,
+        path = %path.display(),
+        "Normalizing export loudness"
+    );
     let temp_path: PathBuf = path.with_extension(format!(
         "loudness.{}",
         path.extension().and_then(|e| e.to_str()).unwrap_or("mp4")
@@ -299,10 +326,10 @@ fn render_at_target(
 ) -> Result<(), LoudnessError> {
     for _ in 0..MAX_PASSES {
         rewrite_audio(path, temp_path, *gain)?;
-        let Some(rendered) = measure_integrated_loudness(temp_path)? else {
+        let Some(rendered) = measure_loudness(temp_path)? else {
             return Ok(());
         };
-        let shortfall = target_lufs - rendered;
+        let shortfall = target_lufs - rendered.integrated_lufs;
         let next = (*gain + shortfall).clamp(
             -MAX_GAIN_DB - LIMITER_HEADROOM_DB,
             MAX_GAIN_DB + LIMITER_HEADROOM_DB,
@@ -319,6 +346,76 @@ fn render_at_target(
 mod tests {
     use super::*;
 
+    fn loudness(integrated_lufs: f32, true_peak: f32) -> Loudness {
+        Loudness {
+            integrated_lufs,
+            true_peak,
+        }
+    }
+
+    fn write_sine_wav(path: &Path, amplitude: f32, seconds: u32) {
+        let rate = 48_000u32;
+        let samples: Vec<i16> = (0..rate * seconds)
+            .map(|i| {
+                let t = i as f32 / rate as f32;
+                (amplitude * (std::f32::consts::TAU * 440.0 * t).sin() * f32::from(i16::MAX)) as i16
+            })
+            .collect();
+        let data_len = (samples.len() * 2) as u32;
+        let mut bytes = Vec::with_capacity(44 + data_len as usize);
+        bytes.extend_from_slice(b"RIFF");
+        bytes.extend_from_slice(&(36 + data_len).to_le_bytes());
+        bytes.extend_from_slice(b"WAVEfmt ");
+        bytes.extend_from_slice(&16u32.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&rate.to_le_bytes());
+        bytes.extend_from_slice(&(rate * 2).to_le_bytes());
+        bytes.extend_from_slice(&2u16.to_le_bytes());
+        bytes.extend_from_slice(&16u16.to_le_bytes());
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&data_len.to_le_bytes());
+        for sample in samples {
+            bytes.extend_from_slice(&sample.to_le_bytes());
+        }
+        std::fs::write(path, bytes).unwrap();
+    }
+
+    fn aac_fixture(dir: &Path, name: &str, amplitude: f32) -> PathBuf {
+        let wav = dir.join(format!("{name}.wav"));
+        write_sine_wav(&wav, amplitude, 6);
+        let m4a = dir.join(format!("{name}.m4a"));
+        rewrite_audio(&wav, &m4a, 0.0).unwrap();
+        m4a
+    }
+
+    #[test]
+    fn normalizes_a_quiet_file_to_the_target_with_a_true_peak_limit() {
+        ffmpeg::init().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = aac_fixture(dir.path(), "quiet", 0.02);
+        let before = measure_loudness(&path).unwrap().unwrap();
+        assert!(before.integrated_lufs < -30.0, "before {before:?}");
+
+        let gain = normalize_file_loudness(&path, SOCIAL_TARGET_LUFS).unwrap();
+        assert!(gain.is_some());
+        let after = measure_loudness(&path).unwrap().unwrap();
+        assert!(
+            (after.integrated_lufs - SOCIAL_TARGET_LUFS).abs() < 1.0,
+            "after {after:?}"
+        );
+        assert!(after.true_peak <= TRUE_PEAK_LIMIT * 1.06, "after {after:?}");
+        assert!(!path.with_extension("loudness.m4a").exists());
+    }
+
+    #[test]
+    fn limits_peaks_even_when_loudness_is_on_target() {
+        let hot = loudness(-14.2, 1.0);
+        assert!(normalization_gain_db(hot, SOCIAL_TARGET_LUFS).is_some());
+        let clean = loudness(-14.2, 0.5);
+        assert!(normalization_gain_db(clean, SOCIAL_TARGET_LUFS).is_none());
+    }
+
     #[test]
     #[ignore = "normalizes a real file named by CAP_LOUDNESS_TEST_FILE"]
     fn normalizes_a_real_file_to_the_target() {
@@ -327,18 +424,34 @@ mod tests {
         };
         ffmpeg::init().unwrap();
         let path = Path::new(&path);
-        let before = measure_integrated_loudness(path).unwrap().unwrap();
+        let before = measure_loudness(path).unwrap().unwrap();
         let gain = normalize_file_loudness(path, SOCIAL_TARGET_LUFS).unwrap();
-        let after = measure_integrated_loudness(path).unwrap().unwrap();
-        println!("before {before:.2} LUFS, gain {gain:?}, after {after:.2} LUFS");
-        assert!((after - SOCIAL_TARGET_LUFS).abs() < 1.0, "after {after}");
+        let after = measure_loudness(path).unwrap().unwrap();
+        println!("before {before:?}, gain {gain:?}, after {after:?}");
+        assert!(
+            (after.integrated_lufs - SOCIAL_TARGET_LUFS).abs() < 1.0,
+            "after {after:?}"
+        );
     }
 
     #[test]
     fn gain_targets_social_loudness_within_limits() {
-        assert_eq!(normalization_gain_db(-20.0, SOCIAL_TARGET_LUFS), Some(6.0));
-        assert_eq!(normalization_gain_db(-14.2, SOCIAL_TARGET_LUFS), None);
-        assert_eq!(normalization_gain_db(-60.0, SOCIAL_TARGET_LUFS), Some(20.0));
-        assert_eq!(normalization_gain_db(-8.0, SOCIAL_TARGET_LUFS), Some(-6.0));
+        let quiet_peak = 0.5;
+        assert_eq!(
+            normalization_gain_db(loudness(-20.0, quiet_peak), SOCIAL_TARGET_LUFS),
+            Some(6.0)
+        );
+        assert_eq!(
+            normalization_gain_db(loudness(-14.2, quiet_peak), SOCIAL_TARGET_LUFS),
+            None
+        );
+        assert_eq!(
+            normalization_gain_db(loudness(-60.0, quiet_peak), SOCIAL_TARGET_LUFS),
+            Some(20.0)
+        );
+        assert_eq!(
+            normalization_gain_db(loudness(-8.0, quiet_peak), SOCIAL_TARGET_LUFS),
+            Some(-6.0)
+        );
     }
 }

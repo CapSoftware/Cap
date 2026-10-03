@@ -1525,7 +1525,7 @@ async fn export_video_attempts(
                         "Export succeeded with FFmpeg decoder fallback: {}",
                         path.display()
                     );
-                    Ok(path)
+                    Ok(normalize_export_loudness(&project_path, &settings, path).await)
                 }
                 Err(retry_e) => {
                     if cancel_token.is_cancelled() || retry_e == "Export cancelled" {
