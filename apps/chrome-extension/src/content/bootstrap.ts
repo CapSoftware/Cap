@@ -30,6 +30,11 @@ const BOOTSTRAP_FLAG = "__capExtensionContentBootstrap";
 const INSTALLED_ATTRIBUTE = "data-cap-chrome-extension-installed";
 const READY_EVENT = "cap-chrome-extension-ready";
 const OPEN_EVENT = "cap-chrome-extension-open";
+// Mirrors of the overlay module's own constants (the bootstrap must stay a
+// few KB, so it cannot import them): the root the overlay mounts under and
+// the DOM event that makes a previous generation unmount cleanly.
+const OVERLAY_ROOT_ID = "cap-extension-recorder-overlay";
+const OVERLAY_TEARDOWN_EVENT = "cap-extension-overlay-teardown";
 
 const isCapWebOrigin = () => {
 	const { hostname, protocol } = window.location;
@@ -62,8 +67,16 @@ const readPanelOpen = (value: unknown): boolean =>
 	typeof value === "object" &&
 	(value as { panelOpen?: unknown }).panelOpen === true;
 
-const bootstrap = () => {
-	const overlayModuleUrl = chrome.runtime.getURL("content/overlay.js");
+const bootstrap = (isCurrent: () => boolean) => {
+	// The query string forces a fresh module per injection: after a takeover,
+	// importing the bare URL would return the cached orphan copy, whose
+	// `initialized` guard makes init() a silent no-op — the tab would keep
+	// acknowledging messages while never mounting UI again. A fresh copy's
+	// mountOverlay already tears down any previous tree via the DOM-level
+	// teardown event, so generations hand over cleanly.
+	const overlayModuleUrl = `${chrome.runtime.getURL(
+		"content/overlay.js",
+	)}?instance=${Date.now().toString(36)}`;
 	// Messages acknowledged while the overlay module is still being fetched.
 	// init() hands them to the module, whose components replay them on mount,
 	// so the panel toggle or webcam settings push that triggered the lazy
@@ -72,16 +85,26 @@ const bootstrap = () => {
 	let modulePromise: Promise<void> | null = null;
 	let moduleStarted = false;
 
+	const detachListeners = () => {
+		try {
+			chrome.runtime.onMessage.removeListener(handleRuntimeMessage);
+			chrome.storage.onChanged.removeListener(handleStorageChange);
+		} catch {
+			// An orphaned instance has no extension context left to detach from.
+		}
+	};
+
 	const startOverlayModule = () => {
+		if (!isCurrent()) return Promise.resolve();
 		modulePromise ??= import(/* @vite-ignore */ overlayModuleUrl)
 			.then((module: OverlayModule) => {
+				if (!isCurrent()) return;
 				moduleStarted = true;
 				// The module registers its own runtime and storage listeners;
 				// from here the bootstrap goes dormant. Messages arriving in the
 				// brief window before the module's listeners mount are covered by
 				// the service worker's send retries and the storage mirror.
-				chrome.runtime.onMessage.removeListener(handleRuntimeMessage);
-				chrome.storage.onChanged.removeListener(handleStorageChange);
+				detachListeners();
 				module.init(pendingMessages);
 			})
 			.catch(() => {
@@ -95,6 +118,10 @@ const bootstrap = () => {
 		changes: Record<string, chrome.storage.StorageChange>,
 		areaName: string,
 	) => {
+		if (!isCurrent()) {
+			detachListeners();
+			return;
+		}
 		if (areaName !== "session") return;
 		if (
 			isUiPhase(changes[RECORDING_STATE_KEY]?.newValue) ||
@@ -109,6 +136,11 @@ const bootstrap = () => {
 		_sender: chrome.runtime.MessageSender,
 		sendResponse: (response?: unknown) => void,
 	) => {
+		if (!isCurrent()) {
+			// A newer injection owns this tab; go silent so only it acknowledges.
+			detachListeners();
+			return false;
+		}
 		if (moduleStarted) return false;
 
 		if (isOverlayMessage(message)) {
@@ -144,16 +176,37 @@ const bootstrap = () => {
 	chrome.runtime.onMessage.addListener(handleRuntimeMessage);
 	chrome.storage.onChanged.addListener(handleStorageChange);
 
+	// A previous generation's UI may still be in the DOM: its embedded
+	// extension iframes died with the old instance (a black camera bubble, a
+	// dead panel), the extension reload wiped the session state that would
+	// have triggered a fresh mount, and the old watcher sees a revived
+	// chrome object so it never self-destructs. Sweep it here — the wake
+	// checks below remount fresh UI whenever current state warrants it.
+	const staleRoot = document.getElementById(OVERLAY_ROOT_ID);
+	if (staleRoot) {
+		staleRoot.dispatchEvent(new Event(OVERLAY_TEARDOWN_EVENT));
+		staleRoot.remove();
+	}
+
 	if (isCapWebOrigin()) {
 		document.documentElement.setAttribute(INSTALLED_ATTRIBUTE, "true");
 		window.dispatchEvent(new CustomEvent(READY_EVENT));
 		window.addEventListener(OPEN_EVENT, () => {
-			chrome.runtime.sendMessage(
-				{ target: "service-worker", type: "open-recorder-panel" },
-				() => {
-					void chrome.runtime.lastError;
-				},
-			);
+			// DOM listeners outlive the extension context that registered them:
+			// after a takeover the current copy answers this event, and an
+			// orphan with no successor must fail silently rather than throw
+			// "Extension context invalidated" into the page console.
+			if (!isCurrent()) return;
+			try {
+				chrome.runtime.sendMessage(
+					{ target: "service-worker", type: "open-recorder-panel" },
+					() => {
+						void chrome.runtime.lastError;
+					},
+				);
+			} catch {
+				// Orphaned context; the event is lost until re-injection.
+			}
 		});
 	}
 
@@ -164,6 +217,7 @@ const bootstrap = () => {
 		chrome.storage.session.get(
 			[RECORDING_STATE_KEY, SHARED_UI_STATE_KEY],
 			(items) => {
+				if (!isCurrent()) return;
 				if (chrome.runtime.lastError || !items) return;
 				if (
 					isUiPhase(items[RECORDING_STATE_KEY]) ||
@@ -180,11 +234,14 @@ const bootstrap = () => {
 };
 
 // chrome.scripting.executeScript re-runs this file in the same isolated
-// world (the service worker injects it before messaging tabs that predate
-// the extension), so a second execution must not stack duplicate listeners
-// or reload the overlay module.
+// world: before messaging tabs that predate the extension, and again after
+// an extension reload or update orphans the previous copy (its chrome.*
+// listeners die, but its flag and DOM listeners survive). Deferring to a
+// boolean flag therefore left such tabs permanently unable to answer the
+// service worker. Instead every run claims the tab with a fresh token and
+// earlier instances detect the takeover and go silent — the token check
+// needs no extension context, which is exactly what orphans have lost.
 const globalScope = globalThis as Record<string, unknown>;
-if (globalScope[BOOTSTRAP_FLAG] !== true) {
-	globalScope[BOOTSTRAP_FLAG] = true;
-	bootstrap();
-}
+const instanceToken: object = {};
+globalScope[BOOTSTRAP_FLAG] = instanceToken;
+bootstrap(() => globalScope[BOOTSTRAP_FLAG] === instanceToken);
