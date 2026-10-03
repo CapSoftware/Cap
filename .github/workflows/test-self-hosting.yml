@@ -95,6 +95,27 @@ jobs:
             exit 1
           fi
 
+      - name: Test scheduled maintenance endpoints
+        run: |
+          echo "Waiting for cap-cron..."
+          timeout 150 bash -c 'until docker inspect cap-cron --format="{{.State.Health.Status}}" 2>/dev/null | grep -q "healthy"; do sleep 2; done'
+          for route in recover-failed-video-processing finalize-stale-desktop-segments cleanup-agent-api; do
+            code=$(docker exec cap-cron sh -c 'curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $CRON_SECRET" "$CAP_WEB_INTERNAL_URL/api/cron/'"$route"'"')
+            if [ "$code" = "200" ]; then
+              echo "✓ /api/cron/$route (HTTP $code)"
+            else
+              echo "✗ /api/cron/$route failed (HTTP $code)"
+              exit 1
+            fi
+          done
+          code=$(docker exec cap-cron sh -c 'curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer wrong" "$CAP_WEB_INTERNAL_URL/api/cron/cleanup-agent-api"')
+          if [ "$code" = "401" ]; then
+            echo "✓ Wrong CRON_SECRET is rejected"
+          else
+            echo "✗ Wrong CRON_SECRET returned HTTP $code"
+            exit 1
+          fi
+
       - name: Test database has tables
         run: |
           echo "Testing database..."
