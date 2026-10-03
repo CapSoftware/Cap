@@ -1826,6 +1826,10 @@ function TrackRow(props: {
 		const kind = lockKind();
 		return !!kind && (project.lockedTracks ?? []).includes(kind);
 	};
+	const lockLabel = () => {
+		const kind = lockKind();
+		return kind === "3d" ? "3D" : (kind ?? "");
+	};
 	const toggleLocked = () => {
 		const kind = lockKind();
 		if (!kind) return;
@@ -2101,12 +2105,16 @@ function TrackRow(props: {
 								? "text-ed-accent opacity-100"
 								: "text-ed-text-3 opacity-0 group-hover/icon:opacity-100",
 						)}
-						aria-label={locked() ? "Unlock track timing" : "Lock track timing"}
+						aria-label={
+							locked()
+								? `Unlock ${lockLabel()} timing`
+								: `Lock ${lockLabel()} timing`
+						}
 						aria-pressed={locked()}
 						title={
 							locked()
-								? "Locked: stays in place when clips are cut, trimmed or retimed. Click to unlock."
-								: "Lock this track so clip edits don't move its segments"
+								? `Locked: ${lockLabel()} segments on every ${lockLabel()} lane stay in place when clips are cut, trimmed or retimed. Click to unlock.`
+								: `Lock ${lockLabel()} segments on every ${lockLabel()} lane so clip edits don't move them`
 						}
 						onClick={(e) => {
 							e.stopPropagation();
