@@ -445,9 +445,10 @@ export function rippleDeleteAllTracks(
 		0,
 		durationBefore - clipTimelineDuration(timeline.segments, nextTransitions),
 	);
-	const overlayShift =
-		shiftDuration +
-		(overlayCutEnd - overlayCutStart - (trackCutEnd - trackCutStart));
+	const removedHoldTime = ripples("text")
+		? overlayCutEnd - overlayCutStart - (trackCutEnd - trackCutStart)
+		: 0;
+	const overlayShift = shiftDuration + removedHoldTime;
 	for (const [kind, track] of [
 		["style", timeline.styleSegments],
 		["image", timeline.imageSegments],
@@ -585,6 +586,22 @@ if (import.meta.vitest) {
 		expect(timeline.zoomSegments).toEqual([{ start: 2, end: 3 }]);
 		expect(timeline.keyboardSegments[0].start).toBe(7);
 		expect(timeline.keyboardSegments[0].end).toBe(8);
+	});
+
+	it("keeps a locked hold's time when cutting the clip around it", () => {
+		const timeline = {
+			segments: [{ start: 0, end: 10, timescale: 1 }],
+			transitions: [] as ClipTransition[],
+			textSegments: [
+				{ start: 2, end: 4, enabled: true, layout: "fullscreen" as const },
+			],
+			zoomSegments: [{ start: 9, end: 10 }],
+		};
+
+		rippleDeleteAllTracks(timeline, 1, 3, undefined, undefined, ["text"]);
+
+		expect(timeline.textSegments).toHaveLength(1);
+		expect(timeline.zoomSegments).toEqual([{ start: 7, end: 8 }]);
 	});
 
 	it("filters locked tracks out of boundary ripples", () => {
