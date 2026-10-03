@@ -16,6 +16,33 @@ export const STRIPE_PLAN_IDS = {
 	},
 };
 
+export const VALID_STRIPE_PLAN_PRICE_IDS = new Set<string>([
+	STRIPE_PLAN_IDS.development.yearly,
+	STRIPE_PLAN_IDS.development.monthly,
+	STRIPE_PLAN_IDS.production.yearly,
+	STRIPE_PLAN_IDS.production.monthly,
+]);
+
+export const isValidStripePlanPriceId = (
+	priceId: string,
+	environment?: "development" | "production",
+): boolean => {
+	const env =
+		environment ??
+		(process.env.VERCEL_ENV === "production"
+			? "production"
+			: process.env.VERCEL_ENV
+				? "development"
+				: undefined);
+
+	if (env) {
+		const envPlans = STRIPE_PLAN_IDS[env];
+		return priceId === envPlans.yearly || priceId === envPlans.monthly;
+	}
+
+	return VALID_STRIPE_PLAN_PRICE_IDS.has(priceId);
+};
+
 export const STRIPE_SIGNED_BAA_PRICE_IDS: Record<string, string> = {
 	development: "price_1U5xKIFJxA1XpeSsdg4Q8H3Z",
 	production: "price_1U6C99FJxA1XpeSsUg1rXHo2",
