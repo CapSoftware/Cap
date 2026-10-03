@@ -4604,13 +4604,18 @@ async fn open_file_path(_app: AppHandle, path: PathBuf) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
         if is_dir {
             Command::new("explorer")
+                .creation_flags(CREATE_NO_WINDOW)
                 .arg(path_str)
                 .spawn()
                 .map_err(|e| format!("Failed to open folder: {e}"))?;
         } else {
             Command::new("explorer")
+                .creation_flags(CREATE_NO_WINDOW)
                 .args(["/select,", path_str])
                 .spawn()
                 .map_err(|e| format!("Failed to open folder: {e}"))?;

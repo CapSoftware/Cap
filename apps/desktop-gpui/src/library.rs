@@ -623,8 +623,12 @@ pub fn reveal_in_folder(path: &Path) {
         }
         #[cfg(target_os = "windows")]
         {
-            std::process::Command::new("explorer")
-                .arg(format!("/select,{}", path.display()))
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+            let mut cmd = std::process::Command::new("explorer");
+            cmd.creation_flags(CREATE_NO_WINDOW);
+            cmd.arg(format!("/select,{}", path.display()))
                 .spawn()
         }
         #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
