@@ -202,7 +202,8 @@ export default function Recordings() {
 
 	const handleScreenStudioImport = async () => {
 		try {
-			await importScreenStudioFromPicker();
+			const projectPath = await importScreenStudioFromPicker();
+			if (projectPath) await recordings.refetch();
 		} catch (e) {
 			console.error("Failed to import Screen Studio project:", e);
 			await showImportError("Screen Studio project", e);

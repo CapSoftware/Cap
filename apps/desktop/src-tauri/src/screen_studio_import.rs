@@ -14,6 +14,7 @@ use tauri::AppHandle;
 use tracing::{info, warn};
 
 const SEGMENT_DIR: &str = "content/segments/segment-0";
+const FALLBACK_CURSOR: &str = "arrow";
 
 struct Session {
     output: Option<String>,
@@ -22,13 +23,21 @@ struct Session {
     frame_rate: Option<f64>,
 }
 
-fn sessions_by_type(metadata: &Value) -> HashMap<String, Session> {
+fn sessions_by_type(metadata: &Value) -> Result<HashMap<String, Session>, String> {
     let mut sessions = HashMap::new();
     for recorder in metadata["recorders"].as_array().into_iter().flatten() {
         let Some(kind) = recorder["type"].as_str() else {
             continue;
         };
-        let Some(session) = recorder["sessions"].as_array().and_then(|s| s.first()) else {
+        let recorder_sessions = recorder["sessions"]
+            .as_array()
+            .map_or(&[][..], Vec::as_slice);
+        if recorder_sessions.len() > 1 {
+            return Err(
+                "This Screen Studio project was recorded in several parts (paused and resumed), which can't be imported yet".to_string(),
+            );
+        }
+        let Some(session) = recorder_sessions.first() else {
             continue;
         };
         let bounds = session.get("bounds").and_then(|b| {
@@ -49,7 +58,24 @@ fn sessions_by_type(metadata: &Value) -> HashMap<String, Session> {
             },
         );
     }
-    sessions
+    Ok(sessions)
+}
+
+// Filenames come from the project's own JSON, so only plain relative names
+// inside the bundle are accepted; absolute paths or `..` could otherwise make
+// the import copy arbitrary local files.
+fn bundle_file(dir: &Path, name: &str) -> Result<PathBuf, String> {
+    let relative = Path::new(name);
+    let plain = !name.is_empty()
+        && relative
+            .components()
+            .all(|component| matches!(component, std::path::Component::Normal(_)));
+    if !plain {
+        return Err(format!(
+            "This Screen Studio project references a file outside the project: {name}"
+        ));
+    }
+    Ok(dir.join(relative))
 }
 
 fn read_json(path: &Path) -> Result<Value, String> {
@@ -271,10 +297,70 @@ fn unique_project_path(recordings_dir: &Path, name: &str) -> PathBuf {
     path
 }
 
+struct CursorRegistry {
+    source_dir: PathBuf,
+    target_dir: PathBuf,
+    infos: HashMap<String, Value>,
+    ids: HashMap<String, String>,
+    metas: HashMap<String, CursorMeta>,
+}
+
+impl CursorRegistry {
+    // A cursor whose image is missing would leave events pointing at an ID
+    // with no image, which hides the cursor; fall back to the arrow instead.
+    fn register(&mut self, ss_id: &str) -> String {
+        if let Some(id) = self.ids.get(ss_id) {
+            return id.clone();
+        }
+        let id = match self.import_image(ss_id) {
+            Some(id) => id,
+            None if ss_id != FALLBACK_CURSOR => self.register(FALLBACK_CURSOR),
+            None => self.metas.len().to_string(),
+        };
+        self.ids.insert(ss_id.to_string(), id.clone());
+        id
+    }
+
+    fn import_image(&mut self, ss_id: &str) -> Option<String> {
+        let image = bundle_file(&self.source_dir, &format!("{ss_id}.png")).ok()?;
+        if !image.exists() {
+            return None;
+        }
+        std::fs::create_dir_all(&self.target_dir).ok()?;
+        let id = self.metas.len().to_string();
+        let file_name = format!("cursor_{id}.png");
+        clone_into(&image, &self.target_dir.join(&file_name)).ok()?;
+        let hotspot = self
+            .infos
+            .get(ss_id)
+            .and_then(|info| {
+                let width = info["standardSize"]["width"].as_f64()?;
+                let height = info["standardSize"]["height"].as_f64()?;
+                Some(XY::new(
+                    info["hotSpot"]["x"].as_f64()? / width.max(1.0),
+                    info["hotSpot"]["y"].as_f64()? / height.max(1.0),
+                ))
+            })
+            .unwrap_or(XY::new(0.0, 0.0));
+        let shape = system_cursor_shape(ss_id).and_then(|variant| {
+            serde_json::from_value(Value::String(format!("MacOS|{variant}"))).ok()
+        });
+        self.metas.insert(
+            id.clone(),
+            CursorMeta {
+                image_path: RelativePathBuf::from(format!("content/cursors/{file_name}")),
+                hotspot,
+                shape,
+            },
+        );
+        Some(id)
+    }
+}
+
 pub async fn import_project(recordings_dir: &Path, source: &Path) -> Result<PathBuf, String> {
     let recording_dir = source.join("recording");
     let metadata = read_json(&recording_dir.join("metadata.json"))?;
-    let sessions = sessions_by_type(&metadata);
+    let sessions = sessions_by_type(&metadata)?;
     let display = sessions
         .get("display")
         .ok_or("This Screen Studio project has no screen recording")?;
@@ -282,7 +368,7 @@ pub async fn import_project(recordings_dir: &Path, source: &Path) -> Result<Path
         .output
         .as_deref()
         .ok_or("The screen recording file is missing from metadata.json")?;
-    let display_source = recording_dir.join(display_file);
+    let display_source = bundle_file(&recording_dir, display_file)?;
     if !display_source.exists() {
         return Err(format!(
             "Screen recording not found: {}. Open the project in Screen Studio once so it finishes processing, then try again.",
@@ -309,7 +395,7 @@ pub async fn import_project(recordings_dir: &Path, source: &Path) -> Result<Path
     let segment_dir = project_path.join(SEGMENT_DIR);
     std::fs::create_dir_all(&segment_dir).map_err(|e| e.to_string())?;
     let relative = |file: &str| RelativePathBuf::from(format!("{SEGMENT_DIR}/{file}"));
-    let offset_secs = |session: &Session| Some(((session.start_ms - origin_ms) / 1000.0).max(0.0));
+    let offset_secs = |session: &Session| Some((session.start_ms - origin_ms) / 1000.0);
 
     clone_into(&display_source, &segment_dir.join("display.mp4"))?;
     let display_meta = VideoMeta {
@@ -319,26 +405,28 @@ pub async fn import_project(recordings_dir: &Path, source: &Path) -> Result<Path
         device_id: None,
     };
 
-    let optional_media =
-        |kind: &str, name: &str| -> Result<Option<(RelativePathBuf, &Session, PathBuf)>, String> {
-            let Some(session) = sessions.get(kind) else {
-                return Ok(None);
-            };
-            let Some(file) = session.output.as_deref() else {
-                return Ok(None);
-            };
-            let source_file = recording_dir.join(file);
-            if !source_file.exists() {
-                warn!(kind, file, "Screen Studio media file missing; skipping");
-                return Ok(None);
-            }
-            let extension = Path::new(file)
-                .extension()
-                .map_or("mp4".to_string(), |e| e.to_string_lossy().to_string());
-            let file_name = format!("{name}.{extension}");
-            clone_into(&source_file, &segment_dir.join(&file_name))?;
-            Ok(Some((relative(&file_name), session, source_file)))
+    let optional_media = |kind: &str,
+                          name: &str|
+     -> Result<Option<(RelativePathBuf, &Session, PathBuf)>, String> {
+        let Some(session) = sessions.get(kind) else {
+            return Ok(None);
         };
+        let Some(file) = session.output.as_deref() else {
+            return Ok(None);
+        };
+        let source_file = bundle_file(&recording_dir, file)?;
+        if !source_file.exists() {
+            return Err(format!(
+                "This Screen Studio project lists a {kind} recording that isn't in the project ({file}). Open the project in Screen Studio once so it finishes processing, then try again."
+            ));
+        }
+        let extension = Path::new(file)
+            .extension()
+            .map_or("mp4".to_string(), |e| e.to_string_lossy().to_string());
+        let file_name = format!("{name}.{extension}");
+        clone_into(&source_file, &segment_dir.join(&file_name))?;
+        Ok(Some((relative(&file_name), session, source_file)))
+    };
 
     let camera =
         optional_media("webcam", "camera")?.map(|(path, session, source_file)| VideoMeta {
@@ -386,45 +474,14 @@ pub async fn import_project(recordings_dir: &Path, source: &Path) -> Result<Path
         .into_iter()
         .filter_map(|info| Some((info["id"].as_str()?.to_string(), info)))
         .collect();
-    let mut cursor_ids: HashMap<String, String> = HashMap::new();
-    let mut cursor_metas: HashMap<String, CursorMeta> = HashMap::new();
-    let cursors_dir = project_path.join("content").join("cursors");
-    let mut register_cursor = |ss_id: &str| -> String {
-        if let Some(id) = cursor_ids.get(ss_id) {
-            return id.clone();
-        }
-        let id = cursor_ids.len().to_string();
-        cursor_ids.insert(ss_id.to_string(), id.clone());
-        let image = recording_dir.join("cursors").join(format!("{ss_id}.png"));
-        let info = cursor_infos.get(ss_id);
-        if image.exists() && std::fs::create_dir_all(&cursors_dir).is_ok() {
-            let file_name = format!("cursor_{id}.png");
-            if clone_into(&image, &cursors_dir.join(&file_name)).is_ok() {
-                let hotspot = info
-                    .and_then(|info| {
-                        let width = info["standardSize"]["width"].as_f64()?;
-                        let height = info["standardSize"]["height"].as_f64()?;
-                        Some(XY::new(
-                            info["hotSpot"]["x"].as_f64()? / width.max(1.0),
-                            info["hotSpot"]["y"].as_f64()? / height.max(1.0),
-                        ))
-                    })
-                    .unwrap_or(XY::new(0.0, 0.0));
-                let shape = system_cursor_shape(ss_id).and_then(|variant| {
-                    serde_json::from_value(Value::String(format!("MacOS|{variant}"))).ok()
-                });
-                cursor_metas.insert(
-                    id.clone(),
-                    CursorMeta {
-                        image_path: RelativePathBuf::from(format!("content/cursors/{file_name}")),
-                        hotspot,
-                        shape,
-                    },
-                );
-            }
-        }
-        id
+    let mut cursors = CursorRegistry {
+        source_dir: recording_dir.join("cursors"),
+        target_dir: project_path.join("content").join("cursors"),
+        infos: cursor_infos,
+        ids: HashMap::new(),
+        metas: HashMap::new(),
     };
+    let mut register_cursor = |ss_id: &str| cursors.register(ss_id);
 
     let normalize = |x: f64, y: f64| {
         (
@@ -443,7 +500,9 @@ pub async fn import_project(recordings_dir: &Path, source: &Path) -> Result<Path
 
     let mut cursor_events = CursorEvents::default();
     for event in moves_file
-        .map(|f| read_events(&recording_dir.join(f)))
+        .map(|f| bundle_file(&recording_dir, &f))
+        .transpose()?
+        .map(|path| read_events(&path))
         .unwrap_or_default()
     {
         let (Some(time), Some(x), Some(y)) = (
@@ -463,7 +522,9 @@ pub async fn import_project(recordings_dir: &Path, source: &Path) -> Result<Path
         });
     }
     for event in clicks_file
-        .map(|f| read_events(&recording_dir.join(f)))
+        .map(|f| bundle_file(&recording_dir, &f))
+        .transpose()?
+        .map(|path| read_events(&path))
         .unwrap_or_default()
     {
         let Some(time) = event["processTimeMs"].as_f64() else {
@@ -504,7 +565,9 @@ pub async fn import_project(recordings_dir: &Path, source: &Path) -> Result<Path
 
     let keyboard = {
         let events = keys_file
-            .map(|f| read_events(&recording_dir.join(f)))
+            .map(|f| bundle_file(&recording_dir, &f))
+            .transpose()?
+            .map(|path| read_events(&path))
             .unwrap_or_default();
         let keyboard = convert_keystrokes(&events, input_start_ms);
         if keyboard.presses.is_empty() {
@@ -531,7 +594,7 @@ pub async fn import_project(recordings_dir: &Path, source: &Path) -> Result<Path
                     keyboard,
                     display_notch: None,
                 }],
-                cursors: Cursors::Correct(cursor_metas),
+                cursors: Cursors::Correct(cursors.metas),
                 status: Some(StudioRecordingStatus::Complete),
             },
         })),
@@ -580,6 +643,52 @@ pub async fn import_screen_studio_project(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bundle_files_must_stay_inside_the_project() {
+        let dir = Path::new("/projects/demo.screenstudio/recording");
+        assert_eq!(
+            bundle_file(dir, "channel-1-display-0.mp4").unwrap(),
+            dir.join("channel-1-display-0.mp4")
+        );
+        assert!(bundle_file(dir, "../../secret.txt").is_err());
+        assert!(bundle_file(dir, "/etc/hosts").is_err());
+        assert!(bundle_file(dir, "").is_err());
+    }
+
+    #[test]
+    fn multi_part_recordings_are_rejected_instead_of_truncated() {
+        let metadata = serde_json::json!({
+            "recorders": [{
+                "type": "display",
+                "sessions": [
+                    {"outputFilename": "a.mp4", "processTimeStartMs": 0},
+                    {"outputFilename": "b.mp4", "processTimeStartMs": 5000}
+                ]
+            }]
+        });
+        assert!(sessions_by_type(&metadata).is_err());
+    }
+
+    #[test]
+    fn missing_cursor_images_fall_back_to_the_arrow() {
+        let source = tempfile::tempdir().unwrap();
+        let target = tempfile::tempdir().unwrap();
+        std::fs::write(source.path().join("arrow.png"), b"png").unwrap();
+        let mut cursors = CursorRegistry {
+            source_dir: source.path().to_path_buf(),
+            target_dir: target.path().to_path_buf(),
+            infos: HashMap::new(),
+            ids: HashMap::new(),
+            metas: HashMap::new(),
+        };
+        let missing = cursors.register("pointingHand");
+        let arrow = cursors.register("arrow");
+        assert_eq!(missing, arrow);
+        assert!(cursors.metas.contains_key(&arrow));
+        assert_eq!(cursors.metas.len(), 1);
+        assert!(cursors.register("../escape").eq(&arrow));
+    }
 
     #[test]
     fn keystrokes_emit_modifier_presses_and_skip_repeats() {
