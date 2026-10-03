@@ -686,6 +686,8 @@ const APP_EXIT_FORCE_TIMEOUT: Duration = Duration::from_secs(8);
 #[cfg(target_os = "macos")]
 const APP_MENU_QUIT_ID: &str = "app_quit";
 #[cfg(target_os = "macos")]
+const APP_MENU_SETTINGS_ID: &str = "app_settings";
+#[cfg(target_os = "macos")]
 static MACOS_NATIVE_TERMINATE_APP: std::sync::OnceLock<AppHandle> = std::sync::OnceLock::new();
 
 async fn await_exit_step<T, E, F>(name: &'static str, timeout: Duration, fut: F) -> Option<T>
@@ -844,6 +846,14 @@ fn build_macos_app_menu(app_handle: &AppHandle) -> tauri::Result<Menu<tauri::Wry
                 true,
                 &[
                     &PredefinedMenuItem::about(app_handle, None, Some(about_metadata))?,
+                    &PredefinedMenuItem::separator(app_handle)?,
+                    &MenuItem::with_id(
+                        app_handle,
+                        APP_MENU_SETTINGS_ID,
+                        "Settings…",
+                        true,
+                        Some("Cmd+,"),
+                    )?,
                     &PredefinedMenuItem::separator(app_handle)?,
                     &PredefinedMenuItem::services(app_handle, None)?,
                     &PredefinedMenuItem::separator(app_handle)?,
@@ -7099,6 +7109,14 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
         .manage(StartupOpenGate::default())
         .menu(build_macos_app_menu)
         .on_menu_event(|app, event| {
+            if event.id() == APP_MENU_SETTINGS_ID {
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(error) = (ShowCapWindow::Settings { page: None }).show(&app).await {
+                        warn!(%error, "Failed to open settings from the app menu");
+                    }
+                });
+            }
             if event.id() == APP_MENU_QUIT_ID {
                 let app = app.clone();
                 tokio::spawn(async move {
