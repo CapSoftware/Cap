@@ -787,6 +787,18 @@ function ConfigSidebarContent() {
 								onChange={(v) => setProject("audio", "mute", v)}
 							/>
 						</Subfield>
+						<Subfield name="Normalize for Social (-14 LUFS)">
+							<Toggle
+								checked={project.audio.normalizeLoudness ?? false}
+								onChange={(v) => setProject("audio", "normalizeLoudness", v)}
+							/>
+						</Subfield>
+						<Show when={project.audio.normalizeLoudness}>
+							<span class="text-[11px] text-ed-text-3 -mt-2">
+								Exports are measured and leveled to -14 LUFS with a -1 dB
+								true-peak limit. The editor preview is not affected.
+							</span>
+						</Show>
 						{editorInstance.recordings.segments[0].mic?.channels === 2 && (
 							<Subfield name="Microphone Stereo Mode">
 								<KSelect<{ name: string; value: StereoMode }>
