@@ -201,6 +201,20 @@ export function PreviewRulersOverlay(props: { size: Size }) {
 		window.addEventListener("mouseup", up);
 	};
 
+	// The rulers sit above the canvas element boxes, so a press on an element
+	// or handle that reaches under a ruler is handed to it instead of
+	// starting a guide.
+	const startRulerDrag = (axis: GuideAxis, event: MouseEvent) => {
+		const element = document
+			.elementsFromPoint(event.clientX, event.clientY)
+			.find((el) => el.closest("[data-canvas-element]"));
+		if (element) {
+			element.dispatchEvent(new MouseEvent("mousedown", event));
+			return;
+		}
+		startDrag(axis, null, event);
+	};
+
 	const shownGuides = (axis: GuideAxis) =>
 		guides()
 			[axis].map((position, index) => ({ position, index }))
@@ -292,7 +306,7 @@ export function PreviewRulersOverlay(props: { size: Size }) {
 					height={RULER_THICKNESS}
 					fill="rgba(20,20,22,0.72)"
 					style={{ "pointer-events": "auto", cursor: "row-resize" }}
-					onMouseDown={(e) => startDrag("h", null, e)}
+					onMouseDown={(e) => startRulerDrag("h", e)}
 				/>
 				<rect
 					x={0}
@@ -301,7 +315,7 @@ export function PreviewRulersOverlay(props: { size: Size }) {
 					height={props.size.height}
 					fill="rgba(20,20,22,0.72)"
 					style={{ "pointer-events": "auto", cursor: "col-resize" }}
-					onMouseDown={(e) => startDrag("v", null, e)}
+					onMouseDown={(e) => startRulerDrag("v", e)}
 				/>
 				<g stroke="rgba(255,255,255,0.7)" stroke-width="1">
 					<For each={rulerTicks(outputWidth(), props.size.width)}>
