@@ -3289,7 +3289,7 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
 									<Field
 										inline
 										name={edge.label}
-										value={`${Math.round((project.camera.crop?.[edge.key] ?? 0) * 100)}%`}
+										value={`${Number(((project.camera.crop?.[edge.key] ?? 0) * 100).toFixed(1))}%`}
 									>
 										<Slider
 											value={[(project.camera.crop?.[edge.key] ?? 0) * 100]}

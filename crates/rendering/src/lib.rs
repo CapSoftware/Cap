@@ -2533,10 +2533,15 @@ fn compute_camera_position(
     [x, y]
 }
 
+// Mirroring flips the image inside the crop bounds, so the crop edges the user
+// sees on the left and right come from the opposite sides of the source frame.
 fn camera_source_region(camera: &Camera, frame_size: [f32; 2]) -> ([f32; 2], [f32; 2]) {
-    let Some(crop) = camera.crop else {
+    let Some(mut crop) = camera.crop else {
         return ([0.0, 0.0], frame_size);
     };
+    if camera.mirror {
+        std::mem::swap(&mut crop.left, &mut crop.right);
+    }
     let [x0, y0, x1, y1] = crop.region();
     let origin = [x0 as f32 * frame_size[0], y0 as f32 * frame_size[1]];
     let size = [
@@ -2544,6 +2549,37 @@ fn camera_source_region(camera: &Camera, frame_size: [f32; 2]) -> ([f32; 2], [f3
         ((y1 - y0) as f32 * frame_size[1]).max(1.0),
     ];
     (origin, size)
+}
+
+fn camera_shape_crop_bounds(shape: CameraShape, origin: [f32; 2], size: [f32; 2]) -> [f32; 4] {
+    let [ox, oy] = origin;
+    let [rw, rh] = size;
+    match shape {
+        CameraShape::Source => [ox, oy, ox + rw, oy + rh],
+        CameraShape::Square => {
+            if rw > rh {
+                let offset = (rw - rh) / 2.0;
+                [ox + offset, oy, ox + rw - offset, oy + rh]
+            } else {
+                let offset = (rh - rw) / 2.0;
+                [ox, oy + offset, ox + rw, oy + rh - offset]
+            }
+        }
+    }
+}
+
+fn camera_fill_crop_bounds(origin: [f32; 2], size: [f32; 2], output_aspect: f32) -> [f32; 4] {
+    let [ox, oy] = origin;
+    let [rw, rh] = size;
+    if rw / rh > output_aspect {
+        let visible_width = rh * output_aspect;
+        let crop_x = ox + (rw - visible_width) / 2.0;
+        [crop_x, oy, crop_x + visible_width, oy + rh]
+    } else {
+        let visible_height = rw / output_aspect;
+        let crop_y = oy + (rh - visible_height) / 2.0;
+        [ox, crop_y, ox + rw, crop_y + visible_height]
+    }
 }
 
 /// Largest centred crop of `src` (origin+size, frame px) matching `target_aspect`
@@ -4549,22 +4585,8 @@ impl ProjectUniforms {
                     )
                 };
 
-                let crop_bounds = {
-                    let [ox, oy] = region_origin;
-                    let [rw, rh] = region_size;
-                    match project.camera.shape {
-                        CameraShape::Source => [ox, oy, ox + rw, oy + rh],
-                        CameraShape::Square => {
-                            if rw > rh {
-                                let offset = (rw - rh) / 2.0;
-                                [ox + offset, oy, ox + rw - offset, oy + rh]
-                            } else {
-                                let offset = (rh - rw) / 2.0;
-                                [ox, oy + offset, ox + rw, oy + rh - offset]
-                            }
-                        }
-                    }
-                };
+                let crop_bounds =
+                    camera_shape_crop_bounds(project.camera.shape, region_origin, region_size);
 
                 // Morph the camera from its PiP overlay toward its split-screen
                 // half by the split factor. The crop is re-derived from the
@@ -4666,7 +4688,6 @@ impl ProjectUniforms {
                 let (region_origin, region_size) =
                     camera_source_region(&project.camera, frame_size);
 
-                let aspect = region_size[0] / region_size[1];
                 let padding =
                     output_size[0].min(output_size[1]) * camera_only_padding as f32 / 100.0;
                 let padded_size = [
@@ -4696,19 +4717,8 @@ impl ProjectUniforms {
                 // In camera-only mode, we ignore the camera shape setting (Square/Source)
                 // and just apply the minimum crop needed to fill the output aspect ratio.
                 // This prevents excessive zooming when shape is set to Square.
-                let [ox, oy] = region_origin;
-                let [rw, rh] = region_size;
-                let crop_bounds = if aspect > output_aspect {
-                    // Camera is wider than output - crop left and right
-                    let visible_width = rh * output_aspect;
-                    let crop_x = ox + (rw - visible_width) / 2.0;
-                    [crop_x, oy, crop_x + visible_width, oy + rh]
-                } else {
-                    // Camera is taller than output - crop top and bottom
-                    let visible_height = rw / output_aspect;
-                    let crop_y = oy + (rh - visible_height) / 2.0;
-                    [ox, crop_y, ox + rw, crop_y + visible_height]
-                };
+                let crop_bounds =
+                    camera_fill_crop_bounds(region_origin, region_size, output_aspect);
                 let crop_bounds =
                     inset_crop_bounds(crop_bounds, frame_size, CAMERA_EDGE_CROP_INSET_PX);
 
@@ -4880,6 +4890,53 @@ mod tests {
         assert!((origin[1] - 108.0).abs() < 1e-3);
         assert!((size[0] - 960.0).abs() < 1e-3);
         assert!((size[1] - 972.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn mirrored_camera_crops_the_sides_the_user_sees() {
+        let mut camera = Camera {
+            crop: Some(cap_project::CameraCrop {
+                left: 0.25,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let (plain, _) = camera_source_region(&camera, [1000.0, 500.0]);
+        assert!((plain[0] - 250.0).abs() < 1e-3);
+        camera.mirror = true;
+        let (mirrored, size) = camera_source_region(&camera, [1000.0, 500.0]);
+        assert!(mirrored[0].abs() < 1e-3);
+        assert!((size[0] - 750.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn camera_layout_crops_stay_inside_the_cropped_region() {
+        let origin = [200.0, 100.0];
+        let size = [1200.0, 800.0];
+        let inside = |bounds: [f32; 4]| {
+            bounds[0] >= origin[0] - 1e-3
+                && bounds[1] >= origin[1] - 1e-3
+                && bounds[2] <= origin[0] + size[0] + 1e-3
+                && bounds[3] <= origin[1] + size[1] + 1e-3
+        };
+
+        let square = camera_shape_crop_bounds(CameraShape::Square, origin, size);
+        assert_eq!(square, [400.0, 100.0, 1200.0, 900.0]);
+        let source = camera_shape_crop_bounds(CameraShape::Source, origin, size);
+        assert_eq!(source, [200.0, 100.0, 1400.0, 900.0]);
+
+        let portrait = camera_fill_crop_bounds(origin, size, 9.0 / 16.0);
+        assert!(inside(portrait));
+        assert!((portrait[3] - portrait[1] - 800.0).abs() < 1e-3);
+        assert!(((portrait[2] - portrait[0]) - 450.0).abs() < 1e-3);
+        let wide = camera_fill_crop_bounds(origin, size, 3.0);
+        assert!(inside(wide));
+        assert!(((wide[2] - wide[0]) - 1200.0).abs() < 1e-3);
+
+        let pane = fit_crop_to_target(origin, size, 1.0, [0.0, 1.0], 1.5);
+        assert!(inside(pane));
+        assert!((pane[0] - origin[0]).abs() < 1e-3);
+        assert!((pane[3] - (origin[1] + size[1])).abs() < 1e-3);
     }
 
     #[test]
