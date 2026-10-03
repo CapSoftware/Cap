@@ -206,11 +206,34 @@ fn agent_grants_path() -> Result<std::path::PathBuf, String> {
         .ok_or_else(|| "Could not locate the user configuration directory".to_string())
 }
 
+fn with_keyring<T, F>(f: F) -> Result<T, String>
+where
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+    T: Send + 'static,
+{
+    // On Linux and other platforms where the keyring backend blocks using an internal runtime
+    // (such as Secret Service via zbus::utils::block_on), calling it from within an active Tokio
+    // worker thread causes a "Cannot start a runtime from within a runtime" panic.
+    // Offloading keyring operations to a dedicated OS thread completely isolates them from any
+    // caller's async runtime and safely catches any potential backend panics.
+    std::thread::Builder::new()
+        .name("cap-keyring".to_string())
+        .spawn(move || {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(f))
+                .unwrap_or_else(|_| Err("The OS credential store panicked".to_string()))
+        })
+        .map_err(|error| format!("Failed to spawn keyring worker thread: {error}"))?
+        .join()
+        .map_err(|_| "The OS credential store thread panicked".to_string())?
+}
+
 fn load_agent_keyring() -> Result<StoredAgentCredential, String> {
-    let entry = keyring::Entry::new(AGENT_KEYRING_SERVICE, AGENT_KEYRING_USER)
-        .map_err(|error| error.to_string())?;
-    let value = entry.get_password().map_err(|error| error.to_string())?;
-    serde_json::from_str(&value).map_err(|error| error.to_string())
+    with_keyring(|| {
+        let entry = keyring::Entry::new(AGENT_KEYRING_SERVICE, AGENT_KEYRING_USER)
+            .map_err(|error| error.to_string())?;
+        let value = entry.get_password().map_err(|error| error.to_string())?;
+        serde_json::from_str(&value).map_err(|error| error.to_string())
+    })
 }
 
 #[cfg(unix)]
@@ -283,10 +306,13 @@ fn write_restricted_file(_path: &std::path::Path, _bytes: &[u8]) -> Result<(), S
 }
 
 fn load_agent_access_grants() -> StoredAgentAccessGrants {
-    let keyring = keyring::Entry::new(AGENT_KEYRING_SERVICE, AGENT_GRANTS_KEYRING_USER)
-        .and_then(|entry| entry.get_password())
-        .ok()
-        .and_then(|value| serde_json::from_str(&value).ok());
+    let keyring = with_keyring(|| {
+        keyring::Entry::new(AGENT_KEYRING_SERVICE, AGENT_GRANTS_KEYRING_USER)
+            .and_then(|entry| entry.get_password())
+            .map_err(|error| error.to_string())
+    })
+    .ok()
+    .and_then(|value| serde_json::from_str(&value).ok());
     if let Some(grants) = keyring {
         return grants;
     }
@@ -333,8 +359,12 @@ pub fn store_agent_access_grant(
         },
     );
     let serialized = serde_json::to_string(&grants).map_err(|error| error.to_string())?;
-    let keyring_result = keyring::Entry::new(AGENT_KEYRING_SERVICE, AGENT_GRANTS_KEYRING_USER)
-        .and_then(|entry| entry.set_password(&serialized));
+    let serialized_clone = serialized.clone();
+    let keyring_result = with_keyring(move || {
+        keyring::Entry::new(AGENT_KEYRING_SERVICE, AGENT_GRANTS_KEYRING_USER)
+            .and_then(|entry| entry.set_password(&serialized_clone))
+            .map_err(|error| error.to_string())
+    });
     if keyring_result.is_ok() {
         let _ = std::fs::remove_file(agent_grants_path()?);
         return Ok(AgentCredentialStorage::Keyring);
@@ -361,8 +391,12 @@ pub fn store_agent(
 ) -> Result<AgentCredentialStorage, String> {
     validate_agent_server(credential.server.clone())?;
     let serialized = serde_json::to_string(credential).map_err(|error| error.to_string())?;
-    let keyring_result = keyring::Entry::new(AGENT_KEYRING_SERVICE, AGENT_KEYRING_USER)
-        .and_then(|entry| entry.set_password(&serialized));
+    let serialized_clone = serialized.clone();
+    let keyring_result = with_keyring(move || {
+        keyring::Entry::new(AGENT_KEYRING_SERVICE, AGENT_KEYRING_USER)
+            .and_then(|entry| entry.set_password(&serialized_clone))
+            .map_err(|error| error.to_string())
+    });
     if keyring_result.is_ok() {
         let _ = std::fs::remove_file(agent_credential_path()?);
         return Ok(AgentCredentialStorage::Keyring);
@@ -419,12 +453,15 @@ pub fn resolve_agent() -> Result<AgentCredentials, String> {
 }
 
 pub fn delete_agent() -> Result<(), String> {
-    if let Ok(entry) = keyring::Entry::new(AGENT_KEYRING_SERVICE, AGENT_KEYRING_USER) {
-        let _ = entry.delete_credential();
-    }
-    if let Ok(entry) = keyring::Entry::new(AGENT_KEYRING_SERVICE, AGENT_GRANTS_KEYRING_USER) {
-        let _ = entry.delete_credential();
-    }
+    let _ = with_keyring(|| {
+        if let Ok(entry) = keyring::Entry::new(AGENT_KEYRING_SERVICE, AGENT_KEYRING_USER) {
+            let _ = entry.delete_credential();
+        }
+        if let Ok(entry) = keyring::Entry::new(AGENT_KEYRING_SERVICE, AGENT_GRANTS_KEYRING_USER) {
+            let _ = entry.delete_credential();
+        }
+        Ok(())
+    });
     for path in [agent_credential_path()?, agent_grants_path()?] {
         match std::fs::remove_file(path) {
             Ok(()) => {}
@@ -785,5 +822,20 @@ mod tests {
         ));
         assert!(!is_agent_api_key("00000000-0000-0000-0000-000000000000"));
         assert!(!is_agent_api_key(""));
+    }
+
+    #[test]
+    fn keyring_operations_do_not_panic_inside_tokio_runtime() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("Tokio runtime builds");
+        runtime.block_on(async {
+            // Calling load_agent_keyring and load_agent_access_grants inside an active Tokio
+            // worker thread must not panic from nested runtimes (e.g. zbus::utils::block_on on Linux).
+            let _ = load_agent_keyring();
+            let _ = load_agent_access_grants();
+            let _ = resolve_agent();
+        });
     }
 }
