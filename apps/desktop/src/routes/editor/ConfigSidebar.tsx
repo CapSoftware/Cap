@@ -2803,7 +2803,12 @@ function BackgroundConfig(props: {
 						formatTooltip="%"
 					/>
 				</Field>
-				<Show when={project.aspectRatio}>
+				<Show
+					when={
+						project.aspectRatio &&
+						(project.background.frame?.style ?? "none") === "none"
+					}
+				>
 					<Subfield name="Fill Frame">
 						<Toggle
 							checked={project.background.fillFrame ?? false}
@@ -5236,7 +5241,8 @@ function SceneSegmentConfig(props: {
 					(props.segment.mode === "default" ||
 						props.segment.mode === "hideCamera") &&
 					!!project.aspectRatio &&
-					project.background.fillFrame
+					project.background.fillFrame &&
+					(project.background.frame?.style ?? "none") === "none"
 				}
 			>
 				<div class="w-full border-t border-ed-line" />
@@ -5247,10 +5253,26 @@ function SceneSegmentConfig(props: {
 							scene.
 						</span>
 						<PositionPad
-							value={() => split().screenPosition}
-							onChange={(pos) => updateSplit({ screenPosition: pos })}
+							value={() =>
+								props.segment.fillFramePosition ??
+								((project.background.fillFrameFollowCursor ?? true)
+									? { x: 0.5, y: 0.5 }
+									: (project.background.fillFramePosition ?? {
+											x: 0.5,
+											y: 0.5,
+										}))
+							}
+							onChange={(pos) =>
+								setProject(
+									"timeline",
+									"sceneSegments",
+									props.segmentIndex,
+									"fillFramePosition",
+									pos,
+								)
+							}
 						/>
-						<Show when={props.segment.splitLayout}>
+						<Show when={props.segment.fillFramePosition}>
 							<EditorButton
 								size="sm"
 								onClick={() =>
@@ -5258,7 +5280,7 @@ function SceneSegmentConfig(props: {
 										"timeline",
 										"sceneSegments",
 										props.segmentIndex,
-										"splitLayout",
+										"fillFramePosition",
 										null,
 									)
 								}

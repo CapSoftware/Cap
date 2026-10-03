@@ -2586,25 +2586,30 @@ fn cursor_crop_uv(position: XY<f64>, crop: &Crop, screen_size: XY<u32>) -> XY<f6
     )
 }
 
+// Scene transitions straddle the scene edges, so the pin eases in across
+// `[start - transition_in, start]` and out across `[end, end + transition_out]`.
 fn fill_frame_scene_override(
     scenes: &[cap_project::SceneSegment],
     time: f64,
 ) -> Option<(XY<f64>, f64)> {
     let scene = scenes.iter().find(|scene| {
         matches!(scene.mode, SceneMode::Default | SceneMode::HideCamera)
-            && time >= scene.start
-            && time < scene.end
+            && scene.fill_frame_position.is_some()
+            && time >= scene.start - scene.transition_in.max(0.0)
+            && time < scene.end + scene.transition_out.max(0.0)
     })?;
-    let position = scene.split_layout?.screen_position;
+    let position = scene.fill_frame_position?;
     let ease = |elapsed: f64, duration: f64| {
         if duration <= 1e-6 {
-            return 1.0;
+            return if elapsed >= 0.0 { 1.0 } else { 0.0 };
         }
         let x = (elapsed / duration).clamp(0.0, 1.0);
         x * x * (3.0 - 2.0 * x)
     };
-    let weight = ease(time - scene.start, scene.transition_in.max(0.0))
-        * ease(scene.end - time, scene.transition_out.max(0.0));
+    let transition_in = scene.transition_in.max(0.0);
+    let transition_out = scene.transition_out.max(0.0);
+    let weight = ease(time - (scene.start - transition_in), transition_in)
+        * ease(scene.end + transition_out - time, transition_out);
     Some((
         XY::new(position.x.clamp(0.0, 1.0), position.y.clamp(0.0, 1.0)),
         weight,
@@ -5632,14 +5637,15 @@ mod tests {
             end: 6.0,
             mode: SceneMode::Default,
             split_layout: Some(cap_project::SplitLayout {
-                screen_position: XY::new(0.1, 0.5),
+                screen_zoom: 2.0,
                 ..Default::default()
             }),
             transition_in: 0.5,
             transition_out: 0.5,
+            fill_frame_position: Some(XY::new(0.1, 0.5)),
         };
         let unpinned = cap_project::SceneSegment {
-            split_layout: None,
+            fill_frame_position: None,
             start: 7.0,
             end: 9.0,
             ..scene.clone()
@@ -5651,8 +5657,12 @@ mod tests {
         let (position, weight) = fill_frame_scene_override(&scenes, 4.0).unwrap();
         assert_eq!(position, XY::new(0.1, 0.5));
         assert!((weight - 1.0).abs() < 1e-9);
-        let (_, entering) = fill_frame_scene_override(&scenes, 2.25).unwrap();
+        let (_, entering) = fill_frame_scene_override(&scenes, 1.75).unwrap();
         assert!(entering > 0.0 && entering < 1.0);
+        let (_, started) = fill_frame_scene_override(&scenes, 2.0).unwrap();
+        assert!((started - 1.0).abs() < 1e-9);
+        let (_, leaving) = fill_frame_scene_override(&scenes, 6.25).unwrap();
+        assert!(leaving > 0.0 && leaving < 1.0);
     }
 
     #[test]
@@ -6129,6 +6139,7 @@ mod style_image_tests {
             split_layout: None,
             transition_in: 0.0,
             transition_out: 0.0,
+            fill_frame_position: None,
         });
         timeline.image_segments.push(ImageSegment {
             start: 0.7,
@@ -8863,6 +8874,7 @@ mod project_uniforms_tests {
                 split_layout: None,
                 transition_in: 0.5,
                 transition_out: 0.5,
+                fill_frame_position: None,
             }];
             cases.push((name, split, short, frame_number));
         }

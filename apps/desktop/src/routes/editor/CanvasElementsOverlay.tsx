@@ -281,7 +281,9 @@ export function CanvasElementsOverlay(props: { size: Size }) {
 	// active, but drags write base-layout config — lock it to avoid a
 	// mismatched pointer feel. Camera placement is not zoom-transformed.
 	const fillFrameActive = () =>
-		!!project.aspectRatio && (project.background.fillFrame ?? false);
+		!!project.aspectRatio &&
+		(project.background.fillFrame ?? false) &&
+		(project.background.frame?.style ?? "none") === "none";
 	const displayDraggable = () =>
 		!zoomActive() &&
 		!fillFrameActive() &&

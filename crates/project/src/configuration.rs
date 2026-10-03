@@ -1367,6 +1367,8 @@ pub struct SceneSegment {
     pub transition_in: f64,
     #[serde(default = "default_scene_transition")]
     pub transition_out: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill_frame_position: Option<XY<f64>>,
 }
 
 // Shots cut straight into the pose; easing in and out is opt-in.
