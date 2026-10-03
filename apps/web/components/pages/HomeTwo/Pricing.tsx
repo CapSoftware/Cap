@@ -131,7 +131,7 @@ export const Pricing = () => {
 					<h2
 						className={`${H_SECTION} mt-6 text-balance text-[clamp(38px,5vw,56px)]`}
 					>
-						Simple, honest pricing
+						Simple pricing
 					</h2>
 					<p
 						className={`${BODY_TEXT} mt-6 max-w-[560px] text-balance text-[16.5px] leading-[1.5] text-[rgba(17,17,17,0.78)] sm:text-[17.5px]`}
