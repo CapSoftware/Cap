@@ -32,6 +32,7 @@ import { rippleKeyboardTrack } from "./keyboard-timing";
 import { routeEditorPlaybackIntent } from "./playback-intent-routing";
 import { scaleKeyframeTimes } from "./three-d";
 import { effectiveToOutput, holdWindows } from "./timeline-holds";
+import { unlockedRippleTracks } from "./timeline-utils";
 
 const formatClipDuration = (seconds: number) => {
 	if (!Number.isFinite(seconds) || seconds <= 0) return "0:00";
@@ -433,24 +434,16 @@ export function ClipsSidebar(props: { class?: string }) {
 					const previousCamera3dDurations = camera3dSegments.map(
 						(segment) => segment.end - segment.start,
 					);
-					for (const track of [
-						timeline.styleSegments,
-						timeline.imageSegments,
-						timeline.zoomSegments,
-						timeline.sceneSegments ?? [],
-						timeline.maskSegments,
-						timeline.textSegments,
-						timeline.captionSegments ?? [],
-						timeline.audioSegments ?? [],
-						camera3dSegments,
-					]) {
+					const locked = project.lockedTracks ?? [];
+					for (const track of unlockedRippleTracks(timeline, locked)) {
 						rippleTimelineTrack(track, boundary, effective.duration);
 					}
-					rippleKeyboardTrack(
-						timeline.keyboardSegments ?? [],
-						boundary,
-						effective.duration,
-					);
+					if (!locked.includes("keyboard"))
+						rippleKeyboardTrack(
+							timeline.keyboardSegments ?? [],
+							boundary,
+							effective.duration,
+						);
 					for (let index = 0; index < camera3dSegments.length; index++) {
 						const segment = camera3dSegments[index];
 						const previousDuration = previousCamera3dDurations[index];

@@ -27,6 +27,7 @@ export function PresetsDropdown() {
 					timeline: project.timeline ?? null,
 					overlayOrder: project.overlayOrder ?? [],
 					clips: project.clips,
+					lockedTracks: project.lockedTracks ?? [],
 				}),
 			),
 		);
@@ -105,6 +106,7 @@ export function PresetsDropdown() {
 											timeline: project.timeline ?? null,
 											overlayOrder: project.overlayOrder ?? [],
 											clips: project.clips,
+											lockedTracks: project.lockedTracks ?? [],
 										});
 										setProject(reconcile(normalizedConfig));
 									}
