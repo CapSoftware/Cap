@@ -45,11 +45,6 @@ fn main() {
         std::env::set_var("RUST_LOG", "trace");
     }
 
-    #[cfg(target_os = "linux")]
-    unsafe {
-        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
-    }
-
     // We have to hold onto the ClientInitGuard until the very end
     let _sentry_guard = std::option_env!("CAP_DESKTOP_SENTRY_URL").map(|url| {
         // Crashpad minidump initialization is intentionally disabled. Its process-wide SEH

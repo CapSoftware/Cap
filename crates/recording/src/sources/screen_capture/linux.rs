@@ -60,6 +60,13 @@ pub struct VideoSourceConfig {
 }
 
 impl VideoSourceConfig {
+    pub(crate) fn is_window_capture(&self) -> bool {
+        match &self.input {
+            LinuxInputConfig::Wayland(w) => w.is_window_capture,
+            LinuxInputConfig::X11(x) => x.window_id.is_some(),
+        }
+    }
+
     pub(crate) fn video_info(&self) -> VideoInfo {
         self.video_info
     }
@@ -87,6 +94,7 @@ struct WaylandInputConfig {
     fps: u32,
     crop_bounds: Option<CropBounds>,
     portal_session: WaylandPortalSession,
+    is_window_capture: bool,
 }
 
 struct WaylandPortalSession {
@@ -248,21 +256,48 @@ impl OutputVideoSource for VideoSource {
         let stop_token = ctx.stop_token();
         let health_tx = ctx.health_tx().clone();
         let info = config.video_info;
-        match config.input {
+        let info = match config.input {
             LinuxInputConfig::X11(input) => {
                 ctx.tasks().spawn_thread("x11-capture-thread", {
                     let stop_token = stop_token.clone();
                     move || capture_x11(info, input, video_tx, stop_token, health_tx)
                 });
+                info
             }
             LinuxInputConfig::Wayland(input) => {
+                let (init_tx, init_rx) = tokio::sync::oneshot::channel();
                 ctx.tasks()
                     .spawn_thread("wayland-pipewire-capture-thread", {
                         let stop_token = stop_token.clone();
-                        move || capture_wayland(info, input, video_tx, stop_token, health_tx)
+                        move || {
+                            capture_wayland(info, input, video_tx, stop_token, health_tx, init_tx)
+                        }
                     });
+
+                let watchdog = tokio::time::sleep(Duration::from_secs(5));
+                tokio::pin!(watchdog);
+
+                tokio::select! {
+                    _ = stop_token.cancelled() => {
+                        bail!("Wayland capture setup was cancelled before stream initialization");
+                    }
+                    _ = &mut watchdog => {
+                        bail!("Timed out waiting for Wayland compositor to negotiate stream format");
+                    }
+                    res = init_rx => {
+                        match res {
+                            Ok(WaylandCaptureInit::Ready(negotiated)) => negotiated,
+                            Ok(WaylandCaptureInit::Failed(error)) => {
+                                bail!("Wayland PipeWire stream failed during initialization: {error}");
+                            }
+                            Err(_) => {
+                                bail!("Wayland PipeWire capture thread exited before format negotiation");
+                            }
+                        }
+                    }
+                }
             }
-        }
+        };
 
         Ok(Self { info, stop_token })
     }
@@ -283,6 +318,12 @@ struct WaylandPortalCapture {
     portal_session: WaylandPortalSession,
 }
 
+#[derive(Debug)]
+pub enum WaylandCaptureInit {
+    Ready(VideoInfo),
+    Failed(String),
+}
+
 struct PipewireCaptureState {
     format: spa::param::video::VideoInfoRaw,
     scaler: Option<FrameScaler>,
@@ -297,13 +338,32 @@ struct PipewireCaptureState {
     rate_limited: Arc<AtomicU64>,
     capture_clock: Instant,
     cadence_gate: FrameCadenceGate,
+    init_tx: Arc<parking_lot::Mutex<Option<tokio::sync::oneshot::Sender<WaylandCaptureInit>>>>,
 }
 
 impl PipewireCaptureState {
+    fn is_initial_negotiation(&self) -> bool {
+        self.init_tx.lock().is_some()
+    }
+
     fn set_fatal_error(&self, error: impl Into<String>) {
         let mut fatal_error = self.fatal_error.lock();
         if fatal_error.is_none() {
             *fatal_error = Some(error.into());
+        }
+    }
+
+    fn notify_ready(&self, info: VideoInfo) {
+        if let Some(tx) = self.init_tx.lock().take() {
+            let _ = tx.send(WaylandCaptureInit::Ready(info));
+        }
+    }
+
+    fn notify_failed(&self, error: impl Into<String>) {
+        let msg = error.into();
+        self.set_fatal_error(msg.clone());
+        if let Some(tx) = self.init_tx.lock().take() {
+            let _ = tx.send(WaylandCaptureInit::Failed(msg));
         }
     }
 }
@@ -329,6 +389,10 @@ async fn create_wayland_source_config(
             bail!("Select the same display in the screen-sharing dialog as the recording area");
         }
     }
+    let is_window_capture = matches!(
+        config.config.linux_source,
+        LinuxCaptureSource::Window { .. }
+    );
     let crop_bounds = match &config.config.linux_source {
         LinuxCaptureSource::Area => config.config.crop_bounds,
         LinuxCaptureSource::Display | LinuxCaptureSource::Window { .. } => None,
@@ -347,6 +411,7 @@ async fn create_wayland_source_config(
             fps: config.config.fps,
             crop_bounds,
             portal_session: portal.portal_session,
+            is_window_capture,
         },
     ))
 }
@@ -365,7 +430,7 @@ async fn open_wayland_portal(
     let cursor_mode = if show_cursor {
         CursorMode::Embedded
     } else {
-        CursorMode::Hidden
+        CursorMode::Metadata
     };
 
     proxy
@@ -464,12 +529,16 @@ fn wayland_video_info(
     )
 }
 
+pub static WAYLAND_CURSOR_POSITION: parking_lot::RwLock<Option<(f64, f64)>> =
+    parking_lot::RwLock::new(None);
+
 fn capture_wayland(
     video_info: VideoInfo,
     input: WaylandInputConfig,
     video_tx: mpsc::Sender<FFmpegVideoFrame>,
     stop_token: CancellationToken,
     health_tx: output_pipeline::HealthSender,
+    init_tx: tokio::sync::oneshot::Sender<WaylandCaptureInit>,
 ) -> anyhow::Result<()> {
     let _portal_session = input.portal_session;
     let stop_requested = Arc::new(AtomicBool::new(false));
@@ -478,7 +547,8 @@ fn capture_wayland(
     let dropped = Arc::new(AtomicU64::new(0));
     let rate_limited = Arc::new(AtomicU64::new(0));
     let started = Instant::now();
-
+    *WAYLAND_CURSOR_POSITION.write() = None;
+    pw::init();
     let thread_loop = unsafe { pw::thread_loop::ThreadLoopBox::new(Some("cap-wayland"), None) }
         .context("create PipeWire thread loop")?;
     let context = pw::context::ContextBox::new(thread_loop.loop_(), None)
@@ -501,6 +571,7 @@ fn capture_wayland(
         rate_limited: rate_limited.clone(),
         capture_clock: started,
         cadence_gate: FrameCadenceGate::new(1_000_000_000 / i64::from(input.fps.max(1))),
+        init_tx: Arc::new(parking_lot::Mutex::new(Some(init_tx))),
     };
 
     let stream = pw::stream::StreamBox::new(
@@ -516,13 +587,21 @@ fn capture_wayland(
 
     let _listener = stream
         .add_local_listener_with_user_data(state)
-        .state_changed(|_, state, _, new| {
+        .state_changed(|stream, state, old, new| {
+            tracing::debug!(?old, ?new, "PipeWire screen capture stream state changed");
+            if new == pw::stream::StreamState::Paused {
+                let res = stream.set_active(true);
+                tracing::debug!(?res, "PipeWire stream.set_active result");
+            }
             if let pw::stream::StreamState::Error(error) = new {
-                state.set_fatal_error(format!("PipeWire screen capture stream failed: {error}"));
+                tracing::error!(%error, "PipeWire stream error");
+                state.notify_failed(format!("PipeWire screen capture stream failed: {error}"));
             }
         })
-        .param_changed(|_, state, id, param| {
-            if let Err(error) = update_pipewire_format(state, id, param) {
+        .param_changed(|stream, state, id, param| {
+            tracing::trace!(id, "PipeWire param_changed");
+            if let Err(error) = update_pipewire_format(stream, state, id, param) {
+                tracing::error!(error = %format!("{error:#}"), "PipeWire update_pipewire_format error");
                 state.set_fatal_error(error.to_string());
             }
         })
@@ -533,25 +612,61 @@ fn capture_wayland(
 
             match process_pipewire_frame(stream, state) {
                 Ok(Some(StallSendOutcome::Sent)) => {
-                    state.sent.fetch_add(1, Ordering::Relaxed);
+                    let count = state.sent.fetch_add(1, Ordering::Relaxed) + 1;
+                    if count <= 5 || count % 60 == 0 {
+                        tracing::trace!(count, "PipeWire frame successfully sent");
+                    }
                 }
-                Ok(Some(StallSendOutcome::StalledAndDropped { .. })) => {
+                Ok(Some(StallSendOutcome::StalledAndDropped { waited_ms })) => {
+                    tracing::trace!(waited_ms, "PipeWire frame dropped (stalled)");
                     state.dropped.fetch_add(1, Ordering::Relaxed);
                 }
                 Ok(Some(StallSendOutcome::Disconnected)) => {
+                    tracing::debug!("PipeWire frame outcome: Disconnected");
                     state.stop_requested.store(true, Ordering::Relaxed);
                 }
                 Ok(None) => {}
-                Err(error) => state.set_fatal_error(error.to_string()),
+                Err(error) => {
+                    tracing::error!(error = %format!("{error:#}"), "PipeWire process_pipewire_frame error");
+                    state.set_fatal_error(error.to_string());
+                }
             }
         })
         .register()
         .context("register PipeWire stream listener")?;
+    let p_bgra_mod =
+        pipewire_format_param(input.fps, spa::param::video::VideoFormat::BGRA, Some(0))?;
+    let p_bgrx_mod =
+        pipewire_format_param(input.fps, spa::param::video::VideoFormat::BGRx, Some(0))?;
+    let p_rgba_mod =
+        pipewire_format_param(input.fps, spa::param::video::VideoFormat::RGBA, Some(0))?;
+    let p_bgra_shm = pipewire_format_param(input.fps, spa::param::video::VideoFormat::BGRA, None)?;
+    let p_bgrx_shm = pipewire_format_param(input.fps, spa::param::video::VideoFormat::BGRx, None)?;
+    let p_rgba_shm = pipewire_format_param(input.fps, spa::param::video::VideoFormat::RGBA, None)?;
+    let p_meta_cursor = pipewire_meta_cursor_param()?;
+    let mut params = [
+        spa::pod::Pod::from_bytes(&p_bgra_mod)
+            .ok_or_else(|| anyhow!("create PipeWire format parameter"))?,
+        spa::pod::Pod::from_bytes(&p_bgrx_mod)
+            .ok_or_else(|| anyhow!("create PipeWire format parameter"))?,
+        spa::pod::Pod::from_bytes(&p_rgba_mod)
+            .ok_or_else(|| anyhow!("create PipeWire format parameter"))?,
+        spa::pod::Pod::from_bytes(&p_bgra_shm)
+            .ok_or_else(|| anyhow!("create PipeWire format parameter"))?,
+        spa::pod::Pod::from_bytes(&p_bgrx_shm)
+            .ok_or_else(|| anyhow!("create PipeWire format parameter"))?,
+        spa::pod::Pod::from_bytes(&p_rgba_shm)
+            .ok_or_else(|| anyhow!("create PipeWire format parameter"))?,
+        spa::pod::Pod::from_bytes(&p_meta_cursor)
+            .ok_or_else(|| anyhow!("create PipeWire meta cursor parameter"))?,
+    ];
 
-    let param_bytes = pipewire_format_param(input.fps)?;
-    let mut params = [spa::pod::Pod::from_bytes(&param_bytes)
-        .ok_or_else(|| anyhow!("create PipeWire format parameter"))?];
-
+    tracing::debug!(
+        node_id = input.node_id,
+        fps = input.fps,
+        is_window = input.is_window_capture,
+        "Connecting to PipeWire node"
+    );
     stream
         .connect(
             spa::utils::Direction::Input,
@@ -562,14 +677,23 @@ fn capture_wayland(
         .context("connect PipeWire stream to portal node")?;
 
     thread_loop.start();
-
+    tracing::debug!("PipeWire thread loop started");
+    let mut last_status = Instant::now();
     while !stop_token.is_cancelled() && !stop_requested.load(Ordering::Relaxed) {
         if fatal_error.lock().is_some() {
             break;
         }
+        if last_status.elapsed() >= Duration::from_secs(2) {
+            last_status = Instant::now();
+            tracing::trace!(
+                sent = sent.load(Ordering::Relaxed),
+                dropped = dropped.load(Ordering::Relaxed),
+                rate_limited = rate_limited.load(Ordering::Relaxed),
+                "PipeWire capture loop tick"
+            );
+        }
         std::thread::sleep(Duration::from_millis(20));
     }
-
     stop_requested.store(true, Ordering::Relaxed);
     thread_loop.stop();
 
@@ -590,6 +714,7 @@ fn capture_wayland(
 }
 
 fn update_pipewire_format(
+    _stream: &pw::stream::Stream,
     state: &mut PipewireCaptureState,
     id: u32,
     param: Option<&spa::pod::Pod>,
@@ -613,14 +738,49 @@ fn update_pipewire_format(
     format
         .parse(param)
         .context("parse PipeWire raw video format")?;
-    pipewire_pixel_format(format.format()).ok_or_else(|| {
+    let (pixel_format, _) = pipewire_pixel_format(format.format()).ok_or_else(|| {
         anyhow!(
             "Unsupported PipeWire screen capture pixel format: {:?}",
             format.format()
         )
     })?;
     state.format = format;
+    let size = format.size();
+    tracing::debug!(
+        width = size.width,
+        height = size.height,
+        format = ?format.format(),
+        modifier = format.modifier(),
+        "PipeWire negotiated format"
+    );
+    let target_width = ensure_even(size.width);
+    let target_height = ensure_even(size.height);
+    if target_width > 0 && target_height > 0 {
+        let actual_info = VideoInfo::from_raw_ffmpeg(
+            pixel_format,
+            target_width,
+            target_height,
+            state.video_info.fps(),
+        );
+        if state.is_initial_negotiation() {
+            state.video_info = actual_info;
+            state.notify_ready(actual_info);
+        }
+    } else if state.is_initial_negotiation() {
+        state.notify_ready(state.video_info);
+    }
+    let p_header = pipewire_meta_header_param()?;
+    let p_cursor = pipewire_meta_cursor_param()?;
 
+    let p1 = spa::pod::Pod::from_bytes(&p_header).ok_or_else(|| anyhow!("create header param"))?;
+    let p2 = spa::pod::Pod::from_bytes(&p_cursor).ok_or_else(|| anyhow!("create cursor param"))?;
+
+    let mut update_params: [&spa::pod::Pod; 2] = [p1, p2];
+    if let Err(e) = _stream.update_params(&mut update_params) {
+        tracing::error!(%e, "PipeWire stream.update_params error");
+    } else {
+        tracing::debug!("PipeWire stream.update_params succeeded with cursor metadata");
+    }
     Ok(())
 }
 
@@ -631,8 +791,23 @@ fn process_pipewire_frame(
     let Some(mut buffer) = stream.dequeue_buffer() else {
         return Ok(None);
     };
+    if let Some(cursor_meta) = buffer.find_meta::<spa::buffer::meta::MetaCursor>() {
+        if cursor_meta.is_valid() {
+            let pos = cursor_meta.position();
+            let width = state.video_info.width as f64;
+            let height = state.video_info.height as f64;
+            if width > 0.0 && height > 0.0 {
+                let norm_x = (pos.x as f64 / width).clamp(0.0, 1.0);
+                let norm_y = (pos.y as f64 / height).clamp(0.0, 1.0);
+                *WAYLAND_CURSOR_POSITION.write() = Some((norm_x, norm_y));
+            }
+        } else {
+            *WAYLAND_CURSOR_POSITION.write() = None;
+        }
+    }
     let datas = buffer.datas_mut();
     if datas.is_empty() {
+        tracing::trace!("PipeWire dequeued buffer but datas is empty");
         return Ok(None);
     }
 
@@ -650,7 +825,7 @@ fn process_pipewire_frame(
 
     let Some(raw_frame) = frame_from_pipewire_data(&mut datas[0], state.format, state.crop_bounds)?
     else {
-        return Ok(Some(StallSendOutcome::StalledAndDropped { waited_ms: 0 }));
+        return Ok(None);
     };
     let frame = prepare_pipewire_frame(raw_frame, &mut state.scaler, state.video_info)?;
     let timestamp = Timestamp::Instant(captured_at);
@@ -678,7 +853,7 @@ fn prepare_pipewire_frame(
         return Ok(frame);
     }
 
-    if scaler.is_none() {
+    if scaler.as_ref().is_none_or(|s| !s.matches(&frame)) {
         *scaler = Some(FrameScaler::new(
             frame.format(),
             frame.width(),
@@ -716,8 +891,7 @@ fn frame_from_pipewire_data(
     let chunk_stride = data.chunk().stride();
     let chunk_offset = data.chunk().offset();
     let chunk_size = data.chunk().size();
-    if chunk_flags.contains(spa::buffer::ChunkFlags::CORRUPTED) {
-        tracing::warn!("PipeWire screen capture frame was marked corrupted; skipping frame");
+    if chunk_flags.contains(spa::buffer::ChunkFlags::CORRUPTED) || chunk_size == 0 {
         return Ok(None);
     }
     if chunk_stride < 0 {
@@ -731,9 +905,67 @@ fn frame_from_pipewire_data(
     };
     let (crop_x, crop_y, crop_width, crop_height) =
         pipewire_crop(source_width, source_height, crop_bounds)?;
-    let source = data
-        .data()
-        .ok_or_else(|| anyhow!("PipeWire screen capture buffer was not memory-mapped"))?;
+    let fd = data.fd();
+    if fd >= 0 {
+        let mut pfd = libc::pollfd {
+            fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        unsafe {
+            libc::poll(&mut pfd, 1, 100);
+        }
+        let sync_start = DmaBufSync {
+            flags: DMA_BUF_SYNC_READ | DMA_BUF_SYNC_START,
+        };
+        unsafe {
+            libc::ioctl(fd, DMA_BUF_IOCTL_SYNC, &sync_start);
+        }
+    }
+
+    let (mapped_slice, _unmap_guard) = if let Some(slice) = data.data() {
+        let guard = if fd >= 0 {
+            Some(DmaBufGuard {
+                ptr: std::ptr::null_mut(),
+                size: 0,
+                fd,
+                needs_unmap: false,
+            })
+        } else {
+            None
+        };
+        (slice as &[u8], guard)
+    } else {
+        let maxsize = data.as_raw().maxsize as usize;
+        if fd < 0 || maxsize == 0 {
+            bail!("PipeWire screen capture buffer has no data pointer and invalid fd ({fd})");
+        }
+        let ptr = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                maxsize,
+                libc::PROT_READ,
+                libc::MAP_SHARED,
+                fd,
+                0,
+            )
+        };
+        if ptr == libc::MAP_FAILED {
+            bail!(
+                "Failed to mmap PipeWire buffer fd {fd} (size {maxsize}): {}",
+                std::io::Error::last_os_error()
+            );
+        }
+        let guard = DmaBufGuard {
+            ptr,
+            size: maxsize,
+            fd,
+            needs_unmap: true,
+        };
+        let slice = unsafe { std::slice::from_raw_parts(ptr as *const u8, maxsize) };
+        (slice, Some(guard))
+    };
+    let source = mapped_slice;
     let offset = chunk_offset as usize;
     let source_limit = if chunk_size > 0 {
         offset
@@ -774,6 +1006,40 @@ fn frame_from_pipewire_data(
     }
 
     Ok(Some(frame))
+}
+#[repr(C)]
+struct DmaBufSync {
+    flags: u64,
+}
+const DMA_BUF_SYNC_READ: u64 = 1;
+const DMA_BUF_SYNC_START: u64 = 0;
+const DMA_BUF_SYNC_END: u64 = 4;
+// _IOW('b', 0, struct dma_buf_sync) from linux/dma-buf.h
+const DMA_BUF_IOCTL_SYNC: libc::c_ulong = 0x40086200;
+
+struct DmaBufGuard {
+    ptr: *mut libc::c_void,
+    size: usize,
+    fd: libc::c_int,
+    needs_unmap: bool,
+}
+
+impl Drop for DmaBufGuard {
+    fn drop(&mut self) {
+        if self.fd >= 0 {
+            let sync_end = DmaBufSync {
+                flags: DMA_BUF_SYNC_READ | DMA_BUF_SYNC_END,
+            };
+            unsafe {
+                libc::ioctl(self.fd, DMA_BUF_IOCTL_SYNC, &sync_end);
+            }
+        }
+        if self.needs_unmap && !self.ptr.is_null() && self.size > 0 {
+            unsafe {
+                libc::munmap(self.ptr, self.size);
+            }
+        }
+    }
 }
 
 fn pipewire_crop(
@@ -829,71 +1095,176 @@ fn pipewire_pixel_format(
     Some((pixel, 4))
 }
 
-fn pipewire_format_param(fps: u32) -> anyhow::Result<Vec<u8>> {
+pub fn pipewire_format_param(
+    fps: u32,
+    format: spa::param::video::VideoFormat,
+    modifier: Option<i64>,
+) -> anyhow::Result<Vec<u8>> {
     let fps = fps.max(1);
-    let obj = spa::pod::object!(
-        spa::utils::SpaTypes::ObjectParamFormat,
-        spa::param::ParamType::EnumFormat,
-        spa::pod::property!(
-            spa::param::format::FormatProperties::MediaType,
-            Id,
-            spa::param::format::MediaType::Video
-        ),
-        spa::pod::property!(
-            spa::param::format::FormatProperties::MediaSubtype,
-            Id,
-            spa::param::format::MediaSubtype::Raw
-        ),
-        spa::pod::property!(
-            spa::param::format::FormatProperties::VideoFormat,
-            Choice,
-            Enum,
-            Id,
-            spa::param::video::VideoFormat::BGRx,
-            spa::param::video::VideoFormat::BGRx,
-            spa::param::video::VideoFormat::BGRA,
-            spa::param::video::VideoFormat::RGBx,
-            spa::param::video::VideoFormat::RGBA,
-            spa::param::video::VideoFormat::RGB,
-            spa::param::video::VideoFormat::BGR
-        ),
-        spa::pod::property!(
-            spa::param::format::FormatProperties::VideoSize,
-            Choice,
-            Range,
-            Rectangle,
-            spa::utils::Rectangle {
-                width: 1920,
-                height: 1080
-            },
-            spa::utils::Rectangle {
-                width: 1,
-                height: 1
-            },
-            spa::utils::Rectangle {
-                width: 8192,
-                height: 8192
-            }
-        ),
-        spa::pod::property!(
-            spa::param::format::FormatProperties::VideoFramerate,
-            Choice,
-            Range,
-            Fraction,
-            spa::utils::Fraction { num: fps, denom: 1 },
-            spa::utils::Fraction { num: 0, denom: 1 },
-            spa::utils::Fraction {
-                num: 1000,
-                denom: 1
-            }
+    let obj = if let Some(m) = modifier {
+        spa::pod::object!(
+            spa::utils::SpaTypes::ObjectParamFormat,
+            spa::param::ParamType::EnumFormat,
+            spa::pod::property!(
+                spa::param::format::FormatProperties::MediaType,
+                Id,
+                spa::param::format::MediaType::Video
+            ),
+            spa::pod::property!(
+                spa::param::format::FormatProperties::MediaSubtype,
+                Id,
+                spa::param::format::MediaSubtype::Raw
+            ),
+            spa::pod::property!(
+                spa::param::format::FormatProperties::VideoFormat,
+                Id,
+                format
+            ),
+            spa::pod::property!(spa::param::format::FormatProperties::VideoModifier, Long, m),
+            spa::pod::property!(
+                spa::param::format::FormatProperties::VideoSize,
+                Choice,
+                Range,
+                Rectangle,
+                spa::utils::Rectangle {
+                    width: 1920,
+                    height: 1080
+                },
+                spa::utils::Rectangle {
+                    width: 1,
+                    height: 1
+                },
+                spa::utils::Rectangle {
+                    width: 8192,
+                    height: 8192
+                }
+            ),
+            spa::pod::property!(
+                spa::param::format::FormatProperties::VideoFramerate,
+                Fraction,
+                spa::utils::Fraction { num: 0, denom: 1 }
+            ),
+            spa::pod::property!(
+                spa::param::format::FormatProperties::VideoMaxFramerate,
+                Choice,
+                Range,
+                Fraction,
+                spa::utils::Fraction { num: fps, denom: 1 },
+                spa::utils::Fraction { num: 0, denom: 1 },
+                spa::utils::Fraction {
+                    num: 1000,
+                    denom: 1
+                }
+            )
         )
-    );
-
+    } else {
+        spa::pod::object!(
+            spa::utils::SpaTypes::ObjectParamFormat,
+            spa::param::ParamType::EnumFormat,
+            spa::pod::property!(
+                spa::param::format::FormatProperties::MediaType,
+                Id,
+                spa::param::format::MediaType::Video
+            ),
+            spa::pod::property!(
+                spa::param::format::FormatProperties::MediaSubtype,
+                Id,
+                spa::param::format::MediaSubtype::Raw
+            ),
+            spa::pod::property!(
+                spa::param::format::FormatProperties::VideoFormat,
+                Id,
+                format
+            ),
+            spa::pod::property!(
+                spa::param::format::FormatProperties::VideoSize,
+                Choice,
+                Range,
+                Rectangle,
+                spa::utils::Rectangle {
+                    width: 1920,
+                    height: 1080
+                },
+                spa::utils::Rectangle {
+                    width: 1,
+                    height: 1
+                },
+                spa::utils::Rectangle {
+                    width: 8192,
+                    height: 8192
+                }
+            ),
+            spa::pod::property!(
+                spa::param::format::FormatProperties::VideoFramerate,
+                Fraction,
+                spa::utils::Fraction { num: 0, denom: 1 }
+            ),
+            spa::pod::property!(
+                spa::param::format::FormatProperties::VideoMaxFramerate,
+                Choice,
+                Range,
+                Fraction,
+                spa::utils::Fraction { num: fps, denom: 1 },
+                spa::utils::Fraction { num: 0, denom: 1 },
+                spa::utils::Fraction {
+                    num: 1000,
+                    denom: 1
+                }
+            )
+        )
+    };
     Ok(spa::pod::serialize::PodSerializer::serialize(
         std::io::Cursor::new(Vec::new()),
         &spa::pod::Value::Object(obj),
     )
     .map_err(|error| anyhow!("serialize PipeWire format parameter: {error:?}"))?
+    .0
+    .into_inner())
+}
+
+struct RawSpaId(u32);
+impl RawSpaId {
+    const fn as_raw(&self) -> u32 {
+        self.0
+    }
+}
+
+pub fn pipewire_meta_header_param() -> anyhow::Result<Vec<u8>> {
+    let obj = spa::pod::object!(
+        spa::utils::SpaTypes::ObjectParamMeta,
+        spa::param::ParamType::Meta,
+        spa::pod::property!(RawSpaId(1), Id, RawSpaId(spa::sys::SPA_META_Header)),
+        spa::pod::property!(
+            RawSpaId(2),
+            Int,
+            std::mem::size_of::<spa::sys::spa_meta_header>() as i32
+        )
+    );
+    Ok(spa::pod::serialize::PodSerializer::serialize(
+        std::io::Cursor::new(Vec::new()),
+        &spa::pod::Value::Object(obj),
+    )
+    .map_err(|error| anyhow!("serialize PipeWire meta header parameter: {error:?}"))?
+    .0
+    .into_inner())
+}
+
+pub fn pipewire_meta_cursor_param() -> anyhow::Result<Vec<u8>> {
+    let cursor_size = (std::mem::size_of::<spa::sys::spa_meta_cursor>()
+        + std::mem::size_of::<spa::sys::spa_meta_bitmap>()
+        + 256 * 256 * 4) as i32;
+
+    let obj = spa::pod::object!(
+        spa::utils::SpaTypes::ObjectParamMeta,
+        spa::param::ParamType::Meta,
+        spa::pod::property!(RawSpaId(1), Id, RawSpaId(spa::sys::SPA_META_Cursor)),
+        spa::pod::property!(RawSpaId(2), Int, cursor_size)
+    );
+    Ok(spa::pod::serialize::PodSerializer::serialize(
+        std::io::Cursor::new(Vec::new()),
+        &spa::pod::Value::Object(obj),
+    )
+    .map_err(|error| anyhow!("serialize PipeWire meta cursor parameter: {error:?}"))?
     .0
     .into_inner())
 }
@@ -2844,8 +3215,9 @@ mod system_audio_tests {
 #[cfg(test)]
 mod pipewire_frame_tests {
     use super::{
-        FrameScaler, LinuxCaptureSource, VideoInfo, prefers_wayland_environment,
-        prepare_pipewire_frame, wayland_area_matches_display, wayland_video_info,
+        FrameScaler, LinuxCaptureSource, VideoInfo, pipewire_meta_cursor_param,
+        prefers_wayland_environment, prepare_pipewire_frame, wayland_area_matches_display,
+        wayland_video_info,
     };
 
     #[test]
@@ -2966,5 +3338,40 @@ mod pipewire_frame_tests {
         assert_eq!(prepared.format(), ffmpeg::format::Pixel::BGRZ);
         assert_eq!((prepared.width(), prepared.height()), (8, 6));
         assert!(scaler.is_some());
+    }
+    #[test]
+    fn vertical_window_dimensions_are_preserved_without_scaling() {
+        let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::BGRZ, 1080, 2400);
+        frame.set_pts(Some(100));
+        let output = VideoInfo::from_raw_ffmpeg(ffmpeg::format::Pixel::BGRZ, 1080, 2400, 60);
+        let mut scaler: Option<FrameScaler> = None;
+
+        let prepared = prepare_pipewire_frame(frame, &mut scaler, output).unwrap();
+
+        assert_eq!((prepared.width(), prepared.height()), (1080, 2400));
+        assert!(scaler.is_none());
+    }
+
+    #[test]
+    fn resized_pipewire_dimensions_update_scaler() {
+        let frame1 = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::BGRZ, 1000, 2000);
+        let output = VideoInfo::from_raw_ffmpeg(ffmpeg::format::Pixel::BGRZ, 500, 1000, 60);
+        let mut scaler: Option<FrameScaler> = None;
+
+        let prepared1 = prepare_pipewire_frame(frame1, &mut scaler, output).unwrap();
+        assert_eq!((prepared1.width(), prepared1.height()), (500, 1000));
+        assert!(scaler.is_some());
+
+        let frame2 = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::BGRZ, 800, 1600);
+        let prepared2 = prepare_pipewire_frame(frame2, &mut scaler, output).unwrap();
+        assert_eq!((prepared2.width(), prepared2.height()), (500, 1000));
+        assert!(scaler.is_some());
+    }
+
+    #[test]
+    fn test_meta_cursor_param() {
+        let param_bytes = pipewire_meta_cursor_param().unwrap();
+        let pod = super::spa::pod::Pod::from_bytes(&param_bytes).unwrap();
+        assert!(pod.size() > 0);
     }
 }

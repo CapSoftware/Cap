@@ -23,6 +23,8 @@ pub mod upload_resume;
 pub mod upload_verification;
 
 #[cfg(target_os = "linux")]
+pub mod evdev_input;
+#[cfg(target_os = "linux")]
 pub use capture_pipeline::target_to_display_and_crop;
 pub use resolution_limits::{H264_MAX_DIMENSION, calculate_gpu_compatible_size};
 

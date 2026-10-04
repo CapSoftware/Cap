@@ -146,17 +146,6 @@ impl CursorActor {
 
 const CURSOR_FLUSH_INTERVAL_SECS: u64 = 5;
 
-#[cfg(target_os = "linux")]
-fn prefers_wayland_portal_cursor() -> bool {
-    if std::env::var_os("WAYLAND_DISPLAY").is_none() {
-        return false;
-    }
-
-    std::env::var_os("DISPLAY").is_none()
-        || std::env::var("XDG_SESSION_TYPE")
-            .is_ok_and(|session| session.eq_ignore_ascii_case("wayland"))
-}
-
 fn flush_cursor_data(output_path: &Path, moves: &[CursorMoveEvent], clicks: &[CursorClickEvent]) {
     let events = CursorEvents {
         clicks: clicks.to_vec(),
@@ -315,24 +304,6 @@ pub fn spawn_cursor_recorder(
     start_gate: Option<RecordingStartGate>,
     incremental_outputs: IncrementalCaptureOutputs,
 ) -> CursorActor {
-    #[cfg(target_os = "linux")]
-    if prefers_wayland_portal_cursor() {
-        let (tx, rx) = oneshot::channel();
-        let _ = tx.send(CursorActorResponse {
-            cursors: prev_cursors,
-            next_cursor_id,
-            moves: vec![],
-            clicks: vec![],
-            keyboard_presses: vec![],
-        });
-        return CursorActor {
-            stop: None,
-            stop_wakeup: None,
-            thread: None,
-            rx: rx.shared(),
-        };
-    }
-
     use device_query::{DeviceQuery, DeviceState};
     use sha2::{Digest, Sha256};
     use std::time::Duration;
@@ -361,9 +332,27 @@ pub fn spawn_cursor_recorder(
         #[cfg(target_os = "linux")]
         let mut last_window_position = None;
         let device_state = DeviceState::new();
-        let mut last_mouse_state = device_state.get_mouse();
         let mut last_keys: Vec<device_query::Keycode> = device_state.get_keys();
-
+        #[cfg(target_os = "linux")]
+        let evdev_listener = crate::evdev_input::EvdevInputListener::new();
+        #[cfg(target_os = "linux")]
+        let mut last_buttons = evdev_listener
+            .as_ref()
+            .map_or([false; 6], |e| e.get_buttons());
+        #[cfg(not(target_os = "linux"))]
+        let mut last_buttons = {
+            let mut b = [false; 6];
+            for (num, &pressed) in device_state
+                .get_mouse()
+                .button_pressed
+                .iter()
+                .enumerate()
+                .take(6)
+            {
+                b[num] = pressed;
+            }
+            b
+        };
         let mut last_position = cap_cursor_capture::RawCursorPosition::get();
 
         std::fs::create_dir_all(&cursors_dir).unwrap();
@@ -395,8 +384,17 @@ pub fn spawn_cursor_recorder(
 
             let Some(epoch) = input_epoch(start_gate.as_ref(), start_time) else {
                 last_position = cap_cursor_capture::RawCursorPosition::get();
-                last_mouse_state = device_state.get_mouse();
-                last_keys = device_state.get_keys();
+                #[cfg(target_os = "linux")]
+                if let Some(evdev) = &evdev_listener {
+                    last_buttons = evdev.get_buttons();
+                    last_keys = evdev.get_keys();
+                } else {
+                    last_keys = device_state.get_keys();
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    last_keys = device_state.get_keys();
+                }
                 continue;
             };
             let elapsed = epoch.elapsed().as_secs_f64() * 1000.0;
@@ -411,7 +409,10 @@ pub fn spawn_cursor_recorder(
                 last_position = position;
             }
             #[cfg(target_os = "linux")]
-            let window_position = window_cursor.as_ref().and_then(X11WindowCursor::position);
+            let window_position = window_cursor
+                .as_ref()
+                .and_then(X11WindowCursor::position)
+                .or_else(|| *crate::sources::screen_capture::WAYLAND_CURSOR_POSITION.read());
             #[cfg(target_os = "linux")]
             let position_changed = position_changed
                 || (target.window.is_some() && window_position != last_window_position);
@@ -477,7 +478,8 @@ pub fn spawn_cursor_recorder(
                 let cropped_norm_pos = if target.window.is_some() {
                     window_position
                 } else {
-                    cropped_norm_pos
+                    (*crate::sources::screen_capture::WAYLAND_CURSOR_POSITION.read())
+                        .or(cropped_norm_pos)
                 };
 
                 if let Some((x, y)) = cropped_norm_pos {
@@ -492,12 +494,35 @@ pub fn spawn_cursor_recorder(
                 }
             }
 
-            for (num, &pressed) in mouse_state.button_pressed.iter().enumerate() {
-                let Some(prev) = last_mouse_state.button_pressed.get(num) else {
-                    continue;
-                };
+            #[cfg(target_os = "linux")]
+            let in_window = target.window.is_none()
+                || window_position
+                    .is_some_and(|(x, y)| (0.0..=1.0).contains(&x) && (0.0..=1.0).contains(&y));
+            let mouse_buttons: [bool; 6] = if let Some(evdev) = &evdev_listener {
+                if in_window {
+                    evdev.get_buttons()
+                } else {
+                    [false; 6]
+                }
+            } else {
+                let mut b = [false; 6];
+                for (num, &pressed) in mouse_state.button_pressed.iter().enumerate().take(6) {
+                    b[num] = pressed;
+                }
+                b
+            };
+            #[cfg(not(target_os = "linux"))]
+            let mouse_buttons = {
+                let mut b = [false; 6];
+                for (num, &pressed) in mouse_state.button_pressed.iter().enumerate().take(6) {
+                    b[num] = pressed;
+                }
+                b
+            };
 
-                if pressed == *prev {
+            for (num, &pressed) in mouse_buttons.iter().enumerate() {
+                let prev = last_buttons.get(num).copied().unwrap_or(false);
+                if pressed == prev {
                     continue;
                 }
 
@@ -511,8 +536,26 @@ pub fn spawn_cursor_recorder(
                 response.clicks.push(mouse_event);
             }
 
-            last_mouse_state = mouse_state;
+            last_buttons = mouse_buttons;
 
+            #[cfg(target_os = "linux")]
+            let current_keys = if let Some(evdev) = &evdev_listener {
+                if in_window {
+                    let k = evdev.get_keys();
+                    if !k.is_empty() || device_state.get_keys().is_empty() {
+                        k
+                    } else {
+                        device_state.get_keys()
+                    }
+                } else {
+                    Vec::new()
+                }
+            } else if in_window {
+                device_state.get_keys()
+            } else {
+                Vec::new()
+            };
+            #[cfg(not(target_os = "linux"))]
             let current_keys = device_state.get_keys();
 
             for key in &current_keys {

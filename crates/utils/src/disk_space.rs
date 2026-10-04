@@ -183,7 +183,7 @@ pub fn free_bytes_for_path(path: &Path) -> io::Result<u64> {
         return Err(io::Error::last_os_error());
     }
 
-    let bavail = stat.f_bavail as u64;
+    let bavail = stat.f_bavail;
     let frsize = if stat.f_frsize == 0 {
         stat.f_bsize
     } else {
