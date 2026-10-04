@@ -1,3 +1,5 @@
+mod estimate_request;
+
 use crate::editor_window::{OptionalWindowEditorInstance, WindowEditorInstance};
 use crate::{FramesRendered, get_video_metadata};
 use cap_export::{ExporterBase, make_cursor_only_project};
@@ -1728,17 +1730,13 @@ pub struct ExportEstimates {
     pub estimated_size_mb: f64,
 }
 
-static EXPORT_ESTIMATE_CANCELLATIONS: LazyLock<Mutex<HashMap<PathBuf, Arc<AtomicBool>>>> =
-    LazyLock::new(Mutex::default);
+static EXPORT_ESTIMATE_REQUESTS: LazyLock<estimate_request::EstimateRequests> =
+    LazyLock::new(estimate_request::EstimateRequests::default);
 
 #[tauri::command]
 #[specta::specta]
 pub fn cancel_export_estimates(editor: WindowEditorInstance) {
-    if let Ok(cancellations) = EXPORT_ESTIMATE_CANCELLATIONS.lock()
-        && let Some(cancel) = cancellations.get(&editor.project_path)
-    {
-        cancel.store(true, Ordering::Release);
-    }
+    EXPORT_ESTIMATE_REQUESTS.cancel(&editor.project_path);
 }
 
 #[tauri::command]
@@ -1753,41 +1751,34 @@ pub async fn get_export_estimates(
     if path != editor.project_path {
         return Err("Export estimate does not match the open project".into());
     }
-    let cancel = Arc::new(AtomicBool::new(false));
-    if let Some(previous) = EXPORT_ESTIMATE_CANCELLATIONS
-        .lock()
-        .map_err(|error| error.to_string())?
-        .insert(path.clone(), cancel.clone())
-    {
-        previous.store(true, Ordering::Release);
-    }
-    let result = async {
-        let project = load_export_preview_config(path.clone(), settings.cursor_only()).await?;
-        let settings = match settings {
-            ExportSettings::Mp4(settings) => cap_export::settings::ExportSettings::Mp4(settings),
-            ExportSettings::Gif(settings) => cap_export::settings::ExportSettings::Gif(settings),
-            ExportSettings::Mov(settings) => cap_export::settings::ExportSettings::Mov(settings),
-        };
-        cap_export::estimates::estimate_export(
-            (**editor).clone(),
-            project,
-            settings,
-            cancel.clone(),
-            move |estimate| {
-                let _ = on_estimate.send(estimate);
-            },
-        )
+    let request = EXPORT_ESTIMATE_REQUESTS.start(path.clone())?;
+    let cancel = request.cancellation();
+    request
+        .run(async {
+            let project = load_export_preview_config(path, settings.cursor_only()).await?;
+            let settings = match settings {
+                ExportSettings::Mp4(settings) => {
+                    cap_export::settings::ExportSettings::Mp4(settings)
+                }
+                ExportSettings::Gif(settings) => {
+                    cap_export::settings::ExportSettings::Gif(settings)
+                }
+                ExportSettings::Mov(settings) => {
+                    cap_export::settings::ExportSettings::Mov(settings)
+                }
+            };
+            cap_export::estimates::estimate_export(
+                (**editor).clone(),
+                project,
+                settings,
+                cancel,
+                move |estimate| {
+                    let _ = on_estimate.send(estimate);
+                },
+            )
+            .await
+        })
         .await
-    }
-    .await;
-    if let Ok(mut cancellations) = EXPORT_ESTIMATE_CANCELLATIONS.lock()
-        && cancellations
-            .get(&path)
-            .is_some_and(|current| Arc::ptr_eq(current, &cancel))
-    {
-        let _ = cancellations.remove(&path);
-    }
-    result
 }
 
 fn export_estimates_for_duration(
