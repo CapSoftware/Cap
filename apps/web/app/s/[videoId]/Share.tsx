@@ -1015,8 +1015,12 @@ export const Share = ({
 											>
 												{/*
 												 * The view toggle sits to the left under the player; the
-												 * absolute placement (desktop) keeps the toolbar pill
-												 * centred rather than pushed aside.
+												 * absolute placement keeps the toolbar pill centred rather
+												 * than pushed aside. Only from `xl`: between `lg` and `xl`
+												 * the rail leaves the video column too narrow for the
+												 * toggle beside a centred pill, so it stacks above it the
+												 * way it does on tablets and phones. A collapsed rail gives
+												 * the column its width back, so `lg` is enough then.
 												 */}
 												<div
 													className={clsx(
@@ -1025,7 +1029,14 @@ export const Share = ({
 													)}
 												>
 													{timelineAvailable && (
-														<div className="mb-3 flex justify-start lg:absolute lg:left-0 lg:top-1/2 lg:mb-0 lg:-translate-y-1/2">
+														<div
+															className={clsx(
+																"mb-3 flex justify-start",
+																showRail && railCollapsed
+																	? "lg:absolute lg:left-0 lg:top-1/2 lg:mb-0 lg:-translate-y-1/2"
+																	: "xl:absolute xl:left-0 xl:top-1/2 xl:mb-0 xl:-translate-y-1/2",
+															)}
+														>
 															<ShareViewToggle
 																view={view}
 																onChange={setViewAndUrl}
