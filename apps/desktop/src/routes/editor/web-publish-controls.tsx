@@ -1,4 +1,4 @@
-import { Channel, invoke } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
 import { cx } from "cva";
 import {
 	createSignal,
@@ -31,11 +31,6 @@ type SaveStart =
 	| { renderer: "farm"; shareUrl: string }
 	| { renderer: "worker"; reason: string };
 
-type WorkerSaveProgress = {
-	stage: "rendering" | "uploading";
-	progress: number;
-};
-
 const POLL_MS = 2000;
 const FIRST_POLL_MS = 1000;
 // A farm render that shows no progress for this long is treated as stuck and
@@ -57,9 +52,8 @@ export function WebPublishControls() {
 	} = useEditorContext();
 	const [starting, setStarting] = createSignal(false);
 	const [status, setStatus] = createSignal<SaveStatus | null>(null);
-	const [workerSave, setWorkerSave] = createSignal<WorkerSaveProgress | null>(
-		null,
-	);
+	// The farm couldn't finish and an editor server took the Save over.
+	const [slowSave, setSlowSave] = createSignal(false);
 	// The revision this session last saved. Nothing counts as saved until a
 	// Save, unless the share link already shows the project as it was opened.
 	const [savedRevision, setSavedRevision] = createSignal<number | null>(null);
@@ -97,7 +91,7 @@ export function WebPublishControls() {
 						"Cap save renders on an editor server:",
 						next.error ?? "the render farm stopped making progress",
 					);
-					await saveOnWorker();
+					await saveOnWorker(true);
 					return;
 				}
 			}
@@ -114,24 +108,22 @@ export function WebPublishControls() {
 		}
 	};
 
-	const saveOnWorker = async () => {
-		setStatus(null);
-		setWorkerSave({ stage: "rendering", progress: 0 });
+	const saveOnWorker = async (slow: boolean) => {
+		setSlowSave(slow);
+		setStatus({
+			state: "rendering",
+			exportId: null,
+			progress: 0,
+			playable: false,
+			hlsUrl: null,
+			error: null,
+		});
 		try {
-			await invoke("webEditorSaveOnWorker", {
-				channel: new Channel<WorkerSaveProgress>((progress) => {
-					if (!disposed) setWorkerSave(progress);
-				}),
-			});
+			// The Save then renders and publishes on Cap's servers like a farm
+			// render, so it's followed the same way.
+			await invoke("webEditorSaveOnWorker");
 			if (disposed) return;
-			setStatus({
-				state: "ready",
-				exportId: null,
-				progress: 1,
-				playable: false,
-				hlsUrl: null,
-				error: null,
-			});
+			timer = setTimeout(poll, FIRST_POLL_MS);
 		} catch (cause) {
 			if (disposed) return;
 			const error = cause instanceof Error ? cause.message : "Save failed";
@@ -144,8 +136,6 @@ export function WebPublishControls() {
 				error,
 			});
 			toast.error(error);
-		} finally {
-			setWorkerSave(null);
 		}
 	};
 
@@ -159,19 +149,19 @@ export function WebPublishControls() {
 		clearTimeout(timer);
 	});
 
-	const rendering = () =>
-		status()?.state === "rendering" || workerSave() !== null;
+	const rendering = () => status()?.state === "rendering";
+	const showsProgress = () =>
+		!!status()?.playable || (status()?.progress ?? 0) > 0;
 	const hasUnsavedEdits = () => projectRevision() !== savedRevision();
 	const upToDate = () =>
 		!hasUnsavedEdits() && !rendering() && status()?.state === "ready";
 
 	// The page asks before closing while this session has edits its share link
-	// doesn't show yet: not saved, still uploading through this tab, or failed.
+	// doesn't show yet: not saved, or failed. A Save in progress carries on
+	// without the tab.
 	const unpublishedEdits = () =>
-		projectRevision() !== (savedRevision() ?? 0) ||
-		workerSave() !== null ||
-		status()?.state === "error";
-	const savingHere = () => workerSave() !== null;
+		projectRevision() !== (savedRevision() ?? 0) || status()?.state === "error";
+	const savingHere = () => starting();
 	const editorWindow = window as Window & {
 		capWebEditorUnpublishedEdits?: () => boolean;
 		capWebEditorSavingHere?: () => boolean;
@@ -197,9 +187,10 @@ export function WebPublishControls() {
 			if (started.renderer === "worker") {
 				console.info("Cap save renders on an editor server:", started.reason);
 				setStarting(false);
-				await saveOnWorker();
+				await saveOnWorker(false);
 				return;
 			}
+			setSlowSave(false);
 			farmSave = { progress: 0, progressAt: Date.now() };
 			setStatus({
 				state: "rendering",
@@ -257,8 +248,8 @@ export function WebPublishControls() {
 			</EditorButton>
 			<Tooltip
 				content={
-					workerSave()
-						? "Saving is taking longer than usual. Keep this tab open until it finishes."
+					rendering() && slowSave()
+						? "Saving is taking longer than usual."
 						: status()?.state === "error"
 							? (status()?.error ?? "Save failed")
 							: upToDate()
@@ -278,23 +269,18 @@ export function WebPublishControls() {
 							: "bg-linear-to-b from-ed-accent-2 to-ed-accent text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.22),0_1px_2px_rgba(0,60,160,0.25)] hover:brightness-[1.06] active:brightness-[0.96] disabled:cursor-default disabled:hover:brightness-100",
 					)}
 				>
-					<Show when={workerSave() ?? (rendering() && status()?.playable)}>
+					<Show when={rendering() && showsProgress()}>
 						<span
 							aria-hidden="true"
 							class="absolute inset-y-0 left-0 bg-white/20 transition-[width] duration-500"
-							style={{
-								width: `${(workerSave()?.progress ?? status()?.progress ?? 0) * 100}%`,
-							}}
+							style={{ width: `${(status()?.progress ?? 0) * 100}%` }}
 						/>
 					</Show>
 					<span class="relative flex items-center gap-1.5">
 						<Switch fallback="Save">
 							<Match when={starting()}>Saving</Match>
-							<Match when={workerSave()}>
-								{(progress) => <span>{workerSaveLabel(progress())}</span>}
-							</Match>
 							<Match when={rendering()}>
-								{status()?.playable
+								{showsProgress()
 									? `Publishing ${Math.floor((status()?.progress ?? 0) * 100)}%`
 									: "Publishing"}
 							</Match>
@@ -309,10 +295,4 @@ export function WebPublishControls() {
 			</Tooltip>
 		</div>
 	);
-}
-
-function workerSaveLabel({ stage, progress }: WorkerSaveProgress) {
-	const percent = Math.floor(progress * 100);
-	if (stage === "uploading") return `Uploading ${percent}%`;
-	return percent > 0 ? `Rendering ${percent}%` : "Rendering";
 }

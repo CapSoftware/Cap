@@ -193,6 +193,8 @@ export interface VideoMetadata {
 		hlsPrefix: string;
 		error?: string;
 		publishedAt?: string;
+		/** Rendered and uploaded by this editor worker session instead of the farm. */
+		worker?: { sessionPath: string };
 	};
 	/** Set by the browser-rendered Saves Cap no longer makes: the video was saved from the web editor. */
 	publishedBrowserSaveId?: string | null;

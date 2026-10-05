@@ -270,16 +270,6 @@ export class PortEditorTransport {
 				}
 			}
 		}
-		if (name === "tauri:webEditorSaveOnWorker") {
-			// The host renders this Save on an editor worker; its progress comes
-			// back on the request's channel.
-			const [request] = args;
-			const channel =
-				typeof request === "object" && request !== null && "channel" in request
-					? request.channel
-					: null;
-			return this.request("invoke", name, [channel]);
-		}
 		if (name === "tauri:webEditorPrewarmExport") {
 			prewarmBrowserLocalExport();
 			return null;

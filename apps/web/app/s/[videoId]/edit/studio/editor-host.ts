@@ -422,9 +422,6 @@ export class EditorHostBridge {
 	private preparedExport: PreparedExport | null = null;
 	private canceledExportCleanup: Promise<void> | null = null;
 	private activeShare: AbortController | null = null;
-	/// Export settings a Save renders with on an editor worker, from the save
-	/// route, which keeps them the same as the farm's.
-	private workerSaveSettings: Record<string, unknown> | null = null;
 	private saveStatusRevision: string | null | undefined;
 	private activeCaptions: {
 		language: AiGenerationLanguage;
@@ -1417,14 +1414,10 @@ export class EditorHostBridge {
 			typeof plan !== "object" ||
 			plan === null ||
 			!("renderer" in plan) ||
-			(plan.renderer !== "farm" && plan.renderer !== "worker") ||
-			!("workerSettings" in plan) ||
-			typeof plan.workerSettings !== "object" ||
-			plan.workerSettings === null
+			(plan.renderer !== "farm" && plan.renderer !== "worker")
 		) {
 			throw new Error("Save response was invalid");
 		}
-		this.workerSaveSettings = plan.workerSettings as Record<string, unknown>;
 		if (plan.renderer === "worker") {
 			return {
 				renderer: "worker",
@@ -1502,110 +1495,68 @@ export class EditorHostBridge {
 	}
 
 	/**
-	 * Saves on an editor worker when the render farm can't: the worker renders
-	 * the stored project natively, with the farm's settings, and this tab moves
-	 * the file to the share link. Nothing renders in the browser.
+	 * Saves on an editor worker when the render farm can't. The worker renders
+	 * the stored project with the farm's settings, uploads it and publishes it
+	 * like a farm render, so the Save finishes even if this tab closes.
 	 */
 	private async saveOnWorker(message: BridgeRequest) {
-		const channelId = exportChannelId(message.args[0]);
-		const settings = this.workerSaveSettings;
-		await this.canceledExportCleanup;
-		if (this.disposed || !this.port) return;
-		if (channelId === null || !settings) {
-			this.port.postMessage({
-				kind: "error",
-				id: message.id,
-				error: "Save request was invalid",
-			});
-			return;
-		}
-		if (this.activeExport || this.preparedExport || this.activeShare) {
-			this.port.postMessage({
-				kind: "error",
-				id: message.id,
-				error: "Finish or cancel the current editor export first",
-			});
-			return;
-		}
-		const progress = (stage: "rendering" | "uploading", fraction: number) =>
-			this.port?.postMessage({
-				kind: "channel",
-				id: channelId,
-				value: { stage, progress: Math.min(1, Math.max(0, fraction)) },
-			});
-		const active = createActiveExport(message.id);
-		this.activeExport = active;
-		// Closing the tab would stop the upload of the finished render.
-		const keepOpen = (event: BeforeUnloadEvent) => event.preventDefault();
-		window.addEventListener("beforeunload", keepOpen);
-		let releaseWorkerUse: (() => void) | null = null;
+		let releaseWorkerUse: () => void = () => undefined;
 		let reply: CommandReply;
 		try {
-			releaseWorkerUse = await this.ensureWorkerSession(
-				false,
-				false,
-				true,
-			).catch(() => {
+			// The save route gives the worker the stored project, so one prepared
+			// before the latest edits still serves.
+			releaseWorkerUse = await this.ensureWorkerSession(true).catch(() => {
 				throw new Error(WORKER_SAVE_UNAVAILABLE);
 			});
+			const sessionId = this.sessionId;
+			const projectSavedAt = this.getProjectSavedAt?.() ?? null;
 			// A farm render still running for this Save must not replace it
 			// when it finishes.
 			const withdrawn = await fetch(
 				`/api/editor/sessions/${encodeURIComponent(this.browserSessionId)}/save?videoId=${encodeURIComponent(this.videoId)}`,
-				{
-					method: "DELETE",
-					cache: "no-store",
-					signal: active.controller.signal,
-				},
+				{ method: "DELETE", cache: "no-store", signal: this.controller.signal },
 			);
 			if (!withdrawn.ok) throw new Error(webEditorSaveError(withdrawn.status));
-			const status = await this.renderExport(
-				active,
-				settings,
-				(rendered, total) =>
-					progress("rendering", total > 0 ? rendered / total : 0),
+			const response = await fetch(
+				`/api/editor/sessions/${encodeURIComponent(sessionId)}/save/worker`,
+				{
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ videoId: this.videoId }),
+					cache: "no-store",
+					signal: this.controller.signal,
+				},
 			);
-			if (!active.jobId || status.size === null || !status.mediaMetadata)
+			if (!response.ok) throw new Error(webEditorSaveError(response.status));
+			const saved: unknown = await response.json();
+			if (
+				typeof saved !== "object" ||
+				saved === null ||
+				!("shareUrl" in saved) ||
+				typeof saved.shareUrl !== "string"
+			)
 				throw new Error(WORKER_SAVE_UNAVAILABLE);
-			await uploadWebEditorExport(
-				this.videoId,
-				this.sessionId,
-				active.jobId,
-				status.size,
-				status.mediaMetadata,
-				active.controller.signal,
-				(upload) => progress("uploading", upload.fraction),
-			);
-			announceShareVideoUpdate(this.videoId);
+			if (this.workerSessionId === sessionId)
+				this.workerProjectSavedAt = projectSavedAt;
 			reply = {
 				kind: "result",
 				id: message.id,
-				value: {
-					shareUrl: new URL(
-						`/s/${encodeURIComponent(this.videoId)}`,
-						window.location.origin,
-					).toString(),
-				},
+				value: { shareUrl: saved.shareUrl },
 			};
 		} catch (cause) {
 			reply = {
 				kind: "error",
 				id: message.id,
-				error:
-					active.canceled || this.disposed
-						? "Save was canceled"
-						: cause instanceof Error
-							? cause.message
-							: WORKER_SAVE_UNAVAILABLE,
+				error: this.disposed
+					? "Save was canceled"
+					: cause instanceof Error
+						? cause.message
+						: WORKER_SAVE_UNAVAILABLE,
 			};
 		} finally {
-			window.removeEventListener("beforeunload", keepOpen);
-			if (active.jobId) await this.cancelExportJob(active.jobId);
-			if (this.activeExport === active) this.activeExport = null;
-			releaseWorkerUse?.();
-			active.finish();
+			releaseWorkerUse();
 		}
-		if (!active.replied) this.port?.postMessage(reply);
+		this.port?.postMessage(reply);
 	}
 
 	private async handleShareExport(message: BridgeRequest) {

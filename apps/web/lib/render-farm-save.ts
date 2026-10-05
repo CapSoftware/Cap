@@ -11,6 +11,11 @@ import { Effect } from "effect";
 import { retireDesktopRecordingJobForOutputReplacement } from "@/lib/desktop-recording-jobs";
 import { invalidateReuploadedVideo } from "@/lib/desktop-reupload";
 import {
+	fetchWorkerSave,
+	workerSaveOutput,
+	workerSaveProgress,
+} from "@/lib/editor-worker-save";
+import {
 	queueVideoTranscription,
 	shouldQueueTranscriptionAfterMultipartComplete,
 } from "@/lib/queue-video-transcription";
@@ -181,6 +186,7 @@ export async function refreshRenderFarmSave(
 			"The recording could not be prepared for rendering",
 		);
 	}
+	if (save.worker) return refreshWorkerSave(videoId, save, rendering);
 	const job = await fetchRenderFarmJob(save.jobId, video.fps ?? 30);
 	if (!job) return rendering;
 	if (job.state === "ready" && job.output) {
@@ -217,6 +223,53 @@ export async function refreshRenderFarmSave(
 		hlsUrl: job.playable ? job.hlsUrl : null,
 	};
 }
+
+// A worker that doesn't know a Save it just started may not have it yet.
+const WORKER_SAVE_START_GRACE_MS = 2 * 60_000;
+
+/** Follows a Save an editor worker renders, publishing it once uploaded. */
+async function refreshWorkerSave(
+	videoId: Video.VideoId,
+	save: RenderFarmSave,
+	rendering: RenderSaveStatus,
+): Promise<RenderSaveStatus> {
+	const state = await runPromise(fetchWorkerSave(save)).catch(() => null);
+	if (!state) return rendering;
+	if (state === "gone") {
+		if (Date.now() - Date.parse(save.startedAt) < WORKER_SAVE_START_GRACE_MS)
+			return rendering;
+		return abandonRenderFarmSave(
+			videoId,
+			save,
+			{ jobId: save.jobId },
+			WORKER_SAVE_FAILED,
+		);
+	}
+	const output = workerSaveOutput(state);
+	if (output) {
+		const finalized = await finalizeRenderFarmSave(videoId, save.jobId, output);
+		if (finalized === "stale") return currentRenderFarmSave(videoId, save);
+		return {
+			...IDLE_RENDER_SAVE,
+			state: "ready",
+			exportId: save.exportId,
+			progress: 1,
+		};
+	}
+	if (state.status === "error") {
+		console.warn(`[workerSave] ${videoId} failed: ${state.error}`);
+		return abandonRenderFarmSave(
+			videoId,
+			save,
+			{ jobId: save.jobId },
+			WORKER_SAVE_FAILED,
+		);
+	}
+	return { ...rendering, progress: workerSaveProgress(state) };
+}
+
+export const WORKER_SAVE_FAILED =
+	"This save couldn't finish. Try again, or use Download.";
 
 async function fetchRenderFarmJob(jobId: string, fps: number) {
 	const config = renderFarmConfig();

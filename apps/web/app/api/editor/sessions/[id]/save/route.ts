@@ -15,7 +15,6 @@ import {
 	canSaveEditorVideo,
 	editorSaveRenderer,
 	startRenderFarmSave,
-	workerSaveSettings,
 } from "@/lib/render-farm-start";
 import { renderFarmSaveIsCurrent } from "@/lib/render-farm-status";
 import { apiToHandler } from "@/lib/server";
@@ -35,14 +34,6 @@ class Api extends HttpApi.make("WebEditorSaveApi").add(
 						reason: Schema.NullOr(Schema.String),
 						/** The farm prepares this project itself: no worker session. */
 						direct: Schema.Boolean,
-						/** What an editor worker renders the Save with if the farm can't. */
-						workerSettings: Schema.Struct({
-							format: Schema.Literal("Mp4"),
-							fps: Schema.Int,
-							resolution_base: Schema.Struct({ x: Schema.Int, y: Schema.Int }),
-							compression: Schema.Literal("Maximum"),
-							custom_bpp: Schema.Null,
-						}),
 					}),
 				)
 				.addError(HttpApiError.NotFound)
@@ -114,7 +105,7 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 						);
 						// Save never renders in the browser.
 						if (!target) return yield* new HttpApiError.ServiceUnavailable();
-						return { ...target, workerSettings: workerSaveSettings(video.fps) };
+						return target;
 					}),
 				)
 				.handle("save", ({ path, payload }) =>
