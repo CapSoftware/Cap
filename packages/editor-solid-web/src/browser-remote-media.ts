@@ -623,8 +623,20 @@ export class RemoteMedia {
 		}
 		const size = await this.fileSize();
 		remember(index.known, scanner.seeds);
+		// A window shorter than a fragment usually lands inside one and finds
+		// no entry point; a camera at several megabits a second writes
+		// fragments of a megabyte or more.
+		const fragmentBytes = typicalFragmentBytes(index.known);
+		// Aiming a fragment early lands before the target's own fragment
+		// even when fragment sizes vary, and the forward scan from there
+		// reaches it.
+		const nearBytes = Math.max(scanner.nearBytes, fragmentBytes * 2);
+		const windowBytes = Math.min(
+			MAX_PROBE_SCAN,
+			Math.max(PROBE_WINDOW, Math.ceil(fragmentBytes * 1.25)),
+		);
 		for (let probe = 0; probe < MAX_PROBES; probe++) {
-			const step = nextFragmentProbe(index.known, time, scanner.nearBytes);
+			const step = nextFragmentProbe(index.known, time, nearBytes);
 			if ("done" in step) return step.done;
 			let at = step.probeAt;
 			let grew = false;
@@ -638,10 +650,7 @@ export class RemoteMedia {
 					at,
 					Math.min(
 						size,
-						at +
-							(scrubbing
-								? Math.max(PROBE_WINDOW, scanner.nearBytes)
-								: PROBE_WINDOW),
+						at + (scrubbing ? Math.max(windowBytes, nearBytes) : windowBytes),
 					),
 				);
 				this.recent.unshift({ start: at, bytes: window });
@@ -690,6 +699,15 @@ export class RemoteMedia {
 				return this.rate;
 			});
 	}
+}
+
+/// The median length of the fragments seen so far, 0 before any.
+export function typicalFragmentBytes(points: FragmentPoint[]) {
+	const lengths = points
+		.map((point) => point.end - point.offset)
+		.filter((length) => length > 0)
+		.sort((a, b) => a - b);
+	return lengths[Math.floor(lengths.length / 2)] ?? 0;
 }
 
 const entries = new Map<string, RemoteMedia>();

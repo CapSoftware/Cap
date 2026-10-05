@@ -234,6 +234,28 @@ describe("RemoteMedia", () => {
 		expect(probes).toBeLessThan(12);
 	});
 
+	test("finds a far fragment in a camera that writes a megabyte or more each", async () => {
+		// 2 s fragments of 0.8 to 2.2 MB, as a 6 Mbit/s camera writes them.
+		const parts = [init()];
+		for (let index = 0; index < 30; index++) {
+			parts.push(
+				fragment(index * 2 * 15360, {
+					payload: 800_000 + ((index * 389_651) % 1_400_000),
+				}),
+			);
+		}
+		serve(concat(...parts));
+		const media = new RemoteMedia(URL_, file.length);
+		media.warm();
+		const point = await media.locate(42);
+		expect(point).not.toBeNull();
+		if (!point) return;
+		expect(point.time).toBeLessThanOrEqual(42);
+		expect(42 - point.time).toBeLessThanOrEqual(4);
+		// The head, the tail and a few probes into the middle.
+		expect(requests.length).toBeLessThanOrEqual(6);
+	});
+
 	test("reads past the target only while scrubbing", async () => {
 		const probeLengths = () =>
 			requests.flatMap((range) => {
