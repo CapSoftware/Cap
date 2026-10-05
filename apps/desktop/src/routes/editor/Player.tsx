@@ -47,6 +47,7 @@ import {
 	createPreviewBoundsReaction,
 	createPreviewBoundsUpdater,
 } from "./preview-bounds";
+import { editorLayout } from "./responsive-layout";
 import { SplitScreenOverlay } from "./SplitScreenOverlay";
 import { TextOverlay } from "./TextOverlay";
 import { sliderToZoom, ZOOM_STEP, zoomToSlider } from "./Timeline/zoom";
@@ -62,14 +63,9 @@ export function PlayerContent(props: {
 	focusMode?: FocusMode;
 }) {
 	const {
-		previewStyle,
-		selectedStyle,
-		toggleStyleGroup,
-		styleScopeToken,
 		project,
 		flushProjectConfig,
 		editorInstance,
-		setDialog,
 		totalDuration,
 		editorState,
 		setEditorState,
@@ -81,7 +77,6 @@ export function PlayerContent(props: {
 		playbackIntent,
 		requestHandoffPlayback,
 		handoffPlaybackPending,
-		meta,
 	} = useEditorContext();
 
 	let panelRef: HTMLDivElement | undefined;
@@ -222,39 +217,6 @@ export function PlayerContent(props: {
 		readoutAt = now;
 		return seconds;
 	}, 0);
-
-	const cropDialogHandler = async () => {
-		const background = selectedStyle()
-			? (selectedStyle()?.overrides.background ?? previewStyle().background)
-			: project.background;
-		if (selectedStyle() && !selectedStyle()?.overrides.background)
-			toggleStyleGroup("background", true);
-		const styleTarget = editorState.styleEditIndex;
-		const scopeToken = styleScopeToken();
-		const display = editorInstance.recordings.segments[0].display;
-		setDialog({
-			open: true,
-			type: "crop",
-			styleTarget,
-			scopeToken,
-			position: {
-				...(background.crop?.position ?? { x: 0, y: 0 }),
-			},
-			size: {
-				...(background.crop?.size ?? {
-					x: display.width,
-					y: display.height,
-				}),
-			},
-		});
-		const pending = requestHandoffPlayback(false);
-		if (pending) {
-			await pending;
-			return;
-		}
-		await commands.stopPlayback();
-		setEditorState("playing", false);
-	};
 
 	const handlePreviewQualityChange = async (quality: EditorPreviewQuality) => {
 		if (quality === previewQuality()) return;
@@ -449,24 +411,12 @@ export function PlayerContent(props: {
 			onMouseLeave={() => setPanelHovered(false)}
 		>
 			<div
+				data-player-toolbar
 				class="flex overflow-x-auto relative z-10 flex-none flex-row gap-3 items-center px-3"
 				style={{ height: `${44 - 4 * (props.compactness ?? 0)}px` }}
 			>
 				<div class="flex flex-1 gap-0.5 items-center min-w-fit">
-					<Show when={!selectedStyle()}>
-						<AspectRatioSelect />
-					</Show>
-					<Show when={!meta().audioOnly && !project.hideDisplay}>
-						<EditorButton
-							variant="text"
-							tooltipText="Crop Video"
-							onClick={cropDialogHandler}
-							leftIcon={<IconCapCrop />}
-						>
-							<span class="max-[1200px]:hidden">Crop</span>
-						</EditorButton>
-						<FrameButton />
-					</Show>
+					<PreviewTools />
 				</div>
 				<div class="flex flex-row flex-none gap-2 items-center">
 					<Tooltip content="How sharp playback looks while you edit. Exports always render at full quality.">
@@ -516,15 +466,22 @@ export function PlayerContent(props: {
 				}}
 			/>
 			<div
+				data-player-transport
 				class="flex overflow-x-auto relative z-10 flex-none flex-row gap-3 items-center px-3.5"
 				style={{ height: `${48 - 4 * (props.compactness ?? 0)}px` }}
 			>
-				<div class="flex flex-1 items-center min-w-fit whitespace-nowrap">
+				<div
+					data-player-time
+					class="flex flex-1 items-center min-w-fit whitespace-nowrap"
+				>
 					<Time class="font-medium text-ed-text-1" seconds={readoutSeconds()} />
 					<span class="text-[13px] tabular-nums text-ed-text-3"> / </span>
 					<Time seconds={totalDuration()} />
 				</div>
-				<div class="flex flex-row flex-none gap-3.5 items-center">
+				<div
+					data-transport-controls
+					class="flex flex-row flex-none gap-3.5 items-center"
+				>
 					<button
 						type="button"
 						aria-label="Skip to start"
@@ -560,7 +517,7 @@ export function PlayerContent(props: {
 							<Show when={playBusy()}>
 								<span
 									aria-hidden="true"
-									class="absolute -inset-[3px] rounded-full border-2 border-transparent border-t-ed-text-1 animate-spin motion-reduce:animate-none"
+									class="absolute -inset-[3px] rounded-full border-2 border-transparent border-t-ed-text-1 animate-spin will-change-transform motion-reduce:animate-none"
 								/>
 							</Show>
 						</button>
@@ -582,7 +539,10 @@ export function PlayerContent(props: {
 						<IconCapNext class="size-3.5" />
 					</button>
 				</div>
-				<div class="flex flex-row flex-1 gap-0.5 justify-end items-center min-w-fit">
+				<div
+					data-transport-tools
+					class="flex flex-row flex-1 gap-0.5 justify-end items-center min-w-fit"
+				>
 					<EditorButton<typeof KToggleButton>
 						tooltipText="Toggle Split"
 						kbd={["S"]}
@@ -594,8 +554,15 @@ export function PlayerContent(props: {
 						variant="danger"
 						leftIcon={<IconCapScissors />}
 					/>
-					<div class="mx-1.5 w-px h-4 shrink-0 bg-ed-line-strong" />
-					<div class="flex flex-row gap-0.5 items-center" title={zoomHint()}>
+					<div
+						data-player-zoom
+						class="mx-1.5 w-px h-4 shrink-0 bg-ed-line-strong"
+					/>
+					<div
+						data-player-zoom
+						class="flex flex-row gap-0.5 items-center"
+						title={zoomHint()}
+					>
 						<EditorButton
 							tooltipText="Zoom out"
 							kbd={["meta", "-"]}
@@ -647,6 +614,78 @@ export function PlayerContent(props: {
 				</div>
 			</div>
 		</div>
+	);
+}
+
+/**
+ * Aspect ratio, crop and frame: the player's toolbar, or the settings bar on
+ * a phone, where the toolbar folds away.
+ */
+export function PreviewTools() {
+	const {
+		previewStyle,
+		selectedStyle,
+		toggleStyleGroup,
+		styleScopeToken,
+		project,
+		editorInstance,
+		setDialog,
+		editorState,
+		setEditorState,
+		requestHandoffPlayback,
+		meta,
+	} = useEditorContext();
+
+	const cropDialogHandler = async () => {
+		const background = selectedStyle()
+			? (selectedStyle()?.overrides.background ?? previewStyle().background)
+			: project.background;
+		if (selectedStyle() && !selectedStyle()?.overrides.background)
+			toggleStyleGroup("background", true);
+		const styleTarget = editorState.styleEditIndex;
+		const scopeToken = styleScopeToken();
+		const display = editorInstance.recordings.segments[0].display;
+		setDialog({
+			open: true,
+			type: "crop",
+			styleTarget,
+			scopeToken,
+			position: {
+				...(background.crop?.position ?? { x: 0, y: 0 }),
+			},
+			size: {
+				...(background.crop?.size ?? {
+					x: display.width,
+					y: display.height,
+				}),
+			},
+		});
+		const pending = requestHandoffPlayback(false);
+		if (pending) {
+			await pending;
+			return;
+		}
+		await commands.stopPlayback();
+		setEditorState("playing", false);
+	};
+
+	return (
+		<>
+			<Show when={!selectedStyle()}>
+				<AspectRatioSelect />
+			</Show>
+			<Show when={!meta().audioOnly && !project.hideDisplay}>
+				<EditorButton
+					variant="text"
+					tooltipText="Crop Video"
+					onClick={cropDialogHandler}
+					leftIcon={<IconCapCrop />}
+				>
+					<span class="max-[1200px]:hidden">Crop</span>
+				</EditorButton>
+				<FrameButton />
+			</Show>
+		</>
 	);
 }
 
@@ -813,16 +852,17 @@ function PreviewCanvas(props: {
 		initializedCanvas = canvas;
 	});
 
-	const padding = 16;
+	// A phone's preview keeps a slimmer frame around the video.
+	const padding = () => (editorLayout().phone() ? 8 : 16);
 	// Every frame arrives as a new object; the preview's size only changes
 	// with its dimensions.
 	const frameWidth = createMemo(() => latestFrame()?.width ?? 1920);
 	const frameHeight = createMemo(() => latestFrame()?.height ?? 1080);
 
 	const availableWidth = () =>
-		Math.max(debouncedBounds().width - padding * 2, 0);
+		Math.max(debouncedBounds().width - padding() * 2, 0);
 	const availableHeight = () =>
-		Math.max(debouncedBounds().height - padding * 2, 0);
+		Math.max(debouncedBounds().height - padding() * 2, 0);
 
 	const containerAspect = () => {
 		const width = availableWidth();
@@ -983,6 +1023,7 @@ function PreviewCanvas(props: {
 	return (
 		<div
 			ref={setCanvasContainerRef}
+			data-preview-stage
 			class="relative flex-1 justify-center items-center min-h-0 bg-ed-card"
 			style={{ contain: "layout style" }}
 			onContextMenu={handleContextMenu}
@@ -990,9 +1031,11 @@ function PreviewCanvas(props: {
 			<CaptionsRegenerateBadge class="absolute top-3 right-3 z-20" />
 			<Show when={!hasFrame() && props.buffering}>
 				{(status) => (
-					<div class="flex absolute inset-0 z-20 justify-center items-center p-4 pointer-events-none">
-						<BufferingStatus playing={status().playing} slow={status().slow} />
-					</div>
+					<BufferingStatus
+						playing={status().playing}
+						slow={status().slow}
+						class="z-20"
+					/>
 				)}
 			</Show>
 			<Show when={preparing?.model.rendered() && !preparing?.ordinaryReady()}>
@@ -1038,7 +1081,7 @@ function PreviewCanvas(props: {
 								<BufferingStatus
 									playing={status().playing}
 									slow={status().slow}
-									class="absolute top-2.5 left-2.5 z-30"
+									scrim={status().playing}
 								/>
 							)}
 						</Show>
@@ -1068,7 +1111,7 @@ function PreviewCanvas(props: {
 												aria-label={label()}
 												data-editor-focus-toggle
 												onClick={() => focusMode().toggle()}
-												class="flex justify-center items-center rounded-lg size-8 text-white/90 bg-black/45 backdrop-blur-md shadow-[0_0_0_0.5px_rgba(255,255,255,0.16),0_6px_16px_-4px_rgba(0,0,0,0.4)] transition-[background-color,color,transform] duration-150 ease-out hover:bg-black/60 hover:text-white active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ed-accent"
+												class="flex justify-center items-center rounded-lg size-8 text-white/90 bg-black/65 shadow-[0_0_0_0.5px_rgba(255,255,255,0.16),0_6px_16px_-4px_rgba(0,0,0,0.4)] transition-[background-color,color,transform] duration-150 ease-out hover:bg-black/75 hover:text-white active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ed-accent"
 											>
 												<FocusModeIcon active={focusMode().active()} />
 											</button>

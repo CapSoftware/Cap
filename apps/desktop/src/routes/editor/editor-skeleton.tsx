@@ -1,16 +1,20 @@
 import { createElementBounds } from "@solid-primitives/bounds";
 import { makePersisted } from "@solid-primitives/storage";
 import { type as ostype } from "@tauri-apps/plugin-os";
-import { createSignal, For, Show } from "solid-js";
+import { createSignal, For, onCleanup, Show } from "solid-js";
 import CaptionControlsMacOS from "~/components/titlebar/controls/CaptionControlsMacOS";
 import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
 import { BufferingStatus, createBufferingDisplay } from "./buffering-status";
+import { createConnectionLevel } from "./connection-status";
 import {
 	CLIP_STRIP_SPACE,
 	DEFAULT_TIMELINE_HEIGHT,
 	editorVerticalLayout,
 } from "./editor-layout";
-import { requestPlayWhenReady } from "./playback-buffering";
+import {
+	createPlayRequested,
+	requestPlayWhenReady,
+} from "./playback-buffering";
 import { usePreparingEditorModel } from "./preparing-editor-context";
 import {
 	type PreparingEditorModel,
@@ -18,8 +22,12 @@ import {
 } from "./preparing-editor-model";
 import { PreparingFrame } from "./preparing-frame";
 import { PreparingTimeline } from "./preparing-timeline";
+import { editorLayout } from "./responsive-layout";
+import "./web-layout.css";
 
 const isWebEditor = import.meta.env.VITE_CAP_WEB_EDITOR === "true";
+
+const OPENING_SLOW_AFTER_MS = 6000;
 
 const DISABLED_CONTROL =
 	"h-7 px-2 rounded-[7px] text-xs text-ed-text-3 disabled:opacity-50 disabled:cursor-default";
@@ -28,6 +36,7 @@ function PreparingHeader(props: { model: PreparingEditorModel }) {
 	return (
 		<div
 			data-tauri-drag-region
+			data-editor-header
 			class="flex relative shrink-0 flex-row items-center w-full h-13 pr-3 max-[900px]:grid max-[900px]:grid-cols-1 max-[900px]:grid-rows-[36px_36px] max-[900px]:h-[72px] max-[900px]:pr-2"
 		>
 			<div
@@ -94,8 +103,14 @@ function PreparingPlayer(props: {
 	previewRef?: (element: HTMLDivElement) => void;
 }) {
 	return (
-		<div class="flex flex-col flex-1 min-w-0 rounded-xl bg-ed-card shadow-ed-card overflow-hidden">
-			<div class="flex flex-row items-center px-3 h-11 shrink-0">
+		<div
+			data-editor-player
+			class="flex flex-col flex-1 min-w-0 rounded-xl bg-ed-card shadow-ed-card overflow-hidden"
+		>
+			<div
+				data-player-toolbar
+				class="flex flex-row items-center px-3 h-11 shrink-0"
+			>
 				<div class="flex flex-row flex-1 gap-0.5 items-center">
 					<button type="button" disabled class={DISABLED_CONTROL}>
 						Aspect ratio
@@ -168,7 +183,10 @@ function PreparingPlayer(props: {
 
 function PreparingSidebar() {
 	return (
-		<div class="flex flex-col min-h-0 w-104 min-w-104 flex-none overflow-hidden rounded-xl bg-ed-card shadow-ed-card">
+		<div
+			data-editor-sheet
+			class="flex flex-col min-h-0 w-104 min-w-104 flex-none overflow-hidden rounded-xl bg-ed-card shadow-ed-card"
+		>
 			<div class="flex justify-around items-center px-2.5 h-[46px] border-b border-ed-line shrink-0">
 				<For each={["Background", "Camera", "Audio", "Cursor", "Keyboard"]}>
 					{(name) => (
@@ -212,13 +230,24 @@ function PlayWhenReady(props: {
 }) {
 	const bounds = createElementBounds(() => props.anchor);
 	const preview = createElementBounds(() => props.preview);
-	const [requested, setRequested] = createSignal(false);
-	const status = createBufferingDisplay(requested, () => true);
+	const requested = createPlayRequested();
+	// The whole loading screen is a wait, so its status shows from the start
+	// rather than only once Play is pressed.
+	const status = createBufferingDisplay(() => true, requested);
+	// Opening takes a few seconds on any connection, so the reason for the
+	// wait shows early only when the connection is the reason.
+	const connection = createConnectionLevel();
+	const [late, setLate] = createSignal(false);
+	const lateTimer = setTimeout(() => setLate(true), OPENING_SLOW_AFTER_MS);
+	onCleanup(() => clearTimeout(lateTimer));
+	const slow = () =>
+		status.slow() &&
+		(late() || (connection() !== null && connection() !== "good"));
 	return (
 		<Show when={bounds.width && bounds.height}>
 			<Show when={status.shown() && preview.width && preview.height}>
 				<div
-					class="flex fixed z-10 justify-center items-center p-4 pointer-events-none"
+					class="fixed z-10 pointer-events-none"
 					style={{
 						left: `${preview.left}px`,
 						top: `${preview.top}px`,
@@ -226,11 +255,15 @@ function PlayWhenReady(props: {
 						height: `${preview.height}px`,
 					}}
 				>
-					{/* Below the placeholder's own spinner. */}
 					<BufferingStatus
-						playing
-						slow={status.slow()}
-						class="translate-y-16"
+						playing={requested()}
+						slow={slow()}
+						title={requested() ? "Loading video" : "Loading editor"}
+						then={
+							requested()
+								? "Playback starts as soon as enough has loaded."
+								: "The editor opens as soon as it has loaded."
+						}
 					/>
 				</div>
 			</Show>
@@ -240,17 +273,13 @@ function PlayWhenReady(props: {
 				aria-busy={requested() || undefined}
 				class="flex fixed z-10 justify-center items-center rounded-full size-8 bg-ed-text-1 text-ed-card transition-opacity hover:opacity-90"
 				style={{ left: `${bounds.left}px`, top: `${bounds.top}px` }}
-				onClick={() => {
-					const next = !requested();
-					setRequested(next);
-					requestPlayWhenReady(next);
-				}}
+				onClick={() => requestPlayWhenReady(!requested())}
 			>
 				<Show when={requested()} fallback={<IconCapPlay class="size-3" />}>
 					<IconCapPause class="size-3" />
 					<span
 						aria-hidden="true"
-						class="absolute -inset-[3px] rounded-full border-2 border-transparent border-t-ed-text-1 animate-spin motion-reduce:animate-none"
+						class="absolute -inset-[3px] rounded-full border-2 border-transparent border-t-ed-text-1 animate-spin will-change-transform motion-reduce:animate-none"
 					/>
 				</Show>
 			</button>
@@ -262,10 +291,14 @@ export function EditorSkeleton(
 	props: { model?: PreparingEditorModel; playWhenReady?: boolean } = {},
 ) {
 	const model = props.model ?? usePreparingEditorModel();
+	const compact = editorLayout().compact;
 	const [playButton, setPlayButton] = createSignal<HTMLButtonElement>();
 	const [preview, setPreview] = createSignal<HTMLDivElement>();
 	// A recording still being prepared plays from its own controls instead.
-	const playWhenReady = () => !!props.playWhenReady && !model.canPlay();
+	// On the web every loading screen shows it, including the editor's own
+	// while it loads the project after its code has.
+	const playWhenReady = () =>
+		(props.playWhenReady ?? isWebEditor) && !model.canPlay();
 	const [layoutRef, setLayoutRef] = createSignal<HTMLDivElement>();
 	const bounds = createElementBounds(layoutRef);
 	const [savedHeight] = makePersisted(createSignal<number | null>(null), {
@@ -287,10 +320,12 @@ export function EditorSkeleton(
 			<div
 				ref={setLayoutRef}
 				data-tauri-drag-region
+				data-editor-grid
 				class="flex overflow-y-hidden flex-col flex-1 gap-2 pb-2 w-full min-h-0 leading-5 opacity-55"
 				inert
 			>
 				<div
+					data-editor-player-row
 					class="flex overflow-y-hidden flex-row flex-1 min-h-0 gap-2 px-2"
 					style={{ "min-height": `${layout().minPlayerHeight}px` }}
 				>
@@ -302,13 +337,16 @@ export function EditorSkeleton(
 					<PreparingSidebar />
 				</div>
 				<Show when={isWebEditor}>
-					<div class="flex-none px-2">
+					<div data-editor-clip-strip class="flex-none px-2">
 						<div class="h-[48px] rounded-xl bg-ed-card shadow-ed-card" />
 					</div>
 				</Show>
 				<div
+					data-editor-timeline
 					class="flex-none min-h-0 px-2 overflow-hidden"
-					style={{ height: `${layout().timelineHeight}px` }}
+					style={
+						compact() ? undefined : { height: `${layout().timelineHeight}px` }
+					}
 				>
 					<PreparingTimeline model={model} />
 				</div>
