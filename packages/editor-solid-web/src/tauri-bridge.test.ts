@@ -3,6 +3,7 @@ import { $PROXY } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import {
 	browserEditorPreviewConfig,
+	setBrowserEditorPreviewConfig,
 	setBrowserEditorVideoId,
 } from "./browser-frame-socket";
 import { EditorCaptionCacheMemo } from "./caption-cache-memo";
@@ -100,6 +101,27 @@ test("a save landing after newer edits leaves the browser preview on them", asyn
 		saves[0]?.();
 		await save;
 		expect(browserEditorPreviewConfig()).toEqual(newer);
+	} finally {
+		setBrowserEditorVideoId(null);
+		transport.dispose();
+		channel.port2.close();
+	}
+});
+
+test("a save seeds a browser preview that has no config yet", async () => {
+	const channel = new MessageChannel();
+	const transport = new PortEditorTransport(channel.port1);
+	channel.port2.onmessage = (event: MessageEvent<unknown>) => {
+		const message = event.data as Record<string, unknown>;
+		channel.port2.postMessage({ kind: "result", id: message.id, value: null });
+	};
+	channel.port2.start();
+	setBrowserEditorVideoId("video");
+	await setBrowserEditorPreviewConfig(null);
+	try {
+		const saved = { timeline: { segments: [{ start: 0, end: 4 }] } };
+		await transport.invoke("setProjectConfig", [saved]);
+		expect(browserEditorPreviewConfig()).toEqual(saved);
 	} finally {
 		setBrowserEditorVideoId(null);
 		transport.dispose();

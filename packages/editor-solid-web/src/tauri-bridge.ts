@@ -12,6 +12,7 @@ import {
 import { WebEditorAudio } from "./audio-player";
 import { BrowserEditorCommands } from "./browser-editor-commands";
 import {
+	browserEditorPreviewConfig,
 	browserEditorPreviewEnabled,
 	pauseBrowserEditorPreview,
 	playBrowserEditorPreview,
@@ -541,10 +542,16 @@ export class PortEditorTransport {
 				value = await this.request("invoke", name, fullConfigArgs);
 			}
 			if (isConfigCommand) {
-				// The browser preview is not given the saved config: it already
-				// shows every edit through updateProjectConfigInMemory, and a save
-				// lands later (seconds on a poor link), by when the editor may have
-				// moved on or hidden tracks the saved config keeps.
+				// A save lands seconds later on a poor link, by when the preview
+				// may show newer edits, so it only seeds a preview that has no
+				// config yet: a recording opened without one, saved before any
+				// edit reached the preview.
+				if (
+					browserEditorPreviewEnabled() &&
+					browserEditorPreviewConfig() == null
+				) {
+					await setBrowserEditorPreviewConfig(fullConfigArgs?.[0] ?? args[0]);
+				}
 				if (name === "setProjectConfig") this.savedCaptionCache = captionCache;
 				else this.nativeCaptionCache = captionCache;
 			}
