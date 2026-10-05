@@ -1,4 +1,5 @@
 import type { Input } from "mediabunny";
+import { connectionBytes } from "./browser-network-budget";
 import {
 	layoutFetch,
 	MediaStorageError,
@@ -30,6 +31,8 @@ const CACHE_BYTES = 16 * 1024 * 1024;
 /// cache holds and evict the start of what it fetched: the fragments the next
 /// seek along the timeline walks, one round trip each.
 const READ_AHEAD_BYTES = CACHE_BYTES / 4;
+const READ_AHEAD_SECONDS = 3;
+const MIN_READ_AHEAD_BYTES = 1024 * 1024;
 /// The probe and the preview open the same file a moment apart; the input
 /// outlives its last user briefly so the second one reuses what the first
 /// read.
@@ -64,9 +67,16 @@ export function limitReadAhead(source: object, bytes = READ_AHEAD_BYTES) {
 	if (!options || typeof profile !== "function") return;
 	options.prefetchProfile = ((start, end, workers) => {
 		const range = (profile as PrefetchProfile)(start, end, workers);
+		// A slow connection spends seconds on read-ahead the next seek may not
+		// use, and the next seek waits behind it.
+		const ahead = connectionBytes(
+			bytes,
+			READ_AHEAD_SECONDS,
+			Math.min(bytes, MIN_READ_AHEAD_BYTES),
+		);
 		return {
 			start: range.start,
-			end: Math.max(end, Math.min(range.end, end + bytes)),
+			end: Math.max(end, Math.min(range.end, end + ahead)),
 		};
 	}) satisfies PrefetchProfile;
 }

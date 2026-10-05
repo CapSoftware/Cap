@@ -17,6 +17,7 @@ import {
 } from "./browser-frame-socket";
 import { acquireMediaInputAt } from "./browser-media-inputs";
 import { probeBrowserMedia } from "./browser-media-probe";
+import { whenMediaReadsIdle } from "./browser-network-budget";
 import { loadBrowserRenderer } from "./browser-renderer";
 import {
 	BrowserEditorSourceCatalog,
@@ -98,10 +99,22 @@ function waveform(url: string, signal: AbortSignal) {
 		signal.addEventListener("abort", cancel, { once: true });
 		worker.addEventListener(
 			"message",
-			(event: MessageEvent<{ peaks: number[] } | { error: string }>) => {
+			(
+				event: MessageEvent<
+					{ peaks: number[] } | { error: string } | { gate: number }
+				>,
+			) => {
+				const message = event.data;
+				if ("gate" in message) {
+					void whenMediaReadsIdle(signal).then(
+						(bytes) => worker.postMessage({ grant: message.gate, bytes }),
+						() => undefined,
+					);
+					return;
+				}
 				finish();
-				if ("peaks" in event.data) resolve(event.data.peaks);
-				else reject(new Error(event.data.error));
+				if ("peaks" in message) resolve(message.peaks);
+				else reject(new Error(message.error));
 			},
 		);
 		worker.addEventListener("error", () => {
@@ -153,7 +166,7 @@ async function cachedWaveform(url: string, signal: AbortSignal) {
 			return;
 		}
 		signal.addEventListener("abort", abort, { once: true });
-		timer = setTimeout(() => finish(), 10_000);
+		timer = setTimeout(() => finish(), 60_000);
 		unsubscribe = onBrowserPreviewSettled(() => finish());
 		if (settled) unsubscribe();
 	});

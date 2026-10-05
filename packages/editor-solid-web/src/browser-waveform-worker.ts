@@ -11,8 +11,11 @@ import {
 } from "mediabunny";
 import { type ByteRange, sparseAudioPlan } from "./mp4-audio-ranges";
 
-type WaveformRequest = { url: string };
-type WaveformResponse = { peaks: number[] } | { error: string };
+type WaveformRequest = { url: string } | { grant: number; bytes: number };
+type WaveformResponse =
+	| { peaks: number[] }
+	| { error: string }
+	| { gate: number };
 
 const scope = self as unknown as {
 	addEventListener: (
@@ -21,6 +24,54 @@ const scope = self as unknown as {
 	) => void;
 	postMessage: (message: WaveformResponse) => void;
 };
+
+const grants = new Map<number, (bytes: number) => void>();
+let nextGate = 0;
+
+/// Waits until the editor's own media reads leave the connection idle, and
+/// returns how much one read may take before handing it back.
+function gate() {
+	const id = nextGate++;
+	return new Promise<number>((resolve) => {
+		grants.set(id, resolve);
+		scope.postMessage({ gate: id });
+	});
+}
+
+/// The file in order as ranged reads, each one waiting for the connection.
+/// Null when the storage ignores ranges.
+async function gatedStream(url: string) {
+	let position = 0;
+	let size: number | null = null;
+	const first = await gate();
+	const opening = await fetchRange(url, 0, first, false).catch(() => null);
+	if (!opening) return null;
+	size = opening.size;
+	position = opening.bytes.byteLength;
+	let pending: Uint8Array | null = opening.bytes;
+	return new ReadableStream<Uint8Array>({
+		async pull(controller) {
+			if (pending) {
+				controller.enqueue(pending);
+				pending = null;
+				return;
+			}
+			if (size === null || position >= size) {
+				controller.close();
+				return;
+			}
+			const bytes = await gate();
+			const read = await fetchRange(
+				url,
+				position,
+				Math.min(size, position + bytes),
+				false,
+			);
+			position += read.bytes.byteLength;
+			controller.enqueue(read.bytes);
+		},
+	});
+}
 
 /// Hands every decoded sample of the track to `onSample`, in order, as
 /// mediabunny's `AudioSampleSink` would. Its sample iterator trims a one
@@ -96,6 +147,7 @@ async function decodeEach(
 /// decoded off the main thread so long recordings don't stall the editor.
 /// The file streams through once: ranged reads ahead of a decoder this slow
 /// get dropped and fetched again, several times the file for long audio.
+/// Every read waits for the preview's media reads, which come first.
 async function waveform(url: string) {
 	const ranged = await rangedAudioSource(url).catch(() => null);
 	if (ranged) {
@@ -103,6 +155,9 @@ async function waveform(url: string) {
 			return await peaksFrom(ranged);
 		} catch {}
 	}
+	const stream = await gatedStream(url);
+	if (stream) return peaksFrom(new ReadableStreamSource(stream));
+	await gate();
 	const response = await fetch(url, { priority: "low", cache: "no-store" });
 	if (!response.ok || !response.body) {
 		throw new Error("Editor waveform audio could not load");
@@ -190,7 +245,13 @@ function windows(range: ByteRange, bytes: number) {
 	return out;
 }
 
-async function fetchRange(url: string, start: number, end: number) {
+async function fetchRange(
+	url: string,
+	start: number,
+	end: number,
+	gated = true,
+) {
+	if (gated) await gate();
 	const response = await fetch(url, {
 		headers: { Range: `bytes=${start}-${end - 1}` },
 		priority: "low",
@@ -322,7 +383,13 @@ async function rangedAudioSource(url: string): Promise<Source | null> {
 }
 
 scope.addEventListener("message", (event) => {
-	void waveform(event.data.url).then(
+	const message = event.data;
+	if ("grant" in message) {
+		grants.get(message.grant)?.(message.bytes);
+		grants.delete(message.grant);
+		return;
+	}
+	void waveform(message.url).then(
 		(peaks) => scope.postMessage({ peaks }),
 		(error: unknown) =>
 			scope.postMessage({

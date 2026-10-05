@@ -1,3 +1,4 @@
+import { startMediaRead } from "./browser-network-budget";
 import {
 	emptyMfra,
 	endsWithMfro,
@@ -35,6 +36,7 @@ const MAX_PROBES = 10;
 /// bytes per second, so its entry point is found closer to the target.
 export const NEAR_SEEK_BYTES = 1024 * 1024;
 const NEAR_AUDIO_BYTES = 128 * 1024;
+
 const MAX_ENTRIES = 24;
 /// Probe windows kept so the decoder that starts at a found fragment reads
 /// its first bytes from memory.
@@ -254,6 +256,7 @@ export class RemoteMedia {
 
 	private async network(start: number, end: number, signal?: AbortSignal) {
 		let response: Response;
+		const read = startMediaRead(signal);
 		try {
 			// Chrome's HTTP cache lets one request at a time use a URL's entry,
 			// so a second range of the same file waits for the first to finish.
@@ -265,6 +268,7 @@ export class RemoteMedia {
 				signal,
 			});
 		} catch (cause) {
+			read.abandon();
 			if (signal?.aborted) throw cause;
 			throw new MediaStorageError(502);
 		}
@@ -273,12 +277,13 @@ export class RemoteMedia {
 				? rangeResponseExtent(response.headers, start, end, this.sizeValue)
 				: null;
 		if (!extent || !response.body) {
+			read.abandon();
 			await response.body?.cancel().catch(() => undefined);
 			throw new MediaStorageError(response.ok ? 502 : response.status);
 		}
 		if (this.sizeValue === null) this.sizeValue = extent.size;
 		return {
-			body: response.body,
+			body: read.body(response.body),
 			start,
 			end: extent.end,
 			size: extent.size,
