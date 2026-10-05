@@ -546,7 +546,6 @@ export function closeAfter(work: Promise<unknown>, close: () => Promise<void>) {
 	return pending;
 }
 
-/// Waits for sessions closing after their Saves, up to `limitMs`.
 export async function settlePendingCloses(limitMs = SHUTDOWN_SAVE_WAIT_MS) {
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	await Promise.race([
