@@ -19,14 +19,23 @@ const MAX_PARALLEL_PART_UPLOADS = 3;
 const MAX_PENDING_UPLOAD_BYTES = 128 * 1024 * 1024;
 const FINAL_BLOB_PART_SIZE_BYTES = 16 * 1024 * 1024;
 const DRIVE_PART_SIZE_BYTES = 16 * 1024 * 1024;
+// A part is stalled once no part has made progress for this long: on a slow
+// uplink the parts share the connection unevenly, and one can sit for a
+// minute or more while the others move.
 const PART_UPLOAD_STALL_TIMEOUT_MS = 30_000;
+// Once the browser has taken every byte of a part, progress stops while the
+// OS sends what it buffered, which on a slow uplink with a deep send buffer
+// can take minutes, so the wait for the reply is longer.
+const PART_UPLOAD_DRAIN_TIMEOUT_MS = 5 * 60 * 1000;
 // Byte progress re-renders whoever listens, so it is reported at most this
 // often per part; status changes are always reported.
 const PART_PROGRESS_INTERVAL_MS = 250;
 // Part URLs are signed an hour ahead; one signed in advance is only trusted
 // for half of that.
 const PRESIGNED_PART_REUSE_MS = 30 * 60 * 1000;
-const PART_UPLOAD_REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
+// Long enough for a part to crawl up a slow uplink alongside the others;
+// a connection that stops moving is caught by the stall timeout first.
+const PART_UPLOAD_REQUEST_TIMEOUT_MS = 20 * 60 * 1000;
 // JSON control-plane calls (initiate/presign/complete/abort) are always
 // timed: a lost response would otherwise wedge the pipeline — a hung presign
 // stalls its part's retry loop until the pending-bytes overflow guard kills
@@ -356,6 +365,7 @@ export class InstantRecordingUploader {
 		(error: CancelledUploadError) => void
 	>();
 	private readonly stallTimeouts = new Set<number>();
+	private partProgressAt = 0;
 	private processingStarted = true;
 	private completionUncertain = false;
 	private queuedBytes = 0;
@@ -919,6 +929,7 @@ export class InstantRecordingUploader {
 				this.activeRequests.delete(partNumber);
 			};
 			let stallTimeoutId: number | null = null;
+			let sentAt: number | null = null;
 			const clearStallTimeout = () => {
 				if (stallTimeoutId === null) {
 					return;
@@ -932,7 +943,13 @@ export class InstantRecordingUploader {
 				const timeoutId = window.setTimeout(() => {
 					this.stallTimeouts.delete(timeoutId);
 					stallTimeoutId = null;
-					xhr.abort();
+					const now = Date.now();
+					if (
+						now - this.partProgressAt < PART_UPLOAD_STALL_TIMEOUT_MS ||
+						(sentAt !== null && now - sentAt < PART_UPLOAD_DRAIN_TIMEOUT_MS)
+					)
+						refreshStallTimeout();
+					else xhr.abort();
 				}, PART_UPLOAD_STALL_TIMEOUT_MS);
 				stallTimeoutId = timeoutId;
 				this.stallTimeouts.add(timeoutId);
@@ -941,6 +958,8 @@ export class InstantRecordingUploader {
 
 			let progressReportedAt = 0;
 			xhr.upload.onprogress = (event) => {
+				this.partProgressAt = Date.now();
+				if (event.loaded >= part.size) sentAt ??= this.partProgressAt;
 				refreshStallTimeout();
 				const now = performance.now();
 				if (now - progressReportedAt < PART_PROGRESS_INTERVAL_MS) return;
@@ -958,6 +977,7 @@ export class InstantRecordingUploader {
 			};
 
 			xhr.onload = () => {
+				this.partProgressAt = Date.now();
 				clearStallTimeout();
 				clearRequest();
 				if (
