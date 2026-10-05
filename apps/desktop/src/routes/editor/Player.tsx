@@ -617,10 +617,6 @@ export function PlayerContent(props: {
 	);
 }
 
-/**
- * Aspect ratio, crop and frame: the player's toolbar, or the settings bar on
- * a phone, where the toolbar folds away.
- */
 export function PreviewTools() {
 	const {
 		previewStyle,
@@ -852,7 +848,6 @@ function PreviewCanvas(props: {
 		initializedCanvas = canvas;
 	});
 
-	// A phone's preview keeps a slimmer frame around the video.
 	const padding = () => (editorLayout().phone() ? 8 : 16);
 	// Every frame arrives as a new object; the preview's size only changes
 	// with its dimensions.
