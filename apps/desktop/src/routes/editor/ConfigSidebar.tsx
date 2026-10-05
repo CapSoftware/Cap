@@ -32,6 +32,7 @@ import {
 	createSignal,
 	For,
 	Index,
+	type JSX,
 	lazy,
 	on,
 	onCleanup,
@@ -78,6 +79,7 @@ import {
 	type XY,
 	type ZoomSegment,
 } from "~/utils/tauri";
+import IconLucideChevronDown from "~icons/lucide/chevron-down";
 import IconLucideColumns2 from "~icons/lucide/columns-2";
 import IconLucideEyeOff from "~icons/lucide/eye-off";
 import IconLucideKeyboard from "~icons/lucide/keyboard";
@@ -447,7 +449,18 @@ const TAB_IDS = {
 	captions: "captions",
 } as const;
 
-export function ConfigSidebar() {
+/**
+ * The sidebar as a sheet (the web editor below 1024px wide): it rests as a
+ * bar of its tab icons, and choosing one opens it over the timeline.
+ */
+export type ConfigSidebarSheet = {
+	open: () => boolean;
+	setOpen: (open: boolean) => void;
+	/** Extra controls for the resting bar (the player's tools on a phone). */
+	tools?: JSX.Element;
+};
+
+export function ConfigSidebar(props: { sheet?: ConfigSidebarSheet }) {
 	const context = useEditorContext();
 	return (
 		<Show when={context.styleScopeToken()} keyed>
@@ -459,7 +472,7 @@ export function ConfigSidebar() {
 						setProject: context.createStyleProjectSetter(),
 					}}
 				>
-					<ConfigSidebarContent />
+					<ConfigSidebarContent sheet={props.sheet} />
 				</EditorStyleContext.Provider>
 			)}
 		</Show>
@@ -583,7 +596,7 @@ function StudioSoundCard() {
 	);
 }
 
-function ConfigSidebarContent() {
+function ConfigSidebarContent(props: { sheet?: ConfigSidebarSheet }) {
 	const {
 		project,
 		selectedStyle,
@@ -694,6 +707,102 @@ function ConfigSidebarContent() {
 		}
 	});
 
+	// Rendered inside the Tabs below (it reads their context), either on its
+	// own as the sidebar's header or within the sheet's bar.
+	const tabList = () => (
+		<KTabs.List
+			class={
+				props.sheet
+					? "flex flex-1 min-w-0 flex-row justify-around items-center"
+					: "flex sticky top-0 z-60 flex-row justify-around items-center px-2.5 h-[46px] border-b border-ed-line shrink-0 bg-ed-card"
+			}
+		>
+			<For
+				each={[
+					{ id: TAB_IDS.background, icon: IconCapImage },
+					{
+						id: TAB_IDS.camera,
+						icon: IconCapCamera,
+						disabled: editorInstance.recordings.segments.every(
+							(s) => s.camera === null,
+						),
+					},
+					{ id: TAB_IDS.audio, icon: IconCapAudioOn },
+					{
+						id: TAB_IDS.cursor,
+						icon: IconCapCursor,
+						disabled: !meta().hasRecordedCursorData,
+					},
+					...(isWebEditor
+						? []
+						: [{ id: TAB_IDS.keyboard, icon: IconLucideKeyboard }]),
+					{
+						id: TAB_IDS.captions,
+						icon: IconCapMessageBubble,
+					},
+					// { id: "hotkeys" as const, icon: IconCapHotkeys },
+				].filter(
+					(item) =>
+						!(meta().audioOnly && item.id === "cursor") &&
+						(!selectedStyle() ||
+							item.id === "background" ||
+							item.id === "camera" ||
+							item.id === "cursor"),
+				)}
+			>
+				{(item) => (
+					<KTabs.Trigger
+						value={item.id}
+						aria-label={
+							item.id === "background"
+								? "Background"
+								: item.id.charAt(0).toUpperCase() + item.id.slice(1)
+						}
+						title={
+							item.id === "background"
+								? "Background"
+								: item.id.charAt(0).toUpperCase() + item.id.slice(1)
+						}
+						class={cx(
+							"flex justify-center items-center transition-colors shrink-0 outline-hidden focus-visible:ring-1 focus-visible:ring-ed-accent text-ed-text-2 hover:bg-ed-ctl hover:text-ed-text-1 data-selected:bg-ed-ctl-hover data-selected:text-ed-text-1 disabled:text-ed-text-3 disabled:opacity-60 disabled:hover:bg-transparent",
+							props.sheet
+								? "size-10 rounded-[10px]"
+								: "w-10 h-[30px] rounded-[9px]",
+						)}
+						onClick={() => {
+							// Choosing the tab that's showing puts the sheet away;
+							// any other tab opens it.
+							const showing =
+								!!props.sheet?.open() &&
+								state.selectedTab === item.id &&
+								!sidebarSelection() &&
+								editorState.timeline.audioPicker === null &&
+								editorState.timeline.audioReplace === null;
+							props.sheet?.setOpen(!showing);
+							// Clear any active selection first
+							if (sidebarSelection()) {
+								setEditorState("timeline", "selection", null);
+							}
+							if (editorState.timeline.audioPicker !== null) {
+								setEditorState("timeline", "audioPicker", null);
+							}
+							if (editorState.timeline.audioReplace !== null) {
+								setEditorState("timeline", "audioReplace", null);
+							}
+							setState("selectedTab", item.id);
+							scrollRef.scrollTo({
+								top: 0,
+							});
+						}}
+						disabled={item.disabled}
+					>
+						<Dynamic component={item.icon} class="size-4" />
+					</KTabs.Trigger>
+				)}
+			</For>
+		</KTabs.List>
+	);
+
 	return (
 		<KTabs
 			value={
@@ -702,83 +811,51 @@ function ConfigSidebarContent() {
 					: state.selectedTab
 			}
 			class="flex overflow-hidden z-10 flex-col flex-1 min-h-0 max-w-104 rounded-xl shrink-0 bg-ed-card shadow-ed-card"
+			data-sidebar-root
+			data-sheet-closed={props.sheet && !props.sheet.open() ? "" : undefined}
 		>
-			<KTabs.List class="flex sticky top-0 z-60 flex-row justify-around items-center px-2.5 h-[46px] border-b border-ed-line shrink-0 bg-ed-card">
-				<For
-					each={[
-						{ id: TAB_IDS.background, icon: IconCapImage },
-						{
-							id: TAB_IDS.camera,
-							icon: IconCapCamera,
-							disabled: editorInstance.recordings.segments.every(
-								(s) => s.camera === null,
-							),
-						},
-						{ id: TAB_IDS.audio, icon: IconCapAudioOn },
-						{
-							id: TAB_IDS.cursor,
-							icon: IconCapCursor,
-							disabled: !meta().hasRecordedCursorData,
-						},
-						...(isWebEditor
-							? []
-							: [{ id: TAB_IDS.keyboard, icon: IconLucideKeyboard }]),
-						{
-							id: TAB_IDS.captions,
-							icon: IconCapMessageBubble,
-						},
-						// { id: "hotkeys" as const, icon: IconCapHotkeys },
-					].filter(
-						(item) =>
-							!(meta().audioOnly && item.id === "cursor") &&
-							(!selectedStyle() ||
-								item.id === "background" ||
-								item.id === "camera" ||
-								item.id === "cursor"),
-					)}
-				>
-					{(item) => (
-						<KTabs.Trigger
-							value={item.id}
-							aria-label={
-								item.id === "background"
-									? "Background"
-									: item.id.charAt(0).toUpperCase() + item.id.slice(1)
+			<Show when={props.sheet} fallback={tabList()}>
+				{(sheet) => (
+					<div
+						data-sheet-bar
+						class="flex sticky top-0 z-60 flex-row gap-1 items-center px-1.5 h-[52px] border-b shrink-0 bg-ed-card transition-colors"
+						classList={{
+							"border-ed-line": sheet().open(),
+							"border-transparent": !sheet().open(),
+						}}
+					>
+						{tabList()}
+						<Show
+							when={sheet().open()}
+							fallback={
+								<Show when={sheet().tools}>
+									<div class="w-px h-5 shrink-0 bg-ed-line-strong" />
+									<div data-sheet-tools class="flex shrink-0 items-center">
+										{sheet().tools}
+									</div>
+								</Show>
 							}
-							title={
-								item.id === "background"
-									? "Background"
-									: item.id.charAt(0).toUpperCase() + item.id.slice(1)
-							}
-							class="flex justify-center items-center w-10 h-[30px] rounded-[9px] transition-colors shrink-0 outline-hidden focus-visible:ring-1 focus-visible:ring-ed-accent text-ed-text-2 hover:bg-ed-ctl hover:text-ed-text-1 data-selected:bg-ed-ctl-hover data-selected:text-ed-text-1 disabled:text-ed-text-3 disabled:opacity-60 disabled:hover:bg-transparent"
-							onClick={() => {
-								// Clear any active selection first
-								if (sidebarSelection()) {
-									setEditorState("timeline", "selection", null);
-								}
-								if (editorState.timeline.audioPicker !== null) {
-									setEditorState("timeline", "audioPicker", null);
-								}
-								if (editorState.timeline.audioReplace !== null) {
-									setEditorState("timeline", "audioReplace", null);
-								}
-								setState("selectedTab", item.id);
-								scrollRef.scrollTo({
-									top: 0,
-								});
-							}}
-							disabled={item.disabled}
 						>
-							<Dynamic component={item.icon} class="size-4" />
-						</KTabs.Trigger>
-					)}
-				</For>
-			</KTabs.List>
+							<button
+								type="button"
+								aria-label="Close settings"
+								title="Close settings"
+								class="flex justify-center items-center rounded-[10px] transition-colors size-10 shrink-0 outline-hidden text-ed-text-2 hover:bg-ed-ctl hover:text-ed-text-1 focus-visible:ring-1 focus-visible:ring-ed-accent"
+								onClick={() => sheet().setOpen(false)}
+							>
+								<IconLucideChevronDown class="size-4" />
+							</button>
+						</Show>
+					</div>
+				)}
+			</Show>
 			<div
 				ref={scrollRef}
 				style={{
 					"--margin-top-scroll": "5px",
 				}}
+				inert={props.sheet && !props.sheet.open()}
+				data-sheet-content
 				class="custom-scroll overscroll-contain overflow-x-hidden overflow-y-auto text-[0.875rem] flex-1 min-h-0"
 				classList={{
 					hidden:
@@ -1152,6 +1229,8 @@ function ConfigSidebarContent() {
 				style={{
 					"--margin-top-scroll": "5px",
 				}}
+				inert={props.sheet && !props.sheet.open()}
+				data-sheet-content
 				class="custom-scroll min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain pt-3.5 px-4 pb-4 text-[0.875rem] space-y-3.5 bg-ed-card z-50"
 				classList={{
 					hidden:

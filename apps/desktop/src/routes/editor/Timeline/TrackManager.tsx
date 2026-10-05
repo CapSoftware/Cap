@@ -185,6 +185,8 @@ export function TrackManager(props: {
 		>
 			<Popover.Anchor class="flex size-full items-center">
 				<Popover.Trigger
+					data-add-track
+					aria-label="Add track"
 					class={cx(
 						"group/trigger relative z-30 flex h-6 shrink-0 items-center gap-[5px] rounded-md pl-1.5 pr-2 outline-hidden",
 						"bg-ed-text-1 text-[12px] font-medium text-ed-card",
@@ -193,7 +195,9 @@ export function TrackManager(props: {
 					onMouseDown={(e) => e.stopPropagation()}
 				>
 					<IconLucidePlus class="size-3 shrink-0 transition-transform duration-200 ease-out group-data-[expanded]/trigger:rotate-45" />
-					<span class="whitespace-nowrap">Add track</span>
+					<span data-add-track-label class="whitespace-nowrap">
+						Add track
+					</span>
 				</Popover.Trigger>
 			</Popover.Anchor>
 			<Popover.Portal>

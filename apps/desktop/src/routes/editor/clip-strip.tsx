@@ -246,7 +246,7 @@ export function ClipStrip() {
 
 	return (
 		<div class="flex h-[48px] shrink-0 items-center gap-3 rounded-xl bg-ed-card pl-3.5 pr-1.5 shadow-ed-card">
-			<div class="flex shrink-0 items-baseline gap-1.5">
+			<div data-clip-strip-label class="flex shrink-0 items-baseline gap-1.5">
 				<span class="text-[13px] font-medium text-ed-text-1">Clips</span>
 				<span class="text-[12px] tabular-nums text-ed-text-3">
 					{formatDuration(total())}

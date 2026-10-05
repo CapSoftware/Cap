@@ -111,6 +111,7 @@ export function Header(props: {
 	return (
 		<div
 			data-tauri-drag-region
+			data-editor-header
 			class="flex relative shrink-0 flex-row items-center w-full h-13 pr-3 max-[900px]:grid max-[900px]:grid-cols-1 max-[900px]:grid-rows-[36px_36px] max-[900px]:h-[72px] max-[900px]:pr-2"
 		>
 			<div
@@ -137,11 +138,17 @@ export function Header(props: {
 						readOnly={titleReadOnly() || props.disabled === true}
 						setReadOnly={setTitleReadOnly}
 					/>
-					<span class="shrink-0 text-[13px] text-ed-text-3">.cap</span>
+					<span
+						data-header-extension
+						class="shrink-0 text-[13px] text-ed-text-3"
+					>
+						.cap
+					</span>
 				</div>
 
 				<div
 					inert={props.disabled}
+					data-header-delete
 					class="flex gap-0.5 items-center ml-1.5 shrink-0"
 				>
 					<Show when={!isWebEditor}>
@@ -177,6 +184,7 @@ export function Header(props: {
 
 			<div
 				data-tauri-drag-region
+				data-header-actions
 				inert={props.disabled}
 				class="flex shrink-0 flex-row items-center gap-1 max-[900px]:justify-end"
 			>

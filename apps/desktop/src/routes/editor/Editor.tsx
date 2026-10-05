@@ -65,12 +65,15 @@ import { EditorSkeleton } from "./editor-skeleton";
 import { createFocusMode } from "./focus-mode";
 import { Header, type TitleSaveRegistration } from "./Header";
 import { ImportProgress } from "./ImportProgress";
-import { PlayerContent } from "./Player";
+import { PlayerContent, PreviewTools } from "./Player";
 import { usePreparingEditor } from "./preparing-editor-context";
+import { editorLayout } from "./responsive-layout";
 import { Timeline } from "./Timeline";
+import { bridgeTouchToMouse } from "./touch-mouse-bridge";
 import { Dialog, DialogContent, EditorButton, Input, Subfield } from "./ui";
 import { applyAudioOnlySetup, needsAudioOnlySetup } from "./waveform";
 import { WebDropImport } from "./web-drop-import";
+import "./web-layout.css";
 
 // Deferred surfaces: these are not visible at first paint (export mode,
 // transcript panel, clips sidebar), so their code is split out of the editor
@@ -454,6 +457,82 @@ function Inner(props: {
 
 	const focusMode = isWebEditor ? createFocusMode() : undefined;
 	const focused = () => focusMode?.active() ?? false;
+
+	// Below 1024px (web only) the settings sidebar is a sheet over the
+	// timeline, resting as a bar of its tab icons until one is chosen.
+	const layout = editorLayout();
+	const [sheetOpen, setSheetOpen] = createSignal(false);
+	const sheet = {
+		open: () => layout.compact() && sheetOpen(),
+		setOpen: setSheetOpen,
+	};
+	const sheetSelectionKey = () => {
+		const selection = editorState.timeline.selection;
+		if (!selection || selection.type === "clip" || selection.type === "style")
+			return "";
+		return `${selection.type}:${"indices" in selection ? selection.indices.join(",") : selection.index}`;
+	};
+	// Tapping a segment opens its settings, as the sidebar shows them at
+	// once on a wide screen; dragging one (to move, trim or draw it) leaves
+	// the timeline in view.
+	let press: { selection: string; x: number; y: number } | null = null;
+	createEventListener(
+		window,
+		"pointerdown",
+		(event: PointerEvent) => {
+			press = {
+				selection: sheetSelectionKey(),
+				x: event.clientX,
+				y: event.clientY,
+			};
+		},
+		{ capture: true },
+	);
+	createEventListener(window, "click", (event: MouseEvent) => {
+		const start = press;
+		press = null;
+		if (!layout.compact() || !start) return;
+		if (Math.hypot(event.clientX - start.x, event.clientY - start.y) > 6)
+			return;
+		const key = sheetSelectionKey();
+		if (key && key !== start.selection) setSheetOpen(true);
+	});
+	createEffect(
+		on(
+			() =>
+				editorState.timeline.audioPicker !== null ||
+				editorState.timeline.audioReplace !== null,
+			(picking) => {
+				if (picking && layout.compact()) setSheetOpen(true);
+			},
+			{ defer: true },
+		),
+	);
+	createEventListener(window, "keydown", (event: KeyboardEvent) => {
+		if (event.key === "Escape" && sheet.open() && !event.defaultPrevented)
+			setSheetOpen(false);
+	});
+	// On a phone the player's own toolbar folds away and its tools join the
+	// sheet's bar. Built once per layout change, not on every read.
+	const sidebarSheet = createMemo(() =>
+		layout.compact()
+			? {
+					open: sheet.open,
+					setOpen: setSheetOpen,
+					tools: layout.phone() ? <PreviewTools /> : undefined,
+				}
+			: undefined,
+	);
+
+	// Touch screens drag the timeline and the preview's handles as a mouse
+	// would; the timeline also pinches to zoom and scrolls with two fingers.
+	const setPlayerCardRef = (element: HTMLDivElement) => {
+		if (isWebEditor) onCleanup(bridgeTouchToMouse(element));
+	};
+	const setTimelineCardRef = (element: HTMLDivElement) => {
+		if (isWebEditor) onCleanup(bridgeTouchToMouse(element, { pinch: true }));
+	};
+
 	// Capture phase, so Esc is judged before the timeline and canvas clear the
 	// selection it would otherwise dismiss first.
 	createEventListener(
@@ -1040,6 +1119,8 @@ function Inner(props: {
 			<div
 				class="relative flex flex-col flex-1 min-h-0"
 				aria-busy={!editorReady() && !preparingSession?.handoffFailed()}
+				data-editor-root
+				data-focused={focused() ? "" : undefined}
 			>
 				{/* Hidden rather than unmounted, so a title edit and its save
 				    registration survive focus mode. */}
@@ -1095,6 +1176,12 @@ function Inner(props: {
 						ref={setLayoutRef}
 						class="flex overflow-hidden flex-col flex-1 gap-2 pb-2 min-h-0"
 						classList={{ "pt-2": focused() }}
+						data-editor-grid
+						style={
+							layout.compact()
+								? { "--timeline-hug": `${huggedTimelineHeight()}px` }
+								: undefined
+						}
 					>
 						<div
 							ref={setSplitContainerRef}
@@ -1102,8 +1189,11 @@ function Inner(props: {
 							style={{
 								"min-height": `${layoutLimits().minPlayerHeight}px`,
 							}}
+							data-editor-player-row
 						>
 							<div
+								ref={setPlayerCardRef}
+								data-editor-player
 								class="flex overflow-hidden flex-col rounded-xl bg-ed-card shadow-ed-card"
 								style={{
 									flex:
@@ -1114,7 +1204,9 @@ function Inner(props: {
 								}}
 							>
 								<PlayerContent
-									compactness={layoutLimits().compactness}
+									compactness={
+										layout.compact() ? 0 : layoutLimits().compactness
+									}
 									focusMode={focusMode}
 								/>
 							</div>
@@ -1122,6 +1214,8 @@ function Inner(props: {
 								<div
 									class="ml-2 flex min-h-0 w-104 min-w-104 flex-none overflow-hidden"
 									classList={{ hidden: focused() }}
+									data-editor-sheet
+									data-open={sheet.open() ? "" : undefined}
 								>
 									<div
 										class="overflow-hidden min-h-0"
@@ -1131,7 +1225,7 @@ function Inner(props: {
 											hidden: isClipsMode(),
 										}}
 									>
-										<ConfigSidebar />
+										<ConfigSidebar sheet={sidebarSheet()} />
 									</div>
 									<Show when={clipsSidebarMounted()}>
 										<Suspense>
@@ -1146,6 +1240,7 @@ function Inner(props: {
 								<div
 									class="flex-none flex items-center justify-center cursor-col-resize select-none group z-10"
 									classList={{ hidden: focused() }}
+									data-editor-split-handle
 									style={{ width: "12px" }}
 									onMouseDown={handleSplitResizeStart}
 									aria-label="Resize captions panel"
@@ -1162,6 +1257,7 @@ function Inner(props: {
 								<div
 									class="flex overflow-hidden flex-col min-h-0 rounded-xl duration-150 bg-ed-card shadow-ed-card animate-in fade-in"
 									classList={{ hidden: focused() }}
+									data-editor-transcript
 									style={{
 										flex: isResizingSplit()
 											? `0 0 calc(${(1 - splitRatio()) * 100}% - 12px)`
@@ -1178,7 +1274,11 @@ function Inner(props: {
 						<Show when={isWebEditor}>
 							{/* The strip's slot is there from the start, so the preview
 							    doesn't shrink and redraw once the editor is ready. */}
-							<div class="flex-none px-2" classList={{ hidden: focused() }}>
+							<div
+								class="flex-none px-2"
+								classList={{ hidden: focused() }}
+								data-editor-clip-strip
+							>
 								<Show
 									when={editorReady()}
 									fallback={
@@ -1190,10 +1290,17 @@ function Inner(props: {
 							</div>
 						</Show>
 						<div
+							ref={setTimelineCardRef}
 							class="relative flex-none px-2 min-h-0"
-							style={{ height: `${timelineHeight()}px` }}
+							style={
+								layout.compact() && !focused()
+									? undefined
+									: { height: `${timelineHeight()}px` }
+							}
+							data-editor-timeline
 						>
 							<div
+								data-editor-timeline-resize
 								role="separator"
 								aria-orientation="horizontal"
 								aria-label="Resize timeline height"
@@ -1226,6 +1333,7 @@ function Inner(props: {
 
 function Dialogs() {
 	const { dialog, setDialog, presets, project } = useEditorContext();
+	const layout = editorLayout();
 
 	const isDialogType = () => isModalDialog(dialog());
 
@@ -1471,8 +1579,15 @@ function Dialogs() {
 								const boxSize = createMemo(() => {
 									const { w: vw, h: vh } = viewport();
 									const ratio = display.width / display.height;
-									const maxW = Math.max(120, Math.min(vw - 164, 1280)) * 0.68;
-									const maxH = Math.max(100, Math.min(vh - 280, 760));
+									// Below 1024px (web) the settings stack under the frame,
+									// or sit in a narrower column when wider than tall.
+									const stacked = layout.compact() && vw < vh * 1.25;
+									const maxW = layout.compact()
+										? Math.max(120, vw - (stacked ? 56 : 380))
+										: Math.max(120, Math.min(vw - 164, 1280)) * 0.68;
+									const maxH = layout.compact()
+										? Math.max(120, stacked ? vh * 0.42 : vh - 180)
+										: Math.max(100, Math.min(vh - 280, 760));
 									let w = maxW;
 									let h = w / ratio;
 									if (h > maxH) {
@@ -1767,7 +1882,7 @@ function Dialogs() {
 												onClick={closeCrop}
 											/>
 										</div>
-										<div class="flex items-stretch gap-4 px-5">
+										<div data-crop-body class="flex items-stretch gap-4 px-5">
 											<div
 												class="relative flex items-center justify-center rounded-xl bg-ed-stage p-4"
 												style={{ width: `${boxSize().w + 32}px` }}
@@ -1825,7 +1940,10 @@ function Dialogs() {
 												</Show>
 											</div>
 
-											<div class="flex w-[300px] shrink-0 flex-col gap-3 rounded-xl bg-ed-card-2 p-3.5">
+											<div
+												data-crop-panel
+												class="flex w-[300px] shrink-0 flex-col gap-3 rounded-xl bg-ed-card-2 p-3.5"
+											>
 												<span class={inspectorLabel}>Preview</span>
 												<div class="relative flex aspect-video w-full items-center justify-center overflow-hidden rounded-lg bg-ed-stage">
 													<canvas

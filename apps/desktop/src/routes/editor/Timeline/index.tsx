@@ -55,6 +55,7 @@ import {
 import { clipDuration, clipTimelineOffsets } from "../clip-transitions";
 import { FPS, type TimelineTrackType, useEditorContext } from "../context";
 import { defaultMaskSegment, type MaskSegment } from "../masks";
+import { editorLayout } from "../responsive-layout";
 import { autoTextColorAt, defaultTextSegment, type TextSegment } from "../text";
 import { effectiveToOutput, holdWindows } from "../timeline-holds";
 import {
@@ -96,8 +97,12 @@ const PLAYHEAD_STALL_MS = 250;
 // Playback settles its clock just after it starts; the playhead follows it
 // directly until then.
 const PLAYHEAD_SETTLE_MS = 300;
-const TRACK_ICON_WIDTH = TRACK_GUTTER;
 const TRACK_GUTTER_INSET = 4;
+// A phone folds track names (and the "Add track" label) to their icons so
+// the lanes keep the width.
+const PHONE_TRACK_GUTTER = 40;
+const trackGutter = () =>
+	editorLayout().phone() ? PHONE_TRACK_GUTTER : TRACK_GUTTER;
 const TIMELINE_HEADER_HEIGHT = 26;
 const TIMELINE_HEADER_GAP = 4;
 const PLAYHEAD_TOP_OFFSET = TIMELINE_HEADER_HEIGHT - 12;
@@ -1238,8 +1243,8 @@ export function Timeline(props: {
 		const rect = container.getBoundingClientRect();
 
 		return {
-			left: rect.left + TRACK_GUTTER,
-			width: Math.max(timelineBounds.width ?? rect.width - TRACK_GUTTER, 0),
+			left: rect.left + trackGutter(),
+			width: Math.max(timelineBounds.width ?? rect.width - trackGutter(), 0),
 		};
 	}
 
@@ -1642,7 +1647,7 @@ export function Timeline(props: {
 					<div
 						class="absolute inset-y-0 left-0 z-30 flex items-center"
 						style={{
-							width: `${TRACK_ICON_WIDTH}px`,
+							width: `${trackGutter()}px`,
 							"padding-left": `${TRACK_GUTTER_INSET}px`,
 						}}
 					>
@@ -1657,7 +1662,7 @@ export function Timeline(props: {
 					    "Add track" trigger beneath, without swallowing that trigger. */}
 					<div
 						class="absolute inset-y-0 right-0 z-40"
-						style={{ left: `${TRACK_GUTTER - RULER_SCRUB_OVERHANG_PX}px` }}
+						style={{ left: `${trackGutter() - RULER_SCRUB_OVERHANG_PX}px` }}
 						onMouseDown={beginRulerScrub}
 					/>
 				</div>
@@ -1674,7 +1679,7 @@ export function Timeline(props: {
 						<div
 							class="absolute bottom-0 z-20 w-px pointer-events-none bg-ed-text-3/50"
 							style={{
-								left: `${TRACK_GUTTER}px`,
+								left: `${trackGutter()}px`,
 								top: `${PLAYHEAD_TOP_OFFSET}px`,
 								transform: `translateX(${
 									((preview().time ?? 0) - transform().position) /
@@ -1692,7 +1697,7 @@ export function Timeline(props: {
 						split() && "opacity-50",
 					)}
 					style={{
-						left: `${TRACK_GUTTER}px`,
+						left: `${trackGutter()}px`,
 						top: `${PLAYHEAD_TOP_OFFSET}px`,
 						transform: `translateX(${playheadRestX()}px)`,
 					}}
@@ -1708,7 +1713,7 @@ export function Timeline(props: {
 								preview().snapped ? "bg-ed-accent" : "bg-ed-text-3/70",
 							)}
 							style={{
-								left: `${TRACK_GUTTER}px`,
+								left: `${trackGutter()}px`,
 								top: `${PLAYHEAD_TOP_OFFSET}px`,
 								transform: `translateX(${
 									(preview().time - transform().position) / secsPerPixel()
@@ -2290,7 +2295,7 @@ function TrackRow(props: {
 		>
 			<div
 				class="group/icon relative shrink-0"
-				style={{ width: `${TRACK_ICON_WIDTH}px` }}
+				style={{ width: `${trackGutter()}px` }}
 			>
 				<button
 					type="button"
@@ -2321,6 +2326,7 @@ function TrackRow(props: {
 					/>
 					<Show when={props.label}>
 						<span
+							data-track-label
 							class={cx(
 								"min-w-0 flex-1 truncate text-[11px] font-medium leading-none transition-[padding,color] duration-150",
 								active()
@@ -2375,7 +2381,7 @@ function TimelineMarkings() {
 	return (
 		<div
 			class="relative flex-1 h-full overflow-hidden"
-			style={{ "margin-left": `${TRACK_GUTTER}px` }}
+			style={{ "margin-left": `${trackGutter()}px` }}
 		>
 			<div class="timeline-follow-shift absolute inset-0">
 				<Index each={Array.from({ length: markingCount() })}>
