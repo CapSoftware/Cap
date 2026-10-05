@@ -101,6 +101,7 @@ function PreparingPlayer(props: {
 	model: PreparingEditorModel;
 	playButtonRef?: (element: HTMLButtonElement) => void;
 	previewRef?: (element: HTMLDivElement) => void;
+	quiet?: boolean;
 }) {
 	return (
 		<div
@@ -174,7 +175,9 @@ function PreparingPlayer(props: {
 					</button>
 				</div>
 				<div class="flex-1 text-right text-[11px] text-ed-text-3" role="status">
-					{props.model.playback().buffering ? "Preparing playback" : ""}
+					{props.model.playback().buffering && !props.quiet
+						? "Preparing playback"
+						: ""}
 				</div>
 			</div>
 		</div>
@@ -333,6 +336,7 @@ export function EditorSkeleton(
 						model={model}
 						playButtonRef={setPlayButton}
 						previewRef={setPreview}
+						quiet={playWhenReady()}
 					/>
 					<PreparingSidebar />
 				</div>
@@ -348,7 +352,8 @@ export function EditorSkeleton(
 						compact() ? undefined : { height: `${layout().timelineHeight}px` }
 					}
 				>
-					<PreparingTimeline model={model} />
+					{/* The loading status over the preview is the one status shown. */}
+					<PreparingTimeline model={model} quiet={playWhenReady()} />
 				</div>
 			</div>
 			<Show when={playWhenReady()}>

@@ -21,7 +21,11 @@ import { captionsStore } from "~/store/captions";
 import { createTauriEventListener } from "~/utils/createEventListener";
 import { commands } from "~/utils/tauri";
 import AspectRatioSelect from "./AspectRatioSelect";
-import { BufferingStatus, createBufferingDisplay } from "./buffering-status";
+import {
+	BufferingStatus,
+	createBufferingDisplay,
+	createFramesFlowing,
+} from "./buffering-status";
 import {
 	CanvasElementsOverlay,
 	SnapGuidesOverlay,
@@ -263,8 +267,12 @@ export function PlayerContent(props: {
 	let playRequest = 0;
 	const shownPlaying = () => playPending() || (playbackIntent() && !isAtEnd());
 	const buffering = createPlaybackBuffering();
+	const framesFlowing = createFramesFlowing(
+		() => editorState.playbackTime,
+		() => editorState.playing,
+	);
 	const bufferingDisplay = createBufferingDisplay(
-		() => playPending() || buffering(),
+		() => (playPending() || buffering()) && !framesFlowing(),
 		shownPlaying,
 	);
 	const playBusy = () => bufferingDisplay.shown() && shownPlaying();
