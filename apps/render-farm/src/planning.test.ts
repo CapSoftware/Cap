@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { type ChunkPlanInput, planChunkBoundaries } from "./planning";
+import {
+	type ChunkPlanInput,
+	chunkPartLayout,
+	MAX_CHUNKS,
+	MIN_RANGE_PARTS,
+	planChunkBoundaries,
+} from "./planning";
 
 const base: ChunkPlanInput = {
 	totalFrames: 1800,
@@ -78,7 +84,31 @@ test("all planner inputs leave six disjoint ranges even with a lead-in", () => {
 			...options,
 		});
 		const count = boundaries.length - 1;
-		expect(Math.floor(Math.floor(9998 / count) / 6)).toBeGreaterThanOrEqual(3);
+		expect(chunkPartLayout(count).partLimit).toBeGreaterThanOrEqual(
+			MIN_RANGE_PARTS,
+		);
 		expectValid(boundaries, 2_160_000);
+	}
+});
+
+test("the chunk cap is the largest count whose part ranges still fit", () => {
+	// The lead-in split adds one chunk after the cap.
+	const largest = MAX_CHUNKS + 1;
+	expect(chunkPartLayout(largest).partLimit).toBeGreaterThanOrEqual(
+		MIN_RANGE_PARTS,
+	);
+	expect(chunkPartLayout(largest + 1).partLimit).toBeLessThan(MIN_RANGE_PARTS);
+	for (const chunks of [MAX_CHUNKS, MAX_CHUNKS + 1, 527, 554, 10_000]) {
+		const boundaries = planChunkBoundaries({
+			...base,
+			totalFrames: 2_160_000,
+			leadInFrames: 120,
+			chunks,
+		});
+		const count = boundaries.length - 1;
+		expect(count).toBeLessThanOrEqual(largest);
+		expect(chunkPartLayout(count).partLimit).toBeGreaterThanOrEqual(
+			MIN_RANGE_PARTS,
+		);
 	}
 });

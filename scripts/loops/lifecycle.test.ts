@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { customerCopy } from "../../emails/customer-copy";
 import type { LoopsClient } from "../../packages/database/loops/client";
+import { customerCopy } from "../../packages/database/loops/customer-copy";
 import {
 	freeOnboardingExperiment,
 	freeOnboardingVariant,

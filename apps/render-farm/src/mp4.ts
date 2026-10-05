@@ -769,16 +769,20 @@ export function buildHeader(input: HeaderInput) {
 	};
 
 	// The moov's size doesn't depend on the offsets (co64 is fixed width), so
-	// measure once, then lay out: ftyp, moov, free padding, 16-byte mdat header.
+	// measure once, then lay out: ftyp, moov, free padding only when a minimum
+	// size asks for it, 16-byte mdat header.
 	const probe = make(0);
-	const natural = probe.ftyp.byteLength + probe.moov.byteLength + 8 + 16;
-	const headerSize = Math.max(natural, input.minimumSize);
+	const bare = probe.ftyp.byteLength + probe.moov.byteLength + 16;
+	const headerSize =
+		input.minimumSize <= bare ? bare : Math.max(input.minimumSize, bare + 8);
 	const final = make(headerSize);
 	const freeSize =
 		headerSize - final.ftyp.byteLength - final.moov.byteLength - 16;
 	const free = new Uint8Array(freeSize);
-	new DataView(free.buffer).setUint32(0, freeSize);
-	free.set(new TextEncoder().encode("free"), 4);
+	if (freeSize > 0) {
+		new DataView(free.buffer).setUint32(0, freeSize);
+		free.set(new TextEncoder().encode("free"), 4);
+	}
 	const mdat = new Uint8Array(16);
 	const mdatView = new DataView(mdat.buffer);
 	mdatView.setUint32(0, 1);
