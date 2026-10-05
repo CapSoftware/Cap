@@ -2523,6 +2523,35 @@ test("a worker Save withdraws the farm render and hands the Save to the worker, 
 	}
 });
 
+test("a worker Save that can't reach Cap says so plainly", async () => {
+	const { bridge, port, invoke } = await browserSaveHost(async (url, init) => {
+		if (url === "/api/editor/sessions/session/save?videoId=video") {
+			if (init?.method === "DELETE") return new Response(null, { status: 204 });
+			return Response.json(savePlan("worker", "The render farm is down"));
+		}
+		if (url === "/api/editor/preparations" && init?.method === "POST")
+			return Response.json({ id: "prep-1", status: "preparing" });
+		if (url.startsWith("/api/editor/preparations/prep-1"))
+			return Response.json({ status: "ready", sessionId: "worker-1" });
+		if (url === "/api/editor/sessions/worker-1/save/worker")
+			throw new TypeError("Failed to fetch");
+		if (url.startsWith("/api/editor/sessions/worker-1?"))
+			return Response.json({ closed: true });
+		throw new Error(`Unexpected editor request ${url}`);
+	});
+	try {
+		await invoke("tauri:webEditorSave");
+		expect(await invoke("tauri:webEditorSaveOnWorker")).toEqual({
+			kind: "error",
+			id: 1,
+			error: "Couldn't reach Cap. Check your connection and try again.",
+		});
+	} finally {
+		port.close();
+		bridge.dispose();
+	}
+});
+
 test("a Save neither the farm nor a worker can take fails with Retry and renders nothing here", async () => {
 	const upload = vi.mocked(uploadWebEditorExport);
 	upload.mockClear();

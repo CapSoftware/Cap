@@ -234,20 +234,25 @@ describe("project configuration save", () => {
 			expect(value.writes).toHaveLength(0);
 			value.setText("edited offline");
 			await vi.advanceTimersByTimeAsync(250);
-			value.writes[0].completion.reject("Failed to fetch");
+			// Still offline through every retry.
+			for (const wait of [1000, 2000, 4000, 0]) {
+				value.writes.at(-1)?.completion.reject("Failed to fetch");
+				await vi.advanceTimersByTimeAsync(wait);
+			}
 			await settle();
 			expect(value.onError).toHaveBeenCalledOnce();
+			expect(value.writes).toHaveLength(4);
 			page.dispatchEvent(new Event("online"));
 			await settle();
-			expect(value.writes).toHaveLength(2);
-			expect(value.writes[1].config.text).toBe("edited offline");
-			value.writes[1].completion.resolve();
+			expect(value.writes).toHaveLength(5);
+			expect(value.writes[4].config.text).toBe("edited offline");
+			value.writes[4].completion.resolve();
 			await settle();
 			expect(value.disk().text).toBe("edited offline");
 			// Once saved, another online event has nothing to do.
 			page.dispatchEvent(new Event("online"));
 			await settle();
-			expect(value.writes).toHaveLength(2);
+			expect(value.writes).toHaveLength(5);
 			value.finish();
 			await settle();
 		} finally {
@@ -326,6 +331,51 @@ describe("project configuration save", () => {
 		value.writes[0].completion.reject("read-only volume");
 		await failure;
 		expect(exportCommand).not.toHaveBeenCalled();
+	});
+
+	it("retries a save that couldn't reach Cap before reporting it", async () => {
+		const value = fixture();
+		value.setText("offline for a moment");
+		const saved = value.save.flush();
+		await settle();
+		value.writes[0].completion.reject(new TypeError("Failed to fetch"));
+		await vi.advanceTimersByTimeAsync(1000);
+		value.writes[1].completion.reject(new TypeError("Failed to fetch"));
+		await vi.advanceTimersByTimeAsync(2000);
+		value.writes[2].completion.resolve();
+		await saved;
+		expect(value.writes).toHaveLength(3);
+		expect(value.disk().text).toBe("offline for a moment");
+	});
+
+	it("says Cap couldn't be reached, never the raw fetch error, once retries run out", async () => {
+		const value = fixture();
+		value.setText("still offline");
+		const saved = value.save.flush();
+		const failure = expect(saved).rejects.toThrow(
+			"Couldn't reach Cap. Check your connection and try again.",
+		);
+		for (const wait of [1000, 2000, 4000, 0]) {
+			await settle();
+			value.writes.at(-1)?.completion.reject(new TypeError("Failed to fetch"));
+			await vi.advanceTimersByTimeAsync(wait);
+		}
+		await failure;
+		expect(value.writes).toHaveLength(4);
+	});
+
+	it("doesn't retry a save Cap refused", async () => {
+		const value = fixture();
+		value.setText("refused");
+		const saved = value.save.flush();
+		const failure = expect(saved).rejects.toThrow(
+			"Could not save the latest edits: read-only volume",
+		);
+		await settle();
+		value.writes[0].completion.reject(new Error("read-only volume"));
+		await failure;
+		await vi.advanceTimersByTimeAsync(10_000);
+		expect(value.writes).toHaveLength(1);
 	});
 
 	it("invalidates an old preview synchronously when a nested project value changes", async () => {

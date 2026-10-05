@@ -102,6 +102,9 @@ const EXPORT_CANCEL_TIMEOUT_MS = 10_000;
 const SAVE_CAPACITY_WAIT_MS = 15_000;
 const SERVERS_UNAVAILABLE =
 	"Our servers aren't available right now. Try again in a moment.";
+// A fetch that never reached Cap rejects with a TypeError.
+const SAVE_UNREACHABLE =
+	"Couldn't reach Cap. Check your connection and try again.";
 const WORKER_SAVE_UNAVAILABLE =
 	"Our servers are busy right now. Try again in a moment, or use Download.";
 const AUDIO_CONTENT_TYPES: Record<string, string> = {
@@ -1404,9 +1407,7 @@ export class EditorHostBridge {
 				{ cache: "no-store", signal: this.controller.signal },
 			);
 		} catch {
-			throw new Error(
-				"Save could not reach Cap. Check your connection and try again.",
-			);
+			throw new Error(SAVE_UNREACHABLE);
 		}
 		if (!target.ok) throw new Error(webEditorSaveError(target.status));
 		const plan: unknown = await target.json();
@@ -1549,9 +1550,11 @@ export class EditorHostBridge {
 				id: message.id,
 				error: this.disposed
 					? "Save was canceled"
-					: cause instanceof Error
-						? cause.message
-						: WORKER_SAVE_UNAVAILABLE,
+					: cause instanceof TypeError
+						? SAVE_UNREACHABLE
+						: cause instanceof Error
+							? cause.message
+							: WORKER_SAVE_UNAVAILABLE,
 			};
 		} finally {
 			releaseWorkerUse();
