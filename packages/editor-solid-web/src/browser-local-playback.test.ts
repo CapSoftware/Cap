@@ -360,7 +360,8 @@ test("a paused frame waiting on its media shows as loading", async () => {
 	Reflect.set(playback, "renderedTime", -1);
 	Reflect.set(playback, "scrubbing", false);
 	Reflect.set(playback, "lastKeyFrameAt", 0);
-	Reflect.set(playback, "canvas", { hasRenderedFrame: () => false });
+	let drawnBefore = false;
+	Reflect.set(playback, "canvas", { hasRenderedFrame: () => drawnBefore });
 	const finish: Array<() => void> = [];
 	Reflect.set(
 		playback,
@@ -388,7 +389,14 @@ test("a paused frame waiting on its media shows as loading", async () => {
 		await quick;
 		await wait(300);
 		expect(buffering).toEqual([]);
-		const slow = playback.seek(2);
+		// The first frame is covered by the editor's own loading state.
+		const first = playback.seek(2);
+		await wait(300);
+		expect(buffering).toEqual([]);
+		finish.shift()?.();
+		await first;
+		drawnBefore = true;
+		const slow = playback.seek(3);
 		await wait(300);
 		expect(buffering).toEqual([true]);
 		finish.shift()?.();

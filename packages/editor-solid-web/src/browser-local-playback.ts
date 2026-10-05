@@ -327,6 +327,7 @@ export class BrowserLocalPlayback {
 	private renderStartedAt = 0;
 	private awaitingPlayingFrame = false;
 	private seekHeld = false;
+	private seekHoldShown = false;
 	private seekHoldTimer: ReturnType<typeof setTimeout> | undefined;
 	private bufferController: AbortController | null = null;
 	private audioClockAligned = false;
@@ -1399,7 +1400,7 @@ export class BrowserLocalPlayback {
 	private reportHold() {
 		reportPlaybackBuffering(
 			!this.disposed &&
-				(this.seekHeld ||
+				(this.seekHoldShown ||
 					(this.playing && (this.awaitingPlayingFrame || this.stalled))),
 		);
 	}
@@ -1458,6 +1459,10 @@ export class BrowserLocalPlayback {
 		if (waiting) {
 			this.seekHoldTimer = setTimeout(() => {
 				this.seekHeld = true;
+				// Until the first frame the editor shows its own loading state,
+				// and a second indicator's animation competes with that frame's
+				// decode on a slow machine.
+				this.seekHoldShown = this.canvas.hasRenderedFrame();
 				this.reportHold();
 				this.abandonHeldSeek();
 			}, SEEK_HOLD_MS);
@@ -1465,6 +1470,7 @@ export class BrowserLocalPlayback {
 		}
 		if (!this.seekHeld) return;
 		this.seekHeld = false;
+		this.seekHoldShown = false;
 		this.reportHold();
 	}
 
