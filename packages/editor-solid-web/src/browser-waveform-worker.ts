@@ -156,7 +156,11 @@ async function waveform(url: string) {
 		} catch {}
 	}
 	const stream = await gatedStream(url);
-	if (stream) return peaksFrom(new ReadableStreamSource(stream));
+	if (stream) {
+		try {
+			return await peaksFrom(new ReadableStreamSource(stream));
+		} catch {}
+	}
 	await gate();
 	const response = await fetch(url, { priority: "low", cache: "no-store" });
 	if (!response.ok || !response.body) {
