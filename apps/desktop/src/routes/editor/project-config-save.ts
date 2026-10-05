@@ -13,6 +13,7 @@ export function createProjectConfigSave<T extends object>(options: {
 	let inFlight: Promise<void> | undefined;
 	let timeout: ReturnType<typeof setTimeout> | undefined;
 	let disposed = false;
+	let failed = false;
 	const [revision, setRevision] = createSignal(0);
 
 	const clearSaveTimeout = () => {
@@ -32,8 +33,10 @@ export function createProjectConfigSave<T extends object>(options: {
 					.then(() => options.save(JSON.parse(config) as T))
 					.then(() => {
 						persistedConfig = config;
+						failed = false;
 					})
 					.catch((error: unknown) => {
+						failed = true;
 						const detail =
 							error instanceof Error ? error.message : String(error);
 						throw new Error(`Could not save the latest edits: ${detail}`, {
@@ -64,6 +67,16 @@ export function createProjectConfigSave<T extends object>(options: {
 			{ defer: true },
 		),
 	);
+
+	// A save that failed while offline goes again once the browser is back
+	// online, rather than waiting for the next edit.
+	if (typeof window !== "undefined") {
+		const retry = () => {
+			if (failed && !disposed) void flush().catch(options.onError);
+		};
+		window.addEventListener("online", retry);
+		onCleanup(() => window.removeEventListener("online", retry));
+	}
 
 	onCleanup(() => {
 		clearSaveTimeout();

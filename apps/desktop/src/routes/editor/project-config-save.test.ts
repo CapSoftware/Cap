@@ -223,6 +223,38 @@ describe("project configuration save", () => {
 		expect(value.writes).toHaveLength(1);
 	});
 
+	it("saves a write that failed offline once the browser is back online", async () => {
+		const page = new EventTarget();
+		vi.stubGlobal("window", page);
+		try {
+			const value = fixture();
+			// Nothing failed yet, so coming online saves nothing.
+			page.dispatchEvent(new Event("online"));
+			await settle();
+			expect(value.writes).toHaveLength(0);
+			value.setText("edited offline");
+			await vi.advanceTimersByTimeAsync(250);
+			value.writes[0].completion.reject("Failed to fetch");
+			await settle();
+			expect(value.onError).toHaveBeenCalledOnce();
+			page.dispatchEvent(new Event("online"));
+			await settle();
+			expect(value.writes).toHaveLength(2);
+			expect(value.writes[1].config.text).toBe("edited offline");
+			value.writes[1].completion.resolve();
+			await settle();
+			expect(value.disk().text).toBe("edited offline");
+			// Once saved, another online event has nothing to do.
+			page.dispatchEvent(new Event("online"));
+			await settle();
+			expect(value.writes).toHaveLength(2);
+			value.finish();
+			await settle();
+		} finally {
+			vi.unstubAllGlobals();
+		}
+	});
+
 	it("flushes pending changes on owner disposal and releases the timer", async () => {
 		const value = fixture();
 		value.setText("on close");
