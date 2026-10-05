@@ -42,12 +42,15 @@ export function ShareLinkTab({
 	onPrivacyClick,
 	onNavigate,
 	prefetchOnHover = false,
+	compact = false,
 }: {
 	videoId: Video.VideoId;
 	shareUrl: string;
 	title: string;
 	isPublic: boolean;
 	active?: boolean;
+	/** On a phone, only a way back to the share page, so the toggle fits. */
+	compact?: boolean;
 	/** Where the viewer is in the video, offered as a link to that moment. */
 	playbackTime?: () => number;
 	onPrivacyClick: () => void;
@@ -90,7 +93,10 @@ export function ShareLinkTab({
 						? "Anyone with the link can watch"
 						: "Only people you share it with can watch"
 				}
-				className="rec-focus grid size-7 shrink-0 place-items-center rounded-md"
+				className={clsx(
+					"rec-focus grid size-7 shrink-0 place-items-center rounded-md",
+					compact && "max-sm:hidden",
+				)}
 			>
 				<span
 					className={clsx(
@@ -105,9 +111,22 @@ export function ShareLinkTab({
 				href={`/s/${videoId}`}
 				onClick={onNavigate}
 				aria-current={active ? "page" : undefined}
-				className="rec-focus min-w-0 max-w-[16rem] truncate rounded-sm"
+				className={clsx(
+					"rec-focus min-w-0 max-w-[16rem] truncate rounded-sm",
+					compact &&
+						"max-sm:flex max-sm:h-full max-sm:items-center max-sm:px-3",
+				)}
 			>
-				{shareUrl.replace(/^https?:\/\//, "")}
+				{compact ? (
+					<>
+						<span className="max-sm:hidden">
+							{shareUrl.replace(/^https?:\/\//, "")}
+						</span>
+						<span className="sm:hidden">Share page</span>
+					</>
+				) : (
+					shareUrl.replace(/^https?:\/\//, "")
+				)}
 			</PageLink>
 			<Popover.Root
 				open={moment !== null}
@@ -125,7 +144,10 @@ export function ShareLinkTab({
 						}}
 						aria-label="Copy link"
 						title="Copy link"
-						className="rec-focus grid size-7 shrink-0 place-items-center rounded-md hover:text-[var(--rec-text-1)]"
+						className={clsx(
+							"rec-focus grid size-7 shrink-0 place-items-center rounded-md hover:text-[var(--rec-text-1)]",
+							compact && "max-sm:hidden",
+						)}
 					>
 						{copied ? (
 							<CheckIcon className="size-3.5" aria-hidden />
@@ -210,6 +232,7 @@ export function EditorShareLinkTab({
 				isPublic={isPublic}
 				onNavigate={onNavigate}
 				prefetchOnHover
+				compact
 				onPrivacyClick={async () => {
 					if (sharing || (await refresh())) setDialogOpen(true);
 				}}
