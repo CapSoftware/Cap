@@ -2435,7 +2435,7 @@ test("Save goes to an editor worker when the farm can't start it", async () => {
 			value: {
 				renderer: "worker",
 				reason:
-					"The editor server is unavailable right now. Try again in a moment.",
+					"Our servers aren't available right now. Try again in a moment.",
 			},
 		});
 		expect(
@@ -2592,7 +2592,7 @@ test("a Save neither the farm nor a worker can take fails with Retry and renders
 	);
 	try {
 		const unavailable =
-			"Save is unavailable right now: neither the render farm nor an editor server could take it. Try again in a moment, or use Download.";
+			"Our servers are busy right now. Try again in a moment, or use Download.";
 		expect(await invoke("tauri:webEditorSave")).toEqual({
 			kind: "error",
 			id: 1,
@@ -2633,7 +2633,7 @@ test("a worker Save the worker can't take fails with Retry and publishes nothing
 			kind: "error",
 			id: 1,
 			error:
-				"Save is unavailable right now: neither the render farm nor an editor server could take it. Try again in a moment, or use Download.",
+				"Our servers are busy right now. Try again in a moment, or use Download.",
 		});
 		expect(upload).not.toHaveBeenCalled();
 	} finally {
@@ -2805,8 +2805,7 @@ test("browser Studio caption jobs report an unavailable worker instead of hangin
 		expect(await transcribe(1)).toEqual({
 			kind: "error",
 			id: 1,
-			error:
-				"The editor server is unavailable right now. Try again in a moment.",
+			error: "Our servers aren't available right now. Try again in a moment.",
 		});
 	} finally {
 		port.close();
@@ -2838,8 +2837,7 @@ test("browser Studio captions move to a worker session when the recording comes 
 		expect(await transcribe(1)).toEqual({
 			kind: "error",
 			id: 1,
-			error:
-				"The editor server is unavailable right now. Try again in a moment.",
+			error: "Our servers aren't available right now. Try again in a moment.",
 		});
 		expect(requests).toContain("POST /api/editor/preparations");
 	} finally {

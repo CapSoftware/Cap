@@ -258,7 +258,7 @@ export function WebPublishControls() {
 			<Tooltip
 				content={
 					workerSave()
-						? "Rendering on Cap's servers. Keep this tab open until it uploads."
+						? "Saving is taking longer than usual. Keep this tab open until it finishes."
 						: status()?.state === "error"
 							? (status()?.error ?? "Save failed")
 							: upToDate()

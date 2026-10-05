@@ -65,9 +65,7 @@ export async function startWebEditorPreparation(
 	for (;;) {
 		if (signal.aborted) throw new Error("Editor preparation was canceled");
 		if (busyRetries > 0 && Date.now() >= deadline) {
-			throw new Error(
-				"Every editor server is busy right now. Try again in a minute.",
-			);
+			throw new Error("Our servers are busy right now. Try again in a minute.");
 		}
 		const response = await fetcher("/api/editor/preparations", {
 			method: "POST",
@@ -99,7 +97,7 @@ export async function startWebEditorPreparation(
 					? "This recording is no longer available"
 					: response.status === 403
 						? "You don't have access to edit this recording"
-						: "The editor server is unavailable right now. Try again in a moment.",
+						: "Our servers aren't available right now. Try again in a moment.",
 			);
 		const created: unknown = await response.json();
 		if (!isPreparation(created)) {

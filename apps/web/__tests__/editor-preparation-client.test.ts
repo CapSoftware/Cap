@@ -128,7 +128,7 @@ test("a missing or unhealthy editor worker fails promptly without a busy wait", 
 			onWait,
 			fetcher,
 		),
-	).rejects.toThrow("The editor server is unavailable right now");
+	).rejects.toThrow("Our servers aren't available right now");
 	expect(fetcher).toHaveBeenCalledTimes(1);
 	expect(onWait).not.toHaveBeenCalled();
 });
@@ -150,7 +150,7 @@ test("capacity waiting has a deadline rather than retrying forever", async () =>
 		fetcher,
 	);
 	const rejection = expect(pending).rejects.toThrow(
-		"Every editor server is busy right now",
+		"Our servers are busy right now",
 	);
 	await vi.advanceTimersByTimeAsync(5 * 60 * 1_000 + 20_000);
 	await rejection;
@@ -175,7 +175,7 @@ test("a caller with somewhere else to go can wait for capacity briefly", async (
 		10_000,
 	);
 	const rejection = expect(pending).rejects.toThrow(
-		"Every editor server is busy right now",
+		"Our servers are busy right now",
 	);
 	await vi.advanceTimersByTimeAsync(10_000);
 	await rejection;

@@ -100,8 +100,10 @@ const CHANNEL_PATTERN = /^__CHANNEL__:(\d+)$/;
 const EXPORT_START_TIMEOUT_MS = 20_000;
 const EXPORT_CANCEL_TIMEOUT_MS = 10_000;
 const SAVE_CAPACITY_WAIT_MS = 15_000;
+const SERVERS_UNAVAILABLE =
+	"Our servers aren't available right now. Try again in a moment.";
 const WORKER_SAVE_UNAVAILABLE =
-	"Save is unavailable right now: neither the render farm nor an editor server could take it. Try again in a moment, or use Download.";
+	"Our servers are busy right now. Try again in a moment, or use Download.";
 const AUDIO_CONTENT_TYPES: Record<string, string> = {
 	ogg: "audio/ogg",
 	m4a: "audio/mp4",
@@ -687,7 +689,7 @@ export class EditorHostBridge {
 
 	private async ensureWorkerCommandSocket() {
 		const sessionId = this.workerSessionId;
-		if (!sessionId) throw new Error("Editor export worker is unavailable");
+		if (!sessionId) throw new Error(SERVERS_UNAVAILABLE);
 		if (
 			this.workerCommands?.readyState === WebSocket.OPEN &&
 			this.workerCommandSessionId === sessionId
@@ -703,7 +705,7 @@ export class EditorHostBridge {
 				);
 				if (this.disposed || this.workerSessionId !== sessionId) {
 					socket.close();
-					throw new Error("Editor export worker changed");
+					throw new Error("The editor reconnected. Try again.");
 				}
 				this.workerCommands = socket;
 				this.workerCommandSessionId = sessionId;
@@ -797,10 +799,7 @@ export class EditorHostBridge {
 			this.port?.postMessage({
 				kind: "error",
 				id: message.id,
-				error:
-					cause instanceof Error
-						? cause.message
-						: "Editor export worker is unavailable",
+				error: cause instanceof Error ? cause.message : SERVERS_UNAVAILABLE,
 			});
 		}
 	}
