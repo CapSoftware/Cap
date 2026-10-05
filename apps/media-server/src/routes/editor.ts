@@ -29,6 +29,7 @@ import {
 	editorExportSettingsSchema,
 	getEditorExport,
 	getEditorExportFile,
+	getEditorSave,
 	markEditorExportDownloadStarted,
 } from "../lib/editor-exports";
 import { stageSignedEditorImageAsset } from "../lib/editor-image-assets";
@@ -798,6 +799,76 @@ editor.post("/sessions/:id/exports", async (c) => {
 		console.error("Editor export could not start", cause);
 		return c.json({ error: "Editor export unavailable" }, 503);
 	}
+});
+
+const saveRequestSchema = z
+	.object({
+		settings: z.unknown(),
+		uploadUrl: z.string().url().max(8192),
+		callbackUrl: z.string().url().max(2048),
+		videoId: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/),
+		saveId: z.string().uuid(),
+	})
+	.strict();
+
+/// Only HTTPS, unless this worker is set up for local media over HTTP.
+function workerTargetUrl(value: string) {
+	const url = new URL(value);
+	return (
+		(url.protocol === "https:" ||
+			(url.protocol === "http:" &&
+				process.env.CAP_WEB_EDITOR_ALLOW_HTTP_MEDIA === "1")) &&
+		!url.username &&
+		!url.password
+	);
+}
+
+/// Renders a Save, uploads it to the video's storage and tells the web app,
+/// which publishes it: the browser that asked can close meanwhile.
+editor.post("/sessions/:id/saves", async (c) => {
+	let body: unknown;
+	try {
+		body = await c.req.json();
+	} catch {
+		return c.json({ error: "Invalid editor save request" }, 400);
+	}
+	const request = saveRequestSchema.safeParse(body);
+	const settings = editorExportSettingsSchema.safeParse(
+		request.success ? request.data.settings : null,
+	);
+	if (
+		!request.success ||
+		!settings.success ||
+		settings.data.format !== "Mp4" ||
+		!workerTargetUrl(request.data.uploadUrl) ||
+		!workerTargetUrl(request.data.callbackUrl)
+	)
+		return c.json({ error: "Invalid editor save request" }, 400);
+	const sessionId = c.req.param("id");
+	const native = getEditorSession(sessionId);
+	if (!native) return c.json({ error: "Not found" }, 404);
+	try {
+		const id = await beginEditorExport(sessionId, native, settings.data, {
+			uploadUrl: request.data.uploadUrl,
+			callbackUrl: request.data.callbackUrl,
+			videoId: request.data.videoId,
+			saveId: request.data.saveId,
+		});
+		attachEditorSession(sessionId);
+		return c.json({ id, status: "rendering" as const }, 202);
+	} catch (cause) {
+		if (cause instanceof EditorExportBusyError) {
+			return c.json({ error: cause.message }, 503);
+		}
+		console.error("Editor save could not start", cause);
+		return c.json({ error: "Editor save unavailable" }, 503);
+	}
+});
+
+/// A Save's progress, which outlives the session it rendered in.
+editor.get("/sessions/:id/saves/:saveId", (c) => {
+	const save = getEditorSave(c.req.param("id"), c.req.param("saveId"));
+	return save ? c.json(save) : c.json({ error: "Not found" }, 404);
 });
 
 editor.get("/sessions/:id/exports/:exportId", (c) => {
