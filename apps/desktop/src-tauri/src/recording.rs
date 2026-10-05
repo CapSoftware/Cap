@@ -10178,6 +10178,19 @@ mod preparing_presentation_parity_tests {
         ProjectConfiguration::default()
     }
 
+    fn preparing_static_projection(
+        preset: &ProjectConfiguration,
+        target: &ScreenCaptureTarget,
+        stopped: &TimelineConfiguration,
+    ) -> ProjectConfiguration {
+        let mut snapshot = preparing_presentation_snapshot(Some(preset), Some(target)).unwrap();
+        apply_recording_camera_preview_state(
+            &mut snapshot,
+            &crate::camera::CameraPreviewState::default(),
+        );
+        crate::editor_preparing::project_from_preparing_presentation(&snapshot, stopped)
+    }
+
     fn ordinary_static_projection(
         preset: &ProjectConfiguration,
         target: &ScreenCaptureTarget,
@@ -10211,10 +10224,8 @@ mod preparing_presentation_parity_tests {
                 mass: 1.0,
             };
             let original = value(&preset);
-            let snapshot = preparing_presentation_snapshot(Some(&preset), Some(&target)).unwrap();
             let stopped = recording_timeline(one_segment(6.0), Vec::new());
-            let projected =
-                crate::editor_preparing::project_from_preparing_presentation(&snapshot, &stopped);
+            let projected = preparing_static_projection(&preset, &target, &stopped);
             let ordinary = ordinary_static_projection(&preset, &target, one_segment(6.0));
             assert_eq!(value(&projected), value(&ordinary));
             assert_eq!(value(&preset), original);
@@ -10266,12 +10277,8 @@ mod preparing_presentation_parity_tests {
                     damping: 22.0,
                     mass: 0.8,
                 };
-                let snapshot =
-                    preparing_presentation_snapshot(Some(&preset), Some(&target)).unwrap();
                 let stopped = recording_timeline(one_segment(6.0), Vec::new());
-                let projected = crate::editor_preparing::project_from_preparing_presentation(
-                    &snapshot, &stopped,
-                );
+                let projected = preparing_static_projection(&preset, &target, &stopped);
                 assert_eq!(
                     value(&projected),
                     value(&ordinary_static_projection(
@@ -10354,10 +10361,8 @@ mod preparing_presentation_parity_tests {
         }))
         .unwrap();
         preset.timeline = Some(recording_timeline(one_segment(2.0), vec![old_zoom]));
-        let snapshot = preparing_presentation_snapshot(Some(&preset), Some(&target)).unwrap();
         let stopped = recording_timeline(one_segment(6.0), Vec::new());
-        let projected =
-            crate::editor_preparing::project_from_preparing_presentation(&snapshot, &stopped);
+        let projected = preparing_static_projection(&preset, &target, &stopped);
         let ordinary = ordinary_static_projection(&preset, &target, one_segment(6.0));
         assert_eq!(value(&projected), value(&ordinary));
         let timeline = projected.timeline.as_ref().unwrap();
