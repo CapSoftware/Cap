@@ -4,11 +4,13 @@ import { type as ostype } from "@tauri-apps/plugin-os";
 import { createSignal, For, Show } from "solid-js";
 import CaptionControlsMacOS from "~/components/titlebar/controls/CaptionControlsMacOS";
 import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
+import { BufferingStatus, createBufferingDisplay } from "./buffering-status";
 import {
 	CLIP_STRIP_SPACE,
 	DEFAULT_TIMELINE_HEIGHT,
 	editorVerticalLayout,
 } from "./editor-layout";
+import { requestPlayWhenReady } from "./playback-buffering";
 import { usePreparingEditorModel } from "./preparing-editor-context";
 import {
 	type PreparingEditorModel,
@@ -86,7 +88,11 @@ function PreparingHeader(props: { model: PreparingEditorModel }) {
 	);
 }
 
-function PreparingPlayer(props: { model: PreparingEditorModel }) {
+function PreparingPlayer(props: {
+	model: PreparingEditorModel;
+	playButtonRef?: (element: HTMLButtonElement) => void;
+	previewRef?: (element: HTMLDivElement) => void;
+}) {
 	return (
 		<div class="flex flex-col flex-1 min-w-0 rounded-xl bg-ed-card shadow-ed-card overflow-hidden">
 			<div class="flex flex-row items-center px-3 h-11 shrink-0">
@@ -100,7 +106,10 @@ function PreparingPlayer(props: { model: PreparingEditorModel }) {
 				</div>
 				<span class="text-[11px] text-ed-text-3">Preview</span>
 			</div>
-			<div class="relative flex flex-1 min-h-0 justify-center items-center p-4">
+			<div
+				ref={props.previewRef}
+				class="relative flex flex-1 min-h-0 justify-center items-center p-4"
+			>
 				<PreparingFrame />
 			</div>
 			<div class="flex flex-row items-center px-3.5 h-12 shrink-0">
@@ -121,6 +130,7 @@ function PreparingPlayer(props: { model: PreparingEditorModel }) {
 						↤
 					</button>
 					<button
+						ref={props.playButtonRef}
 						type="button"
 						aria-label={props.model.playback().playing ? "Pause" : "Play"}
 						disabled={!props.model.canPlay()}
@@ -193,8 +203,69 @@ function PreparingSidebar() {
 	);
 }
 
-export function EditorSkeleton(props: { model?: PreparingEditorModel } = {}) {
+/// Play on the web editor's loading screen: the editor starts playing once it
+/// has mounted and its first frame is ready. It sits over the dimmed, inert
+/// layout, on the play button it stands in for.
+function PlayWhenReady(props: {
+	anchor: HTMLButtonElement | undefined;
+	preview: HTMLDivElement | undefined;
+}) {
+	const bounds = createElementBounds(() => props.anchor);
+	const preview = createElementBounds(() => props.preview);
+	const [requested, setRequested] = createSignal(false);
+	const status = createBufferingDisplay(requested, () => true);
+	return (
+		<Show when={bounds.width && bounds.height}>
+			<Show when={status.shown() && preview.width && preview.height}>
+				<div
+					class="flex fixed z-10 justify-center items-center p-4 pointer-events-none"
+					style={{
+						left: `${preview.left}px`,
+						top: `${preview.top}px`,
+						width: `${preview.width}px`,
+						height: `${preview.height}px`,
+					}}
+				>
+					{/* Below the placeholder's own spinner. */}
+					<BufferingStatus
+						playing
+						slow={status.slow()}
+						class="translate-y-16"
+					/>
+				</div>
+			</Show>
+			<button
+				type="button"
+				aria-label={requested() ? "Pause video" : "Play video"}
+				aria-busy={requested() || undefined}
+				class="flex fixed z-10 justify-center items-center rounded-full size-8 bg-ed-text-1 text-ed-card transition-opacity hover:opacity-90"
+				style={{ left: `${bounds.left}px`, top: `${bounds.top}px` }}
+				onClick={() => {
+					const next = !requested();
+					setRequested(next);
+					requestPlayWhenReady(next);
+				}}
+			>
+				<Show when={requested()} fallback={<IconCapPlay class="size-3" />}>
+					<IconCapPause class="size-3" />
+					<span
+						aria-hidden="true"
+						class="absolute -inset-[3px] rounded-full border-2 border-transparent border-t-ed-text-1 animate-spin motion-reduce:animate-none"
+					/>
+				</Show>
+			</button>
+		</Show>
+	);
+}
+
+export function EditorSkeleton(
+	props: { model?: PreparingEditorModel; playWhenReady?: boolean } = {},
+) {
 	const model = props.model ?? usePreparingEditorModel();
+	const [playButton, setPlayButton] = createSignal<HTMLButtonElement>();
+	const [preview, setPreview] = createSignal<HTMLDivElement>();
+	// A recording still being prepared plays from its own controls instead.
+	const playWhenReady = () => !!props.playWhenReady && !model.canPlay();
 	const [layoutRef, setLayoutRef] = createSignal<HTMLDivElement>();
 	const bounds = createElementBounds(layoutRef);
 	const [savedHeight] = makePersisted(createSignal<number | null>(null), {
@@ -223,7 +294,11 @@ export function EditorSkeleton(props: { model?: PreparingEditorModel } = {}) {
 					class="flex overflow-y-hidden flex-row flex-1 min-h-0 gap-2 px-2"
 					style={{ "min-height": `${layout().minPlayerHeight}px` }}
 				>
-					<PreparingPlayer model={model} />
+					<PreparingPlayer
+						model={model}
+						playButtonRef={setPlayButton}
+						previewRef={setPreview}
+					/>
 					<PreparingSidebar />
 				</div>
 				<Show when={isWebEditor}>
@@ -238,6 +313,9 @@ export function EditorSkeleton(props: { model?: PreparingEditorModel } = {}) {
 					<PreparingTimeline model={model} />
 				</div>
 			</div>
+			<Show when={playWhenReady()}>
+				<PlayWhenReady anchor={playButton()} preview={preview()} />
+			</Show>
 		</div>
 	);
 }

@@ -253,8 +253,148 @@ test("playback starts at the resolution the previous playback settled at", () =>
 		playback.play();
 		expect(sizes).toEqual([1, 0.5, 0.5]);
 	} finally {
+		playback.pause();
 		performance.now = realNow;
 		frames.requestAnimationFrame = raf;
 		frames.cancelAnimationFrame = caf;
+	}
+});
+
+test("playback holds while a frame waits on its media and resumes from it", async () => {
+	const playback = Object.create(
+		BrowserLocalPlayback.prototype,
+	) as BrowserLocalPlayback;
+	const audio: string[] = [];
+	Reflect.set(playback, "previewBase", null);
+	Reflect.set(playback, "playing", false);
+	Reflect.set(playback, "disposed", false);
+	Reflect.set(playback, "previewScale", 1);
+	Reflect.set(playback, "playbackScale", 1);
+	Reflect.set(playback, "outputTime", 2);
+	Reflect.set(playback, "audio", {
+		resume: () => audio.push("resume"),
+		pause: () => audio.push("pause"),
+	});
+	Reflect.set(playback, "pool", { pause() {} });
+	let finishFrame: (rendered: boolean) => void = () => undefined;
+	const requested: number[] = [];
+	Reflect.set(playback, "renderAt", (time: number) => {
+		requested.push(time);
+		return new Promise<boolean>((resolve) => {
+			finishFrame = resolve;
+		});
+	});
+	const frames = globalThis as {
+		requestAnimationFrame?: unknown;
+		cancelAnimationFrame?: unknown;
+	};
+	const raf = frames.requestAnimationFrame;
+	const caf = frames.cancelAnimationFrame;
+	let next: (() => void) | null = null;
+	frames.requestAnimationFrame = (callback: () => void) => {
+		next = callback;
+		return 1;
+	};
+	frames.cancelAnimationFrame = () => undefined;
+	const realNow = performance.now.bind(performance);
+	let now = 1000;
+	performance.now = () => now;
+	const host = globalThis as { window?: unknown };
+	const realWindow = host.window;
+	const events = new EventTarget();
+	const buffering: boolean[] = [];
+	events.addEventListener("cap-editor-buffering", (event) =>
+		buffering.push((event as CustomEvent<boolean>).detail),
+	);
+	host.window = events;
+	const step = (ms: number) => {
+		now += ms;
+		const callback = next;
+		next = null;
+		callback?.();
+	};
+	try {
+		playback.play();
+		// Play shows as loading until its first frame is drawn.
+		expect(buffering).toEqual([true]);
+		step(16);
+		expect(requested).toEqual([2]);
+		step(100);
+		expect(audio).toEqual(["resume"]);
+		step(400);
+		expect(audio).toEqual(["resume", "pause"]);
+		finishFrame(true);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(audio).toEqual(["resume", "pause", "resume"]);
+		expect(buffering).toEqual([true, false]);
+		// The next frame continues from the one that waited, not from where
+		// the clock would have got to.
+		step(40);
+		expect(requested[1]).toBeCloseTo(2.04, 3);
+		// A frame mid-play that waits on its media holds again.
+		step(100);
+		expect(buffering).toEqual([true, false]);
+		step(300);
+		expect(audio).toEqual(["resume", "pause", "resume", "pause"]);
+		expect(buffering).toEqual([true, false, true]);
+		finishFrame(true);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(buffering).toEqual([true, false, true, false]);
+	} finally {
+		playback.pause();
+		host.window = realWindow;
+		performance.now = realNow;
+		frames.requestAnimationFrame = raf;
+		frames.cancelAnimationFrame = caf;
+	}
+});
+
+test("a paused frame waiting on its media shows as loading", async () => {
+	const playback = Object.create(
+		BrowserLocalPlayback.prototype,
+	) as BrowserLocalPlayback;
+	Reflect.set(playback, "playing", false);
+	Reflect.set(playback, "disposed", false);
+	Reflect.set(playback, "seeking", null);
+	Reflect.set(playback, "pendingSeek", null);
+	Reflect.set(playback, "renderedTime", -1);
+	Reflect.set(playback, "scrubbing", false);
+	Reflect.set(playback, "lastKeyFrameAt", 0);
+	Reflect.set(playback, "canvas", { hasRenderedFrame: () => false });
+	const finish: Array<() => void> = [];
+	Reflect.set(
+		playback,
+		"renderAt",
+		() =>
+			new Promise<boolean>((resolve) => {
+				finish.push(() => resolve(true));
+			}),
+	);
+	const host = globalThis as { window?: unknown };
+	const realWindow = host.window;
+	const events = new EventTarget();
+	const buffering: boolean[] = [];
+	events.addEventListener("cap-editor-buffering", (event) =>
+		buffering.push((event as CustomEvent<boolean>).detail),
+	);
+	host.window = events;
+	const wait = (ms: number) =>
+		new Promise((resolve) => setTimeout(resolve, ms));
+	try {
+		// Drawn quickly, as when scrubbing cached media: nothing to show.
+		const quick = playback.seek(1);
+		await wait(50);
+		finish.shift()?.();
+		await quick;
+		await wait(300);
+		expect(buffering).toEqual([]);
+		const slow = playback.seek(2);
+		await wait(300);
+		expect(buffering).toEqual([true]);
+		finish.shift()?.();
+		await slow;
+		expect(buffering).toEqual([true, false]);
+	} finally {
+		host.window = realWindow;
 	}
 });

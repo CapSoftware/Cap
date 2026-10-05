@@ -139,7 +139,7 @@ async function mountEditorSkeleton(element: HTMLElement) {
 		perfMark("skeleton");
 		return (
 			<div class="flex h-screen w-screen flex-col bg-ed-window text-ed-text-1">
-				<EditorSkeleton model={model} />
+				<EditorSkeleton model={model} playWhenReady />
 			</div>
 		);
 	}, element);

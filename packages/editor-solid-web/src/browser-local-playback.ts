@@ -1,4 +1,5 @@
 import { applyDefaultStyle } from "@cap/editor-cap-bundle/default-style";
+import { reportPlaybackBuffering } from "../../../apps/desktop/src/routes/editor/playback-buffering";
 import type {
 	BrowserRecordingTimes,
 	BrowserTimeline,
@@ -161,6 +162,13 @@ const SCRUB_REFINE_MS = 40;
 const KEY_FRAME_TIME_OFFSET = 0.002;
 
 const PLAYBACK_SCALE_SETTLED_MS = 3000;
+/// A playing frame still not drawn after this long is waiting on its media:
+/// playback holds, audio included, and carries on from that frame instead of
+/// skipping what it missed.
+const STALL_MS = 300;
+/// A paused frame (a seek, or a redraw after an edit) still not drawn after
+/// this long is waiting on its media too, and is shown as loading.
+const SEEK_HOLD_MS = 250;
 
 /// Zoom springs keep settling after a zoom segment ends.
 const ZOOM_SETTLE_SECS = 3;
@@ -304,6 +312,11 @@ export class BrowserLocalPlayback {
 	private averageFrameCostMs = 0;
 	private lastRenderedAt = 0;
 	private playClockAligned = false;
+	private stalled = false;
+	private renderStartedAt = 0;
+	private awaitingPlayingFrame = false;
+	private seekHeld = false;
+	private seekHoldTimer: ReturnType<typeof setTimeout> | undefined;
 	private audioClockAligned = false;
 	private audioOffsets: number[] = [];
 	private configJson: string;
@@ -1232,7 +1245,12 @@ export class BrowserLocalPlayback {
 				}
 				keyFrame = this.scrubbing;
 				this.drawingSeek = time;
-				result = await this.renderAt(time, false, true, keyFrame);
+				this.holdForSeek(true);
+				try {
+					result = await this.renderAt(time, false, true, keyFrame);
+				} finally {
+					this.holdForSeek(false);
+				}
 				if (keyFrame) this.lastKeyFrameAt = performance.now();
 			}
 			return result;
@@ -1261,6 +1279,11 @@ export class BrowserLocalPlayback {
 		if (this.playing) return;
 		this.audio.resume();
 		this.playing = true;
+		// Play pressed before this preview existed was already shown as
+		// buffering; the first frame drawn ends that.
+		this.awaitingPlayingFrame = true;
+		this.holdForSeek(false);
+		this.reportHold();
 		this.playStartedAt = performance.now();
 		this.playStartedTime = this.outputTime;
 		this.lastRequestedFrame = -1;
@@ -1283,6 +1306,15 @@ export class BrowserLocalPlayback {
 			this.animationFrame = requestAnimationFrame(tick);
 			if (this.frameBusy) {
 				perfCount("tick.busy");
+				if (
+					!this.stalled &&
+					performance.now() - this.renderStartedAt > STALL_MS
+				) {
+					this.stalled = true;
+					this.audio.pause();
+					this.reportHold();
+					perfCount("playback.stall");
+				}
 				return;
 			}
 			if (firstTick) {
@@ -1296,11 +1328,16 @@ export class BrowserLocalPlayback {
 			this.lastRequestedFrame = frame;
 			this.frameBusy = true;
 			const started = performance.now();
+			this.renderStartedAt = started;
 			void this.renderAt(time, true)
 				.then((rendered) => {
 					if (rendered === false) this.pause();
-					else if (rendered === true)
+					else if (rendered === true) {
+						this.awaitingPlayingFrame = false;
+						if (this.stalled) this.resumeAfterStall(time);
+						this.reportHold();
 						this.samplePlaybackFrameCost(performance.now() - started);
+					}
 				})
 				.catch((cause: unknown) => {
 					if (cause instanceof DOMException && cause.name === "AbortError") {
@@ -1318,9 +1355,47 @@ export class BrowserLocalPlayback {
 		this.animationFrame = requestAnimationFrame(tick);
 	}
 
+	/// Whether a frame the viewer is waiting for is still loading: playback
+	/// starting or held, or a paused frame past SEEK_HOLD_MS.
+	private reportHold() {
+		reportPlaybackBuffering(
+			!this.disposed &&
+				(this.seekHeld ||
+					(this.playing && (this.awaitingPlayingFrame || this.stalled))),
+		);
+	}
+
+	private holdForSeek(waiting: boolean) {
+		clearTimeout(this.seekHoldTimer);
+		if (waiting) {
+			this.seekHoldTimer = setTimeout(() => {
+				this.seekHeld = true;
+				this.reportHold();
+			}, SEEK_HOLD_MS);
+			return;
+		}
+		if (!this.seekHeld) return;
+		this.seekHeld = false;
+		this.reportHold();
+	}
+
+	private resumeAfterStall(time: number) {
+		this.stalled = false;
+		if (!this.playing || this.disposed) return;
+		this.playStartedAt = performance.now();
+		this.playStartedTime = time;
+		this.audioClockAligned = false;
+		this.audioOffsets = [];
+		this.lastRenderedAt = 0;
+		this.audio.resume();
+	}
+
 	pause() {
 		if (!this.playing) return;
 		this.playing = false;
+		this.stalled = false;
+		this.awaitingPlayingFrame = false;
+		this.reportHold();
 		cancelAnimationFrame(this.animationFrame);
 		this.pool.pause();
 		this.audio.pause();
@@ -1352,8 +1427,10 @@ export class BrowserLocalPlayback {
 	dispose() {
 		if (this.disposed) return;
 		this.pause();
+		reportPlaybackBuffering(false);
 		this.disposed = true;
 		clearTimeout(this.refineTimer);
+		clearTimeout(this.seekHoldTimer);
 		this.frameController?.abort();
 		this.canvas.dispose();
 		this.audio.dispose();

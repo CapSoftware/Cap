@@ -21,6 +21,7 @@ import { captionsStore } from "~/store/captions";
 import { createTauriEventListener } from "~/utils/createEventListener";
 import { commands } from "~/utils/tauri";
 import AspectRatioSelect from "./AspectRatioSelect";
+import { BufferingStatus, createBufferingDisplay } from "./buffering-status";
 import {
 	CanvasElementsOverlay,
 	SnapGuidesOverlay,
@@ -39,6 +40,7 @@ import type { FocusMode } from "./focus-mode";
 import { ImageOverlay } from "./image-overlay";
 import { MaskOverlay } from "./MaskOverlay";
 import { PerformanceOverlay } from "./PerformanceOverlay";
+import { createPlaybackBuffering, onPlayRequest } from "./playback-buffering";
 import { usePreparingEditor } from "./preparing-editor-context";
 import { PreparingFrame } from "./preparing-frame";
 import {
@@ -293,7 +295,25 @@ export function PlayerContent(props: {
 		}
 	});
 
+	// On the web the frame Play starts from can still be loading, so the
+	// button shows the press at once rather than when playback begins.
+	const [playPending, setPlayPending] = createSignal(false);
+	let playRequest = 0;
+	const shownPlaying = () => playPending() || (playbackIntent() && !isAtEnd());
+	const buffering = createPlaybackBuffering();
+	const bufferingDisplay = createBufferingDisplay(
+		() => playPending() || buffering(),
+		shownPlaying,
+	);
+	const playBusy = () => bufferingDisplay.shown() && shownPlaying();
+
 	const handlePlayPauseClick = async () => {
+		if (playPending()) {
+			// Pressed again before playback began: it doesn't start.
+			playRequest++;
+			setPlayPending(false);
+			return;
+		}
 		const pending = requestHandoffPlayback(
 			isAtEnd() || !playbackIntent(),
 			isAtEnd() ? 0 : undefined,
@@ -302,27 +322,44 @@ export function PlayerContent(props: {
 			await pending;
 			return;
 		}
+		const request = ++playRequest;
+		const current = () => request === playRequest;
 		try {
 			if (isAtEnd()) {
+				setPlayPending(true);
 				await commands.stopPlayback();
 				setEditorState("playbackTime", 0);
 				await commands.seekTo(0);
+				if (!current()) return;
 				await commands.startPlayback(FPS, previewResolutionBase());
 				setEditorState("playing", true);
 			} else if (editorState.playing) {
 				await commands.stopPlayback();
 				setEditorState("playing", false);
 			} else {
+				setPlayPending(true);
 				await commands.seekTo(Math.floor(editorState.playbackTime * FPS));
+				if (!current()) return;
 				await commands.startPlayback(FPS, previewResolutionBase());
 				setEditorState("playing", true);
+			}
+			if (!current() && editorState.playing) {
+				await commands.stopPlayback();
+				setEditorState("playing", false);
 			}
 			if (editorState.playing) setEditorState("previewTime", null);
 		} catch (error) {
 			console.error("Error handling play/pause:", error);
 			setEditorState("playing", false);
+		} finally {
+			if (current()) setPlayPending(false);
 		}
 	};
+
+	// Play pressed on the loading screen starts once the editor is here.
+	onPlayRequest((playing) => {
+		if (playing !== shownPlaying()) void handlePlayPauseClick();
+	});
 
 	if (import.meta.env.DEV) {
 		createTauriEventListener<boolean>(
@@ -334,7 +371,7 @@ export function PlayerContent(props: {
 					),
 			},
 			(playing) => {
-				if (playbackIntent() !== playing) void handlePlayPauseClick();
+				if (shownPlaying() !== playing) void handlePlayPauseClick();
 			},
 		);
 	}
@@ -469,6 +506,11 @@ export function PlayerContent(props: {
 			</div>
 			<PreviewCanvas
 				focusMode={props.focusMode}
+				buffering={
+					bufferingDisplay.shown()
+						? { playing: shownPlaying(), slow: bufferingDisplay.slow() }
+						: null
+				}
 				onPreviewMouseDown={(event) => {
 					if (event.button === 0) setPreviewPointerDown(true);
 				}}
@@ -505,17 +547,22 @@ export function PlayerContent(props: {
 					<Tooltip kbd={["Space"]} content="Play/Pause video">
 						<button
 							type="button"
-							aria-label={
-								playbackIntent() && !isAtEnd() ? "Pause video" : "Play video"
-							}
+							aria-label={shownPlaying() ? "Pause video" : "Play video"}
+							aria-busy={playBusy() || undefined}
 							onClick={handlePlayPauseClick}
-							class="flex justify-center items-center rounded-full transition-opacity size-8 bg-ed-text-1 text-ed-card hover:opacity-90"
+							class="flex relative justify-center items-center rounded-full transition-opacity size-8 bg-ed-text-1 text-ed-card hover:opacity-90"
 						>
-							{!playbackIntent() || isAtEnd() ? (
-								<IconCapPlay class="size-3" />
-							) : (
+							{shownPlaying() ? (
 								<IconCapPause class="size-3" />
+							) : (
+								<IconCapPlay class="size-3" />
 							)}
+							<Show when={playBusy()}>
+								<span
+									aria-hidden="true"
+									class="absolute -inset-[3px] rounded-full border-2 border-transparent border-t-ed-text-1 animate-spin motion-reduce:animate-none"
+								/>
+							</Show>
 						</button>
 					</Tooltip>
 					<button
@@ -645,6 +692,7 @@ function FocusModeIcon(props: { active: boolean }) {
 function PreviewCanvas(props: {
 	onPreviewMouseDown: (event: MouseEvent) => void;
 	focusMode?: FocusMode;
+	buffering?: { playing: boolean; slow: boolean } | null;
 }) {
 	const preparing = usePreparingEditor();
 	const {
@@ -940,6 +988,13 @@ function PreviewCanvas(props: {
 			onContextMenu={handleContextMenu}
 		>
 			<CaptionsRegenerateBadge class="absolute top-3 right-3 z-20" />
+			<Show when={!hasFrame() && props.buffering}>
+				{(status) => (
+					<div class="flex absolute inset-0 z-20 justify-center items-center p-4 pointer-events-none">
+						<BufferingStatus playing={status().playing} slow={status().slow} />
+					</div>
+				)}
+			</Show>
 			<Show when={preparing?.model.rendered() && !preparing?.ordinaryReady()}>
 				<div class="absolute inset-0 flex items-center justify-center p-4 z-10 pointer-events-none">
 					<PreparingFrame fallback={false} />
@@ -978,6 +1033,15 @@ function PreviewCanvas(props: {
 						)}
 					</Show>
 					<Show when={hasFrame()}>
+						<Show when={props.buffering}>
+							{(status) => (
+								<BufferingStatus
+									playing={status().playing}
+									slow={status().slow}
+									class="absolute top-2.5 left-2.5 z-30"
+								/>
+							)}
+						</Show>
 						<CanvasElementsOverlay size={size()} />
 						<div class="absolute inset-0 isolate pointer-events-none">
 							<MaskOverlay size={size()} />

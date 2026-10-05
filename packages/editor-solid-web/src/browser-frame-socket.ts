@@ -1,4 +1,5 @@
 import { createResource, createSignal } from "solid-js";
+import { reportPlaybackBuffering } from "../../../apps/desktop/src/routes/editor/playback-buffering";
 import type {
 	CanvasControls,
 	FrameData,
@@ -331,11 +332,14 @@ class BrowserPreviewController {
 
 	play() {
 		this.desiredPlaying = true;
+		// Until the preview exists, playing waits for it.
+		if (!this.playback) reportPlaybackBuffering(true);
 		this.playback?.play();
 	}
 
 	pause() {
 		this.desiredPlaying = false;
+		if (!this.playback) reportPlaybackBuffering(false);
 		this.playback?.pause();
 	}
 
