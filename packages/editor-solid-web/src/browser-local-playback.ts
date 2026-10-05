@@ -177,6 +177,11 @@ const STALL_MS = 300;
 /// this long is waiting on its media too, and is shown as loading.
 const SEEK_HOLD_MS = 250;
 const FIRST_FRAME_ATTEMPTS = 3;
+/// A loading paused frame gives way to a newer request only once requests
+/// have stopped this long: a scrub asks for a new time every few
+/// milliseconds and shows each frame as it finishes, so giving way mid-scrub
+/// would leave the preview blank until the drag ends.
+const SEEK_SETTLE_MS = 150;
 /// While paused, the media this far past the playhead is read ahead once
 /// nothing else is loading, so Play starts on loaded media even when the
 /// recording's bitrate is above the connection's.
@@ -335,6 +340,8 @@ export class BrowserLocalPlayback {
 	private seekHeld = false;
 	private seekHoldShown = false;
 	private seekHoldTimer: ReturnType<typeof setTimeout> | undefined;
+	private seekSettleTimer: ReturnType<typeof setTimeout> | undefined;
+	private lastSeekRequestAt = 0;
 	private bufferController: AbortController | null = null;
 	private audioClockAligned = false;
 	private audioOffsets: number[] = [];
@@ -360,6 +367,10 @@ export class BrowserLocalPlayback {
 		sourceColorFix: boolean;
 	} | null = null;
 	private lateCamera: Promise<unknown> | null = null;
+	/// Bumped whenever the playhead jumps (a seek, play, pause or new config),
+	/// so a camera frame that arrives late for an earlier position is
+	/// dropped instead of replacing the held one.
+	private cameraGeneration = 0;
 	/// Aborted when playback stops; a late camera frame outlives the frame
 	/// that asked for it.
 	private playController: AbortController | null = null;
@@ -621,6 +632,7 @@ export class BrowserLocalPlayback {
 		this.configJson = json;
 		this.motion = motionRanges(config, this.hasCursor);
 		this.drawnFrameKey = null;
+		this.jumpCamera();
 		this.audio.setConfig(config);
 		this.canvas.resetFrameState();
 		this.lastRequestedFrame = -1;
@@ -931,11 +943,13 @@ export class BrowserLocalPlayback {
 		clip: number,
 		screen: Promise<TrackFrame | null>,
 		camera: Promise<TrackFrame | null>,
+		playing = true,
 	): Promise<TrackFrame | null> {
 		const held = this.heldCamera;
 		if (!held || held.clip !== clip) {
 			return camera.then((frame) => this.holdCamera(clip, frame));
 		}
+		const generation = this.cameraGeneration;
 		const ready = camera.then((frame) => ({ frame }));
 		const result = await Promise.race([
 			ready,
@@ -951,14 +965,23 @@ export class BrowserLocalPlayback {
 		perfCount("camera.held");
 		perfEvent("camera.held");
 		const late = ready.then(
-			({ frame }) => this.holdCamera(clip, frame)?.release(),
+			({ frame }) => {
+				if (generation === this.cameraGeneration) this.holdCamera(clip, frame);
+				frame?.release();
+			},
 			() => undefined,
 		);
+		if (!playing) return this.heldCameraFrame();
 		this.lateCamera = late;
 		void late.finally(() => {
 			if (this.lateCamera === late) this.lateCamera = null;
 		});
 		return this.heldCameraFrame();
+	}
+
+	private jumpCamera() {
+		this.cameraGeneration++;
+		this.lateCamera = null;
 	}
 
 	private heldCameraFrame(): TrackFrame | null {
@@ -1003,6 +1026,7 @@ export class BrowserLocalPlayback {
 			keyFrame,
 		).finally(() => perfSpan("decode.display", started));
 		const hasCamera = Number.isFinite(sourceTimes[1]) && sourceTimes[1] >= 0;
+		const generation = this.cameraGeneration;
 		const playSignal =
 			playing && !forceSeek && role === "primary"
 				? this.playController?.signal
@@ -1029,11 +1053,23 @@ export class BrowserLocalPlayback {
 				forceSeek,
 				keyFrame,
 			).finally(() => perfSpan("decode.camera", started));
-			cameraPending = playSignal
-				? this.cameraOrHeld(recordingClip, screenFrame, cameraFrame)
-				: role === "primary"
-					? cameraFrame.then((frame) => this.holdCamera(recordingClip, frame))
-					: cameraFrame;
+			// A scrub shows the screen moving with the camera's last frame; the
+			// exact frame drawn once it settles waits for both.
+			cameraPending =
+				playSignal || (keyFrame && role === "primary")
+					? this.cameraOrHeld(
+							recordingClip,
+							screenFrame,
+							cameraFrame,
+							!!playSignal,
+						)
+					: role === "primary"
+						? cameraFrame.then((frame) =>
+								generation === this.cameraGeneration
+									? this.holdCamera(recordingClip, frame)
+									: frame,
+							)
+						: cameraFrame;
 		}
 		const [screenResult, cameraResult] = await Promise.allSettled([
 			screenFrame,
@@ -1335,6 +1371,7 @@ export class BrowserLocalPlayback {
 
 	async seek(time: number) {
 		if (this.disposed) throw new Error("Editor playback is closed");
+		this.jumpCamera();
 		if (!Number.isFinite(time) || time < 0) {
 			throw new Error("Editor playback time is invalid");
 		}
@@ -1361,7 +1398,12 @@ export class BrowserLocalPlayback {
 		this.bufferController?.abort();
 		this.pendingSeek = time;
 		if (this.seeking) {
-			this.abandonHeldSeek();
+			this.lastSeekRequestAt = performance.now();
+			clearTimeout(this.seekSettleTimer);
+			this.seekSettleTimer = setTimeout(
+				() => this.abandonHeldSeek(),
+				SEEK_SETTLE_MS,
+			);
 			return this.seeking;
 		}
 		if (time === this.renderedTime && this.canvas.hasRenderedFrame()) {
@@ -1430,6 +1472,7 @@ export class BrowserLocalPlayback {
 		if (this.disposed) throw new Error("Editor playback is closed");
 		if (this.playing) return;
 		perfEvent("play");
+		this.jumpCamera();
 		this.bufferController?.abort();
 		this.playController?.abort();
 		this.playController = new AbortController();
@@ -1603,7 +1646,8 @@ export class BrowserLocalPlayback {
 				// decode on a slow machine.
 				this.seekHoldShown = this.canvas.hasRenderedFrame();
 				this.reportHold();
-				this.abandonHeldSeek();
+				if (performance.now() - this.lastSeekRequestAt >= SEEK_SETTLE_MS)
+					this.abandonHeldSeek();
 			}, SEEK_HOLD_MS);
 			return;
 		}
@@ -1633,7 +1677,7 @@ export class BrowserLocalPlayback {
 		this.reportHold();
 		this.playController?.abort();
 		this.playController = null;
-		this.lateCamera = null;
+		this.jumpCamera();
 		cancelAnimationFrame(this.animationFrame);
 		this.pool.pause();
 		this.audio.pause();
@@ -1669,6 +1713,7 @@ export class BrowserLocalPlayback {
 		this.disposed = true;
 		clearTimeout(this.refineTimer);
 		clearTimeout(this.seekHoldTimer);
+		clearTimeout(this.seekSettleTimer);
 		this.bufferController?.abort();
 		this.frameController?.abort();
 		this.heldCamera?.frame.close();

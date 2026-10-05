@@ -506,3 +506,96 @@ test("a playing camera that falls behind holds its last frame and catches up", a
 		host.VideoFrame = realFrame;
 	}
 });
+
+test("a camera frame that arrives after a seek does not replace the held one", async () => {
+	class FakeFrame {
+		constructor(readonly time: number) {}
+		clone() {
+			return new FakeFrame(this.time);
+		}
+		close() {}
+	}
+	const host = globalThis as { VideoFrame?: unknown };
+	const realFrame = host.VideoFrame;
+	host.VideoFrame = FakeFrame;
+	const playback = Object.create(
+		BrowserLocalPlayback.prototype,
+	) as BrowserLocalPlayback;
+	Reflect.set(playback, "disposed", false);
+	Reflect.set(playback, "heldCamera", null);
+	Reflect.set(playback, "lateCamera", null);
+	Reflect.set(playback, "cameraGeneration", 0);
+	const track = (time: number) => ({
+		source: new FakeFrame(time) as unknown as VideoFrame,
+		width: 640,
+		height: 360,
+		mediaTime: time,
+		release: () => undefined,
+		sourceColorFix: false,
+	});
+	const cameraOrHeld = (
+		Reflect.get(playback, "cameraOrHeld") as (
+			clip: number,
+			screen: Promise<unknown>,
+			camera: Promise<unknown>,
+		) => Promise<{ mediaTime: number } | null>
+	).bind(playback);
+	const heldTime = () =>
+		(Reflect.get(playback, "heldCamera") as { mediaTime: number }).mediaTime;
+	try {
+		await cameraOrHeld(0, Promise.resolve(null), Promise.resolve(track(1)));
+		let arrive: (frame: unknown) => void = () => undefined;
+		const slow = new Promise((resolve) => {
+			arrive = resolve;
+		});
+		await cameraOrHeld(0, Promise.resolve(null), slow);
+		// The playhead jumps elsewhere, then the earlier camera frame lands.
+		(Reflect.get(playback, "jumpCamera") as () => void).call(playback);
+		expect(Reflect.get(playback, "lateCamera")).toBeNull();
+		arrive(track(1.5));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(heldTime()).toBe(1);
+	} finally {
+		host.VideoFrame = realFrame;
+	}
+});
+
+test("a loading frame stays while a scrub keeps asking and gives way once it stops", async () => {
+	const playback = Object.create(
+		BrowserLocalPlayback.prototype,
+	) as BrowserLocalPlayback;
+	Reflect.set(playback, "playing", false);
+	Reflect.set(playback, "disposed", false);
+	Reflect.set(playback, "seeking", null);
+	Reflect.set(playback, "pendingSeek", null);
+	Reflect.set(playback, "renderedTime", -1);
+	Reflect.set(playback, "scrubbing", false);
+	Reflect.set(playback, "lastKeyFrameAt", 0);
+	Reflect.set(playback, "lastSeekRequestAt", 0);
+	Reflect.set(playback, "canvas", { hasRenderedFrame: () => true });
+	let aborted = 0;
+	Reflect.set(playback, "renderAt", () => {
+		const controller = new AbortController();
+		Reflect.set(playback, "frameController", controller);
+		return new Promise<boolean | null>((resolve) =>
+			controller.signal.addEventListener("abort", () => {
+				aborted++;
+				resolve(null);
+			}),
+		);
+	});
+	const wait = (ms: number) =>
+		new Promise((resolve) => setTimeout(resolve, ms));
+	void playback.seek(1);
+	// A drag asking for a new time every 30 ms for 600 ms.
+	for (let step = 1; step <= 20; step++) {
+		await wait(30);
+		void playback.seek(1 + step / 10);
+	}
+	expect(aborted).toBe(0);
+	await wait(250);
+	expect(aborted).toBe(1);
+	playback.pause();
+	clearTimeout(Reflect.get(playback, "seekHoldTimer"));
+	clearTimeout(Reflect.get(playback, "seekSettleTimer"));
+});
