@@ -66,9 +66,15 @@ export function getEffectiveOrganizationRole({
 	ownerId: string | null | undefined;
 	memberRole: string | null | undefined;
 }): OrganizationRole | null {
+	// Prefer organization_members.role as source-of-truth over organization.ownerId
+	// to avoid drift between the two fields (see #1641).
+	const normalizedRole = normalizeOrganizationRole(memberRole);
+	if (normalizedRole === "owner") return "owner";
+	if (normalizedRole) return normalizedRole;
+	// Fallback: if membership record is missing (e.g. legacy data),
+	// derive owner from the organization.ownerId field.
 	if (userId && ownerId && userId === ownerId) return "owner";
-	const role = normalizeOrganizationRole(memberRole);
-	return role === "owner" ? "member" : role;
+	return null;
 }
 
 export function normalizeSpaceRole(
@@ -131,7 +137,11 @@ export function isOrganizationOwnerTarget({
 	ownerId: string | null | undefined;
 	targetRole: OrganizationRole | null | undefined;
 }) {
-	return targetRole === "owner" || (!!targetUserId && targetUserId === ownerId);
+	// Prefer membership role over ownerId (see #1641).
+	if (targetRole === "owner") return true;
+	if (targetRole) return false;
+	// Fallback for legacy/missing membership records.
+	return !!targetUserId && !!ownerId && targetUserId === ownerId;
 }
 
 export function canChangeOrganizationMemberRole({
