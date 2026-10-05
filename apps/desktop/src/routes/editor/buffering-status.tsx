@@ -110,11 +110,11 @@ export function BufferingStatus(props: {
 			<div
 				ref={fadeIn}
 				role="status"
-				class="flex relative flex-col items-center gap-2 px-4 pt-3.5 pb-3 max-w-[16.5rem] text-center rounded-xl text-white bg-[rgba(18,18,20,0.72)] backdrop-blur-md shadow-[0_0_0_0.5px_rgba(255,255,255,0.14),0_10px_28px_-8px_rgba(0,0,0,0.5)]"
+				class="flex relative flex-col items-center gap-2 px-4 pt-3.5 pb-3 max-w-[16.5rem] text-center rounded-xl text-white bg-[rgba(22,22,24,0.86)] shadow-[0_0_0_0.5px_rgba(255,255,255,0.14),0_10px_28px_-8px_rgba(0,0,0,0.5)]"
 			>
 				<span
 					aria-hidden="true"
-					class="rounded-full border-[2.5px] size-6 shrink-0 border-white/20 border-t-white animate-spin motion-reduce:animate-none"
+					class="rounded-full border-[2.5px] size-6 shrink-0 border-white/20 border-t-white animate-spin will-change-transform motion-reduce:animate-none"
 				/>
 				<span class="text-[13px] font-medium leading-4">
 					{props.title ?? "Loading video"}

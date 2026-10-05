@@ -16,10 +16,10 @@ function EntryLoadingStatus() {
 .cap-entry-slow{opacity:0;max-height:0;margin-top:-8px;overflow:hidden;animation:cap-entry-slow 240ms ease-out 6s forwards}
 @media (prefers-reduced-motion:reduce){.cap-entry-status{animation-duration:1ms}.cap-entry-slow{animation-duration:1ms}}`}
 			</style>
-			<output className="cap-entry-status flex max-w-[16.5rem] flex-col items-center gap-2 rounded-xl bg-[rgba(18,18,20,0.72)] px-4 pb-3 pt-3.5 text-center text-white shadow-[0_0_0_0.5px_rgba(255,255,255,0.14),0_10px_28px_-8px_rgba(0,0,0,0.5)] backdrop-blur-md">
+			<output className="cap-entry-status flex max-w-[16.5rem] flex-col items-center gap-2 rounded-xl bg-[rgba(22,22,24,0.86)] px-4 pb-3 pt-3.5 text-center text-white shadow-[0_0_0_0.5px_rgba(255,255,255,0.14),0_10px_28px_-8px_rgba(0,0,0,0.5)]">
 				<span
 					aria-hidden="true"
-					className="size-6 shrink-0 animate-spin rounded-full border-[2.5px] border-white/20 border-t-white motion-reduce:animate-none"
+					className="size-6 shrink-0 animate-spin rounded-full border-[2.5px] border-white/20 border-t-white will-change-transform motion-reduce:animate-none"
 				/>
 				<span className="text-[13px] font-medium leading-4">
 					Loading editor
