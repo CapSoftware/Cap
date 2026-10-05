@@ -449,14 +449,9 @@ const TAB_IDS = {
 	captions: "captions",
 } as const;
 
-/**
- * The sidebar as a sheet (the web editor below 1024px wide): it rests as a
- * bar of its tab icons, and choosing one opens it over the timeline.
- */
 export type ConfigSidebarSheet = {
 	open: () => boolean;
 	setOpen: (open: boolean) => void;
-	/** Extra controls for the resting bar (the player's tools on a phone). */
 	tools?: JSX.Element;
 };
 
@@ -707,8 +702,7 @@ function ConfigSidebarContent(props: { sheet?: ConfigSidebarSheet }) {
 		}
 	});
 
-	// Rendered inside the Tabs below (it reads their context), either on its
-	// own as the sidebar's header or within the sheet's bar.
+	// A function so it's created inside the Tabs below, whose context it reads.
 	const tabList = () => (
 		<KTabs.List
 			class={
@@ -770,8 +764,6 @@ function ConfigSidebarContent(props: { sheet?: ConfigSidebarSheet }) {
 								: "w-10 h-[30px] rounded-[9px]",
 						)}
 						onClick={() => {
-							// Choosing the tab that's showing puts the sheet away;
-							// any other tab opens it.
 							const showing =
 								!!props.sheet?.open() &&
 								state.selectedTab === item.id &&

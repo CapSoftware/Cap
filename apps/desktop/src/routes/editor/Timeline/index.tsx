@@ -98,8 +98,6 @@ const PLAYHEAD_STALL_MS = 250;
 // directly until then.
 const PLAYHEAD_SETTLE_MS = 300;
 const TRACK_GUTTER_INSET = 4;
-// A phone folds track names (and the "Add track" label) to their icons so
-// the lanes keep the width.
 const PHONE_TRACK_GUTTER = 40;
 const trackGutter = () =>
 	editorLayout().phone() ? PHONE_TRACK_GUTTER : TRACK_GUTTER;

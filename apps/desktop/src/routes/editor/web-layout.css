@@ -1,19 +1,13 @@
 /*
- * The web editor at tablet and phone sizes. responsive-layout.ts sets the
- * attributes on <html> from media queries; the desktop app and the web
- * editor at 1024px and wider never get them, so nothing here reaches those
- * layouts.
- *
- * Below 1024px the player, clip strip and timeline stack in a grid, and the
- * settings sidebar becomes a sheet that rests as a bar of its tab icons under
- * the timeline and slides up over the strip and timeline when a tab is
- * chosen, so the preview stays in view while settings change.
+ * responsive-layout.ts sets these <html> attributes only in the web editor
+ * below 1024px, so nothing here reaches the desktop app or the wide layout.
+ * The sheet covers the strip and timeline rather than the preview so edits
+ * stay visible while settings change.
  */
 
 html[data-web-editor] [data-editor-timeline],
 html[data-web-editor] [data-preview-stage] {
-	/* One finger drags (replayed as the mouse drag it stands for), two pinch
-	   and scroll; the page itself never pans or zooms underneath. */
+	/* touch-mouse-bridge.ts owns these gestures; the page mustn't pan or zoom. */
 	touch-action: none;
 }
 
@@ -22,8 +16,6 @@ html[data-editor-compact] [data-editor-grid] {
 	--sheet-ease: cubic-bezier(0.32, 0.72, 0, 1);
 	display: grid;
 	grid-template-columns: minmax(0, 1fr);
-	/* The preview takes what's left once the timeline hugs its rows (up to a
-	   little under half the height, then it scrolls). */
 	grid-template-rows:
 		minmax(var(--player-min, 180px), 1fr)
 		auto
@@ -113,8 +105,7 @@ html[data-editor-compact] [data-editor-sheet][data-open] [data-sidebar-root] {
 	}
 }
 
-/* Wider than tall (a phone on its side, a short window): the preview gets the
-   left column and the timeline, with the sheet over it, the right. */
+/* A stacked timeline would leave the preview no height on a short screen. */
 @media (min-aspect-ratio: 5 / 4) {
 	html[data-editor-compact] [data-editor-grid] {
 		grid-template-columns: minmax(0, 1.25fr) minmax(300px, 1fr);
@@ -139,7 +130,6 @@ html[data-editor-compact] [data-editor-sheet][data-open] [data-sidebar-root] {
 	}
 }
 
-/* Focus mode: the preview over a timeline that hugs its rows. */
 html[data-editor-compact] [data-editor-root][data-focused] [data-editor-grid] {
 	grid-template-columns: minmax(0, 1fr);
 	grid-template-rows: minmax(0, 1fr) auto;
@@ -157,7 +147,6 @@ html[data-editor-compact]
 	grid-area: 2 / 1;
 }
 
-/* Header: one row, the title giving way first. */
 html[data-editor-compact] [data-editor-header] {
 	display: flex;
 	height: 52px;
@@ -188,7 +177,6 @@ html[data-editor-phone] [data-editor-header] {
 	height: 48px;
 }
 
-/* Player: touch-sized transport. */
 html[data-editor-compact] [data-transport-controls] {
 	gap: 4px;
 }
@@ -217,8 +205,6 @@ html[data-editor-compact] [data-player-toolbar] button {
 	min-height: 36px;
 }
 
-/* Phones: the toolbar's tools move into the sheet's bar, the preview's
-   frame is slimmer, and pinching replaces the zoom slider. */
 html[data-editor-phone] [data-player-toolbar],
 html[data-editor-phone] [data-player-zoom] {
 	display: none;
@@ -245,8 +231,6 @@ html[data-editor-phone] [data-add-track] {
 	border-radius: 8px;
 }
 
-/* The add-track tray wraps to the room beside the gutter rather than
-   running off a narrow screen. */
 html[data-editor-compact] .cap-track-tray {
 	max-width: var(--kb-popper-content-available-width, calc(100vw - 16px));
 }
@@ -255,7 +239,6 @@ html[data-editor-compact] .cap-track-tray > div:first-child {
 	flex-wrap: wrap;
 }
 
-/* At rest the sheet's bar shows no tab as chosen. */
 [data-sheet-closed] [data-sheet-bar] [role="tab"][data-selected] {
 	background-color: transparent;
 	color: var(--ed-text-2);
@@ -284,7 +267,6 @@ html[data-editor-phone] [data-track-type] > :first-child > button {
 	padding-left: 0;
 }
 
-/* Wider sheets keep the tabs together in the middle of the bar. */
 [data-sheet-bar] > [role="tablist"] {
 	max-width: 440px;
 	margin-inline: auto;
@@ -304,7 +286,6 @@ html[data-editor-compact] [data-editor-timeline]
 	}
 }
 
-/* Empty lanes keep their hint to one line on a phone. */
 html[data-editor-phone] .cap-empty-lane {
 	padding-inline: 10px;
 }
@@ -328,8 +309,6 @@ html[data-editor-compact] [data-popper-positioner] > :not([role="tooltip"]) {
 	overscroll-behavior: contain;
 }
 
-/* Export: the preview over its settings, side by side again when the
-   screen is wider than tall. */
 html[data-editor-compact] [data-export-body] {
 	flex-direction: column;
 }
@@ -395,13 +374,11 @@ html[data-editor-phone] [data-export-stats] > :nth-child(n + 3) {
 	}
 }
 
-/* Dialogs scroll inside a short screen rather than running off it. */
 html[data-editor-compact] [role="dialog"]:not([data-popper-positioner] > *) {
 	max-height: calc(100dvh - 16px);
 	overflow-y: auto;
 }
 
-/* Crop: the frame over its settings (beside them when wider than tall). */
 html[data-editor-compact] [data-crop-body] {
 	flex-direction: column;
 	align-items: stretch;

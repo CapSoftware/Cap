@@ -1,17 +1,8 @@
-/**
- * The timeline and the preview's on-canvas handles are driven by mouse
- * events, which a touch screen only sends for a tap. Inside an element given
- * to this bridge a one-finger drag is replayed as the mouse drag it stands
- * for (so scrubbing, trimming, moving and drawing segments work), and with
- * `pinch` two fingers act like a trackpad: pinch to zoom, slide sideways to
- * scroll the timeline and up or down to scroll its tracks.
- *
- * Taps are left alone: the browser already turns those into mouse events and
- * a click. The element needs `touch-action: none` so the page doesn't pan or
- * zoom underneath (see web-layout.css).
- */
+// The timeline and the preview's handles listen for mouse events, which a
+// touch screen only sends for a tap, so drags are replayed as mouse drags and
+// two fingers as trackpad wheels. Taps are left to the browser's own mouse
+// events. Needs `touch-action: none` on the element (web-layout.css).
 
-// Movement before a touch counts as a drag rather than a tap.
 const DRAG_SLOP_PX = 4;
 // Inverse of pinchZoomFactor in Timeline/zoom.ts: a ctrl+wheel delta of d
 // scales the visible span by exp(d * 0.012).
@@ -105,7 +96,6 @@ export function bridgeTouchToMouse(
 			pair = null;
 			return;
 		}
-		// A second finger turns a drag into a pinch.
 		endDrag();
 		single = null;
 		if (options.pinch && event.touches.length === 2) {
