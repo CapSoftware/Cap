@@ -1122,8 +1122,11 @@ export function ExportPage() {
 				</div>
 			</div>
 
-			<div class="flex-1 min-h-0 flex relative">
-				<div class="flex-1 min-w-0 flex flex-col bg-ed-stage pt-4 px-6 pb-5">
+			<div data-export-body class="flex-1 min-h-0 flex relative">
+				<div
+					data-export-preview
+					class="flex-1 min-w-0 flex flex-col bg-ed-stage pt-4 px-6 pb-5"
+				>
 					<div class="flex items-center gap-1.5 h-[22px] text-[12px] font-medium text-ed-text-2">
 						Preview
 						<Tooltip content="This is a rendered frame from your video. Adjust the settings to see the quality of the final export.">
@@ -1194,7 +1197,10 @@ export function ExportPage() {
 					</div>
 
 					<div class="flex justify-center">
-						<div class="flex h-11 min-w-[520px] rounded-[10px] bg-ed-card shadow-ed-card">
+						<div
+							data-export-stats
+							class="flex h-11 min-w-[520px] rounded-[10px] bg-ed-card shadow-ed-card"
+						>
 							<ExportStat
 								label="Duration"
 								value={
@@ -1232,7 +1238,10 @@ export function ExportPage() {
 					</div>
 				</div>
 
-				<div class="w-[400px] shrink-0 border-l border-ed-line flex flex-col bg-ed-card">
+				<div
+					data-export-settings
+					class="w-[400px] shrink-0 border-l border-ed-line flex flex-col bg-ed-card"
+				>
 					<div class="custom-scroll flex-1 min-h-0 overflow-y-auto overscroll-contain p-4 flex flex-col gap-5">
 						<ExportSection
 							name="Destination"
