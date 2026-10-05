@@ -5,6 +5,9 @@ const mocks = vi.hoisted(() => ({
 	worker: null as unknown,
 	fail: vi.fn(async () => undefined),
 	attach: vi.fn(async () => true),
+	record: vi.fn(async (..._args: unknown[]) => undefined),
+	withdraw: vi.fn(async (..._args: unknown[]) => undefined),
+	mediaEditor: null as null | ((path: string, init?: RequestInit) => Response),
 }));
 
 vi.mock("server-only", () => ({}));
@@ -24,7 +27,24 @@ vi.mock("@cap/database/emails/export-ready", () => ({ ExportReady: vi.fn() }));
 vi.mock("@cap/env", () => ({
 	serverEnv: () => ({ MEDIA_SERVER_WEBHOOK_SECRET: "worker-secret" }),
 }));
-vi.mock("@cap/web-backend", () => ({ Storage: {} }));
+vi.mock("@cap/web-backend", async () => {
+	const { Effect } = await import("effect");
+	return {
+		Storage: {
+			getAccessForVideo: () =>
+				Effect.succeed([
+					{
+						provider: "s3",
+						getInternalPresignedPutUrl: () =>
+							Effect.succeed("https://bucket.example/result.mp4"),
+					},
+				]),
+		},
+	};
+});
+vi.mock("@/lib/video-storage", () => ({
+	decodeStorageVideo: (v: unknown) => v,
+}));
 vi.mock("@/lib/server", async () => {
 	const { Effect } = await import("effect");
 	return {
@@ -34,13 +54,22 @@ vi.mock("@/lib/server", async () => {
 vi.mock("@/lib/editor-session", async () => {
 	const { Effect } = await import("effect");
 	return {
-		loadEligibleEditorVideo: vi.fn(),
-		verifyOwnedEditorSession: vi.fn(),
-		requestMediaEditor: (path: string) =>
+		loadEligibleEditorVideo: () =>
+			Effect.succeed({
+				id: "video",
+				ownerId: "owner",
+				fps: 30,
+				captionsEnabled: true,
+				metadata: {},
+			}),
+		verifyOwnedEditorSession: () => Effect.succeed("/editor/sessions/worker-1"),
+		requestMediaEditor: (path: string, init?: RequestInit) =>
 			Effect.succeed(
-				mocks.worker === "gone"
-					? new Response(null, { status: 404 })
-					: Response.json({ path, ...(mocks.worker as object) }),
+				mocks.mediaEditor
+					? mocks.mediaEditor(path, init)
+					: mocks.worker === "gone"
+						? new Response(null, { status: 404 })
+						: Response.json({ path, ...(mocks.worker as object) }),
 			),
 	};
 });
@@ -49,13 +78,15 @@ vi.mock("@/lib/render-farm-records", () => ({
 	changeRenderFarmExports: vi.fn(),
 	clearRecordingRender: vi.fn(),
 	failRenderFarmSave: mocks.fail,
-	recordRenderFarmSave: vi.fn(),
-	withdrawRenderFarmSave: vi.fn(),
+	recordRenderFarmSave: mocks.record,
+	withdrawRenderFarmSave: mocks.withdraw,
 }));
 
+import { Effect, Exit } from "effect";
 import { POST as callback } from "@/app/api/editor/worker-saves/callback/route";
 import {
 	parseWorkerSaveState,
+	startWorkerSave,
 	workerSaveCallbackUrl,
 	workerSaveOutput,
 	workerSaveProgress,
@@ -84,6 +115,9 @@ const save = (jobId = "worker:job-1") => ({
 beforeEach(() => {
 	mocks.rows = [];
 	mocks.worker = null;
+	mocks.mediaEditor = null;
+	mocks.record.mockClear();
+	mocks.withdraw.mockClear();
 	mocks.fail.mockClear();
 	mocks.attach.mockClear();
 });
@@ -178,5 +212,32 @@ test("the worker Save callback needs the worker secret and ignores replaced Save
 		"video",
 		{ jobId: "worker:job-1" },
 		"This save couldn't finish. Try again, or use Download.",
+	);
+});
+
+test("a worker Save the worker can't start withdraws only its own record", async () => {
+	mocks.mediaEditor = (path, init) => {
+		if (path.endsWith("/config"))
+			return init?.method === "PUT"
+				? new Response(null, { status: 204 })
+				: Response.json({ timeline: null });
+		return new Response(null, { status: 503 });
+	};
+	// The mocked services need nothing from the context.
+	const exit = await Effect.runPromiseExit(
+		startWorkerSave(
+			"video" as never,
+			"worker-1",
+			"https://cap.so",
+		) as Effect.Effect<unknown, unknown>,
+	);
+	expect(Exit.isFailure(exit)).toBe(true);
+	const recorded = (mocks.record.mock.calls[0] as unknown[] | undefined)?.[1] as
+		| { exportId: string }
+		| undefined;
+	expect(recorded?.exportId).toBeTruthy();
+	expect(mocks.withdraw).toHaveBeenCalledWith("video", recorded?.exportId);
+	expect(mocks.withdraw.mock.calls.every((call) => call.length === 2)).toBe(
+		true,
 	);
 });

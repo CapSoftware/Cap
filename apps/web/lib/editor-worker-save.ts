@@ -231,7 +231,7 @@ export const startWorkerSave = Effect.fn("startWorkerSave")(function* (
 		catch: () => new HttpApiError.InternalServerError(),
 	});
 	const withdraw = Effect.promise(() =>
-		withdrawRenderFarmSave(video.id).catch(() => undefined),
+		withdrawRenderFarmSave(video.id, exportId).catch(() => undefined),
 	);
 	const started = yield* requestMediaEditor(`${sessionPath}/saves`, {
 		method: "POST",

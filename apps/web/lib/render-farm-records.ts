@@ -163,7 +163,12 @@ export function recordRenderFarmExport(
  * Forgets a save the farm has not published, so a render that stalled or
  * failed can't replace the video the owner is publishing another way.
  */
-export async function withdrawRenderFarmSave(videoId: Video.VideoId) {
+/// Withdraws the video's unpublished save, or only the one with `exportId`
+/// when given, so a later save someone else started is left alone.
+export async function withdrawRenderFarmSave(
+	videoId: Video.VideoId,
+	exportId?: string,
+) {
 	await db()
 		.update(videos)
 		.set({
@@ -173,6 +178,11 @@ export async function withdrawRenderFarmSave(videoId: Video.VideoId) {
 			and(
 				eq(videos.id, videoId),
 				sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.renderFarmSave.status')) IN ('rendering', 'error')`,
+				...(exportId === undefined
+					? []
+					: [
+							sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.renderFarmSave.exportId')) = ${exportId}`,
+						]),
 			),
 		);
 }
