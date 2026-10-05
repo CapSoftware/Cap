@@ -748,6 +748,7 @@ export function StudioEditorClient(props: {
 					left={
 						<EditorShellBrand
 							title="Back to shareable link"
+							compactLabel="Back to shareable link"
 							backHref={`/s/${videoId}`}
 							onClick={backToSharePage}
 							prefetchOnHover

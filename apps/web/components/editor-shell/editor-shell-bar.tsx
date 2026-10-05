@@ -49,25 +49,34 @@ export function EditorShellBrand({
 	backHref,
 	onClick,
 	prefetchOnHover = false,
+	compactLabel,
 }: {
 	title: ReactNode;
 	backHref: string;
 	onClick?: MouseEventHandler<HTMLAnchorElement>;
 	prefetchOnHover?: boolean;
+	/** On a phone, only the arrow shows, with this as its label. */
+	compactLabel?: string;
 }) {
 	const BackLink = prefetchOnHover ? HoverPrefetchLink : Link;
+	const compact = compactLabel !== undefined;
 	return (
 		<BackLink
 			href={backHref}
 			onClick={onClick}
-			className="rec-focus group flex min-w-0 items-center gap-2 rounded-md py-1 pl-1 pr-2 text-[var(--rec-text-1)]"
+			aria-label={compactLabel}
+			className={clsx(
+				"rec-focus group flex min-w-0 items-center gap-2 rounded-md py-1 pl-1 pr-2 text-[var(--rec-text-1)]",
+				compact &&
+					"max-sm:size-8 max-sm:shrink-0 max-sm:justify-center max-sm:p-0 max-sm:hover:bg-[var(--rec-ctl)]",
+			)}
 		>
 			<ArrowLeftIcon
 				className="size-4 shrink-0 text-[var(--rec-text-2)] transition-transform group-hover:-translate-x-0.5"
 				aria-hidden
 			/>
 			<svg
-				className="size-5 shrink-0"
+				className={clsx("size-5 shrink-0", compact && "max-sm:hidden")}
 				xmlns="http://www.w3.org/2000/svg"
 				fill="none"
 				viewBox="0 0 40 40"
@@ -86,7 +95,14 @@ export function EditorShellBrand({
 					d="M20 30c5.523 0 10-4.477 10-10s-4.477-10-10-10-10 4.477-10 10 4.477 10 10 10"
 				/>
 			</svg>
-			<span className="truncate text-[14px] font-medium">{title}</span>
+			<span
+				className={clsx(
+					"truncate text-[14px] font-medium",
+					compact && "max-sm:hidden",
+				)}
+			>
+				{title}
+			</span>
 		</BackLink>
 	);
 }
