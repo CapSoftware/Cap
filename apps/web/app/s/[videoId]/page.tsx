@@ -59,6 +59,7 @@ import { runPromise } from "@/lib/server";
 import { getSharePageBranding } from "@/lib/share-branding";
 import { parseShareCallToAction } from "@/lib/share-call-to-action";
 import { getShareDashboardDestination } from "@/lib/share-dashboard-destination";
+import { readLinkPreview, toLinkPreviewState } from "@/lib/share-link-preview";
 import { getShareLinkPreviewMetadata } from "@/lib/share-link-preview-metadata";
 import { getSharePlaybackUrl } from "@/lib/share-playback";
 import { buildShareVideoMetadata } from "@/lib/share-video-metadata";
@@ -927,6 +928,14 @@ async function AuthorizedContent({
 						spacesData={spacesData}
 						branding={getSharePageBranding(videoWithOrganizationInfo)}
 						canManageSharePageBranding={canManageSharePageBranding}
+						linkPreview={
+							user?.id === video.owner.id
+								? toLinkPreviewState(
+										video.id,
+										readLinkPreview(video.metadata, video.id),
+									)
+								: null
+						}
 						canDownload={canDownloadVideo}
 						hasEdits={videoHasEdits}
 						opensStudio={!!user && isWebStudioEnabledForEmail(user.email)}

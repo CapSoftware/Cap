@@ -437,7 +437,7 @@ export function LinkPreviewDialog({
 					</div>
 				</section>
 
-				<section className="flex flex-1 flex-col md:min-h-0">
+				<section className="flex flex-none flex-col md:min-h-0 md:flex-1">
 					<header className="flex shrink-0 items-start gap-3 px-5 pb-4 pt-5 sm:px-6 sm:pt-6">
 						<span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-blue-3 text-blue-11">
 							<Link2 className="size-[18px]" strokeWidth={2} />

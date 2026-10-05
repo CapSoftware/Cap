@@ -24,6 +24,7 @@ import {
 	Copy,
 	Download,
 	Globe2,
+	Image as ImageIcon,
 	Link2,
 	Lock,
 	LockOpen,
@@ -72,6 +73,10 @@ import { Tooltip } from "@/components/Tooltip";
 import { rememberEntryFrame } from "@/lib/editor-entry-frame";
 import type { ShareDashboardDestination } from "@/lib/share-dashboard-destination";
 import { formatTimestamp, shareLinkUrl } from "@/lib/share-link";
+import {
+	type LinkPreviewState,
+	linkPreviewDisplayHost,
+} from "@/lib/share-link-preview";
 import {
 	copyRichVideoLink,
 	videoPreviewImageUrl,
@@ -133,6 +138,11 @@ const CallToActionDialog = dynamic(
 		),
 	{ ssr: false },
 );
+const LinkPreviewDialog = dynamic(
+	() =>
+		import("./link-preview/LinkPreviewDialog").then((m) => m.LinkPreviewDialog),
+	{ ssr: false },
+);
 const DuplicateCapMenuItem = dynamic(() => import("./DuplicateCapMenuItem"), {
 	ssr: false,
 });
@@ -184,7 +194,10 @@ export const ShareHeader = ({
 	opensStudio = false,
 	views,
 	dashboardDestination = null,
+	linkPreview = null,
 }: {
+	/** The owner's link preview overrides; null for everyone else. */
+	linkPreview?: LinkPreviewState | null;
 	data: VideoData;
 	customDomain?: string | null;
 	domainVerified?: boolean;
@@ -247,6 +260,12 @@ export const ShareHeader = ({
 	const [deleteDialogMounted, setDeleteDialogMounted] = useState(false);
 	const [ctaDialogMounted, setCtaDialogMounted] = useState(false);
 	const [isCtaDialogOpen, setIsCtaDialogOpenRaw] = useState(false);
+	const [linkPreviewDialogMounted, setLinkPreviewDialogMounted] =
+		useState(false);
+	const [isLinkPreviewDialogOpen, setIsLinkPreviewDialogOpenRaw] =
+		useState(false);
+	const [linkPreviewState, setLinkPreviewState] = useState(linkPreview);
+	useEffect(() => setLinkPreviewState(linkPreview), [linkPreview]);
 	const [isSettingsDialogOpen, setIsSettingsDialogOpenRaw] = useState(false);
 	const [isPasswordDialogOpen, setIsPasswordDialogOpenRaw] = useState(false);
 	const [isDeleteDialogOpen, setIsDeleteDialogOpenRaw] = useState(false);
@@ -269,6 +288,10 @@ export const ShareHeader = ({
 	const setIsDeleteDialogOpen = (open: boolean) => {
 		if (open) setDeleteDialogMounted(true);
 		setIsDeleteDialogOpenRaw(open);
+	};
+	const setIsLinkPreviewDialogOpen = (open: boolean) => {
+		if (open) setLinkPreviewDialogMounted(true);
+		setIsLinkPreviewDialogOpenRaw(open);
 	};
 	const setIsCtaDialogOpen = (open: boolean) => {
 		if (open) setCtaDialogMounted(true);
@@ -930,6 +953,23 @@ export const ShareHeader = ({
 					</DropdownMenuItem>
 					<DropdownMenuItem
 						onClick={() => {
+							// A downgraded owner still sees what they set, and can reset it.
+							if (data.owner.isPro || linkPreviewState)
+								setIsLinkPreviewDialogOpen(true);
+							else setUpgradeModalOpen(true);
+						}}
+						className={itemClass}
+					>
+						<ImageIcon className="size-3.5" />
+						<p className="text-sm text-gray-12">Link preview</p>
+						{!data.owner.isPro ? (
+							<span className="ml-auto pl-3 text-xs text-gray-10">Pro</span>
+						) : linkPreviewState ? (
+							<span className="ml-auto pl-3 text-xs text-gray-10">Custom</span>
+						) : null}
+					</DropdownMenuItem>
+					<DropdownMenuItem
+						onClick={() => {
 							if (!user.isPro) setUpgradeModalOpen(true);
 							else setIsPasswordDialogOpen(true);
 						}}
@@ -1068,6 +1108,29 @@ export const ShareHeader = ({
 							videoId={data.id}
 							callToAction={data.callToAction ?? null}
 							onSaved={refresh}
+							onUpgradeRequest={() => setUpgradeModalOpen(true)}
+						/>
+					)}
+					{linkPreviewDialogMounted && (
+						<LinkPreviewDialog
+							open={isLinkPreviewDialogOpen}
+							onOpenChange={setIsLinkPreviewDialogOpen}
+							videoId={data.id}
+							videoName={displayTitle}
+							ownerName={data.owner.name ?? ""}
+							host={linkPreviewDisplayHost(
+								(NODE_ENV === "development" || buildEnv.NEXT_PUBLIC_IS_CAP) &&
+									domainVerified
+									? (customDomain ?? null)
+									: null,
+								webUrl,
+							)}
+							linkPreview={linkPreviewState}
+							canEdit={data.owner.isPro}
+							onSaved={(next) => {
+								setLinkPreviewState(next);
+								refresh();
+							}}
 							onUpgradeRequest={() => setUpgradeModalOpen(true)}
 						/>
 					)}
