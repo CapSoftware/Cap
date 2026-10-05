@@ -26,8 +26,6 @@ type SaveStatus = {
 	error: string | null;
 	/** The share link shows, or is rendering, the project as saved now. */
 	current?: boolean;
-	/** The project has been edited and stored since the recording was made. */
-	edited?: boolean;
 };
 
 type SaveStart =
@@ -75,7 +73,7 @@ export function WebPublishControls() {
 		try {
 			const next = await invoke<SaveStatus>("webEditorSaveStatus");
 			if (disposed) return next.state;
-			if (resuming && shareLinkShowsProject(next, publishOnOpen)) {
+			if (resuming && shareLinkShowsProject(next)) {
 				setSavedRevision(0);
 				setLinkCurrent(true);
 				setStatus(next);
