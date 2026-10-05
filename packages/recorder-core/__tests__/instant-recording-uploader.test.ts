@@ -818,6 +818,70 @@ describe("InstantRecordingUploader", () => {
 		expect(MockXMLHttpRequest.sent).toHaveLength(2);
 	});
 
+	it("retries a part that stops while the others keep the link busy", async () => {
+		vi.useFakeTimers();
+
+		const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+			const url = input.toString();
+
+			if (url === "/api/upload/multipart/presign-part") {
+				return makeJsonResponse({
+					presignedUrl: `https://uploads.example/${fetchMock.mock.calls.length}`,
+				});
+			}
+
+			if (url === "/api/upload/multipart/complete") {
+				return makeJsonResponse({ success: true });
+			}
+
+			throw new Error(`Unexpected fetch call: ${url}`);
+		});
+
+		vi.stubGlobal("fetch", fetchMock);
+		MockXMLHttpRequest.setOutcomes([
+			{ type: "pending", silent: true },
+			{ type: "pending", silent: true },
+			{ type: "success", etag: "etag-retried" },
+		]);
+
+		const uploader = new InstantRecordingUploader({
+			videoId,
+			uploadId: "upload-123",
+			mimeType: "video/mp4",
+			subpath: "result.mp4",
+			setUploadStatus: vi.fn(),
+			sendProgressUpdate: vi.fn().mockResolvedValue(undefined),
+		});
+
+		const part = makeBlob(STREAMED_PART_BYTES, "video/mp4");
+		uploader.handleChunk(part, part.size);
+		uploader.handleChunk(part, part.size * 2);
+		const finalizePromise = uploader.finalize({
+			durationSeconds: 8,
+			subpath: "result.mp4",
+		});
+
+		await vi.advanceTimersByTimeAsync(1_000);
+		const [stuck, moving] = MockXMLHttpRequest.sent;
+		expect(stuck).toBeDefined();
+		// The other part moves a megabyte every two seconds, so the link is
+		// fast enough that a part idle for half a minute has stopped.
+		for (let step = 0; step <= 20; step++) {
+			moving?.upload.onprogress?.({
+				lengthComputable: true,
+				loaded: step * 1024 * 1024,
+				total: 64 * 1024 * 1024,
+			} as ProgressEvent<EventTarget>);
+			await vi.advanceTimersByTimeAsync(2_000);
+		}
+		expect(MockXMLHttpRequest.abortedCount).toBe(1);
+
+		moving?.succeed("etag-moving");
+		await vi.runAllTimersAsync();
+		await finalizePromise;
+		expect(MockXMLHttpRequest.sent).toHaveLength(3);
+	});
+
 	it("marks the uploader as fatal after the final retry fails", async () => {
 		vi.useFakeTimers();
 

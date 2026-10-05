@@ -19,10 +19,14 @@ const MAX_PARALLEL_PART_UPLOADS = 3;
 const MAX_PENDING_UPLOAD_BYTES = 128 * 1024 * 1024;
 const FINAL_BLOB_PART_SIZE_BYTES = 16 * 1024 * 1024;
 const DRIVE_PART_SIZE_BYTES = 16 * 1024 * 1024;
-// A part is stalled once no part has made progress for this long: on a slow
-// uplink the parts share the connection unevenly, and one can sit for a
-// minute or more while the others move.
+// A part is stalled once it has made no progress for this long, or longer
+// on a slow uplink: parts share the connection unevenly there, and one can
+// sit for minutes while the others move. Its window is how long a few
+// progress steps take at its share of the measured throughput.
 const PART_UPLOAD_STALL_TIMEOUT_MS = 30_000;
+const PART_PROGRESS_STEP_BYTES = 1024 * 1024;
+const PART_STALL_STEPS = 4;
+const THROUGHPUT_WINDOW_MS = 60_000;
 // Once the browser has taken every byte of a part, progress stops while the
 // OS sends what it buffered, which on a slow uplink with a deep send buffer
 // can take minutes, so the wait for the reply is longer.
@@ -365,7 +369,9 @@ export class InstantRecordingUploader {
 		(error: CancelledUploadError) => void
 	>();
 	private readonly stallTimeouts = new Set<number>();
-	private partProgressAt = 0;
+	/// Bytes the parts' progress events reported, and when, for the
+	/// throughput a stalled part is judged against.
+	private readonly progressSamples: { at: number; bytes: number }[] = [];
 	private processingStarted = true;
 	private completionUncertain = false;
 	private queuedBytes = 0;
@@ -883,6 +889,37 @@ export class InstantRecordingUploader {
 		this.emitProgress();
 	}
 
+	private recordProgress(at: number, bytes: number) {
+		this.progressSamples.push({ at, bytes });
+		while (
+			this.progressSamples.length > 0 &&
+			at - (this.progressSamples[0]?.at ?? at) > THROUGHPUT_WINDOW_MS
+		)
+			this.progressSamples.shift();
+	}
+
+	/// How long a part may go without progress: a few progress steps at its
+	/// share of the throughput measured lately, and never under the floor.
+	private partStallWindowMs(now: number) {
+		const recent = this.progressSamples.filter(
+			(sample) => now - sample.at <= THROUGHPUT_WINDOW_MS,
+		);
+		const first = recent[0];
+		if (!first) return PART_UPLOAD_STALL_TIMEOUT_MS;
+		const bytes = recent.reduce((total, sample) => total + sample.bytes, 0);
+		const bytesPerMs =
+			bytes /
+			Math.max(1, now - first.at) /
+			Math.max(1, this.activeRequests.size);
+		return Math.min(
+			PART_UPLOAD_DRAIN_TIMEOUT_MS,
+			Math.max(
+				PART_UPLOAD_STALL_TIMEOUT_MS,
+				(PART_STALL_STEPS * PART_PROGRESS_STEP_BYTES) / bytesPerMs,
+			),
+		);
+	}
+
 	private uploadBlobWithProgress({
 		url,
 		provider,
@@ -930,6 +967,8 @@ export class InstantRecordingUploader {
 			};
 			let stallTimeoutId: number | null = null;
 			let sentAt: number | null = null;
+			let progressAt = Date.now();
+			let loaded: number | null = null;
 			const clearStallTimeout = () => {
 				if (stallTimeoutId === null) {
 					return;
@@ -938,19 +977,19 @@ export class InstantRecordingUploader {
 				this.stallTimeouts.delete(stallTimeoutId);
 				stallTimeoutId = null;
 			};
-			const refreshStallTimeout = () => {
+			const refreshStallTimeout = (delay = PART_UPLOAD_STALL_TIMEOUT_MS) => {
 				clearStallTimeout();
 				const timeoutId = window.setTimeout(() => {
 					this.stallTimeouts.delete(timeoutId);
 					stallTimeoutId = null;
 					const now = Date.now();
-					if (
-						now - this.partProgressAt < PART_UPLOAD_STALL_TIMEOUT_MS ||
-						(sentAt !== null && now - sentAt < PART_UPLOAD_DRAIN_TIMEOUT_MS)
-					)
-						refreshStallTimeout();
+					const waiting =
+						sentAt !== null
+							? PART_UPLOAD_DRAIN_TIMEOUT_MS - (now - sentAt)
+							: this.partStallWindowMs(now) - (now - progressAt);
+					if (waiting > 0) refreshStallTimeout(waiting);
 					else xhr.abort();
-				}, PART_UPLOAD_STALL_TIMEOUT_MS);
+				}, delay);
 				stallTimeoutId = timeoutId;
 				this.stallTimeouts.add(timeoutId);
 			};
@@ -958,8 +997,13 @@ export class InstantRecordingUploader {
 
 			let progressReportedAt = 0;
 			xhr.upload.onprogress = (event) => {
-				this.partProgressAt = Date.now();
-				if (event.loaded >= part.size) sentAt ??= this.partProgressAt;
+				progressAt = Date.now();
+				// The first event counts what the socket buffered at once, not
+				// what the link carried.
+				if (loaded !== null && event.loaded > loaded)
+					this.recordProgress(progressAt, event.loaded - loaded);
+				loaded = event.loaded;
+				if (event.loaded >= part.size) sentAt ??= progressAt;
 				refreshStallTimeout();
 				const now = performance.now();
 				if (now - progressReportedAt < PART_PROGRESS_INTERVAL_MS) return;
@@ -977,7 +1021,6 @@ export class InstantRecordingUploader {
 			};
 
 			xhr.onload = () => {
-				this.partProgressAt = Date.now();
 				clearStallTimeout();
 				clearRequest();
 				if (
