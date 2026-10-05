@@ -117,8 +117,19 @@ describe("development transcript reset", () => {
 		expect(response.status).toBe(404);
 		expect(mocks.and).toHaveBeenCalledWith(
 			{ field: schema.videos.id, value: "video-1" },
-			{ field: schema.videos.ownerId, value: "owner-1" },
+			{
+				conditions: [
+					{ field: schema.videos.ownerId, value: "owner-1" },
+					undefined,
+				],
+			},
 		);
 		expect(mocks.getAccessForVideo).not.toHaveBeenCalled();
 	});
 });
+
+vi.mock("@cap/database/directory-sync/access", () => ({
+	directoryAccessAllowed: () => undefined,
+	directorySpaceAccessAllowed: () => undefined,
+	hasDirectoryAccess: async () => true,
+}));

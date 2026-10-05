@@ -1,4 +1,5 @@
 import { db } from "@cap/database";
+import { directoryAccessAllowed } from "@cap/database/directory-sync/access";
 import * as Db from "@cap/database/schema";
 import { Video } from "@cap/web-domain";
 import { zValidator } from "@hono/zod-validator";
@@ -35,7 +36,15 @@ export const app = new Hono().post(
 		const [video] = await db()
 			.select()
 			.from(Db.videos)
-			.where(and(eq(Db.videos.id, videoId), eq(Db.videos.ownerId, user.id)));
+			.where(
+				and(
+					eq(Db.videos.id, videoId),
+					and(
+						eq(Db.videos.ownerId, user.id),
+						directoryAccessAllowed(user.id, Db.videos.orgId),
+					),
+				),
+			);
 
 		if (!video) {
 			return c.json({ error: "Video not found" }, 404);

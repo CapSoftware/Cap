@@ -351,6 +351,13 @@
 			"when": 1790203121737,
 			"tag": "0049_jittery_professor_monster",
 			"breakpoints": true
+		},
+		{
+			"idx": 50,
+			"version": "5",
+			"when": 1790354407829,
+			"tag": "0050_optimal_cerise",
+			"breakpoints": true
 		}
 	]
 }

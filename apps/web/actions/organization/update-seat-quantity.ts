@@ -2,6 +2,7 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { hasDirectoryAccess } from "@cap/database/directory-sync/access";
 import {
 	organizationMembers,
 	organizations,
@@ -26,7 +27,10 @@ async function getOwnerSubscription(
 		.limit(1);
 
 	if (!organization) throw new Error("Organization not found");
-	if (organization.ownerId !== user.id)
+	if (
+		organization.ownerId !== user.id ||
+		!(await hasDirectoryAccess(user.id, organizationId))
+	)
 		throw new Error("Only the owner can manage seats");
 
 	const [owner] = await db()

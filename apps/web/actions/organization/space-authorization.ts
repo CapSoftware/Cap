@@ -2,6 +2,10 @@
 
 import { db } from "@cap/database";
 import {
+	directoryAccessAllowed,
+	directorySpaceAccessAllowed,
+} from "@cap/database/directory-sync/access";
+import {
 	organizationMembers,
 	organizations,
 	spaceMembers,
@@ -46,14 +50,29 @@ export async function getSpaceAccess(
 			organizationMembers,
 			and(
 				eq(organizationMembers.organizationId, spaces.organizationId),
-				eq(organizationMembers.userId, userId),
+				and(
+					eq(organizationMembers.userId, userId),
+					directoryAccessAllowed(userId, organizationMembers.organizationId),
+				),
 			),
 		)
 		.leftJoin(
 			spaceMembers,
-			and(eq(spaceMembers.spaceId, spaces.id), eq(spaceMembers.userId, userId)),
+			and(
+				eq(spaceMembers.spaceId, spaces.id),
+				and(
+					eq(spaceMembers.userId, userId),
+					directorySpaceAccessAllowed(userId, spaceMembers.spaceId),
+				),
+			),
 		)
-		.where(and(eq(spaces.id, spaceId), isNull(organizations.tombstoneAt)))
+		.where(
+			and(
+				eq(spaces.id, spaceId),
+				isNull(organizations.tombstoneAt),
+				directoryAccessAllowed(userId, spaces.organizationId),
+			),
+		)
 		.limit(1);
 
 	if (!space) return null;

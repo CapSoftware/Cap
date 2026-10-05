@@ -4,6 +4,7 @@ import type { Metadata } from "next";
 import { redirect, unstable_rethrow } from "next/navigation";
 import { getOrganizationSsoSettings } from "@/actions/organization/sso";
 import { ComplianceCard } from "../components/ComplianceCard";
+import { DirectorySyncSettings } from "../components/DirectorySyncSettings";
 import { SsoCard } from "../components/SsoCard";
 
 export const metadata: Metadata = {
@@ -62,6 +63,7 @@ export default async function OrganizationSecurityPage({
 						</CardDescription>
 					</CardHeader>
 				</Card>
+				<DirectorySyncSettings organizationId={user.activeOrganizationId} />
 				<ComplianceCard />
 			</div>
 		);
@@ -78,6 +80,7 @@ export default async function OrganizationSecurityPage({
 						: undefined
 				}
 			/>
+			<DirectorySyncSettings organizationId={user.activeOrganizationId} />
 			<ComplianceCard />
 		</div>
 	);

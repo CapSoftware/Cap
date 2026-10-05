@@ -1,3 +1,7 @@
+import {
+	directoryAccessAllowed,
+	hasDirectoryAccess,
+} from "@cap/database/directory-sync/access";
 import * as Db from "@cap/database/schema";
 import type { Organisation, User, Video } from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
@@ -12,6 +16,13 @@ export class OrganisationsRepo extends Effect.Service<OrganisationsRepo>()(
 			const db = yield* Database;
 
 			return {
+				hasDirectoryAccess: (
+					userId: User.UserId,
+					organizationId: Organisation.OrganisationId,
+				) =>
+					db.use((database) =>
+						hasDirectoryAccess(userId, organizationId, database),
+					),
 				membershipForVideo: (userId: User.UserId, videoId: Video.VideoId) =>
 					db.use((db) =>
 						db
@@ -26,7 +37,13 @@ export class OrganisationsRepo extends Effect.Service<OrganisationsRepo>()(
 							)
 							.where(
 								Dz.and(
-									Dz.eq(Db.organizationMembers.userId, userId),
+									Dz.and(
+										Dz.eq(Db.organizationMembers.userId, userId),
+										directoryAccessAllowed(
+											userId,
+											Db.organizationMembers.organizationId,
+										),
+									),
 									Dz.eq(Db.sharedVideos.videoId, videoId),
 								),
 							),
@@ -48,15 +65,30 @@ export class OrganisationsRepo extends Effect.Service<OrganisationsRepo>()(
 											Db.organizationMembers.organizationId,
 											Db.organizations.id,
 										),
-										Dz.eq(Db.organizationMembers.userId, userId),
+										Dz.and(
+											Dz.eq(Db.organizationMembers.userId, userId),
+											directoryAccessAllowed(
+												userId,
+												Db.organizationMembers.organizationId,
+											),
+										),
 									),
 								)
 								.where(
 									Dz.and(
 										Dz.eq(Db.organizations.id, orgId),
 										Dz.or(
-											Dz.eq(Db.organizations.ownerId, userId),
-											Dz.eq(Db.organizationMembers.userId, userId),
+											Dz.and(
+												Dz.eq(Db.organizations.ownerId, userId),
+												directoryAccessAllowed(userId, Db.organizations.id),
+											),
+											Dz.and(
+												Dz.eq(Db.organizationMembers.userId, userId),
+												directoryAccessAllowed(
+													userId,
+													Db.organizationMembers.organizationId,
+												),
+											),
 										),
 									),
 								),

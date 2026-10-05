@@ -1,5 +1,9 @@
 import { db } from "@cap/database";
 import {
+	directoryAccessAllowed,
+	hasDirectoryAccess,
+} from "@cap/database/directory-sync/access";
+import {
 	folders,
 	organizationMembers,
 	organizations,
@@ -117,7 +121,9 @@ export async function getShareDashboardDestination({
 }): Promise<ShareDashboardDestination | null> {
 	if (!viewer) return null;
 
-	const isOwner = viewer.id === ownerId;
+	const isOwner =
+		viewer.id === ownerId &&
+		(await hasDirectoryAccess(viewer.id, videoOrganizationId));
 
 	const [
 		ownerFolderRows,
@@ -162,7 +168,12 @@ export async function getShareDashboardDestination({
 							eq(spaceMembers.userId, viewer.id),
 						),
 					)
-					.where(eq(spaceVideos.videoId, videoId)),
+					.where(
+						and(
+							eq(spaceVideos.videoId, videoId),
+							directoryAccessAllowed(viewer.id, spaces.organizationId),
+						),
+					),
 		isOwner
 			? Promise.resolve([])
 			: db()
@@ -182,6 +193,7 @@ export async function getShareDashboardDestination({
 					.where(
 						and(
 							eq(sharedVideos.videoId, videoId),
+							directoryAccessAllowed(viewer.id, organizations.id),
 							isNull(organizations.tombstoneAt),
 						),
 					),

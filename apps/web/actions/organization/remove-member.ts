@@ -3,6 +3,7 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import {
+	directoryUsers,
 	organizationInvites,
 	organizationMembers,
 	spaceMembers,
@@ -50,6 +51,18 @@ export async function removeOrganizationMember(
 	if (!member) {
 		throw new Error("Member not found");
 	}
+	const [directoryUser] = await db()
+		.select({ id: directoryUsers.id })
+		.from(directoryUsers)
+		.where(
+			and(
+				eq(directoryUsers.organizationId, organizationId),
+				eq(directoryUsers.userId, member.userId),
+			),
+		)
+		.limit(1);
+	if (directoryUser)
+		throw new Error("Remove this user through your identity provider.");
 
 	const targetRole = getEffectiveOrganizationRole({
 		userId: member.userId,

@@ -21,6 +21,11 @@ import {
 	getSsoConfiguration,
 } from "@/lib/sso/workos";
 
+vi.mock(
+	"@/app/(org)/dashboard/settings/organization/components/DirectorySyncSettings",
+	() => ({ DirectorySyncSettings: () => null }),
+);
+
 const mocks = vi.hoisted(() => ({
 	db: vi.fn(),
 	getCurrentUser: vi.fn(),

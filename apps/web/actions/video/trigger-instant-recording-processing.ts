@@ -2,6 +2,7 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { hasDirectoryAccess } from "@cap/database/directory-sync/access";
 import { videos } from "@cap/database/schema";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
@@ -21,7 +22,11 @@ export async function triggerInstantRecordingProcessing({
 		.where(eq(videos.id, videoId));
 
 	if (!video) throw new Error("Video not found");
-	if (video.ownerId !== user.id) throw new Error("Unauthorized");
+	if (
+		video.ownerId !== user.id ||
+		!(await hasDirectoryAccess(user.id, video.orgId))
+	)
+		throw new Error("Unauthorized");
 
 	const rawFileKey = `${user.id}/${videoId}/result.mp4`;
 

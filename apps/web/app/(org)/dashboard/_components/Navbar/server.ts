@@ -2,6 +2,7 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { directoryAccessAllowed } from "@cap/database/directory-sync/access";
 import {
 	organizationMembers,
 	organizations,
@@ -26,7 +27,10 @@ export async function updateActiveOrganization(
 			organizationMembers,
 			and(
 				eq(organizationMembers.organizationId, organizations.id),
-				eq(organizationMembers.userId, user.id),
+				and(
+					eq(organizationMembers.userId, user.id),
+					directoryAccessAllowed(user.id, organizationMembers.organizationId),
+				),
 			),
 		)
 		.where(eq(organizations.id, organizationId));

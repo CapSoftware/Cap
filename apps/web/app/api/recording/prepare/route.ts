@@ -1,3 +1,4 @@
+import { directoryAccessAllowed } from "@cap/database/directory-sync/access";
 import { videoProcessingJobs, videos } from "@cap/database/schema";
 import { Database } from "@cap/web-backend";
 import { CurrentUser, HttpAuthMiddleware, Video } from "@cap/web-domain";
@@ -62,7 +63,10 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 									.where(
 										and(
 											eq(videos.id, payload.videoId),
-											eq(videos.ownerId, user.id),
+											and(
+												eq(videos.ownerId, user.id),
+												directoryAccessAllowed(user.id, videos.orgId),
+											),
 										),
 									);
 							const [current] = await read();

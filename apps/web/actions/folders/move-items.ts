@@ -2,6 +2,7 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { directoryAccessAllowed } from "@cap/database/directory-sync/access";
 import {
 	folders,
 	sharedVideos,
@@ -63,7 +64,10 @@ function getFolderScope(
 	if (location.type === "personal") {
 		return and(
 			eq(folders.organizationId, user.activeOrganizationId),
-			eq(folders.createdById, user.id),
+			and(
+				eq(folders.createdById, user.id),
+				directoryAccessAllowed(user.id, folders.organizationId),
+			),
 			isNull(folders.spaceId),
 		);
 	}
@@ -146,7 +150,10 @@ export async function moveVideos({
 				.where(
 					and(
 						inArray(videos.id, ids),
-						eq(videos.ownerId, user.id),
+						and(
+							eq(videos.ownerId, user.id),
+							directoryAccessAllowed(user.id, videos.orgId),
+						),
 						eq(videos.orgId, user.activeOrganizationId),
 					),
 				);
@@ -161,7 +168,10 @@ export async function moveVideos({
 				.where(
 					and(
 						inArray(videos.id, ids),
-						eq(videos.ownerId, user.id),
+						and(
+							eq(videos.ownerId, user.id),
+							directoryAccessAllowed(user.id, videos.orgId),
+						),
 						eq(videos.orgId, user.activeOrganizationId),
 					),
 				);

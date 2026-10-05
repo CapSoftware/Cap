@@ -261,6 +261,8 @@ function actorContext(actorId: string): SsoAuthContext {
 function makeFixture() {
 	const database = createDatabase(
 		new Map<MySqlTable, Row[]>([
+			[Db.organizationDirectorySync, []],
+			[Db.directoryUsers, []],
 			[
 				Db.users,
 				[
@@ -1070,5 +1072,59 @@ describe("SSO domain normalization", () => {
 		expect(normalizeSsoDomain("https://company.example")).toBeNull();
 		expect(normalizeSsoDomain("alex@company.example")).toBeNull();
 		expect(getSsoEmailDomain("alex@company.example")).toBe("company.example");
+	});
+});
+
+describe("SSO with directory-managed membership", () => {
+	it.each(["inactive", "conflict"])(
+		"does not recreate a %s directory membership at sign-in",
+		async (state) => {
+			const fixture = makeFixture();
+			fixture.link();
+			fixture.rows(Db.organizationDirectorySync).push({
+				organizationId: ORGANIZATION_ID,
+				directoryId: "directory_fixture",
+				state: "active",
+			});
+			fixture.rows(Db.directoryUsers).push({
+				organizationId: ORGANIZATION_ID,
+				directoryId: "directory_fixture",
+				userId: USER_ID,
+				email: PROFILE.email,
+				state,
+			});
+			await expect(
+				validateSsoSignIn(PROFILE, PROFILE.id, CONTEXT),
+			).rejects.toThrow("assign you");
+			await expect(provisionSsoMembership(USER_ID, IDENTITY)).rejects.toThrow(
+				"assign you",
+			);
+			expect(fixture.rows(Db.organizationMembers)).toHaveLength(0);
+		},
+	);
+	it("allows the existing active provisioned identity without allocating a seat", async () => {
+		const fixture = makeFixture();
+		fixture.link();
+		fixture.rows(Db.organizationDirectorySync).push({
+			organizationId: ORGANIZATION_ID,
+			directoryId: "directory_fixture",
+			state: "active",
+		});
+		fixture.rows(Db.directoryUsers).push({
+			organizationId: ORGANIZATION_ID,
+			directoryId: "directory_fixture",
+			userId: USER_ID,
+			email: PROFILE.email,
+			state: "active",
+		});
+		await provisionSsoMembership(USER_ID, IDENTITY);
+		expect(fixture.rows(Db.organizationMembers)).toEqual([
+			expect.objectContaining({
+				userId: USER_ID,
+				organizationId: ORGANIZATION_ID,
+				role: "member",
+				hasProSeat: false,
+			}),
+		]);
 	});
 });

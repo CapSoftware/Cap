@@ -1,5 +1,6 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { hasDirectoryAccess } from "@cap/database/directory-sync/access";
 import { users, videos } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import type { Video } from "@cap/web-domain";
@@ -37,7 +38,10 @@ export async function POST(
 		}
 
 		const video = videoQuery[0];
-		if (video.ownerId !== user.id) {
+		if (
+			video.ownerId !== user.id ||
+			!(await hasDirectoryAccess(user.id, video.orgId))
+		) {
 			return Response.json({ error: "Unauthorized" }, { status: 403 });
 		}
 
