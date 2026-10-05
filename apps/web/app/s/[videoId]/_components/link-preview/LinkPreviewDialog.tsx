@@ -373,7 +373,7 @@ export function LinkPreviewDialog({
 					event.preventDefault();
 					if (canEdit) titleInputRef.current?.focus();
 				}}
-				className="flex max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-[960px] flex-col overflow-hidden rounded-2xl border border-gray-4 bg-gray-1 md:flex-row"
+				className="flex max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-[960px] flex-col overflow-y-auto overscroll-contain rounded-2xl border border-gray-4 bg-gray-1 md:flex-row md:overflow-hidden"
 			>
 				<section className="relative flex shrink-0 flex-col gap-4 border-b border-gray-4 bg-gray-2 p-4 sm:p-5 md:w-[50%] md:border-b-0 md:border-r md:p-6">
 					<div className="flex items-center justify-between gap-3">
@@ -415,11 +415,11 @@ export function LinkPreviewDialog({
 					</div>
 
 					<div className="flex flex-1 flex-col justify-center gap-3">
-						<div className="flex min-h-[200px] items-center justify-center rounded-xl border border-gray-4 bg-gray-1 p-4 max-md:max-h-[34dvh] max-md:overflow-hidden sm:p-6 md:min-h-[340px]">
+						<div className="flex min-h-[180px] items-center justify-center rounded-xl border border-gray-4 bg-gray-1 p-4 sm:p-6 md:min-h-[340px]">
 							<AnimatePresence mode="wait" initial={false}>
 								<motion.div
 									key={app}
-									className="flex w-full justify-center max-md:origin-top max-md:scale-[0.86]"
+									className="flex w-full justify-center"
 									initial={{ opacity: 0, y: 4 }}
 									animate={{ opacity: 1, y: 0 }}
 									exit={{ opacity: 0, y: -4 }}
@@ -437,8 +437,8 @@ export function LinkPreviewDialog({
 					</div>
 				</section>
 
-				<section className="flex min-h-0 flex-1 flex-col">
-					<header className="flex items-start gap-3 px-5 pb-4 pt-5 sm:px-6 sm:pt-6">
+				<section className="flex flex-1 flex-col md:min-h-0">
+					<header className="flex shrink-0 items-start gap-3 px-5 pb-4 pt-5 sm:px-6 sm:pt-6">
 						<span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-blue-3 text-blue-11">
 							<Link2 className="size-[18px]" strokeWidth={2} />
 						</span>
@@ -463,7 +463,7 @@ export function LinkPreviewDialog({
 
 					<form
 						id={ids.form}
-						className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-5 pb-6 sm:px-6"
+						className="flex flex-1 flex-col gap-5 px-5 pb-6 sm:px-6 md:min-h-0 md:overflow-y-auto [&>*]:shrink-0"
 						onSubmit={(event) => {
 							event.preventDefault();
 							if (canEdit) void handleSave();
@@ -697,7 +697,7 @@ export function LinkPreviewDialog({
 						</Field>
 					</form>
 
-					<footer className="flex items-center gap-2 border-t border-gray-4 px-5 py-4 sm:px-6">
+					<footer className="sticky bottom-0 flex shrink-0 items-center gap-2 border-t border-gray-4 bg-gray-1 px-5 py-4 sm:px-6">
 						{hasOverrides && (
 							<button
 								type="button"
