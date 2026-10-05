@@ -51,6 +51,7 @@ mod recordings_locations;
 mod recovery;
 mod screenshot_editor;
 mod startup;
+pub mod studio_caption;
 #[cfg(debug_assertions)]
 mod stop_editor_benchmark;
 mod target_select_overlay;
@@ -6741,6 +6742,7 @@ fn typescript_exporter() -> specta_typescript::Typescript {
 fn specta_builder() -> tauri_specta::Builder {
     tauri_specta::Builder::new()
         .commands(tauri_specta::collect_commands![
+            studio_caption::generate_studio_captions,
             linux_instant_camera::submit_camera_presentation,
             clean_capture::get_clean_capture_state,
             clean_capture::reveal_capture_window,
