@@ -7,3 +7,6 @@ healthcheckPath = "/health"
 healthcheckTimeout = 60
 restartPolicyType = "ALWAYS"
 restartPolicyMaxRetries = 50
+# A Save still publishing when a new deployment takes over gets this long to
+# finish its upload and callback (see SHUTDOWN_SAVE_WAIT_MS).
+drainingSeconds = 300

@@ -516,16 +516,47 @@ export async function closeEditorSession(id: string) {
 			// The session is closed to its clients at once; the files a Save
 			// still publishing renders from go only when it's done.
 			const saves = editorSavesInFlight(id);
-			if (saves)
-				void saves.then(closeNative).catch((error) => {
-					console.error("Editor session cleanup after a save failed", error);
-				});
+			if (saves) closeAfter(saves, closeNative);
 			else await closeNative();
 		}
 		return true;
 	})();
 	closingSessions.set(id, task);
 	return task;
+}
+
+// Native sessions waiting on a Save to publish before they close.
+const pendingCloses = new Set<Promise<void>>();
+// How long shutdown waits for Saves still publishing: inside the worker's
+// draining period (railway.editor.toml), so the process exits on its own.
+export const SHUTDOWN_SAVE_WAIT_MS = 280_000;
+
+/// Closes once `work` settles, whether it published or failed.
+export function closeAfter(work: Promise<unknown>, close: () => Promise<void>) {
+	const pending = work
+		.catch((error) => {
+			console.error("Editor save failed while its session closed", error);
+		})
+		.then(close)
+		.catch((error) => {
+			console.error("Editor session cleanup after a save failed", error);
+		})
+		.finally(() => pendingCloses.delete(pending));
+	pendingCloses.add(pending);
+	return pending;
+}
+
+/// Waits for sessions closing after their Saves, up to `limitMs`.
+export async function settlePendingCloses(limitMs = SHUTDOWN_SAVE_WAIT_MS) {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	await Promise.race([
+		Promise.all([...pendingCloses]),
+		new Promise<void>((resolve) => {
+			timer = setTimeout(resolve, limitMs);
+		}),
+	]);
+	clearTimeout(timer);
+	return pendingCloses.size === 0;
 }
 
 export async function closeAllEditorSessions() {
@@ -541,6 +572,8 @@ export async function closeAllEditorSessions() {
 		...closingSessions.values(),
 		...[...sessions.keys()].map(closeEditorSession),
 	]);
+	if (!(await settlePendingCloses()))
+		console.error("Editor shutdown left saves unpublished");
 }
 
 const sweep = setInterval(() => {
