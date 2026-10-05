@@ -459,7 +459,7 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
                     mixed_samples.chunks(frame_size * channel_count).enumerate()
                 {
                     if chunk_idx % 100 == 0 {
-                        log::info!("Processing chunk {}, size: {}", chunk_idx, chunk.len());
+                        log::debug!("Processing chunk {}, size: {}", chunk_idx, chunk.len());
                     }
 
                     let mut input_frame = ffmpeg::frame::Audio::new(
@@ -487,7 +487,7 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
                     match resampler.run(&input_frame, &mut output_frame) {
                         Ok(_) => {
                             if chunk_idx % 100 == 0 {
-                                log::info!(
+                                log::debug!(
                                     "Successfully resampled chunk {}, output samples: {}",
                                     chunk_idx,
                                     output_frame.samples()
@@ -1352,7 +1352,7 @@ fn process_with_parakeet(
 
 #[tauri::command]
 #[specta::specta]
-#[instrument]
+#[instrument(skip(app))]
 pub async fn transcribe_audio(
     app: AppHandle,
     video_path: String,
