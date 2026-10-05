@@ -194,16 +194,7 @@ export interface VideoMetadata {
 		error?: string;
 		publishedAt?: string;
 	};
-	/** A Save rendering in its owner's browser, kept fresh while that tab works on it. */
-	browserSave?: {
-		updatedAt: string;
-		progress: number;
-		finished?: boolean;
-		/** Where its playable chunks are stored, and each one's duration. */
-		saveId?: string;
-		chunks?: number[];
-	};
-	/** The last browser Save to publish, whose chunks viewers may still be playing. */
+	/** Set by the browser-rendered Saves Cap no longer makes: the video was saved from the web editor. */
 	publishedBrowserSaveId?: string | null;
 	renderFarmExports?: {
 		version: 1;

@@ -1,4 +1,4 @@
-import type { EncodedPacket, Output } from "mediabunny";
+import type { Output } from "mediabunny";
 import type { BrowserRecordingTimes } from "../renderer/pkg-export/cap_editor_browser_renderer.js";
 import type {
 	BrowserExportAudioReply,
@@ -107,10 +107,6 @@ export async function renderBrowserExportAudio(
 	times: BrowserRecordingTimes,
 	output: Output,
 	totalFrames: number,
-	onEncodedPacket?: (
-		packet: EncodedPacket,
-		meta?: EncodedAudioChunkMetadata,
-	) => void,
 ) {
 	const audioConfig = job.config.audio as { mute?: boolean } | undefined;
 	const hasMusic = Object.keys(job.musicUrls).length > 0;
@@ -130,7 +126,6 @@ export async function renderBrowserExportAudio(
 	const source = new AudioSampleSource({
 		codec,
 		bitrate: EXPORT_AUDIO_BITRATE,
-		onEncodedPacket,
 	});
 	const outputSamples = Math.round((totalFrames / job.fps) * SAMPLE_RATE);
 	output.addAudioTrack(source, {

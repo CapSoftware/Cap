@@ -10,16 +10,8 @@ import {
 } from "@effect/platform";
 import { eq } from "drizzle-orm";
 import { Effect, Layer, Schema } from "effect";
-import {
-	browserSavePlayable,
-	browserSavePlaylistUrl,
-} from "@/lib/browser-save-chunks";
 import { refreshRenderFarmSave } from "@/lib/render-farm-save";
-import {
-	IDLE_RENDER_SAVE,
-	recentBrowserSave,
-	renderFarmSaveIsCurrent,
-} from "@/lib/render-farm-status";
+import { renderFarmSaveIsCurrent } from "@/lib/render-farm-status";
 import { apiToHandler } from "@/lib/server";
 import { shareVideoRevision } from "@/lib/share-video-revision";
 
@@ -89,25 +81,8 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 										.where(eq(videos.id, path.videoId)),
 								)
 							: [video];
-						const browserSave =
-							status.state === "rendering"
-								? null
-								: recentBrowserSave(video.metadata);
 						return {
-							...(browserSave
-								? {
-										...IDLE_RENDER_SAVE,
-										state: browserSave.finished
-											? ("ready" as const)
-											: ("rendering" as const),
-										progress: browserSave.finished ? 1 : browserSave.progress,
-										...(!browserSave.finished &&
-											browserSavePlayable(browserSave.chunks ?? []) && {
-												playable: true,
-												hlsUrl: browserSavePlaylistUrl(path.videoId),
-											}),
-									}
-								: status),
+							...status,
 							current: renderFarmSaveIsCurrent(video.metadata),
 							revision: shareVideoRevision((current ?? video).source),
 						};

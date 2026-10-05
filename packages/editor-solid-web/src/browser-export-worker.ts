@@ -60,8 +60,6 @@ export type BrowserExportJob = {
 	fps: number;
 	resolutionBase: { x: number; y: number };
 	bitsPerPixel: number;
-	/** Posts playable chunks while it renders, for watching before it's done. */
-	chunked?: boolean;
 	/** The file the export streams into, whose lock the page already holds. */
 	outputFile: string;
 };
@@ -76,8 +74,6 @@ export type BrowserExportPreviewRequest = {
 
 export type BrowserExportMessage =
 	| { kind: "progress"; renderedCount: number; totalFrames: number }
-	| { kind: "chunk-init"; data: Uint8Array }
-	| { kind: "chunk"; data: Uint8Array; duration: number }
 	| {
 			kind: "done";
 			data: Blob;
@@ -682,127 +678,21 @@ async function openExportFile(maxBytes: number, name: string) {
 	}
 }
 
-const CHUNK_SECONDS = 2;
-
 // Safari's H.264 encoder holds frames in quality mode until more arrive,
 // while the export sends the next frame only once the last is encoded.
 const HOLDS_QUALITY_FRAMES =
 	/AppleWebKit/.test(navigator.userAgent) &&
 	!/Chrome|Chromium|Edg/.test(navigator.userAgent);
 
-// Safari's realtime encoder, fed faster than real time, silently drops
-// frames after keyframes that come every few seconds; one every five seconds
-// keeps them all. Streamed fragments start at keyframes, so they grow to
-// match.
-const KEYFRAME_SECONDS = HOLDS_QUALITY_FRAMES ? 5 : CHUNK_SECONDS;
+// A keyframe every two seconds, as the canvas encoder did. Safari's realtime
+// encoder, fed faster than real time, silently drops frames after keyframes
+// that come every few seconds; one every five seconds keeps them all.
+const KEYFRAME_SECONDS = HOLDS_QUALITY_FRAMES ? 5 : 2;
 
 // The same encoder spends fewer bits the faster frames arrive; asking for
 // more keeps its quality where it was at the slower pace, at about the same
 // file size.
 const BITRATE_SCALE = HOLDS_QUALITY_FRAMES ? 1.35 : 1;
-
-const joinBytes = (parts: Uint8Array[]) => {
-	const joined = new Uint8Array(
-		parts.reduce((size, part) => size + part.length, 0),
-	);
-	let offset = 0;
-	for (const part of parts) {
-		joined.set(part, offset);
-		offset += part.length;
-	}
-	return joined;
-};
-
-/// Splits a fragmented MP4 as it's written into its init segment and one
-/// media segment per fragment, each posted once its duration is known.
-function chunkPoster() {
-	const header: Uint8Array[] = [];
-	let pending: { parts: Uint8Array[]; start: number } | null = null;
-	const post = (end: number) => {
-		if (!pending) return;
-		const data = joinBytes(pending.parts);
-		scope.postMessage({ kind: "chunk", data, duration: end - pending.start }, [
-			data.buffer,
-		]);
-		pending = null;
-	};
-	const callbacks = {
-		onFtyp: (data: Uint8Array) => {
-			header.push(data.slice());
-		},
-		onMoov: (data: Uint8Array) => {
-			header.push(data.slice());
-			const init = joinBytes(header);
-			scope.postMessage({ kind: "chunk-init", data: init }, [init.buffer]);
-		},
-		onMoof: (data: Uint8Array, _position: number, timestamp: number) => {
-			post(timestamp);
-			pending = { parts: [data.slice()], start: timestamp };
-		},
-		onMdat: (data: Uint8Array) => {
-			pending?.parts.push(data.slice());
-		},
-	};
-	return { callbacks, finish: post };
-}
-
-/// The export as fragments for watching while it renders, built from the
-/// packets the export's encoders produce, so nothing is encoded or stored
-/// twice. Streaming stops, and the export carries on, if muxing fails.
-async function chunkStream(fps: number) {
-	const {
-		EncodedAudioPacketSource,
-		EncodedVideoPacketSource,
-		Mp4OutputFormat,
-		NullTarget,
-		Output,
-	} = await import("mediabunny");
-	const poster = chunkPoster();
-	const output = new Output({
-		format: new Mp4OutputFormat({
-			fastStart: "fragmented",
-			minimumFragmentDuration: CHUNK_SECONDS,
-			...poster.callbacks,
-		}),
-		target: new NullTarget(),
-	});
-	const video = new EncodedVideoPacketSource("avc");
-	output.addVideoTrack(video, { frameRate: fps });
-	let audio: InstanceType<typeof EncodedAudioPacketSource> | null = null;
-	let queue: Promise<void> = Promise.resolve();
-	let failed = false;
-	const add = (task: () => Promise<void> | undefined) => {
-		queue = queue
-			.then(() => (failed ? undefined : task()))
-			.catch(() => {
-				failed = true;
-			});
-	};
-	return {
-		video: (packet: EncodedPacket, meta?: EncodedVideoChunkMetadata) =>
-			add(() => video.add(packet, meta)),
-		audio: (packet: EncodedPacket, meta?: EncodedAudioChunkMetadata) =>
-			add(() => audio?.add(packet, meta)),
-		async start(audioCodec: "aac" | "opus" | null) {
-			if (audioCodec) {
-				audio = new EncodedAudioPacketSource(audioCodec);
-				output.addAudioTrack(audio);
-			}
-			await output.start();
-		},
-		async finish(duration: number) {
-			await queue;
-			if (failed) return;
-			video.close();
-			audio?.close();
-			await output.finalize().then(
-				() => poster.finish(duration),
-				() => undefined,
-			);
-		},
-		cancel: () => output.cancel().catch(() => undefined),
-	};
-}
 
 type LoopTimings = {
 	renderMs: number;
@@ -912,7 +802,6 @@ async function runExport(job: BrowserExportJob) {
 		job.outputFile,
 	);
 	const target = file?.target ?? new BufferTarget();
-	const stream = job.chunked ? await chunkStream(job.fps) : null;
 	const output = new Output({
 		format: new Mp4OutputFormat({ fastStart: file ? "reserve" : "in-memory" }),
 		target,
@@ -938,9 +827,7 @@ async function runExport(job: BrowserExportJob) {
 			times,
 			output,
 			totalFrames,
-			stream?.audio,
 		);
-		await stream?.start(audio?.codec ?? null);
 		await output.start();
 		const audioDone = audio?.run() ?? Promise.resolve();
 		audioDone.catch(() => undefined);
@@ -949,7 +836,6 @@ async function runExport(job: BrowserExportJob) {
 			job,
 			encoder,
 			async (packet, meta) => {
-				stream?.video(packet, meta);
 				await videoSource.add(packet, meta);
 			},
 		);
@@ -958,7 +844,6 @@ async function runExport(job: BrowserExportJob) {
 		videoSource.close();
 		await audioDone;
 		await output.finalize();
-		await stream?.finish(totalFrames / job.fps);
 		const data = file
 			? await file.finish()
 			: target instanceof BufferTarget && target.buffer
@@ -986,7 +871,6 @@ async function runExport(job: BrowserExportJob) {
 	} catch (cause) {
 		encoder.close();
 		await output.cancel().catch(() => undefined);
-		await stream?.cancel();
 		file?.discard();
 		throw cause;
 	}

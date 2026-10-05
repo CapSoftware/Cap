@@ -117,22 +117,6 @@ export function publishedRenderFarmUpdate(
 	};
 }
 
-// A tab reports a Save it's rendering every few seconds and marks it finished
-// at the end, which a render quicker than a status poll would otherwise hide.
-// A report this old is from a tab that closed or a finish already seen.
-const BROWSER_SAVE_FRESH_MS = 30_000;
-
-/** A Save its owner's browser is rendering, or has just finished. */
-export function recentBrowserSave(
-	metadata: VideoMetadata | null | undefined,
-	now = Date.now(),
-) {
-	const save = metadata?.browserSave;
-	return save && now - Date.parse(save.updatedAt) < BROWSER_SAVE_FRESH_MS
-		? save
-		: null;
-}
-
 /** Whether the share link shows, or is rendering, the project as saved now. */
 export function renderFarmSaveIsCurrent(metadata: VideoMetadata | null) {
 	const save = metadata?.renderFarmSave;

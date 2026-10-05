@@ -256,10 +256,7 @@ export const CapCard = ({
 		uploadProgress?.status === "error" && uploadProgress.hasRawFallback;
 	// A render in progress takes the card over, as it does the share page.
 	const farmRendering = cap.metadata?.renderFarmSave?.status === "rendering";
-	const renderStatus = useRenderSaveStatus(
-		cap.id,
-		farmRendering || !!cap.metadata?.browserSave,
-	);
+	const renderStatus = useRenderSaveStatus(cap.id, farmRendering);
 	const isRendering = renderStatus
 		? renderStatus.state === "rendering"
 		: farmRendering;

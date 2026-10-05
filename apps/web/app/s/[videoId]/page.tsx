@@ -54,7 +54,6 @@ import {
 } from "@/lib/permissions/roles";
 import { resolveDefaultPlaybackSpeed } from "@/lib/playback-speed";
 import { getPublicShareVideo } from "@/lib/public-share-video";
-import { recentBrowserSave } from "@/lib/render-farm-status";
 import * as EffectRuntime from "@/lib/server";
 import { runPromise } from "@/lib/server";
 import { getSharePageBranding } from "@/lib/share-branding";
@@ -859,9 +858,6 @@ async function AuthorizedContent({
 			"recording" &&
 		!video.metadata?.renderFarmSave;
 
-	const browserSave = recentBrowserSave(video.metadata);
-	const browserSaveRendering = !!browserSave && !browserSave.finished;
-
 	const defaultPlaybackSpeed = resolveDefaultPlaybackSpeed(
 		video.videoSettings?.defaultPlaybackSpeed,
 		video.orgSettings?.defaultPlaybackSpeed,
@@ -942,7 +938,7 @@ async function AuthorizedContent({
 				captionsInitiallyOff={captionsInitiallyOff}
 				canRecordMedia={canRecordMedia}
 				isEditProcessing={isEditProcessing}
-				renderStarting={publishesRecording || browserSaveRendering}
+				renderStarting={publishesRecording}
 				recordingStopped={recordingStopped}
 				defaultPlaybackSpeed={defaultPlaybackSpeed}
 				initialAiData={initialAiData}

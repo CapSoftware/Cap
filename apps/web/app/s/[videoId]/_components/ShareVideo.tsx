@@ -513,9 +513,7 @@ export const ShareVideo = forwardRef<
 		// Only a web editor Save replaces a published video, so public pages
 		// watch just the videos that have one; the owner can Save any of them.
 		const savedFromWebEditor = !!(
-			data.metadata?.renderFarmSave ||
-			data.metadata?.browserSave ||
-			data.metadata?.publishedBrowserSaveId
+			data.metadata?.renderFarmSave || data.metadata?.publishedBrowserSaveId
 		);
 		const { updateAvailable, showLatest } = useShareVideoUpdates({
 			videoId: data.id,
