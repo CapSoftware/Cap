@@ -158,6 +158,10 @@ const TITLE_TEXT_CLASS =
 
 const TITLE_PLACEHOLDER = "Cap title";
 
+/** `overflow-wrap: anywhere` so a title with no spaces still breaks onto line two. */
+const TITLE_CLAMP_CLASS =
+	"block truncate sm:line-clamp-2 sm:whitespace-normal sm:[overflow-wrap:anywhere]";
+
 /** Every control in the title row's action cluster: one height, one radius. */
 const ACTION_BUTTON_CLASS =
 	"h-9 gap-1.5 rounded-full px-3 text-[13px] sm:h-8 sm:text-xs";
@@ -848,15 +852,19 @@ export const ShareHeader = ({
 		const itemClass = "flex items-center gap-2.5 rounded-lg";
 		return (
 			<DropdownMenu modal={false}>
-				<Tooltip content="Manage Cap" position="bottom">
+				<Tooltip content="Manage this Cap" position="bottom">
 					<DropdownMenuTrigger asChild>
 						<Button
 							variant="outline"
 							size="xs"
 							aria-label="Manage Cap"
-							className={clsx(ACTION_BUTTON_CLASS, ICON_BUTTON_CLASS)}
+							className={clsx(
+								ACTION_BUTTON_CLASS,
+								"w-9 shrink-0 px-0 sm:w-auto sm:pl-2.5 sm:pr-3.5",
+							)}
 						>
 							<MoreHorizontal className="size-4 text-gray-11" />
+							<span className="hidden sm:inline">Manage</span>
 						</Button>
 					</DropdownMenuTrigger>
 				</Tooltip>
@@ -1155,11 +1163,23 @@ export const ShareHeader = ({
 			    card's edges below so the actions sit with the video rather than at
 			    the far edge of the window. */}
 			<div className="min-w-0 lg:col-start-1 lg:row-start-2 group-data-[share-view=timeline]/share:hidden">
-				<div className="mx-auto flex w-full max-w-[80rem] flex-wrap items-center justify-between gap-x-8 gap-y-3 px-4 pt-5 lg:px-8 lg:pt-6">
-					<div className="min-w-0 flex-[1_1_18rem]">
+				{/* Where the actions go is fixed per breakpoint, never decided by
+				    how long the title is: beside the title once the column is
+				    wide enough for the whole group (`xl` for the owner's, `sm` for
+				    a viewer's two or three buttons), under the meta line before
+				    that. A long title only ever clamps; it never moves them. */}
+				<div
+					className={clsx(
+						"mx-auto flex w-full max-w-[80rem] flex-col gap-3 px-4 pt-5 lg:px-8 lg:pt-6",
+						isOwner
+							? "xl:flex-row xl:items-center xl:justify-between xl:gap-8"
+							: "sm:flex-row sm:items-center sm:justify-between sm:gap-8",
+					)}
+				>
+					<div className="min-w-0 flex-1">
 						<div
 							className={clsx(
-								"relative -ml-2 -my-1 inline-grid min-w-0 max-w-full grid-cols-[minmax(0,max-content)] items-center rounded-lg px-2 py-1 align-middle ring-1 ring-transparent transition duration-150",
+								"relative -ml-2 -my-1 inline-grid min-w-0 max-w-full grid-cols-[minmax(0,max-content)] items-start rounded-lg px-2 py-1 align-middle ring-1 ring-transparent transition duration-150",
 								isEditing
 									? "bg-gray-1 ring-blue-500/50"
 									: isOwner &&
@@ -1175,7 +1195,7 @@ export const ShareHeader = ({
 							>
 								{(isEditing ? editValue : displayTitle) || TITLE_PLACEHOLDER}
 							</span>
-							{isEditing ? (
+							{isEditing && (
 								<input
 									ref={titleInputRef}
 									value={editValue}
@@ -1193,40 +1213,43 @@ export const ShareHeader = ({
 									onKeyDown={handleTitleKeyDown}
 									className={clsx(
 										TITLE_TEXT_CLASS,
-										"col-start-1 row-start-1 w-full min-w-0 border-0 bg-transparent p-0 outline-none placeholder:text-gray-9",
+										"relative z-10 col-start-1 row-start-1 w-full min-w-0 border-0 bg-transparent p-0 outline-none placeholder:text-gray-9",
 									)}
 								/>
-							) : (
-								<h1
-									className={clsx(
-										TITLE_TEXT_CLASS,
-										"col-start-1 row-start-1 min-w-0",
-									)}
-								>
-									{/* Two lines before it gives up, so a long title still
-									    reads as a title on a phone instead of a stub. */}
-									{isOwner ? (
-										<button
-											ref={titleButtonRef}
-											type="button"
-											// `leading-[inherit]`: the base layer gives every bare
-											// button a 1.5rem line height, which would leave the
-											// heading stubbier than the field and bump the text
-											// every time you clicked it.
-											className="block w-full cursor-text text-left leading-[inherit] outline-none"
-											onClick={startEditing}
-										>
-											<span className="line-clamp-2 break-words">
-												{displayTitle}
-											</span>
-										</button>
-									) : (
-										<span className="line-clamp-2 break-words">
-											{displayTitle}
-										</span>
-									)}
-								</h1>
 							)}
+							{/*
+							 * One line on phones, two from `sm`, then an ellipsis, so the
+							 * header is the same height for any title. The whole title
+							 * is in the hover tooltip and in the rename field. The
+							 * heading stays mounted (invisible) while renaming so the
+							 * field opening doesn't drop a two-line title to one line
+							 * and pull the video up under the cursor.
+							 */}
+							<h1
+								title={displayTitle}
+								className={clsx(
+									TITLE_TEXT_CLASS,
+									"col-start-1 row-start-1 min-w-0",
+									isEditing && "invisible",
+								)}
+							>
+								{isOwner ? (
+									<button
+										ref={titleButtonRef}
+										type="button"
+										// `leading-[inherit]`: the base layer gives every bare
+										// button a 1.5rem line height, which would leave the
+										// heading stubbier than the field and bump the text
+										// every time you clicked it.
+										className="block w-full cursor-text text-left leading-[inherit] outline-none"
+										onClick={startEditing}
+									>
+										<span className={TITLE_CLAMP_CLASS}>{displayTitle}</span>
+									</button>
+								) : (
+									<span className={TITLE_CLAMP_CLASS}>{displayTitle}</span>
+								)}
+							</h1>
 							{isTitleRevealing && (
 								<span aria-hidden className="ai-title-skeleton" />
 							)}
@@ -1240,7 +1263,7 @@ export const ShareHeader = ({
 									letterClass="text-[10px]"
 								/>
 							)}
-							<p className="flex min-w-0 items-center gap-1.5 whitespace-nowrap">
+							<p className="flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap">
 								<span className="truncate font-medium text-gray-12">
 									{data.owner.name}
 								</span>
@@ -1272,8 +1295,8 @@ export const ShareHeader = ({
 						</div>
 					</div>
 					{isOwner ? (
-						<div className="flex w-full min-w-0 items-center gap-1.5 sm:w-auto sm:shrink-0 sm:gap-2">
-							{renderAudiencePill("flex-1 sm:max-w-[15rem] sm:flex-none")}
+						<div className="flex w-full min-w-0 flex-nowrap items-center gap-1.5 sm:w-auto sm:gap-2 sm:self-start xl:shrink-0 xl:self-auto">
+							{renderAudiencePill("flex-1 sm:max-w-[13rem] sm:flex-none")}
 							{!showsEditorBar && (
 								<div className="hidden sm:block">{renderCopyLinkControl()}</div>
 							)}
@@ -1296,7 +1319,7 @@ export const ShareHeader = ({
 						</div>
 					) : (
 						(user !== null || data.public || canDownload) && (
-							<div className="flex shrink-0 items-center gap-2">
+							<div className="flex shrink-0 flex-nowrap items-center gap-2 self-start sm:self-auto">
 								{(user !== null || data.public) && renderCopyLinkControl()}
 								{(user !== null || data.public) &&
 									renderShareButton("shrink-0")}

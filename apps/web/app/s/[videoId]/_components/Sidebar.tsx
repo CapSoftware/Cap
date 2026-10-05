@@ -44,7 +44,6 @@ type AiGenerationStatus =
 	| "SKIPPED";
 
 interface SidebarProps {
-	sidebarId?: string;
 	data: VideoData;
 	commentsData: CommentType[];
 	optimisticComments: CommentType[];
@@ -69,8 +68,6 @@ interface SidebarProps {
 	/** Owner is on Pro and the viewer is signed in; the composer's record
 	 * buttons ride on the same gate the timeline's do. */
 	canRecordMedia?: boolean;
-	/** Supplied on desktop, where the rail can be folded away. */
-	onCollapse?: () => void;
 }
 
 const TabContent = motion.div;
@@ -100,7 +97,6 @@ const tabTransition = {
 export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 	(
 		{
-			sidebarId,
 			data,
 			commentsData,
 			setCommentsData,
@@ -115,7 +111,6 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 			isScreenshot = false,
 			recordingStopped = false,
 			canRecordMedia = false,
-			onCollapse,
 		},
 		ref,
 	) => {
@@ -296,28 +291,6 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 									)}
 								</button>
 							))}
-						{onCollapse && (
-							<button
-								type="button"
-								onClick={() => {
-									if (canLeaveSummary()) onCollapse();
-								}}
-								aria-label="Hide sidebar"
-								title="Hide sidebar"
-								aria-controls={sidebarId}
-								aria-expanded={true}
-								className="hidden shrink-0 items-center justify-center px-3 text-gray-9 transition-colors hover:bg-gray-1 hover:text-gray-12 lg:flex"
-							>
-								<svg
-									viewBox="0 0 16 16"
-									className="size-4 fill-current"
-									aria-hidden
-								>
-									<title>Hide sidebar</title>
-									<path d="M5.7 3.3a.6.6 0 0 0 0 .85L9.55 8 5.7 11.85a.6.6 0 1 0 .85.85l4.27-4.27a.6.6 0 0 0 0-.86L6.55 3.3a.6.6 0 0 0-.85 0Z" />
-								</svg>
-							</button>
-						)}
 					</div>
 				</div>
 				<div className="flex-1 min-h-0">
