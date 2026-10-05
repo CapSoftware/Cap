@@ -645,6 +645,93 @@ test("a paused frame redraws when its late camera lands, unless the playhead mov
 	}
 });
 
+test("a camera that fails after its frame was drawn with the held one is reported", async () => {
+	class FakeFrame {
+		constructor(readonly time: number) {}
+		clone() {
+			return new FakeFrame(this.time);
+		}
+		close() {}
+	}
+	const host = globalThis as { VideoFrame?: unknown };
+	const realFrame = host.VideoFrame;
+	host.VideoFrame = FakeFrame;
+	const playback = Object.create(
+		BrowserLocalPlayback.prototype,
+	) as BrowserLocalPlayback;
+	const errors: string[] = [];
+	Reflect.set(playback, "disposed", false);
+	Reflect.set(playback, "heldCamera", null);
+	Reflect.set(playback, "lateCamera", null);
+	Reflect.set(playback, "cameraGeneration", 0);
+	Reflect.set(playback, "onError", (error: Error) =>
+		errors.push(error.message),
+	);
+	const cameraOrHeld = (
+		Reflect.get(playback, "cameraOrHeld") as (
+			clip: number,
+			screen: Promise<unknown>,
+			camera: Promise<unknown>,
+			playing: boolean,
+			graceMs: number,
+			onLate: () => void,
+		) => Promise<{ mediaTime: number } | null>
+	).bind(playback);
+	const failing = () => {
+		let fail: (cause: unknown) => void = () => undefined;
+		const promise = new Promise((_, reject) => {
+			fail = reject;
+		});
+		promise.catch(() => undefined);
+		return { promise, fail: (cause: unknown) => fail(cause) };
+	};
+	try {
+		await cameraOrHeld(
+			0,
+			Promise.resolve(null),
+			Promise.resolve({
+				source: new FakeFrame(1) as unknown as VideoFrame,
+				width: 640,
+				height: 360,
+				mediaTime: 1,
+				release: () => undefined,
+				sourceColorFix: false,
+			}),
+			false,
+			5,
+			() => undefined,
+		);
+		const current = failing();
+		await cameraOrHeld(
+			0,
+			Promise.resolve(null),
+			current.promise,
+			false,
+			5,
+			() => undefined,
+		);
+		current.fail(new Error("Editor camera decode failed"));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(errors).toEqual(["Editor camera decode failed"]);
+		// Once the playhead has moved, the old position's failure is moot.
+		const stale = failing();
+		await cameraOrHeld(
+			0,
+			Promise.resolve(null),
+			stale.promise,
+			false,
+			5,
+			() => undefined,
+		);
+		(Reflect.get(playback, "jumpCamera") as () => void).call(playback);
+		stale.fail(new Error("Editor camera decode failed"));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(errors).toHaveLength(1);
+	} finally {
+		host.VideoFrame = realFrame;
+	}
+});
+
 test("a loading frame stays while a scrub keeps asking and gives way once it stops", async () => {
 	const playback = Object.create(
 		BrowserLocalPlayback.prototype,

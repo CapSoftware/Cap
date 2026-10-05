@@ -978,7 +978,17 @@ export class BrowserLocalPlayback {
 				}
 				frame?.release();
 			},
-			() => undefined,
+			(cause: unknown) => {
+				// The frame on screen already shows the held camera, so a camera
+				// that then fails is reported as it would have been in time.
+				if (
+					generation !== this.cameraGeneration ||
+					this.disposed ||
+					(cause instanceof DOMException && cause.name === "AbortError")
+				)
+					return;
+				this.onError(cause instanceof Error ? cause : new Error(String(cause)));
+			},
 		);
 		if (!playing) return this.heldCameraFrame();
 		this.lateCamera = late;
@@ -1082,9 +1092,7 @@ export class BrowserLocalPlayback {
 							!!playSignal,
 						)
 					: role === "primary" && this.canvas.hasRenderedFrame()
-						? // A paused frame waiting on a camera fragment shows the screen
-							// at once and redraws when the camera catches up.
-							this.cameraOrHeld(
+						? this.cameraOrHeld(
 								recordingClip,
 								screenFrame,
 								cameraFrame,
