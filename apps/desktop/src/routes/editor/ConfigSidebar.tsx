@@ -3282,7 +3282,6 @@ function BackgroundConfig(props: {
 							onChange={(v) => {
 								batch(() => {
 									setProject("background", "shadow", v[0]);
-									// Initialize advanced shadow settings if they don't exist and shadow is enabled
 									if (v[0] > 0 && !project.background.advancedShadow) {
 										setProject("background", "advancedShadow", {
 											size: 50,
