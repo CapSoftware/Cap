@@ -13,7 +13,6 @@ const TRACK_NAMES = {
 
 export function PreparingTimeline(props: {
 	model: PreparingEditorModel;
-	/** The page shows its own loading status, so this one says nothing. */
 	quiet?: boolean;
 }) {
 	const timeline = () => props.model.timeline();

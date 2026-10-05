@@ -352,7 +352,6 @@ export function EditorSkeleton(
 						compact() ? undefined : { height: `${layout().timelineHeight}px` }
 					}
 				>
-					{/* The loading status over the preview is the one status shown. */}
 					<PreparingTimeline model={model} quiet={playWhenReady()} />
 				</div>
 			</div>
