@@ -541,11 +541,12 @@ export class PortEditorTransport {
 				value = await this.request("invoke", name, fullConfigArgs);
 			}
 			if (isConfigCommand) {
+				// The browser preview is not given the saved config: it already
+				// shows every edit through updateProjectConfigInMemory, and a save
+				// lands later (seconds on a poor link), by when the editor may have
+				// moved on or hidden tracks the saved config keeps.
 				if (name === "setProjectConfig") this.savedCaptionCache = captionCache;
 				else this.nativeCaptionCache = captionCache;
-				if (browserEditorPreviewEnabled()) {
-					await setBrowserEditorPreviewConfig(fullConfigArgs?.[0] ?? args[0]);
-				}
 			}
 			if (
 				planRequestSequence > 0 &&

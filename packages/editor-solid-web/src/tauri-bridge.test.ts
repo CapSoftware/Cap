@@ -1,6 +1,10 @@
 import { expect, test } from "bun:test";
 import { $PROXY } from "solid-js";
 import { createStore, produce } from "solid-js/store";
+import {
+	browserEditorPreviewConfig,
+	setBrowserEditorVideoId,
+} from "./browser-frame-socket";
 import { EditorCaptionCacheMemo } from "./caption-cache-memo";
 import {
 	commands,
@@ -48,6 +52,57 @@ test("desktop commands and events cross the editor port", async () => {
 		expect(requests).toEqual(["getEditorProjectPath", "renderFrameEvent"]);
 	} finally {
 		setEditorTransport(null);
+		channel.port2.close();
+	}
+});
+
+test("a save landing after newer edits leaves the browser preview on them", async () => {
+	const channel = new MessageChannel();
+	const transport = new PortEditorTransport(channel.port1);
+	const saves: Array<() => void> = [];
+	channel.port2.onmessage = (event: MessageEvent<unknown>) => {
+		const message = event.data as Record<string, unknown>;
+		const reply = () =>
+			channel.port2.postMessage({
+				kind: "result",
+				id: message.id,
+				value: null,
+			});
+		if (message.name === "setProjectConfig") saves.push(reply);
+		else reply();
+	};
+	channel.port2.start();
+	setBrowserEditorVideoId("video");
+	try {
+		const saved = { timeline: { segments: [{ start: 0, end: 4 }] } };
+		const newer = {
+			timeline: {
+				segments: [
+					{ start: 0, end: 2 },
+					{ start: 2, end: 4 },
+				],
+			},
+		};
+		await transport.invoke("updateProjectConfigInMemory", [
+			saved,
+			null,
+			null,
+			null,
+		]);
+		const save = transport.invoke("setProjectConfig", [saved]);
+		await transport.invoke("updateProjectConfigInMemory", [
+			newer,
+			null,
+			null,
+			null,
+		]);
+		while (saves.length === 0) await new Promise((r) => setTimeout(r, 1));
+		saves[0]?.();
+		await save;
+		expect(browserEditorPreviewConfig()).toEqual(newer);
+	} finally {
+		setBrowserEditorVideoId(null);
+		transport.dispose();
 		channel.port2.close();
 	}
 });
