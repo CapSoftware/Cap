@@ -1,4 +1,5 @@
 import { timingSafeEqual } from "node:crypto";
+import { customerCopy } from "@cap/database/loops/customer-copy";
 import { runLoopsSync } from "@cap/database/loops/worker";
 import {
 	HttpApi,
@@ -10,7 +11,6 @@ import {
 } from "@effect/platform";
 import { Effect, Layer, Schema } from "effect";
 import { apiToHandler } from "@/lib/server";
-import { customerCopy } from "../../../../../../emails/customer-copy";
 
 class Api extends HttpApi.make("LoopsSyncApi").add(
 	HttpApiGroup.make("root").add(

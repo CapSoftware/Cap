@@ -446,6 +446,12 @@ pub struct FramesIter<'a> {
     track_output: &'a mut av::AssetReaderTrackOutput,
 }
 
+impl Drop for AVAssetReaderDecoder {
+    fn drop(&mut self) {
+        self.reader.cancel_reading();
+    }
+}
+
 impl<'a> Iterator for FramesIter<'a> {
     type Item = ns::ExResult<'static, arc::R<cm::SampleBuf>>;
 
