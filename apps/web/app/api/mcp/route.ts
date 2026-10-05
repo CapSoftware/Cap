@@ -24,6 +24,7 @@ const allowedOrigins = () =>
 		"https://chatgpt.com",
 		"https://claude.ai",
 		"https://muse.ai",
+		"https://grok.com",
 	]);
 
 const corsHeaders = (request: Request) => {
