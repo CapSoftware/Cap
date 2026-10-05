@@ -85,9 +85,11 @@ const ensureAnalyticsSessionId = () => {
 			if (parsed?.value && parsed.expiry > now) return parsed.value;
 		}
 		const newId =
-			typeof crypto !== "undefined" && "randomUUID" in crypto
+			typeof crypto.randomUUID === "function"
 				? crypto.randomUUID()
-				: Math.random().toString(36).slice(2);
+				: Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) =>
+						byte.toString(16).padStart(2, "0"),
+					).join("");
 		window.localStorage.setItem(
 			SESSION_STORAGE_KEY,
 			JSON.stringify({ value: newId, expiry: now + SESSION_TTL_MS }),
