@@ -1,22 +1,25 @@
 import type { ConnectionLevel } from "../../../apps/desktop/src/routes/editor/connection-status";
 
-export type ConnectionSample = {
-	online: boolean;
-	media: { bitsPerSecond: number | null; latencyMs: number | null };
-	/// `navigator.connection`, where the browser has it. Only a hint: Chrome
-	/// rounds and caps it, and Safari and Firefox don't have it.
-	hint: {
-		effectiveType?: string;
-		downlinkMbps?: number;
-		rttMs?: number;
-	} | null;
+export type ConnectionEvidence = {
+	reads: number;
+	bytes: number;
+	waitedMs: number;
+	ageMs: number;
 };
 
-export type ConnectionBasis = "media" | "hint";
+export type MediaReading = {
+	bitsPerSecond: number | null;
+	latencyMs: number | null;
+	evidence: ConnectionEvidence;
+};
 
-export type ConnectionReading = {
-	level: ConnectionLevel;
-	basis: ConnectionBasis;
+export type ConnectionSample = {
+	online: boolean;
+	/// Reads since the first frame painted.
+	media: MediaReading & {
+		/// Reads before it, while the editor's own downloads shared the link.
+		startup?: MediaReading;
+	};
 };
 
 /// At or above this, playback and seeks keep up with a screen recording.
@@ -30,20 +33,37 @@ export const POOR_LATENCY_MS = 1500;
 /// near it doesn't flip back and forth.
 const BAND = 0.25;
 
+/// A first verdict needs several reads over at least a second, and either
+/// enough bytes to time or seconds of waiting on the network, so one slow
+/// request can't call a connection slow.
+export const MIN_EVIDENCE: ConnectionEvidence = {
+	reads: 3,
+	bytes: 1024 * 1024,
+	waitedMs: 4000,
+	ageMs: 1000,
+};
+
+export function enoughConnectionEvidence(evidence: ConnectionEvidence) {
+	return (
+		evidence.reads >= MIN_EVIDENCE.reads &&
+		evidence.ageMs >= MIN_EVIDENCE.ageMs &&
+		(evidence.bytes >= MIN_EVIDENCE.bytes ||
+			evidence.waitedMs >= MIN_EVIDENCE.waitedMs)
+	);
+}
+
 const RANK = { poor: 0, fair: 1, good: 2 } as const;
 type Rank = 0 | 1 | 2;
 const LEVELS = ["poor", "fair", "good"] as const;
 
 /// Leans toward the side of the boundary the last level was on.
-function clears(value: number, boundary: number, wasAbove: boolean | null) {
-	if (wasAbove === null) return value >= boundary;
+function clears(value: number, boundary: number, wasAbove: boolean) {
 	return wasAbove
 		? value >= boundary * (1 - BAND)
 		: value >= boundary * (1 + BAND);
 }
 
-function under(value: number, boundary: number, wasUnder: boolean | null) {
-	if (wasUnder === null) return value < boundary;
+function under(value: number, boundary: number, wasUnder: boolean) {
 	return wasUnder
 		? value < boundary * (1 + BAND)
 		: value < boundary * (1 - BAND);
@@ -52,29 +72,21 @@ function under(value: number, boundary: number, wasUnder: boolean | null) {
 function rankFor(
 	mbps: number | null,
 	latencyMs: number | null,
-	previous: Rank | null,
+	previous: Rank,
 ): Rank | null {
 	if (mbps === null && latencyMs === null) return null;
 	let rank: Rank = 2;
 	if (mbps !== null) {
-		rank = clears(mbps, GOOD_MBPS, previous === null ? null : previous >= 2)
+		rank = clears(mbps, GOOD_MBPS, previous >= 2)
 			? 2
-			: clears(mbps, FAIR_MBPS, previous === null ? null : previous >= 1)
+			: clears(mbps, FAIR_MBPS, previous >= 1)
 				? 1
 				: 0;
 	}
 	if (latencyMs !== null) {
-		const latencyRank: Rank = under(
-			latencyMs,
-			FAIR_LATENCY_MS,
-			previous === null ? null : previous >= 2,
-		)
+		const latencyRank: Rank = under(latencyMs, FAIR_LATENCY_MS, previous >= 2)
 			? 2
-			: under(
-						latencyMs,
-						POOR_LATENCY_MS,
-						previous === null ? null : previous >= 1,
-					)
+			: under(latencyMs, POOR_LATENCY_MS, previous >= 1)
 				? 1
 				: 0;
 		rank = Math.min(rank, latencyRank) as Rank;
@@ -82,103 +94,81 @@ function rankFor(
 	return rank;
 }
 
-function hintRank(
-	hint: NonNullable<ConnectionSample["hint"]>,
-	previous: Rank | null,
-): Rank | null {
-	const fromType: Rank | null =
-		hint.effectiveType === "slow-2g" || hint.effectiveType === "2g"
-			? 0
-			: hint.effectiveType === "3g"
-				? 1
-				: null;
-	// Chrome reports 0 for both when it has no estimate yet.
-	const mbps =
-		hint.downlinkMbps !== undefined && hint.downlinkMbps > 0
-			? hint.downlinkMbps
-			: null;
-	const rtt = hint.rttMs !== undefined && hint.rttMs > 0 ? hint.rttMs : null;
-	const fromNumbers = rankFor(mbps, rtt, previous);
-	if (fromType === null) return fromNumbers;
-	if (fromNumbers === null) return fromType;
-	return Math.min(fromType, fromNumbers) as Rank;
-}
-
-/// The browser's hint stands in only until media reads have said anything.
+/// The level from one sample, or null while there's nothing to judge by.
+/// With no verdict yet it waits for enough evidence and then gives the
+/// benefit of the doubt: a reading near a boundary lands on the better side,
+/// so "slow" is said only of a connection that is clearly slow.
 export function classifyConnection(
 	sample: ConnectionSample,
 	previous: ConnectionLevel | null = null,
-): ConnectionReading | null {
-	if (!sample.online) return { level: "offline", basis: "media" };
-	const previousRank =
-		previous === null || previous === "offline" ? null : RANK[previous];
-	const media = rankFor(
-		sample.media.bitsPerSecond === null
-			? null
-			: sample.media.bitsPerSecond / 1_000_000,
-		sample.media.latencyMs,
-		previousRank,
-	);
-	if (media !== null) return { level: LEVELS[media], basis: "media" };
-	const hint = sample.hint ? hintRank(sample.hint, previousRank) : null;
-	if (hint !== null) return { level: LEVELS[hint], basis: "hint" };
+): ConnectionLevel | null {
+	if (!sample.online) return "offline";
+	const first = previous === null || previous === "offline";
+	const level = (reading: MediaReading, rankBefore: Rank) => {
+		const rank = rankFor(
+			reading.bitsPerSecond === null ? null : reading.bitsPerSecond / 1_000_000,
+			reading.latencyMs,
+			rankBefore,
+		);
+		return rank === null ? null : LEVELS[rank];
+	};
+	if (!first) return level(sample.media, RANK[previous]);
+	if (enoughConnectionEvidence(sample.media.evidence))
+		return level(sample.media, 2);
+	// Startup reads only ever look slower than the connection is, so they can
+	// show it is good but never that it isn't; an editor that reads nothing
+	// once it has opened still gets a verdict that way.
+	// A fast editor paints its first frame well within a second, so startup
+	// reads are judged by count and bytes, not by how long they spread over.
+	const startup = sample.media.startup;
+	if (
+		startup &&
+		startup.evidence.reads >= MIN_EVIDENCE.reads &&
+		startup.evidence.bytes >= MIN_EVIDENCE.bytes
+	)
+		return level(startup, 2) === "good" ? "good" : null;
 	return null;
 }
 
 /// A new level must hold for `confirmSamples` samples in a row so it doesn't
-/// flicker, except going offline or back online, the first reading, and the
-/// first measured one after the browser's hint. Between media reads the last
-/// level stands, since an idle connection isn't a worse one.
+/// flicker, except going offline or back online and the first verdict.
+/// Between media reads the last level stands, since an idle connection isn't
+/// a worse one.
 export function createConnectionTracker(confirmSamples = 2) {
-	let current: ConnectionReading | null = null;
+	let current: ConnectionLevel | null = null;
 	let candidate: ConnectionLevel | null = null;
 	let candidateCount = 0;
-	const set = (next: ConnectionReading) => {
-		const changed = next.level !== current?.level;
+	const set = (next: ConnectionLevel) => {
+		const changed = next !== current;
 		current = next;
 		candidate = null;
 		candidateCount = 0;
-		return changed ? next.level : null;
+		return changed ? next : null;
 	};
 	return {
 		get level() {
-			return current?.level ?? null;
-		},
-		get basis() {
-			return current?.basis ?? null;
+			return current;
 		},
 		update(sample: ConnectionSample): ConnectionLevel | null {
-			// Only a measured level widens the boundaries; the browser's hint
-			// is too rough to lean on.
-			const reading = classifyConnection(
-				sample,
-				current?.basis === "media" ? current.level : null,
-			);
-			if (!reading) {
+			const reading = classifyConnection(sample, current);
+			if (reading === null) {
+				// Back online with nothing new measured yet: checking again.
+				if (current === "offline") {
+					current = null;
+				}
 				candidate = null;
 				candidateCount = 0;
 				return null;
 			}
-			if (
-				current === null ||
-				reading.level === "offline" ||
-				current.level === "offline" ||
-				(current.basis === "hint" && reading.basis === "media")
-			)
+			if (current === null || reading === "offline" || current === "offline")
 				return set(reading);
-			if (current.basis === "media" && reading.basis === "hint") {
+			if (reading === current) {
 				candidate = null;
 				candidateCount = 0;
 				return null;
 			}
-			if (reading.level === current.level) {
-				current = reading;
-				candidate = null;
-				candidateCount = 0;
-				return null;
-			}
-			if (reading.level !== candidate) {
-				candidate = reading.level;
+			if (reading !== candidate) {
+				candidate = reading;
 				candidateCount = 0;
 			}
 			candidateCount++;

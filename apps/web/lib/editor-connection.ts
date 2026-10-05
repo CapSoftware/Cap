@@ -84,7 +84,7 @@ export const EDITOR_CONNECTION_COPY: Record<
 	checking: {
 		label: "Checking connection",
 		title: "Checking your connection",
-		body: "Cap measures it from the video the editor loads, so it never uses extra data.",
+		body: "Cap measures it from the video the editor loads once it has opened, so it never uses extra data.",
 		bars: 0,
 	},
 };

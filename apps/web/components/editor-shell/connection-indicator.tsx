@@ -43,7 +43,10 @@ function SignalBars({ level }: { level: keyof typeof LEVEL_COLOR }) {
 	return (
 		<svg
 			viewBox="0 0 16 16"
-			className="size-4 shrink-0"
+			className={clsx(
+				"size-4 shrink-0",
+				level === "checking" && "animate-pulse motion-reduce:animate-none",
+			)}
 			aria-hidden="true"
 			fill="none"
 		>

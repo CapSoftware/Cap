@@ -1,94 +1,140 @@
 import { describe, expect, test } from "bun:test";
 import {
+	type ConnectionEvidence,
 	type ConnectionSample,
 	classifyConnection,
 	createConnectionTracker,
+	enoughConnectionEvidence,
+	MIN_EVIDENCE,
 } from "./connection-quality";
+
+const plenty: ConnectionEvidence = {
+	reads: 12,
+	bytes: 8 * 1024 * 1024,
+	waitedMs: 6000,
+	ageMs: 10_000,
+};
 
 const media = (
 	mbps: number | null,
 	latencyMs: number | null = null,
-	hint: ConnectionSample["hint"] = null,
+	evidence: ConnectionEvidence = plenty,
 ): ConnectionSample => ({
 	online: true,
 	media: {
 		bitsPerSecond: mbps === null ? null : mbps * 1_000_000,
 		latencyMs,
+		evidence,
 	},
-	hint,
 });
 
-const offline: ConnectionSample = {
-	online: false,
-	media: { bitsPerSecond: null, latencyMs: null },
-	hint: null,
-};
+const offline: ConnectionSample = { ...media(null), online: false };
+
+describe("enoughConnectionEvidence", () => {
+	test("needs several reads over a few seconds", () => {
+		expect(enoughConnectionEvidence(MIN_EVIDENCE)).toBe(true);
+		expect(
+			enoughConnectionEvidence({
+				...MIN_EVIDENCE,
+				reads: MIN_EVIDENCE.reads - 1,
+			}),
+		).toBe(false);
+		expect(enoughConnectionEvidence({ ...plenty, ageMs: 500 })).toBe(false);
+	});
+
+	test("and either enough bytes to time or long enough waiting", () => {
+		expect(
+			enoughConnectionEvidence({ ...plenty, bytes: 4096, waitedMs: 500 }),
+		).toBe(false);
+		expect(enoughConnectionEvidence({ ...plenty, bytes: 4096 })).toBe(true);
+		expect(enoughConnectionEvidence({ ...plenty, waitedMs: 500 })).toBe(true);
+	});
+});
 
 describe("classifyConnection", () => {
-	test("rates the editor's media reads", () => {
-		expect(classifyConnection(media(40, 60))?.level).toBe("good");
-		expect(classifyConnection(media(5, 150))?.level).toBe("fair");
-		expect(classifyConnection(media(1.5, 400))?.level).toBe("poor");
-	});
-
-	test("slow responses cap an otherwise fast connection", () => {
-		expect(classifyConnection(media(40, 900))?.level).toBe("fair");
-		expect(classifyConnection(media(40, 2000))?.level).toBe("poor");
-		expect(classifyConnection(media(null, 2000))?.level).toBe("poor");
-	});
-
-	test("offline wins over everything", () => {
-		expect(classifyConnection({ ...media(40, 50), online: false })).toEqual({
-			level: "offline",
-			basis: "media",
-		});
-	});
-
-	test("uses navigator.connection only until media reads say something", () => {
-		const hint = { effectiveType: "3g", downlinkMbps: 1.4, rttMs: 300 };
-		expect(classifyConnection(media(null, null, hint))).toEqual({
-			level: "poor",
-			basis: "hint",
-		});
-		expect(
-			classifyConnection(media(null, null, { effectiveType: "3g" })),
-		).toEqual({ level: "fair", basis: "hint" });
-		expect(classifyConnection(media(40, 50, hint))).toEqual({
-			level: "good",
-			basis: "media",
-		});
-	});
-
-	test("ignores Chrome's zero placeholders and knows nothing without data", () => {
-		expect(
-			classifyConnection(
-				media(null, null, { effectiveType: "4g", downlinkMbps: 0, rttMs: 0 }),
-			),
-		).toBeNull();
+	test("says nothing until there is enough evidence", () => {
+		const thin = { ...plenty, reads: 1 };
+		expect(classifyConnection(media(0.5, 2000, thin))).toBeNull();
+		expect(classifyConnection(media(50, 40, thin))).toBeNull();
 		expect(classifyConnection(media(null, null))).toBeNull();
 	});
 
-	test("a reading near a boundary leans toward the level already shown", () => {
-		// 7 Mbps is under the 8 Mbps line, but within its band.
-		expect(classifyConnection(media(7), "good")?.level).toBe("good");
-		expect(classifyConnection(media(7), "fair")?.level).toBe("fair");
-		expect(classifyConnection(media(7), null)?.level).toBe("fair");
-		// Crossing up takes clearly clearing the line.
-		expect(classifyConnection(media(9), "fair")?.level).toBe("fair");
-		expect(classifyConnection(media(10.5), "fair")?.level).toBe("good");
-		// And falling out takes clearly dropping below it.
-		expect(classifyConnection(media(1.7), "fair")?.level).toBe("fair");
-		expect(classifyConnection(media(1.4), "fair")?.level).toBe("poor");
-		expect(classifyConnection(media(2.2), "poor")?.level).toBe("poor");
-		expect(classifyConnection(media(2.6), "poor")?.level).toBe("fair");
+	test("rates the editor's media reads", () => {
+		expect(classifyConnection(media(40, 60))).toBe("good");
+		expect(classifyConnection(media(4, 150))).toBe("fair");
+		expect(classifyConnection(media(1, 400))).toBe("poor");
+	});
+
+	test("a first verdict near a boundary lands on the better side", () => {
+		// Under 8 Mbps, but not clearly: good, not fair.
+		expect(classifyConnection(media(6.5))).toBe("good");
+		// Under 2 Mbps, but not clearly: fair, not slow.
+		expect(classifyConnection(media(1.6))).toBe("fair");
+		expect(classifyConnection(media(1.4))).toBe("poor");
+		expect(classifyConnection(media(40, 1800))).toBe("fair");
+		expect(classifyConnection(media(40, 1900))).toBe("poor");
+	});
+
+	test("slow responses cap an otherwise fast connection", () => {
+		expect(classifyConnection(media(40, 900), "good")).toBe("fair");
+		expect(classifyConnection(media(40, 2000), "fair")).toBe("poor");
+	});
+
+	test("startup reads can show a connection is good, never that it isn't", () => {
+		const nothingSince = (startupMbps: number, latencyMs: number) => ({
+			online: true,
+			media: {
+				...media(null, null, { ...plenty, reads: 0, bytes: 0, waitedMs: 0 })
+					.media,
+				startup: {
+					bitsPerSecond: startupMbps * 1_000_000,
+					latencyMs,
+					evidence: plenty,
+				},
+			},
+		});
+		expect(classifyConnection(nothingSince(80, 20))).toBe("good");
+		// A first frame within a second still leaves enough to go on.
+		const quick = nothingSince(80, 20);
+		if (quick.media.startup)
+			quick.media.startup.evidence = { ...plenty, reads: 16, ageMs: 640 };
+		expect(classifyConnection(quick)).toBe("good");
+		// But not one read, however large.
+		const single = nothingSince(80, 20);
+		if (single.media.startup)
+			single.media.startup.evidence = { ...plenty, reads: 1 };
+		expect(classifyConnection(single)).toBeNull();
+		expect(classifyConnection(nothingSince(3, 20))).toBeNull();
+		expect(classifyConnection(nothingSince(0.3, 2000))).toBeNull();
+		// Reads since the first frame decide when there are enough of them.
+		const both = nothingSince(80, 20);
+		both.media = { ...media(1, 400).media, startup: both.media.startup };
+		expect(classifyConnection(both)).toBe("poor");
+	});
+
+	test("offline wins over everything, with or without evidence", () => {
+		expect(classifyConnection(offline)).toBe("offline");
+	});
+
+	test("after a verdict, a reading near a boundary leans toward it", () => {
+		expect(classifyConnection(media(7), "good")).toBe("good");
+		expect(classifyConnection(media(7), "fair")).toBe("fair");
+		expect(classifyConnection(media(9), "fair")).toBe("fair");
+		expect(classifyConnection(media(10.5), "fair")).toBe("good");
+		expect(classifyConnection(media(1.7), "fair")).toBe("fair");
+		expect(classifyConnection(media(1.4), "fair")).toBe("poor");
+		expect(classifyConnection(media(2.2), "poor")).toBe("poor");
+		expect(classifyConnection(media(2.6), "poor")).toBe("fair");
 	});
 });
 
 describe("createConnectionTracker", () => {
-	test("takes the first reading at once", () => {
+	test("stays checking until there is evidence, then decides at once", () => {
 		const tracker = createConnectionTracker();
-		expect(tracker.update(media(1.5, 400))).toBe("poor");
-		expect(tracker.level).toBe("poor");
+		const thin = { ...plenty, reads: 2 };
+		expect(tracker.update(media(0.3, 3000, thin))).toBeNull();
+		expect(tracker.level).toBeNull();
+		expect(tracker.update(media(40, 50))).toBe("good");
 	});
 
 	test("a new level must hold for two samples before it shows", () => {
@@ -103,9 +149,9 @@ describe("createConnectionTracker", () => {
 		const tracker = createConnectionTracker();
 		tracker.update(media(40, 50));
 		const shown = [
-			media(1.5),
+			media(1),
 			media(40),
-			media(2),
+			media(1.5),
 			media(30),
 			media(1),
 			media(40),
@@ -114,39 +160,25 @@ describe("createConnectionTracker", () => {
 		expect(tracker.level).toBe("good");
 	});
 
-	test("a candidate that changes restarts the count", () => {
-		const tracker = createConnectionTracker();
-		tracker.update(media(40));
-		expect(tracker.update(media(5))).toBeNull();
-		expect(tracker.update(media(1))).toBeNull();
-		expect(tracker.update(media(1))).toBe("poor");
-	});
-
-	test("going offline and back applies at once", () => {
+	test("going offline applies at once, and back online decides afresh", () => {
 		const tracker = createConnectionTracker();
 		tracker.update(media(40));
 		expect(tracker.update(offline)).toBe("offline");
-		expect(tracker.update(media(5))).toBe("fair");
+		expect(tracker.update(media(4))).toBe("fair");
 	});
 
-	test("the first media reading replaces the browser's hint at once", () => {
+	test("back online with nothing measured is checking again", () => {
 		const tracker = createConnectionTracker();
-		expect(
-			tracker.update(
-				media(null, null, { effectiveType: "4g", downlinkMbps: 10 }),
-			),
-		).toBe("good");
-		expect(tracker.basis).toBe("hint");
-		expect(tracker.update(media(1.5, 400))).toBe("poor");
-		expect(tracker.basis).toBe("media");
+		tracker.update(media(40));
+		tracker.update(offline);
+		expect(tracker.update(media(null, null))).toBeNull();
+		expect(tracker.level).toBeNull();
 	});
 
 	test("between media reads the last measured level stands", () => {
 		const tracker = createConnectionTracker();
-		tracker.update(media(1.5));
-		const hint = { effectiveType: "4g", downlinkMbps: 10, rttMs: 50 };
-		expect(tracker.update(media(null, null, hint))).toBeNull();
-		expect(tracker.update(media(null, null, hint))).toBeNull();
+		tracker.update(media(1));
+		expect(tracker.update(media(null, null))).toBeNull();
 		expect(tracker.update(media(null, null))).toBeNull();
 		expect(tracker.level).toBe("poor");
 	});

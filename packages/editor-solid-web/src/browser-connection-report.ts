@@ -2,7 +2,11 @@ import {
 	type ConnectionLevel,
 	reportConnectionLevel,
 } from "../../../apps/desktop/src/routes/editor/connection-status";
-import { mediaConnectionSample } from "./browser-network-budget";
+import { onBrowserPreviewSettled } from "./browser-frame-socket";
+import {
+	mediaConnectionSample,
+	openConnectionWindow,
+} from "./browser-network-budget";
 import {
 	type ConnectionSample,
 	createConnectionTracker,
@@ -10,31 +14,13 @@ import {
 
 /// Nothing is fetched to measure the connection, so looking again is cheap.
 const SAMPLE_MS = 2000;
-
-type NetworkInformationLike = {
-	effectiveType?: string;
-	downlink?: number;
-	rtt?: number;
-};
-
-function connectionHint(): ConnectionSample["hint"] {
-	const connection = (
-		navigator as Navigator & { connection?: NetworkInformationLike }
-	).connection;
-	if (!connection) return null;
-	return {
-		effectiveType: connection.effectiveType,
-		downlinkMbps: connection.downlink,
-		rttMs: connection.rtt,
-	};
-}
+/// Measuring starts once the first frame has painted, when the editor's own
+/// startup downloads are done; a first frame this late is no reason to wait
+/// any longer.
+const MEASURE_BY_MS = 20_000;
 
 function sample(): ConnectionSample {
-	return {
-		online: navigator.onLine,
-		media: mediaConnectionSample(),
-		hint: connectionHint(),
-	};
+	return { online: navigator.onLine, media: mediaConnectionSample() };
 }
 
 const LEVELS: readonly ConnectionLevel[] = ["good", "fair", "poor", "offline"];
@@ -46,13 +32,19 @@ export function startConnectionReport(host: Window | null) {
 	const tracker = createConnectionTracker();
 	const post = (level: ConnectionLevel) => {
 		if (!host) return;
-		const media = mediaConnectionSample();
+		const sample = mediaConnectionSample();
+		// Before anything is read once the editor has opened, its startup reads
+		// are the only numbers there are; they understate the connection.
+		const media =
+			sample.bitsPerSecond === null && sample.latencyMs === null
+				? sample.startup
+				: sample;
 		host.postMessage(
 			{
 				kind: "cap-editor-connection",
 				version: 1,
 				level,
-				basis: tracker.basis,
+				basis: "media",
 				mbps:
 					media.bitsPerSecond === null
 						? null
@@ -69,6 +61,20 @@ export function startConnectionReport(host: Window | null) {
 		if (!host) reportConnectionLevel(changed);
 		post(changed);
 	};
+	let measuring = false;
+	let fallback = 0;
+	let unsubscribe = () => {};
+	const startMeasuring = () => {
+		if (measuring) return;
+		measuring = true;
+		window.clearTimeout(fallback);
+		unsubscribe();
+		openConnectionWindow();
+	};
+	fallback = window.setTimeout(startMeasuring, MEASURE_BY_MS);
+	// It calls back at once when the preview has already settled.
+	unsubscribe = onBrowserPreviewSettled(startMeasuring);
+	if (measuring) unsubscribe();
 	check();
 	window.setInterval(check, SAMPLE_MS);
 	window.addEventListener("online", check);
