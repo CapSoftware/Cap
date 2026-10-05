@@ -83,30 +83,31 @@ describe("hosted MCP transport", () => {
 	});
 
 	it("preserves browser preflight and OAuth challenge headers", async () => {
-		const origin = "https://chatgpt.com";
-		const preflight = await OPTIONS(
-			new Request("https://cap.so/api/mcp", {
-				method: "OPTIONS",
-				headers: { Origin: origin },
-			}),
-		);
-		expect(preflight.status).toBe(204);
-		expect(preflight.headers.get("access-control-allow-origin")).toBe(origin);
-		expect(preflight.headers.get("cache-control")).toBe("no-store");
-		const unauthorized = await POST(
-			new Request("https://cap.so/api/mcp", {
-				method: "POST",
-				headers: { Origin: origin, "Content-Type": "application/json" },
-				body: "{}",
-			}),
-		);
-		expect(unauthorized.status).toBe(401);
-		expect(unauthorized.headers.get("access-control-allow-origin")).toBe(
-			origin,
-		);
-		expect(unauthorized.headers.get("www-authenticate")).toContain(
-			"resource_metadata",
-		);
+		for (const origin of ["https://chatgpt.com", "https://grok.com"]) {
+			const preflight = await OPTIONS(
+				new Request("https://cap.so/api/mcp", {
+					method: "OPTIONS",
+					headers: { Origin: origin },
+				}),
+			);
+			expect(preflight.status).toBe(204);
+			expect(preflight.headers.get("access-control-allow-origin")).toBe(origin);
+			expect(preflight.headers.get("cache-control")).toBe("no-store");
+			const unauthorized = await POST(
+				new Request("https://cap.so/api/mcp", {
+					method: "POST",
+					headers: { Origin: origin, "Content-Type": "application/json" },
+					body: "{}",
+				}),
+			);
+			expect(unauthorized.status).toBe(401);
+			expect(unauthorized.headers.get("access-control-allow-origin")).toBe(
+				origin,
+			);
+			expect(unauthorized.headers.get("www-authenticate")).toContain(
+				"resource_metadata",
+			);
+		}
 	});
 
 	it("keeps host, origin, media type, and body limits ahead of MCP dispatch", async () => {
@@ -150,6 +151,32 @@ describe("hosted MCP transport", () => {
 		expect(listBody).toContain("caps_list");
 		expect(listBody).toContain("caps_get");
 		expect(listBody).toContain("caps_context");
+		expect(listBody).toContain('"openWorldHint":false');
+		const data = listBody.split("\n").find((line) => line.startsWith("data: "));
+		expect(data).toBeDefined();
+		const tools = JSON.parse(data?.slice(6) ?? "").result.tools;
+		expect(tools).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					name: "caps_list",
+					annotations: expect.objectContaining({
+						title: "List Cap recordings",
+					}),
+				}),
+				expect.objectContaining({
+					name: "caps_get",
+					annotations: expect.objectContaining({
+						title: "Get a Cap recording",
+					}),
+				}),
+				expect.objectContaining({
+					name: "caps_context",
+					annotations: expect.objectContaining({
+						title: "Read a Cap recording",
+					}),
+				}),
+			]),
+		);
 		expect(listBody).not.toContain("caps_delete");
 		const called = await POST(
 			request({
