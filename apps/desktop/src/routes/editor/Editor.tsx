@@ -67,7 +67,7 @@ import { Header, type TitleSaveRegistration } from "./Header";
 import { ImportProgress } from "./ImportProgress";
 import { PlayerContent, PreviewTools } from "./Player";
 import { usePreparingEditor } from "./preparing-editor-context";
-import { editorLayout } from "./responsive-layout";
+import { editorLayout, tapOpensSheet } from "./responsive-layout";
 import { Timeline } from "./Timeline";
 import { bridgeTouchToMouse } from "./touch-mouse-bridge";
 import { Dialog, DialogContent, EditorButton, Input, Subfield } from "./ui";
@@ -458,8 +458,6 @@ function Inner(props: {
 	const focusMode = isWebEditor ? createFocusMode() : undefined;
 	const focused = () => focusMode?.active() ?? false;
 
-	// Below 1024px (web only) the settings sidebar is a sheet over the
-	// timeline, resting as a bar of its tab icons until one is chosen.
 	const layout = editorLayout();
 	const [sheetOpen, setSheetOpen] = createSignal(false);
 	const sheet = {
@@ -472,9 +470,6 @@ function Inner(props: {
 			return "";
 		return `${selection.type}:${"indices" in selection ? selection.indices.join(",") : selection.index}`;
 	};
-	// Tapping a segment opens its settings, as the sidebar shows them at
-	// once on a wide screen; dragging one (to move, trim or draw it) leaves
-	// the timeline in view.
 	let press: { selection: string; x: number; y: number } | null = null;
 	createEventListener(
 		window,
@@ -492,10 +487,16 @@ function Inner(props: {
 		const start = press;
 		press = null;
 		if (!layout.compact() || !start) return;
-		if (Math.hypot(event.clientX - start.x, event.clientY - start.y) > 6)
-			return;
-		const key = sheetSelectionKey();
-		if (key && key !== start.selection) setSheetOpen(true);
+		const target = event.target instanceof Element ? event.target : null;
+		if (
+			tapOpensSheet({
+				selectionBefore: start.selection,
+				selectionAfter: sheetSelectionKey(),
+				distance: Math.hypot(event.clientX - start.x, event.clientY - start.y),
+				onTrackLane: !!target?.closest("[data-track-type] > :nth-child(2)"),
+			})
+		)
+			setSheetOpen(true);
 	});
 	createEffect(
 		on(
@@ -512,8 +513,7 @@ function Inner(props: {
 		if (event.key === "Escape" && sheet.open() && !event.defaultPrevented)
 			setSheetOpen(false);
 	});
-	// On a phone the player's own toolbar folds away and its tools join the
-	// sheet's bar. Built once per layout change, not on every read.
+	// Memoised so the bar's tools aren't rebuilt each time the prop is read.
 	const sidebarSheet = createMemo(() =>
 		layout.compact()
 			? {
@@ -524,8 +524,6 @@ function Inner(props: {
 			: undefined,
 	);
 
-	// Touch screens drag the timeline and the preview's handles as a mouse
-	// would; the timeline also pinches to zoom and scrolls with two fingers.
 	const setPlayerCardRef = (element: HTMLDivElement) => {
 		if (isWebEditor) onCleanup(bridgeTouchToMouse(element));
 	};
@@ -1579,8 +1577,6 @@ function Dialogs() {
 								const boxSize = createMemo(() => {
 									const { w: vw, h: vh } = viewport();
 									const ratio = display.width / display.height;
-									// Below 1024px (web) the settings stack under the frame,
-									// or sit in a narrower column when wider than tall.
 									const stacked = layout.compact() && vw < vh * 1.25;
 									const maxW = layout.compact()
 										? Math.max(120, vw - (stacked ? 56 : 380))

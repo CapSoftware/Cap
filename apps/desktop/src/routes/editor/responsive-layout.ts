@@ -2,21 +2,14 @@ import { type Accessor, createRoot, createSignal } from "solid-js";
 
 const isWebEditor = import.meta.env.VITE_CAP_WEB_EDITOR === "true";
 
-// Keep these in step with web-layout.css, which keys off the attributes they
-// set on <html> (popovers portal out of the editor, so the root is the one
-// element everything shares).
-//
-// Below 1024px wide the settings sidebar becomes a sheet over the timeline.
+// Keep in step with web-layout.css. The attributes go on <html> because
+// popovers portal out of the editor's own root.
 const COMPACT_QUERY = "(max-width: 1023.98px)";
-// Phones, held either way up: the player's toolbar folds into the sheet's bar
-// and the timeline's track names fold to their icons.
 const PHONE_QUERY =
 	"(max-width: 639.98px), (max-width: 1023.98px) and (max-height: 499.98px)";
 
 export type EditorLayout = {
-	/** The web editor below 1024px wide. Always false in the desktop app. */
 	compact: Accessor<boolean>;
-	/** A phone-sized compact layout, either way up. */
 	phone: Accessor<boolean>;
 };
 
@@ -36,11 +29,8 @@ function mediaSignal(query: string, attribute: string): Accessor<boolean> {
 	return matches;
 }
 
-/**
- * The web editor's layout size class, read from media queries rather than
- * measured, so it never waits on (or causes) a layout. The desktop app keeps
- * its one layout at every size.
- */
+// Media queries rather than measurement, so it never waits on or causes a
+// layout. Always the wide layout in the desktop app.
 export function editorLayout(): EditorLayout {
 	if (shared) return shared;
 	if (!isWebEditor || typeof window === "undefined" || !window.matchMedia) {
@@ -53,4 +43,19 @@ export function editorLayout(): EditorLayout {
 		phone: mediaSignal(PHONE_QUERY, "data-editor-phone"),
 	}));
 	return shared;
+}
+
+const TAP_SLOP_PX = 6;
+
+// A tap on the already-selected segment counts too, so its settings come
+// back after the sheet was put away. Drags (moving, trimming, drawing) leave
+// the timeline in view.
+export function tapOpensSheet(tap: {
+	selectionBefore: string;
+	selectionAfter: string;
+	distance: number;
+	onTrackLane: boolean;
+}) {
+	if (!tap.selectionAfter || tap.distance > TAP_SLOP_PX) return false;
+	return tap.selectionAfter !== tap.selectionBefore || tap.onTrackLane;
 }
