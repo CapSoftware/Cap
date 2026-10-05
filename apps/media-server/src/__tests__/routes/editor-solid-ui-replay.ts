@@ -1346,10 +1346,49 @@ try {
 					assert.equal(firefoxColorPath.kind, "VideoFrame");
 				}
 			}
-			const canvasSize = await editor.locator("#canvas").evaluate((canvas) => {
-				const element = canvas as HTMLCanvasElement;
-				return { width: element.width, height: element.height };
-			});
+			// The preview's backing size follows its box through a debounced
+			// settle (a late font or layout pass can move the box after the
+			// quality switch), so it's measured only once the two agree and hold
+			// still for a few frames; the native render and the screenshot below
+			// then describe the same pixels.
+			const canvasSize = await editor
+				.locator("#canvas")
+				.evaluate(async (canvas) => {
+					const element = canvas as HTMLCanvasElement;
+					const read = () => {
+						const box = element.getBoundingClientRect();
+						const density = window.devicePixelRatio;
+						return {
+							width: element.width,
+							height: element.height,
+							boxWidth: Math.round(box.width * density),
+							boxHeight: Math.round(box.height * density),
+						};
+					};
+					const deadline = performance.now() + 10_000;
+					let last = read();
+					let steadyFrames = 0;
+					while (steadyFrames < 4) {
+						await new Promise((resolve) => requestAnimationFrame(resolve));
+						await new Promise((resolve) => setTimeout(resolve, 40));
+						const next = read();
+						const steady =
+							next.width === last.width &&
+							next.height === last.height &&
+							next.boxWidth === last.boxWidth &&
+							next.boxHeight === last.boxHeight;
+						const matched =
+							Math.abs(next.width - next.boxWidth) <= 2 &&
+							Math.abs(next.height - next.boxHeight) <= 2;
+						steadyFrames = steady && matched ? steadyFrames + 1 : 0;
+						last = next;
+						if (performance.now() > deadline)
+							throw new Error(
+								`Preview size did not settle: ${JSON.stringify(next)}`,
+							);
+					}
+					return { width: last.width, height: last.height };
+				});
 			const native = getEditorSession(sessionId);
 			assert.ok(native);
 			const preview = await native.request("/preview", {
@@ -1377,8 +1416,9 @@ try {
 				.ensureAlpha()
 				.raw()
 				.toBuffer({ resolveWithObject: true });
-			assert.ok(Math.abs(nativeWidth - browserInfo.width) <= 2);
-			assert.ok(Math.abs(nativeHeight - browserInfo.height) <= 2);
+			const sizes = `native ${nativeWidth}x${nativeHeight}, browser ${browserInfo.width}x${browserInfo.height}, requested ${canvasSize.width}x${canvasSize.height}`;
+			assert.ok(Math.abs(nativeWidth - browserInfo.width) <= 2, sizes);
+			assert.ok(Math.abs(nativeHeight - browserInfo.height) <= 2, sizes);
 			const packed = Buffer.alloc(nativeWidth * nativeHeight * 4);
 			for (let row = 0; row < nativeHeight; row++) {
 				exact.copy(
