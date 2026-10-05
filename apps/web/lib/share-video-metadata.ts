@@ -1,4 +1,8 @@
 import type { Metadata } from "next";
+import {
+	DEFAULT_LINK_PREVIEW_DESCRIPTION,
+	defaultLinkPreviewTitle,
+} from "./share-link-preview";
 
 const PLAYER_WIDTH = 1280;
 const PLAYER_HEIGHT = 720;
@@ -23,6 +27,25 @@ export type ShareVideoMetadataInput = {
 	 */
 	canonicalWebUrl?: string;
 	advertiseIframelyPlayer?: boolean;
+	/** The owner's link preview overrides; blank parts keep the defaults. */
+	linkPreview?: ShareVideoLinkPreview | null;
+	/**
+	 * Where search engines should index the Cap: its organization's verified
+	 * custom domain when it has one. `og:url` keeps the visited host, since
+	 * Slack drops the image when that differs from the link it unfurls.
+	 */
+	canonicalShareUrl?: string | null;
+};
+
+export type ShareVideoLinkPreview = {
+	title: string | null;
+	description: string | null;
+	image: {
+		url: string;
+		width: number;
+		height: number;
+		type: string;
+	} | null;
 };
 
 export const getShareVideoUrls = ({
@@ -79,6 +102,8 @@ export const buildShareVideoMetadata = ({
 	webUrl,
 	canonicalWebUrl,
 	advertiseIframelyPlayer = false,
+	linkPreview,
+	canonicalShareUrl,
 }: ShareVideoMetadataInput): Metadata => {
 	const urls = getShareVideoUrls({
 		videoId,
@@ -86,8 +111,10 @@ export const buildShareVideoMetadata = ({
 		webUrl,
 		canonicalWebUrl,
 	});
-	const title = `${name} | Cap Recording`;
-	const description = "Watch this video on Cap";
+	const title = linkPreview?.title ?? defaultLinkPreviewTitle(name);
+	const description =
+		linkPreview?.description ?? DEFAULT_LINK_PREVIEW_DESCRIPTION;
+	const customImage = linkPreview?.image ?? null;
 
 	return {
 		title,
@@ -107,7 +134,7 @@ export const buildShareVideoMetadata = ({
 				}
 			: {}),
 		alternates: {
-			canonical: urls.shareUrl,
+			canonical: canonicalShareUrl ?? urls.shareUrl,
 			types: {
 				"application/json+oembed": [
 					{
@@ -124,20 +151,24 @@ export const buildShareVideoMetadata = ({
 			title,
 			description,
 			ttl: 300,
-			images: [
-				{
-					url: urls.previewImageUrl,
-					width: 480,
-					height: 270,
-					type: "image/gif",
-				},
-				{
-					url: urls.ogImageUrl,
-					width: 1200,
-					height: 630,
-					type: "image/png",
-				},
-			],
+			// Apps take the first image they can use, so a chosen image is the
+			// only one offered.
+			images: customImage
+				? [customImage]
+				: [
+						{
+							url: urls.previewImageUrl,
+							width: 480,
+							height: 270,
+							type: "image/gif",
+						},
+						{
+							url: urls.ogImageUrl,
+							width: 1200,
+							height: 630,
+							type: "image/png",
+						},
+					],
 			videos: [
 				{
 					url: urls.streamUrl,
@@ -152,7 +183,9 @@ export const buildShareVideoMetadata = ({
 			card: "player",
 			title,
 			description,
-			images: [urls.previewImageUrl, urls.ogImageUrl],
+			images: customImage
+				? [customImage.url]
+				: [urls.previewImageUrl, urls.ogImageUrl],
 			players: {
 				playerUrl: urls.playerUrl,
 				streamUrl: urls.streamUrl,

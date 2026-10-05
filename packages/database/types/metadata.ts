@@ -289,6 +289,25 @@ export interface VideoMetadata {
 		status: "active" | "complete" | "stopped";
 		updatedAt?: string;
 	};
+	/**
+	 * The owner's own title, description and image for the share link's
+	 * preview when it is pasted into chat apps and social sites. Setting it
+	 * needs Cap Pro; a downgraded owner keeps what they set but can only reset it.
+	 */
+	linkPreview?: {
+		version: 1;
+		title?: string;
+		description?: string;
+		/** Stored in Cap's default bucket under `link-previews/<videoId>/`. */
+		image?: {
+			key: string;
+			width: number;
+			height: number;
+			contentType: "image/jpeg" | "image/png";
+			size: number;
+		};
+		updatedAt: string;
+	};
 	enhancedAudioStatus?: "PROCESSING" | "COMPLETE" | "ERROR" | "SKIPPED";
 	agentUpload?: {
 		state: "pending" | "accepted" | "rejected";

@@ -59,6 +59,7 @@ import { runPromise } from "@/lib/server";
 import { getSharePageBranding } from "@/lib/share-branding";
 import { parseShareCallToAction } from "@/lib/share-call-to-action";
 import { getShareDashboardDestination } from "@/lib/share-dashboard-destination";
+import { getShareLinkPreviewMetadata } from "@/lib/share-link-preview-metadata";
 import { getSharePlaybackUrl } from "@/lib/share-playback";
 import { buildShareVideoMetadata } from "@/lib/share-video-metadata";
 import { isDefaultShareRequest, resolveShareWebUrl } from "@/lib/share-web-url";
@@ -205,31 +206,45 @@ export async function generateMetadata(
 	).toString();
 
 	return Effect.flatMap(Videos, (v) => v.getByIdForViewing(videoId)).pipe(
-		Effect.map(
+		Effect.flatMap(
 			Option.match({
-				onNone: () =>
-					awaitRecording
-						? {
-								title: "Cap: Preparing Video",
-								description: "This recording is being made available.",
-								robots: "noindex, nofollow",
-							}
-						: notFound(),
-				onSome: ([video]) => {
-					return {
-						...buildShareVideoMetadata({
+				onNone: (): Effect.Effect<Metadata> =>
+					Effect.sync(() =>
+						awaitRecording
+							? {
+									title: "Cap: Preparing Video",
+									description: "This recording is being made available.",
+									robots: "noindex, nofollow",
+								}
+							: notFound(),
+					),
+				onSome: ([video]) =>
+					Effect.promise(() =>
+						getShareLinkPreviewMetadata({
 							videoId,
-							name: video.name,
-							sourceType: video.source.type,
+							organizationId: video.orgId,
+							metadata: Option.getOrNull(video.metadata),
 							webUrl,
-							canonicalWebUrl: buildEnv.NEXT_PUBLIC_WEB_URL,
-							advertiseIframelyPlayer: shouldAdvertiseIframelyPlayer,
 						}),
-						robots: canRenderSocialPreview
-							? "index, follow"
-							: "noindex, nofollow",
-					};
-				},
+					).pipe(
+						Effect.map(
+							({ linkPreview, canonicalShareUrl }): Metadata => ({
+								...buildShareVideoMetadata({
+									videoId,
+									name: video.name,
+									sourceType: video.source.type,
+									webUrl,
+									canonicalWebUrl: buildEnv.NEXT_PUBLIC_WEB_URL,
+									advertiseIframelyPlayer: shouldAdvertiseIframelyPlayer,
+									linkPreview,
+									canonicalShareUrl,
+								}),
+								robots: canRenderSocialPreview
+									? "index, follow"
+									: "noindex, nofollow",
+							}),
+						),
+					),
 			}),
 		),
 		Effect.catchTags({
