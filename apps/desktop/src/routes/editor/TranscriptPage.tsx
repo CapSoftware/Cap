@@ -32,6 +32,7 @@ import { routeEditorPlaybackIntent } from "./playback-intent-routing";
 import {
 	deleteTranscriptWords,
 	type FlatWord,
+	transcriptKeyAction,
 	transcriptSeekPosition,
 } from "./transcript-edits";
 
@@ -605,7 +606,8 @@ function TranscriptWord(props: {
 								<button
 									type="button"
 									class="flex items-center justify-center gap-1 h-6 px-1.5 rounded-md bg-gray-11 text-white hover:bg-gray-10 transition-colors text-xs"
-									title="Cut selected words and their video from the timeline"
+									title="Cut selected words and their video from the timeline (Shift+Delete)"
+									aria-keyshortcuts="Shift+Delete Shift+Backspace"
 									onClick={(e) => {
 										e.stopPropagation();
 										props.onCut();
@@ -703,36 +705,29 @@ function TranscriptEditor(props: {
 	const handleKeyDown = (e: KeyboardEvent) => {
 		if (editingIndex() !== -1) return;
 		const selected = selectedIndices();
-		if (selected.size === 0) return;
+		const fromContainer = e.target === scrollContainerRef;
+		const action = transcriptKeyAction(e, selected.size, fromContainer);
+		if (!action) return;
+		e.preventDefault();
+		e.stopPropagation();
+		if (!fromContainer) scrollContainerRef?.focus({ preventScroll: true });
 
-		if (e.key === "Enter" && selected.size === 1 && editingIndex() === -1) {
-			e.preventDefault();
-			e.stopPropagation();
+		if (action === "edit") {
 			const word = props.allWords[[...selected][0]];
 			if (word) startEditing(word);
-		} else if (e.key === "Backspace" || e.key === "Delete") {
-			e.preventDefault();
-			e.stopPropagation();
-			props.onDeleteWords([...selected]);
+		} else if (action === "delete" || action === "cut") {
+			if (action === "cut") props.onCutWords([...selected]);
+			else props.onDeleteWords([...selected]);
 			setSelectedIndices(new Set<number>());
 			setAnchorIndex(-1);
-		} else if (e.key === "ArrowLeft") {
-			e.preventDefault();
-			e.stopPropagation();
-			const minIdx = Math.min(...selected);
-			const prev = Math.max(minIdx - 1, 0);
-			setSelectedIndices(new Set([prev]));
-			setAnchorIndex(prev);
-			const word = props.allWords[prev];
-			if (word) props.onWordClick(word);
-		} else if (e.key === "ArrowRight") {
-			e.preventDefault();
-			e.stopPropagation();
-			const maxIdx = Math.max(...selected);
-			const next = Math.min(maxIdx + 1, props.allWords.length - 1);
-			setSelectedIndices(new Set([next]));
-			setAnchorIndex(next);
-			const word = props.allWords[next];
+		} else {
+			const target =
+				action === "previous"
+					? Math.max(Math.min(...selected) - 1, 0)
+					: Math.min(Math.max(...selected) + 1, props.allWords.length - 1);
+			setSelectedIndices(new Set([target]));
+			setAnchorIndex(target);
+			const word = props.allWords[target];
 			if (word) props.onWordClick(word);
 		}
 	};
@@ -796,6 +791,7 @@ function TranscriptEditor(props: {
 		else props.onDeleteWords(indices);
 		setSelectedIndices(new Set<number>());
 		setAnchorIndex(-1);
+		scrollContainerRef?.focus({ preventScroll: true });
 	};
 
 	const startEditing = (word: FlatWord) => {

@@ -139,3 +139,31 @@ export function transcriptSeekPosition(
 		? position
 		: Math.max(0, time - zoom / 2);
 }
+
+export type TranscriptKeyAction =
+	| "edit"
+	| "delete"
+	| "cut"
+	| "previous"
+	| "next";
+
+export function transcriptKeyAction(
+	event: Pick<KeyboardEvent, "key" | "shiftKey">,
+	selectedCount: number,
+	fromContainer: boolean,
+): TranscriptKeyAction | null {
+	if (selectedCount === 0) return null;
+	switch (event.key) {
+		case "Enter":
+			return fromContainer && selectedCount === 1 ? "edit" : null;
+		case "Backspace":
+		case "Delete":
+			return event.shiftKey ? "cut" : "delete";
+		case "ArrowLeft":
+			return "previous";
+		case "ArrowRight":
+			return "next";
+		default:
+			return null;
+	}
+}

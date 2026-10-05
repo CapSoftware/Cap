@@ -7,6 +7,7 @@ import type { EditorProjectConfiguration } from "./context";
 import {
 	deleteTranscriptWords,
 	type FlatWord,
+	transcriptKeyAction,
 	transcriptSeekPosition,
 } from "./transcript-edits";
 
@@ -163,5 +164,30 @@ describe("transcript seeking", () => {
 	it("reveals offscreen words without scrolling before the start", () => {
 		expect(transcriptSeekPosition(70, 48, 13)).toBe(63.5);
 		expect(transcriptSeekPosition(1, 48, 13)).toBe(0);
+	});
+});
+
+describe("transcript keyboard actions", () => {
+	const key = (key: string, shiftKey = false) => ({ key, shiftKey });
+
+	it("offers caption deletion and video cuts from the keyboard", () => {
+		for (const name of ["Backspace", "Delete"]) {
+			expect(transcriptKeyAction(key(name), 1, true)).toBe("delete");
+			expect(transcriptKeyAction(key(name, true), 1, true)).toBe("cut");
+			expect(transcriptKeyAction(key(name, true), 3, false)).toBe("cut");
+		}
+	});
+
+	it("leaves Enter to focused word action buttons", () => {
+		expect(transcriptKeyAction(key("Enter"), 1, true)).toBe("edit");
+		expect(transcriptKeyAction(key("Enter"), 1, false)).toBeNull();
+		expect(transcriptKeyAction(key("Enter"), 2, true)).toBeNull();
+	});
+
+	it("ignores keys without a selection", () => {
+		for (const name of ["Enter", "Backspace", "Delete", "ArrowLeft"]) {
+			expect(transcriptKeyAction(key(name, true), 0, true)).toBeNull();
+		}
+		expect(transcriptKeyAction(key(" "), 1, true)).toBeNull();
 	});
 });
