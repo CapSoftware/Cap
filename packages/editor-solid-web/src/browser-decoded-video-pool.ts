@@ -13,7 +13,7 @@ import type {
 	BrowserVideoSourceProvider,
 	BrowserVideoTrack,
 } from "./browser-video-pool";
-import { perfCount, perfSpan, perfStart } from "./editor-perf";
+import { perfCount, perfEvent, perfSpan, perfStart } from "./editor-perf";
 
 /// Up to 4K (Retina screens included) decodes with WebCodecs; a <video>
 /// element would read the whole fragmented recording before it could seek.
@@ -108,6 +108,7 @@ async function sampleAtTime(slot: DecodedSlot, sourceTime: number) {
 				(await keyFrameBetween(slot, current.timestamp, sourceTime))))
 	) {
 		perfCount("decode.restart");
+		perfEvent("decode.restart");
 		await resetStream(slot);
 	}
 	if (!slot.iterator) {
@@ -201,6 +202,7 @@ async function reachTime(
 		slot.sink = sink;
 		slot.packets = packets;
 		perfCount("decode.region");
+		perfEvent(`decode.region ${sourceTime.toFixed(3)}`);
 	} catch (cause) {
 		next.release();
 		throw cause;
@@ -342,10 +344,15 @@ export class BrowserDecodedVideoPool {
 					throw signal.reason ?? new DOMException("Canceled", "AbortError");
 				}
 				const decodeStarted = perfStart();
+				perfEvent(
+					`decode.start ${track} ${sourceTime.toFixed(3)}${keyFrame ? " key" : ""}`,
+				);
 				await reachTime(slot, url.href, sourceTime, signal, keyFrame);
+				perfEvent(`decode.reached ${track}`);
 				sample = keyFrame
 					? await keyFrameAtTime(slot, sourceTime)
 					: await sampleAtTime(slot, sourceTime);
+				perfEvent(`decode.done ${track} ${sample?.timestamp.toFixed(3)}`);
 				if (sample && !keyFrame) slot.lease.reached(sample.timestamp);
 				perfSpan("decode.sample", decodeStarted);
 			} finally {
@@ -428,6 +435,44 @@ export class BrowserDecodedVideoPool {
 				this.slots.delete(key);
 				releaseEntry(entry);
 			}
+		}
+	}
+
+	/// Reads the packets for `seconds` of a track from `sourceTime` into its
+	/// input's cache without decoding them, so playing from there finds its
+	/// media loaded instead of fetching each frame as it comes due. Only the
+	/// input the paused frame already reaches is read.
+	async bufferAhead(
+		segmentIndex: number,
+		track: BrowserVideoTrack,
+		sourceTime: number,
+		seconds: number,
+		signal: AbortSignal,
+	) {
+		const key = slotKey(segmentIndex, track, "primary");
+		const entry = this.slots.get(key);
+		if (!entry || entry.retired || this.disposed) return;
+		entry.activeCalls++;
+		try {
+			const slot = await entry.promise;
+			if (!slot || signal.aborted || !(await slot.lease.covers(sourceTime)))
+				return;
+			const start = await slot.packets.getKeyPacket(
+				Math.max(sourceTime, 0.0001),
+				{ metadataOnly: true },
+			);
+			if (!start || signal.aborted) return;
+			perfEvent(`buffer.start ${track} ${sourceTime.toFixed(3)}`);
+			for await (const packet of slot.packets.packets(start)) {
+				if (signal.aborted || this.disposed) break;
+				if (packet.timestamp > sourceTime + seconds) break;
+			}
+			perfEvent(`buffer.done ${track}`);
+		} catch {
+			// Buffering ahead is only a head start; playback reads what it needs.
+		} finally {
+			entry.activeCalls--;
+			if (entry.activeCalls === 0 && entry.retired) releaseEntry(entry);
 		}
 	}
 

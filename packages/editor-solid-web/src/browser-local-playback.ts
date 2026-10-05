@@ -18,6 +18,7 @@ import {
 	type BrowserStudioSetup,
 } from "./browser-local-canvas";
 import { probeBrowserMedia } from "./browser-media-probe";
+import { whenMediaReadsIdle } from "./browser-network-budget";
 import { loadBrowserRenderer } from "./browser-renderer";
 import {
 	BrowserEditorSourceCatalog,
@@ -29,7 +30,13 @@ import {
 	webInputRecording,
 } from "./browser-studio-setup";
 import { BrowserVideoPool, type BrowserVideoRole } from "./browser-video-pool";
-import { perfCount, perfMark, perfSpan, perfStart } from "./editor-perf";
+import {
+	perfCount,
+	perfEvent,
+	perfMark,
+	perfSpan,
+	perfStart,
+} from "./editor-perf";
 
 type RendererModule = Awaited<ReturnType<typeof loadBrowserRenderer>>;
 
@@ -169,6 +176,10 @@ const STALL_MS = 300;
 /// A paused frame (a seek, or a redraw after an edit) still not drawn after
 /// this long is waiting on its media too, and is shown as loading.
 const SEEK_HOLD_MS = 250;
+/// While paused, the media this far past the playhead is read ahead once
+/// nothing else is loading, so Play starts on loaded media even when the
+/// recording's bitrate is above the connection's.
+const BUFFER_AHEAD_SECONDS = 8;
 
 /// Zoom springs keep settling after a zoom segment ends.
 const ZOOM_SETTLE_SECS = 3;
@@ -317,6 +328,7 @@ export class BrowserLocalPlayback {
 	private awaitingPlayingFrame = false;
 	private seekHeld = false;
 	private seekHoldTimer: ReturnType<typeof setTimeout> | undefined;
+	private bufferController: AbortController | null = null;
 	private audioClockAligned = false;
 	private audioOffsets: number[] = [];
 	private configJson: string;
@@ -749,6 +761,8 @@ export class BrowserLocalPlayback {
 	/// has run for a few frames, the video clock moves onto it so the two
 	/// stay in step for the rest of playback.
 	private followAudio(lag: number | null, time: number) {
+		if (lag !== null && this.playing && this.audioOffsets.length === 0)
+			perfEvent("audio.moving");
 		if (lag === null || !this.playing || this.audioClockAligned) return;
 		const clock =
 			this.playStartedTime + (performance.now() - this.playStartedAt) / 1000;
@@ -1013,10 +1027,26 @@ export class BrowserLocalPlayback {
 				: Promise.resolve(null);
 		let incomingPair: BrowserClipFrame;
 		let outgoingPair: BrowserClipFrame | null;
-		const [incomingResult, outgoingResult] = await Promise.allSettled([
-			incoming,
-			outgoing,
+		const decoded = Promise.allSettled([incoming, outgoing]);
+		// An abandoned frame stops waiting at once; its decodes finish on
+		// their own and their frames are released.
+		const settled = await Promise.race([
+			decoded,
+			new Promise<null>((resolve) => {
+				if (controller.signal.aborted) resolve(null);
+				controller.signal.addEventListener("abort", () => resolve(null), {
+					once: true,
+				});
+			}),
 		]);
+		if (settled === null) {
+			void decoded.then((results) => {
+				for (const result of results)
+					if (result.status === "fulfilled") releasePair(result.value);
+			});
+			return null;
+		}
+		const [incomingResult, outgoingResult] = settled;
 		perfSpan("frame.decode", started);
 		if (incomingResult.status === "rejected") {
 			if (outgoingResult.status === "fulfilled")
@@ -1079,6 +1109,7 @@ export class BrowserLocalPlayback {
 		}
 		perfSpan("frame.draw", drawStarted);
 		perfSpan(playing ? "frame.playing" : "frame.paused", started);
+		perfEvent(`frame ${playing ? "playing" : "paused"} ${time.toFixed(3)}`);
 		this.renderedTime = keyFrame ? -1 : time;
 		if (!transition) {
 			this.pool.releaseOverlaps();
@@ -1213,8 +1244,12 @@ export class BrowserLocalPlayback {
 		) {
 			this.scrubbing = true;
 		}
+		this.bufferController?.abort();
 		this.pendingSeek = time;
-		if (this.seeking) return this.seeking;
+		if (this.seeking) {
+			this.abandonHeldSeek();
+			return this.seeking;
+		}
 		if (time === this.renderedTime && this.canvas.hasRenderedFrame()) {
 			this.pendingSeek = null;
 			return true;
@@ -1257,6 +1292,7 @@ export class BrowserLocalPlayback {
 		} finally {
 			this.seeking = null;
 			this.drawingSeek = null;
+			if (result === true && !keyFrame) this.bufferAhead(this.outputTime);
 			if (keyFrame && !this.playing && !this.disposed) {
 				this.refineTimer = setTimeout(() => {
 					if (this.playing || this.disposed || this.seeking) return;
@@ -1277,6 +1313,8 @@ export class BrowserLocalPlayback {
 	play() {
 		if (this.disposed) throw new Error("Editor playback is closed");
 		if (this.playing) return;
+		perfEvent("play");
+		this.bufferController?.abort();
 		this.audio.resume();
 		this.playing = true;
 		// Play pressed before this preview existed was already shown as
@@ -1314,6 +1352,7 @@ export class BrowserLocalPlayback {
 					this.audio.pause();
 					this.reportHold();
 					perfCount("playback.stall");
+					perfEvent("hold");
 				}
 				return;
 			}
@@ -1365,12 +1404,62 @@ export class BrowserLocalPlayback {
 		);
 	}
 
+	private bufferAhead(time: number) {
+		this.bufferController?.abort();
+		if (this.playing || this.disposed) return;
+		const controller = new AbortController();
+		this.bufferController = controller;
+		const { signal } = controller;
+		void (async () => {
+			await whenMediaReadsIdle(signal);
+			if (signal.aborted || this.playing || this.disposed) return;
+			const mapped = this.timeline.map_frame(time);
+			// A transition reads two clips at once; its few seconds play from
+			// what the frame already loaded.
+			if (mapped.length !== 11 || mapped[0] === 2) return;
+			const clip = mapped[2];
+			const sourceTimes = this.times.source_times(clip, mapped[3]);
+			if (sourceTimes.length !== 2) return;
+			const seconds = BUFFER_AHEAD_SECONDS * this.speed(mapped[1]);
+			await Promise.all(
+				(["display", "camera"] as const).map((track, index) => {
+					const sourceTime = sourceTimes[index];
+					return Number.isFinite(sourceTime) && sourceTime >= 0
+						? this.decodedPool.bufferAhead(
+								clip,
+								track,
+								sourceTime,
+								seconds,
+								signal,
+							)
+						: undefined;
+				}),
+			);
+		})().catch(() => undefined);
+	}
+
+	/// A paused frame still waiting on its media gives way to a newer request
+	/// (the playhead after a hover, or the time Play starts from), which would
+	/// otherwise wait behind it for as long as its media takes to load. Its
+	/// reads carry on, so coming back to it later is quicker.
+	private abandonHeldSeek() {
+		if (
+			this.seekHeld &&
+			this.pendingSeek !== null &&
+			this.pendingSeek !== this.drawingSeek
+		) {
+			perfEvent("seek.abandon");
+			this.frameController?.abort();
+		}
+	}
+
 	private holdForSeek(waiting: boolean) {
 		clearTimeout(this.seekHoldTimer);
 		if (waiting) {
 			this.seekHoldTimer = setTimeout(() => {
 				this.seekHeld = true;
 				this.reportHold();
+				this.abandonHeldSeek();
 			}, SEEK_HOLD_MS);
 			return;
 		}
@@ -1381,6 +1470,7 @@ export class BrowserLocalPlayback {
 
 	private resumeAfterStall(time: number) {
 		this.stalled = false;
+		perfEvent("hold.release");
 		if (!this.playing || this.disposed) return;
 		this.playStartedAt = performance.now();
 		this.playStartedTime = time;
@@ -1431,6 +1521,7 @@ export class BrowserLocalPlayback {
 		this.disposed = true;
 		clearTimeout(this.refineTimer);
 		clearTimeout(this.seekHoldTimer);
+		this.bufferController?.abort();
 		this.frameController?.abort();
 		this.canvas.dispose();
 		this.audio.dispose();

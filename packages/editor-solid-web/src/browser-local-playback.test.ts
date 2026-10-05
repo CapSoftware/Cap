@@ -398,3 +398,41 @@ test("a paused frame waiting on its media shows as loading", async () => {
 		host.window = realWindow;
 	}
 });
+
+test("a paused frame still loading gives way to a newer request", async () => {
+	const playback = Object.create(
+		BrowserLocalPlayback.prototype,
+	) as BrowserLocalPlayback;
+	Reflect.set(playback, "playing", false);
+	Reflect.set(playback, "disposed", false);
+	Reflect.set(playback, "seeking", null);
+	Reflect.set(playback, "pendingSeek", null);
+	Reflect.set(playback, "renderedTime", -1);
+	Reflect.set(playback, "scrubbing", false);
+	Reflect.set(playback, "lastKeyFrameAt", 0);
+	Reflect.set(playback, "canvas", { hasRenderedFrame: () => false });
+	const drawn: number[] = [];
+	Reflect.set(playback, "renderAt", (time: number) => {
+		const controller = new AbortController();
+		Reflect.set(playback, "frameController", controller);
+		// The far frame waits on media that never arrives; the playhead's is
+		// already loaded.
+		if (time !== 5) {
+			drawn.push(time);
+			return Promise.resolve(true);
+		}
+		return new Promise<boolean | null>((resolve) =>
+			controller.signal.addEventListener("abort", () => resolve(null)),
+		);
+	});
+	const wait = (ms: number) =>
+		new Promise((resolve) => setTimeout(resolve, ms));
+	void playback.seek(5);
+	await wait(20);
+	// A quick scrub step queues behind the frame being drawn.
+	const back = playback.seek(0);
+	await wait(20);
+	expect(drawn).toEqual([]);
+	await back;
+	expect(drawn).toEqual([0]);
+});

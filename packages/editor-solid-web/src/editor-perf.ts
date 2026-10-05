@@ -7,6 +7,7 @@
 
 type EditorPerf = {
 	marks: Record<string, number>;
+	events: [number, string][];
 	spans: Record<string, number[]>;
 	counts: Record<string, number>;
 	reset: () => void;
@@ -28,6 +29,7 @@ function perfEnabled() {
 const perf: EditorPerf | null = perfEnabled()
 	? {
 			marks: {},
+			events: [],
 			spans: {},
 			counts: {},
 			reset() {
@@ -57,6 +59,14 @@ export function perfSpan(name: string, start: number) {
 	perf.spans[name] = samples;
 	if (samples.length >= MAX_SAMPLES) samples.shift();
 	samples.push(performance.now() - start);
+}
+
+/// Records one occurrence of `name` with its time, for following a sequence
+/// such as a playback start.
+export function perfEvent(name: string) {
+	if (!perf) return;
+	if (perf.events.length >= MAX_SAMPLES) perf.events.shift();
+	perf.events.push([performance.now(), name]);
 }
 
 export function perfCount(name: string) {
