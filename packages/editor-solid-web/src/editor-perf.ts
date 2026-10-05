@@ -62,7 +62,8 @@ export function perfSpan(name: string, start: number) {
 }
 
 export function perfEvent(name: string) {
-	if (!perf || perf.events.length >= MAX_SAMPLES) return;
+	if (!perf) return;
+	if (perf.events.length >= MAX_SAMPLES) perf.events.shift();
 	perf.events.push([performance.now(), name]);
 }
 
