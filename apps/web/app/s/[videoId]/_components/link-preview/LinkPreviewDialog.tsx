@@ -474,7 +474,7 @@ export function LinkPreviewDialog({
 								<p className="min-w-0 flex-1 text-[13px] leading-relaxed text-gray-11">
 									Custom link previews are part of Cap Pro.
 									{hasOverrides
-										? " The preview you set stays live, and you can reset it any time."
+										? " Your saved preview is paused and comes back when you upgrade, or you can reset it."
 										: ""}
 								</p>
 								<button

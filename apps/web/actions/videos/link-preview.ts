@@ -177,7 +177,7 @@ export async function saveLinkPreview(
 
 /**
  * Puts the default preview back. Allowed without Cap Pro, so an owner who
- * downgraded can still take down what they set.
+ * downgraded can clear what they saved instead of keeping it for later.
  */
 export async function resetLinkPreview(
 	videoId: Video.VideoId,

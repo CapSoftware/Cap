@@ -222,6 +222,7 @@ export async function generateMetadata(
 					Effect.promise(() =>
 						getShareLinkPreviewMetadata({
 							videoId,
+							ownerId: video.ownerId,
 							organizationId: video.orgId,
 							metadata: Option.getOrNull(video.metadata),
 							webUrl,

@@ -291,8 +291,8 @@ export interface VideoMetadata {
 	};
 	/**
 	 * The owner's own title, description and image for the share link's
-	 * preview when it is pasted into chat apps and social sites. Setting it
-	 * needs Cap Pro; a downgraded owner keeps what they set but can only reset it.
+	 * preview when it is pasted into chat apps and social sites. Setting and
+	 * serving it need Cap Pro; it is kept, unserved, while the owner has none.
 	 */
 	linkPreview?: {
 		version: 1;

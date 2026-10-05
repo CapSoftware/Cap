@@ -10,6 +10,7 @@ import {
 	linkPreviewImageVersion,
 	readLinkPreview,
 } from "@/lib/share-link-preview";
+import { ownerServesLinkPreview } from "@/lib/share-link-preview-metadata";
 
 export const dynamic = "force-dynamic";
 
@@ -48,6 +49,9 @@ export async function GET(request: NextRequest) {
 				video.id,
 			)?.image;
 			if (!stored) return null;
+			// Paused while the owner doesn't have Cap Pro.
+			if (!(yield* Effect.promise(() => ownerServesLinkPreview(video.ownerId))))
+				return null;
 
 			const [bucket] = yield* S3Buckets.getBucketAccess(Option.none());
 			const url = yield* bucket.getInternalSignedObjectUrl(stored.key, {

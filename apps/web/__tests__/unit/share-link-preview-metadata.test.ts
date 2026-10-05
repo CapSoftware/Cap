@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
 		customDomain: string | null;
 		domainVerified: Date | null;
 	} | null,
+	owner: null as { stripeSubscriptionStatus: string | null } | null,
 }));
 
 vi.mock("@cap/env", () => ({
@@ -15,16 +16,22 @@ vi.mock("@cap/env", () => ({
 vi.mock("@cap/database", () => ({
 	db: () => ({
 		select: () => ({
-			from: () => ({
+			from: (table: Record<symbol, unknown>) => ({
 				where: () => ({
-					limit: async () => (mocks.organization ? [mocks.organization] : []),
+					limit: async () => {
+						const row =
+							table[Symbol.for("drizzle:Name")] === "users"
+								? mocks.owner
+								: mocks.organization;
+						return row ? [row] : [];
+					},
 				}),
 			}),
 		}),
 	}),
 }));
 
-import type { Organisation } from "@cap/web-domain";
+import type { Organisation, User } from "@cap/web-domain";
 import { getShareLinkPreviewMetadata } from "@/lib/share-link-preview-metadata";
 import { buildShareVideoMetadata } from "@/lib/share-video-metadata";
 
@@ -40,6 +47,7 @@ const image = {
 const build = async (metadata: unknown, webUrl = "https://cap.so") => {
 	const { linkPreview, canonicalShareUrl } = await getShareLinkPreviewMetadata({
 		videoId: "video123",
+		ownerId: "owner123" as User.UserId,
 		organizationId,
 		metadata,
 		webUrl,
@@ -58,6 +66,7 @@ const build = async (metadata: unknown, webUrl = "https://cap.so") => {
 describe("share metadata with link preview overrides", () => {
 	beforeEach(() => {
 		mocks.organization = null;
+		mocks.owner = { stripeSubscriptionStatus: "active" };
 	});
 
 	it("keeps the dynamic defaults when nothing is set", async () => {
@@ -105,6 +114,20 @@ describe("share metadata with link preview overrides", () => {
 			1,
 		);
 	});
+
+	it.each([null, "canceled"])(
+		"pauses the overrides while the owner has no Pro plan (%s)",
+		async (stripeSubscriptionStatus) => {
+			mocks.owner = { stripeSubscriptionStatus };
+			const metadata = await build({
+				linkPreview: { version: 1, title: "Kept for later", image },
+			});
+			expect(metadata.title).toBe("Product demo | Cap Recording");
+			expect(
+				(metadata.openGraph as { images: { url: string }[] }).images[1]?.url,
+			).toBe("https://cap.so/api/video/og?videoId=video123");
+		},
+	);
 
 	it("only replaces the parts the owner set", async () => {
 		const metadata = await build({
