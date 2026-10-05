@@ -33,7 +33,12 @@ export function parseVttCueText(payload: string): {
 	const voice = payload.match(/^\s*<v(?:\.[^\s>]*)?\s+([^>]+)>/);
 	const annotation = voice?.[1]?.trim();
 	return {
-		text: decodeVttText(payload.replace(/<[^>]*(?:>|$)/g, "")).trim(),
+		text: decodeVttText(
+			payload.replace(
+				/<(?:\/(?:c|i|b|u|ruby|rt|v|lang)|(?:c|i|b|u|ruby|rt|v|lang)(?:\.[^\s<>]+)*(?:[ \t]+[^<>]*)?|(?:\d{2,}:)?\d{2}:\d{2}\.\d{3})>/g,
+				"",
+			),
+		).trim(),
 		speaker: annotation
 			? decodeVttText(annotation).replace(/^Speaker /, "")
 			: null,

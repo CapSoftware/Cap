@@ -115,6 +115,32 @@ describe("speaker diarization", () => {
 			{ text: "2 < 3 & 4 > 1", speaker: "A & B" },
 		);
 	});
+
+	it("preserves literal angle brackets in legacy cues through copying and exports", () => {
+		const cues = parseVTT(
+			"WEBVTT\n\n1\n00:00:00.000 --> 00:00:02.000\n2 < 3 and 4 > 1\n\n2\n00:00:02.000 --> 00:00:03.000\nThe answer is < 5\n",
+		);
+		expect(cues.map(({ text }) => text)).toEqual([
+			"2 < 3 and 4 > 1",
+			"The answer is < 5",
+		]);
+		expect(formatTranscriptAsParagraphs(cues)).toBe(
+			"2 < 3 and 4 > 1 The answer is < 5",
+		);
+		expect(parseVTT(formatTranscriptAsVTT(cues))).toEqual(cues);
+	});
+
+	it("strips recognized WebVTT markup and timestamps without stripping literal text", () => {
+		expect(
+			parseVttCueText(
+				"<v.class Speaker A><b>2 < 3</b> <c.green>and</c> <i>4 > 1</i> <00:00:01.000><lang en><u>five</u></lang> <ruby>six<rt>6</rt></ruby></v>",
+			),
+		).toEqual({ text: "2 < 3 and 4 > 1 five six6", speaker: "A" });
+		expect(parseVttCueText("Literal <value> &lt;b&gt; and <b")).toEqual({
+			text: "Literal <value> <b> and <b",
+			speaker: null,
+		});
+	});
 });
 
 it("keeps speaker metadata and literal text through the agent transcript API", async () => {
@@ -123,4 +149,9 @@ it("keeps speaker metadata and literal text through the agent transcript API", a
 		{ startMs: 125, endMs: 500, text: "R&D < planning", speaker: "B" },
 	];
 	expect(parseAgentVtt(renderAgentVtt(cues))).toEqual(cues);
+	expect(
+		parseAgentVtt(
+			"WEBVTT\n\n1\n00:00:00.125 --> 00:00:00.500\n<v Speaker B>R&D < planning</v>\n",
+		),
+	).toEqual(cues);
 });

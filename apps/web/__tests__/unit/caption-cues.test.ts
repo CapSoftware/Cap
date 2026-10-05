@@ -27,4 +27,14 @@ describe("getActiveCaptionText", () => {
 			"Speaker B: Second & final caption",
 		);
 	});
+
+	it("preserves legacy literal angle brackets alongside voice markup", () => {
+		expect(
+			getActiveCaptionText(
+				createCueList([
+					{ startTime: 0, text: "<v Speaker A>2 < 3 and 4 > 1</v>" },
+				]),
+			),
+		).toBe("Speaker A: 2 < 3 and 4 > 1");
+	});
 });
