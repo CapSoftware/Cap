@@ -748,29 +748,26 @@ export const Share = ({
 				fallbackDuration={data.duration}
 			>
 				{/*
-				 * The page bar. It spans the video column AND the comments rail, so
-				 * the rail hangs beneath it the way Loom's panel hangs beneath its
-				 * top bar. Hidden (never unmounted) in timeline view, which carries
-				 * its own slim title row: the header owns dialogs and the inline
-				 * title editor, and toggling views must not discard them.
+				 * The page shell, one grid. On desktop: the header's bar across the
+				 * top, then the title row and the video column on the left with the
+				 * comments rail running beside both, Loom style, so the title and
+				 * its actions sit over the video instead of stretching across the
+				 * rail. The page itself doesn't scroll there (see `page.tsx`): the
+				 * video column scrolls in its own row. Phones stack everything in
+				 * source order and scroll the document.
+				 *
+				 * The header renders its bar and its title row straight into this
+				 * grid. Timeline view hides both (never unmounts them, through the
+				 * `share-view` group): it carries its own slim title row, and the
+				 * header owns dialogs and the inline title editor, which toggling
+				 * views must not discard.
 				 */}
 				<div
-					className={clsx(
-						"shrink-0 border-b border-gray-5 bg-white px-4 lg:px-8",
-						view === "timeline" && "hidden",
-					)}
+					data-share-view={view}
+					className="group/share grid min-h-0 flex-1 grid-cols-1 content-start lg:grid-cols-[minmax(0,1fr)_auto] lg:grid-rows-[auto_auto_minmax(0,1fr)]"
 				>
 					{header}
-				</div>
-
-				{/*
-				 * The two-pane shell. On desktop the page itself no longer scrolls
-				 * (see `page.tsx`): the video column scrolls inside the left pane and
-				 * the comments rail runs the full height beside it.
-				 * Phones stack the two and scroll the document as normal.
-				 */}
-				<div className="flex flex-col flex-1 min-h-0 lg:flex-row">
-					<div className="flex flex-col flex-1 min-w-0 lg:overflow-y-auto">
+					<div className="flex flex-col min-w-0 lg:col-start-1 lg:row-start-3 lg:min-h-0 lg:overflow-y-auto">
 						{/* Gutters live here rather than on the page, so the rail can sit
 						    flush against the viewport edge while the video stays centred
 						    inside what's left. */}
@@ -1163,7 +1160,7 @@ export const Share = ({
 						<aside
 							id={sidebarId}
 							className={clsx(
-								"shrink-0 px-4 pb-8 lg:p-0 lg:h-full lg:border-l lg:border-gray-5 lg:bg-white lg:overflow-hidden",
+								"shrink-0 px-4 pb-8 lg:col-start-2 lg:row-span-2 lg:row-start-2 lg:min-h-0 lg:p-0 lg:h-full lg:border-l lg:border-gray-5 lg:bg-white lg:overflow-hidden",
 								reduceMotion
 									? undefined
 									: "lg:transition-[width] lg:duration-300 lg:ease-out",
