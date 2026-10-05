@@ -32,8 +32,8 @@ export type VideoTask = {
 		firstPart: number;
 		partLimit: number;
 		partTarget: number;
-		/** The final chunk may end in a part smaller than S3's minimum. */
-		isLast: boolean;
+		/** In the farm's own bucket, not the media bucket (see stitch.ts). */
+		stashKey: string;
 	};
 	audio: { first: number; end: number; coordinator: string } | null;
 	/** Stream playable fMP4 segments to `${prefix}/c<chunk>-<n>.m4s` while rendering. */
@@ -104,9 +104,11 @@ export type VideoResult = {
 	/** Runs relative to the chunk's first byte; `first` is a global sample index. */
 	videoRuns: Run[];
 	audioRuns: Run[];
+	/** Names the dispatch's HLS segments even when the chunk uploaded no parts. */
+	firstPart: number;
+	stash: { key: string; bytes: number };
 	parts: { partNumber: number; etag: string; size: number }[];
 	bytes: number;
-	paddedBytes: number;
 	timings: TaskTimings;
 };
 

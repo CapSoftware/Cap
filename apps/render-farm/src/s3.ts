@@ -349,6 +349,17 @@ export class S3 {
 		return new Uint8Array(await response.arrayBuffer());
 	}
 
+	/** `getRange` plus the ETag, which S3 reports for the whole object. */
+	async getRangeTagged(key: string, start: number, endInclusive: number) {
+		const response = await this.send("GET", key, {
+			headers: { range: `bytes=${start}-${endInclusive}` },
+		});
+		return {
+			bytes: new Uint8Array(await response.arrayBuffer()),
+			etag: response.headers.get("etag"),
+		};
+	}
+
 	async getStream(key: string, start?: number, endInclusive?: number) {
 		const response = await this.send("GET", key, {
 			headers:
@@ -403,6 +414,40 @@ export class S3 {
 		const etag = response.headers.get("etag");
 		if (!etag) throw new Error(`no ETag for part ${partNumber}`);
 		return etag;
+	}
+
+	/**
+	 * A part copied server side from another object; `source` must be readable
+	 * with this client's credentials.
+	 */
+	async uploadPartCopy(
+		key: string,
+		uploadId: string,
+		partNumber: number,
+		source: { bucket: string; key: string },
+	) {
+		const response = await this.send("PUT", key, {
+			query: { partNumber: String(partNumber), uploadId },
+			headers: {
+				"x-amz-copy-source": `/${source.bucket}/${encodeKey(source.key)}`,
+			},
+		});
+		// A copy can fail after S3 has already answered 200.
+		const text = await response.text();
+		const etag = text.match(/<ETag>([^<]+)<\/ETag>/)?.[1];
+		if (!etag || text.includes("<Error>")) {
+			throw new Error(
+				`S3 copy of ${source.key} into part ${partNumber} failed: ${text.slice(0, 200)}`,
+			);
+		}
+		return decodeXml(etag);
+	}
+
+	sharesStoreWith(other: S3) {
+		return (
+			this.config.endpoint === other.config.endpoint &&
+			this.config.region === other.config.region
+		);
 	}
 
 	/**
@@ -512,17 +557,22 @@ export class S3 {
 	}
 
 	async list(prefix: string) {
-		const keys: { key: string; size: number }[] = [];
+		const keys: { key: string; size: number; modifiedAt: number }[] = [];
 		let token: string | undefined;
 		do {
 			const query: Record<string, string> = { "list-type": "2", prefix };
 			if (token) query["continuation-token"] = token;
 			const response = await this.send("GET", "", { query });
 			const text = await response.text();
-			for (const match of text.matchAll(
-				/<Key>([^<]+)<\/Key>[\s\S]*?<Size>(\d+)<\/Size>/g,
-			)) {
-				keys.push({ key: decodeXml(match[1] ?? ""), size: Number(match[2]) });
+			for (const match of text.matchAll(/<Contents>([\s\S]*?)<\/Contents>/g)) {
+				const body = match[1] ?? "";
+				keys.push({
+					key: decodeXml(body.match(/<Key>([^<]+)<\/Key>/)?.[1] ?? ""),
+					size: Number(body.match(/<Size>(\d+)<\/Size>/)?.[1]),
+					modifiedAt: Date.parse(
+						body.match(/<LastModified>([^<]+)<\/LastModified>/)?.[1] ?? "",
+					),
+				});
 			}
 			token = text.match(
 				/<NextContinuationToken>([^<]+)<\/NextContinuationToken>/,

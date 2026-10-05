@@ -54,6 +54,7 @@ Additionally, `unused_must_use = "deny"` applies to all Rust code: every `Result
   - `packages/*` shared libs (e.g., `database`, `ui`, `ui-solid`, `utils`, `web-*`).
   - `crates/*` Rust media/recording/rendering/camera crates.
   - `scripts/*`, `infra/`, and `packages/local-docker/` for tooling and local services.
+- Marketing and lifecycle emails (copy, Loops journeys and campaigns, the email catalogue and voice guide) and their Loops tooling live in the private repo [CapSoftware/cap-marketing](https://github.com/CapSoftware/cap-marketing). View and edit them there. This repo keeps only the runtime profile sync in `packages/database/loops/` (with its tests and runners in `scripts/loops/`) and the transactional emails in `packages/database/emails/`.
 
 ## Build, Test, Develop
 - Install: `bun install`; setup: `bun run env-setup` then `bun run cap-setup`.
