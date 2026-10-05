@@ -9,8 +9,10 @@ import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
 import { createSignal, onCleanup } from "solid-js";
 import { render } from "solid-js/web";
 import { Toaster } from "solid-toast";
+import { clearPlayRequest } from "../../../apps/desktop/src/routes/editor/playback-buffering";
 import type { PreparingEditorModel } from "../../../apps/desktop/src/routes/editor/preparing-editor-model";
 import { frameDisplayGamma } from "./browser-color-calibration";
+import { startConnectionReport } from "./browser-connection-report";
 import {
 	onBrowserPreviewSettled,
 	setBrowserEditorVideoId,
@@ -226,6 +228,7 @@ export function disposeEditor() {
 	mountGeneration++;
 	dispose?.();
 	dispose = null;
+	clearPlayRequest();
 	releaseRecordingData();
 	disposeSkeleton();
 	errorDispose?.();
@@ -350,6 +353,7 @@ if (prewarming) {
 		"position:relative;width:100vw;height:100vh;overflow:hidden";
 	container.append(root, skeletonRoot);
 	prefetchStartup();
+	startConnectionReport(window.parent === window ? null : window.parent);
 	void mountEditorSkeleton(skeletonRoot).catch(() => undefined);
 	void loadEditorModule().catch(() => undefined);
 	window.capSolidEditor = {
@@ -391,6 +395,7 @@ if (prewarming) {
 			const generation = ++mountGeneration;
 			dispose?.();
 			dispose = null;
+			clearPlayRequest();
 			releaseRecordingData();
 			disposeSkeleton();
 			setEditorTransport(null);

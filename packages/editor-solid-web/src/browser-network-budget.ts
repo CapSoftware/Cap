@@ -18,6 +18,56 @@ let decayedAt = 0;
 let idleSince = 0;
 const idleWaiters = new Set<() => void>();
 
+/// What the connection itself delivers, for telling people how it is doing:
+/// only the time media reads spend waiting on the network counts, so a reader
+/// that stops pulling doesn't make a fast connection look slow.
+const LINK_DECAY_MS = 5000;
+const LATENCY_SAMPLES = 8;
+const LATENCY_MAX_AGE_MS = 30_000;
+let waiting = 0;
+let waitingSince: number | null = null;
+let waitMs = 0;
+let waitBytes = 0;
+let linkDecayedAt = 0;
+const latencies: Array<{ at: number; ms: number }> = [];
+
+function decayLink(now: number) {
+	const factor = Math.exp(-(now - linkDecayedAt) / LINK_DECAY_MS);
+	waitMs *= factor;
+	waitBytes *= factor;
+	linkDecayedAt = now;
+}
+
+function waitStarted() {
+	if (waiting++ === 0) waitingSince = performance.now();
+}
+
+function waitEnded(byteLength: number) {
+	const now = performance.now();
+	decayLink(now);
+	waitBytes += byteLength;
+	if (--waiting > 0) return;
+	if (waitingSince !== null) waitMs += now - waitingSince;
+	waitingSince = null;
+}
+
+async function timedRead(reader: ReadableStreamDefaultReader<Uint8Array>) {
+	waitStarted();
+	let byteLength = 0;
+	try {
+		const next = await reader.read();
+		if (!next.done) byteLength = next.value.byteLength;
+		return next;
+	} finally {
+		waitEnded(byteLength);
+	}
+}
+
+function recordLatency(ms: number) {
+	latencies.push({ at: performance.now(), ms });
+	if (latencies.length > LATENCY_SAMPLES) latencies.shift();
+}
+
 function decay(now: number) {
 	const factor = Math.exp(-(now - decayedAt) / DECAY_MS);
 	bytes *= factor;
@@ -43,6 +93,7 @@ function finished() {
 /// cancelled; `abandon` ends one that never got a body.
 export function startMediaRead(signal?: AbortSignal) {
 	started();
+	const requestedAt = performance.now();
 	let done = false;
 	// A body its reader stops pulling without cancelling stops counting
 	// after a while, so it can't hold background downloads off for good.
@@ -62,13 +113,14 @@ export function startMediaRead(signal?: AbortSignal) {
 	return {
 		abandon: finish,
 		body(body: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {
+			recordLatency(performance.now() - requestedAt);
 			const reader = body.getReader();
 			watch();
 			return new ReadableStream<Uint8Array>({
 				async pull(controller) {
 					try {
 						watch();
-						const next = await reader.read();
+						const next = await timedRead(reader);
 						if (next.done) {
 							finish();
 							controller.close();
@@ -147,4 +199,31 @@ export function connectionBytes(max: number, seconds: number, min: number) {
 	const rate = mediaBytesPerSecond();
 	if (rate === null) return max;
 	return Math.max(min, Math.min(max, Math.round(rate * seconds)));
+}
+
+/// Latency is the quickest recent response, since requests queued behind
+/// others only ever look slower.
+export function mediaConnectionSample(): {
+	bitsPerSecond: number | null;
+	latencyMs: number | null;
+} {
+	const now = performance.now();
+	decayLink(now);
+	const waited = waitMs + (waitingSince === null ? 0 : now - waitingSince);
+	const enough =
+		waitBytes >= 256 * 1024 ||
+		(waited >= 1000 && waitBytes >= 16 * 1024) ||
+		// A read that has had next to nothing for seconds is evidence too.
+		waited >= 4000;
+	let latencyMs: number | null = null;
+	for (const sample of latencies) {
+		if (now - sample.at > LATENCY_MAX_AGE_MS) continue;
+		latencyMs = latencyMs === null ? sample.ms : Math.min(latencyMs, sample.ms);
+	}
+	return {
+		bitsPerSecond: enough
+			? (waitBytes * 8) / (Math.max(waited, 1) / 1000)
+			: null,
+		latencyMs,
+	};
 }
