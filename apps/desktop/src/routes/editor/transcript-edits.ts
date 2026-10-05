@@ -148,7 +148,10 @@ export type TranscriptKeyAction =
 	| "next";
 
 export function transcriptKeyAction(
-	event: Pick<KeyboardEvent, "key" | "shiftKey">,
+	event: Pick<
+		KeyboardEvent,
+		"key" | "shiftKey" | "ctrlKey" | "metaKey" | "altKey"
+	>,
 	selectedCount: number,
 	fromContainer: boolean,
 ): TranscriptKeyAction | null {
@@ -158,7 +161,9 @@ export function transcriptKeyAction(
 			return fromContainer && selectedCount === 1 ? "edit" : null;
 		case "Backspace":
 		case "Delete":
-			return event.shiftKey ? "cut" : "delete";
+			return event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey
+				? "cut"
+				: "delete";
 		case "ArrowLeft":
 			return "previous";
 		case "ArrowRight":

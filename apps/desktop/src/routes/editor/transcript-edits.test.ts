@@ -168,13 +168,37 @@ describe("transcript seeking", () => {
 });
 
 describe("transcript keyboard actions", () => {
-	const key = (key: string, shiftKey = false) => ({ key, shiftKey });
+	const key = (
+		key: string,
+		shiftKey = false,
+		modifiers: { ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean } = {},
+	) => ({
+		key,
+		shiftKey,
+		ctrlKey: false,
+		metaKey: false,
+		altKey: false,
+		...modifiers,
+	});
 
 	it("offers caption deletion and video cuts from the keyboard", () => {
 		for (const name of ["Backspace", "Delete"]) {
 			expect(transcriptKeyAction(key(name), 1, true)).toBe("delete");
 			expect(transcriptKeyAction(key(name, true), 1, true)).toBe("cut");
 			expect(transcriptKeyAction(key(name, true), 3, false)).toBe("cut");
+		}
+	});
+
+	it("only cuts video for Shift without other modifiers", () => {
+		for (const name of ["Backspace", "Delete"]) {
+			for (const modifier of ["ctrlKey", "metaKey", "altKey"] as const) {
+				expect(
+					transcriptKeyAction(key(name, true, { [modifier]: true }), 1, true),
+				).toBe("delete");
+				expect(
+					transcriptKeyAction(key(name, false, { [modifier]: true }), 1, true),
+				).toBe("delete");
+			}
 		}
 	});
 
