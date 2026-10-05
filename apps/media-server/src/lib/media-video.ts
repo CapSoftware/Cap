@@ -739,7 +739,11 @@ export async function materializeMpdAsHlsPlaylist(
 	}
 
 	const content = await response.text();
-	const sanitizedContent = content.replace(/<!--[\s\S]*?-->/g, "");
+	let sanitizedContent = content;
+	for (let previous = ""; previous !== sanitizedContent; ) {
+		previous = sanitizedContent;
+		sanitizedContent = sanitizedContent.replace(/<!--[\s\S]*?-->/g, "");
+	}
 	const parsedUrl = new URL(manifestUrl);
 	const manifestBaseUrl = new URL(".", parsedUrl).toString();
 	const query = parsedUrl.search;
