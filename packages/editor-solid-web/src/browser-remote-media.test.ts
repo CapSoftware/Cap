@@ -15,10 +15,11 @@ import {
 	firstTailBytes,
 	layoutFetch,
 	MediaStorageError,
+	mp4NeedsNoTail,
 	RemoteMedia,
 	rangeResponseExtent,
 } from "./browser-remote-media";
-import { concat, fragment, init } from "./fragmented-mp4-fixtures";
+import { box, concat, fragment, init } from "./fragmented-mp4-fixtures";
 import { recording as webmRecording } from "./webm-fixtures";
 
 const URL_ = "https://storage.test/recording.mp4";
@@ -127,15 +128,41 @@ afterEach(() => {
 });
 
 describe("firstTailBytes", () => {
-	test("sizes the first tail read to a few seconds of media", () => {
+	test("sizes the first tail read to a couple of seconds of media", () => {
 		expect(firstTailBytes(null, null)).toBe(256 * 1024);
-		expect(firstTailBytes(900_000_000, 7200)).toBe(512 * 1024);
-		expect(firstTailBytes(10_000_000, 120)).toBe(384 * 1024);
+		expect(firstTailBytes(900_000_000, 7200)).toBe(256 * 1024);
+		// A 6 Mbit/s camera: its last 2 s fragment, not twice that.
+		expect(firstTailBytes(19_337_150, 25.7)).toBe(23 * 65536);
 		expect(firstTailBytes(9_000_000_000, 60)).toBe(4 * 1024 * 1024);
 	});
 });
 
+test("only an MP4 with its whole unfragmented moov up front skips its tail", () => {
+	const ftyp = box("ftyp", new TextEncoder().encode("isom"));
+	const moov = box("moov", box("mvhd", new Uint8Array(100)));
+	const mdat = box("mdat", new Uint8Array(1000));
+	expect(mp4NeedsNoTail(concat(ftyp, moov, mdat))).toBe(true);
+	// Fragmented: the tail holds the last fragment, which gives the duration.
+	expect(mp4NeedsNoTail(concat(init(), fragment(0)))).toBe(false);
+	// moov after the media, or not yet in the bytes read.
+	expect(mp4NeedsNoTail(concat(ftyp, mdat, moov))).toBe(false);
+	expect(mp4NeedsNoTail(concat(ftyp, moov).subarray(0, 60))).toBe(false);
+});
+
 describe("RemoteMedia", () => {
+	test("a longer tail read fetches only the bytes before the pinned one", async () => {
+		serve(longRecording(40));
+		const media = new RemoteMedia(URL_, file.length);
+		const short = await media.tail(256 * 1024);
+		const long = await media.tail(1024 * 1024);
+		expect(requests).toEqual([
+			`bytes=${file.length - 256 * 1024}-${file.length - 1}`,
+			`bytes=${file.length - 1024 * 1024}-${file.length - 256 * 1024 - 1}`,
+		]);
+		expect(short).toEqual(file.slice(file.length - 256 * 1024));
+		expect(long).toEqual(file.slice(file.length - 1024 * 1024));
+	});
+
 	test("serves reads inside the head and tail from memory", async () => {
 		serve(longRecording(40));
 		const media = new RemoteMedia(URL_, file.length);

@@ -1,5 +1,7 @@
 import { startMediaRead } from "./browser-network-budget";
 import {
+	boxAt,
+	children,
 	emptyMfra,
 	endsWithMfro,
 	type FragmentPoint,
@@ -42,14 +44,39 @@ const MAX_ENTRIES = 24;
 /// its first bytes from memory.
 const RECENT_WINDOWS = 8;
 
-/// Bytes for the first read of a file's tail: enough for its last fragment
-/// (a second or two of media) when the average bitrate is known, since a read
-/// too short to hold it costs another round trip.
+/// Bytes for the first read of a file's tail: its last fragment (recordings
+/// write one every second or two) when the average bitrate is known. A read
+/// that falls short is extended by only the bytes before it, so this stays
+/// small: a camera at several megabits a second would otherwise read seconds
+/// of video nothing plays before the first frame.
 export function firstTailBytes(size: number | null, duration: number | null) {
 	if (size === null || duration === null || !(duration > 0)) return MIN_TAIL;
-	const fourSeconds = (size / duration) * 4;
-	const rounded = Math.ceil(fourSeconds / 65536) * 65536;
+	const twoSeconds = (size / duration) * 2;
+	const rounded = Math.ceil(twoSeconds / 65536) * 65536;
 	return Math.max(MIN_TAIL, Math.min(MAX_FIRST_TAIL, rounded));
+}
+
+/// Whether an MP4 whose first bytes are `head` keeps all it needs at the
+/// front: a complete `moov` without `mvex` (not fragmented) ahead of the
+/// media, so nothing reads its tail.
+export function mp4NeedsNoTail(head: Uint8Array) {
+	const view = new DataView(head.buffer, head.byteOffset, head.byteLength);
+	let offset = 0;
+	while (offset < head.byteLength) {
+		const box = boxAt(view, offset, head.byteLength);
+		if (!box) return false;
+		if (box.type === "moov") {
+			const parts = children(view, box);
+			return (
+				box.end <= head.byteLength &&
+				parts !== null &&
+				!parts.some((child) => child.type === "mvex")
+			);
+		}
+		if (box.type === "mdat" || box.type === "moof") return false;
+		offset = box.end;
+	}
+	return false;
 }
 
 export type RangeResponse = {
@@ -246,11 +273,18 @@ export class RemoteMedia {
 		if (this.sizeValue === null) this.sizeValue = size;
 	}
 
-	/// Starts reading the head and tail.
+	/// Starts reading the head and tail. The tail of an MP4 whose head holds
+	/// its whole `moov` is never used, so its read stops once the head shows
+	/// that.
 	warm() {
-		void this.head().catch(() => undefined);
+		const tail = new AbortController();
+		void this.head()
+			.then((head) => {
+				if (head && !this.audioWebm && mp4NeedsNoTail(head)) tail.abort();
+			})
+			.catch(() => undefined);
 		void this.fileSize()
-			.then(() => this.tail(this.pinnedTailBytes()))
+			.then(() => this.tail(this.pinnedTailBytes(), tail.signal))
 			.catch(() => undefined);
 	}
 
@@ -290,7 +324,7 @@ export class RemoteMedia {
 		} satisfies RangeResponse;
 	}
 
-	private pin(start: number, end: number) {
+	private pin(start: number, end: number, signal?: AbortSignal) {
 		const existing = this.pinned.find(
 			(block) => block.start === start && block.end === end,
 		);
@@ -298,7 +332,7 @@ export class RemoteMedia {
 		const block: Pinned = {
 			start,
 			end,
-			bytes: this.network(start, end).then(async (response) => {
+			bytes: this.network(start, end, signal).then(async (response) => {
 				const bytes = await readAll(response.body, response.end - start);
 				return bytes.byteLength === response.end - start ? bytes : null;
 			}),
@@ -353,22 +387,31 @@ export class RemoteMedia {
 
 	/// At least the last `length` bytes of the file (all of it when shorter).
 	/// The first tail read stays pinned; longer ones are one-off reads.
-	tail(length: number): Promise<Uint8Array | null> {
+	tail(length: number, signal?: AbortSignal): Promise<Uint8Array | null> {
 		const pinned = this.pinnedTail;
 		if (pinned && pinned.length >= length) return pinned.bytes;
 		if (pinned) {
-			return this.fileSize().then((size) => {
+			return Promise.all([
+				this.fileSize(),
+				pinned.bytes.catch(() => null),
+			]).then(async ([size, last]) => {
 				const start = Math.max(0, size - length);
-				return this.network(start, size).then((response) =>
-					readAll(response.body, size - start),
-				);
+				// Only the bytes before the pinned tail are fetched.
+				const pinnedStart = last ? size - last.byteLength : size;
+				const response = await this.network(start, pinnedStart);
+				const front = await readAll(response.body, pinnedStart - start);
+				if (!last || front.byteLength !== pinnedStart - start) return front;
+				const whole = new Uint8Array(size - start);
+				whole.set(front);
+				whole.set(last, front.byteLength);
+				return whole;
 			});
 		}
 		const wanted = Math.max(length, this.pinnedTailBytes());
 		const entry = {
 			length: wanted,
 			bytes: this.fileSize().then((size) =>
-				this.pin(Math.max(0, size - wanted), size),
+				this.pin(Math.max(0, size - wanted), size, signal),
 			),
 		};
 		this.pinnedTail = entry;
