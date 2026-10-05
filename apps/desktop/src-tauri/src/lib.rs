@@ -4656,6 +4656,25 @@ async fn open_file_path(_app: AppHandle, path: PathBuf) -> Result<(), String> {
     Ok(())
 }
 
+/// The opener's Linux backend makes blocking zbus calls, which panic inside an async task.
+pub(crate) async fn reveal_in_dir(app: AppHandle, path: PathBuf) -> Result<(), String> {
+    cap_utils::run_on_dedicated_thread("reveal-item-in-dir", move || {
+        app.opener().reveal_item_in_dir(path)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+#[instrument(skip(app))]
+async fn reveal_item_in_dir(app: AppHandle, path: PathBuf) -> Result<(), String> {
+    reveal_in_dir(app, path)
+        .await
+        .map_err(|e| format!("Failed to reveal item: {e}"))
+}
+
 #[derive(Deserialize, specta::Type, tauri_specta::Event, Debug, Clone)]
 struct RenderFrameEvent {
     frame_number: u32,
@@ -6810,6 +6829,7 @@ fn specta_builder() -> tauri_specta::Builder {
             copy_image_to_clipboard,
             copy_rendered_screenshot_to_clipboard,
             open_file_path,
+            reveal_item_in_dir,
             get_video_metadata,
             create_editor_instance,
             editor_preparing::create_preparing_editor_frame,
