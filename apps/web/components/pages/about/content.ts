@@ -35,7 +35,7 @@ export type Principle = {
 export const principles: Principle[] = [
 	{
 		title: "Open source, by design",
-		body: "Cap is open source. Most of the code is licensed under AGPLv3, while the camera and capture crates use MIT. From the Rust recording engine to the web sharing platform, the source is public and auditable. This is not a marketing decision. It is a belief about how software should be built.",
+		body: "Cap is open source. Most of the code is licensed under AGPLv3, while the cap-camera* and scap-* crate families use MIT. From the Rust recording engine to the web sharing platform, the source is public and auditable. This is not a marketing decision. It is a belief about how software should be built.",
 		mode: "instant",
 		link: { label: "View on GitHub", href: GITHUB_URL },
 	},
