@@ -1,5 +1,9 @@
 import { cx } from "cva";
 import { createEffect, createSignal, onCleanup, Show, untrack } from "solid-js";
+import {
+	type ConnectionLevel,
+	createConnectionLevel,
+} from "./connection-status";
 
 /// A wait shorter than this passes without an indicator.
 const SHOW_AFTER_MS = 250;
@@ -47,30 +51,80 @@ export function createBufferingDisplay(
 	return { shown, slow };
 }
 
+export function slowLoadingMessage(
+	level: ConnectionLevel | null,
+	then: string,
+) {
+	if (level === "offline")
+		return "You're offline. Video that hasn't loaded yet needs a connection.";
+	if (level === "poor") return `Your connection looks slow. ${then}`;
+	if (level === "fair") return `Your connection is a little slow. ${then}`;
+	return `Taking longer than usual. ${then}`;
+}
+
+function fadeIn(element: HTMLElement) {
+	if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+	// Solid builds the element in its template's inert document, whose
+	// animation timeline never runs, so it starts once the element is in the
+	// page: still before the frame that first paints it.
+	requestAnimationFrame(() => {
+		if (element.isConnected) animateIn(element);
+	});
+}
+
+function animateIn(element: HTMLElement) {
+	element.animate(
+		[
+			{ opacity: 0, transform: "translateY(4px) scale(0.98)" },
+			{ opacity: 1, transform: "none" },
+		],
+		{ duration: 180, easing: "cubic-bezier(0.2, 0, 0, 1)" },
+	);
+}
+
+/// Never takes a pointer, so editing carries on underneath.
 export function BufferingStatus(props: {
 	playing: boolean;
 	slow: boolean;
+	title?: string;
+	then?: string;
+	scrim?: boolean;
 	class?: string;
 }) {
+	const connection = createConnectionLevel();
+	const then = () =>
+		props.then ??
+		(props.playing
+			? "Playback starts as soon as enough has loaded."
+			: "This frame shows as soon as it has loaded.");
 	return (
 		<div
-			role="status"
 			class={cx(
-				"flex flex-col gap-0.5 justify-center px-2.5 py-1.5 min-h-7 max-w-64 text-[11px] font-medium rounded-lg pointer-events-none text-white/90 bg-black/45 backdrop-blur-md shadow-[0_0_0_0.5px_rgba(255,255,255,0.16),0_6px_16px_-4px_rgba(0,0,0,0.4)]",
+				"flex absolute inset-0 z-30 justify-center items-center p-3 pointer-events-none",
 				props.class,
 			)}
 		>
-			<span class="flex gap-1.5 items-center">
-				<span class="rounded-full border-2 size-3 shrink-0 border-white/30 border-t-white animate-spin motion-reduce:animate-none" />
-				Loading video
-			</span>
-			<Show when={props.slow}>
-				<span class="font-normal leading-snug text-white/70">
-					{props.playing
-						? "Your connection looks slow. Playback starts as soon as enough has loaded."
-						: "Your connection looks slow. This frame shows as soon as it has loaded."}
-				</span>
+			<Show when={props.scrim}>
+				<div ref={fadeIn} class="absolute inset-0 bg-black/20" />
 			</Show>
+			<div
+				ref={fadeIn}
+				role="status"
+				class="flex relative flex-col items-center gap-2 px-4 pt-3.5 pb-3 max-w-[16.5rem] text-center rounded-xl text-white bg-[rgba(18,18,20,0.72)] backdrop-blur-md shadow-[0_0_0_0.5px_rgba(255,255,255,0.14),0_10px_28px_-8px_rgba(0,0,0,0.5)]"
+			>
+				<span
+					aria-hidden="true"
+					class="rounded-full border-[2.5px] size-6 shrink-0 border-white/20 border-t-white animate-spin motion-reduce:animate-none"
+				/>
+				<span class="text-[13px] font-medium leading-4">
+					{props.title ?? "Loading video"}
+				</span>
+				<Show when={props.slow}>
+					<span class="-mt-0.5 text-[12px] leading-[16px] text-white/70">
+						{slowLoadingMessage(connection(), then())}
+					</span>
+				</Show>
+			</div>
 		</div>
 	);
 }
