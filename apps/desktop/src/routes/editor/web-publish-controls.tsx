@@ -15,6 +15,7 @@ import IconLucideCheck from "~icons/lucide/check";
 import IconLucideDownload from "~icons/lucide/download";
 import { useEditorContext } from "./context";
 import { EditorButton } from "./ui";
+import { shareLinkShowsProject } from "./web-save-state";
 
 type SaveStatus = {
 	state: "idle" | "rendering" | "ready" | "error";
@@ -25,6 +26,8 @@ type SaveStatus = {
 	error: string | null;
 	/** The share link shows, or is rendering, the project as saved now. */
 	current?: boolean;
+	/** The project has been edited and stored since the recording was made. */
+	edited?: boolean;
 };
 
 type SaveStart =
@@ -54,6 +57,8 @@ export function WebPublishControls() {
 	const [status, setStatus] = createSignal<SaveStatus | null>(null);
 	// The farm couldn't finish and an editor server took the Save over.
 	const [slowSave, setSlowSave] = createSignal(false);
+	// The share link showed this project when the editor opened.
+	const [linkCurrent, setLinkCurrent] = createSignal(false);
 	// The revision this session last saved. Nothing counts as saved until a
 	// Save, unless the share link already shows the project as it was opened.
 	const [savedRevision, setSavedRevision] = createSignal<number | null>(null);
@@ -70,8 +75,9 @@ export function WebPublishControls() {
 		try {
 			const next = await invoke<SaveStatus>("webEditorSaveStatus");
 			if (disposed) return next.state;
-			if (resuming && next.current) {
+			if (resuming && shareLinkShowsProject(next, publishOnOpen)) {
 				setSavedRevision(0);
+				setLinkCurrent(true);
 				setStatus(next);
 			}
 			if (resuming && next.state !== "rendering") return next.state;
@@ -154,7 +160,9 @@ export function WebPublishControls() {
 		!!status()?.playable || (status()?.progress ?? 0) > 0;
 	const hasUnsavedEdits = () => projectRevision() !== savedRevision();
 	const upToDate = () =>
-		!hasUnsavedEdits() && !rendering() && status()?.state === "ready";
+		!hasUnsavedEdits() &&
+		!rendering() &&
+		(status()?.state === "ready" || linkCurrent());
 
 	// The page asks before closing while this session has edits its share link
 	// doesn't show yet: not saved, or failed. A Save in progress carries on
@@ -178,6 +186,7 @@ export function WebPublishControls() {
 	const save = async (automatic = false) => {
 		if (starting() || rendering()) return;
 		setStarting(true);
+		setLinkCurrent(false);
 		try {
 			// Save renders the stored project, so edits still debouncing land first.
 			await flushProjectConfig();

@@ -25,6 +25,8 @@ const RenderSaveStatus = Schema.Struct({
 	hlsUrl: Schema.NullOr(Schema.String),
 	error: Schema.NullOr(Schema.String),
 	current: Schema.Boolean,
+	/** The project has been edited and stored since the recording was made. */
+	edited: Schema.Boolean,
 	revision: Schema.NullOr(Schema.String),
 });
 
@@ -84,6 +86,7 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 						return {
 							...status,
 							current: renderFarmSaveIsCurrent(video.metadata),
+							edited: !!video.metadata?.webEditorProject,
 							revision: shareVideoRevision((current ?? video).source),
 						};
 					}).pipe(
