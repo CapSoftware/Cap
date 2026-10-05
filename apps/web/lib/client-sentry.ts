@@ -9,6 +9,7 @@ const MAX_EARLY_ERRORS = 30;
 const EDITOR_PAINT_WAIT_MS = 60_000;
 
 const earlyErrors: Array<{ error: unknown; type: GlobalErrorType }> = [];
+const earlyTransitions: Array<[href: string, navigationType: string]> = [];
 let loading: Promise<SentryModule | null> | null = null;
 let loaded: SentryModule | null = null;
 
@@ -50,6 +51,9 @@ export function loadSentry(): Promise<SentryModule | null> {
 					},
 				});
 			}
+			for (const [href, navigationType] of earlyTransitions.splice(0)) {
+				Sentry.captureRouterTransitionStart(href, navigationType);
+			}
 			loaded = Sentry;
 			return Sentry;
 		},
@@ -75,7 +79,13 @@ export function forwardRouterTransitionStart(
 	href: string,
 	navigationType: string,
 ) {
-	loaded?.captureRouterTransitionStart(href, navigationType);
+	if (loaded) {
+		loaded.captureRouterTransitionStart(href, navigationType);
+		return;
+	}
+	if (dsn && earlyTransitions.length < MAX_EARLY_ERRORS) {
+		earlyTransitions.push([href, navigationType]);
+	}
 }
 
 const whenIdle = (callback: () => void) => {

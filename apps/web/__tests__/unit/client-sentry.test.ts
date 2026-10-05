@@ -45,6 +45,7 @@ beforeEach(() => {
 	vi.stubEnv("NEXT_PUBLIC_SENTRY_DSN", "https://key@sentry.example/1");
 	sentry.init.mockClear();
 	sentry.captureException.mockClear();
+	sentry.captureRouterTransitionStart.mockClear();
 	sentry.imports = 0;
 });
 
@@ -53,6 +54,20 @@ afterEach(() => {
 });
 
 describe("client Sentry", () => {
+	it("replays navigations from before the SDK loaded once it has", async () => {
+		const { forwardRouterTransitionStart, loadSentry } = await loadModule(
+			"/s/abc/edit/studio",
+		);
+		forwardRouterTransitionStart("/s/abc", "push");
+		expect(sentry.captureRouterTransitionStart).not.toHaveBeenCalled();
+		await loadSentry();
+		forwardRouterTransitionStart("/dashboard", "push");
+		expect(sentry.captureRouterTransitionStart.mock.calls).toEqual([
+			["/s/abc", "push"],
+			["/dashboard", "push"],
+		]);
+	});
+
 	it("reports errors from before the SDK loaded once it has, exactly once", async () => {
 		const { startClientSentry } = await loadModule("/dashboard/caps");
 		startClientSentry();
