@@ -4,7 +4,7 @@ import AutoImport from "unplugin-auto-import/vite";
 import { FileSystemIconLoader } from "unplugin-icons/loaders";
 import IconsResolver from "unplugin-icons/resolver";
 import Icons from "unplugin-icons/vite";
-import { defineConfig } from "vite";
+import { defineConfig, type HtmlTagDescriptor } from "vite";
 import solid from "vite-plugin-solid";
 
 const repositoryRoot = resolve(import.meta.dirname, "../..");
@@ -39,6 +39,47 @@ export default defineConfig({
 	worker: { format: "es" },
 	plugins: [
 		solid(),
+		{
+			// The renderer's wasm is the largest file the first frame needs, and
+			// its fetch otherwise waits for the entry script and the renderer's
+			// glue. Starting it with the page lets the two download together.
+			name: "cap-editor-preload-renderer",
+			transformIndexHtml: {
+				order: "post",
+				handler(_html, context) {
+					const tags: HtmlTagDescriptor[] = [];
+					for (const output of Object.values(context.bundle ?? {})) {
+						const preview =
+							output.type === "asset"
+								? output.originalFileNames.some((name) =>
+										name.includes("renderer/pkg/"),
+									)
+								: output.facadeModuleId?.includes(
+										"renderer/pkg/cap_editor_browser_renderer.js",
+									);
+						if (!preview) continue;
+						tags.push({
+							tag: "link",
+							injectTo: "head",
+							attrs:
+								output.type === "asset"
+									? {
+											rel: "preload",
+											href: `/editor-solid/${output.fileName}`,
+											as: "fetch",
+											type: "application/wasm",
+											crossorigin: "",
+										}
+									: {
+											rel: "modulepreload",
+											href: `/editor-solid/${output.fileName}`,
+										},
+						});
+					}
+					return tags;
+				},
+			},
+		},
 		{
 			name: "cap-editor-wallpapers",
 			async closeBundle() {
