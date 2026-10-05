@@ -256,6 +256,76 @@ describe("RemoteMedia", () => {
 		expect(requests.length).toBeLessThanOrEqual(6);
 	});
 
+	describe("a search its callers abandon", () => {
+		const slowly = () => {
+			const fetchNow = globalThis.fetch;
+			globalThis.fetch = (async (
+				input: RequestInfo | URL,
+				init?: RequestInit,
+			) => {
+				await new Promise((resolve) => setTimeout(resolve, 300));
+				return fetchNow(input, init);
+			}) as typeof fetch;
+		};
+		const middleReads = () =>
+			requests.filter((range) => {
+				const match = /^bytes=(\d+)-(\d+)$/.exec(range);
+				return (
+					!!match &&
+					Number(match[1]) > 524288 &&
+					Number(match[2]) < file.length - 2_000_000
+				);
+			}).length;
+		const opened = async () => {
+			// 2 s fragments of 0.8 to 2.2 MB, which take several probes to search.
+			const parts = [init()];
+			for (let index = 0; index < 30; index++) {
+				parts.push(
+					fragment(index * 2 * 15360, {
+						payload: 800_000 + ((index * 389_651) % 1_400_000),
+					}),
+				);
+			}
+			serve(concat(...parts));
+			slowly();
+			const media = new RemoteMedia(URL_, file.length);
+			media.warm();
+			await media.locate(1);
+			requests = [];
+			return media;
+		};
+
+		test("stops reading once its grace period passes", async () => {
+			const full = await opened();
+			await full.locate(42);
+			const fullReads = middleReads();
+			expect(fullReads).toBeGreaterThan(1);
+			const media = await opened();
+			const caller = new AbortController();
+			const result = media.locate(42, caller.signal).catch(() => "canceled");
+			await new Promise((resolve) => setTimeout(resolve, 50));
+			caller.abort();
+			expect(await result).toBe("canceled");
+			await new Promise((resolve) => setTimeout(resolve, 3000));
+			expect(middleReads()).toBeLessThan(fullReads);
+		}, 15_000);
+
+		test("keeps going for a caller that asks again within it", async () => {
+			const full = await opened();
+			await full.locate(42);
+			const fullReads = middleReads();
+			const media = await opened();
+			const first = new AbortController();
+			void media.locate(42, first.signal).catch(() => undefined);
+			await new Promise((resolve) => setTimeout(resolve, 50));
+			first.abort();
+			await new Promise((resolve) => setTimeout(resolve, 100));
+			const point = await media.locate(42, new AbortController().signal);
+			expect(point).not.toBeNull();
+			expect(middleReads()).toBe(fullReads);
+		}, 15_000);
+	});
+
 	test("reads past the target only while scrubbing", async () => {
 		const probeLengths = () =>
 			requests.flatMap((range) => {
