@@ -171,16 +171,6 @@ async function readAll(body: ReadableStream<Uint8Array>, length: number) {
 	return out.subarray(0, filled);
 }
 
-/// A fragment search and the callers waiting on it. A search every caller
-/// has given up on stops reading; one with a caller that can't give up runs
-/// to the end.
-type Locating = {
-	result: Promise<FragmentPoint | null>;
-	controller: AbortController;
-	waiting: number;
-	keep: boolean;
-};
-
 type Pinned = { start: number; end: number; bytes: Promise<Uint8Array | null> };
 
 export type SeekKind = "mp4" | "webm";
@@ -196,7 +186,7 @@ type Scanner = {
 
 type SeekIndex = {
 	known: FragmentPoint[];
-	locating: Map<number, Locating>;
+	locating: Map<number, Promise<FragmentPoint | null>>;
 	scanner: Promise<Scanner | null> | null;
 };
 
@@ -476,15 +466,11 @@ export class RemoteMedia {
 
 	/// All of `start` to `end`: `read` answers with whatever one cached window
 	/// or request covers, which can be only a few bytes at a window's edge.
-	private async readFully(
-		signal: AbortSignal | undefined,
-		start: number,
-		end: number,
-	) {
+	private async readFully(start: number, end: number) {
 		const out = new Uint8Array(end - start);
 		let filled = 0;
 		while (start + filled < end) {
-			const response = await this.read(start + filled, end, signal);
+			const response = await this.read(start + filled, end);
 			const bytes = await readAll(response.body, response.end - start - filled);
 			if (bytes.byteLength === 0) break;
 			out.set(bytes, filled);
@@ -599,39 +585,22 @@ export class RemoteMedia {
 	) {
 		const index = this.index(kind);
 		const key = time;
-		if (signal?.aborted) return Promise.reject(canceled(signal));
-		let entry = index.locating.get(key);
-		if (!entry) {
-			const controller = new AbortController();
-			const created: Locating = {
-				result: this.search(kind, time, scrubbing, controller.signal),
-				controller,
-				waiting: 0,
-				keep: false,
-			};
-			index.locating.set(key, created);
+		let pending = index.locating.get(key);
+		if (!pending) {
+			pending = this.search(kind, time, scrubbing);
+			index.locating.set(key, pending);
 			const settled = () => {
-				if (index.locating.get(key) === created) index.locating.delete(key);
+				if (index.locating.get(key) === pending) index.locating.delete(key);
 			};
-			created.result.then(settled, settled);
-			entry = created;
+			pending.then(settled, settled);
 		}
-		if (!signal) {
-			entry.keep = true;
-			return entry.result;
-		}
-		const shared = entry;
-		shared.waiting++;
+		if (!signal) return pending;
+		if (signal.aborted) return Promise.reject(canceled(signal));
+		const shared = pending;
 		return new Promise<FragmentPoint | null>((resolve, reject) => {
-			const onAbort = () => {
-				reject(canceled(signal));
-				if (--shared.waiting === 0 && !shared.keep) {
-					if (index.locating.get(key) === shared) index.locating.delete(key);
-					shared.controller.abort();
-				}
-			};
+			const onAbort = () => reject(canceled(signal));
 			signal.addEventListener("abort", onAbort, { once: true });
-			shared.result.then(
+			shared.then(
 				(value) => {
 					signal.removeEventListener("abort", onAbort);
 					resolve(value);
@@ -644,12 +613,7 @@ export class RemoteMedia {
 		});
 	}
 
-	private async search(
-		kind: SeekKind,
-		time: number,
-		scrubbing: boolean,
-		signal: AbortSignal,
-	) {
+	private async search(kind: SeekKind, time: number, scrubbing: boolean) {
 		const index = this.index(kind);
 		index.scanner ??= this.scanner(kind);
 		const scanner = await index.scanner.catch(() => null);
@@ -683,14 +647,10 @@ export class RemoteMedia {
 				// lone seek keeps the short window: those extra bytes cost more than
 				// they save on a slow link.
 				const window = await this.readFully(
-					signal,
 					at,
 					Math.min(
 						size,
-						at +
-							(scrubbing
-								? Math.max(windowBytes, scanner.nearBytes)
-								: windowBytes),
+						at + (scrubbing ? Math.max(windowBytes, nearBytes) : windowBytes),
 					),
 				);
 				this.recent.unshift({ start: at, bytes: window });

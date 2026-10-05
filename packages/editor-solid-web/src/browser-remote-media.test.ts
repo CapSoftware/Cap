@@ -256,32 +256,6 @@ describe("RemoteMedia", () => {
 		expect(requests.length).toBeLessThanOrEqual(6);
 	});
 
-	test("a search every caller gave up on stops reading", async () => {
-		serve(longRecording(3600));
-		const media = new RemoteMedia(URL_, file.length);
-		media.warm();
-		const first = new AbortController();
-		const second = new AbortController();
-		const a = media.locate(5000, first.signal).catch(() => "canceled");
-		const b = media.locate(5000, second.signal).catch(() => "canceled");
-		first.abort();
-		second.abort();
-		expect(await a).toBe("canceled");
-		expect(await b).toBe("canceled");
-		await new Promise((resolve) => setTimeout(resolve, 20));
-		const middle = requests.filter((range) => {
-			const match = /^bytes=(\d+)-(\d+)$/.exec(range);
-			return (
-				!!match &&
-				Number(match[1]) > 524288 &&
-				Number(match[2]) < file.length - 600_000
-			);
-		});
-		expect(middle).toEqual([]);
-		// A new search for the same time starts afresh.
-		expect(await media.locate(5000)).not.toBeNull();
-	});
-
 	test("reads past the target only while scrubbing", async () => {
 		const probeLengths = () =>
 			requests.flatMap((range) => {
