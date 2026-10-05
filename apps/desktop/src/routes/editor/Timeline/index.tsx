@@ -25,10 +25,12 @@ import {
 } from "solid-js";
 import { produce } from "solid-js/store";
 import toast from "solid-toast";
+import IconLucideFilm from "~icons/lucide/film";
 import IconLucidePalette from "~icons/lucide/palette";
 import { stylesRevealCamera } from "../style";
 import { ImageTrack } from "./image-track";
 import { type OverlayDragState, StyleTrack } from "./style-track";
+import { VideoTrack } from "./video-track";
 
 import "./styles.css";
 
@@ -96,6 +98,7 @@ const RULER_SCRUB_OVERHANG_PX = 4;
 const trackIcons: Record<TimelineTrackType, () => JSX.Element> = {
 	style: () => <IconLucidePalette class="size-3" />,
 	image: () => <IconCapImage class="size-3" />,
+	video: () => <IconLucideFilm class="size-3" />,
 	clip: () => <IconLucideClapperboard class="size-3" />,
 	caption: () => <IconCapCaptions class="size-3" />,
 	keyboard: () => <IconLucideKeyboard class="size-3" />,
@@ -117,6 +120,7 @@ type TrackDefinition = {
 const trackDefinitions: TrackDefinition[] = [
 	{ type: "style", label: "Style", icon: trackIcons.style, locked: false },
 	{ type: "image", label: "Image", icon: trackIcons.image, locked: false },
+	{ type: "video", label: "Video", icon: trackIcons.video, locked: false },
 	{
 		type: "clip",
 		label: "Clip",
@@ -209,7 +213,8 @@ export function Timeline(props: {
 		requestHandoffPlayback,
 	} = useEditorContext();
 
-	const duration = () => editorInstance.recordingDuration;
+	const duration = () =>
+		Math.max(editorInstance.recordingDuration, totalDuration());
 	const transform = () => editorState.timeline.transform;
 
 	const [timelineContainerRef, setTimelineContainerRef] =
@@ -300,7 +305,9 @@ export function Timeline(props: {
 		trackDefinitions.map((definition) => ({
 			...definition,
 			active:
-				definition.type === "style" || definition.type === "image"
+				definition.type === "style" ||
+				definition.type === "image" ||
+				definition.type === "video"
 					? trackState()[definition.type] > 0
 					: definition.type === "caption"
 						? trackState().caption
@@ -321,11 +328,14 @@ export function Timeline(props: {
 			supportsMultiple:
 				definition.type === "style" ||
 				definition.type === "image" ||
+				definition.type === "video" ||
 				definition.type === "mask" ||
 				definition.type === "text" ||
 				definition.type === "audio",
 			count:
-				definition.type === "style" || definition.type === "image"
+				definition.type === "style" ||
+				definition.type === "image" ||
+				definition.type === "video"
 					? trackState()[definition.type]
 					: definition.type === "mask"
 						? trackState().mask
@@ -491,6 +501,14 @@ export function Timeline(props: {
 	// existing lane with room at the playhead is reused, otherwise a new lane
 	// is stacked on. Same 1s / 80px sizing as the tracks' click-to-add.
 	function handleAddTrack(type: TimelineTrackType) {
+		if (type === "video") {
+			const lane = Math.max(
+				getUsedTrackCount(project.timeline?.videoSegments ?? []),
+				trackState().video,
+			);
+			void projectActions.importVideoSegment(lane);
+			return;
+		}
 		if (type === "style" || type === "image") {
 			const segments =
 				(type === "style"
@@ -628,15 +646,17 @@ export function Timeline(props: {
 	}
 
 	function handleDeleteTrackLane(
-		type: "text" | "mask" | "audio" | "style" | "image",
+		type: "text" | "mask" | "audio" | "style" | "image" | "video",
 		laneIndex: number,
 	) {
-		if (type === "style" || type === "image") {
+		if (type === "style" || type === "image" || type === "video") {
 			const resumeHistory = projectHistory.pause();
 			const segments =
 				(type === "style"
 					? project.timeline?.styleSegments
-					: project.timeline?.imageSegments) ?? [];
+					: type === "video"
+						? project.timeline?.videoSegments
+						: project.timeline?.imageSegments) ?? [];
 			projectActions.deleteOverlaySegments(
 				type,
 				segments.flatMap((segment, index) =>
@@ -648,10 +668,12 @@ export function Timeline(props: {
 					const remaining =
 						type === "style"
 							? project.timeline?.styleSegments
-							: project.timeline?.imageSegments;
+							: type === "video"
+								? project.timeline?.videoSegments
+								: project.timeline?.imageSegments;
 					for (const segment of remaining ?? [])
 						if (segment.track > laneIndex) segment.track -= 1;
-					if (type === "image")
+					if (type === "image" || type === "video")
 						project.overlayOrder = removeOverlayTrack(
 							project.overlayOrder,
 							type,
@@ -757,6 +779,7 @@ export function Timeline(props: {
 							textSegments: [],
 							styleSegments: [],
 							imageSegments: [],
+							videoSegments: [],
 							captionSegments: [],
 							keyboardSegments: [],
 							camera3dSegments: [],
@@ -784,6 +807,7 @@ export function Timeline(props: {
 							textSegments: [],
 							styleSegments: [],
 							imageSegments: [],
+							videoSegments: [],
 							captionSegments: [],
 							keyboardSegments: [],
 							camera3dSegments: [],
@@ -825,7 +849,7 @@ export function Timeline(props: {
 
 	async function handleOpenTrackMenu(
 		e: MouseEvent,
-		type: "text" | "mask" | "audio" | "style" | "image",
+		type: "text" | "mask" | "audio" | "style" | "image" | "video",
 		laneIndex: number,
 	) {
 		e.preventDefault();
@@ -860,6 +884,7 @@ export function Timeline(props: {
 				textSegments: [],
 				styleSegments: [],
 				imageSegments: [],
+				videoSegments: [],
 				captionSegments: [],
 				keyboardSegments: [],
 				camera3dSegments: [],
@@ -908,6 +933,7 @@ export function Timeline(props: {
 					textSegments: [],
 					styleSegments: [],
 					imageSegments: [],
+					videoSegments: [],
 					captionSegments: [],
 					keyboardSegments: [],
 					camera3dSegments: [],
@@ -922,12 +948,14 @@ export function Timeline(props: {
 				project.timeline.camera3dSegments ??= [];
 				project.timeline.styleSegments ??= [];
 				project.timeline.imageSegments ??= [];
+				project.timeline.videoSegments ??= [];
 			}),
 		);
 	}
 
 	let styleSegmentDragState: OverlayDragState = { type: "idle" };
 	let imageSegmentDragState: OverlayDragState = { type: "idle" };
+	let videoSegmentDragState: OverlayDragState = { type: "idle" };
 	let zoomSegmentDragState = { type: "idle" } as ZoomSegmentDragState;
 	let sceneSegmentDragState = { type: "idle" } as SceneSegmentDragState;
 	let maskSegmentDragState = { type: "idle" } as MaskSegmentDragState;
@@ -1046,6 +1074,7 @@ export function Timeline(props: {
 		if (
 			styleSegmentDragState.type !== "moving" &&
 			imageSegmentDragState.type !== "moving" &&
+			videoSegmentDragState.type !== "moving" &&
 			zoomSegmentDragState.type !== "moving" &&
 			sceneSegmentDragState.type !== "moving" &&
 			maskSegmentDragState.type !== "moving" &&
@@ -1243,6 +1272,7 @@ export function Timeline(props: {
 			const segmentCount = {
 				style: timeline?.styleSegments?.length ?? 0,
 				image: timeline?.imageSegments?.length ?? 0,
+				video: timeline?.videoSegments?.length ?? 0,
 				clip: timeline?.segments.length ?? 0,
 				zoom: timeline?.zoomSegments?.length ?? 0,
 				scene: timeline?.sceneSegments?.length ?? 0,
@@ -1478,12 +1508,21 @@ export function Timeline(props: {
 						}}
 					>
 						<div class="flex flex-col gap-1.5 min-h-full">
-							<TrackRow icon={trackIcons.clip} label="Video" type="clip">
-								<ClipTrack
-									ref={setTimelineRef}
-									handleUpdatePlayhead={handleUpdatePlayhead}
-								/>
-							</TrackRow>
+							<Show
+								when={editorInstance.recordingDuration > 0}
+								fallback={
+									<div style={{ "margin-left": `${TRACK_GUTTER}px` }}>
+										<div ref={setTimelineRef} class="h-px w-full" />
+									</div>
+								}
+							>
+								<TrackRow icon={trackIcons.clip} label="Recording" type="clip">
+									<ClipTrack
+										ref={setTimelineRef}
+										handleUpdatePlayhead={handleUpdatePlayhead}
+									/>
+								</TrackRow>
+							</Show>
 							<Show when={captionTrackVisible()}>
 								<TrackRow
 									icon={trackIcons.caption}
@@ -1560,6 +1599,15 @@ export function Timeline(props: {
 													handleUpdatePlayhead={handleUpdatePlayhead}
 												/>
 											</Match>
+											<Match when={row.kind === "video"}>
+												<VideoTrack
+													laneIndex={row.track}
+													onDragStateChanged={(value) => {
+														videoSegmentDragState = value;
+													}}
+													handleUpdatePlayhead={handleUpdatePlayhead}
+												/>
+											</Match>
 											<Match when={row.kind === "text"}>
 												<TextTrack
 													laneIndex={row.track}
@@ -1605,25 +1653,27 @@ export function Timeline(props: {
 									</TrackRow>
 								)}
 							</For>
-							<TrackRow
-								icon={trackIcons.zoom}
-								label="Zoom"
-								type="zoom"
-								onDelete={
-									(project.timeline?.zoomSegments?.length ?? 0) > 0
-										? () => handleClearTrackSegments("zoom")
-										: undefined
-								}
-								deleteLabel="Clear all"
-								deleteTitle="Delete all zoom segments"
-							>
-								<ZoomTrack
-									onDragStateChanged={(v) => {
-										zoomSegmentDragState = v;
-									}}
-									handleUpdatePlayhead={handleUpdatePlayhead}
-								/>
-							</TrackRow>
+							<Show when={editorInstance.recordingDuration > 0}>
+								<TrackRow
+									icon={trackIcons.zoom}
+									label="Zoom"
+									type="zoom"
+									onDelete={
+										(project.timeline?.zoomSegments?.length ?? 0) > 0
+											? () => handleClearTrackSegments("zoom")
+											: undefined
+									}
+									deleteLabel="Clear all"
+									deleteTitle="Delete all zoom segments"
+								>
+									<ZoomTrack
+										onDragStateChanged={(v) => {
+											zoomSegmentDragState = v;
+										}}
+										handleUpdatePlayhead={handleUpdatePlayhead}
+									/>
+								</TrackRow>
+							</Show>
 							<Show when={threeDTrackVisible()}>
 								<TrackRow
 									icon={trackIcons["3d"]}
@@ -1728,6 +1778,8 @@ function TrackRow(props: {
 				return timeline?.styleSegments ?? [];
 			case "image":
 				return timeline?.imageSegments ?? [];
+			case "video":
+				return timeline?.videoSegments ?? [];
 			case "text":
 				return timeline?.textSegments ?? [];
 			case "mask":

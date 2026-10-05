@@ -1,21 +1,32 @@
 use crate::{
     ProjectConfiguration, RenderingError,
-    layers::{CaptionsLayer, ImageLayer, KeyboardLayer, TextLayer},
+    composite_frame::CompositeVideoFramePipeline,
+    layers::{CaptionsLayer, ImageLayer, KeyboardLayer, TextLayer, VideoLayer},
     readiness,
+    yuv_converter::YuvConverterPipelines,
 };
+use std::sync::Arc;
 
 pub(super) struct OverlayLayers {
     pub(super) text: TextLayer,
     pub(super) images: ImageLayer,
+    pub(super) videos: VideoLayer,
     pub(super) captions: CaptionsLayer,
     pub(super) keyboard: KeyboardLayer,
 }
 
 impl OverlayLayers {
-    pub(super) fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
+    pub(super) fn new(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        yuv_pipelines: Arc<YuvConverterPipelines>,
+        composite_pipeline: Arc<CompositeVideoFramePipeline>,
+        prefer_cpu_conversion: bool,
+    ) -> Self {
         Self {
             text: readiness::measure("layers.text", || TextLayer::new(device, queue)),
             images: readiness::measure("layers.images", || ImageLayer::new(device)),
+            videos: VideoLayer::new(yuv_pipelines, composite_pipeline, prefer_cpu_conversion),
             captions: readiness::measure("layers.captions", || CaptionsLayer::new(device, queue)),
             keyboard: readiness::measure("layers.keyboard", || KeyboardLayer::new(device, queue)),
         }
@@ -34,6 +45,7 @@ impl OverlayLayers {
             || project.timeline.as_ref().is_some_and(|timeline| {
                 !timeline.text_segments.is_empty()
                     || !timeline.image_segments.is_empty()
+                    || !timeline.video_segments.is_empty()
                     || !timeline.caption_segments.is_empty()
                     || !timeline.keyboard_segments.is_empty()
             })

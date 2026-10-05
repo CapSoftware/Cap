@@ -30,7 +30,11 @@ const gridStyle = {
 	"background-position": "0 0, 0 10px, 10px -10px, -10px 0px",
 };
 
-export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
+export function Preview(props: {
+	zoom: number;
+	setZoom: (z: number) => void;
+	editorLayout?: boolean;
+}) {
 	const {
 		latestFrame,
 		annotations,
@@ -465,7 +469,13 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 	});
 
 	return (
-		<div class="flex flex-col flex-1 overflow-hidden bg-gray-1 dark:bg-gray-2">
+		<div
+			class={
+				props.editorLayout
+					? "flex flex-1 flex-col overflow-hidden bg-ed-card-2"
+					: "flex flex-1 flex-col overflow-hidden bg-gray-1 dark:bg-gray-2"
+			}
+		>
 			{/* Preview Area */}
 			<div
 				ref={setCanvasContainerRef}
@@ -473,7 +483,13 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 				style={gridStyle}
 				onMouseDown={handleMiddleMouseDown}
 			>
-				<div class="absolute left-4 bottom-4 z-10 flex items-center gap-2 bg-gray-1 dark:bg-gray-3 rounded-lg shadow-xs p-1 border border-gray-4">
+				<div
+					class={
+						props.editorLayout
+							? "absolute bottom-4 left-4 z-10 flex items-center gap-2 rounded-lg border border-ed-line bg-ed-card p-1 shadow-ed-card"
+							: "absolute bottom-4 left-4 z-10 flex items-center gap-2 rounded-lg border border-gray-4 bg-gray-1 p-1 shadow-xs dark:bg-gray-3"
+					}
+				>
 					<EditorButton
 						tooltipText="Zoom Out"
 						kbd={["meta", "-"]}

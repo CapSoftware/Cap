@@ -247,6 +247,7 @@ mod tests {
                 camera3d_segments: Vec::new(),
                 style_segments: Vec::new(),
                 image_segments: Vec::new(),
+                video_segments: Vec::new(),
             }),
             overlay_order: vec![cap_project::OverlayTrack {
                 kind: cap_project::OverlayTrackKind::Image,

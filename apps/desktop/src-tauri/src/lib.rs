@@ -99,9 +99,10 @@ use recording::{InProgressRecording, RecordingEvent, RecordingInputKind};
 use scap_targets::{Display, DisplayId, WindowId, bounds::LogicalBounds};
 use screenshot_editor::{
     PendingScreenshotEditorInstances, ScreenshotEditorInstances, WindowScreenshotEditorInstance,
-    create_screenshot_editor_instance, prewarm_screenshot_background, recognize_screenshot_text,
-    render_screenshot_for_export, render_screenshot_png, render_screenshot_project_for_export,
-    update_screenshot_config,
+    close_image_drawing_instance, commit_image_drawing, create_image_drawing_instance,
+    create_screenshot_editor_instance, image_drawing_temp_path, prewarm_screenshot_background,
+    recognize_screenshot_text, render_screenshot_for_export, render_screenshot_png,
+    render_screenshot_project_for_export, update_screenshot_config,
 };
 
 mod gpu_context;
@@ -6801,7 +6802,11 @@ fn specta_builder() -> tauri_specta::Builder {
             export::generate_export_preview,
             export::generate_export_preview_fast,
             import::start_video_import,
+            import::create_media_project_from_video,
+            import::create_media_project_from_image,
             import::add_existing_recording_to_editor,
+            import::import_editor_image,
+            import::import_editor_video,
             import::start_image_import,
             import::check_import_ready,
             copy_file_to_path,
@@ -6820,6 +6825,8 @@ fn specta_builder() -> tauri_specta::Builder {
             get_editor_project_path,
             get_mic_waveforms,
             get_system_audio_waveforms,
+            audio_library::get_imported_waveform,
+            audio_library::cancel_imported_waveforms,
             audio_library::list_audio_library,
             audio_library::add_audio_library_track,
             audio_library::import_audio_track_file,
@@ -6845,6 +6852,10 @@ fn specta_builder() -> tauri_specta::Builder {
             upload_screenshot,
             upload_rendered_screenshot,
             create_screenshot_editor_instance,
+            create_image_drawing_instance,
+            close_image_drawing_instance,
+            commit_image_drawing,
+            image_drawing_temp_path,
             update_screenshot_config,
             prewarm_screenshot_background,
             recognize_screenshot_text,
@@ -7579,6 +7590,9 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                 match event {
                     WindowEvent::CloseRequested { api, .. } => {
                         let window_id = CapWindowId::from_str(label).ok();
+                        if matches!(&window_id, Some(CapWindowId::Editor { .. })) {
+                            audio_library::cancel_imported_waveforms_for_window(label);
+                        }
                         if !matches!(
                             window_id,
                             Some(CapWindowId::Editor { .. })
@@ -7624,6 +7638,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                     }
                 }
                 WindowEvent::Destroyed => {
+                    audio_library::cancel_imported_waveforms_for_window(label);
                     fake_window::cancel_fake_window_listener(app, label);
                     let window_id = CapWindowId::from_str(label).ok();
                     if let Some(window_id) = &window_id {
@@ -7785,7 +7800,27 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                 WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) => {
                     let window_id = CapWindowId::from_str(label).ok();
                     for path in paths {
-                        let result = if matches!(window_id, Some(CapWindowId::Main)) {
+                        let result = if matches!(window_id, Some(CapWindowId::Editor { .. }))
+                            && import::is_supported_image_import_path(path)
+                        {
+                            path.to_str()
+                                .ok_or_else(|| "Image path has invalid text encoding".to_string())
+                                .and_then(|source_path| {
+                                    window
+                                        .emit_to(label, "editor-image-dropped", source_path)
+                                        .map_err(|error| error.to_string())
+                                })
+                        } else if matches!(window_id, Some(CapWindowId::Editor { .. }))
+                            && import::is_supported_video_import_path(path)
+                        {
+                            path.to_str()
+                                .ok_or_else(|| "Video path has invalid text encoding".to_string())
+                                .and_then(|source_path| {
+                                    window
+                                        .emit_to(label, "editor-video-dropped", source_path)
+                                        .map_err(|error| error.to_string())
+                                })
+                        } else if matches!(window_id, Some(CapWindowId::Main)) {
                             open_importable_from_path(path, app.clone())
                         } else {
                             open_project_from_path(path, app.clone())
@@ -8448,10 +8483,13 @@ fn retire_project_window(window: &Window, window_id: &CapWindowId) {
             export::cancel_exports_for_window(window.label());
             let label = window.label().to_string();
             let pending = PendingEditorInstances::get(app);
+            let screenshot_pending = PendingScreenshotEditorInstances::get(app);
             spawn_on_runtime(async move {
                 pending.cancel_prewarm(&label).await;
+                screenshot_pending.cancel_prewarm(&label).await;
             });
             spawn_on_runtime(EditorInstances::remove(window.clone()));
+            spawn_on_runtime(ScreenshotEditorInstances::remove(window.clone()));
         }
         CapWindowId::ScreenshotEditor { id } => {
             let window_ids = ScreenshotEditorWindowIds::get(app);
@@ -9174,7 +9212,7 @@ fn open_importable_from_path(path: &Path, app: AppHandle) -> Result<(), String> 
     if import::is_supported_video_import_path(path) {
         let source_path = path.to_path_buf();
         tokio::spawn(async move {
-            match import::start_video_import(app.clone(), source_path).await {
+            match import::create_media_project_from_video(app.clone(), source_path).await {
                 Ok(project_path) => {
                     if let Err(err) = (ShowCapWindow::Editor { project_path }).show(&app).await {
                         error!("Failed to show imported video editor: {err}");
@@ -9199,9 +9237,9 @@ fn open_importable_from_path(path: &Path, app: AppHandle) -> Result<(), String> 
     if import::is_supported_image_import_path(path) {
         let source_path = path.to_path_buf();
         tokio::spawn(async move {
-            match import::start_image_import(app.clone(), source_path).await {
-                Ok(path) => {
-                    if let Err(err) = (ShowCapWindow::ScreenshotEditor { path }).show(&app).await {
+            match import::create_media_project_from_image(app.clone(), source_path).await {
+                Ok(project_path) => {
+                    if let Err(err) = (ShowCapWindow::Editor { project_path }).show(&app).await {
                         error!("Failed to show imported image editor: {err}");
                         show_import_error_dialog(
                             &app,

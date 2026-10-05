@@ -1,5 +1,6 @@
 use cpal::{SampleFormat, SupportedBufferSize, SupportedStreamConfig};
 use ffmpeg::frame;
+pub mod video_import;
 pub use ffmpeg::{
     format::{
         pixel::Pixel,

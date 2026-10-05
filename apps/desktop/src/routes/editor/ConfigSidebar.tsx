@@ -151,6 +151,7 @@ import {
 	topSlideAnimateClasses,
 } from "./ui";
 import { formatTime } from "./utils";
+import { VideoSegmentConfig } from "./video-segment-config";
 import { ZoomModeHelper } from "./ZoomModeHelper";
 
 // Split out of the sidebar chunk: the captions tab is not visible at first
@@ -787,7 +788,7 @@ function ConfigSidebarContent() {
 								onChange={(v) => setProject("audio", "mute", v)}
 							/>
 						</Subfield>
-						{editorInstance.recordings.segments[0].mic?.channels === 2 && (
+						{editorInstance.recordings.segments[0]?.mic?.channels === 2 && (
 							<Subfield name="Microphone Stereo Mode">
 								<KSelect<{ name: string; value: StereoMode }>
 									options={STEREO_MODES}
@@ -1200,6 +1201,18 @@ function ConfigSidebarContent() {
 									}
 								>
 									{(index) => <ImageSegmentConfig index={index} />}
+								</For>
+							</Show>
+							<Show when={selection().type === "video"}>
+								<For
+									each={
+										selection().type === "video"
+											? (selection() as { type: "video"; indices: number[] })
+													.indices
+											: []
+									}
+								>
+									{(index) => <VideoSegmentConfig index={index} />}
 								</For>
 							</Show>
 							<Show

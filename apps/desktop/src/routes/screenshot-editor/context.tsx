@@ -179,7 +179,7 @@ const DEFAULT_PROJECT: ScreenshotProject = {
 	annotations: [],
 } as unknown as ScreenshotProject;
 
-function createScreenshotEditorContext() {
+function createScreenshotEditorContext(props: { imageDrawingIndex?: number }) {
 	const [project, setProject] = createStore<ScreenshotProject>(DEFAULT_PROJECT);
 	const [annotations, setAnnotations] = createStore<Annotation[]>([]);
 	const [selectedAnnotationId, setSelectedAnnotationId] = createSignal<
@@ -221,7 +221,10 @@ function createScreenshotEditorContext() {
 	const [editorInstance] = createResource(async () => {
 		const perfStart = performance.now();
 		const sincePerfStart = () => Math.round(performance.now() - perfStart);
-		const instance = await commands.createScreenshotEditorInstance();
+		const instance =
+			props.imageDrawingIndex === undefined
+				? await commands.createScreenshotEditorInstance()
+				: await commands.createImageDrawingInstance(props.imageDrawingIndex);
 		console.info(
 			`[screenshot-editor] createScreenshotEditorInstance resolved in ${sincePerfStart()}ms`,
 		);
