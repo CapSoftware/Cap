@@ -1751,10 +1751,8 @@ pub async fn get_export_estimates(
     if path != editor.project_path {
         return Err("Export estimate does not match the open project".into());
     }
-    let request = EXPORT_ESTIMATE_REQUESTS.start(path.clone())?;
-    let cancel = request.cancellation();
-    request
-        .run(async {
+    EXPORT_ESTIMATE_REQUESTS
+        .run(path.clone(), |cancel| async move {
             let project = load_export_preview_config(path, settings.cursor_only()).await?;
             let settings = match settings {
                 ExportSettings::Mp4(settings) => {

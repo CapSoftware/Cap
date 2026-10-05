@@ -16,7 +16,20 @@ pub struct EstimateRequests {
 }
 
 impl EstimateRequests {
-    pub fn start(&self, path: PathBuf) -> Result<EstimateRequest<'_>, String> {
+    pub async fn run<T, Fut>(
+        &self,
+        path: PathBuf,
+        estimate: impl FnOnce(Arc<AtomicBool>) -> Fut,
+    ) -> Result<T, String>
+    where
+        Fut: Future<Output = Result<T, String>>,
+    {
+        let request = self.start(path)?;
+        let cancel = request.cancellation();
+        request.run(async move { estimate(cancel).await }).await
+    }
+
+    fn start(&self, path: PathBuf) -> Result<EstimateRequest<'_>, String> {
         let cancel = Arc::new(AtomicBool::new(false));
         if let Some(previous) = self
             .cancellations
@@ -42,21 +55,18 @@ impl EstimateRequests {
     }
 }
 
-pub struct EstimateRequest<'a> {
+struct EstimateRequest<'a> {
     requests: &'a EstimateRequests,
     path: PathBuf,
     cancel: Arc<AtomicBool>,
 }
 
 impl EstimateRequest<'_> {
-    pub fn cancellation(&self) -> Arc<AtomicBool> {
+    fn cancellation(&self) -> Arc<AtomicBool> {
         self.cancel.clone()
     }
 
-    pub async fn run<T>(
-        self,
-        future: impl Future<Output = Result<T, String>>,
-    ) -> Result<T, String> {
+    async fn run<T>(self, future: impl Future<Output = Result<T, String>>) -> Result<T, String> {
         match AssertUnwindSafe(future).catch_unwind().await {
             Ok(result) => result,
             Err(_) => {
@@ -217,6 +227,51 @@ mod tests {
         requests.cancel(Path::new("first.cap"));
         assert!(first.cancellation().load(Ordering::Acquire));
         assert!(!second.cancellation().load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn run_passes_the_registered_cancellation_to_the_estimate() {
+        let requests = EstimateRequests::default();
+        let path = PathBuf::from("example.cap");
+        let result = block_on(requests.run(path.clone(), |cancel| {
+            let requests = &requests;
+            let path = path.clone();
+            async move {
+                assert!(!cancel.load(Ordering::Acquire));
+                requests.cancel(&path);
+                Ok(cancel.load(Ordering::Acquire))
+            }
+        }));
+        assert_eq!(result, Ok(true));
+        assert!(requests.cancellations.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn run_settles_a_panicking_estimate_and_cleans_up() {
+        let requests = EstimateRequests::default();
+        let observed = Arc::new(Mutex::new(None));
+        let seen = observed.clone();
+        let result = block_on(requests.run("example.cap".into(), |cancel| {
+            *seen.lock().unwrap() = Some(cancel);
+            future::poll_fn(|_| -> Poll<Result<(), String>> {
+                panic!("synthetic rendering failure")
+            })
+        }));
+        assert_eq!(result, Err("Export estimate failed unexpectedly".into()));
+        let cancel = observed.lock().unwrap().take().unwrap();
+        assert!(cancel.load(Ordering::Acquire));
+        assert!(requests.cancellations.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn run_settles_a_panic_while_building_the_estimate() {
+        let requests = EstimateRequests::default();
+        let result = block_on(requests.run(
+            "example.cap".into(),
+            |_| -> future::Ready<Result<(), String>> { panic!("synthetic setup failure") },
+        ));
+        assert_eq!(result, Err("Export estimate failed unexpectedly".into()));
+        assert!(requests.cancellations.lock().unwrap().is_empty());
     }
 
     #[test]
