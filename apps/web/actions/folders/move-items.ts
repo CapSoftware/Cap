@@ -28,7 +28,10 @@ import {
 	type MoveFolderDestination,
 	type MoveLocation,
 } from "@/lib/move-items";
-import { canManageOrganizationSettings } from "@/lib/permissions/roles";
+import {
+	canManageOrganizationSettings,
+	getEffectiveSpaceRole,
+} from "@/lib/permissions/roles";
 
 function requireValidLocation(location: MoveLocation) {
 	if (
@@ -214,7 +217,10 @@ export async function placeOwnedVideos({
 	if (!user?.activeOrganizationId) throw new Error("Unauthorized");
 	requireValidLocation(location);
 	const ids = normalizeVideoIds(videoIds).sort();
-	await requireOrganizationAccess(user.id, user.activeOrganizationId);
+	const organizationAccess = await requireOrganizationAccess(
+		user.id,
+		user.activeOrganizationId,
+	);
 	if (location.type === "space") {
 		const access = await getSpaceAccess(user.id, location.spaceId);
 		if (
@@ -227,6 +233,40 @@ export async function placeOwnedVideos({
 		}
 	}
 	await db().transaction(async (tx) => {
+		if (location.type === "space") {
+			const [space] = await tx
+				.select({
+					createdById: spaces.createdById,
+					memberRole: spaceMembers.role,
+				})
+				.from(spaces)
+				.leftJoin(
+					spaceMembers,
+					and(
+						eq(spaceMembers.spaceId, spaces.id),
+						eq(spaceMembers.userId, user.id),
+					),
+				)
+				.where(
+					and(
+						eq(spaces.id, location.spaceId),
+						eq(spaces.organizationId, user.activeOrganizationId),
+					),
+				)
+				.limit(1)
+				.for("update");
+			if (
+				!space ||
+				(!canManageOrganizationSettings(organizationAccess.role) &&
+					!getEffectiveSpaceRole({
+						userId: user.id,
+						createdById: space.createdById,
+						memberRole: space.memberRole,
+					}))
+			) {
+				throw new Error("Space not found");
+			}
+		}
 		const ownedVideos = await tx
 			.select({ id: videos.id })
 			.from(videos)
@@ -246,7 +286,8 @@ export async function placeOwnedVideos({
 				.select({ id: folders.id })
 				.from(folders)
 				.where(and(eq(folders.id, folderId), getFolderScope(user, location)))
-				.limit(1);
+				.limit(1)
+				.for("update");
 			if (!folder) throw new Error("Destination folder not found");
 		}
 		if (location.type === "personal") {

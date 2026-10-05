@@ -113,7 +113,7 @@ describe("placing owned Caps in team folders", () => {
 				location: { type: "organization" },
 			}),
 		).resolves.toEqual({ moved: 2 });
-		expect(locks).toEqual(["update"]);
+		expect(locks).toEqual(["update", "update"]);
 		expect(filters[0]?.sql).toContain("`videos`.`ownerId` = ?");
 		expect(filters[0]?.sql).toContain("`videos`.`orgId` = ?");
 		expect(filters[0]?.params).toEqual([...ids, "owner", "org"]);
@@ -142,13 +142,23 @@ describe("placing owned Caps in team folders", () => {
 	});
 
 	it("lets space members place their own Caps without changing other shares", async () => {
-		results = [[{ id: ids[0] }], [{ id: folderId }], []];
+		results = [
+			[{ createdById: "creator", memberRole: "member" }],
+			[{ id: ids[0] }],
+			[{ id: folderId }],
+			[],
+		];
 		await placeOwnedVideos({
 			videoIds: [ids[0]],
 			folderId,
 			location: { type: "space", spaceId },
 		});
-		expect(filters[1]?.params).toEqual([folderId, "org", spaceId]);
+		expect(filters[0]).toMatchObject({
+			table: "spaces",
+			params: [spaceId, "org"],
+		});
+		expect(locks).toEqual(["update", "update", "update"]);
+		expect(filters[2]?.params).toEqual([folderId, "org", spaceId]);
 		expect(writes.map((write) => write.table)).toEqual([
 			"space_videos",
 			"space_videos",
@@ -157,6 +167,57 @@ describe("placing owned Caps in team folders", () => {
 			expect.objectContaining({ videoId: ids[0], spaceId, folderId }),
 		]);
 	});
+
+	it.each([
+		{ name: "the space was deleted", rows: [] },
+		{
+			name: "space membership was revoked",
+			rows: [{ createdById: "creator", memberRole: null }],
+		},
+	])(
+		"rechecks space access inside the transaction when $name",
+		async ({ rows }) => {
+			results = [rows];
+			await expect(
+				placeOwnedVideos({
+					videoIds: [ids[0]],
+					folderId,
+					location: { type: "space", spaceId },
+				}),
+			).rejects.toThrow("Space not found");
+			expect(mocks.transaction).toHaveBeenCalledOnce();
+			expect(filters).toHaveLength(1);
+			expect(writes).toEqual([]);
+		},
+	);
+
+	it.each([
+		{ role: "admin", createdById: "creator" },
+		{ role: "member", createdById: "owner" },
+	])(
+		"keeps space access for a $role organization role when the space allows it",
+		async ({ role, createdById }) => {
+			mocks.organization.mockResolvedValue({ role });
+			mocks.space.mockResolvedValue({
+				organizationId: "org",
+				organizationRole: role,
+				spaceRole: createdById === "owner" ? "admin" : null,
+				canManage: true,
+			});
+			results = [[{ createdById, memberRole: null }], [{ id: ids[0] }], []];
+			await expect(
+				placeOwnedVideos({
+					videoIds: [ids[0]],
+					folderId: null,
+					location: { type: "space", spaceId },
+				}),
+			).resolves.toEqual({ moved: 1 });
+			expect(writes.map((write) => write.table)).toEqual([
+				"space_videos",
+				"space_videos",
+			]);
+		},
+	);
 
 	it("does not duplicate an existing placement on retry", async () => {
 		results = [[{ id: ids[0] }], [{ videoId: ids[0] }]];
