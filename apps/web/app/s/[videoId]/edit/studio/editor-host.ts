@@ -1541,7 +1541,11 @@ export class EditorHostBridge {
 		let releaseWorkerUse: (() => void) | null = null;
 		let reply: CommandReply;
 		try {
-			releaseWorkerUse = await this.ensureWorkerSession(false, false, true).catch(() => {
+			releaseWorkerUse = await this.ensureWorkerSession(
+				false,
+				false,
+				true,
+			).catch(() => {
 				throw new Error(WORKER_SAVE_UNAVAILABLE);
 			});
 			// A farm render still running for this Save must not replace it
