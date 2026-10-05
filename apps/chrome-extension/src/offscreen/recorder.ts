@@ -1321,6 +1321,8 @@ const startRecording = async (request: StartRecordingRequest) => {
 				pipeline.mimeType,
 				recordingStream.getVideoTracks()[0],
 				isSupported,
+				1,
+				request.mode === "camera" ? "camera" : "screen",
 			),
 		);
 		const cameraRecorder =
@@ -1331,6 +1333,8 @@ const startRecording = async (request: StartRecordingRequest) => {
 							cameraPipeline.mimeType,
 							cameraRecordingStream.getVideoTracks()[0],
 							isSupported,
+							1,
+							"camera",
 						),
 					)
 				: null;

@@ -1757,6 +1757,7 @@ export const useWebRecorder = ({
 					mixedStream.getVideoTracks()[0],
 					(type) => MediaRecorder.isTypeSupported(type),
 					qualityBitrateScale(quality),
+					recordingMode === "camera" ? "camera" : "screen",
 				),
 			);
 			let cameraRecorder: MediaRecorder | null = null;
@@ -1771,6 +1772,7 @@ export const useWebRecorder = ({
 						cameraVideoStream.getVideoTracks()[0],
 						(type) => MediaRecorder.isTypeSupported(type),
 						qualityBitrateScale(quality),
+						"camera",
 					),
 				);
 				cameraRecorder.addEventListener("dataavailable", (event) => {

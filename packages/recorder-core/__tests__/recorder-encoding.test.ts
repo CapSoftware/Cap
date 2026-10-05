@@ -9,12 +9,19 @@ const track = (settings: MediaTrackSettings) =>
 
 describe("recordingBitrate", () => {
 	it("scales with the captured pixels and high frame rates", () => {
-		expect(recordingBitrate(1280, 720, 30)).toBe(3_500_000);
-		expect(recordingBitrate(1920, 1080, 30)).toBe(6_000_000);
-		expect(recordingBitrate(2560, 1600, 30)).toBe(9_000_000);
-		expect(recordingBitrate(3840, 2160, 30)).toBe(14_000_000);
-		expect(recordingBitrate(1920, 1080, 60)).toBe(9_000_000);
-		expect(recordingBitrate(undefined, undefined, undefined)).toBe(6_000_000);
+		expect(recordingBitrate(1280, 720, 30)).toBe(2_500_000);
+		expect(recordingBitrate(1920, 1080, 30)).toBe(4_000_000);
+		expect(recordingBitrate(2560, 1600, 30)).toBe(6_000_000);
+		expect(recordingBitrate(3840, 2160, 30)).toBe(10_000_000);
+		expect(recordingBitrate(1920, 1080, 60)).toBe(6_000_000);
+		expect(recordingBitrate(undefined, undefined, undefined)).toBe(4_000_000);
+	});
+
+	it("gives cameras a lower camera-shaped rate", () => {
+		expect(recordingBitrate(1280, 720, 30, "camera")).toBe(2_000_000);
+		expect(recordingBitrate(1920, 1080, 30, "camera")).toBe(3_500_000);
+		expect(recordingBitrate(3840, 2160, 30, "camera")).toBe(8_000_000);
+		expect(recordingBitrate(1920, 1080, 60, "camera")).toBe(5_250_000);
 	});
 });
 
@@ -26,8 +33,20 @@ describe("recorderOptions", () => {
 			() => true,
 		);
 		expect(options.mimeType).toBe('video/mp4;codecs="avc1.640033,mp4a.40.2"');
-		expect(options.videoBitsPerSecond).toBe(14_000_000);
+		expect(options.videoBitsPerSecond).toBe(10_000_000);
 		expect(options.videoKeyFrameIntervalDuration).toBe(2000);
+	});
+
+	it("scales a camera track's rate for the quality level", () => {
+		expect(
+			recorderOptions(
+				'video/mp4;codecs="avc1.64002A"',
+				track({ width: 1920, height: 1080, frameRate: 30 }),
+				() => true,
+				1.6,
+				"camera",
+			).videoBitsPerSecond,
+		).toBe(5_600_000);
 	});
 
 	it("keeps the chosen type when the sized one is unsupported or not H.264", () => {

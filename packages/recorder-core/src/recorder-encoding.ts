@@ -29,22 +29,38 @@ export function pickMobileSafeAvcCodec(
 	return LEVEL_5_2_CODEC;
 }
 
+export type RecordingContent = "screen" | "camera";
+
+// Bits per second at 30 fps for captures up to 720p, 1080p, 1600p and above.
+// Screens are mostly still, so the browser spends far less than the target
+// on them; the target only caps scrolling and motion, where text stays sharp
+// at these rates. A camera is never still (sensor noise, people moving), so
+// the encoder always spends its whole target: cameras get about 60% of the
+// screen rate, which measured within run-to-run noise of the old screen rate
+// at the size the camera is shown and about 1-2 VMAF lower full frame.
+const BITRATES: Record<RecordingContent, readonly number[]> = {
+	screen: [2_500_000, 4_000_000, 6_000_000, 10_000_000],
+	camera: [2_000_000, 3_500_000, 5_000_000, 8_000_000],
+};
+
 // Chrome's MediaRecorder defaults to ~2.5 Mb/s, which smears text in screen
 // recordings; scale with the pixels being captured instead.
 export function recordingBitrate(
 	width: number | undefined,
 	height: number | undefined,
 	frameRate: number | undefined,
+	content: RecordingContent = "screen",
 ) {
 	const pixels = (width ?? 1920) * (height ?? 1080);
+	const [hd, fullHd, qhd, uhd] = BITRATES[content];
 	const base =
 		pixels <= 1280 * 720
-			? 3_500_000
+			? hd
 			: pixels <= 1920 * 1088
-				? 6_000_000
+				? fullHd
 				: pixels <= 2560 * 1600
-					? 9_000_000
-					: 14_000_000;
+					? qhd
+					: uhd;
 	return (frameRate ?? 30) > 40 ? Math.round(base * 1.5) : base;
 }
 
@@ -55,7 +71,7 @@ type RecorderOptions = MediaRecorderOptions & {
 /**
  * MediaRecorder options for a video track: H.264 at the level its size needs
  * (a level below the capture size makes some encoders fail), a bitrate for
- * the size, and a keyframe every two seconds so the recording can be cut
+ * the size and content, and a keyframe every two seconds so the recording can be cut
  * into chunks and remuxed rather than re-encoded later. Browsers ignore the
  * keyframe option when unsupported.
  */
@@ -64,13 +80,18 @@ export function recorderOptions(
 	track: MediaStreamTrack | undefined,
 	isSupported: (type: string) => boolean,
 	bitrateScale = 1,
+	content: RecordingContent = "screen",
 ): RecorderOptions {
 	const settings = track?.getSettings?.() ?? {};
 	const options: RecorderOptions = {
 		mimeType,
 		videoBitsPerSecond: Math.round(
-			recordingBitrate(settings.width, settings.height, settings.frameRate) *
-				bitrateScale,
+			recordingBitrate(
+				settings.width,
+				settings.height,
+				settings.frameRate,
+				content,
+			) * bitrateScale,
 		),
 		videoKeyFrameIntervalDuration: 2000,
 	};
