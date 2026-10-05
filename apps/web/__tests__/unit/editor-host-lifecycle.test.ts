@@ -2642,6 +2642,50 @@ test("a worker Save the worker can't take fails with Retry and publishes nothing
 	}
 });
 
+test("a worker Save waits only as long as a Save does for a busy editor pool", async () => {
+	vi.useFakeTimers();
+	let preparations = 0;
+	const { bridge, port } = await browserSaveHost(async (url, init) => {
+		if (url === "/api/editor/sessions/session/save?videoId=video")
+			return Response.json(savePlan("worker", "The render farm is down"));
+		if (url === "/api/editor/preparations" && init?.method === "POST") {
+			preparations++;
+			return Response.json(
+				{ _tag: "EditorCapacityBusy", retryAfterMs: 1_000 },
+				{ status: 503 },
+			);
+		}
+		throw new Error(`Unexpected editor request ${url}`);
+	});
+	const replies = new Map<number, unknown>();
+	port.onmessage = (event) => {
+		if (event.data.kind !== "channel") replies.set(event.data.id, event.data);
+	};
+	try {
+		port.postMessage({
+			kind: "invoke",
+			id: 1,
+			name: "tauri:webEditorSave",
+			args: [undefined],
+		});
+		await vi.waitFor(() => expect(replies.has(1)).toBe(true));
+		port.postMessage({
+			kind: "invoke",
+			id: 2,
+			name: "tauri:webEditorSaveOnWorker",
+			args: ["__CHANNEL__:7"],
+		});
+		for (let elapsed = 0; elapsed < 25_000 && !replies.has(2); elapsed += 1_000)
+			await vi.advanceTimersByTimeAsync(1_000);
+		expect(replies.get(2)).toMatchObject({ kind: "error" });
+		expect(preparations).toBeGreaterThan(1);
+	} finally {
+		port.close();
+		bridge.dispose();
+		vi.useRealTimers();
+	}
+});
+
 test("the default style for new recordings is loaded, saved and cleared through the account", async () => {
 	const style = { version: 1, background: { padding: 10 } };
 	const requests: Array<{ url: string; method?: string; body?: unknown }> = [];

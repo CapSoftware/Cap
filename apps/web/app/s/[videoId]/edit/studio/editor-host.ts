@@ -812,7 +812,13 @@ export class EditorHostBridge {
 	 */
 	/// `forCaptions` is the caption request that is itself `activeCaptions`,
 	/// which must not count as work blocking a stale session's replacement.
-	private async ensureWorkerSession(forSave = false, forCaptions = false) {
+	/// `waitForCapacity` waits, as Save does, for a busy pool to free a worker
+	/// instead of failing at once.
+	private async ensureWorkerSession(
+		forSave = false,
+		forCaptions = false,
+		waitForCapacity = forSave,
+	) {
 		if (!this.browserOnly) return () => undefined;
 		const previous = this.pendingWorkerAcquisition;
 		let unlock: () => void = () => undefined;
@@ -822,13 +828,21 @@ export class EditorHostBridge {
 		this.cancelWorkerIdleRelease();
 		await previous;
 		try {
-			return await this.acquireWorkerSession(forSave, forCaptions);
+			return await this.acquireWorkerSession(
+				forSave,
+				forCaptions,
+				waitForCapacity,
+			);
 		} finally {
 			unlock();
 		}
 	}
 
-	private async acquireWorkerSession(forSave: boolean, forCaptions = false) {
+	private async acquireWorkerSession(
+		forSave: boolean,
+		forCaptions: boolean,
+		waitForCapacity: boolean,
+	) {
 		if (this.disposed) throw new Error("Editor bridge is closed");
 		this.cancelWorkerIdleRelease();
 		await this.pendingWorkerRelease;
@@ -865,7 +879,7 @@ export class EditorHostBridge {
 				}
 				await this.prepareWorkerSession(
 					captionsEnabled,
-					forSave ? SAVE_CAPACITY_WAIT_MS : undefined,
+					waitForCapacity ? SAVE_CAPACITY_WAIT_MS : undefined,
 				);
 				if (
 					!forSave &&
@@ -1527,7 +1541,7 @@ export class EditorHostBridge {
 		let releaseWorkerUse: (() => void) | null = null;
 		let reply: CommandReply;
 		try {
-			releaseWorkerUse = await this.ensureWorkerSession().catch(() => {
+			releaseWorkerUse = await this.ensureWorkerSession(false, false, true).catch(() => {
 				throw new Error(WORKER_SAVE_UNAVAILABLE);
 			});
 			// A farm render still running for this Save must not replace it
