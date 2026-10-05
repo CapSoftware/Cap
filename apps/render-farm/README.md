@@ -58,15 +58,18 @@ one S3 multipart upload.
 docker build -f apps/render-farm/Dockerfile -t cap-render-farm .
 ```
 
-Before upgrading from the initial unversioned journal format, stop accepting new
-exports and let the active jobs finish. That format did not durably reserve upload
-ranges, so version 2 refuses to resume those unfinished uploads and aborts them.
-Jobs created with version 2 can resume across subsequent coordinator restarts.
+The journal format is versioned. On restart the coordinator resumes only jobs
+written in its own version and aborts the uploads of any others, so before
+deploying a version that changes it, stop sending exports and let the active
+jobs finish. Version 3 (stashed chunk openings instead of padded parts)
+replaces version 2.
 
 Run workers with the NVIDIA container toolkit (`--gpus all`) and `--init`.
 Give the coordinator a bucket-scoped IAM role (or keys), a shared `RF_TOKEN`,
 and a lifecycle rule on the bucket that aborts incomplete multipart uploads and
-expires `hls/` and `jobs/` objects.
+expires `hls/`, `jobs/` and `stash/` objects. The coordinator deletes each
+export's `stash/` objects when it ends and sweeps any it missed, so a day's
+expiry there is only a backstop.
 
 | Variable | Default | Role |
 | --- | --- | --- |
@@ -85,6 +88,7 @@ expires `hls/` and `jobs/` objects.
 | `RF_SLOT_MEGAPIXELS_PER_SEC` | `450` | Planning estimate of one slot's throughput |
 | `RF_HLS` / `RF_HLS_SEGMENT_SECONDS` | on / `2` | Progressive HLS output |
 | `RF_LEAD_IN_SECONDS` | `4` | Length of the lead-in chunk |
+| `RF_MIN_AUDIO_SECTION_SECONDS` | `10` | Shortest audio section; shorter sections spread a short export's audio over more lanes |
 | `RF_JOURNAL` | on | Resume unfinished jobs after a coordinator restart |
 | `RF_MAX_ACTIVE_JOBS` | `32` | Further `POST /jobs` get `429` |
 | `RF_MAX_SOURCE_FILES` / `RF_MAX_SOURCE_BYTES` | `4096` / 256 GiB | Largest recording manifest a job accepts |
@@ -93,7 +97,7 @@ expires `hls/` and `jobs/` objects.
 | `RF_JOB_STALL_MS` / `RF_JOB_RETENTION_MS` | 10 min / 1 h | Job watchdog and summary retention |
 | `RF_STALL_MS` | `30000` | Worker engine watchdog |
 | `RF_DRAIN_MS` | 15 min | Longest a `SIGTERM` drain may take |
-| `CAP_DECODER_READAHEAD` | `8` | Frames each decoder decodes ahead of the renderer |
+| `CAP_DECODER_READAHEAD` | `0` | Frames each decoder decodes ahead of the renderer. Leave off until the decoder's readahead keeps the first frames of a clip (see the worker's `engineEnv`) |
 | `RF_HOT_SWAP` | off | Development: pull the engine, app and tuning from the bucket's `bin/` pointers |
 
 ## Product integration

@@ -2,11 +2,16 @@ import { describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { TranscodeTask, WorkItem } from "./protocol";
+import { MIN_PART, type TranscodeTask, type WorkItem } from "./protocol";
+import * as stitch from "./stitch";
 import * as transcode from "./transcode";
 
 function harness(
-	options: { presignGate?: Promise<void>; probeStalls?: boolean } = {},
+	options: {
+		presignGate?: Promise<void>;
+		probeStalls?: boolean;
+		stashFails?: boolean;
+	} = {},
 ) {
 	const spawned: string[] = [];
 	const killed: string[] = [];
@@ -26,6 +31,9 @@ function harness(
 		mkdirSync: () => {},
 		rmSync: (path: string) => removed.push(path),
 		mediaS3ConfigFromEnv: () => ({}),
+		s3ConfigFromEnv: () => ({}),
+		...stitch,
+		MIN_PART,
 		S3: class {
 			async presignFresh() {
 				await options.presignGate;
@@ -34,6 +42,14 @@ function harness(
 			async uploadFile() {
 				uploads++;
 				return 42;
+			}
+			put() {
+				return options.stashFails
+					? Promise.reject(new Error("stash upload failed"))
+					: Promise.resolve();
+			}
+			async uploadPart() {
+				return "etag";
 			}
 		},
 		process: {
@@ -81,13 +97,21 @@ function harness(
 	const compiled = new Bun.Transpiler({ loader: "ts" }).transformSync(source);
 	const worker = new Function(
 		...Object.keys(deps),
-		`${compiled}\nreturn {runTranscode, cancel, busy, progress, transcoders};`,
+		`${compiled}\nreturn {runTranscode, cancel, busy, progress, transcoders, engineEnv, uploadLayout};`,
 	)(...Object.values(deps)) as {
 		runTranscode: (task: TranscodeTask, slot: number) => Promise<number>;
 		cancel: (taskIds: string[]) => void;
 		busy: Map<number, WorkItem>;
 		progress: Map<number, { lastProgressAt: number }>;
 		transcoders: Map<number, unknown>;
+		engineEnv: (
+			env: Record<string, string | undefined>,
+		) => Record<string, string>;
+		uploadLayout: (
+			task: unknown,
+			segments: { bytes: Uint8Array }[],
+			bytes: number,
+		) => Promise<unknown>;
 	};
 	return {
 		...worker,
@@ -158,5 +182,48 @@ describe("transcode cancellation", () => {
 		expect(h.uploads()).toBe(1);
 		expect(h.transcoders.size).toBe(0);
 		expect(h.progress.size).toBe(0);
+	});
+});
+
+describe("engine environment", () => {
+	test("keeps decoder readahead off unless the deployment sets it", () => {
+		const h = harness();
+		expect(h.engineEnv({}).CAP_DECODER_READAHEAD).toBe("0");
+		expect(
+			h.engineEnv({ CAP_DECODER_READAHEAD: "4" }).CAP_DECODER_READAHEAD,
+		).toBe("4");
+	});
+});
+
+describe("chunk upload", () => {
+	const upload = {
+		key: "out/job.mp4",
+		uploadId: "upload",
+		firstPart: 2,
+		partLimit: 3,
+		partTarget: MIN_PART,
+		stashKey: "stash/job/0",
+	};
+	const chunk = new Uint8Array(1024);
+
+	test("a stash that failed before the final wait fails the chunk", async () => {
+		const worker = harness({ stashFails: true });
+		await expect(
+			worker.uploadLayout({ upload }, [{ bytes: chunk }], chunk.byteLength),
+		).rejects.toThrow("stash upload failed");
+	});
+
+	test("a stored stash reports the chunk's bytes", async () => {
+		const worker = harness();
+		expect(
+			await worker.uploadLayout(
+				{ upload },
+				[{ bytes: chunk }],
+				chunk.byteLength,
+			),
+		).toEqual({
+			parts: [],
+			stash: { key: "stash/job/0", bytes: chunk.byteLength },
+		});
 	});
 });

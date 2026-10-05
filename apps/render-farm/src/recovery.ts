@@ -30,13 +30,15 @@ export function acceptOnce(
 }
 
 export async function completeUpload(
-	s3: Pick<S3, "head" | "getRange" | "uploadPart" | "completeMultipart">,
+	s3: Pick<S3, "head" | "getRange" | "completeMultipart">,
 	upload: {
 		key: string;
 		uploadId: string;
 		header: Uint8Array;
 		payloadSize: number;
 		parts: { partNumber: number; etag: string }[];
+		/** Writes the coordinator's own parts (header and stashes); idempotent. */
+		prepare: () => Promise<{ partNumber: number; etag: string }[]>;
 	},
 	persist: (intent: string) => Promise<void>,
 ) {
@@ -59,13 +61,11 @@ export async function completeUpload(
 	if (await completed()) return size;
 	await persist(JSON.stringify({ uploadId, size, headerHash }));
 	try {
-		const etag = await s3.uploadPart(key, uploadId, 1, header);
+		const own = await upload.prepare();
 		const accepted = await s3.completeMultipart(
 			key,
 			uploadId,
-			[...parts, { partNumber: 1, etag }].sort(
-				(a, b) => a.partNumber - b.partNumber,
-			),
+			[...parts, ...own].sort((a, b) => a.partNumber - b.partNumber),
 			{ ifNoneMatch: true },
 		);
 		if (!accepted && !(await completed())) {
