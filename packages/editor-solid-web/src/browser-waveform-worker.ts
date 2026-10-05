@@ -385,8 +385,12 @@ async function rangedAudioSource(url: string): Promise<Source | null> {
 scope.addEventListener("message", (event) => {
 	const message = event.data;
 	if ("grant" in message) {
-		grants.get(message.grant)?.(message.bytes);
-		grants.delete(message.grant);
+		const grant =
+			typeof message.grant === "number" ? grants.get(message.grant) : undefined;
+		if (typeof grant === "function") {
+			grants.delete(message.grant);
+			grant(message.bytes);
+		}
 		return;
 	}
 	void waveform(message.url).then(
