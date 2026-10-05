@@ -55,9 +55,8 @@ afterEach(() => {
 
 describe("client Sentry", () => {
 	it("replays navigations from before the SDK loaded once it has", async () => {
-		const { forwardRouterTransitionStart, loadSentry } = await loadModule(
-			"/s/abc/edit/studio",
-		);
+		const { forwardRouterTransitionStart, loadSentry } =
+			await loadModule("/s/abc/edit/studio");
 		forwardRouterTransitionStart("/s/abc", "push");
 		expect(sentry.captureRouterTransitionStart).not.toHaveBeenCalled();
 		await loadSentry();
