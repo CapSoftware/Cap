@@ -239,10 +239,6 @@ impl AudioStream {
         }
         decoder.set_packet_time_base(stream.time_base());
         let channels = if source_channels <= 1 { 1 } else { 2 };
-        let mut options = ffmpeg::Dictionary::new();
-        options.set("filter_size", "128");
-        // FFmpeg parses decimal options using LC_NUMERIC, so use a locale-neutral ratio.
-        options.set("cutoff", "97/100");
         let resampler = resampling::Context::get_with(
             decoder.format(),
             decoder.channel_layout(),
@@ -250,7 +246,7 @@ impl AudioStream {
             crate::AudioData::SAMPLE_FORMAT,
             ChannelLayout::default(channels as i32),
             crate::AudioData::SAMPLE_RATE,
-            options,
+            crate::high_quality_resampler_options(),
         )
         .map_err(|e| at_open("resampler-open", e.to_string()))?;
         if cancellation.is_cancelled() {

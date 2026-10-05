@@ -8,6 +8,15 @@ use std::{ops::Range, path::Path};
 
 use crate::cast_bytes_to_f32_slice;
 
+pub fn high_quality_resampler_options() -> ffmpeg::Dictionary<'static> {
+    let mut options = ffmpeg::Dictionary::new();
+    options.set("filter_size", "128");
+    // FFmpeg parses option values with strtod, which honours LC_NUMERIC. GTK applies the
+    // user's locale on Linux, so "0.97" fails with EINVAL under comma-decimal locales (#2359).
+    options.set("cutoff", "97/100");
+    options
+}
+
 // F32 Packed 48kHz audio
 pub struct AudioData {
     samples: Vec<f32>,
@@ -61,10 +70,6 @@ impl AudioData {
 
         let target_channels = target_channels_for_source(source_channels);
         let target_channel_layout = ChannelLayout::default(target_channels as i32);
-        let mut options = ffmpeg::Dictionary::new();
-        options.set("filter_size", "128");
-        options.set("cutoff", "0.97");
-
         let mut resampler = resampling::Context::get_with(
             decoder.format(),
             decoder.channel_layout(),
@@ -72,7 +77,7 @@ impl AudioData {
             AudioData::SAMPLE_FORMAT,
             target_channel_layout,
             AudioData::SAMPLE_RATE,
-            options,
+            high_quality_resampler_options(),
         )
         .map_err(|e| format!("Resampler / {e}"))?;
 
@@ -451,9 +456,6 @@ mod tests {
                 let output_layout =
                     ChannelLayout::default(i32::from(target_channels_for_source(channels as u16)));
                 let create_resampler = || {
-                    let mut options = ffmpeg::Dictionary::new();
-                    options.set("filter_size", "128");
-                    options.set("cutoff", "0.97");
                     resampling::Context::get_with(
                         source_format,
                         source_layout,
@@ -461,7 +463,7 @@ mod tests {
                         AudioData::SAMPLE_FORMAT,
                         output_layout,
                         AudioData::SAMPLE_RATE,
-                        options,
+                        high_quality_resampler_options(),
                     )
                     .unwrap()
                 };
