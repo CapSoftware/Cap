@@ -61,11 +61,8 @@ export function perfSpan(name: string, start: number) {
 	samples.push(performance.now() - start);
 }
 
-/// Records one occurrence of `name` with its time, for following a sequence
-/// such as a playback start.
 export function perfEvent(name: string) {
-	if (!perf) return;
-	if (perf.events.length >= MAX_SAMPLES) perf.events.shift();
+	if (!perf || perf.events.length >= MAX_SAMPLES) return;
 	perf.events.push([performance.now(), name]);
 }
 

@@ -56,9 +56,6 @@ export function firstTailBytes(size: number | null, duration: number | null) {
 	return Math.max(MIN_TAIL, Math.min(MAX_FIRST_TAIL, rounded));
 }
 
-/// Whether an MP4 whose first bytes are `head` keeps all it needs at the
-/// front: a complete `moov` without `mvex` (not fragmented) ahead of the
-/// media, so nothing reads its tail.
 export function mp4NeedsNoTail(head: Uint8Array) {
 	const view = new DataView(head.buffer, head.byteOffset, head.byteLength);
 	let offset = 0;
@@ -273,9 +270,8 @@ export class RemoteMedia {
 		if (this.sizeValue === null) this.sizeValue = size;
 	}
 
-	/// Starts reading the head and tail. The tail of an MP4 whose head holds
-	/// its whole `moov` is never used, so its read stops once the head shows
-	/// that.
+	/// Starts reading the head and tail. An unfragmented MP4 with its `moov`
+	/// up front never uses its tail.
 	warm() {
 		const tail = new AbortController();
 		void this.head()
@@ -396,7 +392,6 @@ export class RemoteMedia {
 				pinned.bytes.catch(() => null),
 			]).then(async ([size, last]) => {
 				const start = Math.max(0, size - length);
-				// Only the bytes before the pinned tail are fetched.
 				const pinnedStart = last ? size - last.byteLength : size;
 				const response = await this.network(start, pinnedStart);
 				const front = await readAll(response.body, pinnedStart - start);
