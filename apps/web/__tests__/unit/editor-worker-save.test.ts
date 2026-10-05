@@ -223,7 +223,6 @@ test("a worker Save the worker can't start withdraws only its own record", async
 				: Response.json({ timeline: null });
 		return new Response(null, { status: 503 });
 	};
-	// The mocked services need nothing from the context.
 	const exit = await Effect.runPromiseExit(
 		startWorkerSave(
 			"video" as never,
