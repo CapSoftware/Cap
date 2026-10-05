@@ -1,13 +1,9 @@
 import { afterEach, expect, test, vi } from "vitest";
 import { EditorHostBridge } from "../../app/s/[videoId]/edit/studio/editor-host";
-import {
-	uploadWebEditorExport,
-	uploadWebEditorFile,
-} from "../../lib/editor-export-upload-client";
+import { uploadWebEditorExport } from "../../lib/editor-export-upload-client";
 
 vi.mock("@/lib/editor-export-upload-client", () => ({
 	uploadWebEditorExport: vi.fn(async () => undefined),
-	uploadWebEditorFile: vi.fn(async () => undefined),
 }));
 
 const ticket = "a".repeat(43);
@@ -2387,40 +2383,46 @@ async function browserSaveHost(
 	return { bridge, port, invoke, requests };
 }
 
-test("Save renders in the browser without an editor worker when the farm is unavailable", async () => {
-	const { bridge, port, invoke, requests } = await browserSaveHost(
-		async (url) => {
-			if (url === "/api/editor/sessions/session/save?videoId=video")
-				return Response.json({
-					renderer: "browser",
-					reason: "The render farm is not configured",
-				});
-			throw new Error(`Unexpected editor request ${url}`);
-		},
-	);
+const workerSettings = {
+	format: "Mp4",
+	fps: 30,
+	resolution_base: { x: 1920, y: 1080 },
+	compression: "Maximum",
+	custom_bpp: null,
+};
+
+function savePlan(renderer: "farm" | "worker", reason: string | null = null) {
+	return { renderer, reason, direct: false, workerSettings };
+}
+
+test("Save goes to an editor worker when the farm is unavailable", async () => {
+	const { bridge, port, invoke } = await browserSaveHost(async (url) => {
+		if (url === "/api/editor/sessions/session/save?videoId=video")
+			return Response.json(
+				savePlan("worker", "The render farm is not configured"),
+			);
+		throw new Error(`Unexpected editor request ${url}`);
+	});
 	try {
 		expect(await invoke("tauri:webEditorSave")).toEqual({
 			kind: "result",
 			id: 1,
 			value: {
-				renderer: "browser",
+				renderer: "worker",
 				reason: "The render farm is not configured",
 			},
 		});
-		expect(requests.some(({ url }) => url.includes("preparations"))).toBe(
-			false,
-		);
 	} finally {
 		port.close();
 		bridge.dispose();
 	}
 });
 
-test("Save falls back to the browser when no editor worker can prepare", async () => {
+test("Save goes to an editor worker when the farm can't start it", async () => {
 	const { bridge, port, invoke, requests } = await browserSaveHost(
 		async (url, init) => {
 			if (url === "/api/editor/sessions/session/save?videoId=video")
-				return Response.json({ renderer: "farm", reason: null });
+				return Response.json(savePlan("farm"));
 			if (url === "/api/editor/preparations" && init?.method === "POST")
 				return Response.json({ _tag: "ServiceUnavailable" }, { status: 503 });
 			throw new Error(`Unexpected editor request ${url}`);
@@ -2431,7 +2433,7 @@ test("Save falls back to the browser when no editor worker can prepare", async (
 			kind: "result",
 			id: 1,
 			value: {
-				renderer: "browser",
+				renderer: "worker",
 				reason:
 					"The editor server is unavailable right now. Try again in a moment.",
 			},
@@ -2451,7 +2453,7 @@ test("Save starts on the farm through a prepared worker and keeps plan errors", 
 	let saveStatus = 200;
 	const { bridge, port, invoke } = await browserSaveHost(async (url, init) => {
 		if (url === "/api/editor/sessions/session/save?videoId=video")
-			return Response.json({ renderer: "farm", reason: null });
+			return Response.json(savePlan("farm"));
 		if (url === "/api/editor/preparations" && init?.method === "POST")
 			return Response.json({ id: "prep-1", status: "preparing" });
 		if (url.startsWith("/api/editor/preparations/prep-1"))
@@ -2487,44 +2489,153 @@ test("Save starts on the farm through a prepared worker and keeps plan errors", 
 	}
 });
 
-test("a browser-rendered Save withdraws any farm render before publishing the file", async () => {
-	const upload = vi.mocked(uploadWebEditorFile);
-	upload.mockClear();
+function workerSaveRequests() {
 	const order: string[] = [];
-	upload.mockImplementation(async () => {
-		order.push("upload");
-	});
-	const { bridge, port, invoke } = await browserSaveHost(async (url, init) => {
-		if (
-			url === "/api/editor/sessions/session/save?videoId=video" &&
-			init?.method === "DELETE"
-		) {
-			order.push("withdraw");
-			return new Response(null, { status: 204 });
+	const request = async (url: string, init?: RequestInit) => {
+		if (url === "/api/editor/sessions/session/save?videoId=video") {
+			if (init?.method === "DELETE") {
+				order.push("withdraw");
+				return new Response(null, { status: 204 });
+			}
+			return Response.json(savePlan("worker", "The render farm is down"));
 		}
+		if (url === "/api/editor/preparations" && init?.method === "POST")
+			return Response.json({ id: "prep-1", status: "preparing" });
+		if (url.startsWith("/api/editor/preparations/prep-1"))
+			return Response.json({ status: "ready", sessionId: "worker-1" });
+		if (url === "/api/editor/sessions/worker-1/exports") {
+			order.push(
+				`export ${JSON.stringify(JSON.parse(String(init?.body)).settings)}`,
+			);
+			return Response.json({ id: "job", status: "running" });
+		}
+		if (url.startsWith("/api/editor/sessions/worker-1/exports/job?")) {
+			if (init?.method === "DELETE") {
+				order.push("cleanup");
+				return Response.json({ canceled: true });
+			}
+			return Response.json({
+				...exportState("ready"),
+				mediaMetadata: { duration: 3, width: 1920, height: 1080, fps: 30 },
+			});
+		}
+		if (url.startsWith("/api/editor/sessions/worker-1?"))
+			return Response.json({ closed: true });
 		throw new Error(`Unexpected editor request ${url}`);
+	};
+	return { order, request };
+}
+
+test("a worker Save withdraws the farm render, renders on the worker with the farm's settings and publishes", async () => {
+	const upload = vi.mocked(uploadWebEditorExport);
+	upload.mockClear();
+	const worker = workerSaveRequests();
+	upload.mockImplementation(async (...args) => {
+		worker.order.push("upload");
+		args[6]?.({ stage: "uploading", fraction: 0.5 });
 	});
-	const file = new Blob([new Uint8Array(16)], { type: "video/mp4" });
-	const metadata = { duration: 4, width: 1920, height: 1080, fps: 30 };
+	const { bridge, port, invoke } = await browserSaveHost(worker.request);
+	const channel: unknown[] = [];
 	try {
-		expect(
-			await invoke("tauri:webEditorPublishRendered", [
-				file,
-				metadata,
-				"__CHANNEL__:7",
-			]),
-		).toEqual({
+		await invoke("tauri:webEditorSave");
+		const reply = new Promise<unknown>((resolve) => {
+			port.onmessage = (event) => {
+				if (event.data.kind === "channel") channel.push(event.data.value);
+				else resolve(event.data);
+			};
+		});
+		port.postMessage({
+			kind: "invoke",
+			id: 2,
+			name: "tauri:webEditorSaveOnWorker",
+			args: ["__CHANNEL__:7"],
+		});
+		expect(await reply).toEqual({
 			kind: "result",
-			id: 1,
+			id: 2,
 			value: { shareUrl: "http://127.0.0.1:3000/s/video" },
 		});
-		expect(order).toEqual(["withdraw", "upload"]);
-		expect(upload.mock.calls[0]?.slice(0, 4)).toEqual([
-			"video",
-			"session",
-			file,
-			metadata,
+		expect(worker.order).toEqual([
+			"withdraw",
+			`export ${JSON.stringify(workerSettings)}`,
+			"upload",
+			"cleanup",
 		]);
+		expect(upload.mock.calls[0]?.slice(0, 5)).toEqual([
+			"video",
+			"worker-1",
+			"job",
+			160_000,
+			{ duration: 3, width: 1920, height: 1080, fps: 30 },
+		]);
+		expect(channel).toContainEqual({ stage: "rendering", progress: 1 });
+		expect(channel).toContainEqual({ stage: "uploading", progress: 0.5 });
+	} finally {
+		upload.mockReset();
+		upload.mockImplementation(async () => undefined);
+		port.close();
+		bridge.dispose();
+	}
+});
+
+test("a Save neither the farm nor a worker can take fails with Retry and renders nothing here", async () => {
+	const upload = vi.mocked(uploadWebEditorExport);
+	upload.mockClear();
+	const { bridge, port, invoke, requests } = await browserSaveHost(
+		async (url, init) => {
+			if (url === "/api/editor/sessions/session/save?videoId=video")
+				return new Response(null, { status: 503 });
+			if (url === "/api/editor/preparations" && init?.method === "POST")
+				return Response.json({ _tag: "ServiceUnavailable" }, { status: 503 });
+			throw new Error(`Unexpected editor request ${url}`);
+		},
+	);
+	try {
+		const unavailable =
+			"Save is unavailable right now: neither the render farm nor an editor server could take it. Try again in a moment, or use Download.";
+		expect(await invoke("tauri:webEditorSave")).toEqual({
+			kind: "error",
+			id: 1,
+			error: unavailable,
+		});
+		expect(
+			await invoke("tauri:webEditorSaveOnWorker", ["__CHANNEL__:7"]),
+		).toEqual({
+			kind: "error",
+			id: 1,
+			error: "Save request was invalid",
+		});
+		expect(upload).not.toHaveBeenCalled();
+		expect(requests.some(({ url }) => url.includes("browser-save"))).toBe(
+			false,
+		);
+	} finally {
+		port.close();
+		bridge.dispose();
+	}
+});
+
+test("a worker Save the worker can't take fails with Retry and publishes nothing", async () => {
+	const upload = vi.mocked(uploadWebEditorExport);
+	upload.mockClear();
+	const { bridge, port, invoke } = await browserSaveHost(async (url, init) => {
+		if (url === "/api/editor/sessions/session/save?videoId=video")
+			return Response.json(savePlan("worker", "The render farm is down"));
+		if (url === "/api/editor/preparations" && init?.method === "POST")
+			return Response.json({ _tag: "ServiceUnavailable" }, { status: 503 });
+		throw new Error(`Unexpected editor request ${url}`);
+	});
+	try {
+		await invoke("tauri:webEditorSave");
+		expect(
+			await invoke("tauri:webEditorSaveOnWorker", ["__CHANNEL__:7"]),
+		).toEqual({
+			kind: "error",
+			id: 1,
+			error:
+				"Save is unavailable right now: neither the render farm nor an editor server could take it. Try again in a moment, or use Download.",
+		});
+		expect(upload).not.toHaveBeenCalled();
 	} finally {
 		port.close();
 		bridge.dispose();

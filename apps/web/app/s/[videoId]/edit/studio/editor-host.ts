@@ -15,7 +15,6 @@ import {
 } from "@/lib/editor-caption-client";
 import {
 	uploadWebEditorExport,
-	uploadWebEditorFile,
 	type WebEditorExportMetadata,
 } from "@/lib/editor-export-upload-client";
 import { startWebEditorPreparation } from "@/lib/editor-preparation-client";
@@ -101,6 +100,8 @@ const CHANNEL_PATTERN = /^__CHANNEL__:(\d+)$/;
 const EXPORT_START_TIMEOUT_MS = 20_000;
 const EXPORT_CANCEL_TIMEOUT_MS = 10_000;
 const SAVE_CAPACITY_WAIT_MS = 15_000;
+const WORKER_SAVE_UNAVAILABLE =
+	"Save is unavailable right now: neither the render farm nor an editor server could take it. Try again in a moment, or use Download.";
 const AUDIO_CONTENT_TYPES: Record<string, string> = {
 	ogg: "audio/ogg",
 	m4a: "audio/mp4",
@@ -385,23 +386,6 @@ async function openSocket(credential: SocketCredential, signal: AbortSignal) {
 	}
 }
 
-// Chunk bytes waiting to upload before the stream gives up on keeping up.
-const BROWSER_SAVE_CHUNK_BACKLOG = 64 * 1024 * 1024;
-
-type BrowserSaveChunks = {
-	saveId: string;
-	queued: number;
-	/// Durations of the chunks in the playlist.
-	durations: number[];
-	/// Chunks uploaded ahead of one still uploading, by number.
-	uploaded: Map<number, number>;
-	uploads: Set<Promise<void>>;
-	initUploaded: boolean;
-	backlog: number;
-	reportedAt: number;
-	stopped: boolean;
-};
-
 export class EditorHostBridge {
 	private disposed = false;
 	private readonly controller = new AbortController();
@@ -436,11 +420,9 @@ export class EditorHostBridge {
 	private preparedExport: PreparedExport | null = null;
 	private canceledExportCleanup: Promise<void> | null = null;
 	private activeShare: AbortController | null = null;
-	private activeSavePublish: AbortController | null = null;
-	private browserSaveReportedAt = 0;
-	private browserSaveReports: Promise<void> = Promise.resolve();
-	private browserSaveProgress = 0;
-	private browserSaveChunks: BrowserSaveChunks | null = null;
+	/// Export settings a Save renders with on an editor worker, from the save
+	/// route, which keeps them the same as the farm's.
+	private workerSaveSettings: Record<string, unknown> | null = null;
 	private saveStatusRevision: string | null | undefined;
 	private activeCaptions: {
 		language: AiGenerationLanguage;
@@ -1027,8 +1009,8 @@ export class EditorHostBridge {
 
 	private async renderExport(
 		active: ActiveExport,
-		channelId: number,
 		settings: Record<string, unknown>,
+		onFrames: (renderedCount: number, totalFrames: number) => void,
 	) {
 		const startupController = new AbortController();
 		const close = () => startupController.abort();
@@ -1089,15 +1071,7 @@ export class EditorHostBridge {
 			);
 			if (status.progress && status.progress.rendered_count !== lastRendered) {
 				lastRendered = status.progress.rendered_count;
-				this.port?.postMessage({
-					kind: "channel",
-					id: channelId,
-					value: {
-						type: "FramesRendered",
-						renderedCount: lastRendered,
-						totalFrames: status.progress.total_frames,
-					},
-				});
+				onFrames(lastRendered, status.progress.total_frames);
 			}
 			if (status.status === "ready") {
 				if (active.canceled || this.disposed)
@@ -1110,6 +1084,16 @@ export class EditorHostBridge {
 			await waitForExportPoll(active.controller.signal);
 		}
 		throw new Error("Editor export timed out");
+	}
+
+	/// Reports an export's rendered frames on the editor's channel.
+	private framesRendered(channelId: number) {
+		return (renderedCount: number, totalFrames: number) =>
+			this.port?.postMessage({
+				kind: "channel",
+				id: channelId,
+				value: { type: "FramesRendered", renderedCount, totalFrames },
+			});
 	}
 
 	private async handleExport(message: BridgeRequest) {
@@ -1155,8 +1139,8 @@ export class EditorHostBridge {
 			});
 			await this.renderExport(
 				active,
-				channelId,
 				settings as Record<string, unknown>,
+				this.framesRendered(channelId),
 			);
 			if (!active.jobId) throw new Error("Editor export was unavailable");
 			const ticketResponse = await fetch(
@@ -1355,8 +1339,8 @@ export class EditorHostBridge {
 			releaseWorkerUse = await this.ensureWorkerSession();
 			const status = await this.renderExport(
 				active,
-				channelId,
 				settings as Record<string, unknown>,
+				this.framesRendered(channelId),
 			);
 			if (!active.jobId || status.size === null)
 				throw new Error("Editor export was unavailable");
@@ -1391,13 +1375,12 @@ export class EditorHostBridge {
 	}
 
 	/**
-	 * Starts a Save on the render farm when it can take one. Otherwise, or
-	 * when the farm or an editor worker can't start it, tells the editor to
-	 * render in the browser and publish the file itself.
+	 * Starts a Save on the render farm. When the farm can't take it, says why,
+	 * and the editor saves on an editor worker instead (`saveOnWorker`).
 	 */
 	private async startSave(): Promise<
 		| { renderer: "farm"; shareUrl: string }
-		| { renderer: "browser"; reason: string }
+		| { renderer: "worker"; reason: string }
 	> {
 		// The render is built from the stored project, so edits still being
 		// written must land first.
@@ -1421,13 +1404,17 @@ export class EditorHostBridge {
 			typeof plan !== "object" ||
 			plan === null ||
 			!("renderer" in plan) ||
-			(plan.renderer !== "farm" && plan.renderer !== "browser")
+			(plan.renderer !== "farm" && plan.renderer !== "worker") ||
+			!("workerSettings" in plan) ||
+			typeof plan.workerSettings !== "object" ||
+			plan.workerSettings === null
 		) {
 			throw new Error("Save response was invalid");
 		}
-		if (plan.renderer === "browser") {
+		this.workerSaveSettings = plan.workerSettings as Record<string, unknown>;
+		if (plan.renderer === "worker") {
 			return {
-				renderer: "browser",
+				renderer: "worker",
 				reason:
 					"reason" in plan && typeof plan.reason === "string"
 						? plan.reason
@@ -1478,7 +1465,7 @@ export class EditorHostBridge {
 				throw new SaveRejected(webEditorSaveError(response.status));
 			if (!response.ok) {
 				return {
-					renderer: "browser",
+					renderer: "worker",
 					reason: `The render farm could not start the save (${response.status})`,
 				};
 			}
@@ -1490,255 +1477,118 @@ export class EditorHostBridge {
 		} catch (cause) {
 			if (cause instanceof SaveRejected || this.disposed) throw cause;
 			return {
-				renderer: "browser",
+				renderer: "worker",
 				reason:
 					cause instanceof Error
 						? cause.message
-						: "The editor worker is unavailable",
+						: "The render farm could not start the save",
 			};
 		} finally {
 			releaseWorkerUse();
 		}
 	}
 
-	/** Publishes a Save the editor rendered in this browser to the share link. */
-	private async publishRenderedSave(message: BridgeRequest) {
-		const [file, metadata, channel] = message.args;
-		const channelId = exportChannelId(channel);
-		const reply = (
-			value:
-				| { kind: "result"; value: unknown }
-				| { kind: "error"; error: string },
-		) => this.port?.postMessage({ ...value, id: message.id });
-		if (
-			!(file instanceof Blob) ||
-			typeof metadata !== "object" ||
-			metadata === null ||
-			this.activeSavePublish
-		) {
-			reply({
+	/**
+	 * Saves on an editor worker when the render farm can't: the worker renders
+	 * the stored project natively, with the farm's settings, and this tab moves
+	 * the file to the share link. Nothing renders in the browser.
+	 */
+	private async saveOnWorker(message: BridgeRequest) {
+		const channelId = exportChannelId(message.args[0]);
+		const settings = this.workerSaveSettings;
+		await this.canceledExportCleanup;
+		if (this.disposed || !this.port) return;
+		if (channelId === null || !settings) {
+			this.port.postMessage({
 				kind: "error",
-				error: "The rendered video could not be published",
+				id: message.id,
+				error: "Save request was invalid",
 			});
 			return;
 		}
-		const controller = new AbortController();
-		this.activeSavePublish = controller;
+		if (this.activeExport || this.preparedExport || this.activeShare) {
+			this.port.postMessage({
+				kind: "error",
+				id: message.id,
+				error: "Finish or cancel the current editor export first",
+			});
+			return;
+		}
+		const progress = (stage: "rendering" | "uploading", fraction: number) =>
+			this.port?.postMessage({
+				kind: "channel",
+				id: channelId,
+				value: { stage, progress: Math.min(1, Math.max(0, fraction)) },
+			});
+		const active = createActiveExport(message.id);
+		this.activeExport = active;
+		// Closing the tab would stop the upload of the finished render.
 		const keepOpen = (event: BeforeUnloadEvent) => event.preventDefault();
 		window.addEventListener("beforeunload", keepOpen);
-		let published = false;
+		let releaseWorkerUse: (() => void) | null = null;
+		let reply: CommandReply;
 		try {
-			const signal = AbortSignal.any([
-				controller.signal,
-				this.controller.signal,
-			]);
-			// A farm render still running for an earlier Save must not replace
-			// this one when it finishes.
+			releaseWorkerUse = await this.ensureWorkerSession().catch(() => {
+				throw new Error(WORKER_SAVE_UNAVAILABLE);
+			});
+			// A farm render still running for this Save must not replace it
+			// when it finishes.
 			const withdrawn = await fetch(
 				`/api/editor/sessions/${encodeURIComponent(this.browserSessionId)}/save?videoId=${encodeURIComponent(this.videoId)}`,
-				{ method: "DELETE", cache: "no-store", signal },
-			);
-			if (!withdrawn.ok) throw new Error(webEditorSaveError(withdrawn.status));
-			await uploadWebEditorFile(
-				this.videoId,
-				this.browserSessionId,
-				file,
-				metadata as WebEditorExportMetadata,
-				signal,
-				(progress) => {
-					this.reportBrowserSave(0.9 + progress.fraction * 0.1);
-					if (channelId !== null)
-						this.port?.postMessage({
-							kind: "channel",
-							id: channelId,
-							value: { stage: "uploading", progress: progress.fraction },
-						});
+				{
+					method: "DELETE",
+					cache: "no-store",
+					signal: active.controller.signal,
 				},
 			);
-			published = true;
+			if (!withdrawn.ok) throw new Error(webEditorSaveError(withdrawn.status));
+			const status = await this.renderExport(
+				active,
+				settings,
+				(rendered, total) =>
+					progress("rendering", total > 0 ? rendered / total : 0),
+			);
+			if (!active.jobId || status.size === null || !status.mediaMetadata)
+				throw new Error(WORKER_SAVE_UNAVAILABLE);
+			await uploadWebEditorExport(
+				this.videoId,
+				this.sessionId,
+				active.jobId,
+				status.size,
+				status.mediaMetadata,
+				active.controller.signal,
+				(upload) => progress("uploading", upload.fraction),
+			);
 			announceShareVideoUpdate(this.videoId);
-			reply({
+			reply = {
 				kind: "result",
+				id: message.id,
 				value: {
 					shareUrl: new URL(
 						`/s/${encodeURIComponent(this.videoId)}`,
 						window.location.origin,
 					).toString(),
 				},
-			});
+			};
 		} catch (cause) {
-			reply({
+			reply = {
 				kind: "error",
+				id: message.id,
 				error:
-					this.disposed || controller.signal.aborted
+					active.canceled || this.disposed
 						? "Save was canceled"
 						: cause instanceof Error
 							? cause.message
-							: "The rendered video could not be published",
-			});
-		} finally {
-			this.reportBrowserSave(null, published);
-			window.removeEventListener("beforeunload", keepOpen);
-			if (this.activeSavePublish === controller) this.activeSavePublish = null;
-		}
-	}
-
-	/**
-	 * Tells the share page and Cap card how far a Save rendering in this tab has
-	 * got, and clears it with null once the tab is done with it.
-	 */
-	private reportBrowserSave(progress: number | null, published = false) {
-		const now = Date.now();
-		if (progress !== null && now - this.browserSaveReportedAt < 3000) return;
-		this.browserSaveReportedAt = progress === null ? 0 : now;
-		if (progress === null) {
-			const chunks = this.browserSaveChunks;
-			const params = new URLSearchParams();
-			if (published) params.set("published", "1");
-			if (chunks) params.set("saveId", chunks.saveId);
-			this.browserSaveChunks = null;
-			this.queueBrowserSave(async () => {
-				// Every chunk is listed before the Save finishes, so its stream
-				// plays to the end.
-				if (published && chunks) {
-					await Promise.all(chunks.uploads);
-					await this.putBrowserSave(chunks);
-				}
-				await fetch(`${this.browserSavePath()}?${params}`, {
-					method: "DELETE",
-					keepalive: true,
-				});
-			});
-			return;
-		}
-		this.browserSaveProgress = progress;
-		this.queueBrowserSave(() => this.putBrowserSave());
-	}
-
-	/**
-	 * Uploads a playable chunk of the Save rendering in this tab, so the share
-	 * page can start playing before it's done. A chunk that fails, or an upload
-	 * that falls too far behind the render, ends the stream; the finished video
-	 * still publishes.
-	 */
-	private uploadBrowserSaveChunk(
-		data: ArrayBufferView,
-		duration: number | null,
-	) {
-		if (duration === null) {
-			this.browserSaveChunks = {
-				saveId: crypto.randomUUID(),
-				queued: 0,
-				durations: [],
-				uploaded: new Map(),
-				uploads: new Set(),
-				initUploaded: false,
-				backlog: 0,
-				reportedAt: 0,
-				stopped: false,
+							: WORKER_SAVE_UNAVAILABLE,
 			};
+		} finally {
+			window.removeEventListener("beforeunload", keepOpen);
+			if (active.jobId) await this.cancelExportJob(active.jobId);
+			if (this.activeExport === active) this.activeExport = null;
+			releaseWorkerUse?.();
+			active.finish();
 		}
-		const chunks = this.browserSaveChunks;
-		if (!chunks || chunks.stopped) return;
-		if (chunks.backlog + data.byteLength > BROWSER_SAVE_CHUNK_BACKLOG) {
-			chunks.stopped = true;
-			return;
-		}
-		chunks.backlog += data.byteLength;
-		const index = duration === null ? 0 : ++chunks.queued;
-		const upload = this.putBrowserSaveChunk(chunks.saveId, index, data).then(
-			(ok) => {
-				chunks.backlog -= data.byteLength;
-				chunks.uploads.delete(upload);
-				if (!ok) {
-					chunks.stopped = true;
-					return;
-				}
-				if (duration === null) chunks.initUploaded = true;
-				else chunks.uploaded.set(index, duration);
-				this.listBrowserSaveChunks(chunks);
-			},
-		);
-		chunks.uploads.add(upload);
-	}
-
-	/// Adds the chunks uploaded so far, in order and without gaps, to the
-	/// Save's playlist.
-	private listBrowserSaveChunks(chunks: BrowserSaveChunks) {
-		if (!chunks.initUploaded) return;
-		const listed = chunks.durations.length;
-		for (
-			let next = listed + 1, duration = chunks.uploaded.get(next);
-			duration !== undefined;
-			next++, duration = chunks.uploaded.get(next)
-		) {
-			chunks.durations.push(duration);
-			chunks.uploaded.delete(next);
-		}
-		if (chunks.durations.length === listed) return;
-		const now = Date.now();
-		if (
-			chunks.durations.length === chunks.queued ||
-			now - chunks.reportedAt > 3000
-		) {
-			chunks.reportedAt = now;
-			this.queueBrowserSave(async () => {
-				if (this.browserSaveChunks === chunks) await this.putBrowserSave();
-			});
-		}
-	}
-
-	private async putBrowserSaveChunk(
-		saveId: string,
-		index: number,
-		data: ArrayBufferView,
-	) {
-		try {
-			const target = await fetch(this.browserSavePath(), {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({
-					saveId,
-					file: index === 0 ? "init.mp4" : `segment-${index}.m4s`,
-				}),
-			});
-			if (!target.ok) return false;
-			const { url } = (await target.json()) as { url: string };
-			const uploaded = await fetch(url, {
-				method: "PUT",
-				headers: {
-					"Content-Type": index === 0 ? "video/mp4" : "video/iso.segment",
-				},
-				body: data as BodyInit,
-			});
-			return uploaded.ok;
-		} catch {
-			return false;
-		}
-	}
-
-	private browserSavePath() {
-		return `/api/editor/videos/${encodeURIComponent(this.videoId)}/browser-save`;
-	}
-
-	private putBrowserSave(chunks = this.browserSaveChunks) {
-		return fetch(this.browserSavePath(), {
-			method: "PUT",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({
-				progress: this.browserSaveProgress,
-				...(chunks && { saveId: chunks.saveId, chunks: chunks.durations }),
-			}),
-		});
-	}
-
-	// In order, so a late report can't bring back a finished Save or name a
-	// chunk before it's uploaded.
-	private queueBrowserSave(task: () => Promise<unknown>) {
-		this.browserSaveReports = this.browserSaveReports.then(task).then(
-			() => undefined,
-			() => undefined,
-		);
+		if (!active.replied) this.port?.postMessage(reply);
 	}
 
 	private async handleShareExport(message: BridgeRequest) {
@@ -2598,9 +2448,9 @@ export class EditorHostBridge {
 		}
 		if (
 			message.kind === "invoke" &&
-			message.name === "tauri:webEditorPublishRendered"
+			message.name === "tauri:webEditorSaveOnWorker"
 		) {
-			await this.publishRenderedSave(message);
+			await this.saveOnWorker(message);
 			return;
 		}
 		if (
@@ -2664,33 +2514,6 @@ export class EditorHostBridge {
 			} finally {
 				releaseWorkerUse();
 			}
-			return;
-		}
-		if (
-			message.kind === "invoke" &&
-			message.name === "tauri:webEditorBrowserSaveProgress"
-		) {
-			const [progress] = message.args;
-			this.reportBrowserSave(
-				typeof progress === "number" && progress >= 0 && progress <= 1
-					? progress
-					: null,
-			);
-			this.port?.postMessage({ kind: "result", id: message.id, value: null });
-			return;
-		}
-		if (
-			message.kind === "invoke" &&
-			message.name === "tauri:webEditorBrowserSaveChunk"
-		) {
-			const [data, duration] = message.args;
-			if (
-				ArrayBuffer.isView(data) &&
-				(duration === null ||
-					(typeof duration === "number" && duration > 0 && duration <= 30))
-			)
-				this.uploadBrowserSaveChunk(data, duration);
-			this.port?.postMessage({ kind: "result", id: message.id, value: null });
 			return;
 		}
 		if (
@@ -3193,6 +3016,7 @@ function webEditorSaveError(status: number) {
 	if (status === 403)
 		return "Saving recordings of 5 minutes or longer, or with captions, needs Cap Pro";
 	if (status === 404) return "This recording is no longer available";
+	if (status === 503) return WORKER_SAVE_UNAVAILABLE;
 	return "Save is unavailable right now. Try again, or use Download.";
 }
 

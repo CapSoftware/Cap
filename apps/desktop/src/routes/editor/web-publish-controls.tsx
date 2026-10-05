@@ -29,9 +29,9 @@ type SaveStatus = {
 
 type SaveStart =
 	| { renderer: "farm"; shareUrl: string }
-	| { renderer: "browser"; reason: string };
+	| { renderer: "worker"; reason: string };
 
-type BrowserSaveProgress = {
+type WorkerSaveProgress = {
 	stage: "rendering" | "uploading";
 	progress: number;
 };
@@ -39,7 +39,7 @@ type BrowserSaveProgress = {
 const POLL_MS = 2000;
 const FIRST_POLL_MS = 1000;
 // A farm render that shows no progress for this long is treated as stuck and
-// the save renders in the browser instead.
+// the save renders on an editor server instead.
 const FARM_STALL_MS = 90_000;
 // Opened straight from the recorder: the recording publishes in its default
 // style without waiting for a Save when nothing is rendering it yet.
@@ -57,15 +57,16 @@ export function WebPublishControls() {
 	} = useEditorContext();
 	const [starting, setStarting] = createSignal(false);
 	const [status, setStatus] = createSignal<SaveStatus | null>(null);
-	const [browserSave, setBrowserSave] =
-		createSignal<BrowserSaveProgress | null>(null);
+	const [workerSave, setWorkerSave] = createSignal<WorkerSaveProgress | null>(
+		null,
+	);
 	// The revision this session last saved. Nothing counts as saved until a
 	// Save, unless the share link already shows the project as it was opened.
 	const [savedRevision, setSavedRevision] = createSignal<number | null>(null);
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	let disposed = false;
 	// The farm save this editor started, watched so a failed or stuck render
-	// falls back to rendering in the browser.
+	// falls back to rendering on an editor server.
 	let farmSave: { progress: number; progressAt: number } | null = null;
 
 	const poll = async (
@@ -93,10 +94,10 @@ export function WebPublishControls() {
 				) {
 					farmSave = null;
 					console.warn(
-						"Cap save renders in this browser:",
+						"Cap save renders on an editor server:",
 						next.error ?? "the render farm stopped making progress",
 					);
-					await saveInBrowser();
+					await saveOnWorker();
 					return;
 				}
 			}
@@ -113,13 +114,13 @@ export function WebPublishControls() {
 		}
 	};
 
-	const saveInBrowser = async () => {
+	const saveOnWorker = async () => {
 		setStatus(null);
-		setBrowserSave({ stage: "rendering", progress: 0 });
+		setWorkerSave({ stage: "rendering", progress: 0 });
 		try {
-			await invoke("webEditorSaveInBrowser", {
-				channel: new Channel<BrowserSaveProgress>((progress) => {
-					if (!disposed) setBrowserSave(progress);
+			await invoke("webEditorSaveOnWorker", {
+				channel: new Channel<WorkerSaveProgress>((progress) => {
+					if (!disposed) setWorkerSave(progress);
 				}),
 			});
 			if (disposed) return;
@@ -144,7 +145,7 @@ export function WebPublishControls() {
 			});
 			toast.error(error);
 		} finally {
-			setBrowserSave(null);
+			setWorkerSave(null);
 		}
 	};
 
@@ -159,18 +160,18 @@ export function WebPublishControls() {
 	});
 
 	const rendering = () =>
-		status()?.state === "rendering" || browserSave() !== null;
+		status()?.state === "rendering" || workerSave() !== null;
 	const hasUnsavedEdits = () => projectRevision() !== savedRevision();
 	const upToDate = () =>
 		!hasUnsavedEdits() && !rendering() && status()?.state === "ready";
 
 	// The page asks before closing while this session has edits its share link
-	// doesn't show yet: not saved, still rendering in this tab, or failed.
+	// doesn't show yet: not saved, still uploading through this tab, or failed.
 	const unpublishedEdits = () =>
 		projectRevision() !== (savedRevision() ?? 0) ||
-		browserSave() !== null ||
+		workerSave() !== null ||
 		status()?.state === "error";
-	const savingHere = () => browserSave() !== null;
+	const savingHere = () => workerSave() !== null;
 	const editorWindow = window as Window & {
 		capWebEditorUnpublishedEdits?: () => boolean;
 		capWebEditorSavingHere?: () => boolean;
@@ -193,10 +194,10 @@ export function WebPublishControls() {
 			const revision = projectRevision();
 			const started = await invoke<SaveStart>("webEditorSave");
 			setSavedRevision(revision);
-			if (started.renderer === "browser") {
-				console.info("Cap save renders in this browser:", started.reason);
+			if (started.renderer === "worker") {
+				console.info("Cap save renders on an editor server:", started.reason);
 				setStarting(false);
-				await saveInBrowser();
+				await saveOnWorker();
 				return;
 			}
 			farmSave = { progress: 0, progressAt: Date.now() };
@@ -211,16 +212,26 @@ export function WebPublishControls() {
 			timer = setTimeout(poll, FIRST_POLL_MS);
 		} catch (cause) {
 			const message = cause instanceof Error ? cause.message : "Save failed";
-			if (automatic)
+			if (automatic) {
 				console.warn("Cap could not publish the recording:", message);
-			else toast.error(message);
+				return;
+			}
+			setStatus({
+				state: "error",
+				exportId: null,
+				progress: 0,
+				playable: false,
+				hlsUrl: null,
+				error: message,
+			});
+			toast.error(message);
 		} finally {
 			setStarting(false);
 		}
 	};
 
-	// Both can render on this device, so the renderer starts loading as soon
-	// as the person reaches for either.
+	// Download renders on this device, so the renderer starts loading as soon
+	// as the person reaches for it.
 	const prewarmExport = () => {
 		void invoke("webEditorPrewarmExport").catch(() => undefined);
 	};
@@ -246,8 +257,8 @@ export function WebPublishControls() {
 			</EditorButton>
 			<Tooltip
 				content={
-					browserSave()
-						? "Rendering on this device. Keep this tab open until it finishes."
+					workerSave()
+						? "Rendering on Cap's servers. Keep this tab open until it uploads."
 						: status()?.state === "error"
 							? (status()?.error ?? "Save failed")
 							: upToDate()
@@ -257,10 +268,9 @@ export function WebPublishControls() {
 			>
 				<button
 					type="button"
+					data-save-button
 					disabled={starting() || rendering() || upToDate()}
 					onClick={() => void save()}
-					onPointerEnter={prewarmExport}
-					onFocus={prewarmExport}
 					class={cx(
 						"relative flex h-[30px] min-w-[84px] shrink-0 items-center justify-center gap-1.5 overflow-hidden rounded-lg px-3.5 text-[13px] font-medium outline-hidden transition-[filter,background-color,color] duration-150",
 						upToDate()
@@ -268,20 +278,20 @@ export function WebPublishControls() {
 							: "bg-linear-to-b from-ed-accent-2 to-ed-accent text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.22),0_1px_2px_rgba(0,60,160,0.25)] hover:brightness-[1.06] active:brightness-[0.96] disabled:cursor-default disabled:hover:brightness-100",
 					)}
 				>
-					<Show when={browserSave() ?? (rendering() && status()?.playable)}>
+					<Show when={workerSave() ?? (rendering() && status()?.playable)}>
 						<span
 							aria-hidden="true"
 							class="absolute inset-y-0 left-0 bg-white/20 transition-[width] duration-500"
 							style={{
-								width: `${(browserSave()?.progress ?? status()?.progress ?? 0) * 100}%`,
+								width: `${(workerSave()?.progress ?? status()?.progress ?? 0) * 100}%`,
 							}}
 						/>
 					</Show>
 					<span class="relative flex items-center gap-1.5">
 						<Switch fallback="Save">
 							<Match when={starting()}>Saving</Match>
-							<Match when={browserSave()}>
-								{(progress) => <span>{browserSaveLabel(progress())}</span>}
+							<Match when={workerSave()}>
+								{(progress) => <span>{workerSaveLabel(progress())}</span>}
 							</Match>
 							<Match when={rendering()}>
 								{status()?.playable
@@ -301,7 +311,7 @@ export function WebPublishControls() {
 	);
 }
 
-function browserSaveLabel({ stage, progress }: BrowserSaveProgress) {
+function workerSaveLabel({ stage, progress }: WorkerSaveProgress) {
 	const percent = Math.floor(progress * 100);
 	if (stage === "uploading") return `Uploading ${percent}%`;
 	return percent > 0 ? `Rendering ${percent}%` : "Rendering";

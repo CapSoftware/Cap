@@ -28,7 +28,7 @@ beforeEach(() => {
 
 afterEach(() => vi.unstubAllGlobals());
 
-test("Save renders in the browser when the farm or an editor worker is not configured", async () => {
+test("Save can't use the farm when it or an editor worker is not configured", async () => {
 	const health = vi.fn(async () => Response.json({ ok: true, workers: 3 }));
 	vi.stubGlobal("fetch", health);
 	expect(await saveTarget()).toBe("The render farm is not configured");
@@ -82,4 +82,40 @@ test("Save uses the farm only while its health check reports workers", async () 
 		}),
 	);
 	expect(await saveTarget()).toBe("The render farm is not responding");
+});
+
+test("Save goes to an editor worker when the farm is down, and nowhere when neither is there", async () => {
+	const target = async () => {
+		vi.resetModules();
+		const { editorSaveRenderer } = await import("@/lib/render-farm-start");
+		return editorSaveRenderer(true);
+	};
+	vi.stubGlobal(
+		"fetch",
+		vi.fn(async () => Response.json({ ok: true, workers: 0 })),
+	);
+	env.value = { ...farm, ...worker };
+	expect(await target()).toEqual({
+		renderer: "worker",
+		reason: "The render farm is not responding",
+		direct: false,
+	});
+	env.value = { ...farm };
+	expect(await target()).toBeNull();
+	env.value = { ...worker };
+	expect(await target()).toEqual({
+		renderer: "worker",
+		reason: "The render farm is not configured",
+		direct: false,
+	});
+	vi.stubGlobal(
+		"fetch",
+		vi.fn(async () => Response.json({ ok: true, workers: 2 })),
+	);
+	env.value = { ...farm, ...worker };
+	expect(await target()).toEqual({
+		renderer: "farm",
+		reason: null,
+		direct: false,
+	});
 });

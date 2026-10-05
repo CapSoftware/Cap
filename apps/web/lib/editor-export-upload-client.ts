@@ -8,7 +8,8 @@ import type { Video } from "@cap/web-domain";
 const MAX_EXPORT_BYTES = 12 * 1024 * 1024 * 1024;
 const PART_BYTES = 16 * 1024 * 1024;
 const MAX_FETCH_AHEAD_BYTES = 64 * 1024 * 1024;
-const UPLOAD_DEADLINE_MS = 35 * 60 * 1000;
+// How long the upload may go without sending a byte before it gives up.
+const UPLOAD_IDLE_MS = 10 * 60 * 1000;
 const PUBLICATION_WAIT_MS = 15_000;
 const PUBLICATION_POLL_MS = 750;
 const PUBLICATION_REQUEST_MS = 5_000;
@@ -141,29 +142,6 @@ export function uploadWebEditorExport(
 	);
 }
 
-/** Publishes a video rendered in this browser to the share link. */
-export function uploadWebEditorFile(
-	videoId: string,
-	sessionId: string,
-	file: Blob,
-	metadata: WebEditorExportMetadata,
-	signal: AbortSignal,
-	onProgress?: (progress: WebEditorShareProgress) => void,
-) {
-	return uploadWebEditorVideo(
-		videoId,
-		sessionId,
-		{
-			size: file.size,
-			readChunk: async (offset, length) =>
-				file.slice(offset, offset + length, "video/mp4"),
-		},
-		metadata,
-		signal,
-		onProgress,
-	);
-}
-
 /** Replaces the share link's video with `source` as a multipart upload. */
 async function uploadWebEditorVideo(
 	videoId: string,
@@ -180,7 +158,7 @@ async function uploadWebEditorVideo(
 	if (!validExport(size, metadata))
 		throw new Error("Rendered recording metadata is invalid");
 	if (signal.aborted) throw new Error("Recording upload was canceled");
-	const deadline = Date.now() + UPLOAD_DEADLINE_MS;
+	let deadline = Date.now() + UPLOAD_IDLE_MS;
 	// A cast rather than Video.VideoId.make: the value import would bring the
 	// whole Effect runtime into the editor page.
 	const video = videoId as Video.VideoId;
@@ -192,6 +170,7 @@ async function uploadWebEditorVideo(
 		api,
 	});
 	let uploadedBytes = 0;
+	let sendingBytes = 0;
 	let reportedPercent = -1;
 	let fatalError: Error | null = null;
 	let completionUncertain = false;
@@ -211,14 +190,18 @@ async function uploadWebEditorVideo(
 		setUploadStatus: () => {},
 		sendProgressUpdate: async (uploaded) => {
 			uploadedBytes = Math.max(uploadedBytes, uploaded);
-			const percent = Math.floor((uploadedBytes / size) * 100);
-			if (percent !== reportedPercent) {
-				reportedPercent = percent;
-				onProgress?.({
-					stage: publishingStarted ? "publishing" : "uploading",
-					fraction: Math.min(1, uploadedBytes / size),
-				});
-			}
+			report();
+			wake();
+		},
+		// Parts are megabytes each, so on a slow connection progress counts
+		// the bytes of parts still on their way too.
+		onChunkStateChange: (parts) => {
+			let sending = 0;
+			for (const part of parts)
+				if (part.status === "uploading") sending += part.uploadedBytes;
+			sendingBytes = sending;
+			deadline = Date.now() + UPLOAD_IDLE_MS;
+			report();
 			wake();
 		},
 		onFatalError: (error) => {
@@ -227,6 +210,17 @@ async function uploadWebEditorVideo(
 		},
 		api,
 	});
+	function report() {
+		const fraction = Math.min(1, (uploadedBytes + sendingBytes) / size);
+		const percent = Math.floor(fraction * 100);
+		// A retried part starts over; the bar doesn't.
+		if (percent <= reportedPercent) return;
+		reportedPercent = percent;
+		onProgress?.({
+			stage: publishingStarted ? "publishing" : "uploading",
+			fraction,
+		});
+	}
 	const canceled = () => {
 		if (!finished && !completionUncertain) cancellation ??= uploader.cancel();
 		wake();

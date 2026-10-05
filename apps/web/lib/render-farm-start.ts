@@ -216,9 +216,25 @@ export async function renderFarmPrepareSupport() {
 	return health.healthy ? health.prepare : null;
 }
 
+/** Whether an editor worker is set up to prepare projects or render Saves. */
+export function editorWorkerConfigured() {
+	const env = serverEnv();
+	if (!env.MEDIA_SERVER_WEBHOOK_SECRET) return false;
+	try {
+		return (
+			parseEditorWorkerPool(
+				env.CAP_WEB_EDITOR_WORKER_POOL,
+				env.CAP_WEB_EDITOR_WORKER_URL,
+			).length > 0
+		);
+	} catch {
+		return false;
+	}
+}
+
 /**
  * Why Save can't render on the farm right now, or null when it can. The
- * editor renders in the browser instead of waiting on a farm that is not
+ * editor saves on an editor worker instead of waiting on a farm that is not
  * there.
  */
 export async function renderFarmSaveUnavailable() {
@@ -227,18 +243,44 @@ export async function renderFarmSaveUnavailable() {
 	const health = await renderFarmHealth(config);
 	if (!health.healthy) return "The render farm is not responding";
 	if (health.prepare) return null;
-	const env = serverEnv();
-	let workers = 0;
-	try {
-		workers = parseEditorWorkerPool(
-			env.CAP_WEB_EDITOR_WORKER_POOL,
-			env.CAP_WEB_EDITOR_WORKER_URL,
-		).length;
-	} catch {}
-	if (!env.MEDIA_SERVER_WEBHOOK_SECRET || workers === 0) {
-		return "No editor worker is configured";
-	}
+	if (!editorWorkerConfigured()) return "No editor worker is configured";
 	return null;
+}
+
+/** The fps a Save renders at, on the farm or an editor worker. */
+export function editorSaveFps(videoFps: number | null) {
+	return Math.min(60, Math.max(24, Math.round(videoFps ?? 30)));
+}
+
+/** Export settings for a Save an editor worker renders, matching the farm's. */
+export function workerSaveSettings(videoFps: number | null) {
+	return {
+		format: "Mp4" as const,
+		fps: editorSaveFps(videoFps),
+		resolution_base: { x: SAVE_RESOLUTION[0], y: SAVE_RESOLUTION[1] },
+		compression: "Maximum" as const,
+		custom_bpp: null,
+	};
+}
+
+/**
+ * Where a Save renders: the render farm, or an editor worker when the farm
+ * can't take it. Null when neither can.
+ */
+export async function editorSaveRenderer(directLikely: boolean) {
+	const [reason, support] = await Promise.all([
+		renderFarmSaveUnavailable(),
+		renderFarmPrepareSupport(),
+	]);
+	if (!reason)
+		return {
+			renderer: "farm" as const,
+			reason: null,
+			direct: !!support && directLikely,
+		};
+	return editorWorkerConfigured()
+		? { renderer: "worker" as const, reason, direct: false }
+		: null;
 }
 
 export function browserEditorSessionId(videoId: string) {
@@ -661,7 +703,7 @@ const postRenderFarmJob = Effect.fn("postRenderFarmJob")(function* ({
 }) {
 	const jobSettings: RenderFarmJobSettings = settings ?? {
 		resolution: SAVE_RESOLUTION,
-		fps: Math.min(60, Math.max(24, Math.round(video.fps ?? 30))),
+		fps: editorSaveFps(video.fps),
 		compression: "Maximum",
 	};
 	const jobResponse = yield* Effect.tryPromise({

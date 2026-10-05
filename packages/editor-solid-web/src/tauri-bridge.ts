@@ -28,10 +28,8 @@ import {
 	browserLocalExportPreview,
 	browserLocalExportSupported,
 	cancelBrowserLocalExport,
-	discardStoredBrowserExport,
 	prewarmBrowserLocalExport,
 	removeLeftoverBrowserExports,
-	renderBrowserLocalExport,
 	runBrowserLocalExport,
 } from "./browser-local-export";
 import { EditorCaptionCacheMemo } from "./caption-cache-memo";
@@ -47,13 +45,6 @@ import { Store } from "./tauri-store";
 import { setEditorFrameSocketCredential } from "./websocket";
 
 export type * from "../../../apps/desktop/src/utils/tauri";
-
-const BROWSER_SAVE_SETTINGS = {
-	format: "Mp4",
-	fps: 30,
-	resolution_base: { x: 1920, y: 1080 },
-	compression: "Social",
-};
 
 type BridgeReply =
 	| { kind: "result"; id: number; value: unknown }
@@ -250,78 +241,6 @@ export class PortEditorTransport {
 		});
 	}
 
-	/// Renders the project here and hands the file to the host, which
-	/// publishes it to the share link. Save's path when the render farm can't.
-	private async saveInBrowser(request: unknown) {
-		const channel =
-			typeof request === "object" && request !== null && "channel" in request
-				? request.channel
-				: null;
-		const channelId =
-			typeof channel === "object" &&
-			channel !== null &&
-			"id" in channel &&
-			typeof channel.id === "number"
-				? channel.id
-				: null;
-		// The share page shows how far along the render is, uploading counting
-		// for the last tenth.
-		let reportedAt = 0;
-		const report = (progress: number | null) =>
-			void this.request("invoke", "tauri:webEditorBrowserSaveProgress", [
-				progress,
-			]).catch(() => undefined);
-		report(0);
-		let rendered: Awaited<ReturnType<typeof renderBrowserLocalExport>>;
-		try {
-			rendered = await renderBrowserLocalExport(
-				BROWSER_SAVE_SETTINGS,
-				(renderedCount, totalFrames) => {
-					if (totalFrames <= 0) return;
-					const progress = renderedCount / totalFrames;
-					if (channelId !== null)
-						emitEditorChannel(channelId, { stage: "rendering", progress });
-					if (Date.now() - reportedAt >= 1000) {
-						reportedAt = Date.now();
-						report(progress * 0.9);
-					}
-				},
-				(data, duration) =>
-					void this.request("invoke", "tauri:webEditorBrowserSaveChunk", [
-						data,
-						duration,
-					]).catch(() => undefined),
-			);
-		} catch (cause) {
-			report(null);
-			if (cause instanceof BrowserLocalExportUnavailable)
-				throw new Error(
-					"This browser can't render the video. Try Chrome or Edge, or use Download.",
-				);
-			throw cause;
-		}
-		try {
-			if (rendered.mimeType !== "video/mp4") {
-				report(null);
-				throw new Error(
-					"The rendered video is not an MP4. Use Download instead.",
-				);
-			}
-			return await this.request("invoke", "tauri:webEditorPublishRendered", [
-				new Blob([rendered.data], { type: "video/mp4" }),
-				{
-					duration: rendered.duration,
-					width: rendered.width,
-					height: rendered.height,
-					fps: rendered.fps,
-				},
-				channel,
-			]);
-		} finally {
-			discardStoredBrowserExport(rendered.storedFile);
-		}
-	}
-
 	async invoke(name: string, args: unknown[]) {
 		const planRequestSequence =
 			name === "checkUpgradedAndUpdate" ? ++this.planRequestSequence : 0;
@@ -351,8 +270,16 @@ export class PortEditorTransport {
 				}
 			}
 		}
-		if (name === "tauri:webEditorSaveInBrowser")
-			return this.saveInBrowser(args[0]);
+		if (name === "tauri:webEditorSaveOnWorker") {
+			// The host renders this Save on an editor worker; its progress comes
+			// back on the request's channel.
+			const [request] = args;
+			const channel =
+				typeof request === "object" && request !== null && "channel" in request
+					? request.channel
+					: null;
+			return this.request("invoke", name, [channel]);
+		}
 		if (name === "tauri:webEditorPrewarmExport") {
 			prewarmBrowserLocalExport();
 			return null;

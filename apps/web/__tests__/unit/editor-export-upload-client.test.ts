@@ -1,9 +1,6 @@
 import { createHash } from "node:crypto";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import {
-	uploadWebEditorExport,
-	uploadWebEditorFile,
-} from "../../lib/editor-export-upload-client";
+import { uploadWebEditorExport } from "../../lib/editor-export-upload-client";
 
 const CHUNK_BYTES = 16 * 1024 * 1024;
 // Storage parts are uniform (R2 requires it), whatever size the chunks come in.
@@ -297,44 +294,6 @@ test("aborting while a chunk body is read does not publish the recording", async
 	expect(requests.some((url) => url.endsWith("/complete"))).toBe(false);
 });
 
-test("a video rendered in the browser is published from its own bytes", async () => {
-	const size = CHUNK_BYTES + 512;
-	const asset = new Uint8Array(size).fill(0x42);
-	const requests: string[] = [];
-	vi.stubGlobal(
-		"fetch",
-		vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-			const url = String(input);
-			requests.push(url);
-			const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
-			expect(body.replaceExisting).toBe(true);
-			if (url.endsWith("/initiate"))
-				return Response.json({ uploadId: "upload", provider: "s3" });
-			if (url.endsWith("/presign-part"))
-				return Response.json({
-					presignedUrl: `https://uploads.example/part-${body.partNumber}`,
-					provider: "s3",
-				});
-			if (url.endsWith("/complete"))
-				return Response.json({ success: true, processingStarted: true });
-			throw new Error(`Unexpected request: ${url}`);
-		}),
-	);
-	await uploadWebEditorFile(
-		"video",
-		"session",
-		new Blob([asset], { type: "video/mp4" }),
-		metadata,
-		new AbortController().signal,
-	);
-	expect(requests.some((url) => url.includes("/chunk?"))).toBe(false);
-	const uploaded = uploadedBytes();
-	const digest = (bytes: ArrayBuffer) =>
-		createHash("sha256").update(Buffer.from(bytes)).digest("hex");
-	expect(uploaded.size).toBe(size);
-	expect(digest(await uploaded.arrayBuffer())).toBe(digest(asset.buffer));
-});
-
 test("closing the page abandons an unfinished replacement upload", async () => {
 	const listeners = new Map<string, () => void>();
 	vi.stubGlobal(
@@ -360,10 +319,11 @@ test("closing the page abandons an unfinished replacement upload", async () => {
 			return new Promise<Response>(() => undefined);
 		}),
 	);
-	void uploadWebEditorFile(
+	void uploadWebEditorExport(
 		"video",
 		"session",
-		new Blob([new Uint8Array(1024)], { type: "video/mp4" }),
+		"export",
+		1024,
 		metadata,
 		new AbortController().signal,
 	).catch(() => undefined);
