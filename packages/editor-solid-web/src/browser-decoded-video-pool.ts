@@ -46,6 +46,8 @@ type SlotEntry = {
 	activeCalls: number;
 	retired: boolean;
 	released: boolean;
+	/// The call decoding on the slot now, if any.
+	holder: AbortSignal | null;
 };
 
 function slotKey(
@@ -310,7 +312,11 @@ export class BrowserDecodedVideoPool {
 		}
 		const key = slotKey(segmentIndex, track, role);
 		let entry = this.slots.get(key);
-		if (entry && entry.url !== url.href) {
+		// A decode its caller gave up on can still be waiting on the network
+		// for a frame nobody wants, and the next frame would queue behind it;
+		// a new decoder takes over and the old one finishes on its own.
+		if (entry && (entry.url !== url.href || entry.holder?.aborted)) {
+			if (entry.holder?.aborted) perfEvent(`decode.replaced ${track}`);
 			releaseEntry(entry);
 			this.slots.delete(key);
 			entry = undefined;
@@ -322,6 +328,7 @@ export class BrowserDecodedVideoPool {
 				activeCalls: 0,
 				retired: false,
 				released: false,
+				holder: null,
 			};
 			this.slots.set(key, entry);
 		}
@@ -343,6 +350,7 @@ export class BrowserDecodedVideoPool {
 				if (signal.aborted || this.disposed) {
 					throw signal.reason ?? new DOMException("Canceled", "AbortError");
 				}
+				entry.holder = signal;
 				const decodeStarted = perfStart();
 				perfEvent(
 					`decode.start ${track} ${sourceTime.toFixed(3)}${keyFrame ? " key" : ""}`,
@@ -356,6 +364,7 @@ export class BrowserDecodedVideoPool {
 				if (sample && !keyFrame) slot.lease.reached(sample.timestamp);
 				perfSpan("decode.sample", decodeStarted);
 			} finally {
+				if (entry.holder === signal) entry.holder = null;
 				releaseSerial();
 			}
 			if (!sample) throw new Error("Editor decoded frame is unavailable");
@@ -438,10 +447,6 @@ export class BrowserDecodedVideoPool {
 		}
 	}
 
-	/// Reads the packets for `seconds` of a track from `sourceTime` into its
-	/// input's cache without decoding them, so playing from there finds its
-	/// media loaded instead of fetching each frame as it comes due. Only the
-	/// input the paused frame already reaches is read.
 	async bufferAhead(
 		segmentIndex: number,
 		track: BrowserVideoTrack,
