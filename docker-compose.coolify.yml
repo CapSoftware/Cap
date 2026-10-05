@@ -13,7 +13,7 @@ services:
       DATABASE_URL: 'mysql://cap:${SERVICE_PASSWORD_MYSQL}@mysql:3306/cap'
       WEB_URL: '${SERVICE_URL_CAP_WEB}'
       NEXTAUTH_URL: '${SERVICE_URL_CAP_WEB}'
-      DATABASE_ENCRYPTION_KEY: '${SERVICE_HEX_64_DATABASEENCRYPTIONKEY:-${SERVICE_HEX_32_DATABASEENCRYPTIONKEY}}'
+      DATABASE_ENCRYPTION_KEY: '${SERVICE_HEX_32_DATABASEENCRYPTIONKEY}'
       NEXTAUTH_SECRET: '${SERVICE_HEX_32_NEXTAUTHSECRET}'
       CAP_AWS_ACCESS_KEY: capadmin
       CAP_AWS_SECRET_KEY: '${SERVICE_PASSWORD_MINIO}'
@@ -88,7 +88,7 @@ services:
       retries: 10
       start_period: 30s
   minio:
-    image: 'pgsty/minio:latest'
+    image: 'pgsty/minio:RELEASE.2026-08-04T00-00-00Z@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372'
     restart: unless-stopped
     command: 'server /data --console-address ":9001"'
     environment:
@@ -109,7 +109,7 @@ services:
       start_period: 10s
   minio-setup:
     container_name: cap-minio-setup
-    image: 'pgsty/mc:latest'
+    image: 'pgsty/mc:RELEASE.2026-09-16T00-00-00Z@sha256:cfc83108c3abb371f8fb84d99c1fdc88f8c237e022409b0081fb7c0a3be634dd'
     exclude_from_hc: true
     depends_on:
       minio:
