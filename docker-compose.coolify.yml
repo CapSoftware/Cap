@@ -88,7 +88,7 @@ services:
       retries: 10
       start_period: 30s
   minio:
-    image: 'quay.io/minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e'
+    image: 'pgsty/minio:RELEASE.2026-08-04T00-00-00Z@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372'
     restart: unless-stopped
     command: 'server /data --console-address ":9001"'
     environment:
@@ -109,7 +109,7 @@ services:
       start_period: 10s
   minio-setup:
     container_name: cap-minio-setup
-    image: 'quay.io/minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727'
+    image: 'pgsty/mc:RELEASE.2026-09-16T00-00-00Z@sha256:cfc83108c3abb371f8fb84d99c1fdc88f8c237e022409b0081fb7c0a3be634dd'
     exclude_from_hc: true
     depends_on:
       minio:
