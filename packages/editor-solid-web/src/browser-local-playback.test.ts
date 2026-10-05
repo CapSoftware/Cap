@@ -560,6 +560,91 @@ test("a camera frame that arrives after a seek does not replace the held one", a
 	}
 });
 
+test("a paused frame redraws when its late camera lands, unless the playhead moved", async () => {
+	class FakeFrame {
+		constructor(readonly time: number) {}
+		clone() {
+			return new FakeFrame(this.time);
+		}
+		close() {}
+	}
+	const host = globalThis as { VideoFrame?: unknown };
+	const realFrame = host.VideoFrame;
+	host.VideoFrame = FakeFrame;
+	const playback = Object.create(
+		BrowserLocalPlayback.prototype,
+	) as BrowserLocalPlayback;
+	Reflect.set(playback, "disposed", false);
+	Reflect.set(playback, "heldCamera", null);
+	Reflect.set(playback, "lateCamera", null);
+	Reflect.set(playback, "cameraGeneration", 0);
+	const track = (time: number) => ({
+		source: new FakeFrame(time) as unknown as VideoFrame,
+		width: 640,
+		height: 360,
+		mediaTime: time,
+		release: () => undefined,
+		sourceColorFix: false,
+	});
+	const cameraOrHeld = (
+		Reflect.get(playback, "cameraOrHeld") as (
+			clip: number,
+			screen: Promise<unknown>,
+			camera: Promise<unknown>,
+			playing: boolean,
+			graceMs: number,
+			onLate: () => void,
+		) => Promise<{ mediaTime: number } | null>
+	).bind(playback);
+	const slowCamera = () => {
+		let arrive: (frame: unknown) => void = () => undefined;
+		const promise = new Promise((resolve) => {
+			arrive = resolve;
+		});
+		return { promise, arrive: (frame: unknown) => arrive(frame) };
+	};
+	try {
+		await cameraOrHeld(
+			0,
+			Promise.resolve(null),
+			Promise.resolve(track(1)),
+			false,
+			5,
+			() => undefined,
+		);
+		let redraws = 0;
+		const first = slowCamera();
+		const shown = await cameraOrHeld(
+			0,
+			Promise.resolve(null),
+			first.promise,
+			false,
+			5,
+			() => redraws++,
+		);
+		expect(shown?.mediaTime).toBe(1);
+		first.arrive(track(20));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(redraws).toBe(1);
+		// A late camera for a position the playhead has left does nothing.
+		const second = slowCamera();
+		await cameraOrHeld(
+			0,
+			Promise.resolve(null),
+			second.promise,
+			false,
+			5,
+			() => redraws++,
+		);
+		(Reflect.get(playback, "jumpCamera") as () => void).call(playback);
+		second.arrive(track(30));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(redraws).toBe(1);
+	} finally {
+		host.VideoFrame = realFrame;
+	}
+});
+
 test("a loading frame stays while a scrub keeps asking and gives way once it stops", async () => {
 	const playback = Object.create(
 		BrowserLocalPlayback.prototype,

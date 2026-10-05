@@ -191,6 +191,10 @@ const BUFFER_AHEAD_SECONDS = 8;
 /// up (often several times the screen's bitrate) holds its picture until its
 /// media arrives rather than holding the whole preview.
 const CAMERA_GRACE_MS = 120;
+/// The same wait for a paused frame, which then redraws once its camera
+/// frame lands; long enough that a camera decoding normally is never shown
+/// out of step.
+const PAUSED_CAMERA_GRACE_MS = 400;
 
 /// Zoom springs keep settling after a zoom segment ends.
 const ZOOM_SETTLE_SECS = 3;
@@ -944,6 +948,8 @@ export class BrowserLocalPlayback {
 		screen: Promise<TrackFrame | null>,
 		camera: Promise<TrackFrame | null>,
 		playing = true,
+		graceMs = CAMERA_GRACE_MS,
+		onLate?: () => void,
 	): Promise<TrackFrame | null> {
 		const held = this.heldCamera;
 		if (!held || held.clip !== clip) {
@@ -956,7 +962,7 @@ export class BrowserLocalPlayback {
 			screen.then(
 				() =>
 					new Promise<null>((resolve) =>
-						setTimeout(() => resolve(null), CAMERA_GRACE_MS),
+						setTimeout(() => resolve(null), graceMs),
 					),
 				() => null,
 			),
@@ -966,7 +972,10 @@ export class BrowserLocalPlayback {
 		perfEvent("camera.held");
 		const late = ready.then(
 			({ frame }) => {
-				if (generation === this.cameraGeneration) this.holdCamera(clip, frame);
+				if (generation === this.cameraGeneration) {
+					this.holdCamera(clip, frame);
+					onLate?.();
+				}
 				frame?.release();
 			},
 			() => undefined,
@@ -977,6 +986,15 @@ export class BrowserLocalPlayback {
 			if (this.lateCamera === late) this.lateCamera = null;
 		});
 		return this.heldCameraFrame();
+	}
+
+	private redrawPaused() {
+		if (this.playing || this.disposed) return;
+		this.renderedTime = -1;
+		void this.seek(this.outputTime).catch((cause: unknown) => {
+			if (this.disposed) return;
+			this.onError(cause instanceof Error ? cause : new Error(String(cause)));
+		});
 	}
 
 	private jumpCamera() {
@@ -1063,13 +1081,24 @@ export class BrowserLocalPlayback {
 							cameraFrame,
 							!!playSignal,
 						)
-					: role === "primary"
-						? cameraFrame.then((frame) =>
-								generation === this.cameraGeneration
-									? this.holdCamera(recordingClip, frame)
-									: frame,
+					: role === "primary" && this.canvas.hasRenderedFrame()
+						? // A paused frame waiting on a camera fragment shows the screen
+							// at once and redraws when the camera catches up.
+							this.cameraOrHeld(
+								recordingClip,
+								screenFrame,
+								cameraFrame,
+								false,
+								PAUSED_CAMERA_GRACE_MS,
+								() => this.redrawPaused(),
 							)
-						: cameraFrame;
+						: role === "primary"
+							? cameraFrame.then((frame) =>
+									generation === this.cameraGeneration
+										? this.holdCamera(recordingClip, frame)
+										: frame,
+								)
+							: cameraFrame;
 		}
 		const [screenResult, cameraResult] = await Promise.allSettled([
 			screenFrame,
