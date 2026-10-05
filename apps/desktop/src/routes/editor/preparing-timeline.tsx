@@ -11,7 +11,11 @@ const TRACK_NAMES = {
 	systemAudio: "System audio",
 };
 
-export function PreparingTimeline(props: { model: PreparingEditorModel }) {
+export function PreparingTimeline(props: {
+	model: PreparingEditorModel;
+	/** The page shows its own loading status, so this one says nothing. */
+	quiet?: boolean;
+}) {
 	const timeline = () => props.model.timeline();
 	const tracks = () => {
 		const declared = props.model.seed().tracks;
@@ -49,7 +53,11 @@ export function PreparingTimeline(props: { model: PreparingEditorModel }) {
 				<div class="flex flex-1 justify-between gap-2 pb-1 text-[10px] tabular-nums text-ed-text-3">
 					<Show
 						when={timeline().totalDuration}
-						fallback={<span>Recording duration is being checked</span>}
+						fallback={
+							<Show when={!props.quiet}>
+								<span>Recording duration is being checked</span>
+							</Show>
+						}
 					>
 						{(duration) => (
 							<For each={[0, 0.25, 0.5, 0.75, 1]}>
@@ -87,7 +95,7 @@ export function PreparingTimeline(props: { model: PreparingEditorModel }) {
 										style={{ left: `${position() * 100}%` }}
 									/>
 								</Show>
-								<Show when={index() === 0}>
+								<Show when={index() === 0 && !props.quiet}>
 									<span
 										class="absolute inset-0 flex items-center justify-center text-[11px] text-ed-text-3 pointer-events-none"
 										role="status"

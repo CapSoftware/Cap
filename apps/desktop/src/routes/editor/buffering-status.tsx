@@ -12,6 +12,9 @@ const SLOW_AFTER_MS = 2000;
 /// A paused frame's indicator stays up at least this long, so a slow scrub
 /// doesn't flicker it between frames. Playing frames end it at once.
 const PAUSED_MIN_SHOWN_MS = 400;
+/// Frames at 30 fps move the playhead every 33 ms; this long without a move
+/// means they have stopped.
+const FLOWING_FOR_MS = 500;
 
 export function createBufferingDisplay(
 	waiting: () => boolean,
@@ -49,6 +52,30 @@ export function createBufferingDisplay(
 		onCleanup(() => clearTimeout(timer));
 	});
 	return { shown, slow };
+}
+
+/// Whether playback frames are arriving: the playhead moved while playing
+/// within the last moment. A wait is over once they are, whatever is still
+/// reported, so the loading status clears with the first moving frame.
+export function createFramesFlowing(
+	playheadSeconds: () => number,
+	playing: () => boolean,
+) {
+	const [flowing, setFlowing] = createSignal(false);
+	let last: number | undefined;
+	createEffect(() => {
+		const time = playheadSeconds();
+		const moved = last !== undefined && time !== last;
+		last = time;
+		if (!untrack(playing) || !moved) return;
+		setFlowing(true);
+		const timer = setTimeout(() => setFlowing(false), FLOWING_FOR_MS);
+		onCleanup(() => clearTimeout(timer));
+	});
+	createEffect(() => {
+		if (!playing()) setFlowing(false);
+	});
+	return flowing;
 }
 
 export function slowLoadingMessage(
