@@ -75,6 +75,31 @@ describe("groupTranscriptSentences", () => {
 		).toEqual(["Dr. Smith said, I want... to continue."]);
 	});
 
+	it.each(["Option A.", "Plan B.", "Vitamin C.", "option a."])(
+		"keeps %s separate from the next sentence",
+		(label) => {
+			expect(
+				groupTranscriptSentences(entries([label, "Choose another."])).map(
+					(entry) => entry.text,
+				),
+			).toEqual([label, "Choose another."]);
+		},
+	);
+
+	it.each([
+		["A.", "Smith said hello."],
+		["J. R. R.", "Tolkien wrote books."],
+		["By J. R. R.", "Tolkien."],
+		["А.", "Пушкин написал стихотворение."],
+		["Автор А. С.", "Пушкин."],
+	])("keeps initial sequence %s with its name", (initials, name) => {
+		expect(
+			groupTranscriptSentences(entries([initials, name])).map(
+				(entry) => entry.text,
+			),
+		).toEqual([`${initials} ${name}`]);
+	});
+
 	it("never combines different or unknown speakers", () => {
 		const source = entries(["First,", "second,", "unknown,", "fourth."]);
 		if (source[1]) source[1].speaker = "B";

@@ -442,6 +442,11 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 	const showEditingControls = canEdit && isEditingTranscript;
 	const displayedEntries = showEditingControls ? transcriptData : sentenceData;
 
+	const toggleEditingTranscript = () => {
+		setSelectedEntry(null);
+		setIsEditingTranscript(!isEditingTranscript);
+	};
+
 	const liveTranscriptView = showLiveTranscript ? (
 		<div className="flex flex-col h-full">
 			<div className="flex flex-none items-center gap-2 border-b border-gray-3 px-4 py-3">
@@ -711,7 +716,7 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 							type="button"
 							aria-pressed={showEditingControls}
 							disabled={editingEntry !== null || transcriptData.length === 0}
-							onClick={() => setIsEditingTranscript((value) => !value)}
+							onClick={toggleEditingTranscript}
 							className="inline-flex min-h-11 items-center rounded-full px-2 text-[11px] font-medium text-gray-11 transition hover:bg-gray-3 disabled:opacity-50"
 						>
 							{showEditingControls ? "Done editing" : "Edit transcript"}

@@ -132,6 +132,31 @@ describe("sentence transcript reading and editing", () => {
 		expect(button("00:00Speaker AFirst, then second.")).toBeDefined();
 	});
 
+	it.each([
+		["00:00Speaker AFirst,", "00:00Speaker AFirst, then second.", 0.125],
+		["00:02Speaker Athen second.", "00:00Speaker AFirst, then second.", 2],
+		["00:03Speaker BYes.", "00:03Speaker BYes.", 3.1],
+	])(
+		"clears raw cue selection %s when returning to sentences",
+		async (cue, sentence, time) => {
+			const seek = vi.fn();
+			await act(async () =>
+				root.render(createElement(Transcript, { data, onSeek: seek })),
+			);
+			await click("Edit transcript");
+			await click(cue);
+			expect(seek).toHaveBeenCalledWith(time);
+			expect(button(cue).closest("div")?.className).toContain("bg-gray-3");
+			await click("Done editing");
+			const groupedRow = button(sentence).closest("div");
+			expect(groupedRow?.className).not.toContain("bg-gray-3");
+			await click(sentence);
+			expect(button(sentence).closest("div")?.className).toContain("bg-gray-3");
+			await click("Edit transcript");
+			expect(button(cue).closest("div")?.className).not.toContain("bg-gray-3");
+		},
+	);
+
 	it.each(["original", "ar"])(
 		"keeps Arabic questions separate in %s view",
 		async (language) => {

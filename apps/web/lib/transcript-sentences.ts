@@ -4,7 +4,9 @@ function endsSentence(text: string): boolean {
 	const ending = text.trim().replace(/["'”’»）)\]}]+$/u, "");
 	if (/(?:\.{2,}|…)$/.test(ending)) return false;
 	if (
-		/(?:\b(?:Mr|Mrs|Ms|Dr|Prof|Sr|Jr|St|vs|etc)|\b[A-ZА-Я])\.$/iu.test(ending)
+		/\b(?:Mr|Mrs|Ms|Dr|Prof|Sr|Jr|St|vs|etc)\.$/iu.test(ending) ||
+		/^(?:[A-ZА-Я]\.\s*)+$/u.test(ending) ||
+		/(?:^|\s)(?:[A-ZА-Я]\.\s*){2,}$/u.test(ending)
 	)
 		return false;
 	return /\p{Sentence_Terminal}$/u.test(ending);
