@@ -99,7 +99,7 @@ export function MoveItemsDialog({
 		],
 		queryFn: async (): Promise<MoveDestinationGroup[]> =>
 			ownedVideos
-				? getOwnedVideoMoveDestinations()
+				? getOwnedVideoMoveDestinations(organizationId)
 				: [
 						{
 							location,
@@ -137,13 +137,15 @@ export function MoveItemsDialog({
 	const moveMutation = useMutation({
 		mutationFn: async () => {
 			if (item.type === "videos") {
-				const move = ownedVideos ? placeOwnedVideos : moveVideos;
 				if (!selectedGroup) throw new Error("Select a destination");
-				await move({
+				const placement = {
 					videoIds: item.videoIds,
 					folderId: selectedFolderId,
 					location: selectedGroup.location,
-				});
+				};
+				await (ownedVideos
+					? placeOwnedVideos({ ...placement, organizationId })
+					: moveVideos(placement));
 				return;
 			}
 

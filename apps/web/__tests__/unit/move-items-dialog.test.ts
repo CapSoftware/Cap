@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { Folder, Video } from "@cap/web-domain";
+import { Folder, Organisation, Video } from "@cap/web-domain";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -74,6 +74,7 @@ async function render(
 		videoIds: [videoId],
 		currentFolderId: null,
 	},
+	organizationId?: Organisation.OrganisationId,
 ) {
 	await act(async () => {
 		root.render(
@@ -85,6 +86,7 @@ async function render(
 					onOpenChange: mocks.close,
 					location: { type: "personal" },
 					rootLabel: "My Caps",
+					organizationId,
 					item,
 				}),
 			),
@@ -137,6 +139,20 @@ describe("moving Caps from My Caps to a team location", () => {
 			videoIds: [videoId],
 			folderId: null,
 			location: { type: "organization" },
+		});
+	});
+
+	it("uses the Cap's organization when it differs from the active one", async () => {
+		const organizationId = Organisation.OrganisationId.make("cap-org");
+		await render(undefined, organizationId);
+		expect(mocks.destinations).toHaveBeenCalledWith(organizationId);
+		await chooseTeam();
+		await act(async () => button("Share & move").click());
+		expect(mocks.place).toHaveBeenCalledWith({
+			videoIds: [videoId],
+			folderId: null,
+			location: { type: "organization" },
+			organizationId,
 		});
 	});
 

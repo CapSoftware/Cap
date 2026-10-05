@@ -1,4 +1,4 @@
-import { Folder, Space, Video } from "@cap/web-domain";
+import { Folder, Organisation, Space, Video } from "@cap/web-domain";
 import { getTableName, type SQL } from "drizzle-orm";
 import { MySqlDialect, type MySqlTable } from "drizzle-orm/mysql-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -315,6 +315,59 @@ describe("placing owned Caps in team folders", () => {
 		]);
 		expect(filters[0]?.params).toEqual(["org", "owner", "owner"]);
 		expect(filters[1]?.params).toEqual(["org", "owner", "org", spaceId]);
+	});
+
+	it("scopes every check and write to a requested organization the owner belongs to", async () => {
+		const organizationId = Organisation.OrganisationId.make("cap-org");
+		results = [[{ id: ids[0] }], [{ id: folderId }], []];
+		await placeOwnedVideos({
+			videoIds: [ids[0]],
+			folderId,
+			location: { type: "organization" },
+			organizationId,
+		});
+		expect(mocks.organization).toHaveBeenCalledWith("owner", organizationId);
+		expect(filters[0]?.params).toEqual([ids[0], "owner", organizationId]);
+		expect(filters[1]?.params).toEqual([
+			folderId,
+			organizationId,
+			organizationId,
+		]);
+		expect(writes[0]?.values).toEqual([
+			expect.objectContaining({ videoId: ids[0], organizationId }),
+		]);
+	});
+
+	it("rejects a requested organization the owner no longer belongs to", async () => {
+		mocks.organization.mockRejectedValue(new Error("Forbidden"));
+		const organizationId = Organisation.OrganisationId.make("cap-org");
+		await expect(getOwnedVideoMoveDestinations(organizationId)).rejects.toThrow(
+			"Forbidden",
+		);
+		await expect(
+			placeOwnedVideos({
+				videoIds: [ids[0]],
+				folderId: null,
+				location: { type: "personal" },
+				organizationId,
+			}),
+		).rejects.toThrow("Forbidden");
+		expect(mocks.organization).toHaveBeenCalledWith("owner", organizationId);
+		expect(mocks.select).not.toHaveBeenCalled();
+		expect(mocks.transaction).not.toHaveBeenCalled();
+	});
+
+	it("lists destinations in a requested organization", async () => {
+		const organizationId = Organisation.OrganisationId.make("cap-org");
+		results = [[], []];
+		await getOwnedVideoMoveDestinations(organizationId);
+		expect(mocks.organization).toHaveBeenCalledWith("owner", organizationId);
+		expect(filters[0]?.params).toEqual([organizationId, "owner", "owner"]);
+		expect(filters[1]?.params).toEqual([
+			organizationId,
+			"owner",
+			organizationId,
+		]);
 	});
 
 	it("keeps personal moves private and checks personal folder ownership", async () => {
