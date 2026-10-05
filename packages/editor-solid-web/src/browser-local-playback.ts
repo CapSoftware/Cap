@@ -176,10 +176,16 @@ const STALL_MS = 300;
 /// A paused frame (a seek, or a redraw after an edit) still not drawn after
 /// this long is waiting on its media too, and is shown as loading.
 const SEEK_HOLD_MS = 250;
+const FIRST_FRAME_ATTEMPTS = 3;
 /// While paused, the media this far past the playhead is read ahead once
 /// nothing else is loading, so Play starts on loaded media even when the
 /// recording's bitrate is above the connection's.
 const BUFFER_AHEAD_SECONDS = 8;
+/// While playing, how long a drawn screen frame waits for its camera frame
+/// before showing the camera's last frame instead. A camera that can't keep
+/// up (often several times the screen's bitrate) holds its picture until its
+/// media arrives rather than holding the whole preview.
+const CAMERA_GRACE_MS = 120;
 
 /// Zoom springs keep settling after a zoom segment ends.
 const ZOOM_SETTLE_SECS = 3;
@@ -345,6 +351,18 @@ export class BrowserLocalPlayback {
 	private refineTimer: ReturnType<typeof setTimeout> | undefined;
 	private motion: MotionRanges;
 	private drawnFrameKey: string | null = null;
+	private heldCamera: {
+		clip: number;
+		frame: VideoFrame;
+		width: number;
+		height: number;
+		mediaTime: number;
+		sourceColorFix: boolean;
+	} | null = null;
+	private lateCamera: Promise<unknown> | null = null;
+	/// Aborted when playback stops; a late camera frame outlives the frame
+	/// that asked for it.
+	private playController: AbortController | null = null;
 	private lastRenderRepeated = false;
 	private settleResizes = 0;
 
@@ -884,6 +902,79 @@ export class BrowserLocalPlayback {
 		};
 	}
 
+	private holdCamera(clip: number, frame: TrackFrame | null) {
+		if (
+			frame &&
+			typeof VideoFrame === "function" &&
+			frame.source instanceof VideoFrame &&
+			!this.disposed
+		) {
+			this.heldCamera?.frame.close();
+			this.heldCamera = {
+				clip,
+				frame: frame.source.clone(),
+				width: frame.width,
+				height: frame.height,
+				mediaTime: frame.mediaTime,
+				sourceColorFix: frame.sourceColorFix,
+			};
+		}
+		return frame;
+	}
+
+	/// The camera frame for a playing frame: its own once decoded, or the
+	/// camera's last frame when it is still loading `CAMERA_GRACE_MS` after
+	/// the screen frame (at once while an earlier one is still loading). The
+	/// late frame becomes the held one when it arrives, so the camera catches
+	/// up in steps at the right times and never runs behind the screen.
+	private async cameraOrHeld(
+		clip: number,
+		screen: Promise<TrackFrame | null>,
+		camera: Promise<TrackFrame | null>,
+	): Promise<TrackFrame | null> {
+		const held = this.heldCamera;
+		if (!held || held.clip !== clip) {
+			return camera.then((frame) => this.holdCamera(clip, frame));
+		}
+		const ready = camera.then((frame) => ({ frame }));
+		const result = await Promise.race([
+			ready,
+			screen.then(
+				() =>
+					new Promise<null>((resolve) =>
+						setTimeout(() => resolve(null), CAMERA_GRACE_MS),
+					),
+				() => null,
+			),
+		]);
+		if (result) return this.holdCamera(clip, result.frame);
+		perfCount("camera.held");
+		perfEvent("camera.held");
+		const late = ready.then(
+			({ frame }) => this.holdCamera(clip, frame)?.release(),
+			() => undefined,
+		);
+		this.lateCamera = late;
+		void late.finally(() => {
+			if (this.lateCamera === late) this.lateCamera = null;
+		});
+		return this.heldCameraFrame();
+	}
+
+	private heldCameraFrame(): TrackFrame | null {
+		const held = this.heldCamera;
+		if (!held) return null;
+		const frame = held.frame.clone();
+		return {
+			source: frame,
+			width: held.width,
+			height: held.height,
+			mediaTime: held.mediaTime,
+			release: () => frame.close(),
+			sourceColorFix: held.sourceColorFix,
+		};
+	}
+
 	private async pair(
 		recordingClip: number,
 		segmentIndex: number,
@@ -900,31 +991,53 @@ export class BrowserLocalPlayback {
 		}
 		const speed = this.speed(segmentIndex);
 		const started = perfStart();
-		const [screenResult, cameraResult] = await Promise.allSettled([
-			this.trackFrame(
+		const screenFrame = this.trackFrame(
+			recordingClip,
+			"display",
+			role,
+			Math.max(0, sourceTimes[0]),
+			playing,
+			speed,
+			signal,
+			forceSeek,
+			keyFrame,
+		).finally(() => perfSpan("decode.display", started));
+		const hasCamera = Number.isFinite(sourceTimes[1]) && sourceTimes[1] >= 0;
+		const playSignal =
+			playing && !forceSeek && role === "primary"
+				? this.playController?.signal
+				: undefined;
+		let cameraPending: Promise<TrackFrame | null>;
+		if (!hasCamera) cameraPending = Promise.resolve(null);
+		else if (
+			playSignal &&
+			this.lateCamera &&
+			this.heldCamera?.clip === recordingClip
+		) {
+			// The camera is still loading an earlier frame; it shows its last
+			// one until that arrives.
+			cameraPending = Promise.resolve(this.heldCameraFrame());
+		} else {
+			const cameraFrame = this.trackFrame(
 				recordingClip,
-				"display",
+				"camera",
 				role,
-				Math.max(0, sourceTimes[0]),
+				sourceTimes[1],
 				playing,
 				speed,
-				signal,
+				playSignal ?? signal,
 				forceSeek,
 				keyFrame,
-			).finally(() => perfSpan("decode.display", started)),
-			Number.isFinite(sourceTimes[1]) && sourceTimes[1] >= 0
-				? this.trackFrame(
-						recordingClip,
-						"camera",
-						role,
-						sourceTimes[1],
-						playing,
-						speed,
-						signal,
-						forceSeek,
-						keyFrame,
-					).finally(() => perfSpan("decode.camera", started))
-				: Promise.resolve(null),
+			).finally(() => perfSpan("decode.camera", started));
+			cameraPending = playSignal
+				? this.cameraOrHeld(recordingClip, screenFrame, cameraFrame)
+				: role === "primary"
+					? cameraFrame.then((frame) => this.holdCamera(recordingClip, frame))
+					: cameraFrame;
+		}
+		const [screenResult, cameraResult] = await Promise.allSettled([
+			screenFrame,
+			cameraPending,
 		]);
 		if (screenResult.status === "rejected") {
 			if (cameraResult.status === "fulfilled") cameraResult.value?.release();
@@ -1283,7 +1396,9 @@ export class BrowserLocalPlayback {
 				this.drawingSeek = time;
 				this.holdForSeek(true);
 				try {
-					result = await this.renderAt(time, false, true, keyFrame);
+					result = await this.firstFrameRetried(() =>
+						this.renderAt(time, false, true, keyFrame),
+					);
 				} finally {
 					this.holdForSeek(false);
 				}
@@ -1316,6 +1431,8 @@ export class BrowserLocalPlayback {
 		if (this.playing) return;
 		perfEvent("play");
 		this.bufferController?.abort();
+		this.playController?.abort();
+		this.playController = new AbortController();
 		this.audio.resume();
 		this.playing = true;
 		// Play pressed before this preview existed was already shown as
@@ -1439,6 +1556,28 @@ export class BrowserLocalPlayback {
 		})().catch(() => undefined);
 	}
 
+	/// A browser decoding on a starved machine can take longer than a video
+	/// element's timeouts allow; until the preview has a first frame, giving
+	/// up would leave it blank, so a timed out first frame is tried again.
+	private async firstFrameRetried<T>(render: () => Promise<T>) {
+		for (let attempt = 1; ; attempt++) {
+			try {
+				return await render();
+			} catch (cause) {
+				if (
+					attempt >= FIRST_FRAME_ATTEMPTS ||
+					this.disposed ||
+					this.canvas.hasRenderedFrame() ||
+					!(cause instanceof Error) ||
+					!cause.message.includes("timed out")
+				) {
+					throw cause;
+				}
+				perfEvent("frame.retry");
+			}
+		}
+	}
+
 	/// A paused frame still waiting on its media gives way to a newer request
 	/// (the playhead after a hover, or the time Play starts from), which would
 	/// otherwise wait behind it for as long as its media takes to load. Its
@@ -1492,6 +1631,9 @@ export class BrowserLocalPlayback {
 		this.stalled = false;
 		this.awaitingPlayingFrame = false;
 		this.reportHold();
+		this.playController?.abort();
+		this.playController = null;
+		this.lateCamera = null;
 		cancelAnimationFrame(this.animationFrame);
 		this.pool.pause();
 		this.audio.pause();
@@ -1529,6 +1671,8 @@ export class BrowserLocalPlayback {
 		clearTimeout(this.seekHoldTimer);
 		this.bufferController?.abort();
 		this.frameController?.abort();
+		this.heldCamera?.frame.close();
+		this.heldCamera = null;
 		this.canvas.dispose();
 		this.audio.dispose();
 		this.pool.dispose();

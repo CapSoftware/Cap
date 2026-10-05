@@ -444,3 +444,65 @@ test("a paused frame still loading gives way to a newer request", async () => {
 	await back;
 	expect(drawn).toEqual([0]);
 });
+
+test("a playing camera that falls behind holds its last frame and catches up", async () => {
+	class FakeFrame {
+		closed = false;
+		constructor(readonly time: number) {}
+		clone() {
+			return new FakeFrame(this.time);
+		}
+		close() {
+			this.closed = true;
+		}
+	}
+	const host = globalThis as { VideoFrame?: unknown };
+	const realFrame = host.VideoFrame;
+	host.VideoFrame = FakeFrame;
+	const playback = Object.create(
+		BrowserLocalPlayback.prototype,
+	) as BrowserLocalPlayback;
+	Reflect.set(playback, "disposed", false);
+	Reflect.set(playback, "heldCamera", null);
+	Reflect.set(playback, "lateCamera", null);
+	const track = (time: number) => ({
+		source: new FakeFrame(time) as unknown as VideoFrame,
+		width: 640,
+		height: 360,
+		mediaTime: time,
+		release: () => undefined,
+		sourceColorFix: false,
+	});
+	const cameraOrHeld = (
+		Reflect.get(playback, "cameraOrHeld") as (
+			clip: number,
+			screen: Promise<unknown>,
+			camera: Promise<unknown>,
+		) => Promise<{ mediaTime: number } | null>
+	).bind(playback);
+	try {
+		// Nothing held yet: the first camera frame is waited for.
+		const first = await cameraOrHeld(
+			0,
+			Promise.resolve(null),
+			Promise.resolve(track(1)),
+		);
+		expect(first?.mediaTime).toBe(1);
+		// A camera frame still loading after the grace shows the held one.
+		let arrive: (frame: unknown) => void = () => undefined;
+		const slow = new Promise((resolve) => {
+			arrive = resolve;
+		});
+		const held = await cameraOrHeld(0, Promise.resolve(null), slow);
+		expect(held?.mediaTime).toBe(1);
+		expect(Reflect.get(playback, "lateCamera")).not.toBeNull();
+		arrive(track(1.5));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(Reflect.get(playback, "lateCamera")).toBeNull();
+		expect(
+			(Reflect.get(playback, "heldCamera") as { mediaTime: number }).mediaTime,
+		).toBe(1.5);
+	} finally {
+		host.VideoFrame = realFrame;
+	}
+});
