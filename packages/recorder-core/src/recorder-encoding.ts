@@ -29,19 +29,28 @@ export function pickMobileSafeAvcCodec(
 	return LEVEL_5_2_CODEC;
 }
 
-export type RecordingContent = "screen" | "camera";
+/**
+ * What a video track shows: a screen, a camera that is the whole video, or a
+ * camera recorded beside a screen and shown as a bubble over it.
+ */
+export type RecordingContent = "screen" | "camera" | "cameraOverlay";
 
 // Bits per second at 30 fps for captures up to 720p, 1080p, 1600p and above.
 // Screens are mostly still, so the browser spends far less than the target
 // on them; the target only caps scrolling and motion, where text stays sharp
 // at these rates. A camera is never still (sensor noise, people moving), so
-// the encoder always spends its whole target: cameras get about 60% of the
-// screen rate, which measured within run-to-run noise of the old screen rate
-// at the size the camera is shown and about 1-2 VMAF lower full frame.
+// the encoder always spends its whole target. A camera bubble gets about 60%
+// of the old rate, which measured within run-to-run noise of it at the size
+// the bubble is shown; a camera that fills the video keeps more.
 const BITRATES: Record<RecordingContent, readonly number[]> = {
 	screen: [2_500_000, 4_000_000, 6_000_000, 10_000_000],
-	camera: [2_000_000, 3_500_000, 5_000_000, 8_000_000],
+	camera: [2_600_000, 4_500_000, 6_500_000, 10_000_000],
+	cameraOverlay: [2_000_000, 3_500_000, 5_000_000, 8_000_000],
 };
+
+// VP8 (Safari's camera recordings) needs about 30% more bits than H.264 to
+// hold the same quality on camera footage.
+const VP8_BITRATE_SCALE = 1.3;
 
 // Chrome's MediaRecorder defaults to ~2.5 Mb/s, which smears text in screen
 // recordings; scale with the pixels being captured instead.
@@ -91,7 +100,9 @@ export function recorderOptions(
 				settings.height,
 				settings.frameRate,
 				content,
-			) * bitrateScale,
+			) *
+				bitrateScale *
+				(/vp8/i.test(mimeType) ? VP8_BITRATE_SCALE : 1),
 		),
 		videoKeyFrameIntervalDuration: 2000,
 	};

@@ -1334,7 +1334,7 @@ const startRecording = async (request: StartRecordingRequest) => {
 							cameraRecordingStream.getVideoTracks()[0],
 							isSupported,
 							1,
-							"camera",
+							"cameraOverlay",
 						),
 					)
 				: null;

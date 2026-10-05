@@ -1772,7 +1772,7 @@ export const useWebRecorder = ({
 						cameraVideoStream.getVideoTracks()[0],
 						(type) => MediaRecorder.isTypeSupported(type),
 						qualityBitrateScale(quality),
-						"camera",
+						"cameraOverlay",
 					),
 				);
 				cameraRecorder.addEventListener("dataavailable", (event) => {

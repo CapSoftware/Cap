@@ -17,11 +17,12 @@ describe("recordingBitrate", () => {
 		expect(recordingBitrate(undefined, undefined, undefined)).toBe(4_000_000);
 	});
 
-	it("gives cameras a lower camera-shaped rate", () => {
-		expect(recordingBitrate(1280, 720, 30, "camera")).toBe(2_000_000);
-		expect(recordingBitrate(1920, 1080, 30, "camera")).toBe(3_500_000);
-		expect(recordingBitrate(3840, 2160, 30, "camera")).toBe(8_000_000);
-		expect(recordingBitrate(1920, 1080, 60, "camera")).toBe(5_250_000);
+	it("gives cameras a camera-shaped rate, lowest for a camera bubble", () => {
+		expect(recordingBitrate(1280, 720, 30, "cameraOverlay")).toBe(2_000_000);
+		expect(recordingBitrate(1920, 1080, 30, "cameraOverlay")).toBe(3_500_000);
+		expect(recordingBitrate(3840, 2160, 30, "cameraOverlay")).toBe(8_000_000);
+		expect(recordingBitrate(1920, 1080, 60, "cameraOverlay")).toBe(5_250_000);
+		expect(recordingBitrate(1920, 1080, 30, "camera")).toBe(4_500_000);
 	});
 });
 
@@ -44,9 +45,21 @@ describe("recorderOptions", () => {
 				track({ width: 1920, height: 1080, frameRate: 30 }),
 				() => true,
 				1.6,
-				"camera",
+				"cameraOverlay",
 			).videoBitsPerSecond,
 		).toBe(5_600_000);
+	});
+
+	it("gives VP8 camera recordings more bits than H.264", () => {
+		expect(
+			recorderOptions(
+				"video/webm;codecs=vp8",
+				track({ width: 1920, height: 1080, frameRate: 30 }),
+				() => true,
+				1,
+				"cameraOverlay",
+			).videoBitsPerSecond,
+		).toBe(4_550_000);
 	});
 
 	it("keeps the chosen type when the sized one is unsupported or not H.264", () => {
