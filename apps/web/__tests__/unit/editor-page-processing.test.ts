@@ -85,6 +85,12 @@ vi.mock("@/app/s/[videoId]/edit/EditUpgradeGate", () => ({
 vi.mock("@/app/s/[videoId]/edit/edit-recovery", () => ({
 	EditRecovery: () => null,
 }));
+vi.mock("@/app/s/[videoId]/edit/studio/status-screens", async () => ({
+	EditProcessing: (await import("@/app/s/[videoId]/edit/edit-processing"))
+		.EditProcessing,
+	EditRecovery: (await import("@/app/s/[videoId]/edit/edit-recovery"))
+		.EditRecovery,
+}));
 vi.mock("@/app/s/[videoId]/edit/studio/studio-editor-client", () => ({
 	StudioEditorClient: () => null,
 }));

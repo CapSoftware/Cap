@@ -1,7 +1,7 @@
 import {
 	type AiGenerationLanguage,
 	isAiGenerationLanguage,
-} from "@cap/web-domain";
+} from "@cap/web-domain/src/Language";
 import {
 	importWebEditorCap,
 	type WebEditorCapImportProgress,

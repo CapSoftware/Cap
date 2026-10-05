@@ -12,8 +12,7 @@ import { ownerCustomDomain } from "@/lib/owner-custom-domain";
 import { shareLinkUrl } from "@/lib/share-link";
 import { getEditSourceKey, isEditSourceKey } from "@/lib/video-edit-processing";
 import { isWebStudioEnabledForEmail } from "@/lib/web-studio-rollout";
-import { EditProcessing } from "../edit-processing";
-import { EditRecovery } from "../edit-recovery";
+import { EditProcessing, EditRecovery } from "./status-screens";
 import { StudioEditorClient } from "./studio-editor-client";
 
 export default async function StudioEditorPage(props: {

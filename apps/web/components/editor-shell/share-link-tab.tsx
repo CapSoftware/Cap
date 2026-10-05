@@ -10,7 +10,8 @@ import { type MouseEvent, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { getEditorSharing } from "@/actions/videos/get-editor-sharing";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
-import { formatTimestamp } from "@/lib/share-link";
+import { HoverPrefetchLink } from "@/components/hover-prefetch-link";
+import { formatTimestamp } from "@/lib/format-timestamp";
 import {
 	copyRichVideoLink,
 	videoPreviewImageUrl,
@@ -40,6 +41,7 @@ export function ShareLinkTab({
 	playbackTime,
 	onPrivacyClick,
 	onNavigate,
+	prefetchOnHover = false,
 }: {
 	videoId: Video.VideoId;
 	shareUrl: string;
@@ -50,8 +52,10 @@ export function ShareLinkTab({
 	playbackTime?: () => number;
 	onPrivacyClick: () => void;
 	onNavigate?: (event: MouseEvent<HTMLAnchorElement>) => void;
+	prefetchOnHover?: boolean;
 }) {
 	const { webUrl } = usePublicEnv();
+	const PageLink = prefetchOnHover ? HoverPrefetchLink : Link;
 	const [copied, setCopied] = useState(false);
 	const [moment, setMoment] = useState<number | null>(null);
 
@@ -97,14 +101,14 @@ export function ShareLinkTab({
 					)}
 				/>
 			</button>
-			<Link
+			<PageLink
 				href={`/s/${videoId}`}
 				onClick={onNavigate}
 				aria-current={active ? "page" : undefined}
 				className="rec-focus min-w-0 max-w-[16rem] truncate rounded-sm"
 			>
 				{shareUrl.replace(/^https?:\/\//, "")}
-			</Link>
+			</PageLink>
 			<Popover.Root
 				open={moment !== null}
 				onOpenChange={(open) => {
@@ -205,6 +209,7 @@ export function EditorShareLinkTab({
 				title={title}
 				isPublic={isPublic}
 				onNavigate={onNavigate}
+				prefetchOnHover
 				onPrivacyClick={async () => {
 					if (sharing || (await refresh())) setDialogOpen(true);
 				}}

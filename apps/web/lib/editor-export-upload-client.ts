@@ -3,7 +3,7 @@ import {
 	initiateMultipartUpload,
 	MultipartCompletionUncertainError,
 } from "@cap/recorder-core";
-import { Video } from "@cap/web-domain";
+import type { Video } from "@cap/web-domain";
 
 const MAX_EXPORT_BYTES = 12 * 1024 * 1024 * 1024;
 const PART_BYTES = 16 * 1024 * 1024;
@@ -181,7 +181,9 @@ async function uploadWebEditorVideo(
 		throw new Error("Rendered recording metadata is invalid");
 	if (signal.aborted) throw new Error("Recording upload was canceled");
 	const deadline = Date.now() + UPLOAD_DEADLINE_MS;
-	const video = Video.VideoId.make(videoId);
+	// A cast rather than Video.VideoId.make: the value import would bring the
+	// whole Effect runtime into the editor page.
+	const video = videoId as Video.VideoId;
 	const api = { extraBody: { replaceExisting: true } };
 	const target = await initiateMultipartUpload({
 		videoId: video,

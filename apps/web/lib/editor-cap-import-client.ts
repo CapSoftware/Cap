@@ -6,7 +6,7 @@ import {
 	InstantRecordingUploader,
 	MultipartCompletionUncertainError,
 } from "@cap/recorder-core";
-import { Video } from "@cap/web-domain";
+import type { Video } from "@cap/web-domain";
 
 const IMPORT_DEADLINE_MS = 30 * 60 * 1000;
 const CAP_BUNDLE_PATH =
@@ -205,7 +205,7 @@ export async function importWebEditorCap(
 	let uploadedFraction = 0;
 	let reportedPercent = -1;
 	const uploader = new InstantRecordingUploader({
-		videoId: Video.VideoId.make(videoId),
+		videoId: videoId as Video.VideoId,
 		uploadId: target.uploadId,
 		provider: target.provider,
 		mimeType: CAP_BUNDLE_CONTENT_TYPE,

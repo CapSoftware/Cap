@@ -11,6 +11,7 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { toast } from "sonner";
 import {
 	EditorShellActions,
 	EditorShellBar,
@@ -37,9 +38,29 @@ import type { WebEditorVideoImportProgress } from "@/lib/editor-video-import-cli
 import { openWorkerEditorSession } from "@/lib/editor-worker-session-client";
 import { navigateWithTransition, nextPageReady } from "@/utils/view-transition";
 import type { ClipRecorderContext } from "./clip-recorder-context";
-import { EditorClipRecorder } from "./editor-clip-recorder";
 import { EditorEntryFrame } from "./editor-entry-frame";
 import { EditorHostBridge } from "./editor-host";
+
+const loadClipRecorder = () =>
+	import("./editor-clip-recorder").then((module) => module.EditorClipRecorder);
+
+// If the recorder's code can't load, opening it reports that instead of
+// taking the editor down with it.
+const EditorClipRecorder = dynamic(
+	() => loadClipRecorder().catch(() => ClipRecorderUnavailable),
+	{ ssr: false },
+);
+
+function ClipRecorderUnavailable(props: {
+	onClose: (imported: boolean) => void;
+}) {
+	const onClose = useRef(props.onClose);
+	useEffect(() => {
+		toast.error("The recorder couldn't load. Reload the page and try again.");
+		onClose.current(false);
+	}, []);
+	return null;
+}
 
 const UpgradeModal = dynamic(
 	() =>
@@ -619,6 +640,13 @@ export function StudioEditorClient(props: {
 		const timer = setTimeout(() => setEntryFrameGone(true), 320);
 		return () => clearTimeout(timer);
 	}, [editorPainted]);
+	// Code for the recorder and for the share page, the usual way out, loads
+	// once the editor shows a frame rather than competing with it for one.
+	useEffect(() => {
+		if (!editorPainted) return;
+		void loadClipRecorder().catch(() => undefined);
+		router.prefetch(`/s/${videoId}`);
+	}, [editorPainted, router, videoId]);
 
 	const confirmLeave = (event: MouseEvent<HTMLAnchorElement>) => {
 		if (
@@ -720,6 +748,7 @@ export function StudioEditorClient(props: {
 							title="Back to shareable link"
 							backHref={`/s/${videoId}`}
 							onClick={backToSharePage}
+							prefetchOnHover
 						/>
 					}
 					center={
@@ -737,7 +766,9 @@ export function StudioEditorClient(props: {
 							</EditorShellTab>
 						</>
 					}
-					right={<EditorShellActions onNavigate={confirmLeave} />}
+					right={
+						<EditorShellActions onNavigate={confirmLeave} prefetchOnHover />
+					}
 				/>
 			</div>
 			<div className="relative min-h-0 flex-1">

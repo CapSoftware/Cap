@@ -163,19 +163,25 @@ export function EditorTabs({
 
 export function EditorShellActions({
 	onNavigate,
+	prefetchOnHover = false,
 }: {
 	onNavigate?: MouseEventHandler<HTMLAnchorElement>;
+	prefetchOnHover?: boolean;
 }) {
+	const DashboardLink = prefetchOnHover ? HoverPrefetchLink : Link;
 	return (
 		<>
-			<Link
+			<DashboardLink
 				href="/dashboard/caps"
 				onClick={onNavigate}
 				className="rec-btn is-ghost"
 			>
 				Dashboard
-			</Link>
-			<RecordVideoLink onNavigate={onNavigate} />
+			</DashboardLink>
+			<RecordVideoLink
+				onNavigate={onNavigate}
+				prefetchOnHover={prefetchOnHover}
+			/>
 		</>
 	);
 }

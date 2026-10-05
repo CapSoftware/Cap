@@ -1,13 +1,6 @@
 import { buildEnv, NODE_ENV } from "@cap/env";
 
-export function formatTimestamp(seconds: number) {
-	const h = Math.floor(seconds / 3600);
-	const m = Math.floor((seconds % 3600) / 60);
-	const s = seconds % 60;
-	if (h > 0)
-		return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
-	return `${m}:${String(s).padStart(2, "0")}`;
-}
+export { formatTimestamp } from "./format-timestamp";
 
 /**
  * Where a recording is shared: its owner's verified custom domain where Cap
