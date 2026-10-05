@@ -105,7 +105,7 @@ impl ExporterBuilder {
             ProjectConfiguration::load(&self.project_path)
                 .map_err(|error| ExporterBuildError::ConfigLoad(error.into()))?
         };
-        Ok(prepare_project_for_export(project_config))
+        Ok(project_config)
     }
 
     async fn build_inner(
@@ -291,15 +291,6 @@ pub fn synthesize_default_timeline(
             waveform_segments: Vec::new(),
         });
     }
-}
-
-pub fn prepare_project_for_export(
-    mut project_config: ProjectConfiguration,
-) -> ProjectConfiguration {
-    if let Some(captions) = &mut project_config.captions {
-        captions.settings.enabled &= captions.settings.export_with_subtitles;
-    }
-    project_config
 }
 
 pub fn make_cursor_only_project(mut project_config: ProjectConfiguration) -> ProjectConfiguration {
@@ -654,113 +645,5 @@ mod cancellation_tests {
         user.store(true, Ordering::Relaxed);
         assert!(cancellation.user.load(Ordering::Relaxed));
         assert!(!cancellation.stop.load(Ordering::Relaxed));
-    }
-}
-
-#[cfg(test)]
-mod subtitle_export_tests {
-    use super::*;
-
-    fn project(enabled: bool, export: bool) -> ProjectConfiguration {
-        serde_json::from_value(serde_json::json!({
-            "captions": {
-                "segments": [{"id": "source", "start": 0.0, "end": 2.0, "text": "Keep this caption"}],
-                "sourceTimed": true,
-                "settings": {"enabled": enabled, "exportWithSubtitles": export, "font": "System Sans-Serif"}
-            },
-            "timeline": {
-                "segments": [{"start": 0.0, "end": 4.0, "timescale": 1.0}],
-                "zoomSegments": [],
-                "captionSegments": [{"id": "projected", "start": 0.0, "end": 2.0, "text": "Keep this caption"}]
-            }
-        }))
-        .unwrap()
-    }
-
-    #[test]
-    fn subtitle_export_requires_both_switches_and_preserves_editor_config() {
-        for enabled in [false, true] {
-            for export in [false, true] {
-                let editor = project(enabled, export);
-                let original = serde_json::to_value(&editor).unwrap();
-                let mut expected = original.clone();
-                expected["captions"]["settings"]["enabled"] = (enabled && export).into();
-                let output = prepare_project_for_export(editor.clone());
-                assert_eq!(serde_json::to_value(output).unwrap(), expected);
-                assert_eq!(serde_json::to_value(editor).unwrap(), original);
-            }
-        }
-    }
-
-    #[test]
-    fn subtitle_export_preserves_legacy_default_off() {
-        let mut value = serde_json::to_value(project(true, true)).unwrap();
-        assert!(
-            value["captions"]["settings"]
-                .as_object_mut()
-                .unwrap()
-                .remove("exportWithSubtitles")
-                .is_some()
-        );
-        let editor: ProjectConfiguration = serde_json::from_value(value).unwrap();
-        assert!(editor.captions.as_ref().unwrap().settings.enabled);
-        assert!(
-            !editor
-                .captions
-                .as_ref()
-                .unwrap()
-                .settings
-                .export_with_subtitles
-        );
-        let output = prepare_project_for_export(editor);
-        assert!(!output.captions.unwrap().settings.enabled);
-    }
-
-    #[test]
-    fn subtitle_export_transform_is_idempotent_and_keeps_missing_captions_missing() {
-        let empty = ProjectConfiguration::default();
-        assert_eq!(
-            serde_json::to_value(prepare_project_for_export(empty.clone())).unwrap(),
-            serde_json::to_value(empty).unwrap()
-        );
-        for export in [false, true] {
-            let once = prepare_project_for_export(project(true, export));
-            let twice = prepare_project_for_export(once.clone());
-            assert_eq!(
-                serde_json::to_value(once).unwrap(),
-                serde_json::to_value(twice).unwrap()
-            );
-        }
-    }
-
-    #[test]
-    fn subtitle_export_builder_applies_policy_to_disk_and_explicit_configs() {
-        let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("project-config.json");
-        for export in [false, true] {
-            let editor = project(true, export);
-            std::fs::write(&path, serde_json::to_vec(&editor).unwrap()).unwrap();
-            let mut disk = ExporterBase::builder(temp.path().to_path_buf());
-            let mut explicit = ExporterBase::builder(temp.path().to_path_buf()).with_config(editor);
-            for output in [
-                disk.load_project_config().unwrap(),
-                explicit.load_project_config().unwrap(),
-            ] {
-                assert_eq!(output.captions.unwrap().settings.enabled, export);
-            }
-            let persisted: ProjectConfiguration =
-                serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-            assert!(persisted.captions.unwrap().settings.enabled);
-        }
-    }
-
-    #[test]
-    fn subtitle_export_never_reintroduces_cursor_only_captions() {
-        for export in [false, true] {
-            let output =
-                prepare_project_for_export(make_cursor_only_project(project(true, export)));
-            assert!(output.captions.is_none());
-            assert!(output.timeline.unwrap().caption_segments.is_empty());
-        }
     }
 }

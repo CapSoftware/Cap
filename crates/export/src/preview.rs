@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     ExportError, ExporterBase, ExporterBuilder, make_cursor_only_project,
-    prepare_project_for_export, synthesize_default_timeline,
+    synthesize_default_timeline,
 };
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -141,7 +141,7 @@ async fn render_preview_with_base(
 /// seconds, and it is the same path the Tauri editor's fast preview takes.
 pub async fn render_preview_with_editor(
     editor: &EditorInstance,
-    project_config: ProjectConfiguration,
+    mut project_config: ProjectConfiguration,
     frame_time: f64,
     settings: ExportPreviewSettings,
 ) -> Result<ExportPreviewResult, ExportError> {
@@ -149,7 +149,6 @@ pub async fn render_preview_with_editor(
     let studio_meta = recording_meta
         .studio_meta()
         .ok_or_else(|| ExportError::Other("Cannot preview non-studio recordings".to_string()))?;
-    let mut project_config = prepare_project_for_export(project_config);
     if settings.cursor_only {
         project_config = make_cursor_only_project(project_config);
     }
@@ -594,15 +593,14 @@ mod subtitle_preview_tests {
     use super::*;
 
     #[test]
-    fn immediate_export_preview_uses_current_toggle_before_disk_save() {
+    fn immediate_export_preview_uses_current_captions_before_disk_save() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("project-config.json");
-        for export in [false, true] {
+        for enabled in [false, true] {
             let current = ProjectConfiguration {
                 captions: Some(cap_project::CaptionsData {
                     settings: cap_project::CaptionSettings {
-                        enabled: true,
-                        export_with_subtitles: export,
+                        enabled,
                         ..Default::default()
                     },
                     ..Default::default()
@@ -611,12 +609,7 @@ mod subtitle_preview_tests {
             };
             let original = serde_json::to_value(&current).unwrap();
             let mut stale = current.clone();
-            stale
-                .captions
-                .as_mut()
-                .unwrap()
-                .settings
-                .export_with_subtitles = !export;
+            stale.captions.as_mut().unwrap().settings.enabled = !enabled;
             let stale_bytes = serde_json::to_vec(&stale).unwrap();
             std::fs::write(&path, &stale_bytes).unwrap();
             let mut builder = preview_builder_with_config(
@@ -631,11 +624,7 @@ mod subtitle_preview_tests {
                 true,
             );
             let preview = builder.load_project_config().unwrap();
-            assert_eq!(preview.captions.as_ref().unwrap().settings.enabled, export);
-            assert_eq!(
-                preview.captions.unwrap().settings.export_with_subtitles,
-                export
-            );
+            assert_eq!(preview.captions.unwrap().settings.enabled, enabled);
             assert_eq!(std::fs::read(&path).unwrap(), stale_bytes);
             assert_eq!(serde_json::to_value(current).unwrap(), original);
             assert!(builder.force_ffmpeg_decoder);
@@ -648,7 +637,6 @@ mod subtitle_preview_tests {
             captions: Some(cap_project::CaptionsData {
                 settings: cap_project::CaptionSettings {
                     enabled: true,
-                    export_with_subtitles: true,
                     ..Default::default()
                 },
                 ..Default::default()

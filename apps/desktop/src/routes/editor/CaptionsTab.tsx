@@ -1579,20 +1579,6 @@ export function CaptionsTab(props: {
 						</Field>
 					</div>
 				</Section>
-
-				<div class="w-full border-t border-ed-line" />
-
-				<Section name="Export options">
-					<Field name="Export with Subtitles" inline>
-						<Toggle
-							checked={getSetting("exportWithSubtitles")}
-							onChange={(checked) =>
-								updateCaptionSetting("exportWithSubtitles", checked)
-							}
-							disabled={!hasCaptions()}
-						/>
-					</Field>
-				</Section>
 			</div>
 
 			<Show

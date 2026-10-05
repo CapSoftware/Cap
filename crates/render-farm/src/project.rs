@@ -21,8 +21,7 @@ pub struct LoadedProject {
 
 impl LoadedProject {
     pub fn load(path: &Path) -> Result<Self> {
-        let config = ProjectConfiguration::load(path).context("project-config.json")?;
-        let mut config = cap_export::prepare_project_for_export(config);
+        let mut config = ProjectConfiguration::load(path).context("project-config.json")?;
         let recording_meta = RecordingMeta::load_for_project(path)
             .map_err(|error| anyhow!("recording-meta.json: {error}"))?;
         let studio_meta = recording_meta

@@ -16,8 +16,7 @@ use serde::Serialize;
 use specta::Type;
 
 use crate::{
-    ExporterBase, make_cursor_only_project, prepare_project_for_export, settings::ExportSettings,
-    synthesize_default_timeline,
+    ExporterBase, make_cursor_only_project, settings::ExportSettings, synthesize_default_timeline,
 };
 
 #[derive(Clone, Debug, Serialize, Type)]
@@ -143,7 +142,7 @@ pub async fn estimate_export_web(
 
 async fn estimate_export_inner(
     editor: Arc<EditorInstance>,
-    project: ProjectConfiguration,
+    mut project: ProjectConfiguration,
     settings: ExportSettings,
     cancel: Arc<AtomicBool>,
     web_fast: bool,
@@ -163,7 +162,6 @@ async fn estimate_export_inner(
     if resolution.x == 0 || resolution.y == 0 {
         return Err("Invalid export resolution".into());
     }
-    let mut project = prepare_project_for_export(project);
     if settings.cursor_only() {
         project = make_cursor_only_project(project);
     }
