@@ -25,6 +25,7 @@ import {
 	setVideoPassword,
 } from "@/actions/videos/password";
 import {
+	getVideoSharingPolicy,
 	getVideoViewerGrants,
 	inviteVideoViewer,
 	revokeVideoViewer,
@@ -56,6 +57,7 @@ interface SharingDialogProps {
 	spacesData?: Spaces[] | null;
 	hasPassword?: boolean;
 	allowedEmailDomain?: string | null;
+	videoSharingRestrictedToOrg?: boolean;
 	inheritedPasswordSources?: SpaceRuleSource[];
 	onPasswordUpdated?: (protectedStatus: boolean) => void;
 	user?: CurrentUser | null;
@@ -73,6 +75,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 	spacesData: propSpacesData = null,
 	hasPassword = false,
 	allowedEmailDomain: propAllowedEmailDomain,
+	videoSharingRestrictedToOrg: propRestricted,
 	inheritedPasswordSources = [],
 	onPasswordUpdated,
 	user: propUser,
@@ -107,6 +110,13 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 	const router = useRouter();
 	const { webUrl } = usePublicEnv();
 	const shareUrl = `${webUrl}/s/${capId}`;
+	const sharingPolicy = useQuery({
+		queryKey: ["video-sharing-policy", capId],
+		queryFn: () => getVideoSharingPolicy(capId),
+		enabled: isOpen,
+	});
+	const restricted =
+		sharingPolicy.data?.videoSharingRestrictedToOrg ?? propRestricted ?? false;
 	const viewerGrants = useQuery({
 		queryKey: ["video-viewer-grants", capId],
 		queryFn: () => getVideoViewerGrants(capId),
@@ -417,7 +427,25 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 				</div>
 
 				<div className="p-5">
-					{activeTab === "Share" ? (
+					{restricted ? (
+						<div className="space-y-3 rounded-lg border border-gray-4 bg-gray-1 p-4">
+							<p className="text-sm font-medium text-gray-12">
+								Organization only
+							</p>
+							<p className="text-sm text-gray-10">
+								Only signed-in members of this recording’s organization can view
+								it. Your organization overrides public links, invitations,
+								passwords, and individual sharing settings.
+							</p>
+							<p className="text-xs text-gray-10">
+								An organization admin or owner can change this in organization
+								preferences.
+							</p>
+							<Button size="sm" variant="dark" onClick={copyShareUrl}>
+								Copy link for organization members
+							</Button>
+						</div>
+					) : activeTab === "Share" ? (
 						<>
 							{/* Public sharing toggle */}
 							<div className="flex justify-between items-center p-3 mb-4 rounded-lg border bg-gray-1 border-gray-4">
@@ -654,7 +682,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 				</div>
 
 				<DialogFooter className="p-5 border-t border-gray-4">
-					{activeTab === "Share" ? (
+					{activeTab === "Share" && !restricted ? (
 						<>
 							<Button size="sm" variant="gray" onClick={onClose}>
 								Cancel

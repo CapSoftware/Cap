@@ -13,6 +13,7 @@ import {
 	videos,
 	videoUploads,
 } from "@cap/database/schema";
+import { organizationVideoAccessCondition } from "@cap/database/video-organization-access";
 import { serverEnv } from "@cap/env";
 import {
 	Database,
@@ -282,6 +283,7 @@ export default async function SharedCapsPage(props: {
 	const limit = Number(searchParams.limit) || 15;
 	const user = await getCurrentUser();
 	if (!user) notFound();
+	const viewerUserId = user.id;
 
 	const spaceOrOrg = await Effect.flatMap(Spaces, (s) =>
 		s.getSpaceOrOrg(Space.SpaceId.make(params.spaceId)),
@@ -350,6 +352,7 @@ export default async function SharedCapsPage(props: {
 					.where(
 						and(
 							eq(spaceVideos.spaceId, spaceId),
+							organizationVideoAccessCondition(viewerUserId),
 							isNull(spaceVideos.folderId),
 							isNull(organizations.tombstoneAt),
 						),
@@ -373,8 +376,13 @@ export default async function SharedCapsPage(props: {
 				db()
 					.select({ count: count() })
 					.from(spaceVideos)
+					.innerJoin(videos, eq(spaceVideos.videoId, videos.id))
 					.where(
-						and(eq(spaceVideos.spaceId, spaceId), isNull(spaceVideos.folderId)),
+						and(
+							eq(spaceVideos.spaceId, spaceId),
+							isNull(spaceVideos.folderId),
+							organizationVideoAccessCondition(viewerUserId),
+						),
 					),
 			]);
 			return {
@@ -480,6 +488,7 @@ export default async function SharedCapsPage(props: {
 					.where(
 						and(
 							eq(sharedVideos.organizationId, orgId),
+							organizationVideoAccessCondition(viewerUserId),
 							isNull(sharedVideos.folderId),
 						),
 					)
@@ -506,6 +515,7 @@ export default async function SharedCapsPage(props: {
 					.where(
 						and(
 							eq(sharedVideos.organizationId, orgId),
+							organizationVideoAccessCondition(viewerUserId),
 							isNull(videos.folderId),
 						),
 					),

@@ -36,6 +36,18 @@ export async function shareCap({
 		if (!cap || cap.ownerId !== user.id) {
 			return { success: false, error: "Unauthorized" };
 		}
+		const [organization] = await db()
+			.select({ restricted: organizations.videoSharingRestrictedToOrg })
+			.from(organizations)
+			.where(eq(organizations.id, cap.orgId))
+			.limit(1);
+		if (organization?.restricted) {
+			return {
+				success: false,
+				error:
+					"Sharing is managed by your organization. Only organization members can view this recording.",
+			};
+		}
 
 		const userOrganizations = await db()
 			.select({

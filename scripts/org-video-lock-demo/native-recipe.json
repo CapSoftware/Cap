@@ -1,0 +1,13 @@
+{
+	"version": 1,
+	"platform": "macos",
+	"recorder": "installed Cap CLI",
+	"captureTarget": "dedicated synthetic Chrome window",
+	"setup": [
+		"node scripts/org-video-lock-demo/prepare.mjs",
+		"bun scripts/org-video-lock-demo/seed.ts"
+	],
+	"start": "node scripts/org-video-lock-demo/start.mjs",
+	"ready": "node scripts/org-video-lock-demo/ready.mjs",
+	"capture": "node scripts/org-video-lock-demo/native-capture.mjs <absolute-artifact-directory>"
+}

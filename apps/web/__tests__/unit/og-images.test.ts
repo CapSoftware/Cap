@@ -85,19 +85,17 @@ describe("/api/og", () => {
 });
 
 describe("video og", () => {
-	it("renders the video layout with caching headers", async () => {
+	it("renders video previews without caching access-sensitive content", async () => {
 		const res = await renderVideoOg({
 			kind: "video",
 			video: {
 				title: "Cap walkthrough",
-				ownerName: "Richie",
+				ownerName: "Example Owner",
 				duration: 204,
 			},
 		});
 		expect(res.status).toBe(200);
-		expect(res.headers.get("cache-control")).toContain(
-			"stale-while-revalidate",
-		);
+		expect(res.headers.get("cache-control")).toContain("no-store");
 		const { width, height } = pngSize(Buffer.from(await res.arrayBuffer()));
 		expect(width).toBe(1200);
 		expect(height).toBe(630);
