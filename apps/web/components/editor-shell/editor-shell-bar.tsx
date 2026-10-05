@@ -189,19 +189,24 @@ export function EditorShellActions({
 export function RecordVideoLink({
 	onNavigate,
 	prefetchOnHover = false,
+	compact = false,
 }: {
 	onNavigate?: MouseEventHandler<HTMLAnchorElement>;
 	prefetchOnHover?: boolean;
+	compact?: boolean;
 }) {
 	const RecordLink = prefetchOnHover ? HoverPrefetchLink : Link;
 	return (
 		<RecordLink
 			href="/dashboard/editor?tab=record"
 			onClick={onNavigate}
-			className="rec-btn"
+			aria-label={compact ? "Record a video" : undefined}
+			className={clsx("rec-btn", compact && "max-sm:w-8 max-sm:px-0")}
 		>
 			<span className="size-2 rounded-full bg-[var(--rec-red)]" />
-			Record a video
+			<span className={compact ? "max-sm:hidden" : undefined}>
+				Record a video
+			</span>
 		</RecordLink>
 	);
 }

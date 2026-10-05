@@ -12,12 +12,13 @@ import {
 	useState,
 } from "react";
 import { toast } from "sonner";
+import { ConnectionIndicator } from "@/components/editor-shell/connection-indicator";
 import {
-	EditorShellActions,
 	EditorShellBar,
 	EditorShellBrand,
 	EditorShellTab,
 	EditorTabLabel,
+	RecordVideoLink,
 } from "@/components/editor-shell/editor-shell-bar";
 import { EditorShareLinkTab } from "@/components/editor-shell/share-link-tab";
 import { useAppPage } from "@/components/editor-shell/use-app-page";
@@ -740,7 +741,8 @@ export function StudioEditorClient(props: {
 	}
 	return (
 		<div className="flex h-screen w-screen flex-col bg-[#f1f1f3] dark:bg-[#131315]">
-			<div className={editorFocused ? "hidden" : "contents"}>
+			{/* The share page's header divider, so the two read as one bar. */}
+			<div className={editorFocused ? "hidden" : "border-b border-gray-5"}>
 				<EditorShellBar
 					light="grey"
 					left={
@@ -767,7 +769,17 @@ export function StudioEditorClient(props: {
 						</>
 					}
 					right={
-						<EditorShellActions onNavigate={confirmLeave} prefetchOnHover />
+						<>
+							<ConnectionIndicator
+								frameRef={iframeRef}
+								onNavigate={confirmLeave}
+							/>
+							<RecordVideoLink
+								onNavigate={confirmLeave}
+								prefetchOnHover
+								compact
+							/>
+						</>
 					}
 				/>
 			</div>
