@@ -304,8 +304,6 @@ export async function beginEditorExport(
 	return id;
 }
 
-/// Uploads a rendered Save to its presigned URL and tells the web app, which
-/// publishes it. The export's files go once it's done either way.
 async function publishExport(job: ExportJob) {
 	const publish = job.publish;
 	if (!publish) return;
@@ -394,7 +392,6 @@ export async function reportEditorExport(
 	}
 }
 
-/// A publishing export's progress, answerable after its session closed.
 export function getEditorSave(sessionId: string, id: string) {
 	const job = jobs.get(id);
 	if (!job?.publish || job.sessionId !== sessionId) return null;
@@ -605,18 +602,24 @@ const ticketSweep = setInterval(() => {
 }, 30_000);
 ticketSweep.unref();
 
+/// Settles once the session's Saves have published or failed, or null when
+/// none is under way. They outlive the session and need its files until then.
+export function editorSavesInFlight(sessionId: string) {
+	const saves = [...jobs.values()].filter(
+		(job) => job.sessionId === sessionId && job.publish && !publishSettled(job),
+	);
+	return saves.length > 0
+		? Promise.all(saves.map((job) => job.published)).then(() => undefined)
+		: null;
+}
+
 export async function closeEditorExports(sessionId: string) {
 	closingSessions.add(sessionId);
 	try {
 		await starting.get(sessionId);
-		const sessionJobs = [...jobs.values()].filter(
-			(job) => job.sessionId === sessionId,
-		);
-		// A Save finishes publishing before its session's files go.
-		await Promise.all(sessionJobs.map((job) => job.published));
 		await Promise.all(
-			sessionJobs
-				.filter((job) => !job.publish)
+			[...jobs.values()]
+				.filter((job) => job.sessionId === sessionId && !job.publish)
 				.map((job) => cancelEditorExport(sessionId, job.id, true)),
 		);
 	} finally {

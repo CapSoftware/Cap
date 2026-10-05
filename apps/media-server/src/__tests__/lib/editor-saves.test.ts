@@ -1,9 +1,13 @@
 import { afterAll, expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import app from "../../editor-worker-app";
 import {
+	beginEditorExport,
+	closeEditorExports,
+	editorSavesInFlight,
+	getEditorSave,
 	reportEditorExport,
 	uploadEditorExport,
 } from "../../lib/editor-exports";
@@ -117,4 +121,52 @@ test("the Save route rejects requests without the secret, bad targets and unknow
 		headers: authed,
 	});
 	expect(status.status).toBe(404);
+});
+
+test("closing a session doesn't wait for its Save, which keeps going and reports", async () => {
+	const prepare = join(root, "prepare.sh");
+	await writeFile(prepare, "#!/bin/sh\nsleep 0.2\nexit 1\n", { mode: 0o755 });
+	process.env.CAP_WEB_EDITOR_PREPARE_BIN = prepare;
+	const project = join(root, "session", "project.cap");
+	await mkdir(project, { recursive: true });
+	let reported: () => void = () => {};
+	const callback = new Promise<void>((resolve) => {
+		reported = resolve;
+	});
+	const originalFetch = globalThis.fetch;
+	globalThis.fetch = (async () => {
+		await callback;
+		return Response.json({ ok: true });
+	}) as unknown as typeof fetch;
+	try {
+		const id = await beginEditorExport(
+			"save-session",
+			{ projectPath: project } as never,
+			{
+				format: "Mp4",
+				fps: 30,
+				resolution_base: { x: 1920, y: 1080 },
+				compression: "Maximum",
+				custom_bpp: null,
+			},
+			{
+				uploadUrl: "https://bucket.example/result.mp4",
+				callbackUrl: "https://cap.example/callback",
+				videoId: "video",
+				saveId: "8c1f4d39-6d2c-4b1a-9e0b-0b2f6f5f3a11",
+			},
+		);
+		const closing = Date.now();
+		await closeEditorExports("save-session");
+		expect(Date.now() - closing).toBeLessThan(150);
+		const saves = editorSavesInFlight("save-session");
+		expect(saves).not.toBeNull();
+		reported();
+		await saves;
+		expect(getEditorSave("save-session", id)?.status).toBe("error");
+		expect(editorSavesInFlight("save-session")).toBeNull();
+	} finally {
+		globalThis.fetch = originalFetch;
+		delete process.env.CAP_WEB_EDITOR_PREPARE_BIN;
+	}
 });

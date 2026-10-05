@@ -2,7 +2,11 @@ import { randomUUID } from "node:crypto";
 import { stripEditorCaptionContent } from "../../../web/lib/editor-caption-access";
 import type { EditorAudioAsset } from "./editor-assets";
 import { closeEditorCapImports } from "./editor-cap-imports";
-import { closeEditorExports, editorExportActivity } from "./editor-exports";
+import {
+	closeEditorExports,
+	editorExportActivity,
+	editorSavesInFlight,
+} from "./editor-exports";
 import type { EditorImageAsset } from "./editor-image-assets";
 import {
 	downloadEditorMedia,
@@ -502,11 +506,21 @@ export async function closeEditorSession(id: string) {
 				closeEditorCapImports(id),
 			]);
 		} finally {
-			try {
-				await session.native.close();
-			} finally {
-				closingSessions.delete(id);
-			}
+			const closeNative = async () => {
+				try {
+					await session.native.close();
+				} finally {
+					closingSessions.delete(id);
+				}
+			};
+			// The session is closed to its clients at once; the files a Save
+			// still publishing renders from go only when it's done.
+			const saves = editorSavesInFlight(id);
+			if (saves)
+				void saves.then(closeNative).catch((error) => {
+					console.error("Editor session cleanup after a save failed", error);
+				});
+			else await closeNative();
 		}
 		return true;
 	})();
