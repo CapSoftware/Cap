@@ -276,9 +276,10 @@ export const screenRecordWindowsContent: SeoPageContent = {
 	],
 
 	video: {
-		url: "/videos/cap-windows-screen-recorder-demo.mp4",
-		thumbnail: "/videos/cap-windows-screen-recorder-thumbnail.png",
-		alt: "Cap screen recorder running on Windows 11 showing HD recording with webcam overlay",
+		iframe: {
+			src: "https://www.rend.so/embed/10512af0-b922-4efa-8974-f8f14fc1886a?accent=3e63dd",
+			title: "Cap screen recording demo",
+		},
 	},
 
 	cta: {
