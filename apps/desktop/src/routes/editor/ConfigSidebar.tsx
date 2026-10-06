@@ -771,7 +771,6 @@ function ConfigSidebarContent(props: { sheet?: ConfigSidebarSheet }) {
 								editorState.timeline.audioPicker === null &&
 								editorState.timeline.audioReplace === null;
 							props.sheet?.setOpen(!showing);
-							// Clear any active selection first
 							if (sidebarSelection()) {
 								setEditorState("timeline", "selection", null);
 							}
