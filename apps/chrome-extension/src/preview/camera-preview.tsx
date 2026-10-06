@@ -247,7 +247,7 @@ function App() {
 	const sessionCounterRef = useRef(0);
 	const autoPictureInPictureRef = useRef(false);
 	const autoPictureInPictureEnabledRef = useRef(false);
-	const previewEnabled = Boolean(settings?.enabled && settings.deviceId);
+	const previewEnabled = Boolean(settings?.enabled);
 	const isPictureInPictureSupported =
 		typeof document !== "undefined" && document.pictureInPictureEnabled;
 
@@ -486,6 +486,13 @@ function App() {
 				streamRef.current = stream;
 				activeDeviceRef.current = settings.deviceId;
 
+				for (const track of stream.getVideoTracks()) {
+					track.addEventListener("unmute", () => {
+						void videoRef.current?.play().catch(() => undefined);
+						publishPreviewFrame();
+					});
+				}
+
 				if (videoRef.current) {
 					videoRef.current.srcObject = stream;
 					if (autoPictureInPictureEnabledRef.current) {
@@ -621,6 +628,10 @@ function App() {
 					}
 				}}
 				onLoadedData={publishPreviewFrame}
+				onCanPlay={() => {
+					void videoRef.current?.play().catch(() => undefined);
+					publishPreviewFrame();
+				}}
 				onPlaying={publishPreviewFrame}
 			/>
 			{isPictureInPictureSupported && !isInPictureInPicture ? (

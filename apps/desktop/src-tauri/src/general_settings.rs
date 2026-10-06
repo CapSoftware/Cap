@@ -2,9 +2,11 @@ use crate::updates::UpdateChannel;
 use crate::window_exclusion::WindowExclusion;
 use scap_targets::DisplayId;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{Value, json};
 use specta::Type;
 use std::collections::BTreeMap;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 #[cfg(target_os = "macos")]
 use tauri::Listener;
 use tauri::{AppHandle, Manager, Wry};
@@ -375,6 +377,175 @@ pub enum AppTheme {
     Dark,
 }
 
+struct GeneralSettingsSnapshot {
+    original: Option<Value>,
+    settings: GeneralSettingsStore,
+    invalid_fields: Vec<String>,
+}
+
+impl GeneralSettingsSnapshot {
+    fn load(original: Option<Value>) -> Result<Self, String> {
+        let Some(raw) = original.as_ref() else {
+            return Ok(Self {
+                original,
+                settings: GeneralSettingsStore::default(),
+                invalid_fields: Vec::new(),
+            });
+        };
+        if raw.is_object()
+            && let Ok(settings) = serde_json::from_value(raw.clone())
+        {
+            return Ok(Self {
+                original,
+                settings,
+                invalid_fields: Vec::new(),
+            });
+        }
+
+        let mut invalid_fields = Vec::new();
+        let settings = if let Some(fields) = raw.as_object() {
+            let mut recovered = fields.clone();
+            for (key, value) in fields {
+                let field = Value::Object([(key.clone(), value.clone())].into_iter().collect());
+                if serde_json::from_value::<GeneralSettingsStore>(field).is_err() {
+                    let _ = recovered.remove(key);
+                    invalid_fields.push(key.clone());
+                }
+            }
+            serde_json::from_value(Value::Object(recovered))
+                .map_err(|_| "Could not recover general settings fields".to_string())?
+        } else {
+            invalid_fields.push("general_settings".to_string());
+            GeneralSettingsStore::default()
+        };
+
+        Ok(Self {
+            original,
+            settings,
+            invalid_fields,
+        })
+    }
+
+    fn persist(
+        &self,
+        settings: &GeneralSettingsStore,
+        backup: impl FnOnce(&Value) -> Result<(), String>,
+        save: impl FnOnce(Value) -> Result<(), String>,
+    ) -> Result<(), String> {
+        let before = serde_json::to_value(&self.settings).map_err(|error| error.to_string())?;
+        let after = serde_json::to_value(settings).map_err(|error| error.to_string())?;
+        let mut original = self.original.clone().unwrap_or(Value::Null);
+        if let Some(fields) = original.as_object_mut() {
+            for key in &self.invalid_fields {
+                let _ = fields.remove(key);
+            }
+        }
+        let merged = merge_settings_changes(&original, &before, &after);
+
+        if !self.invalid_fields.is_empty()
+            && let Some(raw) = self.original.as_ref()
+        {
+            backup(raw)?;
+        }
+        save(merged)
+    }
+}
+
+fn merge_settings_changes(original: &Value, before: &Value, after: &Value) -> Value {
+    if let (Some(original), Some(before), Some(after)) =
+        (original.as_object(), before.as_object(), after.as_object())
+    {
+        let mut merged = original.clone();
+        for (key, value) in after {
+            let next = match (original.get(key), before.get(key)) {
+                (Some(original), Some(before)) if before == value => original.clone(),
+                (Some(original), Some(before)) => merge_settings_changes(original, before, value),
+                _ => value.clone(),
+            };
+            let _ = merged.insert(key.clone(), next);
+        }
+        for key in before.keys() {
+            if !after.contains_key(key) {
+                let _ = merged.remove(key);
+            }
+        }
+        Value::Object(merged)
+    } else if let (Some(original), Some(before), Some(after)) =
+        (original.as_array(), before.as_array(), after.as_array())
+    {
+        let mut used = vec![false; before.len()];
+        Value::Array(
+            after
+                .iter()
+                .map(|value| {
+                    let matching = before
+                        .iter()
+                        .enumerate()
+                        .find(|(index, previous)| !used[*index] && *previous == value);
+                    if let Some((index, _)) = matching {
+                        used[index] = true;
+                        original
+                            .get(index)
+                            .cloned()
+                            .unwrap_or_else(|| value.clone())
+                    } else {
+                        value.clone()
+                    }
+                })
+                .collect(),
+        )
+    } else {
+        after.clone()
+    }
+}
+
+fn backup_general_settings(directory: &Path, original: &Value) -> Result<PathBuf, String> {
+    std::fs::create_dir_all(directory).map_err(|error| error.to_string())?;
+    let path = directory.join(format!("general-settings-recovery-{}.json", Uuid::new_v4()));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&path).map_err(|error| error.to_string())?;
+    let bytes = serde_json::to_vec_pretty(original).map_err(|error| error.to_string())?;
+    file.write_all(&bytes).map_err(|error| error.to_string())?;
+    file.sync_all().map_err(|error| error.to_string())?;
+    Ok(path)
+}
+
+fn persist_general_settings(
+    app: &AppHandle,
+    store: &tauri_plugin_store::Store<Wry>,
+    snapshot: &GeneralSettingsSnapshot,
+    settings: &GeneralSettingsStore,
+) -> Result<(), String> {
+    snapshot.persist(
+        settings,
+        |original| {
+            let directory = app
+                .path()
+                .app_data_dir()
+                .map_err(|error| error.to_string())?;
+            let path = backup_general_settings(&directory, original).map_err(|error| {
+                format!("Could not back up malformed general settings: {error}")
+            })?;
+            tracing::warn!(
+                fields = ?snapshot.invalid_fields,
+                backup = %path.display(),
+                "Recovered malformed general settings fields"
+            );
+            Ok(())
+        },
+        |value| {
+            store.set("general_settings", value);
+            store.save().map_err(|error| error.to_string())
+        },
+    )
+}
+
 impl GeneralSettingsStore {
     pub fn recordings_dir(app: &AppHandle<Wry>) -> std::path::PathBuf {
         let custom = Self::get(app)
@@ -426,12 +597,8 @@ impl GeneralSettingsStore {
 
     pub fn get(app: &AppHandle<Wry>) -> Result<Option<Self>, String> {
         match app.store("store").map(|s| s.get("general_settings")) {
-            Ok(Some(store)) => {
-                // Handle potential deserialization errors gracefully
-                match serde_json::from_value(store) {
-                    Ok(settings) => Ok(Some(settings)),
-                    Err(e) => Err(format!("Failed to deserialize general settings store: {e}")),
-                }
+            Ok(Some(raw)) => {
+                GeneralSettingsSnapshot::load(Some(raw)).map(|snapshot| Some(snapshot.settings))
             }
             _ => Ok(None),
         }
@@ -443,10 +610,10 @@ impl GeneralSettingsStore {
             return Err("Store not found".to_string());
         };
 
-        let mut settings = Self::get(app)?.unwrap_or_default();
+        let snapshot = GeneralSettingsSnapshot::load(store.get("general_settings"))?;
+        let mut settings = snapshot.settings.clone();
         update(&mut settings);
-        store.set("general_settings", json!(settings));
-        store.save().map_err(|e| e.to_string())?;
+        persist_general_settings(app, &store, &snapshot, &settings)?;
 
         crate::telemetry::set_telemetry_enabled(settings.enable_telemetry);
 
@@ -461,8 +628,8 @@ impl GeneralSettingsStore {
             return Err("Store not found".to_string());
         };
 
-        store.set("general_settings", json!(self));
-        store.save().map_err(|e| e.to_string())
+        let snapshot = GeneralSettingsSnapshot::load(store.get("general_settings"))?;
+        persist_general_settings(app, &store, &snapshot, self)
     }
 }
 
@@ -595,6 +762,200 @@ pub fn get_default_excluded_windows() -> Vec<WindowExclusion> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn settings_with_preserved_values() -> Value {
+        json!({
+            "instanceId": "123e4567-e89b-42d3-a456-426614174000",
+            "commercialLicense": {
+                "licenseKey": "test-license",
+                "expiryDate": null,
+                "refresh": 123.0,
+                "activatedOn": 100.0,
+                "futureLicenseField": { "preserve": true }
+            },
+            "recordingsPath": "/Volumes/Test Recordings",
+            "previousRecordingsPaths": ["/Volumes/Previous"],
+            "theme": "dark",
+            "futureSetting": { "preserve": [1, 2, 3] },
+            "mainWindowPosition": { "x": 20.0, "y": 30.0, "futurePositionField": true },
+            "excludedWindows": [{ "windowTitle": "Custom", "futureExclusionField": true }]
+        })
+    }
+
+    #[test]
+    fn malformed_field_recovery_preserves_identity_license_paths_and_unknown_fields() {
+        let mut original = settings_with_preserved_values();
+        original["theme"] = json!({ "system": {}, "dark": {} });
+        original["maxFps"] = json!("invalid");
+        let snapshot = GeneralSettingsSnapshot::load(Some(original.clone())).unwrap();
+        assert_eq!(snapshot.invalid_fields, ["maxFps", "theme"]);
+        assert_eq!(
+            snapshot.settings.instance_id.to_string(),
+            original["instanceId"]
+        );
+        assert_eq!(
+            snapshot.settings.recordings_path.as_deref(),
+            original["recordingsPath"].as_str()
+        );
+        snapshot
+            .persist(
+                &snapshot.settings,
+                |backup| {
+                    assert_eq!(backup, &original);
+                    Ok(())
+                },
+                |saved| {
+                    for key in [
+                        "instanceId",
+                        "commercialLicense",
+                        "recordingsPath",
+                        "previousRecordingsPaths",
+                        "futureSetting",
+                        "mainWindowPosition",
+                        "excludedWindows",
+                    ] {
+                        assert_eq!(saved[key], original[key], "{key}");
+                    }
+                    assert_eq!(saved["theme"], "system");
+                    assert_eq!(saved["maxFps"], cap_recording::DEFAULT_STUDIO_MAX_FPS);
+                    assert!(serde_json::from_value::<GeneralSettingsStore>(saved).is_ok());
+                    Ok(())
+                },
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn settings_updates_preserve_unknown_nested_fields_and_unchanged_array_entries() {
+        let original = settings_with_preserved_values();
+        let snapshot = GeneralSettingsSnapshot::load(Some(original.clone())).unwrap();
+        let mut updated = snapshot.settings.clone();
+        updated.hide_dock_icon = true;
+        updated.main_window_position.as_mut().unwrap().x = 90.0;
+        updated.commercial_license.as_mut().unwrap().refresh = 456.0;
+        append_missing_default_excluded_windows(&mut updated.excluded_windows);
+        snapshot
+            .persist(
+                &updated,
+                |_| panic!("valid settings must not need recovery"),
+                |saved| {
+                    assert_eq!(saved["hideDockIcon"], true);
+                    assert_eq!(saved["mainWindowPosition"]["x"], 90.0);
+                    assert_eq!(saved["mainWindowPosition"]["futurePositionField"], true);
+                    assert_eq!(saved["commercialLicense"]["refresh"], 456.0);
+                    assert_eq!(
+                        saved["commercialLicense"]["futureLicenseField"],
+                        original["commercialLicense"]["futureLicenseField"]
+                    );
+                    assert_eq!(saved["futureSetting"], original["futureSetting"]);
+                    assert_eq!(saved["excludedWindows"][0], original["excludedWindows"][0]);
+                    Ok(())
+                },
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn healthy_settings_keep_existing_values_and_do_not_create_backups() {
+        let original = settings_with_preserved_values();
+        let snapshot = GeneralSettingsSnapshot::load(Some(original.clone())).unwrap();
+        snapshot
+            .persist(
+                &snapshot.settings,
+                |_| panic!("valid settings must not need recovery"),
+                |saved| {
+                    for (key, value) in original.as_object().unwrap() {
+                        assert_eq!(&saved[key], value, "{key}");
+                    }
+                    Ok(())
+                },
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn failed_backup_does_not_overwrite_malformed_section() {
+        let original = json!({ "theme": "future-theme", "recordingsPath": "/Volumes/Test" });
+        let snapshot = GeneralSettingsSnapshot::load(Some(original.clone())).unwrap();
+        let result = snapshot.persist(
+            &snapshot.settings,
+            |backup| {
+                assert_eq!(backup, &original);
+                Err("injected backup failure".into())
+            },
+            |_| panic!("the original section must survive a failed backup"),
+        );
+        assert_eq!(result.unwrap_err(), "injected backup failure");
+    }
+
+    #[test]
+    fn non_object_section_is_backed_up_before_recovery() {
+        let original = json!(["unreadable", 123]);
+        let snapshot = GeneralSettingsSnapshot::load(Some(original.clone())).unwrap();
+        let backed_up = std::cell::Cell::new(false);
+        snapshot
+            .persist(
+                &snapshot.settings,
+                |backup| {
+                    assert_eq!(backup, &original);
+                    backed_up.set(true);
+                    Ok(())
+                },
+                |saved| {
+                    assert!(backed_up.get());
+                    assert!(serde_json::from_value::<GeneralSettingsStore>(saved).is_ok());
+                    Ok(())
+                },
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn missing_section_keeps_new_install_defaults_without_recovery() {
+        let snapshot = GeneralSettingsSnapshot::load(None).unwrap();
+        assert!(!snapshot.settings.has_completed_onboarding);
+        assert!(!snapshot.settings.has_completed_startup);
+        assert_eq!(snapshot.settings.recording_countdown, Some(3));
+        snapshot
+            .persist(
+                &snapshot.settings,
+                |_| panic!("new settings must not need recovery"),
+                |saved| {
+                    assert_eq!(saved["hasCompletedOnboarding"], false);
+                    assert_eq!(saved["recordingCountdown"], 3);
+                    Ok(())
+                },
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn recovery_backups_are_exact_unique_and_private() {
+        let directory = tempfile::tempdir().unwrap();
+        let original = settings_with_preserved_values();
+        let first = backup_general_settings(directory.path(), &original).unwrap();
+        let second = backup_general_settings(directory.path(), &json!("another section")).unwrap();
+        assert_ne!(first, second);
+        let saved: Value = serde_json::from_slice(&std::fs::read(&first).unwrap()).unwrap();
+        assert_eq!(saved, original);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(first).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+    }
+
+    #[test]
+    fn recovery_backup_reports_unwritable_destination() {
+        let directory = tempfile::tempdir().unwrap();
+        let blocker = directory.path().join("file");
+        std::fs::write(&blocker, "keep").unwrap();
+        assert!(backup_general_settings(&blocker, &json!({ "theme": [] })).is_err());
+        assert_eq!(std::fs::read_to_string(blocker).unwrap(), "keep");
+    }
 
     fn title_exclusion(title: &str) -> WindowExclusion {
         WindowExclusion {

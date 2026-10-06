@@ -1,14 +1,14 @@
 import type { CSSProperties, ReactNode } from "react";
+import { OG_MONO, OG_SANS, OG_SERIF } from "@/lib/og/fonts";
 
 export const OG_WIDTH = 1200;
 export const OG_HEIGHT = 630;
 
 export const OG_BLUE = "#4785FF";
-export const OG_BLUE_DEEP = "#2E6FF2";
 export const OG_BLUE_LIGHT = "#ADC9FF";
-/** Dark ink for text on the light sky — deep navy so it stays on-palette. */
-export const OG_INK = "#122142";
-export const OG_INK_SOFT = "rgba(18,33,66,0.74)";
+export const OG_INK = "#111111";
+export const OG_INK_SOFT = "rgba(17,17,17,0.74)";
+export const OG_INK_MUTED = "rgba(17,17,17,0.5)";
 
 // Light-mode UI palette approximating the desktop app's gray scale.
 const UI = {
@@ -31,185 +31,123 @@ const flex = (extra: CSSProperties = {}): CSSProperties => ({
 	...extra,
 });
 
-const CloudPuff = ({
-	size,
-	left,
-	top,
-	opacity = 1,
+export const OgCanvas = ({
+	background,
+	children,
 }: {
-	size: number;
-	left: number;
-	top: number;
-	opacity?: number;
+	background: string;
+	children: ReactNode;
 }) => (
-	<div
-		style={flex({
-			position: "absolute",
-			left,
-			top,
-			width: size,
-			height: size,
-			borderRadius: 9999,
-			opacity,
-			background:
-				"radial-gradient(circle, rgba(255,255,255,0.92) 0%, rgba(255,255,255,0.45) 42%, rgba(255,255,255,0) 68%)",
-		})}
-	/>
-);
-
-/** A soft glowing star — a point of light with falloff, not a clip-art shape. */
-const Star = ({
-	size,
-	left,
-	top,
-	opacity = 0.7,
-}: {
-	size: number;
-	left: number;
-	top: number;
-	opacity?: number;
-}) => (
-	<div
-		style={flex({
-			position: "absolute",
-			left,
-			top,
-			width: size,
-			height: size,
-			opacity,
-			background:
-				"radial-gradient(circle, rgba(255,255,255,0.95) 0%, rgba(255,255,255,0.4) 28%, rgba(255,255,255,0) 62%)",
-		})}
-	/>
-);
-
-/** A brighter star with thin lens-flare points and its own halo. */
-const Twinkle = ({
-	size,
-	left,
-	top,
-	opacity = 0.8,
-}: {
-	size: number;
-	left: number;
-	top: number;
-	opacity?: number;
-}) => (
-	<div
-		style={flex({
-			position: "absolute",
-			left,
-			top,
-			width: size,
-			height: size,
-			opacity,
-			alignItems: "center",
-			justifyContent: "center",
-			background:
-				"radial-gradient(circle, rgba(255,255,255,0.55) 0%, rgba(255,255,255,0.18) 34%, rgba(255,255,255,0) 62%)",
-		})}
-	>
-		<svg
-			role="img"
-			aria-label="Star"
-			width={Math.round(size * 0.72)}
-			height={Math.round(size * 0.72)}
-			viewBox="0 0 24 24"
-		>
-			<path
-				d="M12 0 Q12.7 10.6 24 12 Q12.7 13.4 12 24 Q11.3 13.4 0 12 Q11.3 10.6 12 0 Z"
-				fill="white"
-			/>
-		</svg>
-	</div>
-);
-
-/**
- * The signature Cap sky — dusk blue gradient, a natural drift of stars high
- * in the sky, soft cloud banks at the horizon. Pure vectors, no remote assets.
- * Star/cloud placement assumes the shared layout: wordmark top-left, text
- * column on the left, app card on the right — the upper band (y < 110,
- * x > 330) and the horizon stay clear of both.
- */
-export const SkyBackground = ({ children }: { children: ReactNode }) => (
 	<div
 		style={flex({
 			width: "100%",
 			height: "100%",
 			position: "relative",
-			fontFamily: "Neue Montreal",
-			background: `linear-gradient(172deg, #9DBEFF 0%, ${OG_BLUE_LIGHT} 44%, #C6D9FF 76%, #E1ECFF 100%)`,
+			fontFamily: OG_SANS,
+			color: OG_INK,
+			background: "#EDF1F6",
 		})}
 	>
-		{/* horizon glow, behind the card */}
 		<div
 			style={flex({
 				position: "absolute",
 				top: 0,
 				left: 0,
-				width: "100%",
-				height: "100%",
-				background:
-					"radial-gradient(circle at 80% 118%, rgba(255,255,255,0.42) 0%, rgba(255,255,255,0) 52%)",
+				width: OG_WIDTH,
+				height: OG_HEIGHT,
+				backgroundImage: `url(${background})`,
+				backgroundSize: `${OG_WIDTH}px ${OG_HEIGHT}px`,
 			})}
 		/>
-		{/* high atmosphere haze */}
+		{children}
+	</div>
+);
+
+export const Headline = ({
+	children,
+	size,
+	lines = 3,
+}: {
+	children: string;
+	size: number;
+	lines?: number;
+}) => (
+	<span
+		style={{
+			display: "block",
+			fontSize: size,
+			fontWeight: 400,
+			lineHeight: 1.02,
+			letterSpacing: -size * 0.03,
+			color: OG_INK,
+			lineClamp: lines,
+		}}
+	>
+		{children}
+	</span>
+);
+
+export const Body = ({
+	children,
+	size = 27,
+	lines = 2,
+}: {
+	children: string;
+	size?: number;
+	lines?: number;
+}) => (
+	<span
+		style={{
+			display: "block",
+			fontFamily: OG_SERIF,
+			fontSize: size,
+			fontWeight: 300,
+			lineHeight: 1.38,
+			letterSpacing: -size * 0.01,
+			color: OG_INK_SOFT,
+			lineClamp: lines,
+		}}
+	>
+		{children}
+	</span>
+);
+
+export const MeshFrame = ({
+	mesh,
+	width,
+	height,
+	padding = 12,
+	radius = 28,
+	children,
+}: {
+	mesh: string;
+	width: number;
+	height: number;
+	padding?: number;
+	radius?: number;
+	children: ReactNode;
+}) => (
+	<div
+		style={flex({
+			position: "relative",
+			width,
+			height,
+			padding,
+			borderRadius: radius,
+			overflow: "hidden",
+			boxShadow:
+				"0 40px 80px -24px rgba(40,72,130,0.35), 0 0 0 1px rgba(255,255,255,0.55)",
+		})}
+	>
 		<div
 			style={flex({
 				position: "absolute",
 				top: 0,
 				left: 0,
-				width: "100%",
-				height: "100%",
-				background:
-					"radial-gradient(circle at 62% -30%, rgba(120,165,255,0.4) 0%, rgba(120,165,255,0) 55%)",
-			})}
-		/>
-		{/* cloud bank at the horizon, mostly behind the card */}
-		<CloudPuff size={560} left={760} top={440} opacity={0.85} />
-		<CloudPuff size={420} left={980} top={390} opacity={0.8} />
-		<CloudPuff size={360} left={640} top={520} opacity={0.65} />
-		<CloudPuff size={380} left={-150} top={540} opacity={0.35} />
-		{/* distant drift, high and faint */}
-		<CloudPuff size={280} left={310} top={-190} opacity={0.28} />
-		<CloudPuff size={300} left={950} top={-200} opacity={0.3} />
-		{/* stars — denser toward the top of the sky, fading out lower down */}
-		<Star size={12} left={352} top={38} opacity={0.6} />
-		<Star size={7} left={432} top={92} opacity={0.4} />
-		<Star size={15} left={520} top={26} opacity={0.75} />
-		<Star size={8} left={606} top={74} opacity={0.5} />
-		<Star size={6} left={672} top={20} opacity={0.45} />
-		<Star size={12} left={766} top={54} opacity={0.65} />
-		<Star size={8} left={864} top={22} opacity={0.5} />
-		<Star size={6} left={938} top={68} opacity={0.4} />
-		<Star size={9} left={1096} top={88} opacity={0.5} />
-		<Star size={11} left={1152} top={36} opacity={0.6} />
-		<Star size={6} left={288} top={26} opacity={0.35} />
-		<Star size={7} left={36} top={168} opacity={0.35} />
-		<Twinkle size={26} left={478} top={48} opacity={0.7} />
-		<Twinkle size={20} left={702} top={30} opacity={0.55} />
-		<Twinkle size={30} left={1032} top={18} opacity={0.8} />
-		{/* readability scrims — over the scenery, under the content */}
-		<div
-			style={flex({
-				position: "absolute",
-				top: 0,
-				left: 0,
-				width: "100%",
-				height: "100%",
-				background:
-					"linear-gradient(97deg, rgba(255,255,255,0.36) 0%, rgba(255,255,255,0.12) 40%, rgba(255,255,255,0) 62%)",
-			})}
-		/>
-		<div
-			style={flex({
-				position: "absolute",
-				top: 0,
-				left: 0,
-				width: "100%",
-				height: "100%",
-				background:
-					"linear-gradient(0deg, rgba(255,255,255,0.3) 0%, rgba(255,255,255,0) 28%)",
+				width,
+				height,
+				backgroundImage: `url(${mesh})`,
+				backgroundSize: `${width}px ${height}px`,
 			})}
 		/>
 		{children}
@@ -229,7 +167,6 @@ const logoMark = () => [
 const WORDMARK_PATH =
 	"M58.416 30.448c-5.404 0-9.212-3.864-9.212-10.36 0-6.384 3.668-10.416 9.268-10.416 5.068 0 7.784 2.66 8.624 7.168l-3.808.196c-.476-2.604-2.072-4.2-4.816-4.2-3.388 0-5.488 2.828-5.488 7.252 0 4.48 2.156 7.196 5.46 7.196 2.94 0 4.508-1.708 4.956-4.564l3.808.196c-.784 4.676-3.752 7.532-8.792 7.532zm16.23-.112c-3.137 0-5.209-1.484-5.209-4.088 0-2.576 1.596-3.948 4.872-4.592l4.956-.98c0-2.1-.98-3.192-2.856-3.192-1.764 0-2.716.812-3.052 2.324l-3.668-.168c.588-3.136 2.996-4.928 6.72-4.928 4.256 0 6.44 2.24 6.44 6.216v5.432c0 .812.28 1.036.84 1.036h.476V30c-.224.056-.812.112-1.288.112-1.624 0-2.828-.588-3.136-2.436-.728 1.596-2.632 2.66-5.096 2.66zm.727-2.604c2.38 0 3.892-1.512 3.892-3.78v-.84l-3.864.784c-1.596.308-2.24.98-2.24 2.016 0 1.176.784 1.82 2.212 1.82zM86.874 34.2V15.048h3.444l.056 2.212c.868-1.652 2.52-2.548 4.48-2.548 4.256 0 6.356 3.5 6.356 7.812s-2.128 7.812-6.384 7.812c-1.904 0-3.556-.924-4.368-2.38V34.2h-3.584zm7.112-6.776c2.184 0 3.5-1.82 3.5-4.9s-1.316-4.9-3.5-4.9-3.528 1.652-3.528 4.9 1.316 4.9 3.528 4.9z";
 
-/** The Cap app icon — the real LogoBadge: white rounded square, mark at 80%. */
 export const CapAppIcon = ({ size }: { size: number }) => (
 	<div
 		style={flex({
@@ -252,10 +189,9 @@ export const CapAppIcon = ({ size }: { size: number }) => (
 	</div>
 );
 
-/** App icon + drawn "Cap" wordmark lockup (the brand OG header). */
 export const CapWordmark = ({
-	height = 60,
-	color = "white",
+	height = 52,
+	color = OG_INK,
 }: {
 	height?: number;
 	color?: string;
@@ -862,42 +798,292 @@ export const RecorderCard = ({ width = 380 }: { width?: number }) => (
 	</div>
 );
 
-/**
- * Pill chip used for page categories ("Pricing", "Blog", …), rendered as
- * Liquid Glass: a mostly-transparent body over the sky with a bright
- * refracted edge (inset highlights top and bottom) and a soft lift shadow.
- * Single layer — a translucent fill over a nested "rim" gradient just shows
- * the rim through the fill and reads as frosted plastic.
- */
-export const TagChip = ({ label }: { label: string }) => (
+const AppleGlyph = ({ size }: { size: number }) => (
+	<svg
+		role="img"
+		aria-label="Apple"
+		width={size}
+		height={size}
+		viewBox="0 0 24 24"
+	>
+		<path
+			fill="#111111"
+			d="M16.37 12.7c-.02-2.3 1.88-3.4 1.96-3.46-1.07-1.56-2.73-1.77-3.32-1.8-1.41-.14-2.76.83-3.47.83-.72 0-1.82-.81-3-.79-1.54.02-2.96.9-3.76 2.28-1.6 2.78-.41 6.9 1.15 9.16.76 1.1 1.67 2.34 2.86 2.3 1.15-.05 1.58-.74 2.97-.74 1.38 0 1.78.74 2.99.72 1.24-.02 2.02-1.12 2.77-2.23.87-1.28 1.23-2.52 1.25-2.58-.03-.01-2.39-.92-2.4-3.65ZM14.1 5.94c.63-.77 1.06-1.83.94-2.9-.91.04-2.02.61-2.67 1.37-.58.67-1.1 1.76-.96 2.8 1.02.08 2.06-.52 2.69-1.27Z"
+		/>
+	</svg>
+);
+
+const MenuBar = () => (
 	<div
 		style={flex({
 			alignItems: "center",
-			alignSelf: "flex-start",
-			borderRadius: 999,
-			padding: "8px 21px",
-			background:
-				"linear-gradient(180deg, rgba(255,255,255,0.34) 0%, rgba(255,255,255,0.1) 100%)",
-			border: "1px solid rgba(255,255,255,0.65)",
-			boxShadow:
-				"inset 0 2px 4px rgba(255,255,255,0.7), inset 0 -3px 6px rgba(255,255,255,0.35), 0 8px 20px rgba(46,80,160,0.18)",
+			height: 30,
+			padding: "0 16px",
+			gap: 18,
+			background: "rgba(255,255,255,0.55)",
+			fontSize: 13,
+			fontWeight: 500,
+			color: "#111111",
 		})}
 	>
-		<span
-			style={{
-				fontSize: 21,
-				fontWeight: 500,
-				color: OG_INK,
-			}}
+		<AppleGlyph size={15} />
+		<span style={{ fontWeight: 600 }}>Cap</span>
+		<span style={{ fontWeight: 400 }}>File</span>
+		<span style={{ fontWeight: 400 }}>Edit</span>
+		<span style={{ fontWeight: 400 }}>View</span>
+		<span style={{ fontWeight: 400 }}>Window</span>
+	</div>
+);
+
+export const DesktopArt = ({
+	mesh,
+	wallpaper,
+}: {
+	mesh: string;
+	wallpaper: string;
+}) => (
+	<MeshFrame mesh={mesh} width={640} height={580}>
+		<div
+			style={flex({
+				position: "relative",
+				flexDirection: "column",
+				width: 616,
+				height: 556,
+				borderRadius: 18,
+				overflow: "hidden",
+				background: "#9FC0E6",
+			})}
 		>
-			{label}
+			<div
+				style={flex({
+					position: "absolute",
+					top: -10,
+					left: -150,
+					width: 1024,
+					height: 576,
+					backgroundImage: `url(${wallpaper})`,
+					backgroundSize: "1024px 576px",
+				})}
+			/>
+			<MenuBar />
+			<div
+				style={flex({
+					position: "absolute",
+					left: 132,
+					top: 64,
+				})}
+			>
+				<RecorderCard width={380} />
+			</div>
+		</div>
+	</MeshFrame>
+);
+
+const Segment = ({
+	label,
+	active,
+	badge,
+}: {
+	label: string;
+	active?: boolean;
+	badge?: string;
+}) => (
+	<div
+		style={flex({
+			flexGrow: 1,
+			flexBasis: 0,
+			alignItems: "center",
+			justifyContent: "center",
+			gap: 8,
+			height: 42,
+			borderRadius: 10,
+			background: active ? "#DCEBFC" : "transparent",
+			fontSize: 16,
+			fontWeight: 500,
+			color: active ? OG_INK : "rgba(17,17,17,0.55)",
+		})}
+	>
+		{label}
+		{badge && (
+			<span
+				style={{
+					fontFamily: OG_MONO,
+					fontSize: 11,
+					letterSpacing: 0.8,
+					padding: "3px 7px",
+					borderRadius: 6,
+					background: "#E1EFFE",
+					color: "#3D77C2",
+				}}
+			>
+				{badge}
+			</span>
+		)}
+	</div>
+);
+
+const PlanCardArt = ({
+	name,
+	chip,
+	chipBg,
+	chipColor,
+	blurb,
+	price,
+	unit,
+	note,
+	children,
+	width,
+}: {
+	name: string;
+	chip: string;
+	chipBg: string;
+	chipColor: string;
+	blurb: string;
+	price: string;
+	unit: string;
+	note: string;
+	children?: ReactNode;
+	width: number;
+}) => (
+	<div
+		style={flex({
+			flexDirection: "column",
+			width,
+			height: "100%",
+			padding: "30px 32px",
+			borderRadius: 20,
+			background: "white",
+		})}
+	>
+		<div
+			style={flex({ alignItems: "center", justifyContent: "space-between" })}
+		>
+			<span style={{ fontSize: 30, letterSpacing: -0.9 }}>{name}</span>
+			<span
+				style={{
+					fontSize: 14,
+					fontWeight: 500,
+					padding: "5px 11px",
+					borderRadius: 999,
+					background: chipBg,
+					color: chipColor,
+				}}
+			>
+				{chip}
+			</span>
+		</div>
+		<div style={flex({ marginTop: 14 })}>
+			<Body size={19} lines={3}>
+				{blurb}
+			</Body>
+		</div>
+		<div style={flex({ alignItems: "flex-end", gap: 12, marginTop: 30 })}>
+			<span style={{ fontSize: 68, lineHeight: 1, letterSpacing: -2.4 }}>
+				{price}
+			</span>
+			<span
+				style={{
+					fontSize: 18,
+					color: "rgba(17,17,17,0.6)",
+					paddingBottom: 8,
+				}}
+			>
+				{unit}
+			</span>
+		</div>
+		<span style={{ marginTop: 18, fontSize: 16, color: "rgba(17,17,17,0.6)" }}>
+			{note}
 		</span>
+		{children}
+	</div>
+);
+
+export const PricingArt = ({
+	mesh,
+	pro,
+}: {
+	mesh: string;
+	pro: { monthly: number; annualPerMonth: number; savePercent: number };
+}) => (
+	<MeshFrame mesh={mesh} width={500} height={620} padding={10} radius={30}>
+		<PlanCardArt
+			width={480}
+			name="Cap Pro"
+			chip="Most popular"
+			chipBg="#DCEBFC"
+			chipColor="#2F62D4"
+			blurb="Everything in Desktop, plus unlimited cloud sharing, AI, and team collaboration."
+			price={`$${pro.monthly}`}
+			unit="per user, per month"
+			note={`Or $${pro.annualPerMonth} a month, billed annually.`}
+		>
+			<div
+				style={flex({
+					marginTop: 26,
+					padding: 5,
+					borderRadius: 14,
+					border: "1px solid #E1E7EE",
+				})}
+			>
+				<Segment label="Monthly" active />
+				<Segment label="Annual" badge={`SAVE ${pro.savePercent}%`} />
+			</div>
+			<div
+				style={flex({
+					marginTop: 24,
+					alignItems: "center",
+					justifyContent: "space-between",
+					fontSize: 17,
+				})}
+			>
+				<span>Users</span>
+				<div style={flex({ alignItems: "center", gap: 18 })}>
+					<StepperDot label="−" />
+					<span>1</span>
+					<StepperDot label="+" />
+				</div>
+			</div>
+			<div
+				style={flex({
+					marginTop: 26,
+					height: 54,
+					borderRadius: 13,
+					alignItems: "center",
+					justifyContent: "center",
+					fontSize: 18,
+					fontWeight: 500,
+					background:
+						"linear-gradient(180deg, #F5FAFE 0%, #E3EFFB 52%, #CFE2F6 100%)",
+					border: "1px solid rgba(63,127,205,0.65)",
+					boxShadow: "0 10px 24px -10px rgba(120,178,240,0.55)",
+				})}
+			>
+				Get Cap Pro
+			</div>
+		</PlanCardArt>
+	</MeshFrame>
+);
+
+const StepperDot = ({ label }: { label: string }) => (
+	<div
+		style={flex({
+			width: 32,
+			height: 32,
+			borderRadius: 9999,
+			background: "#F1F4F8",
+			alignItems: "center",
+			justifyContent: "center",
+			fontSize: 20,
+			color: "rgba(17,17,17,0.6)",
+		})}
+	>
+		{label}
 	</div>
 );
 
 export const titleFontSize = (title: string) => {
-	if (title.length <= 24) return 76;
-	if (title.length <= 48) return 62;
-	if (title.length <= 72) return 52;
-	return 44;
+	if (title.length <= 22) return 84;
+	if (title.length <= 30) return 70;
+	if (title.length <= 56) return 60;
+	return 50;
 };

@@ -6,6 +6,38 @@ import {
 	shouldDeferPlaybackSource,
 	shouldReloadPlaybackAfterUploadCompletes,
 } from "@/app/s/[videoId]/_components/ProgressCircle";
+import { isRecordingUpload } from "@/app/s/[videoId]/_components/upload-progress";
+
+describe("recording state after stopping or reloading", () => {
+	it("does not label a pending status request as an active recording", () => {
+		expect(isRecordingUpload({ status: "fetching" }, false)).toBe(false);
+		expect(isRecordingUpload(null, false)).toBe(false);
+	});
+
+	it("keeps a stopped recording stopped while its final segments upload", () => {
+		const upload = {
+			status: "uploading" as const,
+			lastUpdated: new Date(),
+			progress: 95,
+		};
+		expect(isRecordingUpload(upload, true)).toBe(false);
+		expect(isRecordingUpload(upload, false)).toBe(true);
+	});
+
+	it("does not label server processing as an active recording", () => {
+		expect(
+			isRecordingUpload(
+				{
+					status: "processing",
+					lastUpdated: new Date(),
+					progress: 5,
+					message: "Securing recording...",
+				},
+				false,
+			),
+		).toBe(false);
+	});
+});
 
 describe("shouldDeferPlaybackSource", () => {
 	it.each([
@@ -192,4 +224,18 @@ describe("shouldDeferPlaybackSource", () => {
 			}),
 		).toBe("Video processing stalled. Retry processing.");
 	});
+
+	it.each([0, 25, 90])(
+		"does not report a durable automatic retry as failed at %i percent",
+		(processingProgress) => {
+			expect(
+				getStalledProcessingMessage({
+					phase: "processing",
+					updatedAt: new Date(Date.now() - 2 * 60 * 60 * 1000),
+					processingProgress,
+					automaticRetry: true,
+				}),
+			).toBeNull();
+		},
+	);
 });

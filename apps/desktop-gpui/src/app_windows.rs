@@ -8,14 +8,15 @@
 //! main window whenever the session comes back to rest.
 
 use std::{
+    collections::HashSet,
     path::{Path, PathBuf},
     sync::Arc,
 };
 
 use cap_recording::sources::screen_capture::ScreenCaptureTarget;
 use gpui::{
-    App, AppContext as _, Bounds, Entity, Global, WindowBounds, WindowHandle, WindowKind,
-    WindowOptions, point, px, size,
+    App, AppContext as _, Bounds, Entity, Global, Pixels, Size, WindowBounds, WindowHandle,
+    WindowKind, WindowOptions, point, px, size,
 };
 use scap_targets::DisplayId;
 
@@ -28,9 +29,9 @@ use crate::{
     mode_select_window::{self, ModeSelectWindow},
     onboarding_window::{self, OnboardingWindow},
     platform,
-    recording::{RecordingMode, StartConfig},
+    recording::{RecordingMode, StartConfig, StudioFinalization},
     screenshot_editor::{self, ScreenshotEditorWindow},
-    session::{Phase, RecordingSession},
+    session::{Phase, RecordingSession, StudioEditorPresentation},
     settings_window::{self, Page, SettingsWindow},
     target_overlay::{AreaRect, HoveredWindow, OverlayWindow, TargetSelect},
     teleprompter_window::{self, TeleprompterWindow},
@@ -42,6 +43,151 @@ pub const CONTROLS_WIDTH: f32 = 320.;
 pub const CONTROLS_HEIGHT: f32 = 150.;
 const CONTROLS_BOTTOM_OFFSET: f64 = 120.;
 const TARGET_CONTROLS_OFFSET_Y: f64 = 48.;
+
+pub(crate) fn display_work_area(
+    target: Option<&scap_targets::Display>,
+    cx: &App,
+) -> Option<Bounds<Pixels>> {
+    #[cfg(target_os = "macos")]
+    let display = target
+        .and_then(|target| target.id().to_string().parse::<u64>().ok())
+        .and_then(|id| cx.find_display(gpui::DisplayId::new(id)));
+    #[cfg(not(target_os = "macos"))]
+    let display = target.and_then(|target| platform_display_for_capture(target, cx));
+    #[cfg(target_os = "linux")]
+    if uses_wayland() {
+        return target.and_then(capture_display_bounds);
+    }
+    let display = display.or_else(|| cx.primary_display())?;
+    let available = display.visible_bounds();
+    #[cfg(target_os = "macos")]
+    {
+        let id = u64::from(display.id()).to_string().parse().ok()?;
+        let bounds = scap_targets::Display::from_id(&id)
+            .as_ref()
+            .and_then(capture_display_bounds)?;
+        let primary_height = cx.primary_display()?.bounds().size.height;
+        Some(global_macos_work_area(available, bounds, primary_height))
+    }
+    #[cfg(not(target_os = "macos"))]
+    Some(available)
+}
+
+#[cfg(target_os = "linux")]
+fn uses_wayland() -> bool {
+    std::env::var_os("WAYLAND_DISPLAY").is_some()
+        && (std::env::var_os("DISPLAY").is_none()
+            || std::env::var("XDG_SESSION_TYPE")
+                .is_ok_and(|session| session.eq_ignore_ascii_case("wayland")))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn platform_display_for_capture(
+    target: &scap_targets::Display,
+    cx: &App,
+) -> Option<std::rc::Rc<dyn gpui::PlatformDisplay>> {
+    #[cfg(target_os = "linux")]
+    if let Some(uuid) = target.raw_handle().wayland_uuid() {
+        return cx
+            .displays()
+            .into_iter()
+            .find(|display| display.uuid().is_ok_and(|candidate| candidate == uuid));
+    }
+    let bounds = capture_display_bounds(target)?;
+    let mut matching = cx
+        .displays()
+        .into_iter()
+        .filter(|display| display.bounds().contains(&bounds.center()));
+    let display = matching.next()?;
+    #[cfg(target_os = "linux")]
+    if uses_wayland() && matching.next().is_some() {
+        return None;
+    }
+    Some(display)
+}
+
+fn capture_display_bounds(display: &scap_targets::Display) -> Option<Bounds<Pixels>> {
+    let bounds = display.raw_handle().logical_bounds()?;
+    Some(Bounds {
+        origin: point(
+            px(bounds.position().x() as f32),
+            px(bounds.position().y() as f32),
+        ),
+        size: size(
+            px(bounds.size().width() as f32),
+            px(bounds.size().height() as f32),
+        ),
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn global_macos_work_area(
+    mut available: Bounds<Pixels>,
+    display: Bounds<Pixels>,
+    primary_height: Pixels,
+) -> Bounds<Pixels> {
+    // GPUI's macOS work area uses local x but includes the AppKit screen y.
+    // Windows opened without a display ID need primary-display coordinates.
+    let appkit_origin_y = primary_height - display.origin.y - display.size.height;
+    available.origin.x += display.origin.x;
+    available.origin.y += display.origin.y - appkit_origin_y;
+    available
+}
+
+fn inset_work_area(available: Bounds<Pixels>) -> Bounds<Pixels> {
+    let inset = point(
+        px(16.).min((available.size.width - px(1.)).max(px(0.)) / 2.),
+        px(16.).min((available.size.height - px(1.)).max(px(0.)) / 2.),
+    );
+    Bounds {
+        origin: available.origin + inset,
+        size: size(
+            (available.size.width - inset.x * 2.).max(px(1.)),
+            (available.size.height - inset.y * 2.).max(px(1.)),
+        ),
+    }
+}
+
+fn fit_window_bounds(bounds: Bounds<Pixels>, available: Bounds<Pixels>) -> Bounds<Pixels> {
+    let size = size(
+        bounds.size.width.min(available.size.width).max(px(1.)),
+        bounds.size.height.min(available.size.height).max(px(1.)),
+    );
+    Bounds {
+        origin: point(
+            bounds.origin.x.clamp(
+                available.origin.x,
+                available.origin.x + (available.size.width - size.width).max(px(0.)),
+            ),
+            bounds.origin.y.clamp(
+                available.origin.y,
+                available.origin.y + (available.size.height - size.height).max(px(0.)),
+            ),
+        ),
+        size,
+    }
+}
+
+fn opening_window_bounds(preferred: Size<Pixels>, cx: &App) -> Bounds<Pixels> {
+    let target = scap_targets::Display::get_containing_cursor();
+    match display_work_area(target.as_ref(), cx) {
+        Some(available) => {
+            let available = inset_work_area(available);
+            fit_window_bounds(
+                Bounds::centered_at(available.center(), preferred),
+                available,
+            )
+        }
+        None => Bounds::centered(None, preferred, cx),
+    }
+}
+
+fn fitted_window_min_size(preferred: Size<Pixels>, bounds: Bounds<Pixels>) -> Size<Pixels> {
+    size(
+        preferred.width.min(bounds.size.width),
+        preferred.height.min(bounds.size.height),
+    )
+}
 
 pub struct AppWindows {
     pub main: WindowHandle<MainWindow>,
@@ -59,6 +205,8 @@ pub struct AppWindows {
     /// (`windows.rs:3656-3659`). The Tauri app keys its label off an
     /// incrementing id; the path is the identity in both.
     pub editors: Vec<(PathBuf, WindowHandle<EditorWindow>)>,
+    deleting_editors: HashSet<PathBuf>,
+    preparing_cleanup: crate::editor_preparing::PreparingCleanupRegistry,
     /// One screenshot editor per `.cap` bundle -- the gpui spelling of
     /// `ScreenshotEditorWindowIds`, keyed by the bundle directory.
     pub screenshot_editors: Vec<(PathBuf, WindowHandle<ScreenshotEditorWindow>)>,
@@ -81,27 +229,191 @@ pub struct AppWindows {
     /// Where the camera bubble sat before a window picker parked it inside the
     /// highlighted window -- see [`CameraPark`].
     pub camera_park: CameraPark,
+    #[cfg(target_os = "linux")]
+    clean_capture: Option<CleanCaptureUi>,
+    #[cfg(target_os = "linux")]
+    clean_capture_generation: u64,
 }
 
-/// `originalCameraBounds` / `lastRepositionedWindowId` in the window variant of
-/// the target-select overlay (`target-select-overlay.tsx:478-563`).
-///
-/// The overlay parks the camera bubble 16px inside the bottom-right corner of
-/// whatever window it is highlighting, and puts it back when the picker goes
-/// away *unless* the pick was committed -- a click that locks the highlight, or
-/// a recording/screenshot start, both of which null the saved bounds over
-/// there so the bubble stays where the user will see it in the capture.
+#[cfg(target_os = "linux")]
+struct CleanCaptureUi {
+    generation: u64,
+    config: Option<StartConfig>,
+    gate: CleanCaptureGate,
+    camera: Option<WindowHandle<CameraWindow>>,
+    camera_was_visible: bool,
+    main_was_visible: bool,
+    requested_inputs: CleanCaptureInputs,
+    preview_was_rendering: Option<bool>,
+    wayland: bool,
+    retained_windows: Vec<(gpui::AnyWindowHandle, bool)>,
+    restoring: bool,
+    restoration_error: Option<String>,
+}
+
+#[cfg(target_os = "linux")]
+impl CleanCaptureUi {
+    fn begin_restore(&mut self) -> bool {
+        self.config = None;
+        if self.restoring {
+            return false;
+        }
+        self.restoring = true;
+        true
+    }
+
+    fn prepare_restore_retry(&mut self, phase: Phase, instant_cleanup_safe: bool) -> bool {
+        if phase != Phase::Idle
+            || !instant_cleanup_safe
+            || !self.wayland
+            || self.restoration_error.is_none()
+        {
+            return false;
+        }
+        self.config = None;
+        self.restoration_error = None;
+        self.restoring = false;
+        true
+    }
+
+    fn take_start_config(&mut self, generation: u64) -> Option<StartConfig> {
+        if self.generation != generation
+            || !self.gate.started
+            || self.restoring
+            || self.restoration_error.is_some()
+        {
+            return None;
+        }
+        self.config.take()
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug, PartialEq, Eq)]
+enum CleanCaptureReopenAction {
+    Continue,
+    RetryRestore,
+    WaitForRestore,
+}
+
+#[cfg(target_os = "linux")]
+fn clean_capture_reopen_action(
+    lease: Option<&mut CleanCaptureUi>,
+    phase: Phase,
+    instant_cleanup_safe: bool,
+) -> CleanCaptureReopenAction {
+    let Some(lease) = lease else {
+        return CleanCaptureReopenAction::Continue;
+    };
+    if lease.prepare_restore_retry(phase, instant_cleanup_safe) {
+        CleanCaptureReopenAction::RetryRestore
+    } else if lease.wayland && lease.restoring {
+        CleanCaptureReopenAction::WaitForRestore
+    } else {
+        CleanCaptureReopenAction::Continue
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[derive(PartialEq)]
+struct CleanCaptureInputs {
+    camera: Option<crate::recording::DeviceOrModelID>,
+    microphone: Option<String>,
+}
+
+#[cfg(target_os = "linux")]
+impl CleanCaptureInputs {
+    fn current(cx: &App) -> Self {
+        let feeds = crate::feeds::Feeds::global(cx);
+        let feeds = feeds.read(cx);
+        Self {
+            camera: feeds.camera.as_ref().map(|camera| camera.id.clone()),
+            microphone: feeds.microphone.clone(),
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Default)]
+struct CleanCaptureGate {
+    pressed: bool,
+    started: bool,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug, PartialEq, Eq)]
+enum CleanCaptureAction {
+    Start,
+    Stop,
+}
+
+#[cfg(target_os = "linux")]
+impl CleanCaptureGate {
+    fn shortcut(&mut self, state: global_hotkey::HotKeyState) -> Option<CleanCaptureAction> {
+        if state == global_hotkey::HotKeyState::Pressed {
+            self.pressed = true;
+            return None;
+        }
+        if !std::mem::take(&mut self.pressed) {
+            return None;
+        }
+        if self.started {
+            Some(CleanCaptureAction::Stop)
+        } else {
+            self.started = true;
+            Some(CleanCaptureAction::Start)
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct CameraPark {
-    /// The bubble's gpui-space logical top-left before the first park. `None`
-    /// while nothing has been moved, and cleared outright once the pick is
-    /// committed (`setOriginalCameraBounds(null)`).
-    origin: Option<(f32, f32)>,
-    /// `lastRepositionedWindowId`: the park runs once per highlighted window,
-    /// not once per poll tick.
+    original: Option<CameraSnapshot>,
+    mode: Option<TargetType>,
     last_window: Option<scap_targets::WindowId>,
-    /// The pick was committed; no further parking and no revert.
+    last_area: Option<AreaRect>,
+    area_target: Option<(DisplayId, AreaRect)>,
     released: bool,
+    epoch: u64,
+    generation: u64,
+    pending: Option<CameraPlacement>,
+}
+
+#[derive(Clone, Copy)]
+struct CameraSnapshot {
+    handle: WindowHandle<CameraWindow>,
+    bounds: AreaRect,
+    picker_size: Option<(f32, f32)>,
+}
+
+#[derive(Clone, Copy)]
+enum CameraSizeOverride {
+    Preserve,
+    Set(Option<(f32, f32)>),
+}
+
+#[derive(Clone, Copy)]
+struct CameraPlacement {
+    camera: WindowHandle<CameraWindow>,
+    bounds: AreaRect,
+    size_override: CameraSizeOverride,
+}
+
+impl CameraPark {
+    fn invalidate_pending(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
+        self.pending = None;
+    }
+
+    fn reset_selection(&mut self) {
+        self.epoch = self.epoch.wrapping_add(1);
+        self.original = None;
+        self.mode = None;
+        self.last_window = None;
+        self.last_area = None;
+        self.area_target = None;
+        self.released = false;
+    }
 }
 
 impl Global for AppWindows {}
@@ -134,9 +446,9 @@ pub(crate) fn export_in_flight(cx: &App) -> bool {
     })
 }
 
-pub(crate) fn flush_pending_editor_saves(cx: &mut App) {
+pub(crate) fn flush_pending_editor_saves(cx: &mut App) -> Result<(), String> {
     if !cx.has_global::<AppWindows>() {
-        return;
+        return Ok(());
     }
 
     let windows = cx.global::<AppWindows>();
@@ -148,8 +460,8 @@ pub(crate) fn flush_pending_editor_saves(cx: &mut App) {
         .collect();
 
     for handle in editors {
-        if let Ok(pending) = handle.update(cx, |editor, _, _| editor.pending_save()) {
-            pending.borrow_mut().flush();
+        if let Ok(result) = handle.update(cx, |editor, _, cx| editor.flush_pending_saves(cx)) {
+            result?;
         }
     }
 
@@ -158,6 +470,7 @@ pub(crate) fn flush_pending_editor_saves(cx: &mut App) {
             pending.borrow_mut().flush();
         }
     }
+    Ok(())
 }
 
 /// Install the registry and wire the session observer that tears the bar down
@@ -173,10 +486,16 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
         teleprompter: None,
         overlays: Vec::new(),
         editors: Vec::new(),
+        deleting_editors: HashSet::new(),
+        preparing_cleanup: crate::editor_preparing::PreparingCleanupRegistry::default(),
         screenshot_editors: Vec::new(),
         main_hidden_for_picker: false,
         editor_hidden_for_picker: None,
         camera_park: CameraPark::default(),
+        #[cfg(target_os = "linux")]
+        clean_capture: None,
+        #[cfg(target_os = "linux")]
+        clean_capture_generation: 0,
     });
 
     // The global-Escape drain: the Carbon hotkey (registered only while the
@@ -186,7 +505,11 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
     let escape = platform::escape_hotkey_events();
     cx.spawn(async move |cx| {
         while escape.recv_async().await.is_ok() {
-            cx.update(dismiss_target_overlays);
+            cx.update(|cx| {
+                if TargetSelect::global(cx).read(cx).mode.is_some() {
+                    dismiss_target_overlays(cx);
+                }
+            });
         }
     })
     .detach();
@@ -200,9 +523,26 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
             // status item becomes a stop button while a capture runs.
             crate::tray::set_recording(recording, cx);
         }
+        if phase == Phase::Stopping {
+            open_preparing_studio_editor(&session, cx);
+        }
         if phase == Phase::Idle && last_phase != Phase::Idle {
+            #[cfg(target_os = "linux")]
+            if !session.read(cx).instant_cleanup_safe() {
+                return;
+            }
             close_controls(&session, cx);
-            let finished_studio = session.update(cx, |session, _| session.finished_studio.take());
+            close_target_overlays(cx);
+            #[cfg(target_os = "linux")]
+            if !restore_clean_capture_ui(cx) {
+                return;
+            }
+            let (finished_studio, preparing_editor) = session.update(cx, |session, _| {
+                (
+                    session.finished_studio.take(),
+                    session.take_preparing_studio_editor(),
+                )
+            });
             // The in-editor re-record target is consumed first, before
             // `postStudioRecordingBehaviour` is even consulted -- the order
             // `apply_post_studio_editor_behaviour` checks them
@@ -210,10 +550,29 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
             // clean or not: the fallback at `recording.rs:3225-3237` does the
             // same so a cancelled or failed recording still restores the
             // editor and cannot leak its target into the next session.
+            let main = cx.global::<AppWindows>().main;
+            main.update(cx, |view, _, _| {
+                view.cancel_deep_link_start();
+            })
+            .ok();
             let editor_target =
                 session.update(cx, |session, _| session.take_editor_recording_target());
             if let Some(editor_path) = editor_target {
                 editor_recording_finished(editor_path, finished_studio, cx);
+            } else if let Some(preparing) =
+                preparing_editor.filter(|pending| pending.presentation.suppresses_completion_open())
+            {
+                let key = editor_key(&preparing.project_path);
+                if !cx
+                    .global::<AppWindows>()
+                    .editors
+                    .iter()
+                    .any(|(path, _)| path == &key)
+                {
+                    restore_after_editor_close(&key, cx);
+                } else {
+                    park_idle_camera_preview(cx);
+                }
             } else {
                 // `postStudioRecordingBehaviour` (`openEditor` is the
                 // default): a cleanly-stopped studio recording goes straight
@@ -256,6 +615,40 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
     // The Tauri app orders it the same way -- `DeepLinkActionExecutor::new` in
     // `setup`, before `on_open_url` is wired (`lib.rs:5449`).
     crate::deeplink::init(cx);
+}
+
+fn open_preparing_studio_editor(session: &Entity<RecordingSession>, cx: &mut App) {
+    let Some(pending) = session.read(cx).preparing_studio_editor().cloned() else {
+        return;
+    };
+    if !pending.capture_stopped
+        || pending.presentation != StudioEditorPresentation::Pending
+        || !pending.finalization.is_finalizing()
+        || crate::store::GeneralSettings::load().post_studio_recording_behaviour
+            != crate::store::PostStudioBehaviour::OpenEditor
+    {
+        return;
+    }
+    #[cfg(target_os = "linux")]
+    if !restore_clean_capture_ui(cx) {
+        return;
+    }
+    session.update(cx, |session, _| {
+        if let Some(current) = session.preparing_studio_editor_mut() {
+            current.presentation = StudioEditorPresentation::Attempted;
+        }
+    });
+    open_editor(pending.project_path, cx);
+    if session
+        .read(cx)
+        .preparing_studio_editor()
+        .is_some_and(|pending| matches!(pending.presentation, StudioEditorPresentation::Opened(_)))
+    {
+        close_controls(session, cx);
+        close_target_overlays(cx);
+        close_camera_window(cx);
+        restore_content_protection(cx);
+    }
 }
 
 /// `createThemeListener` + `commands.setTheme`: persist is already done; this
@@ -352,11 +745,56 @@ pub fn broadcast_theme(cx: &mut App) {
 /// Public because the tray's "Open Main Window" is exactly this
 /// (`ShowCapWindow::Main { init_target_mode: None }`).
 pub fn show_main_window(cx: &mut App) {
+    #[cfg(target_os = "linux")]
+    {
+        let session = RecordingSession::global(cx);
+        let phase = session.read(cx).phase;
+        let instant_cleanup_safe = session.read(cx).instant_cleanup_safe();
+        match clean_capture_reopen_action(
+            cx.global_mut::<AppWindows>().clean_capture.as_mut(),
+            phase,
+            instant_cleanup_safe,
+        ) {
+            CleanCaptureReopenAction::RetryRestore => {
+                begin_retained_capture_restore(cx);
+                return;
+            }
+            CleanCaptureReopenAction::WaitForRestore => return,
+            CleanCaptureReopenAction::Continue => {}
+        }
+    }
+    #[cfg(target_os = "linux")]
+    if clean_capture_active(cx) && RecordingSession::global(cx).read(cx).phase != Phase::Idle {
+        RecordingSession::global(cx).update(cx, |session, cx| {
+            session.show_clean_capture_controls(cx);
+        });
+        return;
+    }
+    show_main_window_after_capture_pause(cx);
+}
+
+pub(crate) fn show_main_window_after_capture_pause(cx: &mut App) {
+    #[cfg(target_os = "linux")]
+    if RecordingSession::global(cx).read(cx).phase == Phase::Idle
+        && !RecordingSession::global(cx).read(cx).instant_cleanup_safe()
+    {
+        RecordingSession::global(cx).update(cx, |session, cx| session.stop(cx));
+        return;
+    }
+    #[cfg(target_os = "linux")]
+    if clean_capture_active(cx) {
+        let session = RecordingSession::global(cx);
+        if !session.read(cx).clean_capture_controls_safe() {
+            session.update(cx, |session, cx| session.show_clean_capture_controls(cx));
+            return;
+        }
+    }
     if crate::store::should_show_onboarding() {
         open_onboarding(cx);
         return;
     }
-    if RecordingSession::global(cx).read(cx).phase == Phase::Idle {
+    let resume_inputs = RecordingSession::global(cx).read(cx).phase == Phase::Idle;
+    if resume_inputs {
         crate::feeds::Feeds::global(cx).update(cx, |feeds, cx| feeds.resume_camera_preview(cx));
     }
     let reset_target = RecordingSession::global(cx).read(cx).phase == Phase::Idle
@@ -374,17 +812,20 @@ pub fn show_main_window(cx: &mut App) {
     let main = cx.global::<AppWindows>().main;
     let native = main
         .update(cx, |view, window, cx| {
+            if resume_inputs {
+                view.resume_device_restore(cx);
+            }
             if reset_target {
+                view.show_recorder(cx);
                 view.clear_target(cx);
             }
-            // Every path back to the main window is a path a new capture may
-            // have arrived on -- a finished recording most of all. The Tauri
-            // app gets this from `invalidateRecentMedia` plus the query's
-            // focus gate; here the reshow *is* the trigger, so a recording
-            // made a moment ago is in the list without a restart.
-            view.refresh_recents(window, cx);
             #[cfg(target_os = "linux")]
-            if let Err(error) = platform::set_x11_window_visible(window, true) {
+            if window.retained_visibility().is_some() {
+                match window.set_retained_visibility(true) {
+                    Ok(receipt) => observe_visibility(receipt, true, cx),
+                    Err(error) => tracing::warn!(%error, "could not restore the main window"),
+                }
+            } else if let Err(error) = platform::set_x11_window_visible(window, true) {
                 tracing::warn!(%error, "could not show the X11 main window");
             }
             platform::native_window(window)
@@ -458,9 +899,16 @@ pub fn heal_main_window_style(cx: &mut App) {
 pub fn hide_main_window(cx: &mut App) {
     let main = cx.global::<AppWindows>().main;
     let native = main
-        .update(cx, |_, window, _| {
+        .update(cx, |_, window, cx| {
+            #[cfg(not(target_os = "linux"))]
+            let _ = cx;
             #[cfg(target_os = "linux")]
-            if let Err(error) = platform::set_x11_window_visible(window, false) {
+            if window.retained_visibility().is_some() {
+                match window.set_retained_visibility(false) {
+                    Ok(receipt) => observe_visibility(receipt, false, cx),
+                    Err(error) => tracing::warn!(%error, "could not hide the main window"),
+                }
+            } else if let Err(error) = platform::set_x11_window_visible(window, false) {
                 tracing::warn!(%error, "could not hide the X11 main window");
             }
             platform::native_window(window)
@@ -479,11 +927,24 @@ pub fn hide_main_window(cx: &mut App) {
 
 fn hide_main_and_park_camera_preview(cx: &mut App) {
     hide_main_window(cx);
+    park_idle_camera_preview(cx);
+}
 
+fn park_idle_camera_preview(cx: &mut App) {
     if !camera_preview_can_be_parked(RecordingSession::global(cx).read(cx).phase) {
         return;
     }
 
+    let main = cx.global::<AppWindows>().main;
+    main.update(cx, |view, _, _| {
+        view.suspend_device_restore();
+    })
+    .ok();
+    if let Some(handle) = cx.global::<AppWindows>().camera {
+        handle
+            .update(cx, |view, _, cx| view.retain_preview(cx))
+            .ok();
+    }
     close_camera_window(cx);
     crate::feeds::Feeds::global(cx).update(cx, |feeds, cx| feeds.park_camera_preview(cx));
 }
@@ -492,20 +953,29 @@ fn camera_preview_can_be_parked(phase: Phase) -> bool {
     matches!(phase, Phase::Idle)
 }
 
-/// ⌘W, the File/Window menus' Close Window, and the main window's own red
-/// traffic light.
-///
-/// `CapWindowId::Main`'s `CloseRequested` arm (`lib.rs:5644-5697`), transcribed:
-/// prevent the close and hide the window, sync the dock, and -- when nothing is
-/// recording -- hide the camera bubble, close the target-select overlays, pause
-/// the camera preview and release the mic and camera feeds.
-///
-/// Two deviations, both noted in the report: the camera bubble is *closed*
-/// rather than hidden (this app has no hide-in-place path for it, and the
-/// observable result is the same bubble-off-screen), and `camera_preview.pause()`
-/// has no counterpart because there is no preview stream server here -- the
-/// preview is the bubble, and closing it stops the pump.
 pub fn request_close_main(cx: &mut App) {
+    #[cfg(target_os = "linux")]
+    if clean_capture_pending(cx) {
+        cancel_clean_capture(cx);
+        return;
+    }
+    if RecordingSession::global(cx).read(cx).phase == Phase::Idle
+        && RecordingSession::global(cx)
+            .read(cx)
+            .editor_recording_target()
+            .is_some()
+    {
+        abort_editor_recording_flow(cx);
+        return;
+    }
+    if RecordingSession::global(cx).read(cx).phase == Phase::Idle {
+        let main = cx.global::<AppWindows>().main;
+        main.update(cx, |view, _, _| {
+            view.cancel_deep_link_start();
+            view.suspend_device_restore();
+        })
+        .ok();
+    }
     hide_main_window(cx);
 
     // `state.is_recording_active_or_pending()`: everything but Idle.
@@ -531,6 +1001,23 @@ pub fn handle_dock_reopen(cx: &mut App) {
     if !cx.has_global::<AppWindows>() {
         return;
     }
+    let live = cx
+        .windows()
+        .into_iter()
+        .map(|handle| handle.window_id())
+        .collect::<HashSet<_>>();
+    {
+        let windows = cx.global_mut::<AppWindows>();
+        windows
+            .editors
+            .retain(|(_, handle)| live.contains(&handle.window_id()));
+        windows
+            .screenshot_editors
+            .retain(|(_, handle)| live.contains(&handle.window_id()));
+        windows.settings = windows
+            .settings
+            .filter(|handle| live.contains(&handle.window_id()));
+    }
     let windows = cx.global::<AppWindows>();
     if crate::store::should_show_onboarding() {
         if windows.onboarding.is_some() {
@@ -542,28 +1029,77 @@ pub fn handle_dock_reopen(cx: &mut App) {
         cx.activate(true);
         return;
     }
-    let focus: Option<gpui::AnyWindowHandle> = windows
+    let candidates = windows
         .editors
-        .first()
-        .map(|(_, handle)| (*handle).into())
-        .or_else(|| windows.settings.map(Into::into));
+        .iter()
+        .map(|(_, handle)| gpui::AnyWindowHandle::from(*handle))
+        .chain(
+            windows
+                .screenshot_editors
+                .iter()
+                .map(|(_, handle)| (*handle).into()),
+        )
+        .chain(windows.settings.map(Into::into))
+        .collect::<Vec<_>>();
+    let focus = first_registered_reopen_target(candidates, &live);
     tracing::info!(focus_existing = focus.is_some(), "dock reopen");
     match focus {
         Some(handle) => {
-            let native = handle
-                .update(cx, |_, window, _| platform::native_window(window))
-                .ok()
-                .flatten();
-            cx.spawn(async move |_| {
-                if let Some(native) = &native {
-                    platform::show_native(native);
+            cx.defer(move |cx| {
+                if !cx
+                    .windows()
+                    .iter()
+                    .any(|current| current.window_id() == handle.window_id())
+                {
+                    handle_dock_reopen(cx);
+                    return;
                 }
-            })
-            .detach();
+                let native = match handle.update(cx, |_, window, _| platform::native_window(window))
+                {
+                    Ok(native) => native,
+                    Err(error) => {
+                        tracing::warn!(%error, "could not focus the registered editor window");
+                        return;
+                    }
+                };
+                cx.spawn(async move |_| {
+                    if let Some(native) = &native {
+                        platform::show_native(native);
+                    }
+                })
+                .detach();
+            });
         }
         None => show_main_window(cx),
     }
     cx.activate(true);
+}
+
+fn first_registered_reopen_target(
+    candidates: impl IntoIterator<Item = gpui::AnyWindowHandle>,
+    live: &HashSet<gpui::WindowId>,
+) -> Option<gpui::AnyWindowHandle> {
+    candidates
+        .into_iter()
+        .find(|candidate| live.contains(&candidate.window_id()))
+}
+
+pub fn open_quality_settings(mode: Mode, cx: &mut App) {
+    if mode == Mode::Screenshot {
+        return;
+    }
+    #[cfg(target_os = "linux")]
+    if defer_window_until_capture_safe(cx) {
+        return;
+    }
+    open_settings(Page::Quality, cx);
+    if let Some(handle) = cx.global::<AppWindows>().settings {
+        handle
+            .update(cx, |view, window, cx| {
+                view.show_quality_settings(mode, window, cx);
+            })
+            .ok();
+    }
 }
 
 /// Open the settings window on a page, and hide the main window.
@@ -574,6 +1110,10 @@ pub fn handle_dock_reopen(cx: &mut App) {
 /// through `cx.defer` from anything inside an entity update: opening a window
 /// paints it synchronously and would double-lease the caller.
 pub fn open_settings(page: Page, cx: &mut App) {
+    #[cfg(target_os = "linux")]
+    if defer_window_until_capture_safe(cx) {
+        return;
+    }
     if let Some(handle) = cx.global::<AppWindows>().settings {
         // `ShowCapWindow::show` reuses a live window: show, focus, and let
         // the page argument re-target it.
@@ -594,8 +1134,7 @@ pub fn open_settings(page: Page, cx: &mut App) {
         return;
     }
 
-    let bounds = Bounds::centered(
-        None,
+    let bounds = opening_window_bounds(
         size(
             px(settings_window::SETTINGS_WIDTH),
             px(settings_window::SETTINGS_HEIGHT),
@@ -627,9 +1166,12 @@ pub fn open_settings(page: Page, cx: &mut App) {
             // `.resizable(true).maximized(false)`, and `min_inner_size`.
             is_resizable: true,
             is_minimizable: true,
-            window_min_size: Some(size(
-                px(settings_window::SETTINGS_MIN_WIDTH),
-                px(settings_window::SETTINGS_MIN_HEIGHT),
+            window_min_size: Some(fitted_window_min_size(
+                size(
+                    px(settings_window::SETTINGS_MIN_WIDTH),
+                    px(settings_window::SETTINGS_MIN_HEIGHT),
+                ),
+                bounds,
             )),
             // `builder.transparent(true)` on macOS -- the panes paint, the
             // material shows through the gap.
@@ -729,6 +1271,10 @@ pub fn settings_closed(cx: &mut App) {
 }
 
 pub fn open_onboarding(cx: &mut App) {
+    #[cfg(target_os = "linux")]
+    if defer_window_until_capture_safe(cx) {
+        return;
+    }
     if let Some(handle) = cx.global::<AppWindows>().onboarding {
         let native = handle
             .update(cx, |_, window, _| platform::native_window(window))
@@ -740,40 +1286,56 @@ pub fn open_onboarding(cx: &mut App) {
             }
         })
         .detach();
-        hide_main_window(cx);
+        hide_main_and_park_camera_preview(cx);
         return;
     }
 
-    let bounds = Bounds::centered(
-        None,
-        size(
-            px(onboarding_window::ONBOARDING_WIDTH),
-            px(onboarding_window::ONBOARDING_HEIGHT),
+    let display = scap_targets::Display::get_containing_cursor();
+    let bounds = match display_work_area(display.as_ref(), cx) {
+        Some(available) => {
+            let display_width = display
+                .as_ref()
+                .and_then(capture_display_bounds)
+                .map(|bounds| bounds.size.width)
+                .unwrap_or(available.size.width);
+            let width = (f32::from(display_width) * 0.58)
+                .clamp(onboarding_window::ONBOARDING_WIDTH, 1080.)
+                .min((f32::from(available.size.width) - 32.).max(1.));
+            let height = (width * 0.72)
+                .clamp(onboarding_window::ONBOARDING_HEIGHT, 780.)
+                .min((f32::from(available.size.height) - 32.).max(1.));
+            Bounds {
+                origin: available.center() - point(px(width / 2.), px(height / 2.)),
+                size: size(px(width), px(height)),
+            }
+        }
+        None => Bounds::centered(
+            None,
+            size(
+                px(onboarding_window::ONBOARDING_WIDTH),
+                px(onboarding_window::ONBOARDING_HEIGHT),
+            ),
+            cx,
         ),
-        cx,
-    );
+    };
 
     let handle = cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
-            titlebar: Some(gpui::TitlebarOptions {
-                title: Some("Welcome to Cap".into()),
-                appears_transparent: true,
-                traffic_light_position: Some(onboarding_window::TRAFFIC_LIGHTS),
-            }),
+            titlebar: None,
             kind: WindowKind::Normal,
             focus: true,
             show: true,
             is_resizable: false,
             is_minimizable: true,
-            window_min_size: Some(size(
-                px(onboarding_window::ONBOARDING_WIDTH),
-                px(onboarding_window::ONBOARDING_HEIGHT),
-            )),
+            window_min_size: Some(bounds.size),
             window_background: gpui::WindowBackgroundAppearance::Transparent,
             ..Default::default()
         },
-        |window, cx| cx.new(|cx| OnboardingWindow::new(window, cx)),
+        |window, cx| {
+            window.set_window_title("Welcome to Cap");
+            cx.new(|cx| OnboardingWindow::new(window, cx))
+        },
     );
 
     let handle = match handle {
@@ -795,11 +1357,12 @@ pub fn open_onboarding(cx: &mut App) {
         .flatten();
     cx.spawn(async move |_| {
         if let Some(native) = &native {
+            let _ = platform::install_window_material(native, 16.);
             platform::show_native(native);
         }
     })
     .detach();
-    hide_main_window(cx);
+    hide_main_and_park_camera_preview(cx);
     crate::tray::refresh_menu(cx);
 }
 
@@ -811,6 +1374,15 @@ pub fn onboarding_finished(cx: &mut App) {
     }
     crate::tray::refresh_menu(cx);
     show_main_window(cx);
+}
+
+pub fn close_onboarding(cx: &mut App) {
+    if let Some(handle) = cx.global_mut::<AppWindows>().onboarding.take() {
+        handle
+            .update(cx, |_, window, _| window.remove_window())
+            .ok();
+    }
+    onboarding_closed(cx);
 }
 
 pub fn onboarding_closed(cx: &mut App) {
@@ -849,9 +1421,20 @@ fn restore_after_settings(cx: &mut App) {
 /// Must be reached through `cx.defer` from inside an entity update: opening a
 /// window paints it synchronously and would double-lease the caller.
 pub fn open_mode_select(cx: &mut App) -> bool {
+    if RecordingSession::global(cx)
+        .read(cx)
+        .editor_recording_target()
+        .is_some()
+    {
+        return false;
+    }
+    #[cfg(target_os = "linux")]
+    if defer_window_until_capture_safe(cx) {
+        return false;
+    }
     let main = cx.global::<AppWindows>().main;
     let mode = main
-        .update(cx, |view, _window, _cx| view.mode())
+        .update(cx, |view, _window, cx| view.effective_mode(cx))
         .unwrap_or(Mode::Instant);
 
     if let Some(handle) = cx.global::<AppWindows>().mode_select {
@@ -874,8 +1457,7 @@ pub fn open_mode_select(cx: &mut App) -> bool {
         return true;
     }
 
-    let bounds = Bounds::centered(
-        None,
+    let bounds = opening_window_bounds(
         size(
             px(mode_select_window::MODE_SELECT_WIDTH),
             px(mode_select_window::MODE_SELECT_HEIGHT),
@@ -976,6 +1558,10 @@ pub fn set_recording_mode(mode: Mode, cx: &mut App) {
 /// `utils/teleprompter.ts`, which reuses a live window with
 /// `unminimize()`/`show()`/`setFocus()` and otherwise builds a new one.
 pub fn open_teleprompter(cx: &mut App) {
+    #[cfg(target_os = "linux")]
+    if defer_window_until_capture_safe(cx) {
+        return;
+    }
     if let Some(handle) = cx.global::<AppWindows>().teleprompter {
         let native = handle
             .update(cx, |_, window, _| platform::native_window(window))
@@ -990,8 +1576,7 @@ pub fn open_teleprompter(cx: &mut App) {
         return;
     }
 
-    let bounds = Bounds::centered(
-        None,
+    let bounds = opening_window_bounds(
         size(
             px(teleprompter_window::TELEPROMPTER_WIDTH),
             px(teleprompter_window::TELEPROMPTER_HEIGHT),
@@ -1010,20 +1595,21 @@ pub fn open_teleprompter(cx: &mut App) {
                 appears_transparent: true,
                 traffic_light_position: Some(teleprompter_window::TRAFFIC_LIGHTS),
             }),
-            // `alwaysOnTop: true` + `visibleOnAllWorkspaces: true` are applied
-            // below as level 101 + `CanJoinAllSpaces`, the same way the main
-            // window gets level 100 -- a `WindowKind::PopUp` panel would be
-            // non-activating, and this window has to take keystrokes for the
-            // script.
+            #[cfg(target_os = "macos")]
+            kind: WindowKind::Floating,
+            #[cfg(not(target_os = "macos"))]
             kind: WindowKind::Normal,
             focus: true,
             show: true,
             // `resizable: true`, `minWidth: 420, minHeight: 220`.
             is_resizable: true,
             is_minimizable: true,
-            window_min_size: Some(size(
-                px(teleprompter_window::TELEPROMPTER_MIN_WIDTH),
-                px(teleprompter_window::TELEPROMPTER_MIN_HEIGHT),
+            window_min_size: Some(fitted_window_min_size(
+                size(
+                    px(teleprompter_window::TELEPROMPTER_MIN_WIDTH),
+                    px(teleprompter_window::TELEPROMPTER_MIN_HEIGHT),
+                ),
+                bounds,
             )),
             // `transparent: true`, `shadow: true`: the shell paints a tint and
             // the material shows through.
@@ -1229,6 +1815,10 @@ pub(crate) fn reject_unavailable_window(cx: &mut App) {
 /// cheaper to reason about and what the Tauri flow does (the webviews are
 /// recreated with a new `targetMode` query parameter).
 pub fn open_target_overlays(request: OverlayRequest, cx: &mut App) {
+    #[cfg(target_os = "linux")]
+    if defer_window_until_capture_safe(cx) {
+        return;
+    }
     if !open_overlays_core(request, cx) {
         reject_unavailable_window(cx);
         return;
@@ -1254,6 +1844,10 @@ pub fn open_target_overlays(request: OverlayRequest, cx: &mut App) {
 /// Must be reached through `cx.defer` from anything inside an entity update,
 /// same as [`open_target_overlays`].
 pub fn open_editor_target_overlays(editor_path: PathBuf, request: OverlayRequest, cx: &mut App) {
+    #[cfg(target_os = "linux")]
+    if defer_window_until_capture_safe(cx) {
+        return;
+    }
     // A live recording keeps its own picker semantics; the modal's actions
     // are guarded on Idle already, so this is the belt-and-braces the Tauri
     // backend has in `set_pending_recording`.
@@ -1271,6 +1865,34 @@ pub fn open_editor_target_overlays(editor_path: PathBuf, request: OverlayRequest
         cx.global_mut::<AppWindows>().editor_hidden_for_picker = Some(key.clone());
         hide_editor_window(&key, cx);
     }
+    hide_main_window(cx);
+}
+
+pub fn open_editor_recording_main(editor_path: PathBuf, cx: &mut App) {
+    let session = RecordingSession::global(cx);
+    if session.read(cx).phase != Phase::Idle
+        || session.read(cx).editor_recording_target().as_ref() != Some(&editor_path)
+    {
+        return;
+    }
+    let key = editor_key(&editor_path);
+    if editor_window_handle(&key, cx).is_none() {
+        abort_editor_recording_flow(cx);
+        return;
+    }
+    close_target_overlays(cx);
+    cx.global_mut::<AppWindows>().main_hidden_for_picker = false;
+    cx.global_mut::<AppWindows>().editor_hidden_for_picker = Some(key.clone());
+    let main = cx.global::<AppWindows>().main;
+    main.update(cx, |view, _, cx| {
+        view.cancel_deep_link_start();
+        view.show_recorder(cx);
+        view.clear_target(cx);
+        cx.notify();
+    })
+    .ok();
+    hide_editor_window(&key, cx);
+    show_main_window(cx);
 }
 
 fn open_overlays_core(request: OverlayRequest, cx: &mut App) -> bool {
@@ -1299,11 +1921,12 @@ fn open_overlays_core(request: OverlayRequest, cx: &mut App) -> bool {
     select.update(cx, |select, cx| {
         select.arm(Some(request.mode), request.recording_mode, pinned, cx)
     });
+    sync_camera_presentation(cx);
 
-    // Only the window variant parks the camera bubble; the display/area/camera
-    // variants have no window to park it in.
-    if request.mode == TargetType::Window {
-        arm_camera_park(cx);
+    if request.mode == TargetType::Window
+        || (request.mode == TargetType::Area && request.recording_mode != Mode::Screenshot)
+    {
+        arm_camera_park(request.mode, cx);
     }
 
     let displays = match &display {
@@ -1358,6 +1981,10 @@ fn open_overlays_core(request: OverlayRequest, cx: &mut App) -> bool {
     // (`target_select_overlay.rs:595-617`): with the main window hidden below
     // and the overlays non-activating, a plain key handler has nothing to be
     // delivered to.
+    if cx.global::<AppWindows>().overlays.is_empty() {
+        disarm_target_selection(cx);
+        return false;
+    }
     platform::register_escape_hotkey();
     true
 }
@@ -1369,10 +1996,22 @@ fn open_overlays_core(request: OverlayRequest, cx: &mut App) -> bool {
 /// reveals the main window again (`dismissalReveals`,
 /// `new-main/index.tsx:2047-2058`).
 pub fn dismiss_target_overlays(cx: &mut App) {
+    if RecordingSession::global(cx).read(cx).phase == Phase::Idle
+        && RecordingSession::global(cx)
+            .read(cx)
+            .editor_recording_target()
+            .is_some()
+    {
+        abort_editor_recording_flow(cx);
+        return;
+    }
     close_target_overlays(cx);
     let main = cx.global::<AppWindows>().main;
-    main.update(cx, |view, _window, cx| view.clear_target(cx))
-        .ok();
+    main.update(cx, |view, _window, cx| {
+        view.cancel_deep_link_start();
+        view.clear_target(cx);
+    })
+    .ok();
 
     // An editor-owned picker cancelled: clear the editor recording target and
     // reveal that editor with focus, record modal closed -- the non-
@@ -1412,11 +2051,143 @@ pub fn dismiss_target_overlays(cx: &mut App) {
 /// selection alone.
 pub fn close_target_overlays(cx: &mut App) {
     close_overlay_windows(cx);
+    disarm_target_selection(cx);
+}
+
+fn disarm_target_selection(cx: &mut App) {
     let select = TargetSelect::global(cx);
     select.update(cx, |select, cx| {
         let recording_mode = select.recording_mode;
         select.arm(None, recording_mode, None, cx);
     });
+    sync_camera_presentation(cx);
+}
+
+fn area_overlay_matches(
+    target: &ScreenCaptureTarget,
+    candidate: &ScreenCaptureTarget,
+    capture_excluded: bool,
+) -> bool {
+    let (
+        ScreenCaptureTarget::Area { screen, bounds },
+        ScreenCaptureTarget::Area {
+            screen: candidate_screen,
+            bounds: candidate_bounds,
+        },
+    ) = (target, candidate)
+    else {
+        return false;
+    };
+    capture_excluded
+        && screen == candidate_screen
+        && bounds.position() == candidate_bounds.position()
+        && bounds.size() == candidate_bounds.size()
+}
+
+fn area_overlay_for_recording(
+    target: &ScreenCaptureTarget,
+    cx: &mut App,
+) -> Option<WindowHandle<OverlayWindow>> {
+    let ScreenCaptureTarget::Area { screen, .. } = target else {
+        return None;
+    };
+    let handle = overlay_handle(Some(screen.clone()), cx)?;
+    handle
+        .update(cx, |view, window, cx| {
+            let candidate = view.target(cx)?;
+            #[cfg(target_os = "macos")]
+            let capture_excluded = platform::window_is_visible(window)
+                && platform::window_number(window).is_some_and(|number| number > 0);
+            #[cfg(not(target_os = "macos"))]
+            let capture_excluded = {
+                let _ = window;
+                false
+            };
+            area_overlay_matches(target, &candidate, capture_excluded).then_some(handle)
+        })
+        .ok()
+        .flatten()
+}
+
+fn close_other_overlays(retained: WindowHandle<OverlayWindow>, cx: &mut App) {
+    let closing: Vec<_> = cx
+        .global::<AppWindows>()
+        .overlays
+        .iter()
+        .filter(|(_, handle)| *handle != retained)
+        .map(|(display, _)| display.clone())
+        .collect();
+    for display in closing {
+        close_overlay(&display, cx);
+    }
+}
+
+fn retain_recording_area(
+    target: &ScreenCaptureTarget,
+    cx: &mut App,
+) -> Option<WindowHandle<OverlayWindow>> {
+    let Some(handle) = area_overlay_for_recording(target, cx) else {
+        close_target_overlays(cx);
+        return None;
+    };
+    let committed = handle
+        .update(cx, |view, _, cx| {
+            view.is_recording_area() || view.commit_area_for_recording(cx)
+        })
+        .unwrap_or(false);
+    if !committed {
+        close_target_overlays(cx);
+        return None;
+    }
+    release_camera_park(cx);
+    close_other_overlays(handle, cx);
+    platform::unregister_escape_hotkey();
+    disarm_target_selection(cx);
+    Some(handle)
+}
+
+fn make_recording_area_passive(handle: WindowHandle<OverlayWindow>, cx: &mut App) {
+    cx.spawn(async move |cx| {
+        let native = cx.update(|cx| {
+            if RecordingSession::global(cx).read(cx).phase == Phase::Idle
+                || !cx
+                    .global::<AppWindows>()
+                    .overlays
+                    .iter()
+                    .any(|(_, current)| *current == handle)
+            {
+                return None;
+            }
+            Some(
+                handle
+                    .update(cx, |view, window, _| {
+                        view.is_recording_area()
+                            .then(|| platform::native_window(window))
+                            .flatten()
+                    })
+                    .ok()
+                    .flatten(),
+            )
+        });
+        let Some(native) = native else {
+            return;
+        };
+        if !native.is_some_and(|native| platform::set_window_click_through(&native, true)) {
+            tracing::warn!("recording area click-through failed; removing the outline");
+            cx.update(|cx| {
+                let display = cx
+                    .global::<AppWindows>()
+                    .overlays
+                    .iter()
+                    .find(|(_, current)| *current == handle)
+                    .map(|(display, _)| display.clone());
+                if let Some(display) = display {
+                    close_overlay(&display, cx);
+                }
+            });
+        }
+    })
+    .detach();
 }
 
 /// Repaint every overlay. The cursor probe runs while none of them is the
@@ -1458,33 +2229,55 @@ fn overlay_window_ids(cx: &mut App) -> Vec<scap_targets::WindowId> {
         .collect()
 }
 
-/// The overlay's Start button: overlays down, then the main window's start
-/// path with the target the overlay resolved.
 pub fn start_recording_from_overlay(target: ScreenCaptureTarget, cx: &mut App) {
+    let main = cx.global::<AppWindows>().main;
+    if RecordingSession::global(cx).read(cx).phase != Phase::Idle
+        || main
+            .update(cx, |view, _, _| view.is_preparing_recording())
+            .unwrap_or(true)
+    {
+        return;
+    }
     // Collected before the windows go away: the capture starts a beat after
     // this, and an overlay that has not finished closing must not end up in
     // the recording.
     let excluded = overlay_window_ids(cx);
-    // `onRecordingStart` nulls the saved camera bounds before the dismissal
-    // (`target-select-overlay.tsx:687-690`): a bubble parked inside the picked
-    // window stays there for the recording.
-    release_camera_park(cx);
-    close_target_overlays(cx);
-    // A "recordingStudio" dismissal does not reveal the main window -- the bar
-    // owns the foreground now, and the stop flow's reshow brings it back.
-    cx.global_mut::<AppWindows>().main_hidden_for_picker = false;
-    // Same for an editor-owned picker (`targetModeSource === "editorRecording"`
-    // in the `ClipsSidebar` effect, `:416-419`): the editor stays hidden for
-    // the whole recording, and the session observer's finish path reveals it.
-    // The session's editor recording target survives -- that is what routes
-    // the finished capture back into the project.
-    cx.global_mut::<AppWindows>().editor_hidden_for_picker = None;
+    let retained_area =
+        cfg!(target_os = "macos") && matches!(&target, ScreenCaptureTarget::Area { .. });
+    if retained_area {
+        let handle = area_overlay_for_recording(&target, cx).filter(|handle| {
+            handle
+                .update(cx, |view, _, cx| view.commit_area_for_recording(cx))
+                .unwrap_or(false)
+        });
+        let Some(handle) = handle else {
+            dismiss_target_overlays(cx);
+            RecordingSession::global(cx).update(cx, |session, cx| {
+                session.error = Some(
+                    "The selected area changed or is no longer available. Select it again.".into(),
+                );
+                cx.notify();
+            });
+            return;
+        };
+        close_other_overlays(handle, cx);
+    } else {
+        release_camera_park(cx);
+        close_target_overlays(cx);
+    }
 
-    let main = cx.global::<AppWindows>().main;
-    main.update(cx, |view, window, cx| {
-        view.start_recording_with_target(target, excluded, window, cx)
-    })
-    .ok();
+    let preparing = main
+        .update(cx, |view, window, cx| {
+            view.start_recording_with_target(target, excluded, window, cx);
+            view.is_preparing_recording()
+        })
+        .unwrap_or(false);
+    if !preparing && RecordingSession::global(cx).read(cx).phase == Phase::Idle {
+        dismiss_target_overlays(cx);
+    } else if !retained_area {
+        cx.global_mut::<AppWindows>().main_hidden_for_picker = false;
+        cx.global_mut::<AppWindows>().editor_hidden_for_picker = None;
+    }
 }
 
 /// Seed an area selection on the overlay for a display (harness path -- the
@@ -1531,6 +2324,30 @@ fn open_overlay(
     };
     let width = bounds.size().width();
     let height = bounds.size().height();
+    let window_bounds = WindowBounds::Windowed(Bounds {
+        origin: point(px(0.), px(0.)),
+        size: size(px(width as f32), px(height as f32)),
+    });
+    #[cfg(target_os = "linux")]
+    let overlay_display = if uses_wayland() {
+        let Some(matched) = platform_display_for_capture(display, cx) else {
+            let capture_display_id = display.id();
+            tracing::warn!(%capture_display_id, "could not match capture display to a Wayland output");
+            return;
+        };
+        Some(matched)
+    } else {
+        None
+    };
+    #[cfg(target_os = "linux")]
+    let window_bounds = if overlay_display.is_some() {
+        WindowBounds::Fullscreen(Bounds {
+            origin: point(px(0.), px(0.)),
+            size: size(px(width as f32), px(height as f32)),
+        })
+    } else {
+        window_bounds
+    };
 
     let handle = cx.open_window(
         WindowOptions {
@@ -1538,10 +2355,9 @@ fn open_overlay(
             // window-origin math cannot express "cover this display" (see
             // `platform::set_window_frame_cg`). The size is honoured, and it is
             // the size the renderer is built for.
-            window_bounds: Some(WindowBounds::Windowed(Bounds {
-                origin: point(px(0.), px(0.)),
-                size: size(px(width as f32), px(height as f32)),
-            })),
+            window_bounds: Some(window_bounds),
+            #[cfg(target_os = "linux")]
+            display_id: overlay_display.as_ref().map(|display| display.id()),
             titlebar: None,
             // `NSWindowStyleMaskNonActivatingPanel` in windows.rs: the overlay
             // takes clicks without activating the app over the one being
@@ -1578,6 +2394,14 @@ fn open_overlay(
                 .flatten();
             let (x, y) = (bounds.position().x(), bounds.position().y());
             cx.spawn(async move |cx| {
+                if !cx.update(|cx| {
+                    cx.global::<AppWindows>()
+                        .overlays
+                        .iter()
+                        .any(|(_, current)| *current == handle)
+                }) {
+                    return;
+                }
                 if let Some(native) = &native {
                     platform::place_overlay_panel(
                         native,
@@ -1605,6 +2429,11 @@ fn open_overlay(
                         window.refresh();
                     })
                     .ok();
+                if let Some(camera) = cx.update(visible_camera_frame)
+                    && let Err(error) = camera.raise()
+                {
+                    tracing::warn!(%error, "could not raise the camera above the target picker");
+                }
             })
             .detach();
         }
@@ -1750,14 +2579,13 @@ fn excluded_own_windows(rules: &[crate::store::WindowExclusion]) -> Vec<OwnWindo
         .collect()
 }
 
-/// `apply_content_protection` (`windows.rs:3382-3407`): the same set, minus the
-/// camera window, which that loop skips outright (`:3393-3398`) because its
-/// protection is mode-driven from the start path instead
-/// (`recording.rs:1617-1624`).
 fn content_protection_targets(rules: &[crate::store::WindowExclusion]) -> Vec<OwnWindow> {
     excluded_own_windows(rules)
         .into_iter()
         .filter(|kind| *kind != OwnWindow::Camera)
+        // SCK excludes the controls by window ID. NSWindowSharingNone also hides
+        // them from Screen Sharing, leaving remote users without recording controls.
+        .filter(|kind| !cfg!(target_os = "macos") || *kind != OwnWindow::Controls)
         .collect()
 }
 
@@ -1810,10 +2638,16 @@ fn own_windows(cx: &mut App) -> Vec<OwnWindowHandle> {
         teleprompter,
         overlays,
         editors,
+        deleting_editors: _,
+        preparing_cleanup: _,
         screenshot_editors,
         main_hidden_for_picker: _,
         editor_hidden_for_picker: _,
         camera_park: _,
+        #[cfg(target_os = "linux")]
+            clean_capture: _,
+        #[cfg(target_os = "linux")]
+            clean_capture_generation: _,
     } = cx.global::<AppWindows>();
     let main = *main;
     let controls = *controls;
@@ -1953,9 +2787,845 @@ pub fn restore_content_protection(cx: &mut App) {
     apply_content_protection(windows, |_| false, cx);
 }
 
+#[cfg(target_os = "linux")]
+fn clean_capture_supported(
+    mode: RecordingMode,
+    target: &ScreenCaptureTarget,
+    camera_requested: bool,
+    wayland: bool,
+) -> bool {
+    matches!(
+        target,
+        ScreenCaptureTarget::Display { .. } | ScreenCaptureTarget::Area { .. }
+    ) || (!wayland
+        && mode == RecordingMode::Instant
+        && camera_requested
+        && matches!(target, ScreenCaptureTarget::Window { .. }))
+}
+
+#[cfg(target_os = "linux")]
+fn linux_capture_bounds(
+    target: &ScreenCaptureTarget,
+) -> anyhow::Result<camera_window::LinuxCameraPhysicalRect> {
+    let (display, crop) = cap_recording::target_to_display_and_crop(target)?;
+    let position = display
+        .raw_handle()
+        .physical_position()
+        .ok_or_else(|| anyhow::anyhow!("Capture display position is unavailable"))?;
+    if matches!(target, ScreenCaptureTarget::Window { .. }) {
+        let crop = crop.ok_or_else(|| anyhow::anyhow!("Capture window bounds are unavailable"))?;
+        return linux_window_capture_bounds(
+            position.x() + crop.position().x(),
+            position.y() + crop.position().y(),
+            crop.size().width(),
+            crop.size().height(),
+        );
+    }
+    let size = display
+        .physical_size()
+        .ok_or_else(|| anyhow::anyhow!("Capture display size is unavailable"))?;
+    let (x, y, width, height) = cap_recording::sources::screen_capture::x11_capture_rect(
+        position.x(),
+        position.y(),
+        size.width(),
+        size.height(),
+        crop.map(|crop| {
+            (
+                crop.position().x(),
+                crop.position().y(),
+                crop.size().width(),
+                crop.size().height(),
+            )
+        }),
+    )?;
+    Ok(camera_window::LinuxCameraPhysicalRect {
+        x,
+        y,
+        width,
+        height,
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn linux_window_capture_bounds(
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+) -> anyhow::Result<camera_window::LinuxCameraPhysicalRect> {
+    anyhow::ensure!(
+        [x, y, width, height]
+            .iter()
+            .all(|value| value.is_finite() && value.fract() == 0.0)
+            && x >= f64::from(i32::MIN)
+            && x <= f64::from(i32::MAX)
+            && y >= f64::from(i32::MIN)
+            && y <= f64::from(i32::MAX)
+            && width >= 2.0
+            && width <= f64::from(i32::MAX)
+            && height >= 2.0
+            && height <= f64::from(i32::MAX),
+        "Capture window has invalid physical bounds"
+    );
+    Ok(camera_window::LinuxCameraPhysicalRect {
+        x: x as i32,
+        y: y as i32,
+        width: width as u32,
+        height: height as u32,
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn linux_camera_presentation(
+    snapshot: camera_window::LinuxCameraRecordingSnapshot,
+    capture: camera_window::LinuxCameraPhysicalRect,
+) -> anyhow::Result<cap_recording::instant_recording::LinuxCameraPresentation> {
+    use crate::store::{BlurMode, CameraShape};
+    use cap_recording::instant_recording::{
+        LinuxCameraEffect, LinuxCameraPresentation, LinuxCameraRect, LinuxCameraShape,
+    };
+
+    let rect = snapshot.content_rect;
+    let x = i64::from(rect.x) - i64::from(capture.x);
+    let y = i64::from(rect.y) - i64::from(capture.y);
+    anyhow::ensure!(
+        x >= 0
+            && y >= 0
+            && x + i64::from(rect.width) <= i64::from(capture.width)
+            && y + i64::from(rect.height) <= i64::from(capture.height),
+        "Move the whole camera preview inside the capture area before starting Instant recording"
+    );
+    let radius = snapshot.corner_radius_pixels.round();
+    anyhow::ensure!(
+        radius.is_finite() && radius >= 0.0 && f64::from(radius) <= f64::from(u32::MAX),
+        "Camera preview has an invalid corner radius"
+    );
+    let shape = match snapshot.state.shape {
+        CameraShape::Round if rect.width == rect.height => LinuxCameraShape::Round,
+        CameraShape::Round if rect.width.abs_diff(rect.height) <= 1 => {
+            LinuxCameraShape::RoundedRectangle {
+                radius_pixels: rect.width.min(rect.height) / 2,
+            }
+        }
+        CameraShape::Round => anyhow::bail!("Round camera preview has invalid physical bounds"),
+        CameraShape::Square | CameraShape::Full => LinuxCameraShape::RoundedRectangle {
+            radius_pixels: (radius as u32).min(rect.width.min(rect.height) / 2),
+        },
+    };
+    let mut presentation = LinuxCameraPresentation {
+        rect: LinuxCameraRect {
+            x: u32::try_from(x)?,
+            y: u32::try_from(y)?,
+            width: rect.width,
+            height: rect.height,
+        },
+        shape,
+        mirrored: snapshot.state.mirrored,
+        effect: LinuxCameraEffect::None,
+    };
+    presentation.validate(capture.width, capture.height)?;
+    if snapshot.state.background_blur != BlurMode::Off {
+        presentation.effect = LinuxCameraEffect::BackgroundBlur;
+    }
+    Ok(presentation)
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn refresh_linux_instant_camera(
+    config: &mut StartConfig,
+    cx: &mut App,
+) -> anyhow::Result<()> {
+    use crate::{feeds::Feeds, recording::LinuxInstantCameraRequest, store::BlurMode};
+    use cap_recording::instant_recording::{LinuxCameraBlur, LinuxCameraProcessing};
+
+    config.linux_instant_camera = None;
+    if config.mode != RecordingMode::Instant
+        || config.camera.is_none()
+        || matches!(config.target, ScreenCaptureTarget::CameraOnly)
+    {
+        return Ok(());
+    }
+    anyhow::ensure!(
+        !cap_recording::screenshot::uses_wayland_portal(),
+        "Instant camera overlays require an X11 desktop on Linux"
+    );
+    let camera = cx.global::<AppWindows>().camera.ok_or_else(|| {
+        anyhow::anyhow!("Open the selected camera preview before Instant recording")
+    })?;
+    let snapshot = camera.update(cx, |camera, window, _| camera.recording_snapshot(window))??;
+    let capture = linux_capture_bounds(&config.target)?;
+    let presentation = linux_camera_presentation(snapshot, capture)?;
+    let processing = Feeds::global(cx)
+        .read(cx)
+        .camera_processing_factory()
+        .ok_or_else(|| anyhow::anyhow!("Wait for the selected camera preview before recording"))?;
+    config.linux_instant_camera = Some(LinuxInstantCameraRequest {
+        presentation,
+        reference_size: (capture.width, capture.height),
+        effects: LinuxCameraProcessing {
+            mirrored: snapshot.state.mirrored,
+            blur: match snapshot.state.background_blur {
+                BlurMode::Off | BlurMode::Remove => LinuxCameraBlur::Off,
+                BlurMode::Light => LinuxCameraBlur::Light,
+                BlurMode::Heavy => LinuxCameraBlur::Heavy,
+            },
+        },
+        processing,
+    });
+    Ok(())
+}
+
+pub(crate) fn clean_capture_camera_message(cx: &App) -> &'static str {
+    #[cfg(target_os = "linux")]
+    if cx
+        .try_global::<AppWindows>()
+        .and_then(|windows| windows.clean_capture.as_ref())
+        .and_then(|lease| lease.config.as_ref())
+        .is_some_and(|config| config.mode == RecordingMode::Instant)
+    {
+        return "Cap will hide its preview and controls. Any selected camera will appear at its preview position with the selected shape and effects. Keep the whole preview inside the capture area. Opening Cap will stop this Instant recording before showing its controls.";
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = cx;
+    "Cap will hide its camera preview and recording controls. Any selected camera will keep recording as a separate editable track."
+}
+
+pub fn clean_capture_owned(cx: &App) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        cx.try_global::<AppWindows>()
+            .is_some_and(|windows| windows.clean_capture.is_some())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = cx;
+        false
+    }
+}
+
+pub fn clean_capture_pending(cx: &App) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        cx.try_global::<AppWindows>()
+            .and_then(|windows| windows.clean_capture.as_ref())
+            .is_some_and(|lease| !lease.gate.started && !lease.restoring)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = cx;
+        false
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub fn clean_capture_active(cx: &App) -> bool {
+    cx.try_global::<AppWindows>()
+        .and_then(|windows| windows.clean_capture.as_ref())
+        .is_some_and(|lease| lease.gate.started)
+}
+
+pub fn clean_capture_shortcut_message(cx: &App) -> String {
+    #[cfg(target_os = "linux")]
+    {
+        crate::hotkeys::clean_capture_stop_message(cx)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = cx;
+        String::new()
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub fn notify_clean_capture_preflight(cx: &mut App) {
+    let main = cx.global::<AppWindows>().main;
+    let _ = main.update(cx, |_, _, cx| cx.notify());
+}
+
+#[cfg(target_os = "linux")]
+fn clean_capture_generation_matches(generation: u64, cx: &App) -> bool {
+    cx.try_global::<AppWindows>()
+        .and_then(|windows| windows.clean_capture.as_ref())
+        .is_some_and(|lease| lease.generation == generation)
+}
+
+#[cfg(target_os = "linux")]
+pub fn handle_owned_clean_capture_shortcut(
+    generation: u64,
+    state: global_hotkey::HotKeyState,
+    cx: &mut App,
+) {
+    if clean_capture_generation_matches(generation, cx) {
+        handle_clean_capture_shortcut(state, cx);
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub fn clean_capture_stop_unavailable(generation: u64, error: String, cx: &mut App) {
+    if !clean_capture_generation_matches(generation, cx) {
+        return;
+    }
+    if cx
+        .global::<AppWindows>()
+        .clean_capture
+        .as_ref()
+        .is_some_and(|lease| lease.restoring)
+    {
+        return;
+    }
+    let session = RecordingSession::global(cx);
+    if session.read(cx).phase == Phase::Idle {
+        cancel_clean_capture(cx);
+        report_clean_capture_error(anyhow::Error::msg(error), cx);
+    } else {
+        session.update(cx, |session, cx| {
+            session.error = Some(error);
+            session.stop(cx);
+        });
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn defer_window_until_capture_safe(cx: &mut App) -> bool {
+    if !cx
+        .try_global::<AppWindows>()
+        .and_then(|windows| windows.clean_capture.as_ref())
+        .is_some_and(|lease| lease.wayland && lease.gate.started)
+    {
+        return false;
+    }
+    let session = RecordingSession::global(cx);
+    if session.read(cx).clean_capture_controls_safe() {
+        return false;
+    }
+    session.update(cx, |session, cx| session.show_clean_capture_controls(cx));
+    true
+}
+
+#[cfg(target_os = "linux")]
+fn x11_window_visible(window: &gpui::Window) -> anyhow::Result<bool> {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use x11rb::protocol::xproto::{ConnectionExt, MapState};
+    let id = match HasWindowHandle::window_handle(window)?.as_raw() {
+        RawWindowHandle::Xlib(handle) => u32::try_from(handle.window)?,
+        RawWindowHandle::Xcb(handle) => handle.window.get(),
+        _ => anyhow::bail!("Clean Studio capture requires an X11 window."),
+    };
+    let (connection, _) = x11rb::connect(None)?;
+    Ok(connection.get_window_attributes(id)?.reply()?.map_state == MapState::VIEWABLE)
+}
+
+#[cfg(target_os = "linux")]
+fn prepare_clean_capture(config: StartConfig, cx: &mut App) -> anyhow::Result<()> {
+    if cx.global::<AppWindows>().controls.is_some() {
+        anyhow::bail!("Close the previous recording controls before starting a clean capture.");
+    }
+    let main = cx.global::<AppWindows>().main;
+    let wayland = cap_recording::screenshot::uses_wayland_portal();
+    let main_was_visible = main.update(cx, |_, window, _| {
+        if wayland {
+            window.retained_visibility().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "The window backend cannot retain and acknowledge capture visibility"
+                )
+            })
+        } else {
+            x11_window_visible(window)
+        }
+    })??;
+    let requested_inputs = CleanCaptureInputs::current(cx);
+    let generation = cx
+        .global::<AppWindows>()
+        .clean_capture_generation
+        .wrapping_add(1);
+    crate::hotkeys::reserve_clean_capture_stop(generation, wayland, cx)?;
+    let windows = cx.global_mut::<AppWindows>();
+    windows.clean_capture_generation = generation;
+    windows.clean_capture = Some(CleanCaptureUi {
+        generation: windows.clean_capture_generation,
+        config: Some(config),
+        gate: CleanCaptureGate::default(),
+        camera: None,
+        camera_was_visible: false,
+        main_was_visible,
+        requested_inputs,
+        preview_was_rendering: None,
+        wayland,
+        restoring: false,
+        restoration_error: None,
+        retained_windows: if wayland {
+            vec![(main.into(), main_was_visible)]
+        } else {
+            Vec::new()
+        },
+    });
+    close_target_overlays(cx);
+    let shown = main.update(cx, |_, window, cx| {
+        if wayland {
+            observe_visibility(window.set_retained_visibility(true)?, true, cx);
+        } else {
+            platform::set_x11_window_visible(window, true)?;
+        }
+        window.activate_window();
+        cx.notify();
+        Ok::<_, anyhow::Error>(())
+    });
+    if let Err(error) = shown.and_then(|result| result) {
+        restore_clean_capture_ui(cx);
+        return Err(error);
+    }
+    Ok(())
+}
+
+pub fn cancel_clean_capture(cx: &mut App) {
+    #[cfg(target_os = "linux")]
+    if RecordingSession::global(cx).read(cx).phase == Phase::Idle
+        && RecordingSession::global(cx).read(cx).instant_cleanup_safe()
+    {
+        restore_clean_capture_ui(cx);
+        abort_editor_recording_flow(cx);
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = cx;
+}
+
+#[cfg(target_os = "linux")]
+fn report_clean_capture_error(error: anyhow::Error, cx: &mut App) {
+    tracing::error!(%error, "clean capture preflight failed");
+    RecordingSession::global(cx).update(cx, |session, cx| {
+        session.error = Some(error.to_string());
+        cx.notify();
+    });
+    show_main_window_after_capture_pause(cx);
+    abort_editor_recording_flow(cx);
+}
+
+#[cfg(target_os = "linux")]
+pub type CleanVisibility = futures_util::future::BoxFuture<'static, anyhow::Result<()>>;
+
+#[cfg(target_os = "linux")]
+fn observe_visibility<F, E>(receipt: F, visible: bool, cx: &mut App)
+where
+    F: std::future::Future<Output = Result<anyhow::Result<(u64, bool)>, E>> + Send + 'static,
+    E: std::error::Error + Send + Sync + 'static,
+{
+    let task = gpui_tokio::Tokio::spawn(cx, async move {
+        let (_, acknowledged) =
+            tokio::time::timeout(std::time::Duration::from_secs(3), receipt).await???;
+        anyhow::ensure!(
+            acknowledged == visible,
+            "Unexpected retained visibility acknowledgement"
+        );
+        Ok::<_, anyhow::Error>(())
+    });
+    cx.spawn(async move |_| {
+        if let Err(error) = task
+            .await
+            .map_err(|error| error.to_string())
+            .and_then(|result| result.map_err(|error| error.to_string()))
+        {
+            tracing::error!(%error, "Could not restore retained window visibility");
+        }
+    })
+    .detach();
+}
+
+#[cfg(target_os = "linux")]
+pub fn hide_clean_capture_main(cx: &mut App) -> anyhow::Result<CleanVisibility> {
+    if cx
+        .global::<AppWindows>()
+        .clean_capture
+        .as_ref()
+        .is_some_and(|lease| lease.wayland)
+    {
+        return hide_retained_capture_windows(cx);
+    }
+    let main = cx.global::<AppWindows>().main;
+    main.update(cx, |_, window, _| {
+        platform::set_x11_window_visible(window, false)
+    })??;
+    Ok(Box::pin(async { Ok(()) }))
+}
+
+#[cfg(target_os = "linux")]
+fn hide_retained_capture_windows(cx: &mut App) -> anyhow::Result<CleanVisibility> {
+    let handles = cx.windows();
+    let mut visible = Vec::new();
+    for handle in handles {
+        let was_visible = handle
+            .update(cx, |_, window, _| window.retained_visibility())?
+            .ok_or_else(|| {
+                anyhow::anyhow!("A Cap window cannot acknowledge clean capture visibility")
+            })?;
+        visible.push((handle, was_visible));
+    }
+    let lease = cx
+        .global_mut::<AppWindows>()
+        .clean_capture
+        .as_mut()
+        .ok_or_else(|| anyhow::anyhow!("The capture visibility lease ended"))?;
+    for &(handle, was_visible) in &visible {
+        if !lease
+            .retained_windows
+            .iter()
+            .any(|(saved, _)| *saved == handle)
+        {
+            lease.retained_windows.push((handle, was_visible));
+        }
+    }
+    let mut receipts = Vec::new();
+    for (handle, _) in visible {
+        receipts.push(handle.update(cx, |_, window, _| window.set_retained_visibility(false))??);
+    }
+    Ok(Box::pin(async move {
+        tokio::time::timeout(std::time::Duration::from_secs(3), async move {
+            for receipt in receipts {
+                let (_, visible) = receipt.await??;
+                anyhow::ensure!(
+                    !visible,
+                    "The compositor did not acknowledge hiding a Cap window"
+                );
+            }
+            Ok::<_, anyhow::Error>(())
+        })
+        .await?
+    }))
+}
+
+#[cfg(target_os = "linux")]
+fn hide_clean_capture_ui(cx: &mut App) -> anyhow::Result<CleanVisibility> {
+    let wayland = cx
+        .global::<AppWindows>()
+        .clean_capture
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("Clean capture is no longer waiting to start"))?
+        .wayland;
+    let camera = cx.global::<AppWindows>().camera;
+    let camera_was_visible = if wayland {
+        false
+    } else {
+        match camera {
+            Some(camera) => camera.update(cx, |_, window, _| x11_window_visible(window))??,
+            None => false,
+        }
+    };
+    let preview_was_rendering = crate::feeds::Feeds::global(cx)
+        .read(cx)
+        .set_camera_preview_rendering(false);
+    if let Some(lease) = cx.global_mut::<AppWindows>().clean_capture.as_mut() {
+        lease.camera = camera;
+        lease.camera_was_visible = camera_was_visible;
+        let _ = lease
+            .preview_was_rendering
+            .get_or_insert(preview_was_rendering);
+    }
+    if let Some(camera) = camera.filter(|_| camera_was_visible) {
+        camera.update(cx, |_, window, _| {
+            platform::set_x11_window_visible(window, false)
+        })??;
+    }
+    hide_clean_capture_main(cx)
+}
+
+#[cfg(target_os = "linux")]
+async fn acknowledge_restored_windows<F, E>(
+    receipts: Vec<(bool, F)>,
+    mut errors: Vec<String>,
+) -> Result<(), String>
+where
+    F: std::future::Future<Output = Result<anyhow::Result<(u64, bool)>, E>>,
+    E: std::fmt::Display,
+{
+    for (expected, receipt) in receipts {
+        match receipt.await {
+            Ok(Ok((_, visible))) if visible == expected => {}
+            Ok(Ok(_)) => errors.push("A restored window acknowledged the wrong visibility".into()),
+            Ok(Err(error)) => errors.push(error.to_string()),
+            Err(error) => errors.push(error.to_string()),
+        }
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn begin_retained_capture_restore(cx: &mut App) {
+    let Some(lease) = cx.global_mut::<AppWindows>().clean_capture.as_mut() else {
+        return;
+    };
+    if !lease.begin_restore() {
+        return;
+    }
+    let generation = lease.generation;
+    let windows = lease.retained_windows.clone();
+    let rendering = lease.preview_was_rendering;
+    if let Some(rendering) = rendering {
+        crate::feeds::Feeds::global(cx)
+            .read(cx)
+            .set_camera_preview_rendering(rendering);
+    }
+    let mut receipts = Vec::new();
+    let mut errors = Vec::new();
+    for (handle, visible) in windows {
+        match handle
+            .update(cx, |_, window, _| {
+                let receipt = window.set_retained_visibility(visible)?;
+                window.refresh();
+                Ok::<_, anyhow::Error>(receipt)
+            })
+            .and_then(|result| result)
+        {
+            Ok(receipt) => receipts.push((visible, receipt)),
+            Err(error) => errors.push(error.to_string()),
+        }
+    }
+    let visibility = gpui_tokio::Tokio::spawn(cx, async move {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            acknowledge_restored_windows(receipts, errors),
+        )
+        .await
+        .map_err(|_| {
+            "Window restoration has not been acknowledged; its lease remains owned".to_string()
+        })?
+    });
+    cx.spawn(async move |cx| {
+        let visibility = visibility.await.map_err(|error| error.to_string()).and_then(|result| result);
+        let result = match visibility {
+            Ok(()) => {
+                let cleanup = cx.update(|cx| {
+                    if !clean_capture_generation_matches(generation, cx) { return None; }
+                    let cleanup = crate::hotkeys::begin_wayland_stop_cleanup(cx);
+                    Some(gpui_tokio::Tokio::spawn(cx, cleanup))
+                });
+                match cleanup {
+                    Some(cleanup) => cleanup.await.map_err(|error| error.to_string()).and_then(|result| result),
+                    None => return,
+                }
+            }
+            Err(error) => Err(error),
+        };
+        cx.update(|cx| {
+            if !clean_capture_generation_matches(generation, cx) { return; }
+            match result {
+                Ok(()) => {
+                    crate::hotkeys::complete_clean_capture_stop(generation, cx);
+                    let _restored = cx.global_mut::<AppWindows>().clean_capture.take();
+                    update_camera_presentation(true, cx);
+                    RecordingSession::global(cx).update(cx, |_, cx| cx.notify());
+                }
+                Err(error) => {
+                    if let Some(lease) = cx.global_mut::<AppWindows>().clean_capture.as_mut() {
+                        lease.restoration_error = Some(error.clone());
+                    }
+                    tracing::error!(%error, "Recording UI restoration or Stop cleanup is unconfirmed");
+                    RecordingSession::global(cx).update(cx, |session, cx| {
+                        session.error = Some(format!("Recording cleanup is incomplete: {error}. A new recording is blocked."));
+                        cx.notify();
+                    });
+                }
+            }
+        });
+    }).detach();
+}
+
+#[cfg(target_os = "linux")]
+fn restore_clean_capture_ui(cx: &mut App) -> bool {
+    if !RecordingSession::global(cx).read(cx).instant_cleanup_safe() {
+        return false;
+    }
+    if cx
+        .global::<AppWindows>()
+        .clean_capture
+        .as_ref()
+        .is_some_and(|lease| lease.wayland)
+    {
+        begin_retained_capture_restore(cx);
+        return false;
+    }
+    let Some(lease) = cx.global_mut::<AppWindows>().clean_capture.take() else {
+        return true;
+    };
+    crate::hotkeys::release_clean_capture_stop(cx);
+    if let Some(rendering) = lease.preview_was_rendering {
+        // Camera selection does not reset the shared render flag owned by this lease.
+        crate::feeds::Feeds::global(cx)
+            .read(cx)
+            .set_camera_preview_rendering(rendering);
+    }
+    if lease.camera_was_visible
+        && let Some(camera) = lease.camera
+        && cx.global::<AppWindows>().camera == Some(camera)
+    {
+        let result = camera.update(cx, |_, window, cx| {
+            platform::set_x11_window_visible(window, true)?;
+            cx.notify();
+            Ok::<_, anyhow::Error>(())
+        });
+        if let Err(error) = result.and_then(|result| result) {
+            tracing::warn!(%error, "could not restore the camera preview");
+        }
+    }
+    let main = cx.global::<AppWindows>().main;
+    let result = main.update(cx, |_, window, cx| {
+        platform::set_x11_window_visible(window, lease.main_was_visible)?;
+        cx.notify();
+        Ok::<_, anyhow::Error>(())
+    });
+    if let Err(error) = result.and_then(|result| result) {
+        tracing::warn!(%error, "could not restore the main window");
+    }
+    update_camera_presentation(true, cx);
+    true
+}
+
+#[cfg(target_os = "linux")]
+pub fn handle_clean_capture_shortcut(state: global_hotkey::HotKeyState, cx: &mut App) {
+    let Some(lease) = cx.global_mut::<AppWindows>().clean_capture.as_mut() else {
+        return;
+    };
+    if lease.restoring {
+        return;
+    }
+    let Some(action) = lease.gate.shortcut(state) else {
+        return;
+    };
+    if action == CleanCaptureAction::Stop {
+        if RecordingSession::global(cx).read(cx).phase == Phase::Idle {
+            cancel_clean_capture(cx);
+        } else {
+            RecordingSession::global(cx).update(cx, |session, cx| session.stop(cx));
+        }
+        return;
+    }
+    let generation = lease.generation;
+    let Some(mut config) = lease.config.take() else {
+        return;
+    };
+    let current_inputs = CleanCaptureInputs::current(cx);
+    if cx
+        .global::<AppWindows>()
+        .clean_capture
+        .as_ref()
+        .is_none_or(|lease| lease.requested_inputs != current_inputs)
+    {
+        restore_clean_capture_ui(cx);
+        report_clean_capture_error(
+            anyhow::anyhow!(
+                "Selected devices changed. Start again to confirm the new recording inputs."
+            ),
+            cx,
+        );
+        return;
+    }
+    if let Err(error) = refresh_linux_instant_camera(&mut config, cx) {
+        restore_clean_capture_ui(cx);
+        report_clean_capture_error(error, cx);
+        return;
+    }
+    if let Some(lease) = cx.global_mut::<AppWindows>().clean_capture.as_mut() {
+        lease.config = Some(config);
+    }
+    let visibility = match hide_clean_capture_ui(cx) {
+        Ok(visibility) => visibility,
+        Err(error) => {
+            restore_clean_capture_ui(cx);
+            report_clean_capture_error(error, cx);
+            return;
+        }
+    };
+    let visibility = gpui_tokio::Tokio::spawn(cx, visibility);
+    cx.spawn(async move |cx| {
+        let result = visibility.await.map_err(anyhow::Error::from).and_then(|result| result);
+        if let Err(error) = result {
+            cx.update(|cx| {
+                if clean_capture_generation_matches(generation, cx) {
+                    restore_clean_capture_ui(cx);
+                    report_clean_capture_error(error, cx);
+                }
+            });
+            return;
+        }
+        cx.background_executor()
+            .timer(std::time::Duration::from_millis(150))
+            .await;
+        cx.update(|cx| {
+            let current_inputs = CleanCaptureInputs::current(cx);
+            if cx
+                .global::<AppWindows>()
+                .clean_capture
+                .as_ref()
+                .is_some_and(|lease| {
+                    lease.generation == generation && lease.requested_inputs != current_inputs
+                })
+            {
+                restore_clean_capture_ui(cx);
+                report_clean_capture_error(
+                    anyhow::anyhow!("Selected devices changed before recording started. Start again to confirm the inputs."),
+                    cx,
+                );
+                return;
+            }
+            let config = cx
+                .global_mut::<AppWindows>()
+                .clean_capture
+                .as_mut()
+                .and_then(|lease| lease.take_start_config(generation));
+            if let Some(config) = config {
+                begin_recording_after_preflight(config, cx);
+            }
+        });
+    })
+    .detach();
+}
+
 /// The whole start flow: bar up (in its Starting state), main window hidden,
 /// engine started with the bar excluded from capture.
-pub fn begin_recording(config: StartConfig, cx: &mut App) {
+pub fn begin_recording(mut config: StartConfig, cx: &mut App) {
+    let session = RecordingSession::global(cx);
+    if session.read(cx).phase != Phase::Idle {
+        return;
+    }
+    if session.read(cx).editor_recording_target().is_some() {
+        config.mode = RecordingMode::Studio;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(lease) = cx.global::<AppWindows>().clean_capture.as_ref() {
+            if let Some(error) = lease.restoration_error.clone() {
+                session.update(cx, |session, cx| {
+                    session.error = Some(format!(
+                        "Recording cleanup is incomplete: {error}. A new recording is blocked."
+                    ));
+                    cx.notify();
+                });
+            }
+            return;
+        }
+        let wayland = cap_recording::screenshot::uses_wayland_portal();
+        if clean_capture_supported(
+            config.mode,
+            &config.target,
+            config.camera.is_some(),
+            wayland,
+        ) {
+            if let Err(error) = prepare_clean_capture(config, cx) {
+                report_clean_capture_error(error, cx);
+            }
+            return;
+        }
+        if let Err(error) = refresh_linux_instant_camera(&mut config, cx) {
+            report_clean_capture_error(error, cx);
+            return;
+        }
+    }
+    begin_recording_after_preflight(config, cx);
+}
+
+fn begin_recording_after_preflight(config: StartConfig, cx: &mut App) {
     let session = RecordingSession::global(cx);
     if session.read(cx).phase != Phase::Idle {
         return;
@@ -2003,18 +3673,14 @@ pub fn begin_recording(config: StartConfig, cx: &mut App) {
     }
     set_teleprompter_content_protection(true, cx);
 
-    // `crate::target_select_overlay::close_target_select_overlay_windows(&app)`
-    // at `recording.rs:1758`: the pickers come down at *every* recording start,
-    // not just the ones the overlay's own Start button drove. The overlay path
-    // hands its ids in already (`start_recording_from_overlay`), but the
-    // hotkey, deeplink and tile paths pass an empty list, and an overlay that
-    // has not finished closing is still on screen when the capture opens.
     for id in overlay_window_ids(cx) {
         if !excluded.contains(&id) {
             excluded.push(id);
         }
     }
-    close_target_overlays(cx);
+    let recording_area = retain_recording_area(&config.target, cx);
+    cx.global_mut::<AppWindows>().main_hidden_for_picker = false;
+    cx.global_mut::<AppWindows>().editor_hidden_for_picker = None;
 
     // The user-configurable half. `resolve_excluded_window_ids` (in
     // `recording::start`) walks `CGWindowList` for *other* processes' windows;
@@ -2039,6 +3705,7 @@ pub fn begin_recording(config: StartConfig, cx: &mut App) {
         own,
         move |kind| match kind {
             OwnWindow::Camera => camera_hidden,
+            OwnWindow::TargetSelect => true,
             kind => protected.contains(&kind),
         },
         cx,
@@ -2060,6 +3727,13 @@ pub fn begin_recording(config: StartConfig, cx: &mut App) {
         ..config
     };
     session.update(cx, |session, cx| session.start(config, cx));
+    if let Some(handle) = recording_area {
+        if session.read(cx).phase == Phase::Idle {
+            close_target_overlays(cx);
+        } else {
+            make_recording_area_passive(handle, cx);
+        }
+    }
 }
 
 /// Open the camera preview bubble (idempotent). Placement is the Tauri
@@ -2069,12 +3743,17 @@ pub fn begin_recording(config: StartConfig, cx: &mut App) {
 /// `CursorMonitorInfo::from_window(main)` over there -- else the default
 /// bottom-right slot (see `camera_window::opening_position`).
 pub fn open_camera_window(cx: &mut App) {
+    #[cfg(target_os = "linux")]
+    if clean_capture_active(cx) {
+        return;
+    }
     if cx.global::<AppWindows>().camera.is_some() {
         return;
     }
 
     let state = crate::store::load().camera_window.unwrap_or_default();
-    let (width, height) = camera_window::window_size(&state, None);
+    let (width, height) =
+        camera_window::window_size(&state, camera_window::retained_preview_aspect(cx));
 
     let main = cx.global::<AppWindows>().main;
     let display = main
@@ -2090,6 +3769,7 @@ pub fn open_camera_window(cx: &mut App) {
         .unwrap_or_else(scap_targets::Display::primary);
     let (x, y) = camera_window::opening_position(&display);
 
+    let inline = camera_preview_is_inline(cx);
     let handle = cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(Bounds {
@@ -2118,7 +3798,7 @@ pub fn open_camera_window(cx: &mut App) {
                 WindowKind::PopUp
             },
             focus: false,
-            show: true,
+            show: !inline,
             is_resizable: false,
             is_minimizable: false,
             window_background: gpui::WindowBackgroundAppearance::Transparent,
@@ -2144,12 +3824,21 @@ pub fn open_camera_window(cx: &mut App) {
                             shadow: false,
                         },
                     );
-                    platform::show_window_without_focus(window);
+                    #[cfg(not(target_os = "macos"))]
+                    if !inline {
+                        platform::show_window_without_focus(window);
+                    }
                     platform::native_window(window)
                 })
                 .ok()
                 .flatten();
             remove_popup_window_chrome(native, cx);
+            #[cfg(target_os = "macos")]
+            update_camera_presentation(!inline, cx);
+            #[cfg(not(target_os = "macos"))]
+            sync_camera_presentation(cx);
+            sync_opened_camera_with_picker(cx);
+            refresh_target_overlays(cx);
         }
         Err(error) => tracing::error!("camera window failed to open: {error:#}"),
     }
@@ -2157,136 +3846,440 @@ pub fn open_camera_window(cx: &mut App) {
 
 pub fn close_camera_window(cx: &mut App) {
     if let Some(handle) = cx.global_mut::<AppWindows>().camera.take() {
+        #[cfg(not(target_os = "macos"))]
+        if let Some(previous) = handle
+            .update(cx, |view, _, cx| view.preview_image(cx))
+            .ok()
+            .flatten()
+        {
+            evict_overlay_camera_image(previous, cx);
+        }
+        let park = &mut cx.global_mut::<AppWindows>().camera_park;
+        park.invalidate_pending();
+        park.original = None;
+        park.last_window = None;
+        park.last_area = None;
         handle
             .update(cx, |_, window, _| window.remove_window())
             .ok();
+        refresh_target_overlays(cx);
     }
 }
 
-// -- The camera bubble parked inside a picked window -------------------------
-//
-// `repositionCameraForWindow` (`target-select-overlay.tsx:125-162`) and its
-// caller (`:507-563`): while the window picker is up and nothing has been
-// committed yet, the bubble sits 16px inside the bottom-right corner of the
-// window the overlay is highlighting, so the camera is *in* the recording of
-// that window rather than floating somewhere outside it. It goes back where it
-// came from when the picker is dismissed, and stays parked when the pick is
-// committed (a click that locks the highlight, or a start).
+fn camera_preview_is_inline(cx: &App) -> bool {
+    TargetSelect::global(cx).read(cx).mode == Some(TargetType::CameraOnly)
+}
 
-/// The 16px inset `repositionCameraForWindow` uses on both axes; a window that
-/// cannot hold the bubble plus two of these is left alone (`:147-153`).
+pub fn camera_preview_entity(cx: &mut App) -> Option<Entity<CameraWindow>> {
+    cx.global::<AppWindows>()
+        .camera?
+        .update(cx, |_, _, cx| cx.entity())
+        .ok()
+}
+
+fn sync_camera_presentation(cx: &mut App) {
+    update_camera_presentation(false, cx);
+}
+
+fn update_camera_presentation(force: bool, cx: &mut App) {
+    #[cfg(target_os = "linux")]
+    if cx.global::<AppWindows>().clean_capture.is_some() {
+        return;
+    }
+    let Some(handle) = cx.global::<AppWindows>().camera else {
+        return;
+    };
+    let inline = camera_preview_is_inline(cx);
+    let changed = handle
+        .update(cx, |view, window, cx| {
+            let changed = view.is_inline() != inline;
+            view.set_inline(inline, window, cx);
+            changed
+        })
+        .unwrap_or(false);
+    if !changed && !force {
+        return;
+    }
+    cx.spawn(async move |cx| {
+        #[cfg(not(target_os = "linux"))]
+        let native = cx.update(|cx| {
+            if cx.global::<AppWindows>().camera != Some(handle)
+                || camera_preview_is_inline(cx) != inline
+            {
+                return None;
+            }
+            handle
+                .update(cx, |_, window, _| {
+                    #[cfg(target_os = "windows")]
+                    if !inline {
+                        platform::show_window_without_focus(window);
+                        return None;
+                    }
+                    platform::native_window(window)
+                })
+                .ok()
+                .flatten()
+        });
+        #[cfg(not(target_os = "linux"))]
+        if let Some(native) = native {
+            if inline {
+                platform::hide_native(&native);
+            } else {
+                platform::order_front_native(&native);
+            }
+        }
+        #[cfg(target_os = "linux")]
+        cx.update(|cx| {
+            if cx.global::<AppWindows>().camera != Some(handle)
+                || camera_preview_is_inline(cx) != inline
+                || cx.global::<AppWindows>().clean_capture.is_some()
+            {
+                return;
+            }
+            let result = handle.update(cx, |_, window, _| {
+                if cap_recording::screenshot::uses_wayland_portal() {
+                    window.set_retained_visibility(!inline).map(|_| ())
+                } else {
+                    platform::set_x11_window_visible(window, !inline)
+                }
+            });
+            if let Err(error) = result.and_then(|result| result) {
+                tracing::warn!(%error, "could not update camera picker visibility");
+            }
+        });
+    })
+    .detach();
+}
+
 const CAMERA_PARK_PADDING: f32 = 16.;
 
-/// The camera bubble's geometry, in the two coordinate spaces the move needs.
 struct CameraFrame {
-    native: platform::NativeWindow,
-    /// gpui-space logical top-left -- the space the overlay's window bounds and
-    /// the persisted `cameraWindowPosition` both live in (global, y down).
-    origin: (f32, f32),
-    /// The AppKit frame (bottom-left origin, points), for `setFrame:`.
-    frame: (f64, f64, f64, f64),
+    native: CameraNativeFrame,
+    snapshot: CameraSnapshot,
+    visible: bool,
+}
+
+enum CameraNativeFrame {
+    #[cfg(target_os = "macos")]
+    Mac {
+        native: platform::NativeWindow,
+        frame: (f64, f64, f64, f64),
+    },
+    #[cfg(target_os = "windows")]
+    Windows(platform::NativeWindow),
+    #[cfg(target_os = "linux")]
+    X11 { window_id: u32, scale: f64 },
+}
+
+#[cfg(target_os = "macos")]
+fn camera_native_frame(window: &gpui::Window) -> Option<(CameraNativeFrame, AreaRect)> {
+    let native = platform::native_window(window)?;
+    let frame = platform::window_frame(&native);
+    let origin = window.bounds().origin;
+    Some((
+        CameraNativeFrame::Mac { native, frame },
+        AreaRect {
+            x: f32::from(origin.x),
+            y: f32::from(origin.y),
+            width: frame.2 as f32,
+            height: frame.3 as f32,
+        },
+    ))
+}
+
+#[cfg(target_os = "windows")]
+fn camera_native_frame(window: &gpui::Window) -> Option<(CameraNativeFrame, AreaRect)> {
+    let native = platform::native_window(window)?;
+    let (x, y, width, height) = platform::window_logical_frame(&native);
+    Some((
+        CameraNativeFrame::Windows(native),
+        AreaRect {
+            x: x as f32,
+            y: y as f32,
+            width: width as f32,
+            height: height as f32,
+        },
+    ))
+}
+
+#[cfg(target_os = "linux")]
+fn camera_native_frame(window: &gpui::Window) -> Option<(CameraNativeFrame, AreaRect)> {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    let window_id = match HasWindowHandle::window_handle(window).ok()?.as_raw() {
+        RawWindowHandle::Xlib(handle) => u32::try_from(handle.window).ok()?,
+        RawWindowHandle::Xcb(handle) => handle.window.get(),
+        _ => return None,
+    };
+    let bounds = window.bounds();
+    Some((
+        CameraNativeFrame::X11 {
+            window_id,
+            scale: f64::from(window.scale_factor()),
+        },
+        AreaRect {
+            x: f32::from(bounds.origin.x),
+            y: f32::from(bounds.origin.y),
+            width: f32::from(bounds.size.width),
+            height: f32::from(bounds.size.height),
+        },
+    ))
 }
 
 fn camera_frame(cx: &mut App) -> Option<CameraFrame> {
     let handle = cx.global::<AppWindows>().camera?;
     handle
-        .update(cx, |_, window, _| {
-            let native = platform::native_window(window)?;
-            #[cfg(target_os = "windows")]
-            let frame = platform::window_logical_frame(&native);
-            #[cfg(not(target_os = "windows"))]
-            let frame = platform::window_frame(&native);
-            let origin = window.bounds().origin;
+        .update(cx, |view, window, _| {
+            let (native, bounds) = camera_native_frame(window)?;
             Some(CameraFrame {
                 native,
-                origin: (f32::from(origin.x), f32::from(origin.y)),
-                frame,
+                visible: platform::window_is_visible(window),
+                snapshot: CameraSnapshot {
+                    handle,
+                    bounds,
+                    picker_size: view.picker_size(),
+                },
             })
         })
         .ok()
         .flatten()
+        .filter(|camera| camera.snapshot.bounds.width > 0. && camera.snapshot.bounds.height > 0.)
 }
 
-/// `win.setPosition(new LogicalPosition(x, y))` on the camera window, spelled
-/// as the delta on its AppKit frame the way `CameraWindow::apply_window_size`
-/// does -- gpui's own origin math disagrees with AppKit's, and the delta is
-/// exact in both. Runs from a task: `setFrame:` re-enters gpui's window
-/// callbacks.
-fn move_camera_window(camera: CameraFrame, to: (f32, f32), cx: &mut App) {
-    let dx = f64::from(to.0 - camera.origin.0);
-    let dy = f64::from(to.1 - camera.origin.1);
-    if dx.abs() < 0.5 && dy.abs() < 0.5 {
-        return;
+pub(crate) fn studio_camera_snapshot(
+    target: &ScreenCaptureTarget,
+    cx: &mut App,
+) -> Option<crate::recording::StudioCameraSnapshot> {
+    let handle = cx.global::<AppWindows>().camera?;
+    handle
+        .update(cx, |view, window, _| view.studio_snapshot(window, target))
+        .ok()
+}
+
+fn visible_camera_frame(cx: &mut App) -> Option<CameraFrame> {
+    if camera_preview_is_inline(cx) {
+        return None;
     }
-    #[cfg(not(target_os = "windows"))]
-    let (frame_x, frame_y, width, height) = camera.frame;
-    #[cfg(target_os = "windows")]
-    let (_, _, width, height) = camera.frame;
-    #[cfg(target_os = "windows")]
-    let (x, y) = (f64::from(to.0), f64::from(to.1));
-    // gpui +y is down, AppKit +y is up.
-    #[cfg(not(target_os = "windows"))]
-    let (x, y) = (frame_x + dx, frame_y - dy);
-    let native = camera.native;
-    cx.spawn(async move |_| {
-        #[cfg(target_os = "windows")]
-        platform::set_window_logical_frame(&native, x, y, width, height);
-        #[cfg(not(target_os = "windows"))]
-        platform::set_window_frame(&native, x, y, width, height);
+    #[cfg(target_os = "linux")]
+    if clean_capture_active(cx) {
+        return None;
+    }
+    camera_frame(cx).filter(|camera| camera.visible)
+}
+
+fn camera_snapshot(cx: &mut App) -> Option<CameraSnapshot> {
+    let mut snapshot = camera_frame(cx)?.snapshot;
+    if let Some(pending) = cx.global::<AppWindows>().camera_park.pending
+        && pending.camera == snapshot.handle
+    {
+        snapshot.bounds = pending.bounds;
+        if let CameraSizeOverride::Set(picker_size) = pending.size_override {
+            snapshot.picker_size = picker_size;
+        }
+    }
+    Some(snapshot)
+}
+
+impl CameraFrame {
+    fn raise(&self) -> anyhow::Result<()> {
+        match &self.native {
+            #[cfg(target_os = "macos")]
+            CameraNativeFrame::Mac { native, .. } => platform::order_front_native(native),
+            #[cfg(target_os = "windows")]
+            CameraNativeFrame::Windows(native) => platform::order_front_native(native),
+            #[cfg(target_os = "linux")]
+            CameraNativeFrame::X11 { window_id, .. } => {
+                use x11rb::connection::Connection as _;
+                use x11rb::protocol::xproto::{
+                    ConfigureWindowAux, ConnectionExt as _, MapState, StackMode,
+                };
+
+                let (connection, _) = x11rb::connect(None)?;
+                if connection
+                    .get_window_attributes(*window_id)?
+                    .reply()?
+                    .map_state
+                    == MapState::VIEWABLE
+                {
+                    connection
+                        .configure_window(
+                            *window_id,
+                            &ConfigureWindowAux::new().stack_mode(StackMode::ABOVE),
+                        )?
+                        .check()?;
+                    connection.flush()?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn apply(self, bounds: AreaRect) -> anyhow::Result<()> {
+        match self.native {
+            #[cfg(target_os = "macos")]
+            CameraNativeFrame::Mac { native, frame } => {
+                let dx = f64::from(bounds.x - self.snapshot.bounds.x);
+                let dy = f64::from(bounds.y - self.snapshot.bounds.y);
+                platform::set_window_frame(
+                    &native,
+                    frame.0 + dx,
+                    frame.1 + frame.3 - dy - f64::from(bounds.height),
+                    f64::from(bounds.width),
+                    f64::from(bounds.height),
+                );
+                if self.visible {
+                    platform::order_front_native(&native);
+                }
+            }
+            #[cfg(target_os = "windows")]
+            CameraNativeFrame::Windows(native) => {
+                platform::set_window_logical_frame(
+                    &native,
+                    f64::from(bounds.x),
+                    f64::from(bounds.y),
+                    f64::from(bounds.width),
+                    f64::from(bounds.height),
+                );
+                if self.visible {
+                    platform::order_front_native(&native);
+                }
+            }
+            #[cfg(target_os = "linux")]
+            CameraNativeFrame::X11 { window_id, scale } => {
+                use x11rb::connection::Connection as _;
+                use x11rb::protocol::xproto::{
+                    ConfigureWindowAux, ConnectionExt as _, MapState, StackMode,
+                };
+
+                let (connection, _) = x11rb::connect(None)?;
+                let mut changes = ConfigureWindowAux::new()
+                    .x((f64::from(bounds.x) * scale).round() as i32)
+                    .y((f64::from(bounds.y) * scale).round() as i32)
+                    .width((f64::from(bounds.width) * scale).round().max(1.) as u32)
+                    .height((f64::from(bounds.height) * scale).round().max(1.) as u32);
+                if connection
+                    .get_window_attributes(window_id)?
+                    .reply()?
+                    .map_state
+                    == MapState::VIEWABLE
+                {
+                    changes = changes.stack_mode(StackMode::ABOVE);
+                }
+                connection.configure_window(window_id, &changes)?.check()?;
+                connection.flush()?;
+            }
+        }
+        Ok(())
+    }
+}
+
+fn queue_camera_placement(placement: CameraPlacement, cx: &mut App) {
+    let park = &mut cx.global_mut::<AppWindows>().camera_park;
+    park.invalidate_pending();
+    park.pending = Some(placement);
+    let generation = park.generation;
+    cx.spawn(async move |cx| {
+        let camera = cx.update(|cx| {
+            let windows = cx.global::<AppWindows>();
+            if windows.camera_park.generation != generation
+                || windows.camera != Some(placement.camera)
+            {
+                return None;
+            }
+            let Some(frame) = camera_frame(cx) else {
+                let park = &mut cx.global_mut::<AppWindows>().camera_park;
+                park.invalidate_pending();
+                park.last_window = None;
+                park.last_area = None;
+                return None;
+            };
+            placement
+                .camera
+                .update(cx, |view, window, cx| {
+                    view.invalidate_pending_resize();
+                    if let CameraSizeOverride::Set(picker_size) = placement.size_override {
+                        view.set_picker_size(picker_size, window, cx);
+                    }
+                })
+                .ok()?;
+            cx.global_mut::<AppWindows>().camera_park.pending = None;
+            Some(frame)
+        });
+        // Native setters re-enter GPUI; no App or camera entity borrow may survive this call.
+        if let Some(camera) = camera
+            && let Err(error) = camera.apply(placement.bounds)
+        {
+            tracing::warn!(%error, "could not move the camera preview into the capture target");
+            cx.update(|cx| {
+                let park = &mut cx.global_mut::<AppWindows>().camera_park;
+                if park.generation == generation {
+                    park.last_window = None;
+                    park.last_area = None;
+                }
+            });
+        }
     })
     .detach();
 }
 
-/// `onMount` of the window-variant overlay (`target-select-overlay.tsx:507-517`):
-/// remember where the bubble was before the picker touches it. Only for a fresh
-/// picker -- re-pointing an open picker at another window does not remount the
-/// overlay over there, so the *original* original is what a dismissal restores.
-fn arm_camera_park(cx: &mut App) {
-    {
-        let park = &cx.global::<AppWindows>().camera_park;
-        if park.origin.is_some() || park.released || park.last_window.is_some() {
-            return;
-        }
+fn arm_camera_park(mode: TargetType, cx: &mut App) {
+    if cx.global::<AppWindows>().camera_park.mode == Some(mode) {
+        return;
     }
-    let origin = camera_frame(cx).map(|camera| camera.origin);
-    cx.global_mut::<AppWindows>().camera_park = CameraPark {
-        origin,
-        last_window: None,
-        released: false,
-    };
+    let original = (mode == TargetType::Window)
+        .then(|| camera_snapshot(cx))
+        .flatten();
+    let park = &mut cx.global_mut::<AppWindows>().camera_park;
+    let pending = park.pending;
+    park.invalidate_pending();
+    park.reset_selection();
+    park.mode = Some(mode);
+    park.original = original;
+    if let Some(pending) = pending {
+        queue_camera_placement(pending, cx);
+    }
 }
 
-/// The reposition effect (`target-select-overlay.tsx:518-545`), driven by the
-/// same cursor poll that feeds the highlight: park the bubble in the window the
-/// overlay is highlighting, once per window, and stop entirely once the pick is
-/// committed.
+fn sync_opened_camera_with_picker(cx: &mut App) {
+    let select = TargetSelect::global(cx);
+    match select.read(cx).mode {
+        Some(TargetType::Window) => {
+            let target = select.read(cx).active_window().cloned();
+            sync_camera_park(target, cx);
+        }
+        Some(TargetType::Area) => {
+            if let Some((display, crop)) = cx.global::<AppWindows>().camera_park.area_target.clone()
+            {
+                sync_camera_area(display, Some(crop), cx);
+            }
+        }
+        _ => {}
+    }
+}
+
+pub fn camera_picker_epoch(cx: &App) -> u64 {
+    cx.global::<AppWindows>().camera_park.epoch
+}
+
 pub fn sync_camera_park(active: Option<HoveredWindow>, cx: &mut App) {
-    if !cx.has_global::<AppWindows>() {
+    if !cx.has_global::<AppWindows>()
+        || TargetSelect::global(cx).read(cx).mode != Some(TargetType::Window)
+    {
         return;
     }
     let Some(target) = active else {
-        // `lastRepositionedWindowId = null`: nothing highlighted, so the next
-        // window to be highlighted parks again even if it is the same one.
         cx.global_mut::<AppWindows>().camera_park.last_window = None;
         return;
     };
-    {
-        let park = &cx.global::<AppWindows>().camera_park;
-        if park.released || park.last_window.as_ref() == Some(&target.id) {
-            return;
-        }
+    let park = &cx.global::<AppWindows>().camera_park;
+    if park.released || park.last_window.as_ref() == Some(&target.id) {
+        return;
     }
-    cx.global_mut::<AppWindows>().camera_park.last_window = Some(target.id.clone());
-    park_camera_in_window(&target, cx);
+    if park_camera_in_window(&target, cx) {
+        cx.global_mut::<AppWindows>().camera_park.last_window = Some(target.id);
+    }
 }
 
-/// The bubble's new top-left, in the global logical space its own position
-/// lives in -- `repositionCameraForWindow`'s arithmetic
-/// (`target-select-overlay.tsx:141-160`), verbatim: the window's
-/// display-relative bounds made absolute with the display origin, the bubble
-/// tucked into the bottom-right corner one padding in, rounded. `None` when the
-/// window cannot hold the bubble plus a padding on each side, which is that
-/// function's early return (`:147-153`) -- the bubble stays where it is.
 fn camera_park_position(
     display_origin: (f32, f32),
     window: AreaRect,
@@ -2301,75 +4294,214 @@ fn camera_park_position(
     let absolute_x = window.x + display_origin.0;
     let absolute_y = window.y + display_origin.1;
     Some((
-        (absolute_x + window.width - camera_width - CAMERA_PARK_PADDING).round(),
-        (absolute_y + window.height - camera_height - CAMERA_PARK_PADDING).round(),
+        (absolute_x + window.width - camera_width - CAMERA_PARK_PADDING + 0.5).floor(),
+        (absolute_y + window.height - camera_height - CAMERA_PARK_PADDING + 0.5).floor(),
     ))
 }
 
-fn park_camera_in_window(target: &HoveredWindow, cx: &mut App) {
+fn park_camera_in_window(target: &HoveredWindow, cx: &mut App) -> bool {
     let Some(display) = scap_targets::Display::from_id(&target.display_id) else {
+        return false;
+    };
+    let Some(display_bounds) = display.raw_handle().logical_bounds() else {
+        return false;
+    };
+    let Some(camera) = camera_snapshot(cx) else {
+        return false;
+    };
+
+    let display_origin = (
+        display_bounds.position().x() as f32,
+        display_bounds.position().y() as f32,
+    );
+    let Some((x, y)) = camera_park_position(
+        display_origin,
+        target.bounds,
+        (camera.bounds.width, camera.bounds.height),
+    ) else {
+        return false;
+    };
+
+    let park = &mut cx.global_mut::<AppWindows>().camera_park;
+    if park
+        .original
+        .is_none_or(|original| original.handle != camera.handle)
+    {
+        park.original = Some(camera);
+    }
+    queue_camera_placement(
+        CameraPlacement {
+            camera: camera.handle,
+            bounds: AreaRect {
+                x,
+                y,
+                ..camera.bounds
+            },
+            size_override: CameraSizeOverride::Preserve,
+        },
+        cx,
+    );
+    true
+}
+
+fn camera_area_bounds(
+    display_origin: (f32, f32),
+    crop: AreaRect,
+    original_size: (f32, f32),
+) -> Option<AreaRect> {
+    let (original_width, original_height) = original_size;
+    let toolbar = camera_window::CAMERA_TOOLBAR_HEIGHT;
+    let content_height = (original_height - toolbar).max(0.);
+    let content_max = original_width.max(content_height);
+    let target_max = 100_f32.max(content_max.min(crop.width.min(crop.height) * 0.5 - toolbar));
+    let scale = if content_max > 0. {
+        target_max / content_max
+    } else {
+        1.
+    };
+    let width = (original_width * scale).round();
+    let height = (content_height * scale).round() + toolbar;
+    if crop.width <= width + CAMERA_PARK_PADDING * 2.
+        || crop.height <= height + CAMERA_PARK_PADDING * 2.
+    {
+        return None;
+    }
+    Some(AreaRect {
+        x: (crop.x + crop.width - width - CAMERA_PARK_PADDING).round() + display_origin.0,
+        y: (crop.y + crop.height - height - CAMERA_PARK_PADDING).round() + display_origin.1,
+        width,
+        height,
+    })
+}
+
+fn camera_area_bounds_changed(previous: AreaRect, next: AreaRect) -> bool {
+    (previous.x - next.x).abs() > 1.
+        || (previous.y - next.y).abs() > 1.
+        || (previous.width - next.width).abs() > 1.
+        || (previous.height - next.height).abs() > 1.
+}
+
+pub fn sync_camera_area(display_id: DisplayId, crop: Option<AreaRect>, cx: &mut App) {
+    if !cx.has_global::<AppWindows>()
+        || !cx
+            .global::<AppWindows>()
+            .overlays
+            .iter()
+            .any(|(display, _)| *display == display_id)
+    {
+        return;
+    }
+    let select = TargetSelect::global(cx);
+    if select.read(cx).mode != Some(TargetType::Area)
+        || select.read(cx).recording_mode == Mode::Screenshot
+        || cx.global::<AppWindows>().camera_park.released
+    {
+        return;
+    }
+    let Some(crop) = crop else {
+        if cx
+            .global::<AppWindows>()
+            .camera_park
+            .area_target
+            .as_ref()
+            .is_none_or(|(display, _)| *display == display_id)
+        {
+            revert_camera_park(cx);
+            arm_camera_park(TargetType::Area, cx);
+        }
+        return;
+    };
+    cx.global_mut::<AppWindows>().camera_park.area_target = Some((display_id.clone(), crop));
+    let Some(display) = scap_targets::Display::from_id(&display_id) else {
         return;
     };
     let Some(display_bounds) = display.raw_handle().logical_bounds() else {
         return;
     };
-    let Some(camera) = camera_frame(cx) else {
+    let Some(camera) = camera_snapshot(cx) else {
         return;
     };
-
-    let (_, _, width, height) = camera.frame;
-    let display_origin = (
-        display_bounds.position().x() as f32,
-        display_bounds.position().y() as f32,
-    );
-    let Some(to) =
-        camera_park_position(display_origin, target.bounds, (width as f32, height as f32))
-    else {
-        tracing::debug!(
-            camera_width = width,
-            camera_height = height,
-            window_width = target.bounds.width,
-            window_height = target.bounds.height,
-            "target window is too small for the camera bubble; leaving it where it is"
-        );
+    let park = &mut cx.global_mut::<AppWindows>().camera_park;
+    let original = match park.original {
+        Some(original) if original.handle == camera.handle => original,
+        _ => {
+            park.original = Some(camera);
+            camera
+        }
+    };
+    let Some(bounds) = camera_area_bounds(
+        (
+            display_bounds.position().x() as f32,
+            display_bounds.position().y() as f32,
+        ),
+        crop,
+        (original.bounds.width, original.bounds.height),
+    ) else {
         return;
     };
-
-    // A camera opened *after* the picker went up has no remembered position
-    // yet; the effect over there picks it up the same way (`getCameraWindow()`
-    // starts returning a window and the reposition runs).
-    if cx.global::<AppWindows>().camera_park.origin.is_none() {
-        cx.global_mut::<AppWindows>().camera_park.origin = Some(camera.origin);
+    if park
+        .last_area
+        .is_some_and(|last| !camera_area_bounds_changed(last, bounds))
+    {
+        return;
     }
-    tracing::info!(window = %target.id, x = to.0, y = to.1, "parking the camera bubble in the picked window");
-    move_camera_window(camera, to, cx);
+    park.last_area = Some(bounds);
+    queue_camera_placement(
+        CameraPlacement {
+            camera: camera.handle,
+            bounds,
+            size_override: CameraSizeOverride::Set(Some((bounds.width, bounds.height))),
+        },
+        cx,
+    );
 }
 
-/// `setOriginalCameraBounds(null)`: the pick was committed -- a click that
-/// locks the highlight (`:609-617`), a recording start or a screenshot start
-/// (`:687-690`) -- so the bubble stays where the picker put it and no dismissal
-/// puts it back.
 pub fn release_camera_park(cx: &mut App) {
     if !cx.has_global::<AppWindows>() {
         return;
     }
     let park = &mut cx.global_mut::<AppWindows>().camera_park;
-    park.origin = None;
+    park.original = None;
     park.released = true;
 }
 
-/// `onCleanup` (`:558-563`): the picker went away without a commit, so the
-/// bubble goes back to where it was.
 fn revert_camera_park(cx: &mut App) {
-    let park = std::mem::take(&mut cx.global_mut::<AppWindows>().camera_park);
-    let Some(origin) = park.origin else {
+    let park = &mut cx.global_mut::<AppWindows>().camera_park;
+    let original = park.original;
+    let mode = park.mode;
+    if !park.released {
+        park.invalidate_pending();
+    }
+    park.reset_selection();
+    let Some(original) = original else {
         return;
     };
-    let Some(camera) = camera_frame(cx) else {
+    let Some(camera) = camera_snapshot(cx).filter(|camera| camera.handle == original.handle) else {
         return;
     };
-    tracing::info!(x = origin.0, y = origin.1, "restoring the camera bubble");
-    move_camera_window(camera, origin, cx);
+    let (bounds, size_override) = if mode == Some(TargetType::Area) {
+        (
+            original.bounds,
+            CameraSizeOverride::Set(original.picker_size),
+        )
+    } else {
+        (
+            AreaRect {
+                x: original.bounds.x,
+                y: original.bounds.y,
+                ..camera.bounds
+            },
+            CameraSizeOverride::Preserve,
+        )
+    };
+    queue_camera_placement(
+        CameraPlacement {
+            camera: original.handle,
+            bounds,
+            size_override,
+        },
+        cx,
+    );
 }
 
 /// Hand a camera frame to the preview window. Returns false when no window is
@@ -2379,12 +4511,44 @@ pub fn deliver_camera_frame(
     #[cfg(not(target_os = "macos"))] frame: crate::camera_window::CameraPreviewFrame,
     cx: &mut App,
 ) -> bool {
+    if !crate::feeds::Feeds::global(cx)
+        .read(cx)
+        .accepts_camera_preview(frame.timestamp)
+    {
+        return false;
+    }
     let Some(handle) = cx.global::<AppWindows>().camera else {
         return false;
     };
-    handle
+    #[cfg(not(target_os = "macos"))]
+    let previous = camera_preview_is_inline(cx)
+        .then(|| {
+            handle
+                .update(cx, |view, _, cx| view.preview_image(cx))
+                .ok()
+                .flatten()
+        })
+        .flatten();
+    let delivered = handle
         .update(cx, |view, window, cx| view.frame_arrived(frame, window, cx))
-        .is_ok()
+        .is_ok();
+    #[cfg(not(target_os = "macos"))]
+    if let Some(previous) = previous {
+        evict_overlay_camera_image(previous, cx);
+    }
+    delivered
+}
+
+#[cfg(not(target_os = "macos"))]
+fn evict_overlay_camera_image(image: Arc<gpui::RenderImage>, cx: &mut App) {
+    let overlays = cx.global::<AppWindows>().overlays.clone();
+    for (_, overlay) in overlays {
+        overlay
+            .update(cx, |_, window, _| {
+                let _ = window.drop_image(image.clone());
+            })
+            .ok();
+    }
 }
 
 // -- Editor -----------------------------------------------------------------
@@ -2410,37 +4574,62 @@ fn editor_key(path: &Path) -> PathBuf {
 /// opening a window paints it synchronously and would double-lease the caller.
 pub fn open_editor(project_path: PathBuf, cx: &mut App) {
     let key = editor_key(&project_path);
+    let session = RecordingSession::global(cx);
+    let preparing = session
+        .read(cx)
+        .preparing_studio_editor()
+        .filter(|pending| editor_key(&pending.project_path) == key)
+        .cloned();
+    if preparing
+        .as_ref()
+        .is_some_and(|pending| !pending.capture_stopped)
+    {
+        return;
+    }
+    let finalization = preparing.map(|pending| pending.finalization);
+    if let Some(window_id) = open_editor_window(project_path, finalization, cx) {
+        session.update(cx, |session, _| {
+            if let Some(pending) = session.preparing_studio_editor_mut()
+                && editor_key(&pending.project_path) == key
+            {
+                pending.presentation = StudioEditorPresentation::Opened(window_id);
+            }
+        });
+    }
+}
 
-    if let Some(handle) = cx
+fn open_editor_window(
+    project_path: PathBuf,
+    finalization: Option<StudioFinalization>,
+    cx: &mut App,
+) -> Option<gpui::WindowId> {
+    #[cfg(target_os = "linux")]
+    if defer_window_until_capture_safe(cx) {
+        return None;
+    }
+    let key = editor_key(&project_path);
+    if cx.global::<AppWindows>().deleting_editors.contains(&key) {
+        tracing::info!(path = %key.display(), "recording deletion is still settling; editor remains closed");
+        return None;
+    }
+
+    if let Some(window_id) = cx
         .global::<AppWindows>()
         .editors
         .iter()
         .find(|(path, _)| path == &key)
-        .map(|(_, handle)| *handle)
+        .map(|(_, handle)| handle.window_id())
     {
         tracing::info!(
             path = %key.display(),
             "editor already open for this project; focusing it"
         );
-        let native = handle
-            .update(cx, |_, window, _| platform::native_window(window))
-            .ok()
-            .flatten();
-        cx.spawn(async move |_| {
-            if let Some(native) = &native {
-                platform::show_native(native);
-            }
-        })
-        .detach();
         hide_main_and_park_camera_preview(cx);
-        return;
+        reveal_editor_window(&key, cx);
+        return Some(window_id);
     }
 
-    // `cursor_monitor.center_position(1275.0, 800.0)` in the Tauri arm; gpui
-    // centres on the active display, which is the same one in every
-    // single-pointer case.
-    let bounds = Bounds::centered(
-        None,
+    let bounds = opening_window_bounds(
         size(
             px(editor_window::EDITOR_WIDTH),
             px(editor_window::EDITOR_HEIGHT),
@@ -2460,17 +4649,20 @@ pub fn open_editor(project_path: PathBuf, cx: &mut App) {
                 appears_transparent: true,
                 traffic_light_position: editor_window::TRAFFIC_LIGHTS,
             }),
+            app_owns_titlebar_drag: true,
             // An ordinary window that activates the dock icon
             // (`activates_dock()` lists Editor); no level or Spaces treatment.
             kind: WindowKind::Normal,
             focus: true,
             show: true,
-            // `.maximizable(true)` with `min_inner_size == inner_size`.
             is_resizable: true,
             is_minimizable: true,
-            window_min_size: Some(size(
-                px(editor_window::EDITOR_WIDTH),
-                px(editor_window::EDITOR_HEIGHT),
+            window_min_size: Some(fitted_window_min_size(
+                size(
+                    px(editor_window::EDITOR_WIDTH),
+                    px(editor_window::EDITOR_HEIGHT),
+                ),
+                bounds,
             )),
             // Opaque, and no native material: `is_transparent()`
             // (`windows.rs:1069-1082`) does not list Editor, and
@@ -2488,7 +4680,7 @@ pub fn open_editor(project_path: PathBuf, cx: &mut App) {
         Ok(handle) => handle,
         Err(error) => {
             tracing::error!("editor window failed to open: {error:#}");
-            return;
+            return None;
         }
     };
 
@@ -2511,7 +4703,138 @@ pub fn open_editor(project_path: PathBuf, cx: &mut App) {
         .ok();
 
     hide_main_and_park_camera_preview(cx);
-    load_editor_project(key, handle, cx);
+    reveal_editor_window(&key, cx);
+    if finalization.is_some() {
+        tracing::info!(path = %key.display(), "preparing editor shell created");
+        let frame_path = key.clone();
+        handle.update(cx, |_, window, _| {
+            window.on_next_frame(move |window, _| {
+                window.on_next_frame(move |_, _| {
+                    tracing::info!(path = %frame_path.display(), "preparing editor first frame cycle completed");
+                });
+            });
+            window.refresh();
+        }).ok();
+    }
+    load_editor_project(key, handle, finalization, cx);
+    Some(handle.window_id())
+}
+
+fn editor_audio_output() -> Arc<cap_editor::AudioOutput> {
+    if std::env::var("CAP_GPUI_MUTE_AUDIO").is_ok_and(|value| value == "1") {
+        Arc::new(cap_editor::AudioOutput::new_headless(Box::new(|_, _| {})))
+    } else {
+        Arc::new(cap_editor::AudioOutput::new())
+    }
+}
+
+fn start_preparing_editor(
+    path: PathBuf,
+    handle: WindowHandle<EditorWindow>,
+    finalization: StudioFinalization,
+    audio_output: Arc<cap_editor::AudioOutput>,
+    cx: &mut App,
+) -> crate::editor_preparing::PreparingJoin {
+    let resolution = editor_window::preview_resolution(
+        crate::store::GeneralSettings::load().editor_preview_quality,
+    );
+    let (consumer, joined, frames) = crate::editor_preparing::spawn(
+        finalization,
+        resolution,
+        audio_output,
+        &gpui_tokio::Tokio::handle(cx),
+    );
+    cx.global_mut::<AppWindows>()
+        .preparing_cleanup
+        .register(path.clone(), joined.clone());
+    let mut updates = consumer.updates();
+    handle
+        .update(cx, |view, window, cx| {
+            view.begin_preparing(consumer);
+            cx.notify();
+            window.refresh();
+        })
+        .ok();
+    cx.spawn({
+        let path = path.clone();
+        async move |cx| {
+            loop {
+                let update = updates.borrow_and_update().clone();
+                if let Some(update) = update {
+                    let current_window = cx.update(|cx| {
+                        cx.global::<AppWindows>()
+                            .editors
+                            .iter()
+                            .any(|(key, current)| {
+                                key == &path && current.window_id() == handle.window_id()
+                            })
+                    });
+                    if !current_window
+                        || handle
+                            .update(cx, |view, window, cx| {
+                                view.preparing_progress_arrived(update, window, cx)
+                            })
+                            .is_err()
+                    {
+                        return;
+                    }
+                }
+                if updates.changed().await.is_err() {
+                    return;
+                }
+            }
+        }
+    })
+    .detach();
+    cx.spawn(async move |cx| {
+        while let Ok(preparing) = frames.recv_async().await {
+            let frame = match preparing.output {
+                cap_editor::EditorFrameOutput::Rgba(frame) => {
+                    let image = cx
+                        .background_executor()
+                        .spawn(async move { editor_window::frame_image(&frame) })
+                        .await;
+                    let Some(image) = image else { continue };
+                    editor_window::EditorPreviewFrame::Image(image)
+                }
+                #[cfg(target_os = "macos")]
+                cap_editor::EditorFrameOutput::Surface(surface) => {
+                    editor_window::surface_preview_frame(surface)
+                }
+                cap_editor::EditorFrameOutput::Nv12(_) => continue,
+            };
+            let current_window = cx.update(|cx| {
+                cx.global::<AppWindows>()
+                    .editors
+                    .iter()
+                    .any(|(key, current)| key == &path && current.window_id() == handle.window_id())
+            });
+            if !current_window {
+                return;
+            }
+            if handle
+                .update(cx, |view, window, cx| {
+                    view.preparing_frame_arrived(
+                        &preparing.epoch,
+                        &preparing.identity,
+                        preparing.request.sequence,
+                        editor_window::EditorFrame {
+                            frame,
+                            layout: preparing.layout,
+                            number: preparing.request.frame_number,
+                        },
+                        window,
+                        cx,
+                    );
+                })
+                .is_err()
+            {
+                return;
+            }
+        }
+    })
+    .detach();
+    joined
 }
 
 /// Build the `EditorInstance` and get frame 0 on screen.
@@ -2521,8 +4844,119 @@ pub fn open_editor(project_path: PathBuf, cx: &mut App) {
 /// preview renderer, all of which are tokio-spawned -- is constructed on the
 /// `gpui_tokio` runtime. `EditorInstance::new` on the main thread would block
 /// it for however long the first segment takes to open.
-fn load_editor_project(path: PathBuf, handle: WindowHandle<EditorWindow>, cx: &mut App) {
+fn load_editor_project(
+    path: PathBuf,
+    handle: WindowHandle<EditorWindow>,
+    finalization: Option<StudioFinalization>,
+    cx: &mut App,
+) {
+    load_editor_project_candidate(path, handle, finalization, None, cx);
+}
+
+pub(crate) fn retry_preparing_editor(
+    path: PathBuf,
+    handle: WindowHandle<EditorWindow>,
+    previous: Arc<cap_editor::EditorInstance>,
+    cx: &mut App,
+) {
+    load_editor_project_candidate(path, handle, None, Some(previous), cx);
+}
+
+fn load_editor_project_candidate(
+    path: PathBuf,
+    handle: WindowHandle<EditorWindow>,
+    finalization: Option<StudioFinalization>,
+    previous: Option<Arc<cap_editor::EditorInstance>>,
+    cx: &mut App,
+) {
+    let preparing_output = finalization.as_ref().map(|_| editor_audio_output());
+    let current_join =
+        finalization
+            .as_ref()
+            .zip(preparing_output.as_ref())
+            .map(|(finalization, output)| {
+                start_preparing_editor(
+                    path.clone(),
+                    handle,
+                    finalization.clone(),
+                    output.clone(),
+                    cx,
+                )
+            });
+    let continuing_join = current_join.clone();
+    let mut preparing_joins = if previous.is_some() {
+        Vec::new()
+    } else {
+        cx.global_mut::<AppWindows>()
+            .preparing_cleanup
+            .pending(&path)
+    };
+    if let Some(joined) = current_join
+        && !preparing_joins.iter().any(|pending| pending.same(&joined))
+    {
+        preparing_joins.push(joined);
+    }
     cx.spawn(async move |cx| {
+        let finalized = match finalization {
+            Some(finalization) => finalization.wait().await,
+            None => Ok(()),
+        };
+        let mut completed_audio = None;
+        let mut live_handoff = None;
+        for joined in &preparing_joins {
+            if finalized.is_ok()
+                && continuing_join
+                    .as_ref()
+                    .is_some_and(|current| current.same(joined))
+                && let Some(handoff) = joined.continuing_handoff().await
+            {
+                match handoff.take_completed_audio().await {
+                    Ok(audio) => {
+                        completed_audio = Some(audio);
+                        live_handoff = Some(handoff);
+                        continue;
+                    }
+                    Err(_) => {
+                        handoff.cancel();
+                    }
+                }
+            }
+            let completed = match joined.wait().await {
+                Ok(completed) => completed,
+                Err(message) => {
+                    handle
+                        .update(cx, |view, window, cx| view.set_error(message, window, cx))
+                        .ok();
+                    return;
+                }
+            };
+            let audio = completed.take_audio();
+            let accepted = handle
+                .update(cx, |view, window, cx| {
+                    let accepted = view.finish_preparing(&completed);
+                    cx.notify();
+                    window.refresh();
+                    accepted
+                })
+                .unwrap_or(false);
+            if accepted && finalized.is_ok() {
+                completed_audio = audio;
+            }
+        }
+        cx.update(|cx| {
+            cx.global_mut::<AppWindows>()
+                .preparing_cleanup
+                .prune_completed()
+        });
+        if let Err(message) = finalized {
+            handle
+                .update(cx, |view, window, cx| view.set_error(message, window, cx))
+                .ok();
+            return;
+        }
+        if handle.update(cx, |_, _, _| ()).is_err() {
+            return;
+        }
         let preflight_path = path.clone();
         let summary = cx
             .background_executor()
@@ -2548,10 +4982,7 @@ fn load_editor_project(path: PathBuf, handle: WindowHandle<EditorWindow>, cx: &m
         );
         log_timeline_model(&summary.timeline);
         let recordings = summary.recordings.clone();
-        if handle
-            .update(cx, |view, window, cx| view.set_summary(summary, window, cx))
-            .is_err()
-        {
+        if handle.update(cx, |_, _, _| ()).is_err() {
             return;
         }
 
@@ -2590,23 +5021,28 @@ fn load_editor_project(path: PathBuf, handle: WindowHandle<EditorWindow>, cx: &m
                 let frame_format = cap_editor::EditorFrameFormat::BgraSurface;
                 #[cfg(not(target_os = "macos"))]
                 let frame_format = cap_editor::EditorFrameFormat::Rgba;
-                let audio_output = if std::env::var("CAP_GPUI_MUTE_AUDIO").is_ok_and(|v| v == "1") {
-                    std::sync::Arc::new(cap_editor::AudioOutput::new_headless(Box::new(
-                        |_samples, _at| {},
-                    )))
-                } else {
-                    std::sync::Arc::new(cap_editor::AudioOutput::new())
-                };
-                cap_editor::EditorInstance::new_with_preloaded_recordings(
+                if let Some(previous) = previous {
+                    return previous
+                        .recreate_preparing_candidate(state_cb, frame_cb, frame_format)
+                        .await;
+                }
+                let instance = cap_editor::EditorInstance::new_with_startup_inputs(
                     instance_path,
                     state_cb,
                     frame_cb,
                     None,
                     frame_format,
-                    audio_output,
-                    recordings,
+                    preparing_output.unwrap_or_else(editor_audio_output),
+                    cap_editor::EditorStartupInputs {
+                        recordings: Some(recordings),
+                        completed_audio,
+                    },
                 )
-                .await
+                .await?;
+                if let Some(handoff) = live_handoff {
+                    instance.install_preparing_handoff(&handoff).await?;
+                }
+                Ok::<_, String>(instance)
             })
         });
 
@@ -2633,8 +5069,35 @@ fn load_editor_project(path: PathBuf, handle: WindowHandle<EditorWindow>, cx: &m
         };
 
         tracing::info!(path = %path.display(), "editor instance ready");
+        let (total, config) = {
+            let config = instance.project_config.1.borrow().clone();
+            let total = config
+                .timeline
+                .as_ref()
+                .map_or(0.0, |timeline| timeline.duration());
+            (total, config)
+        };
+        let has_camera = instance
+            .recordings
+            .segments
+            .iter()
+            .any(|segment| segment.camera.is_some());
+        let multiple_clips = instance.recordings.segments.len() > 1;
+        log_timeline_model(&editor_timeline::TimelineModel::build(
+            &config,
+            has_camera,
+            multiple_clips,
+        ));
         if handle
-            .update(cx, |view, _window, _cx| view.set_instance(instance.clone()))
+            .update(cx, |view, window, cx| {
+                // Loading controls can queue a save before the engine is ready.
+                // Publish the loaded config and instance together so those edits
+                // cannot replace the saved project with the initial defaults.
+                view.pending_save().borrow_mut().discard();
+                view.set_summary(summary, window, cx);
+                view.set_project(config, window, cx);
+                view.set_instance(instance.clone());
+            })
             .is_err()
         {
             instance.dispose().await;
@@ -2645,6 +5108,7 @@ fn load_editor_project(path: PathBuf, handle: WindowHandle<EditorWindow>, cx: &m
         // BGRA swap is a few megabytes per frame), deliver on the main one.
         cx.spawn({
             let stats = stats.clone();
+            let pump_instance = instance.clone();
             async move |cx| {
                 while let Ok((output, layout)) = frame_rx.recv_async().await {
                     let (frame, number) = match output {
@@ -2680,6 +5144,9 @@ fn load_editor_project(path: PathBuf, handle: WindowHandle<EditorWindow>, cx: &m
                     };
                     if handle
                         .update(cx, |view, window, cx| {
+                            if !view.is_instance(&pump_instance) {
+                                return;
+                            }
                             view.frame_arrived(
                                 editor_window::EditorFrame {
                                     frame,
@@ -2702,12 +5169,15 @@ fn load_editor_project(path: PathBuf, handle: WindowHandle<EditorWindow>, cx: &m
         // The playhead drain. The signal is latest-wins, so this reads the
         // atomic rather than a queue: at 60Hz a backlog would only ever
         // describe the past.
+        let playhead_instance = instance.clone();
         cx.spawn(async move |cx| {
             while playhead_rx.recv_async().await.is_ok() {
                 let frame = playhead.position();
                 if handle
                     .update(cx, |view, window, cx| {
-                        view.playhead_changed(frame, window, cx)
+                        if view.is_instance(&playhead_instance) {
+                            view.playhead_changed(frame, window, cx);
+                        }
                     })
                     .is_err()
                 {
@@ -2732,10 +5202,15 @@ fn load_editor_project(path: PathBuf, handle: WindowHandle<EditorWindow>, cx: &m
         // The engine-stop drain: the driver's message that the engine died on
         // its own (end of timeline under a live seek, warmup abort, error),
         // delivered on the main thread like every other foreign-thread seam.
+        let stopped_instance = instance.clone();
         cx.spawn(async move |cx| {
             while engine_stopped_rx.recv_async().await.is_ok() {
                 if handle
-                    .update(cx, |view, window, cx| view.engine_stopped(window, cx))
+                    .update(cx, |view, window, cx| {
+                        if view.is_instance(&stopped_instance) {
+                            view.engine_stopped(window, cx);
+                        }
+                    })
                     .is_err()
                 {
                     return;
@@ -2744,44 +5219,6 @@ fn load_editor_project(path: PathBuf, handle: WindowHandle<EditorWindow>, cx: &m
         })
         .detach();
 
-        // `totalDuration()` (`context.ts:1374-1380`). Read off the instance
-        // rather than the pre-flight, because `EditorInstance::new`
-        // synthesises a timeline for a raw bundle -- and `timeline.duration()`
-        // is exactly what the playback engine stops at
-        // (`playback.rs:560-570`).
-        //
-        // The whole track model comes from the same read: the config the
-        // instance actually loaded is the one being rendered, holds, clip
-        // offsets and all. E4 hands the window the config itself rather than
-        // the derived model, because it is what every edit mutates and what
-        // the debounced save writes back.
-        let (total, config) = {
-            let config = instance.project_config.1.borrow().clone();
-            let total = config
-                .timeline
-                .as_ref()
-                .map_or(0.0, |timeline| timeline.duration());
-            (total, config)
-        };
-        {
-            let has_camera = instance
-                .recordings
-                .segments
-                .iter()
-                .any(|segment| segment.camera.is_some());
-            let multiple_clips = instance.recordings.segments.len() > 1;
-            log_timeline_model(&editor_timeline::TimelineModel::build(
-                &config,
-                has_camera,
-                multiple_clips,
-            ));
-        }
-        if handle
-            .update(cx, |view, window, cx| view.set_project(config, window, cx))
-            .is_err()
-        {
-            return;
-        }
         load_editor_waveforms(instance.clone(), handle, cx);
 
         if handle
@@ -2793,17 +5230,6 @@ fn load_editor_project(path: PathBuf, handle: WindowHandle<EditorWindow>, cx: &m
             return;
         }
 
-        // The initial kick, exactly as `lib.rs:6617-6618` does it after
-        // creating an instance. Without this the canvas stays black: `seek_to`
-        // and `set_playhead_position` render nothing.
-        editor_window::request_frame(
-            &instance,
-            0,
-            editor_window::preview_resolution(
-                crate::store::GeneralSettings::load().editor_preview_quality,
-            ),
-        );
-
         drive_auto_sidebar(handle, cx).await;
         drive_auto_playback(path, handle, cx).await;
         drive_auto_export(handle, cx).await;
@@ -2812,6 +5238,23 @@ fn load_editor_project(path: PathBuf, handle: WindowHandle<EditorWindow>, cx: &m
 }
 
 async fn drive_auto_export(handle: WindowHandle<EditorWindow>, cx: &mut gpui::AsyncApp) {
+    if let Ok(page) = std::env::var("CAP_GPUI_AUTO_EXPORT_PAGE") {
+        cx.background_executor()
+            .timer(std::time::Duration::from_millis(300))
+            .await;
+        let _ = handle.update(cx, |view, window, cx| {
+            view.open_export(window, cx);
+            if let Some(export) = view.export.as_mut() {
+                let flags: Vec<&str> = page.split(',').collect();
+                export.advanced_open = flags.contains(&"advanced");
+                if flags.contains(&"link") {
+                    export.destination = crate::editor_export::ExportDestination::Link;
+                }
+            }
+            cx.notify();
+        });
+        return;
+    }
     let Some(path) = std::env::var_os("CAP_GPUI_AUTO_EXPORT").map(PathBuf::from) else {
         return;
     };
@@ -2890,14 +5333,7 @@ fn load_editor_waveforms(
                         (&segment.audio, &mut mic),
                         (&segment.system_audio, &mut system),
                     ] {
-                        match loader.get().await {
-                            Ok(Some(audio)) => {
-                                out.push((audio.samples().to_vec(), audio.channels()))
-                            }
-                            // A failed track is an empty waveform; playback and
-                            // export surface the actual error.
-                            _ => out.push((Vec::new(), 1)),
-                        }
+                        out.push(loader.get().await.ok().flatten());
                     }
                 }
                 (mic, system)
@@ -2909,15 +5345,21 @@ fn load_editor_waveforms(
         let peaks = cx
             .background_executor()
             .spawn(async move {
-                let extract = |tracks: Vec<(Vec<f32>, u16)>| {
+                let [mic, system] = [mic, system].map(|tracks| {
                     tracks
                         .into_iter()
-                        .map(|(samples, channels)| {
-                            Arc::new(editor_timeline::waveform_peaks(&samples, channels))
+                        .map(|audio| {
+                            Arc::new(match audio {
+                                Some(audio) => editor_timeline::waveform_peaks(
+                                    audio.sample_slices().flatten(),
+                                    audio.channels(),
+                                ),
+                                None => Vec::new(),
+                            })
                         })
                         .collect::<Vec<_>>()
-                };
-                (extract(mic), extract(system))
+                });
+                (mic, system)
             })
             .await;
         let _ = handle.update(cx, |view, window, cx| {
@@ -2933,8 +5375,9 @@ fn load_editor_waveforms(
 }
 
 /// `CAP_GPUI_AUTO_SIDEBAR=<tab>[:<scroll>]` selects a config-sidebar tab and
-/// optionally scrolls its body, and `CAP_GPUI_AUTO_SELECT=<track>:<i>[,<i>]`
-/// selects timeline segments so their panel opens.
+/// optionally scrolls its body, `CAP_GPUI_AUTO_CAMERA3D=add[:<time>]|auto`
+/// makes a 3D shot, and `CAP_GPUI_AUTO_SELECT=<track>:<i>[,<i>]` selects
+/// timeline segments so their panel opens.
 ///
 /// They exist for the same reason as every other `CAP_GPUI_AUTO_*` hook, plus
 /// one specific to this pane: **a synthetic wheel does not scroll the sidebar's
@@ -2947,7 +5390,17 @@ async fn drive_auto_sidebar(handle: WindowHandle<EditorWindow>, cx: &mut gpui::A
     let select = std::env::var("CAP_GPUI_AUTO_SELECT").ok();
     let canvas = std::env::var("CAP_GPUI_AUTO_CANVAS").ok();
     let crop = std::env::var("CAP_GPUI_AUTO_CROP").ok();
-    if tab.is_none() && select.is_none() && canvas.is_none() && crop.is_none() {
+    let clip_menu = std::env::var("CAP_GPUI_AUTO_CLIP_MENU").ok();
+    let camera3d = std::env::var("CAP_GPUI_AUTO_CAMERA3D").ok();
+    let add_track = std::env::var("CAP_GPUI_AUTO_ADD_TRACK").ok();
+    if tab.is_none()
+        && select.is_none()
+        && canvas.is_none()
+        && crop.is_none()
+        && clip_menu.is_none()
+        && camera3d.is_none()
+        && add_track.is_none()
+    {
         return;
     }
     cx.background_executor()
@@ -2963,6 +5416,15 @@ async fn drive_auto_sidebar(handle: WindowHandle<EditorWindow>, cx: &mut gpui::A
             .update(cx, |view, window, cx| {
                 view.auto_select_sidebar_tab(&name, scroll, window, cx)
             })
+            .ok();
+    }
+
+    // `CAP_GPUI_AUTO_CAMERA3D=add[:<time>]|auto`: make a 3D shot the way the
+    // lane's own chips make one. Before the selection hook, so a probe can
+    // create a shot and then photograph its panel.
+    if let Some(spec) = camera3d {
+        handle
+            .update(cx, |view, window, cx| view.auto_camera3d(&spec, window, cx))
             .ok();
     }
 
@@ -2990,6 +5452,28 @@ async fn drive_auto_sidebar(handle: WindowHandle<EditorWindow>, cx: &mut gpui::A
             .update(cx, |view, window, cx| view.auto_crop(&spec, window, cx))
             .ok();
     }
+
+    // `CAP_GPUI_AUTO_CLIP_MENU=<index>[:split]`: open clip `<index>`'s settings
+    // menu the way a right-click on it does, optionally splitting the first
+    // clip at 40% first so the merge rows have a neighbour to act on.
+    if let Some(spec) = clip_menu {
+        handle
+            .update(cx, |view, window, cx| {
+                view.auto_clip_menu(&spec, window, cx)
+            })
+            .ok();
+    }
+
+    // `CAP_GPUI_AUTO_ADD_TRACK=1` opens the add-track tray;
+    // `CAP_GPUI_AUTO_ADD_TRACK=<text|mask|style|audio|...>` opens it and picks
+    // that tile, then treats the player as hovered so its overlay draws.
+    if let Some(spec) = add_track {
+        handle
+            .update(cx, |view, window, cx| {
+                view.auto_add_track(&spec, window, cx)
+            })
+            .ok();
+    }
 }
 
 /// `CAP_GPUI_AUTO_PLAYBACK=<seconds>` presses play once the project is up and
@@ -3013,6 +5497,10 @@ async fn drive_auto_playback(
     let seek = std::env::var("CAP_GPUI_AUTO_SEEK")
         .ok()
         .and_then(|value| value.parse::<f64>().ok());
+    let seek_time = std::env::var("CAP_GPUI_AUTO_SEEK_TIME")
+        .ok()
+        .and_then(|value| value.parse::<f64>().ok())
+        .filter(|seconds| seconds.is_finite() && *seconds >= 0.0);
     // `CAP_GPUI_AUTO_SCRUB_PLAYING=<n>`: a synthetic ruler drag during
     // playback -- n seeks at 33ms intervals sweeping 20% to 70% of the
     // timeline. This is the live-seek path's perf gate: every seek lands on a
@@ -3020,7 +5508,12 @@ async fn drive_auto_playback(
     let scrub_playing = std::env::var("CAP_GPUI_AUTO_SCRUB_PLAYING")
         .ok()
         .and_then(|value| value.parse::<u32>().ok());
-    if play_secs.is_none() && torture.is_none() && seek.is_none() && scrub_playing.is_none() {
+    if play_secs.is_none()
+        && torture.is_none()
+        && seek.is_none()
+        && seek_time.is_none()
+        && scrub_playing.is_none()
+    {
         return;
     }
 
@@ -3073,6 +5566,16 @@ async fn drive_auto_playback(
             })
             .ok();
         tracing::info!(fraction, "auto seek");
+    }
+
+    if let Some(seconds) = seek_time {
+        handle
+            .update(cx, |view, _window, cx| {
+                let seconds = seconds.min(view.total_duration());
+                view.seek_to_time(seconds, cx);
+                tracing::info!(seconds, "auto seek to recording time");
+            })
+            .ok();
     }
 
     if let Some(n) = scrub_playing {
@@ -3184,27 +5687,94 @@ fn reveal_main_after_editor_close(editors_left: usize, settings_open: bool, idle
 /// `restore_main_windows_if_no_editors` (`lib.rs:5777-5792`) -- so the main
 /// window comes back only once the last editor has closed, and never over an
 /// open Settings window ([`reveal_main_after_editor_close`]).
-pub fn editor_closed(project_path: &Path, cx: &mut App) {
+pub fn editor_closed(project_path: &Path, window_id: gpui::WindowId, cx: &mut App) {
     let key = editor_key(project_path);
-    let handle = {
-        let editors = &mut cx.global_mut::<AppWindows>().editors;
-        let index = editors.iter().position(|(path, _)| path == &key);
-        index.map(|index| editors.remove(index).1)
+    let Some(handle) =
+        take_editor_window(&mut cx.global_mut::<AppWindows>().editors, &key, window_id)
+    else {
+        return;
     };
 
-    if let Some(handle) = handle {
-        // `onCleanup(() => { clearTimeout(saveTimer); flushProjectConfig() })`
-        // (`ED/context.ts:1246-1252`): a `.cap` closed inside the 250ms save
-        // debounce still gets its last edit written.
-        if let Ok(pending) = handle.update(cx, |view, _window, _cx| view.pending_save()) {
-            pending.borrow_mut().flush();
+    RecordingSession::global(cx).update(cx, |session, _| {
+        if let Some(pending) = session.preparing_studio_editor_mut()
+            && editor_key(&pending.project_path) == key
+        {
+            pending.presentation.closed(window_id);
         }
-        let instance = handle
-            .update(cx, |view, _window, _cx| view.take_instance())
-            .ok()
-            .flatten();
-        if let Some(instance) = instance {
-            gpui_tokio::Tokio::spawn(cx, async move { instance.dispose().await }).detach();
+    });
+
+    handle.update(cx, |view, _, _| view.cancel_preparing()).ok();
+    let preparing_joins = cx
+        .global_mut::<AppWindows>()
+        .preparing_cleanup
+        .pending(&key);
+    cx.spawn(async move |cx| {
+        for joined in preparing_joins {
+            if let Err(error) = joined.wait().await {
+                tracing::warn!(%error, "Closed preparing editor cleanup failed");
+                return;
+            }
+        }
+        cx.update(|cx| {
+            cx.global_mut::<AppWindows>()
+                .preparing_cleanup
+                .prune_completed()
+        });
+    })
+    .detach();
+
+    // `onCleanup(() => { clearTimeout(saveTimer); flushProjectConfig() })`
+    // (`ED/context.ts:1246-1252`): a `.cap` closed inside the 250ms save
+    // debounce still gets its last edit written.
+    if let Ok(pending) = handle.update(cx, |view, _window, _cx| view.pending_save()) {
+        pending.borrow_mut().flush();
+    }
+    let instance = handle
+        .update(cx, |view, _window, _cx| view.take_instance())
+        .ok()
+        .flatten();
+    if let Some(instance) = instance {
+        let refresh =
+            gpui_tokio::Tokio::spawn(cx, async move { instance.dispose_with_thumbnail().await });
+        cx.spawn(async move |cx| {
+            if refresh.await.unwrap_or(false) {
+                cx.update(|cx| {
+                    refresh_library_after_delete(cx);
+                    let main = cx.global::<AppWindows>().main;
+                    main.update(cx, |view, window, cx| view.refresh_open_library(window, cx))
+                        .ok();
+                });
+            }
+        })
+        .detach();
+    }
+
+    restore_after_editor_close(&key, cx);
+}
+
+fn take_editor_window(
+    editors: &mut Vec<(PathBuf, WindowHandle<EditorWindow>)>,
+    key: &Path,
+    window_id: gpui::WindowId,
+) -> Option<WindowHandle<EditorWindow>> {
+    let index = editors
+        .iter()
+        .position(|(path, handle)| path == key && handle.window_id() == window_id)?;
+    Some(editors.remove(index).1)
+}
+
+fn restore_after_editor_close(key: &Path, cx: &mut App) {
+    let session = RecordingSession::global(cx);
+    if session.read(cx).phase == Phase::Idle
+        && session
+            .read(cx)
+            .editor_recording_target()
+            .is_some_and(|path| editor_key(&path) == key)
+    {
+        if clean_capture_owned(cx) {
+            cancel_clean_capture(cx);
+        } else {
+            abort_editor_recording_flow(cx);
         }
     }
 
@@ -3217,14 +5787,156 @@ pub fn editor_closed(project_path: &Path, cx: &mut App) {
         settings_open,
         "editor window closed"
     );
-    let idle = RecordingSession::global(cx).read(cx).phase == Phase::Idle;
-    if reveal_main_after_editor_close(editors_left, settings_open, idle) {
+    let session = session.read(cx);
+    let capture_safe = session.phase == Phase::Idle || session.capture_stopped_for_editor();
+    if reveal_main_after_editor_close(editors_left, settings_open, capture_safe) {
         show_main_window(cx);
     } else {
         // A dock-activating window closed; the policy has to be recomputed
         // even when the main window is not the thing coming back.
         crate::menus::schedule_dock_sync(cx);
     }
+}
+
+fn editor_deletion_allowed(
+    project_path: &Path,
+    handle: WindowHandle<EditorWindow>,
+    cx: &App,
+) -> Result<(), String> {
+    if !crate::library::known_recordings_dirs().iter().any(|root| {
+        root.canonicalize()
+            .is_ok_and(|root| project_path != root && project_path.starts_with(root))
+    }) {
+        return Err(
+            "This recording is outside the recordings library. Its files were not changed.".into(),
+        );
+    }
+    let windows = cx.global::<AppWindows>();
+    if windows.deleting_editors.contains(project_path) {
+        return Err("This recording is already being deleted.".into());
+    }
+    if !windows
+        .editors
+        .iter()
+        .any(|(path, current)| path == project_path && *current == handle)
+    {
+        return Err(
+            "The editor changed while deletion was being confirmed. The recording was not deleted."
+                .into(),
+        );
+    }
+    let session = RecordingSession::global(cx);
+    if session.read(cx).phase != Phase::Idle
+        || session.read(cx).editor_recording_target().is_some()
+        || clean_capture_owned(cx)
+    {
+        return Err("Finish or cancel the recording before deleting this project.".into());
+    }
+    let editor = handle
+        .read(cx)
+        .map_err(|_| "The editor has already closed. The recording was not deleted.")?;
+    if let Some(reason) = editor.deletion_blocked_reason() {
+        return Err(reason.into());
+    }
+    Ok(())
+}
+
+pub(crate) fn request_editor_deletion(
+    project_path: PathBuf,
+    handle: WindowHandle<EditorWindow>,
+    cx: &mut App,
+) {
+    let key = editor_key(&project_path);
+    cx.spawn(async move |cx| {
+        if let Err(error) = cx.update(|cx| editor_deletion_allowed(&key, handle, cx)) {
+            platform::alert_dialog("Recording retained", &error);
+            return;
+        }
+        if !platform::confirm_dialog("Cap", "Are you sure you want to delete this recording?", "Yes", "No", false) {
+            return;
+        }
+        let prepared = cx.update(|cx| {
+            editor_deletion_allowed(&key, handle, cx)?;
+            let ownership = cap_recording::upload_resume::UploadLock::acquire(&key)
+                .map_err(|error| format!("This recording is still in use. Finish or cancel its upload and try again: {error}"))?;
+            let windows = cx.global_mut::<AppWindows>();
+            windows.deleting_editors.insert(key.clone());
+            windows.editors.retain(|(_, current)| *current != handle);
+            let result = handle.update(cx, |view, window, cx| {
+                let instance = view.prepare_for_deletion(cx)?;
+                window.remove_window();
+                Ok::<_, String>(instance)
+            });
+            match result {
+                Ok(Ok(instance)) => {
+                    restore_after_editor_close(&key, cx);
+                    Ok((instance, ownership))
+                }
+                Ok(Err(error)) => {
+                    let windows = cx.global_mut::<AppWindows>();
+                    windows.deleting_editors.remove(&key);
+                    windows.editors.push((key.clone(), handle));
+                    Err(error)
+                }
+                Err(error) => {
+                    cx.global_mut::<AppWindows>().deleting_editors.remove(&key);
+                    Err(format!("Could not close the editor: {error}"))
+                }
+            }
+        });
+        let (instance, ownership) = match prepared {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                platform::alert_dialog("Recording retained", &error);
+                return;
+            }
+        };
+        let deleting = key.clone();
+        let task = cx.update(|cx| gpui_tokio::Tokio::spawn(cx, async move {
+            delete_after_editor_cleanup(
+                async move {
+                    if let Some(instance) = instance {
+                        for segment in instance.segment_medias.iter() {
+                            for audio in [&segment.audio, &segment.system_audio] {
+                                if let Err(error) = audio.get().await {
+                                    tracing::debug!(%error, "audio reader settled with an error before deletion");
+                                }
+                            }
+                        }
+                        instance.dispose().await;
+                    }
+                    drop(ownership);
+                    Ok(())
+                },
+                crate::upload::queue::delete_recording(deleting),
+            ).await
+        }));
+        let notice = cx.background_executor().timer(std::time::Duration::from_secs(10));
+        futures_util::pin_mut!(task, notice);
+        let result = match futures_util::future::select(&mut task, &mut notice).await {
+            futures_util::future::Either::Left((result, _)) => result,
+            futures_util::future::Either::Right(_) => {
+                platform::alert_dialog("Deletion is still finishing", "Cap is waiting for recording cleanup to finish before completing this deletion.");
+                task.await
+            }
+        }.unwrap_or_else(|error| Err(format!("Recording deletion failed: {error}")));
+        cx.update(|cx| {
+            cx.global_mut::<AppWindows>().deleting_editors.remove(&key);
+            refresh_library_after_delete(cx);
+        });
+        if let Err(error) = result {
+            tracing::error!(path = %key.display(), %error, "recording deletion failed");
+            platform::alert_dialog("Could not delete recording", &error);
+        }
+    }).detach();
+}
+
+async fn delete_after_editor_cleanup(
+    cleanup: impl Future<Output = Result<(), String>>,
+    delete: impl Future<Output = Result<(), String>>,
+) -> Result<(), String> {
+    cleanup.await?;
+    delete.await
 }
 
 /// `addExistingRecordingToEditor` ends with `EditorInstances::remove(window)`
@@ -3237,6 +5949,9 @@ pub fn editor_closed(project_path: &Path, cx: &mut App) {
 /// between.
 pub fn reload_editor(project_path: &Path, cx: &mut App) {
     let key = editor_key(project_path);
+    if cx.global::<AppWindows>().deleting_editors.contains(&key) {
+        return;
+    }
     let handle = {
         let editors = &mut cx.global_mut::<AppWindows>().editors;
         let index = editors.iter().position(|(path, _)| path == &key);
@@ -3313,8 +6028,10 @@ fn reveal_editor_window(project_path: &Path, cx: &mut App) {
             platform::show_native(native);
         }
         cx.update(|cx| {
+            cx.activate(true);
             handle
                 .update(cx, |_, window, cx| {
+                    window.activate_window();
                     platform::kick_display_link(window);
                     cx.notify();
                     window.refresh();
@@ -3367,6 +6084,15 @@ fn set_editor_content_protection(project_path: &Path, hidden: bool, cx: &mut App
 ///   there the window merely stays minimized, here it was hidden outright and
 ///   leaving it hidden would leave the app with no window at all.
 fn editor_recording_finished(editor_path: PathBuf, recording: Option<PathBuf>, cx: &mut App) {
+    cx.global_mut::<AppWindows>().editor_hidden_for_picker = None;
+    cx.global_mut::<AppWindows>().main_hidden_for_picker = false;
+    let main = cx.global::<AppWindows>().main;
+    main.update(cx, |view, _, cx| {
+        view.cancel_deep_link_start();
+        view.clear_target(cx);
+        cx.notify();
+    })
+    .ok();
     set_editor_content_protection(&editor_path, false, cx);
 
     let Some(handle) = editor_window_handle(&editor_path, cx) else {
@@ -3397,13 +6123,37 @@ fn editor_recording_finished(editor_path: PathBuf, recording: Option<PathBuf>, c
 /// would stay hidden forever, since no phase transition is coming.
 pub fn abort_editor_recording_flow(cx: &mut App) {
     let session = RecordingSession::global(cx);
-    let Some(editor_path) = session.update(cx, |session, _| session.take_editor_recording_target())
-    else {
+    if session.read(cx).phase != Phase::Idle || session.read(cx).editor_recording_target().is_none()
+    {
+        return;
+    }
+    let main = cx.global::<AppWindows>().main;
+    main.update(cx, |view, _, _| view.cancel_deep_link_start())
+        .ok();
+    let Some(editor_path) = session.update(cx, |session, cx| {
+        let target = session.take_editor_recording_target();
+        cx.notify();
+        target
+    }) else {
         return;
     };
+    close_target_overlays(cx);
     cx.global_mut::<AppWindows>().editor_hidden_for_picker = None;
+    cx.global_mut::<AppWindows>().main_hidden_for_picker = false;
+    let main = cx.global::<AppWindows>().main;
+    main.update(cx, |view, _, cx| {
+        view.cancel_deep_link_start();
+        view.clear_target(cx);
+        cx.notify();
+    })
+    .ok();
+    hide_main_window(cx);
     tracing::info!(path = %editor_path.display(), "editor recording flow aborted before start");
-    if editor_window_handle(&editor_path, cx).is_some() {
+    if let Some(handle) = editor_window_handle(&editor_path, cx) {
+        hide_main_and_park_camera_preview(cx);
+        handle
+            .update(cx, |view, _, cx| view.editor_picker_dismissed(cx))
+            .ok();
         reveal_editor_window(&editor_path, cx);
     } else {
         show_main_window(cx);
@@ -3460,11 +6210,11 @@ fn controls_origin(config: &StartConfig) -> (f64, f64) {
         return (x, y);
     }
 
-    let display = match &config.target {
-        ScreenCaptureTarget::Display { id } => scap_targets::Display::from_id(id),
-        _ => scap_targets::Display::get_containing_cursor(),
-    }
-    .unwrap_or_else(scap_targets::Display::primary);
+    let display = config
+        .target
+        .display()
+        .or_else(scap_targets::Display::get_containing_cursor)
+        .unwrap_or_else(scap_targets::Display::primary);
 
     match display.raw_handle().logical_bounds() {
         Some(bounds) => (
@@ -3481,15 +6231,27 @@ fn open_controls(
     session: Entity<RecordingSession>,
     cx: &mut App,
 ) -> Option<scap_targets::WindowId> {
+    #[cfg(target_os = "linux")]
+    if clean_capture_active(cx) {
+        return None;
+    }
     let (x, y) = controls_origin(config);
+    let bounds = Bounds {
+        origin: point(px(x as f32), px(y as f32)),
+        size: size(px(CONTROLS_WIDTH), px(CONTROLS_HEIGHT)),
+    };
+    let display = config
+        .target
+        .display()
+        .or_else(scap_targets::Display::get_containing_cursor);
+    let bounds = display_work_area(display.as_ref(), cx)
+        .map(|available| fit_window_bounds(bounds, inset_work_area(available)))
+        .unwrap_or(bounds);
     let has_microphone = config.microphone.is_some();
 
     let handle = cx.open_window(
         WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(Bounds {
-                origin: point(px(x as f32), px(y as f32)),
-                size: size(px(CONTROLS_WIDTH), px(CONTROLS_HEIGHT)),
-            })),
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
             // No titlebar at all: with one, the panel still draws standard
             // window buttons floating in the transparent top of the window.
             titlebar: None,
@@ -3580,7 +6342,7 @@ pub fn screenshot_finished(captured: Option<PathBuf>, cx: &mut App) {
             .ok();
     }
     let main = cx.global::<AppWindows>().main;
-    main.update(cx, |view, window, cx| view.refresh_recents(window, cx))
+    main.update(cx, |view, window, cx| view.refresh_open_library(window, cx))
         .ok();
 
     // The editor owns the foreground now, the way a stopped studio recording
@@ -3597,6 +6359,10 @@ pub fn screenshot_finished(captured: Option<PathBuf>, cx: &mut App) {
 /// Must be reached through `cx.defer` from anything inside an entity update:
 /// opening a window paints it synchronously and would double-lease the caller.
 pub fn open_screenshot_editor(path: PathBuf, cx: &mut App) {
+    #[cfg(target_os = "linux")]
+    if defer_window_until_capture_safe(cx) {
+        return;
+    }
     let Some(bundle) = screenshot_editor::resolve_bundle(&path) else {
         tracing::error!(path = %path.display(), "not a screenshot bundle; not opening the editor");
         return;
@@ -3628,8 +6394,7 @@ pub fn open_screenshot_editor(path: PathBuf, cx: &mut App) {
         return;
     }
 
-    let bounds = Bounds::centered(
-        None,
+    let bounds = opening_window_bounds(
         size(
             px(screenshot_editor::SCREENSHOT_EDITOR_WIDTH),
             px(screenshot_editor::SCREENSHOT_EDITOR_HEIGHT),
@@ -3650,9 +6415,12 @@ pub fn open_screenshot_editor(path: PathBuf, cx: &mut App) {
             show: true,
             is_resizable: true,
             is_minimizable: true,
-            window_min_size: Some(size(
-                px(screenshot_editor::SCREENSHOT_EDITOR_MIN_WIDTH),
-                px(screenshot_editor::SCREENSHOT_EDITOR_MIN_HEIGHT),
+            window_min_size: Some(fitted_window_min_size(
+                size(
+                    px(screenshot_editor::SCREENSHOT_EDITOR_MIN_WIDTH),
+                    px(screenshot_editor::SCREENSHOT_EDITOR_MIN_HEIGHT),
+                ),
+                bounds,
             )),
             ..Default::default()
         },
@@ -3711,8 +6479,6 @@ pub fn close_screenshot_editor_after_delete(bundle: &Path, cx: &mut App) {
     refresh_screenshot_surfaces(cx);
 }
 
-/// Every surface that lists screenshots: the tray's Previous, the settings
-/// Screenshots page, and the main window's Recents.
 pub fn refresh_screenshot_surfaces(cx: &mut App) {
     crate::tray::refresh_previous(cx);
     if let Some(settings) = cx.global::<AppWindows>().settings {
@@ -3721,7 +6487,7 @@ pub fn refresh_screenshot_surfaces(cx: &mut App) {
             .ok();
     }
     let main = cx.global::<AppWindows>().main;
-    main.update(cx, |view, window, cx| view.refresh_recents(window, cx))
+    main.update(cx, |view, window, cx| view.refresh_open_library(window, cx))
         .ok();
 }
 
@@ -3762,7 +6528,7 @@ pub fn screenshot_editor_closed(bundle: &Path, cx: &mut App) {
 pub fn refresh_library_after_delete(cx: &mut App) {
     let main = cx.global::<AppWindows>().main;
     let settings = cx.global::<AppWindows>().settings;
-    main.update(cx, |view, window, cx| view.refresh_recents(window, cx))
+    main.update(cx, |view, window, cx| view.refresh_open_library(window, cx))
         .ok();
     if let Some(settings) = settings {
         settings
@@ -3784,6 +6550,880 @@ fn close_controls(session: &Entity<RecordingSession>, cx: &mut App) {
 mod tests {
     use super::*;
     use crate::store::{DEFAULT_EXCLUDED_WINDOW_TITLES, WindowExclusion, default_excluded_windows};
+
+    #[test]
+    fn small_display_keeps_editor_and_minimum_size_inside_the_work_area() {
+        let available = inset_work_area(Bounds {
+            origin: point(px(0.), px(25.)),
+            size: size(px(1024.), px(684.)),
+        });
+        let preferred = size(px(1275.), px(800.));
+        let bounds = fit_window_bounds(
+            Bounds::centered_at(available.center(), preferred),
+            available,
+        );
+        assert_eq!(bounds.origin, point(px(16.), px(41.)));
+        assert_eq!(bounds.size, size(px(992.), px(652.)));
+        assert_eq!(fitted_window_min_size(preferred, bounds), bounds.size);
+    }
+
+    #[test]
+    fn spacious_display_preserves_preferred_editor_size() {
+        let available = inset_work_area(Bounds {
+            origin: point(px(0.), px(25.)),
+            size: size(px(1920.), px(995.)),
+        });
+        let preferred = size(px(1275.), px(800.));
+        let centered = Bounds::centered_at(available.center(), preferred);
+        assert_eq!(fit_window_bounds(centered, available), centered);
+        assert_eq!(fitted_window_min_size(preferred, centered), preferred);
+    }
+
+    #[test]
+    fn controls_for_an_offscreen_target_stay_on_its_negative_origin_display() {
+        let available = inset_work_area(Bounds {
+            origin: point(px(-1440.), px(-180.)),
+            size: size(px(1440.), px(850.)),
+        });
+        for origin in [point(px(-2200.), px(-500.)), point(px(20.), px(800.))] {
+            let bounds = fit_window_bounds(
+                Bounds {
+                    origin,
+                    size: size(px(CONTROLS_WIDTH), px(CONTROLS_HEIGHT)),
+                },
+                available,
+            );
+            assert_eq!(bounds.size, size(px(CONTROLS_WIDTH), px(CONTROLS_HEIGHT)));
+            assert!(bounds.origin.x >= available.origin.x);
+            assert!(bounds.origin.y >= available.origin.y);
+            assert!(bounds.right() <= available.right());
+            assert!(bounds.bottom() <= available.bottom());
+        }
+    }
+
+    #[test]
+    fn scaled_work_areas_fit_without_changing_logical_pixel_sizes() {
+        for logical_size in [size(px(1280.), px(650.)), size(px(853.), px(455.))] {
+            let available = inset_work_area(Bounds {
+                origin: point(px(0.), px(0.)),
+                size: logical_size,
+            });
+            let bounds = fit_window_bounds(
+                Bounds::centered_at(available.center(), size(px(782.), px(775.))),
+                available,
+            );
+            assert_eq!(bounds.size.width, px(782.));
+            assert_eq!(bounds.size.height, logical_size.height - px(32.));
+            let minimum = fitted_window_min_size(size(px(780.), px(560.)), bounds);
+            assert!(minimum.width <= bounds.size.width);
+            assert!(minimum.height <= bounds.size.height);
+        }
+    }
+
+    #[test]
+    fn tiny_work_area_cannot_produce_an_inverted_clamp_range() {
+        let available = inset_work_area(Bounds {
+            origin: point(px(10.), px(20.)),
+            size: size(px(1.), px(1.)),
+        });
+        let bounds = fit_window_bounds(
+            Bounds::centered_at(available.center(), size(px(782.), px(775.))),
+            available,
+        );
+        assert_eq!(bounds, available);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_work_area_preserves_horizontal_and_vertical_display_origins() {
+        for (display_origin, appkit_y) in [
+            (point(px(-1440.), px(0.)), 180.),
+            (point(px(1920.), px(0.)), 180.),
+            (point(px(0.), px(-900.)), 1080.),
+            (point(px(0.), px(1080.)), -900.),
+        ] {
+            let display = Bounds {
+                origin: display_origin,
+                size: size(px(1440.), px(900.)),
+            };
+            let available = global_macos_work_area(
+                Bounds {
+                    origin: point(px(0.), px(appkit_y + 25.)),
+                    size: size(px(1440.), px(825.)),
+                },
+                display,
+                px(1080.),
+            );
+            assert_eq!(available.origin, display_origin + point(px(0.), px(25.)));
+            assert_eq!(available.size, size(px(1440.), px(825.)));
+        }
+    }
+
+    fn area_target(display: &str, x: f64, y: f64, width: f64, height: f64) -> ScreenCaptureTarget {
+        ScreenCaptureTarget::Area {
+            screen: display.parse().unwrap(),
+            bounds: scap_targets::bounds::LogicalBounds::new(
+                scap_targets::bounds::LogicalPosition::new(x, y),
+                scap_targets::bounds::LogicalSize::new(width, height),
+            ),
+        }
+    }
+
+    #[test]
+    fn recording_outline_rejects_a_crop_changed_during_start_preflight() {
+        let admitted = area_target("1", -120., 80., 640., 480.);
+        let same = area_target("1", -120., 80., 640., 480.);
+        assert!(area_overlay_matches(&admitted, &same, true));
+        for changed in [
+            area_target("1", -119., 80., 640., 480.),
+            area_target("1", -120., 81., 640., 480.),
+            area_target("1", -120., 80., 641., 480.),
+            area_target("1", -120., 80., 640., 481.),
+            area_target("2", -120., 80., 640., 480.),
+        ] {
+            assert!(!area_overlay_matches(&admitted, &changed, true));
+        }
+    }
+
+    #[test]
+    fn recording_outline_requires_an_area_and_confirmed_capture_exclusion() {
+        let area = area_target("1", 0., 0., 640., 480.);
+        assert!(!area_overlay_matches(&area, &area, false));
+        for other in [
+            ScreenCaptureTarget::Display {
+                id: "1".parse().unwrap(),
+            },
+            ScreenCaptureTarget::Window {
+                id: "1".parse().unwrap(),
+            },
+            ScreenCaptureTarget::CameraOnly,
+        ] {
+            assert!(!area_overlay_matches(&area, &other, true));
+            assert!(!area_overlay_matches(&other, &area, true));
+        }
+    }
+
+    #[test]
+    fn dock_reopen_uses_registered_windows_and_falls_back_after_delete() {
+        let editor = WindowHandle::<EditorWindow>::new(1_u64.into());
+        let screenshot = WindowHandle::<ScreenshotEditorWindow>::new(2_u64.into());
+        let settings = WindowHandle::<SettingsWindow>::new(3_u64.into());
+        let candidates = [editor.into(), screenshot.into(), settings.into()];
+        let mut live = HashSet::from([editor.window_id(), settings.window_id()]);
+        assert_eq!(
+            first_registered_reopen_target(candidates, &live),
+            Some(editor.into())
+        );
+        live.remove(&editor.window_id());
+        assert_eq!(
+            first_registered_reopen_target(candidates, &live),
+            Some(settings.into())
+        );
+        live.clear();
+        assert_eq!(first_registered_reopen_target(candidates, &live), None);
+    }
+
+    #[test]
+    fn old_editor_close_preserves_a_reopened_window_for_the_same_project() {
+        let path = PathBuf::from("recording.cap");
+        let old = WindowHandle::<EditorWindow>::new(1_u64.into());
+        let current = WindowHandle::<EditorWindow>::new(2_u64.into());
+        let other = WindowHandle::<EditorWindow>::new(3_u64.into());
+        let mut editors = vec![(path.clone(), current), (PathBuf::from("other.cap"), other)];
+        assert_eq!(
+            take_editor_window(&mut editors, &path, old.window_id()),
+            None
+        );
+        assert_eq!(editors.len(), 2);
+        assert_eq!(
+            take_editor_window(&mut editors, &path, current.window_id()),
+            Some(current)
+        );
+        assert_eq!(editors, vec![(PathBuf::from("other.cap"), other)]);
+    }
+
+    struct DeleteFixture(PathBuf);
+
+    impl DeleteFixture {
+        fn new() -> Self {
+            let directory = std::env::temp_dir()
+                .join(format!("cap-editor-delete-{}", crate::store::new_uuid_v4()));
+            std::fs::create_dir(&directory).unwrap();
+            std::fs::write(directory.join("source.mp4"), b"retained recording bytes").unwrap();
+            Self(directory)
+        }
+    }
+
+    impl Drop for DeleteFixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[tokio::test]
+    async fn recording_files_are_not_deleted_before_editor_cleanup_finishes() {
+        let fixture = DeleteFixture::new();
+        let source = fixture.0.join("source.mp4");
+        let (complete, completed) = tokio::sync::oneshot::channel();
+        let deletion = delete_after_editor_cleanup(
+            async { completed.await.map_err(|error| error.to_string()) },
+            async { std::fs::remove_file(&source).map_err(|error| error.to_string()) },
+        );
+        tokio::pin!(deletion);
+        tokio::select! {
+            biased;
+            _ = &mut deletion => panic!("deletion ran before cleanup completed"),
+            _ = tokio::task::yield_now() => {}
+        }
+        assert_eq!(std::fs::read(&source).unwrap(), b"retained recording bytes");
+        complete.send(()).unwrap();
+        deletion.await.unwrap();
+        assert!(!source.exists());
+    }
+
+    #[tokio::test]
+    async fn failed_editor_cleanup_leaves_original_recording_bytes_untouched() {
+        let fixture = DeleteFixture::new();
+        let source = fixture.0.join("source.mp4");
+        let result = delete_after_editor_cleanup(async { Err("cleanup failed".into()) }, async {
+            std::fs::remove_file(&source).map_err(|error| error.to_string())
+        })
+        .await;
+        assert_eq!(result, Err("cleanup failed".into()));
+        assert_eq!(std::fs::read(source).unwrap(), b"retained recording bytes");
+    }
+
+    #[cfg(target_os = "linux")]
+    fn pending_clean_capture(mode: RecordingMode, wayland: bool) -> CleanCaptureUi {
+        CleanCaptureUi {
+            generation: 7,
+            config: Some(StartConfig {
+                mode,
+                target: ScreenCaptureTarget::Display {
+                    id: "1".parse().unwrap(),
+                },
+                microphone: None,
+                camera: None,
+                device_settings: crate::store::RecordingDeviceSettings::default(),
+                input_readiness: crate::feeds::InputReadiness::default(),
+                system_audio: false,
+                excluded_windows: Vec::new(),
+                camera_feed: None,
+                mic_feed: None,
+                linux_instant_camera: None,
+                start_gate: None,
+            }),
+            gate: CleanCaptureGate::default(),
+            camera: None,
+            camera_was_visible: false,
+            main_was_visible: true,
+            requested_inputs: CleanCaptureInputs {
+                camera: None,
+                microphone: None,
+            },
+            preview_was_rendering: Some(true),
+            wayland,
+            retained_windows: Vec::new(),
+            restoring: false,
+            restoration_error: None,
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn clean_capture_delayed_start_consumes_only_the_started_generation() {
+        use global_hotkey::HotKeyState::{Pressed, Released};
+        for mode in [RecordingMode::Studio, RecordingMode::Instant] {
+            for wayland in [false, true] {
+                let mut lease = pending_clean_capture(mode, wayland);
+                let generation = lease.generation;
+                assert!(lease.take_start_config(generation).is_none());
+                assert_eq!(lease.gate.shortcut(Pressed), None);
+                assert!(lease.take_start_config(generation).is_none());
+                assert_eq!(
+                    lease.gate.shortcut(Released),
+                    Some(CleanCaptureAction::Start)
+                );
+                assert!(lease.take_start_config(generation + 1).is_none());
+                assert!(lease.config.is_some());
+                assert!(lease.take_start_config(generation).is_some());
+                assert!(lease.take_start_config(generation).is_none());
+                assert_eq!(lease.gate.shortcut(Pressed), None);
+                assert_eq!(
+                    lease.gate.shortcut(Released),
+                    Some(CleanCaptureAction::Stop)
+                );
+                assert!(lease.gate.started);
+                if wayland {
+                    assert!(lease.begin_restore());
+                    assert!(lease.config.is_none());
+                    assert!(lease.gate.started);
+                }
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn clean_capture_stop_cancels_delayed_start_before_restore_finishes() {
+        use global_hotkey::HotKeyState::{Pressed, Released};
+        for mode in [RecordingMode::Studio, RecordingMode::Instant] {
+            let mut lease = pending_clean_capture(mode, true);
+            let generation = lease.generation;
+            assert_eq!(lease.gate.shortcut(Pressed), None);
+            assert_eq!(
+                lease.gate.shortcut(Released),
+                Some(CleanCaptureAction::Start)
+            );
+            assert_eq!(lease.gate.shortcut(Pressed), None);
+            assert_eq!(
+                lease.gate.shortcut(Released),
+                Some(CleanCaptureAction::Stop)
+            );
+            assert!(lease.begin_restore());
+            assert!(lease.config.is_none());
+            assert!(lease.restoring);
+            assert!(lease.gate.started);
+            assert!(lease.take_start_config(generation).is_none());
+            assert!(!lease.begin_restore());
+            assert!(lease.take_start_config(generation).is_none());
+            lease.restoration_error = Some("Stop cleanup is unconfirmed".into());
+            assert!(lease.take_start_config(generation).is_none());
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn clean_capture_delayed_start_rejects_restoring_and_failed_leases() {
+        for (restoring, restoration_error) in [
+            (true, None),
+            (false, Some("Window restoration failed")),
+            (true, Some("Stop cleanup failed")),
+        ] {
+            let mut lease = pending_clean_capture(RecordingMode::Studio, true);
+            lease.gate.started = true;
+            lease.restoring = restoring;
+            lease.restoration_error = restoration_error.map(str::to_string);
+            assert!(lease.take_start_config(lease.generation).is_none());
+            assert!(lease.config.is_some());
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn clean_capture_restoration_invalidates_preflight_config() {
+        for started in [false, true] {
+            let mut lease = pending_clean_capture(RecordingMode::Studio, true);
+            lease.gate.started = started;
+            assert!(lease.begin_restore());
+            assert!(lease.config.is_none());
+            assert_eq!(lease.gate.started, started);
+            assert!(lease.take_start_config(lease.generation).is_none());
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn clean_capture_restore_retry_requires_safe_idle_wayland_failure() {
+        for phase in [
+            Phase::Idle,
+            Phase::Starting,
+            Phase::Recording { paused: false },
+            Phase::Recording { paused: true },
+            Phase::Stopping,
+        ] {
+            for cleanup_safe in [false, true] {
+                for (wayland, failed) in
+                    [(false, false), (false, true), (true, false), (true, true)]
+                {
+                    let mut lease = pending_clean_capture(RecordingMode::Studio, wayland);
+                    lease.gate.started = true;
+                    lease.restoring = true;
+                    lease.restoration_error = failed.then(|| "Window restoration failed".into());
+                    let permitted = phase == Phase::Idle && cleanup_safe && wayland && failed;
+                    assert_eq!(lease.prepare_restore_retry(phase, cleanup_safe), permitted);
+                    if permitted {
+                        assert!(lease.config.is_none());
+                        assert!(lease.restoration_error.is_none());
+                        assert!(!lease.restoring);
+                        assert!(lease.take_start_config(7).is_none());
+                        assert!(lease.begin_restore());
+                    } else {
+                        assert!(lease.config.is_some());
+                        assert_eq!(lease.restoration_error.is_some(), failed);
+                        assert!(lease.restoring);
+                    }
+                    assert_eq!(lease.generation, 7);
+                    assert!(lease.gate.started);
+                    assert!(lease.take_start_config(7).is_none());
+                }
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn clean_capture_restore_retry_allows_one_attempt_per_failure() {
+        for mode in [RecordingMode::Studio, RecordingMode::Instant] {
+            for started in [false, true] {
+                let mut lease = pending_clean_capture(mode, true);
+                lease.gate.started = started;
+                assert!(lease.begin_restore());
+                for error in ["Window restoration failed", "Stop cleanup failed"] {
+                    lease.restoration_error = Some(error.into());
+                    assert!(!lease.begin_restore());
+                    assert!(lease.prepare_restore_retry(Phase::Idle, true));
+                    assert!(lease.begin_restore());
+                    assert!(!lease.prepare_restore_retry(Phase::Idle, true));
+                    assert!(!lease.begin_restore());
+                    assert!(lease.config.is_none());
+                    assert!(lease.restoration_error.is_none());
+                    assert!(lease.restoring);
+                    assert_eq!(lease.generation, 7);
+                    assert_eq!(lease.gate.started, started);
+                    assert_eq!(lease.preview_was_rendering, Some(true));
+                    assert!(lease.main_was_visible);
+                    assert!(lease.take_start_config(7).is_none());
+                }
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn clean_capture_reopen_waits_for_owned_wayland_restoration() {
+        for mode in [RecordingMode::Studio, RecordingMode::Instant] {
+            for started in [false, true] {
+                let mut lease = pending_clean_capture(mode, true);
+                lease.gate.started = started;
+                assert!(lease.begin_restore());
+                for _ in 0..2 {
+                    assert_eq!(
+                        clean_capture_reopen_action(Some(&mut lease), Phase::Idle, true),
+                        CleanCaptureReopenAction::WaitForRestore
+                    );
+                    assert!(lease.restoring);
+                    assert!(lease.restoration_error.is_none());
+                    assert!(lease.config.is_none());
+                    assert_eq!(lease.gate.started, started);
+                    assert_eq!(lease.generation, 7);
+                }
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn clean_capture_reopen_retries_failure_then_waits_until_cleanup() {
+        for mode in [RecordingMode::Studio, RecordingMode::Instant] {
+            for started in [false, true] {
+                let mut lease = pending_clean_capture(mode, true);
+                lease.gate.started = started;
+                assert!(lease.begin_restore());
+                for error in ["Window restoration failed", "Stop cleanup failed"] {
+                    lease.restoration_error = Some(error.into());
+                    assert_eq!(
+                        clean_capture_reopen_action(Some(&mut lease), Phase::Idle, true),
+                        CleanCaptureReopenAction::RetryRestore
+                    );
+                    assert!(lease.take_start_config(7).is_none());
+                    assert!(lease.begin_restore());
+                    assert_eq!(
+                        clean_capture_reopen_action(Some(&mut lease), Phase::Idle, true),
+                        CleanCaptureReopenAction::WaitForRestore
+                    );
+                    assert!(lease.restoring);
+                    assert!(lease.restoration_error.is_none());
+                    assert_eq!(lease.gate.started, started);
+                    assert_eq!(lease.generation, 7);
+                }
+                assert_eq!(
+                    clean_capture_reopen_action(None, Phase::Idle, true),
+                    CleanCaptureReopenAction::Continue
+                );
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn clean_capture_reopen_preserves_other_paths_and_rejects_unsafe_retry() {
+        use CleanCaptureReopenAction::{Continue, WaitForRestore};
+        for (phase, cleanup_safe, wayland, restoring, failed, expected) in [
+            (Phase::Idle, true, false, false, false, Continue),
+            (Phase::Idle, true, false, true, true, Continue),
+            (Phase::Idle, true, true, false, false, Continue),
+            (Phase::Idle, false, true, true, true, WaitForRestore),
+            (Phase::Starting, true, true, true, true, WaitForRestore),
+            (
+                Phase::Recording { paused: false },
+                true,
+                true,
+                true,
+                true,
+                WaitForRestore,
+            ),
+            (
+                Phase::Recording { paused: true },
+                true,
+                true,
+                true,
+                true,
+                WaitForRestore,
+            ),
+            (Phase::Stopping, true, true, true, true, WaitForRestore),
+        ] {
+            let mut lease = pending_clean_capture(RecordingMode::Studio, wayland);
+            lease.restoring = restoring;
+            lease.restoration_error = failed.then(|| "Window restoration failed".into());
+            assert_eq!(
+                clean_capture_reopen_action(Some(&mut lease), phase, cleanup_safe),
+                expected
+            );
+            assert!(lease.config.is_some());
+            assert_eq!(lease.restoring, restoring);
+            assert_eq!(lease.restoration_error.is_some(), failed);
+            assert_eq!(lease.generation, 7);
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn restoration_waits_for_the_last_owned_window() {
+        let (send, receive) = flume::bounded::<anyhow::Result<(u64, bool)>>(1);
+        let receipt = async move { receive.recv_async().await };
+        let mut restored = Box::pin(acknowledge_restored_windows(
+            vec![(true, receipt)],
+            Vec::new(),
+        ));
+        assert!(futures_util::poll!(&mut restored).is_pending());
+        send.send(Ok((1, true))).unwrap();
+        restored.await.unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn restoration_keeps_errors_and_checks_every_window() {
+        let receipts = vec![
+            (true, std::future::ready(Ok::<_, String>(Ok((1, false))))),
+            (
+                true,
+                std::future::ready(Err::<anyhow::Result<(u64, bool)>, _>(
+                    "window closed".to_string(),
+                )),
+            ),
+        ];
+        let error = acknowledge_restored_windows(receipts, vec!["missing window".into()])
+            .await
+            .unwrap_err();
+        assert!(error.contains("wrong visibility"));
+        assert!(error.contains("window closed"));
+        assert!(error.contains("missing window"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn clean_capture_requires_delivered_press_and_release() {
+        use global_hotkey::HotKeyState::{Pressed, Released};
+        let mut gate = CleanCaptureGate::default();
+        assert_eq!(gate.shortcut(Released), None);
+        assert_eq!(gate.shortcut(Pressed), None);
+        assert!(!gate.started);
+        assert_eq!(gate.shortcut(Pressed), None);
+        assert_eq!(gate.shortcut(Released), Some(CleanCaptureAction::Start));
+        assert!(gate.started);
+        assert_eq!(gate.shortcut(Released), None);
+        assert_eq!(gate.shortcut(Pressed), None);
+        assert_eq!(gate.shortcut(Released), Some(CleanCaptureAction::Stop));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn clean_capture_restart_keeps_stop_and_new_lease_requires_proof() {
+        use global_hotkey::HotKeyState::{Pressed, Released};
+        let mut gate = CleanCaptureGate {
+            pressed: false,
+            started: true,
+        };
+        assert_eq!(gate.shortcut(Pressed), None);
+        assert_eq!(gate.shortcut(Released), Some(CleanCaptureAction::Stop));
+        let mut new_gate = CleanCaptureGate::default();
+        assert_eq!(new_gate.shortcut(Released), None);
+        assert!(!new_gate.started);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn monitor_capture_uses_acknowledged_visibility_on_x11_and_wayland() {
+        let display = ScreenCaptureTarget::Display {
+            id: "1".parse().unwrap(),
+        };
+        let area = ScreenCaptureTarget::Area {
+            screen: "1".parse().unwrap(),
+            bounds: scap_targets::bounds::LogicalBounds::new(
+                scap_targets::bounds::LogicalPosition::new(0.0, 0.0),
+                scap_targets::bounds::LogicalSize::new(100.0, 100.0),
+            ),
+        };
+        let window = ScreenCaptureTarget::Window {
+            id: "1".parse().unwrap(),
+        };
+        for mode in [RecordingMode::Studio, RecordingMode::Instant] {
+            for camera_requested in [false, true] {
+                for target in [&display, &area] {
+                    assert!(clean_capture_supported(
+                        mode,
+                        target,
+                        camera_requested,
+                        true
+                    ));
+                    assert!(clean_capture_supported(
+                        mode,
+                        target,
+                        camera_requested,
+                        false
+                    ));
+                }
+            }
+        }
+        for target in [&window, &ScreenCaptureTarget::CameraOnly] {
+            assert!(!clean_capture_supported(
+                RecordingMode::Studio,
+                target,
+                true,
+                true
+            ));
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn clean_capture_covers_screen_overlays_but_not_camera_only() {
+        let display = ScreenCaptureTarget::Display {
+            id: "1".parse().unwrap(),
+        };
+        assert!(clean_capture_supported(
+            RecordingMode::Studio,
+            &display,
+            false,
+            false
+        ));
+        assert!(clean_capture_supported(
+            RecordingMode::Studio,
+            &display,
+            false,
+            true
+        ));
+        assert!(clean_capture_supported(
+            RecordingMode::Instant,
+            &display,
+            false,
+            false
+        ));
+        assert!(!clean_capture_supported(
+            RecordingMode::Studio,
+            &ScreenCaptureTarget::CameraOnly,
+            true,
+            false
+        ));
+        assert!(!clean_capture_supported(
+            RecordingMode::Studio,
+            &ScreenCaptureTarget::Window {
+                id: "1".parse().unwrap()
+            },
+            true,
+            false
+        ));
+        let window = ScreenCaptureTarget::Window {
+            id: "1".parse().unwrap(),
+        };
+        assert!(clean_capture_supported(
+            RecordingMode::Instant,
+            &window,
+            true,
+            false
+        ));
+        assert!(!clean_capture_supported(
+            RecordingMode::Instant,
+            &window,
+            false,
+            false
+        ));
+        assert!(!clean_capture_supported(
+            RecordingMode::Instant,
+            &window,
+            true,
+            true
+        ));
+        assert!(!clean_capture_supported(
+            RecordingMode::Instant,
+            &ScreenCaptureTarget::CameraOnly,
+            true,
+            false
+        ));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn instant_camera_maps_physical_origins_without_monitor_scale_guessing() {
+        use camera_window::{LinuxCameraPhysicalRect, LinuxCameraRecordingSnapshot};
+        let capture = LinuxCameraPhysicalRect {
+            x: -1920,
+            y: -1200,
+            width: 1920,
+            height: 1080,
+        };
+        let snapshot = LinuxCameraRecordingSnapshot {
+            content_rect: LinuxCameraPhysicalRect {
+                x: -1860,
+                y: -1100,
+                width: 230,
+                height: 230,
+            },
+            state: crate::store::CameraWindowState::default(),
+            corner_radius_pixels: 115.0,
+        };
+        let presentation = linux_camera_presentation(snapshot, capture).unwrap();
+        assert_eq!(presentation.rect.x, 60);
+        assert_eq!(presentation.rect.y, 100);
+        assert_eq!(presentation.rect.width, 230);
+        assert_eq!(presentation.rect.height, 230);
+        assert_eq!(
+            presentation.shape,
+            cap_recording::instant_recording::LinuxCameraShape::Round
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn instant_camera_keeps_live_full_shape_mirror_and_effect_request() {
+        use crate::store::{BlurMode, CameraShape, CameraWindowState};
+        use camera_window::{LinuxCameraPhysicalRect, LinuxCameraRecordingSnapshot};
+        use cap_recording::instant_recording::{LinuxCameraEffect, LinuxCameraShape};
+        let capture = LinuxCameraPhysicalRect {
+            x: 0,
+            y: 0,
+            width: 1280,
+            height: 720,
+        };
+        let snapshot = LinuxCameraRecordingSnapshot {
+            content_rect: LinuxCameraPhysicalRect {
+                x: 160,
+                y: 80,
+                width: 600,
+                height: 300,
+            },
+            state: CameraWindowState {
+                shape: CameraShape::Full,
+                mirrored: true,
+                background_blur: BlurMode::Heavy,
+                ..CameraWindowState::default()
+            },
+            corner_radius_pixels: 36.0,
+        };
+        let presentation = linux_camera_presentation(snapshot, capture).unwrap();
+        assert!(presentation.mirrored);
+        assert_eq!(presentation.effect, LinuxCameraEffect::BackgroundBlur);
+        assert_eq!(presentation.rect.width, 600);
+        assert_eq!(presentation.rect.height, 300);
+        assert_eq!(
+            presentation.shape,
+            LinuxCameraShape::RoundedRectangle { radius_pixels: 36 }
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn instant_camera_does_not_crop_or_omit_an_outside_preview() {
+        use camera_window::{LinuxCameraPhysicalRect, LinuxCameraRecordingSnapshot};
+        let capture = LinuxCameraPhysicalRect {
+            x: 100,
+            y: 100,
+            width: 1000,
+            height: 600,
+        };
+        for (x, y) in [(99, 100), (100, 99), (871, 100), (100, 471)] {
+            let snapshot = LinuxCameraRecordingSnapshot {
+                content_rect: LinuxCameraPhysicalRect {
+                    x,
+                    y,
+                    width: 230,
+                    height: 230,
+                },
+                state: crate::store::CameraWindowState::default(),
+                corner_radius_pixels: 115.0,
+            };
+            let error = linux_camera_presentation(snapshot, capture).unwrap_err();
+            assert!(error.to_string().contains("Move the whole camera preview"));
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn instant_camera_preserves_one_pixel_rounding_without_square_crop() {
+        use camera_window::{LinuxCameraPhysicalRect, LinuxCameraRecordingSnapshot};
+        let capture = LinuxCameraPhysicalRect {
+            x: 0,
+            y: 0,
+            width: 1280,
+            height: 720,
+        };
+        let mut snapshot = LinuxCameraRecordingSnapshot {
+            content_rect: LinuxCameraPhysicalRect {
+                x: 200,
+                y: 100,
+                width: 307,
+                height: 306,
+            },
+            state: crate::store::CameraWindowState::default(),
+            corner_radius_pixels: 153.3333,
+        };
+        let presentation = linux_camera_presentation(snapshot, capture).unwrap();
+        assert_eq!(presentation.rect.width, 307);
+        assert_eq!(presentation.rect.height, 306);
+        assert_eq!(
+            presentation.shape,
+            cap_recording::instant_recording::LinuxCameraShape::RoundedRectangle {
+                radius_pixels: 153
+            }
+        );
+        snapshot.content_rect.width = 308;
+        assert!(linux_camera_presentation(snapshot, capture).is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn instant_camera_reference_keeps_odd_window_dimensions_and_rejects_invalid_bounds() {
+        let bounds = linux_window_capture_bounds(-40.0, 31.0, 1281.0, 721.0).unwrap();
+        assert_eq!((bounds.x, bounds.y), (-40, 31));
+        assert_eq!((bounds.width, bounds.height), (1281, 721));
+        for value in [
+            f64::NAN,
+            f64::INFINITY,
+            0.0,
+            1.0,
+            400.5,
+            f64::from(u32::MAX),
+        ] {
+            assert!(linux_window_capture_bounds(0.0, 0.0, value, 720.0).is_err());
+        }
+        assert!(linux_window_capture_bounds(-0.5, 0.0, 1280.0, 720.0).is_err());
+        assert!(linux_window_capture_bounds(0.0, f64::INFINITY, 1280.0, 720.0).is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn instant_camera_area_reference_uses_shared_capture_edge_rounding() {
+        let capture = cap_recording::sources::screen_capture::x11_capture_rect(
+            -1920.0,
+            0.0,
+            1920.0,
+            1080.0,
+            Some((10.25, 20.5, 800.25, 600.25)),
+        )
+        .unwrap();
+        assert_eq!(capture, (-1910, 20, 800, 600));
+    }
 
     /// `restore_main_windows_if_no_editors` (`lib.rs:6242-6262`): the main
     /// window comes back only when the closing editor was the last one of
@@ -3997,9 +7637,6 @@ mod tests {
         assert!(excluded_own_windows(&by_identity).is_empty());
     }
 
-    /// `apply_content_protection` walks the same rules but skips the camera
-    /// window outright (`windows.rs:3393-3398`); the camera's protection is the
-    /// mode's business instead (`recording.rs:1617-1624`).
     #[test]
     fn content_protection_skips_the_camera_and_follows_the_mode() {
         let studio = own_window_exclusion_rules(default_excluded_windows(), RecordingMode::Studio);
@@ -4008,6 +7645,7 @@ mod tests {
             vec![
                 OwnWindow::Main,
                 OwnWindow::Settings,
+                #[cfg(not(target_os = "macos"))]
                 OwnWindow::Controls,
                 OwnWindow::ModeSelect,
                 OwnWindow::Teleprompter,
@@ -4064,6 +7702,10 @@ mod tests {
             camera_park_position((0.4, 0.), window, (320.3, 240.)),
             Some((564., 394.))
         );
+        assert_eq!(
+            camera_park_position((-1920.5, 0.), window, (320., 240.)),
+            Some((-1356., 394.))
+        );
 
         // Exactly one padding on each side still fits; one point more does not.
         let snug = AreaRect {
@@ -4078,5 +7720,129 @@ mod tests {
         );
         assert_eq!(camera_park_position((0., 0.), snug, (321., 240.)), None);
         assert_eq!(camera_park_position((0., 0.), snug, (320., 241.)), None);
+    }
+
+    #[test]
+    fn area_camera_keeps_toolbar_height_and_restores_the_original_scale() {
+        let crop = AreaRect {
+            x: 100.,
+            y: 50.,
+            width: 800.,
+            height: 600.,
+        };
+        assert_eq!(
+            camera_area_bounds((0., 0.), crop, (320., 376.)),
+            Some(AreaRect {
+                x: 640.,
+                y: 334.,
+                width: 244.,
+                height: 300.,
+            })
+        );
+        assert_eq!(
+            camera_area_bounds(
+                (0., 0.),
+                AreaRect {
+                    width: 1200.,
+                    height: 1000.,
+                    ..crop
+                },
+                (320., 376.)
+            ),
+            Some(AreaRect {
+                x: 964.,
+                y: 658.,
+                width: 320.,
+                height: 376.,
+            })
+        );
+    }
+
+    #[test]
+    fn area_camera_preserves_landscape_and_portrait_content_aspects() {
+        let crop = AreaRect {
+            x: 100.,
+            y: 50.,
+            width: 600.,
+            height: 400.,
+        };
+        assert_eq!(
+            camera_area_bounds((0., 0.), crop, (320., 236.)),
+            Some(AreaRect {
+                x: 540.,
+                y: 297.,
+                width: 144.,
+                height: 137.,
+            })
+        );
+        assert_eq!(
+            camera_area_bounds((0., 0.), crop, (180., 376.)),
+            Some(AreaRect {
+                x: 603.,
+                y: 234.,
+                width: 81.,
+                height: 200.,
+            })
+        );
+    }
+
+    #[test]
+    fn area_camera_uses_the_minimum_size_and_requires_room_beyond_both_insets() {
+        let crop = AreaRect {
+            x: 0.,
+            y: 0.,
+            width: 200.,
+            height: 200.,
+        };
+        assert_eq!(
+            camera_area_bounds((0., 0.), crop, (320., 376.)),
+            Some(AreaRect {
+                x: 84.,
+                y: 28.,
+                width: 100.,
+                height: 156.,
+            })
+        );
+        assert_eq!(
+            camera_area_bounds(
+                (0., 0.),
+                AreaRect {
+                    width: 132.,
+                    ..crop
+                },
+                (320., 376.)
+            ),
+            None
+        );
+        assert_eq!(
+            camera_area_bounds(
+                (0., 0.),
+                AreaRect {
+                    height: 188.,
+                    ..crop
+                },
+                (320., 376.)
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn area_camera_position_preserves_the_display_origin() {
+        let crop = AreaRect {
+            x: 100.,
+            y: 50.,
+            width: 800.,
+            height: 600.,
+        };
+        assert_eq!(
+            camera_area_bounds((-1920.5, -1080.25), crop, (320., 376.)),
+            Some(AreaRect {
+                x: -1280.5,
+                y: -746.25,
+                width: 244.,
+                height: 300.,
+            })
+        );
     }
 }

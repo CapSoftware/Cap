@@ -1,5 +1,4 @@
 import { arch, type as ostype } from "@tauri-apps/plugin-os";
-import { relaunch } from "@tauri-apps/plugin-process";
 import type { CheckOptions } from "@tauri-apps/plugin-updater";
 import { commands } from "~/utils/tauri";
 
@@ -24,7 +23,7 @@ export function getUpdaterCheckOptions(): CheckOptions {
 
 export async function restartAfterUpdate(): Promise<void> {
 	await commands.updatesDownloadAndInstall();
-	await relaunch();
+	await commands.restartApp();
 }
 
 export async function returnToGpui(): Promise<void> {

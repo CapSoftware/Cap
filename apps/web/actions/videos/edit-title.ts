@@ -3,10 +3,10 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { videos } from "@cap/database/schema";
-import type { VideoMetadata } from "@cap/database/types";
 import type { Video } from "@cap/web-domain";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { enqueueVideoStorageNameSync } from "@/lib/sync-video-storage-names";
 
 export async function editTitle(videoId: Video.VideoId, title: string) {
 	const user = await getCurrentUser();
@@ -32,18 +32,14 @@ export async function editTitle(videoId: Video.VideoId, title: string) {
 	}
 
 	try {
-		const metadata = (video.metadata as VideoMetadata) || {};
-
 		await db()
 			.update(videos)
 			.set({
 				name: title,
-				metadata: {
-					...metadata,
-					titleManuallyEdited: true,
-				},
+				metadata: sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.titleManuallyEdited', true)`,
 			})
 			.where(eq(videos.id, videoId));
+		await enqueueVideoStorageNameSync(videoId);
 
 		revalidatePath("/dashboard/caps");
 		revalidatePath("/dashboard/shared-caps");

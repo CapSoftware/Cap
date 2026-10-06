@@ -1,5 +1,4 @@
 import { createEventListenerMap } from "@solid-primitives/event-listener";
-import { cx } from "cva";
 import { createMemo, createRoot, For } from "solid-js";
 
 import { useEditorContext } from "../context";
@@ -144,10 +143,11 @@ export function CaptionsTrack(props: {
 			<For
 				each={captionSegments()}
 				fallback={
-					<div class="text-center text-sm text-(--text-tertiary) flex flex-col gap-2 justify-center items-center inset-0 w-full bg-gray-3/20 dark:bg-gray-3/10 rounded-xl">
-						<div>No captions</div>
+					<div class="cap-empty-lane">
+						<span>No captions</span>
 						<button
-							class="h-8 px-3 rounded-lg border border-green-7/50 bg-green-6/15 text-green-11 text-xs font-medium transition-colors hover:bg-green-6/25 disabled:opacity-50 disabled:cursor-not-allowed"
+							type="button"
+							class="cap-empty-lane-action outline-hidden"
 							disabled={props.isGenerating}
 							onMouseDown={(e) => e.stopPropagation()}
 							onClick={(e) => {
@@ -155,7 +155,7 @@ export function CaptionsTrack(props: {
 								void props.onGenerate();
 							}}
 						>
-							{props.isGenerating ? "Generating..." : "Generate captions"}
+							· {props.isGenerating ? "Generating..." : "Generate captions"}
 						</button>
 					</div>
 				}
@@ -173,8 +173,8 @@ export function CaptionsTrack(props: {
 					// Truncation degrades gracefully, so the same row serves both the
 					// full and compact tiers; it just clips against a smaller box.
 					const captionLabel = () => (
-						<div class="flex gap-1 justify-center items-center text-[10px] text-gray-1 dark:text-gray-12">
-							<span class="truncate max-w-full opacity-80">
+						<div class="cap-seg-labels">
+							<span class="cap-seg-label truncate max-w-full">
 								{segment.text || "Caption"}
 							</span>
 						</div>
@@ -185,11 +185,8 @@ export function CaptionsTrack(props: {
 							data-caption-segment
 							data-index={i()}
 							segColor="var(--track-caption)"
-							class={cx(
-								"border duration-200 transition-colors group",
-								isSelected() ? "border-green-7" : "border-transparent",
-							)}
-							innerClass="ring-green-6"
+							class="group"
+							selected={isSelected()}
 							title={segment.text || "Caption"}
 							segment={{
 								start: segment.start,
@@ -239,7 +236,7 @@ export function CaptionsTrack(props: {
 								)}
 							/>
 							<SegmentContent
-								class="flex justify-center items-center cursor-grab px-2 overflow-hidden"
+								class="flex items-center cursor-grab overflow-hidden"
 								onMouseDown={createMouseDownDrag(
 									i,
 									() => {

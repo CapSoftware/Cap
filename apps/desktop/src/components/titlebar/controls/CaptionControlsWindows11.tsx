@@ -9,7 +9,7 @@ import {
 	Show,
 	splitProps,
 } from "solid-js";
-import titlebarState from "~/utils/titlebar-state";
+import titlebarState, { initializeTitlebar } from "~/utils/titlebar-state";
 import { WindowControlButton as ControlButton } from "./WindowControlButton";
 
 export default function (
@@ -33,13 +33,34 @@ export default function (
 		(hasCustomMaximize() || titlebarState.maximizable);
 	const maximized = () => local.maximized ?? titlebarState.maximized;
 
-	let unlisten: (() => void) | undefined;
-	onMount(async () => {
-		unlisten = await currentWindow.onFocusChanged(({ payload: focused }) =>
-			setFocus(focused),
-		);
+	let disposed = false;
+	const unlisteners: (() => void)[] = [];
+	const retainListener = (unlisten: (() => void) | undefined) => {
+		if (!unlisten) return;
+		if (disposed) unlisten();
+		else unlisteners.push(unlisten);
+	};
+
+	onMount(() => {
+		void Promise.allSettled([
+			currentWindow
+				.onFocusChanged(({ payload: focused }) => {
+					if (!disposed) setFocus(focused);
+				})
+				.then(retainListener),
+			initializeTitlebar().then(retainListener),
+		]).then((results) => {
+			for (const result of results) {
+				if (result.status === "rejected") {
+					console.error("Failed to initialize window controls:", result.reason);
+				}
+			}
+		});
 	});
-	onCleanup(() => unlisten?.());
+	onCleanup(() => {
+		disposed = true;
+		for (const unlisten of unlisteners) unlisten();
+	});
 
 	const handleClose = async () => {
 		currentWindow.close();

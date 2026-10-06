@@ -3,6 +3,7 @@ import { inspect } from "node:util";
 import { db, updateIfDefined } from "@cap/database";
 import * as Db from "@cap/database/schema";
 import { Storage } from "@cap/web-backend";
+import { isInternalRecordingKey } from "@cap/web-backend/src/Storage/recording-output";
 import { Video } from "@cap/web-domain";
 import { zValidator } from "@hono/zod-validator";
 import { and, eq } from "drizzle-orm";
@@ -45,7 +46,10 @@ app.post(
 					z
 						.string()
 						.refine(
-							(s) => !s.includes("..") && !s.startsWith("/"),
+							(s) =>
+								!s.includes("..") &&
+								!s.startsWith("/") &&
+								s.split("/")[0] !== ".recording",
 							"Invalid subpath",
 						),
 				)
@@ -127,6 +131,9 @@ app.post(
 			c.req.valid("json");
 
 		const fileKey = parseVideoIdOrFileKey(user.id, body);
+		if (isInternalRecordingKey(fileKey)) {
+			return c.json({ error: "Recording snapshots are immutable" }, 403);
+		}
 		const videoIdFromKey = fileKey.split("/")[1];
 		const videoIdToUse = "videoId" in body ? body.videoId : videoIdFromKey;
 		if (!videoIdToUse) return c.json({ error: "Video id not found" }, 400);

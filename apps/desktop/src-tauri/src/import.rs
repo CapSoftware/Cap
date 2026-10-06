@@ -325,6 +325,8 @@ fn full_timeline_for_segments(
                 name: None,
                 speed_audio_mode: None,
                 audio_muted: false,
+                hide_cursor: None,
+                volume: None,
             })
         })
         .collect()
@@ -360,6 +362,8 @@ fn full_timeline_for_source_segments(
                 name: None,
                 speed_audio_mode: None,
                 audio_muted: false,
+                hide_cursor: None,
+                volume: None,
             })
         })
         .collect()
@@ -376,6 +380,8 @@ fn ensure_project_timeline<'a>(
             transitions: Vec::new(),
             zoom_segments: Vec::new(),
             scene_segments: Vec::new(),
+            style_segments: Vec::new(),
+            image_segments: Vec::new(),
             mask_segments: Vec::new(),
             text_segments: Vec::new(),
             caption_segments: Vec::new(),
@@ -921,7 +927,9 @@ fn source_timeline_segments_for_import(
             start,
             end,
             name: None,
-            speed_audio_mode: None,
+            speed_audio_mode: segment.speed_audio_mode,
+            hide_cursor: segment.hide_cursor,
+            volume: segment.volume,
             audio_muted: segment.audio_muted,
         });
     }
@@ -1733,6 +1741,8 @@ async fn append_mp4_to_editor_project(
             name: None,
             speed_audio_mode: None,
             audio_muted: false,
+            hide_cursor: None,
+            volume: None,
         });
     add_clip_configs(
         &mut config,
@@ -1873,6 +1883,8 @@ fn append_studio_project_to_editor_project(
                 name: None,
                 speed_audio_mode: source_segment.speed_audio_mode,
                 audio_muted: source_segment.audio_muted,
+                hide_cursor: source_segment.hide_cursor,
+                volume: source_segment.volume,
             });
         }
     }
@@ -2160,6 +2172,8 @@ mod tests {
                     name: None,
                     speed_audio_mode: None,
                     audio_muted: true,
+                    hide_cursor: None,
+                    volume: Some(0.35),
                 }],
                 transitions: Vec::new(),
                 zoom_segments: Vec::new(),
@@ -2169,6 +2183,8 @@ mod tests {
                 caption_segments: Vec::new(),
                 keyboard_segments: Vec::new(),
                 audio_segments: Vec::new(),
+                style_segments: Vec::new(),
+                image_segments: Vec::new(),
                 camera3d_segments: Vec::new(),
             }),
             ..Default::default()
@@ -2217,6 +2233,7 @@ mod tests {
         assert_eq!(imported, 1);
         assert_eq!(target_timeline.segments.len(), 1);
         assert!(target_timeline.segments[0].audio_muted);
+        assert_eq!(target_timeline.segments[0].volume(), 0.35);
         assert_eq!(inner.segments.len(), 1);
         assert!(
             inner.segments[0]

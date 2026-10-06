@@ -756,14 +756,14 @@ async fn run_instant_leg(
 
     reporter.stage("remuxing", Some("instant"));
     reporter.log("[instant 2/3] Finalizing recording...");
-    let completed = handle
+    let mut completed = handle
         .stop()
         .await
         .map_err(|e| LegFailure::Failed(format!("failed to stop instant recording: {e}")))?;
     let project_path = completed.project_path.clone();
     temp.track(project_path.clone());
 
-    let output = instant::finalize(&completed)
+    let output = instant::finalize(&mut completed)
         .await
         .map_err(LegFailure::Failed)?;
 

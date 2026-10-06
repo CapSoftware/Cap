@@ -7,7 +7,11 @@ import { SignedBaa } from "@cap/database/emails/signed-baa";
 import { nanoId } from "@cap/database/helpers";
 import { organizations, signedBaas } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
-import { STRIPE_SIGNED_BAA_PRICE_IDS, stripe } from "@cap/utils";
+import {
+	isProSubscription,
+	STRIPE_SIGNED_BAA_PRICE_IDS,
+	stripe,
+} from "@cap/utils";
 import type { Organisation } from "@cap/web-domain";
 import { and, eq, isNull, lt, ne, or } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
@@ -16,6 +20,7 @@ import {
 	attachPaidBaaCheckout,
 	BAA_ENTITLED_STATUSES,
 	ensureBaaHasPro,
+	hasBaaProWaiver,
 	hasPaidBaaInvoice,
 	isSignedBaaSubscription,
 } from "@/lib/baa/billing";
@@ -364,36 +369,7 @@ async function completeSignedBaa(
 	const { user } = await getOwnerContext(organizationId);
 	const priceId = getBaaPriceId();
 
-	const customerId = user.stripeCustomerId;
-	if (
-		!customerId ||
-		!user.stripeSubscriptionId ||
-		!ownerCanPurchaseSignedBaa(user)
-	) {
-		throw new Error(
-			"Your organization needs an active Cap Pro subscription before adding the Signed BAA add-on.",
-		);
-	}
-
-	let liveProSubscription: Stripe.Subscription;
-	try {
-		liveProSubscription = await stripe().subscriptions.retrieve(
-			user.stripeSubscriptionId,
-		);
-	} catch {
-		throw new Error(
-			"Your organization needs an active Cap Pro subscription before adding the Signed BAA add-on.",
-		);
-	}
-	if (
-		!CAP_PRO_STATUSES.has(liveProSubscription.status) ||
-		isSignedBaaSubscription(liveProSubscription)
-	) {
-		throw new Error(
-			"Your organization needs an active Cap Pro subscription before adding the Signed BAA add-on.",
-		);
-	}
-
+	const customerId = user.stripeCustomerId ?? "";
 	const [existing] = await db()
 		.select()
 		.from(signedBaas)
@@ -423,6 +399,41 @@ async function completeSignedBaa(
 	}
 	if (requirePaid && !paidSubscription) {
 		throw new Error("A confirmed BAA payment is required before signing.");
+	}
+
+	const proRequirementWaived =
+		existing?.userId === user.id &&
+		paidSubscription &&
+		hasBaaProWaiver(paidSubscription, existing);
+	if (!proRequirementWaived) {
+		if (
+			!customerId ||
+			!user.stripeSubscriptionId ||
+			!ownerCanPurchaseSignedBaa(user)
+		) {
+			throw new Error(
+				"Your organization needs an active Cap Pro subscription before adding the Signed BAA add-on.",
+			);
+		}
+
+		let liveProSubscription: Stripe.Subscription;
+		try {
+			liveProSubscription = await stripe().subscriptions.retrieve(
+				user.stripeSubscriptionId,
+			);
+		} catch {
+			throw new Error(
+				"Your organization needs an active Cap Pro subscription before adding the Signed BAA add-on.",
+			);
+		}
+		if (
+			!CAP_PRO_STATUSES.has(liveProSubscription.status) ||
+			!isProSubscription(liveProSubscription)
+		) {
+			throw new Error(
+				"Your organization needs an active Cap Pro subscription before adding the Signed BAA add-on.",
+			);
+		}
 	}
 
 	const { signatureDataUrl, ...contractFields } = details;
@@ -489,6 +500,7 @@ async function completeSignedBaa(
 		}
 	}
 
+	const recordIdentity = { id: recordId, organizationId, userId: user.id };
 	const revertToPending = async () => {
 		// The subscription.created webhook can associate and activate the record
 		// mid-flight when Stripe's create response was lost, so the revert must
@@ -515,7 +527,8 @@ async function completeSignedBaa(
 						BAA_ENTITLED_STATUSES.has(recovered.status) &&
 						hasPaidBaaInvoice(recovered)
 					) {
-						if (!(await ensureBaaHasPro(user, recovered, recordId))) return;
+						if (!(await ensureBaaHasPro(user, recovered, recordIdentity)))
+							return;
 						status = "paid";
 					}
 				} catch {
@@ -628,7 +641,7 @@ async function completeSignedBaa(
 			);
 		}
 	}
-	if (!(await ensureBaaHasPro(user, subscription, recordId))) {
+	if (!(await ensureBaaHasPro(user, subscription, recordIdentity))) {
 		throw new Error(
 			"Cap Pro ended before the BAA could be signed. The BAA subscription has been canceled; please contact support about your payment.",
 		);
@@ -659,7 +672,7 @@ async function completeSignedBaa(
 	let emailSent = Boolean(existing?.emailSentAt);
 	if (!emailSent) {
 		try {
-			await sendEmail({
+			const delivery = await sendEmail({
 				email: user.email,
 				cc: [
 					BAA_NOTICE_EMAIL,
@@ -684,6 +697,12 @@ async function completeSignedBaa(
 				],
 				idempotencyKey: `signed-baa-email-${recordId}`,
 			});
+			if (!delivery?.data?.id || delivery.error) {
+				throw new Error(
+					delivery?.error?.message ??
+						"The email provider did not confirm delivery.",
+				);
+			}
 			await db()
 				.update(signedBaas)
 				.set({ emailSentAt: new Date() })

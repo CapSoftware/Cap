@@ -621,10 +621,8 @@ fn rescale_project_config(project_path: &Path, scales: &HashMap<u32, f64>) {
         changed = true;
     }
 
-    if changed {
-        if let Err(e) = config.write(project_path) {
-            warn!("Failed to write rescaled project config after display heal: {e}");
-        }
+    if changed && let Err(e) = config.write(project_path) {
+        warn!("Failed to write rescaled project config after display heal: {e}");
     }
 }
 
@@ -1053,6 +1051,8 @@ mod tests {
                 name: None,
                 speed_audio_mode: None,
                 audio_muted: false,
+                hide_cursor: None,
+                volume: None,
             }],
             transitions: Vec::new(),
             zoom_segments: vec![ZoomSegment {
@@ -1066,6 +1066,8 @@ mod tests {
                 edge_snap_ratio: 0.25,
             }],
             scene_segments: vec![],
+            style_segments: Vec::new(),
+            image_segments: Vec::new(),
             mask_segments: vec![],
             text_segments: vec![],
             caption_segments: vec![],
@@ -1108,10 +1110,14 @@ mod tests {
                 name: None,
                 speed_audio_mode: None,
                 audio_muted: false,
+                hide_cursor: None,
+                volume: None,
             }],
             transitions: Vec::new(),
             zoom_segments: vec![],
             scene_segments: vec![],
+            style_segments: Vec::new(),
+            image_segments: Vec::new(),
             mask_segments: vec![],
             text_segments: vec![],
             caption_segments: vec![],
@@ -1183,6 +1189,8 @@ mod tests {
                     name: None,
                     speed_audio_mode: None,
                     audio_muted: false,
+                    hide_cursor: None,
+                    volume: None,
                 },
                 TimelineSegment {
                     recording_clip: 1,
@@ -1192,6 +1200,8 @@ mod tests {
                     name: None,
                     speed_audio_mode: None,
                     audio_muted: false,
+                    hide_cursor: None,
+                    volume: None,
                 },
             ],
             transitions: Vec::new(),
@@ -1206,6 +1216,8 @@ mod tests {
                 edge_snap_ratio: 0.25,
             }],
             scene_segments: vec![],
+            style_segments: Vec::new(),
+            image_segments: Vec::new(),
             mask_segments: vec![],
             text_segments: vec![],
             caption_segments: vec![],

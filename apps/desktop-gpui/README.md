@@ -3,14 +3,8 @@
 Cap's desktop app, rewritten in [gpui](https://www.gpui.rs/). No Tauri, no
 webview — the whole UI is drawn by gpui and every pixel is Rust.
 
-This is milestone 1: **the main recording window**, compact and expanded, with
-real device enumeration. It is a parallel implementation, not a replacement.
-`apps/desktop` is untouched and remains the shipping app.
-
-| | |
-|---|---|
-| ![compact](docs/main-window-compact.png) | ![expanded](docs/main-window-expanded.png) |
-| 330×395 | 600×660 |
+The main recording window uses a fixed 330×432 layout with device controls
+and recording and screenshot browsers. The expanded view is no longer available.
 
 ## Running it
 
@@ -35,7 +29,7 @@ one (see the editor's measurements below).
 ./dev.sh
 ```
 
-`pnpm dev:desktop` (from the repo root) starts this loop automatically next
+`bun run dev:desktop` (from the repo root) starts this loop automatically next
 to the Tauri app, output prefixed `[gpui]`; set `CAP_GPUI_DEV=0` to opt out
 (`scripts/dev-desktop.mjs`).
 
@@ -2202,10 +2196,6 @@ black (a useful way to read the tint's alpha back, in fact — a 0.55 white tint
 lands on `#8c8c8c`). Anything about the material actually being live has to be
 judged from a full-screen `screencapture -x`.
 
-`CAP_GPUI_AUTO_EXPAND=1` opens the window expanded, the way clicking the zoom
-light does, for the same reason as the other `CAP_GPUI_AUTO_*` hooks:
-unprivileged synthetic clicks are dropped.
-
 `CAP_GPUI_AUTO_SETTINGS=1` opens the settings window at startup, exactly as
 the header gear does (main window hidden included). Pass a page slug instead
 of `1` — `CAP_GPUI_AUTO_SETTINGS=hotkeys` — to land on another sidebar entry;
@@ -2383,13 +2373,6 @@ a level-100 window that does not become key from a synthetic click, so keys
 posted at it are dropped — with or without Accessibility, and identically on
 the pre-consolidation binary. Its search field has to be checked through the
 panel it filters.
-
-`CAP_GPUI_AUTO_RECENT=1` clicks the first Recents card once the library scan
-has landed (expanding the window first, since the scan only runs while
-expanded), through `main_window::activate_recent` — the card's own handler.
-`=twice` clicks it again 2.5s later, which is how the one-window-per-project
-rule is checked: the second activation logs `editor already open for this
-project; focusing it` instead of opening a second window.
 
 `CAP_GPUI_TAURI_STORE=<path>` points every settings read and write at another
 file. Use it for anything that toggles a setting: the default is the store the

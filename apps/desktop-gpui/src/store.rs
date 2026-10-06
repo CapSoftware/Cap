@@ -42,6 +42,7 @@ pub enum BlurMode {
     Off,
     Light,
     Heavy,
+    Remove,
 }
 
 impl BlurMode {
@@ -49,7 +50,8 @@ impl BlurMode {
         match self {
             Self::Off => Self::Light,
             Self::Light => Self::Heavy,
-            Self::Heavy => Self::Off,
+            Self::Heavy if cfg!(target_os = "macos") => Self::Remove,
+            Self::Heavy | Self::Remove => Self::Off,
         }
     }
 
@@ -60,6 +62,7 @@ impl BlurMode {
             Self::Off => None,
             Self::Light => Some("Light"),
             Self::Heavy => Some("Heavy"),
+            Self::Remove => Some("Cutout"),
         }
     }
 }
@@ -322,7 +325,7 @@ pub fn clear_update_handoff() {
 /// sentinel asks whatever supervises the dev session (`scripts/dev-desktop.mjs`
 /// watches for it) to start that harness again; with no supervisor listening it
 /// is inert, and the flag written alongside it still routes the next
-/// `pnpm dev:desktop` to the classic app.
+/// `bun run dev:desktop` to the classic app.
 pub fn classic_reopen_path() -> PathBuf {
     app_data_dir().join("cap-classic.reopen")
 }
@@ -335,13 +338,6 @@ pub fn request_classic_reopen() -> std::io::Result<()> {
     std::fs::write(&path, std::process::id().to_string())
 }
 
-/// The dev switch-back's readiness handshake. A dev rebuild of the classic app
-/// takes anywhere from seconds to many minutes, and quitting immediately
-/// leaves the user with no app and no feedback for all of it. So the
-/// switch-back writes this file next to the reopen sentinel and stays up
-/// "waiting for the classic app"; the Tauri app deletes it when it starts and
-/// decides to keep the session (`gpui_app.rs`), and only then does this app
-/// quit.
 pub fn classic_pending_path() -> PathBuf {
     app_data_dir().join("cap-classic.pending")
 }
@@ -352,6 +348,14 @@ pub fn mark_classic_pending() -> std::io::Result<()> {
         std::fs::create_dir_all(parent)?;
     }
     std::fs::write(&path, std::process::id().to_string())
+}
+
+pub fn clear_classic_pending() {
+    if let Err(error) = std::fs::remove_file(classic_pending_path())
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        tracing::warn!(%error, "couldn't clear classic handoff readiness");
+    }
 }
 
 fn state_path() -> PathBuf {
@@ -451,6 +455,17 @@ pub fn store_section(section: &str) -> Map<String, Value> {
             _ => None,
         })
         .unwrap_or_default()
+}
+
+pub fn notification_sounds_enabled() -> bool {
+    read_store(&tauri_store_path())
+        .and_then(|mut store| store.remove(GENERAL_SETTINGS))
+        .and_then(|settings| {
+            settings
+                .as_object()
+                .map(|settings| bool_at(settings, "enableNotifications", true))
+        })
+        .unwrap_or(false)
 }
 
 /// Write one key of one section, preserving every other byte of meaning in
@@ -926,14 +941,203 @@ pub struct GeneralSettings {
     /// (`RECORDING_START_SAFETY_DEFAULTS`), and the page renders it in the
     /// middle of the Recording card as if it were one of them.
     pub confirm_without_microphone: bool,
+    /// Also outside `general_settings`: the `audio_enhancement` section's
+    /// `enabledByDefault`, rendered in the Recording card next to it.
+    pub studio_sound_by_default: bool,
 }
 
 /// The section names, so the write calls read as the store keys they are.
 pub const GENERAL_SETTINGS: &str = "general_settings";
 pub const RECORDING_START_SAFETY: &str = "recording_start_safety";
+/// `audioEnhancementStore` (`apps/desktop/src/store.ts`): whether new Studio
+/// recordings start with Studio Sound on. Defaults on; the editor's Audio tab
+/// and the Recording settings card both write it.
+pub const AUDIO_ENHANCEMENT: &str = "audio_enhancement";
+pub const STUDIO_SOUND_BY_DEFAULT_KEY: &str = "enabledByDefault";
+
+pub fn studio_sound_by_default() -> bool {
+    bool_at(
+        &store_section(AUDIO_ENHANCEMENT),
+        STUDIO_SOUND_BY_DEFAULT_KEY,
+        true,
+    )
+}
+
+pub fn set_studio_sound_by_default(enabled: bool) -> bool {
+    set_store_setting(
+        AUDIO_ENHANCEMENT,
+        STUDIO_SOUND_BY_DEFAULT_KEY,
+        Value::Bool(enabled),
+    )
+}
+
+pub fn studio_sound_isolation() -> cap_project::VoiceIsolation {
+    store_section(AUDIO_ENHANCEMENT)
+        .get("isolation")
+        .cloned()
+        .and_then(|value| serde_json::from_value(value).ok())
+        .unwrap_or_default()
+}
+
+pub fn set_studio_sound_isolation(isolation: cap_project::VoiceIsolation) -> bool {
+    set_store_setting(
+        AUDIO_ENHANCEMENT,
+        "isolation",
+        serde_json::to_value(isolation).unwrap(),
+    )
+}
+
+pub fn set_studio_sound_defaults(enabled: bool, isolation: cap_project::VoiceIsolation) -> bool {
+    let mut section = store_section(AUDIO_ENHANCEMENT);
+    section.insert(STUDIO_SOUND_BY_DEFAULT_KEY.into(), Value::Bool(enabled));
+    section.insert("isolation".into(), serde_json::to_value(isolation).unwrap());
+    set_store_value(AUDIO_ENHANCEMENT, Value::Object(section))
+}
 /// `RecordingSettingsStore::KEY` (`src-tauri/src/recording_settings.rs:37`) --
 /// the section the tray's Select Mode submenu reads and writes.
 pub const RECORDING_SETTINGS: &str = "recording_settings";
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct RecordingDeviceSettings {
+    pub camera: Option<cap_recording::feeds::camera::CameraDeviceSettings>,
+    pub microphone: Option<cap_recording::feeds::microphone::MicrophoneDeviceSettings>,
+}
+
+impl RecordingDeviceSettings {
+    pub fn for_camera(
+        device_id: &str,
+        model_id: Option<&cap_camera::ModelID>,
+    ) -> Option<cap_recording::feeds::camera::CameraDeviceSettings> {
+        let settings = store_section(RECORDING_SETTINGS);
+        let formats = settings.get("cameraDeviceSettings")?;
+        std::iter::once(format!("device:{device_id}"))
+            .chain(model_id.map(|model| format!("model:{model}")))
+            .find_map(|key| {
+                formats
+                    .get(key)
+                    .cloned()
+                    .and_then(|value| serde_json::from_value(value).ok())
+            })
+    }
+
+    pub fn for_microphone(
+        name: &str,
+    ) -> Option<cap_recording::feeds::microphone::MicrophoneDeviceSettings> {
+        store_section(RECORDING_SETTINGS)
+            .get("microphoneDeviceSettings")?
+            .get(name)
+            .cloned()
+            .and_then(|value| serde_json::from_value(value).ok())
+    }
+}
+
+pub fn set_camera_device_settings(
+    device_id: &str,
+    model_id: Option<&cap_camera::ModelID>,
+    settings: cap_recording::feeds::camera::CameraDeviceSettings,
+) -> bool {
+    let keys = std::iter::once(format!("device:{device_id}"))
+        .chain(model_id.map(|model| format!("model:{model}")));
+    set_device_format_settings("cameraDeviceSettings", keys, settings)
+}
+
+pub fn set_microphone_device_settings(
+    name: &str,
+    settings: cap_recording::feeds::microphone::MicrophoneDeviceSettings,
+) -> bool {
+    set_device_format_settings("microphoneDeviceSettings", [name.to_string()], settings)
+}
+
+fn set_device_format_settings(
+    map_key: &str,
+    keys: impl IntoIterator<Item = String>,
+    settings: impl serde::Serialize,
+) -> bool {
+    let Ok(Value::Object(fields)) = serde_json::to_value(settings) else {
+        return false;
+    };
+    let path = tauri_store_path();
+    let Some(mut store) = read_store(&path) else {
+        return false;
+    };
+    let section = store
+        .entry(RECORDING_SETTINGS.to_string())
+        .or_insert_with(|| Value::Object(Map::new()));
+    let Some(section) = section.as_object_mut() else {
+        return false;
+    };
+    let map = section
+        .entry(map_key.to_string())
+        .or_insert_with(|| Value::Object(Map::new()));
+    let Some(map) = map.as_object_mut() else {
+        return false;
+    };
+    for key in keys {
+        let entry = map.entry(key).or_insert_with(|| Value::Object(Map::new()));
+        let Some(entry) = entry.as_object_mut() else {
+            return false;
+        };
+        for (key, value) in &fields {
+            if value.is_null() {
+                entry.remove(key);
+            } else {
+                entry.insert(key.clone(), value.clone());
+            }
+        }
+    }
+    write_store(&path, &Value::Object(store))
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RecordingInputSettings {
+    pub camera_id: Option<cap_recording::feeds::camera::DeviceOrModelID>,
+    pub microphone_name: Option<String>,
+}
+
+impl RecordingInputSettings {
+    pub fn load() -> Self {
+        let settings = store_section(RECORDING_SETTINGS);
+        Self {
+            camera_id: settings.get("cameraId").and_then(recording_camera_id),
+            microphone_name: settings
+                .get("micName")
+                .and_then(Value::as_str)
+                .filter(|name| !name.is_empty())
+                .map(str::to_string),
+        }
+    }
+}
+
+fn recording_camera_id(value: &Value) -> Option<cap_recording::feeds::camera::DeviceOrModelID> {
+    use cap_recording::feeds::camera::DeviceOrModelID;
+
+    let object = value.as_object()?;
+    if object.len() != 1 {
+        return None;
+    }
+    if let Some(id) = object.get("DeviceID").and_then(Value::as_str) {
+        return (!id.is_empty()).then(|| DeviceOrModelID::DeviceID(id.to_string()));
+    }
+    let model = object.get("ModelID")?.as_str()?.to_string();
+    cap_camera::ModelID::try_from(model)
+        .ok()
+        .map(DeviceOrModelID::ModelID)
+}
+
+pub fn set_recording_camera_id(id: Option<&cap_recording::feeds::camera::DeviceOrModelID>) -> bool {
+    let Ok(value) = serde_json::to_value(id) else {
+        return false;
+    };
+    set_store_setting(RECORDING_SETTINGS, "cameraId", value)
+}
+
+pub fn set_recording_microphone_name(name: Option<&str>) -> bool {
+    set_store_setting(
+        RECORDING_SETTINGS,
+        "micName",
+        name.map_or(Value::Null, |name| Value::String(name.to_string())),
+    )
+}
 
 /// `RecordingSettingsStore.mode`, i.e. `cap_recording::RecordingMode` under
 /// `#[serde(rename_all = "camelCase")]` -- one lowercase word per variant
@@ -993,7 +1197,7 @@ pub fn should_show_onboarding() -> bool {
 
 impl Default for GeneralSettings {
     fn default() -> Self {
-        Self::from_sections(&Map::new(), &Map::new())
+        Self::from_sections(&Map::new(), &Map::new(), &Map::new())
     }
 }
 
@@ -1002,10 +1206,15 @@ impl GeneralSettings {
         Self::from_sections(
             &store_section(GENERAL_SETTINGS),
             &store_section(RECORDING_START_SAFETY),
+            &store_section(AUDIO_ENHANCEMENT),
         )
     }
 
-    fn from_sections(general: &Map<String, Value>, safety: &Map<String, Value>) -> Self {
+    fn from_sections(
+        general: &Map<String, Value>,
+        safety: &Map<String, Value>,
+        audio_enhancement: &Map<String, Value>,
+    ) -> Self {
         Self {
             theme: enum_at(general, "theme"),
             hide_dock_icon: bool_at(general, "hideDockIcon", false),
@@ -1064,6 +1273,7 @@ impl GeneralSettings {
                 "confirmBeforeRecordingWithoutMicrophone",
                 true,
             ),
+            studio_sound_by_default: bool_at(audio_enhancement, STUDIO_SOUND_BY_DEFAULT_KEY, true),
         }
     }
 }
@@ -1713,6 +1923,217 @@ mod tests {
     }
 
     #[test]
+    fn notification_sounds_follow_tauri_settings_without_writing() {
+        for (contents, enabled) in [
+            (None, false),
+            (Some("{}"), false),
+            (Some("invalid json"), false),
+            (Some(r#"{"general_settings":{}}"#), true),
+            (
+                Some(r#"{"general_settings":{"enableNotifications":false}}"#),
+                false,
+            ),
+            (
+                Some(r#"{"general_settings":{"enableNotifications":true}}"#),
+                true,
+            ),
+        ] {
+            let store = TempStore::new("notification-sounds", contents);
+            assert_eq!(notification_sounds_enabled(), enabled);
+            assert_eq!(
+                std::fs::read_to_string(&store.path).ok().as_deref(),
+                contents
+            );
+        }
+    }
+
+    #[test]
+    fn device_format_preferences_use_tauri_keys_and_preserve_other_fields() {
+        use cap_recording::feeds::{
+            camera::CameraDeviceSettings, microphone::MicrophoneDeviceSettings,
+        };
+        let store = TempStore::new(
+            "device-format-preferences",
+            Some(
+                r#"{"recording_settings":{"mode":"studio","cameraDeviceSettings":{"device:camera-1":{"width":1280,"height":720,"frameRate":30,"future":7},"model:vendor:product":{"frameRate":60},"device:other":{"width":640}},"microphoneDeviceSettings":{"Desk":{"sampleRate":48000,"channels":1,"future":9},"Other":{"channels":2}},"future":{"keep":true}},"unrelated":{"keep":true}}"#,
+            ),
+        );
+        let before = store.read();
+        let model = cap_camera::ModelID::try_from("vendor:product".to_string()).unwrap();
+        let snapshot = RecordingDeviceSettings {
+            camera: RecordingDeviceSettings::for_camera("camera-1", Some(&model)),
+            microphone: RecordingDeviceSettings::for_microphone("Desk"),
+        };
+        assert_eq!(snapshot.camera.unwrap().frame_rate, Some(30.));
+        assert_eq!(
+            RecordingDeviceSettings::for_camera("replugged", Some(&model))
+                .unwrap()
+                .frame_rate,
+            Some(60.)
+        );
+        let camera = CameraDeviceSettings {
+            width: Some(1920),
+            height: Some(1080),
+            frame_rate: Some(30.),
+        };
+        assert!(set_camera_device_settings("camera-1", Some(&model), camera));
+        assert!(set_microphone_device_settings(
+            "Desk",
+            MicrophoneDeviceSettings {
+                sample_rate: Some(44100),
+                channels: Some(2)
+            }
+        ));
+        assert_eq!(
+            RecordingDeviceSettings::for_camera("camera-1", Some(&model)),
+            Some(camera)
+        );
+        assert_eq!(
+            RecordingDeviceSettings::for_camera("replugged", Some(&model)),
+            Some(camera)
+        );
+        assert_eq!(snapshot.camera.unwrap().width, Some(1280));
+        assert_eq!(snapshot.microphone.unwrap().sample_rate, Some(48000));
+        let after = store.read();
+        assert_eq!(
+            after[RECORDING_SETTINGS]["cameraDeviceSettings"]["device:camera-1"]["future"],
+            7
+        );
+        assert_eq!(
+            after[RECORDING_SETTINGS]["microphoneDeviceSettings"]["Desk"]["future"],
+            9
+        );
+        assert_eq!(
+            after[RECORDING_SETTINGS]["cameraDeviceSettings"]["device:other"],
+            before[RECORDING_SETTINGS]["cameraDeviceSettings"]["device:other"]
+        );
+        assert_eq!(
+            after[RECORDING_SETTINGS]["microphoneDeviceSettings"]["Other"],
+            before[RECORDING_SETTINGS]["microphoneDeviceSettings"]["Other"]
+        );
+        assert_eq!(after["unrelated"], before["unrelated"]);
+        assert_eq!(
+            after[RECORDING_SETTINGS]["future"],
+            before[RECORDING_SETTINGS]["future"]
+        );
+        assert!(set_camera_device_settings(
+            "camera-1",
+            Some(&model),
+            CameraDeviceSettings::default()
+        ));
+        assert!(
+            store.read()[RECORDING_SETTINGS]["cameraDeviceSettings"]["device:camera-1"]
+                .get("frameRate")
+                .is_none()
+        );
+        assert_eq!(
+            store.read()[RECORDING_SETTINGS]["cameraDeviceSettings"]["device:camera-1"]["future"],
+            7
+        );
+    }
+
+    #[test]
+    fn device_format_save_failure_does_not_replace_unreadable_preferences() {
+        let store = TempStore::new("device-format-invalid-store", Some("{broken"));
+        let before = std::fs::read(&store.path).unwrap();
+        assert!(!set_microphone_device_settings("Desk", Default::default()));
+        assert_eq!(std::fs::read(&store.path).unwrap(), before);
+    }
+
+    #[test]
+    fn recording_inputs_round_trip_without_replacing_unknown_settings() {
+        use cap_recording::feeds::camera::DeviceOrModelID;
+
+        let store = TempStore::new(
+            "recording-inputs-round-trip",
+            Some(
+                r#"{"recording_settings":{"mode":"studio","cameraId":{"ModelID":"vendor:product"},"micName":"Desk microphone","cameraDeviceSettings":{"model:vendor:product":{"frameRate":30}},"unknown":{"keep":true}},"other":{"keep":[1,2]}}"#,
+            ),
+        );
+        let original = store.read();
+        let model = cap_camera::ModelID::try_from("vendor:product".to_string()).unwrap();
+        assert_eq!(
+            RecordingInputSettings::load(),
+            RecordingInputSettings {
+                camera_id: Some(DeviceOrModelID::ModelID(model)),
+                microphone_name: Some("Desk microphone".to_string()),
+            }
+        );
+
+        let camera = DeviceOrModelID::DeviceID("replacement-camera".to_string());
+        assert!(set_recording_camera_id(Some(&camera)));
+        assert!(set_recording_microphone_name(Some(
+            "Replacement microphone"
+        )));
+        assert_eq!(
+            RecordingInputSettings::load(),
+            RecordingInputSettings {
+                camera_id: Some(camera),
+                microphone_name: Some("Replacement microphone".to_string()),
+            }
+        );
+
+        assert!(set_recording_camera_id(None));
+        assert!(set_recording_microphone_name(None));
+        assert_eq!(
+            RecordingInputSettings::load(),
+            RecordingInputSettings::default()
+        );
+        let mut expected = original;
+        expected[RECORDING_SETTINGS]["cameraId"] = Value::Null;
+        expected[RECORDING_SETTINGS]["micName"] = Value::Null;
+        assert_eq!(store.read(), expected);
+    }
+
+    #[test]
+    fn recording_inputs_keep_saved_identity_without_device_enumeration() {
+        let store = TempStore::new(
+            "recording-inputs-absent-device",
+            Some(
+                r#"{"recording_settings":{"cameraId":{"DeviceID":"unplugged-camera"},"micName":"Unplugged microphone"}}"#,
+            ),
+        );
+        let before = std::fs::read(&store.path).unwrap();
+        let first = RecordingInputSettings::load();
+        assert_eq!(
+            first.microphone_name.as_deref(),
+            Some("Unplugged microphone")
+        );
+        assert_eq!(
+            first.camera_id,
+            Some(cap_recording::feeds::camera::DeviceOrModelID::DeviceID(
+                "unplugged-camera".into()
+            ))
+        );
+        assert_eq!(RecordingInputSettings::load(), first);
+        assert_eq!(std::fs::read(&store.path).unwrap(), before);
+    }
+
+    #[test]
+    fn recording_inputs_malformed_camera_does_not_panic_or_clear_other_settings() {
+        let store = TempStore::new(
+            "recording-inputs-malformed-model",
+            Some(
+                r#"{"recording_settings":{"cameraId":{"ModelID":"missing-separator"},"micName":"Valid microphone","future":42}}"#,
+            ),
+        );
+        let before = store.read();
+        let settings = RecordingInputSettings::load();
+        assert!(settings.camera_id.is_none());
+        assert_eq!(
+            settings.microphone_name.as_deref(),
+            Some("Valid microphone")
+        );
+        assert!(set_recording_microphone_name(None));
+        let after = store.read();
+        assert_eq!(
+            after[RECORDING_SETTINGS]["cameraId"],
+            before[RECORDING_SETTINGS]["cameraId"]
+        );
+        assert_eq!(after[RECORDING_SETTINGS]["future"], 42);
+    }
+
+    #[test]
     fn temporary_stores_are_thread_local_without_mutating_process_environment() {
         let original = std::env::var_os("CAP_GPUI_TAURI_STORE");
         let barrier = std::sync::Arc::new(std::sync::Barrier::new(4));
@@ -1799,9 +2220,11 @@ mod tests {
             "confirmBeforeRecordingWithoutMicrophone",
             Value::Bool(false)
         ));
+        assert!(super::set_studio_sound_by_default(false));
         let settings = GeneralSettings::load();
         assert!(settings.hide_dock_icon);
         assert!(!settings.confirm_without_microphone);
+        assert!(!settings.studio_sound_by_default);
         // The section it created did not disturb the others.
         assert_eq!(store.read()["auth"]["user_id"], "u_1");
     }
@@ -1866,6 +2289,7 @@ mod tests {
         assert!(settings.enable_notifications);
         assert!(settings.crash_recovery_recording);
         assert!(settings.confirm_without_microphone);
+        assert!(settings.studio_sound_by_default);
         assert_eq!(settings.instant_mode_max_resolution, 1920);
     }
 
@@ -2309,7 +2733,7 @@ mod tests {
     /// default); key present but empty -> the user cleared every entry.
     #[test]
     fn excluded_windows_default_only_when_key_is_absent() {
-        let absent = GeneralSettings::from_sections(&Map::new(), &Map::new());
+        let absent = GeneralSettings::from_sections(&Map::new(), &Map::new(), &Map::new());
         assert_eq!(absent.excluded_windows, default_excluded_windows());
         assert!(
             absent
@@ -2320,7 +2744,7 @@ mod tests {
 
         let mut general = Map::new();
         general.insert("excludedWindows".to_string(), Value::Array(Vec::new()));
-        let cleared = GeneralSettings::from_sections(&general, &Map::new());
+        let cleared = GeneralSettings::from_sections(&general, &Map::new(), &Map::new());
         assert!(cleared.excluded_windows.is_empty());
     }
 }

@@ -119,6 +119,9 @@ pub fn dispatch_cli() -> Result<(), String> {
 mod tests {
     use super::*;
 
+    // A sibling fork can retain a writable fixture descriptor and make direct exec return ETXTBSY.
+    static PROCESS_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn ignores_appimage_environment_from_unrelated_applications() {
         assert_eq!(
@@ -160,6 +163,7 @@ mod tests {
     fn launcher_preserves_arguments_exit_status_and_in_place_updates() {
         use std::os::unix::fs::PermissionsExt;
 
+        let _process_guard = PROCESS_TEST_LOCK.lock().unwrap();
         let directory = tempfile::tempdir().unwrap();
         let image = directory.path().join("Cap's portable.AppImage");
         let shim = directory.path().join("cap");
@@ -184,6 +188,7 @@ mod tests {
 
     #[test]
     fn cli_launch_resolves_relative_paths_from_the_original_directory() {
+        let _process_guard = PROCESS_TEST_LOCK.lock().unwrap();
         let parent_directory = std::env::current_dir().unwrap();
         let root = tempfile::tempdir().unwrap();
         for name in [
@@ -209,6 +214,7 @@ mod tests {
 
     #[test]
     fn cli_launch_never_substitutes_a_different_directory_for_invalid_owd() {
+        let _process_guard = PROCESS_TEST_LOCK.lock().unwrap();
         let root = tempfile::tempdir().unwrap();
         let executable = Path::new("/bin/sh");
         assert!(cli_command(executable, Some(Path::new("relative"))).is_err());

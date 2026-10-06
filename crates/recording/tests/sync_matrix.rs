@@ -472,7 +472,7 @@ async fn run_video_case(case: VideoCase) -> Result<String, String> {
         // Drops shorten coverage but must not shrink the recorded span
         // beyond the dropped tail/head, and must never stretch it.
         if let Some((first, last)) = finished.video_timestamp_span {
-            let span = (last - first).as_secs_f64();
+            let span = last.saturating_sub(first).as_secs_f64();
             let expected = sent.last().unwrap() - sent[0];
             if span > expected + 0.25 || span < expected - 0.5 {
                 return Err(format!(
@@ -534,7 +534,7 @@ async fn run_video_case(case: VideoCase) -> Result<String, String> {
 
     // The span the recorder would persist must match the sent span.
     if let Some((first, last)) = finished.video_timestamp_span {
-        let span = (last - first).as_secs_f64();
+        let span = last.saturating_sub(first).as_secs_f64();
         let expected = sent.last().unwrap() - sent[0];
         if (span - expected).abs() > 0.25 {
             return Err(format!(

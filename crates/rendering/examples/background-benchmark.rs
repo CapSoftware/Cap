@@ -27,6 +27,8 @@ struct Args {
     backgrounds: Option<PathBuf>,
     #[arg(long)]
     snapshots: Option<PathBuf>,
+    #[arg(long, value_delimiter = ',', default_value = "0,1800")]
+    snapshot_frames: Vec<u32>,
 }
 
 #[derive(Deserialize)]
@@ -88,6 +90,7 @@ fn default_cases() -> Vec<Case> {
 
 fn segment(source: &DecodedFrame, frame: u32) -> DecodedSegmentFrames {
     DecodedSegmentFrames {
+        screen_size: XY::new(source.width(), source.height()),
         screen_frame: Some(source.clone()),
         camera_frame: None,
         segment_time: frame as f32 / 60.0,
@@ -259,7 +262,7 @@ async fn main() -> Result<()> {
                 std::fs::create_dir_all(directory)?;
                 let mut renderer = FrameRenderer::new(&constants);
                 let mut layers = RendererLayers::new(&constants.device, &constants.queue);
-                for frame_number in [0, 1800] {
+                for &frame_number in &args.snapshot_frames {
                     let frame = segment(&source, frame_number);
                     let uniforms = ProjectUniforms::new(
                         &constants,

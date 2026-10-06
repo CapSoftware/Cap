@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
 	arch: vi.fn(() => "aarch64"),
 	osType: vi.fn(() => "macos"),
+	restartApp: vi.fn(async () => undefined),
 	relaunch: vi.fn(async () => undefined),
 	switchToGpuiApp: vi.fn(async () => undefined),
 	updatesDownloadAndInstall: vi.fn(async () => undefined),
@@ -19,6 +20,7 @@ vi.mock("@tauri-apps/plugin-process", () => ({
 
 vi.mock("~/utils/tauri", () => ({
 	commands: {
+		restartApp: mocks.restartApp,
 		switchToGpuiApp: mocks.switchToGpuiApp,
 		updatesDownloadAndInstall: mocks.updatesDownloadAndInstall,
 	},
@@ -31,7 +33,7 @@ describe("updater", () => {
 		mocks.osType.mockReturnValue("macos");
 		mocks.updatesDownloadAndInstall.mockResolvedValue(undefined);
 		mocks.switchToGpuiApp.mockResolvedValue(undefined);
-		mocks.relaunch.mockResolvedValue(undefined);
+		mocks.restartApp.mockResolvedValue(undefined);
 	});
 
 	it.each([
@@ -46,16 +48,16 @@ describe("updater", () => {
 		expect(getUpdaterCheckOptions()).toEqual({ target: platform.target });
 	});
 
-	it("checks update safety before requesting an unpreventable restart", async () => {
+	it("checks update safety before the final guarded restart admission", async () => {
 		const { restartAfterUpdate } = await import("./updater");
 
 		await restartAfterUpdate();
 
 		expect(mocks.updatesDownloadAndInstall).toHaveBeenCalledOnce();
-		expect(mocks.relaunch).toHaveBeenCalledOnce();
+		expect(mocks.restartApp).toHaveBeenCalledOnce();
 		expect(
 			mocks.updatesDownloadAndInstall.mock.invocationCallOrder[0],
-		).toBeLessThan(mocks.relaunch.mock.invocationCallOrder[0]);
+		).toBeLessThan(mocks.restartApp.mock.invocationCallOrder[0]);
 	});
 
 	it("does not restart while recording, exporting, or uploading is blocked", async () => {
@@ -64,16 +66,30 @@ describe("updater", () => {
 		const { restartAfterUpdate } = await import("./updater");
 
 		await expect(restartAfterUpdate()).rejects.toBe(error);
-		expect(mocks.relaunch).not.toHaveBeenCalled();
+		expect(mocks.restartApp).not.toHaveBeenCalled();
 	});
 
 	it("propagates a restart failure after a successful safety check", async () => {
 		const error = new Error("Restart failed");
-		mocks.relaunch.mockRejectedValueOnce(error);
+		mocks.restartApp.mockRejectedValueOnce(error);
 		const { restartAfterUpdate } = await import("./updater");
 
 		await expect(restartAfterUpdate()).rejects.toBe(error);
 		expect(mocks.updatesDownloadAndInstall).toHaveBeenCalledOnce();
+		expect(mocks.relaunch).not.toHaveBeenCalled();
+	});
+
+	it("retries guarded restart after a post-install recording refusal without raw relaunch", async () => {
+		const error = "Recording started after the update was installed.";
+		mocks.restartApp.mockRejectedValueOnce(error);
+		const { restartAfterUpdate } = await import("./updater");
+
+		await expect(restartAfterUpdate()).rejects.toBe(error);
+		expect(mocks.relaunch).not.toHaveBeenCalled();
+		await expect(restartAfterUpdate()).resolves.toBeUndefined();
+		expect(mocks.restartApp).toHaveBeenCalledTimes(2);
+		expect(mocks.updatesDownloadAndInstall).toHaveBeenCalledTimes(2);
+		expect(mocks.relaunch).not.toHaveBeenCalled();
 	});
 
 	it("returns to GPUI through the guarded application handoff", async () => {
@@ -82,7 +98,7 @@ describe("updater", () => {
 		await returnToGpui();
 
 		expect(mocks.switchToGpuiApp).toHaveBeenCalledOnce();
-		expect(mocks.relaunch).not.toHaveBeenCalled();
+		expect(mocks.restartApp).not.toHaveBeenCalled();
 	});
 
 	it("does not return to GPUI while protected work is active", async () => {
@@ -91,6 +107,6 @@ describe("updater", () => {
 		const { returnToGpui } = await import("./updater");
 
 		await expect(returnToGpui()).rejects.toBe(error);
-		expect(mocks.relaunch).not.toHaveBeenCalled();
+		expect(mocks.restartApp).not.toHaveBeenCalled();
 	});
 });

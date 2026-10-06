@@ -1,6 +1,10 @@
 import { db } from "@cap/database";
 import { organizations, signedBaas, users } from "@cap/database/schema";
-import { STRIPE_SIGNED_BAA_PRICE_IDS, stripe } from "@cap/utils";
+import {
+	isProSubscription,
+	STRIPE_SIGNED_BAA_PRICE_IDS,
+	stripe,
+} from "@cap/utils";
 import type { Organisation, User } from "@cap/web-domain";
 import { and, eq, isNull, ne, or } from "drizzle-orm";
 import type Stripe from "stripe";
@@ -33,6 +37,27 @@ export function hasPaidBaaInvoice(subscription: Stripe.Subscription) {
 	);
 }
 
+type BaaIdentity = Pick<
+	typeof signedBaas.$inferSelect,
+	"id" | "organizationId" | "userId"
+>;
+
+export function hasBaaProWaiver(
+	subscription: Stripe.Subscription,
+	record: BaaIdentity,
+) {
+	return (
+		BAA_ENTITLED_STATUSES.has(subscription.status) &&
+		subscription.items?.data.some((item) =>
+			isSignedBaaPrice(item.price?.id),
+		) === true &&
+		subscription.metadata?.proRequirement === "waived" &&
+		subscription.metadata.baaRecordId === record.id &&
+		subscription.metadata.organizationId === record.organizationId &&
+		subscription.metadata.userId === record.userId
+	);
+}
+
 type CheckoutOwner = {
 	id: User.UserId;
 	email: string;
@@ -43,11 +68,12 @@ type CheckoutOwner = {
 export async function ensureBaaHasPro(
 	owner: Pick<CheckoutOwner, "stripeCustomerId" | "stripeSubscriptionId">,
 	subscription: Stripe.Subscription,
-	recordId: string,
+	record: BaaIdentity,
 ) {
 	if (!isSignedBaaSubscription(subscription)) {
 		throw new Error("The subscription is not a Signed BAA.");
 	}
+	if (hasBaaProWaiver(subscription, record)) return true;
 	const proSubscription = owner.stripeSubscriptionId
 		? await stripe().subscriptions.retrieve(owner.stripeSubscriptionId)
 		: null;
@@ -59,7 +85,7 @@ export async function ensureBaaHasPro(
 	if (
 		proSubscription &&
 		proCustomerId === owner.stripeCustomerId &&
-		!isSignedBaaSubscription(proSubscription) &&
+		isProSubscription(proSubscription) &&
 		BAA_ENTITLED_STATUSES.has(proSubscription.status)
 	) {
 		return true;
@@ -70,7 +96,7 @@ export async function ensureBaaHasPro(
 		.set({ status: "canceled" })
 		.where(
 			and(
-				eq(signedBaas.id, recordId),
+				eq(signedBaas.id, record.id),
 				eq(signedBaas.stripeSubscriptionId, subscription.id),
 			),
 		);
@@ -285,7 +311,7 @@ export async function attachPaidBaaCheckout(
 
 	// Link before checking Pro so a concurrent Pro cancellation can find this
 	// subscription even when Checkout created a different Stripe customer.
-	if (!(await ensureBaaHasPro(owner, subscription, record.id))) {
+	if (!(await ensureBaaHasPro(owner, subscription, record))) {
 		return null;
 	}
 	if (attached.status !== "pending") return attached;

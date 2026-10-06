@@ -22,6 +22,41 @@ use crate::general_settings::PostStudioRecordingBehaviour;
 const WEBHOOK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 const COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 
+#[derive(Debug, PartialEq, Eq)]
+enum ClipboardImageSource {
+    File(PathBuf),
+    ScreenshotProject(PathBuf),
+}
+
+fn resolve_clipboard_image_source(
+    ctx: &TriggerContext,
+    source: ClipboardSource,
+) -> Result<ClipboardImageSource, String> {
+    match source {
+        ClipboardSource::Raw => ctx
+            .image_path
+            .as_ref()
+            .or(ctx.output_path.as_ref())
+            .cloned()
+            .map(ClipboardImageSource::File)
+            .ok_or_else(|| "No image or output path available for clipboard copy".to_string()),
+        ClipboardSource::Rendered => {
+            if let Some(path) = ctx.output_path.clone() {
+                return Ok(ClipboardImageSource::File(path));
+            }
+            if ctx.image_path.is_some()
+                && let Some(path) = ctx.project_path.clone()
+            {
+                return Ok(ClipboardImageSource::ScreenshotProject(path));
+            }
+            ctx.image_path
+                .clone()
+                .map(ClipboardImageSource::File)
+                .ok_or_else(|| "No rendered output available for clipboard copy".to_string())
+        }
+    }
+}
+
 pub struct DesktopAutomationHost {
     app: AppHandle,
     clipboard: Arc<RwLock<ClipboardContext>>,
@@ -58,24 +93,26 @@ impl AutomationHost for DesktopAutomationHost {
         ctx: &TriggerContext,
         source: &ClipboardSource,
     ) -> Result<(), String> {
-        let path = match source {
-            ClipboardSource::Raw => ctx
-                .image_path
-                .as_ref()
-                .or(ctx.output_path.as_ref())
-                .ok_or("No image or output path available for clipboard copy")?,
-            ClipboardSource::Rendered => ctx
-                .output_path
-                .as_ref()
-                .or(ctx.image_path.as_ref())
-                .ok_or("No output path available for clipboard copy")?,
+        let source = resolve_clipboard_image_source(ctx, *source)?;
+        let img_data = match source {
+            ClipboardImageSource::File(path) => {
+                let path = path.to_string_lossy().to_string();
+                info!(%path, "Automation: copying file to clipboard");
+                clipboard_rs::RustImageData::from_path(&path)
+                    .map_err(|e| format!("Failed to load image for clipboard: {e}"))?
+            }
+            ClipboardImageSource::ScreenshotProject(path) => {
+                info!(project = %path.display(), "Automation: rendering screenshot for clipboard");
+                let rendered = crate::screenshot_editor::render_screenshot_project_for_export(
+                    self.app.clone(),
+                    path,
+                )
+                .await?;
+                clipboard_rs::RustImageData::from_bytes(&rendered.image_bytes)
+                    .map_err(|e| format!("Failed to load rendered screenshot for clipboard: {e}"))?
+            }
         };
 
-        let path_str = path.to_string_lossy().to_string();
-        info!(path = %path_str, "Automation: copying to clipboard");
-
-        let img_data = clipboard_rs::RustImageData::from_path(&path_str)
-            .map_err(|e| format!("Failed to load image for clipboard: {e}"))?;
         self.clipboard
             .write()
             .await
@@ -934,4 +971,52 @@ pub async fn list_automation_capabilities() -> Vec<String> {
         "ApplyPreset".to_string(),
         "DeleteLocalFiles".to_string(),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rendered_screenshot_uses_project_instead_of_raw_capture() {
+        let ctx = TriggerContext::new()
+            .with_project_path(PathBuf::from("capture.cap"))
+            .with_image_path(PathBuf::from("capture.cap/original.png"));
+
+        assert_eq!(
+            resolve_clipboard_image_source(&ctx, ClipboardSource::Rendered),
+            Ok(ClipboardImageSource::ScreenshotProject(PathBuf::from(
+                "capture.cap"
+            )))
+        );
+    }
+
+    #[test]
+    fn rendered_output_takes_priority_over_screenshot_project() {
+        let ctx = TriggerContext::new()
+            .with_project_path(PathBuf::from("capture.cap"))
+            .with_image_path(PathBuf::from("capture.cap/original.png"))
+            .with_output_path(PathBuf::from("capture-rendered.png"));
+
+        assert_eq!(
+            resolve_clipboard_image_source(&ctx, ClipboardSource::Rendered),
+            Ok(ClipboardImageSource::File(PathBuf::from(
+                "capture-rendered.png"
+            )))
+        );
+    }
+
+    #[test]
+    fn raw_screenshot_keeps_original_capture() {
+        let ctx = TriggerContext::new()
+            .with_project_path(PathBuf::from("capture.cap"))
+            .with_image_path(PathBuf::from("capture.cap/original.png"));
+
+        assert_eq!(
+            resolve_clipboard_image_source(&ctx, ClipboardSource::Raw),
+            Ok(ClipboardImageSource::File(PathBuf::from(
+                "capture.cap/original.png"
+            )))
+        );
+    }
 }

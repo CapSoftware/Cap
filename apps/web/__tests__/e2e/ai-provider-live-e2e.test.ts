@@ -11,10 +11,10 @@
  *
  * Run (from apps/web), where .env.e2e = local dev env + provider keys:
  *   CAP_AI_E2E=1 CAP_AI_E2E_MEDIA=/path/to/recording.mp4 \
- *     pnpm exec dotenv -e /path/to/.env.e2e -- \
+ *     bun run dotenv -e /path/to/.env.e2e -- \
  *     vitest run __tests__/e2e/ai-provider-live-e2e.test.ts
  *
- * Add AI_PROVIDER=assemblyai (etc.) before `pnpm` to test an explicit
+ * Add AI_PROVIDER=assemblyai (etc.) before `bun` to test an explicit
  * provider; shell env wins over the dotenv file.
  */
 import { readFileSync } from "node:fs";

@@ -170,3 +170,18 @@ impl Timestamps {
         self.mach_absolute_time
     }
 }
+
+impl std::ops::Add<Duration> for Timestamps {
+    type Output = Timestamps;
+
+    fn add(self, rhs: Duration) -> Self::Output {
+        Self {
+            instant: self.instant + rhs,
+            system_time: self.system_time + rhs,
+            #[cfg(windows)]
+            performance_counter: self.performance_counter + rhs,
+            #[cfg(target_os = "macos")]
+            mach_absolute_time: self.mach_absolute_time + rhs,
+        }
+    }
+}

@@ -15,7 +15,7 @@ pub struct RecordingStorage {
 
 impl RecordingStorage {
     pub fn finalization_bytes(self) -> u64 {
-        self.recording_bytes.saturating_mul(2)
+        self.recording_bytes.saturating_mul(3)
     }
 
     pub fn status(self) -> DiskSpaceStatus {
@@ -266,6 +266,7 @@ mod tests {
             available_bytes: u64::MAX,
             recording_bytes: u64::MAX,
         };
+        assert_eq!(storage.finalization_bytes(), u64::MAX);
         assert_eq!(storage.status(), DiskSpaceStatus::Exhausted);
         assert!(!storage.can_finalize());
     }
@@ -274,16 +275,22 @@ mod tests {
     fn recording_storage_reserves_space_for_finalization() {
         let recording_bytes = 1024 * 1024 * 1024;
         let mut storage = RecordingStorage {
-            available_bytes: recording_bytes * 2 + RECORDING_DISK_WARN_BYTES + 1,
+            available_bytes: recording_bytes * 3 + RECORDING_DISK_WARN_BYTES + 1,
             recording_bytes,
         };
         assert_eq!(storage.status(), DiskSpaceStatus::Ok);
         storage.available_bytes -= 1;
         assert_eq!(storage.status(), DiskSpaceStatus::Low);
-        storage.available_bytes = recording_bytes * 2 + RECORDING_DISK_RESERVE_BYTES;
+        storage.available_bytes = recording_bytes * 3 + RECORDING_DISK_RESERVE_BYTES;
         assert_eq!(storage.status(), DiskSpaceStatus::Exhausted);
         assert!(storage.can_finalize());
-        storage.available_bytes = recording_bytes * 2;
+        storage.available_bytes = recording_bytes * 2 + RECORDING_DISK_RESERVE_BYTES;
+        assert!(!storage.can_finalize());
+        storage.available_bytes = recording_bytes * 3 + RECORDING_DISK_RESERVE_BYTES / 2;
+        assert!(!storage.can_finalize());
+        storage.available_bytes += 1;
+        assert!(storage.can_finalize());
+        storage.available_bytes = recording_bytes * 3;
         assert!(!storage.can_finalize());
     }
 
@@ -349,7 +356,7 @@ mod tests {
         let mut storage = RecordingStorageMonitor::default()
             .sample(directory.path())
             .unwrap();
-        storage.available_bytes = 2 * storage.recording_bytes + RECORDING_DISK_RESERVE_BYTES;
+        storage.available_bytes = 3 * storage.recording_bytes + RECORDING_DISK_RESERVE_BYTES;
         assert_eq!(storage.recording_bytes, 1024 * 1024 * 1024);
         assert_eq!(storage.status(), DiskSpaceStatus::Exhausted);
         assert!(storage.can_finalize());

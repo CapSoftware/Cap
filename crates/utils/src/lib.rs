@@ -9,11 +9,20 @@ use std::{
 use aho_corasick::{AhoCorasickBuilder, MatchKind};
 use tracing::Instrument;
 
+pub mod diagnostic_writer;
 pub mod disk_space;
+pub mod export_resources;
 #[cfg(any(target_os = "linux", test))]
 pub mod linux_package;
+#[cfg(target_os = "linux")]
+pub mod linux_recording_stop;
+#[cfg(any(target_os = "linux", test))]
+pub mod linux_runtime;
+pub mod local_captions;
+pub mod log_upload;
 #[cfg(target_os = "macos")]
 pub mod macos_qos;
+pub mod operation_diagnostics;
 
 /// Wrapper around tokio::spawn that inherits the current tracing subscriber and span.
 pub fn spawn_actor<F>(future: F) -> tokio::task::JoinHandle<F::Output>

@@ -37,6 +37,40 @@ impl GifExportSettings {
     pub async fn export(
         self,
         base: ExporterBase,
+        on_progress: impl FnMut(u32) -> bool + Send + 'static,
+    ) -> Result<PathBuf, String> {
+        use cap_utils::operation_diagnostics::{Field, observe};
+        observe(
+            "export_gif",
+            &[
+                Field::number("requested_fps", self.fps as u64),
+                Field::number("requested_width", self.resolution_base.x as u64),
+                Field::number("requested_height", self.resolution_base.y as u64),
+                Field::identifier(
+                    "resource",
+                    cap_utils::operation_diagnostics::resource_id(&base.project_path),
+                ),
+                Field::number(
+                    "source_width",
+                    base.render_constants.options.screen_size.x as u64,
+                ),
+                Field::number(
+                    "source_height",
+                    base.render_constants.options.screen_size.y as u64,
+                ),
+                Field::number("source_segments", base.segments.len() as u64),
+                Field::number("clips", base.project_config.clips.len() as u64),
+                Field::flag("captions", base.project_config.captions.is_some()),
+                Field::flag("streaming_audio", base.streaming_audio.is_some()),
+            ],
+            self.export_inner(base, on_progress),
+        )
+        .await
+    }
+
+    async fn export_inner(
+        self,
+        base: ExporterBase,
         mut on_progress: impl FnMut(u32) -> bool + Send + 'static,
     ) -> Result<PathBuf, String> {
         let meta = &base.studio_meta;
@@ -84,6 +118,7 @@ impl GifExportSettings {
         )
         .map_err(|e| format!("Failed to create GIF encoder: {e}"))?;
 
+        let sample_timing = base.sample_timing.clone();
         let encoder_thread = tokio::task::spawn_blocking(move || {
             let mut frame_count = 0;
 
@@ -100,7 +135,16 @@ impl GifExportSettings {
                     )));
                 }
 
+                if sample_timing
+                    .as_ref()
+                    .is_some_and(|timing| timing.is_cancelled())
+                {
+                    return Err(ExportError::Other("Export cancelled".into()));
+                }
                 frame_count += 1;
+                if let Some(timing) = &sample_timing {
+                    timing.record_frame(frame.frame_number);
+                }
             }
 
             if let Err(e) = gif_encoder.finish() {
@@ -132,6 +176,7 @@ impl GifExportSettings {
             fps,
             self.resolution_base,
             &base.recordings,
+            base.sample_windows.clone(),
         )
         .then(|f| async { f.map_err(|v| v.to_string()) });
 

@@ -1,4 +1,5 @@
 import { Button } from "@cap/ui-solid";
+import { createElementBounds } from "@solid-primitives/bounds";
 import { debounce } from "@solid-primitives/scheduled";
 import { makePersisted } from "@solid-primitives/storage";
 import { createMutation } from "@tanstack/solid-query";
@@ -12,17 +13,21 @@ import {
 	createEffect,
 	createSignal,
 	For,
+	type JSX,
 	Match,
 	mergeProps,
 	on,
 	onCleanup,
+	type ParentProps,
 	Show,
 	Suspense,
 	Switch,
+	type ValidComponent,
 } from "solid-js";
 import { createStore, produce, reconcile } from "solid-js/store";
+import { Dynamic } from "solid-js/web";
 import toast from "solid-toast";
-import { SignInButton } from "~/components/SignInButton";
+import { Toggle } from "~/components/Toggle";
 import Tooltip from "~/components/Tooltip";
 import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
 import { authStore } from "~/store";
@@ -41,11 +46,17 @@ import {
 	type FramesRendered,
 	type UploadProgress,
 } from "~/utils/tauri";
+import IconLucideGem from "~icons/lucide/gem";
+import IconLucideSlidersHorizontal from "~icons/lucide/sliders-horizontal";
 import { type RenderState, useEditorContext } from "./context";
+import { formatEstimatedSize, formatEstimatedTime } from "./export-estimates";
 import { RESOLUTION_OPTIONS } from "./Header";
-import { Dialog, Field } from "./ui";
+import { Dialog } from "./ui";
 
 class SilentError extends Error {}
+
+const EXPORT_CTA_CLASS =
+	"flex w-full h-10 items-center justify-center gap-2 rounded-[10px] text-[13px] font-medium transition-colors outline-hidden focus-visible:ring-2 focus-visible:ring-ed-accent/40 disabled:opacity-50 disabled:cursor-not-allowed";
 
 export const COMPRESSION_OPTIONS: Array<{
 	label: string;
@@ -161,6 +172,7 @@ function buildExportSettings(
 
 export function ExportPage() {
 	const {
+		dialog,
 		setDialog,
 		editorInstance,
 		editorState,
@@ -168,17 +180,21 @@ export function ExportPage() {
 		exportState,
 		meta,
 		refetchMeta,
+		flushProjectConfig,
+		projectRevision,
+		project,
 	} = useEditorContext();
 
 	const projectPath = editorInstance.path;
+	const [reuploading, setReuploading] = createSignal(false);
 
 	const auth = authStore.createQuery();
+	const signIn = createSignInMutation();
 	const organizationSelection = createSelectedOrganization();
 	const organisations = organizationSelection.organizations;
 
 	const hasTransparentBackground = () => {
-		const backgroundSource =
-			editorInstance.savedProjectConfig.background.source;
+		const backgroundSource = project.background.source;
 		return (
 			backgroundSource.type === "color" &&
 			backgroundSource.alpha !== undefined &&
@@ -205,6 +221,14 @@ export function ExportPage() {
 		}),
 		{ name: "export_settings" },
 	);
+	const initialDialog = dialog();
+	if (
+		"type" in initialDialog &&
+		initialDialog.type === "export" &&
+		initialDialog.destination
+	) {
+		setSettings("exportTo", initialDialog.destination);
+	}
 
 	const VALID_COMPRESSIONS: ExportCompression[] = [
 		"Maximum",
@@ -283,25 +307,29 @@ export function ExportPage() {
 	const [previewUrl, setPreviewUrl] = createSignal<string | null>(null);
 	const [previewLoading, setPreviewLoading] = createSignal(false);
 	const [previewUnavailable, setPreviewUnavailable] = createSignal(false);
-	const [renderEstimate, setRenderEstimate] = createSignal<{
-		frameRenderTimeMs: number;
-		totalFrames: number;
-		estimatedSizeMb: number;
-	} | null>(null);
-
-	type EstimateCacheKey = string;
-	const estimateCache = new Map<
-		EstimateCacheKey,
-		{ frameRenderTimeMs: number; totalFrames: number; estimatedSizeMb: number }
-	>();
-
-	const getEstimateCacheKey = (
-		fps: number,
-		width: number,
-		height: number,
-		bpp: number,
-		mode: "video" | "gif" | "cursor",
-	): EstimateCacheKey => `${fps}-${width}-${height}-${bpp}-${mode}`;
+	const [previewError, setPreviewError] = createSignal<string | null>(null);
+	type MeasuredEstimate = Awaited<
+		ReturnType<typeof commands.getExportEstimates>
+	>;
+	const [renderEstimate, setRenderEstimate] =
+		createSignal<MeasuredEstimate | null>(null);
+	const [estimateLoading, setEstimateLoading] = createSignal(false);
+	const estimatedSizeLabel = () => {
+		const estimate = renderEstimate();
+		return estimate
+			? formatEstimatedSize(estimate.size_range_mb)
+			: estimateLoading()
+				? "Calculating…"
+				: "Unavailable";
+	};
+	const estimatedTimeLabel = () => {
+		const estimate = renderEstimate();
+		return estimate
+			? formatEstimatedTime(estimate.time_range_seconds)
+			: estimateLoading()
+				? "Calculating…"
+				: "Unavailable";
+	};
 
 	const updateSettings: typeof setSettings = ((
 		...args: Parameters<typeof setSettings>
@@ -343,30 +371,139 @@ export function ExportPage() {
 	);
 
 	type PreviewRequest = {
+		projectRevision: number;
 		frameTime: number;
 		fps: number;
 		resWidth: number;
 		resHeight: number;
 		bpp: number;
+		mode: "video" | "gif" | "cursor";
+		exportSettings: ExportSettings;
 	};
 
+	let previewDisposed = false;
 	let previewInFlight = false;
+	let latestPreviewRequest: PreviewRequest | null = null;
 	let pendingPreviewRequest: PreviewRequest | null = null;
+	let cancelPreviewRetry: (() => void) | null = null;
+	let ownedPreviewUrl: string | null = null;
+	const [previewDimensions, setPreviewDimensions] = createSignal<{
+		request: PreviewRequest;
+		durationSeconds: number;
+		width: number;
+		height: number;
+	} | null>(null);
+
+	const previewMode = () =>
+		isMovCursorOnlyExport() ? "cursor" : shouldUseGifMode() ? "gif" : "video";
+	const matchesPreviewSettings = (request: PreviewRequest) =>
+		request.projectRevision === projectRevision() &&
+		request.fps === settings.fps &&
+		request.resWidth === settings.resolution.width &&
+		request.resHeight === settings.resolution.height &&
+		request.bpp === compressionBpp() &&
+		request.mode === previewMode() &&
+		JSON.stringify(request.exportSettings) ===
+			JSON.stringify(currentExportSettings());
+	const isPreviewCurrent = (request: PreviewRequest) =>
+		!previewDisposed &&
+		latestPreviewRequest === request &&
+		matchesPreviewSettings(request);
+	const currentPreviewDimensions = () => {
+		const dimensions = previewDimensions();
+		return dimensions && matchesPreviewSettings(dimensions.request)
+			? dimensions
+			: null;
+	};
+	const outputDimensions = () =>
+		currentPreviewDimensions() ?? settings.resolution;
+	const outputDescription = () => {
+		const dimensions = currentPreviewDimensions();
+		return dimensions
+			? `${dimensions.width}×${dimensions.height} · ${settings.fps} fps`
+			: undefined;
+	};
+
+	const currentExportSettings = () =>
+		buildExportSettings(
+			settings,
+			isMovCursorOnlyExport(),
+			advancedMode() && isCustomBpp() ? compressionBpp() : null,
+			forceFfmpegDecoder(),
+		);
+	let estimateGeneration = 0;
+	let estimateCancellation = Promise.resolve();
+	let pendingEstimate: PreviewRequest | null = null;
+	let estimating = false;
+	const fetchEstimate = async (request: PreviewRequest) => {
+		if (exportState.type !== "idle" || !isPreviewCurrent(request)) return;
+		pendingEstimate = request;
+		if (estimating) return;
+		estimating = true;
+		try {
+			while (!previewDisposed && pendingEstimate) {
+				const current = pendingEstimate;
+				pendingEstimate = null;
+				const generation = estimateGeneration;
+				let settled = false;
+				const onEstimate = new Channel<MeasuredEstimate>((estimate) => {
+					if (
+						!settled &&
+						generation === estimateGeneration &&
+						isPreviewCurrent(current)
+					)
+						setRenderEstimate(estimate);
+				});
+				try {
+					const estimate = await commands.getExportEstimates(
+						projectPath,
+						current.exportSettings,
+						onEstimate,
+					);
+					if (generation === estimateGeneration && isPreviewCurrent(current))
+						setRenderEstimate(estimate);
+				} catch (error) {
+					if (generation === estimateGeneration && isPreviewCurrent(current))
+						console.warn("Export estimate unavailable", error);
+				} finally {
+					settled = true;
+					const internals = (
+						globalThis as {
+							__TAURI_INTERNALS__?: {
+								unregisterCallback?: (id: number) => void;
+							};
+						}
+					).__TAURI_INTERNALS__;
+					internals?.unregisterCallback?.(onEstimate.id);
+					if (generation === estimateGeneration && isPreviewCurrent(current))
+						setEstimateLoading(false);
+				}
+			}
+		} finally {
+			estimating = false;
+		}
+	};
 
 	const runPreviewRequest = async (request: PreviewRequest, retryCount = 0) => {
-		const { frameTime, fps, resWidth, resHeight, bpp } = request;
-		const cacheKey = getEstimateCacheKey(
-			fps,
-			resWidth,
-			resHeight,
-			bpp,
-			isMovCursorOnlyExport() ? "cursor" : shouldUseGifMode() ? "gif" : "video",
-		);
-		const cachedEstimate = estimateCache.get(cacheKey);
+		if (!isPreviewCurrent(request)) return;
+		const { frameTime, fps, resWidth, resHeight, bpp, mode } = request;
 
-		if (cachedEstimate) {
-			setRenderEstimate(cachedEstimate);
+		try {
+			await estimateCancellation;
+			await flushProjectConfig();
+		} catch (error) {
+			if (!isPreviewCurrent(request)) return;
+			if (ownedPreviewUrl) URL.revokeObjectURL(ownedPreviewUrl);
+			ownedPreviewUrl = null;
+			setPreviewUrl(null);
+			setPreviewDimensions(null);
+			setRenderEstimate(null);
+			setPreviewError(error instanceof Error ? error.message : String(error));
+			setPreviewUnavailable(true);
+			setEstimateLoading(false);
+			return;
 		}
+		if (!isPreviewCurrent(request)) return;
 
 		const maxRetries = 2;
 
@@ -375,75 +512,111 @@ export function ExportPage() {
 				fps,
 				resolution_base: { x: resWidth, y: resHeight },
 				compression_bpp: bpp,
-				cursor_only: cursorOnly(),
+				cursor_only: mode === "cursor",
 			});
-
-			const oldUrl = previewUrl();
-			if (oldUrl) URL.revokeObjectURL(oldUrl);
+			if (!isPreviewCurrent(request)) return;
 
 			const byteArray = Uint8Array.from(atob(result.jpeg_base64), (c) =>
 				c.charCodeAt(0),
 			);
 			const blob = new Blob([byteArray], { type: "image/jpeg" });
-			setPreviewUrl(URL.createObjectURL(blob));
+			const nextUrl = URL.createObjectURL(blob);
+			if (ownedPreviewUrl) URL.revokeObjectURL(ownedPreviewUrl);
+			ownedPreviewUrl = nextUrl;
+			setPreviewUrl(nextUrl);
+			setPreviewDimensions({
+				request,
+				durationSeconds: result.total_frames / request.fps,
+				width: result.actual_width,
+				height: result.actual_height,
+			});
 
-			const newEstimate = {
-				frameRenderTimeMs: result.frame_render_time_ms,
-				totalFrames: result.total_frames,
-				estimatedSizeMb: result.estimated_size_mb,
-			};
-
-			if (!cachedEstimate) {
-				estimateCache.set(cacheKey, newEstimate);
-			}
 			setPreviewUnavailable(false);
-			setRenderEstimate(newEstimate);
+			void fetchEstimate(request);
 		} catch (e) {
+			if (!isPreviewCurrent(request)) return;
 			console.error("Failed to generate preview:", e);
 			if (retryCount < maxRetries) {
-				await new Promise((resolve) =>
-					setTimeout(resolve, 200 * (retryCount + 1)),
-				);
+				await new Promise<void>((resolve) => {
+					const timeout = setTimeout(
+						() => {
+							cancelPreviewRetry = null;
+							resolve();
+						},
+						200 * (retryCount + 1),
+					);
+					cancelPreviewRetry = () => {
+						clearTimeout(timeout);
+						cancelPreviewRetry = null;
+						resolve();
+					};
+				});
+				if (!isPreviewCurrent(request)) return;
 				return runPreviewRequest(request, retryCount + 1);
 			}
 			setPreviewUnavailable(true);
+			setEstimateLoading(false);
 		}
 	};
 
-	const fetchPreview = async (
-		frameTime: number,
-		fps: number,
-		resWidth: number,
-		resHeight: number,
-		bpp: number,
-	) => {
+	const fetchPreview = async (request: PreviewRequest) => {
+		if (!isPreviewCurrent(request)) return;
 		setPreviewUnavailable(false);
-		pendingPreviewRequest = { frameTime, fps, resWidth, resHeight, bpp };
+		pendingPreviewRequest = request;
 		if (previewInFlight) return;
 
 		previewInFlight = true;
+		let completedRequest: PreviewRequest | null = null;
 		try {
-			while (pendingPreviewRequest) {
+			while (!previewDisposed && pendingPreviewRequest) {
 				const request = pendingPreviewRequest;
 				pendingPreviewRequest = null;
 				await runPreviewRequest(request);
+				completedRequest = request;
 			}
 		} finally {
 			previewInFlight = false;
-			setPreviewLoading(false);
+			if (completedRequest && isPreviewCurrent(completedRequest))
+				setPreviewLoading(false);
 		}
 	};
 
 	const debouncedFetchPreview = debounce(fetchPreview, 300);
+	const requestPreview = (debounced = false) => {
+		if (previewDisposed) return;
+		const request: PreviewRequest = {
+			projectRevision: projectRevision(),
+			frameTime: editorState.playbackTime ?? 0,
+			fps: settings.fps,
+			resWidth: settings.resolution.width,
+			resHeight: settings.resolution.height,
+			bpp: compressionBpp(),
+			mode: previewMode(),
+			exportSettings: currentExportSettings(),
+		};
+		if (
+			previewDimensions()?.request.projectRevision !== request.projectRevision
+		) {
+			if (ownedPreviewUrl) URL.revokeObjectURL(ownedPreviewUrl);
+			ownedPreviewUrl = null;
+			setPreviewUrl(null);
+			setPreviewDimensions(null);
+		}
+		estimateGeneration += 1;
+		pendingEstimate = null;
+		setRenderEstimate(null);
+		setEstimateLoading(true);
+		estimateCancellation = commands.cancelExportEstimates().catch(console.warn);
+		setPreviewError(null);
+		latestPreviewRequest = request;
+		pendingPreviewRequest = null;
+		cancelPreviewRetry?.();
+		setPreviewLoading(true);
+		if (debounced) debouncedFetchPreview(request);
+		else void fetchPreview(request);
+	};
 
-	setPreviewLoading(true);
-	fetchPreview(
-		editorState.playbackTime ?? 0,
-		settings.fps,
-		settings.resolution.width,
-		settings.resolution.height,
-		compressionBpp(),
-	);
+	requestPreview();
 
 	createEffect(
 		on(
@@ -454,25 +627,39 @@ export function ExportPage() {
 				() => settings.resolution.height,
 				cursorOnly,
 				compressionBpp,
+				projectRevision,
+				() => settings.optimizeFilesize,
+				() => settings.compression,
+				forceFfmpegDecoder,
+				advancedMode,
 			],
-			() => {
-				const frameTime = editorState.playbackTime ?? 0;
-				setPreviewLoading(true);
-				debouncedFetchPreview(
-					frameTime,
-					settings.fps,
-					settings.resolution.width,
-					settings.resolution.height,
-					compressionBpp(),
-				);
-			},
+			() => requestPreview(true),
 			{ defer: true },
 		),
 	);
 
 	onCleanup(() => {
-		const url = previewUrl();
-		if (url) URL.revokeObjectURL(url);
+		previewDisposed = true;
+		estimateGeneration += 1;
+		pendingEstimate = null;
+		void commands.cancelExportEstimates().catch(console.warn);
+		latestPreviewRequest = null;
+		pendingPreviewRequest = null;
+		debouncedFetchPreview.clear();
+		cancelPreviewRetry?.();
+		if (ownedPreviewUrl) {
+			URL.revokeObjectURL(ownedPreviewUrl);
+			ownedPreviewUrl = null;
+		}
+	});
+
+	createEffect(() => {
+		if (exportState.type !== "idle") {
+			estimateGeneration += 1;
+			pendingEstimate = null;
+			setEstimateLoading(false);
+			void commands.cancelExportEstimates().catch(console.warn);
+		}
 	});
 
 	let cancelCurrentExport: (() => void) | null = null;
@@ -482,7 +669,7 @@ export function ExportPage() {
 		cancelCurrentExport = null;
 	});
 
-	const exportWithSettings = (
+	const exportWithSettings = async (
 		onProgress: (progress: FramesRendered) => void,
 	) => {
 		const customBpp = advancedMode() && isCustomBpp() ? compressionBpp() : null;
@@ -492,6 +679,8 @@ export function ExportPage() {
 			customBpp,
 			forceFfmpegDecoder(),
 		);
+		await flushProjectConfig();
+		if (previewDisposed || isCancelled()) throw new SilentError("Cancelled");
 		const { promise, cancel } = createExportTask(
 			projectPath,
 			exportSettings,
@@ -565,6 +754,7 @@ export function ExportPage() {
 			}
 		},
 		onError: (error) => {
+			if (previewDisposed) return;
 			if (isCancelled() || isCancellationError(error)) {
 				setExportState(reconcile({ type: "idle" }));
 				return;
@@ -575,6 +765,7 @@ export function ExportPage() {
 			setExportState(reconcile({ type: "idle" }));
 		},
 		onSuccess() {
+			if (previewDisposed) return;
 			setExportState({ type: "done" });
 			toast.success(`${exportedAssetLabel()} exported to clipboard`);
 		},
@@ -593,6 +784,9 @@ export function ExportPage() {
 				customBpp,
 				forceFfmpegDecoder(),
 			);
+			setExportState(reconcile({ action: "save", type: "starting" }));
+			await flushProjectConfig();
+			if (previewDisposed || isCancelled()) throw new SilentError("Cancelled");
 			const task = createExportToFileTask(
 				projectPath,
 				exportSettings,
@@ -620,6 +814,7 @@ export function ExportPage() {
 			setExportState({ type: "done" });
 		},
 		onError: (error) => {
+			if (previewDisposed) return;
 			if (isCancelled() || isCancellationError(error)) {
 				setExportState({ type: "idle" });
 				return;
@@ -632,6 +827,7 @@ export function ExportPage() {
 			setExportState({ type: "idle" });
 		},
 		onSuccess() {
+			if (previewDisposed) return;
 			toast.success(`${exportedAssetLabel()} exported to file`);
 		},
 	}));
@@ -643,6 +839,8 @@ export function ExportPage() {
 			const releaseExportSession = await beginExportSessionGuard();
 			try {
 				setExportState(reconcile({ action: "upload", type: "starting" }));
+				await refetchMeta();
+				setReuploading(!!meta().sharing);
 
 				const existingAuth = await authStore.get();
 				if (!existingAuth) createSignInMutation();
@@ -667,6 +865,13 @@ export function ExportPage() {
 					}
 				}
 
+				await exportWithSettings((progress) => {
+					if (isCancelled()) throw new SilentError("Cancelled");
+					setExportState({ type: "rendering", progress });
+				});
+
+				if (isCancelled()) throw new SilentError("Cancelled");
+
 				const uploadChannel = new Channel<UploadProgress>((progress) => {
 					console.log("Upload progress:", progress);
 					setExportState(
@@ -678,13 +883,6 @@ export function ExportPage() {
 					);
 				});
 
-				await exportWithSettings((progress) => {
-					if (isCancelled()) throw new SilentError("Cancelled");
-					setExportState({ type: "rendering", progress });
-				});
-
-				if (isCancelled()) throw new SilentError("Cancelled");
-
 				setExportState({ type: "uploading", progress: 0 });
 
 				console.log({ organizationId: settings.organizationId });
@@ -694,7 +892,7 @@ export function ExportPage() {
 							projectPath,
 							"Reupload",
 							uploadChannel,
-							settings.organizationId ?? null,
+							null,
 						)
 					: await commands.uploadExportedVideo(
 							projectPath,
@@ -715,9 +913,11 @@ export function ExportPage() {
 		},
 		onSuccess: async () => {
 			await refetchMeta();
+			if (previewDisposed) return;
 			setExportState({ type: "done" });
 		},
 		onError: (error) => {
+			if (previewDisposed) return;
 			if (isCancelled() || isCancellationError(error)) {
 				setExportState(reconcile({ type: "idle" }));
 				return;
@@ -743,232 +943,279 @@ export function ExportPage() {
 		return `${minutes}:${secs.toString().padStart(2, "0")}`;
 	};
 
+	const [stageRef, setStageRef] = createSignal<HTMLDivElement>();
+	const stageBounds = createElementBounds(stageRef);
+	const previewBox = () => {
+		const availWidth = Math.max(120, stageBounds.width ?? 0);
+		const availHeight = Math.max(68, stageBounds.height ?? 0);
+		const { width, height } = outputDimensions();
+		const scale = Math.min(availWidth / width, availHeight / height);
+		return {
+			width: Math.floor(width * scale),
+			height: Math.floor(height * scale),
+		};
+	};
+
+	const destinationOptions = () =>
+		EXPORT_TO_OPTIONS.map((option) => ({
+			value: option.value,
+			label:
+				option.value === "link" && meta().sharing ? "Reupload" : option.label,
+			icon: option.icon,
+			disabled: option.value === "link" && disablesLinkExport(),
+			disabledReason:
+				option.value === "link" && disablesLinkExport()
+					? cursorOnly()
+						? "Cursor-only exports can only be saved to a file or clipboard"
+						: "Transparent exports can only be saved to a file or clipboard"
+					: undefined,
+		}));
+
+	const formatOptions = () =>
+		FORMAT_OPTIONS.map((option) => {
+			const disabled =
+				cursorOnly() ||
+				(option.value === "Mp4" && requiresTransparentExport()) ||
+				(option.value === "Gif" && settings.exportTo === "link");
+			return {
+				value: option.value,
+				label: option.label,
+				disabled,
+				disabledReason: cursorOnly()
+					? "Cursor-only export always uses transparent MOV"
+					: option.value === "Mp4" && requiresTransparentExport()
+						? "MP4 doesn't support transparency"
+						: option.value === "Gif" && settings.exportTo === "link"
+							? "Links require MP4 format"
+							: undefined,
+			};
+		});
+
+	const resolutionOptions = () =>
+		(shouldUseGifMode()
+			? [RESOLUTION_OPTIONS._720p, RESOLUTION_OPTIONS._1080p]
+			: [
+					RESOLUTION_OPTIONS._720p,
+					RESOLUTION_OPTIONS._1080p,
+					RESOLUTION_OPTIONS._4k,
+				]
+		).map((option) => ({ value: option.value, label: option.label }));
+
+	const fpsOptions = () =>
+		(shouldUseGifMode() ? GIF_FPS_OPTIONS : FPS_OPTIONS).map((option) => ({
+			value: option.value,
+			label: option.label,
+		}));
+
+	const qualityOptions = () =>
+		[...COMPRESSION_OPTIONS].reverse().map((option) => ({
+			value: option.value,
+			label: option.label === "Social Media" ? "Social" : option.label,
+		}));
+
+	const selectedQuality = () => (isCustomBpp() ? null : settings.compression);
+
+	const showBitrateControls = () => settings.format === "Mp4" && !cursorOnly();
+
 	return (
-		<div class="flex flex-col h-full bg-gray-1 overflow-hidden">
+		<div class="flex flex-col h-full bg-ed-window text-ed-text-1 overflow-hidden">
 			<div
 				data-tauri-drag-region
-				class="flex relative flex-row items-center w-full h-14 border-b border-gray-3 shrink-0"
+				class={cx(
+					"flex relative flex-row items-center w-full h-[52px] pr-3 border-b border-ed-line shrink-0",
+					ostype() === "macos" ? "pl-[92px]" : "pl-3",
+				)}
 			>
-				<h1 class="absolute inset-0 flex items-center justify-center text-sm font-medium text-gray-12 pointer-events-none">
+				<div data-tauri-drag-region class="flex flex-1 items-center h-full">
+					<button
+						type="button"
+						onClick={handleBack}
+						class="flex gap-1.5 items-center h-7 pl-2 pr-2.5 rounded-lg text-[12px] font-medium text-ed-text-2 transition-colors hover:bg-ed-ctl hover:text-ed-text-1 outline-hidden focus-visible:ring-1 focus-visible:ring-ed-accent"
+					>
+						<IconCapMoveLeft class="size-3.5" />
+						Back to editor
+					</button>
+				</div>
+				<h1 class="text-[13px] font-medium text-ed-text-1 pointer-events-none">
 					Export
 				</h1>
-				<div
-					data-tauri-drag-region
-					class={cx(
-						"flex flex-row flex-1 gap-2 items-center px-4 h-full",
-						ostype() !== "windows" && "pr-2",
-					)}
-				>
-					{ostype() === "macos" && <div class="h-full w-16" />}
-					<div data-tauri-drag-region class="flex-1 h-full" />
+				<div data-tauri-drag-region class="flex flex-1 justify-end h-full">
 					{ostype() === "windows" && <CaptionControlsWindows11 />}
 				</div>
 			</div>
 
 			<div class="flex-1 min-h-0 flex relative">
-				<div class="flex-1 min-h-0 p-5 flex flex-col">
-					<div class="flex items-center gap-1.5 mb-2">
-						<span class="text-sm font-medium text-gray-11">Preview</span>
-						<Tooltip content="This is a rendered frame from your video. Adjust the settings below to see the quality of the final exported video.">
-							<IconLucideInfo class="size-3.5 text-gray-9 hover:text-gray-11 cursor-help transition-colors" />
+				<div class="flex-1 min-w-0 flex flex-col bg-ed-stage pt-4 px-6 pb-5">
+					<div class="flex items-center gap-1.5 h-[22px] text-[12px] font-medium text-ed-text-2">
+						Preview
+						<Tooltip content="This is a rendered frame from your video. Adjust the settings to see the quality of the final export.">
+							<IconLucideInfo class="size-[13px] text-ed-text-3 hover:text-ed-text-2 cursor-help transition-colors" />
 						</Tooltip>
 					</div>
-					<div class="relative flex-1 min-h-0 rounded-xl overflow-hidden bg-gray-2 border border-gray-3 flex items-center justify-center group">
-						<Show
-							when={previewUrl()}
-							fallback={
-								<div class="absolute inset-0 flex items-center justify-center">
-									<Show
-										when={previewLoading()}
-										fallback={
-											<div class="flex flex-col items-center gap-3 text-gray-10">
-												<IconLucideImage class="size-12 text-gray-8" />
-												<span class="text-sm">
-													{previewUnavailable()
-														? "Preview unavailable"
-														: "Generating preview..."}
-												</span>
-											</div>
-										}
-									>
-										<div class="absolute inset-4 rounded-lg bg-gray-4 overflow-hidden">
-											<div class="absolute inset-y-0 w-full animate-shimmer bg-linear-to-r from-transparent from-30% via-gray-6 via-50% to-transparent to-70%" />
+					<div class="flex-1 min-h-0 flex items-center justify-center pt-3.5 pb-[18px]">
+						<div ref={setStageRef} class="relative size-full">
+							<div
+								class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 rounded-[10px] overflow-hidden group"
+								classList={{
+									"shadow-[0_12px_32px_-8px_rgba(0,0,0,0.35),0_0_0_0.5px_rgba(0,0,0,0.12)]":
+										!!previewUrl(),
+									"bg-ed-ctl": !previewUrl(),
+								}}
+								style={{
+									width: `${previewBox().width}px`,
+									height: `${previewBox().height}px`,
+								}}
+							>
+								<Show
+									when={previewUrl()}
+									fallback={
+										<div class="absolute inset-0 flex items-center justify-center px-6">
+											<Show
+												when={previewLoading()}
+												fallback={
+													<span class="text-[12px] text-center text-ed-text-2 break-words">
+														{previewError() ??
+															(previewUnavailable()
+																? "Preview unavailable"
+																: "Generating preview...")}
+													</span>
+												}
+											>
+												<div class="absolute inset-0 overflow-hidden">
+													<div class="absolute inset-y-0 w-full animate-shimmer bg-linear-to-r from-transparent from-30% via-ed-ctl-hover via-50% to-transparent to-70%" />
+												</div>
+											</Show>
 										</div>
-									</Show>
-								</div>
-							}
-						>
-							{(url) => (
-								<>
-									<img
-										src={url()}
-										alt="Export preview"
-										class="relative z-0 w-full h-full object-contain"
-									/>
-									<Show when={previewLoading()}>
-										<div class="absolute inset-0 z-50 overflow-hidden pointer-events-none">
-											<div class="absolute inset-y-0 w-full animate-shimmer bg-linear-to-r from-transparent from-30% via-white/60 via-50% to-transparent to-70%" />
-										</div>
-									</Show>
-									<button
-										type="button"
-										onClick={() => setPreviewDialogOpen(true)}
-										class="absolute bottom-3 right-3 p-2 rounded-lg bg-gray-12/80 hover:bg-gray-12 text-gray-1 opacity-0 group-hover:opacity-100 transition-opacity"
-									>
-										<IconLucideMaximize2 class="size-4" />
-									</button>
-								</>
-							)}
-						</Show>
-					</div>
-
-					<Show
-						when={
-							!previewUnavailable() && !previewLoading() && renderEstimate()
-						}
-						fallback={
-							<div class="flex items-center justify-center gap-4 mt-4 h-4 text-xs text-gray-11">
-								<span class="flex items-center gap-1.5">
-									<IconLucideClock class="size-3.5" />
-									<span class="h-3.5 w-10 bg-gray-4 rounded-sm animate-pulse" />
-								</span>
-								<span class="flex items-center gap-1.5">
-									<IconLucideMonitor class="size-3.5" />
-									<span class="h-3.5 w-20 bg-gray-4 rounded-sm animate-pulse" />
-								</span>
-								<span class="flex items-center gap-1.5">
-									<IconLucideHardDrive class="size-3.5" />
-									<span class="h-3.5 w-16 bg-gray-4 rounded-sm animate-pulse" />
-								</span>
-								<span class="flex items-center gap-1.5">
-									<IconLucideZap class="size-3.5" />
-									<span class="h-3.5 w-12 bg-gray-4 rounded-sm animate-pulse" />
-								</span>
-							</div>
-						}
-					>
-						{(est) => {
-							const data = est();
-							const durationSeconds = data.totalFrames / settings.fps;
-
-							const exportSpeedMultiplier = shouldUseGifMode() ? 4 : 10;
-							const totalTimeMs =
-								(data.frameRenderTimeMs * data.totalFrames) /
-								exportSpeedMultiplier;
-							const estimatedTimeSeconds = Math.max(1, totalTimeMs / 1000);
-
-							const estimatedSizeMb = data.estimatedSizeMb;
-
-							return (
-								<div class="flex items-center justify-center gap-4 mt-4 h-4 text-xs text-gray-11">
-									<span class="flex items-center gap-1.5">
-										<IconLucideClock class="size-3.5" />
-										<span class="min-w-10">
-											{formatDuration(Math.round(durationSeconds))}
-										</span>
-									</span>
-									<span class="flex items-center gap-1.5">
-										<IconLucideMonitor class="size-3.5" />
-										<span class="min-w-20">
-											{settings.resolution.width}×{settings.resolution.height}
-										</span>
-									</span>
-									<span class="flex items-center gap-1.5">
-										<IconLucideHardDrive class="size-3.5" />
-										<span class="min-w-16">
-											~{estimatedSizeMb.toFixed(1)} MB
-										</span>
-									</span>
-									<span class="flex items-center gap-1.5">
-										<IconLucideZap class="size-3.5" />
-										<span class="min-w-12">
-											~{formatDuration(Math.round(estimatedTimeSeconds))}
-										</span>
-									</span>
-								</div>
-							);
-						}}
-					</Show>
-				</div>
-
-				<div class="w-[400px] border-l border-gray-3 flex flex-col bg-gray-1 dark:bg-gray-2">
-					<button
-						type="button"
-						onClick={handleBack}
-						class="flex flex-none gap-2 items-center px-4 w-full h-16 text-sm font-medium border-b transition-colors text-gray-12 border-gray-3 hover:bg-gray-3"
-					>
-						<IconCapMoveLeft class="size-4 text-gray-11" />
-						Back to editor
-					</button>
-					<div class="flex-1 overflow-y-auto p-4 space-y-5">
-						<Field name="Destination" icon={<IconCapUpload class="size-4" />}>
-							<div class="flex gap-1.5">
-								<For each={EXPORT_TO_OPTIONS}>
-									{(option) => {
-										const Icon = option.icon;
-										const isSelected = () => settings.exportTo === option.value;
-										const isDisabled = () =>
-											option.value === "link" && disablesLinkExport();
-										const disabledReason = () =>
-											isDisabled()
-												? cursorOnly()
-													? "Cursor-only exports can only be saved to a file or clipboard"
-													: "Transparent exports can only be saved to a file or clipboard"
-												: undefined;
-										const button = (
+									}
+								>
+									{(url) => (
+										<>
+											<img
+												src={url()}
+												alt="Export preview"
+												class="relative z-0 size-full object-contain"
+											/>
+											<Show when={previewLoading()}>
+												<div class="absolute inset-0 z-50 overflow-hidden pointer-events-none">
+													<div class="absolute inset-y-0 w-full animate-shimmer bg-linear-to-r from-transparent from-30% via-white/60 via-50% to-transparent to-70%" />
+												</div>
+											</Show>
 											<button
 												type="button"
-												class={cx(
-													"flex-1 flex flex-col items-center gap-1.5 px-3 py-2.5 rounded-lg border transition-colors",
-													isSelected()
-														? "bg-gray-3 border-gray-5 text-gray-12"
-														: "bg-transparent border-transparent text-gray-11 hover:bg-gray-3 hover:border-gray-4",
-													isDisabled() && "opacity-50 cursor-not-allowed",
-												)}
-												disabled={isDisabled()}
-												onClick={() => {
-													setSettings(
-														produce((newSettings) => {
-															newSettings.exportTo =
-																option.value as ExportToOption;
-															if (
-																option.value === "link" &&
-																settings.format === "Gif"
-															) {
-																newSettings.format = "Mp4";
-															}
-														}),
-													);
-												}}
+												aria-label="Open full-size preview"
+												onClick={() => setPreviewDialogOpen(true)}
+												class="absolute bottom-3 right-3 p-2 rounded-lg bg-black/60 hover:bg-black/75 text-white opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity outline-hidden"
 											>
-												<Icon
-													class={cx(
-														"size-5",
-														isSelected() ? "text-gray-12" : "text-gray-10",
-													)}
-												/>
-												<span class="text-xs font-medium">{option.label}</span>
+												<IconLucideMaximize2 class="size-4" />
 											</button>
-										);
-
-										return disabledReason() ? (
-											<Tooltip content={disabledReason()}>{button}</Tooltip>
-										) : (
-											button
-										);
-									}}
-								</For>
+										</>
+									)}
+								</Show>
 							</div>
+						</div>
+					</div>
+
+					<div class="flex justify-center">
+						<div class="flex h-11 min-w-[520px] rounded-[10px] bg-ed-card shadow-ed-card">
+							<ExportStat
+								label="Duration"
+								value={
+									previewDimensions()
+										? formatDuration(
+												Math.round(
+													renderEstimate()?.duration_seconds ??
+														previewDimensions()?.durationSeconds ??
+														0,
+												),
+											)
+										: undefined
+								}
+							/>
+							<ExportStat label="Output" value={outputDescription()} divided />
+							<ExportStat
+								label={
+									estimateLoading() && renderEstimate()
+										? "Refining size…"
+										: "Estimated size"
+								}
+								value={estimatedSizeLabel()}
+								divided
+							/>
+							<ExportStat
+								label={
+									estimateLoading() && renderEstimate()
+										? "Refining time…"
+										: "Export time"
+								}
+								value={estimatedTimeLabel()}
+								divided
+							/>
+						</div>
+					</div>
+				</div>
+
+				<div class="w-[400px] shrink-0 border-l border-ed-line flex flex-col bg-ed-card">
+					<div class="custom-scroll flex-1 min-h-0 overflow-y-auto overscroll-contain p-4 flex flex-col gap-5">
+						<ExportSection
+							name="Destination"
+							icon={<IconCapUpload class="size-3.5" />}
+						>
+							<ExportSegmented
+								options={destinationOptions()}
+								value={settings.exportTo}
+								tall
+								onChange={(value) => {
+									setSettings(
+										produce((newSettings) => {
+											newSettings.exportTo = value;
+											if (value === "link" && settings.format === "Gif") {
+												newSettings.format = "Mp4";
+											}
+										}),
+									);
+								}}
+							/>
+							<Show when={disablesLinkExport()}>
+								<p class="text-[11px] text-ed-text-3">
+									{cursorOnly()
+										? "Cursor-only exports can only be saved to a file or clipboard."
+										: "Transparent exports can only be saved to a file or clipboard."}
+								</p>
+							</Show>
+
+							<Show when={settings.exportTo === "link" && meta().sharing}>
+								{(sharing) => (
+									<div class="p-3 rounded-[10px] bg-ed-card-2 flex flex-col gap-1">
+										<p class="text-[12.5px] font-medium text-ed-text-1">
+											Update your existing link
+										</p>
+										<p class="text-[11.5px] leading-[15px] text-ed-text-3">
+											Reupload replaces the video at this link with your latest
+											edit. Everyone with the link will see the updated version.
+										</p>
+										<a
+											class="block text-[11.5px] text-ed-accent truncate hover:underline"
+											href={sharing().link}
+											target="_blank"
+											rel="noreferrer"
+										>
+											{sharing().link}
+										</a>
+									</div>
+								)}
+							</Show>
 
 							<Suspense>
 								<Show
 									when={
-										settings.exportTo === "link" && organisations().length > 1
+										settings.exportTo === "link" &&
+										!meta().sharing &&
+										organisations().length > 1
 									}
 								>
 									<button
 										type="button"
-										class="w-full flex items-center justify-between px-3 py-2 mt-3 rounded-lg bg-gray-3 hover:bg-gray-4 transition-colors text-sm"
+										class="w-full flex items-center justify-between h-[30px] px-2.5 rounded-[7px] bg-ed-ctl hover:bg-ed-ctl-hover transition-colors text-[12px] outline-hidden focus-visible:ring-1 focus-visible:ring-ed-accent"
 										onClick={async () => {
 											const menu = await Menu.new({
 												items: await Promise.all(
@@ -989,8 +1236,8 @@ export function ExportPage() {
 											menu.popup();
 										}}
 									>
-										<span class="text-gray-11">Organization</span>
-										<span class="flex items-center gap-1 text-gray-12">
+										<span class="text-ed-text-2">Organization</span>
+										<span class="flex items-center gap-1 text-ed-text-1">
 											{
 												(
 													organisations().find(
@@ -998,307 +1245,160 @@ export function ExportPage() {
 													) ?? organisations()[0]
 												)?.name
 											}
-											<IconCapChevronDown class="size-4" />
+											<IconCapChevronDown class="size-3.5 text-ed-text-3" />
 										</span>
 									</button>
 								</Show>
 							</Suspense>
-						</Field>
+						</ExportSection>
 
-						<Field name="Format" icon={<IconLucideVideo class="size-4" />}>
-							<div class="flex gap-1.5">
-								<For each={FORMAT_OPTIONS}>
-									{(option) => {
-										const isDisabled = () =>
-											cursorOnly() ||
-											(option.value === "Mp4" && requiresTransparentExport()) ||
-											(option.value === "Gif" && settings.exportTo === "link");
-
-										const disabledReason = () =>
-											cursorOnly()
-												? "Cursor-only export always uses transparent MOV"
-												: option.value === "Mp4" && requiresTransparentExport()
-													? "MP4 doesn't support transparency"
-													: option.value === "Gif" &&
-															settings.exportTo === "link"
-														? "Links require MP4 format"
-														: undefined;
-
-										const button = (
-											<button
-												type="button"
-												class={cx(
-													"flex-1 py-2 text-sm font-medium rounded-lg border transition-colors",
-													settings.format === option.value
-														? "bg-gray-3 border-gray-5 text-gray-12"
-														: "bg-transparent border-transparent text-gray-11 hover:bg-gray-3 hover:border-gray-4",
-													isDisabled() && "opacity-50 cursor-not-allowed",
-												)}
-												disabled={isDisabled()}
-												onClick={() => {
-													updateSettings(
-														produce((newSettings) => {
-															newSettings.format = option.value;
-															if (
-																option.value === "Gif" &&
-																!(
-																	settings.resolution.value === "720p" ||
-																	settings.resolution.value === "1080p"
-																)
-															)
-																newSettings.resolution = {
-																	...RESOLUTION_OPTIONS._720p,
-																};
-															if (
-																option.value === "Gif" &&
-																GIF_FPS_OPTIONS.every(
-																	(v) => v.value !== settings.fps,
-																)
-															)
-																newSettings.fps = 15;
-															if (
-																option.value === "Mp4" &&
-																FPS_OPTIONS.every(
-																	(v) => v.value !== settings.fps,
-																)
-															)
-																newSettings.fps = 30;
-														}),
-													);
-												}}
-											>
-												{option.label}
-											</button>
-										);
-
-										return disabledReason() ? (
-											<Tooltip content={disabledReason()}>{button}</Tooltip>
-										) : (
-											button
-										);
-									}}
-								</For>
-							</div>
-						</Field>
-
-						<Field
-							name="Resolution"
-							icon={<IconLucideMonitor class="size-4" />}
+						<ExportSection
+							name="Format"
+							icon={<IconLucideVideo class="size-3.5" />}
+							disabled={cursorOnly()}
 						>
-							<div class="flex gap-1.5">
-								<For
-									each={
-										shouldUseGifMode()
-											? [RESOLUTION_OPTIONS._720p, RESOLUTION_OPTIONS._1080p]
-											: [
-													RESOLUTION_OPTIONS._720p,
-													RESOLUTION_OPTIONS._1080p,
-													RESOLUTION_OPTIONS._4k,
-												]
-									}
-								>
-									{(option) => (
-										<button
-											type="button"
-											class={cx(
-												"flex-1 py-2 text-sm font-medium rounded-lg border transition-colors",
-												settings.resolution.value === option.value
-													? "bg-gray-3 border-gray-5 text-gray-12"
-													: "bg-transparent border-transparent text-gray-11 hover:bg-gray-3 hover:border-gray-4",
-											)}
-											onClick={() => updateSettings("resolution", option)}
-										>
-											{option.label}
-										</button>
-									)}
-								</For>
-							</div>
-						</Field>
+							<ExportSegmented
+								options={formatOptions()}
+								value={settings.format}
+								onChange={(value) => {
+									updateSettings(
+										produce((newSettings) => {
+											newSettings.format = value;
+											if (
+												value === "Gif" &&
+												!(
+													settings.resolution.value === "720p" ||
+													settings.resolution.value === "1080p"
+												)
+											)
+												newSettings.resolution = {
+													...RESOLUTION_OPTIONS._720p,
+												};
+											if (
+												value === "Gif" &&
+												GIF_FPS_OPTIONS.every((v) => v.value !== settings.fps)
+											)
+												newSettings.fps = 15;
+											if (
+												value === "Mp4" &&
+												FPS_OPTIONS.every((v) => v.value !== settings.fps)
+											)
+												newSettings.fps = 30;
+										}),
+									);
+								}}
+							/>
+						</ExportSection>
 
-						<Field name="Frame Rate" icon={<IconLucideGauge class="size-4" />}>
-							<div class="flex gap-1.5">
-								<For each={shouldUseGifMode() ? GIF_FPS_OPTIONS : FPS_OPTIONS}>
-									{(option) => (
-										<button
-											type="button"
-											class={cx(
-												"flex-1 py-2 text-sm font-medium rounded-lg border transition-colors",
-												settings.fps === option.value
-													? "bg-gray-3 border-gray-5 text-gray-12"
-													: "bg-transparent border-transparent text-gray-11 hover:bg-gray-3 hover:border-gray-4",
-											)}
-											onClick={() => {
-												trackEvent("export_fps_changed", {
-													fps: option.value,
-												});
-												updateSettings("fps", option.value);
-											}}
-										>
-											{option.value}
-										</button>
-									)}
-								</For>
-							</div>
-						</Field>
+						<ExportSection
+							name="Resolution"
+							icon={<IconLucideMonitor class="size-3.5" />}
+						>
+							<ExportSegmented
+								options={resolutionOptions()}
+								value={settings.resolution.value}
+								onChange={(value) => {
+									const option = Object.values(RESOLUTION_OPTIONS).find(
+										(candidate) => candidate.value === value,
+									);
+									if (option) updateSettings("resolution", { ...option });
+								}}
+							/>
+						</ExportSection>
 
-						<Show when={settings.format === "Mp4" && !cursorOnly()}>
-							<Field
+						<ExportSection
+							name="Frame rate"
+							icon={<IconLucideGauge class="size-3.5" />}
+						>
+							<ExportSegmented
+								options={fpsOptions()}
+								value={settings.fps}
+								onChange={(value) => {
+									trackEvent("export_fps_changed", { fps: value });
+									updateSettings("fps", value);
+								}}
+							/>
+						</ExportSection>
+
+						<Show when={showBitrateControls()}>
+							<ExportSection
 								name="Quality"
-								icon={<IconLucideSparkles class="size-4" />}
+								icon={<IconLucideGem class="size-3.5" />}
 							>
-								<div class="grid grid-cols-4 gap-1.5">
-									<For each={[...COMPRESSION_OPTIONS].reverse()}>
-										{(option) => {
-											const isSelected = () => {
-												if (advancedMode() && isCustomBpp()) return false;
-												return settings.compression === option.value;
-											};
-											return (
-												<button
-													type="button"
-													class={cx(
-														"px-2 py-2 text-xs font-medium rounded-lg border transition-colors",
-														isSelected()
-															? "bg-gray-3 border-gray-5 text-gray-12"
-															: "bg-transparent border-transparent text-gray-11 hover:bg-gray-3 hover:border-gray-4",
-													)}
-													onClick={() => {
-														setPreviewLoading(true);
-														setCompressionBpp(option.bpp);
-														setSettings("compression", option.value);
-													}}
-												>
-													{option.label === "Social Media"
-														? "Social"
-														: option.label}
-												</button>
-											);
-										}}
-									</For>
-								</div>
-								<div class="flex justify-between text-[10px] text-gray-10 mt-1.5 px-0.5">
+								<ExportSegmented
+									options={qualityOptions()}
+									value={selectedQuality()}
+									onChange={(value) => {
+										const option = COMPRESSION_OPTIONS.find(
+											(candidate) => candidate.value === value,
+										);
+										if (!option) return;
+										setPreviewLoading(true);
+										setCompressionBpp(option.bpp);
+										setSettings("compression", option.value);
+									}}
+								/>
+								<div class="flex justify-between px-0.5 text-[10.5px] text-ed-text-3">
 									<span>Smaller file</span>
 									<span>Larger file</span>
 								</div>
-
-								<button
-									type="button"
-									role="switch"
-									aria-checked={settings.optimizeFilesize}
-									class="flex items-center gap-2 mt-3 text-xs text-gray-11 hover:text-gray-12 transition-colors w-full"
-									onClick={() =>
-										updateSettings(
-											"optimizeFilesize",
-											!settings.optimizeFilesize,
-										)
+								<ExportToggleRow
+									title="Optimize file size"
+									description="Re-encodes with software for much smaller files (slower)"
+									checked={settings.optimizeFilesize}
+									onChange={(value) =>
+										updateSettings("optimizeFilesize", value)
 									}
-								>
-									<div
-										class={cx(
-											"w-8 h-4 rounded-full transition-colors relative shrink-0",
-											settings.optimizeFilesize ? "bg-blue-9" : "bg-gray-5",
-										)}
-									>
-										<div
-											class={cx(
-												"absolute top-0.5 w-3 h-3 rounded-full bg-white transition-transform",
-												settings.optimizeFilesize
-													? "translate-x-4"
-													: "translate-x-0.5",
-											)}
-										/>
-									</div>
-									<div class="text-left">
-										<span class="block">Optimize file size</span>
-										<span class="text-[10px] text-gray-9">
-											Re-encodes with software for much smaller files (slower)
-										</span>
-									</div>
-								</button>
-							</Field>
+								/>
+							</ExportSection>
 						</Show>
 
-						<Field
-							name="Advanced Options"
-							icon={<IconLucideSparkles class="size-4" />}
-						>
+						<div class="h-px shrink-0 bg-ed-line" />
+
+						<div class="flex flex-col gap-1">
 							<button
 								type="button"
-								class={cx(
-									"w-full flex items-center justify-between px-3 py-2 text-sm font-medium rounded-lg border transition-colors",
-									advancedMode()
-										? "bg-gray-3 border-gray-5 text-gray-12"
-										: "bg-transparent border-gray-4 text-gray-11 hover:bg-gray-3 hover:border-gray-5",
-								)}
+								aria-expanded={advancedMode()}
+								class="flex items-center gap-1.5 h-[30px] -mx-1.5 px-1.5 rounded-lg text-[12px] font-medium text-ed-text-2 transition-colors hover:bg-ed-ctl hover:text-ed-text-1 outline-hidden focus-visible:ring-1 focus-visible:ring-ed-accent"
 								onClick={() => setAdvancedMode(!advancedMode())}
 							>
-								<span>{advancedMode() ? "Hide options" : "Show options"}</span>
+								<IconLucideSlidersHorizontal class="size-3.5" />
+								Advanced
 								<IconCapChevronDown
 									class={cx(
-										"size-4 transition-transform",
+										"ml-auto size-3.5 text-ed-text-3 transition-transform",
 										advancedMode() && "rotate-180",
 									)}
 								/>
 							</button>
 
 							<Show when={advancedMode()}>
-								<div class="mt-3 space-y-4">
-									<button
-										type="button"
-										role="switch"
-										aria-checked={cursorOnly()}
-										class="flex items-center gap-2 text-xs text-gray-11 hover:text-gray-12 transition-colors w-full"
-										onClick={() => setCursorOnly(!cursorOnly())}
-									>
-										<div
-											class={cx(
-												"w-8 h-4 rounded-full transition-colors relative shrink-0",
-												cursorOnly() ? "bg-blue-9" : "bg-gray-5",
-											)}
-										>
-											<div
-												class={cx(
-													"absolute top-0.5 w-3 h-3 rounded-full bg-white transition-transform",
-													cursorOnly() ? "translate-x-4" : "translate-x-0.5",
-												)}
-											/>
-										</div>
-										<div class="text-left">
-											<span class="block">Export cursor only</span>
-											<span class="text-[10px] text-gray-9">
-												Keeps the same cursor motion and clicks on a transparent
-												background
-											</span>
-										</div>
-									</button>
+								<ExportToggleRow
+									title="Export cursor only"
+									description="Keeps the same cursor motion and clicks on a transparent background"
+									checked={cursorOnly()}
+									onChange={setCursorOnly}
+								/>
 
-									<Show when={cursorOnly()}>
-										<div class="rounded-lg border border-amber-6 bg-amber-3/30 px-3 py-2.5">
-											<div class="flex items-start gap-2">
-												<IconLucideAlertTriangle class="mt-0.5 size-4 shrink-0 text-amber-11" />
-												<div class="text-left">
-													<p class="text-xs font-medium text-amber-11">
-														Warning
-													</p>
-													<p class="text-[10px] text-amber-11">
-														Exports as a transparent MOV. Files are large and
-														best for compositing or editing.
-													</p>
-												</div>
-											</div>
-										</div>
-									</Show>
+								<Show when={cursorOnly()}>
+									<div class="mt-1 p-3 rounded-[10px] bg-ed-card-2 flex items-start gap-2">
+										<IconLucideAlertTriangle class="mt-px size-3.5 shrink-0 text-ed-text-2" />
+										<p class="text-[11.5px] leading-[15px] text-ed-text-2">
+											Exports as a transparent MOV. Files are large and best for
+											compositing or editing.
+										</p>
+									</div>
+								</Show>
 
-									<Show when={settings.format === "Mp4" && !cursorOnly()}>
-										<div class="space-y-2 border-t border-gray-4 pt-3">
-											<div class="flex items-center justify-between text-xs">
-												<span class="text-gray-11">Bits per pixel</span>
-												<span class="text-gray-12 font-medium tabular-nums">
-													{compressionBpp().toFixed(2)}
-												</span>
-											</div>
+								<Show when={showBitrateControls()}>
+									<div class="flex items-center gap-2.5 h-[34px]">
+										<span class="min-w-24 shrink-0 text-[13px] text-ed-text-1">
+											Bits per pixel
+										</span>
+										<div class="flex flex-1 items-center min-w-0 px-1 h-8">
 											<input
 												type="range"
+												aria-label="Bits per pixel"
 												min="0.02"
 												max="0.5"
 												step="0.01"
@@ -1316,103 +1416,97 @@ export function ExportPage() {
 														setSettings("compression", preset.value);
 													}
 												}}
-												class="w-full h-1.5 bg-gray-4 rounded-full appearance-none [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3.5 [&::-webkit-slider-thumb]:h-3.5 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-blue-9 [&::-webkit-slider-thumb]:transition-transform [&::-webkit-slider-thumb]:hover:scale-110"
+												class="w-full h-[3px] rounded-full appearance-none cursor-pointer outline-hidden focus-visible:ring-1 focus-visible:ring-ed-accent [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:size-3.5 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-ed-thumb [&::-webkit-slider-thumb]:shadow-[0_1px_3px_rgba(0,0,0,0.25),0_0_0_0.5px_rgba(0,0,0,0.12)] [&::-webkit-slider-thumb]:transition-transform [&::-webkit-slider-thumb]:hover:scale-110"
+												style={{
+													background: `linear-gradient(to right, var(--ed-accent) 0%, var(--ed-accent) ${((compressionBpp() - 0.02) / 0.48) * 100}%, var(--ed-ctl-active) ${((compressionBpp() - 0.02) / 0.48) * 100}%, var(--ed-ctl-active) 100%)`,
+												}}
 											/>
-											<div class="flex justify-between text-[10px] text-gray-9">
-												<span>0.02 (tiny)</span>
-												<span>0.50 (huge)</span>
-											</div>
-											<Show when={isCustomBpp()}>
-												<p class="text-[10px] text-amber-11 mt-1">
-													Using custom bitrate
-												</p>
-											</Show>
-
-											<Show when={ostype() === "macos"}>
-												<div class="mt-4 pt-3 border-t border-gray-4">
-													<button
-														type="button"
-														role="switch"
-														aria-checked={forceFfmpegDecoder()}
-														aria-label="Force FFmpeg decoder"
-														class="flex items-center gap-2 text-xs text-gray-11 hover:text-gray-12 transition-colors w-full"
-														onClick={() =>
-															setForceFfmpegDecoder(!forceFfmpegDecoder())
-														}
-													>
-														<div
-															class={cx(
-																"w-8 h-4 rounded-full transition-colors relative shrink-0",
-																forceFfmpegDecoder()
-																	? "bg-blue-9"
-																	: "bg-gray-5",
-															)}
-														>
-															<div
-																class={cx(
-																	"absolute top-0.5 w-3 h-3 rounded-full bg-white transition-transform",
-																	forceFfmpegDecoder()
-																		? "translate-x-4"
-																		: "translate-x-0.5",
-																)}
-															/>
-														</div>
-														<div class="text-left">
-															<span class="block">Force FFmpeg decoder</span>
-															<span class="text-[10px] text-gray-9">
-																Skip hardware decoder (auto-fallback enabled)
-															</span>
-														</div>
-													</button>
-												</div>
-											</Show>
 										</div>
+										<span class="min-w-9 shrink-0 text-right text-[11px] tabular-nums text-ed-text-3">
+											{compressionBpp().toFixed(2)}
+										</span>
+									</div>
+									<Show when={isCustomBpp()}>
+										<p class="text-[11px] text-ed-text-3">
+											Using a custom bitrate
+										</p>
 									</Show>
-								</div>
+
+									<Show when={ostype() === "macos"}>
+										<ExportToggleRow
+											title="Force FFmpeg decoder"
+											description="Skip hardware decoder (auto-fallback enabled)"
+											checked={forceFfmpegDecoder()}
+											onChange={setForceFfmpegDecoder}
+										/>
+									</Show>
+								</Show>
 							</Show>
-						</Field>
+						</div>
 					</div>
 
-					<div class="p-4 border-t border-gray-3">
+					<div class="px-4 pt-3 pb-4 border-t border-ed-line">
 						{settings.exportTo === "link" && !auth.data ? (
-							<div class="flex flex-col items-center gap-2.5">
-								<SignInButton class="w-full justify-center">
-									<IconCapLink class="size-4" />
-									<span>Sign in to share</span>
-								</SignInButton>
-							</div>
+							<button
+								type="button"
+								class={cx(
+									EXPORT_CTA_CLASS,
+									signIn.isPending
+										? "bg-ed-ctl text-ed-text-1 hover:bg-ed-ctl-hover"
+										: "bg-ed-accent text-white hover:bg-ed-accent-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.18)]",
+								)}
+								onClick={() => {
+									if (signIn.isPending) {
+										signIn.variables?.abort();
+										signIn.reset();
+									} else {
+										signIn.mutate(new AbortController());
+									}
+								}}
+							>
+								{signIn.isPending ? (
+									"Cancel Sign In"
+								) : (
+									<>
+										<IconCapLink class="size-4" />
+										Sign in to share
+									</>
+								)}
+							</button>
 						) : (
-							<div class="flex flex-col items-center gap-2.5">
-								<Button
-									class="w-full gap-2 h-12 text-base"
-									variant="blue"
-									size="lg"
-									onClick={() => {
-										if (settings.exportTo === "file") save.mutate();
-										else if (settings.exportTo === "link") upload.mutate();
-										else copy.mutate();
-									}}
-								>
-									{settings.exportTo === "file" && (
-										<>
-											<IconCapFile class="size-5" />
-											Export to File
-										</>
-									)}
-									{settings.exportTo === "clipboard" && (
-										<>
-											<IconCapCopy class="size-5" />
-											Export to Clipboard
-										</>
-									)}
-									{settings.exportTo === "link" && (
-										<>
-											<IconCapLink class="size-5" />
-											Export to Link
-										</>
-									)}
-								</Button>
-							</div>
+							<button
+								type="button"
+								class={cx(
+									EXPORT_CTA_CLASS,
+									"bg-ed-accent text-white hover:bg-ed-accent-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.18)]",
+								)}
+								onClick={() => {
+									if (settings.exportTo === "file") save.mutate();
+									else if (settings.exportTo === "link") upload.mutate();
+									else copy.mutate();
+								}}
+							>
+								{settings.exportTo === "file" && (
+									<>
+										<IconCapFile class="size-4" />
+										Export to File
+									</>
+								)}
+								{settings.exportTo === "clipboard" && (
+									<>
+										<IconCapCopy class="size-4" />
+										Export to Clipboard
+									</>
+								)}
+								{settings.exportTo === "link" && (
+									<>
+										<IconCapLink class="size-4" />
+										{meta().sharing
+											? "Reupload to same link"
+											: "Create shareable link"}
+									</>
+								)}
+							</button>
 						)}
 					</div>
 				</div>
@@ -1426,16 +1520,19 @@ export function ExportPage() {
 			>
 				<div class="p-4">
 					<div class="flex items-center justify-between mb-4">
-						<h2 class="text-gray-12 font-medium">Quality Preview</h2>
+						<h2 class="text-ed-text-1 text-[13px] font-medium">
+							Quality preview
+						</h2>
 						<button
 							type="button"
+							aria-label="Close preview"
 							onClick={() => setPreviewDialogOpen(false)}
-							class="p-1.5 rounded-md hover:bg-gray-3 text-gray-11 hover:text-gray-12 transition-colors"
+							class="p-1.5 rounded-md hover:bg-ed-ctl text-ed-text-2 hover:text-ed-text-1 transition-colors outline-hidden focus-visible:ring-1 focus-visible:ring-ed-accent"
 						>
-							<IconLucideX class="size-5" />
+							<IconLucideX class="size-4" />
 						</button>
 					</div>
-					<div class="relative aspect-video rounded-lg overflow-hidden bg-gray-4 flex items-center justify-center">
+					<div class="relative aspect-video rounded-[10px] overflow-hidden bg-ed-stage flex items-center justify-center">
 						<Show when={previewUrl()}>
 							{(url) => (
 								<img
@@ -1446,18 +1543,16 @@ export function ExportPage() {
 							)}
 						</Show>
 					</div>
-					<div class="flex justify-between text-sm text-gray-11 mt-4">
+					<div class="flex justify-between text-[12px] text-ed-text-2 mt-3 tabular-nums">
 						<span>
-							{settings.resolution.width}×{settings.resolution.height}
+							{outputDimensions().width}×{outputDimensions().height}
 						</span>
 						<Show when={renderEstimate()}>
-							{(est) => {
-								return (
-									<span>
-										Estimated size: {est().estimatedSizeMb.toFixed(1)} MB
-									</span>
-								);
-							}}
+							{(est) => (
+								<span>
+									Estimated size: {formatEstimatedSize(est().size_range_mb)}
+								</span>
+							)}
 						</Show>
 					</div>
 				</div>
@@ -1471,10 +1566,10 @@ export function ExportPage() {
 
 					return (
 						<div
-							class="flex absolute inset-0 z-50 flex-col gap-6 justify-center items-center p-6 backdrop-blur-md text-gray-12"
+							class="flex absolute inset-0 z-50 flex-col gap-6 justify-center items-center p-6 backdrop-blur-md text-ed-text-1"
 							style={{
 								"background-color":
-									"color-mix(in srgb, var(--gray-1) 94%, transparent)",
+									"color-mix(in srgb, var(--ed-window) 94%, transparent)",
 							}}
 						>
 							<Switch>
@@ -1568,7 +1663,11 @@ export function ExportPage() {
 											>
 												{(uploading) => (
 													<ActiveExport
-														heading="Uploading"
+														heading={
+															reuploading()
+																? "Reuploading to your link"
+																: "Uploading"
+														}
 														percent={uploading.progress}
 													/>
 												)}
@@ -1595,8 +1694,16 @@ export function ExportPage() {
 											</Match>
 											<Match when={uploadState.type === "done"}>
 												<CompletedExport
-													title="Upload complete"
-													subtitle="Your Cap has been uploaded successfully"
+													title={
+														reuploading()
+															? "Reupload complete"
+															: "Upload complete"
+													}
+													subtitle={
+														reuploading()
+															? "Your latest edit is ready at the same link"
+															: "Your Cap has been uploaded successfully"
+													}
 												/>
 											</Match>
 										</Switch>
@@ -1701,8 +1808,8 @@ export function ExportPage() {
 							</Show>
 
 							<Show when={exportState.type !== "done"}>
-								<p class="max-w-sm text-xs leading-relaxed text-center text-gray-11">
-									<span class="font-semibold text-gray-12">Tip:</span> Use
+								<p class="max-w-sm text-xs leading-relaxed text-center text-ed-text-2">
+									<span class="font-semibold text-ed-text-1">Tip:</span> Use
 									Instant Mode for your next recording to record and upload on
 									the fly, with no exporting required.
 								</p>
@@ -1710,6 +1817,135 @@ export function ExportPage() {
 						</div>
 					);
 				}}
+			</Show>
+		</div>
+	);
+}
+
+function ExportSection(
+	props: ParentProps<{ name: string; icon: JSX.Element; disabled?: boolean }>,
+) {
+	return (
+		<div class="flex flex-col gap-2">
+			<div
+				class={cx(
+					"flex items-center gap-1.5 h-[18px] text-[12px] font-medium",
+					props.disabled ? "text-ed-text-3" : "text-ed-text-2",
+				)}
+			>
+				{props.icon}
+				{props.name}
+			</div>
+			{props.children}
+		</div>
+	);
+}
+
+type SegmentedOption<T> = {
+	value: T;
+	label: string;
+	icon?: ValidComponent;
+	disabled?: boolean;
+	disabledReason?: string;
+};
+
+function ExportSegmented<T extends string | number>(props: {
+	options: SegmentedOption<T>[];
+	value: T | null;
+	onChange: (value: T) => void;
+	tall?: boolean;
+}) {
+	return (
+		<div role="radiogroup" class="flex gap-0.5 p-0.5 rounded-lg bg-ed-ctl">
+			<For each={props.options}>
+				{(option) => {
+					const selected = () => props.value === option.value;
+					const button = (
+						<button
+							type="button"
+							role="radio"
+							aria-checked={selected()}
+							disabled={option.disabled}
+							class={cx(
+								"flex flex-1 items-center justify-center gap-1.5 px-1 rounded-md text-[12px] font-medium whitespace-nowrap transition-colors outline-hidden focus-visible:ring-1 focus-visible:ring-ed-accent",
+								props.tall ? "h-[30px]" : "h-[26px]",
+								selected()
+									? "bg-ed-card text-ed-text-1 shadow-[0_1px_2px_rgba(0,0,0,.12),0_0_0_.5px_rgba(0,0,0,.06)] dark:bg-white/11 dark:shadow-none"
+									: "text-ed-text-2 not-disabled:hover:text-ed-text-1 not-disabled:hover:bg-ed-ctl-hover",
+								option.disabled && "opacity-40 cursor-not-allowed",
+							)}
+							onClick={() => {
+								if (!option.disabled && !selected())
+									props.onChange(option.value);
+							}}
+						>
+							<Show when={option.icon}>
+								{(icon) => <Dynamic component={icon()} class="size-3.5" />}
+							</Show>
+							{option.label}
+						</button>
+					);
+					return option.disabledReason ? (
+						<Tooltip content={option.disabledReason}>{button}</Tooltip>
+					) : (
+						button
+					);
+				}}
+			</For>
+		</div>
+	);
+}
+
+function ExportToggleRow(props: {
+	title: string;
+	description: string;
+	checked: boolean;
+	onChange: (value: boolean) => void;
+}) {
+	return (
+		<div class="flex items-center gap-3 min-h-[34px]">
+			<div class="flex flex-col flex-1 min-w-0 gap-px">
+				<span class="text-[12.5px] font-medium text-ed-text-1">
+					{props.title}
+				</span>
+				<span class="text-[11px] leading-[14px] text-ed-text-3">
+					{props.description}
+				</span>
+			</div>
+			<Toggle
+				size="sm"
+				aria-label={props.title}
+				checked={props.checked}
+				onChange={props.onChange}
+			/>
+		</div>
+	);
+}
+
+function ExportStat(props: {
+	label: string;
+	value?: string;
+	divided?: boolean;
+}) {
+	return (
+		<div
+			class={cx(
+				"flex flex-1 flex-col justify-center px-4 gap-px",
+				props.divided && "border-l border-ed-line",
+			)}
+		>
+			<span class="text-[10.5px] font-medium text-ed-text-3">
+				{props.label}
+			</span>
+			<Show
+				when={props.value}
+				fallback={
+					<span class="my-[3px] h-3 w-14 rounded bg-ed-ctl-active animate-pulse" />
+				}
+			>
+				<span class="text-[12.5px] font-medium text-ed-text-1 tabular-nums whitespace-nowrap">
+					{props.value}
+				</span>
 			</Show>
 		</div>
 	);
@@ -1731,7 +1967,7 @@ function ProgressRing(props: { percent?: number; indeterminate?: boolean }) {
 					r="28"
 					stroke="currentColor"
 					stroke-width="4"
-					class="text-gray-4"
+					class="text-ed-ctl-active"
 				/>
 				<circle
 					cx="32"
@@ -1743,12 +1979,12 @@ function ProgressRing(props: { percent?: number; indeterminate?: boolean }) {
 					stroke-dasharray={
 						props.indeterminate ? "44 176" : `${pct() * 1.76} 176`
 					}
-					class="transition-all duration-300 text-blue-9"
+					class="transition-all duration-300 text-ed-accent"
 				/>
 			</svg>
 			<Show when={!props.indeterminate}>
 				<div class="flex absolute inset-0 justify-center items-center">
-					<span class="text-base font-semibold tabular-nums text-gray-12">
+					<span class="text-sm font-medium tabular-nums text-ed-text-1">
 						{Math.round(pct())}%
 					</span>
 				</div>
@@ -1779,10 +2015,10 @@ function ActiveExport(props: {
 				indeterminate={percent() === undefined}
 			/>
 			<div class="flex flex-col gap-1 items-center">
-				<h2 class="text-lg font-medium text-gray-12">{props.heading}</h2>
+				<h2 class="text-base font-medium text-ed-text-1">{props.heading}</h2>
 				<Show when={frames()}>
 					{(rendered) => (
-						<p class="text-sm tabular-nums text-gray-11">
+						<p class="text-[12px] tabular-nums text-ed-text-2">
 							{rendered().renderedCount.toLocaleString()} /{" "}
 							{rendered().totalFrames.toLocaleString()} frames
 						</p>
@@ -1801,12 +2037,12 @@ function ActiveExport(props: {
 function CompletedExport(props: { title: string; subtitle: string }) {
 	return (
 		<div class="flex flex-col gap-4 items-center text-center">
-			<div class="flex justify-center items-center rounded-full size-16 bg-blue-3">
-				<IconLucideCheck class="size-8 text-blue-9" />
+			<div class="flex justify-center items-center rounded-full size-16 bg-ed-accent/12">
+				<IconLucideCheck class="size-8 text-ed-accent" />
 			</div>
 			<div class="flex flex-col gap-1 items-center">
-				<h2 class="text-lg font-medium text-gray-12">{props.title}</h2>
-				<p class="text-sm text-gray-11">{props.subtitle}</p>
+				<h2 class="text-base font-medium text-ed-text-1">{props.title}</h2>
+				<p class="text-[12px] text-ed-text-2">{props.subtitle}</p>
 			</div>
 		</div>
 	);

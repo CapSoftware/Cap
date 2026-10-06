@@ -1,6 +1,6 @@
 use super::core::{
     BlockingThreadFinish, DiskSpaceMonitor, HealthSender, PipelineHealthEvent, SharedHealthSender,
-    frame_timing_log_threshold_ms, wait_for_blocking_thread_finish,
+    frame_timing_log_threshold_ms, resolve_oop_thread_finish, wait_for_blocking_thread_finish,
 };
 use super::macos_frame_convert::{
     FramePool, ffmpeg_pixel_format_for_cap, fill_frame_from_sample_buf,
@@ -219,12 +219,10 @@ impl Muxer for OutOfProcessFragmentedM4SMuxer {
     }
 
     fn finish(&mut self, timestamp: Duration) -> anyhow::Result<anyhow::Result<()>> {
-        if let Some(state) = self.state.take()
-            && let Err(error) = finish_oop_encoder(state, timestamp)
-        {
-            return Ok(Err(error));
+        match self.state.take() {
+            Some(state) => finish_oop_encoder(state, timestamp),
+            None => Ok(Ok(())),
         }
-        Ok(Ok(()))
     }
 
     fn set_health_sender(&mut self, tx: HealthSender) {
@@ -233,7 +231,10 @@ impl Muxer for OutOfProcessFragmentedM4SMuxer {
     }
 }
 
-fn finish_oop_encoder(mut state: EncoderState, _timestamp: Duration) -> anyhow::Result<()> {
+fn finish_oop_encoder(
+    mut state: EncoderState,
+    _timestamp: Duration,
+) -> anyhow::Result<anyhow::Result<()>> {
     if let Err(error) = state.video_tx.send(None) {
         trace!("OOP encoder channel already closed during finish: {error}");
     }
@@ -246,11 +247,7 @@ fn finish_oop_encoder(mut state: EncoderState, _timestamp: Duration) -> anyhow::
         })
         .unwrap_or(BlockingThreadFinish::Clean);
 
-    match thread_result {
-        BlockingThreadFinish::Clean => Ok(()),
-        BlockingThreadFinish::Failed(error) => Err(error),
-        BlockingThreadFinish::TimedOut(error) => Err(error),
-    }
+    resolve_oop_thread_finish(thread_result)
 }
 
 impl OutOfProcessFragmentedM4SMuxer {
@@ -542,16 +539,18 @@ impl OutOfProcessFragmentedM4SMuxer {
                     }
                 }
 
-                let subprocess_report = match subprocess.finish() {
-                    Ok(report) => Some(report),
-                    Err(e) => {
-                        warn!("OOP subprocess finish error: {e:#}");
-                        None
-                    }
-                };
+                let subprocess_result = subprocess.finish();
 
                 tracker.flush_pending_segments();
                 tracker.finalize(final_ts);
+
+                let subprocess_report = match subprocess_result {
+                    Ok(report) => Some(report),
+                    Err(error) => {
+                        warn!("OOP subprocess finish error: {error:#}");
+                        return Err(error.into());
+                    }
+                };
 
                 if total_frames > 0 {
                     debug!(

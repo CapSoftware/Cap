@@ -9,15 +9,15 @@ const apiBaseUrl = resolvePhysicalApiBaseUrl();
 
 const forwardedArgs = process.argv.slice(2);
 if (forwardedArgs[0] === "--") forwardedArgs.shift();
-const command = ["exec", "expo", "run:ios", "--device", ...forwardedArgs];
+const command = ["run", "expo", "run:ios", "--device", ...forwardedArgs];
 console.log(`Using Cap API: ${apiBaseUrl}`);
 
 if (process.env.CAP_MOBILE_DRY_RUN === "1") {
-	console.log(`pnpm ${command.join(" ")}`);
+	console.log(`bun ${command.join(" ")}`);
 	process.exit(0);
 }
 
-const result = spawnSync("pnpm", command, {
+const result = spawnSync("bun", command, {
 	stdio: "inherit",
 	env: {
 		...process.env,

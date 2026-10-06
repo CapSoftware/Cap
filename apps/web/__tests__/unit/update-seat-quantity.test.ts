@@ -48,9 +48,10 @@ vi.mock("@cap/env", () => ({
 	buildEnv: { NEXT_PUBLIC_IS_CAP: true },
 }));
 
-vi.mock("@cap/utils", () => ({
-	stripe: () => mockStripe,
-}));
+vi.mock("@cap/utils", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("@cap/utils")>();
+	return { ...actual, stripe: () => mockStripe };
+});
 
 vi.mock("drizzle-orm", () => ({
 	eq: vi.fn((field: unknown, value: unknown) => ({ field, value })),
@@ -109,6 +110,7 @@ function mockSeatLookup({
 		.mockResolvedValueOnce([]);
 	mockStripe.subscriptions.retrieve.mockResolvedValue({
 		id: "sub_1",
+		customer: "cus_1",
 		cancel_at_period_end: false,
 		items: {
 			data: [{ id: "si_1", quantity: currentQuantity }],
@@ -124,6 +126,51 @@ describe("updateSeatQuantity", () => {
 			id: "sub_1",
 			pending_update: null,
 		});
+	});
+
+	it.each([
+		"price_1UBJpTFJxA1XpeSsQmAOhibr",
+		"price_1UBJQuFJxA1XpeSsnxL2KhP7",
+		"price_1U6C99FJxA1XpeSsUg1rXHo2",
+	])(
+		"never changes an add-on quantity through a contaminated Pro pointer: %s",
+		async (priceId) => {
+			mockSeatLookup({ currentQuantity: 1 });
+			mockStripe.subscriptions.retrieve.mockResolvedValue({
+				id: "sub_1",
+				customer: "cus_1",
+				items: {
+					data: [{ id: "si_addon", price: { id: priceId }, quantity: 1 }],
+				},
+			});
+			const { updateSeatQuantity } = await import(
+				"@/actions/organization/update-seat-quantity"
+			);
+			await expect(updateSeatQuantity("org-1" as never, 2)).rejects.toThrow(
+				"No matching Cap Pro subscription",
+			);
+			expect(mockStripe.subscriptions.update).not.toHaveBeenCalled();
+			expect(mockDb.set).not.toHaveBeenCalled();
+		},
+	);
+
+	it("refuses to change a subscription belonging to a different customer", async () => {
+		mockSeatLookup({ currentQuantity: 1 });
+		mockStripe.subscriptions.retrieve.mockResolvedValue({
+			id: "sub_1",
+			customer: "cus_other",
+			items: {
+				data: [{ id: "si_pro", price: { id: "price_pro" }, quantity: 1 }],
+			},
+		});
+		const { updateSeatQuantity } = await import(
+			"@/actions/organization/update-seat-quantity"
+		);
+		await expect(updateSeatQuantity("org-1" as never, 2)).rejects.toThrow(
+			"No matching Cap Pro subscription",
+		);
+		expect(mockStripe.subscriptions.update).not.toHaveBeenCalled();
+		expect(mockDb.set).not.toHaveBeenCalled();
 	});
 
 	it("immediately invoices seat increases and only stores the quota after Stripe applies the update", async () => {
@@ -181,6 +228,7 @@ describe("updateSeatQuantity", () => {
 		mockSeatLookup({ currentQuantity: 3 });
 		mockStripe.subscriptions.retrieve.mockResolvedValue({
 			id: "sub_1",
+			customer: "cus_1",
 			cancel_at_period_end: true,
 			items: {
 				data: [{ id: "si_1", quantity: 3 }],
@@ -204,6 +252,7 @@ describe("updateSeatQuantity", () => {
 		mockSeatLookup({ currentQuantity: 1 });
 		mockStripe.subscriptions.retrieve.mockResolvedValue({
 			id: "sub_1",
+			customer: "cus_1",
 			cancel_at_period_end: true,
 			items: {
 				data: [{ id: "si_1", quantity: 1 }],
@@ -240,6 +289,7 @@ describe("updateSeatQuantity", () => {
 		mockSeatLookup({ currentQuantity: 1 });
 		mockStripe.subscriptions.retrieve.mockResolvedValue({
 			id: "sub_1",
+			customer: "cus_1",
 			cancel_at_period_end: true,
 			items: {
 				data: [{ id: "si_1", quantity: 1 }],
@@ -271,6 +321,7 @@ describe("updateSeatQuantity", () => {
 		mockSeatLookup({ currentQuantity: 1 });
 		mockStripe.subscriptions.retrieve.mockResolvedValue({
 			id: "sub_1",
+			customer: "cus_1",
 			cancel_at_period_end: true,
 			items: {
 				data: [{ id: "si_1", quantity: 1 }],
@@ -300,6 +351,7 @@ describe("updateSeatQuantity", () => {
 		mockSeatLookup({ currentQuantity: 1 });
 		mockStripe.subscriptions.retrieve.mockResolvedValue({
 			id: "sub_1",
+			customer: "cus_1",
 			cancel_at_period_end: true,
 			items: {
 				data: [{ id: "si_1", quantity: 1 }],
@@ -325,6 +377,7 @@ describe("updateSeatQuantity", () => {
 		mockSeatLookup({ currentQuantity: 1 });
 		mockStripe.subscriptions.retrieve.mockResolvedValue({
 			id: "sub_1",
+			customer: "cus_1",
 			cancel_at_period_end: true,
 			items: {
 				data: [{ id: "si_1", quantity: 1 }],

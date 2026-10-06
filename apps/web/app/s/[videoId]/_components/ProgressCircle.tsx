@@ -59,6 +59,7 @@ export function useUploadProgress(
 		phase,
 		updatedAt: lastUpdated,
 		processingProgress: query.data.processingProgress,
+		automaticRetry: query.data.automaticRetry,
 	});
 
 	if (phase === "complete") {

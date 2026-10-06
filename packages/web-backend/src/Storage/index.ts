@@ -8,7 +8,7 @@ import {
 	type User,
 	type Video,
 } from "@cap/web-domain";
-import { Effect, Option } from "effect";
+import { Effect, Exit, Option } from "effect";
 
 import { S3Buckets } from "../S3Buckets/index.ts";
 import type { S3BucketAccess } from "../S3Buckets/S3BucketAccess.ts";
@@ -19,12 +19,22 @@ import {
 	findGoogleDriveFileByObjectKey,
 	GOOGLE_DRIVE_FOLDER_MIME_TYPE,
 	type GoogleDriveFile,
+	type GoogleDriveRecordingRead,
+	GoogleDriveRequestError,
 	type GoogleDriveTokenStore,
 	getGoogleDriveFileMetadata,
 	getGoogleDriveObjectResponse,
 	getGoogleDriveObjectText,
+	getGoogleDriveRecordingDownload,
+	getGoogleDriveRecordingResponse,
 	parseVideoIdFromObjectKey,
+	syncGoogleDriveVideoNames,
 } from "./GoogleDrive.ts";
+import {
+	getGoogleDriveRecordingIdentity,
+	type RecordingObjectHead,
+} from "./recording-object-identity.ts";
+import { resolveRecordingObjectKey } from "./recording-output.ts";
 import { createStorageObjectToken } from "./SignedObject.ts";
 import type { GoogleDriveIntegrationConfig } from "./StorageRepo.ts";
 import { StorageRepo } from "./StorageRepo.ts";
@@ -34,9 +44,29 @@ type UploadTargetInput = {
 	contentLength?: number;
 	fields?: Record<string, string>;
 	method?: "post" | "put";
+	videoTitle?: string;
+};
+
+type StorageObjectHead = RecordingObjectHead & {
+	ContentLength?: number;
+	ContentType?: string;
+	Metadata?: Record<string, string | undefined>;
+	RecordingContentSHA256?: string;
 };
 
 type MultipartAccess = {
+	copyPart?: (
+		key: string,
+		uploadId: string,
+		partNumber: number,
+		args: Omit<
+			S3.UploadPartCopyCommandInput,
+			"Key" | "Bucket" | "UploadId" | "PartNumber"
+		>,
+	) => Effect.Effect<
+		S3.UploadPartCopyCommandOutput,
+		StorageDomain.StorageError
+	>;
 	create: (
 		key: string,
 		args?: Omit<S3.CreateMultipartUploadCommandInput, "Bucket" | "Key">,
@@ -57,7 +87,10 @@ type MultipartAccess = {
 			S3.CompleteMultipartUploadCommandInput,
 			"Key" | "Bucket" | "UploadId"
 		>,
-	) => Effect.Effect<{ Location?: string }, StorageDomain.StorageError>;
+	) => Effect.Effect<
+		{ Location?: string; ETag?: string },
+		StorageDomain.StorageError
+	>;
 	abort: (
 		key: string,
 		uploadId: string,
@@ -128,7 +161,10 @@ const requireDriveObject = (
 				onNone: () =>
 					Effect.fail(
 						new StorageDomain.StorageError({
-							cause: new Error(`Storage object not found: ${key}`),
+							cause: new GoogleDriveRequestError(
+								404,
+								`Storage object not found: ${key}`,
+							),
 						}),
 					),
 				onSome: Effect.succeed,
@@ -160,6 +196,8 @@ const mapStorageError = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
 	);
 
 const makeS3MultipartAccess = (s3: S3BucketAccess): MultipartAccess => ({
+	copyPart: (key, uploadId, partNumber, args) =>
+		mapStorageError(s3.multipart.copyPart(key, uploadId, partNumber, args)),
 	create: (
 		key: string,
 		args?: Omit<S3.CreateMultipartUploadCommandInput, "Bucket" | "Key">,
@@ -221,6 +259,163 @@ const makeGoogleDriveTokenStore = (
 		),
 });
 
+const recordingCopyMetadata = (metadata: {
+	ContentLength?: number;
+	ETag?: string;
+}) => {
+	const fileSize = metadata.ContentLength;
+	const objectIdentity = metadata.ETag;
+	if (
+		fileSize === undefined ||
+		!Number.isSafeInteger(fileSize) ||
+		fileSize < 0 ||
+		!objectIdentity ||
+		!/^"[\x21\x23-\x7e]+"$/.test(objectIdentity)
+	) {
+		return Effect.fail(
+			new StorageDomain.StorageError({
+				cause: new Error(
+					"Recording copy requires a stable source identity and size",
+				),
+			}),
+		);
+	}
+	return Effect.succeed({ fileSize, objectIdentity });
+};
+
+const copyS3ObjectForRecording = (
+	s3: S3BucketAccess,
+	source: string,
+	key: string,
+) =>
+	Effect.gen(function* () {
+		const prefix = `${s3.bucketName}/`;
+		if (!source.startsWith(prefix) || source.slice(prefix.length) === key) {
+			return yield* Effect.fail(
+				new StorageDomain.StorageError({
+					cause: new Error(
+						"Recording copy requires a distinct object in the same bucket",
+					),
+				}),
+			);
+		}
+		const sourceKey = source.slice(prefix.length);
+		const sourceMetadata = yield* s3.headObject(sourceKey);
+		const { fileSize, objectIdentity } =
+			yield* recordingCopyMetadata(sourceMetadata);
+		const copySource = `${prefix}${sourceKey.split("/").map(encodeURIComponent).join("/")}`;
+		const singleCopyLimit = 5 * 1024 ** 3;
+		const copiedIdentity = yield* fileSize <= singleCopyLimit
+			? s3
+					.copyObject(copySource, key, { CopySourceIfMatch: objectIdentity })
+					.pipe(Effect.map((result) => result.CopyObjectResult?.ETag))
+			: Effect.acquireUseRelease(
+					s3.multipart
+						.create(key, {
+							ContentType: sourceMetadata.ContentType,
+							CacheControl: sourceMetadata.CacheControl,
+							ContentDisposition: sourceMetadata.ContentDisposition,
+							ContentEncoding: sourceMetadata.ContentEncoding,
+							ContentLanguage: sourceMetadata.ContentLanguage,
+							Expires: sourceMetadata.Expires,
+							Metadata: sourceMetadata.Metadata,
+						})
+						.pipe(
+							Effect.flatMap((upload) =>
+								upload.UploadId
+									? Effect.succeed(upload.UploadId)
+									: Effect.fail(
+											new StorageDomain.StorageError({
+												cause: new Error(
+													"Recording multipart copy did not return an upload id",
+												),
+											}),
+										),
+							),
+						),
+					(uploadId) =>
+						Effect.gen(function* () {
+							const partSize = Math.max(
+								128 * 1024 ** 2,
+								Math.ceil(fileSize / 10_000),
+							);
+							if (partSize > singleCopyLimit) {
+								return yield* Effect.fail(
+									new StorageDomain.StorageError({
+										cause: new Error("Recording exceeds multipart copy limits"),
+									}),
+								);
+							}
+							const parts = yield* Effect.forEach(
+								Array.from(
+									{ length: Math.ceil(fileSize / partSize) },
+									(_, index) => index,
+								),
+								(index) =>
+									Effect.gen(function* () {
+										const start = index * partSize;
+										const result = yield* s3.multipart.copyPart(
+											key,
+											uploadId,
+											index + 1,
+											{
+												CopySource: copySource,
+												CopySourceIfMatch: objectIdentity,
+												CopySourceRange: `bytes=${start}-${Math.min(fileSize, start + partSize) - 1}`,
+											},
+										);
+										const etag = result.CopyPartResult?.ETag;
+										if (!etag) {
+											return yield* Effect.fail(
+												new StorageDomain.StorageError({
+													cause: new Error(
+														"Recording multipart copy returned an incomplete part",
+													),
+												}),
+											);
+										}
+										return { PartNumber: index + 1, ETag: etag };
+									}),
+								{ concurrency: 3 },
+							);
+							const result = yield* s3.multipart.complete(key, uploadId, {
+								MultipartUpload: { Parts: parts },
+								IfNoneMatch: "*",
+							});
+							return result.ETag;
+						}),
+					(uploadId, exit) =>
+						Exit.isFailure(exit)
+							? s3.multipart.abort(key, uploadId).pipe(
+									Effect.catchAll(() =>
+										Effect.logWarning("Recording multipart copy abort failed"),
+									),
+									Effect.asVoid,
+								)
+							: Effect.void,
+				);
+		const [currentSource, currentDestination] = yield* Effect.all([
+			s3.headObject(sourceKey),
+			s3.headObject(key),
+		]);
+		yield* recordingCopyMetadata(currentDestination);
+		if (
+			currentSource.ContentLength !== fileSize ||
+			currentSource.ETag !== objectIdentity ||
+			!copiedIdentity ||
+			currentDestination.ContentLength !== fileSize ||
+			currentDestination.ETag !== copiedIdentity
+		) {
+			return yield* Effect.fail(
+				new StorageDomain.StorageError({
+					cause: new Error(
+						"Recording copy changed during transfer or failed readback",
+					),
+				}),
+			);
+		}
+	}).pipe(mapStorageError);
+
 const makeS3Access = (s3: S3BucketAccess) => ({
 	provider: "s3" as const,
 	bucketName: s3.bucketName,
@@ -253,11 +448,14 @@ const makeS3Access = (s3: S3BucketAccess) => ({
 		),
 	headObject: (key: string) =>
 		mapStorageError(s3.headObject(key)).pipe(
-			Effect.map((result) => ({
-				ContentLength: result.ContentLength,
-				ContentType: result.ContentType,
-				Metadata: result.Metadata,
-			})),
+			Effect.map(
+				(result): StorageObjectHead => ({
+					ContentLength: result.ContentLength,
+					ContentType: result.ContentType,
+					Metadata: result.Metadata,
+					ETag: result.ETag,
+				}),
+			),
 		),
 	putObject: (
 		key: string,
@@ -268,7 +466,9 @@ const makeS3Access = (s3: S3BucketAccess) => ({
 		source: string,
 		key: string,
 		args?: Omit<S3.CopyObjectCommandInput, "Bucket" | "CopySource" | "Key">,
-	) => mapStorageError(s3.copyObject(source, key, args)).pipe(Effect.asVoid),
+	) => mapStorageError(s3.copyObject(source, key, args)),
+	copyObjectForRecording: (source: string, key: string) =>
+		copyS3ObjectForRecording(s3, source, key),
 	deleteObject: (key: string) =>
 		mapStorageError(s3.deleteObject(key)).pipe(Effect.asVoid),
 	deleteObjects: (objects: Array<{ Key?: string }>) =>
@@ -332,6 +532,9 @@ const parseObjectKeyVideoId = (key: string) =>
 		Option.getOrNull,
 	);
 
+const isMissingDriveObject = (error: StorageDomain.StorageError) =>
+	error.cause instanceof GoogleDriveRequestError && error.cause.status === 404;
+
 const makeGoogleDriveAccess = ({
 	repo,
 	integration,
@@ -357,21 +560,33 @@ const makeGoogleDriveAccess = ({
 					onNone: () =>
 						Effect.fail(
 							new StorageDomain.StorageError({
-								cause: new Error(`Google Drive object not found: ${key}`),
+								cause: new GoogleDriveRequestError(
+									404,
+									`Object not found: ${key}`,
+								),
 							}),
 						),
 					onSome: (file) => {
+						if (
+							file.id !== previous.providerObjectId &&
+							previous.uploadStatus !== "complete"
+						) {
+							return Effect.fail(
+								new StorageDomain.StorageError({
+									cause: new Error(
+										"Cannot replace a Google Drive upload that is not complete",
+									),
+								}),
+							);
+						}
 						const videoId = parseObjectKeyVideoId(key);
 						const contentType = file.mimeType ?? previous.contentType;
 						return mapStorageError(
-							repo.upsertObject({
-								integrationId,
-								ownerId,
-								videoId,
-								objectKey: key,
+							repo.updateObjectIfCurrent(previous, {
 								providerObjectId: file.id,
 								uploadStatus: "complete",
 								contentType,
+								preserveMetadata: true,
 								contentLength:
 									parseGoogleDriveContentLength(file) ??
 									previous.contentLength ??
@@ -383,7 +598,19 @@ const makeGoogleDriveAccess = ({
 									contentType: file.mimeType ?? previous.metadata?.contentType,
 								},
 							}),
-						).pipe(Effect.as(file.id));
+						).pipe(
+							Effect.flatMap((saved) =>
+								saved
+									? Effect.succeed(file.id)
+									: Effect.fail(
+											new StorageDomain.StorageError({
+												cause: new Error(
+													"Storage object changed during Google Drive recovery; retry",
+												),
+											}),
+										),
+							),
+						);
 					},
 				}),
 			),
@@ -394,10 +621,131 @@ const makeGoogleDriveAccess = ({
 		read: (fileId: string) => Effect.Effect<A, StorageDomain.StorageError>,
 	) =>
 		read(object.providerObjectId).pipe(
-			Effect.catchTag("StorageError", () =>
-				recoverDriveFileId(key, object).pipe(Effect.flatMap(read)),
+			Effect.catchTag("StorageError", (error) =>
+				isMissingDriveObject(error)
+					? recoverDriveFileId(key, object).pipe(Effect.flatMap(read))
+					: Effect.fail(error),
 			),
 		);
+	const copyObject = (
+		source: string,
+		key: string,
+		args?: Omit<S3.CopyObjectCommandInput, "Bucket" | "CopySource" | "Key">,
+	) =>
+		getObjectRecord(parseSourceKey(source)).pipe(
+			Effect.flatMap((sourceObject) =>
+				copyGoogleDriveFile({
+					repo,
+					config,
+					sourceFileId: sourceObject.providerObjectId,
+					input: {
+						integrationId,
+						ownerId,
+						videoId: parseObjectKeyVideoId(key),
+						key,
+						contentType:
+							args?.ContentType ??
+							sourceObject.contentType ??
+							"application/octet-stream",
+					},
+					tokenStore,
+				}).pipe(mapStorageError),
+			),
+		);
+	const deleteObject = (key: string) =>
+		Effect.gen(function* () {
+			const stored = yield* mapStorageError(
+				repo.getObjectByKey(integrationId, key),
+			);
+			if (Option.isNone(stored)) return;
+			yield* deleteGoogleDriveFile(
+				config,
+				stored.value.providerObjectId,
+				tokenStore,
+			).pipe(
+				Effect.catchAll((error) =>
+					isMissingDriveObject(error) ? Effect.void : Effect.fail(error),
+				),
+			);
+			yield* mapStorageError(
+				repo.deleteObjectByKey(
+					integrationId,
+					key,
+					stored.value.providerObjectId,
+				),
+			);
+		});
+	const copyObjectForRecording = (source: string, key: string) =>
+		Effect.gen(function* () {
+			const sourceKey = parseSourceKey(source);
+			if (!source.startsWith("google-drive/") || sourceKey === key) {
+				return yield* Effect.fail(
+					new StorageDomain.StorageError({
+						cause: new Error(
+							"Recording copy requires a distinct object in the same storage integration",
+						),
+					}),
+				);
+			}
+			const sourceObject = yield* getObjectRecord(sourceKey);
+			const before = yield* withRecoveredDriveFile(
+				sourceKey,
+				sourceObject,
+				(fileId) => getGoogleDriveFileMetadata(config, fileId, tokenStore),
+			);
+			const { fileSize } = yield* recordingCopyMetadata({
+				ContentLength: parseGoogleDriveContentLength(before) ?? undefined,
+				ETag: getGoogleDriveRecordingIdentity(before) ?? undefined,
+			});
+			yield* copyGoogleDriveFile({
+				repo,
+				config,
+				sourceFileId: before.id,
+				input: {
+					integrationId,
+					ownerId,
+					videoId: parseObjectKeyVideoId(key),
+					key,
+					contentType:
+						before.mimeType ??
+						sourceObject.contentType ??
+						"application/octet-stream",
+				},
+				tokenStore,
+			}).pipe(mapStorageError);
+			const currentSource = yield* getObjectRecord(sourceKey);
+			const destination = yield* getObjectRecord(key);
+			const [after, copied] = yield* Effect.all([
+				getGoogleDriveFileMetadata(config, before.id, tokenStore),
+				getGoogleDriveFileMetadata(
+					config,
+					destination.providerObjectId,
+					tokenStore,
+				),
+			]);
+			yield* recordingCopyMetadata({
+				ContentLength: parseGoogleDriveContentLength(copied) ?? undefined,
+				ETag: getGoogleDriveRecordingIdentity(copied) ?? undefined,
+			});
+			if (
+				currentSource.providerObjectId !== before.id ||
+				after.id !== before.id ||
+				getGoogleDriveRecordingIdentity(after) !==
+					getGoogleDriveRecordingIdentity(before) ||
+				copied.sha256Checksum?.toLowerCase() !==
+					before.sha256Checksum?.toLowerCase() ||
+				parseGoogleDriveContentLength(after) !== fileSize ||
+				parseGoogleDriveContentLength(copied) !== fileSize
+			) {
+				return yield* Effect.fail(
+					new StorageDomain.StorageError({
+						cause: new Error(
+							"Recording copy changed during transfer or failed readback",
+						),
+					}),
+				);
+			}
+		});
 
 	const multipart: MultipartAccess = {
 		create: (
@@ -474,15 +822,22 @@ const makeGoogleDriveAccess = ({
 			signingArgs?: Parameters<S3BucketAccess["getInternalSignedObjectUrl"]>[1],
 		) => createDriveObjectUrl(key, signingArgs?.expiresIn ?? 7200),
 		getObject: (key: string) =>
-			getObjectRecord(key).pipe(
-				Effect.flatMap((object) =>
-					withRecoveredDriveFile(key, object, (fileId) =>
-						getGoogleDriveObjectText(config, fileId, tokenStore),
+			Effect.gen(function* () {
+				const object = yield* mapStorageError(
+					repo.getObjectByKey(integrationId, key),
+				);
+				if (Option.isNone(object)) return Option.none<string>();
+				return yield* withRecoveredDriveFile(key, object.value, (fileId) =>
+					getGoogleDriveObjectText(config, fileId, tokenStore),
+				).pipe(
+					Effect.map(Option.some),
+					Effect.catchTag("StorageError", (error) =>
+						isMissingDriveObject(error)
+							? Effect.succeed(Option.none<string>())
+							: Effect.fail(error),
 					),
-				),
-				Effect.map(Option.some),
-				Effect.catchTag("StorageError", () => Effect.succeed(Option.none())),
-			),
+				);
+			}),
 		listObjects: (input: {
 			prefix?: string;
 			maxKeys?: number;
@@ -523,13 +878,25 @@ const makeGoogleDriveAccess = ({
 					withRecoveredDriveFile(key, object, (fileId) =>
 						getGoogleDriveFileMetadata(config, fileId, tokenStore),
 					).pipe(
-						Effect.map((metadata) => ({
-							ContentLength: metadata.size
-								? Number(metadata.size)
-								: (object.contentLength ?? undefined),
-							ContentType: metadata.mimeType ?? object.contentType ?? undefined,
-							Metadata: object.metadata ?? undefined,
-						})),
+						Effect.map(
+							(metadata): StorageObjectHead => ({
+								ContentLength: metadata.size
+									? Number(metadata.size)
+									: (object.contentLength ?? undefined),
+								ContentType:
+									metadata.mimeType ?? object.contentType ?? undefined,
+								Metadata: object.metadata ?? undefined,
+								ETag: metadata.version
+									? `"${metadata.id}:${metadata.version}"`
+									: undefined,
+								RecordingContentETag: getGoogleDriveRecordingIdentity(metadata),
+								RecordingContentSHA256: getGoogleDriveRecordingIdentity(
+									metadata,
+								)
+									? metadata.sha256Checksum?.toLowerCase()
+									: undefined,
+							}),
+						),
 					),
 				),
 			),
@@ -585,77 +952,14 @@ const makeGoogleDriveAccess = ({
 					repo.markObjectComplete(integrationId, key, contentLength),
 				);
 			}),
-		copyObject: (
-			source: string,
-			key: string,
-			args?: Omit<S3.CopyObjectCommandInput, "Bucket" | "CopySource" | "Key">,
-		) =>
-			getObjectRecord(parseSourceKey(source)).pipe(
-				Effect.flatMap((sourceObject) =>
-					copyGoogleDriveFile({
-						repo,
-						config,
-						sourceFileId: sourceObject.providerObjectId,
-						input: {
-							integrationId,
-							ownerId,
-							videoId: parseVideoIdFromObjectKey(key).pipe(
-								Option.map((id) => id as Video.VideoId),
-								Option.getOrNull,
-							),
-							key,
-							contentType:
-								(args?.ContentType as string | undefined) ??
-								sourceObject.contentType ??
-								"application/octet-stream",
-						},
-						tokenStore,
-					}).pipe(mapStorageError),
-				),
-			),
-		deleteObject: (key: string) =>
-			getObjectRecord(key).pipe(
-				Effect.flatMap((object) =>
-					deleteGoogleDriveFile(
-						config,
-						object.providerObjectId,
-						tokenStore,
-					).pipe(
-						Effect.catchAll(() => Effect.void),
-						Effect.flatMap(() =>
-							mapStorageError(repo.deleteObjectByKey(integrationId, key)),
-						),
-					),
-				),
-				Effect.catchAll(() => Effect.void),
-			),
+		copyObject,
+		copyObjectForRecording,
+		deleteObject,
 		deleteObjects: (objects: Array<{ Key?: string }>) =>
 			Effect.forEach(
 				objects,
-				(object) =>
-					object.Key
-						? getObjectRecord(object.Key).pipe(
-								Effect.flatMap((record) =>
-									deleteGoogleDriveFile(
-										config,
-										record.providerObjectId,
-										tokenStore,
-									).pipe(
-										Effect.catchAll(() => Effect.void),
-										Effect.flatMap(() =>
-											mapStorageError(
-												repo.deleteObjectByKey(
-													integrationId,
-													object.Key as string,
-												),
-											),
-										),
-									),
-								),
-								Effect.catchAll(() => Effect.void),
-							)
-						: Effect.void,
-				{ concurrency: 3 },
+				(object) => (object.Key ? deleteObject(object.Key) : Effect.void),
+				{ concurrency: 3, discard: true },
 			),
 		getPresignedPutUrl: (
 			key: string,
@@ -720,22 +1024,103 @@ const makeGoogleDriveAccess = ({
 					key,
 					contentType: input.contentType,
 					contentLength: input.contentLength,
+					videoTitle: input.videoTitle,
 				},
 				tokenStore,
 			).pipe(
 				mapStorageError,
 				Effect.map((url) => toDriveUploadTarget(url, input.contentType)),
 			),
-		getObjectResponse: (key: string, range?: string | null) =>
+		getInternalDownload: (
+			key: string,
+			verification: { objectIdentity?: string; signal?: AbortSignal },
+		) =>
 			getObjectRecord(key).pipe(
 				Effect.flatMap((object) =>
-					withRecoveredDriveFile(key, object, (fileId) =>
-						getGoogleDriveObjectResponse(config, fileId, range, tokenStore),
+					getGoogleDriveRecordingDownload(
+						config,
+						object.providerObjectId,
+						verification,
+						tokenStore,
 					),
+				),
+			),
+		getObjectResponse: (
+			key: string,
+			range?: string | null,
+			verification?: GoogleDriveRecordingRead | { signal: AbortSignal },
+		) =>
+			getObjectRecord(key).pipe(
+				Effect.flatMap((object) =>
+					verification && "objectIdentity" in verification
+						? getGoogleDriveRecordingResponse(
+								config,
+								object.providerObjectId,
+								range,
+								verification,
+								tokenStore,
+							)
+						: withRecoveredDriveFile(key, object, (fileId) =>
+								getGoogleDriveObjectResponse(
+									config,
+									fileId,
+									range,
+									tokenStore,
+									verification?.signal,
+								),
+							),
 				),
 			),
 	};
 };
+
+function withPublishedRecordingOutput<
+	Access extends
+		| ReturnType<typeof makeS3Access>
+		| ReturnType<typeof makeGoogleDriveAccess>,
+>(video: Video.Video, access: Access): Access {
+	const resolve = (key: string) => resolveRecordingObjectKey(video, key);
+	const resolveCopySource = (source: string) => {
+		const prefix = `${access.bucketName}/`;
+		return source.startsWith(prefix)
+			? `${prefix}${resolve(source.slice(prefix.length))}`
+			: source;
+	};
+	const shared = {
+		...access,
+		getObject: (key: string) => access.getObject(resolve(key)),
+		headObject: (key: string) => access.headObject(resolve(key)),
+		getSignedObjectUrl: (
+			key: string,
+			args?: Parameters<S3BucketAccess["getSignedObjectUrl"]>[1],
+		) => access.getSignedObjectUrl(resolve(key), args),
+		getInternalSignedObjectUrl: (
+			key: string,
+			args?: Parameters<S3BucketAccess["getInternalSignedObjectUrl"]>[1],
+		) => access.getInternalSignedObjectUrl(resolve(key), args),
+		copyObject: (
+			source: string,
+			key: string,
+			args?: Omit<S3.CopyObjectCommandInput, "Bucket" | "CopySource" | "Key">,
+		) => access.copyObject(resolveCopySource(source), key, args),
+		copyObjectForRecording: (source: string, key: string) =>
+			access.copyObjectForRecording(resolveCopySource(source), key),
+	};
+	if (access.provider === "googleDrive") {
+		return Object.assign({}, access, shared, {
+			getInternalDownload: (
+				key: string,
+				verification: { objectIdentity?: string; signal?: AbortSignal },
+			) => access.getInternalDownload(resolve(key), verification),
+			getObjectResponse: (
+				key: string,
+				range?: string | null,
+				verification?: GoogleDriveRecordingRead,
+			) => access.getObjectResponse(resolve(key), range, verification),
+		});
+	}
+	return Object.assign({}, access, shared);
+}
 
 type WritableStorageAccess = {
 	access:
@@ -867,16 +1252,28 @@ export class Storage extends Effect.Service<Storage>()("Storage", {
 
 		const getAccessForVideo = Effect.fn("Storage.getAccessForVideo")(function* (
 			video: Video.Video,
+			options?: { resolvePublishedOutput?: boolean },
 		) {
 			if (Option.isSome(video.storageIntegrationId)) {
 				const access = yield* getDriveAccess(video.storageIntegrationId.value);
-				return [access, Option.none()] as const;
+				return [
+					options?.resolvePublishedOutput === false
+						? access
+						: withPublishedRecordingOutput(video, access),
+					Option.none(),
+				] as const;
 			}
 
 			const [s3, customBucket] = yield* mapStorageError(
 				s3Buckets.getBucketAccess(video.bucketId),
 			);
-			return [makeS3Access(s3), customBucket] as const;
+			const access = makeS3Access(s3);
+			return [
+				options?.resolvePublishedOutput === false
+					? access
+					: withPublishedRecordingOutput(video, access),
+				customBucket,
+			] as const;
 		});
 
 		const createUploadTargetForUser = Effect.fn(
@@ -899,6 +1296,57 @@ export class Storage extends Effect.Service<Storage>()("Storage", {
 			return yield* access.createUploadTarget(key, input);
 		});
 
+		const syncVideoDisplayNames = Effect.fn("Storage.syncVideoDisplayNames")(
+			function* (videoId: Video.VideoId) {
+				for (let attempt = 0; attempt < 3; attempt++) {
+					const current = yield* mapStorageError(
+						repo.getVideoForNameSync(videoId),
+					);
+					if (Option.isNone(current) || !current.value.storageIntegrationId)
+						return;
+					const video = current.value;
+					const integrationId = current.value.storageIntegrationId;
+					const integration = yield* mapStorageError(
+						repo.getIntegrationById(integrationId),
+					);
+					if (Option.isNone(integration)) {
+						return yield* Effect.fail(
+							new StorageDomain.StorageError({
+								cause: new Error("Storage integration not found"),
+							}),
+						);
+					}
+					const config = yield* mapStorageError(
+						repo.getGoogleDriveConfig(integration.value),
+					);
+					const synced = yield* syncGoogleDriveVideoNames(
+						repo,
+						config,
+						{ ...video, storageIntegrationId: integrationId },
+						makeGoogleDriveTokenStore(repo, integration.value),
+					);
+					const latest = yield* mapStorageError(
+						repo.getVideoForNameSync(videoId),
+					);
+					if (Option.isNone(latest)) return;
+					if (
+						synced &&
+						latest.value.name === video.name &&
+						latest.value.ownerId === video.ownerId &&
+						latest.value.storageIntegrationId === integrationId
+					)
+						return;
+				}
+				return yield* Effect.fail(
+					new StorageDomain.StorageError({
+						cause: new Error(
+							"Video changed during Google Drive name synchronization",
+						),
+					}),
+				);
+			},
+		);
+
 		return {
 			getS3WritableAccessForUser,
 			getOrganizationWritableAccess,
@@ -906,6 +1354,7 @@ export class Storage extends Effect.Service<Storage>()("Storage", {
 			getAccessForVideo,
 			createUploadTargetForUser,
 			createUploadTargetForVideo,
+			syncVideoDisplayNames,
 		};
 	}),
 	dependencies: [StorageRepo.Default, S3Buckets.Default],
@@ -930,8 +1379,17 @@ export class Storage extends Effect.Service<Storage>()("Storage", {
 		Effect.flatMap(Storage, (storage) =>
 			storage.getOrganizationWritableAccess(organizationId),
 		);
-	static getAccessForVideo = (video: Video.Video) =>
-		Effect.flatMap(Storage, (storage) => storage.getAccessForVideo(video));
+	static getAccessForVideo = (
+		video: Video.Video,
+		options?: { resolvePublishedOutput?: boolean },
+	) =>
+		Effect.flatMap(Storage, (storage) =>
+			storage.getAccessForVideo(video, options),
+		);
+	static syncVideoDisplayNames = (videoId: Video.VideoId) =>
+		Effect.flatMap(Storage, (storage) =>
+			storage.syncVideoDisplayNames(videoId),
+		);
 	static createUploadTargetForUser = (
 		userId: User.UserId,
 		key: string,

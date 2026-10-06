@@ -1,4 +1,5 @@
 use bytemuck::{Pod, Zeroable};
+use cap_project::XY;
 use wgpu::{include_wgsl, util::DeviceExt};
 
 pub struct CompositeVideoFramePipeline {
@@ -206,6 +207,60 @@ impl ColorGradeUniformParams {
 }
 
 impl CompositeVideoFrameUniforms {
+    pub(crate) fn for_source_frame(mut self, source_size: XY<u32>) -> Self {
+        let scale_x = source_size.x as f32 / self.frame_size[0].max(1.0);
+        let scale_y = source_size.y as f32 / self.frame_size[1].max(1.0);
+
+        self.crop_bounds = [
+            self.crop_bounds[0] * scale_x,
+            self.crop_bounds[1] * scale_y,
+            self.crop_bounds[2] * scale_x,
+            self.crop_bounds[3] * scale_y,
+        ];
+        self.frame_size = [source_size.x as f32, source_size.y as f32];
+
+        let crop_w = self.crop_bounds[2] - self.crop_bounds[0];
+        let crop_h = self.crop_bounds[3] - self.crop_bounds[1];
+        let target_w = self.target_bounds[2] - self.target_bounds[0];
+        let target_h = self.target_bounds[3] - self.target_bounds[1];
+
+        if crop_w > 0.0 && crop_h > 0.0 && target_w > 0.0 && target_h > 0.0 {
+            let source_aspect = crop_w / crop_h;
+            let target_aspect = target_w / target_h;
+
+            if (source_aspect - target_aspect).abs() > 0.001 {
+                let scale = (target_w / crop_w).min(target_h / crop_h);
+                let fitted_w = crop_w * scale;
+                let fitted_h = crop_h * scale;
+                let new_x0 = self.target_bounds[0] + (target_w - fitted_w) * 0.5;
+                let new_y0 = self.target_bounds[1] + (target_h - fitted_h) * 0.5;
+
+                self.target_bounds = [new_x0, new_y0, new_x0 + fitted_w, new_y0 + fitted_h];
+                self.target_size = [fitted_w, fitted_h];
+            }
+        }
+
+        self
+    }
+
+    pub(crate) fn source_uv_to_target(&self, position: XY<f64>) -> XY<f64> {
+        let crop_size = XY::new(
+            (self.crop_bounds[2] - self.crop_bounds[0]).max(f32::EPSILON) as f64,
+            (self.crop_bounds[3] - self.crop_bounds[1]).max(f32::EPSILON) as f64,
+        );
+        let source_position =
+            position * XY::new(self.frame_size[0] as f64, self.frame_size[1] as f64);
+        let mut position_in_crop = (source_position
+            - XY::new(self.crop_bounds[0] as f64, self.crop_bounds[1] as f64))
+            / crop_size;
+        if self.mirror_x != 0.0 {
+            position_in_crop.x = 1.0 - position_in_crop.x;
+        }
+
+        XY::new(self.target_bounds[0] as f64, self.target_bounds[1] as f64)
+            + position_in_crop * XY::new(self.target_size[0] as f64, self.target_size[1] as f64)
+    }
+
     pub fn to_buffer(self, device: &wgpu::Device) -> wgpu::Buffer {
         device.create_buffer_init(
             &(wgpu::util::BufferInitDescriptor {

@@ -85,6 +85,7 @@ pub struct SegmentedControl {
     container_border: Option<Hsla>,
     item_padding_x: Pixels,
     item_padding_y: Pixels,
+    item_height: Option<Pixels>,
     item_radius: Pixels,
     item_gap: Pixels,
     text_size: Pixels,
@@ -95,6 +96,7 @@ pub struct SegmentedControl {
     idle_text: Hsla,
     idle_bg: Option<Hsla>,
     hover_bg: Option<Hsla>,
+    selected_shadow: Vec<gpui::BoxShadow>,
     stretch: bool,
     on_select: Option<SegmentHandler>,
 }
@@ -111,6 +113,7 @@ impl SegmentedControl {
             container_border: None,
             item_padding_x: px(12.),
             item_padding_y: px(4.),
+            item_height: None,
             item_radius: px(6.),
             item_gap: px(6.),
             text_size: px(12.),
@@ -121,6 +124,7 @@ impl SegmentedControl {
             idle_text: theme.gray(11),
             idle_bg: None,
             hover_bg: None,
+            selected_shadow: Vec::new(),
             stretch: false,
             on_select: None,
         }
@@ -158,6 +162,34 @@ impl SegmentedControl {
         }
     }
 
+    /// The editor's segmented control: an `ed-ctl` trough with a raised
+    /// `ed-card` pill on the selected item (a white 12% wash in dark, where a
+    /// lifted card would read as a hole).
+    pub fn editor(theme: &Theme, id: impl Into<ElementId>, options: Vec<SegmentOption>) -> Self {
+        let editor = theme.editor;
+        Self {
+            container_bg: Some(Hsla::from(editor.ctl)),
+            container_border: None,
+            item_padding_x: px(10.),
+            item_padding_y: px(0.),
+            item_height: Some(px(24.)),
+            selected_bg: Some(if theme.is_dark() {
+                gpui::hsla(0., 0., 1., 0.12)
+            } else {
+                Hsla::from(editor.card)
+            }),
+            selected_text: Hsla::from(editor.text_1),
+            idle_text: Hsla::from(editor.text_2),
+            hover_bg: Some(Hsla::from(editor.ctl_hover)),
+            selected_shadow: if theme.is_dark() {
+                Vec::new()
+            } else {
+                crate::theme::raised_pill_shadow()
+            },
+            ..Self::base(theme, id, options)
+        }
+    }
+
     /// The text-align icon grid: `grid grid-cols-N gap-1 rounded-lg border
     /// border-gray-3 bg-gray-2 p-1`, selected `bg-gray-5 text-gray-12`.
     pub fn icons(theme: &Theme, id: impl Into<ElementId>, options: Vec<SegmentOption>) -> Self {
@@ -181,6 +213,11 @@ impl SegmentedControl {
 
     pub fn text_size(mut self, size: Pixels) -> Self {
         self.text_size = size;
+        self
+    }
+
+    pub fn item_height(mut self, height: Pixels) -> Self {
+        self.item_height = Some(height);
         self
     }
 
@@ -213,6 +250,7 @@ impl RenderOnce for SegmentedControl {
             container_border,
             item_padding_x,
             item_padding_y,
+            item_height,
             item_radius,
             item_gap,
             text_size,
@@ -223,6 +261,7 @@ impl RenderOnce for SegmentedControl {
             idle_text,
             idle_bg,
             hover_bg,
+            selected_shadow,
             stretch,
             on_select,
         } = self;
@@ -257,7 +296,10 @@ impl RenderOnce for SegmentedControl {
                     .justify_center()
                     .gap(item_gap)
                     .px(item_padding_x)
-                    .py(item_padding_y)
+                    .when(f32::from(item_padding_y) > 0., |this| {
+                        this.py(item_padding_y)
+                    })
+                    .when_some(item_height, |this, height| this.h(height))
                     .rounded(item_radius)
                     .text_size(text_size)
                     .when(stretch, |this| this.flex_1())
@@ -265,7 +307,11 @@ impl RenderOnce for SegmentedControl {
                     .when(disabled, |this| this.opacity(0.5))
                     .map(|this| {
                         if selected {
-                            let this = this.text_color(selected_text);
+                            let this = this
+                                .text_color(selected_text)
+                                .when(!selected_shadow.is_empty(), |this| {
+                                    this.shadow(selected_shadow.clone())
+                                });
                             match selected_bg {
                                 Some(bg) => this.bg(bg),
                                 None => this,

@@ -291,6 +291,7 @@ async fn render_still(
     resolution_base: Option<cap_project::XY<u32>>,
 ) -> Result<RenderedFrame, String> {
     let segment_frames = DecodedSegmentFrames {
+        screen_size: cap_project::XY::new(source.width(), source.height()),
         screen_frame: Some(source.clone()),
         camera_frame: None,
         segment_time: 0.0,
@@ -1967,63 +1968,33 @@ impl ScreenshotEditorWindow {
             match result {
                 Ok(bytes) => match destination {
                     ExportDestination::Clipboard => {
-                        // The clipboard seam this app has is "NSImage from a
-                        // path" (`platform::copy_image_to_clipboard`); a temp
-                        // file bridges the rendered bytes to it.
-                        let path = std::env::temp_dir()
-                            .join(format!("cap-screenshot-copy-{}.png", std::process::id()));
-                        let written =
-                            cx.background_executor()
-                                .spawn({
-                                    let path = path.clone();
-                                    async move {
-                                        std::fs::write(&path, &bytes).map_err(|e| e.to_string())
-                                    }
-                                })
-                                .await;
-                        match written {
-                            Ok(()) => {
-                                let copied = this.update_in(cx, |_, _, _| {
-                                    crate::platform::copy_image_to_clipboard(&path)
-                                });
-                                match copied {
-                                    Ok(Err(error)) => {
-                                        tracing::error!("copying the screenshot failed: {error}");
-                                        this.update_in(cx, |this, window, cx| {
-                                            this.toast_error(error, window, cx)
-                                        })
-                                        .ok();
-                                    }
-                                    Ok(Ok(())) => {
-                                        this.update_in(cx, |this, window, cx| {
-                                            this.toast_success(
-                                                "Screenshot copied to clipboard!",
-                                                window,
-                                                cx,
-                                            )
-                                        })
-                                        .ok();
-                                    }
-                                    Err(_) => {}
+                        this.update_in(cx, |this, window, cx| {
+                            match crate::platform::copy_image_bytes_to_clipboard(&bytes, cx) {
+                                Ok(()) => {
+                                    this.toast_success(
+                                        "Screenshot copied to clipboard!",
+                                        window,
+                                        cx,
+                                    );
                                 }
-                                cx.background_executor()
-                                    .spawn(async move {
-                                        let _ = std::fs::remove_file(&path);
-                                    })
-                                    .detach();
+                                Err(error) => {
+                                    tracing::error!("copying the screenshot failed: {error}");
+                                    this.toast_error(error, window, cx);
+                                }
                             }
-                            Err(error) => {
-                                tracing::error!("writing the clipboard temp file failed: {error}");
-                                this.update_in(cx, |this, window, cx| {
-                                    this.toast_error(error, window, cx)
-                                })
-                                .ok();
-                            }
-                        }
+                        })
+                        .ok();
                     }
                     ExportDestination::File => {
-                        let dest =
-                            crate::platform::save_file_panel(&format!("{name}.png"), &["png"]);
+                        let dest = crate::platform::save_file_panel_async(
+                            &format!("{name}.png"),
+                            &["png"],
+                            cx,
+                        )
+                        .await;
+                        if this.update_in(cx, |_, _, _| ()).is_err() {
+                            return;
+                        }
                         if let Some(dest) = dest {
                             let written = cx
                                 .background_executor()
@@ -2108,6 +2079,7 @@ impl ScreenshotEditorWindow {
         cx: &mut Context<Self>,
     ) {
         cx.write_to_clipboard(gpui::ClipboardItem::new_string(link));
+        crate::app_sounds::play_notification();
         self.toast_update(
             toast,
             ToastKind::Success,
@@ -3945,6 +3917,7 @@ impl ScreenshotEditorWindow {
                 .child(
                     div()
                         .id("screenshot-popover-backdrop")
+                        .occlude()
                         .absolute()
                         .top_0()
                         .left_0()
@@ -3956,6 +3929,7 @@ impl ScreenshotEditorWindow {
                 )
                 .child(
                     div()
+                        .occlude()
                         .absolute()
                         .left(px(left))
                         .top(px(top))
@@ -4541,6 +4515,7 @@ fn kbd_tooltip(
         .id(gpui::SharedString::from(format!("{label}-tooltip")))
         .flex_shrink_0()
         .child(child)
+        .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
         .tooltip(move |_window, cx| ui::Tooltip::new(&theme, label).keys(keys).view(cx))
 }
 
@@ -4574,6 +4549,7 @@ fn tool_button(
         } else {
             theme.gray_11
         }))
+        .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
         .tooltip(move |_window, cx| {
             ui::Tooltip::new(&theme, label.clone())
                 .keys([shortcut.clone()])

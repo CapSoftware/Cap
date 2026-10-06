@@ -68,7 +68,7 @@ const pageContent: ToolPageContent = {
 		"Download any public Loom video as an MP4 — or skip the one-by-one downloads and migrate your whole Loom library to Cap with 20% off using code MIGRATE20.",
 	featuresTitle: "Download Loom videos, then move your whole library to Cap",
 	featuresDescription:
-		"Cap's Loom downloader is free, fast, and requires zero setup. When you're ready to leave Loom for good, Cap Pro's built-in <a href=\"/loom-alternative\">Loom video importer</a> moves your entire workspace in one click.",
+		"Cap's Loom downloader is free, fast, and requires zero setup. When you're ready to leave Loom for good, Cap Pro's built-in <a href=\"/migrate-from-loom\">Loom video importer</a> moves your entire workspace in one click.",
 	features: [
 		{
 			title: "Instant Downloads",

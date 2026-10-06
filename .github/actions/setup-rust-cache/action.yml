@@ -8,13 +8,27 @@ inputs:
     description: "Whether to save the cache"
     required: false
     default: "false"
+  cache-on-failure:
+    description: "Save the cache even when the job fails (useful when a job fails after the build, e.g. at signing)"
+    required: false
+    default: "false"
+  prefix-key:
+    description: "Cache key prefix. Use a distinct prefix per build flavour (CI debug vs release) so restore-keys never pull an irrelevant cache"
+    required: false
+    default: "v1-rust"
+  workspaces:
+    description: "Newline-separated `path -> target` pairs of Cargo workspaces to cache (rust-cache format)"
+    required: false
+    default: ". -> target"
 runs:
   using: "composite"
   steps:
     - name: Cache Rust Dependencies
       uses: swatinem/rust-cache@v2
       with:
-        prefix-key: v1-rust
+        prefix-key: ${{ inputs.prefix-key }}
         cache-bin: "false"
         save-if: ${{ inputs.save-cache }}
+        cache-on-failure: ${{ inputs.cache-on-failure }}
         shared-key: ${{ inputs.target }}
+        workspaces: ${{ inputs.workspaces }}

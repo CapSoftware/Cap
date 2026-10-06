@@ -30,7 +30,8 @@ import { CollectionShareControl } from "../../_components/CollectionShareControl
 import SpaceDialog from "../../_components/Navbar/SpaceDialog";
 import { useDashboardContext } from "../../Contexts";
 import { CapPagination } from "../../caps/components/CapPagination";
-import Folder, { type FolderDataType } from "../../caps/components/Folder";
+import type { FolderDataType } from "../../caps/components/Folder";
+import { FoldersSection } from "../../caps/components/FoldersSection";
 import { NewFolderDialog } from "../../caps/components/NewFolderDialog";
 import { SelectedCapsBar } from "../../caps/components/SelectedCapsBar";
 import { AddVideosDialog } from "./components/AddVideosDialog";
@@ -418,20 +419,14 @@ export const SharedCaps = ({
 					</Button>
 				)}
 			</div>
-			{folders && folders.length > 0 && (
-				<>
-					<h1 className="mb-6 text-2xl font-medium text-gray-12">Folders</h1>
-					<div className="grid grid-cols-[repeat(auto-fill,minmax(250px,1fr))] gap-4 mb-10">
-						{folders.map((folder) => (
-							<Folder
-								key={folder.id}
-								{...folder}
-								canMove={canManageCurrentSharedCollection}
-								moveRootLabel={moveRootLabel}
-							/>
-						))}
-					</div>
-				</>
+			{folders && (
+				<FoldersSection
+					title="Folders"
+					scope={`space:${spaceId}`}
+					folders={folders}
+					canMove={canManageCurrentSharedCollection}
+					moveRootLabel={moveRootLabel}
+				/>
 			)}
 
 			{data.length > 0 && (

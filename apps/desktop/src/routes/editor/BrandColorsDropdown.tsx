@@ -18,7 +18,7 @@ export function BrandColorsDropdown(props: {
 				<KDropdownMenu.Trigger
 					disabled={props.disabled}
 					class={cx(
-						"flex h-8 w-full items-center gap-2 rounded-lg border border-gray-3 bg-gray-2 px-2 text-sm text-gray-12 transition-colors hover:border-gray-4 hover:bg-gray-3 disabled:pointer-events-none disabled:opacity-50",
+						"flex h-8 w-full items-center gap-2 rounded-[7px] bg-ed-ctl px-2 text-[13px] text-ed-text-1 outline-hidden transition-colors duration-150 hover:bg-ed-ctl-hover data-expanded:bg-ed-ctl-hover disabled:pointer-events-none disabled:opacity-50",
 						props.class,
 					)}
 				>
@@ -27,7 +27,7 @@ export function BrandColorsDropdown(props: {
 						<For each={props.swatches.slice(0, 4)}>
 							{(swatch) => (
 								<span
-									class="size-4 rounded-full border border-gray-1"
+									class="size-4 rounded-full border border-ed-card"
 									style={{
 										"background-color": swatch.color,
 										"box-shadow": `inset 0 0 0 1px ${getColorPreviewBorderColor(
@@ -38,7 +38,7 @@ export function BrandColorsDropdown(props: {
 							)}
 						</For>
 					</span>
-					<IconCapChevronDown class="size-4 shrink-0 text-gray-10" />
+					<IconCapChevronDown class="size-3.5 shrink-0 text-ed-text-3" />
 				</KDropdownMenu.Trigger>
 				<KDropdownMenu.Portal>
 					<PopperContent<typeof KDropdownMenu.Content>
@@ -62,7 +62,7 @@ export function BrandColorsDropdown(props: {
 											}}
 										/>
 										<span class="min-w-0 flex-1 truncate">{swatch.label}</span>
-										<span class="text-xs text-gray-10 tabular-nums">
+										<span class="text-[11px] text-ed-text-3 tabular-nums">
 											{swatch.color}
 										</span>
 									</DropdownItem>
