@@ -7,10 +7,14 @@ const mocks = vi.hoisted(() => ({
 		stripeSubscriptionStatus?: string | null;
 	} | null,
 	video: null as { ownerId: string; metadata: unknown } | null,
+	rereads: [] as unknown[],
+	affected: [] as number[],
 	updates: [] as unknown[],
+	conditions: [] as unknown[],
 	puts: [] as { key: string; contentType?: string }[],
 	deletes: [] as string[],
 	revalidated: [] as string[],
+	selects: 0,
 }));
 
 vi.mock("@cap/env", () => ({
@@ -25,13 +29,21 @@ vi.mock("@cap/database", () => ({
 	db: () => ({
 		select: () => ({
 			from: () => ({
-				where: async () => (mocks.video ? [mocks.video] : []),
+				where: async () => {
+					if (!mocks.video) return [];
+					if (mocks.selects++ > 0 && mocks.rereads.length > 0) {
+						mocks.video = { ...mocks.video, metadata: mocks.rereads.shift() };
+					}
+					return [mocks.video];
+				},
 			}),
 		}),
 		update: () => ({
 			set: (values: unknown) => ({
-				where: async () => {
+				where: async (condition: unknown) => {
 					mocks.updates.push(values);
+					mocks.conditions.push(condition);
+					return [{ affectedRows: mocks.affected.shift() ?? 1 }];
 				},
 			}),
 		}),
@@ -100,21 +112,22 @@ const form = (fields: Record<string, string | File>) => {
 };
 
 const sqlText = (value: unknown): string => {
-	const chunks = (value as { queryChunks?: unknown[] }).queryChunks ?? [];
-	return chunks
-		.map((chunk) => {
-			if (typeof chunk === "string") return chunk;
-			if (chunk && typeof chunk === "object" && "value" in chunk) {
-				const inner = (chunk as { value: unknown }).value;
-				return Array.isArray(inner) ? inner.join("") : String(inner);
-			}
-			return "?";
-		})
-		.join("");
+	if (typeof value === "string") return value;
+	if (!value || typeof value !== "object") return String(value);
+	if ("queryChunks" in value) {
+		return (value as { queryChunks: unknown[] }).queryChunks
+			.map(sqlText)
+			.join("");
+	}
+	if ("value" in value) {
+		const inner = (value as { value: unknown }).value;
+		return Array.isArray(inner) ? inner.map(sqlText).join("") : String(inner);
+	}
+	return "?";
 };
 
 const storedJson = () => {
-	const values = mocks.updates[0] as { metadata: unknown };
+	const values = mocks.updates.at(-1) as { metadata: unknown };
 	const chunks = (values.metadata as { queryChunks: unknown[] }).queryChunks;
 	const json = chunks.find(
 		(chunk): chunk is string =>
@@ -131,6 +144,10 @@ describe("saveLinkPreview", () => {
 		mocks.puts = [];
 		mocks.deletes = [];
 		mocks.revalidated = [];
+		mocks.rereads = [];
+		mocks.affected = [];
+		mocks.conditions = [];
+		mocks.selects = 0;
 	});
 
 	it("requires a signed-in user", async () => {
@@ -263,6 +280,82 @@ describe("saveLinkPreview", () => {
 		).toContain("JSON_REMOVE(");
 		expect(mocks.deletes).toEqual([existingImage.key]);
 	});
+
+	it("only writes over the image it read", async () => {
+		mocks.video = {
+			ownerId: "owner",
+			metadata: { linkPreview: { version: 1, image: existingImage } },
+		};
+		await saveLinkPreview(form({ title: "New title" }));
+		expect(sqlText(mocks.conditions[0])).toContain(
+			`'$.linkPreview.image.key')), '') = ${existingImage.key}`,
+		);
+	});
+
+	it("keeps an image another save swapped in instead of restoring the stale one", async () => {
+		const swapped = { ...existingImage, key: "link-previews/video123/new.jpg" };
+		mocks.video = {
+			ownerId: "owner",
+			metadata: { linkPreview: { version: 1, image: existingImage } },
+		};
+		mocks.rereads = [{ linkPreview: { version: 1, image: swapped } }];
+		mocks.affected = [0, 1];
+
+		const result = await saveLinkPreview(form({ title: "Text only" }));
+
+		expect(result.success).toBe(true);
+		expect(mocks.updates).toHaveLength(2);
+		expect(storedJson()).toMatchObject({ title: "Text only", image: swapped });
+		// The other request owns the old image's deletion; this one deletes nothing.
+		expect(mocks.deletes).toHaveLength(0);
+	});
+
+	it("does not delete anything when a reset landed between the read and the write", async () => {
+		mocks.video = {
+			ownerId: "owner",
+			metadata: { linkPreview: { version: 1, image: existingImage } },
+		};
+		mocks.rereads = [null];
+		mocks.affected = [0, 1];
+
+		const result = await saveLinkPreview(
+			form({
+				image: new File([jpeg(1200, 630)], "x.jpg", { type: "image/jpeg" }),
+			}),
+		);
+
+		expect(result.success).toBe(true);
+		expect(storedJson()?.image?.key).toBe(mocks.puts[0]?.key);
+		expect(mocks.deletes).toHaveLength(0);
+	});
+
+	it("gives up after repeated conflicts and removes its own upload", async () => {
+		mocks.video = { ownerId: "owner", metadata: null };
+		mocks.affected = [0, 0, 0];
+		await expect(
+			saveLinkPreview(
+				form({
+					image: new File([jpeg(1200, 630)], "x.jpg", { type: "image/jpeg" }),
+				}),
+			),
+		).rejects.toThrow("changed while saving");
+		expect(mocks.updates).toHaveLength(3);
+		expect(mocks.deletes).toEqual([mocks.puts[0]?.key]);
+	});
+
+	it("gives every upload its own object", async () => {
+		await saveLinkPreview(
+			form({
+				image: new File([jpeg(1200, 630)], "a.jpg", { type: "image/jpeg" }),
+			}),
+		);
+		await saveLinkPreview(
+			form({
+				image: new File([jpeg(1200, 630)], "a.jpg", { type: "image/jpeg" }),
+			}),
+		);
+		expect(mocks.puts[0]?.key).not.toBe(mocks.puts[1]?.key);
+	});
 });
 
 describe("resetLinkPreview", () => {
@@ -275,6 +368,10 @@ describe("resetLinkPreview", () => {
 		};
 		mocks.updates = [];
 		mocks.deletes = [];
+		mocks.rereads = [];
+		mocks.affected = [];
+		mocks.conditions = [];
+		mocks.selects = 0;
 	});
 
 	it("lets a downgraded owner take their preview down", async () => {
@@ -287,6 +384,25 @@ describe("resetLinkPreview", () => {
 			sqlText((mocks.updates[0] as { metadata: unknown }).metadata),
 		).toContain("JSON_REMOVE(");
 		expect(mocks.deletes).toEqual([existingImage.key]);
+	});
+
+	it("does not write when there is nothing to reset", async () => {
+		mocks.user = { id: "owner", stripeSubscriptionStatus: "active" };
+		mocks.video = { ownerId: "owner", metadata: null };
+		await resetLinkPreview(videoId as never);
+		expect(mocks.updates).toHaveLength(0);
+	});
+
+	it("never deletes another video's image a duplicate carried over", async () => {
+		mocks.user = { id: "owner", stripeSubscriptionStatus: "active" };
+		const foreign = { ...existingImage, key: "link-previews/original/abc.jpg" };
+		mocks.video = {
+			ownerId: "owner",
+			metadata: { linkPreview: { version: 1, title: "Copy", image: foreign } },
+		};
+		await resetLinkPreview(videoId as never);
+		expect(sqlText(mocks.conditions[0])).toContain(foreign.key);
+		expect(mocks.deletes).toHaveLength(0);
 	});
 
 	it("is owner only", async () => {
