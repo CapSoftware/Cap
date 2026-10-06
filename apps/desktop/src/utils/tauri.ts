@@ -1130,7 +1130,7 @@ export type ImportedAudioTrack = {
  * Path relative to the project directory, e.g. `assets/audio/<file>`.
  */
 path: string; name: string; duration: number }
-export type IncompleteRecordingInfo = { projectPath: string; prettyName: string; segmentCount: number; estimatedDurationSecs: number }
+export type IncompleteRecordingInfo = { projectPath: string; prettyName: string; segmentCount: number; estimatedDurationSecs: number; totalBytes: number }
 export type InstantRecordingMeta = { recording: boolean } | { error: string } | { fps: number; sample_rate: number | null }
 export type JsonValue<T> = [T]
 export type KeyPressDisplay = { key: string; timeOffset: number }

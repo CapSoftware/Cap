@@ -1,6 +1,7 @@
 import { Button } from "@cap/ui-solid";
 import { createMutation } from "@tanstack/solid-query";
 import { createSignal, onMount, Show } from "solid-js";
+import { confirmAndDiscardRecording } from "~/utils/recovery-discard";
 import { commands, type IncompleteRecordingInfo } from "~/utils/tauri";
 
 function formatDuration(secs: number): string {
@@ -13,6 +14,12 @@ function formatDuration(secs: number): string {
 		return `${mins}m`;
 	}
 	return `${mins}m ${remainingSecs}s`;
+}
+
+function errorMessage(error: unknown, fallback: string): string {
+	if (error instanceof Error) return error.message;
+	if (typeof error === "string") return error;
+	return fallback;
 }
 
 const RECOVERY_CHECK_DELAY_MS = 2000;
@@ -55,10 +62,17 @@ export function RecoveryToast() {
 	}));
 
 	const discardMutation = createMutation(() => ({
-		mutationFn: async (projectPath: string) => {
-			await commands.discardIncompleteRecording(projectPath);
+		mutationFn: (recording: IncompleteRecordingInfo) =>
+			confirmAndDiscardRecording(
+				recording,
+				commands.discardIncompleteRecording,
+			),
+		onSuccess: async (discarded: boolean) => {
+			if (!discarded) return;
+			recoverMutation.reset();
 			await fetchIncompleteRecordings();
 		},
+		onError: () => fetchIncompleteRecordings(),
 	}));
 
 	const isProcessing = () =>
@@ -89,17 +103,21 @@ export function RecoveryToast() {
 								{duration() && ` · ~${duration()}`}
 							</p>
 							<Show when={recoverMutation.error}>
-								{(error) => {
-									const errorMessage = () => {
-										const e = error();
-										if (e instanceof Error) return e.message;
-										if (typeof e === "string") return e;
-										return "Recovery failed. The recording may be corrupted.";
-									};
-									return (
-										<p class="text-red-11 text-[10px] mt-1">{errorMessage()}</p>
-									);
-								}}
+								{(error) => (
+									<p class="text-red-11 text-[10px] mt-1">
+										{errorMessage(
+											error(),
+											"Recovery failed. The recording may be corrupted.",
+										)}
+									</p>
+								)}
+							</Show>
+							<Show when={discardMutation.error}>
+								{(error) => (
+									<p class="text-red-11 text-[10px] mt-1">
+										{errorMessage(error(), "Couldn't discard this recording.")}
+									</p>
+								)}
 							</Show>
 						</div>
 						<div class="flex gap-1.5 shrink-0">
@@ -112,7 +130,7 @@ export function RecoveryToast() {
 								{recoverMutation.isPending ? "..." : "Recover"}
 							</Button>
 							<Button
-								onClick={() => discardMutation.mutate(rec().projectPath)}
+								onClick={() => discardMutation.mutate(rec())}
 								disabled={isProcessing()}
 								variant="gray"
 								size="xs"

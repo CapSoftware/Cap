@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter, Manager};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::create_screenshot;
 
@@ -97,6 +97,49 @@ pub struct IncompleteRecordingInfo {
     pub pretty_name: String,
     pub segment_count: u32,
     pub estimated_duration_secs: f64,
+    pub total_bytes: f64,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct ProjectDiskUsage {
+    file_count: u64,
+    total_bytes: u64,
+    unreadable_entries: u64,
+}
+
+fn project_disk_usage(project_path: &Path) -> ProjectDiskUsage {
+    let mut usage = ProjectDiskUsage::default();
+    let mut pending = vec![project_path.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            usage.unreadable_entries += 1;
+            continue;
+        };
+        for entry in entries {
+            let Ok(entry) = entry else {
+                usage.unreadable_entries += 1;
+                continue;
+            };
+            let Ok(metadata) = entry.metadata() else {
+                usage.unreadable_entries += 1;
+                continue;
+            };
+            if metadata.is_dir() {
+                pending.push(entry.path());
+            } else if metadata.is_file() {
+                usage.file_count += 1;
+                usage.total_bytes += metadata.len();
+            }
+        }
+    }
+    usage
+}
+
+async fn is_recording_active_or_pending(app: &AppHandle) -> bool {
+    app.state::<crate::ArcLock<crate::App>>()
+        .read()
+        .await
+        .is_recording_active_or_pending()
 }
 
 #[tauri::command]
@@ -104,6 +147,10 @@ pub struct IncompleteRecordingInfo {
 pub async fn find_incomplete_recordings(
     app: AppHandle,
 ) -> Result<Vec<IncompleteRecordingInfo>, String> {
+    if is_recording_active_or_pending(&app).await {
+        return Ok(Vec::new());
+    }
+
     let recordings_dirs = crate::recordings_locations::known_recordings_dirs(&app);
 
     let result = tokio::task::spawn_blocking(move || {
@@ -119,6 +166,7 @@ pub async fn find_incomplete_recordings(
                 pretty_name: recording.meta.pretty_name.clone(),
                 segment_count: recording.recoverable_segments.len() as u32,
                 estimated_duration_secs: recording.estimated_duration.as_secs_f64(),
+                total_bytes: project_disk_usage(&recording.project_path).total_bytes as f64,
             })
             .collect::<Vec<_>>()
     })
@@ -227,16 +275,162 @@ pub async fn recover_recording(app: AppHandle, project_path: String) -> Result<S
 
 #[tauri::command]
 #[specta::specta]
-pub async fn discard_incomplete_recording(project_path: String) -> Result<(), String> {
-    let path = PathBuf::from(&project_path);
-
-    if !path.exists() {
-        return Err("Recording path does not exist".to_string());
+pub async fn discard_incomplete_recording(
+    app: AppHandle,
+    project_path: String,
+) -> Result<(), String> {
+    if is_recording_active_or_pending(&app).await {
+        return Err("Finish the current recording before discarding another one.".to_string());
     }
 
-    std::fs::remove_dir_all(&path).map_err(|e| e.to_string())?;
+    let recordings_dirs = crate::recordings_locations::known_recordings_dirs(&app);
+    let target = discard_target(&recordings_dirs, Path::new(&project_path))?;
 
-    info!("Discarded incomplete recording: {}", project_path);
+    let project = crate::FinalizationProject::observe(target.clone()).await?;
+    let finalizing = app.state::<crate::FinalizingRecordings>();
+    let recovering = finalizing.is_running(&project);
+    drop(project);
+    if recovering {
+        return Err("This recording is being recovered. Try again when it finishes.".to_string());
+    }
 
-    Ok(())
+    tokio::task::spawn_blocking(move || discard_project(&target))
+        .await
+        .map_err(|error| format!("Discard task failed: {error}"))?
+}
+
+fn discard_target(recordings_dirs: &[PathBuf], path: &Path) -> Result<PathBuf, String> {
+    let is_link = path
+        .symlink_metadata()
+        .is_ok_and(|metadata| metadata.file_type().is_symlink());
+    let target = crate::recording_delete_target(recordings_dirs, path)?
+        .ok_or_else(|| "Recording path does not exist".to_string())?;
+    if is_link
+        || !target.is_dir()
+        || target
+            .extension()
+            .is_none_or(|extension| extension != "cap")
+    {
+        return Err("Path is not a Cap recording".to_string());
+    }
+    Ok(target)
+}
+
+fn discard_project(target: &Path) -> Result<(), String> {
+    let ownership = crate::acquire_recording_delete_lock(target)?;
+    let usage = project_disk_usage(target);
+    let result = std::fs::remove_dir_all(target);
+    drop(ownership);
+
+    match result {
+        Ok(()) => {
+            warn!(
+                project_path = %target.display(),
+                file_count = usage.file_count,
+                total_bytes = usage.total_bytes,
+                unreadable_entries = usage.unreadable_entries,
+                outcome = "permanently_deleted",
+                "Discarded incomplete recording"
+            );
+            Ok(())
+        }
+        Err(error) => {
+            warn!(
+                project_path = %target.display(),
+                file_count = usage.file_count,
+                total_bytes = usage.total_bytes,
+                unreadable_entries = usage.unreadable_entries,
+                outcome = "failed",
+                %error,
+                "Discarded incomplete recording"
+            );
+            Err(format!("Failed to discard recording: {error}"))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn disk_usage_counts_nested_and_hidden_files() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("Recording.cap");
+        let segment = project.join("content/segments/segment-0");
+        std::fs::create_dir_all(&segment).unwrap();
+        std::fs::write(project.join("recording-meta.json"), [0u8; 10]).unwrap();
+        std::fs::write(project.join(".recovery.lock"), b"").unwrap();
+        std::fs::write(segment.join("display.m4s"), [0u8; 100]).unwrap();
+
+        assert_eq!(
+            project_disk_usage(&project),
+            ProjectDiskUsage {
+                file_count: 3,
+                total_bytes: 110,
+                unreadable_entries: 0,
+            }
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn disk_usage_does_not_follow_symlinks() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = root.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("large.bin"), [0u8; 1000]).unwrap();
+        let project = root.path().join("Recording.cap");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(project.join("recording-meta.json"), [0u8; 10]).unwrap();
+        std::os::unix::fs::symlink(&outside, project.join("linked")).unwrap();
+
+        assert_eq!(
+            project_disk_usage(&project),
+            ProjectDiskUsage {
+                file_count: 1,
+                total_bytes: 10,
+                unreadable_entries: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn discard_target_rejects_paths_outside_recordings() {
+        let root = tempfile::tempdir().unwrap();
+        let dirs = [root.path().join("recordings")];
+        let elsewhere = root.path().join("elsewhere/Recording.cap");
+        std::fs::create_dir_all(&dirs[0]).unwrap();
+        std::fs::create_dir_all(&elsewhere).unwrap();
+
+        assert!(discard_target(&dirs, &elsewhere).is_err());
+        assert!(discard_target(&dirs, &dirs[0]).is_err());
+    }
+
+    #[test]
+    fn discard_target_requires_a_cap_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let dirs = [root.path().join("recordings")];
+        let not_a_project = dirs[0].join("Downloads");
+        let project = dirs[0].join("Recording.cap");
+        std::fs::create_dir_all(&not_a_project).unwrap();
+        std::fs::create_dir_all(&project).unwrap();
+
+        assert!(discard_target(&dirs, &not_a_project).is_err());
+        assert_eq!(
+            discard_target(&dirs, &project),
+            Ok(project.canonicalize().unwrap())
+        );
+    }
+
+    #[test]
+    fn discard_project_removes_the_project() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("Recording.cap");
+        std::fs::create_dir_all(project.join("content")).unwrap();
+        std::fs::write(project.join("content/output.mp4"), [0u8; 10]).unwrap();
+
+        assert_eq!(discard_project(&project), Ok(()));
+        assert!(!project.exists());
+    }
 }

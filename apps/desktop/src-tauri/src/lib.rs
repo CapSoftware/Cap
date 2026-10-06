@@ -1108,6 +1108,14 @@ impl FinalizingRecordings {
             .filter(|attempt| !matches!(attempt.result.borrow().as_ref(), Some(Ok(()))))
             .map(|attempt| attempt.result.subscribe())
     }
+
+    pub(crate) fn is_running(&self, project: &FinalizationProject) -> bool {
+        let recordings = self.recordings.lock().unwrap();
+        recordings
+            .attempts
+            .get(&project.identity)
+            .is_some_and(|attempt| attempt.result.borrow().is_none())
+    }
 }
 
 fn recoverable_finalization_error(path: &Path, error: String) -> String {
