@@ -95,9 +95,13 @@ const button = (text: string) =>
 		(element) => element.textContent === text,
 	);
 const render = async (overrides: Partial<OrganizationSsoSettings> = {}) => {
+	const initialSettings = settings(overrides);
 	await act(async () =>
 		root.render(
-			createElement(SsoCard, { initialSettings: settings(overrides) }),
+			createElement(SsoCard, {
+				key: initialSettings.organizationId,
+				initialSettings,
+			}),
 		),
 	);
 };
@@ -249,6 +253,37 @@ describe("SSO invoices", () => {
 		expect(getOrganizationSsoInvoices).toHaveBeenCalledTimes(2);
 		expect(container.querySelector('[role="alert"]')).toBeNull();
 		expect(container.textContent).toContain("SSO-0001");
+	});
+
+	it("does not leak a late invoice response after switching organizations", async () => {
+		let complete: (value: InvoiceResult) => void = () => {};
+		vi.mocked(getOrganizationSsoInvoices).mockReturnValueOnce(
+			new Promise((resolve) => {
+				complete = resolve;
+			}),
+		);
+		await render();
+		await act(async () => button("View invoices")?.click());
+		const nextOrganizationId = Organisation.OrganisationId.make("org_another");
+		await render({
+			organizationId: nextOrganizationId,
+			organizationName: "Another Organization",
+		});
+		expect(button("View invoices")?.disabled).toBe(false);
+		expect(container.textContent).not.toContain("SSO-0001");
+		vi.mocked(getOrganizationSsoInvoices).mockResolvedValueOnce({
+			invoices: [],
+			hasMore: false,
+		});
+		await act(async () => button("View invoices")?.click());
+		expect(getOrganizationSsoInvoices).toHaveBeenLastCalledWith(
+			nextOrganizationId,
+		);
+		await act(async () => complete(invoiceResult()));
+		expect(container.textContent).toContain("Another Organization");
+		expect(container.textContent).toContain("No SSO invoices found.");
+		expect(container.textContent).not.toContain("SSO-0001");
+		expect(container.querySelector('a[href*="stripe"]')).toBeNull();
 	});
 
 	it("shows an explicit empty state without billing portal links", async () => {
