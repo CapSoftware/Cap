@@ -6,6 +6,11 @@ const mocks = vi.hoisted(() => ({
 		domainVerified: Date | null;
 	} | null,
 	owner: null as { stripeSubscriptionStatus: string | null } | null,
+	access: null as {
+		public: boolean;
+		hasPassword: boolean;
+		allowedEmailDomain: string | null;
+	} | null,
 }));
 
 vi.mock("@cap/env", () => ({
@@ -13,25 +18,39 @@ vi.mock("@cap/env", () => ({
 	NODE_ENV: "production",
 }));
 
+vi.mock("@/lib/video-shared-spaces", () => ({
+	getSharedSpacesForVideo: async () => ({
+		sharedSpaces: [],
+		sharedOrganizations: [],
+	}),
+}));
+
 vi.mock("@cap/database", () => ({
 	db: () => ({
 		select: () => ({
-			from: (table: Record<symbol, unknown>) => ({
-				where: () => ({
-					limit: async () => {
-						const row =
-							table[Symbol.for("drizzle:Name")] === "users"
-								? mocks.owner
+			from: (table: Record<symbol, unknown>) => {
+				const rows = async () => {
+					const name = table[Symbol.for("drizzle:Name")];
+					const row =
+						name === "users"
+							? mocks.owner
+							: name === "videos"
+								? mocks.access
 								: mocks.organization;
-						return row ? [row] : [];
-					},
-				}),
-			}),
+					return row ? [row] : [];
+				};
+				const chain = {
+					leftJoin: () => chain,
+					where: () => chain,
+					limit: rows,
+				};
+				return chain;
+			},
 		}),
 	}),
 }));
 
-import type { Organisation, User } from "@cap/web-domain";
+import type { Organisation, User, Video } from "@cap/web-domain";
 import { getShareLinkPreviewMetadata } from "@/lib/share-link-preview-metadata";
 import { buildShareVideoMetadata } from "@/lib/share-video-metadata";
 
@@ -46,7 +65,7 @@ const image = {
 
 const build = async (metadata: unknown, webUrl = "https://cap.so") => {
 	const { linkPreview, canonicalShareUrl } = await getShareLinkPreviewMetadata({
-		videoId: "video123",
+		videoId: "video123" as Video.VideoId,
 		ownerId: "owner123" as User.UserId,
 		organizationId,
 		metadata,
@@ -67,6 +86,11 @@ describe("share metadata with link preview overrides", () => {
 	beforeEach(() => {
 		mocks.organization = null;
 		mocks.owner = { stripeSubscriptionStatus: "active" };
+		mocks.access = {
+			public: true,
+			hasPassword: false,
+			allowedEmailDomain: null,
+		};
 	});
 
 	it("keeps the dynamic defaults when nothing is set", async () => {
@@ -95,8 +119,9 @@ describe("share metadata with link preview overrides", () => {
 				updatedAt: "2026-10-05T00:00:00.000Z",
 			},
 		});
-		const imageUrl =
-			"https://cap.so/api/video/link-preview?videoId=video123&v=kx1";
+		const imageUrl = expect.stringMatching(
+			/^https:\/\/cap\.so\/api\/video\/link-preview\?videoId=video123&v=kx1-[0-9a-z]+$/,
+		);
 		expect(metadata.title).toBe("Q3 launch walkthrough");
 		expect(metadata.description).toBe("Five minutes on what shipped.");
 		expect(metadata.openGraph).toMatchObject({
@@ -147,9 +172,29 @@ describe("share metadata with link preview overrides", () => {
 		);
 		expect(metadata.twitter).toMatchObject({
 			images: [
-				"https://videos.example.com/api/video/link-preview?videoId=video123&v=kx1",
+				expect.stringMatching(
+					/^https:\/\/videos\.example\.com\/api\/video\/link-preview\?videoId=video123&v=kx1-/,
+				),
 			],
 		});
+	});
+
+	it("moves the image to a new URL when the video goes private", async () => {
+		const imageUrl = async () =>
+			(
+				(await build({ linkPreview: { version: 1, image } })).twitter as {
+					images: string[];
+				}
+			).images[0];
+		const before = await imageUrl();
+		mocks.access = {
+			public: false,
+			hasPassword: false,
+			allowedEmailDomain: null,
+		};
+		const after = await imageUrl();
+		expect(after).toMatch(/v=kx1-/);
+		expect(after).not.toBe(before);
 	});
 
 	it("points the canonical URL at a verified custom domain", async () => {

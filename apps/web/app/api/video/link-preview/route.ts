@@ -1,113 +1,135 @@
-import { getCurrentUser } from "@cap/database/auth/session";
 import { provideOptionalAuth, S3Buckets, Videos } from "@cap/web-backend";
-import { Video } from "@cap/web-domain";
-import { Effect, Option } from "effect";
-import { type NextRequest, NextResponse } from "next/server";
-import { runPromise } from "@/lib/server";
+import { CurrentUser, Video } from "@cap/web-domain";
+import {
+	HttpApi,
+	HttpApiBuilder,
+	HttpApiEndpoint,
+	HttpApiGroup,
+	HttpServerResponse,
+} from "@effect/platform";
+import { Effect, Layer, Option, Schema } from "effect";
+import { apiToHandler } from "@/lib/server";
 import {
 	inspectLinkPreviewImage,
+	LINK_PREVIEW_CACHE_CONTROL,
 	LINK_PREVIEW_IMAGE_MAX_BYTES,
 	linkPreviewImageVersion,
 	readLinkPreview,
 } from "@/lib/share-link-preview";
-import { ownerServesLinkPreview } from "@/lib/share-link-preview-metadata";
+import {
+	getLinkPreviewAccessKey,
+	ownerServesLinkPreview,
+} from "@/lib/share-link-preview-metadata";
 
 export const dynamic = "force-dynamic";
 
 const FETCH_TIMEOUT_MS = 8000;
 
-// Whoever can't see the image gets the same dynamic card the share page
-// would have advertised, which already knows how to say "private".
-function fallback(request: NextRequest, videoId: string) {
-	const url = new URL("/api/video/og", request.url);
-	url.searchParams.set("videoId", videoId);
-	const response = NextResponse.redirect(url, 302);
-	response.headers.set("Cache-Control", "private, no-store, max-age=0");
-	return response;
-}
+class Api extends HttpApi.make("Api").add(
+	HttpApiGroup.make("root").add(
+		HttpApiEndpoint.get(
+			"linkPreviewImage",
+		)`/api/video/link-preview`.setUrlParams(
+			Schema.Struct({
+				videoId: Video.VideoId,
+				v: Schema.optional(Schema.String),
+			}),
+		),
+	),
+) {}
 
-/**
- * Serves the owner's link preview image from Cap's bucket at a URL that only
- * changes when the image does (`v`), so crawlers and CDNs can cache it. The
- * object key comes from the video's metadata, never from the request.
- */
-export async function GET(request: NextRequest) {
-	const rawVideoId = request.nextUrl.searchParams.get("videoId");
-	if (!rawVideoId) return new NextResponse(null, { status: 400 });
-	const videoId = Video.VideoId.make(rawVideoId);
-
-	let image: { url: string; key: string; contentType: string } | null;
-	try {
-		image = await Effect.gen(function* () {
-			const maybeVideo = yield* Effect.flatMap(Videos, (videos) =>
-				videos.getByIdForViewing(videoId),
-			);
-			if (Option.isNone(maybeVideo)) return null;
-			const [video] = maybeVideo.value;
-			const stored = readLinkPreview(
-				Option.getOrNull(video.metadata),
-				video.id,
-			)?.image;
-			if (!stored) return null;
-			// Paused while the owner doesn't have Cap Pro.
-			if (!(yield* Effect.promise(() => ownerServesLinkPreview(video.ownerId))))
-				return null;
-
-			const [bucket] = yield* S3Buckets.getBucketAccess(Option.none());
-			const url = yield* bucket.getInternalSignedObjectUrl(stored.key, {
-				expiresIn: 60,
-			});
-			return { url, key: stored.key, contentType: stored.contentType };
-		}).pipe(provideOptionalAuth, runPromise);
-	} catch {
-		return fallback(request, rawVideoId);
-	}
-
-	if (!image) return fallback(request, rawVideoId);
-
-	let bytes: Uint8Array;
-	try {
-		const response = await fetch(image.url, {
-			signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-		});
-		if (!response.ok) return fallback(request, rawVideoId);
-		bytes = new Uint8Array(await response.arrayBuffer());
-	} catch (error) {
-		console.error(
-			`[video/link-preview] Failed to read preview image for ${rawVideoId}:`,
-			error,
-		);
-		return fallback(request, rawVideoId);
-	}
-
-	// What was stored was checked on upload; checking again keeps this route
-	// from ever serving bytes as a type they are not.
-	const inspection =
-		bytes.byteLength <= LINK_PREVIEW_IMAGE_MAX_BYTES
-			? inspectLinkPreviewImage(bytes)
-			: null;
-	if (!inspection?.ok || inspection.contentType !== image.contentType) {
-		return fallback(request, rawVideoId);
-	}
-
-	const anonymous = (await getCurrentUser()) === null;
-	const current =
-		request.nextUrl.searchParams.get("v") ===
-		linkPreviewImageVersion(image.key);
-
-	return new NextResponse(Buffer.from(bytes), {
-		headers: {
-			"Content-Type": inspection.contentType,
-			"Content-Length": String(bytes.byteLength),
-			"Content-Disposition": "inline",
-			"X-Content-Type-Options": "nosniff",
-			"Cache-Control": !anonymous
-				? "private, max-age=300"
-				: current
-					? "public, max-age=3600, s-maxage=86400, stale-while-revalidate=604800"
-					: "public, max-age=60, s-maxage=60",
+// Whoever can't see the image gets the dynamic card the share page would have
+// advertised, which already knows how to say "private".
+const fallback = (videoId: string) =>
+	HttpServerResponse.redirect(
+		`/api/video/og?videoId=${encodeURIComponent(videoId)}`,
+		{
+			status: 302,
+			headers: { "Cache-Control": "private, no-store, max-age=0" },
 		},
-	});
-}
+	);
 
-export const HEAD = GET;
+const readImage = (videoId: Video.VideoId) =>
+	Effect.gen(function* () {
+		const maybeVideo = yield* Effect.flatMap(Videos, (videos) =>
+			videos.getByIdForViewing(videoId),
+		);
+		if (Option.isNone(maybeVideo)) return null;
+		const [video] = maybeVideo.value;
+		const stored = readLinkPreview(
+			Option.getOrNull(video.metadata),
+			video.id,
+		)?.image;
+		if (!stored) return null;
+		const serves = yield* Effect.promise(() =>
+			ownerServesLinkPreview(video.ownerId),
+		);
+		if (!serves) return null;
+
+		const [bucket] = yield* S3Buckets.getBucketAccess(Option.none());
+		const url = yield* bucket.getInternalSignedObjectUrl(stored.key, {
+			expiresIn: 60,
+		});
+		const bytes = yield* Effect.tryPromise(async () => {
+			const response = await fetch(url, {
+				signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+			});
+			if (!response.ok) throw new Error(`Storage answered ${response.status}`);
+			return new Uint8Array(await response.arrayBuffer());
+		});
+		const accessKey = yield* Effect.promise(() =>
+			getLinkPreviewAccessKey(video.id),
+		);
+		const signedIn = Option.isSome(yield* Effect.serviceOption(CurrentUser));
+		return {
+			bytes,
+			contentType: stored.contentType,
+			version: linkPreviewImageVersion(stored.key, accessKey),
+			signedIn,
+		};
+	}).pipe(provideOptionalAuth);
+
+const ApiLive = HttpApiBuilder.api(Api).pipe(
+	Layer.provide(
+		HttpApiBuilder.group(Api, "root", (handlers) =>
+			handlers.handle("linkPreviewImage", ({ urlParams }) =>
+				readImage(urlParams.videoId).pipe(
+					Effect.catchAllCause((cause) =>
+						Effect.logError("Failed to serve a link preview image", cause).pipe(
+							Effect.as(null),
+						),
+					),
+					Effect.map((image) => {
+						if (!image) return fallback(urlParams.videoId);
+
+						// Stored bytes were checked on upload; checking again keeps
+						// this route from ever serving them as a type they are not.
+						const inspection =
+							image.bytes.byteLength <= LINK_PREVIEW_IMAGE_MAX_BYTES
+								? inspectLinkPreviewImage(image.bytes)
+								: null;
+						if (!inspection?.ok || inspection.contentType !== image.contentType)
+							return fallback(urlParams.videoId);
+
+						return HttpServerResponse.uint8Array(image.bytes, {
+							contentType: inspection.contentType,
+							headers: {
+								"Content-Disposition": "inline",
+								"X-Content-Type-Options": "nosniff",
+								"Cache-Control": image.signedIn
+									? LINK_PREVIEW_CACHE_CONTROL.signedIn
+									: urlParams.v === image.version
+										? LINK_PREVIEW_CACHE_CONTROL.current
+										: LINK_PREVIEW_CACHE_CONTROL.outdated,
+							},
+						});
+					}),
+				),
+			),
+		),
+	),
+);
+
+const handler = apiToHandler(ApiLive);
+
+export const GET = handler;

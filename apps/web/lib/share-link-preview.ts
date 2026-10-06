@@ -1,10 +1,6 @@
 import type { VideoMetadata } from "@cap/database/types";
 
-/**
- * A Cap's link preview: the title, description and image chat apps and social
- * sites show when its share link is pasted. Pure and client safe, so the
- * dialog validates with exactly the rules the server enforces.
- */
+// Client safe on purpose: the dialog validates with the server's own rules.
 
 export const LINK_PREVIEW_TITLE_MAX_LENGTH = 100;
 /** Most unfurls show about this much of a title before cutting it off. */
@@ -34,7 +30,6 @@ export type StoredLinkPreview = NonNullable<VideoMetadata["linkPreview"]>;
 export type StoredLinkPreviewImage = NonNullable<StoredLinkPreview["image"]>;
 export type LinkPreviewImageType = StoredLinkPreviewImage["contentType"];
 
-/** What the share page hands the dialog: the owner's overrides, if any. */
 export type LinkPreviewState = {
 	title: string | null;
 	description: string | null;
@@ -61,7 +56,6 @@ const isInvisible = (code: number) =>
 	(code >= 0x2066 && code <= 0x2069) ||
 	code === 0xfeff;
 
-/** One line of plain text, as it should appear in a meta tag. */
 export function sanitizeLinkPreviewText(value: string): string {
 	let visible = "";
 	for (const character of value.normalize("NFC")) {
@@ -171,10 +165,8 @@ const jpegSize = (bytes: Uint8Array) => {
 	return null;
 };
 
-/**
- * Checks an uploaded preview image from its bytes alone: the declared type,
- * the file name and the extension are never trusted.
- */
+// Judged from the bytes alone: the declared type, name and extension are
+// all client controlled.
 export function inspectLinkPreviewImage(
 	bytes: Uint8Array,
 ): LinkPreviewImageInspection {
@@ -241,15 +233,60 @@ export const isLinkPreviewImageKey = (videoId: string, key: string) =>
 	key.startsWith(linkPreviewImagePrefix(videoId)) &&
 	!key.slice(linkPreviewImagePrefix(videoId).length).includes("/");
 
-/** Changes whenever the image does, so the image URL can be cached hard. */
-export const linkPreviewImageVersion = (key: string) =>
-	(key.split("/").pop() ?? "").replace(/\.[a-z]+$/, "");
+/**
+ * Who can see a video without signing in, reduced to a string. It goes into
+ * the image URL's version so that making a video private, adding a password
+ * or changing where it is shared moves the image to a URL no cache has seen.
+ */
+export type LinkPreviewAccess = {
+	public: boolean;
+	hasPassword: boolean;
+	allowedEmailDomain: string | null;
+	spaces: { id: string; hasPassword: boolean }[];
+	organizationIds: string[];
+};
+
+export const linkPreviewAccessKey = (access: LinkPreviewAccess) =>
+	JSON.stringify([
+		access.public,
+		access.hasPassword,
+		access.allowedEmailDomain ?? "",
+		access.spaces
+			.map((space) => `${space.id}:${space.hasPassword ? 1 : 0}`)
+			.sort(),
+		[...access.organizationIds].sort(),
+	]);
+
+// FNV-1a: a cache buster, not a secret, and it has to run in the browser too.
+const fnv1a = (value: string) => {
+	let hash = 0x811c9dc5;
+	for (let index = 0; index < value.length; index++) {
+		hash ^= value.charCodeAt(index);
+		hash = Math.imul(hash, 0x01000193) >>> 0;
+	}
+	return hash.toString(36);
+};
+
+export const linkPreviewImageVersion = (key: string, accessKey?: string) => {
+	const stamp = (key.split("/").pop() ?? "").replace(/\.[a-z]+$/, "");
+	return accessKey === undefined ? stamp : `${stamp}-${fnv1a(accessKey)}`;
+};
 
 export const linkPreviewImagePath = (
 	videoId: string,
 	image: Pick<StoredLinkPreviewImage, "key">,
+	accessKey?: string,
 ) =>
-	`/api/video/link-preview?videoId=${encodeURIComponent(videoId)}&v=${encodeURIComponent(linkPreviewImageVersion(image.key))}`;
+	`/api/video/link-preview?videoId=${encodeURIComponent(videoId)}&v=${encodeURIComponent(linkPreviewImageVersion(image.key, accessKey))}`;
+
+// Shared caches keep the image for minutes, not hours: the version in the URL
+// already moves when the video's access changes, and the short lifetime bounds
+// how long an old URL can outlive a privacy change.
+export const LINK_PREVIEW_CACHE_CONTROL = {
+	current: "public, max-age=300, s-maxage=300, stale-while-revalidate=300",
+	outdated: "public, max-age=60, s-maxage=60",
+	signedIn: "private, max-age=300",
+} as const;
 
 const isNonEmptyString = (value: unknown): value is string =>
 	typeof value === "string" && value.trim().length > 0;
@@ -257,7 +294,6 @@ const isNonEmptyString = (value: unknown): value is string =>
 const isPositiveInteger = (value: unknown): value is number =>
 	typeof value === "number" && Number.isInteger(value) && value > 0;
 
-/** Reads the stored overrides defensively: metadata is untyped JSON. */
 export function readLinkPreview(
 	metadata: unknown,
 	videoId: string,
@@ -327,7 +363,6 @@ export const toLinkPreviewState = (
 			}
 		: null;
 
-/** The host a share link shows: a verified custom domain, otherwise Cap's. */
 export function linkPreviewDisplayHost(
 	customDomain: string | null | undefined,
 	webUrl: string,

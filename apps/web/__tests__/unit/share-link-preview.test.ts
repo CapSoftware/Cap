@@ -9,9 +9,12 @@ import {
 	inspectLinkPreviewImage,
 	isLinkPreviewImageKey,
 	LINK_PREVIEW_IMAGE_MAX_BYTES,
+	type LinkPreviewAccess,
+	linkPreviewAccessKey,
 	linkPreviewDisplayHost,
 	linkPreviewImageKey,
 	linkPreviewImagePath,
+	linkPreviewImageVersion,
 	readLinkPreview,
 	sanitizeLinkPreviewText,
 	toLinkPreviewState,
@@ -190,6 +193,54 @@ describe("stored link previews", () => {
 			expect(readLinkPreview(metadata, "video123")).toBeNull();
 		},
 	);
+});
+
+describe("linkPreviewImageVersion", () => {
+	const key = "link-previews/video123/abc.jpg";
+	const open: LinkPreviewAccess = {
+		public: true,
+		hasPassword: false,
+		allowedEmailDomain: null,
+		spaces: [{ id: "space1", hasPassword: false }],
+		organizationIds: ["org1"],
+	};
+	const version = (access: LinkPreviewAccess) =>
+		linkPreviewImageVersion(key, linkPreviewAccessKey(access));
+
+	it("moves to a new URL whenever who can see the video changes", () => {
+		const base = version(open);
+		expect(base).toMatch(/^abc-[0-9a-z]+$/);
+		for (const changed of [
+			{ ...open, public: false },
+			{ ...open, hasPassword: true },
+			{ ...open, allowedEmailDomain: "example.com" },
+			{ ...open, spaces: [] },
+			{ ...open, spaces: [{ id: "space1", hasPassword: true }] },
+			{ ...open, organizationIds: ["org1", "org2"] },
+		]) {
+			expect(version(changed)).not.toBe(base);
+		}
+	});
+
+	it("does not depend on the order sharing is listed in", () => {
+		expect(
+			version({
+				...open,
+				spaces: [
+					{ id: "b", hasPassword: false },
+					{ id: "a", hasPassword: false },
+				],
+			}),
+		).toBe(
+			version({
+				...open,
+				spaces: [
+					{ id: "a", hasPassword: false },
+					{ id: "b", hasPassword: false },
+				],
+			}),
+		);
+	});
 });
 
 describe("linkPreviewDisplayHost", () => {
