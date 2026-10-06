@@ -397,8 +397,13 @@ test("leaving asks first while the share link is missing this session's edits", 
 		window.dispatchEvent(event);
 		return event.defaultPrevented;
 	};
-	const dashboard = [...container.querySelectorAll("a")].find(
-		(link) => link.textContent === "Dashboard",
+	const connection = container.querySelector<HTMLButtonElement>(
+		"button[aria-label$='Connection details and dashboard']",
+	);
+	if (!connection) throw new Error("Connection indicator was not shown");
+	await act(async () => connection.click());
+	const dashboard = [...document.querySelectorAll("a")].find((link) =>
+		link.textContent?.includes("Go to dashboard"),
 	);
 	if (!dashboard) throw new Error("Dashboard was not shown");
 	const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
