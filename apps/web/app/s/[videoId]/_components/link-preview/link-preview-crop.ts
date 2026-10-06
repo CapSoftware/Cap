@@ -25,7 +25,6 @@ const OUTPUT: Size = {
 const clamp = (value: number, min: number, max: number) =>
 	Math.min(max, Math.max(min, Number.isFinite(value) ? value : min));
 
-/** The part of the source, in source pixels, that ends up in the output. */
 export function cropSourceRect(source: Size, crop: CropState, output = OUTPUT) {
 	const cover = Math.max(
 		output.width / source.width,
@@ -42,7 +41,6 @@ export function cropSourceRect(source: Size, crop: CropState, output = OUTPUT) {
 	};
 }
 
-/** Drags the image by a pointer movement measured in the on-screen frame. */
 export function panCrop(
 	source: Size,
 	crop: CropState,
@@ -67,11 +65,8 @@ export function panCrop(
 	};
 }
 
-/**
- * Background CSS that shows exactly the cropped window inside a 1.91:1 frame.
- * A percentage background position lines the same fraction of the image up
- * with the frame, which is what the focus values mean.
- */
+// A percentage background position lines the same fraction of the image up
+// with the frame, which is exactly what the focus values mean.
 export function cropBackgroundStyle(source: Size, crop: CropState) {
 	const rect = cropSourceRect(source, crop);
 	return {
@@ -85,10 +80,7 @@ const toBlob = (canvas: HTMLCanvasElement, quality: number) =>
 		canvas.toBlob(resolve, "image/jpeg", quality),
 	);
 
-/**
- * Draws the crop at 1200 × 630 and encodes it as a JPEG under the upload
- * limit. Re-encoding also drops whatever metadata the original carried.
- */
+// Re-encoding also drops whatever metadata the original carried.
 export async function renderCroppedImage(
 	image: CanvasImageSource,
 	source: Size,
@@ -124,10 +116,7 @@ export async function renderCroppedImage(
 	throw new Error("That image is too detailed to fit. Try another one.");
 }
 
-/**
- * Grabs the frame the share page's player is showing. Fails when the browser
- * won't let a cross-origin video be read back.
- */
+// Fails when the browser won't let a cross-origin video be read back.
 export async function captureVideoFrame(
 	video: HTMLVideoElement,
 ): Promise<{ url: string; size: Size }> {

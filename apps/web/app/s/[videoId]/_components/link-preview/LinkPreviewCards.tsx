@@ -21,7 +21,6 @@ export const UNFURL_APPS: { id: UnfurlApp; label: string }[] = [
 const SYSTEM_FONT =
 	"font-[system-ui,-apple-system,BlinkMacSystemFont,'Segoe_UI',sans-serif]";
 
-/** The image as apps crop it: 1.91:1 and filled. */
 function UnfurlImage({
 	src,
 	className,

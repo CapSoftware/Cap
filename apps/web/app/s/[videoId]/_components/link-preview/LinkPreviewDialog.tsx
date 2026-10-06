@@ -114,10 +114,8 @@ export function LinkPreviewDialog({
 	videoId: Video.VideoId;
 	videoName: string;
 	ownerName: string;
-	/** The domain the share link shows: the custom domain, or Cap's. */
 	host: string;
 	linkPreview: LinkPreviewState | null;
-	/** False for owners without Cap Pro: they can see and reset, not edit. */
 	canEdit: boolean;
 	onSaved?: (linkPreview: LinkPreviewState | null) => void;
 	onUpgradeRequest: () => void;
