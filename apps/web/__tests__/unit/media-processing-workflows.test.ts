@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
 	remove: vi.fn(),
 	fetch: vi.fn(),
 	sleep: vi.fn(),
+	continueLoomImport: vi.fn(),
 }));
 
 vi.mock("@cap/database", () => ({
@@ -56,6 +57,9 @@ vi.mock("@/lib/video-storage", () => ({
 	decodeStorageVideo: (value: unknown) => value,
 }));
 vi.mock("@/lib/transcribe", () => ({ transcribeVideo: vi.fn() }));
+vi.mock("@/lib/loom-import/dispatch", () => ({
+	dispatchLoomImportForVideo: mocks.continueLoomImport,
+}));
 vi.mock("@/lib/ai-generation-entitlement", () => ({
 	isAiGenerationEnabledForUser: () => false,
 }));
@@ -111,6 +115,7 @@ describe("media processing workflows", () => {
 		);
 		mocks.remove.mockImplementation(() => Effect.void);
 		mocks.sleep.mockResolvedValue(undefined);
+		mocks.continueLoomImport.mockReset().mockResolvedValue(null);
 		vi.stubGlobal("fetch", mocks.fetch);
 		mocks.fetch.mockReset().mockImplementation(async (url: string) => {
 			if (url.startsWith("https://www.loom.com/")) {
@@ -198,6 +203,21 @@ describe("media processing workflows", () => {
 			priority: "bulk",
 		});
 		expect(mocks.remove).not.toHaveBeenCalled();
+		expect(mocks.continueLoomImport).toHaveBeenCalledExactlyOnceWith("video");
+	});
+
+	it("frees its import slot when a Loom video fails for good", async () => {
+		mocks.continueLoomImport.mockRejectedValueOnce(new Error("Database busy"));
+		vi.spyOn(console, "error").mockImplementation(() => undefined);
+		mocks.fetch.mockImplementation(async (url: string) =>
+			url.startsWith("https://www.loom.com/")
+				? new Response(null, { status: 404 })
+				: Response.json({ jobId: "job-1" }),
+		);
+		await expect(importLoomVideoWorkflow(payload)).rejects.toThrow(
+			"Could not retrieve a download URL from Loom",
+		);
+		expect(mocks.continueLoomImport).toHaveBeenCalledExactlyOnceWith("video");
 	});
 
 	it("reuses a preserved Loom upload when retrying", async () => {

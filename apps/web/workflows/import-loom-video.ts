@@ -7,6 +7,7 @@ import { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect } from "effect";
 import { FatalError, sleep } from "workflow";
+import { dispatchLoomImportForVideo } from "@/lib/loom-import/dispatch";
 import {
 	createMediaServerCapacityError,
 	isMediaServerCapacityError,
@@ -236,6 +237,7 @@ export async function importLoomVideoWorkflow(
 		}
 		await saveMetadataAndComplete(payload.videoId, metadata);
 		await completeAgentImport(payload.agentOperationId, payload.videoId);
+		await continueLoomImportJob(payload.videoId);
 
 		return {
 			success: true,
@@ -246,7 +248,21 @@ export async function importLoomVideoWorkflow(
 		const errorMessage = error instanceof Error ? error.message : String(error);
 		await setProcessingError(payload.videoId, errorMessage);
 		await failAgentImport(payload.agentOperationId, errorMessage);
+		await continueLoomImportJob(payload.videoId);
 		throw new FatalError(errorMessage);
+	}
+}
+
+async function continueLoomImportJob(videoId: string): Promise<void> {
+	"use step";
+
+	try {
+		await dispatchLoomImportForVideo(videoId);
+	} catch (error) {
+		console.error("[import-loom-video] Could not continue Loom import job", {
+			videoId,
+			error,
+		});
 	}
 }
 
