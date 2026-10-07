@@ -6314,10 +6314,10 @@ async fn check_notification_permissions(app: AppHandle) {
 
     match app.notification().permission_state() {
         Ok(state) if state != PermissionState::Granted => {
-            println!("Requesting notification permission");
+            info!("Requesting notification permission");
             match app.notification().request_permission() {
                 Ok(PermissionState::Granted) => {
-                    println!("Notification permission granted");
+                    info!("Notification permission granted");
                 }
                 Ok(_) | Err(_) => {
                     GeneralSettingsStore::update(&app, |s| {
@@ -6328,10 +6328,10 @@ async fn check_notification_permissions(app: AppHandle) {
             }
         }
         Ok(_) => {
-            println!("Notification permission already granted");
+            debug!("Notification permission already granted");
         }
         Err(e) => {
-            eprintln!("Error checking notification permission state: {e}");
+            error!("Error checking notification permission state: {e}");
         }
     }
 }
