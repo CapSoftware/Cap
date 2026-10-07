@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
 	countRequestBodyBytes,
@@ -62,5 +64,30 @@ describe("countRequestBodyBytes", () => {
 		const result = await countRequestBodyBytes(body, 24);
 		expect(result).toEqual({ receivedBytes: 32, truncated: true });
 		expect(cancelled).toBe(true);
+	});
+});
+
+describe("upload-health route contract", () => {
+	const route = readFileSync(
+		join(process.cwd(), "app/api/desktop/upload-health/route.ts"),
+		"utf8",
+	);
+	const desktopRoot = readFileSync(
+		join(process.cwd(), "app/api/desktop/[...route]/root.ts"),
+		"utf8",
+	);
+
+	it("serves the probe through the HttpApi builder with auth middleware", () => {
+		expect(route).toContain("HttpApiBuilder.group");
+		expect(route).toContain("HttpAuthMiddleware");
+		expect(route).toContain("/api/desktop/upload-health`");
+		expect(route).toContain("countRequestBodyBytes");
+		expect(route).toContain('jsonResponse({ error: "probe_too_large" }, 413)');
+		expect(route).toContain("apiToHandler(ApiLive)");
+	});
+
+	it("keeps the desktop catch-all free of ad-hoc probe handlers", () => {
+		expect(desktopRoot).not.toContain('"/upload-health"');
+		expect(desktopRoot).not.toContain("countRequestBodyBytes");
 	});
 });
