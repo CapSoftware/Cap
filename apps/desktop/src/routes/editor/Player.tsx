@@ -586,7 +586,6 @@ function PreviewCanvas(props: {
 		performanceMode,
 		setPerformanceMode,
 		editorState,
-		setEditorState,
 	} = useEditorContext();
 
 	const hasRenderedFrame = () => canvasControls()?.hasRenderedFrame() ?? false;
@@ -787,9 +786,7 @@ function PreviewCanvas(props: {
 							<TextOverlay size={size()} />
 						</div>
 						<CaptionOverlay size={size()} />
-						<Show when={!hasRenderedFrame()}>
-							<KeyboardOverlay size={size()} />
-						</Show>
+						<KeyboardOverlay size={size()} />
 						<SplitScreenOverlay size={size()} />
 						<SnapGuidesOverlay size={size()} />
 						<PerformanceOverlay size={size()} />

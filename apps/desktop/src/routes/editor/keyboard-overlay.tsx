@@ -37,10 +37,29 @@ export function KeyboardOverlay(props: KeyboardOverlayProps) {
 		return parseShortcutKeys(seg.displayText || "");
 	});
 
+	const positionClasses = createMemo(() => {
+		const pos = settings().position || "bottom-center";
+		switch (pos) {
+			case "top-left":
+				return "items-start justify-start pt-14 pl-12";
+			case "top-center":
+			case "top":
+				return "items-start justify-center pt-14";
+			case "top-right":
+				return "items-start justify-end pt-14 pr-12";
+			case "bottom-left":
+				return "items-end justify-start pb-32 pl-12";
+			case "bottom-right":
+				return "items-end justify-end pb-32 pr-12";
+			default:
+				return "items-end justify-center pb-32";
+		}
+	});
+
 	return (
 		<Show when={activeSegment()}>
 			<div
-				class="absolute inset-0 pointer-events-none flex items-end justify-center pb-8 z-30 transition-all duration-150 ease-out"
+				class={`absolute inset-0 pointer-events-none flex ${positionClasses()} z-30 transition-all duration-150 ease-out`}
 				style={{
 					width: `${props.size.width}px`,
 					height: `${props.size.height}px`,

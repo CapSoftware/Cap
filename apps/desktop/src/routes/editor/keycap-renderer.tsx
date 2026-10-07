@@ -157,6 +157,65 @@ export const THEME_PALETTES: Record<
 	},
 };
 
+export interface ChassisThemeTokens {
+	background: string;
+	border: string;
+	boxShadow: string;
+	backdropFilter?: string;
+}
+
+export const THEME_CHASSIS: Record<KeycapTheme, ChassisThemeTokens> = {
+	white: {
+		background: "rgba(238, 238, 242, 0.94)",
+		border: "1.5px solid rgba(0, 0, 0, 0.12)",
+		boxShadow:
+			"0 12px 28px rgba(0, 0, 0, 0.16), 0 4px 10px rgba(0, 0, 0, 0.08)",
+		backdropFilter: "blur(20px) saturate(180%)",
+	},
+	black: {
+		background: "rgba(20, 20, 24, 0.94)",
+		border: "1.5px solid rgba(255, 255, 255, 0.14)",
+		boxShadow:
+			"0 14px 28px rgba(0, 0, 0, 0.55), 0 4px 10px rgba(0, 0, 0, 0.35)",
+		backdropFilter: "blur(20px) saturate(180%)",
+	},
+	ocean: {
+		background: "rgba(20, 32, 58, 0.92)",
+		border: "1.5px solid rgba(96, 165, 250, 0.3)",
+		boxShadow:
+			"0 14px 28px rgba(0, 0, 0, 0.45), 0 4px 10px rgba(37, 99, 235, 0.25)",
+		backdropFilter: "blur(20px) saturate(180%)",
+	},
+	emerald: {
+		background: "rgba(10, 36, 26, 0.92)",
+		border: "1.5px solid rgba(52, 211, 153, 0.3)",
+		boxShadow:
+			"0 14px 28px rgba(0, 0, 0, 0.45), 0 4px 10px rgba(5, 150, 105, 0.25)",
+		backdropFilter: "blur(20px) saturate(180%)",
+	},
+	amber: {
+		background: "rgba(38, 24, 8, 0.92)",
+		border: "1.5px solid rgba(251, 191, 36, 0.3)",
+		boxShadow:
+			"0 14px 28px rgba(0, 0, 0, 0.45), 0 4px 10px rgba(217, 119, 6, 0.25)",
+		backdropFilter: "blur(20px) saturate(180%)",
+	},
+	rose: {
+		background: "rgba(38, 14, 22, 0.92)",
+		border: "1.5px solid rgba(251, 113, 133, 0.3)",
+		boxShadow:
+			"0 14px 28px rgba(0, 0, 0, 0.45), 0 4px 10px rgba(225, 29, 72, 0.25)",
+		backdropFilter: "blur(20px) saturate(180%)",
+	},
+	purple: {
+		background: "rgba(28, 14, 48, 0.92)",
+		border: "1.5px solid rgba(167, 139, 250, 0.3)",
+		boxShadow:
+			"0 14px 28px rgba(0, 0, 0, 0.45), 0 4px 10px rgba(124, 58, 237, 0.25)",
+		backdropFilter: "blur(20px) saturate(180%)",
+	},
+};
+
 export interface SingleKeycapProps {
 	keyText?: string;
 	label?: string;
@@ -165,6 +224,7 @@ export interface SingleKeycapProps {
 	theme?: KeycapTheme;
 	scale?: number;
 	is3D?: boolean;
+	showChassis?: boolean;
 }
 
 export function parseShortcutKeys(text: string): string[] {
@@ -311,7 +371,7 @@ export function SingleKeycap(props: SingleKeycapProps) {
 					dominant-baseline="central"
 					fill={palette().textColor}
 					font-family="system-ui, -apple-system, sans-serif"
-					font-size={displayLabel().length > 2 ? 14 : 19}
+					font-size={String(displayLabel().length > 2 ? 14 : 19)}
 					font-weight="600"
 				>
 					{displayLabel()}
@@ -371,7 +431,7 @@ export function SingleKeycap(props: SingleKeycapProps) {
 					dominant-baseline="central"
 					fill={palette().textColor}
 					font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif"
-					font-size={displayLabel().length > 2 ? 13 : 18}
+					font-size={String(displayLabel().length > 2 ? 13 : 18)}
 					font-weight="500"
 				>
 					{displayLabel()}
@@ -408,7 +468,7 @@ export function SingleKeycap(props: SingleKeycapProps) {
 					dominant-baseline="central"
 					fill={palette().textColor}
 					font-family="system-ui, sans-serif"
-					font-size={displayLabel().length > 2 ? 13 : 18}
+					font-size={String(displayLabel().length > 2 ? 13 : 18)}
 					font-weight="600"
 				>
 					{displayLabel()}
@@ -465,7 +525,7 @@ export function SingleKeycap(props: SingleKeycapProps) {
 					dominant-baseline="central"
 					fill={palette().textColor}
 					font-family="Courier New, monospace"
-					font-size={displayLabel().length > 2 ? 14 : 20}
+					font-size={String(displayLabel().length > 2 ? 14 : 20)}
 					font-weight="bold"
 				>
 					{displayLabel()}
@@ -484,7 +544,15 @@ export function SingleKeycap(props: SingleKeycapProps) {
 
 	return (
 		<Show when={style() !== "classic_box"} fallback={renderClassicBox()}>
-			<div class="inline-flex items-center justify-center transition-transform hover:scale-105 active:scale-95">
+			<div
+				class="inline-flex items-center justify-center transition-transform hover:scale-105 active:scale-95"
+				style={{
+					filter:
+						props.showChassis === false
+							? "drop-shadow(0 3px 6px rgba(0, 0, 0, 0.22))"
+							: undefined,
+				}}
+			>
 				<Show when={style() === "pbt"}>{renderPBT()}</Show>
 				<Show when={style() === "apple"}>{renderApple()}</Show>
 				<Show when={style() === "minimal"}>{renderMinimal()}</Show>
@@ -510,6 +578,7 @@ export function KeycapPreviewCluster(props: {
 	const style = () => props.style || "pbt";
 	const theme = () => props.theme || "white";
 	const scale = () => props.scale || 1.0;
+	const chassisTheme = () => THEME_CHASSIS[theme()] || THEME_CHASSIS.white;
 
 	return (
 		<div
@@ -517,12 +586,12 @@ export function KeycapPreviewCluster(props: {
 			style={{
 				...(showChassis() && style() !== "classic_box"
 					? {
-							background: "rgba(18, 19, 23, 0.94)",
+							background: chassisTheme().background,
 							padding: "10px 14px",
 							"border-radius": "18px",
-							border: "1.5px solid rgba(255, 255, 255, 0.14)",
-							"box-shadow":
-								"0 14px 28px rgba(0,0,0,0.55), 0 4px 10px rgba(0,0,0,0.35)",
+							border: chassisTheme().border,
+							"box-shadow": chassisTheme().boxShadow,
+							"backdrop-filter": chassisTheme().backdropFilter,
 						}
 					: {
 							padding: "6px",
@@ -538,6 +607,7 @@ export function KeycapPreviewCluster(props: {
 						theme={theme()}
 						scale={scale()}
 						is3D={use3D()}
+						showChassis={showChassis()}
 					/>
 				)}
 			</For>

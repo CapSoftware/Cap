@@ -47,8 +47,8 @@ impl KeyboardPosition {
     fn y_factor(&self) -> f32 {
         match self {
             Self::TopLeft | Self::TopCenter | Self::TopRight => 0.08,
-            Self::AboveCaptions => 0.75,
-            Self::BottomLeft | Self::BottomCenter | Self::BottomRight => 0.85,
+            Self::AboveCaptions => 0.72,
+            Self::BottomLeft | Self::BottomCenter | Self::BottomRight => 0.74,
         }
     }
 }

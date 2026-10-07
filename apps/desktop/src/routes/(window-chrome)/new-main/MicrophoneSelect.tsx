@@ -40,7 +40,7 @@ export default function MicrophoneSelect(props: {
 	const [dbs, setDbs] = createSignal<number | undefined>();
 
 	const permissionGranted = () =>
-		!props.permissions ||
+		props.permissions === undefined ||
 		props.permissions.microphone === "granted" ||
 		props.permissions.microphone === "notNeeded";
 

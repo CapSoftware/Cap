@@ -90,7 +90,7 @@ export default function CameraSelect(props: {
 	};
 
 	const permissionGranted = () =>
-		!props.permissions ||
+		props.permissions === undefined ||
 		props.permissions.camera === "granted" ||
 		props.permissions.camera === "notNeeded";
 

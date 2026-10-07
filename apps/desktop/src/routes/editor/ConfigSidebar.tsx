@@ -3798,7 +3798,7 @@ function KeyboardSegmentConfig(props: {
 		<div class="space-y-4">
 			<div class="flex flex-col items-center justify-center p-3 rounded-xl bg-ed-ctl/50 border border-ed-line overflow-hidden">
 				<div class="text-[10px] font-semibold text-ed-text-3 mb-2.5 tracking-wider uppercase">
-					Keycap Preview (Key23)
+					Keycap Preview
 				</div>
 				<KeycapPreviewCluster
 					keys={previewKeys()}
@@ -3822,7 +3822,7 @@ function KeyboardSegmentConfig(props: {
 				/>
 			</Section>
 
-			<Section name="Keycap Design (Key23)">
+			<Section name="Keycap Design">
 				<div class="flex flex-col gap-2">
 					<Field name="Keycap Style" inline>
 						<KSelect<KeycapStyle>
