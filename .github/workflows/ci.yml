@@ -313,6 +313,14 @@ jobs:
         shell: bash
         run: ./scripts/build-desktop-binaries.sh ${{ matrix.settings.target }}
 
+      - name: Test Windows startup logging regressions
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          export PATH="$(cygpath "$GITHUB_WORKSPACE/target/debug"):$PATH"
+          cargo test --locked -p cap-desktop --target ${{ matrix.settings.target }} --bin cap-desktop logging_tests
+          cargo test --locked -p cap-desktop --target ${{ matrix.settings.target }} --test crash_sentinel
+
       - name: Test Linux desktop regressions
         if: ${{ runner.os == 'Linux' }}
         shell: bash
@@ -323,12 +331,27 @@ jobs:
           cargo test --locked -p cap --bin cap record::tests
           cargo test --locked -p cap-recording --lib -- --test-threads=1
           cargo test --locked -p cap-enc-ffmpeg
+          cargo test --locked -p cap-desktop --lib render_frame_event
         env:
           LD_LIBRARY_PATH: ${{ format('{0}/target/native-deps/lib:{0}/target/debug:{0}/target/{1}/debug', github.workspace, matrix.settings.target) }}
+
+      - name: Test export estimate request lifecycle
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            export PATH="$(cygpath "$GITHUB_WORKSPACE/target/debug"):$PATH"
+          elif [[ "$RUNNER_OS" == "Linux" ]]; then
+            export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/target/native-deps/lib:$GITHUB_WORKSPACE/target/debug:$GITHUB_WORKSPACE/target/${{ matrix.settings.target }}/debug${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          fi
+          cargo test --locked -p cap-desktop --test export_estimate_request
 
       - name: Build GPUI desktop
         shell: bash
         run: ./scripts/build-gpui-binary.sh debug ${{ matrix.settings.target }}
+
+      - name: Test export preview device-loss handling
+        shell: bash
+        run: cargo test --locked -p cap-desktop --test gpu_device_health
 
       - name: Test GPUI desktop
         shell: bash
