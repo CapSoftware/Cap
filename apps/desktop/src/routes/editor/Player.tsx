@@ -285,10 +285,7 @@ export function PlayerContent(props: { compactness?: number }) {
 	const shuttle = async (rate: number) => {
 		if (isAtEnd()) return;
 		const pending = requestHandoffPlayback(true);
-		if (pending) {
-			await pending;
-			if (rate === 1) return;
-		}
+		if (pending && (!(await pending) || rate === 1)) return;
 		const time = editorState.previewTime ?? editorState.playbackTime;
 		const frame = Math.max(Math.floor(time * FPS), 0);
 		try {
