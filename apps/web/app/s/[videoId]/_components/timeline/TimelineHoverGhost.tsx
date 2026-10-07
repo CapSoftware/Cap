@@ -158,7 +158,7 @@ export function TimelineHoverGhost({
 				type="button"
 				tabIndex={-1}
 				onClick={() => onAddAtTime(timeRef.current)}
-				className="pointer-events-auto absolute bottom-full -translate-x-1/2 overflow-hidden rounded-xl bg-white text-left ring-1 ring-gray-5 shadow-[0_4px_16px_rgba(18,22,31,0.14)] transition-shadow hover:shadow-[0_6px_20px_rgba(18,22,31,0.18)]"
+				className="pointer-events-auto absolute bottom-full -translate-x-1/2 overflow-hidden rounded-xl bg-gray-1 text-left ring-1 ring-gray-5 shadow-[0_4px_16px_rgba(18,22,31,0.14)] transition-shadow hover:shadow-[0_6px_20px_rgba(18,22,31,0.18)]"
 				style={{ marginBottom: 10, width: GHOST_CARD_WIDTH }}
 			>
 				<span
