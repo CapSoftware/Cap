@@ -1,5 +1,5 @@
 import { cx } from "cva";
-import { createSignal, onMount, Show } from "solid-js";
+import { createEffect, createSignal, onMount, Show } from "solid-js";
 
 import Tooltip from "~/components/Tooltip";
 import { authStore } from "~/store";
@@ -28,7 +28,15 @@ export default function UploadHealthIndicator() {
 			.getUploadHealth()
 			.then(setStatus)
 			.catch(() => undefined);
-		void commands.runUploadHealthCheck().catch(() => undefined);
+	});
+
+	createEffect(() => {
+		if (auth.data) {
+			void commands
+				.runUploadHealthCheck()
+				.then(setStatus)
+				.catch(() => undefined);
+		}
 	});
 
 	createTauriEventListener(events.uploadHealthChanged, setStatus);

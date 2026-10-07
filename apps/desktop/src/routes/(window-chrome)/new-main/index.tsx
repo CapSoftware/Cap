@@ -125,7 +125,7 @@ import type { RecordingWithPath, ScreenshotWithPath } from "./TargetCard";
 import TargetDropdownButton from "./TargetDropdownButton";
 import TargetMenuGrid from "./TargetMenuGrid";
 import TargetTypeButton from "./TargetTypeButton";
-import UploadHealthIndicator from "./UploadHealthIndicator";
+import UploadHealthIndicator from "./upload-health-indicator";
 import useRequestPermission from "./useRequestPermission";
 import { getPostResizeWindowPosition } from "./window-geometry";
 

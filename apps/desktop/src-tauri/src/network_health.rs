@@ -243,6 +243,9 @@ async fn recording_active(app: &AppHandle) -> bool {
 
 fn build_status(health: &UploadHealth, recording_active: bool) -> UploadHealthStatus {
     let stored = health.stored.lock().unwrap();
+    let measurement_is_fresh = stored.measured_at.is_some_and(|measured_at| {
+        Instant::now().saturating_duration_since(measured_at) <= MEASUREMENT_TTL
+    });
     UploadHealthStatus {
         state: if health.probing.load(Ordering::Acquire) {
             UploadHealthState::Checking
@@ -250,7 +253,9 @@ fn build_status(health: &UploadHealth, recording_active: bool) -> UploadHealthSt
             stored.state
         },
         upload_mbps: stored.upload_mbps,
-        recommended_max_width: stored.recommended_max_width,
+        recommended_max_width: measurement_is_fresh
+            .then_some(stored.recommended_max_width)
+            .flatten(),
         detail: stored.detail.clone(),
         checked_at: stored.checked_at,
         recording_active,
@@ -299,8 +304,6 @@ pub(crate) async fn run_probe(app: &AppHandle) -> UploadHealthStatus {
     status
 }
 
-/// Called when a recording is admitted: in-flight probes stop and new probes
-/// are refused until the recording releases the state again.
 pub(crate) fn recording_admitted(app: &AppHandle) {
     let Some(health) = app.try_state::<UploadHealth>() else {
         return;
@@ -318,8 +321,6 @@ pub(crate) fn recording_released(app: &AppHandle) {
     emit(app, build_status(&health, false));
 }
 
-/// The upload-speed capture cap applied to Instant recordings, or `None` when
-/// there is no fresh measurement to gate on.
 pub(crate) async fn recommended_capture_width(app: &AppHandle) -> Option<u32> {
     let health = app.try_state::<UploadHealth>()?;
     health.stored.lock().unwrap().fresh_width(Instant::now())
