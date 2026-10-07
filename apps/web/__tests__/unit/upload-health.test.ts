@@ -104,7 +104,9 @@ describe("upload-health route contract", () => {
 		expect(route).toContain(".deleteObject(");
 		expect(route).toContain("Effect.retry({");
 		expect(route).toContain('Schedule.exponential("100 millis")');
+		expect(route).not.toContain("Effect.ensuring(");
 		expect(route).not.toContain("Effect.catchAll(() => Effect.void)");
+		expect(route).toContain("Effect.catchAll(() => Effect.succeed(false))");
 		expect(route).toContain('jsonResponse({ error: "probe_too_large" }, 413)');
 		expect(route).toContain("apiToHandler(ApiLive)");
 	});
