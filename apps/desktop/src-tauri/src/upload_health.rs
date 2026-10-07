@@ -394,13 +394,11 @@ async fn run_probe(app: &AppHandle) -> UploadHealthSnapshot {
                 recorded_at: Some(Instant::now()),
                 message: if kind == UploadHealthKind::Healthy {
                     format!(
-                        "Test video reached the Cap API intact at approximately {:.1} Mbps. Screen capture, encoding and cloud storage were not tested.",
-                        upload_mbps
+                        "Test video reached the Cap API intact at approximately {upload_mbps:.1} Mbps. Screen capture, encoding and cloud storage were not tested."
                     )
                 } else {
                     format!(
-                        "Estimated API upload is {:.1} Mbps; Instant quality will be capped. The test video arrived intact. Screen capture, encoding and cloud storage were not tested.",
-                        upload_mbps
+                        "Estimated API upload is {upload_mbps:.1} Mbps; Instant quality will be capped. The test video arrived intact. Screen capture, encoding and cloud storage were not tested."
                     )
                 },
             }
