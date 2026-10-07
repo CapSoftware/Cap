@@ -32,6 +32,7 @@ import {
 import { getCheckoutRedirectUrls } from "@/lib/mobile-checkout";
 import { runPromise } from "@/lib/server";
 import { trackServerEvent } from "@/lib/server-analytics";
+import { countRequestBodyBytes } from "@/lib/upload-health";
 import { withAuth, withOptionalAuth } from "../../utils";
 import {
 	canEditOrganizationBranding,
@@ -351,6 +352,18 @@ app.get("/plan", withAuth, async (c) => {
 		upgraded: isSubscribed,
 		stripeSubscriptionStatus: user.stripeSubscriptionStatus,
 	});
+});
+
+app.get("/upload-health", withAuth, (c) => c.json({ ok: true }));
+
+app.post("/upload-health", withAuth, async (c) => {
+	const { receivedBytes, truncated } = await countRequestBodyBytes(
+		c.req.raw.body,
+	);
+	if (truncated) {
+		return c.json({ error: "probe_too_large" }, { status: 413 });
+	}
+	return c.json({ receivedBytes });
 });
 
 app.get("/user/profile", async (c) => {

@@ -143,6 +143,22 @@ const protectedContract = c.router(
 				}),
 			},
 		},
+		uploadHealthStatus: {
+			method: "GET",
+			path: "/desktop/upload-health",
+			responses: {
+				200: z.object({ ok: z.literal(true) }),
+			},
+		},
+		uploadHealthProbe: {
+			method: "POST",
+			path: "/desktop/upload-health",
+			body: z.custom<Uint8Array>(),
+			responses: {
+				200: z.object({ receivedBytes: z.number().int().nonnegative() }),
+				413: z.object({ error: z.literal("probe_too_large") }),
+			},
+		},
 		getUserProfile: {
 			method: "GET",
 			path: "/desktop/user/profile",

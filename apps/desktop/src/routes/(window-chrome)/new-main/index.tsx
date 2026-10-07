@@ -125,6 +125,7 @@ import type { RecordingWithPath, ScreenshotWithPath } from "./TargetCard";
 import TargetDropdownButton from "./TargetDropdownButton";
 import TargetMenuGrid from "./TargetMenuGrid";
 import TargetTypeButton from "./TargetTypeButton";
+import UploadHealthIndicator from "./UploadHealthIndicator";
 import useRequestPermission from "./useRequestPermission";
 import { getPostResizeWindowPosition } from "./window-geometry";
 
@@ -3384,6 +3385,9 @@ function Page() {
 						}
 					</Show>
 				</Show>
+			</div>
+			<div class="flex shrink-0 items-center justify-end">
+				<UploadHealthIndicator />
 			</div>
 			<Show when={isActivelyRecording()}>
 				<div class="absolute inset-0 z-10 flex flex-col justify-end bg-gray-1/80 px-6 pb-8 backdrop-blur-xs">

@@ -584,6 +584,12 @@ async restartApp() : Promise<null> {
 },
 async updatesChannelChanged() : Promise<null> {
     return await TAURI_INVOKE("updates_channel_changed");
+},
+async getUploadHealth() : Promise<UploadHealthStatus> {
+    return await TAURI_INVOKE("get_upload_health");
+},
+async runUploadHealthCheck() : Promise<UploadHealthStatus> {
+    return await TAURI_INVOKE("run_upload_health_check");
 }
 }
 
@@ -623,6 +629,7 @@ setCaptureAreaPending: SetCaptureAreaPending,
 targetUnderCursor: TargetUnderCursor,
 updateDownloadProgress: UpdateDownloadProgress,
 updateReady: UpdateReady,
+uploadHealthChanged: UploadHealthChanged,
 uploadProgressEvent: UploadProgressEvent,
 videoImportProgress: VideoImportProgress
 }>({
@@ -658,6 +665,7 @@ setCaptureAreaPending: "set-capture-area-pending",
 targetUnderCursor: "target-under-cursor",
 updateDownloadProgress: "update-download-progress",
 updateReady: "update-ready",
+uploadHealthChanged: "upload-health-changed",
 uploadProgressEvent: "upload-progress-event",
 videoImportProgress: "video-import-progress"
 })
@@ -1358,6 +1366,9 @@ export type UpdateChannel = "stable" | "nightly"
 export type UpdateCheckResult = { version: string; notes: string | null; channel: UpdateChannel }
 export type UpdateDownloadProgress = { downloaded: number; total: number | null }
 export type UpdateReady = { version: string; installed: boolean }
+export type UploadHealthChanged = UploadHealthStatus
+export type UploadHealthState = "unknown" | "checking" | "healthy" | "degraded" | "failed" | "endpointUnavailable" | "unauthenticated"
+export type UploadHealthStatus = { state: UploadHealthState; uploadMbps: number | null; recommendedMaxWidth: number | null; detail: string | null; checkedAt: number | null; recordingActive: boolean }
 export type UploadMeta = { state: "MultipartUpload"; video_id: string; file_path: string; pre_created_video: VideoUploadInfo; recording_dir: string } | { state: "SinglePartUpload"; video_id: string; recording_dir: string; file_path: string; screenshot_path: string } | { state: "SegmentUpload"; video_id: string; pre_created_video: VideoUploadInfo; recording_dir: string } | { state: "Failed"; error: string } | { state: "Complete" }
 export type UploadMode = { Initial: { pre_created_video: VideoUploadInfo | null } } | "Reupload"
 export type UploadProgress = { progress: number }
