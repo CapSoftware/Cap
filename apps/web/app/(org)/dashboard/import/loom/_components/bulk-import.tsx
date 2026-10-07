@@ -51,9 +51,9 @@ const GUIDE = [
 		body: "Admins can export every video from Settings, Workspace, Data, Export. Or just copy your Loom links.",
 	},
 	{
-		doodle: "drop" as const,
+		doodle: "check" as const,
 		title: "Drop it here",
-		body: "We find the Loom links, owners and spaces on our own. You check them before anything starts.",
+		body: "We find the Loom links, owners and spaces on our own, and check every video before anything starts.",
 	},
 	{
 		doodle: "move" as const,

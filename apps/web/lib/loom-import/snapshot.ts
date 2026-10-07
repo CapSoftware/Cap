@@ -16,7 +16,7 @@ import {
 	type LoomImportSnapshot,
 } from "./status";
 
-const CURSOR_OVERLAP_MS = 5_000;
+const CURSOR_OVERLAP_MS = 3_000;
 
 function time(value: Date | null | undefined) {
 	return value ? value.getTime() : 0;
@@ -31,6 +31,7 @@ export async function getLoomImportSnapshot({
 	userId: User.UserId;
 	since?: number;
 }): Promise<LoomImportSnapshot | null> {
+	const queriedAt = Date.now();
 	const found = await getLoomImportJobForUser(jobId, userId);
 	if (!found) return null;
 	const { job, isAdmin } = found;
@@ -113,12 +114,10 @@ export async function getLoomImportSnapshot({
 		};
 	});
 
-	let cursor = 0;
 	let totalDuration = 0;
 	let importedDuration = 0;
 	const owners = new Set<string>();
 	for (const item of all) {
-		cursor = Math.max(cursor, item.v);
 		if (item.email) owners.add(item.email);
 		if (
 			item.duration &&
@@ -155,7 +154,7 @@ export async function getLoomImportSnapshot({
 		items: full
 			? all
 			: all.filter((item) => item.v > (since as number) - CURSOR_OVERLAP_MS),
-		cursor,
+		cursor: queriedAt,
 		full,
 	};
 }

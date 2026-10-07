@@ -439,11 +439,18 @@ describe.runIf(Boolean(databaseUrl))(
 					.set({ updatedAt: earlier })
 					.where(eq(videoUploads.videoId, item.videoId));
 			}
+			const pollStartedAt = Date.now();
 			const settledView = await getLoomImportSnapshot({
 				jobId,
 				userId: ownerId,
 			});
-			expect(settledView?.cursor).toBeLessThan(Date.now() - 50_000);
+			expect(settledView?.cursor).toBeGreaterThanOrEqual(pollStartedAt);
+			const quiet = await getLoomImportSnapshot({
+				jobId,
+				userId: ownerId,
+				since: (settledView?.cursor ?? 0) + 6_000,
+			});
+			expect(quiet?.items).toEqual([]);
 			const lastPoll = Date.now() - 1_000;
 			await database()
 				.update(videoUploads)

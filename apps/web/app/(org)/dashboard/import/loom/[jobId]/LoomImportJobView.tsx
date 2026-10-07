@@ -520,6 +520,10 @@ export const LoomImportJobView = ({
 						>
 							{FILTERS.map((option) => {
 								const count = filterCount(counts, option.value);
+								const label =
+									option.value === "active" && job.status === "awaiting_upgrade"
+										? "Ready"
+										: option.label;
 								return (
 									<button
 										key={option.value}
@@ -534,7 +538,7 @@ export const LoomImportJobView = ({
 												: "text-gray-11 hover:bg-gray-3 hover:text-gray-12",
 										)}
 									>
-										{option.label}
+										{label}
 										<span
 											className={clsx(
 												"tabular-nums",

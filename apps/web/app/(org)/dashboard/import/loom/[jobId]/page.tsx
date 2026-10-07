@@ -8,6 +8,8 @@ export const metadata: Metadata = {
 	title: "Loom import — Cap",
 };
 
+const FIRST_SCREEN_ROWS = 60;
+
 export default async function Page({
 	params,
 	searchParams,
@@ -25,10 +27,15 @@ export default async function Page({
 	const snapshot = await getLoomImportSnapshot({ jobId, userId: user.id });
 	if (!snapshot) notFound();
 
+	const firstScreen = snapshot.items.slice(0, FIRST_SCREEN_ROWS);
 	return (
 		<LoomImportJobView
 			key={jobId}
-			initial={snapshot}
+			initial={{
+				...snapshot,
+				items: firstScreen,
+				full: firstScreen.length === snapshot.items.length,
+			}}
 			returnedFromCheckout={query.upgrade === "true"}
 		/>
 	);

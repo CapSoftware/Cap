@@ -132,6 +132,15 @@ export function useLoomImportJob(
 		[apply, initial.job.id],
 	);
 
+	const loadedRest = useRef(initial.full);
+	useEffect(() => {
+		if (loadedRest.current) return;
+		loadedRest.current = true;
+		fetchSnapshot(true).catch(() => {
+			loadedRest.current = false;
+		});
+	}, [fetchSnapshot]);
+
 	const status = summary.job.status;
 	const shouldPoll =
 		isLoomImportJobActive(status) ||

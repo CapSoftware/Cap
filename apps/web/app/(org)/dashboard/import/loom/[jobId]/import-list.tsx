@@ -18,6 +18,8 @@ import {
 
 export const ROW_HEIGHT = 64;
 const OVERSCAN = 8;
+const SCROLL_SETTLE_MS = 140;
+const loadedThumbs = new Set<string>();
 
 const dateFormat = new Intl.DateTimeFormat("en-US", {
 	day: "numeric",
@@ -43,12 +45,20 @@ function shortLoomUrl(url: string) {
 export function useVirtualWindow(count: number, viewport: number) {
 	const ref = useRef<HTMLDivElement>(null);
 	const [scrollTop, setScrollTop] = useState(0);
+	const [scrolling, setScrolling] = useState(false);
 	const frame = useRef<number | null>(null);
+	const settle = useRef<number | undefined>(undefined);
 
 	const onScroll = useCallback(() => {
+		window.clearTimeout(settle.current);
+		settle.current = window.setTimeout(
+			() => setScrolling(false),
+			SCROLL_SETTLE_MS,
+		);
 		if (frame.current !== null) return;
 		frame.current = window.requestAnimationFrame(() => {
 			frame.current = null;
+			setScrolling(true);
 			setScrollTop(ref.current?.scrollTop ?? 0);
 		});
 	}, []);
@@ -56,6 +66,7 @@ export function useVirtualWindow(count: number, viewport: number) {
 	useEffect(
 		() => () => {
 			if (frame.current !== null) window.cancelAnimationFrame(frame.current);
+			window.clearTimeout(settle.current);
 		},
 		[],
 	);
@@ -75,7 +86,7 @@ export function useVirtualWindow(count: number, viewport: number) {
 		count,
 		Math.ceil((scrollTop + viewport) / ROW_HEIGHT) + OVERSCAN,
 	);
-	return { ref, onScroll, start, end };
+	return { ref, onScroll, start, end, scrolling };
 }
 
 const STATUS_TONE: Record<LoomImportDisplayStatus, string> = {
@@ -185,9 +196,15 @@ const StatusCell = ({ item }: { item: LoomImportItemView }) => {
 	);
 };
 
-const Thumb = ({ src }: { src: string | null }) => (
+const Thumb = ({
+	src,
+	deferred,
+}: {
+	src: string | null;
+	deferred: boolean;
+}) => (
 	<div className="relative h-10 w-[71px] shrink-0 overflow-hidden rounded-md bg-gray-3">
-		{src && (
+		{src && (!deferred || loadedThumbs.has(src)) && (
 			<img
 				src={src}
 				alt=""
@@ -196,6 +213,7 @@ const Thumb = ({ src }: { src: string | null }) => (
 				draggable={false}
 				className="size-full object-cover"
 				referrerPolicy="no-referrer"
+				onLoad={() => loadedThumbs.add(src)}
 			/>
 		)}
 	</div>
@@ -204,9 +222,11 @@ const Thumb = ({ src }: { src: string | null }) => (
 export const ImportRow = memo(function ImportRow({
 	item,
 	showOwner,
+	scrolling,
 }: {
 	item: LoomImportItemView;
 	showOwner: boolean;
+	scrolling: boolean;
 }) {
 	const meta = [
 		item.recordedAt
@@ -218,7 +238,7 @@ export const ImportRow = memo(function ImportRow({
 	].filter(Boolean);
 	return (
 		<div className="li-row flex h-full items-center gap-3 border-b border-gray-3 px-4">
-			<Thumb src={item.thumb} />
+			<Thumb src={item.thumb} deferred={scrolling} />
 			<div className="min-w-0 flex-1">
 				<p
 					className={clsx(
@@ -251,7 +271,7 @@ export const VirtualImportList = ({
 	showOwner: boolean;
 	empty: ReactNode;
 }) => {
-	const { ref, onScroll, start, end } = useVirtualWindow(
+	const { ref, onScroll, start, end, scrolling } = useVirtualWindow(
 		items.length,
 		viewport,
 	);
@@ -288,7 +308,11 @@ export const VirtualImportList = ({
 							transform: `translateY(${(start + index) * ROW_HEIGHT}px)`,
 						}}
 					>
-						<ImportRow item={item} showOwner={showOwner} />
+						<ImportRow
+							item={item}
+							showOwner={showOwner}
+							scrolling={scrolling}
+						/>
 					</li>
 				))}
 			</ul>
