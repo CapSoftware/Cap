@@ -56,8 +56,12 @@ const waitForNextFrame = () =>
 		window.requestAnimationFrame(() => resolve());
 	});
 
-export const WebRecorderDialog = () => {
-	const [open, setOpen] = useState(false);
+export const WebRecorderDialog = ({
+	defaultOpen = false,
+}: {
+	defaultOpen?: boolean;
+} = {}) => {
+	const [open, setOpen] = useState(defaultOpen);
 	const [settingsOpen, setSettingsOpen] = useState(false);
 	const [howItWorksOpen, setHowItWorksOpen] = useState(false);
 	const [recordingMode, setRecordingMode] =

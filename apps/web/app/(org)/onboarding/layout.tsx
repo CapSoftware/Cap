@@ -1,6 +1,13 @@
+import "./onboarding.css";
 import { getCurrentUser } from "@cap/database/auth/session";
-import Bottom from "./components/Bottom";
-import Stepper from "./components/Stepper";
+import type { Metadata } from "next";
+import { redirect } from "next/navigation";
+import { OnboardingHeader } from "./components/OnboardingHeader";
+import { PaperRoot } from "./components/PaperRoot";
+
+export const metadata: Metadata = {
+	title: "Get started — Cap",
+};
 
 export default async function OnboardingLayout({
 	children,
@@ -8,13 +15,12 @@ export default async function OnboardingLayout({
 	children: React.ReactNode;
 }) {
 	const user = await getCurrentUser();
-	const completedSteps = user?.onboardingSteps || {};
+	if (!user) redirect("/login");
 
 	return (
-		<div className="flex relative flex-col justify-center items-center px-5 py-10 w-full custom-scroll min-h-fit lg:min-h-auto h-dvh bg-gray-1">
-			<Stepper completedSteps={completedSteps} />
-			{children}
-			<Bottom />
-		</div>
+		<PaperRoot>
+			<OnboardingHeader email={user.email} />
+			<main className="flex flex-1 flex-col">{children}</main>
+		</PaperRoot>
 	);
 }

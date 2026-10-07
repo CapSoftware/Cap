@@ -1,0 +1,1361 @@
+.cap-ob {
+	--ob-paper: #fbfaf7;
+	--ob-paper-2: #f4f2ec;
+	--ob-card: rgba(255, 255, 255, 0.78);
+	--ob-ink: #20242c;
+	--ob-ink-2: #4a4f59;
+	--ob-ink-soft: #6b6f78;
+	--ob-ink-faint: #a9acb3;
+	--ob-track: #e4e1d9;
+	--ob-track-strong: #d3cfc4;
+	--ob-accent: #4785ff;
+	--ob-accent-soft: rgba(71, 133, 255, 0.14);
+	--ob-red: #e5484d;
+	--ob-green: #2f9e69;
+	--ob-loom: #625df5;
+	--ob-loom-soft: rgba(98, 93, 245, 0.14);
+	--ob-screen: #3b82f6;
+	--ob-camera: #8b5cf6;
+	--ob-mic: #22c55e;
+	position: relative;
+	min-height: 100dvh;
+	background-color: var(--ob-paper);
+	background-image: radial-gradient(
+		rgba(32, 36, 44, 0.075) 1px,
+		transparent 1.2px
+	);
+	background-size: 22px 22px;
+	color: var(--ob-ink);
+	color-scheme: light;
+	-webkit-font-smoothing: antialiased;
+}
+
+.cap-ob ::selection {
+	background: var(--ob-accent-soft);
+}
+
+.ob-card {
+	border: 1.5px solid var(--ob-track);
+	border-radius: 22px;
+	background: var(--ob-card);
+	backdrop-filter: blur(6px);
+}
+
+.ob-scene-frame {
+	border-radius: 16px;
+	background: var(--ob-paper-2);
+	box-shadow: inset 0 0 0 1.5px var(--ob-track);
+}
+
+.ob-cta {
+	display: inline-flex;
+	min-height: 48px;
+	flex-shrink: 0;
+	align-items: center;
+	justify-content: center;
+	gap: 8px;
+	border: 1.5px solid var(--ob-ink);
+	border-radius: 999px;
+	padding: 0 22px;
+	background: var(--ob-ink);
+	color: var(--ob-paper);
+	font-size: 15px;
+	font-weight: 500;
+	line-height: 1;
+	white-space: nowrap;
+	cursor: pointer;
+	transition:
+		transform 0.18s cubic-bezier(0.2, 0.8, 0.2, 1),
+		background 0.18s ease,
+		color 0.18s ease,
+		border-color 0.18s ease,
+		opacity 0.18s ease;
+}
+.ob-cta:hover:not(:disabled) {
+	background: #343944;
+	border-color: #343944;
+}
+.ob-cta:active:not(:disabled) {
+	transform: scale(0.98);
+}
+.ob-cta:disabled {
+	cursor: not-allowed;
+	opacity: 0.45;
+}
+.ob-cta.is-outline {
+	background: transparent;
+	color: var(--ob-ink);
+}
+.ob-cta.is-outline:hover:not(:disabled) {
+	background: var(--ob-ink);
+	color: var(--ob-paper);
+	border-color: var(--ob-ink);
+}
+.ob-cta.is-quiet {
+	border-color: var(--ob-track-strong);
+	background: rgba(255, 255, 255, 0.7);
+	color: var(--ob-ink);
+}
+.ob-cta.is-quiet:hover:not(:disabled) {
+	border-color: var(--ob-ink);
+	background: #fff;
+}
+.ob-cta.is-small {
+	min-height: 40px;
+	padding: 0 16px;
+	font-size: 14px;
+}
+.ob-cta .ob-cta-arrow {
+	transition: transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.ob-cta:hover:not(:disabled) .ob-cta-arrow {
+	transform: translateX(3px);
+}
+
+.ob-focus:focus-visible,
+.ob-cta:focus-visible,
+.ob-link:focus-visible {
+	outline: 2px solid var(--ob-accent);
+	outline-offset: 3px;
+}
+
+.ob-link {
+	position: relative;
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	border-radius: 6px;
+	color: var(--ob-ink-2);
+	font-size: 14px;
+	font-weight: 500;
+	text-decoration: underline;
+	text-decoration-color: var(--ob-track-strong);
+	text-decoration-thickness: 1.5px;
+	text-underline-offset: 5px;
+	transition:
+		color 0.18s ease,
+		text-decoration-color 0.18s ease;
+}
+.ob-link:hover {
+	color: var(--ob-ink);
+	text-decoration-color: var(--ob-ink);
+}
+
+.ob-input {
+	width: 100%;
+	min-height: 56px;
+	border: 1.5px solid var(--ob-track-strong);
+	border-radius: 16px;
+	padding: 0 18px;
+	background: #fff;
+	color: var(--ob-ink);
+	font-size: 17px;
+	transition:
+		border-color 0.18s ease,
+		box-shadow 0.18s ease;
+}
+.ob-input::placeholder {
+	color: var(--ob-ink-faint);
+}
+.ob-input:focus {
+	outline: none;
+	border-color: var(--ob-ink);
+	box-shadow: 0 0 0 4px var(--ob-accent-soft);
+}
+.ob-input[aria-invalid="true"] {
+	border-color: var(--ob-red);
+}
+
+.ob-choice {
+	position: relative;
+	display: flex;
+	border: 1.5px solid var(--ob-track);
+	border-radius: 22px;
+	background: var(--ob-card);
+	text-align: left;
+	transition:
+		transform 0.22s cubic-bezier(0.2, 0.8, 0.2, 1),
+		border-color 0.18s ease,
+		box-shadow 0.22s ease,
+		background 0.18s ease;
+}
+.ob-choice:hover {
+	transform: translateY(-3px);
+	border-color: var(--ob-ink);
+	background: #fff;
+	box-shadow: 0 18px 36px -26px rgba(32, 36, 44, 0.45);
+}
+.ob-choice:active {
+	transform: translateY(-1px) scale(0.995);
+}
+.ob-choice:focus-visible {
+	outline: 2px solid var(--ob-accent);
+	outline-offset: 3px;
+}
+.ob-choice:hover .ob-doodle-hover {
+	animation: ob-bob 1.2s ease-in-out infinite;
+}
+.ob-choice .ob-choice-arrow {
+	transition:
+		transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1),
+		color 0.18s ease;
+}
+.ob-choice:hover .ob-choice-arrow {
+	transform: translateX(4px);
+	color: var(--ob-ink);
+}
+
+.ob-drop {
+	position: relative;
+	display: flex;
+	width: 100%;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	border-radius: 24px;
+	background: rgba(255, 255, 255, 0.6);
+	text-align: center;
+	transition: background 0.18s ease;
+}
+.ob-drop[data-over="true"] {
+	background: rgba(71, 133, 255, 0.06);
+}
+.ob-drop-outline {
+	position: absolute;
+	inset: 0;
+	border: 2px dashed var(--ob-track-strong);
+	border-radius: 24px;
+	pointer-events: none;
+	transition: border-color 0.18s ease;
+}
+.ob-drop[data-over="true"] .ob-drop-outline,
+.ob-drop:hover:not(:disabled) .ob-drop-outline {
+	border-color: var(--ob-accent);
+}
+
+.ob-boil {
+	filter: var(--ob-boil-filter, none);
+}
+.ob-ink {
+	fill: none;
+	stroke: var(--ob-ink);
+	stroke-width: 2.2;
+	stroke-linecap: round;
+	stroke-linejoin: round;
+}
+.ob-ink.is-bold {
+	stroke-width: 3;
+}
+.ob-ink.is-soft {
+	stroke: var(--ob-ink-faint);
+}
+.ob-ink.is-track {
+	stroke: var(--ob-track-strong);
+}
+.ob-ink.is-accent {
+	stroke: var(--ob-accent);
+}
+.ob-ink.is-red {
+	stroke: var(--ob-red);
+}
+.ob-ink.is-green {
+	stroke: var(--ob-green);
+}
+.ob-ink.is-loom {
+	stroke: var(--ob-loom);
+}
+.ob-label {
+	fill: var(--ob-ink);
+	font-family: inherit;
+}
+.ob-label.is-soft {
+	fill: var(--ob-ink-soft);
+}
+.ob-label.is-faint {
+	fill: var(--ob-ink-faint);
+}
+.ob-label.is-paper {
+	fill: #fff;
+}
+
+.ob-draw {
+	stroke-dasharray: 1;
+	stroke-dashoffset: 1;
+	animation: ob-draw 0.9s ease var(--d, 0s) forwards;
+}
+.ob-spark {
+	fill: none;
+	stroke: var(--ob-accent);
+	stroke-width: 2.4;
+	stroke-linecap: round;
+	opacity: 0;
+	transform-box: fill-box;
+	transform-origin: center;
+	animation: ob-spark 0.5s ease var(--d, 0.6s) forwards;
+}
+.ob-bob {
+	animation: ob-bob 1.9s ease-in-out infinite;
+}
+.ob-rise {
+	animation: ob-rise 0.55s cubic-bezier(0.2, 0.8, 0.2, 1) var(--d, 0s) both;
+}
+.ob-fade {
+	animation: ob-fade 0.4s ease var(--d, 0s) both;
+}
+.ob-pulse {
+	animation: ob-pulse 1.6s ease-in-out infinite;
+}
+.ob-march {
+	stroke-dasharray: 2 5;
+	animation: ob-march 1s linear infinite;
+}
+.ob-spin {
+	animation: ob-spin 0.9s linear infinite;
+	transform-origin: center;
+	transform-box: fill-box;
+}
+
+.ob-progress-mark {
+	fill: none;
+	stroke-width: 3;
+	stroke-linecap: round;
+	transition: stroke 0.3s ease;
+}
+.ob-progress-mark.is-done {
+	stroke: var(--ob-ink);
+}
+.ob-progress-mark.is-current {
+	stroke: var(--ob-accent);
+	stroke-dasharray: 1;
+	stroke-dashoffset: 1;
+	animation: ob-draw 0.7s ease 0.15s forwards;
+}
+.ob-progress-mark.is-next {
+	stroke: var(--ob-track-strong);
+	stroke-dasharray: 0.04 0.09;
+}
+
+.ob-squiggle-track {
+	fill: none;
+	stroke: var(--ob-track-strong);
+	stroke-width: 2.5;
+	stroke-linecap: round;
+	stroke-dasharray: 0.45 1.15;
+}
+.ob-squiggle-progress {
+	fill: none;
+	stroke: var(--ob-accent);
+	stroke-width: 3.2;
+	stroke-linecap: round;
+	stroke-dasharray: 100;
+	transition: stroke-dashoffset 0.6s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.ob-squiggle-progress.is-waiting {
+	stroke: var(--ob-ink-faint);
+	stroke-dasharray: 2 4.2;
+	stroke-dashoffset: 0;
+	animation: ob-march 1.2s linear infinite;
+}
+
+.ob-step {
+	--ob-step-ring: var(--ob-ink-faint);
+	--ob-step-num: var(--ob-ink);
+	--ob-step-text: var(--ob-ink);
+	animation: ob-step-focus var(--loop) step-end infinite;
+	animation-delay: calc((var(--i) / 3 - 1) * var(--loop));
+}
+.ob-step-ring {
+	fill: none;
+	stroke: var(--ob-step-ring);
+	stroke-width: 2;
+	stroke-linecap: round;
+	transition: stroke 0.25s ease;
+}
+.ob-step-num {
+	color: var(--ob-step-num);
+	transition: color 0.25s ease;
+}
+.ob-step-text {
+	color: var(--ob-step-text);
+	transition: color 0.25s ease;
+}
+
+.ob-scene {
+	display: block;
+	width: 100%;
+	height: auto;
+	overflow: visible;
+}
+.ob-scene .ob-tf {
+	transform-box: fill-box;
+	transform-origin: center;
+}
+.ob-scene .ob-tf-left {
+	transform-box: fill-box;
+	transform-origin: left center;
+}
+.ob-scene .ob-tf-right {
+	transform-box: fill-box;
+	transform-origin: right center;
+}
+.ob-scene .ob-tf-bottom {
+	transform-box: fill-box;
+	transform-origin: center bottom;
+}
+
+.ob-cursor {
+	opacity: 0;
+	animation: var(--cursor) var(--loop) cubic-bezier(0.45, 0, 0.2, 1) infinite;
+}
+.ob-ripple {
+	opacity: 0;
+	transform-box: fill-box;
+	transform-origin: center;
+	animation: ob-ripple var(--loop) ease-out infinite;
+	animation-delay: calc((var(--at) - 1) * var(--loop));
+}
+.ob-press {
+	transform-box: fill-box;
+	transform-origin: center;
+	animation: ob-press var(--loop) ease infinite;
+	animation-delay: calc((var(--at) - 1) * var(--loop));
+}
+.ob-loop-spark {
+	opacity: 1;
+	fill: none;
+	stroke: var(--ob-accent);
+	stroke-width: 2.2;
+	stroke-linecap: round;
+	transform-box: fill-box;
+	transform-origin: center;
+	animation: ob-loop-spark var(--loop) ease infinite;
+	animation-delay: calc((var(--at) - 1) * var(--loop));
+}
+
+.ob-loom-copy-label {
+	opacity: 0;
+	animation: ob-loom-copy var(--loop) linear infinite;
+}
+.ob-loom-copied-label {
+	animation: ob-loom-copied var(--loop) linear infinite;
+}
+.ob-loom-placeholder {
+	opacity: 0;
+	animation: ob-loom-placeholder var(--loop) linear infinite;
+}
+.ob-loom-typed-cover {
+	transform: scaleX(0);
+	animation: ob-loom-typed var(--loop) linear infinite;
+}
+.ob-loom-input-focus {
+	opacity: 0;
+	animation: ob-loom-focus var(--loop) linear infinite;
+}
+.ob-loom-trail {
+	opacity: 0;
+	animation:
+		ob-march 1s linear infinite,
+		ob-loom-trail var(--loop) linear infinite;
+}
+.ob-loom-flyer {
+	opacity: 0;
+	animation: ob-loom-fly var(--loop) cubic-bezier(0.45, 0, 0.25, 1) infinite;
+}
+.ob-loom-slot-fill {
+	animation: ob-loom-slot var(--loop) linear infinite;
+}
+.ob-loom-check {
+	stroke-dasharray: 1;
+	stroke-dashoffset: 0;
+	animation: ob-loom-check var(--loop) ease infinite;
+}
+
+.ob-rec-switch {
+	fill: var(--ob-accent);
+	animation: var(--switch) var(--loop) step-end infinite;
+}
+.ob-rec-knob {
+	transform: translateX(9px);
+	animation: var(--knob) var(--loop) cubic-bezier(0.2, 0.8, 0.2, 1) infinite;
+}
+.ob-rec-start {
+	animation: ob-rec-start var(--loop) linear infinite;
+}
+.ob-rec-stop {
+	opacity: 0;
+	animation: ob-rec-stop var(--loop) linear infinite;
+}
+.ob-rec-live {
+	opacity: 0;
+	animation: ob-rec-live var(--loop) linear infinite;
+}
+.ob-rec-time {
+	opacity: 0;
+	animation: ob-rec-time var(--loop) step-end infinite;
+	animation-delay: calc((var(--at) - 1) * var(--loop));
+}
+.ob-rec-time.is-last {
+	opacity: 1;
+	animation-name: ob-rec-time-last;
+}
+.ob-rec-cam {
+	animation: ob-rec-cam var(--loop) cubic-bezier(0.2, 0.8, 0.2, 1) infinite;
+}
+.ob-rec-bar {
+	transform-box: fill-box;
+	transform-origin: center;
+	animation: ob-rec-bar 0.9s ease-in-out infinite;
+	animation-delay: calc(var(--j) * -0.13s);
+}
+.ob-rec-link {
+	animation: ob-rec-link var(--loop) cubic-bezier(0.2, 0.8, 0.2, 1) infinite;
+}
+
+.ob-up-file {
+	opacity: 0;
+	animation: ob-up-file var(--loop) cubic-bezier(0.45, 0, 0.25, 1) infinite;
+}
+.ob-up-zone-hint {
+	opacity: 0;
+	animation: ob-up-hint var(--loop) linear infinite;
+}
+.ob-up-zone-hot {
+	opacity: 0;
+	animation:
+		ob-march-long 1.2s linear infinite,
+		ob-up-hot var(--loop) linear infinite;
+}
+.ob-up-progress-group {
+	opacity: 0;
+	animation: ob-up-progress-group var(--loop) linear infinite;
+}
+.ob-up-progress {
+	stroke-dasharray: 100;
+	stroke-dashoffset: 0;
+	animation: ob-up-progress var(--loop) linear infinite;
+}
+.ob-up-done {
+	animation: ob-up-done var(--loop) cubic-bezier(0.2, 0.8, 0.2, 1) infinite;
+}
+
+.ob-join-flap-closed {
+	opacity: 0;
+	animation: ob-join-flap-closed var(--loop) step-end infinite;
+}
+.ob-join-flap-open {
+	animation: ob-join-flap-open var(--loop) step-end infinite;
+}
+.ob-join-card {
+	animation: ob-join-card var(--loop) cubic-bezier(0.2, 0.8, 0.2, 1) infinite;
+}
+.ob-join-you {
+	animation: ob-join-you var(--loop) cubic-bezier(0.2, 0.8, 0.2, 1) infinite;
+}
+.ob-join-you-label {
+	animation: ob-join-you-label var(--loop) linear infinite;
+}
+.ob-join-thumb {
+	animation: ob-join-thumb var(--loop) cubic-bezier(0.2, 0.8, 0.2, 1) infinite;
+	animation-delay: calc((var(--j) * 0.05 - 1) * var(--loop));
+}
+
+@keyframes ob-draw {
+	to {
+		stroke-dashoffset: 0;
+	}
+}
+@keyframes ob-spark {
+	from {
+		opacity: 0;
+		transform: scale(0.2);
+	}
+	60% {
+		opacity: 1;
+		transform: scale(1.2);
+	}
+	to {
+		opacity: 1;
+		transform: scale(1);
+	}
+}
+@keyframes ob-bob {
+	0%,
+	100% {
+		transform: translateY(0);
+	}
+	50% {
+		transform: translateY(-4px);
+	}
+}
+@keyframes ob-rise {
+	from {
+		opacity: 0;
+		transform: translateY(12px);
+	}
+	to {
+		opacity: 1;
+		transform: none;
+	}
+}
+@keyframes ob-fade {
+	from {
+		opacity: 0;
+	}
+	to {
+		opacity: 1;
+	}
+}
+@keyframes ob-pulse {
+	50% {
+		opacity: 0.35;
+	}
+}
+@keyframes ob-march {
+	to {
+		stroke-dashoffset: -7;
+	}
+}
+@keyframes ob-march-long {
+	to {
+		stroke-dashoffset: -16;
+	}
+}
+@keyframes ob-spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+@keyframes ob-step-focus {
+	0% {
+		--ob-step-ring: var(--ob-accent);
+		--ob-step-num: var(--ob-accent);
+		--ob-step-text: var(--ob-ink);
+	}
+	33.333% {
+		--ob-step-ring: var(--ob-track-strong);
+		--ob-step-num: var(--ob-ink-soft);
+		--ob-step-text: var(--ob-ink-soft);
+	}
+}
+@keyframes ob-ripple {
+	0% {
+		opacity: 0.45;
+		transform: scale(0.4);
+	}
+	9%,
+	100% {
+		opacity: 0;
+		transform: scale(1.9);
+	}
+}
+@keyframes ob-press {
+	0% {
+		transform: scale(1);
+	}
+	2% {
+		transform: scale(0.9);
+	}
+	6%,
+	100% {
+		transform: scale(1);
+	}
+}
+@keyframes ob-loop-spark {
+	0% {
+		opacity: 0;
+		transform: scale(0.2);
+	}
+	3% {
+		opacity: 1;
+		transform: scale(1.2);
+	}
+	5% {
+		transform: scale(1);
+	}
+	14% {
+		opacity: 1;
+	}
+	20%,
+	100% {
+		opacity: 0;
+	}
+}
+
+@keyframes ob-loom-cursor {
+	0% {
+		opacity: 0;
+		transform: translate(96px, 236px);
+	}
+	4% {
+		opacity: 1;
+	}
+	12%,
+	18% {
+		transform: translate(60px, 156px);
+	}
+	15% {
+		transform: translate(60px, 156px) scale(0.86);
+	}
+	40%,
+	46% {
+		transform: translate(262px, 71px);
+	}
+	43% {
+		transform: translate(262px, 71px) scale(0.86);
+	}
+	56%,
+	66% {
+		opacity: 1;
+		transform: translate(306px, 100px);
+	}
+	61% {
+		transform: translate(306px, 100px) scale(0.86);
+	}
+	76% {
+		opacity: 0;
+		transform: translate(334px, 196px);
+	}
+	100% {
+		opacity: 0;
+		transform: translate(96px, 236px);
+	}
+}
+@keyframes ob-loom-copy {
+	0%,
+	15% {
+		opacity: 1;
+	}
+	16%,
+	96% {
+		opacity: 0;
+	}
+	100% {
+		opacity: 1;
+	}
+}
+@keyframes ob-loom-copied {
+	0%,
+	15% {
+		opacity: 0;
+	}
+	16%,
+	96% {
+		opacity: 1;
+	}
+	100% {
+		opacity: 0;
+	}
+}
+@keyframes ob-loom-placeholder {
+	0%,
+	44% {
+		opacity: 1;
+	}
+	45%,
+	96% {
+		opacity: 0;
+	}
+	100% {
+		opacity: 1;
+	}
+}
+@keyframes ob-loom-typed {
+	0%,
+	44% {
+		transform: scaleX(1);
+		animation-timing-function: steps(16, end);
+	}
+	54%,
+	96% {
+		transform: scaleX(0);
+	}
+	100% {
+		transform: scaleX(1);
+	}
+}
+@keyframes ob-loom-focus {
+	0%,
+	42% {
+		opacity: 0;
+	}
+	43%,
+	64% {
+		opacity: 1;
+	}
+	68%,
+	100% {
+		opacity: 0;
+	}
+}
+@keyframes ob-loom-trail {
+	0%,
+	65% {
+		opacity: 0;
+	}
+	68%,
+	86% {
+		opacity: 1;
+	}
+	90%,
+	100% {
+		opacity: 0;
+	}
+}
+@keyframes ob-loom-fly {
+	0%,
+	65% {
+		opacity: 0;
+		transform: translate(92px, 97px) scale(0.7);
+	}
+	67% {
+		opacity: 1;
+		transform: translate(92px, 97px) scale(1);
+	}
+	77% {
+		transform: translate(196px, 30px) scale(0.92) rotate(-6deg);
+	}
+	86% {
+		opacity: 1;
+		transform: translate(316px, 152px) scale(1);
+	}
+	88%,
+	100% {
+		opacity: 0;
+		transform: translate(316px, 152px) scale(1);
+	}
+}
+@keyframes ob-loom-slot {
+	0%,
+	85% {
+		opacity: 0;
+	}
+	86%,
+	96% {
+		opacity: 1;
+	}
+	100% {
+		opacity: 0;
+	}
+}
+@keyframes ob-loom-check {
+	0%,
+	86% {
+		stroke-dashoffset: 1;
+	}
+	91%,
+	96% {
+		stroke-dashoffset: 0;
+	}
+	100% {
+		stroke-dashoffset: 1;
+	}
+}
+
+@keyframes ob-rec-cursor {
+	0% {
+		opacity: 0;
+		transform: translate(320px, 236px);
+	}
+	6% {
+		opacity: 1;
+	}
+	14%,
+	20% {
+		transform: translate(328px, 45px);
+	}
+	17% {
+		transform: translate(328px, 45px) scale(0.86);
+	}
+	24%,
+	27% {
+		transform: translate(328px, 81px);
+	}
+	25.5% {
+		transform: translate(328px, 81px) scale(0.86);
+	}
+	30%,
+	32% {
+		transform: translate(328px, 117px);
+	}
+	31% {
+		transform: translate(328px, 117px) scale(0.86);
+	}
+	36%,
+	40% {
+		transform: translate(293px, 161px);
+	}
+	38% {
+		transform: translate(293px, 161px) scale(0.86);
+	}
+	46%,
+	62% {
+		opacity: 1;
+		transform: translate(338px, 206px);
+	}
+	68%,
+	72% {
+		transform: translate(293px, 161px);
+	}
+	70% {
+		transform: translate(293px, 161px) scale(0.86);
+	}
+	82%,
+	88% {
+		opacity: 1;
+		transform: translate(170px, 101px);
+	}
+	86% {
+		transform: translate(170px, 101px) scale(0.86);
+	}
+	94% {
+		opacity: 0;
+		transform: translate(196px, 150px);
+	}
+	100% {
+		opacity: 0;
+		transform: translate(320px, 236px);
+	}
+}
+@keyframes ob-rec-switch-1 {
+	0% {
+		fill: var(--ob-track-strong);
+	}
+	17% {
+		fill: var(--ob-accent);
+	}
+	97% {
+		fill: var(--ob-track-strong);
+	}
+}
+@keyframes ob-rec-knob-1 {
+	0%,
+	17% {
+		transform: translateX(0);
+	}
+	20%,
+	96% {
+		transform: translateX(9px);
+	}
+	99%,
+	100% {
+		transform: translateX(0);
+	}
+}
+@keyframes ob-rec-switch-2 {
+	0% {
+		fill: var(--ob-track-strong);
+	}
+	25.5% {
+		fill: var(--ob-accent);
+	}
+	97% {
+		fill: var(--ob-track-strong);
+	}
+}
+@keyframes ob-rec-knob-2 {
+	0%,
+	25.5% {
+		transform: translateX(0);
+	}
+	28.5%,
+	96% {
+		transform: translateX(9px);
+	}
+	99%,
+	100% {
+		transform: translateX(0);
+	}
+}
+@keyframes ob-rec-switch-3 {
+	0% {
+		fill: var(--ob-track-strong);
+	}
+	31% {
+		fill: var(--ob-accent);
+	}
+	97% {
+		fill: var(--ob-track-strong);
+	}
+}
+@keyframes ob-rec-knob-3 {
+	0%,
+	31% {
+		transform: translateX(0);
+	}
+	34%,
+	96% {
+		transform: translateX(9px);
+	}
+	99%,
+	100% {
+		transform: translateX(0);
+	}
+}
+@keyframes ob-rec-start {
+	0%,
+	38% {
+		opacity: 1;
+	}
+	39%,
+	70% {
+		opacity: 0;
+	}
+	71%,
+	100% {
+		opacity: 1;
+	}
+}
+@keyframes ob-rec-stop {
+	0%,
+	38% {
+		opacity: 0;
+	}
+	39%,
+	70% {
+		opacity: 1;
+	}
+	71%,
+	100% {
+		opacity: 0;
+	}
+}
+@keyframes ob-rec-live {
+	0%,
+	38% {
+		opacity: 0;
+	}
+	40%,
+	70% {
+		opacity: 1;
+	}
+	72%,
+	100% {
+		opacity: 0;
+	}
+}
+@keyframes ob-rec-time {
+	0% {
+		opacity: 1;
+	}
+	8% {
+		opacity: 0;
+	}
+}
+@keyframes ob-rec-time-last {
+	0% {
+		opacity: 1;
+	}
+	15% {
+		opacity: 0;
+	}
+}
+@keyframes ob-rec-cam {
+	0%,
+	38% {
+		opacity: 0;
+		transform: scale(0.4);
+	}
+	44%,
+	96% {
+		opacity: 1;
+		transform: scale(1);
+	}
+	100% {
+		opacity: 0;
+		transform: scale(0.4);
+	}
+}
+@keyframes ob-rec-bar {
+	0%,
+	100% {
+		transform: scaleY(0.35);
+	}
+	50% {
+		transform: scaleY(1);
+	}
+}
+@keyframes ob-rec-link {
+	0%,
+	71% {
+		opacity: 0;
+		transform: translateY(10px) scale(0.92);
+	}
+	76%,
+	96% {
+		opacity: 1;
+		transform: none;
+	}
+	100% {
+		opacity: 0;
+		transform: translateY(10px) scale(0.92);
+	}
+}
+
+@keyframes ob-up-cursor {
+	0% {
+		opacity: 0;
+		transform: translate(40px, 236px);
+	}
+	5% {
+		opacity: 1;
+		transform: translate(66px, 124px);
+	}
+	8% {
+		transform: translate(66px, 124px) scale(0.86);
+	}
+	30% {
+		transform: translate(252px, 120px) scale(0.86);
+	}
+	33% {
+		opacity: 1;
+		transform: translate(252px, 120px);
+	}
+	44%,
+	100% {
+		opacity: 0;
+		transform: translate(300px, 210px);
+	}
+}
+@keyframes ob-up-file {
+	0%,
+	2% {
+		opacity: 0;
+		transform: translate(56px, 108px);
+	}
+	5%,
+	8% {
+		opacity: 1;
+		transform: translate(56px, 108px);
+	}
+	30% {
+		opacity: 1;
+		transform: translate(242px, 104px) rotate(-5deg);
+	}
+	36% {
+		opacity: 0;
+		transform: translate(242px, 112px) scale(0.5);
+	}
+	100% {
+		opacity: 0;
+		transform: translate(56px, 108px);
+	}
+}
+@keyframes ob-up-hint {
+	0%,
+	30% {
+		opacity: 1;
+	}
+	33%,
+	97% {
+		opacity: 0;
+	}
+	100% {
+		opacity: 1;
+	}
+}
+@keyframes ob-up-hot {
+	0%,
+	17% {
+		opacity: 0;
+	}
+	20%,
+	34% {
+		opacity: 1;
+	}
+	38%,
+	100% {
+		opacity: 0;
+	}
+}
+@keyframes ob-up-progress-group {
+	0%,
+	34% {
+		opacity: 0;
+	}
+	36%,
+	66% {
+		opacity: 1;
+	}
+	69%,
+	100% {
+		opacity: 0;
+	}
+}
+@keyframes ob-up-progress {
+	0%,
+	36% {
+		stroke-dashoffset: 100;
+	}
+	62%,
+	100% {
+		stroke-dashoffset: 0;
+	}
+}
+@keyframes ob-up-done {
+	0%,
+	67% {
+		opacity: 0;
+		transform: translateY(10px) scale(0.92);
+	}
+	72%,
+	96% {
+		opacity: 1;
+		transform: none;
+	}
+	100% {
+		opacity: 0;
+		transform: translateY(10px) scale(0.92);
+	}
+}
+
+@keyframes ob-join-cursor {
+	0% {
+		opacity: 0;
+		transform: translate(160px, 236px);
+	}
+	8% {
+		opacity: 0;
+	}
+	16% {
+		opacity: 1;
+	}
+	24%,
+	30% {
+		transform: translate(112px, 88px);
+	}
+	27% {
+		transform: translate(112px, 88px) scale(0.86);
+	}
+	40% {
+		opacity: 0;
+		transform: translate(200px, 170px);
+	}
+	100% {
+		opacity: 0;
+		transform: translate(160px, 236px);
+	}
+}
+@keyframes ob-join-flap-closed {
+	0% {
+		opacity: 1;
+	}
+	6% {
+		opacity: 0;
+	}
+	97% {
+		opacity: 1;
+	}
+}
+@keyframes ob-join-flap-open {
+	0% {
+		opacity: 0;
+	}
+	6% {
+		opacity: 1;
+	}
+	97% {
+		opacity: 0;
+	}
+}
+@keyframes ob-join-card {
+	0%,
+	6% {
+		opacity: 0;
+		transform: translateY(70px);
+	}
+	9% {
+		opacity: 1;
+	}
+	18%,
+	96% {
+		opacity: 1;
+		transform: none;
+	}
+	100% {
+		opacity: 0;
+		transform: translateY(70px);
+	}
+}
+@keyframes ob-join-you {
+	0%,
+	36% {
+		opacity: 0;
+		transform: translateY(-30px) scale(0.6);
+	}
+	42% {
+		opacity: 1;
+		transform: translateY(3px) scale(1.06);
+	}
+	46%,
+	96% {
+		opacity: 1;
+		transform: none;
+	}
+	100% {
+		opacity: 0;
+		transform: translateY(-30px) scale(0.6);
+	}
+}
+@keyframes ob-join-you-label {
+	0%,
+	44% {
+		opacity: 0;
+	}
+	48%,
+	96% {
+		opacity: 1;
+	}
+	100% {
+		opacity: 0;
+	}
+}
+@keyframes ob-join-thumb {
+	0%,
+	66% {
+		opacity: 0;
+		transform: translateY(8px) scale(0.9);
+	}
+	72%,
+	96% {
+		opacity: 1;
+		transform: none;
+	}
+	100% {
+		opacity: 0;
+		transform: translateY(8px) scale(0.9);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.ob-boil {
+		filter: none;
+	}
+	.ob-draw,
+	.ob-spark,
+	.ob-rise,
+	.ob-fade,
+	.ob-progress-mark.is-current {
+		animation-duration: 0.01ms;
+		animation-delay: 0s;
+	}
+	.ob-bob,
+	.ob-pulse,
+	.ob-march,
+	.ob-step,
+	.ob-cursor,
+	.ob-ripple,
+	.ob-press,
+	.ob-loop-spark,
+	.ob-squiggle-progress.is-waiting,
+	.ob-doodle-hover,
+	.ob-choice:hover .ob-doodle-hover,
+	.ob-scene * {
+		animation: none;
+	}
+	.ob-cta,
+	.ob-choice,
+	.ob-choice .ob-choice-arrow,
+	.ob-cta .ob-cta-arrow {
+		transition: none;
+	}
+}
