@@ -111,6 +111,9 @@ const parseVttTimestamp = (value: string) => {
 	return ((hours * 60 + minutes) * 60 + seconds) * 1000 + milliseconds;
 };
 
+const stripMarkupTags = (value: string) =>
+	value.replace(/<[A-Za-z/!?][^<>]*(?:>|$)/g, "").trim();
+
 export const parseAgentVtt = (
 	vtt: string,
 ): (typeof Agent.AgentTranscriptCue)["Type"][] => {
@@ -142,7 +145,9 @@ export const parseAgentVtt = (
 			if (cueIndex === lines.length - 1) index = cueIndex;
 		}
 
-		const { text, speaker } = parseVttCueText(textLines.join("\n"));
+		const parsed = parseVttCueText(textLines.join("\n"));
+		const text = stripMarkupTags(parsed.text);
+		const speaker = parsed.speaker ? stripMarkupTags(parsed.speaker) : null;
 		if (text)
 			cues.push({ startMs, endMs, text, ...(speaker ? { speaker } : {}) });
 	}
