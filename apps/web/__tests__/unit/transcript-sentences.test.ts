@@ -75,6 +75,17 @@ describe("groupTranscriptSentences", () => {
 		).toEqual(["Dr. Smith said, I want... to continue."]);
 	});
 
+	it.each(["e.g.", "i.e.", "E.g.", "I.E."])(
+		"keeps %s with the following phrase",
+		(abbreviation) => {
+			expect(
+				groupTranscriptSentences(
+					entries([`Use a short label, ${abbreviation}`, "Option A."]),
+				).map((entry) => entry.text),
+			).toEqual([`Use a short label, ${abbreviation} Option A.`]);
+		},
+	);
+
 	it.each(["Option A.", "Plan B.", "Vitamin C.", "option a."])(
 		"keeps %s separate from the next sentence",
 		(label) => {
