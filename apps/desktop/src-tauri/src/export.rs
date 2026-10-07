@@ -1040,7 +1040,7 @@ fn export_project_config(
     if cursor_only {
         make_cursor_only_project(project_config)
     } else {
-        cap_export::prepare_project_for_export(project_config)
+        project_config
     }
 }
 
@@ -2236,7 +2236,7 @@ mod tests {
                 .await
                 .unwrap();
             let settings = preview.captions.unwrap().settings;
-            assert_eq!(settings.enabled, export_with_subtitles);
+            assert!(settings.enabled);
             assert_eq!(settings.export_with_subtitles, export_with_subtitles);
             assert!(
                 !receiver
@@ -2334,10 +2334,7 @@ mod tests {
                     if cursor_only {
                         assert!(preview.captions.is_none());
                     } else {
-                        assert_eq!(
-                            preview.captions.unwrap().settings.enabled,
-                            enabled && export
-                        );
+                        assert_eq!(preview.captions.unwrap().settings.enabled, enabled);
                     }
                     assert_eq!(serde_json::to_value(editor).unwrap(), original);
                 }
