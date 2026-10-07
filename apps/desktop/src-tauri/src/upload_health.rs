@@ -13,9 +13,11 @@ use crate::{
 };
 
 mod lifecycle;
+mod response;
 mod timing;
 
 use lifecycle::ProbeControl;
+use response::read_probe_response;
 use timing::{
     connection_will_close, measure_warm_probe_rtt, upload_elapsed_after_rtt, upload_mbps_for_bytes,
 };
@@ -350,7 +352,7 @@ async fn run_probe(app: &AppHandle) -> UploadHealthSnapshot {
 
     match response {
         Ok(response) if response.status().is_success() => {
-            let probe_response = match response.json::<UploadHealthProbeResponse>().await {
+            let probe_response = match read_probe_response(response).await {
                 Ok(probe_response) => probe_response,
                 Err(err) => {
                     warn!(error = %err, "Upload health probe returned an invalid response");

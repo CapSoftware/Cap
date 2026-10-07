@@ -28,6 +28,12 @@ export function createUploadHealth(options: {
 	let refreshQueued = false;
 	let disposed = false;
 	let delayedRefresh: ReturnType<typeof setTimeout> | undefined;
+	let refreshInterval: ReturnType<typeof setInterval> | undefined;
+
+	const clearScheduledRefreshes = () => {
+		clearTimeout(delayedRefresh);
+		clearInterval(refreshInterval);
+	};
 
 	const load = async (refresh: boolean, queueIfBusy = false) => {
 		if (disposed) return;
@@ -40,6 +46,8 @@ export function createUploadHealth(options: {
 		}
 		const currentRequest = ++requestId;
 		if (shouldRefresh) {
+			clearScheduledRefreshes();
+			refreshInterval = setInterval(() => void load(true), REFRESH_INTERVAL_MS);
 			activeGeneration = currentGeneration;
 			setRefreshing(true);
 		}
@@ -78,7 +86,7 @@ export function createUploadHealth(options: {
 	};
 
 	const scheduleRefresh = (delay: number, queueIfBusy = false) => {
-		clearTimeout(delayedRefresh);
+		clearScheduledRefreshes();
 		delayedRefresh = setTimeout(() => void load(true, queueIfBusy), delay);
 	};
 
@@ -97,7 +105,7 @@ export function createUploadHealth(options: {
 			options.isRecording,
 			(recording, previous) => {
 				if (recording) {
-					clearTimeout(delayedRefresh);
+					clearScheduledRefreshes();
 					void load(false);
 				} else if (previous) {
 					scheduleRefresh(POST_RECORDING_DELAY_MS, true);
@@ -107,11 +115,9 @@ export function createUploadHealth(options: {
 		),
 	);
 
-	const interval = setInterval(() => void load(true), REFRESH_INTERVAL_MS);
 	onCleanup(() => {
 		disposed = true;
-		clearTimeout(delayedRefresh);
-		clearInterval(interval);
+		clearScheduledRefreshes();
 	});
 
 	return { status, refreshing, refresh: () => load(true) };

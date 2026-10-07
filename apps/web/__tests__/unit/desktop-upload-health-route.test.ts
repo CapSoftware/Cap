@@ -9,8 +9,20 @@ import {
 	HttpServerRequest,
 } from "@effect/platform";
 import { type Context, Effect, Layer, Option } from "effect";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { MAX_DESKTOP_UPLOAD_HEALTH_PROBE_BYTES } from "@/app/api/desktop/upload-health/upload-health";
+import {
+	afterAll,
+	afterEach,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	vi,
+} from "vitest";
+import * as uploadHealth from "@/app/api/desktop/upload-health/upload-health";
+import {
+	DESKTOP_UPLOAD_HEALTH_READ_TIMEOUT_MS,
+	MAX_DESKTOP_UPLOAD_HEALTH_PROBE_BYTES,
+} from "@/app/api/desktop/upload-health/upload-health";
 
 const mocks = vi.hoisted(() => ({
 	authenticate: vi.fn<
@@ -74,6 +86,11 @@ const fixtureSha256 =
 
 beforeEach(() => {
 	mocks.authenticate.mockReset().mockReturnValue(true);
+});
+
+afterEach(() => {
+	vi.useRealTimers();
+	vi.restoreAllMocks();
 });
 
 afterAll(async () => {
@@ -276,6 +293,119 @@ describe("desktop upload health route", () => {
 		expect(response.status).toBe(500);
 		expect(response.headers.get("cache-control")).toBe("private, no-store");
 		expect(await response.json()).toEqual({ error: "probe_failed" });
+		expect(body.locked).toBe(false);
+	});
+
+	it("returns 413 without waiting for a stalled cancellation", async () => {
+		const { POST } = await import("@/app/api/desktop/upload-health/route");
+		const cancel = vi.fn(() => new Promise<void>(() => {}));
+		const body = new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(
+					new Uint8Array(MAX_DESKTOP_UPLOAD_HEALTH_PROBE_BYTES + 1),
+				);
+			},
+			cancel,
+		});
+		const options = {
+			method: "POST",
+			headers: { authorization },
+			body,
+			duplex: "half",
+		};
+		const response = await POST(new Request(url, options));
+
+		expect(response.status).toBe(413);
+		expect(await response.json()).toEqual({ error: "probe_too_large" });
+		expect(cancel).toHaveBeenCalledOnce();
+		expect(body.locked).toBe(false);
+	}, 1_000);
+
+	it("returns 408 for a partially received body that never finishes", async () => {
+		const { POST } = await import("@/app/api/desktop/upload-health/route");
+		vi.useFakeTimers();
+		let waiting!: () => void;
+		const stalled = new Promise<void>((resolve) => {
+			waiting = resolve;
+		});
+		const cancel = vi.fn(() => new Promise<void>(() => {}));
+		let first = true;
+		const body = new ReadableStream<Uint8Array>(
+			{
+				pull(controller) {
+					if (first) {
+						first = false;
+						controller.enqueue(new Uint8Array([1, 2, 3]));
+					} else {
+						waiting();
+					}
+				},
+				cancel,
+			},
+			{ highWaterMark: 0 },
+		);
+		const options = {
+			method: "POST",
+			headers: { authorization },
+			body,
+			duplex: "half",
+		};
+		const result = POST(new Request(url, options));
+		await stalled;
+		await vi.advanceTimersByTimeAsync(DESKTOP_UPLOAD_HEALTH_READ_TIMEOUT_MS);
+		const response = await result;
+
+		expect(response.status).toBe(408);
+		expect(response.headers.get("cache-control")).toBe("private, no-store");
+		expect(await response.json()).toEqual({ error: "probe_timeout" });
+		expect(cancel).toHaveBeenCalledOnce();
+		expect(body.locked).toBe(false);
+	});
+
+	it("forwards Effect cancellation and never succeeds on a partial aborted body", async () => {
+		const { POST } = await import("@/app/api/desktop/upload-health/route");
+		const read = vi.spyOn(uploadHealth, "readUploadHealthProbe");
+		const controller = new AbortController();
+		let waiting!: () => void;
+		const stalled = new Promise<void>((resolve) => {
+			waiting = resolve;
+		});
+		const cancel = vi.fn(() => new Promise<void>(() => {}));
+		let first = true;
+		const body = new ReadableStream<Uint8Array>(
+			{
+				pull(stream) {
+					if (first) {
+						first = false;
+						stream.enqueue(new Uint8Array([1]));
+					} else {
+						waiting();
+					}
+				},
+				cancel,
+			},
+			{ highWaterMark: 0 },
+		);
+		const options = {
+			method: "POST",
+			headers: { authorization },
+			body,
+			duplex: "half",
+			signal: controller.signal,
+		};
+		const request = new Request(url, options);
+		const result = POST(request);
+		await stalled;
+		controller.abort();
+		const response = await result;
+
+		expect(response.status).toBe(499);
+		expect(read).toHaveBeenCalledWith(request, {
+			signal: expect.any(AbortSignal),
+		});
+		expect(read.mock.calls[0]?.[1]?.signal).not.toBe(request.signal);
+		expect(read.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+		expect(cancel).toHaveBeenCalledOnce();
 		expect(body.locked).toBe(false);
 	});
 

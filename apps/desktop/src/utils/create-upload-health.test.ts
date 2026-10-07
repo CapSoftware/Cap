@@ -88,6 +88,40 @@ describe("upload health lifecycle", () => {
 		expect(commands.refresh).toHaveBeenCalledOnce();
 	});
 
+	it.each([false, true])(
+		"a manual refresh consumes the startup delay (pending: %s)",
+		async (pending) => {
+			const manual = deferred<UploadHealthStatus>();
+			const { health } = mount();
+			await vi.advanceTimersByTimeAsync(400);
+			if (pending) commands.refresh.mockReturnValueOnce(manual.promise);
+			const refreshing = health.refresh();
+			await vi.advanceTimersByTimeAsync(400);
+			expect(commands.refresh).toHaveBeenCalledOnce();
+			manual.resolve(healthy);
+			await refreshing;
+			expect(commands.refresh).toHaveBeenCalledOnce();
+			await vi.advanceTimersByTimeAsync(299_599);
+			expect(commands.refresh).toHaveBeenCalledOnce();
+			await vi.advanceTimersByTimeAsync(1);
+			expect(commands.refresh).toHaveBeenCalledTimes(2);
+		},
+	);
+
+	it("anchors periodic checks to the latest admitted manual refresh", async () => {
+		const { health } = mount();
+		await vi.advanceTimersByTimeAsync(299_000);
+		expect(commands.refresh).toHaveBeenCalledOnce();
+		await health.refresh();
+		expect(commands.refresh).toHaveBeenCalledTimes(2);
+		await vi.advanceTimersByTimeAsync(1_000);
+		expect(commands.refresh).toHaveBeenCalledTimes(2);
+		await vi.advanceTimersByTimeAsync(298_999);
+		expect(commands.refresh).toHaveBeenCalledTimes(2);
+		await vi.advanceTimersByTimeAsync(1);
+		expect(commands.refresh).toHaveBeenCalledTimes(3);
+	});
+
 	it("does not probe during recording, then refreshes after stop", async () => {
 		const { health, setRecording } = mount();
 		setRecording(true);
@@ -99,6 +133,49 @@ describe("upload health lifecycle", () => {
 		expect(commands.refresh).not.toHaveBeenCalled();
 		await vi.advanceTimersByTimeAsync(1);
 		expect(commands.refresh).toHaveBeenCalledOnce();
+	});
+
+	it.each([false, true])(
+		"a manual refresh consumes the post-recording delay (pending: %s)",
+		async (pending) => {
+			const manual = deferred<UploadHealthStatus>();
+			const { health, setRecording } = mount();
+			setRecording(true);
+			await vi.advanceTimersByTimeAsync(2_000);
+			setRecording(false);
+			await vi.advanceTimersByTimeAsync(500);
+			if (pending) commands.refresh.mockReturnValueOnce(manual.promise);
+			const refreshing = health.refresh();
+			await vi.advanceTimersByTimeAsync(500);
+			expect(commands.refresh).toHaveBeenCalledOnce();
+			manual.resolve(healthy);
+			await refreshing;
+			expect(commands.refresh).toHaveBeenCalledOnce();
+			await vi.advanceTimersByTimeAsync(299_499);
+			expect(commands.refresh).toHaveBeenCalledOnce();
+			await vi.advanceTimersByTimeAsync(1);
+			expect(commands.refresh).toHaveBeenCalledTimes(2);
+		},
+	);
+
+	it("replaces an overlapping periodic deadline with one post-recording probe", async () => {
+		const pending = deferred<UploadHealthStatus>();
+		commands.refresh
+			.mockResolvedValueOnce(healthy)
+			.mockReturnValueOnce(pending.promise)
+			.mockResolvedValue(slow);
+		const { setRecording } = mount();
+		await vi.advanceTimersByTimeAsync(299_800);
+		expect(commands.refresh).toHaveBeenCalledOnce();
+		setRecording(true);
+		setRecording(false);
+		await vi.advanceTimersByTimeAsync(999);
+		expect(commands.refresh).toHaveBeenCalledOnce();
+		await vi.advanceTimersByTimeAsync(1);
+		expect(commands.refresh).toHaveBeenCalledTimes(2);
+		pending.resolve(healthy);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(commands.refresh).toHaveBeenCalledTimes(2);
 	});
 
 	it("coalesces overlapping manual and periodic refreshes", async () => {
@@ -113,6 +190,22 @@ describe("upload health lifecycle", () => {
 		pending.resolve(healthy);
 		await vi.advanceTimersByTimeAsync(0);
 		expect(health.refreshing()).toBe(false);
+		expect(commands.refresh).toHaveBeenCalledOnce();
+		await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+		expect(commands.refresh).toHaveBeenCalledTimes(2);
+	});
+
+	it("a coalesced manual refresh does not postpone the periodic deadline", async () => {
+		const pending = deferred<UploadHealthStatus>();
+		commands.refresh.mockReturnValueOnce(pending.promise);
+		const { health } = mount();
+		await vi.advanceTimersByTimeAsync(1_000);
+		await health.refresh();
+		pending.resolve(healthy);
+		await vi.advanceTimersByTimeAsync(299_799);
+		expect(commands.refresh).toHaveBeenCalledOnce();
+		await vi.advanceTimersByTimeAsync(1);
+		expect(commands.refresh).toHaveBeenCalledTimes(2);
 	});
 
 	it("queues a post-recording check while an older IPC command is settling", async () => {
@@ -125,6 +218,7 @@ describe("upload health lifecycle", () => {
 		setRecording(true);
 		await vi.advanceTimersByTimeAsync(0);
 		setRecording(false);
+		await health.refresh();
 		await vi.advanceTimersByTimeAsync(1_000);
 		expect(commands.refresh).toHaveBeenCalledOnce();
 		pending.resolve(unknown);
@@ -152,6 +246,36 @@ describe("upload health lifecycle", () => {
 			expect(health.status()).toEqual(slow);
 		},
 	);
+
+	it.each(["server", "account"])(
+		"a manual refresh consumes a pending %s transition delay",
+		async (change) => {
+			const { health, setServer, setUser } = mount();
+			await vi.advanceTimersByTimeAsync(299_000);
+			if (change === "server") setServer("https://self-hosted.example");
+			else setUser("account-b");
+			await vi.advanceTimersByTimeAsync(400);
+			await health.refresh();
+			await vi.advanceTimersByTimeAsync(1_000);
+			expect(commands.refresh).toHaveBeenCalledTimes(2);
+			await vi.advanceTimersByTimeAsync(298_999);
+			expect(commands.refresh).toHaveBeenCalledTimes(2);
+			await vi.advanceTimersByTimeAsync(1);
+			expect(commands.refresh).toHaveBeenCalledTimes(3);
+		},
+	);
+
+	it("clears the old periodic deadline after sign-out", async () => {
+		const { setUser } = mount();
+		await vi.advanceTimersByTimeAsync(800);
+		setUser(null);
+		await vi.advanceTimersByTimeAsync(800);
+		const reads = commands.read.mock.calls.length;
+		await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+		expect(commands.refresh).toHaveBeenCalledOnce();
+		expect(commands.read).toHaveBeenCalledTimes(reads);
+		expect(vi.getTimerCount()).toBe(0);
+	});
 
 	it("does not replace a fresh result with a delayed cache read", async () => {
 		const cached = deferred<UploadHealthStatus>();

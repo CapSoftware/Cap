@@ -13,6 +13,7 @@ import {
 	MAX_DESKTOP_UPLOAD_HEALTH_PROBE_BYTES,
 	readUploadHealthProbe,
 	UploadHealthProbeEmptyError,
+	UploadHealthProbeTimeoutError,
 	UploadHealthProbeTooLargeError,
 } from "./upload-health";
 
@@ -53,11 +54,11 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 						}
 
 						return yield* Effect.tryPromise({
-							try: () => {
+							try: (signal) => {
 								if (!(request.source instanceof Request)) {
 									throw new Error("Expected a Web Request");
 								}
-								return readUploadHealthProbe(request.source);
+								return readUploadHealthProbe(request.source, { signal });
 							},
 							catch: (error) => error,
 						}).pipe(
@@ -77,6 +78,9 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 								}
 								if (error instanceof UploadHealthProbeEmptyError) {
 									return Effect.succeed(probeError("probe_empty", 400));
+								}
+								if (error instanceof UploadHealthProbeTimeoutError) {
+									return Effect.succeed(probeError("probe_timeout", 408));
 								}
 								return Effect.logError(
 									"Failed to read upload health probe",
