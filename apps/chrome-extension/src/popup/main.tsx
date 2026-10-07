@@ -94,7 +94,10 @@ if (!IS_EMBEDDED) {
 	});
 	chrome.runtime.onMessage.addListener((message: unknown) => {
 		const candidate = message as { target?: string; type?: string } | null;
-		if (candidate?.target === "standalone-panel" && candidate.type === "close") {
+		if (
+			candidate?.target === "standalone-panel" &&
+			candidate.type === "close"
+		) {
 			window.close();
 		}
 	});
