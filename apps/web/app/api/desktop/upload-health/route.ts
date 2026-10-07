@@ -9,7 +9,7 @@ import {
 	HttpServerRequest,
 	HttpServerResponse,
 } from "@effect/platform";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Schedule } from "effect";
 import { apiToHandler } from "@/lib/server";
 import { readUploadProbeBody } from "@/lib/upload-health";
 
@@ -69,9 +69,12 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 										})
 										.pipe(
 											Effect.ensuring(
-												writable.access
-													.deleteObject(key)
-													.pipe(Effect.catchAll(() => Effect.void)),
+												writable.access.deleteObject(key).pipe(
+													Effect.retry({
+														times: 3,
+														schedule: Schedule.exponential("100 millis"),
+													}),
+												),
 											),
 										),
 								),
