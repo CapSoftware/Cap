@@ -112,6 +112,7 @@ export const UploadStep = ({
 		const ok = await importMediaFile({
 			file,
 			orgId: organizationId,
+			showSuccessToast: false,
 			setUploadStatus: (next) => {
 				setStatus(next);
 				if (next && "capId" in next) capIdRef.current = next.capId;
