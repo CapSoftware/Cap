@@ -1,6 +1,5 @@
 import { emit } from "@tauri-apps/api/event";
 import * as dialog from "@tauri-apps/plugin-dialog";
-import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import type { createOptionsQuery } from "./queries";
 import {
 	commands,
@@ -125,5 +124,5 @@ export async function openRecordingFolder(
 
 	if (openedContent) return;
 
-	await revealItemInDir(`${path}/`);
+	await commands.revealItemInDir(`${path}/`);
 }
