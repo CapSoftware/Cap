@@ -129,9 +129,19 @@ async function lookupBatch(
 					return results;
 				}
 			} else if (response.status < 500 && response.status !== 429) {
+				console.warn("[loom-import] Loom lookup rejected", {
+					status: response.status,
+					videos: ids.length,
+				});
 				break;
 			}
-		} catch {}
+		} catch (error) {
+			console.warn("[loom-import] Loom lookup failed", {
+				attempt,
+				videos: ids.length,
+				error,
+			});
+		}
 		if (attempt < attempts - 1) {
 			await new Promise((resolve) => setTimeout(resolve, 400 * 2 ** attempt));
 		}

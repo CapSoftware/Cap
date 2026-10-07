@@ -109,6 +109,20 @@ export async function dispatchLoomImportJob(jobId: string) {
 	const limit = loomImportConcurrency();
 	const isPublic = await getNewVideoPublic(job.orgId);
 	const storage = new Map<string, Writable | null>();
+	const upcoming = await db()
+		.select({ ownerId: loomImportJobItems.ownerId })
+		.from(loomImportJobItems)
+		.where(
+			and(
+				eq(loomImportJobItems.jobId, jobId),
+				eq(loomImportJobItems.status, "ready"),
+			),
+		)
+		.orderBy(asc(loomImportJobItems.rowNumber))
+		.limit(limit * 2);
+	for (const ownerId of new Set(upcoming.map((row) => row.ownerId))) {
+		if (ownerId) await writableFor(storage, ownerId, job.orgId);
+	}
 
 	const outcome = await db().transaction(async (tx) => {
 		const [locked] = await tx

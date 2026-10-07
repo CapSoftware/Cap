@@ -9,6 +9,7 @@ import { formatDistanceToNowStrict } from "date-fns";
 import Link from "next/link";
 import {
 	type ReactNode,
+	useCallback,
 	useDeferredValue,
 	useEffect,
 	useMemo,
@@ -282,41 +283,56 @@ export const LoomImportJobView = ({
 		[items, filter, deferredQuery],
 	);
 
-	const runStart = async (automatic: boolean) => {
-		setBusy("start");
-		const result = await startLoomImportJobAction(job.id);
-		if (!result.ok) toast.error(result.error);
-		else if (automatic)
-			toast.success("You're on Cap Pro. Your import has started.");
-		await refresh().catch(() => undefined);
-		setBusy(null);
-	};
+	const runAction = useCallback(
+		async (kind: "start" | "cancel" | "retry", action: () => Promise<void>) => {
+			setBusy(kind);
+			try {
+				await action();
+			} catch {
+				toast.error("Something went wrong. Please try again.");
+			} finally {
+				await refresh().catch(() => undefined);
+				setBusy(null);
+			}
+		},
+		[refresh],
+	);
+
+	const jobId = job.id;
+	const runStart = useCallback(
+		(automatic: boolean) =>
+			runAction("start", async () => {
+				const result = await startLoomImportJobAction(jobId);
+				if (!result.ok) toast.error(result.error);
+				else if (automatic)
+					toast.success("You're on Cap Pro. Your import has started.");
+			}),
+		[runAction, jobId],
+	);
 
 	useEffect(() => {
 		if (!watchForUpgrade || !job.canStart || autoStarted.current) return;
 		autoStarted.current = true;
 		void runStart(true);
-	});
+	}, [watchForUpgrade, job.canStart, runStart]);
 
-	const runCancel = async () => {
-		setBusy("cancel");
-		const result = await cancelLoomImportJobAction(job.id);
-		if (!result.ok) toast.error(result.error);
-		setCancelOpen(false);
-		await refresh().catch(() => undefined);
-		setBusy(null);
-	};
+	const runCancel = () =>
+		runAction("cancel", async () => {
+			const result = await cancelLoomImportJobAction(jobId);
+			if (!result.ok) toast.error(result.error);
+			setCancelOpen(false);
+		});
 
-	const runRetry = async () => {
-		setBusy("retry");
-		const result = await retryLoomImportJobAction(job.id);
-		if (!result.ok) toast.error(result.error);
-		else if (result.retried === 0) toast("Nothing left to retry.");
-		else
-			toast.success(`Retrying ${numberFormat.format(result.retried)} videos.`);
-		await refresh().catch(() => undefined);
-		setBusy(null);
-	};
+	const runRetry = () =>
+		runAction("retry", async () => {
+			const result = await retryLoomImportJobAction(jobId);
+			if (!result.ok) toast.error(result.error);
+			else if (result.retried === 0) toast("Nothing left to retry.");
+			else
+				toast.success(
+					`Retrying ${numberFormat.format(result.retried)} videos.`,
+				);
+		});
 
 	const downloadReport = () => {
 		const csv = buildLoomImportReport(items, window.location.origin);

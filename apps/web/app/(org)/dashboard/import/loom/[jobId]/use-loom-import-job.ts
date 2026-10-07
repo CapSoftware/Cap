@@ -132,14 +132,22 @@ export function useLoomImportJob(
 		[apply, initial.job.id],
 	);
 
-	const loadedRest = useRef(initial.full);
 	useEffect(() => {
-		if (loadedRest.current) return;
-		loadedRest.current = true;
-		fetchSnapshot(true).catch(() => {
-			loadedRest.current = false;
-		});
-	}, [fetchSnapshot]);
+		if (initial.full) return;
+		let stopped = false;
+		let timer: number | undefined;
+		const load = (attempt: number) => {
+			fetchSnapshot(true).catch(() => {
+				if (stopped || attempt >= 4) return;
+				timer = window.setTimeout(() => load(attempt + 1), 1000 * 2 ** attempt);
+			});
+		};
+		load(0);
+		return () => {
+			stopped = true;
+			window.clearTimeout(timer);
+		};
+	}, [initial.full, fetchSnapshot]);
 
 	const status = summary.job.status;
 	const shouldPoll =

@@ -400,16 +400,22 @@ const ReviewCard = ({
 
 	const start = () => {
 		startTransition(async () => {
-			const result = await createLoomImportJobAction({
-				orgId,
-				fileName: source.name,
-				rows: plan.rows,
-			});
-			if (!result.ok) {
-				toast.error(result.error);
-				return;
+			try {
+				const result = await createLoomImportJobAction({
+					orgId,
+					fileName: source.name,
+					rows: plan.rows,
+				});
+				if (!result.ok) {
+					toast.error(result.error);
+					return;
+				}
+				router.push(`/dashboard/import/loom/${result.jobId}`);
+			} catch {
+				toast.error(
+					"We couldn't start this import. Check your connection, or split the CSV into smaller files.",
+				);
 			}
-			router.push(`/dashboard/import/loom/${result.jobId}`);
 		});
 	};
 

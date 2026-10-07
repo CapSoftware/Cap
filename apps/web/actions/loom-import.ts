@@ -11,6 +11,7 @@ import {
 	LoomImportError,
 	markLoomImportJobStarting,
 	resetFailedLoomImportItems,
+	revertLoomImportJobStart,
 } from "@/lib/loom-import/jobs";
 import { loomImportJobWorkflow } from "@/workflows/loom-import-job";
 
@@ -19,6 +20,22 @@ type ActionResult<T = Record<never, never>> =
 	| { ok: false; error: string };
 
 const GENERIC_ERROR = "Something went wrong. Please try again.";
+
+async function startJobWorkflow(jobId: string) {
+	for (let attempt = 0; attempt < 2; attempt++) {
+		try {
+			await start(loomImportJobWorkflow, [{ jobId }]);
+			return true;
+		} catch (error) {
+			console.error("[loom-import] Could not start import workflow", {
+				jobId,
+				attempt,
+				error,
+			});
+		}
+	}
+	return false;
+}
 
 export async function createLoomImportJobAction({
 	orgId,
@@ -32,21 +49,23 @@ export async function createLoomImportJobAction({
 	const user = await getCurrentUser();
 	if (!user) return { ok: false, error: "Please sign in again." };
 
+	let jobId: string;
 	try {
-		const { jobId } = await createLoomImportJob({
+		({ jobId } = await createLoomImportJob({
 			userId: user.id,
 			orgId,
 			fileName: typeof fileName === "string" ? fileName : "",
 			rows,
-		});
-		await start(loomImportJobWorkflow, [{ jobId }]);
-		return { ok: true, jobId };
+		}));
 	} catch (error) {
 		if (error instanceof LoomImportError)
 			return { ok: false, error: error.message };
 		console.error("[loom-import] Could not create import", error);
 		return { ok: false, error: GENERIC_ERROR };
 	}
+
+	await startJobWorkflow(jobId);
+	return { ok: true, jobId };
 }
 
 export async function startLoomImportJobAction(
@@ -66,9 +85,14 @@ export async function startLoomImportJobAction(
 		return { ok: false, error: "Importing from Loom needs Cap Pro." };
 	}
 
-	const started = await markLoomImportJobStarting(jobId);
-	if (started) await start(loomImportJobWorkflow, [{ jobId }]);
-	return { ok: true, started };
+	if (!(await markLoomImportJobStarting(jobId))) {
+		return { ok: true, started: false };
+	}
+	if (!(await startJobWorkflow(jobId))) {
+		await revertLoomImportJobStart(jobId);
+		return { ok: false, error: "The import couldn't start. Please try again." };
+	}
+	return { ok: true, started: true };
 }
 
 export async function cancelLoomImportJobAction(
@@ -96,6 +120,6 @@ export async function retryLoomImportJobAction(
 		return { ok: false, error: "This import can't be retried." };
 	}
 	const retried = await resetFailedLoomImportItems(jobId);
-	if (retried > 0) await start(loomImportJobWorkflow, [{ jobId }]);
+	if (retried > 0) await startJobWorkflow(jobId);
 	return { ok: true, retried };
 }

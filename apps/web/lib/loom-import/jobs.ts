@@ -785,6 +785,15 @@ export async function markLoomImportJobStarting(jobId: string) {
 	return affectedRows(result) > 0;
 }
 
+export async function revertLoomImportJobStart(jobId: string) {
+	await db()
+		.update(loomImportJobs)
+		.set({ status: "awaiting_upgrade", updatedAt: new Date() })
+		.where(
+			and(eq(loomImportJobs.id, jobId), eq(loomImportJobs.status, "checking")),
+		);
+}
+
 export async function cancelLoomImportJob(jobId: string) {
 	await db().transaction(async (tx) => {
 		const [job] = await tx
