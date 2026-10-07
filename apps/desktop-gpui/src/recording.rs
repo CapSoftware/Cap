@@ -2569,8 +2569,10 @@ fn format_recording_project_name(
         RecordingMode::Studio => ("Studio", "studio"),
         RecordingMode::Instant => ("Instant", "instant"),
     };
+    let template = replace_random_template_tokens(
+        template.unwrap_or(crate::store::DEFAULT_PROJECT_NAME_TEMPLATE),
+    );
     let formatted = template
-        .unwrap_or(crate::store::DEFAULT_PROJECT_NAME_TEMPLATE)
         .replace("{recording_mode}", recording_mode)
         .replace("{mode}", mode)
         .replace("{target_kind}", target_kind)
@@ -2579,7 +2581,7 @@ fn format_recording_project_name(
     let formatted = replace_datetime_template_token(&formatted, "time", "%I:%M %p", datetime);
     let formatted =
         replace_datetime_template_token(&formatted, "moment", "%Y-%m-%d %H:%M", datetime);
-    replace_random_template_tokens(&formatted)
+    formatted
 }
 
 fn replace_random_template_tokens(input: &str) -> String {
@@ -2747,6 +2749,24 @@ mod tests {
                 .all(|part| part.chars().all(|character| character.is_ascii_hexdigit()))
         );
         assert_eq!(parts[2], "{random:0}");
+    }
+
+    #[test]
+    fn recording_project_names_preserve_random_placeholder_in_window_title() {
+        let timestamp = chrono::Local
+            .with_ymd_and_hms(2026, 8, 25, 9, 15, 0)
+            .single()
+            .unwrap();
+
+        let name = format_recording_project_name(
+            None,
+            "Implement {random} placeholder",
+            "Window",
+            RecordingMode::Studio,
+            timestamp,
+        );
+
+        assert!(name.contains("Implement {random} placeholder"));
     }
 
     #[test]

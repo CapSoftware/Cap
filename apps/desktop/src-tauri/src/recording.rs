@@ -1879,6 +1879,19 @@ pub fn format_project_name<'a>(
         };
     }
     let haystack = template.unwrap_or(DEFAULT_FILENAME_TEMPLATE);
+    let haystack = RANDOM_REGEX.replace_all(haystack, |caps: &regex::Captures| {
+        let length = match caps.get(1) {
+            Some(value) => match value.as_str().parse::<usize>() {
+                Ok(length) => length,
+                Err(_) => return caps.get(0).unwrap().as_str().to_owned(),
+            },
+            None => 10,
+        };
+        if !(1..=32).contains(&length) {
+            return caps.get(0).unwrap().as_str().to_owned();
+        }
+        uuid::Uuid::new_v4().simple().to_string()[..length].to_owned()
+    });
 
     // Get recording mode information
     let (recording_mode, mode) = match recording_mode {
@@ -1889,7 +1902,7 @@ pub fn format_project_name<'a>(
 
     let result = AC
         .try_replace_all(
-            haystack,
+            &haystack,
             &[recording_mode, mode, target_kind, &truncated_target_name],
         )
         .expect("AhoCorasick replace should never fail with default configuration");
@@ -1930,21 +1943,7 @@ pub fn format_project_name<'a>(
             .to_string()
     });
 
-    RANDOM_REGEX
-        .replace_all(&result, |caps: &regex::Captures| {
-            let length = match caps.get(1) {
-                Some(value) => match value.as_str().parse::<usize>() {
-                    Ok(length) => length,
-                    Err(_) => return caps.get(0).unwrap().as_str().to_owned(),
-                },
-                None => 10,
-            };
-            if !(1..=32).contains(&length) {
-                return caps.get(0).unwrap().as_str().to_owned();
-            }
-            uuid::Uuid::new_v4().simple().to_string()[..length].to_owned()
-        })
-        .into_owned()
+    result.into_owned()
 }
 
 #[tauri::command]
@@ -7111,6 +7110,24 @@ mod tests {
                 .all(|part| part.chars().all(|character| character.is_ascii_hexdigit()))
         );
         assert_eq!(parts[2], "{random:0}");
+    }
+
+    #[test]
+    fn project_name_preserves_random_placeholder_in_window_title() {
+        let timestamp = chrono::Local
+            .with_ymd_and_hms(2026, 8, 25, 9, 15, 0)
+            .single()
+            .unwrap();
+
+        let name = format_project_name(
+            None,
+            "Implement {random} placeholder",
+            "Window",
+            RecordingMode::Studio,
+            Some(timestamp),
+        );
+
+        assert!(name.contains("Implement {random} placeholder"));
     }
 
     #[test]
