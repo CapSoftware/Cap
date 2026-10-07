@@ -384,11 +384,26 @@ impl KeyboardLayer {
             _ => (settings.background_color.as_str(), settings.color.as_str()),
         };
 
+        let default_theme_bg = "#000000";
+        let default_theme_text = "#FFFFFF";
+
+        let fallback_bg = if settings.background_color != default_theme_bg && !settings.background_color.is_empty() {
+            settings.background_color.as_str()
+        } else {
+            theme_bg_hex
+        };
+
+        let fallback_text = if settings.color != default_theme_text && !settings.color.is_empty() {
+            settings.color.as_str()
+        } else {
+            theme_text_hex
+        };
+
         let color_hex = active
             .segment
             .color_override
             .as_deref()
-            .unwrap_or(theme_text_hex);
+            .unwrap_or(fallback_text);
         let text_color = [
             parse_color_component(color_hex, 0),
             parse_color_component(color_hex, 1),
@@ -399,7 +414,7 @@ impl KeyboardLayer {
             .segment
             .background_color_override
             .as_deref()
-            .unwrap_or(theme_bg_hex);
+            .unwrap_or(fallback_bg);
         let background_color_rgb = [
             parse_color_component(bg_color_hex, 0),
             parse_color_component(bg_color_hex, 1),
