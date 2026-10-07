@@ -110,4 +110,18 @@ describe("upload-health route contract", () => {
 		expect(desktopRoot).not.toContain('"/upload-health"');
 		expect(desktopRoot).not.toContain("countRequestBodyBytes");
 	});
+
+	it("declares every probe response shape in the desktop contract", () => {
+		const contract = readFileSync(
+			join(process.cwd(), "../../packages/web-api-contract/src/desktop.ts"),
+			"utf8",
+		);
+		for (const shape of [
+			'"probe_read_failed"',
+			'"probe_too_large"',
+			'"storage_probe_failed"',
+		]) {
+			expect(contract).toContain(`z.literal(${shape})`);
+		}
+	});
 });

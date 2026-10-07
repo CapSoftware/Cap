@@ -156,7 +156,9 @@ const protectedContract = c.router(
 			body: z.custom<Uint8Array>(),
 			responses: {
 				200: z.object({ receivedBytes: z.number().int().nonnegative() }),
+				400: z.object({ error: z.literal("probe_read_failed") }),
 				413: z.object({ error: z.literal("probe_too_large") }),
+				503: z.object({ error: z.literal("storage_probe_failed") }),
 			},
 		},
 		getUserProfile: {
