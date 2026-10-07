@@ -1867,6 +1867,7 @@ pub fn format_project_name<'a>(
         static ref DATE_REGEX: Regex = Regex::new(r"\{date(?::([^}]+))?\}").unwrap();
         static ref TIME_REGEX: Regex = Regex::new(r"\{time(?::([^}]+))?\}").unwrap();
         static ref MOMENT_REGEX: Regex = Regex::new(r"\{moment(?::([^}]+))?\}").unwrap();
+        static ref RANDOM_REGEX: Regex = Regex::new(r"\{random(?::(\d+))?\}").unwrap();
         static ref AC: aho_corasick::AhoCorasick = {
             aho_corasick::AhoCorasick::new([
                 "{recording_mode}",
@@ -1929,7 +1930,21 @@ pub fn format_project_name<'a>(
             .to_string()
     });
 
-    result.into_owned()
+    RANDOM_REGEX
+        .replace_all(&result, |caps: &regex::Captures| {
+            let length = match caps.get(1) {
+                Some(value) => match value.as_str().parse::<usize>() {
+                    Ok(length) => length,
+                    Err(_) => return caps.get(0).unwrap().as_str().to_owned(),
+                },
+                None => 10,
+            };
+            if !(1..=32).contains(&length) {
+                return caps.get(0).unwrap().as_str().to_owned();
+            }
+            uuid::Uuid::new_v4().simple().to_string()[..length].to_owned()
+        })
+        .into_owned()
 }
 
 #[tauri::command]
@@ -7076,6 +7091,27 @@ async fn emit_recording_started_telemetry(app: &AppHandle, state_mtx: &MutableSt
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn project_name_random_placeholder_is_filename_safe_and_sized() {
+        let name = format_project_name(
+            Some("{random}-{random:16}-{random:0}"),
+            "Example Window",
+            "Window",
+            RecordingMode::Studio,
+            None,
+        );
+        let parts = name.split('-').collect::<Vec<_>>();
+
+        assert_eq!(parts[0].len(), 10);
+        assert_eq!(parts[1].len(), 16);
+        assert!(
+            parts[..2]
+                .iter()
+                .all(|part| part.chars().all(|character| character.is_ascii_hexdigit()))
+        );
+        assert_eq!(parts[2], "{random:0}");
+    }
 
     #[test]
     fn requested_microphone_absence_is_an_error_not_an_empty_track() {

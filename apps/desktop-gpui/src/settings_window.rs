@@ -3641,6 +3641,11 @@ impl SettingsWindow {
             ("", "{target_name}", "Monitor name or window title."),
             ("Date & time", "{date}", "the recording's date"),
             ("", "{time}", "the recording's time"),
+            (
+                "Random",
+                "{random}",
+                "10 filename-safe hexadecimal characters; use {random:N} for 1–32.",
+            ),
         ];
 
         let body = div()
