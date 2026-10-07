@@ -112,7 +112,7 @@ const parseVttTimestamp = (value: string) => {
 };
 
 const stripMarkupTags = (value: string) =>
-	value.replace(/<[A-Za-z/!?][^<>]*(?:>|$)/g, "").trim();
+	value.replace(/<[A-Za-z/!?][^<>]*>/g, "").trim();
 
 export const parseAgentVtt = (
 	vtt: string,

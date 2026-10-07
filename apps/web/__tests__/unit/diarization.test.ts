@@ -167,4 +167,9 @@ it("keeps escaped angle-bracket speech through the agent transcript API", async 
 			"WEBVTT\n\n1\n00:00:00.000 --> 00:00:01.000\n<v Speaker A><c.green>Type &lt;value&gt;</c> <00:00:00.500>then &lt;b</v>\n",
 		),
 	).toEqual(cues);
+	expect(
+		parseAgentVtt(
+			"WEBVTT\n\n1\n00:00:00.000 --> 00:00:01.000\n<v Speaker A>Type &lt;value&gt; then <b</v>\n",
+		),
+	).toEqual(cues);
 });
