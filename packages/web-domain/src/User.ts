@@ -16,6 +16,14 @@ export const UserUpdate = Schema.Struct({
 });
 export type UserUpdate = Schema.Schema.Type<typeof UserUpdate>;
 
+export const OnboardingStartPath = Schema.Literal(
+	"loom",
+	"record",
+	"upload",
+	"explore",
+);
+export type OnboardingStartPath = typeof OnboardingStartPath.Type;
+
 export const OnboardingStepPayload = Schema.Union(
 	Schema.Struct({
 		step: Schema.Literal("welcome"),
@@ -49,6 +57,12 @@ export const OnboardingStepPayload = Schema.Union(
 		step: Schema.Literal("skipToDashboard"),
 		data: Schema.Void,
 	}),
+	Schema.Struct({
+		step: Schema.Literal("getStarted"),
+		data: Schema.Struct({
+			path: OnboardingStartPath,
+		}),
+	}),
 );
 
 export const OnboardingStepResult = Schema.Union(
@@ -72,6 +86,10 @@ export const OnboardingStepResult = Schema.Union(
 	}),
 	Schema.Struct({
 		step: Schema.Literal("skipToDashboard"),
+		data: Schema.Void,
+	}),
+	Schema.Struct({
+		step: Schema.Literal("getStarted"),
 		data: Schema.Void,
 	}),
 );
