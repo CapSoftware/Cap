@@ -124,8 +124,11 @@ function mergeSegmentTokens(segment: Record<string, unknown>): SttWord[] {
 // createEditTranscript drops. Take the span from a free gap so cuts stay safe.
 function withMinimumSpan(input: SttWord[]): SttWord[] {
 	const words = input.map((word) => ({ ...word }));
-	for (const [index, word] of words.entries()) {
-		if (word.end > word.start) continue;
+	// Back to front, so a run of zero-length words can split the span the
+	// last one takes.
+	for (let index = words.length - 1; index >= 0; index--) {
+		const word = words[index];
+		if (word === undefined || word.end > word.start) continue;
 		const previousEnd = words[index - 1]?.end ?? 0;
 		const next = words[index + 1];
 		if (next === undefined || next.start > word.start) {

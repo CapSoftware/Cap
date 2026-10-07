@@ -219,6 +219,19 @@ describe("parseOpenAICompatibleTranscription", () => {
 			{ text: "um", start: 1000, end: 1100 },
 			{ text: "yes", start: 1100, end: 1200 },
 		]);
+		expect(
+			parse([
+				{ word: "so", start: 0, end: 1 },
+				{ word: "um", start: 1, end: 1 },
+				{ word: "uh", start: 1, end: 1 },
+				{ word: "yes", start: 1.5, end: 1.8 },
+			]),
+		).toEqual([
+			{ text: "so", start: 0, end: 1000 },
+			{ text: "um", start: 1000, end: 1100 },
+			{ text: "uh", start: 1100, end: 1200 },
+			{ text: "yes", start: 1500, end: 1800 },
+		]);
 	});
 
 	it("falls back to the last word end when duration is missing", () => {
