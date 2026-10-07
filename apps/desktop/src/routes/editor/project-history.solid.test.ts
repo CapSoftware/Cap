@@ -93,11 +93,25 @@ describe("project history", () => {
 		ctx.dispose();
 	});
 
-	it("ends a pointer pause whose release happened outside the window", () => {
+	it("ends a pointer pause whose release happened outside the window", async () => {
 		const ctx = setup();
 		pointer("pointerdown", 1, 1);
 		ctx.history.pause();
 		pointer("pointermove", 1, 0);
+		await tick();
+		expect(ctx.history.isPaused()).toBe(false);
+		ctx.dispose();
+	});
+
+	it("ignores buttonless moves from other pointers during a drag", async () => {
+		const ctx = setup();
+		pointer("pointerdown", 7, 1);
+		ctx.history.pause();
+		pointer("pointermove", 1, 0);
+		await tick();
+		expect(ctx.history.isPaused()).toBe(true);
+		pointer("pointerup", 7);
+		await tick();
 		expect(ctx.history.isPaused()).toBe(false);
 		ctx.dispose();
 	});

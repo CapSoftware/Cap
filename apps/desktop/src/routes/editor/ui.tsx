@@ -224,12 +224,20 @@ export function Slider(
 		>
 			<KSlider.Track
 				class="h-[3px] transition-[height] relative mx-1 bg-ed-ctl-active rounded-full w-full before:content-[''] before:absolute before:inset-0 before:-top-3 before:-bottom-3"
-				onPointerDown={() => {
+				onPointerDown={(down) => {
 					setDragging(true);
 					createRoot((dispose) => {
-						createEventListener(window, "mouseup", () => {
+						const finish = () => {
 							setDragging(false);
 							dispose();
+						};
+						createEventListener(window, "mouseup", finish);
+						createEventListener(window, "pointerup", finish);
+						createEventListener(window, "pointercancel", finish);
+						createEventListener(window, "blur", finish);
+						createEventListener(window, "pointermove", (move) => {
+							if (move.pointerId === down.pointerId && move.buttons === 0)
+								finish();
 						});
 					});
 				}}

@@ -9,9 +9,6 @@ export function createStoreHistory<T extends Static>(
 	setState: ReturnType<typeof createStore<T>>[1],
 	onRestore?: () => void,
 ) {
-	// not working properly yet
-	// const getDelta = captureStoreUpdates(state);
-
 	// Pauses are tokens rather than a bare counter: a caller that never resumes
 	// (a slider whose change-end event never fires, a drag whose mouseup lands
 	// outside the window) used to freeze history, so the next undo discarded
@@ -93,12 +90,15 @@ export function createStoreHistory<T extends Static>(
 		capture: true,
 	});
 	// A press released outside the window never delivers pointerup; the next
-	// buttonless move over the window, or losing focus, ends it instead.
+	// buttonless move from that same pointer, or losing focus, ends it instead.
+	// Moves from other pointers say nothing about it (a hovering mouse during a
+	// touch drag), so they are ignored.
 	createEventListener(
 		window,
 		"pointermove",
 		(e) => {
-			if (e.buttons === 0 && pressedPointers.size > 0) releaseAllPointers();
+			if (e.buttons === 0 && pressedPointers.has(e.pointerId))
+				endPointerPress(e);
 		},
 		{ capture: true },
 	);
