@@ -15,6 +15,7 @@ use tracing::debug;
 
 use crate::{
     ArcLock,
+    auth::AuthStore,
     web_api::{AuthedApiError, ManagerExt},
 };
 
@@ -50,6 +51,12 @@ pub struct UploadHealthStatus {
 #[derive(Clone, Debug, Serialize, Type, Event)]
 pub struct UploadHealthChanged(pub UploadHealthStatus);
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ProbeIdentity {
+    server_url: String,
+    owner_id: String,
+}
+
 #[derive(Default)]
 struct StoredStatus {
     state: UploadHealthState,
@@ -58,10 +65,14 @@ struct StoredStatus {
     detail: Option<String>,
     checked_at: Option<f64>,
     measured_at: Option<Instant>,
+    identity: Option<ProbeIdentity>,
 }
 
 impl StoredStatus {
-    fn fresh_width(&self, now: Instant) -> Option<u32> {
+    fn fresh_width(&self, now: Instant, identity: &ProbeIdentity) -> Option<u32> {
+        if self.identity.as_ref() != Some(identity) {
+            return None;
+        }
         self.measured_at
             .is_some_and(|measured_at| {
                 now.saturating_duration_since(measured_at) <= MEASUREMENT_TTL
@@ -69,9 +80,9 @@ impl StoredStatus {
             .then_some(self.recommended_max_width?)
     }
 
-    fn store_outcome(&mut self, outcome: ProbeOutcome) {
+    fn store_outcome(&mut self, outcome: ProbeOutcome, identity: Option<ProbeIdentity>) {
         if !matches!(outcome, ProbeOutcome::Aborted) {
-            *self = outcome.into_stored();
+            *self = outcome.into_stored(identity);
         }
     }
 }
@@ -94,7 +105,7 @@ enum ProbeOutcome {
 }
 
 impl ProbeOutcome {
-    fn into_stored(self) -> StoredStatus {
+    fn into_stored(self, identity: Option<ProbeIdentity>) -> StoredStatus {
         let checked_at = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|since| since.as_secs_f64())
@@ -111,6 +122,7 @@ impl ProbeOutcome {
                 detail: None,
                 checked_at,
                 measured_at: Some(Instant::now()),
+                identity,
             },
             Self::EndpointUnavailable => StoredStatus {
                 state: UploadHealthState::EndpointUnavailable,
@@ -118,11 +130,13 @@ impl ProbeOutcome {
                     "The connected server does not support upload health checks".into(),
                 ),
                 checked_at,
+                identity,
                 ..Default::default()
             },
             Self::Unauthenticated => StoredStatus {
                 state: UploadHealthState::Unauthenticated,
                 checked_at,
+                identity,
                 ..Default::default()
             },
             Self::Failed { status, detail } => StoredStatus {
@@ -132,6 +146,7 @@ impl ProbeOutcome {
                     None => format!("Upload test failed: {detail}"),
                 }),
                 checked_at,
+                identity,
                 ..Default::default()
             },
             Self::Aborted => StoredStatus::default(),
@@ -164,6 +179,19 @@ fn probe_payload() -> Vec<u8> {
     }
     payload.truncate(PROBE_PAYLOAD_BYTES);
     payload
+}
+
+async fn current_identity(app: &AppHandle) -> Option<ProbeIdentity> {
+    let state = app.try_state::<ArcLock<crate::App>>()?;
+    let server_url = state.read().await.server_url.clone();
+    let owner_id = AuthStore::get(app).ok().flatten()?.user_id?;
+    if server_url.is_empty() || owner_id.is_empty() {
+        return None;
+    }
+    Some(ProbeIdentity {
+        server_url,
+        owner_id,
+    })
 }
 
 async fn send_probe(app: &AppHandle) -> ProbeOutcome {
@@ -279,6 +307,7 @@ pub(crate) async fn run_probe(app: &AppHandle) -> UploadHealthStatus {
         return status_with(app, health.inner()).await;
     };
     health.probing.store(true, Ordering::Release);
+    let identity = current_identity(app).await;
     let cancel = CancellationToken::new();
     *health.cancel.lock().unwrap() = Some(cancel.clone());
     emit(app, build_status(&health, false));
@@ -298,7 +327,14 @@ pub(crate) async fn run_probe(app: &AppHandle) -> UploadHealthStatus {
     *health.cancel.lock().unwrap() = None;
     health.probing.store(false, Ordering::Release);
     debug!(?outcome, "upload health probe finished");
-    health.stored.lock().unwrap().store_outcome(outcome);
+    let current_identity = current_identity(app).await;
+    let mut stored = health.stored.lock().unwrap();
+    if identity == current_identity {
+        stored.store_outcome(outcome, current_identity);
+    } else {
+        *stored = StoredStatus::default();
+    }
+    drop(stored);
     let status = status_with(app, health.inner()).await;
     emit(app, status.clone());
     status
@@ -323,7 +359,12 @@ pub(crate) fn recording_released(app: &AppHandle) {
 
 pub(crate) async fn recommended_capture_width(app: &AppHandle) -> Option<u32> {
     let health = app.try_state::<UploadHealth>()?;
-    health.stored.lock().unwrap().fresh_width(Instant::now())
+    let identity = current_identity(app).await?;
+    health
+        .stored
+        .lock()
+        .unwrap()
+        .fresh_width(Instant::now(), &identity)
 }
 
 #[tauri::command]
@@ -347,6 +388,13 @@ pub async fn run_upload_health_check(app: AppHandle) -> UploadHealthStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn identity() -> ProbeIdentity {
+        ProbeIdentity {
+            server_url: "https://cap.so".into(),
+            owner_id: "user-1".into(),
+        }
+    }
 
     #[test]
     fn width_ladder_boundaries() {
@@ -373,7 +421,7 @@ mod tests {
             let stored = ProbeOutcome::Success {
                 upload_mbps: mbps,
             }
-            .into_stored();
+            .into_stored(Some(identity()));
             assert_eq!(stored.state, expected);
             assert_eq!(stored.upload_mbps, Some(mbps));
             assert_eq!(stored.recommended_max_width, recommended_width(mbps));
@@ -395,7 +443,7 @@ mod tests {
                 detail: "offline".into(),
             },
         ] {
-            let stored = outcome.into_stored();
+            let stored = outcome.into_stored(Some(identity()));
             assert!(stored.recommended_max_width.is_none());
             assert!(stored.upload_mbps.is_none());
             assert!(stored.measured_at.is_none());
@@ -407,10 +455,10 @@ mod tests {
         let mut stored = ProbeOutcome::Success {
             upload_mbps: 1.0,
         }
-        .into_stored();
+        .into_stored(Some(identity()));
         let checked_at = stored.checked_at;
         let measured_at = stored.measured_at;
-        stored.store_outcome(ProbeOutcome::Aborted);
+        stored.store_outcome(ProbeOutcome::Aborted, Some(identity()));
         assert_eq!(stored.state, UploadHealthState::Degraded);
         assert_eq!(stored.checked_at, checked_at);
         assert_eq!(stored.measured_at, measured_at);
@@ -418,19 +466,37 @@ mod tests {
     }
 
     #[test]
-    fn fresh_width_only_applies_within_ttl() {
+    fn fresh_width_only_applies_to_matching_identity_within_ttl() {
         let mut stored = ProbeOutcome::Success {
             upload_mbps: 1.0,
         }
-        .into_stored();
-        assert_eq!(stored.fresh_width(Instant::now()), Some(854));
+        .into_stored(Some(identity()));
+        assert_eq!(
+            stored.fresh_width(Instant::now(), &identity()),
+            Some(854)
+        );
+        for other_identity in [
+            ProbeIdentity {
+                server_url: "https://self-hosted.example".into(),
+                owner_id: "user-1".into(),
+            },
+            ProbeIdentity {
+                server_url: "https://cap.so".into(),
+                owner_id: "user-2".into(),
+            },
+        ] {
+            assert_eq!(
+                stored.fresh_width(Instant::now(), &other_identity),
+                None
+            );
+        }
         stored.measured_at = Instant::now().checked_sub(MEASUREMENT_TTL + Duration::from_secs(1));
-        assert_eq!(stored.fresh_width(Instant::now()), None);
+        assert_eq!(stored.fresh_width(Instant::now(), &identity()), None);
         stored.measured_at = None;
-        assert_eq!(stored.fresh_width(Instant::now()), None);
+        assert_eq!(stored.fresh_width(Instant::now(), &identity()), None);
         stored.recommended_max_width = None;
         stored.measured_at = Some(Instant::now());
-        assert_eq!(stored.fresh_width(Instant::now()), None);
+        assert_eq!(stored.fresh_width(Instant::now(), &identity()), None);
     }
 
     #[test]
