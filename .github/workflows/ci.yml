@@ -313,6 +313,14 @@ jobs:
         shell: bash
         run: ./scripts/build-desktop-binaries.sh ${{ matrix.settings.target }}
 
+      - name: Test Windows startup logging regressions
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          export PATH="$(cygpath "$GITHUB_WORKSPACE/target/debug"):$PATH"
+          cargo test --locked -p cap-desktop --target ${{ matrix.settings.target }} --bin cap-desktop logging_tests
+          cargo test --locked -p cap-desktop --target ${{ matrix.settings.target }} --test crash_sentinel
+
       - name: Test Linux desktop regressions
         if: ${{ runner.os == 'Linux' }}
         shell: bash

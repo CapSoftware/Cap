@@ -1491,7 +1491,7 @@ pub struct App {
     camera_cleanup_done: bool,
     camera_feed: ActorRef<feeds::camera::CameraFeed>,
     server_url: String,
-    logs_dir: PathBuf,
+    logs_dir: Option<PathBuf>,
     disconnected_inputs: HashSet<RecordingInputKind>,
     was_camera_only_recording: bool,
 }
@@ -6995,11 +6995,11 @@ fn specta_builder() -> tauri_specta::Builder {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
+pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: Option<PathBuf>) {
     let startup = startup::Startup::default();
     // Arm the unexpected-termination sentinel before anything else can crash, and
     // report any previous session that died without a clean shutdown.
-    let previous_termination = crash_sentinel::init(&logs_dir, env!("CARGO_PKG_VERSION"));
+    let previous_termination = crash_sentinel::init(logs_dir.as_deref(), env!("CARGO_PKG_VERSION"));
     configure_windows_graphics_recovery(previous_termination);
 
     // Keep the sentinel's blur marker in sync with live BlurProcessor instances
