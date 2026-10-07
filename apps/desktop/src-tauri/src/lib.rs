@@ -35,6 +35,7 @@ mod logging;
 #[cfg(target_os = "macos")]
 mod macos_save_panel;
 mod main_window_geometry;
+mod network_health;
 mod notifications;
 mod panel_manager;
 mod permissions;
@@ -1639,6 +1640,7 @@ impl App {
 
         self.recording_state = RecordingState::Pending { mode, target };
         CurrentRecordingChanged.emit(&self.handle).ok();
+        crate::network_health::recording_admitted(&self.handle);
 
         Ok(())
     }
@@ -1665,6 +1667,7 @@ impl App {
             let _ = camera.set_content_protected(false);
         }
         CurrentRecordingChanged.emit(&self.handle).ok();
+        crate::network_health::recording_released(&self.handle);
 
         true
     }
@@ -1679,6 +1682,7 @@ impl App {
             RecordingState::Active(recording) => {
                 self.close_occluder_windows();
                 crate::windows::apply_content_protection(&self.handle, false);
+                crate::network_health::recording_released(&self.handle);
                 Some(recording)
             }
             state => {
@@ -1696,6 +1700,9 @@ impl App {
         let previous = std::mem::replace(&mut self.recording_state, RecordingState::None);
         self.close_occluder_windows();
         crate::windows::apply_content_protection(&self.handle, false);
+        if !matches!(previous, RecordingState::None) {
+            crate::network_health::recording_released(&self.handle);
+        }
         match previous {
             RecordingState::Active(recording) => Some(recording),
             _ => None,
@@ -6931,6 +6938,8 @@ fn specta_builder() -> tauri_specta::Builder {
             updates::updates_download_and_install,
             restart_app,
             updates::updates_channel_changed,
+            network_health::get_upload_health,
+            network_health::run_upload_health_check,
         ])
         .events(tauri_specta::collect_events![
             linux_instant_camera::CameraPresentationRequested,
@@ -6967,6 +6976,7 @@ fn specta_builder() -> tauri_specta::Builder {
             updates::UpdateDownloadProgress,
             updates::UpdateReady,
             diagnostics::DiagnosticProgress,
+            network_health::UploadHealthChanged,
         ])
         .error_handling(tauri_specta::ErrorHandlingMode::Throw)
         .typ::<ProjectConfiguration>()
@@ -7253,6 +7263,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             app.manage(PendingScreenshots::default());
             app.manage(FinalizingRecordings::default());
             app.manage(editor_preparing::PreparingConsumers::default());
+            app.manage(network_health::UploadHealth::default());
             app.manage(updates::UpdatesState::default());
             updates::spawn_background_loop(app.clone());
 
@@ -7413,6 +7424,11 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                 let clipboard = ClipboardContext::new()
                     .expect("Failed to create clipboard context");
                 app.manage(Arc::new(RwLock::new(clipboard)));
+
+                let app = app.clone();
+                tokio::spawn(async move {
+                    network_health::run_probe(&app).await;
+                });
             }
 
             app.listen_any("main-window-ready", {
