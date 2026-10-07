@@ -101,7 +101,11 @@ describe("upload-health route contract", () => {
 		expect(route).toContain("readUploadProbeBody");
 		expect(route).toContain("getWritableAccessForUser");
 		expect(route).toContain(".putObject(");
+		expect(route).toContain("const writeResult = yield* writable.access");
+		expect(route).toContain("Effect.match({");
+		expect(route).toContain("onFailure: (error) => ({ ok: false as const, error })");
 		expect(route).toContain(".deleteObject(");
+		expect(route).toContain("if (!writeResult.ok) yield* Effect.fail(writeResult.error)");
 		expect(route).toContain("Effect.retry({");
 		expect(route).toContain('Schedule.exponential("100 millis")');
 		expect(route).not.toContain("Effect.ensuring(");
