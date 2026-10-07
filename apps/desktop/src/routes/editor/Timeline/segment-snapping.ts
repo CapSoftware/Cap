@@ -99,6 +99,25 @@ export function timelineSnapTargets(
 	return targets;
 }
 
+export type SnapTargets = number[] | (() => number[]);
+
+const resolveTargets = (targets: SnapTargets) =>
+	typeof targets === "function" ? targets() : targets;
+
+// Segment edges are fixed for the length of a drag, but the playhead keeps
+// moving while playback runs, so it is read on every move.
+export function liveSnapTargets(
+	timeline: SnapTimeline | null | undefined,
+	playhead: () => number,
+	exclude?: SnapExclusion,
+): () => number[] {
+	const fixed = timelineSnapTargets(timeline, null, exclude);
+	return () => {
+		const time = playhead();
+		return Number.isFinite(time) ? [...fixed, time] : fixed;
+	};
+}
+
 function nearestTarget(
 	time: number,
 	targets: number[],
@@ -126,7 +145,7 @@ const snappingActive = (event: MouseEvent) =>
 export function snapEdgeTime(
 	time: number,
 	event: MouseEvent,
-	targets: number[],
+	targets: SnapTargets,
 	secsPerPixel: number,
 	bounds?: SnapBounds,
 ): number {
@@ -136,7 +155,7 @@ export function snapEdgeTime(
 	}
 	const hit = nearestTarget(
 		time,
-		targets,
+		resolveTargets(targets),
 		SEGMENT_SNAP_PX * secsPerPixel,
 		0,
 		bounds,
@@ -149,7 +168,7 @@ export function snapMoveDelta(
 	span: Span,
 	delta: number,
 	event: MouseEvent,
-	targets: number[],
+	targets: SnapTargets,
 	secsPerPixel: number,
 	deltaBounds?: SnapBounds,
 ): number {
@@ -158,16 +177,17 @@ export function snapMoveDelta(
 		return delta;
 	}
 	const threshold = SEGMENT_SNAP_PX * secsPerPixel;
+	const resolved = resolveTargets(targets);
 	const startHit = nearestTarget(
 		span.start + delta,
-		targets,
+		resolved,
 		threshold,
 		span.start,
 		deltaBounds,
 	);
 	const endHit = nearestTarget(
 		span.end + delta,
-		targets,
+		resolved,
 		threshold,
 		span.end,
 		deltaBounds,
@@ -209,6 +229,18 @@ if (import.meta.vitest) {
 		expect(
 			snapEdgeTime(10.05, { altKey: true } as MouseEvent, targets, 0.01),
 		).toBe(10.05);
+	});
+
+	it("follows the playhead while a drag is in progress", () => {
+		let playhead = 5;
+		const targets = liveSnapTargets(
+			{ segments: [{ start: 0, end: 30, timescale: 1 }] },
+			() => playhead,
+		);
+		expect(snapEdgeTime(5.05, event, targets, 0.01)).toBe(5);
+		playhead = 8;
+		expect(snapEdgeTime(5.05, event, targets, 0.01)).toBe(5.05);
+		expect(snapEdgeTime(8.05, event, targets, 0.01)).toBe(8);
 	});
 
 	it("ignores targets outside the allowed range", () => {

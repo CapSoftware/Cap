@@ -17,9 +17,9 @@ import { useEditorContext } from "../context";
 import { useTimelineContext, useTrackContext } from "./context";
 import {
 	clearSnapGuide,
+	liveSnapTargets,
 	snapEdgeTime,
 	snapMoveDelta,
-	timelineSnapTargets,
 } from "./segment-snapping";
 import {
 	SegmentContent,
@@ -280,7 +280,7 @@ export function SceneTrack(props: {
 					};
 
 					const sceneSnapTargets = () =>
-						timelineSnapTargets(project.timeline, editorState.playbackTime, {
+						liveSnapTargets(project.timeline, () => editorState.playbackTime, {
 							type: "scene",
 							index: i(),
 						});

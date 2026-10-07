@@ -19,9 +19,9 @@ import { useEditorContext } from "../context";
 import { useTimelineContext, useTrackContext } from "./context";
 import {
 	clearSnapGuide,
+	liveSnapTargets,
 	snapEdgeTime,
 	snapMoveDelta,
-	timelineSnapTargets,
 } from "./segment-snapping";
 import {
 	SegmentContent,
@@ -413,10 +413,14 @@ export function ZoomTrack(props: {
 						};
 
 						const zoomSnapTargets = () =>
-							timelineSnapTargets(project.timeline, editorState.playbackTime, {
-								type: "zoom",
-								index: i,
-							});
+							liveSnapTargets(
+								project.timeline,
+								() => editorState.playbackTime,
+								{
+									type: "zoom",
+									index: i,
+								},
+							);
 
 						function createMouseDownDrag<T>(
 							setup: () => T,

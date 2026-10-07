@@ -8,9 +8,9 @@ import { getSegmentTrack, sortTrackSegments } from "../timelineTracks";
 import { useTimelineContext } from "./context";
 import {
 	clearSnapGuide,
+	liveSnapTargets,
 	snapEdgeTime,
 	snapMoveDelta,
-	timelineSnapTargets,
 } from "./segment-snapping";
 import {
 	SegmentContent,
@@ -44,7 +44,7 @@ export function MaskTrack(props: {
 		projectActions,
 	} = useEditorContext();
 	const snapTargetsFor = (index: number) =>
-		timelineSnapTargets(project.timeline, editorState.playbackTime, {
+		liveSnapTargets(project.timeline, () => editorState.playbackTime, {
 			type: "mask",
 			index,
 		});
