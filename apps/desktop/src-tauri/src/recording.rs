@@ -5455,7 +5455,7 @@ fn notify_ocr_error(app: &AppHandle, error: String) -> String {
     error
 }
 
-async fn capture_screen_image(
+pub async fn capture_screen_image(
     app: &AppHandle,
     target: ScreenCaptureTarget,
 ) -> Result<image::DynamicImage, String> {
@@ -5501,7 +5501,7 @@ async fn capture_screen_image(
     result
 }
 
-fn save_screenshot_project(
+pub fn save_screenshot_project(
     app: &AppHandle,
     image: image::DynamicImage,
     target: &ScreenCaptureTarget,

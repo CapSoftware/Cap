@@ -68,6 +68,7 @@ pub enum HotkeyAction {
     ScreenshotWindow,
     ScreenshotArea,
     OcrArea,
+    ScrollingCaptureWindow,
     #[serde(other)]
     Other,
 }
@@ -503,6 +504,36 @@ async fn handle_hotkey(app: AppHandle, action: HotkeyAction) -> Result<(), Strin
             }
             .emit(&app);
             Ok(())
+        }
+        HotkeyAction::ScrollingCaptureWindow => {
+            #[cfg(target_os = "linux")]
+            {
+                Err("Scrolling capture is not supported on this platform yet".to_string())
+            }
+
+            #[cfg(not(target_os = "linux"))]
+            {
+                use scap_targets::Window;
+
+                let window_id = Window::get_topmost_at_cursor()
+                    .ok_or_else(|| "No window found under cursor".to_string())?
+                    .id();
+                let target = ScreenCaptureTarget::Window {
+                    id: window_id.clone(),
+                };
+
+                match crate::scrolling_capture::capture_scrolling_window(app.clone(), window_id)
+                    .await
+                {
+                    Ok(path) => {
+                        if crate::automation::should_open_screenshot_editor(&app, &target) {
+                            let _ = ShowCapWindow::ScreenshotEditor { path }.show(&app).await;
+                        }
+                        Ok(())
+                    }
+                    Err(e) => Err(format!("Failed to capture scrolling window: {e}")),
+                }
+            }
         }
         HotkeyAction::Other => Ok(()),
     }
