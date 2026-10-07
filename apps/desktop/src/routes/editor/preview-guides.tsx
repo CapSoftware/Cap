@@ -159,6 +159,7 @@ export function PreviewRulersOverlay(props: { size: Size }) {
 	const outputHeight = () => latestFrameLayout()?.output_height ?? 1080;
 	const [drag, setDrag] = createSignal<GuideDrag | null>(null);
 	let root: HTMLDivElement | undefined;
+	let rulerSvg: SVGSVGElement | undefined;
 	let stopDrag: (() => void) | undefined;
 	onCleanup(() => stopDrag?.());
 
@@ -201,15 +202,21 @@ export function PreviewRulersOverlay(props: { size: Size }) {
 		window.addEventListener("mouseup", up);
 	};
 
-	// The rulers sit above the canvas element boxes, so a press on an element
-	// or handle that reaches under a ruler is handed to it instead of
+	// The rulers sit above every preview control, so a press on a control that
+	// reaches under a ruler is handed to the topmost one there instead of
 	// starting a guide.
 	const startRulerDrag = (axis: GuideAxis, event: MouseEvent) => {
-		const element = document
+		const preview = root?.parentElement;
+		const control = document
 			.elementsFromPoint(event.clientX, event.clientY)
-			.find((el) => el.closest("[data-canvas-element]"));
-		if (element) {
-			element.dispatchEvent(new MouseEvent("mousedown", event));
+			.find((el) => !root?.contains(el) && !rulerSvg?.contains(el));
+		if (
+			control &&
+			preview?.contains(control) &&
+			!(control instanceof HTMLCanvasElement) &&
+			!control.closest("[data-preview-backdrop]")
+		) {
+			control.dispatchEvent(new MouseEvent("mousedown", event));
 			return;
 		}
 		startDrag(axis, null, event);
@@ -292,6 +299,7 @@ export function PreviewRulersOverlay(props: { size: Size }) {
 				</Show>
 			</div>
 			<svg
+				ref={rulerSvg}
 				class="absolute inset-0 pointer-events-none"
 				width={props.size.width}
 				height={props.size.height}

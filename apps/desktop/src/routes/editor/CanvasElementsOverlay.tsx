@@ -680,6 +680,7 @@ export function CanvasElementsOverlay(props: { size: Size }) {
 			<Show when={overlayVisible()}>
 				<Show when={selection() || editorState.timeline.selection}>
 					<div
+						data-preview-backdrop
 						class="absolute inset-0 pointer-events-auto"
 						onMouseDown={(e) => {
 							if (e.button !== 0) return;
@@ -864,7 +865,6 @@ function ElementBox(props: {
 
 	return (
 		<div
-			data-canvas-element
 			class="absolute pointer-events-auto"
 			style={{
 				left: `${props.rect.x * props.size.width}px`,
