@@ -357,6 +357,19 @@ impl CursorRegistry {
     }
 }
 
+struct PartialProject {
+    path: PathBuf,
+    keep: bool,
+}
+
+impl Drop for PartialProject {
+    fn drop(&mut self) {
+        if !self.keep {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+}
+
 pub async fn import_project(recordings_dir: &Path, source: &Path) -> Result<PathBuf, String> {
     let recording_dir = source.join("recording");
     let metadata = read_json(&recording_dir.join("metadata.json"))?;
@@ -392,6 +405,10 @@ pub async fn import_project(recordings_dir: &Path, source: &Path) -> Result<Path
         .unwrap_or_else(|| "Screen Studio import".to_string());
 
     let project_path = unique_project_path(recordings_dir, &pretty_name);
+    let mut partial_project = PartialProject {
+        path: project_path.clone(),
+        keep: false,
+    };
     let segment_dir = project_path.join(SEGMENT_DIR);
     std::fs::create_dir_all(&segment_dir).map_err(|e| e.to_string())?;
     let relative = |file: &str| RelativePathBuf::from(format!("{SEGMENT_DIR}/{file}"));
@@ -626,6 +643,7 @@ pub async fn import_project(recordings_dir: &Path, source: &Path) -> Result<Path
     }
 
     info!(source = %source.display(), project = %project_path.display(), "Imported Screen Studio project");
+    partial_project.keep = true;
     Ok(project_path)
 }
 
@@ -654,6 +672,40 @@ mod tests {
         assert!(bundle_file(dir, "../../secret.txt").is_err());
         assert!(bundle_file(dir, "/etc/hosts").is_err());
         assert!(bundle_file(dir, "").is_err());
+    }
+
+    #[tokio::test]
+    async fn failed_imports_leave_no_partial_project() {
+        let source = tempfile::tempdir().unwrap();
+        let bundle = source.path().join("demo.screenstudio");
+        let recording = bundle.join("recording");
+        std::fs::create_dir_all(&recording).unwrap();
+        std::fs::write(recording.join("display.mp4"), b"not a real video").unwrap();
+        std::fs::write(
+            recording.join("metadata.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "recorders": [
+                    {
+                        "type": "display",
+                        "sessions": [{
+                            "outputFilename": "display.mp4",
+                            "processTimeStartMs": 0,
+                            "bounds": {"x": 0, "y": 0, "width": 1920, "height": 1080}
+                        }]
+                    },
+                    {
+                        "type": "webcam",
+                        "sessions": [{"outputFilename": "webcam.mp4", "processTimeStartMs": 0}]
+                    }
+                ]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let recordings = tempfile::tempdir().unwrap();
+
+        assert!(import_project(recordings.path(), &bundle).await.is_err());
+        assert_eq!(std::fs::read_dir(recordings.path()).unwrap().count(), 0);
     }
 
     #[test]
