@@ -106,6 +106,7 @@ use screenshot_editor::{
 };
 
 mod gpu_context;
+mod gpu_device_health;
 pub use gpu_context::{PendingScreenshot, PendingScreenshots};
 use serde::{Deserialize, Serialize};
 use serde_json::json;

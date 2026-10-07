@@ -349,6 +349,10 @@ jobs:
         shell: bash
         run: ./scripts/build-gpui-binary.sh debug ${{ matrix.settings.target }}
 
+      - name: Test export preview device-loss handling
+        shell: bash
+        run: cargo test --locked -p cap-desktop --test gpu_device_health
+
       - name: Test GPUI desktop
         shell: bash
         run: |
