@@ -1,4 +1,7 @@
-import { hasProSubscription, type ProSubscriptionUser } from "./pro-subscription";
+import {
+	hasProSubscription,
+	type ProSubscriptionUser,
+} from "./pro-subscription";
 
 export type AiGenerationEntitlementUser = ProSubscriptionUser;
 
