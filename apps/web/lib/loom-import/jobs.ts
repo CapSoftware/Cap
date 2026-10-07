@@ -19,7 +19,7 @@ import {
 	User,
 	type Video,
 } from "@cap/web-domain";
-import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNull, sql } from "drizzle-orm";
 import { getOrganizationAccess } from "@/actions/organization/authorization";
 import { provisionOrganizationInvitee } from "@/lib/organization-provisioning";
 import { canManageOrganizationSettings } from "@/lib/permissions/roles";
@@ -40,6 +40,7 @@ import {
 } from "./loom-api";
 
 const INSERT_CHUNK = 500;
+const LOOM_IMPORT_JOBS_PER_HOUR = 30;
 const IN_CHUNK = 500;
 
 export class LoomImportError extends Error {}
@@ -202,6 +203,22 @@ export async function createLoomImportJob({
 	const access = await getLoomImportAccess(userId, orgId);
 	if (!access)
 		throw new LoomImportError("You don't have access to this organization.");
+
+	const [recent] = await db()
+		.select({ count: sql<number>`COUNT(*)`.mapWith(Number) })
+		.from(loomImportJobs)
+		.where(
+			and(
+				eq(loomImportJobs.orgId, orgId),
+				eq(loomImportJobs.createdById, userId),
+				gte(loomImportJobs.createdAt, new Date(Date.now() - 60 * 60 * 1000)),
+			),
+		);
+	if ((recent?.count ?? 0) >= LOOM_IMPORT_JOBS_PER_HOUR) {
+		throw new LoomImportError(
+			"You've started a lot of imports in the last hour. Try again in a little while.",
+		);
+	}
 
 	const jobId = nanoId();
 	const items = planLoomImportItems(jobId, rows, { isAdmin: access.isAdmin });

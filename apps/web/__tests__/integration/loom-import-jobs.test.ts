@@ -574,6 +574,27 @@ describe.runIf(Boolean(databaseUrl))(
 			).toEqual([]);
 		});
 
+		it("limits how many imports one person can start in an hour", async () => {
+			const { ownerId, orgId } = await makeOrganization({ pro: false });
+			const rows = [{ rowNumber: 2, loomUrl: share(LOOM.ok1) }];
+			for (let index = 0; index < 30; index++) {
+				await createLoomImportJob({
+					userId: ownerId,
+					orgId,
+					fileName: `${index}.csv`,
+					rows,
+				});
+			}
+			await expect(
+				createLoomImportJob({
+					userId: ownerId,
+					orgId,
+					fileName: "one-more.csv",
+					rows,
+				}),
+			).rejects.toThrow("a lot of imports");
+		});
+
 		it("creates a 2,000 video import in one request", async () => {
 			const { ownerId, orgId } = await makeOrganization({ pro: true });
 			const rows = Array.from({ length: 2000 }, (_, index) => ({
