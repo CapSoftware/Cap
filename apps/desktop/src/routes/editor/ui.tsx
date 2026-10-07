@@ -231,13 +231,17 @@ export function Slider(
 							setDragging(false);
 							dispose();
 						};
-						createEventListener(window, "mouseup", finish);
-						createEventListener(window, "pointerup", finish);
-						createEventListener(window, "pointercancel", finish);
+						const isDragPointer = (e: PointerEvent) =>
+							e.pointerId === down.pointerId;
+						createEventListener(window, "pointerup", (e) => {
+							if (isDragPointer(e)) finish();
+						});
+						createEventListener(window, "pointercancel", (e) => {
+							if (isDragPointer(e)) finish();
+						});
 						createEventListener(window, "blur", finish);
-						createEventListener(window, "pointermove", (move) => {
-							if (move.pointerId === down.pointerId && move.buttons === 0)
-								finish();
+						createEventListener(window, "pointermove", (e) => {
+							if (isDragPointer(e) && e.buttons === 0) finish();
 						});
 					});
 				}}
