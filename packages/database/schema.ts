@@ -1652,6 +1652,88 @@ export const importedVideos = mysqlTable(
 	],
 );
 
+export type LoomImportJobStatus =
+	| "checking"
+	| "awaiting_upgrade"
+	| "importing"
+	| "completed"
+	| "cancelled";
+
+export type LoomImportItemStatus =
+	| "pending"
+	| "ready"
+	| "importing"
+	| "complete"
+	| "failed"
+	| "skipped"
+	| "cancelled";
+
+export const loomImportJobs = mysqlTable(
+	"loom_import_jobs",
+	{
+		id: nanoId("id").notNull().primaryKey(),
+		orgId: nanoIdRequired("org_id").$type<Organisation.OrganisationId>(),
+		createdById: nanoIdRequired("created_by_id").$type<User.UserId>(),
+		fileName: varchar("file_name", { length: 255 }).notNull(),
+		status: varchar("status", { length: 32 })
+			.$type<LoomImportJobStatus>()
+			.notNull()
+			.default("checking"),
+		totalCount: int("total_count").notNull(),
+		createdAt: datetime("created_at", { fsp: 3 })
+			.notNull()
+			.$defaultFn(() => new Date()),
+		updatedAt: datetime("updated_at", { fsp: 3 })
+			.notNull()
+			.$defaultFn(() => new Date()),
+		startedAt: datetime("started_at", { fsp: 3 }),
+		completedAt: datetime("completed_at", { fsp: 3 }),
+	},
+	(table) => [
+		index("org_creator_created_idx").on(
+			table.orgId,
+			table.createdById,
+			table.createdAt,
+		),
+		index("status_updated_idx").on(table.status, table.updatedAt),
+	],
+);
+
+export const loomImportJobItems = mysqlTable(
+	"loom_import_job_items",
+	{
+		id: nanoId("id").notNull().primaryKey(),
+		jobId: nanoIdRequired("job_id"),
+		rowNumber: int("csv_row").notNull(),
+		loomUrl: varchar("loom_url", { length: 1024 }).notNull(),
+		loomVideoId: varchar("loom_video_id", { length: 64 }),
+		ownerEmail: varchar("owner_email", { length: 255 }),
+		spaceName: varchar("space_name", { length: 255 }),
+		status: varchar("status", { length: 16 })
+			.$type<LoomImportItemStatus>()
+			.notNull()
+			.default("pending"),
+		ownerId: nanoIdNullable("owner_id").$type<User.UserId>(),
+		spaceId: nanoIdNullable("space_id").$type<Space.SpaceIdOrOrganisationId>(),
+		videoId: nanoIdNullable("video_id").$type<Video.VideoId>(),
+		title: varchar("title", { length: 255 }),
+		loomCreatedAt: datetime("loom_created_at", { fsp: 3 }),
+		durationSeconds: float("duration_seconds"),
+		width: int("width"),
+		height: int("height"),
+		thumbnailUrl: varchar("thumbnail_url", { length: 1024 }),
+		error: varchar("error", { length: 512 }),
+		updatedAt: datetime("updated_at", { fsp: 3 })
+			.notNull()
+			.$defaultFn(() => new Date()),
+	},
+	(table) => [
+		uniqueIndex("job_row_idx").on(table.jobId, table.rowNumber),
+		index("job_status_row_idx").on(table.jobId, table.status, table.rowNumber),
+		index("video_id_idx").on(table.videoId),
+	],
+);
+
 export const developerApps = mysqlTable(
 	"developer_apps",
 	{
