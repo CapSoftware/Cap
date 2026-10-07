@@ -196,7 +196,9 @@ export function parseCsv(text: string): CsvTable {
 	const first = records[0];
 	if (!first || !isFilledRecord(first)) throw new Error("This CSV is empty.");
 	const headerless = first.some(
-		(cell) => /loom\.com/i.test(cell) && extractLoomVideoId(cell) !== null,
+		(cell) =>
+			LOOM_ID_PATTERN.test(cell) ||
+			(/loom\.com/i.test(cell) && extractLoomVideoId(cell) !== null),
 	);
 	if (headerless) {
 		const width = records.reduce(

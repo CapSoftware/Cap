@@ -51,6 +51,32 @@ describe("parseCsv", () => {
 		expect(table.headerless).toBe(true);
 		expect(table.rows).toHaveLength(2);
 	});
+
+	it("keeps the first video in a plain list of Loom ids", () => {
+		const table = parseCsv(`${ID_A}\n${ID_B.toUpperCase()}\n`);
+		expect(table).toMatchObject({
+			headerless: true,
+			rows: [[ID_A], [ID_B.toUpperCase()]],
+		});
+		const plan = buildLoomImportPlan(table, detectLoomImportMapping(table), {
+			allowOwners: false,
+		});
+		expect(plan.rows).toEqual([
+			{ rowNumber: 1, loomUrl: `https://www.loom.com/share/${ID_A}` },
+			{ rowNumber: 2, loomUrl: `https://www.loom.com/share/${ID_B}` },
+		]);
+
+		const single = parseCsv(`${ID_A}\r\n`);
+		expect(single.headerless).toBe(true);
+		expect(single.rows).toEqual([[ID_A]]);
+	});
+
+	it("still reads a header row above a column of Loom ids", () => {
+		const table = parseCsv(`loom_video_id,owner\n${ID_A},a@b.co\n`);
+		expect(table.headerless).toBe(false);
+		expect(table.headers).toEqual(["loom_video_id", "owner"]);
+		expect(table.rows).toEqual([[ID_A, "a@b.co"]]);
+	});
 });
 
 describe("extractLoomVideoId", () => {
