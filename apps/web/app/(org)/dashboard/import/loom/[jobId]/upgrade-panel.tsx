@@ -200,6 +200,9 @@ export const UpgradePanel = ({
 									decoding="async"
 									referrerPolicy="no-referrer"
 									className="size-full object-cover"
+									onError={(event) => {
+										event.currentTarget.style.visibility = "hidden";
+									}}
 								/>
 							</div>
 						))}

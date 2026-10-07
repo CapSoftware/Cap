@@ -214,6 +214,9 @@ const Thumb = ({
 				className="size-full object-cover"
 				referrerPolicy="no-referrer"
 				onLoad={() => loadedThumbs.add(src)}
+				onError={(event) => {
+					event.currentTarget.style.visibility = "hidden";
+				}}
 			/>
 		)}
 	</div>
