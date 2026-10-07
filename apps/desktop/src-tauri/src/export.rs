@@ -626,9 +626,7 @@ async fn run_out_of_process_export_attempt_inner(
         .arg(project_path)
         .arg("--settings-json")
         .arg(settings_json)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stdin(Stdio::null());
 
     if let Ok(parent) = serde_json::to_string(&diagnostic.id()) {
         command.env("CAP_DIAGNOSTIC_PARENT", parent);
@@ -647,7 +645,7 @@ async fn run_out_of_process_export_attempt_inner(
     }
     configure_exporter_command(&mut command);
 
-    let mut child = command.spawn().map_err(|e| {
+    let mut child = cap_utils::process::spawn_with_piped_output(command).map_err(|e| {
         format!(
             "Failed to start export worker '{}': {e}",
             bin_path.display()
