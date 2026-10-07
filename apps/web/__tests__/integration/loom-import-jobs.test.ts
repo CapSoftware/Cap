@@ -86,7 +86,10 @@ import {
 	resetFailedLoomImportItems,
 	resolveLoomImportJob,
 } from "@/lib/loom-import/jobs";
-import { getLoomImportSnapshot } from "@/lib/loom-import/snapshot";
+import {
+	getLoomImportSnapshot,
+	LOOM_IMPORT_CURSOR_OVERLAP_MS,
+} from "@/lib/loom-import/snapshot";
 
 const databaseUrl = process.env.CAP_LOOM_IMPORT_TEST_DATABASE_URL;
 
@@ -448,7 +451,8 @@ describe.runIf(Boolean(databaseUrl))(
 			const quiet = await getLoomImportSnapshot({
 				jobId,
 				userId: ownerId,
-				since: (settledView?.cursor ?? 0) + 6_000,
+				since:
+					(settledView?.cursor ?? 0) + LOOM_IMPORT_CURSOR_OVERLAP_MS + 1_000,
 			});
 			expect(quiet?.items).toEqual([]);
 			const lastPoll = Date.now() - 1_000;
@@ -459,7 +463,7 @@ describe.runIf(Boolean(databaseUrl))(
 			const delta = await getLoomImportSnapshot({
 				jobId,
 				userId: ownerId,
-				since: lastPoll + 5_000,
+				since: lastPoll + LOOM_IMPORT_CURSOR_OVERLAP_MS,
 			});
 			expect(delta?.full).toBe(false);
 			expect(

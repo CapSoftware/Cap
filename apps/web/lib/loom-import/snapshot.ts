@@ -16,7 +16,7 @@ import {
 	type LoomImportSnapshot,
 } from "./status";
 
-const CURSOR_OVERLAP_MS = 3_000;
+export const LOOM_IMPORT_CURSOR_OVERLAP_MS = 3_000;
 
 function time(value: Date | null | undefined) {
 	return value ? value.getTime() : 0;
@@ -153,7 +153,9 @@ export async function getLoomImportSnapshot({
 		owners: Math.max(owners.size, 1),
 		items: full
 			? all
-			: all.filter((item) => item.v > (since as number) - CURSOR_OVERLAP_MS),
+			: all.filter(
+					(item) => item.v > (since as number) - LOOM_IMPORT_CURSOR_OVERLAP_MS,
+				),
 		cursor: queriedAt,
 		full,
 	};
