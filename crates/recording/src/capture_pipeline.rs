@@ -389,6 +389,11 @@ impl MakeCapturePipeline for screen_capture::X11Capture {
             .unwrap_or_else(|| output_path.with_file_name("display"));
 
         let ultra = quality == StudioQuality::Ultra;
+        let effective_output_size = if screen_capture.is_window_capture() {
+            None
+        } else {
+            output_size
+        };
         OutputPipeline::builder(fragments_dir)
             .with_video::<screen_capture::VideoSource>(screen_capture)
             .with_timestamps(start_time)
@@ -400,7 +405,7 @@ impl MakeCapturePipeline for screen_capture::X11Capture {
                 } else {
                     H264Preset::Ultrafast
                 },
-                output_size,
+                output_size: effective_output_size,
                 shared_pause_state,
                 segment_tx: None,
             })
@@ -415,6 +420,11 @@ impl MakeCapturePipeline for screen_capture::X11Capture {
         start_gate: Option<RecordingStartGate>,
         segment_tx: Option<std::sync::mpsc::Sender<SegmentCompletedEvent>>,
     ) -> anyhow::Result<OutputPipeline> {
+        let effective_output_size = if screen_capture.is_window_capture() {
+            None
+        } else {
+            Some(output_size)
+        };
         OutputPipeline::builder(segments_dir)
             .with_video::<screen_capture::VideoSource>(screen_capture)
             .with_timestamps(start_time)
@@ -422,7 +432,7 @@ impl MakeCapturePipeline for screen_capture::X11Capture {
             .build::<crate::ffmpeg::SegmentedVideoMuxer>(crate::ffmpeg::SegmentedVideoMuxerConfig {
                 segment_duration: std::time::Duration::from_secs(2),
                 preset: H264Preset::Ultrafast,
-                output_size: Some(output_size),
+                output_size: effective_output_size,
                 shared_pause_state: None,
                 segment_tx,
             })

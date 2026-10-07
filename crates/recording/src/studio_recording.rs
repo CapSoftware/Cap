@@ -3163,8 +3163,6 @@ async fn create_segment_pipeline(
         screen_capture::ScreenCaptureTarget::CameraOnly
     );
     #[cfg(target_os = "linux")]
-    let custom_cursor_capture = custom_cursor_capture && !screen_capture::prefers_wayland_portal();
-    #[cfg(target_os = "linux")]
     let mut start_time = start_time;
 
     let (screen, system_audio, cursor_display) = if camera_only {
@@ -3285,14 +3283,16 @@ async fn create_segment_pipeline(
         .await
         .context("screen capture init")?;
 
+        let (capture_source, system_audio) = screen_config.to_sources().await?;
+        #[cfg(target_os = "linux")]
+        let screen_info = capture_source.video_info();
+        #[cfg(not(target_os = "linux"))]
         let screen_info = screen_config.info();
         let output_size = calculate_gpu_compatible_size(
             screen_info.width,
             screen_info.height,
             H264_MAX_DIMENSION,
         );
-
-        let (capture_source, system_audio) = screen_config.to_sources().await?;
         #[cfg(target_os = "linux")]
         {
             start_time = Timestamps::now();

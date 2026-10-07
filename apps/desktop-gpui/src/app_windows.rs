@@ -2794,11 +2794,13 @@ fn clean_capture_supported(
     camera_requested: bool,
     wayland: bool,
 ) -> bool {
+    if wayland {
+        return false;
+    }
     matches!(
         target,
         ScreenCaptureTarget::Display { .. } | ScreenCaptureTarget::Area { .. }
-    ) || (!wayland
-        && mode == RecordingMode::Instant
+    ) || (mode == RecordingMode::Instant
         && camera_requested
         && matches!(target, ScreenCaptureTarget::Window { .. }))
 }

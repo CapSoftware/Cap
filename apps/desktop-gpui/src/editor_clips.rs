@@ -1577,6 +1577,7 @@ impl EditorWindow {
             self.import_mp4(source, window, cx);
             return;
         }
+        let source = resolve_cap_project_path(&source).unwrap_or(source);
         let Some(editor) = window.window_handle().downcast::<Self>() else {
             return;
         };
@@ -2034,7 +2035,10 @@ async fn pick_existing_recording_path(_cx: &mut gpui::AsyncWindowContext) -> Opt
     #[cfg(target_os = "linux")]
     {
         crate::platform::open_file_panel_async(
-            &[("Cap Recording", &["cap"])],
+            &[
+                ("Cap Recording", &["cap", "json"]),
+                ("All Files", &["*"]),
+            ],
             Some(crate::recording::recordings_dir()),
             _cx,
         )
@@ -2044,7 +2048,7 @@ async fn pick_existing_recording_path(_cx: &mut gpui::AsyncWindowContext) -> Opt
     {
         rfd::FileDialog::new()
             .set_directory(crate::recording::recordings_dir())
-            .add_filter("Cap Recording", &["cap"])
+            .add_filter("Cap Recording", &["cap", "json"])
             .pick_file()
     }
 }
@@ -2323,6 +2327,20 @@ fn has_allowed_extension(path: &str, extensions: &[&str]) -> bool {
 /// `is_cap_project_path` (`import.rs:160-162`).
 fn is_cap_project_path(path: &Path) -> bool {
     path.is_dir() && path.join("recording-meta.json").is_file()
+}
+
+/// On Linux, portal file pickers traverse into .cap directory bundles
+/// instead of selecting them. This resolves the project root from any selected inner file.
+pub(crate) fn resolve_cap_project_path(path: &Path) -> Option<PathBuf> {
+    if is_cap_project_path(path) {
+        return Some(path.to_path_buf());
+    }
+    for ancestor in path.ancestors() {
+        if is_cap_project_path(ancestor) {
+            return Some(ancestor.to_path_buf());
+        }
+    }
+    None
 }
 
 /// `same_project_path` (`import.rs:267-271`).
@@ -3257,12 +3275,12 @@ pub(crate) fn append_cap_project_to_editor(
     target_project_path: &Path,
     source_path: &Path,
 ) -> Result<usize, String> {
-    if same_project_path(target_project_path, source_path) {
+    let source_path = resolve_cap_project_path(source_path)
+        .ok_or_else(|| "Select a Cap project folder".to_string())?;
+    if same_project_path(target_project_path, &source_path) {
         return Err("Cannot import a recording into itself".to_string());
     }
-    if !is_cap_project_path(source_path) {
-        return Err("Select a Cap project folder".to_string());
-    }
+    let source_path = source_path.as_path();
 
     let source_meta = RecordingMeta::load_for_project(source_path)
         .map_err(|e| format!("Failed to load source project metadata: {e}"))?;

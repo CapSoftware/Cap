@@ -385,8 +385,8 @@ async fn run_portal_stop(
         portal.get_property::<u32>("version"),
     )
     .await??;
-    *fallback_safe = false;
     let session = tokio::time::timeout(Duration::from_secs(5), portal.create_session()).await??;
+    *fallback_safe = false;
     let outcome = async {
         let session_path = serde_json::to_value(&session)?.as_str().ok_or_else(|| anyhow::anyhow!("Invalid shortcut session identity"))?.to_owned();
         let shortcut_id = format!("cap-recording-stop-{generation}");

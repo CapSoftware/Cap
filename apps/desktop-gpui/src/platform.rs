@@ -286,11 +286,16 @@ async fn linux_open_file_panel(
     cx: &mut gpui::AsyncApp,
 ) -> LinuxFileDialogResult {
     let filters = portal_filters(filters);
+
     run_linux_file_dialog(cx, owner, parent, move |identifier| async move {
         let request = ashpd::desktop::file_chooser::OpenFileRequest::default()
             .identifier(identifier)
+            .title("Select Cap Recording")
+            .accept_label("Select")
             .multiple(false)
-            .filters(filters)
+            .filters(filters);
+
+        let request = request
             .current_folder::<&std::path::PathBuf>(directory.as_ref())
             .map_err(|error| LinuxFileDialogError::BeforeDispatch(error.to_string()))?
             .send()
