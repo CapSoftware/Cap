@@ -3759,6 +3759,13 @@ async fn cancel_discarded_recording(
     app: &AppHandle,
     recording: InProgressRecording,
 ) -> Option<String> {
+    cancel_discarded_recording_with_ack(app, recording).await.0
+}
+
+async fn cancel_discarded_recording_with_ack(
+    app: &AppHandle,
+    recording: InProgressRecording,
+) -> (Option<String>, bool) {
     match recording {
         InProgressRecording::Instant {
             handle,
@@ -3767,32 +3774,41 @@ async fn cancel_discarded_recording(
             ..
         } => {
             let video_id = video_upload_info.id;
+            let shutdown_acknowledged;
             #[cfg(target_os = "linux")]
             {
                 if let Some(attempt) = linux_instant::current(app) {
                     attempt.cancel();
                 }
-                if let Err(error) = handle.cancel().await {
-                    warn!(%error, "Instant cancellation failed");
-                }
+                shutdown_acknowledged = match handle.cancel().await {
+                    Ok(()) => true,
+                    Err(error) => {
+                        warn!(%error, "Instant cancellation failed");
+                        false
+                    }
+                };
                 if handle.lifecycle().wait_for_quiescence().await
                     != instant_recording::InstantQuiescence::Joined
                 {
-                    return None;
+                    return (None, false);
                 }
                 if let Some(attempt) = linux_instant::current(app)
                     && !attempt.upload_cleanup().await
                 {
-                    return None;
+                    return (None, shutdown_acknowledged);
                 }
                 let _ = await_instant_upload(segment_upload).await;
             }
             #[cfg(not(target_os = "linux"))]
             {
                 segment_upload.session.mark_cancelled().ok();
-                if let Err(err) = handle.cancel().await {
-                    warn!("Failed to cancel instant recording while discarding: {err:#}");
-                }
+                shutdown_acknowledged = match handle.cancel().await {
+                    Ok(()) => true,
+                    Err(err) => {
+                        warn!("Failed to cancel instant recording while discarding: {err:#}");
+                        false
+                    }
+                };
                 match segment_upload.handle.await {
                     Ok(Ok(())) => {}
                     Ok(Err(err)) => warn!("Instant upload ended while discarding recording: {err}"),
@@ -3803,14 +3819,17 @@ async fn cancel_discarded_recording(
                 }
             }
             crate::upload::emit_upload_complete(app, &video_id);
-            Some(video_id)
+            (Some(video_id), shutdown_acknowledged)
         }
         InProgressRecording::Studio { handle, .. } => {
-            if let Err(err) = handle.cancel().await {
-                warn!("Failed to cancel studio recording while discarding: {err:#}");
-            }
-
-            None
+            let acknowledged = match handle.cancel().await {
+                Ok(()) => true,
+                Err(err) => {
+                    warn!("Failed to cancel studio recording while discarding: {err:#}");
+                    false
+                }
+            };
+            (None, acknowledged)
         }
     }
 }
@@ -3847,13 +3866,15 @@ async fn delete_remote_instant_video(app: &AppHandle, video_id: &str) -> Result<
     ))
 }
 
-async fn discard_recording(app: &AppHandle, recording: InProgressRecording) -> Result<(), String> {
-    let recording_dir = recording.recording_dir().clone();
-    let video_id = cancel_discarded_recording(app, recording).await;
+async fn finish_discarded_recording(
+    app: &AppHandle,
+    recording_dir: &Path,
+    video_id: Option<String>,
+) -> Result<(), String> {
     if let Some(video_id) = video_id {
         delete_remote_instant_video(app, &video_id).await?;
     }
-    remove_recording_dir(&recording_dir).await
+    remove_recording_dir(recording_dir).await
 }
 
 #[cfg(target_os = "linux")]
@@ -5025,16 +5046,21 @@ pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Res
     }
     let mut state = state.write().await;
     let recording_pending = matches!(&state.recording_state, RecordingState::Pending { .. });
-    let current_recording = if matches!(
+    let terminal_pause = matches!(
         state.current_recording(),
         Some(InProgressRecording::Instant { .. })
-    ) {
+    )
+    .then(|| crate::upload_health::pause_probes_for_terminal(&app));
+    let current_recording = if terminal_pause.is_some() {
         // Keep capture exclusions active until the Instant actor has stopped.
         state.take_current_recording()
     } else {
         state.clear_current_recording()
     };
     let Some(current_recording) = current_recording else {
+        if let Some(pause) = terminal_pause {
+            pause.cancel_before_handoff();
+        }
         if recording_pending {
             debug!("Stop recording requested before recording actor was ready");
             return Err("Recording is still starting".to_string());
@@ -5044,7 +5070,19 @@ pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Res
     };
 
     let recording_dir = current_recording.recording_dir().clone();
-    let recording_outcome = match current_recording.stop().await {
+    let stopped = if let Some(pause) = terminal_pause {
+        pause
+            .spawn(async move {
+                let result = current_recording.stop().await;
+                let acknowledged = result.is_ok();
+                (result, acknowledged)
+            })
+            .await
+            .unwrap_or_else(|error| Err((anyhow!("Recording stop task failed: {error}"), None)))
+    } else {
+        current_recording.stop().await
+    };
+    let recording_outcome = match stopped {
         Ok(completed) => Ok(completed),
         Err((e, ctx)) => {
             error!("Recording stop failed: {e:#}");
@@ -5163,31 +5201,46 @@ pub async fn restart_recording(
         crate::clean_capture::control(&app, false).await?;
     }
 
-    let (recording, clean_generation) = {
+    let (cancellation, clean_generation) = {
         let mut state = state.write().await;
         let recording = state
             .current_recording()
             .ok_or("No recording in progress")?;
         let generation = crate::clean_capture::begin_restart(&app, recording.recording_dir())?;
-        (state.clear_current_recording().unwrap(), generation)
+        let pause = crate::upload_health::pause_probes_for_terminal(&app);
+        let Some(recording) = state.clear_current_recording() else {
+            pause.cancel_before_handoff();
+            return Err("Recording cleanup is still pending".to_string());
+        };
+        let app = app.clone();
+        let cancellation = pause.spawn(async move {
+            let inputs = recording.inputs().clone();
+            let recording_dir = recording.recording_dir().clone();
+            let upload_session = match &recording {
+                InProgressRecording::Instant { segment_upload, .. } => {
+                    #[cfg(not(target_os = "linux"))]
+                    let session = segment_upload.session.clone();
+                    #[cfg(target_os = "linux")]
+                    let session = segment_upload.lock().await.session.clone();
+                    Some(session)
+                }
+                _ => None,
+            };
+            let (video_id, acknowledged) =
+                cancel_discarded_recording_with_ack(&app, recording).await;
+            (
+                (inputs, recording_dir, upload_session, video_id),
+                acknowledged,
+            )
+        });
+        (cancellation, generation)
     };
 
     let _ = CurrentRecordingChanged.emit(&app);
 
-    let inputs = recording.inputs().clone();
-    let recording_dir = recording.recording_dir().clone();
-
-    let upload_session = match &recording {
-        InProgressRecording::Instant { segment_upload, .. } => {
-            #[cfg(not(target_os = "linux"))]
-            let session = segment_upload.session.clone();
-            #[cfg(target_os = "linux")]
-            let session = segment_upload.lock().await.session.clone();
-            Some(session)
-        }
-        _ => None,
-    };
-    let video_id = cancel_discarded_recording(&app, recording).await;
+    let (inputs, recording_dir, upload_session, video_id) = cancellation
+        .await
+        .map_err(|error| format!("Recording cancellation task failed: {error}"))?;
     if let (Some(video_id), Some(session)) = (video_id, upload_session) {
         let cleanup_app = app.clone();
         let cleanup_directory = recording_dir.clone();
@@ -5356,12 +5409,28 @@ pub async fn delete_recording(app: AppHandle, state: MutableState<'_, App>) -> R
     ) {
         return Err("Recording is changing state. Use Ctrl+Shift+F9 to stop.".into());
     }
-    let recording_data = {
+    let cancellation_data = {
         let mut app_state = state.write().await;
-        app_state.clear_current_recording()
+        if app_state.current_recording().is_some() {
+            let pause = crate::upload_health::pause_probes_for_terminal(&app);
+            if let Some(recording) = app_state.clear_current_recording() {
+                let recording_dir = recording.recording_dir().clone();
+                let clean_generation = crate::clean_capture::owner(&app, &recording_dir);
+                let app = app.clone();
+                let cancellation = pause.spawn(async move {
+                    cancel_discarded_recording_with_ack(&app, recording).await
+                });
+                Some((cancellation, recording_dir, clean_generation))
+            } else {
+                pause.cancel_before_handoff();
+                None
+            }
+        } else {
+            None
+        }
     };
 
-    if let Some(recording) = recording_data {
+    if let Some((cancellation, recording_dir, clean_generation)) = cancellation_data {
         CurrentRecordingChanged.emit(&app).ok();
         RecordingStopped {}.emit(&app).ok();
 
@@ -5369,7 +5438,6 @@ pub async fn delete_recording(app: AppHandle, state: MutableState<'_, App>) -> R
             let _ = window.hide();
         }
 
-        let clean_generation = crate::clean_capture::owner(&app, recording.recording_dir());
         if let Some(generation) = clean_generation {
             crate::clean_capture::set_phase(
                 &app,
@@ -5377,7 +5445,10 @@ pub async fn delete_recording(app: AppHandle, state: MutableState<'_, App>) -> R
                 crate::clean_capture::Phase::Stopping,
             );
         }
-        let delete_result = discard_recording(&app, recording).await;
+        let delete_result = match cancellation.await {
+            Ok(video_id) => finish_discarded_recording(&app, &recording_dir, video_id).await,
+            Err(error) => Err(format!("Recording cancellation task failed: {error}")),
+        };
         if let Some(generation) = clean_generation {
             crate::clean_capture::release(&app, generation, false);
         }

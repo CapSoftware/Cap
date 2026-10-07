@@ -17,7 +17,7 @@ mod lifecycle;
 mod response;
 mod timing;
 
-use lifecycle::ProbeControl;
+use lifecycle::{PauseState, ProbeControl};
 use response::read_probe_response;
 use timing::{
     connection_will_close, measure_warm_probe_rtt, upload_elapsed_after_rtt, upload_mbps_for_bytes,
@@ -289,7 +289,43 @@ impl UploadHealthCache {
     async fn status(&self, app: &AppHandle, state: &App) -> UploadHealthStatus {
         let mut cached = self.state.lock().await;
         cached.synchronize(ProbeIdentity::current(app, state));
-        cached.snapshot.status()
+        self.current_status(&cached)
+    }
+
+    fn current_status(&self, cached: &UploadHealthCacheState) -> UploadHealthStatus {
+        let Some(pause) = self.probe.pause_state() else {
+            return cached.snapshot.status();
+        };
+        UploadHealthStatus {
+            kind: UploadHealthKind::Unavailable,
+            upload_mbps: None,
+            max_instant_resolution: None,
+            checked_at_unix_ms: None,
+            stale: true,
+            message: match pause {
+                PauseState::Stopping => {
+                    "Upload checks are paused while the previous recording is stopping."
+                }
+                PauseState::Unconfirmed => {
+                    "Upload checks are paused because recording shutdown could not be confirmed. Restart Cap before checking again."
+                }
+            }
+            .to_string(),
+        }
+    }
+
+    fn instant_resolution_for_video(
+        &self,
+        cached: &UploadHealthCacheState,
+        configured_resolution: u32,
+        created_video: &CreatedVideo,
+        creation: &VideoCreationContext,
+    ) -> u32 {
+        if self.probe.pause_state().is_some() {
+            configured_resolution
+        } else {
+            cached.instant_resolution_for_video(configured_resolution, created_video, creation)
+        }
     }
 }
 
@@ -506,14 +542,14 @@ pub async fn refresh_upload_health_status(
     let mut cached = cache.state.lock().await;
     cached.synchronize(ProbeIdentity::current(&app, &state));
     if state.is_recording_active_or_pending() {
-        return Ok(cached.snapshot.status());
+        return Ok(cache.current_status(&cached));
     }
 
     let Some(ticket) = cached.ticket() else {
-        return Ok(cached.snapshot.status());
+        return Ok(cache.current_status(&cached));
     };
     let Some(mut probe) = cache.probe.try_start() else {
-        return Ok(cached.snapshot.status());
+        return Ok(cache.current_status(&cached));
     };
     let request_context = ticket
         .identity
@@ -529,7 +565,11 @@ pub async fn refresh_upload_health_status(
     if let Some(snapshot) = snapshot {
         cached.publish(&ticket, snapshot);
     }
-    Ok(cached.snapshot.status())
+    Ok(cache.current_status(&cached))
+}
+
+pub(crate) fn pause_probes_for_terminal(app: &AppHandle) -> lifecycle::ProbePause {
+    app.state::<UploadHealthCache>().probe.pause()
 }
 
 pub fn cancel_probe_for_recording(app: &AppHandle) {
@@ -571,7 +611,7 @@ pub(crate) async fn instant_resolution_for_video(
     let state = app_state.read().await;
     let mut cached = cache.state.lock().await;
     cached.synchronize(ProbeIdentity::current(app, &state));
-    cached.instant_resolution_for_video(configured_resolution, created_video, creation)
+    cache.instant_resolution_for_video(&cached, configured_resolution, created_video, creation)
 }
 
 #[cfg(test)]
@@ -792,6 +832,77 @@ mod tests {
         cache.synchronize(Some(identity("https://cap.test", "alice")));
         cache.publish(&cache.ticket().unwrap(), snapshot);
         cache
+    }
+
+    #[tokio::test]
+    async fn terminal_pause_hides_cached_status_and_cap_until_shutdown_is_acknowledged() {
+        for speed in [2.0, 18.5] {
+            let cache = UploadHealthCache::default();
+            let mut cached = cache_with_snapshot(measured_snapshot(speed));
+            let creation = cached.prepare_video_creation(cached.identity.clone());
+            let video = created_video(serde_json::json!({
+                "id": "managed",
+                "usesDefaultStorage": true,
+            }));
+            let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
+            let task = cache.probe.pause().spawn(async move {
+                ack_rx.await.unwrap();
+                ((), true)
+            });
+
+            let status = cache.current_status(&cached);
+            assert_eq!(status.kind, UploadHealthKind::Unavailable);
+            assert!(status.message.contains("recording is stopping"));
+            assert_eq!(status.upload_mbps, None);
+            assert_eq!(status.max_instant_resolution, None);
+            assert_eq!(status.checked_at_unix_ms, None);
+            assert!(status.stale);
+            assert_eq!(
+                cache.instant_resolution_for_video(&cached, 3840, &video, &creation),
+                3840
+            );
+
+            ack_tx.send(()).unwrap();
+            task.await.unwrap();
+            assert_eq!(cache.current_status(&cached).upload_mbps, Some(speed));
+            assert_eq!(
+                cache.instant_resolution_for_video(&cached, 3840, &video, &creation),
+                max_resolution_for_upload_mbps(speed)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn unconfirmed_shutdown_stays_unavailable_and_uncapped_after_context_changes() {
+        let cache = UploadHealthCache::default();
+        cache
+            .probe
+            .pause()
+            .spawn(async { ((), false) })
+            .await
+            .unwrap();
+        let mut cached = cache_with_snapshot(measured_snapshot(2.0));
+        cached.synchronize(Some(identity("https://other.cap.test", "bob")));
+        cached.publish(&cached.ticket().unwrap(), measured_snapshot(2.0));
+        let creation = cached.prepare_video_creation(cached.identity.clone());
+        let video = created_video(serde_json::json!({
+            "id": "managed",
+            "usesDefaultStorage": true,
+        }));
+
+        let status = cache.current_status(&cached);
+        assert_eq!(status.kind, UploadHealthKind::Unavailable);
+        assert!(status.message.contains("shutdown could not be confirmed"));
+        assert!(status.message.contains("Restart Cap"));
+        assert_eq!(status.upload_mbps, None);
+        assert_eq!(status.max_instant_resolution, None);
+        assert_eq!(status.checked_at_unix_ms, None);
+        assert!(status.stale);
+        assert_eq!(
+            cache.instant_resolution_for_video(&cached, 1920, &video, &creation),
+            1920
+        );
+        assert!(cache.probe.try_start().is_none());
     }
 
     #[test]
