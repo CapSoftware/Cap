@@ -168,7 +168,7 @@ const SourcePicker = ({ onSource }: { onSource: (source: Source) => void }) => {
 				onDrop={onDrop}
 				className={clsx(
 					"li-dropzone relative flex flex-col items-center gap-4 rounded-2xl px-6 py-10 text-center transition-colors duration-200 sm:flex-row sm:gap-8 sm:px-10 sm:text-left",
-					isOver ? "is-over bg-blue-2" : "bg-gray-1",
+					isOver ? "is-over li-accent-surface" : "bg-gray-1",
 				)}
 			>
 				<Doodle kind="drop" className="w-[120px] shrink-0" />
@@ -223,7 +223,7 @@ const SourcePicker = ({ onSource }: { onSource: (source: Source) => void }) => {
 						placeholder={
 							"https://www.loom.com/share/…\nhttps://www.loom.com/share/…"
 						}
-						className="w-full resize-y rounded-lg border border-gray-4 bg-gray-2 px-3 py-2 font-mono text-[13px] text-gray-12 outline-none transition-colors placeholder:text-gray-8 focus:border-blue-8"
+						className="w-full resize-y rounded-lg border border-gray-4 bg-gray-2 px-3 py-2 font-mono text-[13px] text-gray-12 outline-none transition-colors placeholder:text-gray-8 focus:border-blue-9"
 					/>
 					<div className="flex items-center justify-between gap-3">
 						<p className="text-xs text-gray-10">
@@ -551,7 +551,7 @@ const ReviewCard = ({
 							</p>
 							<p className="mt-1">
 								Split it into {Math.ceil(ready / LOOM_IMPORT_MAX_ROWS)} CSVs and
-								import them one after another. They can run at the same time.
+								start an import for each. They can run at the same time.
 							</p>
 						</div>
 					</div>

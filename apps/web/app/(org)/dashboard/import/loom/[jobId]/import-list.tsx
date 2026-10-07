@@ -93,7 +93,7 @@ const STATUS_TONE: Record<LoomImportDisplayStatus, string> = {
 	checking: "text-gray-10",
 	ready: "text-gray-11",
 	queued: "text-gray-10",
-	importing: "text-blue-11",
+	importing: "text-[var(--li-accent)]",
 	imported: "text-[#218358] dark:text-[#3dd68c]",
 	failed: "text-red-11",
 	skipped: "text-gray-10",
@@ -248,7 +248,7 @@ export const ImportRow = memo(function ImportRow({
 				>
 					{item.title ?? shortLoomUrl(item.url)}
 				</p>
-				<p className="truncate text-xs text-gray-10">
+				<p className="truncate text-xs text-gray-10" suppressHydrationWarning>
 					<span className="tabular-nums">Row {item.row}</span>
 					{meta.length > 0 && ` · ${meta.join(" · ")}`}
 				</p>

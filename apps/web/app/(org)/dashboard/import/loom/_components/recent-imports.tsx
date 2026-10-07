@@ -51,7 +51,7 @@ export const RecentImports = ({ jobs }: { jobs: LoomImportJobSummary[] }) => {
 									<p className="truncate text-sm text-gray-12">
 										{job.fileName}
 									</p>
-									<p className="text-xs text-gray-10">
+									<p className="text-xs text-gray-10" suppressHydrationWarning>
 										{numberFormat.format(job.totalCount)}{" "}
 										{job.totalCount === 1 ? "video" : "videos"} ·{" "}
 										{formatDistanceToNowStrict(new Date(job.createdAt), {

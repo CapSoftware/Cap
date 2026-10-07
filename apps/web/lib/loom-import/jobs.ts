@@ -44,7 +44,7 @@ const IN_CHUNK = 500;
 
 export class LoomImportError extends Error {}
 
-export const LOOM_IMPORT_LIMIT_MESSAGE = `Each CSV can hold up to ${LOOM_IMPORT_MAX_ROWS.toLocaleString("en-US")} videos. Split your list into more than one CSV and import them one after another.`;
+export const LOOM_IMPORT_LIMIT_MESSAGE = `Each CSV can hold up to ${LOOM_IMPORT_MAX_ROWS.toLocaleString("en-US")} videos. Split your list into a few CSVs and start an import for each.`;
 
 type ItemInsert = typeof loomImportJobItems.$inferInsert;
 

@@ -164,7 +164,7 @@ const PipelineStrip = ({
 						className={clsx(
 							"relative flex flex-col gap-0.5 rounded-xl border px-4 py-3 transition-colors",
 							stage.key === "importing" && value > 0
-								? "border-blue-6 bg-blue-2"
+								? "li-accent-surface"
 								: "border-gray-3 bg-gray-1",
 						)}
 					>
@@ -345,6 +345,35 @@ export const LoomImportJobView = ({
 		counts.failed > 0 &&
 		(job.status === "importing" || job.status === "completed");
 
+	const retryButton = canRetry && (
+		<Button
+			type="button"
+			variant="gray"
+			size="sm"
+			spinner={busy === "retry"}
+			disabled={busy !== null}
+			onClick={runRetry}
+		>
+			Retry {numberFormat.format(counts.failed)} failed
+		</Button>
+	);
+	const stopButton = canCancel && (
+		<Button
+			type="button"
+			variant="gray"
+			size="sm"
+			disabled={busy !== null}
+			onClick={() => setCancelOpen(true)}
+		>
+			Stop import
+		</Button>
+	);
+	const reportButton = (label: string) => (
+		<Button type="button" variant="gray" size="sm" onClick={downloadReport}>
+			{label}
+		</Button>
+	);
+
 	return (
 		<div className="li-scope flex w-full flex-col">
 			<div className="mb-8">
@@ -364,7 +393,7 @@ export const LoomImportJobView = ({
 							<h1 className="truncate text-2xl font-medium text-gray-12">
 								{job.fileName}
 							</h1>
-							<p className="mt-1 text-sm text-gray-10">
+							<p className="mt-1 text-sm text-gray-10" suppressHydrationWarning>
 								{numberFormat.format(job.totalCount)}{" "}
 								{job.totalCount === 1 ? "video" : "videos"} · added{" "}
 								{formatDistanceToNowStrict(new Date(job.createdAt), {
@@ -397,6 +426,9 @@ export const LoomImportJobView = ({
 								{numberFormat.format(counts.total)} checked
 							</span>
 						</StatLine>
+						{stopButton && (
+							<div className="flex flex-wrap gap-2">{stopButton}</div>
+						)}
 					</Hero>
 				)}
 
@@ -450,6 +482,11 @@ export const LoomImportJobView = ({
 								</StatLine>
 							)}
 						</div>
+						<div className="mt-1 flex flex-wrap gap-2">
+							{settled > 0 && reportButton("Download results")}
+							{retryButton}
+							{stopButton}
+						</div>
 					</Hero>
 				)}
 
@@ -472,14 +509,8 @@ export const LoomImportJobView = ({
 							<Button href="/dashboard/caps" variant="dark" size="sm">
 								Open my Caps
 							</Button>
-							<Button
-								type="button"
-								variant="gray"
-								size="sm"
-								onClick={downloadReport}
-							>
-								Download Loom to Cap links
-							</Button>
+							{reportButton("Download Loom to Cap links")}
+							{retryButton}
 						</div>
 					</Hero>
 				)}
@@ -491,14 +522,7 @@ export const LoomImportJobView = ({
 						body={`${numberFormat.format(counts.imported)} ${counts.imported === 1 ? "video" : "videos"} made it into Cap before you stopped. The rest were left in Loom.`}
 					>
 						<div className="flex flex-wrap gap-2">
-							<Button
-								type="button"
-								variant="gray"
-								size="sm"
-								onClick={downloadReport}
-							>
-								Download Loom to Cap links
-							</Button>
+							{reportButton("Download Loom to Cap links")}
 						</div>
 					</Hero>
 				)}
@@ -553,51 +577,14 @@ export const LoomImportJobView = ({
 								);
 							})}
 						</div>
-						<div className="flex flex-wrap items-center gap-2">
-							<input
-								type="search"
-								value={query}
-								onChange={(event) => setQuery(event.target.value)}
-								placeholder="Search titles, owners, links"
-								aria-label="Search videos"
-								className="h-8 w-full rounded-full border border-gray-4 bg-gray-2 px-3 text-sm text-gray-12 outline-none transition-colors placeholder:text-gray-9 focus:border-blue-8 sm:w-56"
-							/>
-							{canRetry && (
-								<Button
-									type="button"
-									variant="gray"
-									size="xs"
-									spinner={busy === "retry"}
-									disabled={busy !== null}
-									onClick={runRetry}
-								>
-									Retry {numberFormat.format(counts.failed)} failed
-								</Button>
-							)}
-							{settled > 0 &&
-								job.status !== "completed" &&
-								job.status !== "cancelled" && (
-									<Button
-										type="button"
-										variant="gray"
-										size="xs"
-										onClick={downloadReport}
-									>
-										Download results
-									</Button>
-								)}
-							{canCancel && (
-								<Button
-									type="button"
-									variant="gray"
-									size="xs"
-									disabled={busy !== null}
-									onClick={() => setCancelOpen(true)}
-								>
-									Stop import
-								</Button>
-							)}
-						</div>
+						<input
+							type="search"
+							value={query}
+							onChange={(event) => setQuery(event.target.value)}
+							placeholder="Search titles, owners, links"
+							aria-label="Search videos"
+							className="h-8 w-full rounded-full border border-gray-4 bg-gray-2 px-3 text-sm text-gray-12 outline-none transition-colors placeholder:text-gray-9 focus:border-blue-9 lg:w-60"
+						/>
 					</div>
 					<VirtualImportList
 						items={visible}

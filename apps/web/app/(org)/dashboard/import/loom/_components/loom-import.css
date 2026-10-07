@@ -258,3 +258,8 @@
 		animation-duration: 0.01s;
 	}
 }
+
+.li-accent-surface {
+	background-color: var(--li-accent-soft);
+	border-color: color-mix(in srgb, var(--li-accent) 40%, transparent);
+}
