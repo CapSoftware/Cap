@@ -43,6 +43,11 @@ function finiteNumber(value: unknown) {
 	return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+function positiveNumber(value: unknown) {
+	const number = finiteNumber(value);
+	return number !== null && number > 0 ? number : null;
+}
+
 function toSttWord(raw: Record<string, unknown>): SttWord | null {
 	const text = typeof raw.word === "string" ? raw.word : "";
 	const start = finiteNumber(raw.start);
@@ -60,9 +65,26 @@ const PUNCTUATION_ONLY = /^[\p{P}\p{S}]+$/u;
 const UNSPACED_SCRIPT =
 	/^[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Thai}\p{Script=Lao}\p{Script=Khmer}\p{Script=Myanmar}]/u;
 
-// whisper.cpp reports BPE tokens as "words" (" timest" + "amps", " Hello" + ","),
-// marking word starts with a leading space. Unspaced scripts (CJK, Thai) only
-// fold punctuation.
+// Word starts from the segment text: a token starts a word when whitespace
+// precedes it there. Null when the tokens don't line up with the text.
+function wordStartsFromText(tokens: SttWord[], text: unknown) {
+	if (typeof text !== "string") return null;
+	let cursor = 0;
+	const starts: boolean[] = [];
+	for (const token of tokens) {
+		const core = token.text.trim();
+		const index = text.indexOf(core, cursor);
+		if (index === -1) return null;
+		const gap = text.slice(cursor, index);
+		if (gap.trim()) return null;
+		starts.push(cursor === 0 || gap.length > 0 || /^\s/.test(token.text));
+		cursor = index + core.length;
+	}
+	return starts;
+}
+
+// whisper.cpp reports BPE tokens as "words" (" timest" + "amps", " Hello" + ",").
+// Unspaced scripts (CJK, Thai) only fold punctuation.
 function mergeSegmentTokens(segment: Record<string, unknown>): SttWord[] {
 	if (!Array.isArray(segment.words)) return [];
 	const tokens = segment.words
@@ -70,15 +92,18 @@ function mergeSegmentTokens(segment: Record<string, unknown>): SttWord[] {
 		.map(toSttWord)
 		.filter((word): word is SttWord => word !== null);
 	const marksWordStarts = tokens.some((token) => /^\s/.test(token.text));
+	const startsFromText = wordStartsFromText(tokens, segment.text);
 	const merged: SttWord[] = [];
 
-	for (const token of tokens) {
+	for (const [index, token] of tokens.entries()) {
 		const previous = merged.at(-1);
+		const spaced = startsFromText?.[index] ?? /^\s/.test(token.text);
 		const continuesPrevious =
 			previous !== undefined &&
-			!/^\s/.test(token.text) &&
+			!spaced &&
 			(PUNCTUATION_ONLY.test(token.text) ||
-				(marksWordStarts && !UNSPACED_SCRIPT.test(token.text)));
+				((startsFromText !== null || marksWordStarts) &&
+					!UNSPACED_SCRIPT.test(token.text)));
 
 		if (previous && continuesPrevious) {
 			previous.text += token.text;
@@ -175,7 +200,7 @@ export function parseOpenAICompatibleTranscription(
 		language_code: detectLanguageCode(body),
 		speech_model_used: model,
 		audio_duration:
-			finiteNumber(body.duration) ??
+			positiveNumber(body.duration) ??
 			(words.length > 0
 				? Math.max(...words.map((word) => word.end)) / 1000
 				: null),

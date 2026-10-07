@@ -149,6 +149,32 @@ describe("parseOpenAICompatibleTranscription", () => {
 		expect(result.words?.map((word) => word.text)).toEqual(["Hello", "world"]);
 	});
 
+	it("splits words at the segment text's spaces when only some tokens mark them", () => {
+		const result = parseOpenAICompatibleTranscription(
+			{
+				text: " Hello world, again",
+				segments: [
+					{
+						text: " Hello world, again",
+						words: [
+							{ word: " Hello", start: 0, end: 0.4 },
+							{ word: "world", start: 0.5, end: 0.9 },
+							{ word: ",", start: 0.9, end: 1 },
+							{ word: "again", start: 1.1, end: 1.5 },
+						],
+					},
+				],
+			},
+			"turbo",
+		);
+
+		expect(result.words?.map((word) => word.text)).toEqual([
+			"Hello",
+			"world,",
+			"again",
+		]);
+	});
+
 	it("gives zero-length fillers a span so the edit transcript keeps them", () => {
 		const result = parseOpenAICompatibleTranscription(
 			whisperCppVerboseResponse,
@@ -171,6 +197,15 @@ describe("parseOpenAICompatibleTranscription", () => {
 		expect(
 			parseOpenAICompatibleTranscription(withoutDuration, "turbo")
 				.audio_duration,
+		).toBe(6.3);
+	});
+
+	it("treats a zero duration as missing", () => {
+		expect(
+			parseOpenAICompatibleTranscription(
+				{ ...whisperCppVerboseResponse, duration: 0 },
+				"turbo",
+			).audio_duration,
 		).toBe(6.3);
 	});
 
