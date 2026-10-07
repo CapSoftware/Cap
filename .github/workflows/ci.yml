@@ -122,7 +122,7 @@ jobs:
       - name: Test desktop upload health
         run: |
           bun run --cwd apps/desktop vitest run src/utils/create-upload-health.test.ts src/utils/upload-health.test.ts
-          bun run --cwd apps/web test __tests__/unit/desktop-upload-health-route.test.ts __tests__/unit/desktop-upload-health.test.ts
+          bun run --cwd apps/web test __tests__/unit/desktop-upload-health-route.test.ts __tests__/unit/desktop-upload-health.test.ts __tests__/unit/desktop-video-create.test.ts
 
   mobile:
     name: Mobile

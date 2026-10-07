@@ -46,8 +46,8 @@ export function describeUploadHealth(
 
 	if (status.kind === "unavailable") {
 		return {
-			label: "Upload check failed",
-			detail: "Instant capped",
+			label: "API check failed",
+			detail: "Quality may be limited",
 			tone: "danger",
 		};
 	}
@@ -60,14 +60,14 @@ export function describeUploadHealth(
 			: null;
 	if (status.kind === "slow") {
 		return {
-			label: "Upload slow",
-			detail: speed ? `${speed}, capped` : "Instant capped",
+			label: "API upload slow",
+			detail: speed ? `~${speed}` : "Not measured",
 			tone: "warning",
 		};
 	}
 
 	return {
-		label: "Upload estimate",
+		label: "API estimate",
 		detail: speed ? `~${speed}` : "Not measured",
 		tone: "good",
 	};

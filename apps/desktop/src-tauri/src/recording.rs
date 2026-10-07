@@ -2290,7 +2290,7 @@ async fn start_recording_prepared(
                 notify_recording_start_failed(&app, &error);
                 return Err(error);
             };
-            let mut instant_mode_max_resolution = if auth.is_upgraded() {
+            let configured_resolution = if auth.is_upgraded() {
                 general_settings
                     .map_or(cap_recording::PRO_INSTANT_MODE_MAX_RESOLUTION, |settings| {
                         settings.instant_mode_max_resolution
@@ -2299,28 +2299,13 @@ async fn start_recording_prepared(
                 cap_recording::FREE_INSTANT_MODE_MAX_RESOLUTION
             };
 
-            if let Some(upload_health_cap) =
-                crate::upload_health::cached_instant_resolution_cap(&app).await
-            {
-                let capped_resolution = instant_mode_max_resolution.min(upload_health_cap);
-                if capped_resolution < instant_mode_max_resolution {
-                    info!(
-                        configured_resolution = instant_mode_max_resolution,
-                        upload_health_cap = upload_health_cap,
-                        capped_resolution = capped_resolution,
-                        "Capping instant recording resolution based on cached upload health"
-                    );
-                }
-                instant_mode_max_resolution = capped_resolution;
-            }
-
             let upload_mode = if matches!(inputs.capture_target, ScreenCaptureTarget::CameraOnly) {
                 "desktopMP4"
             } else {
                 "desktopSegments"
             };
 
-            let s3_config = match crate::upload::create_or_get_video_with_mode(
+            let created_video = match crate::upload::create_or_get_video_with_mode(
                 &app,
                 false,
                 None,
@@ -2358,6 +2343,20 @@ async fn start_recording_prepared(
                 }
             };
 
+            let instant_mode_max_resolution = crate::upload_health::instant_resolution_for_video(
+                &app,
+                configured_resolution,
+                &created_video,
+            )
+            .await;
+            if instant_mode_max_resolution < configured_resolution {
+                info!(
+                    configured_resolution,
+                    capped_resolution = instant_mode_max_resolution,
+                    "Capping default-storage Instant recording resolution based on cached API upload health"
+                );
+            }
+            let s3_config = created_video.upload_meta;
             let link = app.make_app_url(format!("/s/{}", s3_config.id)).await;
             info!("Pre-created shareable link: {}", link);
 

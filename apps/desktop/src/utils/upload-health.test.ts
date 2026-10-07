@@ -41,12 +41,12 @@ describe("upload health presentation", () => {
 		});
 	});
 
-	it("warns when slow upload caps Instant quality", () => {
+	it("reports a slow API estimate without claiming the recording is capped", () => {
 		expect(
 			describeUploadHealth(status({ kind: "slow", uploadMbps: 3.8 })),
 		).toEqual({
-			label: "Upload slow",
-			detail: "3.8 Mbps, capped",
+			label: "API upload slow",
+			detail: "~3.8 Mbps",
 			tone: "warning",
 		});
 	});
@@ -55,16 +55,16 @@ describe("upload health presentation", () => {
 		expect(
 			describeUploadHealth(status({ kind: "slow", uploadMbps: 0 })),
 		).toEqual({
-			label: "Upload slow",
-			detail: "0.0 Mbps, capped",
+			label: "API upload slow",
+			detail: "~0.0 Mbps",
 			tone: "warning",
 		});
 	});
 
-	it("reports unavailable upload checks as capped", () => {
+	it("describes a failed API check as a possible quality limit", () => {
 		expect(describeUploadHealth(status({ kind: "unavailable" }))).toEqual({
-			label: "Upload check failed",
-			detail: "Instant capped",
+			label: "API check failed",
+			detail: "Quality may be limited",
 			tone: "danger",
 		});
 	});
@@ -73,7 +73,7 @@ describe("upload health presentation", () => {
 		expect(
 			describeUploadHealth(status({ kind: "healthy", uploadMbps: 18.2 })),
 		).toEqual({
-			label: "Upload estimate",
+			label: "API estimate",
 			detail: "~18 Mbps",
 			tone: "good",
 		});
@@ -93,6 +93,34 @@ describe("upload health presentation", () => {
 			expect(
 				describeUploadHealth(status({ kind: "healthy", uploadMbps })).detail,
 			).toBe("Not measured");
+		},
+	);
+
+	it.each(["slow", "unavailable"] as const)(
+		"does not infer an active destination cap from a %s probe recommendation",
+		(kind) => {
+			const presentation = describeUploadHealth(
+				status({ kind, uploadMbps: 2, maxInstantResolution: 1280 }),
+			);
+			expect(presentation.label).toContain("API");
+			expect(`${presentation.label}. ${presentation.detail}`).not.toMatch(
+				/capped|storage speed|storage throughput/i,
+			);
+		},
+	);
+
+	it.each([Number.NaN, Number.POSITIVE_INFINITY, -1])(
+		"does not turn an invalid slow estimate %s into a claimed quality cap",
+		(uploadMbps) => {
+			expect(
+				describeUploadHealth(
+					status({ kind: "slow", uploadMbps, maxInstantResolution: 1280 }),
+				),
+			).toEqual({
+				label: "API upload slow",
+				detail: "Not measured",
+				tone: "warning",
+			});
 		},
 	);
 });

@@ -9,6 +9,7 @@ use tracing::{debug, warn};
 use crate::{
     App, ArcLock, MutableState,
     auth::AuthStore,
+    upload::CreatedVideo,
     web_api::{AuthedApiError, ManagerExt, UploadRequestContext},
 };
 
@@ -27,6 +28,7 @@ const PROBE_SHA256: &str = "2a53c14ff7bd4380890b938b9d238455661b9aca84c169c8e172
 const HEALTH_FRESH_FOR: Duration = Duration::from_secs(10 * 60);
 const HEALTH_REQUEST_TIMEOUT: Duration = Duration::from_secs(8);
 const HEALTH_RTT_TIMEOUT: Duration = Duration::from_secs(2);
+const API_QUALITY_SCOPE: &str = "This API check may limit Instant quality only when the recording uses Cap's default storage. Custom S3 and Google Drive are not measured.";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -85,13 +87,13 @@ impl UploadHealthProbeResponse {
             (
                 UploadHealthKind::Unsupported,
                 None,
-                "This server does not support upload integrity checks. Update the server to enable them.",
+                "This server does not support upload integrity checks. Update the server to enable them.".to_string(),
             )
         } else {
             (
                 UploadHealthKind::Unavailable,
                 Some(cap_recording::FREE_INSTANT_MODE_MAX_RESOLUTION),
-                "Upload health check could not verify the probe; Instant quality will be capped.",
+                format!("Upload API check could not verify the probe. {API_QUALITY_SCOPE}"),
             )
         };
 
@@ -101,7 +103,7 @@ impl UploadHealthProbeResponse {
             max_instant_resolution,
             checked_at_unix_ms: Some(now_unix_ms()),
             recorded_at: Some(Instant::now()),
-            message: message.to_string(),
+            message,
         })
     }
 }
@@ -224,6 +226,18 @@ impl UploadHealthCacheState {
             UploadHealthKind::Unknown | UploadHealthKind::Unsupported => None,
         }
     }
+
+    fn instant_resolution_for_video(
+        &self,
+        configured_resolution: u32,
+        created_video: &CreatedVideo,
+    ) -> u32 {
+        if created_video.uses_default_storage != Some(true) {
+            return configured_resolution;
+        }
+        self.fresh_instant_resolution_cap()
+            .map_or(configured_resolution, |cap| configured_resolution.min(cap))
+    }
 }
 
 #[derive(Default)]
@@ -284,9 +298,7 @@ fn http_failure_snapshot(status: reqwest::StatusCode) -> UploadHealthSnapshot {
         (
             UploadHealthKind::Unavailable,
             Some(cap_recording::FREE_INSTANT_MODE_MAX_RESOLUTION),
-            format!(
-                "Upload health check failed with status {status}; Instant quality will be capped."
-            ),
+            format!("Upload API check failed with status {status}. {API_QUALITY_SCOPE}"),
         )
     };
 
@@ -364,8 +376,9 @@ async fn run_probe(app: &AppHandle) -> UploadHealthSnapshot {
                         ),
                         checked_at_unix_ms: Some(now_unix_ms()),
                         recorded_at: Some(Instant::now()),
-                        message: "Upload health check returned an invalid response; Instant quality will be capped."
-                            .to_string(),
+                        message: format!(
+                            "Upload API check returned an invalid response. {API_QUALITY_SCOPE}"
+                        ),
                     };
                 }
             };
@@ -400,7 +413,7 @@ async fn run_probe(app: &AppHandle) -> UploadHealthSnapshot {
                     )
                 } else {
                     format!(
-                        "Estimated API upload is {upload_mbps:.1} Mbps; Instant quality will be capped. The test video arrived intact. Screen capture, encoding and cloud storage were not tested."
+                        "Estimated API upload is {upload_mbps:.1} Mbps. The test video arrived intact. {API_QUALITY_SCOPE} Screen capture, encoding and cloud storage were not tested."
                     )
                 },
             }
@@ -426,8 +439,7 @@ async fn run_probe(app: &AppHandle) -> UploadHealthSnapshot {
                 max_instant_resolution: Some(cap_recording::FREE_INSTANT_MODE_MAX_RESOLUTION),
                 checked_at_unix_ms: Some(now_unix_ms()),
                 recorded_at: Some(Instant::now()),
-                message: "Upload health check could not reach Cap; Instant quality will be capped."
-                    .to_string(),
+                message: format!("Upload API check could not reach Cap. {API_QUALITY_SCOPE}"),
             }
         }
     }
@@ -493,13 +505,21 @@ pub async fn wait_for_probe_to_stop(app: &AppHandle) {
     }
 }
 
-pub async fn cached_instant_resolution_cap(app: &AppHandle) -> Option<u32> {
-    let cache = app.try_state::<UploadHealthCache>()?;
-    let app_state = app.try_state::<ArcLock<App>>()?;
+pub async fn instant_resolution_for_video(
+    app: &AppHandle,
+    configured_resolution: u32,
+    created_video: &CreatedVideo,
+) -> u32 {
+    let (Some(cache), Some(app_state)) = (
+        app.try_state::<UploadHealthCache>(),
+        app.try_state::<ArcLock<App>>(),
+    ) else {
+        return configured_resolution;
+    };
     let state = app_state.read().await;
     let mut cached = cache.state.lock().await;
     cached.synchronize(ProbeIdentity::current(app, &state));
-    cached.fresh_instant_resolution_cap()
+    cached.instant_resolution_for_video(configured_resolution, created_video)
 }
 
 #[cfg(test)]
@@ -708,6 +728,174 @@ mod tests {
             checked_at_unix_ms: Some(now_unix_ms()),
             recorded_at: Some(Instant::now()),
             message: "measured".to_string(),
+        }
+    }
+
+    fn created_video(response: serde_json::Value) -> CreatedVideo {
+        serde_json::from_value(response).unwrap()
+    }
+
+    fn cache_with_snapshot(snapshot: UploadHealthSnapshot) -> UploadHealthCacheState {
+        let mut cache = UploadHealthCacheState::default();
+        cache.synchronize(Some(identity("https://cap.test", "alice")));
+        cache.publish(&cache.ticket().unwrap(), snapshot);
+        cache
+    }
+
+    #[test]
+    fn video_creation_capability_requires_an_explicit_boolean() {
+        for (response, expected) in [
+            (
+                serde_json::json!({"id": "managed", "usesDefaultStorage": true}),
+                Some(true),
+            ),
+            (
+                serde_json::json!({"id": "custom", "usesDefaultStorage": false}),
+                Some(false),
+            ),
+            (serde_json::json!({"id": "legacy"}), None),
+            (
+                serde_json::json!({"id": "unknown", "usesDefaultStorage": null}),
+                None,
+            ),
+            (
+                serde_json::json!({"id": "no-inference", "provider": "s3", "bucketId": null, "orgId": "default"}),
+                None,
+            ),
+        ] {
+            let video = created_video(response.clone());
+            assert_eq!(video.upload_meta.id, response["id"].as_str().unwrap());
+            assert_eq!(video.uses_default_storage, expected);
+        }
+
+        for capability in [
+            serde_json::json!("true"),
+            serde_json::json!(1),
+            serde_json::json!([]),
+            serde_json::json!({}),
+        ] {
+            assert!(
+                serde_json::from_value::<CreatedVideo>(serde_json::json!({
+                    "id": "malformed",
+                    "usesDefaultStorage": capability,
+                }))
+                .is_err()
+            );
+        }
+        assert!(
+            serde_json::from_value::<CreatedVideo>(serde_json::json!({
+                "usesDefaultStorage": true,
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn default_storage_slow_or_failed_api_never_exceeds_user_or_plan_resolution() {
+        let video = created_video(serde_json::json!({
+            "id": "managed",
+            "usesDefaultStorage": true,
+        }));
+        for snapshot in [
+            measured_snapshot(2.0),
+            http_failure_snapshot(reqwest::StatusCode::SERVICE_UNAVAILABLE),
+        ] {
+            let cache = cache_with_snapshot(snapshot);
+            for (configured, expected) in [(3840, 1280), (1920, 1280), (1280, 1280), (640, 640)] {
+                assert_eq!(
+                    cache.instant_resolution_for_video(configured, &video),
+                    expected
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn custom_drive_and_legacy_destinations_ignore_api_quality_limits() {
+        for snapshot in [
+            measured_snapshot(2.0),
+            http_failure_snapshot(reqwest::StatusCode::SERVICE_UNAVAILABLE),
+        ] {
+            let cache = cache_with_snapshot(snapshot);
+            for response in [
+                serde_json::json!({"id": "custom-s3", "provider": "s3", "usesDefaultStorage": false}),
+                serde_json::json!({"id": "drive", "provider": "google-drive", "usesDefaultStorage": false}),
+                serde_json::json!({"id": "legacy"}),
+                serde_json::json!({"id": "unknown", "usesDefaultStorage": null}),
+            ] {
+                let video = created_video(response);
+                for configured in [640, 1280, 1920, 3840] {
+                    assert_eq!(
+                        cache.instant_resolution_for_video(configured, &video),
+                        configured,
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn each_recording_uses_its_returned_destination_without_a_cached_storage_choice() {
+        let cache = cache_with_snapshot(measured_snapshot(2.0));
+        for (response, expected) in [
+            (
+                serde_json::json!({"id": "one", "usesDefaultStorage": true}),
+                1280,
+            ),
+            (
+                serde_json::json!({"id": "two", "usesDefaultStorage": false}),
+                3840,
+            ),
+            (serde_json::json!({"id": "three"}), 3840),
+            (
+                serde_json::json!({"id": "four", "usesDefaultStorage": true}),
+                1280,
+            ),
+            (
+                serde_json::json!({"id": "five", "usesDefaultStorage": false}),
+                3840,
+            ),
+        ] {
+            assert_eq!(
+                cache.instant_resolution_for_video(3840, &created_video(response)),
+                expected,
+            );
+        }
+    }
+
+    #[test]
+    fn healthy_api_estimates_only_lower_an_eligible_configured_resolution() {
+        let video = created_video(serde_json::json!({
+            "id": "managed",
+            "usesDefaultStorage": true,
+        }));
+        for (speed, expected) in [(6.0, 1920), (18.0, 2560), (100.0, 3840)] {
+            let cache = cache_with_snapshot(measured_snapshot(speed));
+            assert_eq!(cache.instant_resolution_for_video(3840, &video), expected);
+            assert_eq!(cache.instant_resolution_for_video(1280, &video), 1280);
+        }
+    }
+
+    #[test]
+    fn default_storage_does_not_revive_expired_or_unavailable_probe_context() {
+        let video = created_video(serde_json::json!({
+            "id": "managed",
+            "usesDefaultStorage": true,
+        }));
+        let mut stale = measured_snapshot(2.0);
+        stale.recorded_at = Instant::now().checked_sub(HEALTH_FRESH_FOR + Duration::from_secs(1));
+        for snapshot in [
+            UploadHealthSnapshot::default(),
+            stale,
+            http_failure_snapshot(reqwest::StatusCode::NOT_FOUND),
+        ] {
+            let cache = cache_with_snapshot(snapshot);
+            assert_eq!(cache.instant_resolution_for_video(3840, &video), 3840);
+        }
+        for next in [None, Some(identity("https://cap.test", "bob"))] {
+            let mut cache = cache_with_snapshot(measured_snapshot(2.0));
+            cache.synchronize(next);
+            assert_eq!(cache.instant_resolution_for_video(3840, &video), 3840);
         }
     }
 
