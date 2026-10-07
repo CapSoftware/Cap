@@ -1,4 +1,4 @@
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, createUniqueId, For, Show } from "solid-js";
 import type { KeycapStyle, KeycapTheme } from "~/store/keyboard";
 
 export interface KeycapColorPalette {
@@ -299,8 +299,9 @@ export function SingleKeycap(props: SingleKeycapProps) {
 		};
 	});
 
+	const instanceId = createUniqueId();
 	const uid = () =>
-		`cap_${style()}_${text().replace(/[^a-zA-Z0-9]/g, "")}_${isMod() ? "m" : "a"}`;
+		`cap_${instanceId}_${style()}_${text().replace(/[^a-zA-Z0-9]/g, "")}_${isMod() ? "m" : "a"}`;
 
 	const displayLabel = () => {
 		const k = text();
