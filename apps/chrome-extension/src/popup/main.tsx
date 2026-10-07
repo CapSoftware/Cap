@@ -92,15 +92,29 @@ if (!IS_EMBEDDED) {
 			},
 		);
 	});
-	chrome.runtime.onMessage.addListener((message: unknown) => {
-		const candidate = message as { target?: string; type?: string } | null;
-		if (
-			candidate?.target === "standalone-panel" &&
-			candidate.type === "close"
-		) {
-			window.close();
-		}
-	});
+	chrome.runtime.onMessage.addListener(
+		(message: unknown, _sender, sendResponse) => {
+			const candidate = message as {
+				target?: string;
+				type?: string;
+				bootedAt?: number;
+			} | null;
+			if (candidate?.target !== "standalone-panel") return;
+			if (candidate.type === "close") {
+				window.close();
+				return;
+			}
+			// Only a panel that outlived the previous worker answers; one opened
+			// by the click that woke this worker loaded after it booted.
+			if (
+				candidate.type === "survivor-check" &&
+				typeof candidate.bootedAt === "number" &&
+				performance.timeOrigin < candidate.bootedAt
+			) {
+				sendResponse(true);
+			}
+		},
+	);
 }
 
 // Maps the offscreen document's authoritative permission query to a stored
