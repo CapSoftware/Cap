@@ -277,7 +277,10 @@ fn aspect_ratio(project: &Value) -> Option<AspectRatio> {
     }
 }
 
-fn unique_project_path(recordings_dir: &Path, name: &str) -> PathBuf {
+// Creating the directory is the reservation: `create_dir` fails if another
+// import already claimed the name, so each import only ever owns (and on
+// failure removes) a directory it created itself.
+fn reserve_project_path(recordings_dir: &Path, name: &str) -> Result<PathBuf, String> {
     let sanitized: String = name
         .chars()
         .map(|c| {
@@ -288,13 +291,20 @@ fn unique_project_path(recordings_dir: &Path, name: &str) -> PathBuf {
             }
         })
         .collect();
-    let mut path = recordings_dir.join(format!("{sanitized}.cap"));
-    let mut counter = 1;
-    while path.exists() {
-        path = recordings_dir.join(format!("{sanitized} ({counter}).cap"));
-        counter += 1;
+    std::fs::create_dir_all(recordings_dir).map_err(|e| e.to_string())?;
+    for counter in 0u32.. {
+        let path = if counter == 0 {
+            recordings_dir.join(format!("{sanitized}.cap"))
+        } else {
+            recordings_dir.join(format!("{sanitized} ({counter}).cap"))
+        };
+        match std::fs::create_dir(&path) {
+            Ok(()) => return Ok(path),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(format!("Failed to create {}: {error}", path.display())),
+        }
     }
-    path
+    Err("No free project name left".to_string())
 }
 
 struct CursorRegistry {
@@ -404,7 +414,7 @@ pub async fn import_project(recordings_dir: &Path, source: &Path) -> Result<Path
         })
         .unwrap_or_else(|| "Screen Studio import".to_string());
 
-    let project_path = unique_project_path(recordings_dir, &pretty_name);
+    let project_path = reserve_project_path(recordings_dir, &pretty_name)?;
     let mut partial_project = PartialProject {
         path: project_path.clone(),
         keep: false,
@@ -706,6 +716,16 @@ mod tests {
 
         assert!(import_project(recordings.path(), &bundle).await.is_err());
         assert_eq!(std::fs::read_dir(recordings.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn each_import_reserves_its_own_project_directory() {
+        let recordings = tempfile::tempdir().unwrap();
+        let first = reserve_project_path(recordings.path(), "Demo").unwrap();
+        let second = reserve_project_path(recordings.path(), "Demo").unwrap();
+        assert_ne!(first, second);
+        assert!(first.is_dir() && second.is_dir());
+        assert_eq!(second.file_name().unwrap(), "Demo (1).cap");
     }
 
     #[test]
