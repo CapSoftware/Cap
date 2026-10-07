@@ -99,7 +99,9 @@ vi.mock("next/link", () => ({
 vi.mock("@/actions/loom", () => ({
 	getLoomImportFolders: mocks.folders,
 	importFromLoom: mocks.import,
-	importFromLoomCsv: vi.fn(),
+}));
+vi.mock("@/actions/loom-import", () => ({
+	createLoomImportJobAction: vi.fn(),
 }));
 vi.mock("@cap/utils", async () => await import("@cap/utils/helpers"));
 vi.mock("@cap/ui", async () => ({

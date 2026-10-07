@@ -8,10 +8,17 @@ import type { NextRequest } from "next/server";
 import type Stripe from "stripe";
 import { trackServerEvent } from "@/lib/server-analytics";
 
+function dashboardReturnPath(value: unknown) {
+	if (typeof value !== "string" || value.length > 200) return null;
+	if (!/^\/dashboard\/[A-Za-z0-9/_-]*$/.test(value)) return null;
+	return value.includes("//") ? null : value;
+}
+
 export async function POST(request: NextRequest) {
 	const user = await getCurrentUser();
 	let customerId = user?.stripeCustomerId;
-	const { priceId, quantity, isOnBoarding } = await request.json();
+	const { priceId, quantity, isOnBoarding, returnTo } = await request.json();
+	const returnPath = isOnBoarding ? null : dashboardReturnPath(returnTo);
 
 	if (!priceId) {
 		console.error("Price ID not found");
@@ -69,10 +76,12 @@ export async function POST(request: NextRequest) {
 			mode: "subscription",
 			success_url: isOnBoarding
 				? `${serverEnv().WEB_URL}/dashboard/settings/organization?upgrade=true&session_id={CHECKOUT_SESSION_ID}`
-				: `${serverEnv().WEB_URL}/dashboard/caps?upgrade=true&session_id={CHECKOUT_SESSION_ID}`,
+				: `${serverEnv().WEB_URL}${returnPath ?? "/dashboard/caps"}?upgrade=true&session_id={CHECKOUT_SESSION_ID}`,
 			cancel_url: isOnBoarding
 				? `${serverEnv().WEB_URL}/onboarding`
-				: `${serverEnv().WEB_URL}/pricing`,
+				: returnPath
+					? `${serverEnv().WEB_URL}${returnPath}`
+					: `${serverEnv().WEB_URL}/pricing`,
 			allow_promotion_codes: true,
 			metadata: {
 				platform: "web",
