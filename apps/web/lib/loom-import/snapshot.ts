@@ -5,9 +5,9 @@ import {
 	videos,
 	videoUploads,
 } from "@cap/database/schema";
-import { userIsPro } from "@cap/utils";
 import type { User } from "@cap/web-domain";
 import { asc, eq, sql } from "drizzle-orm";
+import { hasProSubscription } from "@/lib/pro-subscription";
 import { getLoomImportJobForUser } from "./jobs";
 import {
 	countLoomImportItems,
@@ -129,7 +129,7 @@ export async function getLoomImportSnapshot({
 		}
 	}
 
-	const isPro = userIsPro(viewer ?? null);
+	const isPro = hasProSubscription(viewer ?? null);
 	const createdByMe = job.createdById === userId;
 	const full = since === undefined || !Number.isFinite(since);
 

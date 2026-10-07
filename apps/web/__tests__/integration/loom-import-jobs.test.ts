@@ -122,7 +122,7 @@ function share(loomId: string) {
 	return `https://www.loom.com/share/${loomId}`;
 }
 
-const loomFetch = vi.fn(
+const loomFetchMock = vi.fn(
 	async (_url: string | URL | Request, init?: RequestInit) => {
 		const body = JSON.parse(String(init?.body)) as {
 			variables: Record<string, string>;
@@ -148,7 +148,8 @@ const loomFetch = vi.fn(
 		}
 		return Response.json({ data });
 	},
-) as unknown as typeof fetch;
+);
+const loomFetch = loomFetchMock as unknown as typeof fetch;
 
 async function makeOrganization({ pro }: { pro: boolean }) {
 	const ownerId = User.UserId.make(id());
@@ -236,7 +237,7 @@ describe.runIf(Boolean(databaseUrl))(
 		beforeEach(() => {
 			fixture.start.mockReset().mockResolvedValue({ runId: "run" });
 			fixture.concurrency = "2";
-			loomFetch.mockClear();
+			loomFetchMock.mockClear();
 		});
 
 		it("checks every link, waits for Pro on the free plan, then imports with original dates in a bounded window", async () => {
@@ -268,7 +269,7 @@ describe.runIf(Boolean(databaseUrl))(
 			expect(totalCount).toBe(8);
 
 			await resolveLoomImportJob(jobId, { fetchImpl: loomFetch });
-			expect(loomFetch).toHaveBeenCalledTimes(1);
+			expect(loomFetchMock).toHaveBeenCalledTimes(1);
 			const resolved = await items(jobId);
 			expect(resolved.map((item) => [item.rowNumber, item.status])).toEqual([
 				[2, "ready"],
@@ -333,11 +334,12 @@ describe.runIf(Boolean(databaseUrl))(
 				.from(spaces)
 				.where(eq(spaces.organizationId, orgId));
 			expect(otherSpaces).toEqual([]);
-			expect(salesSpace?.name).toBe("Sales");
+			if (!salesSpace) throw new Error("Expected the Sales space to exist.");
+			expect(salesSpace.name).toBe("Sales");
 			const members = await database()
 				.select({ userId: spaceMembers.userId, role: spaceMembers.role })
 				.from(spaceMembers)
-				.where(eq(spaceMembers.spaceId, salesSpace?.id ?? ""));
+				.where(eq(spaceMembers.spaceId, salesSpace.id));
 			expect(members).toEqual(
 				expect.arrayContaining([
 					{ userId: ownerId, role: "admin" },

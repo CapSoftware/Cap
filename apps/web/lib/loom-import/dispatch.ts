@@ -9,8 +9,7 @@ import {
 	videoUploads,
 } from "@cap/database/schema";
 import { getNewVideoPublic } from "@cap/database/video-sharing-default";
-import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
-import { dub } from "@cap/utils";
+import { serverEnv } from "@cap/env";
 import { Storage } from "@cap/web-backend/src/Storage/index";
 import { type Organisation, type User, Video } from "@cap/web-domain";
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
@@ -39,7 +38,6 @@ type Launch = {
 	bucketId: string | null;
 	loomVideoId: string;
 	reuseExistingRawUpload: boolean;
-	created: boolean;
 };
 
 export function loomImportConcurrency() {
@@ -263,7 +261,6 @@ export async function dispatchLoomImportJob(jobId: string) {
 							bucketId: existing.bucket,
 							loomVideoId: item.loomVideoId,
 							reuseExistingRawUpload: true,
-							created: false,
 						});
 						continue;
 					}
@@ -375,7 +372,6 @@ export async function dispatchLoomImportJob(jobId: string) {
 					bucketId: writable.bucketId,
 					loomVideoId,
 					reuseExistingRawUpload: false,
-					created: true,
 				});
 			}
 		}
@@ -448,22 +444,6 @@ export async function dispatchLoomImportJob(jobId: string) {
 				})
 				.where(eq(loomImportJobItems.id, launch.itemId));
 		}
-	}
-
-	if (buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production") {
-		await Promise.all(
-			outcome.launches
-				.filter((launch) => launch.created)
-				.map((launch) =>
-					dub()
-						.links.create({
-							url: `${serverEnv().WEB_URL}/s/${launch.videoId}`,
-							domain: "cap.link",
-							key: launch.videoId,
-						})
-						.catch(() => undefined),
-				),
-		);
 	}
 
 	return { started: outcome.launches.length, completed: outcome.completed };

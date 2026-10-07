@@ -11,6 +11,7 @@ const workflowEntries = [
 	"workflows/admin-reprocess-video.ts",
 	"workflows/import-loom-video.ts",
 	"workflows/agent-cap-operation.ts",
+	"workflows/loom-import-job.ts",
 ];
 
 const forbiddenModules = new Set([

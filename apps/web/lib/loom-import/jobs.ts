@@ -12,7 +12,6 @@ import {
 	videos,
 	videoUploads,
 } from "@cap/database/schema";
-import { userIsPro } from "@cap/utils";
 import {
 	type Organisation,
 	Space,
@@ -24,6 +23,7 @@ import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { getOrganizationAccess } from "@/actions/organization/authorization";
 import { provisionOrganizationInvitee } from "@/lib/organization-provisioning";
 import { canManageOrganizationSettings } from "@/lib/permissions/roles";
+import { hasProSubscription } from "@/lib/pro-subscription";
 import {
 	extractLoomVideoId,
 	isValidImportEmail,
@@ -565,7 +565,7 @@ export async function prepareLoomImportJob(
 		.where(eq(users.id, job.createdById))
 		.limit(1);
 
-	if (!creator || !userIsPro(creator)) {
+	if (!creator || !hasProSubscription(creator)) {
 		await db()
 			.update(loomImportJobs)
 			.set({ status: "awaiting_upgrade", updatedAt: new Date() })
