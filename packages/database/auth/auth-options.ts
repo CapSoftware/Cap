@@ -33,6 +33,10 @@ export const maxDuration = 120;
 
 const OTP_CODE_MAX_AGE_SECONDS = 10 * 60;
 
+// authOptions() is rebuilt per request (getServerSession, getCurrentUser), so
+// the trusted-proxy warning is gated at module scope to log once per process.
+let trustedProxyWarned = false;
+
 export async function decodeSessionToken(
 	params: JWTDecodeParams,
 ): Promise<JWT | null> {
@@ -92,9 +96,11 @@ export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 			const appleClientId = serverEnv().APPLE_CLIENT_ID;
 			const appleClientSecret = serverEnv().APPLE_CLIENT_SECRET;
 			if (
+				!trustedProxyWarned &&
 				serverEnv().TRUSTED_PROXY_AUTH_HEADER &&
 				serverEnv().TRUSTED_PROXY_AUTH_EMAIL
 			) {
+				trustedProxyWarned = true;
 				console.warn(
 					"[auth] trusted-proxy sign-in is ENABLED. Only run this behind a reverse proxy that strips client-sent copies of the trust header, or a login bypass is possible.",
 				);
@@ -158,7 +164,9 @@ export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 								// proxy — it would be a login bypass. Fails closed below.
 								async authorize(_credentials, req) {
 									const env = serverEnv();
-									const header = env.TRUSTED_PROXY_AUTH_HEADER!.toLowerCase();
+									const header = env.TRUSTED_PROXY_AUTH_HEADER?.toLowerCase();
+									const email = env.TRUSTED_PROXY_AUTH_EMAIL?.toLowerCase();
+									if (!header || !email) return null;
 									// The router is the sole authority for this header (it strips
 									// any client-sent copy), so its presence means the request was
 									// owner-authenticated. Fail closed on anything else.
@@ -173,11 +181,12 @@ export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 											req?.headers?.["x-trusted-proxy-secret"] ?? "";
 										const digest = (s: string) =>
 											crypto.createHash("sha256").update(s).digest();
-										if (!crypto.timingSafeEqual(digest(provided), digest(secret)))
+										if (
+											!crypto.timingSafeEqual(digest(provided), digest(secret))
+										)
 											return null;
 									}
 
-									const email = env.TRUSTED_PROXY_AUTH_EMAIL!.toLowerCase();
 									const [user] = await db()
 										.select({
 											id: users.id,
