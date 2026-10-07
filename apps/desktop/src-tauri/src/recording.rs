@@ -3679,14 +3679,10 @@ async fn start_recording_prepared(
                     // An explicit terminal task owns both capture acknowledgement
                     // and presentation. Video completion must not clear its state.
                     let terminal = app.state::<InstantTerminalState>();
-                    if terminal.owns(&project_file_path) {
+                    let Some((cohort, failure)) =
+                        automatic_instant_terminal_request(&terminal, &project_file_path, res)
+                    else {
                         return;
-                    }
-                    let cohort = terminal.cohort();
-                    let failure = match classify_actor_done_result(res, true) {
-                        ActorDoneDisposition::UnexpectedStop { error }
-                        | ActorDoneDisposition::Failed { error } => Some(error),
-                        ActorDoneDisposition::UserInitiatedStop => None,
                     };
                     if let Some(Err(error)) = control_instant_recording(
                         &app,
@@ -5714,6 +5710,16 @@ impl InstantTerminalState {
             .is_some_and(|current| Arc::ptr_eq(current, request))
             && request.safe_to_release()
         {
+            if request.committed()
+                && let Some((generation, _)) = &request.previous_terminal_pause
+                && inner.owner.as_ref().is_some_and(|owner| {
+                    owner.generation == *generation && owner.capture_acknowledged && owner.running
+                })
+            {
+                // The replacement is retained and armed under App.write. Its
+                // terminal actions must not wait for the previous Restart UI tail.
+                inner.owner = None;
+            }
             request.release_pause();
             inner.startup = None;
             true
@@ -6078,6 +6084,62 @@ fn control_instant_recording<'a>(
     )
 }
 
+#[cfg(any(not(target_os = "linux"), test))]
+fn automatic_instant_terminal_request<E: ToString>(
+    terminal: &InstantTerminalState,
+    directory: &Path,
+    result: Result<(), E>,
+) -> Option<(u64, Option<String>)> {
+    if terminal.owns(directory) {
+        return None;
+    }
+    let cohort = terminal.cohort();
+    let failure = match classify_actor_done_result(result, true) {
+        ActorDoneDisposition::UnexpectedStop { error } | ActorDoneDisposition::Failed { error } => {
+            Some(error)
+        }
+        ActorDoneDisposition::UserInitiatedStop => None,
+    };
+    Some((cohort, failure))
+}
+
+#[cfg(any(not(target_os = "linux"), test))]
+struct InstantTerminalClaim<S> {
+    state: tokio::sync::OwnedRwLockWriteGuard<S>,
+    directory: PathBuf,
+    owner: InstantTerminalLease,
+}
+
+#[cfg(any(not(target_os = "linux"), test))]
+async fn claim_instant_terminal<S>(
+    terminal: &InstantTerminalState,
+    state: Arc<tokio::sync::RwLock<S>>,
+    cohort: u64,
+    expected_directory: Option<&Path>,
+    prepared_owner: Option<InstantTerminalLease>,
+    directory: impl FnOnce(&S) -> Option<PathBuf>,
+) -> Result<Option<InstantTerminalClaim<S>>, String> {
+    if prepared_owner.is_none() {
+        terminal.check_cohort(cohort)?;
+    }
+    let state = state.write_owned().await;
+    if prepared_owner.is_none() {
+        terminal.check_cohort(cohort)?;
+    }
+    let Some(directory) = directory(&state) else {
+        return Ok(None);
+    };
+    if expected_directory.is_some_and(|expected| expected != directory) {
+        return Err("The recording terminal request was superseded".into());
+    }
+    let owner = prepared_owner.map_or_else(|| terminal.begin(directory.clone(), cohort), Ok)?;
+    Ok(Some(InstantTerminalClaim {
+        state,
+        directory,
+        owner,
+    }))
+}
+
 #[cfg(not(target_os = "linux"))]
 fn control_instant_recording_with_owner<'a>(
     app: &'a AppHandle,
@@ -6093,29 +6155,29 @@ fn control_instant_recording_with_owner<'a>(
         let cleanup_state = state.clone();
         let final_app = app.clone();
         let terminal = app.state::<InstantTerminalState>();
-        if prepared_owner.is_none()
-            && let Err(error) = terminal.check_cohort(cohort)
+        let InstantTerminalClaim {
+            state,
+            directory,
+            owner,
+        } = match claim_instant_terminal(
+            &terminal,
+            state.clone(),
+            cohort,
+            expected_directory,
+            prepared_owner,
+            |state| match state.current_recording() {
+                Some(InProgressRecording::Instant { common, .. }) => {
+                    Some(common.recording_dir.clone())
+                }
+                _ => None,
+            },
+        )
+        .await
         {
-            return Some(Err(error));
-        }
-        let state = state.clone().write_owned().await;
-        if prepared_owner.is_none()
-            && let Err(error) = terminal.check_cohort(cohort)
-        {
-            return Some(Err(error));
-        }
-        let Some(InProgressRecording::Instant { common, .. }) = state.current_recording() else {
-            return None;
+            Ok(Some(claim)) => claim,
+            Ok(None) => return None,
+            Err(error) => return Some(Err(error)),
         };
-        let directory = common.recording_dir.clone();
-        if expected_directory.is_some_and(|expected| expected != directory) {
-            return Some(Err("The recording terminal request was superseded".into()));
-        }
-        let owner =
-            match prepared_owner.map_or_else(|| terminal.begin(directory.clone(), cohort), Ok) {
-                Ok(owner) => owner,
-                Err(error) => return Some(Err(error)),
-            };
         let pause = crate::upload_health::pause_probes_for_terminal(app);
         owner.retain_probe_recovery(pause.recovery_token());
         let pause = InstantTerminalProbeHold::new(pause);
@@ -6517,6 +6579,286 @@ mod instant_terminal_tests {
         stop.complete();
         assert!(terminal.admission_allowed(None));
         assert!(!terminal.release_startup(&request));
+    }
+
+    async fn replacement_terminal_during_restart_tail(
+        action: InstantTerminalAction,
+        actor_done: Option<Result<(), &'static str>>,
+        finish_previous_before_cleanup: bool,
+    ) {
+        let terminal = InstantTerminalState::default();
+        let health = Arc::new(crate::upload_health::UploadHealthCache::default());
+        let replacement = PathBuf::from("replacement.cap");
+        let state = Arc::new(tokio::sync::RwLock::new(Some(directory())));
+        let first = claim_instant_terminal(
+            &terminal,
+            state.clone(),
+            terminal.cohort(),
+            None,
+            None,
+            Clone::clone,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let prior_generation = first.owner.generation;
+        let previous_pause = health.terminal_test_pause();
+        first
+            .owner
+            .retain_probe_recovery(previous_pause.recovery_token());
+        let previous_pause = InstantTerminalProbeHold::new(previous_pause);
+        let restart_pause = previous_pause.clone();
+        let restart_terminal = terminal.clone();
+        let restart_health = health.clone();
+        let restart_directory = replacement.clone();
+        let (admitted_tx, admitted_rx) = oneshot::channel();
+        let (tail_tx, tail_rx) = oneshot::channel();
+        let mut restart = previous_pause.spawn(finish_instant_terminal(
+            first.owner,
+            async move { (first.state, Ok(())) },
+            move |mut state, (), generation| async move {
+                assert_eq!(generation, prior_generation);
+                let request = Arc::new(InstantStartupRequest {
+                    previous_terminal_pause: Some((generation, restart_pause)),
+                    ..Default::default()
+                });
+                restart_terminal
+                    .reserve_startup(request.clone(), restart_health.startup_test_pause())?;
+                assert!(restart_health.terminal_test_is_paused());
+                assert!(restart_terminal.check_cohort(generation).is_err());
+                request.begin_capture(restart_directory.clone())?;
+                let gate = cap_recording::RecordingStartGate::explicit_admission();
+                assert!(!gate.is_armed());
+                request.publish_if_live(|| {
+                    *state = Some(restart_directory);
+                    assert!(gate.arm());
+                    Ok(())
+                })?;
+                assert!(restart_terminal.release_startup(&request));
+                assert!(gate.is_armed());
+                assert!(!restart_health.terminal_test_is_paused());
+                drop(state);
+                assert!(admitted_tx.send(request.clone()).is_ok());
+                tail_rx.await.unwrap();
+                request.completed.cancel();
+                Ok(())
+            },
+        ));
+        let request = admitted_rx.await.unwrap();
+        let mut tail_tx = Some(tail_tx);
+        assert!(!restart.is_finished());
+        assert!(!request.completed.is_cancelled());
+        let (cohort, expected, failure) = match actor_done {
+            Some(result) => {
+                let (cohort, failure) =
+                    automatic_instant_terminal_request(&terminal, &replacement, result)
+                        .expect("replacement completion must reach its terminal controller");
+                assert!(failure.is_some());
+                if let Err(error) = result {
+                    assert_eq!(failure.as_deref(), Some(error));
+                }
+                (cohort, Some(replacement.as_path()), failure)
+            }
+            None => (terminal.cohort(), None, None),
+        };
+        let claim = claim_instant_terminal(
+            &terminal,
+            state.clone(),
+            cohort,
+            expected,
+            None,
+            Clone::clone,
+        )
+        .await
+        .expect("admitted replacement must accept terminal control while Restart tail is held")
+        .unwrap();
+        assert_eq!(claim.directory, replacement);
+        assert_ne!(claim.owner.generation, prior_generation);
+        let pause = health.terminal_test_pause();
+        claim.owner.retain_probe_recovery(pause.recovery_token());
+        drop(InstantTerminalLease {
+            state: terminal.clone(),
+            generation: prior_generation,
+        });
+        if finish_previous_before_cleanup {
+            tail_tx.take().unwrap().send(()).unwrap();
+            (&mut restart).await.unwrap().unwrap();
+        }
+        assert!(terminal.owns(&replacement));
+        assert!(terminal.requires_protection());
+        assert!(terminal.check_cohort(terminal.cohort()).is_err());
+        assert!(health.terminal_test_is_paused());
+        assert!(
+            automatic_instant_terminal_request(&terminal, &replacement, Ok::<(), &str>(()))
+                .is_none()
+        );
+        let stop_calls = AtomicUsize::new(0);
+        let cancel_calls = AtomicUsize::new(0);
+        let upload_cancelled = std::sync::atomic::AtomicBool::new(failure.is_some());
+        let effects = AtomicUsize::new(0);
+        let finishing_terminal = &terminal;
+        let finishing_effects = &effects;
+        let (result, acknowledged) = finish_instant_terminal(
+            claim.owner,
+            async {
+                let result = shutdown_instant_capture(
+                    action,
+                    || upload_cancelled.store(true, Ordering::SeqCst),
+                    async {
+                        stop_calls.fetch_add(1, Ordering::SeqCst);
+                        Ok::<(), String>(())
+                    },
+                    async {
+                        cancel_calls.fetch_add(1, Ordering::SeqCst);
+                        Ok::<(), String>(())
+                    },
+                )
+                .await;
+                (claim.state, result)
+            },
+            |mut state, completed, _| async move {
+                assert!(!finishing_terminal.requires_protection());
+                assert_eq!(
+                    completed.is_some(),
+                    matches!(action, InstantTerminalAction::Stop)
+                );
+                *state = None;
+                finishing_effects.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            },
+        )
+        .await;
+        result.unwrap();
+        assert!(acknowledged);
+        pause.cancel_before_handoff();
+        assert_eq!(effects.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            stop_calls.load(Ordering::SeqCst),
+            usize::from(matches!(action, InstantTerminalAction::Stop))
+        );
+        assert_eq!(
+            cancel_calls.load(Ordering::SeqCst),
+            usize::from(matches!(action, InstantTerminalAction::Discard))
+        );
+        assert_eq!(
+            upload_cancelled.load(Ordering::SeqCst),
+            failure.is_some() || matches!(action, InstantTerminalAction::Discard)
+        );
+        assert!(state.read().await.is_none());
+        assert!(terminal.admission_allowed(None));
+        assert!(!health.terminal_test_is_paused());
+        if !finish_previous_before_cleanup {
+            assert!(!restart.is_finished());
+            assert!(!request.completed.is_cancelled());
+            tail_tx.take().unwrap().send(()).unwrap();
+            restart.await.unwrap().unwrap();
+            assert!(terminal.admission_allowed(None));
+            assert!(!health.terminal_test_is_paused());
+        }
+    }
+
+    #[tokio::test]
+    async fn restart_held_tail_allows_replacement_stop() {
+        for finish_previous in [false, true] {
+            replacement_terminal_during_restart_tail(
+                InstantTerminalAction::Stop,
+                None,
+                finish_previous,
+            )
+            .await;
+        }
+    }
+
+    #[tokio::test]
+    async fn restart_held_tail_allows_replacement_discard() {
+        for finish_previous in [false, true] {
+            replacement_terminal_during_restart_tail(
+                InstantTerminalAction::Discard,
+                None,
+                finish_previous,
+            )
+            .await;
+        }
+    }
+
+    #[tokio::test]
+    async fn restart_held_tail_routes_replacement_done_to_cleanup() {
+        for finish_previous in [false, true] {
+            replacement_terminal_during_restart_tail(
+                InstantTerminalAction::Stop,
+                Some(Ok(())),
+                finish_previous,
+            )
+            .await;
+        }
+    }
+
+    #[tokio::test]
+    async fn restart_held_tail_routes_replacement_failure_to_cleanup() {
+        for finish_previous in [false, true] {
+            replacement_terminal_during_restart_tail(
+                InstantTerminalAction::Stop,
+                Some(Err("replacement encoder failed")),
+                finish_previous,
+            )
+            .await;
+        }
+    }
+
+    #[test]
+    fn startup_release_never_retires_an_unmatched_or_unadmitted_restart_owner() {
+        for case in [
+            "uncommitted",
+            "cancelled",
+            "unacknowledged",
+            "mismatched-generation",
+            "stale-request",
+            "stopped-owner",
+            "ordinary-start",
+        ] {
+            let terminal = InstantTerminalState::default();
+            let health = crate::upload_health::UploadHealthCache::default();
+            let owner = terminal.begin(directory(), terminal.cohort()).unwrap();
+            owner.acknowledge_capture();
+            let pause = InstantTerminalProbeHold::new(health.terminal_test_pause());
+            let request = Arc::new(InstantStartupRequest {
+                previous_terminal_pause: (case != "ordinary-start")
+                    .then(|| (owner.generation, pause.clone())),
+                ..Default::default()
+            });
+            terminal
+                .reserve_startup(request.clone(), health.startup_test_pause())
+                .unwrap();
+            match case {
+                "uncommitted" => {}
+                "cancelled" => assert!(request.cancel_before_commit()),
+                _ => request.publish_if_live(|| Ok(())).unwrap(),
+            }
+            {
+                let mut inner = terminal.0.lock().unwrap();
+                let current = inner.owner.as_mut().unwrap();
+                match case {
+                    "unacknowledged" => current.capture_acknowledged = false,
+                    "mismatched-generation" => current.generation += 1,
+                    "stopped-owner" => current.running = false,
+                    _ => {}
+                }
+            }
+            if case == "stale-request" {
+                let stale = Arc::new(InstantStartupRequest {
+                    previous_terminal_pause: Some((owner.generation, pause.clone())),
+                    ..Default::default()
+                });
+                stale.publish_if_live(|| Ok(())).unwrap();
+                assert!(!terminal.release_startup(&stale));
+                assert!(terminal.startup_is(&request));
+            } else {
+                assert!(terminal.release_startup(&request));
+            }
+            assert!(terminal.owns(&directory()), "{case} must retain the owner");
+            request.release_pause();
+            pause.release_acknowledged();
+        }
     }
 
     #[tokio::test]
