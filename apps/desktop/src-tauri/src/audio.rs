@@ -13,6 +13,10 @@ pub async fn play_recording_start_sound(cue: StartCue, gate: cap_recording::Reco
     recording_start_sound::play(cue, gate).await;
 }
 
+pub async fn play_recording_start_sound_for_admission(cue: StartCue) -> Result<(), String> {
+    recording_start_sound::play_for_admission(cue).await
+}
+
 fn play_audio(bytes: &'static [u8]) {
     use rodio::{Decoder, OutputStream, Sink};
     use std::io::Cursor;

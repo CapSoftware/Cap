@@ -18,6 +18,8 @@ mod response;
 mod timing;
 
 use lifecycle::{PauseState, ProbeControl};
+#[cfg(any(not(target_os = "linux"), test))]
+pub(crate) use lifecycle::{ProbePause, ProbeRecoveryToken};
 use response::read_probe_response;
 use timing::{
     connection_will_close, measure_warm_probe_rtt, upload_elapsed_after_rtt, upload_mbps_for_bytes,
@@ -191,13 +193,43 @@ pub(crate) struct VideoCreationContext {
 
 struct BoundVideoCreationContext {
     ticket: ProbeTicket,
-    request: UploadRequestContext,
 }
 
 impl VideoCreationContext {
-    pub(crate) async fn run<F: std::future::Future>(&self, future: F) -> F::Output {
+    pub(crate) fn cap_is_current(&self, app: &AppHandle) -> bool {
+        let Some(cache) = app.try_state::<UploadHealthCache>() else {
+            return false;
+        };
+        if matches!(
+            cache.probe.pause_state(),
+            Some(PauseState::Stopping | PauseState::Unconfirmed)
+        ) {
+            return false;
+        }
+        let Ok(cached) = cache.state.try_lock() else {
+            return false;
+        };
+        self.cap_is_current_in(&cached)
+    }
+
+    fn cap_is_current_in(&self, cached: &UploadHealthCacheState) -> bool {
+        self.bound.as_ref().is_some_and(|bound| {
+            cached.matches_ticket(&bound.ticket) && !cached.snapshot.is_stale()
+        })
+    }
+
+    #[cfg(test)]
+    async fn run<F: std::future::Future>(&self, future: F) -> F::Output {
         match &self.bound {
-            Some(bound) => bound.request.clone().run(future).await,
+            Some(bound) => {
+                bound
+                    .ticket
+                    .identity
+                    .request_context()
+                    .unwrap()
+                    .run(future)
+                    .await
+            }
             // Local owner metadata is optional. The normal request remains
             // responsible for accepting or rejecting the actual credentials.
             None => future.await,
@@ -242,10 +274,9 @@ impl UploadHealthCacheState {
         // Synchronize before sending the request, even if no health read observed
         // an account/server change. Its result must not borrow another context's cap.
         self.synchronize(identity);
-        let bound = self.ticket().and_then(|ticket| {
-            let request = ticket.identity.request_context().ok()?;
-            Some(BoundVideoCreationContext { ticket, request })
-        });
+        let bound = self
+            .ticket()
+            .map(|ticket| BoundVideoCreationContext { ticket });
         VideoCreationContext { bound }
     }
 
@@ -286,6 +317,21 @@ pub struct UploadHealthCache {
 }
 
 impl UploadHealthCache {
+    #[cfg(test)]
+    pub(crate) fn terminal_test_pause(&self) -> lifecycle::ProbePause {
+        self.probe.pause()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn startup_test_pause(&self) -> lifecycle::ProbePause {
+        self.probe.pause_startup()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn terminal_test_is_paused(&self) -> bool {
+        self.probe.pause_state().is_some()
+    }
+
     async fn status(&self, app: &AppHandle, state: &App) -> UploadHealthStatus {
         let mut cached = self.state.lock().await;
         cached.synchronize(ProbeIdentity::current(app, state));
@@ -303,6 +349,7 @@ impl UploadHealthCache {
             checked_at_unix_ms: None,
             stale: true,
             message: match pause {
+                PauseState::Starting => "Upload checks are paused while recording is starting.",
                 PauseState::Stopping => {
                     "Upload checks are paused while the previous recording is stopping."
                 }
@@ -321,7 +368,10 @@ impl UploadHealthCache {
         created_video: &CreatedVideo,
         creation: &VideoCreationContext,
     ) -> u32 {
-        if self.probe.pause_state().is_some() {
+        if matches!(
+            self.probe.pause_state(),
+            Some(PauseState::Stopping | PauseState::Unconfirmed)
+        ) {
             configured_resolution
         } else {
             cached.instant_resolution_for_video(configured_resolution, created_video, creation)
@@ -572,6 +622,11 @@ pub(crate) fn pause_probes_for_terminal(app: &AppHandle) -> lifecycle::ProbePaus
     app.state::<UploadHealthCache>().probe.pause()
 }
 
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn pause_probes_for_startup(app: &AppHandle) -> lifecycle::ProbePause {
+    app.state::<UploadHealthCache>().probe.pause_startup()
+}
+
 pub fn cancel_probe_for_recording(app: &AppHandle) {
     if let Some(cache) = app.try_state::<UploadHealthCache>() {
         cache.probe.cancel();
@@ -584,7 +639,11 @@ pub async fn wait_for_probe_to_stop(app: &AppHandle) {
     }
 }
 
-pub(crate) async fn prepare_video_creation(app: &AppHandle) -> VideoCreationContext {
+pub(crate) async fn prepare_bound_video_creation(
+    app: &AppHandle,
+    server_url: &str,
+    owner_id: Option<String>,
+) -> VideoCreationContext {
     let (Some(app_state), Some(cache)) = (
         app.try_state::<ArcLock<App>>(),
         app.try_state::<UploadHealthCache>(),
@@ -593,7 +652,12 @@ pub(crate) async fn prepare_video_creation(app: &AppHandle) -> VideoCreationCont
     };
     let state = app_state.read().await;
     let mut cached = cache.state.lock().await;
-    cached.prepare_video_creation(ProbeIdentity::current(app, &state))
+    let current = ProbeIdentity::current(app, &state);
+    cached.synchronize(current.clone());
+    if current != ProbeIdentity::new(server_url.to_string(), owner_id) {
+        return VideoCreationContext::default();
+    }
+    cached.prepare_video_creation(current)
 }
 
 pub(crate) async fn instant_resolution_for_video(
@@ -835,6 +899,142 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn owned_startup_reservation_preserves_fresh_caps_without_permitting_probes() {
+        let cache = UploadHealthCache::default();
+        let mut cached = cache.state.lock().await;
+        *cached = cache_with_snapshot(measured_snapshot(2.0));
+        let current_identity = cached.identity.clone();
+        let creation = cached.prepare_video_creation(current_identity);
+        let managed = created_video(serde_json::json!({
+            "id":"managed", "usesDefaultStorage":true
+        }));
+        crate::recording::with_test_startup_reservation(cache.startup_test_pause(), || {
+            assert_eq!(cache.probe.pause_state(), Some(PauseState::Starting));
+            assert!(cache.probe.try_start().is_none());
+            assert!(cache.current_status(&cached).message.contains("starting"));
+            assert_eq!(
+                cache.instant_resolution_for_video(&cached, 1920, &managed, &creation),
+                1280
+            );
+            assert_eq!(
+                cache.instant_resolution_for_video(&cached, 640, &managed, &creation),
+                640
+            );
+            for capability in [serde_json::json!(false), serde_json::Value::Null] {
+                let video = created_video(serde_json::json!({
+                    "id":"other", "usesDefaultStorage":capability
+                }));
+                assert_eq!(
+                    cache.instant_resolution_for_video(&cached, 1920, &video, &creation),
+                    1920
+                );
+            }
+
+            let terminal = cache.terminal_test_pause();
+            assert_eq!(cache.probe.pause_state(), Some(PauseState::Stopping));
+            assert_eq!(
+                cache.instant_resolution_for_video(&cached, 1920, &managed, &creation),
+                1920
+            );
+            terminal.cancel_before_handoff();
+            assert_eq!(
+                cache.instant_resolution_for_video(&cached, 1920, &managed, &creation),
+                1280
+            );
+
+            let failed = cache.startup_test_pause();
+            let recovery = failed.recovery_token();
+            drop(failed);
+            assert_eq!(cache.probe.pause_state(), Some(PauseState::Unconfirmed));
+            assert!(cache.probe.try_start().is_none());
+            assert_eq!(
+                cache.instant_resolution_for_video(&cached, 1920, &managed, &creation),
+                1920
+            );
+            recovery.acknowledge_capture();
+            assert_eq!(
+                cache.instant_resolution_for_video(&cached, 1920, &managed, &creation),
+                1280
+            );
+            assert!(cache.probe.try_start().is_none());
+        });
+        assert!(cache.probe.try_start().is_some());
+        assert_eq!(cache.current_status(&cached).upload_mbps, Some(2.0));
+    }
+
+    #[tokio::test]
+    async fn owned_startup_reservation_does_not_revive_stale_or_replaced_health() {
+        let cache = UploadHealthCache::default();
+        let mut cached = cache.state.lock().await;
+        *cached = cache_with_snapshot(measured_snapshot(2.0));
+        let current_identity = cached.identity.clone();
+        let creation = cached.prepare_video_creation(current_identity);
+        let managed = created_video(serde_json::json!({
+            "id":"managed", "usesDefaultStorage":true
+        }));
+        crate::recording::with_test_startup_reservation(cache.startup_test_pause(), || {
+            cached.snapshot.recorded_at =
+                Instant::now().checked_sub(HEALTH_FRESH_FOR + Duration::from_secs(1));
+            assert_eq!(
+                cache.instant_resolution_for_video(&cached, 1920, &managed, &creation),
+                1920
+            );
+            assert!(!creation.cap_is_current_in(&cached));
+            cached.synchronize(Some(identity("https://other.test", "bob")));
+            let ticket = cached.ticket().unwrap();
+            cached.publish(&ticket, measured_snapshot(2.0));
+            assert_eq!(
+                cache.instant_resolution_for_video(&cached, 1920, &managed, &creation),
+                1920
+            );
+            assert!(!creation.cap_is_current_in(&cached));
+            assert!(cache.probe.try_start().is_none());
+        });
+    }
+
+    #[tokio::test]
+    async fn acknowledged_restart_hands_probe_exclusion_to_startup_without_losing_its_cap() {
+        let cache = UploadHealthCache::default();
+        let mut cached = cache.state.lock().await;
+        *cached = cache_with_snapshot(measured_snapshot(2.0));
+        let current_identity = cached.identity.clone();
+        let creation = cached.prepare_video_creation(current_identity);
+        let managed = created_video(serde_json::json!({
+            "id":"restart-managed", "usesDefaultStorage":true
+        }));
+        let previous = cache.terminal_test_pause();
+        assert_eq!(cache.probe.pause_state(), Some(PauseState::Stopping));
+        assert_eq!(
+            cache.instant_resolution_for_video(&cached, 1920, &managed, &creation),
+            1920
+        );
+        crate::recording::with_test_restart_startup_reservation(
+            previous,
+            cache.startup_test_pause(),
+            || {
+                assert_eq!(cache.probe.pause_state(), Some(PauseState::Starting));
+                assert!(cache.probe.try_start().is_none());
+                assert_eq!(
+                    cache.instant_resolution_for_video(&cached, 1920, &managed, &creation),
+                    1280
+                );
+                let unrelated = cache.terminal_test_pause();
+                assert_eq!(
+                    cache.instant_resolution_for_video(&cached, 1920, &managed, &creation),
+                    1920
+                );
+                unrelated.cancel_before_handoff();
+                assert_eq!(
+                    cache.instant_resolution_for_video(&cached, 1920, &managed, &creation),
+                    1280
+                );
+            },
+        );
+        assert_eq!(cache.probe.pause_state(), None);
+        assert!(cache.probe.try_start().is_some());
+    }
+
+    #[tokio::test]
     async fn terminal_pause_hides_cached_status_and_cap_until_shutdown_is_acknowledged() {
         for speed in [2.0, 18.5] {
             let cache = UploadHealthCache::default();
@@ -906,8 +1106,10 @@ mod tests {
     }
 
     #[test]
-    fn video_creation_capability_requires_an_explicit_boolean() {
-        for (response, expected) in [
+    fn video_creation_capability_is_optional_and_never_coerces_other_types() {
+        let mut cache = cache_with_snapshot(measured_snapshot(2.0));
+        let creation = cache.prepare_video_creation(cache.identity.clone());
+        let mut cases = vec![
             (
                 serde_json::json!({"id": "managed", "usesDefaultStorage": true}),
                 Some(true),
@@ -925,32 +1127,52 @@ mod tests {
                 serde_json::json!({"id": "no-inference", "provider": "s3", "bucketId": null, "orgId": "default"}),
                 None,
             ),
+        ];
+        for capability in [
+            serde_json::json!("true"),
+            serde_json::json!("false"),
+            serde_json::json!(1),
+            serde_json::json!(0),
+            serde_json::json!([]),
+            serde_json::json!([true]),
+            serde_json::json!({}),
+            serde_json::json!({"value": true}),
         ] {
+            cases.push((
+                serde_json::json!({"id": "valid", "usesDefaultStorage": capability}),
+                None,
+            ));
+        }
+        for (response, expected) in cases {
             let video = created_video(response.clone());
             assert_eq!(video.upload_meta.id, response["id"].as_str().unwrap());
             assert_eq!(video.uses_default_storage, expected);
-        }
-
-        for capability in [
-            serde_json::json!("true"),
-            serde_json::json!(1),
-            serde_json::json!([]),
-            serde_json::json!({}),
-        ] {
-            assert!(
-                serde_json::from_value::<CreatedVideo>(serde_json::json!({
-                    "id": "malformed",
-                    "usesDefaultStorage": capability,
-                }))
-                .is_err()
+            let expected_resolution = if expected == Some(true) { 1280 } else { 3840 };
+            assert_eq!(
+                cache.instant_resolution_for_video(3840, &video, &creation),
+                expected_resolution
+            );
+            assert_eq!(
+                cache.instant_resolution_for_video(640, &video, &creation),
+                640
             );
         }
-        assert!(
-            serde_json::from_value::<CreatedVideo>(serde_json::json!({
-                "usesDefaultStorage": true,
-            }))
-            .is_err()
-        );
+    }
+
+    #[test]
+    fn optional_capability_does_not_relax_required_video_identity() {
+        for response in [
+            serde_json::json!({}),
+            serde_json::json!({"usesDefaultStorage": true}),
+            serde_json::json!({"usesDefaultStorage": "true"}),
+            serde_json::json!({"id": null, "usesDefaultStorage": true}),
+            serde_json::json!({"id": 1, "usesDefaultStorage": false}),
+            serde_json::json!({"id": [], "usesDefaultStorage": "true"}),
+            serde_json::json!({"id": {}, "usesDefaultStorage": null}),
+        ] {
+            assert!(serde_json::from_value::<CreatedVideo>(response).is_err());
+        }
+        assert!(serde_json::from_str::<CreatedVideo>(r#"{"id":"valid","#).is_err());
     }
 
     #[test]
@@ -972,6 +1194,27 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn final_admission_does_not_reuse_a_cap_after_its_generation_or_freshness_changes() {
+        let mut cache = cache_with_snapshot(measured_snapshot(2.0));
+        let original = cache.identity.clone();
+        let creation = cache.prepare_video_creation(original.clone());
+        assert!(creation.cap_is_current_in(&cache));
+        assert_eq!(
+            cache.instant_resolution_for_video(1920, &managed_video(), &creation),
+            1280
+        );
+        cache.snapshot.recorded_at =
+            Some(Instant::now() - HEALTH_FRESH_FOR - Duration::from_secs(1));
+        assert!(!creation.cap_is_current_in(&cache));
+        cache.synchronize(Some(identity("https://changed.test", "bob")));
+        cache.synchronize(original);
+        cache.publish(&cache.ticket().unwrap(), measured_snapshot(2.0));
+        assert_eq!(cache.fresh_instant_resolution_cap(), Some(1280));
+        assert!(!creation.cap_is_current_in(&cache));
+        assert!(!VideoCreationContext::default().cap_is_current_in(&cache));
     }
 
     #[test]

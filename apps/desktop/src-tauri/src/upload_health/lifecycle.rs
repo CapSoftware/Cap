@@ -2,8 +2,8 @@ use std::{
     future::Future,
     pin::Pin,
     sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc, Mutex as StdMutex,
+        atomic::{AtomicUsize, Ordering},
     },
 };
 
@@ -43,21 +43,36 @@ impl ProbeControl {
     }
 
     pub(super) fn pause(&self) -> ProbePause {
-        self.terminal.active.fetch_add(1, Ordering::SeqCst);
+        self.pause_kind(PauseKind::Terminal)
+    }
+
+    #[cfg(any(not(target_os = "linux"), test))]
+    pub(super) fn pause_startup(&self) -> ProbePause {
+        self.pause_kind(PauseKind::Startup)
+    }
+
+    fn pause_kind(&self, kind: PauseKind) -> ProbePause {
+        kind.active(&self.terminal).fetch_add(1, Ordering::SeqCst);
         self.cancel();
         ProbePause {
-            terminal: Arc::clone(&self.terminal),
-            acknowledged: false,
+            recovery: ProbeRecoveryToken {
+                terminal: Arc::clone(&self.terminal),
+                state: Arc::new(StdMutex::new(PauseRecoveryState::default())),
+                kind,
+            },
         }
     }
 
     pub(super) fn pause_state(&self) -> Option<PauseState> {
         // A failed guard publishes unconfirmed before decrementing this count.
         let active = self.terminal.active.load(Ordering::SeqCst);
-        if self.terminal.unconfirmed.load(Ordering::SeqCst) {
+        let startup = self.terminal.startup.load(Ordering::SeqCst);
+        if self.terminal.unconfirmed.load(Ordering::SeqCst) > 0 {
             Some(PauseState::Unconfirmed)
         } else if active > 0 {
             Some(PauseState::Stopping)
+        } else if startup > 0 {
+            Some(PauseState::Starting)
         } else {
             None
         }
@@ -67,23 +82,70 @@ impl ProbeControl {
 #[derive(Default)]
 struct TerminalPauses {
     active: AtomicUsize,
-    unconfirmed: AtomicBool,
+    startup: AtomicUsize,
+    unconfirmed: AtomicUsize,
+}
+
+#[derive(Clone, Copy)]
+enum PauseKind {
+    #[cfg(any(not(target_os = "linux"), test))]
+    Startup,
+    Terminal,
+}
+
+impl PauseKind {
+    fn active(self, pauses: &TerminalPauses) -> &AtomicUsize {
+        match self {
+            #[cfg(any(not(target_os = "linux"), test))]
+            Self::Startup => &pauses.startup,
+            Self::Terminal => &pauses.active,
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum PauseState {
+    Starting,
     Stopping,
     Unconfirmed,
 }
 
 pub(crate) struct ProbePause {
+    recovery: ProbeRecoveryToken,
+}
+
+#[derive(Clone)]
+pub(crate) struct ProbeRecoveryToken {
     terminal: Arc<TerminalPauses>,
+    state: Arc<StdMutex<PauseRecoveryState>>,
+    kind: PauseKind,
+}
+
+#[derive(Default)]
+struct PauseRecoveryState {
     acknowledged: bool,
+    dropped: bool,
+}
+
+impl ProbeRecoveryToken {
+    pub(crate) fn acknowledge_capture(&self) {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        if !state.acknowledged {
+            if state.dropped {
+                self.terminal.unconfirmed.fetch_sub(1, Ordering::SeqCst);
+            }
+            state.acknowledged = true;
+        }
+    }
 }
 
 impl ProbePause {
-    pub(crate) fn cancel_before_handoff(mut self) {
-        self.acknowledged = true;
+    pub(crate) fn recovery_token(&self) -> ProbeRecoveryToken {
+        self.recovery.clone()
+    }
+
+    pub(crate) fn cancel_before_handoff(self) {
+        self.recovery.acknowledge_capture();
     }
 
     pub(crate) fn spawn<T, F>(self, shutdown: F) -> tokio::task::JoinHandle<T>
@@ -93,9 +155,11 @@ impl ProbePause {
     {
         // The task owns both shutdown and its pause even if the command is dropped.
         tokio::spawn(async move {
-            let mut pause = self;
+            let pause = self;
             let (result, acknowledged) = shutdown.await;
-            pause.acknowledged = acknowledged;
+            if acknowledged {
+                pause.recovery.acknowledge_capture();
+            }
             result
         })
     }
@@ -103,10 +167,22 @@ impl ProbePause {
 
 impl Drop for ProbePause {
     fn drop(&mut self) {
-        if !self.acknowledged {
-            self.terminal.unconfirmed.store(true, Ordering::SeqCst);
+        let mut state = self
+            .recovery
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if !state.acknowledged {
+            self.recovery
+                .terminal
+                .unconfirmed
+                .fetch_add(1, Ordering::SeqCst);
         }
-        self.terminal.active.fetch_sub(1, Ordering::SeqCst);
+        state.dropped = true;
+        self.recovery
+            .kind
+            .active(&self.recovery.terminal)
+            .fetch_sub(1, Ordering::SeqCst);
     }
 }
 
@@ -138,6 +214,33 @@ mod tests {
     use tokio::{io::AsyncReadExt, net::TcpListener, sync::oneshot};
 
     use super::*;
+
+    #[tokio::test]
+    async fn startup_exclusion_cancels_probes_and_failed_drop_requires_its_own_ack() {
+        let control = ProbeControl::default();
+        let mut active = control.try_start().unwrap();
+        let pause = control.pause_startup();
+        let recovery = pause.recovery_token();
+        assert_eq!(control.pause_state(), Some(PauseState::Starting));
+        assert_eq!(
+            active
+                .run(async { panic!("startup exclusion must cancel the active probe") })
+                .await,
+            None::<()>
+        );
+        drop(active);
+        assert!(control.try_start().is_none());
+        let terminal = control.pause();
+        assert_eq!(control.pause_state(), Some(PauseState::Stopping));
+        terminal.cancel_before_handoff();
+        assert_eq!(control.pause_state(), Some(PauseState::Starting));
+        drop(pause);
+        assert_eq!(control.pause_state(), Some(PauseState::Unconfirmed));
+        assert!(control.try_start().is_none());
+        recovery.acknowledge_capture();
+        assert_eq!(control.pause_state(), None);
+        assert!(control.try_start().is_some());
+    }
 
     #[tokio::test]
     async fn cancellation_before_first_poll_does_not_start_the_request() {
@@ -396,5 +499,65 @@ mod tests {
         control.pause().cancel_before_handoff();
         assert_eq!(control.pause_state(), Some(PauseState::Unconfirmed));
         assert!(control.try_start().is_none());
+    }
+
+    #[tokio::test]
+    async fn recovery_acknowledges_only_its_own_failed_pause() {
+        let control = ProbeControl::default();
+        let first = control.pause();
+        let first_recovery = first.recovery_token();
+        let second = control.pause();
+        let second_recovery = second.recovery_token();
+        first.spawn(async { ((), false) }).await.unwrap();
+        second.spawn(async { ((), false) }).await.unwrap();
+
+        first_recovery.acknowledge_capture();
+        first_recovery.acknowledge_capture();
+        assert_eq!(control.pause_state(), Some(PauseState::Unconfirmed));
+        assert!(control.try_start().is_none());
+        second_recovery.acknowledge_capture();
+        assert_eq!(control.pause_state(), None);
+        assert!(control.try_start().is_some());
+    }
+
+    #[tokio::test]
+    async fn recovery_before_guard_drop_still_waits_for_owned_completion() {
+        let control = ProbeControl::default();
+        let pause = control.pause();
+        let recovery = pause.recovery_token();
+        let (complete_tx, complete_rx) = oneshot::channel();
+        let shutdown = pause.spawn(async move {
+            complete_rx.await.unwrap();
+            ((), false)
+        });
+
+        recovery.acknowledge_capture();
+        assert_eq!(control.pause_state(), Some(PauseState::Stopping));
+        assert!(control.try_start().is_none());
+        complete_tx.send(()).unwrap();
+        shutdown.await.unwrap();
+        assert_eq!(control.pause_state(), None);
+        assert!(control.try_start().is_some());
+    }
+
+    #[test]
+    fn concurrent_recovery_and_drop_never_reintroduce_a_failed_pause() {
+        let control = ProbeControl::default();
+        for _ in 0..128 {
+            let pause = control.pause();
+            let recovery = pause.recovery_token();
+            let barrier = Arc::new(std::sync::Barrier::new(2));
+            std::thread::scope(|scope| {
+                let drop_barrier = Arc::clone(&barrier);
+                scope.spawn(move || {
+                    drop_barrier.wait();
+                    drop(pause);
+                });
+                barrier.wait();
+                recovery.acknowledge_capture();
+            });
+            assert_eq!(control.pause_state(), None);
+            assert!(control.try_start().is_some());
+        }
     }
 }

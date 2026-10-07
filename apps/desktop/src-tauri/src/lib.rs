@@ -1624,6 +1624,20 @@ impl App {
         mode: RecordingMode,
         target: ScreenCaptureTarget,
     ) -> Result<(), String> {
+        self.set_pending_recording_with_terminal(mode, target, None)
+    }
+
+    pub(crate) fn set_pending_recording_with_terminal(
+        &mut self,
+        mode: RecordingMode,
+        target: ScreenCaptureTarget,
+        terminal_owner: Option<u64>,
+    ) -> Result<(), String> {
+        if !recording::instant_terminal_admission_allowed(&self.handle, terminal_owner) {
+            return Err(
+                "Recording cleanup is still pending. Finish stopping before recording.".into(),
+            );
+        }
         recording_start_allowed(
             self.handle
                 .try_state::<AppExitState>()
@@ -1653,6 +1667,9 @@ impl App {
     }
 
     pub fn clear_pending_recording(&mut self) -> bool {
+        if recording::instant_terminal_requires_protection(&self.handle) {
+            return false;
+        }
         #[cfg(target_os = "linux")]
         if recording::linux_instant::blocks_cleanup(&self.handle) {
             return false;
@@ -1681,6 +1698,9 @@ impl App {
     }
 
     pub(crate) fn take_current_recording(&mut self) -> Option<InProgressRecording> {
+        if recording::instant_terminal_requires_protection(&self.handle) {
+            return None;
+        }
         #[cfg(target_os = "linux")]
         if recording::linux_instant::blocks_cleanup(&self.handle) {
             return None;
@@ -1696,6 +1716,9 @@ impl App {
     }
 
     pub fn clear_recording_state(&mut self) -> Option<InProgressRecording> {
+        if recording::instant_terminal_requires_protection(&self.handle) {
+            return None;
+        }
         #[cfg(target_os = "linux")]
         if recording::linux_instant::blocks_cleanup(&self.handle) {
             return None;
@@ -1814,6 +1837,7 @@ impl App {
     pub fn is_recording_active_or_pending(&self) -> bool {
         !matches!(self.recording_state, RecordingState::None)
             || clean_capture::blocks_idle_cleanup(&self.handle)
+            || !recording::instant_terminal_admission_allowed(&self.handle, None)
     }
 
     async fn handle_input_disconnect(&mut self, kind: RecordingInputKind) -> Result<(), String> {
@@ -7285,6 +7309,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: Option<PathB
             app.manage(updates::UpdatesState::default());
             updates::spawn_background_loop(app.clone());
             app.manage(upload_health::UploadHealthCache::default());
+            #[cfg(not(target_os = "linux"))]
+            app.manage(recording::InstantTerminalState::default());
 
             #[cfg(unix)]
             {
@@ -7963,53 +7989,438 @@ fn run_tauri_event_loop<R>(run: impl FnOnce() -> R) -> R {
 fn handle_single_instance(app: &AppHandle, args: Vec<String>) {
     trace!(arg_count = args.len(), "Single instance invoked");
 
-    #[cfg(target_os = "linux")]
-    if app
-        .try_state::<AppExitState>()
-        .is_some_and(|state| state.is_exiting())
-    {
-        return;
-    }
+    dispatch_single_instance(
+        app,
+        &args,
+        || {
+            #[cfg(target_os = "linux")]
+            return app
+                .try_state::<AppExitState>()
+                .is_some_and(|state| state.is_exiting());
+            #[cfg(not(target_os = "linux"))]
+            false
+        },
+        || gpui_app::handle_update_handoff(app),
+        || {
+            #[cfg(any(target_os = "macos", windows))]
+            return gpui_app::forward_deep_links_to_active_gpui(app, &args);
+            #[cfg(not(any(target_os = "macos", windows)))]
+            false
+        },
+        |cap_file| {
+            if let Some(cap_file) = cap_file {
+                let _ = open_project_from_path(&cap_file, app.clone());
+            } else {
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(error) = (ShowCapWindow::Main {
+                        init_target_mode: None,
+                    })
+                    .show(&app)
+                    .await
+                    {
+                        warn!(%error, "Could not show Cap recording controls");
+                    }
+                });
+            }
+        },
+    );
+}
 
-    if gpui_app::handle_update_handoff(app) {
-        return;
-    }
-
-    #[cfg(any(target_os = "macos", windows))]
-    if gpui_app::forward_deep_links_to_active_gpui(app, &args) {
+fn dispatch_single_instance<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    args: &[String],
+    is_exiting: impl FnOnce() -> bool,
+    handle_update: impl FnOnce() -> bool,
+    forward_to_gpui: impl FnOnce() -> bool,
+    activate: impl FnOnce(Option<PathBuf>),
+) {
+    if is_exiting() || handle_update() || forward_to_gpui() {
         return;
     }
 
     let action_urls = args
         .iter()
-        .filter(|arg| arg.starts_with("cap-desktop://"))
+        .filter(|arg| cfg!(any(windows, target_os = "linux")) || arg.starts_with("cap-desktop://"))
         .filter_map(|arg| tauri::Url::parse(arg).ok())
+        .filter(|url| url.scheme() == "cap-desktop")
         .collect::<Vec<_>>();
     if !action_urls.is_empty() {
+        #[cfg(any(windows, target_os = "linux"))]
+        for url in action_urls {
+            // The plugin accepts one URL argument and delivers both native and frontend listeners.
+            app.deep_link().handle_cli_arguments(
+                [
+                    args.first().map_or("cap-desktop", String::as_str),
+                    url.as_str(),
+                ]
+                .into_iter(),
+            );
+        }
+        #[cfg(not(any(windows, target_os = "linux")))]
         deeplink_actions::handle(app, action_urls);
         return;
     }
 
-    let Some(cap_file) = args
-        .iter()
-        .find(|arg| arg.ends_with(".cap"))
-        .map(PathBuf::from)
-    else {
-        let app = app.clone();
-        tauri::async_runtime::spawn(async move {
-            if let Err(error) = (ShowCapWindow::Main {
-                init_target_mode: None,
-            })
-            .show(&app)
-            .await
-            {
-                warn!(%error, "Could not show Cap recording controls");
-            }
-        });
-        return;
-    };
+    activate(
+        args.iter()
+            .find(|arg| arg.ends_with(".cap"))
+            .map(PathBuf::from),
+    );
+}
 
-    let _ = open_project_from_path(&cap_file, app.clone());
+#[cfg(test)]
+mod single_instance_dispatch_tests {
+    use super::dispatch_single_instance;
+    use crate::deeplink_actions::{self, DeepLinkAction, DeepLinkActionExecutor};
+    use std::{
+        cell::RefCell,
+        path::PathBuf,
+        sync::{Arc, Mutex, mpsc},
+    };
+    use tauri::{Emitter, Listener, Manager, Url, test::MockRuntime};
+    use tauri_plugin_deep_link::DeepLinkExt;
+
+    const STOP: &str = "cap-desktop://action?value=%22stop_recording%22";
+    const LOGIN: &str = "cap-desktop://login?token=fixture-token";
+
+    struct Fixture {
+        app: tauri::App<MockRuntime>,
+        actions: mpsc::Receiver<DeepLinkAction>,
+        frontend_urls: Arc<Mutex<Vec<Vec<Url>>>>,
+    }
+
+    fn plugin_app() -> tauri::App<MockRuntime> {
+        let mut context = tauri::test::mock_context(tauri::test::noop_assets());
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        context.config_mut().plugins = serde_json::from_value(config["plugins"].clone()).unwrap();
+        tauri::test::mock_builder()
+            .plugin(tauri_plugin_deep_link::init())
+            .build(context)
+            .unwrap()
+    }
+
+    impl Fixture {
+        fn new() -> Self {
+            Self::attach(plugin_app())
+        }
+
+        fn attach(app: tauri::App<MockRuntime>) -> Self {
+            let (sender, actions) = mpsc::channel();
+            app.manage(DeepLinkActionExecutor::from_sender(sender));
+            let handle = app.handle().clone();
+            app.deep_link().on_open_url(move |event| {
+                deeplink_actions::handle(&handle, event.urls());
+            });
+            let frontend_urls = Arc::new(Mutex::new(Vec::new()));
+            let received = frontend_urls.clone();
+            app.listen("deep-link://new-url", move |event| {
+                received
+                    .lock()
+                    .unwrap()
+                    .push(serde_json::from_str::<Vec<Url>>(event.payload()).unwrap());
+            });
+            Self {
+                app,
+                actions,
+                frontend_urls,
+            }
+        }
+
+        fn dispatch(&self, arguments: &[&str]) -> Vec<Option<PathBuf>> {
+            let mut activations = Vec::new();
+            dispatch_single_instance(
+                self.app.handle(),
+                &arguments
+                    .iter()
+                    .map(|arg| (*arg).to_string())
+                    .collect::<Vec<_>>(),
+                || false,
+                || false,
+                || false,
+                |path| activations.push(path),
+            );
+            activations
+        }
+
+        fn native_actions(&self) -> Vec<DeepLinkAction> {
+            self.actions.try_iter().collect()
+        }
+    }
+
+    #[test]
+    #[cfg(any(windows, target_os = "linux"))]
+    fn one_url_dispatches_one_native_action_and_one_frontend_event() {
+        let fixture = Fixture::new();
+        assert!(fixture.dispatch(&["Cap", STOP]).is_empty());
+        assert_eq!(
+            fixture.native_actions(),
+            vec![DeepLinkAction::StopRecording]
+        );
+        let expected = vec![Url::parse(STOP).unwrap()];
+        assert_eq!(
+            *fixture.frontend_urls.lock().unwrap(),
+            vec![expected.clone()]
+        );
+        assert_eq!(
+            fixture.app.deep_link().get_current().unwrap(),
+            Some(expected)
+        );
+    }
+
+    #[test]
+    #[cfg(any(windows, target_os = "linux"))]
+    fn mixed_case_scheme_keeps_previously_supported_plugin_delivery() {
+        let fixture = Fixture::new();
+        assert!(
+            fixture
+                .dispatch(&["Cap", "CaP-DeSkToP://action?value=%22stop_recording%22"])
+                .is_empty()
+        );
+        assert_eq!(
+            fixture.native_actions(),
+            vec![DeepLinkAction::StopRecording]
+        );
+        let expected = vec![Url::parse(STOP).unwrap()];
+        assert_eq!(
+            *fixture.frontend_urls.lock().unwrap(),
+            vec![expected.clone()]
+        );
+        assert_eq!(
+            fixture.app.deep_link().get_current().unwrap(),
+            Some(expected)
+        );
+    }
+
+    #[test]
+    #[cfg(any(windows, target_os = "linux"))]
+    fn mixed_arguments_deliver_every_url_once_and_keep_the_last_current_url() {
+        let fixture = Fixture::new();
+        let settings = Url::parse_with_params(
+            "cap-desktop://action",
+            &[("value", r#"{"open_settings":{"page":"general"}}"#)],
+        )
+        .unwrap();
+        assert!(
+            fixture
+                .dispatch(&[
+                    "Cap",
+                    "first.cap",
+                    STOP,
+                    "--ordinary",
+                    LOGIN,
+                    settings.as_str()
+                ])
+                .is_empty()
+        );
+        assert_eq!(
+            fixture.native_actions(),
+            vec![
+                DeepLinkAction::StopRecording,
+                DeepLinkAction::OpenSettings {
+                    page: Some("general".into())
+                }
+            ]
+        );
+        assert_eq!(
+            *fixture.frontend_urls.lock().unwrap(),
+            vec![
+                vec![Url::parse(STOP).unwrap()],
+                vec![Url::parse(LOGIN).unwrap()],
+                vec![settings.clone()]
+            ]
+        );
+        assert_eq!(
+            fixture.app.deep_link().get_current().unwrap(),
+            Some(vec![settings])
+        );
+    }
+
+    #[test]
+    fn exit_update_and_gpui_guards_stop_delivery_before_later_guards() {
+        for blocked in 0..3 {
+            let fixture = Fixture::new();
+            let calls = RefCell::new(Vec::new());
+            let guard = |index| {
+                calls.borrow_mut().push(index);
+                index == blocked
+            };
+            dispatch_single_instance(
+                fixture.app.handle(),
+                &["Cap".into(), STOP.into(), "recording.cap".into()],
+                || guard(0),
+                || guard(1),
+                || guard(2),
+                |_| panic!("intercepted activation must not open a window or project"),
+            );
+            assert_eq!(*calls.borrow(), (0..=blocked).collect::<Vec<_>>());
+            assert!(fixture.native_actions().is_empty());
+            assert!(fixture.frontend_urls.lock().unwrap().is_empty());
+            assert_eq!(fixture.app.deep_link().get_current().unwrap(), None);
+        }
+    }
+
+    #[test]
+    fn project_and_ordinary_activation_preserve_existing_fallbacks() {
+        let fixture = Fixture::new();
+        assert_eq!(fixture.dispatch(&["Cap"]), vec![None]);
+        assert_eq!(fixture.dispatch(&[]), vec![None]);
+        assert_eq!(fixture.dispatch(&["Cap", "--ordinary"]), vec![None]);
+        assert_eq!(
+            fixture.dispatch(&["Cap", "first.cap", "second.cap"]),
+            vec![Some(PathBuf::from("first.cap"))]
+        );
+        assert_eq!(
+            fixture.dispatch(&["Cap", "https://example.com", "cap-desktop://[", "saved.cap"]),
+            vec![Some(PathBuf::from("saved.cap"))]
+        );
+        assert!(fixture.native_actions().is_empty());
+        assert!(fixture.frontend_urls.lock().unwrap().is_empty());
+        assert_eq!(fixture.app.deep_link().get_current().unwrap(), None);
+    }
+
+    #[test]
+    #[cfg(any(windows, target_os = "linux"))]
+    fn credential_url_still_reaches_frontend_without_a_native_recording_action() {
+        let fixture = Fixture::new();
+        assert!(fixture.dispatch(&["Cap", LOGIN]).is_empty());
+        assert!(fixture.native_actions().is_empty());
+        let expected = vec![Url::parse(LOGIN).unwrap()];
+        assert_eq!(
+            *fixture.frontend_urls.lock().unwrap(),
+            vec![expected.clone()]
+        );
+        assert_eq!(
+            fixture.app.deep_link().get_current().unwrap(),
+            Some(expected)
+        );
+    }
+
+    #[test]
+    #[cfg(any(windows, target_os = "linux"))]
+    fn repeated_explicit_urls_are_each_delivered_once() {
+        let fixture = Fixture::new();
+        assert!(fixture.dispatch(&["Cap", STOP, STOP]).is_empty());
+        assert_eq!(
+            fixture.native_actions(),
+            vec![DeepLinkAction::StopRecording, DeepLinkAction::StopRecording]
+        );
+        assert_eq!(
+            *fixture.frontend_urls.lock().unwrap(),
+            vec![
+                vec![Url::parse(STOP).unwrap()],
+                vec![Url::parse(STOP).unwrap()]
+            ]
+        );
+        assert_eq!(
+            fixture.app.deep_link().get_current().unwrap(),
+            Some(vec![Url::parse(STOP).unwrap()])
+        );
+    }
+
+    #[test]
+    #[cfg(any(windows, target_os = "linux"))]
+    fn startup_url_remains_current_before_listeners_attach() {
+        let app = plugin_app();
+        app.deep_link()
+            .handle_cli_arguments(["Cap", LOGIN].into_iter());
+        let fixture = Fixture::attach(app);
+        assert_eq!(
+            fixture.app.deep_link().get_current().unwrap(),
+            Some(vec![Url::parse(LOGIN).unwrap()])
+        );
+        assert!(fixture.native_actions().is_empty());
+        assert!(fixture.frontend_urls.lock().unwrap().is_empty());
+        assert!(fixture.dispatch(&["Cap", STOP]).is_empty());
+        assert_eq!(
+            fixture.native_actions(),
+            vec![DeepLinkAction::StopRecording]
+        );
+        assert_eq!(fixture.frontend_urls.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn independent_plugin_events_keep_native_and_frontend_routes() {
+        let fixture = Fixture::new();
+        let urls = vec![Url::parse(STOP).unwrap(), Url::parse(LOGIN).unwrap()];
+        fixture
+            .app
+            .emit("deep-link://new-url", urls.clone())
+            .unwrap();
+        assert_eq!(
+            fixture.native_actions(),
+            vec![DeepLinkAction::StopRecording]
+        );
+        assert_eq!(*fixture.frontend_urls.lock().unwrap(), vec![urls]);
+        assert_eq!(fixture.app.deep_link().get_current().unwrap(), None);
+    }
+
+    #[test]
+    fn direct_native_delivery_does_not_disable_independent_plugin_events() {
+        let fixture = Fixture::new();
+        let urls = vec![Url::parse(STOP).unwrap()];
+        deeplink_actions::handle(fixture.app.handle(), urls.clone());
+        assert_eq!(
+            fixture.native_actions(),
+            vec![DeepLinkAction::StopRecording]
+        );
+        assert!(fixture.frontend_urls.lock().unwrap().is_empty());
+        fixture
+            .app
+            .emit("deep-link://new-url", urls.clone())
+            .unwrap();
+        assert_eq!(
+            fixture.native_actions(),
+            vec![DeepLinkAction::StopRecording]
+        );
+        assert_eq!(*fixture.frontend_urls.lock().unwrap(), vec![urls]);
+        assert_eq!(fixture.app.deep_link().get_current().unwrap(), None);
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn macos_single_instance_keeps_direct_native_delivery() {
+        let fixture = Fixture::new();
+        assert!(fixture.dispatch(&["Cap", STOP]).is_empty());
+        assert_eq!(
+            fixture.native_actions(),
+            vec![DeepLinkAction::StopRecording]
+        );
+        assert!(fixture.frontend_urls.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn macos_manual_path_preserves_existing_literal_scheme_filter() {
+        let fixture = Fixture::new();
+        assert_eq!(
+            fixture.dispatch(&["Cap", "CaP-DeSkToP://action?value=%22stop_recording%22"]),
+            vec![None]
+        );
+        assert!(fixture.native_actions().is_empty());
+        assert!(fixture.frontend_urls.lock().unwrap().is_empty());
+        assert_eq!(fixture.app.deep_link().get_current().unwrap(), None);
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn macos_open_event_keeps_native_frontend_and_current_url_routes() {
+        let fixture = Fixture::new();
+        let urls = vec![Url::parse(STOP).unwrap(), Url::parse(LOGIN).unwrap()];
+        let mut plugin = tauri_plugin_deep_link::init();
+        tauri::plugin::Plugin::on_event(
+            &mut plugin,
+            fixture.app.handle(),
+            &tauri::RunEvent::Opened { urls: urls.clone() },
+        );
+        assert_eq!(
+            fixture.native_actions(),
+            vec![DeepLinkAction::StopRecording]
+        );
+        assert_eq!(*fixture.frontend_urls.lock().unwrap(), vec![urls.clone()]);
+        assert_eq!(fixture.app.deep_link().get_current().unwrap(), Some(urls));
+    }
 }
 
 pub(crate) fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {

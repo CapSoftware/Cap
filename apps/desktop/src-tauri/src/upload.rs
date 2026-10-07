@@ -732,7 +732,16 @@ pub async fn create_or_get_video(
 pub struct CreatedVideo {
     #[serde(flatten)]
     pub upload_meta: S3UploadMeta,
+    #[serde(default, deserialize_with = "deserialize_storage_capability")]
     pub uses_default_storage: Option<bool>,
+}
+
+fn deserialize_storage_capability<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    // Optional quality metadata must not reject an otherwise valid video response.
+    Ok(serde_json::Value::deserialize(deserializer)?.as_bool())
 }
 
 #[instrument(skip(app))]

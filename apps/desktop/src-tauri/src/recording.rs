@@ -68,7 +68,6 @@ use crate::{
     RecordingStopped, VideoUploadInfo,
     api::PresignedS3PutRequestMethod,
     audio::AppSounds,
-    auth::AuthStore,
     create_screenshot, create_screenshot_source_from_segments,
     general_settings::{GeneralSettingsStore, PostDeletionBehaviour, PostStudioRecordingBehaviour},
     open_external_link,
@@ -83,6 +82,8 @@ use crate::{
 
 #[cfg(not(target_os = "linux"))]
 use crate::upload::InstantMultipartUpload;
+
+mod admission;
 
 fn recording_stopped_share_url(link: &str) -> String {
     if link.contains('?') {
@@ -628,6 +629,8 @@ type InstantActorHandle = instant_recording::ActorHandle;
 pub enum InProgressRecording {
     Instant {
         handle: InstantActorHandle,
+        #[cfg(not(target_os = "linux"))]
+        finish_upload: flume::Sender<()>,
         segment_upload: InstantUploader,
         video_upload_info: VideoUploadInfo,
         common: InProgressRecordingCommon,
@@ -1229,6 +1232,191 @@ fn recording_start_mode_error(mode: RecordingMode, authenticated: bool) -> Optio
 }
 
 const RECORDING_START_CANCELLED: &str = "Recording cancelled before starting.";
+
+const INSTANT_STARTUP_TIMEOUT: Duration = Duration::from_secs(60);
+
+#[derive(Default)]
+enum InstantStartupPhase {
+    #[default]
+    Pending,
+    Committed,
+    Cancelled,
+}
+
+#[derive(Default)]
+struct InstantStartupRequest {
+    phase: std::sync::Mutex<InstantStartupPhase>,
+    cancelled: CancellationToken,
+    setup_started: CancellationToken,
+    #[cfg(any(not(target_os = "linux"), test))]
+    completed: CancellationToken,
+    #[cfg(any(not(target_os = "linux"), test))]
+    result: std::sync::OnceLock<Result<(), String>>,
+    #[cfg(any(not(target_os = "linux"), test))]
+    capture: std::sync::Mutex<InstantStartupCapture>,
+    #[cfg(any(not(target_os = "linux"), test))]
+    previous_terminal_pause: Option<(u64, InstantTerminalProbeHold)>,
+}
+
+#[cfg(any(not(target_os = "linux"), test))]
+#[derive(Default)]
+struct InstantStartupCapture {
+    directory: Option<PathBuf>,
+    acknowledged: bool,
+    pause: Option<crate::upload_health::ProbePause>,
+}
+
+impl InstantStartupRequest {
+    #[cfg(any(not(target_os = "linux"), test))]
+    fn committed(&self) -> bool {
+        matches!(
+            *self.phase.lock().unwrap_or_else(|e| e.into_inner()),
+            InstantStartupPhase::Committed
+        )
+    }
+
+    #[cfg(any(not(target_os = "linux"), test))]
+    fn begin_capture(&self, directory: PathBuf) -> Result<(), String> {
+        let phase = self.phase.lock().unwrap_or_else(|e| e.into_inner());
+        if !matches!(*phase, InstantStartupPhase::Pending) {
+            return Err(RECORDING_START_CANCELLED.into());
+        }
+        let mut capture = self.capture.lock().unwrap_or_else(|e| e.into_inner());
+        capture.directory = Some(directory);
+        capture.acknowledged = false;
+        Ok(())
+    }
+
+    #[cfg(any(not(target_os = "linux"), test))]
+    fn acknowledge_capture(&self, directory: &Path) {
+        let mut capture = self.capture.lock().unwrap_or_else(|e| e.into_inner());
+        if capture.directory.as_deref() == Some(directory) {
+            capture.acknowledged = true;
+        }
+    }
+
+    #[cfg(any(not(target_os = "linux"), test))]
+    fn safe_to_release(&self) -> bool {
+        if self.committed() {
+            return true;
+        }
+        let capture = self.capture.lock().unwrap_or_else(|e| e.into_inner());
+        capture.directory.is_none() || capture.acknowledged
+    }
+
+    #[cfg(any(not(target_os = "linux"), test))]
+    fn release_pause(&self) {
+        if let Some(pause) = self
+            .capture
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .pause
+            .take()
+        {
+            pause.cancel_before_handoff();
+        }
+    }
+
+    #[cfg(any(not(target_os = "linux"), test))]
+    async fn wait_cancelled_setup(&self, timeout: Duration) -> Result<(), String> {
+        self.cancel_before_commit();
+        tokio::time::timeout(timeout, self.completed.cancelled()).await
+            .map_err(|_| "Instant startup cancellation is still pending; capture ownership and exclusions are retained".to_string())?;
+        self.result
+            .get()
+            .cloned()
+            .unwrap_or_else(|| Err("Instant startup completion is unavailable".into()))
+    }
+    fn begin_setup(&self) {
+        self.setup_started.cancel();
+    }
+
+    fn cancel_before_commit(&self) -> bool {
+        let mut phase = self.phase.lock().unwrap_or_else(|error| error.into_inner());
+        if matches!(*phase, InstantStartupPhase::Committed) {
+            return false;
+        }
+        *phase = InstantStartupPhase::Cancelled;
+        self.cancelled.cancel();
+        true
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.cancelled.is_cancelled()
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    async fn cancelled(&self) {
+        self.cancelled.cancelled().await;
+    }
+
+    fn publish_if_live(&self, publish: impl FnOnce() -> Result<(), String>) -> Result<(), String> {
+        let mut phase = self.phase.lock().unwrap_or_else(|error| error.into_inner());
+        match *phase {
+            InstantStartupPhase::Pending => {
+                publish()?;
+                *phase = InstantStartupPhase::Committed;
+                Ok(())
+            }
+            InstantStartupPhase::Cancelled => Err(RECORDING_START_CANCELLED.into()),
+            InstantStartupPhase::Committed => Err("Instant startup was already admitted".into()),
+        }
+    }
+}
+
+#[cfg(any(not(target_os = "linux"), test))]
+struct InstantStartupCaller(Arc<InstantStartupRequest>);
+
+#[cfg(any(not(target_os = "linux"), test))]
+impl Drop for InstantStartupCaller {
+    fn drop(&mut self) {
+        self.0.cancel_before_commit();
+    }
+}
+
+#[cfg(any(not(target_os = "linux"), test))]
+async fn await_owned_instant_start<T>(
+    caller: InstantStartupCaller,
+    mut owned: tokio::task::JoinHandle<Result<T, String>>,
+    timeout: Duration,
+    admitted: impl FnOnce() -> T,
+) -> Result<T, String> {
+    let result = tokio::select! {
+        result = &mut owned => return result.map_err(|error| format!("Instant startup task failed: {error}"))?,
+        () = caller.0.setup_started.cancelled() => {
+            tokio::time::timeout(timeout, &mut owned).await
+        }
+    };
+    match result {
+        Ok(result) => result.map_err(|error| format!("Instant startup task failed: {error}"))?,
+        Err(_) if caller.0.cancel_before_commit() => Err(
+            "Instant recording setup timed out; cancellation continues until capture shutdown is confirmed".into(),
+        ),
+        // Admission has already atomically armed and published the real actor.
+        // Its remaining UI work stays owned even if the caller stops waiting.
+        Err(_) => Ok(admitted()),
+    }
+}
+
+#[cfg(any(target_os = "linux", test))]
+async fn await_startup_reply<T>(
+    request: Arc<InstantStartupRequest>,
+    reply: impl std::future::Future<Output = Result<T, String>>,
+    timeout: Duration,
+) -> Result<T, String> {
+    tokio::pin!(reply);
+    tokio::select! {
+        result = &mut reply => return result,
+        () = request.setup_started.cancelled() => {}
+    }
+    match tokio::time::timeout(timeout, &mut reply).await {
+        Ok(result) => result,
+        Err(_) if request.cancel_before_commit() => Err("Instant recording setup timed out; cancellation continues until capture shutdown is confirmed".into()),
+        // Linux's existing reply guard must stay alive after admission. Its
+        // worker owns cleanup when an uncommitted reply is dropped on timeout.
+        Err(_) => reply.await,
+    }
+}
 
 #[derive(Clone, Default)]
 struct RecordingStoragePrompt(Arc<std::sync::Mutex<Option<Arc<CancellationToken>>>>);
@@ -1956,7 +2144,91 @@ async fn start_recording_inner(
     state_mtx: MutableState<'_, App>,
     inputs: StartRecordingInputs,
 ) -> Result<RecordingAction, String> {
+    #[cfg(not(target_os = "linux"))]
+    if inputs.mode == RecordingMode::Instant && EditorRecordingTarget::current(&app).is_none() {
+        return start_owned_instant(app, inputs, None, None).await;
+    }
+    #[cfg(target_os = "linux")]
+    let startup_request = linux_instant::current(&app).map(|attempt| attempt.startup_request());
+    #[cfg(not(target_os = "linux"))]
+    let startup_request = None;
+    start_recording_inner_with_terminal(app, state_mtx, inputs, None, startup_request).await
+}
+
+#[cfg(not(target_os = "linux"))]
+fn start_owned_instant(
+    app: AppHandle,
+    inputs: StartRecordingInputs,
+    terminal_owner: Option<u64>,
+    previous_terminal_pause: Option<InstantTerminalProbeHold>,
+) -> futures::future::BoxFuture<'static, Result<RecordingAction, String>> {
+    Box::pin(async move {
+        let request = Arc::new(InstantStartupRequest {
+            previous_terminal_pause: terminal_owner.zip(previous_terminal_pause),
+            ..Default::default()
+        });
+        let caller = InstantStartupCaller(request.clone());
+        let owned_request = request.clone();
+        let task = tokio::spawn(async move {
+            let owned_app = app.clone();
+            let mut result = AssertUnwindSafe(start_recording_inner_with_terminal(
+                app.clone(),
+                owned_app.state(),
+                inputs,
+                terminal_owner,
+                Some(owned_request.clone()),
+            ))
+            .catch_unwind()
+            .await
+            .unwrap_or_else(|panic| {
+                Err(format!(
+                    "Instant startup task panicked: {}",
+                    panic_message(panic)
+                ))
+            });
+            let state_mtx = app.state::<Arc<tokio::sync::RwLock<App>>>();
+            let mut state = state_mtx.write().await;
+            let terminal = app.state::<InstantTerminalState>();
+            if terminal.release_startup(&owned_request) {
+                if !owned_request.committed() {
+                    state.clear_pending_recording();
+                }
+                crate::windows::apply_content_protection(
+                    &app,
+                    state.is_recording_active_or_pending(),
+                );
+            } else if terminal.startup_is(&owned_request) {
+                result = Err(format!(
+                    "{}; Instant capture shutdown is unconfirmed; recording state and exclusions are retained",
+                    result
+                        .err()
+                        .unwrap_or_else(|| "Instant startup did not commit".into())
+                ));
+            }
+            let _ = owned_request
+                .result
+                .set(result.as_ref().map(|_| ()).map_err(Clone::clone));
+            owned_request.completed.cancel();
+            result
+        });
+        await_owned_instant_start(caller, task, INSTANT_STARTUP_TIMEOUT, || {
+            RecordingAction::Started
+        })
+        .await
+    })
+}
+
+async fn start_recording_inner_with_terminal(
+    app: AppHandle,
+    state_mtx: MutableState<'_, App>,
+    inputs: StartRecordingInputs,
+    terminal_owner: Option<u64>,
+    startup_request: Option<Arc<InstantStartupRequest>>,
+) -> Result<RecordingAction, String> {
     let mut inputs = inputs;
+    if !instant_terminal_admission_allowed(&app, terminal_owner) {
+        return Err("Recording cleanup is still pending. Finish stopping before recording.".into());
+    }
 
     #[cfg(target_os = "linux")]
     let has_instant_owner = linux_instant::current(&app).is_some();
@@ -1989,6 +2261,8 @@ async fn start_recording_inner(
         inputs,
         requested_inputs,
         clean_generation,
+        terminal_owner,
+        startup_request,
     )
     .await;
     if !matches!(&result, Ok(RecordingAction::Started))
@@ -2010,18 +2284,28 @@ async fn start_recording_prepared(
     mut inputs: StartRecordingInputs,
     requested_inputs: crate::RequestedInputs,
     clean_generation: Option<u32>,
+    terminal_owner: Option<u64>,
+    startup_request: Option<Arc<InstantStartupRequest>>,
 ) -> Result<RecordingAction, String> {
     let requested_state = app.state::<crate::RequestedInputsState>();
-    let mut _input_operation = Some(requested_state.operation.lock().await);
-    if let Err(error) = requested_state.ready_snapshot() {
-        notify_recording_start_failed(&app, &error);
-        return Err(error);
-    }
-    if !requested_state.is_current(&requested_inputs) {
-        let error = "Input selection changed before recording could start. Try recording again."
-            .to_string();
-        notify_recording_start_failed(&app, &error);
-        return Err(error);
+    let validate_requested = || -> Result<(), String> {
+        requested_state.ready_snapshot()?;
+        if !requested_state.is_current(&requested_inputs) {
+            return Err(
+                "Input selection changed before recording could start. Try recording again.".into(),
+            );
+        }
+        Ok(())
+    };
+    // Instant establishes Pending plus its request before a device operation can
+    // hold setup. Stop must be able to cancel that wait without losing its owner.
+    let mut _input_operation = if inputs.mode == RecordingMode::Instant {
+        None
+    } else {
+        Some(requested_state.operation.lock().await)
+    };
+    if _input_operation.is_some() {
+        validate_requested().inspect_err(|error| notify_recording_start_failed(&app, error))?;
     }
 
     let is_camera_only = matches!(inputs.capture_target, ScreenCaptureTarget::CameraOnly);
@@ -2044,7 +2328,11 @@ async fn start_recording_prepared(
                 Err("Recording preflight was cancelled or superseded".to_string())
             }
         } else {
-            app_state.set_pending_recording(inputs.mode, inputs.capture_target.clone())
+            app_state.set_pending_recording_with_terminal(
+                inputs.mode,
+                inputs.capture_target.clone(),
+                terminal_owner,
+            )
         };
         if let Err(error) = pending_result {
             drop(app_state);
@@ -2053,8 +2341,37 @@ async fn start_recording_prepared(
             notify_recording_start_failed(&app, &error);
             return Err(error);
         }
+        #[cfg(not(target_os = "linux"))]
+        if inputs.mode == RecordingMode::Instant
+            && let Some(request) = &startup_request
+        {
+            app.state::<InstantTerminalState>().reserve_startup(
+                request.clone(),
+                crate::upload_health::pause_probes_for_startup(&app),
+            )?;
+        }
         if is_camera_only {
             app_state.was_camera_only_recording = true;
+        }
+    }
+
+    if _input_operation.is_none() {
+        _input_operation = Some(
+            tokio::time::timeout(INSTANT_STARTUP_TIMEOUT, requested_state.operation.lock())
+                .await
+                .map_err(|_| {
+                    if let Some(request) = &startup_request {
+                        request.cancel_before_commit();
+                    }
+                    "Instant input preparation timed out before capture setup".to_string()
+                })?,
+        );
+        validate_requested().inspect_err(|error| notify_recording_start_failed(&app, error))?;
+        if startup_request
+            .as_ref()
+            .is_some_and(|request| request.is_cancelled())
+        {
+            return Err(RECORDING_START_CANCELLED.into());
         }
     }
 
@@ -2068,12 +2385,13 @@ async fn start_recording_prepared(
         drop(_input_operation.take());
     }
 
-    let instant_auth = if matches!(inputs.mode, RecordingMode::Instant) {
-        AuthStore::get(&app).ok().flatten()
+    let instant_binding = if matches!(inputs.mode, RecordingMode::Instant) {
+        let state = state_mtx.read().await;
+        admission::Binding::read(&app, &state.server_url).ok()
     } else {
         None
     };
-    if let Some(error) = recording_start_mode_error(inputs.mode, instant_auth.is_some()) {
+    if let Some(error) = recording_start_mode_error(inputs.mode, instant_binding.is_some()) {
         state_mtx.write().await.clear_pending_recording();
         notify_recording_start_failed(&app, error);
         return Err(error.to_string());
@@ -2193,7 +2511,17 @@ async fn start_recording_prepared(
         storage_work.await
     };
     #[cfg(not(target_os = "linux"))]
-    let storage_result = storage_work.await;
+    let storage_result = if let Some(request) = &startup_request {
+        tokio::select! {
+            result = storage_work => result,
+            () = request.cancelled() => {
+                storage_prompt.cancelled.cancel();
+                Err(RECORDING_START_CANCELLED.into())
+            }
+        }
+    } else {
+        storage_work.await
+    };
     {
         let mut app_state = state_mtx.write().await;
         let owns_pending = matches!(app_state.recording_state, RecordingState::Pending { .. })
@@ -2245,6 +2573,24 @@ async fn start_recording_prepared(
     }
     drop(storage_events);
 
+    if let Some(request) = &startup_request {
+        if request.is_cancelled() {
+            state_mtx.write().await.clear_pending_recording();
+            return Err(RECORDING_START_CANCELLED.into());
+        }
+        request.begin_setup();
+    }
+
+    if let Some(binding) = &instant_binding {
+        let mut state = state_mtx.write().await;
+        if let Err(error) = binding.validate(&app, &state.server_url) {
+            state.clear_pending_recording();
+            drop(state);
+            notify_recording_start_failed(&app, &error);
+            return Err(error);
+        }
+    }
+
     let project_file_path = recordings_base_dir.join(&pending_try!(
         cap_utils::ensure_unique_filename(&filename, &recordings_base_dir,),
         |e| e
@@ -2283,22 +2629,15 @@ async fn start_recording_prepared(
         warn!(%error, "Failed to update camera window content protection");
     }
 
-    let (video_upload_info, instant_mode_max_resolution) = match inputs.mode {
+    let (video_upload_info, instant_mode_max_resolution, creation_health) = match inputs.mode {
         RecordingMode::Instant => {
-            let Some(auth) = instant_auth else {
+            let Some(binding) = instant_binding.as_ref() else {
                 let error = "Please sign in to use instant recording".to_string();
                 state_mtx.write().await.clear_pending_recording();
                 notify_recording_start_failed(&app, &error);
                 return Err(error);
             };
-            let configured_resolution = if auth.is_upgraded() {
-                general_settings
-                    .map_or(cap_recording::PRO_INSTANT_MODE_MAX_RESOLUTION, |settings| {
-                        settings.instant_mode_max_resolution
-                    })
-            } else {
-                cap_recording::FREE_INSTANT_MODE_MAX_RESOLUTION
-            };
+            let configured_resolution = binding.configured_resolution;
 
             let upload_mode = if matches!(inputs.capture_target, ScreenCaptureTarget::CameraOnly) {
                 "desktopMP4"
@@ -2306,9 +2645,15 @@ async fn start_recording_prepared(
                 "desktopSegments"
             };
 
-            let (creation, created_video) = match async {
-                let creation = crate::upload_health::prepare_video_creation(&app).await;
-                let created_video = creation
+            let creation_result = async {
+                let creation = crate::upload_health::prepare_bound_video_creation(
+                    &app,
+                    binding.server_url(),
+                    binding.owner_id(),
+                )
+                .await;
+                let created_video = binding
+                    .context()?
                     .run(crate::upload::create_or_get_video_with_mode(
                         &app,
                         false,
@@ -2321,8 +2666,17 @@ async fn start_recording_prepared(
                     .await?;
                 Ok::<_, AuthedApiError>((creation, created_video))
             }
-            .await
+            .await;
             {
+                let mut state = state_mtx.write().await;
+                if let Err(error) = binding.validate(&app, &state.server_url) {
+                    state.clear_pending_recording();
+                    drop(state);
+                    notify_recording_start_failed(&app, &error);
+                    return Err(error);
+                }
+            }
+            let (creation, created_video) = match creation_result {
                 Ok(meta) => meta,
                 Err(AuthedApiError::InvalidAuthentication) => {
                     state_mtx.write().await.clear_pending_recording();
@@ -2365,7 +2719,7 @@ async fn start_recording_prepared(
                 );
             }
             let s3_config = created_video.upload_meta;
-            let link = app.make_app_url(format!("/s/{}", s3_config.id)).await;
+            let link = binding.share_url(&s3_config.id);
             info!("Pre-created shareable link: {}", link);
 
             (
@@ -2375,9 +2729,10 @@ async fn start_recording_prepared(
                     config: s3_config,
                 }),
                 instant_mode_max_resolution,
+                Some(creation),
             )
         }
-        RecordingMode::Studio => (None, cap_recording::PRO_INSTANT_MODE_MAX_RESOLUTION),
+        RecordingMode::Studio => (None, cap_recording::PRO_INSTANT_MODE_MAX_RESOLUTION, None),
         RecordingMode::Screenshot => {
             let error = "Use take_screenshot for screenshots".to_string();
             state_mtx.write().await.clear_pending_recording();
@@ -2454,8 +2809,13 @@ async fn start_recording_prepared(
                 .perform(&window);
         }
     }
-    let start_gate = cap_recording::RecordingStartGate::new();
+    let start_gate = if inputs.mode == RecordingMode::Instant {
+        cap_recording::RecordingStartGate::explicit_admission()
+    } else {
+        cap_recording::RecordingStartGate::new()
+    };
     let start_cue = crate::audio::prime_recording_start_sound();
+    let cue_result: Arc<std::sync::OnceLock<Result<(), String>>> = Arc::default();
     let start_cancelled: Arc<std::sync::OnceLock<&'static str>> = Arc::default();
     crate::windows::apply_content_protection(&app, true);
 
@@ -2468,9 +2828,16 @@ async fn start_recording_prepared(
 
     let start_cancel_reason = {
         let app = app.clone();
+        let startup_request = startup_request.clone();
         #[cfg(target_os = "linux")]
         let mode = inputs.mode;
         move || -> Option<&'static str> {
+            if startup_request
+                .as_ref()
+                .is_some_and(|request| request.is_cancelled())
+            {
+                return Some(RECORDING_START_CANCELLED);
+            }
             if clean_generation
                 .is_some_and(|generation| crate::clean_capture::stop_requested(&app, generation))
             {
@@ -2505,25 +2872,67 @@ async fn start_recording_prepared(
         let start_gate = start_gate.clone();
         let start_cancelled = start_cancelled.clone();
         let start_cancel_reason = start_cancel_reason.clone();
+        let cue_result = cue_result.clone();
+        let instant = inputs.mode == RecordingMode::Instant;
+        let startup_request = startup_request.clone();
         async move {
             if countdown >= 1 {
                 let _ = RecordingEvent::Countdown { value: 1 }.emit(&app);
                 if let Err(reason) = countdown_tick(&start_cancel_reason).await {
                     let _ = start_cancelled.set(reason);
-                    start_gate.arm();
+                    if !instant {
+                        start_gate.arm();
+                    }
+                    if instant && let Some(request) = &startup_request {
+                        request.cancel_before_commit();
+                    }
+                    #[cfg(target_os = "linux")]
+                    if instant && let Some(attempt) = linux_instant::current(&app) {
+                        attempt.cancel();
+                    }
+                    let _ = cue_result.set(Err(reason.into()));
                     return;
                 }
                 let _ = RecordingEvent::Countdown { value: 0 }.emit(&app);
             }
-            let cue = crate::audio::play_recording_start_sound(start_cue, start_gate);
+            let cue = async move {
+                if instant {
+                    crate::audio::play_recording_start_sound_for_admission(start_cue).await
+                } else {
+                    crate::audio::play_recording_start_sound(start_cue, start_gate).await;
+                    Ok(())
+                }
+            };
             tokio::pin!(cue);
             loop {
                 tokio::select! {
-                    _ = &mut cue => break,
+                    result = &mut cue => {
+                        if result.is_err() {
+                            if let Some(request) = &startup_request {
+                                request.cancel_before_commit();
+                            }
+                            #[cfg(target_os = "linux")]
+                            if instant && let Some(attempt) = linux_instant::current(&app) {
+                                attempt.cancel();
+                            }
+                        }
+                        let _ = cue_result.set(result);
+                        break;
+                    },
                     _ = tokio::time::sleep(Duration::from_millis(50)) => {}
                 }
                 if let Some(reason) = start_cancel_reason() {
                     let _ = start_cancelled.set(reason);
+                    if instant {
+                        if let Some(request) = &startup_request {
+                            request.cancel_before_commit();
+                        }
+                        #[cfg(target_os = "linux")]
+                        if let Some(attempt) = linux_instant::current(&app) {
+                            attempt.cancel();
+                        }
+                    }
+                    let _ = cue_result.set(Err(reason.into()));
                     break;
                 }
             }
@@ -2545,12 +2954,16 @@ async fn start_recording_prepared(
 
     let app_handle = app.clone();
     let actor_task = {
+        #[cfg(not(target_os = "linux"))]
+        let finish_upload = finish_upload_tx.clone();
         let state_mtx = Arc::clone(&state_mtx);
         let general_settings = general_settings.cloned();
         let recording_dir = project_file_path.clone();
         let inputs = inputs.clone();
         let start_gate = start_gate.clone();
         let start_cancelled = start_cancelled.clone();
+        let cue_result = cue_result.clone();
+        let startup_request = startup_request.clone();
         async move {
             fail!("recording::spawn_actor");
 
@@ -2807,14 +3220,25 @@ async fn start_recording_prepared(
                                 .map_err(anyhow::Error::msg)?;
                                 attempt.checked(Ok(())).map_err(anyhow::Error::msg)?;
                             }
-                            let upload_session = crate::upload::lifecycle::prepare(
+                            let bound_context = instant_binding
+                                .as_ref()
+                                .ok_or_else(|| anyhow!("Instant recording account is unavailable"))?
+                                .context()?;
+                            let upload_session = crate::upload::lifecycle::prepare_bound(
                                 &app_handle,
                                 &recording_dir,
                                 &video_upload_info.id,
                                 inputs.capture_system_audio || mic_feed.is_some(),
+                                &bound_context,
                             )
                             .await
                             .map_err(anyhow::Error::from)?;
+                            #[cfg(not(target_os = "linux"))]
+                            if let Some(request) = &startup_request {
+                                request
+                                    .begin_capture(recording_dir.clone())
+                                    .map_err(anyhow::Error::msg)?;
+                            }
                             let handle = builder
                                 .build(
                                     #[cfg(target_os = "macos")]
@@ -2822,6 +3246,12 @@ async fn start_recording_prepared(
                                 )
                                 .await
                                 .map_err(|e| {
+                                    #[cfg(any(windows, target_os = "macos"))]
+                                    if !instant_recording::startup_cleanup_is_unconfirmed(&e)
+                                        && let Some(request) = &startup_request
+                                    {
+                                        request.acknowledge_capture(&recording_dir);
+                                    }
                                     error!("Failed to spawn instant recording actor: {e:#}");
                                     e
                                 })?;
@@ -2880,6 +3310,8 @@ async fn start_recording_prepared(
 
                             Ok(InProgressRecording::Instant {
                                 handle,
+                                #[cfg(not(target_os = "linux"))]
+                                finish_upload: finish_upload.clone(),
                                 segment_upload,
                                 video_upload_info,
                                 common: common.clone(),
@@ -2896,25 +3328,73 @@ async fn start_recording_prepared(
 
                 match actor_result {
                     Ok(mut actor) => {
-                        // The recording stays out of app state until the cue has
-                        // armed the gate, so nothing reports "recording" while the
-                        // primed pipeline is still discarding frames.
-                        while !start_gate.is_armed() && start_cancelled.get().is_none() {
+                        while (if inputs.mode == RecordingMode::Instant {
+                            cue_result.get().is_none()
+                        } else {
+                            !start_gate.is_armed()
+                        }) && start_cancelled.get().is_none()
+                            && !startup_request
+                                .as_ref()
+                                .is_some_and(|request| request.is_cancelled())
+                        {
                             tokio::time::sleep(Duration::from_millis(10)).await;
                         }
                         let mut state = state_mtx.write().await;
+                        macro_rules! reject_start {
+                            ($actor:expr, $reason:expr) => {{
+                                let reason = $reason.to_string();
+                                #[cfg(not(target_os = "linux"))]
+                                if inputs.mode == RecordingMode::Instant {
+                                    let cleanup = own_rejected_instant_start(
+                                        &app_handle,
+                                        &state_mtx,
+                                        state,
+                                        $actor,
+                                        terminal_owner,
+                                    )
+                                    .map_err(anyhow::Error::msg)?;
+                                    cleanup
+                                        .await
+                                        .map_err(|error| {
+                                            anyhow!(
+                                                "{reason}; startup cleanup task failed: {error}"
+                                            )
+                                        })?
+                                        .map_err(|error| {
+                                            anyhow!("{reason}; startup cleanup failed: {error}")
+                                        })?;
+                                    return Err(anyhow!(reason));
+                                }
+                                drop(state);
+                                if let Some(error) =
+                                    cancel_discarded_recording(&app_handle, $actor).await
+                                {
+                                    return Err(anyhow!(
+                                        "{reason}; startup cleanup failed: {error}"
+                                    ));
+                                }
+                                return Err(anyhow!(reason));
+                            }};
+                        }
                         if let Some(reason) = start_cancelled.get().copied() {
-                            drop(state);
-                            let _ = cancel_discarded_recording(&app_handle, actor).await;
-                            return Err(anyhow!(reason));
+                            reject_start!(actor, reason);
+                        }
+                        if inputs.mode == RecordingMode::Instant {
+                            if let Some(Err(error)) = cue_result.get() {
+                                reject_start!(actor, error);
+                            }
+                            if startup_request
+                                .as_ref()
+                                .is_some_and(|request| request.is_cancelled())
+                            {
+                                reject_start!(actor, RECORDING_START_CANCELLED);
+                            }
                         }
                         if clean_generation.is_some_and(|generation| {
                             !crate::clean_capture::is_current(&app_handle, generation)
                         }) || !matches!(state.recording_state, RecordingState::Pending { .. })
                         {
-                            drop(state);
-                            let _ = cancel_discarded_recording(&app_handle, actor).await;
-                            return Err(anyhow!("Recording startup was cancelled or superseded"));
+                            reject_start!(actor, "Recording startup was cancelled or superseded");
                         }
                         #[cfg(target_os = "linux")]
                         if inputs.mode == RecordingMode::Instant
@@ -2926,38 +3406,86 @@ async fn start_recording_prepared(
                                 .state::<crate::RequestedInputsState>()
                                 .is_current(&requested_inputs))
                         {
-                            drop(state);
-                            let _ = cancel_discarded_recording(&app_handle, actor).await;
-                            return Err(anyhow!("Instant startup was cancelled"));
+                            reject_start!(actor, "Instant startup was cancelled");
                         }
                         let done_fut = actor.done_fut();
                         let health_rx = actor.take_health_rx();
                         let mut candidate = Some(actor);
-                        let published = app_handle
+                        let mut publish = || -> Result<(), String> {
+                            let mut result = Ok(());
+                            let published = app_handle
                             .state::<crate::RequestedInputsState>()
                             .publish_if_current(&requested_inputs, || {
-                                state.selected_mic_label =
-                                    requested_inputs.microphone.value.clone();
-                                state.selected_camera_id = requested_inputs.camera.value.clone();
-                                state.camera_in_use = has_camera_feed;
-                                state.applied_mic_input.confirm();
-                                state.set_current_recording(candidate.take().unwrap());
-                                if let Some(generation) = clean_generation {
-                                    crate::clean_capture::publish(
-                                        &app_handle,
-                                        generation,
-                                        recording_dir.clone(),
-                                    );
+                                if let Some(binding) = &instant_binding {
+                                    result = (|| {
+                                        crate::check_requested_camera_permission(
+                                            requested_inputs.camera.value.as_ref(), permissions::check_camera_access,
+                                        )?;
+                                        if requested_inputs.microphone.value.is_some() {
+                                            permissions::check_microphone_access()?;
+                                        }
+                                        if instant_mode_max_resolution < binding.configured_resolution
+                                            && !creation_health.as_ref().is_some_and(|ticket| ticket.cap_is_current(&app_handle))
+                                        {
+                                            return Err("Upload health changed during startup. Try recording again.".into());
+                                        }
+                                        Ok(())
+                                    })();
+                                    if result.is_err() { return; }
+                                }
+                                let server_url = state.server_url.clone();
+                                let mut commit = || {
+                                    state.selected_mic_label = requested_inputs.microphone.value.clone();
+                                    state.selected_camera_id = requested_inputs.camera.value.clone();
+                                    state.camera_in_use = has_camera_feed;
+                                    state.applied_mic_input.confirm();
+                                    if inputs.mode == RecordingMode::Instant {
+                                        // Retain the actor before arm; no fallible work or await
+                                        // separates the final snapshot, ownership, and admission.
+                                        state.recording_state = RecordingState::Active(candidate.take().unwrap());
+                                        start_gate.arm();
+                                    } else {
+                                        state.set_current_recording(candidate.take().unwrap());
+                                    }
+                                };
+                                if let Some(binding) = &instant_binding {
+                                    result = binding.admit(&app_handle, &server_url, commit);
+                                } else {
+                                    commit();
                                 }
                             });
-                        if !published {
-                            drop(state);
-                            let _ =
-                                cancel_discarded_recording(&app_handle, candidate.take().unwrap())
-                                    .await;
-                            return Err(anyhow!(
-                                "Input selection changed during recording startup. Try recording again."
-                            ));
+                            if !published {
+                                return Err("Input selection changed during recording startup. Try recording again.".into());
+                            }
+                            result
+                        };
+                        let publication = match &startup_request {
+                            Some(request) => request.publish_if_live(publish),
+                            None => publish(),
+                        };
+                        if let Err(error) = publication {
+                            reject_start!(candidate.take().unwrap(), error);
+                        }
+                        #[cfg(not(target_os = "linux"))]
+                        if inputs.mode == RecordingMode::Instant
+                            && let Some(request) = &startup_request
+                        {
+                            // App now retains the admitted actor. Startup must not
+                            // keep blocking a later Start after that actor is stopped
+                            // merely because this command's UI tail is still pending.
+                            app_handle
+                                .state::<InstantTerminalState>()
+                                .release_startup(request);
+                        }
+                        if inputs.mode == RecordingMode::Instant {
+                            CurrentRecordingChanged.emit(&app_handle).ok();
+                        }
+                        if let Some(generation) = clean_generation {
+                            crate::clean_capture::publish(
+                                &app_handle,
+                                generation,
+                                recording_dir.clone(),
+                            );
                         }
                         #[cfg(any(target_os = "linux", target_os = "macos", windows))]
                         let automatic_stop = match state.current_recording() {
@@ -3143,6 +3671,34 @@ async fn start_recording_prepared(
                     .await
                     {
                         completion.present_automatic();
+                    }
+                    return;
+                }
+                #[cfg(not(target_os = "linux"))]
+                if instant_watch {
+                    // An explicit terminal task owns both capture acknowledgement
+                    // and presentation. Video completion must not clear its state.
+                    let terminal = app.state::<InstantTerminalState>();
+                    if terminal.owns(&project_file_path) {
+                        return;
+                    }
+                    let cohort = terminal.cohort();
+                    let failure = match classify_actor_done_result(res, true) {
+                        ActorDoneDisposition::UnexpectedStop { error }
+                        | ActorDoneDisposition::Failed { error } => Some(error),
+                        ActorDoneDisposition::UserInitiatedStop => None,
+                    };
+                    if let Some(Err(error)) = control_instant_recording(
+                        &app,
+                        &state_mtx,
+                        InstantTerminalAction::Stop,
+                        cohort,
+                        Some(&project_file_path),
+                        failure,
+                    )
+                    .await
+                    {
+                        error!(%error, "Automatic Instant stop did not complete");
                     }
                     return;
                 }
@@ -3612,6 +4168,11 @@ async fn handle_spawn_failure(
     recording_dir: &Path,
     message: String,
 ) -> Result<(), String> {
+    if instant_terminal_requires_protection(app) {
+        return Err(format!(
+            "{message}; Instant capture cleanup is unconfirmed; recording state and exclusions retained"
+        ));
+    }
     #[cfg(target_os = "linux")]
     if linux_instant::current(app).is_some_and(|attempt| attempt.owns_directory(recording_dir)) {
         notify_recording_start_failed(app, &message);
@@ -5000,10 +5561,1537 @@ async fn queue_studio_stop(
     (deferred, retry)
 }
 
+#[cfg(any(not(target_os = "linux"), test))]
+#[derive(Clone, Default)]
+pub(crate) struct InstantTerminalState(Arc<std::sync::Mutex<InstantTerminalInner>>);
+
+#[cfg(any(not(target_os = "linux"), test))]
+#[derive(Clone)]
+struct InstantTerminalProbeHold(Arc<std::sync::Mutex<Option<crate::upload_health::ProbePause>>>);
+
+#[cfg(any(not(target_os = "linux"), test))]
+impl InstantTerminalProbeHold {
+    fn new(pause: crate::upload_health::ProbePause) -> Self {
+        Self(Arc::new(std::sync::Mutex::new(Some(pause))))
+    }
+
+    fn release_acknowledged(&self) {
+        if let Some(pause) = self.0.lock().unwrap().take() {
+            pause.cancel_before_handoff();
+        }
+    }
+
+    fn spawn<T: Send + 'static>(
+        self,
+        work: impl std::future::Future<Output = (T, bool)> + Send + 'static,
+    ) -> tokio::task::JoinHandle<T> {
+        tokio::spawn(async move {
+            let (result, acknowledged) = work.await;
+            if acknowledged {
+                self.release_acknowledged();
+            }
+            result
+        })
+    }
+}
+
+#[cfg(any(not(target_os = "linux"), test))]
+#[derive(Default)]
+struct InstantTerminalInner {
+    generation: u64,
+    owner: Option<InstantTerminalOwner>,
+    startup: Option<Arc<InstantStartupRequest>>,
+}
+
+#[cfg(test)]
+pub(crate) fn with_test_startup_reservation(
+    pause: crate::upload_health::ProbePause,
+    action: impl FnOnce(),
+) {
+    let terminal = InstantTerminalState::default();
+    let request = Arc::new(InstantStartupRequest::default());
+    terminal.reserve_startup(request.clone(), pause).unwrap();
+    assert!(terminal.requires_protection());
+    assert!(!terminal.admission_allowed(None));
+    action();
+    assert!(terminal.release_startup(&request));
+    assert!(!terminal.requires_protection());
+    assert!(terminal.admission_allowed(None));
+}
+
+#[cfg(test)]
+pub(crate) fn with_test_restart_startup_reservation(
+    terminal_pause: crate::upload_health::ProbePause,
+    startup_pause: crate::upload_health::ProbePause,
+    action: impl FnOnce(),
+) {
+    let terminal = InstantTerminalState::default();
+    let owner = terminal
+        .begin(PathBuf::from("previous.cap"), terminal.cohort())
+        .unwrap();
+    owner.retain_probe_recovery(terminal_pause.recovery_token());
+    owner.acknowledge_capture();
+    let pause = InstantTerminalProbeHold::new(terminal_pause);
+    let request = Arc::new(InstantStartupRequest {
+        previous_terminal_pause: Some((owner.generation, pause)),
+        ..Default::default()
+    });
+    terminal
+        .reserve_startup(request.clone(), startup_pause)
+        .unwrap();
+    assert!(terminal.requires_protection());
+    assert!(!terminal.admission_allowed(None));
+    action();
+    assert!(terminal.release_startup(&request));
+    owner.complete();
+    assert!(terminal.admission_allowed(None));
+}
+
+#[cfg(any(not(target_os = "linux"), test))]
+struct InstantTerminalOwner {
+    generation: u64,
+    directory: PathBuf,
+    capture_acknowledged: bool,
+    running: bool,
+    probe_recovery: Vec<crate::upload_health::ProbeRecoveryToken>,
+}
+
+#[cfg(any(not(target_os = "linux"), test))]
+impl InstantTerminalState {
+    fn reserve_startup(
+        &self,
+        request: Arc<InstantStartupRequest>,
+        pause: crate::upload_health::ProbePause,
+    ) -> Result<(), String> {
+        let mut inner = self.0.lock().unwrap();
+        if inner.startup.is_some() {
+            pause.cancel_before_handoff();
+            return Err("Instant startup is already owned".into());
+        }
+        if let Some((generation, _)) = &request.previous_terminal_pause
+            && !inner.owner.as_ref().is_some_and(|owner| {
+                owner.generation == *generation && owner.capture_acknowledged && owner.running
+            })
+        {
+            pause.cancel_before_handoff();
+            return Err(
+                "Previous Instant capture has not acknowledged this restart handoff".into(),
+            );
+        }
+        request
+            .capture
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .pause = Some(pause);
+        inner.startup = Some(request.clone());
+        // Restart has already acknowledged and fully cleaned its previous
+        // capture. Install the replacement exclusion before releasing only
+        // that previous terminal pause, so its cached quality cap remains usable.
+        if let Some((_, previous)) = &request.previous_terminal_pause {
+            previous.release_acknowledged();
+        }
+        Ok(())
+    }
+
+    fn startup(&self) -> Option<Arc<InstantStartupRequest>> {
+        self.0.lock().unwrap().startup.clone()
+    }
+
+    fn startup_is(&self, request: &Arc<InstantStartupRequest>) -> bool {
+        self.0
+            .lock()
+            .unwrap()
+            .startup
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, request))
+    }
+
+    fn release_startup(&self, request: &Arc<InstantStartupRequest>) -> bool {
+        let mut inner = self.0.lock().unwrap();
+        if inner
+            .startup
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, request))
+            && request.safe_to_release()
+        {
+            request.release_pause();
+            inner.startup = None;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn completed_startup_cancellation(
+        &self,
+        request: &Arc<InstantStartupRequest>,
+        active_instant_directory: Option<&Path>,
+    ) -> Option<Result<(), String>> {
+        // Completion may have released this request while its caller waited
+        // for App.read. A newer actor must never become its retry target.
+        if request.safe_to_release() {
+            return Some(Ok(()));
+        }
+        if self.startup_is(request)
+            && active_instant_directory.is_some_and(|directory| {
+                request
+                    .capture
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .directory
+                    .as_deref()
+                    == Some(directory)
+            })
+        {
+            return None;
+        }
+        Some(Err(
+            "Instant startup cleanup is unconfirmed; recording state and exclusions are retained"
+                .into(),
+        ))
+    }
+
+    fn cohort(&self) -> u64 {
+        self.0.lock().unwrap().generation
+    }
+
+    fn check_cohort(&self, cohort: u64) -> Result<(), String> {
+        let inner = self.0.lock().unwrap();
+        if inner.generation != cohort || inner.owner.as_ref().is_some_and(|owner| owner.running) {
+            return Err("Another recording terminal action already owns this request".into());
+        }
+        Ok(())
+    }
+
+    fn begin(&self, directory: PathBuf, cohort: u64) -> Result<InstantTerminalLease, String> {
+        let mut inner = self.0.lock().unwrap();
+        if inner.generation != cohort
+            || inner
+                .owner
+                .as_ref()
+                .is_some_and(|owner| owner.running || owner.directory != directory)
+        {
+            return Err("Recording cleanup is already in progress".into());
+        }
+        inner.generation = inner.generation.wrapping_add(1);
+        let generation = inner.generation;
+        let probe_recovery = inner
+            .owner
+            .take()
+            .map_or_else(Vec::new, |owner| owner.probe_recovery);
+        inner.owner = Some(InstantTerminalOwner {
+            generation,
+            directory,
+            capture_acknowledged: false,
+            running: true,
+            probe_recovery,
+        });
+        Ok(InstantTerminalLease {
+            state: self.clone(),
+            generation,
+        })
+    }
+
+    fn begin_rejected_start(
+        &self,
+        directory: PathBuf,
+        restart_owner: Option<u64>,
+    ) -> Result<InstantTerminalLease, String> {
+        let mut inner = self.0.lock().unwrap();
+        if inner.owner.as_ref().is_some_and(|owner| {
+            restart_owner != Some(owner.generation) || !owner.running || !owner.capture_acknowledged
+        }) {
+            return Err("Another recording owns capture cleanup".into());
+        }
+        inner.generation = inner.generation.wrapping_add(1);
+        let generation = inner.generation;
+        inner.owner = Some(InstantTerminalOwner {
+            generation,
+            directory,
+            capture_acknowledged: false,
+            running: true,
+            probe_recovery: Vec::new(),
+        });
+        Ok(InstantTerminalLease {
+            state: self.clone(),
+            generation,
+        })
+    }
+
+    fn admission_allowed(&self, generation: Option<u64>) -> bool {
+        let inner = self.0.lock().unwrap();
+        inner.startup.is_none()
+            && inner.owner.as_ref().is_none_or(|owner| {
+                generation == Some(owner.generation) && owner.capture_acknowledged && owner.running
+            })
+    }
+
+    fn requires_protection(&self) -> bool {
+        let inner = self.0.lock().unwrap();
+        inner.startup.as_ref().is_some_and(|request| {
+            !request.committed()
+                && !request
+                    .capture
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .acknowledged
+        }) || inner
+            .owner
+            .as_ref()
+            .is_some_and(|owner| !owner.capture_acknowledged)
+    }
+
+    fn owns(&self, directory: &Path) -> bool {
+        self.0
+            .lock()
+            .unwrap()
+            .owner
+            .as_ref()
+            .is_some_and(|owner| owner.directory == directory)
+    }
+}
+
+#[cfg(any(not(target_os = "linux"), test))]
+struct InstantTerminalLease {
+    state: InstantTerminalState,
+    generation: u64,
+}
+
+#[cfg(any(not(target_os = "linux"), test))]
+impl InstantTerminalLease {
+    fn retain_probe_recovery(&self, token: crate::upload_health::ProbeRecoveryToken) {
+        let mut inner = self.state.0.lock().unwrap();
+        if let Some(owner) = &mut inner.owner
+            && owner.generation == self.generation
+        {
+            owner.probe_recovery.push(token);
+        }
+    }
+
+    fn acknowledge_capture(&self) {
+        let mut inner = self.state.0.lock().unwrap();
+        if let Some(owner) = &mut inner.owner
+            && owner.generation == self.generation
+        {
+            owner.capture_acknowledged = true;
+            for token in &owner.probe_recovery {
+                token.acknowledge_capture();
+            }
+            let directory = owner.directory.clone();
+            if let Some(request) = &inner.startup {
+                request.acknowledge_capture(&directory);
+            }
+        }
+    }
+
+    fn complete(self) {
+        let mut inner = self.state.0.lock().unwrap();
+        if inner
+            .owner
+            .as_ref()
+            .is_some_and(|owner| owner.generation == self.generation)
+        {
+            inner.owner = None;
+            if inner.startup.as_ref().is_some_and(|request| {
+                request.completed.is_cancelled() && request.safe_to_release()
+            }) {
+                inner.startup.take().unwrap().release_pause();
+            }
+        }
+    }
+}
+
+#[cfg(any(not(target_os = "linux"), test))]
+impl Drop for InstantTerminalLease {
+    fn drop(&mut self) {
+        let mut inner = self.state.0.lock().unwrap();
+        if let Some(owner) = &mut inner.owner
+            && owner.generation == self.generation
+        {
+            // A failed or panicked transaction must not advertise an idle capture.
+            owner.running = false;
+        }
+    }
+}
+
+pub(crate) fn instant_terminal_admission_allowed(app: &AppHandle, owner: Option<u64>) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        let _ = (app, owner);
+        true
+    }
+    #[cfg(not(target_os = "linux"))]
+    app.try_state::<InstantTerminalState>()
+        .is_none_or(|state| state.admission_allowed(owner))
+}
+
+pub(crate) fn instant_terminal_requires_protection(app: &AppHandle) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        let _ = app;
+        false
+    }
+    #[cfg(not(target_os = "linux"))]
+    app.try_state::<InstantTerminalState>()
+        .is_some_and(|state| state.requires_protection())
+}
+
+#[cfg(not(target_os = "linux"))]
+async fn cancel_pending_instant_start(
+    app: &AppHandle,
+    state: &Arc<tokio::sync::RwLock<App>>,
+) -> Option<Result<(), String>> {
+    let request = app.state::<InstantTerminalState>().startup()?;
+    // This is the same mutex boundary as final retain/arm. If publication won,
+    // route to the active actor instead of reporting its startup as cancelled.
+    if !request.cancel_before_commit() {
+        return None;
+    }
+    if request.completed.is_cancelled() {
+        if request.safe_to_release() {
+            return Some(Ok(()));
+        }
+        // A returned actor with a failed cancellation remains retryable through
+        // the terminal controller. A still-unconfirmed builder has no actor yet.
+        let state = state.read().await;
+        let directory = match state.current_recording() {
+            Some(InProgressRecording::Instant { common, .. }) => {
+                Some(common.recording_dir.as_path())
+            }
+            _ => None,
+        };
+        return app
+            .state::<InstantTerminalState>()
+            .completed_startup_cancellation(&request, directory);
+    }
+    let result = request.wait_cancelled_setup(INSTANT_STARTUP_TIMEOUT).await;
+    Some(
+        if request.completed.is_cancelled() && request.safe_to_release() {
+            Ok(())
+        } else {
+            result
+        },
+    )
+}
+
+#[cfg(any(not(target_os = "linux"), test))]
+async fn finish_instant_terminal<C, R, T, S, F>(
+    owner: InstantTerminalLease,
+    shutdown: S,
+    finish: impl FnOnce(C, R, u64) -> F,
+) -> (Result<T, String>, bool)
+where
+    S: std::future::Future<Output = (C, Result<R, String>)>,
+    F: std::future::Future<Output = Result<T, String>>,
+{
+    let (context, stopped) = shutdown.await;
+    let stopped = match stopped {
+        Ok(stopped) => stopped,
+        Err(error) => return (Err(error), false),
+    };
+    owner.acknowledge_capture();
+    let result = finish(context, stopped, owner.generation).await;
+    owner.complete();
+    (result, true)
+}
+
+#[cfg(any(not(target_os = "linux"), test))]
+#[derive(Clone, Copy)]
+enum InstantTerminalAction {
+    Stop,
+    Restart,
+    Discard,
+}
+
+#[cfg(any(not(target_os = "linux"), test))]
+async fn shutdown_instant_capture<R, E>(
+    action: InstantTerminalAction,
+    cancel_upload: impl FnOnce(),
+    stop: impl std::future::Future<Output = Result<R, E>>,
+    cancel: impl std::future::Future<Output = Result<(), E>>,
+) -> Result<Option<R>, E> {
+    match action {
+        InstantTerminalAction::Stop => stop.await.map(Some),
+        InstantTerminalAction::Restart | InstantTerminalAction::Discard => {
+            // Deny publication immediately, even while capture is still stopping.
+            cancel_upload();
+            cancel.await.map(|()| None)
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn own_rejected_instant_start(
+    app: &AppHandle,
+    state_mtx: &Arc<tokio::sync::RwLock<App>>,
+    mut state: tokio::sync::RwLockWriteGuard<'_, App>,
+    actor: InProgressRecording,
+    terminal_owner: Option<u64>,
+) -> Result<tokio::task::JoinHandle<Result<Option<RecordingAction>, String>>, String> {
+    let directory = actor.recording_dir().clone();
+    let owner = app
+        .state::<InstantTerminalState>()
+        .begin_rejected_start(directory.clone(), terminal_owner)?;
+    let cohort = owner.generation;
+    let pause = crate::upload_health::pause_probes_for_terminal(app);
+    owner.retain_probe_recovery(pause.recovery_token());
+    // The real start gate is still closed. Retain ownership without publishing
+    // a Started event, then hand off before the initiating future can disappear.
+    state.recording_state = RecordingState::Active(actor);
+    drop(state);
+    let app = app.clone();
+    let state_mtx = state_mtx.clone();
+    Ok(pause.spawn(async move {
+        let result = control_instant_recording_with_owner(
+            &app,
+            &state_mtx,
+            InstantTerminalAction::Discard,
+            cohort,
+            Some(&directory),
+            None,
+            Some(owner),
+        )
+        .await
+        .unwrap_or_else(|| Err("Rejected Instant capture owner was lost".into()));
+        let acknowledged = !instant_terminal_requires_protection(&app);
+        (result, acknowledged)
+    }))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn control_instant_recording<'a>(
+    app: &'a AppHandle,
+    state: &'a Arc<tokio::sync::RwLock<App>>,
+    action: InstantTerminalAction,
+    cohort: u64,
+    expected_directory: Option<&'a Path>,
+    failure: Option<String>,
+) -> futures::future::BoxFuture<'a, Option<Result<Option<RecordingAction>, String>>> {
+    control_instant_recording_with_owner(
+        app,
+        state,
+        action,
+        cohort,
+        expected_directory,
+        failure,
+        None,
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+fn control_instant_recording_with_owner<'a>(
+    app: &'a AppHandle,
+    state: &'a Arc<tokio::sync::RwLock<App>>,
+    action: InstantTerminalAction,
+    cohort: u64,
+    expected_directory: Option<&'a Path>,
+    failure: Option<String>,
+    prepared_owner: Option<InstantTerminalLease>,
+) -> futures::future::BoxFuture<'a, Option<Result<Option<RecordingAction>, String>>> {
+    Box::pin(async move {
+        let final_state = state.clone();
+        let cleanup_state = state.clone();
+        let final_app = app.clone();
+        let terminal = app.state::<InstantTerminalState>();
+        if prepared_owner.is_none()
+            && let Err(error) = terminal.check_cohort(cohort)
+        {
+            return Some(Err(error));
+        }
+        let state = state.clone().write_owned().await;
+        if prepared_owner.is_none()
+            && let Err(error) = terminal.check_cohort(cohort)
+        {
+            return Some(Err(error));
+        }
+        let Some(InProgressRecording::Instant { common, .. }) = state.current_recording() else {
+            return None;
+        };
+        let directory = common.recording_dir.clone();
+        if expected_directory.is_some_and(|expected| expected != directory) {
+            return Some(Err("The recording terminal request was superseded".into()));
+        }
+        let owner =
+            match prepared_owner.map_or_else(|| terminal.begin(directory.clone(), cohort), Ok) {
+                Ok(owner) => owner,
+                Err(error) => return Some(Err(error)),
+            };
+        let pause = crate::upload_health::pause_probes_for_terminal(app);
+        owner.retain_probe_recovery(pause.recovery_token());
+        let pause = InstantTerminalProbeHold::new(pause);
+        let restart_pause = pause.clone();
+        let app = app.clone();
+        let automatic_failure = failure.is_some();
+        let transaction = finish_instant_terminal(
+            owner,
+            async move {
+                let InProgressRecording::Instant {
+                    handle,
+                    finish_upload,
+                    segment_upload,
+                    ..
+                } = state.current_recording().unwrap()
+                else {
+                    unreachable!("the owned App lock retains the Instant recording");
+                };
+                if automatic_failure {
+                    segment_upload.session.cancel();
+                }
+                let stopped = shutdown_instant_capture(
+                    action,
+                    || segment_upload.session.cancel(),
+                    handle.stop(),
+                    handle.cancel(),
+                )
+                .await
+                .map_err(|error| {
+                    let error = format!("Instant capture shutdown is unconfirmed: {error}");
+                    error!(%error, "Recording state and exclusions retained");
+                    error
+                });
+                if stopped.as_ref().is_ok_and(Option::is_some) && !automatic_failure {
+                    // The pipeline done future covers video only. Publish end-of-input
+                    // only after the actor acknowledges both video and audio shutdown.
+                    let _ = finish_upload.try_send(());
+                }
+                ((app, state, directory), stopped)
+            },
+            move |(app, mut state, directory), completed, terminal_owner| async move {
+                let recording = state
+                    .take_current_recording()
+                    .ok_or("Recording owner was lost")?;
+                let InProgressRecording::Instant {
+                    common,
+                    segment_upload,
+                    video_upload_info,
+                    ..
+                } = recording
+                else {
+                    return Err("Instant recording owner was replaced".into());
+                };
+                if let Some(recording) = completed {
+                    if let Some(error) = failure {
+                        segment_upload.session.cancel();
+                        let session = segment_upload.session.clone();
+                        drop(state);
+                        let _ = segment_upload.handle.await;
+                        session.wait_for_reads().await;
+                        let mut state = cleanup_state.write_owned().await;
+                        crate::upload::emit_upload_complete(&app, &video_upload_info.id);
+                        let _ = RecordingEvent::Failed {
+                            error: error.clone(),
+                        }
+                        .emit(&app);
+                        handle_recording_end(app, Err(error.clone()), &mut state, directory)
+                            .await?;
+                        return Err(error);
+                    }
+                    let completed = CompletedRecording::Instant {
+                        recording,
+                        target_name: common.target_name,
+                        segment_upload,
+                        video_upload_info,
+                    };
+                    handle_recording_end(app, Ok(completed), &mut state, directory).await?;
+                    return Ok(None);
+                }
+
+                let inputs = common.inputs;
+                let video_id = video_upload_info.id;
+                let session = segment_upload.session.clone();
+                let journal_result = session.mark_cancelled().map_err(|error| error.to_string());
+                // Upload requests may still be acquiring an App read lock. The
+                // terminal owner now blocks admission independently of this lock.
+                drop(state);
+                match segment_upload.handle.await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => warn!(%error, "Discarded Instant upload ended"),
+                    Err(error) => warn!(%error, "Discarded Instant upload could not be joined"),
+                }
+                session.wait_for_reads().await;
+                crate::upload::emit_upload_complete(&app, &video_id);
+                let mut state = cleanup_state.write_owned().await;
+                state.clear_recording_state();
+                state.disconnected_inputs.clear();
+                state.camera_in_use = false;
+                state.was_camera_only_recording = false;
+                CurrentRecordingChanged.emit(&app).ok();
+                RecordingStopped.emit(&app).ok();
+                if let Some(window) = CapWindowId::RecordingControls.get(&app) {
+                    let _ = window.hide();
+                }
+                let _ = state.recording_logging_handle.reload(None);
+                crate::target_select_overlay::close_target_select_overlay_windows(&app);
+                drop(state);
+                journal_result?;
+                // The cancelled upload scope must not cancel its own deletion. Bind
+                // the original account/origin while keeping this transaction owned.
+                let context = session.context().ok_or(
+                    "Original upload identity is unavailable; cancelled recording files retained",
+                )?;
+                context
+                    .run(finish_discarded_recording(&app, &directory, Some(video_id)))
+                    .await?;
+                match action {
+                    InstantTerminalAction::Restart => start_owned_instant(
+                        app.clone(),
+                        inputs,
+                        Some(terminal_owner),
+                        Some(restart_pause),
+                    )
+                    .await
+                    .map(Some),
+                    InstantTerminalAction::Discard => {
+                        let settings = GeneralSettingsStore::get(&app)
+                            .ok()
+                            .flatten()
+                            .unwrap_or_default();
+                        if matches!(
+                            settings.post_deletion_behaviour,
+                            PostDeletionBehaviour::ReopenRecordingWindow
+                        ) {
+                            let _ = ShowCapWindow::Main {
+                                init_target_mode: None,
+                            }
+                            .show(&app)
+                            .await;
+                        }
+                        Ok(None)
+                    }
+                    InstantTerminalAction::Stop => {
+                        unreachable!("Stop returns a completed recording")
+                    }
+                }
+            },
+        );
+        let task = pause.spawn(async move {
+            let result = transaction.await;
+            // Finish callbacks can refresh exclusions while the App write lock is
+            // held. Reconcile them under a readable, stable recording snapshot.
+            let state = final_state.read().await;
+            crate::windows::apply_content_protection(
+                &final_app,
+                state.is_recording_active_or_pending(),
+            );
+            result
+        });
+        Some(
+            task.await
+                .unwrap_or_else(|error| Err(format!("Recording terminal task failed: {error}"))),
+        )
+    })
+}
+
+#[cfg(test)]
+mod instant_terminal_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::sync::oneshot;
+
+    fn directory() -> PathBuf {
+        PathBuf::from("instant-owner.cap")
+    }
+
+    async fn wait_until(mut condition: impl FnMut() -> bool) {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !condition() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("owned terminal transaction must finish");
+    }
+
+    #[tokio::test]
+    async fn startup_caller_drop_keeps_builder_owned_and_protected_until_late_ack() {
+        let terminal = InstantTerminalState::default();
+        let health = crate::upload_health::UploadHealthCache::default();
+        let request = Arc::new(InstantStartupRequest::default());
+        terminal
+            .reserve_startup(request.clone(), health.startup_test_pause())
+            .unwrap();
+        request.begin_capture(directory()).unwrap();
+        request.begin_setup();
+        let (builder_tx, builder_rx) = oneshot::channel();
+        let (ack_tx, ack_rx) = oneshot::channel();
+        let owned_request = request.clone();
+        let owned_terminal = terminal.clone();
+        let task = tokio::spawn(async move {
+            builder_rx.await.unwrap();
+            assert!(
+                owned_request
+                    .publish_if_live(|| panic!("cancelled setup must not publish"))
+                    .is_err()
+            );
+            ack_rx.await.unwrap();
+            owned_request.acknowledge_capture(&directory());
+            assert!(owned_terminal.release_startup(&owned_request));
+            owned_request.completed.cancel();
+            Ok::<_, String>(())
+        });
+        let caller = tokio::spawn(await_owned_instant_start(
+            InstantStartupCaller(request.clone()),
+            task,
+            Duration::from_secs(30),
+            || (),
+        ));
+        caller.abort();
+        let _ = caller.await;
+        assert!(request.is_cancelled());
+        assert!(terminal.requires_protection());
+        assert!(!terminal.admission_allowed(None));
+        assert!(health.terminal_test_is_paused());
+        builder_tx.send(()).unwrap();
+        tokio::task::yield_now().await;
+        assert!(!terminal.release_startup(&request));
+        assert!(health.terminal_test_is_paused());
+        ack_tx.send(()).unwrap();
+        request.completed.cancelled().await;
+        assert!(terminal.admission_allowed(None));
+        assert!(!terminal.requires_protection());
+        assert!(!health.terminal_test_is_paused());
+    }
+
+    #[tokio::test]
+    async fn startup_timeout_returns_without_releasing_unconfirmed_builder() {
+        let terminal = InstantTerminalState::default();
+        let health = crate::upload_health::UploadHealthCache::default();
+        let request = Arc::new(InstantStartupRequest::default());
+        terminal
+            .reserve_startup(request.clone(), health.startup_test_pause())
+            .unwrap();
+        request.begin_capture(directory()).unwrap();
+        let (ack_tx, ack_rx) = oneshot::channel();
+        let owned_request = request.clone();
+        let owned_terminal = terminal.clone();
+        let task = tokio::spawn(async move {
+            ack_rx.await.unwrap();
+            owned_request.acknowledge_capture(&directory());
+            assert!(owned_terminal.release_startup(&owned_request));
+            owned_request.completed.cancel();
+            Ok::<_, String>(())
+        });
+        let waiter = tokio::spawn(await_owned_instant_start(
+            InstantStartupCaller(request.clone()),
+            task,
+            Duration::from_millis(10),
+            || (),
+        ));
+        // User storage decisions are outside the setup deadline.
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        assert!(!waiter.is_finished());
+        request.begin_setup();
+        assert!(waiter.await.unwrap().unwrap_err().contains("timed out"));
+        assert!(request.is_cancelled());
+        assert!(terminal.requires_protection());
+        assert!(!terminal.admission_allowed(None));
+        assert!(health.terminal_test_is_paused());
+        assert!(!terminal.release_startup(&request));
+        ack_tx.send(()).unwrap();
+        request.completed.cancelled().await;
+        assert!(terminal.admission_allowed(None));
+        assert!(!health.terminal_test_is_paused());
+    }
+
+    #[tokio::test]
+    async fn startup_reservation_is_cancellable_while_input_operation_is_held() {
+        let terminal = InstantTerminalState::default();
+        let health = crate::upload_health::UploadHealthCache::default();
+        let operation = Arc::new(tokio::sync::Mutex::new(()));
+        let held = operation.clone().lock_owned().await;
+        let request = Arc::new(InstantStartupRequest::default());
+        terminal
+            .reserve_startup(request.clone(), health.startup_test_pause())
+            .unwrap();
+        let worker_request = request.clone();
+        let worker_terminal = terminal.clone();
+        let worker = tokio::spawn(async move {
+            let _operation = operation.lock().await;
+            assert!(worker_request.is_cancelled());
+            assert!(worker_request.begin_capture(directory()).is_err());
+            assert!(worker_terminal.release_startup(&worker_request));
+            let _ = worker_request
+                .result
+                .set(Err(RECORDING_START_CANCELLED.into()));
+            worker_request.completed.cancel();
+        });
+        assert!(
+            request
+                .wait_cancelled_setup(Duration::from_millis(10))
+                .await
+                .is_err()
+        );
+        assert!(!worker.is_finished());
+        assert!(terminal.requires_protection());
+        assert!(!terminal.admission_allowed(None));
+        assert!(health.terminal_test_is_paused());
+        drop(held);
+        worker.await.unwrap();
+        assert!(terminal.admission_allowed(None));
+        assert!(!health.terminal_test_is_paused());
+    }
+
+    #[tokio::test]
+    async fn bounded_startup_reply_keeps_owned_work_alive_until_acknowledgement() {
+        let request = Arc::new(InstantStartupRequest::default());
+        request.begin_setup();
+        let (ack_tx, ack_rx) = oneshot::channel();
+        let (reply_tx, reply_rx) = oneshot::channel();
+        let owned = tokio::spawn(async move {
+            ack_rx.await.unwrap();
+            let _ = reply_tx.send(Ok::<_, String>(()));
+        });
+        let result = await_startup_reply(
+            request.clone(),
+            async { reply_rx.await.unwrap() },
+            Duration::from_millis(10),
+        )
+        .await;
+        assert!(result.unwrap_err().contains("timed out"));
+        assert!(request.is_cancelled());
+        assert!(!owned.is_finished());
+        assert!(
+            request
+                .publish_if_live(|| panic!("timed-out setup must not arm"))
+                .is_err()
+        );
+        ack_tx.send(()).unwrap();
+        owned.await.unwrap();
+    }
+
+    #[test]
+    fn startup_cancel_and_publication_have_one_atomic_winner() {
+        for cancel_first in [true, false] {
+            let request = Arc::new(InstantStartupRequest::default());
+            let published = AtomicUsize::new(0);
+            let caller = InstantStartupCaller(request.clone());
+            if cancel_first {
+                drop(caller);
+            } else {
+                request
+                    .publish_if_live(|| {
+                        published.fetch_add(1, Ordering::SeqCst);
+                        Ok(())
+                    })
+                    .unwrap();
+                drop(caller);
+            }
+            if cancel_first {
+                assert!(
+                    request
+                        .publish_if_live(|| {
+                            published.fetch_add(1, Ordering::SeqCst);
+                            Ok(())
+                        })
+                        .is_err()
+                );
+                assert!(request.begin_capture(directory()).is_err());
+                assert_eq!(published.load(Ordering::SeqCst), 0);
+            } else {
+                assert!(request.committed());
+                assert!(!request.is_cancelled());
+                assert_eq!(published.load(Ordering::SeqCst), 1);
+            }
+        }
+    }
+
+    #[test]
+    fn committed_startup_hands_off_to_active_state_before_its_ui_tail() {
+        let terminal = InstantTerminalState::default();
+        let health = crate::upload_health::UploadHealthCache::default();
+        let request = Arc::new(InstantStartupRequest::default());
+        terminal
+            .reserve_startup(request.clone(), health.startup_test_pause())
+            .unwrap();
+        request.begin_capture(directory()).unwrap();
+        request.publish_if_live(|| Ok(())).unwrap();
+        assert!(terminal.release_startup(&request));
+        assert!(!request.completed.is_cancelled());
+        assert!(!health.terminal_test_is_paused());
+        assert!(crate::windows::recording_content_protection(
+            terminal.requires_protection(),
+            Some(Ok(true))
+        ));
+        let stop = terminal.begin(directory(), terminal.cohort()).unwrap();
+        stop.acknowledge_capture();
+        stop.complete();
+        assert!(terminal.admission_allowed(None));
+        assert!(!terminal.release_startup(&request));
+    }
+
+    #[tokio::test]
+    async fn completed_startup_cancellation_cannot_target_a_replacement_after_state_wait() {
+        for capture_started in [false, true] {
+            let terminal = InstantTerminalState::default();
+            let health = crate::upload_health::UploadHealthCache::default();
+            let request = Arc::new(InstantStartupRequest::default());
+            terminal
+                .reserve_startup(request.clone(), health.startup_test_pause())
+                .unwrap();
+            if capture_started {
+                request.begin_capture(directory()).unwrap();
+            }
+            request.cancel_before_commit();
+            request.completed.cancel();
+            let cohort = terminal.cohort();
+            let active = Arc::new(tokio::sync::RwLock::new(None::<PathBuf>));
+            let mut held_state = active.clone().write_owned().await;
+            let (waiting_tx, waiting_rx) = oneshot::channel();
+            let captured_request = request.clone();
+            let captured_terminal = terminal.clone();
+            let captured_active = active.clone();
+            let caller = tokio::spawn(async move {
+                waiting_tx.send(()).unwrap();
+                let state = captured_active.read().await;
+                captured_terminal
+                    .completed_startup_cancellation(&captured_request, state.as_deref())
+            });
+            waiting_rx.await.unwrap();
+
+            if capture_started {
+                request.acknowledge_capture(&directory());
+            }
+            assert!(terminal.release_startup(&request));
+            let replacement = Arc::new(InstantStartupRequest::default());
+            terminal
+                .reserve_startup(replacement.clone(), health.startup_test_pause())
+                .unwrap();
+            replacement
+                .begin_capture(PathBuf::from("replacement.cap"))
+                .unwrap();
+            replacement
+                .publish_if_live(|| {
+                    *held_state = Some(PathBuf::from("replacement.cap"));
+                    Ok(())
+                })
+                .unwrap();
+            assert!(terminal.release_startup(&replacement));
+            // Pre-capture completion does not advance a terminal cohort.
+            assert_eq!(terminal.cohort(), cohort);
+            drop(held_state);
+
+            let result = caller.await.unwrap();
+            assert_eq!(result, Some(Ok(())));
+            // Public terminal commands return on Some instead of falling
+            // through to the actor controller for the replacement recording.
+            assert_eq!(
+                active.read().await.as_deref(),
+                Some(Path::new("replacement.cap"))
+            );
+            assert!(!replacement.is_cancelled());
+        }
+    }
+
+    #[test]
+    fn completed_startup_cancellation_retries_only_its_retained_actor() {
+        let terminal = InstantTerminalState::default();
+        let health = crate::upload_health::UploadHealthCache::default();
+        let safe = Arc::new(InstantStartupRequest::default());
+        terminal
+            .reserve_startup(safe.clone(), health.startup_test_pause())
+            .unwrap();
+        safe.cancel_before_commit();
+        safe.completed.cancel();
+        assert!(terminal.release_startup(&safe));
+        assert_eq!(
+            terminal.completed_startup_cancellation(&safe, None),
+            Some(Ok(()))
+        );
+
+        let retained = Arc::new(InstantStartupRequest::default());
+        terminal
+            .reserve_startup(retained.clone(), health.startup_test_pause())
+            .unwrap();
+        retained.begin_capture(directory()).unwrap();
+        retained.cancel_before_commit();
+        retained.completed.cancel();
+        assert_eq!(
+            terminal.completed_startup_cancellation(&retained, Some(&directory())),
+            None
+        );
+        assert!(matches!(
+            terminal.completed_startup_cancellation(&retained, None),
+            Some(Err(_))
+        ));
+        assert!(matches!(
+            terminal.completed_startup_cancellation(&retained, Some(Path::new("other.cap"))),
+            Some(Err(_))
+        ));
+        let unrelated = Arc::new(InstantStartupRequest::default());
+        unrelated.begin_capture(directory()).unwrap();
+        unrelated.cancel_before_commit();
+        unrelated.completed.cancel();
+        assert!(matches!(
+            terminal.completed_startup_cancellation(&unrelated, Some(&directory())),
+            Some(Err(_))
+        ));
+        assert_eq!(
+            terminal.completed_startup_cancellation(&safe, Some(&directory())),
+            Some(Ok(()))
+        );
+        retained.acknowledge_capture(&directory());
+        assert_eq!(
+            terminal.completed_startup_cancellation(&retained, Some(&directory())),
+            Some(Ok(()))
+        );
+        assert!(terminal.release_startup(&retained));
+    }
+
+    #[test]
+    fn restart_probe_handoff_requires_acknowledged_matching_terminal_owner() {
+        let terminal = InstantTerminalState::default();
+        let health = crate::upload_health::UploadHealthCache::default();
+        let owner = terminal.begin(directory(), terminal.cohort()).unwrap();
+        let pause = health.terminal_test_pause();
+        owner.retain_probe_recovery(pause.recovery_token());
+        let hold = InstantTerminalProbeHold::new(pause);
+        let request = Arc::new(InstantStartupRequest {
+            previous_terminal_pause: Some((owner.generation, hold.clone())),
+            ..Default::default()
+        });
+        assert!(
+            terminal
+                .reserve_startup(request.clone(), health.startup_test_pause())
+                .is_err()
+        );
+        assert!(terminal.requires_protection());
+        assert!(health.terminal_test_is_paused());
+        owner.acknowledge_capture();
+        let stale = Arc::new(InstantStartupRequest {
+            previous_terminal_pause: Some((owner.generation.wrapping_sub(1), hold.clone())),
+            ..Default::default()
+        });
+        assert!(
+            terminal
+                .reserve_startup(stale, health.startup_test_pause())
+                .is_err()
+        );
+        assert!(health.terminal_test_is_paused());
+        terminal
+            .reserve_startup(request.clone(), health.startup_test_pause())
+            .unwrap();
+        assert!(terminal.requires_protection());
+        assert!(health.terminal_test_is_paused());
+        assert!(terminal.release_startup(&request));
+        owner.complete();
+        assert!(!health.terminal_test_is_paused());
+    }
+
+    #[test]
+    fn startup_reservation_releases_only_its_own_pre_capture_or_acknowledged_work() {
+        let terminal = InstantTerminalState::default();
+        let health = crate::upload_health::UploadHealthCache::default();
+        let first = Arc::new(InstantStartupRequest::default());
+        terminal
+            .reserve_startup(first.clone(), health.startup_test_pause())
+            .unwrap();
+        assert!(terminal.release_startup(&first));
+        let next = Arc::new(InstantStartupRequest::default());
+        terminal
+            .reserve_startup(next.clone(), health.startup_test_pause())
+            .unwrap();
+        next.begin_capture(PathBuf::from("next.cap")).unwrap();
+        assert!(!terminal.release_startup(&first));
+        next.acknowledge_capture(&directory());
+        assert!(!terminal.release_startup(&next));
+        assert!(terminal.requires_protection());
+        assert!(health.terminal_test_is_paused());
+        next.acknowledge_capture(Path::new("next.cap"));
+        assert!(terminal.release_startup(&next));
+        assert!(!health.terminal_test_is_paused());
+    }
+
+    #[test]
+    fn rejected_restart_replaces_only_acknowledged_owner_and_reconciles_late_retry() {
+        let terminal = InstantTerminalState::default();
+        let old = terminal.begin(directory(), terminal.cohort()).unwrap();
+        assert!(
+            terminal
+                .begin_rejected_start(PathBuf::from("next.cap"), Some(old.generation))
+                .is_err()
+        );
+        old.acknowledge_capture();
+        let health = crate::upload_health::UploadHealthCache::default();
+        let unrelated = health.terminal_test_pause();
+        let unrelated_recovery = unrelated.recovery_token();
+        drop(unrelated);
+        let request = Arc::new(InstantStartupRequest::default());
+        terminal
+            .reserve_startup(request.clone(), health.startup_test_pause())
+            .unwrap();
+        request.begin_capture(PathBuf::from("next.cap")).unwrap();
+        request.cancel_before_commit();
+        let rejected = terminal
+            .begin_rejected_start(PathBuf::from("next.cap"), Some(old.generation))
+            .unwrap();
+        old.complete();
+        assert!(terminal.requires_protection());
+        drop(rejected); // A failed cancellation retains both owners' blockers.
+        request.completed.cancel();
+        assert!(!terminal.release_startup(&request));
+        let retry = terminal
+            .begin(PathBuf::from("next.cap"), terminal.cohort())
+            .unwrap();
+        retry.acknowledge_capture();
+        retry.complete();
+        assert!(terminal.admission_allowed(None));
+        assert!(health.terminal_test_is_paused());
+        unrelated_recovery.acknowledge_capture();
+        assert!(!health.terminal_test_is_paused());
+    }
+
+    #[tokio::test]
+    async fn all_terminal_actions_survive_caller_drop_through_ack_and_cleanup() {
+        for action in [
+            InstantTerminalAction::Stop,
+            InstantTerminalAction::Restart,
+            InstantTerminalAction::Discard,
+        ] {
+            let terminal = InstantTerminalState::default();
+            let cohort = terminal.cohort();
+            let owner = terminal.begin(directory(), cohort).unwrap();
+            let health = Arc::new(crate::upload_health::UploadHealthCache::default());
+            let effects = Arc::new(AtomicUsize::new(0));
+            let capture = Arc::new(tokio::sync::RwLock::new(true));
+            let capture_owner = capture.clone().write_owned().await;
+            let (poll_tx, poll_rx) = oneshot::channel();
+            let (entered_tx, entered_rx) = oneshot::channel();
+            let (ack_tx, ack_rx) = oneshot::channel();
+            let (finishing_tx, finishing_rx) = oneshot::channel();
+            let (cleanup_tx, cleanup_rx) = oneshot::channel();
+            let owned_terminal = terminal.clone();
+            let owned_effects = effects.clone();
+            let pause = health.terminal_test_pause();
+            owner.retain_probe_recovery(pause.recovery_token());
+            let task = InstantTerminalProbeHold::new(pause).spawn(finish_instant_terminal(
+                owner,
+                async move {
+                    poll_rx.await.unwrap();
+                    entered_tx.send(()).unwrap();
+                    ack_rx.await.unwrap();
+                    (capture_owner, Ok(()))
+                },
+                move |mut capture_owner, (), token| async move {
+                    assert!(!owned_terminal.requires_protection());
+                    assert!(!owned_terminal.admission_allowed(None));
+                    assert!(owned_terminal.admission_allowed(Some(token)));
+                    *capture_owner = false;
+                    owned_effects.fetch_add(1, Ordering::SeqCst);
+                    finishing_tx.send(()).unwrap();
+                    cleanup_rx.await.unwrap();
+                    // These represent the final effect for Stop, Restart and
+                    // Discard. None may occur before capture acknowledgement.
+                    match action {
+                        InstantTerminalAction::Stop
+                        | InstantTerminalAction::Restart
+                        | InstantTerminalAction::Discard => {
+                            owned_effects.fetch_add(1, Ordering::SeqCst);
+                        }
+                    }
+                    Ok(())
+                },
+            ));
+            let caller = tokio::spawn(async move { task.await });
+            caller.abort();
+            assert!(caller.await.unwrap_err().is_cancelled());
+            assert!(terminal.requires_protection());
+            assert!(capture.try_read().is_err());
+            assert!(crate::windows::recording_content_protection(
+                false,
+                Some(Err(()))
+            ));
+            assert!(!terminal.admission_allowed(None));
+            assert!(health.terminal_test_is_paused());
+            assert_eq!(effects.load(Ordering::SeqCst), 0);
+            poll_tx.send(()).unwrap();
+            entered_rx.await.unwrap();
+            assert!(terminal.requires_protection());
+            assert!(capture.try_read().is_err());
+            assert!(terminal.check_cohort(cohort).is_err());
+            assert_eq!(effects.load(Ordering::SeqCst), 0);
+            ack_tx.send(()).unwrap();
+            finishing_rx.await.unwrap();
+            assert_eq!(effects.load(Ordering::SeqCst), 1);
+            assert!(capture.try_read().is_err());
+            assert!(crate::windows::recording_content_protection(
+                false,
+                Some(Err(()))
+            ));
+            assert!(!terminal.admission_allowed(None));
+            assert!(health.terminal_test_is_paused());
+            cleanup_tx.send(()).unwrap();
+            wait_until(|| terminal.admission_allowed(None) && !health.terminal_test_is_paused())
+                .await;
+            assert_eq!(effects.load(Ordering::SeqCst), 2);
+            assert!(!*capture.read().await);
+        }
+    }
+
+    #[tokio::test]
+    async fn discard_and_restart_cancel_upload_before_capture_shutdown() {
+        for action in [
+            InstantTerminalAction::Stop,
+            InstantTerminalAction::Restart,
+            InstantTerminalAction::Discard,
+        ] {
+            let publication_denied = std::sync::atomic::AtomicBool::new(false);
+            let stop_calls = AtomicUsize::new(0);
+            let cancel_calls = AtomicUsize::new(0);
+            let outcome = shutdown_instant_capture(
+                action,
+                || publication_denied.store(true, Ordering::SeqCst),
+                async {
+                    assert!(!publication_denied.load(Ordering::SeqCst));
+                    stop_calls.fetch_add(1, Ordering::SeqCst);
+                    Ok::<_, String>(42)
+                },
+                async {
+                    assert!(publication_denied.load(Ordering::SeqCst));
+                    cancel_calls.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                },
+            )
+            .await
+            .unwrap();
+            match action {
+                InstantTerminalAction::Stop => {
+                    assert_eq!(outcome, Some(42));
+                    assert_eq!(stop_calls.load(Ordering::SeqCst), 1);
+                    assert_eq!(cancel_calls.load(Ordering::SeqCst), 0);
+                }
+                InstantTerminalAction::Restart | InstantTerminalAction::Discard => {
+                    assert_eq!(
+                        outcome, None,
+                        "cancellation cannot publish a completed recording"
+                    );
+                    assert_eq!(stop_calls.load(Ordering::SeqCst), 0);
+                    assert_eq!(cancel_calls.load(Ordering::SeqCst), 1);
+                    assert!(publication_denied.load(Ordering::SeqCst));
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_or_panicked_capture_never_runs_terminal_effects() {
+        for panic in [false, true] {
+            let terminal = InstantTerminalState::default();
+            let owner = terminal.begin(directory(), terminal.cohort()).unwrap();
+            let health = crate::upload_health::UploadHealthCache::default();
+            let effects = Arc::new(AtomicUsize::new(0));
+            let owned_effects = effects.clone();
+            let task = InstantTerminalProbeHold::new(health.terminal_test_pause()).spawn(
+                finish_instant_terminal(
+                    owner,
+                    async move {
+                        assert!(!panic, "synthetic actor shutdown panic");
+                        ((), Err::<(), _>("audio shutdown not acknowledged".into()))
+                    },
+                    move |(), (), _| async move {
+                        owned_effects.fetch_add(1, Ordering::SeqCst);
+                        Ok(())
+                    },
+                ),
+            );
+            let result = task.await;
+            if panic {
+                assert!(result.unwrap_err().is_panic());
+            } else {
+                assert!(result.unwrap().is_err());
+            }
+            assert_eq!(effects.load(Ordering::SeqCst), 0);
+            assert!(terminal.requires_protection());
+            assert!(!terminal.admission_allowed(None));
+            assert!(health.terminal_test_is_paused());
+            assert!(
+                terminal
+                    .begin(PathBuf::from("replacement.cap"), terminal.cohort())
+                    .is_err()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn acknowledged_finalization_error_releases_only_after_cleanup() {
+        let terminal = InstantTerminalState::default();
+        let owner = terminal.begin(directory(), terminal.cohort()).unwrap();
+        let health = crate::upload_health::UploadHealthCache::default();
+        let cleanup = Arc::new(AtomicUsize::new(0));
+        let owned_cleanup = cleanup.clone();
+        let result = InstantTerminalProbeHold::new(health.terminal_test_pause())
+            .spawn(finish_instant_terminal(
+                owner,
+                async { ((), Ok(())) },
+                move |(), (), _| async move {
+                    owned_cleanup.fetch_add(1, Ordering::SeqCst);
+                    Err::<(), _>("metadata could not be saved".into())
+                },
+            ))
+            .await
+            .unwrap();
+        assert_eq!(result.unwrap_err(), "metadata could not be saved");
+        assert_eq!(cleanup.load(Ordering::SeqCst), 1);
+        assert!(terminal.admission_allowed(None));
+        assert!(!terminal.requires_protection());
+        assert!(!health.terminal_test_is_paused());
+    }
+
+    #[test]
+    fn stale_cohorts_and_completions_cannot_touch_replacement_recordings() {
+        let terminal = InstantTerminalState::default();
+        let old_cohort = terminal.cohort();
+        let first = terminal.begin(directory(), old_cohort).unwrap();
+        let old_generation = first.generation;
+        first.acknowledge_capture();
+        first.complete();
+        // Replacements include Instant and editor-forced Studio. The cohort
+        // check runs before inspecting or dispatching either actor type.
+        assert!(terminal.check_cohort(old_cohort).is_err());
+        let second = terminal
+            .begin(PathBuf::from("replacement.cap"), terminal.cohort())
+            .unwrap();
+        let stale = InstantTerminalLease {
+            state: terminal.clone(),
+            generation: old_generation,
+        };
+        stale.acknowledge_capture();
+        stale.complete();
+        assert!(terminal.requires_protection());
+        assert!(terminal.owns(Path::new("replacement.cap")));
+        assert!(!terminal.admission_allowed(Some(old_generation)));
+        second.acknowledge_capture();
+        second.complete();
+        assert!(terminal.admission_allowed(None));
+    }
+
+    #[test]
+    fn only_the_same_unconfirmed_capture_can_retry_shutdown() {
+        let terminal = InstantTerminalState::default();
+        drop(terminal.begin(directory(), terminal.cohort()).unwrap());
+        assert!(!terminal.admission_allowed(None));
+        assert!(terminal.requires_protection());
+        let retry = terminal.begin(directory(), terminal.cohort()).unwrap();
+        assert!(!terminal.admission_allowed(Some(retry.generation)));
+        retry.acknowledge_capture();
+        assert!(terminal.admission_allowed(Some(retry.generation)));
+        retry.complete();
+    }
+
+    #[tokio::test]
+    async fn positive_retry_recovers_only_its_recordings_probe_failures() {
+        let first = InstantTerminalState::default();
+        let other = InstantTerminalState::default();
+        let health = crate::upload_health::UploadHealthCache::default();
+        for terminal in [&first, &other] {
+            let owner = terminal.begin(directory(), terminal.cohort()).unwrap();
+            let pause = health.terminal_test_pause();
+            owner.retain_probe_recovery(pause.recovery_token());
+            let result = InstantTerminalProbeHold::new(pause)
+                .spawn(finish_instant_terminal(
+                    owner,
+                    async { ((), Err::<(), _>("audio shutdown unconfirmed".into())) },
+                    |(), (), _| async {
+                        Err::<(), String>("unconfirmed capture incorrectly ran cleanup".into())
+                    },
+                ))
+                .await
+                .unwrap();
+            assert_eq!(result.unwrap_err(), "audio shutdown unconfirmed");
+            assert!(!terminal.admission_allowed(None));
+        }
+        let mut unrelated_active = Some(health.terminal_test_pause());
+        let stale_generation = first.cohort();
+        for (index, terminal) in [&first, &other].into_iter().enumerate() {
+            let owner = terminal.begin(directory(), terminal.cohort()).unwrap();
+            let pause = health.terminal_test_pause();
+            owner.retain_probe_recovery(pause.recovery_token());
+            if index == 0 {
+                let stale = InstantTerminalLease {
+                    state: first.clone(),
+                    generation: stale_generation,
+                };
+                stale.acknowledge_capture();
+                assert!(first.requires_protection());
+                assert!(health.terminal_test_is_paused());
+            }
+            InstantTerminalProbeHold::new(pause)
+                .spawn(finish_instant_terminal(
+                    owner,
+                    async { ((), Ok(())) },
+                    |(), (), _| async { Ok(()) },
+                ))
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(terminal.admission_allowed(None));
+            if index == 0 {
+                assert!(
+                    health.terminal_test_is_paused(),
+                    "the unrelated active pause remains owned"
+                );
+                unrelated_active.take().unwrap().cancel_before_handoff();
+                assert!(
+                    health.terminal_test_is_paused(),
+                    "the other recording's failure remains owned"
+                );
+            } else {
+                assert!(!health.terminal_test_is_paused());
+            }
+        }
+        assert!(!health.terminal_test_is_paused());
+    }
+
+    #[test]
+    fn stale_capture_acknowledgement_cannot_recover_new_probe_pause() {
+        let terminal = InstantTerminalState::default();
+        let first = terminal.begin(directory(), terminal.cohort()).unwrap();
+        let stale_generation = first.generation;
+        first.acknowledge_capture();
+        first.complete();
+        let second = terminal.begin(directory(), terminal.cohort()).unwrap();
+        let health = crate::upload_health::UploadHealthCache::default();
+        let pause = health.terminal_test_pause();
+        second.retain_probe_recovery(pause.recovery_token());
+        let stale = InstantTerminalLease {
+            state: terminal.clone(),
+            generation: stale_generation,
+        };
+        stale.acknowledge_capture();
+        stale.complete();
+        drop(second);
+        drop(pause);
+        assert!(terminal.requires_protection());
+        assert!(health.terminal_test_is_paused());
+        let retry = terminal.begin(directory(), terminal.cohort()).unwrap();
+        retry.acknowledge_capture();
+        retry.complete();
+        assert!(!health.terminal_test_is_paused());
+    }
+}
+
 #[tauri::command]
 #[specta::specta]
 #[instrument(skip(app, state))]
 pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<(), String> {
+    #[cfg(not(target_os = "linux"))]
+    let instant_terminal_cohort = app.state::<InstantTerminalState>().cohort();
+    #[cfg(not(target_os = "linux"))]
+    if let Some(result) = cancel_pending_instant_start(&app, &state).await {
+        return result;
+    }
+    #[cfg(not(target_os = "linux"))]
+    if let Some(result) = control_instant_recording(
+        &app,
+        &state,
+        InstantTerminalAction::Stop,
+        instant_terminal_cohort,
+        None,
+        None,
+    )
+    .await
+    {
+        return result.map(|_| ());
+    }
     if cancel_recording_storage_prompt(&app, &state).await {
         return Ok(());
     }
@@ -5115,6 +7203,15 @@ pub async fn restart_recording(
     app: AppHandle,
     state: MutableState<'_, App>,
 ) -> Result<RecordingAction, String> {
+    #[cfg(not(target_os = "linux"))]
+    let instant_terminal_cohort = app.state::<InstantTerminalState>().cohort();
+    #[cfg(not(target_os = "linux"))]
+    if let Some(result) = cancel_pending_instant_start(&app, &state).await {
+        result?;
+        return Err(
+            "Pending Instant startup was cancelled. Start recording again to retry.".into(),
+        );
+    }
     #[cfg(target_os = "linux")]
     if let Some(attempt) = linux_instant::current(&app) {
         let inputs = state
@@ -5131,6 +7228,20 @@ pub async fn restart_recording(
             crate::clean_capture::wait_restored(&app, generation).await?;
         }
         return Box::pin(start_recording(app, state, inputs)).await;
+    }
+    #[cfg(not(target_os = "linux"))]
+    if let Some(result) = control_instant_recording(
+        &app,
+        &state,
+        InstantTerminalAction::Restart,
+        instant_terminal_cohort,
+        None,
+        None,
+    )
+    .await
+    {
+        return result
+            .and_then(|result| result.ok_or_else(|| "Instant restart did not start".into()));
     }
     #[cfg(any(target_os = "linux", target_os = "macos", windows))]
     {
@@ -5278,6 +7389,8 @@ pub async fn restart_recording(
                 inputs,
                 requested,
                 Some(generation),
+                None,
+                None,
             )
             .await
         }
@@ -5373,6 +7486,25 @@ fn take_editor_target_after_recording(
 #[specta::specta]
 #[instrument(skip(app, state))]
 pub async fn delete_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<(), String> {
+    #[cfg(not(target_os = "linux"))]
+    let instant_terminal_cohort = app.state::<InstantTerminalState>().cohort();
+    #[cfg(not(target_os = "linux"))]
+    if let Some(result) = cancel_pending_instant_start(&app, &state).await {
+        return result;
+    }
+    #[cfg(not(target_os = "linux"))]
+    if let Some(result) = control_instant_recording(
+        &app,
+        &state,
+        InstantTerminalAction::Discard,
+        instant_terminal_cohort,
+        None,
+        None,
+    )
+    .await
+    {
+        return result.map(|_| ());
+    }
     if cancel_recording_storage_prompt(&app, &state).await {
         return Ok(());
     }
@@ -5703,6 +7835,12 @@ async fn handle_recording_end_inner(
     preserve_editor_target: bool,
     finalization_project: Option<Result<Arc<crate::FinalizationProject>, String>>,
 ) -> Result<(), String> {
+    if instant_terminal_requires_protection(&handle) {
+        return Err(
+            "Instant capture cleanup is unconfirmed; recording state and exclusions retained"
+                .into(),
+        );
+    }
     #[cfg(target_os = "linux")]
     if let Some(InProgressRecording::Studio {
         handle: studio,
@@ -7698,6 +9836,7 @@ pub(crate) mod linux_instant {
     pub struct Attempt(Arc<AttemptInner>);
 
     struct AttemptInner {
+        admission: Arc<InstantStartupRequest>,
         lifecycle: Mutex<Option<instant_recording::InstantLifecycle>>,
         directory: Mutex<Option<PathBuf>>,
         cancelled: AtomicBool,
@@ -7730,6 +9869,7 @@ pub(crate) mod linux_instant {
             let (upload, permission) = Control::new();
             let (started, _) = tokio::sync::watch::channel(false);
             Self(Arc::new(AttemptInner {
+                admission: Arc::new(InstantStartupRequest::default()),
                 lifecycle: Mutex::new(None),
                 directory: Mutex::new(None),
                 cancelled: AtomicBool::new(false),
@@ -7807,6 +9947,8 @@ pub(crate) mod linux_instant {
         }
 
         pub fn cancel(&self) {
+            // Serialize cancellation with final retain/arm, including caller drop.
+            self.0.admission.cancel_before_commit();
             self.0.cancelled.store(true, Ordering::Release);
             self.0.cancel_changed.send_replace(true);
             self.0.upload.deny();
@@ -7817,6 +9959,10 @@ pub(crate) mod linux_instant {
 
         pub fn cancelled(&self) -> bool {
             self.0.cancelled.load(Ordering::Acquire)
+        }
+
+        pub(super) fn startup_request(&self) -> Arc<InstantStartupRequest> {
+            self.0.admission.clone()
         }
         pub(crate) async fn while_active<T>(
             &self,
@@ -8203,7 +10349,8 @@ pub(crate) mod linux_instant {
         let work_attempt = attempt.clone();
         let abandoned_attempt = attempt.clone();
         let abandoned_app = app.clone();
-        owned_reply(
+        let request = attempt.startup_request();
+        let reply = owned_reply(
             attempt,
             async move {
                 let attempt = work_attempt;
@@ -8269,8 +10416,8 @@ pub(crate) mod linux_instant {
             async move {
                 let _ = execute(abandoned_app, abandoned_attempt, false).await;
             },
-        )
-        .await
+        );
+        await_startup_reply(request, reply, INSTANT_STARTUP_TIMEOUT).await
     }
 
     pub fn control(
@@ -8742,6 +10889,45 @@ pub(crate) mod linux_instant {
     #[cfg(test)]
     mod tests {
         use super::*;
+        #[tokio::test]
+        async fn strict_cue_failure_cancels_held_linux_setup_and_prevents_admission() {
+            let attempt = Attempt::new();
+            let request = attempt.startup_request();
+            let worker = attempt.clone();
+            let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+            let setup = tokio::spawn(async move {
+                worker
+                    .while_active(async {
+                        entered_tx.send(()).unwrap();
+                        std::future::pending::<Result<(), String>>().await
+                    })
+                    .await
+            });
+            entered_rx.await.unwrap();
+            // This is the same request/attempt cancellation pair used on cue Err.
+            request.cancel_before_commit();
+            attempt.cancel();
+            assert!(setup.await.unwrap().is_err());
+            assert!(
+                request
+                    .publish_if_live(|| panic!("cancelled cue must not arm capture"))
+                    .is_err()
+            );
+            assert!(attempt.cancelled());
+        }
+
+        #[test]
+        fn linux_caller_cancel_before_publication_uses_shared_admission_fence() {
+            let attempt = Attempt::new();
+            let request = attempt.startup_request();
+            attempt.cancel();
+            assert!(
+                request
+                    .publish_if_live(|| panic!("caller cancellation must fence capture admission"))
+                    .is_err()
+            );
+        }
+
         #[tokio::test]
         async fn preflight_cancel_before_f9_unblocks_start_and_stop_only_after_owned_cleanup() {
             for discard in [false, true] {

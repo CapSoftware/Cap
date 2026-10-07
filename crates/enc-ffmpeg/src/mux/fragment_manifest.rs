@@ -91,10 +91,15 @@ pub struct FragmentManifestTracker {
 }
 
 impl FragmentManifestTracker {
-    pub fn new(base_path: PathBuf, video_config: &VideoInfo, segment_duration: Duration) -> Self {
+    pub fn new(
+        base_path: PathBuf,
+        video_config: &VideoInfo,
+        encoded_size: (u32, u32),
+        segment_duration: Duration,
+    ) -> Self {
         let codec_info = CodecInfo {
-            width: video_config.width,
-            height: video_config.height,
+            width: encoded_size.0,
+            height: encoded_size.1,
             frame_rate_num: video_config.frame_rate.0,
             frame_rate_den: video_config.frame_rate.1,
             time_base_num: video_config.time_base.0,
@@ -469,12 +474,67 @@ mod tests {
     }
 
     #[test]
+    fn tracker_persists_built_encoder_dimensions_before_and_after_finalization() {
+        ffmpeg::init().unwrap();
+        for (source_size, requested, expected) in [
+            ((1920, 1080), (1280, 720), (1280, 720)),
+            ((320, 240), (320, 240), (320, 240)),
+            ((320, 240), (160, 120), (160, 120)),
+            ((240, 320), (120, 160), (120, 160)),
+            ((320, 240), (159, 119), (158, 118)),
+            ((320, 240), (1, 1), (2, 2)),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let base = directory.path().to_path_buf();
+            let mut source = test_video_info();
+            source.width = source_size.0;
+            source.height = source_size.1;
+            let builder = crate::video::h264::H264EncoderBuilder::new(source)
+                .with_encoder_priority_override(&["libx264"])
+                .with_output_size(requested.0, requested.1)
+                .unwrap();
+            // The default 36-bit/s rate at 2x2 is rejected before metadata exists.
+            let builder = if expected == (2, 2) {
+                builder.with_bpp(10.0)
+            } else {
+                builder
+            };
+            let encoder = builder
+                .build_standalone()
+                .unwrap_or_else(|error| panic!("{source_size:?} -> {requested:?}: {error}"));
+            let mut tracker = FragmentManifestTracker::new(
+                base.clone(),
+                &source,
+                (encoder.output_width(), encoder.output_height()),
+                Duration::from_secs(2),
+            );
+            tracker.write_initial_manifest();
+            for complete in [false, true] {
+                if complete {
+                    tracker.finalize(Duration::ZERO);
+                }
+                let manifest: serde_json::Value =
+                    serde_json::from_slice(&std::fs::read(base.join("manifest.json")).unwrap())
+                        .unwrap();
+                assert_eq!(manifest["codec_info"]["width"], expected.0);
+                assert_eq!(manifest["codec_info"]["height"], expected.1);
+                assert_eq!(manifest["is_complete"], complete);
+                assert_eq!(manifest["version"], MANIFEST_VERSION);
+            }
+        }
+    }
+
+    #[test]
     fn tracker_writes_initial_manifest_on_start() {
         let temp = tempfile::tempdir().unwrap();
         let base = temp.path().to_path_buf();
 
-        let tracker =
-            FragmentManifestTracker::new(base.clone(), &test_video_info(), Duration::from_secs(2));
+        let tracker = FragmentManifestTracker::new(
+            base.clone(),
+            &test_video_info(),
+            (320, 240),
+            Duration::from_secs(2),
+        );
         tracker.write_initial_manifest();
 
         let manifest_path = base.join("manifest.json");
@@ -492,8 +552,12 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let base = temp.path().to_path_buf();
 
-        let mut tracker =
-            FragmentManifestTracker::new(base.clone(), &test_video_info(), Duration::from_secs(2));
+        let mut tracker = FragmentManifestTracker::new(
+            base.clone(),
+            &test_video_info(),
+            (320, 240),
+            Duration::from_secs(2),
+        );
         tracker.write_initial_manifest();
         tracker.finalize(Duration::from_secs(0));
 
@@ -511,6 +575,7 @@ mod tests {
         let mut tracker = FragmentManifestTracker::new(
             base.clone(),
             &test_video_info(),
+            (320, 240),
             Duration::from_millis(100),
         );
         tracker.write_initial_manifest();
@@ -526,8 +591,12 @@ mod tests {
     fn tracker_waits_for_finalized_files_and_uses_media_duration() {
         let temp = tempfile::tempdir().unwrap();
         let base = temp.path().to_path_buf();
-        let mut tracker =
-            FragmentManifestTracker::new(base.clone(), &test_video_info(), Duration::from_secs(2));
+        let mut tracker = FragmentManifestTracker::new(
+            base.clone(),
+            &test_video_info(),
+            (320, 240),
+            Duration::from_secs(2),
+        );
         let (tx, rx) = std::sync::mpsc::channel();
         tracker.set_segment_callback(tx);
         let bytes = crate::mux::fragment_metadata::tests::fragment(1, 90_000, &[360_070]);
@@ -564,8 +633,12 @@ mod tests {
     fn tracker_finalizes_actual_tail_without_publishing_truncated_files() {
         let temp = tempfile::tempdir().unwrap();
         let base = temp.path().to_path_buf();
-        let mut tracker =
-            FragmentManifestTracker::new(base.clone(), &test_video_info(), Duration::from_secs(2));
+        let mut tracker = FragmentManifestTracker::new(
+            base.clone(),
+            &test_video_info(),
+            (320, 240),
+            Duration::from_secs(2),
+        );
         let (tx, rx) = std::sync::mpsc::channel();
         tracker.set_segment_callback(tx);
         tracker.on_frame(Duration::ZERO);

@@ -39,6 +39,15 @@ use tracing::*;
 mod completion;
 pub use completion::CleanInstantRecording;
 
+/// A desktop startup error returns after its owned pipelines have joined, unless
+/// this typed marker reports that capture cleanup could not be confirmed.
+#[cfg(any(windows, target_os = "macos"))]
+pub fn startup_cleanup_is_unconfirmed(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<output_pipeline::PipelineStartupCleanupUnconfirmed>()
+        .is_some()
+}
+
 #[cfg(target_os = "linux")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 /// Joined covers this attempt's capture/output work, not shared preview feeds or physical device shutdown.
@@ -1113,12 +1122,17 @@ async fn spawn_instant_recording_actor_inner(
     max_fps: u32,
 ) -> anyhow::Result<ActorHandle> {
     let startup = build_instant_recording_actor(recording_dir, inputs, max_output_size, max_fps);
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     {
+        #[cfg(windows)]
         let scope = output_pipeline::PipelineBuildScope::new();
+        // Preserve concurrent macOS capture warmup while owning every setup
+        // task and requested track until successful actor handoff or joined error.
+        #[cfg(target_os = "macos")]
+        let scope = output_pipeline::PipelineBuildScope::new_macos_segment();
         output_pipeline::finish_pipeline_startup(&scope, startup).await
     }
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     startup.await
 }
 
@@ -1557,6 +1571,25 @@ fn clamp_size(input: (u32, u32), max: (u32, u32)) -> (u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(any(windows, target_os = "macos"))]
+    #[tokio::test]
+    async fn early_setup_failure_returns_acknowledged_error_without_capture() {
+        let directory = tempfile::tempdir().unwrap();
+        let blocked = directory.path().join("not-a-directory");
+        std::fs::write(&blocked, b"fixture").unwrap();
+        let result = Actor::builder(blocked, ScreenCaptureTarget::CameraOnly)
+            .build(
+                #[cfg(target_os = "macos")]
+                None,
+            )
+            .await;
+        let error = match result {
+            Err(error) => error,
+            Ok(_) => panic!("a file cannot become a capture directory"),
+        };
+        assert!(!startup_cleanup_is_unconfirmed(&error));
+    }
 
     #[cfg(target_os = "linux")]
     #[test]

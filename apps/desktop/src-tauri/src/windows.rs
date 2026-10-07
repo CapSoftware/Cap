@@ -3756,14 +3756,24 @@ pub fn capture_exclusion_hides_ui() -> bool {
 }
 
 fn content_protection_enabled(app: &AppHandle<Wry>) -> bool {
-    app.try_state::<ArcLock<crate::App>>()
-        .and_then(|state| {
+    recording_content_protection(
+        crate::recording::instant_terminal_requires_protection(app),
+        app.try_state::<ArcLock<crate::App>>().map(|state| {
             state
                 .try_read()
-                .ok()
                 .map(|app| app.is_recording_active_or_pending())
-        })
-        .unwrap_or(false)
+                .map_err(|_| ())
+        }),
+    )
+}
+
+pub(crate) fn recording_content_protection(
+    terminal: bool,
+    recording: Option<Result<bool, ()>>,
+) -> bool {
+    // A write lock can cover startup or capture shutdown. Contention is not
+    // evidence that capture is idle, so retain exclusions until state is readable.
+    terminal || recording.is_some_and(|recording| recording.unwrap_or(true))
 }
 
 fn window_capture_excluded(app: &AppHandle<Wry>, window_title: &str) -> bool {
@@ -4279,6 +4289,18 @@ pub fn editor_window_for_path(app: &AppHandle, path: &std::path::Path) -> Option
 #[cfg(test)]
 mod content_window_tests {
     use super::*;
+
+    #[test]
+    fn recording_exclusions_fail_closed_on_unreadable_state() {
+        assert!(!recording_content_protection(false, None));
+        assert!(!recording_content_protection(false, Some(Ok(false))));
+        // Both pending and active recordings report a non-idle snapshot.
+        assert!(recording_content_protection(false, Some(Ok(true))));
+        assert!(recording_content_protection(false, Some(Err(()))));
+        assert!(recording_content_protection(true, None));
+        assert!(recording_content_protection(true, Some(Ok(false))));
+        assert!(recording_content_protection(true, Some(Err(()))));
+    }
 
     fn rect(x: f64, y: f64, width: f64, height: f64) -> ContentWindowRect {
         ContentWindowRect {

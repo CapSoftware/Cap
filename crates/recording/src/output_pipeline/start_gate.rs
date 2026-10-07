@@ -27,6 +27,7 @@ struct Inner {
     armed_at: OnceLock<Timestamps>,
     created: Instant,
     failsafe_logged: AtomicBool,
+    explicit_admission: bool,
 }
 
 impl Default for RecordingStartGate {
@@ -37,10 +38,19 @@ impl Default for RecordingStartGate {
 
 impl RecordingStartGate {
     pub fn new() -> Self {
+        Self::with_admission(false)
+    }
+
+    pub fn explicit_admission() -> Self {
+        Self::with_admission(true)
+    }
+
+    fn with_admission(explicit_admission: bool) -> Self {
         Self(Arc::new(Inner {
             armed_at: OnceLock::new(),
             created: Instant::now(),
             failsafe_logged: AtomicBool::new(false),
+            explicit_admission,
         }))
     }
 
@@ -75,7 +85,7 @@ impl RecordingStartGate {
         if let Some(at) = self.0.armed_at.get() {
             return Some(*at);
         }
-        if self.0.created.elapsed() < START_GATE_FAILSAFE {
+        if self.0.explicit_admission || self.0.created.elapsed() < START_GATE_FAILSAFE {
             return None;
         }
         let _ = self.0.armed_at.set(Timestamps::now());
@@ -138,6 +148,31 @@ pub(crate) enum AudioAdmission {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_admission_never_falls_back_to_elapsed_time() {
+        let mut gate = RecordingStartGate::explicit_admission();
+        Arc::get_mut(&mut gate.0).unwrap().created =
+            Instant::now() - START_GATE_FAILSAFE - Duration::from_secs(1);
+        let now = Timestamps::now();
+        assert!(!gate.admits_video(at(now, 0)));
+        assert_eq!(
+            gate.admit_audio(at(now, 0), 480, 48_000),
+            AudioAdmission::Drop
+        );
+        assert!(!gate.is_armed());
+        assert!(gate.arm_at(now));
+        assert!(gate.admits_video(at(now, 0)));
+    }
+
+    #[test]
+    fn default_admission_retains_elapsed_time_fallback() {
+        let mut gate = RecordingStartGate::new();
+        Arc::get_mut(&mut gate.0).unwrap().created =
+            Instant::now() - START_GATE_FAILSAFE - Duration::from_secs(1);
+        assert!(gate.armed_at_or_failsafe().is_some());
+        assert!(gate.is_armed());
+    }
 
     fn at(base: Timestamps, offset_ms: i64) -> Timestamp {
         let instant = base.instant();
