@@ -106,33 +106,38 @@ const closeStandalonePanel = () => {
 // Rebuild the flag after a worker restart: the panel outlives this worker's
 // memory, and without the flag the next icon click would re-open instead of
 // toggling the visible recorder closed.
-const refreshStandalonePanelFlag = (): Promise<void> =>
-	new Promise<void>((resolve) => {
+const refreshStandalonePanelFlag = (): Promise<boolean> =>
+	new Promise<boolean>((resolve) => {
 		try {
 			chrome.runtime.getContexts(
 				{
-					contextTypes: [
-						"SIDE_PANEL",
-						"TAB",
-					] as chrome.runtime.ContextType[],
+					contextTypes: ["SIDE_PANEL", "TAB"] as chrome.runtime.ContextType[],
 					documentUrls: [chrome.runtime.getURL(POPUP_URL)],
 				},
 				(contexts) => {
-					if (!chrome.runtime.lastError) {
-						standalonePanelOpen = (contexts ?? []).length > 0;
+					if (chrome.runtime.lastError) {
+						resolve(false);
+						return;
 					}
-					resolve();
+					const open = (contexts ?? []).length > 0;
+					// Never clear: a panel opened by a click that woke this worker
+					// may already have reported in before this query returns.
+					if (open) standalonePanelOpen = true;
+					resolve(open);
 				},
 			);
 		} catch {
 			// getContexts is unavailable in older Chrome — fall back to the
 			// message-driven flag alone.
-			resolve();
+			resolve(false);
 		}
 	});
 let isStandaloneFlagReady = false;
-const standaloneFlagReady = refreshStandalonePanelFlag().then(() => {
+// Resolves with whether a standalone panel survived into this worker, i.e.
+// the panel state as it was before any click that woke the worker.
+const standaloneFlagReady = refreshStandalonePanelFlag().then((open) => {
 	isStandaloneFlagReady = true;
+	return open;
 });
 
 // Content scripts read the webcam "dismissed" flag and the cached preview
@@ -841,8 +846,7 @@ const openRecorderPanel = async (actionTab?: chrome.tabs.Tab) => {
 	// If Chrome still rejects (gesture expired, API missing), fall back to
 	// the standalone window.
 	try {
-		const windowId =
-			actionTab?.windowId ?? (await getActiveTab())?.windowId;
+		const windowId = actionTab?.windowId ?? (await getActiveTab())?.windowId;
 		if (windowId !== undefined && chrome.sidePanel) {
 			await chrome.sidePanel.open({ windowId });
 			// Set eagerly: the panel page pings standalone-panel-opened on load,
@@ -1925,33 +1929,51 @@ chrome.runtime.onInstalled.addListener((details) => {
 	}
 });
 
+const openStandaloneSidePanel = (tab: chrome.tabs.Tab, windowId: number) => {
+	chrome.sidePanel.open({ windowId }).then(
+		() => {
+			standalonePanelOpen = true;
+		},
+		(error) => {
+			console.warn("sidePanel.open failed, using popup window", error);
+			return openRecorderPanel(tab);
+		},
+	);
+};
+
 chrome.action.onClicked.addListener((tab) => {
-	// If the startup flag-refresh hasn't settled yet, the standalonePanelOpen
-	// value may be stale (worker restarted while panel was visible). Fall back
-	// to openRecorderPanel so Chrome's click gesture is never voided by an
-	// async wait — the cost is one extra popup open on a cold-restart race,
-	// which is far better than a dead icon click.
 	if (
-		isStandaloneFlagReady &&
 		chrome.sidePanel &&
 		!canInjectIntoTab(tab) &&
-		!isCapturingRecordingStatus(recordingStatus) &&
-		tab.windowId !== undefined
+		tab.windowId !== undefined &&
+		!(isStandaloneFlagReady && isCapturingRecordingStatus(recordingStatus))
 	) {
-		// Second click toggles the panel closed, mirroring the overlay panel.
-		if (standalonePanelOpen) {
-			closeStandalonePanel();
+		if (isStandaloneFlagReady) {
+			// Second click toggles the panel closed, mirroring the overlay panel.
+			if (standalonePanelOpen) {
+				closeStandalonePanel();
+				return;
+			}
+			openStandaloneSidePanel(tab, tab.windowId);
 			return;
 		}
-		chrome.sidePanel.open({ windowId: tab.windowId }).then(
-			() => {
-				standalonePanelOpen = true;
-			},
-			(error) => {
-				console.warn("sidePanel.open failed, using popup window", error);
-				return openRecorderPanel(tab);
-			},
-		);
+		// This click woke the worker: neither the surviving-panel query nor the
+		// recording status has settled, and awaiting either would void the
+		// gesture sidePanel.open needs. Open now (a no-op if a panel survived
+		// the restart) and reconcile the toggle once both are known.
+		openStandaloneSidePanel(tab, tab.windowId);
+		void Promise.all([
+			standaloneFlagReady,
+			syncRecordingStatus().catch(() => recordingStatus),
+		])
+			.then(([wasOpen, currentStatus]) => {
+				if (isCapturingRecordingStatus(currentStatus)) {
+					if (!wasOpen) closeStandalonePanel();
+					return stopRecordingAndOpenDestination().then(() => undefined);
+				}
+				if (wasOpen) closeStandalonePanel();
+			})
+			.catch(() => undefined);
 		return;
 	}
 	void syncRecordingStatus()
