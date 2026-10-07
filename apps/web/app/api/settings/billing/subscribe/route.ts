@@ -6,12 +6,14 @@ import { stripe, userIsPro } from "@cap/utils";
 import { eq } from "drizzle-orm";
 import type { NextRequest } from "next/server";
 import type Stripe from "stripe";
+import { resolveCheckoutReturnUrls } from "@/lib/checkout-return";
 import { trackServerEvent } from "@/lib/server-analytics";
 
 export async function POST(request: NextRequest) {
 	const user = await getCurrentUser();
 	let customerId = user?.stripeCustomerId;
-	const { priceId, quantity, isOnBoarding } = await request.json();
+	const { priceId, quantity, isOnBoarding, returnPath } = await request.json();
+	const returnUrls = resolveCheckoutReturnUrls(serverEnv().WEB_URL, returnPath);
 
 	if (!priceId) {
 		console.error("Price ID not found");
@@ -67,12 +69,16 @@ export async function POST(request: NextRequest) {
 			customer: customerId as string,
 			line_items: [{ price: priceId, quantity: quantity }],
 			mode: "subscription",
-			success_url: isOnBoarding
-				? `${serverEnv().WEB_URL}/dashboard/settings/organization?upgrade=true&session_id={CHECKOUT_SESSION_ID}`
-				: `${serverEnv().WEB_URL}/dashboard/caps?upgrade=true&session_id={CHECKOUT_SESSION_ID}`,
-			cancel_url: isOnBoarding
-				? `${serverEnv().WEB_URL}/onboarding`
-				: `${serverEnv().WEB_URL}/pricing`,
+			success_url:
+				returnUrls?.successUrl ??
+				(isOnBoarding
+					? `${serverEnv().WEB_URL}/dashboard/settings/organization?upgrade=true&session_id={CHECKOUT_SESSION_ID}`
+					: `${serverEnv().WEB_URL}/dashboard/caps?upgrade=true&session_id={CHECKOUT_SESSION_ID}`),
+			cancel_url:
+				returnUrls?.cancelUrl ??
+				(isOnBoarding
+					? `${serverEnv().WEB_URL}/onboarding`
+					: `${serverEnv().WEB_URL}/pricing`),
 			allow_promotion_codes: true,
 			metadata: {
 				platform: "web",

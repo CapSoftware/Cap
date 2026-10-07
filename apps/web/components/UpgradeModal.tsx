@@ -37,6 +37,7 @@ interface UpgradeModalProps {
 	onOpenChange: (open: boolean) => void;
 	onCheckout?: () => Promise<void>;
 	dismissible?: boolean;
+	returnPath?: string;
 }
 
 const modalVariants = {
@@ -151,6 +152,7 @@ const UpgradeModalImpl = ({
 	onCheckout,
 	onboarding,
 	dismissible = true,
+	returnPath,
 }: UpgradeModalProps) => {
 	const stripeCtx = useStripeContext();
 	const { currency } = useCurrency();
@@ -176,6 +178,7 @@ const UpgradeModalImpl = ({
 					priceId: planId,
 					quantity: proQuantity,
 					isOnBoarding: onboarding,
+					returnPath,
 				}),
 			});
 			const data = await response.json();
