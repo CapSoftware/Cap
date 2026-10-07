@@ -533,7 +533,10 @@ fn create_d3d_capturer(
     error_tx: &mpsc::Sender<CaptureClosureEvent>,
 ) -> anyhow::Result<scap_direct3d::Capturer> {
     let capture_item = match params.window_id {
-        Some(window_id) => Window::from_id(window_id)
+        // Resolve the handle directly: `from_id` searches `list()`, which
+        // skips minimized windows, so a target minimized between selection
+        // and capture setup would fail to start despite still existing.
+        Some(window_id) => Window::from_id_direct(window_id)
             .ok_or_else(|| anyhow!("Window not found for ID: {:?}", window_id))?
             .raw_handle()
             .try_as_capture_item()
