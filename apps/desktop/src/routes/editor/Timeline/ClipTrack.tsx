@@ -108,8 +108,6 @@ function createWaveformPath(
 	const amplitudeAt = (outputTime: number) => {
 		const time = sourceTimeAt(outputTime);
 		if (time === null) return 0;
-		// Playback reads each track at source time + its clip offset
-		// (crates/editor/src/audio.rs), so the waveform must too.
 		const index = Math.floor((time + offsetSecs) * 10);
 		const sample = waveform[index];
 		const db =
