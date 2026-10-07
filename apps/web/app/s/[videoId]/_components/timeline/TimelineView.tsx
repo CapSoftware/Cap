@@ -59,6 +59,82 @@ const EMPTY_CHAPTERS: TimelineChapter[] = [];
 const WHEEL_ZOOM_RATE = 0.012;
 const WHEEL_ZOOM_MAX = 1.6;
 
+export type TimelineKeyAction =
+	| { type: "seekDelta"; delta: number }
+	| { type: "seekTo"; time: number }
+	| { type: "togglePlay" }
+	| null;
+
+export function isIgnoredTimelineKeyboardTarget(
+	target: HTMLElement | null,
+): boolean {
+	if (!target) return false;
+	const tagName = target.tagName?.toLowerCase();
+	const role = target.getAttribute?.("role");
+	return (
+		tagName === "input" ||
+		tagName === "textarea" ||
+		tagName === "select" ||
+		target.isContentEditable ||
+		role === "listbox" ||
+		role === "menu"
+	);
+}
+
+export function resolveTimelineKeyAction(
+	key: string,
+	hasModifier: boolean,
+	duration: number,
+	isNodeButton: boolean,
+	isSlider = false,
+): TimelineKeyAction {
+	if (hasModifier) return null;
+
+	if (isSlider) {
+		if (key === "ArrowRight" || key === "ArrowUp") {
+			return { type: "seekDelta", delta: KEYBOARD_SEEK_STEP };
+		}
+		if (key === "ArrowLeft" || key === "ArrowDown") {
+			return { type: "seekDelta", delta: -KEYBOARD_SEEK_STEP };
+		}
+		if (key === "Home") {
+			return { type: "seekTo", time: 0 };
+		}
+		if (key === "End") {
+			const safeDuration =
+				Number.isFinite(duration) && duration >= 0 ? duration : 0;
+			return { type: "seekTo", time: safeDuration };
+		}
+		if (key === " " || key === "Spacebar") {
+			return { type: "togglePlay" };
+		}
+		return null;
+	}
+
+	if (key === "ArrowLeft" || key === "ArrowRight") {
+		return {
+			type: "seekDelta",
+			delta: key === "ArrowLeft" ? -KEYBOARD_SEEK_STEP : KEYBOARD_SEEK_STEP,
+		};
+	}
+
+	if (key === "ArrowUp" || key === "Home") {
+		return { type: "seekTo", time: 0 };
+	}
+
+	if (key === "ArrowDown" || key === "End") {
+		const safeDuration =
+			Number.isFinite(duration) && duration >= 0 ? duration : 0;
+		return { type: "seekTo", time: safeDuration };
+	}
+
+	if ((key === " " || key === "Spacebar") && !isNodeButton) {
+		return { type: "togglePlay" };
+	}
+
+	return null;
+}
+
 export interface TimelineViewProps {
 	comments: CommentType[];
 	videoId: Video.VideoId;
@@ -409,27 +485,38 @@ function TimelineBand({
 	const handleKeyDown = useCallback(
 		(event: React.KeyboardEvent<HTMLDivElement>) => {
 			const target = event.target as HTMLElement | null;
-			if (
-				target instanceof HTMLInputElement ||
-				target instanceof HTMLTextAreaElement
-			) {
+			if (isIgnoredTimelineKeyboardTarget(target)) {
 				return;
 			}
 
-			if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
-				event.preventDefault();
-				const delta =
-					event.key === "ArrowLeft" ? -KEYBOARD_SEEK_STEP : KEYBOARD_SEEK_STEP;
-				playback.seek(playback.getCurrentTime() + delta);
-				return;
-			}
+			const role = target?.getAttribute?.("role");
+			const isSlider =
+				role === "slider" || Boolean(target?.closest?.("[data-timeline-rail]"));
+			const hasModifier =
+				event.shiftKey || event.altKey || event.ctrlKey || event.metaKey;
+			const isNodeButton = Boolean(target?.closest("[data-timeline-node]"));
+			const action = resolveTimelineKeyAction(
+				event.key,
+				hasModifier,
+				playback.getDuration(),
+				isNodeButton,
+				isSlider,
+			);
 
-			// Space over a branch node belongs to that button, not to playback.
-			if (event.key === " " || event.key === "Spacebar") {
-				if (target?.closest("[data-timeline-node]")) return;
-				event.preventDefault();
-				if (playback.getPlaying()) playback.pause();
-				else playback.play();
+			if (!action) return;
+
+			event.preventDefault();
+			switch (action.type) {
+				case "seekDelta":
+					playback.seek(playback.getCurrentTime() + action.delta);
+					break;
+				case "seekTo":
+					playback.seek(action.time);
+					break;
+				case "togglePlay":
+					if (playback.getPlaying()) playback.pause();
+					else playback.play();
+					break;
 			}
 		},
 		[playback],
