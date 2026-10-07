@@ -10,6 +10,7 @@ import { start } from "workflow/api";
 import { importLoomVideoWorkflow } from "@/workflows/import-loom-video";
 import { loomImportJobWorkflow } from "@/workflows/loom-import-job";
 import { dispatchLoomImportJob, rawFileKeyFor } from "./dispatch";
+import { affectedRows } from "./jobs";
 
 const STALE_CHECKING_MS = 10 * 60 * 1000;
 const STALE_IMPORTING_MS = 2 * 60 * 1000;
@@ -17,7 +18,7 @@ const STUCK_START_MS = 30 * 60 * 1000;
 
 export async function recoverLoomImportJobs(now = new Date(), limit = 20) {
 	const staleChecking = await db()
-		.select({ id: loomImportJobs.id })
+		.select({ id: loomImportJobs.id, updatedAt: loomImportJobs.updatedAt })
 		.from(loomImportJobs)
 		.where(
 			and(
@@ -29,12 +30,29 @@ export async function recoverLoomImportJobs(now = new Date(), limit = 20) {
 			),
 		)
 		.limit(limit);
+
+	let resumed = 0;
 	for (const job of staleChecking) {
-		await db()
+		const claim = await db()
 			.update(loomImportJobs)
 			.set({ updatedAt: now })
-			.where(eq(loomImportJobs.id, job.id));
-		await start(loomImportJobWorkflow, [{ jobId: job.id }]);
+			.where(
+				and(
+					eq(loomImportJobs.id, job.id),
+					eq(loomImportJobs.status, "checking"),
+					eq(loomImportJobs.updatedAt, job.updatedAt),
+				),
+			);
+		if (affectedRows(claim) !== 1) continue;
+		try {
+			await start(loomImportJobWorkflow, [{ jobId: job.id }]);
+			resumed++;
+		} catch (error) {
+			console.error("[loom-import] Could not resume import job", {
+				jobId: job.id,
+				error,
+			});
+		}
 	}
 
 	const staleImporting = await db()
@@ -60,6 +78,7 @@ export async function recoverLoomImportJobs(now = new Date(), limit = 20) {
 				bucket: videos.bucket,
 				loomVideoId: loomImportJobItems.loomVideoId,
 				rawFileKey: videoUploads.rawFileKey,
+				uploadUpdatedAt: videoUploads.updatedAt,
 			})
 			.from(loomImportJobItems)
 			.innerJoin(videos, eq(videos.id, loomImportJobItems.videoId))
@@ -79,31 +98,46 @@ export async function recoverLoomImportJobs(now = new Date(), limit = 20) {
 			if (!row.loomVideoId) continue;
 			const rawFileKey =
 				row.rawFileKey ?? rawFileKeyFor(row.ownerId, row.videoId);
-			await db()
+			const claim = await db()
 				.update(videoUploads)
 				.set({
 					processingMessage: "Retrying Loom import...",
 					rawFileKey,
 					updatedAt: now,
 				})
-				.where(eq(videoUploads.videoId, row.videoId));
-			await start(importLoomVideoWorkflow, [
-				{
+				.where(
+					and(
+						eq(videoUploads.videoId, row.videoId),
+						eq(videoUploads.phase, "uploading"),
+						eq(videoUploads.updatedAt, row.uploadUpdatedAt),
+					),
+				);
+			if (affectedRows(claim) !== 1) continue;
+			try {
+				await start(importLoomVideoWorkflow, [
+					{
+						videoId: row.videoId,
+						userId: row.ownerId,
+						rawFileKey,
+						bucketId: row.bucket,
+						loomVideoId: row.loomVideoId,
+						reuseExistingRawUpload: true,
+					},
+				]);
+				restarted++;
+			} catch (error) {
+				console.error("[loom-import] Could not restart stuck import", {
 					videoId: row.videoId,
-					userId: row.ownerId,
-					rawFileKey,
-					bucketId: row.bucket,
-					loomVideoId: row.loomVideoId,
-					reuseExistingRawUpload: true,
-				},
-			]);
-			restarted++;
+					error,
+				});
+			}
 		}
 		await dispatchLoomImportJob(job.id);
 	}
 
 	return {
 		checking: staleChecking.length,
+		resumed,
 		importing: staleImporting.length,
 		restarted,
 	};

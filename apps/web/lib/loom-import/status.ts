@@ -91,7 +91,45 @@ export type LoomImportSnapshot = {
 export const LOOM_IMPORT_TERMINAL_STATUSES: ReadonlySet<LoomImportDisplayStatus> =
 	new Set(["imported", "failed", "skipped", "cancelled"]);
 
-const DELETED_VIDEO_ERROR = "The imported Cap was deleted.";
+export const LOOM_IMPORT_DELETED_VIDEO_ERROR = "The imported Cap was deleted.";
+
+export function loomImportWaitingStatus(
+	jobStatus: LoomImportJobStatus,
+): "ready" | "queued" {
+	return jobStatus === "awaiting_upgrade" || jobStatus === "checking"
+		? "ready"
+		: "queued";
+}
+
+export type LoomImportSettleSource = {
+	status: LoomImportItemStatus;
+	videoExists: boolean;
+	uploadPhase: string | null;
+	uploadError: string | null;
+};
+
+export type LoomImportSettlement =
+	| { status: "complete"; error: null }
+	| { status: "failed"; error: string };
+
+export function settleLoomImportItem(
+	source: LoomImportSettleSource,
+): LoomImportSettlement | null {
+	if (!source.videoExists) {
+		return { status: "failed", error: LOOM_IMPORT_DELETED_VIDEO_ERROR };
+	}
+	if (source.status === "complete") return null;
+	if (source.uploadPhase === null || source.uploadPhase === "complete") {
+		return { status: "complete", error: null };
+	}
+	if (source.uploadPhase === "error") {
+		return {
+			status: "failed",
+			error: (source.uploadError || "Loom import failed.").slice(0, 512),
+		};
+	}
+	return null;
+}
 
 function importStage(
 	phase: string | null,
@@ -113,12 +151,7 @@ export function deriveLoomImportItemState(
 		case "pending":
 			return { status: "checking" };
 		case "ready":
-			return {
-				status:
-					jobStatus === "awaiting_upgrade" || jobStatus === "checking"
-						? "ready"
-						: "queued",
-			};
+			return { status: loomImportWaitingStatus(jobStatus) };
 		case "skipped":
 			return { status: "skipped", error: source.error ?? undefined };
 		case "cancelled":
@@ -135,13 +168,17 @@ export function deriveLoomImportItemState(
 	}
 
 	if (!source.videoExists) {
-		return { status: "failed", error: source.error ?? DELETED_VIDEO_ERROR };
+		return {
+			status: "failed",
+			error: source.error ?? LOOM_IMPORT_DELETED_VIDEO_ERROR,
+		};
 	}
 
-	if (source.uploadPhase === null) {
-		if (source.status === "failed" && source.error) {
-			return { status: "failed", error: source.error };
-		}
+	if (
+		source.status === "complete" ||
+		source.uploadPhase === null ||
+		source.uploadPhase === "complete"
+	) {
 		return { status: "imported" };
 	}
 

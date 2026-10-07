@@ -824,6 +824,7 @@ export async function resetFailedLoomImportItems(jobId: string) {
 	const failed = await db()
 		.select({
 			id: loomImportJobItems.id,
+			status: loomImportJobItems.status,
 			videoId: loomImportJobItems.videoId,
 			loomVideoId: loomImportJobItems.loomVideoId,
 			videoExists: sql<number>`${videos.id} IS NOT NULL`.mapWith(Number),
@@ -845,16 +846,31 @@ export async function resetFailedLoomImportItems(jobId: string) {
 
 	const toPending: string[] = [];
 	const toReady: string[] = [];
+	const toComplete: string[] = [];
 	for (const item of failed) {
 		if (!item.loomVideoId) continue;
 		if (!item.videoId || !item.videoExists) {
 			toPending.push(item.id);
+		} else if (item.status === "complete") {
 		} else if (item.uploadPhase === "error") {
 			toReady.push(item.id);
+		} else if (item.status === "failed" && !item.uploadVideoId) {
+			toComplete.push(item.id);
 		}
 	}
 
 	const now = new Date();
+	for (const ids of chunk(toComplete, IN_CHUNK)) {
+		await db()
+			.update(loomImportJobItems)
+			.set({ status: "complete", error: null, updatedAt: now })
+			.where(
+				and(
+					inArray(loomImportJobItems.id, ids),
+					eq(loomImportJobItems.status, "failed"),
+				),
+			);
+	}
 	for (const ids of chunk(toPending, IN_CHUNK)) {
 		await db()
 			.update(loomImportJobItems)

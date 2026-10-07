@@ -17,11 +17,11 @@ import { Option } from "effect";
 import { start } from "workflow/api";
 import { runWorkflowPromise } from "@/lib/workflow-runtime";
 import { importLoomVideoWorkflow } from "@/workflows/import-loom-video";
+import { settleLoomImportItem } from "./status";
 
 const DEFAULT_CONCURRENCY = 4;
 const MAX_CONCURRENCY = 32;
 const WAITING_FOR_CAPACITY = "Queued for Loom import";
-const DELETED_VIDEO_ERROR = "The imported Cap was deleted.";
 
 type VideoInsert = typeof videos.$inferInsert;
 
@@ -163,16 +163,19 @@ export async function dispatchLoomImportJob(jobId: string) {
 		let active = 0;
 		let waiting = 0;
 		for (const row of inFlight) {
-			if (!row.videoId || !row.videoExists) {
-				failures.set(DELETED_VIDEO_ERROR, [
-					...(failures.get(DELETED_VIDEO_ERROR) ?? []),
+			const settled = settleLoomImportItem({
+				status: "importing",
+				videoExists: Boolean(row.videoId && row.videoExists),
+				uploadPhase: row.uploadVideoId ? row.uploadPhase : null,
+				uploadError: row.uploadError,
+			});
+			if (settled?.status === "complete") {
+				completedIds.push(row.id);
+			} else if (settled) {
+				failures.set(settled.error, [
+					...(failures.get(settled.error) ?? []),
 					row.id,
 				]);
-			} else if (!row.uploadVideoId) {
-				completedIds.push(row.id);
-			} else if (row.uploadPhase === "error") {
-				const error = (row.uploadError || "Loom import failed.").slice(0, 512);
-				failures.set(error, [...(failures.get(error) ?? []), row.id]);
 			} else {
 				active++;
 				if (row.uploadMessage?.startsWith(WAITING_FOR_CAPACITY)) waiting++;
@@ -464,18 +467,71 @@ export async function dispatchLoomImportJob(jobId: string) {
 }
 
 export async function dispatchLoomImportForVideo(videoId: string) {
-	const [item] = await db()
-		.select({ jobId: loomImportJobItems.jobId })
+	const items = await db()
+		.select({
+			id: loomImportJobItems.id,
+			jobId: loomImportJobItems.jobId,
+			status: loomImportJobItems.status,
+			error: loomImportJobItems.error,
+			jobStatus: loomImportJobs.status,
+			videoExists: sql<number>`${videos.id} IS NOT NULL`.mapWith(Number),
+			uploadVideoId: videoUploads.videoId,
+			uploadPhase: videoUploads.phase,
+			uploadError: videoUploads.processingError,
+		})
 		.from(loomImportJobItems)
+		.innerJoin(loomImportJobs, eq(loomImportJobs.id, loomImportJobItems.jobId))
+		.leftJoin(videos, eq(videos.id, loomImportJobItems.videoId))
+		.leftJoin(
+			videoUploads,
+			eq(videoUploads.videoId, loomImportJobItems.videoId),
+		)
 		.where(
 			and(
 				eq(loomImportJobItems.videoId, Video.VideoId.make(videoId)),
-				eq(loomImportJobItems.status, "importing"),
+				inArray(loomImportJobItems.status, ["importing", "failed", "complete"]),
 			),
-		)
-		.limit(1);
-	if (!item) return null;
-	return dispatchLoomImportJob(item.jobId);
+		);
+	if (items.length === 0) return null;
+
+	const jobsToDispatch = new Set<string>();
+	for (const item of items) {
+		if (item.jobStatus === "importing" && item.status === "importing") {
+			jobsToDispatch.add(item.jobId);
+			continue;
+		}
+		const settled = settleLoomImportItem({
+			status: item.status,
+			videoExists: Boolean(item.videoExists),
+			uploadPhase: item.uploadVideoId ? item.uploadPhase : null,
+			uploadError: item.uploadError,
+		});
+		if (
+			!settled ||
+			(settled.status === item.status && settled.error === item.error)
+		) {
+			continue;
+		}
+		await db()
+			.update(loomImportJobItems)
+			.set({
+				status: settled.status,
+				error: settled.error,
+				updatedAt: new Date(),
+			})
+			.where(
+				and(
+					eq(loomImportJobItems.id, item.id),
+					eq(loomImportJobItems.status, item.status),
+				),
+			);
+	}
+
+	let outcome: { started: number; completed: boolean } | null = null;
+	for (const jobId of jobsToDispatch) {
+		outcome = await dispatchLoomImportJob(jobId);
+	}
+	return outcome;
 }
 
 export async function isLoomImportedVideo(videoId: Video.VideoId) {

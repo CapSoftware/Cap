@@ -13,7 +13,7 @@ import {
 	videoUploads,
 } from "@cap/database/schema";
 import { Organisation, User, type Video } from "@cap/web-domain";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, inArray, notInArray } from "drizzle-orm";
 import { drizzle, type MySql2Database } from "drizzle-orm/mysql2";
 import { Effect, Option } from "effect";
 import { createPool, type Pool } from "mysql2/promise";
@@ -86,6 +86,7 @@ import {
 	resetFailedLoomImportItems,
 	resolveLoomImportJob,
 } from "@/lib/loom-import/jobs";
+import { recoverLoomImportJobs } from "@/lib/loom-import/recovery";
 import {
 	getLoomImportSnapshot,
 	LOOM_IMPORT_CURSOR_OVERLAP_MS,
@@ -550,6 +551,145 @@ describe.runIf(Boolean(databaseUrl))(
 				started: 0,
 				completed: false,
 			});
+
+			await finishVideo(state[1]?.videoId as Video.VideoId);
+			expect((await items(second.jobId))[1]).toMatchObject({
+				status: "complete",
+				error: null,
+			});
+			expect(await jobStatus(second.jobId)).toBe("cancelled");
+		});
+
+		it("marks a failed video imported once a retry from the video page finishes, even after the import ended", async () => {
+			const { ownerId, orgId } = await makeOrganization({ pro: true });
+			const { jobId } = await createLoomImportJob({
+				userId: ownerId,
+				orgId,
+				fileName: "retry.csv",
+				rows: [{ rowNumber: 2, loomUrl: share(LOOM.ok1) }],
+			});
+			await resolveLoomImportJob(jobId, { fetchImpl: loomFetch });
+			await prepareLoomImportJob(jobId);
+			await dispatchLoomImportJob(jobId);
+			const videoId = (await items(jobId))[0]?.videoId as Video.VideoId;
+			await failVideo(videoId, "Media server unavailable");
+			expect(await jobStatus(jobId)).toBe("completed");
+			expect((await items(jobId))[0]).toMatchObject({
+				status: "failed",
+				error: "Media server unavailable",
+			});
+
+			await database()
+				.update(videoUploads)
+				.set({
+					phase: "processing",
+					processingError: null,
+					processingMessage: "Retrying Loom import...",
+				})
+				.where(eq(videoUploads.videoId, videoId));
+			await dispatchLoomImportForVideo(videoId);
+			expect((await items(jobId))[0]?.status).toBe("failed");
+			expect(
+				(await getLoomImportSnapshot({ jobId, userId: ownerId }))?.counts
+					.importing,
+			).toBe(1);
+
+			await finishVideo(videoId);
+			expect((await items(jobId))[0]).toMatchObject({
+				status: "complete",
+				error: null,
+				videoId,
+			});
+			const finished = await getLoomImportSnapshot({ jobId, userId: ownerId });
+			expect(finished?.counts).toMatchObject({ imported: 1, failed: 0 });
+			expect(finished?.items[0]).toMatchObject({ status: "imported", videoId });
+			expect(await jobStatus(jobId)).toBe("completed");
+			const [summary] = await listLoomImportJobs({ userId: ownerId, orgId });
+			expect(summary).toMatchObject({ id: jobId, imported: 1, failed: 0 });
+
+			await database()
+				.update(loomImportJobItems)
+				.set({ status: "failed", error: "Media server unavailable" })
+				.where(eq(loomImportJobItems.jobId, jobId));
+			expect(await resetFailedLoomImportItems(jobId)).toBe(0);
+			expect((await items(jobId))[0]).toMatchObject({
+				status: "complete",
+				error: null,
+			});
+			expect(await jobStatus(jobId)).toBe("completed");
+		});
+
+		it("restarts a stuck import only once when two recovery runs overlap", async () => {
+			const { ownerId, orgId } = await makeOrganization({ pro: true });
+			const stuck = await createLoomImportJob({
+				userId: ownerId,
+				orgId,
+				fileName: "stuck.csv",
+				rows: [{ rowNumber: 2, loomUrl: share(LOOM.ok1) }],
+			});
+			await resolveLoomImportJob(stuck.jobId, { fetchImpl: loomFetch });
+			expect(await prepareLoomImportJob(stuck.jobId)).toBe("importing");
+			await dispatchLoomImportJob(stuck.jobId);
+			const videoId = (await items(stuck.jobId))[0]?.videoId as Video.VideoId;
+			const checking = await createLoomImportJob({
+				userId: ownerId,
+				orgId,
+				fileName: "checking.csv",
+				rows: [{ rowNumber: 2, loomUrl: share(LOOM.ok2) }],
+			});
+			const ours = [stuck.jobId, checking.jobId];
+
+			await database()
+				.update(loomImportJobs)
+				.set({ status: "cancelled" })
+				.where(
+					and(
+						inArray(loomImportJobs.status, ["checking", "importing"]),
+						notInArray(loomImportJobs.id, ours),
+					),
+				);
+			const longAgo = new Date(Date.now() - 60 * 60 * 1000);
+			await database()
+				.update(loomImportJobs)
+				.set({ updatedAt: longAgo })
+				.where(inArray(loomImportJobs.id, ours));
+			await database()
+				.update(videoUploads)
+				.set({ updatedAt: longAgo })
+				.where(eq(videoUploads.videoId, videoId));
+			fixture.start.mockClear();
+
+			const runs = await Promise.all([
+				recoverLoomImportJobs(),
+				recoverLoomImportJobs(),
+			]);
+
+			const startsFor = (workflow: string, key: string, value: string) =>
+				fixture.start.mock.calls.filter(
+					([started, [payload]]) =>
+						started === workflow &&
+						(payload as Record<string, unknown>)[key] === value,
+				);
+			expect(
+				startsFor("importLoomVideoWorkflow", "videoId", videoId),
+			).toHaveLength(1);
+			expect(
+				startsFor("loomImportJobWorkflow", "jobId", checking.jobId),
+			).toHaveLength(1);
+			expect(runs.reduce((sum, run) => sum + run.restarted, 0)).toBe(1);
+			expect(runs.reduce((sum, run) => sum + run.resumed, 0)).toBe(1);
+			const [upload] = await database()
+				.select()
+				.from(videoUploads)
+				.where(eq(videoUploads.videoId, videoId));
+			expect(upload).toMatchObject({
+				phase: "uploading",
+				processingMessage: "Retrying Loom import...",
+			});
+
+			fixture.start.mockClear();
+			await recoverLoomImportJobs();
+			expect(fixture.start).not.toHaveBeenCalled();
 		});
 
 		it("rejects files over the 2,000 video limit without creating anything", async () => {
