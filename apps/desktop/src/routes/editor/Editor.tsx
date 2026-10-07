@@ -44,6 +44,7 @@ import { Toggle } from "~/components/Toggle";
 import { composeEventHandlers } from "~/utils/composeEventHandlers";
 import { createTauriEventListener } from "~/utils/createEventListener";
 import { commands, events } from "~/utils/tauri";
+import { isBrowserShortcut } from "./browser-shortcuts";
 import { ConfigSidebar } from "./ConfigSidebar";
 import { ClipStrip } from "./clip-strip";
 import {
@@ -577,6 +578,13 @@ function Inner(props: {
 			if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "w")
 				return;
 			if (event.altKey && event.key === "F4") return;
+			// In a browser, reload, find and the other browser shortcuts must
+			// still work while the editor loads: kept from the editor's own
+			// shortcuts, never cancelled.
+			if (isWebEditor && isBrowserShortcut(event)) {
+				event.stopImmediatePropagation();
+				return;
+			}
 			event.preventDefault();
 			event.stopImmediatePropagation();
 		};
