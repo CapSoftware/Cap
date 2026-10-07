@@ -54,6 +54,7 @@ import { forwardRef, useEffect } from "react";
 import * as ReactDOM from "react-dom";
 import { useComposedRefs } from "@/app/lib/compose-refs";
 import { cn } from "@/app/lib/utils";
+import { isBrowserShortcut } from "@/lib/browser-shortcut";
 import {
 	formatPlaybackDuration,
 	normalizePlaybackSpeed,
@@ -508,6 +509,10 @@ function MediaPlayerRootImpl(props: MediaPlayerRootProps) {
 			rootImplProps.onKeyDown?.(event);
 
 			if (event.defaultPrevented) return;
+			// Cmd, Ctrl and Alt combinations belong to the browser: reload, hard
+			// reload, find, the address bar, tab switching and history. The
+			// player's single-key shortcuts must never cancel them.
+			if (isBrowserShortcut(event)) return;
 
 			const mediaElement = mediaRef.current;
 			if (!mediaElement) return;
