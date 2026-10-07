@@ -119,6 +119,11 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
+      - name: Test desktop upload health
+        run: |
+          bun run --cwd apps/desktop vitest run src/utils/create-upload-health.test.ts src/utils/upload-health.test.ts
+          bun run --cwd apps/web test __tests__/unit/desktop-upload-health-route.test.ts __tests__/unit/desktop-upload-health.test.ts
+
   mobile:
     name: Mobile
     runs-on: ubuntu-latest
@@ -332,6 +337,7 @@ jobs:
           cargo test --locked -p cap-recording --lib -- --test-threads=1
           cargo test --locked -p cap-enc-ffmpeg
           cargo test --locked -p cap-desktop --lib render_frame_event
+          cargo test --locked -p cap-desktop --lib upload_health::
         env:
           LD_LIBRARY_PATH: ${{ format('{0}/target/native-deps/lib:{0}/target/debug:{0}/target/{1}/debug', github.workspace, matrix.settings.target) }}
 
