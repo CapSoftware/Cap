@@ -242,6 +242,8 @@ export const LoomImportJobView = ({
 
 	const settled =
 		counts.imported + counts.failed + counts.skipped + counts.cancelled;
+	const importable =
+		counts.total - counts.failed - counts.skipped - counts.cancelled;
 	const importingProgress = useMemo(
 		() =>
 			items.reduce(
@@ -419,7 +421,7 @@ export const LoomImportJobView = ({
 							<span className="flex flex-wrap items-baseline gap-x-2">
 								<NumberFlow value={counts.imported} className="tabular-nums" />
 								<span>
-									of {numberFormat.format(counts.total)} videos are in Cap
+									of {numberFormat.format(importable)} videos are in Cap
 								</span>
 							</span>
 						}

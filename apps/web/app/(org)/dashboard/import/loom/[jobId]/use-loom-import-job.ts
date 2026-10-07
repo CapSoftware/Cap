@@ -10,8 +10,8 @@ import {
 const ACTIVE_POLL_MS = 1500;
 const HIDDEN_POLL_MS = 15_000;
 const UPGRADE_POLL_MS = 2500;
-const RATE_WINDOW_MS = 90_000;
-const RATE_MIN_SPAN_MS = 10_000;
+const RATE_WINDOW_MS = 180_000;
+const RATE_MIN_SPAN_MS = 20_000;
 
 export type LoomImportSummary = Omit<
 	LoomImportSnapshot,
