@@ -162,6 +162,7 @@ const cameraPreviewSessions = new Map<string, RTCPeerConnection>();
 // reopen that lands too soon after the close fails with NotReadableError on
 // exclusive-access platforms. Keep the stream warm across that gap instead.
 const CAMERA_PREVIEW_RELEASE_GRACE_MS = 2000;
+const CAMERA_PREVIEW_PEER_DISCONNECT_GRACE_MS = 5000;
 const activeRecordingSounds = new Set<HTMLAudioElement>();
 
 const playRecordingSound = (
@@ -1668,13 +1669,32 @@ const connectCameraPreview = async (request: ConnectCameraPreviewRequest) => {
 			request.settings,
 			request.sessionId,
 		);
+		let disconnectTimer: number | null = null;
 		peer.addEventListener("connectionstatechange", () => {
+			if (disconnectTimer !== null) {
+				window.clearTimeout(disconnectTimer);
+				disconnectTimer = null;
+			}
 			if (
 				peer.connectionState === "closed" ||
-				peer.connectionState === "disconnected" ||
 				peer.connectionState === "failed"
 			) {
 				disconnectCameraPreview(request.sessionId);
+				return;
+			}
+			// The preview page drives recovery from a transient disconnect with
+			// its own shorter grace; this only reaps a peer whose page died
+			// without sending disconnect-camera-preview.
+			if (peer.connectionState === "disconnected") {
+				disconnectTimer = window.setTimeout(() => {
+					disconnectTimer = null;
+					if (
+						peer.connectionState === "disconnected" &&
+						cameraPreviewSessions.get(request.sessionId) === peer
+					) {
+						disconnectCameraPreview(request.sessionId);
+					}
+				}, CAMERA_PREVIEW_PEER_DISCONNECT_GRACE_MS);
 			}
 		});
 
