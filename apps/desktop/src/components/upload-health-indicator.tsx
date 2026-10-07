@@ -1,6 +1,6 @@
 import * as shell from "@tauri-apps/plugin-shell";
 import { cx } from "cva";
-import { createMemo, Show } from "solid-js";
+import { createMemo, createSignal, createUniqueId, Show } from "solid-js";
 import toast from "solid-toast";
 import {
 	describeUploadHealth,
@@ -15,7 +15,12 @@ export default function UploadHealthIndicator(props: {
 	disabled: boolean;
 	onRefresh: () => void;
 }) {
+	const descriptionId = createUniqueId();
+	const [tooltipOpen, setTooltipOpen] = createSignal(false);
+	const [focusTooltipOpen, setFocusTooltipOpen] = createSignal(false);
 	const presentation = createMemo(() => describeUploadHealth(props.status));
+	const message = () =>
+		props.status?.message || "Check the API upload connection";
 	const toneClass = createMemo(() => {
 		switch (presentation().tone) {
 			case "good":
@@ -35,9 +40,17 @@ export default function UploadHealthIndicator(props: {
 		<div class="flex min-w-0 max-w-full items-center gap-1.5">
 			<Tooltip
 				childClass="min-w-0"
+				open={tooltipOpen() || focusTooltipOpen()}
+				onOpenChange={setTooltipOpen}
 				content={
-					<span>
-						{props.status?.message || "Check the API upload connection"}
+					<span
+						class="block whitespace-normal text-left"
+						style={{
+							"max-width": "min(18rem, calc(100vw - 3rem))",
+							"overflow-wrap": "anywhere",
+						}}
+					>
+						{message()}
 					</span>
 				}
 			>
@@ -45,12 +58,21 @@ export default function UploadHealthIndicator(props: {
 					type="button"
 					disabled={props.disabled || props.refreshing}
 					onClick={props.onRefresh}
+					onFocus={() => setFocusTooltipOpen(true)}
+					onBlur={() => setFocusTooltipOpen(false)}
+					onKeyDown={(event) => {
+						if (event.key === "Escape") {
+							setTooltipOpen(false);
+							setFocusTooltipOpen(false);
+						}
+					}}
 					aria-label={
 						props.refreshing
 							? `Checking upload. ${statusLabel()}`
 							: `Refresh upload check. ${statusLabel()}`
 					}
 					aria-busy={props.refreshing}
+					aria-describedby={descriptionId}
 					class={cx(
 						"flex min-w-0 max-w-full items-center gap-1.5 rounded-lg border px-2 py-1 text-[11px] leading-none transition hover:opacity-80 disabled:pointer-events-none disabled:opacity-70",
 						toneClass(),
@@ -70,6 +92,9 @@ export default function UploadHealthIndicator(props: {
 					/>
 				</button>
 			</Tooltip>
+			<span id={descriptionId} class="sr-only">
+				{message()}
+			</span>
 			<Show when={props.status?.kind === "unavailable" && !props.status.stale}>
 				<button
 					type="button"
