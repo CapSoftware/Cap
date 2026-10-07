@@ -2305,15 +2305,21 @@ async fn start_recording_prepared(
                 "desktopSegments"
             };
 
-            let created_video = match crate::upload::create_or_get_video_with_mode(
-                &app,
-                false,
-                None,
-                Some(project_name.clone()),
-                None,
-                inputs.organization_id.clone(),
-                upload_mode,
-            )
+            let (creation, created_video) = match async {
+                let creation = crate::upload_health::prepare_video_creation(&app).await?;
+                let created_video = creation
+                    .run(crate::upload::create_or_get_video_with_mode(
+                        &app,
+                        false,
+                        None,
+                        Some(project_name.clone()),
+                        None,
+                        inputs.organization_id.clone(),
+                        upload_mode,
+                    ))
+                    .await?;
+                Ok::<_, AuthedApiError>((creation, created_video))
+            }
             .await
             {
                 Ok(meta) => meta,
@@ -2347,6 +2353,7 @@ async fn start_recording_prepared(
                 &app,
                 configured_resolution,
                 &created_video,
+                &creation,
             )
             .await;
             if instant_mode_max_resolution < configured_resolution {
