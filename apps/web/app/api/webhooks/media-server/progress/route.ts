@@ -16,6 +16,10 @@ import {
 import { queueDesktopSegmentsFinalization } from "@/lib/desktop-segments-finalization";
 import { invalidateGoogleDriveStorageQuotaCache } from "@/lib/google-drive-storage-quota";
 import {
+	dispatchLoomImportForVideo,
+	isLoomImportedVideo,
+} from "@/lib/loom-import/dispatch";
+import {
 	queueVideoTranscription,
 	shouldQueueTranscriptionAfterMediaComplete,
 } from "@/lib/queue-video-transcription";
@@ -60,6 +64,17 @@ interface ProgressWebhookPayload {
 
 function getValidDuration(duration: number) {
 	return Number.isFinite(duration) && duration > 0 ? duration : undefined;
+}
+
+async function continueLoomImport(videoId: Video.VideoId) {
+	try {
+		await dispatchLoomImportForVideo(videoId);
+	} catch (error) {
+		console.warn("[media-server-webhook] Could not continue Loom import", {
+			videoId,
+			error,
+		});
+	}
 }
 
 function mapPhaseToDbPhase(
@@ -262,7 +277,15 @@ export async function POST(request: NextRequest) {
 				currentVideo?.storageIntegrationId,
 			);
 
-			if (
+			const videoId = payload.videoId as Video.VideoId;
+			const isLoomImport =
+				!isEditUpload &&
+				currentVideo?.source.type === "webMP4" &&
+				(await isLoomImportedVideo(videoId));
+
+			if (isLoomImport) {
+				await continueLoomImport(videoId);
+			} else if (
 				shouldQueueTranscriptionAfterMediaComplete(
 					currentVideo?.source.type,
 					Boolean(isEditUpload),
@@ -309,6 +332,7 @@ export async function POST(request: NextRequest) {
 						updatedAt: new Date(),
 					})
 					.where(eq(videoUploads.videoId, payload.videoId as Video.VideoId));
+				await continueLoomImport(payload.videoId as Video.VideoId);
 			}
 		} else {
 			await db()

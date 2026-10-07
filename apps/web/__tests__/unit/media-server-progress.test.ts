@@ -15,6 +15,8 @@ const mocks = vi.hoisted(() => ({
 	transcribe: vi.fn(),
 	invalidateQuota: vi.fn(),
 	audio: vi.fn(),
+	isLoomImport: vi.fn(),
+	continueLoomImport: vi.fn(),
 	tables: {
 		videos: {
 			id: "videos.id",
@@ -67,6 +69,10 @@ vi.mock("@/lib/google-drive-storage-quota", () => ({
 }));
 vi.mock("@/lib/google-drive-storage-quota-cache", () => ({
 	invalidateGoogleDriveStorageQuotaCache: mocks.invalidateQuota,
+}));
+vi.mock("@/lib/loom-import/dispatch", () => ({
+	isLoomImportedVideo: mocks.isLoomImport,
+	dispatchLoomImportForVideo: mocks.continueLoomImport,
 }));
 vi.mock("@/lib/queue-video-transcription", () => ({
 	queueVideoTranscription: mocks.transcribe,
@@ -253,6 +259,17 @@ function databaseFixture(initial: DesktopRecordingJob | null = fixture().job) {
 	};
 }
 
+function webPayload(overrides: Record<string, unknown> = {}) {
+	return {
+		jobId: "media-job-1",
+		videoId,
+		phase: "complete",
+		progress: 100,
+		metadata: { ...metadata, bitrate: 1_000_000 },
+		...overrides,
+	};
+}
+
 function request(
 	body: unknown = fixture().payload,
 	secret: string | null = "media-secret",
@@ -283,6 +300,8 @@ describe("media-server recording progress webhook", () => {
 		);
 		mocks.queue.mockReset().mockResolvedValue("queued");
 		mocks.transcribe.mockReset().mockResolvedValue({ success: true });
+		mocks.isLoomImport.mockReset().mockResolvedValue(false);
+		mocks.continueLoomImport.mockReset().mockResolvedValue(null);
 		mocks.invalidateQuota.mockResolvedValue(undefined);
 		mocks.retry.mockResolvedValue(true);
 		mocks.blocked.mockResolvedValue(true);
@@ -330,6 +349,37 @@ describe("media-server recording progress webhook", () => {
 			expect(mocks.transcribe).not.toHaveBeenCalled();
 		},
 	);
+
+	it("leaves AI for imported Loom videos until they are viewed and keeps the import moving", async () => {
+		const database = databaseFixture(null);
+		database.video.source = { type: "webMP4" };
+		mocks.isLoomImport.mockResolvedValue(true);
+		expect((await request(webPayload())).status).toBe(200);
+		expect(mocks.isLoomImport).toHaveBeenCalledExactlyOnceWith(videoId);
+		expect(mocks.transcribe).not.toHaveBeenCalled();
+		expect(mocks.continueLoomImport).toHaveBeenCalledExactlyOnceWith(videoId);
+		expect(database.mutations).toContainEqual({
+			operation: "delete",
+			table: mocks.tables.uploads,
+		});
+	});
+
+	it("still transcribes ordinary web uploads as soon as processing finishes", async () => {
+		const database = databaseFixture(null);
+		database.video.source = { type: "webMP4" };
+		expect((await request(webPayload())).status).toBe(200);
+		expect(mocks.transcribe).toHaveBeenCalledExactlyOnceWith(videoId);
+		expect(mocks.continueLoomImport).not.toHaveBeenCalled();
+	});
+
+	it("keeps a Loom import moving when a video fails for good", async () => {
+		const database = databaseFixture(null);
+		database.video.source = { type: "webMP4" };
+		const failed = webPayload({ phase: "error", error: "Source unavailable" });
+		expect((await request(failed)).status).toBe(200);
+		expect(mocks.continueLoomImport).toHaveBeenCalledExactlyOnceWith(videoId);
+		expect(mocks.transcribe).not.toHaveBeenCalled();
+	});
 
 	it("refuses callbacks when the webhook secret is not configured", async () => {
 		databaseFixture();
