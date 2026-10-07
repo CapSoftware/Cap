@@ -2586,19 +2586,14 @@ fn cursor_crop_uv(position: XY<f64>, crop: &Crop, screen_size: XY<u32>) -> XY<f6
     )
 }
 
-// Scene transitions straddle the scene edges, so the pin eases in across
+// Scene transitions straddle the scene edges, so each pin eases in across
 // `[start - transition_in, start]` and out across `[end, end + transition_out]`.
+// Adjacent pinned scenes overlap there, so overlapping pins are blended by
+// weight instead of letting the earlier one win until its window ends.
 fn fill_frame_scene_override(
     scenes: &[cap_project::SceneSegment],
     time: f64,
 ) -> Option<(XY<f64>, f64)> {
-    let scene = scenes.iter().find(|scene| {
-        matches!(scene.mode, SceneMode::Default | SceneMode::HideCamera)
-            && scene.fill_frame_position.is_some()
-            && time >= scene.start - scene.transition_in.max(0.0)
-            && time < scene.end + scene.transition_out.max(0.0)
-    })?;
-    let position = scene.fill_frame_position?;
     let ease = |elapsed: f64, duration: f64| {
         if duration <= 1e-6 {
             return if elapsed >= 0.0 { 1.0 } else { 0.0 };
@@ -2606,14 +2601,30 @@ fn fill_frame_scene_override(
         let x = (elapsed / duration).clamp(0.0, 1.0);
         x * x * (3.0 - 2.0 * x)
     };
-    let transition_in = scene.transition_in.max(0.0);
-    let transition_out = scene.transition_out.max(0.0);
-    let weight = ease(time - (scene.start - transition_in), transition_in)
-        * ease(scene.end + transition_out - time, transition_out);
-    Some((
-        XY::new(position.x.clamp(0.0, 1.0), position.y.clamp(0.0, 1.0)),
-        weight,
-    ))
+    let mut weighted = XY::new(0.0, 0.0);
+    let mut total = 0.0;
+    for scene in scenes {
+        if !matches!(scene.mode, SceneMode::Default | SceneMode::HideCamera) {
+            continue;
+        }
+        let Some(position) = scene.fill_frame_position else {
+            continue;
+        };
+        let transition_in = scene.transition_in.max(0.0);
+        let transition_out = scene.transition_out.max(0.0);
+        if time < scene.start - transition_in || time >= scene.end + transition_out {
+            continue;
+        }
+        let weight = ease(time - (scene.start - transition_in), transition_in)
+            * ease(scene.end + transition_out - time, transition_out);
+        if weight <= 0.0 {
+            continue;
+        }
+        let position = XY::new(position.x.clamp(0.0, 1.0), position.y.clamp(0.0, 1.0));
+        weighted = weighted + position * weight;
+        total += weight;
+    }
+    (total > 0.0).then(|| (weighted / total, total.min(1.0)))
 }
 
 // The smoothed focus trails fast pointer moves, so the live cursor is also
@@ -5628,6 +5639,33 @@ mod tests {
         let size = ze.coord - zs.coord;
         assert!(((1080.0 - size.x) * 0.2 - zs.coord.x).abs() < 1e-6);
         assert!(((1920.0 - size.y) * 0.9 - zs.coord.y).abs() < 1e-6);
+    }
+
+    #[test]
+    fn adjacent_scene_pins_blend_without_jumping() {
+        let pinned = |start: f64, end: f64, x: f64| cap_project::SceneSegment {
+            start,
+            end,
+            mode: SceneMode::Default,
+            split_layout: None,
+            transition_in: 0.5,
+            transition_out: 0.5,
+            fill_frame_position: Some(XY::new(x, 0.5)),
+        };
+        let scenes = [pinned(0.0, 4.0, 0.0), pinned(4.0, 8.0, 1.0)];
+        let x_at = |time: f64| fill_frame_scene_override(&scenes, time).unwrap().0.x;
+
+        assert!(x_at(3.0).abs() < 1e-9);
+        assert!((x_at(5.0) - 1.0).abs() < 1e-9);
+        let mut previous = x_at(3.4);
+        let mut time = 3.4;
+        while time < 4.6 {
+            time += 0.01;
+            let x = x_at(time);
+            assert!(x >= previous - 1e-9, "x went back at {time}");
+            assert!(x - previous < 0.05, "x jumped at {time}: {previous} -> {x}");
+            previous = x;
+        }
     }
 
     #[test]
