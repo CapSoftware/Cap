@@ -225,6 +225,8 @@ export interface SingleKeycapProps {
 	scale?: number;
 	is3D?: boolean;
 	showChassis?: boolean;
+	customTextColor?: string;
+	customBgColor?: string;
 }
 
 export function parseShortcutKeys(text: string): string[] {
@@ -271,7 +273,30 @@ export function SingleKeycap(props: SingleKeycapProps) {
 
 	const palette = createMemo(() => {
 		const themeData = THEME_PALETTES[theme()] || THEME_PALETTES.white;
-		return isMod() ? themeData.mod : themeData.alpha;
+		const base = isMod() ? themeData.mod : themeData.alpha;
+		const customText = props.customTextColor;
+		const customBg = props.customBgColor;
+		const hasCustomText =
+			customText && customText !== "#FFFFFF" && customText !== "";
+		const hasCustomBg = customBg && customBg !== "#000000" && customBg !== "";
+
+		if (!hasCustomText && !hasCustomBg) {
+			return base;
+		}
+
+		return {
+			...base,
+			...(hasCustomText ? { textColor: customText } : {}),
+			...(hasCustomBg
+				? {
+						surfaceTop: customBg,
+						surfaceMid: customBg,
+						surfaceBottom: customBg,
+						dishTop: customBg,
+						dishBottom: customBg,
+					}
+				: {}),
+		};
 	});
 
 	const uid = () =>
@@ -571,6 +596,8 @@ export function KeycapPreviewCluster(props: {
 	showChassis?: boolean;
 	use3D?: boolean;
 	scale?: number;
+	customTextColor?: string;
+	customBgColor?: string;
 }) {
 	const keys = () => props.keys || ["⌘", "K"];
 	const showChassis = () => props.showChassis ?? true;
@@ -608,6 +635,8 @@ export function KeycapPreviewCluster(props: {
 						scale={scale()}
 						is3D={use3D()}
 						showChassis={showChassis()}
+						customTextColor={props.customTextColor}
+						customBgColor={props.customBgColor}
 					/>
 				)}
 			</For>

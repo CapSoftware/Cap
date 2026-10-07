@@ -202,6 +202,8 @@ export function KeyboardTab(props: {
 						showChassis={getSetting("showChassis")}
 						use3D={getSetting("keycapMode")}
 						scale={0.85}
+						customTextColor={getSetting("color")}
+						customBgColor={getSetting("backgroundColor")}
 					/>
 				</div>
 

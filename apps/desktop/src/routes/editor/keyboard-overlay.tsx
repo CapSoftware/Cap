@@ -73,6 +73,11 @@ export function KeyboardOverlay(props: KeyboardOverlayProps) {
 						showChassis={settings().showChassis ?? true}
 						use3D={settings().keycapMode ?? true}
 						scale={Math.min(1.2, Math.max(0.7, props.size.width / 1200))}
+						customTextColor={activeSegment()?.colorOverride ?? settings().color}
+						customBgColor={
+							activeSegment()?.backgroundColorOverride ??
+							settings().backgroundColor
+						}
 					/>
 				</div>
 			</div>

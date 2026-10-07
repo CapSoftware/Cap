@@ -3807,6 +3807,11 @@ function KeyboardSegmentConfig(props: {
 					showChassis={getSetting("showChassis")}
 					use3D={getSetting("keycapMode")}
 					scale={0.9}
+					customTextColor={props.segment.colorOverride ?? getSetting("color")}
+					customBgColor={
+						props.segment.backgroundColorOverride ??
+						getSetting("backgroundColor")
+					}
 				/>
 			</div>
 
