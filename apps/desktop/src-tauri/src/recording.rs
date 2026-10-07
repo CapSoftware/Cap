@@ -5404,10 +5404,23 @@ pub async fn capture_ocr_text(
         .await
         .map_err(|error| notify_ocr_error(&app, error))?;
 
-    let text = crate::screenshot_editor::recognize_text_from_dynamic_image(&image)
-        .await
-        .map_err(|error| notify_ocr_error(&app, error))?;
-    let text = text.trim().to_string();
+    let barcode = {
+        let image = image.clone();
+        tokio::task::spawn_blocking(move || crate::barcode::decode_barcode(&image))
+            .await
+            .ok()
+            .flatten()
+    };
+
+    let text = match barcode {
+        Some(payload) => payload,
+        None => {
+            let text = crate::screenshot_editor::recognize_text_from_dynamic_image(&image)
+                .await
+                .map_err(|error| notify_ocr_error(&app, error))?;
+            text.trim().to_string()
+        }
+    };
 
     if text.is_empty() {
         return Err(notify_ocr_error(
