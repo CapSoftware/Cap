@@ -1,4 +1,3 @@
-// Captured from whisper.cpp whisper-server (large-v3-turbo) verbose_json output.
 export const whisperCppVerboseResponse = {
 	task: "transcribe",
 	language: "english",

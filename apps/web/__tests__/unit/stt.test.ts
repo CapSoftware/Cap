@@ -190,6 +190,37 @@ describe("parseOpenAICompatibleTranscription", () => {
 		).toContain("Um,");
 	});
 
+	it("spans zero-length words without overlapping a word at the same start", () => {
+		const parse = (words: { word: string; start: number; end: number }[]) =>
+			parseOpenAICompatibleTranscription(
+				{ text: "x", words, duration: 2 },
+				"whisper-1",
+			).words?.map(({ text, start, end }) => ({ text, start, end }));
+
+		expect(
+			parse([
+				{ word: "so", start: 0, end: 0.5 },
+				{ word: "um", start: 1, end: 1 },
+				{ word: "yes", start: 1, end: 1.4 },
+			]),
+		).toEqual([
+			{ text: "so", start: 0, end: 500 },
+			{ text: "um", start: 800, end: 1000 },
+			{ text: "yes", start: 1000, end: 1400 },
+		]);
+		expect(
+			parse([
+				{ word: "so", start: 0, end: 1 },
+				{ word: "um", start: 1, end: 1 },
+				{ word: "yes", start: 1, end: 1.2 },
+			]),
+		).toEqual([
+			{ text: "so", start: 0, end: 1000 },
+			{ text: "um", start: 1000, end: 1100 },
+			{ text: "yes", start: 1100, end: 1200 },
+		]);
+	});
+
 	it("falls back to the last word end when duration is missing", () => {
 		const { duration: _duration, ...withoutDuration } =
 			whisperCppVerboseResponse;

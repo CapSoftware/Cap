@@ -65,8 +65,8 @@ const PUNCTUATION_ONLY = /^[\p{P}\p{S}]+$/u;
 const UNSPACED_SCRIPT =
 	/^[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Thai}\p{Script=Lao}\p{Script=Khmer}\p{Script=Myanmar}]/u;
 
-// Word starts from the segment text: a token starts a word when whitespace
-// precedes it there. Null when the tokens don't line up with the text.
+// Some providers mark only a few word starts with a leading space, so the
+// segment text is the reliable boundary source when tokens align with it.
 function wordStartsFromText(tokens: SttWord[], text: unknown) {
 	if (typeof text !== "string") return null;
 	let cursor = 0;
@@ -121,18 +121,26 @@ function mergeSegmentTokens(segment: Record<string, unknown>): SttWord[] {
 }
 
 // whisper.cpp gives short fillers ("Um", "Uh") start == end, which
-// createEditTranscript would drop; stretch them toward the next word.
-function withMinimumSpan(words: SttWord[]): SttWord[] {
-	return words.map((word, index) => {
-		if (word.end > word.start) return word;
-		const nextStart = words[index + 1]?.start;
-		const limit = word.start + ZERO_LENGTH_WORD_SPAN_MS;
-		const end =
-			nextStart !== undefined && nextStart > word.start
-				? Math.min(nextStart, limit)
-				: limit;
-		return { ...word, end };
-	});
+// createEditTranscript drops. Take the span from a free gap so cuts stay safe.
+function withMinimumSpan(input: SttWord[]): SttWord[] {
+	const words = input.map((word) => ({ ...word }));
+	for (const [index, word] of words.entries()) {
+		if (word.end > word.start) continue;
+		const previousEnd = words[index - 1]?.end ?? 0;
+		const next = words[index + 1];
+		if (next === undefined || next.start > word.start) {
+			const limit = word.start + ZERO_LENGTH_WORD_SPAN_MS;
+			word.end = next === undefined ? limit : Math.min(next.start, limit);
+		} else if (previousEnd < word.start) {
+			word.start = Math.max(previousEnd, word.start - ZERO_LENGTH_WORD_SPAN_MS);
+		} else if (next.end > next.start) {
+			word.end =
+				word.start +
+				Math.min(ZERO_LENGTH_WORD_SPAN_MS, (next.end - next.start) / 2);
+			next.start = word.end;
+		}
+	}
+	return words;
 }
 
 function collectWords(body: Record<string, unknown>): SttWord[] {
