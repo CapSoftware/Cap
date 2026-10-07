@@ -251,10 +251,13 @@ export const UploadStep = ({
 									<UploadDoodle />
 								</span>
 								<span className="mt-4 text-[18px] font-medium tracking-[-0.01em]">
-									{over ? "Let go to upload" : "Drop your video here"}
+									<span className="ob-pointer-only">
+										{over ? "Let go to upload" : "Drop your video here"}
+									</span>
+									<span className="ob-touch-only">Choose a video</span>
 								</span>
 								<span className="mt-1 text-[14.5px] text-[var(--ob-ink-soft)]">
-									or{" "}
+									<span className="ob-pointer-only">or </span>
 									<span className="font-medium text-[var(--ob-ink)] underline decoration-[var(--ob-track-strong)] decoration-[1.5px] underline-offset-4">
 										{isPro ? "choose a file" : "upgrade to upload"}
 									</span>

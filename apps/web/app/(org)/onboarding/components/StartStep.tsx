@@ -83,7 +83,7 @@ export const StartStep = ({
 	};
 
 	return (
-		<StepPage>
+		<StepPage className="justify-center">
 			<div className="mx-auto flex w-full max-w-[760px] flex-col items-center text-center">
 				<StepTitle>
 					{organizationName

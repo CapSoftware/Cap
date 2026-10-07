@@ -14,7 +14,7 @@ export const StepPage = ({
 }) => (
 	<div
 		className={clsx(
-			"mx-auto flex w-full flex-1 flex-col px-5 pb-16 pt-8 sm:px-8 sm:pt-12 lg:pt-14",
+			"mx-auto flex w-full flex-1 flex-col px-5 pb-24 pt-8 sm:px-8 sm:pb-16 sm:pt-12 lg:pt-14",
 			width === "narrow" ? "max-w-[640px]" : "max-w-[1120px]",
 			className,
 		)}

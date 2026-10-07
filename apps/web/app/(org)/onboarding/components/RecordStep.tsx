@@ -46,28 +46,26 @@ const OptionCard = ({
 }) => (
 	<li
 		className={clsx(
-			"ob-card ob-rise flex flex-col gap-4 p-5 sm:flex-row sm:items-start sm:gap-5 sm:p-6",
+			"ob-card ob-rise grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-4 gap-y-3 p-5 sm:gap-x-5 sm:p-6",
 			featured && "!border-[var(--ob-ink)] !bg-white",
 		)}
 		style={{ "--d": `${delay}s` } as CSSProperties}
 	>
-		<span className="flex size-12 shrink-0 items-center justify-center rounded-2xl bg-[var(--ob-paper-2)]">
+		<span className="flex size-12 shrink-0 items-center justify-center rounded-2xl bg-[var(--ob-paper-2)] sm:row-span-3 sm:self-start">
 			{icon}
 		</span>
-		<div className="flex min-w-0 flex-1 flex-col">
-			<div className="flex flex-wrap items-center gap-2">
-				<h2 className="text-[18px] font-medium tracking-[-0.01em]">{title}</h2>
-				{tag && (
-					<span className="rounded-full bg-[var(--ob-accent-soft)] px-2.5 py-0.5 text-[12.5px] font-medium text-[var(--ob-accent)]">
-						{tag}
-					</span>
-				)}
-			</div>
-			<div className="mt-1 text-[14.5px] leading-relaxed text-[var(--ob-ink-soft)]">
-				{children}
-			</div>
-			<div className="mt-4">{action}</div>
+		<div className="flex flex-wrap items-center gap-2">
+			<h2 className="text-[18px] font-medium tracking-[-0.01em]">{title}</h2>
+			{tag && (
+				<span className="rounded-full bg-[var(--ob-accent-soft)] px-2.5 py-0.5 text-[12.5px] font-medium text-[var(--ob-accent)]">
+					{tag}
+				</span>
+			)}
 		</div>
+		<div className="col-span-2 text-[14.5px] leading-relaxed text-[var(--ob-ink-soft)] sm:col-span-1 sm:col-start-2 sm:-mt-2">
+			{children}
+		</div>
+		<div className="col-span-2 mt-1 sm:col-span-1 sm:col-start-2">{action}</div>
 	</li>
 );
 
