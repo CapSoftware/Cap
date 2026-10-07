@@ -63,17 +63,25 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 							.pipe(
 								Effect.flatMap((writable) =>
 									Effect.gen(function* () {
-										yield* writable.access.putObject(key, probe.bytes, {
-											contentType: "application/octet-stream",
-											contentLength: probe.receivedBytes,
-										});
+										const writeResult = yield* writable.access
+											.putObject(key, probe.bytes, {
+												contentType: "application/octet-stream",
+												contentLength: probe.receivedBytes,
+											})
+											.pipe(
+												Effect.match({
+													onFailure: (error) => ({ ok: false as const, error }),
+													onSuccess: () => ({ ok: true as const }),
+												}),
+											);
 										yield* writable.access.deleteObject(key).pipe(
 											Effect.retry({
 												times: 3,
 												schedule: Schedule.exponential("100 millis"),
 											}),
 										);
-									}),
+										if (!writeResult.ok) yield* Effect.fail(writeResult.error);
+									})
 								),
 								Effect.as(true),
 								Effect.catchAll(() => Effect.succeed(false)),
