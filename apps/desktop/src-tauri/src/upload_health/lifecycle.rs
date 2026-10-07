@@ -86,15 +86,16 @@ impl ProbePause {
         self.acknowledged = true;
     }
 
-    pub(crate) fn spawn<T, F>(mut self, shutdown: F) -> tokio::task::JoinHandle<T>
+    pub(crate) fn spawn<T, F>(self, shutdown: F) -> tokio::task::JoinHandle<T>
     where
         T: Send + 'static,
         F: Future<Output = (T, bool)> + Send + 'static,
     {
         // The task owns both shutdown and its pause even if the command is dropped.
         tokio::spawn(async move {
+            let mut pause = self;
             let (result, acknowledged) = shutdown.await;
-            self.acknowledged = acknowledged;
+            pause.acknowledged = acknowledged;
             result
         })
     }

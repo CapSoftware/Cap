@@ -2061,6 +2061,7 @@ async fn start_recording_prepared(
     let storage_generation = crate::clean_capture::generation(&app);
     #[cfg(target_os = "linux")]
     let storage_instant = linux_instant::current(&app);
+
     crate::upload_health::wait_for_probe_to_stop(&app).await;
 
     if cfg!(target_os = "linux") && inputs.mode == RecordingMode::Instant {
