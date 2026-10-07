@@ -186,6 +186,9 @@ describe("maskEmail", () => {
 	it("hides most of the mailbox name", () => {
 		expect(maskEmail("richie@cap.so")).toBe("ri••••@cap.so");
 		expect(maskEmail("jo@cap.so")).toBe("j•••@cap.so");
+		expect(maskEmail("nadia.1791348130278@example.com")).toBe(
+			"na•••••@example.com",
+		);
 		expect(maskEmail("not-an-email")).toBe("not-an-email");
 	});
 });

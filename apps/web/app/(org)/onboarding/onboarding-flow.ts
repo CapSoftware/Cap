@@ -151,5 +151,6 @@ export const maskEmail = (email: string) => {
 	if (at <= 0) return email;
 	const local = email.slice(0, at);
 	const visible = local.length > 4 ? 2 : 1;
-	return `${local.slice(0, visible)}${"•".repeat(Math.max(3, local.length - visible))}${email.slice(at)}`;
+	const hidden = Math.min(5, Math.max(3, local.length - visible));
+	return `${local.slice(0, visible)}${"•".repeat(hidden)}${email.slice(at)}`;
 };

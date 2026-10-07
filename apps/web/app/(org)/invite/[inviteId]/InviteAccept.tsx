@@ -140,7 +140,7 @@ export function InviteAccept({
 											Already on Cap?{" "}
 											<Link
 												href={`/login?next=${encodeURIComponent(invitePath)}`}
-												className="ob-link !inline !text-[14px]"
+												className="ob-link !inline whitespace-nowrap !text-[14px]"
 											>
 												Log in
 											</Link>
