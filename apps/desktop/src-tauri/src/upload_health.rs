@@ -184,14 +184,24 @@ struct ProbeTicket {
     generation: u64,
 }
 
+#[derive(Default)]
 pub(crate) struct VideoCreationContext {
+    bound: Option<BoundVideoCreationContext>,
+}
+
+struct BoundVideoCreationContext {
     ticket: ProbeTicket,
     request: UploadRequestContext,
 }
 
 impl VideoCreationContext {
     pub(crate) async fn run<F: std::future::Future>(&self, future: F) -> F::Output {
-        self.request.clone().run(future).await
+        match &self.bound {
+            Some(bound) => bound.request.clone().run(future).await,
+            // Local owner metadata is optional. The normal request remains
+            // responsible for accepting or rejecting the actual credentials.
+            None => future.await,
+        }
     }
 }
 
@@ -228,16 +238,15 @@ impl UploadHealthCacheState {
         }
     }
 
-    fn prepare_video_creation(
-        &mut self,
-        identity: Option<ProbeIdentity>,
-    ) -> Result<VideoCreationContext, AuthedApiError> {
+    fn prepare_video_creation(&mut self, identity: Option<ProbeIdentity>) -> VideoCreationContext {
         // Synchronize before sending the request, even if no health read observed
         // an account/server change. Its result must not borrow another context's cap.
         self.synchronize(identity);
-        let ticket = self.ticket().ok_or(AuthedApiError::InvalidAuthentication)?;
-        let request = ticket.identity.request_context()?;
-        Ok(VideoCreationContext { ticket, request })
+        let bound = self.ticket().and_then(|ticket| {
+            let request = ticket.identity.request_context().ok()?;
+            Some(BoundVideoCreationContext { ticket, request })
+        });
+        VideoCreationContext { bound }
     }
 
     fn fresh_instant_resolution_cap(&self) -> Option<u32> {
@@ -259,9 +268,10 @@ impl UploadHealthCacheState {
         created_video: &CreatedVideo,
         creation: &VideoCreationContext,
     ) -> u32 {
-        if created_video.uses_default_storage != Some(true)
-            || !self.matches_ticket(&creation.ticket)
-        {
+        let Some(bound) = &creation.bound else {
+            return configured_resolution;
+        };
+        if created_video.uses_default_storage != Some(true) || !self.matches_ticket(&bound.ticket) {
             return configured_resolution;
         }
         self.fresh_instant_resolution_cap()
@@ -534,15 +544,13 @@ pub async fn wait_for_probe_to_stop(app: &AppHandle) {
     }
 }
 
-pub(crate) async fn prepare_video_creation(
-    app: &AppHandle,
-) -> Result<VideoCreationContext, AuthedApiError> {
-    let app_state = app
-        .try_state::<ArcLock<App>>()
-        .ok_or(AuthedApiError::AppStateUnavailable)?;
-    let cache = app
-        .try_state::<UploadHealthCache>()
-        .ok_or(AuthedApiError::AppStateUnavailable)?;
+pub(crate) async fn prepare_video_creation(app: &AppHandle) -> VideoCreationContext {
+    let (Some(app_state), Some(cache)) = (
+        app.try_state::<ArcLock<App>>(),
+        app.try_state::<UploadHealthCache>(),
+    ) else {
+        return VideoCreationContext::default();
+    };
     let state = app_state.read().await;
     let mut cached = cache.state.lock().await;
     cached.prepare_video_creation(ProbeIdentity::current(app, &state))
@@ -845,9 +853,7 @@ mod tests {
             http_failure_snapshot(reqwest::StatusCode::SERVICE_UNAVAILABLE),
         ] {
             let mut cache = cache_with_snapshot(snapshot);
-            let creation = cache
-                .prepare_video_creation(cache.identity.clone())
-                .unwrap();
+            let creation = cache.prepare_video_creation(cache.identity.clone());
             for (configured, expected) in [(3840, 1280), (1920, 1280), (1280, 1280), (640, 640)] {
                 assert_eq!(
                     cache.instant_resolution_for_video(configured, &video, &creation),
@@ -864,9 +870,7 @@ mod tests {
             http_failure_snapshot(reqwest::StatusCode::SERVICE_UNAVAILABLE),
         ] {
             let mut cache = cache_with_snapshot(snapshot);
-            let creation = cache
-                .prepare_video_creation(cache.identity.clone())
-                .unwrap();
+            let creation = cache.prepare_video_creation(cache.identity.clone());
             for response in [
                 serde_json::json!({"id": "custom-s3", "provider": "s3", "usesDefaultStorage": false}),
                 serde_json::json!({"id": "drive", "provider": "google-drive", "usesDefaultStorage": false}),
@@ -906,9 +910,7 @@ mod tests {
                 3840,
             ),
         ] {
-            let creation = cache
-                .prepare_video_creation(cache.identity.clone())
-                .unwrap();
+            let creation = cache.prepare_video_creation(cache.identity.clone());
             assert_eq!(
                 cache.instant_resolution_for_video(3840, &created_video(response), &creation),
                 expected,
@@ -924,9 +926,7 @@ mod tests {
         }));
         for (speed, expected) in [(6.0, 1920), (18.0, 2560), (100.0, 3840)] {
             let mut cache = cache_with_snapshot(measured_snapshot(speed));
-            let creation = cache
-                .prepare_video_creation(cache.identity.clone())
-                .unwrap();
+            let creation = cache.prepare_video_creation(cache.identity.clone());
             assert_eq!(
                 cache.instant_resolution_for_video(3840, &video, &creation),
                 expected
@@ -952,9 +952,7 @@ mod tests {
             http_failure_snapshot(reqwest::StatusCode::NOT_FOUND),
         ] {
             let mut cache = cache_with_snapshot(snapshot);
-            let creation = cache
-                .prepare_video_creation(cache.identity.clone())
-                .unwrap();
+            let creation = cache.prepare_video_creation(cache.identity.clone());
             assert_eq!(
                 cache.instant_resolution_for_video(3840, &video, &creation),
                 3840
@@ -962,9 +960,7 @@ mod tests {
         }
         for next in [None, Some(identity("https://cap.test", "bob"))] {
             let mut cache = cache_with_snapshot(measured_snapshot(2.0));
-            let creation = cache
-                .prepare_video_creation(cache.identity.clone())
-                .unwrap();
+            let creation = cache.prepare_video_creation(cache.identity.clone());
             cache.synchronize(next);
             assert_eq!(
                 cache.instant_resolution_for_video(3840, &video, &creation),
@@ -1005,7 +1001,7 @@ mod tests {
         // No health command has observed A. Preparing A's request must clear B's
         // fresh result before the response can arrive after switching back to B.
         assert_eq!(cache.fresh_instant_resolution_cap(), Some(1280));
-        let creation = cache.prepare_video_creation(Some(current_a)).unwrap();
+        let creation = cache.prepare_video_creation(Some(current_a));
         let (started_tx, started_rx) = tokio::sync::oneshot::channel();
         let (response_tx, response_rx) = tokio::sync::oneshot::channel();
         let pending = tokio::spawn(held_video_creation(creation, started_tx, response_rx));
@@ -1024,9 +1020,7 @@ mod tests {
     #[tokio::test]
     async fn held_creation_in_the_same_context_applies_its_cap_without_raising_user_limits() {
         let mut cache = cache_with_snapshot(measured_snapshot(2.0));
-        let creation = cache
-            .prepare_video_creation(cache.identity.clone())
-            .unwrap();
+        let creation = cache.prepare_video_creation(cache.identity.clone());
         let (started_tx, started_rx) = tokio::sync::oneshot::channel();
         let (response_tx, response_rx) = tokio::sync::oneshot::channel();
         let pending = tokio::spawn(held_video_creation(creation, started_tx, response_rx));
@@ -1051,9 +1045,7 @@ mod tests {
             identity("https://cap.test", "bob"),
         ] {
             let mut cache = cache_with_snapshot(measured_snapshot(2.0));
-            let creation = cache
-                .prepare_video_creation(cache.identity.clone())
-                .unwrap();
+            let creation = cache.prepare_video_creation(cache.identity.clone());
             cache.synchronize(Some(next));
             cache.publish(&cache.ticket().unwrap(), measured_snapshot(2.0));
 
@@ -1069,9 +1061,7 @@ mod tests {
     async fn held_creation_rejects_a_new_cache_generation_after_switching_away_and_back() {
         let mut cache = cache_with_snapshot(measured_snapshot(2.0));
         let original = cache.identity.clone().unwrap();
-        let creation = cache
-            .prepare_video_creation(Some(original.clone()))
-            .unwrap();
+        let creation = cache.prepare_video_creation(Some(original.clone()));
         let (started_tx, started_rx) = tokio::sync::oneshot::channel();
         let (response_tx, response_rx) = tokio::sync::oneshot::channel();
         let pending = tokio::spawn(held_video_creation(creation, started_tx, response_rx));
@@ -1084,22 +1074,49 @@ mod tests {
         let (creation, video) = pending.await.unwrap();
 
         assert_eq!(cache.fresh_instant_resolution_cap(), Some(1280));
-        assert!(cache.identity.as_ref() == Some(&creation.ticket.identity));
-        assert_ne!(cache.generation, creation.ticket.generation);
+        let ticket = &creation.bound.as_ref().unwrap().ticket;
+        assert!(cache.identity.as_ref() == Some(&ticket.identity));
+        assert_ne!(cache.generation, ticket.generation);
         assert_eq!(
             cache.instant_resolution_for_video(1920, &video, &creation),
             1920
         );
     }
 
-    #[test]
-    fn video_creation_requires_an_authenticated_context_and_discards_old_health() {
+    #[tokio::test]
+    async fn missing_local_owner_runs_create_future_without_a_health_cap() {
         let mut cache = cache_with_snapshot(measured_snapshot(2.0));
+        let original = cache.identity.clone();
+        let creation =
+            cache.prepare_video_creation(ProbeIdentity::new("https://cap.test".to_string(), None));
+        assert!(creation.bound.is_none());
+        assert_unknown(&cache);
+
+        let request_ran = std::cell::Cell::new(false);
+        let video = creation
+            .run(async {
+                request_ran.set(true);
+                assert!(UploadRequestContext::current().is_none());
+                Ok::<_, AuthedApiError>(managed_video())
+            })
+            .await
+            .unwrap();
+        assert!(request_ran.get());
+        cache.synchronize(original);
+        cache.publish(&cache.ticket().unwrap(), measured_snapshot(2.0));
+        assert_eq!(cache.fresh_instant_resolution_cap(), Some(1280));
+        assert_eq!(
+            cache.instant_resolution_for_video(1920, &video, &creation),
+            1920
+        );
+
+        let rejected = creation
+            .run(async { Err::<CreatedVideo, _>(AuthedApiError::InvalidAuthentication) })
+            .await;
         assert!(matches!(
-            cache.prepare_video_creation(None),
+            rejected,
             Err(AuthedApiError::InvalidAuthentication)
         ));
-        assert_unknown(&cache);
     }
 
     fn assert_unknown(cache: &UploadHealthCacheState) {

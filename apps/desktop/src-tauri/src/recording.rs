@@ -2306,7 +2306,7 @@ async fn start_recording_prepared(
             };
 
             let (creation, created_video) = match async {
-                let creation = crate::upload_health::prepare_video_creation(&app).await?;
+                let creation = crate::upload_health::prepare_video_creation(&app).await;
                 let created_video = creation
                     .run(crate::upload::create_or_get_video_with_mode(
                         &app,
