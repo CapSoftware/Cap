@@ -145,9 +145,9 @@ export const parseAgentVtt = (
 			if (cueIndex === lines.length - 1) index = cueIndex;
 		}
 
-		const parsed = parseVttCueText(textLines.join("\n"));
-		const text = stripMarkupTags(parsed.text);
-		const speaker = parsed.speaker ? stripMarkupTags(parsed.speaker) : null;
+		const payload = textLines.join("\n");
+		const { speaker } = parseVttCueText(payload);
+		const { text } = parseVttCueText(stripMarkupTags(payload));
 		if (text)
 			cues.push({ startMs, endMs, text, ...(speaker ? { speaker } : {}) });
 	}

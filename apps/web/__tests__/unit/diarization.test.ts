@@ -155,3 +155,16 @@ it("keeps speaker metadata and literal text through the agent transcript API", a
 		),
 	).toEqual(cues);
 });
+
+it("keeps escaped angle-bracket speech through the agent transcript API", async () => {
+	const { parseAgentVtt, renderAgentVtt } = await import("@/lib/agent-api");
+	const cues = [
+		{ startMs: 0, endMs: 1_000, text: "Type <value> then <b", speaker: "A" },
+	];
+	expect(parseAgentVtt(renderAgentVtt(cues))).toEqual(cues);
+	expect(
+		parseAgentVtt(
+			"WEBVTT\n\n1\n00:00:00.000 --> 00:00:01.000\n<v Speaker A><c.green>Type &lt;value&gt;</c> <00:00:00.500>then &lt;b</v>\n",
+		),
+	).toEqual(cues);
+});
