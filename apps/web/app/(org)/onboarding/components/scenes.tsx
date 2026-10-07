@@ -173,14 +173,6 @@ export const LoomScene = () => (
 			stroke="var(--ob-accent)"
 			strokeWidth="2"
 		/>
-		<text
-			x="209"
-			y="74.4"
-			fontSize="9"
-			className="ob-label is-faint ob-loom-placeholder"
-		>
-			Paste a Loom link
-		</text>
 		<text x="209" y="74.4" fontSize="9" className="ob-label">
 			loom.com/share/7f3a2c…
 		</text>
@@ -192,6 +184,14 @@ export const LoomScene = () => (
 			height="18"
 			fill="#fff"
 		/>
+		<text
+			x="209"
+			y="74.4"
+			fontSize="9"
+			className="ob-label is-faint ob-loom-placeholder"
+		>
+			Paste a Loom link
+		</text>
 
 		<g className="ob-press" style={{ "--at": 0.61 } as CSSProperties}>
 			<rect
@@ -243,7 +243,7 @@ export const LoomScene = () => (
 			/>
 		</g>
 		<LoopSparks
-			at={0.87}
+			at={0.86}
 			points={[
 				[290, 132, 3],
 				[344, 138, 3.2],
@@ -587,8 +587,8 @@ export const RecordScene = () => (
 			at={0.76}
 			points={[
 				[34, 52, 3.4],
-				[206, 56, 3],
-				[204, 126, 2.6],
+				[206, 54, 3],
+				[34, 126, 2.6],
 			]}
 		/>
 
@@ -728,6 +728,24 @@ export const UploadScene = () => (
 			]}
 		/>
 
+		<g className="ob-boil">
+			<path
+				d="M 20 150 L 38 150 L 44 156 L 92 156 L 92 198 L 20 198 Z"
+				className="ob-ink"
+				style={paper2}
+			/>
+			<path d="M 20 164 L 92 164" className="ob-ink is-track" />
+		</g>
+		<text
+			x="56"
+			y="213"
+			fontSize="8.5"
+			textAnchor="middle"
+			className="ob-label is-soft"
+		>
+			Your files
+		</text>
+
 		<g className="ob-up-file">
 			<g className="ob-boil">
 				<path
@@ -755,7 +773,7 @@ export const UploadScene = () => (
 			</text>
 		</g>
 
-		<SceneRipple x={66} y={124} at={0.05} />
+		<SceneRipple x={66} y={108} at={0.05} />
 		<SceneRipple x={252} y={120} at={0.31} r={16} />
 		<SceneCursor name="ob-up-cursor" />
 	</svg>
@@ -963,16 +981,26 @@ export const JoinScene = ({
 				/>
 			</g>
 		))}
-		<circle cx="346" cy="150" r="3" fill="var(--ob-red)" className="ob-pulse" />
-		<text
-			x="214"
-			y="200"
-			fontSize="9"
-			fontWeight="500"
-			className="ob-label is-soft"
-		>
-			Team library
-		</text>
+		<g className="ob-join-thumb" style={{ "--j": 5 } as CSSProperties}>
+			<circle
+				cx="346"
+				cy="150"
+				r="3"
+				fill="var(--ob-red)"
+				className="ob-pulse"
+			/>
+		</g>
+		<g className="ob-join-thumb" style={{ "--j": 0 } as CSSProperties}>
+			<text
+				x="214"
+				y="200"
+				fontSize="9"
+				fontWeight="500"
+				className="ob-label is-soft"
+			>
+				Team library
+			</text>
+		</g>
 
 		<SceneRipple x={110} y={87} at={0.27} />
 		<SceneCursor name="ob-join-cursor" />
