@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
 	countRequestBodyBytes,
 	MAX_UPLOAD_PROBE_BYTES,
+	readUploadProbeBody,
 } from "@/lib/upload-health";
 
 function streamOf(chunks: number[]) {
@@ -32,7 +33,7 @@ describe("countRequestBodyBytes", () => {
 		});
 	});
 
-	it("sums bytes across chunks without buffering them", async () => {
+	it("sums bytes across chunks", async () => {
 		const result = await countRequestBodyBytes(
 			streamOf([128, 1024, 7, 65_536]),
 		);
@@ -67,6 +68,22 @@ describe("countRequestBodyBytes", () => {
 	});
 });
 
+describe("readUploadProbeBody", () => {
+	it("retains chunk order for the selected storage probe", async () => {
+		const body = new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(Uint8Array.from([1, 2]));
+				controller.enqueue(Uint8Array.from([3, 4, 5]));
+				controller.close();
+			},
+		});
+		const result = await readUploadProbeBody(body);
+		expect(result.receivedBytes).toBe(5);
+		expect(result.truncated).toBe(false);
+		expect(Array.from(result.bytes)).toEqual([1, 2, 3, 4, 5]);
+	});
+});
+
 describe("upload-health route contract", () => {
 	const route = readFileSync(
 		join(process.cwd(), "app/api/desktop/upload-health/route.ts"),
@@ -77,11 +94,14 @@ describe("upload-health route contract", () => {
 		"utf8",
 	);
 
-	it("serves the probe through the HttpApi builder with auth middleware", () => {
+	it("serves the selected-storage probe through authenticated HttpApi", () => {
 		expect(route).toContain("HttpApiBuilder.group");
 		expect(route).toContain("HttpAuthMiddleware");
 		expect(route).toContain("/api/desktop/upload-health`");
-		expect(route).toContain("countRequestBodyBytes");
+		expect(route).toContain("readUploadProbeBody");
+		expect(route).toContain("getWritableAccessForUser");
+		expect(route).toContain(".putObject(");
+		expect(route).toContain(".deleteObject(");
 		expect(route).toContain('jsonResponse({ error: "probe_too_large" }, 413)');
 		expect(route).toContain("apiToHandler(ApiLive)");
 	});

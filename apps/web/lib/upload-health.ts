@@ -5,14 +5,23 @@ export type CountedRequestBody = {
 	truncated: boolean;
 };
 
-// Counts an upload probe without persisting anything. The body is bounded so a
-// caller cannot stream unbounded data through the function.
-export async function countRequestBodyBytes(
+export type UploadProbeBody = CountedRequestBody & {
+	bytes: Uint8Array;
+};
+
+export async function readUploadProbeBody(
 	body: ReadableStream<Uint8Array> | null,
 	maxBytes: number = MAX_UPLOAD_PROBE_BYTES,
-): Promise<CountedRequestBody> {
-	if (!body) return { receivedBytes: 0, truncated: false };
+): Promise<UploadProbeBody> {
+	if (!body) {
+		return {
+			bytes: new Uint8Array(),
+			receivedBytes: 0,
+			truncated: false,
+		};
+	}
 
+	const chunks: Uint8Array[] = [];
 	let receivedBytes = 0;
 	const reader = body.getReader();
 	try {
@@ -22,12 +31,31 @@ export async function countRequestBodyBytes(
 			receivedBytes += value?.byteLength ?? 0;
 			if (receivedBytes > maxBytes) {
 				await reader.cancel();
-				return { receivedBytes, truncated: true };
+				return {
+					bytes: new Uint8Array(),
+					receivedBytes,
+					truncated: true,
+				};
 			}
+			if (value) chunks.push(value);
 		}
 	} finally {
 		reader.releaseLock();
 	}
 
-	return { receivedBytes, truncated: false };
+	const bytes = new Uint8Array(receivedBytes);
+	let offset = 0;
+	for (const chunk of chunks) {
+		bytes.set(chunk, offset);
+		offset += chunk.byteLength;
+	}
+	return { bytes, receivedBytes, truncated: false };
+}
+
+export async function countRequestBodyBytes(
+	body: ReadableStream<Uint8Array> | null,
+	maxBytes: number = MAX_UPLOAD_PROBE_BYTES,
+): Promise<CountedRequestBody> {
+	const { receivedBytes, truncated } = await readUploadProbeBody(body, maxBytes);
+	return { receivedBytes, truncated };
 }

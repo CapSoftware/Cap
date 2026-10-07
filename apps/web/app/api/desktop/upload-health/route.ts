@@ -1,16 +1,17 @@
-import { HttpAuthMiddleware } from "@cap/web-domain";
+import { randomUUID } from "node:crypto";
+import { Storage } from "@cap/web-backend";
+import { CurrentUser, HttpAuthMiddleware } from "@cap/web-domain";
 import {
 	HttpApi,
 	HttpApiBuilder,
 	HttpApiEndpoint,
-	HttpApiError,
 	HttpApiGroup,
 	HttpServerRequest,
 	HttpServerResponse,
 } from "@effect/platform";
 import { Effect, Layer } from "effect";
 import { apiToHandler } from "@/lib/server";
-import { countRequestBodyBytes } from "@/lib/upload-health";
+import { readUploadProbeBody } from "@/lib/upload-health";
 
 export const dynamic = "force-dynamic";
 
@@ -41,14 +42,46 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 						const request = yield* HttpServerRequest.HttpServerRequest;
 						const body =
 							request.source instanceof Request ? request.source.body : null;
-						const { receivedBytes, truncated } = yield* Effect.tryPromise({
-							try: () => countRequestBodyBytes(body),
-							catch: () => new HttpApiError.InternalServerError(),
-						});
-						if (truncated) {
+						const probe = yield* Effect.tryPromise(() =>
+							readUploadProbeBody(body),
+						).pipe(Effect.catchAll(() => Effect.succeed(null)));
+						if (!probe) {
+							return jsonResponse({ error: "probe_read_failed" }, 400);
+						}
+						if (probe.truncated) {
 							return jsonResponse({ error: "probe_too_large" }, 413);
 						}
-						return jsonResponse({ receivedBytes });
+
+						const user = yield* CurrentUser;
+						const storage = yield* Storage;
+						const key = `.cap-upload-health-${randomUUID()}`;
+						const uploaded = yield* storage
+							.getWritableAccessForUser(
+								user.id,
+								user.activeOrganizationId,
+							)
+							.pipe(
+								Effect.flatMap((writable) =>
+									writable.access
+										.putObject(key, probe.bytes, {
+											contentType: "application/octet-stream",
+											contentLength: probe.receivedBytes,
+										})
+										.pipe(
+											Effect.ensuring(
+												writable.access
+													.deleteObject(key)
+													.pipe(Effect.catchAll(() => Effect.void)),
+											),
+										),
+								),
+								Effect.as(true),
+								Effect.catchAll(() => Effect.succeed(false)),
+							);
+						if (!uploaded) {
+							return jsonResponse({ error: "storage_probe_failed" }, 503);
+						}
+						return jsonResponse({ receivedBytes: probe.receivedBytes });
 					}),
 				),
 		),
