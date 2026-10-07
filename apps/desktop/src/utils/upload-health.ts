@@ -36,16 +36,28 @@ export function describeUploadHealth(
 		};
 	}
 
+	if (status.kind === "unsupported") {
+		return {
+			label: "Upload check unavailable",
+			detail: "Server unsupported",
+			tone: "neutral",
+		};
+	}
+
 	if (status.kind === "unavailable") {
 		return {
-			label: "Upload offline",
+			label: "Upload check failed",
 			detail: "Instant capped",
 			tone: "danger",
 		};
 	}
 
 	const speed =
-		status.uploadMbps != null ? formatUploadMbps(status.uploadMbps) : null;
+		status.uploadMbps != null &&
+		Number.isFinite(status.uploadMbps) &&
+		status.uploadMbps >= 0
+			? formatUploadMbps(status.uploadMbps)
+			: null;
 	if (status.kind === "slow") {
 		return {
 			label: "Upload slow",
@@ -55,8 +67,8 @@ export function describeUploadHealth(
 	}
 
 	return {
-		label: "Upload ready",
-		detail: speed ?? "Ready",
+		label: "Upload estimate",
+		detail: speed ? `~${speed}` : "Not measured",
 		tone: "good",
 	};
 }

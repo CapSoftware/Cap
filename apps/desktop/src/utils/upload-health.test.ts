@@ -63,9 +63,36 @@ describe("upload health presentation", () => {
 
 	it("reports unavailable upload checks as capped", () => {
 		expect(describeUploadHealth(status({ kind: "unavailable" }))).toEqual({
-			label: "Upload offline",
+			label: "Upload check failed",
 			detail: "Instant capped",
 			tone: "danger",
 		});
 	});
+
+	it("describes successful checks as estimates rather than recording readiness", () => {
+		expect(
+			describeUploadHealth(status({ kind: "healthy", uploadMbps: 18.2 })),
+		).toEqual({
+			label: "Upload estimate",
+			detail: "~18 Mbps",
+			tone: "good",
+		});
+	});
+
+	it("does not label unsupported servers as a failed upload or healthy connection", () => {
+		expect(describeUploadHealth(status({ kind: "unsupported" }))).toEqual({
+			label: "Upload check unavailable",
+			detail: "Server unsupported",
+			tone: "neutral",
+		});
+	});
+
+	it.each([Number.NaN, Number.POSITIVE_INFINITY, -1])(
+		"does not display invalid speed %s as a measurement",
+		(uploadMbps) => {
+			expect(
+				describeUploadHealth(status({ kind: "healthy", uploadMbps })).detail,
+			).toBe("Not measured");
+		},
+	);
 });

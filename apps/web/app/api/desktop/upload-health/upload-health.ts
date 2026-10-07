@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 export const MAX_DESKTOP_UPLOAD_HEALTH_PROBE_BYTES = 512 * 1024;
 
 export class UploadHealthProbeTooLargeError extends Error {
@@ -7,13 +9,21 @@ export class UploadHealthProbeTooLargeError extends Error {
 	}
 }
 
-export async function readUploadHealthProbeBytes(
+export class UploadHealthProbeEmptyError extends Error {
+	constructor() {
+		super("Upload health probe body is empty");
+		this.name = "UploadHealthProbeEmptyError";
+	}
+}
+
+export async function readUploadHealthProbe(
 	request: Request,
 	maxBytes = MAX_DESKTOP_UPLOAD_HEALTH_PROBE_BYTES,
 ) {
-	if (!request.body) return 0;
+	if (!request.body) throw new UploadHealthProbeEmptyError();
 
 	let receivedBytes = 0;
+	const hash = createHash("sha256");
 	const reader = request.body.getReader();
 
 	try {
@@ -26,10 +36,12 @@ export async function readUploadHealthProbeBytes(
 				await reader.cancel().catch(() => undefined);
 				throw new UploadHealthProbeTooLargeError();
 			}
+			hash.update(value);
 		}
 	} finally {
 		reader.releaseLock();
 	}
 
-	return receivedBytes;
+	if (receivedBytes === 0) throw new UploadHealthProbeEmptyError();
+	return { receivedBytes, sha256: hash.digest("hex") };
 }

@@ -11,7 +11,8 @@ import { Effect, Layer } from "effect";
 import { apiToHandler } from "@/lib/server";
 import {
 	MAX_DESKTOP_UPLOAD_HEALTH_PROBE_BYTES,
-	readUploadHealthProbeBytes,
+	readUploadHealthProbe,
+	UploadHealthProbeEmptyError,
 	UploadHealthProbeTooLargeError,
 } from "./upload-health";
 
@@ -22,15 +23,22 @@ class Api extends HttpApi.make("DesktopUploadHealthApi").add(
 		.middleware(HttpAuthMiddleware),
 ) {}
 
-const probeTooLarge = () =>
-	HttpServerResponse.unsafeJson({ error: "probe_too_large" }, { status: 413 });
+const responseHeaders = { "Cache-Control": "private, no-store" };
+
+const probeError = (error: string, status: number) =>
+	HttpServerResponse.unsafeJson(
+		{ error },
+		{ status, headers: responseHeaders },
+	);
 
 const ApiLive = HttpApiBuilder.api(Api).pipe(
 	Layer.provide(
 		HttpApiBuilder.group(Api, "root", (handlers) =>
 			handlers
 				.handle("check", () =>
-					Effect.succeed(HttpServerResponse.empty({ status: 204 })),
+					Effect.succeed(
+						HttpServerResponse.empty({ status: 204, headers: responseHeaders }),
+					),
 				)
 				.handle("probe", () =>
 					Effect.gen(function* () {
@@ -41,7 +49,7 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 							Number.isFinite(contentLength) &&
 							contentLength > MAX_DESKTOP_UPLOAD_HEALTH_PROBE_BYTES
 						) {
-							return probeTooLarge();
+							return probeError("probe_too_large", 413);
 						}
 
 						return yield* Effect.tryPromise({
@@ -49,32 +57,31 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 								if (!(request.source instanceof Request)) {
 									throw new Error("Expected a Web Request");
 								}
-								return readUploadHealthProbeBytes(request.source);
+								return readUploadHealthProbe(request.source);
 							},
 							catch: (error) => error,
 						}).pipe(
-							Effect.map((receivedBytes) =>
-								HttpServerResponse.unsafeJson({
-									success: true,
-									receivedBytes,
-									maxProbeBytes: MAX_DESKTOP_UPLOAD_HEALTH_PROBE_BYTES,
-								}),
+							Effect.map((probe) =>
+								HttpServerResponse.unsafeJson(
+									{
+										success: true,
+										...probe,
+										maxProbeBytes: MAX_DESKTOP_UPLOAD_HEALTH_PROBE_BYTES,
+									},
+									{ headers: responseHeaders },
+								),
 							),
 							Effect.catchAll((error) => {
 								if (error instanceof UploadHealthProbeTooLargeError) {
-									return Effect.succeed(probeTooLarge());
+									return Effect.succeed(probeError("probe_too_large", 413));
+								}
+								if (error instanceof UploadHealthProbeEmptyError) {
+									return Effect.succeed(probeError("probe_empty", 400));
 								}
 								return Effect.logError(
 									"Failed to read upload health probe",
 									error,
-								).pipe(
-									Effect.as(
-										HttpServerResponse.unsafeJson(
-											{ error: "probe_failed" },
-											{ status: 500 },
-										),
-									),
-								);
+								).pipe(Effect.as(probeError("probe_failed", 500)));
 							}),
 						);
 					}),

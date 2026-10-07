@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { CurrentUser, HttpAuthMiddleware } from "@cap/web-domain";
 import {
 	type HttpApi,
@@ -59,6 +61,16 @@ vi.mock("@/lib/server", () => ({
 
 const url = "https://cap.test/api/desktop/upload-health";
 const authorization = `Bearer ${"a".repeat(36)}`;
+const fixture = new Uint8Array(
+	readFileSync(
+		new URL(
+			"../../../desktop/src-tauri/src/upload_health/fixtures/probe.mp4",
+			import.meta.url,
+		),
+	),
+);
+const fixtureSha256 =
+	"2a53c14ff7bd4380890b938b9d238455661b9aca84c169c8e17215235e46ef5d";
 
 beforeEach(() => {
 	mocks.authenticate.mockReset().mockReturnValue(true);
@@ -77,6 +89,7 @@ describe("desktop upload health route", () => {
 
 		expect(response.status).toBe(204);
 		expect(await response.text()).toBe("");
+		expect(response.headers.get("cache-control")).toBe("private, no-store");
 		expect(mocks.authenticate).toHaveBeenCalledWith(
 			expect.objectContaining({ authorization }),
 		);
@@ -102,24 +115,85 @@ describe("desktop upload health route", () => {
 		},
 	);
 
-	it.each([0, 64 * 1024, MAX_DESKTOP_UPLOAD_HEALTH_PROBE_BYTES])(
-		"accepts a %i-byte body with the existing response fields",
+	it.each([1, 64 * 1024, MAX_DESKTOP_UPLOAD_HEALTH_PROBE_BYTES])(
+		"accepts a %i-byte body with a digest of the bytes received",
 		async (size) => {
 			const { POST } = await import("@/app/api/desktop/upload-health/route");
+			const body = new Uint8Array(size);
 			const response = await POST(
 				new Request(url, {
 					method: "POST",
 					headers: { authorization },
-					...(size ? { body: new Uint8Array(size) } : {}),
+					body,
 				}),
 			);
 
 			expect(response.status).toBe(200);
+			expect(response.headers.get("cache-control")).toBe("private, no-store");
 			expect(await response.json()).toEqual({
 				success: true,
 				receivedBytes: size,
+				sha256: createHash("sha256").update(body).digest("hex"),
 				maxProbeBytes: MAX_DESKTOP_UPLOAD_HEALTH_PROBE_BYTES,
 			});
+		},
+	);
+
+	it("receives the exact desktop recording fixture through the Effect router", async () => {
+		const { POST } = await import("@/app/api/desktop/upload-health/route");
+		const response = await POST(
+			new Request(url, {
+				method: "POST",
+				headers: { authorization, "Content-Type": "video/mp4" },
+				body: fixture,
+			}),
+		);
+
+		expect(response.status).toBe(200);
+		expect(await response.json()).toEqual({
+			success: true,
+			receivedBytes: 256 * 1024,
+			sha256: fixtureSha256,
+			maxProbeBytes: MAX_DESKTOP_UPLOAD_HEALTH_PROBE_BYTES,
+		});
+	});
+
+	it.each(["truncated", "corrupted"])(
+		"reports the actual digest for a %s recording instead of certifying the expected fixture",
+		async (change) => {
+			const { POST } = await import("@/app/api/desktop/upload-health/route");
+			const body =
+				change === "truncated" ? fixture.slice(0, -1) : fixture.slice();
+			if (change === "corrupted") body[128] = (body[128] ?? 0) ^ 1;
+			const response = await POST(
+				new Request(url, {
+					method: "POST",
+					headers: { authorization, "Content-Type": "video/mp4" },
+					body,
+				}),
+			);
+
+			expect(response.status).toBe(200);
+			const result = await response.json();
+			expect(result.receivedBytes).toBe(body.byteLength);
+			expect(result.sha256).toBe(
+				createHash("sha256").update(body).digest("hex"),
+			);
+			expect(result.sha256).not.toBe(fixtureSha256);
+		},
+	);
+
+	it.each([undefined, new Uint8Array()])(
+		"rejects an empty body",
+		async (body) => {
+			const { POST } = await import("@/app/api/desktop/upload-health/route");
+			const response = await POST(
+				new Request(url, { method: "POST", headers: { authorization }, body }),
+			);
+
+			expect(response.status).toBe(400);
+			expect(response.headers.get("cache-control")).toBe("private, no-store");
+			expect(await response.json()).toEqual({ error: "probe_empty" });
 		},
 	);
 
@@ -140,6 +214,7 @@ describe("desktop upload health route", () => {
 		const response = await POST(request);
 
 		expect(response.status).toBe(413);
+		expect(response.headers.get("cache-control")).toBe("private, no-store");
 		expect(await response.json()).toEqual({ error: "probe_too_large" });
 		expect(getReader).not.toHaveBeenCalled();
 	});
@@ -175,6 +250,7 @@ describe("desktop upload health route", () => {
 			const response = await POST(new Request(url, options));
 
 			expect(response.status).toBe(413);
+			expect(response.headers.get("cache-control")).toBe("private, no-store");
 			expect(await response.json()).toEqual({ error: "probe_too_large" });
 			expect(cancel).toHaveBeenCalledOnce();
 			expect(chunks).toBe(2);
@@ -198,6 +274,7 @@ describe("desktop upload health route", () => {
 		const response = await POST(new Request(url, options));
 
 		expect(response.status).toBe(500);
+		expect(response.headers.get("cache-control")).toBe("private, no-store");
 		expect(await response.json()).toEqual({ error: "probe_failed" });
 		expect(body.locked).toBe(false);
 	});
