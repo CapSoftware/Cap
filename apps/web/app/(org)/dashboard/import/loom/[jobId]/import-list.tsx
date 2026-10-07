@@ -7,6 +7,7 @@ import {
 	type ReactNode,
 	useCallback,
 	useEffect,
+	useLayoutEffect,
 	useRef,
 	useState,
 } from "react";
@@ -71,14 +72,11 @@ export function useVirtualWindow(count: number, viewport: number) {
 		[],
 	);
 
-	useEffect(() => {
+	useLayoutEffect(() => {
 		const element = ref.current;
-		if (!element) return;
 		const max = Math.max(0, count * ROW_HEIGHT - viewport);
-		if (element.scrollTop > max) {
-			element.scrollTop = max;
-			setScrollTop(max);
-		}
+		if (element && element.scrollTop > max) element.scrollTop = max;
+		setScrollTop(element?.scrollTop ?? 0);
 	}, [count, viewport]);
 
 	const start = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN);
@@ -278,47 +276,49 @@ export const VirtualImportList = ({
 		items.length,
 		viewport,
 	);
-	const height = Math.min(viewport, Math.max(items.length, 1) * ROW_HEIGHT);
-
-	if (items.length === 0) {
-		return (
-			<div className="flex items-center justify-center px-6 py-14 text-sm text-gray-10">
-				{empty}
-			</div>
-		);
-	}
+	const isEmpty = items.length === 0;
 
 	return (
 		<div
 			ref={ref}
 			onScroll={onScroll}
 			className="custom-scroll relative overflow-y-auto overscroll-contain"
-			style={{ height }}
+			style={
+				isEmpty
+					? undefined
+					: { height: Math.min(viewport, items.length * ROW_HEIGHT) }
+			}
 			data-testid="loom-import-list"
 		>
-			<ul
-				aria-label="Videos in this import"
-				style={{ height: items.length * ROW_HEIGHT, position: "relative" }}
-			>
-				{items.slice(start, end).map((item, index) => (
-					<li
-						key={item.id}
-						aria-setsize={items.length}
-						aria-posinset={start + index + 1}
-						className="absolute inset-x-0 top-0"
-						style={{
-							height: ROW_HEIGHT,
-							transform: `translateY(${(start + index) * ROW_HEIGHT}px)`,
-						}}
-					>
-						<ImportRow
-							item={item}
-							showOwner={showOwner}
-							scrolling={scrolling}
-						/>
-					</li>
-				))}
-			</ul>
+			{isEmpty ? (
+				<div className="flex items-center justify-center px-6 py-14 text-sm text-gray-10">
+					{empty}
+				</div>
+			) : (
+				<ul
+					aria-label="Videos in this import"
+					style={{ height: items.length * ROW_HEIGHT, position: "relative" }}
+				>
+					{items.slice(start, end).map((item, index) => (
+						<li
+							key={item.id}
+							aria-setsize={items.length}
+							aria-posinset={start + index + 1}
+							className="absolute inset-x-0 top-0"
+							style={{
+								height: ROW_HEIGHT,
+								transform: `translateY(${(start + index) * ROW_HEIGHT}px)`,
+							}}
+						>
+							<ImportRow
+								item={item}
+								showOwner={showOwner}
+								scrolling={scrolling}
+							/>
+						</li>
+					))}
+				</ul>
+			)}
 		</div>
 	);
 };

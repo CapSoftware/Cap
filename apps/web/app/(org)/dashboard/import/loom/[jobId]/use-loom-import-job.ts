@@ -4,12 +4,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	isLoomImportJobActive,
 	type LoomImportItemView,
+	type LoomImportJobStatus,
 	type LoomImportSnapshot,
+	loomImportWaitingStatus,
 } from "@/lib/loom-import/status";
 
 const ACTIVE_POLL_MS = 1500;
 const HIDDEN_POLL_MS = 15_000;
 const UPGRADE_POLL_MS = 2500;
+const SNAPSHOT_TIMEOUT_MS = 20_000;
 const RATE_WINDOW_MS = 180_000;
 const RATE_MIN_SPAN_MS = 20_000;
 
@@ -39,6 +42,7 @@ export function mergeLoomImportItems(
 	map: Map<string, LoomImportItemView>,
 	order: string[],
 	snapshot: LoomImportSnapshot,
+	previousJobStatus: LoomImportJobStatus = snapshot.job.status,
 ) {
 	let nextOrder = order;
 	if (snapshot.full) {
@@ -46,6 +50,18 @@ export function mergeLoomImportItems(
 		nextOrder = snapshot.items.map((item) => item.id);
 	}
 	let changed = snapshot.full;
+	if (!snapshot.full && previousJobStatus !== snapshot.job.status) {
+		const waiting = loomImportWaitingStatus(snapshot.job.status);
+		for (const [id, item] of map) {
+			if (
+				(item.status === "ready" || item.status === "queued") &&
+				item.status !== waiting
+			) {
+				map.set(id, { ...item, status: waiting });
+				changed = true;
+			}
+		}
+	}
 	for (const item of snapshot.items) {
 		const previous = map.get(item.id);
 		if (
@@ -69,6 +85,8 @@ export function useLoomImportJob(
 	const itemsRef = useRef<Map<string, LoomImportItemView> | null>(null);
 	const orderRef = useRef<string[]>([]);
 	const cursorRef = useRef(initial.cursor);
+	const jobStatusRef = useRef(initial.job.status);
+	const queueRef = useRef<Promise<void>>(Promise.resolve());
 	const samplesRef = useRef<RateSample[]>([]);
 	if (itemsRef.current === null) {
 		itemsRef.current = new Map(initial.items.map((item) => [item.id, item]));
@@ -84,9 +102,15 @@ export function useLoomImportJob(
 	const apply = useCallback((snapshot: LoomImportSnapshot) => {
 		const map = itemsRef.current;
 		if (!map) return;
-		const merged = mergeLoomImportItems(map, orderRef.current, snapshot);
+		const merged = mergeLoomImportItems(
+			map,
+			orderRef.current,
+			snapshot,
+			jobStatusRef.current,
+		);
 		orderRef.current = merged.order;
 		cursorRef.current = Math.max(cursorRef.current, snapshot.cursor);
+		jobStatusRef.current = snapshot.job.status;
 
 		const next = toSummary(snapshot);
 		const now = Date.now();
@@ -119,15 +143,22 @@ export function useLoomImportJob(
 	}, []);
 
 	const fetchSnapshot = useCallback(
-		async (full = false) => {
-			const params = new URLSearchParams({ jobId: initial.job.id });
-			if (!full) params.set("since", String(cursorRef.current));
-			const response = await fetch(`/api/import/loom/jobs?${params}`, {
-				cache: "no-store",
-				credentials: "same-origin",
-			});
-			if (!response.ok) throw new Error(`Snapshot failed: ${response.status}`);
-			apply((await response.json()) as LoomImportSnapshot);
+		(full = false) => {
+			const run = async () => {
+				const params = new URLSearchParams({ jobId: initial.job.id });
+				if (!full) params.set("since", String(cursorRef.current));
+				const response = await fetch(`/api/import/loom/jobs?${params}`, {
+					cache: "no-store",
+					credentials: "same-origin",
+					signal: AbortSignal.timeout(SNAPSHOT_TIMEOUT_MS),
+				});
+				if (!response.ok)
+					throw new Error(`Snapshot failed: ${response.status}`);
+				apply((await response.json()) as LoomImportSnapshot);
+			};
+			const request = queueRef.current.then(run, run);
+			queueRef.current = request.catch(() => undefined);
+			return request;
 		},
 		[apply, initial.job.id],
 	);
@@ -161,6 +192,7 @@ export function useLoomImportJob(
 		let hiddenAt: number | null = null;
 
 		const schedule = () => {
+			window.clearTimeout(timer);
 			if (stopped) return;
 			const wait = document.hidden
 				? HIDDEN_POLL_MS

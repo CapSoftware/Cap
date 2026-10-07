@@ -11,8 +11,12 @@ import {
 	deriveLoomImportItemState,
 	type LoomImportItemSource,
 	type LoomImportItemView,
+	type LoomImportJobStatus,
+	type LoomImportSettleSource,
 	type LoomImportSnapshot,
 	loomImportProgress,
+	loomImportWaitingStatus,
+	settleLoomImportItem,
 } from "@/lib/loom-import/status";
 
 const source = (
@@ -102,6 +106,75 @@ describe("deriveLoomImportItemState", () => {
 				"completed",
 			).status,
 		).toBe("importing");
+	});
+
+	it("shows a failed row as imported once a retry from the video page finishes", () => {
+		expect(
+			deriveLoomImportItemState(
+				source({ status: "failed", error: "Old failure", uploadPhase: null }),
+				"completed",
+			),
+		).toEqual({ status: "imported" });
+	});
+
+	it("keeps finished imports imported while the Cap is edited later", () => {
+		expect(
+			deriveLoomImportItemState(
+				source({ status: "complete", uploadPhase: "processing" }),
+				"completed",
+			),
+		).toEqual({ status: "imported" });
+	});
+});
+
+describe("settleLoomImportItem", () => {
+	const settle = (overrides: Partial<LoomImportSettleSource>) =>
+		settleLoomImportItem({
+			status: "importing",
+			videoExists: true,
+			uploadPhase: "processing",
+			uploadError: null,
+			...overrides,
+		});
+
+	it("completes rows whose upload finished, including ones that failed before", () => {
+		expect(settle({ uploadPhase: null })).toEqual({
+			status: "complete",
+			error: null,
+		});
+		expect(settle({ status: "failed", uploadPhase: null })).toEqual({
+			status: "complete",
+			error: null,
+		});
+	});
+
+	it("fails rows whose upload errored or whose Cap was deleted", () => {
+		expect(
+			settle({ uploadPhase: "error", uploadError: "Source unavailable" }),
+		).toEqual({ status: "failed", error: "Source unavailable" });
+		expect(settle({ uploadPhase: "error" })).toEqual({
+			status: "failed",
+			error: "Loom import failed.",
+		});
+		expect(settle({ status: "complete", videoExists: false })).toEqual({
+			status: "failed",
+			error: "The imported Cap was deleted.",
+		});
+	});
+
+	it("leaves rows alone while they are still copying or already done", () => {
+		expect(settle({})).toBeNull();
+		expect(settle({ status: "failed", uploadPhase: "processing" })).toBeNull();
+		expect(settle({ status: "complete", uploadPhase: "error" })).toBeNull();
+	});
+});
+
+describe("loomImportWaitingStatus", () => {
+	it("calls checked rows ready until the import starts", () => {
+		expect(loomImportWaitingStatus("checking")).toBe("ready");
+		expect(loomImportWaitingStatus("awaiting_upgrade")).toBe("ready");
+		expect(loomImportWaitingStatus("importing")).toBe("queued");
+		expect(loomImportWaitingStatus("completed")).toBe("queued");
 	});
 });
 
@@ -255,8 +328,53 @@ describe("results report", () => {
 });
 
 describe("mergeLoomImportItems", () => {
-	const snapshot = (items: LoomImportItemView[], full: boolean) =>
-		({ items, full, cursor: 0 }) as unknown as LoomImportSnapshot;
+	const snapshot = (
+		items: LoomImportItemView[],
+		full: boolean,
+		status: LoomImportJobStatus = "importing",
+	) => ({ items, full, cursor: 0, job: { status } }) as LoomImportSnapshot;
+
+	it("moves rows the poll skipped from ready to queued when the import starts", () => {
+		const map = new Map<string, LoomImportItemView>();
+		const first = mergeLoomImportItems(
+			map,
+			[],
+			snapshot(
+				[
+					view({ id: "a", row: 2, status: "ready" }),
+					view({ id: "b", row: 3, status: "ready" }),
+					view({ id: "c", row: 4, status: "failed" }),
+				],
+				true,
+				"checking",
+			),
+			"checking",
+		);
+		const started = mergeLoomImportItems(
+			map,
+			first.order,
+			snapshot(
+				[view({ id: "a", row: 2, status: "importing", v: 2 })],
+				false,
+				"importing",
+			),
+			"checking",
+		);
+		expect(started.changed).toBe(true);
+		expect(first.order.map((id) => map.get(id)?.status)).toEqual([
+			"importing",
+			"queued",
+			"failed",
+		]);
+
+		const steady = mergeLoomImportItems(
+			map,
+			first.order,
+			snapshot([], false, "importing"),
+			"importing",
+		);
+		expect(steady.changed).toBe(false);
+	});
 
 	it("replaces only rows that changed and keeps CSV order", () => {
 		const map = new Map<string, LoomImportItemView>();
