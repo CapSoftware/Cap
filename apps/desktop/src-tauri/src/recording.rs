@@ -5025,7 +5025,16 @@ pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Res
     }
     let mut state = state.write().await;
     let recording_pending = matches!(&state.recording_state, RecordingState::Pending { .. });
-    let Some(current_recording) = state.clear_current_recording() else {
+    let current_recording = if matches!(
+        state.current_recording(),
+        Some(InProgressRecording::Instant { .. })
+    ) {
+        // Keep capture exclusions active until the Instant actor has stopped.
+        state.take_current_recording()
+    } else {
+        state.clear_current_recording()
+    };
+    let Some(current_recording) = current_recording else {
         if recording_pending {
             debug!("Stop recording requested before recording actor was ready");
             return Err("Recording is still starting".to_string());

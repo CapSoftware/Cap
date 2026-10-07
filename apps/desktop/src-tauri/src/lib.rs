@@ -1674,17 +1674,20 @@ impl App {
     }
 
     pub fn clear_current_recording(&mut self) -> Option<InProgressRecording> {
+        let recording = self.take_current_recording()?;
+        self.close_occluder_windows();
+        crate::windows::apply_content_protection(&self.handle, false);
+        Some(recording)
+    }
+
+    pub(crate) fn take_current_recording(&mut self) -> Option<InProgressRecording> {
         #[cfg(target_os = "linux")]
         if recording::linux_instant::blocks_cleanup(&self.handle) {
             return None;
         }
         let previous = std::mem::replace(&mut self.recording_state, RecordingState::None);
         match previous {
-            RecordingState::Active(recording) => {
-                self.close_occluder_windows();
-                crate::windows::apply_content_protection(&self.handle, false);
-                Some(recording)
-            }
+            RecordingState::Active(recording) => Some(recording),
             state => {
                 self.recording_state = state;
                 None
