@@ -17,7 +17,32 @@ import { trackEvent } from "@/app/utils/analytics";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { splitFullName } from "../onboarding-flow";
 import { StepLede, StepPage, StepTitle } from "./StepChrome";
-import { WaveDoodle } from "./scenes";
+
+const WavingHand = () => (
+	<span className="relative inline-block whitespace-nowrap">
+		<span role="img" aria-label="Waving hand" className="ob-wave">
+			👋
+		</span>
+		<svg
+			viewBox="0 0 24 24"
+			className="ob-boil pointer-events-none absolute -right-[0.42em] -top-[0.32em] size-[0.6em] overflow-visible"
+			aria-hidden="true"
+		>
+			<path
+				pathLength={1}
+				className="ob-ink is-accent ob-draw"
+				style={{ "--d": "0.55s", strokeWidth: 2.4 } as CSSProperties}
+				d="M 5 13 C 8 10 10 7 11 3"
+			/>
+			<path
+				pathLength={1}
+				className="ob-ink is-accent ob-draw"
+				style={{ "--d": "0.75s", strokeWidth: 2.4 } as CSSProperties}
+				d="M 11 19 C 15 17 18 14 20 10"
+			/>
+		</svg>
+	</span>
+);
 
 const NamePreview = ({ name }: { name: string }) => {
 	const trimmed = name.trim();
@@ -205,18 +230,13 @@ export const WelcomeStep = ({
 		<StepPage>
 			<div className="grid flex-1 items-center gap-12 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:gap-16">
 				<div className="flex flex-col">
-					<div className="ob-rise -ml-2 mb-3">
-						<WaveDoodle />
-					</div>
-					<StepTitle>
-						{organizationName ? (
-							<>
-								Welcome to{" "}
-								<span className="break-words">{organizationName}</span>
-							</>
-						) : (
-							"Welcome to Cap"
-						)}
+					<StepTitle className="ob-greeting">
+						Hey, welcome to{" "}
+						<span className="break-words">
+							{organizationName ?? "Cap"}
+							{"\u00a0"}
+							<WavingHand />
+						</span>
 					</StepTitle>
 					<StepLede>
 						{organizationName

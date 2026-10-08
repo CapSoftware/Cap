@@ -1152,39 +1152,3 @@ export const DoneDoodle = () => (
 		</g>
 	</svg>
 );
-
-export const WaveDoodle = () => (
-	<svg
-		viewBox="0 0 120 104"
-		className="h-auto w-24 overflow-visible"
-		aria-hidden="true"
-	>
-		<g className="ob-boil">
-			<path
-				pathLength={1}
-				className="ob-ink is-bold ob-draw"
-				style={{ "--d": "0.1s", strokeWidth: 4.2 } as CSSProperties}
-				d="M 28 82 C 30 64 34 42 38 22 C 40 14 32 14 31 24 C 29 44 28 66 27 86 C 32 70 38 58 46 58 C 54 58 52 72 52 84"
-			/>
-			<path
-				pathLength={1}
-				className="ob-ink is-bold ob-draw"
-				style={{ "--d": "0.75s", strokeWidth: 4.2 } as CSSProperties}
-				d="M 66 60 C 66 68 65 76 66 84"
-			/>
-			<path
-				pathLength={1}
-				className="ob-ink is-bold ob-draw"
-				style={{ "--d": "0.95s", strokeWidth: 4.8 } as CSSProperties}
-				d="M 66 44 L 66 44.6"
-			/>
-			<Sparks
-				delay={1.1}
-				points={[
-					[90, 30, 3.4],
-					[104, 60, 2.8],
-				]}
-			/>
-		</g>
-	</svg>
-);

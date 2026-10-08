@@ -133,6 +133,12 @@
 	animation: ob-theme-in 0.45s cubic-bezier(0.2, 0.8, 0.2, 1) both;
 }
 
+.ob-wave {
+	display: inline-block;
+	transform-origin: 70% 80%;
+	animation: ob-wave 1.9s ease-in-out 0.35s 2 both;
+}
+
 .cap-ob ::selection {
 	background: var(--ob-accent-soft);
 }
@@ -178,6 +184,9 @@
 	.ob-theme-toggle:hover {
 		border-color: var(--ob-ink);
 		background: var(--ob-surface);
+	}
+	.ob-greeting:hover .ob-wave {
+		animation: ob-wave 1.9s ease-in-out infinite;
 	}
 	.ob-cta:hover:not(:disabled) {
 		background: var(--ob-cta-hover);
@@ -692,6 +701,28 @@
 	to {
 		opacity: 1;
 		transform: none;
+	}
+}
+@keyframes ob-wave {
+	0%,
+	60%,
+	100% {
+		transform: rotate(0deg);
+	}
+	10% {
+		transform: rotate(16deg);
+	}
+	20% {
+		transform: rotate(-8deg);
+	}
+	30% {
+		transform: rotate(16deg);
+	}
+	40% {
+		transform: rotate(-4deg);
+	}
+	50% {
+		transform: rotate(10deg);
 	}
 }
 @keyframes ob-draw {
@@ -1484,6 +1515,8 @@
 	.ob-squiggle-progress.is-waiting,
 	.ob-doodle-hover,
 	.ob-choice:hover .ob-doodle-hover,
+	.ob-wave,
+	.ob-greeting:hover .ob-wave,
 	.ob-theme-icon,
 	.ob-scene * {
 		animation: none;
