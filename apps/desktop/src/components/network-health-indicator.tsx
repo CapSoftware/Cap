@@ -22,7 +22,7 @@ export default function NetworkHealthIndicator(
 	const isUnhealthy = () => networkHealth().status === "unhealthy";
 	const isChecking = () =>
 		networkHealth().status === "checking" || speedTest().status === "running";
-	const isRecording = () => isRecordingInProgress();
+	const isRecording = isRecordingInProgress;
 
 	const handleRefresh = async (e: MouseEvent) => {
 		e.stopPropagation();
@@ -32,23 +32,25 @@ export default function NetworkHealthIndicator(
 	};
 
 	const speedLabel = () => {
-		const mbps = speedTest().speedMbps;
-		if (mbps === null) return "Checking...";
-		return `${mbps} Mbps`;
+		if (speedTest().status === "running") return "Testing...";
+		if (speedTest().status === "error" && speedTest().speedMbps === null)
+			return "Failed";
+		if (speedTest().speedMbps !== null) return `${speedTest().speedMbps} Mbps`;
+		if (networkHealth().status === "checking") return "Checking...";
+		if (isUnhealthy()) return "Offline";
+		return "Ready";
 	};
 
 	const qualityLabel = () => {
-		const tier = speedTest().qualityTier;
-		const res = speedTest().recommendedResolution;
-		if (!tier) return "Standard (1080p)";
-		if (tier === "high") return `Full (${res}p)`;
-		if (tier === "medium") return `Standard (${res}p)`;
-		return `Adapted (${res}p)`;
+		const label = speedTest().recommendedLabel;
+		return label ? `${label}` : "1080p";
 	};
 
 	const dotColor = () => {
 		if (isUnhealthy()) return "bg-red-9";
 		if (speedTest().status === "running") return "bg-blue-9 animate-pulse";
+		if (speedTest().status === "error" && speedTest().speedMbps === null)
+			return "bg-red-9";
 		const speed = speedTest().speedMbps;
 		if (speed === null) return "bg-gray-8";
 		if (speed >= 15) return "bg-green-9";
@@ -63,10 +65,15 @@ export default function NetworkHealthIndicator(
 				<span
 					class={cx(
 						"text-[10px] uppercase font-bold",
-						isUnhealthy() ? "text-red-10" : "text-green-10",
+						isUnhealthy() || speedTest().status === "error"
+							? "text-red-10"
+							: "text-green-10",
 					)}
 				>
-					{isUnhealthy() ? "Failed" : "Operational"}
+					{isUnhealthy() ||
+					(speedTest().status === "error" && speedTest().speedMbps === null)
+						? "Error"
+						: "Operational"}
 				</span>
 			</div>
 			<div class="flex items-center justify-between text-gray-11">
@@ -74,13 +81,12 @@ export default function NetworkHealthIndicator(
 				<span class="font-medium text-gray-12">{speedLabel()}</span>
 			</div>
 			<div class="flex items-center justify-between text-gray-11">
-				<span>Recording Quality:</span>
+				<span>Recommended Quality:</span>
 				<span class="font-medium text-gray-12">{qualityLabel()}</span>
 			</div>
-			<Show when={isUnhealthy()}>
+			<Show when={networkHealth().error || speedTest().error}>
 				<div class="mt-1 rounded bg-red-3 p-1.5 text-[11px] text-red-11 border border-red-6">
-					Upload test failed. Recording uploads might fail. Please contact
-					support at hello@cap.so
+					{networkHealth().error ?? speedTest().error}
 				</div>
 			</Show>
 			<div class="mt-1 pt-1 border-t border-gray-6 flex justify-end">
@@ -111,13 +117,19 @@ export default function NetworkHealthIndicator(
 					aria-label="Network health and speed indicator"
 					class={cx(
 						"flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] transition-colors border",
-						isUnhealthy()
+						isUnhealthy() ||
+							(speedTest().status === "error" && speedTest().speedMbps === null)
 							? "bg-red-3 text-red-11 border-red-6 hover:bg-red-4"
 							: "bg-gray-2 text-gray-11 border-gray-6 hover:bg-gray-3 hover:text-gray-12",
 					)}
 				>
 					<Show
-						when={!isUnhealthy()}
+						when={
+							!isUnhealthy() &&
+							!(
+								speedTest().status === "error" && speedTest().speedMbps === null
+							)
+						}
 						fallback={<IconLucideAlertTriangle class="size-3 text-red-9" />}
 					>
 						<span class={cx("size-1.5 rounded-full shrink-0", dotColor())} />
@@ -131,3 +143,4 @@ export default function NetworkHealthIndicator(
 		</div>
 	);
 }
+export { NetworkHealthIndicator };

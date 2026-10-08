@@ -1,3 +1,6 @@
+import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
+import { createSignal } from "solid-js";
+
 export type QualityTier = "high" | "medium" | "low";
 
 export interface NetworkHealthState {
@@ -11,6 +14,7 @@ export interface SpeedTestState {
 	speedMbps: number | null;
 	qualityTier: QualityTier | null;
 	recommendedResolution: number;
+	recommendedLabel: string;
 	lastTested: number | null;
 	error: string | null;
 }
@@ -22,40 +26,25 @@ export const SPEED_THRESHOLDS = {
 } as const;
 
 export const RESOLUTION_PRESETS = {
-	high: 2160,
-	medium: 1920,
-	low: 1280,
-	minimum: 960,
+	ultra: 3840,
+	high: 1920,
+	medium: 1280,
+	low: 960,
 } as const;
 
-type SignalGetter<T> = () => T;
-type SignalSetter<T> = (value: T | ((prev: T) => T)) => void;
-
-function createFallbackSignal<T>(
-	initial: T,
-): [SignalGetter<T>, SignalSetter<T>] {
-	let current = initial;
-	return [
-		() => current,
-		(update: T | ((prev: T) => T)) => {
-			current =
-				typeof update === "function"
-					? (update as (prev: T) => T)(current)
-					: update;
-		},
-	];
+export function formatResolutionLabel(width: number): string {
+	if (width >= 3840) return "4K";
+	if (width >= 2560) return "1440p";
+	if (width >= 1920) return "1080p";
+	if (width >= 1280) return "720p";
+	return "540p";
 }
 
-let signalFactory: <T>(initial: T) => [SignalGetter<T>, SignalSetter<T>] =
-	createFallbackSignal;
-
-try {
-	const solid = await import("solid-js");
-	if (solid && typeof solid.createSignal === "function") {
-		signalFactory = solid.createSignal;
+function getHttpFetch(): typeof globalThis.fetch {
+	if (typeof window !== "undefined") {
+		return tauriFetch;
 	}
-} catch {
-	// Fallback to standalone reactive signal
+	return globalThis.fetch;
 }
 
 async function getServerUrl(): Promise<string> {
@@ -67,26 +56,27 @@ async function getServerUrl(): Promise<string> {
 	}
 }
 
-const [networkHealth, setNetworkHealth] = signalFactory<NetworkHealthState>({
+const [networkHealth, setNetworkHealth] = createSignal<NetworkHealthState>({
 	status: "idle",
 	lastChecked: null,
 	error: null,
 });
 
-const [speedTest, setSpeedTest] = signalFactory<SpeedTestState>({
+const [speedTest, setSpeedTest] = createSignal<SpeedTestState>({
 	status: "idle",
 	speedMbps: null,
 	qualityTier: null,
-	recommendedResolution: RESOLUTION_PRESETS.medium,
+	recommendedResolution: RESOLUTION_PRESETS.high,
+	recommendedLabel: "1080p",
 	lastTested: null,
 	error: null,
 });
 
-let isRecordingActive = false;
+const [isRecordingSignal, setIsRecordingSignal] = createSignal(false);
 let activeSpeedTestAbort: AbortController | null = null;
 
 export function setRecordingState(active: boolean) {
-	isRecordingActive = active;
+	setIsRecordingSignal(active);
 	if (active && activeSpeedTestAbort) {
 		activeSpeedTestAbort.abort();
 		activeSpeedTestAbort = null;
@@ -98,34 +88,39 @@ export function setRecordingState(active: boolean) {
 }
 
 export function isRecordingInProgress(): boolean {
-	return isRecordingActive;
+	return isRecordingSignal();
 }
 
 export function determineQualityTierAndResolution(speedMbps: number): {
 	qualityTier: QualityTier;
 	recommendedResolution: number;
+	recommendedLabel: string;
 } {
+	if (speedMbps >= 25) {
+		return {
+			qualityTier: "high",
+			recommendedResolution: RESOLUTION_PRESETS.ultra,
+			recommendedLabel: "4K",
+		};
+	}
 	if (speedMbps >= SPEED_THRESHOLDS.highSpeedMinMbps) {
 		return {
 			qualityTier: "high",
 			recommendedResolution: RESOLUTION_PRESETS.high,
+			recommendedLabel: "1080p",
 		};
 	}
 	if (speedMbps >= SPEED_THRESHOLDS.mediumSpeedMinMbps) {
 		return {
 			qualityTier: "medium",
 			recommendedResolution: RESOLUTION_PRESETS.medium,
-		};
-	}
-	if (speedMbps >= SPEED_THRESHOLDS.lowSpeedMinMbps) {
-		return {
-			qualityTier: "low",
-			recommendedResolution: RESOLUTION_PRESETS.low,
+			recommendedLabel: "720p",
 		};
 	}
 	return {
 		qualityTier: "low",
-		recommendedResolution: RESOLUTION_PRESETS.minimum,
+		recommendedResolution: RESOLUTION_PRESETS.low,
+		recommendedLabel: "540p",
 	};
 }
 
@@ -148,21 +143,12 @@ export async function runUploadHealthCheck(): Promise<boolean> {
 		const baseUrl = await getServerUrl();
 		const targetUrl = new URL("/api/desktop/health", baseUrl).toString();
 
-		const testPayload = JSON.stringify({
-			type: "screen_recording_health_check",
-			timestamp: Date.now(),
-			payload: "cap_health_check_ping_data_12345",
-		});
-
 		const controller = new AbortController();
 		const timeoutId = setTimeout(() => controller.abort(), 8000);
 
-		const response = await fetch(targetUrl, {
-			method: "POST",
-			headers: {
-				"Content-Type": "application/json",
-			},
-			body: testPayload,
+		const fetchFn = getHttpFetch();
+		const response = await fetchFn(targetUrl, {
+			method: "GET",
 			signal: controller.signal,
 		});
 
@@ -173,10 +159,9 @@ export async function runUploadHealthCheck(): Promise<boolean> {
 		}
 
 		const data = (await response.json()) as {
-			healthy?: boolean;
 			status?: string;
 		};
-		const isHealthy = data.healthy === true || data.status === "ok";
+		const isHealthy = data.status === "ok";
 
 		if (!isHealthy) {
 			throw new Error("Server responded with unhealthy status");
@@ -201,7 +186,7 @@ export async function runUploadHealthCheck(): Promise<boolean> {
 }
 
 export async function runSpeedTest(): Promise<number | null> {
-	if (isRecordingActive) {
+	if (isRecordingSignal()) {
 		return speedTest().speedMbps;
 	}
 
@@ -217,30 +202,48 @@ export async function runSpeedTest(): Promise<number | null> {
 
 	try {
 		const baseUrl = await getServerUrl();
-		const targetUrl = new URL(
-			"/api/desktop/health/speed-test",
-			baseUrl,
-		).toString();
+		const targetUrl = new URL("/api/desktop/health", baseUrl).toString();
+		const fetchFn = getHttpFetch();
 
-		const chunkSize = 256 * 1024;
-		const buffer = new Uint8Array(chunkSize);
-		for (let i = 0; i < chunkSize; i += 64) {
-			buffer[i] = i & 0xff;
-		}
+		const warmupPayload = JSON.stringify({
+			payload: "x".repeat(32 * 1024),
+		});
 
-		const startTime = performance.now();
-		const response = await fetch(targetUrl, {
+		const warmupResponse = await fetchFn(targetUrl, {
 			method: "POST",
 			headers: {
-				"Content-Type": "application/octet-stream",
+				"Content-Type": "application/json",
 			},
-			body: buffer,
+			body: warmupPayload,
 			signal: controller.signal,
 		});
 
+		if (!warmupResponse.ok) {
+			throw new Error(`Warmup failed with HTTP ${warmupResponse.status}`);
+		}
+
+		if (isRecordingSignal()) {
+			return speedTest().speedMbps;
+		}
+
+		const sampleBytes = 512 * 1024;
+		const sampleData = "a".repeat(sampleBytes);
+		const testPayload = JSON.stringify({
+			payload: sampleData,
+		});
+
+		const startTime = performance.now();
+		const response = await fetchFn(targetUrl, {
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json",
+			},
+			body: testPayload,
+			signal: controller.signal,
+		});
 		const durationMs = performance.now() - startTime;
 
-		if (isRecordingActive) {
+		if (isRecordingSignal()) {
 			return speedTest().speedMbps;
 		}
 
@@ -248,8 +251,26 @@ export async function runSpeedTest(): Promise<number | null> {
 			throw new Error(`Speed test returned HTTP ${response.status}`);
 		}
 
-		const calculatedSpeed = calculateSpeedMbps(chunkSize, durationMs);
-		const { qualityTier, recommendedResolution } =
+		const result = (await response.json()) as {
+			success?: boolean;
+			bytesReceived?: number;
+		};
+
+		if (!result.success || typeof result.bytesReceived !== "number") {
+			throw new Error("Invalid speed test server response");
+		}
+
+		if (result.bytesReceived < sampleBytes) {
+			throw new Error(
+				`Incomplete upload: expected ${sampleBytes} bytes, received ${result.bytesReceived}`,
+			);
+		}
+
+		const calculatedSpeed = calculateSpeedMbps(
+			result.bytesReceived,
+			durationMs,
+		);
+		const { qualityTier, recommendedResolution, recommendedLabel } =
 			determineQualityTierAndResolution(calculatedSpeed);
 
 		setSpeedTest({
@@ -257,16 +278,10 @@ export async function runSpeedTest(): Promise<number | null> {
 			speedMbps: calculatedSpeed,
 			qualityTier,
 			recommendedResolution,
+			recommendedLabel,
 			lastTested: Date.now(),
 			error: null,
 		});
-
-		try {
-			const { generalSettingsStore } = await import("~/store");
-			await generalSettingsStore.set({
-				instantModeMaxResolution: recommendedResolution,
-			});
-		} catch {}
 
 		activeSpeedTestAbort = null;
 		return calculatedSpeed;
@@ -292,7 +307,7 @@ export function initNetworkHealthMonitoring(): () => void {
 	void runSpeedTest();
 
 	const interval = setInterval(() => {
-		if (!isRecordingActive) {
+		if (!isRecordingSignal()) {
 			void runSpeedTest();
 		}
 	}, 45_000);

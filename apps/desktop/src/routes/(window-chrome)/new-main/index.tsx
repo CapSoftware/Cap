@@ -37,7 +37,7 @@ import { createStore, produce, reconcile } from "solid-js/store";
 import toast from "solid-toast";
 import { Transition } from "solid-transition-group";
 import Mode from "~/components/Mode";
-import NetworkHealthIndicator from "~/components/NetworkHealthIndicator";
+import NetworkHealthIndicator from "~/components/network-health-indicator";
 import { RecoveryToast } from "~/components/RecoveryToast";
 import Tooltip from "~/components/Tooltip";
 import { Input } from "~/routes/editor/ui";
