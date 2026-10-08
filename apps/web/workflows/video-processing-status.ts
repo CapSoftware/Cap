@@ -99,11 +99,11 @@ export async function readVideoProcessingStatus(
 export async function checkMediaServerJob(
 	videoId: string,
 	jobId: string,
-): Promise<"active" | "settled" | "missing"> {
+): Promise<"active" | "settled" | "unseen"> {
 	"use step";
 
 	const env = serverEnv();
-	if (!env.MEDIA_SERVER_URL) return "missing";
+	if (!env.MEDIA_SERVER_URL) return "unseen";
 	const observation = await observeDesktopRecordingJob({
 		videoId,
 		jobId,
@@ -111,11 +111,19 @@ export async function checkMediaServerJob(
 		webhookUrl: `${env.MEDIA_SERVER_WEBHOOK_URL || env.WEB_URL}/api/webhooks/media-server/progress?retryable=true`,
 		secret: env.MEDIA_SERVER_WEBHOOK_SECRET,
 	});
-	if (observation.status === "active") return "active";
-	return observation.delivered ? "settled" : "missing";
+	if (observation.status === "active") {
+		await db()
+			.update(videoUploads)
+			.set({ updatedAt: new Date() })
+			.where(eq(videoUploads.videoId, Video.VideoId.make(videoId)));
+		return "active";
+	}
+	return observation.delivered ? "settled" : "unseen";
 }
 
 export const VIDEO_PROCESSING_STALL_MS = 20 * 60 * 1000;
+export const UNSEEN_JOB_GRACE_MS = 10 * 60 * 1000;
+const UNSEEN_JOB_POLL_MS = 30_000;
 
 export async function waitForVideoProcessing(
 	videoId: string,
@@ -125,9 +133,11 @@ export async function waitForVideoProcessing(
 		maxPollMs = 30_000,
 	}: { jobId?: string; stallMs?: number; maxPollMs?: number } = {},
 ): Promise<ProcessedVideoMetadata> {
-	let lastSeen: string | null = null;
+	let lastMessage: string | null = null;
+	let lastUpdatedAt: number | null = null;
 	let lastChangeAt = Date.now();
-	let updatesMissing = false;
+	let jobActive = false;
+	let unseenSince: number | null = null;
 	for (let attempt = 0; ; attempt++) {
 		const result = await readVideoProcessingStatus(videoId);
 		if (result.status === "complete") return result.metadata;
@@ -135,21 +145,38 @@ export async function waitForVideoProcessing(
 			throw new VideoProcessingFailedError(result.message);
 		}
 		if (result.status === "error") throw new FatalError(result.message);
-		const seen = `${result.message}|${result.updatedAt ?? ""}`;
-		if (seen !== lastSeen) {
-			lastSeen = seen;
+		const changed =
+			result.message !== lastMessage ||
+			(!jobActive && result.updatedAt !== lastUpdatedAt);
+		lastMessage = result.message;
+		lastUpdatedAt = result.updatedAt;
+		if (changed) {
 			lastChangeAt = Date.now();
-			updatesMissing = false;
-		} else if (updatesMissing || Date.now() - lastChangeAt > stallMs) {
-			const job = jobId ? await checkMediaServerJob(videoId, jobId) : "missing";
-			if (job === "missing") {
-				throw new VideoProcessingFailedError(
-					`Video processing stopped making progress while ${result.message}`,
-				);
+			jobActive = false;
+			unseenSince = null;
+		} else if (
+			jobActive ||
+			unseenSince !== null ||
+			Date.now() - lastChangeAt > stallMs
+		) {
+			const job = jobId ? await checkMediaServerJob(videoId, jobId) : "unseen";
+			jobActive = job === "active";
+			if (job === "unseen") {
+				unseenSince ??= Date.now();
+				if (!jobId || Date.now() - unseenSince >= UNSEEN_JOB_GRACE_MS) {
+					throw new VideoProcessingFailedError(
+						`Video processing stopped making progress while ${result.message}`,
+					);
+				}
+			} else {
+				unseenSince = null;
+				lastChangeAt = Date.now();
 			}
-			updatesMissing = job === "active";
-			lastChangeAt = Date.now();
 		}
-		await sleep(Math.min(5_000 * (attempt + 1), maxPollMs));
+		await sleep(
+			unseenSince === null
+				? Math.min(5_000 * (attempt + 1), maxPollMs)
+				: Math.min(UNSEEN_JOB_POLL_MS, maxPollMs),
+		);
 	}
 }

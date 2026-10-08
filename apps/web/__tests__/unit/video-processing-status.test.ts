@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
 	rows: [] as unknown[][],
 	where: vi.fn(),
+	write: vi.fn(),
 	sleep: vi.fn(),
 	observe: vi.fn(),
 	now: 0,
@@ -22,6 +23,7 @@ vi.mock("@/lib/desktop-recording-job-status", () => ({
 vi.mock("@cap/database", () => ({
 	db: () => ({
 		select: () => ({ from: () => ({ where: mocks.where }) }),
+		update: () => ({ set: () => ({ where: mocks.write }) }),
 	}),
 }));
 vi.mock("@cap/database/schema", () => ({
@@ -38,6 +40,7 @@ vi.mock("workflow", () => ({
 
 import {
 	readVideoProcessingStatus,
+	UNSEEN_JOB_GRACE_MS,
 	VIDEO_PROCESSING_STALL_MS,
 	VideoProcessingFailedError,
 	waitForVideoProcessing,
@@ -63,6 +66,7 @@ describe("durable video processing completion", () => {
 		mocks.observe
 			.mockReset()
 			.mockResolvedValue({ status: "unavailable", delivered: false });
+		mocks.write.mockReset().mockResolvedValue(undefined);
 	});
 
 	afterEach(() => vi.restoreAllMocks());
@@ -151,19 +155,46 @@ describe("durable video processing completion", () => {
 		expect(mocks.observe).not.toHaveBeenCalled();
 	});
 
-	it("asks the media server before giving up, and gives up once it no longer has the job", async () => {
+	it("restarts only after the media server has not seen the job for ten minutes of checks", async () => {
 		mocks.where.mockResolvedValue([{ ...pending, updatedAt: new Date(0) }]);
 		await expect(
 			waitForVideoProcessing("video", { jobId: "job-1" }),
 		).rejects.toBeInstanceOf(VideoProcessingFailedError);
-		expect(mocks.observe).toHaveBeenCalledExactlyOnceWith({
-			videoId: "video",
-			jobId: "job-1",
-			mediaServerUrl: "https://worker.example.com",
-			webhookUrl:
-				"https://cap.example.com/api/webhooks/media-server/progress?retryable=true",
-			secret: "test-secret",
+		expect(mocks.now).toBeGreaterThanOrEqual(
+			VIDEO_PROCESSING_STALL_MS + UNSEEN_JOB_GRACE_MS,
+		);
+		expect(mocks.observe.mock.calls.length).toBeGreaterThanOrEqual(20);
+		for (const [lookup] of mocks.observe.mock.calls) {
+			expect(lookup).toEqual({
+				videoId: "video",
+				jobId: "job-1",
+				mediaServerUrl: "https://worker.example.com",
+				webhookUrl:
+					"https://cap.example.com/api/webhooks/media-server/progress?retryable=true",
+				secret: "test-secret",
+			});
+		}
+		expect(mocks.write).not.toHaveBeenCalled();
+	});
+
+	it("does not start another copy when status checks fail for a few minutes", async () => {
+		const stuck = { ...pending, updatedAt: new Date(0) };
+		let checks = 0;
+		mocks.observe.mockImplementation(async () => {
+			checks++;
+			if (checks <= 8) return { status: "unavailable", delivered: false };
+			if (checks <= 12) return { status: "active", delivered: false };
+			return { status: "terminal", delivered: true };
 		});
+		mocks.rows = [[], [metadata]];
+		mocks.where.mockImplementation(async () =>
+			checks < 13 ? [stuck] : mocks.rows.shift(),
+		);
+		await expect(
+			waitForVideoProcessing("video", { jobId: "job-1" }),
+		).resolves.toEqual(metadata);
+		expect(checks).toBe(13);
+		expect(mocks.write).toHaveBeenCalledTimes(4);
 	});
 
 	it("keeps waiting without a second copy while the media server still runs the job", async () => {
@@ -187,18 +218,25 @@ describe("durable video processing completion", () => {
 		const checks = mocks.observe.mock.calls.length;
 		expect(checks).toBeGreaterThan(100);
 		expect(checks).toBeLessThan(mocks.where.mock.calls.length);
+		expect(mocks.write).toHaveBeenCalledTimes(checks - 1);
 	});
 
-	it("goes back to quiet waiting once updates arrive again", async () => {
-		let updatedAt = 0;
+	it("goes back to quiet waiting once progress arrives again", async () => {
+		let progress = 25;
 		mocks.observe.mockImplementation(async () => {
-			updatedAt = mocks.now;
+			progress++;
 			return { status: "active", delivered: false };
 		});
 		mocks.rows = [[], [metadata]];
 		mocks.where.mockImplementation(async () =>
 			mocks.now < 3 * 60 * 60 * 1000
-				? [{ ...pending, updatedAt: new Date(updatedAt) }]
+				? [
+						{
+							...pending,
+							processingProgress: progress,
+							updatedAt: new Date(0),
+						},
+					]
 				: mocks.rows.shift(),
 		);
 		await expect(

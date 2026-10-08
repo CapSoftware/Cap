@@ -313,7 +313,7 @@ describe("media processing workflows", () => {
 		try {
 			mocks.rows = [
 				[video],
-				...Array.from({ length: 23 }, () => [quiet]),
+				...Array.from({ length: 43 }, () => [quiet]),
 				[video],
 				[video],
 				[],
@@ -322,10 +322,11 @@ describe("media processing workflows", () => {
 			await expect(importLoomVideoWorkflow(payload)).resolves.toMatchObject({
 				success: true,
 			});
-			expect(now).toBeGreaterThan(20 * 60 * 1000);
-			expect(mocks.observe).toHaveBeenCalledExactlyOnceWith(
-				expect.objectContaining({ videoId: "video", jobId: "job-1" }),
-			);
+			expect(now).toBeGreaterThan(30 * 60 * 1000);
+			expect(mocks.observe).toHaveBeenCalledTimes(21);
+			for (const [lookup] of mocks.observe.mock.calls) {
+				expect(lookup).toMatchObject({ videoId: "video", jobId: "job-1" });
+			}
 			expect(mocks.fetch.mock.calls.map(([url]) => url)).toEqual([
 				"https://www.loom.com/api/campaigns/sessions/loom-video/transcoded-url",
 				"https://worker.example.com/video/import",
