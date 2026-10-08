@@ -1,11 +1,5 @@
 import type { CSSProperties } from "react";
-import {
-	LOOM_MARK_PATH,
-	LoopSparks,
-	SceneCursor,
-	SceneRipple,
-	Sparks,
-} from "./paper";
+import { LOOM_MARK_PATH, LoopSparks, SceneCursor, SceneRipple } from "./paper";
 
 const white = { fill: "var(--ob-surface)" } as const;
 const paper2 = { fill: "var(--ob-paper-2)" } as const;
@@ -251,10 +245,6 @@ export const LoomScene = () => (
 			]}
 		/>
 
-		<path
-			className="ob-ink is-soft ob-loom-trail"
-			d="M 92 97 C 150 14 262 12 316 152"
-		/>
 		<g className="ob-loom-flyer">
 			<rect
 				x="-20"
@@ -307,6 +297,14 @@ const MIC_BARS = Array.from({ length: 16 }, (_, index) => ({
 	j: index % 7,
 }));
 
+const SCREEN_CARDS = [
+	{ id: "now-1", x: 32, y: 60, tag: "var(--ob-green)", line: 34 },
+	{ id: "now-2", x: 32, y: 84, tag: "var(--ob-green)", line: 24 },
+	{ id: "next-1", x: 92, y: 60, tag: "var(--ob-accent)", line: 30 },
+	{ id: "next-2", x: 92, y: 84, tag: "var(--ob-accent)", line: 38 },
+	{ id: "later-1", x: 152, y: 60, tag: "var(--ob-camera)", line: 28 },
+] as const;
+
 export const RecordScene = () => (
 	<svg viewBox="0 0 360 220" className="ob-scene" aria-hidden="true">
 		<g className="ob-boil">
@@ -323,19 +321,32 @@ export const RecordScene = () => (
 				d="M 108 154 L 104 170 M 136 154 L 140 170 M 92 172 L 152 172"
 				className="ob-ink"
 			/>
-			<rect
-				x="150"
-				y="40"
-				width="62"
-				height="48"
-				rx="6"
-				className="ob-ink is-track"
-			/>
-			<path
-				d="M 156 78 L 168 66 L 178 72 L 192 54 L 206 60"
-				className="ob-ink is-accent"
-				style={{ strokeWidth: 1.8 }}
-			/>
+			{SCREEN_CARDS.map((card) => (
+				<g key={card.id}>
+					<rect
+						x={card.x}
+						y={card.y}
+						width="52"
+						height="18"
+						rx="4"
+						fill="var(--ob-surface)"
+						stroke="var(--ob-track-strong)"
+						strokeWidth="1.3"
+					/>
+					<path
+						d={`M ${card.x + 5} ${card.y + 6} L ${card.x + 13} ${card.y + 6}`}
+						stroke={card.tag}
+						strokeWidth="2.2"
+						strokeLinecap="round"
+					/>
+					<path
+						d={`M ${card.x + 5} ${card.y + 12.5} L ${card.x + 5 + card.line} ${card.y + 12.5}`}
+						stroke="var(--ob-ink-faint)"
+						strokeWidth="1.8"
+						strokeLinecap="round"
+					/>
+				</g>
+			))}
 			{SOURCE_GLYPHS.map((source, index) => (
 				<rect
 					key={source.label}
@@ -350,11 +361,21 @@ export const RecordScene = () => (
 			))}
 		</g>
 
-		<rect x="32" y="40" width="56" height="7" rx="3.5" fill="var(--ob-track)" />
-		<rect x="32" y="57" width="104" height="5" rx="2.5" style={paper2} />
-		<rect x="32" y="68" width="84" height="5" rx="2.5" style={paper2} />
-		<rect x="32" y="79" width="96" height="5" rx="2.5" style={paper2} />
-		<rect x="32" y="96" width="110" height="5" rx="2.5" style={paper2} />
+		<text x="32" y="45" fontSize="8.5" fontWeight="500" className="ob-label">
+			Roadmap
+		</text>
+		{["Now", "Next", "Later"].map((title, index) => (
+			<text
+				key={title}
+				x={33 + index * 60}
+				y="56"
+				fontSize="6.5"
+				fontWeight="500"
+				className="ob-label is-soft"
+			>
+				{title}
+			</text>
+		))}
 
 		{SOURCE_GLYPHS.map((source, index) => {
 			const y = 30 + index * 36;
@@ -478,6 +499,14 @@ export const RecordScene = () => (
 				strokeWidth="1.6"
 				strokeDasharray="5 4"
 			/>
+			<path
+				className="ob-boil"
+				d="M 88 89 C 92 78 142 76 150 89 C 156 101 137 108 118 108 C 98 108 85 101 88 93"
+				fill="none"
+				stroke="var(--ob-accent)"
+				strokeWidth="1.8"
+				strokeLinecap="round"
+			/>
 			<circle
 				cx="35"
 				cy="139"
@@ -535,9 +564,16 @@ export const RecordScene = () => (
 					stroke="var(--ob-camera)"
 					strokeWidth="1.8"
 				/>
-				<circle cx="190" cy="118" r="1.8" fill="var(--ob-ink)" />
-				<circle cx="202" cy="118" r="1.8" fill="var(--ob-ink)" />
-				<path d="M 189 126 Q 196 132 203 126" className="ob-ink" />
+				<circle
+					cx="196"
+					cy="117"
+					r="6.5"
+					fill="color-mix(in srgb, var(--ob-camera) 55%, var(--ob-surface))"
+				/>
+				<path
+					d="M 181.7 134.5 C 184 127.5 189.5 125.5 196 125.5 C 202.5 125.5 208 127.5 210.3 134.5 A 19 19 0 0 1 181.7 134.5 Z"
+					fill="color-mix(in srgb, var(--ob-camera) 55%, var(--ob-surface))"
+				/>
 			</g>
 		</g>
 
@@ -1044,15 +1080,6 @@ export const LoomToCapDoodle = () => (
 		<circle cx="97" cy="46" r="15" fill="var(--ob-accent)" />
 		<circle cx="97" cy="46" r="10" fill="#ADC9FF" />
 		<circle cx="97" cy="46" r="6.5" fill="#fff" />
-		<g className="ob-boil">
-			<Sparks
-				delay={1}
-				points={[
-					[110, 22, 2.6],
-					[116, 66, 2.2],
-				]}
-			/>
-		</g>
 	</svg>
 );
 
@@ -1090,9 +1117,16 @@ export const RecordDoodle = () => (
 					stroke="var(--ob-camera)"
 					strokeWidth="2.2"
 				/>
-				<circle cx="87.5" cy="57" r="1.6" fill="var(--ob-ink)" />
-				<circle cx="96.5" cy="57" r="1.6" fill="var(--ob-ink)" />
-				<path d="M 87 63 Q 92 67 97 63" className="ob-ink" />
+				<circle
+					cx="92"
+					cy="56.5"
+					r="4.6"
+					fill="color-mix(in srgb, var(--ob-camera) 55%, var(--ob-surface))"
+				/>
+				<path
+					d="M 79.4 66 C 81.5 61.5 86 59.8 92 59.8 C 98 59.8 102.5 61.5 104.6 66 A 14 14 0 0 1 79.4 66 Z"
+					fill="color-mix(in srgb, var(--ob-camera) 55%, var(--ob-surface))"
+				/>
 			</g>
 		</g>
 	</svg>
@@ -1130,24 +1164,22 @@ export const UploadDoodle = () => (
 
 export const DoneDoodle = () => (
 	<svg
-		viewBox="0 0 120 104"
-		className="h-auto w-24 overflow-visible"
+		viewBox="0 0 64 64"
+		className="h-auto w-14 overflow-visible"
 		aria-hidden="true"
 	>
 		<g className="ob-boil">
 			<path
 				pathLength={1}
-				className="ob-ink is-bold ob-draw"
-				style={{ "--d": "0.05s", strokeWidth: 4.5 } as CSSProperties}
-				d="M 34 58 L 52 76 L 90 30"
+				className="ob-ink is-green ob-draw"
+				style={{ "--d": "0.05s", strokeWidth: 2.6 } as CSSProperties}
+				d="M 33 5 C 49 5 59 16 59 31 C 59 47 47 59 32 59 C 16 59 5 47 5 32 C 5 18 15 6 30 5.2"
 			/>
-			<Sparks
-				delay={0.55}
-				points={[
-					[24, 22, 3.2],
-					[98, 14, 3.2],
-					[104, 64, 2.6],
-				]}
+			<path
+				pathLength={1}
+				className="ob-ink is-green ob-draw"
+				style={{ "--d": "0.6s", strokeWidth: 3.4 } as CSSProperties}
+				d="M 20 33 L 28.5 41.5 L 44.5 24"
 			/>
 		</g>
 	</svg>

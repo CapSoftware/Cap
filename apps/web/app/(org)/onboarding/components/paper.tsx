@@ -141,25 +141,6 @@ export const LoopSparks = ({
 	</>
 );
 
-export const Sparks = ({
-	points,
-	delay = 0.6,
-}: {
-	points: readonly (readonly [number, number, number])[];
-	delay?: number;
-}) => (
-	<>
-		{points.map(([x, y, s], index) => (
-			<path
-				key={`${x}-${y}`}
-				className="ob-spark"
-				d={SPARK_SHAPE(x, y, s)}
-				style={{ "--d": `${delay + index * 0.12}s` } as CSSProperties}
-			/>
-		))}
-	</>
-);
-
 const PROGRESS_MARKS = Array.from(
 	{ length: ONBOARDING_PROGRESS_TOTAL },
 	(_, mark) => mark,

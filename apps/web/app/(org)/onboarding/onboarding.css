@@ -413,19 +413,9 @@
 }
 
 .ob-draw {
-	stroke-dasharray: 1;
+	stroke-dasharray: 1 2;
 	stroke-dashoffset: 1;
 	animation: ob-draw 0.9s ease var(--d, 0s) forwards;
-}
-.ob-spark {
-	fill: none;
-	stroke: var(--ob-accent);
-	stroke-width: 2.4;
-	stroke-linecap: round;
-	opacity: 0;
-	transform-box: fill-box;
-	transform-origin: center;
-	animation: ob-spark 0.5s ease var(--d, 0.6s) forwards;
 }
 .ob-bob {
 	animation: ob-bob 1.9s ease-in-out infinite;
@@ -460,7 +450,7 @@
 }
 .ob-progress-mark.is-current {
 	stroke: var(--ob-accent);
-	stroke-dasharray: 1;
+	stroke-dasharray: 1 2;
 	stroke-dashoffset: 1;
 	animation: ob-draw 0.7s ease 0.15s forwards;
 }
@@ -566,6 +556,24 @@
 	animation-delay: calc((var(--at) - 1) * var(--loop));
 }
 
+.ob-pv-progress {
+	transform: scaleX(0.42);
+	transform-origin: left center;
+	animation: ob-pv-progress 12s linear infinite;
+}
+.ob-pv-cursor {
+	transform: translate(198px, 104px);
+	animation: ob-pv-cursor 12s cubic-bezier(0.45, 0, 0.2, 1) infinite;
+}
+.ob-pv-circle {
+	stroke-dasharray: 1 2;
+	stroke-dashoffset: 0;
+	animation: ob-pv-circle 12s ease infinite;
+}
+.ob-pv-cam {
+	animation: ob-pv-cam 4.2s ease-in-out infinite;
+}
+
 .ob-loom-copy-label {
 	opacity: 0;
 	animation: ob-loom-copy var(--loop) linear infinite;
@@ -585,12 +593,6 @@
 	opacity: 0;
 	animation: ob-loom-focus var(--loop) linear infinite;
 }
-.ob-loom-trail {
-	opacity: 0;
-	animation:
-		ob-march 1s linear infinite,
-		ob-loom-trail var(--loop) linear infinite;
-}
 .ob-loom-flyer {
 	opacity: 0;
 	animation: ob-loom-fly var(--loop) cubic-bezier(0.45, 0, 0.25, 1) infinite;
@@ -599,7 +601,7 @@
 	animation: ob-loom-slot var(--loop) linear infinite;
 }
 .ob-loom-check {
-	stroke-dasharray: 1;
+	stroke-dasharray: 1 2;
 	stroke-dashoffset: 0;
 	animation: ob-loom-check var(--loop) ease infinite;
 }
@@ -730,20 +732,6 @@
 		stroke-dashoffset: 0;
 	}
 }
-@keyframes ob-spark {
-	from {
-		opacity: 0;
-		transform: scale(0.2);
-	}
-	60% {
-		opacity: 1;
-		transform: scale(1.2);
-	}
-	to {
-		opacity: 1;
-		transform: scale(1);
-	}
-}
 @keyframes ob-bob {
 	0%,
 	100% {
@@ -847,6 +835,60 @@
 	}
 }
 
+@keyframes ob-pv-progress {
+	from {
+		transform: scaleX(0.04);
+	}
+	to {
+		transform: scaleX(1);
+	}
+}
+@keyframes ob-pv-cursor {
+	0% {
+		opacity: 0;
+		transform: translate(70px, 150px);
+	}
+	6% {
+		opacity: 1;
+		transform: translate(76px, 140px);
+	}
+	24%,
+	84% {
+		opacity: 1;
+		transform: translate(198px, 104px);
+	}
+	92%,
+	100% {
+		opacity: 0;
+		transform: translate(240px, 146px);
+	}
+}
+@keyframes ob-pv-circle {
+	0%,
+	26% {
+		opacity: 1;
+		stroke-dashoffset: 1;
+	}
+	36%,
+	84% {
+		opacity: 1;
+		stroke-dashoffset: 0;
+	}
+	92%,
+	100% {
+		opacity: 0;
+		stroke-dashoffset: 0;
+	}
+}
+@keyframes ob-pv-cam {
+	0%,
+	100% {
+		transform: translateY(0);
+	}
+	50% {
+		transform: translateY(-1.5px);
+	}
+}
 @keyframes ob-loom-cursor {
 	0% {
 		opacity: 0;
@@ -953,20 +995,6 @@
 		opacity: 0;
 	}
 }
-@keyframes ob-loom-trail {
-	0%,
-	65% {
-		opacity: 0;
-	}
-	68%,
-	86% {
-		opacity: 1;
-	}
-	90%,
-	100% {
-		opacity: 0;
-	}
-}
 @keyframes ob-loom-fly {
 	0%,
 	65% {
@@ -978,7 +1006,7 @@
 		transform: translate(92px, 97px) scale(1);
 	}
 	77% {
-		transform: translate(196px, 30px) scale(0.92) rotate(-6deg);
+		transform: translate(196px, 6px) scale(0.92) rotate(-6deg);
 	}
 	86% {
 		opacity: 1;
@@ -1497,7 +1525,6 @@
 		filter: none;
 	}
 	.ob-draw,
-	.ob-spark,
 	.ob-rise,
 	.ob-fade,
 	.ob-progress-mark.is-current {
@@ -1517,6 +1544,10 @@
 	.ob-choice:hover .ob-doodle-hover,
 	.ob-wave,
 	.ob-greeting:hover .ob-wave,
+	.ob-pv-progress,
+	.ob-pv-cursor,
+	.ob-pv-circle,
+	.ob-pv-cam,
 	.ob-theme-icon,
 	.ob-scene * {
 		animation: none;
