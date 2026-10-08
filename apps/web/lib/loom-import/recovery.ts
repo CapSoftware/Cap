@@ -5,7 +5,7 @@ import {
 	videos,
 	videoUploads,
 } from "@cap/database/schema";
-import { and, eq, inArray, lt } from "drizzle-orm";
+import { and, eq, inArray, isNull, lt, ne, or } from "drizzle-orm";
 import { start } from "workflow/api";
 import { importLoomVideoWorkflow } from "@/workflows/import-loom-video";
 import { loomImportJobWorkflow } from "@/workflows/loom-import-job";
@@ -18,6 +18,14 @@ const SILENT_IMPORT_MS = 2 * 60 * 60 * 1000;
 const SILENT_IMPORT_BATCH = 500;
 export const LOOM_IMPORT_SILENT_ERROR =
 	"This video stopped responding while it was copying. Try it again.";
+export const LOOM_IMPORT_RESTART_MESSAGE =
+	"Restarting a Loom import that stalled before copying...";
+
+const notRestartedYet = () =>
+	or(
+		isNull(videoUploads.processingMessage),
+		ne(videoUploads.processingMessage, LOOM_IMPORT_RESTART_MESSAGE),
+	);
 
 async function resumeStaleChecks(now: Date, limit: number) {
 	const staleChecking = await db()
@@ -81,6 +89,7 @@ async function restartStuckStarts(now: Date, limit: number) {
 				eq(loomImportJobItems.status, "importing"),
 				eq(videoUploads.phase, "uploading"),
 				lt(videoUploads.updatedAt, new Date(now.getTime() - STUCK_START_MS)),
+				notRestartedYet(),
 			),
 		)
 		.limit(limit);
@@ -93,7 +102,7 @@ async function restartStuckStarts(now: Date, limit: number) {
 		const claim = await db()
 			.update(videoUploads)
 			.set({
-				processingMessage: "Retrying Loom import...",
+				processingMessage: LOOM_IMPORT_RESTART_MESSAGE,
 				rawFileKey,
 				updatedAt: now,
 			})
@@ -102,6 +111,7 @@ async function restartStuckStarts(now: Date, limit: number) {
 					eq(videoUploads.videoId, row.videoId),
 					eq(videoUploads.phase, "uploading"),
 					eq(videoUploads.updatedAt, row.uploadUpdatedAt),
+					notRestartedYet(),
 				),
 			);
 		if (affectedRows(claim) !== 1) continue;

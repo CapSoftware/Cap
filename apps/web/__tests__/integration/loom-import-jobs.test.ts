@@ -90,9 +90,11 @@ import {
 	resolveLoomImportJob,
 } from "@/lib/loom-import/jobs";
 import {
+	LOOM_IMPORT_RESTART_MESSAGE,
 	LOOM_IMPORT_SILENT_ERROR,
 	recoverLoomImportJobs,
 } from "@/lib/loom-import/recovery";
+import { markLoomImportRetrying } from "@/lib/loom-import/retry";
 import {
 	getLoomImportSnapshot,
 	LOOM_IMPORT_CURSOR_OVERLAP_MS,
@@ -741,7 +743,7 @@ describe.runIf(Boolean(databaseUrl))(
 				.where(eq(videoUploads.videoId, videoId));
 			expect(upload).toMatchObject({
 				phase: "uploading",
-				processingMessage: "Retrying Loom import...",
+				processingMessage: LOOM_IMPORT_RESTART_MESSAGE,
 			});
 
 			fixture.start.mockClear();
@@ -1020,6 +1022,86 @@ describe.runIf(Boolean(databaseUrl))(
 				error: LOOM_IMPORT_SILENT_ERROR,
 			});
 			expect(second?.status).toBe("importing");
+		});
+
+		it("restarts a stalled upload once, then frees its slot if the restart never moves", async () => {
+			fixture.concurrency = "1";
+			const owner = await makeOrganization({ pro: true });
+			const jobId = await readyJob(owner, 2);
+			await dispatchLoomImportJob(jobId);
+			const [stalled] = await inFlight();
+			const videoId = stalled?.videoId as Video.VideoId;
+			const age = async (hours: number) =>
+				database()
+					.update(videoUploads)
+					.set({ updatedAt: new Date(Date.now() - hours * 60 * 60 * 1000) })
+					.where(eq(videoUploads.videoId, videoId));
+
+			await age(1);
+			expect(await recoverLoomImportJobs()).toMatchObject({
+				restarted: 1,
+				silent: 0,
+			});
+			await age(1);
+			expect(await recoverLoomImportJobs()).toMatchObject({
+				restarted: 0,
+				silent: 0,
+			});
+			await age(3);
+			expect(await recoverLoomImportJobs()).toMatchObject({
+				restarted: 0,
+				silent: 1,
+				started: 1,
+			});
+			const [first, second] = await items(jobId);
+			expect(first).toMatchObject({
+				status: "failed",
+				error: LOOM_IMPORT_SILENT_ERROR,
+			});
+			expect(second?.status).toBe("importing");
+		});
+
+		it("shows a retry from the video page as copying while it runs", async () => {
+			const owner = await makeOrganization({ pro: true });
+			const jobId = await readyJob(owner, 1);
+			await dispatchLoomImportJob(jobId);
+			const videoId = (await items(jobId))[0]?.videoId as Video.VideoId;
+			await failVideo(videoId, "Media server unavailable");
+			expect(await jobStatus(jobId)).toBe("completed");
+			await database()
+				.update(loomImportJobItems)
+				.set({ updatedAt: new Date(Date.now() - 60_000) })
+				.where(eq(loomImportJobItems.jobId, jobId));
+			const before = await getLoomImportSnapshot({
+				jobId,
+				userId: owner.ownerId,
+			});
+
+			await database()
+				.update(videoUploads)
+				.set({
+					phase: "processing",
+					processingProgress: 35,
+					processingError: null,
+					processingMessage: "Retrying Loom import...",
+				})
+				.where(eq(videoUploads.videoId, videoId));
+			await markLoomImportRetrying(videoId);
+			const delta = await getLoomImportSnapshot({
+				jobId,
+				userId: owner.ownerId,
+				since: before?.cursor,
+			});
+			expect(delta?.items).toMatchObject([
+				{ status: "importing", progress: 35, videoId },
+			]);
+			expect((await dispatchLoomImports()).inFlight).toBe(1);
+
+			await finishVideo(videoId);
+			expect((await items(jobId))[0]).toMatchObject({
+				status: "complete",
+				error: null,
+			});
 		});
 	},
 );
