@@ -1370,7 +1370,15 @@ async function processVideoAsync(
 		if (isWebm) {
 			updateJob(jobId, { message: "Checking the original recording..." });
 			await withJobHeartbeat(jobId, () =>
-				validateVideoInput(inputTempFile.path, abortController.signal),
+				validateVideoInput(
+					inputTempFile.path,
+					abortController.signal,
+					undefined,
+					{
+						idleTimeoutMs: FFMPEG_IDLE_TIMEOUT_MS,
+						onProgress: () => markJobProgress(jobId),
+					},
+				),
 			);
 		}
 

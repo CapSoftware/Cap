@@ -208,4 +208,37 @@ describe("raw recording input validation", () => {
 			"timed out",
 		);
 	});
+
+	test("reports decoding progress while it checks a clean recording", async () => {
+		let reports = 0;
+		await expect(
+			validateVideoInput(clean, undefined, undefined, {
+				idleTimeoutMs: 5_000,
+				onProgress: () => reports++,
+			}),
+		).resolves.toBeUndefined();
+		expect(reports).toBeGreaterThan(0);
+	});
+
+	test("still rejects a damaged recording while tracking progress", async () => {
+		await expect(
+			validateVideoInput(corrupt, undefined, undefined, {
+				idleTimeoutMs: 5_000,
+				onProgress: () => {},
+			}),
+		).rejects.toThrow("original upload has been preserved");
+	});
+
+	test("stops a check whose input stops producing frames", async () => {
+		const stalled = join(directory, "stalled.webm");
+		execFileSync("mkfifo", [stalled]);
+		let reports = 0;
+		await expect(
+			validateVideoInput(stalled, undefined, undefined, {
+				idleTimeoutMs: 1_000,
+				onProgress: () => reports++,
+			}),
+		).rejects.toThrow("Stopped making progress");
+		expect(reports).toBe(0);
+	}, 30_000);
 });
