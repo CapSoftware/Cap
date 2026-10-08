@@ -146,8 +146,8 @@ async function validateProcessingRequest(
 
 const MEDIA_SERVER_START_MAX_ATTEMPTS = 2;
 const MEDIA_SERVER_START_RETRY_BASE_MS = 250;
-const MEDIA_SERVER_PRESIGNED_GET_EXPIRES_SECONDS = 3 * 60 * 60;
-const MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS = 3 * 60 * 60;
+const MEDIA_SERVER_PRESIGNED_GET_EXPIRES_SECONDS = 24 * 60 * 60;
+const MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS = 24 * 60 * 60;
 
 function getInputExtension(rawFileKey: string): string {
 	const parts = rawFileKey.split(".");
