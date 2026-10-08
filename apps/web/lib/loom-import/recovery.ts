@@ -5,18 +5,20 @@ import {
 	videos,
 	videoUploads,
 } from "@cap/database/schema";
-import { and, eq, lt } from "drizzle-orm";
+import { and, eq, inArray, lt } from "drizzle-orm";
 import { start } from "workflow/api";
 import { importLoomVideoWorkflow } from "@/workflows/import-loom-video";
 import { loomImportJobWorkflow } from "@/workflows/loom-import-job";
-import { dispatchLoomImportJob, rawFileKeyFor } from "./dispatch";
+import { dispatchLoomImports, rawFileKeyFor } from "./dispatch";
 import { affectedRows } from "./jobs";
 
 const STALE_CHECKING_MS = 10 * 60 * 1000;
-const STALE_IMPORTING_MS = 2 * 60 * 1000;
 const STUCK_START_MS = 30 * 60 * 1000;
+const SILENT_IMPORT_MS = 2 * 60 * 60 * 1000;
+export const LOOM_IMPORT_SILENT_ERROR =
+	"This video stopped responding while it was copying. Try it again.";
 
-export async function recoverLoomImportJobs(now = new Date(), limit = 20) {
+async function resumeStaleChecks(now: Date, limit: number) {
 	const staleChecking = await db()
 		.select({ id: loomImportJobs.id, updatedAt: loomImportJobs.updatedAt })
 		.from(loomImportJobs)
@@ -54,91 +56,133 @@ export async function recoverLoomImportJobs(now = new Date(), limit = 20) {
 			});
 		}
 	}
+	return { checking: staleChecking.length, resumed };
+}
 
-	const staleImporting = await db()
-		.select({ id: loomImportJobs.id })
-		.from(loomImportJobs)
+async function restartStuckStarts(now: Date, limit: number) {
+	const stuck = await db()
+		.select({
+			videoId: videos.id,
+			ownerId: videos.ownerId,
+			bucket: videos.bucket,
+			loomVideoId: loomImportJobItems.loomVideoId,
+			rawFileKey: videoUploads.rawFileKey,
+			uploadUpdatedAt: videoUploads.updatedAt,
+		})
+		.from(loomImportJobItems)
+		.innerJoin(videos, eq(videos.id, loomImportJobItems.videoId))
+		.innerJoin(
+			videoUploads,
+			eq(videoUploads.videoId, loomImportJobItems.videoId),
+		)
 		.where(
 			and(
-				eq(loomImportJobs.status, "importing"),
-				lt(
-					loomImportJobs.updatedAt,
-					new Date(now.getTime() - STALE_IMPORTING_MS),
-				),
+				eq(loomImportJobItems.status, "importing"),
+				eq(videoUploads.phase, "uploading"),
+				lt(videoUploads.updatedAt, new Date(now.getTime() - STUCK_START_MS)),
 			),
 		)
 		.limit(limit);
 
 	let restarted = 0;
-	for (const job of staleImporting) {
-		const stuck = await db()
-			.select({
-				videoId: videos.id,
-				ownerId: videos.ownerId,
-				bucket: videos.bucket,
-				loomVideoId: loomImportJobItems.loomVideoId,
-				rawFileKey: videoUploads.rawFileKey,
-				uploadUpdatedAt: videoUploads.updatedAt,
+	for (const row of stuck) {
+		if (!row.loomVideoId) continue;
+		const rawFileKey =
+			row.rawFileKey ?? rawFileKeyFor(row.ownerId, row.videoId);
+		const claim = await db()
+			.update(videoUploads)
+			.set({
+				processingMessage: "Retrying Loom import...",
+				rawFileKey,
+				updatedAt: now,
 			})
-			.from(loomImportJobItems)
-			.innerJoin(videos, eq(videos.id, loomImportJobItems.videoId))
-			.innerJoin(
-				videoUploads,
-				eq(videoUploads.videoId, loomImportJobItems.videoId),
-			)
 			.where(
 				and(
-					eq(loomImportJobItems.jobId, job.id),
-					eq(loomImportJobItems.status, "importing"),
+					eq(videoUploads.videoId, row.videoId),
 					eq(videoUploads.phase, "uploading"),
-					lt(videoUploads.updatedAt, new Date(now.getTime() - STUCK_START_MS)),
+					eq(videoUploads.updatedAt, row.uploadUpdatedAt),
 				),
 			);
-		for (const row of stuck) {
-			if (!row.loomVideoId) continue;
-			const rawFileKey =
-				row.rawFileKey ?? rawFileKeyFor(row.ownerId, row.videoId);
-			const claim = await db()
-				.update(videoUploads)
-				.set({
-					processingMessage: "Retrying Loom import...",
-					rawFileKey,
-					updatedAt: now,
-				})
-				.where(
-					and(
-						eq(videoUploads.videoId, row.videoId),
-						eq(videoUploads.phase, "uploading"),
-						eq(videoUploads.updatedAt, row.uploadUpdatedAt),
-					),
-				);
-			if (affectedRows(claim) !== 1) continue;
-			try {
-				await start(importLoomVideoWorkflow, [
-					{
-						videoId: row.videoId,
-						userId: row.ownerId,
-						rawFileKey,
-						bucketId: row.bucket,
-						loomVideoId: row.loomVideoId,
-						reuseExistingRawUpload: true,
-					},
-				]);
-				restarted++;
-			} catch (error) {
-				console.error("[loom-import] Could not restart stuck import", {
+		if (affectedRows(claim) !== 1) continue;
+		try {
+			await start(importLoomVideoWorkflow, [
+				{
 					videoId: row.videoId,
-					error,
-				});
-			}
+					userId: row.ownerId,
+					rawFileKey,
+					bucketId: row.bucket,
+					loomVideoId: row.loomVideoId,
+					reuseExistingRawUpload: true,
+				},
+			]);
+			restarted++;
+		} catch (error) {
+			console.error("[loom-import] Could not restart stuck import", {
+				videoId: row.videoId,
+				error,
+			});
 		}
-		await dispatchLoomImportJob(job.id);
 	}
+	return restarted;
+}
 
+async function failSilentImports(now: Date, limit: number) {
+	const silent = await db()
+		.select({
+			videoId: videoUploads.videoId,
+			updatedAt: videoUploads.updatedAt,
+		})
+		.from(loomImportJobItems)
+		.innerJoin(
+			videoUploads,
+			eq(videoUploads.videoId, loomImportJobItems.videoId),
+		)
+		.where(
+			and(
+				eq(loomImportJobItems.status, "importing"),
+				inArray(videoUploads.phase, [
+					"uploading",
+					"processing",
+					"generating_thumbnail",
+				]),
+				lt(videoUploads.updatedAt, new Date(now.getTime() - SILENT_IMPORT_MS)),
+			),
+		)
+		.limit(limit);
+
+	let failed = 0;
+	for (const row of silent) {
+		const result = await db()
+			.update(videoUploads)
+			.set({
+				phase: "error",
+				processingError: LOOM_IMPORT_SILENT_ERROR,
+				processingMessage: "Loom import failed",
+				updatedAt: now,
+			})
+			.where(
+				and(
+					eq(videoUploads.videoId, row.videoId),
+					eq(videoUploads.updatedAt, row.updatedAt),
+				),
+			);
+		failed += affectedRows(result);
+	}
+	return failed;
+}
+
+export async function recoverLoomImportJobs(now = new Date(), limit = 20) {
+	const { checking, resumed } = await resumeStaleChecks(now, limit);
+	const restarted = await restartStuckStarts(now, limit);
+	const silent = await failSilentImports(now, limit);
+	const dispatched = await dispatchLoomImports();
 	return {
-		checking: staleChecking.length,
+		checking,
 		resumed,
-		importing: staleImporting.length,
 		restarted,
+		silent,
+		started: dispatched.started,
+		inFlight: dispatched.inFlight,
+		waiting: dispatched.waiting,
 	};
 }

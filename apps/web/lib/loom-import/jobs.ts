@@ -25,6 +25,7 @@ import { provisionOrganizationInvitee } from "@/lib/organization-provisioning";
 import { canManageOrganizationSettings } from "@/lib/permissions/roles";
 import { hasProSubscription } from "@/lib/pro-subscription";
 import {
+	decodeLoomImportRows,
 	extractLoomVideoId,
 	isValidImportEmail,
 	LOOM_IMPORT_MAX_ROWS,
@@ -33,6 +34,7 @@ import {
 	normalizeImportEmail,
 	normalizeImportSpaceName,
 } from "./csv";
+import { LOOM_IMPORT_JOB_STATUS_INDEX } from "./indexes";
 import {
 	type LoomVideoLookup,
 	lookupLoomVideos,
@@ -42,6 +44,8 @@ import {
 const INSERT_CHUNK = 500;
 const LOOM_IMPORT_JOBS_PER_HOUR = 30;
 const IN_CHUNK = 500;
+const RESOLVE_HEARTBEAT_MS = 60_000;
+const RESOLVE_BUDGET_MS = 90_000;
 
 export class LoomImportError extends Error {}
 
@@ -98,13 +102,14 @@ export function planLoomImportItems(
 	rows: unknown,
 	{ isAdmin }: { isAdmin: boolean },
 ): ItemInsert[] {
-	if (!Array.isArray(rows)) throw new LoomImportError("No Loom links found.");
+	const list = Array.isArray(rows) ? rows : decodeLoomImportRows(rows);
+	if (!list) throw new LoomImportError("No Loom links found.");
 	const seen = new Map<string, number>();
 	const usedRows = new Set<number>();
 	const items: ItemInsert[] = [];
 	const now = new Date();
 
-	(rows as IncomingRow[]).forEach((row, index) => {
+	(list as IncomingRow[]).forEach((row, index) => {
 		const candidateRow =
 			typeof row?.rowNumber === "number" &&
 			Number.isInteger(row.rowNumber) &&
@@ -316,14 +321,41 @@ function resolvedItem(
 
 export async function resolveLoomImportJob(
 	jobId: string,
-	options: { fetchImpl?: typeof fetch } = {},
-) {
+	options: {
+		fetchImpl?: typeof fetch;
+		giveUp?: boolean;
+		budgetMs?: number;
+	} = {},
+): Promise<{ waiting: number }> {
 	const [job] = await db()
 		.select({ orgId: loomImportJobs.orgId, status: loomImportJobs.status })
 		.from(loomImportJobs)
 		.where(eq(loomImportJobs.id, jobId))
 		.limit(1);
-	if (!job || job.status === "cancelled" || job.status === "completed") return;
+	if (!job || job.status === "cancelled" || job.status === "completed")
+		return { waiting: 0 };
+
+	if (options.giveUp) {
+		const now = new Date();
+		await db()
+			.update(loomImportJobItems)
+			.set({
+				status: "failed",
+				error: loomLookupError({ status: "error" }),
+				updatedAt: now,
+			})
+			.where(
+				and(
+					eq(loomImportJobItems.jobId, jobId),
+					eq(loomImportJobItems.status, "pending"),
+				),
+			);
+		await db()
+			.update(loomImportJobs)
+			.set({ updatedAt: now })
+			.where(eq(loomImportJobs.id, jobId));
+		return { waiting: 0 };
+	}
 
 	const pending: PendingItem[] = await db()
 		.select({
@@ -333,7 +365,7 @@ export async function resolveLoomImportJob(
 			loomUrl: loomImportJobItems.loomUrl,
 			loomVideoId: loomImportJobItems.loomVideoId,
 		})
-		.from(loomImportJobItems)
+		.from(loomImportJobItems, { forceIndex: LOOM_IMPORT_JOB_STATUS_INDEX })
 		.where(
 			and(
 				eq(loomImportJobItems.jobId, jobId),
@@ -341,7 +373,7 @@ export async function resolveLoomImportJob(
 			),
 		)
 		.orderBy(asc(loomImportJobItems.rowNumber));
-	if (pending.length === 0) return;
+	if (pending.length === 0) return { waiting: 0 };
 
 	const loomIds = Array.from(
 		new Set(
@@ -422,16 +454,29 @@ export async function resolveLoomImportJob(
 		itemsByLoomId.set(item.loomVideoId, list);
 	}
 
+	let resolved = 0;
+	let touchedAt = Date.now();
+	const deadline = Date.now() + (options.budgetMs ?? RESOLVE_BUDGET_MS);
 	await lookupLoomVideos(Array.from(itemsByLoomId.keys()), {
 		fetchImpl: options.fetchImpl,
+		shouldStop: () => Date.now() > deadline,
 		onBatch: async (results) => {
 			const updates: ItemInsert[] = [];
 			const batchTime = new Date();
+			if (batchTime.getTime() - touchedAt > RESOLVE_HEARTBEAT_MS) {
+				touchedAt = batchTime.getTime();
+				await db()
+					.update(loomImportJobs)
+					.set({ updatedAt: batchTime })
+					.where(eq(loomImportJobs.id, jobId));
+			}
 			for (const [loomVideoId, lookup] of results) {
+				if (lookup.status === "error") continue;
 				for (const item of itemsByLoomId.get(loomVideoId) ?? []) {
 					updates.push(resolvedItem(item, lookup, batchTime));
 				}
 			}
+			resolved += updates.length;
 			await writeItemUpdates(updates);
 		},
 	});
@@ -440,6 +485,7 @@ export async function resolveLoomImportJob(
 		.update(loomImportJobs)
 		.set({ updatedAt: new Date() })
 		.where(eq(loomImportJobs.id, jobId));
+	return { waiting: toLookup.length - resolved };
 }
 
 async function resolveImportOwners({

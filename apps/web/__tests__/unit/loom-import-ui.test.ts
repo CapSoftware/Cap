@@ -332,10 +332,14 @@ describe("Loom importer component", () => {
 		expect(mocks.createJob).toHaveBeenCalledWith({
 			orgId: "org",
 			fileName: "loom-ids.csv",
-			rows: [
-				{ rowNumber: 1, loomUrl: `https://www.loom.com/share/${first}` },
-				{ rowNumber: 2, loomUrl: `https://www.loom.com/share/${second}` },
-			],
+			rows: {
+				owners: [],
+				spaces: [],
+				rows: [
+					[1, first, -1, -1],
+					[2, second, -1, -1],
+				],
+			},
 		});
 		await waitFor(() =>
 			expect(mocks.push).toHaveBeenCalledWith("/dashboard/import/loom/job-1"),

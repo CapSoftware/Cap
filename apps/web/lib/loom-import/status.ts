@@ -77,12 +77,16 @@ export type LoomImportJobView = {
 	isAdmin: boolean;
 };
 
-export type LoomImportSnapshot = {
-	job: LoomImportJobView;
+export type LoomImportSummaryView = {
 	counts: LoomImportCounts;
 	totalDuration: number;
 	importedDuration: number;
 	owners: number;
+};
+
+export type LoomImportSnapshot = {
+	job: LoomImportJobView;
+	summary: LoomImportSummaryView | null;
 	items: LoomImportItemView[];
 	cursor: number;
 	full: boolean;
@@ -221,6 +225,34 @@ export function countLoomImportItems(
 		counts.total++;
 	}
 	return counts;
+}
+
+export function summarizeLoomImportItems(
+	items: Iterable<Pick<LoomImportItemView, "status" | "duration" | "email">>,
+): LoomImportSummaryView {
+	const counts = emptyLoomImportCounts();
+	const owners = new Set<string>();
+	let totalDuration = 0;
+	let importedDuration = 0;
+	for (const item of items) {
+		counts[item.status]++;
+		counts.total++;
+		if (item.email) owners.add(item.email);
+		if (
+			item.duration &&
+			item.status !== "failed" &&
+			item.status !== "cancelled"
+		) {
+			totalDuration += item.duration;
+			if (item.status === "imported") importedDuration += item.duration;
+		}
+	}
+	return {
+		counts,
+		totalDuration,
+		importedDuration,
+		owners: Math.max(owners.size, 1),
+	};
 }
 
 export function loomImportProgress(

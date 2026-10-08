@@ -18,10 +18,10 @@ import {
 } from "@/app/(org)/dashboard/import/loom/[jobId]/import-list";
 import { useLoomImportJob } from "@/app/(org)/dashboard/import/loom/[jobId]/use-loom-import-job";
 import {
-	countLoomImportItems,
 	type LoomImportItemView,
 	type LoomImportJobStatus,
 	type LoomImportSnapshot,
+	summarizeLoomImportItems,
 } from "@/lib/loom-import/status";
 
 const item = (index: number, overrides: Partial<LoomImportItemView> = {}) =>
@@ -47,11 +47,13 @@ const snapshot = ({
 	full,
 	cursor,
 	status = "importing",
+	summary = full,
 }: {
 	items: LoomImportItemView[];
 	full: boolean;
 	cursor: number;
 	status?: LoomImportJobStatus;
+	summary?: boolean;
 }): LoomImportSnapshot => ({
 	job: {
 		id: "job-1",
@@ -66,10 +68,7 @@ const snapshot = ({
 		isPro: true,
 		isAdmin: true,
 	},
-	counts: countLoomImportItems(items),
-	totalDuration: 0,
-	importedDuration: 0,
-	owners: 1,
+	summary: summary ? summarizeLoomImportItems(items) : null,
 	items,
 	cursor,
 	full,
@@ -139,6 +138,7 @@ describe("useLoomImportJob", () => {
 						full: false,
 						cursor: 1_000,
 						status: "checking",
+						summary: true,
 					}),
 				}),
 			);
@@ -170,9 +170,14 @@ describe("useLoomImportJob", () => {
 			"ready",
 			"failed",
 		]);
+		expect(latest?.summary.counts).toMatchObject({
+			ready: 2,
+			failed: 1,
+			total: 3,
+		});
 
 		await act(async () => {
-			vi.advanceTimersByTime(1_500);
+			vi.advanceTimersByTime(2_000);
 		});
 		expect(requests[1]?.url).toBe(
 			"/api/import/loom/jobs?jobId=job-1&since=2000",
@@ -195,6 +200,12 @@ describe("useLoomImportJob", () => {
 			"queued",
 			"failed",
 		]);
+		expect(latest?.summary.counts).toMatchObject({
+			importing: 1,
+			queued: 1,
+			failed: 1,
+			total: 3,
+		});
 		expect(requests[2]?.url).toBe("/api/import/loom/jobs?jobId=job-1");
 
 		requests[2]?.resolve(

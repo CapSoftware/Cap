@@ -450,6 +450,73 @@ export function buildLoomImportPlan(
 	};
 }
 
+export type LoomImportRowsPayload = {
+	owners: string[];
+	spaces: string[];
+	rows: Array<[number, string, number, number]>;
+};
+
+export function encodeLoomImportRows(
+	rows: LoomImportRowInput[],
+): LoomImportRowsPayload {
+	const owners: string[] = [];
+	const spaces: string[] = [];
+	const ownerIndex = new Map<string, number>();
+	const spaceIndex = new Map<string, number>();
+	const indexOf = (
+		value: string | undefined,
+		list: string[],
+		index: Map<string, number>,
+	) => {
+		if (!value) return -1;
+		let position = index.get(value);
+		if (position === undefined) {
+			position = list.length;
+			list.push(value);
+			index.set(value, position);
+		}
+		return position;
+	};
+	return {
+		owners,
+		spaces,
+		rows: rows.map((row) => [
+			row.rowNumber,
+			extractLoomVideoId(row.loomUrl) ?? row.loomUrl,
+			indexOf(row.ownerEmail, owners, ownerIndex),
+			indexOf(row.spaceName, spaces, spaceIndex),
+		]),
+	};
+}
+
+export function decodeLoomImportRows(
+	payload: unknown,
+): LoomImportRowInput[] | null {
+	if (!payload || typeof payload !== "object") return null;
+	const { owners, spaces, rows } = payload as Partial<LoomImportRowsPayload>;
+	if (!Array.isArray(owners) || !Array.isArray(spaces) || !Array.isArray(rows))
+		return null;
+	const pick = (list: unknown[], index: unknown) =>
+		typeof index === "number" && typeof list[index] === "string"
+			? (list[index] as string)
+			: undefined;
+	return rows.map((row, index) => {
+		const [rowNumber, loomId, owner, space] = Array.isArray(row) ? row : [];
+		const id = typeof loomId === "string" ? loomId : "";
+		const ownerEmail = pick(owners, owner);
+		const spaceName = pick(spaces, space);
+		return {
+			rowNumber:
+				typeof rowNumber === "number" && Number.isInteger(rowNumber)
+					? rowNumber
+					: index + 1,
+			loomUrl: LOOM_ID_PATTERN.test(id) ? loomShareUrl(id.toLowerCase()) : id,
+			...(ownerEmail ? { ownerEmail } : {}),
+			...(spaceName ? { spaceName } : {}),
+		};
+	});
+}
+
 export const LOOM_IMPORT_ISSUE_LABELS: Record<
 	LoomImportRowIssue["reason"],
 	string

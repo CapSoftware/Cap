@@ -20,6 +20,7 @@ import {
 	type CsvTable,
 	countFilledRows,
 	detectLoomImportMapping,
+	encodeLoomImportRows,
 	LOOM_CSV_TEMPLATE,
 	LOOM_IMPORT_ISSUE_LABELS,
 	LOOM_IMPORT_MAX_ROWS,
@@ -404,7 +405,7 @@ const ReviewCard = ({
 				const result = await createLoomImportJobAction({
 					orgId,
 					fileName: source.name,
-					rows: plan.rows,
+					rows: encodeLoomImportRows(plan.rows),
 				});
 				if (!result.ok) {
 					toast.error(result.error);

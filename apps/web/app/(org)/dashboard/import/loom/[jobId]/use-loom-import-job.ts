@@ -5,35 +5,29 @@ import {
 	isLoomImportJobActive,
 	type LoomImportItemView,
 	type LoomImportJobStatus,
+	type LoomImportJobView,
 	type LoomImportSnapshot,
+	type LoomImportSummaryView,
 	loomImportWaitingStatus,
+	summarizeLoomImportItems,
 } from "@/lib/loom-import/status";
 
-const ACTIVE_POLL_MS = 1500;
+const ACTIVE_POLL_MS = 2000;
+const IDLE_POLL_MS = 10_000;
 const HIDDEN_POLL_MS = 15_000;
 const UPGRADE_POLL_MS = 2500;
+const FULL_REFRESH_MS = 180_000;
 const SNAPSHOT_TIMEOUT_MS = 20_000;
 const RATE_WINDOW_MS = 180_000;
 const RATE_MIN_SPAN_MS = 20_000;
 
-export type LoomImportSummary = Omit<
-	LoomImportSnapshot,
-	"items" | "cursor" | "full"
->;
+export type LoomImportSummary = LoomImportSummaryView & {
+	job: LoomImportJobView;
+};
 
 type RateSample = { at: number; settled: number };
 
-function toSummary(snapshot: LoomImportSnapshot): LoomImportSummary {
-	return {
-		job: snapshot.job,
-		counts: snapshot.counts,
-		totalDuration: snapshot.totalDuration,
-		importedDuration: snapshot.importedDuration,
-		owners: snapshot.owners,
-	};
-}
-
-function settledCount(summary: LoomImportSummary) {
+function settledCount(summary: LoomImportSummaryView) {
 	const { imported, failed, skipped, cancelled } = summary.counts;
 	return imported + failed + skipped + cancelled;
 }
@@ -86,7 +80,13 @@ export function useLoomImportJob(
 	const orderRef = useRef<string[]>([]);
 	const cursorRef = useRef(initial.cursor);
 	const jobStatusRef = useRef(initial.job.status);
+	const hasAllRef = useRef(initial.full);
+	const fullAtRef = useRef(initial.full ? Date.now() : 0);
+	const summaryRef = useRef<LoomImportSummaryView>(
+		initial.summary ?? summarizeLoomImportItems(initial.items),
+	);
 	const queueRef = useRef<Promise<void>>(Promise.resolve());
+	const pollDelayRef = useRef(ACTIVE_POLL_MS);
 	const samplesRef = useRef<RateSample[]>([]);
 	if (itemsRef.current === null) {
 		itemsRef.current = new Map(initial.items.map((item) => [item.id, item]));
@@ -94,9 +94,10 @@ export function useLoomImportJob(
 	}
 
 	const [items, setItems] = useState<LoomImportItemView[]>(initial.items);
-	const [summary, setSummary] = useState<LoomImportSummary>(() =>
-		toSummary(initial),
-	);
+	const [summary, setSummary] = useState<LoomImportSummary>(() => ({
+		job: initial.job,
+		...summaryRef.current,
+	}));
 	const [rate, setRate] = useState<number | null>(null);
 
 	const apply = useCallback((snapshot: LoomImportSnapshot) => {
@@ -111,11 +112,22 @@ export function useLoomImportJob(
 		orderRef.current = merged.order;
 		cursorRef.current = Math.max(cursorRef.current, snapshot.cursor);
 		jobStatusRef.current = snapshot.job.status;
+		if (snapshot.full) {
+			hasAllRef.current = true;
+			fullAtRef.current = Date.now();
+		}
+		if (snapshot.summary) {
+			summaryRef.current = snapshot.summary;
+		} else if (hasAllRef.current && merged.changed) {
+			summaryRef.current = summarizeLoomImportItems(map.values());
+		}
+		pollDelayRef.current = merged.changed
+			? ACTIVE_POLL_MS
+			: Math.min(IDLE_POLL_MS, Math.round(pollDelayRef.current * 1.5));
 
-		const next = toSummary(snapshot);
 		const now = Date.now();
 		const samples = samplesRef.current;
-		samples.push({ at: now, settled: settledCount(next) });
+		samples.push({ at: now, settled: settledCount(summaryRef.current) });
 		while (
 			samples.length > 2 &&
 			(samples[0]?.at ?? now) < now - RATE_WINDOW_MS
@@ -130,7 +142,7 @@ export function useLoomImportJob(
 				? ((last.settled - first.settled) / span) * 60_000
 				: 0;
 
-		setSummary(next);
+		setSummary({ job: snapshot.job, ...summaryRef.current });
 		setRate(perMinute > 0 ? perMinute : null);
 		if (merged.changed) {
 			const list: LoomImportItemView[] = [];
@@ -198,12 +210,14 @@ export function useLoomImportJob(
 				? HIDDEN_POLL_MS
 				: status === "awaiting_upgrade"
 					? UPGRADE_POLL_MS
-					: ACTIVE_POLL_MS;
+					: pollDelayRef.current;
 			timer = window.setTimeout(tick, wait);
 		};
 
 		const tick = () => {
-			fetchSnapshot()
+			const full =
+				hasAllRef.current && Date.now() - fullAtRef.current > FULL_REFRESH_MS;
+			fetchSnapshot(full)
 				.catch(() => undefined)
 				.finally(schedule);
 		};

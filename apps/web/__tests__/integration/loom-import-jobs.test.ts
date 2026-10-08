@@ -31,6 +31,7 @@ const fixture = vi.hoisted(() => ({
 	database: undefined as MySql2Database | undefined,
 	start: vi.fn(),
 	concurrency: "2",
+	globalConcurrency: "12",
 }));
 
 vi.mock("server-only", () => ({}));
@@ -46,6 +47,7 @@ vi.mock("@cap/env", () => ({
 	serverEnv: () => ({
 		CAP_VIDEOS_DEFAULT_PUBLIC: true,
 		LOOM_IMPORT_CONCURRENCY: fixture.concurrency,
+		LOOM_IMPORT_GLOBAL_CONCURRENCY: fixture.globalConcurrency,
 		WEB_URL: "https://cap.test",
 	}),
 }));
@@ -76,6 +78,7 @@ vi.mock("@/workflows/loom-import-job", () => ({
 import {
 	dispatchLoomImportForVideo,
 	dispatchLoomImportJob,
+	dispatchLoomImports,
 } from "@/lib/loom-import/dispatch";
 import {
 	cancelLoomImportJob,
@@ -86,7 +89,10 @@ import {
 	resetFailedLoomImportItems,
 	resolveLoomImportJob,
 } from "@/lib/loom-import/jobs";
-import { recoverLoomImportJobs } from "@/lib/loom-import/recovery";
+import {
+	LOOM_IMPORT_SILENT_ERROR,
+	recoverLoomImportJobs,
+} from "@/lib/loom-import/recovery";
 import {
 	getLoomImportSnapshot,
 	LOOM_IMPORT_CURSOR_OVERLAP_MS,
@@ -133,18 +139,18 @@ const loomFetchMock = vi.fn(
 			const alias = key.replace("id", "v");
 			if (loomId === LOOM.private) {
 				data[alias] = { __typename: "PrivateVideo", id: loomId };
-			} else if (RECORDED[loomId]) {
+			} else if (loomId === LOOM.missing) {
+				data[alias] = null;
+			} else {
 				data[alias] = {
 					__typename: "RegularUserVideo",
 					name: `Video ${loomId.slice(0, 4)}`,
-					createdAt: RECORDED[loomId],
+					createdAt: RECORDED[loomId] ?? "2024-01-01T00:00:00.000Z",
 					thumbnails: {
 						default: `https://cdn.loom.com/sessions/thumbnails/${loomId}-00001.jpg`,
 					},
 					video_properties: { duration: 120.5, width: 1920, height: 1080 },
 				};
-			} else {
-				data[alias] = null;
 			}
 		}
 		return Response.json({ data });
@@ -210,6 +216,40 @@ async function failVideo(videoId: Video.VideoId, error: string) {
 	return dispatchLoomImportForVideo(videoId);
 }
 
+function loomIds(count: number) {
+	return Array.from({ length: count }, () => randomUUID().replaceAll("-", ""));
+}
+
+async function readyJob(
+	owner: { ownerId: User.UserId; orgId: Organisation.OrganisationId },
+	count: number,
+) {
+	const { jobId } = await createLoomImportJob({
+		userId: owner.ownerId,
+		orgId: owner.orgId,
+		fileName: `${count}.csv`,
+		rows: loomIds(count).map((loomId, index) => ({
+			rowNumber: index + 2,
+			loomUrl: share(loomId),
+		})),
+	});
+	await resolveLoomImportJob(jobId, { fetchImpl: loomFetch });
+	expect(await prepareLoomImportJob(jobId)).toBe("importing");
+	return jobId;
+}
+
+async function inFlight() {
+	return database()
+		.select({
+			jobId: loomImportJobItems.jobId,
+			videoId: loomImportJobItems.videoId,
+			updatedAt: loomImportJobItems.updatedAt,
+		})
+		.from(loomImportJobItems)
+		.where(eq(loomImportJobItems.status, "importing"))
+		.orderBy(asc(loomImportJobItems.updatedAt), asc(loomImportJobItems.id));
+}
+
 describe.runIf(Boolean(databaseUrl))(
 	"Loom CSV imports with an isolated MySQL database",
 	() => {
@@ -235,10 +275,13 @@ describe.runIf(Boolean(databaseUrl))(
 			fixture.database = undefined;
 		});
 
-		beforeEach(() => {
+		beforeEach(async () => {
 			fixture.start.mockReset().mockResolvedValue({ runId: "run" });
 			fixture.concurrency = "2";
+			fixture.globalConcurrency = "12";
 			loomFetchMock.mockClear();
+			await database().delete(loomImportJobItems);
+			await database().delete(loomImportJobs);
 		});
 
 		it("checks every link, waits for Pro on the free plan, then imports with original dates in a bounded window", async () => {
@@ -302,12 +345,12 @@ describe.runIf(Boolean(databaseUrl))(
 				canStart: false,
 				isPro: false,
 			});
-			expect(waiting?.counts).toMatchObject({
+			expect(waiting?.summary?.counts).toMatchObject({
 				ready: 4,
 				failed: 3,
 				skipped: 1,
 			});
-			expect(waiting?.totalDuration).toBeCloseTo(482);
+			expect(waiting?.summary?.totalDuration).toBeCloseTo(482);
 			expect(fixture.start).not.toHaveBeenCalled();
 			expect(
 				await database().select().from(videos).where(eq(videos.orgId, orgId)),
@@ -423,7 +466,7 @@ describe.runIf(Boolean(databaseUrl))(
 			expect(state[7]?.status).toBe("importing");
 
 			const live = await getLoomImportSnapshot({ jobId, userId: ownerId });
-			expect(live?.counts).toMatchObject({
+			expect(live?.summary?.counts).toMatchObject({
 				imported: 1,
 				importing: 2,
 				failed: 4,
@@ -457,12 +500,19 @@ describe.runIf(Boolean(databaseUrl))(
 				since:
 					(settledView?.cursor ?? 0) + LOOM_IMPORT_CURSOR_OVERLAP_MS + 1_000,
 			});
-			expect(quiet?.items).toEqual([]);
+			expect(quiet?.items.map((item) => [item.row, item.status])).toEqual([
+				[4, "importing"],
+				[9, "importing"],
+			]);
 			const lastPoll = Date.now() - 1_000;
 			await database()
 				.update(videoUploads)
 				.set({ processingProgress: 40, updatedAt: new Date() })
 				.where(eq(videoUploads.videoId, state[7]?.videoId as Video.VideoId));
+			await database()
+				.update(loomImportJobItems)
+				.set({ updatedAt: new Date() })
+				.where(eq(loomImportJobItems.id, state[0]?.id as string));
 			const delta = await getLoomImportSnapshot({
 				jobId,
 				userId: ownerId,
@@ -471,8 +521,12 @@ describe.runIf(Boolean(databaseUrl))(
 			expect(delta?.full).toBe(false);
 			expect(
 				delta?.items.map((item) => [item.row, item.status, item.progress]),
-			).toEqual([[9, "importing", 40]]);
-			expect(delta?.counts.total).toBe(8);
+			).toEqual([
+				[2, "imported", undefined],
+				[4, "importing", 0],
+				[9, "importing", 40],
+			]);
+			expect(delta?.summary).toBeNull();
 
 			await finishVideo(state[2]?.videoId as Video.VideoId);
 			await finishVideo(state[7]?.videoId as Video.VideoId);
@@ -590,8 +644,8 @@ describe.runIf(Boolean(databaseUrl))(
 			await dispatchLoomImportForVideo(videoId);
 			expect((await items(jobId))[0]?.status).toBe("failed");
 			expect(
-				(await getLoomImportSnapshot({ jobId, userId: ownerId }))?.counts
-					.importing,
+				(await getLoomImportSnapshot({ jobId, userId: ownerId }))?.summary
+					?.counts.importing,
 			).toBe(1);
 
 			await finishVideo(videoId);
@@ -601,7 +655,10 @@ describe.runIf(Boolean(databaseUrl))(
 				videoId,
 			});
 			const finished = await getLoomImportSnapshot({ jobId, userId: ownerId });
-			expect(finished?.counts).toMatchObject({ imported: 1, failed: 0 });
+			expect(finished?.summary?.counts).toMatchObject({
+				imported: 1,
+				failed: 0,
+			});
 			expect(finished?.items[0]).toMatchObject({ status: "imported", videoId });
 			expect(await jobStatus(jobId)).toBe("completed");
 			const [summary] = await listLoomImportJobs({ userId: ownerId, orgId });
@@ -754,10 +811,215 @@ describe.runIf(Boolean(databaseUrl))(
 			const snapshotStartedAt = performance.now();
 			const snapshot = await getLoomImportSnapshot({ jobId, userId: ownerId });
 			const snapshotElapsed = performance.now() - snapshotStartedAt;
-			expect(snapshot?.counts.checking).toBe(2000);
+			expect(snapshot?.summary?.counts.checking).toBe(2000);
 			console.info(
 				`[loom-import benchmark] create 2000 rows: ${elapsed.toFixed(0)}ms, full snapshot: ${snapshotElapsed.toFixed(0)}ms`,
 			);
+		});
+
+		it("shares a system-wide limit fairly between people and finishes every import", async () => {
+			fixture.globalConcurrency = "6";
+			fixture.concurrency = "4";
+			const [ana, ben, cy] = await Promise.all([
+				makeOrganization({ pro: true }),
+				makeOrganization({ pro: true }),
+				makeOrganization({ pro: true }),
+			]);
+			if (!ana || !ben || !cy) throw new Error("Missing organizations.");
+			const creatorOf = new Map<string, string>();
+			for (const [owner, count] of [
+				[ana, 10],
+				[ana, 10],
+				[ben, 10],
+				[cy, 10],
+			] as const) {
+				creatorOf.set(await readyJob(owner, count), owner.ownerId);
+			}
+
+			expect((await dispatchLoomImports()).started).toBe(4);
+			expect((await dispatchLoomImports()).started).toBe(2);
+			expect((await dispatchLoomImports()).started).toBe(0);
+			const first = await inFlight();
+			expect(first).toHaveLength(6);
+			const perPerson = new Map<string, number>();
+			for (const row of first) {
+				const creator = creatorOf.get(row.jobId) ?? "";
+				perPerson.set(creator, (perPerson.get(creator) ?? 0) + 1);
+			}
+			expect([...perPerson.values()]).toEqual([2, 2, 2]);
+
+			let most = 0;
+			let mostForOneImport = 0;
+			for (let step = 0; step < 100; step++) {
+				const running = await inFlight();
+				if (running.length === 0) break;
+				most = Math.max(most, running.length);
+				const perJob = new Map<string, number>();
+				for (const row of running) {
+					perJob.set(row.jobId, (perJob.get(row.jobId) ?? 0) + 1);
+				}
+				mostForOneImport = Math.max(mostForOneImport, ...perJob.values());
+				await finishVideo(running[0]?.videoId as Video.VideoId);
+			}
+			expect(most).toBe(6);
+			expect(mostForOneImport).toBeLessThanOrEqual(4);
+			for (const jobId of creatorOf.keys()) {
+				expect(await jobStatus(jobId)).toBe("completed");
+				expect(
+					(await items(jobId)).every((item) => item.status === "complete"),
+				).toBe(true);
+			}
+			expect(fixture.start).toHaveBeenCalledTimes(40);
+		});
+
+		it("starts nothing new while the media server is busy, then carries on", async () => {
+			fixture.concurrency = "4";
+			const owner = await makeOrganization({ pro: true });
+			const jobId = await readyJob(owner, 8);
+			expect((await dispatchLoomImportJob(jobId)).started).toBe(4);
+			const [busy, done] = await inFlight();
+			await database()
+				.update(videoUploads)
+				.set({ processingMessage: "Queued for Loom import processing..." })
+				.where(eq(videoUploads.videoId, busy?.videoId as Video.VideoId));
+
+			const paused = await finishVideo(done?.videoId as Video.VideoId);
+			expect(paused).toMatchObject({ started: 0, waiting: true, inFlight: 3 });
+			expect(await inFlight()).toHaveLength(3);
+
+			await database()
+				.update(videoUploads)
+				.set({ processingMessage: "Starting video processing..." })
+				.where(eq(videoUploads.videoId, busy?.videoId as Video.VideoId));
+			expect(await dispatchLoomImports()).toMatchObject({
+				started: 1,
+				waiting: false,
+				inFlight: 4,
+			});
+		});
+
+		it("keeps checking links Loom is rate limiting instead of failing them", async () => {
+			const owner = await makeOrganization({ pro: true });
+			const ids = loomIds(30);
+			const { jobId } = await createLoomImportJob({
+				userId: owner.ownerId,
+				orgId: owner.orgId,
+				fileName: "busy.csv",
+				rows: ids.map((loomId, index) => ({
+					rowNumber: index + 2,
+					loomUrl: share(loomId),
+				})),
+			});
+			let limited = true;
+			const rateLimited = vi.fn(
+				async (url: string | URL | Request, init?: RequestInit) =>
+					limited
+						? new Response("slow down", {
+								status: 429,
+								headers: { "Retry-After": "0.01" },
+							})
+						: loomFetchMock(url, init),
+			) as unknown as typeof fetch;
+
+			expect(
+				await resolveLoomImportJob(jobId, { fetchImpl: rateLimited }),
+			).toEqual({ waiting: 30 });
+			expect(
+				(await items(jobId)).every((item) => item.status === "pending"),
+			).toBe(true);
+			expect(await jobStatus(jobId)).toBe("checking");
+
+			limited = false;
+			expect(
+				await resolveLoomImportJob(jobId, {
+					fetchImpl: rateLimited,
+					budgetMs: -1,
+				}),
+			).toEqual({ waiting: 30 });
+			expect(
+				await resolveLoomImportJob(jobId, { fetchImpl: rateLimited }),
+			).toEqual({ waiting: 0 });
+			expect(
+				(await items(jobId)).every((item) => item.status === "ready"),
+			).toBe(true);
+
+			const stuck = await createLoomImportJob({
+				userId: owner.ownerId,
+				orgId: owner.orgId,
+				fileName: "down.csv",
+				rows: [{ rowNumber: 2, loomUrl: share(loomIds(1)[0] as string) }],
+			});
+			limited = true;
+			expect(
+				await resolveLoomImportJob(stuck.jobId, {
+					fetchImpl: rateLimited,
+					giveUp: true,
+				}),
+			).toEqual({ waiting: 0 });
+			expect((await items(stuck.jobId))[0]).toMatchObject({
+				status: "failed",
+				error: "Loom didn't respond. Try again in a minute.",
+			});
+		});
+
+		it("queues a video again once when its workflow can't start", async () => {
+			fixture.concurrency = "1";
+			const owner = await makeOrganization({ pro: true });
+			const jobId = await readyJob(owner, 2);
+			fixture.start.mockRejectedValueOnce(new Error("Workflow unavailable"));
+			const quiet = vi
+				.spyOn(console, "error")
+				.mockImplementation(() => undefined);
+
+			expect((await dispatchLoomImportJob(jobId)).started).toBe(1);
+			const [first] = await items(jobId);
+			const videoId = first?.videoId as Video.VideoId;
+			expect(first).toMatchObject({ status: "importing", error: null });
+			expect(fixture.start).toHaveBeenCalledTimes(2);
+			expect(fixture.start.mock.calls[0]?.[1]?.[0]).toMatchObject({
+				videoId,
+			});
+			expect(fixture.start.mock.calls[1]?.[1]?.[0]).toMatchObject({
+				videoId,
+				reuseExistingRawUpload: true,
+			});
+
+			fixture.start
+				.mockRejectedValueOnce(new Error("Workflow unavailable"))
+				.mockRejectedValueOnce(new Error("Workflow unavailable"));
+			await finishVideo(videoId);
+			const [, second] = await items(jobId);
+			expect(second).toMatchObject({
+				status: "failed",
+				error: "Loom import could not start.",
+			});
+			expect(await jobStatus(jobId)).toBe("completed");
+			quiet.mockRestore();
+		});
+
+		it("frees the slot of a video that stopped responding", async () => {
+			fixture.concurrency = "1";
+			const owner = await makeOrganization({ pro: true });
+			const jobId = await readyJob(owner, 2);
+			await dispatchLoomImportJob(jobId);
+			const [silent] = await inFlight();
+			await database()
+				.update(videoUploads)
+				.set({
+					phase: "processing",
+					updatedAt: new Date(Date.now() - 3 * 60 * 60 * 1000),
+				})
+				.where(eq(videoUploads.videoId, silent?.videoId as Video.VideoId));
+			fixture.start.mockClear();
+
+			const recovered = await recoverLoomImportJobs();
+			expect(recovered).toMatchObject({ silent: 1, started: 1 });
+			const [first, second] = await items(jobId);
+			expect(first).toMatchObject({
+				status: "failed",
+				error: LOOM_IMPORT_SILENT_ERROR,
+			});
+			expect(second?.status).toBe("importing");
 		});
 	},
 );

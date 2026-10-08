@@ -19,6 +19,7 @@ type LookupOptions = {
 	attempts?: number;
 	fetchImpl?: typeof fetch;
 	onBatch?: (results: Map<string, LoomVideoLookup>) => Promise<void> | void;
+	shouldStop?: () => boolean;
 };
 
 type GraphqlVideo = {
@@ -96,6 +97,19 @@ export function buildLoomVideosQuery(ids: string[]) {
 	};
 }
 
+export function loomRetryDelayMs(
+	attempt: number,
+	retryAfter: string | null,
+	random = Math.random,
+) {
+	const seconds = retryAfter ? Number(retryAfter) : Number.NaN;
+	const base =
+		Number.isFinite(seconds) && seconds > 0
+			? Math.min(seconds, 10) * 1000
+			: (retryAfter === null ? 400 : 2000) * 2 ** attempt;
+	return Math.round(base + random() * base * 0.5);
+}
+
 async function lookupBatch(
 	ids: string[],
 	fetchImpl: typeof fetch,
@@ -103,6 +117,7 @@ async function lookupBatch(
 ): Promise<Map<string, LoomVideoLookup>> {
 	const body = JSON.stringify(buildLoomVideosQuery(ids));
 	for (let attempt = 0; attempt < attempts; attempt++) {
+		let retryAfter: string | null = null;
 		try {
 			const response = await fetchImpl(LOOM_GRAPHQL_URL, {
 				method: "POST",
@@ -128,7 +143,9 @@ async function lookupBatch(
 					});
 					return results;
 				}
-			} else if (response.status < 500 && response.status !== 429) {
+			} else if (response.status === 429) {
+				retryAfter = response.headers.get("Retry-After") ?? "";
+			} else if (response.status < 500) {
 				console.warn("[loom-import] Loom lookup rejected", {
 					status: response.status,
 					videos: ids.length,
@@ -143,7 +160,9 @@ async function lookupBatch(
 			});
 		}
 		if (attempt < attempts - 1) {
-			await new Promise((resolve) => setTimeout(resolve, 400 * 2 ** attempt));
+			await new Promise((resolve) =>
+				setTimeout(resolve, loomRetryDelayMs(attempt, retryAfter)),
+			);
 		}
 	}
 	return new Map(ids.map((id) => [id, { status: "error" } as const]));
@@ -154,9 +173,10 @@ export async function lookupLoomVideos(
 	{
 		batchSize = 25,
 		concurrency = 4,
-		attempts = 3,
+		attempts = 4,
 		fetchImpl = fetch,
 		onBatch,
+		shouldStop,
 	}: LookupOptions = {},
 ): Promise<Map<string, LoomVideoLookup>> {
 	const unique = Array.from(new Set(ids));
@@ -170,7 +190,7 @@ export async function lookupLoomVideos(
 	const workers = Array.from(
 		{ length: Math.min(concurrency, batches.length) },
 		async () => {
-			while (next < batches.length) {
+			while (next < batches.length && !shouldStop?.()) {
 				const batch = batches[next++];
 				if (!batch) continue;
 				const batchResults = await lookupBatch(batch, fetchImpl, attempts);
