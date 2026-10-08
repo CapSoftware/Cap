@@ -9,7 +9,7 @@ interface LoomImportJobPayload {
 	jobId: string;
 }
 
-const RESOLVE_PATIENCE = 6;
+const RESOLVE_PATIENCE = 10;
 const RESOLVE_MAX_PASSES = 60;
 
 async function resolveLoomImportJobStep(jobId: string, giveUp: boolean) {
