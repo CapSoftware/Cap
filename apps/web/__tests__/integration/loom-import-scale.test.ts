@@ -10,7 +10,7 @@ import {
 	videoUploads,
 } from "@cap/database/schema";
 import { Organisation, User, Video } from "@cap/web-domain";
-import { and, eq, inArray, ne, sql } from "drizzle-orm";
+import { and, eq, inArray, ne, or, sql } from "drizzle-orm";
 import { drizzle, type MySql2Database } from "drizzle-orm/mysql2";
 import { Effect, Option } from "effect";
 import { createPool, type Pool } from "mysql2/promise";
@@ -87,6 +87,7 @@ const enabled =
 const LOOM_CAPACITY = 16;
 const MEDIA_CAPACITY = 9;
 const FAILURE_RATE = 0.01;
+const SIMULATED_MEDIA_FAILURE = "Simulated media failure";
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -137,6 +138,8 @@ type Simulation = {
 	launched: number;
 	errors: number;
 	processing: [number, number];
+	slow?: { owners: Set<string>; share: number; factor: number };
+	slowRuns: number;
 };
 
 function newSimulation(processing: [number, number]): Simulation {
@@ -148,6 +151,7 @@ function newSimulation(processing: [number, number]): Simulation {
 		launched: 0,
 		errors: 0,
 		processing,
+		slowRuns: 0,
 	};
 }
 
@@ -198,7 +202,11 @@ async function timedDispatch(simulation: Simulation, videoId: string) {
 	simulation.dispatchMs.push(performance.now() - startedAt);
 }
 
-async function simulateVideo(simulation: Simulation, videoId: Video.VideoId) {
+async function simulateVideo(
+	simulation: Simulation,
+	videoId: Video.VideoId,
+	ownerId: string,
+) {
 	const { media } = simulation;
 	const upload = (values: Partial<typeof videoUploads.$inferInsert>) =>
 		database()
@@ -220,7 +228,13 @@ async function simulateVideo(simulation: Simulation, videoId: Video.VideoId) {
 	});
 	await timedDispatch(simulation, videoId);
 	const [shortest, longest] = simulation.processing;
-	const duration = shortest + Math.random() * (longest - shortest);
+	const slow =
+		simulation.slow?.owners.has(ownerId) &&
+		Math.random() < simulation.slow.share;
+	if (slow) simulation.slowRuns++;
+	const duration =
+		(shortest + Math.random() * (longest - shortest)) *
+		(slow ? (simulation.slow?.factor ?? 1) : 1);
 	await wait(duration / 2);
 	await upload({
 		processingProgress: 50,
@@ -232,7 +246,7 @@ async function simulateVideo(simulation: Simulation, videoId: Video.VideoId) {
 		media.failed++;
 		await upload({
 			phase: "error",
-			processingError: "Simulated media failure",
+			processingError: SIMULATED_MEDIA_FAILURE,
 		});
 	} else {
 		media.completed++;
@@ -296,6 +310,22 @@ async function cleanUp(orgIds: string[]) {
 	}
 }
 
+async function lookupFailureCount() {
+	const [row] = await database()
+		.select({ count: sql<number>`COUNT(*)`.mapWith(Number) })
+		.from(loomImportJobItems)
+		.where(
+			or(
+				eq(loomImportJobItems.status, "pending"),
+				and(
+					eq(loomImportJobItems.status, "failed"),
+					ne(loomImportJobItems.error, SIMULATED_MEDIA_FAILURE),
+				),
+			),
+		);
+	return row?.count ?? 0;
+}
+
 async function inFlightCount() {
 	const [row] = await database()
 		.select({ count: sql<number>`COUNT(*)`.mapWith(Number) })
@@ -319,11 +349,15 @@ function wireStart(simulation: Simulation) {
 	fixture.start
 		.mockReset()
 		.mockImplementation(
-			async (_workflow: unknown, [payload]: [{ videoId: string }]) => {
+			async (
+				_workflow: unknown,
+				[payload]: [{ videoId: string; userId: string }],
+			) => {
 				simulation.launched++;
 				const run = simulateVideo(
 					simulation,
 					Video.VideoId.make(payload.videoId),
+					payload.userId,
 				).catch((error) => {
 					simulation.errors++;
 					console.error("[scale] simulated video failed", error);
@@ -689,10 +723,7 @@ describe.runIf(enabled)("Loom CSV imports under load", () => {
 				true,
 			);
 
-			const afterChecks = await statusesByJob();
-			const lookupFailures = afterChecks
-				.filter((row) => row.status === "failed" || row.status === "pending")
-				.reduce((total, row) => total + row.count, 0);
+			const lookupFailures = await lookupFailureCount();
 
 			await wait(90_000);
 
@@ -836,6 +867,112 @@ describe.runIf(enabled)("Loom CSV imports under load", () => {
 				2000,
 			);
 			expect(most).toBeLessThanOrEqual(loomImportGlobalConcurrency());
+		},
+		20 * 60 * 1000,
+	);
+
+	it(
+		"29 people importing 2,000 videos each, some with 3 hour recordings, all keep moving",
+		async () => {
+			await cleanUp([]);
+			const people = await makePeople(29);
+			orgIds.push(...people.map((person) => person.orgId));
+			const simulation = newSimulation([150, 350]);
+			const longOwners = new Set<string>(
+				people.slice(0, 10).map((person) => person.ownerId),
+			);
+			simulation.slow = { owners: longOwners, share: 0.25, factor: 30 };
+			wireStart(simulation);
+			vi.stubGlobal("fetch", fakeLoom(simulation));
+
+			const jobIds: string[] = [];
+			for (const person of people) {
+				const { jobId } = await createLoomImportJob({
+					userId: person.ownerId,
+					orgId: person.orgId,
+					fileName: "loom-export.csv",
+					rows: Array.from({ length: 2000 }, (_, index) => ({
+						rowNumber: index + 2,
+						loomUrl: `https://www.loom.com/share/${randomUUID().replaceAll("-", "")}`,
+					})),
+				});
+				jobIds.push(jobId);
+			}
+			const jobOwner = new Map<string, string>(
+				jobIds.map((jobId, index) => [jobId, people[index]?.ownerId ?? ""]),
+			);
+
+			let most = 0;
+			let sampling = true;
+			const sampler = (async () => {
+				while (sampling) {
+					most = Math.max(most, await inFlightCount());
+					await wait(100);
+				}
+			})();
+
+			const checkedAt = performance.now();
+			await Promise.all(
+				jobIds.map((jobId) => loomImportJobWorkflow({ jobId })),
+			);
+			const checkedMs = performance.now() - checkedAt;
+			const lookupFailures = await lookupFailureCount();
+
+			await wait(90_000);
+			for (const jobId of jobIds) await cancelLoomImportJob(jobId);
+			while (simulation.running.size > 0) {
+				await Promise.all(Array.from(simulation.running));
+			}
+			sampling = false;
+			await sampler;
+
+			const finalStatuses = await statusesByJob();
+			const completed = new Map<string, number>();
+			for (const row of finalStatuses) {
+				if (row.status === "complete") completed.set(row.jobId, row.count);
+			}
+			const withLong: number[] = [];
+			const shortOnly: number[] = [];
+			for (const jobId of jobIds) {
+				const count = completed.get(jobId) ?? 0;
+				if (longOwners.has(jobOwner.get(jobId) ?? "")) withLong.push(count);
+				else shortOnly.push(count);
+			}
+			const stillImporting = finalStatuses
+				.filter((row) => row.status === "importing")
+				.reduce((total, row) => total + row.count, 0);
+			const report = {
+				people: people.length,
+				rows: people.length * 2000,
+				peopleWithLongVideos: longOwners.size,
+				longVideoRuns: simulation.slowRuns,
+				allLinksCheckedMs: Math.round(checkedMs),
+				lookupFailures,
+				loom: simulation.loom,
+				mostInFlight: most,
+				media: simulation.media,
+				completedPerImport: {
+					withLongVideos: {
+						min: Math.min(...withLong),
+						max: Math.max(...withLong),
+					},
+					shortVideosOnly: {
+						min: Math.min(...shortOnly),
+						max: Math.max(...shortOnly),
+					},
+				},
+				stillImportingAfterDrain: stillImporting,
+				simulationErrors: simulation.errors,
+				dispatchMs: stats(simulation.dispatchMs),
+			};
+			console.info(`[loom-import scale] ${JSON.stringify(report, null, 1)}`);
+
+			expect(lookupFailures).toBe(0);
+			expect(most).toBeLessThanOrEqual(loomImportGlobalConcurrency());
+			expect(simulation.media.most).toBeLessThanOrEqual(MEDIA_CAPACITY);
+			expect(Math.min(...withLong, ...shortOnly)).toBeGreaterThan(0);
+			expect(stillImporting).toBe(0);
+			expect(simulation.errors).toBe(0);
 		},
 		20 * 60 * 1000,
 	);
