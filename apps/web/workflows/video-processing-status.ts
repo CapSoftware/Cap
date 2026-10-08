@@ -94,8 +94,9 @@ export async function readVideoProcessingStatus(
 
 export async function waitForVideoProcessing(
 	videoId: string,
+	maxWaitMs = 60 * 60 * 1000,
 ): Promise<ProcessedVideoMetadata> {
-	const deadline = Date.now() + 60 * 60 * 1000;
+	const deadline = Date.now() + maxWaitMs;
 	let lastStatus = "processing";
 	for (let attempt = 0; Date.now() < deadline; attempt++) {
 		const result = await readVideoProcessingStatus(videoId);

@@ -36,8 +36,13 @@ const LOOM_UNAVAILABLE_RETRY_AFTER_MS = 20_000;
 const LOOM_UNAVAILABLE_MAX_WAITS = 6;
 const MEDIA_SERVER_START_MAX_ATTEMPTS = 2;
 const MEDIA_SERVER_START_RETRY_BASE_MS = 250;
-const MEDIA_SERVER_PRESIGNED_GET_EXPIRES_SECONDS = 3 * 60 * 60;
-const MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS = 3 * 60 * 60;
+const MEDIA_SERVER_PRESIGNED_GET_EXPIRES_SECONDS = 4 * 60 * 60;
+const MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS = 4 * 60 * 60;
+const MINUTE_MS = 60 * 1000;
+const MEDIA_SERVER_MIN_LIFETIME_MS = 60 * MINUTE_MS;
+const MEDIA_SERVER_LIFETIME_BASE_MS = 30 * MINUTE_MS;
+const MEDIA_SERVER_MAX_LIFETIME_MS = 3 * 60 * MINUTE_MS;
+const PROCESSING_WAIT_MARGIN_MS = 15 * MINUTE_MS;
 
 function getValidDuration(duration: number) {
 	return Number.isFinite(duration) && duration > 0 ? duration : undefined;
@@ -46,6 +51,22 @@ function getValidDuration(duration: number) {
 function isStreamingUrl(url: string): boolean {
 	const path = (url.split("?")[0] ?? "").toLowerCase();
 	return path.endsWith(".m3u8") || path.endsWith(".mpd");
+}
+
+export function loomImportProcessingWaitMs(
+	durationSeconds: number | null | undefined,
+) {
+	const lifetime =
+		durationSeconds && Number.isFinite(durationSeconds) && durationSeconds > 0
+			? Math.min(
+					MEDIA_SERVER_MAX_LIFETIME_MS,
+					Math.max(
+						MEDIA_SERVER_MIN_LIFETIME_MS,
+						MEDIA_SERVER_LIFETIME_BASE_MS + Math.ceil(durationSeconds * 1000),
+					),
+				)
+			: MEDIA_SERVER_MAX_LIFETIME_MS;
+	return lifetime + PROCESSING_WAIT_MARGIN_MS;
 }
 
 function isLoomUnavailableError(error: unknown): boolean {
@@ -231,11 +252,16 @@ export async function importLoomVideoWorkflow(
 
 		let metadata: ProcessedVideoMetadata;
 		let loomWaits = 0;
+		let durationSeconds: number | null = null;
 		for (let processingAttempt = 0; ; processingAttempt++) {
 			let capacityRetryCount = 0;
 			while (true) {
 				try {
-					await processVideoOnMediaServer(payload, processingInput);
+					const started = await processVideoOnMediaServer(
+						payload,
+						processingInput,
+					);
+					durationSeconds = started?.durationSeconds ?? durationSeconds;
 					break;
 				} catch (error) {
 					if (
@@ -254,7 +280,10 @@ export async function importLoomVideoWorkflow(
 				}
 			}
 			try {
-				metadata = await waitForVideoProcessing(payload.videoId);
+				metadata = await waitForVideoProcessing(
+					payload.videoId,
+					loomImportProcessingWaitMs(durationSeconds),
+				);
 				break;
 			} catch (error) {
 				if (
@@ -428,7 +457,7 @@ async function startMediaServerProcessJob(
 async function processVideoOnMediaServer(
 	payload: ImportLoomPayload,
 	processingInput: LoomProcessingInput,
-): Promise<void> {
+): Promise<{ durationSeconds: number | null }> {
 	"use step";
 
 	const { videoId, userId, rawFileKey, loomVideoId } = payload;
@@ -450,6 +479,7 @@ async function processVideoOnMediaServer(
 		outputPresignedUrl,
 		thumbnailPresignedUrl,
 		previewGifPresignedUrl,
+		durationSeconds,
 	} = await Effect.gen(function* () {
 		const [video] = yield* Effect.promise(() =>
 			db()
@@ -516,6 +546,7 @@ async function processVideoOnMediaServer(
 			outputPresignedUrl,
 			thumbnailPresignedUrl,
 			previewGifPresignedUrl,
+			durationSeconds: getValidDuration(video.duration ?? 0) ?? null,
 		};
 	}).pipe(runWorkflowPromise);
 
@@ -547,6 +578,7 @@ async function processVideoOnMediaServer(
 		priority: "bulk",
 	});
 	await continueLoomImports(videoId);
+	return { durationSeconds };
 }
 
 async function saveMetadataAndComplete(

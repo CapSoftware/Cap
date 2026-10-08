@@ -69,7 +69,10 @@ vi.mock("workflow", () => ({
 	RetryableError: class RetryableError extends Error {},
 }));
 
-import { importLoomVideoWorkflow } from "@/workflows/import-loom-video";
+import {
+	importLoomVideoWorkflow,
+	loomImportProcessingWaitMs,
+} from "@/workflows/import-loom-video";
 import { processVideoWorkflow } from "@/workflows/process-video";
 
 const payload = {
@@ -205,6 +208,15 @@ describe("media processing workflows", () => {
 		});
 		expect(mocks.remove).not.toHaveBeenCalled();
 		expect(mocks.continueLoomImport.mock.calls).toEqual([["video"], ["video"]]);
+	});
+
+	it("waits longer for long Loom videos, in step with the media server", () => {
+		const minutes = (ms: number) => ms / 60_000;
+		expect(minutes(loomImportProcessingWaitMs(4 * 60))).toBe(75);
+		expect(minutes(loomImportProcessingWaitMs(60 * 60))).toBe(105);
+		expect(minutes(loomImportProcessingWaitMs(3 * 60 * 60))).toBe(195);
+		expect(minutes(loomImportProcessingWaitMs(10 * 60 * 60))).toBe(195);
+		expect(minutes(loomImportProcessingWaitMs(null))).toBe(195);
 	});
 
 	it("waits for Loom instead of failing when Loom rate limits the download link", async () => {
