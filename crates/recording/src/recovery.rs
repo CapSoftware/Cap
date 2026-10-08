@@ -368,7 +368,8 @@ impl RecoveryManager {
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(0);
 
-            let display_info = Self::segment_display_fragments(&segment_path);
+            let display_info =
+                Self::segment_track_fragments(&segment_path, "display", "display.mp4");
             let display_fragments = display_info.fragments;
             let display_init_segment = display_info.init_segment;
 
@@ -380,17 +381,12 @@ impl RecoveryManager {
                 continue;
             }
 
-            let camera_dir = segment_path.join("camera");
-            let (camera_fragments, camera_init_segment) = {
-                let camera_info = Self::find_complete_fragments_with_init(&camera_dir);
-                if camera_info.fragments.is_empty() {
-                    (
-                        Self::probe_single_file(&segment_path.join("camera.mp4")).map(|p| vec![p]),
-                        None,
-                    )
-                } else {
-                    (Some(camera_info.fragments), camera_info.init_segment)
-                }
+            let camera_info = Self::segment_track_fragments(&segment_path, "camera", "camera.mp4");
+            let camera_init_segment = camera_info.init_segment;
+            let camera_fragments = if camera_info.fragments.is_empty() {
+                None
+            } else {
+                Some(camera_info.fragments)
             };
 
             let mic_fragments = Self::find_audio_fragments(&segment_path.join("audio-input"));
@@ -608,18 +604,21 @@ impl RecoveryManager {
         }
     }
 
-    /// The display media a single segment directory holds, or no fragments when
-    /// the segment has nothing recoverable. Shared by segment collection and by
-    /// recovery validation so neither can disagree with the other about which
-    /// segments count as recoverable.
-    fn segment_display_fragments(segment_path: &Path) -> FragmentsInfo {
-        let info = Self::find_complete_fragments_with_init(&segment_path.join("display"));
+    /// The fragmented media a single track of a segment directory holds, falling
+    /// back to the equivalent single file. Shared by segment collection and by
+    /// recovery validation so neither can disagree about what a segment holds.
+    fn segment_track_fragments(
+        segment_path: &Path,
+        track: &str,
+        single_file: &str,
+    ) -> FragmentsInfo {
+        let info = Self::find_complete_fragments_with_init(&segment_path.join(track));
 
         if !info.fragments.is_empty() {
             return info;
         }
 
-        match Self::probe_single_file(&segment_path.join("display.mp4")) {
+        match Self::probe_single_file(&segment_path.join(single_file)) {
             Some(fragment) => FragmentsInfo {
                 fragments: vec![fragment],
                 init_segment: None,
@@ -629,6 +628,30 @@ impl RecoveryManager {
                 init_segment: None,
             },
         }
+    }
+
+    /// Whether a segment directory holds any recoverable media at all.
+    ///
+    /// A directory with nothing in it is the residue of a resume that failed
+    /// before it wrote a frame, and recovery can ignore it. One holding any
+    /// track at all is a real inconsistency: skipping it would leave that
+    /// footage out of the recovered recording, so it has to be surfaced rather
+    /// than waved through.
+    fn segment_holds_recoverable_media(segment_path: &Path) -> bool {
+        for track in ["display", "camera"] {
+            let single_file = format!("{track}.mp4");
+
+            if !Self::segment_track_fragments(segment_path, track, &single_file)
+                .fragments
+                .is_empty()
+            {
+                return true;
+            }
+        }
+
+        ["audio-input", "system_audio"]
+            .iter()
+            .any(|track| Self::find_audio_fragments(&segment_path.join(track)).is_some())
     }
 
     fn collect_respawn_groups(
@@ -1346,18 +1369,16 @@ impl RecoveryManager {
             }
 
             // An interrupted resume, a crash or a power loss can leave a segment
-            // directory behind that holds no recoverable display media. It
-            // contributes nothing to the recording, so ignoring it is what lets
-            // the segments that do hold footage be recovered. Only a directory
-            // that still has display media but was not collected is fatal.
-            if Self::segment_display_fragments(&entry.path())
-                .fragments
-                .is_empty()
-            {
+            // directory behind that holds no media at all. It contributes
+            // nothing to the recording, so ignoring it is what lets the segments
+            // that do hold footage be recovered. A directory holding any
+            // recoverable track is not that, and stays fatal: recovering around
+            // it would silently drop that footage from the recording.
+            if !Self::segment_holds_recoverable_media(&entry.path()) {
                 warn!(
                     segment = index,
                     path = %entry.path().display(),
-                    "Ignoring segment directory without recoverable display media"
+                    "Ignoring segment directory without recoverable media"
                 );
                 continue;
             }
@@ -5238,14 +5259,14 @@ mod empty_orphan_segment_tests {
     use super::*;
     use cap_enc_ffmpeg::segmented_stream::{SegmentedVideoEncoder, SegmentedVideoEncoderConfig};
 
-    /// Encode a short fragmented display track so the segment passes the same
+    /// Encode a short fragmented video track so the segment passes the same
     /// media probes a real recording does.
-    fn write_fragmented_display(segment_path: &Path) {
+    fn write_fragmented_track(segment_path: &Path, track: &str) {
         ffmpeg::init().unwrap();
         std::fs::create_dir_all(segment_path).unwrap();
 
         let mut encoder = SegmentedVideoEncoder::init(
-            segment_path.join("display"),
+            segment_path.join(track),
             cap_media_info::VideoInfo {
                 pixel_format: cap_media_info::Pixel::NV12,
                 width: 320,
@@ -5324,7 +5345,7 @@ mod empty_orphan_segment_tests {
         let directory = tempfile::tempdir().unwrap();
         let project = directory.path();
 
-        write_fragmented_display(&project.join("content/segments/segment-0"));
+        write_fragmented_track(&project.join("content/segments/segment-0"), "display");
         std::fs::create_dir_all(project.join("content/segments/segment-1")).unwrap();
         write_recording_meta(project, 1);
 
@@ -5344,14 +5365,18 @@ mod empty_orphan_segment_tests {
     /// footage but never made it into the recoverable set is a real
     /// inconsistency, and recovering around it would silently drop that
     /// footage from the recording.
+    ///
+    /// The metadata deliberately declares a single segment so that validation
+    /// reaches the directory-level guard. Declaring two would fail earlier with
+    /// "Missing display segment 1" and never exercise the check under test.
     #[test]
     fn segment_directory_with_footage_outside_the_recoverable_set_is_still_fatal() {
         let directory = tempfile::tempdir().unwrap();
         let project = directory.path();
 
-        write_fragmented_display(&project.join("content/segments/segment-0"));
-        write_fragmented_display(&project.join("content/segments/segment-1"));
-        write_recording_meta(project, 2);
+        write_fragmented_track(&project.join("content/segments/segment-0"), "display");
+        write_fragmented_track(&project.join("content/segments/segment-1"), "display");
+        write_recording_meta(project, 1);
 
         let mut incomplete = RecoveryManager::inspect_recording(project)
             .expect("both populated segments must be detected");
@@ -5368,6 +5393,36 @@ mod empty_orphan_segment_tests {
                 .to_string()
                 .contains("Unrecoverable display segment 1"),
             "a populated but uncollected segment must still fail validation, got: {error}"
+        );
+    }
+
+    /// A directory holding only a track other than the display is not an empty
+    /// orphan. Skipping it would let recovery publish a recording that silently
+    /// omits that footage, so it stays fatal.
+    #[test]
+    fn segment_directory_holding_only_non_display_media_is_still_fatal() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = directory.path();
+
+        write_fragmented_track(&project.join("content/segments/segment-0"), "display");
+        write_fragmented_track(&project.join("content/segments/segment-1"), "camera");
+        write_recording_meta(project, 1);
+
+        let incomplete =
+            RecoveryManager::inspect_recording(project).expect("the display segment must be found");
+        assert_eq!(
+            incomplete.recoverable_segments.len(),
+            1,
+            "a camera-only segment has no display fragments to collect"
+        );
+
+        let error = RecoveryManager::require_recoverable_tracks(&incomplete).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("Unrecoverable display segment 1"),
+            "a segment holding camera media must still fail validation, got: {error}"
         );
     }
 }
