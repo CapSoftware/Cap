@@ -37,6 +37,7 @@ import { createStore, produce, reconcile } from "solid-js/store";
 import toast from "solid-toast";
 import { Transition } from "solid-transition-group";
 import Mode from "~/components/Mode";
+import NetworkHealthIndicator from "~/components/NetworkHealthIndicator";
 import { RecoveryToast } from "~/components/RecoveryToast";
 import Tooltip from "~/components/Tooltip";
 import { Input } from "~/routes/editor/ui";
@@ -59,6 +60,10 @@ import {
 	importVideoFromPicker,
 	showImportError,
 } from "~/utils/importMedia";
+import {
+	initNetworkHealthMonitoring,
+	setRecordingState,
+} from "~/utils/network-health";
 import {
 	createCameraMutation,
 	createCleanCaptureQuery,
@@ -1846,6 +1851,16 @@ function Page() {
 	const isRecording = () => !!currentRecording.data;
 	const isActivelyRecording = () =>
 		currentRecording.data?.status === "recording";
+
+	createEffect(() => {
+		setRecordingState(isRecording());
+	});
+
+	onMount(() => {
+		const cleanup = initNetworkHealthMonitoring();
+		onCleanup(cleanup);
+	});
+
 	const auth = authStore.createQuery();
 	const recordingSettingsQuery = recordingDeviceSettingsStore.createQuery();
 	const generalSettings = generalSettingsStore.createQuery();
@@ -2984,6 +2999,9 @@ function Page() {
 					</div>
 				</div>
 				<BaseControls />
+				<div class="flex items-center justify-end pt-1 px-0.5 text-xs text-gray-11">
+					<NetworkHealthIndicator />
+				</div>
 			</div>
 		</Transition>
 	);
@@ -3153,6 +3171,7 @@ function Page() {
 											? new URL("/dashboard", serverUrl()).toString()
 											: serverUrl()
 									}
+									rel="noopener"
 								>
 									<IconCapLogoFullDark class="hidden dark:block" />
 									<IconCapLogoFull class="block dark:hidden" />
