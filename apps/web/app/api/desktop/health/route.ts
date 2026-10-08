@@ -92,8 +92,16 @@ const baseHandler = apiToHandler(ApiLive);
 export const GET = baseHandler;
 
 export const POST = async (req: Request) => {
-	const contentLength = req.headers.get("content-length");
-	if (contentLength && Number.parseInt(contentLength, 10) > MAX_PAYLOAD_BYTES) {
+	const contentLengthHeader = req.headers.get("content-length");
+	if (!contentLengthHeader) {
+		return new Response(JSON.stringify({ error: "Length Required" }), {
+			status: 411,
+			headers: { "Content-Type": "application/json" },
+		});
+	}
+
+	const contentLength = Number.parseInt(contentLengthHeader, 10);
+	if (Number.isNaN(contentLength) || contentLength > MAX_PAYLOAD_BYTES) {
 		return new Response(JSON.stringify({ error: "Payload too large" }), {
 			status: 413,
 			headers: { "Content-Type": "application/json" },
@@ -101,7 +109,9 @@ export const POST = async (req: Request) => {
 	}
 
 	const ip =
-		req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
+		req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+		req.headers.get("x-real-ip") ||
+		"unknown";
 	if (isRateLimited(ip)) {
 		return new Response(
 			JSON.stringify({ error: "Too many speed test requests" }),

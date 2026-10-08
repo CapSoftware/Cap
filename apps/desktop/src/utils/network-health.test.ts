@@ -3,6 +3,7 @@ import {
 	calculateSpeedMbps,
 	determineQualityTierAndResolution,
 	formatResolutionLabel,
+	initNetworkHealthMonitoring,
 	isRecordingInProgress,
 	networkHealth,
 	runSpeedTest,
@@ -158,18 +159,22 @@ describe("network-health speed test & quality adaptation", () => {
 	it("prevents delayed health check failure from overwriting newer successful status", async () => {
 		const originalFetch = globalThis.fetch;
 
-		let delayedReject: ((err: Error) => void) | null = null;
+		let delayedReject!: (err: Error) => void;
+		let getEnteredMock = false;
 		const delayedPromise = new Promise<Response>((_, reject) => {
 			delayedReject = reject;
 		});
 		delayedPromise.catch(() => {});
 
-		globalThis.fetch = vi.fn().mockReturnValue(delayedPromise);
-		const pendingCheck = runUploadHealthCheck();
-
 		globalThis.fetch = vi
 			.fn()
 			.mockImplementation((_url: string, init?: RequestInit) => {
+				const method = init?.method ?? "GET";
+				if (method === "GET") {
+					getEnteredMock = true;
+					return delayedPromise;
+				}
+
 				const body =
 					typeof init?.body === "string" ? JSON.parse(init.body) : {};
 				if (body.payload === "ping") {
@@ -192,14 +197,60 @@ describe("network-health speed test & quality adaptation", () => {
 				} as Response);
 			});
 
+		const pendingCheck = runUploadHealthCheck();
+		await new Promise((resolve) => setTimeout(resolve, 15));
+		expect(getEnteredMock).toBe(true);
+
 		await runSpeedTest();
 		expect(networkHealth().status).toBe("healthy");
 
-		delayedReject?.(new Error("Late network timeout"));
-		await pendingCheck;
+		delayedReject(new Error("Late network timeout"));
+		const checkResult = await pendingCheck;
+		expect(checkResult).toBe(false);
 
 		expect(networkHealth().status).toBe("healthy");
 		expect(networkHealth().error).toBeNull();
+
+		globalThis.fetch = originalFetch;
+	});
+
+	it("stops scheduled speed tests after monitoring is disposed", async () => {
+		const originalFetch = globalThis.fetch;
+		let postCallCount = 0;
+
+		let resolveHealth!: (res: Response) => void;
+		const healthPromise = new Promise<Response>((resolve) => {
+			resolveHealth = resolve;
+		});
+
+		globalThis.fetch = vi
+			.fn()
+			.mockImplementation((_url: string, init?: RequestInit) => {
+				const method = init?.method ?? "GET";
+				if (method === "GET") {
+					return healthPromise;
+				}
+				postCallCount++;
+				return Promise.resolve({
+					ok: true,
+					json: async () => ({
+						success: true,
+						bytesReceived: 512 * 1024,
+						timestamp: Date.now(),
+					}),
+				} as Response);
+			});
+
+		const stopMonitoring = initNetworkHealthMonitoring();
+		stopMonitoring();
+
+		resolveHealth({
+			ok: true,
+			json: async () => ({ status: "ok" }),
+		} as Response);
+		await new Promise((resolve) => setTimeout(resolve, 30));
+
+		expect(postCallCount).toBe(0);
 
 		globalThis.fetch = originalFetch;
 	});

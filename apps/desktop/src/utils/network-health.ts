@@ -342,25 +342,27 @@ export async function runSpeedTest(): Promise<number | null> {
 }
 
 export function initNetworkHealthMonitoring(): () => void {
+	let isStopped = false;
+
 	void (async () => {
 		await runUploadHealthCheck();
-		if (!isRecordingSignal()) {
+		if (!isStopped && !isRecordingSignal()) {
 			await runSpeedTest();
 		}
 	})();
 
 	const interval = setInterval(async () => {
-		if (!isRecordingSignal()) {
-			if (networkHealth().status !== "healthy") {
-				await runUploadHealthCheck();
-			}
-			if (!isRecordingSignal()) {
-				await runSpeedTest();
-			}
+		if (isStopped || isRecordingSignal()) return;
+		if (networkHealth().status !== "healthy") {
+			await runUploadHealthCheck();
+		}
+		if (!isStopped && !isRecordingSignal()) {
+			await runSpeedTest();
 		}
 	}, 45_000);
 
 	return () => {
+		isStopped = true;
 		clearInterval(interval);
 		activeSpeedTestAbort?.abort();
 	};
