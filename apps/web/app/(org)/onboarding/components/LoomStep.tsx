@@ -1,6 +1,7 @@
 "use client";
 
 import type { Organisation } from "@cap/web-domain";
+import clsx from "clsx";
 import { ArrowRight, LoaderCircle } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -18,11 +19,33 @@ import { trackEvent } from "@/app/utils/analytics";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { isLoomShareUrl } from "@/lib/loom-import-href";
 import { onboardingStepHref } from "../onboarding-flow";
-import { Explainer, LoomMark } from "./paper";
+import { Explainer, LOOM_MARK_PATH, LoomMark } from "./paper";
 import { BackLink, ProNote, StepLede, StepPage, StepTitle } from "./StepChrome";
 import { DoneDoodle, LoomScene } from "./scenes";
 import { useGetStarted } from "./use-get-started";
 import { useUpgradeConfirmation } from "./use-upgrade-confirmation";
+
+const CsvGlyph = () => (
+	<span className="flex size-11 shrink-0 items-center justify-center rounded-2xl bg-[var(--ob-paper-2)]">
+		<svg
+			viewBox="0 0 28 28"
+			className="ob-boil size-6 overflow-visible"
+			aria-hidden="true"
+		>
+			<rect x="3.5" y="4.5" width="21" height="19" rx="3" className="ob-ink" />
+			<path
+				d="M 3.5 10.5 L 24.5 10.5 M 3.5 16.5 L 24.5 16.5 M 11 4.5 L 11 23.5"
+				className="ob-ink"
+				style={{ strokeWidth: 1.6 }}
+			/>
+			<path
+				d={LOOM_MARK_PATH}
+				transform="translate(14.2 12) scale(0.36)"
+				fill="var(--ob-loom)"
+			/>
+		</svg>
+	</span>
+);
 
 const LoomToCapBadge = () => (
 	<div className="ob-rise mb-5 flex items-center gap-2">
@@ -161,7 +184,8 @@ export const LoomStep = ({
 					<StepTitle>Bring your Looms to Cap</StepTitle>
 					<StepLede>
 						Paste a Loom share link and we'll copy the video into your Cap
-						library. Your Loom stays exactly where it is.
+						library, or bring your whole library over with a CSV. Your Looms
+						stay exactly where they are.
 					</StepLede>
 
 					{status === "done" ? (
@@ -285,16 +309,6 @@ export const LoomStep = ({
 										</>
 									)}
 								</button>
-								{canBulkImport && bulk && (
-									<button
-										type="button"
-										className="ob-cta is-quiet"
-										disabled={leaving}
-										onClick={() => leaveTo("/dashboard/import/loom?mode=csv")}
-									>
-										Bulk import from a CSV
-									</button>
-								)}
 							</div>
 							{upgrade.waiting ? (
 								<ProNote className="mt-3">
@@ -328,21 +342,41 @@ export const LoomStep = ({
 						</form>
 					)}
 
-					{canBulkImport && !bulk && status !== "done" && (
-						<p
-							className="ob-rise mt-8 text-[14px] text-[var(--ob-ink-soft)]"
+					{status !== "done" && (
+						<div
+							className={clsx(
+								"ob-card ob-rise mt-6 flex items-start gap-4 p-5 sm:p-6",
+								bulk && "!border-[var(--ob-ink)]",
+							)}
 							style={{ "--d": "0.2s" } as CSSProperties}
 						>
-							Moving a whole team?{" "}
-							<button
-								type="button"
-								className="ob-link !inline"
-								disabled={leaving}
-								onClick={() => leaveTo("/dashboard/import/loom?mode=csv")}
-							>
-								Bulk import from a CSV
-							</button>
-						</p>
+							<CsvGlyph />
+							<div className="flex min-w-0 flex-col">
+								<h2 className="text-[16px] font-medium tracking-[-0.01em]">
+									Moving lots of videos?
+								</h2>
+								<p className="mt-1 text-[14px] leading-relaxed text-[var(--ob-ink-soft)]">
+									Add your Loom links to a spreadsheet and import up to 500 at a
+									time. We'll give you a template, and each video can go to the
+									right person and space.
+								</p>
+								{canBulkImport ? (
+									<button
+										type="button"
+										className="ob-cta is-quiet is-small mt-4 w-full sm:w-fit"
+										disabled={leaving}
+										onClick={() => leaveTo("/dashboard/import/loom?mode=csv")}
+									>
+										Bulk import from a CSV
+										<ArrowRight className="ob-cta-arrow size-4" aria-hidden />
+									</button>
+								) : (
+									<p className="mt-2 text-[13.5px] text-[var(--ob-ink-2)]">
+										Ask an admin on your team to run a bulk import.
+									</p>
+								)}
+							</div>
+						</div>
 					)}
 				</div>
 

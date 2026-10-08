@@ -23,8 +23,8 @@ const CHOICES: readonly Choice[] = [
 	{
 		path: "loom",
 		title: "Bring my videos from Loom",
-		body: "Paste a Loom link and we'll move the video into Cap for you. Nothing changes on Loom.",
-		cue: "Paste a link",
+		body: "Paste a link, or bring your whole library over with a CSV. Nothing changes on Loom.",
+		cue: "One link or a whole CSV",
 		doodle: <LoomToCapDoodle />,
 	},
 	{
