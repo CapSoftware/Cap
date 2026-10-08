@@ -177,7 +177,7 @@ describe("useLoomImportJob", () => {
 		});
 
 		await act(async () => {
-			vi.advanceTimersByTime(4_000);
+			vi.advanceTimersByTime(2_000);
 		});
 		expect(requests[1]?.url).toBe(
 			"/api/import/loom/jobs?jobId=job-1&since=2000",
@@ -259,7 +259,7 @@ describe("useLoomImportJob", () => {
 				);
 			});
 			await act(async () => {
-				vi.advanceTimersByTime(4_000);
+				vi.advanceTimersByTime(2_000);
 			});
 			expect(requests).toHaveLength(1);
 			requests[0]?.resolve(snapshot({ items: [], full: false, cursor: 1_000 }));
