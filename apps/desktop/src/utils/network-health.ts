@@ -205,21 +205,36 @@ export async function runSpeedTest(): Promise<number | null> {
 		const targetUrl = new URL("/api/desktop/health", baseUrl).toString();
 		const fetchFn = getHttpFetch();
 
-		const warmupPayload = JSON.stringify({
-			payload: "x".repeat(32 * 1024),
-		});
-
 		const warmupResponse = await fetchFn(targetUrl, {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/json",
 			},
-			body: warmupPayload,
+			body: JSON.stringify({ payload: "ping" }),
 			signal: controller.signal,
 		});
 
 		if (!warmupResponse.ok) {
 			throw new Error(`Warmup failed with HTTP ${warmupResponse.status}`);
+		}
+
+		if (isRecordingSignal()) {
+			return speedTest().speedMbps;
+		}
+
+		const rttStart = performance.now();
+		const rttResponse = await fetchFn(targetUrl, {
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify({ payload: "ping" }),
+			signal: controller.signal,
+		});
+		const baselineRttMs = performance.now() - rttStart;
+
+		if (!rttResponse.ok) {
+			throw new Error(`Latency probe returned HTTP ${rttResponse.status}`);
 		}
 
 		if (isRecordingSignal()) {
@@ -232,44 +247,58 @@ export async function runSpeedTest(): Promise<number | null> {
 			payload: sampleData,
 		});
 
-		const startTime = performance.now();
-		const response = await fetchFn(targetUrl, {
-			method: "POST",
-			headers: {
-				"Content-Type": "application/json",
-			},
-			body: testPayload,
-			signal: controller.signal,
-		});
-		const durationMs = performance.now() - startTime;
+		const sampleCount = 2;
+		const measuredSpeeds: number[] = [];
 
-		if (isRecordingSignal()) {
-			return speedTest().speedMbps;
-		}
+		for (let i = 0; i < sampleCount; i++) {
+			if (isRecordingSignal()) {
+				return speedTest().speedMbps;
+			}
 
-		if (!response.ok) {
-			throw new Error(`Speed test returned HTTP ${response.status}`);
-		}
+			const sampleStartTime = performance.now();
+			const response = await fetchFn(targetUrl, {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+				},
+				body: testPayload,
+				signal: controller.signal,
+			});
+			const rawDurationMs = performance.now() - sampleStartTime;
 
-		const result = (await response.json()) as {
-			success?: boolean;
-			bytesReceived?: number;
-		};
+			if (isRecordingSignal()) {
+				return speedTest().speedMbps;
+			}
 
-		if (!result.success || typeof result.bytesReceived !== "number") {
-			throw new Error("Invalid speed test server response");
-		}
+			if (!response.ok) {
+				throw new Error(`Speed test returned HTTP ${response.status}`);
+			}
 
-		if (result.bytesReceived < sampleBytes) {
-			throw new Error(
-				`Incomplete upload: expected ${sampleBytes} bytes, received ${result.bytesReceived}`,
+			const result = (await response.json()) as {
+				success?: boolean;
+				bytesReceived?: number;
+			};
+
+			if (!result.success || typeof result.bytesReceived !== "number") {
+				throw new Error("Invalid speed test server response");
+			}
+
+			if (result.bytesReceived < sampleBytes) {
+				throw new Error(
+					`Incomplete upload: expected ${sampleBytes} bytes, received ${result.bytesReceived}`,
+				);
+			}
+
+			const netDurationMs = Math.max(
+				10,
+				rawDurationMs - Math.min(baselineRttMs, rawDurationMs * 0.8),
+			);
+			measuredSpeeds.push(
+				calculateSpeedMbps(result.bytesReceived, netDurationMs),
 			);
 		}
 
-		const calculatedSpeed = calculateSpeedMbps(
-			result.bytesReceived,
-			durationMs,
-		);
+		const calculatedSpeed = Math.max(...measuredSpeeds);
 		const { qualityTier, recommendedResolution, recommendedLabel } =
 			determineQualityTierAndResolution(calculatedSpeed);
 
@@ -280,6 +309,12 @@ export async function runSpeedTest(): Promise<number | null> {
 			recommendedResolution,
 			recommendedLabel,
 			lastTested: Date.now(),
+			error: null,
+		});
+
+		setNetworkHealth({
+			status: "healthy",
+			lastChecked: Date.now(),
 			error: null,
 		});
 
@@ -308,6 +343,9 @@ export function initNetworkHealthMonitoring(): () => void {
 
 	const interval = setInterval(() => {
 		if (!isRecordingSignal()) {
+			if (networkHealth().status !== "healthy") {
+				void runUploadHealthCheck();
+			}
 			void runSpeedTest();
 		}
 	}, 45_000);
