@@ -545,7 +545,7 @@
 	animation-delay: calc((var(--at) - 1) * var(--loop));
 }
 .ob-loop-spark {
-	opacity: 1;
+	opacity: 0;
 	fill: none;
 	stroke: var(--ob-accent);
 	stroke-width: 2.2;
