@@ -177,7 +177,7 @@ describe("useLoomImportJob", () => {
 		});
 
 		await act(async () => {
-			vi.advanceTimersByTime(2_000);
+			vi.advanceTimersByTime(4_000);
 		});
 		expect(requests[1]?.url).toBe(
 			"/api/import/loom/jobs?jobId=job-1&since=2000",
@@ -227,6 +227,59 @@ describe("useLoomImportJob", () => {
 			"importing",
 			"failed",
 		]);
+	});
+
+	it("stops polling in a background tab and catches up when it comes back", async () => {
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+		let hidden = false;
+		Object.defineProperty(document, "hidden", {
+			configurable: true,
+			get: () => hidden,
+		});
+		const setHidden = async (value: boolean) => {
+			hidden = value;
+			await act(async () => {
+				document.dispatchEvent(new Event("visibilitychange"));
+			});
+		};
+		const Harness = ({ initial }: { initial: LoomImportSnapshot }) => {
+			useLoomImportJob(initial, { watchForUpgrade: false });
+			return null;
+		};
+		try {
+			await act(async () => {
+				root.render(
+					React.createElement(Harness, {
+						initial: snapshot({
+							items: [item(0, { status: "importing" })],
+							full: true,
+							cursor: 1_000,
+						}),
+					}),
+				);
+			});
+			await act(async () => {
+				vi.advanceTimersByTime(4_000);
+			});
+			expect(requests).toHaveLength(1);
+			requests[0]?.resolve(snapshot({ items: [], full: false, cursor: 1_000 }));
+			await flush();
+
+			await setHidden(true);
+			await act(async () => {
+				vi.advanceTimersByTime(30 * 60_000);
+			});
+			expect(requests).toHaveLength(1);
+
+			await setHidden(false);
+			await flush();
+			expect(requests.map((request) => request.url)).toEqual([
+				"/api/import/loom/jobs?jobId=job-1&since=1000",
+				"/api/import/loom/jobs?jobId=job-1",
+			]);
+		} finally {
+			Reflect.deleteProperty(document, "hidden");
+		}
 	});
 });
 

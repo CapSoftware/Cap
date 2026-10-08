@@ -12,9 +12,8 @@ import {
 	summarizeLoomImportItems,
 } from "@/lib/loom-import/status";
 
-const ACTIVE_POLL_MS = 2000;
-const IDLE_POLL_MS = 10_000;
-const HIDDEN_POLL_MS = 15_000;
+const ACTIVE_POLL_MS = 4000;
+const IDLE_POLL_MS = 15_000;
 const UPGRADE_POLL_MS = 2500;
 const FULL_REFRESH_MS = 180_000;
 const SNAPSHOT_TIMEOUT_MS = 20_000;
@@ -205,12 +204,9 @@ export function useLoomImportJob(
 
 		const schedule = () => {
 			window.clearTimeout(timer);
-			if (stopped) return;
-			const wait = document.hidden
-				? HIDDEN_POLL_MS
-				: status === "awaiting_upgrade"
-					? UPGRADE_POLL_MS
-					: pollDelayRef.current;
+			if (stopped || document.hidden) return;
+			const wait =
+				status === "awaiting_upgrade" ? UPGRADE_POLL_MS : pollDelayRef.current;
 			timer = window.setTimeout(tick, wait);
 		};
 
@@ -225,6 +221,7 @@ export function useLoomImportJob(
 		const onVisibility = () => {
 			if (document.hidden) {
 				hiddenAt = Date.now();
+				window.clearTimeout(timer);
 				return;
 			}
 			const full = hiddenAt !== null && Date.now() - hiddenAt > 60_000;
