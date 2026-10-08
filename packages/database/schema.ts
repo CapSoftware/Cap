@@ -1688,6 +1688,7 @@ export const loomImportJobs = mysqlTable(
 			.$defaultFn(() => new Date()),
 		startedAt: datetime("started_at", { fsp: 3 }),
 		completedAt: datetime("completed_at", { fsp: 3 }),
+		dispatchedAt: datetime("dispatched_at", { fsp: 3 }),
 	},
 	(table) => [
 		index("org_creator_created_idx").on(
@@ -1697,6 +1698,16 @@ export const loomImportJobs = mysqlTable(
 		),
 		index("status_updated_idx").on(table.status, table.updatedAt),
 	],
+);
+
+export const loomImportDispatchLocks = mysqlTable(
+	"loom_import_dispatch_locks",
+	{
+		id: varchar("id", { length: 32 }).notNull().primaryKey(),
+		lockedAt: datetime("locked_at", { fsp: 3 })
+			.notNull()
+			.$defaultFn(() => new Date()),
+	},
 );
 
 export const loomImportJobItems = mysqlTable(
@@ -1730,6 +1741,8 @@ export const loomImportJobItems = mysqlTable(
 	(table) => [
 		uniqueIndex("job_row_idx").on(table.jobId, table.rowNumber),
 		index("job_status_row_idx").on(table.jobId, table.status, table.rowNumber),
+		index("job_updated_idx").on(table.jobId, table.updatedAt),
+		index("status_job_idx").on(table.status, table.jobId),
 		index("video_id_idx").on(table.videoId),
 	],
 );
