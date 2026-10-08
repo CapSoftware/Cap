@@ -6,6 +6,7 @@ import {
 	cleanupExpiredJobs,
 	createJob,
 	deleteJob,
+	extendJobLifetimeForMedia,
 	getJob,
 	type JobProgress,
 	type RecordingWorkerAcknowledgement,
@@ -520,5 +521,39 @@ describe("job cleanup", () => {
 		expect(cleaned).toBe(1);
 		expect(currentJob?.phase).toBe("error");
 		expect(currentJob?.error).toContain("maximum lifetime of 60 minutes");
+	});
+
+	test("gives a long video time to finish in proportion to its length", () => {
+		const now = Date.now();
+		const running = createTrackedJob("job-long-media-running");
+		running.phase = "processing";
+		running.createdAt = now - 2 * 60 * 60 * 1000;
+		running.updatedAt = now;
+		extendJobLifetimeForMedia(running.jobId, 3 * 60 * 60);
+		const overdue = createTrackedJob("job-long-media-overdue");
+		overdue.phase = "processing";
+		overdue.createdAt = now - 3 * 60 * 60 * 1000 - 60_000;
+		overdue.updatedAt = now;
+		extendJobLifetimeForMedia(overdue.jobId, 3 * 60 * 60);
+
+		expect(cleanupExpiredJobs()).toBe(1);
+		expect(getJob(running.jobId)?.phase).toBe("processing");
+		expect(getJob(overdue.jobId)?.error).toContain(
+			"maximum lifetime of 180 minutes",
+		);
+	});
+
+	test("keeps the one-hour cap for short videos", () => {
+		const job = createTrackedJob("job-short-media");
+		const now = Date.now();
+		job.phase = "processing";
+		job.createdAt = now - 61 * 60 * 1000;
+		job.updatedAt = now;
+		extendJobLifetimeForMedia(job.jobId, 4 * 60);
+
+		expect(cleanupExpiredJobs()).toBe(1);
+		expect(getJob(job.jobId)?.error).toContain(
+			"maximum lifetime of 60 minutes",
+		);
 	});
 });

@@ -17,6 +17,7 @@ import {
 	claimRecordingWorker,
 	createJob,
 	deleteJob,
+	extendJobLifetimeForMedia,
 	forceCleanupActiveJobs,
 	generateJobId,
 	getActiveVideoProcessCount,
@@ -1346,6 +1347,7 @@ async function processVideoAsync(
 		);
 		repairedTempFile = repairedFile;
 		updateJob(jobId, { metadata });
+		extendJobLifetimeForMedia(jobId, metadata.duration);
 
 		const processingInputPath = repairedFile
 			? repairedFile.path

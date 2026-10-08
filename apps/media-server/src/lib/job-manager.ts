@@ -124,6 +124,7 @@ export interface Job {
 	webhookLastAttemptAt?: number;
 	recordingVerificationDeadlineAt?: number;
 	recordingProcessingDeadlineAt?: number;
+	mediaDeadlineAt?: number;
 	recordingVerification?: RecordingVerificationProof;
 	manifestSha256?: string;
 	jobId: string;
@@ -150,6 +151,8 @@ const jobs = new Map<string, Job>();
 const JOB_TTL_MS = 60 * 60 * 1000;
 const STALE_JOB_MS = 15 * 60 * 1000;
 const MAX_JOB_LIFETIME_MS = 60 * 60 * 1000;
+const MEDIA_JOB_LIFETIME_BASE_MS = 30 * 60 * 1000;
+const MAX_MEDIA_JOB_LIFETIME_MS = 3 * 60 * 60 * 1000;
 const MAX_RECORDING_PROCESSING_BUDGET_MS = 3 * 60 * 60 * 1000;
 const WEBHOOK_MAX_ATTEMPTS = 3;
 const WEBHOOK_RETRY_BASE_MS = 500;
@@ -475,6 +478,32 @@ export function beginRecordingProcessing(
 	return true;
 }
 
+export function extendJobLifetimeForMedia(
+	jobId: string,
+	durationSeconds: number,
+): number | undefined {
+	const job = jobs.get(jobId);
+	if (
+		!job ||
+		!isActivePhase(job.phase) ||
+		!Number.isFinite(durationSeconds) ||
+		durationSeconds <= 0
+	)
+		return job?.mediaDeadlineAt;
+	const lifetime = Math.min(
+		MAX_MEDIA_JOB_LIFETIME_MS,
+		Math.max(
+			MAX_JOB_LIFETIME_MS,
+			MEDIA_JOB_LIFETIME_BASE_MS + Math.ceil(durationSeconds * 1000),
+		),
+	);
+	job.mediaDeadlineAt = Math.max(
+		job.mediaDeadlineAt ?? 0,
+		job.createdAt + lifetime,
+	);
+	return job.mediaDeadlineAt;
+}
+
 export function deleteJob(jobId: string): boolean {
 	const job = jobs.get(jobId);
 	if (job) {
@@ -585,6 +614,7 @@ export function cleanupExpiredJobs(): number {
 		const deadline =
 			job.recordingVerificationDeadlineAt ??
 			job.recordingProcessingDeadlineAt ??
+			job.mediaDeadlineAt ??
 			job.createdAt + MAX_JOB_LIFETIME_MS;
 		if (isActivePhase(job.phase) && now > deadline) {
 			console.warn(
@@ -596,7 +626,7 @@ export function cleanupExpiredJobs(): number {
 				error:
 					job.recordingVerificationDeadlineAt === undefined &&
 					job.recordingProcessingDeadlineAt === undefined
-						? `Job exceeded maximum lifetime of ${Math.round(MAX_JOB_LIFETIME_MS / 60000)} minutes`
+						? `Job exceeded maximum lifetime of ${Math.round((deadline - job.createdAt) / 60000)} minutes`
 						: "Recording verification timed out",
 				message: "Processing failed (timeout)",
 			});
