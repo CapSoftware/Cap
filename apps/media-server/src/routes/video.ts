@@ -84,7 +84,8 @@ import { validateVideoInput } from "../lib/video-input-validation";
 const video = new Hono();
 const PROCESSING_HEARTBEAT_MS = 60 * 1000;
 const LIVENESS_WEBHOOK_TICKS = 5;
-const PROGRESS_WEBHOOK_INTERVAL_MS = 15 * 1000;
+const PROGRESS_WEBHOOK_INTERVAL_MS = 1000;
+const BULK_PROGRESS_WEBHOOK_INTERVAL_MS = 5 * 1000;
 const FFMPEG_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 const RECORDING_WORKER_INSTANCE = randomUUID();
 const SEGMENTED_RECORDING_TIMEOUT_MS = 3 * PROCESS_TIMEOUT_MS + 35 * 60 * 1000;
@@ -964,12 +965,16 @@ async function processWithResilientRetry(
 		idleTimeoutMs: FFMPEG_IDLE_TIMEOUT_MS,
 	};
 
+	const progressWebhookIntervalMs =
+		options.priority === "bulk"
+			? BULK_PROGRESS_WEBHOOK_INTERVAL_MS
+			: PROGRESS_WEBHOOK_INTERVAL_MS;
 	let progressWebhookAt = 0;
 	const onProgress = (progress: number, message: string) => {
 		const scaledProgress = 10 + progress * 0.7;
 		updateJob(jobId, { progress: scaledProgress, message });
 		const now = Date.now();
-		if (now - progressWebhookAt < PROGRESS_WEBHOOK_INTERVAL_MS) return;
+		if (now - progressWebhookAt < progressWebhookIntervalMs) return;
 		progressWebhookAt = now;
 		const currentJob = getJob(jobId);
 		if (currentJob) {
