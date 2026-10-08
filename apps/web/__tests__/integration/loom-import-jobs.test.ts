@@ -1031,23 +1031,23 @@ describe.runIf(Boolean(databaseUrl))(
 			await dispatchLoomImportJob(jobId);
 			const [stalled] = await inFlight();
 			const videoId = stalled?.videoId as Video.VideoId;
-			const age = async (hours: number) =>
+			const age = async (minutes: number) =>
 				database()
 					.update(videoUploads)
-					.set({ updatedAt: new Date(Date.now() - hours * 60 * 60 * 1000) })
+					.set({ updatedAt: new Date(Date.now() - minutes * 60 * 1000) })
 					.where(eq(videoUploads.videoId, videoId));
 
-			await age(1);
+			await age(35);
 			expect(await recoverLoomImportJobs()).toMatchObject({
 				restarted: 1,
 				silent: 0,
 			});
-			await age(1);
+			await age(35);
 			expect(await recoverLoomImportJobs()).toMatchObject({
 				restarted: 0,
 				silent: 0,
 			});
-			await age(3);
+			await age(60);
 			expect(await recoverLoomImportJobs()).toMatchObject({
 				restarted: 0,
 				silent: 1,

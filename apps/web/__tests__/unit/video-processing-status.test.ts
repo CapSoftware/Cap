@@ -26,6 +26,8 @@ vi.mock("workflow", () => ({
 
 import {
 	readVideoProcessingStatus,
+	VIDEO_PROCESSING_STALL_MS,
+	VideoProcessingFailedError,
 	waitForVideoProcessing,
 } from "@/workflows/video-processing-status";
 
@@ -96,13 +98,38 @@ describe("durable video processing completion", () => {
 		});
 	});
 
-	it("bounds waiting when a worker never completes", async () => {
-		mocks.where.mockResolvedValue([pending]);
-		await expect(waitForVideoProcessing("video")).rejects.toThrow(
-			"Video processing timed out while processing 25% Processing video...",
+	it("keeps waiting on a long recording for as long as the worker reports in", async () => {
+		const fourHours = 4 * 60 * 60 * 1000;
+		const heartbeatMs = 15 * 60 * 1000;
+		mocks.rows = [[], [metadata]];
+		mocks.where.mockImplementation(async () =>
+			mocks.now < fourHours
+				? [
+						{
+							...pending,
+							updatedAt: new Date(
+								Math.floor(mocks.now / heartbeatMs) * heartbeatMs,
+							),
+						},
+					]
+				: mocks.rows.shift(),
 		);
-		expect(mocks.now).toBeLessThanOrEqual(60 * 60 * 1000 + 30_000);
-		expect(mocks.sleep.mock.calls.length).toBeLessThan(130);
+		await expect(
+			waitForVideoProcessing("video", { maxPollMs: 2 * 60 * 1000 }),
+		).resolves.toEqual(metadata);
+		expect(mocks.now).toBeGreaterThanOrEqual(fourHours);
+		expect(mocks.sleep.mock.calls.length).toBeLessThan(150);
+	});
+
+	it("gives up on processing that stops changing, however short the video", async () => {
+		mocks.where.mockResolvedValue([{ ...pending, updatedAt: new Date(0) }]);
+		const waiting = waitForVideoProcessing("video");
+		await expect(waiting).rejects.toBeInstanceOf(VideoProcessingFailedError);
+		await expect(waiting).rejects.toThrow(
+			"Video processing stopped making progress while processing 25% Processing video...",
+		);
+		expect(mocks.now).toBeGreaterThan(VIDEO_PROCESSING_STALL_MS);
+		expect(mocks.now).toBeLessThanOrEqual(VIDEO_PROCESSING_STALL_MS + 30_000);
 		expect(Math.max(...mocks.sleep.mock.calls.map(([delay]) => delay))).toBe(
 			30_000,
 		);

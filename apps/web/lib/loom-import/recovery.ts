@@ -14,7 +14,7 @@ import { affectedRows } from "./jobs";
 
 const STALE_CHECKING_MS = 10 * 60 * 1000;
 const STUCK_START_MS = 30 * 60 * 1000;
-const SILENT_IMPORT_MS = 2 * 60 * 60 * 1000;
+const SILENT_IMPORT_MS = 45 * 60 * 1000;
 const SILENT_IMPORT_BATCH = 500;
 export const LOOM_IMPORT_SILENT_ERROR =
 	"This video stopped responding while it was copying. Try it again.";

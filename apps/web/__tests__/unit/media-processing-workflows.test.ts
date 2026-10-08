@@ -69,10 +69,7 @@ vi.mock("workflow", () => ({
 	RetryableError: class RetryableError extends Error {},
 }));
 
-import {
-	importLoomVideoWorkflow,
-	loomImportProcessingWaitMs,
-} from "@/workflows/import-loom-video";
+import { importLoomVideoWorkflow } from "@/workflows/import-loom-video";
 import { processVideoWorkflow } from "@/workflows/process-video";
 
 const payload = {
@@ -210,15 +207,6 @@ describe("media processing workflows", () => {
 		expect(mocks.continueLoomImport.mock.calls).toEqual([["video"], ["video"]]);
 	});
 
-	it("waits longer for long Loom videos, in step with the media server", () => {
-		const minutes = (ms: number) => ms / 60_000;
-		expect(minutes(loomImportProcessingWaitMs(4 * 60))).toBe(75);
-		expect(minutes(loomImportProcessingWaitMs(60 * 60))).toBe(105);
-		expect(minutes(loomImportProcessingWaitMs(3 * 60 * 60))).toBe(195);
-		expect(minutes(loomImportProcessingWaitMs(10 * 60 * 60))).toBe(195);
-		expect(minutes(loomImportProcessingWaitMs(null))).toBe(195);
-	});
-
 	it("waits for Loom instead of failing when Loom rate limits the download link", async () => {
 		let loomCalls = 0;
 		mocks.fetch.mockImplementation(async (url: string) => {
@@ -305,6 +293,40 @@ describe("media processing workflows", () => {
 			payload.rawFileKey,
 			expect.anything(),
 		);
+	});
+
+	it("restarts a Loom video from its preserved original when the worker goes quiet", async () => {
+		let now = 0;
+		const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+		mocks.sleep.mockImplementation(async (delay: unknown) => {
+			if (typeof delay === "number") now += delay;
+		});
+		const quiet = { ...pending, updatedAt: new Date(0) };
+		try {
+			mocks.rows = [
+				[video],
+				...Array.from({ length: 23 }, () => [quiet]),
+				[video],
+				[video],
+				[],
+				[metadata],
+			];
+			await expect(importLoomVideoWorkflow(payload)).resolves.toMatchObject({
+				success: true,
+			});
+			expect(now).toBeGreaterThan(20 * 60 * 1000);
+			expect(mocks.fetch.mock.calls.map(([url]) => url)).toEqual([
+				"https://www.loom.com/api/campaigns/sessions/loom-video/transcoded-url",
+				"https://worker.example.com/video/import",
+				"https://worker.example.com/video/process",
+			]);
+			expect(mocks.get).toHaveBeenCalledWith(
+				payload.rawFileKey,
+				expect.anything(),
+			);
+		} finally {
+			clock.mockRestore();
+		}
 	});
 
 	it("supports Loom streaming fallbacks without reading a nonexistent raw object", async () => {

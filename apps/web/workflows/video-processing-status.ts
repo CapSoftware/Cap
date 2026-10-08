@@ -13,7 +13,7 @@ export interface ProcessedVideoMetadata {
 
 type ProcessingStatus =
 	| { status: "complete"; metadata: ProcessedVideoMetadata }
-	| { status: "pending"; message: string }
+	| { status: "pending"; message: string; updatedAt: number | null }
 	| { status: "failed"; message: string }
 	| { status: "error"; message: string };
 
@@ -34,6 +34,7 @@ export async function readVideoProcessingStatus(
 			processingProgress: videoUploads.processingProgress,
 			processingMessage: videoUploads.processingMessage,
 			processingError: videoUploads.processingError,
+			updatedAt: videoUploads.updatedAt,
 		})
 		.from(videoUploads)
 		.where(eq(videoUploads.videoId, Video.VideoId.make(videoId)));
@@ -89,24 +90,37 @@ export async function readVideoProcessingStatus(
 		]
 			.filter(Boolean)
 			.join(" "),
+		updatedAt: upload.updatedAt ? upload.updatedAt.getTime() : null,
 	};
 }
 
+export const VIDEO_PROCESSING_STALL_MS = 20 * 60 * 1000;
+
 export async function waitForVideoProcessing(
 	videoId: string,
-	maxWaitMs = 60 * 60 * 1000,
+	{
+		stallMs = VIDEO_PROCESSING_STALL_MS,
+		maxPollMs = 30_000,
+	}: { stallMs?: number; maxPollMs?: number } = {},
 ): Promise<ProcessedVideoMetadata> {
-	const deadline = Date.now() + maxWaitMs;
-	let lastStatus = "processing";
-	for (let attempt = 0; Date.now() < deadline; attempt++) {
+	let lastSeen: string | null = null;
+	let lastChangeAt = Date.now();
+	for (let attempt = 0; ; attempt++) {
 		const result = await readVideoProcessingStatus(videoId);
 		if (result.status === "complete") return result.metadata;
 		if (result.status === "failed") {
 			throw new VideoProcessingFailedError(result.message);
 		}
 		if (result.status === "error") throw new FatalError(result.message);
-		lastStatus = result.message;
-		await sleep(Math.min(5_000 * (attempt + 1), 30_000));
+		const seen = `${result.message}|${result.updatedAt ?? ""}`;
+		if (seen !== lastSeen) {
+			lastSeen = seen;
+			lastChangeAt = Date.now();
+		} else if (Date.now() - lastChangeAt > stallMs) {
+			throw new VideoProcessingFailedError(
+				`Video processing stopped making progress while ${result.message}`,
+			);
+		}
+		await sleep(Math.min(5_000 * (attempt + 1), maxPollMs));
 	}
-	throw new FatalError(`Video processing timed out while ${lastStatus}`);
 }
