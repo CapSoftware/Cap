@@ -17,7 +17,6 @@ import {
 	claimRecordingWorker,
 	createJob,
 	deleteJob,
-	extendJobLifetimeForMedia,
 	forceCleanupActiveJobs,
 	generateJobId,
 	getActiveVideoProcessCount,
@@ -27,9 +26,11 @@ import {
 	getMaxConcurrentVideoProcesses,
 	getSystemResources,
 	hasCriticalMemoryPressure,
+	markJobProgress,
 	sendWebhook,
 	touchJob,
 	updateJob,
+	watchJobProgress,
 } from "../lib/job-manager";
 import { PROCESS_TIMEOUT_MS } from "../lib/media-common";
 import { renderEditedVideo } from "../lib/media-edit";
@@ -82,6 +83,9 @@ import { validateVideoInput } from "../lib/video-input-validation";
 
 const video = new Hono();
 const PROCESSING_HEARTBEAT_MS = 60 * 1000;
+const LIVENESS_WEBHOOK_TICKS = 5;
+const PROGRESS_WEBHOOK_INTERVAL_MS = 15 * 1000;
+const FFMPEG_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 const RECORDING_WORKER_INSTANCE = randomUUID();
 const SEGMENTED_RECORDING_TIMEOUT_MS = 3 * PROCESS_TIMEOUT_MS + 35 * 60 * 1000;
 const POST_VERIFICATION_ASSET_BUDGET_MS = 5 * 60 * 1000;
@@ -336,6 +340,36 @@ async function withJobHeartbeat<T>(
 		}
 
 		touchJob(jobId);
+	}, PROCESSING_HEARTBEAT_MS);
+	interval.unref?.();
+
+	try {
+		return await operation();
+	} finally {
+		clearInterval(interval);
+	}
+}
+
+async function withBoundedTransfer<T>(
+	jobId: string,
+	operation: () => Promise<T>,
+): Promise<T> {
+	let ticks = 0;
+	const interval = setInterval(() => {
+		const job = getJob(jobId);
+		if (
+			!job ||
+			job.phase === "complete" ||
+			job.phase === "error" ||
+			job.phase === "cancelled"
+		) {
+			clearInterval(interval);
+			return;
+		}
+		touchJob(jobId);
+		markJobProgress(jobId);
+		ticks++;
+		if (ticks % LIVENESS_WEBHOOK_TICKS === 0) void sendWebhook(job);
 	}, PROCESSING_HEARTBEAT_MS);
 	interval.unref?.();
 
@@ -927,11 +961,16 @@ async function processWithResilientRetry(
 		preset: options.preset,
 		remuxOnly: options.remuxOnly,
 		normalizeH264Level: options.normalizeH264Level,
+		idleTimeoutMs: FFMPEG_IDLE_TIMEOUT_MS,
 	};
 
+	let progressWebhookAt = 0;
 	const onProgress = (progress: number, message: string) => {
 		const scaledProgress = 10 + progress * 0.7;
 		updateJob(jobId, { progress: scaledProgress, message });
+		const now = Date.now();
+		if (now - progressWebhookAt < PROGRESS_WEBHOOK_INTERVAL_MS) return;
+		progressWebhookAt = now;
 		const currentJob = getJob(jobId);
 		if (currentJob) {
 			void sendWebhook(currentJob).catch((error) =>
@@ -1290,6 +1329,7 @@ async function processVideoAsync(
 
 	const abortController = new AbortController();
 	updateJob(jobId, { abortController });
+	watchJobProgress(jobId);
 
 	let repairedTempFile: TempFileHandle | null = null;
 	let lastResortRepairFile: TempFileHandle | null = null;
@@ -1302,11 +1342,12 @@ async function processVideoAsync(
 		});
 		await sendWebhook(job);
 
-		const inputTempFile = await withJobHeartbeat(jobId, () =>
+		const inputTempFile = await withBoundedTransfer(jobId, () =>
 			downloadVideoToTemp(
 				videoUrl,
 				options.inputExtension,
 				abortController.signal,
+				() => markJobProgress(jobId),
 			),
 		);
 		updateJob(jobId, { inputTempFile });
@@ -1315,7 +1356,7 @@ async function processVideoAsync(
 		if (sourcePresignedUrl) {
 			updateJob(jobId, { message: "Saving original video..." });
 			await sendWebhook(job);
-			await withJobHeartbeat(jobId, () =>
+			await withBoundedTransfer(jobId, () =>
 				uploadFileToS3(
 					inputTempFile.path,
 					sourcePresignedUrl,
@@ -1347,7 +1388,6 @@ async function processVideoAsync(
 		);
 		repairedTempFile = repairedFile;
 		updateJob(jobId, { metadata });
-		extendJobLifetimeForMedia(jobId, metadata.duration);
 
 		const processingInputPath = repairedFile
 			? repairedFile.path
@@ -1382,11 +1422,13 @@ async function processVideoAsync(
 		});
 		await sendWebhook(job);
 
-		const uploadReceipt = await uploadFileToS3(
-			outputTempFile.path,
-			outputPresignedUrl,
-			"video/mp4",
-			abortController.signal,
+		const uploadReceipt = await withBoundedTransfer(jobId, () =>
+			uploadFileToS3(
+				outputTempFile.path,
+				outputPresignedUrl,
+				"video/mp4",
+				abortController.signal,
+			),
 		);
 
 		if (thumbnailPresignedUrl || previewGifPresignedUrl) {

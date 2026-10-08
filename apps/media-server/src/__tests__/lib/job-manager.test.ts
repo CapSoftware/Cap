@@ -6,13 +6,15 @@ import {
 	cleanupExpiredJobs,
 	createJob,
 	deleteJob,
-	extendJobLifetimeForMedia,
 	getJob,
+	JOB_PROGRESS_STALL_MS,
 	type JobProgress,
+	markJobProgress,
 	type RecordingWorkerAcknowledgement,
 	sendWebhook,
 	touchJob,
 	updateJob,
+	watchJobProgress,
 } from "../../lib/job-manager";
 
 const createdJobs: string[] = [];
@@ -523,37 +525,58 @@ describe("job cleanup", () => {
 		expect(currentJob?.error).toContain("maximum lifetime of 60 minutes");
 	});
 
-	test("gives a long video time to finish in proportion to its length", () => {
-		const now = Date.now();
-		const running = createTrackedJob("job-long-media-running");
-		running.phase = "processing";
-		running.createdAt = now - 2 * 60 * 60 * 1000;
-		running.updatedAt = now;
-		extendJobLifetimeForMedia(running.jobId, 3 * 60 * 60);
-		const overdue = createTrackedJob("job-long-media-overdue");
-		overdue.phase = "processing";
-		overdue.createdAt = now - 3 * 60 * 60 * 1000 - 60_000;
-		overdue.updatedAt = now;
-		extendJobLifetimeForMedia(overdue.jobId, 3 * 60 * 60);
-
-		expect(cleanupExpiredJobs()).toBe(1);
-		expect(getJob(running.jobId)?.phase).toBe("processing");
-		expect(getJob(overdue.jobId)?.error).toContain(
-			"maximum lifetime of 180 minutes",
-		);
-	});
-
-	test("keeps the one-hour cap for short videos", () => {
-		const job = createTrackedJob("job-short-media");
+	test("keeps a job that is still making progress running for hours", () => {
+		const job = createTrackedJob("job-long-but-moving");
 		const now = Date.now();
 		job.phase = "processing";
-		job.createdAt = now - 61 * 60 * 1000;
+		watchJobProgress(job.jobId);
+		job.createdAt = now - 3 * 60 * 60 * 1000;
 		job.updatedAt = now;
-		extendJobLifetimeForMedia(job.jobId, 4 * 60);
+		job.progressAt = now - 60_000;
+
+		expect(cleanupExpiredJobs()).toBe(0);
+		expect(getJob(job.jobId)?.phase).toBe("processing");
+	});
+
+	test("fails a job that stopped making progress, however short it is", () => {
+		const job = createTrackedJob("job-short-but-stuck");
+		const now = Date.now();
+		job.phase = "processing";
+		watchJobProgress(job.jobId);
+		job.createdAt = now - 20 * 60 * 1000;
+		job.updatedAt = now;
+		job.progressAt = now - JOB_PROGRESS_STALL_MS - 60_000;
 
 		expect(cleanupExpiredJobs()).toBe(1);
-		expect(getJob(job.jobId)?.error).toContain(
-			"maximum lifetime of 60 minutes",
-		);
+		expect(getJob(job.jobId)).toMatchObject({
+			phase: "error",
+			message: "Processing failed (stalled)",
+		});
+		expect(getJob(job.jobId)?.error).toContain("stopped making progress");
+	});
+
+	test("counts rising progress and new phases as progress, not heartbeats", () => {
+		const job = createTrackedJob("job-progress-signals");
+		job.phase = "processing";
+		job.progress = 20;
+		watchJobProgress(job.jobId);
+		const old = Date.now() - 10 * 60 * 1000;
+
+		job.progressAt = old;
+		touchJob(job.jobId);
+		updateJob(job.jobId, { message: "Still here" });
+		updateJob(job.jobId, { progress: 20 });
+		expect(job.progressAt).toBe(old);
+
+		updateJob(job.jobId, { progress: 21 });
+		expect(job.progressAt).toBeGreaterThan(old);
+
+		job.progressAt = old;
+		updateJob(job.jobId, { phase: "uploading" });
+		expect(job.progressAt).toBeGreaterThan(old);
+
+		job.progressAt = old;
+		markJobProgress(job.jobId);
+		expect(job.progressAt).toBeGreaterThan(old);
 	});
 });
