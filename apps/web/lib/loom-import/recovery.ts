@@ -15,6 +15,7 @@ import { affectedRows } from "./jobs";
 const STALE_CHECKING_MS = 10 * 60 * 1000;
 const STUCK_START_MS = 30 * 60 * 1000;
 const SILENT_IMPORT_MS = 2 * 60 * 60 * 1000;
+const SILENT_IMPORT_BATCH = 500;
 export const LOOM_IMPORT_SILENT_ERROR =
 	"This video stopped responding while it was copying. Try it again.";
 
@@ -126,12 +127,15 @@ async function restartStuckStarts(now: Date, limit: number) {
 	return restarted;
 }
 
-async function failSilentImports(now: Date, limit: number) {
+async function failSilentImports(now: Date) {
+	const silentSince = new Date(now.getTime() - SILENT_IMPORT_MS);
+	const silentPhases = [
+		"uploading",
+		"processing",
+		"generating_thumbnail",
+	] as const;
 	const silent = await db()
-		.select({
-			videoId: videoUploads.videoId,
-			updatedAt: videoUploads.updatedAt,
-		})
+		.select({ videoId: videoUploads.videoId })
 		.from(loomImportJobItems)
 		.innerJoin(
 			videoUploads,
@@ -140,41 +144,38 @@ async function failSilentImports(now: Date, limit: number) {
 		.where(
 			and(
 				eq(loomImportJobItems.status, "importing"),
-				inArray(videoUploads.phase, [
-					"uploading",
-					"processing",
-					"generating_thumbnail",
-				]),
-				lt(videoUploads.updatedAt, new Date(now.getTime() - SILENT_IMPORT_MS)),
+				inArray(videoUploads.phase, silentPhases),
+				lt(videoUploads.updatedAt, silentSince),
 			),
 		)
-		.limit(limit);
+		.limit(SILENT_IMPORT_BATCH);
+	if (silent.length === 0) return 0;
 
-	let failed = 0;
-	for (const row of silent) {
-		const result = await db()
-			.update(videoUploads)
-			.set({
-				phase: "error",
-				processingError: LOOM_IMPORT_SILENT_ERROR,
-				processingMessage: "Loom import failed",
-				updatedAt: now,
-			})
-			.where(
-				and(
-					eq(videoUploads.videoId, row.videoId),
-					eq(videoUploads.updatedAt, row.updatedAt),
+	const result = await db()
+		.update(videoUploads)
+		.set({
+			phase: "error",
+			processingError: LOOM_IMPORT_SILENT_ERROR,
+			processingMessage: "Loom import failed",
+			updatedAt: now,
+		})
+		.where(
+			and(
+				inArray(
+					videoUploads.videoId,
+					silent.map((row) => row.videoId),
 				),
-			);
-		failed += affectedRows(result);
-	}
-	return failed;
+				inArray(videoUploads.phase, silentPhases),
+				lt(videoUploads.updatedAt, silentSince),
+			),
+		);
+	return affectedRows(result);
 }
 
 export async function recoverLoomImportJobs(now = new Date(), limit = 20) {
 	const { checking, resumed } = await resumeStaleChecks(now, limit);
 	const restarted = await restartStuckStarts(now, limit);
-	const silent = await failSilentImports(now, limit);
+	const silent = await failSilentImports(now);
 	const dispatched = await dispatchLoomImports();
 	return {
 		checking,
