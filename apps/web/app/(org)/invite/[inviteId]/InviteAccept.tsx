@@ -7,6 +7,7 @@ import { signOut } from "next-auth/react";
 import { type CSSProperties, useState } from "react";
 import { toast } from "sonner";
 import { resetUser, trackEvent } from "@/app/utils/analytics";
+import { ThemeToggle } from "../../onboarding/components/PaperRoot";
 import { CapWordmark, Explainer } from "../../onboarding/components/paper";
 import {
 	StepLede,
@@ -91,11 +92,14 @@ export function InviteAccept({
 		<>
 			<header className="mx-auto flex w-full max-w-[1180px] items-center justify-between gap-3 px-5 pt-5 sm:px-8 sm:pt-7">
 				<CapWordmark className="h-[26px] w-auto text-[var(--ob-ink)] sm:h-7" />
-				{signedIn && (
-					<span className="min-w-0 truncate text-[13px] text-[var(--ob-ink-soft)]">
-						{signedInEmail}
-					</span>
-				)}
+				<div className="flex min-w-0 items-center gap-3">
+					{signedIn && (
+						<span className="hidden min-w-0 truncate text-[13px] text-[var(--ob-ink-soft)] sm:inline">
+							{signedInEmail}
+						</span>
+					)}
+					<ThemeToggle />
+				</div>
 			</header>
 			<main className="flex flex-1 flex-col">
 				<StepPage>
@@ -188,7 +192,7 @@ export function InviteAccept({
 									</>
 								) : (
 									<>
-										<div className="rounded-2xl border-[1.5px] border-dashed border-[var(--ob-track-strong)] bg-white/60 px-4 py-3.5 text-[14.5px] leading-relaxed text-[var(--ob-ink-2)]">
+										<div className="rounded-2xl border-[1.5px] border-dashed border-[var(--ob-track-strong)] bg-[var(--ob-surface-soft)] px-4 py-3.5 text-[14.5px] leading-relaxed text-[var(--ob-ink-2)]">
 											This invite was sent to{" "}
 											<span className="font-medium text-[var(--ob-ink)]">
 												{maskedEmail}

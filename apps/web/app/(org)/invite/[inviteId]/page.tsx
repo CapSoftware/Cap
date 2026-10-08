@@ -8,9 +8,15 @@ import {
 } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
 import type { Metadata } from "next";
+import { cookies } from "next/headers";
 import { notFound } from "next/navigation";
 import { PaperRoot } from "../../onboarding/components/PaperRoot";
-import { maskEmail, needsOnboarding } from "../../onboarding/onboarding-flow";
+import {
+	maskEmail,
+	needsOnboarding,
+	onboardingThemeFromCookie,
+	THEME_COOKIE,
+} from "../../onboarding/onboarding-flow";
 import { InviteAccept } from "./InviteAccept";
 
 type Props = {
@@ -65,9 +71,12 @@ export default async function InvitePage(props: Props) {
 	}
 
 	const invitedEmail = inviteDetails.invite.invitedEmail;
+	const theme = onboardingThemeFromCookie(
+		(await cookies()).get(THEME_COOKIE)?.value,
+	);
 
 	return (
-		<PaperRoot>
+		<PaperRoot initialTheme={theme}>
 			<InviteAccept
 				inviteId={inviteId}
 				organizationName={inviteDetails.organizationName}

@@ -6,7 +6,9 @@ import {
 	onboardingHrefForIntent,
 	onboardingIntentFromNextPath,
 	onboardingProgressIndex,
+	onboardingThemeFromCookie,
 	resolveOnboardingStep,
+	resolveOnboardingTheme,
 	splitFullName,
 } from "@/app/(org)/onboarding/onboarding-flow";
 
@@ -190,5 +192,21 @@ describe("maskEmail", () => {
 			"na•••••@example.com",
 		);
 		expect(maskEmail("not-an-email")).toBe("not-an-email");
+	});
+});
+
+describe("onboarding theme", () => {
+	it("follows the device unless the app theme was chosen", () => {
+		expect(onboardingThemeFromCookie(undefined)).toBe("system");
+		expect(onboardingThemeFromCookie("purple")).toBe("system");
+		expect(onboardingThemeFromCookie("dark")).toBe("dark");
+		expect(onboardingThemeFromCookie("light")).toBe("light");
+	});
+
+	it("resolves the device preference", () => {
+		expect(resolveOnboardingTheme("system", true)).toBe("dark");
+		expect(resolveOnboardingTheme("system", false)).toBe("light");
+		expect(resolveOnboardingTheme("light", true)).toBe("light");
+		expect(resolveOnboardingTheme("dark", false)).toBe("dark");
 	});
 });

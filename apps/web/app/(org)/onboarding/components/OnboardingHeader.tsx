@@ -6,6 +6,7 @@ import { useState } from "react";
 import { resetUser } from "@/app/utils/analytics";
 import { clearOnboardingNextPath } from "../../onboarding-next";
 import { isOnboardingStep, onboardingProgressIndex } from "../onboarding-flow";
+import { ThemeToggle } from "./PaperRoot";
 import { CapWordmark, ProgressMarks } from "./paper";
 
 export const OnboardingHeader = ({ email }: { email: string }) => {
@@ -20,10 +21,11 @@ export const OnboardingHeader = ({ email }: { email: string }) => {
 			<div className="justify-self-center">
 				{step && <ProgressMarks index={onboardingProgressIndex(step)} />}
 			</div>
-			<div className="flex min-w-0 items-center justify-end gap-3">
+			<div className="flex min-w-0 items-center justify-end gap-2.5 sm:gap-3">
 				<span className="hidden max-w-[220px] truncate text-[13px] text-[var(--ob-ink-soft)] lg:inline">
 					{email}
 				</span>
+				<ThemeToggle />
 				<button
 					type="button"
 					className="ob-link shrink-0 !text-[13px]"

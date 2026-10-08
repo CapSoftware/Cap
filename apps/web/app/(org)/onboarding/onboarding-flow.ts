@@ -9,6 +9,20 @@ export const ONBOARDING_STEPS = [
 export type OnboardingStep = (typeof ONBOARDING_STEPS)[number];
 
 export const ONBOARDING_NEXT_COOKIE = "cap_onboarding_next";
+export const THEME_COOKIE = "theme";
+
+export type OnboardingThemePreference = "light" | "dark" | "system";
+
+export const onboardingThemeFromCookie = (
+	value: string | undefined,
+): OnboardingThemePreference =>
+	value === "light" || value === "dark" ? value : "system";
+
+export const resolveOnboardingTheme = (
+	preference: OnboardingThemePreference,
+	systemPrefersDark: boolean,
+) =>
+	preference === "system" ? (systemPrefersDark ? "dark" : "light") : preference;
 
 const LEGACY_STEP_REDIRECTS: Record<string, OnboardingStep> = {
 	"organization-setup": "start",

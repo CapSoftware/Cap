@@ -88,7 +88,7 @@ export const ProNote = ({
 }) => (
 	<div
 		className={clsx(
-			"flex items-start gap-3 rounded-2xl border-[1.5px] border-dashed border-[var(--ob-track-strong)] bg-white/60 px-4 py-3.5 text-[14px] leading-relaxed text-[var(--ob-ink-2)]",
+			"flex items-start gap-3 rounded-2xl border-[1.5px] border-dashed border-[var(--ob-track-strong)] bg-[var(--ob-surface-soft)] px-4 py-3.5 text-[14px] leading-relaxed text-[var(--ob-ink-2)]",
 			className,
 		)}
 	>

@@ -47,7 +47,7 @@ const OptionCard = ({
 	<li
 		className={clsx(
 			"ob-card ob-rise grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-4 gap-y-3 p-5 sm:gap-x-5 sm:p-6",
-			featured && "!border-[var(--ob-ink)] !bg-white",
+			featured && "!border-[var(--ob-ink)] !bg-[var(--ob-surface)]",
 		)}
 		style={{ "--d": `${delay}s` } as CSSProperties}
 	>

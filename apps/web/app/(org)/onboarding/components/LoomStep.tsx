@@ -26,7 +26,7 @@ import { useUpgradeConfirmation } from "./use-upgrade-confirmation";
 
 const LoomToCapBadge = () => (
 	<div className="ob-rise mb-5 flex items-center gap-2">
-		<span className="flex size-11 items-center justify-center rounded-2xl border-[1.5px] border-[var(--ob-track)] bg-white">
+		<span className="flex size-11 items-center justify-center rounded-2xl border-[1.5px] border-[var(--ob-track)] bg-[var(--ob-surface)]">
 			<LoomMark size={22} />
 		</span>
 		<svg
@@ -47,7 +47,7 @@ const LoomToCapBadge = () => (
 				d="M 31 5 L 39 10.5 L 31 15"
 			/>
 		</svg>
-		<span className="flex size-11 items-center justify-center rounded-2xl border-[1.5px] border-[var(--ob-track)] bg-white">
+		<span className="flex size-11 items-center justify-center rounded-2xl border-[1.5px] border-[var(--ob-track)] bg-[var(--ob-surface)]">
 			<svg viewBox="0 0 40 40" className="size-6" aria-hidden="true">
 				<circle cx="20" cy="20" r="16" fill="#4785FF" />
 				<circle cx="20" cy="20" r="13" fill="#ADC9FF" />

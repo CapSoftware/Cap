@@ -48,21 +48,28 @@ const NamePreview = ({ name }: { name: string }) => {
 					/>
 				</svg>
 			</div>
-			<div className="ob-card ob-rise -rotate-[1.2deg] p-2.5 shadow-[0_30px_60px_-40px_rgba(32,36,44,0.45)]">
+			<div className="ob-card ob-rise -rotate-[1.2deg] p-2.5 shadow-[0_30px_60px_-40px_var(--ob-shadow)]">
 				<div className="ob-scene-frame relative aspect-video overflow-hidden">
 					<svg
 						viewBox="0 0 320 180"
 						className="absolute inset-0 size-full"
 						aria-hidden="true"
 					>
-						<rect x="28" y="30" width="120" height="10" rx="5" fill="#e4e1d9" />
+						<rect
+							x="28"
+							y="30"
+							width="120"
+							height="10"
+							rx="5"
+							fill="var(--ob-track)"
+						/>
 						<rect
 							x="28"
 							y="52"
 							width="170"
 							height="7"
 							rx="3.5"
-							fill="#ebe8e1"
+							fill="var(--ob-track)"
 						/>
 						<rect
 							x="28"
@@ -70,7 +77,7 @@ const NamePreview = ({ name }: { name: string }) => {
 							width="140"
 							height="7"
 							rx="3.5"
-							fill="#ebe8e1"
+							fill="var(--ob-track)"
 						/>
 						<rect
 							x="28"
@@ -78,7 +85,7 @@ const NamePreview = ({ name }: { name: string }) => {
 							width="156"
 							height="7"
 							rx="3.5"
-							fill="#ebe8e1"
+							fill="var(--ob-track)"
 						/>
 						<g className="ob-boil">
 							<rect
@@ -98,7 +105,7 @@ const NamePreview = ({ name }: { name: string }) => {
 								cy="122"
 								r="22"
 								className="ob-ink"
-								style={{ fill: "rgba(255,255,255,0.9)" }}
+								style={{ fill: "var(--ob-surface)" }}
 							/>
 						</g>
 						<path d="M 153 111 L 172 122 L 153 133 Z" fill="var(--ob-ink)" />
@@ -106,7 +113,7 @@ const NamePreview = ({ name }: { name: string }) => {
 							cx="282"
 							cy="146"
 							r="20"
-							fill="color-mix(in srgb, var(--ob-camera) 20%, #fff)"
+							fill="color-mix(in srgb, var(--ob-camera) 20%, var(--ob-surface))"
 							stroke="var(--ob-camera)"
 							strokeWidth="2"
 						/>

@@ -91,7 +91,7 @@ export const SceneCursor = ({ name }: { name: string }) => (
 		<path
 			d="M 0 0 L 0 17 L 4.5 12.8 L 7.6 19.6 L 10.4 18.4 L 7.4 11.7 L 13 11.4 Z"
 			fill="var(--ob-ink)"
-			stroke="#fff"
+			stroke="var(--ob-paper)"
 			strokeWidth="1.4"
 			strokeLinejoin="round"
 		/>

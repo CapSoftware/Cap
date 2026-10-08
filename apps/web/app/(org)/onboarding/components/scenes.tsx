@@ -7,7 +7,7 @@ import {
 	Sparks,
 } from "./paper";
 
-const white = { fill: "#fff" } as const;
+const white = { fill: "var(--ob-surface)" } as const;
 const paper2 = { fill: "var(--ob-paper-2)" } as const;
 
 const PlayTriangle = ({
@@ -182,7 +182,7 @@ export const LoomScene = () => (
 			y="62"
 			width="125"
 			height="18"
-			fill="#fff"
+			fill="var(--ob-surface)"
 		/>
 		<text
 			x="209"
@@ -208,7 +208,7 @@ export const LoomScene = () => (
 				fontSize="9.5"
 				fontWeight="500"
 				textAnchor="middle"
-				className="ob-label is-paper"
+				className="ob-label is-on-ink"
 			>
 				Import
 			</text>
@@ -262,7 +262,7 @@ export const LoomScene = () => (
 				width="40"
 				height="28"
 				rx="6"
-				fill="#efeefe"
+				fill="color-mix(in srgb, var(--ob-loom) 16%, var(--ob-surface))"
 				stroke="var(--ob-loom)"
 				strokeWidth="1.6"
 			/>
@@ -430,7 +430,7 @@ export const RecordScene = () => (
 				y="163.6"
 				fontSize="10"
 				fontWeight="500"
-				className="ob-label is-paper"
+				className="ob-label is-white"
 			>
 				Record
 			</text>
@@ -447,13 +447,20 @@ export const RecordScene = () => (
 				rx="14"
 				fill="var(--ob-ink)"
 			/>
-			<rect x="262" y="156" width="8" height="8" rx="1.6" fill="#fff" />
+			<rect
+				x="262"
+				y="156"
+				width="8"
+				height="8"
+				rx="1.6"
+				fill="var(--ob-paper)"
+			/>
 			<text
 				x="276"
 				y="163.6"
 				fontSize="10"
 				fontWeight="500"
-				className="ob-label is-paper"
+				className="ob-label is-on-ink"
 			>
 				Stop
 			</text>
@@ -524,7 +531,7 @@ export const RecordScene = () => (
 					cx="196"
 					cy="122"
 					r="19"
-					fill="color-mix(in srgb, var(--ob-camera) 18%, #fff)"
+					fill="color-mix(in srgb, var(--ob-camera) 18%, var(--ob-surface))"
 					stroke="var(--ob-camera)"
 					strokeWidth="1.8"
 				/>
@@ -567,7 +574,7 @@ export const RecordScene = () => (
 					width="40"
 					height="18"
 					rx="9"
-					fill="#fff"
+					fill="var(--ob-surface)"
 					stroke="var(--ob-ink)"
 					strokeWidth="1.4"
 				/>
@@ -615,7 +622,7 @@ export const UploadScene = () => (
 				height="164"
 				rx="16"
 				className="ob-ink is-soft"
-				style={{ fill: "rgba(255,255,255,0.65)", strokeDasharray: "7 7" }}
+				style={{ fill: "var(--ob-surface-soft)", strokeDasharray: "7 7" }}
 			/>
 		</g>
 		<rect
@@ -780,9 +787,9 @@ export const UploadScene = () => (
 );
 
 const TEAM = [
-	{ initial: "A", fill: "#ffe7d1" },
-	{ initial: "M", fill: "#dbe8ff" },
-	{ initial: "J", fill: "#dcf5e5" },
+	{ initial: "A", fill: "var(--ob-team-1)" },
+	{ initial: "M", fill: "var(--ob-team-2)" },
+	{ initial: "J", fill: "var(--ob-team-3)" },
 ] as const;
 
 const LIBRARY = Array.from({ length: 6 }, (_, index) => ({
@@ -863,7 +870,7 @@ export const JoinScene = ({
 					fontSize="9.5"
 					fontWeight="500"
 					textAnchor="middle"
-					className="ob-label is-paper"
+					className="ob-label is-on-ink"
 				>
 					Join
 				</text>
@@ -948,7 +955,7 @@ export const JoinScene = ({
 				fontSize="10"
 				fontWeight="500"
 				textAnchor="middle"
-				className="ob-label is-paper"
+				className="ob-label is-white"
 			>
 				{initial}
 			</text>
@@ -1079,7 +1086,7 @@ export const RecordDoodle = () => (
 					cx="92"
 					cy="60"
 					r="14"
-					fill="color-mix(in srgb, var(--ob-camera) 18%, #fff)"
+					fill="color-mix(in srgb, var(--ob-camera) 18%, var(--ob-surface))"
 					stroke="var(--ob-camera)"
 					strokeWidth="2.2"
 				/>

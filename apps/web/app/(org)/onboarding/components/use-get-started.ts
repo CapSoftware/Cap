@@ -1,10 +1,18 @@
 "use client";
 
 import type { User } from "@cap/web-domain";
+import Cookies from "js-cookie";
 import { useCallback, useEffect, useRef } from "react";
 import { trackEvent } from "@/app/utils/analytics";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { clearOnboardingNextPath } from "../../onboarding-next";
+import { THEME_COOKIE } from "../onboarding-flow";
+
+const carryThemeToDashboard = () => {
+	if (Cookies.get(THEME_COOKIE)) return;
+	if (!window.matchMedia("(prefers-color-scheme: dark)").matches) return;
+	Cookies.set(THEME_COOKIE, "dark", { expires: 365 });
+};
 
 export const useGetStarted = (
 	initiallyComplete: boolean,
@@ -27,6 +35,7 @@ export const useGetStarted = (
 					.then(() => {
 						completeRef.current = true;
 						clearOnboardingNextPath();
+						carryThemeToDashboard();
 						trackEvent("onboarding_completed", { path });
 					})
 					.finally(() => {
