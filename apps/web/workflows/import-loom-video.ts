@@ -234,9 +234,10 @@ export async function importLoomVideoWorkflow(
 		let loomWaits = 0;
 		for (let processingAttempt = 0; ; processingAttempt++) {
 			let capacityRetryCount = 0;
+			let jobId: string;
 			while (true) {
 				try {
-					await processVideoOnMediaServer(payload, processingInput);
+					jobId = await processVideoOnMediaServer(payload, processingInput);
 					break;
 				} catch (error) {
 					if (
@@ -256,6 +257,7 @@ export async function importLoomVideoWorkflow(
 			}
 			try {
 				metadata = await waitForVideoProcessing(payload.videoId, {
+					jobId,
 					maxPollMs: PROCESSING_POLL_MAX_MS,
 				});
 				break;
@@ -431,7 +433,7 @@ async function startMediaServerProcessJob(
 async function processVideoOnMediaServer(
 	payload: ImportLoomPayload,
 	processingInput: LoomProcessingInput,
-): Promise<void> {
+): Promise<string> {
 	"use step";
 
 	const { videoId, userId, rawFileKey, loomVideoId } = payload;
@@ -536,7 +538,7 @@ async function processVideoOnMediaServer(
 		})
 		.where(eq(videoUploads.videoId, videoId as Video.VideoId));
 
-	await startMediaServerProcessJob(mediaServerUrl, {
+	const jobId = await startMediaServerProcessJob(mediaServerUrl, {
 		videoId,
 		userId,
 		videoUrl: rawVideoUrl,
@@ -550,6 +552,7 @@ async function processVideoOnMediaServer(
 		priority: "bulk",
 	});
 	await continueLoomImports(videoId);
+	return jobId;
 }
 
 async function saveMetadataAndComplete(

@@ -4,7 +4,19 @@ const mocks = vi.hoisted(() => ({
 	rows: [] as unknown[][],
 	where: vi.fn(),
 	sleep: vi.fn(),
+	observe: vi.fn(),
 	now: 0,
+}));
+
+vi.mock("@cap/env", () => ({
+	serverEnv: () => ({
+		MEDIA_SERVER_URL: "https://worker.example.com",
+		WEB_URL: "https://cap.example.com",
+		MEDIA_SERVER_WEBHOOK_SECRET: "test-secret",
+	}),
+}));
+vi.mock("@/lib/desktop-recording-job-status", () => ({
+	observeDesktopRecordingJob: mocks.observe,
 }));
 
 vi.mock("@cap/database", () => ({
@@ -48,6 +60,9 @@ describe("durable video processing completion", () => {
 		mocks.sleep.mockReset().mockImplementation(async (delay: number) => {
 			mocks.now += delay;
 		});
+		mocks.observe
+			.mockReset()
+			.mockResolvedValue({ status: "unavailable", delivered: false });
 	});
 
 	afterEach(() => vi.restoreAllMocks());
@@ -133,5 +148,62 @@ describe("durable video processing completion", () => {
 		expect(Math.max(...mocks.sleep.mock.calls.map(([delay]) => delay))).toBe(
 			30_000,
 		);
+		expect(mocks.observe).not.toHaveBeenCalled();
+	});
+
+	it("asks the media server before giving up, and gives up once it no longer has the job", async () => {
+		mocks.where.mockResolvedValue([{ ...pending, updatedAt: new Date(0) }]);
+		await expect(
+			waitForVideoProcessing("video", { jobId: "job-1" }),
+		).rejects.toBeInstanceOf(VideoProcessingFailedError);
+		expect(mocks.observe).toHaveBeenCalledExactlyOnceWith({
+			videoId: "video",
+			jobId: "job-1",
+			mediaServerUrl: "https://worker.example.com",
+			webhookUrl:
+				"https://cap.example.com/api/webhooks/media-server/progress?retryable=true",
+			secret: "test-secret",
+		});
+	});
+
+	it("keeps waiting without a second copy while the media server still runs the job", async () => {
+		const stuck = { ...pending, updatedAt: new Date(0) };
+		let finishedAt = Number.POSITIVE_INFINITY;
+		mocks.observe.mockImplementation(async () => {
+			if (mocks.now > 90 * 60 * 1000) {
+				finishedAt = mocks.now;
+				return { status: "terminal", delivered: true };
+			}
+			return { status: "active", delivered: false };
+		});
+		mocks.rows = [[], [metadata]];
+		mocks.where.mockImplementation(async () =>
+			mocks.now <= finishedAt ? [stuck] : mocks.rows.shift(),
+		);
+		await expect(
+			waitForVideoProcessing("video", { jobId: "job-1" }),
+		).resolves.toEqual(metadata);
+		expect(finishedAt).toBeGreaterThan(90 * 60 * 1000);
+		const checks = mocks.observe.mock.calls.length;
+		expect(checks).toBeGreaterThan(100);
+		expect(checks).toBeLessThan(mocks.where.mock.calls.length);
+	});
+
+	it("goes back to quiet waiting once updates arrive again", async () => {
+		let updatedAt = 0;
+		mocks.observe.mockImplementation(async () => {
+			updatedAt = mocks.now;
+			return { status: "active", delivered: false };
+		});
+		mocks.rows = [[], [metadata]];
+		mocks.where.mockImplementation(async () =>
+			mocks.now < 3 * 60 * 60 * 1000
+				? [{ ...pending, updatedAt: new Date(updatedAt) }]
+				: mocks.rows.shift(),
+		);
+		await expect(
+			waitForVideoProcessing("video", { jobId: "job-1" }),
+		).resolves.toEqual(metadata);
+		expect(mocks.observe.mock.calls.length).toBeLessThanOrEqual(9);
 	});
 });

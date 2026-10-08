@@ -13,6 +13,11 @@ const mocks = vi.hoisted(() => ({
 	fetch: vi.fn(),
 	sleep: vi.fn(),
 	continueLoomImport: vi.fn(),
+	observe: vi.fn(),
+}));
+
+vi.mock("@/lib/desktop-recording-job-status", () => ({
+	observeDesktopRecordingJob: mocks.observe,
 }));
 
 vi.mock("@cap/database", () => ({
@@ -117,6 +122,9 @@ describe("media processing workflows", () => {
 		mocks.remove.mockImplementation(() => Effect.void);
 		mocks.sleep.mockResolvedValue(undefined);
 		mocks.continueLoomImport.mockReset().mockResolvedValue(null);
+		mocks.observe
+			.mockReset()
+			.mockResolvedValue({ status: "unavailable", delivered: false });
 		vi.stubGlobal("fetch", mocks.fetch);
 		mocks.fetch.mockReset().mockImplementation(async (url: string) => {
 			if (url.startsWith("https://www.loom.com/")) {
@@ -315,6 +323,9 @@ describe("media processing workflows", () => {
 				success: true,
 			});
 			expect(now).toBeGreaterThan(20 * 60 * 1000);
+			expect(mocks.observe).toHaveBeenCalledExactlyOnceWith(
+				expect.objectContaining({ videoId: "video", jobId: "job-1" }),
+			);
 			expect(mocks.fetch.mock.calls.map(([url]) => url)).toEqual([
 				"https://www.loom.com/api/campaigns/sessions/loom-video/transcoded-url",
 				"https://worker.example.com/video/import",
@@ -324,6 +335,38 @@ describe("media processing workflows", () => {
 				payload.rawFileKey,
 				expect.anything(),
 			);
+		} finally {
+			clock.mockRestore();
+		}
+	});
+
+	it("does not start a second copy while the media server still has the Loom video", async () => {
+		let now = 0;
+		const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+		mocks.sleep.mockImplementation(async (delay: unknown) => {
+			if (typeof delay === "number") now += delay;
+		});
+		mocks.observe
+			.mockResolvedValueOnce({ status: "active", delivered: false })
+			.mockResolvedValueOnce({ status: "active", delivered: false })
+			.mockResolvedValueOnce({ status: "terminal", delivered: true });
+		const quiet = { ...pending, updatedAt: new Date(0) };
+		try {
+			mocks.rows = [
+				[video],
+				...Array.from({ length: 25 }, () => [quiet]),
+				[],
+				[metadata],
+			];
+			await expect(importLoomVideoWorkflow(payload)).resolves.toMatchObject({
+				success: true,
+				metadata,
+			});
+			expect(mocks.observe).toHaveBeenCalledTimes(3);
+			expect(mocks.fetch.mock.calls.map(([url]) => url)).toEqual([
+				"https://www.loom.com/api/campaigns/sessions/loom-video/transcoded-url",
+				"https://worker.example.com/video/import",
+			]);
 		} finally {
 			clock.mockRestore();
 		}

@@ -54,9 +54,10 @@ export async function processVideoWorkflow(
 		let metadata: ProcessedVideoMetadata;
 		for (let processingAttempt = 0; ; processingAttempt++) {
 			let capacityRetryCount = 0;
+			let jobId: string;
 			while (true) {
 				try {
-					await processVideoOnMediaServer(
+					jobId = await processVideoOnMediaServer(
 						videoId,
 						userId,
 						rawFileKey,
@@ -71,7 +72,7 @@ export async function processVideoWorkflow(
 				}
 			}
 			try {
-				metadata = await waitForVideoProcessing(videoId);
+				metadata = await waitForVideoProcessing(videoId, { jobId });
 				break;
 			} catch (error) {
 				if (
@@ -260,7 +261,7 @@ async function processVideoOnMediaServer(
 	userId: string,
 	rawFileKey: string,
 	_bucketId: string | null,
-): Promise<void> {
+): Promise<string> {
 	"use step";
 
 	const mediaServerUrl = serverEnv().MEDIA_SERVER_URL;
@@ -339,7 +340,7 @@ async function processVideoOnMediaServer(
 		})
 		.where(eq(videoUploads.videoId, videoId as Video.VideoId));
 
-	await startMediaServerProcessJob(mediaServerUrl, {
+	return await startMediaServerProcessJob(mediaServerUrl, {
 		audioLevels: video.source.type === "webMP4",
 		videoId,
 		userId,
