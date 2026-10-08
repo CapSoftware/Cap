@@ -91,4 +91,20 @@ describe("network-health speed test & quality adaptation", () => {
 
 		globalThis.fetch = originalFetch;
 	});
+
+	it("handles rate limiting and server errors gracefully during speed tests", async () => {
+		const originalFetch = globalThis.fetch;
+		globalThis.fetch = vi.fn().mockResolvedValue({
+			ok: false,
+			status: 429,
+			statusText: "Too Many Requests",
+		} as Response);
+
+		const result = await runSpeedTest();
+		expect(result).toBeNull();
+		expect(speedTest().status).toBe("error");
+		expect(speedTest().error).toContain("429");
+
+		globalThis.fetch = originalFetch;
+	});
 });
