@@ -133,6 +133,7 @@ export function calculateSpeedMbps(bytes: number, durationMs: number): number {
 }
 
 export async function runUploadHealthCheck(): Promise<boolean> {
+	const startedAt = Date.now();
 	setNetworkHealth((prev) => ({
 		...prev,
 		status: "checking",
@@ -176,11 +177,14 @@ export async function runUploadHealthCheck(): Promise<boolean> {
 	} catch (error) {
 		const errorMessage =
 			error instanceof Error ? error.message : "Upload health check failed";
-		setNetworkHealth({
-			status: "unhealthy",
-			lastChecked: Date.now(),
-			error: errorMessage,
-		});
+		const current = networkHealth();
+		if (current.lastChecked === null || current.lastChecked <= startedAt) {
+			setNetworkHealth({
+				status: "unhealthy",
+				lastChecked: Date.now(),
+				error: errorMessage,
+			});
+		}
 		return false;
 	}
 }
@@ -338,15 +342,21 @@ export async function runSpeedTest(): Promise<number | null> {
 }
 
 export function initNetworkHealthMonitoring(): () => void {
-	void runUploadHealthCheck();
-	void runSpeedTest();
+	void (async () => {
+		await runUploadHealthCheck();
+		if (!isRecordingSignal()) {
+			await runSpeedTest();
+		}
+	})();
 
-	const interval = setInterval(() => {
+	const interval = setInterval(async () => {
 		if (!isRecordingSignal()) {
 			if (networkHealth().status !== "healthy") {
-				void runUploadHealthCheck();
+				await runUploadHealthCheck();
 			}
-			void runSpeedTest();
+			if (!isRecordingSignal()) {
+				await runSpeedTest();
+			}
 		}
 	}, 45_000);
 

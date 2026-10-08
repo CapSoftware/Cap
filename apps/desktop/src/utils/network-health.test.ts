@@ -111,7 +111,6 @@ describe("network-health speed test & quality adaptation", () => {
 	it("clears unhealthy network health status upon successful speed test completion", async () => {
 		const originalFetch = globalThis.fetch;
 
-		// Force network health to unhealthy (simulating offline startup)
 		globalThis.fetch = vi
 			.fn()
 			.mockRejectedValue(new Error("Offline: network unreachable"));
@@ -119,7 +118,6 @@ describe("network-health speed test & quality adaptation", () => {
 		expect(networkHealth().status).toBe("unhealthy");
 		expect(networkHealth().error).toContain("Offline: network unreachable");
 
-		// Mock successful responses for warmup probe, latency probe, and samples
 		const mockFetch = vi
 			.fn()
 			.mockImplementation((_url: string, init?: RequestInit) => {
@@ -150,13 +148,58 @@ describe("network-health speed test & quality adaptation", () => {
 		expect(speed).toBeGreaterThan(0);
 		expect(speedTest().status).toBe("completed");
 		expect(speedTest().error).toBeNull();
-
-		// Verify network health was restored and error cleared
 		expect(networkHealth().status).toBe("healthy");
 		expect(networkHealth().error).toBeNull();
-
-		// Verify that warmup probe, latency probe, and 2 samples were requested
 		expect(mockFetch).toHaveBeenCalledTimes(4);
+
+		globalThis.fetch = originalFetch;
+	});
+
+	it("prevents delayed health check failure from overwriting newer successful status", async () => {
+		const originalFetch = globalThis.fetch;
+
+		let delayedReject: ((err: Error) => void) | null = null;
+		const delayedPromise = new Promise<Response>((_, reject) => {
+			delayedReject = reject;
+		});
+		delayedPromise.catch(() => {});
+
+		globalThis.fetch = vi.fn().mockReturnValue(delayedPromise);
+		const pendingCheck = runUploadHealthCheck();
+
+		globalThis.fetch = vi
+			.fn()
+			.mockImplementation((_url: string, init?: RequestInit) => {
+				const body =
+					typeof init?.body === "string" ? JSON.parse(init.body) : {};
+				if (body.payload === "ping") {
+					return Promise.resolve({
+						ok: true,
+						json: async () => ({
+							success: true,
+							bytesReceived: 4,
+							timestamp: Date.now(),
+						}),
+					} as Response);
+				}
+				return Promise.resolve({
+					ok: true,
+					json: async () => ({
+						success: true,
+						bytesReceived: 512 * 1024,
+						timestamp: Date.now(),
+					}),
+				} as Response);
+			});
+
+		await runSpeedTest();
+		expect(networkHealth().status).toBe("healthy");
+
+		delayedReject?.(new Error("Late network timeout"));
+		await pendingCheck;
+
+		expect(networkHealth().status).toBe("healthy");
+		expect(networkHealth().error).toBeNull();
 
 		globalThis.fetch = originalFetch;
 	});
