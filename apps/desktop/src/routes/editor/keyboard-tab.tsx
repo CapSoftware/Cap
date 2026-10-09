@@ -6,7 +6,11 @@ import toast from "solid-toast";
 import { Toggle } from "~/components/Toggle";
 import {
 	defaultKeyboardSettings,
+	KEYCAP_STYLE_OPTIONS,
+	KEYCAP_THEME_OPTIONS,
 	type KeyboardSettings,
+	type KeycapStyle,
+	type KeycapTheme,
 } from "~/store/keyboard";
 import type { OrganizationBrandColorSwatch } from "~/utils/organization-branding";
 import { commands } from "~/utils/tauri";
@@ -17,6 +21,7 @@ import {
 	generateForStableKeyboardTimeline,
 	keyboardTimelineSignature,
 } from "./keyboard-timing";
+import { KeycapPreviewCluster } from "./keycap-renderer";
 import {
 	FONT_OPTIONS,
 	getTextWeightLabel,
@@ -186,6 +191,140 @@ export function KeyboardTab(props: {
 					!getSetting("enabled") && "opacity-50 pointer-events-none",
 				)}
 			>
+				<div class="flex flex-col items-center justify-center p-3 rounded-xl bg-ed-ctl/50 border border-ed-line overflow-hidden">
+					<div class="text-[10px] font-semibold text-ed-text-3 mb-2.5 tracking-wider uppercase">
+						Keycap Preview
+					</div>
+					<KeycapPreviewCluster
+						keys={["⌘", "K"]}
+						style={getSetting("style")}
+						theme={getSetting("theme")}
+						showChassis={getSetting("showChassis")}
+						use3D={getSetting("keycapMode")}
+						scale={0.85}
+						customTextColor={getSetting("color")}
+						customBgColor={getSetting("backgroundColor")}
+					/>
+				</div>
+
+				<Section name="Keycap Design">
+					<div class="flex flex-col gap-2">
+						<Field name="Keycap Style" inline>
+							<KSelect<KeycapStyle>
+								options={KEYCAP_STYLE_OPTIONS.map((s) => s.value)}
+								value={getSetting("style")}
+								onChange={(value) => {
+									if (value === null) return;
+									updateSetting("style", value);
+								}}
+								itemComponent={(props) => (
+									<MenuItem<typeof KSelect.Item>
+										as={KSelect.Item}
+										item={props.item}
+									>
+										<KSelect.ItemLabel class="flex-1">
+											{
+												KEYCAP_STYLE_OPTIONS.find(
+													(s) => s.value === props.item.rawValue,
+												)?.label
+											}
+										</KSelect.ItemLabel>
+									</MenuItem>
+								)}
+							>
+								<KSelect.Trigger class={selectTriggerClass}>
+									<KSelect.Value<KeycapStyle> class="truncate">
+										{(state) =>
+											KEYCAP_STYLE_OPTIONS.find(
+												(s) => s.value === state.selectedOption(),
+											)?.label
+										}
+									</KSelect.Value>
+									<KSelect.Icon>
+										<IconCapChevronDown class="shrink-0 size-3.5 text-ed-text-3" />
+									</KSelect.Icon>
+								</KSelect.Trigger>
+								<KSelect.Portal>
+									<PopperContent<typeof KSelect.Content>
+										as={KSelect.Content}
+										class={topSlideAnimateClasses}
+									>
+										<MenuItemList<typeof KSelect.Listbox>
+											class="overflow-y-auto max-h-48"
+											as={KSelect.Listbox}
+										/>
+									</PopperContent>
+								</KSelect.Portal>
+							</KSelect>
+						</Field>
+
+						<Field name="Color Theme" inline>
+							<KSelect<KeycapTheme>
+								options={KEYCAP_THEME_OPTIONS.map((t) => t.value)}
+								value={getSetting("theme")}
+								onChange={(value) => {
+									if (value === null) return;
+									updateSetting("theme", value);
+								}}
+								itemComponent={(props) => (
+									<MenuItem<typeof KSelect.Item>
+										as={KSelect.Item}
+										item={props.item}
+									>
+										<KSelect.ItemLabel class="flex-1">
+											{
+												KEYCAP_THEME_OPTIONS.find(
+													(t) => t.value === props.item.rawValue,
+												)?.label
+											}
+										</KSelect.ItemLabel>
+									</MenuItem>
+								)}
+							>
+								<KSelect.Trigger class={selectTriggerClass}>
+									<KSelect.Value<KeycapTheme> class="truncate">
+										{(state) =>
+											KEYCAP_THEME_OPTIONS.find(
+												(t) => t.value === state.selectedOption(),
+											)?.label
+										}
+									</KSelect.Value>
+									<KSelect.Icon>
+										<IconCapChevronDown class="shrink-0 size-3.5 text-ed-text-3" />
+									</KSelect.Icon>
+								</KSelect.Trigger>
+								<KSelect.Portal>
+									<PopperContent<typeof KSelect.Content>
+										as={KSelect.Content}
+										class={topSlideAnimateClasses}
+									>
+										<MenuItemList<typeof KSelect.Listbox>
+											class="overflow-y-auto max-h-48"
+											as={KSelect.Listbox}
+										/>
+									</PopperContent>
+								</KSelect.Portal>
+							</KSelect>
+						</Field>
+
+						<Field name="3D Keycaps Mode" inline>
+							<Toggle
+								checked={getSetting("keycapMode")}
+								onChange={(checked) => updateSetting("keycapMode", checked)}
+							/>
+						</Field>
+
+						<Field name="Floating Pod Chassis" inline>
+							<Toggle
+								checked={getSetting("showChassis")}
+								onChange={(checked) => updateSetting("showChassis", checked)}
+							/>
+						</Field>
+					</div>
+				</Section>
+
+				<div class="w-full border-t border-ed-line" />
+
 				<Section name="Font settings">
 					<div class="flex flex-col gap-2">
 						<Field name="Font Family" inline>
