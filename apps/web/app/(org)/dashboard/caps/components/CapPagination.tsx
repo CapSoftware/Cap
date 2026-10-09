@@ -7,6 +7,7 @@ import {
 	PaginationNext,
 	PaginationPrevious,
 } from "@cap/ui";
+import Link from "next/link";
 
 interface CapPaginationProps {
 	currentPage: number;
@@ -25,50 +26,63 @@ export const CapPagination: React.FC<CapPaginationProps> = ({
 				{currentPage > 1 && (
 					<PaginationItem>
 						<PaginationPrevious
+							asChild
 							className="h-10 bg-transparent hover:bg-gray-4"
-							href={hrefForPage(currentPage - 1)}
-						/>
+						>
+							<Link href={hrefForPage(currentPage - 1)} scroll={false} />
+						</PaginationPrevious>
 					</PaginationItem>
 				)}
 				<PaginationItem>
 					<PaginationLink
+						asChild
 						className="h-10 min-w-10"
-						href={hrefForPage(1)}
 						isActive={currentPage === 1}
 					>
-						1
+						<Link href={hrefForPage(1)} scroll={false}>
+							1
+						</Link>
 					</PaginationLink>
 				</PaginationItem>
 				{currentPage !== 1 && (
 					<PaginationItem>
 						<PaginationLink
+							asChild
 							className="h-10 min-w-10"
-							href={hrefForPage(currentPage)}
 							isActive={true}
 						>
-							{currentPage}
+							<Link href={hrefForPage(currentPage)} scroll={false}>
+								{currentPage}
+							</Link>
 						</PaginationLink>
 					</PaginationItem>
 				)}
 				{totalPages > currentPage + 1 && (
 					<PaginationItem>
 						<PaginationLink
+							asChild
 							className="h-10 min-w-10 hover:bg-gray-3"
-							href={hrefForPage(currentPage + 1)}
 							isActive={false}
 						>
-							{currentPage + 1}
+							<Link href={hrefForPage(currentPage + 1)} scroll={false}>
+								{currentPage + 1}
+							</Link>
 						</PaginationLink>
 					</PaginationItem>
 				)}
 				{currentPage > 2 && <PaginationEllipsis />}
 				<PaginationItem>
 					<PaginationNext
+						asChild
 						className="h-10 bg-transparent hover:bg-gray-4"
-						href={hrefForPage(
-							currentPage === totalPages ? currentPage : currentPage + 1,
-						)}
-					/>
+					>
+						<Link
+							href={hrefForPage(
+								currentPage === totalPages ? currentPage : currentPage + 1,
+							)}
+							scroll={false}
+						/>
+					</PaginationNext>
 				</PaginationItem>
 			</PaginationContent>
 		</Pagination>
