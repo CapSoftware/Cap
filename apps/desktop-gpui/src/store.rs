@@ -190,6 +190,43 @@ fn bundled_resource_dirs_for(
     directories
 }
 
+/// The Tauri dev harness's hand-off marker (`gpui_app.rs` over there): it
+/// survives the whole session and is removed only on a clean quit, so a marker
+/// left behind reads as a crash and routes the next `bun run dev:desktop` back
+/// to the classic app.
+pub fn handoff_marker_path() -> PathBuf {
+    app_data_dir().join("cap-gpui.handoff")
+}
+
+pub fn mark_handoff_session() {
+    if let Err(error) = mark_handoff_session_at(&handoff_marker_path()) {
+        tracing::warn!("writing the hand-off marker: {error}");
+    }
+}
+
+fn mark_handoff_session_at(path: &Path) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let staged = path.with_extension(format!("handoff-{}", std::process::id()));
+    std::fs::write(&staged, std::process::id().to_string())?;
+    std::fs::rename(&staged, path).inspect_err(|_| {
+        let _ = std::fs::remove_file(&staged);
+    })
+}
+
+pub fn clear_handoff_marker() {
+    clear_handoff_marker_at(&handoff_marker_path());
+}
+
+fn clear_handoff_marker_at(path: &Path) {
+    match std::fs::remove_file(path) {
+        Ok(()) => tracing::info!("cleared the hand-off marker"),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => tracing::warn!("clearing the hand-off marker: {error}"),
+    }
+}
+
 /// A dev-checkout switch-back has no `Cap.app` to `open`: the classic app only
 /// runs inside its `tauri dev` harness, which exited with the hand-off. This
 /// sentinel asks whatever supervises the dev session (`scripts/dev-desktop.mjs`
@@ -1752,6 +1789,23 @@ pub fn preset_names() -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_handoff_marker_holds_this_pid_until_a_clean_quit_clears_it() {
+        let directory =
+            std::env::temp_dir().join(format!("cap-gpui-handoff-{}", super::new_uuid_v4()));
+        let marker = directory.join("cap-gpui.handoff");
+        super::mark_handoff_session_at(&marker).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&marker).unwrap(),
+            std::process::id().to_string()
+        );
+        assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
+        super::clear_handoff_marker_at(&marker);
+        assert!(!marker.exists());
+        super::clear_handoff_marker_at(&marker);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
     use super::*;
 
     struct TempStore {
