@@ -28,6 +28,12 @@ export async function AppProviders({ children }: PropsWithChildren) {
 								webUrl: buildEnv.NEXT_PUBLIC_WEB_URL,
 								workosAuthAvailable: !!serverEnv().WORKOS_CLIENT_ID,
 								googleAuthAvailable: !!serverEnv().GOOGLE_CLIENT_ID,
+								oidcAuthAvailable: !!(
+									serverEnv().OIDC_ISSUER &&
+									serverEnv().OIDC_CLIENT_ID &&
+									serverEnv().OIDC_CLIENT_SECRET
+								),
+								oidcName: serverEnv().OIDC_NAME || "SSO",
 							}}
 						>
 							<ReactQueryProvider>
