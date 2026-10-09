@@ -432,11 +432,6 @@ export const ShareHeader = ({
 		[],
 	);
 
-	/**
-	 * Where the caret goes when the field opens: under the pointer for a click,
-	 * so renaming reads as a caret appearing in the text you clicked, or
-	 * `null` to select the whole title (the keyboard's way in).
-	 */
 	const pendingCaretRef = useRef<number | null>(null);
 
 	const startEditing = (event?: ReactMouseEvent<HTMLButtonElement>) => {
@@ -1578,11 +1573,6 @@ function MetaDot() {
 	);
 }
 
-/**
- * Whether the element's text is cut off by its ellipsis. Re-measured when it
- * resizes or `content` changes, so the title's tooltip only offers itself when
- * there is something more to read.
- */
 function useIsTruncated(element: HTMLElement | null, content: string): boolean {
 	const [truncated, setTruncated] = useState(false);
 	useEffect(() => {
@@ -1625,11 +1615,6 @@ function CreatedAt({ date }: { date: Date }) {
 	);
 }
 
-/**
- * The character offset under a point in `container`'s text, for putting the
- * rename caret where the title was clicked. `null` when the browser can't say
- * or the point isn't in the title, and the field then selects everything.
- */
 function caretOffsetAtPoint(
 	x: number,
 	y: number,

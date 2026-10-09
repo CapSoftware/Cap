@@ -22,7 +22,6 @@ const Tooltip = ({
 	kbd?: string[];
 	disable?: boolean;
 	delayDuration?: number;
-	/** Controlled open state, for a trigger that decides when it has something to say. */
 	open?: boolean;
 	onOpenChange?: (open: boolean) => void;
 }) => {
