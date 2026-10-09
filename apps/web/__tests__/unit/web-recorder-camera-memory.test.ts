@@ -165,6 +165,7 @@ vi.mock(
 	() => ({
 		loadRecoveredRecordingSpools: vi.fn(async () => []),
 		removeRecoveredRecordingSpoolFromCache: vi.fn(),
+		resetRecoveredRecordingSpoolsCache: vi.fn(),
 	}),
 );
 
