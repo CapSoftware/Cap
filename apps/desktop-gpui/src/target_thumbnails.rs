@@ -719,7 +719,7 @@ mod platform {
                         lock.bytes_per_row(),
                         width,
                         height,
-                        pixel_format.into(),
+                        channel_order(pixel_format),
                     )
                 }?
             }
@@ -761,18 +761,16 @@ mod platform {
         Some(normalize_thumbnail_dimensions(&img))
     }
 
-    impl From<cv::PixelFormat> for super::ChannelOrder {
-        fn from(value: cv::PixelFormat) -> Self {
-            match value {
-                cv::PixelFormat::_32_BGRA => Self::Bgra,
-                cv::PixelFormat::_32_RGBA => Self::Rgba,
-                cv::PixelFormat::_32_ARGB => Self::Argb,
-                cv::PixelFormat::_32_ABGR => Self::Abgr,
-                // `capture_thumbnail_from_filter` only reaches the conversion
-                // for the four 32-bit orders; anything else has already
-                // returned. Mirrors the source's `_ => unreachable!()`.
-                other => unreachable!("unsupported 32-bit pixel format {other:?}"),
-            }
+    fn channel_order(value: cv::PixelFormat) -> super::ChannelOrder {
+        match value {
+            cv::PixelFormat::_32_BGRA => super::ChannelOrder::Bgra,
+            cv::PixelFormat::_32_RGBA => super::ChannelOrder::Rgba,
+            cv::PixelFormat::_32_ARGB => super::ChannelOrder::Argb,
+            cv::PixelFormat::_32_ABGR => super::ChannelOrder::Abgr,
+            // `capture_thumbnail_from_filter` only reaches the conversion
+            // for the four 32-bit orders; anything else has already
+            // returned. Mirrors the source's `_ => unreachable!()`.
+            other => unreachable!("unsupported 32-bit pixel format {other:?}"),
         }
     }
 
@@ -948,10 +946,12 @@ use platform::{capture_display_thumbnail, capture_window_thumbnail, shareable_co
 // `PixelBufferLock` so the arithmetic can be unit tested against hand-built
 // buffers on any host.
 
+#[cfg(test)]
+use cap_gpui_kernels::frame::ycbcr_to_rgb;
 #[cfg(any(target_os = "macos", test))]
 pub use cap_gpui_kernels::frame::{ChannelOrder, Nv12Range};
 #[cfg(any(target_os = "macos", test))]
-use cap_gpui_kernels::frame::{convert_32bit_rows, convert_nv12_planes, ycbcr_to_rgb};
+use cap_gpui_kernels::frame::{convert_32bit_rows, convert_nv12_planes};
 
 /// `convert_32bit_pixel_buffer` (`thumbnails/mac.rs:111-160`).
 ///
