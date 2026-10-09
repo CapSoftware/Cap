@@ -1,7 +1,6 @@
 "use client";
 
 import { acquireDisplayStream } from "@cap/recorder-core/capture-streams";
-import { detectRecordingModeFromTrack } from "@cap/recorder-core/recorder-utils";
 import {
 	Button,
 	Dialog,
@@ -75,6 +74,7 @@ import { useDevicePreferences } from "./useDevicePreferences";
 import { useDialogInteractions } from "./useDialogInteractions";
 import { useMicOnlyRecorder } from "./useMicOnlyRecorder";
 import { useMicrophoneDevices } from "./useMicrophoneDevices";
+import { type ScreenSurface, useScreenShare } from "./useScreenShare";
 import { useWebRecorder } from "./useWebRecorder";
 import { FREE_PLAN_MAX_RECORDING_MS } from "./web-recorder-constants";
 import { WebRecorderDialogHeader } from "./web-recorder-dialog-header";
@@ -95,12 +95,6 @@ const waitForNextFrame = () =>
 		window.requestAnimationFrame(() => resolve());
 	});
 
-const stopStream = (stream: MediaStream | null) => {
-	for (const track of stream?.getTracks() ?? []) track.stop();
-};
-
-type ScreenSurface = Exclude<RecordingMode, "camera">;
-
 const SURFACE_LABELS: Record<ScreenSurface, string> = {
 	fullscreen: "Entire screen",
 	window: "Window",
@@ -115,11 +109,6 @@ const SURFACE_PHRASES: Record<ScreenSurface, string> = {
 
 const AUDIO_GUIDE_DISMISSED_KEY = "cap-web-recorder-audio-guide-dismissed";
 const NO_CAMERA_KEY = "cap-web-recorder-no-camera";
-
-type SharedScreen = {
-	stream: MediaStream;
-	surface: ScreenSurface;
-};
 
 const joinWords = (words: string[]) =>
 	words.length <= 1
@@ -175,9 +164,6 @@ export const WebRecorderDialog = ({
 	const [open, setOpen] = useState(embedded);
 	const [recordingMode, setRecordingMode] =
 		useState<RecordingMode>("fullscreen");
-	const [sharedScreen, setSharedScreen] = useState<SharedScreen | null>(null);
-	const sharedScreenRef = useRef<SharedScreen | null>(null);
-	const [sharePending, setSharePending] = useState(false);
 	const dialogContentRef = useRef<HTMLDivElement>(null);
 	const startSoundRef = useRef<HTMLAudioElement | null>(null);
 	const stopSoundRef = useRef<HTMLAudioElement | null>(null);
@@ -187,35 +173,6 @@ export const WebRecorderDialog = ({
 		() => cameraPreviewRef.current?.getVideoStream() ?? null,
 		[],
 	);
-
-	const replaceSharedScreen = useCallback((next: SharedScreen | null) => {
-		sharedScreenRef.current = next;
-		setSharedScreen(next);
-	}, []);
-
-	const stopSharing = useCallback(() => {
-		stopStream(sharedScreenRef.current?.stream ?? null);
-		replaceSharedScreen(null);
-	}, [replaceSharedScreen]);
-
-	useEffect(
-		() => () => {
-			stopStream(sharedScreenRef.current?.stream ?? null);
-			sharedScreenRef.current = null;
-		},
-		[],
-	);
-
-	// The recorder takes ownership of the shared screen when it starts, so the
-	// dialog forgets it rather than stopping it.
-	const takeSharedDisplayStream = useCallback(() => {
-		const shared = sharedScreenRef.current;
-		replaceSharedScreen(null);
-		const live = shared?.stream
-			.getVideoTracks()
-			.some((track) => track.readyState === "live");
-		return live ? (shared?.stream ?? null) : null;
-	}, [replaceSharedScreen]);
 
 	useEffect(() => {
 		if (typeof window === "undefined") {
@@ -436,44 +393,28 @@ export const WebRecorderDialog = ({
 
 	const [screenNotice, setScreenNotice] = useState(true);
 
-	const shareScreen = useCallback(async () => {
-		setSharePending(true);
-		try {
-			const stream = await acquireDisplayStream({
-				mode: "fullscreen",
-				quality: { height: quality.screenHeight, frameRate: quality.frameRate },
-				systemAudioEnabled,
-				onSystemAudioFallback: () => {
-					toast.warning(
-						"System audio isn't supported in this browser. Recording without it.",
-					);
-				},
-			});
-			await cameraPreviewRef.current?.closePictureInPicture();
-			stopStream(sharedScreenRef.current?.stream ?? null);
-			const track = stream.getVideoTracks()[0] ?? null;
-			const shared: SharedScreen = {
-				stream,
-				surface: detectRecordingModeFromTrack(track) ?? "fullscreen",
-			};
-			track?.addEventListener("ended", () => {
-				if (sharedScreenRef.current === shared) replaceSharedScreen(null);
-			});
-			replaceSharedScreen(shared);
-			setScreenNotice(true);
-			return true;
-		} catch (error) {
-			if (
-				!(error instanceof DOMException && error.name === "NotAllowedError")
-			) {
-				console.error("Screen share failed", error);
-				toast.error("Couldn't share your screen. Try again.");
-			}
-			return false;
-		} finally {
-			setSharePending(false);
-		}
-	}, [replaceSharedScreen, systemAudioEnabled, quality]);
+	const acquireScreen = useCallback(async () => {
+		const stream = await acquireDisplayStream({
+			mode: "fullscreen",
+			quality: { height: quality.screenHeight, frameRate: quality.frameRate },
+			systemAudioEnabled,
+			onSystemAudioFallback: () => {
+				toast.warning(
+					"System audio isn't supported in this browser. Recording without it.",
+				);
+			},
+		});
+		await cameraPreviewRef.current?.closePictureInPicture();
+		return stream;
+	}, [systemAudioEnabled, quality]);
+	const {
+		sharedScreen,
+		sharedScreenRef,
+		sharePending,
+		shareScreen,
+		stopSharing,
+		takeSharedDisplayStream,
+	} = useScreenShare({ open, acquire: acquireScreen });
 
 	const webRecorder = useWebRecorder({
 		organisationId,
@@ -690,8 +631,9 @@ export const WebRecorderDialog = ({
 	}, [recordAfterShare, sharedScreen, recordingMode]);
 
 	const shareThenMaybeRecord = async (thenRecord: boolean) => {
-		const shared = await shareScreen();
-		if (shared && thenRecord) setRecordAfterShare(true);
+		if (!(await shareScreen())) return;
+		setScreenNotice(true);
+		if (thenRecord) setRecordAfterShare(true);
 	};
 
 	// Sharing with system audio on goes through the guide first; the popup
