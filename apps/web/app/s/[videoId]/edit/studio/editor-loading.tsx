@@ -61,7 +61,9 @@ export function EditorLoading({
 				<span
 					className="edl-pill edl-title"
 					style={{ width: Math.min(480, Math.max(80, title.length * 6.6)) }}
-				/>
+				>
+					<span className="sr-only">{title}</span>
+				</span>
 				<span className="edl-spacer" />
 				<Pill width={64} className="edl-wide-only" />
 				<Pill width={76} className="edl-wide-only" />
