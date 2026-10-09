@@ -98,7 +98,9 @@ fn current_channel(app: &AppHandle) -> UpdateChannel {
         .unwrap_or_default()
 }
 
-fn updater_target() -> Result<String, String> {
+const CLASSIC_PLATFORM_SUFFIX: &str = "-classic";
+
+fn platform_target() -> Result<String, String> {
     let arch = if cfg!(target_arch = "aarch64") {
         "aarch64"
     } else {
@@ -118,6 +120,16 @@ fn updater_target() -> Result<String, String> {
         };
         Ok(format!("{platform}-{arch}"))
     }
+}
+
+/// Cap Classic ships beside Cap in the same release under `-classic`
+/// platforms; the unsuffixed ones carry Cap itself.
+fn classic_target(platform: &str) -> String {
+    format!("{platform}{CLASSIC_PLATFORM_SUFFIX}")
+}
+
+fn updater_target() -> Result<String, String> {
+    platform_target().map(|platform| classic_target(&platform))
 }
 
 fn endpoint(channel: UpdateChannel) -> Result<Url, String> {
@@ -420,4 +432,18 @@ pub fn spawn_background_loop(app: AppHandle) {
             *state.announced_version.lock().await = Some(version);
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn classic_updates_resolve_only_to_classic_platforms() {
+        for (platform, expected) in [
+            ("darwin-aarch64", "darwin-aarch64-classic"),
+            ("windows-x86_64", "windows-x86_64-classic"),
+            ("linux-x86_64-appimage", "linux-x86_64-appimage-classic"),
+        ] {
+            assert_eq!(super::classic_target(platform), expected);
+        }
+    }
 }

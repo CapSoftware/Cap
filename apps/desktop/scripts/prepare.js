@@ -3,7 +3,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { shouldBundleGpui } from "../../../scripts/run-gpui-build.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -72,39 +71,10 @@ export async function createTauriPlatformConfigs(
 	configOptions = undefined,
 ) {
 	const srcTauri = path.join(__dirname, "../src-tauri/");
-	const profile = process.argv.includes("--release") ? "release" : "debug";
-	const hostArchitecture = process.arch === "arm64" ? "aarch64" : "x86_64";
-	const hostTargets = {
-		darwin: `${hostArchitecture}-apple-darwin`,
-		win32: `${hostArchitecture}-pc-windows-msvc`,
-		linux: `${hostArchitecture}-unknown-linux-gnu`,
-	};
-	const target = process.env.RUST_TARGET_TRIPLE ?? hostTargets[platform];
-	const extension = platform === "win32" ? ".exe" : "";
-	const sidecarAvailable = target
-		? await fs
-				.access(
-					path.join(srcTauri, "binaries", `cap-gpui-${target}${extension}`),
-				)
-				.then(() => true)
-				.catch(() => false)
-		: false;
-	const developmentWorkspaceAvailable = await fs
-		.access(path.join(__dirname, "../../desktop-gpui/dev.sh"))
-		.then(() => true)
-		.catch(() => false);
-	const includeGpui = shouldBundleGpui(
-		platform,
-		process.env,
-		profile,
-		sidecarAvailable,
-		developmentWorkspaceAvailable,
-	);
 	const externalBin = [
 		"binaries/cap-muxer",
 		"binaries/cap-exporter",
 		"binaries/cap-cli",
-		...(includeGpui ? ["binaries/cap-gpui"] : []),
 	];
 	let baseConfig = {};
 	let configFileName = null;

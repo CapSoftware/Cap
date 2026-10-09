@@ -1,5 +1,7 @@
+import { Button } from "@cap/ui-solid";
 import { invoke } from "@tauri-apps/api/core";
 import { type } from "@tauri-apps/plugin-os";
+import * as shell from "@tauri-apps/plugin-shell";
 import { createResource, createSignal, For, onCleanup, Show } from "solid-js";
 import { createStore } from "solid-js/store";
 
@@ -11,6 +13,7 @@ import {
 import {
 	Section,
 	SectionRows,
+	SettingItem,
 	SettingsPageContent,
 	ToggleSettingItem,
 } from "./Setting";
@@ -20,11 +23,11 @@ import {
 // The mirror of this sequence lives in `render_switch_overlay` in the native
 // app's `settings_pages.rs`.
 const SWITCH_SENTENCES = [
-	"Switching to the native Cap app.",
-	"It will look almost identical. That is the point.",
+	"Switching to Cap.",
 	"Same Cap, rebuilt fully native for performance.",
-	"Experimental. Your recordings and settings come with you.",
+	"Your recordings and settings come with you.",
 ];
+const CAP_DOWNLOAD_URL = "https://cap.so/download";
 const SENTENCE_MS = 1300;
 const COUNTDOWN_FROM = 5;
 
@@ -55,7 +58,7 @@ function Inner(props: {
 		deriveGeneralSettings(props.initialStore),
 	);
 
-	const [gpuiAvailable] = createResource(() =>
+	const [capInstalled] = createResource(() =>
 		invoke<boolean>("gpui_app_available").catch(() => false),
 	);
 
@@ -73,39 +76,21 @@ function Inner(props: {
 		setTakeover(null);
 	};
 
-	// A failed takeover leaves the overlay up but puts the toggle back where
-	// it was, since nothing was switched.
-	const takeoverActive = () => {
-		const state = takeover();
-		return state !== null && state.error === null;
-	};
-
 	const performSwitch = async () => {
 		try {
-			await generalSettingsStore.set({ enableGpuiApp: true });
 			await invoke("switch_to_gpui_app");
 		} catch (error) {
-			// The setting is written first so the native app comes up already
-			// owning the session; a refused handoff has to put it back.
-			await generalSettingsStore
-				.set({ enableGpuiApp: false })
-				.catch(() => undefined);
 			setTakeover((state) =>
 				state
 					? {
 							...state,
-							error:
-								typeof error === "string"
-									? error
-									: "Couldn't open the native app.",
+							error: typeof error === "string" ? error : "Couldn't open Cap.",
 						}
 					: state,
 			);
 		}
 	};
 
-	// The toggle is the confirmation: flipping it starts the takeover, and
-	// Cancel is on screen for the whole sequence.
 	const startTakeover = () => {
 		clearTimers();
 		setTakeover({ sentence: 0, remaining: COUNTDOWN_FROM, error: null });
@@ -183,22 +168,40 @@ function Inner(props: {
 					</SectionRows>
 				</Section>
 
-				<Show when={gpuiAvailable()}>
-					<Section title="Native app">
-						<SectionRows>
-							<ToggleSettingItem
-								label="Cap GPUI"
-								description="Close this app and reopen the experimental fully-native version of Cap. It is unfinished, so expect missing features. Your recordings and settings are shared, and you can switch back from its Experimental settings."
-								value={!!settings.enableGpuiApp || takeoverActive()}
-								onChange={(value) => {
-									if (value) startTakeover();
-									else if (takeover()) cancelTakeover();
-									else void handleChange("enableGpuiApp", false);
-								}}
-							/>
-						</SectionRows>
-					</Section>
-				</Show>
+				<Section title="Cap">
+					<SectionRows>
+						<SettingItem
+							label="Switch to Cap"
+							description={
+								capInstalled()
+									? "Close Cap Classic and open Cap, the fully native version. Your recordings and settings are shared, and you can come back from Cap's Experimental settings."
+									: "Cap, the fully native version, isn't installed on this computer yet. Download it to switch; your recordings and settings are shared."
+							}
+						>
+							<Show
+								when={capInstalled()}
+								fallback={
+									<Button
+										size="sm"
+										variant="dark"
+										onClick={() => void shell.open(CAP_DOWNLOAD_URL)}
+									>
+										Download
+									</Button>
+								}
+							>
+								<Button
+									size="sm"
+									variant="dark"
+									disabled={takeover() !== null}
+									onClick={startTakeover}
+								>
+									Switch
+								</Button>
+							</Show>
+						</SettingItem>
+					</SectionRows>
+				</Section>
 			</SettingsPageContent>
 
 			<Show when={takeover()}>
