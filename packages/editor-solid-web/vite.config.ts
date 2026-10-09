@@ -43,38 +43,41 @@ export default defineConfig({
 			// The renderer's wasm is the largest file the first frame needs, and
 			// its fetch otherwise waits for the entry script and the renderer's
 			// glue. Starting it with the page lets the two download together.
+			// A script starts it rather than a preload, which Safari downloads a
+			// second time when the renderer asks for the same file.
 			name: "cap-editor-preload-renderer",
 			transformIndexHtml: {
 				order: "post",
 				handler(_html, context) {
 					const tags: HtmlTagDescriptor[] = [];
 					for (const output of Object.values(context.bundle ?? {})) {
-						const preview =
-							output.type === "asset"
-								? output.originalFileNames.some((name) =>
-										name.includes("renderer/pkg/"),
-									)
-								: output.facadeModuleId?.includes(
-										"renderer/pkg/cap_editor_browser_renderer.js",
-									);
-						if (!preview) continue;
-						tags.push({
-							tag: "link",
-							injectTo: "head",
-							attrs:
-								output.type === "asset"
-									? {
-											rel: "preload",
-											href: `/editor-solid/${output.fileName}`,
-											as: "fetch",
-											type: "application/wasm",
-											crossorigin: "",
-										}
-									: {
-											rel: "modulepreload",
-											href: `/editor-solid/${output.fileName}`,
-										},
-						});
+						if (
+							output.type === "asset" &&
+							output.originalFileNames.some((name) =>
+								name.includes("renderer/pkg/"),
+							)
+						) {
+							const url = JSON.stringify(`/editor-solid/${output.fileName}`);
+							tags.push({
+								tag: "script",
+								injectTo: "head",
+								children: `window.__capRendererWasm=fetch(${url},{credentials:"same-origin"});window.__capRendererWasm.catch(function(){});`,
+							});
+						} else if (
+							output.type === "chunk" &&
+							output.facadeModuleId?.includes(
+								"renderer/pkg/cap_editor_browser_renderer.js",
+							)
+						) {
+							tags.push({
+								tag: "link",
+								injectTo: "head",
+								attrs: {
+									rel: "modulepreload",
+									href: `/editor-solid/${output.fileName}`,
+								},
+							});
+						}
 					}
 					return tags;
 				},
