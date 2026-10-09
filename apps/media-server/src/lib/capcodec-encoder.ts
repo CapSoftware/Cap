@@ -1,4 +1,6 @@
-import { file, spawn } from "bun";
+import { constants } from "node:fs";
+import { access } from "node:fs/promises";
+import { file, type Subprocess, spawn } from "bun";
 import { registerSubprocess, terminateProcess } from "./subprocess";
 
 const DEFAULT_CRF = 23;
@@ -100,6 +102,19 @@ export function capcodecOptionsForJob(
 			? mapCapcodecPreset(presetOverride)
 			: mapCapcodecPreset(job.preset),
 	};
+}
+
+export async function assertCapcodecBinary(binary: string): Promise<void> {
+	const resolved = binary.includes("/") ? binary : Bun.which(binary);
+	if (resolved) {
+		try {
+			await access(resolved, constants.X_OK);
+			return;
+		} catch {}
+	}
+	throw new Error(
+		`capcodec binary "${binary}" is not executable. The media-server image does not include capcodec. Mount a binary and set CAPCODEC_BIN to its path before setting CAP_MEDIA_VIDEO_ENCODER=capcodec. See /app/capcodec.md.`,
+	);
 }
 
 export function remainingTimeoutMs(
@@ -272,53 +287,60 @@ export async function encodeVideoWithCapcodec(
 	job: CapcodecEncodeJob,
 ): Promise<void> {
 	if (job.abortSignal?.aborted) throw cancelled();
+	await assertCapcodecBinary(job.options.binary);
 	const size = fitEvenSize(job.width, job.height, job.maxWidth, job.maxHeight);
 	const fps = frameRateFraction(job.fps);
-	const decoder = registerSubprocess(
-		spawn({
-			cmd: buildCapcodecDecodeArgs(job, size.width, size.height, fps),
-			stdout: "pipe",
-			stderr: "pipe",
-		}),
-	);
-	const encoder = registerSubprocess(
-		spawn({
-			cmd: buildCapcodecEncodeArgs(
-				job.options,
-				job.outputPath,
-				size.width,
-				size.height,
-				fps,
-			),
-			stdin: decoder.stdout as ReadableStream<Uint8Array>,
-			stdout: "ignore",
-			stderr: "pipe",
-		}),
-	);
-	const abort = () => {
-		void terminateProcess(decoder);
-		void terminateProcess(encoder);
+	let decoder: Subprocess | undefined;
+	let encoder: Subprocess | undefined;
+	let stopping: Promise<void> | undefined;
+	const stop = () => {
+		if (!stopping) {
+			const procs = [decoder, encoder].filter(
+				(proc): proc is Subprocess => proc !== undefined,
+			);
+			stopping = Promise.all(procs.map((proc) => terminateProcess(proc))).then(
+				() => undefined,
+			);
+		}
+		return stopping;
 	};
-	job.abortSignal?.addEventListener("abort", abort, { once: true });
-	const decoderLines: string[] = [];
-	const encoderLines: string[] = [];
+	const onAbort = () => {
+		void stop();
+	};
 	try {
+		decoder = registerSubprocess(
+			spawn({
+				cmd: buildCapcodecDecodeArgs(job, size.width, size.height, fps),
+				stdout: "pipe",
+				stderr: "pipe",
+			}),
+		);
+		encoder = registerSubprocess(
+			spawn({
+				cmd: buildCapcodecEncodeArgs(
+					job.options,
+					job.outputPath,
+					size.width,
+					size.height,
+					fps,
+				),
+				stdin: decoder.stdout,
+				stdout: "ignore",
+				stderr: "pipe",
+			}),
+		);
+		job.abortSignal?.addEventListener("abort", onAbort, { once: true });
+		const decoderLines: string[] = [];
+		const encoderLines: string[] = [];
 		await Promise.all([
-			collectStderr(
-				decoder.stderr as ReadableStream<Uint8Array>,
-				decoderLines,
-				(line) => {
-					const outTime = parseOutTimeUs(line);
-					if (outTime !== null && job.onProgress && job.totalDurationUs > 0) {
-						const progress = Math.min(
-							100,
-							(outTime / job.totalDurationUs) * 100,
-						);
-						job.onProgress(progress, `Encoding: ${Math.round(progress)}%`);
-					}
-				},
-			),
-			collectStderr(encoder.stderr as ReadableStream<Uint8Array>, encoderLines),
+			collectStderr(decoder.stderr, decoderLines, (line) => {
+				const outTime = parseOutTimeUs(line);
+				if (outTime !== null && job.onProgress && job.totalDurationUs > 0) {
+					const progress = Math.min(100, (outTime / job.totalDurationUs) * 100);
+					job.onProgress(progress, `Encoding: ${Math.round(progress)}%`);
+				}
+			}),
+			collectStderr(encoder.stderr, encoderLines),
 		]);
 		if (job.abortSignal?.aborted) throw cancelled();
 		const [decoderExit, encoderExit] = await Promise.all([
@@ -347,8 +369,7 @@ export async function encodeVideoWithCapcodec(
 		if (job.abortSignal?.aborted) throw cancelled();
 		throw error;
 	} finally {
-		job.abortSignal?.removeEventListener("abort", abort);
-		await terminateProcess(decoder);
-		await terminateProcess(encoder);
+		job.abortSignal?.removeEventListener("abort", onAbort);
+		await stop();
 	}
 }

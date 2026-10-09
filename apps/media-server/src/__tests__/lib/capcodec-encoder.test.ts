@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+	assertCapcodecBinary,
 	buildCapcodecDecodeArgs,
 	buildCapcodecEncodeArgs,
 	capcodecOptionsForJob,
@@ -110,6 +111,13 @@ describe("capcodec encoder integration", () => {
 		expect(frameRateFraction(12.5)).toBe("25/2");
 		expect(frameRateFraction(Number.NaN)).toBe("30/1");
 		expect(frameRateFraction(0.0001)).toBe("30/1");
+	});
+
+	test("requires a mounted capcodec binary", async () => {
+		await expect(assertCapcodecBinary("/bin/true")).resolves.toBeUndefined();
+		await expect(assertCapcodecBinary("/no/such/capcodec")).rejects.toThrow(
+			/does not include capcodec/,
+		);
 	});
 
 	test("leaves the mux the time the encode did not use", () => {

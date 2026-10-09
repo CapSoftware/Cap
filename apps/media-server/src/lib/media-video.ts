@@ -1709,25 +1709,25 @@ async function processVideoWithCapcodec(
 	const forwardAbort = () => controller.abort();
 	abortSignal?.addEventListener("abort", forwardAbort, { once: true });
 	const startedAt = performance.now();
+	const encodePromise = encodeVideoWithCapcodec({
+		inputPath,
+		outputPath: videoOnly.path,
+		width: metadata.width,
+		height: metadata.height,
+		fps: metadata.fps,
+		maxWidth: opts.maxWidth,
+		maxHeight: opts.maxHeight,
+		extraInputArgs,
+		options: capcodec,
+		totalDurationUs: metadata.duration * 1_000_000,
+		onProgress,
+		abortSignal: controller.signal,
+	});
 	try {
-		await withTimeout(
-			encodeVideoWithCapcodec({
-				inputPath,
-				outputPath: videoOnly.path,
-				width: metadata.width,
-				height: metadata.height,
-				fps: metadata.fps,
-				maxWidth: opts.maxWidth,
-				maxHeight: opts.maxHeight,
-				extraInputArgs,
-				options: capcodec,
-				totalDurationUs: metadata.duration * 1_000_000,
-				onProgress,
-				abortSignal: controller.signal,
-			}),
-			processTimeoutMs,
-			async () => controller.abort(),
-		);
+		await withTimeout(encodePromise, processTimeoutMs, async () => {
+			controller.abort();
+			await encodePromise.catch(() => undefined);
+		});
 		const muxArgs = [
 			"ffmpeg",
 			"-hide_banner",
