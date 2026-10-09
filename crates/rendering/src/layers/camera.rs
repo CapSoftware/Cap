@@ -34,6 +34,14 @@ struct BlurCacheEntry {
 }
 
 impl CameraLayer {
+    /// Forget the last frame shown, as a new layer would: the next render of
+    /// a reused layer set starts somewhere else in the recording.
+    pub(crate) fn reset_frame_state(&mut self) {
+        self.last_recording_time = None;
+        self.last_frame_storage = None;
+        self.blur_cache = None;
+    }
+
     #[allow(dead_code)]
     pub fn new(device: &wgpu::Device) -> Self {
         Self::new_with_all_shared_pipelines(
@@ -229,7 +237,16 @@ impl CameraLayer {
                                 .is_ok()
                         })
                         .unwrap_or(false);
-                    #[cfg(not(target_os = "macos"))]
+                    #[cfg(target_os = "linux")]
+                    let iosurface_converted = camera_frame.cuda_nv12().is_some_and(|cuda| {
+                        self.yuv_converter
+                            .convert_nv12_cuda(device, queue, cuda)
+                            .inspect_err(|error| {
+                                tracing::warn!(%error, "CUDA camera frame conversion failed")
+                            })
+                            .is_ok()
+                    });
+                    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
                     let iosurface_converted = false;
 
                     if iosurface_converted && self.yuv_converter.output_texture().is_some() {
@@ -460,7 +477,18 @@ impl CameraLayer {
                                 .is_ok()
                         })
                         .unwrap_or(false);
-                    #[cfg(not(target_os = "macos"))]
+                    // Submitted on its own ahead of `encoder`, so queue order
+                    // still has the conversion land before the copy below.
+                    #[cfg(target_os = "linux")]
+                    let iosurface_converted = camera_frame.cuda_nv12().is_some_and(|cuda| {
+                        self.yuv_converter
+                            .convert_nv12_cuda(device, queue, cuda)
+                            .inspect_err(|error| {
+                                tracing::warn!(%error, "CUDA camera frame conversion failed")
+                            })
+                            .is_ok()
+                    });
+                    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
                     let iosurface_converted = false;
 
                     if iosurface_converted && self.yuv_converter.output_texture().is_some() {

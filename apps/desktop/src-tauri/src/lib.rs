@@ -49,6 +49,7 @@ mod recording_settings;
 mod recording_telemetry;
 mod recordings_locations;
 mod recovery;
+mod render_frame_event;
 mod screenshot_editor;
 mod startup;
 #[cfg(debug_assertions)]
@@ -105,6 +106,7 @@ use screenshot_editor::{
 };
 
 mod gpu_context;
+mod gpu_device_health;
 pub use gpu_context::{PendingScreenshot, PendingScreenshots};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -1490,7 +1492,7 @@ pub struct App {
     camera_cleanup_done: bool,
     camera_feed: ActorRef<feeds::camera::CameraFeed>,
     server_url: String,
-    logs_dir: PathBuf,
+    logs_dir: Option<PathBuf>,
     disconnected_inputs: HashSet<RecordingInputKind>,
     was_camera_only_recording: bool,
 }
@@ -4661,6 +4663,25 @@ async fn open_file_path(_app: AppHandle, path: PathBuf) -> Result<(), String> {
     Ok(())
 }
 
+/// The opener's Linux backend makes blocking zbus calls, which panic inside an async task.
+pub(crate) async fn reveal_in_dir(app: AppHandle, path: PathBuf) -> Result<(), String> {
+    cap_utils::run_on_dedicated_thread("reveal-item-in-dir", move || {
+        app.opener().reveal_item_in_dir(path)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+#[instrument(skip(app))]
+async fn reveal_item_in_dir(app: AppHandle, path: PathBuf) -> Result<(), String> {
+    reveal_in_dir(app, path)
+        .await
+        .map_err(|e| format!("Failed to reveal item: {e}"))
+}
+
 #[derive(Deserialize, specta::Type, tauri_specta::Event, Debug, Clone)]
 struct RenderFrameEvent {
     frame_number: u32,
@@ -6319,10 +6340,10 @@ async fn check_notification_permissions(app: AppHandle) {
 
     match app.notification().permission_state() {
         Ok(state) if state != PermissionState::Granted => {
-            println!("Requesting notification permission");
+            info!("Requesting notification permission");
             match app.notification().request_permission() {
                 Ok(PermissionState::Granted) => {
-                    println!("Notification permission granted");
+                    info!("Notification permission granted");
                 }
                 Ok(_) | Err(_) => {
                     GeneralSettingsStore::update(&app, |s| {
@@ -6333,10 +6354,10 @@ async fn check_notification_permissions(app: AppHandle) {
             }
         }
         Ok(_) => {
-            println!("Notification permission already granted");
+            debug!("Notification permission already granted");
         }
         Err(e) => {
-            eprintln!("Error checking notification permission state: {e}");
+            error!("Error checking notification permission state: {e}");
         }
     }
 }
@@ -6815,6 +6836,7 @@ fn specta_builder() -> tauri_specta::Builder {
             copy_image_to_clipboard,
             copy_rendered_screenshot_to_clipboard,
             open_file_path,
+            reveal_item_in_dir,
             get_video_metadata,
             create_editor_instance,
             editor_preparing::create_preparing_editor_frame,
@@ -6999,11 +7021,11 @@ fn specta_builder() -> tauri_specta::Builder {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
+pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: Option<PathBuf>) {
     let startup = startup::Startup::default();
     // Arm the unexpected-termination sentinel before anything else can crash, and
     // report any previous session that died without a clean shutdown.
-    let previous_termination = crash_sentinel::init(&logs_dir, env!("CARGO_PKG_VERSION"));
+    let previous_termination = crash_sentinel::init(logs_dir.as_deref(), env!("CARGO_PKG_VERSION"));
     configure_windows_graphics_recovery(previous_termination);
 
     // Keep the sentinel's blur marker in sync with live BlurProcessor instances
@@ -8820,15 +8842,11 @@ async fn create_editor_instance_impl(
         instance.install_preparing_handoff(handoff).await?;
     }
 
-    let event_id = RenderFrameEvent::listen_any(&app, {
+    let event_id = RenderFrameEvent::listen_checked(&app, {
         let preview_tx = instance.preview_tx.clone();
         move |e| {
             preview_tx.send_modify(|v| {
-                *v = Some((
-                    e.payload.frame_number,
-                    e.payload.fps,
-                    e.payload.resolution_base,
-                ));
+                *v = Some((e.frame_number, e.fps, e.resolution_base));
             });
         }
     });
