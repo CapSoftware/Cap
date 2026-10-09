@@ -341,6 +341,7 @@ def main() -> None:
                 runs: dict[str, list[dict]] = {}
                 jobs = []
                 for t in threads:
+                    # Counts above 1 keep the published table: x264 uses -threads 0 (automatic).
                     jobs.append((f"x264_t{t}", x264_cmd(src, a.x264_crf, mode, 0 if t > 1 else 1, work / "x.mp4",
                                                         a.keyint1)))
                     jobs.append((f"cap_t{t}", capcodec_cmd(a.binary, src, m["crf"], mode, t, work / "c.mp4",
@@ -369,7 +370,9 @@ def main() -> None:
 
 def write_report(results: dict, path: Path, threads: list[int]) -> None:
     lines = ["# Speed at matched VMAF vs x264 (interleaved, other work paused during each timed run)", "",
-             "Ratio = x264 / capcodec (above 1 means capcodec is faster). Medians over rounds.", ""]
+             "Ratio = x264 / capcodec (above 1 means capcodec is faster). Medians over rounds.",
+             "A thread count of 1 limits both encoders to one thread. A higher count limits capcodec to that count and runs x264 with `-threads 0` (automatic).",
+             ""]
     head = "| clip | mode | VMAF | capcodec crf | kbps vs x264 |"
     sep = "|---|---|---|---|---|"
     for t in threads:

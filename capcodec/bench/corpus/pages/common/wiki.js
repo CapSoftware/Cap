@@ -89,7 +89,7 @@ ${Array.from({ length: 5 }, (_, r) => {
 				const data = [0.12, 0.31, 0.55, 0.9, 1.15, 0.72, 1.05, 1.42, 1.9, 2.35, 2.62, 2.1, 1.35, 0.6, 0.22, 0.08, 0.04, 0.02, 0.01];
 				const years = [1900, 1905, 1910, 1915, 1920, 1925, 1930, 1935, 1940, 1945, 1950, 1955, 1960, 1965, 1970, 1975, 1980, 1985, 1990];
 				const series = [0.12, 0.3, 0.52, 0.85, 1.1, 0.95, 0.8, 0.98, 1.3, 1.6, 2.1, 2.55, 2.75, 2.6, 2.2, 1.6, 0.9, 0.35, 0.12];
-				let s = '<rect width="330" height="236" fill="#fff"/>';
+				let s = "<rect width=\"330\" height=\"236\" fill=\"#fff\"/>";
 				for (let i = 0; i <= 6; i++) {
 					const y = 196 - i * 28;
 					s += `<line x1="40" x2="320" y1="${y}" y2="${y}" stroke="#e5e5e5"/><text x="34" y="${y + 4}" font-size="10" text-anchor="end" fill="#444" font-family="Noto Sans">${(i * 0.5).toFixed(1)}</text>`;
@@ -101,10 +101,10 @@ ${Array.from({ length: 5 }, (_, r) => {
 					if (i % 3 === 0) s += `<text x="${x + 5}" y="210" font-size="9.5" text-anchor="middle" fill="#444" font-family="Noto Sans">${years[i]}</text>`;
 				});
 				s += `<polyline fill="none" stroke="#d9534f" stroke-width="2" points="${data.map((v, i) => `${51 + i * 14.4},${196 - v * 56}`).join(" ")}"/>`;
-				s += '<line x1="40" x2="320" y1="196" y2="196" stroke="#333"/><line x1="40" x2="40" y1="20" y2="196" stroke="#333"/>';
-				s += '<rect x="196" y="16" width="10" height="10" fill="#5b8ccf"/><text x="210" y="25" font-size="10" fill="#222" font-family="Noto Sans">All typewriters</text>';
-				s += '<line x1="196" x2="206" y1="38" y2="38" stroke="#d9534f" stroke-width="2"/><text x="210" y="41" font-size="10" fill="#222" font-family="Noto Sans">Portable models</text>';
-				s += '<text x="180" y="230" font-size="10" text-anchor="middle" fill="#222" font-family="Noto Sans">Year</text>';
+				s += "<line x1=\"40\" x2=\"320\" y1=\"196\" y2=\"196\" stroke=\"#333\"/><line x1=\"40\" x2=\"40\" y1=\"20\" y2=\"196\" stroke=\"#333\"/>";
+				s += "<rect x=\"196\" y=\"16\" width=\"10\" height=\"10\" fill=\"#5b8ccf\"/><text x=\"210\" y=\"25\" font-size=\"10\" fill=\"#222\" font-family=\"Noto Sans\">All typewriters</text>";
+				s += "<line x1=\"196\" x2=\"206\" y1=\"38\" y2=\"38\" stroke=\"#d9534f\" stroke-width=\"2\"/><text x=\"210\" y=\"41\" font-size=\"10\" fill=\"#222\" font-family=\"Noto Sans\">Portable models</text>";
+				s += "<text x=\"180\" y=\"230\" font-size=\"10\" text-anchor=\"middle\" fill=\"#222\" font-family=\"Noto Sans\">Year</text>";
 				return s;
 			})(),
 		},
@@ -140,7 +140,7 @@ ${[
 			cap: "The QWERTY layout as used on most English-language typewriters",
 			svg: (() => {
 				const rows = ["1234567890-", "QWERTYUIOP", "ASDFGHJKL;", "ZXCVBNM,./"];
-				let s = '<rect width="330" height="128" fill="#f4f4f4"/>';
+				let s = "<rect width=\"330\" height=\"128\" fill=\"#f4f4f4\"/>";
 				rows.forEach((r, ri) => {
 					[...r].forEach((ch, ci) => {
 						const x = 10 + ri * 9 + ci * 27;
@@ -148,7 +148,7 @@ ${[
 						s += `<rect x="${x}" y="${y}" width="24" height="24" rx="4" fill="#fff" stroke="#888"/><text x="${x + 12}" y="${y + 16.5}" text-anchor="middle" font-family="DejaVu Sans Mono" font-size="12" fill="#222">${ch}</text>`;
 					});
 				});
-				s += '<rect x="80" y="116" width="170" height="10" rx="3" fill="#fff" stroke="#888"/>';
+				s += "<rect x=\"80\" y=\"116\" width=\"170\" height=\"10\" rx=\"3\" fill=\"#fff\" stroke=\"#888\"/>";
 				return s;
 			})(),
 		},
@@ -200,9 +200,9 @@ ${[
 			["<i>The Writing Machine</i>", "London: George Allen &amp; Unwin"],
 			["<i>Antique Typewriters and Office Collectibles</i>", "Paducah: Collector Books"],
 			["<i>Machine Writing and Typesetting</i>", "Salem, NH: GAMA"],
-			['"A historical study of typewriters and typing methods"', "<i>Journal of Information Processing</i>"],
-			['"Clio and the Economics of QWERTY"', "<i>American Economic Review</i>"],
-			['"The Fable of the Keys"', "<i>Journal of Law and Economics</i>"],
+			["\"A historical study of typewriters and typing methods\"", "<i>Journal of Information Processing</i>"],
+			["\"Clio and the Economics of QWERTY\"", "<i>American Economic Review</i>"],
+			["\"The Fable of the Keys\"", "<i>Journal of Law and Economics</i>"],
 			["<i>Mastering the Dynamics of Innovation</i>", "Boston: Harvard Business School Press"],
 			["<i>Ingenious Yankees</i>", "New York: Columbia University Press"],
 			["<i>Woman's Place Is at the Typewriter</i>", "Philadelphia: Temple University Press"],
@@ -210,10 +210,10 @@ ${[
 			["<i>The Iron Whim: A Fragmented History of Typewriting</i>", "Ithaca: Cornell University Press"],
 			["<i>The Typewriter Legend</i>", "Secaucus, NJ: Matsushita Electric"],
 			["<i>The Wonderful Writing Machine</i>", "New York: Random House"],
-			['"The keyboard that would not die"', "<i>Smithsonian Magazine</i>"],
+			["\"The keyboard that would not die\"", "<i>Smithsonian Magazine</i>"],
 			["<i>The Story of the Typewriter, 1873–1923</i>", "Herkimer, NY"],
-			['"How the typewriter changed office work"', "<i>The Atlantic</i>"],
-			['"Mistake Out: the invention of correction fluid"', "<i>Texas Monthly</i>"],
+			["\"How the typewriter changed office work\"", "<i>The Atlantic</i>"],
+			["\"Mistake Out: the invention of correction fluid\"", "<i>Texas Monthly</i>"],
 		];
 		const out = [];
 		for (let i = 0; i < 38; i++) {
@@ -221,7 +221,7 @@ ${[
 			const [t, p] = titles[(i * 11 + 3) % titles.length];
 			const y = 1923 + ((i * 37) % 98);
 			const pg = 12 + ((i * 53) % 290);
-			const back = i % 4 === 1 ? '<span class="up">^ <sup>a</sup> <sup>b</sup></span>' : '<span class="up">^</span>';
+			const back = i % 4 === 1 ? "<span class=\"up\">^ <sup>a</sup> <sup>b</sup></span>" : "<span class=\"up\">^</span>";
 			const isbn = i % 3 === 0 ? ` ISBN 978-0-${String(100000 + i * 7919).slice(0, 3)}-${String(10000 + i * 3571).slice(0, 5)}-${i % 10}.` : "";
 			out.push(`<li>${back}${a} (${y}). ${t}. ${p}. p. ${pg}.${isbn}${i % 5 === 2 ? " Retrieved 14 March 2024." : ""}</li>`);
 		}
@@ -245,7 +245,7 @@ ${[
 
 	function figure(key) {
 		const f = FIGS[key];
-		return `<div class="thumb" style="width:${f.w + 2}px"><svg viewBox="0 0 ${f.w} ${f.h}" width="${f.w}" height="${f.h}" ${key === "production" || key === "typebar" || key === "keyboard" ? "" : 'filter="url(#grain)"'}>${f.svg}</svg><div class="cap">${f.cap}</div></div>`;
+		return `<div class="thumb" style="width:${f.w + 2}px"><svg viewBox="0 0 ${f.w} ${f.h}" width="${f.w}" height="${f.h}" ${key === "production" || key === "typebar" || key === "keyboard" ? "" : "filter=\"url(#grain)\""}>${f.svg}</svg><div class="cap">${f.cap}</div></div>`;
 	}
 
 	const article = document.getElementById("article");
@@ -253,7 +253,7 @@ ${[
 	let h2n = 0;
 	let h3n = 0;
 	let html = "";
-	const tocItems = ['<li class="top">(Top)</li>'];
+	const tocItems = ["<li class=\"top\">(Top)</li>"];
 	for (const sec of window.ARTICLE) {
 		let body = sec.html
 			.replace(/\{fig:(\w+)\}/g, (_, k) => figure(k))

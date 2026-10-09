@@ -81,7 +81,7 @@
 			["720p and below", 10, "#f59e0b"],
 		];
 		let a0 = -Math.PI / 2;
-		let s = '<svg width="620" height="620" viewBox="-310 -310 620 620">';
+		let s = "<svg width=\"620\" height=\"620\" viewBox=\"-310 -310 620 620\">";
 		for (const [, pct, c] of parts) {
 			const a1 = a0 + (pct / 100) * Math.PI * 2;
 			const large = a1 - a0 > Math.PI ? 1 : 0;
@@ -90,7 +90,7 @@
 			s += `<path d="M${Math.cos(a0) * r} ${Math.sin(a0) * r} A${r} ${r} 0 ${large} 1 ${Math.cos(a1) * r} ${Math.sin(a1) * r} L${Math.cos(a1) * ri} ${Math.sin(a1) * ri} A${ri} ${ri} 0 ${large} 0 ${Math.cos(a0) * ri} ${Math.sin(a0) * ri}Z" fill="${c}"/>`;
 			a0 = a1;
 		}
-		s += '<text x="0" y="-6" text-anchor="middle" font-family="Noto Sans" font-size="76" font-weight="800" fill="#1d2433">1.9M</text><text x="0" y="46" text-anchor="middle" font-family="Noto Sans" font-size="28" fill="#6b7280">recordings in Q3</text></svg>';
+		s += "<text x=\"0\" y=\"-6\" text-anchor=\"middle\" font-family=\"Noto Sans\" font-size=\"76\" font-weight=\"800\" fill=\"#1d2433\">1.9M</text><text x=\"0\" y=\"46\" text-anchor=\"middle\" font-family=\"Noto Sans\" font-size=\"28\" fill=\"#6b7280\">recordings in Q3</text></svg>";
 		const legend = parts
 			.map(([n, p, c]) => `<div style="display:flex;align-items:center;gap:22px;font-size:34px;margin-bottom:30px"><span style="width:30px;height:30px;border-radius:8px;background:${c}"></span><span style="flex:1">${n}</span><b>${p}%</b></div>`)
 			.join("");

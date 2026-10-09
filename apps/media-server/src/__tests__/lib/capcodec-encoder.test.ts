@@ -134,6 +134,9 @@ describe("capcodec encoder integration", () => {
 			"30/1",
 		);
 		expect(decode.slice(-4)).toEqual(["yuv420p", "-progress", "pipe:2", "-"]);
+		expect(decode).toContain(
+			"scale=1920:1080:flags=bicubic:in_color_matrix=auto:out_color_matrix=bt709:in_range=auto:out_range=tv,format=yuv420p",
+		);
 		expect(decode).toContain("rawvideo");
 		const encode = buildCapcodecEncodeArgs(
 			{

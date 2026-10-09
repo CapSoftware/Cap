@@ -636,8 +636,9 @@ def gate(summary: dict, best: dict | None) -> tuple[bool, list[str]]:
         if v.get("errors"):
             ok = False
             msgs.append(f"FAIL {e}: {v['errors']} encodes errored")
-    if s is None:
-        msgs.append(f"{GATE_ENCODER} not run; gate checks decode only")
+    if s is None or REFERENCE not in summary:
+        ok = False
+        msgs.append(f"FAIL {GATE_ENCODER} and {REFERENCE} must both run")
         return ok, msgs
     bd = s.get(f"bd_psnr_yuv_vs_{REFERENCE}")
     fps = s.get("cpu_fps_median")

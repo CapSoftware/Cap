@@ -1,49 +1,49 @@
 (() => {
 	const D = window.BOARD;
 	const P = {
-		inbox: '<path d="M3 13l3-8h12l3 8v6H3z"/><path d="M3 13h5l1 3h6l1-3h5"/>',
-		user: '<circle cx="12" cy="8" r="4"/><path d="M4 21c1-4 4-6 8-6s7 2 8 6"/>',
-		review: '<circle cx="12" cy="12" r="3"/><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/>',
-		pulse: '<path d="M3 12h4l3-7 4 14 3-7h4"/>',
-		box: '<path d="M4 7l8-4 8 4v10l-8 4-8-4z"/><path d="M4 7l8 4 8-4M12 11v10"/>',
-		layers: '<path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/>',
-		target: '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="4"/>',
-		users: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.5 3.3-5.5 6.5-5.5s5.7 2 6.5 5.5"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M18.5 14.5c1.6.8 2.6 2.7 3 5.5"/>',
-		issue: '<rect x="4" y="4" width="16" height="16" rx="4"/><path d="M9 12l2 2 4-4"/>',
-		cycle: '<path d="M20 12a8 8 0 1 1-3-6.2"/><path d="M20 4v5h-5"/>',
-		search: '<circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/>',
-		edit: '<path d="M4 20h4L19 9l-4-4L4 16z"/>',
-		star: '<path d="M12 4l2.5 5.2 5.7.8-4.1 4 1 5.6-5.1-2.7-5.1 2.7 1-5.6-4.1-4 5.7-.8z"/>',
-		chev: '<path d="M9 6l6 6-6 6"/>',
-		down: '<path d="M6 9l6 6 6-6"/>',
-		board: '<rect x="4" y="4" width="5" height="16" rx="1.5"/><rect x="10.5" y="4" width="5" height="11" rx="1.5"/><rect x="17" y="4" width="3" height="7" rx="1"/>',
-		list: '<path d="M8 6h12M8 12h12M8 18h12M4 6h.5M4 12h.5M4 18h.5"/>',
-		timeline: '<path d="M4 6h9M8 12h12M6 18h8"/>',
-		cal: '<rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M9 3v4M15 3v4"/>',
-		filter: '<path d="M4 6h16M7 12h10M10 18h4"/>',
-		display: '<path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/>',
-		plus: '<path d="M12 5v14M5 12h14"/>',
-		more: '<circle cx="6" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="18" cy="12" r="1.2"/>',
-		comment: '<path d="M5 5h14v10H9l-4 4z"/>',
-		subtask: '<path d="M6 4v10a3 3 0 0 0 3 3h9"/><path d="M15 14l3 3-3 3"/>',
-		date: '<rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16"/>',
-		link: '<path d="M10 14a4 4 0 0 0 6 0l3-3a4 4 0 0 0-6-6l-1 1M14 10a4 4 0 0 0-6 0l-3 3a4 4 0 0 0 6 6l1-1"/>',
-		close: '<path d="M6 6l12 12M18 6L6 18"/>',
-		share: '<path d="M12 4v11M8 8l4-4 4 4M5 14v5h14v-5"/>',
-		help: '<circle cx="12" cy="12" r="8"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.7.3-1 .9-1 1.7M12 16.5v.5"/>',
-		bell: '<path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4z"/><path d="M10 20a2 2 0 0 0 4 0"/>',
-		trash: '<path d="M5 7h14M10 7V4h4v3M7 7l1 13h8l1-13"/>',
-		copy: '<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/>',
-		archive: '<rect x="3" y="4" width="18" height="5" rx="1"/><path d="M5 9v10h14V9M10 13h4"/>',
+		inbox: "<path d=\"M3 13l3-8h12l3 8v6H3z\"/><path d=\"M3 13h5l1 3h6l1-3h5\"/>",
+		user: "<circle cx=\"12\" cy=\"8\" r=\"4\"/><path d=\"M4 21c1-4 4-6 8-6s7 2 8 6\"/>",
+		review: "<circle cx=\"12\" cy=\"12\" r=\"3\"/><path d=\"M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z\"/>",
+		pulse: "<path d=\"M3 12h4l3-7 4 14 3-7h4\"/>",
+		box: "<path d=\"M4 7l8-4 8 4v10l-8 4-8-4z\"/><path d=\"M4 7l8 4 8-4M12 11v10\"/>",
+		layers: "<path d=\"M12 3l9 5-9 5-9-5z\"/><path d=\"M3 13l9 5 9-5\"/>",
+		target: "<circle cx=\"12\" cy=\"12\" r=\"8\"/><circle cx=\"12\" cy=\"12\" r=\"4\"/>",
+		users: "<circle cx=\"9\" cy=\"8\" r=\"3.5\"/><path d=\"M2.5 20c.8-3.5 3.3-5.5 6.5-5.5s5.7 2 6.5 5.5\"/><path d=\"M16 4.5a3.5 3.5 0 0 1 0 7M18.5 14.5c1.6.8 2.6 2.7 3 5.5\"/>",
+		issue: "<rect x=\"4\" y=\"4\" width=\"16\" height=\"16\" rx=\"4\"/><path d=\"M9 12l2 2 4-4\"/>",
+		cycle: "<path d=\"M20 12a8 8 0 1 1-3-6.2\"/><path d=\"M20 4v5h-5\"/>",
+		search: "<circle cx=\"11\" cy=\"11\" r=\"6.5\"/><path d=\"M16 16l4.5 4.5\"/>",
+		edit: "<path d=\"M4 20h4L19 9l-4-4L4 16z\"/>",
+		star: "<path d=\"M12 4l2.5 5.2 5.7.8-4.1 4 1 5.6-5.1-2.7-5.1 2.7 1-5.6-4.1-4 5.7-.8z\"/>",
+		chev: "<path d=\"M9 6l6 6-6 6\"/>",
+		down: "<path d=\"M6 9l6 6 6-6\"/>",
+		board: "<rect x=\"4\" y=\"4\" width=\"5\" height=\"16\" rx=\"1.5\"/><rect x=\"10.5\" y=\"4\" width=\"5\" height=\"11\" rx=\"1.5\"/><rect x=\"17\" y=\"4\" width=\"3\" height=\"7\" rx=\"1\"/>",
+		list: "<path d=\"M8 6h12M8 12h12M8 18h12M4 6h.5M4 12h.5M4 18h.5\"/>",
+		timeline: "<path d=\"M4 6h9M8 12h12M6 18h8\"/>",
+		cal: "<rect x=\"4\" y=\"5\" width=\"16\" height=\"15\" rx=\"2\"/><path d=\"M4 10h16M9 3v4M15 3v4\"/>",
+		filter: "<path d=\"M4 6h16M7 12h10M10 18h4\"/>",
+		display: "<path d=\"M4 7h10M18 7h2M4 17h4M12 17h8\"/><circle cx=\"16\" cy=\"7\" r=\"2\"/><circle cx=\"10\" cy=\"17\" r=\"2\"/>",
+		plus: "<path d=\"M12 5v14M5 12h14\"/>",
+		more: "<circle cx=\"6\" cy=\"12\" r=\"1.2\"/><circle cx=\"12\" cy=\"12\" r=\"1.2\"/><circle cx=\"18\" cy=\"12\" r=\"1.2\"/>",
+		comment: "<path d=\"M5 5h14v10H9l-4 4z\"/>",
+		subtask: "<path d=\"M6 4v10a3 3 0 0 0 3 3h9\"/><path d=\"M15 14l3 3-3 3\"/>",
+		date: "<rect x=\"4\" y=\"5\" width=\"16\" height=\"15\" rx=\"2\"/><path d=\"M4 10h16\"/>",
+		link: "<path d=\"M10 14a4 4 0 0 0 6 0l3-3a4 4 0 0 0-6-6l-1 1M14 10a4 4 0 0 0-6 0l-3 3a4 4 0 0 0 6 6l1-1\"/>",
+		close: "<path d=\"M6 6l12 12M18 6L6 18\"/>",
+		share: "<path d=\"M12 4v11M8 8l4-4 4 4M5 14v5h14v-5\"/>",
+		help: "<circle cx=\"12\" cy=\"12\" r=\"8\"/><path d=\"M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.7.3-1 .9-1 1.7M12 16.5v.5\"/>",
+		bell: "<path d=\"M6 16V11a6 6 0 0 1 12 0v5l2 2H4z\"/><path d=\"M10 20a2 2 0 0 0 4 0\"/>",
+		trash: "<path d=\"M5 7h14M10 7V4h4v3M7 7l1 13h8l1-13\"/>",
+		copy: "<rect x=\"8\" y=\"8\" width=\"12\" height=\"12\" rx=\"2\"/><path d=\"M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3\"/>",
+		archive: "<rect x=\"3\" y=\"4\" width=\"18\" height=\"5\" rx=\"1\"/><path d=\"M5 9v10h14V9M10 13h4\"/>",
 	};
 	const ic = (n) => `<svg class="i" viewBox="0 0 24 24">${P[n] || ""}</svg>`;
 	const STATUS = {
-		backlog: '<svg class="i" viewBox="0 0 24 24" style="color:#9a9eab"><circle cx="12" cy="12" r="7.5" stroke-dasharray="3 2.6"/></svg>',
-		todo: '<svg class="i" viewBox="0 0 24 24" style="color:#9a9eab"><circle cx="12" cy="12" r="7.5"/></svg>',
-		progress: '<svg class="i" viewBox="0 0 24 24" style="color:#eab308"><circle cx="12" cy="12" r="7.5"/><path d="M12 7.5a4.5 4.5 0 0 1 0 9z" fill="#eab308" stroke="none"/></svg>',
-		review: '<svg class="i" viewBox="0 0 24 24" style="color:#22c55e"><circle cx="12" cy="12" r="7.5"/><path d="M12 7.5a4.5 4.5 0 1 1-4.5 4.5H12z" fill="#22c55e" stroke="none"/></svg>',
-		done: '<svg class="i" viewBox="0 0 24 24" style="color:#6366f1"><circle cx="12" cy="12" r="8" fill="#6366f1" stroke="none"/><path d="M8.5 12.2l2.4 2.4 4.6-4.8" stroke="#fff"/></svg>',
-		canceled: '<svg class="i" viewBox="0 0 24 24" style="color:#9a9eab"><circle cx="12" cy="12" r="8" fill="#b4b7c0" stroke="none"/><path d="M9.5 9.5l5 5M14.5 9.5l-5 5" stroke="#fff"/></svg>',
+		backlog: "<svg class=\"i\" viewBox=\"0 0 24 24\" style=\"color:#9a9eab\"><circle cx=\"12\" cy=\"12\" r=\"7.5\" stroke-dasharray=\"3 2.6\"/></svg>",
+		todo: "<svg class=\"i\" viewBox=\"0 0 24 24\" style=\"color:#9a9eab\"><circle cx=\"12\" cy=\"12\" r=\"7.5\"/></svg>",
+		progress: "<svg class=\"i\" viewBox=\"0 0 24 24\" style=\"color:#eab308\"><circle cx=\"12\" cy=\"12\" r=\"7.5\"/><path d=\"M12 7.5a4.5 4.5 0 0 1 0 9z\" fill=\"#eab308\" stroke=\"none\"/></svg>",
+		review: "<svg class=\"i\" viewBox=\"0 0 24 24\" style=\"color:#22c55e\"><circle cx=\"12\" cy=\"12\" r=\"7.5\"/><path d=\"M12 7.5a4.5 4.5 0 1 1-4.5 4.5H12z\" fill=\"#22c55e\" stroke=\"none\"/></svg>",
+		done: "<svg class=\"i\" viewBox=\"0 0 24 24\" style=\"color:#6366f1\"><circle cx=\"12\" cy=\"12\" r=\"8\" fill=\"#6366f1\" stroke=\"none\"/><path d=\"M8.5 12.2l2.4 2.4 4.6-4.8\" stroke=\"#fff\"/></svg>",
+		canceled: "<svg class=\"i\" viewBox=\"0 0 24 24\" style=\"color:#9a9eab\"><circle cx=\"12\" cy=\"12\" r=\"8\" fill=\"#b4b7c0\" stroke=\"none\"/><path d=\"M9.5 9.5l5 5M14.5 9.5l-5 5\" stroke=\"#fff\"/></svg>",
 	};
 	const av = (k, size) => {
 		if (!k) return `<span class="av" style="background:#fff;border:1.5px dashed #b4b7c0;color:#9a9eab${size ? `;width:${size}px;height:${size}px` : ""}"></span>`;
@@ -51,8 +51,8 @@
 		return `<span class="av" style="background:${c}${size ? `;width:${size}px;height:${size}px` : ""}">${k}</span>`;
 	};
 	const prio = (p) => {
-		if (p === 4) return '<span class="prio urgent">!</span>';
-		if (p === 0) return '<span class="prio"><i style="height:2px"></i><i style="height:2px"></i><i style="height:2px"></i></span>';
+		if (p === 4) return "<span class=\"prio urgent\">!</span>";
+		if (p === 0) return "<span class=\"prio\"><i style=\"height:2px\"></i><i style=\"height:2px\"></i><i style=\"height:2px\"></i></span>";
 		return `<span class="prio"><i class="on" style="height:5px"></i><i class="${p >= 2 ? "on" : ""}" style="height:8px"></i><i class="${p >= 3 ? "on" : ""}" style="height:11px"></i></span>`;
 	};
 	const PRIO_NAMES = ["No priority", "Low", "Medium", "High", "Urgent"];

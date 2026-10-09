@@ -140,7 +140,7 @@
 					continue;
 				}
 			}
-			const sm = (lang === "py" ? /^[rRbBuUfF]{0,2}("|')/ : /^("|')/).exec(rest);
+			const sm = (lang === "py" ? /^[rRbBuUfF]{0,2}("|")/ : /^(\"|")/).exec(rest);
 			if (sm) {
 				const q = sm[1];
 				let j = i + sm[0].length;
@@ -290,7 +290,7 @@
 					let guides = "";
 					let k = 0;
 					while (k + 4 <= take) {
-						guides += '<span class="ig">    </span>';
+						guides += "<span class=\"ig\">    </span>";
 						k += 4;
 					}
 					if (k < take) guides += " ".repeat(take - k);
@@ -333,7 +333,7 @@
 		insertRow(at) {
 			const d = document.createElement("div");
 			d.className = "ce-row";
-			d.innerHTML = '<span class="ln"></span><span class="code"> </span>';
+			d.innerHTML = "<span class=\"ln\"></span><span class=\"code\"> </span>";
 			const ref = this.rowEls[at] || null;
 			this.rowsEl.insertBefore(d, ref);
 			this.rowEls.splice(at, 0, d);
@@ -474,7 +474,7 @@
 					if (col <= lead && col % 4 === 0) n = 4;
 					else if (col <= lead) n = col % 4;
 					const pair = text[col - 1] + (text[col] || "");
-					if (["()", "[]", '""', "''"].includes(pair)) {
+					if (["()", "[]", "\"\"", "''"].includes(pair)) {
 						this.lines[line] = text.slice(0, col - 1) + text.slice(col + 1);
 					} else {
 						this.lines[line] = text.slice(0, col - n) + text.slice(col);
@@ -549,14 +549,14 @@
 			const text = this.lines[line];
 			const next = text[col] || "";
 			const closers = { "(": ")", "[": "]" };
-			if ((ch === ")" || ch === "]" || ch === '"' || ch === "'") && next === ch) {
+			if ((ch === ")" || ch === "]" || ch === "\"" || ch === "'") && next === ch) {
 				this.caret.col++;
 				this.updateSuggest();
 				return;
 			}
 			let ins = ch;
 			if (closers[ch] && (!next || /[\s)\],:]/.test(next))) ins = ch + closers[ch];
-			else if ((ch === '"' || ch === "'") && !/\w/.test(text[col - 1] || "") && text[col - 1] !== ch && (!next || /[\s)\],:]/.test(next))) ins = ch + ch;
+			else if ((ch === "\"" || ch === "'") && !/\w/.test(text[col - 1] || "") && text[col - 1] !== ch && (!next || /[\s)\],:]/.test(next))) ins = ch + ch;
 			let newText = text.slice(0, col) + ins + text.slice(col);
 			let newCol = col + 1;
 			if (this.lang === "c" && ch === "}" && /^ +$/.test(text.slice(0, col)) && col >= 4) {

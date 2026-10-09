@@ -1,5 +1,5 @@
-import { processVideo } from "/workspace/apps/media-server/src/lib/media-video";
-import { probeVideoFile } from "/workspace/apps/media-server/src/lib/media-probe";
+import { processVideo } from "../../../apps/media-server/src/lib/media-video";
+import { probeVideoFile } from "../../../apps/media-server/src/lib/media-probe";
 
 const [input, output] = process.argv.slice(2);
 if (!input || !output) {

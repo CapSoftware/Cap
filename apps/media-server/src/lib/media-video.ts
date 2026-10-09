@@ -1704,7 +1704,7 @@ async function processVideoWithCapcodec(
 	onProgress?: ProgressCallback,
 	abortSignal?: AbortSignal,
 ): Promise<void> {
-	const videoOnly = await createTempFile(".mp4");
+	const videoOnly = await createTempFile(".fmp4");
 	const controller = new AbortController();
 	const forwardAbort = () => controller.abort();
 	abortSignal?.addEventListener("abort", forwardAbort, { once: true });

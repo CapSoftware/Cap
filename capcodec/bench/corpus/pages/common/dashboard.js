@@ -180,7 +180,7 @@
 			const pw = w - left - right;
 			const ph = h - top - bottom;
 			ctx.clearRect(0, 0, w, h);
-			ctx.font = '11px "Noto Sans", "Liberation Sans", sans-serif';
+			ctx.font = "11px \"Noto Sans\", \"Liberation Sans\", sans-serif";
 			ctx.textBaseline = "middle";
 			const yTicks = 5;
 			for (let i = 0; i <= yTicks; i++) {

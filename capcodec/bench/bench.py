@@ -18,9 +18,11 @@ HISTORY = BENCH / "history.jsonl"
 
 
 def committed_best() -> dict | None:
-    r = subprocess.run(["git", "-C", str(ROOT), "show", "HEAD:bench/best.json"], capture_output=True, text=True)
-    if r.returncode == 0 and r.stdout.strip():
-        return json.loads(r.stdout)
+    # A standalone checkout stores the file at bench/best.json. Inside Cap it is capcodec/bench/best.json.
+    for spec in ("HEAD:bench/best.json", "HEAD:capcodec/bench/best.json"):
+        r = subprocess.run(["git", "-C", str(ROOT), "show", spec], capture_output=True, text=True)
+        if r.returncode == 0 and r.stdout.strip():
+            return json.loads(r.stdout)
     if BEST.exists():
         return json.loads(BEST.read_text())
     return None

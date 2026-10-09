@@ -192,7 +192,7 @@ export function buildCapcodecDecodeArgs(
 		"-map",
 		"0:v:0",
 		"-vf",
-		`scale=${width}:${height}:flags=bicubic,format=yuv420p`,
+		`scale=${width}:${height}:flags=bicubic:in_color_matrix=auto:out_color_matrix=bt709:in_range=auto:out_range=tv,format=yuv420p`,
 		"-fps_mode",
 		"cfr",
 		"-r",
