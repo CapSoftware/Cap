@@ -166,7 +166,6 @@ export const ScreenPlaceholder = ({
 	</div>
 );
 
-/** The empty camera bubble, sitting where the camera will appear. */
 export const CameraPlaceholder = ({
 	select,
 	onDecline,

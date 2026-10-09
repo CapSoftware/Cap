@@ -70,6 +70,7 @@ import { useRecordingQuality } from "./recording-quality";
 import { canRecordMicOnly, startRecordingChoice } from "./recording-sources";
 import { SystemAudioGuide } from "./system-audio-guide";
 import { useCameraDevices } from "./useCameraDevices";
+import { useDeviceAccessRequest } from "./useDeviceAccessRequest";
 import { useDevicePreferences } from "./useDevicePreferences";
 import { useDialogInteractions } from "./useDialogInteractions";
 import { useMicOnlyRecorder } from "./useMicOnlyRecorder";
@@ -317,6 +318,10 @@ export const WebRecorderDialog = ({
 		useMicrophoneDevices(open);
 	const { devices: availableCameras, refresh: refreshCameras } =
 		useCameraDevices(open);
+	const refreshDevices = useCallback(
+		() => Promise.all([refreshCameras(), refreshMics()]),
+		[refreshCameras, refreshMics],
+	);
 
 	const {
 		rememberDevices,
@@ -337,7 +342,6 @@ export const WebRecorderDialog = ({
 	const micEnabled = selectedMicId !== null;
 	const cameraEnabled = selectedCameraId !== null;
 
-	// "No camera" is remembered, so the camera stays off next time too.
 	const [cameraDeclined, setCameraDeclinedState] = useState(false);
 	useEffect(() => {
 		try {
@@ -408,47 +412,15 @@ export const WebRecorderDialog = ({
 		handleCameraChange(null);
 	};
 
-	// A device asked for before access was granted is switched on once the
-	// browser lists it.
-	const wantedRef = useRef({ camera: false, mic: false });
-	useEffect(() => {
-		const wanted = wantedRef.current;
-		const camera = availableCameras[0];
-		if (wanted.camera && camera) {
-			wanted.camera = false;
-			chooseCamera(camera.deviceId);
-		}
-		const mic = availableMics[0];
-		if (wanted.mic && mic) {
-			wanted.mic = false;
-			handleMicChange(mic.deviceId);
-		}
-	}, [availableCameras, availableMics, chooseCamera, handleMicChange]);
-
-	const [requestingAccess, setRequestingAccess] = useState(false);
-	const requestAccess = useCallback(
-		async (kinds: { video: boolean; audio: boolean }) => {
-			setRequestingAccess(true);
-			wantedRef.current = { camera: kinds.video, mic: kinds.audio };
-			try {
-				const stream = await navigator.mediaDevices.getUserMedia(kinds);
-				stopStream(stream);
-				await Promise.all([refreshCameras(), refreshMics()]);
-			} catch (error) {
-				wantedRef.current = { camera: false, mic: false };
-				toast.error(
-					error instanceof DOMException && error.name === "NotFoundError"
-						? kinds.video
-							? "No camera was found. Check it's plugged in, then try again."
-							: "No microphone was found. Check it's plugged in, then try again."
-						: "Your browser blocked access. Allow the camera and microphone in the address bar, then try again.",
-				);
-			} finally {
-				setRequestingAccess(false);
-			}
-		},
-		[refreshCameras, refreshMics],
-	);
+	const { requestAccess, requesting: requestingAccess } =
+		useDeviceAccessRequest({
+			open,
+			availableCameras,
+			availableMics,
+			refreshDevices,
+			onCameraGranted: chooseCamera,
+			onMicGranted: handleMicChange,
+		});
 
 	const turnOnCamera = () => {
 		if (availableCameras.length === 0) {
