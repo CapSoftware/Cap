@@ -44,6 +44,7 @@ import {
 	type OrganizationSettings,
 	type Spaces,
 } from "@/app/(org)/dashboard/dashboard-data";
+import { EditorPrewarm } from "@/components/editor-shell/editor-prewarm";
 import { isAiConfigured } from "@/lib/ai/provider";
 import { completeDesktopSegmentsManifestAndQueue } from "@/lib/desktop-segments-recovery";
 import { createNotification } from "@/lib/Notification";
@@ -869,6 +870,13 @@ async function AuthorizedContent({
 		isWebStudioEnabledForEmail(user.email) &&
 		video.source.type === "webMP4" &&
 		video.metadata?.editorSources?.version === 1;
+	const opensStudioEditor =
+		!!user &&
+		user.id === video.owner.id &&
+		isWebStudioEnabledForEmail(user.email) &&
+		!video.isScreenshot &&
+		!hasActiveUpload &&
+		(video.source.type === "desktopMP4" || video.source.type === "webMP4");
 	const publishesRecording =
 		ownsStudioRecording &&
 		optionFromTOrFirst(searchParams.from).pipe(Option.getOrNull) ===
@@ -898,6 +906,9 @@ async function AuthorizedContent({
 	// in a container.
 	return (
 		<div className="flex flex-col flex-1 min-h-0">
+			{opensStudioEditor && (
+				<EditorPrewarm route={`/s/${video.id}/edit/studio`} />
+			)}
 			{ownsStudioRecording && user && (
 				<RecordingPublisherSlot
 					start={publishesRecording}

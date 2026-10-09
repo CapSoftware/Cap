@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
 const PREWARM_TIMEOUT_MS = 60_000;
@@ -8,18 +9,27 @@ let prewarmed = false;
 /**
  * Loads the editor once in a hidden frame so its code and renderer are in the
  * browser cache (and the renderer compiled) before the editor is opened. The
- * frame is removed as soon as it reports back.
+ * frame is removed as soon as it reports back. `route` is the page that will
+ * host the editor, prefetched at the same time.
  */
-export function EditorPrewarm({ enabled = true }: { enabled?: boolean }) {
+export function EditorPrewarm({
+	enabled = true,
+	route,
+}: {
+	enabled?: boolean;
+	route?: string;
+}) {
+	const router = useRouter();
 	const [active, setActive] = useState(false);
 
 	useEffect(() => {
-		if (!enabled || prewarmed) return;
+		if (!enabled || (prewarmed && !route)) return;
 		const connection = (
 			navigator as Navigator & { connection?: { saveData?: boolean } }
 		).connection;
 		if (connection?.saveData) return;
 		const start = () => {
+			if (route) router.prefetch(route);
 			if (prewarmed) return;
 			prewarmed = true;
 			setActive(true);
@@ -30,7 +40,7 @@ export function EditorPrewarm({ enabled = true }: { enabled?: boolean }) {
 		}
 		const handle = setTimeout(start, 500);
 		return () => clearTimeout(handle);
-	}, [enabled]);
+	}, [enabled, route, router]);
 
 	useEffect(() => {
 		if (!active) return;
