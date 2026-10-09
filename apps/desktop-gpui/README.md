@@ -96,7 +96,22 @@ build the user has; it simply lands this app in place.
 
 The bundle carries `cap-muxer` and `cap-cli` only: `cap-exporter` was a
 byte-identical copy of `cap-cli`, and the self-test now runs `cap-cli`
-directly. The NSIS install hook (`packaging/windows/installer-hooks.nsh`)
+directly. Release sidecars are built without debug info and stripped.
+
+After `tauri bundle`, the release shrinks every artifact without changing a
+byte of what gets installed:
+
+- `scripts/finalize-linux-gpui-packages.mjs` drops the WebKitGTK and GTK
+  dependencies the Tauri CLI always adds, links the duplicate
+  `libonnxruntime.so` to its `.so.1`, recompresses the deb with a 192 MiB xz
+  window and the RPM with zstd level 22, and re-signs both.
+- `scripts/finalize-linux-appimage.mjs` (`webview: false`) prunes the AppImage
+  to the libraries its binaries actually load.
+- `scripts/finalize-macos-packages.mjs` recompresses `Cap.app.tar.gz` with
+  zopfli (still plain gzip for every updater) and converts the disk image to
+  LZMA, keeping the original if conversion or signing fails.
+- `packaging/windows/installer-hooks.nsh` gives the NSIS installer a 128 MB
+  LZMA window, so `cap-cli.exe` compresses against `Cap.exe`. The NSIS install hook (`packaging/windows/installer-hooks.nsh`)
 deletes the Tauri-era `cap-gpui.exe`, `cap-exporter.exe` and Rive assets an
 update in place would otherwise leave behind.
 
