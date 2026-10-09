@@ -1,9 +1,12 @@
 import {
 	mkdir,
 	mkdtemp,
+	readdir,
 	readFile,
 	rename,
 	rm,
+	stat,
+	symlink,
 	writeFile,
 } from "node:fs/promises";
 import path from "node:path";
@@ -21,13 +24,13 @@ export const webviewRpmRequirements = new Set([
 	"gtk3",
 ]);
 
-const payloadCodecs = {
-	gzip: "gzdio",
-	bzip2: "bzdio",
-	xz: "xzdio",
-	lzma: "lzdio",
-	zstd: "zstdio",
-};
+// Level 22 keeps a 128 MiB window, the default limit of zstd decoders, so it
+// still installs everywhere while matching across the bundled libraries.
+export const RPM_PAYLOAD = "w22T0.zstdio";
+
+// dpkg-deb only offers presets, whose largest dictionary is 64 MiB; 192 MiB
+// lets xz match cap-cli against the Cap binary it shares most of its code with.
+export const DEB_DATA_XZ = ["--threads=1", "--lzma2=preset=9,dict=192MiB"];
 
 export function withoutWebviewDebDependencies(control) {
 	const fields = [];
@@ -61,6 +64,58 @@ export function withoutWebviewRpmRequirements(requirements) {
 			!name.startsWith("rpmlib(") &&
 			!webviewRpmRequirements.has(name.replace(/\(\)\(64bit\)$/, ""))
 		);
+	});
+}
+
+export async function linkDuplicateLibraries(directory) {
+	const entries = await readdir(directory, { withFileTypes: true }).catch(
+		(error) => {
+			if (error.code === "ENOENT") return [];
+			throw error;
+		},
+	);
+	const files = entries
+		.filter((entry) => entry.isFile())
+		.map((entry) => entry.name);
+	const linked = [];
+	for (const name of files.filter((file) => file.endsWith(".so")).sort()) {
+		const candidates = files
+			.filter(
+				(file) =>
+					file.startsWith(`${name}.`) &&
+					/^(?:\.\d+)+$/.test(file.slice(name.length)),
+			)
+			.sort((a, b) => a.length - b.length || a.localeCompare(b));
+		for (const target of candidates) {
+			const [source, versioned] = await Promise.all([
+				readFile(path.join(directory, name)),
+				readFile(path.join(directory, target)),
+			]);
+			if (!source.equals(versioned)) continue;
+			await rm(path.join(directory, name));
+			await symlink(target, path.join(directory, name));
+			linked.push({ name, target, bytes: source.length });
+			break;
+		}
+	}
+	return linked;
+}
+
+export function withoutLinkedFiles(md5sums, removed) {
+	const paths = new Set(removed);
+	return md5sums
+		.split("\n")
+		.filter((line) => {
+			const match = /^[0-9a-f]{32} {2}(.+)$/.exec(line);
+			return !match || !paths.has(match[1]);
+		})
+		.join("\n");
+}
+
+export function withInstalledSize(control, freedBytes) {
+	return control.replace(/^Installed-Size: (\d+)$/m, (_, size) => {
+		const freed = Math.ceil(freedBytes / 1024);
+		return `Installed-Size: ${Math.max(0, Number(size) - freed)}`;
 	});
 }
 
@@ -156,6 +211,42 @@ async function replaceArtifact(output, destination, { unsigned, env, run }) {
 	else await rename(`${output}.sig`, `${destination}.sig`);
 }
 
+const captured = (env) => ({
+	env: { ...env, LC_ALL: "C" },
+	encoding: "utf8",
+	stdio: ["ignore", "pipe", "inherit"],
+});
+
+async function recompressDebData(uncompressed, output, members, { env, run }) {
+	await mkdir(members);
+	const names = (await run("ar", ["t", uncompressed], captured(env))).stdout
+		.split("\n")
+		.filter(Boolean);
+	if (
+		names.length !== 3 ||
+		names[0] !== "debian-binary" ||
+		!/^control\.tar(?:\.[a-z0-9]+)?$/.test(names[1]) ||
+		names[2] !== "data.tar"
+	) {
+		throw new Error(`Unexpected deb members: ${names.join(", ")}`);
+	}
+	await run("ar", ["x", uncompressed], { cwd: members, env });
+	await run("xz", [...DEB_DATA_XZ, "data.tar"], { cwd: members, env });
+	await run("ar", ["rcD", output, names[0], names[1], "data.tar.xz"], {
+		cwd: members,
+		env,
+	});
+	const [expected, actual] = await Promise.all(
+		[uncompressed, output].map(
+			async (file) =>
+				(await run("dpkg-deb", ["--contents", file], captured(env))).stdout,
+		),
+	);
+	if (expected !== actual) {
+		throw new Error("The recompressed deb does not contain the same files");
+	}
+}
+
 export async function finalizeGpuiDeb(
 	filename,
 	{ unsigned = false, env = process.env, run = runCommand } = {},
@@ -167,17 +258,38 @@ export async function finalizeGpuiDeb(
 	try {
 		const root = path.join(work, "root");
 		await run("dpkg-deb", ["--raw-extract", deb, root], { env });
+		const linked = await linkDuplicateLibraries(
+			path.join(root, "usr", "lib", "cap"),
+		);
 		const control = path.join(root, "DEBIAN", "control");
 		await writeFile(
 			control,
-			withoutWebviewDebDependencies(await readFile(control, "utf8")),
+			withInstalledSize(
+				withoutWebviewDebDependencies(await readFile(control, "utf8")),
+				linked.reduce((total, link) => total + link.bytes, 0),
+			),
 		);
-		const output = path.join(work, path.basename(deb));
+		const md5sums = path.join(root, "DEBIAN", "md5sums");
+		if (linked.length > 0 && (await stat(md5sums).catch(() => null))) {
+			await writeFile(
+				md5sums,
+				withoutLinkedFiles(
+					await readFile(md5sums, "utf8"),
+					linked.map((link) => `usr/lib/cap/${link.name}`),
+				),
+			);
+		}
+		const uncompressed = path.join(work, "uncompressed.deb");
 		await run(
 			"dpkg-deb",
-			["--root-owner-group", "-Zxz", "--build", root, output],
+			["--root-owner-group", "-Znone", "--build", root, uncompressed],
 			{ env },
 		);
+		const output = path.join(work, path.basename(deb));
+		await recompressDebData(uncompressed, output, path.join(work, "members"), {
+			env,
+			run,
+		});
 		await replaceArtifact(output, deb, { unsigned, env, run });
 	} finally {
 		await rm(work, { recursive: true, force: true });
@@ -223,16 +335,8 @@ export async function finalizeGpuiRpm(
 		"LICENSE",
 		"URL",
 		"DESCRIPTION",
-		"PAYLOADCOMPRESSOR",
-		"PAYLOADFLAGS",
 	]) {
 		tags[tag] = await queryTag(rpm, tag, env, run);
-	}
-	const codec = payloadCodecs[tags.PAYLOADCOMPRESSOR];
-	if (!codec) {
-		throw new Error(
-			`Unsupported RPM payload compressor: ${tags.PAYLOADCOMPRESSOR}`,
-		);
 	}
 	const requires = withoutWebviewRpmRequirements(
 		(await queryRpm(rpm, ["--requires"], env, run))
@@ -267,6 +371,14 @@ export async function finalizeGpuiRpm(
 			await mkdir(path.join(top, directory), { recursive: true });
 		}
 		await run("bsdtar", ["-xf", rpm, "-C", staging], { env });
+		const linked = new Set(
+			(
+				await linkDuplicateLibraries(path.join(staging, "usr", "lib", "cap"))
+			).map((link) => `/usr/lib/cap/${link.name}`),
+		);
+		for (const file of files) {
+			if (linked.has(file.name)) file.mode = 0o120777;
+		}
 		const spec = path.join(top, "SPECS", `${tags.NAME}.spec`);
 		await writeFile(
 			spec,
@@ -297,7 +409,7 @@ export async function finalizeGpuiRpm(
 				"--define",
 				`_rpmfilename ${escapeMacros(path.basename(rpm))}`,
 				"--define",
-				`_binary_payload w${tags.PAYLOADFLAGS || "9"}.${codec}`,
+				`_binary_payload ${RPM_PAYLOAD}`,
 				"--define",
 				"_build_id_links none",
 				"--define",

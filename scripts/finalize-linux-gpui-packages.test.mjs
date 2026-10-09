@@ -1,15 +1,26 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+	lstat,
+	mkdir,
+	mkdtemp,
+	readFile,
+	readlink,
+	rm,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import {
 	finalizeGpuiDeb,
 	finalizeGpuiRpm,
+	linkDuplicateLibraries,
 	parseRpmFiles,
 	rpmFileEntry,
 	rpmSpec,
+	withInstalledSize,
+	withoutLinkedFiles,
 	withoutWebviewDebDependencies,
 	withoutWebviewRpmRequirements,
 } from "./finalize-linux-gpui-packages.mjs";
@@ -139,50 +150,165 @@ test("rpm spec disables automatic dependencies and escapes macros", () => {
 	assert.match(spec, /%files\n%attr\(0755,root,root\) "\/usr\/bin\/Cap"\n$/);
 });
 
-test("deb finalization signs the rebuilt package before replacing it", async (t) => {
+test("identical unversioned libraries become links to their versioned soname", async (t) => {
 	const root = await workspace(t);
-	const deb = path.join(root, "Cap_0.6.1_amd64.deb");
-	await writeFile(deb, "original");
-	await writeFile(`${deb}.sig`, "original signature");
-	const calls = [];
-	const env = { TAURI_SIGNING_PRIVATE_KEY: "key" };
-	await finalizeGpuiDeb(deb, {
-		env,
-		run: async (command, args, options) => {
-			calls.push([command, ...args.slice(0, 4)]);
-			if (command === "dpkg-deb" && args[0] === "--raw-extract") {
-				await mkdir(path.join(args[2], "DEBIAN"), { recursive: true });
-				await writeFile(
-					path.join(args[2], "DEBIAN/control"),
-					"Package: cap\nDepends: libva2, libwebkit2gtk-4.1-0, libgtk-3-0\n",
-				);
-			} else if (command === "dpkg-deb") {
-				assert.deepEqual(args.slice(0, 3), [
-					"--root-owner-group",
-					"-Zxz",
-					"--build",
-				]);
-				assert.equal(
-					await readFile(path.join(args[3], "DEBIAN/control"), "utf8"),
-					"Package: cap\nDepends: libva2\n",
-				);
-				await writeFile(args[4], "rebuilt");
-			} else {
-				assert.deepEqual(args.slice(0, 4), ["run", "tauri", "signer", "sign"]);
-				assert.equal(options.env.TAURI_PRIVATE_KEY, "key");
-				assert.equal(await readFile(args[4], "utf8"), "rebuilt");
-				await writeFile(`${args[4]}.sig`, "rebuilt signature");
-			}
-			return {};
-		},
-	});
-	assert.deepEqual(
-		calls.map(([command]) => command),
-		["dpkg-deb", "dpkg-deb", "bun"],
+	const library = path.join(root, "lib");
+	await mkdir(library);
+	await writeFile(path.join(library, "libonnxruntime.so"), "onnx");
+	await writeFile(path.join(library, "libonnxruntime.so.1"), "onnx");
+	await writeFile(path.join(library, "libonnxruntime.so.1.20.1"), "onnx");
+	await writeFile(path.join(library, "libheif.so"), "old heif");
+	await writeFile(path.join(library, "libheif.so.1"), "new heif");
+	await writeFile(path.join(library, "libavcodec.so.61"), "codec");
+	await writeFile(path.join(library, "libnot.sox"), "other");
+	await writeFile(path.join(library, "libnot.sox.1"), "other");
+
+	assert.deepEqual(await linkDuplicateLibraries(library), [
+		{ name: "libonnxruntime.so", target: "libonnxruntime.so.1", bytes: 4 },
+	]);
+	assert.equal(
+		await readlink(path.join(library, "libonnxruntime.so")),
+		"libonnxruntime.so.1",
 	);
-	assert.equal(await readFile(deb, "utf8"), "rebuilt");
-	assert.equal(await readFile(`${deb}.sig`, "utf8"), "rebuilt signature");
+	assert.equal(
+		await readFile(path.join(library, "libonnxruntime.so"), "utf8"),
+		"onnx",
+	);
+	for (const file of ["libheif.so", "libavcodec.so.61", "libnot.sox"]) {
+		assert.ok((await lstat(path.join(library, file))).isFile(), file);
+	}
+	assert.deepEqual(await linkDuplicateLibraries(library), []);
+	assert.deepEqual(await linkDuplicateLibraries(path.join(root, "absent")), []);
 });
+
+test("deb metadata drops linked files from md5sums and Installed-Size", () => {
+	assert.equal(
+		withoutLinkedFiles(
+			[
+				"d41d8cd98f00b204e9800998ecf8427e  usr/bin/Cap",
+				"0cc175b9c0f1b6a831c399e269772661  usr/lib/cap/libonnxruntime.so",
+				"92eb5ffee6ae2fec3ad71c777531578f  usr/lib/cap/libonnxruntime.so.1",
+				"",
+			].join("\n"),
+			["usr/lib/cap/libonnxruntime.so"],
+		),
+		[
+			"d41d8cd98f00b204e9800998ecf8427e  usr/bin/Cap",
+			"92eb5ffee6ae2fec3ad71c777531578f  usr/lib/cap/libonnxruntime.so.1",
+			"",
+		].join("\n"),
+	);
+	assert.equal(
+		withInstalledSize(
+			"Package: cap\nInstalled-Size: 286485\nArchitecture: amd64\n",
+			22146944,
+		),
+		"Package: cap\nInstalled-Size: 264857\nArchitecture: amd64\n",
+	);
+	assert.equal(withInstalledSize("Package: cap\n", 1024), "Package: cap\n");
+});
+
+for (const [name, listing, expected] of [
+	["signs the rebuilt package before replacing it", "same", null],
+	[
+		"refuses a recompressed package with different contents",
+		"differs",
+		/does not contain the same files/,
+	],
+]) {
+	test(`deb finalization ${name}`, async (t) => {
+		const root = await workspace(t);
+		const deb = path.join(root, "Cap_0.6.1_amd64.deb");
+		await writeFile(deb, "original");
+		await writeFile(`${deb}.sig`, "original signature");
+		const calls = [];
+		const env = { TAURI_SIGNING_PRIVATE_KEY: "key" };
+		const operation = finalizeGpuiDeb(deb, {
+			env,
+			run: async (command, args, options) => {
+				calls.push(command === "ar" ? `ar ${args[0]}` : command);
+				if (command === "dpkg-deb" && args[0] === "--raw-extract") {
+					await mkdir(path.join(args[2], "DEBIAN"), { recursive: true });
+					await writeFile(
+						path.join(args[2], "DEBIAN/control"),
+						"Package: cap\nDepends: libva2, libwebkit2gtk-4.1-0, libgtk-3-0\n",
+					);
+				} else if (command === "dpkg-deb" && args[0] === "--contents") {
+					return {
+						stdout:
+							listing === "differs" && args[1].endsWith("uncompressed.deb")
+								? "drwxr-xr-x root/root 0 ./usr/\n"
+								: "drwxr-xr-x root/root 0 ./usr/bin/\n",
+					};
+				} else if (command === "dpkg-deb") {
+					assert.deepEqual(args.slice(0, 3), [
+						"--root-owner-group",
+						"-Znone",
+						"--build",
+					]);
+					assert.equal(
+						await readFile(path.join(args[3], "DEBIAN/control"), "utf8"),
+						"Package: cap\nDepends: libva2\n",
+					);
+					await writeFile(args[4], "uncompressed");
+				} else if (command === "ar" && args[0] === "t") {
+					return { stdout: "debian-binary\ncontrol.tar\ndata.tar\n" };
+				} else if (command === "ar" && args[0] === "x") {
+					for (const member of ["debian-binary", "control.tar", "data.tar"]) {
+						await writeFile(path.join(options.cwd, member), member);
+					}
+				} else if (command === "xz") {
+					assert.deepEqual(args, [
+						"--threads=1",
+						"--lzma2=preset=9,dict=192MiB",
+						"data.tar",
+					]);
+					await rm(path.join(options.cwd, "data.tar"));
+					await writeFile(path.join(options.cwd, "data.tar.xz"), "xz");
+				} else if (command === "ar") {
+					assert.deepEqual(args.slice(0, 1), ["rcD"]);
+					assert.deepEqual(args.slice(2), [
+						"debian-binary",
+						"control.tar",
+						"data.tar.xz",
+					]);
+					await writeFile(args[1], "rebuilt");
+				} else {
+					assert.deepEqual(args.slice(0, 4), [
+						"run",
+						"tauri",
+						"signer",
+						"sign",
+					]);
+					assert.equal(options.env.TAURI_PRIVATE_KEY, "key");
+					assert.equal(await readFile(args[4], "utf8"), "rebuilt");
+					await writeFile(`${args[4]}.sig`, "rebuilt signature");
+				}
+				return {};
+			},
+		});
+		if (expected) {
+			await assert.rejects(operation, expected);
+			assert.equal(await readFile(deb, "utf8"), "original");
+			assert.equal(await readFile(`${deb}.sig`, "utf8"), "original signature");
+			return;
+		}
+		await operation;
+		assert.deepEqual(calls, [
+			"dpkg-deb",
+			"dpkg-deb",
+			"ar t",
+			"ar x",
+			"xz",
+			"ar rcD",
+			"dpkg-deb",
+			"dpkg-deb",
+			"bun",
+		]);
+		assert.equal(await readFile(deb, "utf8"), "rebuilt");
+		assert.equal(await readFile(`${deb}.sig`, "utf8"), "rebuilt signature");
+	});
+}
 
 test("package finalization requires a signing key unless unsigned", async (t) => {
 	const root = await workspace(t);
@@ -211,9 +337,25 @@ test(
 		const tree = path.join(root, "tree");
 		await mkdir(path.join(tree, "DEBIAN"), { recursive: true });
 		await mkdir(path.join(tree, "usr/bin"), { recursive: true });
+		await mkdir(path.join(tree, "usr/lib/cap"), { recursive: true });
 		await writeFile(path.join(tree, "usr/bin/Cap"), "#!/bin/sh\n", {
 			mode: 0o755,
 		});
+		const library = Buffer.alloc(4096, 7);
+		for (const name of ["libonnxruntime.so", "libonnxruntime.so.1"]) {
+			await writeFile(path.join(tree, "usr/lib/cap", name), library, {
+				mode: 0o755,
+			});
+		}
+		await writeFile(
+			path.join(tree, "DEBIAN/md5sums"),
+			capture("sh", [
+				"-c",
+				'cd "$1" && md5sum usr/bin/Cap usr/lib/cap/libonnxruntime.so usr/lib/cap/libonnxruntime.so.1',
+				"sh",
+				tree,
+			]),
+		);
 		await writeFile(
 			path.join(tree, "DEBIAN/control"),
 			[
@@ -221,6 +363,7 @@ test(
 				"Version: 0.6.1",
 				"Architecture: amd64",
 				"Maintainer: cap",
+				"Installed-Size: 12",
 				"Depends: libva2, libasound2t64 | libasound2, libwebkit2gtk-4.1-0, libgtk-3-0",
 				"Description: Beautiful screen recordings, owned by you.",
 				"",
@@ -238,10 +381,21 @@ test(
 			capture("dpkg-deb", ["--field", deb, "Package"]).trim(),
 			"cap",
 		);
+		const contents = capture("dpkg-deb", ["--contents", deb]);
+		assert.match(contents, /-rwxr-xr-x root\/root .* \.\/usr\/bin\/Cap/);
 		assert.match(
-			capture("dpkg-deb", ["--contents", deb]),
-			/-rwxr-xr-x root\/root .* \.\/usr\/bin\/Cap/,
+			contents,
+			/lrwxrwxrwx root\/root .* \.\/usr\/lib\/cap\/libonnxruntime\.so -> libonnxruntime\.so\.1/,
 		);
+		assert.equal(
+			capture("dpkg-deb", ["--field", deb, "Installed-Size"]).trim(),
+			"8",
+		);
+		const control = path.join(root, "control");
+		capture("dpkg-deb", ["--control", deb, control]);
+		const sums = await readFile(path.join(control, "md5sums"), "utf8");
+		assert.doesNotMatch(sums, /libonnxruntime\.so$/m);
+		assert.match(sums, /libonnxruntime\.so\.1$/m);
 		assert.match(capture("ar", ["t", deb]), /data\.tar\.xz/);
 		await assert.rejects(readFile(`${deb}.sig`));
 	},
@@ -280,9 +434,11 @@ test(
 				"Beautiful screen recordings, owned by you.",
 				"",
 				"%install",
-				'mkdir -p "%{buildroot}/usr/bin" "%{buildroot}/usr/lib/Cap"',
+				'mkdir -p "%{buildroot}/usr/bin" "%{buildroot}/usr/lib/Cap" "%{buildroot}/usr/lib/cap"',
 				"printf 'cap' > \"%{buildroot}/usr/bin/Cap\"",
 				"printf 'music' > \"%{buildroot}/usr/lib/Cap/track one.mp3\"",
+				"printf 'onnx' > \"%{buildroot}/usr/lib/cap/libonnxruntime.so.1\"",
+				"printf 'onnx' > \"%{buildroot}/usr/lib/cap/libonnxruntime.so\"",
 				'ln -s Cap "%{buildroot}/usr/bin/cap"',
 				"",
 				"%files",
@@ -290,6 +446,8 @@ test(
 				'%attr(-,root,root) "/usr/bin/cap"',
 				'%dir %attr(0755,root,root) "/usr/lib/Cap"',
 				'%attr(0644,root,root) "/usr/lib/Cap/track one.mp3"',
+				'%attr(0755,root,root) "/usr/lib/cap/libonnxruntime.so"',
+				'%attr(0755,root,root) "/usr/lib/cap/libonnxruntime.so.1"',
 				"",
 			].join("\n"),
 		);
@@ -332,7 +490,22 @@ test(
 				.filter((line) => line && !line.startsWith("rpmlib(")),
 			["libva"],
 		);
-		assert.equal(files(rpm), before);
+		assert.equal(
+			files(rpm),
+			before.replace(
+				"100755 root:root /usr/lib/cap/libonnxruntime.so\n",
+				"120777 root:root /usr/lib/cap/libonnxruntime.so\n",
+			),
+		);
+		assert.match(
+			capture("rpm", [
+				"-qp",
+				"--queryformat",
+				"[%{FILENAMES} -> %{FILELINKTOS}\\n]",
+				rpm,
+			]),
+			/\/usr\/lib\/cap\/libonnxruntime\.so -> libonnxruntime\.so\.1\n/,
+		);
 		assert.equal(
 			capture("rpm", [
 				"-qp",
