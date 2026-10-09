@@ -86,9 +86,6 @@ struct ClipTrack {
     /// Studio Sound state for microphone tracks: the profile, measured once
     /// from the start of the track, and the enhancer.
     voice: Option<(Option<VoiceProfile>, Option<VoiceEnhancer>)>,
-    /// Whether the worker streams this track in blocks, rather than handing
-    /// it over whole.
-    streamed: bool,
 }
 
 #[wasm_bindgen]
@@ -181,70 +178,204 @@ fn gcd(a: u64, b: u64) -> u64 {
     if b == 0 { a } else { gcd(b, a % b) }
 }
 
-/// Band-limited resampling of interleaved samples to 48 kHz: a Hann-windowed
-/// sinc (cutoff 0.97 of the lower Nyquist, like the native resampler) with
-/// one precomputed filter per output phase.
+const RESAMPLE_HALF_TAPS: i64 = 16;
+const RESAMPLE_TAPS: usize = (RESAMPLE_HALF_TAPS * 2) as usize;
+
+/// Band-limited resampling to 48 kHz: a Hann-windowed sinc (cutoff 0.97 of
+/// the lower Nyquist, like the native resampler) with one precomputed filter
+/// per output phase.
+struct ResampleFilter {
+    up: u64,
+    down: u64,
+    ratio: f64,
+    table: Vec<f32>,
+}
+
+impl ResampleFilter {
+    fn new(rate: u32) -> Self {
+        let divisor = gcd(u64::from(SAMPLE_RATE), u64::from(rate));
+        let up = u64::from(SAMPLE_RATE) / divisor;
+        let down = u64::from(rate) / divisor;
+        let ratio = f64::from(SAMPLE_RATE) / f64::from(rate);
+        let cutoff = 0.97 * ratio.min(1.0);
+        // Phase p holds the taps for an output sample whose source position
+        // has fractional part p / up.
+        let mut table = vec![0.0f32; up as usize * RESAMPLE_TAPS];
+        for phase in 0..up as usize {
+            let fraction = phase as f64 / up as f64;
+            let mut total = 0.0;
+            let weights = &mut table[phase * RESAMPLE_TAPS..(phase + 1) * RESAMPLE_TAPS];
+            for (index, weight) in weights.iter_mut().enumerate() {
+                let x = fraction - (index as i64 - RESAMPLE_HALF_TAPS + 1) as f64;
+                let sinc = if x.abs() < 1e-9 {
+                    1.0
+                } else {
+                    (std::f64::consts::PI * x * cutoff).sin() / (std::f64::consts::PI * x)
+                };
+                let window = if x.abs() < RESAMPLE_HALF_TAPS as f64 {
+                    0.5 + 0.5 * (std::f64::consts::PI * x / RESAMPLE_HALF_TAPS as f64).cos()
+                } else {
+                    0.0
+                };
+                let value = sinc * window;
+                *weight = value as f32;
+                total += value;
+            }
+            if total.abs() > 1e-12 {
+                for weight in weights.iter_mut() {
+                    *weight = (f64::from(*weight) / total) as f32;
+                }
+            }
+        }
+        Self {
+            up,
+            down,
+            ratio,
+            table,
+        }
+    }
+
+    /// Output frames for a source of `frames` frames.
+    fn output_frames(&self, frames: i64) -> u64 {
+        ((frames as f64) * self.ratio).round() as u64
+    }
+
+    /// The source frame output `frame`'s first tap reads.
+    fn first_tap(&self, frame: u64) -> i64 {
+        (frame * self.down / self.up) as i64 - RESAMPLE_HALF_TAPS + 1
+    }
+
+    /// The first output frame whose taps all fall at or after source frame
+    /// `start`.
+    fn first_frame_from(&self, start: i64) -> u64 {
+        ((start + RESAMPLE_HALF_TAPS - 1).max(0) as u64 * self.up).div_ceil(self.down)
+    }
+
+    /// Writes output `frame` into `out` (one sample per channel). `input`
+    /// holds source frames from `input_start`; taps outside `0..end` read as
+    /// silence.
+    fn render(&self, frame: u64, input: &[f32], input_start: i64, end: i64, out: &mut [f32]) {
+        let channels = out.len();
+        let numerator = frame * self.down;
+        let phase = (numerator % self.up) as usize;
+        let weights = &self.table[phase * RESAMPLE_TAPS..(phase + 1) * RESAMPLE_TAPS];
+        let first = self.first_tap(frame);
+        for (channel, sample) in out.iter_mut().enumerate() {
+            let mut value = 0.0f32;
+            for (index, weight) in weights.iter().enumerate() {
+                let tap = first + index as i64;
+                if tap >= 0 && tap < end {
+                    value += weight * input[(tap - input_start) as usize * channels + channel];
+                }
+            }
+            *sample = value;
+        }
+    }
+}
+
+/// Resamples interleaved samples to 48 kHz.
 pub fn resample(input: &[f32], channels: usize, rate: u32) -> Vec<f32> {
     if rate == SAMPLE_RATE || input.is_empty() || rate == 0 {
         return input.to_vec();
     }
-    const HALF_TAPS: i64 = 16;
-    const TAPS: usize = (HALF_TAPS * 2) as usize;
-    let divisor = gcd(u64::from(SAMPLE_RATE), u64::from(rate));
-    let up = u64::from(SAMPLE_RATE) / divisor;
-    let down = u64::from(rate) / divisor;
-    let ratio = f64::from(SAMPLE_RATE) / f64::from(rate);
-    let cutoff = 0.97 * ratio.min(1.0);
+    let filter = ResampleFilter::new(rate);
     let frames = (input.len() / channels) as i64;
-    let out_frames = ((frames as f64) * ratio).round() as usize;
-    // Phase p holds the taps for an output sample whose source position has
-    // fractional part p / up.
-    let mut table = vec![0.0f32; up as usize * TAPS];
-    for phase in 0..up as usize {
-        let fraction = phase as f64 / up as f64;
-        let mut total = 0.0;
-        let weights = &mut table[phase * TAPS..(phase + 1) * TAPS];
-        for (index, weight) in weights.iter_mut().enumerate() {
-            let x = fraction - (index as i64 - HALF_TAPS + 1) as f64;
-            let sinc = if x.abs() < 1e-9 {
-                1.0
-            } else {
-                (std::f64::consts::PI * x * cutoff).sin() / (std::f64::consts::PI * x)
-            };
-            let window = if x.abs() < HALF_TAPS as f64 {
-                0.5 + 0.5 * (std::f64::consts::PI * x / HALF_TAPS as f64).cos()
-            } else {
-                0.0
-            };
-            let value = sinc * window;
-            *weight = value as f32;
-            total += value;
-        }
-        if total.abs() > 1e-12 {
-            for weight in weights.iter_mut() {
-                *weight = (f64::from(*weight) / total) as f32;
-            }
-        }
-    }
+    let out_frames = filter.output_frames(frames) as usize;
     let mut output = vec![0.0f32; out_frames * channels];
-    for frame in 0..out_frames as u64 {
-        let numerator = frame * down;
-        let center = (numerator / up) as i64;
-        let phase = (numerator % up) as usize;
-        let weights = &table[phase * TAPS..(phase + 1) * TAPS];
-        let first = center - HALF_TAPS + 1;
-        for channel in 0..channels {
-            let mut value = 0.0f32;
-            for (index, weight) in weights.iter().enumerate() {
-                let tap = first + index as i64;
-                if tap >= 0 && tap < frames {
-                    value += weight * input[tap as usize * channels + channel];
-                }
-            }
-            output[frame as usize * channels + channel] = value;
-        }
+    for (frame, out) in output.chunks_exact_mut(channels).enumerate() {
+        filter.render(frame as u64, input, 0, frames, out);
     }
     output
+}
+
+/// `resample` for a track decoded a piece at a time, so it never holds more
+/// than a piece plus the filter's taps. Fed from the track's start, its
+/// output is identical to resampling the whole track at once; started at
+/// source frame `start`, it begins at the first output frame that doesn't
+/// read anything earlier.
+#[wasm_bindgen]
+pub struct ExportAudioResampler {
+    filter: ResampleFilter,
+    channels: usize,
+    buffer: Vec<f32>,
+    buffer_start: i64,
+    received: i64,
+    next: u64,
+}
+
+impl ExportAudioResampler {
+    fn emit(&mut self, until: u64, end: i64) -> Vec<f32> {
+        let count = until.saturating_sub(self.next) as usize;
+        let mut output = vec![0.0f32; count * self.channels];
+        for (index, out) in output.chunks_exact_mut(self.channels).enumerate() {
+            self.filter.render(
+                self.next + index as u64,
+                &self.buffer,
+                self.buffer_start,
+                end,
+                out,
+            );
+        }
+        self.next += count as u64;
+        let keep_from = self.filter.first_tap(self.next).max(self.buffer_start);
+        let drop =
+            ((keep_from - self.buffer_start) as usize * self.channels).min(self.buffer.len());
+        self.buffer.drain(..drop);
+        self.buffer_start += (drop / self.channels) as i64;
+        output
+    }
+}
+
+#[wasm_bindgen]
+impl ExportAudioResampler {
+    #[wasm_bindgen(constructor)]
+    pub fn new(
+        channels: u32,
+        sample_rate: u32,
+        start: f64,
+    ) -> Result<ExportAudioResampler, JsValue> {
+        if !(1..=2).contains(&channels) || sample_rate == 0 || sample_rate == SAMPLE_RATE {
+            return Err(js_error("Export audio resampler is invalid"));
+        }
+        let filter = ResampleFilter::new(sample_rate);
+        let start = start.max(0.0).round() as i64;
+        let next = if start == 0 {
+            0
+        } else {
+            filter.first_frame_from(start)
+        };
+        Ok(Self {
+            filter,
+            channels: channels as usize,
+            buffer: Vec::new(),
+            buffer_start: start,
+            received: start,
+            next,
+        })
+    }
+
+    /// The 48 kHz frame the next output starts at.
+    pub fn position(&self) -> f64 {
+        self.next as f64
+    }
+
+    /// Appends the source frames that follow those already pushed, and
+    /// returns the output frames they complete.
+    pub fn push(&mut self, samples: &[f32]) -> Vec<f32> {
+        self.buffer.extend_from_slice(samples);
+        self.received += (samples.len() / self.channels) as i64;
+        let mut until = self.next;
+        while self.filter.first_tap(until) + RESAMPLE_TAPS as i64 <= self.received {
+            until += 1;
+        }
+        self.emit(until, self.received)
+    }
+
+    /// The output frames left once the track has ended.
+    pub fn finish(&mut self) -> Vec<f32> {
+        let until = self.filter.output_frames(self.received);
+        self.emit(until, self.received)
+    }
 }
 
 impl BrowserExportAudio {
@@ -254,7 +385,6 @@ impl BrowserExportAudio {
         microphone: bool,
         offset_seconds: f64,
         track: Track,
-        streamed: bool,
     ) -> u32 {
         let tracks = self.clips.entry(clip).or_default();
         tracks.push(ClipTrack {
@@ -266,7 +396,6 @@ impl BrowserExportAudio {
             offset_samples: (offset_seconds * f64::from(SAMPLE_RATE)).round() as isize,
             track,
             voice: (microphone && self.project.audio.improve).then_some((None, None)),
-            streamed,
         });
         self.track_ids.push((clip, tracks.len() - 1));
         (self.track_ids.len() - 1) as u32
@@ -675,29 +804,12 @@ impl BrowserExportAudio {
         })
     }
 
-    /// Adds a decoded recording track. `offset_seconds` is where recording
-    /// time zero falls in the track (the preview's `audio_times` offset).
-    pub fn add_track(
-        &mut self,
-        clip: u32,
-        microphone: bool,
-        channels: u32,
-        sample_rate: u32,
-        offset_seconds: f64,
-        samples: Vec<f32>,
-    ) -> Result<(), JsValue> {
-        if !(1..=2).contains(&channels) || sample_rate == 0 {
-            return Err(js_error("Export audio track is invalid"));
-        }
-        let channels = channels as usize;
-        let track = Track::whole(channels, resample(&samples, channels, sample_rate));
-        self.push_track(clip, microphone, offset_seconds, track, false);
-        Ok(())
-    }
-
-    /// Adds a 48 kHz recording track whose samples arrive later in blocks, as
-    /// `plan` asks for them. `frames` is its length, or 0 when not yet known.
-    /// Returns the id `plan` and `put_block` use for it.
+    /// Adds a recording track whose samples arrive later in 48 kHz blocks
+    /// (through `ExportAudioResampler` for other rates), as `plan` asks for
+    /// them. `frames` is its 48 kHz length, or 0 when not yet known.
+    /// `offset_seconds` is where recording time zero falls in the track (the
+    /// preview's `audio_times` offset). Returns the id `plan` and `put_block`
+    /// use for it.
     pub fn add_streamed_track(
         &mut self,
         clip: u32,
@@ -718,7 +830,7 @@ impl BrowserExportAudio {
             },
             blocks: HashMap::new(),
         };
-        Ok(self.push_track(clip, microphone, offset_seconds, track, true))
+        Ok(self.push_track(clip, microphone, offset_seconds, track))
     }
 
     /// Stores block `block` of a streamed track: `BLOCK_FRAMES` interleaved
@@ -779,9 +891,6 @@ impl BrowserExportAudio {
             let Some(clip_track) = self.clips.get_mut(&clip).and_then(|t| t.get_mut(index)) else {
                 continue;
             };
-            if !clip_track.streamed {
-                continue;
-            }
             let track_frames = clip_track.track.frames;
             let mut wanted = std::collections::BTreeSet::new();
             let mut want = |first: isize, count: usize| {

@@ -40,14 +40,12 @@ export class BrowserExportAudio {
   free(): void;
   constructor(config_json: string, total_frames: number);
   /**
-   * Adds a decoded recording track. `offset_seconds` is where recording
-   * time zero falls in the track (the preview's `audio_times` offset).
-   */
-  add_track(clip: number, microphone: boolean, channels: number, sample_rate: number, offset_seconds: number, samples: Float32Array): void;
-  /**
-   * Adds a 48 kHz recording track whose samples arrive later in blocks, as
-   * `plan` asks for them. `frames` is its length, or 0 when not yet known.
-   * Returns the id `plan` and `put_block` use for it.
+   * Adds a recording track whose samples arrive later in 48 kHz blocks
+   * (through `ExportAudioResampler` for other rates), as `plan` asks for
+   * them. `frames` is its 48 kHz length, or 0 when not yet known.
+   * `offset_seconds` is where recording time zero falls in the track (the
+   * preview's `audio_times` offset). Returns the id `plan` and `put_block`
+   * use for it.
    */
   add_streamed_track(clip: number, microphone: boolean, channels: number, frames: number, offset_seconds: number): number;
   /**
@@ -146,6 +144,30 @@ export class BrowserVisualConfig {
   output_dimensions(source_width: number, source_height: number, resolution_width: number, resolution_height: number): Uint32Array;
   aspect_locked(): boolean;
 }
+/**
+ * `resample` for a track decoded a piece at a time, so it never holds more
+ * than a piece plus the filter's taps. Fed from the track's start, its
+ * output is identical to resampling the whole track at once; started at
+ * source frame `start`, it begins at the first output frame that doesn't
+ * read anything earlier.
+ */
+export class ExportAudioResampler {
+  free(): void;
+  constructor(channels: number, sample_rate: number, start: number);
+  /**
+   * The 48 kHz frame the next output starts at.
+   */
+  position(): number;
+  /**
+   * Appends the source frames that follow those already pushed, and
+   * returns the output frames they complete.
+   */
+  push(samples: Float32Array): Float32Array;
+  /**
+   * The output frames left once the track has ended.
+   */
+  finish(): Float32Array;
+}
 
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
@@ -155,8 +177,12 @@ export interface InitOutput {
   readonly sin: (a: number) => number;
   readonly cos: (a: number) => number;
   readonly __wbg_browserexportaudio_free: (a: number, b: number) => void;
+  readonly __wbg_exportaudioresampler_free: (a: number, b: number) => void;
+  readonly exportaudioresampler_new: (a: number, b: number, c: number) => [number, number, number];
+  readonly exportaudioresampler_position: (a: number) => number;
+  readonly exportaudioresampler_push: (a: number, b: number, c: number) => [number, number];
+  readonly exportaudioresampler_finish: (a: number) => [number, number];
   readonly browserexportaudio_new: (a: number, b: number, c: number) => [number, number, number];
-  readonly browserexportaudio_add_track: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];
   readonly browserexportaudio_add_streamed_track: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
   readonly browserexportaudio_put_block: (a: number, b: number, c: number, d: number, e: number) => void;
   readonly browserexportaudio_set_track_frames: (a: number, b: number, c: number) => void;
@@ -226,9 +252,9 @@ export interface InitOutput {
   readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
   readonly __wbindgen_export_6: WebAssembly.Table;
   readonly __externref_table_dealloc: (a: number) => void;
+  readonly closure1254_externref_shim: (a: number, b: number, c: any) => void;
   readonly wasm_bindgen__convert__closures_____invoke__hfa69fcf5a022ebc2: (a: number, b: number) => void;
   readonly closure1638_externref_shim: (a: number, b: number, c: any) => void;
-  readonly closure1254_externref_shim: (a: number, b: number, c: any) => void;
   readonly closure2710_externref_shim: (a: number, b: number, c: any, d: any) => void;
   readonly __wbindgen_start: () => void;
 }
