@@ -29,7 +29,7 @@ export const SystemAudioGuide = ({
 
 	return (
 		<div
-			className="rec-fade absolute inset-0 z-30 flex items-center justify-center bg-[var(--rec-scrim)] p-4 backdrop-blur-md"
+			className="rec-fade absolute inset-0 z-30 flex items-center justify-center bg-[var(--rec-scrim)] p-4"
 			role="dialog"
 			aria-modal="true"
 			aria-label="Record your computer's sound"

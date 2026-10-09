@@ -338,8 +338,8 @@ const LayoutScene = () => (
 
 const STEPS = [
 	{
-		title: "Switch on what you want to record",
-		body: "Your screen, camera, mic and your computer's sound. Turn on any mix of them before you start.",
+		title: "Pick what you want to record",
+		body: "Select a screen, choose your camera or No camera, and check your mic. Any mix works.",
 		Scene: SourcesScene,
 	},
 	{
@@ -359,34 +359,13 @@ const STEPS = [
 	},
 ] as const;
 
-export const CAMERA_STEPS = [
-	{
-		title: "Your camera records on its own track",
-		body: "It's kept separate from your screen, not baked into it, so nothing about it is final while you record.",
-		Scene: TracksScene,
-	},
-	{
-		title: "Change it after you stop",
-		body: "Once the recording is complete, place, resize or hide the camera in the editor, then save and your link updates.",
-		Scene: LayoutScene,
-	},
-] as const;
-
-type Step = (typeof STEPS)[number] | (typeof CAMERA_STEPS)[number];
-
 const AUTO_ADVANCE_MS = 6000;
 
-export const HowRecordingWorks = ({
-	steps = STEPS,
-	onClose,
-}: {
-	steps?: readonly [Step, ...Step[]];
-	onClose: () => void;
-}) => {
+export const HowRecordingWorks = ({ onClose }: { onClose: () => void }) => {
 	const titleId = useId();
 	const [step, setStep] = useState(0);
 	const [auto, setAuto] = useState(true);
-	const last = steps.length - 1;
+	const last = STEPS.length - 1;
 
 	const go = useCallback(
 		(next: number) => {
@@ -416,12 +395,12 @@ export const HowRecordingWorks = ({
 		return () => window.removeEventListener("keydown", onKey, true);
 	}, [go, onClose, step]);
 
-	const current = steps[step] ?? steps[0];
+	const current = STEPS[step] ?? STEPS[0];
 	const Scene = current.Scene;
 
 	return (
 		<div
-			className="rec-fade absolute inset-0 z-30 flex items-center justify-center bg-[var(--rec-scrim)] p-4 backdrop-blur-md"
+			className="rec-fade absolute inset-0 z-30 flex items-center justify-center bg-[var(--rec-scrim)] p-4"
 			role="dialog"
 			aria-modal="true"
 			aria-labelledby={titleId}
@@ -442,7 +421,7 @@ export const HowRecordingWorks = ({
 				</div>
 				<div className="flex flex-col gap-1.5 px-5 pb-5 pt-4 sm:px-6">
 					<span className="text-[12px] tabular-nums text-[var(--rec-text-3)]">
-						{step + 1} of {steps.length}
+						{step + 1} of {STEPS.length}
 					</span>
 					<h2
 						id={titleId}
@@ -460,7 +439,7 @@ export const HowRecordingWorks = ({
 					</p>
 					<div className="mt-3 flex items-center justify-between gap-3">
 						<div className="flex items-center gap-1.5">
-							{steps.map((item, index) => (
+							{STEPS.map((item, index) => (
 								<button
 									key={item.title}
 									type="button"

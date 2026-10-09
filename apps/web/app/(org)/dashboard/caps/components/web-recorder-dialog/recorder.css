@@ -19,8 +19,6 @@
 	--rec-red: #ff3b30;
 	--rec-green: #2f9e69;
 	--rec-media: #101012;
-	--rec-seg-tint: 13%;
-	--rec-seg-line: 34%;
 	--rec-seg-label: #000000;
 	--rec-seg-label-mix: 58%;
 	--rec-card-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 0 0 1px var(--rec-line);
@@ -55,8 +53,6 @@
 		--rec-red: #ff453a;
 		--rec-green: #3dd68c;
 		--rec-media: #0b0b0c;
-		--rec-seg-tint: 20%;
-		--rec-seg-line: 42%;
 		--rec-seg-label: #ffffff;
 		--rec-seg-label-mix: 55%;
 		--rec-card-shadow:
@@ -207,13 +203,53 @@
 	aspect-ratio: 16 / 9;
 	width: min(100cqw, 100cqh * 16 / 9);
 }
-.rec-bubble {
-	width: 22%;
-	aspect-ratio: 1;
-	border-radius: 22%;
+/* The frame keeps its place from the empty state to the end of a take;
+   what's inside it changes. */
+.rec-stage:has(> .rec-frame) {
+	max-height: calc((100vw - 3rem) * 9 / 16);
 }
-/* Tracks borrow the editor timeline's clip treatment: a tint, a hairline
-   ring and a 3px bar in the track colour. */
+.rec-frame {
+	container-type: size;
+	max-width: 76rem;
+}
+.rec-dial-fit > span {
+	width: min(13rem, 46cqh);
+	height: min(13rem, 46cqh);
+}
+.rec-dial-fit .rec-countdown-number {
+	font-size: min(104px, 22cqh);
+}
+@container (max-height: 300px) {
+	.rec-screen-hint,
+	.rec-countdown-hint {
+		display: none;
+	}
+}
+@container (max-height: 220px) {
+	.rec-screen-doodle {
+		display: none;
+	}
+}
+@container (max-width: 176px) {
+	.rec-cam-icon {
+		display: none;
+	}
+}
+@container (max-height: 150px) {
+	.rec-person-doodle {
+		display: none;
+	}
+}
+@container (max-height: 104px) {
+	.rec-cam-label,
+	.rec-cam-decline {
+		display: none;
+	}
+	.rec-cam-icon {
+		display: block;
+	}
+}
+/* Each source keeps its editor track colour. */
 .rec-track {
 	--t: var(--track-screen);
 }
@@ -237,18 +273,6 @@
 .rec-track[data-on="false"] .rec-track-tile {
 	background: var(--rec-ctl);
 	color: var(--rec-text-3);
-}
-.rec-segment {
-	background: color-mix(in srgb, var(--t) var(--rec-seg-tint), var(--rec-card));
-	box-shadow:
-		inset 0 0 0 1px
-		color-mix(in srgb, var(--t) var(--rec-seg-line), transparent),
-		inset 3px 0 0 var(--t);
-	color: color-mix(
-		in srgb,
-		var(--t) var(--rec-seg-label-mix),
-		var(--rec-seg-label)
-	);
 }
 /* Animation language shared with the Chrome extension: strokes that draw
    themselves on, a gentle hand-drawn boil, sparks and marching dashes. */

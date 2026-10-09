@@ -244,7 +244,7 @@ const Sparks = ({ delay = 0.5 }: { delay?: number }) => (
 	</>
 );
 
-export type DoodleKind = "upload" | "done" | "error" | "share" | "tracks";
+export type DoodleKind = "upload" | "done" | "error" | "tracks";
 
 export const Doodle = ({ kind }: { kind: DoodleKind }) => (
 	<svg
@@ -326,21 +326,6 @@ export const Doodle = ({ kind }: { kind: DoodleKind }) => (
 								keySplines="0.45 0 0.55 1; 0.45 0 0.55 1"
 							/>
 						</path>
-					</g>
-				</>
-			)}
-			{kind === "share" && (
-				<>
-					<path
-						className="rec-ink rec-draw"
-						pathLength={1}
-						d="M 22 26 L 98 26 C 101 26 103 28 103 31 L 103 75 C 103 78 101 80 98 80 L 22 80 C 19 80 17 78 17 75 L 17 31 C 17 28 19 26 22 26 Z M 48 96 L 72 96 M 60 80 L 60 96"
-					/>
-					<g className="rec-fade" style={{ "--d": "0.6s" } as CSSProperties}>
-						<path
-							className="rec-ink is-accent rec-bob"
-							d="M 60 66 L 60 40 M 49 51 L 60 39 L 71 51"
-						/>
 					</g>
 				</>
 			)}

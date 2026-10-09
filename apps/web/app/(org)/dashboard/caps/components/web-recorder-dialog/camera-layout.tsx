@@ -145,6 +145,8 @@ export const CameraBubble = ({
 	onChange,
 	children,
 	label,
+	corner,
+	surfaceClassName = "bg-black ring-1 ring-white/15",
 }: {
 	frame: { width: number; height: number } | null;
 	layout: CameraLayout;
@@ -152,7 +154,9 @@ export const CameraBubble = ({
 	locked: boolean;
 	onChange: (update: Partial<CameraLayout>) => void;
 	children: ReactNode;
-	label: ReactNode;
+	label?: ReactNode;
+	corner?: ReactNode;
+	surfaceClassName?: string;
 }) => {
 	const [drag, setDrag] = useState<{
 		left: number;
@@ -253,16 +257,20 @@ export const CameraBubble = ({
 				onPointerCancel={endDrag}
 			>
 				<div
-					className="absolute inset-0 overflow-hidden bg-black shadow-[0_8px_24px_-8px_rgba(0,0,0,0.6)] ring-1 ring-white/15 transition-[border-radius] duration-300"
+					className={clsx(
+						"absolute inset-0 overflow-hidden shadow-[0_8px_24px_-8px_rgba(0,0,0,0.6)] transition-[border-radius] duration-300 [container-type:size]",
+						surfaceClassName,
+					)}
 					style={{ borderRadius: radius }}
 				>
 					{children}
 					{label}
 				</div>
+				{corner}
 				{!locked && !drag && (
 					<div
 						className={clsx(
-							"absolute left-1/2 flex -translate-x-1/2 items-center gap-0.5 rounded-lg bg-black/70 p-0.5 text-white opacity-0 shadow-lg backdrop-blur-md transition-opacity focus-within:opacity-100 group-hover/cam:opacity-100",
+							"absolute left-1/2 flex -translate-x-1/2 items-center gap-0.5 rounded-lg bg-black/80 p-0.5 text-white opacity-0 shadow-lg transition-opacity focus-within:opacity-100 group-hover/cam:opacity-100 [@media(hover:none)]:opacity-100",
 							toolbarAbove ? "bottom-full mb-2" : "top-full mt-2",
 						)}
 					>

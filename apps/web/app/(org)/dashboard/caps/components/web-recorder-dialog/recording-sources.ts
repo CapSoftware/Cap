@@ -1,41 +1,22 @@
-export const CAMERA_ONLY_PROMPT_DISMISSED_KEY =
-	"cap-web-recorder-camera-only-prompt-dismissed";
-
-export type CameraOnlyChoice = "camera" | "screen";
-
-export function parseCameraOnlyChoice(
-	value: string | null,
-): CameraOnlyChoice | null {
-	return value === "camera" || value === "screen" ? value : null;
-}
-
-export type StartChoice =
-	| "record"
-	| "share-then-record"
-	| "confirm-camera-only";
+export type StartChoice = "record" | "share-then-record";
 
 /**
- * What Start Recording does with the sources switched on. Nothing shared and
- * no camera goes straight to the browser's screen picker; a camera on its own
- * first asks whether the screen should be in it too, unless the browser can't
- * record a screen at all or the question was turned off, in which case the
- * answer given then is repeated.
+ * What Start Recording does with the sources switched on. A shared screen or
+ * a camera records straight away (the camera on its own when no screen is
+ * shared, which the button says); with neither, the browser's screen picker
+ * opens first. A browser that can't record a screen records the camera.
  */
 export function startRecordingChoice({
 	screenShared,
 	cameraEnabled,
 	screenSupported,
-	cameraOnlyChoice,
 }: {
 	screenShared: boolean;
 	cameraEnabled: boolean;
 	screenSupported: boolean;
-	cameraOnlyChoice: CameraOnlyChoice | null;
 }): StartChoice {
-	if (screenShared || !screenSupported) return "record";
-	if (!cameraEnabled || cameraOnlyChoice === "screen")
-		return "share-then-record";
-	return cameraOnlyChoice === "camera" ? "record" : "confirm-camera-only";
+	if (screenShared || cameraEnabled || !screenSupported) return "record";
+	return "share-then-record";
 }
 
 /** Recording just the microphone is offered when nothing visual is on. */

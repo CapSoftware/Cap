@@ -4,7 +4,6 @@ import {
 	micOnlyFileExtension,
 	micOnlyLanding,
 	micOnlyMimeType,
-	parseCameraOnlyChoice,
 	startRecordingChoice,
 } from "@/app/(org)/dashboard/caps/components/web-recorder-dialog/recording-sources";
 
@@ -12,7 +11,6 @@ const base = {
 	screenShared: false,
 	cameraEnabled: false,
 	screenSupported: true,
-	cameraOnlyChoice: null,
 };
 
 describe("startRecordingChoice", () => {
@@ -33,37 +31,13 @@ describe("startRecordingChoice", () => {
 		expect(startRecordingChoice(base)).toBe("share-then-record");
 	});
 
-	it("asks before recording just the camera", () => {
+	it("records just the camera when no screen is shared", () => {
 		expect(startRecordingChoice({ ...base, cameraEnabled: true })).toBe(
-			"confirm-camera-only",
+			"record",
 		);
 	});
 
-	it("repeats the answer given when the question was turned off", () => {
-		expect(
-			startRecordingChoice({
-				...base,
-				cameraEnabled: true,
-				cameraOnlyChoice: "camera",
-			}),
-		).toBe("record");
-		expect(
-			startRecordingChoice({
-				...base,
-				cameraEnabled: true,
-				cameraOnlyChoice: "screen",
-			}),
-		).toBe("share-then-record");
-	});
-
-	it("only accepts a stored choice it knows", () => {
-		expect(parseCameraOnlyChoice("camera")).toBe("camera");
-		expect(parseCameraOnlyChoice("screen")).toBe("screen");
-		expect(parseCameraOnlyChoice("true")).toBeNull();
-		expect(parseCameraOnlyChoice(null)).toBeNull();
-	});
-
-	it("never asks when the browser can't record a screen", () => {
+	it("records when the browser can't record a screen", () => {
 		expect(
 			startRecordingChoice({
 				...base,
