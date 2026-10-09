@@ -1426,27 +1426,13 @@ pub(crate) fn camera_preview_image(
 
     let width = width as usize;
     let height = height as usize;
-    let row_bytes = width.checked_mul(4)?;
-    let stride = source.stride(0);
-    if stride < row_bytes {
-        return None;
-    }
-    let input = source.data(0);
-    if input.len() < height.checked_mul(stride)? {
-        return None;
-    }
-    let mut pixels = vec![0; height.checked_mul(row_bytes)?];
-    for (row, output) in pixels.chunks_exact_mut(row_bytes).enumerate() {
-        let input = &input[row * stride..row * stride + row_bytes];
-        if mirrored {
-            for (destination, source) in output.chunks_exact_mut(4).zip(input.chunks_exact(4).rev())
-            {
-                destination.copy_from_slice(source);
-            }
-        } else {
-            output.copy_from_slice(input);
-        }
-    }
+    let pixels = cap_gpui_kernels::frame::copy_rows(
+        source.data(0),
+        width.checked_mul(4)?,
+        source.stride(0),
+        height,
+        mirrored,
+    )?;
     let image = image::RgbaImage::from_raw(width as u32, height as u32, pixels)?;
     let image = Arc::new(gpui::RenderImage::new(smallvec::smallvec![
         image::Frame::new(image)

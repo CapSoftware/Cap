@@ -895,14 +895,17 @@ pub(crate) fn snapshot_preview(
         let scale = (960. / width as f64).min(540. / height as f64).min(1.);
         let target_width = (width as f64 * scale).round().max(1.) as u32;
         let target_height = (height as f64 * scale).round().max(1.) as u32;
-        let image = image::RgbaImage::from_fn(target_width, target_height, |x, y| {
-            let source_x = x as usize * width / target_width as usize;
-            let source_y = y as usize * height / target_height as usize;
-            let offset = source_y * stride + source_x * 4;
-            let pixel = unsafe { std::slice::from_raw_parts(base.add(offset), 4) };
-            // RenderImage consumes BGRA bytes even though image::Frame wraps RgbaImage.
-            image::Rgba([pixel[0], pixel[1], pixel[2], pixel[3]])
-        });
+        let data = unsafe { std::slice::from_raw_parts(base, required_bytes) };
+        // RenderImage consumes BGRA bytes even though image::Frame wraps RgbaImage.
+        let pixels = cap_gpui_kernels::frame::downsample_nearest(
+            data,
+            width,
+            height,
+            stride,
+            target_width,
+            target_height,
+        );
+        let image = image::RgbaImage::from_raw(target_width, target_height, pixels)?;
         Some(Arc::new(gpui::RenderImage::new(smallvec::smallvec![
             image::Frame::new(image)
         ])))

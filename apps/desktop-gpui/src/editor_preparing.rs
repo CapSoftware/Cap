@@ -709,7 +709,7 @@ fn adapt(
                 is_live: || !*control.cancelled.borrow() && sources.live().is_some(),
                 remaining: cursor_budget,
             });
-            let cursor = CursorEvents::load_from_reader(&mut reader)?;
+            let cursor = read_cursor_events(&mut reader)?;
             cursor_budget = reader.get_ref().remaining;
             cursor
         } else {
@@ -757,6 +757,14 @@ fn adapt(
         },
         audio,
     ))
+}
+
+fn read_cursor_events(reader: &mut impl Read) -> Result<CursorEvents, String> {
+    let mut bytes = Vec::new();
+    reader
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("Failed to parse cursor data: {error}"))?;
+    cap_gpui_kernels::codec::parse_cursor_events(&bytes)
 }
 
 struct CheckedCursorReader<R, F> {
@@ -853,7 +861,7 @@ mod tests {
                 is_live: || true,
                 remaining,
             };
-            let result = CursorEvents::load_from_reader(BufReader::new(reader));
+            let result = read_cursor_events(&mut BufReader::new(reader));
             assert_eq!(result.is_ok(), remaining == bytes.len() as u64);
         }
     }

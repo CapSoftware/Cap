@@ -16,12 +16,19 @@ cargo run
 `RUST_LOG=cap_gpui=debug cargo run` for logs — note the filter is `cap_gpui`
 (the binary), not `cap_desktop_gpui` (the package).
 
-The first build takes a few minutes and about 8 GB of `target/`: gpui pulls its
-own revisions of the wgpu and font stacks. Rebuilds after that are seconds —
-the dependencies build at `opt-level = 2` and so, since the editor landed, does
-the app crate: the editor's per-frame pixel conversion is 30ms unoptimised and
-0.92ms optimised, which is the difference between a 33fps preview and a 60fps
-one (see the editor's measurements below).
+The first build takes about 11 minutes and 6.4 GB of `target/`: gpui pulls its
+own revisions of the wgpu and font stacks. After that, an edit rebuilds only
+the app crate, which stays at `opt-level = 0`: about 75s with `cargo build` and
+35s in the dev loop below. Dependencies build at `opt-level = 2` with line-table
+debug info.
+
+Loops over pixels or samples live in `kernels/` (`cap-gpui-kernels`,
+`opt-level = 3`): unoptimised, the editor's frame conversion alone costs 42.7ms
+a frame against 1.0ms, a 23fps preview instead of a 60fps one. That includes
+generic dependency calls over large data — `imageops::resize`, image encoders,
+`serde_json::from_reader`, `md5` — because a generic compiles into the crate
+that instantiates it, at that crate's opt-level. Put the call in `kernels/`
+behind a plain-slice function and call that from the app.
 
 ### The dev loop
 
@@ -49,8 +56,8 @@ doubles as that handshake — `dev.sh` will not kill the app while it reads
 `"recording":true`).
 
 The loop exports `CARGO_INCREMENTAL=1`, overriding this profile's
-`incremental = false` for its own builds only: a warm rebuild drops from ~41s
-to ~3s for a metadata-only change and ~23s for an edit to a 4k-line module.
+`incremental = false` for its own builds only: a one-line edit to the app crate
+rebuilds in about 35s instead of 75s.
 The costs are the ones the profile comment warns about, scoped down: a few GB
 of `target/debug/incremental` (delete it to reclaim), and a one-off app-crate
 rebuild when switching between `./dev.sh` and a plain `cargo build`, whose
@@ -1315,9 +1322,10 @@ crate at `opt-level = 0` the same conversion measures **30.1ms**, the pump
 becomes convert-bound at 33 fps and the bounded channel drops **45 %** of the
 renderer's frames (`playback fps=33.0 frames=523 dropped=423 …
 convert_avg=30149us`). Nothing about the architecture changes — it is a
-3MB-per-frame per-pixel loop compiled without optimisation. `Cargo.toml` now
-carries `[profile.dev.package.cap-desktop-gpui] opt-level = 2` so a dev build
-shows the editor at its real speed; it costs about seven seconds a build.
+3MB-per-frame per-pixel loop compiled without optimisation. The loop now lives
+in `kernels/` (`cap_gpui_kernels::frame::unpad_rgba_to_bgra`), built at
+`opt-level = 3`, so a dev build shows the editor at its real speed while the
+app crate itself stays unoptimised (see [Running it](#running-it)).
 
 Reliability, same binary:
 

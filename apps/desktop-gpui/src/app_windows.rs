@@ -5351,7 +5351,7 @@ fn load_editor_waveforms(
                         .map(|audio| {
                             Arc::new(match audio {
                                 Some(audio) => editor_timeline::waveform_peaks(
-                                    audio.sample_slices().flatten(),
+                                    &audio.sample_slices().collect::<Vec<_>>(),
                                     audio.channels(),
                                 ),
                                 None => Vec::new(),

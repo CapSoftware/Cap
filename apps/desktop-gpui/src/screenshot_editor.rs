@@ -391,12 +391,9 @@ async fn render_export_rgba(
             frame.height
         ));
     }
-    let rgba: Vec<u8> = frame
-        .data
-        .chunks(padded)
-        .take(frame.height as usize)
-        .flat_map(|row| row[..row_bytes].iter().copied())
-        .collect();
+    let rgba =
+        cap_gpui_kernels::frame::unpad_rows(&frame.data, row_bytes, padded, frame.height as usize)
+            .ok_or_else(|| "Invalid export buffer rows".to_string())?;
 
     // What the preview renders this config at: `get_base_size`, then the
     // uniforms' own alignment -- `get_output_size` at scale 1. That is what
@@ -4688,22 +4685,14 @@ fn decode_preview_image(path: &Path) -> Option<Arc<RenderImage>> {
 /// copied once and the swap runs over a clone, so the padded GPU buffer is
 /// walked a single time.
 fn frame_buffers(frame: &RenderedFrame) -> Option<(Arc<Vec<u8>>, Arc<RenderImage>)> {
-    let row_bytes = frame.width as usize * 4;
-    let mut rgba = Vec::with_capacity(row_bytes * frame.height as usize);
-    for row in frame
-        .data
-        .chunks(frame.padded_bytes_per_row as usize)
-        .take(frame.height as usize)
-    {
-        if row.len() < row_bytes {
-            return None;
-        }
-        rgba.extend_from_slice(&row[..row_bytes]);
-    }
+    let rgba = cap_gpui_kernels::frame::unpad_rows(
+        &frame.data,
+        frame.width as usize * 4,
+        frame.padded_bytes_per_row as usize,
+        frame.height as usize,
+    )?;
     let mut bgra = rgba.clone();
-    for pixel in bgra.chunks_exact_mut(4) {
-        pixel.swap(0, 2);
-    }
+    cap_gpui_kernels::frame::swap_red_blue(&mut bgra);
     let buffer = image::RgbaImage::from_raw(frame.width, frame.height, bgra)?;
     Some((
         Arc::new(rgba),
