@@ -3,6 +3,10 @@
 Cap's desktop app, rewritten in [gpui](https://www.gpui.rs/). No Tauri, no
 webview — the whole UI is drawn by gpui and every pixel is Rust.
 
+This is the app that ships as **Cap**. The Tauri app in `apps/desktop` ships
+separately as **Cap Classic**; see [Shipping, updates and Cap
+Classic](#shipping-updates-and-cap-classic).
+
 The main recording window uses a fixed 330×432 layout with device controls
 and recording and screenshot browsers. The expanded view is no longer available.
 
@@ -67,6 +71,72 @@ and CI completely untouched.
 `rust-toolchain.toml` pins `stable` rather than the root's 1.88.0, because
 gpui's dependencies need 1.89+ (`smol_str` 0.3.6, `cosmic-text` 0.19). The
 nearest toolchain file wins, so the Tauri app is unaffected.
+
+## Shipping, updates and Cap Classic
+
+### How Cap is packaged
+
+`tauri.conf.json` in this directory is a **packaging** config only — nothing
+here links the Tauri runtime. `scripts/bundle-gpui.mjs` builds `cap-gpui`
+(`scripts/build-gpui-binary.sh release <target>`), stages it as the main
+binary `Cap`/`Cap.exe`, and runs `tauri bundle` against this crate
+(`TAURI_APP_PATH`). Reusing the bundler keeps every artifact byte-compatible
+with what installed copies of the Tauri app already update through:
+
+- the same identity (`Cap`, `so.cap.desktop`, main binary `Cap`), so the macOS
+  bundle, the NSIS uninstall key and install folder, and the `cap` deb package
+  are the ones already on disk, and permissions and data carry over;
+- the same updater artifacts — `Cap.app.tar.gz`, the NSIS `-setup.exe`, the
+  deb and the AppImage — signed with the same updater key and published under
+  the platform names (`darwin-aarch64`, `windows-x86_64`, `linux-x86_64-deb`,
+  …) every existing install already polls.
+
+The first update after the split is therefore installed by the Tauri updater
+of whatever build the user has; it simply lands this app in place.
+
+The bundle carries `cap-muxer` and `cap-cli` only: `cap-exporter` was a
+byte-identical copy of `cap-cli`, and the self-test now runs `cap-cli`
+directly. The NSIS install hook (`packaging/windows/installer-hooks.nsh`)
+deletes the Tauri-era `cap-gpui.exe`, `cap-exporter.exe` and Rive assets an
+update in place would otherwise leave behind.
+
+### The native updater
+
+`src/updates.rs` checks the CrabNebula endpoint on the same cadence the
+Tauri app used, and `src/installer.rs` does the rest without Tauri:
+
+1. **Download** streams the artifact to
+   `<cache>/so.cap.desktop/updates/cap/<version>/` and verifies its minisign
+   signature *while* it downloads (`minisign_verify::StreamVerifier`), so a
+   200 MB update never sits in memory. A verified file is reused on the next
+   attempt instead of being fetched again; anything that fails verification is
+   deleted.
+2. **Install** checks the file's format, then: on macOS unpacks the
+   `.app.tar.gz` beside the running bundle and swaps it in with two renames
+   (asking for an administrator password only when the folder is not
+   writable); on Windows starts the NSIS installer with `/P /R /UPDATE` and
+   quits; on Linux installs the deb through `pkexec dpkg -i` or replaces the
+   AppImage in place.
+3. **Relaunch** waits for this process to exit and reopens the new build.
+
+Progress shows in the settings sidebar footer, and the update never installs
+while a recording, export, upload, import or transcription is running.
+
+### Cap Classic
+
+The Tauri app is built from the same commit and published in the same
+release as **Cap Classic** (`Cap Classic.app`, `Cap Classic.exe`, and on
+Linux a self-contained AppImage), under the same platform names with a
+`-classic` suffix. Cap Classic's updater only ever asks for `-classic`
+platforms, and this app only ever asks for unsuffixed ones, so neither can
+update into the other.
+
+Settings → Experimental → **Switch to Cap Classic** finds an installed copy
+or downloads and installs the latest one (verified the same way as an
+update), opens it, and quits once Cap Classic's window is visible
+(`cap-classic.pending`). Both apps keep the `so.cap.desktop` identity and data
+directory, so recordings, settings, sign-in and permissions are shared, and
+Cap Classic's own Experimental page switches back.
 
 ## What is implemented
 
@@ -898,9 +968,9 @@ is read off the `Report` line instead.
 Sidecar resolution (`resolve_selftest_binary`), in order, with
 `CAP_GPUI_SELFTEST_BIN` winning over all of it:
 
-1. Next to the running executable — `cap-exporter`, `cap-exporter-<triple>`,
-   then `cap`. This is where the sidecar sits for an app-staged build and
-   where a dev `cargo build` leaves the CLI.
+1. Next to the running executable — `cap-cli`, `cap-cli-<triple>`, then
+   `cap`. This is where the sidecar sits in a packaged build and where a dev
+   `cargo build` leaves the CLI.
 2. `../Resources` and `../MacOS` relative to it, the two places Tauri puts an
    `externalBin` inside a bundle.
 3. `/Applications/Cap.app/Contents/{Resources,MacOS}`. The gpui dev binary is
@@ -963,7 +1033,7 @@ Settings-specific deviations:
 | **Settings does not park the other windows** | `ShowCapWindow::Settings::show` also calls `hide_recording_windows` and `release_camera_preview_if_idle`, and its close calls `restore_camera_window`. Neither half is reproduced — the gear hides the main window and nothing else. |
 | **Several settings persist without a consumer** | `hideDockIcon`, `enableNotifications`, the countdown, the post-recording behaviours and the update channel write the same store keys as Tauri; the machinery that would obey them is not built yet. Theme is applied. |
 | **No confirm on the recordings folder move** | `pickRecordingsFolder` offers to migrate existing recordings afterwards; here the path is written and nothing is moved. |
-| **Version is this crate's** | The sidebar footer shows the crate version from `CARGO_PKG_VERSION` (kept in lockstep with the Tauri app, 0.6.0), not `getVersion()`; "Check for updates" is drawn in its disabled state because there is no updater. |
+| **Version is this crate's** | The sidebar footer shows the crate version from `CARGO_PKG_VERSION` (kept in lockstep with the Tauri app by `scripts/sync-desktop-versions.mjs`), not `getVersion()`. "Check for updates" runs the native updater and shows its download progress in place. |
 
 ## Mode select
 

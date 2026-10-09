@@ -3,7 +3,7 @@
 //! Two halves, and they run very differently.
 //!
 //! The A/V sync self-test runs as a **subprocess** -- the `cap` CLI, shipped
-//! inside `Cap.app` as the `cap-exporter` sidecar. It cannot run in-process:
+//! inside `Cap.app` as the `cap-cli` sidecar. It cannot run in-process:
 //! `cap selftest av-sync` builds its own winit `EventLoop` for the flashing
 //! test pattern and needs the process main thread, which gpui owns for the
 //! whole life of the app. So this module resolves the binary, drives its
@@ -101,9 +101,9 @@ pub fn log_tail() -> cap_utils::log_upload::LogBundle {
 
 fn selftest_bin_name() -> &'static str {
     if cfg!(windows) {
-        "cap-exporter.exe"
+        "cap-cli.exe"
     } else {
-        "cap-exporter"
+        "cap-cli"
     }
 }
 
@@ -158,10 +158,7 @@ fn selftest_binary_candidates(
     let mut push_dir = |dir: &Path| {
         candidates.push(dir.join(selftest_bin_name()));
         if let Some(triple) = triple {
-            candidates.push(dir.join(format!(
-                "cap-exporter-{triple}{}",
-                std::env::consts::EXE_SUFFIX
-            )));
+            candidates.push(dir.join(format!("cap-cli-{triple}{}", std::env::consts::EXE_SUFFIX)));
         }
         candidates.push(dir.join(cap_bin_name()));
     };
@@ -1088,7 +1085,7 @@ mod tests {
     }
 
     /// The order the run has to follow: the binary shipped next to this build,
-    /// then the installed app, then the dev checkout. `cap-exporter` beats a
+    /// then the installed app, then the dev checkout. `cap-cli` beats a
     /// bare `cap` inside the same directory.
     #[test]
     fn the_sidecar_probe_walks_from_this_build_outwards() {

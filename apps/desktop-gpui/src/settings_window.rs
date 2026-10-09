@@ -1805,6 +1805,28 @@ impl SettingsWindow {
 
     fn render_account(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
+        let (update_label, update_ready) = match crate::updates::status(cx) {
+            crate::updates::UpdateStatus::Idle => ("Check for updates".to_string(), false),
+            crate::updates::UpdateStatus::Downloading {
+                version,
+                fraction: Some(fraction),
+            } => (
+                format!(
+                    "Downloading v{version}… {}%",
+                    (fraction * 100.).round() as u32
+                ),
+                false,
+            ),
+            crate::updates::UpdateStatus::Downloading { version, .. } => {
+                (format!("Downloading v{version}…"), false)
+            }
+            crate::updates::UpdateStatus::Ready { version } => {
+                (format!("Restart to update to v{version}"), true)
+            }
+            crate::updates::UpdateStatus::Installing { version } => {
+                (format!("Installing v{version}…"), false)
+            }
+        };
 
         let update_links = div()
             .flex()
@@ -1820,10 +1842,7 @@ impl SettingsWindow {
                     .px(px(4.))
                     .py(px(2.))
                     .rounded(px(4.))
-                    .child(format!(
-                        "v{} (Experimental GPUI)",
-                        env!("CARGO_PKG_VERSION")
-                    )),
+                    .child(format!("v{}", env!("CARGO_PKG_VERSION"))),
             )
             .child(
                 div()
@@ -1836,11 +1855,18 @@ impl SettingsWindow {
                 div()
                     .id("settings-check-updates")
                     .cursor_pointer()
+                    .when(update_ready, |link| {
+                        link.text_color(rgb(Theme::SETTINGS_ACCENT))
+                    })
                     .hover(|style| style.text_color(theme.settings_text()))
-                    .on_click(cx.listener(|_, _, _, cx| {
-                        crate::updates::check_manually(cx);
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        if update_ready {
+                            crate::updates::install_and_relaunch(cx);
+                        } else {
+                            crate::updates::check_manually(cx);
+                        }
                     }))
-                    .child("Check for updates"),
+                    .child(update_label),
             );
 
         div()

@@ -1102,6 +1102,15 @@ pub fn open_quality_settings(mode: Mode, cx: &mut App) {
     }
 }
 
+pub(crate) fn refresh_settings(cx: &mut App) {
+    if !cx.has_global::<AppWindows>() {
+        return;
+    }
+    if let Some(handle) = cx.global::<AppWindows>().settings {
+        handle.update(cx, |_, _, cx| cx.notify()).ok();
+    }
+}
+
 /// Open the settings window on a page, and hide the main window.
 ///
 /// The header gear in `new-main/index.tsx` is

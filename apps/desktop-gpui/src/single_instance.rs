@@ -123,16 +123,18 @@ fn is_cap_gpui(pid: i32) -> bool {
 
 fn is_cap_gpui_image(path: &Path) -> bool {
     #[cfg(windows)]
-    const IMAGE_NAME: &str = "cap-gpui.exe";
+    const IMAGE_NAMES: [&str; 2] = ["Cap.exe", "cap-gpui.exe"];
     #[cfg(not(windows))]
-    const IMAGE_NAME: &str = "cap-gpui";
+    const IMAGE_NAMES: [&str; 2] = ["Cap", "cap-gpui"];
 
     let Some(name) = path.file_name().and_then(std::ffi::OsStr::to_str) else {
         return false;
     };
     #[cfg(target_os = "linux")]
     let name = name.strip_suffix(" (deleted)").unwrap_or(name);
-    name.eq_ignore_ascii_case(IMAGE_NAME)
+    IMAGE_NAMES
+        .iter()
+        .any(|image| name.eq_ignore_ascii_case(image))
 }
 
 #[cfg(target_os = "macos")]
@@ -1209,14 +1211,18 @@ mod tests {
     #[test]
     fn gpui_process_image_must_match_exactly() {
         #[cfg(windows)]
-        let name = "cap-gpui.exe";
+        let names = ["cap-gpui.exe", "Cap.exe"];
         #[cfg(not(windows))]
-        let name = "cap-gpui";
+        let names = ["cap-gpui", "Cap"];
 
-        assert!(is_cap_gpui_image(Path::new(name)));
-        assert!(is_cap_gpui_image(Path::new(&name.to_ascii_uppercase())));
+        for name in names {
+            assert!(is_cap_gpui_image(Path::new(name)));
+            assert!(is_cap_gpui_image(Path::new(&name.to_ascii_uppercase())));
+        }
         assert!(!is_cap_gpui_image(Path::new("not-cap-gpui")));
         assert!(!is_cap_gpui_image(Path::new("cap-gpui-helper")));
+        assert!(!is_cap_gpui_image(Path::new("Cap Classic")));
+        assert!(!is_cap_gpui_image(Path::new("Cap Classic.exe")));
     }
 
     #[cfg(target_os = "linux")]

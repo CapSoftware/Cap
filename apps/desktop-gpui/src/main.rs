@@ -14,6 +14,7 @@ mod camera_blur;
 #[cfg(any(not(target_os = "macos"), test))]
 mod camera_blur_portable;
 mod camera_window;
+mod classic;
 mod controls_window;
 mod deeplink;
 mod dev_restore;
@@ -37,6 +38,7 @@ mod editor_window;
 mod feeds;
 mod hotkeys;
 mod import;
+mod installer;
 mod library;
 mod main_window;
 mod menus;
@@ -249,7 +251,6 @@ fn main() {
     let _log_guard = init_logging();
 
     single_instance::acquire();
-    store::mark_handoff_session();
 
     platform::install_url_scheme_handler();
     for argument in std::env::args().skip(1) {
@@ -366,11 +367,6 @@ fn main() {
             cx.quit();
             return;
         };
-
-        cx.on_app_quit(|_| async {
-            crate::store::clear_handoff_marker();
-        })
-        .detach();
 
         app_windows::init(window_handle, session, cx);
         #[cfg(target_os = "macos")]
