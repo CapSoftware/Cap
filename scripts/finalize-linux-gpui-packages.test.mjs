@@ -222,11 +222,30 @@ for (const [name, listing, expected] of [
 		await writeFile(deb, "original");
 		await writeFile(`${deb}.sig`, "original signature");
 		const calls = [];
-		const env = { TAURI_SIGNING_PRIVATE_KEY: "key" };
+		const env = {
+			PATH: "/usr/bin",
+			TAURI_SIGNING_PRIVATE_KEY: "key",
+			TAURI_SIGNING_PRIVATE_KEY_PASSWORD: "password",
+		};
 		const operation = finalizeGpuiDeb(deb, {
 			env,
 			run: async (command, args, options) => {
 				calls.push(command === "ar" ? `ar ${args[0]}` : command);
+				if (command !== "bun") {
+					assert.equal(options.env.PATH, "/usr/bin");
+					for (const name of [
+						"TAURI_SIGNING_PRIVATE_KEY",
+						"TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
+						"TAURI_PRIVATE_KEY",
+						"TAURI_PRIVATE_KEY_PASSWORD",
+					]) {
+						assert.equal(
+							options.env[name],
+							undefined,
+							`${command} saw ${name}`,
+						);
+					}
+				}
 				if (command === "dpkg-deb" && args[0] === "--raw-extract") {
 					await mkdir(path.join(args[2], "DEBIAN"), { recursive: true });
 					await writeFile(
@@ -309,6 +328,71 @@ for (const [name, listing, expected] of [
 		assert.equal(await readFile(`${deb}.sig`, "utf8"), "rebuilt signature");
 	});
 }
+
+test("rpm tools never see the updater signing key", async (t) => {
+	const root = await workspace(t);
+	const rpm = path.join(root, "Cap.rpm");
+	await writeFile(rpm, "original");
+	await writeFile(`${rpm}.sig`, "original signature");
+	const tags = {
+		NAME: "cap",
+		VERSION: "0.6.1",
+		RELEASE: "1",
+		ARCH: "x86_64",
+		SUMMARY: "Cap",
+		LICENSE: "AGPL-3.0",
+		URL: "",
+		DESCRIPTION: "Cap",
+	};
+	await finalizeGpuiRpm(rpm, {
+		env: {
+			PATH: "/usr/bin",
+			TAURI_SIGNING_PRIVATE_KEY: "key",
+			TAURI_SIGNING_PRIVATE_KEY_PASSWORD: "password",
+		},
+		run: async (command, args, options) => {
+			if (command === "bun") {
+				assert.equal(options.env.TAURI_PRIVATE_KEY, "key");
+				assert.equal(options.env.TAURI_PRIVATE_KEY_PASSWORD, "password");
+				await writeFile(`${args[4]}.sig`, "rebuilt signature");
+				return {};
+			}
+			assert.equal(options.env.PATH, "/usr/bin");
+			for (const name of [
+				"TAURI_SIGNING_PRIVATE_KEY",
+				"TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
+				"TAURI_PRIVATE_KEY",
+				"TAURI_PRIVATE_KEY_PASSWORD",
+			]) {
+				assert.equal(options.env[name], undefined, `${command} saw ${name}`);
+			}
+			if (command === "rpm" && args.includes("--scripts"))
+				return { stdout: "" };
+			if (command === "rpm" && args.includes("--requires"))
+				return { stdout: "libva\n" };
+			if (command === "rpm" && args.some((arg) => arg.includes("FILEMODES"))) {
+				return { stdout: "33188 0 root root /usr/bin/Cap\n" };
+			}
+			if (command === "rpm") {
+				const tag = args.find((arg) => arg.startsWith("%{"));
+				return { stdout: `${tags[tag.slice(2, -1)]}\n` };
+			}
+			if (command === "rpmbuild") {
+				const rpmdir = args
+					.find((arg) => arg.startsWith("_rpmdir "))
+					.slice("_rpmdir ".length);
+				const filename = args
+					.find((arg) => arg.startsWith("_rpmfilename "))
+					.slice("_rpmfilename ".length);
+				await mkdir(rpmdir, { recursive: true });
+				await writeFile(path.join(rpmdir, filename), "rebuilt");
+			}
+			return {};
+		},
+	});
+	assert.equal(await readFile(rpm, "utf8"), "rebuilt");
+	assert.equal(await readFile(`${rpm}.sig`, "utf8"), "rebuilt signature");
+});
 
 test("package finalization requires a signing key unless unsigned", async (t) => {
 	const root = await workspace(t);

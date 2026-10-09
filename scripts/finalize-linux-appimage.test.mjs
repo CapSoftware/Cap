@@ -816,6 +816,15 @@ test("webview-free finalization hands the pruned AppDir to the output plugin", a
 	const { image, plugin } = await fixture(t);
 	let extracted;
 	const run = async (command, args, options) => {
+		assert.equal(options.env.PATH, "/usr/bin");
+		for (const name of [
+			"TAURI_SIGNING_PRIVATE_KEY",
+			"TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
+			"TAURI_PRIVATE_KEY",
+			"TAURI_PRIVATE_KEY_PASSWORD",
+		]) {
+			assert.equal(options.env[name], undefined, `${command} saw ${name}`);
+		}
 		if (command === image) {
 			if (args[0] === "--appimage-signature") return { stdout: "" };
 			if (args[0] === "--appimage-offset") {
@@ -850,7 +859,13 @@ test("webview-free finalization hands the pruned AppDir to the output plugin", a
 		outputPlugin: plugin,
 		unsigned: true,
 		webview: false,
-		env: {},
+		env: {
+			PATH: "/usr/bin",
+			TAURI_SIGNING_PRIVATE_KEY: "key",
+			TAURI_SIGNING_PRIVATE_KEY_PASSWORD: "password",
+			TAURI_PRIVATE_KEY: "legacy",
+			TAURI_PRIVATE_KEY_PASSWORD: "legacy-password",
+		},
 		run,
 	});
 	assert.ok(excluded.includes("usr/lib/libwebkit2gtk-4.1.so.0"));

@@ -11,7 +11,11 @@ import {
 } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { runCommand, signUpdaterArtifact } from "./finalize-linux-appimage.mjs";
+import {
+	runCommand,
+	signUpdaterArtifact,
+	withoutUpdaterSecrets,
+} from "./finalize-linux-appimage.mjs";
 
 export const webviewDebPackages = new Set([
 	"libwebkit2gtk-4.1-0",
@@ -254,10 +258,11 @@ export async function finalizeGpuiDeb(
 	const deb = path.resolve(filename);
 	if (!deb.endsWith(".deb")) throw new Error("Expected a .deb artifact");
 	requireSigningKey(unsigned, env);
+	const tools = withoutUpdaterSecrets(env);
 	const work = await mkdtemp(path.join(path.dirname(deb), ".cap-deb-"));
 	try {
 		const root = path.join(work, "root");
-		await run("dpkg-deb", ["--raw-extract", deb, root], { env });
+		await run("dpkg-deb", ["--raw-extract", deb, root], { env: tools });
 		const linked = await linkDuplicateLibraries(
 			path.join(root, "usr", "lib", "cap"),
 		);
@@ -283,11 +288,11 @@ export async function finalizeGpuiDeb(
 		await run(
 			"dpkg-deb",
 			["--root-owner-group", "-Znone", "--build", root, uncompressed],
-			{ env },
+			{ env: tools },
 		);
 		const output = path.join(work, path.basename(deb));
 		await recompressDebData(uncompressed, output, path.join(work, "members"), {
-			env,
+			env: tools,
 			run,
 		});
 		await replaceArtifact(output, deb, { unsigned, env, run });
@@ -322,7 +327,8 @@ export async function finalizeGpuiRpm(
 	const rpm = path.resolve(filename);
 	if (!rpm.endsWith(".rpm")) throw new Error("Expected an .rpm artifact");
 	requireSigningKey(unsigned, env);
-	if ((await queryRpm(rpm, ["--scripts"], env, run)).trim()) {
+	const tools = withoutUpdaterSecrets(env);
+	if ((await queryRpm(rpm, ["--scripts"], tools, run)).trim()) {
 		throw new Error(`${rpm} has install scripts that cannot be carried over`);
 	}
 	const tags = {};
@@ -336,10 +342,10 @@ export async function finalizeGpuiRpm(
 		"URL",
 		"DESCRIPTION",
 	]) {
-		tags[tag] = await queryTag(rpm, tag, env, run);
+		tags[tag] = await queryTag(rpm, tag, tools, run);
 	}
 	const requires = withoutWebviewRpmRequirements(
-		(await queryRpm(rpm, ["--requires"], env, run))
+		(await queryRpm(rpm, ["--requires"], tools, run))
 			.split("\n")
 			.map((line) => line.trim()),
 	);
@@ -350,7 +356,7 @@ export async function finalizeGpuiRpm(
 				"--queryformat",
 				"[%{FILEMODES} %{FILEFLAGS} %{FILEUSERNAME} %{FILEGROUPNAME} %{FILENAMES}\\n]",
 			],
-			env,
+			tools,
 			run,
 		),
 	);
@@ -370,7 +376,7 @@ export async function finalizeGpuiRpm(
 		]) {
 			await mkdir(path.join(top, directory), { recursive: true });
 		}
-		await run("bsdtar", ["-xf", rpm, "-C", staging], { env });
+		await run("bsdtar", ["-xf", rpm, "-C", staging], { env: tools });
 		const linked = new Set(
 			(
 				await linkDuplicateLibraries(path.join(staging, "usr", "lib", "cap"))
@@ -419,7 +425,7 @@ export async function finalizeGpuiRpm(
 				"--define",
 				"__os_install_post %{nil}",
 			],
-			{ env: { ...env, LC_ALL: "C" } },
+			{ env: { ...tools, LC_ALL: "C" } },
 		);
 		await replaceArtifact(path.join(output, path.basename(rpm)), rpm, {
 			unsigned,

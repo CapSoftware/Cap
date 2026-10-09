@@ -411,6 +411,19 @@ export async function relativizeDirIcon(appDir) {
 	await symlink(name, icon);
 }
 
+const updaterSecrets = [
+	"TAURI_SIGNING_PRIVATE_KEY",
+	"TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
+	"TAURI_PRIVATE_KEY",
+	"TAURI_PRIVATE_KEY_PASSWORD",
+];
+
+export function withoutUpdaterSecrets(env) {
+	const tools = { ...env };
+	for (const name of updaterSecrets) delete tools[name];
+	return tools;
+}
+
 export async function signUpdaterArtifact(
 	filename,
 	{ env = process.env, run = runCommand } = {},
@@ -461,10 +474,11 @@ export async function finalizeLinuxAppImage(
 	const work = await mkdtemp(path.join(path.dirname(image), ".cap-appimage-"));
 	let retainWork = false;
 	try {
-		const runtime = await copyRuntime(image, work, env, run);
+		const tools = withoutUpdaterSecrets(env);
+		const runtime = await copyRuntime(image, work, tools, run);
 		await run(image, ["--appimage-extract"], {
 			cwd: work,
-			env,
+			env: tools,
 			stdio: ["ignore", "ignore", "inherit"],
 		});
 		const appDir = path.join(work, "squashfs-root");
@@ -474,7 +488,9 @@ export async function finalizeLinuxAppImage(
 		if (webview) {
 			await selectAppImageGtkBackend(appDir);
 		} else {
-			excluded.push(...(await removeWebviewRuntime(appDir, { env, run })));
+			excluded.push(
+				...(await removeWebviewRuntime(appDir, { env: tools, run })),
+			);
 		}
 		await relativizeDirIcon(appDir);
 		await preserveAppImageWorkingDirectory(appDir);
@@ -484,7 +500,7 @@ export async function finalizeLinuxAppImage(
 			["--appimage-extract-and-run", "--appdir", appDir],
 			{
 				env: {
-					...env,
+					...tools,
 					APPIMAGE_EXTRACT_AND_RUN: "1",
 					OUTPUT: output,
 					LDAI_OUTPUT: output,

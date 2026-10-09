@@ -2,7 +2,11 @@ import { mkdtemp, readdir, rename, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as wait } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
-import { runCommand, signUpdaterArtifact } from "./finalize-linux-appimage.mjs";
+import {
+	runCommand,
+	signUpdaterArtifact,
+	withoutUpdaterSecrets,
+} from "./finalize-linux-appimage.mjs";
 
 const captured = (env) => ({
 	env: { ...env, LC_ALL: "C" },
@@ -39,6 +43,7 @@ export async function recompressUpdaterArchive(
 			"TAURI_SIGNING_PRIVATE_KEY is required to sign the updater archive",
 		);
 	}
+	const tools = withoutUpdaterSecrets(env);
 	const work = await mkdtemp(path.join(path.dirname(archive), ".cap-update-"));
 	try {
 		const output = path.join(work, path.basename(archive));
@@ -51,11 +56,11 @@ export async function recompressUpdaterArchive(
 				archive,
 				output,
 			],
-			{ env },
+			{ env: tools },
 		);
 		if (
-			(await tarDigest(archive, env, run)) !==
-			(await tarDigest(output, env, run))
+			(await tarDigest(archive, tools, run)) !==
+			(await tarDigest(output, tools, run))
 		) {
 			throw new Error("The recompressed updater archive changed its contents");
 		}
@@ -114,15 +119,16 @@ export async function convertDiskImage(
 			"APPLE_SIGNING_IDENTITY is required to sign the disk image",
 		);
 	}
+	const tools = withoutUpdaterSecrets(env);
 	const work = await mkdtemp(path.join(path.dirname(dmg), ".cap-dmg-"));
 	try {
 		const output = path.join(work, path.basename(dmg));
 		try {
 			await run("hdiutil", ["convert", dmg, "-format", "ULMO", "-o", output], {
-				env,
+				env: tools,
 			});
-			await run("hdiutil", ["verify", output], { env });
-			await signDiskImage(output, env, run, delay);
+			await run("hdiutil", ["verify", output], { env: tools });
+			await signDiskImage(output, tools, run, delay);
 		} catch (error) {
 			warn(
 				`::warning::Keeping the zlib disk image; LZMA conversion failed: ${error instanceof Error ? error.message : error}`,

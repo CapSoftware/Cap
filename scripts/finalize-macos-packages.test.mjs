@@ -196,6 +196,60 @@ test("disk image conversion needs a signing identity before touching the image",
 	assert.equal(await readFile(dmg, "utf8"), "original");
 });
 
+test("only the updater signer sees the updater signing key", async (t) => {
+	const root = await workspace(t);
+	await mkdir(path.join(root, "macos"));
+	await mkdir(path.join(root, "dmg"));
+	await writeFile(path.join(root, "macos/Cap.app.tar.gz"), "original archive");
+	await writeFile(path.join(root, "dmg/Cap.dmg"), Buffer.alloc(100, 7));
+	const calls = [];
+	const result = await finalizeMacosPackages(root, {
+		env: {
+			PATH: "/usr/bin",
+			APPLE_SIGNING_IDENTITY: "Developer ID Application: Cap",
+			TAURI_SIGNING_PRIVATE_KEY: "key",
+			TAURI_SIGNING_PRIVATE_KEY_PASSWORD: "password",
+		},
+		run: async (command, args, options) => {
+			calls.push({ command, env: options.env });
+			if (command === "bash" && args[1].includes("pigz -11")) {
+				await writeFile(args[4], "smaller");
+			} else if (command === "bash") {
+				return { stdout: `${"a".repeat(64)}  -\n` };
+			} else if (command === "bun") {
+				await writeFile(`${args[4]}.sig`, "signature");
+			} else if (command === "hdiutil" && args[0] === "convert") {
+				await writeFile(args[5], Buffer.alloc(10, 1));
+			}
+			return {};
+		},
+	});
+	assert.deepEqual(result, {
+		archive: { before: 16, after: 7 },
+		dmg: { before: 100, after: 10 },
+	});
+	const tools = calls.filter((call) => call.command !== "bun");
+	assert.deepEqual(
+		[...new Set(tools.map((call) => call.command))],
+		["bash", "hdiutil", "codesign"],
+	);
+	for (const call of tools) {
+		assert.equal(call.env.PATH, "/usr/bin");
+		for (const name of [
+			"TAURI_SIGNING_PRIVATE_KEY",
+			"TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
+			"TAURI_PRIVATE_KEY",
+			"TAURI_PRIVATE_KEY_PASSWORD",
+		]) {
+			assert.equal(call.env[name], undefined, `${call.command} saw ${name}`);
+		}
+	}
+	const signer = calls.filter((call) => call.command === "bun");
+	assert.equal(signer.length, 1);
+	assert.equal(signer[0].env.TAURI_PRIVATE_KEY, "key");
+	assert.equal(signer[0].env.TAURI_PRIVATE_KEY_PASSWORD, "password");
+});
+
 test("macOS packages are located once each inside the bundle", async (t) => {
 	const root = await workspace(t);
 	await mkdir(path.join(root, "macos"));

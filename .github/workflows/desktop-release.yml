@@ -402,17 +402,31 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           RUST_TARGET_TRIPLE: ${{ matrix.settings.target }}
 
+      - name: Build pinned pigz
+        if: ${{ runner.os == 'macOS' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/pigz"
+          mkdir -p "$dir"
+          curl -fsSL --retry 3 -o "$dir/pigz.tar.gz" "https://zlib.net/pigz/pigz-$PIGZ_VERSION.tar.gz"
+          echo "$PIGZ_SHA256  $dir/pigz.tar.gz" | shasum -a 256 -c -
+          tar -xzf "$dir/pigz.tar.gz" -C "$dir"
+          make -C "$dir/pigz-$PIGZ_VERSION" CC=cc
+          "$dir/pigz-$PIGZ_VERSION/pigz" --version
+          echo "$dir/pigz-$PIGZ_VERSION" >> "$GITHUB_PATH"
+        env:
+          PIGZ_VERSION: "2.8"
+          PIGZ_SHA256: eb872b4f0e1f0ebe59c9f7bd8c506c4204893ba6a8492de31df416f0d5170fd0
+
       # Same bytes, smaller downloads: zopfli for the updater archive, which
       # every install (0.6.0's Tauri updater included) still unpacks as gzip,
       # and LZMA for the disk image, which macOS 10.15+ mounts natively.
       - name: Shrink macOS packages
         if: ${{ runner.os == 'macOS' }}
         shell: bash
-        run: |
-          brew install pigz
-          node scripts/finalize-macos-packages.mjs "$CAP_BUNDLE"
+        run: node scripts/finalize-macos-packages.mjs "$CAP_BUNDLE"
         env:
-          HOMEBREW_NO_AUTO_UPDATE: "1"
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_KEYCHAIN: ${{ format('{0}/build.keychain', runner.temp) }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
