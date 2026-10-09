@@ -3,9 +3,9 @@
 Cap's desktop app, rewritten in [gpui](https://www.gpui.rs/). No Tauri, no
 webview — the whole UI is drawn by gpui and every pixel is Rust.
 
-This is the app that ships as **Cap**. The Tauri app in `apps/desktop` ships
-separately as **Cap Classic**; see [Shipping, updates and Cap
-Classic](#shipping-updates-and-cap-classic).
+This is the app that ships as **Cap**, from 0.6.1 on. The Tauri app in
+`apps/desktop` last shipped in 0.6.0 and is kept only for the dev harness; see
+[Shipping and updates](#shipping-and-updates).
 
 The main recording window uses a fixed 330×432 layout with device controls
 and recording and screenshot browsers. The expanded view is no longer available.
@@ -72,7 +72,7 @@ and CI completely untouched.
 gpui's dependencies need 1.89+ (`smol_str` 0.3.6, `cosmic-text` 0.19). The
 nearest toolchain file wins, so the Tauri app is unaffected.
 
-## Shipping, updates and Cap Classic
+## Shipping and updates
 
 ### How Cap is packaged
 
@@ -91,8 +91,8 @@ with what installed copies of the Tauri app already update through:
   the platform names (`darwin-aarch64`, `windows-x86_64`, `linux-x86_64-deb`,
   …) every existing install already polls.
 
-The first update after the split is therefore installed by the Tauri updater
-of whatever build the user has; it simply lands this app in place.
+The update to 0.6.1 is therefore installed by the Tauri updater of whatever
+build the user has; it simply lands this app in place.
 
 The bundle carries `cap-muxer` and `cap-cli` only: `cap-exporter` was a
 byte-identical copy of `cap-cli`, and the self-test now runs `cap-cli`
@@ -122,21 +122,14 @@ Tauri app used, and `src/installer.rs` does the rest without Tauri:
 Progress shows in the settings sidebar footer, and the update never installs
 while a recording, export, upload, import or transcription is running.
 
-### Cap Classic
+### The Tauri app
 
-The Tauri app is built from the same commit and published in the same
-release as **Cap Classic** (`Cap Classic.app`, `Cap Classic.exe`, and on
-Linux a self-contained AppImage), under the same platform names with a
-`-classic` suffix. Cap Classic's updater only ever asks for `-classic`
-platforms, and this app only ever asks for unsuffixed ones, so neither can
-update into the other.
-
-Settings → Experimental → **Switch to Cap Classic** finds an installed copy
-or downloads and installs the latest one (verified the same way as an
-update), opens it, and quits once Cap Classic's window is visible
-(`cap-classic.pending`). Both apps keep the `so.cap.desktop` identity and data
-directory, so recordings, settings, sign-in and permissions are shared, and
-Cap Classic's own Experimental page switches back.
+Releases no longer build the Tauri app. 0.6.0 was its last version, and the
+website's [all versions](https://cap.so/download/versions) page keeps it
+downloadable. In a debug build started from `target/`, Settings → Experimental
+still has the **Cap GPUI** switch that hands the session back to the Tauri
+app running under `bun run dev:desktop`, through the dev supervisor
+(`store::request_classic_reopen` and `cap-classic.pending`).
 
 ## What is implemented
 

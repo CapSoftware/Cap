@@ -12,9 +12,9 @@ function updaterTarget() {
 	const currentArch = updaterArch();
 	const os = ostype();
 
-	if (os === "macos") return `darwin-${currentArch}-classic`;
-	if (os === "linux") return `linux-${currentArch}-appimage-classic`;
-	return `${os}-${currentArch}-classic`;
+	if (os === "macos") return `darwin-${currentArch}`;
+	if (os === "linux") return `linux-${currentArch}-deb`;
+	return `${os}-${currentArch}`;
 }
 
 export function getUpdaterCheckOptions(): CheckOptions {
@@ -24,4 +24,8 @@ export function getUpdaterCheckOptions(): CheckOptions {
 export async function restartAfterUpdate(): Promise<void> {
 	await commands.updatesDownloadAndInstall();
 	await commands.restartApp();
+}
+
+export async function returnToGpui(): Promise<void> {
+	await commands.switchToGpuiApp();
 }

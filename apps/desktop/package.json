@@ -2,9 +2,11 @@
 	"name": "@cap/desktop",
 	"type": "module",
 	"scripts": {
-		"dev": "bun run --cwd ../.. cap-setup && bun run build:sidecar && dotenv -e ../../.env -- bun run preparescript && dotenv -e ../../.env -- node ../../scripts/dev-desktop.mjs",
-		"build:tauri": "bun run build:sidecar && dotenv -e ../../.env -- bun run preparescript --release && dotenv -e ../../.env -- bun run tauri build",
+		"dev": "bun run --cwd ../.. cap-setup && bun run build:sidecar && bun run build:gpui:dev && dotenv -e ../../.env -- bun run preparescript && dotenv -e ../../.env -- node ../../scripts/dev-desktop.mjs",
+		"build:tauri": "bun run build:sidecar && bun run build:gpui && dotenv -e ../../.env -- bun run preparescript --release && node ../../scripts/verify-gpui-release-inputs.mjs && dotenv -e ../../.env -- bun run tauri build",
 		"build:sidecar": "node ../../scripts/build-desktop-binaries.mjs",
+		"build:gpui": "node ../../scripts/run-gpui-build.mjs release",
+		"build:gpui:dev": "dotenv -e ../../.env -- node ../../scripts/run-gpui-build.mjs debug",
 		"preparescript": "node scripts/prepare.js",
 		"localdev": "dotenv -e ../../.env -- vinxi dev --port 3002",
 		"build": "vinxi build",

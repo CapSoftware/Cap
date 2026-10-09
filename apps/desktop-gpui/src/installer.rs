@@ -18,56 +18,30 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const METADATA_TIMEOUT: Duration = Duration::from_secs(20);
 const CHUNK_TIMEOUT: Duration = Duration::from_secs(60);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Product {
-    Cap,
-    Classic,
-}
+const STAGING_SLUG: &str = "cap";
 
-impl Product {
-    fn slug(self) -> &'static str {
-        match self {
-            Self::Cap => "cap",
-            Self::Classic => "cap-classic",
-        }
-    }
-
-    pub(crate) fn update_platform(self) -> Result<String, String> {
-        let arch = if cfg!(target_arch = "aarch64") {
-            "aarch64"
-        } else {
-            "x86_64"
-        };
-        match self {
-            Self::Cap => cap_update_platform(arch),
-            Self::Classic => Ok(classic_update_platform(arch)),
-        }
-    }
+pub(crate) fn update_platform() -> Result<String, String> {
+    let arch = if cfg!(target_arch = "aarch64") {
+        "aarch64"
+    } else {
+        "x86_64"
+    };
+    platform_for(arch)
 }
 
 #[cfg(target_os = "linux")]
-fn cap_update_platform(arch: &str) -> Result<String, String> {
+fn platform_for(arch: &str) -> Result<String, String> {
     cap_utils::linux_package::updater_target(arch)
 }
 
 #[cfg(not(target_os = "linux"))]
-fn cap_update_platform(arch: &str) -> Result<String, String> {
+fn platform_for(arch: &str) -> Result<String, String> {
     let os = if cfg!(target_os = "macos") {
         "darwin"
     } else {
         "windows"
     };
     Ok(format!("{os}-{arch}"))
-}
-
-fn classic_update_platform(arch: &str) -> String {
-    if cfg!(target_os = "macos") {
-        format!("darwin-{arch}-classic")
-    } else if cfg!(target_os = "windows") {
-        format!("windows-{arch}-classic")
-    } else {
-        format!("linux-{arch}-appimage-classic")
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -93,16 +67,12 @@ impl ArtifactKind {
         }
     }
 
-    fn file_name(self, product: Product) -> &'static str {
-        match (product, self) {
-            (Product::Cap, Self::AppArchive) => "Cap.app.tar.gz",
-            (Product::Classic, Self::AppArchive) => "Cap Classic.app.tar.gz",
-            (Product::Cap, Self::NsisInstaller) => "Cap-setup.exe",
-            (Product::Classic, Self::NsisInstaller) => "Cap Classic-setup.exe",
-            (Product::Cap, Self::Deb) => "Cap.deb",
-            (Product::Classic, Self::Deb) => "Cap Classic.deb",
-            (Product::Cap, Self::AppImage) => "Cap.AppImage",
-            (Product::Classic, Self::AppImage) => "Cap-Classic.AppImage",
+    fn file_name(self) -> &'static str {
+        match self {
+            Self::AppArchive => "Cap.app.tar.gz",
+            Self::NsisInstaller => "Cap-setup.exe",
+            Self::Deb => "Cap.deb",
+            Self::AppImage => "Cap.AppImage",
         }
     }
 
@@ -171,11 +141,10 @@ fn client() -> Result<reqwest::Client, String> {
 }
 
 pub(crate) async fn fetch_release(
-    product: Product,
     channel: UpdateChannel,
     current: &Version,
 ) -> Result<Option<Release>, String> {
-    let platform = product.update_platform()?;
+    let platform = update_platform()?;
     let response = client()?
         .get(endpoint(&platform, channel, current))
         .timeout(METADATA_TIMEOUT)
@@ -183,10 +152,8 @@ pub(crate) async fn fetch_release(
         .await
         .map_err(|error| error.to_string())?;
 
-    match response.status() {
-        reqwest::StatusCode::NO_CONTENT => return Ok(None),
-        status if product == Product::Classic && status.is_client_error() => return Ok(None),
-        _ => {}
+    if response.status() == reqwest::StatusCode::NO_CONTENT {
+        return Ok(None);
     }
 
     let body = response
@@ -304,7 +271,6 @@ fn prune_other_versions(product_dir: &Path, keep: &Path) {
 }
 
 pub(crate) async fn download(
-    product: Product,
     kind: ArtifactKind,
     release: &Release,
     mut progress: impl FnMut(u64, Option<u64>) + Send,
@@ -312,7 +278,6 @@ pub(crate) async fn download(
     download_into(
         &staging_root(),
         UPDATER_PUBLIC_KEY,
-        product,
         kind,
         release,
         &mut progress,
@@ -323,16 +288,15 @@ pub(crate) async fn download(
 async fn download_into(
     root: &Path,
     encoded_key: &str,
-    product: Product,
     kind: ArtifactKind,
     release: &Release,
     progress: &mut (impl FnMut(u64, Option<u64>) + Send),
 ) -> Result<PathBuf, String> {
     let key = trusted_key(encoded_key)?;
     let signature = decode_signature(&release.signature)?;
-    let product_dir = root.join(product.slug());
+    let product_dir = root.join(STAGING_SLUG);
     let version_dir = product_dir.join(release.version.to_string());
-    let destination = version_dir.join(kind.file_name(product));
+    let destination = version_dir.join(kind.file_name());
 
     if destination.is_file() && verify_file(&destination, &key, &signature).is_ok() {
         prune_other_versions(&product_dir, &version_dir);
@@ -340,7 +304,7 @@ async fn download_into(
     }
 
     std::fs::create_dir_all(&version_dir).map_err(|error| error.to_string())?;
-    let partial = version_dir.join(format!("{}.partial", kind.file_name(product)));
+    let partial = version_dir.join(format!("{}.partial", kind.file_name()));
     if let Err(error) = stream_to_file(&partial, &key, &signature, release, progress).await {
         let _ = std::fs::remove_file(&partial);
         return Err(error);
@@ -718,20 +682,15 @@ mod tests {
             "https://cdn.crabnebula.app/update/cap/cap/darwin-aarch64/0.6.2-nightly.4"
         );
         assert_eq!(
-            endpoint("windows-x86_64-classic", UpdateChannel::Nightly, &current),
-            "https://cdn.crabnebula.app/update/cap/cap/windows-x86_64-classic/0.6.2-nightly.4?channel=nightly"
+            endpoint("windows-x86_64", UpdateChannel::Nightly, &current),
+            "https://cdn.crabnebula.app/update/cap/cap/windows-x86_64/0.6.2-nightly.4?channel=nightly"
         );
     }
 
     #[test]
-    fn classic_platforms_are_suffixed_and_linux_classic_ships_as_an_appimage() {
-        let platform = classic_update_platform("x86_64");
-        assert!(platform.ends_with("-classic"));
-        if cfg!(target_os = "linux") {
-            assert_eq!(platform, "linux-x86_64-appimage-classic");
-        }
+    fn update_platforms_map_to_their_artifact_kinds() {
         assert_eq!(
-            ArtifactKind::for_platform("linux-x86_64-appimage-classic"),
+            ArtifactKind::for_platform("linux-x86_64-appimage"),
             Ok(ArtifactKind::AppImage)
         );
         assert_eq!(
@@ -739,7 +698,7 @@ mod tests {
             Ok(ArtifactKind::Deb)
         );
         assert_eq!(
-            ArtifactKind::for_platform("darwin-aarch64-classic"),
+            ArtifactKind::for_platform("darwin-aarch64"),
             Ok(ArtifactKind::AppArchive)
         );
         assert_eq!(
@@ -747,6 +706,10 @@ mod tests {
             Ok(ArtifactKind::NsisInstaller)
         );
         assert!(ArtifactKind::for_platform("linux-x86_64-rpm").is_err());
+        if !cfg!(target_os = "linux") {
+            let platform = update_platform().unwrap();
+            assert!(ArtifactKind::for_platform(&platform).is_ok(), "{platform}");
+        }
     }
 
     #[test]
@@ -777,7 +740,7 @@ mod tests {
             .build()
             .unwrap();
         let root = scratch("download");
-        let stale = root.join("cap-classic").join("0.0.1");
+        let stale = root.join("cap").join("0.0.1");
         std::fs::create_dir_all(&stale).unwrap();
 
         let (url, server) = serve_once(b"test");
@@ -786,17 +749,13 @@ mod tests {
             .block_on(download_into(
                 &root,
                 &encode(TEST_KEY),
-                Product::Classic,
                 ArtifactKind::AppImage,
                 &release(url),
                 &mut |done, total| updates.push((done, total)),
             ))
             .unwrap();
         assert_eq!(server.join().unwrap(), 1);
-        assert_eq!(
-            downloaded,
-            root.join("cap-classic/9.9.9/Cap-Classic.AppImage")
-        );
+        assert_eq!(downloaded, root.join("cap/9.9.9/Cap.AppImage"));
         assert_eq!(std::fs::read(&downloaded).unwrap(), b"test");
         assert_eq!(updates.first(), Some(&(0, Some(4))));
         assert_eq!(updates.last(), Some(&(4, Some(4))));
@@ -807,7 +766,6 @@ mod tests {
             .block_on(download_into(
                 &root,
                 &encode(TEST_KEY),
-                Product::Classic,
                 ArtifactKind::AppImage,
                 &release("http://127.0.0.1:9/unreachable".to_string()),
                 &mut |_, _| panic!("a verified cached download must not be fetched again"),
@@ -848,7 +806,6 @@ mod tests {
             .block_on(download_into(
                 &root,
                 &encode(TEST_KEY),
-                Product::Cap,
                 ArtifactKind::AppImage,
                 &release(url),
                 &mut |_, _| {},
@@ -904,7 +861,7 @@ mod tests {
         let root = scratch("appimage");
         let source = root.join("download.AppImage");
         std::fs::write(&source, b"\x7fELFnew").unwrap();
-        let destination = root.join("Applications").join("Cap-Classic.AppImage");
+        let destination = root.join("Applications").join("Cap.AppImage");
         install_appimage(&source, &destination).unwrap();
         assert_eq!(std::fs::read(&destination).unwrap(), b"\x7fELFnew");
         assert_eq!(

@@ -55,7 +55,7 @@ pub(crate) fn acquire_upload_lock(recording_dir: &Path) -> Result<UploadLock, Au
     let lock = UploadLock::acquire(recording_dir).map_err(|error| error.to_string())?;
     match std::fs::symlink_metadata(recording_dir.join("instant-upload.json")) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(lock),
-        Ok(_) => Err("This recording's upload is managed by Cap; local files retained".into()),
+        Ok(_) => Err("This recording's upload is managed by Cap GPUI; local files retained".into()),
         Err(error) => Err(format!("Could not verify recording upload ownership: {error}").into()),
     }
 }

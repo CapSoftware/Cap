@@ -1267,8 +1267,8 @@ mod tests {
         }
         assert!(!is_cap_gpui_image(Path::new("not-cap-gpui")));
         assert!(!is_cap_gpui_image(Path::new("cap-gpui-helper")));
-        assert!(!is_cap_gpui_image(Path::new("Cap Classic")));
-        assert!(!is_cap_gpui_image(Path::new("Cap Classic.exe")));
+        assert!(!is_cap_gpui_image(Path::new("Cap Helper")));
+        assert!(!is_cap_gpui_image(Path::new("cap-cli")));
     }
 
     #[cfg(target_os = "linux")]

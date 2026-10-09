@@ -254,8 +254,9 @@ pub struct GeneralSettingsStore {
     pub camera_blur_disabled_by_crash: Option<String>,
     #[serde(default)]
     pub update_channel: UpdateChannel,
-    /// Whether Cap, rather than this app, owns the session. Both apps' switch
-    /// flows write it and the GPUI dev loop (`apps/desktop-gpui/dev.sh`) reads it.
+    /// Run the experimental gpui-native app (`cap-gpui`) *instead of* this one:
+    /// while enabled, startup hands off to it and exits, and the native app's
+    /// own Experimental page hands back. See `gpui_app.rs`.
     #[serde(default)]
     pub enable_gpui_app: bool,
 }

@@ -5,7 +5,7 @@ use gpui::{App, Global};
 use semver::Version;
 
 use crate::{
-    installer::{self, ArtifactKind, Product, Release},
+    installer::{self, ArtifactKind, Release},
     session::RecordingSession,
     store::{GeneralSettings, UpdateChannel},
 };
@@ -90,7 +90,7 @@ fn current_version() -> Result<Version, String> {
 
 async fn available_release(channel: UpdateChannel) -> Result<Option<Release>, String> {
     let current = current_version()?;
-    let stable = installer::fetch_release(Product::Cap, UpdateChannel::Stable, &current)
+    let stable = installer::fetch_release(UpdateChannel::Stable, &current)
         .await
         .map(|candidate| {
             candidate.filter(|remote| {
@@ -102,7 +102,7 @@ async fn available_release(channel: UpdateChannel) -> Result<Option<Release>, St
         return stable;
     }
 
-    let nightly = installer::fetch_release(Product::Cap, UpdateChannel::Nightly, &current)
+    let nightly = installer::fetch_release(UpdateChannel::Nightly, &current)
         .await
         .map(|candidate| {
             candidate.filter(|remote| {
@@ -368,8 +368,7 @@ pub(crate) fn schedule_startup_check(cx: &mut App) {
 }
 
 fn start_download(release: Release, cx: &mut App) {
-    let kind = match Product::Cap
-        .update_platform()
+    let kind = match installer::update_platform()
         .and_then(|platform| ArtifactKind::for_platform(&platform))
     {
         Ok(kind) => kind,
@@ -391,7 +390,7 @@ fn start_download(release: Release, cx: &mut App) {
     let (progress_sender, progress) = flume::bounded::<Option<f32>>(1);
     let download = gpui_tokio::Tokio::spawn(cx, async move {
         let mut reported = None::<u16>;
-        installer::download(Product::Cap, kind, &release, move |done, total| {
+        installer::download(kind, &release, move |done, total| {
             let fraction = total
                 .filter(|total| *total > 0)
                 .map(|total| (done as f64 / total as f64).clamp(0., 1.) as f32);
