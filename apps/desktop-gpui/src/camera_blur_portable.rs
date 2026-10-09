@@ -130,12 +130,7 @@ impl PortableCameraBlur {
         }
 
         self.ensure_resources(width, height)?;
-        self.rgba.clear();
-        self.rgba.reserve(expected_bytes);
-        for pixel in bgra.chunks_exact(4) {
-            self.rgba
-                .extend_from_slice(&[pixel[2], pixel[1], pixel[0], pixel[3]]);
-        }
+        cap_gpui_kernels::frame::swap_red_blue_into(bgra, &mut self.rgba);
 
         let source = self.source.as_ref().context("camera blur source missing")?;
         self.queue.write_texture(
@@ -210,18 +205,17 @@ impl PortableCameraBlur {
             .context("camera blur GPU readback channel")?
             .map_err(|error| anyhow!("camera blur GPU readback: {error}"))?;
 
-        let mut pixels = Vec::with_capacity(expected_bytes);
-        {
+        let pixels = {
             let mapped = readback.slice(..).get_mapped_range();
-            let padded = self.padded_bytes_per_row as usize;
-            let row = row_bytes as usize;
-            for source in mapped.chunks_exact(padded).take(height as usize) {
-                for pixel in source[..row].chunks_exact(4) {
-                    pixels.extend_from_slice(&[pixel[2], pixel[1], pixel[0], pixel[3]]);
-                }
-            }
-        }
+            cap_gpui_kernels::frame::unpad_rgba_to_bgra(
+                &mapped,
+                width as usize,
+                self.padded_bytes_per_row as usize,
+                height as usize,
+            )
+        };
         readback.unmap();
+        let pixels = pixels.context("camera blur readback rows")?;
 
         let image = image::RgbaImage::from_raw(width, height, pixels)
             .context("camera blur output image")?;

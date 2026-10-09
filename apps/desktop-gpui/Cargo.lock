@@ -1537,6 +1537,7 @@ dependencies = [
  "cap-editor",
  "cap-enc-ffmpeg",
  "cap-export",
+ "cap-gpui-kernels",
  "cap-media-info",
  "cap-project",
  "cap-recording",
@@ -1562,7 +1563,6 @@ dependencies = [
  "jpeg-decoder",
  "kameo",
  "libc",
- "md-5",
  "objc2 0.5.2",
  "objc2-app-kit 0.2.2",
  "objc2-foundation 0.2.2",
@@ -1745,6 +1745,16 @@ dependencies = [
  "tracing",
  "windows 0.60.0",
  "workspace-hack",
+]
+
+[[package]]
+name = "cap-gpui-kernels"
+version = "0.1.0"
+dependencies = [
+ "cap-audio",
+ "cap-project",
+ "image 0.25.10",
+ "md-5",
 ]
 
 [[package]]

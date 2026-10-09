@@ -1776,12 +1776,7 @@ fn decode_image_rgba(source_path: &Path) -> Result<(u32, u32, Vec<u8>), String> 
 }
 
 fn decode_image_with_image_crate(source_path: &Path) -> Result<(u32, u32, Vec<u8>), String> {
-    let image = image::ImageReader::open(source_path)
-        .map_err(|e| format!("Failed to open image: {e}"))?
-        .with_guessed_format()
-        .map_err(|e| format!("Failed to detect image format: {e}"))?
-        .decode()
-        .map_err(|e| format!("Failed to decode image: {e}"))?;
+    let image = cap_gpui_kernels::codec::decode_image_file(source_path)?;
 
     let (width, height) = (image.width(), image.height());
     check_image_dimensions(width, height)?;
@@ -1868,13 +1863,16 @@ fn decode_image_with_ffmpeg(source_path: &Path) -> Result<(u32, u32, Vec<u8>), S
 fn write_png(path: &Path, width: u32, height: u32, rgba: &[u8]) -> Result<(), String> {
     let file = std::fs::File::create(path)
         .map_err(|e| format!("Failed to create imported image file: {e}"))?;
-    let encoder = image::codecs::png::PngEncoder::new_with_quality(
-        std::io::BufWriter::new(file),
+    cap_gpui_kernels::codec::write_png_file(
+        file,
+        rgba,
+        width,
+        height,
+        image::ColorType::Rgba8.into(),
         image::codecs::png::CompressionType::Default,
         image::codecs::png::FilterType::Adaptive,
-    );
-    image::ImageEncoder::write_image(encoder, rgba, width, height, image::ColorType::Rgba8.into())
-        .map_err(|e| format!("Failed to encode imported image: {e}"))
+    )
+    .map_err(|e| format!("Failed to encode imported image: {e}"))
 }
 
 #[cfg(test)]
@@ -2093,7 +2091,6 @@ pub(crate) fn import_editor_image(
     project_path: &Path,
     source: &Path,
 ) -> Result<ImportedEditorImage, String> {
-    use image::ImageDecoder;
     use std::{
         hash::BuildHasher,
         io::{Read, Write},
@@ -2114,39 +2111,7 @@ pub(crate) fn import_editor_image(
     if encoded.len() as u64 > MAX_BYTES {
         return Err("Image files must be 64 MiB or smaller".into());
     }
-    let mut reader = image::ImageReader::new(std::io::Cursor::new(&encoded))
-        .with_guessed_format()
-        .map_err(|error| error.to_string())?;
-    let extension = match reader.format() {
-        Some(image::ImageFormat::Png) => "png",
-        Some(image::ImageFormat::Jpeg) => "jpg",
-        Some(image::ImageFormat::WebP) => "webp",
-        Some(image::ImageFormat::Gif) => "gif",
-        Some(image::ImageFormat::Bmp) => "bmp",
-        _ => return Err("Choose a PNG, JPEG, WebP, GIF or BMP image".into()),
-    };
-    let mut limits = image::Limits::default();
-    limits.max_alloc = Some(128 * 1024 * 1024);
-    limits.max_image_width = Some(32_768);
-    limits.max_image_height = Some(32_768);
-    reader.limits(limits);
-    let mut decoder = reader.into_decoder().map_err(|error| {
-        format!("Cannot decode image (maximum 32,768 pixels per side): {error}")
-    })?;
-    let (source_width, source_height) = decoder.dimensions();
-    if source_width == 0
-        || source_height == 0
-        || u64::from(source_width) * u64::from(source_height) > 16_777_216
-        || decoder.total_bytes() > 128 * 1024 * 1024
-    {
-        return Err("Images must have at most 16,777,216 pixels (32,768 per side) and decode to at most 128 MiB".into());
-    }
-    let orientation = decoder.orientation().map_err(|error| error.to_string())?;
-    let mut decoded = image::DynamicImage::from_decoder(decoder)
-        .map_err(|error| format!("Cannot decode image: {error}"))?;
-    decoded.apply_orientation(orientation);
-    let (width, height) = (decoded.width(), decoded.height());
-    drop(decoded);
+    let (extension, width, height) = cap_gpui_kernels::codec::inspect_overlay_image(&encoded)?;
     let mut bytes = [0u8; 16];
     for chunk in bytes.chunks_exact_mut(8) {
         chunk.copy_from_slice(
