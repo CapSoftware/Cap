@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     ExportError, ExporterBase, ExporterBuilder, make_cursor_only_project,
-    prepare_project_for_export, synthesize_default_timeline,
+    synthesize_default_timeline,
 };
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -149,7 +149,7 @@ pub async fn render_preview_with_editor(
     let studio_meta = recording_meta
         .studio_meta()
         .ok_or_else(|| ExportError::Other("Cannot preview non-studio recordings".to_string()))?;
-    let mut project_config = prepare_project_for_export(project_config);
+    let mut project_config = project_config;
     if settings.cursor_only {
         project_config = make_cursor_only_project(project_config);
     }
@@ -561,7 +561,7 @@ mod subtitle_preview_tests {
     use super::*;
 
     #[test]
-    fn immediate_export_preview_uses_current_toggle_before_disk_save() {
+    fn immediate_export_preview_keeps_enabled_captions_regardless_of_legacy_export_toggle() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("project-config.json");
         for export in [false, true] {
@@ -598,7 +598,7 @@ mod subtitle_preview_tests {
                 true,
             );
             let preview = builder.load_project_config().unwrap();
-            assert_eq!(preview.captions.as_ref().unwrap().settings.enabled, export);
+            assert!(preview.captions.as_ref().unwrap().settings.enabled);
             assert_eq!(
                 preview.captions.unwrap().settings.export_with_subtitles,
                 export
