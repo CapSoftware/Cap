@@ -170,12 +170,14 @@ const TITLE_TEXT_CLASS =
 const TITLE_PLACEHOLDER = "Cap title";
 
 /**
- * One line at every width, then an ellipsis. The clip box is grown by the
- * descender (and given back with a negative margin, so the line box doesn't
- * move): `overflow: hidden` clips at the line box, which is where a g, y or p
- * in the title's font used to get its tail cut off.
+ * One line at every width, then an ellipsis. `leading-[inherit]` matters: the
+ * base layer gives every bare span a 1.5rem line, which at the title's 24px is
+ * a line box with no room below the baseline, so `overflow: hidden` cut the
+ * tails off g, y and p. The small padding (given back by the negative margin,
+ * so nothing moves) is a margin for fonts whose descenders run deeper still.
  */
-const TITLE_CLAMP_CLASS = "-mb-[0.2em] block truncate pb-[0.2em]";
+const TITLE_CLAMP_CLASS =
+	"-mb-[0.1em] block truncate pb-[0.1em] leading-[inherit]";
 
 /** Cap's tooltip, widened and wrapping for text that can run long. */
 const LONG_TOOLTIP_CLASS =
