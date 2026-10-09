@@ -162,7 +162,10 @@ export async function transcribeVideoWorkflow(
 		await saveTranscription(videoId, userId, videoData.video, transcription);
 	} catch (error) {
 		if (
-			error instanceof Error &&
+			typeof error === "object" &&
+			error !== null &&
+			"message" in error &&
+			typeof error.message === "string" &&
 			error.message.toLowerCase().includes("no spoken audio")
 		) {
 			await markNoAudio(videoId);

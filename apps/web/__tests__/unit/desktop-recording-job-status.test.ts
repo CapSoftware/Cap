@@ -16,6 +16,115 @@ const input = {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("recording job completion reconciliation", () => {
+	it("does not treat a replica-local 404 as worker death", async () => {
+		const fetcher = vi
+			.fn()
+			.mockResolvedValue(new Response(null, { status: 404 }));
+		vi.stubGlobal("fetch", fetcher);
+		expect(await observeDesktopRecordingJob(input)).toEqual({
+			status: "unavailable",
+			delivered: false,
+		});
+		expect(fetcher).toHaveBeenCalledOnce();
+	});
+
+	it("identifies workers whose lease can only be renewed by their own callback", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn().mockResolvedValue(
+				Response.json({
+					jobId: "job",
+					videoId: "video",
+					phase: "processing",
+					recordingWorker: { version: 1, action: "progress", sequence: 3 },
+				}),
+			),
+		);
+		expect(await observeDesktopRecordingJob(input)).toEqual({
+			status: "active",
+			delivered: false,
+			workerProtocol: 1,
+		});
+	});
+
+	it.each([
+		{ success: true },
+		{
+			recordingWorker: {
+				version: 1,
+				status: "accepted",
+				generation: "generation",
+				attemptId: "attempt",
+				jobId: "other",
+				sequence: 4,
+			},
+		},
+		{
+			recordingWorker: {
+				version: 1,
+				status: "stale",
+				generation: "generation",
+				attemptId: "attempt",
+				jobId: "job",
+				sequence: 4,
+			},
+		},
+	])(
+		"requires an exact terminal acknowledgement for owned workers",
+		async (ack) => {
+			const fetcher = vi
+				.fn()
+				.mockResolvedValueOnce(
+					Response.json({
+						jobId: "job",
+						videoId: "video",
+						generation: "generation",
+						attemptId: "attempt",
+						phase: "complete",
+						recordingWorker: { version: 1, action: "progress", sequence: 4 },
+					}),
+				)
+				.mockResolvedValueOnce(Response.json(ack));
+			vi.stubGlobal("fetch", fetcher);
+			expect(await observeDesktopRecordingJob(input)).toEqual({
+				status: "terminal",
+				delivered: false,
+			});
+		},
+	);
+
+	it("accepts an exact redelivery acknowledgement after the completion ACK was lost", async () => {
+		const fence = {
+			generation: "generation",
+			attemptId: "attempt",
+			jobId: "job",
+		};
+		vi.stubGlobal(
+			"fetch",
+			vi
+				.fn()
+				.mockResolvedValueOnce(
+					Response.json({
+						...fence,
+						videoId: "video",
+						phase: "complete",
+						recordingWorker: { version: 1, action: "progress", sequence: 4 },
+					}),
+				)
+				.mockResolvedValueOnce(
+					Response.json({
+						recordingWorker: {
+							...fence,
+							version: 1,
+							status: "accepted",
+							sequence: 4,
+						},
+					}),
+				),
+		);
+		expect(await reconcileDesktopRecordingJob(input)).toBe(true);
+	});
+
 	it("redelivers a lost completion through the validated webhook", async () => {
 		const proof = {
 			request: { version: 1 },

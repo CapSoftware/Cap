@@ -68,6 +68,7 @@ import {
 	createSsoBillingPortal,
 	createSsoCheckout,
 	getSsoPrices,
+	listSsoInvoices,
 	syncSsoSubscription,
 } from "@/lib/sso/billing";
 
@@ -370,6 +371,7 @@ beforeEach(() => {
 				metadata: params.metadata as Stripe.Metadata,
 				customer: params.customer,
 				currency: params.currency ?? null,
+				allow_promotion_codes: params.allow_promotion_codes ?? false,
 			});
 			state.sessions.set(session.id, session);
 			return session;
@@ -854,6 +856,7 @@ describe("SSO checkout ownership and duplicate prevention", () => {
 				currency: "gbp",
 				customer: "cus_owner",
 				mode: "subscription",
+				allow_promotion_codes: true,
 				line_items: [{ price: STRIPE_SAML_SSO_PRICE_ID, quantity: 1 }],
 				metadata: expect.objectContaining({
 					type: "saml_sso",
@@ -911,6 +914,77 @@ describe("SSO checkout ownership and duplicate prevention", () => {
 		await createSsoCheckout(checkoutInput("eur"));
 		expect(mocks.stripe.checkout.sessions.create).toHaveBeenCalledTimes(1);
 		expect(state.billing.get(organizationId)?.checkoutCurrency).toBe("eur");
+	});
+
+	it("replaces an open checkout that cannot accept a promotion code", async () => {
+		await createSsoCheckout(checkoutInput());
+		const previous = state.billing.get(organizationId);
+		const previousSessionId = String(previous?.checkoutSessionId);
+		const previousSession = state.sessions.get(previousSessionId);
+		if (!previousSession) throw new Error("Missing checkout fixture");
+		state.sessions.set(previousSessionId, {
+			...previousSession,
+			allow_promotion_codes: false,
+		});
+
+		await createSsoCheckout(checkoutInput());
+
+		expect(state.sessions.get(previousSessionId)?.status).toBe("expired");
+		expect(mocks.stripe.checkout.sessions.create).toHaveBeenCalledTimes(2);
+		const currentSessionId = String(
+			state.billing.get(organizationId)?.checkoutSessionId,
+		);
+		expect(currentSessionId).not.toBe(previousSessionId);
+		expect(state.sessions.get(currentSessionId)?.allow_promotion_codes).toBe(
+			true,
+		);
+	});
+
+	it("recovers an unsaved legacy checkout before replacing its idempotency key", async () => {
+		const oldAttemptId = "attempt_old";
+		state.billing.set(
+			organizationId,
+			billingRow({
+				checkoutAttemptId: oldAttemptId,
+				checkoutCurrency: "usd",
+				checkoutPriceId: STRIPE_SAML_SSO_PRICE_ID,
+				checkoutStartedAt: new Date("2026-09-02T00:00:00Z"),
+			}),
+		);
+		state.sessions.set(
+			"cs_old_unsaved",
+			checkoutSession({
+				id: "cs_old_unsaved",
+				status: "open",
+				payment_status: "unpaid",
+				url: "https://checkout.stripe.test/old-sso",
+				subscription: null,
+				allow_promotion_codes: false,
+				metadata: {
+					type: "saml_sso",
+					organizationId,
+					userId,
+					checkoutAttemptId: oldAttemptId,
+				},
+			}),
+		);
+		mocks.stripe.checkout.sessions.create.mockImplementationOnce(async () => {
+			throw Object.assign(new Error("Idempotency parameters changed"), {
+				type: "StripeIdempotencyError",
+			});
+		});
+
+		await createSsoCheckout(checkoutInput());
+
+		const calls = mocks.stripe.checkout.sessions.create.mock.calls;
+		expect(calls).toHaveLength(3);
+		expect(calls[0]?.[0].allow_promotion_codes).toBe(true);
+		expect(calls[1]?.[0].allow_promotion_codes).toBeUndefined();
+		expect(calls[1]?.[1].idempotencyKey).toBe(calls[0]?.[1].idempotencyKey);
+		expect(state.sessions.get("cs_old_unsaved")?.status).toBe("expired");
+		expect(state.billing.get(organizationId)?.checkoutAttemptId).not.toBe(
+			oldAttemptId,
+		);
 	});
 
 	it("confirms expiration before replacing an open checkout with the selected currency", async () => {
@@ -1134,5 +1208,167 @@ describe("SSO prices and billing management", () => {
 			"current owner",
 		);
 		expect(mocks.stripe.billingPortal.sessions.create).not.toHaveBeenCalled();
+	});
+});
+
+describe("read-only SSO invoices", () => {
+	beforeEach(() => {
+		state.billing.set(
+			organizationId,
+			billingRow({ stripeSubscriptionId: "sub_sso" }),
+		);
+		mocks.stripe.invoices.list.mockResolvedValue({
+			data: [
+				{
+					...paidInvoice(),
+					number: "SSO-0001",
+					created: 1788307200,
+					total: 20000,
+					currency: "usd",
+					invoice_pdf: "https://pay.stripe.com/invoice/acct_test/inv_test/pdf",
+					hosted_invoice_url: "https://invoice.stripe.com/pay/inv_test",
+					customer_email: "private@example.com",
+				},
+			],
+			has_more: false,
+		});
+	});
+
+	it("lists only the linked SSO customer and subscription, preserving separate Pro billing", async () => {
+		state.users.set(userId, {
+			id: userId,
+			stripeCustomerId: "cus_separate_pro",
+		});
+		const billingBefore = structuredClone(state.billing.get(organizationId));
+		expect(await listSsoInvoices(organizationId)).toEqual({
+			invoices: [
+				{
+					id: "in_sso",
+					number: "SSO-0001",
+					created: 1788307200,
+					total: 20000,
+					currency: "usd",
+					status: "paid",
+					pdfUrl: "https://pay.stripe.com/invoice/acct_test/inv_test/pdf",
+				},
+			],
+			hasMore: false,
+		});
+		expect(mocks.stripe.invoices.list).toHaveBeenCalledWith({
+			customer: "cus_owner",
+			subscription: "sub_sso",
+			limit: 100,
+		});
+		expect(state.billing.get(organizationId)).toEqual(billingBefore);
+		expect(state.users.get(userId)?.stripeCustomerId).toBe("cus_separate_pro");
+		expect(mocks.stripe.billingPortal.sessions.create).not.toHaveBeenCalled();
+		expect(mocks.stripe.checkout.sessions.create).not.toHaveBeenCalled();
+		expect(mocks.stripe.customers.create).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		{ purchasedByUserId: User.UserId.make("user_old_owner") },
+		{ stripeCustomerId: null },
+		{ stripeSubscriptionId: null },
+	])("rejects an untrusted billing mapping: %j", async (overrides) => {
+		state.billing.set(
+			organizationId,
+			billingRow({ stripeSubscriptionId: "sub_sso", ...overrides }),
+		);
+		await expect(listSsoInvoices(organizationId)).rejects.toThrow(
+			"current owner",
+		);
+		expect(mocks.stripe.invoices.list).not.toHaveBeenCalled();
+	});
+
+	it("rejects a missing billing mapping", async () => {
+		state.billing.clear();
+		await expect(listSsoInvoices(organizationId)).rejects.toThrow(
+			"current owner",
+		);
+		expect(mocks.stripe.invoices.list).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		ssoSubscription({ customer: "cus_unrelated" }),
+		ssoSubscription({ id: "sub_unrelated" }),
+		proSubscription(),
+	])("rejects an unrelated Stripe subscription", async (subscription) => {
+		mocks.stripe.subscriptions.retrieve.mockResolvedValue(subscription);
+		await expect(listSsoInvoices(organizationId)).rejects.toThrow(
+			"does not match",
+		);
+		expect(mocks.stripe.invoices.list).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		{ customer: "cus_unrelated" },
+		{ subscription: "sub_pro" },
+		{ subscription: null },
+		{ customer: null },
+	])("rejects mismatched returned invoice: %j", async (overrides) => {
+		mocks.stripe.invoices.list.mockResolvedValue({
+			data: [{ ...paidInvoice(), ...overrides }],
+			has_more: false,
+		});
+		await expect(listSsoInvoices(organizationId)).rejects.toThrow(
+			"invoices do not match",
+		);
+	});
+
+	it.each([
+		"javascript:alert(1)",
+		"http://pay.stripe.com/invoice/pdf",
+		"https://pay.stripe.com.evil.test/pdf",
+		"https://evil.test/pay.stripe.com/pdf",
+		"https://pay.stripe.com@evil.test/pdf",
+		"https://user:password@pay.stripe.com/pdf",
+		"https://pay.stripe.com:8443/pdf",
+		"not a URL",
+		null,
+		undefined,
+	])("does not expose an unsafe or missing PDF: %s", async (invoicePdf) => {
+		mocks.stripe.invoices.list.mockResolvedValue({
+			data: [
+				{
+					...paidInvoice(),
+					invoice_pdf: invoicePdf,
+					hosted_invoice_url: "https://invoice.stripe.com/pay/inv_test",
+				},
+			],
+			has_more: false,
+		});
+		const result = await listSsoInvoices(organizationId);
+		expect(result.invoices[0]?.pdfUrl).toBeNull();
+	});
+
+	it("accepts expanded bindings and Stripe invoice PDF hosts", async () => {
+		mocks.stripe.subscriptions.retrieve.mockResolvedValue(
+			ssoSubscription({ customer: { id: "cus_owner" } as Stripe.Customer }),
+		);
+		mocks.stripe.invoices.list.mockResolvedValue({
+			data: [
+				{
+					...paidInvoice(),
+					customer: { id: "cus_owner" },
+					subscription: { id: "sub_sso" },
+					invoice_pdf: "https://invoice.stripe.com/i/acct_test/inv_test/pdf",
+				},
+			],
+			has_more: true,
+		});
+		const result = await listSsoInvoices(organizationId);
+		expect(result.invoices[0]?.pdfUrl).toBe(
+			"https://invoice.stripe.com/i/acct_test/inv_test/pdf",
+		);
+		expect(result.hasMore).toBe(true);
+	});
+
+	it("returns an empty page without changing billing", async () => {
+		mocks.stripe.invoices.list.mockResolvedValue({ data: [], has_more: false });
+		expect(await listSsoInvoices(organizationId)).toEqual({
+			invoices: [],
+			hasMore: false,
+		});
 	});
 });

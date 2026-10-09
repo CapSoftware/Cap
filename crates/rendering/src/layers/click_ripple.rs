@@ -148,7 +148,8 @@ impl ClickRippleLayer {
     pub fn prepare(&mut self, uniforms: &ProjectUniforms, constants: &RenderVideoConstants) {
         self.instance_count = 0;
 
-        if uniforms.click_ripples.is_empty() {
+        let clip_visibility = uniforms.cursor_clip_visibility.clamp(0.0, 1.0);
+        if uniforms.click_ripples.is_empty() || clip_visibility <= f32::EPSILON {
             return;
         }
 
@@ -188,7 +189,8 @@ impl ClickRippleLayer {
                 continue;
             }
 
-            let (position_size, opacity) = placement.map(position_uv, size, hotspot, 1.0);
+            let (position_size, opacity) =
+                placement.map(position_uv, size, hotspot, clip_visibility);
             if !position_size.iter().all(|v| v.is_finite()) {
                 continue;
             }

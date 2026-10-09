@@ -1,4 +1,8 @@
 import { createHash } from "node:crypto";
+import {
+	getRecordingObjectIdentity,
+	type RecordingObjectHead,
+} from "@cap/web-backend/src/Storage/recording-object-identity";
 import { z } from "zod";
 
 const positiveNumber = z.number().finite().positive();
@@ -199,13 +203,13 @@ export type RecordingUploadReceipt = z.infer<
 >;
 
 export function assertRecordingObjectIdentity(
-	head: { ContentLength?: number; ETag?: string },
+	head: RecordingObjectHead & { ContentLength?: number },
 	expected: { fileSize: number; objectIdentity: string },
 ) {
 	if (
 		head.ContentLength !== expected.fileSize ||
-		!head.ETag ||
-		head.ETag !== expected.objectIdentity
+		getRecordingObjectIdentity(head, expected.objectIdentity) !==
+			expected.objectIdentity
 	) {
 		throw new Error("Uploaded recording object changed or is incomplete");
 	}

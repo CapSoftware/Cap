@@ -637,7 +637,14 @@ async function driveFixture() {
 	const files = new Map<string, GoogleDriveFile>([
 		[
 			"original-file",
-			{ id: "original-file", version: "1", size: "10", mimeType: "video/mp4" },
+			{
+				id: "original-file",
+				version: "1",
+				size: "10",
+				mimeType: "video/mp4",
+				sha256Checksum: "a".repeat(64),
+				headRevisionId: "revision-1",
+			},
 		],
 	]);
 	const repo = await Effect.runPromise(
@@ -790,6 +797,29 @@ afterEach(() => {
 });
 
 describe("recording storage lifecycle", () => {
+	it.each(["desktopMP4", "webMP4"] as const)(
+		"uses the published %s thumbnail without discovering older objects",
+		async (type) => {
+			const editThumbnail = `${prefix}.recording/outputs/edit-11111111-1111-4111-8111-111111111111/thumbnail.jpg`;
+			databaseFixture(recording({ type, thumbnailKey: editThumbnail }));
+			const storage = await storageFixture([
+				[editThumbnail, "current-thumbnail"],
+				[`${prefix}screenshot/screen-capture.jpg`, "old-thumbnail"],
+			]);
+			const thumbnail = await Effect.runPromise(
+				Effect.flatMap(Videos, (videos) =>
+					videos.getThumbnailURL(videoId),
+				).pipe(
+					Effect.provide(Videos.Default),
+					Effect.provideService(CurrentUser, currentUser),
+				),
+			);
+			expect(Option.getOrNull(thumbnail)).toContain(editThumbnail);
+			expect(
+				storage.requests.filter(({ operation }) => operation === "list"),
+			).toEqual([]);
+		},
+	);
 	it.each([
 		"committing",
 		"queued",
@@ -890,6 +920,27 @@ describe("recording storage lifecycle", () => {
 				key: `${newPrefix}preview/animated-preview.gif`,
 			},
 		]);
+	});
+	it("duplicates enhanced browser playback without retaining foreign audio pointers", async () => {
+		const audioKey = `${prefix}.recording/outputs/audio-quality-v3/selected.mp4`;
+		const database = databaseFixture(
+			recording({
+				type: "webMP4",
+				audioLevelSourceKey: `${prefix}result.mp4`,
+				audioLevelOutputKey: audioKey,
+			}),
+		);
+		const storage = await storageFixture([
+			[audioKey, "enhanced"],
+			[`${prefix}result.mp4`, "original"],
+		]);
+		const result = await runVideoOperation("duplicate");
+		expect(Exit.isSuccess(result)).toBe(true);
+		expect(storage.objects.get(`${newPrefix}result.mp4`)).toBe("enhanced");
+		expect(database.rows.get("duplicate-video")?.source).toEqual({
+			type: "webMP4",
+		});
+		expect(storage.objects.get(`${prefix}result.mp4`)).toBe("original");
 	});
 
 	it("does not duplicate source inventories, raw fragments, or comment attachments across pages", async () => {
@@ -1704,7 +1755,36 @@ describe("recording storage lifecycle", () => {
 		);
 	});
 
-	it.each(["source-version", "destination-size"] as const)(
+	it("allows native Drive copies to change metadata versions without changing bytes", async () => {
+		const drive = await driveFixture();
+		const nativeCopy = mocks.driveCopy.getMockImplementation();
+		if (!nativeCopy) throw new Error("Missing native Drive copy fixture");
+		mocks.driveCopy.mockImplementation(
+			(input: Parameters<typeof copyGoogleDriveFile>[0]) =>
+				nativeCopy(input).pipe(
+					Effect.tap(() =>
+						Effect.sync(() => {
+							for (const file of drive.files.values()) file.version = "6";
+						}),
+					),
+				),
+		);
+		await Effect.runPromise(
+			drive.access.copyObjectForRecording(
+				`google-drive/${outputKey}`,
+				`${newPrefix}result.mp4`,
+			),
+		);
+		expect(drive.records.get(`${newPrefix}result.mp4`)?.providerObjectId).toBe(
+			"copied-file",
+		);
+	});
+
+	it.each([
+		"source-checksum",
+		"destination-checksum",
+		"destination-size",
+	] as const)(
 		"rejects a Drive copy when %s changes during readback",
 		async (change) => {
 			const drive = await driveFixture();
@@ -1715,16 +1795,17 @@ describe("recording storage lifecycle", () => {
 					nativeCopy(input).pipe(
 						Effect.tap(() =>
 							Effect.sync(() => {
-								if (change === "source-version") {
+								if (change === "source-checksum") {
 									const original = drive.files.get("original-file");
 									if (!original)
 										throw new Error("Missing original Drive fixture");
-									original.version = "2";
+									original.sha256Checksum = "b".repeat(64);
 								} else {
 									const destination = drive.files.get("copied-file");
 									if (!destination)
 										throw new Error("Missing copied Drive fixture");
-									destination.size = "9";
+									if (change === "destination-size") destination.size = "9";
+									else destination.sha256Checksum = "b".repeat(64);
 								}
 							}),
 						),

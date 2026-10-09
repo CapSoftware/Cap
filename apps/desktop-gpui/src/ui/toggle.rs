@@ -27,7 +27,7 @@ pub enum ToggleSize {
 impl ToggleSize {
     fn track(self) -> (Pixels, Pixels, Pixels) {
         match self {
-            ToggleSize::Sm => (px(36.), px(20.), px(2.)),
+            ToggleSize::Sm => (px(34.), px(20.), px(2.)),
             ToggleSize::Md => (px(44.), px(24.), px(2.)),
             ToggleSize::Lg => (px(56.), px(28.), px(3.)),
         }
@@ -58,14 +58,14 @@ pub struct Toggle {
 }
 
 impl Toggle {
-    /// The plain Radix track: `bg-gray-6`, checked `bg-blue-500`.
+    /// The editor track: `ed-ctl-active` off, `ed-accent` on, white knob.
     pub fn plain(theme: &Theme, id: impl Into<ElementId>, checked: bool) -> Self {
         Self {
             id: id.into(),
             checked,
-            size: ToggleSize::Md,
-            off_fill: Hsla::from(theme.gray_6),
-            on_fill: Hsla::from(theme.blue_500),
+            size: ToggleSize::Sm,
+            off_fill: Hsla::from(theme.editor.ctl_active),
+            on_fill: Hsla::from(theme.editor.accent),
             thumb: gpui::white(),
             disabled: false,
             on_click: None,
@@ -104,11 +104,10 @@ impl Toggle {
         self
     }
 
-    /// `data-disabled:bg-gray-3`.
     pub fn disabled(mut self, theme: &Theme, disabled: bool) -> Self {
         self.disabled = disabled;
         if disabled && !self.checked {
-            self.off_fill = Hsla::from(theme.gray_3);
+            self.off_fill = Hsla::from(theme.editor.ctl);
         }
         self
     }
@@ -148,6 +147,7 @@ impl RenderOnce for Toggle {
             // `data-checked:translate-x-[calc(100%)]` on the thumb -- the same
             // end position a flex justification reaches, without a transform.
             .when(checked, |this| this.justify_end())
+            .when(!disabled, |this| this.cursor_pointer())
             .bg(if checked { on_fill } else { off_fill })
             .child(div().size(size.thumb()).rounded_full().bg(thumb))
             .when_some(on_click.filter(|_| !disabled), |this, handler| {

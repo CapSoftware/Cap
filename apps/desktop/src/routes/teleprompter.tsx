@@ -22,7 +22,6 @@ import {
 } from "~/store";
 import { applyMacOSWindowMaterial } from "~/utils/macos-window-material";
 import { commands, events } from "~/utils/tauri";
-import { initializeTitlebar } from "~/utils/titlebar-state";
 import IconLucideChevronLeft from "~icons/lucide/chevron-left";
 import IconLucideChevronRight from "~icons/lucide/chevron-right";
 import IconLucideEyeOff from "~icons/lucide/eye-off";
@@ -111,7 +110,6 @@ export default function Teleprompter() {
 	let scrollElement: HTMLDivElement | undefined;
 	let editorElement: HTMLTextAreaElement | undefined;
 	let saveTimer: ReturnType<typeof setTimeout> | undefined;
-	let unlistenTitlebar: UnlistenFn | undefined;
 	let unlistenCloseRequested: UnlistenFn | undefined;
 	let resizeObserver: ResizeObserver | undefined;
 	let playbackFrame = 0;
@@ -215,12 +213,7 @@ export default function Teleprompter() {
 		document.documentElement.setAttribute("data-transparent-window", "true");
 		document.body.style.background = "transparent";
 
-		void Promise.allSettled([
-			applyMacOSWindowMaterial("teleprompter"),
-			initializeTitlebar().then((unlisten) => {
-				unlistenTitlebar = unlisten;
-			}),
-		])
+		void Promise.allSettled([applyMacOSWindowMaterial("teleprompter")])
 			.then(async () => {
 				await commands.setTeleprompterWindowLevel(true);
 				await currentWindow.show();
@@ -301,7 +294,6 @@ export default function Teleprompter() {
 		clearTimeout(saveTimer);
 		cancelAnimationFrame(playbackFrame);
 		resizeObserver?.disconnect();
-		unlistenTitlebar?.();
 		unlistenCloseRequested?.();
 	});
 

@@ -1,10 +1,11 @@
 use std::path::PathBuf;
 
 use base64::{Engine, engine::general_purpose::STANDARD};
-use cap_project::{RecordingMeta, TimelineFrameMapping, XY};
+use cap_editor::EditorInstance;
+use cap_project::{CursorEvents, ProjectConfiguration, RecordingMeta, TimelineFrameMapping, XY};
 use cap_rendering::{
-    FrameRenderer, ProjectUniforms, RenderedFrame, RendererLayers, TransitionRenderInput,
-    ZoomTransformTimeline,
+    FrameRenderer, ProjectUniforms, RecordingSegmentDecoders, RenderVideoConstants, RenderedFrame,
+    RendererLayers, TransitionRenderInput, ZoomTransformTimeline,
 };
 use image::{
     Rgba,
@@ -13,7 +14,10 @@ use image::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{ExportError, ExporterBase, make_cursor_only_project};
+use crate::{
+    ExportError, ExporterBase, ExporterBuilder, make_cursor_only_project,
+    synthesize_default_timeline,
+};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct ExportPreviewSettings {
@@ -58,42 +62,188 @@ pub async fn render_preview(
     render_preview_with_base(exporter_base, frame_time, settings).await
 }
 
+fn preview_builder_with_config(
+    project_path: PathBuf,
+    project_config: ProjectConfiguration,
+    settings: ExportPreviewSettings,
+    force_ffmpeg_decoder: bool,
+) -> ExporterBuilder {
+    let project_config = if settings.cursor_only {
+        make_cursor_only_project(project_config)
+    } else {
+        project_config
+    };
+    ExporterBase::builder(project_path)
+        .with_config(project_config)
+        .with_force_ffmpeg_decoder(force_ffmpeg_decoder)
+}
+
+pub async fn render_preview_with_config(
+    project_path: PathBuf,
+    project_config: ProjectConfiguration,
+    frame_time: f64,
+    settings: ExportPreviewSettings,
+    force_ffmpeg_decoder: bool,
+) -> Result<ExportPreviewResult, ExportError> {
+    let exporter_base =
+        preview_builder_with_config(project_path, project_config, settings, force_ffmpeg_decoder)
+            .build()
+            .await
+            .map_err(|error| ExportError::Other(format!("Exporter build error: {error}")))?;
+    render_preview_with_base(exporter_base, frame_time, settings).await
+}
+
+/// Everything a preview frame needs, borrowed from whichever owner already
+/// holds the decoders and GPU pipelines.
+struct PreviewSource<'a> {
+    project_config: &'a ProjectConfiguration,
+    render_constants: &'a RenderVideoConstants,
+    segments: Vec<PreviewSegment<'a>>,
+    total_duration: f64,
+}
+
+struct PreviewSegment<'a> {
+    decoders: &'a RecordingSegmentDecoders,
+    cursor: &'a CursorEvents,
+}
+
 async fn render_preview_with_base(
     exporter_base: ExporterBase,
     frame_time: f64,
     settings: ExportPreviewSettings,
 ) -> Result<ExportPreviewResult, ExportError> {
-    let transition_mapping = exporter_base
-        .project_config
-        .timeline
-        .as_ref()
-        .and_then(|timeline| {
-            if timeline.transitions.is_empty() {
-                return None;
-            }
-            match timeline.get_frame_mapping(frame_time) {
-                Some(TimelineFrameMapping::Transition {
-                    outgoing,
-                    kind,
-                    progress,
-                    ..
-                }) => Some((outgoing, kind, progress)),
-                _ => None,
-            }
-        });
-    let Some((segment_time, segment)) = exporter_base.project_config.get_segment_time(frame_time)
-    else {
+    let total_duration = cap_rendering::get_duration(
+        &exporter_base.recordings,
+        &exporter_base.recording_meta,
+        &exporter_base.studio_meta,
+        &exporter_base.project_config,
+    );
+    let source = PreviewSource {
+        project_config: &exporter_base.project_config,
+        render_constants: &exporter_base.render_constants,
+        segments: exporter_base
+            .segments
+            .iter()
+            .map(|segment| PreviewSegment {
+                decoders: &segment.decoders,
+                cursor: &segment.cursor,
+            })
+            .collect(),
+        total_duration,
+    };
+    render_preview_frame(source, frame_time, settings).await
+}
+
+/// Render the preview through an open editor's decoders and GPU pipelines
+/// instead of building a fresh exporter (a new wgpu device, every shader, and
+/// a cold decoder per recording segment) for each frame. This is what makes the
+/// export page's preview respond in one frame's worth of work rather than
+/// seconds, and it is the same path the Tauri editor's fast preview takes.
+pub async fn render_preview_with_editor(
+    editor: &EditorInstance,
+    project_config: ProjectConfiguration,
+    frame_time: f64,
+    settings: ExportPreviewSettings,
+) -> Result<ExportPreviewResult, ExportError> {
+    let recording_meta = editor.meta();
+    let studio_meta = recording_meta
+        .studio_meta()
+        .ok_or_else(|| ExportError::Other("Cannot preview non-studio recordings".to_string()))?;
+    let mut project_config = project_config;
+    if settings.cursor_only {
+        project_config = make_cursor_only_project(project_config);
+    }
+    synthesize_default_timeline(&mut project_config, &editor.recordings);
+    cap_project::synchronize_legacy_keyboard(recording_meta, &mut project_config);
+    cap_project::synchronize_captions(
+        &mut project_config,
+        &editor
+            .recordings
+            .segments
+            .iter()
+            .map(|segment| segment.display.duration)
+            .collect::<Vec<_>>(),
+    );
+    let total_duration = cap_rendering::get_duration(
+        &editor.recordings,
+        recording_meta,
+        studio_meta,
+        &project_config,
+    );
+
+    let _pause_prefetch = EditorPreviewGuard::new(editor);
+    let source = PreviewSource {
+        project_config: &project_config,
+        render_constants: &editor.render_constants,
+        segments: editor
+            .segment_medias
+            .iter()
+            .map(|segment| PreviewSegment {
+                decoders: &segment.decoders,
+                cursor: &segment.cursor,
+            })
+            .collect(),
+        total_duration,
+    };
+    render_preview_frame(source, frame_time, settings).await
+}
+
+/// Holds the editor's `export_preview_active` flag so its idle prefetch does
+/// not compete with the preview for the decoders.
+struct EditorPreviewGuard<'a>(&'a EditorInstance);
+
+impl<'a> EditorPreviewGuard<'a> {
+    fn new(editor: &'a EditorInstance) -> Self {
+        editor
+            .export_preview_active
+            .store(true, std::sync::atomic::Ordering::Release);
+        Self(editor)
+    }
+}
+
+impl Drop for EditorPreviewGuard<'_> {
+    fn drop(&mut self) {
+        self.0
+            .export_preview_active
+            .store(false, std::sync::atomic::Ordering::Release);
+    }
+}
+
+async fn render_preview_frame(
+    source: PreviewSource<'_>,
+    frame_time: f64,
+    settings: ExportPreviewSettings,
+) -> Result<ExportPreviewResult, ExportError> {
+    let PreviewSource {
+        project_config,
+        render_constants,
+        segments,
+        total_duration,
+    } = source;
+    let transition_mapping = project_config.timeline.as_ref().and_then(|timeline| {
+        if timeline.transitions.is_empty() {
+            return None;
+        }
+        match timeline.get_frame_mapping(frame_time) {
+            Some(TimelineFrameMapping::Transition {
+                outgoing,
+                kind,
+                progress,
+                ..
+            }) => Some((outgoing, kind, progress)),
+            _ => None,
+        }
+    });
+    let Some((segment_time, segment)) = project_config.get_segment_time(frame_time) else {
         return Err(ExportError::Other(
             "Frame time is outside video duration".to_string(),
         ));
     };
 
-    let segment_media = exporter_base
-        .segments
+    let segment_media = segments
         .get(segment.recording_clip as usize)
         .ok_or_else(|| ExportError::Other("Recording clip is unavailable".to_string()))?;
-    let clip_config = exporter_base
-        .project_config
+    let clip_config = project_config
         .clips
         .iter()
         .find(|v| v.index == segment.recording_clip);
@@ -104,7 +254,7 @@ async fn render_preview_with_base(
         .decoders
         .get_frames(
             segment_time as f32,
-            !exporter_base.project_config.camera.hide && !settings.cursor_only,
+            project_config.requires_camera() && !settings.cursor_only,
             !settings.cursor_only,
             clip_config.map(|v| v.offsets).unwrap_or_default(),
         )
@@ -112,50 +262,42 @@ async fn render_preview_with_base(
         .ok_or_else(|| ExportError::Other("Failed to decode frame".to_string()))?;
 
     let frame_number = (frame_time * settings.fps as f64).floor() as u32;
-    let total_duration = cap_rendering::get_duration(
-        &exporter_base.recordings,
-        &exporter_base.recording_meta,
-        &exporter_base.studio_meta,
-        &exporter_base.project_config,
-    );
 
     let mut zoom_timeline = ZoomTransformTimeline::from_project_for_clip(
-        &exporter_base.project_config,
-        &segment_media.cursor,
+        project_config,
+        segment_media.cursor,
         total_duration,
-        exporter_base.render_constants.options.screen_size,
+        render_constants.options.screen_size,
         segment.recording_clip,
     );
     zoom_timeline.ensure_precomputed_until((frame_number as f32 + 1.0) / settings.fps as f32);
 
     let uniforms = ProjectUniforms::new(
-        &exporter_base.render_constants,
-        &exporter_base.project_config,
+        render_constants,
+        project_config,
         frame_number,
         settings.fps,
         settings.resolution_base,
-        &segment_media.cursor,
+        segment_media.cursor,
         &segment_frames,
         total_duration,
         &zoom_timeline,
     );
 
-    let mut frame_renderer = FrameRenderer::new(&exporter_base.render_constants);
+    let mut frame_renderer = FrameRenderer::new(render_constants);
     let mut layers = RendererLayers::new_with_options(
-        &exporter_base.render_constants.device,
-        &exporter_base.render_constants.queue,
-        exporter_base.render_constants.is_software_adapter,
+        &render_constants.device,
+        &render_constants.queue,
+        render_constants.is_software_adapter,
     );
 
     let frame = if let Some((outgoing, kind, progress)) = transition_mapping {
-        let outgoing_media = exporter_base
-            .segments
+        let outgoing_media = segments
             .get(outgoing.segment.recording_clip as usize)
             .ok_or_else(|| {
                 ExportError::Other("Outgoing recording clip is unavailable".to_string())
             })?;
-        let outgoing_offsets = exporter_base
-            .project_config
+        let outgoing_offsets = project_config
             .clips
             .iter()
             .find(|clip| clip.index == outgoing.segment.recording_clip)
@@ -165,27 +307,27 @@ async fn render_preview_with_base(
             .decoders
             .get_frames(
                 outgoing.source_time as f32,
-                !exporter_base.project_config.camera.hide && !settings.cursor_only,
+                project_config.requires_camera() && !settings.cursor_only,
                 !settings.cursor_only,
                 outgoing_offsets,
             )
             .await
             .ok_or_else(|| ExportError::Other("Failed to decode outgoing frame".to_string()))?;
         let mut outgoing_zoom = ZoomTransformTimeline::from_project_for_outgoing_clip(
-            &exporter_base.project_config,
-            &outgoing_media.cursor,
+            project_config,
+            outgoing_media.cursor,
             total_duration,
-            exporter_base.render_constants.options.screen_size,
+            render_constants.options.screen_size,
             outgoing.segment.recording_clip,
         );
         outgoing_zoom.ensure_precomputed_until((frame_number as f32 + 1.0) / settings.fps as f32);
         let outgoing_uniforms = ProjectUniforms::new(
-            &exporter_base.render_constants,
-            &exporter_base.project_config,
+            render_constants,
+            project_config,
             frame_number,
             settings.fps,
             settings.resolution_base,
-            &outgoing_media.cursor,
+            outgoing_media.cursor,
             &outgoing_frames,
             total_duration,
             &outgoing_zoom,
@@ -196,13 +338,13 @@ async fn render_preview_with_base(
                 TransitionRenderInput {
                     segment_frames: outgoing_frames,
                     uniforms: outgoing_uniforms,
-                    cursor: &outgoing_media.cursor,
+                    cursor: outgoing_media.cursor,
                     render_display: !settings.cursor_only,
                 },
                 TransitionRenderInput {
                     segment_frames,
                     uniforms,
-                    cursor: &segment_media.cursor,
+                    cursor: segment_media.cursor,
                     render_display: !settings.cursor_only,
                 },
                 kind,
@@ -215,7 +357,7 @@ async fn render_preview_with_base(
             .render_immediate(
                 segment_frames,
                 uniforms,
-                &segment_media.cursor,
+                segment_media.cursor,
                 !settings.cursor_only,
                 &mut layers,
             )
@@ -411,5 +553,86 @@ mod tests {
         let mut empty = valid;
         empty.width = 0;
         assert!(encode_preview_jpeg(&empty, 70).is_err());
+    }
+}
+
+#[cfg(test)]
+mod subtitle_preview_tests {
+    use super::*;
+
+    #[test]
+    fn immediate_export_preview_keeps_enabled_captions_regardless_of_legacy_export_toggle() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("project-config.json");
+        for export in [false, true] {
+            let current = ProjectConfiguration {
+                captions: Some(cap_project::CaptionsData {
+                    settings: cap_project::CaptionSettings {
+                        enabled: true,
+                        export_with_subtitles: export,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            let original = serde_json::to_value(&current).unwrap();
+            let mut stale = current.clone();
+            stale
+                .captions
+                .as_mut()
+                .unwrap()
+                .settings
+                .export_with_subtitles = !export;
+            let stale_bytes = serde_json::to_vec(&stale).unwrap();
+            std::fs::write(&path, &stale_bytes).unwrap();
+            let mut builder = preview_builder_with_config(
+                temp.path().to_path_buf(),
+                current.clone(),
+                ExportPreviewSettings {
+                    fps: 30,
+                    resolution_base: XY::new(1280, 720),
+                    compression_bpp: 0.15,
+                    cursor_only: false,
+                },
+                true,
+            );
+            let preview = builder.load_project_config().unwrap();
+            assert!(preview.captions.as_ref().unwrap().settings.enabled);
+            assert_eq!(
+                preview.captions.unwrap().settings.export_with_subtitles,
+                export
+            );
+            assert_eq!(std::fs::read(&path).unwrap(), stale_bytes);
+            assert_eq!(serde_json::to_value(current).unwrap(), original);
+            assert!(builder.force_ffmpeg_decoder);
+        }
+    }
+
+    #[test]
+    fn current_config_export_preview_preserves_cursor_only_override() {
+        let current = ProjectConfiguration {
+            captions: Some(cap_project::CaptionsData {
+                settings: cap_project::CaptionSettings {
+                    enabled: true,
+                    export_with_subtitles: true,
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let mut builder = preview_builder_with_config(
+            PathBuf::from("unused-current-config-project"),
+            current,
+            ExportPreviewSettings {
+                fps: 30,
+                resolution_base: XY::new(1280, 720),
+                compression_bpp: 0.15,
+                cursor_only: true,
+            },
+            false,
+        );
+        assert!(builder.load_project_config().unwrap().captions.is_none());
     }
 }

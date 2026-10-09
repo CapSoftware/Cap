@@ -135,6 +135,18 @@ impl MP4File {
         audio.send_frame(frame, &mut self.output);
     }
 
+    pub fn try_queue_audio_frame(&mut self, frame: frame::Audio) -> Result<(), ffmpeg::Error> {
+        if self.is_finished {
+            return Err(ffmpeg::Error::Eof);
+        }
+
+        let Some(audio) = &mut self.audio else {
+            return Err(ffmpeg::Error::StreamNotFound);
+        };
+
+        audio.try_send_frame(frame, &mut self.output)
+    }
+
     pub fn finish(&mut self) -> Result<FinishResult, FinishError> {
         if self.is_finished {
             return Err(FinishError::AlreadyFinished);

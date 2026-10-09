@@ -14,6 +14,18 @@ describe("describeShareAudience", () => {
 		expect(audience.tooltip).toContain("outside your organization");
 	});
 
+	it("identifies domain restricted link sharing separately from a private recording", () => {
+		const audience = describeShareAudience({
+			isPublic: true,
+			allowedEmailDomain: "route.com",
+			passwordProtected: false,
+			audienceNames: [],
+		});
+
+		expect(audience.label).toBe("Restricted link access");
+		expect(audience.tooltip).toContain("route.com or invited viewers");
+	});
+
 	it("says a password is required when the public link is locked", () => {
 		const audience = describeShareAudience({
 			isPublic: true,
@@ -98,5 +110,32 @@ describe("describeShareAudience", () => {
 		expect(audience.kind).toBe("private");
 		expect(audience.label).toBe("Only you");
 		expect(audience.tooltip).toContain("Click to share it");
+	});
+
+	it("shows invited viewers on a private recording", () => {
+		const audience = describeShareAudience({
+			isPublic: false,
+			passwordProtected: false,
+			audienceNames: [],
+			viewerCount: 2,
+		});
+
+		expect(audience.kind).toBe("people");
+		expect(audience.label).toBe("Shared with 2 people");
+		expect(audience.tooltip).toContain("invited email address");
+	});
+
+	it("includes invited viewers alongside a shared space", () => {
+		const audience = describeShareAudience({
+			isPublic: false,
+			passwordProtected: false,
+			audienceNames: ["Design"],
+			viewerCount: 1,
+		});
+
+		expect(audience.label).toBe("Shared with spaces and 1 person");
+		expect(audience.tooltip).toContain(
+			"members of Design and 1 invited person",
+		);
 	});
 });

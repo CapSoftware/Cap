@@ -1,0 +1,13 @@
+{
+	"name": "cap-building",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"test": "node --test scripts/*.test.mjs"
+	},
+	"dependencies": {
+		"@daytonaio/sdk": "0.217.0",
+		"mysql2": "3.24.4",
+		"playwright-core": "1.62.1"
+	}
+}

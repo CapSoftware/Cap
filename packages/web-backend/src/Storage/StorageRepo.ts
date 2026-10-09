@@ -533,14 +533,23 @@ export class StorageRepo extends Effect.Service<StorageRepo>()("StorageRepo", {
 			) =>
 				db.use(async (db) => {
 					const pageSize = Math.min(Math.max(maxKeys ?? 1_000, 1), 1_000);
+					const prefixPattern = prefix
+						? `${escapeLikePattern(prefix)}%`
+						: undefined;
 					const objects = await db
 						.select()
 						.from(Db.storageObjects)
 						.where(
 							Dz.and(
 								Dz.eq(Db.storageObjects.integrationId, integrationId),
-								prefix
-									? Dz.sql`BINARY ${Db.storageObjects.objectKey} LIKE ${`${escapeLikePattern(prefix)}%`}`
+								// The collation-aware LIKE is a superset of the BINARY match and is
+								// what lets MySQL range-scan integration_object_key_prefix_idx;
+								// the BINARY LIKE keeps the result case-sensitive.
+								prefixPattern
+									? Dz.like(Db.storageObjects.objectKey, prefixPattern)
+									: undefined,
+								prefixPattern
+									? Dz.sql`BINARY ${Db.storageObjects.objectKey} LIKE ${prefixPattern}`
 									: undefined,
 								continuationToken
 									? Dz.sql`BINARY ${Db.storageObjects.objectKey} > BINARY ${continuationToken}`

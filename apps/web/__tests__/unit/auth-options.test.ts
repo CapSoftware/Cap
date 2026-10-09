@@ -1,4 +1,7 @@
-import { authOptions } from "@cap/database/auth/auth-options";
+import {
+	authOptions,
+	decodeSessionToken,
+} from "@cap/database/auth/auth-options";
 import type {
 	SsoAuthContext,
 	ValidatedSsoIdentity,
@@ -37,6 +40,7 @@ const env = vi.hoisted(() => ({
 	APPLE_CLIENT_ID: "so.cap.auth",
 	APPLE_CLIENT_SECRET: "apple-secret",
 	CAP_ALLOWED_SIGNUP_DOMAINS: undefined as string | undefined,
+	CAP_BLOCKED_SIGNUP_DOMAINS: undefined as string | undefined,
 	GOOGLE_CLIENT_ID: "google-client",
 	GOOGLE_CLIENT_SECRET: "google-secret",
 	NEXTAUTH_SECRET: "next-auth-secret",
@@ -108,6 +112,7 @@ describe("authOptions", () => {
 		env.WORKOS_CLIENT_ID = "workos-client";
 		env.WORKOS_API_KEY = "workos-secret";
 		env.CAP_ALLOWED_SIGNUP_DOMAINS = undefined;
+		env.CAP_BLOCKED_SIGNUP_DOMAINS = undefined;
 		mocks.validate.mockReset().mockResolvedValue(IDENTITY);
 		mocks.provision.mockReset().mockResolvedValue(undefined);
 		mocks.adapter.mockClear();
@@ -173,6 +178,70 @@ describe("authOptions", () => {
 		expect((email as { options?: { maxAge?: number } }).options?.maxAge).toBe(
 			10 * 60,
 		);
+	});
+
+	it("sends blocked domains and addresses to the login page with SignupBlocked", async () => {
+		env.CAP_BLOCKED_SIGNUP_DOMAINS = "blocked.example, someone@other.example";
+		const callbacks = callbacksFor(authOptions(CONTEXT));
+
+		await expect(
+			callbacks.signIn({
+				user: { id: "u1", email: "Anyone@Blocked.example" },
+				account: { provider: "google", providerAccountId: "g1", type: "oauth" },
+			}),
+		).resolves.toBe("/login?error=SignupBlocked");
+		await expect(
+			callbacks.signIn({
+				user: { id: "u2", email: "someone@other.example" },
+				account: {
+					provider: "email",
+					providerAccountId: "someone@other.example",
+					type: "email",
+				},
+				email: { verificationRequest: true },
+			}),
+		).resolves.toBe("/login?error=SignupBlocked");
+		await expect(
+			callbacks.signIn({
+				user: { id: "u3", email: "else@other.example" },
+				account: { provider: "google", providerAccountId: "g3", type: "oauth" },
+			}),
+		).resolves.toBe(true);
+	});
+
+	it("expires existing sessions whose email is blocked", async () => {
+		const { encode } = await import("next-auth/jwt");
+		const secret = "next-auth-secret";
+		const token = await encode({
+			token: {
+				id: "user-1",
+				email: "someone@blocked.example",
+				sessionVersion: 0,
+			},
+			secret,
+		});
+		env.CAP_BLOCKED_SIGNUP_DOMAINS = "blocked.example";
+		await expect(decodeSessionToken({ token, secret })).resolves.toBeNull();
+		env.CAP_BLOCKED_SIGNUP_DOMAINS = undefined;
+		mocks.select.mockReturnValueOnce({
+			from: () => ({
+				where: () => ({ limit: async () => [{ authSessionVersion: 0 }] }),
+			}),
+		} as never);
+		await expect(decodeSessionToken({ token, secret })).resolves.toMatchObject({
+			id: "user-1",
+			email: "someone@blocked.example",
+		});
+	});
+
+	it("does not block anyone when CAP_BLOCKED_SIGNUP_DOMAINS is unset", async () => {
+		const callbacks = callbacksFor(authOptions(CONTEXT));
+		await expect(
+			callbacks.signIn({
+				user: { id: "u1", email: "anyone@blocked.example" },
+				account: { provider: "google", providerAccountId: "g1", type: "oauth" },
+			}),
+		).resolves.toBe(true);
 	});
 
 	it("validates the raw WorkOS profile before exposing it to the adapter", async () => {

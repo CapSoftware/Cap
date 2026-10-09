@@ -67,17 +67,21 @@ describe("SSO login intent", () => {
 		expect(verifySsoLoginIntent(value, secret, now - 31_000)).toBeNull();
 	});
 
-	it("preserves a same-origin app continuation through SSO error recovery", () => {
-		const returnTo = "/api/mobile/session/request?redirectUri=cap%3A%2F%2Fauth";
-		const value = createSsoLoginIntent({ ...context, returnTo }, secret, now);
-		expect(verifySsoLoginIntent(value, secret, now)?.returnTo).toBe(returnTo);
-		const errorUrl = new URL(
-			ssoLoginErrorPath("SsoSignInFailed", returnTo),
-			"https://cap.test",
-		);
-		expect(errorUrl.searchParams.get("next")).toBe(returnTo);
-		expect(errorUrl.searchParams.get("error")).toBe("SsoSignInFailed");
-	});
+	it.each(["SsoSignInFailed", "SsoMissingProfileAttributes"] as const)(
+		"preserves a same-origin app continuation through %s recovery",
+		(error) => {
+			const returnTo =
+				"/api/mobile/session/request?redirectUri=cap%3A%2F%2Fauth";
+			const value = createSsoLoginIntent({ ...context, returnTo }, secret, now);
+			expect(verifySsoLoginIntent(value, secret, now)?.returnTo).toBe(returnTo);
+			const errorUrl = new URL(
+				ssoLoginErrorPath(error, returnTo),
+				"https://cap.test",
+			);
+			expect(errorUrl.searchParams.get("next")).toBe(returnTo);
+			expect(errorUrl.searchParams.get("error")).toBe(error);
+		},
+	);
 
 	it.each([
 		"https://attacker.example/",

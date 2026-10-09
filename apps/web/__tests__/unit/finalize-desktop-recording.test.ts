@@ -5,6 +5,10 @@ import type {
 	DesktopRecordingAttempt,
 	DesktopRecordingJob,
 } from "@/lib/desktop-recording-jobs";
+import type { DesktopRecordingSourceCheckpoint } from "@/lib/desktop-recording-source-checkpoint";
+import type { RecordingVerification } from "@/lib/desktop-recording-verification";
+import { MediaProcessingBudgetError } from "@/lib/media-processing-budget";
+import sourceCommitTimings from "../fixtures/source-commit-timings.json";
 
 const mocks = vi.hoisted(() => ({
 	state: vi.fn(),
@@ -12,6 +16,7 @@ const mocks = vi.hoisted(() => ({
 	ensure: vi.fn(),
 	persist: vi.fn(),
 	heartbeat: vi.fn(),
+	waitCapacity: vi.fn(),
 	blocked: vi.fn(),
 	retry: vi.fn(),
 	attach: vi.fn(),
@@ -27,6 +32,15 @@ const mocks = vi.hoisted(() => ({
 	fetch: vi.fn(),
 	put: vi.fn(),
 	databaseRows: vi.fn(),
+	reserveBudget: vi.fn(),
+}));
+vi.mock("@/lib/media-processing-budget", () => ({
+	reserveMediaProcessingBudget: mocks.reserveBudget,
+	MediaProcessingBudgetError: class extends Error {
+		constructor(readonly scope: "recording") {
+			super(scope);
+		}
+	},
 }));
 vi.mock("@cap/database", () => ({
 	db: () => ({
@@ -49,6 +63,7 @@ vi.mock("@/lib/desktop-recording-jobs", () => ({
 	initializeSourceCommitCheckpoint: mocks.checkpoint,
 	persistSourceCommitCheckpoint: mocks.saveCheckpoint,
 	heartbeatAttempt: mocks.heartbeat,
+	waitForDesktopRecordingCapacity: mocks.waitCapacity,
 	markSourceBlocked: mocks.blocked,
 	scheduleRetry: mocks.retry,
 	attachRemoteJob: mocks.attach,
@@ -141,6 +156,7 @@ function withCurrent(update: Partial<DesktopRecordingJob>) {
 }
 
 beforeEach(() => {
+	mocks.reserveBudget.mockResolvedValue(100_000_000);
 	mocks.databaseRows.mockResolvedValue([
 		{ id: "video", ownerId: "user", source: { type: "desktopSegments" } },
 	]);
@@ -168,6 +184,7 @@ beforeEach(() => {
 		withCurrent({ source: savedSource, state: "processing" });
 		return true;
 	});
+	mocks.waitCapacity.mockResolvedValue(true);
 	mocks.heartbeat.mockImplementation(async () => {
 		withCurrent({ leaseExpiresAt: new Date(Date.now() + 5 * 60_000) });
 		return true;
@@ -190,6 +207,7 @@ beforeEach(() => {
 		withCurrent({ remoteJobId });
 		return true;
 	});
+
 	mocks.defer.mockImplementation(async () => {
 		withCurrent({ state: "queued", leaseExpiresAt: null });
 		return true;
@@ -334,6 +352,37 @@ function pollingInput() {
 }
 
 describe("short durable processing polls", () => {
+	it("keeps an unchanged stage alive from durable heartbeats while every status lookup misses", async () => {
+		withCurrent({ remoteJobId: "owning-replica" });
+		mocks.observe.mockResolvedValue({
+			status: "unavailable",
+			delivered: false,
+		});
+		for (let minute = 1; minute <= 10; minute++) {
+			vi.setSystemTime(new Date(now.getTime() + minute * 60_000));
+			withCurrent({ leaseExpiresAt: new Date(Date.now() + 5 * 60_000) });
+			expect(await pollDesktopRecordingAttempt(pollingInput())).toBe("waiting");
+		}
+		expect(mocks.observe).toHaveBeenLastCalledWith(
+			expect.objectContaining({ jobId: "owning-replica" }),
+		);
+		expect(mocks.retry).not.toHaveBeenCalled();
+		expect(mocks.heartbeat).not.toHaveBeenCalled();
+	});
+
+	it("does not renew an owned worker from a status probe", async () => {
+		mocks.observe.mockResolvedValue({
+			status: "active",
+			delivered: false,
+			workerProtocol: 1,
+		});
+		expect(await pollDesktopRecordingAttempt(pollingInput())).toBe("waiting");
+		expect(mocks.heartbeat).not.toHaveBeenCalled();
+		vi.setSystemTime(new Date(now.getTime() + 5 * 60_000));
+		expect(await pollDesktopRecordingAttempt(pollingInput())).toBe("retry");
+		expect(mocks.heartbeat).not.toHaveBeenCalled();
+	});
+
 	it.each(["processing-timeout", "worker-lease-expired"])(
 		"does not reuse a rich attempt's stale retry date after %s",
 		async (errorCode) => {
@@ -419,8 +468,262 @@ describe("short durable processing polls", () => {
 	});
 });
 
+describe("bounded source commitment steps", () => {
+	beforeEach(() => {
+		withCurrent({ source: null, state: "committing" });
+	});
+
+	function advanceCheckpoint(
+		_video: unknown,
+		checkpoint: DesktopRecordingSourceCheckpoint,
+	) {
+		return { checkpoint: { ...checkpoint, revision: checkpoint.revision + 1 } };
+	}
+
+	it.each(sourceCommitTimings)(
+		"replays the $name production timings without repeating or skipping a page",
+		async ({ pageDurationsMs, expectedBatchedSteps, terminalResult }) => {
+			const revisions: number[] = [];
+			mocks.commitSource.mockImplementation(async (_video, checkpoint) => {
+				const duration = pageDurationsMs[checkpoint.revision];
+				if (duration === undefined) throw new Error("Unexpected source page");
+				vi.setSystemTime(Date.now() + duration);
+				revisions.push(checkpoint.revision);
+				if (checkpoint.revision + 1 < pageDurationsMs.length)
+					return advanceCheckpoint(_video, checkpoint);
+				if (terminalResult === "source-blocked")
+					throw Object.assign(new Error("Manifest is incomplete"), {
+						code: "source-incomplete",
+					});
+				return { source };
+			});
+			let batches = 0;
+			let result: Awaited<ReturnType<typeof commitDesktopRecordingAttempt>>;
+			do {
+				if (++batches > pageDurationsMs.length)
+					throw new Error("Source preparation did not terminate");
+				result = await commitDesktopRecordingAttempt(fixture);
+			} while (result === "progress");
+			expect(result).toBe(terminalResult);
+			expect(batches).toBe(expectedBatchedSteps);
+			expect(revisions).toEqual(pageDurationsMs.map((_, index) => index));
+			expect(mocks.saveCheckpoint).toHaveBeenCalledTimes(
+				pageDurationsMs.length - 1,
+			);
+			expect(mocks.persist).toHaveBeenCalledTimes(
+				terminalResult === "ready" ? 1 : 0,
+			);
+		},
+	);
+
+	it("persists every page before advancing and commits only once after a lost step response", async () => {
+		const revisions: number[] = [];
+		mocks.commitSource.mockImplementation(async (_video, checkpoint) => {
+			expect(current?.output).toEqual(
+				checkpoint.revision === 0 ? null : checkpoint,
+			);
+			revisions.push(checkpoint.revision);
+			return checkpoint.revision === 4
+				? { source }
+				: advanceCheckpoint(_video, checkpoint);
+		});
+		expect(await commitDesktopRecordingAttempt(fixture)).toBe("ready");
+		expect(revisions).toEqual([0, 1, 2, 3, 4]);
+		expect(mocks.saveCheckpoint).toHaveBeenCalledTimes(4);
+		expect(await commitDesktopRecordingAttempt(fixture)).toBe("ready");
+		expect(mocks.commitSource).toHaveBeenCalledTimes(5);
+		expect(mocks.persist).toHaveBeenCalledOnce();
+		expect(mocks.fetch).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		[0, 32],
+		[-1, 32],
+		[1_000, 15],
+		[14_999, 2],
+		[15_000, 1],
+		[180_000, 1],
+	])("yields after bounded work with %i ms pages", async (duration, pages) => {
+		mocks.commitSource.mockImplementation(async (_video, checkpoint) => {
+			vi.setSystemTime(Date.now() + duration);
+			return advanceCheckpoint(_video, checkpoint);
+		});
+		expect(await commitDesktopRecordingAttempt(fixture)).toBe("progress");
+		expect(mocks.commitSource).toHaveBeenCalledTimes(pages);
+		expect(mocks.saveCheckpoint).toHaveBeenCalledTimes(pages);
+		expect(current?.output).toMatchObject({ revision: pages });
+		expect(mocks.persist).not.toHaveBeenCalled();
+	});
+
+	it("includes checkpoint persistence latency in the batch budget", async () => {
+		mocks.commitSource.mockImplementation(advanceCheckpoint);
+		mocks.saveCheckpoint.mockImplementation(async (_attempt, checkpoint) => {
+			withCurrent({ output: checkpoint });
+			vi.setSystemTime(Date.now() + 15_000);
+			return true;
+		});
+		expect(await commitDesktopRecordingAttempt(fixture)).toBe("progress");
+		expect(mocks.commitSource).toHaveBeenCalledOnce();
+		expect(current?.output).toMatchObject({ revision: 1 });
+	});
+
+	it("resumes from the last saved page when a later storage operation fails", async () => {
+		mocks.commitSource
+			.mockImplementationOnce(advanceCheckpoint)
+			.mockImplementationOnce(advanceCheckpoint)
+			.mockRejectedValueOnce(new Error("Storage unavailable"));
+		expect(await commitDesktopRecordingAttempt(fixture)).toBe("progress");
+		expect(current?.output).toMatchObject({ revision: 2 });
+		expect(mocks.blocked).not.toHaveBeenCalled();
+		expect(await commitDesktopRecordingAttempt(fixture)).toBe("ready");
+		expect(
+			mocks.commitSource.mock.calls.map((call) => call[1].revision),
+		).toEqual([0, 1, 2, 2]);
+		expect(mocks.persist).toHaveBeenCalledOnce();
+	});
+
+	it("preserves a fresh durable retry budget after each saved page", async () => {
+		const failedRevisions = new Set<number>();
+		mocks.commitSource.mockImplementation(async (_video, checkpoint) => {
+			if (
+				checkpoint.revision > 0 &&
+				!failedRevisions.has(checkpoint.revision)
+			) {
+				failedRevisions.add(checkpoint.revision);
+				throw new Error("Intermittent storage failure");
+			}
+			return checkpoint.revision === 5
+				? { source }
+				: advanceCheckpoint(_video, checkpoint);
+		});
+		for (let revision = 1; revision <= 5; revision++) {
+			expect(await commitDesktopRecordingAttempt(fixture)).toBe("progress");
+			expect(current?.output).toMatchObject({ revision });
+		}
+		expect(await commitDesktopRecordingAttempt(fixture)).toBe("ready");
+		expect(mocks.saveCheckpoint).toHaveBeenCalledTimes(5);
+		expect(mocks.retry).not.toHaveBeenCalled();
+	});
+
+	it("throws persistent failures when the new batch cannot make progress", async () => {
+		mocks.commitSource.mockImplementationOnce(advanceCheckpoint);
+		mocks.commitSource.mockRejectedValue(new Error("Storage unavailable"));
+		expect(await commitDesktopRecordingAttempt(fixture)).toBe("progress");
+		await expect(commitDesktopRecordingAttempt(fixture)).rejects.toThrow(
+			"Storage unavailable",
+		);
+		expect(current?.output).toMatchObject({ revision: 1 });
+		expect(mocks.commitSource).toHaveBeenCalledTimes(3);
+	});
+
+	it.each([false, true])(
+		"reconciles a failed checkpoint response with database commit=%s",
+		async (committed) => {
+			mocks.commitSource.mockImplementationOnce(advanceCheckpoint);
+			mocks.saveCheckpoint.mockImplementationOnce(
+				async (_attempt, checkpoint) => {
+					if (committed) withCurrent({ output: checkpoint });
+					throw new Error("Database response lost");
+				},
+			);
+			await expect(commitDesktopRecordingAttempt(fixture)).rejects.toThrow(
+				"Database response lost",
+			);
+			expect(mocks.commitSource).toHaveBeenCalledOnce();
+			expect(await commitDesktopRecordingAttempt(fixture)).toBe("ready");
+			expect(mocks.commitSource.mock.calls[1]?.[1]).toMatchObject({
+				revision: committed ? 1 : 0,
+			});
+		},
+	);
+
+	it("stops immediately when checkpoint persistence loses its ownership fence", async () => {
+		mocks.commitSource.mockImplementation(advanceCheckpoint);
+		mocks.saveCheckpoint.mockResolvedValueOnce(false);
+		expect(await commitDesktopRecordingAttempt(fixture)).toBe("superseded");
+		expect(mocks.commitSource).toHaveBeenCalledOnce();
+		expect(mocks.persist).not.toHaveBeenCalled();
+	});
+
+	it.each(["deleted", "replaced", "lease-expired"])(
+		"stops between pages when the job is %s",
+		async (change) => {
+			mocks.commitSource.mockImplementationOnce(advanceCheckpoint);
+			mocks.saveCheckpoint.mockImplementationOnce(
+				async (_attempt, checkpoint) => {
+					withCurrent({ output: checkpoint });
+					if (change === "deleted") current = null;
+					else if (change === "replaced")
+						withCurrent({ attemptId: "replacement" });
+					else mocks.checkpoint.mockResolvedValueOnce(null);
+					return true;
+				},
+			);
+			expect(await commitDesktopRecordingAttempt(fixture)).toBe("superseded");
+			expect(mocks.commitSource).toHaveBeenCalledOnce();
+			expect(mocks.persist).not.toHaveBeenCalled();
+		},
+	);
+
+	it("refreshes the video and late verification before the next page", async () => {
+		const verification: RecordingVerification = {
+			version: 1,
+			artifact: { kind: "segments", manifestSha256: source.manifestSha256 },
+			requiredAudio: true,
+		};
+		const updatedVideo = { id: "video", storageIntegrationId: "updated" };
+		mocks.commitSource.mockImplementationOnce(async (_video, checkpoint) => {
+			withCurrent({ verification });
+			mocks.databaseRows.mockResolvedValueOnce([updatedVideo]);
+			return advanceCheckpoint(_video, checkpoint);
+		});
+		expect(await commitDesktopRecordingAttempt(fixture)).toBe("ready");
+		expect(mocks.commitSource.mock.calls[0]?.[2]).toBeUndefined();
+		expect(mocks.commitSource.mock.calls[1]?.slice(0, 3)).toEqual([
+			updatedVideo,
+			expect.objectContaining({ revision: 1 }),
+			verification,
+		]);
+	});
+
+	it("keeps heartbeat ownership checks on later pages", async () => {
+		mocks.commitSource
+			.mockImplementationOnce(advanceCheckpoint)
+			.mockImplementationOnce(
+				async (_video, _checkpoint, _verification, pulse) => {
+					await pulse();
+					return { source };
+				},
+			);
+		mocks.heartbeat.mockResolvedValueOnce(false);
+		expect(await commitDesktopRecordingAttempt(fixture)).toBe("progress");
+		expect(current?.output).toMatchObject({ revision: 1 });
+		expect(mocks.persist).not.toHaveBeenCalled();
+		mocks.checkpoint.mockResolvedValueOnce(null);
+		expect(await commitDesktopRecordingAttempt(fixture)).toBe("superseded");
+		expect(mocks.commitSource).toHaveBeenCalledTimes(2);
+	});
+
+	it.each([
+		"source-incomplete",
+		"source-missing",
+		"source-changed",
+		"source-invalid",
+	])("preserves %s rejection after earlier pages were saved", async (code) => {
+		mocks.commitSource
+			.mockImplementationOnce(advanceCheckpoint)
+			.mockRejectedValueOnce(Object.assign(new Error(code), { code }));
+		expect(await commitDesktopRecordingAttempt(fixture)).toBe("source-blocked");
+		expect(mocks.blocked).toHaveBeenCalledWith(
+			expect.objectContaining({ errorCode: code }),
+		);
+		expect(mocks.persist).not.toHaveBeenCalled();
+		expect(mocks.fetch).not.toHaveBeenCalled();
+	});
+});
+
 describe("source commitment and media request compatibility", () => {
-	it("checkpoints each source batch in a separate durable step before processing", async () => {
+	it("checkpoints each source page before processing", async () => {
 		withCurrent({ source: null, state: "committing", leaseExpiresAt: null });
 		mocks.commitSource.mockImplementationOnce(async (_video, checkpoint) => ({
 			checkpoint: { ...checkpoint, revision: 1, phase: "copy" },
@@ -470,6 +773,71 @@ describe("source commitment and media request compatibility", () => {
 		expect(mocks.fetch).not.toHaveBeenCalled();
 	});
 
+	it("waits for capacity using the same attempt instead of exhausting processing retries", async () => {
+		withCurrent({ state: "retry", leaseExpiresAt: null, attemptCount: 4 });
+		for (let index = 0; index < 8; index++)
+			mocks.fetch.mockResolvedValueOnce(
+				Response.json(
+					{ code: "SERVER_BUSY" },
+					{ status: 503, headers: { "Retry-After": "60" } },
+				),
+			);
+		await expect(
+			finalizeDesktopRecordingWorkflow({
+				videoId,
+				userId,
+				generation: fixture.generation,
+			}),
+		).resolves.toMatchObject({ success: true });
+		expect(current?.attemptCount).toBe(5);
+		expect(mocks.fetch).toHaveBeenCalledTimes(9);
+		expect(mocks.waitCapacity).toHaveBeenCalledWith(
+			expect.objectContaining({ retryAfterMs: expect.any(Number) }),
+		);
+		expect(
+			mocks.sleep.mock.calls.filter(
+				([delay]) => typeof delay === "number" && delay >= 60_000,
+			),
+		).toHaveLength(8);
+		const attempts = mocks.reserveBudget.mock.calls.map(
+			([input]) => input.attemptId,
+		);
+		expect(new Set(attempts).size).toBe(1);
+		expect(mocks.retry).not.toHaveBeenCalled();
+		expect(mocks.blocked).not.toHaveBeenCalled();
+	});
+
+	it("respects a persisted capacity wait when a dispatch step is replayed", async () => {
+		withCurrent({
+			output: { kind: "desktop-recording-capacity-wait" },
+			nextRetryAt: new Date(Date.now() + 60_000),
+		});
+		await expect(startDesktopRecordingJob(fixture)).resolves.toMatchObject({
+			status: "capacity",
+		});
+		expect(mocks.fetch).not.toHaveBeenCalled();
+		expect(mocks.sourceUrls).not.toHaveBeenCalled();
+	});
+
+	it("does not treat an ambiguous dispatch failure as a capacity refusal", async () => {
+		mocks.fetch.mockResolvedValueOnce(
+			Response.json({ code: "UPSTREAM_FAILURE" }, { status: 503 }),
+		);
+		await expect(startDesktopRecordingJob(fixture)).resolves.toBeUndefined();
+		expect(mocks.heartbeat).not.toHaveBeenCalled();
+	});
+
+	it("blocks an exhausted transfer budget before dispatching media work", async () => {
+		const error = new MediaProcessingBudgetError("recording");
+		mocks.reserveBudget.mockRejectedValueOnce(error);
+		await expect(startDesktopRecordingJob(fixture)).rejects.toBe(error);
+		expect(mocks.blocked).toHaveBeenCalledWith(
+			expect.objectContaining({ errorCode: "processing-budget-exhausted" }),
+		);
+		expect(mocks.fetch).not.toHaveBeenCalled();
+		expect(mocks.put).not.toHaveBeenCalled();
+	});
+
 	it("preserves incomplete originals without calling the media server", async () => {
 		withCurrent({ source: null, state: "committing" });
 		mocks.commitSource.mockRejectedValue(
@@ -516,6 +884,13 @@ describe("source commitment and media request compatibility", () => {
 		});
 		mocks.sourceUrls.mockResolvedValue({
 			videoUrl: "https://source.test/recording.mp4",
+			sourceObjects: [
+				{
+					url: "https://source.test/recording.mp4",
+					size: 1000,
+					objectIdentity: '"snapshot"',
+				},
+			],
 			sourceObjectIdentity: '"snapshot"',
 			outputKey: "user/video/.recording/sources/generation/mp4/0.mp4",
 		});
@@ -553,6 +928,13 @@ describe("source commitment and media request compatibility", () => {
 		});
 		mocks.sourceUrls.mockResolvedValue({
 			videoUrl: "https://source.test/recording.mp4",
+			sourceObjects: [
+				{
+					url: "https://source.test/recording.mp4",
+					size: 1000,
+					objectIdentity: '"snapshot"',
+				},
+			],
 			sourceObjectIdentity: '"snapshot"',
 			outputKey: "user/video/.recording/sources/generation/mp4/0.mp4",
 		});
@@ -563,6 +945,90 @@ describe("source commitment and media request compatibility", () => {
 });
 
 describe("workflow retry lifetime", () => {
+	it("finishes normally when publication commits during a failing poll", async () => {
+		withCurrent({ state: "queued", leaseExpiresAt: null });
+		mocks.observe.mockImplementationOnce(async () => {
+			withCurrent({ state: "verified", leaseExpiresAt: null });
+			throw new Error("Response lost after publication");
+		});
+		expect(
+			await finalizeDesktopRecordingWorkflow({
+				videoId,
+				userId,
+				generation: fixture.generation,
+			}),
+		).toMatchObject({ success: true });
+		expect(mocks.retry).not.toHaveBeenCalled();
+		expect(mocks.claim).toHaveBeenCalledOnce();
+		expect(mocks.transcribe).toHaveBeenCalledOnce();
+	});
+
+	it("waits for an uncertain dispatch without reserving the unacknowledged worker", async () => {
+		mocks.fetch.mockResolvedValue(
+			Response.json({ jobId: "unclaimed-worker", recordingWorkerVersion: 1 }),
+		);
+		expect(await startDesktopRecordingJob(fixture)).toBeUndefined();
+		expect(mocks.attach).not.toHaveBeenCalled();
+		expect(mocks.retry).not.toHaveBeenCalled();
+		const input = { ...pollingInput(), jobId: undefined };
+		expect(await pollDesktopRecordingAttempt(input)).toBe("waiting");
+		expect(mocks.observe).not.toHaveBeenCalled();
+		withCurrent({ remoteJobId: "actual-owner" });
+		expect(await pollDesktopRecordingAttempt(input)).toBe("verified");
+		expect(mocks.observe).toHaveBeenCalledWith(
+			expect.objectContaining({ jobId: "actual-owner" }),
+		);
+		expect(mocks.fetch).toHaveBeenCalledOnce();
+	});
+
+	it("uses the durable winning replica instead of a dispatch response", async () => {
+		mocks.fetch.mockImplementation(async () => {
+			withCurrent({ remoteJobId: "winner" });
+			return Response.json({ jobId: "loser", recordingWorkerVersion: 1 });
+		});
+		expect(await startDesktopRecordingJob(fixture)).toBe("winner");
+		expect(mocks.attach).not.toHaveBeenCalled();
+	});
+
+	it("reconciles a committed ownership claim after the dispatch ACK is lost", async () => {
+		mocks.fetch.mockImplementation(async () => {
+			withCurrent({ remoteJobId: "winner" });
+			throw new Error("Response lost after acceptance");
+		});
+		expect(await startDesktopRecordingJob(fixture)).toBe("winner");
+		expect(await startDesktopRecordingJob(fixture)).toBe("winner");
+		expect(mocks.fetch).toHaveBeenCalledOnce();
+		expect(mocks.attach).not.toHaveBeenCalled();
+		expect(mocks.retry).not.toHaveBeenCalled();
+	});
+
+	it("waits for the existing lease to expire if dispatch was never accepted", async () => {
+		mocks.fetch.mockRejectedValue(new Error("offline"));
+		expect(await startDesktopRecordingJob(fixture)).toBeUndefined();
+		const input = { ...pollingInput(), jobId: undefined };
+		expect(await pollDesktopRecordingAttempt(input)).toBe("waiting");
+		expect(mocks.retry).not.toHaveBeenCalled();
+		vi.setSystemTime(new Date(now.getTime() + 5 * 60_000));
+		expect(await pollDesktopRecordingAttempt(input)).toBe("retry");
+		expect(current?.source).toEqual(source);
+		expect(mocks.fetch).toHaveBeenCalledOnce();
+	});
+
+	it("resumes the same live attempt after a polling exception", async () => {
+		withCurrent({ state: "queued", leaseExpiresAt: null });
+		mocks.observe.mockRejectedValueOnce(new Error("Transient polling failure"));
+		expect(
+			await finalizeDesktopRecordingWorkflow({
+				videoId,
+				userId,
+				generation: fixture.generation,
+			}),
+		).toEqual({ success: true, jobId: "remote-job" });
+		expect(mocks.claim).toHaveBeenCalledOnce();
+		expect(mocks.fetch).toHaveBeenCalledOnce();
+		expect(mocks.retry).not.toHaveBeenCalled();
+	});
+
 	it("waits for fresh backoff after a source commit failure with a rich stale attempt", async () => {
 		withCurrent({
 			state: "committing",

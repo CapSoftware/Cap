@@ -19,14 +19,21 @@ import {
 	findGoogleDriveFileByObjectKey,
 	GOOGLE_DRIVE_FOLDER_MIME_TYPE,
 	type GoogleDriveFile,
+	type GoogleDriveRecordingRead,
 	GoogleDriveRequestError,
 	type GoogleDriveTokenStore,
 	getGoogleDriveFileMetadata,
 	getGoogleDriveObjectResponse,
 	getGoogleDriveObjectText,
+	getGoogleDriveRecordingDownload,
+	getGoogleDriveRecordingResponse,
 	parseVideoIdFromObjectKey,
 	syncGoogleDriveVideoNames,
 } from "./GoogleDrive.ts";
+import {
+	getGoogleDriveRecordingIdentity,
+	type RecordingObjectHead,
+} from "./recording-object-identity.ts";
 import { resolveRecordingObjectKey } from "./recording-output.ts";
 import { createStorageObjectToken } from "./SignedObject.ts";
 import type { GoogleDriveIntegrationConfig } from "./StorageRepo.ts";
@@ -38,6 +45,13 @@ type UploadTargetInput = {
 	fields?: Record<string, string>;
 	method?: "post" | "put";
 	videoTitle?: string;
+};
+
+type StorageObjectHead = RecordingObjectHead & {
+	ContentLength?: number;
+	ContentType?: string;
+	Metadata?: Record<string, string | undefined>;
+	RecordingContentSHA256?: string;
 };
 
 type MultipartAccess = {
@@ -434,12 +448,14 @@ const makeS3Access = (s3: S3BucketAccess) => ({
 		),
 	headObject: (key: string) =>
 		mapStorageError(s3.headObject(key)).pipe(
-			Effect.map((result) => ({
-				ContentLength: result.ContentLength,
-				ContentType: result.ContentType,
-				Metadata: result.Metadata,
-				ETag: result.ETag,
-			})),
+			Effect.map(
+				(result): StorageObjectHead => ({
+					ContentLength: result.ContentLength,
+					ContentType: result.ContentType,
+					Metadata: result.Metadata,
+					ETag: result.ETag,
+				}),
+			),
 		),
 	putObject: (
 		key: string,
@@ -679,10 +695,7 @@ const makeGoogleDriveAccess = ({
 			);
 			const { fileSize } = yield* recordingCopyMetadata({
 				ContentLength: parseGoogleDriveContentLength(before) ?? undefined,
-				ETag:
-					before.id && before.version
-						? `"${before.id}:${before.version}"`
-						: undefined,
+				ETag: getGoogleDriveRecordingIdentity(before) ?? undefined,
 			});
 			yield* copyGoogleDriveFile({
 				repo,
@@ -712,15 +725,15 @@ const makeGoogleDriveAccess = ({
 			]);
 			yield* recordingCopyMetadata({
 				ContentLength: parseGoogleDriveContentLength(copied) ?? undefined,
-				ETag:
-					copied.id && copied.version
-						? `"${copied.id}:${copied.version}"`
-						: undefined,
+				ETag: getGoogleDriveRecordingIdentity(copied) ?? undefined,
 			});
 			if (
 				currentSource.providerObjectId !== before.id ||
 				after.id !== before.id ||
-				after.version !== before.version ||
+				getGoogleDriveRecordingIdentity(after) !==
+					getGoogleDriveRecordingIdentity(before) ||
+				copied.sha256Checksum?.toLowerCase() !==
+					before.sha256Checksum?.toLowerCase() ||
 				parseGoogleDriveContentLength(after) !== fileSize ||
 				parseGoogleDriveContentLength(copied) !== fileSize
 			) {
@@ -865,16 +878,25 @@ const makeGoogleDriveAccess = ({
 					withRecoveredDriveFile(key, object, (fileId) =>
 						getGoogleDriveFileMetadata(config, fileId, tokenStore),
 					).pipe(
-						Effect.map((metadata) => ({
-							ContentLength: metadata.size
-								? Number(metadata.size)
-								: (object.contentLength ?? undefined),
-							ContentType: metadata.mimeType ?? object.contentType ?? undefined,
-							Metadata: object.metadata ?? undefined,
-							ETag: metadata.version
-								? `"${metadata.id}:${metadata.version}"`
-								: undefined,
-						})),
+						Effect.map(
+							(metadata): StorageObjectHead => ({
+								ContentLength: metadata.size
+									? Number(metadata.size)
+									: (object.contentLength ?? undefined),
+								ContentType:
+									metadata.mimeType ?? object.contentType ?? undefined,
+								Metadata: object.metadata ?? undefined,
+								ETag: metadata.version
+									? `"${metadata.id}:${metadata.version}"`
+									: undefined,
+								RecordingContentETag: getGoogleDriveRecordingIdentity(metadata),
+								RecordingContentSHA256: getGoogleDriveRecordingIdentity(
+									metadata,
+								)
+									? metadata.sha256Checksum?.toLowerCase()
+									: undefined,
+							}),
+						),
 					),
 				),
 			),
@@ -1009,12 +1031,44 @@ const makeGoogleDriveAccess = ({
 				mapStorageError,
 				Effect.map((url) => toDriveUploadTarget(url, input.contentType)),
 			),
-		getObjectResponse: (key: string, range?: string | null) =>
+		getInternalDownload: (
+			key: string,
+			verification: { objectIdentity?: string; signal?: AbortSignal },
+		) =>
 			getObjectRecord(key).pipe(
 				Effect.flatMap((object) =>
-					withRecoveredDriveFile(key, object, (fileId) =>
-						getGoogleDriveObjectResponse(config, fileId, range, tokenStore),
+					getGoogleDriveRecordingDownload(
+						config,
+						object.providerObjectId,
+						verification,
+						tokenStore,
 					),
+				),
+			),
+		getObjectResponse: (
+			key: string,
+			range?: string | null,
+			verification?: GoogleDriveRecordingRead | { signal: AbortSignal },
+		) =>
+			getObjectRecord(key).pipe(
+				Effect.flatMap((object) =>
+					verification && "objectIdentity" in verification
+						? getGoogleDriveRecordingResponse(
+								config,
+								object.providerObjectId,
+								range,
+								verification,
+								tokenStore,
+							)
+						: withRecoveredDriveFile(key, object, (fileId) =>
+								getGoogleDriveObjectResponse(
+									config,
+									fileId,
+									range,
+									tokenStore,
+									verification?.signal,
+								),
+							),
 				),
 			),
 	};
@@ -1054,8 +1108,15 @@ function withPublishedRecordingOutput<
 	};
 	if (access.provider === "googleDrive") {
 		return Object.assign({}, access, shared, {
-			getObjectResponse: (key: string, range?: string | null) =>
-				access.getObjectResponse(resolve(key), range),
+			getInternalDownload: (
+				key: string,
+				verification: { objectIdentity?: string; signal?: AbortSignal },
+			) => access.getInternalDownload(resolve(key), verification),
+			getObjectResponse: (
+				key: string,
+				range?: string | null,
+				verification?: GoogleDriveRecordingRead,
+			) => access.getObjectResponse(resolve(key), range, verification),
 		});
 	}
 	return Object.assign({}, access, shared);

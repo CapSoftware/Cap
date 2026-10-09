@@ -35,6 +35,24 @@ static SVG_CURSOR_RASTERIZED_HEIGHT: u32 = 200;
 
 const CIRCLE_CURSOR_SIZE: u32 = 256;
 
+fn cursor_asset_shape(
+    recorded: Option<cap_cursor_info::CursorShape>,
+    use_svg: bool,
+    cursor_type: &CursorType,
+) -> Option<cap_cursor_info::CursorShape> {
+    let shape = recorded?;
+    match cursor_type.family() {
+        Some(family) => Some(shape.in_family(family)),
+        None if use_svg => Some(shape),
+        None => None,
+    }
+}
+
+fn recorded_image_shape(image: &image::RgbaImage) -> Option<cap_cursor_info::CursorShape> {
+    cap_cursor_info::CursorShapeMacOS::from_rgba(image.width(), image.height(), image.as_raw())
+        .map(Into::into)
+}
+
 pub struct CursorLayer {
     statics: Statics,
     bind_group: Option<BindGroup>,
@@ -276,36 +294,31 @@ impl CursorLayer {
     ) -> Option<CursorTexture> {
         let mut loaded_cursor = None;
 
-        let recorded_shape = match &constants.recording_meta.inner {
-            RecordingMetaInner::Studio(studio) => match studio.as_ref() {
-                StudioRecordingMeta::MultipleSegments {
-                    inner:
-                        MultipleSegments {
-                            cursors: Cursors::Correct(cursors),
-                            ..
-                        },
-                } => cursors.get(cursor_id).and_then(|v| v.shape),
+        let recorded_shape = if let Some(assets) = &constants.frozen_recorded_cursors {
+            match assets.metadata(cursor_id) {
+                Ok(metadata) => metadata.shape,
+                Err(error) => {
+                    error!("{error}");
+                    return None;
+                }
+            }
+        } else {
+            match &constants.recording_meta.inner {
+                RecordingMetaInner::Studio(studio) => match studio.as_ref() {
+                    StudioRecordingMeta::MultipleSegments {
+                        inner:
+                            MultipleSegments {
+                                cursors: Cursors::Correct(cursors),
+                                ..
+                            },
+                    } => cursors.get(cursor_id).and_then(|v| v.shape),
+                    _ => None,
+                },
                 _ => None,
-            },
-            _ => None,
+            }
         };
 
-        // An explicit family cross-maps the recorded shape into it (and
-        // stands in with its arrow for recordings that carry no shape info at
-        // all, e.g. Linux PNG-only captures), so SVG assets are the only
-        // possible source and `use_svg` no longer applies.
-        let (cursor_shape, use_svg) = match cursor_type.family() {
-            Some(family) => (
-                Some(
-                    recorded_shape.map_or_else(|| family.arrow(), |shape| shape.in_family(family)),
-                ),
-                true,
-            ),
-            None => (recorded_shape, use_svg),
-        };
-
-        if let Some(cursor_shape) = cursor_shape
-            && use_svg
+        if let Some(cursor_shape) = cursor_asset_shape(recorded_shape, use_svg, cursor_type)
             && let Some(info) = cursor_shape.resolve()
         {
             loaded_cursor = CursorTexture::prepare_svg(constants, info.raw, info.hotspot.into())
@@ -313,18 +326,56 @@ impl CursorLayer {
                 .ok();
         }
 
-        if let StudioRecordingMeta::MultipleSegments { inner, .. } = &constants.meta
-            && loaded_cursor.is_none()
-            && let Some(c) = inner.get_cursor_image(&constants.recording_meta, cursor_id)
-            && let Ok(img) = image::open(&c.path)
-                .map_err(|err| error!("Failed to load cursor image from {:?}: {err}", c.path))
-        {
-            loaded_cursor = Some(CursorTexture::prepare(
-                constants,
-                &img.to_rgba8(),
-                img.dimensions(),
-                c.hotspot,
-            ));
+        if loaded_cursor.is_none() {
+            let cursor = crate::recorded_cursor_assets::select_recorded_cursor_image(
+                constants.frozen_recorded_cursors.as_ref(),
+                cursor_id,
+                || {
+                    let StudioRecordingMeta::MultipleSegments { inner, .. } = &constants.meta
+                    else {
+                        return None;
+                    };
+                    let cursor = inner.get_cursor_image(&constants.recording_meta, cursor_id)?;
+                    let image = image::open(&cursor.path)
+                        .map_err(|err| {
+                            error!("Failed to load cursor image from {:?}: {err}", cursor.path)
+                        })
+                        .ok()?;
+                    Some(crate::recorded_cursor_assets::DecodedRecordedCursor {
+                        image,
+                        hotspot: cursor.hotspot,
+                    })
+                },
+            );
+            match cursor {
+                Ok(Some(cursor)) => {
+                    let rgba = cursor.image.to_rgba8();
+                    if recorded_shape.is_none()
+                        && let Some(shape) =
+                            cursor_asset_shape(recorded_image_shape(&rgba), use_svg, cursor_type)
+                        && let Some(info) = shape.resolve()
+                    {
+                        loaded_cursor =
+                            CursorTexture::prepare_svg(constants, info.raw, info.hotspot.into())
+                                .map_err(|err| {
+                                    error!(
+                                        "Error loading recovered SVG cursor {cursor_id:?}: {err}"
+                                    )
+                                })
+                                .ok();
+                    }
+                    if loaded_cursor.is_none() {
+                        loaded_cursor = Some(CursorTexture::prepare(
+                            constants,
+                            &rgba,
+                            cursor.image.dimensions(),
+                            cursor.hotspot,
+                        ));
+                    }
+                }
+                Err(error) => error!("{error}"),
+                Ok(None) => {}
+            }
         }
 
         loaded_cursor
@@ -336,6 +387,18 @@ impl CursorLayer {
         use_svg: bool,
         cursor_type: &CursorType,
     ) {
+        if let Some(assets) = &constants.frozen_recorded_cursors {
+            for cursor_id in assets.ids() {
+                if !self.cursors.contains_key(cursor_id)
+                    && let Some(texture) =
+                        Self::load_cursor_texture(constants, cursor_id, use_svg, cursor_type)
+                {
+                    self.cursors.insert(cursor_id.clone(), texture);
+                }
+            }
+            return;
+        }
+
         let StudioRecordingMeta::MultipleSegments { inner, .. } = &constants.meta else {
             return;
         };
@@ -381,7 +444,8 @@ impl CursorLayer {
         uniforms: &ProjectUniforms,
         constants: &RenderVideoConstants,
     ) {
-        if uniforms.project.cursor.hide {
+        let clip_visibility = uniforms.cursor_clip_visibility.clamp(0.0, 1.0);
+        if uniforms.project.cursor.hide || clip_visibility <= f32::EPSILON {
             self.bind_group = None;
             return;
         }
@@ -452,6 +516,7 @@ impl CursorLayer {
                 cursor_opacity = 0.0;
             }
         }
+        cursor_opacity *= clip_visibility;
 
         let cursor_type = uniforms.project.cursor.cursor_type().clone();
 
@@ -1050,6 +1115,100 @@ mod tests {
                 .map(|(time, x, y)| move_event(*time, *x, *y))
                 .collect(),
             clicks: vec![],
+        }
+    }
+
+    #[test]
+    fn appearance_selection_preserves_unknown_recorded_shapes() {
+        for cursor_type in [
+            CursorType::Auto,
+            CursorType::Pointer,
+            CursorType::MacOS,
+            CursorType::MacOSTahoe,
+            CursorType::Windows,
+        ] {
+            for use_svg in [false, true] {
+                assert_eq!(cursor_asset_shape(None, use_svg, &cursor_type), None);
+            }
+        }
+    }
+
+    #[test]
+    fn appearance_selection_keeps_pointer_and_text_transitions() {
+        use cap_cursor_info::{CursorShape, CursorShapeMacOS, CursorShapeWindows};
+        for (recorded, macos, windows) in [
+            (
+                CursorShapeMacOS::TahoeArrow,
+                CursorShapeMacOS::Arrow,
+                CursorShapeWindows::Arrow,
+            ),
+            (
+                CursorShapeMacOS::TahoePointingHand,
+                CursorShapeMacOS::PointingHand,
+                CursorShapeWindows::Hand,
+            ),
+            (
+                CursorShapeMacOS::TahoeIBeam,
+                CursorShapeMacOS::IBeam,
+                CursorShapeWindows::IBeam,
+            ),
+        ] {
+            let shape = CursorShape::MacOS(recorded);
+            assert_eq!(
+                cursor_asset_shape(Some(shape), true, &CursorType::Auto),
+                Some(shape)
+            );
+            assert_eq!(
+                cursor_asset_shape(Some(shape), false, &CursorType::Auto),
+                None
+            );
+            assert_eq!(
+                cursor_asset_shape(Some(shape), false, &CursorType::MacOS),
+                Some(CursorShape::MacOS(macos))
+            );
+            assert_eq!(
+                cursor_asset_shape(Some(shape), false, &CursorType::Windows),
+                Some(CursorShape::Windows(windows))
+            );
+        }
+    }
+
+    #[test]
+    fn unclassified_recorded_hands_recover_scalable_assets() {
+        use cap_cursor_info::{CursorShape, CursorShapeMacOS};
+        let fixtures: &[(&[u8], CursorShapeMacOS)] = &[
+            (
+                include_bytes!("../../../cursor-info/assets/mac/recorded/pointing-hand.png"),
+                CursorShapeMacOS::TahoePointingHand,
+            ),
+            (
+                include_bytes!("../../../cursor-info/assets/mac/recorded/open-hand.png"),
+                CursorShapeMacOS::TahoeOpenHand,
+            ),
+            (
+                include_bytes!("../../../cursor-info/assets/mac/recorded/closed-hand.png"),
+                CursorShapeMacOS::TahoeClosedHand,
+            ),
+        ];
+        for (bytes, expected) in fixtures {
+            let mut image = image::load_from_memory(bytes).unwrap().to_rgba8();
+            let shape = recorded_image_shape(&image);
+            assert_eq!(shape, Some(CursorShape::MacOS(*expected)));
+            for cursor_type in [
+                CursorType::Auto,
+                CursorType::MacOS,
+                CursorType::MacOSTahoe,
+                CursorType::Windows,
+            ] {
+                let selected = cursor_asset_shape(shape, true, &cursor_type).unwrap();
+                let svg = selected.resolve().unwrap();
+                let raster = rasterize_svg_cursor(svg.raw).unwrap();
+                assert_eq!(raster.dimensions.1, SVG_CURSOR_RASTERIZED_HEIGHT);
+                assert!(raster.rgba.chunks_exact(4).any(|pixel| pixel[3] > 200));
+            }
+            assert_eq!(cursor_asset_shape(shape, false, &CursorType::Auto), None);
+            image.get_pixel_mut(0, 0).0 = [255; 4];
+            assert_eq!(recorded_image_shape(&image), None);
         }
     }
 

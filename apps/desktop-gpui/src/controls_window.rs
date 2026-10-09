@@ -27,6 +27,8 @@ pub struct ControlsWindow {
     session: Entity<RecordingSession>,
     theme: Theme,
     has_microphone: bool,
+    #[cfg(target_os = "linux")]
+    confirmation_pending: bool,
     /// Repaints the timer. An inactive window is repainted lazily by the
     /// platform, so the tick both notifies and asks for a frame explicitly.
     _tick: gpui::Task<()>,
@@ -36,6 +38,15 @@ pub struct ControlsWindow {
 enum DestructiveAction {
     Restart,
     Delete,
+}
+
+#[cfg(target_os = "linux")]
+fn controls_owner_is_current(owner: gpui::WindowId, window: &Window, cx: &gpui::App) -> bool {
+    window.window_handle().window_id() == owner
+        && cx
+            .try_global::<crate::app_windows::AppWindows>()
+            .and_then(|windows| windows.controls)
+            .is_some_and(|controls| controls.window_id() == owner)
 }
 
 impl ControlsWindow {
@@ -73,6 +84,8 @@ impl ControlsWindow {
             session,
             theme,
             has_microphone,
+            #[cfg(target_os = "linux")]
+            confirmation_pending: false,
             _tick: tick,
         }
     }
@@ -92,7 +105,9 @@ impl ControlsWindow {
         let theme = self.theme;
         div()
             .id(id)
-            .size(px(32.))
+            .w(px(28.))
+            .h(px(32.))
+            .flex_shrink_0()
             .flex()
             .items_center()
             .justify_center()
@@ -115,8 +130,7 @@ impl ControlsWindow {
         let stopping = session.phase == Phase::Stopping;
         let countdown = session.countdown_remaining();
         let can_stop = (!starting && !stopping) || countdown.is_some();
-        let error = session.error.clone();
-        let label: SharedString = if let Some(countdown) = countdown {
+        let label: SharedString = if let Some(countdown) = countdown.filter(|value| *value > 0) {
             countdown.to_string().into()
         } else if starting {
             "Starting".into()
@@ -129,23 +143,25 @@ impl ControlsWindow {
                 "Pausing…"
             }
             .into()
-        } else if error.is_some() {
-            "Error".into()
         } else if session.is_paused() {
             "Paused".into()
+        } else if session.error.is_some() {
+            "Error".into()
         } else {
             Self::format_elapsed(session.elapsed()).into()
         };
 
         div()
             .id("stop")
+            .min_w_0()
+            .flex_1()
             .flex()
             .flex_row()
             .items_center()
             .gap(px(4.))
             .rounded(px(8.))
             .py(px(4.))
-            .px(px(8.))
+            .px(px(6.))
             .text_color(theme.red_300)
             .when(can_stop, |this| {
                 this.hover(|style| style.bg(Theme::with_alpha(theme.red_300, 0.08)))
@@ -155,17 +171,17 @@ impl ControlsWindow {
                     }))
             })
             .when(!can_stop, |this| this.opacity(0.6))
-            .when_some(error, |this, error| {
-                this.tooltip(move |_, cx| ui::Tooltip::new(&theme, error.clone()).view(cx))
-            })
             .child(
                 svg()
                     .path("icons/stop-circle.svg")
-                    .size(px(16.))
+                    .size(px(20.))
+                    .flex_shrink_0()
                     .text_color(theme.red_300),
             )
             .child(
                 div()
+                    .min_w_0()
+                    .truncate()
                     .text_size(px(14.))
                     .font_weight(gpui::FontWeight::MEDIUM)
                     .child(label),
@@ -202,7 +218,9 @@ impl ControlsWindow {
 
         div()
             .id("microphone")
-            .size(px(32.))
+            .w(px(28.))
+            .h(px(32.))
+            .flex_shrink_0()
             .relative()
             .flex()
             .items_center()
@@ -260,6 +278,47 @@ impl ControlsWindow {
             ),
         };
 
+        #[cfg(target_os = "linux")]
+        {
+            let owner = window.window_handle().window_id();
+            if self.confirmation_pending
+                || window.has_active_prompt()
+                || !controls_owner_is_current(owner, window, cx)
+            {
+                return;
+            }
+            let session_id = self.session.entity_id();
+            let Some(ticket) = self.session.read(cx).confirmation_ticket() else {
+                return;
+            };
+            self.confirmation_pending = true;
+            let response =
+                crate::editor_modal::confirm_action(title, message, accept, "Cancel", window, cx);
+            cx.spawn_in(window, async move |this, cx| {
+                let confirmed = response.await;
+                let _ = this.update_in(cx, |this, window, cx| {
+                    this.confirmation_pending = false;
+                    if !confirmed
+                        || !controls_owner_is_current(owner, window, cx)
+                        || this.session.entity_id() != session_id
+                    {
+                        return;
+                    }
+                    this.session.update(cx, |session, cx| {
+                        if !session.confirmation_is_current(&ticket) {
+                            return;
+                        }
+                        match action {
+                            DestructiveAction::Restart => session.restart(cx),
+                            DestructiveAction::Delete => session.delete(cx),
+                        }
+                    });
+                });
+            })
+            .detach();
+        }
+
+        #[cfg(not(target_os = "linux"))]
         cx.spawn_in(window, async move |this, cx| {
             if !crate::platform::confirm_dialog(title, message, accept, "Cancel", true) {
                 return;
@@ -298,6 +357,7 @@ impl ControlsWindow {
 
         div()
             .h(px(40.))
+            .flex_shrink_0()
             .w_full()
             .flex()
             .flex_row()
@@ -319,9 +379,11 @@ impl ControlsWindow {
                 div()
                     .flex()
                     .flex_1()
+                    .min_w_0()
                     .flex_row()
                     .items_center()
                     .justify_between()
+                    .gap(px(4.))
                     .p(px(4.))
                     .child(self.render_stop(cx))
                     .child(
@@ -329,7 +391,8 @@ impl ControlsWindow {
                             .flex()
                             .flex_row()
                             .items_center()
-                            .gap(px(4.))
+                            .gap(px(2.))
+                            .flex_shrink_0()
                             .child(self.render_microphone(cx))
                             .child(
                                 self.action_button(
@@ -386,6 +449,8 @@ impl ControlsWindow {
             .child(
                 div()
                     .id("drag")
+                    .w(px(24.))
+                    .flex_shrink_0()
                     .cursor_move()
                     .flex()
                     .items_center()
@@ -411,29 +476,67 @@ impl ControlsWindow {
 impl Render for ControlsWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.theme.refresh(window, cx, false);
+        let session = self.session.read(cx);
+        let issue = session.error.clone().or_else(|| {
+            session
+                .storage_warning
+                .then(|| "Low storage. Cap will stop soon to save your recording.".to_owned())
+        });
 
         div()
             .size_full()
             .flex()
             .flex_col()
             .justify_end()
-            .px(px(12.))
-            .pb(px(12.))
+            .p(px(12.))
             .font_family("Geist")
             // `body { font-weight: 500 }` (`ui-solid/src/main.css:189-192`).
             .font_weight(FontWeight::MEDIUM)
-            .when(self.session.read(cx).storage_warning, |this| {
+            .when_some(issue, |this, issue| {
                 this.child(
                     div()
+                        .min_h_0()
+                        .w_full()
+                        .flex()
+                        .items_start()
+                        .gap(px(8.))
                         .mb(px(8.))
-                        .rounded(px(8.))
-                        .bg(self.theme.red_2)
+                        .rounded(px(12.))
+                        .border_1()
+                        .border_color(Theme::with_alpha(self.theme.red_9, 0.4))
+                        .bg(self.theme.gray_1)
                         .p(px(8.))
-                        .text_size(px(11.))
+                        .text_size(px(12.))
                         .text_color(self.theme.red_11)
-                        .child("Low storage. Cap will stop soon to save your recording."),
+                        .child(
+                            svg()
+                                .path("icons/triangle-alert.svg")
+                                .size(px(20.))
+                                .flex_shrink_0()
+                                .text_color(self.theme.red_9),
+                        )
+                        .child(recording_issue_text(issue)),
                 )
             })
             .child(self.render_bar(cx))
     }
+}
+
+fn recording_issue_text(error: String) -> impl IntoElement + Styled {
+    div()
+        .id("recording-issue-text")
+        .min_w_0()
+        .min_h_0()
+        .flex_1()
+        .max_h(px(56.))
+        .overflow_x_scroll()
+        .overflow_y_scroll()
+        .child(if error.contains("Insufficient disk space")
+            && error.contains("Your recording is still paused")
+        {
+            "Not enough disk space to resume. Free up space and try again, or press Stop to save."
+                .to_owned()
+        } else {
+            error
+        })
 }

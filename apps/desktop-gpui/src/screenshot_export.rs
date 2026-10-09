@@ -131,6 +131,16 @@ pub fn export_bounds(scaled: &[Annotation], canvas: (u32, u32)) -> ExportBounds 
 pub fn composite(raw: &RawFrame, config: &ProjectConfiguration) -> Composited {
     let width = raw.width.max(1);
     let height = raw.height.max(1);
+    if config.annotations.is_empty()
+        && raw.rgba.len() == width as usize * height as usize * 4
+        && is_opaque(&raw.rgba)
+    {
+        return Composited {
+            rgba: raw.rgba.clone(),
+            width,
+            height,
+        };
+    }
     let scale_x = f64::from(width) / f64::from(raw.base_width.max(1));
     let scale_y = f64::from(height) / f64::from(raw.base_height.max(1));
     let scaled = scale_annotations(&config.annotations, scale_x, scale_y);
@@ -201,16 +211,30 @@ pub fn needs_transparency(out: &Composited, config: &ProjectConfiguration) -> bo
         .any(|&alpha| alpha != 255)
 }
 
+fn is_opaque(rgba: &[u8]) -> bool {
+    const ALPHA_MASK: u128 = 0xff000000ff000000ff000000ff000000;
+    let mut blocks = rgba.chunks_exact(16);
+    blocks
+        .by_ref()
+        .all(|block| u128::from_le_bytes(block.try_into().unwrap()) & ALPHA_MASK == ALPHA_MASK)
+        && blocks
+            .remainder()
+            .iter()
+            .skip(3)
+            .step_by(4)
+            .all(|&alpha| alpha == 255)
+}
+
 /// `withWhiteBackground` (`useScreenshotExport.ts:18-28`).
 pub fn flatten_onto_white(out: &Composited) -> Composited {
-    let mut rgba = vec![255u8; out.rgba.len()];
-    blit_over_offset(
-        &mut rgba,
-        (out.width, out.height),
-        &out.rgba,
-        (out.width, out.height),
-        (0, 0),
-    );
+    let mut rgba = out.rgba.clone();
+    for pixel in rgba.chunks_exact_mut(4) {
+        let alpha = u32::from(pixel[3]);
+        for channel in &mut pixel[..3] {
+            *channel = ((u32::from(*channel) * alpha + 255 * (255 - alpha) + 127) / 255) as u8;
+        }
+        pixel[3] = 255;
+    }
     Composited {
         rgba,
         width: out.width,
@@ -293,7 +317,7 @@ pub fn encode_for_share(
 /// Copy: always PNG, composited over white when transparency is not needed
 /// (`:183-198` -- `withWhiteBackground` only on the clipboard path).
 pub fn encode_for_copy(out: &Composited, config: &ProjectConfiguration) -> Result<Vec<u8>, String> {
-    if needs_transparency(out, config) {
+    if has_no_visible_background(&config.background.source) || is_opaque(&out.rgba) {
         encode_png(out)
     } else {
         encode_png(&flatten_onto_white(out))
@@ -967,6 +991,186 @@ mod tests {
         assert_eq!(pixel[3], 255);
         assert_eq!(pixel[0], 255);
         assert!(pixel[1] >= 127 && pixel[1] <= 128, "{pixel:?}");
+    }
+
+    fn reference_flatten(out: &Composited) -> Composited {
+        let mut rgba = vec![255; out.rgba.len()];
+        blit_over_offset(
+            &mut rgba,
+            (out.width, out.height),
+            &out.rgba,
+            (out.width, out.height),
+            (0, 0),
+        );
+        Composited {
+            rgba,
+            width: out.width,
+            height: out.height,
+        }
+    }
+
+    fn reference_unannotated_composite(
+        raw: &RawFrame,
+        config: &ProjectConfiguration,
+    ) -> Composited {
+        let width = raw.width.max(1);
+        let height = raw.height.max(1);
+        let mut canvas = raw.rgba.clone();
+        draw_annotations_onto(&mut canvas, width, height, &[]);
+        let mut rgba = vec![0; width as usize * height as usize * 4];
+        if !has_no_visible_background(&config.background.source) {
+            rgba.fill(255);
+        }
+        blit_over_offset(&mut rgba, (width, height), &canvas, (width, height), (0, 0));
+        Composited {
+            rgba,
+            width,
+            height,
+        }
+    }
+
+    #[test]
+    fn white_flatten_matches_source_over_for_every_channel_and_alpha() {
+        let rgba = (0..=255u8)
+            .flat_map(|alpha| {
+                (0..=255u8).flat_map(move |channel| {
+                    [channel, 255 - channel, channel.wrapping_mul(17), alpha]
+                })
+            })
+            .collect();
+        let out = Composited {
+            rgba,
+            width: 256,
+            height: 256,
+        };
+        assert_eq!(flatten_onto_white(&out).rgba, reference_flatten(&out).rgba);
+    }
+
+    #[test]
+    fn opacity_check_matches_individual_alpha_bytes_at_block_boundaries() {
+        for length in 0..130 {
+            let opaque = vec![255; length];
+            assert!(is_opaque(&opaque));
+            for changed_byte in 0..length {
+                let mut rgba = opaque.clone();
+                rgba[changed_byte] = 127;
+                assert_eq!(
+                    is_opaque(&rgba),
+                    rgba.iter().skip(3).step_by(4).all(|&alpha| alpha == 255),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unannotated_composite_and_copy_preserve_all_alpha_values() {
+        for opaque in [false, true] {
+            let raw = RawFrame {
+                rgba: (0..=255u8)
+                    .flat_map(|value| {
+                        [
+                            value,
+                            255 - value,
+                            value.wrapping_mul(17),
+                            if opaque { 255 } else { value },
+                        ]
+                    })
+                    .collect(),
+                width: 16,
+                height: 16,
+                base_width: 16,
+                base_height: 16,
+            };
+            for invisible in [false, true] {
+                let mut config = ProjectConfiguration::default();
+                if invisible {
+                    invisible_background(&mut config);
+                }
+                let out = composite(&raw, &config);
+                let reference = reference_unannotated_composite(&raw, &config);
+                assert_eq!(out.rgba, reference.rgba);
+                let expected = if needs_transparency(&reference, &config) {
+                    reference
+                } else {
+                    reference_flatten(&reference)
+                };
+                let png = encode_for_copy(&out, &config).unwrap();
+                let decoded = image::load_from_memory(&png).unwrap().to_rgba8();
+                assert_eq!(decoded.dimensions(), (16, 16));
+                assert_eq!(decoded.as_raw(), &expected.rgba);
+            }
+        }
+    }
+
+    #[test]
+    fn unannotated_composite_preserves_extra_pixel_handling() {
+        let raw = RawFrame {
+            rgba: vec![10, 20, 30, 255, 40, 50, 60, 255],
+            width: 1,
+            height: 1,
+            base_width: 1,
+            base_height: 1,
+        };
+        let config = ProjectConfiguration::default();
+        assert_eq!(
+            composite(&raw, &config).rgba,
+            reference_unannotated_composite(&raw, &config).rgba,
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn benchmark_screenshot_copy_preparation() {
+        use std::{hint::black_box, time::Instant};
+        for (width, height) in [(1920, 1080), (3840, 2160)] {
+            for opaque in [false, true] {
+                let raw = RawFrame {
+                    rgba: (0..width * height)
+                        .flat_map(|i| {
+                            [
+                                (i % 251) as u8,
+                                ((i / width) % 253) as u8,
+                                (i % 247) as u8,
+                                if opaque { 255 } else { (i % 256) as u8 },
+                            ]
+                        })
+                        .collect(),
+                    width,
+                    height,
+                    base_width: width,
+                    base_height: height,
+                };
+                let config = ProjectConfiguration::default();
+                let mut before = Vec::new();
+                let mut after = Vec::new();
+                for iteration in 0..8 {
+                    let start = Instant::now();
+                    let reference = reference_unannotated_composite(black_box(&raw), &config);
+                    let reference = reference_flatten(&reference);
+                    let baseline_ms = start.elapsed().as_secs_f64() * 1000.0;
+                    let start = Instant::now();
+                    let result = composite(black_box(&raw), &config);
+                    let result = if is_opaque(&result.rgba) {
+                        result
+                    } else {
+                        flatten_onto_white(&result)
+                    };
+                    let candidate_ms = start.elapsed().as_secs_f64() * 1000.0;
+                    assert_eq!(result.rgba, reference.rgba);
+                    black_box(result);
+                    if iteration > 0 {
+                        before.push(baseline_ms);
+                        after.push(candidate_ms);
+                    }
+                }
+                before.sort_by(f64::total_cmp);
+                after.sort_by(f64::total_cmp);
+                println!(
+                    "{}",
+                    serde_json::json!({"width":width,"height":height,"opaque":opaque,"baseline_ms":before[3],"candidate_ms":after[3],"pixels_equal":true,"scope":"CPU composite and clipboard flatten; excludes GPU, PNG and native pasteboard"})
+                );
+            }
+        }
     }
 
     /// `withWhiteBackground` leaves an opaque canvas untouched.

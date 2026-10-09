@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { videos } from "@cap/database/schema";
 import { Storage } from "@cap/web-backend/src/Storage/index";
+import { getRecordingObjectIdentity } from "@cap/web-backend/src/Storage/recording-object-identity";
 import { getPublishedRecordingOutputKey } from "@cap/web-backend/src/Storage/recording-output";
 import { Video } from "@cap/web-domain";
 import { Effect, Option, Runtime } from "effect";
@@ -211,6 +212,7 @@ const sourcePlanSchema = z.object({
 	videoCount: z.number().int().nonnegative(),
 	audioCount: z.number().int().nonnegative(),
 	objectCount: z.number().int().positive().max(SOURCE_COMMIT_MAX_OBJECTS),
+	sourcePreparation: z.boolean().optional(),
 	mp4: z
 		.object({
 			originalKey: z.string(),
@@ -541,6 +543,20 @@ async function createSourcePlan(
 			videoCount,
 			audioCount,
 			objectCount: videoCount + audioCount,
+			sourcePreparation: await context
+				.run(
+					context.bucket
+						.getObject(preparationMarkerKey(context.video))
+						.pipe(Effect.timeout("2 seconds")),
+				)
+				.then(
+					(marker) =>
+						Option.isSome(marker) &&
+						z
+							.object({ version: z.literal(1) })
+							.safeParse(JSON.parse(marker.value)).success,
+				)
+				.catch(() => false),
 		};
 	} else {
 		const video = context.video;
@@ -615,9 +631,17 @@ async function captureOriginal(
 	const head = await context.run(
 		context.bucket.headObject(original.originalKey),
 	);
+	const expectedIdentity =
+		original.track === "mp4" && verification?.artifact.kind === "mp4"
+			? verification.artifact.objectIdentity
+			: undefined;
+	const identity = getRecordingObjectIdentity(head, expectedIdentity);
+	if (!identity && "RecordingContentETag" in head) {
+		throw new Error("Recording content identity is unavailable");
+	}
 	if (
-		!head.ETag ||
-		!recordingObjectIdentitySchema.safeParse(head.ETag).success ||
+		!identity ||
+		!recordingObjectIdentitySchema.safeParse(identity).success ||
 		!head.ContentLength ||
 		!Number.isSafeInteger(head.ContentLength) ||
 		head.ContentLength < 0
@@ -631,14 +655,14 @@ async function captureOriginal(
 		original.track === "mp4" &&
 		verification?.artifact.kind === "mp4" &&
 		(verification.artifact.fileSize !== head.ContentLength ||
-			verification.artifact.objectIdentity !== head.ETag)
+			verification.artifact.objectIdentity !== identity)
 	) {
 		throw new DesktopRecordingSourceError(
 			"source-changed",
 			"Uploaded recording does not match its original object identity",
 		);
 	}
-	return { ...original, originalIdentity: head.ETag, size: head.ContentLength };
+	return { ...original, originalIdentity: identity, size: head.ContentLength };
 }
 
 function copyMetadata(original: OriginalObject) {
@@ -653,14 +677,19 @@ async function checkOriginal(context: SourceContext, original: OriginalObject) {
 	const head = await context.run(
 		context.bucket.headObject(original.originalKey),
 	);
+	const identity = getRecordingObjectIdentity(head, original.originalIdentity);
+	if (!identity && "RecordingContentETag" in head) {
+		throw new Error("Recording content identity is unavailable");
+	}
 	if (
-		head.ETag !== original.originalIdentity ||
+		identity !== original.originalIdentity ||
 		head.ContentLength !== original.size
 	)
 		throw new DesktopRecordingSourceError(
 			"source-changed",
 			"Recording source changed while its durable snapshot was being saved",
 		);
+	return head;
 }
 
 async function checkCopy(
@@ -669,16 +698,41 @@ async function checkCopy(
 	key: string,
 	expectedIdentity?: string,
 ): Promise<SourceObject> {
-	assertContextKey(context, key);
-	const [head] = await Promise.all([
+	assertContextKey(
+		key.startsWith(`${preparedSourcePrefix(context.video, original)}/`)
+			? { ...context, prefix: preparedSourcePrefix(context.video, original) }
+			: context,
+		key,
+	);
+	const [head, originalHead] = await Promise.all([
 		context.run(context.bucket.headObject(key)),
 		checkOriginal(context, original),
 	]);
+	const identity = getRecordingObjectIdentity(head, expectedIdentity);
+	if (!identity && "RecordingContentETag" in head) {
+		throw new Error("Recording content identity is unavailable");
+	}
+	if (context.bucket.provider === "googleDrive") {
+		if (
+			!("RecordingContentSHA256" in head) ||
+			!("RecordingContentSHA256" in originalHead) ||
+			!head.RecordingContentSHA256 ||
+			!originalHead.RecordingContentSHA256
+		) {
+			throw new Error("Recording content checksum is unavailable");
+		}
+		if (head.RecordingContentSHA256 !== originalHead.RecordingContentSHA256) {
+			throw new DesktopRecordingSourceError(
+				"source-changed",
+				"Recording snapshot content does not match its original source",
+			);
+		}
+	}
 	if (
-		!head.ETag ||
-		!recordingObjectIdentitySchema.safeParse(head.ETag).success ||
+		!identity ||
+		!recordingObjectIdentitySchema.safeParse(identity).success ||
 		head.ContentLength !== original.size ||
-		(expectedIdentity !== undefined && head.ETag !== expectedIdentity)
+		(expectedIdentity !== undefined && identity !== expectedIdentity)
 	) {
 		throw new DesktopRecordingSourceError(
 			"source-changed",
@@ -696,7 +750,7 @@ async function checkCopy(
 			"Recording snapshot is missing its original source identity",
 		);
 	}
-	return { ...original, key, objectIdentity: head.ETag };
+	return { ...original, key, objectIdentity: identity };
 }
 
 function objectDirectory(key: string) {
@@ -746,6 +800,11 @@ async function reusableCopy(
 				) {
 					return checkCopy(context, original, key, receipt.data.objectIdentity);
 				}
+			} else if (context.bucket.provider === "googleDrive") {
+				return saveObjectReceipt(
+					context,
+					await checkCopy(context, original, key),
+				);
 			} else if (context.bucket.provider === "s3") {
 				const head = await context.run(context.bucket.headObject(key));
 				if (
@@ -779,7 +838,16 @@ async function copySmallObject(
 	context: SourceContext,
 	original: OriginalObject,
 	position: number,
+	prepared = false,
 ) {
+	if (prepared && original.index > 0) {
+		const existing = await reusableCopy(
+			{ ...context, prefix: preparedSourcePrefix(context.video, original) },
+			original,
+			original.index,
+		).catch(() => null);
+		if (existing) return existing;
+	}
 	const existing = await reusableCopy(context, original, position);
 	if (existing) return existing;
 	const key = newCopyKey(context, original, position);
@@ -797,6 +865,109 @@ async function copySmallObject(
 		),
 	);
 	return saveObjectReceipt(context, await checkCopy(context, original, key));
+}
+
+function preparedSourcePrefix(video: DbVideo, original: OriginalObject) {
+	return `${sourcePrefix(video)}prepared/${hash(
+		JSON.stringify([
+			original.originalKey,
+			original.originalIdentity,
+			original.size,
+		]),
+	)}`;
+}
+
+function preparationMarkerKey(video: DbVideo) {
+	return `${sourcePrefix(video)}preparation.json`;
+}
+
+export const recordingPreparationSegmentSchema = z.object({
+	track: z.enum(["video", "audio"]),
+	index: z.number().int().min(1).max(50_000),
+});
+
+export type RecordingPreparationSegment = z.infer<
+	typeof recordingPreparationSegmentSchema
+>;
+
+export async function prepareDesktopRecordingSegments(
+	video: DbVideo,
+	segments: readonly RecordingPreparationSegment[],
+	canContinue: () => Promise<boolean>,
+): Promise<RecordingPreparationSegment[]> {
+	identifierSchema.parse(video.ownerId);
+	identifierSchema.parse(video.id);
+	const requested = z
+		.array(recordingPreparationSegmentSchema)
+		.min(1)
+		.max(32)
+		.parse(segments);
+	if (video.source?.type !== "desktopSegments") return [];
+	const deadline = Date.now() + 15_000;
+	const run: SourceRun = (operation) => {
+		const remaining = deadline - Date.now();
+		if (remaining <= 0)
+			throw new Error("Recording preparation time budget ended");
+		return runWorkflowPromise(
+			operation.pipe(Effect.timeout(Math.min(5_000, remaining))),
+		);
+	};
+	const [bucket] = await run(
+		Storage.getAccessForVideo(decodeStorageVideo(video), {
+			resolvePublishedOutput: false,
+		}),
+	);
+	const context = {
+		video,
+		bucket,
+		run,
+		prefix: sourcePrefix(video).slice(0, -1),
+	};
+	const unique = [
+		...new Map(
+			requested.map((entry) => [`${entry.track}/${entry.index}`, entry]),
+		).values(),
+	];
+	const prepared: RecordingPreparationSegment[] = [];
+	let markerSaved = false;
+	for (
+		let offset = 0;
+		offset < unique.length && Date.now() < deadline;
+		offset += 4
+	) {
+		if (!(await run(Effect.tryPromise(canContinue)))) break;
+		const results = await Promise.all(
+			unique.slice(offset, offset + 4).map(async (segment) => {
+				try {
+					const original = await captureOriginal(context, {
+						originalKey: `${video.ownerId}/${video.id}/segments/${segment.track}/segment_${String(segment.index).padStart(3, "0")}.m4s`,
+						...segment,
+					});
+					if (original.size > 64 * 1024 * 1024) return null;
+					await copySmallObject(
+						{ ...context, prefix: preparedSourcePrefix(video, original) },
+						original,
+						original.index,
+					);
+					return segment;
+				} catch {
+					return null;
+				}
+			}),
+		);
+		for (const segment of results) {
+			if (segment) prepared.push(segment);
+		}
+		if (!markerSaved && prepared.length > 0) {
+			await writeSourceText(
+				context,
+				preparationMarkerKey(video),
+				JSON.stringify({ version: 1 }),
+			);
+			markerSaved = true;
+		}
+	}
+	return prepared;
 }
 
 async function advanceMultipartCopy(
@@ -1058,7 +1229,12 @@ async function advanceSourceSnapshot(
 					position: checkpoint.cursor + index,
 				})),
 				({ original, position }) =>
-					copySmallObject(context, original, position),
+					copySmallObject(
+						context,
+						original,
+						position,
+						plan.sourcePreparation === true,
+					),
 			);
 		}
 		const receiptRoots = await appendTree(

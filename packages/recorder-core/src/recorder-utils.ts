@@ -33,6 +33,13 @@ export type RecordingPipeline =
 			supportsProgressiveUpload: false;
 	  };
 
+export const getMediaRecorderOptions = (
+	mimeType: string,
+): MediaRecorderOptions & { videoKeyFrameIntervalDuration: number } => ({
+	mimeType,
+	videoKeyFrameIntervalDuration: 2_000,
+});
+
 export const detectCapabilities = (): RecorderCapabilities => {
 	if (typeof window === "undefined" || typeof navigator === "undefined") {
 		return {

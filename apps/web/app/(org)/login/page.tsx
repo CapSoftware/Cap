@@ -37,6 +37,7 @@ export default async function LoginPage(props: {
 			sso === "1" ||
 			error === "SsoSessionExpired" ||
 			error === "SsoSignInFailed" ||
+			error === "SsoMissingProfileAttributes" ||
 			error === "profile_not_allowed_outside_organization" ||
 			error === "signin_consent_denied",
 	);

@@ -48,8 +48,7 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
-#[cfg(not(target_os = "macos"))]
-use gpui::StyledImage as _;
+use gpui::{Animation, AnimationExt as _, StyledImage as _};
 use gpui::{
     AppContext as _, Context, Entity, FontWeight, InteractiveElement as _, IntoElement,
     MouseButton, MouseMoveEvent, MouseUpEvent, ParentElement as _, Render,
@@ -162,6 +161,9 @@ fn normalized_size(state: &CameraWindowState) -> f32 {
 /// the native page's issue overlay, and the native WGSL mask uses its own
 /// smaller radii; the 24px container is what users see.
 pub(crate) fn preview_radius(state: &CameraWindowState) -> f32 {
+    if cfg!(target_os = "macos") && state.background_blur == BlurMode::Remove {
+        return 0.;
+    }
     match state.shape {
         CameraShape::Round => clamp_size(state.size) / 2.,
         _ => 24.,
@@ -169,6 +171,9 @@ pub(crate) fn preview_radius(state: &CameraWindowState) -> f32 {
 }
 
 fn picker_preview_radius(state: &CameraWindowState, picker_size: Option<(f32, f32)>) -> f32 {
+    if cfg!(target_os = "macos") && state.background_blur == BlurMode::Remove {
+        return 0.;
+    }
     match (state.shape, picker_size) {
         (CameraShape::Round, Some((width, height))) => {
             width.max(0.).min((height - CAMERA_TOOLBAR_HEIGHT).max(0.)) / 2.
@@ -306,6 +311,69 @@ fn linux_camera_recording_snapshot(
 mod frame {
     use cidre::{arc, cf, cv, vt};
 
+    type CreateRotationSession = unsafe extern "C-unwind" fn(
+        Option<&cf::Allocator>,
+        *mut Option<arc::R<vt::PixelRotationSession>>,
+    ) -> cidre::os::Status;
+    type RotateImage = unsafe extern "C-unwind" fn(
+        &vt::PixelRotationSession,
+        &cv::PixelBuf,
+        &mut cv::PixelBuf,
+    ) -> cidre::os::Status;
+
+    struct FlipSession {
+        session: arc::R<vt::PixelRotationSession>,
+        rotate_image: RotateImage,
+    }
+
+    impl FlipSession {
+        fn new() -> Option<Self> {
+            // These APIs are macOS 13+. Direct cidre calls create strong imports that
+            // make dyld terminate the entire app on macOS 12 before any OS guard runs.
+            let create = unsafe {
+                libc::dlsym(libc::RTLD_DEFAULT, c"VTPixelRotationSessionCreate".as_ptr())
+            };
+            let rotate = unsafe {
+                libc::dlsym(
+                    libc::RTLD_DEFAULT,
+                    c"VTPixelRotationSessionRotateImage".as_ptr(),
+                )
+            };
+            let key = unsafe {
+                libc::dlsym(
+                    libc::RTLD_DEFAULT,
+                    c"kVTPixelRotationPropertyKey_FlipHorizontalOrientation".as_ptr(),
+                )
+            };
+            if create.is_null() || rotate.is_null() || key.is_null() {
+                return None;
+            }
+            let create =
+                unsafe { std::mem::transmute::<*mut libc::c_void, CreateRotationSession>(create) };
+            let rotate_image =
+                unsafe { std::mem::transmute::<*mut libc::c_void, RotateImage>(rotate) };
+            let key = unsafe { key.cast::<*const cf::String>().read().as_ref()? };
+            let mut session = None;
+            unsafe { create(None, &mut session).result().ok()? };
+            let mut session = session?;
+            session
+                .set_prop(key, Some(cf::Boolean::value_true().as_ref()))
+                .ok()?;
+            Some(Self {
+                session,
+                rotate_image,
+            })
+        }
+
+        fn rotate(
+            &self,
+            source: &cv::PixelBuf,
+            destination: &mut cv::PixelBuf,
+        ) -> cidre::os::Result {
+            unsafe { (self.rotate_image)(&self.session, source, destination).result() }
+        }
+    }
+
     /// A converted preview frame: the BGRA IOSurface pixel buffer to paint or
     /// blur, its dimensions, and the ring generation (bumped on every ring
     /// rebuild so the blur worker's imported-texture cache can never alias a
@@ -314,6 +382,7 @@ mod frame {
         pub buffer: arc::R<cv::PixelBuf>,
         pub dims: (usize, usize),
         pub generation: u64,
+        pub mirrored: bool,
     }
 
     /// Converts camera frames (typically `420v`) into BGRA IOSurface-backed
@@ -342,7 +411,7 @@ mod frame {
         session: arc::R<vt::PixelTransferSession>,
         /// `None` when unmirrored, or when the rotation session could not be
         /// created (the preview then degrades to unmirrored, logged once).
-        flip_session: Option<arc::R<vt::PixelRotationSession>>,
+        flip_session: Option<FlipSession>,
         ring: Vec<arc::R<cv::PixelBuf>>,
         mirror_ring: Vec<arc::R<cv::PixelBuf>>,
         next: usize,
@@ -402,11 +471,7 @@ mod frame {
             session.set_realtime(true).ok()?;
 
             let flip_session = if mirrored {
-                let flip = vt::PixelRotationSession::new()
-                    .ok()
-                    .and_then(|mut session| {
-                        session.set_horizontal_flip(true).ok().map(|_| session)
-                    });
+                let flip = FlipSession::new();
                 if flip.is_none() {
                     tracing::warn!(
                         "VTPixelRotationSession unavailable; camera preview mirroring disabled"
@@ -464,8 +529,14 @@ mod frame {
             converter.session.transfer(src, &dst).ok()?;
             let out = if let Some(flip) = &converter.flip_session {
                 let mut flipped = converter.mirror_ring[converter.next].clone();
-                flip.rotate(&dst, &mut flipped).ok()?;
-                flipped
+                match flip.rotate(&dst, &mut flipped) {
+                    Ok(()) => flipped,
+                    Err(error) => {
+                        tracing::warn!(?error, "camera preview mirroring failed");
+                        converter.flip_session = None;
+                        dst
+                    }
+                }
             } else {
                 dst
             };
@@ -474,6 +545,7 @@ mod frame {
                 buffer: out,
                 dims: converter.dst_dims,
                 generation: converter.generation,
+                mirrored: converter.flip_session.is_some(),
             })
         }
     }
@@ -640,11 +712,216 @@ fn camera_issue(error: &str) -> (&'static str, &'static str) {
     ("Camera unavailable", message)
 }
 
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+struct PreviewEffectFailures {
+    mirror: bool,
+    blur: bool,
+}
+
+#[cfg(target_os = "macos")]
+impl PreviewEffectFailures {
+    fn issue(self) -> Option<(&'static str, &'static str)> {
+        match (self.mirror, self.blur) {
+            (false, false) => None,
+            (true, false) => Some(("Mirror unavailable", "Your camera preview is not mirrored.")),
+            (false, true) => Some(("Background blur unavailable", "Your camera is unblurred.")),
+            (true, true) => Some((
+                "Camera effects unavailable",
+                "Your camera is unblurred and not mirrored.",
+            )),
+        }
+    }
+
+    fn reset_changed(&mut self, before: CameraWindowState, after: CameraWindowState) {
+        if before.mirrored != after.mirrored {
+            self.mirror = false;
+        }
+        if before.background_blur != after.background_blur {
+            self.blur = false;
+        }
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod preview_effect_failure_tests {
+    use super::*;
+
+    #[test]
+    fn each_failed_effect_has_explicit_feedback() {
+        assert!(PreviewEffectFailures::default().issue().is_none());
+        assert!(
+            PreviewEffectFailures {
+                mirror: true,
+                blur: false
+            }
+            .issue()
+            .unwrap()
+            .1
+            .contains("not mirrored")
+        );
+        assert!(
+            PreviewEffectFailures {
+                mirror: false,
+                blur: true
+            }
+            .issue()
+            .unwrap()
+            .1
+            .contains("unblurred")
+        );
+        assert!(
+            PreviewEffectFailures {
+                mirror: true,
+                blur: true
+            }
+            .issue()
+            .unwrap()
+            .1
+            .contains("unblurred and not mirrored")
+        );
+    }
+
+    #[test]
+    fn unrelated_changes_preserve_failure_and_requested_recording_blur() {
+        let before = CameraWindowState {
+            mirrored: true,
+            background_blur: BlurMode::Heavy,
+            ..Default::default()
+        };
+        let after = CameraWindowState {
+            size: 400.,
+            ..before
+        };
+        let mut failures = PreviewEffectFailures {
+            mirror: true,
+            blur: true,
+        };
+        failures.reset_changed(before, after);
+        assert!(failures.mirror && failures.blur);
+        assert_eq!(after.background_blur, BlurMode::Heavy);
+    }
+
+    #[test]
+    fn toggle_retry_resets_only_the_changed_effect() {
+        let before = CameraWindowState {
+            mirrored: true,
+            background_blur: BlurMode::Heavy,
+            ..Default::default()
+        };
+        let mut failures = PreviewEffectFailures {
+            mirror: true,
+            blur: true,
+        };
+        failures.reset_changed(
+            before,
+            CameraWindowState {
+                mirrored: false,
+                ..before
+            },
+        );
+        assert!(!failures.mirror && failures.blur);
+        failures.reset_changed(
+            before,
+            CameraWindowState {
+                background_blur: BlurMode::Off,
+                ..before
+            },
+        );
+        assert!(!failures.mirror && !failures.blur);
+        assert!(failures.issue().is_none());
+    }
+}
+
+#[derive(Default)]
+struct ParkedCameraPreview(Option<RetainedCameraPreview>);
+
+impl gpui::Global for ParkedCameraPreview {}
+
+struct RetainedCameraPreview {
+    image: Arc<gpui::RenderImage>,
+    camera: crate::feeds::SelectedCamera,
+    state: CameraWindowState,
+    captured_at: Instant,
+    frame_dims: (usize, usize),
+}
+
+pub(crate) fn retained_preview_aspect(cx: &gpui::App) -> Option<f32> {
+    let retained = cx.try_global::<ParkedCameraPreview>()?.0.as_ref()?;
+    let feeds = Feeds::global(cx);
+    let feeds = feeds.read(cx);
+    if feeds.camera.as_ref() != Some(&retained.camera)
+        || feeds.camera_error.is_some()
+        || store::load().camera_window.unwrap_or_default() != retained.state
+        || retained.captured_at.elapsed() >= Duration::from_secs(60)
+    {
+        return None;
+    }
+    Some(retained.frame_dims.0 as f32 / retained.frame_dims.1.max(1) as f32)
+}
+
+pub(crate) fn clear_parked_camera_preview(cx: &mut gpui::App) {
+    cx.default_global::<ParkedCameraPreview>().0 = None;
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn snapshot_preview(
+    buffer: &core_video::pixel_buffer::CVPixelBuffer,
+) -> Option<Arc<gpui::RenderImage>> {
+    use core_video::pixel_buffer::{kCVPixelBufferLock_ReadOnly, kCVPixelFormatType_32BGRA};
+
+    let width = buffer.get_width();
+    let height = buffer.get_height();
+    let stride = buffer.get_bytes_per_row();
+    let row_bytes = width.checked_mul(4)?;
+    let required_bytes = height
+        .checked_sub(1)?
+        .checked_mul(stride)?
+        .checked_add(row_bytes)?;
+    if buffer.get_pixel_format() != kCVPixelFormatType_32BGRA
+        || width == 0
+        || height == 0
+        || stride < row_bytes
+        || required_bytes > buffer.get_data_size()
+        || buffer.lock_base_address(kCVPixelBufferLock_ReadOnly) != 0
+    {
+        return None;
+    }
+    let image = (|| {
+        let base = unsafe { buffer.get_base_address() }.cast::<u8>();
+        if base.is_null() {
+            return None;
+        }
+        let scale = (960. / width as f64).min(540. / height as f64).min(1.);
+        let target_width = (width as f64 * scale).round().max(1.) as u32;
+        let target_height = (height as f64 * scale).round().max(1.) as u32;
+        let image = image::RgbaImage::from_fn(target_width, target_height, |x, y| {
+            let source_x = x as usize * width / target_width as usize;
+            let source_y = y as usize * height / target_height as usize;
+            let offset = source_y * stride + source_x * 4;
+            let pixel = unsafe { std::slice::from_raw_parts(base.add(offset), 4) };
+            // RenderImage consumes BGRA bytes even though image::Frame wraps RgbaImage.
+            image::Rgba([pixel[0], pixel[1], pixel[2], pixel[3]])
+        });
+        Some(Arc::new(gpui::RenderImage::new(smallvec::smallvec![
+            image::Frame::new(image)
+        ])))
+    })();
+    if buffer.unlock_base_address(kCVPixelBufferLock_ReadOnly) != 0 {
+        return None;
+    }
+    image
+}
+
 /// The per-frame half of the window: owns the latest converted (or blurred)
 /// frame and is the only entity notified at camera rate. Chrome invalidation
 /// goes through the parent [`CameraWindow`] instead, so a frame draw reuses
 /// the cached toolbar subtree.
 struct CameraPreviewView {
+    #[cfg(target_os = "macos")]
+    cutout_frame: Option<Arc<gpui::RenderImage>>,
+    #[cfg(target_os = "macos")]
+    painted_cutout_frame: Option<Arc<gpui::RenderImage>>,
     theme: Theme,
     radius: f32,
     /// Clamped bubble size, for the issue overlay's scaled text metrics.
@@ -654,6 +931,14 @@ struct CameraPreviewView {
     #[cfg(not(target_os = "macos"))]
     latest_frame: Option<Arc<gpui::RenderImage>>,
     frame_dims: Option<(usize, usize)>,
+    retained: Option<Arc<gpui::RenderImage>>,
+    retained_dims: Option<(usize, usize)>,
+    retained_captured_at: Option<Instant>,
+    reveal_started: Option<Instant>,
+    retained_invalidated: bool,
+    selection_revision: u64,
+    frame_revision: Option<u64>,
+    camera: Option<crate::feeds::SelectedCamera>,
     /// Bumped by the canvas paint callback; the parent's cadence log reads it
     /// to prove notify-driven repaints actually present.
     paints: Arc<AtomicU32>,
@@ -662,6 +947,7 @@ struct CameraPreviewView {
     /// ~20Hz whenever a microphone is selected, and each of those would
     /// repaint the whole preview for a message that did not change.
     camera_error: Option<String>,
+    effect_issue: Option<(&'static str, &'static str)>,
     _feeds_subscription: Subscription,
 }
 
@@ -675,14 +961,56 @@ impl CameraPreviewView {
     ) -> Self {
         let feeds = Feeds::global(cx);
         let camera_error = feeds.read(cx).camera_error.clone();
+        let camera = feeds.read(cx).camera.clone();
+        let state = store::load().camera_window.unwrap_or_default();
+        let retained = cx
+            .default_global::<ParkedCameraPreview>()
+            .0
+            .take()
+            .filter(|retained| {
+                camera.as_ref() == Some(&retained.camera)
+                    && state == retained.state
+                    && camera_error.is_none()
+                    && retained.captured_at.elapsed() < Duration::from_secs(60)
+            });
+        let retained_dims = retained.as_ref().map(|retained| retained.frame_dims);
+        let retained_captured_at = retained.as_ref().map(|retained| retained.captured_at);
+        if let Some(retained) = &retained {
+            let expiry = cx
+                .background_executor()
+                .timer(Duration::from_secs(60).saturating_sub(retained.captured_at.elapsed()));
+            cx.spawn(async move |this, cx| {
+                expiry.await;
+                this.update(cx, |this: &mut Self, cx| {
+                    if this.retained.is_some() {
+                        this.retained_invalidated = true;
+                        cx.notify();
+                    }
+                })
+                .ok();
+            })
+            .detach();
+        }
+        let retained = retained.map(|retained| retained.image);
         let feeds_subscription = cx.observe(&feeds, |this: &mut Self, feeds, cx| {
-            let error = feeds.read(cx).camera_error.clone();
-            if this.camera_error != error {
+            let feeds = feeds.read(cx);
+            let error = feeds.camera_error.clone();
+            let camera = feeds.camera.clone();
+            if this.camera_error != error || this.camera != camera {
+                if error.is_some() || this.camera != camera {
+                    this.retained_invalidated = true;
+                    this.selection_revision = this.selection_revision.wrapping_add(1);
+                }
                 this.camera_error = error;
+                this.camera = camera;
                 cx.notify();
             }
         });
         Self {
+            #[cfg(target_os = "macos")]
+            cutout_frame: None,
+            #[cfg(target_os = "macos")]
+            painted_cutout_frame: None,
             theme,
             radius,
             size,
@@ -691,8 +1019,17 @@ impl CameraPreviewView {
             #[cfg(not(target_os = "macos"))]
             latest_frame: None,
             frame_dims: None,
+            retained,
+            retained_dims,
+            retained_captured_at,
+            reveal_started: None,
+            retained_invalidated: false,
+            selection_revision: 0,
+            frame_revision: None,
+            camera,
             paints,
             camera_error,
+            effect_issue: None,
             _feeds_subscription: feeds_subscription,
         }
     }
@@ -704,8 +1041,13 @@ impl CameraPreviewView {
         dims: (usize, usize),
         cx: &mut Context<Self>,
     ) {
+        self.cutout_frame = None;
         self.latest_frame = Some(frame);
         self.frame_dims = Some(dims);
+        self.frame_revision = Some(self.selection_revision);
+        if self.retained.is_some() && self.reveal_started.is_none() {
+            self.reveal_started = Some(Instant::now());
+        }
         cx.notify();
     }
 
@@ -718,6 +1060,10 @@ impl CameraPreviewView {
     ) -> Option<Arc<gpui::RenderImage>> {
         let previous = self.latest_frame.replace(frame);
         self.frame_dims = Some(dims);
+        self.frame_revision = Some(self.selection_revision);
+        if self.retained.is_some() && self.reveal_started.is_none() {
+            self.reveal_started = Some(Instant::now());
+        }
         cx.notify();
         previous
     }
@@ -732,7 +1078,43 @@ impl CameraPreviewView {
 }
 
 impl Render for CameraPreviewView {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        #[cfg(target_os = "macos")]
+        if self.painted_cutout_frame.as_ref().is_some_and(|painted| {
+            self.cutout_frame
+                .as_ref()
+                .is_none_or(|current| !Arc::ptr_eq(painted, current))
+        }) && let Some(image) = self.painted_cutout_frame.take()
+        {
+            let _ = window.drop_image(image);
+        }
+        if self
+            .frame_revision
+            .is_some_and(|revision| revision != self.selection_revision)
+        {
+            #[cfg(target_os = "macos")]
+            {
+                if let Some(image) = self.cutout_frame.take() {
+                    let _ = window.drop_image(image);
+                }
+                self.latest_frame = None;
+            }
+            #[cfg(not(target_os = "macos"))]
+            if let Some(image) = self.latest_frame.take() {
+                let _ = window.drop_image(image);
+            }
+            self.frame_dims = None;
+            self.frame_revision = None;
+        }
+        if (self.retained_invalidated
+            || self
+                .reveal_started
+                .is_some_and(|started| started.elapsed() >= Duration::from_millis(180)))
+            && let Some(image) = self.retained.take()
+        {
+            let _ = window.drop_image(image);
+        }
+        self.retained_invalidated = false;
         let theme = self.theme;
         let radius = self.radius;
 
@@ -741,11 +1123,15 @@ impl Render for CameraPreviewView {
             .size_full()
             .overflow_hidden()
             .rounded(px(radius))
-            .bg(theme.gray_1)
+            .when(radius > 0., |this| this.bg(theme.gray_1))
             .text_color(theme.gray_12);
 
         #[cfg(target_os = "macos")]
-        if let Some(buffer) = self.latest_frame.clone() {
+        if let Some(buffer) = self
+            .latest_frame
+            .clone()
+            .filter(|_| self.cutout_frame.is_none())
+        {
             let frame_dims = self.frame_dims;
             let paints = self.paints.clone();
             // Cover-fit painted straight from the IOSurface: `ObjectFit::Cover`
@@ -777,6 +1163,17 @@ impl Render for CameraPreviewView {
             );
         }
 
+        #[cfg(target_os = "macos")]
+        if let Some(image) = self.cutout_frame.clone() {
+            self.painted_cutout_frame = Some(image.clone());
+            self.paints.fetch_add(1, Ordering::Relaxed);
+            container = container.child(
+                gpui::img(image)
+                    .size_full()
+                    .object_fit(gpui::ObjectFit::Cover),
+            );
+        }
+
         #[cfg(not(target_os = "macos"))]
         if let Some(image) = self.latest_frame.clone() {
             self.paints.fetch_add(1, Ordering::Relaxed);
@@ -788,7 +1185,25 @@ impl Render for CameraPreviewView {
             );
         }
 
-        let showing_frame = self.latest_frame.is_some();
+        if let Some(image) = self.retained.clone() {
+            let overlay = div().absolute().inset_0().child(
+                gpui::img(image)
+                    .size_full()
+                    .rounded(px(radius))
+                    .object_fit(gpui::ObjectFit::Cover),
+            );
+            container = if self.reveal_started.is_some() {
+                container.child(overlay.with_animation(
+                    "camera-preview-reveal",
+                    Animation::new(Duration::from_millis(180)),
+                    |element, progress| element.opacity(1. - progress),
+                ))
+            } else {
+                container.child(overlay)
+            };
+        }
+
+        let showing_frame = self.latest_frame.is_some() || self.retained.is_some();
 
         if !showing_frame {
             container = container.child(
@@ -807,8 +1222,12 @@ impl Render for CameraPreviewView {
         // the preview with a centred, size-scaled title + message. The
         // `backdrop-blur-xs` behind it has no per-element hook in this gpui
         // rev (the recording overlay documents the same gap).
-        if let Some(error) = self.camera_error.clone() {
-            let (title, message) = camera_issue(&error);
+        if let Some((title, message)) = self
+            .camera_error
+            .as_deref()
+            .map(camera_issue)
+            .or(self.effect_issue)
+        {
             let metrics = overlay_metrics(self.size);
             container = container.child(
                 div()
@@ -853,6 +1272,7 @@ impl Render for CameraPreviewView {
 
 #[cfg(not(target_os = "macos"))]
 pub struct CameraPreviewFrame {
+    pub timestamp: cap_timestamp::Timestamp,
     pub image: Arc<gpui::RenderImage>,
     pub dims: (usize, usize),
 }
@@ -891,6 +1311,7 @@ impl Render for CameraToolbarView {
 /// `release_blur_resources` behaviour (`camera.rs:1477-1484`).
 #[cfg(target_os = "macos")]
 struct BlurBridge {
+    epoch: u64,
     tx: flume::Sender<camera_blur::BlurJob>,
     /// The first blurred output may land while the window is inactive, where
     /// a notify alone may not present (the unit-2 first-frame finding); the
@@ -912,14 +1333,12 @@ pub struct CameraWindow {
     converter: Option<frame::FrameConverter>,
     #[cfg(target_os = "macos")]
     blur: Option<BlurBridge>,
-    /// Latched when the worker dies (device/ONNX bring-up failed); cleared
-    /// when the blur mode changes, which is the retry point -- the
-    /// `blur_processor_init_attempted` shape (`camera.rs:1500-1518`).
     #[cfg(target_os = "macos")]
-    blur_failed: bool,
+    effect_failures: PreviewEffectFailures,
     preview: Entity<CameraPreviewView>,
     toolbar: Entity<CameraToolbarView>,
     frame_dims: Option<(usize, usize)>,
+    retained_aspect: Option<f32>,
     // Cadence instrumentation: proves the preview stays live (delivered) and
     // actually presents (painted) while the window is inactive.
     frames_in_window: u32,
@@ -933,6 +1352,51 @@ pub struct CameraWindow {
 }
 
 impl CameraWindow {
+    pub(crate) fn studio_snapshot(
+        &self,
+        window: &Window,
+        target: &cap_recording::screen_capture::ScreenCaptureTarget,
+    ) -> crate::recording::StudioCameraSnapshot {
+        let placement = (|| {
+            if self.inline {
+                return None;
+            }
+            #[cfg(target_os = "macos")]
+            let bounds = {
+                let bounds = window.bounds();
+                [
+                    f64::from(f32::from(bounds.origin.x)),
+                    f64::from(f32::from(bounds.origin.y)) + f64::from(CAMERA_TOOLBAR_HEIGHT),
+                    f64::from(f32::from(bounds.size.width)),
+                    f64::from(f32::from(bounds.size.height) - CAMERA_TOOLBAR_HEIGHT),
+                ]
+            };
+            #[cfg(target_os = "windows")]
+            let bounds = {
+                let native = platform::native_window(window)?;
+                let (x, y, width, height) = platform::window_frame(&native);
+                let toolbar = f64::from(CAMERA_TOOLBAR_HEIGHT * window.scale_factor());
+                [x, y + toolbar, width, height - toolbar]
+            };
+            #[cfg(target_os = "linux")]
+            let bounds = {
+                let snapshot = self.recording_snapshot(window).ok()?;
+                let rect = snapshot.content_rect;
+                [
+                    f64::from(rect.x),
+                    f64::from(rect.y),
+                    f64::from(rect.width),
+                    f64::from(rect.height),
+                ]
+            };
+            cap_recording::camera_placement::recording_camera_placement(target, bounds)
+        })();
+        crate::recording::StudioCameraSnapshot {
+            blur: self.state.background_blur,
+            placement,
+        }
+    }
+
     #[cfg(target_os = "linux")]
     pub(crate) fn recording_snapshot(
         &self,
@@ -974,6 +1438,62 @@ impl CameraWindow {
         )
     }
 
+    pub(crate) fn retain_preview(&self, cx: &mut Context<Self>) {
+        let feeds = Feeds::global(cx);
+        let Some(camera) = feeds.read(cx).camera.clone() else {
+            return;
+        };
+        if feeds.read(cx).camera_error.is_some() {
+            return;
+        }
+        let preview = self.preview.read(cx);
+        if preview.retained_invalidated || preview.camera.as_ref() != Some(&camera) {
+            return;
+        }
+        #[cfg(target_os = "macos")]
+        let image = (preview.frame_revision == Some(preview.selection_revision))
+            .then(|| preview.latest_frame.as_ref().and_then(snapshot_preview))
+            .flatten();
+        #[cfg(not(target_os = "macos"))]
+        let image = (preview.frame_revision == Some(preview.selection_revision))
+            .then(|| preview.latest_frame.clone())
+            .flatten();
+        let Some((image, captured_at)) = image
+            .map(|image| (image, Instant::now()))
+            .or_else(|| preview.retained.clone().zip(preview.retained_captured_at))
+        else {
+            return;
+        };
+        let remaining = Duration::from_secs(60).saturating_sub(captured_at.elapsed());
+        if remaining.is_zero() {
+            return;
+        }
+        let Some(frame_dims) = preview.frame_dims.or(preview.retained_dims) else {
+            return;
+        };
+        cx.default_global::<ParkedCameraPreview>().0 = Some(RetainedCameraPreview {
+            image,
+            camera,
+            state: self.state,
+            captured_at,
+            frame_dims,
+        });
+        let expiry = cx.background_executor().timer(remaining);
+        cx.spawn(async move |_, cx| {
+            expiry.await;
+            cx.update(|cx| {
+                if cx
+                    .try_global::<ParkedCameraPreview>()
+                    .and_then(|cache| cache.0.as_ref())
+                    .is_some_and(|cached| cached.captured_at == captured_at)
+                {
+                    clear_parked_camera_preview(cx);
+                }
+            });
+        })
+        .detach();
+    }
+
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         // `document.documentElement.classList.toggle("dark", true)`
         // (`camera.tsx:128`): the bubble is always dark, whatever the app
@@ -984,7 +1504,13 @@ impl CameraWindow {
             platform::ForcedAppearance::Dark,
             cx.foreground_executor(),
         );
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(target_os = "macos")]
+        platform::apply_window_theme_deferred(
+            window,
+            platform::ForcedAppearance::Dark,
+            cx.foreground_executor(),
+        );
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         platform::apply_window_theme(window, platform::ForcedAppearance::Dark);
         let theme = Theme::dark();
         let state = store::load().camera_window.unwrap_or_default();
@@ -992,6 +1518,7 @@ impl CameraWindow {
         Feeds::global(cx).update(cx, |feeds, _| {
             feeds.set_camera_preview_state(state.mirrored, state.background_blur)
         });
+        let retained_aspect = retained_preview_aspect(cx);
         let paints = Arc::new(AtomicU32::new(0));
         let preview = cx.new({
             let paints = paints.clone();
@@ -1024,10 +1551,11 @@ impl CameraWindow {
             #[cfg(target_os = "macos")]
             blur: None,
             #[cfg(target_os = "macos")]
-            blur_failed: false,
+            effect_failures: PreviewEffectFailures::default(),
             preview,
             toolbar,
             frame_dims: None,
+            retained_aspect,
             frames_in_window: 0,
             cadence_window_start: Instant::now(),
             paints,
@@ -1100,9 +1628,16 @@ impl CameraWindow {
     ) {
         #[cfg(target_os = "macos")]
         {
+            let Some(epoch) = Feeds::global(cx).read(cx).camera_preview_epoch() else {
+                return;
+            };
             use core_foundation::base::TCFType as _;
             use core_video::pixel_buffer::{CVPixelBuffer, CVPixelBufferRef};
 
+            let failures_before = self.effect_failures;
+            if self.state.background_blur != BlurMode::Off && camera_blur::is_low_spec_preview() {
+                self.effect_failures.blur = true;
+            }
             let blur_mode = self.active_blur_mode();
             let max_dims = blur_mode.is_some().then_some(camera_blur::BLUR_MAX_DIMS);
             if let Some(converted) = frame::FrameConverter::convert(
@@ -1111,6 +1646,7 @@ impl CameraWindow {
                 max_dims,
                 self.state.mirrored,
             ) {
+                self.effect_failures.mirror = self.state.mirrored && !converted.mirrored;
                 let first_frame = self.frame_dims.is_none();
                 let dims = converted.dims;
                 let dims_changed = self.frame_dims != Some(dims);
@@ -1125,7 +1661,7 @@ impl CameraWindow {
                         ring_generation: converted.generation,
                         mode,
                     };
-                    match self.ensure_blur_bridge(window, cx).tx.try_send(job) {
+                    match self.ensure_blur_bridge(epoch, window, cx).tx.try_send(job) {
                         Ok(()) => {}
                         // Worker busy: drop this frame and keep the last
                         // painted one -- the bounded(1) latest-wins shape of
@@ -1140,7 +1676,7 @@ impl CameraWindow {
                                 "camera blur worker unavailable; preview continues unblurred"
                             );
                             self.blur = None;
-                            self.blur_failed = true;
+                            self.effect_failures.blur = true;
                             paint_raw = true;
                         }
                     }
@@ -1162,6 +1698,9 @@ impl CameraWindow {
                 }
             } else if self.frame_dims.is_none() && self.frames_in_window == 0 {
                 tracing::warn!("camera frame could not be converted for preview");
+            }
+            if failures_before != self.effect_failures {
+                self.sync_effect_feedback(cx);
             }
         }
         #[cfg(not(target_os = "macos"))]
@@ -1205,24 +1744,45 @@ impl CameraWindow {
         }
     }
 
-    /// The blur mode frames should be processed with right now: `None` when
-    /// off, latched off after a worker failure, and always `None` on low-spec
-    /// machines (`ensure_blur_processor`'s early return, `camera.rs:1491-1498`
-    /// -- the toggle still cycles and persists there too).
+    #[cfg(target_os = "macos")]
+    fn sync_effect_feedback(&self, cx: &mut Context<Self>) {
+        let issue = self.effect_failures.issue();
+        self.preview.update(cx, |preview, cx| {
+            if preview.effect_issue != issue {
+                preview.effect_issue = issue;
+                cx.notify();
+            }
+        });
+        cx.notify();
+    }
+
     #[cfg(target_os = "macos")]
     fn active_blur_mode(&self) -> Option<cap_camera_effects::BlurMode> {
-        if self.blur_failed || camera_blur::is_low_spec_preview() {
+        if self.effect_failures.blur || camera_blur::is_low_spec_preview() {
             return None;
         }
         match self.state.background_blur {
             BlurMode::Off => None,
             BlurMode::Light => Some(cap_camera_effects::BlurMode::Light),
             BlurMode::Heavy => Some(cap_camera_effects::BlurMode::Heavy),
+            BlurMode::Remove => Some(cap_camera_effects::BlurMode::Remove),
         }
     }
 
     #[cfg(target_os = "macos")]
-    fn ensure_blur_bridge(&mut self, window: &Window, cx: &mut Context<Self>) -> &BlurBridge {
+    fn ensure_blur_bridge(
+        &mut self,
+        epoch: u64,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> &BlurBridge {
+        if self
+            .blur
+            .as_ref()
+            .is_some_and(|bridge| bridge.epoch != epoch)
+        {
+            self.blur = None;
+        }
         if self.blur.is_none() {
             let (job_tx, job_rx) = flume::bounded::<camera_blur::BlurJob>(1);
             let (out_tx, out_rx) = flume::bounded::<camera_blur::BlurOutput>(2);
@@ -1238,7 +1798,7 @@ impl CameraWindow {
             let pump = cx.spawn(async move |this, cx| {
                 while let Ok(output) = out_rx.recv_async().await {
                     let first = match this.update(cx, |this: &mut CameraWindow, cx| {
-                        this.blurred_frame_arrived(output, cx)
+                        this.blurred_frame_arrived(output, epoch, cx)
                     }) {
                         Ok(first) => first,
                         Err(_) => break,
@@ -1255,6 +1815,7 @@ impl CameraWindow {
                 }
             });
             self.blur = Some(BlurBridge {
+                epoch,
                 tx: job_tx,
                 first_output_pending: true,
                 _pump: pump,
@@ -1270,11 +1831,14 @@ impl CameraWindow {
     fn blurred_frame_arrived(
         &mut self,
         output: camera_blur::BlurOutput,
+        epoch: u64,
         cx: &mut Context<Self>,
     ) -> bool {
         // A stale output can land after the mode flips back to Off; the raw
         // path is already painting again, so drop it.
-        if self.state.background_blur == BlurMode::Off {
+        if self.active_blur_mode() != Some(output.mode)
+            || Feeds::global(cx).read(cx).camera_preview_epoch() != Some(epoch)
+        {
             return false;
         }
         let first = self
@@ -1287,14 +1851,17 @@ impl CameraWindow {
         let dims = (output.width as usize, output.height as usize);
         let raw = &*output.buffer.0 as *const cidre::cv::PixelBuf as CVPixelBufferRef;
         let buffer = unsafe { CVPixelBuffer::wrap_under_get_rule(raw) };
-        self.preview
-            .update(cx, |preview, cx| preview.set_frame(buffer, dims, cx));
+        self.preview.update(cx, |preview, cx| {
+            preview.set_frame(buffer, dims, cx);
+            preview.cutout_frame = output.cutout;
+        });
         first
     }
 
     fn frame_aspect(&self) -> Option<f32> {
         self.frame_dims
             .map(|(width, height)| width as f32 / height.max(1) as f32)
+            .or(self.retained_aspect)
     }
 
     fn toolbar_scale(&self) -> f32 {
@@ -1317,7 +1884,7 @@ impl CameraWindow {
         mutate: impl FnOnce(&mut CameraWindowState),
     ) {
         #[cfg(target_os = "macos")]
-        let blur_before = self.state.background_blur;
+        let before = self.state;
         self.picker_size = None;
         mutate(&mut self.state);
         self.state.size = clamp_size(self.state.size);
@@ -1327,11 +1894,11 @@ impl CameraWindow {
         });
         #[cfg(target_os = "macos")]
         {
-            if self.state.background_blur != blur_before {
-                // Changing the mode is the retry point after a failed
-                // bring-up.
-                self.blur_failed = false;
+            self.effect_failures.reset_changed(before, self.state);
+            if before.mirrored != self.state.mirrored {
+                self.converter = None;
             }
+            self.sync_effect_feedback(cx);
             if self.state.background_blur == BlurMode::Off {
                 // Ends the worker thread, dropping the ONNX session and every
                 // GPU texture -- `release_blur_resources`
@@ -1550,6 +2117,10 @@ impl CameraWindow {
     fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let scale = self.toolbar_scale();
+        #[cfg(target_os = "macos")]
+        let (mirror_failed, blur_failed) = (self.effect_failures.mirror, self.effect_failures.blur);
+        #[cfg(not(target_os = "macos"))]
+        let (mirror_failed, blur_failed) = (false, false);
         let shape_icon = match self.state.shape {
             CameraShape::Round => "icons/circle.svg",
             CameraShape::Square => "icons/square.svg",
@@ -1627,9 +2198,9 @@ impl CameraWindow {
                     .child(self.toolbar_button(
                         "mirror",
                         "icons/arrows.svg",
-                        self.state.mirrored,
+                        self.state.mirrored && !mirror_failed,
                         scale,
-                        None,
+                        mirror_failed.then_some("!"),
                         cx,
                         |this, window, cx| {
                             this.mutate_state(window, cx, |state| {
@@ -1640,9 +2211,13 @@ impl CameraWindow {
                     .child(self.toolbar_button(
                         "blur",
                         "icons/person-standing.svg",
-                        self.state.background_blur != BlurMode::Off,
+                        self.state.background_blur != BlurMode::Off && !blur_failed,
                         scale,
-                        self.state.background_blur.label(),
+                        if blur_failed {
+                            Some("!")
+                        } else {
+                            self.state.background_blur.label()
+                        },
                         cx,
                         |this, window, cx| {
                             this.mutate_state(window, cx, |state| {
@@ -1653,14 +2228,11 @@ impl CameraWindow {
             )
     }
 
-    /// `CameraResizeHandles` + `ResizeCornerHandle`
-    /// (`CameraPreviewChrome.tsx:218-357`): a 28px hit area per corner, with
-    /// a 14px white 2px-bordered bracket inset 6px, rounded 6px on its outer
-    /// corner. Opacity 0 hidden / 0.7 with chrome visible / 1.0 hovered or
-    /// resizing. The 150ms transition, the hover `scale-110` and the
-    /// `drop-shadow` filter have no hooks here (no animation pass, no
-    /// transform, and a box shadow would shadow the bracket's full rect, not
-    /// its L-shape).
+    /// `CameraResizeHandles` + `ResizeCornerHandle`: a 28px hit area in each
+    /// corner holding a 14px white 2px L-bracket, 85% while the chrome is
+    /// visible and 100% while hovered or resizing. A 50% black bracket sits
+    /// underneath, 1px proud on every edge, so the white L keeps a contour
+    /// over a light desktop (cutout mode has no backdrop behind it).
     fn render_resize_handles(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let visible = self.chrome_visible || self.resizing.is_some();
         let mut layer = div()
@@ -1683,51 +2255,94 @@ impl CameraWindow {
                 .is_some_and(|drag| drag.corner == corner)
                 || self.hovered_handle == Some(corner);
 
-            let mut bracket = div()
+            // 14px white L-bracket 6px in from the corner, with a thicker
+            // 50% black bracket underneath that pokes out 1px on every edge
+            // so the L reads as a contour over a light desktop too (cutout
+            // mode has no backdrop). Mirrors `ResizeCornerHandle` in
+            // `CameraPreviewChrome.tsx`.
+            let outline = div()
                 .absolute()
-                .size(px(14.))
-                .border_color(gpui::white())
+                .size(px(16.))
+                .border_color(gpui::hsla(0., 0., 0., 0.5));
+            let bracket = div().absolute().size(px(14.)).border_color(gpui::white());
+            let (outline, bracket) = match corner {
+                ResizeCorner::NorthWest => (
+                    outline
+                        .top(px(5.))
+                        .left(px(5.))
+                        .border_t_4()
+                        .border_l_4()
+                        .rounded_tl(px(7.)),
+                    bracket
+                        .top(px(6.))
+                        .left(px(6.))
+                        .border_t_2()
+                        .border_l_2()
+                        .rounded_tl(px(6.)),
+                ),
+                ResizeCorner::NorthEast => (
+                    outline
+                        .top(px(5.))
+                        .right(px(5.))
+                        .border_t_4()
+                        .border_r_4()
+                        .rounded_tr(px(7.)),
+                    bracket
+                        .top(px(6.))
+                        .right(px(6.))
+                        .border_t_2()
+                        .border_r_2()
+                        .rounded_tr(px(6.)),
+                ),
+                ResizeCorner::SouthWest => (
+                    outline
+                        .bottom(px(5.))
+                        .left(px(5.))
+                        .border_b_4()
+                        .border_l_4()
+                        .rounded_bl(px(7.)),
+                    bracket
+                        .bottom(px(6.))
+                        .left(px(6.))
+                        .border_b_2()
+                        .border_l_2()
+                        .rounded_bl(px(6.)),
+                ),
+                ResizeCorner::SouthEast => (
+                    outline
+                        .bottom(px(5.))
+                        .right(px(5.))
+                        .border_b_4()
+                        .border_r_4()
+                        .rounded_br(px(7.)),
+                    bracket
+                        .bottom(px(6.))
+                        .right(px(6.))
+                        .border_b_2()
+                        .border_r_2()
+                        .rounded_br(px(6.)),
+                ),
+            };
+            let glyph = div()
+                .absolute()
+                .inset_0()
                 .opacity(if active {
                     1.0
                 } else if visible {
-                    0.7
+                    0.85
                 } else {
                     0.0
-                });
-            bracket = match corner {
-                ResizeCorner::NorthWest => bracket
-                    .top(px(6.))
-                    .left(px(6.))
-                    .border_t_2()
-                    .border_l_2()
-                    .rounded_tl(px(6.)),
-                ResizeCorner::NorthEast => bracket
-                    .top(px(6.))
-                    .right(px(6.))
-                    .border_t_2()
-                    .border_r_2()
-                    .rounded_tr(px(6.)),
-                ResizeCorner::SouthWest => bracket
-                    .bottom(px(6.))
-                    .left(px(6.))
-                    .border_b_2()
-                    .border_l_2()
-                    .rounded_bl(px(6.)),
-                ResizeCorner::SouthEast => bracket
-                    .bottom(px(6.))
-                    .right(px(6.))
-                    .border_b_2()
-                    .border_r_2()
-                    .rounded_br(px(6.)),
-            };
+                })
+                .child(outline)
+                .child(bracket);
 
             // Like the toolbar buttons, no `.occlude()`: it would knock the
             // root's hover flag false over the 28px corner hit areas (even
             // while the brackets are invisible) and hide the chrome mid-
             // travel. The handle's own on_mouse_down stops propagation, which
             // is what keeps a resize press from starting a window move.
-            let mut handle = div().id(id).absolute().size(px(28.)).child(bracket);
-            // `cursor-nw-resize` and friends (`CameraPreviewChrome.tsx:306-317`).
+            let mut handle = div().id(id).absolute().size(px(28.)).child(glyph);
+            // `cursor-nw-resize` and friends (`CameraPreviewChrome.tsx`).
             handle = match corner {
                 ResizeCorner::NorthWest => handle
                     .top_0()
@@ -2314,5 +2929,80 @@ mod recording_snapshot_tests {
         assert_eq!(snapshot.content_rect.height, 306);
         assert_eq!(snapshot.content_rect.x, client.x);
         assert_eq!(snapshot.content_rect.y, client.y + 75);
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod retained_preview_tests {
+    use super::*;
+    use core_video::pixel_buffer::{
+        CVPixelBuffer, kCVPixelFormatType_32ARGB, kCVPixelFormatType_32BGRA,
+    };
+
+    fn buffer(width: usize, height: usize) -> CVPixelBuffer {
+        let buffer = CVPixelBuffer::new(kCVPixelFormatType_32BGRA, width, height, None).unwrap();
+        assert_eq!(buffer.lock_base_address(0), 0);
+        let stride = buffer.get_bytes_per_row();
+        let pixels = unsafe {
+            std::slice::from_raw_parts_mut(buffer.get_base_address().cast::<u8>(), stride * height)
+        };
+        for row in pixels.chunks_exact_mut(stride) {
+            for pixel in row[..width * 4].as_chunks_mut::<4>().0 {
+                pixel.copy_from_slice(&[19, 71, 143, 255]);
+            }
+        }
+        assert_eq!(buffer.unlock_base_address(0), 0);
+        buffer
+    }
+
+    #[test]
+    fn retained_preview_owns_pixels_after_native_surface_changes() {
+        let buffer = buffer(17, 9);
+        let image = snapshot_preview(&buffer).unwrap();
+        assert_eq!(
+            image.as_bytes(0).unwrap(),
+            [19, 71, 143, 255].repeat(17 * 9)
+        );
+        assert_eq!(buffer.lock_base_address(0), 0);
+        unsafe { buffer.get_base_address().cast::<u8>().write(200) };
+        assert_eq!(buffer.unlock_base_address(0), 0);
+        drop(buffer);
+        assert_eq!(image.as_bytes(0).unwrap()[0], 19);
+    }
+
+    #[test]
+    fn retained_preview_bounds_memory_for_large_camera_frames() {
+        let buffer = buffer(3840, 2160);
+        let image = snapshot_preview(&buffer).unwrap();
+        assert_eq!(image.as_bytes(0).unwrap().len(), 960 * 540 * 4);
+        assert_eq!(&image.as_bytes(0).unwrap()[..4], &[19, 71, 143, 255]);
+    }
+
+    #[test]
+    fn cutout_preview_preserves_transparent_and_feathered_pixels() {
+        let buffer = buffer(3, 1);
+        assert_eq!(buffer.lock_base_address(0), 0);
+        let base = unsafe { buffer.get_base_address().cast::<u8>() };
+        unsafe {
+            base.add(3).write(0);
+            base.add(7).write(128);
+        }
+        assert_eq!(buffer.unlock_base_address(0), 0);
+        let image = snapshot_preview(&buffer).unwrap();
+        let bytes = image.as_bytes(0).unwrap();
+        assert_eq!([bytes[3], bytes[7], bytes[11]], [0, 128, 255]);
+        let state = CameraWindowState {
+            background_blur: BlurMode::Remove,
+            ..Default::default()
+        };
+        assert_eq!(preview_radius(&state), 0.0);
+        assert_eq!(picker_preview_radius(&state, Some((230.0, 286.0))), 0.0);
+        assert_eq!(state.shape, CameraShape::Round);
+    }
+
+    #[test]
+    fn retained_preview_rejects_non_bgra_surfaces() {
+        let buffer = CVPixelBuffer::new(kCVPixelFormatType_32ARGB, 32, 16, None).unwrap();
+        assert!(snapshot_preview(&buffer).is_none());
     }
 }

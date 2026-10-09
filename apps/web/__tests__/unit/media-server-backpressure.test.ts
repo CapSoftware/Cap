@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { RetryableError } from "workflow";
 import {
 	createMediaServerCapacityError,
+	getMediaServerCapacityDelay,
 	isMediaServerCapacityError,
 } from "@/lib/media-server-backpressure";
 
@@ -61,3 +62,19 @@ describe("media server backpressure", () => {
 		).toBe(15_000);
 	});
 });
+
+it.each(["Sun, 06 Sep 2026 19:40:00 GMT", "1.0001", "999999", "invalid"])(
+	"bounds and rounds server backoff %s",
+	(header) => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2026-09-06T19:39:00Z"));
+		const delay = getMediaServerCapacityDelay({
+			response: new Response(null, { headers: { "Retry-After": header } }),
+			videoId: "video",
+		});
+		expect(Number.isSafeInteger(delay)).toBe(true);
+		expect(delay).toBeGreaterThan(0);
+		expect(delay).toBeLessThanOrEqual(320_000);
+		if (header.startsWith("Sun")) expect(delay).toBeGreaterThanOrEqual(60_000);
+	},
+);

@@ -294,8 +294,11 @@ const disconnectCameraPreviews = () => {
 };
 
 const getCameraPreviewStream = async (settings: WebcamSettings) => {
+	const videoTrack = cameraPreviewStream?.getVideoTracks()[0];
 	if (
 		cameraPreviewStream?.active &&
+		videoTrack &&
+		videoTrack.readyState === "live" &&
 		cameraPreviewDeviceId === settings.deviceId
 	) {
 		return cameraPreviewStream;
@@ -377,38 +380,39 @@ const broadcastCaptureSource = (source: RecordingCaptureSource) => {
 	);
 };
 
-const getVideoConstraint = (webcam: WebcamSettings) =>
-	webcam.deviceId && webcam.deviceId !== DEFAULT_CAMERA_DEVICE_ID
-		? {
-				deviceId: { exact: webcam.deviceId },
-			}
-		: true;
-
-const shouldRetryDefaultCamera = (webcam: WebcamSettings, error: unknown) =>
-	webcam.deviceId !== null &&
-	webcam.deviceId !== DEFAULT_CAMERA_DEVICE_ID &&
-	error instanceof DOMException &&
-	(error.name === "NotFoundError" || error.name === "OverconstrainedError");
-
 const getCameraMediaStream = async (
 	webcam: WebcamSettings,
 	audio: boolean | MediaTrackConstraints,
 ) => {
-	try {
-		return await navigator.mediaDevices.getUserMedia({
-			video: getVideoConstraint(webcam),
+	const constraints: MediaStreamConstraints[] = [];
+	if (webcam.deviceId && webcam.deviceId !== DEFAULT_CAMERA_DEVICE_ID) {
+		constraints.push({
+			video: { deviceId: { exact: webcam.deviceId } },
 			audio,
 		});
-	} catch (error) {
-		if (!shouldRetryDefaultCamera(webcam, error)) {
-			throw error;
-		}
-
-		return navigator.mediaDevices.getUserMedia({
-			video: true,
+		constraints.push({
+			video: { deviceId: { ideal: webcam.deviceId } },
 			audio,
 		});
 	}
+	constraints.push({
+		video: true,
+		audio,
+	});
+
+	let lastError: unknown = null;
+	for (const constraint of constraints) {
+		try {
+			const stream = await navigator.mediaDevices.getUserMedia(constraint);
+			const videoTrack = stream.getVideoTracks()[0];
+			if (videoTrack && videoTrack.readyState === "live") {
+				return stream;
+			}
+		} catch (error) {
+			lastError = error;
+		}
+	}
+	throw lastError ?? new Error("Failed to acquire camera stream");
 };
 
 const tabCaptureConstraints = (streamId: string, includeAudio: boolean) =>
@@ -501,8 +505,8 @@ const getMicrophoneStream = async (
 // amplitude (time-domain, 0..1) that counts as sound. A muted/dead device
 // flat-lines near 0; a working mic's noise floor clears this threshold, so it
 // only flags an effectively-silent input.
-const MIC_PROBE_WINDOW_MS = 1200;
-const MIC_PROBE_SAMPLE_INTERVAL_MS = 50;
+const MIC_PROBE_WINDOW_MS = 250;
+const MIC_PROBE_SAMPLE_INTERVAL_MS = 20;
 const MIC_SOUND_MIN_PEAK = 0.0015;
 
 // Opens the selected mic and listens for any signal so the recorder can warn
@@ -1699,6 +1703,21 @@ const handleRequest = async (
 
 	if (message.type === "probe-microphone") {
 		return { ok: true, micProbe: await probeMicrophone(message.microphone) };
+	}
+
+	if (message.type === "toggle-microphone-mute") {
+		const recording = activeRecording;
+		if (recording) {
+			for (const stream of recording.streams) {
+				for (const track of stream.getAudioTracks()) {
+					track.enabled = !message.muted;
+				}
+			}
+			for (const track of recording.recordingStream.getAudioTracks()) {
+				track.enabled = !message.muted;
+			}
+		}
+		return { ok: true };
 	}
 
 	return { ok: true, status };

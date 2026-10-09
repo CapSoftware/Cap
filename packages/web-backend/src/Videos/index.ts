@@ -1,9 +1,11 @@
 import { nanoId } from "@cap/database/helpers";
 import * as Db from "@cap/database/schema";
+import { getNewVideoPublic } from "@cap/database/video-sharing-default";
 import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
 import { dub } from "@cap/utils";
 import {
 	CurrentUser,
+	DatabaseError,
 	type Folder,
 	Policy,
 	Storage as StorageDomain,
@@ -17,6 +19,7 @@ import { Database } from "../Database.ts";
 import { Storage as StorageService } from "../Storage/index.ts";
 import {
 	getPublishedRecordingCopyKeys,
+	getPublishedRecordingThumbnailKey,
 	isInternalRecordingKey,
 } from "../Storage/recording-output.ts";
 import { Tinybird } from "../Tinybird/index.ts";
@@ -130,12 +133,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 		const tinybird = yield* Tinybird;
 
 		const getByIdForViewing = (id: Video.VideoId) =>
-			repo
-				.getById(id)
-				.pipe(
-					Policy.withPublicPolicy(policy.canView(id)),
-					Effect.withSpan("Videos.getById"),
-				);
+			policy.getViewableById(id).pipe(Effect.withSpan("Videos.getById"));
 
 		const getAnalyticsCounts = Effect.fn("Videos.getAnalyticsCounts")(
 			function* (
@@ -302,9 +300,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 			 * Delete a video. Will fail if the user does not have access.
 			 */
 			delete: Effect.fn("Videos.delete")(function* (videoId: Video.VideoId) {
-				const maybeVideo = yield* repo
-					.getById(videoId)
-					.pipe(Policy.withPolicy(policy.isOwner(videoId)));
+				const maybeVideo = yield* policy.getOwnedById(videoId);
 				if (Option.isNone(maybeVideo))
 					return yield* Effect.fail(new Video.NotFoundError());
 				const [video] = maybeVideo.value;
@@ -353,9 +349,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 			duplicate: Effect.fn("Videos.duplicate")(function* (
 				videoId: Video.VideoId,
 			) {
-				const maybeVideo = yield* repo
-					.getById(videoId)
-					.pipe(Policy.withPolicy(policy.isOwner(videoId)));
+				const maybeVideo = yield* policy.getOwnedById(videoId);
 				if (Option.isNone(maybeVideo))
 					return yield* Effect.fail(new Video.NotFoundError());
 				const [video] = maybeVideo.value;
@@ -423,7 +417,14 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 						{
 							...video,
 							source:
-								publishedKeys.size > 0 ? { type: "desktopMP4" } : video.source,
+								publishedKeys.size > 0
+									? {
+											type:
+												video.source.type === "webMP4"
+													? "webMP4"
+													: "desktopMP4",
+										}
+									: video.source,
 							metadata: Option.map(video.metadata, (metadata) => {
 								const copied = { ...metadata };
 								delete copied.desktopRecordingUpload;
@@ -528,23 +529,22 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 				const updatedAt = input.updatedAt;
 				const videoId = input.videoId;
 
-				const [record] = yield* db
-					.use((db) =>
-						db
-							.select({
-								video: Db.videos,
-								upload: Db.videoUploads,
-							})
-							.from(Db.videos)
-							.leftJoin(
-								Db.videoUploads,
-								Dz.eq(Db.videos.id, Db.videoUploads.videoId),
-							)
-							.where(Dz.eq(Db.videos.id, videoId)),
-					)
-					.pipe(Policy.withPolicy(policy.isOwner(videoId)));
+				const [record] = yield* db.use((db) =>
+					db
+						.select({
+							video: Db.videos,
+							upload: Db.videoUploads,
+						})
+						.from(Db.videos)
+						.leftJoin(
+							Db.videoUploads,
+							Dz.eq(Db.videos.id, Db.videoUploads.videoId),
+						)
+						.where(Dz.eq(Db.videos.id, videoId)),
+				);
 
 				if (!record) return yield* Effect.fail(new Video.NotFoundError());
+				yield* policy.isOwnerLoaded(record.video);
 
 				yield* db.use((db) =>
 					db.transaction(async (tx) => {
@@ -614,7 +614,10 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 						ownerId: user.id,
 						orgId: input.orgId,
 						name: `Cap Recording - ${formattedDate}`,
-						public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
+						public: yield* Effect.tryPromise({
+							try: () => getNewVideoPublic(input.orgId),
+							catch: (cause) => new DatabaseError({ cause }),
+						}),
 						source: { type: "webMP4" },
 						bucketId,
 						storageIntegrationId,
@@ -705,9 +708,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 			getDownloadInfo: Effect.fn("Videos.getDownloadInfo")(function* (
 				videoId: Video.VideoId,
 			) {
-				const maybeVideo = yield* repo
-					.getById(videoId)
-					.pipe(Policy.withPublicPolicy(policy.canView(videoId)));
+				const maybeVideo = yield* policy.getViewableById(videoId);
 				if (Option.isNone(maybeVideo))
 					return yield* Effect.fail(new Video.NotFoundError());
 				const [video] = maybeVideo.value;
@@ -788,13 +789,17 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 			getThumbnailURL: Effect.fn("Videos.getThumbnailURL")(function* (
 				videoId: Video.VideoId,
 			) {
-				const maybeVideo = yield* repo
-					.getById(videoId)
-					.pipe(Policy.withPublicPolicy(policy.canView(videoId)));
+				const maybeVideo = yield* policy.getViewableById(videoId);
 				if (Option.isNone(maybeVideo)) return Option.none();
 				const [video] = maybeVideo.value;
 
 				const [bucket] = yield* storage.getAccessForVideo(video);
+				const publishedThumbnail = getPublishedRecordingThumbnailKey(video);
+				if (publishedThumbnail) {
+					return Option.some(
+						yield* bucket.getSignedObjectUrl(publishedThumbnail),
+					);
+				}
 				const listResponse = yield* bucket.listObjects({
 					prefix: `${video.ownerId}/${video.id}/`,
 				});

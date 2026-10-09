@@ -183,6 +183,7 @@ mod tests {
         };
         let video_cancel = video.cancel_token();
         let actor = Actor::spawn(Actor {
+            diagnostic: None,
             recording_dir: project.to_path_buf(),
             output_dir: segments_dir.clone(),
             capture_target: if progressive {

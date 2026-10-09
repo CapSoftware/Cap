@@ -1986,8 +1986,15 @@ impl ScreenshotEditorWindow {
                         .ok();
                     }
                     ExportDestination::File => {
-                        let dest =
-                            crate::platform::save_file_panel(&format!("{name}.png"), &["png"]);
+                        let dest = crate::platform::save_file_panel_async(
+                            &format!("{name}.png"),
+                            &["png"],
+                            cx,
+                        )
+                        .await;
+                        if this.update_in(cx, |_, _, _| ()).is_err() {
+                            return;
+                        }
                         if let Some(dest) = dest {
                             let written = cx
                                 .background_executor()
@@ -2072,6 +2079,7 @@ impl ScreenshotEditorWindow {
         cx: &mut Context<Self>,
     ) {
         cx.write_to_clipboard(gpui::ClipboardItem::new_string(link));
+        crate::app_sounds::play_notification();
         self.toast_update(
             toast,
             ToastKind::Success,
@@ -3909,6 +3917,7 @@ impl ScreenshotEditorWindow {
                 .child(
                     div()
                         .id("screenshot-popover-backdrop")
+                        .occlude()
                         .absolute()
                         .top_0()
                         .left_0()
@@ -3920,6 +3929,7 @@ impl ScreenshotEditorWindow {
                 )
                 .child(
                     div()
+                        .occlude()
                         .absolute()
                         .left(px(left))
                         .top(px(top))
@@ -4505,6 +4515,7 @@ fn kbd_tooltip(
         .id(gpui::SharedString::from(format!("{label}-tooltip")))
         .flex_shrink_0()
         .child(child)
+        .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
         .tooltip(move |_window, cx| ui::Tooltip::new(&theme, label).keys(keys).view(cx))
 }
 
@@ -4538,6 +4549,7 @@ fn tool_button(
         } else {
             theme.gray_11
         }))
+        .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
         .tooltip(move |_window, cx| {
             ui::Tooltip::new(&theme, label.clone())
                 .keys([shortcut.clone()])

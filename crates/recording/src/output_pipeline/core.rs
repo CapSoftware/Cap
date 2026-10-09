@@ -1,3 +1,4 @@
+use super::start_gate::{AudioAdmission, RecordingStartGate};
 use crate::sources::audio_mixer::AudioMixer;
 use anyhow::{Context, anyhow};
 use cap_media_info::{AudioInfo, VideoInfo};
@@ -39,6 +40,10 @@ pub const STALL_BUDGET_MS: u64 = 50;
 pub(crate) const STALL_POLL_INTERVAL: Duration = Duration::from_micros(500);
 
 pub const VIDEO_START_GATE_TIMEOUT: Duration = Duration::from_millis(500);
+/// How long a primed video track waits after the arm point for a fresh frame
+/// before releasing the last pre-arm frame as the recording's first frame.
+const STATIC_SOURCE_RELEASE_DELAY: Duration = Duration::from_millis(50);
+const STATIC_SOURCE_RELEASE_POLL: Duration = Duration::from_millis(10);
 
 fn remap_video_timestamp(
     source_clock: &mut SourceClockState,
@@ -438,6 +443,60 @@ fn new_health_channel() -> (HealthSender, HealthReceiver) {
 }
 
 pub fn emit_health(tx: &HealthSender, event: PipelineHealthEvent) {
+    use cap_utils::operation_diagnostics::{Field, health_event};
+    match &event {
+        PipelineHealthEvent::FrameDropRateHigh { rate_pct, .. } => health_event(
+            0,
+            "high_frame_drop_rate",
+            &[Field::number(
+                "drop_rate_basis_points",
+                (rate_pct * 100.0).max(0.0) as u64,
+            )],
+        ),
+        PipelineHealthEvent::AudioGapDetected { gap_ms } => {
+            health_event(1, "audio_gap", &[Field::number("gap_ms", *gap_ms)])
+        }
+        PipelineHealthEvent::AudioDegradedToVideoOnly { .. } => {
+            health_event(2, "audio_degraded_to_video_only", &[])
+        }
+        PipelineHealthEvent::SourceRestarting => health_event(3, "source_restarting", &[]),
+        PipelineHealthEvent::SourceRestarted => health_event(4, "source_restarted", &[]),
+        PipelineHealthEvent::Stalled { waited_ms, .. } => health_event(
+            5,
+            "pipeline_stalled",
+            &[Field::number("waited_ms", *waited_ms)],
+        ),
+        PipelineHealthEvent::MuxerCrashed { .. } => health_event(6, "muxer_crashed", &[]),
+        PipelineHealthEvent::DiskSpaceLow {
+            bytes_remaining, ..
+        } => health_event(
+            7,
+            "disk_space_low",
+            &[Field::number("bytes_remaining", *bytes_remaining)],
+        ),
+        PipelineHealthEvent::DiskSpaceExhausted { bytes_remaining } => health_event(
+            8,
+            "disk_space_exhausted",
+            &[Field::number("bytes_remaining", *bytes_remaining)],
+        ),
+        PipelineHealthEvent::DeviceLost { .. } => health_event(9, "device_lost", &[]),
+        PipelineHealthEvent::EncoderRebuilt { attempt, .. } => health_event(
+            10,
+            "encoder_rebuilt",
+            &[Field::number("attempt", *attempt as u64)],
+        ),
+        PipelineHealthEvent::SourceAudioReset { starvation_ms, .. } => health_event(
+            11,
+            "source_audio_reset",
+            &[Field::number("starvation_ms", *starvation_ms)],
+        ),
+        PipelineHealthEvent::RecoveryFragmentCorrupt { .. } => {
+            health_event(12, "recovery_fragment_corrupt", &[])
+        }
+        PipelineHealthEvent::CaptureTargetLost { .. } => {
+            health_event(13, "capture_target_lost", &[])
+        }
+    }
     let _ = tx.try_send(event);
 }
 
@@ -1613,6 +1672,7 @@ impl OutputPipeline {
             timestamps,
             master_clock: None,
             audio_anchor: AudioAnchor::FirstFrame,
+            start_gate: None,
         }
     }
 }
@@ -1696,6 +1756,7 @@ pub struct OutputPipelineBuilder<TVideo> {
     timestamps: Timestamps,
     master_clock: Option<Arc<MasterClock>>,
     audio_anchor: AudioAnchor,
+    start_gate: Option<RecordingStartGate>,
 }
 
 pub struct NoVideo;
@@ -1741,6 +1802,12 @@ impl<THasVideo> OutputPipelineBuilder<THasVideo> {
         self.audio_anchor = anchor;
         self
     }
+
+    /// Hold every captured frame until `gate` is armed. See [`RecordingStartGate`].
+    pub fn with_start_gate(mut self, gate: Option<RecordingStartGate>) -> Self {
+        self.start_gate = gate;
+        self
+    }
 }
 
 impl OutputPipelineBuilder<NoVideo> {
@@ -1755,6 +1822,7 @@ impl OutputPipelineBuilder<NoVideo> {
             timestamps: self.timestamps,
             master_clock: self.master_clock,
             audio_anchor: self.audio_anchor,
+            start_gate: self.start_gate,
         }
     }
 }
@@ -1765,13 +1833,13 @@ pub(crate) struct PipelineBuildScope(Arc<PipelineBuildScopeInner>);
 type CaptureCompletion = Shared<BoxFuture<'static, Result<(), String>>>;
 
 struct ScopeError {
-    #[cfg(any(test, target_os = "linux", windows))]
+    #[cfg(any(test, target_os = "linux", target_os = "macos", windows))]
     message: String,
-    #[cfg(any(test, target_os = "linux", windows))]
+    #[cfg(any(test, target_os = "linux", target_os = "macos", windows))]
     uncertain: bool,
 }
 
-#[cfg(any(test, target_os = "linux", windows))]
+#[cfg(any(test, target_os = "linux", target_os = "macos", windows))]
 #[derive(Debug)]
 pub(crate) struct PipelineJoinReport {
     pub quiescent: bool,
@@ -1781,9 +1849,10 @@ pub(crate) struct PipelineJoinReport {
 struct PipelineBuildScopeInner {
     parent: Option<PipelineBuildScope>,
     strict_lifetime: bool,
+    wait_for_video_start: bool,
     #[cfg(target_os = "linux")]
     required_source_health: bool,
-    #[cfg(any(test, target_os = "linux", windows))]
+    #[cfg(any(test, target_os = "linux", target_os = "macos", windows))]
     drain: tokio::sync::Mutex<()>,
     cancelled: CancellationToken,
     committed: AtomicBool,
@@ -1825,6 +1894,11 @@ impl PipelineBuildScope {
         Self::with_lifetime(false)
     }
 
+    #[cfg(target_os = "macos")]
+    pub(crate) fn new_macos_segment() -> Self {
+        Self::with_lifetime_policy(false, false, false)
+    }
+
     #[cfg(any(test, target_os = "linux"))]
     pub(crate) fn new_lifetime() -> Self {
         Self::with_lifetime(true)
@@ -1832,19 +1906,24 @@ impl PipelineBuildScope {
 
     #[cfg(any(test, target_os = "linux", windows))]
     fn with_lifetime(strict_lifetime: bool) -> Self {
-        Self::with_lifetime_policy(strict_lifetime, false)
+        Self::with_lifetime_policy(strict_lifetime, false, true)
     }
 
     #[cfg(target_os = "linux")]
     pub(crate) fn new_studio_lifetime() -> Self {
-        Self::with_lifetime_policy(true, true)
+        Self::with_lifetime_policy(true, true, true)
     }
 
-    #[cfg(any(test, target_os = "linux", windows))]
-    fn with_lifetime_policy(strict_lifetime: bool, _required_source_health: bool) -> Self {
+    #[cfg(any(test, target_os = "linux", target_os = "macos", windows))]
+    fn with_lifetime_policy(
+        strict_lifetime: bool,
+        _required_source_health: bool,
+        wait_for_video_start: bool,
+    ) -> Self {
         Self(Arc::new(PipelineBuildScopeInner {
             parent: None,
             strict_lifetime,
+            wait_for_video_start,
             #[cfg(target_os = "linux")]
             required_source_health: _required_source_health,
             drain: tokio::sync::Mutex::new(()),
@@ -1861,6 +1940,7 @@ impl PipelineBuildScope {
         Self(Arc::new(PipelineBuildScopeInner {
             parent: Some(self.clone()),
             strict_lifetime: self.requires_joined_stop(),
+            wait_for_video_start: self.0.wait_for_video_start,
             required_source_health: self.0.required_source_health,
             drain: tokio::sync::Mutex::new(()),
             cancelled: self.cancellation().child_token(),
@@ -1954,7 +2034,7 @@ impl PipelineBuildScope {
         });
     }
 
-    #[cfg(any(test, target_os = "linux", windows))]
+    #[cfg(any(test, target_os = "linux", target_os = "macos", windows))]
     pub(crate) async fn cancel_and_join_report(&self) -> PipelineJoinReport {
         self.cancel();
         let _drain = self.0.drain.lock().await;
@@ -1996,7 +2076,7 @@ impl PipelineBuildScope {
         self.0.strict_lifetime
     }
 
-    #[cfg(any(test, target_os = "linux", windows))]
+    #[cfg(any(test, target_os = "linux", target_os = "macos", windows))]
     pub(crate) fn commit(&self) -> bool {
         let mut tokens = self.0.tokens.lock().unwrap();
         if self.0.cancelled.is_cancelled() {
@@ -2018,9 +2098,9 @@ impl PipelineBuildScope {
         }
         if !self.0.committed.load(Ordering::Acquire) {
             self.0.cleanup_errors.lock().unwrap().push(ScopeError {
-                #[cfg(any(test, target_os = "linux", windows))]
+                #[cfg(any(test, target_os = "linux", target_os = "macos", windows))]
                 message: error,
-                #[cfg(any(test, target_os = "linux", windows))]
+                #[cfg(any(test, target_os = "linux", target_os = "macos", windows))]
                 uncertain: true,
             });
         }
@@ -2069,9 +2149,9 @@ impl PipelineBuildScope {
         }
         if !self.is_committed() {
             self.0.cleanup_errors.lock().unwrap().push(ScopeError {
-                #[cfg(any(test, target_os = "linux", windows))]
+                #[cfg(any(test, target_os = "linux", target_os = "macos", windows))]
                 message: error,
-                #[cfg(any(test, target_os = "linux", windows))]
+                #[cfg(any(test, target_os = "linux", target_os = "macos", windows))]
                 uncertain: !self.requires_joined_stop(),
             });
         }
@@ -2192,14 +2272,14 @@ impl TaskPool {
     }
 }
 
-#[cfg(any(windows, test))]
-struct WindowsStartupGuard {
+#[cfg(any(windows, target_os = "macos", test))]
+struct PipelineStartupGuard {
     scope: PipelineBuildScope,
     armed: bool,
 }
 
-#[cfg(any(windows, test))]
-impl Drop for WindowsStartupGuard {
+#[cfg(any(windows, target_os = "macos", test))]
+impl Drop for PipelineStartupGuard {
     fn drop(&mut self) {
         if self.armed {
             self.scope.cancel();
@@ -2208,7 +2288,7 @@ impl Drop for WindowsStartupGuard {
                 runtime.spawn(async move {
                     let report = scope.cancel_and_join_report().await;
                     if let Some(error) = report.error {
-                        error!(%error, "Dropped Windows startup cleanup failed");
+                        error!(%error, "Dropped capture startup cleanup failed");
                     }
                 });
             }
@@ -2216,12 +2296,17 @@ impl Drop for WindowsStartupGuard {
     }
 }
 
-#[cfg(any(windows, test))]
-pub(crate) async fn finish_windows_pipeline_startup<T>(
+#[cfg(any(windows, target_os = "macos", test))]
+#[derive(Debug, thiserror::Error)]
+#[error("Capture startup cleanup is unconfirmed: {0}")]
+pub(crate) struct PipelineStartupCleanupUnconfirmed(String);
+
+#[cfg(any(windows, target_os = "macos", test))]
+pub(crate) async fn finish_pipeline_startup<T>(
     scope: &PipelineBuildScope,
     startup: impl Future<Output = anyhow::Result<T>>,
 ) -> anyhow::Result<T> {
-    let mut guard = WindowsStartupGuard {
+    let mut guard = PipelineStartupGuard {
         scope: scope.clone(),
         armed: true,
     };
@@ -2240,15 +2325,14 @@ pub(crate) async fn finish_windows_pipeline_startup<T>(
                 Err(error) => error,
                 Ok(output) => {
                     drop(output);
-                    anyhow!("Windows capture startup was cancelled")
+                    anyhow!("Capture startup was cancelled")
                 }
             };
             let report = scope.cancel_and_join_report().await;
             guard.armed = false;
             match (report.quiescent, report.error) {
-                (false, cleanup) => Err(error.context(format!(
-                    "Capture startup cleanup is unconfirmed: {}",
-                    cleanup.unwrap_or_default()
+                (false, cleanup) => Err(error.context(PipelineStartupCleanupUnconfirmed(
+                    cleanup.unwrap_or_default(),
                 ))),
                 (true, Some(cleanup)) => {
                     Err(error.context(format!("Capture startup cleanup: {cleanup}")))
@@ -2267,11 +2351,7 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
         #[cfg(windows)]
         if PipelineBuildScope::current().is_none() {
             let scope = PipelineBuildScope::new();
-            return finish_windows_pipeline_startup(
-                &scope,
-                self.build_inner::<TMuxer>(muxer_config),
-            )
-            .await;
+            return finish_pipeline_startup(&scope, self.build_inner::<TMuxer>(muxer_config)).await;
         }
         self.build_inner::<TMuxer>(muxer_config).await
     }
@@ -2287,6 +2367,7 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
             path,
             master_clock,
             audio_anchor,
+            start_gate,
             ..
         } = self;
 
@@ -2348,6 +2429,7 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
             master_clock.clone(),
             video_info,
             video_start_gate.clone(),
+            start_gate.clone(),
         );
 
         let audio_gap_summary = Arc::new(OnceLock::new());
@@ -2364,6 +2446,7 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
             shared_pause,
             true,
             video_start_gate,
+            start_gate,
             build_ctx.stop_signal,
             audio_gap_summary.clone(),
             audio_anchor,
@@ -2406,6 +2489,7 @@ impl OutputPipelineBuilder<NoVideo> {
             path,
             master_clock,
             audio_anchor,
+            start_gate,
             ..
         } = self;
 
@@ -2459,6 +2543,7 @@ impl OutputPipelineBuilder<NoVideo> {
             shared_pause,
             false,
             None,
+            start_gate,
             build_ctx.stop_signal,
             audio_gap_summary.clone(),
             audio_anchor,
@@ -2536,6 +2621,7 @@ async fn finish_build(
     shared_pause: SharedWallClockPause,
     has_video: bool,
     video_start_gate: Option<VideoStartGate>,
+    start_gate: Option<RecordingStartGate>,
     stop_signal: PipelineStopSignal,
     gap_summary_slot: Arc<OnceLock<AudioGapSummary>>,
     audio_anchor: AudioAnchor,
@@ -2550,6 +2636,7 @@ async fn finish_build(
             shared_pause,
             has_video,
             video_start_gate,
+            start_gate,
             gap_summary_slot,
             audio_anchor,
         );
@@ -2767,14 +2854,16 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
     master_clock: Arc<MasterClock>,
     video_info: VideoInfo,
     video_start_gate: Option<VideoStartGate>,
+    start_gate: Option<RecordingStartGate>,
 ) -> Option<oneshot::Receiver<Result<(), String>>> {
     let frame_duration_ns = estimate_video_frame_duration_ns(&video_info);
-    let (start_tx, started) = if PipelineBuildScope::current().is_some() {
-        let (sender, receiver) = oneshot::channel();
-        (Some(sender), Some(receiver))
-    } else {
-        (None, None)
-    };
+    let (start_tx, started) =
+        if PipelineBuildScope::current().is_some_and(|scope| scope.0.wait_for_video_start) {
+            let (sender, receiver) = oneshot::channel();
+            (Some(sender), Some(receiver))
+        } else {
+            (None, None)
+        };
     setup_ctx.tasks().spawn("capture-video", {
         let stop_token = stop_token.clone();
         let scope = PipelineBuildScope::current();
@@ -2842,10 +2931,42 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
         let mut dropped_during_pause: u64 = 0;
         let mut last_frame = None;
         let mut first_frame_offset = None;
+        let mut start_gate = start_gate;
+        let mut held_before_start: u64 = 0;
+        // Screen capture only delivers on change, so a static screen may never
+        // produce a frame after the arm point. The last frame captured before it
+        // is kept and released, stamped at the arm point, once no fresh frame has
+        // followed the arm within a frame interval.
+        let mut held_frame: Option<TVideo::Frame> = None;
+        let mut wall_clock_origin = timestamps.instant();
 
         let res = stop_token
             .run_until_cancelled(async {
-                while let Some(frame) = video_rx.next().await {
+                loop {
+                    let (frame, released_at_arm) = if let Some(gate) = &start_gate
+                        && held_frame.is_some()
+                    {
+                        tokio::select! {
+                            next = video_rx.next() => match next {
+                                Some(frame) => (frame, false),
+                                None => break,
+                            },
+                            _ = tokio::time::sleep(STATIC_SOURCE_RELEASE_POLL) => {
+                                let static_since_arm = gate.armed_instant().is_some_and(|armed| {
+                                    armed.elapsed() >= STATIC_SOURCE_RELEASE_DELAY
+                                });
+                                if !static_since_arm {
+                                    continue;
+                                }
+                                (held_frame.take().expect("held frame presence checked"), true)
+                            }
+                        }
+                    } else {
+                        match video_rx.next().await {
+                            Some(frame) => (frame, false),
+                            None => break,
+                        }
+                    };
                     let (is_paused, total_pause_duration) = shared_pause.check();
 
                     if is_paused {
@@ -2853,9 +2974,36 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                         continue;
                     }
 
-                    frame_count += 1;
+                    let mut timestamp = frame.timestamp();
 
-                    let timestamp = frame.timestamp();
+                    if let Some(gate) = &start_gate {
+                        if released_at_arm {
+                            let armed = gate.armed_instant().expect("released only once armed");
+                            timestamp = Timestamp::Instant(armed);
+                            info!(
+                                held_frames = held_before_start,
+                                "Start gate released the frame on screen at the arm point"
+                            );
+                        } else if !gate.admits_video(timestamp) {
+                            held_before_start += 1;
+                            held_frame = Some(frame);
+                            continue;
+                        } else {
+                            info!(
+                                held_frames = held_before_start,
+                                admitted_after_arm_ms =
+                                    gate.offset_secs(timestamp).unwrap_or_default() * 1000.0,
+                                "Start gate admitted first video frame"
+                            );
+                        }
+                        wall_clock_origin = gate
+                            .armed_instant()
+                            .unwrap_or(timestamps.instant());
+                        start_gate = None;
+                        held_frame = None;
+                    }
+
+                    frame_count += 1;
 
                     let is_first_frame = first_tx.is_some();
                     if let Some(first_tx) = first_tx.take() {
@@ -2893,8 +3041,7 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                             + remap.duration().saturating_sub(total_pause_duration),
                     );
 
-                    let wall_clock_elapsed = timestamps
-                        .instant()
+                    let wall_clock_elapsed = wall_clock_origin
                         .elapsed()
                         .saturating_sub(total_pause_duration);
 
@@ -2982,10 +3129,19 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
 
                 match tokio::time::timeout_at(drain_deadline, video_rx.next()).await {
                     Ok(Some(frame)) => {
+                        let timestamp = frame.timestamp();
+                        if let Some(gate) = &start_gate {
+                            if !gate.admits_video(timestamp) {
+                                held_before_start += 1;
+                                continue;
+                            }
+                            wall_clock_origin = gate
+                                .armed_instant()
+                                .unwrap_or(timestamps.instant());
+                            start_gate = None;
+                        }
                         frame_count += 1;
                         drained += 1;
-
-                        let timestamp = frame.timestamp();
 
                         let is_first_frame = first_tx.is_some();
                         if let Some(first_tx) = first_tx.take() {
@@ -3014,8 +3170,7 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                                     .saturating_sub(shared_pause.total_pause_duration()),
                         );
 
-                        let wall_clock_elapsed = timestamps
-                            .instant()
+                        let wall_clock_elapsed = wall_clock_origin
                             .elapsed()
                             .saturating_sub(shared_pause.total_pause_duration());
 
@@ -3187,6 +3342,7 @@ impl PreparedAudioSources {
         shared_pause: SharedWallClockPause,
         has_video: bool,
         video_start_gate: Option<VideoStartGate>,
+        start_gate: Option<RecordingStartGate>,
         gap_summary_slot: Arc<OnceLock<AudioGapSummary>>,
         audio_anchor: AudioAnchor,
     ) {
@@ -3218,6 +3374,7 @@ impl PreparedAudioSources {
                 let mut frame_count: u64 = 0;
                 let mut gap_tracker = AudioGapTracker::new(has_wireless_source, timestamps);
                 let mut gate_applied = video_start_gate.is_none();
+                let mut start_gate = StartGateState::new(start_gate);
 
                 let mut audio_degraded = false;
 
@@ -3233,6 +3390,7 @@ impl PreparedAudioSources {
                                     health_tx: &health_tx,
                                     shared_pause: &shared_pause,
                                     video_start_gate: video_start_gate.as_ref(),
+                                    start_gate: &start_gate.gate,
                                     allow_audio_degradation,
                                     origin: FrameProcessOrigin::Live,
                                     observed_at: Instant::now(),
@@ -3243,6 +3401,8 @@ impl PreparedAudioSources {
                                     timestamp_generator: &mut timestamp_generator,
                                     gap_tracker: &mut gap_tracker,
                                     gate_applied: &mut gate_applied,
+                                    held_before_start: &mut start_gate.held,
+                                    start_admitted: &mut start_gate.admitted,
                                     first_tx: &mut first_tx,
                                     frame_count: &mut frame_count,
                                     dropped_during_pause: &mut dropped_during_pause,
@@ -3305,6 +3465,7 @@ impl PreparedAudioSources {
                                     health_tx: &health_tx,
                                     shared_pause: &shared_pause,
                                     video_start_gate: video_start_gate.as_ref(),
+                                    start_gate: &start_gate.gate,
                                     allow_audio_degradation,
                                     origin: FrameProcessOrigin::Drain,
                                     observed_at: Instant::now(),
@@ -3315,6 +3476,8 @@ impl PreparedAudioSources {
                                     timestamp_generator: &mut timestamp_generator,
                                     gap_tracker: &mut gap_tracker,
                                     gate_applied: &mut gate_applied,
+                                    held_before_start: &mut start_gate.held,
+                                    start_admitted: &mut start_gate.admitted,
                                     first_tx: &mut first_tx,
                                     frame_count: &mut frame_count,
                                     dropped_during_pause: &mut dropped_during_pause,
@@ -3382,8 +3545,9 @@ impl PreparedAudioSources {
                     // the fill below covers the full duration and the track
                     // reports a valid start.
                     if audio_anchor == AudioAnchor::PipelineEpoch && !gap_tracker.started() {
-                        let epoch_ts = Timestamp::Instant(timestamps.instant());
-                        gap_tracker.mark_started(epoch_ts, timestamps.instant());
+                        let epoch = audio_epoch(timestamps, start_gate.gate.as_ref());
+                        let epoch_ts = Timestamp::Instant(epoch.instant());
+                        gap_tracker.mark_started(epoch_ts, epoch.instant());
                         if let Some(first_tx) = first_tx.take() {
                             let _ = first_tx.send(epoch_ts);
                         }
@@ -3525,6 +3689,7 @@ struct AudioFrameProcessContext<'a, TMutex: AudioMuxer> {
     health_tx: &'a HealthSender,
     shared_pause: &'a SharedWallClockPause,
     video_start_gate: Option<&'a VideoStartGate>,
+    start_gate: &'a Option<RecordingStartGate>,
     allow_audio_degradation: bool,
     origin: FrameProcessOrigin,
     observed_at: Instant,
@@ -3536,9 +3701,37 @@ struct AudioFrameProcessState<'a> {
     timestamp_generator: &'a mut AudioTimestampGenerator,
     gap_tracker: &'a mut AudioGapTracker,
     gate_applied: &'a mut bool,
+    held_before_start: &'a mut u64,
+    start_admitted: &'a mut bool,
     first_tx: &'a mut Option<oneshot::Sender<Timestamp>>,
     frame_count: &'a mut u64,
     dropped_during_pause: &'a mut u64,
+}
+
+struct StartGateState {
+    gate: Option<RecordingStartGate>,
+    held: u64,
+    admitted: bool,
+}
+
+impl StartGateState {
+    fn new(gate: Option<RecordingStartGate>) -> Self {
+        Self {
+            gate,
+            held: 0,
+            admitted: false,
+        }
+    }
+}
+
+/// The instant an epoch-anchored audio track treats as time zero: the start
+/// gate's arm point when the pipeline was primed ahead of the recording, else
+/// the pipeline epoch.
+fn audio_epoch(timestamps: Timestamps, start_gate: Option<&RecordingStartGate>) -> Timestamps {
+    start_gate
+        .and_then(RecordingStartGate::armed_at)
+        .filter(|armed| armed.instant() > timestamps.instant())
+        .unwrap_or(timestamps)
 }
 
 async fn process_audio_frame<TMutex: AudioMuxer>(
@@ -3551,6 +3744,42 @@ async fn process_audio_frame<TMutex: AudioMuxer>(
     if is_paused {
         *state.dropped_during_pause += 1;
         return Ok(AudioFrameOutcome::DroppedPaused);
+    }
+
+    if let Some(gate) = ctx.start_gate {
+        match gate.admit_audio(frame.timestamp, frame.inner.samples(), ctx.sample_rate) {
+            AudioAdmission::Drop => {
+                *state.held_before_start += 1;
+                return Ok(AudioFrameOutcome::DropFrame);
+            }
+            AudioAdmission::Trim { samples } => {
+                let Some(trimmed) = trim_audio_frame_front(&frame.inner, samples) else {
+                    *state.held_before_start += 1;
+                    return Ok(AudioFrameOutcome::DropFrame);
+                };
+                let trim_duration = Duration::from_nanos(
+                    samples as u64 * 1_000_000_000 / u64::from(ctx.sample_rate.max(1)),
+                );
+                if !std::mem::replace(state.start_admitted, true) {
+                    info!(
+                        held_frames = *state.held_before_start,
+                        trimmed_samples = samples,
+                        "Start gate admitted first audio frame at the arm point"
+                    );
+                }
+                frame = AudioFrame::new(trimmed, frame.timestamp + trim_duration);
+            }
+            AudioAdmission::Admit => {
+                if !std::mem::replace(state.start_admitted, true) {
+                    info!(
+                        held_frames = *state.held_before_start,
+                        admitted_after_arm_ms =
+                            gate.offset_secs(frame.timestamp).unwrap_or_default() * 1000.0,
+                        "Start gate admitted first audio frame"
+                    );
+                }
+            }
+        }
     }
 
     if !*state.gate_applied
@@ -3593,17 +3822,16 @@ async fn process_audio_frame<TMutex: AudioMuxer>(
         && ctx.video_start_gate.is_none()
         && !state.gap_tracker.started()
     {
-        let epoch_ts = Timestamp::Instant(ctx.timestamps.instant());
-        state
-            .gap_tracker
-            .mark_started(epoch_ts, ctx.timestamps.instant());
+        let epoch = audio_epoch(ctx.timestamps, ctx.start_gate.as_ref());
+        let epoch_ts = Timestamp::Instant(epoch.instant());
+        state.gap_tracker.mark_started(epoch_ts, epoch.instant());
 
-        let head_secs = frame.timestamp.signed_duration_since_secs(ctx.timestamps);
+        let head_secs = frame.timestamp.signed_duration_since_secs(epoch);
         let head = Duration::from_secs_f64(head_secs.max(0.0))
             .saturating_sub(total_pause_duration)
             // A capture timestamp can't credibly predate more wall time than
             // has actually elapsed since the epoch.
-            .min(observed_at.saturating_duration_since(ctx.timestamps.instant()));
+            .min(observed_at.saturating_duration_since(epoch.instant()));
 
         if !head.is_zero() {
             let start_samples = state.timestamp_generator.total_samples;
@@ -3648,7 +3876,7 @@ async fn process_audio_frame<TMutex: AudioMuxer>(
     if let Some(first_tx) = state.first_tx.take() {
         let anchor_ts =
             if ctx.anchor == AudioAnchor::PipelineEpoch && ctx.video_start_gate.is_none() {
-                Timestamp::Instant(ctx.timestamps.instant())
+                Timestamp::Instant(audio_epoch(ctx.timestamps, ctx.start_gate.as_ref()).instant())
             } else {
                 frame.timestamp
             };
@@ -6810,6 +7038,98 @@ mod tests {
         }
 
         #[tokio::test]
+        async fn primed_pipeline_discards_video_captured_before_the_start_gate_arms() {
+            let temp_dir = tempfile::tempdir().unwrap();
+            let gate = RecordingStartGate::new();
+            let (sender, receiver) = flume::bounded(8);
+            let sent = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let pipeline = OutputPipeline::builder(temp_dir.path().join("primed.mp4"))
+                .with_video::<ChannelVideoSource<StaticFrame>>(ChannelVideoSourceConfig::new(
+                    VideoInfo::from_raw(cap_media_info::RawVideoFormat::Bgra, 16, 16, 30),
+                    receiver,
+                ))
+                .with_timestamps(Timestamps::now())
+                .with_start_gate(Some(gate.clone()))
+                .build::<ObservedMuxer>(sent.clone())
+                .await
+                .unwrap();
+
+            for _ in 0..3 {
+                sender
+                    .send_async(StaticFrame {
+                        timestamp: Timestamp::Instant(Instant::now()),
+                    })
+                    .await
+                    .unwrap();
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            tokio::time::sleep(Duration::from_millis(60)).await;
+            assert!(sent.lock().unwrap().is_empty());
+
+            assert!(gate.arm());
+            let first_admitted = Instant::now();
+            for frame in 0..3u32 {
+                sender
+                    .send_async(StaticFrame {
+                        timestamp: Timestamp::Instant(
+                            first_admitted + Duration::from_millis(33 * u64::from(frame)),
+                        ),
+                    })
+                    .await
+                    .unwrap();
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            let outcome = pipeline.stop().await.unwrap();
+
+            match outcome.first_timestamp {
+                Timestamp::Instant(instant) => assert_eq!(instant, first_admitted),
+                other => panic!("unexpected first timestamp {other:?}"),
+            }
+            let timestamps = sent.lock().unwrap().clone();
+            assert_eq!(timestamps.first(), Some(&Duration::ZERO));
+            assert!(timestamps.len() >= 3, "{timestamps:?}");
+        }
+
+        #[tokio::test]
+        async fn primed_static_screen_opens_on_the_frame_held_at_the_arm_point() {
+            let temp_dir = tempfile::tempdir().unwrap();
+            let gate = RecordingStartGate::new();
+            let (sender, receiver) = flume::bounded(8);
+            let sent = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let pipeline = OutputPipeline::builder(temp_dir.path().join("static-primed.mp4"))
+                .with_video::<ChannelVideoSource<StaticFrame>>(ChannelVideoSourceConfig::new(
+                    VideoInfo::from_raw(cap_media_info::RawVideoFormat::Bgra, 16, 16, 30),
+                    receiver,
+                ))
+                .with_timestamps(Timestamps::now())
+                .with_start_gate(Some(gate.clone()))
+                .build::<ObservedMuxer>(sent.clone())
+                .await
+                .unwrap();
+
+            sender
+                .send_async(StaticFrame {
+                    timestamp: Timestamp::Instant(Instant::now()),
+                })
+                .await
+                .unwrap();
+            tokio::time::sleep(Duration::from_millis(80)).await;
+            assert!(sent.lock().unwrap().is_empty());
+
+            let armed = Timestamps::now();
+            assert!(gate.arm_at(armed));
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            let outcome = pipeline.stop().await.unwrap();
+
+            match outcome.first_timestamp {
+                Timestamp::Instant(instant) => assert_eq!(instant, armed.instant()),
+                other => panic!("unexpected first timestamp {other:?}"),
+            }
+            let timestamps = sent.lock().unwrap().clone();
+            assert_eq!(timestamps.first(), Some(&Duration::ZERO));
+        }
+
+        #[tokio::test]
         async fn static_capture_finishes_with_two_nominally_spaced_frames() {
             let (timestamps, _) = record_static_capture(Duration::ZERO).await;
             assert_eq!(timestamps.len(), 3);
@@ -7497,6 +7817,9 @@ mod tests {
             timestamp_generator: AudioTimestampGenerator,
             gap_tracker: AudioGapTracker,
             gate_applied: bool,
+            start_gate: Option<RecordingStartGate>,
+            held_before_start: u64,
+            start_admitted: bool,
             first_tx: Option<oneshot::Sender<Timestamp>>,
             frame_count: u64,
             dropped_during_pause: u64,
@@ -7524,10 +7847,20 @@ mod tests {
                     timestamp_generator: AudioTimestampGenerator::from_master_clock(master_clock),
                     gap_tracker: AudioGapTracker::new(false, timestamps),
                     gate_applied: true,
+                    start_gate: None,
+                    held_before_start: 0,
+                    start_admitted: false,
                     first_tx: None,
                     frame_count: 0,
                     dropped_during_pause: 0,
                     anchor: AudioAnchor::FirstFrame,
+                }
+            }
+
+            fn primed(start_gate: RecordingStartGate) -> Self {
+                Self {
+                    start_gate: Some(start_gate),
+                    ..Self::new()
                 }
             }
 
@@ -7570,6 +7903,7 @@ mod tests {
                         health_tx: &self.health_tx,
                         shared_pause: &self.shared_pause,
                         video_start_gate: None,
+                        start_gate: &self.start_gate,
                         allow_audio_degradation: true,
                         origin: FrameProcessOrigin::Live,
                         observed_at,
@@ -7580,6 +7914,8 @@ mod tests {
                         timestamp_generator: &mut self.timestamp_generator,
                         gap_tracker: &mut self.gap_tracker,
                         gate_applied: &mut self.gate_applied,
+                        held_before_start: &mut self.held_before_start,
+                        start_admitted: &mut self.start_admitted,
                         first_tx: &mut self.first_tx,
                         frame_count: &mut self.frame_count,
                         dropped_during_pause: &mut self.dropped_during_pause,
@@ -7605,6 +7941,81 @@ mod tests {
             fn sent(&self) -> Vec<SentAudioFrame> {
                 self.sent.lock().unwrap().clone()
             }
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn primed_track_holds_audio_until_the_start_gate_arms() {
+            let gate = RecordingStartGate::new();
+            let mut harness = AudioTimelineHarness::primed(gate.clone());
+
+            assert!(matches!(
+                harness.process(Duration::ZERO, 480).await,
+                AudioFrameOutcome::DropFrame
+            ));
+            assert!(matches!(
+                harness.process(Duration::from_millis(10), 480).await,
+                AudioFrameOutcome::DropFrame
+            ));
+            assert!(harness.sent().is_empty());
+            assert_eq!(harness.held_before_start, 2);
+
+            gate.arm_at(harness.timestamps + Duration::from_millis(25));
+
+            assert!(matches!(
+                harness.process(Duration::from_millis(20), 480).await,
+                AudioFrameOutcome::Sent
+            ));
+            assert!(matches!(
+                harness.process(Duration::from_millis(30), 480).await,
+                AudioFrameOutcome::Sent
+            ));
+
+            assert_eq!(
+                harness.sent(),
+                vec![
+                    SentAudioFrame {
+                        samples: 240,
+                        timestamp: Duration::ZERO,
+                    },
+                    SentAudioFrame {
+                        samples: 480,
+                        timestamp: Duration::from_millis(5),
+                    },
+                ]
+            );
+            assert_eq!(harness.committed_audio(), Duration::from_millis(15));
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn primed_epoch_anchored_track_anchors_at_the_arm_point() {
+            let gate = RecordingStartGate::new();
+            let mut harness = AudioTimelineHarness {
+                start_gate: Some(gate.clone()),
+                ..AudioTimelineHarness::new_epoch_anchored()
+            };
+
+            assert!(matches!(
+                harness.process(Duration::from_millis(500), 480).await,
+                AudioFrameOutcome::DropFrame
+            ));
+            gate.arm_at(harness.timestamps + Duration::from_millis(1_000));
+
+            assert!(matches!(
+                harness.process(Duration::from_millis(1_020), 480).await,
+                AudioFrameOutcome::Sent
+            ));
+
+            let sent = harness.sent();
+            let (frame, head) = sent.split_last().unwrap();
+            let head_samples: usize = head.iter().map(|frame| frame.samples).sum();
+            assert_eq!(head_samples, 960);
+            assert_eq!(
+                *frame,
+                SentAudioFrame {
+                    samples: 480,
+                    timestamp: Duration::from_millis(20),
+                }
+            );
         }
 
         #[tokio::test(flavor = "current_thread")]
@@ -8278,6 +8689,7 @@ mod tests {
                             SharedWallClockPause::new(Arc::new(AtomicBool::new(false))),
                             false,
                             None,
+                            None,
                             Arc::new(OnceLock::new()),
                             AudioAnchor::FirstFrame,
                         );
@@ -8433,6 +8845,8 @@ mod build_scope_tests {
         MuxerSetup,
         MuxerPending,
         VideoStart,
+        #[cfg(target_os = "macos")]
+        VideoStartPending,
         #[cfg(windows)]
         VideoStop,
         None,
@@ -8512,6 +8926,10 @@ mod build_scope_tests {
             async move {
                 if self.probe.stage == FailureStage::VideoStart {
                     anyhow::bail!("video start fault");
+                }
+                #[cfg(target_os = "macos")]
+                if self.probe.stage == FailureStage::VideoStartPending {
+                    self.probe.setup_pending.notified().await;
                 }
                 Ok(())
             }
@@ -8629,7 +9047,7 @@ mod build_scope_tests {
         let observed = exited.clone();
         let result = tokio::time::timeout(
             Duration::from_secs(2),
-            finish_windows_pipeline_startup(&scope, async move {
+            finish_pipeline_startup(&scope, async move {
                 let build = BuildCtx::new();
                 let mut setup = SetupCtx::new(
                     build.health_tx.clone(),
@@ -8673,7 +9091,7 @@ mod build_scope_tests {
         let scope = PipelineBuildScope::new();
         let probe = Probe::new(FailureStage::VideoStop, &scope);
         let directory = tempfile::tempdir().unwrap();
-        let pipeline = finish_windows_pipeline_startup(
+        let pipeline = finish_pipeline_startup(
             &scope,
             OutputPipeline::builder(directory.path().join("stop-fault.mp4"))
                 .with_video::<Video>(probe.clone())
@@ -8702,7 +9120,7 @@ mod build_scope_tests {
             let directory = tempfile::tempdir().unwrap();
             let result = tokio::time::timeout(
                 Duration::from_secs(3),
-                finish_windows_pipeline_startup(
+                finish_pipeline_startup(
                     &scope,
                     OutputPipeline::builder(directory.path().join("unused.mp4"))
                         .with_video::<Video>(probe.clone())
@@ -8729,7 +9147,7 @@ mod build_scope_tests {
             let screen = Probe::new(FailureStage::None, &scope);
             let requested = Probe::new(stage, &scope);
             let directory = tempfile::tempdir().unwrap();
-            let result = finish_windows_pipeline_startup(&scope, async {
+            let result = finish_pipeline_startup(&scope, async {
                 let _screen = OutputPipeline::builder(directory.path().join("screen.mp4"))
                     .with_video::<Video>(screen.clone())
                     .build::<Encoder>(screen.clone())
@@ -8763,7 +9181,7 @@ mod build_scope_tests {
         let ready = entered.clone();
         let owned = scope.clone();
         let task = tokio::spawn(async move {
-            finish_windows_pipeline_startup(&owned, async {
+            finish_pipeline_startup(&owned, async {
                 ready.notify_one();
                 std::future::pending::<anyhow::Result<()>>().await
             })
@@ -8781,7 +9199,7 @@ mod build_scope_tests {
         let scope = PipelineBuildScope::new();
         let probe = Probe::new(FailureStage::None, &scope);
         let directory = tempfile::tempdir().unwrap();
-        let pipeline = finish_windows_pipeline_startup(
+        let pipeline = finish_pipeline_startup(
             &scope,
             OutputPipeline::builder(directory.path().join("unused.mp4"))
                 .with_video::<Video>(probe.clone())
@@ -8796,6 +9214,33 @@ mod build_scope_tests {
         assert_eq!(probe.stopped.load(Ordering::Acquire), 1);
     }
 
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn macos_segment_startup_keeps_video_start_concurrent() {
+        let scope = PipelineBuildScope::new_macos_segment();
+        let probe = Probe::new(FailureStage::VideoStartPending, &scope);
+        let directory = tempfile::tempdir().unwrap();
+        let pipeline = tokio::time::timeout(
+            Duration::from_secs(2),
+            finish_pipeline_startup(
+                &scope,
+                OutputPipeline::builder(directory.path().join("screen.mp4"))
+                    .with_video::<Video>(probe.clone())
+                    .build::<Encoder>(probe.clone()),
+            ),
+        )
+        .await
+        .expect("camera and microphone setup must not wait for screen startup")
+        .unwrap();
+        assert!(scope.is_committed());
+        probe.setup_pending.notify_one();
+        tokio::task::yield_now().await;
+        probe.cancel.cancel();
+        pipeline.stop().await.unwrap();
+        assert_eq!(probe.alive.load(Ordering::Acquire), 0);
+        assert_eq!(probe.stopped.load(Ordering::Acquire), 1);
+    }
+
     #[tokio::test]
     async fn windows_failed_startup_does_not_finish_before_held_cleanup() {
         let scope = PipelineBuildScope::new();
@@ -8803,7 +9248,7 @@ mod build_scope_tests {
         let (entered, ready) = oneshot::channel();
         let scoped = scope.clone();
         let task = tokio::spawn(async move {
-            finish_windows_pipeline_startup(&scoped, async {
+            finish_pipeline_startup(&scoped, async {
                 let completion = PipelineBuildScope::current().unwrap().task_completion();
                 tokio::spawn(async move {
                     let _completion = completion;
@@ -8829,7 +9274,7 @@ mod build_scope_tests {
         let scope = PipelineBuildScope::new();
         let token = CancellationToken::new();
         scope.register_token(token.clone());
-        let result = finish_windows_pipeline_startup(&scope, async {
+        let result = finish_pipeline_startup(&scope, async {
             token.cancel();
             Ok(())
         })
@@ -8843,7 +9288,7 @@ mod build_scope_tests {
         let scope = PipelineBuildScope::new();
         scope.cancel();
         assert!(
-            finish_windows_pipeline_startup(&scope, async { Ok(()) })
+            finish_pipeline_startup(&scope, async { Ok(()) })
                 .await
                 .is_err()
         );

@@ -34,6 +34,7 @@ jobs:
             desktop:
               - '.gitattributes'
               - '.github/actions/install-desktop-deps/**'
+              - '.github/actions/setup-js/**'
               - '.github/workflows/ci.yml'
               - 'apps/cli/**'
               - 'apps/desktop/**'
@@ -52,7 +53,9 @@ jobs:
               - 'scripts/verify-gpui-release-inputs.mjs'
               - 'Cargo.toml'
               - 'Cargo.lock'
-              - 'pnpm-lock.yaml'
+              - 'bun.lock'
+              - 'bunfig.toml'
+              - 'package.json'
             rust:
               - '.cargo/**'
               - '.github/**'
@@ -64,7 +67,9 @@ jobs:
               - 'Cargo.lock'
             tauri-plugins:
               - 'Cargo.lock'
-              - 'pnpm-lock.yaml'
+              - 'bun.lock'
+              - 'scripts/check-tauri-plugin-versions*'
+              - 'apps/desktop/package.json'
 
       - name: Output branch name
         id: branch
@@ -80,10 +85,39 @@ jobs:
 
       - uses: ./.github/actions/setup-js
 
-      - run: pnpm web exec next typegen
+      - run: bun run --cwd apps/web next typegen
+
+      - name: Check MCP card bundle
+        run: bun run --cwd apps/web mcp-card:check
+
+      - name: Test workspace tooling
+        run: node --test scripts/bun-scripts.test.mjs scripts/check-tauri-plugin-versions.test.mjs
+
+      - name: Test Loops profile sync
+        run: |
+          bun test scripts/loops/profile.test.ts scripts/loops/lifecycle.test.ts
+          bun run tsc --noEmit --strict --jsx react-jsx --allowImportingTsExtensions --target ESNext --module ESNext --moduleResolution bundler --resolveJsonModule --types bun --skipLibCheck scripts/loops/*.ts
+
+      - name: Test render farm orchestration
+        run: |
+          bun test apps/render-farm
+          bun run --cwd apps/render-farm typecheck
+
+      - name: Test web React compatibility
+        run: >-
+          bun run --cwd apps/web test
+          __tests__/unit/embed-video-playback-chrome.test.ts
+          __tests__/unit/homepage-demo-accessibility.test.ts
+          __tests__/unit/linkified-text.test.ts
+          __tests__/unit/loom-import-ui.test.ts
+          __tests__/unit/media-player-store-refs.test.ts
+          __tests__/unit/seo-demo-videos.test.ts
+          __tests__/unit/signed-baa-card.test.ts
+          __tests__/unit/summary-editor.test.ts
+          __tests__/unit/sso-login-pages.test.ts
 
       - name: Typecheck
-        run: pnpm typecheck
+        run: bun run typecheck
 
   mobile:
     name: Mobile
@@ -97,19 +131,19 @@ jobs:
       - name: Check Expo dependencies
         env:
           EXPO_OFFLINE: "1"
-        run: pnpm --dir apps/mobile exec expo install --check
+        run: bun run --cwd apps/mobile expo install --check
 
       - name: Run Expo Doctor
         env:
           EXPO_OFFLINE: "1"
         working-directory: apps/mobile
-        run: pnpm dlx expo-doctor@1.20.1
+        run: bunx expo-doctor@1.20.1
 
       - name: Typecheck
-        run: pnpm --dir apps/mobile typecheck
+        run: bun run --cwd apps/mobile typecheck
 
       - name: Test
-        run: pnpm --dir apps/mobile test
+        run: bun run --cwd apps/mobile test
 
   format-biome:
     name: Format (Biome)
@@ -271,7 +305,7 @@ jobs:
 
       - name: Run cap-setup
         shell: bash
-        run: pnpm -w cap-setup
+        run: bun run cap-setup
         env:
           RUST_TARGET_TRIPLE: ${{ matrix.settings.target }}
 
@@ -279,22 +313,45 @@ jobs:
         shell: bash
         run: ./scripts/build-desktop-binaries.sh ${{ matrix.settings.target }}
 
+      - name: Test Windows startup logging regressions
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          export PATH="$(cygpath "$GITHUB_WORKSPACE/target/debug"):$PATH"
+          cargo test --locked -p cap-desktop --target ${{ matrix.settings.target }} --bin cap-desktop logging_tests
+          cargo test --locked -p cap-desktop --target ${{ matrix.settings.target }} --test crash_sentinel
+
       - name: Test Linux desktop regressions
         if: ${{ runner.os == 'Linux' }}
         shell: bash
         run: |
           node --test scripts/linux-bundle-config.test.mjs scripts/finalize-linux-appimage.test.mjs
-          pnpm --dir apps/desktop exec vitest run scripts/prepare.test.js
+          bun run --cwd apps/desktop vitest run scripts/prepare.test.js
           cargo test --locked -p cap-utils -p cap-cli-install --lib
           cargo test --locked -p cap --bin cap record::tests
           cargo test --locked -p cap-recording --lib -- --test-threads=1
           cargo test --locked -p cap-enc-ffmpeg
+          cargo test --locked -p cap-desktop --lib render_frame_event
         env:
           LD_LIBRARY_PATH: ${{ format('{0}/target/native-deps/lib:{0}/target/debug:{0}/target/{1}/debug', github.workspace, matrix.settings.target) }}
+
+      - name: Test export estimate request lifecycle
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            export PATH="$(cygpath "$GITHUB_WORKSPACE/target/debug"):$PATH"
+          elif [[ "$RUNNER_OS" == "Linux" ]]; then
+            export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/target/native-deps/lib:$GITHUB_WORKSPACE/target/debug:$GITHUB_WORKSPACE/target/${{ matrix.settings.target }}/debug${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          fi
+          cargo test --locked -p cap-desktop --test export_estimate_request
 
       - name: Build GPUI desktop
         shell: bash
         run: ./scripts/build-gpui-binary.sh debug ${{ matrix.settings.target }}
+
+      - name: Test export preview device-loss handling
+        shell: bash
+        run: cargo test --locked -p cap-desktop --test gpu_device_health
 
       - name: Test GPUI desktop
         shell: bash
@@ -317,7 +374,7 @@ jobs:
 
       - name: Build app
         working-directory: apps/desktop
-        run: pnpm tauri build --debug --target ${{ matrix.settings.target }} --no-bundle
+        run: bun run tauri build --debug --target ${{ matrix.settings.target }} --no-bundle
         env:
           LD_LIBRARY_PATH: ${{ runner.os == 'Linux' && format('{0}/target/native-deps/lib:{0}/target/debug:{0}/target/{1}/debug', github.workspace, matrix.settings.target) || '' }}
           RUST_TARGET_TRIPLE: ${{ matrix.settings.target }}
@@ -331,10 +388,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup node
-        uses: actions/setup-node@v3
-        with:
-          node-version: 20
+      - uses: ./.github/actions/setup-js
 
       - name: Run verify
         shell: bash
@@ -365,6 +419,7 @@ jobs:
         uses: dtolnay/rust-toolchain@1.88.0
         with:
           targets: ${{ matrix.settings.target }}
+          components: clippy
 
       - uses: ./.github/actions/setup-rust-cache
         with:

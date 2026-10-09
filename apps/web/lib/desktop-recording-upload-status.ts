@@ -1,5 +1,6 @@
 import type { videos } from "@cap/database/schema";
 import { Storage } from "@cap/web-backend";
+import { getRecordingObjectIdentity } from "@cap/web-backend/src/Storage/recording-object-identity";
 import { Video } from "@cap/web-domain";
 import { Effect, Option } from "effect";
 import {
@@ -165,10 +166,11 @@ export async function createVerifiedRecordingReceipt(
 	}
 	const bucket = await getRecordingStorage(video);
 	const head = await EffectRuntime.runPromise(bucket.headObject(outputKey));
-	if (!head.ETag || head.ContentLength !== output.fileSize) {
+	const identity = getRecordingObjectIdentity(head, objectIdentity);
+	if (!identity || head.ContentLength !== output.fileSize) {
 		throw new Error("Final recording object is not fully uploaded");
 	}
-	if (head.ETag !== objectIdentity) {
+	if (identity !== objectIdentity) {
 		throw new Error("Recording changed while its content was verified");
 	}
 	return recordingUploadReceiptSchema.parse({
@@ -179,7 +181,7 @@ export async function createVerifiedRecordingReceipt(
 		hasAudio: Boolean(output.audioCodec),
 		fullDecode: true,
 		requiredAudioVerified,
-		objectIdentity: head.ETag,
+		objectIdentity: identity,
 		outputKey,
 		...(outputSha256 === undefined ? {} : { outputSha256 }),
 		...(sourceProof === undefined ? {} : { sourceProof }),

@@ -9,7 +9,7 @@ members = ["."]
 
 [package]
 name = "cap-desktop-gpui"
-version = "0.6.0"
+version = "0.6.1"
 edition = "2024"
 license = "AGPL-3.0"
 publish = false
@@ -18,16 +18,21 @@ publish = false
 name = "cap-gpui"
 path = "src/main.rs"
 
+[[example]]
+name = "studio-finalization-benchmark"
+path = "../../crates/recording/examples/studio-finalization-benchmark.rs"
+
 [package.metadata.bundle]
 name = "Cap GPUI"
 identifier = "so.cap.desktop.gpui"
 icon = ["assets/dock-icon.png"]
 category = "public.app-category.productivity"
-osx_minimum_system_version = "11.0"
+osx_minimum_system_version = "12.3"
 osx_info_plist_exts = ["resources/Info.plist"]
 osx_url_schemes = ["cap-desktop"]
 
 [dependencies]
+cap-audio = { path = "../../crates/audio" }
 # gpui — the wingleeio/zed fork Comet ships. The pinned rev carries f596cde
 # ("destination alpha on transparent windows: Porter-Duff OVER, not additive"),
 # which our transparent rounded main-window shell depends on.
@@ -63,7 +68,7 @@ cap-project = { path = "../../crates/project" }
 # a `RenderImage` (`src/editor_sidebar/cursor.rs`).
 cap-cursor-info = { path = "../../crates/cursor-info" }
 resvg = "0.45"
-rodio = { version = "0.19.0", default-features = false, features = ["mp3"] }
+rodio = { version = "0.19.0", default-features = false, features = ["mp3", "vorbis"] }
 # The editor stack. `cap-rendering` is not a new subtree -- cap-recording
 # already depends on it, so wgpu 25 and its vendored wgpu-hal have been built
 # by this workspace since the recording unit; naming it here only makes the
@@ -124,6 +129,7 @@ chrono = "0.4"
 # Read the Tauri app's settings store so both apps share one recordings library.
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
+sanitize-filename = "0.6.0"
 semver = "1"
 base64 = "0.22"
 rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "tokio"] }
@@ -183,11 +189,13 @@ windows-sys = { version = "0.59", features = [
     "Win32_Security",
     "Win32_System_SystemInformation",
     "Win32_System_Threading",
+    "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 ashpd = { version = "0.11", default-features = false, features = ["tokio"] }
+wayland-client = "0.31"
 
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
 raw-window-handle = "0.6"

@@ -889,6 +889,17 @@ fn concatenate_m4s_segments_with_init_validated_with_reader(
         }
     }
 
+    // Existing destinations can alias an input, which must be copied before opening the output.
+    if !output.try_exists()? {
+        return crate::segmented_input::with_input(
+            std::iter::once(init_path).chain(segments.iter().map(PathBuf::as_path)),
+            |input| {
+                let mut output = avformat::output(output)?;
+                remux_streams_validated_with_reader(input, &mut output, read_packet)
+            },
+        );
+    }
+
     let sequence = VALIDATED_AGGREGATE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     let combined_path = output.with_extension(format!(
         "validated-combined-{}-{sequence}.mp4",
@@ -1292,6 +1303,29 @@ mod tests {
         assert!(super::probe_video_can_decode(&output).unwrap());
         super::probe_video_seek_points(&output, 8).unwrap();
         assert_no_validated_aggregate(directory.path());
+    }
+
+    #[test]
+    fn validated_m4s_concat_preserves_existing_destination_and_input_alias_support() {
+        for aliases_input in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let (init, segments) = encode_test_segments(&directory.path().join("source"));
+            let reference = directory.path().join("reference.mp4");
+            concatenate_m4s_segments_with_init(&init, &segments, &reference).unwrap();
+            let output = directory.path().join("existing.mp4");
+            if aliases_input {
+                std::fs::hard_link(&segments[0], &output).unwrap();
+            } else {
+                std::fs::write(&output, b"previous output").unwrap();
+            }
+            concatenate_m4s_segments_with_init_validated(&init, &segments, &output).unwrap();
+            assert_eq!(
+                video_packet_contents(&output),
+                video_packet_contents(&reference)
+            );
+            assert_eq!(decoded_video_frame_count(&output), 320);
+            assert_no_validated_aggregate(directory.path());
+        }
     }
 
     #[test]

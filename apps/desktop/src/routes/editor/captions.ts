@@ -508,6 +508,8 @@ export function applyCaptionResultToProject<
 			sceneSegments: [],
 			maskSegments: [],
 			textSegments: [],
+			styleSegments: [],
+			imageSegments: [],
 			captionSegments: [],
 			keyboardSegments: [],
 		} as NonNullable<T["timeline"]>;
