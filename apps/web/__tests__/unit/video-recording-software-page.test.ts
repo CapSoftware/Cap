@@ -129,7 +129,7 @@ describe("VideoRecordingSoftwarePage FAQ schema", () => {
 		{
 			question: "Is Cap open-source video recording software?",
 			answer:
-				"Yes. Cap is fully open-source and MIT-licensed. The complete codebase is publicly available on GitHub.",
+				"Yes. Most Cap code is under AGPLv3, with specified Rust crates under MIT. The source is available on GitHub.",
 		},
 	];
 

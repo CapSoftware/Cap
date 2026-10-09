@@ -33,7 +33,7 @@ export const selfHostedScreenRecordingContent: SeoPageContent = {
 		{
 			title: "Open Source and Auditable",
 			description:
-				"Cap is MIT-licensed and fully open source on GitHub. Your security team can audit every line of code that handles recording, uploading, and sharing. No black-box behavior, no undisclosed data flows — complete transparency for enterprise security reviews.",
+				"Cap is open source on GitHub, with most code under AGPLv3 and specified Rust crates under MIT. Your security team can audit every line of code that handles recording, uploading, and sharing. No black-box behavior, no undisclosed data flows — complete transparency for enterprise security reviews.",
 		},
 		{
 			title: "Instant Shareable Links from Your Own Storage",
@@ -103,7 +103,7 @@ export const selfHostedScreenRecordingContent: SeoPageContent = {
 			],
 			[
 				"Open source",
-				{ text: "Yes — MIT", status: "positive" },
+				{ text: "Yes — AGPLv3 and MIT crates", status: "positive" },
 				{ text: "No", status: "negative" },
 				{ text: "No", status: "negative" },
 				{ text: "No", status: "negative" },
@@ -206,7 +206,7 @@ export const selfHostedScreenRecordingContent: SeoPageContent = {
 		{
 			title: "Self-Hosting Enthusiasts and Privacy Advocates",
 			description:
-				"Individuals and teams who prefer to own their tools deploy the full Cap platform — web app, API, and storage — on their own VPS or cloud account. MIT-licensed code means no restrictions on how you run it or modify it for your needs.",
+				"Individuals and teams who prefer to own their tools deploy the full Cap platform — web app, API, and storage — on their own VPS or cloud account. The repository LICENSE explains the terms for modifying and deploying the code.",
 		},
 	],
 
@@ -250,7 +250,7 @@ export const selfHostedScreenRecordingContent: SeoPageContent = {
 		{
 			question: "Can I self-host the entire Cap platform, not just storage?",
 			answer:
-				"Yes. Cap is fully open source under the MIT license. You can deploy the complete Cap platform — including the Next.js web application, API, and all services — on your own infrastructure. See Cap's self-hosting documentation for deployment instructions and configuration options.",
+				"Yes. Cap is open source, with most code under AGPLv3 and specified Rust crates under MIT. You can deploy the complete Cap platform — including the Next.js web application, API, and all services — on your own infrastructure. See Cap's self-hosting documentation for deployment instructions and configuration options.",
 		},
 		{
 			question: "Is self-hosted Cap suitable for HIPAA compliance?",
@@ -266,7 +266,7 @@ export const selfHostedScreenRecordingContent: SeoPageContent = {
 		{
 			question: "What is the best self-hosted screen recorder?",
 			answer:
-				"Cap is the best self-hosted screen recorder for teams that need both data control and a modern async video experience. It combines S3-compatible custom storage, instant shareable links, webcam overlay, AI captions, and thread commenting — all in an MIT-licensed open-source package. Unlike local-only recorders, Cap gives you the collaboration layer. Unlike closed-source SaaS tools, Cap gives you full data ownership.",
+				"Cap is the best self-hosted screen recorder for teams that need both data control and a modern async video experience. It combines S3-compatible custom storage, instant shareable links, webcam overlay, AI captions, and thread commenting in an open-source package with most code under AGPLv3. Unlike local-only recorders, Cap gives you the collaboration layer. Unlike closed-source SaaS tools, Cap gives you full data ownership.",
 		},
 	],
 
