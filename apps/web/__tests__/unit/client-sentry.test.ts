@@ -90,7 +90,7 @@ describe("client Sentry", () => {
 			},
 		});
 		// The SDK's own handlers take over from here.
-		raise(new Error("late"));
+		window.dispatchEvent(new ErrorEvent("error", { message: "late" }));
 		await flush();
 		expect(sentry.captureException).toHaveBeenCalledTimes(2);
 	});
