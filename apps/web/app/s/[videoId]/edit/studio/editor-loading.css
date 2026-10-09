@@ -164,6 +164,15 @@
 	animation: edl-appear 320ms ease-out 450ms both;
 }
 
+.edl-preview[data-poster] .edl-status {
+	background: radial-gradient(
+		closest-side,
+		rgb(0 0 0 / 0.55),
+		rgb(0 0 0 / 0.3) 55%,
+		transparent
+	);
+}
+
 .edl-slow {
 	margin: 0;
 	font-size: 12px;
