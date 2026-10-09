@@ -258,8 +258,8 @@ gpui_tokio = { path = "../../../zed-cap/crates/gpui_tokio" }
 # build deps at opt-level 2 and keep the app crate itself at 0.
 opt-level = 0
 # Incremental caches for this dep tree run to gigabytes on a disk that has
-# already been filled to zero once; a full app-crate recompile at opt-level 0
-# costs about a minute, and `dev.sh` opts back in for its own loop.
+# already been filled to zero once; only the app crate, the one that changes
+# on every edit, opts back in below.
 incremental = false
 
 [profile.dev.package."*"]
@@ -274,6 +274,12 @@ debug = "line-tables-only"
 # turns a one-line edit into a 6-minute rebuild.
 [profile.dev.package.cap-gpui-kernels]
 opt-level = 3
+
+# Incremental halves a one-line rebuild for about 2 GB of cache, and line tables
+# cut its codegen and link time; breakpoints and backtraces keep their lines.
+[profile.dev.package.cap-desktop-gpui]
+incremental = true
+debug = "line-tables-only"
 
 [profile.release]
 lto = "thin"

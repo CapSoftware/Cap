@@ -79,7 +79,7 @@ while true; do
 	if [ "$CURRENT" != "$LAST" ]; then
 		LAST="$CURRENT"
 		echo "[dev] building..."
-		if "$BUILD" build --config profile.dev.package.cap-desktop-gpui.incremental=true; then
+		if "$BUILD" build; then
 			if [ -n "$APP_PID" ] || gpui_owns_session || instance_live; then
 				stop_app
 				start_app
