@@ -1976,6 +1976,10 @@ function Page() {
 	const [hasHiddenMainWindowForPicker, setHasHiddenMainWindowForPicker] =
 		createSignal(false);
 	const [canRevealMainWindow, setCanRevealMainWindow] = createSignal(false);
+	const [
+		shouldRevealMainWindowAfterPicker,
+		setShouldRevealMainWindowAfterPicker,
+	] = createSignal(false);
 
 	createEffect(() => {
 		const pickerActive = rawOptions.targetMode != null;
@@ -1984,7 +1988,10 @@ function Page() {
 
 		if (pickerActive && !hasHidden && !recording) {
 			setHasHiddenMainWindowForPicker(true);
+			setShouldRevealMainWindowAfterPicker(true);
 			void hideCurrentWindow();
+		} else if (pickerActive && hasHidden) {
+			setShouldRevealMainWindowAfterPicker(true);
 		} else if (recording) {
 			// A recording is active. The backend owns main-window visibility for the
 			// recording lifecycle: it hides the main window on start, and after a
@@ -2001,12 +2008,19 @@ function Page() {
 			// A studio recording hands the foreground to the editor and this
 			// window is always-on-top — revealing it then covers the editor.
 			const dismissal = rawOptions.targetModeDismissal ?? "cancelled";
+			const shouldRevealMainWindow = shouldRevealMainWindowAfterPicker();
+			setShouldRevealMainWindowAfterPicker(false);
 			const dismissalReveals =
 				dismissal === "cancelled" ||
 				dismissal === "screenshot" ||
+				dismissal === "ocr" ||
 				dismissal === "recordingInstant";
-			if (dismissalReveals) {
-				void revealRecordingWindow();
+			if (shouldRevealMainWindow && dismissalReveals) {
+				if (dismissal === "ocr") {
+					void commands.showWindowWithoutActivating();
+				} else {
+					void revealRecordingWindow();
+				}
 			}
 		}
 	});
@@ -2016,7 +2030,11 @@ function Page() {
 		// Restore on dispose only when the picker is still open with no recording
 		// in flight (e.g. dev HMR mid-picker). Disposal after a recording started
 		// must not resurface the main window over the recording UI or the editor.
-		if (rawOptions.targetMode != null && !currentRecording.data)
+		if (
+			shouldRevealMainWindowAfterPicker() &&
+			rawOptions.targetMode != null &&
+			!currentRecording.data
+		)
 			void revealRecordingWindow();
 	});
 
