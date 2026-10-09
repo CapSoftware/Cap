@@ -10,8 +10,10 @@ pub fn md5(bytes: &[u8]) -> [u8; 16] {
     output
 }
 
-pub fn parse_cursor_events(bytes: &[u8]) -> Result<cap_project::CursorEvents, String> {
-    cap_project::CursorEvents::load_from_reader(bytes)
+pub fn read_cursor_events(
+    reader: &mut dyn std::io::Read,
+) -> Result<cap_project::CursorEvents, String> {
+    cap_project::CursorEvents::load_from_reader(std::io::BufReader::new(reader))
 }
 
 pub fn rgba_to_rgb(rgba: &[u8]) -> Vec<u8> {
@@ -206,11 +208,11 @@ mod tests {
     }
 
     #[test]
-    fn parses_cursor_events_and_reports_errors() {
-        let events = parse_cursor_events(br#"{"clicks":[],"moves":[]}"#).unwrap();
+    fn reads_cursor_events_and_reports_errors() {
+        let events = read_cursor_events(&mut &br#"{"clicks":[],"moves":[]}"#[..]).unwrap();
         assert!(events.clicks.is_empty() && events.moves.is_empty());
         assert!(
-            parse_cursor_events(b"{")
+            read_cursor_events(&mut &b"{"[..])
                 .unwrap_err()
                 .starts_with("Failed to parse cursor data: ")
         );
