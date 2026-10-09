@@ -1398,6 +1398,7 @@ export function Timeline(props: {
 	}
 
 	createEventListener(window, "keydown", (e) => {
+		if (e.defaultPrevented) return;
 		const hasNoModifiers = !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey;
 
 		if (

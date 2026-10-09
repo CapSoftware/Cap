@@ -294,6 +294,7 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 			db()
 				.select({
 					id: videos.id,
+					folderId: videos.folderId,
 					name: videos.name,
 					orgId: videos.orgId,
 					createdAt: videos.createdAt,
@@ -390,7 +391,7 @@ async function AuthorizedContent({
 }: {
 	video: Omit<
 		InferSelectModel<typeof videos>,
-		"folderId" | "password" | "settings" | "ownerId"
+		"password" | "settings" | "ownerId"
 	> & {
 		owner: InferSelectModel<typeof users>;
 		sharedOrganization: { organizationId: Organisation.OrganisationId } | null;
@@ -656,8 +657,8 @@ async function AuthorizedContent({
 
 	const viewsPromise = getVideoAnalytics(videoId).then((v) => v.count);
 
-	const canManageSharePageBrandingPromise = (async () => {
-		if (!userId) return false;
+	const videoOrganizationRolePromise = (async () => {
+		if (!userId) return null;
 
 		const [organizationAccess] = await db()
 			.select({
@@ -680,15 +681,13 @@ async function AuthorizedContent({
 			)
 			.limit(1);
 
-		if (!organizationAccess) return false;
+		if (!organizationAccess) return null;
 
-		return canManageOrganizationSettings(
-			getEffectiveOrganizationRole({
-				userId,
-				ownerId: organizationAccess.ownerId,
-				memberRole: organizationAccess.memberRole,
-			}),
-		);
+		return getEffectiveOrganizationRole({
+			userId,
+			ownerId: organizationAccess.ownerId,
+			memberRole: organizationAccess.memberRole,
+		});
 	})();
 
 	const isVideoDownloadReady =
@@ -743,7 +742,7 @@ async function AuthorizedContent({
 		membersList,
 		userOrganizations,
 		{ customDomain, domainVerified },
-		canManageSharePageBranding,
+		videoOrganizationRole,
 		canDownloadVideo,
 		videoHasEdits,
 		ownerIsOverShareLimit,
@@ -758,7 +757,7 @@ async function AuthorizedContent({
 		membersListPromise,
 		userOrganizationsPromise,
 		customDomainPromise,
-		canManageSharePageBrandingPromise,
+		videoOrganizationRolePromise,
 		canDownloadVideoPromise,
 		videoHasEditsPromise,
 		overShareLimitPromise,
@@ -844,7 +843,7 @@ async function AuthorizedContent({
 		},
 		sharedOrganizations: sharedOrganizations,
 		password: null,
-		folderId: null,
+		folderId: user?.id === video.owner.id ? video.folderId : null,
 		orgSettings: video.orgSettings || null,
 		organizationName: video.organizationName,
 		organizationIconUrl: resolvedImages.organization,
@@ -921,6 +920,9 @@ async function AuthorizedContent({
 			<Share
 				header={
 					<ShareHeader
+						canMoveToFolder={
+							user?.id === video.owner.id && videoOrganizationRole !== null
+						}
 						data={{
 							...videoWithOrganizationInfo,
 							createdAt: video.metadata?.customCreatedAt
@@ -938,7 +940,9 @@ async function AuthorizedContent({
 						userOrganizations={userOrganizations}
 						spacesData={spacesData}
 						branding={getSharePageBranding(videoWithOrganizationInfo)}
-						canManageSharePageBranding={canManageSharePageBranding}
+						canManageSharePageBranding={canManageOrganizationSettings(
+							videoOrganizationRole,
+						)}
 						linkPreview={
 							user?.id === video.owner.id
 								? toLinkPreviewState(

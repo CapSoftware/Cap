@@ -13,6 +13,7 @@ const fixtures = vi.hoisted(() => ({
 	video: { id: "video-1", ownerId: "owner-1", name: "Demo" },
 	grants: [] as string[],
 	revokedEmails: [] as string[],
+	selected: vi.fn(),
 	inserted: vi.fn(),
 	updated: vi.fn(),
 }));
@@ -32,6 +33,7 @@ vi.mock("@cap/database", () => ({
 		return {
 			select: () => ({
 				from: (table: unknown) => {
+					fixtures.selected(table);
 					selectedTable = table;
 					return {
 						where: () => ({
@@ -103,14 +105,65 @@ describe("recording viewer invitations", () => {
 		});
 	});
 
-	it("rejects a non-owner before writing a grant or sending email", async () => {
-		fixtures.user.mockResolvedValue({ id: "other-1" });
+	it.each(["viewer@example.com", "invalid"])(
+		"rejects a non-owner before validating %s",
+		async (email) => {
+			fixtures.user.mockResolvedValue({ id: "other-1" });
 
-		await expect(
-			inviteVideoViewer(VIDEO_ID, "viewer@example.com"),
-		).rejects.toThrow("Unauthorized");
+			await expect(inviteVideoViewer(VIDEO_ID, email)).rejects.toThrow(
+				"Unauthorized",
+			);
+			expect(fixtures.inserted).not.toHaveBeenCalled();
+			expect(fixtures.sendEmail).not.toHaveBeenCalled();
+		},
+	);
+
+	it("rejects an unauthenticated caller before validation or database access", async () => {
+		fixtures.user.mockResolvedValue(null);
+
+		await expect(inviteVideoViewer(VIDEO_ID, "invalid")).rejects.toThrow(
+			"Unauthorized",
+		);
+		expect(fixtures.selected).not.toHaveBeenCalled();
 		expect(fixtures.inserted).not.toHaveBeenCalled();
 		expect(fixtures.sendEmail).not.toHaveBeenCalled();
+		expect(fixtures.revalidatePath).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		"",
+		"   ",
+		"invalid",
+		"viewer@example",
+		"viewer@@example.com",
+		"view er@example.com",
+		"viewer@example.com,other@example.com",
+		"viewer\n@example.com",
+		`${"a".repeat(243)}@example.com`,
+	])(
+		"returns validation feedback for %j without looking up or changing grants",
+		async (email) => {
+			await expect(inviteVideoViewer(VIDEO_ID, email)).resolves.toEqual({
+				success: false,
+				error: "Enter a valid email address",
+			});
+			expect(fixtures.selected).toHaveBeenCalledExactlyOnceWith(schema.videos);
+			expect(fixtures.inserted).not.toHaveBeenCalled();
+			expect(fixtures.updated).not.toHaveBeenCalled();
+			expect(fixtures.sendEmail).not.toHaveBeenCalled();
+			expect(fixtures.revalidatePath).not.toHaveBeenCalled();
+		},
+	);
+
+	it("still accepts 254 characters after trimming and lowercasing", async () => {
+		const email = `${"A".repeat(242)}@Example.com`;
+		const result = await inviteVideoViewer(VIDEO_ID, ` ${email} `);
+
+		expect(result.success).toBe(true);
+		expect(fixtures.inserted).toHaveBeenCalledWith(
+			expect.objectContaining({ email: email.toLowerCase() }),
+		);
+		expect(fixtures.sendEmail).toHaveBeenCalledOnce();
 	});
 
 	it("grants access to the normalized email and sends the recording link", async () => {
@@ -137,7 +190,7 @@ describe("recording viewer invitations", () => {
 
 		const result = await inviteVideoViewer(VIDEO_ID, "viewer@example.com");
 
-		expect(result.emailSent).toBe(false);
+		expect(result).toMatchObject({ success: true, emailSent: false });
 		expect(fixtures.inserted).toHaveBeenCalledOnce();
 	});
 
@@ -146,7 +199,11 @@ describe("recording viewer invitations", () => {
 
 		const result = await inviteVideoViewer(VIDEO_ID, "Viewer@Example.com");
 
-		expect(result.alreadyAdded).toBe(true);
+		expect(result).toEqual({
+			success: true,
+			alreadyAdded: true,
+			emailSent: false,
+		});
 		expect(fixtures.inserted).not.toHaveBeenCalled();
 		expect(fixtures.sendEmail).not.toHaveBeenCalled();
 	});
@@ -157,9 +214,47 @@ describe("recording viewer invitations", () => {
 
 		const result = await inviteVideoViewer(VIDEO_ID, "viewer@example.com");
 
-		expect(result.alreadyAdded).toBe(false);
+		expect(result).toMatchObject({
+			success: true,
+			alreadyAdded: false,
+			emailSent: true,
+		});
 		expect(fixtures.inserted).toHaveBeenCalledOnce();
 		expect(fixtures.sendEmail).toHaveBeenCalledOnce();
+	});
+
+	it("keeps unexpected grant failures as errors", async () => {
+		fixtures.inserted.mockRejectedValueOnce(new Error("Database unavailable"));
+
+		await expect(
+			inviteVideoViewer(VIDEO_ID, "viewer@example.com"),
+		).rejects.toThrow("Database unavailable");
+		expect(fixtures.sendEmail).not.toHaveBeenCalled();
+		expect(fixtures.revalidatePath).not.toHaveBeenCalled();
+	});
+
+	it("keeps granted access when email delivery throws", async () => {
+		fixtures.sendEmail.mockRejectedValueOnce(new Error("Delivery unavailable"));
+		const log = vi.spyOn(console, "error").mockImplementation(() => {});
+
+		await expect(
+			inviteVideoViewer(VIDEO_ID, "viewer@example.com"),
+		).resolves.toEqual({
+			success: true,
+			alreadyAdded: false,
+			emailSent: false,
+		});
+		expect(fixtures.inserted).toHaveBeenCalledOnce();
+		expect(fixtures.revalidatePath).toHaveBeenCalledWith(`/s/${VIDEO_ID}`);
+		expect(log).toHaveBeenCalledOnce();
+	});
+
+	it("preserves invalid-address rejection when revoking", async () => {
+		await expect(revokeVideoViewer(VIDEO_ID, "invalid")).rejects.toThrow(
+			"Enter a valid email address",
+		);
+		expect(fixtures.updated).not.toHaveBeenCalled();
+		expect(fixtures.revalidatePath).not.toHaveBeenCalled();
 	});
 
 	it("keeps the invited viewer list and removal owner-only", async () => {

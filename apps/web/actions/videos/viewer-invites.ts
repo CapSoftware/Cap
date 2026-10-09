@@ -30,7 +30,7 @@ async function getOwnedVideo(videoId: Video.VideoId) {
 function normalizeEmail(email: string) {
 	const normalized = email.trim().toLowerCase();
 	if (normalized.length > 254 || !EMAIL_PATTERN.test(normalized)) {
-		throw new Error("Enter a valid email address");
+		return null;
 	}
 	return normalized;
 }
@@ -52,6 +52,9 @@ export async function getVideoViewerGrants(videoId: Video.VideoId) {
 export async function inviteVideoViewer(videoId: Video.VideoId, email: string) {
 	const { user, video } = await getOwnedVideo(videoId);
 	const normalizedEmail = normalizeEmail(email);
+	if (!normalizedEmail) {
+		return { success: false, error: "Enter a valid email address" } as const;
+	}
 
 	const [existingGrant] = await db()
 		.select({ revokedAt: videoViewerGrants.revokedAt })
@@ -65,7 +68,7 @@ export async function inviteVideoViewer(videoId: Video.VideoId, email: string) {
 		.limit(1);
 
 	if (existingGrant && !existingGrant.revokedAt) {
-		return { success: true, alreadyAdded: true, emailSent: false };
+		return { success: true, alreadyAdded: true, emailSent: false } as const;
 	}
 
 	await db()
@@ -101,12 +104,13 @@ export async function inviteVideoViewer(videoId: Video.VideoId, email: string) {
 		console.error("Failed to email video viewer invitation:", error);
 	}
 
-	return { success: true, alreadyAdded: false, emailSent };
+	return { success: true, alreadyAdded: false, emailSent } as const;
 }
 
 export async function revokeVideoViewer(videoId: Video.VideoId, email: string) {
 	await getOwnedVideo(videoId);
 	const normalizedEmail = normalizeEmail(email);
+	if (!normalizedEmail) throw new Error("Enter a valid email address");
 	await db()
 		.update(videoViewerGrants)
 		.set({ revokedAt: new Date() })

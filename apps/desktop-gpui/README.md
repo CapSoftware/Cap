@@ -1908,7 +1908,6 @@ steps and side effects are the call site's.
 | | Uppercase / Active Word Highlight (+ Highlight Color, Style) | toggles, then a hex field and a select | — | `captions.settings.{uppercase,activeWordHighlight,highlightColor,highlightStyle}` |
 | | Background Settings → Color / Opacity | hex field + swatch, slider | 0–100 / 1 `%` | `captions.settings.{backgroundColor,backgroundOpacity}` |
 | | Position / Animation / Font Weight | three selects | — | `captions.settings.{position,fontWeight}`, `{fade,linger,wordTransition}Duration` |
-| | Export Options → Export with Subtitles | toggle | — | `captions.settings.exportWithSubtitles` |
 
 Two things in these tabs are honest dead ends rather than key paths, and both
 say so in the UI:

@@ -23,6 +23,7 @@ import {
 	Clock,
 	Copy,
 	Download,
+	FolderInput,
 	Globe2,
 	Image as ImageIcon,
 	Link2,
@@ -115,6 +116,13 @@ const SharingDialog = dynamic(
 		),
 	{ ssr: false },
 );
+const MoveItemsDialog = dynamic(
+	() =>
+		import("@/app/(org)/dashboard/caps/components/MoveItemsDialog").then(
+			(m) => m.MoveItemsDialog,
+		),
+	{ ssr: false },
+);
 const SettingsDialog = dynamic(
 	() =>
 		import("@/app/(org)/dashboard/caps/components/SettingsDialog").then(
@@ -201,6 +209,7 @@ export const ShareHeader = ({
 	branding,
 	canManageSharePageBranding = false,
 	canDownload = false,
+	canMoveToFolder = false,
 	hasEdits = false,
 	opensStudio = false,
 	views,
@@ -236,6 +245,7 @@ export const ShareHeader = ({
 	branding?: SharePageBranding | null;
 	canManageSharePageBranding?: boolean;
 	canDownload?: boolean;
+	canMoveToFolder?: boolean;
 	hasEdits?: boolean;
 	/** The owner edits in the studio editor, which doesn't need Cap Pro to open. */
 	opensStudio?: boolean;
@@ -254,6 +264,8 @@ export const ShareHeader = ({
 		queryKey: ["videoStatus", data.id],
 		queryFn: skipToken,
 	});
+	const [moveDialogOpen, setMoveDialogOpen] = useState(false);
+	const [moveDialogMounted, setMoveDialogMounted] = useState(false);
 	const [isEditing, setIsEditing] = useState(false);
 	const [displayTitle, setDisplayTitle] = useState(data.name);
 	const [editValue, setEditValue] = useState(data.name);
@@ -959,6 +971,18 @@ export const ShareHeader = ({
 						<Users className="size-3.5" />
 						<p className="text-sm text-gray-12">Sharing & access</p>
 					</DropdownMenuItem>
+					{canMoveToFolder && (
+						<DropdownMenuItem
+							onClick={() => {
+								setMoveDialogMounted(true);
+								setMoveDialogOpen(true);
+							}}
+							className={itemClass}
+						>
+							<FolderInput className="size-3.5" />
+							<p className="text-sm text-gray-12">Move to folder</p>
+						</DropdownMenuItem>
+					)}
 					<DropdownMenuItem
 						onClick={() => setIsSettingsDialogOpen(true)}
 						className={itemClass}
@@ -1112,6 +1136,20 @@ export const ShareHeader = ({
 			)}
 			{isOwner && (
 				<>
+					{moveDialogMounted && (
+						<MoveItemsDialog
+							open={moveDialogOpen}
+							onOpenChange={setMoveDialogOpen}
+							location={{ type: "personal" }}
+							rootLabel="My Caps"
+							organizationId={data.orgId ?? undefined}
+							item={{
+								type: "videos",
+								videoIds: [data.id],
+								currentFolderId: data.folderId,
+							}}
+						/>
+					)}
 					{settingsDialogMounted && (
 						<SettingsDialog
 							isOpen={isSettingsDialogOpen}

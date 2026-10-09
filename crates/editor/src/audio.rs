@@ -2,6 +2,7 @@ use crate::export_audio::{EXPORT_AUDIO_BLOCK_SAMPLES, ExportAudioError, ExportAu
 use cap_audio::{
     AudioData, AudioRendererTrack, DecodedAudio, FromSampleBytes, StereoMode, VoiceAudio,
     VoiceEnhancer, VoiceSource, cast_bytes_to_f32_slice, cast_f32_slice_to_bytes,
+    high_quality_resampler_options,
 };
 use cap_media::MediaError;
 use cap_media_info::AudioInfo;
@@ -10,8 +11,7 @@ use cap_project::{
     TimelineConfiguration, TimelineFrameMapping, TimelineSource, VoiceIsolation,
 };
 use ffmpeg::{
-    ChannelLayout, Dictionary, filter, format as avformat, frame::Audio as FFAudio,
-    software::resampling,
+    ChannelLayout, filter, format as avformat, frame::Audio as FFAudio, software::resampling,
 };
 use ringbuf::{
     HeapRb,
@@ -1383,10 +1383,6 @@ impl AudioResampler {
         // Clamp output info for FFmpeg compatibility (max 8 channels)
         let output_info = output_info.for_ffmpeg_output();
 
-        let mut options = Dictionary::new();
-        options.set("filter_size", "128");
-        options.set("cutoff", "0.97");
-
         let context = resampling::Context::get_with(
             AudioData::SAMPLE_FORMAT,
             ChannelLayout::STEREO,
@@ -1394,7 +1390,7 @@ impl AudioResampler {
             output_info.sample_format,
             output_info.channel_layout(),
             output_info.sample_rate,
-            options,
+            high_quality_resampler_options(),
         )?;
 
         info!(

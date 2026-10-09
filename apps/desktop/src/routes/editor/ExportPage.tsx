@@ -592,6 +592,12 @@ export function ExportPage() {
 				if (!isPreviewCurrent(request)) return;
 				return runPreviewRequest(request, retryCount + 1);
 			}
+			if (ownedPreviewUrl) URL.revokeObjectURL(ownedPreviewUrl);
+			ownedPreviewUrl = null;
+			setPreviewUrl(null);
+			setPreviewDimensions(null);
+			setRenderEstimate(null);
+			setPreviewError(e instanceof Error ? e.message : String(e));
 			setPreviewUnavailable(true);
 			setEstimateLoading(false);
 		}
