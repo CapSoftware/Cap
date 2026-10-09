@@ -126,6 +126,7 @@ const DEFAULT_CAMERA: Camera = {
 const DEFAULT_AUDIO: AudioConfiguration = {
 	mute: false,
 	improve: false,
+	isolation: "balanced",
 	micVolumeDb: 0,
 	micStereoMode: "stereo",
 	systemVolumeDb: 0,

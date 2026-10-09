@@ -16,12 +16,83 @@ resolver = "2"
 
 # Add triples corresponding to platforms commonly used by developers here.
 # https://doc.rust-lang.org/rustc/platform-support.html
+# Every target desktop-release.yml ships. Leaving a target out here leaves its
+# platform-specific deps (windows-sys, libc, ...) un-unified, so the sidecar
+# `cargo build -p cap` and Tauri's `cargo build -p cap-desktop` resolve
+# different feature sets and recompile ~500 shared crates in the same job.
 platforms = [
-    # "x86_64-unknown-linux-gnu",
-    # "x86_64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
     "aarch64-apple-darwin",
     "x86_64-pc-windows-msvc",
 ]
 
 # Write out exact versions rather than a semver range. (Defaults to false.)
 # exact-versions = true
+
+# --- cap release-build tuning ---
+# cap-muxer is ~55 crates; letting it depend on the hack would drag the whole
+# unified tree into every `cargo build -p cap-muxer`. Any drift it causes is
+# bounded by its own tiny graph.
+[traversal-excludes]
+workspace-members = ["cap-muxer", "cap-muxer-protocol"]
+
+# hakari unifies dev-dependencies as well, so left alone it pins tauri with its
+# `test` feature and tokio `test-util` into every release binary and pulls the
+# Tauri/WebKit stack into the standalone GPUI workspace. Only crates whose
+# feature drift actually cascades through the sidecar and desktop builds stay
+# in the hack; everything else keeps its natural per-binary resolution.
+[final-excludes]
+third-party = [
+    { name = "softbuffer" },
+    { name = "aho-corasick" },
+    { name = "block2" },
+    { name = "cookie" },
+    { name = "core-foundation" },
+    { name = "core-foundation-sys" },
+    { name = "coreaudio-rs" },
+    { name = "coreaudio-sys" },
+    { name = "crossbeam-utils" },
+    { name = "errno" },
+    { name = "event-listener" },
+    { name = "event-listener-strategy" },
+    { name = "fastrand" },
+    { name = "futures-lite" },
+    { name = "getrandom" },
+    { name = "half" },
+    { name = "hashbrown" },
+    { name = "hyper" },
+    { name = "hyper-util" },
+    { name = "image" },
+    { name = "indexmap" },
+    { name = "itertools" },
+    { name = "lru" },
+    { name = "num-traits" },
+    { name = "objc" },
+    { name = "objc2-core-image" },
+    { name = "objc2-foundation" },
+    { name = "objc2-quartz-core" },
+    { name = "once_cell" },
+    { name = "phf_shared" },
+    { name = "serde_json" },
+    { name = "serde_spanned" },
+    { name = "smallvec" },
+    { name = "swift-rs" },
+    { name = "syn" },
+    { name = "tauri" },
+    { name = "tauri-build" },
+    { name = "tokio" },
+    { name = "tokio-util" },
+    { name = "toml" },
+    { name = "tower" },
+    { name = "uuid" },
+    { name = "wayland-protocols" },
+    { name = "wayland-sys" },
+    { name = "winapi" },
+    { name = "windows-numerics" },
+    { name = "windows-strings" },
+    { name = "x11" },
+    { name = "zbus" },
+    { name = "zbus_macros" },
+    { name = "zvariant" },
+]

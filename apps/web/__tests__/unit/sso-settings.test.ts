@@ -10,6 +10,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getOrganizationSSOData } from "@/actions/organization/get-organization-sso-data";
 import {
 	confirmOrganizationSsoCheckout,
+	getOrganizationSsoInvoices,
 	getOrganizationSsoSettings,
 	manageOrganizationSsoBilling,
 	openOrganizationSsoPortal,
@@ -39,6 +40,7 @@ const mocks = vi.hoisted(() => ({
 	createSsoCheckout: vi.fn(),
 	attachSsoCheckout: vi.fn(),
 	createSsoBillingPortal: vi.fn(),
+	listSsoInvoices: vi.fn(),
 	setCookie: vi.fn(),
 	revalidatePath: vi.fn(),
 	isRateLimited: vi.fn(),
@@ -115,6 +117,7 @@ vi.mock("@/lib/sso/billing", () => ({
 	createSsoCheckout: mocks.createSsoCheckout,
 	attachSsoCheckout: mocks.attachSsoCheckout,
 	createSsoBillingPortal: mocks.createSsoBillingPortal,
+	listSsoInvoices: mocks.listSsoInvoices,
 }));
 
 const ORGANIZATION_ID = Organisation.OrganisationId.make("a".repeat(15));
@@ -178,6 +181,7 @@ function makeFixture({
 		metadata: null,
 		tombstoneAt: null,
 		allowedEmailDomain: null,
+		defaultVideoVisibility: null,
 		customDomain: null,
 		domainVerified: null,
 		settings: null,
@@ -325,6 +329,7 @@ function makeFixture({
 	mocks.createSsoBillingPortal.mockResolvedValue(
 		"https://billing.stripe.test/sso",
 	);
+	mocks.listSsoInvoices.mockResolvedValue({ invoices: [], hasMore: false });
 	mocks.isRateLimited.mockResolvedValue(false);
 	return {
 		user,
@@ -433,6 +438,7 @@ describe("organization SSO settings authorization", () => {
 			expect(markup).toContain("Manage SSO");
 			expect(markup).toContain("Share your SSO sign-in link");
 			expect(markup).not.toMatch(/Manage (SSO )?subscription/);
+			expect(markup).toContain("View invoices");
 			if (cancelAtPeriodEnd) {
 				expect(markup).toContain("scheduled to end on 3 October 2026");
 			}
@@ -456,6 +462,7 @@ describe("organization SSO settings authorization", () => {
 		expect(markup).toContain('href="mailto:hello@cap.so"');
 		expect(markup).toContain("purchase it again");
 		expect(markup).not.toMatch(/Manage (SSO )?subscription/);
+		expect(markup).toContain("View invoices");
 		expect(markup).not.toContain("Add SAML SSO");
 	});
 
@@ -523,6 +530,56 @@ describe("organization SSO settings authorization", () => {
 		expect(mocks.createSsoCheckout).not.toHaveBeenCalled();
 		expect(mocks.attachSsoCheckout).not.toHaveBeenCalled();
 		expect(mocks.createSsoBillingPortal).not.toHaveBeenCalled();
+	});
+
+	it("lets the owner list only their organization SSO invoices", async () => {
+		makeFixture();
+		const result = {
+			invoices: [
+				{
+					id: "in_sso",
+					number: "SSO-0001",
+					created: 1790812800,
+					total: 20000,
+					currency: "usd",
+					status: "paid",
+					pdfUrl: "https://pay.stripe.test/invoice/sso.pdf",
+				},
+			],
+			hasMore: false,
+		};
+		mocks.listSsoInvoices.mockResolvedValue(result);
+		await expect(getOrganizationSsoInvoices(ORGANIZATION_ID)).resolves.toEqual(
+			result,
+		);
+		expect(mocks.listSsoInvoices).toHaveBeenCalledExactlyOnceWith(
+			ORGANIZATION_ID,
+		);
+		expect(mocks.createSsoBillingPortal).not.toHaveBeenCalled();
+		expect(mocks.createSsoCheckout).not.toHaveBeenCalled();
+	});
+
+	it.each(["admin", "member", "stranger", "forged-owner"] as const)(
+		"denies %s access to invoice history",
+		async (role) => {
+			makeFixture({ role });
+			await expect(
+				getOrganizationSsoInvoices(ORGANIZATION_ID),
+			).rejects.toThrow();
+			expect(mocks.listSsoInvoices).not.toHaveBeenCalled();
+		},
+	);
+
+	it("rejects invoice requests for another organization or a signed-out user", async () => {
+		makeFixture();
+		await expect(
+			getOrganizationSsoInvoices(OTHER_ORGANIZATION_ID),
+		).rejects.toThrow("Forbidden");
+		mocks.getCurrentUser.mockResolvedValue(null);
+		await expect(getOrganizationSsoInvoices(ORGANIZATION_ID)).rejects.toThrow(
+			"Unauthorized",
+		);
+		expect(mocks.listSsoInvoices).not.toHaveBeenCalled();
 	});
 
 	it("does not create WorkOS resources or portal links for unpaid organizations", async () => {

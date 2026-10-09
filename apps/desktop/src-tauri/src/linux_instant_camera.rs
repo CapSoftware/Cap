@@ -342,7 +342,9 @@ fn processing(
     LinuxCameraProcessing {
         mirrored: state.mirrored,
         blur: match state.background_blur {
-            cap_project::BackgroundBlurMode::Off => LinuxCameraBlur::Off,
+            cap_project::BackgroundBlurMode::Off | cap_project::BackgroundBlurMode::Remove => {
+                LinuxCameraBlur::Off
+            }
             cap_project::BackgroundBlurMode::Light => LinuxCameraBlur::Light,
             cap_project::BackgroundBlurMode::Heavy => LinuxCameraBlur::Heavy,
         },

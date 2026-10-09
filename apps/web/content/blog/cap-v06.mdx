@@ -1,0 +1,118 @@
+---
+title: Cap v0.6 is here
+description: A redesigned editor, 3D scenes for beautiful demo videos in minutes, animated text, moving backgrounds, Studio Sound, camera cutouts, faster exports, a sturdier recorder, and a first look at the new native GPUI app.
+publishedAt: "2026-09-15"
+category: Release
+image: /blog/cap-v06.jpg
+author: Richie McIlroy
+tags: News, Updates, Release
+---
+
+Hey everyone,
+
+Cap v0.6 is here. It is the biggest release we have ever shipped, and it is the one that finally makes Cap feel like a real video editor, not just a really good screen recorder.
+
+Here is the release video.
+
+<CapEmbed id="0d5cwrje4tf7h8r" title="Cap v0.6 release video" />
+
+There is a lot in this release, so this post sticks to the things that matter most. The [full changelog](/changelog/desktop) has everything.
+
+## A redesigned editor
+
+The editor has been rebuilt from the timeline up.
+
+There is a new crop tool, a new inspector, dedicated panels for text and 3D, a track picker for adding new layers, and a new export screen that tells you the measured file size and how long the export will take before you commit to it.
+
+The timeline got the attention it deserved too. You can scrub the ruler, navigate long recordings with the minimap, snap cuts to each other, multi-select zooms, and have the view follow playback. Right-click any clip to set speed and volume, mute it, hide the cursor, split, merge, rename, or delete it.
+
+We also added the thing people asked for most: you can now record straight into a project you already have open. Start a new clip from inside the editor and it lands on the timeline next to the rest of your footage.
+
+## 3D scenes
+
+Every recording now has a 3D track.
+
+Pick an automatic scene and Cap will lay out camera shots across your clip with perspective, easing, and focus blur, previewed right on the timeline. Or build your own: click to add a shot, drag the camera where you want it, and shape the move with the orbit controls.
+
+This is the feature that changes what a Cap looks like. A flat screen recording becomes something with depth, and it takes a couple of clicks.
+
+It also means you can make a beautiful product demo without leaving Cap. Record your screen, pick a scene, add a moving background and a title, and export. What used to take an afternoon in a motion tool now takes a few minutes, and the result looks like it came from a design team.
+
+## Animated text and full-screen cards
+
+Text is a proper layer now.
+
+Use any installed font. Pick from a set of presets with outlines, glows, gradients, and pill backgrounds. Add an animation for the way each title enters and leaves. Full-screen cards pause the recording underneath them, so you can drop a title card between two sections without editing the footage around it.
+
+## Moving backgrounds
+
+Backgrounds can move now. Create animated gradients with editable colors and a set of presets, and the background flows behind your recording for the whole clip. They look great behind a 3D scene.
+
+## Color correction
+
+Screen and camera can be graded separately. There are presets for a quick look, and full grading controls when you want to match a brand or fix a washed-out capture.
+
+## Frames, cursors, and drawing
+
+A few smaller things that add up:
+
+- **Device and browser frames** - Wrap a recording in a macOS, Windows, browser, or MacBook frame from the editor.
+- **Cursor effects** - Choose macOS, Tahoe, Windows, or circle cursors, with shape changes and a click ripple.
+- **Style and image tracks** - Change the background, camera, or cursor for just part of a video, and add logos or images that you can resize, rotate, fade, and trim.
+- **Draw on screenshots** - Press **D** in the screenshot editor to draw freehand before you copy or save.
+
+## Studio Sound
+
+Studio Sound removes background noise from your microphone. Choose Light, Balanced, or Strong isolation, and set a default so every new recording starts with it on.
+
+If you have ever recorded next to an open window, a keyboard, or a fan, this is the one to switch on and forget about.
+
+## Camera cutouts
+
+Camera background blur landed in v0.5. In v0.6 you can remove the background entirely, so it is just you on top of your recording. It works in the live preview and in the export, on macOS.
+
+## Faster exports, and honest estimates
+
+Exporting is faster in v0.6, and the export screen now shows measured estimates for file size and time. The numbers come from sampling your actual project, not from a guess, so what you see is what you get.
+
+## A sturdier recorder
+
+Like every release, a lot of the work went into the parts you should never have to think about.
+
+- **Recording recovery** - Cap recovers complete fragments after an interruption and keeps your footage through a failed save.
+- **Low storage** - Cap warns you before you run out of disk space and leaves room to finish the recording. Exports are guarded against low disk and low memory too.
+- **Devices** - Your selected microphone and camera come back after a reconnection, and camera placement stays where you put it.
+- **Recording start** - Capture begins the moment the start sound ends, so the first thing you say is always in the recording.
+- **Edits stay aligned** - Captions, keyboard overlays, zooms, titles, and cursors stay in place after cuts and through export.
+- **Linux** - Wayland and X11 capture the right target, mic and system audio stay separate, and there are now DEB, RPM, AppImage, and Arch packages.
+
+There are also plenty of macOS and Windows fixes in the changelog: picker freezes, permission recovery, black export previews, window controls, virtual cameras, and capture cards among them.
+
+## A first look at the new native app
+
+v0.6 ships with something we have been quietly building for a little while: a new version of Cap written entirely in Rust, on top of GPUI, the UI framework behind the Zed editor.
+
+We are going to write a separate post about it, because it deserves one. The short version is that Cap has always rendered its interface in a webview. That has served us well, but there is a ceiling to how fast an editor can feel when the UI and the video pipeline live in two different worlds. The native app removes that ceiling. The window, the timeline, and the preview are all drawn by the same GPU-backed renderer that plays your video.
+
+You can feel the difference immediately, and you can measure it. On the same machine, playing back the same recording:
+
+- **CPU usage** - 76.6% in the classic app, 17.5% in the native app.
+- **Memory** - 3,724 MiB in the classic app, 440 MiB in the native app.
+
+Playback holds a steady 60 frames per second, scrubbing keeps up with you, and the app opens in an instant.
+
+It is an optional preview for now. Turn it on in **Settings > Experimental**, and your recordings and settings carry over. Some editor features have not made it across yet, and you can switch back at any time while we finish them. The full story of how we built it is coming in its own post soon.
+
+## Try Cap v0.6
+
+You can download Cap v0.6 at [Cap.so/download](https://cap.so/download), and if you already have Cap installed, it will update on its own.
+
+We are onboarding bigger teams every week. If you are moving from Loom, our [importer](/migrate-from-loom) brings your whole library across, and we can help with larger migrations at [hello@cap.so](mailto:hello@cap.so).
+
+Thank you to everyone who tested the nightlies, sent crash reports, opened issues, and told us where the editor still felt rough. This release is better because of you.
+
+There is a lot more coming.
+
+Richie McIlroy
+
+Founder of Cap

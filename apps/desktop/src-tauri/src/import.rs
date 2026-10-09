@@ -324,6 +324,8 @@ fn full_timeline_for_segments(
                 end: duration,
                 name: None,
                 speed_audio_mode: None,
+                hide_cursor: None,
+                volume: None,
             })
         })
         .collect()
@@ -358,6 +360,8 @@ fn full_timeline_for_source_segments(
                 end: duration,
                 name: None,
                 speed_audio_mode: None,
+                hide_cursor: None,
+                volume: None,
             })
         })
         .collect()
@@ -921,7 +925,9 @@ fn source_timeline_segments_for_import(
             start,
             end,
             name: None,
-            speed_audio_mode: None,
+            speed_audio_mode: segment.speed_audio_mode,
+            hide_cursor: segment.hide_cursor,
+            volume: segment.volume,
         });
     }
 
@@ -1731,6 +1737,8 @@ async fn append_mp4_to_editor_project(
             end: duration,
             name: None,
             speed_audio_mode: None,
+            hide_cursor: None,
+            volume: None,
         });
     add_clip_configs(
         &mut config,
@@ -1862,6 +1870,8 @@ async fn append_cap_project_to_editor_project(
                 end: source_segment.end,
                 name: None,
                 speed_audio_mode: source_segment.speed_audio_mode,
+                hide_cursor: source_segment.hide_cursor,
+                volume: source_segment.volume,
             });
         }
     }

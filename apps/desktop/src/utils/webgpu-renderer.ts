@@ -30,7 +30,7 @@ const FRAGMENT_SHADER = `
 @fragment
 fn fs(@location(0) texCoord: vec2f) -> @location(0) vec4f {
 	let sampled = textureSample(frameTexture, frameSampler, texCoord);
-	return vec4f(sampled.r, sampled.g, sampled.b, 1.0);
+	return vec4f(sampled.rgb * sampled.a, sampled.a);
 }
 `;
 
@@ -78,6 +78,7 @@ fn fs(@location(0) texCoord: vec2f) -> @location(0) vec4f {
 `;
 
 export interface WebGPURenderer {
+	alphaMode: GPUCanvasAlphaMode;
 	device: GPUDevice;
 	context: GPUCanvasContext;
 	pipeline: GPURenderPipeline;
@@ -145,6 +146,7 @@ export async function isWebGPUSupported(
 export async function initWebGPU(
 	canvas: OffscreenCanvas,
 	powerPreference: GPUPowerPreference = "high-performance",
+	preserveAlpha = false,
 ): Promise<WebGPURenderer> {
 	const adapter = await requestWebGPUAdapter(powerPreference);
 	if (!adapter) {
@@ -152,7 +154,19 @@ export async function initWebGPU(
 	}
 
 	const device = await adapter.requestDevice();
+	try {
+		return createWebGPURenderer(device, canvas, preserveAlpha);
+	} catch (error) {
+		device.destroy();
+		throw error;
+	}
+}
 
+function createWebGPURenderer(
+	device: GPUDevice,
+	canvas: OffscreenCanvas,
+	preserveAlpha: boolean,
+): WebGPURenderer {
 	device.lost.then((info) => {
 		if (info.reason !== "destroyed") {
 			self.postMessage({
@@ -171,7 +185,7 @@ export async function initWebGPU(
 	context.configure({
 		device,
 		format,
-		alphaMode: "opaque",
+		alphaMode: preserveAlpha ? "premultiplied" : "opaque",
 	});
 
 	const bindGroupLayout = device.createBindGroupLayout({
@@ -218,7 +232,14 @@ export async function initWebGPU(
 	});
 
 	const vertexModule = device.createShaderModule({ code: VERTEX_SHADER });
-	const fragmentModule = device.createShaderModule({ code: FRAGMENT_SHADER });
+	const fragmentModule = device.createShaderModule({
+		code: preserveAlpha
+			? FRAGMENT_SHADER
+			: FRAGMENT_SHADER.replace(
+					"vec4f(sampled.rgb * sampled.a, sampled.a)",
+					"vec4f(sampled.rgb, 1.0)",
+				),
+	});
 	const nv12FragmentModule = device.createShaderModule({
 		code: NV12_FRAGMENT_SHADER,
 	});
@@ -282,6 +303,7 @@ export async function initWebGPU(
 	});
 
 	return {
+		alphaMode: preserveAlpha ? "premultiplied" : "opaque",
 		device,
 		context,
 		pipeline,
@@ -326,7 +348,7 @@ export function renderFrameWebGPU(
 		context.configure({
 			device,
 			format,
-			alphaMode: "opaque",
+			alphaMode: renderer.alphaMode,
 		});
 		resizeMs = performance.now() - start;
 	}
@@ -437,7 +459,7 @@ export function renderNv12FrameWebGPU(
 		context.configure({
 			device,
 			format,
-			alphaMode: "opaque",
+			alphaMode: renderer.alphaMode,
 		});
 		resizeMs = performance.now() - start;
 	}

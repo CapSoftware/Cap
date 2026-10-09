@@ -141,6 +141,12 @@ export function createPermissionsQuery() {
 	}));
 }
 
+export const getEditorRecordingTarget = queryOptions({
+	queryKey: ["editorRecordingTarget"] as const,
+	queryFn: () => commands.getEditorRecordingTarget(),
+	staleTime: Number.POSITIVE_INFINITY,
+});
+
 export const isSystemAudioSupported = queryOptions({
 	queryKey: ["systemAudioSupported"] as const,
 	queryFn: () => commands.isSystemAudioCaptureSupported(),
@@ -149,7 +155,7 @@ export const isSystemAudioSupported = queryOptions({
 
 type CameraCaptureTarget = ScreenCaptureTarget | { variant: "cameraOnly" };
 type ExtendedRecordingTargetMode = RecordingTargetMode | "camera" | null;
-type RecordingTargetModeSource = "main" | "editor" | "editorRecording" | null;
+type RecordingTargetModeSource = "main" | null;
 /**
  * Why the target picker was last dismissed. Written in the same `setOptions`
  * call that sets `targetMode: null`, so it reaches other webviews atomically

@@ -509,7 +509,56 @@ macro_rules! impl_track_segment {
 
 impl_track_segment!(ZoomSegment);
 impl_track_segment!(SceneSegment);
-impl_track_segment!(Camera3DSegment);
+/// The 3D shot is the one segment whose *contents* are timed: its pose tracks
+/// hold keyframes measured from the shot's own start, so an edge that moves
+/// without them leaves a lengthened shot finishing its move early and a
+/// shortened one cutting it off. Every edge write refits the motion, the same
+/// way the clip-speed ripple already rescales it.
+impl TrackSegmentOps for Camera3DSegment {
+    fn start(&self) -> f64 {
+        self.start
+    }
+    fn end(&self) -> f64 {
+        self.end
+    }
+    fn set_start(&mut self, value: f64) {
+        self.start = value;
+        fit_camera3d_motion(self);
+    }
+    fn set_end(&mut self, value: f64) {
+        self.end = value;
+        fit_camera3d_motion(self);
+    }
+}
+
+/// Rescale a shot's keyframe times so its move spans exactly the shot.
+///
+/// The span is measured rather than remembered, which makes this idempotent:
+/// a shot already fitted is left untouched, so a move (two edge writes that
+/// cancel out) cannot creep.
+pub fn fit_camera3d_motion(segment: &mut Camera3DSegment) {
+    let duration = segment.end - segment.start;
+    if !duration.is_finite() || duration <= 0.0 {
+        return;
+    }
+    let mut span = 0.0_f64;
+    for track in segment.tracks.all_tracks_mut() {
+        for keyframe in track.iter() {
+            if keyframe.time.is_finite() {
+                span = span.max(keyframe.time);
+            }
+        }
+    }
+    if span <= 0.0 || (span - duration).abs() <= 1e-9 {
+        return;
+    }
+    let scale = duration / span;
+    for track in segment.tracks.all_tracks_mut() {
+        for keyframe in track.iter_mut() {
+            keyframe.time *= scale;
+        }
+    }
+}
 impl_track_segment!(MaskSegment, lane: track);
 impl_track_segment!(TextSegment, lane: track);
 impl_track_segment!(cap_project::StyleSegment, lane: track);
@@ -1526,6 +1575,12 @@ pub fn default_text_segment(start: f64, end: f64, track: u32) -> TextSegment {
         italic: false,
         color: "#ffffff".to_string(),
         background_color: None,
+        background_style: Default::default(),
+        uppercase: false,
+        stroke_width: 0.0,
+        stroke_color: "#000000".to_string(),
+        gradient_color: None,
+        glow: 0.0,
         fade_duration: 0.15,
         align: Default::default(),
         letter_spacing: 0.0,
@@ -1754,6 +1809,8 @@ pub fn ensure_timeline(project: &mut ProjectConfiguration, clip_display_duration
                 end: *duration,
                 name: None,
                 speed_audio_mode: None,
+                hide_cursor: None,
+                volume: None,
             })
             .collect(),
         transitions: Vec::new(),
@@ -2367,6 +2424,21 @@ pub fn clip_is_muted(segment: &TimelineSegment) -> bool {
     }
 }
 
+pub fn set_clip_volume(timeline: &mut TimelineConfiguration, index: usize, volume: f64) -> bool {
+    if !volume.is_finite() {
+        return false;
+    }
+    let Some(segment) = timeline.segments.get_mut(index) else {
+        return false;
+    };
+    let volume = volume.clamp(0.0, 2.0);
+    if segment.volume() == volume {
+        return false;
+    }
+    segment.volume = (volume != 1.0).then_some(volume);
+    true
+}
+
 pub fn set_clip_muted(timeline: &mut TimelineConfiguration, index: usize, muted: bool) -> bool {
     let Some(segment) = timeline.segments.get_mut(index) else {
         return false;
@@ -2398,6 +2470,143 @@ pub fn set_clip_segment_speed_audio_mode(
     }
     segment.speed_audio_mode = Some(mode);
     true
+}
+
+/// `setClipSegmentHideCursor` (`ED/context.ts`): the flag is stored only when
+/// set, so an untouched clip serialises exactly as before.
+pub fn set_clip_hide_cursor(
+    timeline: &mut TimelineConfiguration,
+    index: usize,
+    hidden: bool,
+) -> bool {
+    let Some(segment) = timeline.segments.get_mut(index) else {
+        return false;
+    };
+    if segment.hides_cursor() == hidden {
+        return false;
+    }
+    segment.hide_cursor = hidden.then_some(true);
+    true
+}
+
+/// `setClipSegmentName`: the trimmed name, or none when empty.
+pub fn set_clip_name(timeline: &mut TimelineConfiguration, index: usize, name: &str) -> bool {
+    let Some(segment) = timeline.segments.get_mut(index) else {
+        return false;
+    };
+    let trimmed = name.trim();
+    let next = (!trimmed.is_empty()).then(|| trimmed.to_string());
+    if segment.name == next {
+        return false;
+    }
+    segment.name = next;
+    true
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClipMergeDirection {
+    Previous,
+    Next,
+}
+
+/// Why two neighbouring clips cannot be merged (`clipMergeBlocker`,
+/// `ED/clip-merge.ts`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClipMergeBlocker {
+    Edge,
+    DifferentRecording,
+    Gap,
+    Speed,
+}
+
+impl ClipMergeBlocker {
+    pub fn hint(self) -> &'static str {
+        match self {
+            Self::Edge => "No clip on that side",
+            Self::DifferentRecording => "Different recording",
+            Self::Gap => "Footage was cut between them",
+            Self::Speed => "Match the clip speeds first",
+        }
+    }
+}
+
+const CLIP_MERGE_CONTIGUOUS_EPSILON: f64 = 1e-6;
+
+pub fn clip_merge_kept_index(index: usize, direction: ClipMergeDirection) -> Option<usize> {
+    match direction {
+        ClipMergeDirection::Next => Some(index),
+        ClipMergeDirection::Previous => index.checked_sub(1),
+    }
+}
+
+pub fn clip_merge_blocker(
+    segments: &[TimelineSegment],
+    index: usize,
+    direction: ClipMergeDirection,
+) -> Option<ClipMergeBlocker> {
+    let Some(kept) = clip_merge_kept_index(index, direction) else {
+        return Some(ClipMergeBlocker::Edge);
+    };
+    let (Some(left), Some(right)) = (segments.get(kept), segments.get(kept + 1)) else {
+        return Some(ClipMergeBlocker::Edge);
+    };
+    if left.recording_clip != right.recording_clip {
+        return Some(ClipMergeBlocker::DifferentRecording);
+    }
+    if (left.end - right.start).abs() > CLIP_MERGE_CONTIGUOUS_EPSILON {
+        return Some(ClipMergeBlocker::Gap);
+    }
+    if left.timescale != right.timescale {
+        return Some(ClipMergeBlocker::Speed);
+    }
+    None
+}
+
+/// `mergeClipSegment` (`ED/context.ts`): the clip at `index` and its
+/// neighbour become one clip spanning both, keeping the acted-on clip's
+/// settings and whichever custom name exists. Any transition on the merged
+/// boundary goes first (rippling the other tracks for the overlap it gave
+/// back), so the merge itself is duration-neutral. Returns the merged clip's
+/// index.
+pub fn merge_clip_segments(
+    timeline: &mut TimelineConfiguration,
+    index: usize,
+    direction: ClipMergeDirection,
+) -> Option<usize> {
+    if clip_merge_blocker(&timeline.segments, index, direction).is_some() {
+        return None;
+    }
+    let kept = clip_merge_kept_index(index, direction)?;
+    crate::editor_clips::drop_clip_transition(timeline, kept + 1);
+
+    let settings = timeline.segments[index].clone();
+    let right = timeline.segments.remove(kept + 1);
+    let left = &mut timeline.segments[kept];
+    let custom_name = |name: &Option<String>| {
+        name.as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_string)
+    };
+    left.name = custom_name(&settings.name)
+        .or_else(|| custom_name(&left.name))
+        .or_else(|| custom_name(&right.name));
+    left.end = right.end;
+    left.speed_audio_mode = settings.speed_audio_mode;
+    left.volume = settings.volume;
+    left.hide_cursor = settings.hide_cursor;
+
+    // `transitionsAfterClipMerge`: the merged boundary's transition is gone,
+    // everything past it shifts down one.
+    timeline
+        .transitions
+        .retain(|transition| transition.segment_index as usize != kept + 1);
+    for transition in timeline.transitions.iter_mut() {
+        if transition.segment_index as usize > kept + 1 {
+            transition.segment_index -= 1;
+        }
+    }
+    Some(kept)
 }
 
 #[cfg(test)]
@@ -2644,6 +2853,8 @@ mod tests {
                 source_duration: end - start,
                 timescale: 1.,
                 muted: false,
+                cursor_hidden: false,
+                volume: 1.,
                 recording_clip: 0,
                 holds: Arc::from(&[][..]),
             },
@@ -3411,6 +3622,60 @@ mod tests {
     }
 
     #[test]
+    fn trimming_a_3d_shot_refits_its_move_to_the_new_length() {
+        let mut timeline: TimelineConfiguration =
+            serde_json::from_value(serde_json::json!({ "segments": [], "zoomSegments": [] }))
+                .unwrap();
+        timeline
+            .camera3d_segments
+            .push(crate::editor_panels::new_camera3d_shot(2.0, 6.0));
+        let span = |timeline: &TimelineConfiguration| {
+            timeline.camera3d_segments[0]
+                .tracks
+                .pan_x
+                .last()
+                .map(|keyframe| keyframe.time)
+                .unwrap()
+        };
+        assert!((span(&timeline) - 4.0).abs() < 1e-9);
+
+        // Lengthening the shot lengthens the move with it.
+        assert!(set_segment_end(&mut timeline, TrackKind::ThreeD, 0, 12.0));
+        assert!((span(&timeline) - 10.0).abs() < 1e-9);
+
+        // And so does dragging the start edge.
+        assert!(set_segment_start(&mut timeline, TrackKind::ThreeD, 0, 4.0));
+        assert!((span(&timeline) - 8.0).abs() < 1e-9);
+
+        // Sliding the whole shot leaves the move alone.
+        assert!(move_segment(&mut timeline, TrackKind::ThreeD, 0, 6.0, 14.0));
+        assert!((span(&timeline) - 8.0).abs() < 1e-9);
+
+        // Refitting a shot that already fits is a no-op.
+        let before = timeline.camera3d_segments[0].tracks.pan_x.clone();
+        fit_camera3d_motion(&mut timeline.camera3d_segments[0]);
+        assert_eq!(
+            before
+                .iter()
+                .map(|keyframe| keyframe.time)
+                .collect::<Vec<_>>(),
+            timeline.camera3d_segments[0]
+                .tracks
+                .pan_x
+                .iter()
+                .map(|keyframe| keyframe.time)
+                .collect::<Vec<_>>()
+        );
+
+        // The poses at the two ends are untouched by any of it.
+        let shot = &timeline.camera3d_segments[0];
+        assert_eq!(
+            crate::editor_panels::match_camera3d_look(shot).map(|look| look.id),
+            Some("glide-across")
+        );
+    }
+
+    #[test]
     fn camera3d_ripple_drops_cut_keys_and_preserves_both_boundary_poses() {
         let mut camera = default_camera3d_segment(0.0, 10.0);
         camera.tracks.tilt_x = [2.0, 5.0, 8.0]
@@ -3586,6 +3851,169 @@ mod tests {
         assert_eq!(keyboard.keys[0].time_offset, 500.0);
         assert_eq!(keyboard.keys[1].time_offset, 2500.0);
         assert!(!set_clip_segment_timescale(timeline, 0, 2.0));
+    }
+
+    #[test]
+    fn hide_cursor_flag_is_stored_only_when_set() {
+        let mut config = two_clip_config();
+        let timeline = config.timeline.as_mut().unwrap();
+        assert!(!set_clip_hide_cursor(timeline, 0, false));
+        assert!(set_clip_hide_cursor(timeline, 0, true));
+        assert_eq!(timeline.segments[0].hide_cursor, Some(true));
+        assert!(!set_clip_hide_cursor(timeline, 0, true));
+        assert!(set_clip_hide_cursor(timeline, 0, false));
+        assert_eq!(timeline.segments[0].hide_cursor, None);
+        assert!(!set_clip_hide_cursor(timeline, 9, true));
+    }
+
+    #[test]
+    fn clip_name_is_trimmed_and_cleared_when_empty() {
+        let mut config = two_clip_config();
+        let timeline = config.timeline.as_mut().unwrap();
+        assert!(set_clip_name(timeline, 0, "  Intro "));
+        assert_eq!(timeline.segments[0].name.as_deref(), Some("Intro"));
+        assert!(!set_clip_name(timeline, 0, "Intro"));
+        assert!(set_clip_name(timeline, 0, "   "));
+        assert_eq!(timeline.segments[0].name, None);
+    }
+
+    #[test]
+    fn merge_blockers_match_the_source() {
+        let mut config = two_clip_config();
+        let timeline = config.timeline.as_mut().unwrap();
+        assert_eq!(
+            clip_merge_blocker(&timeline.segments, 0, ClipMergeDirection::Previous),
+            Some(ClipMergeBlocker::Edge)
+        );
+        assert_eq!(
+            clip_merge_blocker(&timeline.segments, 1, ClipMergeDirection::Next),
+            Some(ClipMergeBlocker::Edge)
+        );
+        assert_eq!(
+            clip_merge_blocker(&timeline.segments, 0, ClipMergeDirection::Next),
+            Some(ClipMergeBlocker::DifferentRecording)
+        );
+        assert!(split_clip_segment(timeline, 4.0, Some(0)));
+        assert_eq!(
+            clip_merge_blocker(&timeline.segments, 0, ClipMergeDirection::Next),
+            None
+        );
+        assert_eq!(
+            clip_merge_blocker(&timeline.segments, 1, ClipMergeDirection::Previous),
+            None
+        );
+        timeline.segments[1].timescale = 2.0;
+        assert_eq!(
+            clip_merge_blocker(&timeline.segments, 0, ClipMergeDirection::Next),
+            Some(ClipMergeBlocker::Speed)
+        );
+        timeline.segments[1].timescale = 1.0;
+        timeline.segments[1].start = 5.0;
+        assert_eq!(
+            clip_merge_blocker(&timeline.segments, 0, ClipMergeDirection::Next),
+            Some(ClipMergeBlocker::Gap)
+        );
+    }
+
+    #[test]
+    fn merging_split_halves_restores_one_clip_with_the_acted_on_settings() {
+        let mut config = two_clip_config();
+        let timeline = config.timeline.as_mut().unwrap();
+        assert!(split_clip_segment(timeline, 4.0, Some(0)));
+        assert_eq!(timeline.segments.len(), 3);
+        assert!(set_clip_hide_cursor(timeline, 1, true));
+        assert!(set_clip_volume(timeline, 1, 0.5));
+        assert!(set_clip_name(timeline, 0, "Intro"));
+        timeline.transitions = vec![cap_project::ClipTransition {
+            segment_index: 2,
+            kind: cap_project::ClipTransitionType::CrossFade,
+            duration: 0.5,
+        }];
+
+        assert_eq!(
+            merge_clip_segments(timeline, 1, ClipMergeDirection::Previous),
+            Some(0)
+        );
+        assert_eq!(timeline.segments.len(), 2);
+        let merged = &timeline.segments[0];
+        assert_eq!((merged.start, merged.end), (0.0, 10.0));
+        assert_eq!(merged.hide_cursor, Some(true));
+        assert_eq!(merged.volume, Some(0.5));
+        assert_eq!(merged.name.as_deref(), Some("Intro"));
+        assert_eq!(timeline.transitions.len(), 1);
+        assert_eq!(timeline.transitions[0].segment_index, 1);
+        assert_eq!(
+            merge_clip_segments(timeline, 0, ClipMergeDirection::Next),
+            None
+        );
+    }
+
+    #[test]
+    fn merging_across_a_transition_gives_the_overlap_back_to_later_tracks() {
+        let mut config = two_clip_config();
+        let timeline = config.timeline.as_mut().unwrap();
+        assert!(split_clip_segment(timeline, 4.0, Some(0)));
+        timeline.transitions = vec![cap_project::ClipTransition {
+            segment_index: 1,
+            kind: cap_project::ClipTransitionType::CrossFade,
+            duration: 1.0,
+        }];
+        timeline.zoom_segments = vec![cap_project::ZoomSegment {
+            start: 12.0,
+            end: 14.0,
+            amount: 1.5,
+            mode: cap_project::ZoomMode::Auto,
+            glide_direction: Default::default(),
+            glide_speed: 1.0,
+            instant_animation: false,
+            edge_snap_ratio: 0.0,
+        }];
+        timeline.camera3d_segments = serde_json::from_value(serde_json::json!([
+            {
+                "start": 12.0, "end": 14.0,
+                "tracks": { "zoom": [
+                    { "time": 0.0, "value": 1.0 },
+                    { "time": 2.0, "value": 1.5 }
+                ] }
+            }
+        ]))
+        .unwrap();
+        let before = clip_timeline_duration(timeline);
+        assert_eq!(
+            merge_clip_segments(timeline, 0, ClipMergeDirection::Next),
+            Some(0)
+        );
+        assert!((clip_timeline_duration(timeline) - (before + 1.0)).abs() < 1e-9);
+        assert!(timeline.transitions.is_empty());
+        assert!((timeline.zoom_segments[0].start - 13.0).abs() < 1e-9);
+        assert!((timeline.zoom_segments[0].end - 15.0).abs() < 1e-9);
+        let shot = &timeline.camera3d_segments[0];
+        assert_eq!((shot.start, shot.end), (13.0, 15.0));
+        assert_eq!(shot.tracks.zoom[0].time, 0.0);
+        assert_eq!(shot.tracks.zoom[1].time, 2.0);
+        assert_eq!(shot.tracks.zoom[1].value, 1.5);
+    }
+
+    #[test]
+    fn clip_volume_survives_split_mute_and_unmute() {
+        let mut config = two_clip_config();
+        let timeline = config.timeline.as_mut().unwrap();
+        assert!(set_clip_volume(timeline, 0, 0.35));
+        assert!(split_clip_segment(timeline, 4.0, None));
+        assert_eq!(timeline.segments[0].volume(), 0.35);
+        assert_eq!(timeline.segments[1].volume(), 0.35);
+        assert_eq!(timeline.segments[2].volume(), 1.0);
+        assert!(set_clip_muted(timeline, 1, true));
+        assert!(set_clip_volume(timeline, 1, 0.5));
+        assert!(set_clip_muted(timeline, 1, false));
+        assert_eq!(timeline.segments[1].volume(), 0.5);
+        assert_eq!(timeline.segments[0].volume(), 0.35);
+        assert!(!set_clip_volume(timeline, 1, f64::NAN));
+        assert!(!set_clip_volume(timeline, 99, 0.5));
+        assert!(set_clip_volume(timeline, 1, 3.0));
+        assert_eq!(timeline.segments[1].volume(), 2.0);
+        assert!(set_clip_volume(timeline, 1, 1.0));
+        assert_eq!(timeline.segments[1].volume, None);
     }
 
     #[test]

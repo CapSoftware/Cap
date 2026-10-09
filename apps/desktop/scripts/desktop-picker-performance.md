@@ -13,6 +13,12 @@ CAP_PICKER_BENCH_CAMERA_ID=<device-id> cargo test -p cap-desktop-gpui --bin cap-
 
 Both debug apps also support `CAP_PICKER_BENCHMARK_OUTPUT=<absolute-json-path>` and `CAP_PICKER_BENCHMARK_DELAY_MS=0`. They open and dismiss six alternating display/window pickers, write timings, and exit. The default delay is 2000 ms. Run them sequentially after compilation has finished.
 
+The Tauri app also takes `CAP_PICKER_BENCHMARK_SAMPLES=<n>` to run more than six picker cycles and `CAP_PICKER_BENCHMARK_CAMERA_CYCLES=<n>` to follow them with camera-window close/reopen cycles (written to `<output>.camera.json`), and `CAP_PICKER_BENCHMARK_ESCAPE=direct` (or `wait:<ms>`, for an external driver sending a real Escape keypress) to check the picker is dismissed through the Escape path (written to `<output>.escape.json`). Together with `NSZombieEnabled=YES` this is the overlay soak that guards the vendored `tauri-nspanel` ownership fix: the picker reveal converts its overlay windows to NSPanels on every open, and the camera window is destroyed and recreated under one label, so an over-release in either path shows up as a `message sent to deallocated instance` line or a crash within a few cycles instead of in a user's session.
+
+```sh
+NSZombieEnabled=YES CAP_PICKER_BENCHMARK_OUTPUT=/tmp/picker.json CAP_PICKER_BENCHMARK_SAMPLES=200 CAP_PICKER_BENCHMARK_CAMERA_CYCLES=30 target/debug/cap-desktop
+```
+
 - Tauri measures from the target-mode request through native window creation, frontend initialization, input restoration, and two animation frames with the recording button enabled.
 - GPUI includes pending device discovery and selected-input readiness, then waits for two rendered overlay frames.
 - Sample zero measures the first picker in a fresh process. Later samples measure reopening. These are picker timings, not total process launch times. They are not directly interchangeable across UI implementations.

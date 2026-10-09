@@ -786,7 +786,8 @@ pub(crate) async fn resume_existing(
                     video_id.clone(),
                     file_path,
                     screenshot_path,
-                    metadata,
+                    meta.sharing.is_some()
+                        && matches!(meta.inner, cap_project::RecordingMetaInner::Studio(_)),
                     None,
                 )
                 .await?;
@@ -1177,6 +1178,20 @@ pub(crate) fn init(app: AppHandle) {
         return;
     }
     *pump = Some(spawn_actor(async move {
+        loop {
+            if STOPPING.load(Ordering::Acquire) {
+                return;
+            }
+            tokio::select! {
+                ready = crate::startup::wait_for_window(&app) => {
+                    if !ready {
+                        return;
+                    }
+                    break;
+                }
+                _ = WAKE.notified() => {},
+            }
+        }
         let mut first = true;
         while !STOPPING.load(Ordering::Acquire) {
             if let Err(error) = crate::resume_uploads(app.clone(), first).await {

@@ -167,6 +167,7 @@ pub struct KeyboardLayer {
 impl KeyboardLayer {
     pub fn new(device: &Device, queue: &Queue) -> Self {
         let font_system = super::new_font_system();
+        let glyph_phase = crate::readiness::Phase::start("glyph.keyboard.gpu_resources");
         let swash_cache = SwashCache::new();
         let cache = Cache::new(device);
         let viewport = Viewport::new(device, &cache);
@@ -177,6 +178,7 @@ impl KeyboardLayer {
             wgpu::MultisampleState::default(),
             None,
         );
+        glyph_phase.finish("returned");
 
         let metrics = Metrics::new(28.0, 28.0 * 1.2);
         let text_buffer = Buffer::new_empty(metrics);

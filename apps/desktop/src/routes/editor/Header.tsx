@@ -1,5 +1,4 @@
 import { ask } from "@tauri-apps/plugin-dialog";
-import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
 import {
@@ -50,7 +49,10 @@ export type TitleSaveRegistration = {
 
 type RegisterTitleSave = (save: TitleSaveRegistration | undefined) => void;
 
-export function Header(props: { registerTitleSave: RegisterTitleSave }) {
+export function Header(props: {
+	registerTitleSave: RegisterTitleSave;
+	disabled?: boolean;
+}) {
 	const {
 		editorInstance,
 		project,
@@ -60,7 +62,6 @@ export function Header(props: { registerTitleSave: RegisterTitleSave }) {
 		meta,
 		exportState,
 		setExportState,
-		customDomain,
 		editorState,
 		setEditorState,
 	} = useEditorContext();
@@ -108,23 +109,26 @@ export function Header(props: { registerTitleSave: RegisterTitleSave }) {
 				)}
 				{ostype() === "windows" && <div class="w-3 shrink-0" />}
 
-				<div class="flex gap-1.5 items-center min-w-0">
+				<div inert={props.disabled} class="flex gap-1.5 items-center min-w-0">
 					<NameEditor
 						name={meta().prettyName}
 						registerTitleSave={props.registerTitleSave}
-						readOnly={titleReadOnly()}
+						readOnly={titleReadOnly() || props.disabled === true}
 						setReadOnly={setTitleReadOnly}
 					/>
 					<span class="shrink-0 text-[13px] text-ed-text-3">.cap</span>
 				</div>
 
-				<div class="flex gap-0.5 items-center ml-1.5 shrink-0">
+				<div
+					inert={props.disabled}
+					class="flex gap-0.5 items-center ml-1.5 shrink-0"
+				>
 					<EditorButton
 						onClick={() => {
 							clearTimelineSelection();
 
 							console.log({ path: `${editorInstance.path}/` });
-							revealItemInDir(`${editorInstance.path}/`);
+							commands.revealItemInDir(`${editorInstance.path}/`);
 						}}
 						tooltipText="Open recording bundle"
 						leftIcon={<IconLucideFolder />}
@@ -150,6 +154,7 @@ export function Header(props: { registerTitleSave: RegisterTitleSave }) {
 
 			<div
 				data-tauri-drag-region
+				inert={props.disabled}
 				class="flex shrink-0 flex-row items-center gap-1 max-[900px]:justify-end"
 			>
 				<EditorButton
@@ -219,9 +224,7 @@ export function Header(props: { registerTitleSave: RegisterTitleSave }) {
 						</span>
 					</EditorButton>
 				</Show>
-				<Show when={customDomain.data}>
-					<ShareButton />
-				</Show>
+				<ShareButton />
 				<button
 					type="button"
 					class={cx(

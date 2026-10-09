@@ -31,6 +31,10 @@ impl KeyboardEvents {
     pub fn load_from_file(path: &Path) -> Result<Self, String> {
         let bytes =
             std::fs::read(path).map_err(|e| format!("Failed to open keyboard events file: {e}"))?;
+        Self::from_bytes(&bytes, path)
+    }
+
+    pub fn from_bytes(bytes: &[u8], source_path: &Path) -> Result<Self, String> {
         let config = bincode::config::standard();
 
         if let Some(payload) = bytes.strip_prefix(KEYBOARD_EVENTS_MAGIC) {
@@ -39,16 +43,16 @@ impl KeyboardEvents {
                 .map_err(|e| format!("Failed to parse keyboard events binary payload: {e}"));
         }
 
-        if path
+        if source_path
             .extension()
             .and_then(|extension| extension.to_str())
             .is_some_and(|extension| extension == "bin")
-            && let Ok((events, _)) = bincode::serde::decode_from_slice::<Self, _>(&bytes, config)
+            && let Ok((events, _)) = bincode::serde::decode_from_slice::<Self, _>(bytes, config)
         {
             return Ok(events);
         }
 
-        serde_json::from_slice(&bytes)
+        serde_json::from_slice(bytes)
             .map_err(|e| format!("Failed to parse keyboard events legacy JSON: {e}"))
     }
 
@@ -1076,6 +1080,57 @@ mod tests {
 
         let loaded = KeyboardEvents::load_from_file(&path).unwrap();
         assert_eq!(loaded.presses, events.presses);
+    }
+
+    #[test]
+    fn keyboard_bytes_preserve_versioned_unversioned_and_json_dispatch() {
+        let expected = KeyboardEvents {
+            presses: vec![key_down("文字🖱", 12.5), key_up("文字🖱", 19.75)],
+        };
+        let binary = bincode::serde::encode_to_vec(&expected, bincode::config::standard()).unwrap();
+        let mut versioned = KEYBOARD_EVENTS_MAGIC.to_vec();
+        versioned.extend(&binary);
+        let json = serde_json::to_vec(&expected).unwrap();
+        for (bytes, path) in [
+            (&versioned, "keyboard.bin"),
+            (&versioned, "keyboard.json"),
+            (&binary, "keyboard.bin"),
+            (&json, "keyboard.bin"),
+            (&json, "keyboard.json"),
+            (&json, "keyboard.BIN"),
+        ] {
+            let events = KeyboardEvents::from_bytes(bytes, Path::new(path)).unwrap();
+            assert_eq!(events.presses, expected.presses);
+        }
+        assert!(KeyboardEvents::from_bytes(&binary, Path::new("keyboard.BIN")).is_err());
+    }
+
+    #[test]
+    fn keyboard_bytes_keep_existing_trailing_data_and_error_behavior() {
+        let expected = KeyboardEvents {
+            presses: vec![key_down("a", 1.0)],
+        };
+        let mut binary =
+            bincode::serde::encode_to_vec(&expected, bincode::config::standard()).unwrap();
+        binary.extend(b"trailing bytes");
+        assert_eq!(
+            KeyboardEvents::from_bytes(&binary, Path::new("keyboard.bin"))
+                .unwrap()
+                .presses,
+            expected.presses
+        );
+        let mut versioned = KEYBOARD_EVENTS_MAGIC.to_vec();
+        versioned.extend(b"{\"presses\":[]}");
+        assert!(
+            KeyboardEvents::from_bytes(&versioned, Path::new("keyboard.json"))
+                .unwrap_err()
+                .starts_with("Failed to parse keyboard events binary payload: ")
+        );
+        assert!(
+            KeyboardEvents::from_bytes(b"{\"presses\":[]} trailing", Path::new("keyboard.bin"))
+                .unwrap_err()
+                .starts_with("Failed to parse keyboard events legacy JSON: ")
+        );
     }
 
     #[test]

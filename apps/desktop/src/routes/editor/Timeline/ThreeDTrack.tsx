@@ -1,13 +1,27 @@
-import { createEventListenerMap } from "@solid-primitives/event-listener";
-import { createMemo, createRoot, Index, Show } from "solid-js";
+import {
+	createEventListener,
+	createEventListenerMap,
+} from "@solid-primitives/event-listener";
+import {
+	createMemo,
+	createRoot,
+	createSignal,
+	For,
+	Index,
+	onCleanup,
+	Show,
+} from "solid-js";
 import { produce } from "solid-js/store";
 import { useEditorContext } from "../context";
 import {
-	camera3DSceneRange,
-	findCamera3DScene,
+	camera3DShotLabel,
+	DEFAULT_CAMERA3D_SHOT_DURATION,
 	fitCamera3DMotionToSegment,
-	hasCamera3DMotion,
+	MAX_AUTO_CAMERA3D_SHOTS,
+	maxAutoCamera3DShots,
+	placeCamera3DShot,
 } from "../three-d";
+import { ShotCountPills } from "../three-d-panel";
 import { useTimelineContext, useTrackContext } from "./context";
 import {
 	SegmentContent,
@@ -27,32 +41,10 @@ export type ThreeDSegmentDragState =
 	| { type: "moving" };
 
 const MIN_THREE_D_SEGMENT_PIXEL_WIDTH = 40;
-function Camera3DSetupGhost(props: {
-	segment: { start: number; end: number };
-	label: string;
-}) {
-	const translateX = useSegmentTranslateX(() => props.segment);
-	const width = useSegmentWidth(() => props.segment);
-
-	return (
-		<div
-			class="flex absolute inset-y-0 justify-center items-center rounded-lg border border-dashed pointer-events-none"
-			style={{
-				transform: `translateX(${translateX()}px)`,
-				width: `${width()}px`,
-				"border-color": "color-mix(in srgb, var(--track-3d) 70%, transparent)",
-				background: "color-mix(in srgb, var(--track-3d) 14%, transparent)",
-			}}
-		>
-			<span
-				class="px-2 truncate cap-seg-label"
-				style={{ "--seg-color": "var(--track-3d)" }}
-			>
-				{props.label}
-			</span>
-		</div>
-	);
-}
+const MIN_NEW_SHOT_SECS = 1;
+/** Below this the ghost has no room for words and shows a bare "+". */
+const GHOST_LABEL_PX = 96;
+const GHOST_FULL_LABEL_PX = 200;
 
 export function ThreeDTrack(props: {
 	onDragStateChanged: (v: ThreeDSegmentDragState) => void;
@@ -66,44 +58,102 @@ export function ThreeDTrack(props: {
 		editorState,
 		totalDuration,
 		projectActions,
-		camera3DScenePreview,
+		camera3DAutoScenePreview,
 	} = useEditorContext();
 
 	const { duration, secsPerPixel } = useTimelineContext();
 	const setPreviewTime = useSetPreviewTime();
 
-	const hasCamera3DSegments = () =>
-		(project.timeline?.camera3dSegments?.length ?? 0) > 0;
-	const setup = () => editorState.timeline.camera3dSetup;
-	const setupRange = createMemo(() => {
-		const current = setup();
-		if (!current) return null;
-		const segments = camera3DScenePreview(current);
-		if (!segments.length) return null;
-		return { start: segments[0].start, end: segments[segments.length - 1].end };
+	// The range being drawn by a drag on empty lane space. While it is set the
+	// ghost shows the drawn range instead of the one under the cursor.
+	const [dragRange, setDragRange] = createSignal<{
+		start: number;
+		end: number;
+	} | null>(null);
+
+	const camera3dSegments = () => project.timeline?.camera3dSegments ?? [];
+	const hasCamera3DSegments = () => camera3dSegments().length > 0;
+
+	// The empty lane's "Auto scene" chip opens in place rather than in a dialog,
+	// so the counts sit right above the track they are about to fill.
+	const [pickerOpen, setPickerOpen] = createSignal(false);
+	const maxShots = () => maxAutoCamera3DShots(totalDuration());
+
+	const previewShotCount = (count: number | null) =>
+		setEditorState("timeline", "camera3dAutoPreview", count);
+
+	const closePicker = () => {
+		setPickerOpen(false);
+		previewShotCount(null);
+	};
+
+	const pickShotCount = (count: number) => {
+		closePicker();
+		projectActions.applyCamera3DAutoScene(count);
+	};
+
+	onCleanup(() => previewShotCount(null));
+
+	createEventListener(window, "keydown", (e) => {
+		// The picker only exists on an empty lane: a shot landing there while it
+		// is open takes the shortcuts with it.
+		if (!pickerOpen() || hasCamera3DSegments()) return;
+		if (
+			document.activeElement instanceof HTMLInputElement ||
+			document.activeElement instanceof HTMLTextAreaElement
+		)
+			return;
+		if (e.key === "Escape") {
+			closePicker();
+			return;
+		}
+		if (e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
+		const count = Number.parseInt(e.key, 10);
+		if (
+			!Number.isInteger(count) ||
+			count < 1 ||
+			count > MAX_AUTO_CAMERA3D_SHOTS
+		)
+			return;
+		if (count > maxShots()) return;
+		e.preventDefault();
+		pickShotCount(count);
 	});
-	const startSetup = (time = editorState.playbackTime) =>
-		projectActions.startCamera3DSetup(time);
+
 	const selectedCamera3DIndices = createMemo(() => {
 		const selection = editorState.timeline.selection;
 		if (!selection || selection.type !== "3d") return null;
 		return new Set(selection.indices);
 	});
 
-	const newSegmentDetails = () => {
+	// The range a shot dropped at the cursor would take. Also drives the drag,
+	// so what the ghost promises is exactly what a drag starts from. Over an
+	// existing shot there is nothing to offer: that click selects instead, and
+	// a ghost hovering somewhere else on the lane would only mislead.
+	const newShotDetails = () => {
+		const time = editorState.previewTime;
+		if (editorState.timeline.hoveredTrack !== "3d" || time === null)
+			return null;
 		if (
-			setup() ||
-			!hasCamera3DSegments() ||
-			editorState.timeline.hoveredTrack !== "3d" ||
-			editorState.previewTime === null
+			camera3dSegments().some(
+				(segment) => time >= segment.start && time < segment.end,
+			)
 		)
 			return null;
-		return camera3DSceneRange(
-			project.timeline?.camera3dSegments ?? [],
-			editorState.previewTime,
-			6,
+		return placeCamera3DShot(
+			camera3dSegments(),
+			time,
+			DEFAULT_CAMERA3D_SHOT_DURATION,
 			totalDuration(),
 		);
+	};
+
+	// How far right a drag from `start` may run before it hits the next shot.
+	const gapEndAfter = (start: number) => {
+		let end = totalDuration();
+		for (const segment of camera3dSegments())
+			if (segment.start >= start) end = Math.min(end, segment.start);
+		return end;
 	};
 
 	return (
@@ -114,35 +164,125 @@ export function ThreeDTrack(props: {
 				if (e.button !== 0 || editorState.timeline.interactMode !== "seek")
 					return;
 				e.stopPropagation();
-				const time = editorState.previewTime ?? editorState.playbackTime;
-				if (setup()) {
-					setEditorState("timeline", "camera3dSetup", "start", time);
-				} else startSetup(time);
+
+				const base = newShotDetails();
+				if (!base) {
+					// The lane is full at the cursor, but the click still deserves an
+					// answer: place it wherever there is room, or say there is none.
+					projectActions.addCamera3DShot(
+						editorState.previewTime ?? editorState.playbackTime,
+					);
+					return;
+				}
+
+				createRoot((dispose) => {
+					const initialMouseX = e.clientX;
+					// A drag can run to the next shot even though the click-sized
+					// ghost stops at the default duration.
+					const maxEnd = Math.max(
+						gapEndAfter(base.start),
+						base.start + MIN_NEW_SHOT_SECS,
+					);
+					let dragging = false;
+
+					const rangeFor = (clientX: number) => {
+						const dragged =
+							base.end + (clientX - initialMouseX) * secsPerPixel();
+						return {
+							start: base.start,
+							end: Math.min(
+								Math.max(dragged, base.start + MIN_NEW_SHOT_SECS),
+								maxEnd,
+							),
+						};
+					};
+
+					createEventListenerMap(window, {
+						mousemove: (moveEvent: MouseEvent) => {
+							if (!dragging && Math.abs(moveEvent.clientX - initialMouseX) <= 2)
+								return;
+							dragging = true;
+							setDragRange(rangeFor(moveEvent.clientX));
+						},
+						mouseup: (upEvent: MouseEvent) => {
+							const range = dragging ? rangeFor(upEvent.clientX) : base;
+							setDragRange(null);
+							dispose();
+							projectActions.addCamera3DShotRange(range.start, range.end);
+						},
+						blur: () => {
+							setDragRange(null);
+							dispose();
+						},
+					});
+				});
 			}}
 		>
-			<Show when={!hasCamera3DSegments() && !setup()}>
-				<button
-					type="button"
-					class="cap-empty-lane pointer-events-auto outline-hidden"
-					onMouseDown={(e) => e.stopPropagation()}
-					onClick={(e) => {
-						e.stopPropagation();
-						startSetup();
-					}}
-				>
-					<span>Tilt the scene in 3D perspective</span>
-					<span class="cap-empty-lane-action">· Add 3D scene</span>
-				</button>
+			<Show when={!hasCamera3DSegments()}>
+				<div class="cap-empty-lane relative z-1 isolate pointer-events-auto">
+					<Show
+						when={pickerOpen()}
+						fallback={
+							<>
+								<span>Add cinematic 3D shots to your recording</span>
+								<div
+									class="flex relative z-10 gap-2 items-center"
+									onMouseDown={(e) => e.stopPropagation()}
+								>
+									<button
+										type="button"
+										class="cap-lane-chip outline-hidden"
+										onClick={() => setPickerOpen(true)}
+									>
+										Auto scene
+									</button>
+									<button
+										type="button"
+										class="cap-lane-chip cap-lane-chip-ghost outline-hidden"
+										onClick={() => projectActions.addCamera3DShot()}
+									>
+										+ Add shot
+									</button>
+								</div>
+							</>
+						}
+					>
+						<span>How many shots?</span>
+						<div
+							class="flex relative z-10 gap-1 items-center"
+							onMouseDown={(e) => e.stopPropagation()}
+						>
+							<ShotCountPills
+								max={maxShots()}
+								onHover={previewShotCount}
+								onPick={pickShotCount}
+							/>
+							<button
+								type="button"
+								aria-label="Close the shot picker"
+								class="flex justify-center items-center ml-1 rounded-md transition-colors outline-hidden text-ed-text-3 hover:text-ed-text-1 hover:bg-ed-ctl-hover size-5"
+								onClick={() => closePicker()}
+							>
+								<IconLucideX class="size-3" />
+							</button>
+							<button
+								type="button"
+								class="ml-1 cap-lane-chip cap-lane-chip-ghost outline-hidden"
+								onClick={() => projectActions.addCamera3DShot()}
+							>
+								+ Add shot
+							</button>
+						</div>
+					</Show>
+				</div>
 			</Show>
 			<Index each={project.timeline?.camera3dSegments}>
 				{(segment, i) => {
 					const { setTrackState } = useTrackContext();
 
-					const camera3dSegments = () =>
-						project.timeline?.camera3dSegments ?? [];
-
-					const motionLabel = () =>
-						hasCamera3DMotion(segment()) ? "Motion" : "Still";
+					const shotLabel = () => camera3DShotLabel(segment());
+					const shotDuration = () =>
+						`${(segment().end - segment().start).toFixed(1)}s`;
 
 					// Double-clicking a handle expands the segment as far as it can go
 					// in that direction (up to the neighbouring segment / timeline edge).
@@ -315,7 +455,7 @@ export function ThreeDTrack(props: {
 							segColor="var(--track-3d)"
 							class="group"
 							selected={isSelected()}
-							title={`3D Perspective · ${motionLabel()}`}
+							title={`3D shot · ${shotLabel()} · ${shotDuration()}`}
 							segment={segment()}
 							onMouseDown={(e) => {
 								e.stopPropagation();
@@ -430,24 +570,19 @@ export function ThreeDTrack(props: {
 										<SegmentLabel
 											full={() => (
 												<div class="cap-seg-labels animate-in fade-in">
-													<span class="cap-seg-label">
+													<span class="cap-seg-label truncate">
 														{visibleBox().width >= 140
-															? "3D Perspective"
-															: "3D"}
+															? shotLabel()
+															: shotLabel().split(" ")[0]}
 													</span>
-													<span class="cap-seg-sublabel flex gap-1 items-center">
-														{motionLabel()}
-														{/* Presentation only: the arrow says the shot
-															moves from its start pose to its end pose. */}
-														<Show when={hasCamera3DMotion(segment())}>
-															<IconLucideChevronRight class="size-3" />
-														</Show>
-													</span>
+													<span class="cap-seg-sublabel">{shotDuration()}</span>
 												</div>
 											)}
 											compact={() => (
 												<div class="cap-seg-labels">
-													<span class="cap-seg-label">3D</span>
+													<span class="cap-seg-label">
+														{shotLabel().split(" ")[0]}
+													</span>
 												</div>
 											)}
 											glyph={() => (
@@ -511,36 +646,91 @@ export function ThreeDTrack(props: {
 									},
 								)}
 							/>
+							{/* The two poses of the selected shot, on the shot itself:
+							    the same control as the panel's pose cards. They sit
+							    inside the resize handles, which keep the edge. */}
+							<Show
+								when={isSelected() && selectedCamera3DIndices()?.size === 1}
+							>
+								<For each={[false, true]}>
+									{(end) => (
+										<button
+											type="button"
+											aria-label={
+												end ? "Edit the end pose" : "Edit the start pose"
+											}
+											title={end ? "End pose" : "Start pose"}
+											class="cap-pose-dot"
+											data-active={
+												(editorState.timeline.camera3dPose === "end") === end
+											}
+											style={end ? { right: "5px" } : { left: "5px" }}
+											onMouseDown={(e) => e.stopPropagation()}
+											onClick={(e) => {
+												e.stopPropagation();
+												projectActions.selectCamera3DPose(i, end);
+											}}
+										/>
+									)}
+								</For>
+							</Show>
 						</SegmentRoot>
 					);
 				}}
 			</Index>
-			<Show when={setupRange()}>
-				{(range) => (
-					<Camera3DSetupGhost
-						segment={range()}
-						label={`${findCamera3DScene(setup()?.sceneId ?? "")?.name ?? "3D scene"} · ${(range().end - range().start).toFixed(1)}s`}
-					/>
-				)}
-			</Show>
 			<Show
-				when={
-					!useTrackContext().trackState.draggingSegment && newSegmentDetails()
+				when={editorState.timeline.camera3dAutoPreview}
+				fallback={
+					<Show
+						when={
+							!useTrackContext().trackState.draggingSegment &&
+							(dragRange() ?? (hasCamera3DSegments() ? newShotDetails() : null))
+						}
+					>
+						{(range) => <AddShotGhost labelled range={range()} />}
+					</Show>
 				}
 			>
-				{(details) => (
-					<SegmentRoot
-						class="pointer-events-none z-0"
-						ghost
-						segColor="var(--track-3d)"
-						segment={details()}
-					>
-						<SegmentContent class="group justify-center">
-							<p class="cap-seg-label">+ Add 3D scene</p>
-						</SegmentContent>
-					</SegmentRoot>
+				{(count) => (
+					<For each={camera3DAutoScenePreview(count())}>
+						{(range) => <AddShotGhost range={range} />}
+					</For>
 				)}
 			</Show>
 		</TrackRoot>
+	);
+}
+
+/**
+ * The dashed preview of the shot a click would create, with its left edge on
+ * the cursor. It is not interactive itself: the lane underneath owns the click
+ * and the drag, so the ghost can never swallow either.
+ */
+function AddShotGhost(props: {
+	range: { start: number; end: number };
+	labelled?: boolean;
+}) {
+	const translateX = useSegmentTranslateX(() => props.range);
+	const width = useSegmentWidth(() => props.range);
+	const seconds = () => props.range.end - props.range.start;
+
+	return (
+		<div
+			class="cap-add-shot-ghost"
+			style={{
+				transform: `translateX(${translateX()}px)`,
+				width: `${width()}px`,
+			}}
+		>
+			<Show when={props.labelled}>
+				<span class="truncate">
+					{width() >= GHOST_FULL_LABEL_PX
+						? `+ Add shot · Glide across · ${seconds().toFixed(1)}s`
+						: width() >= GHOST_LABEL_PX
+							? "+ Add shot"
+							: "+"}
+				</span>
+			</Show>
+		</div>
 	);
 }

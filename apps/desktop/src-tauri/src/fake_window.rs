@@ -16,6 +16,8 @@ use tracing::{debug, instrument};
 use crate::{App, ArcLock, RecordingState};
 
 const RECORDING_CONTROLS_LABEL: &str = "in-progress-recording";
+#[cfg(any(target_os = "macos", test))]
+const RECORDING_CONTROLS_BOUNDS_NAME: &str = "recording-controls-interactive-area";
 const RECORDING_CONTROLS_WIDTH: f64 = 320.0;
 const RECORDING_CONTROLS_HEIGHT: f64 = 150.0;
 const RECORDING_CONTROLS_BAR_HEIGHT: f64 = 40.0;
@@ -58,25 +60,27 @@ impl FakeWindowListeners {
         (id, token)
     }
 
-    fn finish(&self, label: &str, id: u64) {
+    fn finish(&self, label: &str, id: u64) -> bool {
         let mut guard = self.tokens.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(current) = guard.get(label)
             && current.id == id
         {
             guard.remove(label);
+            return true;
         }
+        false
     }
 
     pub fn cancel(&self, label: &str) {
-        let mut guard = self.tokens.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(entry) = guard.remove(label) {
+        let guard = self.tokens.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(entry) = guard.get(label) {
             entry.token.cancel();
         }
     }
 
     pub fn cancel_all(&self) {
-        let mut guard = self.tokens.lock().unwrap_or_else(|e| e.into_inner());
-        for (_, entry) in guard.drain() {
+        let guard = self.tokens.lock().unwrap_or_else(|e| e.into_inner());
+        for entry in guard.values() {
             entry.token.cancel();
         }
     }
@@ -259,6 +263,118 @@ fn spawn_recording_controls_sanity_checks(app: AppHandle, window: WebviewWindow)
     });
 }
 
+#[cfg(any(target_os = "macos", test))]
+fn ensure_recording_controls_bounds(
+    bounds: &mut HashMap<String, LogicalBounds>,
+    width: f64,
+    height: f64,
+) {
+    bounds
+        .entry(RECORDING_CONTROLS_BOUNDS_NAME.to_string())
+        .or_insert_with(|| {
+            LogicalBounds::new(
+                scap_targets::bounds::LogicalPosition::new(
+                    RECORDING_CONTROLS_BOTTOM_PADDING,
+                    height - RECORDING_CONTROLS_BOTTOM_PADDING - RECORDING_CONTROLS_BAR_HEIGHT,
+                ),
+                scap_targets::bounds::LogicalSize::new(
+                    width - RECORDING_CONTROLS_BOTTOM_PADDING * 2.0,
+                    RECORDING_CONTROLS_BAR_HEIGHT,
+                ),
+            )
+        });
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn preserve_pointer_gesture(ignore: bool, pressed: bool, was_ignoring: bool) -> bool {
+    ignore && (!pressed || was_ignoring)
+}
+
+#[cfg(target_os = "macos")]
+async fn update_recording_controls_hit_test(
+    window: &WebviewWindow,
+    mut bounds: HashMap<String, LogicalBounds>,
+    token: CancellationToken,
+) -> Option<bool> {
+    use objc2_app_kit::{NSEvent, NSWindow};
+    use objc2_foundation::NSSize;
+
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let handle = window.clone();
+    window
+        .run_on_main_thread(move || {
+            if tx.is_closed() || token.is_cancelled() {
+                return;
+            }
+            let result = objc2::rc::autoreleasepool(|_| {
+                let ptr = handle.ns_window().ok()? as *const NSWindow;
+                let native = unsafe { ptr.as_ref()? };
+                let view = native.contentView()?;
+                let frame = native.frame();
+                let scale = native.backingScaleFactor();
+                let small = recording_controls_size_allows_default_interaction(
+                    tauri::LogicalSize::new(frame.size.width, frame.size.height).to_physical(scale),
+                    scale,
+                );
+                let pressed = unsafe { NSEvent::pressedMouseButtons() } & 1 != 0;
+                if !small {
+                    native.setIgnoresMouseEvents(true);
+                    native.setContentSize(NSSize::new(
+                        RECORDING_CONTROLS_WIDTH,
+                        RECORDING_CONTROLS_HEIGHT,
+                    ));
+                    return Some(pressed);
+                }
+                let point = view.convertPoint_fromView(
+                    unsafe { native.mouseLocationOutsideOfEventStream() },
+                    None,
+                );
+                let view_bounds = view.bounds();
+                ensure_recording_controls_bounds(
+                    &mut bounds,
+                    view_bounds.size.width,
+                    view_bounds.size.height,
+                );
+                let y = if view.isFlipped() {
+                    point.y - view_bounds.origin.y
+                } else {
+                    view_bounds.origin.y + view_bounds.size.height - point.y
+                };
+                let ignore = should_ignore_cursor_events(
+                    tauri::PhysicalPosition::new(0, 0),
+                    tauri::PhysicalPosition::new(
+                        (point.x - view_bounds.origin.x) * scale,
+                        y * scale,
+                    ),
+                    scale,
+                    &bounds,
+                    false,
+                    true,
+                );
+                // Keep the mouse-up routed to this panel when a drag crosses its hit area.
+                let ignore = preserve_pointer_gesture(ignore, pressed, unsafe {
+                    native.ignoresMouseEvents()
+                });
+                if unsafe { native.ignoresMouseEvents() } != ignore {
+                    native.setIgnoresMouseEvents(ignore);
+                    debug!(
+                        ignore,
+                        pressed,
+                        bounds = bounds.len(),
+                        "Recording controls hit test changed"
+                    );
+                }
+                Some(pressed)
+            });
+            let _ = tx.send(result);
+        })
+        .ok()?;
+    tokio::time::timeout(Duration::from_millis(250), rx)
+        .await
+        .ok()?
+        .ok()?
+}
+
 fn get_display_id_for_cursor() -> Option<DisplayId> {
     Display::get_containing_cursor().map(|d| d.id())
 }
@@ -391,7 +507,26 @@ pub fn spawn_fake_window_listener(app: AppHandle, window: WebviewWindow) {
                 break;
             }
 
-            if is_recording_controls {
+            #[cfg(target_os = "macos")]
+            let controls_pressed = if is_recording_controls {
+                let bounds = state
+                    .0
+                    .read()
+                    .await
+                    .get(&label)
+                    .cloned()
+                    .unwrap_or_default();
+                match update_recording_controls_hit_test(&window, bounds, token.clone()).await {
+                    Some(pressed) => pressed,
+                    None => continue,
+                }
+            } else {
+                false
+            };
+            #[cfg(not(target_os = "macos"))]
+            let controls_pressed = false;
+
+            if is_recording_controls && !controls_pressed {
                 let capture_target = app.state::<ArcLock<App>>().try_read().ok().and_then(|s| {
                     match &s.recording_state {
                         RecordingState::Pending { target, .. } => Some(target.clone()),
@@ -444,9 +579,14 @@ pub fn spawn_fake_window_listener(app: AppHandle, window: WebviewWindow) {
                 }
             }
 
-            let map = state.0.read().await;
+            #[cfg(target_os = "macos")]
+            if is_recording_controls {
+                continue;
+            }
 
-            let Some(windows) = map.get(&label) else {
+            let windows = state.0.read().await.get(&label).cloned();
+
+            let Some(windows) = windows else {
                 let ignore = if is_recording_controls {
                     !prepare_recording_controls_default_interaction(&window)
                 } else {
@@ -518,7 +658,7 @@ pub fn spawn_fake_window_listener(app: AppHandle, window: WebviewWindow) {
                 window_position,
                 mouse_position,
                 scale_factor,
-                windows,
+                &windows,
                 default_ignore,
                 allow_default_interaction,
             );
@@ -535,15 +675,8 @@ pub fn spawn_fake_window_listener(app: AppHandle, window: WebviewWindow) {
             }
         }
 
-        if is_recording_controls {
-            let ignore = !prepare_recording_controls_default_interaction(&window);
-            let _ = window.set_ignore_cursor_events(ignore);
-        }
-
-        listeners.finish(&label, listener_id);
-
-        {
-            let mut map = state.0.write().await;
+        let mut map = state.0.write().await;
+        if listeners.finish(&label, listener_id) && !app.webview_windows().contains_key(&label) {
             map.remove(&label);
         }
     });
@@ -570,6 +703,65 @@ pub fn init(app: &AppHandle) {
 mod tests {
     use super::*;
     use scap_targets::bounds::{LogicalPosition, LogicalSize};
+
+    #[test]
+    fn tooltip_only_bounds_do_not_disable_the_recording_bar() {
+        let mut registered = HashMap::from([("tooltip".into(), bounds(30.0, 60.0, 80.0, 24.0))]);
+        ensure_recording_controls_bounds(&mut registered, 320.0, 150.0);
+        for (x, y, ignore) in [(24.0, 110.0, false), (40.0, 70.0, false), (4.0, 30.0, true)] {
+            assert_eq!(
+                should_ignore_cursor_events(
+                    tauri::PhysicalPosition::new(0, 0),
+                    tauri::PhysicalPosition::new(x, y),
+                    1.0,
+                    &registered,
+                    false,
+                    true,
+                ),
+                ignore,
+            );
+        }
+    }
+
+    #[test]
+    fn registered_issue_panel_bounds_are_preserved() {
+        let issue = bounds(12.0, 40.0, 296.0, 98.0);
+        let mut registered = HashMap::from([(RECORDING_CONTROLS_BOUNDS_NAME.into(), issue)]);
+        ensure_recording_controls_bounds(&mut registered, 320.0, 150.0);
+        let actual = registered[RECORDING_CONTROLS_BOUNDS_NAME];
+        assert_eq!(actual.position().x(), issue.position().x());
+        assert_eq!(actual.position().y(), issue.position().y());
+        assert_eq!(actual.size().width(), issue.size().width());
+        assert_eq!(actual.size().height(), issue.size().height());
+    }
+
+    #[test]
+    fn replaced_listener_cannot_finish_the_current_listener() {
+        let listeners = FakeWindowListeners::default();
+        let (old, old_token) = listeners.register("controls".into());
+        let (current, current_token) = listeners.register("controls".into());
+        assert!(old_token.is_cancelled());
+        assert!(!listeners.finish("controls", old));
+        assert!(!current_token.is_cancelled());
+        assert!(listeners.finish("controls", current));
+    }
+
+    #[test]
+    fn cancelled_listener_retains_ownership_until_cleanup() {
+        let listeners = FakeWindowListeners::default();
+        let (id, token) = listeners.register("controls".into());
+        listeners.cancel("controls");
+        assert!(token.is_cancelled());
+        assert!(listeners.finish("controls", id));
+    }
+
+    #[test]
+    fn pointer_gesture_remains_interactive_until_release() {
+        assert!(!preserve_pointer_gesture(true, true, false));
+        assert!(preserve_pointer_gesture(true, false, false));
+        assert!(preserve_pointer_gesture(true, true, true));
+        assert!(!preserve_pointer_gesture(false, true, true));
+    }
 
     fn bounds(x: f64, y: f64, width: f64, height: f64) -> LogicalBounds {
         LogicalBounds::new(LogicalPosition::new(x, y), LogicalSize::new(width, height))

@@ -191,9 +191,10 @@ export const dailyStandupSoftwareContent: SeoPageContent = {
 	},
 
 	video: {
-		url: "/videos/daily-standup-demo.mp4",
-		thumbnail: "/videos/daily-standup-thumbnail.png",
-		alt: "Cap screen recorder demonstration for daily standup meetings",
+		iframe: {
+			src: "https://www.rend.so/embed/10512af0-b922-4efa-8974-f8f14fc1886a?accent=3e63dd",
+			title: "Cap screen recording demo",
+		},
 	},
 
 	cta: {

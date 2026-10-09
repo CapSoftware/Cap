@@ -2,7 +2,7 @@ use crate::output_pipeline::core::{HealthSender, PipelineHealthEvent, emit_healt
 use anyhow::{Context, Result, anyhow};
 use cap_muxer_protocol::{
     Frame, InitAudio, InitVideo, PACKET_FLAG_KEYFRAME, Packet, STREAM_INDEX_AUDIO,
-    STREAM_INDEX_VIDEO, StartParams, write_frame,
+    STREAM_INDEX_VIDEO, StartParams, write_frame, write_packet as write_packet_frame,
 };
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -356,16 +356,16 @@ impl MuxerSubprocess {
             .as_mut()
             .ok_or_else(|| MuxerSubprocessError::Write(anyhow!("stdin closed")))?;
 
-        let frame = Frame::Packet(Packet {
+        let packet = Packet {
             stream_index,
             pts,
             dts,
             duration,
             flags,
-            data: data.to_vec(),
-        });
+            data,
+        };
 
-        match write_frame(stdin, &frame) {
+        match write_packet_frame(stdin, &packet) {
             Ok(()) => {
                 self.packets_written.fetch_add(1, Ordering::Relaxed);
                 Ok(())

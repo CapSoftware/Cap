@@ -14,7 +14,11 @@ import WorkOSProvider from "next-auth/providers/workos";
 import { sendEmail } from "../emails/config.ts";
 import { db } from "../index.ts";
 import { users } from "../schema.ts";
-import { isEmailAllowedForSignup } from "./domain-utils.ts";
+import {
+	isBlockedAccountEmail,
+	isEmailAllowedForSignup,
+	isEmailBlockedFromSignup,
+} from "./domain-utils.ts";
 import { DrizzleAdapter } from "./drizzle-adapter.ts";
 import {
 	provisionSsoMembership,
@@ -33,6 +37,9 @@ export async function decodeSessionToken(
 ): Promise<JWT | null> {
 	const token = await decode(params);
 	if (!token) return null;
+	// A blocked email loses its existing sessions, not just new sign-ins.
+	if (typeof token.email === "string" && isBlockedAccountEmail(token.email))
+		return null;
 
 	const userId = typeof token.id === "string" ? token.id : null;
 	if (!userId) return token;
@@ -218,9 +225,6 @@ export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 						);
 					}
 				}
-				const allowedDomains = serverEnv().CAP_ALLOWED_SIGNUP_DOMAINS;
-				if (!allowedDomains) return true;
-
 				const rawEmail =
 					user?.email ||
 					(typeof email === "string"
@@ -230,6 +234,19 @@ export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 							: null);
 				if (!rawEmail || typeof rawEmail !== "string") return true;
 				const userEmail = rawEmail.toLowerCase();
+
+				if (
+					isEmailBlockedFromSignup(
+						userEmail,
+						serverEnv().CAP_BLOCKED_SIGNUP_DOMAINS,
+					)
+				) {
+					console.warn(`Sign-in blocked for email: ${userEmail}`);
+					return "/login?error=SignupBlocked";
+				}
+
+				const allowedDomains = serverEnv().CAP_ALLOWED_SIGNUP_DOMAINS;
+				if (!allowedDomains) return true;
 
 				const [existingUser] = await db()
 					.select()

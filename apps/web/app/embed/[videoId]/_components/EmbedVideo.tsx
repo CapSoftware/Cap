@@ -29,6 +29,7 @@ import {
 	type TranscriptEntry,
 } from "@/app/s/[videoId]/_components/utils/transcript-utils";
 import type { SharePageBranding } from "@/lib/share-branding";
+import type { ShareCallToAction } from "@/lib/share-call-to-action";
 import { usePlayerJsReceiver } from "./use-player-js-receiver";
 
 declare global {
@@ -60,12 +61,15 @@ export const EmbedVideo = forwardRef<
 		comments: CommentWithAuthor[];
 		chapters?: { title: string; start: number }[];
 		ownerName?: string | null;
+		ownerImageUrl?: string | null;
 		autoplay?: boolean;
 		/** Seconds to open at, from the embed URL's `?t=`. */
 		startTime?: number | null;
 		minimal?: boolean;
+		defaultPlaybackSpeed?: number;
 		viewerSettings?: ViewerSettings | null;
 		showPlaybackStatusBadge?: boolean;
+		callToAction?: ShareCallToAction | null;
 	}
 >(
 	(
@@ -76,11 +80,14 @@ export const EmbedVideo = forwardRef<
 			comments: _comments,
 			chapters = [],
 			ownerName,
+			ownerImageUrl,
 			autoplay = false,
 			startTime = null,
 			minimal = false,
+			defaultPlaybackSpeed,
 			viewerSettings,
 			showPlaybackStatusBadge = false,
+			callToAction = null,
 		},
 		ref,
 	) => {
@@ -274,8 +281,10 @@ export const EmbedVideo = forwardRef<
 							captionsSrc={captionsDisabled ? "" : subtitleUrl || ""}
 							videoRef={videoRef}
 							autoplay={autoplay}
+							defaultPlaybackSpeed={defaultPlaybackSpeed}
 							enableCrossOrigin={enableCrossOrigin}
 							hasActiveUpload={data.hasActiveUpload}
+							callToAction={callToAction}
 						/>
 					) : (
 						<HLSVideoPlayer
@@ -288,8 +297,10 @@ export const EmbedVideo = forwardRef<
 							captionsSrc={captionsDisabled ? "" : subtitleUrl || ""}
 							videoRef={videoRef}
 							autoplay={autoplay}
+							defaultPlaybackSpeed={defaultPlaybackSpeed}
 							hasActiveUpload={data.hasActiveUpload}
 							isLiveSegments={isSegmentsSource}
+							callToAction={callToAction}
 						/>
 					)}
 				</div>
@@ -309,6 +320,7 @@ export const EmbedVideo = forwardRef<
 										{ownerName && (
 											<Avatar
 												name={ownerName}
+												imageUrl={ownerImageUrl}
 												className="hidden flex-shrink-0 xs:flex xs:size-10"
 												letterClass="xs:text-base font-medium"
 											/>

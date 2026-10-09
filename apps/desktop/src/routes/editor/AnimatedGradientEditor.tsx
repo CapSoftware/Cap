@@ -364,7 +364,7 @@ export function AnimatedGradientEditor(props: {
 	};
 
 	const swatchClass =
-		"aspect-square w-full rounded-lg ring-offset-2 ring-offset-ed-card transition-all duration-200 hover:scale-105 hover:opacity-80";
+		"aspect-square w-full rounded-lg border border-ed-line ring-offset-2 ring-offset-ed-card transition-all duration-200 hover:scale-105 hover:opacity-80";
 
 	return (
 		<Show when={config()}>

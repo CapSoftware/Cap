@@ -15,6 +15,7 @@ import {
 	createSignal,
 	type JSX,
 	mergeProps,
+	onCleanup,
 	type ParentProps,
 	Show,
 	splitProps,
@@ -163,10 +164,25 @@ export function Slider(
 
 	// Pause history when slider is being dragged
 	let resumeHistory: (() => void) | null = null;
+	onCleanup(() => resumeHistory?.());
 
 	const [thumbRef, setThumbRef] = createSignal<HTMLDivElement>();
 
-	const thumbBounds = createElementBounds(thumbRef);
+	let boundsFrame: number | undefined;
+	const deferBoundsUpdate = (update: () => void) => () => {
+		if (boundsFrame !== undefined) return;
+		boundsFrame = requestAnimationFrame(() => {
+			boundsFrame = undefined;
+			update();
+		});
+	};
+	onCleanup(() => {
+		if (boundsFrame !== undefined) cancelAnimationFrame(boundsFrame);
+	});
+	const thumbBounds = createElementBounds(thumbRef, {
+		trackResize: deferBoundsUpdate,
+		trackMutation: deferBoundsUpdate,
+	});
 
 	const [dragging, setDragging] = createSignal(false);
 

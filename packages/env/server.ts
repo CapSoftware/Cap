@@ -87,6 +87,12 @@ function createServerEnv() {
 				.string()
 				.optional()
 				.describe("Comma-separated list of permitted signup domains"),
+			CAP_BLOCKED_SIGNUP_DOMAINS: z
+				.string()
+				.optional()
+				.describe(
+					"Comma-separated domains or full email addresses refused at sign-in",
+				),
 
 			/// AI providers
 			ASSEMBLY_API_KEY: z.string().optional().describe("Audio transcription"),
