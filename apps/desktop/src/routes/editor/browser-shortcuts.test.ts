@@ -21,6 +21,12 @@ describe("isBrowserShortcut", () => {
 		expect(isBrowserShortcut(key("w", { metaKey: true }))).toBe(true);
 	});
 
+	it("passes Alt+Left and Alt+Right history navigation", () => {
+		expect(isBrowserShortcut(key("ArrowLeft", { altKey: true }))).toBe(true);
+		expect(isBrowserShortcut(key("ArrowRight", { altKey: true }))).toBe(true);
+		expect(isBrowserShortcut(key("Home", { altKey: true }))).toBe(true);
+	});
+
 	it("passes function keys, including F5 reload", () => {
 		expect(isBrowserShortcut(key("F5"))).toBe(true);
 		expect(isBrowserShortcut(key("F12"))).toBe(true);
@@ -32,7 +38,7 @@ describe("isBrowserShortcut", () => {
 		expect(isBrowserShortcut(key(" "))).toBe(false);
 		expect(isBrowserShortcut(key("f"))).toBe(false);
 		expect(isBrowserShortcut(key("F"))).toBe(false);
-		expect(isBrowserShortcut(key("ArrowLeft", { altKey: true }))).toBe(false);
 		expect(isBrowserShortcut(key("Escape"))).toBe(false);
+		expect(isBrowserShortcut(key("ArrowLeft"))).toBe(false);
 	});
 });
