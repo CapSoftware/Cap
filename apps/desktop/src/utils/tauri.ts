@@ -684,6 +684,7 @@ export type AnnotationType = "arrow" | "circle" | "rectangle" | "text" | "mask" 
 export type AppTheme = "system" | "light" | "dark"
 export type AspectRatio = "wide" | "vertical" | "square" | "classic" | "tall"
 export type Audio = { duration: number; sample_rate: number; channels: number; start_time: number }
+export type AudioCaptureSource = "none" | "system" | "application"
 export type AudioConfiguration = { mute: boolean; improve: boolean; isolation: VoiceIsolation; micVolumeDb: number; micStereoMode: StereoMode; systemVolumeDb: number }
 /**
  * Overlap-trim accounting captured by the recorder's audio gap tracker, persisted so the
@@ -1228,7 +1229,7 @@ export type RecordingMeta = (StudioRecordingMeta | InstantRecordingMeta) & { pla
 export type RecordingMetaWithMetadata = ((StudioRecordingMeta | InstantRecordingMeta) & { platform?: Platform | null; pretty_name: string; sharing?: SharingMeta | null; upload?: UploadMeta | null }) & { mode: RecordingMode; status: StudioRecordingStatus; clip_count: number; sort_time_millis: number }
 export type RecordingMode = "studio" | "instant" | "screenshot"
 export type RecordingOptionsChanged = null
-export type RecordingSettingsStore = { target: ScreenCaptureTarget | null; micName: string | null; cameraId: DeviceOrModelID | null; mode: RecordingMode | null; systemAudio: boolean; organizationId: string | null; cameraDeviceSettings: { [key in string]: CameraDeviceSettings }; microphoneDeviceSettings: { [key in string]: MicrophoneDeviceSettings } }
+export type RecordingSettingsStore = { target: ScreenCaptureTarget | null; micName: string | null; cameraId: DeviceOrModelID | null; mode: RecordingMode | null; audioSource: AudioCaptureSource; showCursor: boolean; organizationId: string | null; cameraDeviceSettings: { [key in string]: CameraDeviceSettings }; microphoneDeviceSettings: { [key in string]: MicrophoneDeviceSettings } }
 export type RecordingStarted = null
 export type RecordingStatus = "pending" | "recording"
 export type RecordingStopped = null
@@ -1277,7 +1278,7 @@ export type ShowCapWindow = { Main: { init_target_mode: RecordingTargetMode | nu
 export type SingleSegment = { display: VideoMeta; camera?: VideoMeta | null; audio?: AudioMeta | null; cursor?: string | null }
 export type Snapshot = { generation: number; phase: Phase | null; mode: RecordingMode | null; shortcut: string | null; error: string | null }
 export type SplitLayout = { screenZoom: number; screenPosition: XY<number>; cameraZoom: number; cameraPosition: XY<number> }
-export type StartRecordingInputs = { capture_target: ScreenCaptureTarget; capture_system_audio?: boolean; mode: RecordingMode; organization_id?: string | null }
+export type StartRecordingInputs = { capture_target: ScreenCaptureTarget; audio_source?: AudioCaptureSource; show_cursor?: boolean; mode: RecordingMode; organization_id?: string | null }
 export type StereoMode = "stereo" | "monoL" | "monoR"
 export type StudioRecordingMeta = { segment: SingleSegment } | { inner: MultipleSegments }
 export type StudioRecordingQuality = "compatibility" | "balanced" | "ultra"

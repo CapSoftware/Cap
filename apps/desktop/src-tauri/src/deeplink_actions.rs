@@ -249,7 +249,12 @@ impl DeepLinkAction {
                 let inputs = StartRecordingInputs {
                     mode,
                     capture_target,
-                    capture_system_audio,
+                    audio_source: if capture_system_audio {
+                        cap_recording::screen_capture::AudioCaptureSource::System
+                    } else {
+                        cap_recording::screen_capture::AudioCaptureSource::None
+                    },
+                    show_cursor: true,
                     organization_id: None,
                 };
 

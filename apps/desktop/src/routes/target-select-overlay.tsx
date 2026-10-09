@@ -339,7 +339,7 @@ function Inner() {
 				"captureTarget",
 				reconcile({ variant: "cameraOnly" } as ScreenCaptureTarget),
 			);
-			setOptions("captureSystemAudio", false);
+			setOptions("audioSource", "none");
 			getCameraWindow().then((win) => {
 				if (win) win.close();
 			});
@@ -1950,7 +1950,8 @@ function RecordingControls(props: {
 			selectedMicrophone: selectedMicName(),
 			camera: rawOptions.cameraID,
 			cameraAvailable: selectedCamera() !== null,
-			systemAudio: rawOptions.captureSystemAudio,
+			audioSource: rawOptions.audioSource ?? "none",
+			showCursor: rawOptions.showCursor !== false,
 			targetModeSource: rawOptions.targetModeSource,
 			organizationId: rawOptions.organizationId,
 		}),
@@ -2074,7 +2075,8 @@ function RecordingControls(props: {
 			.startRecording({
 				capture_target: target,
 				mode: rawOptions.mode,
-				capture_system_audio: rawOptions.captureSystemAudio,
+				audio_source: rawOptions.audioSource ?? "none",
+				show_cursor: rawOptions.showCursor !== false,
 			})
 			.then((action) => {
 				// On success the backend closes the overlay windows; the

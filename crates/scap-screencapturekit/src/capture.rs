@@ -127,6 +127,7 @@ impl Capturer {
             target,
             config,
             callbacks: CapturerCallbacksInner::default(),
+            captures_screen: true,
         }
     }
 
@@ -209,9 +210,15 @@ pub struct CapturerBuilder {
     target: arc::R<sc::ContentFilter>,
     config: arc::R<sc::StreamCfg>,
     callbacks: CapturerCallbacksInner,
+    captures_screen: bool,
 }
 
 impl CapturerBuilder {
+    pub fn with_captures_screen(mut self, captures_screen: bool) -> Self {
+        self.captures_screen = captures_screen;
+        self
+    }
+
     pub fn with_output_sample_buf_cb(mut self, cb: impl FnMut(Frame) + 'static) -> Self {
         self.callbacks.did_output_sample_buf_cb = Some(Box::new(cb));
         self
@@ -238,9 +245,11 @@ impl CapturerBuilder {
                 .map_err(|e| e.retained())?;
         }
 
-        stream
-            .add_stream_output(callbacks.as_ref(), sc::OutputType::Screen, Some(&queue))
-            .map_err(|e| e.retained())?;
+        if self.captures_screen {
+            stream
+                .add_stream_output(callbacks.as_ref(), sc::OutputType::Screen, Some(&queue))
+                .map_err(|e| e.retained())?;
+        }
 
         Ok(Capturer {
             _queue: queue,

@@ -100,6 +100,9 @@ cap-camera-windows = { path = "../camera-windows" }
 scap-direct3d = { path = "../scap-direct3d" }
 scap-cpal = { path = "../scap-cpal" }
 
+[target.'cfg(target_os = "windows")'.build-dependencies]
+cc = "1.2"
+
 [target.'cfg(target_os = "linux")'.dependencies]
 ashpd = { version = "0.11.0", default-features = false, features = ["tokio"] }
 pipewire = "0.10.0"

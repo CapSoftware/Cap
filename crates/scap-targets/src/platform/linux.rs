@@ -231,6 +231,14 @@ impl WindowImpl {
         })
     }
 
+    pub fn owner_pid(&self) -> Option<u32> {
+        if is_wayland_portal_window(self.0) {
+            return None;
+        }
+        let (conn, _) = x11_connection().ok()?;
+        window_pid(&conn, self.0)
+    }
+
     pub fn id(&self) -> WindowIdImpl {
         WindowIdImpl(self.0)
     }

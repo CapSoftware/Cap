@@ -48,7 +48,10 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use thiserror::Error;
 
-use crate::{feeds::camera::CameraFeedLock, sources::screen_capture::ScreenCaptureTarget};
+use crate::{
+    feeds::camera::CameraFeedLock,
+    sources::screen_capture::{AudioCaptureSource, ScreenCaptureTarget},
+};
 
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug, Copy, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -82,7 +85,8 @@ pub struct RecordingOptions {
 #[derive(Clone)]
 pub struct RecordingBaseInputs {
     pub capture_target: ScreenCaptureTarget,
-    pub capture_system_audio: bool,
+    pub audio_source: AudioCaptureSource,
+    pub show_cursor: bool,
     pub mic_feed: Option<Arc<MicrophoneFeedLock>>,
     pub camera_feed: Option<Arc<CameraFeedLock>>,
     #[cfg(target_os = "macos")]

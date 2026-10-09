@@ -7,7 +7,7 @@ use crate::{OutputFormat, write_json};
 
 /// Version of the machine-readable JSON contracts the CLI emits. Bump on breaking changes so an
 /// agent can detect drift via `cap version`/`cap doctor`.
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 #[cfg(windows)]
 const BINARY_SUFFIX: &str = ".exe";
@@ -216,6 +216,7 @@ pub enum CheckId {
     ScreenRecordingPermission,
     #[cfg(target_os = "macos")]
     ScreenCaptureKit,
+    ApplicationAudio,
     CliInstall,
 }
 
@@ -226,6 +227,7 @@ impl CheckId {
             Self::ScreenRecordingPermission => "screenRecordingPermission",
             #[cfg(target_os = "macos")]
             Self::ScreenCaptureKit => "screenCaptureKit",
+            Self::ApplicationAudio => "applicationAudio",
             Self::CliInstall => "cliInstall",
         }
     }
@@ -455,6 +457,100 @@ fn install_check(install: &Result<cap_cli_install::CliInstallStatus, String>) ->
     }
 }
 
+#[cfg(windows)]
+fn application_audio_check() -> Check {
+    let Some(version) = scap_direct3d::WindowsVersion::detect() else {
+        return Check {
+            id: CheckId::ApplicationAudio,
+            status: CheckStatus::Unknown,
+            message: "Could not determine whether Windows process-loopback capture is available"
+                .to_string(),
+        };
+    };
+    if version.build >= 20_348 {
+        Check {
+            id: CheckId::ApplicationAudio,
+            status: CheckStatus::Ok,
+            message: format!(
+                "Windows build {} supports process-tree application audio capture",
+                version.build
+            ),
+        }
+    } else {
+        Check {
+            id: CheckId::ApplicationAudio,
+            status: CheckStatus::Warn,
+            message: format!(
+                "Application audio requires Windows build 20348 or newer; this system is build {}",
+                version.build
+            ),
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn application_audio_check() -> Check {
+    if scap_screencapturekit::is_system_audio_supported() {
+        Check {
+            id: CheckId::ApplicationAudio,
+            status: CheckStatus::Ok,
+            message: "ScreenCaptureKit supports selected-application audio capture".to_string(),
+        }
+    } else {
+        Check {
+            id: CheckId::ApplicationAudio,
+            status: CheckStatus::Warn,
+            message: "Application audio requires macOS 13.0 or newer".to_string(),
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn application_audio_check() -> Check {
+    let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some()
+        && (std::env::var_os("DISPLAY").is_none()
+            || std::env::var("XDG_SESSION_TYPE")
+                .is_ok_and(|session| session.eq_ignore_ascii_case("wayland")));
+    if wayland {
+        return Check {
+            id: CheckId::ApplicationAudio,
+            status: CheckStatus::Warn,
+            message: "Application audio requires X11 window process identity; the Wayland screen-cast portal does not expose it"
+                .to_string(),
+        };
+    }
+    let bundled_pactl = std::env::current_exe()
+        .ok()
+        .and_then(|executable| executable.parent().map(|parent| parent.join("pactl")))
+        .filter(|path| path.is_file());
+    match std::process::Command::new(bundled_pactl.unwrap_or_else(|| "pactl".into()))
+        .args(["list", "short", "sinks"])
+        .output()
+    {
+        Ok(output) if output.status.success() => Check {
+            id: CheckId::ApplicationAudio,
+            status: CheckStatus::Ok,
+            message: "PulseAudio/PipeWire routing is available for isolated application audio"
+                .to_string(),
+        },
+        Ok(output) => Check {
+            id: CheckId::ApplicationAudio,
+            status: CheckStatus::Warn,
+            message: format!(
+                "pactl could not reach PulseAudio/PipeWire: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ),
+        },
+        Err(error) => Check {
+            id: CheckId::ApplicationAudio,
+            status: CheckStatus::Warn,
+            message: format!(
+                "Application audio needs pactl and PulseAudio/PipeWire compatibility modules: {error}"
+            ),
+        },
+    }
+}
+
 #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
 fn capture_ready(permissions: &Permissions, checks: &[Check]) -> bool {
     let permission_ready = match permissions.screen_recording {
@@ -548,6 +644,7 @@ pub async fn run_doctor(format: OutputFormat) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     checks.push(screen_capture_kit_check(&permissions).await);
 
+    checks.push(application_audio_check());
     checks.push(install_check(&install));
 
     let ok = !checks

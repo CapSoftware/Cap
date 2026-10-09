@@ -349,6 +349,12 @@ impl WindowImpl {
         self.0
     }
 
+    pub fn owner_pid(&self) -> Option<u32> {
+        let mut process_id = 0;
+        unsafe { GetWindowThreadProcessId(self.0, Some(&mut process_id)) };
+        (process_id != 0).then_some(process_id)
+    }
+
     pub fn get_topmost_at_cursor() -> Option<Self> {
         let cursor = get_cursor_position()?;
         let point = POINT {

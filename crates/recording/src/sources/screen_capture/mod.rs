@@ -72,6 +72,43 @@ pub enum ScreenCaptureTarget {
     CameraOnly,
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum AudioCaptureSource {
+    #[default]
+    None,
+    System,
+    Application,
+}
+
+impl AudioCaptureSource {
+    pub fn is_enabled(self) -> bool {
+        !matches!(self, Self::None)
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "None",
+            Self::System => "System",
+            Self::Application => "Application",
+        }
+    }
+}
+
+pub fn deserialize_audio_capture_source<'de, D>(
+    deserializer: D,
+) -> Result<AudioCaptureSource, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    match value {
+        serde_json::Value::Bool(true) => Ok(AudioCaptureSource::System),
+        serde_json::Value::Bool(false) | serde_json::Value::Null => Ok(AudioCaptureSource::None),
+        value => serde_json::from_value(value).map_err(serde::de::Error::custom),
+    }
+}
+
 #[cfg(target_os = "linux")]
 #[derive(Clone, Debug)]
 pub enum LinuxCaptureSource {
@@ -92,6 +129,31 @@ impl LinuxCaptureSource {
 }
 
 impl ScreenCaptureTarget {
+    pub fn application_pid(&self) -> Option<u32> {
+        let Self::Window { id } = self else {
+            return None;
+        };
+        let window = Window::from_id(id)?;
+
+        #[cfg(target_os = "macos")]
+        {
+            u32::try_from(window.raw_handle().owner_pid()?).ok()
+        }
+
+        #[cfg(any(windows, target_os = "linux"))]
+        {
+            window.raw_handle().owner_pid()
+        }
+    }
+
+    pub fn is_available(&self) -> bool {
+        match self {
+            Self::Display { id } | Self::Area { screen: id, .. } => Display::from_id(id).is_some(),
+            Self::Window { id } => Window::from_id(id).is_some(),
+            Self::CameraOnly => true,
+        }
+    }
+
     pub fn display(&self) -> Option<Display> {
         match self {
             Self::Display { id } => Display::from_id(id),
@@ -290,7 +352,7 @@ pub struct ScreenCaptureConfig<TCaptureFormat: ScreenCaptureFormat> {
     config: Config,
     video_info: VideoInfo,
     start_time: SystemTime,
-    pub system_audio: bool,
+    pub audio_source: AudioCaptureSource,
     _phantom: std::marker::PhantomData<TCaptureFormat>,
     #[cfg(windows)]
     d3d_device: ::windows::Win32::Graphics::Direct3D11::ID3D11Device,
@@ -358,7 +420,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> Clone for ScreenCaptureConfig<TCapture
             config: self.config.clone(),
             video_info: self.video_info,
             start_time: self.start_time,
-            system_audio: self.system_audio,
+            audio_source: self.audio_source,
             _phantom: std::marker::PhantomData,
             #[cfg(windows)]
             d3d_device: self.d3d_device.clone(),
@@ -372,6 +434,8 @@ impl<TCaptureFormat: ScreenCaptureFormat> Clone for ScreenCaptureConfig<TCapture
 
 #[derive(Clone, Debug)]
 pub struct Config {
+    target: ScreenCaptureTarget,
+    #[cfg(target_os = "linux")]
     display: DisplayId,
     crop_bounds: Option<CropBounds>,
     fps: u32,
@@ -457,24 +521,33 @@ pub enum ScreenCaptureInitError {
     NoWindow,
     #[error("Bounds")]
     NoBounds,
+    #[error("Application audio requires a window capture target")]
+    ApplicationAudioRequiresWindow,
 }
 
 impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureConfig<TCaptureFormat> {
     #[allow(clippy::too_many_arguments)]
     pub async fn init(
+        target: ScreenCaptureTarget,
         display: scap_targets::Display,
         crop_bounds: Option<CropBounds>,
         show_cursor: bool,
         max_fps: u32,
         max_capture_size: Option<(u32, u32)>,
         start_time: SystemTime,
-        system_audio: bool,
+        audio_source: AudioCaptureSource,
         #[cfg(target_os = "linux")] linux_source: LinuxCaptureSource,
         #[cfg(windows)] d3d_device: ::windows::Win32::Graphics::Direct3D11::ID3D11Device,
         #[cfg(target_os = "macos")] shareable_content: SendableShareableContent,
         #[cfg(target_os = "macos")] excluded_windows: Vec<WindowId>,
     ) -> Result<Self, ScreenCaptureInitError> {
         cap_fail::fail!("ScreenCaptureSource::init");
+
+        if audio_source == AudioCaptureSource::Application
+            && !matches!(target, ScreenCaptureTarget::Window { .. })
+        {
+            return Err(ScreenCaptureInitError::ApplicationAudioRequiresWindow);
+        }
 
         let target_refresh = validated_refresh_rate(display.refresh_rate());
         let fps = std::cmp::max(1, std::cmp::min(max_fps, target_refresh));
@@ -525,6 +598,8 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureConfig<TCaptureFormat> {
 
         Ok(Self {
             config: Config {
+                target,
+                #[cfg(target_os = "linux")]
                 display: display.id(),
                 crop_bounds,
                 fps,
@@ -539,7 +614,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureConfig<TCaptureFormat> {
                 fps,
             ),
             start_time,
-            system_audio,
+            audio_source,
             _phantom: std::marker::PhantomData,
             #[cfg(windows)]
             d3d_device,
@@ -713,6 +788,27 @@ fn list_windows_inner(_include_accessory_panels: bool) -> Vec<(CaptureWindow, Wi
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Deserialize)]
+    struct AudioPreference {
+        #[serde(deserialize_with = "deserialize_audio_capture_source")]
+        source: AudioCaptureSource,
+    }
+
+    #[test]
+    fn audio_source_deserializes_enum_and_legacy_boolean() {
+        for (json, expected) in [
+            (r#"{"source":false}"#, AudioCaptureSource::None),
+            (r#"{"source":true}"#, AudioCaptureSource::System),
+            (
+                r#"{"source":"application"}"#,
+                AudioCaptureSource::Application,
+            ),
+        ] {
+            let preference: AudioPreference = serde_json::from_str(json).unwrap();
+            assert_eq!(preference.source, expected);
+        }
+    }
 
     #[test]
     #[cfg(target_os = "linux")]

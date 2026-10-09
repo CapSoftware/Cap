@@ -4,7 +4,9 @@ use cap_recording::{
         camera::{CameraDeviceSettings, DeviceOrModelID},
         microphone::MicrophoneDeviceSettings,
     },
-    sources::screen_capture::ScreenCaptureTarget,
+    sources::screen_capture::{
+        AudioCaptureSource, ScreenCaptureTarget, deserialize_audio_capture_source,
+    },
 };
 use std::collections::HashMap;
 use tauri::{AppHandle, Wry};
@@ -21,7 +23,7 @@ pub enum RecordingTargetMode {
     Camera,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, specta::Type, Debug, Clone, Default)]
+#[derive(serde::Serialize, serde::Deserialize, specta::Type, Debug, Clone)]
 #[serde(rename_all = "camelCase", default)]
 pub struct RecordingSettingsStore {
     pub target: Option<ScreenCaptureTarget>,
@@ -29,10 +31,37 @@ pub struct RecordingSettingsStore {
     #[serde(deserialize_with = "deserialize_camera_id")]
     pub camera_id: Option<DeviceOrModelID>,
     pub mode: Option<RecordingMode>,
-    pub system_audio: bool,
+    #[serde(
+        default,
+        alias = "systemAudio",
+        deserialize_with = "deserialize_audio_capture_source"
+    )]
+    pub audio_source: AudioCaptureSource,
+    #[serde(default = "default_show_cursor")]
+    pub show_cursor: bool,
     pub organization_id: Option<String>,
     pub camera_device_settings: HashMap<String, CameraDeviceSettings>,
     pub microphone_device_settings: HashMap<String, MicrophoneDeviceSettings>,
+}
+
+fn default_show_cursor() -> bool {
+    true
+}
+
+impl Default for RecordingSettingsStore {
+    fn default() -> Self {
+        Self {
+            target: None,
+            mic_name: None,
+            camera_id: None,
+            mode: None,
+            audio_source: AudioCaptureSource::None,
+            show_cursor: true,
+            organization_id: None,
+            camera_device_settings: HashMap::new(),
+            microphone_device_settings: HashMap::new(),
+        }
+    }
 }
 
 fn deserialize_camera_id<'de, D>(deserializer: D) -> Result<Option<DeviceOrModelID>, D::Error>
@@ -114,7 +143,7 @@ pub fn set_recording_mode(app: AppHandle, mode: RecordingMode) -> Result<(), Str
 
 #[cfg(test)]
 mod tests {
-    use super::RecordingSettingsStore;
+    use super::{AudioCaptureSource, RecordingSettingsStore};
     use serde_json::json;
 
     #[test]
@@ -143,7 +172,12 @@ mod tests {
             });
             let settings: RecordingSettingsStore = serde_json::from_value(saved.clone()).unwrap();
             assert!(settings.camera_id.is_none());
+            assert_eq!(settings.audio_source, AudioCaptureSource::System);
+            assert!(settings.show_cursor);
             saved["cameraId"] = serde_json::Value::Null;
+            saved.as_object_mut().unwrap().remove("systemAudio");
+            saved["audioSource"] = json!("system");
+            saved["showCursor"] = json!(true);
             assert_eq!(serde_json::to_value(settings).unwrap(), saved);
         }
     }

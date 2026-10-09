@@ -65,6 +65,7 @@ is taken from `CAP_SERVER_URL`, else Cap Desktop's configured server, else `http
 cap doctor --json                          # verify permissions & capture readiness (exits 0; read `ok`/`captureReady`)
 cap targets --json                         # discover screens/windows/cameras/mics (ids feed the next steps)
 cap record start --screen <id> --json --detach  # start in the background -> {"type":"started","recordingId","pid","path"}
+cap record start --window <id> --audio-source application --hide-cursor --duration 30 --json
 # ... the agent performs whatever it needs to capture ...
 cap record stop --id <recordingId> --json  # finalize -> {"type":"stopped","path","recordingMetaExists":true}
 cap project validate <path.cap> --json     # confirm the recording is complete before exporting
@@ -89,6 +90,8 @@ step.
 - `cap automations list` — list the automation rules configured in Cap Desktop that the CLI honors.
 - `cap desktop status|install-cli|uninstall-cli` — manage the `cap` shim on PATH.
 - `cap completions <shell>` — shell completion scripts (bash/zsh/fish/powershell).
+
+Application audio requires a window target and follows that window's owning process tree without falling back to the system mix. On Linux this requires X11 because the Wayland screen-cast portal does not expose the selected window's process identity. Use `--audio-source none|system|application`; `--system-audio` remains an alias for `system`. `--hide-cursor` applies to native display, area, and window capture.
 
 ## Automations
 
