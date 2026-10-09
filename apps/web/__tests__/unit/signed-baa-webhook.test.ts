@@ -1062,4 +1062,102 @@ describe("Signed BAA Payment Link webhooks", () => {
 		);
 		expect(mockDbChain.update).not.toHaveBeenCalledWith(signedBaas);
 	});
+
+	it.each(["customer.subscription.updated", "customer.subscription.deleted"])(
+		"keeps a newer active Pro subscription when an old checkout receives %s",
+		async (eventType) => {
+			const oldSubscription = {
+				...proSubscription,
+				id: "sub_old",
+				status: eventType.endsWith("deleted")
+					? "canceled"
+					: "incomplete_expired",
+			};
+			const activeSubscription = {
+				...proSubscription,
+				id: "sub_active",
+				items: { data: [{ price: { id: "price_pro" }, quantity: 3 }] },
+			};
+			const pastDueSubscription = {
+				...proSubscription,
+				id: "sub_past_due",
+				status: "past_due",
+				items: { data: [{ price: { id: "price_pro" }, quantity: 2 }] },
+			};
+			mockStripe.webhooks.constructEvent.mockReturnValue({
+				type: eventType,
+				data: { object: oldSubscription },
+			});
+			mockStripe.customers.retrieve.mockResolvedValue({
+				id: "cus_pro",
+				email: owner.email,
+				metadata: { userId: owner.id },
+			});
+			mockStripe.subscriptions.list.mockResolvedValue({
+				data: [oldSubscription, pastDueSubscription, activeSubscription],
+			});
+			if (eventType.endsWith("deleted")) {
+				mockDbChain.where.mockResolvedValueOnce([owner]);
+			} else {
+				mockDbChain.limit.mockResolvedValueOnce([owner]);
+			}
+
+			expect((await POST(makeWebhookRequest())).status).toBe(200);
+			expect(mockDbChain.set).toHaveBeenCalledWith(
+				expect.objectContaining({
+					stripeSubscriptionId: "sub_active",
+					stripeSubscriptionStatus: "active",
+					inviteQuota: 5,
+				}),
+			);
+		},
+	);
+
+	it.each(["customer.subscription.updated", "customer.subscription.deleted"])(
+		"finds Pro entitlement on a later Stripe page for %s",
+		async (eventType) => {
+			const oldSubscription = {
+				...proSubscription,
+				id: "sub_old",
+				status: eventType.endsWith("deleted")
+					? "canceled"
+					: "incomplete_expired",
+			};
+			const activeSubscription = {
+				...proSubscription,
+				id: "sub_active",
+				items: { data: [{ price: { id: "price_pro" }, quantity: 2 }] },
+			};
+			mockStripe.webhooks.constructEvent.mockReturnValue({
+				type: eventType,
+				data: { object: oldSubscription },
+			});
+			mockStripe.customers.retrieve.mockResolvedValue({
+				id: "cus_pro",
+				email: owner.email,
+				metadata: { userId: owner.id },
+			});
+			mockStripe.subscriptions.list
+				.mockReset()
+				.mockResolvedValueOnce({ data: [oldSubscription], has_more: true })
+				.mockResolvedValueOnce({ data: [activeSubscription], has_more: false });
+			if (eventType.endsWith("deleted")) {
+				mockDbChain.where.mockResolvedValueOnce([owner]);
+			} else {
+				mockDbChain.limit.mockResolvedValueOnce([owner]);
+			}
+
+			expect((await POST(makeWebhookRequest())).status).toBe(200);
+			expect(mockStripe.subscriptions.list).toHaveBeenCalledWith(
+				expect.objectContaining({ starting_after: "sub_old" }),
+			);
+			expect(mockDbChain.set).toHaveBeenCalledWith(
+				expect.objectContaining({
+					stripeSubscriptionId: "sub_active",
+					stripeSubscriptionStatus: "active",
+					inviteQuota: 2,
+				}),
+			);
+		},
+	);
 });
