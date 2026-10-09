@@ -69,12 +69,17 @@ function validateArguments(target, args, platform) {
 		/^(?:aarch64|x86_64)-apple-darwin$/.test(target ?? "");
 	for (let index = 0; index < args.length && valid; index++) {
 		const argument = args[index];
-		if (argument === "--config" || argument === "-c") {
+		if (
+			argument === "--config" ||
+			argument === "-c" ||
+			argument === "--bundles" ||
+			argument === "-b"
+		) {
 			const value = args[++index];
 			valid = Boolean(value) && !value.startsWith("-");
 		} else {
 			valid =
-				/^--config=.+/.test(argument) ||
+				/^--(?:config|bundles)=.+/.test(argument) ||
 				argument === "--verbose" ||
 				/^-v{1,2}$/.test(argument);
 		}
@@ -147,6 +152,7 @@ export async function buildMacosPackages(
 	target,
 	args = [],
 	{
+		app = "classic",
 		platform = process.platform,
 		env = process.env,
 		signal,
@@ -157,6 +163,9 @@ export async function buildMacosPackages(
 	} = {},
 ) {
 	validateArguments(target, args, platform);
+	if (app !== "classic" && app !== "cap") {
+		throw new Error(`Unknown macOS app to package: ${app}`);
+	}
 	const commandArguments = ["--target", target, ...args];
 	const environment = {
 		...env,
@@ -179,7 +188,7 @@ export async function buildMacosPackages(
 		signal?.throwIfAborted();
 		let outputTail = "";
 		const command =
-			attempt === 0
+			attempt === 0 && app === "classic"
 				? ["build:tauri", ...commandArguments]
 				: [
 						"dotenv",

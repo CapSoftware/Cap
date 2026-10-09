@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+	CLASSIC_RPM_DEPENDS,
 	createLinuxBundleConfig,
+	GPUI_RPM_DEPENDS,
 	supportedLinuxBundles,
+	supportedLinuxClassicBundles,
 } from "./linux-bundle-config.mjs";
 
 test("nightly builds retain DEB and AppImage without passing invalid hyphenated versions to RPM", () => {
@@ -74,5 +77,45 @@ test("Debian audio dependencies retain existing requirements without duplicates"
 	assert.deepEqual(
 		createLinuxBundleConfig([], {}, ["libgtk-3-0"]).bundle.linux.deb.depends,
 		["libgtk-3-0", "libasound2-plugins"],
+	);
+});
+
+test("the GPUI app maps native libraries from its own crate directory without webview packages", () => {
+	const config = createLinuxBundleConfig(
+		["libavcodec.so.61"],
+		{},
+		["libxkbcommon0"],
+		{
+			root: "../..",
+			rpmDependencies: GPUI_RPM_DEPENDS,
+			mediaFramework: false,
+		},
+	);
+	const { appimage, deb, rpm } = config.bundle.linux;
+	for (const format of [appimage, deb, rpm]) {
+		assert.equal(
+			format.files["/usr/lib/cap/libavcodec.so.61"],
+			"../../target/native-deps/cap-deb-libs/libavcodec.so.61",
+		);
+	}
+	assert.equal(
+		deb.files["/usr/lib/cap/package-format"],
+		"../../packaging/linux/deb",
+	);
+	assert.equal(appimage.bundleMediaFramework, false);
+	assert.deepEqual(deb.depends, ["libxkbcommon0", "libasound2-plugins"]);
+	for (const depends of [deb.depends, rpm.depends]) {
+		assert.ok(
+			!depends.some((dependency) => /webkit|gtk|appindicator/.test(dependency)),
+		);
+	}
+	assert.notEqual(rpm.depends, GPUI_RPM_DEPENDS);
+});
+
+test("Cap Classic ships on Linux as a self-contained AppImage", () => {
+	assert.deepEqual(supportedLinuxClassicBundles(), ["appimage"]);
+	assert.deepEqual(
+		createLinuxBundleConfig([]).bundle.linux.rpm.depends,
+		CLASSIC_RPM_DEPENDS,
 	);
 });

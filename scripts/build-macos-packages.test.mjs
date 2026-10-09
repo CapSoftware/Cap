@@ -64,23 +64,57 @@ test("macOS packaging uses the ScreenCaptureKit minimum across both app manifest
 	const minimum = resolveMacosDeploymentTarget();
 	assert.equal(minimum, "12.3");
 	assert.equal(resolveMacosDeploymentTarget(""), minimum);
-	const cargo = readFileSync(
-		new URL("../apps/desktop-gpui/Cargo.toml", import.meta.url),
-		"utf8",
+	const gpui = JSON.parse(
+		readFileSync(
+			new URL("../apps/desktop-gpui/tauri.conf.json", import.meta.url),
+			"utf8",
+		),
 	);
-	const plist = readFileSync(
-		new URL("../apps/desktop-gpui/resources/Info.plist", import.meta.url),
-		"utf8",
+	assert.equal(gpui.bundle.macOS.minimumSystemVersion, minimum);
+});
+
+test("the GPUI app is packaged by rebundling its prebuilt binary on every attempt", async () => {
+	const fixture = harness([
+		{ code: 1, output: armTimestampFailure },
+		{ code: 0 },
+	]);
+	fixture.options.env.TAURI_APP_PATH = "/repo/apps/desktop-gpui";
+	const result = await buildMacosPackages(
+		target,
+		["--bundles", "app,dmg", "--verbose"],
+		{
+			...fixture.options,
+			app: "cap",
+		},
 	);
-	assert.equal(
-		cargo.match(/osx_minimum_system_version\s*=\s*"([^"]+)"/)?.[1],
-		minimum,
+	assert.equal(result.code, 0);
+	const bundle = [
+		"dotenv",
+		"-e",
+		"../../.env",
+		"--",
+		"bun",
+		"run",
+		"tauri",
+		"bundle",
+		"--target",
+		target,
+		"--bundles",
+		"app,dmg",
+		"--verbose",
+		"--config",
+		JSON.stringify({ bundle: { macOS: { minimumSystemVersion: "12.3" } } }),
+	];
+	assert.deepEqual(
+		fixture.calls.map((call) => call.args),
+		[bundle, bundle],
 	);
-	assert.equal(
-		plist.match(
-			/<key>LSMinimumSystemVersion<\/key>\s*<string>([^<]+)<\/string>/,
-		)?.[1],
-		minimum,
+	for (const call of fixture.calls) {
+		assert.equal(call.env.TAURI_APP_PATH, "/repo/apps/desktop-gpui");
+	}
+	await assert.rejects(
+		buildMacosPackages(target, [], { ...fixture.options, app: "other" }),
+		/Unknown macOS app/,
 	);
 });
 
@@ -477,6 +511,8 @@ test("unsupported platforms and arguments fail before executing bun", async () =
 		["darwin", target, ["--target", "aarch64-apple-darwin"]],
 		["darwin", target, ["--skip-stapling"]],
 		["darwin", target, ["--no-bundle"]],
+		["darwin", target, ["--bundles"]],
+		["darwin", target, ["--bundles", "--verbose"]],
 	]) {
 		const fixture = harness([]);
 		await assert.rejects(

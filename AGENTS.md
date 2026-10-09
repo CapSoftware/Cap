@@ -50,7 +50,7 @@ Additionally, `unused_must_use = "deny"` applies to all Rust code: every `Result
 
 ## Project Structure & Modules
 - Turborepo monorepo:
-  - `apps/desktop` (Tauri v2 + SolidStart), `apps/web` (Next.js), `apps/cli` (Rust CLI).
+  - `apps/desktop-gpui` (GPUI, ships as Cap), `apps/desktop` (Tauri v2 + SolidStart, ships separately as Cap Classic), `apps/web` (Next.js), `apps/cli` (Rust CLI).
   - `packages/*` shared libs (e.g., `database`, `ui`, `ui-solid`, `utils`, `web-*`).
   - `crates/*` Rust media/recording/rendering/camera crates.
   - `scripts/*`, `infra/`, and `packages/local-docker/` for tooling and local services.
@@ -59,7 +59,7 @@ Additionally, `unused_must_use = "deny"` applies to all Rust code: every `Result
 ## Build, Test, Develop
 - Install: `bun install`; setup: `bun run env-setup` then `bun run cap-setup`.
 - Dev: `bun run dev` (web+desktop). Desktop only: `bun run dev:desktop`. Web only: `bun run dev:web` or `cd apps/web && bun run dev`.
-- Build: `bun run build` (Turbo). Desktop release: `bun run tauri:build`.
+- Build: `bun run build` (Turbo). Desktop release: `bun run gpui:build <target>` for Cap (GPUI) and `bun run tauri:build` for Cap Classic (Tauri).
 - DB: `bun run db:generate` → `bun run db:push` → `bun run db:studio`.
 - Docker: `bun run docker:up | docker:stop | docker:clean`.
 - Quality: `bun run lint`, `bun run format`, `bun run typecheck`. Rust: `cargo build -p <crate>`, `cargo test -p <crate>`.
