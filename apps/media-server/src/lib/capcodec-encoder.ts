@@ -288,6 +288,7 @@ export async function encodeVideoWithCapcodec(
 ): Promise<void> {
 	if (job.abortSignal?.aborted) throw cancelled();
 	await assertCapcodecBinary(job.options.binary);
+	if (job.abortSignal?.aborted) throw cancelled();
 	const size = fitEvenSize(job.width, job.height, job.maxWidth, job.maxHeight);
 	const fps = frameRateFraction(job.fps);
 	let decoder: Subprocess | undefined;
