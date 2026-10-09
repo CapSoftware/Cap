@@ -183,14 +183,14 @@ fn decode_signature(encoded: &str) -> Result<Signature, String> {
 }
 
 enum Verifier<'a> {
-    Stream(StreamVerifier<'a>),
+    Stream(Box<StreamVerifier<'a>>),
     Buffered,
 }
 
 impl<'a> Verifier<'a> {
     fn new(key: &'a PublicKey, signature: &'a Signature) -> Result<Self, String> {
         match key.verify_stream(signature) {
-            Ok(verifier) => Ok(Self::Stream(verifier)),
+            Ok(verifier) => Ok(Self::Stream(Box::new(verifier))),
             Err(minisign_verify::Error::UnsupportedLegacyMode) => Ok(Self::Buffered),
             Err(error) => Err(format!("The update was not signed by Cap: {error}")),
         }
@@ -457,11 +457,7 @@ fn replace_directory(new: &Path, destination: &Path) -> std::io::Result<()> {
     if !destination.exists() {
         return std::fs::rename(new, destination);
     }
-    let name = destination
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let backup = destination.with_file_name(format!(".{name}.previous-{}", std::process::id()));
+    let backup = previous_app_path(destination);
     if backup.exists() {
         std::fs::remove_dir_all(&backup)?;
     }
@@ -478,6 +474,33 @@ fn replace_directory(new: &Path, destination: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+#[cfg(any(target_os = "macos", test))]
+const PRIVILEGED_REPLACE_SCRIPT: &str = r#"destination="$1"
+replacement="$2"
+backup="$3"
+/bin/rm -rf "$backup" || exit 1
+if [ -e "$destination" ]; then
+    /bin/mv -f "$destination" "$backup" || exit 1
+fi
+if /bin/mv -f "$replacement" "$destination"; then
+    /bin/rm -rf "$backup"
+    exit 0
+fi
+/bin/rm -rf "$destination"
+if [ -e "$backup" ]; then
+    /bin/mv -f "$backup" "$destination"
+fi
+exit 1"#;
+
+#[cfg(any(target_os = "macos", test))]
+fn previous_app_path(destination: &Path) -> PathBuf {
+    let name = destination
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    destination.with_file_name(format!(".{name}.previous-{}", std::process::id()))
+}
+
 #[cfg(target_os = "macos")]
 fn replace_directory_with_privileges(new: &Path, destination: &Path) -> Result<(), String> {
     let output = std::process::Command::new("/usr/bin/osascript")
@@ -485,12 +508,14 @@ fn replace_directory_with_privileges(new: &Path, destination: &Path) -> Result<(
             "-e",
             "on run argv",
             "-e",
-            "do shell script \"/bin/rm -rf \" & quoted form of (item 1 of argv) & \" && /bin/mv -f \" & quoted form of (item 2 of argv) & \" \" & quoted form of (item 1 of argv) with administrator privileges",
+            "do shell script \"/bin/sh -c \" & quoted form of (item 1 of argv) & \" cap-update \" & quoted form of (item 2 of argv) & \" \" & quoted form of (item 3 of argv) & \" \" & quoted form of (item 4 of argv) with administrator privileges",
             "-e",
             "end run",
         ])
+        .arg(PRIVILEGED_REPLACE_SCRIPT)
         .arg(destination)
         .arg(new)
+        .arg(previous_app_path(destination))
         .output()
         .map_err(|error| format!("Could not ask for permission to install: {error}"))?;
     if output.status.success() {
@@ -850,6 +875,50 @@ mod tests {
         std::fs::create_dir_all(again.join("Contents")).unwrap();
         std::fs::write(again.join("Contents/Info.plist"), "again").unwrap();
         assert!(single_app_bundle(&staging).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_privileged_swap_restores_the_previous_app_when_the_move_fails() {
+        let root = scratch("privileged");
+        let applications = root.join("Applications");
+        let destination = applications.join("Cap.app");
+        let staged = root.join("staging").join("Cap.app");
+        let backup = previous_app_path(&destination);
+        let swap = |replacement: &Path| {
+            std::process::Command::new("/bin/sh")
+                .arg("-c")
+                .arg(PRIVILEGED_REPLACE_SCRIPT)
+                .arg("cap-update")
+                .arg(&destination)
+                .arg(replacement)
+                .arg(&backup)
+                .status()
+                .unwrap()
+        };
+        let plist = |app: &Path| std::fs::read_to_string(app.join("Contents/Info.plist")).unwrap();
+        let write_app = |app: &Path, contents: &str| {
+            std::fs::create_dir_all(app.join("Contents")).unwrap();
+            std::fs::write(app.join("Contents/Info.plist"), contents).unwrap();
+        };
+
+        write_app(&destination, "old");
+        assert!(!swap(&root.join("missing.app")).success());
+        assert_eq!(plist(&destination), "old");
+        assert!(!backup.exists());
+
+        write_app(&staged, "new");
+        assert!(swap(&staged).success());
+        assert_eq!(plist(&destination), "new");
+        assert!(!backup.exists());
+        assert!(!staged.exists());
+
+        std::fs::remove_dir_all(&destination).unwrap();
+        write_app(&staged, "fresh");
+        assert!(swap(&staged).success());
+        assert_eq!(plist(&destination), "fresh");
+        assert_eq!(std::fs::read_dir(&applications).unwrap().count(), 1);
         std::fs::remove_dir_all(root).unwrap();
     }
 
