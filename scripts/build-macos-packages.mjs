@@ -152,7 +152,7 @@ export async function buildMacosPackages(
 	target,
 	args = [],
 	{
-		app = "classic",
+		bundleOnly = false,
 		platform = process.platform,
 		env = process.env,
 		signal,
@@ -163,9 +163,6 @@ export async function buildMacosPackages(
 	} = {},
 ) {
 	validateArguments(target, args, platform);
-	if (app !== "classic" && app !== "cap") {
-		throw new Error(`Unknown macOS app to package: ${app}`);
-	}
 	const commandArguments = ["--target", target, ...args];
 	const environment = {
 		...env,
@@ -188,7 +185,7 @@ export async function buildMacosPackages(
 		signal?.throwIfAborted();
 		let outputTail = "";
 		const command =
-			attempt === 0 && app === "classic"
+			attempt === 0 && !bundleOnly
 				? ["build:tauri", ...commandArguments]
 				: [
 						"dotenv",

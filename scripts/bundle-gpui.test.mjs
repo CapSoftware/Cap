@@ -17,8 +17,8 @@ const readJson = (relative) =>
 	JSON.parse(readFileSync(new URL(relative, import.meta.url), "utf8"));
 
 const gpuiConfig = readJson("../apps/desktop-gpui/tauri.conf.json");
-const classicConfig = readJson("../apps/desktop/src-tauri/tauri.conf.json");
-const classicProduction = readJson(
+const tauriConfig = readJson("../apps/desktop/src-tauri/tauri.conf.json");
+const tauriProduction = readJson(
 	"../apps/desktop/src-tauri/tauri.prod.conf.json",
 );
 
@@ -44,7 +44,7 @@ test("the GPUI app keeps the identity every existing install updates into", () =
 	assert.equal(gpuiConfig.identifier, "so.cap.desktop");
 	assert.equal(
 		gpuiConfig.plugins.updater.pubkey,
-		classicProduction.plugins.updater.pubkey,
+		tauriProduction.plugins.updater.pubkey,
 	);
 	assert.deepEqual(gpuiConfig.plugins.updater.endpoints, [
 		"https://cdn.crabnebula.app/update/cap/cap/{{target}}/{{current_version}}",
@@ -61,23 +61,17 @@ test("the GPUI app keeps the identity every existing install updates into", () =
 	);
 	assert.deepEqual(
 		gpuiConfig.plugins["deep-link"],
-		classicConfig.plugins["deep-link"],
+		tauriConfig.plugins["deep-link"],
 	);
 	assert.equal(gpuiConfig.bundle.createUpdaterArtifacts, true);
 });
 
-test("Cap Classic is a separate app that shares Cap's data identity", () => {
-	assert.equal(classicProduction.productName, "Cap Classic");
-	assert.equal(classicProduction.mainBinaryName, "Cap Classic");
-	assert.equal(classicProduction.identifier, gpuiConfig.identifier);
-	assert.ok(
-		!classicConfig.bundle.externalBin.some((binary) =>
-			binary.includes("cap-gpui"),
-		),
-	);
-	assert.notEqual(
-		classicProduction.bundle.fileAssociations[0].name,
-		gpuiConfig.bundle.fileAssociations[0].name,
+test("the GPUI bundle takes over the identity the Tauri app shipped with", () => {
+	assert.equal(tauriProduction.productName, gpuiConfig.productName);
+	assert.equal(tauriProduction.identifier, gpuiConfig.identifier);
+	assert.deepEqual(
+		tauriProduction.plugins.updater.endpoints,
+		gpuiConfig.plugins.updater.endpoints,
 	);
 });
 

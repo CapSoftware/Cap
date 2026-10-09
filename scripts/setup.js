@@ -740,17 +740,17 @@ async function writeLinuxTauriConfig(sonameLibs) {
 	await fs.mkdir(appimageLibDir, { recursive: true });
 	await fs.copyFile(pulsePlugin, path.join(appimageLibDir, pluginName));
 
-	const classicDirectory = path.join(__root, "apps", "desktop", "src-tauri");
-	const classicConfig = JSON.parse(
-		await fs.readFile(path.join(classicDirectory, "tauri.conf.json"), "utf8"),
+	const tauriDirectory = path.join(__root, "apps", "desktop", "src-tauri");
+	const tauriConfig = JSON.parse(
+		await fs.readFile(path.join(tauriDirectory, "tauri.conf.json"), "utf8"),
 	);
 	await writeFileIfChanged(
-		path.join(classicDirectory, "tauri.linux.conf.json"),
+		path.join(tauriDirectory, "tauri.linux.conf.json"),
 		`${JSON.stringify(
 			createLinuxBundleConfig(
 				sonameLibs,
-				classicConfig.bundle.linux.deb.files,
-				classicConfig.bundle.linux.deb.depends,
+				tauriConfig.bundle.linux.deb.files,
+				tauriConfig.bundle.linux.deb.depends,
 			),
 			null,
 			"\t",

@@ -4,11 +4,7 @@ export function supportedLinuxBundles(version) {
 		: ["deb", "rpm", "appimage"];
 }
 
-export function supportedLinuxClassicBundles() {
-	return ["appimage"];
-}
-
-export const CLASSIC_RPM_DEPENDS = [
+export const TAURI_RPM_DEPENDS = [
 	"webkit2gtk4.1",
 	"gtk3",
 	"libayatana-appindicator-gtk3",
@@ -44,7 +40,7 @@ export function createLinuxBundleConfig(
 	debDependencies = [],
 	{
 		root = "../../..",
-		rpmDependencies = CLASSIC_RPM_DEPENDS,
+		rpmDependencies = TAURI_RPM_DEPENDS,
 		mediaFramework = true,
 	} = {},
 ) {

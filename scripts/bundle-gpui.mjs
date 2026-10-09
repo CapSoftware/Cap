@@ -164,7 +164,7 @@ export async function bundleGpui(target, args, { env = process.env } = {}) {
 
 	if (platform === "darwin") {
 		const result = await buildMacosPackages(target, bundleArgs, {
-			app: "cap",
+			bundleOnly: true,
 			env: bundleEnvironment(env),
 		});
 		if (result.signal || result.code !== 0) {

@@ -1,11 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-	CLASSIC_RPM_DEPENDS,
 	createLinuxBundleConfig,
 	GPUI_RPM_DEPENDS,
 	supportedLinuxBundles,
-	supportedLinuxClassicBundles,
+	TAURI_RPM_DEPENDS,
 } from "./linux-bundle-config.mjs";
 
 test("nightly builds retain DEB and AppImage without passing invalid hyphenated versions to RPM", () => {
@@ -112,10 +111,9 @@ test("the GPUI app maps native libraries from its own crate directory without we
 	assert.notEqual(rpm.depends, GPUI_RPM_DEPENDS);
 });
 
-test("Cap Classic ships on Linux as a self-contained AppImage", () => {
-	assert.deepEqual(supportedLinuxClassicBundles(), ["appimage"]);
+test("the Tauri dev app keeps its webview RPM dependencies by default", () => {
 	assert.deepEqual(
 		createLinuxBundleConfig([]).bundle.linux.rpm.depends,
-		CLASSIC_RPM_DEPENDS,
+		TAURI_RPM_DEPENDS,
 	);
 });

@@ -84,7 +84,7 @@ test("the GPUI app is packaged by rebundling its prebuilt binary on every attemp
 		["--bundles", "app,dmg", "--verbose"],
 		{
 			...fixture.options,
-			app: "cap",
+			bundleOnly: true,
 		},
 	);
 	assert.equal(result.code, 0);
@@ -112,10 +112,6 @@ test("the GPUI app is packaged by rebundling its prebuilt binary on every attemp
 	for (const call of fixture.calls) {
 		assert.equal(call.env.TAURI_APP_PATH, "/repo/apps/desktop-gpui");
 	}
-	await assert.rejects(
-		buildMacosPackages(target, [], { ...fixture.options, app: "other" }),
-		/Unknown macOS app/,
-	);
 });
 
 test("macOS deployment targets preserve compatible overrides and reject unsafe versions", () => {

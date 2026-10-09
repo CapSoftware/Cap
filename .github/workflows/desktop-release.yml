@@ -5,9 +5,8 @@ name: "desktop-release"
 #   - publish-nightly.yml -> channel: nightly, generated prerelease version, auto CN publish
 #   - promote-nightly.yml -> channel: stable, rebuilds a nightly's commit as a plain x.y.z
 #
-# Every release carries two apps from one commit: Cap (the GPUI app) under the
-# platform names existing installs update from, and Cap Classic (the Tauri
-# app) under `-classic` platform names, so neither ever updates into the other.
+# Cap ships as the GPUI app only, under the platform names existing installs
+# update from, so 0.6.0 and earlier Tauri installs update straight into it.
 #
 # Stable releases get a cap-v{version} git tag + draft GitHub release and are
 # published on CrabNebula manually (Discord bot / dashboard), exactly as before.
@@ -43,8 +42,6 @@ on:
 
 env:
   CN_APPLICATION: cap/cap
-  SENTRY_ORG: cap-s2
-  SENTRY_PROJECT: cap-desktop
 
 jobs:
   draft:
@@ -219,11 +216,9 @@ jobs:
       TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
       TURBO_TEAM: ${{ secrets.TURBO_TEAM }}
       CN_CHANNEL_FLAG: ${{ inputs.channel == 'nightly' && '--channel nightly' || '' }}
-      # Cap is the GPUI app and keeps the platform names every existing
-      # install updates from; Cap Classic is the Tauri app, built from the
-      # same commit and published beside it under `-classic` platforms.
+      # Cap ships as the GPUI app only, under the platform names every
+      # existing install already updates from.
       CAP_BUNDLE: apps/desktop-gpui/target/${{ matrix.settings.target }}/release/bundle
-      CLASSIC_BUNDLE: target/${{ matrix.settings.target }}/release/bundle
     runs-on: ${{ matrix.settings.runner }}
     steps:
       - name: Checkout repository
@@ -317,7 +312,6 @@ jobs:
           {
             echo "appVersion=${{ inputs.version }}"
             echo "VITE_ENVIRONMENT=production"
-            echo "CAP_DESKTOP_SENTRY_URL=https://6a3b6a09e6ae976c2ad6fff710e88748@o4506859771527168.ingest.us.sentry.io/4508330917101568"
             echo "NEXT_PUBLIC_WEB_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}"
             echo 'NEXTAUTH_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}'
             echo 'VITE_OPENPANEL_CLIENT_ID=${{ secrets.VITE_OPENPANEL_CLIENT_ID }}'
@@ -334,13 +328,15 @@ jobs:
           APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && secrets.APPLE_SIGNING_IDENTITY || '' }}
           APPLE_KEYCHAIN: ${{ runner.os == 'macOS' && format('{0}/build.keychain', runner.temp) || '' }}
 
+      # The sidecars ship inside Cap, which is itself stripped, and nothing
+      # symbolicates them, so their symbol tables are dead weight in every
+      # download.
       - name: Build desktop binaries
         shell: bash
-        run: |
-          if [[ "$RUNNER_OS" == "Linux" ]]; then
-            export CARGO_PROFILE_RELEASE_DEBUG=0
-          fi
-          ./scripts/build-desktop-binaries.sh ${{ matrix.settings.target }}
+        env:
+          CARGO_PROFILE_RELEASE_DEBUG: "0"
+          CARGO_PROFILE_RELEASE_STRIP: symbols
+        run: ./scripts/build-desktop-binaries.sh ${{ matrix.settings.target }}
 
       # The final link used to peak well above the 16GB stock Linux runner and
       # get OOM-killed ("runner received a shutdown signal") under fat LTO +
@@ -374,40 +370,6 @@ jobs:
           maximum-size: 24GB
           disk-root: "D:"
 
-      - name: Build Cap Classic
-        working-directory: apps/desktop
-        shell: bash
-        run: |
-          case "$RUNNER_OS" in
-            Linux)
-              CARGO_PROFILE_RELEASE_DEBUG=0 node ../../scripts/build-linux-packages.mjs "$TARGET" classic --config src-tauri/tauri.prod.conf.json --verbose
-              ;;
-            macOS)
-              node ../../scripts/build-macos-packages.mjs "$TARGET" --config src-tauri/tauri.prod.conf.json
-              ;;
-            Windows)
-              bun run build:tauri --target "$TARGET" --config src-tauri/tauri.prod.conf.json --bundles nsis
-              ;;
-          esac
-        env:
-          TARGET: ${{ matrix.settings.target }}
-          # https://github.com/tauri-apps/tauri-action/issues/740
-          CI: false
-          LD_LIBRARY_PATH: ${{ runner.os == 'Linux' && format('{0}/target/{1}/release:{0}/target/native-deps/lib', github.workspace, matrix.settings.target) || '' }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # codesigning
-          APPLE_CERTIFICATE: ${{ runner.os == 'macOS' && secrets.APPLE_CERTIFICATE || '' }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ runner.os == 'macOS' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
-          APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && secrets.APPLE_SIGNING_IDENTITY || '' }}
-          # notarization
-          APPLE_API_ISSUER: ${{ runner.os == 'macOS' && secrets.APPLE_API_ISSUER || '' }}
-          APPLE_API_KEY: ${{ runner.os == 'macOS' && secrets.APPLE_API_KEY || '' }}
-          APPLE_API_KEY_PATH: ${{ runner.os == 'macOS' && format('{0}/api.p8', github.workspace) || '' }}
-          APPLE_KEYCHAIN: ${{ runner.os == 'macOS' && format('{0}/build.keychain', runner.temp) || '' }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          RUST_TARGET_TRIPLE: ${{ matrix.settings.target }}
-
       # The Tauri bundler is only the packager here: it lays the prebuilt GPUI
       # binary out in the same app bundle, installer and package formats the
       # Tauri updater already installs, so existing installs update into Cap.
@@ -416,7 +378,7 @@ jobs:
         run: |
           case "$RUNNER_OS" in
             Linux)
-              CARGO_PROFILE_RELEASE_DEBUG=0 node scripts/build-linux-packages.mjs "$TARGET" cap --verbose
+              node scripts/build-linux-packages.mjs "$TARGET" --verbose
               ;;
             macOS)
               node scripts/bundle-gpui.mjs "$TARGET" --bundles app,dmg
@@ -440,9 +402,8 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           RUST_TARGET_TRIPLE: ${{ matrix.settings.target }}
 
-      # Tauri patches Cap Classic.exe with the NSIS marker during the first
-      # bundle. Sign those patched bytes and Cap's prebuilt binary in one
-      # request, then bundle both installers from the signed payload.
+      # Sign Cap's prebuilt binary and its sidecars in one request, then bundle
+      # the installer from the signed payload.
       - name: Stage Windows payload for Authenticode signing
         if: ${{ runner.os == 'Windows' }}
         shell: pwsh
@@ -481,12 +442,10 @@ jobs:
         run: |
           ./scripts/windows-release-signing.ps1 -Operation Restore -Target "${{ matrix.settings.target }}" -WorkspaceRoot "$env:GITHUB_WORKSPACE"
 
-      - name: Bundle Windows installers
+      - name: Bundle Windows installer
         if: ${{ runner.os == 'Windows' }}
         shell: bash
-        run: |
-          (cd apps/desktop && bun run tauri bundle --target "$TARGET" --bundles nsis --config src-tauri/tauri.prod.conf.json)
-          node scripts/bundle-gpui.mjs "$TARGET" --skip-build --bundles nsis
+        run: node scripts/bundle-gpui.mjs "$TARGET" --skip-build --bundles nsis
         env:
           TARGET: ${{ matrix.settings.target }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -551,7 +510,6 @@ jobs:
             echo "::error::Cap still bundles the duplicate cap-exporter sidecar."
             exit 1
           fi
-          verify_app "$CLASSIC_BUNDLE/macos/Cap Classic.app" "Cap Classic" cap-muxer cap-exporter cap-cli
 
       - name: Notarize and verify macOS disk images
         if: ${{ runner.os == 'macOS' }}
@@ -564,9 +522,9 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s nullglob
-          DMGS=("$CAP_BUNDLE"/dmg/*.dmg "$CLASSIC_BUNDLE"/dmg/*.dmg)
-          if [[ ${#DMGS[@]} -ne 2 ]]; then
-            echo "::error::Expected the Cap and Cap Classic disk images, found ${#DMGS[@]}."
+          DMGS=("$CAP_BUNDLE"/dmg/*.dmg)
+          if [[ ${#DMGS[@]} -ne 1 ]]; then
+            echo "::error::Expected one Cap disk image, found ${#DMGS[@]}."
             exit 1
           fi
           [[ -n "$APPLE_API_KEY" && -n "$APPLE_API_ISSUER" && -s "$APPLE_API_KEY_PATH" ]]
@@ -596,15 +554,11 @@ jobs:
           done
 
       # Guards against the Linux packaging regressions:
-      #   1. Frontend missing: vinxi must produce apps/desktop/.output/public,
-      #      which Tauri EMBEDS into Cap Classic. A blank webview ships if
-      #      turbo's cache restores an empty .output/public (see
-      #      @cap/desktop#build outputs in turbo.json).
-      #   2. FFmpeg soname mismatch: every libav*/libsw* a binary lists as
+      #   1. FFmpeg soname mismatch: every libav*/libsw* a binary lists as
       #      NEEDED must be bundled under /usr/lib/cap/ with the exact same soname.
       #      The bundled libs come from native-deps (FFmpeg 7); if a binary
       #      linked system FFmpeg 6 the loader fails at launch.
-      #   3. Undeclared runtime dependency: a system lib a binary NEEDs that is
+      #   2. Undeclared runtime dependency: a system lib a binary NEEDs that is
       #      neither bundled nor part of the declared stack must appear in the
       #      .deb Depends, or the loader aborts at launch. This is the
       #      libpipewire-0.3.so.0 crash that shipped in 0.5.2.
@@ -647,7 +601,7 @@ jobs:
             exit 1
           fi
 
-          # (2) every FFmpeg soname the binaries NEED is bundled
+          # (1) every FFmpeg soname the binaries NEED is bundled
           NEEDED="$(for executable in "${EXECUTABLES[@]}"; do objdump -p "$executable"; done | awk '/NEEDED/{print $2}' | grep -E '^lib(av|sw|postproc)' | sort -u || true)"
           echo "Binaries NEED FFmpeg sonames:"; echo "${NEEDED:-(none)}"
           echo "Bundled FFmpeg libs:"; ls -1 "$WORK/usr/lib/cap" 2>/dev/null || true
@@ -664,7 +618,7 @@ jobs:
           fi
           echo "FFmpeg soname bundle OK"
 
-          # (3) runtime libs that are NOT bundled must be declared in the .deb
+          # (2) runtime libs that are NOT bundled must be declared in the .deb
           # Depends, or the dynamic loader aborts at launch.
           DEPENDS="$(dpkg-deb -f "$DEB" Depends || true)"
           echo "Declared Depends: ${DEPENDS:-(none)}"
@@ -714,16 +668,12 @@ jobs:
           set -euo pipefail
           RPM="$CAP_BUNDLE/rpm/Cap-$CAP_RELEASE_VERSION-1.x86_64.rpm"
           APPIMAGE="$CAP_BUNDLE/appimage/Cap_${CAP_RELEASE_VERSION}_amd64.AppImage"
-          CLASSIC_APPIMAGE="$CLASSIC_BUNDLE/appimage/Cap Classic_${CAP_RELEASE_VERSION}_amd64.AppImage"
           test -s "$APPIMAGE.sig"
-          test -s "$CLASSIC_APPIMAGE.sig"
           WORK="$(mktemp -d)"
           trap 'rm -rf "$WORK"' EXIT
-          mkdir "$WORK/rpm" "$WORK/appimage" "$WORK/classic"
+          mkdir "$WORK/rpm" "$WORK/appimage"
           (cd "$WORK/appimage" && "$(realpath "$APPIMAGE")" --appimage-extract > /dev/null)
-          (cd "$WORK/classic" && "$(realpath "$CLASSIC_APPIMAGE")" --appimage-extract > /dev/null)
           APPROOT="$WORK/appimage/squashfs-root"
-          CLASSIC_APPROOT="$WORK/classic/squashfs-root"
           verify_root() {
             local root="$1"
             shift
@@ -736,7 +686,6 @@ jobs:
             test ! -e "$root/usr/bin/cap-gpui"
           }
           verify_root "$APPROOT" Cap cap-muxer cap-cli
-          verify_root "$CLASSIC_APPROOT" "Cap Classic" cap-muxer cap-exporter cap-cli
           if [[ -n "$(find "$APPROOT" \( -name 'libwebkit2gtk-*' -o -name 'libgtk-3.so*' -o -name 'WebKitWebProcess' \) -print -quit)" || -e "$APPROOT/apprun-hooks" ]]; then
             echo "::error::The Cap AppImage still bundles the Tauri webview runtime"
             exit 1
@@ -753,33 +702,17 @@ jobs:
             test "$(cat "$WORK/rpm/usr/lib/cap/package-format")" = rpm
             verify_root "$WORK/rpm" Cap cap-muxer cap-cli
           fi
-          for root in "$APPROOT" "$CLASSIC_APPROOT"; do
-            test "$(cat "$root/usr/lib/cap/package-format")" = appimage
-            test -x "$root/usr/bin/pactl"
-            test -s "$root/usr/lib/alsa-lib/libasound_module_pcm_pulse.so"
-            test -s "$root/usr/lib/cap/alsa-pulse.conf"
-            if [[ -n "$(find "$root" -name 'libwayland-client.so*' -print -quit)" ]]; then
-              echo "::error::$root bundles a Wayland client that can conflict with host Mesa drivers"
-              exit 1
-            fi
-            if [[ -n "$(find "$root/usr/lib" -maxdepth 1 -name 'libpipewire-0.3.so*' -print -quit)" ]]; then
-              echo "::error::$root bundles PipeWire that can conflict with host ALSA plugins"
-              exit 1
-            fi
-          done
-
-          # Tauri embeds .output/public into Cap Classic, so an empty or
-          # missing directory means a blank webview.
-          FE="apps/desktop/.output/public/index.html"
-          if [[ ! -s "$FE" ]]; then
-            echo "::error::Frontend build output missing/empty ($FE) - Cap Classic's webview would be blank."
-            ls -la apps/desktop/.output/public 2>/dev/null || echo "(no .output/public dir)"
+          test "$(cat "$APPROOT/usr/lib/cap/package-format")" = appimage
+          test -x "$APPROOT/usr/bin/pactl"
+          test -s "$APPROOT/usr/lib/alsa-lib/libasound_module_pcm_pulse.so"
+          test -s "$APPROOT/usr/lib/cap/alsa-pulse.conf"
+          if [[ -n "$(find "$APPROOT" -name 'libwayland-client.so*' -print -quit)" ]]; then
+            echo "::error::The Cap AppImage bundles a Wayland client that can conflict with host Mesa drivers"
             exit 1
           fi
-          if strings "$CLASSIC_APPROOT/usr/bin/Cap Classic" 2>/dev/null | grep -q "index.html"; then
-            echo "Cap Classic appears to embed the frontend (index.html key present)"
-          else
-            echo "::warning::Could not confirm the embedded frontend key in Cap Classic (asset format may differ)"
+          if [[ -n "$(find "$APPROOT/usr/lib" -maxdepth 1 -name 'libpipewire-0.3.so*' -print -quit)" ]]; then
+            echo "::error::The Cap AppImage bundles PipeWire that can conflict with host ALSA plugins"
+            exit 1
           fi
 
       - name: Build Arch Linux package
@@ -805,60 +738,42 @@ jobs:
         if: ${{ runner.os == 'Windows' }}
         shell: pwsh
         run: |
+          $installers = @(Get-ChildItem -Path "$env:CAP_BUNDLE/nsis" -Filter *.exe)
+          if ($installers.Count -ne 1) {
+            throw "Expected one Windows NSIS installer, found $($installers.Count)."
+          }
           $sevenZip = Get-Command 7z -ErrorAction Stop
-          $libraries = @(
+          $requiredFiles = @(
+            "Cap.exe", "cap-muxer.exe", "cap-cli.exe",
             "avcodec-61.dll", "avdevice-61.dll", "avfilter-10.dll", "avformat-61.dll",
             "avutil-59.dll", "postproc-58.dll", "swresample-5.dll", "swscale-8.dll",
             "dxcompiler.dll", "dxil.dll", "onnxruntime.dll", "onnxruntime_providers_shared.dll"
           )
-          $apps = @(
-            [pscustomobject]@{
-              Bundle = "$env:CAP_BUNDLE/nsis"
-              Required = @("Cap.exe", "cap-muxer.exe", "cap-cli.exe") + $libraries
-              Forbidden = @("cap-gpui.exe", "cap-exporter.exe", "Cap Classic.exe")
-            },
-            [pscustomobject]@{
-              Bundle = "$env:CLASSIC_BUNDLE/nsis"
-              Required = @("Cap Classic.exe", "cap-muxer.exe", "cap-exporter.exe", "cap-cli.exe") + $libraries
-              Forbidden = @("cap-gpui.exe", "Cap.exe")
+          $forbiddenFiles = @("cap-gpui.exe", "cap-exporter.exe")
+          foreach ($installer in $installers) {
+            $contents = & $sevenZip.Source l -slt $installer.FullName
+            if ($LASTEXITCODE -ne 0) {
+              throw "Could not inspect Windows installer '$($installer.Name)'."
             }
-          )
-          foreach ($app in $apps) {
-            $installers = @(Get-ChildItem -Path $app.Bundle -Filter *.exe)
-            if ($installers.Count -ne 1) {
-              throw "Expected one Windows NSIS installer in '$($app.Bundle)', found $($installers.Count)."
+            foreach ($file in $requiredFiles) {
+              if ($contents -notcontains "Path = $file") {
+                throw "Windows installer '$($installer.Name)' is missing bundled '$file'."
+              }
             }
-            foreach ($installer in $installers) {
-              $contents = & $sevenZip.Source l -slt $installer.FullName
-              if ($LASTEXITCODE -ne 0) {
-                throw "Could not inspect Windows installer '$($installer.Name)'."
-              }
-              foreach ($file in $app.Required) {
-                if ($contents -notcontains "Path = $file") {
-                  throw "Windows installer '$($installer.Name)' is missing bundled '$file'."
-                }
-              }
-              foreach ($file in $app.Forbidden) {
-                if ($contents -contains "Path = $file") {
-                  throw "Windows installer '$($installer.Name)' unexpectedly bundles '$file'."
-                }
+            foreach ($file in $forbiddenFiles) {
+              if ($contents -contains "Path = $file") {
+                throw "Windows installer '$($installer.Name)' unexpectedly bundles '$file'."
               }
             }
           }
 
-      - name: Stage Windows installers for Authenticode signing
-        if: ${{ runner.os == 'Windows' }}
-        shell: pwsh
-        run: |
-          ./scripts/windows-release-signing.ps1 -Operation StageInstallers -Target "${{ matrix.settings.target }}" -WorkspaceRoot "$env:GITHUB_WORKSPACE"
-
-      - name: Upload unsigned Windows installers
+      - name: Upload unsigned Windows installer
         if: ${{ runner.os == 'Windows' }}
         id: upload_unsigned_windows_installer
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: unsigned-windows-installer
-          path: target/${{ matrix.settings.target }}/release/windows-signing/installers/*.exe
+          path: ${{ env.CAP_BUNDLE }}/nsis/*.exe
           if-no-files-found: error
 
       - name: Submit SignPath signing request
@@ -881,33 +796,62 @@ jobs:
           service-unavailable-timeout-in-seconds: 5400
           output-artifact-directory: signed-windows-installer
 
-      - name: Restore and verify signed Windows installers
+      - name: Restore signed Windows installer
         if: ${{ runner.os == 'Windows' }}
         shell: pwsh
         run: |
-          ./scripts/windows-release-signing.ps1 -Operation RestoreInstallers -Target "${{ matrix.settings.target }}" -WorkspaceRoot "$env:GITHUB_WORKSPACE"
+          $signedDir = "signed-windows-installer"
+          $bundleDir = "$env:CAP_BUNDLE/nsis"
+
+          if (-not (Test-Path $signedDir)) {
+            throw "Signed artifact directory '$signedDir' not found."
+          }
+
+          $executables = Get-ChildItem -Path $signedDir -Filter *.exe -Recurse
+          if (-not $executables) {
+            throw "No signed executables found in '$signedDir'."
+          }
+
+          Write-Host "Copying signed executables to: $bundleDir"
+          Copy-Item -Path (Join-Path $signedDir '*.exe') -Destination $bundleDir -Force
+
+          Write-Host "Files in bundle directory after signing:"
+          Get-ChildItem -Path $bundleDir -Filter *.exe | ForEach-Object { Write-Host "  - $($_.Name)" }
+
+      - name: Verify Windows installer Authenticode signature
+        if: ${{ runner.os == 'Windows' }}
+        shell: pwsh
+        run: |
+          $installers = Get-ChildItem -Path "$env:CAP_BUNDLE/nsis" -Filter *.exe
+          if (-not $installers) {
+            throw "No Windows installer exists after SignPath signing."
+          }
+          foreach ($installer in $installers) {
+            $signature = Get-AuthenticodeSignature -FilePath $installer.FullName
+            if ($signature.Status -ne "Valid") {
+              throw "Windows installer '$($installer.Name)' has invalid Authenticode status: $($signature.Status)."
+            }
+          }
 
       - name: Verify extracted Windows payload signatures and hashes
         if: ${{ runner.os == 'Windows' }}
         shell: pwsh
         run: |
-          foreach ($app in @(
-            [pscustomobject]@{ Name = "cap"; Bundle = "$env:CAP_BUNDLE/nsis" },
-            [pscustomobject]@{ Name = "classic"; Bundle = "$env:CLASSIC_BUNDLE/nsis" }
-          )) {
-            $installers = @(Get-ChildItem -Path $app.Bundle -Filter *.exe)
-            if ($installers.Count -ne 1) {
-              throw "Expected one signed installer in '$($app.Bundle)', found $($installers.Count)."
-            }
-            ./scripts/windows-release-signing.ps1 -Operation VerifyInstaller -App $app.Name -Target "${{ matrix.settings.target }}" -WorkspaceRoot "$env:GITHUB_WORKSPACE" -InstallerPath $installers[0].FullName
+          $installers = Get-ChildItem -Path "$env:CAP_BUNDLE/nsis" -Filter *.exe
+          if (-not $installers) {
+            throw "No Windows installer exists for extracted payload verification."
+          }
+          foreach ($installer in $installers) {
+            ./scripts/windows-release-signing.ps1 -Operation VerifyInstaller -Target "${{ matrix.settings.target }}" -WorkspaceRoot "$env:GITHUB_WORKSPACE" -InstallerPath $installer.FullName
           }
 
-      - name: Re-sign Windows installers for the updater
+      - name: Re-sign Windows installer for the updater
         if: ${{ runner.os == 'Windows' }}
         shell: bash
         working-directory: apps/desktop
         run: |
-          for exe in "../../$CAP_BUNDLE"/nsis/*.exe "../../$CLASSIC_BUNDLE"/nsis/*.exe; do
+          BUNDLE_DIR="../../$CAP_BUNDLE/nsis"
+          for exe in "$BUNDLE_DIR"/*.exe; do
             echo "Re-signing $(basename "$exe") for the updater..."
             rm -f "${exe}.sig"
             bun run tauri signer sign -k "$TAURI_SIGNING_PRIVATE_KEY" -p "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" "$exe"
@@ -916,7 +860,8 @@ jobs:
               exit 1
             fi
           done
-          ls -la "../../$CAP_BUNDLE"/nsis/*.sig "../../$CLASSIC_BUNDLE"/nsis/*.sig
+          echo "Signature files after re-signing:"
+          ls -la "$BUNDLE_DIR"/*.sig
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -935,13 +880,7 @@ jobs:
             ${{ env.CAP_BUNDLE }}/deb/*.sig
             ${{ env.CAP_BUNDLE }}/appimage/*.AppImage
             ${{ env.CAP_BUNDLE }}/appimage/*.sig
-            ${{ env.CLASSIC_BUNDLE }}/dmg/*.dmg
-            ${{ env.CLASSIC_BUNDLE }}/macos/*.tar.gz
-            ${{ env.CLASSIC_BUNDLE }}/macos/*.sig
-            ${{ env.CLASSIC_BUNDLE }}/nsis/*.exe
-            ${{ env.CLASSIC_BUNDLE }}/nsis/*.sig
-            ${{ env.CLASSIC_BUNDLE }}/appimage/*.AppImage
-            ${{ env.CLASSIC_BUNDLE }}/appimage/*.sig
+            ${{ env.CAP_BUNDLE }}/rpm/*.rpm
             target/${{ matrix.settings.target }}/release/windows-signing/payload-manifest.json
           if-no-files-found: error
           retention-days: 3
@@ -965,18 +904,14 @@ jobs:
               macOS)
                 echo "cap_dmg=$(one "$CAP_BUNDLE"/dmg/*.dmg)"
                 echo "cap_update=$(one "$CAP_BUNDLE"/macos/*.app.tar.gz)"
-                echo "classic_dmg=$(one "$CLASSIC_BUNDLE"/dmg/*.dmg)"
-                echo "classic_update=$(one "$CLASSIC_BUNDLE"/macos/*.app.tar.gz)"
                 ;;
               Windows)
                 echo "cap_installer=$(one "$CAP_BUNDLE"/nsis/*.exe)"
-                echo "classic_installer=$(one "$CLASSIC_BUNDLE"/nsis/*.exe)"
                 ;;
               Linux)
                 echo "cap_deb=$(one "$CAP_BUNDLE"/deb/*.deb)"
                 echo "cap_appimage=$(one "$CAP_BUNDLE"/appimage/*.AppImage)"
                 echo "cap_arch=$(one "$CAP_BUNDLE"/arch/*.pkg.tar.zst)"
-                echo "classic_appimage=$(one "$CLASSIC_BUNDLE"/appimage/*.AppImage)"
                 if [[ "$VERSION" != *-* ]]; then
                   echo "cap_rpm=$(one "$CAP_BUNDLE"/rpm/*.rpm)"
                 fi
@@ -1000,32 +935,11 @@ jobs:
           command: release upload ${{ env.CN_APPLICATION }} "${{ inputs.version }}" --file "${{ steps.assets.outputs.cap_update }}" --signature "${{ steps.assets.outputs.cap_update }}.sig" --update-platform darwin-${{ matrix.settings.arch }} ${{ env.CN_CHANNEL_FLAG }}
           api-key: ${{ secrets.CN_API_KEY }}
 
-      - name: Upload Cap Classic macOS disk image
-        if: ${{ runner.os == 'macOS' }}
-        uses: crabnebula-dev/cloud-release@v0
-        with:
-          command: release upload ${{ env.CN_APPLICATION }} "${{ inputs.version }}" --file "${{ steps.assets.outputs.classic_dmg }}" --public-platform dmg-${{ matrix.settings.arch }}-classic ${{ env.CN_CHANNEL_FLAG }}
-          api-key: ${{ secrets.CN_API_KEY }}
-
-      - name: Upload Cap Classic macOS update
-        if: ${{ runner.os == 'macOS' }}
-        uses: crabnebula-dev/cloud-release@v0
-        with:
-          command: release upload ${{ env.CN_APPLICATION }} "${{ inputs.version }}" --file "${{ steps.assets.outputs.classic_update }}" --signature "${{ steps.assets.outputs.classic_update }}.sig" --update-platform darwin-${{ matrix.settings.arch }}-classic ${{ env.CN_CHANNEL_FLAG }}
-          api-key: ${{ secrets.CN_API_KEY }}
-
       - name: Upload Cap Windows installer
         if: ${{ runner.os == 'Windows' }}
         uses: crabnebula-dev/cloud-release@v0
         with:
           command: release upload ${{ env.CN_APPLICATION }} "${{ inputs.version }}" --file "${{ steps.assets.outputs.cap_installer }}" --signature "${{ steps.assets.outputs.cap_installer }}.sig" --public-platform nsis-${{ matrix.settings.arch }} --update-platform windows-${{ matrix.settings.arch }} ${{ env.CN_CHANNEL_FLAG }}
-          api-key: ${{ secrets.CN_API_KEY }}
-
-      - name: Upload Cap Classic Windows installer
-        if: ${{ runner.os == 'Windows' }}
-        uses: crabnebula-dev/cloud-release@v0
-        with:
-          command: release upload ${{ env.CN_APPLICATION }} "${{ inputs.version }}" --file "${{ steps.assets.outputs.classic_installer }}" --signature "${{ steps.assets.outputs.classic_installer }}.sig" --public-platform nsis-${{ matrix.settings.arch }}-classic --update-platform windows-${{ matrix.settings.arch }}-classic ${{ env.CN_CHANNEL_FLAG }}
           api-key: ${{ secrets.CN_API_KEY }}
 
       - name: Upload Cap Linux deb
@@ -1055,31 +969,6 @@ jobs:
         with:
           command: release upload ${{ env.CN_APPLICATION }} "${{ inputs.version }}" --file "${{ steps.assets.outputs.cap_arch }}" --public-platform pacman-x86_64 ${{ env.CN_CHANNEL_FLAG }}
           api-key: ${{ secrets.CN_API_KEY }}
-
-      - name: Upload Cap Classic Linux AppImage
-        if: ${{ runner.os == 'Linux' }}
-        uses: crabnebula-dev/cloud-release@v0
-        with:
-          command: release upload ${{ env.CN_APPLICATION }} "${{ inputs.version }}" --file "${{ steps.assets.outputs.classic_appimage }}" --signature "${{ steps.assets.outputs.classic_appimage }}.sig" --public-platform appimage-x86_64-classic --update-platform linux-x86_64-appimage-classic ${{ env.CN_CHANNEL_FLAG }}
-          api-key: ${{ secrets.CN_API_KEY }}
-
-      - uses: matbour/setup-sentry-cli@8ef22a4ff03bcd1ebbcaa3a36a81482ca8e3872e
-
-      - name: Upload debug symbols to Sentry
-        if: ${{ runner.os == 'macOS' }}
-        shell: bash
-        env:
-          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
-        run: |
-          sentry-cli debug-files upload -o ${{ env.SENTRY_ORG }} -p ${{ env.SENTRY_PROJECT }} "target/Cap Classic.dSYM"
-
-      - name: Upload debug symbols to Sentry
-        if: ${{ runner.os == 'Windows' }}
-        shell: bash
-        env:
-          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
-        run: |
-          sentry-cli debug-files upload -o ${{ env.SENTRY_ORG }} -p ${{ env.SENTRY_PROJECT }} target/${{ matrix.settings.target }}/release/cap_desktop.pdb
 
   done:
     needs: [draft, build]
