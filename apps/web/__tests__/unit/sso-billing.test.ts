@@ -1234,6 +1234,27 @@ describe("read-only SSO invoices", () => {
 		});
 	});
 
+	it("rejects an owner who changed after source discovery", async () => {
+		await expect(
+			listSsoInvoices(organizationId, { ownerId: "user_previous_owner" }),
+		).rejects.toThrow("ownership has changed");
+		expect(mocks.stripe.invoices.list).not.toHaveBeenCalled();
+	});
+
+	it("paginates within the linked subscription", async () => {
+		await listSsoInvoices(organizationId, {
+			ownerId: userId,
+			limit: 25,
+			startingAfter: "in_previous",
+		});
+		expect(mocks.stripe.invoices.list).toHaveBeenCalledWith({
+			customer: "cus_owner",
+			subscription: "sub_sso",
+			limit: 25,
+			starting_after: "in_previous",
+		});
+	});
+
 	it("lists only the linked SSO customer and subscription, preserving separate Pro billing", async () => {
 		state.users.set(userId, {
 			id: userId,
