@@ -4011,6 +4011,9 @@ impl SettingsWindow {
                         current,
                         cx,
                         |this, value, cx| {
+                            if this.settings.update_channel == value {
+                                return;
+                            }
                             this.settings.update_channel = value;
                             this.write_enum("updateChannel", value, cx);
                             crate::updates::update_channel_changed(

@@ -72,6 +72,7 @@ struct UpdateScheduler {
     status: UpdateStatus,
     staged: Option<StagedUpdate>,
     download: Option<gpui::Task<()>>,
+    download_epoch: u64,
 }
 
 impl Global for UpdateScheduler {}
@@ -199,9 +200,28 @@ pub(crate) fn update_channel_changed(channel: UpdateChannel, cx: &mut App) {
         return;
     }
 
+    drop_pending_update_from_previous_channel(cx);
     let scheduler = cx.global_mut::<UpdateScheduler>();
     scheduler.pending.request_channel(channel);
     let _ = scheduler.wake.try_send(());
+}
+
+fn channel_switch_drops_pending_package(status: &UpdateStatus) -> bool {
+    matches!(
+        status,
+        UpdateStatus::Downloading { .. } | UpdateStatus::Ready { .. }
+    )
+}
+
+fn drop_pending_update_from_previous_channel(cx: &mut App) {
+    if !channel_switch_drops_pending_package(&status(cx)) {
+        return;
+    }
+    let scheduler = cx.global_mut::<UpdateScheduler>();
+    scheduler.download_epoch = scheduler.download_epoch.wrapping_add(1);
+    scheduler.download = None;
+    scheduler.staged = None;
+    set_status(UpdateStatus::Idle, cx);
 }
 
 fn first_check_delay(channel: UpdateChannel) -> Duration {
@@ -238,6 +258,7 @@ pub(crate) fn schedule_startup_check(cx: &mut App) {
         status: UpdateStatus::Idle,
         staged: None,
         download: None,
+        download_epoch: 0,
     });
 
     cx.spawn(async move |cx| {
@@ -280,6 +301,7 @@ pub(crate) fn schedule_startup_check(cx: &mut App) {
             if let Some(next_channel) = request.channel {
                 channel = next_channel;
                 ignored_version = None;
+                let _ = cx.update(drop_pending_update_from_previous_channel);
             }
 
             let manual = request.manual;
@@ -392,6 +414,7 @@ fn start_download(release: Release, cx: &mut App) {
         },
         cx,
     );
+    let download_epoch = cx.global::<UpdateScheduler>().download_epoch;
 
     let (progress_sender, progress) = flume::bounded::<Option<f32>>(1);
     let download = gpui_tokio::Tokio::spawn(cx, async move {
@@ -411,9 +434,13 @@ fn start_download(release: Release, cx: &mut App) {
 
     let task = cx.spawn(async move |cx| {
         let progress_version = version.clone();
+        let progress_epoch = download_epoch;
         let progress_updates = cx.spawn(async move |cx| {
             while let Ok(fraction) = progress.recv_async().await {
                 cx.update(|cx| {
+                    if cx.global::<UpdateScheduler>().download_epoch != progress_epoch {
+                        return;
+                    }
                     set_status(
                         UpdateStatus::Downloading {
                             version: progress_version.clone(),
@@ -432,6 +459,9 @@ fn start_download(release: Release, cx: &mut App) {
         drop(progress_updates);
 
         cx.update(|cx| {
+            if cx.global::<UpdateScheduler>().download_epoch != download_epoch {
+                return;
+            }
             cx.global_mut::<UpdateScheduler>().download = None;
             match result {
                 Ok(package) => {
@@ -779,6 +809,30 @@ mod tests {
         requests.manual = false;
         assert!(!requests.request_manual(true));
         assert!(requests.request_manual(false));
+    }
+
+    #[test]
+    fn channel_switch_drops_a_download_or_staged_package_and_keeps_an_install() {
+        let nightly = version("0.6.1-nightly.4");
+        assert!(channel_switch_drops_pending_package(
+            &UpdateStatus::Downloading {
+                version: nightly.clone(),
+                fraction: Some(0.4),
+            }
+        ));
+        assert!(channel_switch_drops_pending_package(&UpdateStatus::Ready {
+            version: nightly.clone(),
+        }));
+        assert!(!channel_switch_drops_pending_package(
+            &UpdateStatus::Installing { version: nightly }
+        ));
+        assert!(!channel_switch_drops_pending_package(
+            &UpdateStatus::Installed {
+                version: version("0.6.1"),
+                executable: PathBuf::from("/Applications/Cap.app"),
+            }
+        ));
+        assert!(!channel_switch_drops_pending_package(&UpdateStatus::Idle));
     }
 
     #[test]
