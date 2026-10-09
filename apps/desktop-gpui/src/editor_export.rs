@@ -2867,7 +2867,6 @@ fn matches_compression(current: ExportCompression, expected: ExportCompression) 
     std::mem::discriminant(&current) == std::mem::discriminant(&expected)
 }
 
-#[allow(clippy::too_many_arguments)]
 // The NV12 readback wait sleeps in 1 ms steps (`frame_pipeline.rs`), which the
 // default 15.6 ms Windows timer resolution stretches to most of a frame each.
 #[cfg(windows)]
@@ -2888,6 +2887,7 @@ impl Drop for TimerResolution {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_export(
     project_path: PathBuf,
     project: cap_project::ProjectConfiguration,
