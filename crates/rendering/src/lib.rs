@@ -46,6 +46,8 @@ mod frame_windows;
 #[cfg(target_os = "macos")]
 pub mod iosurface_texture;
 mod layers;
+#[cfg(target_os = "linux")]
+pub mod linux_gpu;
 mod managed_segment;
 mod mask;
 pub mod notch_shape;
@@ -1075,6 +1077,108 @@ pub fn zero_copy_export_disabled() -> bool {
     })
 }
 
+/// Cumulative wall time per stage of the NV12 export loop (µs), for finding
+/// which stage a render slot waits on. Off unless CAP_RENDER_LOOP_STATS=1;
+/// `take` reads and resets.
+pub mod loop_stats {
+    use std::sync::{
+        OnceLock,
+        atomic::{AtomicU64, Ordering},
+    };
+
+    pub static DECODE: AtomicU64 = AtomicU64::new(0);
+    pub static RENDER: AtomicU64 = AtomicU64::new(0);
+    pub static PREFETCH: AtomicU64 = AtomicU64::new(0);
+    pub static JOIN: AtomicU64 = AtomicU64::new(0);
+    pub static SEND: AtomicU64 = AtomicU64::new(0);
+    pub static FRAMES: AtomicU64 = AtomicU64::new(0);
+
+    pub fn enabled() -> bool {
+        static ENABLED: OnceLock<bool> = OnceLock::new();
+        *ENABLED.get_or_init(|| std::env::var("CAP_RENDER_LOOP_STATS").as_deref() == Ok("1"))
+    }
+
+    pub fn add(counter: &AtomicU64, elapsed: std::time::Duration) {
+        if enabled() {
+            counter.fetch_add(elapsed.as_micros() as u64, Ordering::Relaxed);
+        }
+    }
+
+    /// [decode wait, render, next-frame decode, render+decode join, send wait, frames]
+    pub fn take() -> [u64; 6] {
+        [&DECODE, &RENDER, &PREFETCH, &JOIN, &SEND, &FRAMES]
+            .map(|counter| counter.swap(0, Ordering::Relaxed))
+    }
+}
+
+/// A blurred static background is identical on every frame. Render hosts
+/// reuse the first frame's result; editor and desktop exports keep blurring
+/// every frame until this has been verified there.
+static BLUR_RESULT_CACHE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn enable_blur_result_cache() {
+    BLUR_RESULT_CACHE.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn blur_result_cache_enabled() -> bool {
+    BLUR_RESULT_CACHE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Layer pipelines take ~0.25-0.5 s to build per render. A process that
+/// renders many ranges of the same project (a render-farm engine) can set a
+/// key naming that project; successful renders then hand their layers to the
+/// next render with the same key on the same device. Layers cache per-project
+/// assets (cursor images, backgrounds) under ids that are only unique within
+/// a recording, so they are never shared across keys.
+static LAYERS_REUSE_KEY: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+static LAYERS_POOL: std::sync::Mutex<Vec<(wgpu::Device, String, RendererLayers)>> =
+    std::sync::Mutex::new(Vec::new());
+
+pub fn set_layers_reuse_key(key: Option<String>) {
+    if let Ok(mut current) = LAYERS_REUSE_KEY.lock() {
+        *current = key;
+    }
+}
+
+/// Key of never-used layers: they hold no project state, so any project
+/// may take them.
+const SPARE_LAYERS: &str = "\0spare";
+
+fn take_pooled_layers(device: &wgpu::Device, key: &str) -> Option<RendererLayers> {
+    let mut pool = LAYERS_POOL.lock().ok()?;
+    // Layers for other projects will not be asked for again.
+    pool.retain(|(_, pooled_key, _)| pooled_key == key || pooled_key == SPARE_LAYERS);
+    let index = pool
+        .iter()
+        .position(|(owner, pooled_key, _)| owner == device && pooled_key == key)
+        .or_else(|| pool.iter().position(|(owner, _, _)| owner == device))?;
+    Some(pool.swap_remove(index).2)
+}
+
+/// Builds a fresh set of layers for the next project's first render, off
+/// its critical path (an idle engine calls this between tasks).
+pub fn prebuild_spare_layers(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    is_software_adapter: bool,
+) {
+    let has_spare = LAYERS_POOL.lock().is_ok_and(|pool| {
+        pool.iter()
+            .any(|(owner, key, _)| owner == device && key == SPARE_LAYERS)
+    });
+    if has_spare {
+        return;
+    }
+    let layers = RendererLayers::new_with_options(device, queue, is_software_adapter);
+    return_pooled_layers(device.clone(), SPARE_LAYERS.to_string(), layers);
+}
+
+fn return_pooled_layers(device: wgpu::Device, key: String, layers: RendererLayers) {
+    if let Ok(mut pool) = LAYERS_POOL.lock() {
+        pool.push((device, key, layers));
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn render_video_to_channel_nv12(
     constants: &RenderVideoConstants,
@@ -1169,11 +1273,21 @@ pub async fn render_video_to_channel_nv12(
         frame_renderer.enable_nv12_surface_output();
     }
 
-    let mut layers = RendererLayers::new_with_options(
-        &constants.device,
-        &constants.queue,
-        constants.is_software_adapter,
-    );
+    let layers_reuse_key = LAYERS_REUSE_KEY.lock().ok().and_then(|key| key.clone());
+    let mut layers = layers_reuse_key
+        .as_deref()
+        .and_then(|key| take_pooled_layers(&constants.device, key))
+        .map(|mut layers| {
+            layers.reset_frame_state();
+            layers
+        })
+        .unwrap_or_else(|| {
+            RendererLayers::new_with_options(
+                &constants.device,
+                &constants.queue,
+                constants.is_software_adapter,
+            )
+        });
 
     if let Some(first_segment) = render_segments.first() {
         let (screen_w, screen_h) = first_segment.decoders.screen_video_dimensions();
@@ -1296,6 +1410,7 @@ pub async fn render_video_to_channel_nv12(
             (incoming_decode.await, None)
         };
         let this_decode_ms = decode_wall_start.elapsed().as_millis() as u64;
+        loop_stats::add(&loop_stats::DECODE, decode_wall_start.elapsed());
 
         if let Some(segment_frames) = segment_frames {
             consecutive_failures = 0;
@@ -1429,7 +1544,7 @@ pub async fn render_video_to_channel_nv12(
                     )
                 }
             } else if let Some(prefetch) = prefetch_future {
-                if record_first_frame_nv12_phases {
+                if record_first_frame_nv12_phases || loop_stats::enabled() {
                     let join_wall_start = Instant::now();
                     let render_fut = async {
                         let t0 = Instant::now();
@@ -1451,6 +1566,9 @@ pub async fn render_video_to_channel_nv12(
                     };
                     let ((render_elapsed, render), (prefetch_elapsed, decoded)) =
                         tokio::join!(render_fut, prefetch_fut);
+                    loop_stats::add(&loop_stats::RENDER, render_elapsed);
+                    loop_stats::add(&loop_stats::PREFETCH, prefetch_elapsed);
+                    loop_stats::add(&loop_stats::JOIN, join_wall_start.elapsed());
                     if let Some((next_frame_number, next_seg_time, next_clip_index)) =
                         next_prefetch_meta
                     {
@@ -1484,7 +1602,7 @@ pub async fn render_video_to_channel_nv12(
 
                     (render, None, None, None)
                 }
-            } else if record_first_frame_nv12_phases {
+            } else if record_first_frame_nv12_phases || loop_stats::enabled() {
                 let render_start = Instant::now();
                 let render = frame_renderer
                     .render_nv12(
@@ -1495,6 +1613,8 @@ pub async fn render_video_to_channel_nv12(
                         &mut layers,
                     )
                     .await;
+                loop_stats::add(&loop_stats::RENDER, render_start.elapsed());
+                loop_stats::add(&loop_stats::JOIN, render_start.elapsed());
                 (
                     render,
                     Some(render_start.elapsed().as_millis() as u64),
@@ -1554,7 +1674,12 @@ pub async fn render_video_to_channel_nv12(
                         record_first_frame_nv12_phases = false;
                     }
                     last_successful_frame = Some(frame.clone_metadata_with_data());
+                    let send_started = Instant::now();
                     sender.send((frame, current_frame_number)).await?;
+                    loop_stats::add(&loop_stats::SEND, send_started.elapsed());
+                    if loop_stats::enabled() {
+                        loop_stats::FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
                     channel_frames_sent += 1;
                     if stop_after_frames_sent.is_some_and(|m| channel_frames_sent >= m) {
                         stopped_after_frame_limit = true;
@@ -1684,6 +1809,11 @@ pub async fn render_video_to_channel_nv12(
         elapsed_secs = format!("{:.2}", total_time.as_secs_f32()),
         "NV12 render complete"
     );
+
+    // Only after a clean run: a failed render may leave layer state behind.
+    if let Some(key) = layers_reuse_key {
+        return_pooled_layers(constants.device.clone(), key, layers);
+    }
 
     Ok(())
 }
@@ -2011,6 +2141,111 @@ pub struct RenderVideoConstants {
     frozen_recorded_cursors: Option<FrozenRecordedCursorAssets>,
 }
 
+/// Instance, adapter and device the way every renderer creates them. A
+/// long-lived process can make one up front and hand it to
+/// [`RenderVideoConstants::new_with_device`].
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn create_shared_device() -> Result<SharedWgpuDevice, RenderingError> {
+    let instance_phase = readiness::Phase::start("wgpu.instance");
+    let instance = create_wgpu_instance().await;
+    instance_phase.finish("returned");
+
+    let force_software_adapter = force_software_wgpu_adapter();
+    if force_software_adapter {
+        tracing::warn!("Forcing software WGPU adapter");
+    }
+
+    let adapter_phase = readiness::Phase::start("wgpu.adapter");
+    let hardware_adapter = if force_software_adapter {
+        None
+    } else {
+        instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                force_fallback_adapter: false,
+                compatible_surface: None,
+            })
+            .await
+            .ok()
+    };
+
+    let (adapter, is_software_adapter) = if let Some(adapter) = hardware_adapter {
+        let adapter_info = adapter.get_info();
+        let is_software = is_software_wgpu_adapter(&adapter_info);
+
+        if is_software {
+            tracing::warn!(
+                adapter_name = adapter_info.name,
+                adapter_backend = ?adapter_info.backend,
+                adapter_device_type = ?adapter_info.device_type,
+                "Hardware adapter behaves like a software renderer"
+            );
+        } else {
+            tracing::info!(
+                adapter_name = adapter_info.name,
+                adapter_backend = ?adapter_info.backend,
+                adapter_device_type = ?adapter_info.device_type,
+                "Using hardware GPU adapter"
+            );
+        }
+
+        (adapter, is_software)
+    } else {
+        tracing::warn!("No hardware GPU adapter found, attempting software fallback");
+        let software_adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::LowPower,
+                force_fallback_adapter: true,
+                compatible_surface: None,
+            })
+            .await
+            .map_err(|_| RenderingError::NoAdapter)?;
+
+        let adapter_info = software_adapter.get_info();
+        tracing::info!(
+            adapter_name = adapter_info.name,
+            adapter_backend = ?adapter_info.backend,
+            adapter_device_type = ?adapter_info.device_type,
+            "Using software adapter (CPU rendering - performance may be reduced)"
+        );
+        (software_adapter, true)
+    };
+
+    adapter_phase.finish(if is_software_adapter {
+        "software"
+    } else {
+        "hardware"
+    });
+
+    let mut required_features = wgpu::Features::empty();
+    if adapter.features().contains(wgpu::Features::PIPELINE_CACHE) {
+        required_features |= wgpu::Features::PIPELINE_CACHE;
+    }
+    if adapter
+        .features()
+        .contains(wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES)
+    {
+        required_features |= wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES;
+    }
+
+    let device_descriptor = wgpu::DeviceDescriptor {
+        label: Some("cap-rendering-device"),
+        required_features,
+        ..Default::default()
+    };
+
+    let device_phase = readiness::Phase::start("wgpu.device");
+    let (device, queue) = adapter.request_device(&device_descriptor).await?;
+    device_phase.finish("returned");
+    Ok(SharedWgpuDevice {
+        instance,
+        adapter,
+        device,
+        queue,
+        is_software_adapter,
+    })
+}
+
 pub struct SharedWgpuDevice {
     pub instance: wgpu::Instance,
     pub adapter: wgpu::Adapter,
@@ -2130,97 +2365,15 @@ impl RenderVideoConstants {
         meta: StudioRecordingMeta,
     ) -> Result<Self, RenderingError> {
         let constants_phase = readiness::Phase::start("constants.new");
-        let instance_phase = readiness::Phase::start("wgpu.instance");
-        let instance = create_wgpu_instance().await;
-        instance_phase.finish("returned");
-
-        let force_software_adapter = force_software_wgpu_adapter();
-        if force_software_adapter {
-            tracing::warn!("Forcing software WGPU adapter");
-        }
-
-        let adapter_phase = readiness::Phase::start("wgpu.adapter");
-        let hardware_adapter = if force_software_adapter {
-            None
-        } else {
-            instance
-                .request_adapter(&wgpu::RequestAdapterOptions {
-                    power_preference: wgpu::PowerPreference::HighPerformance,
-                    force_fallback_adapter: false,
-                    compatible_surface: None,
-                })
-                .await
-                .ok()
-        };
-
-        let (adapter, is_software_adapter, adapter_name) = if let Some(adapter) = hardware_adapter {
-            let adapter_info = adapter.get_info();
-            let is_software = is_software_wgpu_adapter(&adapter_info);
-
-            if is_software {
-                tracing::warn!(
-                    adapter_name = adapter_info.name,
-                    adapter_backend = ?adapter_info.backend,
-                    adapter_device_type = ?adapter_info.device_type,
-                    "Hardware adapter behaves like a software renderer"
-                );
-            } else {
-                tracing::info!(
-                    adapter_name = adapter_info.name,
-                    adapter_backend = ?adapter_info.backend,
-                    adapter_device_type = ?adapter_info.device_type,
-                    "Using hardware GPU adapter"
-                );
-            }
-
-            (adapter, is_software, adapter_info.name)
-        } else {
-            tracing::warn!("No hardware GPU adapter found, attempting software fallback");
-            let software_adapter = instance
-                .request_adapter(&wgpu::RequestAdapterOptions {
-                    power_preference: wgpu::PowerPreference::LowPower,
-                    force_fallback_adapter: true,
-                    compatible_surface: None,
-                })
-                .await
-                .map_err(|_| RenderingError::NoAdapter)?;
-
-            let adapter_info = software_adapter.get_info();
-            tracing::info!(
-                adapter_name = adapter_info.name,
-                adapter_backend = ?adapter_info.backend,
-                adapter_device_type = ?adapter_info.device_type,
-                "Using software adapter (CPU rendering - performance may be reduced)"
-            );
-            (software_adapter, true, adapter_info.name)
-        };
-
-        adapter_phase.finish(if is_software_adapter {
-            "software"
-        } else {
-            "hardware"
-        });
-
-        let mut required_features = wgpu::Features::empty();
-        if adapter.features().contains(wgpu::Features::PIPELINE_CACHE) {
-            required_features |= wgpu::Features::PIPELINE_CACHE;
-        }
-        if adapter
-            .features()
-            .contains(wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES)
-        {
-            required_features |= wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES;
-        }
-
-        let device_descriptor = wgpu::DeviceDescriptor {
-            label: Some("cap-rendering-device"),
-            required_features,
-            ..Default::default()
-        };
-
-        let device_phase = readiness::Phase::start("wgpu.device");
-        let (device, queue) = adapter.request_device(&device_descriptor).await?;
-        device_phase.finish("returned");
+        let shared = create_shared_device().await?;
+        let adapter_name = shared.adapter.get_info().name;
+        let SharedWgpuDevice {
+            instance,
+            adapter,
+            device,
+            queue,
+            is_software_adapter,
+        } = shared;
 
         let background_textures = Arc::new(BackgroundTextureCache::default());
 
@@ -5979,7 +6132,15 @@ impl<'a> FrameRenderer<'a> {
             }
             converter
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "linux")]
+        {
+            let mut converter = frame_pipeline::RgbaToNv12Converter::new(&self.constants.device);
+            if crate::linux_gpu::enabled() && !self.constants.is_software_adapter {
+                converter.enable_external_output();
+            }
+            converter
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         frame_pipeline::RgbaToNv12Converter::new(&self.constants.device)
     }
 
@@ -6665,6 +6826,8 @@ impl<'a> FrameRenderer<'a> {
             format: frame_pipeline::GpuOutputFormat::Nv12,
             #[cfg(target_os = "macos")]
             surface: None,
+            #[cfg(target_os = "linux")]
+            gpu: None,
         }
     }
 
@@ -6789,6 +6952,12 @@ pub struct RendererLayers {
 }
 
 impl RendererLayers {
+    fn reset_frame_state(&mut self) {
+        self.display.reset_frame_state();
+        self.camera.reset_frame_state();
+        self.camera_only.reset_frame_state();
+    }
+
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
         Self::new_with_options(device, queue, false)
     }
@@ -7390,26 +7559,54 @@ impl RendererLayers {
         self.camera_only.copy_to_texture(encoder);
         self.background.render_surface(encoder);
 
-        {
-            let mut pass = render_pass!(
-                session.current_texture_view(),
-                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
+        let blur_key = (blur_result_cache_enabled() && self.background_blur.blur_amount > 0.0)
+            .then(|| self.background.static_generation())
+            .flatten()
+            .map(|background_generation| {
+                let size = session.current_texture().size();
+                layers::BlurResultKey {
+                    background_generation,
+                    blur_amount_bits: self.background_blur.blur_amount.to_bits(),
+                    output_size: uniforms.output_size,
+                    texture_size: (size.width, size.height),
+                }
+            });
+        if let Some(cached) = blur_key.and_then(|key| self.background_blur.cached_result(key)) {
+            encoder.copy_texture_to_texture(
+                cached.as_image_copy(),
+                session.current_texture().as_image_copy(),
+                cached.size(),
             );
-            self.background.render(&mut pass);
-        }
-
-        // Separable gaussian: horizontal into the spare texture, vertical back
-        // into the current one, so the result ends up where it started and no
-        // swap is needed.
-        if self.background_blur.blur_amount > 0.0 {
+        } else {
             {
-                let mut pass = render_pass!(session.other_texture_view(), wgpu::LoadOp::Load);
-                self.background_blur
-                    .render_h(&mut pass, device, session.current_texture_view());
+                let mut pass = render_pass!(
+                    session.current_texture_view(),
+                    wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
+                );
+                self.background.render(&mut pass);
             }
-            let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
-            self.background_blur
-                .render_v(&mut pass, device, session.other_texture_view());
+
+            // Separable gaussian: horizontal into the spare texture, vertical
+            // back into the current one, so the result ends up where it
+            // started and no swap is needed.
+            if self.background_blur.blur_amount > 0.0 {
+                {
+                    let mut pass = render_pass!(session.other_texture_view(), wgpu::LoadOp::Load);
+                    self.background_blur.render_h(
+                        &mut pass,
+                        device,
+                        session.current_texture_view(),
+                    );
+                }
+                let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
+                self.background_blur
+                    .render_v(&mut pass, device, session.other_texture_view());
+            }
+
+            if let Some(key) = blur_key {
+                self.background_blur
+                    .store_result(device, encoder, key, session.current_texture());
+            }
         }
 
         // Runs before content layers so the screen grade covers the whole

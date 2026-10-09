@@ -1552,6 +1552,10 @@ export async function processVideo(
 			"-level:v",
 			targetH264Level.ffmpegValue,
 		);
+		if (metadata.videoCodec === "vp8" || metadata.videoCodec === "vp9") {
+			// Reordered B-frames can make MP4 duration exclude the tail of sparse browser captures.
+			ffmpegArgs.push("-bf", "0");
+		}
 	} else {
 		ffmpegArgs.push("-c:v", "copy");
 	}

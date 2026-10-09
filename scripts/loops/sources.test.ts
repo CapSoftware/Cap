@@ -19,7 +19,7 @@ describe.skipIf(!url)("profile source SQL preserves the previous reads", () => {
 	});
 
 	const userQuery =
-		"SELECT id,email,name,lastName,emailVerified,stripeCustomerId,stripeSubscriptionStatus,thirdPartyStripeSubscriptionId,created_at,defaultOrgId,marketingOrigin FROM users WHERE id=?";
+		"SELECT id,email,name,lastName,emailVerified,stripeCustomerId,stripeSubscriptionStatus,thirdPartyStripeSubscriptionId,inviteQuota,created_at,defaultOrgId,marketingOrigin FROM users WHERE id=?";
 
 	function fixtureRows(columns: string[], values: (string | null)[][]) {
 		return values.length
@@ -85,6 +85,7 @@ describe.skipIf(!url)("profile source SQL preserves the previous reads", () => {
 					null,
 					"active",
 					null,
+					"3",
 					"2026-09-12 01:00:00",
 					"organization",
 					"independent",
@@ -100,6 +101,7 @@ describe.skipIf(!url)("profile source SQL preserves the previous reads", () => {
 							"stripeCustomerId",
 							"stripeSubscriptionStatus",
 							"thirdPartyStripeSubscriptionId",
+							"inviteQuota",
 							"created_at",
 							"defaultOrgId",
 							"marketingOrigin",

@@ -7,7 +7,7 @@ These rules are enforced by CI (`cargo clippy -D warnings`, Biome). Fixing them 
 ### Zero-tolerance rules
 - **Default to no code comments. Add a comment only after solving a bug or working through a complex issue, and only when it captures non-obvious context that a future investigator or reviewer genuinely needs** — e.g. why the fix looks the way it does, the upstream/platform bug being worked around, a non-obvious invariant or trade-off chosen after investigation, or a link to the PR/issue that explains the decision. Bad cases that remain banned: narrating what the code does, restating types, JSDoc that paraphrases parameter names, "TODO: refactor" or "this should be cleaner" notes, and any comment that just describes the change you are currently making. When in doubt, prefer better naming/types over a comment. Applies to every language: Rust, TS, JS, Python, shell, SQL, TOML, etc.
 - **Never hand-edit generated files**: `**/tauri.ts`, `apps/desktop/src-tauri/gen/**`, `packages/ui-solid/src/auto-imports.d.ts`, Drizzle migration SQL under `packages/database/migrations/`. These are regenerated (e.g. `tauri.ts` only on debug desktop runs) but stay committed because CI typecheck and fresh clones depend on them; commit binding changes alongside the Rust change that produced them. For database schema changes, run `bun run db:generate` and commit the generated SQL, snapshot, and journal changes alongside the schema change. Generating and committing these artifacts is required; modifying generated output by hand is prohibited. Note: `apps/desktop/src/utils/queries.ts` is hand-written, not generated — edit it normally.
-- **Never start additional dev servers** (`bun run dev`, `bun run dev:web`, `bun run dev:desktop`, Docker services). Assume they are already running.
+- **Never start additional dev servers** (`bun run dev`, `bun run dev:web`, `bun run dev:desktop`, Docker services). Assume they are already running. The `/building` workflow may start a session-owned web server in its isolated worktree on an allocated port through its environment wrapper, or services inside its owned sandbox. This exception does not permit restarting shared services or launching a native app against the user's existing profile.
 
 ### Post-edit checks (run before you say "done")
 - Prefer scoped, fast checks over full workspace gates. Do not run long full-repo checks by default.
@@ -54,6 +54,7 @@ Additionally, `unused_must_use = "deny"` applies to all Rust code: every `Result
   - `packages/*` shared libs (e.g., `database`, `ui`, `ui-solid`, `utils`, `web-*`).
   - `crates/*` Rust media/recording/rendering/camera crates.
   - `scripts/*`, `infra/`, and `packages/local-docker/` for tooling and local services.
+- Marketing and lifecycle emails (copy, Loops journeys and campaigns, the email catalogue and voice guide) and their Loops tooling live in the private repo [CapSoftware/cap-marketing](https://github.com/CapSoftware/cap-marketing). View and edit them there. This repo keeps only the runtime profile sync in `packages/database/loops/` (with its tests and runners in `scripts/loops/`) and the transactional emails in `packages/database/emails/`.
 
 ## Build, Test, Develop
 - Install: `bun install`; setup: `bun run env-setup` then `bun run cap-setup`.

@@ -16,6 +16,7 @@ import {
 	createSsoCheckout,
 	getSsoBilling,
 	getSsoPrices,
+	listSsoInvoices,
 	syncSsoSubscription,
 } from "@/lib/sso/billing";
 import {
@@ -206,4 +207,11 @@ export async function manageOrganizationSsoBilling(
 ) {
 	await requireSsoOwner(organizationId);
 	return { url: await createSsoBillingPortal(organizationId) };
+}
+
+export async function getOrganizationSsoInvoices(
+	organizationId: Organisation.OrganisationId,
+) {
+	await requireSsoOwner(organizationId);
+	return listSsoInvoices(organizationId);
 }
