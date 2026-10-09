@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
 	} | null,
 	isCap: true,
 	licenses: vi.fn(),
+	allowRequest: vi.fn(),
 	documents: vi.fn(),
 	sso: vi.fn(),
 	rows: {} as Record<string, Record<string, unknown>[]>,
@@ -110,6 +111,9 @@ vi.mock("@/lib/billing/invoices", () => ({
 	listCustomerDocuments: mocks.documents,
 }));
 vi.mock("@/lib/sso/billing", () => ({ listSsoInvoices: mocks.sso }));
+vi.mock("@/lib/billing/request-limit", () => ({
+	allowInvoiceRequest: mocks.allowRequest,
+}));
 
 const sourceId = (key: string, user = "owner") =>
 	createHash("sha256").update(`${user}:${key}`).digest("hex");
@@ -121,6 +125,7 @@ beforeEach(() => {
 		stripeCustomerId: "cus_pro",
 	};
 	mocks.isCap = true;
+	mocks.allowRequest.mockReturnValue(true);
 	mocks.licenses.mockReset().mockResolvedValue(["cus_license", "cus_pro"]);
 	mocks.documents.mockReset().mockResolvedValue({ documents: [], next: null });
 	mocks.sso.mockReset().mockResolvedValue({ invoices: [], hasMore: false });
@@ -147,6 +152,17 @@ beforeEach(() => {
 	};
 });
 describe("invoice authorization", () => {
+	it("limits both history and pagination before source discovery", async () => {
+		mocks.allowRequest.mockReturnValue(false);
+		await expect(getInvoiceHistory()).rejects.toThrow(
+			"Too many invoice requests",
+		);
+		await expect(getInvoiceHistoryPage(sourceId("cus_pro"))).rejects.toThrow(
+			"Too many invoice requests",
+		);
+		expect(mocks.licenses).not.toHaveBeenCalled();
+		expect(mocks.documents).not.toHaveBeenCalled();
+	});
 	it("combines owned sources, deduplicates customers and limits SSO to owned organizations", async () => {
 		const result = await getInvoiceHistory();
 		expect(result.sections).toHaveLength(4);

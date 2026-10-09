@@ -57,4 +57,33 @@ describe("license invoice database reader", () => {
 		expect(mocks.destroy).toHaveBeenCalledOnce();
 		expect(vi.getTimerCount()).toBe(0);
 	});
+	it("caps concurrent connections before opening another socket", async () => {
+		mocks.execute.mockImplementation(() => new Promise(() => {}));
+		const requests = Array.from({ length: 4 }, () =>
+			expect(getLicenseCustomerIds("owner@example.com")).rejects.toThrow(
+				"timed out",
+			),
+		);
+		await expect(getLicenseCustomerIds("other@example.com")).rejects.toThrow(
+			"busy",
+		);
+		expect(mocks.connect).toHaveBeenCalledTimes(4);
+		await vi.advanceTimersByTimeAsync(5000);
+		await Promise.all(requests);
+		mocks.execute.mockResolvedValue([[{ stripeId: "cus_license" }], []]);
+		await expect(getLicenseCustomerIds("owner@example.com")).resolves.toEqual([
+			"cus_license",
+		]);
+		expect(mocks.destroy).toHaveBeenCalledTimes(5);
+	});
+	it("releases its concurrency slot when connection setup fails", async () => {
+		mocks.connect.mockRejectedValueOnce(new Error("Connection failed"));
+		await expect(getLicenseCustomerIds("owner@example.com")).rejects.toThrow(
+			"Connection failed",
+		);
+		expect(mocks.destroy).not.toHaveBeenCalled();
+		await expect(getLicenseCustomerIds("owner@example.com")).resolves.toEqual([
+			"cus_license",
+		]);
+	});
 });

@@ -20,6 +20,7 @@ import {
 	type InvoicePage,
 	listCustomerDocuments,
 } from "@/lib/billing/invoices";
+import { allowInvoiceRequest } from "@/lib/billing/request-limit";
 import { hasVerifiedProviderEmail } from "@/lib/billing/verified-email";
 import { listSsoInvoices } from "@/lib/sso/billing";
 
@@ -56,6 +57,8 @@ const cursorSchema = z
 async function requireBillingUser() {
 	const user = await getCurrentUser();
 	if (!user || !buildEnv.NEXT_PUBLIC_IS_CAP) throw new Error("Unauthorized");
+	if (!allowInvoiceRequest(user.id))
+		throw new Error("Too many invoice requests. Try again in a minute.");
 	return user;
 }
 
