@@ -313,11 +313,31 @@ async fn create_wayland_source_config(
 ) -> anyhow::Result<(VideoInfo, WaylandInputConfig)> {
     let portal =
         open_wayland_portal(&config.config.linux_source, config.config.show_cursor).await?;
+    if matches!(config.config.linux_source, LinuxCaptureSource::Area) {
+        let displays = Display::list();
+        let selected = displays
+            .iter()
+            .find(|display| display.id() == config.config.display)
+            .and_then(|display| display.raw_handle().logical_bounds())
+            .ok_or_else(|| anyhow!("Selected Wayland display is no longer available"))?;
+        if !wayland_area_matches_display(
+            portal.stream.position(),
+            portal.stream.size(),
+            selected,
+            displays.len() == 1,
+        ) {
+            bail!("Select the same display in the screen-sharing dialog as the recording area");
+        }
+    }
     let crop_bounds = match &config.config.linux_source {
         LinuxCaptureSource::Area => config.config.crop_bounds,
         LinuxCaptureSource::Display | LinuxCaptureSource::Window { .. } => None,
     };
-    let video_info = wayland_video_info(&portal.stream, config.video_info, crop_bounds);
+    let video_info = wayland_video_info(
+        portal.stream.size(),
+        config.video_info,
+        &config.config.linux_source,
+    );
 
     Ok((
         video_info,
@@ -405,16 +425,31 @@ fn wayland_source_type(source: &LinuxCaptureSource) -> ashpd::enumflags2::BitFla
     }
 }
 
+fn wayland_area_matches_display(
+    stream_position: Option<(i32, i32)>,
+    stream_size: Option<(i32, i32)>,
+    selected: LogicalBounds,
+    only_display: bool,
+) -> bool {
+    stream_position.map_or(only_display, |(x, y)| {
+        f64::from(x) == selected.position().x() && f64::from(y) == selected.position().y()
+    }) && stream_size.map_or(only_display, |(width, height)| {
+        f64::from(width) == selected.size().width() && f64::from(height) == selected.size().height()
+    })
+}
+
 fn wayland_video_info(
-    stream: &PortalStream,
+    stream_size: Option<(i32, i32)>,
     fallback: VideoInfo,
-    crop_bounds: Option<CropBounds>,
+    source: &LinuxCaptureSource,
 ) -> VideoInfo {
-    if crop_bounds.is_some() {
+    // Portal sizes use compositor coordinates; configured monitor sizes already
+    // include physical scaling and the requested capture resolution limit.
+    if !matches!(source, LinuxCaptureSource::Window { .. }) {
         return fallback;
     }
 
-    let Some((width, height)) = stream.size() else {
+    let Some((width, height)) = stream_size else {
         return fallback;
     };
     if width <= 0 || height <= 0 {
@@ -2808,7 +2843,76 @@ mod system_audio_tests {
 
 #[cfg(test)]
 mod pipewire_frame_tests {
-    use super::{FrameScaler, VideoInfo, prefers_wayland_environment, prepare_pipewire_frame};
+    use super::{
+        FrameScaler, LinuxCaptureSource, VideoInfo, prefers_wayland_environment,
+        prepare_pipewire_frame, wayland_area_matches_display, wayland_video_info,
+    };
+
+    #[test]
+    fn wayland_area_requires_the_selected_monitor_in_the_portal() {
+        use scap_targets::bounds::{LogicalBounds, LogicalPosition, LogicalSize};
+
+        let selected = LogicalBounds::new(
+            LogicalPosition::new(960.0, 0.0),
+            LogicalSize::new(960.0, 540.0),
+        );
+        assert!(wayland_area_matches_display(
+            Some((960, 0)),
+            Some((960, 540)),
+            selected,
+            false,
+        ));
+        assert!(!wayland_area_matches_display(
+            Some((0, 0)),
+            Some((960, 540)),
+            selected,
+            false,
+        ));
+        assert!(!wayland_area_matches_display(
+            None,
+            Some((960, 540)),
+            selected,
+            false,
+        ));
+        assert!(!wayland_area_matches_display(
+            Some((960, 0)),
+            Some((1920, 1080)),
+            selected,
+            false,
+        ));
+        assert!(wayland_area_matches_display(None, None, selected, true));
+    }
+
+    #[test]
+    fn portal_logical_size_does_not_reduce_physical_monitor_capture() {
+        let output = VideoInfo::from_raw_ffmpeg(ffmpeg::format::Pixel::BGRZ, 1920, 1080, 60);
+        let result = wayland_video_info(Some((960, 540)), output, &LinuxCaptureSource::Display);
+        assert_eq!((result.width, result.height), (1920, 1080));
+    }
+
+    #[test]
+    fn portal_size_does_not_override_capture_limits_or_area_dimensions() {
+        for (source, width, height) in [
+            (LinuxCaptureSource::Display, 1280, 720),
+            (LinuxCaptureSource::Area, 800, 400),
+        ] {
+            let output = VideoInfo::from_raw_ffmpeg(ffmpeg::format::Pixel::BGRZ, width, height, 60);
+            let result = wayland_video_info(Some((1920, 1080)), output, &source);
+            assert_eq!((result.width, result.height), (width, height));
+        }
+    }
+
+    #[test]
+    fn portal_window_capture_keeps_its_selected_surface_dimensions() {
+        let output = VideoInfo::from_raw_ffmpeg(ffmpeg::format::Pixel::BGRZ, 1920, 1080, 60);
+        let source = LinuxCaptureSource::Window {
+            id: "0".parse().unwrap(),
+        };
+        let result = wayland_video_info(Some((641, 481)), output, &source);
+        assert_eq!((result.width, result.height), (640, 480));
+        let result = wayland_video_info(None, output, &source);
+        assert_eq!((result.width, result.height), (1920, 1080));
+    }
 
     #[test]
     fn active_wayland_sessions_use_the_portal_even_with_xwayland() {

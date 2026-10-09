@@ -16,7 +16,7 @@
 //!    Imports are cached per ring slot (keyed by pixel-buffer pointer +
 //!    ring generation), so the steady state creates no textures.
 //! 3. `BlurProcessor::process_into_encoder` runs the segmentation mask +
-//!    separable blur + composite, with the preview's 150ms inference interval
+//!    separable blur + composite, with the preview's 33ms inference interval
 //!    (`CAMERA_PREVIEW_BLUR_INFERENCE_INTERVAL`, `camera.rs:50`).
 //! 4. `cap_rendering::RgbaToBgraSurfaceConverter` blits the RGBA output into
 //!    a BGRA IOSurface-backed CVPixelBuffer from its own ring, and
@@ -25,7 +25,7 @@
 //!
 //! Everything runs on one dedicated `camera-blur` thread (the Tauri preview
 //! renders on a dedicated thread too, `camera.rs:466-490`), so the ~10ms
-//! CoreML/CPU segmentation inference every 150ms never blocks the UI thread.
+//! CoreML/CPU segmentation inference every 33ms never blocks the UI thread.
 //! The channel back to the window is how "what you see is what records" holds:
 //! this is the same `BlurProcessor` the editor/export camera layer runs
 //! (`cap-rendering/src/lib.rs:5742`), fed by the same `BackgroundBlurMode`
@@ -57,7 +57,7 @@ use cidre::{arc, cv};
 pub const BLUR_MAX_DIMS: (usize, usize) = (640, 360);
 
 /// `CAMERA_PREVIEW_BLUR_INFERENCE_INTERVAL` (`camera.rs:50`).
-const BLUR_INFERENCE_INTERVAL: Duration = Duration::from_millis(150);
+const BLUR_INFERENCE_INTERVAL: Duration = Duration::from_millis(33);
 
 /// `LOW_SPEC_PREVIEW_RAM_THRESHOLD_BYTES` (`camera.rs:66`): machines at or
 /// under 8GB never spin up the ONNX/wgpu blur processor -- the heaviest cost
@@ -113,6 +113,8 @@ pub struct BlurJob {
 }
 
 pub struct BlurOutput {
+    pub mode: cap_camera_effects::BlurMode,
+    pub cutout: Option<std::sync::Arc<gpui::RenderImage>>,
     /// Blurred BGRA IOSurface pixel buffer, GPU work complete.
     pub buffer: SendPixelBuf,
     pub width: u32,
@@ -275,9 +277,8 @@ impl Worker {
             .context("blur output missing")?;
 
         self.frame_number = self.frame_number.wrapping_add(1);
-        let pending = self
-            .converter
-            .encode(
+        let pending = runtime
+            .block_on(self.converter.encode(
                 &self.device,
                 &mut encoder,
                 output,
@@ -285,14 +286,28 @@ impl Worker {
                 height,
                 self.frame_number,
                 30,
-            )
+            ))
             .map_err(|error| anyhow!("{error}"))?;
         self.queue.submit(std::iter::once(encoder.finish()));
 
         let frame = runtime
             .block_on(pending.wait(&self.device, &self.queue))
             .map_err(|error| anyhow!("{error}"))?;
+        let cutout = if mode == cap_camera_effects::BlurMode::Remove {
+            use core_foundation::base::TCFType as _;
+            use core_video::pixel_buffer::{CVPixelBuffer, CVPixelBufferRef};
+            let raw = &*frame.pixel_buffer as *const cv::PixelBuf as CVPixelBufferRef;
+            let buffer = unsafe { CVPixelBuffer::wrap_under_get_rule(raw) };
+            Some(
+                crate::camera_window::snapshot_preview(&buffer)
+                    .context("cutout preview pixels unavailable")?,
+            )
+        } else {
+            None
+        };
         Ok(BlurOutput {
+            mode,
+            cutout,
             buffer: SendPixelBuf(frame.pixel_buffer),
             width: frame.width,
             height: frame.height,
@@ -332,5 +347,96 @@ impl Worker {
         .map_err(|error| anyhow!("{error}"))?;
         self.imported.push((key, texture));
         Ok(&self.imported.last().expect("just pushed").1)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cap_camera_effects::BlurMode;
+    use cidre::cf;
+    use core_foundation::base::TCFType as _;
+    use core_video::pixel_buffer::{CVPixelBuffer, CVPixelBufferRef};
+    use std::time::Instant;
+
+    #[test]
+    #[ignore = "requires CAP_CAMERA_EFFECT_TEST_FRAME containing a 640x360 RGBA webcam frame"]
+    fn native_cutout_preserves_alpha_through_iosurface_and_preview_image() {
+        let pixels = std::fs::read(std::env::var("CAP_CAMERA_EFFECT_TEST_FRAME").unwrap()).unwrap();
+        let (width, height) = BLUR_MAX_DIMS;
+        assert_eq!(pixels.len(), width * height * 4);
+        let properties = cf::Dictionary::new();
+        let attributes = cf::Dictionary::with_keys_values(
+            &[
+                cv::pixel_buffer::keys::io_surf_props().as_ref(),
+                cv::pixel_buffer::keys::metal_compatibility().as_ref(),
+            ],
+            &[properties.as_ref(), cf::Boolean::value_true().as_ref()],
+        )
+        .unwrap();
+        let buffer =
+            cv::PixelBuf::new(width, height, cv::PixelFormat::_32_BGRA, Some(&attributes)).unwrap();
+        let raw = &*buffer as *const cv::PixelBuf as CVPixelBufferRef;
+        let wrapped = unsafe { CVPixelBuffer::wrap_under_get_rule(raw) };
+        assert_eq!(wrapped.lock_base_address(0), 0);
+        let stride = wrapped.get_bytes_per_row();
+        let destination = unsafe {
+            std::slice::from_raw_parts_mut(wrapped.get_base_address().cast::<u8>(), stride * height)
+        };
+        for (source, target) in pixels
+            .chunks_exact(width * 4)
+            .zip(destination.chunks_exact_mut(stride))
+        {
+            for (source, target) in source.chunks_exact(4).zip(target.chunks_exact_mut(4)) {
+                target.copy_from_slice(&[source[2], source[1], source[0], source[3]]);
+            }
+        }
+        assert_eq!(wrapped.unlock_base_address(0), 0);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        let (device, queue) = shared_device(&runtime).unwrap();
+        let mut worker = Worker::new(device, queue).unwrap();
+        for mode in [
+            BlurMode::Remove,
+            BlurMode::Heavy,
+            BlurMode::Light,
+            BlurMode::Remove,
+        ] {
+            let mut timings = Vec::new();
+            for _ in 0..30 {
+                let start = Instant::now();
+                let output = worker
+                    .process(
+                        &runtime,
+                        BlurJob {
+                            buffer: SendPixelBuf(buffer.clone()),
+                            width: width as u32,
+                            height: height as u32,
+                            ring_generation: 1,
+                            mode,
+                        },
+                    )
+                    .unwrap();
+                timings.push(start.elapsed().as_secs_f64() * 1000.0);
+                assert_eq!(output.mode, mode);
+                if mode == BlurMode::Remove {
+                    let image = output.cutout.unwrap();
+                    let bytes = image.as_bytes(0).unwrap();
+                    assert!(bytes.chunks_exact(4).any(|pixel| pixel[3] == 0));
+                    assert!(bytes.chunks_exact(4).any(|pixel| pixel[3] == 255));
+                } else {
+                    assert!(output.cutout.is_none());
+                }
+                std::thread::sleep(Duration::from_millis(33).saturating_sub(start.elapsed()));
+            }
+            timings.sort_by(f64::total_cmp);
+            eprintln!(
+                "native {mode:?} preview worker: p50={:.2}ms p95={:.2}ms",
+                timings[15], timings[28]
+            );
+        }
+        assert_eq!(worker.imported.len(), 1);
     }
 }

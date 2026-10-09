@@ -1,4 +1,5 @@
 pub mod benchmark;
+pub mod camera_placement;
 mod capture_pipeline;
 pub mod cursor;
 pub mod defaults;
@@ -17,6 +18,7 @@ pub mod sources;
 pub mod studio_recording;
 pub mod sync_calibration;
 pub mod track_heal;
+pub mod upload_preparation;
 pub mod upload_resume;
 pub mod upload_verification;
 
@@ -87,6 +89,9 @@ pub struct RecordingBaseInputs {
     pub shareable_content: Option<SendableShareableContent>,
     #[cfg(target_os = "macos")]
     pub excluded_windows: Vec<scap_targets::WindowId>,
+    /// Present when the pipeline is primed ahead of the start cue; capture is
+    /// held back until it is armed.
+    pub start_gate: Option<RecordingStartGate>,
 }
 
 #[cfg(target_os = "macos")]

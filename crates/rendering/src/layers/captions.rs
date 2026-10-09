@@ -295,6 +295,7 @@ impl CaptionsLayer {
         });
 
         let font_system = super::new_font_system();
+        let glyph_phase = crate::readiness::Phase::start("glyph.captions.gpu_resources");
         let swash_cache = SwashCache::new();
         let cache = Cache::new(device);
         let viewport = Viewport::new(device, &cache);
@@ -305,6 +306,7 @@ impl CaptionsLayer {
             wgpu::MultisampleState::default(),
             None,
         );
+        glyph_phase.finish("returned");
 
         let metrics = Metrics::new(24.0, 24.0 * 1.2);
         let text_buffer = Buffer::new_empty(metrics);

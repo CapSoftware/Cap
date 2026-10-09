@@ -1132,8 +1132,8 @@ export const AgentUploadCompleteResponse = Schema.Struct({
 
 export const AgentLoomImportInput = Schema.Struct({
 	loomUrl: Schema.String,
-	ownerEmail: Schema.optional(Schema.String),
-	spaceName: Schema.optional(Schema.String),
+	ownerEmail: Schema.optional(Schema.NullOr(Schema.String)),
+	spaceName: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
 export const AgentProfileUpdateInput = Schema.Struct({
@@ -1229,7 +1229,7 @@ export const AgentSpaceMemberUpdateInput = Schema.Struct({
 export const AgentMoveCapInput = Schema.Struct({
 	container: Schema.Literal("personal", "organization", "space"),
 	organizationId: OrganisationId,
-	spaceId: Schema.optional(SpaceIdOrOrganisationId),
+	spaceId: Schema.optional(Schema.NullOr(SpaceIdOrOrganisationId)),
 	folderId: Schema.NullOr(FolderId),
 });
 

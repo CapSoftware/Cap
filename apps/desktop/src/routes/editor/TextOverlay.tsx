@@ -18,6 +18,7 @@ import { produce } from "solid-js/store";
 import type { TextSegment as TauriTextSegment } from "~/utils/tauri";
 import { useCanvasSnapTargets } from "./CanvasElementsOverlay";
 import { FPS, useEditorContext } from "./context";
+import { createOverlaySegments } from "./overlay-segments";
 import { SNAP_PX, snapMovingRect } from "./snapping";
 import {
 	TEXT_FONT_SIZE_MAX,
@@ -26,6 +27,7 @@ import {
 	type TextAlign,
 	type TextSegment,
 } from "./text";
+import { getOverlayZIndex } from "./timelineTracks";
 
 // Figma-style text manipulation on the canvas: the selection box always hugs
 // the rendered glyphs (a hidden measure div mirrors the renderer's font
@@ -53,13 +55,10 @@ export function TextOverlay(props: TextOverlayProps) {
 	const currentAbsoluteTime = () =>
 		editorState.previewTime ?? editorState.playbackTime ?? 0;
 
-	const visibleTextSegments = createMemo(() => {
-		const segments = project.timeline?.textSegments ?? [];
-		const time = currentAbsoluteTime();
-		return segments
-			.map((segment, index) => ({ segment, index }))
-			.filter(({ segment }) => time >= segment.start && time < segment.end);
-	});
+	const { visible: visibleTextSegments } = createOverlaySegments(
+		() => project.timeline?.textSegments ?? [],
+		currentAbsoluteTime,
+	);
 
 	const selectedTextIndex = createMemo(() => {
 		const selection = editorState.timeline.selection;
@@ -164,16 +163,6 @@ export function TextOverlay(props: TextOverlayProps) {
 		});
 	};
 
-	const handleBackgroundClick = (e: MouseEvent) => {
-		if (e.target === e.currentTarget && selectedTextIndex() !== null) {
-			e.preventDefault();
-			e.stopPropagation();
-			setEditorState("timeline", "selection", null);
-		}
-	};
-
-	const hasTextSelection = () => selectedTextIndex() !== null;
-
 	// A pending inline-edit request (set when the Add-track picker creates a
 	// text segment) only survives while that segment stays selected; the
 	// segment's overlay consumes it on mount.
@@ -231,17 +220,14 @@ export function TextOverlay(props: TextOverlayProps) {
 	});
 
 	return (
-		<div
-			class="absolute inset-0"
-			classList={{ "pointer-events-none": !hasTextSelection() }}
-			onMouseDown={handleBackgroundClick}
-		>
+		<div class="absolute inset-0 pointer-events-none">
 			<For each={visibleTextSegments()}>
 				{({ segment, index }) => (
 					<TextSegmentOverlay
 						size={props.size}
 						segment={segment}
 						index={index}
+						zIndex={getOverlayZIndex(project, "text", segment.track ?? 0)}
 						isSelected={selectedTextIndex() === index}
 						onSelect={() => handleSelectSegment(index)}
 						updateSegment={(fn) => updateSegmentByIndex(index, fn)}
@@ -264,6 +250,7 @@ type SegmentWithDefaults = {
 	fontSize: number;
 	fontWeight: number;
 	italic: boolean;
+	uppercase: boolean;
 	color: string;
 	backgroundColor: string | null;
 	align: TextAlign;
@@ -278,7 +265,11 @@ function normalizeSegment(segment: TauriTextSegment): SegmentWithDefaults {
 		Partial<
 			Pick<
 				TextSegment,
-				"align" | "backgroundColor" | "letterSpacing" | "lineHeight"
+				| "align"
+				| "backgroundColor"
+				| "letterSpacing"
+				| "lineHeight"
+				| "uppercase"
 			>
 		>;
 	return {
@@ -292,6 +283,7 @@ function normalizeSegment(segment: TauriTextSegment): SegmentWithDefaults {
 		fontSize: segment.fontSize ?? 48,
 		fontWeight: segment.fontWeight ?? 700,
 		italic: segment.italic ?? false,
+		uppercase: styled.uppercase ?? false,
 		color: segment.color ?? "#ffffff",
 		backgroundColor: styled.backgroundColor ?? null,
 		align: styled.align ?? "center",
@@ -309,6 +301,7 @@ function TextSegmentOverlay(props: {
 	size: { width: number; height: number };
 	segment: TauriTextSegment;
 	index: number;
+	zIndex: number;
 	isSelected: boolean;
 	onSelect: () => void;
 	updateSegment: (fn: (segment: TextSegment) => void) => void;
@@ -549,7 +542,7 @@ function TextSegmentOverlay(props: {
 	const createResizeHandler = (dirX: 1 | 0 | -1, dirY: 1 | 0 | -1) =>
 		props.createMouseDownDrag(
 			() => {
-				if (editing()) return null;
+				if (!props.isSelected) props.onSelect();
 				setResizing(true);
 				const seg = segment();
 				const corner = {
@@ -739,6 +732,7 @@ function TextSegmentOverlay(props: {
 		"font-style": segment().italic ? "italic" : "normal",
 		"line-height": segment().lineHeight,
 		"letter-spacing": `${letterSpacingPx()}px`,
+		"text-transform": segment().uppercase ? "uppercase" : "none",
 	});
 
 	return (
@@ -770,6 +764,7 @@ function TextSegmentOverlay(props: {
 					"cursor-text": editing(),
 				}}
 				style={{
+					"z-index": props.zIndex,
 					left: `${rect().left}px`,
 					top: `${rect().top}px`,
 					width: `${rect().width}px`,
@@ -815,6 +810,7 @@ function TextSegmentOverlay(props: {
 				</Show>
 				<div
 					class="absolute inset-0 border-2 transition-colors rounded-md pointer-events-none"
+					style={{ opacity: "var(--preview-controls-opacity, 1)" }}
 					classList={{
 						"border-blue-9": props.isSelected,
 						"border-blue-6": !props.isSelected && hovered(),
@@ -824,7 +820,10 @@ function TextSegmentOverlay(props: {
 				<Show when={(props.isSelected || hovered()) && !editing()}>
 					<div
 						class="absolute px-1.5 py-0.5 text-[11px] font-medium text-white bg-blue-9 rounded pointer-events-none select-none"
-						style={labelStyle()}
+						style={{
+							...labelStyle(),
+							opacity: "var(--preview-controls-opacity, 1)",
+						}}
 					>
 						Text
 					</div>
@@ -858,7 +857,10 @@ function TextSegmentOverlay(props: {
 						onBlur={() => endEditing?.()}
 					/>
 				</Show>
-				<Show when={(props.isSelected || hovered()) && !editing()}>
+				{/* The handles stay up while the inline editor is open (a freshly
+				    added segment mounts editing), and the drag's preventDefault
+				    keeps the textarea focused, so a resize never ends the edit. */}
+				<Show when={props.isSelected || hovered()}>
 					<For each={edges}>
 						{(edge) => (
 							<div
@@ -882,7 +884,10 @@ function TextSegmentOverlay(props: {
 								)}
 								onMouseDown={createResizeHandler(corner.dirX, corner.dirY)}
 							>
-								<span class="w-3 h-3 rounded-full border border-white shadow-xs pointer-events-none bg-blue-9 transition-transform group-hover/handle:scale-125" />
+								<span
+									class="w-3 h-3 rounded-full border border-white shadow-xs pointer-events-none bg-blue-9 transition-transform group-hover/handle:scale-125"
+									style={{ opacity: "var(--preview-controls-opacity, 1)" }}
+								/>
 							</div>
 						)}
 					</For>

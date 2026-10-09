@@ -20,6 +20,7 @@ type ProbeOutcome = ProbeFailure | ProbeResult;
 
 type ResolvePlaybackSourceInput = {
 	videoSrc: string;
+	initialUrl?: string | null;
 	rawFallbackSrc?: string;
 	enableCrossOrigin?: boolean;
 	fetchImpl?: typeof fetch;
@@ -57,8 +58,9 @@ async function probePlaybackSource(
 	url: string,
 	fetchImpl: typeof fetch,
 	now: () => number,
+	cacheBust = true,
 ): Promise<ProbeOutcome> {
-	const requestUrl = appendCacheBust(url, now());
+	const requestUrl = cacheBust ? appendCacheBust(url, now()) : url;
 
 	try {
 		const response = await fetchImpl(requestUrl, {
@@ -131,6 +133,7 @@ export function shouldFallbackToRawPlaybackSource(
 
 export async function resolvePlaybackSource({
 	videoSrc,
+	initialUrl,
 	rawFallbackSrc,
 	enableCrossOrigin = false,
 	fetchImpl = fetch,
@@ -169,6 +172,31 @@ export async function resolvePlaybackSource({
 	if (preferredSource === "raw") {
 		const rawSource = await resolveRaw();
 		if (rawSource) return rawSource;
+	}
+	if (preferredSource === "mp4" && initialUrl) {
+		const initialResult = await probePlaybackSource(
+			initialUrl,
+			fetchImpl,
+			now,
+			false,
+		);
+		if (isProbeResult(initialResult)) {
+			return {
+				url: initialResult.url,
+				type: "mp4",
+				supportsCrossOrigin: enableCrossOrigin,
+			};
+		}
+		if (
+			initialResult.reason === "network-error" &&
+			canUseUnprobedSource(videoSrc)
+		) {
+			return {
+				url: appendCacheBust(videoSrc, now()),
+				type: "mp4",
+				supportsCrossOrigin: false,
+			};
+		}
 	}
 
 	const mp4Result = await probePlaybackSource(videoSrc, fetchImpl, now);

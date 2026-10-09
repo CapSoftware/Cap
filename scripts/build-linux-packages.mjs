@@ -44,8 +44,8 @@ if (!version) throw new Error("Desktop version is missing from Cargo metadata");
 const bundles = supportedLinuxBundles(version).join(",");
 
 runCommand(
-	"pnpm",
-	["build:tauri", "--target", target, "--bundles", bundles, ...args],
+	"bun",
+	["run", "build:tauri", "--target", target, "--bundles", bundles, ...args],
 	{
 		cwd: desktopDirectory,
 		env: { ...process.env, RUST_TARGET_TRIPLE: target },

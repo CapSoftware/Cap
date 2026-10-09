@@ -1,9 +1,11 @@
 import { nanoId } from "@cap/database/helpers";
 import * as Db from "@cap/database/schema";
+import { getNewVideoPublic } from "@cap/database/video-sharing-default";
 import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
 import { dub } from "@cap/utils";
 import {
 	CurrentUser,
+	DatabaseError,
 	type Folder,
 	Policy,
 	Storage as StorageDomain,
@@ -17,6 +19,7 @@ import { Database } from "../Database.ts";
 import { Storage as StorageService } from "../Storage/index.ts";
 import {
 	getPublishedRecordingCopyKeys,
+	getPublishedRecordingThumbnailKey,
 	isInternalRecordingKey,
 } from "../Storage/recording-output.ts";
 import { Tinybird } from "../Tinybird/index.ts";
@@ -418,7 +421,14 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 							name: video.name,
 							public: video.public,
 							source:
-								publishedKeys.size > 0 ? { type: "desktopMP4" } : video.source,
+								publishedKeys.size > 0
+									? {
+											type:
+												video.source.type === "webMP4"
+													? "webMP4"
+													: "desktopMP4",
+										}
+									: video.source,
 							metadata: Option.map(video.metadata, (metadata) => {
 								const copied = { ...metadata };
 								delete copied.desktopRecordingUpload;
@@ -617,7 +627,10 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 						ownerId: user.id,
 						orgId: input.orgId,
 						name: `Cap Recording - ${formattedDate}`,
-						public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
+						public: yield* Effect.tryPromise({
+							try: () => getNewVideoPublic(input.orgId),
+							catch: (cause) => new DatabaseError({ cause }),
+						}),
 						source: { type: "webMP4" },
 						bucketId,
 						storageIntegrationId,
@@ -794,6 +807,12 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 				const [video] = maybeVideo.value;
 
 				const [bucket] = yield* storage.getAccessForVideo(video);
+				const publishedThumbnail = getPublishedRecordingThumbnailKey(video);
+				if (publishedThumbnail) {
+					return Option.some(
+						yield* bucket.getSignedObjectUrl(publishedThumbnail),
+					);
+				}
 				const listResponse = yield* bucket.listObjects({
 					prefix: `${video.ownerId}/${video.id}/`,
 				});

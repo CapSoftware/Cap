@@ -165,12 +165,14 @@ export async function GET(request: NextRequest) {
 			isInternalRecordingKey(key) &&
 			!(tokenPayload?.videoId === videoIdParam && tokenPayload.key === key) &&
 			!(
-				video.source.type === "desktopMP4" &&
-				[
-					key === video.source.outputKey,
-					key === video.source.thumbnailKey,
-					key === video.source.previewKey,
-				].some(Boolean)
+				key === Video.getAudioLevelOutputKey(video) ||
+				((video.source.type === "desktopMP4" ||
+					video.source.type === "webMP4") &&
+					[
+						key === video.source.outputKey,
+						key === video.source.thumbnailKey,
+						key === video.source.previewKey,
+					].some(Boolean))
 			)
 		) {
 			return yield* Effect.fail("not-found" as const);

@@ -1,3 +1,4 @@
+use crate::RecordingStartGate;
 use cap_cursor_capture::CursorCropBounds;
 use cap_cursor_info::CursorShape;
 use cap_project::{
@@ -292,6 +293,18 @@ fn keycode_to_string(key: &device_query::Keycode) -> (String, String) {
     (display.to_string(), code.to_string())
 }
 
+/// Time zero for cursor, click and key events: the start gate's arm point
+/// when the pipeline was primed ahead of the recording, else the pipeline
+/// epoch. `None` while a primed recording is still waiting for its cue.
+fn input_epoch(start_gate: Option<&RecordingStartGate>, start_time: Timestamps) -> Option<Instant> {
+    match start_gate {
+        Some(gate) => gate
+            .armed_instant()
+            .map(|armed| armed.max(start_time.instant())),
+        None => Some(start_time.instant()),
+    }
+}
+
 #[tracing::instrument(name = "cursor", skip_all)]
 pub fn spawn_cursor_recorder(
     target: CursorCaptureTarget,
@@ -299,6 +312,7 @@ pub fn spawn_cursor_recorder(
     prev_cursors: Cursors,
     next_cursor_id: u32,
     start_time: Timestamps,
+    start_gate: Option<RecordingStartGate>,
     incremental_outputs: IncrementalCaptureOutputs,
 ) -> CursorActor {
     #[cfg(target_os = "linux")]
@@ -365,6 +379,7 @@ pub fn spawn_cursor_recorder(
         let mut last_flush = Instant::now();
         let flush_interval = Duration::from_secs(CURSOR_FLUSH_INTERVAL_SECS);
         let mut last_cursor_id: Option<String> = None;
+        let mut awaiting_start = start_gate.is_some();
 
         loop {
             if stop_token_child.is_cancelled() {
@@ -378,11 +393,19 @@ pub fn spawn_cursor_recorder(
                 break;
             }
 
-            let elapsed = start_time.instant().elapsed().as_secs_f64() * 1000.0;
+            let Some(epoch) = input_epoch(start_gate.as_ref(), start_time) else {
+                last_position = cap_cursor_capture::RawCursorPosition::get();
+                last_mouse_state = device_state.get_mouse();
+                last_keys = device_state.get_keys();
+                continue;
+            };
+            let elapsed = epoch.elapsed().as_secs_f64() * 1000.0;
             let mouse_state = device_state.get_mouse();
 
             let position = cap_cursor_capture::RawCursorPosition::get();
-            let position_changed = position != last_position;
+            // The first sample after the gate opens is always recorded so the
+            // cursor has a known position at the recording's time zero.
+            let position_changed = position != last_position || std::mem::take(&mut awaiting_start);
 
             if position_changed {
                 last_position = position;
@@ -560,20 +583,44 @@ struct CursorData {
 #[cfg(target_os = "macos")]
 fn get_cursor_data() -> Option<CursorData> {
     use objc::rc::autoreleasepool;
+    use objc2::{ClassType, msg_send, rc::Retained};
     use objc2_app_kit::NSCursor;
-    use sha2::{Digest, Sha256};
 
     autoreleasepool(|| unsafe {
         #[allow(deprecated)]
-        let cursor = NSCursor::currentSystemCursor().unwrap_or(NSCursor::currentCursor());
+        let cursor = NSCursor::currentSystemCursor().or_else(|| {
+            let cursor: Option<Retained<NSCursor>> = msg_send![NSCursor::class(), currentCursor];
+            cursor
+        })?;
 
-        let image = cursor.image();
+        macos_cursor_data(&cursor)
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn macos_cursor_data(cursor: &objc2_app_kit::NSCursor) -> Option<CursorData> {
+    use objc2::{msg_send, rc::Retained};
+    use objc2_app_kit::NSImage;
+    use sha2::{Digest, Sha256};
+
+    unsafe {
+        // AppKit can return nil for transient system cursors despite NSCursor.image's nonnull annotation.
+        let image: Option<Retained<NSImage>> = msg_send![cursor, image];
+        let image = image?;
         let size = image.size();
         let hotspot = cursor.hotSpot();
+        if !size.width.is_finite()
+            || !size.height.is_finite()
+            || size.width <= 0.0
+            || size.height <= 0.0
+            || !hotspot.x.is_finite()
+            || !hotspot.y.is_finite()
+        {
+            return None;
+        }
+
         let image_data = image.TIFFRepresentation()?;
-
         let image = image_data.as_bytes_unchecked().to_vec();
-
         let shape =
             cap_cursor_info::CursorShapeMacOS::from_hash(&hex::encode(Sha256::digest(&image)));
 
@@ -582,7 +629,56 @@ fn get_cursor_data() -> Option<CursorData> {
             hotspot: XY::new(hotspot.x / size.width, hotspot.y / size.height),
             shape: shape.map(Into::into),
         })
-    })
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod macos_cursor_tests {
+    use super::macos_cursor_data;
+    use objc2::{AllocAnyThread, class, msg_send, rc::Retained, runtime::AnyObject};
+    use objc2_app_kit::{NSCursor, NSImage};
+
+    #[test]
+    fn cursor_without_image_is_skipped() {
+        let cursor = unsafe { NSCursor::new() };
+        assert!(macos_cursor_data(&cursor).is_none());
+    }
+
+    #[test]
+    fn zero_sized_cursor_is_skipped() {
+        let image = unsafe { NSImage::initWithSize(NSImage::alloc(), Default::default()) };
+        let cursor = NSCursor::initWithImage_hotSpot(NSCursor::alloc(), &image, Default::default());
+        assert!(macos_cursor_data(&cursor).is_none());
+    }
+
+    #[test]
+    fn valid_cursor_keeps_image_and_hotspot() {
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::RgbaImage::from_pixel(8, 8, image::Rgba([20, 40, 80, 255]))
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+        let png = png.into_inner();
+        let data: Retained<AnyObject> = unsafe {
+            msg_send![class!(NSData), dataWithBytes: png.as_ptr().cast::<std::ffi::c_void>(), length: png.len()]
+        };
+        let image: Retained<NSImage> = unsafe { msg_send![NSImage::alloc(), initWithData: &*data] };
+        let cursor = NSCursor::initWithImage_hotSpot(NSCursor::alloc(), &image, Default::default());
+        let image = unsafe { cursor.image() };
+        let expected_image = unsafe {
+            image
+                .TIFFRepresentation()
+                .unwrap()
+                .as_bytes_unchecked()
+                .to_vec()
+        };
+        let size = unsafe { image.size() };
+        let hotspot = unsafe { cursor.hotSpot() };
+        let actual = macos_cursor_data(&cursor).unwrap();
+
+        assert_eq!(actual.image, expected_image);
+        assert_eq!(actual.hotspot.x, hotspot.x / size.width);
+        assert_eq!(actual.hotspot.y, hotspot.y / size.height);
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -980,5 +1076,34 @@ fn get_cursor_data() -> Option<CursorData> {
             hotspot: XY::new(hotspot_x, hotspot_y),
             shape: CursorShape::try_from(&cursor_info.hCursor).ok(),
         })
+    }
+}
+
+#[cfg(test)]
+mod input_epoch_tests {
+    use super::*;
+
+    #[test]
+    fn primed_input_waits_for_the_gate_and_then_starts_at_the_arm_point() {
+        let start_time = Timestamps::now();
+        assert_eq!(input_epoch(None, start_time), Some(start_time.instant()));
+
+        let gate = RecordingStartGate::new();
+        assert_eq!(input_epoch(Some(&gate), start_time), None);
+
+        let armed = Timestamps::now() + std::time::Duration::from_millis(250);
+        gate.arm_at(armed);
+        assert_eq!(input_epoch(Some(&gate), start_time), Some(armed.instant()));
+    }
+
+    #[test]
+    fn an_arm_point_before_the_pipeline_epoch_is_clamped_to_it() {
+        let gate = RecordingStartGate::new();
+        gate.arm();
+        let start_time = Timestamps::now() + std::time::Duration::from_millis(250);
+        assert_eq!(
+            input_epoch(Some(&gate), start_time),
+            Some(start_time.instant())
+        );
     }
 }

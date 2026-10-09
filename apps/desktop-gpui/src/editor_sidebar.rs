@@ -296,10 +296,15 @@ pub enum SourceTab {
 }
 
 impl SourceTab {
-    /// `BACKGROUND_SOURCES_ROW_ONE` / `_TWO` (`:236-246`).
-    pub const ROWS: [[SourceTab; 3]; 2] = [
-        [Self::Desktop, Self::Wallpaper, Self::Image],
-        [Self::Color, Self::Gradient, Self::AnimatedGradient],
+    /// `BACKGROUND_SOURCES_ROW_ONE` / `_TWO` (`:236-246`), now one segmented
+    /// row. `None` is not in it: it is the section header's own action.
+    pub const PICKER: [SourceTab; 6] = [
+        Self::Desktop,
+        Self::Wallpaper,
+        Self::Image,
+        Self::Color,
+        Self::Gradient,
+        Self::AnimatedGradient,
     ];
 
     pub fn label(self) -> &'static str {
@@ -705,6 +710,7 @@ pub enum SliderKey {
     Grade(GradeTarget, GradeSlider),
     Camera(CameraSlider),
     Audio(AudioSlider),
+    ClipVolume(usize),
     Cursor(CursorSlider),
     Caption(CaptionSlider),
     Keyboard(KeyboardSlider),
@@ -737,6 +743,11 @@ pub enum ColorTarget {
     /// A text segment's colour, per segment index.
     TextColor(usize),
     TextBackground(usize),
+    /// The outline colour, only reachable while `stroke_width > 0`.
+    TextStroke(usize),
+    /// The right-hand stop of the horizontal gradient, only reachable while
+    /// `gradient_color` is set.
+    TextGradient(usize),
 }
 
 impl ColorTarget {
@@ -764,6 +775,11 @@ pub enum ColorPickerDrag {
 /// The sidebar's own state -- everything `ConfigSidebar`'s signals hold that is
 /// not in the project config.
 pub struct SidebarState {
+    pub audio_enhancement_default: bool,
+    pub audio_enhancement_error: Option<String>,
+    pub(crate) style_target: Option<(usize, StyleGroup)>,
+    pub(crate) image_import_error: Option<String>,
+    pub(crate) image_asset_status: Option<(String, bool)>,
     animated_gradient: animated_gradient::AnimatedGradientState,
     /// `state.selectedTab` (`:563-573`).
     pub tab: SidebarTab,
@@ -813,7 +829,7 @@ pub struct SidebarState {
     /// The device scale those were rasterised at, sampled once a frame from
     /// `render` -- the only place in the sidebar's chain with a `&Window`.
     cursor_scale: f32,
-    /// The 3D panel's three `Camera3DSection`s and the zoom panel's helper.
+    /// The 3D panel's two disclosures and the zoom panel's helper.
     pub panel_sections: std::cell::RefCell<HashMap<PanelSection, std::rc::Rc<CollapsibleState>>>,
 
     /// The gradient preview's grain, cached by the grain-scale step it was
@@ -828,9 +844,19 @@ pub struct SidebarState {
     /// state in the source too, not project config.
     pub caption_model: &'static str,
     pub caption_language: &'static str,
+    /// The text panel's Style chip row: 0 is "All", `n` is
+    /// `TEXT_PRESET_GROUPS[n - 1]`. Local UI state, like the source's own
+    /// signal, so it survives selecting another text segment.
+    pub text_style_group: usize,
+    /// Which edge the text panel's Animation tiles and Duration row point at:
+    /// `false` is In, `true` is Out.
+    pub text_anim_edge: bool,
     /// `editingEnd` on the 3D panel -- which of the two poses the camera
     /// sliders point at (`ConfigSidebar.tsx:4908`).
     pub editing_end_pose: bool,
+    /// Which half of the 3D panel's Look grid is showing. Session state, like
+    /// the source's own `lookTab` signal: it survives selecting another shot.
+    pub camera3d_angles: bool,
 
     /// The open colour picker's target, if any -- drives the swatch's blue
     /// ring while its popover is up.
@@ -862,13 +888,18 @@ pub struct SidebarState {
     pub importing_desktop: bool,
     /// Guards the file-picker task: `runModal` spins its own run loop and a
     /// second panel would stack on the first.
-    picking_image: bool,
+    pub(crate) picking_image: bool,
     picker_task: Option<gpui::Task<()>>,
 }
 
 impl SidebarState {
     pub fn new(config: &ProjectConfiguration) -> Self {
         Self {
+            audio_enhancement_default: crate::store::studio_sound_by_default(),
+            audio_enhancement_error: None,
+            style_target: None,
+            image_import_error: None,
+            image_asset_status: None,
             animated_gradient: animated_gradient::AnimatedGradientState::new(),
             tab: SidebarTab::Background,
             source_tab: initial_source_tab(config),
@@ -897,7 +928,10 @@ impl SidebarState {
             menu: None,
             caption_model: "best",
             caption_language: "auto",
+            text_style_group: 0,
+            text_anim_edge: false,
             editing_end_pose: false,
+            camera3d_angles: false,
             color_target: None,
             color_picker: None,
             color_drag: None,
@@ -979,13 +1013,16 @@ pub enum PadKey {
     SceneCamera(usize),
     ZoomManual(usize),
     ZoomMulti,
+    /// The 3D panel's orbit pad: x is `tiltY`, y is `tiltX`.
+    Camera3DOrbit(usize),
 }
 
 /// The collapsible sections a segment panel owns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PanelSection {
-    Camera3DCamera,
-    Camera3DBlur,
+    /// The Depth blur group's per-mode sliders.
+    Camera3DBlurTune,
+    /// "Timing & advanced".
     Camera3DAdvanced,
     ZoomHelper,
 }
@@ -1054,7 +1091,7 @@ impl EditorWindow {
             self.end_color_history();
         }
         let previous_animated_gradient = self.animated_gradient_config().cloned();
-        if !change(&mut self.project) {
+        if !self.apply_control_change(change) {
             return;
         }
         self.project_changed(window, cx);
@@ -1077,7 +1114,7 @@ impl EditorWindow {
             return;
         }
         self.end_color_history();
-        if !change(&mut self.project) {
+        if !self.apply_control_change(change) {
             return;
         }
         self.project_changed(window, cx);
@@ -1150,8 +1187,9 @@ impl EditorWindow {
     }
 
     fn notch_value(&self, slider: BgSlider) -> f64 {
+        let project = self.style_control_project();
         let base = self.notch_base();
-        let notch = self.project.background.notch.as_ref();
+        let notch = project.background.notch.as_ref();
         match slider {
             BgSlider::NotchWidth => notch.and_then(|n| n.width).unwrap_or(base.width),
             BgSlider::NotchHeight => notch.and_then(|n| n.height).unwrap_or(base.height),
@@ -1179,6 +1217,7 @@ impl EditorWindow {
             SliderKey::Grade(_, slider) => slider.limits(),
             SliderKey::Camera(slider) => slider.limits(),
             SliderKey::Audio(slider) => slider.limits(),
+            SliderKey::ClipVolume(_) => (0., 200., 1.),
             SliderKey::Cursor(slider) => slider.limits(),
             SliderKey::Caption(slider) => slider.limits(),
             SliderKey::Keyboard(slider) => slider.limits(),
@@ -1187,6 +1226,7 @@ impl EditorWindow {
     }
 
     pub(crate) fn slider_value(&self, slider: SliderKey) -> f32 {
+        let project = self.style_control_project();
         match slider {
             SliderKey::Bg(slider) => self.bg_slider_value(slider),
             SliderKey::AnimatedGradient(parameter) => self
@@ -1199,11 +1239,17 @@ impl EditorWindow {
             // Every grade slider is `Math.round(value * 100)` in the UI and
             // `v / 100` back into the config (`ColorCorrectionSection.tsx:181`).
             SliderKey::Grade(target, slider) => (slider.read(self.grade(target)) * 100.).round(),
-            SliderKey::Camera(slider) => slider.read(&self.project),
-            SliderKey::Audio(slider) => slider.read(&self.project),
-            SliderKey::Cursor(slider) => slider.read(&self.project),
-            SliderKey::Caption(slider) => slider.read(&self.project),
-            SliderKey::Keyboard(slider) => slider.read(&self.project),
+            SliderKey::Camera(slider) => slider.read(&project),
+            SliderKey::Audio(slider) => slider.read(&project),
+            SliderKey::ClipVolume(index) => self
+                .project
+                .timeline
+                .as_ref()
+                .and_then(|timeline| timeline.segments.get(index))
+                .map_or(100., |segment| (segment.volume() * 100.) as f32),
+            SliderKey::Cursor(slider) => slider.read(&project),
+            SliderKey::Caption(slider) => slider.read(&project),
+            SliderKey::Keyboard(slider) => slider.read(&project),
             SliderKey::Panel(slider, index) => self.panel_slider_value(slider, index),
         }
     }
@@ -1229,6 +1275,9 @@ impl EditorWindow {
             }
             SliderKey::Camera(slider) => self.apply_camera_slider(slider, value, window, cx),
             SliderKey::Audio(slider) => self.apply_audio_slider(slider, value, window, cx),
+            SliderKey::ClipVolume(index) => {
+                self.set_clip_volume(index, f64::from(value) / 100., window, cx)
+            }
             SliderKey::Cursor(slider) => self.apply_cursor_slider(slider, value, window, cx),
             SliderKey::Caption(slider) => self.apply_caption_slider(slider, value, window, cx),
             SliderKey::Keyboard(slider) => self.apply_keyboard_slider(slider, value, window, cx),
@@ -1254,12 +1303,13 @@ impl EditorWindow {
     }
 
     fn bg_slider_value(&self, slider: BgSlider) -> f32 {
-        let background = &self.project.background;
+        let project = self.style_control_project();
+        let background = &project.background;
         match slider {
             BgSlider::Blur => background.blur as f32,
             BgSlider::Padding => background.padding as f32,
             BgSlider::Rounding => background.rounding as f32,
-            BgSlider::MotionBlur => self.project.screen_motion_blur,
+            BgSlider::MotionBlur => project.screen_motion_blur,
             BgSlider::BorderWidth => background
                 .border
                 .as_ref()
@@ -1629,16 +1679,17 @@ impl EditorWindow {
     }
 
     pub(crate) fn color_for(&self, target: ColorTarget) -> Option<Color> {
+        let project = self.style_control_project();
         match target {
-            ColorTarget::BackgroundColor => match &self.project.background.source {
+            ColorTarget::BackgroundColor => match &project.background.source {
                 BackgroundSource::Color { value, .. } => Some(*value),
                 _ => None,
             },
-            ColorTarget::GradientFrom => match &self.project.background.source {
+            ColorTarget::GradientFrom => match &project.background.source {
                 BackgroundSource::Gradient { from, .. } => Some(*from),
                 _ => None,
             },
-            ColorTarget::GradientTo => match &self.project.background.source {
+            ColorTarget::GradientTo => match &project.background.source {
                 BackgroundSource::Gradient { to, .. } => Some(*to),
                 _ => None,
             },
@@ -1647,13 +1698,13 @@ impl EditorWindow {
                 .and_then(|config| config.color_stops.get(index))
                 .map(|stop| stop.color),
             ColorTarget::BorderColor => Some(
-                self.project
+                project
                     .background
                     .border
                     .as_ref()
                     .map_or(UI_BORDER_FALLBACK.color, |border| border.color),
             ),
-            ColorTarget::CursorRipple => Some(self.project.cursor.ripple.color),
+            ColorTarget::CursorRipple => Some(project.cursor.ripple.color),
             _ => self.hex_string_for(target).and_then(|hex| {
                 hex_to_rgb(&hex).map(|rgba| [rgba[0] as u16, rgba[1] as u16, rgba[2] as u16])
             }),
@@ -1682,6 +1733,18 @@ impl EditorWindow {
                 .as_ref()
                 .and_then(|timeline| timeline.text_segments.get(index))
                 .and_then(|segment| segment.background_color.clone()),
+            ColorTarget::TextStroke(index) => self
+                .project
+                .timeline
+                .as_ref()
+                .and_then(|timeline| timeline.text_segments.get(index))
+                .map(|segment| segment.stroke_color.clone()),
+            ColorTarget::TextGradient(index) => self
+                .project
+                .timeline
+                .as_ref()
+                .and_then(|timeline| timeline.text_segments.get(index))
+                .and_then(|segment| segment.gradient_color.clone()),
             _ => None,
         }
     }
@@ -1808,6 +1871,24 @@ impl EditorWindow {
                         return false;
                     }
                     segment.background_color = Some(hex);
+                    true
+                })
+            }
+            ColorTarget::TextStroke(index) => {
+                self.edit_text_segment("text-stroke-color", index, window, cx, move |segment| {
+                    if segment.stroke_color == hex {
+                        return false;
+                    }
+                    segment.stroke_color = hex;
+                    true
+                })
+            }
+            ColorTarget::TextGradient(index) => {
+                self.edit_text_segment("text-gradient-color", index, window, cx, move |segment| {
+                    if segment.gradient_color.as_deref() == Some(hex.as_str()) {
+                        return false;
+                    }
+                    segment.gradient_color = Some(hex);
                     true
                 })
             }
@@ -1966,6 +2047,13 @@ fn write_desktop_background_snapshot(source: &Path, output: &Path) -> Result<(),
 fn import_desktop_background(project_path: &Path) -> Result<PathBuf, String> {
     let source = crate::platform::desktop_picture_path()
         .ok_or_else(|| "Current desktop background path not found".to_string())?;
+    import_desktop_background_from_source(project_path, &source)
+}
+
+fn import_desktop_background_from_source(
+    project_path: &Path,
+    source: &Path,
+) -> Result<PathBuf, String> {
     if !source.exists() {
         return Err(format!(
             "Current desktop background does not exist: {}",
@@ -1978,7 +2066,7 @@ fn import_desktop_background(project_path: &Path) -> Result<PathBuf, String> {
         .map_err(|err| format!("failed to create background assets directory: {err}"))?;
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_millis())
+        .map(|elapsed| elapsed.as_nanos())
         .unwrap_or(0);
     let name = format!("{CURRENT_DESKTOP_BACKGROUND_BASENAME}-{timestamp}.jpg");
     let output = assets.join(&name);
@@ -1987,26 +2075,13 @@ fn import_desktop_background(project_path: &Path) -> Result<PathBuf, String> {
     ));
 
     let _ = std::fs::remove_file(&pending);
-    if let Err(error) = write_desktop_background_snapshot(&source, &pending) {
+    if let Err(error) = write_desktop_background_snapshot(source, &pending) {
         let _ = std::fs::remove_file(&pending);
         return Err(error);
     }
     let _ = std::fs::remove_file(&output);
     std::fs::rename(&pending, &output)
         .map_err(|err| format!("failed to store current desktop background: {err}"))?;
-
-    // `remove_imported_desktop_background_snapshots` (`recording.rs:210-224`).
-    if let Ok(entries) = std::fs::read_dir(&assets) {
-        let prefix = format!("{CURRENT_DESKTOP_BACKGROUND_BASENAME}-");
-        for entry in entries.flatten() {
-            if let Some(entry_name) = entry.file_name().to_str()
-                && entry_name != name
-                && entry_name.starts_with(&prefix)
-            {
-                let _ = std::fs::remove_file(entry.path());
-            }
-        }
-    }
 
     Ok(output)
 }
@@ -2143,8 +2218,9 @@ impl EditorWindow {
     /// Which file the big preview should be showing: the chosen image on the
     /// image tab, the imported desktop picture on the desktop tab.
     fn preview_path(&self) -> Option<PathBuf> {
+        let project = self.style_control_project();
         match self.sidebar.source_tab {
-            SourceTab::Image => match &self.project.background.source {
+            SourceTab::Image => match &project.background.source {
                 BackgroundSource::Image { path } => path.as_ref().map(PathBuf::from),
                 _ => None,
             },
@@ -2172,17 +2248,19 @@ impl EditorWindow {
     /// default padding *and* rounding; a real-to-real switch only ensures
     /// padding, so an intentionally-square background keeps rounding at 0.
     fn ensure_background_presentation(&mut self, from_none: bool) -> bool {
-        let mut changed = false;
-        let background = &mut self.project.background;
-        if background.padding == 0. {
-            background.padding = DEFAULT_BACKGROUND_PADDING;
-            changed = true;
-        }
-        if from_none && background.rounding == 0. {
-            background.rounding = DEFAULT_BACKGROUND_ROUNDING;
-            changed = true;
-        }
-        changed
+        self.apply_control_change(|project| {
+            let mut changed = false;
+            let background = &mut project.background;
+            if background.padding == 0. {
+                background.padding = DEFAULT_BACKGROUND_PADDING;
+                changed = true;
+            }
+            if from_none && background.rounding == 0. {
+                background.rounding = DEFAULT_BACKGROUND_ROUNDING;
+                changed = true;
+            }
+            changed
+        })
     }
 
     /// The source-tab row's `onChange` (`:2189-2263`), verbatim.
@@ -2292,6 +2370,8 @@ impl EditorWindow {
             return;
         }
         self.sidebar.picking_image = true;
+        let style_target = self.sidebar.style_target;
+        let style_fingerprint = self.style_target_fingerprint();
         self.sidebar.picker_task = Some(cx.spawn_in(window, async move |this, cx| {
             let picked = cx
                 .update(|_, _| crate::platform::open_image_panel(&BACKGROUND_IMAGE_EXTENSIONS))
@@ -2332,6 +2412,12 @@ impl EditorWindow {
 
             this.update_in(cx, |this, window, cx| {
                 this.sidebar.picking_image = false;
+                if this.sidebar.style_target != style_target
+                    || this.style_target_fingerprint() != style_fingerprint
+                {
+                    cx.notify();
+                    return;
+                }
                 match stored {
                     Ok(path) => {
                         this.edit_background(
@@ -2365,7 +2451,9 @@ impl EditorWindow {
         }
         self.sidebar.importing_desktop = true;
         let project_path = self.project_path.clone();
-        let from_none = is_none_background(&self.project);
+        let from_none = is_none_background(&self.style_control_project());
+        let style_target = self.sidebar.style_target;
+        let style_fingerprint = self.style_target_fingerprint();
         cx.spawn_in(window, async move |this, cx| {
             let imported = cx
                 .background_executor()
@@ -2373,6 +2461,12 @@ impl EditorWindow {
                 .await;
             this.update_in(cx, |this, window, cx| {
                 this.sidebar.importing_desktop = false;
+                if this.sidebar.style_target != style_target
+                    || this.style_target_fingerprint() != style_fingerprint
+                {
+                    cx.notify();
+                    return;
+                }
                 match imported {
                     Ok(path) => {
                         this.sidebar.desktop_background = Some(path.clone());
@@ -2399,9 +2493,10 @@ impl EditorWindow {
 /// The sidebar card's inner content width: 416 minus its 1px borders minus the
 /// panel's `p-4`. Fixed, because the column is `w-104 min-w-104 flex-none`.
 const CONTENT_WIDTH: f32 = 416. - 2. - 32.;
-/// `grid grid-cols-7 gap-2`.
-const WALLPAPER_COLUMNS: f32 = 7.;
-const WALLPAPER_GAP: f32 = 8.;
+/// Six 34px-tall tiles across the pane.
+const WALLPAPER_COLUMNS: f32 = 6.;
+const WALLPAPER_GAP: f32 = 6.;
+const WALLPAPER_TILE_HEIGHT: f32 = 34.;
 /// The gradient preview: `h-28` over the panel's full content width.
 const GRADIENT_PREVIEW_WIDTH: f32 = CONTENT_WIDTH;
 const GRADIENT_PREVIEW_HEIGHT: f32 = 112.;
@@ -2427,6 +2522,7 @@ impl EditorWindow {
                 // the indicator is hidden (`:586-592, 667-677`).
                 ui::TabRailItem::new(
                     tab.icon(),
+                    tab.label(),
                     selection.is_none() && tab == selected_tab,
                     disabled,
                 )
@@ -2440,14 +2536,12 @@ impl EditorWindow {
             }));
 
         div()
-            .ml(px(8.))
             .w(px(crate::editor_window::SIDEBAR_WIDTH))
             .h_full()
             .flex()
             .flex_col()
             .flex_none()
             .min_h_0()
-            .overflow_hidden()
             .child(
                 div()
                     .flex()
@@ -2459,12 +2553,25 @@ impl EditorWindow {
                     .rounded(px(12.))
                     .bg(self.panel_bg())
                     .border_1()
-                    .border_color(Hsla::from(theme.gray_3))
+                    .border_color(self.card_line())
+                    .shadow(theme.editor.card_shadow())
                     .child(rail)
-                    .child(if self.audio_picker.is_some() {
+                    .children(self.sidebar.image_import_error.as_ref().map(|error| {
+                        div()
+                            .p(px(12.))
+                            .text_size(px(12.))
+                            .text_color(Hsla::from(theme.editor.text_1))
+                            .child(error.clone())
+                    }))
+                    .children(
+                        self.sidebar
+                            .picking_image
+                            .then(|| div().p(px(12.)).child("Importing image…")),
+                    )
+                    .child(if let Some((index, group)) = self.sidebar.style_target {
+                        self.render_style_group(index, group, cx)
+                    } else if self.audio_picker.is_some() {
                         self.render_audio_library(cx)
-                    } else if self.camera3d_setup.is_some() {
-                        self.render_camera3d_setup(cx)
                     } else {
                         match selection {
                             Some(selection) => self.render_selection_panel(&selection, cx),
@@ -2496,13 +2603,15 @@ impl EditorWindow {
             .overflow_x_hidden()
             .overflow_y_scroll()
             .track_scroll(&self.sidebar.scroll)
-            .text_size(px(14.))
+            .text_size(px(13.))
             .child(
                 div()
                     .flex()
                     .flex_col()
-                    .gap(px(24.))
-                    .p(px(16.))
+                    .gap(px(14.))
+                    .pt(px(14.))
+                    .px(px(16.))
+                    .pb(px(16.))
                     .child(content),
             )
             .into_any_element()
@@ -2536,38 +2645,48 @@ impl EditorWindow {
         div()
             .flex()
             .flex_col()
-            .gap(px(24.))
+            .gap(px(14.))
             .child(self.render_source_field(cx))
+            .child(dashed_divider(Hsla::from(theme.editor.line)))
             .child(
-                ui::Field::plain(&theme, "Background Blur")
-                    .icon("icons/bg-blur.svg")
-                    .child(self.slider(SliderKey::Bg(BgSlider::Blur), "%", cx)),
-            )
-            // `<div class="w-full border-t border-gray-300 border-dashed" />`
-            .child(dashed_divider(Hsla::from(theme.gray_300_legacy)))
-            .child(
-                ui::Field::plain(&theme, "Padding")
-                    .icon("icons/padding.svg")
-                    .child(self.slider(SliderKey::Bg(BgSlider::Padding), "%", cx))
-                    // The custom screen position row, shown only once the
-                    // display has been dragged on the canvas (`:2656-2667`).
-                    .children(background.display_position.map(|_| {
-                        div()
-                            .flex()
-                            .flex_row()
-                            .justify_between()
-                            .items_center()
-                            .mt(px(12.))
-                            .child(
-                                div()
-                                    .text_size(px(12.))
-                                    .text_color(Hsla::from(theme.gray_11))
-                                    .child("Custom screen position (dragged on canvas)"),
-                            )
-                            .child(
-                                ui::EditorButton::plain(&theme, "reset-display-position")
-                                    .label("Reset")
-                                    .on_click(cx.listener(|this, _, window, cx| {
+                ui::Field::section(&theme, "Layout").child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .child(self.slider_field(
+                            "Background Blur",
+                            SliderKey::Bg(BgSlider::Blur),
+                            "%",
+                            cx,
+                        ))
+                        .child(self.slider_field(
+                            "Padding",
+                            SliderKey::Bg(BgSlider::Padding),
+                            "%",
+                            cx,
+                        ))
+                        // The custom screen position row, shown only once the
+                        // display has been dragged on the canvas (`:2656-2667`).
+                        .children(background.display_position.map(|_| {
+                            div()
+                                .flex()
+                                .flex_row()
+                                .justify_between()
+                                .items_center()
+                                .h(px(34.))
+                                .child(
+                                    div()
+                                        .text_size(px(12.))
+                                        .text_color(Hsla::from(theme.editor.text_2))
+                                        .child("Custom screen position (dragged on canvas)"),
+                                )
+                                .child(section_action(
+                                    &theme,
+                                    "reset-display-position",
+                                    "Reset",
+                                    None,
+                                    false,
+                                    cx.listener(|this, _, window, cx| {
                                         this.edit_background(
                                             "display-position",
                                             |project| {
@@ -2577,33 +2696,41 @@ impl EditorWindow {
                                             window,
                                             cx,
                                         );
-                                    })),
+                                    }),
+                                ))
+                                .into_any_element()
+                        }))
+                        .child(self.slider_field(
+                            "Rounded Corners",
+                            SliderKey::Bg(BgSlider::Rounding),
+                            "%",
+                            cx,
+                        ))
+                        .child(self.render_corner_style(cx))
+                        .children(self.sidebar.style_target.is_none().then(|| {
+                            self.slider_field(
+                                "Motion Blur",
+                                SliderKey::Bg(BgSlider::MotionBlur),
+                                "x100%",
+                                cx,
                             )
                             .into_any_element()
-                    })),
+                        })),
+                ),
             )
-            .child(
-                ui::Field::plain(&theme, "Rounded Corners")
-                    .icon("icons/corners.svg")
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(12.))
-                            .child(self.slider(SliderKey::Bg(BgSlider::Rounding), "%", cx))
-                            .child(self.render_corner_style(cx)),
-                    ),
-            )
-            .child(
-                ui::Field::plain(&theme, "Motion Blur")
-                    .icon("icons/wind.svg")
-                    .child(self.slider(SliderKey::Bg(BgSlider::MotionBlur), "x100%", cx)),
-            )
+            .child(dashed_divider(Hsla::from(theme.editor.line)))
             .child(self.render_border_field(cx))
+            .child(dashed_divider(Hsla::from(theme.editor.line)))
             .child(self.render_notch_field(cx))
+            .child(dashed_divider(Hsla::from(theme.editor.line)))
             .child(self.render_shadow_field(cx))
             // `<ColorCorrectionSection target="screen" />` (`:2962`).
-            .child(self.render_color_correction(GradeTarget::Screen, cx))
+            .children(
+                self.sidebar
+                    .style_target
+                    .is_none()
+                    .then(|| self.render_color_correction(GradeTarget::Screen, cx)),
+            )
     }
 
     // -- Source ------------------------------------------------------------
@@ -2612,171 +2739,45 @@ impl EditorWindow {
         let theme = self.theme;
         let tab = self.sidebar.source_tab;
 
-        let rows = SourceTab::ROWS.map(|row| {
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(px(8.))
-                .children(
-                    row.into_iter()
-                        .map(|item| self.render_source_trigger(item, cx).into_any_element()),
-                )
-                .into_any_element()
-        });
+        let options = SourceTab::PICKER
+            .into_iter()
+            .map(|item| ui::SegmentOption::new(item.label(), tab == item))
+            .collect();
 
-        ui::Field::plain(&theme, "Background Image")
-            .icon("icons/image.svg")
+        ui::Field::section(&theme, "Background")
+            .value(section_action(
+                &theme,
+                "source-none",
+                SourceTab::None.label(),
+                Some("icons/x.svg"),
+                tab == SourceTab::None,
+                cx.listener(|this, _, window, cx| {
+                    this.select_source_tab(SourceTab::None, window, cx);
+                }),
+            ))
             .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(8.))
-                    .children(rows)
-                    .child(self.render_source_trigger(SourceTab::None, cx))
-                    // `my-5 w-full border-t border-dashed border-gray-5`
-                    .child(
-                        div()
-                            .my(px(20.))
-                            .child(dashed_divider(Hsla::from(theme.gray_5))),
-                    )
-                    .child(match tab {
-                        SourceTab::Desktop => self.render_desktop_pane(cx).into_any_element(),
-                        SourceTab::Wallpaper => self.render_wallpaper_pane(cx).into_any_element(),
-                        SourceTab::Image => self.render_image_pane(cx).into_any_element(),
-                        SourceTab::Color => self.render_color_pane(cx).into_any_element(),
-                        SourceTab::Gradient => self.render_gradient_pane(cx).into_any_element(),
-                        SourceTab::AnimatedGradient => {
-                            self.render_animated_gradient_pane(cx).into_any_element()
+                ui::SegmentedControl::editor(&theme, "background-source", options)
+                    .stretch()
+                    .item_height(px(26.))
+                    .item_padding(px(4.), px(0.))
+                    .text_size(px(11.5))
+                    .on_select(cx.listener(|this, index: &usize, window, cx| {
+                        if let Some(item) = ui::option_at(&SourceTab::PICKER, *index) {
+                            this.select_source_tab(item, window, cx);
                         }
-                        SourceTab::None => div().into_any_element(),
-                    }),
+                    })),
             )
-    }
-
-    /// `BackgroundSourceTrigger` (`:2116-2130`): `py-2.5 px-2 text-xs
-    /// rounded-[10px] border` with a live `size-3.5` preview of what the tile
-    /// would select.
-    fn render_source_trigger(&self, item: SourceTab, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = self.theme;
-        let selected = self.sidebar.source_tab == item;
-
-        div()
-            .id(SharedString::from(format!("source-{}", item.label())))
-            .flex()
-            .flex_1()
-            .justify_center()
-            .items_center()
-            .gap(px(6.))
-            .py(px(10.))
-            .px(px(8.))
-            .rounded(px(10.))
-            .border_1()
-            .text_size(px(12.))
-            .when(selected, |this| {
-                this.border_color(Hsla::from(theme.gray_3))
-                    .bg(Hsla::from(theme.gray_3))
-                    .text_color(Hsla::from(theme.gray_12))
-            })
-            .when(!selected, |this| {
-                this.border_color(if item == SourceTab::None {
-                    Hsla::from(theme.gray_5)
-                } else {
-                    gpui::transparent_black()
-                })
-                .text_color(Hsla::from(theme.gray_11))
-                .cursor_pointer()
-                .hover(|this| this.border_color(Hsla::from(theme.gray_7)))
-            })
-            .child(self.render_source_icon(item))
-            .child(item.label())
-            .on_click(cx.listener(move |this, _, window, cx| {
-                this.select_source_tab(item, window, cx);
-            }))
-    }
-
-    /// `renderBackgroundSourceIcon` (`:2054-2114`). Every tile previews the
-    /// thing it would select: the colour tile is the colour, the gradient tile
-    /// is the gradient at its current angle, and the three image tiles are the
-    /// selected file where there is one and the shipped illustration where
-    /// there is not.
-    fn render_source_icon(&self, item: SourceTab) -> AnyElement {
-        let source = &self.project.background.source;
-        match item {
-            SourceTab::None => svg()
-                .path("icons/image-off.svg")
-                .size(px(14.))
-                .text_color(Hsla::from(self.theme.gray_11))
-                .into_any_element(),
-            SourceTab::Gradient => {
-                let (from, to, angle) = match source {
-                    BackgroundSource::Gradient {
-                        from, to, angle, ..
-                    } => (*from, *to, f32::from(*angle)),
-                    _ => (DEFAULT_GRADIENT_FROM, DEFAULT_GRADIENT_TO, 90.),
-                };
-                div()
-                    .size(px(14.))
-                    .rounded(px(2.))
-                    .bg(linear_gradient(
-                        angle,
-                        linear_color_stop(color_to_hsla(from), 0.),
-                        linear_color_stop(color_to_hsla(to), 1.),
-                    ))
-                    .into_any_element()
-            }
-            SourceTab::AnimatedGradient => self.render_animated_gradient_icon(),
-            SourceTab::Color => {
-                let value = match source {
-                    BackgroundSource::Color { value, .. } => *value,
-                    // `hexToRgb(BACKGROUND_COLORS[9])` -- dodger blue.
-                    _ => [71, 133, 255],
-                };
-                div()
-                    .size(px(14.))
-                    .rounded(px(5.))
-                    .bg(color_to_hsla(value))
-                    .into_any_element()
-            }
-            SourceTab::Image | SourceTab::Wallpaper | SourceTab::Desktop => {
-                let thumbnail = match item {
-                    SourceTab::Image => match source {
-                        BackgroundSource::Image { path: Some(path) } => self.tile_image(path),
-                        _ => None,
-                    },
-                    SourceTab::Desktop => self
-                        .sidebar
-                        .desktop_background
-                        .as_ref()
-                        .and_then(|path| self.tile_image(&path.to_string_lossy())),
-                    _ => match source {
-                        BackgroundSource::Wallpaper { path: Some(path) }
-                            if !is_current_desktop_background_path(Some(path)) =>
-                        {
-                            wallpaper_id_for_path(path)
-                                .and_then(|id| self.sidebar.wallpapers.get(id).cloned())
-                        }
-                        _ => None,
-                    },
-                };
-                match thumbnail {
-                    Some(image) => img(image)
-                        .size(px(14.))
-                        .rounded(px(2.))
-                        .object_fit(gpui::ObjectFit::Cover)
-                        .into_any_element(),
-                    None => img(match item {
-                        // `imageBg` for both the desktop and wallpaper tiles,
-                        // `transparentBg` for image (`:229-234, 2088-2089`).
-                        SourceTab::Image => "illustrations/transparent.webp",
-                        _ => "illustrations/image.webp",
-                    })
-                    .size(px(14.))
-                    .rounded(px(2.))
-                    .into_any_element(),
+            .child(match tab {
+                SourceTab::Desktop => self.render_desktop_pane(cx).into_any_element(),
+                SourceTab::Wallpaper => self.render_wallpaper_pane(cx).into_any_element(),
+                SourceTab::Image => self.render_image_pane(cx).into_any_element(),
+                SourceTab::Color => self.render_color_pane(cx).into_any_element(),
+                SourceTab::Gradient => self.render_gradient_pane(cx).into_any_element(),
+                SourceTab::AnimatedGradient => {
+                    self.render_animated_gradient_pane(cx).into_any_element()
                 }
-            }
-        }
+                SourceTab::None => div().into_any_element(),
+            })
     }
 
     /// The decoded preview for a path, if it is the one already decoded.
@@ -2809,18 +2810,18 @@ impl EditorWindow {
                 .p(px(24.))
                 .w_full()
                 .rounded(px(8.))
-                .border_dashed_1(Hsla::from(theme.gray_5))
-                .bg(Hsla::from(theme.gray_2))
+                .border_dashed_1(Hsla::from(theme.editor.line_strong))
+                .bg(Hsla::from(theme.editor.ctl))
                 .child(
                     svg()
                         .path("icons/monitor-outline.svg")
                         .size(px(24.))
-                        .text_color(Hsla::from(theme.gray_11)),
+                        .text_color(Hsla::from(theme.editor.text_2)),
                 )
                 .child(
                     div()
                         .text_size(px(13.))
-                        .text_color(Hsla::from(theme.gray_12))
+                        .text_color(Hsla::from(theme.editor.text_1))
                         .child("Use the wallpaper from your desktop"),
                 )
                 .child(
@@ -2857,9 +2858,11 @@ impl EditorWindow {
                             .border_1()
                             .when(selected, |this| this.border_color(Hsla::from(theme.blue_9)))
                             .when(!selected, |this| {
-                                this.border_color(Hsla::from(theme.gray_5))
+                                this.border_color(Hsla::from(theme.editor.line_strong))
                                     .cursor_pointer()
-                                    .hover(|this| this.border_color(Hsla::from(theme.gray_7)))
+                                    .hover(|this| {
+                                        this.border_color(Hsla::from(theme.editor.accent))
+                                    })
                             })
                             .children(preview.map(|image| {
                                 img(image)
@@ -2910,7 +2913,11 @@ impl EditorWindow {
             _ => None,
         };
         let ids = wallpapers_for_theme(BACKGROUND_THEMES[selected_theme].0);
-        let cell = (CONTENT_WIDTH - WALLPAPER_GAP * (WALLPAPER_COLUMNS - 1.)) / WALLPAPER_COLUMNS;
+        // Floored, with a pixel to spare: a cell that divides the pane exactly
+        // wraps the last tile onto its own row.
+        let cell = ((CONTENT_WIDTH - WALLPAPER_GAP * (WALLPAPER_COLUMNS - 1.)) / WALLPAPER_COLUMNS)
+            .floor()
+            - 1.;
 
         div()
             .flex()
@@ -2925,8 +2932,8 @@ impl EditorWindow {
                     .flex()
                     .flex_row()
                     .items_center()
-                    .gap(px(8.))
-                    .mb(px(12.))
+                    .gap(px(4.))
+                    .mb(px(10.))
                     .text_size(px(12.))
                     .overflow_x_scroll()
                     .children(
@@ -2941,22 +2948,18 @@ impl EditorWindow {
                                     .flex_1()
                                     .justify_center()
                                     .items_center()
-                                    .px(px(16.))
-                                    .py(px(8.))
-                                    .rounded(px(8.))
-                                    .border_1()
+                                    .h(px(24.))
+                                    .px(px(8.))
+                                    .rounded(px(6.))
+                                    .font_weight(FontWeight::MEDIUM)
                                     .when(selected, |this| {
-                                        this.bg(Hsla::from(theme.gray_3))
-                                            .border_color(Hsla::from(theme.gray_3))
-                                            .text_color(Hsla::from(theme.gray_12))
+                                        this.bg(Hsla::from(theme.editor.ctl_hover))
+                                            .text_color(Hsla::from(theme.editor.text_1))
                                     })
                                     .when(!selected, |this| {
-                                        this.border_color(gpui::transparent_black())
-                                            .text_color(Hsla::from(theme.gray_11))
+                                        this.text_color(Hsla::from(theme.editor.text_2))
                                             .cursor_pointer()
-                                            .hover(|this| {
-                                                this.border_color(Hsla::from(theme.gray_7))
-                                            })
+                                            .hover(|this| this.bg(Hsla::from(theme.editor.ctl)))
                                     })
                                     .child(*label)
                                     .on_click(cx.listener(move |this, _, window, cx| {
@@ -2968,9 +2971,6 @@ impl EditorWindow {
                     ),
             )
             .child(
-                // `grid grid-cols-7 gap-2 h-auto`, each item `aspect-square
-                // rounded-lg`, selected `ring-2 ring-gray-500 ring-offset-2
-                // ring-offset-gray-200`.
                 div()
                     .flex()
                     .flex_row()
@@ -2982,33 +2982,26 @@ impl EditorWindow {
                         div()
                             .id(SharedString::from(format!("wallpaper-{id}")))
                             .w(px(cell))
-                            .h(px(cell))
+                            .h(px(WALLPAPER_TILE_HEIGHT + 2. * (RING_WIDTH + RING_GAP)))
                             .rounded(px(8.))
-                            .overflow_hidden()
-                            .bg(Hsla::from(theme.gray_3))
                             .cursor_pointer()
-                            .when(selected, |this| {
-                                // The ring: 2px of `gray-500` outside a 2px
-                                // `gray-200` offset. gpui has no outside
-                                // border, so the offset is drawn as the tile's
-                                // own 2px `gray-200` ring and the selection
-                                // colour as the 2px border over it.
-                                this.border_2()
-                                    .border_color(Hsla::from(theme.gray_500_legacy))
-                            })
-                            .when(!selected, |this| {
-                                this.hover(|this| {
-                                    this.border_1().border_color(Hsla::from(theme.gray_7))
-                                })
-                            })
-                            .children(image.map(|image| {
-                                // `overflow_hidden` clips to the rect, not the
-                                // radius, so the picture needs its own corners.
-                                img(image)
+                            .selection_ring(self.panel_bg(), theme.editor.accent, selected)
+                            .child(
+                                div()
                                     .size_full()
-                                    .object_fit(gpui::ObjectFit::Cover)
-                                    .rounded(px(8.))
-                            }))
+                                    .rounded(px(6.))
+                                    .overflow_hidden()
+                                    .bg(Hsla::from(theme.editor.ctl_hover))
+                                    .children(image.map(|image| {
+                                        // `overflow_hidden` clips to the rect,
+                                        // not the radius, so the picture needs
+                                        // its own corners.
+                                        img(image)
+                                            .size_full()
+                                            .object_fit(gpui::ObjectFit::Cover)
+                                            .rounded(px(6.))
+                                    })),
+                            )
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 let Some(path) = wallpaper_path(id) else {
                                     tracing::error!(id, "wallpaper file not found");
@@ -3047,20 +3040,20 @@ impl EditorWindow {
                 .p(px(24.))
                 .w_full()
                 .rounded(px(8.))
-                .bg(Hsla::from(theme.gray_2))
-                .border_dashed_1(Hsla::from(theme.gray_5))
+                .bg(Hsla::from(theme.editor.ctl))
+                .border_dashed_1(Hsla::from(theme.editor.line_strong))
                 .text_size(px(13.))
                 .cursor_pointer()
-                .hover(|this| this.bg(Hsla::from(theme.gray_3)))
+                .hover(|this| this.bg(Hsla::from(theme.editor.ctl_hover)))
                 .child(
                     svg()
                         .path("icons/image.svg")
                         .size(px(24.))
-                        .text_color(Hsla::from(theme.gray_11)),
+                        .text_color(Hsla::from(theme.editor.text_2)),
                 )
                 .child(
                     div()
-                        .text_color(Hsla::from(theme.gray_12))
+                        .text_color(Hsla::from(theme.editor.text_1))
                         .child("Click to select or drag and drop image"),
                 )
                 .on_click(cx.listener(|this, _, window, cx| {
@@ -3074,7 +3067,7 @@ impl EditorWindow {
                 .rounded(px(6.))
                 .overflow_hidden()
                 .border_1()
-                .border_color(Hsla::from(theme.gray_3))
+                .border_color(Hsla::from(theme.editor.line))
                 .children(self.tile_image(&path).map(|image| {
                     img(image)
                         .size_full()
@@ -3146,16 +3139,18 @@ impl EditorWindow {
                             .size(px(32.))
                             .rounded(px(8.))
                             .cursor_pointer()
-                            .when(transparent, |this| {
-                                // `CHECKERED_BUTTON_BACKGROUND` (`:6500`): an
-                                // 8px `#a0a0a0` checker.
-                                this.bg(gpui::checkerboard(gpui::rgb(0xa0a0a0), 8.))
-                            })
-                            .when(!transparent, |this| this.bg(color_to_hsla(color)))
-                            .when(selected, |this| {
-                                this.border_2()
-                                    .border_color(Hsla::from(theme.gray_500_legacy))
-                            })
+                            .selection_ring(self.panel_bg(), theme.editor.accent, selected)
+                            .child(
+                                div()
+                                    .size_full()
+                                    .rounded(px(6.))
+                                    .when(transparent, |this| {
+                                        // `CHECKERED_BUTTON_BACKGROUND`
+                                        // (`:6500`): an 8px `#a0a0a0` checker.
+                                        this.bg(gpui::checkerboard(gpui::rgb(0xa0a0a0), 8.))
+                                    })
+                                    .when(!transparent, |this| this.bg(color_to_hsla(color))),
+                            )
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.edit_background(
                                     "color-preset",
@@ -3227,11 +3222,10 @@ impl EditorWindow {
                     .padding_x(px(6.))
                     .padding_y(px(6.))
                     .height(px(30.))
-                    .radius(px(8.))
-                    .bg(Hsla::from(theme.gray_1))
-                    .border(Hsla::from(theme.gray_12))
+                    .radius(px(7.))
+                    .bg(Hsla::from(theme.editor.ctl))
                     .text_size(px(13.))
-                    .text_color(Hsla::from(theme.gray_12))
+                    .text_color(Hsla::from(theme.editor.text_1))
             }))
     }
 
@@ -3281,7 +3275,7 @@ impl EditorWindow {
                     .overflow_hidden()
                     .rounded(px(12.))
                     .border_1()
-                    .border_color(Hsla::from(theme.gray_5))
+                    .border_color(Hsla::from(theme.editor.line_strong))
                     .bg(linear_gradient(
                         angle,
                         linear_color_stop(color_to_hsla(from), 0.),
@@ -3317,58 +3311,35 @@ impl EditorWindow {
                         cx,
                     )),
             )
+            .child(dashed_divider(Hsla::from(theme.editor.line)))
             .child(
                 div()
-                    .my(px(4.))
-                    .child(dashed_divider(Hsla::from(theme.gray_5))),
-            )
-            // Angle: the slider plus the redundant `w-12 text-right
-            // tabular-nums` readout the source draws beside it.
-            .child(
-                ui::Subfield::plain(&theme, "Angle").gap(px(16.)).child(
-                    div()
-                        .flex()
-                        .flex_1()
-                        .flex_row()
-                        .items_center()
-                        .gap(px(12.))
-                        .child(self.slider_flex(SliderKey::Bg(BgSlider::GradientAngle), "deg", cx))
-                        .child(
-                            div()
-                                .w(px(48.))
-                                .text_size(px(12.))
-                                .text_color(Hsla::from(theme.gray_11))
-                                .child(format!("{}\u{b0}", angle.round() as i32)),
-                        ),
-                ),
-            )
-            .child(
-                div()
-                    .my(px(4.))
-                    .child(dashed_divider(Hsla::from(theme.gray_5))),
-            )
-            .child(ui::Subfield::plain(&theme, "Noise").child(
-                div().w(px(120.)).child(self.slider(
-                    SliderKey::Bg(BgSlider::GradientNoise),
-                    "%",
-                    cx,
-                )),
-            ))
-            // Grain Scale appears only while noise is on (`:204-221`).
-            .children((noise > 0.).then(|| {
-                ui::Subfield::plain(&theme, "Grain Scale")
-                    .child(div().w(px(120.)).child(self.slider(
-                        SliderKey::Bg(BgSlider::GradientGrain),
+                    .flex()
+                    .flex_col()
+                    .child(self.slider_field(
+                        "Angle",
+                        SliderKey::Bg(BgSlider::GradientAngle),
+                        "deg",
+                        cx,
+                    ))
+                    .child(self.slider_field(
+                        "Noise",
+                        SliderKey::Bg(BgSlider::GradientNoise),
                         "%",
                         cx,
-                    )))
-                    .into_any_element()
-            }))
-            .child(
-                div()
-                    .my(px(4.))
-                    .child(dashed_divider(Hsla::from(theme.gray_5))),
+                    ))
+                    // Grain Scale appears only while noise is on (`:204-221`).
+                    .children((noise > 0.).then(|| {
+                        self.slider_field(
+                            "Grain Scale",
+                            SliderKey::Bg(BgSlider::GradientGrain),
+                            "%",
+                            cx,
+                        )
+                        .into_any_element()
+                    })),
             )
+            .child(dashed_divider(Hsla::from(theme.editor.line)))
             // Randomize, then the 18 presets -- which rotate live with the
             // angle, because each swatch draws the same gradient the preview
             // does (`:255-282`).
@@ -3386,15 +3357,15 @@ impl EditorWindow {
                             .justify_center()
                             .size(px(32.))
                             .rounded(px(8.))
-                            .bg(Hsla::from(theme.gray_2))
-                            .border_dashed_1(Hsla::from(theme.gray_8))
-                            .text_color(Hsla::from(theme.gray_10))
+                            .bg(Hsla::from(theme.editor.ctl))
+                            .border_dashed_1(Hsla::from(theme.editor.line_strong))
+                            .text_color(Hsla::from(theme.editor.text_3))
                             .cursor_pointer()
                             .child(
                                 svg()
                                     .path("icons/shuffle.svg")
                                     .size(px(14.))
-                                    .text_color(Hsla::from(theme.gray_10)),
+                                    .text_color(Hsla::from(theme.editor.text_3)),
                             )
                             .on_click(cx.listener(|this, _, window, cx| {
                                 // `Math.floor(Math.random() * 256)` per
@@ -3441,15 +3412,16 @@ impl EditorWindow {
                                 .size(px(32.))
                                 .rounded(px(8.))
                                 .cursor_pointer()
-                                .bg(linear_gradient(
+                                .selection_ring(
+                                    self.panel_bg(),
+                                    theme.editor.accent,
+                                    preset == Some(index),
+                                )
+                                .child(div().size_full().rounded(px(6.)).bg(linear_gradient(
                                     angle,
                                     linear_color_stop(color_to_hsla(preset_from), 0.),
                                     linear_color_stop(color_to_hsla(preset_to), 1.),
-                                ))
-                                .when(preset == Some(index), |this| {
-                                    this.border_2()
-                                        .border_color(Hsla::from(theme.gray_500_legacy))
-                                })
+                                )))
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     this.edit_background(
                                         "gradient-preset",
@@ -3490,7 +3462,7 @@ impl EditorWindow {
                 div()
                     .mb(px(4.))
                     .text_size(px(11.))
-                    .text_color(Hsla::from(theme.gray_10))
+                    .text_color(Hsla::from(theme.editor.text_3))
                     .child(label),
             )
             .child(self.render_rgb_input(id, target, value, cx))
@@ -3508,22 +3480,12 @@ impl EditorWindow {
             CornerStyle::Rounded => "Rounded",
         };
 
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(6.))
-            .child(
-                div()
-                    .text_size(px(10.4))
-                    .text_color(Hsla::from(theme.gray_11))
-                    .child("CORNER STYLE"),
-            )
-            .child(self.menu_select(
-                crate::editor_tabs::SidebarMenu::BackgroundCornerStyle,
-                "corner-style",
-                label,
-                cx,
-            ))
+        ui::Field::inline(&theme, "Corner Style").child(div().w(px(150.)).child(self.menu_select(
+            crate::editor_tabs::SidebarMenu::BackgroundCornerStyle,
+            "corner-style",
+            label,
+            cx,
+        )))
     }
 
     fn render_border_field(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -3535,65 +3497,60 @@ impl EditorWindow {
         div()
             .flex()
             .flex_col()
-            .gap(px(24.))
             .child(
-                ui::Field::plain(&theme, "Border")
-                    .icon("icons/settings.svg")
-                    .value(
-                        ui::Toggle::plain(&theme, "border-enabled", enabled)
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                let next = !enabled;
-                                this.sidebar.border_open.set_open(next);
-                                // gpui renders on invalidation only, so the
-                                // height transition needs someone to ask for
-                                // the frames.
-                                this.animate_collapsibles(window, cx);
-                                this.edit_background(
-                                    "border-enabled",
-                                    |project| {
-                                        let mut border = project
-                                            .background
-                                            .border
-                                            .clone()
-                                            .unwrap_or(UI_BORDER_FALLBACK);
-                                        border.enabled = next;
-                                        project.background.border = Some(border);
-                                        true
-                                    },
-                                    window,
-                                    cx,
-                                );
-                            }))
-                            .into_any_element(),
-                    ),
+                ui::Field::inline(&theme, "Border").value(
+                    ui::Toggle::plain(&theme, "border-enabled", enabled)
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            let next = !enabled;
+                            this.sidebar.border_open.set_open(next);
+                            // gpui renders on invalidation only, so the
+                            // height transition needs someone to ask for
+                            // the frames.
+                            this.animate_collapsibles(window, cx);
+                            this.edit_background(
+                                "border-enabled",
+                                |project| {
+                                    let mut border = project
+                                        .background
+                                        .border
+                                        .clone()
+                                        .unwrap_or(UI_BORDER_FALLBACK);
+                                    border.enabled = next;
+                                    project.background.border = Some(border);
+                                    true
+                                },
+                                window,
+                                cx,
+                            );
+                        }))
+                        .into_any_element(),
+                ),
             )
             .child(collapsible(
                 &self.sidebar.border_open,
                 div()
                     .flex()
                     .flex_col()
-                    .gap(px(24.))
-                    .pb(px(24.))
+                    .child(self.slider_field(
+                        "Border Width",
+                        SliderKey::Bg(BgSlider::BorderWidth),
+                        "px",
+                        cx,
+                    ))
                     .child(
-                        ui::Field::plain(&theme, "Border Width")
-                            .icon("icons/enlarge.svg")
-                            .child(self.slider(SliderKey::Bg(BgSlider::BorderWidth), "px", cx)),
+                        ui::Field::stacked(&theme, "Border Color").child(self.render_rgb_input(
+                            "border-color",
+                            ColorTarget::BorderColor,
+                            color,
+                            cx,
+                        )),
                     )
-                    .child(
-                        ui::Field::plain(&theme, "Border Color")
-                            .icon("icons/image.svg")
-                            .child(self.render_rgb_input(
-                                "border-color",
-                                ColorTarget::BorderColor,
-                                color,
-                                cx,
-                            )),
-                    )
-                    .child(
-                        ui::Field::plain(&theme, "Border Opacity")
-                            .icon("icons/shadow.svg")
-                            .child(self.slider(SliderKey::Bg(BgSlider::BorderOpacity), "%", cx)),
-                    )
+                    .child(self.slider_field(
+                        "Border Opacity",
+                        SliderKey::Bg(BgSlider::BorderOpacity),
+                        "%",
+                        cx,
+                    ))
                     .into_any_element(),
             ))
     }
@@ -3610,67 +3567,68 @@ impl EditorWindow {
         div()
             .flex()
             .flex_col()
-            .gap(px(24.))
             .child(
-                ui::Field::plain(&theme, "MacBook notch")
-                    .icon("icons/laptop.svg")
-                    .value(
-                        ui::Toggle::plain(&theme, "notch-enabled", enabled)
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                let next = !enabled;
-                                this.sidebar.notch_open.set_open(next);
-                                // gpui renders on invalidation only, so the
-                                // height transition needs someone to ask for
-                                // the frames.
-                                this.animate_collapsibles(window, cx);
-                                this.edit_background(
-                                    "notch-enabled",
-                                    |project| {
-                                        let mut notch =
-                                            project.background.notch.unwrap_or(UNPLACED_NOTCH);
-                                        notch.enabled = next;
-                                        project.background.notch = Some(notch);
-                                        true
-                                    },
-                                    window,
-                                    cx,
-                                );
-                            }))
-                            .into_any_element(),
-                    ),
+                ui::Field::inline(&theme, "MacBook notch").value(
+                    ui::Toggle::plain(&theme, "notch-enabled", enabled)
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            let next = !enabled;
+                            this.sidebar.notch_open.set_open(next);
+                            // gpui renders on invalidation only, so the
+                            // height transition needs someone to ask for
+                            // the frames.
+                            this.animate_collapsibles(window, cx);
+                            this.edit_background(
+                                "notch-enabled",
+                                |project| {
+                                    let mut notch =
+                                        project.background.notch.unwrap_or(UNPLACED_NOTCH);
+                                    notch.enabled = next;
+                                    project.background.notch = Some(notch);
+                                    true
+                                },
+                                window,
+                                cx,
+                            );
+                        }))
+                        .into_any_element(),
+                ),
             )
             .child(collapsible(
                 &self.sidebar.notch_open,
                 div()
                     .flex()
                     .flex_col()
-                    .gap(px(24.))
-                    .pb(px(24.))
+                    .gap(px(4.))
+                    .pb(px(8.))
                     .child(
                         div()
+                            .pt(px(4.))
                             .text_size(px(12.))
-                            .text_color(Hsla::from(theme.gray_11))
+                            .text_color(Hsla::from(theme.editor.text_2))
                             .child(
                                 "Draws a MacBook notch over the recording. Recordings made \
                                  on a Mac with a notch use their own measurements; \
                                  otherwise start from the size below and adjust to match.",
                             ),
                     )
-                    .child(
-                        ui::Field::plain(&theme, "Notch Width")
-                            .icon("icons/enlarge.svg")
-                            .child(self.slider(SliderKey::Bg(BgSlider::NotchWidth), "pct", cx)),
-                    )
-                    .child(
-                        ui::Field::plain(&theme, "Notch Height")
-                            .icon("icons/enlarge.svg")
-                            .child(self.slider(SliderKey::Bg(BgSlider::NotchHeight), "pct", cx)),
-                    )
-                    .child(
-                        ui::Field::plain(&theme, "Notch Position")
-                            .icon("icons/enlarge.svg")
-                            .child(self.slider(SliderKey::Bg(BgSlider::NotchX), "pct", cx)),
-                    )
+                    .child(self.slider_field(
+                        "Notch Width",
+                        SliderKey::Bg(BgSlider::NotchWidth),
+                        "pct",
+                        cx,
+                    ))
+                    .child(self.slider_field(
+                        "Notch Height",
+                        SliderKey::Bg(BgSlider::NotchHeight),
+                        "pct",
+                        cx,
+                    ))
+                    .child(self.slider_field(
+                        "Notch Position",
+                        SliderKey::Bg(BgSlider::NotchX),
+                        "pct",
+                        cx,
+                    ))
                     .into_any_element(),
             ))
     }
@@ -3679,67 +3637,49 @@ impl EditorWindow {
         let theme = self.theme;
         let open = self.sidebar.shadow_open.is_open();
 
-        ui::Field::plain(&theme, "Shadow")
-            .icon("icons/shadow.svg")
-            .child(self.slider(SliderKey::Bg(BgSlider::Shadow), "%", cx))
+        div()
+            .flex()
+            .flex_col()
+            .child(self.slider_field("Shadow", SliderKey::Bg(BgSlider::Shadow), "%", cx))
             // `ShadowSettings` (`ShadowSettings.tsx:37-86`): its own trigger
             // row with a rotating chevron, over three sliders.
             .child(
                 div()
                     .flex()
                     .flex_col()
-                    .child(
-                        div()
-                            .id("shadow-advanced")
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .gap(px(4.))
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(Hsla::from(theme.gray_12))
-                            .cursor_pointer()
-                            .child(div().text_size(px(14.)).child("Advanced shadow settings"))
-                            .child(
-                                // `rotate-180` when open. There is no rotation
-                                // in this gpui rev, so the glyph swaps rather
-                                // than turns -- the same substitution the
-                                // settings window's reveal makes.
-                                svg()
-                                    .path(if open {
-                                        "icons/chevron-down.svg"
-                                    } else {
-                                        "icons/chevron-right.svg"
-                                    })
-                                    .size(px(20.))
-                                    .text_color(Hsla::from(theme.gray_12)),
-                            )
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.sidebar.shadow_open.toggle();
-                                this.animate_collapsibles(window, cx);
-                            })),
-                    )
+                    .child(disclosure_row(
+                        &theme,
+                        "shadow-advanced",
+                        "Advanced shadow settings",
+                        open,
+                        cx.listener(|this, _, window, cx| {
+                            this.sidebar.shadow_open.toggle();
+                            this.animate_collapsibles(window, cx);
+                        }),
+                    ))
                     .child(collapsible(
                         &self.sidebar.shadow_open,
                         div()
                             .flex()
                             .flex_col()
-                            .gap(px(24.))
-                            .mt(px(16.))
-                            .child(ui::Field::plain(&theme, "Size").child(self.slider(
+                            .child(self.slider_field(
+                                "Size",
                                 SliderKey::Bg(BgSlider::ShadowSize),
                                 "",
                                 cx,
-                            )))
-                            .child(ui::Field::plain(&theme, "Opacity").child(self.slider(
+                            ))
+                            .child(self.slider_field(
+                                "Opacity",
                                 SliderKey::Bg(BgSlider::ShadowOpacity),
                                 "",
                                 cx,
-                            )))
-                            .child(ui::Field::plain(&theme, "Blur").child(self.slider(
+                            ))
+                            .child(self.slider_field(
+                                "Blur",
                                 SliderKey::Bg(BgSlider::ShadowBlur),
                                 "",
                                 cx,
-                            )))
+                            ))
                             .into_any_element(),
                     )),
             )
@@ -3799,18 +3739,32 @@ impl EditorWindow {
         self.slider_sized(slider, unit, true, cx)
     }
 
-    /// `<Slider disabled>`: Kobalte stops the pointer reaching the track and
-    /// the fill repaints `data-disabled:bg-gray-8` (`editor/ui.tsx:118`). The
-    /// two audio volumes are the sidebar's only disabled sliders, and both are
-    /// disabled by `project.audio.mute` (`:786, :804`).
-    pub(crate) fn slider_disabled(
+    /// The inline row every single-slider setting is: label, track, readout.
+    /// The readout is the value the source only showed in the slider's own
+    /// tooltip, which the tooltip still carries.
+    pub(crate) fn slider_field(
         &self,
+        name: impl Into<SharedString>,
+        slider: SliderKey,
+        unit: &'static str,
+        cx: &mut Context<Self>,
+    ) -> ui::Field {
+        self.slider_field_disabled(name, slider, unit, false, cx)
+    }
+
+    pub(crate) fn slider_field_disabled(
+        &self,
+        name: impl Into<SharedString>,
         slider: SliderKey,
         unit: &'static str,
         disabled: bool,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        self.slider_sized_state(slider, unit, false, disabled, cx)
+    ) -> ui::Field {
+        let value = format_slider_value(self.slider_value(slider), unit);
+        ui::Field::inline(&self.theme, name)
+            .disabled(disabled)
+            .value_text(value)
+            .child(self.slider_sized_state(slider, unit, true, disabled, cx))
     }
 
     fn slider_sized(
@@ -3859,24 +3813,19 @@ impl EditorWindow {
                     track,
                 )
                 .flex()
-                .row_height(px(32.))
-                // `h-[0.3rem] bg-gray-4 rounded-full`
-                .track(px(4.8), Hsla::from(theme.gray_4))
+                .row_height(px(28.))
+                .track(px(3.), Hsla::from(theme.editor.ctl_active))
                 .fill(Hsla::from(if disabled {
-                    theme.gray_8
+                    theme.editor.text_3
                 } else {
-                    theme.blue_9
+                    theme.editor.accent
                 }))
-                // `bg-gray-1 dark:bg-gray-12 border border-gray-6 size-4`
                 .thumb(
-                    px(16.),
-                    Hsla::from(if theme.is_dark() {
-                        theme.gray_12
-                    } else {
-                        theme.gray_1
-                    }),
-                    Some(Hsla::from(theme.gray_6)),
+                    px(14.),
+                    Hsla::from(theme.editor.thumb),
+                    Some(gpui::hsla(0., 0., 0., 0.12)),
                 )
+                .thumb_shadow()
                 .when(!disabled, |this| {
                     this.on_drag_start(cx.listener(
                         move |this, event: &MouseDownEvent, window, cx| {
@@ -3905,30 +3854,106 @@ pub(crate) fn format_slider_value(value: f32, unit: &str) -> String {
     }
 }
 
-/// The dashed dividers. gpui has no dashed border, so the dashes are painted:
-/// 4px on, 4px off, one pixel tall.
+/// The section dividers: a solid hairline, not the source's dashes.
 pub(crate) fn dashed_divider(color: Hsla) -> impl IntoElement {
-    div().w_full().h(px(1.)).child(
-        canvas(
-            |_, _, _| {},
-            move |bounds: Bounds<Pixels>, _, window: &mut Window, _| {
-                let mut x = f32::from(bounds.origin.x);
-                let right = x + f32::from(bounds.size.width);
-                while x < right {
-                    let width = 4_f32.min(right - x);
-                    window.paint_quad(gpui::fill(
-                        Bounds {
-                            origin: gpui::point(px(x), bounds.origin.y),
-                            size: gpui::size(px(width), px(1.)),
-                        },
-                        color,
-                    ));
-                    x += 8.;
-                }
-            },
+    div().w_full().h(px(1.)).bg(color)
+}
+
+/// A section header that is also a disclosure trigger: same 12px/500 `text_2`
+/// as [`ui::Field::section`]'s label, with a chevron.
+pub(crate) fn disclosure_row(
+    theme: &crate::theme::Theme,
+    id: impl Into<gpui::ElementId>,
+    label: impl Into<SharedString>,
+    open: bool,
+    handler: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
+) -> AnyElement {
+    let id = id.into();
+    let group: SharedString = SharedString::from(format!("dr-{id:?}"));
+    let rest = Hsla::from(theme.editor.text_2);
+    let hover = Hsla::from(theme.editor.text_1);
+
+    div()
+        .id(id)
+        .group(group.clone())
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(4.))
+        .min_h(px(22.))
+        .text_size(px(12.))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(rest)
+        .cursor_pointer()
+        .hover(move |this| this.text_color(hover))
+        .child(label.into())
+        .child(
+            // `rotate-180` when open. There is no rotation in this gpui rev,
+            // so the glyph swaps rather than turns.
+            svg()
+                .path(if open {
+                    "icons/chevron-down.svg"
+                } else {
+                    "icons/chevron-right.svg"
+                })
+                .size(px(12.))
+                .flex_shrink_0()
+                .text_color(Hsla::from(theme.editor.text_3))
+                .group_hover(group, move |style| style.text_color(hover)),
         )
-        .size_full(),
-    )
+        .on_click(handler)
+        .into_any_element()
+}
+
+/// The 22px ghost that sits on a section header's own row (`None`, `Save`,
+/// `Reset`). `EditorButton` is the 28px ghost the header rows are too short
+/// for, and its height is shared with the player toolbar.
+pub(crate) fn section_action(
+    theme: &crate::theme::Theme,
+    id: impl Into<gpui::ElementId>,
+    label: impl Into<SharedString>,
+    icon: Option<&'static str>,
+    active: bool,
+    handler: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
+) -> AnyElement {
+    let id = id.into();
+    let group: SharedString = SharedString::from(format!("sa-{id:?}"));
+    let rest = Hsla::from(theme.editor.text_2);
+    let hover = Hsla::from(theme.editor.text_1);
+    let foreground = if active { hover } else { rest };
+
+    div()
+        .id(id)
+        .group(group.clone())
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(4.))
+        .h(px(22.))
+        .px(px(6.))
+        .rounded(px(6.))
+        .flex_shrink_0()
+        .text_size(px(12.))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(foreground)
+        .when(active, |this| this.bg(Hsla::from(theme.editor.ctl_hover)))
+        .cursor_pointer()
+        .hover(move |this| {
+            this.bg(Hsla::from(theme.editor.ctl_hover))
+                .text_color(hover)
+        })
+        .active(move |this| this.bg(Hsla::from(theme.editor.ctl_active)))
+        .children(icon.map(|icon| {
+            svg()
+                .path(icon)
+                .size(px(12.))
+                .flex_shrink_0()
+                .text_color(foreground)
+                .group_hover(group, move |style| style.text_color(hover))
+        }))
+        .child(label.into())
+        .on_click(handler)
+        .into_any_element()
 }
 
 /// The clipped, animating container. Mounted while open *and* while animating
@@ -3959,6 +3984,24 @@ trait DashedBorder {
     fn border_dashed_1(self, color: Hsla) -> Self;
 }
 
+/// The selected-tile ring: a 2px accent border with a 2px gap of the card
+/// colour inside it, painted on every tile so selecting one never moves the
+/// grid.
+pub(crate) const RING_WIDTH: f32 = 2.;
+pub(crate) const RING_GAP: f32 = 2.;
+
+pub(crate) trait SelectionRing {
+    fn selection_ring(self, gap: Hsla, accent: impl Into<Hsla>, selected: bool) -> Self;
+}
+
+fn ring_colors(gap: Hsla, accent: impl Into<Hsla>, selected: bool) -> (Hsla, Hsla) {
+    if selected {
+        (gap, accent.into())
+    } else {
+        (gpui::transparent_black(), gpui::transparent_black())
+    }
+}
+
 impl DashedBorder for gpui::Div {
     fn border_dashed_1(self, color: Hsla) -> Self {
         self.border_1().border_color(color)
@@ -3968,6 +4011,26 @@ impl DashedBorder for gpui::Div {
 impl DashedBorder for gpui::Stateful<gpui::Div> {
     fn border_dashed_1(self, color: Hsla) -> Self {
         self.border_1().border_color(color)
+    }
+}
+
+impl SelectionRing for gpui::Div {
+    fn selection_ring(self, gap: Hsla, accent: impl Into<Hsla>, selected: bool) -> Self {
+        let (fill, border) = ring_colors(gap, accent, selected);
+        self.bg(fill)
+            .p(px(RING_GAP))
+            .border(px(RING_WIDTH))
+            .border_color(border)
+    }
+}
+
+impl SelectionRing for gpui::Stateful<gpui::Div> {
+    fn selection_ring(self, gap: Hsla, accent: impl Into<Hsla>, selected: bool) -> Self {
+        let (fill, border) = ring_colors(gap, accent, selected);
+        self.bg(fill)
+            .p(px(RING_GAP))
+            .border(px(RING_WIDTH))
+            .border_color(border)
     }
 }
 
@@ -4004,15 +4067,26 @@ impl EditorWindow {
         window.refresh();
     }
 
-    /// `CAP_GPUI_AUTO_SELECT=<track>:<i>[,<i>]`, through `set_selection` so the
-    /// panel opens exactly as a timeline click opens it.
+    /// `CAP_GPUI_AUTO_SELECT=<track>:<i>[,<i>][@<scroll>]`, through
+    /// `set_selection` so the panel opens exactly as a timeline click opens it.
+    ///
+    /// The optional `@<scroll>` is the same escape hatch the tab hook has: a
+    /// synthetic wheel does not move the sidebar's scroll body, so a panel
+    /// taller than the pane cannot be photographed below the fold without it.
+    /// It is applied after the selection, which resets the offset.
     pub(crate) fn auto_select_segments(&mut self, spec: &str, cx: &mut Context<Self>) {
+        let (spec, scroll) = match spec.split_once('@') {
+            Some((spec, scroll)) => (spec, scroll.trim().parse::<f32>().ok()),
+            None => (spec, None),
+        };
         let Some((track, indices)) = spec.split_once(':') else {
             tracing::warn!(spec, "auto select needs <track>:<index>");
             return;
         };
         let track = match track.to_ascii_lowercase().as_str() {
             "zoom" => TrackKind::Zoom,
+            "style" => TrackKind::Style,
+            "image" => TrackKind::Image,
             "text" => TrackKind::Text,
             "caption" => TrackKind::Caption,
             "mask" => TrackKind::Mask,
@@ -4032,8 +4106,13 @@ impl EditorWindow {
         if indices.is_empty() {
             return;
         }
-        tracing::info!(?track, ?indices, "auto select segments");
+        tracing::info!(?track, ?indices, ?scroll, "auto select segments");
         self.set_selection(Some(crate::editor_edits::Selection { track, indices }), cx);
+        if let Some(offset) = scroll {
+            self.sidebar
+                .scroll
+                .set_offset(gpui::point(px(0.), px(-offset)));
+        }
     }
 }
 
@@ -4066,13 +4145,8 @@ mod tests {
         };
         assert_eq!(source_tab_for(&source), SourceTab::AnimatedGradient);
         assert_eq!(SourceTab::AnimatedGradient.label(), "Animated");
-        assert!(SourceTab::ROWS[1].contains(&SourceTab::AnimatedGradient));
-        assert!(
-            !SourceTab::ROWS
-                .iter()
-                .flatten()
-                .any(|tab| *tab == SourceTab::None)
-        );
+        assert!(SourceTab::PICKER.contains(&SourceTab::AnimatedGradient));
+        assert!(!SourceTab::PICKER.contains(&SourceTab::None));
         assert!(!ColorTarget::AnimatedGradientStop(0).is_hex_string());
     }
 
@@ -4188,6 +4262,48 @@ mod tests {
     }
 
     #[test]
+    fn importing_a_desktop_background_preserves_referenced_snapshots() {
+        let root = std::env::temp_dir().join(format!(
+            "cap-gpui-desktop-background-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let project = root.join("project.cap");
+        let source = root.join("wallpaper.jpg");
+        std::fs::create_dir_all(&root).unwrap();
+        image::RgbImage::from_pixel(32, 16, image::Rgb([40, 120, 200]))
+            .save(&source)
+            .unwrap();
+        let previous = project.join("assets/current-desktop-background-1.jpg");
+        std::fs::create_dir_all(previous.parent().unwrap()).unwrap();
+        write_desktop_background_snapshot(&source, &previous).unwrap();
+        let saved_style_path = previous.clone();
+        let history_path = previous.clone();
+        let previous_bytes = std::fs::read(&previous).unwrap();
+        let sibling_pending = project.join("assets/current-desktop-background-2.pending.jpg");
+        std::fs::write(&sibling_pending, b"another import in progress").unwrap();
+
+        image::RgbImage::from_pixel(48, 24, image::Rgb([180, 60, 30]))
+            .save(&source)
+            .unwrap();
+        let imported = import_desktop_background_from_source(&project, &source).unwrap();
+
+        assert_ne!(imported, previous);
+        assert_eq!(image::image_dimensions(&imported).unwrap(), (48, 24));
+        assert_eq!(std::fs::read(saved_style_path).unwrap(), previous_bytes);
+        assert_eq!(image::image_dimensions(history_path).unwrap(), (32, 16));
+        assert_eq!(
+            std::fs::read(sibling_pending).unwrap(),
+            b"another import in progress"
+        );
+        assert_eq!(stored_desktop_background(&project), Some(imported));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn none_wins_over_the_underlying_source() {
         let mut config = ProjectConfiguration::default();
         config.background.padding = 0.;
@@ -4256,5 +4372,331 @@ mod tests {
         let ring = preview_border_color([255, 255, 255]);
         let rgba = gpui::Rgba::from(ring);
         assert_eq!((rgba.r * 255.).round() as u8, 209);
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StyleGroup {
+    Background,
+    Camera,
+    Cursor,
+}
+
+impl StyleGroup {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Background => "Background & frame",
+            Self::Camera => "Camera",
+            Self::Cursor => "Cursor",
+        }
+    }
+
+    pub(crate) fn icon(self) -> &'static str {
+        match self {
+            Self::Background => "icons/monitor-outline.svg",
+            Self::Camera => "icons/camera.svg",
+            Self::Cursor => "icons/cursor.svg",
+        }
+    }
+}
+
+pub(crate) fn apply_style_control_change(
+    project: &mut ProjectConfiguration,
+    index: usize,
+    group: StyleGroup,
+    change: impl FnOnce(&mut ProjectConfiguration) -> bool,
+) -> bool {
+    let Some(segment) = project
+        .timeline
+        .as_ref()
+        .and_then(|timeline| timeline.style_segments.get(index))
+    else {
+        return false;
+    };
+    let mut scoped = project.clone();
+    match group {
+        StyleGroup::Background => {
+            let Some(value) = &segment.overrides.background else {
+                return false;
+            };
+            scoped.background = value.clone();
+        }
+        StyleGroup::Camera => {
+            let Some(value) = &segment.overrides.camera else {
+                return false;
+            };
+            scoped.camera = value.clone();
+        }
+        StyleGroup::Cursor => {
+            let Some(value) = &segment.overrides.cursor else {
+                return false;
+            };
+            scoped.cursor = value.clone();
+        }
+    }
+    if !change(&mut scoped) {
+        return false;
+    }
+    let Some(segment) = project
+        .timeline
+        .as_mut()
+        .and_then(|timeline| timeline.style_segments.get_mut(index))
+    else {
+        return false;
+    };
+    match group {
+        StyleGroup::Background => segment.overrides.background = Some(scoped.background),
+        StyleGroup::Camera => segment.overrides.camera = Some(scoped.camera),
+        StyleGroup::Cursor => segment.overrides.cursor = Some(scoped.cursor),
+    }
+    true
+}
+
+impl EditorWindow {
+    pub(crate) fn style_background(&self) -> &cap_project::BackgroundConfiguration {
+        self.sidebar
+            .style_target
+            .filter(|(_, group)| *group == StyleGroup::Background)
+            .and_then(|(index, _)| {
+                self.project
+                    .timeline
+                    .as_ref()?
+                    .style_segments
+                    .get(index)?
+                    .overrides
+                    .background
+                    .as_ref()
+            })
+            .unwrap_or(&self.project.background)
+    }
+
+    pub(crate) fn style_control_project(&self) -> std::borrow::Cow<'_, ProjectConfiguration> {
+        let Some((index, group)) = self.sidebar.style_target else {
+            return std::borrow::Cow::Borrowed(&self.project);
+        };
+        let Some(segment) = self
+            .project
+            .timeline
+            .as_ref()
+            .and_then(|timeline| timeline.style_segments.get(index))
+        else {
+            return std::borrow::Cow::Borrowed(&self.project);
+        };
+        let mut project = self.project.clone();
+        match group {
+            StyleGroup::Background => {
+                if let Some(value) = &segment.overrides.background {
+                    project.background = value.clone();
+                }
+            }
+            StyleGroup::Camera => {
+                if let Some(value) = &segment.overrides.camera {
+                    project.camera = value.clone();
+                }
+            }
+            StyleGroup::Cursor => {
+                if let Some(value) = &segment.overrides.cursor {
+                    project.cursor = value.clone();
+                }
+            }
+        }
+        std::borrow::Cow::Owned(project)
+    }
+
+    pub(crate) fn with_style_controls<R>(&mut self, render: impl FnOnce(&mut Self) -> R) -> R {
+        let std::borrow::Cow::Owned(scoped) = self.style_control_project() else {
+            return render(self);
+        };
+        // Existing controls read the project while building their elements. Restore the base before any event can publish or save it.
+        let base = std::mem::replace(&mut self.project, scoped);
+        let result = render(self);
+        self.project = base;
+        result
+    }
+
+    fn apply_control_change(
+        &mut self,
+        change: impl FnOnce(&mut ProjectConfiguration) -> bool,
+    ) -> bool {
+        match self.sidebar.style_target {
+            Some((index, group)) => {
+                apply_style_control_change(&mut self.project, index, group, change)
+            }
+            None => change(&mut self.project),
+        }
+    }
+
+    pub(crate) fn open_style_group(
+        &mut self,
+        index: usize,
+        group: StyleGroup,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dismiss_frame_controls(cx);
+        self.end_field_edit(cx);
+        self.close_color_picker(cx);
+        self.sidebar.menu = None;
+        self.sidebar.style_target = Some((index, group));
+        self.sidebar.tab = match group {
+            StyleGroup::Background => SidebarTab::Background,
+            StyleGroup::Camera => SidebarTab::Camera,
+            StyleGroup::Cursor => SidebarTab::Cursor,
+        };
+        let ripple_enabled = self.style_control_project().cursor.ripple.enabled;
+        self.sidebar.cursor_ripple_open.set_open(ripple_enabled);
+        self.sidebar.source_tab = initial_source_tab(&self.style_control_project());
+        self.sidebar.scroll.set_offset(gpui::point(px(0.), px(0.)));
+        cx.notify();
+        window.refresh();
+    }
+
+    fn render_style_group(
+        &self,
+        index: usize,
+        group: StyleGroup,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .child(
+                div()
+                    .p(px(12.))
+                    .flex()
+                    .flex_col()
+                    .gap(px(6.))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(px(8.))
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .child(svg().path(group.icon()).size(px(16.)))
+                            .child(format!("Style {} · {}", index + 1, group.label())),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .child("Editing this segment only. Global settings are unchanged."),
+                    )
+                    .child(
+                        div()
+                            .id("style-back")
+                            .cursor_pointer()
+                            .text_size(px(12.))
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_row()
+                                    .items_center()
+                                    .gap(px(4.))
+                                    .child(svg().path("icons/arrow-left.svg").size(px(14.)))
+                                    .child("Back to Style"),
+                            )
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.end_field_edit(cx);
+                                this.close_color_picker(cx);
+                                this.sidebar.menu = None;
+                                this.sidebar.style_target = None;
+                                cx.notify();
+                                window.refresh();
+                            })),
+                    ),
+            )
+            .child(self.render_tab_body(cx))
+            .into_any_element()
+    }
+}
+
+impl EditorWindow {
+    fn style_target_fingerprint(&self) -> Option<String> {
+        let index = self.sidebar.style_target?.0;
+        serde_json::to_string(self.project.timeline.as_ref()?.style_segments.get(index)?).ok()
+    }
+
+    pub(crate) fn selected_style_index(&self) -> Option<usize> {
+        self.sidebar
+            .style_target
+            .map(|target| target.0)
+            .or_else(|| {
+                self.selection()
+                    .filter(|selection| {
+                        selection.track == TrackKind::Style && selection.indices.len() == 1
+                    })
+                    .map(|selection| selection.indices[0])
+            })
+    }
+}
+
+#[cfg(test)]
+mod style_image_tests {
+    use super::*;
+
+    #[test]
+    fn style_image_group_changes_preserve_globals_and_require_opt_in() {
+        let mut project: ProjectConfiguration = serde_json::from_value(
+            serde_json::json!({"timeline":{"zoomSegments":[],"segments":[],"styleSegments":[{"start":1,"end":5}]}}),
+        )
+        .unwrap();
+        let base = serde_json::to_value(&project).unwrap();
+        assert!(!apply_style_control_change(
+            &mut project,
+            0,
+            StyleGroup::Background,
+            |project| {
+                project.background.padding = 30.;
+                true
+            }
+        ));
+        assert_eq!(serde_json::to_value(&project).unwrap(), base);
+        let background = project.background.clone();
+        let camera = project.camera.clone();
+        let cursor = project.cursor.clone();
+        let segment = &mut project.timeline.as_mut().unwrap().style_segments[0];
+        segment.overrides.background = Some(background);
+        segment.overrides.camera = Some(camera);
+        segment.overrides.cursor = Some(cursor);
+        assert!(apply_style_control_change(
+            &mut project,
+            0,
+            StyleGroup::Background,
+            |project| {
+                project.background.padding = 30.;
+                project.camera.hide = true;
+                true
+            }
+        ));
+        assert!(apply_style_control_change(
+            &mut project,
+            0,
+            StyleGroup::Camera,
+            |project| {
+                project.camera.hide = true;
+                true
+            }
+        ));
+        for enabled in [true, false] {
+            assert!(apply_style_control_change(
+                &mut project,
+                0,
+                StyleGroup::Cursor,
+                |project| {
+                    project.cursor.ripple.enabled = enabled;
+                    true
+                }
+            ));
+        }
+        let after = serde_json::to_value(&project).unwrap();
+        for group in ["background", "camera", "cursor"] {
+            assert_eq!(after[group], base[group]);
+        }
+        let segment = &project.timeline.as_ref().unwrap().style_segments[0];
+        assert_eq!(segment.overrides.background.as_ref().unwrap().padding, 30.);
+        assert!(segment.overrides.camera.as_ref().unwrap().hide);
+        assert!(!segment.overrides.cursor.as_ref().unwrap().ripple.enabled);
     }
 }

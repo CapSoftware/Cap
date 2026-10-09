@@ -80,6 +80,24 @@ fn matches_window_title(exclusions: &[WindowExclusion], title: &str) -> bool {
         .any(|entry| entry.matches(None, None, Some(title)))
 }
 
+#[cfg(any(target_os = "macos", test))]
+fn excludes_own_window(
+    exclusions: &[WindowExclusion],
+    window: &crate::windows::CapWindowId,
+) -> bool {
+    matches!(window, crate::windows::CapWindowId::RecordingControls)
+        || matches_window_title(exclusions, &window.title())
+}
+
+#[cfg(target_os = "macos")]
+fn append_native_window_id(ids: &mut Vec<WindowId>, native_id: &WindowId) -> bool {
+    if ids.contains(native_id) {
+        return false;
+    }
+    ids.push(native_id.clone());
+    true
+}
+
 #[cfg(target_os = "macos")]
 pub fn resolve_window_ids(exclusions: &[WindowExclusion]) -> Vec<WindowId> {
     if exclusions.is_empty() {
@@ -132,7 +150,7 @@ pub fn append_matching_webview_window_ids(
             continue;
         };
         let title = window_id.title();
-        if !matches_window_title(exclusions, &title) {
+        if !excludes_own_window(exclusions, &window_id) {
             continue;
         }
         let Some(native_id) = webview_window_id(&window) else {
@@ -143,25 +161,7 @@ pub fn append_matching_webview_window_ids(
             );
             continue;
         };
-        if Window::from_id(&native_id).is_none() {
-            if window.is_visible().unwrap_or(false) {
-                warn!(
-                    window_id = %native_id,
-                    label = %label,
-                    title = %title,
-                    "Excluded Tauri webview window id is not visible to CGWindowList"
-                );
-            } else {
-                debug!(
-                    window_id = %native_id,
-                    label = %label,
-                    title = %title,
-                    "Skipping hidden excluded Tauri webview window"
-                );
-            }
-            continue;
-        }
-        if ids.contains(&native_id) {
+        if !append_native_window_id(ids, &native_id) {
             debug!(
                 window_id = %native_id,
                 label = %label,
@@ -176,14 +176,14 @@ pub fn append_matching_webview_window_ids(
             title = %title,
             "Resolved excluded Tauri webview window"
         );
-        ids.push(native_id);
     }
 }
 
 #[cfg(target_os = "macos")]
 fn webview_window_id(window: &tauri::WebviewWindow) -> Option<WindowId> {
     let ns_window = window.ns_window().ok()? as *const objc2_app_kit::NSWindow;
-    let number = unsafe { (*ns_window).windowNumber() };
+    let ns_window = unsafe { ns_window.as_ref() }?;
+    let number = unsafe { ns_window.windowNumber() };
 
     if number <= 0 {
         return None;
@@ -333,6 +333,47 @@ mod tests {
 
         assert!(matches_window_title(&exclusions, "Cap Camera"));
         assert!(!matches_window_title(&exclusions, "Cap Recording Controls"));
+    }
+
+    #[test]
+    fn own_controls_are_excluded_with_empty_or_custom_rules() {
+        use crate::windows::CapWindowId;
+
+        assert!(excludes_own_window(&[], &CapWindowId::RecordingControls));
+        assert!(excludes_own_window(
+            &[title_exclusion("Unrelated window")],
+            &CapWindowId::RecordingControls,
+        ));
+        assert!(!excludes_own_window(&[], &CapWindowId::Camera));
+    }
+
+    #[test]
+    fn own_window_exclusions_preserve_default_and_instant_camera_rules() {
+        use crate::windows::CapWindowId;
+
+        let defaults = crate::general_settings::default_excluded_windows();
+        assert!(excludes_own_window(
+            &defaults,
+            &CapWindowId::RecordingControls
+        ));
+        assert!(excludes_own_window(&defaults, &CapWindowId::Camera));
+        let instant = filter_for_instant_mode(defaults, &CapWindowId::Camera.title());
+        assert!(!excludes_own_window(&instant, &CapWindowId::Camera));
+        assert!(excludes_own_window(
+            &instant,
+            &CapWindowId::RecordingControls
+        ));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn native_exclusion_ids_do_not_require_a_visible_cg_window() {
+        let native_id: WindowId = "4294967294".parse().unwrap();
+        let mut ids = Vec::new();
+        assert!(append_native_window_id(&mut ids, &native_id));
+        assert_eq!(ids, vec![native_id.clone()]);
+        assert!(!append_native_window_id(&mut ids, &native_id));
+        assert_eq!(ids.len(), 1);
     }
 
     #[test]

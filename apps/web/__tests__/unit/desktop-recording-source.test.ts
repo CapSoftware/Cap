@@ -26,6 +26,7 @@ import {
 	commitDesktopRecordingSource,
 	DesktopRecordingSourceError,
 	getDesktopRecordingOutputKey,
+	prepareDesktopRecordingSegments,
 } from "@/lib/desktop-recording-source";
 
 type VideoRow = Parameters<typeof commitDesktopRecordingSource>[0];
@@ -421,6 +422,302 @@ function seedSegments(
 
 beforeEach(() => {
 	vi.clearAllMocks();
+});
+
+describe("recording source preparation during upload", () => {
+	it.each(["missing", "corrupt", "unknown-version"])(
+		"keeps normal finalization available with a %s preparation marker",
+		async (mutation) => {
+			const storage = storageFixture();
+			seedSegments(storage, [1], false);
+			await prepareDesktopRecordingSegments(
+				recording(),
+				[{ track: "video", index: 1 }],
+				async () => true,
+			);
+			const marker = `${prefix}/.recording/sources/preparation.json`;
+			if (mutation === "missing") storage.objects.delete(marker);
+			else
+				storage.seed(
+					marker,
+					mutation === "corrupt" ? "invalid" : JSON.stringify({ version: 2 }),
+				);
+			const source = await commitDesktopRecordingSource(
+				recording(),
+				generation,
+			);
+			expect(storage.bucket.copyObject).toHaveBeenCalledTimes(3);
+			expect(
+				readInventory(storage, source.inventoryKey).objects.every(
+					(entry) => !entry.key.includes("/prepared/"),
+				),
+			).toBe(true);
+			expect(
+				storage.object(`${prefix}/segments/video/segment_001.m4s`).body,
+			).toBe("video-fragment-1");
+		},
+	);
+
+	it("bounds a stalled recording-state check before copying fragments", async () => {
+		vi.useFakeTimers();
+		try {
+			const storage = storageFixture();
+			seedSegments(storage, [1], false);
+			const result = prepareDesktopRecordingSegments(
+				recording(),
+				[{ track: "video", index: 1 }],
+				() => new Promise<boolean>(() => {}),
+			);
+			const rejected = expect(result).rejects.toThrow("timed out");
+			await vi.advanceTimersByTimeAsync(5_001);
+			await rejected;
+			expect(storage.bucket.copyObject).not.toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("does not acknowledge stalled storage or hold the request indefinitely", async () => {
+		vi.useFakeTimers();
+		try {
+			const storage = storageFixture();
+			seedSegments(storage, [1, 2, 3, 4, 5], false);
+			storage.bucket.headObject.mockImplementation(() => Effect.never);
+			const result = prepareDesktopRecordingSegments(
+				recording(),
+				Array.from({ length: 5 }, (_, index) => ({
+					track: "video" as const,
+					index: index + 1,
+				})),
+				async () => true,
+			);
+			await vi.advanceTimersByTimeAsync(15_001);
+			expect(await result).toEqual([]);
+			expect(storage.bucket.copyObject).not.toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	for (const provider of ["s3", "googleDrive"]) {
+		it(`reuses ${provider} copies after Stop without copying media twice`, async () => {
+			const storage = storageFixture(provider);
+			const { manifest } = seedSegments(storage);
+			storage.seed(
+				manifestKey,
+				JSON.stringify({ ...manifest, is_complete: false }),
+			);
+			const requested = [
+				{ track: "video" as const, index: 1 },
+				{ track: "video" as const, index: 2 },
+				{ track: "audio" as const, index: 1 },
+			];
+			expect(
+				await prepareDesktopRecordingSegments(
+					recording(),
+					requested,
+					async () => true,
+				),
+			).toEqual(requested);
+			expect(storage.bucket.copyObject).toHaveBeenCalledTimes(3);
+			await prepareDesktopRecordingSegments(
+				recording(),
+				[...requested, { track: "video", index: 1 }],
+				async () => true,
+			);
+			expect(storage.bucket.copyObject).toHaveBeenCalledTimes(3);
+			storage.seed(
+				manifestKey,
+				JSON.stringify({
+					...manifest,
+				}),
+			);
+			const source = await commitDesktopRecordingSource(
+				recording(),
+				generation,
+			);
+			expect(storage.bucket.copyObject).toHaveBeenCalledTimes(5);
+			const inventory = readInventory(storage, source.inventoryKey);
+			expect(
+				inventory.objects.filter((entry) => entry.key.includes("/prepared/")),
+			).toHaveLength(3);
+			expect(storage.object(videoInitKey).body).toBe("video-init");
+			const urls = await buildDesktopRecordingSourceUrls(recording(), source);
+			expect(urls.videoSegmentUrls).toHaveLength(2);
+		});
+	}
+
+	it("leaves late fragments for normal finalization", async () => {
+		const storage = storageFixture();
+		const { manifest } = seedSegments(storage, [1], false);
+		const prepared = await prepareDesktopRecordingSegments(
+			recording(),
+			[
+				{ track: "video", index: 1 },
+				{ track: "video", index: 2 },
+			],
+			async () => true,
+		);
+		expect(prepared).toEqual([{ track: "video", index: 1 }]);
+		storage.seed(`${prefix}/segments/video/segment_002.m4s`, "late-fragment");
+		storage.seed(
+			manifestKey,
+			JSON.stringify({
+				...manifest,
+				video_segments: [1, 2],
+			}),
+		);
+		const source = await commitDesktopRecordingSource(recording(), generation);
+		expect(readInventory(storage, source.inventoryKey).objects).toHaveLength(3);
+		expect(storage.bucket.copyObject).toHaveBeenCalledTimes(3);
+	});
+
+	it("does not accept missing final fragments because earlier preparation succeeded", async () => {
+		const storage = storageFixture();
+		const { manifest } = seedSegments(storage, [1], false);
+		await prepareDesktopRecordingSegments(
+			recording(),
+			[{ track: "video", index: 1 }],
+			async () => true,
+		);
+		storage.seed(
+			manifestKey,
+			JSON.stringify({
+				...manifest,
+				video_segments: [1, 2],
+			}),
+		);
+		await expect(
+			commitDesktopRecordingSource(recording(), generation),
+		).rejects.toThrow("missing");
+		expect(
+			storage.object(`${prefix}/segments/video/segment_001.m4s`).body,
+		).toBe("video-fragment-1");
+	});
+
+	it("uses the current source when a fragment was uploaded again after preparation", async () => {
+		const storage = storageFixture();
+		const { manifest } = seedSegments(storage, [1], false);
+		await prepareDesktopRecordingSegments(
+			recording(),
+			[{ track: "video", index: 1 }],
+			async () => true,
+		);
+		storage.seed(
+			`${prefix}/segments/video/segment_001.m4s`,
+			"replacement-fragment",
+		);
+		storage.seed(
+			manifestKey,
+			JSON.stringify({
+				...manifest,
+			}),
+		);
+		const source = await commitDesktopRecordingSource(recording(), generation);
+		const output = readInventory(storage, source.inventoryKey).objects;
+		const fragment = output.find((entry) => entry.index === 1);
+		if (!fragment) throw new Error("Missing copied video fragment");
+		expect(output.every((entry) => !entry.key.includes("/prepared/"))).toBe(
+			true,
+		);
+		expect(storage.object(fragment.key).body).toBe("replacement-fragment");
+	});
+
+	for (const mutation of ["receipt", "object", "missing"] as const) {
+		it(`falls back when the optional prepared ${mutation} is invalid`, async () => {
+			const storage = storageFixture();
+			const { manifest } = seedSegments(storage, [1], false);
+			await prepareDesktopRecordingSegments(
+				recording(),
+				[{ track: "video", index: 1 }],
+				async () => true,
+			);
+			const copy = storage.bucket.copyObject.mock.calls[0];
+			if (!copy) throw new Error("Missing prepared copy");
+			const key = copy[1];
+			if (mutation === "receipt")
+				storage.seed(
+					key.replace(/\/video\/1\.m4s$/, "/receipt.json"),
+					"invalid-json",
+				);
+			if (mutation === "object") storage.seed(key, "wrong-fragment");
+			if (mutation === "missing") storage.objects.delete(key);
+			storage.seed(
+				manifestKey,
+				JSON.stringify({
+					...manifest,
+				}),
+			);
+			const source = await commitDesktopRecordingSource(
+				recording(),
+				generation,
+			);
+			const objects = readInventory(storage, source.inventoryKey).objects;
+			const fragment = objects.find((entry) => entry.index === 1);
+			if (!fragment) throw new Error("Missing copied video fragment");
+			expect(objects.every((entry) => !entry.key.includes("/prepared/"))).toBe(
+				true,
+			);
+			expect(storage.object(fragment.key).body).toBe("video-fragment-1");
+		});
+	}
+
+	it("stops scheduling copies when the recording is stopped or deleted", async () => {
+		const storage = storageFixture();
+		seedSegments(storage, [1, 2, 3, 4, 5, 6], false);
+		const canContinue = vi
+			.fn()
+			.mockResolvedValueOnce(true)
+			.mockResolvedValue(false);
+		const prepared = await prepareDesktopRecordingSegments(
+			recording(),
+			Array.from({ length: 6 }, (_, index) => ({
+				track: "video" as const,
+				index: index + 1,
+			})),
+			canContinue,
+		);
+		expect(prepared).toHaveLength(4);
+		expect(storage.bucket.copyObject).toHaveBeenCalledTimes(4);
+		await prepareDesktopRecordingSegments(
+			recording(),
+			[{ track: "video", index: 5 }],
+			async () => false,
+		);
+		expect(storage.bucket.copyObject).toHaveBeenCalledTimes(4);
+	});
+
+	it("bounds speculative copies and rejects init files and oversized batches", async () => {
+		const storage = storageFixture();
+		seedSegments(storage, [1], false);
+		storage.object(`${prefix}/segments/video/segment_001.m4s`).size =
+			65 * 1024 * 1024;
+		expect(
+			await prepareDesktopRecordingSegments(
+				recording(),
+				[{ track: "video", index: 1 }],
+				async () => true,
+			),
+		).toEqual([]);
+		await expect(
+			prepareDesktopRecordingSegments(
+				recording(),
+				[{ track: "video", index: 0 }],
+				async () => true,
+			),
+		).rejects.toThrow();
+		await expect(
+			prepareDesktopRecordingSegments(
+				recording(),
+				Array.from({ length: 33 }, (_, index) => ({
+					track: "video" as const,
+					index: index + 1,
+				})),
+				async () => true,
+			),
+		).rejects.toThrow();
+		expect(storage.bucket.copyObject).not.toHaveBeenCalled();
+	});
 });
 
 describe("durable desktop recording source commit", () => {

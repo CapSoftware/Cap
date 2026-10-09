@@ -13,17 +13,43 @@ on:
       - main
     paths:
       - "apps/media-server/**"
+      - "scripts/benchmark-instant-audio.py"
+      - "scripts/benchmark-audio-intelligibility.py"
+      - "scripts/test-audio-intelligibility.py"
       - ".github/workflows/docker-build-media-server.yml"
   pull_request:
     paths:
       - "apps/media-server/**"
+      - "scripts/benchmark-instant-audio.py"
+      - "scripts/benchmark-audio-intelligibility.py"
+      - "scripts/test-audio-intelligibility.py"
       - ".github/workflows/docker-build-media-server.yml"
+
+permissions: {}
 
 concurrency:
   group: media-server-${{ github.head_ref || github.ref_name }}-${{ inputs.tag || 'latest' }}
   cancel-in-progress: true
 
 jobs:
+  audio-metrics:
+    name: Audio intelligibility alignment
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Verify aligned audio metrics
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          python3 -m venv "$RUNNER_TEMP/audio-metrics"
+          "$RUNNER_TEMP/audio-metrics/bin/python" -m pip install --disable-pip-version-check --no-input --only-binary=:all: numpy==2.4.1 scipy==1.18.1 pystoi==0.4.1
+          "$RUNNER_TEMP/audio-metrics/bin/python" scripts/test-audio-intelligibility.py
+
   build:
     name: Build Docker Image (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
@@ -77,6 +103,13 @@ jobs:
         env:
           MEDIA_IMAGE: ${{ github.event_name == 'pull_request' && 'cap-media-server:verification' || format('ghcr.io/{0}/cap-media-server@{1}', env.REPOSITORY_OWNER, steps.build.outputs.digest) }}
         run: |
+          docker run --rm --network none --entrypoint bun "$MEDIA_IMAGE" test \
+            src/__tests__/lib/audio-quality-policy.test.ts \
+            src/__tests__/lib/audio-quality.integration.test.ts \
+            src/__tests__/lib/audio-quality-formats.integration.test.ts \
+            src/__tests__/lib/audio-quality-benchmark.test.ts
+          docker run --rm --network none --entrypoint bun "$MEDIA_IMAGE" test \
+            src/__tests__/lib/audio-levels.integration.test.ts
           docker run --rm --network none --entrypoint bun "$MEDIA_IMAGE" test \
             src/__tests__/lib/recording-verification.integration.test.ts \
             src/__tests__/lib/job-manager.test.ts

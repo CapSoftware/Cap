@@ -437,18 +437,8 @@ export const anglePresetMotion = (
 
 // A slider cannot express anything finer than one step, so half a step is the
 // tightest a pose can be "the same as" a preset and still be reachable.
-const presetMatchEpsilon = (key: Camera3DAnglePresetKey) =>
+const presetMatchEpsilon = (key: Camera3DPropertyKey) =>
 	Math.max(CAMERA3D_LIMITS[key].step / 2, 1e-4);
-
-export const matchAnglePreset = (
-	pose: Pick<Camera3DProperties, Camera3DAnglePresetKey>,
-): string | null =>
-	ANGLE_PRESETS.find((preset) =>
-		CAMERA3D_ANGLE_PRESET_KEYS.every(
-			(key) =>
-				Math.abs(pose[key] - preset.values[key]) <= presetMatchEpsilon(key),
-		),
-	)?.id ?? null;
 
 export type Camera3DMotionTemplate = {
 	id: string;
@@ -795,6 +785,59 @@ export const CAMERA3D_SCENES: Camera3DScene[] = [
 	},
 ];
 
+export const CAMERA3D_SCENE_DESCRIPTIONS: Record<string, string> = {
+	showcase: "Close-up, overhead sweep, then zoom in",
+	"product-tour": "Reveal, orbit, then settle on your screen",
+	"punch-in": "Zoom into a detail, then pull back",
+};
+
+/**
+ * The shots an auto scene draws from, in order: the showcase, then the product
+ * tour, then the punch in. Asking for more shots simply reaches further down
+ * the list, so 4 shots is the 3-shot showcase plus the tour's opener.
+ */
+export const AUTO_SHOT_POOL: Camera3DSceneShot[] = [
+	...(CAMERA3D_SCENES.find((scene) => scene.id === "showcase")?.shots ?? []),
+	...(CAMERA3D_SCENES.find((scene) => scene.id === "product-tour")?.shots ??
+		[]),
+	...(CAMERA3D_SCENES.find((scene) => scene.id === "punch-in")?.shots ?? []),
+];
+
+/** How many shots the auto-scene pickers offer. */
+export const MAX_AUTO_CAMERA3D_SHOTS = 6;
+
+/**
+ * The scene an "Auto scene" of `count` shots lays down. One shot is the plain
+ * Glide across move; more than one takes the head of the pool with equal
+ * weights, so every shot gets the same share of the recording.
+ */
+export const autoCamera3DScene = (count: number): Camera3DScene => {
+	const wanted = Math.min(
+		Math.max(Math.floor(count), 1),
+		AUTO_SHOT_POOL.length,
+	);
+	const shots =
+		wanted === 1
+			? [templateShot(motionTemplateById("glide-across"), 1)]
+			: AUTO_SHOT_POOL.slice(0, wanted).map((shot) => ({
+					...shot,
+					weight: 1 / wanted,
+				}));
+	return { id: "auto", name: "Auto scene", shots };
+};
+
+/** How many shots this recording has room for at the one-second minimum. */
+export const maxAutoCamera3DShots = (total: number) =>
+	Number.isFinite(total)
+		? Math.max(
+				0,
+				Math.min(
+					MAX_AUTO_CAMERA3D_SHOTS,
+					Math.floor(total / CAMERA3D_MIN_SHOT_DURATION),
+				),
+			)
+		: 0;
+
 /**
  * The scene's leading `count` shots with their weights renormalized, so a
  * shorter sequence still fills the whole range it is laid onto. Asking for
@@ -829,6 +872,93 @@ export const sceneWithShotCount = (
  * glitch rather than an edit.
  */
 export const CAMERA3D_MIN_SHOT_DURATION = 1;
+
+/** How long a shot the lane's "Add shot" affordances reach for. */
+export const DEFAULT_CAMERA3D_SHOT_DURATION = 4;
+
+/**
+ * Where a new shot goes. The playhead is a request, not a constraint: a click
+ * inside an existing shot lands in the next free space rather than doing
+ * nothing, which is the whole reason a second shot used to silently never
+ * appear.
+ *
+ * The gap holding `time` wins; failing that the first gap after it; failing
+ * that the first gap anywhere. Only a timeline with no gap left at all (every
+ * remaining hole shorter than a second) returns null, and the caller says so.
+ */
+export function placeCamera3DShot(
+	existing: readonly { start: number; end: number }[],
+	time: number,
+	duration: number,
+	total: number,
+): { start: number; end: number } | null {
+	if (
+		![time, duration, total].every(Number.isFinite) ||
+		duration <= 0 ||
+		total <= 0
+	)
+		return null;
+
+	// A recording shorter than the minimum still deserves its one shot.
+	const minimum = Math.min(CAMERA3D_MIN_SHOT_DURATION, total);
+	const at = clamp(time, 0, total);
+
+	const taken = existing
+		.filter((segment) => segment.end > segment.start)
+		.slice()
+		.sort((a, b) => a.start - b.start);
+
+	const gaps: { start: number; end: number }[] = [];
+	let cursor = 0;
+	for (const segment of taken) {
+		if (segment.start > cursor)
+			gaps.push({ start: cursor, end: Math.min(segment.start, total) });
+		cursor = Math.max(cursor, segment.end);
+		if (cursor >= total) break;
+	}
+	if (cursor < total) gaps.push({ start: cursor, end: total });
+
+	const usable = gaps.filter((gap) => gap.end - gap.start >= minimum);
+	if (usable.length === 0) return null;
+
+	const holdsPlayhead = (gap: { start: number; end: number }) =>
+		at >= gap.start && at <= gap.end;
+	const gap =
+		usable.find(holdsPlayhead) ??
+		usable.find((candidate) => candidate.start >= at) ??
+		usable[0];
+
+	// The shot opens where it was asked for and runs until the gap closes, so
+	// the ghost shrinks as the space does. A gap the playhead is not in starts
+	// the shot at its own opening instead.
+	const start = holdsPlayhead(gap) ? at : gap.start;
+	const end = Math.min(start + duration, gap.end);
+	// Too little left to be a shot: slide back into the gap for the minimum.
+	if (end - start < minimum) return { start: gap.end - minimum, end: gap.end };
+	return { start, end };
+}
+
+/**
+ * The time to park the playhead on to see one end of a shot.
+ *
+ * The renderer floors the seek onto a frame, so asking for a start that falls
+ * between two frames shows the frame BEFORE the shot: the previous scene, not
+ * the opening pose. The start therefore rounds up to the first frame inside the
+ * shot, and the end rounds down to the last frame still inside it.
+ */
+export const camera3DPoseSeekTime = (
+	segment: { start: number; end: number },
+	end: boolean,
+	fps: number,
+) => {
+	const rate = fps > 0 && Number.isFinite(fps) ? fps : 30;
+	// The epsilon absorbs the float error in a start that is already on a frame,
+	// and the floor at zero keeps a first shot off a negative -0 seek.
+	const startTime = Math.max(Math.ceil(segment.start * rate - 1e-6) / rate, 0);
+	if (!end) return startTime;
+	// A millisecond inside the end keeps the seek off the next shot's first frame.
+	return Math.max(Math.floor((segment.end - 1e-3) * rate) / rate, startTime);
+};
 
 /**
  * How far a shot boundary will travel to land on a clip cut, as a fraction of
@@ -1085,6 +1215,19 @@ export const defaultCamera3DSegment = (
 	};
 };
 
+/**
+ * The shot every "Add shot" affordance creates: a complete Glide across look,
+ * so a new shot plays as a real move the moment it lands on the track.
+ */
+export const newCamera3DShot = (
+	start: number,
+	end: number,
+): Camera3DSegment => {
+	const segment = defaultCamera3DSegment(start, end);
+	applyMotionTemplate(segment, motionTemplateById("glide-across"));
+	return segment;
+};
+
 // -----------------------------------------------------------------------------
 // Sampling (mirrors crates/rendering/src/camera3d.rs)
 // -----------------------------------------------------------------------------
@@ -1252,6 +1395,54 @@ export const camera3DPosesEqual = (
 /** Whether any camera property is animated. Blur is never keyed. */
 export const hasCamera3DMotion = (segment: Camera3DSegment) =>
 	CAMERA3D_PROPERTY_KEYS.some((key) => segment.tracks[key].length > 0);
+
+/** The card a shot currently reads as: one of the Moves, or one of the Angles. */
+export type Camera3DLook = {
+	kind: "move" | "angle";
+	id: string;
+	name: string;
+};
+
+const posesMatchWithinStep = (a: Camera3DProperties, b: Camera3DProperties) =>
+	CAMERA3D_PROPERTY_KEYS.every(
+		(key) => Math.abs(a[key] - b[key]) <= presetMatchEpsilon(key),
+	);
+
+/**
+ * Which card wrote this shot, read back off its two poses. Both ends have to
+ * match, so a shot that was nudged after the click stops claiming the card.
+ * Blur is deliberately not part of the match: it is the one part of a look the
+ * panel lets you dial without leaving the look.
+ */
+export const matchCamera3DLook = (
+	segment: Camera3DSegment,
+): Camera3DLook | null => {
+	const start = getStartPose(segment);
+	const end = getEndPose(segment);
+
+	const move = MOTION_TEMPLATES.find(
+		(template) =>
+			posesMatchWithinStep(start, template.from) &&
+			posesMatchWithinStep(end, template.to),
+	);
+	if (move) return { kind: "move", id: move.id, name: move.name };
+
+	const angle = ANGLE_PRESETS.find((preset) => {
+		const motion = anglePresetMotion(preset);
+		return (
+			posesMatchWithinStep(start, motion.from) &&
+			posesMatchWithinStep(end, motion.to)
+		);
+	});
+	if (angle) return { kind: "angle", id: angle.id, name: angle.name };
+
+	return null;
+};
+
+/** What the timeline segment and the panel header call this shot. */
+export const camera3DShotLabel = (segment: Camera3DSegment) =>
+	matchCamera3DLook(segment)?.name ??
+	(hasCamera3DMotion(segment) ? "Custom move" : "Still shot");
 
 /**
  * The one way the editor authors camera animation: a segment is a start pose

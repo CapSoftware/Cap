@@ -1,16 +1,18 @@
 import { ImageResponse } from "next/og";
 import type { NextRequest } from "next/server";
+import { PRICING } from "@/data/pricing";
+import { loadOgAssets } from "@/lib/og/assets";
 import { loadOgFonts } from "@/lib/og/fonts";
 import { verifyOgSignature } from "@/lib/og/signature";
 import {
+	Body,
 	CapWordmark,
+	DesktopArt,
+	Headline,
 	OG_HEIGHT,
-	OG_INK,
-	OG_INK_SOFT,
 	OG_WIDTH,
-	RecorderCard,
-	SkyBackground,
-	TagChip,
+	OgCanvas,
+	PricingArt,
 	titleFontSize,
 } from "@/lib/og/template";
 
@@ -51,89 +53,66 @@ export async function GET(req: NextRequest) {
 		: undefined;
 	const isDefault = !isSigned;
 
+	const [fonts, assets] = await Promise.all([loadOgFonts(), loadOgAssets()]);
+	const body = description ?? (isDefault ? DEFAULT_DESCRIPTION : undefined);
+	const art =
+		tag === "Pricing" ? (
+			<div
+				style={{ display: "flex", position: "absolute", left: 660, top: 96 }}
+			>
+				<PricingArt
+					mesh={assets.mesh}
+					pro={{
+						monthly: PRICING.pro.monthly,
+						annualPerMonth: PRICING.pro.annualPerMonth,
+						savePercent: Math.round(
+							(1 - PRICING.pro.annualPerMonth / PRICING.pro.monthly) * 100,
+						),
+					}}
+				/>
+			</div>
+		) : (
+			<div
+				style={{ display: "flex", position: "absolute", left: 668, top: 112 }}
+			>
+				<DesktopArt mesh={assets.mesh} wallpaper={assets.wallpaper} />
+			</div>
+		);
+
 	return new ImageResponse(
-		<SkyBackground>
+		<OgCanvas background={assets.skySplit}>
+			{art}
 			<div
 				style={{
 					display: "flex",
 					position: "absolute",
 					top: 0,
 					left: 0,
-					width: "100%",
+					width: 620,
 					height: "100%",
-					padding: "56px 64px",
-					alignItems: "center",
-					gap: 56,
+					padding: "58px 0 54px 64px",
+					flexDirection: "column",
+					justifyContent: "space-between",
 				}}
 			>
-				<div
-					style={{
-						display: "flex",
-						flexDirection: "column",
-						flexGrow: 1,
-						flexShrink: 1,
-						minWidth: 0,
-						height: "100%",
-						justifyContent: "space-between",
-					}}
-				>
-					<CapWordmark height={60} color={OG_INK} />
-					<div
-						style={{
-							display: "flex",
-							flexDirection: "column",
-							gap: 22,
-							paddingBottom: 8,
-						}}
-					>
-						{tag && <TagChip label={tag} />}
-						<span
-							style={{
-								display: "block",
-								fontSize: titleFontSize(title),
-								fontWeight: 500,
-								color: OG_INK,
-								lineHeight: 1.1,
-								letterSpacing: -0.5,
-								lineClamp: 4,
-							}}
-						>
-							{title}
-						</span>
-						{(description ?? (isDefault ? DEFAULT_DESCRIPTION : undefined)) && (
-							<span
-								style={{
-									display: "block",
-									fontSize: 27,
-									fontWeight: 400,
-									color: OG_INK_SOFT,
-									lineHeight: 1.4,
-									lineClamp: 2,
-								}}
-							>
-								{description ?? DEFAULT_DESCRIPTION}
-							</span>
-						)}
-					</div>
-					<span
-						style={{
-							fontSize: 24,
-							fontWeight: 500,
-							color: OG_INK_SOFT,
-						}}
-					>
-						Cap.so
-					</span>
+				<CapWordmark />
+				<div style={{ display: "flex", flexDirection: "column", gap: 26 }}>
+					<Headline size={titleFontSize(title)} lines={4}>
+						{title}
+					</Headline>
+					{body && (
+						<Body size={25} lines={title.length > 30 ? 2 : 3}>
+							{body}
+						</Body>
+					)}
 				</div>
-				<div style={{ display: "flex", flexShrink: 0 }}>
-					<RecorderCard width={384} />
-				</div>
+				<div style={{ display: "flex", height: 52 }} />
 			</div>
-		</SkyBackground>,
+		</OgCanvas>,
 		{
 			width: OG_WIDTH,
 			height: OG_HEIGHT,
-			fonts: await loadOgFonts(),
+			fonts,
 			headers: {
 				// The image is a pure function of the URL, so it can be cached
 				// forever — changed copy produces a different URL.

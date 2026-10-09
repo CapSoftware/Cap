@@ -271,9 +271,9 @@ impl RenderOnce for ColorPicker {
             .gap(px(GAP))
             .rounded(px(12.))
             .border_1()
-            .border_color(Hsla::from(theme.gray_3))
-            .bg(Hsla::from(theme.gray_1))
-            .shadow_md()
+            .border_color(Hsla::from(theme.editor.line))
+            .bg(Hsla::from(theme.editor.card))
+            .shadow(theme.editor.pop_shadow())
             // A press on the panel body must not fall through to the
             // caller's click-away backdrop underneath.
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())

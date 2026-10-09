@@ -246,6 +246,53 @@ pub fn request_permission(permission: OSPermission) {
     let _ = permission;
 }
 
+#[cfg(any(target_os = "macos", test))]
+type PendingMediaRequest =
+    futures_util::future::Shared<futures_util::future::BoxFuture<'static, Result<bool, String>>>;
+
+#[cfg(any(target_os = "macos", test))]
+fn shared_media_request(
+    slot: &std::sync::Mutex<Option<PendingMediaRequest>>,
+    request: impl FnOnce() -> Result<PendingMediaRequest, String>,
+) -> Result<PendingMediaRequest, String> {
+    use futures_util::FutureExt as _;
+    let mut slot = slot
+        .lock()
+        .map_err(|_| "Media permission request state is unavailable".to_string())?;
+    if let Some(pending) = slot.as_ref()
+        && pending.clone().now_or_never().is_none()
+    {
+        return Ok(pending.clone());
+    }
+    let pending = request()?;
+    *slot = Some(pending.clone());
+    Ok(pending)
+}
+
+#[cfg(any(target_os = "macos", test))]
+async fn media_permission_result(
+    permission: OSPermission,
+    status: MediaAuthorization,
+    request: impl std::future::Future<Output = Result<bool, String>>,
+) -> Result<(), String> {
+    match status {
+        MediaAuthorization::Authorized => Ok(()),
+        MediaAuthorization::NotDetermined if request.await? => Ok(()),
+        MediaAuthorization::NotDetermined
+        | MediaAuthorization::Denied
+        | MediaAuthorization::Restricted => Err(format!(
+            "{} access is unavailable. Allow Cap in System Settings > Privacy & Security > {}, then select the device again.",
+            permission.label(),
+            permission.label()
+        )),
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub async fn ensure_capture_media_permission(permission: OSPermission) -> Result<(), String> {
+    macos::ensure_capture_media_permission(permission).await
+}
+
 pub fn open_permission_settings(permission: OSPermission) {
     #[cfg(target_os = "macos")]
     {
@@ -408,24 +455,58 @@ mod macos {
         }
     }
 
-    /// The AV request blocks until the user answers the dialog, so it gets a
-    /// plain thread of its own rather than a gpui background-pool thread. The
-    /// answer lands in TCC; the caller's 1s poll observes it there.
-    fn request_media(camera: bool) {
-        std::thread::spawn(move || {
-            use cidre::av;
-            let media = if camera {
-                av::MediaType::video()
-            } else {
-                av::MediaType::audio()
-            };
-            if let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-            {
-                let _ = runtime.block_on(av::CaptureDevice::request_access_for_media_type(media));
+    static CAMERA_REQUEST: std::sync::Mutex<Option<super::PendingMediaRequest>> =
+        std::sync::Mutex::new(None);
+    static MICROPHONE_REQUEST: std::sync::Mutex<Option<super::PendingMediaRequest>> =
+        std::sync::Mutex::new(None);
+
+    fn shared_media_request(camera: bool) -> Result<super::PendingMediaRequest, String> {
+        use futures_util::FutureExt as _;
+        let slot = if camera {
+            &CAMERA_REQUEST
+        } else {
+            &MICROPHONE_REQUEST
+        };
+        super::shared_media_request(slot, || {
+            let answer = objc2::rc::autoreleasepool(|_| {
+                use cidre::av;
+                let media = if camera {
+                    av::MediaType::video()
+                } else {
+                    av::MediaType::audio()
+                };
+                let (answer, mut completion) = cidre::blocks::comp1();
+                av::CaptureDevice::request_access_for_media_type_ch(media, &mut completion)
+                    .map_err(|error| format!("Could not request media access: {error}"))?;
+                Ok::<_, String>(answer)
+            })?;
+            Ok(async move { Ok(answer.await) }.boxed().shared())
+        })
+    }
+
+    pub async fn ensure_capture_media_permission(permission: OSPermission) -> Result<(), String> {
+        let camera = match permission {
+            OSPermission::Camera => true,
+            OSPermission::Microphone => false,
+            _ => {
+                return Err("Only camera and microphone permissions can configure a device".into());
             }
-        });
+        };
+        let status = objc2::rc::autoreleasepool(|_| media_authorization(camera));
+        super::media_permission_result(permission, status, async move {
+            let granted = shared_media_request(camera)?.await?;
+            Ok(granted
+                && objc2::rc::autoreleasepool(|_| {
+                    media_authorization(camera) == MediaAuthorization::Authorized
+                }))
+        })
+        .await
+    }
+
+    fn request_media(camera: bool) {
+        if let Err(error) = shared_media_request(camera) {
+            tracing::error!("Media permission request failed: {error}");
+        }
     }
 }
 
@@ -664,5 +745,113 @@ mod tests {
             OSPermission::Camera.settings_url(),
             "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera"
         );
+    }
+}
+
+#[cfg(test)]
+mod capture_consent_tests {
+    #[tokio::test]
+    async fn grant_clicks_and_device_selection_share_one_pending_native_request() {
+        use futures_util::FutureExt as _;
+        let slot = std::sync::Mutex::new(None);
+        let (send, receive) = tokio::sync::oneshot::channel();
+        let grant_click = shared_media_request(&slot, || {
+            Ok(
+                async move { receive.await.map_err(|error| error.to_string()) }
+                    .boxed()
+                    .shared(),
+            )
+        })
+        .unwrap();
+        drop(grant_click);
+        for _ in 0..100 {
+            drop(
+                shared_media_request(&slot, || panic!("A pending OS request must be shared"))
+                    .unwrap(),
+            );
+        }
+        let selection =
+            shared_media_request(&slot, || panic!("Selection must join Grant request")).unwrap();
+        send.send(true).unwrap();
+        assert!(selection.await.unwrap());
+        let fresh =
+            shared_media_request(&slot, || Ok(async { Ok(false) }.boxed().shared())).unwrap();
+        assert!(!fresh.await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn completed_unpolled_grant_is_not_reused_after_a_new_preflight() {
+        use futures_util::FutureExt as _;
+        let slot = std::sync::Mutex::new(None);
+        let (send, receive) = tokio::sync::oneshot::channel();
+        drop(
+            shared_media_request(&slot, || {
+                Ok(
+                    async move { receive.await.map_err(|error| error.to_string()) }
+                        .boxed()
+                        .shared(),
+                )
+            })
+            .unwrap(),
+        );
+        send.send(true).unwrap();
+        let fresh =
+            shared_media_request(&slot, || Ok(async { Ok(false) }.boxed().shared())).unwrap();
+        assert!(!fresh.await.unwrap());
+    }
+
+    use super::*;
+
+    #[tokio::test]
+    async fn granted_or_denied_media_never_waits_for_a_new_prompt() {
+        for permission in [OSPermission::Camera, OSPermission::Microphone] {
+            for status in [
+                MediaAuthorization::Authorized,
+                MediaAuthorization::Denied,
+                MediaAuthorization::Restricted,
+            ] {
+                let result = media_permission_result(permission, status, async {
+                    panic!("Resolved authorization must not request consent again");
+                })
+                .await;
+                assert_eq!(result.is_ok(), status == MediaAuthorization::Authorized);
+                if let Err(error) = result {
+                    assert!(error.contains(permission.label()));
+                    assert!(error.contains("System Settings"));
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn undetermined_media_waits_for_the_actual_answer() {
+        for permission in [OSPermission::Camera, OSPermission::Microphone] {
+            let (send, receive) = tokio::sync::oneshot::channel();
+            let wait =
+                media_permission_result(permission, MediaAuthorization::NotDetermined, async {
+                    receive.await.map_err(|error| error.to_string())
+                });
+            tokio::pin!(wait);
+            assert!(futures_util::poll!(&mut wait).is_pending());
+            send.send(true).unwrap();
+            assert!(wait.await.is_ok());
+            let denied =
+                media_permission_result(permission, MediaAuthorization::NotDetermined, async {
+                    Ok(false)
+                })
+                .await;
+            assert!(denied.unwrap_err().contains(permission.label()));
+        }
+    }
+
+    #[tokio::test]
+    async fn request_failure_is_reported_without_claiming_authorization() {
+        let result = media_permission_result(
+            OSPermission::Camera,
+            MediaAuthorization::NotDetermined,
+            async { Err("native request failed".into()) },
+        )
+        .await;
+        assert_eq!(result.unwrap_err(), "native request failed");
     }
 }

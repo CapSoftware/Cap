@@ -335,9 +335,6 @@ pub(crate) struct PagesState {
     // License (license.tsx)
     license_input: Entity<ui::TextInputState>,
     license_draft: String,
-    /// `isCommercialAnnual`, default true.
-    license_annual: bool,
-    license_checkout_pending: bool,
     license_activating: bool,
     license_error: Option<String>,
 
@@ -437,8 +434,6 @@ impl PagesState {
             changelog: None,
             license_input,
             license_draft: String::new(),
-            license_annual: true,
-            license_checkout_pending: false,
             license_activating: false,
             license_error: None,
             integrations_view: IntegrationsView::Index,
@@ -511,8 +506,6 @@ impl SettingsWindow {
             Page::Changelog => self.changelog_fetch(window, cx),
             Page::License => {
                 self.pages.license_draft.clear();
-                self.pages.license_annual = true;
-                self.pages.license_checkout_pending = false;
                 self.pages.license_activating = false;
                 self.pages.license_error = None;
                 let input = self.pages.license_input.clone();
@@ -1918,9 +1911,6 @@ pub(crate) enum SwitchBack {
     /// The sequence, timed from its start. One clock drives the sentence, its
     /// fade and the countdown, so nothing can drift apart.
     Running(std::time::Instant),
-    /// Dev only: the switch is committed and the supervisor is rebuilding the
-    /// classic app; this app stays up until the classic one deletes the
-    /// pending file to say it is on screen (`store::classic_pending_path`).
     WaitingForClassic,
     /// The switch was refused; the overlay stays up with the reason and the
     /// toggle goes back to on, because nothing was switched.
@@ -2315,11 +2305,7 @@ impl SettingsWindow {
                             .text_size(px(14.))
                             .text_center()
                             .text_color(gpui::hsla(0., 0., 1., 0.7))
-                            .child(
-                                "The dev build is compiling. This window closes by itself when \
-                                 the classic app is on screen; a cold build can take a few \
-                                 minutes.",
-                            ),
+                            .child("This window will close when the classic Cap app is ready."),
                     );
             }
             SwitchBack::Failed(error) => {
@@ -2444,80 +2430,110 @@ impl SettingsWindow {
             return;
         }
 
+        if !store::set_store_setting(GENERAL_SETTINGS, "enableGpuiApp", Value::Bool(false)) {
+            self.pages.switch_back = Some(SwitchBack::Failed(
+                "Couldn't save your app preference. Cap is still open.".to_string(),
+            ));
+            cx.notify();
+            return;
+        }
         self.settings.enable_gpui_app = false;
-        self.write_bool("enableGpuiApp", false, cx);
-
-        let started = match &target {
-            ClassicTarget::Bundle(_) | ClassicTarget::Executable(_) => launch_classic(&target)
-                .map_err(|error| format!("Couldn't open the Cap app: {error}")),
-            ClassicTarget::DevSupervisor => store::mark_classic_pending()
-                .and_then(|()| store::request_classic_reopen())
-                .map_err(|error| format!("Couldn't request the dev app restart: {error}")),
+        let dev = matches!(target, ClassicTarget::DevSupervisor);
+        let timeout = if dev {
+            CLASSIC_WAIT_TIMEOUT
+        } else {
+            Duration::from_secs(30)
         };
+        let pending = store::mark_classic_pending();
+        self.pages.switch_back = Some(SwitchBack::WaitingForClassic);
+        self.pages.switch_back_ticker = None;
+        cx.notify();
 
-        match (started, target) {
-            // An installed bundle opens in a moment; quit right away.
-            (Ok(()), ClassicTarget::Bundle(_) | ClassicTarget::Executable(_)) => {
-                tracing::info!("handing back to the classic app");
-                quit_after_flushing_editors(cx);
-            }
-            // The dev harness has to rebuild first, which can take minutes.
-            // Stay up until the classic app deletes the pending file to say
-            // it is on screen, so the user is never staring at no app at all.
-            (Ok(()), ClassicTarget::DevSupervisor) => {
-                tracing::info!("handing back to the classic app; waiting for the dev build");
-                self.pages.switch_back = Some(SwitchBack::WaitingForClassic);
-                self.pages.switch_back_ticker = None;
-                cx.notify();
-                // A committed handoff must finish even if its settings window closes.
-                cx.spawn(async move |this, cx| {
-                    let started = std::time::Instant::now();
-                    loop {
-                        cx.background_executor()
-                            .timer(Duration::from_millis(500))
-                            .await;
-                        if !store::classic_pending_path().exists() {
-                            tracing::info!("classic app is up; quitting");
-                            cx.update(quit_after_flushing_editors);
-                            break;
-                        }
-                        if started.elapsed() > CLASSIC_WAIT_TIMEOUT {
-                            this.update(cx, |this, cx| {
-                                this.pages.switch_back = Some(SwitchBack::Failed(
-                                    "The classic app hasn't come up. Check the dev terminal for \
-                                     build errors, then toggle again."
-                                        .to_string(),
-                                ));
-                                cx.notify();
-                            })
-                            .ok();
-                            break;
-                        }
+        // The handoff must finish even if its settings window closes.
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    pending?;
+                    match target {
+                        ClassicTarget::DevSupervisor => store::request_classic_reopen(),
+                        _ => launch_classic(&target),
                     }
                 })
-                .detach();
+                .await;
+            let mut failure = result.err().map(|error| format!("Couldn't open Cap: {error}"));
+            let started = std::time::Instant::now();
+            while failure.is_none() {
+                match store::classic_pending_path().try_exists() {
+                    Ok(false) => {
+                        tracing::info!("classic app is visible; quitting GPUI");
+                        cx.update(quit_after_flushing_editors);
+                        return;
+                    }
+                    Ok(true) => {}
+                    Err(error) => {
+                        failure = Some(format!("Couldn't check whether Cap opened: {error}"));
+                        break;
+                    }
+                }
+                if started.elapsed() >= timeout {
+                    failure = Some(if dev {
+                        "The classic app hasn't opened. Check the dev terminal for build errors, then try again."
+                            .to_string()
+                    } else {
+                        "The classic app hasn't opened. Cap is still here; please try again."
+                            .to_string()
+                    });
+                    break;
+                }
+                cx.background_executor()
+                    .timer(Duration::from_millis(250))
+                    .await;
             }
-            (Err(message), _) => {
-                tracing::error!("{message}");
-                self.settings.enable_gpui_app = true;
-                self.write_bool("enableGpuiApp", true, cx);
-                self.pages.switch_back = Some(SwitchBack::Failed(message));
+            let message = failure.unwrap_or_else(|| "Couldn't open Cap.".to_string());
+            tracing::error!("{message}");
+            store::clear_classic_pending();
+            store::set_store_setting(GENERAL_SETTINGS, "enableGpuiApp", Value::Bool(true));
+            this.update(cx, |this, cx| {
+                this.settings = store::GeneralSettings::load();
+                this.pages.switch_back = Some(SwitchBack::Failed(message));
                 cx.notify();
-            }
+            })
+            .ok();
+        })
+        .detach();
+    }
+}
+
+fn classic_launch_command(target: &ClassicTarget) -> Option<std::process::Command> {
+    match target {
+        ClassicTarget::Bundle(bundle) => {
+            let mut command = std::process::Command::new("/usr/bin/open");
+            // GPUI shares Cap's bundle identity, so a normal open can reactivate GPUI.
+            command.arg("-n").arg(bundle);
+            Some(command)
         }
+        ClassicTarget::Executable(executable) => Some(std::process::Command::new(executable)),
+        ClassicTarget::DevSupervisor => None,
     }
 }
 
 fn launch_classic(target: &ClassicTarget) -> std::io::Result<()> {
-    match target {
-        ClassicTarget::Bundle(bundle) => std::process::Command::new("/usr/bin/open")
-            .arg(bundle)
-            .spawn()
-            .map(drop),
-        ClassicTarget::Executable(executable) => {
-            std::process::Command::new(executable).spawn().map(drop)
+    let Some(mut command) = classic_launch_command(target) else {
+        return Ok(());
+    };
+    if matches!(target, ClassicTarget::Bundle(_)) {
+        let output = command.output()?;
+        if !output.status.success() {
+            return Err(std::io::Error::other(format!(
+                "Cap launcher failed ({}): {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            )));
         }
-        ClassicTarget::DevSupervisor => Ok(()),
+        Ok(())
+    } else {
+        command.spawn().map(drop)
     }
 }
 
@@ -3697,44 +3713,6 @@ fn markdown_paragraphs(content: &str) -> Vec<MarkdownParagraph> {
 const LICENSE_API_BASE: &str = "https://l.cap.so/api";
 
 impl SettingsWindow {
-    /// `createCommercialCheckoutUrl`, opened externally.
-    fn license_checkout(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.pages.license_checkout_pending {
-            return;
-        }
-        self.pages.license_checkout_pending = true;
-        let kind = if self.pages.license_annual {
-            "yearly"
-        } else {
-            "lifetime"
-        };
-        let url = format!("{LICENSE_API_BASE}/commercial/checkout");
-        self.spawn_tokio(
-            window,
-            cx,
-            async move {
-                http_json(
-                    reqwest::Method::POST,
-                    url,
-                    Vec::new(),
-                    Vec::new(),
-                    None,
-                    HttpBody::Json(json!({ "type": kind })),
-                    None,
-                )
-                .await
-            },
-            |this, result, _window, cx| {
-                this.pages.license_checkout_pending = false;
-                if let Ok((200, body)) = result
-                    && let Some(url) = body.get("url").and_then(Value::as_str)
-                {
-                    cx.open_url(url);
-                }
-            },
-        );
-    }
-
     /// `activateCommercialLicense`: key and instance id go as headers, and a
     /// 200 writes `general_settings.commercialLicense` in the exact shape
     /// license.tsx's `onActivated` writes.
@@ -3805,66 +3783,55 @@ impl SettingsWindow {
     pub(crate) fn render_license(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
         let theme = self.theme;
         let auth = store::auth_snapshot();
-
-        // `createLicenseQuery`: pro from the auth plan, else commercial from
-        // the store, else the purchase/activate pair.
-        if auth.plan_upgraded {
-            return vec![
-                div()
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .w_full()
-                    .pt(px(96.))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .items_center()
-                            .gap(px(12.))
-                            .w_full()
-                            .max_w(px(448.))
-                            .p(px(24.))
-                            .rounded(px(24.))
-                            .border_1()
-                            .border_color(theme.settings_border())
-                            .bg(theme.settings_card_bg())
-                            .child(
-                                div()
-                                    .text_size(px(24.))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .child("Cap Pro License"),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(13.))
-                                    .line_height(px(20.))
-                                    .text_color(theme.settings_muted())
-                                    .child(
-                                        "Your account is upgraded to Cap Pro and already \
-                                         includes a commercial license.",
-                                    ),
-                            ),
-                    )
-                    .into_any_element(),
-            ];
+        let pro = auth.is_upgraded();
+        let license = store::commercial_license();
+        let (name, description) = if pro {
+            (
+                "Cap Pro",
+                "Your account includes cloud sharing, Pro features and a desktop license for commercial use.",
+            )
+        } else if license.is_some() {
+            (
+                "Desktop License",
+                "Your desktop license covers commercial recording and editing. Cap Pro adds cloud sharing and collaboration features.",
+            )
+        } else {
+            (
+                "Cap Free",
+                "Record and edit locally for personal use. Choose a paid plan for commercial use or more cloud features.",
+            )
+        };
+        let mut content = vec![
+            self.section("Plan & license", Some("Your Cap plan and desktop license, in one place."), None, vec![]).into_any_element(),
+            self.section("Your plan", None, None, vec![self.card(true).child(
+                div().flex().flex_col().gap(px(8.))
+                    .child(div().text_size(px(18.)).font_weight(FontWeight::SEMIBOLD).child(name))
+                    .child(div().text_size(px(12.)).line_height(px(18.)).text_color(theme.settings_muted()).child(description))
+                    .when(auth.signed_in(), |this| this.child(
+                        div().flex().flex_col().items_start().gap(px(8.)).child(self.button(
+                            "refresh-plan", (ui::ButtonVariant::Gray, None),
+                            if self.plan_refresh_pending { "Checking…" } else { "Refresh plan" },
+                            self.plan_refresh_pending, cx, |this, window, cx| this.refresh_plan(window, cx),
+                        )).when(self.plan_refresh_failed, |this| this.child(div().text_size(px(12.)).text_color(theme.settings_muted()).child("Couldn't refresh your plan. Please try again.")))
+                    ))
+                    .when(!auth.signed_in(), |this| this.child(div().text_size(px(12.)).line_height(px(18.)).text_color(theme.settings_muted()).child("Already have Cap Pro? Sign in with your account from the sidebar.")))
+            ).into_any_element()]).into_any_element(),
+            self.section("Explore plans", Some("Compare current pricing and everything included on our website."), None, vec![self.card(true).child(
+                div().flex().flex_col().items_start().gap(px(12.))
+                    .child(div().text_size(px(12.)).line_height(px(18.)).child("Desktop License · Commercial use of the desktop recorder and editor."))
+                    .child(div().text_size(px(12.)).line_height(px(18.)).child("Cap Pro · A desktop license, plus cloud sharing, AI features and collaboration."))
+                    .child(ui::Button::settings(&theme, "license-pricing", ui::ButtonVariant::Dark, ui::ButtonSize::Sm).label("View plans & pricing ↗").on_click(|_, _, cx| cx.open_url(crate::auth::PRICING_URL)))
+                    .child(div().text_size(px(12.)).text_color(theme.settings_muted()).child("Opens cap.so/pricing in your browser."))
+            ).into_any_element()]).into_any_element(),
+        ];
+        if !pro {
+            content.push(if let Some(license) = license {
+                self.render_license_active(license, cx)
+            } else {
+                self.render_license_activate(cx).into_any_element()
+            });
         }
-
-        if let Some(license) = store::commercial_license() {
-            return vec![self.render_license_active(license, cx)];
-        }
-
-        vec![
-            div()
-                .flex()
-                .flex_col()
-                .items_center()
-                .gap(px(12.))
-                .w_full()
-                .child(self.render_license_purchase(cx))
-                .child(self.render_license_activate(cx))
-                .into_any_element(),
-        ]
+        content
     }
 
     /// The activated-commercial card.
@@ -3903,7 +3870,7 @@ impl SettingsWindow {
                             div()
                                 .text_size(px(24.))
                                 .font_weight(FontWeight::MEDIUM)
-                                .child("Commercial License"),
+                                .child("Desktop license"),
                         ),
                     )
                     .child(
@@ -3957,168 +3924,6 @@ impl SettingsWindow {
                     ))),
             )
             .into_any_element()
-    }
-
-    /// `CommercialLicensePurchase`'s pricing card. The Rive card-stack
-    /// animation has no gpui equivalent and is omitted.
-    fn render_license_purchase(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = self.theme;
-        let annual = self.pages.license_annual;
-        let pending = self.pages.license_checkout_pending;
-
-        let left = div()
-            .flex()
-            .flex_col()
-            .items_center()
-            .gap(px(16.))
-            .p(px(20.))
-            .flex_1()
-            .min_w_0()
-            .rounded_l(px(12.))
-            .border_1()
-            .border_color(theme.settings_border())
-            .bg(theme.settings_fill())
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .gap(px(4.))
-                    .child(
-                        div()
-                            .text_size(px(24.))
-                            .font_weight(FontWeight::MEDIUM)
-                            .child("Commercial License"),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(13.))
-                            .text_color(theme.settings_muted())
-                            .child("For commercial use"),
-                    ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .mt(px(20.))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .items_end()
-                            .child(div().text_size(px(36.)).child(if annual {
-                                "$29"
-                            } else {
-                                "$58"
-                            }))
-                            .child(
-                                div()
-                                    .text_size(px(16.))
-                                    .text_color(theme.settings_muted())
-                                    .child(".00 /"),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(16.))
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(theme.settings_muted())
-                            .child(if annual {
-                                "billed annually"
-                            } else {
-                                "one-time payment"
-                            }),
-                    ),
-            )
-            .child(
-                div()
-                    .id("license-billing-toggle")
-                    .px(px(12.))
-                    .py(px(8.))
-                    .rounded_full()
-                    .bg(theme.settings_selection())
-                    .cursor_pointer()
-                    .hover(|style| style.bg(theme.settings_fill()))
-                    .child(div().text_size(px(12.)).child(format!(
-                        "Switch to {}: {}",
-                        if annual { "lifetime" } else { "yearly" },
-                        if annual { "$58" } else { "$29" }
-                    )))
-                    .on_click(cx.listener(|this, _, _window, cx| {
-                        this.pages.license_annual = !this.pages.license_annual;
-                        cx.notify();
-                    })),
-            )
-            .child(
-                div().w_full().mt(px(40.)).child(
-                    ui::Button::settings(
-                        &theme,
-                        "license-purchase",
-                        ui::ButtonVariant::Dark,
-                        ui::ButtonSize::Lg,
-                    )
-                    .label(if pending {
-                        "Loading..."
-                    } else {
-                        "Purchase License"
-                    })
-                    .radius(px(24.))
-                    .height(px(48.))
-                    .full_width()
-                    .font_weight(FontWeight::MEDIUM)
-                    .disabled_settings(&theme, pending)
-                    .on_click(cx.listener(|this, _, window, cx| this.license_checkout(window, cx))),
-                ),
-            );
-
-        let features = [
-            "Commercial Use of Cap Recorder + Editor",
-            "Community Support",
-            "Local-only features",
-            "Perpetual license option",
-        ];
-        let right = div()
-            .flex()
-            .flex_col()
-            .justify_center()
-            .items_center()
-            .gap(px(16.))
-            .p(px(20.))
-            .flex_1()
-            .min_w_0()
-            .rounded_r(px(12.))
-            .border_1()
-            .border_color(theme.settings_border())
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(8.))
-                    .children(features.into_iter().map(|feature| {
-                        div()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .gap(px(4.))
-                            .child(
-                                svg()
-                                    .path("icons/check.svg")
-                                    .size(px(16.))
-                                    .flex_shrink_0()
-                                    .text_color(theme.settings_text()),
-                            )
-                            .child(div().text_size(px(14.)).child(feature))
-                    })),
-            );
-
-        div()
-            .w_full()
-            .max_w(px(700.))
-            .rounded(px(12.))
-            .bg(theme.settings_card_bg())
-            .child(div().flex().flex_row().child(left).child(right))
     }
 
     /// `LicenseKeyActivate`.
@@ -4507,7 +4312,6 @@ impl SettingsWindow {
             "{}/api/desktop/storage/google-drive/connect",
             self.settings.server_url
         );
-        let server = self.settings.server_url.clone();
         self.spawn_tokio(
             window,
             cx,
@@ -4532,9 +4336,7 @@ impl SettingsWindow {
                             this.gdrive_wait_for_connection(window, cx);
                         }
                     }
-                    // `showWindow("Upgrade")` has no gpui equivalent; the
-                    // pricing page is the closest external destination.
-                    Ok((403, _)) => cx.open_url(&format!("{server}/pricing")),
+                    Ok((403, _)) => cx.open_url(crate::auth::PRICING_URL),
                     Ok(_) => {
                         this.pages.gdrive.error =
                             Some("Failed to start Google Drive connection".to_string())
@@ -4782,7 +4584,6 @@ impl SettingsWindow {
             .as_ref()
             .and_then(|storage| storage.managed_by_organization.as_ref())
             .map(|organization| organization.name.clone());
-        let server = self.settings.server_url.clone();
 
         let apps: [(&'static str, &'static str, &'static str, IntegrationsView); 2] = [
             (
@@ -4820,7 +4621,6 @@ impl SettingsWindow {
                             "Configure"
                         };
                         let managed_here = managed.is_some();
-                        let server = server.clone();
                         self.card(true)
                             .flex()
                             .flex_col()
@@ -4859,9 +4659,7 @@ impl SettingsWindow {
                                                 return;
                                             }
                                             if !store::auth_snapshot().plan_upgraded {
-                                                // `showWindow("Upgrade")` in the Tauri
-                                                // app; no upgrade window exists here.
-                                                cx.open_url(&format!("{server}/pricing"));
+                                                cx.open_url(crate::auth::PRICING_URL);
                                                 return;
                                             }
                                             match view {
@@ -8698,6 +8496,23 @@ mod tests {
                 "/Users/x/Cap/target/debug/bundle/osx/Cap.app"
             )))
         );
+    }
+
+    #[test]
+    fn installed_handoff_launches_a_new_bundle_instance() {
+        let bundle = std::path::PathBuf::from("/Applications/Cap Preview.app");
+        let command = classic_launch_command(&ClassicTarget::Bundle(bundle.clone())).unwrap();
+        assert_eq!(command.get_program(), "/usr/bin/open");
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            [std::ffi::OsStr::new("-n"), bundle.as_os_str()]
+        );
+        assert!(classic_launch_command(&ClassicTarget::DevSupervisor).is_none());
+        let executable = std::path::PathBuf::from("/opt/cap/Cap");
+        let command =
+            classic_launch_command(&ClassicTarget::Executable(executable.clone())).unwrap();
+        assert_eq!(command.get_program(), executable.as_os_str());
+        assert_eq!(command.get_args().count(), 0);
     }
 
     /// The takeover's whole timeline, read off its one clock.

@@ -399,6 +399,16 @@ impl VideoDeviceInfo {
         Ok(res)
     }
 
+    pub fn into_formats(self) -> Vec<VideoFormat> {
+        let formats = self.formats();
+        // Format-only callers own a temporary device. Shut it down after the
+        // reader is dropped without racing a live capture engine's teardown.
+        if let VideoDeviceInfoInner::MediaFoundation { device, .. } = &self.inner {
+            device.shutdown();
+        }
+        formats
+    }
+
     pub fn formats(&self) -> Vec<VideoFormat> {
         match &self.inner {
             VideoDeviceInfoInner::MediaFoundation {
@@ -436,7 +446,6 @@ impl Debug for VideoDeviceInfo {
         f.debug_struct("DeviceInfo")
             .field("id", &self.id)
             .field("name", &self.name)
-            .field("format_count", &self.formats().len())
             .field("inner", &self.inner)
             .finish()
     }

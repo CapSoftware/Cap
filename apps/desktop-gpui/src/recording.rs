@@ -15,6 +15,7 @@ use anyhow::{Context as _, anyhow};
 use cap_recording::{
     feeds::{camera, camera::CameraFeed, microphone, microphone::MicrophoneFeed},
     instant_recording,
+    recovery::{PreparingStudioJob, PreparingStudioObserver, RecoveryManager},
     sources::screen_capture::ScreenCaptureTarget,
     studio_recording,
 };
@@ -51,6 +52,9 @@ pub struct StartConfig {
     pub mic_feed: Option<ActorRef<MicrophoneFeed>>,
     #[cfg(target_os = "linux")]
     pub linux_instant_camera: Option<LinuxInstantCameraRequest>,
+    /// When set, the pipeline is primed behind this gate and records nothing
+    /// until the session arms it at the end of the start cue.
+    pub start_gate: Option<cap_recording::RecordingStartGate>,
 }
 
 #[cfg(target_os = "linux")]
@@ -72,12 +76,20 @@ enum Handle {
 
 type SharedInstantUpload = Arc<tokio::sync::Mutex<Option<crate::upload::InstantUpload>>>;
 
-/// A live recording. Stopping consumes it; dropping it without stopping leaves
-/// the actors to wind down on their own when the refs go away.
+struct RecordingOwnedFeed<A: Actor>(ActorRef<A>);
+
+impl<A: Actor> Drop for RecordingOwnedFeed<A> {
+    fn drop(&mut self) {
+        self.0.kill();
+    }
+}
+
+/// A live recording. Stopping consumes it.
 #[cfg_attr(target_os = "linux", derive(Clone))]
 pub struct ActiveRecording {
     handle: Handle,
     pub project_dir: PathBuf,
+    start_gate: Option<cap_recording::RecordingStartGate>,
     instant_upload: Option<SharedInstantUpload>,
     instant_share_link: Option<String>,
     #[cfg(target_os = "linux")]
@@ -87,11 +99,8 @@ pub struct ActiveRecording {
     /// Recording-scoped mic mute (payload zeroing at the consumer seam; the
     /// stream cadence is unaffected). `None` when the recording has no mic.
     pub mic_mute: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
-    // Held for the duration of the recording: dropping an ActorRef early would
-    // stop the feed under the pipeline. Only populated by the per-recording
-    // fallback path; app-scoped feeds are owned by `Feeds`.
-    _mic_feed: Option<ActorRef<MicrophoneFeed>>,
-    _camera_feed: Option<ActorRef<CameraFeed>>,
+    _mic_feed: Option<Arc<RecordingOwnedFeed<MicrophoneFeed>>>,
+    _camera_feed: Option<Arc<RecordingOwnedFeed<CameraFeed>>>,
     // The mic error channel must outlive the stream or error sends panic the
     // sender side into logs; we keep it and drain nothing.
     _mic_errors: Option<flume::Receiver<cpal::StreamError>>,
@@ -405,22 +414,35 @@ async fn run_instant_operation<T>(
 async fn finalize_studio(
     completed: studio_recording::CompletedRecording,
     capture_target: ScreenCaptureTarget,
+    progress: Option<StudioFinalizationPublisher>,
+    camera_snapshot: Option<StudioCameraSnapshot>,
 ) -> anyhow::Result<PathBuf> {
+    let started = std::time::Instant::now();
     let project_path = completed.project_path.clone();
     let needs_remux = matches!(
         completed.meta.status(),
         cap_project::StudioRecordingStatus::NeedsRemux
     );
-    tokio::task::spawn_blocking(move || {
+    let completed = tokio::task::spawn_blocking(move || {
         if needs_remux {
             ensure_finalization_storage(&project_path)?;
         }
-        cap_recording::recovery::RecoveryManager::remux_if_needed(&project_path)
-            .map_err(anyhow::Error::from)
+        let preparing = progress
+            .as_ref()
+            .and_then(|progress| progress.claim_preparing(&completed));
+        let result = match preparing {
+            Some(job) => RecoveryManager::remux_stopped_with_preparing(&completed, job),
+            None => RecoveryManager::remux_if_needed(&project_path),
+        };
+        result.map(|_| completed).map_err(anyhow::Error::from)
     })
     .await
     .context("studio finalize task")?
     .context("studio finalize")?;
+    tracing::info!(
+        elapsed_ms = started.elapsed().as_secs_f64() * 1000.0,
+        "Studio stop remux complete"
+    );
 
     // Everything `handle_recording_finish` does after the remux,
     // in its order: the first-frame JPEG the library's card is
@@ -429,15 +451,33 @@ async fn finalize_studio(
     // recording that is already on disk, so both only warn.
     let project_path = completed.project_path.clone();
     tokio::task::spawn_blocking(move || {
+        let thumbnail_started = std::time::Instant::now();
         if let Some(display_path) = studio_display_path(&project_path) {
             write_bundle_thumbnail(&project_path, &display_path);
         }
-        apply_camera_blur_to_project_config(&project_path, current_camera_blur());
+        tracing::info!(
+            elapsed_ms = thumbnail_started.elapsed().as_secs_f64() * 1000.0,
+            "Studio stop thumbnail complete"
+        );
+        let placement = completed
+            .meta
+            .camera_path()
+            .and_then(|_| camera_snapshot.and_then(|snapshot| snapshot.placement));
+        apply_camera_preview_to_project_config(
+            &project_path,
+            camera_snapshot.map_or_else(current_camera_blur, |snapshot| snapshot.blur),
+            placement,
+        );
         let library = serde_json::from_value(serde_json::Value::Object(
             crate::store::store_section("animated_gradients"),
         ))
         .unwrap_or_default();
         apply_animated_gradient_to_project_config(&project_path, &capture_target, &library);
+        if crate::store::studio_sound_by_default()
+            && let Err(error) = enable_studio_sound(&project_path)
+        {
+            tracing::warn!(%error, "Could not apply the Studio Sound default");
+        }
     })
     .await
     .context("studio post-finalize task")?;
@@ -512,6 +552,198 @@ where
 
 pub(crate) type CaptureStopFuture =
     std::pin::Pin<Box<dyn Future<Output = (bool, anyhow::Result<PathBuf>)> + Send>>;
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct StudioCameraSnapshot {
+    pub blur: crate::store::BlurMode,
+    pub placement: Option<cap_recording::camera_placement::RecordingCameraPlacement>,
+}
+
+#[derive(Clone, Default)]
+struct StudioFinalizationState {
+    camera_snapshot: Option<StudioCameraSnapshot>,
+    capture_stopped: bool,
+    preparing_decided: bool,
+    preparing: Option<PreparingStudioObserver>,
+    result: Option<Result<(), String>>,
+}
+
+#[derive(Clone)]
+pub(crate) struct StudioFinalization {
+    state: tokio::sync::watch::Receiver<StudioFinalizationState>,
+}
+
+#[derive(Clone)]
+pub(crate) struct StudioFinalizationPublisher {
+    state: tokio::sync::watch::Sender<StudioFinalizationState>,
+    target: Arc<StudioFinalizationTarget>,
+}
+
+struct StudioFinalizationTarget {
+    project_path: PathBuf,
+    generation: u64,
+}
+
+impl StudioFinalization {
+    pub(crate) fn camera_snapshot(&self) -> Option<StudioCameraSnapshot> {
+        self.state.borrow().camera_snapshot
+    }
+
+    pub(crate) fn channel(
+        project_path: PathBuf,
+        generation: u64,
+    ) -> (StudioFinalizationPublisher, Self) {
+        let (state, receiver) = tokio::sync::watch::channel(StudioFinalizationState::default());
+        (
+            StudioFinalizationPublisher {
+                state,
+                target: Arc::new(StudioFinalizationTarget {
+                    project_path,
+                    generation,
+                }),
+            },
+            Self { state: receiver },
+        )
+    }
+
+    pub(crate) fn same_job(&self, other: &Self) -> bool {
+        self.state.same_channel(&other.state)
+    }
+
+    pub(crate) fn matches_preparing_identity(
+        &self,
+        identity: &cap_recording::recovery::PreparingStudioIdentity,
+    ) -> bool {
+        let observer = self.state.borrow().preparing.clone();
+        observer.is_some_and(|observer| {
+            observer.identity().same_job(identity)
+                && matches!(
+                    observer.latest(),
+                    cap_recording::recovery::PreparingStudioState::Available(_)
+                )
+        })
+    }
+
+    pub(crate) fn is_finalizing(&self) -> bool {
+        let state = self.state.borrow();
+        state.capture_stopped && state.result.is_none()
+    }
+
+    pub(crate) fn allows_preparing_continuation(
+        &self,
+        identity: &cap_recording::recovery::PreparingStudioIdentity,
+    ) -> bool {
+        let state = self.state.borrow();
+        state.capture_stopped
+            && state.result.as_ref().is_none_or(Result::is_ok)
+            && identity.publication_succeeded()
+            && state
+                .preparing
+                .as_ref()
+                .is_some_and(|observer| observer.identity().same_job(identity))
+    }
+
+    pub(crate) async fn wait_for_capture(&self) -> bool {
+        let mut state = self.state.clone();
+        loop {
+            {
+                let current = state.borrow_and_update();
+                if current.capture_stopped {
+                    return true;
+                }
+                if current.result.is_some() {
+                    return false;
+                }
+            }
+            if state.changed().await.is_err() {
+                return false;
+            }
+        }
+    }
+
+    pub(crate) async fn wait_for_preparing(&self) -> Option<PreparingStudioObserver> {
+        let mut state = self.state.clone();
+        loop {
+            {
+                let current = state.borrow_and_update();
+                if current.preparing_decided || current.result.is_some() {
+                    return current.preparing.clone();
+                }
+            }
+            if state.changed().await.is_err() {
+                return None;
+            }
+        }
+    }
+
+    pub(crate) async fn wait(&self) -> Result<(), String> {
+        let mut state = self.state.clone();
+        loop {
+            if let Some(result) = state.borrow_and_update().result.clone() {
+                return result;
+            }
+            state.changed().await.map_err(|_| {
+                "Recording finalization ended without a result. Your files were retained."
+                    .to_string()
+            })?;
+        }
+    }
+}
+
+impl StudioFinalizationPublisher {
+    pub(crate) fn set_camera_snapshot(&self, snapshot: Option<StudioCameraSnapshot>) {
+        self.state
+            .send_modify(|state| state.camera_snapshot = snapshot);
+    }
+
+    fn claim_preparing(
+        &self,
+        completed: &studio_recording::CompletedRecording,
+    ) -> Option<PreparingStudioJob> {
+        self.claim_preparing_with(completed, PreparingStudioJob::claim)
+    }
+
+    fn claim_preparing_with(
+        &self,
+        completed: &studio_recording::CompletedRecording,
+        claim: impl FnOnce(
+            &studio_recording::CompletedRecording,
+            u64,
+        ) -> Option<(PreparingStudioJob, PreparingStudioObserver)>,
+    ) -> Option<PreparingStudioJob> {
+        let mut job = None;
+        self.state.send_if_modified(|state| {
+            if !state.capture_stopped || state.preparing_decided || state.result.is_some() {
+                return false;
+            }
+            state.preparing_decided = true;
+            if completed.project_path == self.target.project_path
+                && let Some((claimed, observer)) = claim(completed, self.target.generation)
+            {
+                state.preparing = Some(observer);
+                job = Some(claimed);
+            }
+            true
+        });
+        job
+    }
+
+    fn capture_stopped(&self) {
+        tracing::info!("Studio capture shutdown acknowledged; finalization starting");
+        self.state.send_modify(|state| state.capture_stopped = true);
+    }
+
+    fn complete(&self, result: &anyhow::Result<PathBuf>) {
+        self.state.send_modify(|state| {
+            state.result = Some(
+                result
+                    .as_ref()
+                    .map(|_| ())
+                    .map_err(|error| format!("{error:#}")),
+            );
+        });
+    }
+}
 
 #[cfg(any(windows, test))]
 async fn finish_windows_startup_setup<T>(
@@ -622,29 +854,44 @@ impl ActiveRecording {
     }
 
     #[cfg(target_os = "linux")]
-    pub fn clean_studio_stop_handle(&self) -> Option<CaptureStopFuture> {
+    pub(crate) fn clean_studio_stop_handle(
+        &self,
+        progress: Option<StudioFinalizationPublisher>,
+        camera_snapshot: Option<StudioCameraSnapshot>,
+    ) -> Option<CaptureStopFuture> {
         let Handle::Studio(handle) = &self.handle else {
             return None;
         };
         let handle = handle.clone();
         Some(Box::pin(async move {
             let capture_target = handle.capture_target.clone();
-            finish_studio_after_join(handle.stop_with_report(), |completed| {
-                finalize_studio(completed, capture_target)
+            let result = finish_studio_after_join(handle.stop_with_report(), |completed| {
+                if let Some(progress) = &progress {
+                    progress.capture_stopped();
+                }
+                finalize_studio(completed, capture_target, progress.clone(), camera_snapshot)
             })
-            .await
+            .await;
+            if let Some(progress) = progress {
+                progress.complete(&result.1);
+            }
+            result
         }))
     }
 
     #[cfg(any(target_os = "macos", windows))]
-    pub fn clean_studio_stop_handle(&self) -> Option<CaptureStopFuture> {
+    pub(crate) fn clean_studio_stop_handle(
+        &self,
+        progress: Option<StudioFinalizationPublisher>,
+        camera_snapshot: Option<StudioCameraSnapshot>,
+    ) -> Option<CaptureStopFuture> {
         let Handle::Studio(handle) = &self.handle else {
             return None;
         };
         let handle = handle.clone();
         Some(Box::pin(async move {
             let capture_target = handle.capture_target.clone();
-            finish_after_capture_stop(
+            let result = finish_after_capture_stop(
                 async move {
                     let outcome = handle.stop_with_outcome().await;
                     (
@@ -652,9 +899,18 @@ impl ActiveRecording {
                         outcome.result.map_err(anyhow::Error::msg),
                     )
                 },
-                |completed| finalize_studio(completed, capture_target),
+                |completed| {
+                    if let Some(progress) = &progress {
+                        progress.capture_stopped();
+                    }
+                    finalize_studio(completed, capture_target, progress.clone(), camera_snapshot)
+                },
             )
-            .await
+            .await;
+            if let Some(progress) = progress {
+                progress.complete(&result.1);
+            }
+            result
         }))
     }
 
@@ -715,7 +971,7 @@ impl ActiveRecording {
                     })
                     .await
                 } else {
-                    joined_instant_result(lifecycle, active.stop(preserve_local)).await
+                    joined_instant_result(lifecycle, active.stop(preserve_local, None)).await
                 }
             },
             cancel,
@@ -805,6 +1061,9 @@ impl ActiveRecording {
 
     #[cfg(target_os = "linux")]
     pub(crate) async fn cancel_preserving(self) -> anyhow::Result<()> {
+        if let Some(gate) = &self.start_gate {
+            gate.arm();
+        }
         if let Some(completion) = &self.instant_completion {
             completion.deny();
         }
@@ -837,6 +1096,9 @@ impl ActiveRecording {
     /// delete and restart flows. Deleting a directory this app just created is
     /// app behavior, same as the Tauri delete button.
     pub async fn cancel_and_delete(self) -> anyhow::Result<()> {
+        if let Some(gate) = &self.start_gate {
+            gate.arm();
+        }
         #[cfg(target_os = "linux")]
         if let Some(completion) = &self.instant_completion {
             completion.deny();
@@ -901,7 +1163,11 @@ impl ActiveRecording {
         Ok(())
     }
 
-    pub async fn stop(self, preserve_local: bool) -> anyhow::Result<PathBuf> {
+    pub(crate) async fn stop(
+        self,
+        preserve_local: bool,
+        camera_snapshot: Option<StudioCameraSnapshot>,
+    ) -> anyhow::Result<PathBuf> {
         #[cfg(target_os = "linux")]
         let _operation = self.instant_operation.lock().await;
         let mut upload_guard = match self.instant_upload.as_ref() {
@@ -913,7 +1179,7 @@ impl ActiveRecording {
             Handle::Studio(handle) => {
                 let capture_target = handle.capture_target.clone();
                 let completed = handle.stop().await?;
-                finalize_studio(completed, capture_target).await
+                finalize_studio(completed, capture_target, None, camera_snapshot).await
             }
             Handle::Instant(handle) => {
                 let result = async {
@@ -1192,6 +1458,43 @@ fn write_bundle_thumbnail(project_dir: &std::path::Path, source_video: &std::pat
     }
 }
 
+pub(crate) fn preparing_presentation(
+    project: &cap_project::ProjectConfiguration,
+    camera_snapshot: Option<StudioCameraSnapshot>,
+) -> Result<cap_project::ProjectConfiguration, String> {
+    let library = serde_json::from_value(serde_json::Value::Object(crate::store::store_section(
+        "animated_gradients",
+    )))
+    .map_err(|error| format!("Preparing appearance preferences did not parse: {error}"))?;
+    let mut config = preparing_presentation_for(
+        project,
+        camera_snapshot.map_or_else(current_camera_blur, |snapshot| snapshot.blur),
+        &library,
+    )?;
+    if crate::store::studio_sound_by_default() {
+        config.audio.improve = true;
+        config.audio.isolation = crate::store::studio_sound_isolation();
+    }
+    if let Some(placement) = camera_snapshot.and_then(|snapshot| snapshot.placement) {
+        placement.apply(&mut config.camera);
+    }
+    Ok(config)
+}
+
+fn preparing_presentation_for(
+    project: &cap_project::ProjectConfiguration,
+    blur: crate::store::BlurMode,
+    library: &cap_project::AnimatedGradientLibrary,
+) -> Result<cap_project::ProjectConfiguration, String> {
+    if blur != crate::store::BlurMode::Off || project.camera.background_blur.is_active() {
+        return Err("Camera blur requires ordinary editor loading".into());
+    }
+    if library.selected && library.last_used.is_some() {
+        return Err("Animated-gradient preferences require ordinary editor loading".into());
+    }
+    Ok(project.clone())
+}
+
 /// The camera preview bubble's current blur mode.
 ///
 /// `handle_recording_finish` reads the *live* preview state
@@ -1214,7 +1517,40 @@ fn blur_mode_json(blur: crate::store::BlurMode) -> &'static str {
         crate::store::BlurMode::Off => "off",
         crate::store::BlurMode::Light => "light",
         crate::store::BlurMode::Heavy => "heavy",
+        crate::store::BlurMode::Remove => "remove",
     }
+}
+
+fn enable_studio_sound(project_path: &std::path::Path) -> std::io::Result<()> {
+    let path = project_path.join("project-config.json");
+    let mut config: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)?;
+    let object = config.as_object_mut().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Project configuration is not an object",
+        )
+    })?;
+    let audio = object
+        .entry("audio")
+        .or_insert_with(|| serde_json::json!({}));
+    let audio = audio.as_object_mut().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Audio configuration is not an object",
+        )
+    })?;
+    audio.insert("improve".into(), serde_json::Value::Bool(true));
+    audio.insert(
+        "isolation".into(),
+        serde_json::to_value(crate::store::studio_sound_isolation())?,
+    );
+    let temp = path.with_extension(format!("studio-sound-{}.tmp", crate::store::new_uuid_v4()));
+    let result = std::fs::write(&temp, serde_json::to_vec_pretty(&config)?)
+        .and_then(|()| std::fs::rename(&temp, path));
+    if result.is_err() {
+        let _ = std::fs::remove_file(temp);
+    }
+    result
 }
 
 fn apply_animated_gradient_to_project_config(
@@ -1332,9 +1668,18 @@ fn apply_initial_animated_gradient(
 /// discipline applied to the other shared file, including its refusal: a config
 /// that does not parse, or whose `camera` is not an object, is left alone
 /// rather than replaced.
-pub fn apply_camera_blur_to_project_config(
+#[cfg(test)]
+fn apply_camera_blur_to_project_config(
     project_dir: &std::path::Path,
     blur: crate::store::BlurMode,
+) -> bool {
+    apply_camera_preview_to_project_config(project_dir, blur, None)
+}
+
+fn apply_camera_preview_to_project_config(
+    project_dir: &std::path::Path,
+    blur: crate::store::BlurMode,
+    placement: Option<cap_recording::camera_placement::RecordingCameraPlacement>,
 ) -> bool {
     use serde_json::{Map, Value};
 
@@ -1375,6 +1720,23 @@ pub fn apply_camera_blur_to_project_config(
         "mode".to_string(),
         Value::String(blur_mode_json(blur).to_string()),
     );
+
+    if let Some(placement) = placement {
+        let mut positioned = cap_project::Camera::default();
+        placement.apply(&mut positioned);
+        let Ok(Value::Object(position)) = serde_json::to_value(positioned.position) else {
+            return false;
+        };
+        let Some(saved_position) = camera
+            .entry("position")
+            .or_insert_with(|| Value::Object(Map::new()))
+            .as_object_mut()
+        else {
+            return false;
+        };
+        saved_position.extend(position);
+        camera.insert("manualPosition".into(), Value::Null);
+    }
 
     // Same shape `ProjectConfiguration::write` produces (serde_json pretty),
     // via a temp file so a crash mid-write cannot leave a project whose config
@@ -1873,6 +2235,9 @@ async fn start_attempt_with_upload(
                 camera_lock.is_some(),
                 None,
             );
+            if let Some(gate) = config.start_gate.clone() {
+                builder = builder.with_start_gate(gate);
+            }
             #[cfg(target_os = "macos")]
             {
                 builder = builder.with_excluded_windows(excluded_windows.clone());
@@ -1898,6 +2263,9 @@ async fn start_attempt_with_upload(
                 instant_recording::Actor::builder(project_dir.clone(), config.target.clone())
                     .with_system_audio(config.system_audio)
                     .with_max_output_size(instant_max_resolution);
+            if let Some(gate) = config.start_gate.clone() {
+                builder = builder.with_start_gate(gate);
+            }
             #[cfg(target_os = "macos")]
             {
                 builder = builder.with_excluded_windows(excluded_windows.clone());
@@ -1976,6 +2344,7 @@ async fn start_attempt_with_upload(
     Ok(ActiveRecording {
         handle,
         project_dir,
+        start_gate: config.start_gate.clone(),
         instant_upload,
         instant_share_link,
         #[cfg(target_os = "linux")]
@@ -2034,10 +2403,11 @@ async fn setup_camera(
     id: &DeviceOrModelID,
     settings: Option<camera::CameraDeviceSettings>,
 ) -> anyhow::Result<(
-    ActorRef<CameraFeed>,
+    Arc<RecordingOwnedFeed<CameraFeed>>,
     cap_recording::feeds::camera::CameraFeedLock,
 )> {
     let feed = CameraFeed::spawn(CameraFeed::default());
+    let owner = Arc::new(RecordingOwnedFeed(feed.clone()));
     let ready = feed
         .ask(camera::SetInput {
             id: id.clone(),
@@ -2050,19 +2420,20 @@ async fn setup_camera(
         .ask(camera::Lock)
         .await
         .map_err(|e| anyhow!("camera lock: {e}"))?;
-    Ok((feed, lock))
+    Ok((owner, lock))
 }
 
 async fn setup_microphone(
     label: &str,
     settings: Option<microphone::MicrophoneDeviceSettings>,
 ) -> anyhow::Result<(
-    ActorRef<MicrophoneFeed>,
+    Arc<RecordingOwnedFeed<MicrophoneFeed>>,
     Arc<cap_recording::feeds::microphone::MicrophoneFeedLock>,
     flume::Receiver<cpal::StreamError>,
 )> {
     let (error_tx, error_rx) = flume::unbounded();
     let feed = MicrophoneFeed::spawn(MicrophoneFeed::new(error_tx));
+    let owner = Arc::new(RecordingOwnedFeed(feed.clone()));
     let ready = feed
         .ask(microphone::SetInput {
             label: label.to_string(),
@@ -2075,7 +2446,7 @@ async fn setup_microphone(
         .ask(microphone::Lock)
         .await
         .map_err(|e| anyhow!("lock: {e}"))?;
-    Ok((feed, Arc::new(lock), error_rx))
+    Ok((owner, Arc::new(lock), error_rx))
 }
 
 #[cfg(target_os = "macos")]
@@ -2168,13 +2539,18 @@ fn create_project_dir(
         recording_mode,
         now,
     );
-    // Same normalization chain as the Tauri app: colons break Finder, slashes
-    // break paths.
-    let filename = format!("{}.cap", name.replace([':', '/'], "."));
+    let filename = project_bundle_filename(&name);
     let filename = cap_utils::ensure_unique_filename(&filename, &base)
         .map_err(|e| anyhow!("unique filename: {e}"))?;
 
     Ok(base.join(filename))
+}
+
+/// Preserve GPUI's colon and slash replacement, then strip invalid characters
+/// as the Tauri recording and screenshot paths do.
+pub(crate) fn project_bundle_filename(name: &str) -> String {
+    let name = name.replace([':', '/'], ".");
+    format!("{}.cap", sanitize_filename::sanitize(&name))
 }
 
 fn format_recording_project_name(
@@ -2312,6 +2688,22 @@ mod tests {
             ),
             format!("studio-{}...-{{unknown}}", "x".repeat(180))
         );
+    }
+
+    #[test]
+    fn window_title_with_windows_reserved_characters_creates_a_project_directory() {
+        let filename = project_bundle_filename(
+            "NATO fighter jets | News World | Metro News : / * ? < > (Window)",
+        );
+        assert!(filename.ends_with(".cap"));
+        assert!(!filename.chars().any(|c| "\\/:*?\"<>|".contains(c)));
+
+        #[cfg(windows)]
+        {
+            let base = temp_project("window-title");
+            std::fs::create_dir(base.join(filename)).unwrap();
+            std::fs::remove_dir_all(base).unwrap();
+        }
     }
 
     fn temp_project(tag: &str) -> PathBuf {
@@ -3001,6 +3393,45 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    #[test]
+    fn bridging_camera_placement_preserves_unknown_fields_and_saved_edits() {
+        let dir = temp_project("camera-placement");
+        let path = dir.join("project-config.json");
+        let original = serde_json::json!({
+            "camera": {
+                "size": 41.0,
+                "mirror": true,
+                "manualPosition": { "x": 0.1, "y": 0.9 },
+                "position": { "x": "right", "y": "bottom", "futureAxis": 1 },
+                "backgroundBlur": { "mode": "light", "futureSetting": 123 },
+                "futureCameraSetting": "retained"
+            },
+            "timeline": { "segments": [{ "start": 1.0, "end": 7200.0 }] },
+            "futureProjectSetting": [1, 2, 3]
+        });
+        let placement = cap_recording::camera_placement::RecordingCameraPlacement::from_bounds(
+            [860.0, 20.0, 200.0, 200.0],
+            [0.0, 0.0, 1920.0, 1080.0],
+        )
+        .unwrap();
+        for blur in [BlurMode::Off, BlurMode::Remove] {
+            std::fs::write(&path, serde_json::to_vec(&original).unwrap()).unwrap();
+            assert!(apply_camera_preview_to_project_config(
+                &dir,
+                blur,
+                Some(placement)
+            ));
+            let written: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            let mut expected = original.clone();
+            expected["camera"]["backgroundBlur"]["mode"] = blur_mode_json(blur).into();
+            expected["camera"]["manualPosition"] = Value::Null;
+            expected["camera"]["position"]["x"] = "center".into();
+            expected["camera"]["position"]["y"] = "top".into();
+            assert_eq!(written, expected);
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     /// A config written by a build that predates `backgroundBlur` (or one that
     /// never had a camera section at all) gets the key created rather than
     /// being skipped.
@@ -3068,6 +3499,7 @@ mod tests {
             (BlurMode::Off, "off"),
             (BlurMode::Light, "light"),
             (BlurMode::Heavy, "heavy"),
+            (BlurMode::Remove, "remove"),
         ] {
             assert_eq!(blur_mode_json(mode), json);
             let parsed: cap_project::BackgroundBlurMode =
@@ -3162,6 +3594,282 @@ mod capture_stop_contract_tests {
         .await;
         assert!(!stopped);
         assert!(result.unwrap_err().to_string().contains("unconfirmed"));
+    }
+}
+
+#[cfg(test)]
+mod studio_finalization_tests {
+    use super::*;
+
+    fn channel() -> (StudioFinalizationPublisher, StudioFinalization) {
+        StudioFinalization::channel(PathBuf::from("project.cap"), 42)
+    }
+
+    fn completed_without_receipt(path: &str) -> studio_recording::CompletedRecording {
+        studio_recording::CompletedRecording {
+            project_path: PathBuf::from(path),
+            meta: serde_json::from_value(serde_json::json!({
+                "segments": [{
+                    "display": { "path": "content/segments/segment-0/display", "fps": 30, "start_time": 0.0 }
+                }],
+                "status": { "status": "NeedsRemux" }
+            }))
+            .unwrap(),
+            cursor_data: Default::default(),
+            clean_stopped: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn editor_waits_for_complete_finalization_after_capture_acknowledgement() {
+        let (publisher, finalization) = channel();
+        assert!(!finalization.is_finalizing());
+        assert!(finalization.wait_for_capture().now_or_never().is_none());
+        assert!(finalization.wait().now_or_never().is_none());
+        publisher.capture_stopped();
+        assert!(finalization.wait_for_capture().await);
+        assert!(finalization.is_finalizing());
+        assert!(finalization.wait().now_or_never().is_none());
+        publisher.complete(&Ok(PathBuf::from("project.cap")));
+        finalization.wait().await.unwrap();
+        assert!(!finalization.is_finalizing());
+    }
+
+    #[tokio::test]
+    async fn completion_before_subscription_is_retained_for_close_and_reopen() {
+        let (publisher, finalization) = channel();
+        publisher.capture_stopped();
+        publisher.complete(&Ok(PathBuf::from("project.cap")));
+        drop(publisher);
+        assert!(finalization.wait_for_capture().await);
+        finalization.wait().await.unwrap();
+        finalization.clone().wait().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn stop_failure_never_opens_a_preparing_editor() {
+        let (publisher, finalization) = channel();
+        publisher.complete(&Err(anyhow!("capture stop unconfirmed")));
+        assert!(!finalization.wait_for_capture().await);
+        assert!(!finalization.is_finalizing());
+        assert!(
+            finalization
+                .wait()
+                .await
+                .unwrap_err()
+                .contains("unconfirmed")
+        );
+    }
+
+    #[tokio::test]
+    async fn finalization_failure_remains_an_error_after_capture_stops() {
+        let (publisher, finalization) = channel();
+        publisher.capture_stopped();
+        publisher.complete(&Err(anyhow!("media validation failed")));
+        assert!(finalization.wait_for_capture().await);
+        assert!(!finalization.is_finalizing());
+        assert_eq!(
+            finalization.wait().await.unwrap_err(),
+            "media validation failed"
+        );
+    }
+
+    #[tokio::test]
+    async fn lost_finalizer_cannot_leave_the_loading_shell_waiting_forever() {
+        for capture_stopped in [false, true] {
+            let (publisher, finalization) = channel();
+            if capture_stopped {
+                publisher.capture_stopped();
+            }
+            drop(publisher);
+            assert_eq!(finalization.wait_for_capture().await, capture_stopped);
+            assert!(
+                finalization
+                    .wait()
+                    .await
+                    .unwrap_err()
+                    .contains("files were retained")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn closing_every_editor_waiter_does_not_cancel_retained_finalization() {
+        let (publisher, finalization) = channel();
+        let (release, released) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            let result = finish_after_capture_stop(async { (true, Ok(())) }, |()| async {
+                publisher.capture_stopped();
+                released.await.unwrap();
+                Ok(PathBuf::from("project.cap"))
+            })
+            .await;
+            publisher.complete(&result.1);
+            result
+        });
+        assert!(finalization.wait_for_capture().await);
+        drop(finalization);
+        release.send(()).unwrap();
+        let (stopped, result) = task.await.unwrap();
+        assert!(stopped);
+        assert_eq!(result.unwrap(), PathBuf::from("project.cap"));
+    }
+
+    #[tokio::test]
+    async fn finalizer_panic_publishes_failure_without_losing_capture_acknowledgement() {
+        let (publisher, finalization) = channel();
+        let result = finish_after_capture_stop(async { (true, Ok(())) }, |()| async {
+            publisher.capture_stopped();
+            panic!("finalizer failed");
+        })
+        .await;
+        publisher.complete(&result.1);
+        assert!(result.0);
+        assert!(finalization.wait_for_capture().await);
+        assert!(
+            finalization
+                .wait()
+                .await
+                .unwrap_err()
+                .contains("after capture stopped")
+        );
+    }
+
+    #[tokio::test]
+    async fn capture_acknowledgement_does_not_imply_preparing_sources() {
+        let (publisher, finalization) = channel();
+        publisher.capture_stopped();
+        assert!(finalization.wait_for_capture().await);
+        assert!(finalization.wait_for_preparing().now_or_never().is_none());
+        publisher.complete(&Ok(PathBuf::from("project.cap")));
+        assert!(finalization.wait_for_preparing().await.is_none());
+        finalization.wait().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn declined_receipt_does_not_finish_post_finalize_work() {
+        let (publisher, finalization) = channel();
+        publisher.capture_stopped();
+        assert!(
+            publisher
+                .claim_preparing(&completed_without_receipt("project.cap"))
+                .is_none()
+        );
+        assert!(finalization.wait_for_preparing().await.is_none());
+        assert!(finalization.is_finalizing());
+        assert!(finalization.wait().now_or_never().is_none());
+        publisher.complete(&Err(anyhow!("post-finalize task failed")));
+        assert_eq!(
+            finalization.wait().await.unwrap_err(),
+            "post-finalize task failed"
+        );
+    }
+
+    #[tokio::test]
+    async fn preparing_admission_requires_capture_acknowledgement() {
+        let (publisher, finalization) = channel();
+        assert!(
+            publisher
+                .claim_preparing_with(&completed_without_receipt("project.cap"), |_, _| panic!(
+                    "Capture must be acknowledged before the receipt is claimed"
+                ),)
+                .is_none()
+        );
+        assert!(!publisher.state.borrow().preparing_decided);
+        assert!(finalization.wait_for_preparing().now_or_never().is_none());
+        publisher.complete(&Err(anyhow!("capture stop failed")));
+        assert!(finalization.wait_for_preparing().await.is_none());
+        assert!(!finalization.wait_for_capture().await);
+    }
+
+    #[tokio::test]
+    async fn wrong_project_declines_preview_without_changing_finalization_result() {
+        let (publisher, finalization) = channel();
+        publisher.capture_stopped();
+        assert!(
+            publisher
+                .claim_preparing_with(&completed_without_receipt("other.cap"), |_, _| panic!(
+                    "A different project cannot claim this publisher's receipt"
+                ),)
+                .is_none()
+        );
+        assert!(publisher.state.borrow().preparing_decided);
+        assert!(finalization.wait_for_preparing().await.is_none());
+        assert!(finalization.is_finalizing());
+        publisher.complete(&Ok(PathBuf::from("project.cap")));
+        finalization.wait().await.unwrap();
+    }
+
+    #[test]
+    fn completed_and_duplicate_attempts_cannot_reopen_preparing_admission() {
+        let (publisher, _) = channel();
+        publisher.capture_stopped();
+        let observed_generation = std::cell::Cell::new(None);
+        assert!(
+            publisher
+                .claim_preparing_with(
+                    &completed_without_receipt("project.cap"),
+                    |_, generation| {
+                        observed_generation.set(Some(generation));
+                        None
+                    },
+                )
+                .is_none()
+        );
+        assert_eq!(observed_generation.get(), Some(42));
+        assert!(publisher.state.borrow().preparing_decided);
+        let cloned = publisher.clone();
+        assert!(
+            cloned
+                .claim_preparing_with(&completed_without_receipt("project.cap"), |_, _| panic!(
+                    "A duplicate finalizer cannot claim a second receipt"
+                ),)
+                .is_none()
+        );
+        publisher.complete(&Ok(PathBuf::from("project.cap")));
+        assert!(
+            cloned
+                .claim_preparing_with(&completed_without_receipt("project.cap"), |_, _| panic!(
+                    "A completed finalizer cannot reopen preview admission"
+                ),)
+                .is_none()
+        );
+        assert_eq!(publisher.target.generation, 42);
+        assert_eq!(publisher.target.project_path, PathBuf::from("project.cap"));
+        assert!(Arc::ptr_eq(&publisher.target, &cloned.target));
+    }
+
+    #[test]
+    fn completed_finalization_cannot_mint_a_late_preparing_job() {
+        let (publisher, _) = channel();
+        publisher.capture_stopped();
+        publisher.complete(&Ok(PathBuf::from("project.cap")));
+        assert!(!publisher.state.borrow().preparing_decided);
+        assert!(
+            publisher
+                .claim_preparing_with(&completed_without_receipt("project.cap"), |_, _| panic!(
+                    "Completed finalization cannot claim a first late receipt"
+                ),)
+                .is_none()
+        );
+        assert!(!publisher.state.borrow().preparing_decided);
+    }
+
+    #[tokio::test]
+    async fn lost_publisher_releases_preparing_waiters_without_success() {
+        let (publisher, finalization) = channel();
+        publisher.capture_stopped();
+        drop(publisher);
+        assert!(finalization.wait_for_preparing().await.is_none());
+        assert!(finalization.wait().await.is_err());
+    }
+
+    #[test]
+    fn readiness_identity_does_not_confuse_retries_or_later_recordings() {
+        let (_, first) = channel();
+        let (_, second) = channel();
+        assert!(first.same_job(&first.clone()));
+        assert!(!first.same_job(&second));
     }
 }
 
@@ -3603,5 +4311,184 @@ mod windows_studio_stop_tests {
             .await;
         assert!(acknowledged);
         assert_eq!(result.unwrap(), PathBuf::from("preserved.cap"));
+    }
+}
+
+#[cfg(test)]
+mod recording_owned_feed_tests {
+    use super::*;
+    use kameo::{
+        actor::{Recipient, WeakActorRef},
+        message::{Context, Message},
+    };
+    use std::{sync::mpsc, time::Duration};
+
+    #[derive(Actor)]
+    struct TestFeed {
+        _native_stop: mpsc::Sender<()>,
+    }
+
+    struct NativeFrame;
+
+    impl Message<NativeFrame> for TestFeed {
+        type Reply = ();
+
+        async fn handle(&mut self, _: NativeFrame, _: &mut Context<Self, Self::Reply>) {}
+    }
+
+    struct NativeFeedFixture {
+        actor: WeakActorRef<TestFeed>,
+        stopped: flume::Receiver<()>,
+        worker: std::thread::JoinHandle<()>,
+    }
+
+    fn spawn_native_feed() -> (ActorRef<TestFeed>, NativeFeedFixture) {
+        let (stop_tx, stop_rx) = mpsc::channel();
+        let actor = TestFeed::spawn(TestFeed {
+            _native_stop: stop_tx,
+        });
+        let native_callback: Recipient<NativeFrame> = actor.clone().recipient();
+        let weak = actor.downgrade();
+        let (stopped_tx, stopped_rx) = flume::bounded(1);
+        let worker = std::thread::spawn(move || {
+            let _ = stop_rx.recv();
+            drop(native_callback);
+            stopped_tx.send(()).unwrap();
+        });
+        (
+            actor,
+            NativeFeedFixture {
+                actor: weak,
+                stopped: stopped_rx,
+                worker,
+            },
+        )
+    }
+
+    fn native_feed_fixture() -> (Arc<RecordingOwnedFeed<TestFeed>>, NativeFeedFixture) {
+        let (actor, native) = spawn_native_feed();
+        (Arc::new(RecordingOwnedFeed(actor)), native)
+    }
+
+    impl NativeFeedFixture {
+        async fn cleaned_up(self) -> bool {
+            let stopped =
+                tokio::time::timeout(Duration::from_millis(250), self.stopped.recv_async())
+                    .await
+                    .is_ok();
+            if !stopped && let Some(actor) = self.actor.upgrade() {
+                actor.kill();
+            }
+            if !stopped {
+                tokio::time::timeout(Duration::from_secs(1), self.stopped.recv_async())
+                    .await
+                    .unwrap()
+                    .unwrap();
+            }
+            self.worker.join().unwrap();
+            stopped
+        }
+    }
+
+    #[tokio::test]
+    async fn fallback_feed_stops_after_startup_failure() {
+        let (owner, native) = native_feed_fixture();
+        let result: Result<(), ()> = async move {
+            let _owner = owner;
+            Err(())
+        }
+        .await;
+        assert!(result.is_err());
+        assert!(native.cleaned_up().await);
+    }
+
+    #[tokio::test]
+    async fn cancelling_recording_startup_stops_fallback_feed() {
+        let (owner, native) = native_feed_fixture();
+        let startup = tokio::spawn(async move {
+            let _owner = owner;
+            std::future::pending::<()>().await;
+        });
+        tokio::task::yield_now().await;
+        startup.abort();
+        assert!(startup.await.unwrap_err().is_cancelled());
+        assert!(native.cleaned_up().await);
+    }
+
+    #[tokio::test]
+    async fn fallback_feed_stops_after_final_recording_clone() {
+        let (owner, native) = native_feed_fixture();
+        let recording_clone = owner.clone();
+        drop(owner);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(25), native.stopped.recv_async())
+                .await
+                .is_err()
+        );
+        drop(recording_clone);
+        assert!(native.cleaned_up().await);
+    }
+
+    #[tokio::test]
+    async fn releasing_fallback_preserves_app_scoped_feed() {
+        let (app_feed, app_native) = spawn_native_feed();
+        let (fallback, fallback_native) = native_feed_fixture();
+        drop(fallback);
+        let fallback_stopped = fallback_native.cleaned_up().await;
+        let app_still_running =
+            tokio::time::timeout(Duration::from_millis(25), app_native.stopped.recv_async())
+                .await
+                .is_err();
+        app_feed.kill();
+        drop(app_feed);
+        let app_stopped = app_native.cleaned_up().await;
+        assert!(fallback_stopped);
+        assert!(app_still_running);
+        assert!(app_stopped);
+    }
+}
+
+#[cfg(test)]
+mod preparing_presentation_tests {
+    use super::*;
+
+    #[test]
+    fn supported_preparing_presentation_preserves_every_config_value() {
+        let project = cap_project::ProjectConfiguration::default();
+        let shown = preparing_presentation_for(
+            &project,
+            crate::store::BlurMode::Off,
+            &cap_project::AnimatedGradientLibrary::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(shown).unwrap(),
+            serde_json::to_value(project).unwrap()
+        );
+    }
+
+    #[test]
+    fn live_blur_and_selected_gradient_decline_without_mutating_stopped_config() {
+        let project = cap_project::ProjectConfiguration::default();
+        let original = serde_json::to_value(&project).unwrap();
+        for blur in [crate::store::BlurMode::Light, crate::store::BlurMode::Heavy] {
+            assert!(
+                preparing_presentation_for(
+                    &project,
+                    blur,
+                    &cap_project::AnimatedGradientLibrary::default(),
+                )
+                .is_err()
+            );
+        }
+        let library = cap_project::AnimatedGradientLibrary {
+            selected: true,
+            last_used: Some(cap_project::AnimatedGradientConfig::default()),
+            ..Default::default()
+        };
+        assert!(
+            preparing_presentation_for(&project, crate::store::BlurMode::Off, &library).is_err()
+        );
+        assert_eq!(serde_json::to_value(project).unwrap(), original);
     }
 }

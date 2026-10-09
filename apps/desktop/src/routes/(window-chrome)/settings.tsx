@@ -30,6 +30,7 @@ import {
 	getConfiguredServerUrl,
 	protectedHeaders,
 } from "~/utils/web-api";
+import IconLucideSlidersHorizontal from "~icons/lucide/sliders-horizontal";
 import IconLucideTerminal from "~icons/lucide/terminal";
 import IconLucideUserRound from "~icons/lucide/user-round";
 import IconLucideZap from "~icons/lucide/zap";
@@ -201,6 +202,11 @@ export default function Settings(props: RouteSectionProps) {
 			icon: IconCapSettings,
 		},
 		{
+			href: "quality",
+			name: "Recording quality",
+			icon: IconLucideSlidersHorizontal,
+		},
+		{
 			href: "hotkeys",
 			name: "Shortcuts",
 			icon: IconCapHotkeys,
@@ -237,7 +243,7 @@ export default function Settings(props: RouteSectionProps) {
 		},
 		{
 			href: "license",
-			name: "License",
+			name: "Plan & license",
 			icon: IconLucideGift,
 		},
 		{

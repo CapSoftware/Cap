@@ -74,7 +74,12 @@ pub fn interpolate_masks(
 ) -> Vec<PreparedMask> {
     let mut prepared = Vec::new();
 
-    for segment in segments.iter().filter(|s| s.enabled) {
+    let mut ordered = segments
+        .iter()
+        .filter(|segment| segment.enabled)
+        .collect::<Vec<_>>();
+    ordered.sort_by_key(|segment| segment.track);
+    for segment in ordered {
         if frame_time < segment.start || frame_time > segment.end {
             continue;
         }
@@ -118,6 +123,7 @@ pub fn interpolate_masks(
         let feather = (min_axis * 0.5 * segment_feather.max(0.0)).max(0.0001) as f32;
 
         prepared.push(PreparedMask {
+            track: segment.track,
             center: XY::new(
                 position.x.clamp(0.0, 1.0) as f32,
                 position.y.clamp(0.0, 1.0) as f32,
@@ -192,6 +198,26 @@ mod tests {
             fade_duration: 0.0,
             keyframes: Default::default(),
         }
+    }
+
+    #[test]
+    fn mask_layers_follow_lane_order_with_stable_ties() {
+        let mut front = sample_segment();
+        front.track = 2;
+        front.center.x = 0.75;
+        let mut back = front.clone();
+        back.track = 0;
+        back.center.x = 0.25;
+        let mut later_front = front.clone();
+        later_front.center.x = 0.5;
+        let masks = interpolate_masks(XY::new(1920, 1080), 1.0, &[front, back, later_front]);
+        assert_eq!(masks.len(), 3);
+        assert_eq!(
+            masks.iter().map(|mask| mask.track).collect::<Vec<_>>(),
+            [0, 2, 2]
+        );
+        assert!(masks[0].center.x < masks[2].center.x);
+        assert!(masks[2].center.x < masks[1].center.x);
     }
 
     #[test]
