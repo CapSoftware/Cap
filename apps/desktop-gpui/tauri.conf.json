@@ -71,7 +71,8 @@
 				"headerImage": "../desktop/src-tauri/assets/nsis-header.bmp",
 				"sidebarImage": "../desktop/src-tauri/assets/nsis-sidebar.bmp",
 				"installerIcon": "../desktop/src-tauri/icons/icon.ico",
-				"installerHooks": "packaging/windows/installer-hooks.nsh"
+				"installerHooks": "packaging/windows/installer-hooks.nsh",
+				"compression": "lzma"
 			},
 			"webviewInstallMode": {
 				"type": "skip"

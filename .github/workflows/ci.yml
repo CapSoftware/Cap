@@ -50,6 +50,7 @@ jobs:
               - 'scripts/build-macos-packages*'
               - 'scripts/bundle-gpui*'
               - 'scripts/finalize-linux-*'
+              - 'scripts/finalize-macos-*'
               - 'scripts/linux-bundle-config*'
               - 'scripts/prepare-gpui-dependency*'
               - 'scripts/run-gpui-build*'
@@ -274,7 +275,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Test desktop build preparation
-        run: node --test scripts/prepare-gpui-dependency.test.mjs scripts/build-macos-packages.test.mjs scripts/bundle-gpui.test.mjs
+        run: node --test scripts/prepare-gpui-dependency.test.mjs scripts/build-macos-packages.test.mjs scripts/bundle-gpui.test.mjs scripts/finalize-macos-packages.test.mjs
 
       - name: Install Linux desktop dependencies
         if: ${{ runner.os == 'Linux' }}

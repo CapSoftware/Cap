@@ -231,7 +231,7 @@ jobs:
         run: node --test scripts/prepare-gpui-dependency.test.mjs
 
       - name: Test desktop packaging scripts
-        run: node --test scripts/build-macos-packages.test.mjs scripts/bundle-gpui.test.mjs
+        run: node --test scripts/build-macos-packages.test.mjs scripts/bundle-gpui.test.mjs scripts/finalize-macos-packages.test.mjs
 
       - name: Install Linux desktop dependencies
         if: ${{ runner.os == 'Linux' }}
@@ -401,6 +401,22 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           RUST_TARGET_TRIPLE: ${{ matrix.settings.target }}
+
+      # Same bytes, smaller downloads: zopfli for the updater archive, which
+      # every install (0.6.0's Tauri updater included) still unpacks as gzip,
+      # and LZMA for the disk image, which macOS 10.15+ mounts natively.
+      - name: Shrink macOS packages
+        if: ${{ runner.os == 'macOS' }}
+        shell: bash
+        run: |
+          brew install pigz
+          node scripts/finalize-macos-packages.mjs "$CAP_BUNDLE"
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_KEYCHAIN: ${{ format('{0}/build.keychain', runner.temp) }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
       # Sign Cap's prebuilt binary and its sidecars in one request, then bundle
       # the installer from the signed payload.

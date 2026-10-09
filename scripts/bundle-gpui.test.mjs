@@ -116,6 +116,22 @@ test("the GPUI bundle ships one CLI sidecar instead of two identical copies", ()
 	);
 });
 
+test("the Windows installer compresses with a window large enough to span both binaries", () => {
+	assert.equal(gpuiConfig.bundle.windows.nsis.compression, "lzma");
+	const hooks = readFileSync(
+		path.join(gpuiDirectory, gpuiConfig.bundle.windows.nsis.installerHooks),
+		"utf8",
+	);
+	const directives = hooks
+		.split(/\r?\n/)
+		.filter((line) => line.trim() && !line.trim().startsWith(";"));
+	assert.equal(directives[0], "SetCompressorDictSize 128");
+	assert.ok(
+		directives.indexOf("SetCompressorDictSize 128") <
+			directives.findIndex((line) => line.startsWith("!macro")),
+	);
+});
+
 test("platform resources point at the shared native dependencies", () => {
 	assert.deepEqual(gpuiPlatformConfig("darwin"), {
 		bundle: {
