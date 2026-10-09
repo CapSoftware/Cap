@@ -31,6 +31,12 @@ pub(crate) enum UpdateStatus {
     Installing {
         version: Version,
     },
+    /// On disk and waiting only for the restart, which work started while the
+    /// installer waited on an administrator prompt holds back.
+    Installed {
+        version: Version,
+        executable: PathBuf,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -162,7 +168,7 @@ pub(crate) fn check_manually(cx: &mut App) {
     }
 
     match status(cx) {
-        UpdateStatus::Ready { .. } => {
+        UpdateStatus::Ready { .. } | UpdateStatus::Installed { .. } => {
             prompt_restart(cx);
             return;
         }
@@ -457,7 +463,8 @@ fn update_failed(message: &str, cx: &mut App) {
 }
 
 fn prompt_restart(cx: &mut App) {
-    let UpdateStatus::Ready { version } = status(cx) else {
+    let (UpdateStatus::Ready { version } | UpdateStatus::Installed { version, .. }) = status(cx)
+    else {
         return;
     };
     if work_in_flight(cx) {
@@ -489,9 +496,13 @@ pub(crate) fn install_and_relaunch(cx: &mut App) {
     if !cx.has_global::<UpdateScheduler>() {
         return;
     }
-    let UpdateStatus::Ready { version } = status(cx) else {
+    let status = status(cx);
+    if !matches!(
+        status,
+        UpdateStatus::Ready { .. } | UpdateStatus::Installed { .. }
+    ) {
         return;
-    };
+    }
     if work_in_flight(cx) {
         busy_alert(cx);
         return;
@@ -503,6 +514,17 @@ pub(crate) fn install_and_relaunch(cx: &mut App) {
         .detach();
         return;
     }
+    let version = match status {
+        UpdateStatus::Installed {
+            version,
+            executable,
+        } => {
+            relaunch_into(&version, &executable, cx);
+            return;
+        }
+        UpdateStatus::Ready { version } => version,
+        _ => return,
+    };
     let Some((package, kind)) = cx
         .global::<UpdateScheduler>()
         .staged
@@ -524,13 +546,7 @@ pub(crate) fn install_and_relaunch(cx: &mut App) {
             .spawn(async move { apply(&package, kind) })
             .await;
         cx.update(|cx| match applied {
-            Ok(Some(executable)) => {
-                tracing::info!(%version, "update installed; relaunching");
-                if let Err(error) = crate::permissions::relaunch_executable(&executable, cx) {
-                    tracing::error!(%error, "could not relaunch after updating");
-                    crate::menus::quit(cx);
-                }
-            }
+            Ok(Some(executable)) => restart_after_install(version, executable, cx),
             Ok(None) => {
                 tracing::info!(%version, "update installer started; quitting");
                 crate::menus::quit(cx);
@@ -543,6 +559,41 @@ pub(crate) fn install_and_relaunch(cx: &mut App) {
         });
     })
     .detach();
+}
+
+/// The install can sit behind an administrator prompt for as long as the user
+/// leaves it, so anything started meanwhile defers the restart to a prompt
+/// that waits for Cap to be idle.
+fn restart_after_install(version: Version, executable: PathBuf, cx: &mut App) {
+    let deferred = if work_in_flight(cx) {
+        tracing::info!(%version, "update installed; waiting for in-flight work before restarting");
+        true
+    } else if let Err(error) = crate::app_windows::flush_pending_editor_saves(cx) {
+        tracing::warn!(%version, "update installed; editor changes are still unsaved: {error}");
+        true
+    } else {
+        false
+    };
+    if deferred {
+        set_status(
+            UpdateStatus::Installed {
+                version,
+                executable,
+            },
+            cx,
+        );
+        prompt_restart(cx);
+        return;
+    }
+    relaunch_into(&version, &executable, cx);
+}
+
+fn relaunch_into(version: &Version, executable: &std::path::Path, cx: &mut App) {
+    tracing::info!(%version, "update installed; relaunching");
+    if let Err(error) = crate::permissions::relaunch_executable(executable, cx) {
+        tracing::error!(%error, "could not relaunch after updating");
+        crate::menus::quit(cx);
+    }
 }
 
 fn apply(package: &std::path::Path, kind: ArtifactKind) -> Result<Option<PathBuf>, String> {

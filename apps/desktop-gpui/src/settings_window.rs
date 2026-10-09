@@ -1820,7 +1820,8 @@ impl SettingsWindow {
             crate::updates::UpdateStatus::Downloading { version, .. } => {
                 (format!("Downloading v{version}…"), false)
             }
-            crate::updates::UpdateStatus::Ready { version } => {
+            crate::updates::UpdateStatus::Ready { version }
+            | crate::updates::UpdateStatus::Installed { version, .. } => {
                 (format!("Restart to update to v{version}"), true)
             }
             crate::updates::UpdateStatus::Installing { version } => {
