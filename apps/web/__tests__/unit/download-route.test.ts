@@ -94,4 +94,44 @@ describe("desktop download route", () => {
 		);
 		vi.unstubAllGlobals();
 	});
+
+	it.each([
+		["classic-apple-silicon", "dmg-aarch64-classic"],
+		["classic-apple-intel", "dmg-x86_64-classic"],
+		["classic-windows", "nsis-x86_64-classic"],
+		["classic-linux-appimage", "appimage-x86_64-classic"],
+	])(
+		"serves Cap Classic for %s from its own platform",
+		async (platform, asset) => {
+			const fetch = vi.fn().mockResolvedValue({
+				status: 206,
+				url: `https://downloads.example/${asset}`,
+				body: { cancel: vi.fn().mockResolvedValue(undefined) },
+			});
+			vi.stubGlobal("fetch", fetch);
+			const response = await GET(request, {
+				params: Promise.resolve({ platform }),
+			});
+			expect(fetch.mock.calls[0]?.[0]).toBe(
+				`https://cdn.crabnebula.app/download/cap/cap/latest/platform/${asset}`,
+			);
+			expect(response.headers.get("location")).toBe(
+				`https://downloads.example/${asset}`,
+			);
+			vi.unstubAllGlobals();
+		},
+	);
+
+	it("sends Cap Classic downloads back to the download page when unavailable", async () => {
+		vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("Unavailable")));
+		vi.mocked(getGitHubReleases).mockClear();
+		const response = await GET(request, {
+			params: Promise.resolve({ platform: "classic-windows" }),
+		});
+		expect(response.headers.get("location")).toBe(
+			"https://cap.so/download?version=classic",
+		);
+		expect(getGitHubReleases).not.toHaveBeenCalled();
+		vi.unstubAllGlobals();
+	});
 });

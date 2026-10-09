@@ -567,6 +567,73 @@ label {
 	animation-delay: 0.3s;
 }
 
+.dl-ink {
+	filter: var(--dl-boil);
+}
+
+.dl-ink path {
+	fill: none;
+	stroke: currentColor;
+	stroke-linecap: round;
+	stroke-linejoin: round;
+	stroke-dasharray: 1;
+	stroke-dashoffset: 1;
+	vector-effect: non-scaling-stroke;
+}
+
+.dl-ink-loop {
+	stroke-width: 1.6px;
+	animation: dl-ink-draw 0.85s cubic-bezier(0.55, 0.1, 0.25, 1) 0.45s forwards;
+}
+
+.dl-ink-spark {
+	stroke-width: 1.6px;
+	animation: dl-ink-draw 0.22s ease-out forwards;
+}
+
+.dl-ink-underline {
+	stroke-width: 2px;
+	animation: dl-ink-draw 0.7s cubic-bezier(0.55, 0.1, 0.25, 1) 1.35s forwards;
+}
+
+.dl-swap {
+	animation: dl-swap 0.32s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+@keyframes dl-ink-draw {
+	to {
+		stroke-dashoffset: 0;
+	}
+}
+
+@keyframes dl-swap {
+	from {
+		opacity: 0;
+		transform: translateY(4px);
+		filter: blur(2px);
+	}
+	to {
+		opacity: 1;
+		transform: none;
+		filter: none;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.dl-ink path {
+		animation: none;
+		stroke-dashoffset: 0;
+	}
+
+	.dl-ink {
+		filter: none;
+	}
+
+	.dl-swap {
+		animation: none;
+	}
+}
+
 .animate-delay-2 {
 	animation-delay: 0.6s;
 }

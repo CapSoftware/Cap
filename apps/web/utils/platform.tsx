@@ -17,6 +17,22 @@ export const getDownloadUrl = (
 	}
 };
 
+export const getClassicDownloadUrl = (
+	platform: string | null,
+	isIntel: boolean,
+): string => {
+	if (platform === "windows") return "/download/classic-windows";
+	if (platform === "linux") return "/download/classic-linux-appimage";
+	if (platform === "macos" && isIntel) return "/download/classic-apple-intel";
+	return "/download/classic-apple-silicon";
+};
+
+export const getClassicVersionText = (platform: string | null): string => {
+	if (platform === "windows") return "Windows 10+ • installs alongside Cap";
+	if (platform === "linux") return "Linux x86_64 • AppImage";
+	return "macOS 12.3+ • installs alongside Cap";
+};
+
 export const getDownloadButtonText = (
 	platform: string | null,
 	loading: boolean,
