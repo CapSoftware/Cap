@@ -54,6 +54,7 @@ import { forwardRef, useEffect } from "react";
 import * as ReactDOM from "react-dom";
 import { useComposedRefs } from "@/app/lib/compose-refs";
 import { cn } from "@/app/lib/utils";
+import { InkLoader } from "@/components/ink-loader";
 import { isBrowserShortcut } from "@/lib/browser-shortcut";
 import {
 	formatPlaybackDuration,
@@ -1123,7 +1124,7 @@ function MediaPlayerLoading(props: MediaPlayerLoadingProps) {
 				className,
 			)}
 		>
-			<Loader2Icon className="size-20 animate-spin stroke-[.0938rem] text-white" />
+			<InkLoader size="lg" tone="media" />
 		</LoadingPrimitive>
 	);
 }

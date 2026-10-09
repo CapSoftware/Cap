@@ -30,7 +30,6 @@ vi.mock("@/app/s/[videoId]/_components/caption-tracks", () => ({
 vi.mock("@/app/s/[videoId]/_components/VideoPreviewGif", () => ({
 	VideoPreviewGif: () => null,
 }));
-vi.mock("@cap/ui", () => ({ LogoSpinner: () => null }));
 vi.mock("@cap/utils", () => ({
 	getProgressCircleConfig: () => ({ circumference: 50 }),
 	calculateStrokeDashoffset: () => 0,

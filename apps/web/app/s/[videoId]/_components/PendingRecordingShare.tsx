@@ -1,8 +1,8 @@
 "use client";
 
-import { LogoSpinner } from "@cap/ui";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { InkLoader } from "@/components/ink-loader";
 
 const MAX_REFRESH_ATTEMPTS = 30;
 const REFRESH_INTERVAL_MS = 2000;
@@ -32,7 +32,7 @@ export function PendingRecordingShare() {
 
 	return (
 		<div className="flex flex-col justify-center items-center p-4 min-h-screen text-center bg-gray-2">
-			<LogoSpinner className="mb-6 w-10 h-auto animate-spin" />
+			<InkLoader size="lg" className="mb-6" />
 			<h1 className="mb-2 text-2xl font-semibold text-gray-12">
 				Preparing your recording
 			</h1>
