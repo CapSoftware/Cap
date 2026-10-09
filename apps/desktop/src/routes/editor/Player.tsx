@@ -1085,6 +1085,7 @@ function PreviewCanvas(props: {
 									playing={status().playing}
 									slow={status().slow}
 									scrim={status().playing}
+									onFrame
 								/>
 							)}
 						</Show>

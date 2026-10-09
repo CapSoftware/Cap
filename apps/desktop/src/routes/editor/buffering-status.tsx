@@ -4,6 +4,7 @@ import {
 	type ConnectionLevel,
 	createConnectionLevel,
 } from "./connection-status";
+import { InkLoader } from "./ink-loader";
 
 /// A wait shorter than this passes without an indicator.
 const SHOW_AFTER_MS = 250;
@@ -109,21 +110,21 @@ function animateIn(element: HTMLElement) {
 	);
 }
 
-/// Never takes a pointer, so editing carries on underneath.
+/// Never takes a pointer, so editing carries on underneath. Over the frame
+/// it draws in white on a soft shade rather than a card, so the picture
+/// stays in view.
 export function BufferingStatus(props: {
 	playing: boolean;
 	slow: boolean;
-	title?: string;
-	then?: string;
+	onFrame?: boolean;
 	scrim?: boolean;
 	class?: string;
 }) {
 	const connection = createConnectionLevel();
 	const then = () =>
-		props.then ??
-		(props.playing
+		props.playing
 			? "Playback starts as soon as enough has loaded."
-			: "This frame shows as soon as it has loaded.");
+			: "This frame shows as soon as it has loaded.";
 	return (
 		<div
 			class={cx(
@@ -137,17 +138,23 @@ export function BufferingStatus(props: {
 			<div
 				ref={fadeIn}
 				role="status"
-				class="flex relative flex-col items-center gap-2 px-4 pt-3.5 pb-3 max-w-[16.5rem] text-center rounded-xl text-white bg-[rgba(22,22,24,0.86)] shadow-[0_0_0_0.5px_rgba(255,255,255,0.14),0_10px_28px_-8px_rgba(0,0,0,0.5)]"
+				class={cx(
+					"flex relative flex-col items-center gap-2.5 px-6 py-5 max-w-[18rem] text-center",
+					props.onFrame &&
+						"bg-[radial-gradient(closest-side,rgba(0,0,0,0.32),rgba(0,0,0,0.12)_60%,transparent)]",
+				)}
 			>
-				<span
-					aria-hidden="true"
-					class="rounded-full border-[2.5px] size-6 shrink-0 border-white/20 border-t-white animate-spin will-change-transform motion-reduce:animate-none"
-				/>
-				<span class="text-[13px] font-medium leading-4">
-					{props.title ?? "Loading video"}
-				</span>
+				<InkLoader size="lg" tone={props.onFrame ? "media" : "muted"} />
+				<span class="sr-only">Loading video</span>
 				<Show when={props.slow}>
-					<span class="-mt-0.5 text-[12px] leading-[16px] text-white/70">
+					<span
+						class={cx(
+							"text-[12px] leading-[16px]",
+							props.onFrame
+								? "text-white/90 [text-shadow:0_1px_8px_rgba(0,0,0,0.6)]"
+								: "text-ed-text-2",
+						)}
+					>
 						{slowLoadingMessage(connection(), then())}
 					</span>
 				</Show>
