@@ -1,5 +1,5 @@
 import { beforeAll, expect, test } from "bun:test";
-import type { AudioSample } from "mediabunny";
+import type { AudioSample, Input } from "mediabunny";
 import {
 	BrowserExportAudio,
 	ExportAudioResampler,
@@ -10,6 +10,7 @@ import {
 	BLOCK_FRAMES,
 	BlockDecoder,
 	SAMPLE_RATE,
+	StreamedTracks,
 } from "./browser-export-audio-blocks";
 
 const PACKET_FRAMES = 1024;
@@ -52,7 +53,10 @@ function fakeAudio(
 	const first = 0.25;
 	const progress = { decoded: 0 };
 	const audio: Audio = {
-		input: { dispose: () => undefined },
+		input: {
+			dispose: () => undefined,
+			getDurationFromMetadata: async () => first + 12,
+		} as Audio["input"],
 		sink: {
 			async *samples(start = first) {
 				let from =
@@ -137,7 +141,7 @@ for (const [rate, channels] of [
 
 		const { audio, progress } = fakeAudio(samples, channels, rate);
 		const mixer = new BrowserExportAudio(config(outputFrames), outputFrames);
-		const id = mixer.add_streamed_track(0, false, channels, 0, 0);
+		const id = mixer.add_streamed_track(0, false, channels, 0);
 		const decoder = new BlockDecoder(audio, createResampler);
 		const requested: number[] = [];
 		let trackFrames: number | null = null;
@@ -218,4 +222,65 @@ test("a resampled track seeking straight to a block matches reading up to it", a
 		expect(block.end).toBe(blocks[index]?.end ?? null);
 		expect(block.samples).toEqual(blocks[index]?.samples as Float32Array);
 	}
+});
+
+for (const rate of [48_000, 44_100]) {
+	test(`a ${rate} Hz track whose container declares only its first fragment still mixes to its real end`, async () => {
+		const channels = 2;
+		const sourceFrames = rate * 35;
+		const samples = tone(sourceFrames, channels, rate);
+		const outputFrames = 40 * SAMPLE_RATE;
+
+		const reference = new BrowserExportAudio(
+			config(outputFrames),
+			outputFrames,
+		);
+		reference.add_music("reference", channels, rate, samples);
+		const expected = await drain(reference);
+		reference.free();
+
+		const { audio } = fakeAudio(samples, channels, rate);
+		expect(await (audio.input as Input).getDurationFromMetadata()).toBe(
+			audio.first + 12,
+		);
+		const mixer = new BrowserExportAudio(config(outputFrames), outputFrames);
+		const tracks = new StreamedTracks(mixer, createResampler);
+		tracks.add(
+			{ url: "", segment: 0, microphone: false, offsetSeconds: 0 },
+			audio,
+		);
+		const actual = await drain(mixer, () => tracks.load(CHUNK_FRAMES));
+		mixer.free();
+		await tracks.dispose();
+
+		expect(actual.length).toBe(outputFrames * 2);
+		const end = 35 * SAMPLE_RATE * 2;
+		let late = 0;
+		let difference = 0;
+		for (let index = 0; index < expected.length; index++) {
+			if (index >= 30 * SAMPLE_RATE * 2 && index < end) {
+				late = Math.max(late, Math.abs(actual[index] ?? 0));
+			}
+			difference = Math.max(
+				difference,
+				Math.abs((actual[index] ?? 0) - (expected[index] ?? 0)),
+			);
+		}
+		expect(late).toBeGreaterThan(0.3);
+		expect(difference).toBe(0);
+		expect(actual.subarray(end).every((sample) => sample === 0)).toBe(true);
+	});
+}
+
+test("a seek past a track's end leaves its length unknown", async () => {
+	const rate = 44_100;
+	const samples = tone(rate * 5, 2, rate);
+	const decoder = new BlockDecoder(
+		fakeAudio(samples, 2, rate).audio,
+		createResampler,
+	);
+	const block = await decoder.block(3);
+	await decoder.dispose();
+	expect(block.end).toBeNull();
+	expect(block.samples.every((sample) => sample === 0)).toBe(true);
 });

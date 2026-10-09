@@ -5,9 +5,8 @@ import type { Input } from "mediabunny";
 import type { BrowserExportAudioTrack } from "./browser-export-audio";
 import {
 	type Audio,
-	BlockDecoder,
 	interleave,
-	SAMPLE_RATE,
+	StreamedTracks,
 } from "./browser-export-audio-blocks";
 
 type RendererModule =
@@ -98,7 +97,7 @@ async function decodeWhole(audio: Audio) {
 }
 
 let mixer: InstanceType<RendererModule["BrowserExportAudio"]> | null = null;
-const decoders = new Map<number, BlockDecoder>();
+let tracks: StreamedTracks | null = null;
 let remaining = 0;
 let decodeMs = 0;
 let mixMs = 0;
@@ -116,29 +115,17 @@ async function start(
 		request.outputSamples,
 	);
 	mixer = audio;
+	const streamed = new StreamedTracks(
+		audio,
+		(channels, sampleRate, start) =>
+			new module.ExportAudioResampler(channels, sampleRate, start),
+	);
+	tracks = streamed;
 	remaining = request.outputSamples;
 	await Promise.all([
 		...request.tracks.map(async (track) => {
 			const source = await openAudio(track.url);
-			if (!source) return;
-			const duration = await source.input
-				.getDurationFromMetadata()
-				.catch(() => null);
-			const id = audio.add_streamed_track(
-				track.segment,
-				track.microphone,
-				source.channels,
-				duration ? Math.round((duration - source.first) * SAMPLE_RATE) : 0,
-				track.offsetSeconds,
-			);
-			decoders.set(
-				id,
-				new BlockDecoder(
-					source,
-					(channels, sampleRate, start) =>
-						new module.ExportAudioResampler(channels, sampleRate, start),
-				),
-			);
+			if (source) streamed.add(track, source);
 		}),
 		...Object.entries(request.musicUrls).map(async ([path, url]) => {
 			const source = await openAudio(url);
@@ -170,9 +157,9 @@ async function finish() {
 	});
 	mixer?.free();
 	mixer = null;
-	const open = [...decoders.values()];
-	decoders.clear();
-	await Promise.all(open.map((decoder) => decoder.dispose()));
+	const open = tracks;
+	tracks = null;
+	await open?.dispose();
 }
 
 async function pull(chunks: number) {
@@ -186,18 +173,9 @@ async function pull(chunks: number) {
 			return;
 		}
 		const frames = Math.min(CHUNK_FRAMES, remaining);
-		const missing = mixer.plan(frames);
-		for (let pair = 0; pair < missing.length; pair += 2) {
-			const id = missing[pair] as number;
-			const block = missing[pair + 1] as number;
-			const decoder = decoders.get(id);
-			if (!decoder) continue;
-			const decodeStart = performance.now();
-			const { samples, end } = await decoder.block(block);
-			decodeMs += performance.now() - decodeStart;
-			mixer.put_block(id, block, samples);
-			if (end !== null) mixer.set_track_frames(id, end);
-		}
+		const decodeStart = performance.now();
+		await tracks?.load(frames);
+		decodeMs += performance.now() - decodeStart;
 		const mixStart = performance.now();
 		const samples = mixer.next_chunk(frames);
 		mixMs += performance.now() - mixStart;

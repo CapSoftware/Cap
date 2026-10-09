@@ -42,12 +42,13 @@ export class BrowserExportAudio {
   /**
    * Adds a recording track whose samples arrive later in 48 kHz blocks
    * (through `ExportAudioResampler` for other rates), as `plan` asks for
-   * them. `frames` is its 48 kHz length, or 0 when not yet known.
+   * them. Its length stays open until `set_track_frames`, since container
+   * durations can cover only a fragmented file's first fragment.
    * `offset_seconds` is where recording time zero falls in the track (the
    * preview's `audio_times` offset). Returns the id `plan` and `put_block`
    * use for it.
    */
-  add_streamed_track(clip: number, microphone: boolean, channels: number, frames: number, offset_seconds: number): number;
+  add_streamed_track(clip: number, microphone: boolean, channels: number, offset_seconds: number): number;
   /**
    * Stores block `block` of a streamed track: `BLOCK_FRAMES` interleaved
    * frames, fewer at the end of the track.
@@ -154,9 +155,6 @@ export class BrowserVisualConfig {
 export class ExportAudioResampler {
   free(): void;
   constructor(channels: number, sample_rate: number, start: number);
-  /**
-   * The 48 kHz frame the next output starts at.
-   */
   position(): number;
   /**
    * Appends the source frames that follow those already pushed, and
@@ -183,7 +181,7 @@ export interface InitOutput {
   readonly exportaudioresampler_push: (a: number, b: number, c: number) => [number, number];
   readonly exportaudioresampler_finish: (a: number) => [number, number];
   readonly browserexportaudio_new: (a: number, b: number, c: number) => [number, number, number];
-  readonly browserexportaudio_add_streamed_track: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
+  readonly browserexportaudio_add_streamed_track: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];
   readonly browserexportaudio_put_block: (a: number, b: number, c: number, d: number, e: number) => void;
   readonly browserexportaudio_set_track_frames: (a: number, b: number, c: number) => void;
   readonly browserexportaudio_plan: (a: number, b: number) => [number, number];

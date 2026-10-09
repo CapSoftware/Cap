@@ -1,5 +1,9 @@
 import type { AudioSample, AudioSampleSink, Input } from "mediabunny";
-import type { ExportAudioResampler } from "../renderer/pkg-export/cap_editor_browser_renderer.js";
+import type {
+	BrowserExportAudio,
+	ExportAudioResampler,
+} from "../renderer/pkg-export/cap_editor_browser_renderer.js";
+import type { BrowserExportAudioTrack } from "./browser-export-audio";
 
 export const SAMPLE_RATE = 48_000;
 // Matches `BLOCK_FRAMES` in the renderer's export_audio.rs.
@@ -28,7 +32,6 @@ export type ResamplerFactory = (
 	start: number,
 ) => Resampler;
 
-/// Interleaved 48 kHz frames starting at track frame `frame`.
 type Piece = { frame: number; data: Float32Array };
 type Pieces = AsyncGenerator<Piece, void, unknown>;
 
@@ -62,8 +65,7 @@ async function* nativePieces(audio: Audio, start: number): Pieces {
 	}
 }
 
-/// Decoded audio at the track's own rate, placed by timestamp (gaps filled
-/// with silence, overlaps dropped) and resampled to 48 kHz as it arrives.
+/// Placed by timestamp: gaps become silence and overlaps are dropped.
 async function* resampledPieces(
 	audio: Audio,
 	createResampler: ResamplerFactory,
@@ -123,6 +125,7 @@ export class BlockDecoder {
 	private iterator: Pieces | null = null;
 	private from = 0;
 	private position = 0;
+	private decoded = false;
 	private readonly partial = new Map<number, Float32Array>();
 	private readonly pieces: (start: number) => Pieces;
 
@@ -136,7 +139,6 @@ export class BlockDecoder {
 				: (start) => resampledPieces(audio, createResampler, start);
 	}
 
-	/// Blocks decoded but not yet handed over.
 	get held() {
 		return this.partial.size;
 	}
@@ -156,15 +158,19 @@ export class BlockDecoder {
 			this.iterator = this.pieces(start);
 			this.from = start;
 			this.position = start;
+			this.decoded = false;
 		}
 		const iterator = this.iterator as Pieces;
 		let end: number | null = null;
 		while (this.position < start + BLOCK_FRAMES) {
 			const next = await iterator.next();
 			if (next.done) {
-				end = this.position;
+				// A seek past the end decodes nothing, which says nothing about
+				// where the end is.
+				if (this.decoded || this.from === 0) end = this.position;
 				break;
 			}
+			this.decoded = true;
 			const { frame, data } = next.value;
 			this.write(frame, data, index);
 			this.position = Math.max(
@@ -203,5 +209,51 @@ export class BlockDecoder {
 	async dispose() {
 		await this.iterator?.return();
 		this.audio.input.dispose();
+	}
+}
+
+export type StreamedMixer = Pick<
+	BrowserExportAudio,
+	"add_streamed_track" | "plan" | "put_block" | "set_track_frames"
+>;
+
+/// Recording tracks the mixer reads in blocks. A track's length is only
+/// known once its decoder reaches the end: container durations can cover
+/// just the first fragment of a fragmented MP4 or WebM.
+export class StreamedTracks {
+	private readonly decoders = new Map<number, BlockDecoder>();
+
+	constructor(
+		private readonly mixer: StreamedMixer,
+		private readonly createResampler: ResamplerFactory,
+	) {}
+
+	add(track: BrowserExportAudioTrack, audio: Audio) {
+		const id = this.mixer.add_streamed_track(
+			track.segment,
+			track.microphone,
+			audio.channels,
+			track.offsetSeconds,
+		);
+		this.decoders.set(id, new BlockDecoder(audio, this.createResampler));
+	}
+
+	async load(frames: number) {
+		const missing = this.mixer.plan(frames);
+		for (let pair = 0; pair < missing.length; pair += 2) {
+			const id = missing[pair] as number;
+			const block = missing[pair + 1] as number;
+			const decoder = this.decoders.get(id);
+			if (!decoder) continue;
+			const { samples, end } = await decoder.block(block);
+			this.mixer.put_block(id, block, samples);
+			if (end !== null) this.mixer.set_track_frames(id, end);
+		}
+	}
+
+	async dispose() {
+		const open = [...this.decoders.values()];
+		this.decoders.clear();
+		await Promise.all(open.map((decoder) => decoder.dispose()));
 	}
 }

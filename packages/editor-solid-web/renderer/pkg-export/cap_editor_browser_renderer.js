@@ -504,15 +504,15 @@ export function webgl2_available(canvas) {
     return ret !== 0;
 }
 
-function __wbg_adapter_18(arg0, arg1, arg2) {
+function __wbg_adapter_10(arg0, arg1, arg2) {
     wasm.closure1254_externref_shim(arg0, arg1, arg2);
 }
 
-function __wbg_adapter_21(arg0, arg1) {
+function __wbg_adapter_23(arg0, arg1) {
     wasm.wasm_bindgen__convert__closures_____invoke__hfa69fcf5a022ebc2(arg0, arg1);
 }
 
-function __wbg_adapter_24(arg0, arg1, arg2) {
+function __wbg_adapter_32(arg0, arg1, arg2) {
     wasm.closure1638_externref_shim(arg0, arg1, arg2);
 }
 
@@ -659,19 +659,19 @@ export class BrowserExportAudio {
     /**
      * Adds a recording track whose samples arrive later in 48 kHz blocks
      * (through `ExportAudioResampler` for other rates), as `plan` asks for
-     * them. `frames` is its 48 kHz length, or 0 when not yet known.
+     * them. Its length stays open until `set_track_frames`, since container
+     * durations can cover only a fragmented file's first fragment.
      * `offset_seconds` is where recording time zero falls in the track (the
      * preview's `audio_times` offset). Returns the id `plan` and `put_block`
      * use for it.
      * @param {number} clip
      * @param {boolean} microphone
      * @param {number} channels
-     * @param {number} frames
      * @param {number} offset_seconds
      * @returns {number}
      */
-    add_streamed_track(clip, microphone, channels, frames, offset_seconds) {
-        const ret = wasm.browserexportaudio_add_streamed_track(this.__wbg_ptr, clip, microphone, channels, frames, offset_seconds);
+    add_streamed_track(clip, microphone, channels, offset_seconds) {
+        const ret = wasm.browserexportaudio_add_streamed_track(this.__wbg_ptr, clip, microphone, channels, offset_seconds);
         if (ret[2]) {
             throw takeFromExternrefTable0(ret[1]);
         }
@@ -1173,7 +1173,6 @@ export class ExportAudioResampler {
         return this;
     }
     /**
-     * The 48 kHz frame the next output starts at.
      * @returns {number}
      */
     position() {
@@ -3407,7 +3406,7 @@ function __wbg_get_imports() {
     };
     imports.wbg.__wbindgen_cast_aaa93aae03c115ab = function(arg0, arg1) {
         // Cast intrinsic for `Closure(Closure { dtor_idx: 1, function: Function { arguments: [], shim_idx: 2, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-        const ret = makeMutClosure(arg0, arg1, 1, __wbg_adapter_21);
+        const ret = makeMutClosure(arg0, arg1, 1, __wbg_adapter_23);
         return ret;
     };
     imports.wbg.__wbindgen_cast_bbb4883c6389f1de = function(arg0, arg1) {
@@ -3417,7 +3416,7 @@ function __wbg_get_imports() {
     };
     imports.wbg.__wbindgen_cast_c3d22d6c8426da85 = function(arg0, arg1) {
         // Cast intrinsic for `Closure(Closure { dtor_idx: 1253, function: Function { arguments: [NamedExternref("GPUUncapturedErrorEvent")], shim_idx: 1254, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-        const ret = makeMutClosure(arg0, arg1, 1253, __wbg_adapter_18);
+        const ret = makeMutClosure(arg0, arg1, 1253, __wbg_adapter_10);
         return ret;
     };
     imports.wbg.__wbindgen_cast_cb9088102bce6b30 = function(arg0, arg1) {
@@ -3432,7 +3431,7 @@ function __wbg_get_imports() {
     };
     imports.wbg.__wbindgen_cast_d4bd1c47d29fbd27 = function(arg0, arg1) {
         // Cast intrinsic for `Closure(Closure { dtor_idx: 1637, function: Function { arguments: [Externref], shim_idx: 1638, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-        const ret = makeMutClosure(arg0, arg1, 1637, __wbg_adapter_24);
+        const ret = makeMutClosure(arg0, arg1, 1637, __wbg_adapter_32);
         return ret;
     };
     imports.wbg.__wbindgen_cast_d6cd19b81560fd6e = function(arg0) {

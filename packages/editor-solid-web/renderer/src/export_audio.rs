@@ -235,12 +235,10 @@ impl ResampleFilter {
         }
     }
 
-    /// Output frames for a source of `frames` frames.
     fn output_frames(&self, frames: i64) -> u64 {
         ((frames as f64) * self.ratio).round() as u64
     }
 
-    /// The source frame output `frame`'s first tap reads.
     fn first_tap(&self, frame: u64) -> i64 {
         (frame * self.down / self.up) as i64 - RESAMPLE_HALF_TAPS + 1
     }
@@ -273,7 +271,6 @@ impl ResampleFilter {
     }
 }
 
-/// Resamples interleaved samples to 48 kHz.
 pub fn resample(input: &[f32], channels: usize, rate: u32) -> Vec<f32> {
     if rate == SAMPLE_RATE || input.is_empty() || rate == 0 {
         return input.to_vec();
@@ -354,7 +351,6 @@ impl ExportAudioResampler {
         })
     }
 
-    /// The 48 kHz frame the next output starts at.
     pub fn position(&self) -> f64 {
         self.next as f64
     }
@@ -806,7 +802,8 @@ impl BrowserExportAudio {
 
     /// Adds a recording track whose samples arrive later in 48 kHz blocks
     /// (through `ExportAudioResampler` for other rates), as `plan` asks for
-    /// them. `frames` is its 48 kHz length, or 0 when not yet known.
+    /// them. Its length stays open until `set_track_frames`, since container
+    /// durations can cover only a fragmented file's first fragment.
     /// `offset_seconds` is where recording time zero falls in the track (the
     /// preview's `audio_times` offset). Returns the id `plan` and `put_block`
     /// use for it.
@@ -815,7 +812,6 @@ impl BrowserExportAudio {
         clip: u32,
         microphone: bool,
         channels: u32,
-        frames: u32,
         offset_seconds: f64,
     ) -> Result<u32, JsValue> {
         if !(1..=2).contains(&channels) {
@@ -823,11 +819,7 @@ impl BrowserExportAudio {
         }
         let track = Track {
             channels: channels as usize,
-            frames: if frames == 0 {
-                usize::MAX / 4
-            } else {
-                frames as usize
-            },
+            frames: usize::MAX / 4,
             blocks: HashMap::new(),
         };
         Ok(self.push_track(clip, microphone, offset_seconds, track))
