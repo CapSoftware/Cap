@@ -23,8 +23,11 @@ on:
       - "crates/enc-mediafoundation/**"
       - "crates/timestamp/**"
       - "crates/rendering/**"
+      - "crates/render-farm/**"
       - "crates/editor/**"
+      - "crates/export/**"
       - "crates/audio/**"
+      - "crates/rnnoise/**"
       - "crates/media-info/**"
       - "crates/project/**"
       - "scripts/recording-reliability.py"
@@ -86,6 +89,9 @@ jobs:
         shell: pwsh
         run: Add-Content -Path $env:GITHUB_PATH -Value "${{ github.workspace }}\\target\\ffmpeg\\bin"
 
+      - name: RNNoise lifecycle regression tests
+        run: cargo test --locked -p cap-rnnoise --lib
+
       - name: Recording metadata and harness regression tests
         shell: bash
         run: |
@@ -136,17 +142,25 @@ jobs:
         shell: bash
         run: |
           cargo test --locked -p cap-timestamp -p cap-enc-ffmpeg
+          cargo test --locked -p cap-camera-effects --lib
           cargo test --locked -p cap-recording --lib -- --test-threads=1
           # --nocapture so a WARP-adapter notch skip prints instead of
           # looking identical to a pass in the CI log.
-          cargo test --locked -p cap-rendering -- --nocapture
+          cargo test --locked -p cap-rendering -- --nocapture --skip zoom_spring::tests::precompute_cost_is_bounded_for_long_projects
+          cargo test --locked -p cap-rendering --lib zoom_spring::tests::precompute_cost_is_bounded_for_long_projects -- --exact --nocapture --test-threads=1
 
       - name: Editor audio playback and export regressions
         shell: bash
         run: |
+          cargo test --locked -p cap-audio --lib
+          cargo test --locked -p cap-export --lib
           cargo test --locked -p cap-editor --lib audio::tests::
           cargo test --locked -p cap-editor --lib audio_output::tests::
           cargo test --locked -p cap-editor --lib playback::tests::
+
+      - name: Render farm engine
+        shell: bash
+        run: cargo test --locked -p cap-render-farm
 
       # Real encoders + DASH muxer + remux/validation over full instant-mode
       # scenarios: pause/resume excision, stall-recovery bursts with

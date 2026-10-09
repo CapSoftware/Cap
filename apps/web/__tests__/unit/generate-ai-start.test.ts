@@ -80,6 +80,20 @@ beforeEach(() => {
 });
 
 describe("startAiGeneration", () => {
+	it("queues without replacing concurrently edited metadata", async () => {
+		const update = makeUpdateChain(1);
+		mockDb
+			.mockReturnValueOnce(makeSelectChain(video))
+			.mockReturnValueOnce(update);
+		const { startAiGeneration } = await import("@/lib/generate-ai");
+		await startAiGeneration("video-1" as never, "user-1");
+		const value = update.set.mock.calls[0]?.[0];
+		expect(value.metadata.strings.join("")).toContain("JSON_SET(COALESCE(");
+		expect(value.metadata.strings.join("")).toContain(
+			"'$.aiGenerationStatus', 'QUEUED'",
+		);
+		expect(value.metadata.values).toEqual(["videos.metadata"]);
+	});
 	it("fails fast when no AI provider is configured", async () => {
 		serverEnvMock.mockReturnValue({});
 

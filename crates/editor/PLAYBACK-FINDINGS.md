@@ -561,7 +561,7 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 - `cargo fmt --all`
 - `cargo check -p cap-rendering`
 - `cargo check -p cap-editor --examples`
-- `pnpm exec biome check --write apps/desktop/src/utils/socket.ts`
+- `bun run biome check --write apps/desktop/src/utils/socket.ts`
 - `cargo run -p cap-editor --example editor-playback-benchmark -- --recording-path /tmp/cap-performance-fixtures/reference-recording.cap --fps 60 --frames 300 --resolution full`
 - `cargo run -p cap-editor --example editor-playback-benchmark -- --recording-path /tmp/cap-performance-fixtures/reference-recording.cap --fps 60 --frames 300 --resolution half`
 - `cargo run -p cap-recording --example playback-test-runner -- --recording-path /tmp/cap-performance-fixtures/reference-recording.cap --fps 60 full`
@@ -612,15 +612,15 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 - `cargo fmt --all`
 - `cargo check -p cap-editor --examples`
 - `cargo check -p cap-desktop --examples`
-- `pnpm exec biome check --write apps/desktop/scripts/desktop-display-transport-benchmark.js apps/desktop/package.json apps/desktop/src/utils/socket.ts apps/desktop/src/utils/webgpu-renderer.ts crates/editor/PLAYBACK-FINDINGS.md`
+- `bun run biome check --write apps/desktop/scripts/desktop-display-transport-benchmark.js apps/desktop/package.json apps/desktop/src/utils/socket.ts apps/desktop/src/utils/webgpu-renderer.ts crates/editor/PLAYBACK-FINDINGS.md`
 - `cargo run -p cap-editor --example editor-playback-benchmark -- --recording-path /tmp/cap-performance-fixtures/reference-recording.cap --fps 60 --frames 300 --resolution full`
 - `cargo run -p cap-editor --example editor-playback-benchmark -- --recording-path /tmp/cap-performance-fixtures/reference-recording.cap --fps 60 --frames 300 --resolution half`
 - `cargo run -p cap-editor --example editor-playback-benchmark -- --recording-path /tmp/cap-performance-fixtures/reference-recording.cap --fps 60 --frames 900 --resolution full`
 - `cargo run -p cap-editor --example editor-playback-benchmark -- --recording-path /tmp/cap-performance-fixtures/reference-recording.cap --fps 60 --frames 900 --resolution half`
-- `pnpm --dir apps/desktop test:display-transport -- --recording-path /tmp/cap-performance-fixtures/reference-recording.cap --fps 60 --frames 300 --resolution full --startup-delay-ms 5000`
-- `pnpm --dir apps/desktop test:display-transport -- --recording-path /tmp/cap-performance-fixtures/reference-recording.cap --fps 60 --frames 300 --resolution half --startup-delay-ms 5000`
-- `pnpm --dir apps/desktop test:display-transport -- --recording-path /tmp/cap-performance-fixtures/reference-recording.cap --fps 60 --frames 900 --resolution full --startup-delay-ms 5000`
-- `pnpm --dir apps/desktop test:display-transport -- --recording-path /tmp/cap-performance-fixtures/reference-recording.cap --fps 60 --frames 900 --resolution half --startup-delay-ms 5000`
+- `bun run --cwd apps/desktop test:display-transport -- --recording-path /tmp/cap-performance-fixtures/reference-recording.cap --fps 60 --frames 300 --resolution full --startup-delay-ms 5000`
+- `bun run --cwd apps/desktop test:display-transport -- --recording-path /tmp/cap-performance-fixtures/reference-recording.cap --fps 60 --frames 300 --resolution half --startup-delay-ms 5000`
+- `bun run --cwd apps/desktop test:display-transport -- --recording-path /tmp/cap-performance-fixtures/reference-recording.cap --fps 60 --frames 900 --resolution full --startup-delay-ms 5000`
+- `bun run --cwd apps/desktop test:display-transport -- --recording-path /tmp/cap-performance-fixtures/reference-recording.cap --fps 60 --frames 900 --resolution half --startup-delay-ms 5000`
 - `cargo run -p cap-recording --example playback-test-runner -- --recording-path /tmp/cap-performance-fixtures/reference-recording.cap --fps 60 full`
 
 **Stopping point**: The measured sustained-run bottleneck was first-use cursor asset loading during playback. Moving that work to renderer-layer initialization removes the repeated frame 696 drop without changing playback timing, frame choice, preview resolution semantics, visual asset selection, audio/video sync, decoder selection, GPU adapter selection, or fallback behavior. The full desktop path now sustains 60fps on the reference fixture with no renderer drops, skips, WebSocket send failures, or browser display notification loss in the 900-frame full/default-half runs. The next visible full-preview cost is WebGPU texture upload/display work around 2.1ms average plus Rust WebSocket send around 1.3ms average, both still under frame budget.

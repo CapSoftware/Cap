@@ -90,6 +90,7 @@ fn default_cases() -> Vec<Case> {
 
 fn segment(source: &DecodedFrame, frame: u32) -> DecodedSegmentFrames {
     DecodedSegmentFrames {
+        screen_size: XY::new(source.width(), source.height()),
         screen_frame: Some(source.clone()),
         camera_frame: None,
         segment_time: frame as f32 / 60.0,

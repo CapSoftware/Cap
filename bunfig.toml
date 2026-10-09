@@ -1,0 +1,6 @@
+[install]
+linker = "hoisted"
+
+[run]
+bun = false
+elide-lines = 0

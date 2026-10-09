@@ -129,33 +129,114 @@ fn samples_to_f64(samples: &MicrophoneSamples) -> impl Iterator<Item = f64> + us
     samples
         .data
         .chunks(samples.format.sample_size())
-        .map(|data| match samples.format {
-            SampleFormat::I8 => i8::from_ne_bytes([data[0]]) as f64 / i8::MAX as f64,
-            SampleFormat::U8 => u8::from_ne_bytes([data[0]]) as f64 / u8::MAX as f64,
-            SampleFormat::I16 => i16::from_ne_bytes([data[0], data[1]]) as f64 / i16::MAX as f64,
-            SampleFormat::U16 => u16::from_ne_bytes([data[0], data[1]]) as f64 / u16::MAX as f64,
-            SampleFormat::I32 => {
-                i32::from_ne_bytes([data[0], data[1], data[2], data[3]]) as f64 / i32::MAX as f64
-            }
-            SampleFormat::U32 => {
-                u32::from_ne_bytes([data[0], data[1], data[2], data[3]]) as f64 / u32::MAX as f64
-            }
-            SampleFormat::U64 => {
-                u64::from_ne_bytes([
-                    data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7],
-                ]) as f64
-                    / u64::MAX as f64
-            }
-            SampleFormat::I64 => {
-                i64::from_ne_bytes([
-                    data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7],
-                ]) as f64
-                    / i64::MAX as f64
-            }
-            SampleFormat::F32 => f32::from_ne_bytes([data[0], data[1], data[2], data[3]]) as f64,
-            SampleFormat::F64 => f64::from_ne_bytes([
+        .map(|data| sample_to_f64(data, samples.format))
+}
+
+fn sample_to_f64(data: &[u8], format: SampleFormat) -> f64 {
+    match format {
+        SampleFormat::I8 => i8::from_ne_bytes([data[0]]) as f64 / i8::MAX as f64,
+        SampleFormat::U8 => u8::from_ne_bytes([data[0]]).to_sample::<f64>(),
+        SampleFormat::I16 => i16::from_ne_bytes([data[0], data[1]]) as f64 / i16::MAX as f64,
+        SampleFormat::U16 => u16::from_ne_bytes([data[0], data[1]]).to_sample::<f64>(),
+        SampleFormat::I32 => {
+            i32::from_ne_bytes([data[0], data[1], data[2], data[3]]) as f64 / i32::MAX as f64
+        }
+        SampleFormat::U32 => {
+            u32::from_ne_bytes([data[0], data[1], data[2], data[3]]).to_sample::<f64>()
+        }
+        SampleFormat::U64 => u64::from_ne_bytes([
+            data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7],
+        ])
+        .to_sample::<f64>(),
+        SampleFormat::I64 => {
+            i64::from_ne_bytes([
                 data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7],
-            ]),
-            _ => 0.0,
-        })
+            ]) as f64
+                / i64::MAX as f64
+        }
+        SampleFormat::F32 => f32::from_ne_bytes([data[0], data[1], data[2], data[3]]) as f64,
+        SampleFormat::F64 => f64::from_ne_bytes([
+            data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7],
+        ]),
+        _ => 0.0,
+    }
+}
+
+#[cfg(test)]
+mod sample_tests {
+    use super::*;
+
+    #[test]
+    fn unsigned_equilibrium_is_silent() {
+        let cases = [
+            (SampleFormat::U8, 128u8.to_ne_bytes().to_vec()),
+            (SampleFormat::U16, 32768u16.to_ne_bytes().to_vec()),
+            (SampleFormat::U32, (1u32 << 31).to_ne_bytes().to_vec()),
+            (SampleFormat::U64, (1u64 << 63).to_ne_bytes().to_vec()),
+        ];
+        for (format, bytes) in cases {
+            assert_eq!(sample_to_f64(&bytes, format), 0.0, "{format:?}");
+        }
+    }
+
+    #[test]
+    fn unsigned_negative_peaks_are_full_scale() {
+        for format in [
+            SampleFormat::U8,
+            SampleFormat::U16,
+            SampleFormat::U32,
+            SampleFormat::U64,
+        ] {
+            assert_eq!(sample_to_f64(&[0; 8], format), -1.0, "{format:?}");
+        }
+    }
+
+    #[test]
+    fn unsigned_samples_preserve_both_sides_of_equilibrium() {
+        assert_eq!(sample_to_f64(&[64], SampleFormat::U8), -0.5);
+        assert_eq!(sample_to_f64(&[192], SampleFormat::U8), 0.5);
+    }
+
+    #[test]
+    fn unsigned_microphone_silence_has_minimum_level() {
+        assert_eq!(
+            db_fs(std::iter::once(sample_to_f64(&[128], SampleFormat::U8))),
+            MIN_DB
+        );
+        assert_eq!(
+            db_fs(std::iter::once(sample_to_f64(&[0], SampleFormat::U8))),
+            0.0
+        );
+    }
+
+    #[test]
+    fn signed_and_float_samples_keep_existing_levels() {
+        let cases = [
+            (
+                SampleFormat::I8,
+                63i8.to_ne_bytes().to_vec(),
+                63.0 / i8::MAX as f64,
+            ),
+            (
+                SampleFormat::I16,
+                16383i16.to_ne_bytes().to_vec(),
+                16383.0 / i16::MAX as f64,
+            ),
+            (
+                SampleFormat::I32,
+                123456i32.to_ne_bytes().to_vec(),
+                123456.0 / i32::MAX as f64,
+            ),
+            (
+                SampleFormat::I64,
+                123456i64.to_ne_bytes().to_vec(),
+                123456.0 / i64::MAX as f64,
+            ),
+            (SampleFormat::F32, 0.5f32.to_ne_bytes().to_vec(), 0.5),
+            (SampleFormat::F64, 0.5f64.to_ne_bytes().to_vec(), 0.5),
+        ];
+        for (format, bytes, expected) in cases {
+            assert_eq!(sample_to_f64(&bytes, format), expected, "{format:?}");
+        }
+    }
 }

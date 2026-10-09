@@ -14,19 +14,22 @@
 			},
 			"ios": {
 				"simulator": true
-			}
+			},
+			"bun": "1.4.0"
 		},
 		"preview": {
 			"channel": "preview",
 			"distribution": "internal",
-			"environment": "preview"
+			"environment": "preview",
+			"bun": "1.4.0"
 		},
 		"production": {
 			"autoIncrement": true,
 			"channel": "production",
 			"credentialsSource": "remote",
 			"distribution": "store",
-			"environment": "production"
+			"environment": "production",
+			"bun": "1.4.0"
 		}
 	},
 	"submit": {

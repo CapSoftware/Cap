@@ -371,7 +371,7 @@ export const homepageCopy: HomePageCopy = {
 			{
 				question: "How long can I record for on the free version?",
 				answer:
-					"You can record for 5 minutes on the free version. After that, you'll need to upgrade to a paid plan.",
+					"Studio Mode lets you record locally without a time limit. Free cloud shareable links are limited to 5 minutes each.",
 			},
 			{
 				question: "How does Cap AI work?",
@@ -396,7 +396,7 @@ export const homepageCopy: HomePageCopy = {
 			{
 				question: "Which platforms do you support?",
 				answer:
-					"Native desktop apps for macOS (Apple Silicon & Intel) and Windows. View your shareable links from anywhere.",
+					"Native desktop apps for macOS (Apple Silicon & Intel), Windows, and Linux, plus a Chrome extension. View your shareable links from anywhere.",
 			},
 			{
 				question: "Can I use Cap for commercial purposes?",
@@ -406,7 +406,7 @@ export const homepageCopy: HomePageCopy = {
 			{
 				question: "Is my data secure?",
 				answer:
-					"Security is core to Cap. Cap is SOC 2 Type II, ISO 27001, and HIPAA compliant, and as an open source project, our code is fully auditable and transparent — you can see exactly how your data is handled. End-to-end encryption for cloud storage, option to use your own infrastructure, and community-driven security reviews keep your content safe.",
+					"Security is core to Cap. Cap is SOC 2 Type II, ISO 27001, and HIPAA compliant, and as an open source project, our code is fully auditable and transparent — you can see exactly how your data is handled. You can connect your own storage or self-host Cap for more control over your recordings.",
 			},
 			{
 				question: "What about SOC 2, ISO 27001, GDPR, and HIPAA compliance?",

@@ -2,10 +2,12 @@ import { describe, expect, it } from "vitest";
 
 import {
 	ANGLE_PRESETS,
+	AUTO_SHOT_POOL,
 	anglePresetMotion,
 	anglePresetPose,
 	applyMotionTemplate,
 	applySceneToRange,
+	autoCamera3DScene,
 	bezierEase,
 	CAMERA3D_ANGLE_PRESET_KEYS,
 	CAMERA3D_MIN_SHOT_DURATION,
@@ -16,7 +18,10 @@ import {
 	type Camera3DProperties,
 	type Camera3DScene,
 	type Camera3DSegment,
+	camera3DPoseSeekTime,
 	camera3DPosesEqual,
+	camera3DShotLabel,
+	DEFAULT_CAMERA3D_SHOT_DURATION,
 	DEFAULT_IN_EASING,
 	DEFAULT_OUT_EASING,
 	defaultCamera3DSegment,
@@ -29,9 +34,14 @@ import {
 	getStartPose,
 	hasCamera3DMotion,
 	LINEAR_MOTION_EASING,
+	MAX_AUTO_CAMERA3D_SHOTS,
 	MOTION_EASINGS,
 	MOTION_TEMPLATES,
+	matchCamera3DLook,
+	maxAutoCamera3DShots,
+	newCamera3DShot,
 	normalizeCamera3DSegments,
+	placeCamera3DShot,
 	sampleTrack,
 	sceneWithShotCount,
 	setMotion,
@@ -1060,5 +1070,288 @@ describe("flipCamera3DSegment", () => {
 		// Horizontal family untouched.
 		expect(getStartPose(segment).tiltY).toBeCloseTo(26, 9);
 		expect(segment.blur.focusY).toBeCloseTo(0.64, 9);
+	});
+});
+
+describe("placeCamera3DShot", () => {
+	it("starts at the playhead inside a free gap", () => {
+		expect(placeCamera3DShot([], 4, 4, 30)).toEqual({ start: 4, end: 8 });
+		expect(placeCamera3DShot([{ start: 0, end: 3 }], 3, 4, 30)).toEqual({
+			start: 3,
+			end: 7,
+		});
+	});
+
+	it("stops at the end of the timeline and at the next shot", () => {
+		expect(placeCamera3DShot([], 9, 4, 10)).toEqual({ start: 9, end: 10 });
+		expect(placeCamera3DShot([{ start: 8, end: 12 }], 6, 4, 20)).toEqual({
+			start: 6,
+			end: 8,
+		});
+		// A recording shorter than the minimum still gets its one shot.
+		expect(placeCamera3DShot([], 0, 4, 0.3)).toEqual({ start: 0, end: 0.3 });
+	});
+
+	it("slides left rather than returning a sliver", () => {
+		const placed = placeCamera3DShot([{ start: 5, end: 20 }], 4.4, 4, 20);
+		expect(placed).toEqual({ start: 4, end: 5 });
+		expect((placed?.end ?? 0) - (placed?.start ?? 0)).toBeGreaterThanOrEqual(
+			CAMERA3D_MIN_SHOT_DURATION,
+		);
+		expect(placeCamera3DShot([], 9.9, 4, 10)).toEqual({ start: 9, end: 10 });
+	});
+
+	it("moves to the next free gap when the playhead is inside a shot", () => {
+		const existing = [
+			{ start: 0, end: 6 },
+			{ start: 10, end: 12 },
+		];
+		expect(placeCamera3DShot(existing, 3, 4, 30)).toEqual({
+			start: 6,
+			end: 10,
+		});
+		// Nothing free after it: the first free gap anywhere takes the shot.
+		expect(placeCamera3DShot([{ start: 4, end: 20 }], 10, 4, 20)).toEqual({
+			start: 0,
+			end: 4,
+		});
+	});
+
+	it("returns null when no gap can hold a shot", () => {
+		expect(placeCamera3DShot([{ start: 0, end: 20 }], 20, 4, 20)).toBeNull();
+		expect(
+			placeCamera3DShot(
+				[
+					{ start: 0, end: 3 },
+					{ start: 3.2, end: 20 },
+				],
+				3.1,
+				4,
+				20,
+			),
+		).toBeNull();
+	});
+
+	it("rejects invalid times and durations", () => {
+		for (const value of [
+			Number.NaN,
+			Number.POSITIVE_INFINITY,
+			Number.NEGATIVE_INFINITY,
+		]) {
+			expect(placeCamera3DShot([], value, 4, 20)).toBeNull();
+			expect(placeCamera3DShot([], 0, value, 20)).toBeNull();
+			expect(placeCamera3DShot([], 0, 4, value)).toBeNull();
+		}
+		expect(placeCamera3DShot([], 0, 0, 20)).toBeNull();
+		expect(placeCamera3DShot([], 0, 4, 0)).toBeNull();
+	});
+
+	it("leaves the segments it was given alone", () => {
+		const existing = [
+			{ start: 8, end: 12 },
+			{ start: 0, end: 3 },
+		];
+		placeCamera3DShot(existing, 4, 4, 20);
+		expect(existing).toEqual([
+			{ start: 8, end: 12 },
+			{ start: 0, end: 3 },
+		]);
+	});
+});
+
+describe("matchCamera3DLook", () => {
+	it("round-trips every move", () => {
+		for (const template of MOTION_TEMPLATES) {
+			const segment = defaultCamera3DSegment(0, 4);
+			applyMotionTemplate(segment, template);
+			expect(matchCamera3DLook(segment)).toEqual({
+				kind: "move",
+				id: template.id,
+				name: template.name,
+			});
+		}
+	});
+
+	it("round-trips every angle", () => {
+		for (const preset of ANGLE_PRESETS) {
+			const segment = defaultCamera3DSegment(0, 4);
+			applyMotionTemplate(segment, anglePresetMotion(preset));
+			expect(matchCamera3DLook(segment)).toEqual({
+				kind: "angle",
+				id: preset.id,
+				name: preset.name,
+			});
+		}
+	});
+
+	it("survives a resize, which only retimes the keyframes", () => {
+		const segment = newCamera3DShot(0, DEFAULT_CAMERA3D_SHOT_DURATION);
+		segment.end = 9;
+		fitCamera3DMotionToSegment(segment);
+		expect(matchCamera3DLook(segment)?.id).toBe("glide-across");
+	});
+
+	it("lets go of the card once a pose is nudged past a slider step", () => {
+		const segment = defaultCamera3DSegment(0, 4);
+		applyMotionTemplate(segment, MOTION_TEMPLATES[0]);
+		const start = getStartPose(segment);
+		setMotion(
+			segment,
+			{ ...start, zoom: start.zoom + 0.4 },
+			getEndPose(segment),
+		);
+		expect(matchCamera3DLook(segment)).toBeNull();
+	});
+
+	it("does not claim a card for a still shot on the default pose", () => {
+		const segment = defaultCamera3DSegment(0, 4);
+		const pose = getStartPose(segment);
+		setMotion(segment, pose, pose);
+		expect(matchCamera3DLook(segment)).toBeNull();
+	});
+});
+
+describe("camera3DShotLabel", () => {
+	it("names the look a shot was built from", () => {
+		expect(camera3DShotLabel(newCamera3DShot(0, 4))).toBe("Glide across");
+		const angled = defaultCamera3DSegment(0, 4);
+		applyMotionTemplate(angled, anglePresetMotion(ANGLE_PRESETS[1]));
+		expect(camera3DShotLabel(angled)).toBe(ANGLE_PRESETS[1].name);
+	});
+
+	it("falls back to the shot's shape", () => {
+		const moved = defaultCamera3DSegment(0, 4);
+		const pose = getStartPose(moved);
+		setMotion(moved, pose, { ...pose, zoom: pose.zoom + 1.3 });
+		expect(camera3DShotLabel(moved)).toBe("Custom move");
+
+		const still = defaultCamera3DSegment(0, 4);
+		setMotion(still, pose, pose);
+		expect(camera3DShotLabel(still)).toBe("Still shot");
+	});
+});
+
+describe("newCamera3DShot", () => {
+	it("is a complete glide-across look over the requested range", () => {
+		const shot = newCamera3DShot(2, 2 + DEFAULT_CAMERA3D_SHOT_DURATION);
+		expect(shot).toMatchObject({ start: 2, end: 6, enabled: true });
+		expect(hasCamera3DMotion(shot)).toBe(true);
+		expect(shot.transitionIn).toBe(0);
+		expect(shot.transitionOut).toBe(0);
+		expect(shot.blur).toEqual(MOTION_TEMPLATES[0].blur);
+		// Keyframes span the shot, so it plays end to end.
+		expect(shot.tracks.panX.at(-1)?.time).toBeCloseTo(
+			DEFAULT_CAMERA3D_SHOT_DURATION,
+			9,
+		);
+	});
+});
+
+describe("camera3DPoseSeekTime", () => {
+	it("rounds a start up to the first frame inside the shot", () => {
+		// Flooring 3.025 lands on the frame before the shot, which is the
+		// previous scene rather than the opening pose.
+		expect(
+			camera3DPoseSeekTime({ start: 3.025, end: 6 }, false, 30),
+		).toBeCloseTo(91 / 30, 9);
+		expect(
+			Math.floor(
+				camera3DPoseSeekTime({ start: 3.025, end: 6 }, false, 30) * 30,
+			),
+		).toBe(91);
+	});
+
+	it("rounds an end down to the last frame inside the shot", () => {
+		expect(camera3DPoseSeekTime({ start: 3, end: 5.83 }, true, 30)).toBeCloseTo(
+			5.8,
+			9,
+		);
+		// A boundary already on a frame does not spill into the next shot.
+		expect(camera3DPoseSeekTime({ start: 0, end: 2 }, true, 30)).toBeCloseTo(
+			59 / 30,
+			9,
+		);
+	});
+
+	it("leaves a start already on a frame where it is", () => {
+		expect(camera3DPoseSeekTime({ start: 2, end: 4 }, false, 60)).toBeCloseTo(
+			2,
+			9,
+		);
+		expect(camera3DPoseSeekTime({ start: 0, end: 4 }, false, 60)).toBe(0);
+	});
+
+	it("never puts the end before the start", () => {
+		const shot = { start: 4, end: 4.001 };
+		expect(camera3DPoseSeekTime(shot, true, 30)).toBeCloseTo(
+			camera3DPoseSeekTime(shot, false, 30),
+			9,
+		);
+	});
+});
+
+describe("autoCamera3DScene", () => {
+	it("is one glide-across move at a count of one", () => {
+		const scene = autoCamera3DScene(1);
+		expect(scene.shots).toHaveLength(1);
+		const glide = MOTION_TEMPLATES[0];
+		expect(glide.id).toBe("glide-across");
+		expect(scene.shots[0].from).toEqual(glide.from);
+		expect(scene.shots[0].to).toEqual(glide.to);
+		expect(scene.shots[0].blur).toEqual(glide.blur);
+	});
+
+	it("takes the head of the pool with equal weights", () => {
+		for (const count of [2, 3, 4, 5, 6]) {
+			const scene = autoCamera3DScene(count);
+			expect(scene.shots).toHaveLength(count);
+			for (const shot of scene.shots)
+				expect(shot.weight).toBeCloseTo(1 / count, 9);
+			scene.shots.forEach((shot, index) => {
+				expect(shot.from).toEqual(AUTO_SHOT_POOL[index].from);
+				expect(shot.to).toEqual(AUTO_SHOT_POOL[index].to);
+			});
+		}
+	});
+
+	it("draws the pool from showcase, then product tour, then punch in", () => {
+		const scenes = ["showcase", "product-tour", "punch-in"].map((id) => {
+			const scene = CAMERA3D_SCENES.find((candidate) => candidate.id === id);
+			if (!scene) throw new Error(`missing scene ${id}`);
+			return scene;
+		});
+		expect(AUTO_SHOT_POOL).toEqual(scenes.flatMap((scene) => scene.shots));
+		expect(AUTO_SHOT_POOL).toHaveLength(9);
+	});
+
+	it("clamps a nonsense count into the pool", () => {
+		expect(autoCamera3DScene(0).shots).toHaveLength(1);
+		expect(autoCamera3DScene(-4).shots).toHaveLength(1);
+		expect(autoCamera3DScene(2.7).shots).toHaveLength(2);
+		expect(autoCamera3DScene(99).shots).toHaveLength(AUTO_SHOT_POOL.length);
+	});
+
+	it("lays every shot across the whole recording", () => {
+		const segments = applySceneToRange(autoCamera3DScene(3), 0, 30, []);
+		expect(segments).toHaveLength(3);
+		expect(segments[0].start).toBe(0);
+		expect(segments.at(-1)?.end).toBe(30);
+		for (const segment of segments)
+			expect(segment.end - segment.start).toBeCloseTo(10, 9);
+	});
+});
+
+describe("maxAutoCamera3DShots", () => {
+	it("is one shot per second, capped at the six the pickers offer", () => {
+		expect(maxAutoCamera3DShots(3.5)).toBe(3);
+		expect(maxAutoCamera3DShots(1)).toBe(1);
+		expect(maxAutoCamera3DShots(41)).toBe(MAX_AUTO_CAMERA3D_SHOTS);
+	});
+
+	it("offers nothing when there is no room and never a negative count", () => {
+		expect(maxAutoCamera3DShots(0.4)).toBe(0);
+		expect(maxAutoCamera3DShots(0)).toBe(0);
+		expect(maxAutoCamera3DShots(-5)).toBe(0);
+		expect(maxAutoCamera3DShots(Number.NaN)).toBe(0);
 	});
 });

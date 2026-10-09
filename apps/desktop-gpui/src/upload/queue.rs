@@ -355,6 +355,7 @@ trait UploadBackend: Send + Sync + 'static {
         verification: &UploadVerification,
     ) -> Result<(), String>;
     fn delete_after_upload(&self) -> bool;
+    fn notify_failure(&self);
 }
 
 struct LiveBackend;
@@ -500,6 +501,10 @@ impl UploadBackend for LiveBackend {
     fn delete_after_upload(&self) -> bool {
         crate::store::GeneralSettings::load().delete_instant_recordings_after_upload
     }
+
+    fn notify_failure(&self) {
+        crate::app_sounds::play_notification();
+    }
 }
 
 struct Job {
@@ -632,6 +637,9 @@ impl<B: UploadBackend> Manager<B> {
         })).catch_unwind().await.unwrap_or_else(|_| Err("The upload worker failed; the local recording is preserved".into()));
         upload.abort_segments().await;
         if let Err(error) = result {
+            if !*cancelled.borrow() {
+                self.backend.notify_failure();
+            }
             state.fail(error.clone(), now());
             if let Err(save_error) = write_state(&project, &state) {
                 tracing::error!(%save_error, "Failed to persist upload retry state");
@@ -655,6 +663,13 @@ impl<B: UploadBackend> Manager<B> {
             .is_some_and(UploadVerification::requires_reupload)
         {
             state.verification = None;
+        }
+        if let Some(verification) = &state.verification
+            && let Err(error) = self.backend.verify_local(project, state, verification)
+        {
+            state.verification = None;
+            state.receipt = None;
+            return Err(error);
         }
         state.receipt = None;
         if state.verification.is_none() {
@@ -1177,6 +1192,7 @@ mod tests {
         delete: AtomicBool,
         transfers: AtomicUsize,
         confirmations: AtomicUsize,
+        failure_notifications: AtomicUsize,
         transfer_steps: usize,
         transfer_step_delay: Duration,
         progress: AtomicUsize,
@@ -1245,7 +1261,7 @@ mod tests {
             &self,
             project: &Path,
             _: &UploadState,
-            _: &UploadVerification,
+            verification: &UploadVerification,
         ) -> Result<(), String> {
             if std::fs::read(project.join("content/output.mp4"))
                 .map_err(|error| error.to_string())?
@@ -1253,10 +1269,17 @@ mod tests {
             {
                 return Err("The local recording changed after upload".into());
             }
+            if verification != &UploadVerification::mp4(12, 2.0, true, "\"fake-object\"".into())? {
+                return Err("The saved upload verification no longer matches the recording".into());
+            }
             Ok(())
         }
         fn delete_after_upload(&self) -> bool {
             self.delete.load(Ordering::Acquire)
+        }
+
+        fn notify_failure(&self) {
+            self.failure_notifications.fetch_add(1, Ordering::AcqRel);
         }
     }
 
@@ -1320,6 +1343,13 @@ mod tests {
                 .unwrap();
             joined(&manager).await;
             fixture.assert_retained();
+            assert_eq!(
+                manager
+                    .backend
+                    .failure_notifications
+                    .load(Ordering::Acquire),
+                1
+            );
             assert_eq!(
                 fixture.state().phase,
                 if failure == "authentication" {
@@ -1393,6 +1423,91 @@ mod tests {
         assert!(state.verification.is_some());
         assert!(state.next_retry_at.is_some());
         fixture.assert_retained();
+    }
+
+    #[tokio::test]
+    async fn stale_cached_verification_is_replaced_only_after_a_new_transfer() {
+        let fixture = Fixture::new();
+        fixture.cache_receipt();
+        let mut state = fixture.state();
+        state.verification = Some(
+            UploadVerification::mp4(
+                12,
+                f64::from_bits(2.0_f64.to_bits() + 1),
+                true,
+                "\"fake-object\"".into(),
+            )
+            .unwrap(),
+        );
+        write_state(&fixture.project(), &state).unwrap();
+        let backend = FakeBackend::default();
+        backend.verified.store(true, Ordering::Release);
+        backend.delete.store(true, Ordering::Release);
+        let manager = Arc::new(Manager::new(backend, Duration::from_secs(1)));
+        manager
+            .admit(fixture.project(), fixture.upload(), false)
+            .await
+            .unwrap();
+        joined(&manager).await;
+        assert_eq!(manager.backend.transfers.load(Ordering::Acquire), 0);
+        assert_eq!(manager.backend.confirmations.load(Ordering::Acquire), 0);
+        let state = fixture.state();
+        assert_eq!(state.phase, UploadPhase::Retrying);
+        assert!(state.verification.is_none());
+        assert!(state.receipt.is_none());
+        fixture.assert_retained();
+
+        manager
+            .admit(fixture.project(), fixture.upload(), true)
+            .await
+            .unwrap();
+        joined(&manager).await;
+        assert_eq!(manager.backend.transfers.load(Ordering::Acquire), 1);
+        assert_eq!(manager.backend.confirmations.load(Ordering::Acquire), 1);
+        let state = fixture.state();
+        assert_eq!(state.video_id, "same-video");
+        assert_eq!(state.phase, UploadPhase::Verified);
+        assert_eq!(
+            state.verification.unwrap(),
+            UploadVerification::mp4(12, 2.0, true, "\"fake-object\"".into()).unwrap()
+        );
+        assert_eq!(
+            std::fs::read(fixture.project().join("content/output.mp4")).unwrap(),
+            b"saved-output"
+        );
+    }
+
+    #[tokio::test]
+    async fn cached_verification_cannot_confirm_changed_local_media() {
+        let fixture = Fixture::new();
+        fixture.cache_receipt();
+        std::fs::write(
+            fixture.project().join("content/output.mp4"),
+            b"changed-data",
+        )
+        .unwrap();
+        let backend = FakeBackend::default();
+        backend.verified.store(true, Ordering::Release);
+        backend.delete.store(true, Ordering::Release);
+        let manager = Arc::new(Manager::new(backend, Duration::from_secs(1)));
+        manager
+            .admit(fixture.project(), fixture.upload(), false)
+            .await
+            .unwrap();
+        joined(&manager).await;
+        assert_eq!(manager.backend.transfers.load(Ordering::Acquire), 0);
+        assert_eq!(manager.backend.confirmations.load(Ordering::Acquire), 0);
+        let state = fixture.state();
+        assert_eq!(state.phase, UploadPhase::Retrying);
+        assert!(state.verification.is_none());
+        assert!(state.receipt.is_none());
+        assert_eq!(
+            std::fs::read(fixture.project().join("content/output.mp4")).unwrap(),
+            b"changed-data"
+        );
+        assert!(
+            pending_video(&RecordingMeta::load_for_project(&fixture.project()).unwrap()).is_some()
+        );
     }
 
     #[tokio::test]
@@ -1505,6 +1620,13 @@ mod tests {
         manager.backend.release.notify_one();
         fixture.assert_retained();
         assert_eq!(manager.backend.confirmations.load(Ordering::Acquire), 0);
+        assert_eq!(
+            manager
+                .backend
+                .failure_notifications
+                .load(Ordering::Acquire),
+            0
+        );
         assert!(manager.jobs.lock().await.is_empty());
     }
 

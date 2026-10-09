@@ -6,6 +6,29 @@
  * Video metadata structure
  */
 export interface VideoMetadata {
+	editProcessing?: {
+		token: string;
+		startedAt: string;
+		ownerId: string;
+		bucket: string | null;
+		storageIntegrationId: string | null;
+		sourceKey: string;
+		source: string;
+		dispatch: "pending" | "dispatching" | "accepted";
+		jobId?: string;
+		resultCommitted?: boolean;
+		renderedMetadata?: {
+			duration: number;
+			width: number;
+			height: number;
+			fps: number;
+		};
+	};
+	completedVideoEdit?: {
+		token: string;
+		startedAt: string;
+		transcriptRemapped: boolean;
+	};
 	desktopRecordingUpload?: {
 		version: 1;
 		artifact:
@@ -22,6 +45,18 @@ export interface VideoMetadata {
 		fullDecode: true;
 		requiredAudioVerified?: boolean;
 		objectIdentity: string;
+		outputKey?: string;
+		outputSha256?: string;
+		sourceObjectIdentity?: string;
+		sourceProof?: {
+			version: 1;
+			manifestSha256: string;
+			inventorySha256: string;
+			sourcePreserved: true;
+			videoDuration: number;
+			hasAudio: boolean;
+			audioVerified: boolean;
+		};
 	};
 	/**
 	 * Custom created date that can be edited by the user
@@ -41,10 +76,12 @@ export interface VideoMetadata {
 	 * AI generated summary of the content
 	 */
 	summary?: string;
+	summaryManuallyEdited?: boolean;
 	/**
 	 * Chapter markers generated from the transcript
 	 */
 	chapters?: { title: string; start: number }[];
+	chaptersManuallyEdited?: boolean;
 	aiGenerationStatus?:
 		| "QUEUED"
 		| "PROCESSING"
@@ -66,6 +103,14 @@ export interface VideoMetadata {
 		state: "pending" | "accepted" | "rejected";
 		rawFileKey?: string;
 	};
+}
+
+export interface VideoCallToAction {
+	label: string;
+	url: string;
+	headline?: string;
+	color?: string;
+	showWhilePlaying?: boolean;
 }
 
 export type VideoEditRange = {

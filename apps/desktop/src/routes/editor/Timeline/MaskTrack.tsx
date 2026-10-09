@@ -1,5 +1,4 @@
 import { createEventListenerMap } from "@solid-primitives/event-listener";
-import { cx } from "cva";
 import { createMemo, createRoot, createSignal, For, Show } from "solid-js";
 import { produce } from "solid-js/store";
 
@@ -328,13 +327,11 @@ export function MaskTrack(props: {
 				fallback={
 					<Show
 						when={!newSegmentDetails()}
-						fallback={<div class="w-full rounded-xl bg-transparent" />}
+						fallback={<div class="w-full rounded-lg bg-transparent" />}
 					>
-						<div class="text-center text-sm text-(--text-tertiary) flex flex-col justify-center items-center inset-0 w-full bg-gray-3/20 dark:bg-gray-3/10 hover:bg-gray-3/30 dark:hover:bg-gray-3/20 transition-colors rounded-xl pointer-events-none">
-							<div>Click to add a mask</div>
-							<div class="text-[10px] text-(--text-tertiary)/40 mt-0.5">
-								(Combine sensitive blur or highlight masks)
-							</div>
+						<div class="cap-empty-lane pointer-events-none">
+							<span>Combine sensitive blur or highlight masks</span>
+							<span class="cap-empty-lane-action">· Add mask</span>
 						</div>
 					</Show>
 				}
@@ -356,13 +353,8 @@ export function MaskTrack(props: {
 							data-mask-segment
 							data-index={index}
 							segColor="var(--track-mask)"
-							class={cx(
-								"duration-200 transition-colors group",
-								isSelected()
-									? "border border-gray-12"
-									: "border border-transparent",
-							)}
-							innerClass="ring-red-5"
+							class="group"
+							selected={isSelected()}
 							title={`Mask · ${contentLabel()}`}
 							segment={segment}
 							onMouseEnter={(e) => {
@@ -441,7 +433,7 @@ export function MaskTrack(props: {
 								)}
 							/>
 							<SegmentContent
-								class="flex justify-center items-center cursor-grab px-3"
+								class="flex items-center cursor-grab"
 								onMouseDown={createMouseDownDrag(
 									() => index,
 									() => {
@@ -480,16 +472,16 @@ export function MaskTrack(props: {
 							>
 								<SegmentLabel
 									full={() => (
-										<div class="flex flex-col gap-0.5 justify-center items-center text-xs whitespace-nowrap text-gray-1 dark:text-gray-12">
-											<span class="opacity-70">Mask</span>
-											<div class="flex gap-1 items-center text-md">
-												<span>{contentLabel()}</span>
-											</div>
+										<div class="cap-seg-labels">
+											<span class="cap-seg-label">Mask</span>
+											<span class="cap-seg-sublabel">{contentLabel()}</span>
 										</div>
 									)}
 									compact={() => (
-										<div class="flex gap-1 items-center text-xs whitespace-nowrap text-gray-1 dark:text-gray-12">
-											<span class="truncate">{contentLabel()}</span>
+										<div class="cap-seg-labels">
+											<span class="cap-seg-label truncate">
+												{contentLabel()}
+											</span>
 										</div>
 									)}
 								/>
@@ -530,15 +522,13 @@ export function MaskTrack(props: {
 			<Show when={!draggingSegment() && newSegmentDetails()}>
 				{(details) => (
 					<SegmentRoot
-						class="pointer-events-none z-10 border border-transparent"
-						innerClass="ring-red-300"
+						class="pointer-events-none z-10"
+						ghost
 						segColor="var(--track-mask)"
 						segment={details()}
 					>
-						<SegmentContent>
-							<p class="w-full text-center text-gray-1 dark:text-gray-12 text-md">
-								+
-							</p>
+						<SegmentContent class="justify-center">
+							<p class="cap-seg-label">+</p>
 						</SegmentContent>
 					</SegmentRoot>
 				)}

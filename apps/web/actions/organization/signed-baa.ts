@@ -7,7 +7,11 @@ import { SignedBaa } from "@cap/database/emails/signed-baa";
 import { nanoId } from "@cap/database/helpers";
 import { organizations, signedBaas } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
-import { STRIPE_SIGNED_BAA_PRICE_IDS, stripe } from "@cap/utils";
+import {
+	isProSubscription,
+	STRIPE_SIGNED_BAA_PRICE_IDS,
+	stripe,
+} from "@cap/utils";
 import type { Organisation } from "@cap/web-domain";
 import { and, eq, isNull, lt, ne, or } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
@@ -424,7 +428,7 @@ async function completeSignedBaa(
 		}
 		if (
 			!CAP_PRO_STATUSES.has(liveProSubscription.status) ||
-			isSignedBaaSubscription(liveProSubscription)
+			!isProSubscription(liveProSubscription)
 		) {
 			throw new Error(
 				"Your organization needs an active Cap Pro subscription before adding the Signed BAA add-on.",

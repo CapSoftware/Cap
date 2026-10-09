@@ -664,6 +664,7 @@ impl ScreenshotEditorWindow {
                 .child(
                     div()
                         .id("screenshot-crop-backdrop")
+                        .occlude()
                         .absolute()
                         .inset_0()
                         .bg(gpui::hsla(0., 0., 0., 0.8))

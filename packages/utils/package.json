@@ -2,7 +2,8 @@
 	"name": "@cap/utils",
 	"type": "module",
 	"exports": {
-		".": "./src/index.ts"
+		".": "./src/index.ts",
+		"./helpers": "./src/helpers.ts"
 	},
 	"scripts": {
 		"typecheck": "tsc -b",

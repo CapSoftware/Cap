@@ -7,6 +7,8 @@ import { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { type NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
+import { getProcessingState } from "@/lib/desktop-recording-jobs";
+import { getDesktopRecordingOutputKey } from "@/lib/desktop-recording-source";
 import { runPromise } from "@/lib/server";
 import { decodeStorageVideo } from "@/lib/video-storage";
 
@@ -14,6 +16,14 @@ const baseSchema = z.object({
 	videoId: z.string().min(1),
 	key: z.string().min(1),
 	uploadId: z.string().min(1),
+	generation: z
+		.string()
+		.regex(/^[a-zA-Z0-9_-]{1,64}$/)
+		.optional(),
+	attemptId: z
+		.string()
+		.regex(/^[a-zA-Z0-9_-]{1,64}$/)
+		.optional(),
 });
 
 const signPartSchema = baseSchema.extend({
@@ -50,7 +60,10 @@ function isAuthorized(request: NextRequest) {
 	);
 }
 
-async function getMultipartContext(payload: MultipartPayload) {
+async function getMultipartContext(
+	payload: MultipartPayload,
+	allowExpired = false,
+) {
 	const [video] = await db()
 		.select()
 		.from(videos)
@@ -65,14 +78,47 @@ async function getMultipartContext(payload: MultipartPayload) {
 		};
 	}
 
-	const expectedKey = `${video.ownerId}/${video.id}/result.mp4`;
-	if (payload.key !== expectedKey) {
+	const fenced =
+		payload.generation !== undefined || payload.attemptId !== undefined;
+	const expectedKey =
+		fenced && payload.generation && payload.attemptId
+			? getDesktopRecordingOutputKey(
+					video.ownerId,
+					video.id,
+					payload.generation,
+					payload.attemptId,
+				)
+			: `${video.ownerId}/${video.id}/result.mp4`;
+	if (
+		payload.key !== expectedKey ||
+		(fenced && (!payload.generation || !payload.attemptId))
+	) {
 		return {
 			response: NextResponse.json(
 				{ error: "Invalid multipart upload key" },
 				{ status: 400 },
 			),
 		};
+	}
+	if (fenced && !allowExpired) {
+		const job = await getProcessingState({ videoId: video.id });
+		if (
+			!job ||
+			job.ownerId !== video.ownerId ||
+			job.state !== "processing" ||
+			!job.source ||
+			job.generation !== payload.generation ||
+			job.attemptId !== payload.attemptId ||
+			!job.leaseExpiresAt ||
+			job.leaseExpiresAt <= new Date()
+		) {
+			return {
+				response: NextResponse.json(
+					{ error: "Recording attempt is no longer active" },
+					{ status: 409 },
+				),
+			};
+		}
 	}
 
 	const [bucket] = await Storage.getAccessForVideo(
@@ -88,7 +134,7 @@ async function getMultipartContext(payload: MultipartPayload) {
 		};
 	}
 
-	return { bucket };
+	return { bucket, fenced };
 }
 
 async function readJson(request: NextRequest) {
@@ -152,10 +198,17 @@ export async function POST(
 					PartNumber: part.partNumber,
 					ETag: part.etag,
 				}));
+			if (parts.some((part, index) => part.PartNumber !== index + 1)) {
+				return NextResponse.json(
+					{ error: "Multipart parts must be contiguous and unique" },
+					{ status: 400 },
+				);
+			}
 
 			const result = await multipartContext.bucket.multipart
 				.complete(payload.data.key, payload.data.uploadId, {
 					MultipartUpload: { Parts: parts },
+					...(multipartContext.fenced ? { IfNoneMatch: "*" } : {}),
 				})
 				.pipe(runPromise);
 
@@ -175,7 +228,7 @@ export async function POST(
 				);
 			}
 
-			const multipartContext = await getMultipartContext(payload.data);
+			const multipartContext = await getMultipartContext(payload.data, true);
 			if ("response" in multipartContext) return multipartContext.response;
 
 			await multipartContext.bucket.multipart

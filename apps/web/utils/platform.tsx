@@ -79,7 +79,7 @@ export const getVersionText = (platform: string | null): React.ReactNode => {
 	} else if (platform === "windows") {
 		return "Windows 10+ recommended";
 	} else if (platform === "linux") {
-		return "Linux x86_64 .deb recommended";
+		return "Linux x86_64 • .deb, AppImage, RPM and Arch available";
 	} else {
 		return "macOS 13.1+ recommended";
 	}

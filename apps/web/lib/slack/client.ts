@@ -76,7 +76,7 @@ export const getSlackConfig = (): SlackConfig | null => {
 
 export const isSlackIntegrationConfigured = () =>
 	getSlackConfig() !== null &&
-	/^[0-9a-f]{64}$/i.test(serverEnv().DATABASE_ENCRYPTION_KEY ?? "");
+	/^(?:[0-9a-f]{32}){1,2}$/i.test(serverEnv().DATABASE_ENCRYPTION_KEY ?? "");
 
 export const buildSlackInstallUrl = ({
 	config,

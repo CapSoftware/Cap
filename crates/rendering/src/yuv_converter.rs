@@ -19,6 +19,9 @@ use windows::Win32::Graphics::Direct3D11::{
 
 #[derive(Debug, thiserror::Error)]
 pub enum YuvConversionError {
+    #[cfg(target_os = "linux")]
+    #[error("GPU interop: {0}")]
+    GpuInterop(String),
     #[error("{plane} plane size mismatch: expected {expected}, got {actual}")]
     PlaneSizeMismatch {
         plane: &'static str,
@@ -436,6 +439,8 @@ pub struct YuvToRgbaConverter {
     zero_copy_failed: bool,
     #[cfg(target_os = "windows")]
     d3d11_interop: D3D11WgpuInterop,
+    #[cfg(target_os = "linux")]
+    cuda_staging: Option<crate::linux_gpu::SharedRing>,
 }
 
 impl YuvToRgbaConverter {
@@ -494,7 +499,145 @@ impl YuvToRgbaConverter {
             zero_copy_failed: false,
             #[cfg(target_os = "windows")]
             d3d11_interop: D3D11WgpuInterop::new(),
+            #[cfg(target_os = "linux")]
+            cuda_staging: None,
         }
+    }
+
+    /// NV12 straight from NVDEC: device-to-device into a Vulkan-shared
+    /// staging buffer, then GPU copies into the plane textures. Nothing
+    /// touches system memory.
+    #[cfg(target_os = "linux")]
+    pub fn convert_nv12_cuda(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        frame: &crate::linux_gpu::CudaNv12Frame,
+    ) -> Result<&wgpu::TextureView, YuvConversionError> {
+        // There is no CPU copy of a CUDA frame to fall back to, so a failed
+        // conversion leaves the previous texture on screen; count it so the
+        // caller can reject the render instead of encoding stale frames.
+        self.convert_nv12_cuda_into_textures(device, queue, frame)
+            .inspect_err(|_| crate::linux_gpu::note_interop_failure())
+    }
+
+    #[cfg(target_os = "linux")]
+    fn convert_nv12_cuda_into_textures(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        frame: &crate::linux_gpu::CudaNv12Frame,
+    ) -> Result<&wgpu::TextureView, YuvConversionError> {
+        let width = frame.width;
+        let height = frame.height;
+        let (effective_width, effective_height, _downscaled) =
+            validate_dimensions(width, height, self.gpu_max_texture_size)?;
+        self.ensure_texture_size(device, effective_width, effective_height);
+        self.swap_output_buffer();
+
+        let pitch = u64::from(width.next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT));
+        let needed = pitch * u64::from(height) * 3 / 2;
+        if self
+            .cuda_staging
+            .as_ref()
+            .is_none_or(|ring| ring.size() < needed)
+        {
+            self.cuda_staging = Some(
+                crate::linux_gpu::SharedRing::new(device, 3, needed, "NV12 CUDA Staging")
+                    .map_err(YuvConversionError::GpuInterop)?,
+            );
+        }
+        let ring = self.cuda_staging.as_mut().expect("staging ring");
+        let slot = ring.acquire(device).ok_or_else(|| {
+            YuvConversionError::GpuInterop("no free CUDA staging slot".to_string())
+        })?;
+        let base = slot.shared.cuda_ptr;
+        let y_rows = height as usize;
+        let copied = crate::linux_gpu::copy_plane(
+            frame.y,
+            frame.y_pitch,
+            base,
+            pitch as usize,
+            width as usize,
+            y_rows,
+        )
+        .and_then(|_| {
+            crate::linux_gpu::copy_plane(
+                frame.uv,
+                frame.uv_pitch,
+                base + pitch * u64::from(height),
+                pitch as usize,
+                width as usize,
+                y_rows / 2,
+            )
+        })
+        .and_then(|_| crate::linux_gpu::synchronize());
+        if let Err(error) = copied {
+            slot.release();
+            return Err(YuvConversionError::GpuInterop(error));
+        }
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("NV12 CUDA Conversion Encoder"),
+        });
+        encoder.copy_buffer_to_texture(
+            wgpu::TexelCopyBufferInfo {
+                buffer: &slot.shared.buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(pitch as u32),
+                    rows_per_image: Some(height),
+                },
+            },
+            self.y_texture.as_image_copy(),
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        encoder.copy_buffer_to_texture(
+            wgpu::TexelCopyBufferInfo {
+                buffer: &slot.shared.buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: pitch * u64::from(height),
+                    bytes_per_row: Some(pitch as u32),
+                    rows_per_image: Some(height / 2),
+                },
+            },
+            self.uv_texture.as_image_copy(),
+            wgpu::Extent3d {
+                width: width / 2,
+                height: height / 2,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        let output_index = self.current_output;
+        let bind_group = self.bind_group_cache.get_or_create_nv12(
+            device,
+            &self.pipelines.nv12_bind_group_layout,
+            &self.y_view,
+            &self.uv_view,
+            &self.output_views[output_index],
+            output_index,
+            self.allocated_width,
+            self.allocated_height,
+        );
+        {
+            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("NV12 CUDA Conversion Pass"),
+                ..Default::default()
+            });
+            compute_pass.set_pipeline(&self.pipelines.nv12_pipeline);
+            compute_pass.set_bind_group(0, bind_group, &[]);
+            compute_pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
+        }
+        queue.submit(std::iter::once(encoder.finish()));
+        let released = std::sync::Arc::clone(&slot);
+        queue.on_submitted_work_done(move || released.release());
+
+        Ok(self.current_output_view())
     }
 
     fn create_y_texture(

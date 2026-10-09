@@ -23,6 +23,7 @@ name = "editor-startup-benchmark"
 path = "examples/editor-startup-benchmark.rs"
 
 [dependencies]
+cap-utils = { path = "../utils" }
 cap-media = { path = "../media" }
 cap-project = { path = "../project" }
 cap-rendering = { path = "../rendering" }
@@ -35,6 +36,9 @@ axum = { version = "0.7.5", features = ["ws"] }
 ffmpeg.workspace = true
 specta.workspace = true
 serde = { workspace = true }
+serde_json = "1.0"
+image = "0.25.2"
+tempfile = "3"
 sentry.workspace = true
 futures = { workspace = true }
 tracing.workspace = true
@@ -49,4 +53,5 @@ workspace-hack = { version = "0.1", path = "../workspace-hack" }
 windows = { workspace = true, features = ["Win32_Media"] }
 
 [dev-dependencies]
-tempfile = "3"
+cap-audio = { path = "../audio", features = ["test-support"] }
+cap-enc-ffmpeg = { path = "../enc-ffmpeg" }

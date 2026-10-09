@@ -67,21 +67,21 @@ jobs:
           done
 
       - name: Typecheck
-        run: pnpm --filter "@cap/chrome-extension..." typecheck
+        run: bun run --filter "@cap/chrome-extension..." typecheck
 
       - name: Test
-        run: pnpm --filter @cap/chrome-extension test
+        run: bun run --filter @cap/chrome-extension test
 
       - name: Install Playwright browser
         if: ${{ inputs.run_e2e }}
-        run: pnpm --filter @cap/chrome-extension test:e2e:install
+        run: bun run --filter @cap/chrome-extension test:e2e:install
 
       - name: Test E2E
         if: ${{ inputs.run_e2e }}
-        run: pnpm --filter @cap/chrome-extension test:e2e
+        run: bun run --filter @cap/chrome-extension test:e2e
 
       - name: Build
-        run: pnpm --filter @cap/chrome-extension build
+        run: bun run --filter @cap/chrome-extension build
 
       - name: Package
         id: package

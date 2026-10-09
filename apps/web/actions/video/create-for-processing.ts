@@ -4,7 +4,7 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
 import { videos, videoUploads } from "@cap/database/schema";
-import { serverEnv } from "@cap/env";
+import { getNewVideoPublic } from "@cap/database/video-sharing-default";
 import { userIsPro } from "@cap/utils";
 import { Storage as StorageService } from "@cap/web-backend";
 import {
@@ -70,12 +70,14 @@ export async function createVideoForServerProcessing({
 	})} ${date.getFullYear()}`;
 
 	const rawFileKey = `${user.id}/${videoId}/raw-upload.mp4`;
+	const videoTitle = `Cap Upload - ${formattedDate}`;
 
 	const uploadResult = await StorageService.createUploadTargetForUser(
 		user.id,
 		rawFileKey,
 		{
 			contentType: "video/mp4",
+			videoTitle,
 			method: "put",
 			fields: {
 				"x-amz-meta-userid": user.id,
@@ -90,13 +92,13 @@ export async function createVideoForServerProcessing({
 		.insert(videos)
 		.values({
 			id: videoId,
-			name: `Cap Upload - ${formattedDate}`,
+			name: videoTitle,
 			ownerId: user.id,
 			orgId,
 			source: { type: "webMP4" as const },
 			bucket: Option.getOrNull(uploadResult.bucketId),
 			storageIntegrationId: Option.getOrNull(uploadResult.storageIntegrationId),
-			public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
+			public: await getNewVideoPublic(orgId),
 			...(folderId ? { folderId } : {}),
 		});
 

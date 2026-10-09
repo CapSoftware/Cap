@@ -1,3 +1,4 @@
+use crate::RecordingStartGate;
 #[cfg(target_os = "macos")]
 use crate::SendableShareableContent;
 #[cfg(target_os = "linux")]
@@ -377,6 +378,7 @@ impl Drop for ActorHandle {
 
 #[derive(kameo::Actor)]
 pub struct Actor {
+    diagnostic: Option<cap_utils::operation_diagnostics::Operation>,
     recording_dir: PathBuf,
     output_dir: PathBuf,
     capture_target: ScreenCaptureTarget,
@@ -486,6 +488,30 @@ impl Message<Stop> for Actor {
     type Reply = anyhow::Result<CompletedRecording>;
 
     async fn handle(&mut self, _: Stop, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
+        if let Some(diagnostic) = &mut self.diagnostic {
+            diagnostic.stage("finalizing");
+        }
+        let result = self.complete_recording().await;
+        if let Some(mut diagnostic) = self.diagnostic.take() {
+            if let Ok(recording) = &result {
+                diagnostic.field(cap_utils::operation_diagnostics::Field::label(
+                    "output_health",
+                    match recording.health {
+                        crate::RecordingHealth::Healthy => "healthy",
+                        crate::RecordingHealth::Repaired { .. } => "repaired",
+                        crate::RecordingHealth::Degraded { .. } => "degraded",
+                        crate::RecordingHealth::Damaged { .. } => "damaged",
+                    },
+                ));
+            }
+            diagnostic.finish(result.is_ok());
+        }
+        result
+    }
+}
+
+impl Actor {
+    async fn complete_recording(&mut self) -> anyhow::Result<CompletedRecording> {
         if let Some(pause_start) = self.pause_started_at.take() {
             let pause_elapsed = current_time_f64() - pause_start;
             if pause_elapsed > 0.0 {
@@ -586,6 +612,11 @@ impl Message<Pause> for Actor {
 
             state
         });
+        if matches!(self.state, ActorState::Paused { .. })
+            && let Some(diagnostic) = &mut self.diagnostic
+        {
+            diagnostic.stage("paused");
+        }
     }
 }
 
@@ -619,6 +650,11 @@ impl Message<Resume> for Actor {
 
             state
         });
+        if matches!(self.state, ActorState::Recording { .. })
+            && let Some(diagnostic) = &mut self.diagnostic
+        {
+            diagnostic.stage("recording");
+        }
     }
 }
 
@@ -628,7 +664,14 @@ impl Message<Cancel> for Actor {
     type Reply = anyhow::Result<()>;
 
     async fn handle(&mut self, _: Cancel, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
-        self.stop().await
+        if let Some(diagnostic) = &mut self.diagnostic {
+            diagnostic.stage("cancelling");
+        }
+        let result = self.stop().await;
+        if let Some(diagnostic) = self.diagnostic.take() {
+            diagnostic.finish(result.is_ok());
+        }
+        result
     }
 }
 
@@ -665,6 +708,7 @@ async fn create_pipeline(
     system_audio_source: Option<crate::sources::screen_capture::SystemAudioSourceConfig>,
     max_output_size: Option<u32>,
     start_time: Timestamps,
+    start_gate: Option<RecordingStartGate>,
 ) -> anyhow::Result<Pipeline> {
     let ScreenPipelineInput {
         source: screen_capture,
@@ -705,6 +749,7 @@ async fn create_pipeline(
         segments_dir.clone(),
         output_resolution,
         start_time,
+        start_gate.clone(),
         segment_tx_for_video,
     )
     .await?;
@@ -717,6 +762,7 @@ async fn create_pipeline(
                 camera,
             })
             .with_timestamps(start_time)
+            .with_start_gate(start_gate.clone())
             .build::<crate::ffmpeg::SegmentedVideoMuxer>(crate::ffmpeg::SegmentedVideoMuxerConfig {
                 segment_duration: std::time::Duration::from_secs(2),
                 preset: cap_enc_ffmpeg::h264::H264Preset::Ultrafast,
@@ -731,6 +777,7 @@ async fn create_pipeline(
             segments_dir.clone(),
             output_resolution,
             start_time,
+            start_gate.clone(),
             segment_tx_for_video,
         )
         .await?
@@ -739,8 +786,9 @@ async fn create_pipeline(
     let has_audio = mic_feed.is_some() || system_audio_source.is_some();
     let audio = if has_audio {
         let audio_dir = content_dir.join("audio");
-        let mut builder =
-            output_pipeline::OutputPipeline::builder(audio_dir.clone()).with_timestamps(start_time);
+        let mut builder = output_pipeline::OutputPipeline::builder(audio_dir.clone())
+            .with_timestamps(start_time)
+            .with_start_gate(start_gate.clone());
         #[cfg(target_os = "linux")]
         {
             builder = builder.with_audio_anchor(output_pipeline::AudioAnchor::PipelineEpoch);
@@ -815,6 +863,7 @@ pub struct ActorBuilder {
     excluded_windows: Vec<scap_targets::WindowId>,
     #[cfg(target_os = "linux")]
     lifetime: InstantLifetimeOwner,
+    start_gate: Option<RecordingStartGate>,
 }
 
 impl ActorBuilder {
@@ -839,7 +888,15 @@ impl ActorBuilder {
             lifetime: InstantLifetimeOwner::new(),
             #[cfg(target_os = "macos")]
             excluded_windows: Vec::new(),
+            start_gate: None,
         }
+    }
+
+    /// Prime the capture pipeline ahead of the start cue; nothing is recorded
+    /// until the gate is armed. See [`RecordingStartGate`].
+    pub fn with_start_gate(mut self, start_gate: RecordingStartGate) -> Self {
+        self.start_gate = Some(start_gate);
+        self
     }
 
     #[cfg(target_os = "linux")]
@@ -919,6 +976,7 @@ impl ActorBuilder {
                 capture_system_audio: self.system_audio,
                 mic_feed: self.mic_feed,
                 camera_feed: self.camera_feed,
+                start_gate: self.start_gate,
                 #[cfg(target_os = "macos")]
                 shareable_content,
                 #[cfg(target_os = "macos")]
@@ -1058,7 +1116,7 @@ async fn spawn_instant_recording_actor_inner(
     #[cfg(windows)]
     {
         let scope = output_pipeline::PipelineBuildScope::new();
-        output_pipeline::finish_windows_pipeline_startup(&scope, startup).await
+        output_pipeline::finish_pipeline_startup(&scope, startup).await
     }
     #[cfg(not(windows))]
     startup.await
@@ -1073,6 +1131,47 @@ async fn build_instant_recording_actor(
     #[cfg(target_os = "linux")] camera: LinuxCameraConfig,
     #[cfg(target_os = "linux")] lifecycle: InstantLifecycle,
 ) -> anyhow::Result<ActorHandle> {
+    use cap_utils::operation_diagnostics::{Field, Operation};
+    let mut diagnostic = Operation::start(
+        "instant_recording",
+        &[
+            Field::identifier(
+                "resource",
+                cap_utils::operation_diagnostics::resource_id(&recording_dir),
+            ),
+            Field::number("requested_fps", max_fps as u64),
+            Field::flag("system_audio", inputs.capture_system_audio),
+            Field::flag("microphone", inputs.mic_feed.is_some()),
+            Field::flag("camera", inputs.camera_feed.is_some()),
+        ],
+    );
+    if let Some(microphone) = &inputs.mic_feed {
+        let info = microphone.audio_info();
+        diagnostic.field(Field::number(
+            "microphone_sample_rate",
+            info.sample_rate as u64,
+        ));
+        diagnostic.field(Field::number("microphone_channels", info.channels as u64));
+        diagnostic.field(Field::flag(
+            "microphone_wireless",
+            info.is_wireless_transport,
+        ));
+    }
+    if let Some(camera) = &inputs.camera_feed {
+        let info = camera.video_info();
+        diagnostic.field(Field::number("camera_width", info.width as u64));
+        diagnostic.field(Field::number("camera_height", info.height as u64));
+        diagnostic.field(Field::number(
+            "camera_fps_numerator",
+            info.frame_rate.0 as u64,
+        ));
+        diagnostic.field(Field::number(
+            "camera_fps_denominator",
+            info.frame_rate.1 as u64,
+        ));
+    }
+    diagnostic.stage("initializing_capture");
+
     #[cfg(target_os = "linux")]
     anyhow::ensure!(
         !matches!(inputs.capture_target, ScreenCaptureTarget::CameraOnly)
@@ -1163,7 +1262,8 @@ async fn build_instant_recording_actor(
 
                 let mut builder = OutputPipeline::builder(output_path.clone())
                     .with_video::<crate::sources::NativeCamera>(camera_feed.clone())
-                    .with_timestamps(timestamps);
+                    .with_timestamps(timestamps)
+                    .with_start_gate(inputs.start_gate.clone());
 
                 if let Some(mic_feed) = inputs.mic_feed.clone() {
                     builder = builder.with_audio_source::<crate::sources::Microphone>(mic_feed);
@@ -1285,6 +1385,7 @@ async fn build_instant_recording_actor(
                 system_audio_source,
                 max_output_size,
                 timestamps,
+                inputs.start_gate.clone(),
             )
             .await?;
 
@@ -1309,7 +1410,9 @@ async fn build_instant_recording_actor(
     #[cfg(target_os = "linux")]
     let done_fut = lifecycle.done_fut();
     let health_rx = pipeline.video.take_health_rx();
+    diagnostic.stage("recording");
     let actor_ref = Actor::spawn(Actor {
+        diagnostic: Some(diagnostic),
         recording_dir,
         output_dir,
         capture_target: inputs.capture_target.clone(),
@@ -1482,6 +1585,7 @@ mod tests {
     #[tokio::test]
     async fn actor_retains_terminal_error_after_internal_stop() {
         let mut actor = Actor {
+            diagnostic: None,
             recording_dir: PathBuf::new(),
             output_dir: PathBuf::new(),
             capture_target: ScreenCaptureTarget::CameraOnly,
@@ -1808,6 +1912,7 @@ mod quiescence_tests {
         let video_done = video.done_fut();
         let audio_done = audio.as_ref().map(OutputPipeline::done_fut);
         let actor_ref = Actor::spawn(Actor {
+            diagnostic: None,
             recording_dir: directory.to_path_buf(),
             output_dir: directory.join("display"),
             capture_target: ScreenCaptureTarget::CameraOnly,
@@ -2026,6 +2131,7 @@ mod quiescence_tests {
         let pipeline_cancel = video.cancel_token();
         let done = video.done_fut();
         let actor_ref = Actor::spawn(Actor {
+            diagnostic: None,
             recording_dir: directory.to_path_buf(),
             output_dir: output.clone(),
             capture_target: ScreenCaptureTarget::CameraOnly,
@@ -2739,6 +2845,7 @@ mod non_linux_stop_tests {
 
     fn stopped_actor(error: Option<String>) -> Actor {
         Actor {
+            diagnostic: None,
             recording_dir: PathBuf::new(),
             output_dir: PathBuf::new(),
             capture_target: ScreenCaptureTarget::CameraOnly,
@@ -2831,6 +2938,7 @@ mod non_linux_stop_tests {
             .unwrap();
         let audio_done = audio.done_fut();
         let actor = Actor::spawn(Actor {
+            diagnostic: None,
             recording_dir: directory.path().to_path_buf(),
             output_dir: directory.path().join("display"),
             capture_target: ScreenCaptureTarget::CameraOnly,

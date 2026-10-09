@@ -16,7 +16,7 @@
 
 use gpui::{
     App, ElementId, FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement, RenderOnce,
-    SharedString, StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder, px,
+    SharedString, StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder, px, svg,
 };
 
 use crate::theme::Theme;
@@ -145,10 +145,20 @@ impl RenderOnce for RadioCards {
                                     .mt(px(4.))
                                     .size(px(16.))
                                     .flex_none()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
                                     .rounded_full()
                                     .border_1()
                                     .border_color(if checked { dot_fill } else { dot_border })
-                                    .when(checked, |this| this.bg(dot_fill)),
+                                    .when(checked, |this| {
+                                        this.bg(dot_fill).child(
+                                            svg()
+                                                .path("icons/check.svg")
+                                                .size(px(12.))
+                                                .text_color(Hsla::from(gpui::rgb(0xffffff))),
+                                        )
+                                    }),
                             )
                             .child(
                                 div()
