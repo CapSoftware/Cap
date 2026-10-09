@@ -682,13 +682,14 @@ jobs:
           CAP_RELEASE_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          RPM="$CAP_BUNDLE/rpm/Cap-$CAP_RELEASE_VERSION-1.x86_64.rpm"
-          APPIMAGE="$CAP_BUNDLE/appimage/Cap_${CAP_RELEASE_VERSION}_amd64.AppImage"
+          BUNDLE="$GITHUB_WORKSPACE/$CAP_BUNDLE"
+          RPM="$BUNDLE/rpm/Cap-$CAP_RELEASE_VERSION-1.x86_64.rpm"
+          APPIMAGE="$BUNDLE/appimage/Cap_${CAP_RELEASE_VERSION}_amd64.AppImage"
           test -s "$APPIMAGE.sig"
           WORK="$(mktemp -d)"
           trap 'rm -rf "$WORK"' EXIT
           mkdir "$WORK/rpm" "$WORK/appimage"
-          (cd "$WORK/appimage" && "$(realpath "$APPIMAGE")" --appimage-extract > /dev/null)
+          (cd "$WORK/appimage" && "$APPIMAGE" --appimage-extract > /dev/null)
           APPROOT="$WORK/appimage/squashfs-root"
           verify_root() {
             local root="$1"
