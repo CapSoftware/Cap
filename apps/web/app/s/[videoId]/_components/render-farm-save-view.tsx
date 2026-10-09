@@ -235,7 +235,7 @@ export function RenderFarmSaveView({
 					progress={progress}
 				/>
 			)}
-			<div className="pointer-events-none absolute top-3 right-3 flex items-center gap-1.5 rounded-md bg-black/65 px-2.5 py-1 text-[11px] font-medium text-white backdrop-blur-sm">
+			<div className="pointer-events-none absolute top-3 right-3 flex items-center gap-1.5 rounded-md bg-black/75 px-2.5 py-1 text-[11px] font-medium text-white">
 				{rendering && (
 					<span className="size-1.5 animate-pulse rounded-full bg-white" />
 				)}

@@ -9,12 +9,12 @@
 	color: #fff;
 }
 
+/* Over a playing video it only tints: a backdrop blur would redraw the
+   video beneath it on every frame. */
 .render-fog[data-overlay] {
 	position: absolute;
 	inset: 0;
-	background: rgb(11 11 13 / 0.4);
-	backdrop-filter: blur(22px) saturate(1.15);
-	-webkit-backdrop-filter: blur(22px) saturate(1.15);
+	background: rgb(11 11 13 / 0.62);
 	animation: render-fog-in 0.6s ease-out both;
 }
 
@@ -65,14 +65,25 @@
 .render-fog-sheen {
 	position: absolute;
 	inset: 0;
+	overflow: hidden;
+}
+
+.render-fog-sheen::before {
+	content: "";
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	left: 0;
+	width: 60%;
 	background: linear-gradient(
 		100deg,
-		transparent 35%,
+		transparent 20%,
 		rgb(255 255 255 / 0.07) 50%,
-		transparent 65%
+		transparent 80%
 	);
-	background-size: 250% 100%;
+	transform: translateX(-100%);
 	animation: render-fog-sheen 3.6s linear infinite;
+	will-change: transform;
 }
 
 .render-fog-label {
@@ -134,11 +145,8 @@
 }
 
 @keyframes render-fog-sheen {
-	from {
-		background-position: 150% 0;
-	}
 	to {
-		background-position: -100% 0;
+		transform: translateX(270%);
 	}
 }
 
@@ -150,7 +158,7 @@
 
 @media (prefers-reduced-motion: reduce) {
 	.render-fog-cloud,
-	.render-fog-sheen {
+	.render-fog-sheen::before {
 		animation: none;
 	}
 }

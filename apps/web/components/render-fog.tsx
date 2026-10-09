@@ -1,4 +1,5 @@
 import clsx from "clsx";
+import { InkLoader } from "./ink-loader";
 import "./render-fog.css";
 
 /**
@@ -34,6 +35,7 @@ export function RenderFog({
 			<div className="render-fog-cloud is-c" />
 			<div className="render-fog-sheen" />
 			<div className="render-fog-label">
+				<InkLoader size={compact ? "md" : "lg"} tone="media" />
 				<span>{label}</span>
 				{detail && <span className="render-fog-detail">{detail}</span>}
 				{progress != null && (

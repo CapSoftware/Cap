@@ -16,7 +16,7 @@ export function RecordingInProgressOverlay({
 	variant?: "solid" | "overlay";
 }) {
 	const backgroundClassName =
-		variant === "overlay" ? "bg-black/70 backdrop-blur-[1px]" : "bg-black";
+		variant === "overlay" ? "bg-black/75" : "bg-black";
 
 	return (
 		<div
