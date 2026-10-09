@@ -1,9 +1,4 @@
-"""Input helpers and per-clip scenario timelines.
-
-Scenarios run in a worker thread. They only inject X input (XTest for pointer
-and buttons, xdotool for keyboard) and talk to the page through ctx.js(),
-which is executed by the Playwright thread.
-"""
+"""Scenarios run on a worker thread. Pointer and keyboard input is injected there; ctx.js() runs on the Playwright thread."""
 
 import math
 import re

@@ -105,7 +105,10 @@ body {
 	color: #ffffffa0;
 }
 .slide.title-slide {
-	background: radial-gradient(1200px 700px at 78% 18%, #7c3aed 0%, transparent 60%), radial-gradient(900px 600px at 12% 90%, #0891b2 0%, transparent 60%), linear-gradient(135deg, #111827, #1e1b4b);
+	background:
+		radial-gradient(1200px 700px at 78% 18%, #7c3aed 0%, transparent 60%),
+		radial-gradient(900px 600px at 12% 90%, #0891b2 0%, transparent 60%),
+		linear-gradient(135deg, #111827, #1e1b4b);
 	display: none;
 	padding: 0 140px;
 }
@@ -358,7 +361,9 @@ table.rm td {
 }
 .build.on {
 	opacity: 1;
-	transition: opacity 0.35s ease, transform 0.35s ease;
+	transition:
+		opacity 0.35s ease,
+		transform 0.35s ease;
 	transform: none;
 }
 .photo-cap {
@@ -389,7 +394,9 @@ table.rm td {
 	height: 320px;
 	border-radius: 50%;
 	overflow: hidden;
-	box-shadow: 0 10px 40px #0000004d, 0 0 0 4px #ffffff;
+	box-shadow:
+		0 10px 40px #0000004d,
+		0 0 0 4px #ffffff;
 	z-index: 50;
 	cursor: grab;
 	left: 72px;
@@ -400,7 +407,9 @@ table.rm td {
 }
 #webcam.drag {
 	cursor: grabbing;
-	box-shadow: 0 18px 60px #00000066, 0 0 0 4px #ffffff;
+	box-shadow:
+		0 18px 60px #00000066,
+		0 0 0 4px #ffffff;
 }
 #cam {
 	width: 320px;

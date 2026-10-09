@@ -29,10 +29,15 @@
 	}
 
 	video.addEventListener("error", () => {
-		cap.event("video_error", { code: video.error?.code, message: video.error?.message });
+		cap.event("video_error", {
+			code: video.error?.code,
+			message: video.error?.message,
+		});
 	});
 	for (const type of ["playing", "waiting", "stalled", "seeked"]) {
-		video.addEventListener(type, () => cap.event(`video_${type}`, { current_time: video.currentTime }));
+		video.addEventListener(type, () =>
+			cap.event(`video_${type}`, { current_time: video.currentTime }),
+		);
 	}
 
 	window.capStats = () => {
@@ -54,12 +59,16 @@
 		recent.length = 0;
 		window.capReady = false;
 		video.currentTime = 0;
-		video.play().catch((e) => cap.event("video_play_error", { message: String(e) }));
+		video
+			.play()
+			.catch((e) => cap.event("video_play_error", { message: String(e) }));
 	};
 	window.capTextRegions = () => [];
 
 	video.requestVideoFrameCallback(onFrame);
 	const src = window.capVideoSrc;
 	if (typeof src === "string") video.src = src;
-	video.play().catch((e) => cap.event("video_play_error", { message: String(e) }));
+	video
+		.play()
+		.catch((e) => cap.event("video_play_error", { message: String(e) }));
 })();

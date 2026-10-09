@@ -1,21 +1,35 @@
 (() => {
 	const PY_CONTROL = new Set(
-		"if elif else for while return yield break continue pass raise try except finally with as import from in not and or is lambda assert del global nonlocal await async".split(" "),
+		"if elif else for while return yield break continue pass raise try except finally with as import from in not and or is lambda assert del global nonlocal await async".split(
+			" ",
+		),
 	);
 	const PY_STORAGE = new Set("def class True False None".split(" "));
 	const PY_SELF = new Set(["self", "cls"]);
 	const PY_TYPES = new Set(
-		"int str list dict set tuple float bool bytes object type frozenset ValueError TypeError KeyError IndexError StopIteration Exception NotImplementedError AttributeError".split(" "),
+		"int str list dict set tuple float bool bytes object type frozenset ValueError TypeError KeyError IndexError StopIteration Exception NotImplementedError AttributeError".split(
+			" ",
+		),
 	);
 	const PY_BUILTINS = new Set(
-		"len range isinstance min max sum enumerate zip sorted reversed print super any all map filter iter next abs hash id repr getattr setattr hasattr divmod round".split(" "),
+		"len range isinstance min max sum enumerate zip sorted reversed print super any all map filter iter next abs hash id repr getattr setattr hasattr divmod round".split(
+			" ",
+		),
 	);
-	const C_CONTROL = new Set("if else for while do switch case default break continue return goto".split(" "));
+	const C_CONTROL = new Set(
+		"if else for while do switch case default break continue return goto".split(
+			" ",
+		),
+	);
 	const C_STORAGE = new Set(
-		"int unsigned signed char void struct union enum const static extern register typedef sizeof long short local volatile inline".split(" "),
+		"int unsigned signed char void struct union enum const static extern register typedef sizeof long short local volatile inline".split(
+			" ",
+		),
 	);
 	const C_TYPES = new Set(
-		"z_streamp z_stream Bytef uInt uLong code ZLIB_INTERNAL voidpf gz_headerp inflate_mode size_t uint32_t uint8_t ptrdiff_t".split(" "),
+		"z_streamp z_stream Bytef uInt uLong code ZLIB_INTERNAL voidpf gz_headerp inflate_mode size_t uint32_t uint8_t ptrdiff_t".split(
+			" ",
+		),
 	);
 
 	function classifyIdent(lang, word, prevWord, nextChar) {
@@ -140,7 +154,9 @@
 					continue;
 				}
 			}
-			const sm = (lang === "py" ? /^[rRbBuUfF]{0,2}("|")/ : /^(\"|")/).exec(rest);
+			const sm = (lang === "py" ? /^[rRbBuUfF]{0,2}("|")/ : /^("|")/).exec(
+				rest,
+			);
 			if (sm) {
 				const q = sm[1];
 				let j = i + sm[0].length;
@@ -152,7 +168,10 @@
 				i = Math.min(len, j + 1);
 				continue;
 			}
-			const nm = /^(0[xX][0-9a-fA-F]+[uUlL]*|\d+(\.\d+)?([eE][+-]?\d+)?[uUlLj]*)/.exec(rest);
+			const nm =
+				/^(0[xX][0-9a-fA-F]+[uUlL]*|\d+(\.\d+)?([eE][+-]?\d+)?[uUlLj]*)/.exec(
+					rest,
+				);
 			if (nm && !/[A-Za-z_]/.test(line[i - 1] || "")) {
 				pushTok("num", nm[0]);
 				i += nm[0].length;
@@ -183,7 +202,8 @@
 		return { tokens: out, state: {} };
 	}
 
-	const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+	const esc = (s) =>
+		s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
 	class CodeEditor {
 		constructor(host, opts) {
@@ -227,7 +247,13 @@
 			this.caretEl.className = "ce-caret blink";
 			this.suggest = document.createElement("div");
 			this.suggest.className = "ce-suggest";
-			this.content.append(this.lineHL, this.selEl, this.rowsEl, this.caretEl, this.suggest);
+			this.content.append(
+				this.lineHL,
+				this.selEl,
+				this.rowsEl,
+				this.caretEl,
+				this.suggest,
+			);
 			this.scroller.append(this.content);
 			this.minimap = document.createElement("canvas");
 			this.minimap.className = "ce-minimap";
@@ -264,8 +290,10 @@
 			for (let i = start; i < this.lines.length; i++) {
 				const prev = this.states[i];
 				const r = tokenize(this.lang, this.lines[i], state);
-				const changedEnd = !prev || JSON.stringify(prev.end) !== JSON.stringify(r.state);
-				const changedStart = !prev || JSON.stringify(prev.start) !== JSON.stringify(state);
+				const changedEnd =
+					!prev || JSON.stringify(prev.end) !== JSON.stringify(r.state);
+				const changedStart =
+					!prev || JSON.stringify(prev.start) !== JSON.stringify(state);
 				this.states[i] = { start: state, end: r.state };
 				this.tokens[i] = r.tokens;
 				if (!all && i > start && !changedEnd && !changedStart) {
@@ -290,7 +318,7 @@
 					let guides = "";
 					let k = 0;
 					while (k + 4 <= take) {
-						guides += "<span class=\"ig\">    </span>";
+						guides += '<span class="ig">    </span>';
 						k += 4;
 					}
 					if (k < take) guides += " ".repeat(take - k);
@@ -299,10 +327,15 @@
 					col += take;
 					if (!t) continue;
 				}
-				html += cls === "plain" ? esc(t) : `<span class="tk-${cls}">${esc(t)}</span>`;
+				html +=
+					cls === "plain" ? esc(t) : `<span class="tk-${cls}">${esc(t)}</span>`;
 				col += t.length;
 			}
-			const mark = this.added.has(i) ? " add" : this.modified.has(i) ? " mod" : "";
+			const mark = this.added.has(i)
+				? " add"
+				: this.modified.has(i)
+					? " mod"
+					: "";
 			return `<span class="ln${mark}">${i + 1}</span><span class="code">${html || " "}</span>`;
 		}
 
@@ -333,7 +366,7 @@
 		insertRow(at) {
 			const d = document.createElement("div");
 			d.className = "ce-row";
-			d.innerHTML = "<span class=\"ln\"></span><span class=\"code\"> </span>";
+			d.innerHTML = '<span class="ln"></span><span class="code"> </span>';
 			const ref = this.rowEls[at] || null;
 			this.rowsEl.insertBefore(d, ref);
 			this.rowEls.splice(at, 0, d);
@@ -354,7 +387,8 @@
 		}
 
 		renumber(from) {
-			for (let i = from; i < this.rowEls.length; i++) this.rowEls[i].firstChild.textContent = i + 1;
+			for (let i = from; i < this.rowEls.length; i++)
+				this.rowEls[i].firstChild.textContent = i + 1;
 		}
 
 		shiftSets(at, delta) {
@@ -384,8 +418,20 @@
 				e.preventDefault();
 				this.focus();
 				const r = this.content.getBoundingClientRect();
-				const line = Math.max(0, Math.min(this.lines.length - 1, Math.floor((e.clientY - r.top) / this.lineHeight)));
-				const col = Math.max(0, Math.min(this.lines[line].length, Math.round((e.clientX - r.left - this.gutter) / this.cw)));
+				const line = Math.max(
+					0,
+					Math.min(
+						this.lines.length - 1,
+						Math.floor((e.clientY - r.top) / this.lineHeight),
+					),
+				);
+				const col = Math.max(
+					0,
+					Math.min(
+						this.lines[line].length,
+						Math.round((e.clientX - r.left - this.gutter) / this.cw),
+					),
+				);
 				this.caret = { line, col };
 				this.hideSuggest();
 				this.clearSel();
@@ -414,7 +460,10 @@
 			const l = Math.max(0, Math.min(this.lines.length - 1, line));
 			const c = Math.max(0, Math.min(this.lines[l].length, col));
 			const r = this.content.getBoundingClientRect();
-			return [Math.round(r.left + this.gutter + c * this.cw), Math.round(r.top + l * this.lineHeight + this.lineHeight / 2)];
+			return [
+				Math.round(r.left + this.gutter + c * this.cw),
+				Math.round(r.top + l * this.lineHeight + this.lineHeight / 2),
+			];
 		}
 
 		scrollTo(y) {
@@ -457,9 +506,18 @@
 				const after = text.slice(col);
 				let indent = /^ */.exec(text)[0].length;
 				const trimmed = before.trimEnd();
-				if ((this.lang === "py" && trimmed.endsWith(":")) || (this.lang === "c" && trimmed.endsWith("{"))) indent += 4;
-				this.lines[line] = before.replace(/ +$/, "") || (before.trim() ? before : "");
-				this.lines.splice(line + 1, 0, " ".repeat(indent) + after.replace(/^ +/, ""));
+				if (
+					(this.lang === "py" && trimmed.endsWith(":")) ||
+					(this.lang === "c" && trimmed.endsWith("{"))
+				)
+					indent += 4;
+				this.lines[line] =
+					before.replace(/ +$/, "") || (before.trim() ? before : "");
+				this.lines.splice(
+					line + 1,
+					0,
+					" ".repeat(indent) + after.replace(/^ +/, ""),
+				);
 				this.insertRow(line + 1);
 				this.added.add(line + 1);
 				this.edited(line);
@@ -474,7 +532,7 @@
 					if (col <= lead && col % 4 === 0) n = 4;
 					else if (col <= lead) n = col % 4;
 					const pair = text[col - 1] + (text[col] || "");
-					if (["()", "[]", "\"\"", "''"].includes(pair)) {
+					if (["()", "[]", '""', "''"].includes(pair)) {
 						this.lines[line] = text.slice(0, col - 1) + text.slice(col + 1);
 					} else {
 						this.lines[line] = text.slice(0, col - n) + text.slice(col);
@@ -506,17 +564,22 @@
 				this.retokenizeFrom(line);
 			} else if (e.key === "ArrowLeft") {
 				if (col > 0) this.caret.col--;
-				else if (line > 0) this.caret = { line: line - 1, col: this.lines[line - 1].length };
+				else if (line > 0)
+					this.caret = { line: line - 1, col: this.lines[line - 1].length };
 				this.hideSuggest();
 			} else if (e.key === "ArrowRight") {
 				if (col < text.length) this.caret.col++;
-				else if (line < this.lines.length - 1) this.caret = { line: line + 1, col: 0 };
+				else if (line < this.lines.length - 1)
+					this.caret = { line: line + 1, col: 0 };
 				this.hideSuggest();
 			} else if (e.key === "ArrowUp" || e.key === "ArrowDown") {
 				const d = e.key === "ArrowUp" ? -1 : 1;
 				const l = Math.max(0, Math.min(this.lines.length - 1, line + d));
 				this.goalCol = this.goalCol ?? col;
-				this.caret = { line: l, col: Math.min(this.lines[l].length, this.goalCol) };
+				this.caret = {
+					line: l,
+					col: Math.min(this.lines[l].length, this.goalCol),
+				};
 				this.hideSuggest();
 				this.updateCaret(true, true);
 				this.renderRows(this.dirtyRows);
@@ -549,17 +612,32 @@
 			const text = this.lines[line];
 			const next = text[col] || "";
 			const closers = { "(": ")", "[": "]" };
-			if ((ch === ")" || ch === "]" || ch === "\"" || ch === "'") && next === ch) {
+			if (
+				(ch === ")" || ch === "]" || ch === '"' || ch === "'") &&
+				next === ch
+			) {
 				this.caret.col++;
 				this.updateSuggest();
 				return;
 			}
 			let ins = ch;
-			if (closers[ch] && (!next || /[\s)\],:]/.test(next))) ins = ch + closers[ch];
-			else if ((ch === "\"" || ch === "'") && !/\w/.test(text[col - 1] || "") && text[col - 1] !== ch && (!next || /[\s)\],:]/.test(next))) ins = ch + ch;
+			if (closers[ch] && (!next || /[\s)\],:]/.test(next)))
+				ins = ch + closers[ch];
+			else if (
+				(ch === '"' || ch === "'") &&
+				!/\w/.test(text[col - 1] || "") &&
+				text[col - 1] !== ch &&
+				(!next || /[\s)\],:]/.test(next))
+			)
+				ins = ch + ch;
 			let newText = text.slice(0, col) + ins + text.slice(col);
 			let newCol = col + 1;
-			if (this.lang === "c" && ch === "}" && /^ +$/.test(text.slice(0, col)) && col >= 4) {
+			if (
+				this.lang === "c" &&
+				ch === "}" &&
+				/^ +$/.test(text.slice(0, col)) &&
+				col >= 4
+			) {
 				newText = text.slice(0, col - 4) + "}" + text.slice(col);
 				newCol = col - 3;
 			}
@@ -582,16 +660,24 @@
 			if (w.length < 2) return this.hideSuggest();
 			if (!this.vocab) {
 				const counts = new Map();
-				for (const l of this.lines) for (const m of l.matchAll(/[A-Za-z_]\w{2,}/g)) counts.set(m[0], (counts.get(m[0]) || 0) + 1);
-				this.vocab = [...counts.entries()].sort((a, b) => b[1] - a[1]).map((x) => x[0]);
+				for (const l of this.lines)
+					for (const m of l.matchAll(/[A-Za-z_]\w{2,}/g))
+						counts.set(m[0], (counts.get(m[0]) || 0) + 1);
+				this.vocab = [...counts.entries()]
+					.sort((a, b) => b[1] - a[1])
+					.map((x) => x[0]);
 			}
 			const lw = w.toLowerCase();
-			const items = this.vocab.filter((v) => v.toLowerCase().startsWith(lw) && v !== w).slice(0, 8);
+			const items = this.vocab
+				.filter((v) => v.toLowerCase().startsWith(lw) && v !== w)
+				.slice(0, 8);
 			if (!items.length) return this.hideSuggest();
 			const kinds = ["method", "variable", "field", "keyword", "class"];
 			this.suggest.innerHTML = items
 				.map((it, k) => {
-					const kind = /^[A-Z]/.test(it) ? "class" : kinds[(it.length * 7 + k) % 3];
+					const kind = /^[A-Z]/.test(it)
+						? "class"
+						: kinds[(it.length * 7 + k) % 3];
 					return `<div class="sg-item${k === 0 ? " active" : ""}"><span class="sg-icon ${kind}"></span><b>${esc(it.slice(0, w.length))}</b>${esc(it.slice(w.length))}${k === 0 ? `<span class="sg-detail">${kind}</span>` : ""}</div>`;
 				})
 				.join("");
@@ -634,9 +720,13 @@
 			this.caretEl.classList.remove("blink");
 			void this.caretEl.offsetWidth;
 			clearTimeout(this.blinkTimer);
-			this.blinkTimer = setTimeout(() => this.caretEl.classList.add("blink"), 550);
+			this.blinkTimer = setTimeout(
+				() => this.caretEl.classList.add("blink"),
+				550,
+			);
 			const ln = this.rowEls[line] && this.rowEls[line].firstChild;
-			if (this.curLnEl && this.curLnEl !== ln) this.curLnEl.classList.remove("cur");
+			if (this.curLnEl && this.curLnEl !== ln)
+				this.curLnEl.classList.remove("cur");
 			if (ln) ln.classList.add("cur");
 			this.curLnEl = ln;
 			if (reveal) {
@@ -675,7 +765,12 @@
 				for (const seg of text.split(/(\s+)/)) {
 					if (seg && !/^\s+$/.test(seg)) {
 						ctx.fillStyle = colr;
-						ctx.fillRect(x + start * 1, y, seg.length * 1, this.miniLineH - 0.5);
+						ctx.fillRect(
+							x + start * 1,
+							y,
+							seg.length * 1,
+							this.miniLineH - 0.5,
+						);
 					}
 					start += seg.length;
 				}
@@ -685,7 +780,10 @@
 
 		renderMinimapRows(rows) {
 			if (!rows || !rows.size || !this.miniCtx) return;
-			if (this.lines.length * this.miniLineH + 200 > this.mini.height / (window.devicePixelRatio || 1)) {
+			if (
+				this.lines.length * this.miniLineH + 200 >
+				this.mini.height / (window.devicePixelRatio || 1)
+			) {
 				this.renderMinimapFull();
 			} else {
 				const first = Math.min(...rows);
@@ -709,12 +807,28 @@
 			const total = this.lines.length * this.miniLineH;
 			const firstLine = sc.scrollTop / this.lineHeight;
 			const visLines = sc.clientHeight / this.lineHeight;
-			const miniTop = total > mh ? frac * (total + visLines * this.miniLineH - mh) : 0;
+			const miniTop =
+				total > mh ? frac * (total + visLines * this.miniLineH - mh) : 0;
 			ctx.setTransform(1, 0, 0, 1, 0, 0);
 			ctx.clearRect(0, 0, this.minimap.width, this.minimap.height);
-			ctx.drawImage(this.mini, 0, Math.round(miniTop * dpr), this.minimap.width, this.minimap.height, 0, 0, this.minimap.width, this.minimap.height);
+			ctx.drawImage(
+				this.mini,
+				0,
+				Math.round(miniTop * dpr),
+				this.minimap.width,
+				this.minimap.height,
+				0,
+				0,
+				this.minimap.width,
+				this.minimap.height,
+			);
 			ctx.fillStyle = this.minimapColors.slider;
-			ctx.fillRect(0, Math.round((firstLine * this.miniLineH - miniTop) * dpr), this.minimap.width, Math.round(visLines * this.miniLineH * dpr));
+			ctx.fillRect(
+				0,
+				Math.round((firstLine * this.miniLineH - miniTop) * dpr),
+				this.minimap.width,
+				Math.round(visLines * this.miniLineH * dpr),
+			);
 		}
 	}
 

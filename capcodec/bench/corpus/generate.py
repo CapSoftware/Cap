@@ -1,17 +1,4 @@
 #!/usr/bin/env python3
-"""Generate the lossless screen-recording benchmark corpus.
-
-    python3 generate.py --list
-    python3 generate.py --clip slow_typing [--clip dashboard ...]
-    python3 generate.py --all
-    python3 generate.py --all --missing          # only clips without outputs
-    python3 generate.py --clip idle --sideinfo-only
-    python3 generate.py --verify-lossless
-
-Outputs go to $CAPCODEC_CORPUS (default /home/ubuntu/work/corpus); the manifest
-is written next to this script. See README.md for the method.
-"""
-
 import argparse
 import cmath
 import hashlib
@@ -1431,7 +1418,7 @@ def outputs_exist(clip):
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(description="Generate the screen-recording benchmark corpus.")
     ap.add_argument("--clip", action="append", default=[], help="clip name (repeatable)")
     ap.add_argument("--all", action="store_true", help="generate every clip")
     ap.add_argument("--missing", action="store_true", help="with --all: skip clips whose outputs already exist")

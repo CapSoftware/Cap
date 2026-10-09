@@ -1,1464 +1,1148 @@
 {
-  "version": 1,
-  "clips": [
-    {
-      "name": "slow_typing",
-      "file": "slow_typing.mkv",
-      "width": 1920,
-      "height": 1080,
-      "fps": 30,
-      "frames": 1200,
-      "duration_s": 40.0,
-      "sha256": "405b196876613bf31c5f74f1fd9046d808745ddcf01928c3248beea542d58fc3",
-      "tags": [
-        "typing",
-        "text",
-        "light",
-        "docs",
-        "low-motion"
-      ],
-      "description": "Google-Docs-like editor, 15px Liberation Sans body text. Human typing via xdotool (120-250 ms per keystroke, word-level pauses, two typo corrections with BackSpace), one wheel notch down/up, a few mouse moves and clicks.",
-      "device_scale_factor": 1,
-      "page": "pages/docs.html",
-      "text_regions": [
-        [
-          648,
-          153,
-          624,
-          455
-        ],
-        [
-          648,
-          608,
-          624,
-          455
-        ]
-      ],
-      "sideinfo": "slow_typing.sideinfo.jsonl",
-      "events": "slow_typing.events.jsonl",
-      "pointer_samples": "slow_typing.pointer.jsonl",
-      "capture_log": "slow_typing.capture.json",
-      "previews": [
-        "previews/slow_typing_f00000.png",
-        "previews/slow_typing_f00400.png",
-        "previews/slow_typing_f00659.png",
-        "previews/slow_typing_f00800.png",
-        "previews/slow_typing_f01199.png",
-        "previews/slow_typing_sheet.png"
-      ],
-      "avg_dirty_fraction": 0.002112,
-      "identical_frames": 908,
-      "cursor_check": {
-        "frames_with_cursor": 1200,
-        "moved_frames": 97,
-        "moved_frames_with_dirty_hotspot_tile_at_old_and_new_pos": 92,
-        "fraction": 0.9485,
-        "sample_offset_ms": 4,
-        "fraction_at_zero_offset": 0.899,
-        "grab_latency_ms": 0.907,
-        "method": "latest 240 Hz query_pointer sample at or before frame wallclock + sample_offset_ms; offset fitted in [-12, 12] ms (1 ms steps) to maximise frames whose hotspot tile is dirty at both the previous and the new position"
-      },
-      "capture": {
-        "codec": "libx264rgb qp0 (lossless H.264 High 4:4:4 Predictive, GBR), ultrafast, keyint 150",
-        "dropped_frames": 0,
-        "duplicated_frames": 0,
-        "ffmpeg_drop_frames": 0,
-        "ffmpeg_dup_frames": 0,
-        "late_grabs": 0,
-        "max_interval_ms": 35.428,
-        "interval_stdev_ms": 0.493,
-        "method": "ffmpeg x11grab -framerate 30 -draw_mouse 1 -use_wallclock_as_timestamps 1 on Xvfb :99 (1920x1080x24), -fps_mode passthrough, encoder time base = demuxer (us); per-frame wallclock from -stats_enc_pre; remuxed with setts to CFR pts n/fps; Chrome kiosk, --force-device-scale-factor=1"
-      },
-      "scroll_validation": {
-        "frames_with_scroll": 12,
-        "unverifiable_frames": 0,
-        "validated_frames": 12,
-        "fraction": 1.0,
-        "entries": 12,
-        "valid_entries": 12,
-        "unverifiable_entries": 0,
-        "align_counts": {
-          "latency": 12,
-          "realigned": 0,
-          "held": 0,
-          "invalid": 0,
-          "unverifiable": 0
-        },
-        "latency_ms": 24,
-        "latency_frames": 0.72,
-        "latency_only": {
-          "frames_with_scroll": 12,
-          "validated_frames": 12,
-          "fraction": 1.0,
-          "score_at_chosen_latency": [
-            12,
-            12,
-            0
-          ],
-          "score_at_zero_latency": [
-            -11,
-            0,
-            11
-          ]
-        },
-        "match_threshold": 0.9,
-        "residual_max": 0.25
-      },
-      "generator": {
-        "script": "bench/corpus/generate.py",
-        "args": [
-          "--clip",
-          "slow_typing"
-        ]
-      }
-    },
-    {
-      "name": "code_editor",
-      "file": "code_editor.mkv",
-      "width": 1920,
-      "height": 1080,
-      "fps": 30,
-      "frames": 1200,
-      "duration_s": 40.0,
-      "sha256": "d7cd86a27f5d55cf5ccb23d80ceb43f20f8f15535040c034259dc7b1e10fa1f8",
-      "tags": [
-        "code",
-        "typing",
-        "scroll",
-        "text",
-        "light",
-        "monospace"
-      ],
-      "description": "VS Code Light+ workbench on CPython difflib.py, 13px JetBrains Mono. Types a new Python function with auto-indent and IntelliSense popups, saves, then wheel-scrolls (single notches and bursts), PageDown x3, arrow-key caret moves, a click and Ctrl+Home.",
-      "device_scale_factor": 1,
-      "page": "pages/code.html",
-      "text_regions": [
-        [
-          310,
-          91,
-          720,
-          481
-        ],
-        [
-          310,
-          572,
-          720,
-          481
-        ]
-      ],
-      "sideinfo": "code_editor.sideinfo.jsonl",
-      "events": "code_editor.events.jsonl",
-      "pointer_samples": "code_editor.pointer.jsonl",
-      "capture_log": "code_editor.capture.json",
-      "previews": [
-        "previews/code_editor_f00000.png",
-        "previews/code_editor_f00400.png",
-        "previews/code_editor_f00772.png",
-        "previews/code_editor_f00800.png",
-        "previews/code_editor_f01199.png",
-        "previews/code_editor_sheet.png"
-      ],
-      "avg_dirty_fraction": 0.006199,
-      "identical_frames": 864,
-      "cursor_check": {
-        "frames_with_cursor": 1200,
-        "moved_frames": 108,
-        "moved_frames_with_dirty_hotspot_tile_at_old_and_new_pos": 108,
-        "fraction": 1.0,
-        "sample_offset_ms": 4,
-        "fraction_at_zero_offset": 0.963,
-        "grab_latency_ms": 0.994,
-        "method": "latest 240 Hz query_pointer sample at or before frame wallclock + sample_offset_ms; offset fitted in [-12, 12] ms (1 ms steps) to maximise frames whose hotspot tile is dirty at both the previous and the new position"
-      },
-      "capture": {
-        "codec": "libx264rgb qp0 (lossless H.264 High 4:4:4 Predictive, GBR), ultrafast, keyint 150",
-        "dropped_frames": 0,
-        "duplicated_frames": 0,
-        "ffmpeg_drop_frames": 0,
-        "ffmpeg_dup_frames": 0,
-        "late_grabs": 0,
-        "max_interval_ms": 34.564,
-        "interval_stdev_ms": 0.469,
-        "method": "ffmpeg x11grab -framerate 30 -draw_mouse 1 -use_wallclock_as_timestamps 1 on Xvfb :99 (1920x1080x24), -fps_mode passthrough, encoder time base = demuxer (us); per-frame wallclock from -stats_enc_pre; remuxed with setts to CFR pts n/fps; Chrome kiosk, --force-device-scale-factor=1"
-      },
-      "scroll_validation": {
-        "frames_with_scroll": 19,
-        "unverifiable_frames": 1,
-        "validated_frames": 18,
-        "fraction": 1.0,
-        "entries": 19,
-        "valid_entries": 18,
-        "unverifiable_entries": 1,
-        "align_counts": {
-          "latency": 18,
-          "realigned": 0,
-          "held": 0,
-          "invalid": 0,
-          "unverifiable": 1
-        },
-        "latency_ms": 4,
-        "latency_frames": 0.12,
-        "latency_only": {
-          "frames_with_scroll": 18,
-          "validated_frames": 18,
-          "fraction": 1.0,
-          "score_at_chosen_latency": [
-            17,
-            18,
-            1
-          ],
-          "score_at_zero_latency": [
-            17,
-            18,
-            1
-          ]
-        },
-        "match_threshold": 0.9,
-        "residual_max": 0.25
-      },
-      "generator": {
-        "script": "bench/corpus/generate.py",
-        "args": [
-          "--clip",
-          "code_editor"
-        ]
-      }
-    },
-    {
-      "name": "text_scroll",
-      "file": "text_scroll.mkv",
-      "width": 1920,
-      "height": 1080,
-      "fps": 30,
-      "frames": 1200,
-      "duration_s": 40.0,
-      "sha256": "ee286ac6cffa25d01fd244097f4cf8694c525e0bad66ee0fcf31cd8963ad8f1b",
-      "tags": [
-        "scroll",
-        "text",
-        "light",
-        "web",
-        "images"
-      ],
-      "description": "Wikipedia (Vector 2022)-like article with images, tables and references. Wheel scrolling at varying speeds (single smooth notches, fast flicks up and down), link-preview hovers, a drag text selection, a 4.2 s eased smooth scroll and keyboard PageDown.",
-      "device_scale_factor": 1,
-      "page": "pages/article.html",
-      "text_regions": [
-        [
-          458,
-          120,
-          600,
-          440
-        ],
-        [
-          458,
-          580,
-          600,
-          440
-        ]
-      ],
-      "sideinfo": "text_scroll.sideinfo.jsonl",
-      "events": "text_scroll.events.jsonl",
-      "pointer_samples": "text_scroll.pointer.jsonl",
-      "capture_log": "text_scroll.capture.json",
-      "previews": [
-        "previews/text_scroll_f00000.png",
-        "previews/text_scroll_f00069.png",
-        "previews/text_scroll_f00400.png",
-        "previews/text_scroll_f00800.png",
-        "previews/text_scroll_f01199.png",
-        "previews/text_scroll_sheet.png"
-      ],
-      "avg_dirty_fraction": 0.083433,
-      "identical_frames": 892,
-      "cursor_check": {
-        "frames_with_cursor": 1200,
-        "moved_frames": 81,
-        "moved_frames_with_dirty_hotspot_tile_at_old_and_new_pos": 81,
-        "fraction": 1.0,
-        "sample_offset_ms": 0,
-        "fraction_at_zero_offset": 1.0,
-        "grab_latency_ms": 0.991,
-        "method": "latest 240 Hz query_pointer sample at or before frame wallclock + sample_offset_ms; offset fitted in [-12, 12] ms (1 ms steps) to maximise frames whose hotspot tile is dirty at both the previous and the new position"
-      },
-      "capture": {
-        "codec": "libx264rgb qp0 (lossless H.264 High 4:4:4 Predictive, GBR), ultrafast, keyint 150",
-        "dropped_frames": 0,
-        "duplicated_frames": 0,
-        "ffmpeg_drop_frames": 0,
-        "ffmpeg_dup_frames": 0,
-        "late_grabs": 0,
-        "max_interval_ms": 34.423,
-        "interval_stdev_ms": 0.385,
-        "method": "ffmpeg x11grab -framerate 30 -draw_mouse 1 -use_wallclock_as_timestamps 1 on Xvfb :99 (1920x1080x24), -fps_mode passthrough, encoder time base = demuxer (us); per-frame wallclock from -stats_enc_pre; remuxed with setts to CFR pts n/fps; Chrome kiosk, --force-device-scale-factor=1"
-      },
-      "scroll_validation": {
-        "frames_with_scroll": 220,
-        "unverifiable_frames": 0,
-        "validated_frames": 220,
-        "fraction": 1.0,
-        "entries": 220,
-        "valid_entries": 220,
-        "unverifiable_entries": 0,
-        "align_counts": {
-          "latency": 112,
-          "realigned": 108,
-          "held": 0,
-          "invalid": 0,
-          "unverifiable": 0
-        },
-        "latency_ms": 2,
-        "latency_frames": 0.06,
-        "latency_only": {
-          "frames_with_scroll": 221,
-          "validated_frames": 178,
-          "fraction": 0.8054,
-          "score_at_chosen_latency": [
-            135,
-            178,
-            43
-          ],
-          "score_at_zero_latency": [
-            135,
-            178,
-            43
-          ]
-        },
-        "match_threshold": 0.9,
-        "residual_max": 0.25
-      },
-      "generator": {
-        "script": "bench/corpus/generate.py",
-        "args": [
-          "--clip",
-          "text_scroll"
-        ]
-      }
-    },
-    {
-      "name": "slides",
-      "file": "slides.mkv",
-      "width": 1920,
-      "height": 1080,
-      "fps": 30,
-      "frames": 1200,
-      "duration_s": 40.0,
-      "sha256": "0f20ec4335c7be5e2312fbce05086542110577ac376d69a25ec4be2070e0d756",
-      "tags": [
-        "slides",
-        "transitions",
-        "fades",
-        "light"
-      ],
-      "description": "16:9 presentation deck (charts, photo with grain, tables, timeline). Advances every ~3 s with cuts, 600 ms fades and 650 ms push/cover slide-ins, incl. bullet builds, one step back, and a couple of pointer moves.",
-      "device_scale_factor": 1,
-      "page": "pages/slides.html",
-      "text_regions": [
-        [
-          120,
-          80,
-          1400,
-          150
-        ],
-        [
-          120,
-          240,
-          1500,
-          560
-        ]
-      ],
-      "sideinfo": "slides.sideinfo.jsonl",
-      "events": "slides.events.jsonl",
-      "pointer_samples": "slides.pointer.jsonl",
-      "capture_log": "slides.capture.json",
-      "previews": [
-        "previews/slides_f00000.png",
-        "previews/slides_f00080.png",
-        "previews/slides_f00400.png",
-        "previews/slides_f00800.png",
-        "previews/slides_f01199.png",
-        "previews/slides_sheet.png"
-      ],
-      "avg_dirty_fraction": 0.052426,
-      "identical_frames": 913,
-      "cursor_check": {
-        "frames_with_cursor": 1200,
-        "moved_frames": 89,
-        "moved_frames_with_dirty_hotspot_tile_at_old_and_new_pos": 89,
-        "fraction": 1.0,
-        "sample_offset_ms": 2,
-        "fraction_at_zero_offset": 0.9775,
-        "grab_latency_ms": 0.95,
-        "method": "latest 240 Hz query_pointer sample at or before frame wallclock + sample_offset_ms; offset fitted in [-12, 12] ms (1 ms steps) to maximise frames whose hotspot tile is dirty at both the previous and the new position"
-      },
-      "capture": {
-        "codec": "libx264rgb qp0 (lossless H.264 High 4:4:4 Predictive, GBR), ultrafast, keyint 150",
-        "dropped_frames": 0,
-        "duplicated_frames": 0,
-        "ffmpeg_drop_frames": 0,
-        "ffmpeg_dup_frames": 0,
-        "late_grabs": 0,
-        "max_interval_ms": 37.952,
-        "interval_stdev_ms": 0.473,
-        "method": "ffmpeg x11grab -framerate 30 -draw_mouse 1 -use_wallclock_as_timestamps 1 on Xvfb :99 (1920x1080x24), -fps_mode passthrough, encoder time base = demuxer (us); per-frame wallclock from -stats_enc_pre; remuxed with setts to CFR pts n/fps; Chrome kiosk, --force-device-scale-factor=1"
-      },
-      "scroll_validation": {
-        "frames_with_scroll": 0,
-        "unverifiable_frames": 0,
-        "validated_frames": 0,
-        "fraction": null,
-        "entries": 0,
-        "valid_entries": 0,
-        "unverifiable_entries": 0,
-        "align_counts": {
-          "latency": 0,
-          "realigned": 0,
-          "held": 0,
-          "invalid": 0,
-          "unverifiable": 0
-        },
-        "latency_ms": null,
-        "latency_frames": null,
-        "latency_only": {
-          "frames_with_scroll": 0,
-          "validated_frames": 0,
-          "fraction": null,
-          "score_at_chosen_latency": null,
-          "score_at_zero_latency": null
-        },
-        "match_threshold": 0.9,
-        "residual_max": 0.25
-      },
-      "generator": {
-        "script": "bench/corpus/generate.py",
-        "args": [
-          "--clip",
-          "slides"
-        ]
-      }
-    },
-    {
-      "name": "busy_ui",
-      "file": "busy_ui.mkv",
-      "width": 1920,
-      "height": 1080,
-      "fps": 30,
-      "frames": 1200,
-      "duration_s": 40.0,
-      "sha256": "9a2b47e62a82c3eed3a6d2bdcb01001d820053a7065f023f31e0c23adc244605",
-      "tags": [
-        "ui",
-        "pointer",
-        "menus",
-        "drag",
-        "scroll",
-        "light"
-      ],
-      "description": "Dense Linear/Notion-like issue board. The pointer moves almost constantly along curved paths: hover states, tooltips, filter/card/display menus, a details side panel, three card drags with toasts, vertical column scroll and horizontal board scroll.",
-      "device_scale_factor": 1,
-      "page": "pages/board.html",
-      "text_regions": [
-        [
-          4,
-          60,
-          236,
-          560
-        ],
-        [
-          268,
-          152,
-          304,
-          600
-        ],
-        [
-          900,
-          152,
-          304,
-          600
-        ]
-      ],
-      "sideinfo": "busy_ui.sideinfo.jsonl",
-      "events": "busy_ui.events.jsonl",
-      "pointer_samples": "busy_ui.pointer.jsonl",
-      "capture_log": "busy_ui.capture.json",
-      "previews": [
-        "previews/busy_ui_f00000.png",
-        "previews/busy_ui_f00400.png",
-        "previews/busy_ui_f00800.png",
-        "previews/busy_ui_f01073.png",
-        "previews/busy_ui_f01199.png",
-        "previews/busy_ui_sheet.png"
-      ],
-      "avg_dirty_fraction": 0.014476,
-      "identical_frames": 467,
-      "cursor_check": {
-        "frames_with_cursor": 1200,
-        "moved_frames": 642,
-        "moved_frames_with_dirty_hotspot_tile_at_old_and_new_pos": 614,
-        "fraction": 0.9564,
-        "sample_offset_ms": 2,
-        "fraction_at_zero_offset": 0.9314,
-        "grab_latency_ms": 0.951,
-        "method": "latest 240 Hz query_pointer sample at or before frame wallclock + sample_offset_ms; offset fitted in [-12, 12] ms (1 ms steps) to maximise frames whose hotspot tile is dirty at both the previous and the new position"
-      },
-      "capture": {
-        "codec": "libx264rgb qp0 (lossless H.264 High 4:4:4 Predictive, GBR), ultrafast, keyint 150",
-        "dropped_frames": 0,
-        "duplicated_frames": 0,
-        "ffmpeg_drop_frames": 0,
-        "ffmpeg_dup_frames": 0,
-        "late_grabs": 0,
-        "max_interval_ms": 35.189,
-        "interval_stdev_ms": 0.384,
-        "method": "ffmpeg x11grab -framerate 30 -draw_mouse 1 -use_wallclock_as_timestamps 1 on Xvfb :99 (1920x1080x24), -fps_mode passthrough, encoder time base = demuxer (us); per-frame wallclock from -stats_enc_pre; remuxed with setts to CFR pts n/fps; Chrome kiosk, --force-device-scale-factor=1"
-      },
-      "scroll_validation": {
-        "frames_with_scroll": 38,
-        "unverifiable_frames": 0,
-        "validated_frames": 38,
-        "fraction": 1.0,
-        "entries": 38,
-        "valid_entries": 38,
-        "unverifiable_entries": 0,
-        "align_counts": {
-          "latency": 22,
-          "realigned": 16,
-          "held": 1,
-          "invalid": 0,
-          "unverifiable": 0
-        },
-        "latency_ms": 4,
-        "latency_frames": 0.12,
-        "latency_only": {
-          "frames_with_scroll": 39,
-          "validated_frames": 21,
-          "fraction": 0.5385,
-          "score_at_chosen_latency": [
-            3,
-            21,
-            18
-          ],
-          "score_at_zero_latency": [
-            3,
-            21,
-            18
-          ]
-        },
-        "match_threshold": 0.9,
-        "residual_max": 0.25
-      },
-      "generator": {
-        "script": "bench/corpus/generate.py",
-        "args": [
-          "--clip",
-          "busy_ui"
-        ]
-      }
-    },
-    {
-      "name": "dashboard",
-      "file": "dashboard.mkv",
-      "width": 1920,
-      "height": 1080,
-      "fps": 30,
-      "frames": 1200,
-      "duration_s": 40.0,
-      "sha256": "025783d2e2ee7682e284e6d1003c359734feba7f2aa58916d2d24876aea5292a",
-      "tags": [
-        "dashboard",
-        "small-text",
-        "charts",
-        "animation",
-        "light"
-      ],
-      "description": "Analytics dashboard: 11-12px tables, KPI tiles with sparklines, numbers updating every second with flash highlights, two canvas line charts shifting every second (420 ms animation), live event feed; pointer sweeps chart crosshairs/tooltips and hovers table rows.",
-      "device_scale_factor": 1,
-      "page": "pages/dashboard.html",
-      "text_regions": [
-        [
-          35,
-          576,
-          820,
-          400
-        ],
-        [
-          20,
-          66,
-          934,
-          104
-        ],
-        [
-          1296,
-          745,
-          589,
-          320
-        ]
-      ],
-      "sideinfo": "dashboard.sideinfo.jsonl",
-      "events": "dashboard.events.jsonl",
-      "pointer_samples": "dashboard.pointer.jsonl",
-      "capture_log": "dashboard.capture.json",
-      "previews": [
-        "previews/dashboard_f00000.png",
-        "previews/dashboard_f00400.png",
-        "previews/dashboard_f00548.png",
-        "previews/dashboard_f00800.png",
-        "previews/dashboard_f01199.png",
-        "previews/dashboard_sheet.png"
-      ],
-      "avg_dirty_fraction": 0.062966,
-      "identical_frames": 0,
-      "cursor_check": {
-        "frames_with_cursor": 1200,
-        "moved_frames": 582,
-        "moved_frames_with_dirty_hotspot_tile_at_old_and_new_pos": 573,
-        "fraction": 0.9845,
-        "sample_offset_ms": 4,
-        "fraction_at_zero_offset": 0.9416,
-        "grab_latency_ms": 0.993,
-        "method": "latest 240 Hz query_pointer sample at or before frame wallclock + sample_offset_ms; offset fitted in [-12, 12] ms (1 ms steps) to maximise frames whose hotspot tile is dirty at both the previous and the new position"
-      },
-      "capture": {
-        "codec": "libx264rgb qp0 (lossless H.264 High 4:4:4 Predictive, GBR), ultrafast, keyint 150",
-        "dropped_frames": 0,
-        "duplicated_frames": 0,
-        "ffmpeg_drop_frames": 0,
-        "ffmpeg_dup_frames": 0,
-        "late_grabs": 0,
-        "max_interval_ms": 35.541,
-        "interval_stdev_ms": 0.354,
-        "method": "ffmpeg x11grab -framerate 30 -draw_mouse 1 -use_wallclock_as_timestamps 1 on Xvfb :99 (1920x1080x24), -fps_mode passthrough, encoder time base = demuxer (us); per-frame wallclock from -stats_enc_pre; remuxed with setts to CFR pts n/fps; Chrome kiosk, --force-device-scale-factor=1"
-      },
-      "scroll_validation": {
-        "frames_with_scroll": 0,
-        "unverifiable_frames": 0,
-        "validated_frames": 0,
-        "fraction": null,
-        "entries": 0,
-        "valid_entries": 0,
-        "unverifiable_entries": 0,
-        "align_counts": {
-          "latency": 0,
-          "realigned": 0,
-          "held": 0,
-          "invalid": 0,
-          "unverifiable": 0
-        },
-        "latency_ms": null,
-        "latency_frames": null,
-        "latency_only": {
-          "frames_with_scroll": 0,
-          "validated_frames": 0,
-          "fraction": null,
-          "score_at_chosen_latency": null,
-          "score_at_zero_latency": null
-        },
-        "match_threshold": 0.9,
-        "residual_max": 0.25
-      },
-      "generator": {
-        "script": "bench/corpus/generate.py",
-        "args": [
-          "--clip",
-          "dashboard"
-        ]
-      }
-    },
-    {
-      "name": "dark_mode",
-      "file": "dark_mode.mkv",
-      "width": 1920,
-      "height": 1080,
-      "fps": 30,
-      "frames": 1200,
-      "duration_s": 40.0,
-      "sha256": "92840637b541123dae559debe387bc40776e964f2f40a948801ea13e7688676d",
-      "tags": [
-        "code",
-        "dark",
-        "terminal",
-        "scroll",
-        "typing",
-        "monospace"
-      ],
-      "description": "VS Code Dark+ on zlib inflate.c with an integrated terminal streaming libFuzzer logs (auto-scrolling). Ctrl+C, typed git status / make test (build log), a one-line C edit + save, editor wheel scroll, then restarts the fuzzer.",
-      "device_scale_factor": 1,
-      "page": "pages/dark.html",
-      "text_regions": [
-        [
-          310,
-          91,
-          720,
-          559
-        ],
-        [
-          330,
-          692,
-          1100,
-          364
-        ]
-      ],
-      "sideinfo": "dark_mode.sideinfo.jsonl",
-      "events": "dark_mode.events.jsonl",
-      "pointer_samples": "dark_mode.pointer.jsonl",
-      "capture_log": "dark_mode.capture.json",
-      "previews": [
-        "previews/dark_mode_f00000.png",
-        "previews/dark_mode_f00400.png",
-        "previews/dark_mode_f00672.png",
-        "previews/dark_mode_f00800.png",
-        "previews/dark_mode_f01199.png",
-        "previews/dark_mode_sheet.png"
-      ],
-      "avg_dirty_fraction": 0.007266,
-      "identical_frames": 876,
-      "cursor_check": {
-        "frames_with_cursor": 1200,
-        "moved_frames": 131,
-        "moved_frames_with_dirty_hotspot_tile_at_old_and_new_pos": 124,
-        "fraction": 0.9466,
-        "sample_offset_ms": 1,
-        "fraction_at_zero_offset": 0.8931,
-        "grab_latency_ms": 0.975,
-        "method": "latest 240 Hz query_pointer sample at or before frame wallclock + sample_offset_ms; offset fitted in [-12, 12] ms (1 ms steps) to maximise frames whose hotspot tile is dirty at both the previous and the new position"
-      },
-      "capture": {
-        "codec": "libx264rgb qp0 (lossless H.264 High 4:4:4 Predictive, GBR), ultrafast, keyint 150",
-        "dropped_frames": 0,
-        "duplicated_frames": 0,
-        "ffmpeg_drop_frames": 0,
-        "ffmpeg_dup_frames": 0,
-        "late_grabs": 0,
-        "max_interval_ms": 34.45,
-        "interval_stdev_ms": 0.479,
-        "method": "ffmpeg x11grab -framerate 30 -draw_mouse 1 -use_wallclock_as_timestamps 1 on Xvfb :99 (1920x1080x24), -fps_mode passthrough, encoder time base = demuxer (us); per-frame wallclock from -stats_enc_pre; remuxed with setts to CFR pts n/fps; Chrome kiosk, --force-device-scale-factor=1"
-      },
-      "scroll_validation": {
-        "frames_with_scroll": 88,
-        "unverifiable_frames": 0,
-        "validated_frames": 88,
-        "fraction": 1.0,
-        "entries": 88,
-        "valid_entries": 88,
-        "unverifiable_entries": 0,
-        "align_counts": {
-          "latency": 88,
-          "realigned": 0,
-          "held": 0,
-          "invalid": 0,
-          "unverifiable": 0
-        },
-        "latency_ms": 10,
-        "latency_frames": 0.3,
-        "latency_only": {
-          "frames_with_scroll": 88,
-          "validated_frames": 88,
-          "fraction": 1.0,
-          "score_at_chosen_latency": [
-            88,
-            88,
-            0
-          ],
-          "score_at_zero_latency": [
-            6,
-            47,
-            41
-          ]
-        },
-        "match_threshold": 0.9,
-        "residual_max": 0.25
-      },
-      "generator": {
-        "script": "bench/corpus/generate.py",
-        "args": [
-          "--clip",
-          "dark_mode"
-        ]
-      }
-    },
-    {
-      "name": "idle",
-      "file": "idle.mkv",
-      "width": 1920,
-      "height": 1080,
-      "fps": 30,
-      "frames": 1800,
-      "duration_s": 60.0,
-      "sha256": "cf3e3c23d8d1f51b3d654c6cc6480defc79cda9a9e9e979f4faa74af41f3a1d9",
-      "tags": [
-        "idle",
-        "static",
-        "text",
-        "toasts"
-      ],
-      "description": "Desktop-like static scene (PDF viewer window, dock, menu bar). Only the menu-bar clock ticks each second, three notification toasts slide in/out, and the pointer moves four times.",
-      "device_scale_factor": 1,
-      "page": "pages/idle.html",
-      "text_regions": [
-        [
-          712,
-          291,
-          692,
-          214
-        ],
-        [
-          712,
-          804,
-          692,
-          90
-        ]
-      ],
-      "sideinfo": "idle.sideinfo.jsonl",
-      "events": "idle.events.jsonl",
-      "pointer_samples": "idle.pointer.jsonl",
-      "capture_log": "idle.capture.json",
-      "previews": [
-        "previews/idle_f00000.png",
-        "previews/idle_f00600.png",
-        "previews/idle_f01200.png",
-        "previews/idle_f01543.png",
-        "previews/idle_f01799.png",
-        "previews/idle_sheet.png"
-      ],
-      "avg_dirty_fraction": 0.000678,
-      "identical_frames": 1576,
-      "cursor_check": {
-        "frames_with_cursor": 1800,
-        "moved_frames": 104,
-        "moved_frames_with_dirty_hotspot_tile_at_old_and_new_pos": 104,
-        "fraction": 1.0,
-        "sample_offset_ms": 2,
-        "fraction_at_zero_offset": 0.9709,
-        "grab_latency_ms": 0.975,
-        "method": "latest 240 Hz query_pointer sample at or before frame wallclock + sample_offset_ms; offset fitted in [-12, 12] ms (1 ms steps) to maximise frames whose hotspot tile is dirty at both the previous and the new position"
-      },
-      "capture": {
-        "codec": "libx264rgb qp0 (lossless H.264 High 4:4:4 Predictive, GBR), ultrafast, keyint 150",
-        "dropped_frames": 0,
-        "duplicated_frames": 0,
-        "ffmpeg_drop_frames": 0,
-        "ffmpeg_dup_frames": 0,
-        "late_grabs": 0,
-        "max_interval_ms": 34.789,
-        "interval_stdev_ms": 0.419,
-        "method": "ffmpeg x11grab -framerate 30 -draw_mouse 1 -use_wallclock_as_timestamps 1 on Xvfb :99 (1920x1080x24), -fps_mode passthrough, encoder time base = demuxer (us); per-frame wallclock from -stats_enc_pre; remuxed with setts to CFR pts n/fps; Chrome kiosk, --force-device-scale-factor=1"
-      },
-      "scroll_validation": {
-        "frames_with_scroll": 0,
-        "unverifiable_frames": 0,
-        "validated_frames": 0,
-        "fraction": null,
-        "entries": 0,
-        "valid_entries": 0,
-        "unverifiable_entries": 0,
-        "align_counts": {
-          "latency": 0,
-          "realigned": 0,
-          "held": 0,
-          "invalid": 0,
-          "unverifiable": 0
-        },
-        "latency_ms": null,
-        "latency_frames": null,
-        "latency_only": {
-          "frames_with_scroll": 0,
-          "validated_frames": 0,
-          "fraction": null,
-          "score_at_chosen_latency": null,
-          "score_at_zero_latency": null
-        },
-        "match_threshold": 0.9,
-        "residual_max": 0.25
-      },
-      "generator": {
-        "script": "bench/corpus/generate.py",
-        "args": [
-          "--clip",
-          "idle"
-        ]
-      }
-    },
-    {
-      "name": "webcam_overlay",
-      "file": "webcam_overlay.mkv",
-      "width": 1920,
-      "height": 1080,
-      "fps": 30,
-      "frames": 1200,
-      "duration_s": 40.0,
-      "sha256": "e6ebac847d0ea7a28108e37fe408211838099cea7704184c6b35a887c8ee2c3c",
-      "tags": [
-        "webcam",
-        "noise",
-        "slides",
-        "drag",
-        "overlay"
-      ],
-      "description": "Slide deck with a 320px circular webcam bubble rendered on a canvas at 30 fps (moving gradient, head-and-shoulders, blink/talk, per-frame sensor noise). The bubble is dragged to four positions; slides advance every ~4 s.",
-      "device_scale_factor": 1,
-      "page": "pages/slides.html?webcam=1",
-      "text_regions": [
-        [
-          120,
-          80,
-          1400,
-          150
-        ],
-        [
-          120,
-          240,
-          1500,
-          560
-        ]
-      ],
-      "sideinfo": "webcam_overlay.sideinfo.jsonl",
-      "events": "webcam_overlay.events.jsonl",
-      "pointer_samples": "webcam_overlay.pointer.jsonl",
-      "capture_log": "webcam_overlay.capture.json",
-      "previews": [
-        "previews/webcam_overlay_f00000.png",
-        "previews/webcam_overlay_f00181.png",
-        "previews/webcam_overlay_f00400.png",
-        "previews/webcam_overlay_f00800.png",
-        "previews/webcam_overlay_f01199.png",
-        "previews/webcam_overlay_sheet.png"
-      ],
-      "avg_dirty_fraction": 0.087328,
-      "identical_frames": 0,
-      "cursor_check": {
-        "frames_with_cursor": 1200,
-        "moved_frames": 364,
-        "moved_frames_with_dirty_hotspot_tile_at_old_and_new_pos": 359,
-        "fraction": 0.9863,
-        "sample_offset_ms": 2,
-        "fraction_at_zero_offset": 0.9752,
-        "grab_latency_ms": 0.986,
-        "method": "latest 240 Hz query_pointer sample at or before frame wallclock + sample_offset_ms; offset fitted in [-12, 12] ms (1 ms steps) to maximise frames whose hotspot tile is dirty at both the previous and the new position"
-      },
-      "capture": {
-        "codec": "libx264rgb qp0 (lossless H.264 High 4:4:4 Predictive, GBR), ultrafast, keyint 150",
-        "dropped_frames": 0,
-        "duplicated_frames": 0,
-        "ffmpeg_drop_frames": 0,
-        "ffmpeg_dup_frames": 0,
-        "late_grabs": 0,
-        "max_interval_ms": 34.6,
-        "interval_stdev_ms": 0.439,
-        "method": "ffmpeg x11grab -framerate 30 -draw_mouse 1 -use_wallclock_as_timestamps 1 on Xvfb :99 (1920x1080x24), -fps_mode passthrough, encoder time base = demuxer (us); per-frame wallclock from -stats_enc_pre; remuxed with setts to CFR pts n/fps; Chrome kiosk, --force-device-scale-factor=1"
-      },
-      "scroll_validation": {
-        "frames_with_scroll": 0,
-        "unverifiable_frames": 0,
-        "validated_frames": 0,
-        "fraction": null,
-        "entries": 0,
-        "valid_entries": 0,
-        "unverifiable_entries": 0,
-        "align_counts": {
-          "latency": 0,
-          "realigned": 0,
-          "held": 0,
-          "invalid": 0,
-          "unverifiable": 0
-        },
-        "latency_ms": null,
-        "latency_frames": null,
-        "latency_only": {
-          "frames_with_scroll": 0,
-          "validated_frames": 0,
-          "fraction": null,
-          "score_at_chosen_latency": null,
-          "score_at_zero_latency": null
-        },
-        "match_threshold": 0.9,
-        "residual_max": 0.25
-      },
-      "generator": {
-        "script": "bench/corpus/generate.py",
-        "args": [
-          "--clip",
-          "webcam_overlay"
-        ]
-      }
-    },
-    {
-      "name": "busy_ui_60fps",
-      "file": "busy_ui_60fps.mkv",
-      "width": 1920,
-      "height": 1080,
-      "fps": 60,
-      "frames": 1200,
-      "duration_s": 20.0,
-      "sha256": "1c4715bf397d2b9bb41346b636016dfa626155c5216307f2115cf4a403907a8f",
-      "tags": [
-        "ui",
-        "pointer",
-        "60fps",
-        "menus",
-        "drag",
-        "light"
-      ],
-      "description": "busy_ui scenario variant at 60 fps: continuous curved pointer motion and hovers, filter and card menus, a card drag with toast, column wheel scroll.",
-      "device_scale_factor": 1,
-      "page": "pages/board.html",
-      "text_regions": [
-        [
-          4,
-          60,
-          236,
-          560
-        ],
-        [
-          268,
-          152,
-          304,
-          600
-        ],
-        [
-          900,
-          152,
-          304,
-          600
-        ]
-      ],
-      "sideinfo": "busy_ui_60fps.sideinfo.jsonl",
-      "events": "busy_ui_60fps.events.jsonl",
-      "pointer_samples": "busy_ui_60fps.pointer.jsonl",
-      "capture_log": "busy_ui_60fps.capture.json",
-      "previews": [
-        "previews/busy_ui_60fps_f00000.png",
-        "previews/busy_ui_60fps_f00400.png",
-        "previews/busy_ui_60fps_f00730.png",
-        "previews/busy_ui_60fps_f00800.png",
-        "previews/busy_ui_60fps_f01199.png",
-        "previews/busy_ui_60fps_sheet.png"
-      ],
-      "avg_dirty_fraction": 0.006611,
-      "identical_frames": 534,
-      "cursor_check": {
-        "frames_with_cursor": 1200,
-        "moved_frames": 596,
-        "moved_frames_with_dirty_hotspot_tile_at_old_and_new_pos": 567,
-        "fraction": 0.9513,
-        "sample_offset_ms": 2,
-        "fraction_at_zero_offset": 0.9433,
-        "grab_latency_ms": 0.988,
-        "method": "latest 240 Hz query_pointer sample at or before frame wallclock + sample_offset_ms; offset fitted in [-12, 12] ms (1 ms steps) to maximise frames whose hotspot tile is dirty at both the previous and the new position"
-      },
-      "capture": {
-        "codec": "libx264rgb qp0 (lossless H.264 High 4:4:4 Predictive, GBR), ultrafast, keyint 300",
-        "dropped_frames": 0,
-        "duplicated_frames": 0,
-        "ffmpeg_drop_frames": 0,
-        "ffmpeg_dup_frames": 0,
-        "late_grabs": 0,
-        "max_interval_ms": 17.682,
-        "interval_stdev_ms": 0.348,
-        "method": "ffmpeg x11grab -framerate 60 -draw_mouse 1 -use_wallclock_as_timestamps 1 on Xvfb :99 (1920x1080x24), -fps_mode passthrough, encoder time base = demuxer (us); per-frame wallclock from -stats_enc_pre; remuxed with setts to CFR pts n/fps; Chrome kiosk, --force-device-scale-factor=1"
-      },
-      "scroll_validation": {
-        "frames_with_scroll": 31,
-        "unverifiable_frames": 0,
-        "validated_frames": 31,
-        "fraction": 1.0,
-        "entries": 31,
-        "valid_entries": 31,
-        "unverifiable_entries": 0,
-        "align_counts": {
-          "latency": 27,
-          "realigned": 4,
-          "held": 0,
-          "invalid": 0,
-          "unverifiable": 0
-        },
-        "latency_ms": 24,
-        "latency_frames": 1.44,
-        "latency_only": {
-          "frames_with_scroll": 34,
-          "validated_frames": 27,
-          "fraction": 0.7941,
-          "score_at_chosen_latency": [
-            20,
-            27,
-            7
-          ],
-          "score_at_zero_latency": [
-            -29,
-            1,
-            30
-          ]
-        },
-        "match_threshold": 0.9,
-        "residual_max": 0.25
-      },
-      "generator": {
-        "script": "bench/corpus/generate.py",
-        "args": [
-          "--clip",
-          "busy_ui_60fps"
-        ]
-      }
-    },
-    {
-      "name": "code_4k",
-      "file": "code_4k.mkv",
-      "width": 3840,
-      "height": 2160,
-      "fps": 30,
-      "frames": 600,
-      "duration_s": 20.0,
-      "sha256": "99410a781263162a5a8755668b6d159bc1b54500fd341c05f9c30e25d3af00ce",
-      "tags": [
-        "code",
-        "4k",
-        "hidpi",
-        "typing",
-        "scroll",
-        "monospace"
-      ],
-      "description": "3840x2160 (device scale factor 2) VS Code Light+ on difflib.py: types a short function, saves, wheel scroll, PageDown, caret moves.",
-      "device_scale_factor": 2,
-      "page": "pages/code.html",
-      "text_regions": [
-        [
-          620,
-          182,
-          1440,
-          962
-        ],
-        [
-          620,
-          1144,
-          1440,
-          962
-        ]
-      ],
-      "sideinfo": "code_4k.sideinfo.jsonl",
-      "events": "code_4k.events.jsonl",
-      "pointer_samples": "code_4k.pointer.jsonl",
-      "capture_log": "code_4k.capture.json",
-      "previews": [
-        "previews/code_4k_f00000.png",
-        "previews/code_4k_f00200.png",
-        "previews/code_4k_f00400.png",
-        "previews/code_4k_f00433.png",
-        "previews/code_4k_f00599.png",
-        "previews/code_4k_sheet.png"
-      ],
-      "avg_dirty_fraction": 0.005939,
-      "identical_frames": 393,
-      "cursor_check": {
-        "frames_with_cursor": 600,
-        "moved_frames": 67,
-        "moved_frames_with_dirty_hotspot_tile_at_old_and_new_pos": 67,
-        "fraction": 1.0,
-        "sample_offset_ms": 0,
-        "fraction_at_zero_offset": 1.0,
-        "grab_latency_ms": 2.24,
-        "method": "latest 240 Hz query_pointer sample at or before frame wallclock + sample_offset_ms; offset fitted in [-12, 12] ms (1 ms steps) to maximise frames whose hotspot tile is dirty at both the previous and the new position"
-      },
-      "capture": {
-        "codec": "libx264rgb qp0 (lossless H.264 High 4:4:4 Predictive, GBR), ultrafast, keyint 150",
-        "dropped_frames": 0,
-        "duplicated_frames": 0,
-        "ffmpeg_drop_frames": 0,
-        "ffmpeg_dup_frames": 0,
-        "late_grabs": 0,
-        "max_interval_ms": 40.322,
-        "interval_stdev_ms": 1.435,
-        "method": "ffmpeg x11grab -framerate 30 -draw_mouse 1 -use_wallclock_as_timestamps 1 on Xvfb :98 (3840x2160x24), -fps_mode passthrough, encoder time base = demuxer (us); per-frame wallclock from -stats_enc_pre; remuxed with setts to CFR pts n/fps; Chrome kiosk, --force-device-scale-factor=2"
-      },
-      "scroll_validation": {
-        "frames_with_scroll": 11,
-        "unverifiable_frames": 0,
-        "validated_frames": 11,
-        "fraction": 1.0,
-        "entries": 11,
-        "valid_entries": 11,
-        "unverifiable_entries": 0,
-        "align_counts": {
-          "latency": 11,
-          "realigned": 0,
-          "held": 1,
-          "invalid": 0,
-          "unverifiable": 0
-        },
-        "latency_ms": 14,
-        "latency_frames": 0.42,
-        "latency_only": {
-          "frames_with_scroll": 11,
-          "validated_frames": 10,
-          "fraction": 0.9091,
-          "score_at_chosen_latency": [
-            9,
-            10,
-            1
-          ],
-          "score_at_zero_latency": [
-            2,
-            6,
-            4
-          ]
-        },
-        "match_threshold": 0.9,
-        "residual_max": 0.25
-      },
-      "generator": {
-        "script": "bench/corpus/generate.py",
-        "args": [
-          "--clip",
-          "code_4k"
-        ]
-      }
-    },
-    {
-      "name": "full_motion",
-      "file": "full_motion.mkv",
-      "width": 1920,
-      "height": 1080,
-      "fps": 30,
-      "frames": 900,
-      "duration_s": 30.0,
-      "sha256": "de20d89fd2e78ec9a176e84b06263130342ad7a87074ced030252f4e28daa848",
-      "tags": [
-        "video",
-        "natural",
-        "full-motion",
-        "camera-motion",
-        "fine-detail",
-        "worst-case"
-      ],
-      "description": "Natural video full screen (worst case for a screen encoder): Big Buck Bunny 1080p30 (Blender Foundation, CC BY 3.0) played by Chrome in a <video> filling the viewport (object-fit: cover, autoplay muted loop, no controls), source 27.47-57.43 s from a shot cut: slow camera push-in on the burrow under the tree with wind-blown grass and foliage, the dark burrow close-up as the bunny emerges, the bunny stretching in the sunlit meadow. No input; pointer parked bottom-right, hidden (cursor: none, -draw_mouse 0).",
-      "device_scale_factor": 1,
-      "page": "pages/video.html",
-      "text_regions": [],
-      "sideinfo": "full_motion.sideinfo.jsonl",
-      "events": "full_motion.events.jsonl",
-      "pointer_samples": "full_motion.pointer.jsonl",
-      "capture_log": "full_motion.capture.json",
-      "previews": [
-        "previews/full_motion_f00000.png",
-        "previews/full_motion_f00250.png",
-        "previews/full_motion_f00300.png",
-        "previews/full_motion_f00600.png",
-        "previews/full_motion_f00899.png",
-        "previews/full_motion_sheet.png"
-      ],
-      "avg_dirty_fraction": 0.949286,
-      "identical_frames": 0,
-      "cursor_check": {
-        "frames_with_cursor": 0,
-        "moved_frames": 0,
-        "moved_frames_with_dirty_hotspot_tile_at_old_and_new_pos": 0,
-        "fraction": null,
-        "sample_offset_ms": 0,
-        "fraction_at_zero_offset": null,
-        "grab_latency_ms": 0.969,
-        "method": "latest 240 Hz query_pointer sample at or before frame wallclock + sample_offset_ms; offset fitted in [-12, 12] ms (1 ms steps) to maximise frames whose hotspot tile is dirty at both the previous and the new position"
-      },
-      "capture": {
-        "codec": "libx264rgb qp0 (lossless H.264 High 4:4:4 Predictive, GBR), ultrafast, keyint 150",
-        "dropped_frames": 0,
-        "duplicated_frames": 0,
-        "ffmpeg_drop_frames": 0,
-        "ffmpeg_dup_frames": 0,
-        "late_grabs": 0,
-        "max_interval_ms": 35.314,
-        "interval_stdev_ms": 0.241,
-        "method": "ffmpeg x11grab -framerate 30 -draw_mouse 0 -use_wallclock_as_timestamps 1 on Xvfb :99 (1920x1080x24), -fps_mode passthrough, encoder time base = demuxer (us); per-frame wallclock from -stats_enc_pre; remuxed with setts to CFR pts n/fps; Chrome kiosk, --force-device-scale-factor=1; ffmpeg relaunched until its grab grid sat 25.0 +- 4.5 ms after Chrome's video presentation phase (requestVideoFrameCallback expectedDisplayTime), started before the cut and trimmed bit-exactly to the first frame showing it",
-        "phase_lock": {
-          "attempts": 5,
-          "accepted_delta_ms": -0.919,
-          "playback_restarts": 0
-        },
-        "trim": {
-          "raw_frames": 1149,
-          "first_raw_frame": 202,
-          "rvfc_predicted_raw_frame": 202,
-          "verified_bit_exact": true
-        },
-        "runs": {
-          "runs": 2,
-          "max_runs": 3,
-          "policy": "recapture while the playback check shows repeated/skipped source frames or dropped grabs",
-          "rejected": [
-            {
-              "repeated_frames": 1,
-              "skipped_source_frames": 1,
-              "irregular_steps": [
-                {
-                  "frame": 491,
-                  "source_step": 2
-                },
-                {
-                  "frame": 492,
-                  "source_step": 0
-                }
-              ],
-              "identical_frames": 1,
-              "dropped_frames": 0,
-              "phase_lock_delta_ms": 4.211,
-              "chrome_dropped": 0
-            }
-          ]
-        }
-      },
-      "scroll_validation": {
-        "frames_with_scroll": 0,
-        "unverifiable_frames": 0,
-        "validated_frames": 0,
-        "fraction": null,
-        "entries": 0,
-        "valid_entries": 0,
-        "unverifiable_entries": 0,
-        "align_counts": {
-          "latency": 0,
-          "realigned": 0,
-          "held": 0,
-          "invalid": 0,
-          "unverifiable": 0
-        },
-        "latency_ms": null,
-        "latency_frames": null,
-        "latency_only": {
-          "frames_with_scroll": 0,
-          "validated_frames": 0,
-          "fraction": null,
-          "score_at_chosen_latency": null,
-          "score_at_zero_latency": null
-        },
-        "match_threshold": 0.9,
-        "residual_max": 0.25
-      },
-      "generator": {
-        "script": "bench/corpus/generate.py",
-        "args": [
-          "--clip",
-          "full_motion"
-        ]
-      },
-      "source_video": {
-        "title": "Big Buck Bunny (2013 'sunflower' edition, 1920x1080, 30 fps, H.264 High, ~3 Mbit/s)",
-        "url": "https://download.blender.org/demo/movies/BBB/bbb_sunflower_1080p_30fps_normal.mp4.zip",
-        "homepage": "https://peach.blender.org/",
-        "licence": "CC BY 3.0",
-        "licence_url": "https://creativecommons.org/licenses/by/3.0/",
-        "attribution": "Big Buck Bunny, (c) copyright 2008, Blender Foundation / www.bigbuckbunny.org",
-        "zip_sha256": "e320fef389ec749117d0c1583945039266a40f25483881c2ff0d33207e62b362",
-        "sha256": "ae51005850b0ff757fe60c3dd7a12d754d3cd2397d87d939b55235e457f97658",
-        "cache_dir": "/home/ubuntu/work/cache/capcodec-corpus",
-        "segment": {
-          "file": "bbb_sunflower_1080p_30fps_normal_from16.300s_1325f.mp4",
-          "sha256": "2f8170a7d990bb5f28c712091764bded2dec247f21b12e5c8dd7424848c5be2a",
-          "start_s": 16.3,
-          "frames": 1325,
-          "source_first_frame_index": 487,
-          "method": "ffmpeg -ss START -i SOURCE -map 0:v:0 -c copy -an (starts on a keyframe; no re-encode); every decoded frame verified identical (framemd5) to the matching source frame"
-        },
-        "clip_source_range_s": [
-          27.466667,
-          57.433333
-        ],
-        "clip_segment_frames": [
-          335,
-          1234
-        ],
-        "transcoded": false,
-        "playback": "Chrome <video> (software H.264 decode of the original stream), muted, loop, object-fit: cover, 1:1 pixels at 1920x1080"
-      },
-      "playback_check": {
-        "frames": 900,
-        "source_first": 335,
-        "source_last": 1234,
-        "source_steps": {
-          "1": 899
-        },
-        "repeated_frames": 0,
-        "skipped_source_frames": 0,
-        "backward_steps": 0,
-        "irregular_steps": [],
-        "match_distance": {
-          "median": 0.0006,
-          "p99": 0.0009,
-          "max": 0.0009
-        },
-        "next_best_distance_ratio": {
-          "min": 1.114,
-          "p01": 2.918,
-          "median": 20.976
-        },
-        "frames_with_next_best_ratio_below_2": 2,
-        "source_first_expected": 335,
-        "source_last_expected": 1234,
-        "chrome_presentation": {
-          "callbacks": 900,
-          "media_time_steps_frames": {
-            "1": 899
-          },
-          "presented_frames_steps": {
-            "1": 899
-          },
-          "expected_display_interval_vsyncs": {
-            "2": 899
-          },
-          "expected_display_interval_ms": {
-            "mean": 33.3319,
-            "stdev": 0.058
-          }
-        },
-        "chrome_video_quality": {
-          "samples_during_clip": 7,
-          "dropped_during_clip": 0,
-          "decoded_during_clip": 858,
-          "dropped_total_at_end": 0,
-          "decoded_total_at_end": 1289
-        },
-        "dirty_fraction_per_frame": {
-          "min": 0.085556,
-          "p01": 0.663677,
-          "p05": 0.825179,
-          "median": 0.972346,
-          "frames_ge_0_99": 360,
-          "frames_ge_0_95": 580,
-          "frames_ge_0_90": 763,
-          "frames_lt_0_50": 4,
-          "frames_considered": 899
-        },
-        "dirty_vs_source": {
-          "frames_compared": 899,
-          "source_mean": 0.94935,
-          "captured_mean": 0.949286,
-          "mean_abs_diff": 6.4e-05,
-          "max_abs_diff": 0.001111,
-          "correlation": 0.999998
-        },
-        "method": "captured and source frames area-downscaled to 480x270 luma, high-passed and normalised (playback.py); each captured frame matched to a source frame by 1 - normalised cross-correlation along a monotonic Viterbi path (offset band +-6, 0.004 per offset change); repeated_frames and skipped_source_frames count source steps of 0 and >1 between consecutive captured frames"
-      },
-      "playback": "full_motion.playback.json"
-    }
-  ],
-  "corpus_dir": "/home/ubuntu/work/corpus",
-  "lossless_check": {
-    "method": "single x11grab input -> (a) rawvideo NUT and (b) libx264rgb -preset ultrafast -qp 0 in one ffmpeg run; framemd5 of both decoded to bgr0 compared frame by frame",
-    "results": [
-      {
-        "resolution": "1920x1080",
-        "fps": 30,
-        "frames_compared": 90,
-        "frames_identical": 90,
-        "distinct_frames": 90,
-        "lossless": true
-      },
-      {
-        "resolution": "3840x2160",
-        "fps": 30,
-        "frames_compared": 90,
-        "frames_identical": 90,
-        "distinct_frames": 89,
-        "lossless": true
-      }
-    ],
-    "lossless": true,
-    "checked_at": "2026-10-07T05:27:27+0000"
-  }
+	"version": 1,
+	"clips": [
+		{
+			"name": "slow_typing",
+			"file": "slow_typing.mkv",
+			"width": 1920,
+			"height": 1080,
+			"fps": 30,
+			"frames": 1200,
+			"duration_s": 40.0,
+			"sha256": "405b196876613bf31c5f74f1fd9046d808745ddcf01928c3248beea542d58fc3",
+			"tags": ["typing", "text", "light", "docs", "low-motion"],
+			"description": "Google-Docs-like editor, 15px Liberation Sans body text. Human typing via xdotool (120-250 ms per keystroke, word-level pauses, two typo corrections with BackSpace), one wheel notch down/up, a few mouse moves and clicks.",
+			"device_scale_factor": 1,
+			"page": "pages/docs.html",
+			"text_regions": [[648, 153, 624, 455], [648, 608, 624, 455]],
+			"sideinfo": "slow_typing.sideinfo.jsonl",
+			"events": "slow_typing.events.jsonl",
+			"pointer_samples": "slow_typing.pointer.jsonl",
+			"capture_log": "slow_typing.capture.json",
+			"previews": [
+				"previews/slow_typing_f00000.png",
+				"previews/slow_typing_f00400.png",
+				"previews/slow_typing_f00659.png",
+				"previews/slow_typing_f00800.png",
+				"previews/slow_typing_f01199.png",
+				"previews/slow_typing_sheet.png"
+			],
+			"avg_dirty_fraction": 0.002112,
+			"identical_frames": 908,
+			"cursor_check": {
+				"frames_with_cursor": 1200,
+				"moved_frames": 97,
+				"moved_frames_with_dirty_hotspot_tile_at_old_and_new_pos": 92,
+				"fraction": 0.9485,
+				"sample_offset_ms": 4,
+				"fraction_at_zero_offset": 0.899,
+				"grab_latency_ms": 0.907,
+				"method": "latest 240 Hz query_pointer sample at or before frame wallclock + sample_offset_ms; offset fitted in [-12, 12] ms (1 ms steps) to maximise frames whose hotspot tile is dirty at both the previous and the new position"
+			},
+			"capture": {
+				"codec": "libx264rgb qp0 (lossless H.264 High 4:4:4 Predictive, GBR), ultrafast, keyint 150",
+				"dropped_frames": 0,
+				"duplicated_frames": 0,
+				"ffmpeg_drop_frames": 0,
+				"ffmpeg_dup_frames": 0,
+				"late_grabs": 0,
+				"max_interval_ms": 35.428,
+				"interval_stdev_ms": 0.493,
+				"method": "ffmpeg x11grab -framerate 30 -draw_mouse 1 -use_wallclock_as_timestamps 1 on Xvfb :99 (1920x1080x24), -fps_mode passthrough, encoder time base = demuxer (us); per-frame wallclock from -stats_enc_pre; remuxed with setts to CFR pts n/fps; Chrome kiosk, --force-device-scale-factor=1"
+			},
+			"scroll_validation": {
+				"frames_with_scroll": 12,
+				"unverifiable_frames": 0,
+				"validated_frames": 12,
+				"fraction": 1.0,
+				"entries": 12,
+				"valid_entries": 12,
+				"unverifiable_entries": 0,
+				"align_counts": {
+					"latency": 12,
+					"realigned": 0,
+					"held": 0,
+					"invalid": 0,
+					"unverifiable": 0
+				},
+				"latency_ms": 24,
+				"latency_frames": 0.72,
+				"latency_only": {
+					"frames_with_scroll": 12,
+					"validated_frames": 12,
+					"fraction": 1.0,
+					"score_at_chosen_latency": [12, 12, 0],
+					"score_at_zero_latency": [-11, 0, 11]
+				},
+				"match_threshold": 0.9,
+				"residual_max": 0.25
+			},
+			"generator": {
+				"script": "bench/corpus/generate.py",
+				"args": ["--clip", "slow_typing"]
+			}
+		},
+		{
+			"name": "code_editor",
+			"file": "code_editor.mkv",
+			"width": 1920,
+			"height": 1080,
+			"fps": 30,
+			"frames": 1200,
+			"duration_s": 40.0,
+			"sha256": "d7cd86a27f5d55cf5ccb23d80ceb43f20f8f15535040c034259dc7b1e10fa1f8",
+			"tags": ["code", "typing", "scroll", "text", "light", "monospace"],
+			"description": "VS Code Light+ workbench on CPython difflib.py, 13px JetBrains Mono. Types a new Python function with auto-indent and IntelliSense popups, saves, then wheel-scrolls (single notches and bursts), PageDown x3, arrow-key caret moves, a click and Ctrl+Home.",
+			"device_scale_factor": 1,
+			"page": "pages/code.html",
+			"text_regions": [[310, 91, 720, 481], [310, 572, 720, 481]],
+			"sideinfo": "code_editor.sideinfo.jsonl",
+			"events": "code_editor.events.jsonl",
+			"pointer_samples": "code_editor.pointer.jsonl",
+			"capture_log": "code_editor.capture.json",
+			"previews": [
+				"previews/code_editor_f00000.png",
+				"previews/code_editor_f00400.png",
+				"previews/code_editor_f00772.png",
+				"previews/code_editor_f00800.png",
+				"previews/code_editor_f01199.png",
+				"previews/code_editor_sheet.png"
+			],
+			"avg_dirty_fraction": 0.006199,
+			"identical_frames": 864,
+			"cursor_check": {
+				"frames_with_cursor": 1200,
+				"moved_frames": 108,
+				"moved_frames_with_dirty_hotspot_tile_at_old_and_new_pos": 108,
+				"fraction": 1.0,
+				"sample_offset_ms": 4,
+				"fraction_at_zero_offset": 0.963,
+				"grab_latency_ms": 0.994,
+				"method": "latest 240 Hz query_pointer sample at or before frame wallclock + sample_offset_ms; offset fitted in [-12, 12] ms (1 ms steps) to maximise frames whose hotspot tile is dirty at both the previous and the new position"
+			},
+			"capture": {
+				"codec": "libx264rgb qp0 (lossless H.264 High 4:4:4 Predictive, GBR), ultrafast, keyint 150",
+				"dropped_frames": 0,
+				"duplicated_frames": 0,
+				"ffmpeg_drop_frames": 0,
+				"ffmpeg_dup_frames": 0,
+				"late_grabs": 0,
+				"max_interval_ms": 34.564,
+				"interval_stdev_ms": 0.469,
+				"method": "ffmpeg x11grab -framerate 30 -draw_mouse 1 -use_wallclock_as_timestamps 1 on Xvfb :99 (1920x1080x24), -fps_mode passthrough, encoder time base = demuxer (us); per-frame wallclock from -stats_enc_pre; remuxed with setts to CFR pts n/fps; Chrome kiosk, --force-device-scale-factor=1"
+			},
+			"scroll_validation": {
+				"frames_with_scroll": 19,
+				"unverifiable_frames": 1,
+				"validated_frames": 18,
+				"fraction": 1.0,
+				"entries": 19,
+				"valid_entries": 18,
+				"unverifiable_entries": 1,
+				"align_counts": {
+					"latency": 18,
+					"realigned": 0,
+					"held": 0,
+					"invalid": 0,
+					"unverifiable": 1
+				},
+				"latency_ms": 4,
+				"latency_frames": 0.12,
+				"latency_only": {
+					"frames_with_scroll": 18,
+					"validated_frames": 18,
+					"fraction": 1.0,
+					"score_at_chosen_latency": [17, 18, 1],
+					"score_at_zero_latency": [17, 18, 1]
+				},
+				"match_threshold": 0.9,
+				"residual_max": 0.25
+			},
+			"generator": {
+				"script": "bench/corpus/generate.py",
+				"args": ["--clip", "code_editor"]
+			}
+		},
+		{
+			"name": "text_scroll",
+			"file": "text_scroll.mkv",
+			"width": 1920,
+			"height": 1080,
+			"fps": 30,
+			"frames": 1200,
+			"duration_s": 40.0,
+			"sha256": "ee286ac6cffa25d01fd244097f4cf8694c525e0bad66ee0fcf31cd8963ad8f1b",
+			"tags": ["scroll", "text", "light", "web", "images"],
+			"description": "Wikipedia (Vector 2022)-like article with images, tables and references. Wheel scrolling at varying speeds (single smooth notches, fast flicks up and down), link-preview hovers, a drag text selection, a 4.2 s eased smooth scroll and keyboard PageDown.",
+			"device_scale_factor": 1,
+			"page": "pages/article.html",
+			"text_regions": [[458, 120, 600, 440], [458, 580, 600, 440]],
+			"sideinfo": "text_scroll.sideinfo.jsonl",
+			"events": "text_scroll.events.jsonl",
+			"pointer_samples": "text_scroll.pointer.jsonl",
+			"capture_log": "text_scroll.capture.json",
+			"previews": [
+				"previews/text_scroll_f00000.png",
+				"previews/text_scroll_f00069.png",
+				"previews/text_scroll_f00400.png",
+				"previews/text_scroll_f00800.png",
+				"previews/text_scroll_f01199.png",
+				"previews/text_scroll_sheet.png"
+			],
+			"avg_dirty_fraction": 0.083433,
+			"identical_frames": 892,
+			"cursor_check": {
+				"frames_with_cursor": 1200,
+				"moved_frames": 81,
+				"moved_frames_with_dirty_hotspot_tile_at_old_and_new_pos": 81,
+				"fraction": 1.0,
+				"sample_offset_ms": 0,
+				"fraction_at_zero_offset": 1.0,
+				"grab_latency_ms": 0.991,
+				"method": "latest 240 Hz query_pointer sample at or before frame wallclock + sample_offset_ms; offset fitted in [-12, 12] ms (1 ms steps) to maximise frames whose hotspot tile is dirty at both the previous and the new position"
+			},
+			"capture": {
+				"codec": "libx264rgb qp0 (lossless H.264 High 4:4:4 Predictive, GBR), ultrafast, keyint 150",
+				"dropped_frames": 0,
+				"duplicated_frames": 0,
+				"ffmpeg_drop_frames": 0,
+				"ffmpeg_dup_frames": 0,
+				"late_grabs": 0,
+				"max_interval_ms": 34.423,
+				"interval_stdev_ms": 0.385,
+				"method": "ffmpeg x11grab -framerate 30 -draw_mouse 1 -use_wallclock_as_timestamps 1 on Xvfb :99 (1920x1080x24), -fps_mode passthrough, encoder time base = demuxer (us); per-frame wallclock from -stats_enc_pre; remuxed with setts to CFR pts n/fps; Chrome kiosk, --force-device-scale-factor=1"
+			},
+			"scroll_validation": {
+				"frames_with_scroll": 220,
+				"unverifiable_frames": 0,
+				"validated_frames": 220,
+				"fraction": 1.0,
+				"entries": 220,
+				"valid_entries": 220,
+				"unverifiable_entries": 0,
+				"align_counts": {
+					"latency": 112,
+					"realigned": 108,
+					"held": 0,
+					"invalid": 0,
+					"unverifiable": 0
+				},
+				"latency_ms": 2,
+				"latency_frames": 0.06,
+				"latency_only": {
+					"frames_with_scroll": 221,
+					"validated_frames": 178,
+					"fraction": 0.8054,
+					"score_at_chosen_latency": [135, 178, 43],
+					"score_at_zero_latency": [135, 178, 43]
+				},
+				"match_threshold": 0.9,
+				"residual_max": 0.25
+			},
+			"generator": {
+				"script": "bench/corpus/generate.py",
+				"args": ["--clip", "text_scroll"]
+			}
+		},
+		{
+			"name": "slides",
+			"file": "slides.mkv",
+			"width": 1920,
+			"height": 1080,
+			"fps": 30,
+			"frames": 1200,
+			"duration_s": 40.0,
+			"sha256": "0f20ec4335c7be5e2312fbce05086542110577ac376d69a25ec4be2070e0d756",
+			"tags": ["slides", "transitions", "fades", "light"],
+			"description": "16:9 presentation deck (charts, photo with grain, tables, timeline). Advances every ~3 s with cuts, 600 ms fades and 650 ms push/cover slide-ins, incl. bullet builds, one step back, and a couple of pointer moves.",
+			"device_scale_factor": 1,
+			"page": "pages/slides.html",
+			"text_regions": [[120, 80, 1400, 150], [120, 240, 1500, 560]],
+			"sideinfo": "slides.sideinfo.jsonl",
+			"events": "slides.events.jsonl",
+			"pointer_samples": "slides.pointer.jsonl",
+			"capture_log": "slides.capture.json",
+			"previews": [
+				"previews/slides_f00000.png",
+				"previews/slides_f00080.png",
+				"previews/slides_f00400.png",
+				"previews/slides_f00800.png",
+				"previews/slides_f01199.png",
+				"previews/slides_sheet.png"
+			],
+			"avg_dirty_fraction": 0.052426,
+			"identical_frames": 913,
+			"cursor_check": {
+				"frames_with_cursor": 1200,
+				"moved_frames": 89,
+				"moved_frames_with_dirty_hotspot_tile_at_old_and_new_pos": 89,
+				"fraction": 1.0,
+				"sample_offset_ms": 2,
+				"fraction_at_zero_offset": 0.9775,
+				"grab_latency_ms": 0.95,
+				"method": "latest 240 Hz query_pointer sample at or before frame wallclock + sample_offset_ms; offset fitted in [-12, 12] ms (1 ms steps) to maximise frames whose hotspot tile is dirty at both the previous and the new position"
+			},
+			"capture": {
+				"codec": "libx264rgb qp0 (lossless H.264 High 4:4:4 Predictive, GBR), ultrafast, keyint 150",
+				"dropped_frames": 0,
+				"duplicated_frames": 0,
+				"ffmpeg_drop_frames": 0,
+				"ffmpeg_dup_frames": 0,
+				"late_grabs": 0,
+				"max_interval_ms": 37.952,
+				"interval_stdev_ms": 0.473,
+				"method": "ffmpeg x11grab -framerate 30 -draw_mouse 1 -use_wallclock_as_timestamps 1 on Xvfb :99 (1920x1080x24), -fps_mode passthrough, encoder time base = demuxer (us); per-frame wallclock from -stats_enc_pre; remuxed with setts to CFR pts n/fps; Chrome kiosk, --force-device-scale-factor=1"
+			},
+			"scroll_validation": {
+				"frames_with_scroll": 0,
+				"unverifiable_frames": 0,
+				"validated_frames": 0,
+				"fraction": null,
+				"entries": 0,
+				"valid_entries": 0,
+				"unverifiable_entries": 0,
+				"align_counts": {
+					"latency": 0,
+					"realigned": 0,
+					"held": 0,
+					"invalid": 0,
+					"unverifiable": 0
+				},
+				"latency_ms": null,
+				"latency_frames": null,
+				"latency_only": {
+					"frames_with_scroll": 0,
+					"validated_frames": 0,
+					"fraction": null,
+					"score_at_chosen_latency": null,
+					"score_at_zero_latency": null
+				},
+				"match_threshold": 0.9,
+				"residual_max": 0.25
+			},
+			"generator": {
+				"script": "bench/corpus/generate.py",
+				"args": ["--clip", "slides"]
+			}
+		},
+		{
+			"name": "busy_ui",
+			"file": "busy_ui.mkv",
+			"width": 1920,
+			"height": 1080,
+			"fps": 30,
+			"frames": 1200,
+			"duration_s": 40.0,
+			"sha256": "9a2b47e62a82c3eed3a6d2bdcb01001d820053a7065f023f31e0c23adc244605",
+			"tags": ["ui", "pointer", "menus", "drag", "scroll", "light"],
+			"description": "Dense Linear/Notion-like issue board. The pointer moves almost constantly along curved paths: hover states, tooltips, filter/card/display menus, a details side panel, three card drags with toasts, vertical column scroll and horizontal board scroll.",
+			"device_scale_factor": 1,
+			"page": "pages/board.html",
+			"text_regions": [
+				[4, 60, 236, 560],
+				[268, 152, 304, 600],
+				[900, 152, 304, 600]
+			],
+			"sideinfo": "busy_ui.sideinfo.jsonl",
+			"events": "busy_ui.events.jsonl",
+			"pointer_samples": "busy_ui.pointer.jsonl",
+			"capture_log": "busy_ui.capture.json",
+			"previews": [
+				"previews/busy_ui_f00000.png",
+				"previews/busy_ui_f00400.png",
+				"previews/busy_ui_f00800.png",
+				"previews/busy_ui_f01073.png",
+				"previews/busy_ui_f01199.png",
+				"previews/busy_ui_sheet.png"
+			],
+			"avg_dirty_fraction": 0.014476,
+			"identical_frames": 467,
+			"cursor_check": {
+				"frames_with_cursor": 1200,
+				"moved_frames": 642,
+				"moved_frames_with_dirty_hotspot_tile_at_old_and_new_pos": 614,
+				"fraction": 0.9564,
+				"sample_offset_ms": 2,
+				"fraction_at_zero_offset": 0.9314,
+				"grab_latency_ms": 0.951,
+				"method": "latest 240 Hz query_pointer sample at or before frame wallclock + sample_offset_ms; offset fitted in [-12, 12] ms (1 ms steps) to maximise frames whose hotspot tile is dirty at both the previous and the new position"
+			},
+			"capture": {
+				"codec": "libx264rgb qp0 (lossless H.264 High 4:4:4 Predictive, GBR), ultrafast, keyint 150",
+				"dropped_frames": 0,
+				"duplicated_frames": 0,
+				"ffmpeg_drop_frames": 0,
+				"ffmpeg_dup_frames": 0,
+				"late_grabs": 0,
+				"max_interval_ms": 35.189,
+				"interval_stdev_ms": 0.384,
+				"method": "ffmpeg x11grab -framerate 30 -draw_mouse 1 -use_wallclock_as_timestamps 1 on Xvfb :99 (1920x1080x24), -fps_mode passthrough, encoder time base = demuxer (us); per-frame wallclock from -stats_enc_pre; remuxed with setts to CFR pts n/fps; Chrome kiosk, --force-device-scale-factor=1"
+			},
+			"scroll_validation": {
+				"frames_with_scroll": 38,
+				"unverifiable_frames": 0,
+				"validated_frames": 38,
+				"fraction": 1.0,
+				"entries": 38,
+				"valid_entries": 38,
+				"unverifiable_entries": 0,
+				"align_counts": {
+					"latency": 22,
+					"realigned": 16,
+					"held": 1,
+					"invalid": 0,
+					"unverifiable": 0
+				},
+				"latency_ms": 4,
+				"latency_frames": 0.12,
+				"latency_only": {
+					"frames_with_scroll": 39,
+					"validated_frames": 21,
+					"fraction": 0.5385,
+					"score_at_chosen_latency": [3, 21, 18],
+					"score_at_zero_latency": [3, 21, 18]
+				},
+				"match_threshold": 0.9,
+				"residual_max": 0.25
+			},
+			"generator": {
+				"script": "bench/corpus/generate.py",
+				"args": ["--clip", "busy_ui"]
+			}
+		},
+		{
+			"name": "dashboard",
+			"file": "dashboard.mkv",
+			"width": 1920,
+			"height": 1080,
+			"fps": 30,
+			"frames": 1200,
+			"duration_s": 40.0,
+			"sha256": "025783d2e2ee7682e284e6d1003c359734feba7f2aa58916d2d24876aea5292a",
+			"tags": ["dashboard", "small-text", "charts", "animation", "light"],
+			"description": "Analytics dashboard: 11-12px tables, KPI tiles with sparklines, numbers updating every second with flash highlights, two canvas line charts shifting every second (420 ms animation), live event feed; pointer sweeps chart crosshairs/tooltips and hovers table rows.",
+			"device_scale_factor": 1,
+			"page": "pages/dashboard.html",
+			"text_regions": [
+				[35, 576, 820, 400],
+				[20, 66, 934, 104],
+				[1296, 745, 589, 320]
+			],
+			"sideinfo": "dashboard.sideinfo.jsonl",
+			"events": "dashboard.events.jsonl",
+			"pointer_samples": "dashboard.pointer.jsonl",
+			"capture_log": "dashboard.capture.json",
+			"previews": [
+				"previews/dashboard_f00000.png",
+				"previews/dashboard_f00400.png",
+				"previews/dashboard_f00548.png",
+				"previews/dashboard_f00800.png",
+				"previews/dashboard_f01199.png",
+				"previews/dashboard_sheet.png"
+			],
+			"avg_dirty_fraction": 0.062966,
+			"identical_frames": 0,
+			"cursor_check": {
+				"frames_with_cursor": 1200,
+				"moved_frames": 582,
+				"moved_frames_with_dirty_hotspot_tile_at_old_and_new_pos": 573,
+				"fraction": 0.9845,
+				"sample_offset_ms": 4,
+				"fraction_at_zero_offset": 0.9416,
+				"grab_latency_ms": 0.993,
+				"method": "latest 240 Hz query_pointer sample at or before frame wallclock + sample_offset_ms; offset fitted in [-12, 12] ms (1 ms steps) to maximise frames whose hotspot tile is dirty at both the previous and the new position"
+			},
+			"capture": {
+				"codec": "libx264rgb qp0 (lossless H.264 High 4:4:4 Predictive, GBR), ultrafast, keyint 150",
+				"dropped_frames": 0,
+				"duplicated_frames": 0,
+				"ffmpeg_drop_frames": 0,
+				"ffmpeg_dup_frames": 0,
+				"late_grabs": 0,
+				"max_interval_ms": 35.541,
+				"interval_stdev_ms": 0.354,
+				"method": "ffmpeg x11grab -framerate 30 -draw_mouse 1 -use_wallclock_as_timestamps 1 on Xvfb :99 (1920x1080x24), -fps_mode passthrough, encoder time base = demuxer (us); per-frame wallclock from -stats_enc_pre; remuxed with setts to CFR pts n/fps; Chrome kiosk, --force-device-scale-factor=1"
+			},
+			"scroll_validation": {
+				"frames_with_scroll": 0,
+				"unverifiable_frames": 0,
+				"validated_frames": 0,
+				"fraction": null,
+				"entries": 0,
+				"valid_entries": 0,
+				"unverifiable_entries": 0,
+				"align_counts": {
+					"latency": 0,
+					"realigned": 0,
+					"held": 0,
+					"invalid": 0,
+					"unverifiable": 0
+				},
+				"latency_ms": null,
+				"latency_frames": null,
+				"latency_only": {
+					"frames_with_scroll": 0,
+					"validated_frames": 0,
+					"fraction": null,
+					"score_at_chosen_latency": null,
+					"score_at_zero_latency": null
+				},
+				"match_threshold": 0.9,
+				"residual_max": 0.25
+			},
+			"generator": {
+				"script": "bench/corpus/generate.py",
+				"args": ["--clip", "dashboard"]
+			}
+		},
+		{
+			"name": "dark_mode",
+			"file": "dark_mode.mkv",
+			"width": 1920,
+			"height": 1080,
+			"fps": 30,
+			"frames": 1200,
+			"duration_s": 40.0,
+			"sha256": "92840637b541123dae559debe387bc40776e964f2f40a948801ea13e7688676d",
+			"tags": ["code", "dark", "terminal", "scroll", "typing", "monospace"],
+			"description": "VS Code Dark+ on zlib inflate.c with an integrated terminal streaming libFuzzer logs (auto-scrolling). Ctrl+C, typed git status / make test (build log), a one-line C edit + save, editor wheel scroll, then restarts the fuzzer.",
+			"device_scale_factor": 1,
+			"page": "pages/dark.html",
+			"text_regions": [[310, 91, 720, 559], [330, 692, 1100, 364]],
+			"sideinfo": "dark_mode.sideinfo.jsonl",
+			"events": "dark_mode.events.jsonl",
+			"pointer_samples": "dark_mode.pointer.jsonl",
+			"capture_log": "dark_mode.capture.json",
+			"previews": [
+				"previews/dark_mode_f00000.png",
+				"previews/dark_mode_f00400.png",
+				"previews/dark_mode_f00672.png",
+				"previews/dark_mode_f00800.png",
+				"previews/dark_mode_f01199.png",
+				"previews/dark_mode_sheet.png"
+			],
+			"avg_dirty_fraction": 0.007266,
+			"identical_frames": 876,
+			"cursor_check": {
+				"frames_with_cursor": 1200,
+				"moved_frames": 131,
+				"moved_frames_with_dirty_hotspot_tile_at_old_and_new_pos": 124,
+				"fraction": 0.9466,
+				"sample_offset_ms": 1,
+				"fraction_at_zero_offset": 0.8931,
+				"grab_latency_ms": 0.975,
+				"method": "latest 240 Hz query_pointer sample at or before frame wallclock + sample_offset_ms; offset fitted in [-12, 12] ms (1 ms steps) to maximise frames whose hotspot tile is dirty at both the previous and the new position"
+			},
+			"capture": {
+				"codec": "libx264rgb qp0 (lossless H.264 High 4:4:4 Predictive, GBR), ultrafast, keyint 150",
+				"dropped_frames": 0,
+				"duplicated_frames": 0,
+				"ffmpeg_drop_frames": 0,
+				"ffmpeg_dup_frames": 0,
+				"late_grabs": 0,
+				"max_interval_ms": 34.45,
+				"interval_stdev_ms": 0.479,
+				"method": "ffmpeg x11grab -framerate 30 -draw_mouse 1 -use_wallclock_as_timestamps 1 on Xvfb :99 (1920x1080x24), -fps_mode passthrough, encoder time base = demuxer (us); per-frame wallclock from -stats_enc_pre; remuxed with setts to CFR pts n/fps; Chrome kiosk, --force-device-scale-factor=1"
+			},
+			"scroll_validation": {
+				"frames_with_scroll": 88,
+				"unverifiable_frames": 0,
+				"validated_frames": 88,
+				"fraction": 1.0,
+				"entries": 88,
+				"valid_entries": 88,
+				"unverifiable_entries": 0,
+				"align_counts": {
+					"latency": 88,
+					"realigned": 0,
+					"held": 0,
+					"invalid": 0,
+					"unverifiable": 0
+				},
+				"latency_ms": 10,
+				"latency_frames": 0.3,
+				"latency_only": {
+					"frames_with_scroll": 88,
+					"validated_frames": 88,
+					"fraction": 1.0,
+					"score_at_chosen_latency": [88, 88, 0],
+					"score_at_zero_latency": [6, 47, 41]
+				},
+				"match_threshold": 0.9,
+				"residual_max": 0.25
+			},
+			"generator": {
+				"script": "bench/corpus/generate.py",
+				"args": ["--clip", "dark_mode"]
+			}
+		},
+		{
+			"name": "idle",
+			"file": "idle.mkv",
+			"width": 1920,
+			"height": 1080,
+			"fps": 30,
+			"frames": 1800,
+			"duration_s": 60.0,
+			"sha256": "cf3e3c23d8d1f51b3d654c6cc6480defc79cda9a9e9e979f4faa74af41f3a1d9",
+			"tags": ["idle", "static", "text", "toasts"],
+			"description": "Desktop-like static scene (PDF viewer window, dock, menu bar). Only the menu-bar clock ticks each second, three notification toasts slide in/out, and the pointer moves four times.",
+			"device_scale_factor": 1,
+			"page": "pages/idle.html",
+			"text_regions": [[712, 291, 692, 214], [712, 804, 692, 90]],
+			"sideinfo": "idle.sideinfo.jsonl",
+			"events": "idle.events.jsonl",
+			"pointer_samples": "idle.pointer.jsonl",
+			"capture_log": "idle.capture.json",
+			"previews": [
+				"previews/idle_f00000.png",
+				"previews/idle_f00600.png",
+				"previews/idle_f01200.png",
+				"previews/idle_f01543.png",
+				"previews/idle_f01799.png",
+				"previews/idle_sheet.png"
+			],
+			"avg_dirty_fraction": 0.000678,
+			"identical_frames": 1576,
+			"cursor_check": {
+				"frames_with_cursor": 1800,
+				"moved_frames": 104,
+				"moved_frames_with_dirty_hotspot_tile_at_old_and_new_pos": 104,
+				"fraction": 1.0,
+				"sample_offset_ms": 2,
+				"fraction_at_zero_offset": 0.9709,
+				"grab_latency_ms": 0.975,
+				"method": "latest 240 Hz query_pointer sample at or before frame wallclock + sample_offset_ms; offset fitted in [-12, 12] ms (1 ms steps) to maximise frames whose hotspot tile is dirty at both the previous and the new position"
+			},
+			"capture": {
+				"codec": "libx264rgb qp0 (lossless H.264 High 4:4:4 Predictive, GBR), ultrafast, keyint 150",
+				"dropped_frames": 0,
+				"duplicated_frames": 0,
+				"ffmpeg_drop_frames": 0,
+				"ffmpeg_dup_frames": 0,
+				"late_grabs": 0,
+				"max_interval_ms": 34.789,
+				"interval_stdev_ms": 0.419,
+				"method": "ffmpeg x11grab -framerate 30 -draw_mouse 1 -use_wallclock_as_timestamps 1 on Xvfb :99 (1920x1080x24), -fps_mode passthrough, encoder time base = demuxer (us); per-frame wallclock from -stats_enc_pre; remuxed with setts to CFR pts n/fps; Chrome kiosk, --force-device-scale-factor=1"
+			},
+			"scroll_validation": {
+				"frames_with_scroll": 0,
+				"unverifiable_frames": 0,
+				"validated_frames": 0,
+				"fraction": null,
+				"entries": 0,
+				"valid_entries": 0,
+				"unverifiable_entries": 0,
+				"align_counts": {
+					"latency": 0,
+					"realigned": 0,
+					"held": 0,
+					"invalid": 0,
+					"unverifiable": 0
+				},
+				"latency_ms": null,
+				"latency_frames": null,
+				"latency_only": {
+					"frames_with_scroll": 0,
+					"validated_frames": 0,
+					"fraction": null,
+					"score_at_chosen_latency": null,
+					"score_at_zero_latency": null
+				},
+				"match_threshold": 0.9,
+				"residual_max": 0.25
+			},
+			"generator": {
+				"script": "bench/corpus/generate.py",
+				"args": ["--clip", "idle"]
+			}
+		},
+		{
+			"name": "webcam_overlay",
+			"file": "webcam_overlay.mkv",
+			"width": 1920,
+			"height": 1080,
+			"fps": 30,
+			"frames": 1200,
+			"duration_s": 40.0,
+			"sha256": "e6ebac847d0ea7a28108e37fe408211838099cea7704184c6b35a887c8ee2c3c",
+			"tags": ["webcam", "noise", "slides", "drag", "overlay"],
+			"description": "Slide deck with a 320px circular webcam bubble rendered on a canvas at 30 fps (moving gradient, head-and-shoulders, blink/talk, per-frame sensor noise). The bubble is dragged to four positions; slides advance every ~4 s.",
+			"device_scale_factor": 1,
+			"page": "pages/slides.html?webcam=1",
+			"text_regions": [[120, 80, 1400, 150], [120, 240, 1500, 560]],
+			"sideinfo": "webcam_overlay.sideinfo.jsonl",
+			"events": "webcam_overlay.events.jsonl",
+			"pointer_samples": "webcam_overlay.pointer.jsonl",
+			"capture_log": "webcam_overlay.capture.json",
+			"previews": [
+				"previews/webcam_overlay_f00000.png",
+				"previews/webcam_overlay_f00181.png",
+				"previews/webcam_overlay_f00400.png",
+				"previews/webcam_overlay_f00800.png",
+				"previews/webcam_overlay_f01199.png",
+				"previews/webcam_overlay_sheet.png"
+			],
+			"avg_dirty_fraction": 0.087328,
+			"identical_frames": 0,
+			"cursor_check": {
+				"frames_with_cursor": 1200,
+				"moved_frames": 364,
+				"moved_frames_with_dirty_hotspot_tile_at_old_and_new_pos": 359,
+				"fraction": 0.9863,
+				"sample_offset_ms": 2,
+				"fraction_at_zero_offset": 0.9752,
+				"grab_latency_ms": 0.986,
+				"method": "latest 240 Hz query_pointer sample at or before frame wallclock + sample_offset_ms; offset fitted in [-12, 12] ms (1 ms steps) to maximise frames whose hotspot tile is dirty at both the previous and the new position"
+			},
+			"capture": {
+				"codec": "libx264rgb qp0 (lossless H.264 High 4:4:4 Predictive, GBR), ultrafast, keyint 150",
+				"dropped_frames": 0,
+				"duplicated_frames": 0,
+				"ffmpeg_drop_frames": 0,
+				"ffmpeg_dup_frames": 0,
+				"late_grabs": 0,
+				"max_interval_ms": 34.6,
+				"interval_stdev_ms": 0.439,
+				"method": "ffmpeg x11grab -framerate 30 -draw_mouse 1 -use_wallclock_as_timestamps 1 on Xvfb :99 (1920x1080x24), -fps_mode passthrough, encoder time base = demuxer (us); per-frame wallclock from -stats_enc_pre; remuxed with setts to CFR pts n/fps; Chrome kiosk, --force-device-scale-factor=1"
+			},
+			"scroll_validation": {
+				"frames_with_scroll": 0,
+				"unverifiable_frames": 0,
+				"validated_frames": 0,
+				"fraction": null,
+				"entries": 0,
+				"valid_entries": 0,
+				"unverifiable_entries": 0,
+				"align_counts": {
+					"latency": 0,
+					"realigned": 0,
+					"held": 0,
+					"invalid": 0,
+					"unverifiable": 0
+				},
+				"latency_ms": null,
+				"latency_frames": null,
+				"latency_only": {
+					"frames_with_scroll": 0,
+					"validated_frames": 0,
+					"fraction": null,
+					"score_at_chosen_latency": null,
+					"score_at_zero_latency": null
+				},
+				"match_threshold": 0.9,
+				"residual_max": 0.25
+			},
+			"generator": {
+				"script": "bench/corpus/generate.py",
+				"args": ["--clip", "webcam_overlay"]
+			}
+		},
+		{
+			"name": "busy_ui_60fps",
+			"file": "busy_ui_60fps.mkv",
+			"width": 1920,
+			"height": 1080,
+			"fps": 60,
+			"frames": 1200,
+			"duration_s": 20.0,
+			"sha256": "1c4715bf397d2b9bb41346b636016dfa626155c5216307f2115cf4a403907a8f",
+			"tags": ["ui", "pointer", "60fps", "menus", "drag", "light"],
+			"description": "busy_ui scenario variant at 60 fps: continuous curved pointer motion and hovers, filter and card menus, a card drag with toast, column wheel scroll.",
+			"device_scale_factor": 1,
+			"page": "pages/board.html",
+			"text_regions": [
+				[4, 60, 236, 560],
+				[268, 152, 304, 600],
+				[900, 152, 304, 600]
+			],
+			"sideinfo": "busy_ui_60fps.sideinfo.jsonl",
+			"events": "busy_ui_60fps.events.jsonl",
+			"pointer_samples": "busy_ui_60fps.pointer.jsonl",
+			"capture_log": "busy_ui_60fps.capture.json",
+			"previews": [
+				"previews/busy_ui_60fps_f00000.png",
+				"previews/busy_ui_60fps_f00400.png",
+				"previews/busy_ui_60fps_f00730.png",
+				"previews/busy_ui_60fps_f00800.png",
+				"previews/busy_ui_60fps_f01199.png",
+				"previews/busy_ui_60fps_sheet.png"
+			],
+			"avg_dirty_fraction": 0.006611,
+			"identical_frames": 534,
+			"cursor_check": {
+				"frames_with_cursor": 1200,
+				"moved_frames": 596,
+				"moved_frames_with_dirty_hotspot_tile_at_old_and_new_pos": 567,
+				"fraction": 0.9513,
+				"sample_offset_ms": 2,
+				"fraction_at_zero_offset": 0.9433,
+				"grab_latency_ms": 0.988,
+				"method": "latest 240 Hz query_pointer sample at or before frame wallclock + sample_offset_ms; offset fitted in [-12, 12] ms (1 ms steps) to maximise frames whose hotspot tile is dirty at both the previous and the new position"
+			},
+			"capture": {
+				"codec": "libx264rgb qp0 (lossless H.264 High 4:4:4 Predictive, GBR), ultrafast, keyint 300",
+				"dropped_frames": 0,
+				"duplicated_frames": 0,
+				"ffmpeg_drop_frames": 0,
+				"ffmpeg_dup_frames": 0,
+				"late_grabs": 0,
+				"max_interval_ms": 17.682,
+				"interval_stdev_ms": 0.348,
+				"method": "ffmpeg x11grab -framerate 60 -draw_mouse 1 -use_wallclock_as_timestamps 1 on Xvfb :99 (1920x1080x24), -fps_mode passthrough, encoder time base = demuxer (us); per-frame wallclock from -stats_enc_pre; remuxed with setts to CFR pts n/fps; Chrome kiosk, --force-device-scale-factor=1"
+			},
+			"scroll_validation": {
+				"frames_with_scroll": 31,
+				"unverifiable_frames": 0,
+				"validated_frames": 31,
+				"fraction": 1.0,
+				"entries": 31,
+				"valid_entries": 31,
+				"unverifiable_entries": 0,
+				"align_counts": {
+					"latency": 27,
+					"realigned": 4,
+					"held": 0,
+					"invalid": 0,
+					"unverifiable": 0
+				},
+				"latency_ms": 24,
+				"latency_frames": 1.44,
+				"latency_only": {
+					"frames_with_scroll": 34,
+					"validated_frames": 27,
+					"fraction": 0.7941,
+					"score_at_chosen_latency": [20, 27, 7],
+					"score_at_zero_latency": [-29, 1, 30]
+				},
+				"match_threshold": 0.9,
+				"residual_max": 0.25
+			},
+			"generator": {
+				"script": "bench/corpus/generate.py",
+				"args": ["--clip", "busy_ui_60fps"]
+			}
+		},
+		{
+			"name": "code_4k",
+			"file": "code_4k.mkv",
+			"width": 3840,
+			"height": 2160,
+			"fps": 30,
+			"frames": 600,
+			"duration_s": 20.0,
+			"sha256": "99410a781263162a5a8755668b6d159bc1b54500fd341c05f9c30e25d3af00ce",
+			"tags": ["code", "4k", "hidpi", "typing", "scroll", "monospace"],
+			"description": "3840x2160 (device scale factor 2) VS Code Light+ on difflib.py: types a short function, saves, wheel scroll, PageDown, caret moves.",
+			"device_scale_factor": 2,
+			"page": "pages/code.html",
+			"text_regions": [[620, 182, 1440, 962], [620, 1144, 1440, 962]],
+			"sideinfo": "code_4k.sideinfo.jsonl",
+			"events": "code_4k.events.jsonl",
+			"pointer_samples": "code_4k.pointer.jsonl",
+			"capture_log": "code_4k.capture.json",
+			"previews": [
+				"previews/code_4k_f00000.png",
+				"previews/code_4k_f00200.png",
+				"previews/code_4k_f00400.png",
+				"previews/code_4k_f00433.png",
+				"previews/code_4k_f00599.png",
+				"previews/code_4k_sheet.png"
+			],
+			"avg_dirty_fraction": 0.005939,
+			"identical_frames": 393,
+			"cursor_check": {
+				"frames_with_cursor": 600,
+				"moved_frames": 67,
+				"moved_frames_with_dirty_hotspot_tile_at_old_and_new_pos": 67,
+				"fraction": 1.0,
+				"sample_offset_ms": 0,
+				"fraction_at_zero_offset": 1.0,
+				"grab_latency_ms": 2.24,
+				"method": "latest 240 Hz query_pointer sample at or before frame wallclock + sample_offset_ms; offset fitted in [-12, 12] ms (1 ms steps) to maximise frames whose hotspot tile is dirty at both the previous and the new position"
+			},
+			"capture": {
+				"codec": "libx264rgb qp0 (lossless H.264 High 4:4:4 Predictive, GBR), ultrafast, keyint 150",
+				"dropped_frames": 0,
+				"duplicated_frames": 0,
+				"ffmpeg_drop_frames": 0,
+				"ffmpeg_dup_frames": 0,
+				"late_grabs": 0,
+				"max_interval_ms": 40.322,
+				"interval_stdev_ms": 1.435,
+				"method": "ffmpeg x11grab -framerate 30 -draw_mouse 1 -use_wallclock_as_timestamps 1 on Xvfb :98 (3840x2160x24), -fps_mode passthrough, encoder time base = demuxer (us); per-frame wallclock from -stats_enc_pre; remuxed with setts to CFR pts n/fps; Chrome kiosk, --force-device-scale-factor=2"
+			},
+			"scroll_validation": {
+				"frames_with_scroll": 11,
+				"unverifiable_frames": 0,
+				"validated_frames": 11,
+				"fraction": 1.0,
+				"entries": 11,
+				"valid_entries": 11,
+				"unverifiable_entries": 0,
+				"align_counts": {
+					"latency": 11,
+					"realigned": 0,
+					"held": 1,
+					"invalid": 0,
+					"unverifiable": 0
+				},
+				"latency_ms": 14,
+				"latency_frames": 0.42,
+				"latency_only": {
+					"frames_with_scroll": 11,
+					"validated_frames": 10,
+					"fraction": 0.9091,
+					"score_at_chosen_latency": [9, 10, 1],
+					"score_at_zero_latency": [2, 6, 4]
+				},
+				"match_threshold": 0.9,
+				"residual_max": 0.25
+			},
+			"generator": {
+				"script": "bench/corpus/generate.py",
+				"args": ["--clip", "code_4k"]
+			}
+		},
+		{
+			"name": "full_motion",
+			"file": "full_motion.mkv",
+			"width": 1920,
+			"height": 1080,
+			"fps": 30,
+			"frames": 900,
+			"duration_s": 30.0,
+			"sha256": "de20d89fd2e78ec9a176e84b06263130342ad7a87074ced030252f4e28daa848",
+			"tags": [
+				"video",
+				"natural",
+				"full-motion",
+				"camera-motion",
+				"fine-detail",
+				"worst-case"
+			],
+			"description": "Natural video full screen (worst case for a screen encoder): Big Buck Bunny 1080p30 (Blender Foundation, CC BY 3.0) played by Chrome in a <video> filling the viewport (object-fit: cover, autoplay muted loop, no controls), source 27.47-57.43 s from a shot cut: slow camera push-in on the burrow under the tree with wind-blown grass and foliage, the dark burrow close-up as the bunny emerges, the bunny stretching in the sunlit meadow. No input; pointer parked bottom-right, hidden (cursor: none, -draw_mouse 0).",
+			"device_scale_factor": 1,
+			"page": "pages/video.html",
+			"text_regions": [],
+			"sideinfo": "full_motion.sideinfo.jsonl",
+			"events": "full_motion.events.jsonl",
+			"pointer_samples": "full_motion.pointer.jsonl",
+			"capture_log": "full_motion.capture.json",
+			"previews": [
+				"previews/full_motion_f00000.png",
+				"previews/full_motion_f00250.png",
+				"previews/full_motion_f00300.png",
+				"previews/full_motion_f00600.png",
+				"previews/full_motion_f00899.png",
+				"previews/full_motion_sheet.png"
+			],
+			"avg_dirty_fraction": 0.949286,
+			"identical_frames": 0,
+			"cursor_check": {
+				"frames_with_cursor": 0,
+				"moved_frames": 0,
+				"moved_frames_with_dirty_hotspot_tile_at_old_and_new_pos": 0,
+				"fraction": null,
+				"sample_offset_ms": 0,
+				"fraction_at_zero_offset": null,
+				"grab_latency_ms": 0.969,
+				"method": "latest 240 Hz query_pointer sample at or before frame wallclock + sample_offset_ms; offset fitted in [-12, 12] ms (1 ms steps) to maximise frames whose hotspot tile is dirty at both the previous and the new position"
+			},
+			"capture": {
+				"codec": "libx264rgb qp0 (lossless H.264 High 4:4:4 Predictive, GBR), ultrafast, keyint 150",
+				"dropped_frames": 0,
+				"duplicated_frames": 0,
+				"ffmpeg_drop_frames": 0,
+				"ffmpeg_dup_frames": 0,
+				"late_grabs": 0,
+				"max_interval_ms": 35.314,
+				"interval_stdev_ms": 0.241,
+				"method": "ffmpeg x11grab -framerate 30 -draw_mouse 0 -use_wallclock_as_timestamps 1 on Xvfb :99 (1920x1080x24), -fps_mode passthrough, encoder time base = demuxer (us); per-frame wallclock from -stats_enc_pre; remuxed with setts to CFR pts n/fps; Chrome kiosk, --force-device-scale-factor=1; ffmpeg relaunched until its grab grid sat 25.0 +- 4.5 ms after Chrome's video presentation phase (requestVideoFrameCallback expectedDisplayTime), started before the cut and trimmed bit-exactly to the first frame showing it",
+				"phase_lock": {
+					"attempts": 5,
+					"accepted_delta_ms": -0.919,
+					"playback_restarts": 0
+				},
+				"trim": {
+					"raw_frames": 1149,
+					"first_raw_frame": 202,
+					"rvfc_predicted_raw_frame": 202,
+					"verified_bit_exact": true
+				},
+				"runs": {
+					"runs": 2,
+					"max_runs": 3,
+					"policy": "recapture while the playback check shows repeated/skipped source frames or dropped grabs",
+					"rejected": [
+						{
+							"repeated_frames": 1,
+							"skipped_source_frames": 1,
+							"irregular_steps": [
+								{
+									"frame": 491,
+									"source_step": 2
+								},
+								{
+									"frame": 492,
+									"source_step": 0
+								}
+							],
+							"identical_frames": 1,
+							"dropped_frames": 0,
+							"phase_lock_delta_ms": 4.211,
+							"chrome_dropped": 0
+						}
+					]
+				}
+			},
+			"scroll_validation": {
+				"frames_with_scroll": 0,
+				"unverifiable_frames": 0,
+				"validated_frames": 0,
+				"fraction": null,
+				"entries": 0,
+				"valid_entries": 0,
+				"unverifiable_entries": 0,
+				"align_counts": {
+					"latency": 0,
+					"realigned": 0,
+					"held": 0,
+					"invalid": 0,
+					"unverifiable": 0
+				},
+				"latency_ms": null,
+				"latency_frames": null,
+				"latency_only": {
+					"frames_with_scroll": 0,
+					"validated_frames": 0,
+					"fraction": null,
+					"score_at_chosen_latency": null,
+					"score_at_zero_latency": null
+				},
+				"match_threshold": 0.9,
+				"residual_max": 0.25
+			},
+			"generator": {
+				"script": "bench/corpus/generate.py",
+				"args": ["--clip", "full_motion"]
+			},
+			"source_video": {
+				"title": "Big Buck Bunny (2013 'sunflower' edition, 1920x1080, 30 fps, H.264 High, ~3 Mbit/s)",
+				"url": "https://download.blender.org/demo/movies/BBB/bbb_sunflower_1080p_30fps_normal.mp4.zip",
+				"homepage": "https://peach.blender.org/",
+				"licence": "CC BY 3.0",
+				"licence_url": "https://creativecommons.org/licenses/by/3.0/",
+				"attribution": "Big Buck Bunny, (c) copyright 2008, Blender Foundation / www.bigbuckbunny.org",
+				"zip_sha256": "e320fef389ec749117d0c1583945039266a40f25483881c2ff0d33207e62b362",
+				"sha256": "ae51005850b0ff757fe60c3dd7a12d754d3cd2397d87d939b55235e457f97658",
+				"cache_dir": "/home/ubuntu/work/cache/capcodec-corpus",
+				"segment": {
+					"file": "bbb_sunflower_1080p_30fps_normal_from16.300s_1325f.mp4",
+					"sha256": "2f8170a7d990bb5f28c712091764bded2dec247f21b12e5c8dd7424848c5be2a",
+					"start_s": 16.3,
+					"frames": 1325,
+					"source_first_frame_index": 487,
+					"method": "ffmpeg -ss START -i SOURCE -map 0:v:0 -c copy -an (starts on a keyframe; no re-encode); every decoded frame verified identical (framemd5) to the matching source frame"
+				},
+				"clip_source_range_s": [27.466667, 57.433333],
+				"clip_segment_frames": [335, 1234],
+				"transcoded": false,
+				"playback": "Chrome <video> (software H.264 decode of the original stream), muted, loop, object-fit: cover, 1:1 pixels at 1920x1080"
+			},
+			"playback_check": {
+				"frames": 900,
+				"source_first": 335,
+				"source_last": 1234,
+				"source_steps": {
+					"1": 899
+				},
+				"repeated_frames": 0,
+				"skipped_source_frames": 0,
+				"backward_steps": 0,
+				"irregular_steps": [],
+				"match_distance": {
+					"median": 0.0006,
+					"p99": 0.0009,
+					"max": 0.0009
+				},
+				"next_best_distance_ratio": {
+					"min": 1.114,
+					"p01": 2.918,
+					"median": 20.976
+				},
+				"frames_with_next_best_ratio_below_2": 2,
+				"source_first_expected": 335,
+				"source_last_expected": 1234,
+				"chrome_presentation": {
+					"callbacks": 900,
+					"media_time_steps_frames": {
+						"1": 899
+					},
+					"presented_frames_steps": {
+						"1": 899
+					},
+					"expected_display_interval_vsyncs": {
+						"2": 899
+					},
+					"expected_display_interval_ms": {
+						"mean": 33.3319,
+						"stdev": 0.058
+					}
+				},
+				"chrome_video_quality": {
+					"samples_during_clip": 7,
+					"dropped_during_clip": 0,
+					"decoded_during_clip": 858,
+					"dropped_total_at_end": 0,
+					"decoded_total_at_end": 1289
+				},
+				"dirty_fraction_per_frame": {
+					"min": 0.085556,
+					"p01": 0.663677,
+					"p05": 0.825179,
+					"median": 0.972346,
+					"frames_ge_0_99": 360,
+					"frames_ge_0_95": 580,
+					"frames_ge_0_90": 763,
+					"frames_lt_0_50": 4,
+					"frames_considered": 899
+				},
+				"dirty_vs_source": {
+					"frames_compared": 899,
+					"source_mean": 0.94935,
+					"captured_mean": 0.949286,
+					"mean_abs_diff": 6.4e-5,
+					"max_abs_diff": 0.001111,
+					"correlation": 0.999998
+				},
+				"method": "captured and source frames area-downscaled to 480x270 luma, high-passed and normalised (playback.py); each captured frame matched to a source frame by 1 - normalised cross-correlation along a monotonic Viterbi path (offset band +-6, 0.004 per offset change); repeated_frames and skipped_source_frames count source steps of 0 and >1 between consecutive captured frames"
+			},
+			"playback": "full_motion.playback.json"
+		}
+	],
+	"corpus_dir": "/home/ubuntu/work/corpus",
+	"lossless_check": {
+		"method": "single x11grab input -> (a) rawvideo NUT and (b) libx264rgb -preset ultrafast -qp 0 in one ffmpeg run; framemd5 of both decoded to bgr0 compared frame by frame",
+		"results": [
+			{
+				"resolution": "1920x1080",
+				"fps": 30,
+				"frames_compared": 90,
+				"frames_identical": 90,
+				"distinct_frames": 90,
+				"lossless": true
+			},
+			{
+				"resolution": "3840x2160",
+				"fps": 30,
+				"frames_compared": 90,
+				"frames_identical": 90,
+				"distinct_frames": 89,
+				"lossless": true
+			}
+		],
+		"lossless": true,
+		"checked_at": "2026-10-07T05:27:27+0000"
+	}
 }

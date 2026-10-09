@@ -1,5 +1,5 @@
-import { processVideo } from "../../../apps/media-server/src/lib/media-video";
 import { probeVideoFile } from "../../../apps/media-server/src/lib/media-probe";
+import { processVideo } from "../../../apps/media-server/src/lib/media-video";
 
 const [input, output] = process.argv.slice(2);
 if (!input || !output) {
@@ -12,4 +12,10 @@ const result = await processVideo(input, metadata, {});
 const elapsed = performance.now() - started;
 await Bun.write(output, Bun.file(result.path));
 await result.cleanup();
-console.log(JSON.stringify({ encoder: process.env.CAP_MEDIA_VIDEO_ENCODER ?? "libx264", elapsedMs: elapsed, metadata }));
+console.log(
+	JSON.stringify({
+		encoder: process.env.CAP_MEDIA_VIDEO_ENCODER ?? "libx264",
+		elapsedMs: elapsed,
+		metadata,
+	}),
+);

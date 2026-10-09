@@ -1,7 +1,8 @@
 (() => {
 	const deck = document.getElementById("deck");
 	const TOTAL = 14;
-	const foot = (n, dark) => `<div class="foot"><span class="logo"></span><span>Capture Pipeline 2.0 · Q3 Review</span><span class="num">${n} / ${TOTAL}</span></div>`;
+	const foot = (n, dark) =>
+		`<div class="foot"><span class="logo"></span><span>Capture Pipeline 2.0 · Q3 Review</span><span class="num">${n} / ${TOTAL}</span></div>`;
 
 	function barChart() {
 		const groups = [
@@ -58,12 +59,16 @@
 		}
 		const px = (i) => x0 + 20 + i * ((W - x0 - 60) / 25);
 		const py = (val) => y0 - (val / 12) * 460;
-		const line = pts.map((p, i) => `${px(i).toFixed(1)},${py(p).toFixed(1)}`).join(" ");
+		const line = pts
+			.map((p, i) => `${px(i).toFixed(1)},${py(p).toFixed(1)}`)
+			.join(" ");
 		s += `<polygon points="${px(0)},${y0} ${line} ${px(25)},${y0}" fill="#4f46e5" opacity=".08"/>`;
 		s += `<polyline points="${line}" fill="none" stroke="#4f46e5" stroke-width="5" stroke-linejoin="round"/>`;
 		pts.forEach((p, i) => {
-			if (i % 5 === 0 || i === 25) s += `<circle cx="${px(i)}" cy="${py(p)}" r="8" fill="#fff" stroke="#4f46e5" stroke-width="4"/>`;
-			if (i % 4 === 0) s += `<text x="${px(i)}" y="${y0 + 40}" text-anchor="middle" font-size="22" fill="#6b7280">W${27 + i}</text>`;
+			if (i % 5 === 0 || i === 25)
+				s += `<circle cx="${px(i)}" cy="${py(p)}" r="8" fill="#fff" stroke="#4f46e5" stroke-width="4"/>`;
+			if (i % 4 === 0)
+				s += `<text x="${px(i)}" y="${y0 + 40}" text-anchor="middle" font-size="22" fill="#6b7280">W${27 + i}</text>`;
 		});
 		s += `<line x1="${px(15)}" x2="${px(15)}" y1="${py(pts[15]) - 30}" y2="${py(pts[15]) - 100}" stroke="#f59e0b" stroke-width="3"/>`;
 		s += `<text x="${px(15) + 14}" y="${py(pts[15]) - 104}" font-size="24" fill="#b45309" font-weight="700">CDN incident (Aug 14)</text>`;
@@ -81,7 +86,7 @@
 			["720p and below", 10, "#f59e0b"],
 		];
 		let a0 = -Math.PI / 2;
-		let s = "<svg width=\"620\" height=\"620\" viewBox=\"-310 -310 620 620\">";
+		let s = '<svg width="620" height="620" viewBox="-310 -310 620 620">';
 		for (const [, pct, c] of parts) {
 			const a1 = a0 + (pct / 100) * Math.PI * 2;
 			const large = a1 - a0 > Math.PI ? 1 : 0;
@@ -90,9 +95,13 @@
 			s += `<path d="M${Math.cos(a0) * r} ${Math.sin(a0) * r} A${r} ${r} 0 ${large} 1 ${Math.cos(a1) * r} ${Math.sin(a1) * r} L${Math.cos(a1) * ri} ${Math.sin(a1) * ri} A${ri} ${ri} 0 ${large} 0 ${Math.cos(a0) * ri} ${Math.sin(a0) * ri}Z" fill="${c}"/>`;
 			a0 = a1;
 		}
-		s += "<text x=\"0\" y=\"-6\" text-anchor=\"middle\" font-family=\"Noto Sans\" font-size=\"76\" font-weight=\"800\" fill=\"#1d2433\">1.9M</text><text x=\"0\" y=\"46\" text-anchor=\"middle\" font-family=\"Noto Sans\" font-size=\"28\" fill=\"#6b7280\">recordings in Q3</text></svg>";
+		s +=
+			'<text x="0" y="-6" text-anchor="middle" font-family="Noto Sans" font-size="76" font-weight="800" fill="#1d2433">1.9M</text><text x="0" y="46" text-anchor="middle" font-family="Noto Sans" font-size="28" fill="#6b7280">recordings in Q3</text></svg>';
 		const legend = parts
-			.map(([n, p, c]) => `<div style="display:flex;align-items:center;gap:22px;font-size:34px;margin-bottom:30px"><span style="width:30px;height:30px;border-radius:8px;background:${c}"></span><span style="flex:1">${n}</span><b>${p}%</b></div>`)
+			.map(
+				([n, p, c]) =>
+					`<div style="display:flex;align-items:center;gap:22px;font-size:34px;margin-bottom:30px"><span style="width:30px;height:30px;border-radius:8px;background:${c}"></span><span style="flex:1">${n}</span><b>${p}%</b></div>`,
+			)
 			.join("");
 		return `<div style="display:flex;gap:120px;align-items:center;margin-top:10px">${s}<div style="width:640px">${legend}<div style="font-size:24px;color:#5b6475;line-height:1.45;margin-top:40px">4K share doubled since Q1, driven by new external displays and the 5K iMac refresh.</div></div></div>`;
 	}
@@ -107,7 +116,10 @@
 		for (const [c, base, amp, seed] of layers) {
 			let d = `M0 1080 L0 ${base * 1080}`;
 			for (let x = 0; x <= 1920; x += 40) {
-				const y = base * 1080 - Math.abs(Math.sin(x / (180 + seed * 40) + seed) * amp) - Math.sin(x / 63 + seed * 2) * amp * 0.25;
+				const y =
+					base * 1080 -
+					Math.abs(Math.sin(x / (180 + seed * 40) + seed) * amp) -
+					Math.sin(x / 63 + seed * 2) * amp * 0.25;
 				d += ` L${x} ${y.toFixed(1)}`;
 			}
 			d += " L1920 1080Z";
@@ -145,7 +157,10 @@ ${[
 	["05", "Risks", "Memory growth on long recordings"],
 	["06", "Q&amp;A", "Open discussion"],
 ]
-	.map(([n, t, d]) => `<div class="ai"><div class="n">${n}</div><div><div class="t">${t}</div><div class="d">${d}</div></div></div>`)
+	.map(
+		([n, t, d]) =>
+			`<div class="ai"><div class="n">${n}</div><div><div class="t">${t}</div><div class="d">${d}</div></div></div>`,
+	)
 	.join("")}</div>`,
 		},
 		{
@@ -206,7 +221,10 @@ ${[
 	["Nov 18", "ARM build", "Native Windows on ARM", 70],
 	["Dec 2", "GPU overlay", "Camera bubble on GPU", 92],
 ]
-	.map(([d, t, x, p]) => `<div class="ms" style="left:${p}%"><div class="d">${d}</div><div class="dot"></div><div class="t">${t}</div><div class="x">${x}</div></div>`)
+	.map(
+		([d, t, x, p]) =>
+			`<div class="ms" style="left:${p}%"><div class="d">${d}</div><div class="dot"></div><div class="t">${t}</div><div class="x">${x}</div></div>`,
+	)
 	.join("")}</div>`,
 		},
 		{
@@ -255,7 +273,11 @@ ${[
 		to.classList.add("show");
 		for (const b of to.querySelectorAll(".build")) b.classList.remove("on");
 		buildStep = 0;
-		const opts = { duration: tr === "fade" ? 600 : 650, easing: "cubic-bezier(.2,.7,.2,1)", fill: "both" };
+		const opts = {
+			duration: tr === "fade" ? 600 : 650,
+			easing: "cubic-bezier(.2,.7,.2,1)",
+			fill: "both",
+		};
 		const done = () => {
 			from.classList.remove("show");
 			from.style.zIndex = "";
@@ -273,14 +295,26 @@ ${[
 		if (tr === "fade") {
 			a = to.animate([{ opacity: 0 }, { opacity: 1 }], opts);
 		} else if (tr === "push") {
-			a = to.animate([{ transform: "translateX(100%)" }, { transform: "translateX(0)" }], opts);
-			anims.push(from.animate([{ transform: "translateX(0)" }, { transform: "translateX(-100%)" }], opts));
+			a = to.animate(
+				[{ transform: "translateX(100%)" }, { transform: "translateX(0)" }],
+				opts,
+			);
+			anims.push(
+				from.animate(
+					[{ transform: "translateX(0)" }, { transform: "translateX(-100%)" }],
+					opts,
+				),
+			);
 		} else {
-			a = to.animate([{ transform: "translateX(100%)" }, { transform: "translateX(0)" }], opts);
+			a = to.animate(
+				[{ transform: "translateX(100%)" }, { transform: "translateX(0)" }],
+				opts,
+			);
 		}
 		anims.push(a);
 		a.finished.then(() => {
-			for (const x of [from, to]) for (const an of x.getAnimations()) an.cancel();
+			for (const x of [from, to])
+				for (const an of x.getAnimations()) an.cancel();
 			done();
 		});
 	}

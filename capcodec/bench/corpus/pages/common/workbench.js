@@ -1,35 +1,45 @@
 (() => {
 	const ICONS = {
-		files: "<path d=\"M14 3H8a1 1 0 0 0-1 1v13a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V8z\"/><path d=\"M14 3v5h5\"/><path d=\"M4 7v13a1 1 0 0 0 1 1h10\"/>",
-		search: "<circle cx=\"10.5\" cy=\"10.5\" r=\"6.5\"/><path d=\"M15.5 15.5 21 21\"/>",
-		scm: "<circle cx=\"6.5\" cy=\"5\" r=\"2\"/><circle cx=\"6.5\" cy=\"19\" r=\"2\"/><circle cx=\"17.5\" cy=\"8\" r=\"2\"/><path d=\"M6.5 7v10\"/><path d=\"M17.5 10c0 4.5-5 3.5-10 7.5\"/>",
-		run: "<path d=\"M7 4.5v15l12-7.5z\"/><circle cx=\"18\" cy=\"18\" r=\"3\"/>",
-		ext: "<rect x=\"3.5\" y=\"10.5\" width=\"5\" height=\"5\"/><rect x=\"8.5\" y=\"10.5\" width=\"5\" height=\"5\"/><rect x=\"3.5\" y=\"15.5\" width=\"5\" height=\"5\"/><rect x=\"8.5\" y=\"15.5\" width=\"5\" height=\"5\"/><rect x=\"14.5\" y=\"3.5\" width=\"5\" height=\"5\" transform=\"rotate(12 17 6)\"/>",
-		test: "<path d=\"M9 3v6l-5 9a2 2 0 0 0 2 3h12a2 2 0 0 0 2-3l-5-9V3\"/><path d=\"M8 3h8\"/>",
-		account: "<circle cx=\"12\" cy=\"8.5\" r=\"4\"/><path d=\"M4 21c1-4.5 4.5-6.5 8-6.5s7 2 8 6.5\"/>",
-		gear: "<circle cx=\"12\" cy=\"12\" r=\"3\"/><path d=\"M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1\"/>",
-		split: "<rect x=\"3.5\" y=\"4.5\" width=\"17\" height=\"15\" rx=\"1\"/><path d=\"M12 4.5v15\"/>",
-		more: "<circle cx=\"6\" cy=\"12\" r=\"1\"/><circle cx=\"12\" cy=\"12\" r=\"1\"/><circle cx=\"18\" cy=\"12\" r=\"1\"/>",
-		branch: "<circle cx=\"6\" cy=\"5\" r=\"2\"/><circle cx=\"6\" cy=\"19\" r=\"2\"/><circle cx=\"18\" cy=\"7\" r=\"2\"/><path d=\"M6 7v10M18 9c0 4-5 4-11 8\"/>",
-		sync: "<path d=\"M4 12a8 8 0 0 1 14-5.3M20 12a8 8 0 0 1-14 5.3\"/><path d=\"M18 3v4h-4M6 21v-4h4\"/>",
-		err: "<circle cx=\"12\" cy=\"12\" r=\"8\"/><path d=\"M9 9l6 6M15 9l-6 6\"/>",
-		warn: "<path d=\"M12 4 21 20H3z\"/><path d=\"M12 10v5M12 17.5v.5\"/>",
-		bell: "<path d=\"M6 16V11a6 6 0 0 1 12 0v5l2 2H4z\"/><path d=\"M10 20a2 2 0 0 0 4 0\"/>",
-		layout1: "<rect x=\"3.5\" y=\"4.5\" width=\"17\" height=\"15\" rx=\"1\"/><path d=\"M9 4.5v15\"/>",
-		layout2: "<rect x=\"3.5\" y=\"4.5\" width=\"17\" height=\"15\" rx=\"1\"/><path d=\"M3.5 14h17\"/>",
-		layout3: "<rect x=\"3.5\" y=\"4.5\" width=\"17\" height=\"15\" rx=\"1\"/><path d=\"M15 4.5v15\"/>",
-		newfile: "<path d=\"M13 3H7a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V8z\"/><path d=\"M12 11v6M9 14h6\"/>",
-		refresh: "<path d=\"M19 12a7 7 0 1 1-2-5\"/><path d=\"M19 4v4h-4\"/>",
-		collapse: "<rect x=\"4\" y=\"4\" width=\"16\" height=\"16\" rx=\"1\"/><path d=\"M8 12h8\"/>",
-		close: "<path d=\"M6 6l12 12M18 6 6 18\"/>",
-		min: "<path d=\"M5 12h14\"/>",
-		max: "<rect x=\"6\" y=\"6\" width=\"12\" height=\"12\"/>",
-		trash: "<path d=\"M5 7h14M10 7V4h4v3M7 7l1 13h8l1-13\"/>",
-		plus: "<path d=\"M12 5v14M5 12h14\"/>",
-		chevup: "<path d=\"M6 15l6-6 6 6\"/>",
-		term: "<rect x=\"3.5\" y=\"4.5\" width=\"17\" height=\"15\" rx=\"1\"/><path d=\"M7 9l3 3-3 3M12 15h5\"/>",
+		files:
+			'<path d="M14 3H8a1 1 0 0 0-1 1v13a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V8z"/><path d="M14 3v5h5"/><path d="M4 7v13a1 1 0 0 0 1 1h10"/>',
+		search: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21"/>',
+		scm: '<circle cx="6.5" cy="5" r="2"/><circle cx="6.5" cy="19" r="2"/><circle cx="17.5" cy="8" r="2"/><path d="M6.5 7v10"/><path d="M17.5 10c0 4.5-5 3.5-10 7.5"/>',
+		run: '<path d="M7 4.5v15l12-7.5z"/><circle cx="18" cy="18" r="3"/>',
+		ext: '<rect x="3.5" y="10.5" width="5" height="5"/><rect x="8.5" y="10.5" width="5" height="5"/><rect x="3.5" y="15.5" width="5" height="5"/><rect x="8.5" y="15.5" width="5" height="5"/><rect x="14.5" y="3.5" width="5" height="5" transform="rotate(12 17 6)"/>',
+		test: '<path d="M9 3v6l-5 9a2 2 0 0 0 2 3h12a2 2 0 0 0 2-3l-5-9V3"/><path d="M8 3h8"/>',
+		account:
+			'<circle cx="12" cy="8.5" r="4"/><path d="M4 21c1-4.5 4.5-6.5 8-6.5s7 2 8 6.5"/>',
+		gear: '<circle cx="12" cy="12" r="3"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"/>',
+		split:
+			'<rect x="3.5" y="4.5" width="17" height="15" rx="1"/><path d="M12 4.5v15"/>',
+		more: '<circle cx="6" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="18" cy="12" r="1"/>',
+		branch:
+			'<circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="7" r="2"/><path d="M6 7v10M18 9c0 4-5 4-11 8"/>',
+		sync: '<path d="M4 12a8 8 0 0 1 14-5.3M20 12a8 8 0 0 1-14 5.3"/><path d="M18 3v4h-4M6 21v-4h4"/>',
+		err: '<circle cx="12" cy="12" r="8"/><path d="M9 9l6 6M15 9l-6 6"/>',
+		warn: '<path d="M12 4 21 20H3z"/><path d="M12 10v5M12 17.5v.5"/>',
+		bell: '<path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4z"/><path d="M10 20a2 2 0 0 0 4 0"/>',
+		layout1:
+			'<rect x="3.5" y="4.5" width="17" height="15" rx="1"/><path d="M9 4.5v15"/>',
+		layout2:
+			'<rect x="3.5" y="4.5" width="17" height="15" rx="1"/><path d="M3.5 14h17"/>',
+		layout3:
+			'<rect x="3.5" y="4.5" width="17" height="15" rx="1"/><path d="M15 4.5v15"/>',
+		newfile:
+			'<path d="M13 3H7a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V8z"/><path d="M12 11v6M9 14h6"/>',
+		refresh: '<path d="M19 12a7 7 0 1 1-2-5"/><path d="M19 4v4h-4"/>',
+		collapse:
+			'<rect x="4" y="4" width="16" height="16" rx="1"/><path d="M8 12h8"/>',
+		close: '<path d="M6 6l12 12M18 6 6 18"/>',
+		min: '<path d="M5 12h14"/>',
+		max: '<rect x="6" y="6" width="12" height="12"/>',
+		trash: '<path d="M5 7h14M10 7V4h4v3M7 7l1 13h8l1-13"/>',
+		plus: '<path d="M12 5v14M5 12h14"/>',
+		chevup: '<path d="M6 15l6-6 6 6"/>',
+		term: '<rect x="3.5" y="4.5" width="17" height="15" rx="1"/><path d="M7 9l3 3-3 3M12 15h5"/>',
 	};
-	const icon = (name, extra) => `<svg class="ic ${extra || ""}" viewBox="0 0 24 24">${ICONS[name] || ""}</svg>`;
+	const icon = (name, extra) =>
+		`<svg class="ic ${extra || ""}" viewBox="0 0 24 24">${ICONS[name] || ""}</svg>`;
 	window.wbIcon = icon;
 
 	const FILE_BADGES = {
@@ -58,14 +68,19 @@
 				}
 				const ext = it.name.includes(".") ? it.name.split(".").pop() : "txt";
 				const [color, glyph] = FILE_BADGES[ext] || FILE_BADGES.txt;
-				const cls = [it.active ? "active" : "", it.gs === "M" ? "mod" : it.gs === "U" ? "unt" : ""].join(" ");
+				const cls = [
+					it.active ? "active" : "",
+					it.gs === "M" ? "mod" : it.gs === "U" ? "unt" : "",
+				].join(" ");
 				return `<div class="ti ${cls}" style="padding-left:${pad + 16}px"><span class="fi" style="color:${color}">${glyph}</span><span class="nm">${it.name}</span>${it.gs ? `<span class="gs ${it.gs === "M" ? "m" : "u"}">${it.gs}</span>` : ""}</div>`;
 			})
 			.join("");
 	}
 
 	function buildWorkbench(cfg) {
-		document.body.classList.add(cfg.theme === "dark" ? "theme-dark" : "theme-light");
+		document.body.classList.add(
+			cfg.theme === "dark" ? "theme-dark" : "theme-light",
+		);
 		const tabs = cfg.tabs
 			.map((t) => {
 				const ext = t.name.split(".").pop();
@@ -73,7 +88,12 @@
 				return `<div class="tab${t.active ? " active" : ""}${t.preview ? " preview" : ""}" data-name="${t.name}"><span class="fi" style="color:${color};font:700 10px 'DejaVu Sans Mono'">${glyph}</span><span class="${t.preview ? "it" : ""}">${t.name}</span><span class="x">${t.active ? "×" : ""}</span></div>`;
 			})
 			.join("");
-		const crumbs = cfg.crumbs.map((c, i) => `<span>${c}</span>${i < cfg.crumbs.length - 1 ? "<span class=\"sep\">❯</span>" : ""}`).join("");
+		const crumbs = cfg.crumbs
+			.map(
+				(c, i) =>
+					`<span>${c}</span>${i < cfg.crumbs.length - 1 ? '<span class="sep">❯</span>' : ""}`,
+			)
+			.join("");
 		document.body.innerHTML = `
 <div id="wb">
   <div id="titlebar">
@@ -105,7 +125,7 @@
       <div id="tabs">${tabs}<div class="tacts">${icon("run")}${icon("split")}${icon("more")}</div></div>
       <div id="crumbs">${crumbs}</div>
       <div id="editor"></div>
-      ${cfg.panel ? "<div id=\"panel\"></div>" : ""}
+      ${cfg.panel ? '<div id="panel"></div>' : ""}
     </div>
   </div>
   <div id="statusbar">

@@ -80,8 +80,6 @@ def raw_input_args(src: Source) -> list[str]:
 
 
 class FFmpegAdapter(Adapter):
-    """An encoder driven through ffmpeg: codec_args(src, params, speed) returns the codec options."""
-
     codec = "libx264"
     ladder: list[Point] = []
     out_ext = "mp4"

@@ -145,6 +145,7 @@ class Quiet:
         self.done = threading.Event()
         self.lock = threading.Lock()
         self.watcher: threading.Thread | None = None
+        self.resumed = False
 
     def stop(self, pids: list[int]) -> None:
         with self.lock:
@@ -171,8 +172,19 @@ class Quiet:
             if fresh:
                 self.stop(fresh)
 
+    def resume(self) -> None:
+        self.done.set()
+        if self.watcher is not None:
+            self.watcher.join()
+            self.watcher = None
+        if not self.resumed:
+            thaw(self.pids)
+            self.resumed = True
+
     def __enter__(self):
-        if self.enabled:
+        if not self.enabled:
+            return self
+        try:
             for _ in range(20):
                 new = [p for p in freezable() if p not in self.stopped]
                 if not new:
@@ -182,14 +194,14 @@ class Quiet:
             self.watcher = threading.Thread(target=self.watch, args=(spawners(), ancestors(os.getpid())), daemon=True)
             self.watcher.start()
             time.sleep(0.3)
+        except BaseException:
+            self.resume()
+            raise
         return self
 
     def __exit__(self, *exc):
         if self.enabled:
-            self.done.set()
-            if self.watcher:
-                self.watcher.join()
-            thaw(self.pids)
+            self.resume()
         return False
 
 
@@ -376,7 +388,8 @@ def write_report(results: dict, path: Path, threads: list[int]) -> None:
     head = "| clip | mode | VMAF | capcodec crf | kbps vs x264 |"
     sep = "|---|---|---|---|---|"
     for t in threads:
-        head += f" CPU {t}t | wall {t}t |"
+        x264 = "1t" if t == 1 else "auto"
+        head += f" CPU cap {t}t / x264 {x264} | wall cap {t}t / x264 {x264} |"
         sep += "---|---|"
     lines += [head, sep]
     for e in results.values():

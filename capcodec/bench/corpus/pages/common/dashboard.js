@@ -9,8 +9,16 @@
 	};
 	const dpr = () => window.devicePixelRatio || 1;
 	const fmtInt = (v) => Math.round(v).toLocaleString("en-US");
-	const fmt1 = (v) => v.toLocaleString("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
-	const fmt2 = (v) => v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+	const fmt1 = (v) =>
+		v.toLocaleString("en-US", {
+			minimumFractionDigits: 1,
+			maximumFractionDigits: 1,
+		});
+	const fmt2 = (v) =>
+		v.toLocaleString("en-US", {
+			minimumFractionDigits: 2,
+			maximumFractionDigits: 2,
+		});
 	const el = (tag, cls, html) => {
 		const e = document.createElement(tag);
 		if (cls) e.className = cls;
@@ -38,19 +46,25 @@
 	}
 
 	function drawSpark(c, data, color, fill) {
-		if (!c._ctx) Object.assign(c, (({ ctx, w, h }) => ({ _ctx: ctx, _w: w, _h: h }))(sizeCanvas(c)));
+		if (!c._ctx)
+			Object.assign(
+				c,
+				(({ ctx, w, h }) => ({ _ctx: ctx, _w: w, _h: h }))(sizeCanvas(c)),
+			);
 		const ctx = c._ctx;
 		const w = c._w;
 		const h = c._h;
 		ctx.clearRect(0, 0, w, h);
-		let lo = Math.min(...data);
+		const lo = Math.min(...data);
 		let hi = Math.max(...data);
 		if (hi - lo < 1e-9) hi = lo + 1;
 		const padY = 2;
 		const xs = (i) => (i / (data.length - 1)) * (w - 2) + 1;
 		const ys = (v) => h - padY - ((v - lo) / (hi - lo)) * (h - 2 * padY);
 		ctx.beginPath();
-		data.forEach((v, i) => (i ? ctx.lineTo(xs(i), ys(v)) : ctx.moveTo(xs(i), ys(v))));
+		data.forEach((v, i) =>
+			i ? ctx.lineTo(xs(i), ys(v)) : ctx.moveTo(xs(i), ys(v)),
+		);
 		if (fill) {
 			ctx.save();
 			ctx.lineTo(xs(data.length - 1), h);
@@ -63,7 +77,9 @@
 			ctx.fill();
 			ctx.restore();
 			ctx.beginPath();
-			data.forEach((v, i) => (i ? ctx.lineTo(xs(i), ys(v)) : ctx.moveTo(xs(i), ys(v))));
+			data.forEach((v, i) =>
+				i ? ctx.lineTo(xs(i), ys(v)) : ctx.moveTo(xs(i), ys(v)),
+			);
 		}
 		ctx.strokeStyle = color;
 		ctx.lineWidth = 1.5;
@@ -83,12 +99,66 @@
 	const tip = document.getElementById("tip");
 
 	const kpiDefs = [
-		{ lab: "Active users", v: 18432, dv: 0.004, f: fmtInt, unit: "", vs: "+6.2%", color: "#4f46e5", up: true },
-		{ lab: "Requests / s", v: 2864, dv: 0.03, f: fmtInt, unit: "", vs: "+3.9%", color: "#0891b2", up: true },
-		{ lab: "p95 latency", v: 184, dv: 0.04, f: fmtInt, unit: "ms", vs: "−11 ms", color: "#d97706", up: true },
-		{ lab: "Error rate", v: 0.42, dv: 0.06, f: fmt2, unit: "%", vs: "+0.05 pp", color: "#dc2626", up: false },
-		{ lab: "Revenue today", v: 48213.5, dv: 0, f: (v) => `$${fmtInt(v)}`, unit: "", vs: "+12.4%", color: "#16a34a", up: true },
-		{ lab: "Conversion", v: 3.18, dv: 0.01, f: fmt2, unit: "%", vs: "+0.21 pp", color: "#9333ea", up: true },
+		{
+			lab: "Active users",
+			v: 18432,
+			dv: 0.004,
+			f: fmtInt,
+			unit: "",
+			vs: "+6.2%",
+			color: "#4f46e5",
+			up: true,
+		},
+		{
+			lab: "Requests / s",
+			v: 2864,
+			dv: 0.03,
+			f: fmtInt,
+			unit: "",
+			vs: "+3.9%",
+			color: "#0891b2",
+			up: true,
+		},
+		{
+			lab: "p95 latency",
+			v: 184,
+			dv: 0.04,
+			f: fmtInt,
+			unit: "ms",
+			vs: "−11 ms",
+			color: "#d97706",
+			up: true,
+		},
+		{
+			lab: "Error rate",
+			v: 0.42,
+			dv: 0.06,
+			f: fmt2,
+			unit: "%",
+			vs: "+0.05 pp",
+			color: "#dc2626",
+			up: false,
+		},
+		{
+			lab: "Revenue today",
+			v: 48213.5,
+			dv: 0,
+			f: (v) => `$${fmtInt(v)}`,
+			unit: "",
+			vs: "+12.4%",
+			color: "#16a34a",
+			up: true,
+		},
+		{
+			lab: "Conversion",
+			v: 3.18,
+			dv: 0.01,
+			f: fmt2,
+			unit: "%",
+			vs: "+0.21 pp",
+			color: "#9333ea",
+			up: true,
+		},
 	];
 	const kpis = kpiDefs.map((d, i) => {
 		const p = el("div", "panel kpi");
@@ -101,7 +171,14 @@
 			hist.unshift(v);
 		}
 		hist[hist.length - 1] = d.v;
-		return { d, p, val: p.querySelector(".val"), canvas: p.querySelector("canvas"), hist, v: d.v };
+		return {
+			d,
+			p,
+			val: p.querySelector(".val"),
+			canvas: p.querySelector("canvas"),
+			hist,
+			v: d.v,
+		};
 	});
 
 	function renderKpi(k) {
@@ -137,7 +214,12 @@
 			this.bottom = 22;
 			this.canvas.addEventListener("mousemove", (e) => {
 				const r = this.canvas.getBoundingClientRect();
-				this.hover = { x: e.clientX - r.left, y: e.clientY - r.top, cx: e.clientX, cy: e.clientY };
+				this.hover = {
+					x: e.clientX - r.left,
+					y: e.clientY - r.top,
+					cx: e.clientX,
+					cy: e.clientY,
+				};
 				this.dirty = true;
 			});
 			this.canvas.addEventListener("mouseleave", () => {
@@ -149,7 +231,8 @@
 
 		targetMax() {
 			let m = 0;
-			for (const s of this.series) for (const v of s.data.slice(-this.n - 1)) m = Math.max(m, v);
+			for (const s of this.series)
+				for (const v of s.data.slice(-this.n - 1)) m = Math.max(m, v);
 			const step = this.opts.step;
 			return Math.ceil((m * 1.12) / step) * step;
 		}
@@ -161,7 +244,12 @@
 			});
 			this.times.push(t);
 			if (this.times.length > this.n + 3) this.times.shift();
-			this.anim = { t0: performance.now(), dur: 420, from: this.yMax, to: this.targetMax() };
+			this.anim = {
+				t0: performance.now(),
+				dur: 420,
+				from: this.yMax,
+				to: this.targetMax(),
+			};
 			this.dirty = true;
 		}
 
@@ -180,7 +268,7 @@
 			const pw = w - left - right;
 			const ph = h - top - bottom;
 			ctx.clearRect(0, 0, w, h);
-			ctx.font = "11px \"Noto Sans\", \"Liberation Sans\", sans-serif";
+			ctx.font = '11px "Noto Sans", "Liberation Sans", sans-serif';
 			ctx.textBaseline = "middle";
 			const yTicks = 5;
 			for (let i = 0; i <= yTicks; i++) {
@@ -206,7 +294,9 @@
 			ctx.clip();
 			this.series.forEach((s, j) => {
 				ctx.beginPath();
-				s.data.forEach((v, i) => (i ? ctx.lineTo(xOf(i), yOf(v)) : ctx.moveTo(xOf(i), yOf(v))));
+				s.data.forEach((v, i) =>
+					i ? ctx.lineTo(xOf(i), yOf(v)) : ctx.moveTo(xOf(i), yOf(v)),
+				);
 				if (j === 0) {
 					ctx.save();
 					ctx.lineTo(xOf(len - 1), top + ph);
@@ -219,7 +309,9 @@
 					ctx.fill();
 					ctx.restore();
 					ctx.beginPath();
-					s.data.forEach((v, i) => (i ? ctx.lineTo(xOf(i), yOf(v)) : ctx.moveTo(xOf(i), yOf(v))));
+					s.data.forEach((v, i) =>
+						i ? ctx.lineTo(xOf(i), yOf(v)) : ctx.moveTo(xOf(i), yOf(v)),
+					);
 				}
 				ctx.strokeStyle = s.color;
 				ctx.lineWidth = s.width || 1.6;
@@ -243,7 +335,13 @@
 				ctx.lineTo(Math.round(x) + 0.5, top + ph + 4);
 				ctx.stroke();
 			}
-			if (this.hover && this.hover.x >= left && this.hover.x <= left + pw && this.hover.y >= top && this.hover.y <= top + ph) {
+			if (
+				this.hover &&
+				this.hover.x >= left &&
+				this.hover.x <= left + pw &&
+				this.hover.y >= top &&
+				this.hover.y <= top + ph
+			) {
 				let best = len - 1;
 				let bd = Number.POSITIVE_INFINITY;
 				for (let i = 0; i < len; i++) {
@@ -276,7 +374,10 @@
 				tip.innerHTML = html;
 				tip.style.display = "block";
 				const tw = tip.offsetWidth;
-				const tx = this.hover.cx + 16 + tw > innerWidth ? this.hover.cx - 16 - tw : this.hover.cx + 16;
+				const tx =
+					this.hover.cx + 16 + tw > innerWidth
+						? this.hover.cx - 16 - tw
+						: this.hover.cx + 16;
 				tip.style.left = `${tx}px`;
 				tip.style.top = `${this.hover.cy - 30}px`;
 			}
@@ -307,7 +408,11 @@
 		rpsBase += gauss() * 40 + (2850 - rpsBase) * 0.05 + Math.sin(i / 9) * 12;
 		const spike = rng() < 0.04 ? rand(1.1, 1.3) : 1;
 		const ok = rpsBase * spike;
-		return [ok, ok * rand(0.035, 0.06), ok * rand(0.002, 0.009) * (rng() < 0.05 ? 4 : 1)];
+		return [
+			ok,
+			ok * rand(0.035, 0.06),
+			ok * rand(0.002, 0.009) * (rng() < 0.05 ? 4 : 1),
+		];
 	};
 	let latBase = 62;
 	const latGen = () => {
@@ -315,20 +420,31 @@
 		const p95 = latBase * rand(2.7, 3.2) * (rng() < 0.05 ? 1.5 : 1);
 		return [latBase, p95, p95 * rand(1.5, 2.1)];
 	};
-	const rpsChart = new LineChart(chartPanel("", "Requests per second", "by status class · 1 s resolution", rpsSeries), {
-		series: rpsSeries,
-		gen: rpsGen,
-		step: 500,
-		axis: (v) => (v >= 1000 ? `${fmt1(v / 1000)}k` : fmtInt(v)),
-		tip: (v) => `${fmtInt(v)} req/s`,
-	});
-	const latChart = new LineChart(chartPanel(" r", "Latency", "all endpoints · ms", latSeries), {
-		series: latSeries,
-		gen: latGen,
-		step: 100,
-		axis: (v) => `${fmtInt(v)}`,
-		tip: (v) => `${fmtInt(v)} ms`,
-	});
+	const rpsChart = new LineChart(
+		chartPanel(
+			"",
+			"Requests per second",
+			"by status class · 1 s resolution",
+			rpsSeries,
+		),
+		{
+			series: rpsSeries,
+			gen: rpsGen,
+			step: 500,
+			axis: (v) => (v >= 1000 ? `${fmt1(v / 1000)}k` : fmtInt(v)),
+			tip: (v) => `${fmtInt(v)} req/s`,
+		},
+	);
+	const latChart = new LineChart(
+		chartPanel(" r", "Latency", "all endpoints · ms", latSeries),
+		{
+			series: latSeries,
+			gen: latGen,
+			step: 100,
+			axis: (v) => `${fmtInt(v)}`,
+			tip: (v) => `${fmtInt(v)} ms`,
+		},
+	);
 	const charts = [rpsChart, latChart];
 
 	const endpoints = [
@@ -377,12 +493,15 @@
 		r.errPct = path === "/healthz" ? 0 : rand(0.02, 1.1);
 		r.err = Math.round((r.rpm * 5 * r.errPct) / 100);
 		r.apdex = Math.min(0.99, 1.02 - r.p95 / 900 - r.errPct / 30);
-		for (let k = 0; k < 30; k++) r.hist.push(r.rpm * (1 + gauss() * 0.06 + Math.sin(k / 4 + i) * 0.05));
+		for (let k = 0; k < 30; k++)
+			r.hist.push(r.rpm * (1 + gauss() * 0.06 + Math.sin(k / 4 + i) * 0.05));
 		const tr = el("tr");
 		tr.innerHTML = `<td class="ep"><span class="m">${m}</span>${path}</td><td data-c="rpm"></td><td data-c="p50"></td><td data-c="p95"></td><td data-c="p99"></td><td data-c="err"></td><td data-c="errPct"></td><td><span data-c="apdex"></span><span class="bar"><i></i></span></td><td><canvas></canvas></td>`;
 		tbody.append(tr);
 		r.tr = tr;
-		r.cells = Object.fromEntries([...tr.querySelectorAll("[data-c]")].map((c) => [c.dataset.c, c]));
+		r.cells = Object.fromEntries(
+			[...tr.querySelectorAll("[data-c]")].map((c) => [c.dataset.c, c]),
+		);
 		r.barI = tr.querySelector(".bar i");
 		r.canvas = tr.querySelector("canvas");
 		return r;
@@ -410,7 +529,8 @@
 		}
 		r.cells.errPct.className = r.errPct > 0.8 ? "dn" : "";
 		r.barI.style.width = `${Math.round(r.apdex * 100)}%`;
-		r.barI.style.background = r.apdex > 0.85 ? "#22c55e" : r.apdex > 0.7 ? "#f59e0b" : "#ef4444";
+		r.barI.style.background =
+			r.apdex > 0.85 ? "#22c55e" : r.apdex > 0.7 ? "#f59e0b" : "#ef4444";
 		drawSpark(r.canvas, r.hist, "#6366f1", false);
 	}
 
@@ -425,7 +545,11 @@
 		["ConnectionResetError", 87],
 		["KeyError: 'currency'", 41],
 	].map(([n, c]) => {
-		const row = el("div", "er", `<span class="n">${n}</span><span class="b"><i></i></span><span class="c num"></span>`);
+		const row = el(
+			"div",
+			"er",
+			`<span class="n">${n}</span><span class="b"><i></i></span><span class="c num"></span>`,
+		);
 		errPanel.append(row);
 		return { n, c, i: row.querySelector("i"), cEl: row.querySelector(".c") };
 	});
@@ -444,24 +568,78 @@
 		}
 	}
 
-	const services = ["api-gateway", "checkout-svc", "payments-svc", "cart-svc", "search-svc", "catalog-svc", "auth-svc", "worker-events"];
-	const pods = () => `${pick(services)}-${Math.floor(rand(4096, 65535)).toString(16)}-${pick(["x7k2p", "m4q9z", "t2v8c", "b6n1r", "h3d5w"])}`;
+	const services = [
+		"api-gateway",
+		"checkout-svc",
+		"payments-svc",
+		"cart-svc",
+		"search-svc",
+		"catalog-svc",
+		"auth-svc",
+		"worker-events",
+	];
+	const pods = () =>
+		`${pick(services)}-${Math.floor(rand(4096, 65535)).toString(16)}-${pick(["x7k2p", "m4q9z", "t2v8c", "b6n1r", "h3d5w"])}`;
 	const eventTemplates = [
-		["info", () => `deploy <b>${pick(services)}</b> v2.${Math.floor(rand(30, 48))}.${Math.floor(rand(0, 9))} rolled out to ${Math.floor(rand(6, 13))}/12 pods`],
-		["info", () => `autoscaler: <b>${pick(services)}</b> scaled ${Math.floor(rand(4, 7))} → ${Math.floor(rand(7, 11))} replicas`],
-		["warn", () => `p95 latency on <b>/api/v2/${pick(["search", "checkout", "orders", "recommendations"])}</b> above ${pick([300, 400, 500])} ms`],
-		["err", () => `<b>payments-svc</b> 502 from upstream stripe-proxy (${Math.floor(rand(2, 30))} in 60 s)`],
-		["info", () => `cache hit ratio ${fmt1(rand(91, 97))}% on redis-${pick(["main", "sessions", "catalog"])}`],
-		["info", () => `job <b>${pick(["nightly-reindex", "export-orders", "sync-inventory", "gc-sessions"])}</b> completed in ${Math.floor(rand(1, 9))}m${pad(Math.floor(rand(0, 59)))}s`],
+		[
+			"info",
+			() =>
+				`deploy <b>${pick(services)}</b> v2.${Math.floor(rand(30, 48))}.${Math.floor(rand(0, 9))} rolled out to ${Math.floor(rand(6, 13))}/12 pods`,
+		],
+		[
+			"info",
+			() =>
+				`autoscaler: <b>${pick(services)}</b> scaled ${Math.floor(rand(4, 7))} → ${Math.floor(rand(7, 11))} replicas`,
+		],
+		[
+			"warn",
+			() =>
+				`p95 latency on <b>/api/v2/${pick(["search", "checkout", "orders", "recommendations"])}</b> above ${pick([300, 400, 500])} ms`,
+		],
+		[
+			"err",
+			() =>
+				`<b>payments-svc</b> 502 from upstream stripe-proxy (${Math.floor(rand(2, 30))} in 60 s)`,
+		],
+		[
+			"info",
+			() =>
+				`cache hit ratio ${fmt1(rand(91, 97))}% on redis-${pick(["main", "sessions", "catalog"])}`,
+		],
+		[
+			"info",
+			() =>
+				`job <b>${pick(["nightly-reindex", "export-orders", "sync-inventory", "gc-sessions"])}</b> completed in ${Math.floor(rand(1, 9))}m${pad(Math.floor(rand(0, 59)))}s`,
+		],
 		["warn", () => `pod <b>${pods()}</b> restarted (OOMKilled)`],
-		["info", () => `alert resolved: ${pick(["High error rate", "Disk usage > 80%", "Queue backlog"])} on ${pick(services)}`],
-		["err", () => `<b>${pick(services)}</b> ${pick(["ConnectionResetError", "UpstreamTimeout", "KeyError: 'currency'"])} in ${pick(["handler.py:212", "client.go:88", "routes.ts:47"])}`],
-		["info", () => `${pick(["sw", "mk", "jl", "ar"])}@acme.io acknowledged INC-${Math.floor(rand(2200, 2400))}`],
-		["warn", () => `queue <b>${pick(["events.batch", "emails", "webhooks"])}</b> depth ${fmtInt(rand(1200, 9000))} (consumer lag ${fmt1(rand(1, 9))} s)`],
+		[
+			"info",
+			() =>
+				`alert resolved: ${pick(["High error rate", "Disk usage > 80%", "Queue backlog"])} on ${pick(services)}`,
+		],
+		[
+			"err",
+			() =>
+				`<b>${pick(services)}</b> ${pick(["ConnectionResetError", "UpstreamTimeout", "KeyError: 'currency'"])} in ${pick(["handler.py:212", "client.go:88", "routes.ts:47"])}`,
+		],
+		[
+			"info",
+			() =>
+				`${pick(["sw", "mk", "jl", "ar"])}@acme.io acknowledged INC-${Math.floor(rand(2200, 2400))}`,
+		],
+		[
+			"warn",
+			() =>
+				`queue <b>${pick(["events.batch", "emails", "webhooks"])}</b> depth ${fmtInt(rand(1200, 9000))} (consumer lag ${fmt1(rand(1, 9))} s)`,
+		],
 	];
 	function addEvent(animate, tms) {
 		const [lv, f] = pick(eventTemplates);
-		const ev = el("div", `ev${animate ? " new" : ""}`, `<span class="t">${hms(tms)}</span><span class="lv ${lv}">${lv.toUpperCase()}</span><span>${f()}</span>`);
+		const ev = el(
+			"div",
+			`ev${animate ? " new" : ""}`,
+			`<span class="t">${hms(tms)}</span><span class="lv ${lv}">${lv.toUpperCase()}</span><span>${f()}</span>`,
+		);
 		feedList.prepend(ev);
 		while (feedList.children.length > 16) feedList.lastChild.remove();
 		if (animate) cap.event("dash_event", { level: lv });
@@ -497,7 +675,11 @@
 			later(140 + i * 110, () => {
 				if (i === 4) k.v += rand(8, 140) * (rng() < 0.25 ? 3 : 1);
 				else k.v *= 1 + gauss() * k.d.dv * 0.5;
-				if (i === 1) k.v = rpsChart.series[0].data.at(-1) + rpsChart.series[1].data.at(-1) + rpsChart.series[2].data.at(-1);
+				if (i === 1)
+					k.v =
+						rpsChart.series[0].data.at(-1) +
+						rpsChart.series[1].data.at(-1) +
+						rpsChart.series[2].data.at(-1);
 				if (i === 2) k.v = latChart.series[1].data.at(-1);
 				k.hist.push(k.v);
 				k.hist.shift();
@@ -514,9 +696,13 @@
 				r.p50 = Math.max(3, Math.round(r.p50 * (1 + gauss() * 0.04)));
 				r.p95 = Math.max(r.p50 + 4, Math.round(r.p95 * (1 + gauss() * 0.05)));
 				r.p99 = Math.max(r.p95 + 6, Math.round(r.p99 * (1 + gauss() * 0.06)));
-				if (r.path !== "/healthz") r.errPct = Math.max(0, r.errPct * (1 + gauss() * 0.08));
+				if (r.path !== "/healthz")
+					r.errPct = Math.max(0, r.errPct * (1 + gauss() * 0.08));
 				r.err = Math.round((r.rpm * 5 * r.errPct) / 100);
-				r.apdex = Math.max(0.4, Math.min(0.99, 1.02 - r.p95 / 900 - r.errPct / 30));
+				r.apdex = Math.max(
+					0.4,
+					Math.min(0.99, 1.02 - r.p95 / 900 - r.errPct / 30),
+				);
 				r.hist.push(r.rpm);
 				r.hist.shift();
 				renderRow(r, true);
@@ -524,7 +710,8 @@
 		});
 		if (tickNo % 2 === 0) {
 			later(500, () => {
-				for (const e of errTypes) e.c += Math.floor(rand(0, 6) * (rng() < 0.15 ? 4 : 1));
+				for (const e of errTypes)
+					e.c += Math.floor(rand(0, 6) * (rng() < 0.15 ? 4 : 1));
 				renderErrs();
 			});
 		}

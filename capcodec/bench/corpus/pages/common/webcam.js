@@ -35,13 +35,27 @@
 	function draw(tms) {
 		const t = tms / 1000;
 		ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-		const exposure = 0.94 + 0.05 * Math.sin(t * 0.21) + 0.02 * Math.sin(t * 1.3);
+		const exposure =
+			0.94 + 0.05 * Math.sin(t * 0.21) + 0.02 * Math.sin(t * 1.3);
 		const wall = ctx.createLinearGradient(0, 0, S, S);
-		wall.addColorStop(0, `hsl(${32 + 6 * Math.sin(t * 0.13)}, 32%, ${Math.round(70 * exposure)}%)`);
-		wall.addColorStop(1, `hsl(${24 + 4 * Math.sin(t * 0.17)}, 28%, ${Math.round(46 * exposure)}%)`);
+		wall.addColorStop(
+			0,
+			`hsl(${32 + 6 * Math.sin(t * 0.13)}, 32%, ${Math.round(70 * exposure)}%)`,
+		);
+		wall.addColorStop(
+			1,
+			`hsl(${24 + 4 * Math.sin(t * 0.17)}, 28%, ${Math.round(46 * exposure)}%)`,
+		);
 		ctx.fillStyle = wall;
 		ctx.fillRect(0, 0, S, S);
-		const win = ctx.createRadialGradient(260 + 6 * Math.sin(t * 0.3), 70, 10, 260, 70, 150);
+		const win = ctx.createRadialGradient(
+			260 + 6 * Math.sin(t * 0.3),
+			70,
+			10,
+			260,
+			70,
+			150,
+		);
 		win.addColorStop(0, `rgba(255,248,225,${0.55 + 0.1 * Math.sin(t * 0.4)})`);
 		win.addColorStop(1, "rgba(255,248,225,0)");
 		ctx.fillStyle = win;
@@ -58,7 +72,14 @@
 		ctx.fillRect(-10 + sway * 0.4, 110, 200, 6);
 		ctx.fillRect(-10 + sway * 0.4, 176, 200, 6);
 		ctx.restore();
-		const plant = ctx.createRadialGradient(286 + sway * 0.4, 220, 4, 286, 220, 60);
+		const plant = ctx.createRadialGradient(
+			286 + sway * 0.4,
+			220,
+			4,
+			286,
+			220,
+			60,
+		);
 		plant.addColorStop(0, "rgba(60,110,50,0.85)");
 		plant.addColorStop(1, "rgba(60,110,50,0)");
 		ctx.fillStyle = plant;
@@ -126,11 +147,19 @@
 		ctx.bezierCurveTo(46, -40, 20, -48, -4, -46);
 		ctx.bezierCurveTo(-30, -46, -46, -36, -58, -6);
 		ctx.fill();
-		const blink = (t % 4.3) < 0.13;
+		const blink = t % 4.3 < 0.13;
 		ctx.fillStyle = "#2a1a12";
 		for (const ex of [-21, 21]) {
 			ctx.beginPath();
-			ctx.ellipse(ex + 2 * Math.sin(t * 0.9), -6, 7, blink ? 1 : 4.5, 0, 0, Math.PI * 2);
+			ctx.ellipse(
+				ex + 2 * Math.sin(t * 0.9),
+				-6,
+				7,
+				blink ? 1 : 4.5,
+				0,
+				0,
+				Math.PI * 2,
+			);
 			ctx.fill();
 		}
 		ctx.strokeStyle = "rgba(60,35,25,0.6)";
@@ -147,7 +176,10 @@
 		ctx.moveTo(-2, -2);
 		ctx.quadraticCurveTo(-7, 18, 2, 22);
 		ctx.stroke();
-		const talk = Math.max(0, Math.sin(t * 9.1) * Math.sin(t * 2.3) + 0.25 * Math.sin(t * 13.7));
+		const talk = Math.max(
+			0,
+			Math.sin(t * 9.1) * Math.sin(t * 2.3) + 0.25 * Math.sin(t * 13.7),
+		);
 		ctx.fillStyle = "#7a3b32";
 		ctx.beginPath();
 		ctx.ellipse(0, 40, 16, 3 + 6 * talk, 0, 0, Math.PI * 2);

@@ -368,7 +368,9 @@ svg.i {
 	margin-bottom: 8px;
 	box-shadow: 0 1px 1px #0000000a;
 	position: relative;
-	transition: box-shadow 0.12s ease, border-color 0.12s ease;
+	transition:
+		box-shadow 0.12s ease,
+		border-color 0.12s ease;
 }
 .card:hover {
 	border-color: #cbcdd3;
@@ -485,7 +487,9 @@ svg.i {
 	pointer-events: none;
 	z-index: 100;
 	transform: rotate(2.5deg);
-	box-shadow: 0 16px 40px #0000002e, 0 2px 6px #0000001f !important;
+	box-shadow:
+		0 16px 40px #0000002e,
+		0 2px 6px #0000001f !important;
 	border-color: #b9bbff !important;
 	margin: 0;
 }
@@ -605,7 +609,9 @@ svg.i {
 	background: #fff;
 	border: 1px solid #e3e4e8;
 	border-radius: 10px;
-	box-shadow: 0 12px 32px #0000001f, 0 2px 6px #00000012;
+	box-shadow:
+		0 12px 32px #0000001f,
+		0 2px 6px #00000012;
 	padding: 5px;
 	z-index: 150;
 }

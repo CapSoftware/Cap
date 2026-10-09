@@ -452,7 +452,9 @@ ul.fr {
 	display: none;
 	width: 450px;
 	background: #fff;
-	box-shadow: 0 30px 90px -20px #00000052, 0 0 1px #a2a9b1;
+	box-shadow:
+		0 30px 90px -20px #00000052,
+		0 0 1px #a2a9b1;
 	border-radius: 2px;
 	z-index: 10;
 	font-size: 14px;

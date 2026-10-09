@@ -116,5 +116,9 @@ window.ARTICLE = [
 <li>Yamada, Hisao (1980). "A historical study of typewriters and typing methods: from the position of planning Japanese parallels". <i>Journal of Information Processing</i>. <b>2</b> (4): 175–202.</li>
 </ul>`,
 	},
-	{ h: 2, title: "External links", html: `<ul class="fr"><li>Typewriter Database – a collaborative record of serial numbers and production dates</li><li>Media related to Typewriters at Wikimedia Commons</li><li>"How typewriters work" – an illustrated introduction from a museum collection</li></ul>{navbox}` },
+	{
+		h: 2,
+		title: "External links",
+		html: `<ul class="fr"><li>Typewriter Database – a collaborative record of serial numbers and production dates</li><li>Media related to Typewriters at Wikimedia Commons</li><li>"How typewriters work" – an illustrated introduction from a museum collection</li></ul>{navbox}`,
+	},
 ];

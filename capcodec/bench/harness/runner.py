@@ -588,7 +588,7 @@ def summarize(rows: list[dict], tier: Tier, refs: list[str]) -> dict:
             "speed_wall_fps_median": statistics.median([r["speed_wall_fps"] for r in sr if r.get("speed_wall_fps")]) if sr else None,
             "decode_failures": sum(1 for r in er if r.get("decode_ffmpeg_ok") is False or r.get("decode_jm_ok") is False
                                    or r.get("recon_match") is False or r.get("jm_match") is False),
-            "errors": sum(1 for r in rows if r["encoder"] == e and r.get("error")),
+            "errors": sum(1 for r in rows if r["encoder"] == e and (r.get("error") or r.get("metrics_error"))),
         }
         for k, t in tables.items():
             for ref in refs:
@@ -642,6 +642,9 @@ def gate(summary: dict, best: dict | None) -> tuple[bool, list[str]]:
         return ok, msgs
     bd = s.get(f"bd_psnr_yuv_vs_{REFERENCE}")
     fps = s.get("cpu_fps_median")
+    if bd is None:
+        ok = False
+        msgs.append(f"FAIL no BD-rate for {GATE_ENCODER} vs {REFERENCE}")
     if best:
         b_bd, b_fps = best.get("bd_psnr_yuv"), best.get("cpu_fps")
         if bd is not None and b_bd is not None and bd > b_bd + 1.0:

@@ -11,7 +11,8 @@
 	}
 	window.mulberry32 = mulberry32;
 
-	const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+	const esc = (s) =>
+		s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
 	class Terminal {
 		constructor(host, opts) {
@@ -53,7 +54,8 @@
 			const d = document.createElement("div");
 			d.className = `tl${cls ? ` ${cls}` : ""}`;
 			d.innerHTML = html || " ";
-			if (this.inputLine && this.inputLine.isConnected) this.body.insertBefore(d, this.inputLine);
+			if (this.inputLine && this.inputLine.isConnected)
+				this.body.insertBefore(d, this.inputLine);
 			else this.body.append(d);
 			while (this.body.childElementCount > 2000) this.body.firstChild.remove();
 			this.scrollBottom();

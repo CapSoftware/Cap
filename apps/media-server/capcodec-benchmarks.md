@@ -22,7 +22,7 @@ Quality measured 2026-10-09 on main `fff504d`. Speed remeasured the same day on 
 How to reproduce (from the `capcodec/` directory in this repository):
 
 - Quality: `CAPCODEC_BIN_UNCHECKED=<binary> python3 bench/bench.py standard --quality-only --encoders capcodec-medium,capcodec-live,capcodec-live-zerolatency,x264-veryfast,x264-veryfast-zerolatency --out <dir>` (1080p, 10 s per clip; code_4k is scaled to 1080p here). capcodec's CRF ladder runs 20-44 so its VMAF range covers x264's CRF 18-33; the overlap column shows how much of the two curves BD-rate compares (it was 15-24% on screen clips with the old 20-36 ladder).
-- Speed: `bench/lane.sh start`, then `bench/lane.sh run "python3 bench/speedcmp.py --binary <binary> --clips all --modes medium,live,zerolatency --retime bench/out/speedcmp-fff504d-v2 --out <dir>"`. The rerun reuses the CRF that matched x264 CRF 23 (bitstreams are unchanged, so the match stands). 5 shuffled, interleaved rounds at 1 and 4 threads; every other process is stopped for each timed run (about 690 processes stopped, frozen median). code_4k runs at native 4K for 5 s. Output: `bench/out/speedcmp-00fecf7`.
+- Speed: `bench/lane.sh start`, then `bench/lane.sh run "python3 bench/speedcmp.py --binary <binary> --clips all --modes medium,live,zerolatency --out <dir>"`. A fresh run matches each clip to x264 CRF 23 by VMAF, then times 5 shuffled rounds at 1 and 4 threads with other processes stopped. code_4k runs at native 4K for 5 s. The published table reused an earlier CRF match; that results file is not in the repository.
 - Tables: `python3 bench/scoreboard.py --quality LABEL=<dir> --speed LABEL=<dir> --out SCOREBOARD.md`.
 
 ### main fff504d: capcodec-medium vs x264-veryfast (BD-rate, negative = capcodec needs fewer bits)

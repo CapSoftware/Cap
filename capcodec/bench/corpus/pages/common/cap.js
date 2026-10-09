@@ -23,12 +23,20 @@
 			return [0, 0, de.clientWidth, de.clientHeight];
 		}
 		const r = el.getBoundingClientRect();
-		return [r.left + el.clientLeft, r.top + el.clientTop, el.clientWidth, el.clientHeight];
+		return [
+			r.left + el.clientLeft,
+			r.top + el.clientTop,
+			el.clientWidth,
+			el.clientHeight,
+		];
 	}
 
 	function track(el, name) {
 		if (!el || tracked.has(el)) return;
-		tracked.set(el, { id: name || el.dataset.scrollId || `s${nextId++}`, last: null });
+		tracked.set(el, {
+			id: name || el.dataset.scrollId || `s${nextId++}`,
+			last: null,
+		});
 	}
 
 	function sample(src) {
@@ -64,16 +72,43 @@
 		for (const el of document.querySelectorAll("[data-scroll-id]")) track(el);
 	}
 
-	document.addEventListener("scroll", () => sample("scroll"), { capture: true, passive: true });
+	document.addEventListener("scroll", () => sample("scroll"), {
+		capture: true,
+		passive: true,
+	});
 	for (const type of ["keydown", "keyup"]) {
-		window.addEventListener(type, (e) => push({ k: "input", type, key: e.key, code: e.code }), { capture: true });
+		window.addEventListener(
+			type,
+			(e) => push({ k: "input", type, key: e.key, code: e.code }),
+			{ capture: true },
+		);
 	}
 	for (const type of ["mousedown", "mouseup", "click", "dblclick"]) {
-		window.addEventListener(type, (e) => push({ k: "input", type, x: e.clientX, y: e.clientY, button: e.button }), { capture: true });
+		window.addEventListener(
+			type,
+			(e) =>
+				push({
+					k: "input",
+					type,
+					x: e.clientX,
+					y: e.clientY,
+					button: e.button,
+				}),
+			{ capture: true },
+		);
 	}
 	window.addEventListener(
 		"wheel",
-		(e) => push({ k: "input", type: "wheel", x: e.clientX, y: e.clientY, dx: e.deltaX, dy: e.deltaY, mode: e.deltaMode }),
+		(e) =>
+			push({
+				k: "input",
+				type: "wheel",
+				x: e.clientX,
+				y: e.clientY,
+				dx: e.deltaX,
+				dy: e.deltaY,
+				mode: e.deltaMode,
+			}),
 		{ capture: true, passive: true },
 	);
 
@@ -84,9 +119,11 @@
 		sample("ready");
 		event("ready", { w: innerWidth, h: innerHeight, dpr: devicePixelRatio });
 		document.fonts.ready.then(() => {
-			requestAnimationFrame(() => requestAnimationFrame(() => {
-				window.capReady = true;
-			}));
+			requestAnimationFrame(() =>
+				requestAnimationFrame(() => {
+					window.capReady = true;
+				}),
+			);
 		});
 	};
 	requestAnimationFrame(onFrame);
