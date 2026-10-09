@@ -5,12 +5,18 @@ import {
 	access,
 	chmod,
 	copyFile,
+	lstat,
 	mkdtemp,
+	open,
 	readdir,
 	readFile,
+	readlink,
+	realpath,
 	rename,
 	rm,
+	rmdir,
 	stat,
+	symlink,
 	writeFile,
 } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -243,10 +249,190 @@ export async function findConflictingLibraries(appDir, directory = appDir) {
 	return libraries;
 }
 
+const elfMagic = Buffer.from([0x7f, 0x45, 0x4c, 0x46]);
+
+async function isElf(filename) {
+	const handle = await open(filename, "r");
+	try {
+		const { buffer, bytesRead } = await handle.read(Buffer.alloc(4), 0, 4, 0);
+		return bytesRead === 4 && buffer.equals(elfMagic);
+	} finally {
+		await handle.close();
+	}
+}
+
+async function neededLibraries(filename, env, run) {
+	const result = await run("readelf", ["--wide", "--dynamic", filename], {
+		env: { ...env, LC_ALL: "C" },
+		encoding: "utf8",
+		stdio: ["ignore", "pipe", "inherit"],
+	});
+	if (typeof result.stdout !== "string") {
+		throw new Error(`Could not read the dynamic section of ${filename}`);
+	}
+	return [
+		...result.stdout.matchAll(/\(NEEDED\)\s+Shared library: \[([^\]]+)\]/g),
+	].map((match) => match[1]);
+}
+
+async function elfFiles(directory, libraryDirectory) {
+	const files = [];
+	for (const entry of await readdir(directory, { withFileTypes: true })) {
+		const filename = path.join(directory, entry.name);
+		if (entry.isDirectory()) {
+			files.push(...(await elfFiles(filename, libraryDirectory)));
+		} else if (
+			entry.isFile() &&
+			directory !== libraryDirectory &&
+			(await isElf(filename))
+		) {
+			files.push(filename);
+		}
+	}
+	return files;
+}
+
+const gtkLauncherSource =
+	/^\s*source\s+"\$this_dir"\/apprun-hooks\/"linuxdeploy-plugin-gtk\.sh"\s*$/;
+const gtkLauncherExec = /^\s*exec\s+"\$this_dir"\/AppRun\.wrapped\s+"\$@"\s*$/;
+
+async function removeGtkLauncher(appDir) {
+	const hooks = path.join(appDir, "apprun-hooks");
+	const launcher = path.join(appDir, "AppRun");
+	const wrapped = path.join(appDir, "AppRun.wrapped");
+	const commands = (await readFile(launcher, "utf8"))
+		.split("\n")
+		.filter((line) => line.trim() && !line.trimStart().startsWith("#"));
+	const sources = commands.filter((line) => /^\s*source\b/.test(line));
+	if (
+		(await readdir(hooks)).join() !== "linuxdeploy-plugin-gtk.sh" ||
+		sources.length !== 1 ||
+		!gtkLauncherSource.test(sources[0]) ||
+		!gtkLauncherExec.test(commands.at(-1) ?? "")
+	) {
+		throw new Error(
+			"Unrecognized AppImage launcher; refusing to remove the GTK runtime",
+		);
+	}
+	await access(wrapped, constants.X_OK);
+	await rm(hooks, { recursive: true });
+	await rename(wrapped, launcher);
+}
+
+async function webviewRuntimeDirectories(appDir) {
+	const libraryDirectory = path.join(appDir, "usr/lib");
+	const multiarch = (await readdir(libraryDirectory, { withFileTypes: true }))
+		.filter((entry) => entry.isDirectory() && /-linux-gnu/.test(entry.name))
+		.map((entry) => path.join(libraryDirectory, entry.name));
+	return {
+		multiarch,
+		directories: [
+			"usr/lib/gtk-3.0",
+			"usr/lib/gdk-pixbuf-2.0",
+			"usr/lib/girepository-1.0",
+			"usr/lib/webkit2gtk-4.1",
+			"usr/lib64/webkit2gtk-4.1",
+			"usr/libexec/webkit2gtk-4.1",
+			"usr/share/glib-2.0",
+		]
+			.map((directory) => path.join(appDir, directory))
+			.concat(
+				multiarch.flatMap((directory) => [
+					path.join(directory, "webkit2gtk-4.1"),
+					path.join(directory, "gio"),
+				]),
+			),
+	};
+}
+
+export async function removeWebviewRuntime(
+	appDir,
+	{ env = process.env, run = runCommand } = {},
+) {
+	await removeGtkLauncher(appDir);
+	const removed = [];
+	const { directories, multiarch } = await webviewRuntimeDirectories(appDir);
+	for (const directory of directories) {
+		const entry = await lstat(directory).catch(() => null);
+		if (!entry) continue;
+		await rm(directory, { recursive: true });
+		removed.push(directory);
+	}
+	for (const directory of multiarch) {
+		if ((await readdir(directory)).length === 0) await rmdir(directory);
+	}
+
+	const libraryDirectory = path.join(appDir, "usr/lib");
+	const libraryRoot = await realpath(libraryDirectory);
+	const candidates = new Set(
+		(await readdir(libraryDirectory, { withFileTypes: true }))
+			.filter(
+				(entry) =>
+					(entry.isFile() || entry.isSymbolicLink()) &&
+					/\.so(?:\.|$)/.test(entry.name),
+			)
+			.map((entry) => entry.name),
+	);
+	const pending = [];
+	for (const file of await elfFiles(appDir, libraryDirectory)) {
+		pending.push(...(await neededLibraries(file, env, run)));
+	}
+	const kept = new Set();
+	while (pending.length > 0) {
+		const name = pending.pop();
+		if (kept.has(name) || !candidates.has(name)) continue;
+		kept.add(name);
+		const filename = path.join(libraryDirectory, name);
+		if ((await lstat(filename)).isSymbolicLink()) {
+			const target = await realpath(filename).catch(() => null);
+			if (target && path.dirname(target) === libraryRoot) {
+				pending.push(path.basename(target));
+			}
+		} else if (await isElf(filename)) {
+			pending.push(...(await neededLibraries(filename, env, run)));
+		}
+	}
+	for (const name of candidates) {
+		if (kept.has(name)) continue;
+		const filename = path.join(libraryDirectory, name);
+		await rm(filename);
+		removed.push(filename);
+	}
+	return removed;
+}
+
+export async function relativizeDirIcon(appDir) {
+	const icon = path.join(appDir, ".DirIcon");
+	const target = await readlink(icon).catch(() => null);
+	if (!target || !path.isAbsolute(target)) return;
+	const name = path.basename(target);
+	await access(path.join(appDir, name));
+	await rm(icon);
+	await symlink(name, icon);
+}
+
+export async function signUpdaterArtifact(
+	filename,
+	{ env = process.env, run = runCommand } = {},
+) {
+	await run("bun", ["run", "tauri", "signer", "sign", filename], {
+		cwd: desktopDirectory,
+		env: {
+			...env,
+			TAURI_PRIVATE_KEY: env.TAURI_SIGNING_PRIVATE_KEY,
+			TAURI_PRIVATE_KEY_PASSWORD: env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD ?? "",
+		},
+	});
+	if (!(await stat(`${filename}.sig`)).size) {
+		throw new Error(`Updater signature for ${filename} is empty`);
+	}
+}
+
 export async function finalizeLinuxAppImage(
 	filename,
 	{
 		unsigned = false,
+		webview = true,
 		env = process.env,
 		run = runCommand,
 		replace = rename,
@@ -285,7 +471,12 @@ export async function finalizeLinuxAppImage(
 		const excluded = await findConflictingLibraries(appDir);
 		// Host Mesa and ALSA plugins require their matching Wayland and PipeWire ABIs.
 		for (const library of excluded) await rm(library);
-		await selectAppImageGtkBackend(appDir);
+		if (webview) {
+			await selectAppImageGtkBackend(appDir);
+		} else {
+			excluded.push(...(await removeWebviewRuntime(appDir, { env, run })));
+		}
+		await relativizeDirIcon(appDir);
 		await preserveAppImageWorkingDirectory(appDir);
 		const output = path.join(work, path.basename(image));
 		await run(
@@ -309,20 +500,7 @@ export async function finalizeLinuxAppImage(
 			throw new Error("Final AppImage did not preserve its runtime");
 		}
 		await chmod(output, 0o755);
-		if (!unsigned) {
-			await run("bun", ["run", "tauri", "signer", "sign", output], {
-				cwd: desktopDirectory,
-				env: {
-					...env,
-					TAURI_PRIVATE_KEY: env.TAURI_SIGNING_PRIVATE_KEY,
-					TAURI_PRIVATE_KEY_PASSWORD:
-						env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD ?? "",
-				},
-			});
-			if (!(await stat(`${output}.sig`)).size) {
-				throw new Error("Final AppImage updater signature is empty");
-			}
-		}
+		if (!unsigned) await signUpdaterArtifact(output, { env, run });
 		const originalImage = path.join(work, "original-image");
 		const originalImageStat = await stat(image);
 		await copyFile(image, originalImage, constants.COPYFILE_FICLONE);
@@ -356,16 +534,19 @@ if (
 	process.argv[1] &&
 	import.meta.url === pathToFileURL(process.argv[1]).href
 ) {
+	const flags = new Set(["--unsigned", "--without-webview"]);
 	const args = process.argv.slice(2);
-	const unsigned = args[0] === "--unsigned";
-	if (unsigned) args.shift();
-	if (process.platform !== "linux" || args.length !== 1) {
+	const files = args.filter((arg) => !flags.has(arg));
+	if (process.platform !== "linux" || files.length !== 1) {
 		throw new Error(
-			"Run on Linux: node scripts/finalize-linux-appimage.mjs [--unsigned] <Cap.AppImage>",
+			"Run on Linux: node scripts/finalize-linux-appimage.mjs [--unsigned] [--without-webview] <Cap.AppImage>",
 		);
 	}
-	const excluded = await finalizeLinuxAppImage(args[0], { unsigned });
+	const excluded = await finalizeLinuxAppImage(files[0], {
+		unsigned: args.includes("--unsigned"),
+		webview: !args.includes("--without-webview"),
+	});
 	console.log(
-		`Finalized ${args[0]}; excluded ${excluded.join(", ") || "none"}`,
+		`Finalized ${files[0]}; excluded ${excluded.join(", ") || "none"}`,
 	);
 }
