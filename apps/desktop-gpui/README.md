@@ -22,9 +22,12 @@ cargo run
 
 The first build takes about 11 minutes and 6.4 GB of `target/`: gpui pulls its
 own revisions of the wgpu and font stacks. After that, an edit rebuilds only
-the app crate, which stays at `opt-level = 0`: about 75s with `cargo build` and
-35s in the dev loop below. Dependencies build at `opt-level = 2` with line-table
-debug info.
+the app crate, at `opt-level = 0` and incrementally, in about 22s with plain
+`cargo build` or the dev loop below; the app crate's incremental cache is about
+1.6 GB of `target/debug/incremental`. Dependencies build at `opt-level = 2`.
+The app crate and its dependencies carry line-table debug info, so breakpoints
+and backtraces keep their lines; for locals in a debugger, build with
+`--config 'profile.dev.package.cap-desktop-gpui.debug=true'`.
 
 Loops over pixels or samples live in `kernels/` (`cap-gpui-kernels`,
 `opt-level = 3`): unoptimised, the editor's frame conversion alone costs 42.7ms
@@ -59,13 +62,8 @@ waits out an in-flight recording rather than truncating it (the state file
 doubles as that handshake — `dev.sh` will not kill the app while it reads
 `"recording":true`).
 
-The loop exports `CARGO_INCREMENTAL=1`, overriding this profile's
-`incremental = false` for its own builds only: a one-line edit to the app crate
-rebuilds in about 35s instead of 75s.
-The costs are the ones the profile comment warns about, scoped down: a few GB
-of `target/debug/incremental` (delete it to reclaim), and a one-off app-crate
-rebuild when switching between `./dev.sh` and a plain `cargo build`, whose
-flags differ.
+The loop runs a plain `cargo build`, so it shares every artifact with one run
+by hand: switching between `./dev.sh` and `cargo build` rebuilds nothing.
 
 ### Why it is a separate workspace
 
