@@ -1,6 +1,6 @@
-// The desktop dev entry: `pnpm tauri dev` plus the gpui app's save-to-relaunch
+// The desktop dev entry: `bun run tauri dev` plus the gpui app's save-to-relaunch
 // loop (`apps/desktop-gpui/dev.sh`), so working on either app under
-// `pnpm dev:desktop` gets hot reload without a second terminal. The gpui loop
+// `bun run dev:desktop` gets hot reload without a second terminal. The gpui loop
 // is macOS-only (dev.sh uses BSD stat/md5), skipped when the workspace is
 // absent (main without the gpui branch), and opt-out via CAP_GPUI_DEV=0. Its
 // output is prefixed [gpui] so the two cargo streams stay tellable apart.
@@ -35,7 +35,7 @@ let lastTauriCode = 0;
 let exiting = false;
 
 function startTauri() {
-	tauri = spawn("pnpm", ["tauri", "dev"], { stdio: "inherit" });
+	tauri = spawn("bun", ["run", "tauri", "dev"], { stdio: "inherit" });
 	tauri.on("exit", (code, signal) => {
 		tauri = null;
 		lastTauriCode = signal ? 1 : (code ?? 1);

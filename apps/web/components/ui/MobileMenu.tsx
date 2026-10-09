@@ -23,6 +23,8 @@ interface NavLink {
 const primaryLinks: NavLink[] = [
 	{ href: "/pricing", text: "Pricing" },
 	{ href: "/download", text: "Download" },
+	{ href: "/agents", text: "Agents" },
+	{ href: "/migrate-from-loom", text: "Migrate from Loom" },
 	{ href: "/blog", text: "Blog" },
 	{ href: "/changelog", text: "Changelog" },
 	{ href: "/about", text: "About" },

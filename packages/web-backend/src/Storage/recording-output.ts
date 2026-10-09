@@ -6,6 +6,8 @@ type RecordingVideo = {
 	source: {
 		type: string;
 		outputKey?: string;
+		audioLevelSourceKey?: string;
+		audioLevelOutputKey?: string;
 		thumbnailKey?: string;
 		previewKey?: string;
 	};
@@ -16,7 +18,7 @@ export function isInternalRecordingKey(key: string) {
 }
 
 export function getPublishedRecordingOutputKey(video: RecordingVideo) {
-	return video.source.type === "desktopMP4"
+	return video.source.type === "desktopMP4" || video.source.type === "webMP4"
 		? Video.getRetainedRecordingOutputKey(
 				video.ownerId,
 				video.id,
@@ -34,7 +36,7 @@ export function resolveRecordingObjectKey(video: RecordingVideo, key: string) {
 				? video.source.previewKey
 				: undefined;
 	if (
-		video.source.type === "desktopMP4" &&
+		(video.source.type === "desktopMP4" || video.source.type === "webMP4") &&
 		asset?.startsWith(`${prefix}.recording/outputs/`) &&
 		!asset.includes("..") &&
 		/^[a-zA-Z0-9_./-]+$/.test(asset)
@@ -42,12 +44,18 @@ export function resolveRecordingObjectKey(video: RecordingVideo, key: string) {
 		return asset;
 	}
 	return key === `${video.ownerId}/${video.id}/result.mp4`
-		? (getPublishedRecordingOutputKey(video) ?? key)
+		? (Video.getAudioLevelOutputKey(video) ??
+				getPublishedRecordingOutputKey(video) ??
+				key)
 		: key;
 }
 
 export function getPublishedRecordingCopyKeys(video: RecordingVideo) {
-	if (!getPublishedRecordingOutputKey(video)) return [];
+	if (
+		!getPublishedRecordingOutputKey(video) &&
+		!Video.getAudioLevelOutputKey(video)
+	)
+		return [];
 	const prefix = `${video.ownerId}/${video.id}/`;
 	return [
 		`${prefix}result.mp4`,
@@ -55,4 +63,10 @@ export function getPublishedRecordingCopyKeys(video: RecordingVideo) {
 			.map((suffix) => `${prefix}${suffix}`)
 			.filter((key) => resolveRecordingObjectKey(video, key) !== key),
 	];
+}
+
+export function getPublishedRecordingThumbnailKey(video: RecordingVideo) {
+	const canonical = `${video.ownerId}/${video.id}/screenshot/screen-capture.jpg`;
+	const resolved = resolveRecordingObjectKey(video, canonical);
+	return resolved === canonical ? undefined : resolved;
 }

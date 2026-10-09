@@ -1,25 +1,53 @@
 "use client";
 
 import { classNames } from "@cap/utils/helpers";
-import { usePathname } from "next/navigation";
-import { type ReactNode, useEffect, useState } from "react";
+import {
+	type ReactNode,
+	useCallback,
+	useEffect,
+	useLayoutEffect,
+	useRef,
+	useState,
+	useSyncExternalStore,
+} from "react";
 
-const FLAT_HEADER_ROUTES = new Set(["/", "/home"]);
 const EASE = "cubic-bezier(0.22, 1, 0.36, 1)";
 const SLIDE_MS = 560;
 const DOCK_AT = 80;
 
 type Phase = "docked" | "entering" | "floating" | "leaving";
 
+const readSentinel = () => document.querySelector("[data-header-sentinel]");
+const noSentinel = () => null;
+
+// The page declares the flat treatment with `data-header-flat` on its root, a
+// sibling of this header, and `:has(~ ...)` applies it in the prerendered HTML.
+// The island is driven by the page's `data-header-sentinel`, re-read whenever
+// the sibling page changes. Neither depends on `usePathname()`: Next prerenders
+// `/` with pathname `/index`, so a route-keyed header rendered the fixed bar on
+// the server and React kept those attributes after hydration.
 export const NavbarFrame = ({ children }: { children: ReactNode }) => {
-	const pathname = usePathname();
-	const flat = FLAT_HEADER_ROUTES.has(pathname);
+	const headerRef = useRef<HTMLElement>(null);
 	const [phase, setPhase] = useState<Phase>("docked");
 
-	useEffect(() => {
-		if (!FLAT_HEADER_ROUTES.has(pathname)) return;
-		const sentinel = document.querySelector("[data-header-sentinel]");
-		if (!sentinel) return;
+	const subscribeToPage = useCallback((onChange: () => void) => {
+		const slot = headerRef.current?.parentElement;
+		if (!slot) return () => {};
+		const observer = new MutationObserver(onChange);
+		observer.observe(slot, { childList: true });
+		return () => observer.disconnect();
+	}, []);
+	const sentinel = useSyncExternalStore(
+		subscribeToPage,
+		readSentinel,
+		noSentinel,
+	);
+
+	useLayoutEffect(() => {
+		if (!sentinel) {
+			setPhase("docked");
+			return;
+		}
 		const io = new IntersectionObserver(([entry]) => {
 			const past = entry
 				? !entry.isIntersecting && entry.boundingClientRect.top < 0
@@ -37,7 +65,7 @@ export const NavbarFrame = ({ children }: { children: ReactNode }) => {
 		});
 		io.observe(sentinel);
 		return () => io.disconnect();
-	}, [pathname]);
+	}, [sentinel]);
 
 	useEffect(() => {
 		if (phase === "entering") {
@@ -64,23 +92,23 @@ export const NavbarFrame = ({ children }: { children: ReactNode }) => {
 		}
 	}, [phase]);
 
-	const island = flat && phase !== "docked";
+	const island = sentinel !== null && phase !== "docked";
 	const shown = phase === "floating";
 
 	return (
 		<header
-			data-flat={flat ? "true" : "false"}
+			ref={headerRef}
 			data-island={island ? "true" : "false"}
 			className={classNames(
-				"group pointer-events-none inset-x-0 top-0 z-[51]",
-				flat && !island ? "absolute" : "fixed",
+				"group pointer-events-none inset-x-0 top-0 z-[51] fixed",
+				!island && "has-[~[data-header-flat]]:absolute",
 			)}
 		>
 			<div
 				className={classNames(
 					"pointer-events-auto mx-auto",
-					!flat && "max-w-none border-b border-zinc-200/70 bg-white",
-					flat && !island && "bg-transparent",
+					!island &&
+						"border-b border-zinc-200/70 bg-white group-has-[~[data-header-flat]]:border-b-0 group-has-[~[data-header-flat]]:bg-transparent",
 					island &&
 						"mt-3 max-w-[calc(100%-24px)] rounded-[18px] bg-white/90 shadow-[0_0_0_1px_rgba(17,17,17,0.06)] backdrop-blur-xl lg:mt-4 lg:max-w-[min(1200px,calc(100%-32px))]",
 				)}

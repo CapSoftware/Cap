@@ -18,6 +18,8 @@ const mocks = vi.hoisted(() => ({
 		providers: [],
 	})),
 	decode: vi.fn(),
+	getProfileAndToken: vi.fn(),
+	isRateLimited: vi.fn(),
 	getToken: vi.fn<() => Promise<JWT | null>>(),
 	nextAuth:
 		vi.fn<
@@ -32,6 +34,7 @@ const mocks = vi.hoisted(() => ({
 const env = vi.hoisted(() => ({
 	WEB_URL: "https://cap.example",
 	NEXTAUTH_SECRET: "test-sso-route-secret-with-sufficient-entropy",
+	WORKOS_CLIENT_ID: "client_fixture",
 }));
 
 vi.mock("@cap/env", () => ({ serverEnv: () => env }));
@@ -41,6 +44,10 @@ vi.mock("@cap/database/auth/auth-options", () => ({
 }));
 vi.mock("next-auth", () => ({ default: mocks.nextAuth }));
 vi.mock("next-auth/jwt", () => ({ getToken: mocks.getToken }));
+vi.mock("@cap/database/auth/sso", () => ({
+	getWorkOS: () => ({ sso: { getProfileAndToken: mocks.getProfileAndToken } }),
+}));
+vi.mock("@/lib/rate-limit", () => ({ isRateLimited: mocks.isRateLimited }));
 
 const RETURN_TO = "/api/mobile/session/request?redirectUri=cap%3A%2F%2Fauth";
 const MISSING_PROFILE_QUERY = {
@@ -123,6 +130,11 @@ async function errorUrl(response: Response) {
 
 beforeEach(() => {
 	vi.clearAllMocks();
+	mocks.getProfileAndToken.mockReset().mockResolvedValue({
+		accessToken: "private-access-token",
+		profile: { connectionId: "conn_verified", email: "idp-user@example.com" },
+	});
+	mocks.isRateLimited.mockReset().mockResolvedValue(false);
 	mocks.getToken.mockReset().mockResolvedValue(null);
 	mocks.nextAuth.mockReset().mockImplementation(async () => {
 		return new Response(null, {
@@ -136,6 +148,123 @@ beforeEach(() => {
 });
 
 describe("SSO auth request boundary", () => {
+	it.each([null, "tampered.invalid-signature"])(
+		"restarts an IdP-initiated callback without authenticating its profile: %s",
+		async (intent) => {
+			const { request, context } = makeRequest({
+				action: "callback",
+				intent,
+				query: { code: "idp-code" },
+			});
+
+			const response = await GET(request, context);
+
+			expect(response.status).toBe(303);
+			expect(response.headers.get("location")).toBe(
+				`${env.WEB_URL}/login?connection_id=conn_verified`,
+			);
+			expect(response.headers.get("cache-control")).toBe("no-store");
+			expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+			expect(response.headers.get("set-cookie")).toBe(
+				`${ssoIntentCookie(true).name}=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=lax`,
+			);
+			expect(mocks.getProfileAndToken).toHaveBeenCalledWith({
+				clientId: env.WORKOS_CLIENT_ID,
+				code: "idp-code",
+			});
+			expect(mocks.nextAuth).not.toHaveBeenCalled();
+			expect(mocks.authOptions).not.toHaveBeenCalled();
+		},
+	);
+
+	it("does not reuse an existing browser session or signed intent for an unsolicited callback", async () => {
+		mocks.getToken.mockResolvedValue({ id: "existing-user" });
+		const { request, context } = makeRequest({
+			action: "callback",
+			query: { code: "idp-code" },
+		});
+
+		const response = await GET(request, context);
+
+		expect(response.headers.get("location")).toBe(
+			`${env.WEB_URL}/login?connection_id=conn_verified`,
+		);
+		expect(response.headers.get("set-cookie")).not.toContain(
+			"next-auth.session-token",
+		);
+		expect(mocks.nextAuth).not.toHaveBeenCalled();
+	});
+
+	it.each<Record<string, string> | URLSearchParams>([
+		{ code: "" },
+		{ code: "x".repeat(2049) },
+		{ code: "idp-code", state: "" },
+		{ code: "idp-code", state: "invalid-state" },
+		{ code: "idp-code", connection_id: "conn_attacker" },
+		{ code: "idp-code", error: "access_denied" },
+		new URLSearchParams([
+			["code", "first"],
+			["code", "second"],
+		]),
+	])(
+		"does not redeem a malformed or stateful IdP callback: %j",
+		async (query) => {
+			const { request, context } = makeRequest({
+				action: "callback",
+				intent: null,
+				query,
+			});
+
+			const redirect = await errorUrl(await GET(request, context));
+
+			expect(redirect.searchParams.get("error")).toBe("SsoSessionExpired");
+			expect(mocks.getProfileAndToken).not.toHaveBeenCalled();
+			expect(mocks.nextAuth).not.toHaveBeenCalled();
+		},
+	);
+
+	it("does not restart from a POST callback", async () => {
+		const { request, context } = makeRequest({
+			action: "callback",
+			method: "POST",
+			intent: null,
+			query: { code: "idp-code" },
+		});
+
+		await POST(request, context);
+
+		expect(mocks.getProfileAndToken).not.toHaveBeenCalled();
+		expect(mocks.nextAuth).not.toHaveBeenCalled();
+	});
+
+	it.each(["rate-limited", "expired-code", "invalid-connection"])(
+		"fails closed when the IdP callback is %s",
+		async (reason) => {
+			if (reason === "rate-limited")
+				mocks.isRateLimited.mockResolvedValue(true);
+			if (reason === "expired-code")
+				mocks.getProfileAndToken.mockRejectedValue(
+					new Error("private details"),
+				);
+			if (reason === "invalid-connection")
+				mocks.getProfileAndToken.mockResolvedValue({
+					profile: { connectionId: "https://attacker.example" },
+				});
+			const { request, context } = makeRequest({
+				action: "callback",
+				intent: null,
+				query: { code: "idp-code" },
+			});
+
+			const redirect = await errorUrl(await GET(request, context));
+
+			expect(redirect.searchParams.get("error")).toBe("SsoSessionExpired");
+			expect(mocks.nextAuth).not.toHaveBeenCalled();
+			if (reason === "rate-limited")
+				expect(mocks.getProfileAndToken).not.toHaveBeenCalled();
+		},
+	);
+
 	it.each(["missing", "tampered", "expired"])(
 		"returns a JSON sign-in error for a %s intent without calling NextAuth",
 		async (reason) => {

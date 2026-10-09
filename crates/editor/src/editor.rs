@@ -18,6 +18,10 @@ pub enum RendererMessage {
         width: u32,
         height: u32,
     },
+    RenderThumbnail {
+        input: RendererTransitionInput,
+        finished: oneshot::Sender<Result<RenderedFrame, String>>,
+    },
     RenderFrame {
         segment_frames: DecodedSegmentFrames,
         uniforms: ProjectUniforms,
@@ -247,6 +251,20 @@ impl Renderer {
                         Self::prepare_output_size(&telemetry, &mut frame_renderer, width, height);
                         continue;
                     }
+                    Some(RendererMessage::RenderThumbnail { input, finished }) => {
+                        let result = frame_renderer
+                            .render_immediate(
+                                input.segment_frames,
+                                input.uniforms,
+                                &input.cursor,
+                                true,
+                                &mut layers,
+                            )
+                            .await
+                            .map_err(|error| error.to_string());
+                        let _ = finished.send(result);
+                        continue;
+                    }
                     Some(RendererMessage::RenderFrame {
                         segment_frames,
                         uniforms,
@@ -295,6 +313,19 @@ impl Renderer {
             let queue_drain_start = Instant::now();
             while let Ok(msg) = rx.try_recv() {
                 match msg {
+                    RendererMessage::RenderThumbnail { input, finished } => {
+                        let result = frame_renderer
+                            .render_immediate(
+                                input.segment_frames,
+                                input.uniforms,
+                                &input.cursor,
+                                true,
+                                &mut layers,
+                            )
+                            .await
+                            .map_err(|error| error.to_string());
+                        let _ = finished.send(result);
+                    }
                     RendererMessage::PrepareOutputSize { width, height } => {
                         Self::prepare_output_size(&telemetry, &mut frame_renderer, width, height);
                     }
@@ -541,6 +572,20 @@ impl Renderer {
 }
 
 impl RendererHandle {
+    pub(crate) async fn render_thumbnail(
+        &self,
+        input: RendererTransitionInput,
+    ) -> Result<RenderedFrame, String> {
+        let (finished, result) = oneshot::channel();
+        self.tx
+            .send(RendererMessage::RenderThumbnail { input, finished })
+            .await
+            .map_err(|_| "Thumbnail renderer stopped".to_string())?;
+        result
+            .await
+            .map_err(|_| "Thumbnail render cancelled".to_string())?
+    }
+
     pub fn prepare_output_size(&self, width: u32, height: u32) {
         let _ = self
             .tx

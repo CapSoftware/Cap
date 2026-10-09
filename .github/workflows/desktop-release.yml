@@ -226,28 +226,6 @@ jobs:
         if: ${{ hashFiles('scripts/build-macos-packages.test.mjs') != '' }}
         run: node --test scripts/build-macos-packages.test.mjs
 
-      # Nightly and promoted builds carry a version that differs from the
-      # committed Cargo.toml; Tauri reads the app version from package.version.
-      - name: Stamp build version
-        shell: bash
-        env:
-          BUILD_VERSION: ${{ inputs.version }}
-        run: |
-          node -e '
-            const fs = require("fs");
-            const path = "apps/desktop/src-tauri/Cargo.toml";
-            const version = process.env.BUILD_VERSION;
-            let toml = fs.readFileSync(path, "utf8");
-            const re = /^version = ".*"$/m;
-            if (!re.test(toml)) {
-              console.error("package.version line not found in " + path);
-              process.exit(1);
-            }
-            toml = toml.replace(re, "version = \"" + version + "\"");
-            fs.writeFileSync(path, toml);
-            console.log("Stamped " + path + " with " + version);
-          '
-
       - name: Install Linux desktop dependencies
         if: ${{ runner.os == 'Linux' }}
         uses: ./.github/actions/install-desktop-deps
@@ -278,9 +256,44 @@ jobs:
           cargo -V
           rustup show active-toolchain
 
+      # Release builds get their own cache flavour (release-profile rlibs for
+      # both the root workspace and the standalone GPUI workspace). Save it
+      # even when the job fails later, because the Windows job most often dies
+      # at SignPath approval, long after the compile it would have cached.
       - uses: ./.github/actions/setup-rust-cache
         with:
           target: ${{ matrix.settings.target }}
+          prefix-key: v1-rust-release
+          save-cache: true
+          cache-on-failure: true
+          workspaces: |
+            . -> target
+            apps/desktop-gpui -> target
+
+      # Nightly and promoted builds carry a version that differs from the
+      # committed Cargo.toml; Tauri reads the app version from package.version.
+      # Runs after the cache step so the stamped version never lands in the
+      # cache key's Cargo.toml hash (a fresh nightly version each night would
+      # otherwise write a fresh multi-GB cache entry per target per night).
+      - name: Stamp build version
+        shell: bash
+        env:
+          BUILD_VERSION: ${{ inputs.version }}
+        run: |
+          node -e '
+            const fs = require("fs");
+            const path = "apps/desktop/src-tauri/Cargo.toml";
+            const version = process.env.BUILD_VERSION;
+            let toml = fs.readFileSync(path, "utf8");
+            const re = /^version = ".*"$/m;
+            if (!re.test(toml)) {
+              console.error("package.version line not found in " + path);
+              process.exit(1);
+            }
+            toml = toml.replace(re, "version = \"" + version + "\"");
+            fs.writeFileSync(path, toml);
+            console.log("Stamped " + path + " with " + version);
+          '
 
       - uses: ./.github/actions/setup-js
 
@@ -301,7 +314,7 @@ jobs:
 
       - name: Run cap-setup
         shell: bash
-        run: pnpm -w cap-setup
+        run: bun run cap-setup
         env:
           RUST_TARGET_TRIPLE: ${{ matrix.settings.target }}
           APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && secrets.APPLE_SIGNING_IDENTITY || '' }}
@@ -315,11 +328,12 @@ jobs:
           fi
           ./scripts/build-desktop-binaries.sh ${{ matrix.settings.target }}
 
-      # The release profile uses fat LTO + full debuginfo, so the final link
-      # peaks well above the 16GB stock Linux runner and gets OOM-killed
-      # ("runner received a shutdown signal"). The runner already ships an
-      # active /swapfile (resizing it fails with "Text file busy"), so add a
-      # large swapfile on the roomy /mnt disk on top of the existing swap.
+      # The final link used to peak well above the 16GB stock Linux runner and
+      # get OOM-killed ("runner received a shutdown signal") under fat LTO +
+      # full debuginfo. The release profile is thin LTO + line tables now, but
+      # the headroom is cheap, so keep it. The runner already ships an active
+      # /swapfile (resizing it fails with "Text file busy"), so add a large
+      # swapfile on the roomy /mnt disk on top of the existing swap.
       # macOS runs on xlarge runners and is unaffected.
       - name: Increase swap space (Linux)
         if: ${{ runner.os == 'Linux' }}
@@ -334,10 +348,10 @@ jobs:
           swapon --show
           free -h
 
-      # The same fat-LTO link exhausts commit on the 16GB Windows runner
+      # The same link used to exhaust commit on the 16GB Windows runner
       # ("rustc-LLVM ERROR: out of memory" while linking cap-desktop), so
-      # raise the pagefile on the roomy D: disk — the Windows analog of the
-      # Linux swapfile above.
+      # raise the pagefile on the roomy D: disk, the Windows analog of the
+      # Linux swapfile above. Kept for headroom after the move to thin LTO.
       - name: Increase pagefile size (Windows)
         if: ${{ runner.os == 'Windows' }}
         uses: al-cheb/configure-pagefile-action@a3b6ebd6b634da88790d9c58d4b37a7f4a7b8708 # v1.4
@@ -348,7 +362,7 @@ jobs:
 
       - name: Build app
         working-directory: apps/desktop
-        run: ${{ runner.os == 'Linux' && 'CARGO_PROFILE_RELEASE_DEBUG=0 node ../../scripts/build-linux-packages.mjs' || runner.os == 'macOS' && hashFiles('scripts/build-macos-packages.mjs') != '' && 'node ../../scripts/build-macos-packages.mjs' || 'pnpm build:tauri --target' }} ${{ matrix.settings.target }} --config src-tauri/tauri.prod.conf.json ${{ runner.os == 'Windows' && '--bundles nsis' || runner.os == 'Linux' && '--verbose' || '' }}
+        run: ${{ runner.os == 'Linux' && 'CARGO_PROFILE_RELEASE_DEBUG=0 node ../../scripts/build-linux-packages.mjs' || runner.os == 'macOS' && hashFiles('scripts/build-macos-packages.mjs') != '' && 'node ../../scripts/build-macos-packages.mjs' || 'bun run build:tauri --target' }} ${{ matrix.settings.target }} --config src-tauri/tauri.prod.conf.json ${{ runner.os == 'Windows' && '--bundles nsis' || runner.os == 'Linux' && '--verbose' || '' }}
         env:
           # https://github.com/tauri-apps/tauri-action/issues/740
           CI: false
@@ -411,7 +425,7 @@ jobs:
         if: ${{ runner.os == 'Windows' }}
         working-directory: apps/desktop
         shell: bash
-        run: pnpm tauri bundle --target ${{ matrix.settings.target }} --bundles nsis --config src-tauri/tauri.prod.conf.json
+        run: bun run tauri bundle --target ${{ matrix.settings.target }} --bundles nsis --config src-tauri/tauri.prod.conf.json
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -792,7 +806,7 @@ jobs:
           for exe in "$BUNDLE_DIR"/*.exe; do
             echo "Re-signing $(basename "$exe") for Tauri updater..."
             rm -f "${exe}.sig"
-            pnpm tauri signer sign -k "$TAURI_SIGNING_PRIVATE_KEY" -p "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" "$exe"
+            bun run tauri signer sign -k "$TAURI_SIGNING_PRIVATE_KEY" -p "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" "$exe"
             if [[ ! -s "${exe}.sig" ]]; then
               echo "::error::Windows production updater signature missing for $exe"
               exit 1

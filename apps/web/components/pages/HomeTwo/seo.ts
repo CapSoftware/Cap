@@ -66,6 +66,7 @@ export const homepageSchema = {
 				"Instant video sharing",
 				"Local recording with a built-in video editor",
 				"Screenshot capture and annotation",
+				"Loom video importer for single videos and CSV libraries",
 				"Custom backgrounds and automatic zoom",
 				"Google Drive and S3 storage integrations",
 				"Open source and self-hostable",

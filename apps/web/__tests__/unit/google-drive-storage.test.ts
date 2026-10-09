@@ -19,6 +19,7 @@ import {
 	findGoogleDriveFileByObjectKey,
 	GOOGLE_DRIVE_FOLDER_MIME_TYPE,
 	type GoogleDriveTokenStore,
+	getGoogleDriveRecordingDownload,
 	getGoogleDriveRecordingResponse,
 	syncGoogleDriveVideoNames,
 } from "../../../../packages/web-backend/src/Storage/GoogleDrive";
@@ -345,6 +346,45 @@ describe("Google Drive recording content identity", () => {
 		headRevisionId: "revision-1",
 	};
 	const identity = getGoogleDriveRecordingIdentity(file) as string;
+
+	it("issues only the pinned revision after validating the expected identity", async () => {
+		const fetch = vi.fn(async () => jsonResponse(file));
+		vi.stubGlobal("fetch", fetch);
+		const target = await Effect.runPromise(
+			getGoogleDriveRecordingDownload(
+				makeConfig(),
+				file.id,
+				{ objectIdentity: identity },
+				makeTokenStore(),
+			),
+		);
+		expect(target.url).toBe(
+			"https://www.googleapis.com/drive/v3/files/recording-file/revisions/revision-1?alt=media",
+		);
+		expect(target.objectIdentity).toBe(identity);
+		expect(target.sha256).toBe(file.sha256Checksum);
+		expect(target.size).toBe(8);
+		expect(fetch).toHaveBeenCalledTimes(1);
+	});
+
+	it("does not issue a download descriptor for a changed recording", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () =>
+				jsonResponse({ ...file, sha256Checksum: "b".repeat(64) }),
+			),
+		);
+		await expect(
+			Effect.runPromise(
+				getGoogleDriveRecordingDownload(
+					makeConfig(),
+					file.id,
+					{ objectIdentity: identity },
+					makeTokenStore(),
+				),
+			),
+		).rejects.toThrow("Recording object changed");
+	});
 
 	it("matches the media-server upload identity wire vector", () => {
 		expect(

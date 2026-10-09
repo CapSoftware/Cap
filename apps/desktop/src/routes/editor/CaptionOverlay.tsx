@@ -304,7 +304,10 @@ export function CaptionOverlay(props: CaptionOverlayProps) {
 	};
 
 	return (
-		<div class="absolute inset-0 pointer-events-none">
+		<div
+			class="absolute inset-0 pointer-events-none"
+			style={{ opacity: "var(--preview-controls-opacity, 1)" }}
+		>
 			<div
 				ref={hiddenMeasureRef}
 				class="absolute invisible pointer-events-none"

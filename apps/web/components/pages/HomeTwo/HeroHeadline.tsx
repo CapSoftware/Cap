@@ -22,7 +22,7 @@ const SLIDES: Slide[] = [
 	{ key: "all", words: ["Record.", "Edit.", "Share."] },
 	{ key: "instant", words: ["Record.", "Stop.", "Instant Share."] },
 	{ key: "studio", words: ["Record.", "Edit.", "Export."] },
-	{ key: "screenshot", words: ["Screenshot.", "Beautify.", "Paste."] },
+	{ key: "screenshot", words: ["Screenshot.", "Style.", "Share."] },
 ];
 
 const NUDGE = "Click me \u{1F440}";

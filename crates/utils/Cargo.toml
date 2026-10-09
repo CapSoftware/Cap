@@ -35,7 +35,11 @@ aho-corasick.workspace = true
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [dev-dependencies]
+tracing-appender = "0.2.3"
 tempfile = "3"
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+zbus = { version = "5.18.0", default-features = false, features = ["tokio", "blocking-api"] }
 
 [lints]
 workspace = true

@@ -94,7 +94,7 @@ export async function invalidateVideoCache(videoId: string) {
 				metadata,
 				source:
 					lockedVideo.source.type === "webMP4"
-						? lockedVideo.source
+						? { type: "webMP4" }
 						: { type: "desktopMP4" },
 			})
 			.where(eq(videos.id, video.id));

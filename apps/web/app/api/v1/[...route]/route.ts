@@ -10,6 +10,7 @@ import { sendEmail } from "@cap/database/emails/config";
 import { OrganizationInvite } from "@cap/database/emails/organization-invite";
 import { nanoId, nanoIdLong } from "@cap/database/helpers";
 import * as Db from "@cap/database/schema";
+import { getNewVideoPublic } from "@cap/database/video-sharing-default";
 import { buildEnv, serverEnv } from "@cap/env";
 import {
 	STRIPE_DEVELOPER_CREDITS_PRODUCT_ID,
@@ -2385,7 +2386,7 @@ const queueAgentLoomImport = Effect.fn("Agent.queueLoomImport")(
 										storageIntegrationId: Option.getOrNull(
 											writable.storageIntegrationId,
 										),
-										public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
+										public: await getNewVideoPublic(input.organizationId),
 										duration: download.durationSeconds,
 										width: download.width,
 										height: download.height,
@@ -6598,7 +6599,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 										writable.storageIntegrationId,
 									),
 									folderId: payload.folderId ?? null,
-									public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
+									public: await getNewVideoPublic(organizationId),
 									duration: payload.durationSeconds,
 									width: payload.width,
 									height: payload.height,

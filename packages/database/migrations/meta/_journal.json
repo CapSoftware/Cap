@@ -302,6 +302,55 @@
 			"when": 1788437051131,
 			"tag": "0042_perf_indexes",
 			"breakpoints": true
+		},
+		{
+			"idx": 43,
+			"version": "5",
+			"when": 1788695529193,
+			"tag": "0043_flimsy_caretaker",
+			"breakpoints": true
+		},
+		{
+			"idx": 44,
+			"version": "5",
+			"when": 1789135858521,
+			"tag": "0044_awesome_sugar_man",
+			"breakpoints": true
+		},
+		{
+			"idx": 45,
+			"version": "5",
+			"when": 1789136779085,
+			"tag": "0045_steep_forge",
+			"breakpoints": true
+		},
+		{
+			"idx": 46,
+			"version": "5",
+			"when": 1790071320615,
+			"tag": "0046_mcp_oauth",
+			"breakpoints": true
+		},
+		{
+			"idx": 47,
+			"version": "5",
+			"when": 1790073320452,
+			"tag": "0047_mcp_client_lifecycle",
+			"breakpoints": true
+		},
+		{
+			"idx": 48,
+			"version": "5",
+			"when": 1790073970527,
+			"tag": "0048_mcp_registration_quota",
+			"breakpoints": true
+		},
+		{
+			"idx": 49,
+			"version": "5",
+			"when": 1790203121737,
+			"tag": "0049_jittery_professor_monster",
+			"breakpoints": true
 		}
 	]
 }

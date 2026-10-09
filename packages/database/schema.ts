@@ -35,7 +35,11 @@ import {
 import { relations } from "drizzle-orm/relations";
 
 import { nanoIdLength } from "./helpers.ts";
-import type { VideoEditSpec, VideoMetadata } from "./types/index.ts";
+import type {
+	VideoCallToAction,
+	VideoEditSpec,
+	VideoMetadata,
+} from "./types/index.ts";
 
 export type AuthApiKeySource = "desktop" | "extension" | "mobile" | "unknown";
 
@@ -129,9 +133,32 @@ export const users = mysqlTable(
 		defaultOrgId:
 			nanoIdNullable("defaultOrgId").$type<Organisation.OrganisationId>(),
 		authSessionVersion: int("authSessionVersion").notNull().default(0),
+		marketingOrigin: varchar("marketingOrigin", { length: 20 })
+			.notNull()
+			.default("unknown"),
 	},
 	(table) => ({
 		emailIndex: uniqueIndex("email_idx").on(table.email),
+	}),
+);
+
+export const loopsSyncJobs = mysqlTable(
+	"loops_sync_jobs",
+	{
+		userId: nanoId("userId").notNull().primaryKey().$type<User.UserId>(),
+		revision: int("revision").notNull().default(1),
+		nextAttemptAt: datetime("nextAttemptAt", { mode: "date" }).notNull(),
+		leaseToken: varchar("leaseToken", { length: 36 }),
+		leaseUntil: datetime("leaseUntil", { mode: "date" }),
+		failures: int("failures").notNull().default(0),
+		lastError: varchar("lastError", { length: 64 }),
+		profileHash: varchar("profileHash", { length: 64 }),
+		teammateJoinedAt: datetime("teammateJoinedAt", { mode: "date" }),
+		syncedEmail: varchar("syncedEmail", { length: 255 }),
+		lastSyncedAt: datetime("lastSyncedAt", { mode: "date" }),
+	},
+	(table) => ({
+		dueIndex: index("loops_sync_due_idx").on(table.nextAttemptAt),
 	}),
 );
 
@@ -198,6 +225,9 @@ export const organizations = mysqlTable(
 		metadata: json("metadata"),
 		tombstoneAt: timestamp("tombstoneAt"),
 		allowedEmailDomain: varchar("allowedEmailDomain", { length: 255 }),
+		defaultVideoVisibility: varchar("defaultVideoVisibility", {
+			length: 7,
+		}).$type<"private">(),
 		customDomain: varchar("customDomain", { length: 255 }),
 		domainVerified: timestamp("domainVerified"),
 		settings: json("settings").$type<{
@@ -416,6 +446,7 @@ export const videos = mysqlTable(
 			disableTranscript?: boolean;
 			disableComments?: boolean;
 			defaultPlaybackSpeed?: number;
+			callToAction?: VideoCallToAction;
 		}>(),
 		transcriptionStatus: varchar("transcriptionStatus", { length: 255 }).$type<
 			"PROCESSING" | "COMPLETE" | "ERROR" | "SKIPPED" | "NO_AUDIO"
@@ -427,11 +458,20 @@ export const videos = mysqlTable(
 				| {
 						type: "desktopMP4";
 						outputKey?: string;
+						audioLevelOutputKey?: string;
+						audioLevelSourceKey?: string;
 						thumbnailKey?: string;
 						previewKey?: string;
 				  }
 				| { type: "desktopSegments" }
-				| { type: "webMP4" }
+				| {
+						type: "webMP4";
+						outputKey?: string;
+						thumbnailKey?: string;
+						previewKey?: string;
+						audioLevelOutputKey?: string;
+						audioLevelSourceKey?: string;
+				  }
 			>()
 			.notNull()
 			.default({ type: "MediaConvert" }),
@@ -461,6 +501,7 @@ export const videos = mysqlTable(
 	},
 	(table) => [
 		index("owner_id_idx").on(table.ownerId),
+		index("owner_updated_id_idx").on(table.ownerId, table.updatedAt, table.id),
 		index("is_public_idx").on(table.public),
 		index("folder_id_idx").on(table.folderId),
 		index("storage_integration_id_idx").on(table.storageIntegrationId),
@@ -518,6 +559,27 @@ export const sharedVideos = mysqlTable(
 		videoIdFolderIdIndex: index("video_id_folder_id_idx").on(
 			table.videoId,
 			table.folderId,
+		),
+	}),
+);
+
+export const videoViewerGrants = mysqlTable(
+	"video_viewer_grants",
+	{
+		id: nanoId("id").notNull().primaryKey(),
+		videoId: nanoId("videoId")
+			.notNull()
+			.$type<Video.VideoId>()
+			.references(() => videos.id, { onDelete: "cascade" }),
+		email: varchar("email", { length: 255 }).notNull(),
+		invitedByUserId: nanoId("invitedByUserId").notNull().$type<User.UserId>(),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+		revokedAt: timestamp("revokedAt"),
+	},
+	(table) => ({
+		videoEmailUnique: uniqueIndex("video_email_idx").on(
+			table.videoId,
+			table.email,
 		),
 	}),
 );
@@ -970,6 +1032,80 @@ export const agentApiAuthorizationCodes = mysqlTable(
 		uniqueIndex("code_hash_idx").on(table.codeHash),
 		index("expires_at_idx").on(table.expiresAt),
 		index("user_created_at_idx").on(table.userId, table.createdAt),
+	],
+);
+
+export const mcpOAuthClients = mysqlTable(
+	"mcp_oauth_clients",
+	{
+		id: nanoId("id").notNull().primaryKey(),
+		clientId: varchar("clientId", { length: 128 }).notNull(),
+		clientName: varchar("clientName", { length: 100 }).notNull(),
+		redirectUris: json("redirectUris").notNull().$type<string[]>(),
+		activatedAt: timestamp("activatedAt"),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+	},
+	(table) => [
+		uniqueIndex("client_id_idx").on(table.clientId),
+		index("inactive_created_at_idx").on(table.activatedAt, table.createdAt),
+	],
+);
+
+export const mcpOAuthRegistrationQuotas = mysqlTable(
+	"mcp_oauth_registration_quotas",
+	{
+		windowId: varchar("windowId", { length: 10 }).notNull().primaryKey(),
+		registrations: int("registrations").notNull().default(0),
+		expiresAt: timestamp("expiresAt").notNull(),
+	},
+	(table) => [index("expires_at_idx").on(table.expiresAt)],
+);
+
+export const mcpOAuthCodes = mysqlTable(
+	"mcp_oauth_codes",
+	{
+		id: nanoId("id").notNull().primaryKey(),
+		userId: nanoId("userId").notNull().$type<User.UserId>(),
+		clientId: varchar("clientId", { length: 128 }).notNull(),
+		codeHash: varchar("codeHash", { length: 64 }).notNull(),
+		codeChallenge: varchar("codeChallenge", { length: 64 }).notNull(),
+		redirectUri: varchar("redirectUri", { length: 512 }).notNull(),
+		resource: varchar("resource", { length: 512 }).notNull(),
+		expiresAt: timestamp("expiresAt").notNull(),
+		consumedAt: timestamp("consumedAt"),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+	},
+	(table) => [
+		uniqueIndex("code_hash_idx").on(table.codeHash),
+		index("expires_at_idx").on(table.expiresAt),
+	],
+);
+
+export const mcpOAuthTokens = mysqlTable(
+	"mcp_oauth_tokens",
+	{
+		id: nanoId("id").notNull().primaryKey(),
+		userId: nanoId("userId").notNull().$type<User.UserId>(),
+		clientId: varchar("clientId", { length: 128 }).notNull(),
+		familyId: nanoId("familyId").notNull(),
+		resource: varchar("resource", { length: 512 }).notNull(),
+		accessHash: varchar("accessHash", { length: 64 }).notNull(),
+		refreshHash: varchar("refreshHash", { length: 64 }).notNull(),
+		accessExpiresAt: timestamp("accessExpiresAt").notNull(),
+		refreshExpiresAt: timestamp("refreshExpiresAt").notNull(),
+		revokedAt: timestamp("revokedAt"),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+	},
+	(table) => [
+		uniqueIndex("access_hash_idx").on(table.accessHash),
+		uniqueIndex("refresh_hash_idx").on(table.refreshHash),
+		index("family_id_idx").on(table.familyId),
+		index("client_active_idx").on(
+			table.clientId,
+			table.revokedAt,
+			table.refreshExpiresAt,
+		),
+		index("refresh_expires_at_idx").on(table.refreshExpiresAt),
 	],
 );
 
@@ -1482,6 +1618,22 @@ export const videoProcessingJobs = mysqlTable(
 			table.videoId,
 		),
 	],
+);
+
+export const mediaProcessingBudgets = mysqlTable(
+	"media_processing_budgets",
+	{
+		id: varchar("id", { length: 64 }).primaryKey().notNull(),
+		reservedBytes: bigint("reserved_bytes", { mode: "number", unsigned: true })
+			.notNull()
+			.default(0),
+		limitBytes: bigint("limit_bytes", {
+			mode: "number",
+			unsigned: true,
+		}).notNull(),
+		expiresAt: datetime("expires_at", { fsp: 3 }).notNull(),
+	},
+	(table) => [index("media_budget_expiry_idx").on(table.expiresAt)],
 );
 
 export const importedVideos = mysqlTable(

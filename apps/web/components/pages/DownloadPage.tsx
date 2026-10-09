@@ -155,7 +155,7 @@ export const DownloadPage = () => {
 					<h3 className="mb-2 text-base font-medium text-gray-10">
 						Other download options:
 					</h3>
-					<div className="flex flex-col gap-3 justify-center items-center md:flex-row">
+					<div className="flex flex-col gap-3 justify-center items-center md:flex-row md:flex-wrap">
 						{platform !== "windows" && (
 							<a
 								href="/download/windows"
@@ -181,9 +181,45 @@ export const DownloadPage = () => {
 								}
 								className="text-sm transition-all text-gray-10 hover:underline"
 							>
-								Linux .deb
+								Debian / Ubuntu (.deb)
 							</a>
 						)}
+						<a
+							href="/download/linux-appimage"
+							onClick={() =>
+								trackDownloadClick(
+									"other_option_linux_appimage",
+									"/download/linux-appimage",
+								)
+							}
+							className="text-sm transition-all text-gray-10 hover:underline"
+						>
+							AppImage
+						</a>
+						<a
+							href="/download/linux-rpm"
+							onClick={() =>
+								trackDownloadClick(
+									"other_option_linux_rpm",
+									"/download/linux-rpm",
+								)
+							}
+							className="text-sm transition-all text-gray-10 hover:underline"
+						>
+							Fedora / RPM
+						</a>
+						<a
+							href="/download/linux-pacman"
+							onClick={() =>
+								trackDownloadClick(
+									"other_option_linux_pacman",
+									"/download/linux-pacman",
+								)
+							}
+							className="text-sm transition-all text-gray-10 hover:underline"
+						>
+							Arch / Pacman
+						</a>
 						{platform === "macos" && isIntel && (
 							<a
 								href="/download/apple-silicon"

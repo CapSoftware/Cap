@@ -34,24 +34,65 @@ pub struct AnimatedGradientConfig {
 
 impl Default for AnimatedGradientConfig {
     fn default() -> Self {
-        Self {
-            color_stops: stops([0xff6b35, 0xf7c59f, 0xe891b9, 0x2e4057, 0x1a1a2e]),
-            direction: 45.0,
-            flow_scale: 2.0,
-            flow_strength: 55.0,
-            curvature: 70.0,
-            detail: 2.0,
-            relief: 60.0,
-            light: 50.0,
-            shade: 55.0,
-            ripples: 60.0,
-            grain_amount: 8.0,
-            grain_size: 1.0,
-            exposure: 0.0,
-            contrast: 100.0,
-            vibrance: 100.0,
-            motion_speed: 30.0,
-            seed: 0,
+        Mood::Field.config(COOL_CANDY, 0)
+    }
+}
+
+/// Aqua to periwinkle to lilac; also the default palette for a fresh animated background.
+const COOL_CANDY: [u32; 5] = [0x7ddcf9, 0x6f9bf5, 0x6b6fe8, 0x9a7ff5, 0xc0a6f7];
+
+/// Two families of presets, both built like a blurred colour-field wallpaper:
+/// a few adjacent hues at large scale, no specular highlights, fine grain.
+/// `Field` is a full-frame colour wash at mid lightness; `Deep` starts from a
+/// tinted dark base and lets one or two colours glow out of it.
+#[derive(Clone, Copy)]
+enum Mood {
+    Field,
+    Deep,
+}
+
+impl Mood {
+    fn config(self, palette: [u32; 5], index: usize) -> AnimatedGradientConfig {
+        let variation = index as f32;
+        match self {
+            Self::Field => AnimatedGradientConfig {
+                color_stops: stops(palette),
+                direction: (30.0 + variation * 33.0) % 360.0,
+                flow_scale: 0.8 + (index % 3) as f32 * 0.1,
+                flow_strength: 65.0,
+                curvature: 75.0,
+                detail: 2.0,
+                relief: 15.0,
+                light: 5.0,
+                shade: 20.0,
+                ripples: 100.0,
+                grain_amount: 7.0,
+                grain_size: 1.0,
+                exposure: 0.0,
+                contrast: 104.0,
+                vibrance: 110.0,
+                motion_speed: 40.0,
+                seed: index as u32 * 137,
+            },
+            Self::Deep => AnimatedGradientConfig {
+                color_stops: stops(palette),
+                direction: (20.0 + variation * 37.0) % 360.0,
+                flow_scale: 0.9 + (index % 3) as f32 * 0.1,
+                flow_strength: 65.0,
+                curvature: 80.0,
+                detail: 2.0,
+                relief: 30.0,
+                light: 8.0,
+                shade: 40.0,
+                ripples: 100.0,
+                grain_amount: 8.0,
+                grain_size: 1.0,
+                exposure: 0.0,
+                contrast: 106.0,
+                vibrance: 112.0,
+                motion_speed: 40.0,
+                seed: index as u32 * 137,
+            },
         }
     }
 }
@@ -203,21 +244,68 @@ impl AnimatedGradientConfig {
 
     pub fn from_seed(seed: u32) -> Self {
         let mut random = GradientRandom(u64::from(seed));
-        let hue = random.range(0.0, 360.0);
-        let span = random.range(65.0, 260.0);
+        // Built from scratch rather than sampled from the templates: any
+        // start hue, a pastel / field / deep register, 3-5 stops and freely
+        // varied lighting. Only three quality rules survive: stops walk a short
+        // arc of adjacent hues (a long arc blends through grey), yellow-green
+        // is folded onto gold (olive), and a dark base never sits on orange or
+        // green (brown, forest) but leans maroon or navy instead.
+        let register = random.next() % 3;
+        let deep = register == 0;
+        let pastel = register == 1;
+        // The arc lives either in the teal -> blue -> violet -> magenta -> red
+        // -> orange -> gold sweep or entirely inside green; crossing between
+        // the two always blends through olive.
+        let (arc_start, arc_end): (f32, f32) = if random.next() % 6 == 0 {
+            (120.0, 200.0)
+        } else {
+            (175.0, 415.0)
+        };
+        let span = random.range(60.0, (arc_end - arc_start).min(170.0));
+        let start = random.range(arc_start, arc_end - span);
+        let reversed = random.next() % 2 == 0;
+        let hue = if reversed { start + span } else { start };
+        let span = if reversed { -span } else { span };
         let count = 3 + (random.next() % 3) as usize;
         let color_stops = (0..count)
             .map(|index| {
                 let t = index as f32 / (count - 1) as f32;
-                let h = (hue + span * t + random.range(-12.0, 12.0)).rem_euclid(360.0);
-                let s = random.range(0.55, 0.92);
-                let l = (0.76 - t * 0.55 + random.range(-0.08, 0.08)).clamp(0.12, 0.88);
+                let mut h = (hue + span * t + random.range(-8.0, 8.0)).rem_euclid(360.0);
+                // Yellow-green at any lightness is olive; fold that band onto gold.
+                if (55.0..105.0).contains(&h) {
+                    h = 40.0 + (h - 55.0) * 0.2;
+                }
+                let (s, l) = if deep {
+                    if index == 0 {
+                        if (15.0..55.0).contains(&h) {
+                            h = 350.0;
+                        } else if (105.0..175.0).contains(&h) {
+                            h = 205.0;
+                        }
+                        (random.range(0.5, 0.8), random.range(0.08, 0.16))
+                    } else {
+                        (
+                            random.range(0.6, 0.95),
+                            (0.2 + t * 0.5 + random.range(-0.06, 0.06)).clamp(0.2, 0.8),
+                        )
+                    }
+                } else if pastel {
+                    (
+                        random.range(0.7, 1.0),
+                        (0.78 + t * 0.1 + random.range(-0.05, 0.05)).clamp(0.68, 0.9),
+                    )
+                } else {
+                    (
+                        random.range(0.7, 0.95),
+                        (0.55 + t * 0.15 + random.range(-0.06, 0.06)).clamp(0.45, 0.78),
+                    )
+                };
                 AnimatedGradientStop {
                     color: hsl_color(h, s, l),
                     position: if index == 0 || index == count - 1 {
                         t * 100.0
                     } else {
-                        t * 100.0 + random.range(-7.0, 7.0)
+                        t * 100.0 + random.range(-9.0, 9.0)
                     },
                 }
             })
@@ -225,20 +313,28 @@ impl AnimatedGradientConfig {
         Self {
             color_stops,
             direction: random.range(0.0, 360.0),
-            flow_scale: random.range(0.7, 3.2),
-            flow_strength: random.range(25.0, 75.0),
-            curvature: random.range(30.0, 90.0),
+            flow_scale: random.range(0.6, 1.8),
+            flow_strength: random.range(40.0, 80.0),
+            curvature: random.range(40.0, 95.0),
             detail: random.range(1.0, 4.0),
-            relief: random.range(30.0, 85.0),
-            light: random.range(20.0, 75.0),
-            shade: random.range(25.0, 80.0),
-            ripples: random.range(30.0, 90.0),
-            grain_amount: random.range(3.0, 15.0),
-            grain_size: random.range(0.6, 2.0),
-            exposure: random.range(-8.0, 8.0),
-            contrast: random.range(90.0, 125.0),
-            vibrance: random.range(85.0, 130.0),
-            motion_speed: random.range(20.0, 65.0),
+            relief: if deep {
+                random.range(20.0, 55.0)
+            } else {
+                random.range(5.0, 35.0)
+            },
+            light: random.range(0.0, 25.0),
+            shade: if deep {
+                random.range(25.0, 55.0)
+            } else {
+                random.range(10.0, 35.0)
+            },
+            ripples: random.range(60.0, 100.0),
+            grain_amount: random.range(3.0, 12.0),
+            grain_size: random.range(0.7, 1.6),
+            exposure: random.range(-4.0, 5.0),
+            contrast: random.range(98.0, 112.0),
+            vibrance: random.range(95.0, 125.0),
+            motion_speed: random.range(30.0, 55.0),
             seed,
         }
         .normalized()
@@ -346,51 +442,65 @@ pub struct AnimatedGradientCatalog {
 }
 
 pub fn animated_gradient_catalog() -> AnimatedGradientCatalog {
+    // Seven colour fields (five vibrant, two pastel) then five deep glows.
+    // Stops walk a short arc of adjacent hues so every blend stays clean,
+    // with the brightest, warmest stop reading as the light source.
     let palettes = [
         (
-            "Afterglow",
-            [0xff6b35, 0xf7c59f, 0xe891b9, 0x2e4057, 0x1a1a2e],
+            "Golden Hour",
+            Mood::Field,
+            [0xff6a52, 0xff9a4d, 0xf8c56a, 0xe9a8a0, 0xb0a6d8],
         ),
-        ("Tidal", [0x081c35, 0x165b83, 0x51b6d6, 0xc7eef2, 0xffd49b]),
+        ("Cool Candy", Mood::Field, COOL_CANDY),
         (
-            "Northern Lights",
-            [0x091322, 0x155450, 0x3ac8a0, 0xa4eed4, 0x7154b8],
-        ),
-        (
-            "Electric Iris",
-            [0x23085d, 0x4737d7, 0x8b62f1, 0xee98d2, 0xffcfdf],
+            "Sherbet",
+            Mood::Field,
+            [0xf9c87e, 0xf28fb7, 0xc86ad8, 0x8467ea, 0x6a9af2],
         ),
         (
-            "Rose Quartz",
-            [0x542c56, 0xa65d88, 0xea9cae, 0xffd2c2, 0xffead5],
+            "Good Energy",
+            Mood::Field,
+            [0x5a35e0, 0x9a4de8, 0xd84fa0, 0xf0705f, 0xf5b85a],
         ),
         (
-            "Solar Flare",
-            [0x260c23, 0x971c49, 0xef5a43, 0xffad58, 0xffe7a3],
+            "Rain Light",
+            Mood::Field,
+            [0x5f52b8, 0x6a86d4, 0x58b3cf, 0xc27e8c, 0xe7a58a],
         ),
         (
-            "Glacier",
-            [0xf0ffff, 0xbce9fa, 0x63b9de, 0x27628c, 0x11253e],
+            "Blush Aqua",
+            Mood::Field,
+            [0x6fd9e6, 0x9bcdf5, 0xa8a6f0, 0xe3a0c4, 0xf3e6d6],
         ),
         (
-            "Jade Silk",
-            [0x102f2e, 0x286854, 0x70af83, 0xc2dca6, 0xf8efd5],
+            "Blossom",
+            Mood::Field,
+            [0xd66a5c, 0xe4948f, 0xf0cfa0, 0xc9b3e6, 0xe4eef0],
         ),
         (
-            "Moonstone",
-            [0x181a36, 0x515470, 0x9195b1, 0xd1c7d7, 0xffe6dd],
+            "Moonlit",
+            Mood::Deep,
+            [0x1a0c4a, 0x4a1478, 0x7b2a9a, 0xb055b0, 0xd48fd0],
         ),
         (
-            "Hot Pink",
-            [0x21134b, 0x612585, 0xc33599, 0xfa77b1, 0xffced9],
+            "Deep Reef",
+            Mood::Deep,
+            [0x171a44, 0x2a4f8f, 0x2ee0cc, 0x6f69b8, 0xcf62ac],
         ),
         (
-            "Desert Glass",
-            [0x263a42, 0x737b76, 0xd1ad84, 0xf3d3a7, 0xfaeee0],
+            "Ultraviolet",
+            Mood::Deep,
+            [0x150a3a, 0x3e1fa8, 0x7b3ff0, 0xd056e6, 0xff8a6a],
         ),
         (
-            "Deep Current",
-            [0x040c23, 0x152a64, 0x265e9f, 0x44afb0, 0xb0ead2],
+            "Nightfall Bloom",
+            Mood::Deep,
+            [0x120820, 0x3a1a60, 0x7a4fb0, 0xbb8fe8, 0xecd0ff],
+        ),
+        (
+            "Ember Bloom",
+            Mood::Deep,
+            [0x160809, 0x5a2030, 0xa04f66, 0xe092a8, 0xffd0e0],
         ),
     ];
     AnimatedGradientCatalog {
@@ -398,19 +508,10 @@ pub fn animated_gradient_catalog() -> AnimatedGradientCatalog {
         templates: palettes
             .into_iter()
             .enumerate()
-            .map(|(index, (name, palette))| AnimatedGradientPreset {
+            .map(|(index, (name, mood, palette))| AnimatedGradientPreset {
                 id: format!("template-{index}"),
                 name: name.into(),
-                config: AnimatedGradientConfig {
-                    color_stops: stops(palette),
-                    direction: (45.0 + index as f32 * 29.0) % 360.0,
-                    flow_scale: 1.3 + (index % 4) as f32 * 0.4,
-                    curvature: 45.0 + (index % 3) as f32 * 18.0,
-                    relief: 40.0 + (index % 4) as f32 * 13.0,
-                    seed: index as u32 * 137,
-                    ..Default::default()
-                }
-                .normalized(),
+                config: mood.config(palette, index).normalized(),
             })
             .collect(),
         controls: AnimatedGradientParameter::ALL
@@ -428,6 +529,7 @@ mod tests {
     fn defaults_and_library_round_trip() {
         let config: AnimatedGradientConfig = serde_json::from_str("{}").unwrap();
         assert_eq!(config, AnimatedGradientConfig::default());
+        assert_eq!(config, config.normalized());
         assert_eq!(
             serde_json::from_str::<AnimatedGradientLibrary>("{}").unwrap(),
             AnimatedGradientLibrary::default()
@@ -534,7 +636,10 @@ mod tests {
             ..Default::default()
         }
         .normalized();
-        assert_eq!(config.flow_scale, 2.0);
+        assert_eq!(
+            config.flow_scale,
+            AnimatedGradientConfig::default().flow_scale
+        );
         assert_eq!(config.grain_size, 0.5);
         assert_eq!(config.detail, 6.0);
         assert_eq!(config.motion_speed, 0.0);

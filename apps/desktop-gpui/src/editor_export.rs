@@ -5,15 +5,23 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use cap_export::estimates::{ExportEstimates, estimate_export};
 use cap_export::gif::GifExportSettings;
 use cap_export::mov::MovExportSettings;
 use cap_export::mp4::{ExportCompression, Mp4ExportSettings};
-use cap_export::preview::{ExportPreviewSettings, render_preview};
+use cap_export::preview::{
+    ExportPreviewSettings, render_preview_with_config, render_preview_with_editor,
+};
+use cap_export::settings::ExportSettings;
 use cap_export::{ExporterBase, make_cursor_only_project};
 use cap_project::{BackgroundSource, RecordingMeta, XY};
+use cap_utils::export_resources::{
+    DiskBudget, ExportResources, estimated_working_bytes, is_resource_stop,
+};
 use gpui::{
-    Context, FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement, RenderImage,
-    StatefulInteractiveElement, Styled, Window, div, img, prelude::FluentBuilder, px, svg,
+    Context, FontWeight, Hsla, InteractiveElement, IntoElement, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, ParentElement, RenderImage, StatefulInteractiveElement, Styled, Window, div, img,
+    prelude::FluentBuilder, px, svg,
 };
 
 use crate::editor_window::EditorWindow;
@@ -22,6 +30,19 @@ use crate::ui;
 use crate::{library, platform};
 
 const SIDEBAR_WIDTH: f32 = 400.;
+const HEADER_HEIGHT: f32 = 52.;
+const STAGE_PADDING_X: f32 = 24.;
+/// Stage top padding, caption row, preview padding, stats card and bottom
+/// padding: everything on the stage that is not the preview itself.
+const STAGE_VERTICAL_CHROME: f32 = 16. + 22. + 14. + 18. + STATS_HEIGHT + 20.;
+const STATS_HEIGHT: f32 = 44.;
+const SEGMENT_HEIGHT: f32 = 26.;
+const COMPRESSION_PRESETS: [(ExportCompression, &str); 4] = [
+    (ExportCompression::Potato, "Potato"),
+    (ExportCompression::Web, "Web"),
+    (ExportCompression::Social, "Social"),
+    (ExportCompression::Maximum, "Maximum"),
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExportDestination {
@@ -158,7 +179,6 @@ pub struct PreviewStats {
     pub height: u32,
     pub total_frames: u32,
     pub estimated_size_mb: f64,
-    pub frame_render_time_ms: f64,
 }
 
 pub struct ExportUi {
@@ -176,6 +196,10 @@ pub struct ExportUi {
     pub preview_stats: Option<PreviewStats>,
     pub preview_error: Option<String>,
     pub preview_task: Option<gpui::Task<()>>,
+    preview_request: Arc<()>,
+    estimate: Option<ExportEstimates>,
+    estimate_loading: bool,
+    estimate_cancel: Arc<AtomicBool>,
     pub phase: ExportPhase,
     close_requested: bool,
     pub rendered: u32,
@@ -188,9 +212,22 @@ pub struct ExportUi {
     pub sign_in_cancel: Arc<AtomicBool>,
     pub organization_id: Option<String>,
     pub share_link: Option<String>,
+    pub reuploading: bool,
     pub upload_progress: f32,
     pub copy_link_pressed: bool,
+    bpp_track: ui::SliderTrack,
+    bpp_dragging: bool,
 }
+
+impl Drop for ExportUi {
+    fn drop(&mut self) {
+        self.estimate_cancel.store(true, Ordering::Release);
+    }
+}
+
+const BPP_MIN: f32 = 0.02;
+const BPP_MAX: f32 = 0.5;
+const BPP_STEP: f32 = 0.01;
 
 impl ExportUi {
     pub fn load() -> Self {
@@ -231,6 +268,10 @@ impl ExportUi {
             preview_stats: None,
             preview_error: None,
             preview_task: None,
+            preview_request: Arc::new(()),
+            estimate: None,
+            estimate_loading: false,
+            estimate_cancel: Arc::new(AtomicBool::new(false)),
             phase: ExportPhase::Idle,
             close_requested: false,
             rendered: 0,
@@ -243,9 +284,20 @@ impl ExportUi {
             sign_in_cancel: Arc::new(AtomicBool::new(false)),
             organization_id: prefs.organization_id,
             share_link: None,
+            reuploading: false,
             upload_progress: 0.0,
             copy_link_pressed: false,
+            bpp_track: ui::SliderTrack::default(),
+            bpp_dragging: false,
         }
+    }
+
+    fn update_preview(&mut self, request: &Arc<()>, update: impl FnOnce(&mut Self)) -> bool {
+        if !Arc::ptr_eq(&self.preview_request, request) {
+            return false;
+        }
+        update(self);
+        true
     }
 
     fn persist(&self) {
@@ -268,6 +320,33 @@ impl ExportUi {
     fn bpp(&self) -> f32 {
         self.custom_bpp
             .unwrap_or_else(|| self.compression.bits_per_pixel())
+    }
+
+    fn estimate_settings(&self) -> ExportSettings {
+        let (width, height) = self.resolution.size();
+        let resolution_base = XY::new(width, height);
+        if self.cursor_only {
+            ExportSettings::Mov(MovExportSettings {
+                fps: self.fps,
+                resolution_base,
+                cursor_only: true,
+            })
+        } else if self.format == ExportFormatKind::Gif {
+            ExportSettings::Gif(GifExportSettings {
+                fps: self.fps,
+                resolution_base,
+                quality: None,
+            })
+        } else {
+            ExportSettings::Mp4(Mp4ExportSettings {
+                fps: self.fps,
+                resolution_base,
+                compression: self.compression,
+                custom_bpp: self.custom_bpp,
+                force_ffmpeg_decoder: self.force_ffmpeg,
+                optimize_filesize: self.optimize_filesize,
+            })
+        }
     }
 
     fn is_custom_bpp(&self) -> bool {
@@ -325,13 +404,30 @@ fn format_duration(seconds: f64) -> String {
     }
 }
 
-fn format_export_time(seconds: f64) -> String {
-    if seconds < 1.0 {
-        "< 1s".into()
-    } else if seconds < 60.0 {
-        format!("~{:.0}s", seconds)
+fn format_estimate_range(range: [f64; 2], time: bool) -> String {
+    if range[1] < 1.0 {
+        return if time { "< 1s" } else { "< 1 MB" }.into();
+    }
+    let (scale, unit) = if time {
+        if range[1] >= 3600.0 {
+            (3600.0, "hr")
+        } else if range[1] >= 60.0 {
+            (60.0, "min")
+        } else {
+            (1.0, "s")
+        }
+    } else if range[1] >= 1024.0 {
+        (1024.0, "GB")
     } else {
-        format!("~{:.0}m", (seconds / 60.0).ceil())
+        (1.0, "MB")
+    };
+    let precision = if scale == 1.0 { 1.0 } else { 10.0 };
+    let lower = ((range[0] / scale * precision).round() / precision).max(1.0 / precision);
+    let upper = ((range[1] / scale * precision).round() / precision).max(lower);
+    if lower == upper {
+        format!("~{lower} {unit}")
+    } else {
+        format!("~{lower}–{upper} {unit}")
     }
 }
 
@@ -347,11 +443,52 @@ fn decode_jpeg_bytes(bytes: &[u8]) -> Option<Arc<RenderImage>> {
 }
 
 impl EditorWindow {
+    pub(crate) fn render_reupload_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .rounded(px(8.))
+            .bg(Hsla::from(self.theme.blue_3))
+            .border_1()
+            .border_color(Hsla::from(self.theme.blue_5))
+            .child(
+                ui::EditorButton::plain(&self.theme, "editor-reupload")
+                    .left_icon("icons/cloud-upload.svg")
+                    .label("Reupload")
+                    .tooltip(
+                        &self.theme,
+                        if has_transparent_background(&self.project) {
+                            "Share links require a background without transparency"
+                        } else {
+                            "Upload your latest edit to the same link"
+                        },
+                    )
+                    .disabled(!self.project_ready() || has_transparent_background(&self.project))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        if !this.project_ready() {
+                            return;
+                        }
+                        this.open_export(window, cx);
+                        if !has_transparent_background(&this.project)
+                            && let Some(ui) = this.export.as_mut()
+                        {
+                            ui.destination = ExportDestination::Link;
+                            ui.format = ExportFormatKind::Mp4;
+                            ui.cursor_only = false;
+                        }
+                        this.normalize_loaded_export_fps();
+                        this.refresh_export_preview(window, cx);
+                        cx.notify();
+                    })),
+            )
+    }
+
     pub(crate) fn open_export(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.playing {
             self.toggle_play_from_crop(cx);
         }
         let mut ui = ExportUi::load();
+        if let Ok(meta) = RecordingMeta::load_for_project(&self.project_path) {
+            self.sharing = meta.sharing;
+        }
         if has_transparent_background(&self.project) {
             ui.format = ExportFormatKind::Gif;
             if ui.resolution == ExportResolution::P4k {
@@ -469,9 +606,20 @@ impl EditorWindow {
     fn refresh_export_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let path = self.project_path.clone();
         let time = self.preview_or_playhead();
+        let instance = self.instance.clone();
         let Some(ui) = self.export.as_mut() else {
             return;
         };
+        let project = self.project.clone();
+        ui.estimate_cancel.store(true, Ordering::Release);
+        ui.estimate_cancel = Arc::new(AtomicBool::new(false));
+        ui.estimate = None;
+        ui.estimate_loading = true;
+        ui.preview_stats = None;
+        let estimate_cancel = ui.estimate_cancel.clone();
+        let estimate_settings = ui.estimate_settings();
+        let estimate_instance = instance.clone();
+        let estimate_project = project.clone();
         let (width, height) = ui.resolution.size();
         let settings = ExportPreviewSettings {
             fps: ui.fps,
@@ -482,20 +630,32 @@ impl EditorWindow {
         // Match Windows editor playback: a fresh Media Foundation preview seek can return black.
         let force = cfg!(target_os = "windows") || ui.force_ffmpeg;
         ui.preview_error = None;
+        let request = Arc::new(());
+        ui.preview_request = request.clone();
         ui.preview_task = Some(cx.spawn_in(window, async move |this, cx| {
             cx.background_executor()
                 .timer(Duration::from_millis(120))
                 .await;
+            let started = std::time::Instant::now();
             let result = gpui_tokio::Tokio::spawn(cx, async move {
-                render_preview(path, time, settings, force).await
+                match instance {
+                    Some(instance) => {
+                        render_preview_with_editor(&instance, project, time, settings).await
+                    }
+                    None => render_preview_with_config(path, project, time, settings, force).await,
+                }
             })
             .await
             .ok();
+            tracing::debug!(
+                elapsed_ms = started.elapsed().as_millis() as u64,
+                "export preview rendered"
+            );
             let _ = this.update_in(cx, |this, window, cx| {
                 let Some(ui) = this.export.as_mut() else {
                     return;
                 };
-                match result {
+                let updated = ui.update_preview(&request, |ui| match result {
                     Some(Ok(preview)) => {
                         let bytes = base64::Engine::decode(
                             &base64::engine::general_purpose::STANDARD,
@@ -512,7 +672,6 @@ impl EditorWindow {
                             height: preview.actual_height,
                             total_frames: preview.total_frames,
                             estimated_size_mb: preview.estimated_size_mb,
-                            frame_render_time_ms: preview.frame_render_time_ms,
                         });
                         ui.preview_error = None;
                     }
@@ -522,9 +681,52 @@ impl EditorWindow {
                     None => {
                         ui.preview_error = Some("Preview unavailable".into());
                     }
+                });
+                if !updated {
+                    return;
                 }
                 cx.notify();
                 window.refresh();
+            });
+            let result = if let Some(instance) = estimate_instance {
+                let (estimate_tx, estimate_rx) = flume::unbounded();
+                let estimate_task = gpui_tokio::Tokio::spawn(cx, async move {
+                    estimate_export(
+                        instance,
+                        estimate_project,
+                        estimate_settings,
+                        estimate_cancel,
+                        move |estimate| {
+                            let _ = estimate_tx.send(estimate);
+                        },
+                    )
+                    .await
+                });
+                while let Ok(estimate) = estimate_rx.recv_async().await {
+                    let _ = this.update(cx, |this, cx| {
+                        if let Some(ui) = this.export.as_mut()
+                            && !ui.estimate_cancel.load(Ordering::Acquire)
+                            && ui.update_preview(&request, |ui| ui.estimate = Some(estimate))
+                        {
+                            cx.notify();
+                        }
+                    });
+                }
+                estimate_task.await.ok().and_then(Result::ok)
+            } else {
+                None
+            };
+            let _ = this.update(cx, |this, cx| {
+                if let Some(ui) = this.export.as_mut()
+                    && ui.update_preview(&request, |ui| {
+                        if let Some(estimate) = result {
+                            ui.estimate = Some(estimate);
+                        }
+                        ui.estimate_loading = false;
+                    })
+                {
+                    cx.notify();
+                }
             });
         }));
     }
@@ -538,6 +740,7 @@ impl EditorWindow {
         let Some(ui) = self.export.as_mut() else {
             return;
         };
+        ui.estimate_cancel.store(true, Ordering::Release);
         if ui.phase.is_busy() || ui.close_requested {
             return;
         }
@@ -556,6 +759,17 @@ impl EditorWindow {
             return;
         }
 
+        let estimate = ui
+            .estimate
+            .as_ref()
+            .map(|estimate| estimate.size_range_mb[1])
+            .or_else(|| {
+                ui.preview_stats
+                    .as_ref()
+                    .map(|stats| stats.estimated_size_mb)
+            })
+            .map(estimated_working_bytes)
+            .unwrap_or(0);
         let destination = ui.destination;
         let format = ui.format;
         let cursor_only = ui.cursor_only;
@@ -590,12 +804,24 @@ impl EditorWindow {
                     "mp4"
                 };
                 let default = format!("{pretty_name}.{ext}");
-                let chosen = std::env::var_os("CAP_GPUI_AUTO_EXPORT")
-                    .map(PathBuf::from)
-                    .or_else(|| platform::save_file_panel(&default, &[ext]));
-                if chosen.is_none() {
+                let chosen: Result<Option<PathBuf>, String> = match std::env::var_os("CAP_GPUI_AUTO_EXPORT") {
+                    Some(path) => Ok(Some(PathBuf::from(path))),
+                    None => {
+                        #[cfg(target_os = "macos")]
+                        {
+                            platform::try_save_file_panel(&default, &[ext])
+                        }
+                        #[cfg(not(target_os = "macos"))]
+                        {
+                            Ok(platform::save_file_panel_async(&default, &[ext], cx).await)
+                        }
+                    }
+                };
+                if matches!(chosen, Ok(None)) {
                     let _ = this.update(cx, |this, cx| {
-                        if let Some(ui) = this.export.as_mut() {
+                        if let Some(ui) = this.export.as_mut()
+                            && Arc::ptr_eq(&ui.cancel, &cancel)
+                        {
                             ui.phase = ExportPhase::Idle;
                         }
                         cx.notify();
@@ -605,15 +831,35 @@ impl EditorWindow {
                     });
                     return;
                 }
-                chosen
+                match chosen {
+                    Ok(path) => path,
+                    Err(error) => {
+                        tracing::warn!(error, "Save dialog unavailable; keeping the export in its project output folder");
+                        None
+                    }
+                }
             } else {
                 None
             };
 
-            let started = this.update(cx, |this, cx| {
+            let output = save_path.clone().unwrap_or_else(|| project_path.join("output"));
+            let resources = ExportResources::new(vec![DiskBudget {
+                path: output,
+                description: "your export drive",
+                estimated_bytes: estimate,
+            }]);
+            if !confirm_export_resources(&this, cx, &resources, &cancel).await {
+                let _ = this.update_in(cx, |this, window, cx| this.finish_requested_export_close(window, cx));
+                return;
+            }
+
+            let started = this.update_in(cx, |this, _, cx| {
                 let Some(ui) = this.export.as_mut() else {
                     return false;
                 };
+                if !Arc::ptr_eq(&ui.cancel, &cancel) {
+                    return false;
+                }
                 if cancel.load(Ordering::Relaxed) {
                     ui.phase = ExportPhase::Idle;
                     cx.notify();
@@ -630,10 +876,12 @@ impl EditorWindow {
                 return;
             }
 
+            let notify_file_save = save_path.is_some();
             let (progress_tx, progress_rx) = flume::unbounded::<(u32, u32)>();
             let export_cancel = cancel.clone();
             let export = gpui_tokio::Tokio::spawn(cx, async move {
-                run_export(
+                let stopped = export_cancel.clone();
+                resources.supervise(run_export(
                     project_path,
                     project,
                     format,
@@ -648,8 +896,7 @@ impl EditorWindow {
                     save_path.clone(),
                     progress_tx,
                     export_cancel,
-                )
-                .await
+                ), || stopped.store(true, Ordering::Release)).await
             });
 
             loop {
@@ -678,12 +925,17 @@ impl EditorWindow {
                         let _ = this.update(cx, |this, cx| {
                             if let Some(ui) = this.export.as_mut() {
                                 ui.copy_completed_export(path, |path| {
-                                    platform::copy_file_to_clipboard(path, cx)
+                                    let result = platform::copy_file_to_clipboard(path, cx);
+                                    crate::app_sounds::play_notification();
+                                    result
                                 });
                             }
                             cx.notify();
                         });
                     } else {
+                        if notify_file_save {
+                            crate::app_sounds::play_notification();
+                        }
                         let _ = this.update(cx, |this, cx| {
                             if let Some(ui) = this.export.as_mut() {
                                 ui.phase = ExportPhase::Done;
@@ -695,7 +947,7 @@ impl EditorWindow {
                 }
                 Ok(Err(error)) => {
                     tracing::error!(error, "editor export failed");
-                    let cancelled = error == "Export cancelled" || cancel.load(Ordering::Relaxed);
+                    let cancelled = !is_resource_stop(&error) && (error == "Export cancelled" || cancel.load(Ordering::Relaxed));
                     let _ = this.update(cx, |this, cx| {
                         if let Some(ui) = this.export.as_mut() {
                             if cancelled {
@@ -732,7 +984,11 @@ impl EditorWindow {
             return;
         };
         ui.cancel = Arc::new(AtomicBool::new(false));
-        ui.copy_completed_export(path, |path| platform::copy_file_to_clipboard(path, cx));
+        ui.copy_completed_export(path, |path| {
+            let result = platform::copy_file_to_clipboard(path, cx);
+            crate::app_sounds::play_notification();
+            result
+        });
         cx.notify();
         self.finish_requested_export_close(window, cx);
     }
@@ -820,10 +1076,21 @@ impl EditorWindow {
 
         let upgraded = store::auth_snapshot().is_upgraded();
         if !upgraded && duration >= 300.0 {
-            cx.open_url(&format!("{}/pricing", crate::auth::server_url()));
+            cx.open_url(crate::auth::PRICING_URL);
             return;
         }
 
+        let estimate = ui
+            .estimate
+            .as_ref()
+            .map(|estimate| estimate.size_range_mb[1])
+            .or_else(|| {
+                ui.preview_stats
+                    .as_ref()
+                    .map(|stats| stats.estimated_size_mb)
+            })
+            .map(estimated_working_bytes)
+            .unwrap_or(0);
         let format = ui.format;
         let cursor_only = ui.cursor_only;
         let fps = ui.fps;
@@ -843,6 +1110,7 @@ impl EditorWindow {
         ui.cancel = Arc::new(AtomicBool::new(false));
         let cancel = ui.cancel.clone();
         ui.phase = ExportPhase::Starting;
+        ui.reuploading = self.sharing.is_some();
         ui.error = None;
         ui.share_link = None;
         ui.upload_progress = 0.0;
@@ -860,6 +1128,20 @@ impl EditorWindow {
                 let _ = std::fs::create_dir_all(parent);
             }
 
+            let resources = ExportResources::new(vec![DiskBudget {
+                path: save_path
+                    .clone()
+                    .unwrap_or_else(|| project_path.join("output")),
+                description: "your recording drive",
+                estimated_bytes: estimate,
+            }]);
+            if !confirm_export_resources(&this, cx, &resources, &cancel).await {
+                let _ = this.update_in(cx, |this, window, cx| {
+                    this.finish_requested_export_close(window, cx)
+                });
+                return;
+            }
+
             let _ = this.update(cx, |this, cx| {
                 if let Some(ui) = this.export.as_mut() {
                     ui.phase = ExportPhase::Rendering;
@@ -871,23 +1153,28 @@ impl EditorWindow {
             let export_cancel = cancel.clone();
             let export_path = project_path.clone();
             let export = gpui_tokio::Tokio::spawn(cx, async move {
-                run_export(
-                    export_path,
-                    project,
-                    format,
-                    cursor_only,
-                    fps,
-                    width,
-                    height,
-                    compression,
-                    custom_bpp,
-                    optimize,
-                    force,
-                    save_path.clone(),
-                    progress_tx,
-                    export_cancel,
-                )
-                .await
+                let stopped = export_cancel.clone();
+                resources
+                    .supervise(
+                        run_export(
+                            export_path,
+                            project,
+                            format,
+                            cursor_only,
+                            fps,
+                            width,
+                            height,
+                            compression,
+                            custom_bpp,
+                            optimize,
+                            force,
+                            save_path.clone(),
+                            progress_tx,
+                            export_cancel,
+                        ),
+                        || stopped.store(true, Ordering::Release),
+                    )
+                    .await
             });
 
             loop {
@@ -956,6 +1243,11 @@ impl EditorWindow {
                     match upload.await {
                         Ok(Ok(crate::upload::UploadResult::Success(link))) => {
                             let _ = this.update(cx, |this, cx| {
+                                if let Ok(meta) =
+                                    RecordingMeta::load_for_project(&this.project_path)
+                                {
+                                    this.sharing = meta.sharing;
+                                }
                                 if let Some(ui) = this.export.as_mut() {
                                     ui.phase = ExportPhase::Done;
                                     ui.share_link = Some(link.clone());
@@ -965,6 +1257,7 @@ impl EditorWindow {
                             });
                             let _ = this.update(cx, |_, cx| {
                                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(link));
+                                crate::app_sounds::play_notification();
                             });
                         }
                         Ok(Ok(crate::upload::UploadResult::NotAuthenticated)) => {
@@ -983,7 +1276,7 @@ impl EditorWindow {
                                 cx.notify();
                             });
                             let _ = this.update(cx, |_, cx| {
-                                cx.open_url(&format!("{}/pricing", crate::auth::server_url()));
+                                cx.open_url(crate::auth::PRICING_URL);
                             });
                             platform::alert_dialog(
                                 "Upgrade required",
@@ -1008,7 +1301,8 @@ impl EditorWindow {
                     }
                 }
                 Ok(Err(error)) => {
-                    let cancelled = error == "Export cancelled" || cancel.load(Ordering::Relaxed);
+                    let cancelled = !is_resource_stop(&error)
+                        && (error == "Export cancelled" || cancel.load(Ordering::Relaxed));
                     let _ = this.update(cx, |this, cx| {
                         if let Some(ui) = this.export.as_mut() {
                             if cancelled {
@@ -1036,23 +1330,26 @@ impl EditorWindow {
 
     pub(crate) fn render_export_page(
         &self,
-        _window: &Window,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = self.theme;
+        let editor = theme.editor;
         let Some(ui) = self.export.as_ref() else {
             return div().into_any_element();
         };
 
         let header = div()
             .relative()
-            .h(px(56.))
+            .h(px(HEADER_HEIGHT))
             .flex_none()
             .flex()
+            .flex_row()
             .items_center()
-            .justify_center()
+            .pl(px(if cfg!(target_os = "macos") { 92. } else { 12. }))
+            .pr(px(12.))
             .border_b_1()
-            .border_color(Hsla::from(theme.gray_3))
+            .border_color(Hsla::from(editor.line))
             .when(cfg!(target_os = "windows"), |header| {
                 header.window_control_area(gpui::WindowControlArea::Drag)
             })
@@ -1066,22 +1363,69 @@ impl EditorWindow {
                 })
             })
             .child(
+                div().flex_1().flex().flex_row().items_center().child(
+                    div()
+                        .id("export-back")
+                        .when(cfg!(target_os = "windows"), |button| button.occlude())
+                        .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(6.))
+                        .h(px(28.))
+                        .pl(px(8.))
+                        .pr(px(10.))
+                        .rounded(px(8.))
+                        .cursor_pointer()
+                        .text_size(px(12.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(Hsla::from(editor.text_2))
+                        .hover(move |style| {
+                            style
+                                .bg(Hsla::from(editor.ctl))
+                                .text_color(Hsla::from(editor.text_1))
+                        })
+                        .child(
+                            svg()
+                                .path("icons/move-left.svg")
+                                .size(px(14.))
+                                .text_color(Hsla::from(editor.text_2)),
+                        )
+                        .child("Back to editor")
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.close_export(window, cx);
+                        })),
+                ),
+            )
+            .child(
                 div()
-                    .text_size(px(14.))
+                    .flex_none()
+                    .text_size(px(13.))
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(Hsla::from(theme.gray_12))
+                    .text_color(Hsla::from(editor.text_1))
                     .child("Export"),
-            );
+            )
+            .child(div().flex_1());
         #[cfg(target_os = "windows")]
         let header = header.child(div().absolute().right_0().top_0().h_full().child(
             ui::windows_caption_controls(
                 theme,
-                _window.is_window_active(),
-                _window.is_maximized(),
+                window.is_window_active(),
+                window.is_maximized(),
                 true,
                 true,
             ),
         ));
+
+        let viewport = window.viewport_size();
+        let preview_box = preview_fit(
+            f32::from(viewport.width) - SIDEBAR_WIDTH - STAGE_PADDING_X * 2.,
+            f32::from(viewport.height) - HEADER_HEIGHT - STAGE_VERTICAL_CHROME,
+            ui.preview.as_ref().map(|image| {
+                let size = image.size(0);
+                (size.width.0 as f32, size.height.0 as f32)
+            }),
+        );
 
         div()
             .size_full()
@@ -1096,7 +1440,7 @@ impl EditorWindow {
                     .flex_row()
                     .flex_1()
                     .min_h_0()
-                    .child(self.render_export_preview_pane(ui))
+                    .child(self.render_export_preview_pane(ui, preview_box))
                     .child(self.render_export_sidebar(ui, cx))
                     .when(ui.phase.shows_progress(), |this| {
                         this.child(self.render_export_overlay(ui, cx))
@@ -1105,11 +1449,27 @@ impl EditorWindow {
                         this.child(div().absolute().inset_0().occlude())
                     }),
             )
+            .when(ui.bpp_dragging, |this| {
+                this.child(ui::Slider::drag_layer(
+                    "export-bpp-drag",
+                    cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
+                        this.export_bpp_drag_to(event.position.x, cx);
+                    }),
+                    cx.listener(|this, _: &MouseUpEvent, window, cx| {
+                        this.export_bpp_mouse_up(window, cx);
+                    }),
+                ))
+            })
             .into_any_element()
     }
 
-    fn render_export_preview_pane(&self, ui: &ExportUi) -> impl IntoElement {
+    fn render_export_preview_pane(
+        &self,
+        ui: &ExportUi,
+        preview_box: (f32, f32),
+    ) -> impl IntoElement {
         let theme = self.theme;
+        let editor = theme.editor;
         let stats = ui.preview_stats.as_ref();
         let duration = stats
             .map(|stats| {
@@ -1120,34 +1480,61 @@ impl EditorWindow {
                 }
             })
             .unwrap_or(0.0);
-        let estimate_mult = if ui.format == ExportFormatKind::Gif {
-            4.0
-        } else {
-            10.0
+        let (box_w, box_h) = preview_box;
+
+        let preview = match ui.preview.clone() {
+            Some(image) => {
+                use gpui::StyledImage as _;
+                div()
+                    .w(px(box_w))
+                    .h(px(box_h))
+                    .rounded(px(10.))
+                    .overflow_hidden()
+                    .shadow(crate::theme::preview_shadow())
+                    .child(img(image).object_fit(gpui::ObjectFit::Contain).size_full())
+                    .into_any_element()
+            }
+            None => div()
+                .w(px(box_w))
+                .h(px(box_h))
+                .rounded(px(10.))
+                .bg(Hsla::from(editor.ctl))
+                .flex()
+                .items_center()
+                .justify_center()
+                .px(px(24.))
+                .text_size(px(12.))
+                .text_color(Hsla::from(editor.text_2))
+                .text_center()
+                .child(
+                    ui.preview_error
+                        .clone()
+                        .unwrap_or_else(|| "Generating preview…".into()),
+                )
+                .into_any_element(),
         };
-        let export_secs = stats
-            .map(|stats| {
-                stats.frame_render_time_ms / 1000.0 * stats.total_frames as f64 / estimate_mult
-            })
-            .unwrap_or(0.0);
 
         div()
             .flex()
             .flex_col()
             .flex_1()
             .min_w_0()
-            .p(px(20.))
-            .gap(px(12.))
+            .bg(Hsla::from(editor.stage))
+            .pt(px(16.))
+            .px(px(STAGE_PADDING_X))
+            .pb(px(20.))
             .child(
                 div()
+                    .h(px(22.))
                     .flex()
                     .flex_row()
                     .items_center()
                     .gap(px(6.))
                     .child(
                         div()
-                            .text_size(px(13.))
+                            .text_size(px(12.))
                             .font_weight(FontWeight::MEDIUM)
+                            .text_color(Hsla::from(editor.text_2))
                             .child("Preview"),
                     )
                     .child(
@@ -1159,16 +1546,15 @@ impl EditorWindow {
                                 crate::ui::Tooltip::new(
                                     &theme,
                                     "This is a rendered frame from your video. Adjust the \
-                                     settings below to see the quality of the final exported \
-                                     video.",
+                                     settings to see the quality of the final export.",
                                 )
                                 .view(cx)
                             })
                             .child(
                                 svg()
                                     .path("icons/info.svg")
-                                    .size(px(14.))
-                                    .text_color(Hsla::from(theme.gray_10)),
+                                    .size(px(13.))
+                                    .text_color(Hsla::from(editor.text_3)),
                             ),
                     ),
             )
@@ -1179,63 +1565,87 @@ impl EditorWindow {
                     .min_h_0()
                     .items_center()
                     .justify_center()
-                    .rounded(px(12.))
-                    .border_1()
-                    .border_color(Hsla::from(theme.gray_3))
-                    .bg(Hsla::from(theme.gray_2))
-                    .overflow_hidden()
-                    .child(match ui.preview.clone() {
-                        Some(image) => {
-                            use gpui::StyledImage as _;
-                            img(image)
-                                .object_fit(gpui::ObjectFit::Contain)
-                                .size_full()
-                                .into_any_element()
-                        }
-                        None => div()
-                            .text_size(px(13.))
-                            .text_color(Hsla::from(theme.gray_11))
-                            .child(
-                                ui.preview_error
-                                    .clone()
-                                    .unwrap_or_else(|| "Generating preview…".into()),
-                            )
-                            .into_any_element(),
-                    }),
+                    .pt(px(14.))
+                    .pb(px(18.))
+                    .child(preview),
             )
             .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .gap(px(16.))
-                    .text_size(px(12.))
-                    .text_color(Hsla::from(theme.gray_11))
-                    .child(export_stat("icons/clock.svg", format_duration(duration)))
-                    .child(export_stat(
-                        "icons/monitor-outline.svg",
-                        stats
-                            .map(|stats| format!("{}×{}", stats.width, stats.height))
-                            .unwrap_or_else(|| "—".into()),
-                    ))
-                    .child(export_stat(
-                        "icons/folder.svg",
-                        stats
-                            .map(|stats| format!("~{:.1} MB", stats.estimated_size_mb))
-                            .unwrap_or_else(|| "—".into()),
-                    ))
-                    .child(export_stat(
-                        "icons/zap.svg",
-                        if stats.is_some() {
-                            format_export_time(export_secs)
-                        } else {
-                            "—".into()
-                        },
-                    )),
+                div().flex().flex_row().justify_center().child(
+                    div()
+                        .h(px(STATS_HEIGHT))
+                        .min_w(px(520.))
+                        .flex()
+                        .flex_row()
+                        .rounded(px(10.))
+                        .bg(Hsla::from(editor.card))
+                        .shadow(editor.card_shadow())
+                        .child(export_stat(
+                            &theme,
+                            "Duration",
+                            stats.map(|_| format_duration(duration)),
+                            false,
+                        ))
+                        .child(export_stat(
+                            &theme,
+                            "Output",
+                            stats.map(|stats| {
+                                format!("{}×{} · {} fps", stats.width, stats.height, ui.fps)
+                            }),
+                            true,
+                        ))
+                        .child(export_stat(
+                            &theme,
+                            if ui.estimate_loading && ui.estimate.is_some() {
+                                "Refining size…"
+                            } else {
+                                "Estimated size"
+                            },
+                            Some(
+                                ui.estimate
+                                    .as_ref()
+                                    .map(|estimate| {
+                                        format_estimate_range(estimate.size_range_mb, false)
+                                    })
+                                    .unwrap_or_else(|| {
+                                        if ui.estimate_loading {
+                                            "Calculating…".into()
+                                        } else {
+                                            "Unavailable".into()
+                                        }
+                                    }),
+                            ),
+                            true,
+                        ))
+                        .child(export_stat(
+                            &theme,
+                            if ui.estimate_loading && ui.estimate.is_some() {
+                                "Refining time…"
+                            } else {
+                                "Export time"
+                            },
+                            Some(
+                                ui.estimate
+                                    .as_ref()
+                                    .map(|estimate| {
+                                        format_estimate_range(estimate.time_range_seconds, true)
+                                    })
+                                    .unwrap_or_else(|| {
+                                        if ui.estimate_loading {
+                                            "Calculating…".into()
+                                        } else {
+                                            "Unavailable".into()
+                                        }
+                                    }),
+                            ),
+                            true,
+                        )),
+                ),
             )
     }
 
     fn render_export_sidebar(&self, ui: &ExportUi, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
+        let editor = theme.editor;
         let transparent = has_transparent_background(&self.project);
         let link_disabled = transparent || ui.cursor_only;
         let format_locked = transparent || ui.cursor_only;
@@ -1248,46 +1658,9 @@ impl EditorWindow {
             .h_full()
             .flex()
             .flex_col()
+            .bg(Hsla::from(editor.card))
             .border_l_1()
-            .border_color(Hsla::from(theme.gray_3))
-            .child(
-                div()
-                    .h(px(64.))
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .px(px(16.))
-                    .border_b_1()
-                    .border_color(Hsla::from(theme.gray_3))
-                    .child(
-                        div()
-                            .id("export-back")
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .gap(px(6.))
-                            .h(px(36.))
-                            .px(px(8.))
-                            .rounded(px(8.))
-                            .cursor_pointer()
-                            .hover(|style| style.bg(Hsla::from(theme.gray_3)))
-                            .child(
-                                svg()
-                                    .path("icons/move-left.svg")
-                                    .size(px(14.))
-                                    .text_color(Hsla::from(theme.gray_11)),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(13.))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .child("Back to editor"),
-                            )
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.close_export(window, cx);
-                            })),
-                    ),
-            )
+            .border_color(Hsla::from(editor.line))
             .child(
                 div()
                     .id("export-settings")
@@ -1302,75 +1675,99 @@ impl EditorWindow {
                     .child(self.export_format_field(ui, format_locked, cx))
                     .child(self.export_resolution_field(ui, &resolutions, cx))
                     .child(self.export_fps_field(ui, fps_options, cx))
-                    .when(ui.format == ExportFormatKind::Mp4 && !ui.cursor_only, |this| {
-                        this.child(self.export_quality_field(ui, cx))
-                            .child(self.export_optimize_row(ui, cx))
-                    })
-                    .when(ui.cursor_only, |this| {
-                        this.child(
-                            div()
-                                .p(px(12.))
-                                .rounded(px(8.))
-                                .bg(Hsla::from(theme.gray_3))
-                                .text_size(px(12.))
-                                .text_color(Hsla::from(theme.gray_11))
-                                .child(
-                                    "Cursor-only exports are saved as a transparent MOV and cannot be shared as a link.",
-                                ),
-                        )
-                    })
+                    .when(
+                        ui.format == ExportFormatKind::Mp4 && !ui.cursor_only,
+                        |this| this.child(self.export_quality_field(ui, cx)),
+                    )
+                    .child(div().h(px(1.)).flex_none().bg(Hsla::from(editor.line)))
                     .child(self.export_advanced(ui, cx)),
             )
             .child(
                 div()
-                    .p(px(16.))
+                    .px(px(16.))
+                    .pt(px(12.))
+                    .pb(px(16.))
                     .border_t_1()
-                    .border_color(Hsla::from(theme.gray_3))
-                    .child(
-                        {
-                            let signed_in = store::auth_snapshot().signed_in();
-                            let (variant, label, icon) = match ui.destination {
-                                ExportDestination::File => (
-                                    ui::ButtonVariant::Primary,
-                                    "Export to File",
-                                    Some("icons/folder.svg"),
-                                ),
-                                ExportDestination::Clipboard => (
-                                    ui::ButtonVariant::Primary,
-                                    "Export to Clipboard",
-                                    Some("icons/copy.svg"),
-                                ),
-                                ExportDestination::Link if ui.sign_in_pending => {
-                                    (ui::ButtonVariant::Gray, "Cancel Sign In", None)
-                                }
-                                ExportDestination::Link if !signed_in => (
-                                    ui::ButtonVariant::Primary,
-                                    "Sign in to share",
-                                    Some("icons/link.svg"),
-                                ),
-                                ExportDestination::Link => (
-                                    ui::ButtonVariant::Primary,
-                                    "Export to Link",
-                                    Some("icons/link.svg"),
-                                ),
-                            };
-                            let mut button = ui::Button::plain(
-                                &theme,
-                                "export-cta",
-                                variant,
-                                ui::ButtonSize::Lg,
-                            )
-                            .label(label)
-                            .disabled(ui.phase.is_busy())
-                            .full_width()
-                            .on_click(cx.listener(|this, _, window, cx| this.start_export(window, cx)));
-                            if let Some(icon) = icon {
-                                button = button.icon(icon);
-                            }
-                            button
-                        }
-                    ),
+                    .border_color(Hsla::from(editor.line))
+                    .child(self.export_cta(ui, cx)),
             )
+    }
+
+    fn export_cta(&self, ui: &ExportUi, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+        let editor = theme.editor;
+        let signed_in = store::auth_snapshot().signed_in();
+        let (label, icon, primary) = match ui.destination {
+            ExportDestination::File => ("Export to File", Some("icons/folder.svg"), true),
+            ExportDestination::Clipboard => ("Export to Clipboard", Some("icons/copy.svg"), true),
+            ExportDestination::Link if ui.sign_in_pending => ("Cancel Sign In", None, false),
+            ExportDestination::Link if !signed_in => {
+                ("Sign in to share", Some("icons/link.svg"), true)
+            }
+            ExportDestination::Link => (
+                if self.sharing.is_some() {
+                    "Reupload to same link"
+                } else {
+                    "Create shareable link"
+                },
+                Some("icons/link.svg"),
+                true,
+            ),
+        };
+        let busy = ui.phase.is_busy();
+        let (bg, hover_bg, text) = if primary {
+            (
+                Hsla::from(editor.accent),
+                Hsla::from(editor.accent_2),
+                gpui::white(),
+            )
+        } else {
+            (
+                Hsla::from(editor.ctl),
+                Hsla::from(editor.ctl_hover),
+                Hsla::from(editor.text_1),
+            )
+        };
+
+        div()
+            .id("export-cta")
+            .tab_index(0)
+            .w_full()
+            .h(px(40.))
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_center()
+            .gap(px(8.))
+            .rounded(px(10.))
+            .bg(bg)
+            .text_size(px(13.))
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(text)
+            .when(primary, |this| {
+                this.shadow(vec![gpui::BoxShadow {
+                    color: gpui::hsla(0., 0., 1., 0.18),
+                    offset: gpui::point(px(0.), px(1.)),
+                    blur_radius: px(0.),
+                    spread_radius: px(0.),
+                    inset: true,
+                }])
+            })
+            .when(busy, |this| this.opacity(0.5))
+            .when(!busy, |this| {
+                this.cursor_pointer()
+                    .hover(move |style| style.bg(hover_bg))
+                    .on_click(cx.listener(|this, _, window, cx| this.start_export(window, cx)))
+            })
+            .children(icon.map(|icon| svg().path(icon).size(px(16.)).text_color(text)))
+            .child(label)
+    }
+
+    fn export_section(&self, name: &'static str, icon: &'static str) -> ui::Field {
+        ui::Field::section(&self.theme, name)
+            .icon(icon)
+            .icon_size(px(14.))
+            .gap(px(8.))
     }
 
     fn export_destination_field(
@@ -1380,23 +1777,32 @@ impl EditorWindow {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = self.theme;
-        ui::Field::plain(&theme, "Destination")
-            .icon("icons/upload-arrow.svg")
+        let editor = theme.editor;
+        self.export_section("Destination", "icons/upload-arrow.svg")
             .child(
-                ui::SegmentedControl::pills(
+                ui::SegmentedControl::editor(
                     &theme,
                     "export-destination",
                     ExportDestination::ALL
                         .iter()
                         .map(|dest| {
+                            let label = if *dest == ExportDestination::Link
+                                && self.sharing.is_some()
+                            {
+                                "Reupload"
+                            } else {
+                                dest.label()
+                            };
                             let mut option =
-                                ui::SegmentOption::new(dest.label(), ui.destination == *dest)
+                                ui::SegmentOption::new(label, ui.destination == *dest)
                                     .disabled(*dest == ExportDestination::Link && link_disabled);
                             option.icon = Some(dest.icon().into());
                             option
                         })
                         .collect(),
                 )
+                .stretch()
+                .item_height(px(30.))
                 .on_select(cx.listener(|this, index: &usize, window, cx| {
                     let Some(dest) = ui::option_at(ExportDestination::ALL, *index) else {
                         return;
@@ -1417,8 +1823,62 @@ impl EditorWindow {
                     cx.notify();
                 })),
             )
+            .when(link_disabled, |field| {
+                field.child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(Hsla::from(editor.text_3))
+                        .child(if ui.cursor_only {
+                            "Cursor-only exports can only be saved to a file or clipboard."
+                        } else {
+                            "Transparent exports can only be saved to a file or clipboard."
+                        }),
+                )
+            })
+            .when(
+                ui.destination == ExportDestination::Link && self.sharing.is_some(),
+                |field| {
+                    let link = self.sharing.as_ref()
+                        .map(|sharing| sharing.link.clone())
+                        .unwrap_or_default();
+                    field.child(
+                        div()
+                            .p(px(12.))
+                            .rounded(px(10.))
+                            .bg(Hsla::from(editor.card_2))
+                            .flex()
+                            .flex_col()
+                            .gap(px(4.))
+                            .child(
+                                div()
+                                    .text_size(px(12.5))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(Hsla::from(editor.text_1))
+                                    .child("Update your existing link"),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(11.5))
+                                    .line_height(px(15.))
+                                    .text_color(Hsla::from(editor.text_3))
+                                    .child("Reupload replaces the video at this link with your latest edit. Everyone with the link will see the updated version."),
+                            )
+                            .child(
+                                div()
+                                    .id("reupload-existing-link")
+                                    .text_size(px(11.5))
+                                    .text_color(Hsla::from(editor.accent))
+                                    .truncate()
+                                    .cursor_pointer()
+                                    .child(link.clone())
+                                    .on_click(move |_, _, cx| cx.open_url(&link)),
+                            ),
+                    )
+                },
+            )
             .when(
                 ui.destination == ExportDestination::Link
+                    && self.sharing.is_none()
                     && store::auth_snapshot().organizations.len() > 1,
                 |this| {
                     let orgs = store::auth_snapshot().organizations;
@@ -1439,12 +1899,12 @@ impl EditorWindow {
                             .flex_row()
                             .items_center()
                             .justify_between()
-                            .px(px(12.))
-                            .py(px(8.))
-                            .rounded(px(8.))
-                            .bg(Hsla::from(theme.gray_3))
+                            .h(px(30.))
+                            .px(px(10.))
+                            .rounded(px(7.))
+                            .bg(Hsla::from(editor.ctl))
                             .cursor_pointer()
-                            .hover(|style| style.bg(Hsla::from(theme.gray_4)))
+                            .hover(move |style| style.bg(Hsla::from(editor.ctl_hover)))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 let orgs = store::auth_snapshot().organizations;
                                 if orgs.is_empty() {
@@ -1467,8 +1927,8 @@ impl EditorWindow {
                             }))
                             .child(
                                 div()
-                                    .text_size(px(13.))
-                                    .text_color(Hsla::from(theme.gray_11))
+                                    .text_size(px(12.))
+                                    .text_color(Hsla::from(editor.text_2))
                                     .child("Organization"),
                             )
                             .child(
@@ -1477,14 +1937,14 @@ impl EditorWindow {
                                     .flex_row()
                                     .items_center()
                                     .gap(px(4.))
-                                    .text_size(px(13.))
-                                    .text_color(Hsla::from(theme.gray_12))
+                                    .text_size(px(12.))
+                                    .text_color(Hsla::from(editor.text_1))
                                     .child(label)
                                     .child(
                                         svg()
                                             .path("icons/caret-down.svg")
-                                            .size(px(16.))
-                                            .text_color(Hsla::from(theme.gray_11)),
+                                            .size(px(14.))
+                                            .text_color(Hsla::from(editor.text_3)),
                                     ),
                             ),
                     )
@@ -1500,11 +1960,10 @@ impl EditorWindow {
     ) -> impl IntoElement {
         let theme = self.theme;
         let options = [ExportFormatKind::Mp4, ExportFormatKind::Gif];
-        ui::Field::plain(&theme, "Format")
-            .icon("icons/video.svg")
+        self.export_section("Format", "icons/video.svg")
             .disabled(locked)
             .child(
-                ui::SegmentedControl::pills(
+                ui::SegmentedControl::editor(
                     &theme,
                     "export-format",
                     options
@@ -1515,6 +1974,8 @@ impl EditorWindow {
                         })
                         .collect(),
                 )
+                .stretch()
+                .item_height(px(SEGMENT_HEIGHT))
                 .on_select(cx.listener(move |this, index: &usize, window, cx| {
                     if locked {
                         return;
@@ -1551,10 +2012,9 @@ impl EditorWindow {
     ) -> impl IntoElement {
         let theme = self.theme;
         let resolutions = resolutions.to_vec();
-        ui::Field::plain(&theme, "Resolution")
-            .icon("icons/monitor-outline.svg")
+        self.export_section("Resolution", "icons/monitor-outline.svg")
             .child(
-                ui::SegmentedControl::pills(
+                ui::SegmentedControl::editor(
                     &theme,
                     "export-resolution",
                     resolutions
@@ -1562,6 +2022,8 @@ impl EditorWindow {
                         .map(|res| ui::SegmentOption::new(res.label(), ui.resolution == *res))
                         .collect(),
                 )
+                .stretch()
+                .item_height(px(SEGMENT_HEIGHT))
                 .on_select(cx.listener(move |this, index: &usize, window, cx| {
                     let Some(resolution) = resolutions.get(*index).copied() else {
                         return;
@@ -1584,57 +2046,53 @@ impl EditorWindow {
     ) -> impl IntoElement {
         let theme = self.theme;
         let options = options.to_vec();
-        ui::Field::plain(&theme, "Frame Rate")
-            .icon("icons/gauge.svg")
-            .child(
-                ui::SegmentedControl::pills(
-                    &theme,
-                    "export-fps",
-                    options
-                        .iter()
-                        .map(|fps| ui::SegmentOption::new(format!("{fps} FPS"), ui.fps == *fps))
-                        .collect(),
-                )
-                .on_select(cx.listener(move |this, index: &usize, window, cx| {
-                    let Some(fps) = options.get(*index).copied() else {
-                        return;
-                    };
-                    if let Some(ui) = this.export.as_mut() {
-                        ui.fps = fps;
-                        ui.persist();
-                    }
-                    this.refresh_export_preview(window, cx);
-                    cx.notify();
-                })),
+        self.export_section("Frame rate", "icons/gauge.svg").child(
+            ui::SegmentedControl::editor(
+                &theme,
+                "export-fps",
+                options
+                    .iter()
+                    .map(|fps| ui::SegmentOption::new(format!("{fps} FPS"), ui.fps == *fps))
+                    .collect(),
             )
+            .stretch()
+            .item_height(px(SEGMENT_HEIGHT))
+            .on_select(cx.listener(move |this, index: &usize, window, cx| {
+                let Some(fps) = options.get(*index).copied() else {
+                    return;
+                };
+                if let Some(ui) = this.export.as_mut() {
+                    ui.fps = fps;
+                    ui.persist();
+                }
+                this.refresh_export_preview(window, cx);
+                cx.notify();
+            })),
+        )
     }
 
     fn export_quality_field(&self, ui: &ExportUi, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
-        let options = [
-            (ExportCompression::Potato, "Potato"),
-            (ExportCompression::Web, "Web"),
-            (ExportCompression::Social, "Social"),
-            (ExportCompression::Maximum, "Maximum"),
-        ];
-        ui::Field::plain(&theme, "Quality")
-            .icon("icons/diamond.svg")
+        let editor = theme.editor;
+        self.export_section("Quality", "icons/gem.svg")
             .child(
-                ui::SegmentedControl::pills(
+                ui::SegmentedControl::editor(
                     &theme,
                     "export-quality",
-                    options
+                    COMPRESSION_PRESETS
                         .iter()
                         .map(|(value, label)| {
                             ui::SegmentOption::new(
                                 *label,
-                                matches_compression(ui.compression, *value),
+                                !ui.is_custom_bpp() && matches_compression(ui.compression, *value),
                             )
                         })
                         .collect(),
                 )
+                .stretch()
+                .item_height(px(SEGMENT_HEIGHT))
                 .on_select(cx.listener(move |this, index: &usize, window, cx| {
-                    let Some((compression, _)) = options.get(*index).copied() else {
+                    let Some((compression, _)) = COMPRESSION_PRESETS.get(*index).copied() else {
                         return;
                     };
                     if let Some(ui) = this.export.as_mut() {
@@ -1651,79 +2109,100 @@ impl EditorWindow {
                     .flex()
                     .flex_row()
                     .justify_between()
-                    .text_size(px(11.))
-                    .text_color(Hsla::from(theme.gray_10))
+                    .px(px(2.))
+                    .text_size(px(10.5))
+                    .text_color(Hsla::from(editor.text_3))
                     .child("Smaller file")
                     .child("Larger file"),
             )
+            .child(self.export_optimize_row(ui, cx))
     }
 
-    fn export_optimize_row(&self, ui: &ExportUi, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = self.theme;
+    fn export_toggle_row(
+        &self,
+        id: &'static str,
+        title: &'static str,
+        description: &'static str,
+        checked: bool,
+        on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
+    ) -> impl IntoElement {
+        let editor = self.theme.editor;
         div()
             .flex()
             .flex_row()
             .items_center()
-            .justify_between()
             .gap(px(12.))
+            .min_h(px(34.))
             .child(
                 div()
                     .flex()
                     .flex_col()
-                    .gap(px(2.))
+                    .flex_1()
+                    .min_w_0()
+                    .gap(px(1.))
                     .child(
                         div()
-                            .text_size(px(14.))
+                            .text_size(px(12.5))
                             .font_weight(FontWeight::MEDIUM)
-                            .child("Optimize file size"),
+                            .text_color(Hsla::from(editor.text_1))
+                            .child(title),
                     )
                     .child(
                         div()
-                            .text_size(px(12.))
-                            .text_color(Hsla::from(theme.gray_11))
-                            .child("Re-encodes with software for much smaller files (slower)"),
+                            .text_size(px(11.))
+                            .line_height(px(14.))
+                            .text_color(Hsla::from(editor.text_3))
+                            .child(description),
                     ),
             )
-            .child(
-                ui::Toggle::plain(&theme, "export-optimize", ui.optimize_filesize).on_click(
-                    cx.listener(|this, _, window, cx| {
-                        if let Some(ui) = this.export.as_mut() {
-                            ui.optimize_filesize = !ui.optimize_filesize;
-                            ui.persist();
-                        }
-                        this.refresh_export_preview(window, cx);
-                        cx.notify();
-                    }),
-                ),
-            )
+            .child(ui::Toggle::plain(&self.theme, id, checked).on_click(on_click))
+    }
+
+    fn export_optimize_row(&self, ui: &ExportUi, cx: &mut Context<Self>) -> impl IntoElement {
+        self.export_toggle_row(
+            "export-optimize",
+            "Optimize file size",
+            "Re-encodes with software for much smaller files (slower)",
+            ui.optimize_filesize,
+            cx.listener(|this, _, window, cx| {
+                if let Some(ui) = this.export.as_mut() {
+                    ui.optimize_filesize = !ui.optimize_filesize;
+                    ui.persist();
+                }
+                this.refresh_export_preview(window, cx);
+                cx.notify();
+            }),
+        )
     }
 
     fn export_advanced(&self, ui: &ExportUi, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
+        let editor = theme.editor;
+        let show_bpp = ui.format == ExportFormatKind::Mp4 && !ui.cursor_only;
         div()
             .flex()
             .flex_col()
-            .gap(px(12.))
+            .gap(px(4.))
             .child(
                 div()
                     .id("export-advanced-toggle")
                     .flex()
                     .flex_row()
                     .items_center()
-                    .justify_between()
-                    .px(px(12.))
-                    .py(px(8.))
+                    .gap(px(6.))
+                    .h(px(30.))
+                    .mx(px(-6.))
+                    .px(px(6.))
                     .rounded(px(8.))
-                    .border_1()
-                    .border_color(if ui.advanced_open {
-                        theme.gray_5
-                    } else {
-                        theme.gray_4
-                    })
-                    .when(ui.advanced_open, |button| button.bg(theme.gray_3))
-                    .hover(|style| style.bg(theme.gray_3).border_color(theme.gray_5))
-                    .active(|style| style.bg(theme.gray_4))
                     .cursor_pointer()
+                    .text_size(px(12.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(Hsla::from(editor.text_2))
+                    .hover(move |style| {
+                        style
+                            .bg(Hsla::from(editor.ctl))
+                            .text_color(Hsla::from(editor.text_1))
+                    })
                     .on_click(cx.listener(|this, _, _window, cx| {
                         if let Some(ui) = this.export.as_mut() {
                             ui.advanced_open = !ui.advanced_open;
@@ -1732,143 +2211,213 @@ impl EditorWindow {
                         cx.notify();
                     }))
                     .child(
-                        div()
-                            .text_size(px(13.))
-                            .font_weight(FontWeight::MEDIUM)
-                            .child("Advanced Options"),
+                        svg()
+                            .path("icons/sliders-horizontal.svg")
+                            .size(px(14.))
+                            .text_color(Hsla::from(editor.text_2)),
                     )
+                    .child("Advanced")
                     .child(
-                        div()
-                            .text_size(px(12.))
-                            .text_color(Hsla::from(theme.gray_11))
-                            .child(if ui.advanced_open {
-                                "Hide options"
+                        svg()
+                            .path(if ui.advanced_open {
+                                "icons/chevron-up.svg"
                             } else {
-                                "Show options"
-                            }),
+                                "icons/chevron-down.svg"
+                            })
+                            .size(px(14.))
+                            .ml_auto()
+                            .text_color(Hsla::from(editor.text_3)),
                     ),
             )
             .when(ui.advanced_open, |this| {
-                this.child(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .justify_between()
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap(px(2.))
-                                .child(
-                                    div()
-                                        .text_size(px(13.))
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .child("Export cursor only"),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(px(12.))
-                                        .text_color(Hsla::from(theme.gray_11))
-                                        .child("Renders just the cursor as a transparent MOV"),
-                                ),
-                        )
-                        .child(
-                            ui::Toggle::plain(&theme, "export-cursor-only", ui.cursor_only)
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    if let Some(ui) = this.export.as_mut() {
-                                        ui.cursor_only = !ui.cursor_only;
-                                        if ui.cursor_only
-                                            && ui.destination == ExportDestination::Link
-                                        {
-                                            ui.destination = ExportDestination::File;
-                                        }
-                                        ui.persist();
-                                    }
-                                    this.refresh_export_preview(window, cx);
-                                    cx.notify();
-                                })),
-                        ),
-                )
-                .when(
-                    ui.format == ExportFormatKind::Mp4 && !ui.cursor_only,
-                    |this| {
-                        this.child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap(px(6.))
-                                .child(
-                                    div()
-                                        .flex()
-                                        .flex_row()
-                                        .justify_between()
-                                        .child(
-                                            div()
-                                                .text_size(px(13.))
-                                                .font_weight(FontWeight::MEDIUM)
-                                                .child("Bits per pixel"),
+                this.child(self.export_toggle_row(
+                    "export-cursor-only",
+                    "Export cursor only",
+                    "Keeps the same cursor motion and clicks on a transparent background",
+                    ui.cursor_only,
+                    cx.listener(|this, _, window, cx| {
+                        if let Some(ui) = this.export.as_mut() {
+                            ui.cursor_only = !ui.cursor_only;
+                            if ui.cursor_only && ui.destination == ExportDestination::Link {
+                                ui.destination = ExportDestination::File;
+                            }
+                            ui.persist();
+                        }
+                        this.refresh_export_preview(window, cx);
+                        cx.notify();
+                    }),
+                ))
+                .when(ui.cursor_only, |this| {
+                    this.child(
+                        div()
+                            .mt(px(4.))
+                            .p(px(12.))
+                            .rounded(px(10.))
+                            .bg(Hsla::from(editor.card_2))
+                            .flex()
+                            .flex_row()
+                            .items_start()
+                            .gap(px(8.))
+                            .child(
+                                svg()
+                                    .path("icons/triangle-alert.svg")
+                                    .size(px(14.))
+                                    .flex_shrink_0()
+                                    .mt(px(1.))
+                                    .text_color(Hsla::from(editor.text_2)),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(11.5))
+                                    .line_height(px(15.))
+                                    .text_color(Hsla::from(editor.text_2))
+                                    .child(
+                                        "Exports as a transparent MOV. Files are large and best for compositing or editing.",
+                                    ),
+                            ),
+                    )
+                })
+                .when(show_bpp, |this| {
+                    let fraction = ((ui.bpp() - BPP_MIN) / (BPP_MAX - BPP_MIN)).clamp(0., 1.);
+                    this.child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .h(px(34.))
+                            .gap(px(10.))
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .min_w(px(96.))
+                                    .text_size(px(13.))
+                                    .text_color(Hsla::from(editor.text_1))
+                                    .child("Bits per pixel"),
+                            )
+                            .child(
+                                div()
+                                    .id("export-bpp-row")
+                                    .flex_1()
+                                    .min_w_0()
+                                    .px(px(4.))
+                                    .h(px(32.))
+                                    .flex()
+                                    .flex_row()
+                                    .items_center()
+                                    .child(
+                                        ui::Slider::new(
+                                            "export-bpp",
+                                            fraction,
+                                            ui.bpp_track.clone(),
                                         )
-                                        .child(
-                                            div()
-                                                .text_size(px(12.))
-                                                .text_color(Hsla::from(theme.gray_11))
-                                                .child(format!("{:.2}", ui.bpp())),
-                                        ),
-                                )
-                                .when(ui.is_custom_bpp(), |this| {
-                                    this.child(
-                                        div()
-                                            .text_size(px(11.))
-                                            .text_color(Hsla::from(theme.gray_11))
-                                            .child("Using custom bitrate"),
-                                    )
-                                }),
-                        )
-                    },
-                )
-                .when(
-                    cfg!(target_os = "macos")
-                        && ui.format == ExportFormatKind::Mp4
-                        && !ui.cursor_only,
-                    |this| {
+                                        .flex()
+                                        .row_height(px(28.))
+                                        .track(px(3.), Hsla::from(editor.ctl_active))
+                                        .fill(Hsla::from(editor.accent))
+                                        .thumb(
+                                            px(14.),
+                                            Hsla::from(editor.thumb),
+                                            Some(gpui::hsla(0., 0., 0., 0.12)),
+                                        )
+                                        .thumb_shadow()
+                                        .on_drag_start(cx.listener(
+                                            |this, event: &MouseDownEvent, _window, cx| {
+                                                this.export_bpp_mouse_down(event, cx);
+                                            },
+                                        )),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .min_w(px(36.))
+                                    .text_right()
+                                    .text_size(px(11.))
+                                    .text_color(Hsla::from(editor.text_3))
+                                    .child(format!("{:.2}", ui.bpp())),
+                            ),
+                    )
+                    .when(ui.is_custom_bpp(), |this| {
                         this.child(
                             div()
-                                .flex()
-                                .flex_row()
-                                .items_center()
-                                .justify_between()
-                                .child(
-                                    div()
-                                        .text_size(px(13.))
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .child("Force FFmpeg decoder"),
-                                )
-                                .child(
-                                    ui::Toggle::plain(
-                                        &theme,
-                                        "export-force-ffmpeg",
-                                        ui.force_ffmpeg,
-                                    )
-                                    .on_click(cx.listener(
-                                        |this, _, window, cx| {
-                                            if let Some(ui) = this.export.as_mut() {
-                                                ui.force_ffmpeg = !ui.force_ffmpeg;
-                                                ui.persist();
-                                            }
-                                            this.refresh_export_preview(window, cx);
-                                            cx.notify();
-                                        },
-                                    )),
-                                ),
+                                .text_size(px(11.))
+                                .text_color(Hsla::from(editor.text_3))
+                                .child("Using a custom bitrate"),
                         )
-                    },
-                )
+                    })
+                })
+                .when(cfg!(target_os = "macos") && show_bpp, |this| {
+                    this.child(self.export_toggle_row(
+                        "export-force-ffmpeg",
+                        "Force FFmpeg decoder",
+                        "Skip hardware decoder (auto-fallback enabled)",
+                        ui.force_ffmpeg,
+                        cx.listener(|this, _, window, cx| {
+                            if let Some(ui) = this.export.as_mut() {
+                                ui.force_ffmpeg = !ui.force_ffmpeg;
+                                ui.persist();
+                            }
+                            this.refresh_export_preview(window, cx);
+                            cx.notify();
+                        }),
+                    ))
+                })
             })
+    }
+
+    fn export_bpp_mouse_down(&mut self, event: &MouseDownEvent, cx: &mut Context<Self>) {
+        if let Some(ui) = self.export.as_mut() {
+            ui.bpp_dragging = true;
+        }
+        self.export_bpp_drag_to(event.position.x, cx);
+        cx.notify();
+    }
+
+    fn export_bpp_drag_to(&mut self, x: gpui::Pixels, cx: &mut Context<Self>) {
+        let Some(ui) = self.export.as_mut() else {
+            return;
+        };
+        let Some(bounds) = ui.bpp_track.get() else {
+            return;
+        };
+        let Some(fraction) = ui::fraction_from_x(x, bounds) else {
+            return;
+        };
+        let value = ui::snap_to_step(
+            ui::value_from_fraction(fraction, BPP_MIN, BPP_MAX),
+            BPP_MIN,
+            BPP_MAX,
+            BPP_STEP,
+        );
+        if (value - ui.bpp()).abs() < f32::EPSILON {
+            return;
+        }
+        ui.custom_bpp = Some(value);
+        if let Some((preset, _)) = COMPRESSION_PRESETS
+            .iter()
+            .find(|(preset, _)| (preset.bits_per_pixel() - value).abs() < 0.001)
+        {
+            ui.compression = *preset;
+        }
+        cx.notify();
+    }
+
+    fn export_bpp_mouse_up(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(ui) = self.export.as_mut() else {
+            return;
+        };
+        if !ui.bpp_dragging {
+            return;
+        }
+        ui.bpp_dragging = false;
+        ui.persist();
+        self.refresh_export_preview(window, cx);
+        cx.notify();
     }
 
     fn render_export_overlay(&self, ui: &ExportUi, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
+        let editor = theme.editor;
         let fraction = if ui.phase == ExportPhase::Uploading {
             Some(ui.upload_progress.clamp(0.0, 1.0))
         } else if ui.total_frames == 0 {
@@ -1885,9 +2434,13 @@ impl EditorWindow {
                 "Copying to clipboard"
             }
             ExportPhase::Copying => "Saving to file",
+            ExportPhase::Uploading if ui.reuploading => "Reuploading to your link",
             ExportPhase::Uploading => "Creating shareable link",
             ExportPhase::Done if ui.destination == ExportDestination::Clipboard => {
                 "Copied to clipboard"
+            }
+            ExportPhase::Done if ui.destination == ExportDestination::Link && ui.reuploading => {
+                "Reupload complete"
             }
             ExportPhase::Done if ui.destination == ExportDestination::Link => "Upload complete",
             ExportPhase::Done => "Export complete",
@@ -1898,7 +2451,7 @@ impl EditorWindow {
             ExportPhase::Idle | ExportPhase::ChoosingFile => "",
         };
 
-        let mut wash: Hsla = theme.gray(1);
+        let mut wash: Hsla = editor.window.into();
         wash.a = 0.94;
 
         div()
@@ -1911,14 +2464,15 @@ impl EditorWindow {
             .justify_center()
             .gap(px(16.))
             .bg(wash)
+            .text_color(Hsla::from(editor.text_1))
             .child({
                 let ring = ui::CircularProgress::new(
                     px(80.),
                     px(6.),
-                    theme.gray(4),
-                    Hsla::from(theme.blue_9),
+                    Hsla::from(editor.ctl_active),
+                    Hsla::from(editor.accent),
                 )
-                .label(Hsla::from(theme.gray_12), px(14.));
+                .label(Hsla::from(editor.text_1), px(14.));
                 if let Some(fraction) = fraction {
                     ring.progress(fraction)
                 } else {
@@ -1944,8 +2498,12 @@ impl EditorWindow {
                             this.child(
                                 div()
                                     .text_size(px(12.))
-                                    .text_color(Hsla::from(theme.gray_11))
-                                    .child("Your Cap has been uploaded successfully"),
+                                    .text_color(Hsla::from(editor.text_2))
+                                    .child(if ui.reuploading {
+                                        "Your latest edit is ready at the same link"
+                                    } else {
+                                        "Your Cap has been uploaded successfully"
+                                    }),
                             )
                         },
                     ),
@@ -1954,7 +2512,7 @@ impl EditorWindow {
                 this.child(
                     div()
                         .text_size(px(12.))
-                        .text_color(Hsla::from(theme.gray_11))
+                        .text_color(Hsla::from(editor.text_2))
                         .child(format!("{} / {} frames", ui.rendered, ui.total_frames)),
                 )
             })
@@ -1982,6 +2540,26 @@ impl EditorWindow {
                             return;
                         };
                         let cancel = ui.cancel.clone();
+                        #[cfg(target_os = "linux")]
+                        {
+                            if !ui.phase.is_busy() {
+                                return;
+                            }
+                            let response = crate::editor_modal::confirm_cancel_export(window, cx);
+                            cx.spawn_in(window, async move |this, cx| {
+                                let confirmed = response.await;
+                                let _ = this.update_in(cx, |this, _, cx| {
+                                    if let Some(ui) = this.export.as_mut()
+                                        && ui.phase.is_busy()
+                                    {
+                                        cancel_matching_export(&ui.cancel, &cancel, confirmed);
+                                    }
+                                    cx.notify();
+                                });
+                            })
+                            .detach();
+                        }
+                        #[cfg(not(target_os = "linux"))]
                         cx.spawn_in(window, async move |this, cx| {
                             let confirmed = platform::confirm_dialog(
                                 "Cancel export?",
@@ -2004,7 +2582,7 @@ impl EditorWindow {
                     div()
                         .max_w(px(320.))
                         .text_size(px(12.))
-                        .text_color(Hsla::from(theme.gray_11))
+                        .text_color(Hsla::from(editor.text_2))
                         .text_center()
                         .child(
                             "Use Instant Mode for your next recording if you want a link the moment you stop.",
@@ -2101,6 +2679,123 @@ impl EditorWindow {
     }
 }
 
+/// The largest box of the preview's aspect that fits the stage, so the frame's
+/// rounded corners and shadow hug the picture instead of a letterboxed pane.
+fn preview_fit(avail_w: f32, avail_h: f32, image: Option<(f32, f32)>) -> (f32, f32) {
+    let avail_w = avail_w.max(120.);
+    let avail_h = avail_h.max(68.);
+    let (iw, ih) = match image {
+        Some((w, h)) if w > 0. && h > 0. => (w, h),
+        _ => (16., 9.),
+    };
+    let scale = (avail_w / iw).min(avail_h / ih);
+    ((iw * scale).floor(), (ih * scale).floor())
+}
+
+async fn confirm_export_resources(
+    this: &gpui::WeakEntity<EditorWindow>,
+    cx: &mut gpui::AsyncWindowContext,
+    resources: &ExportResources,
+    cancel: &Arc<AtomicBool>,
+) -> bool {
+    let check = {
+        let resources = resources.clone();
+        gpui_tokio::Tokio::spawn(cx, async move { resources.check().await }).await
+    };
+    let result = async {
+        let warning = check.map_err(|error| error.to_string())??;
+        if let Some(message) = warning {
+            #[cfg(target_os = "linux")]
+            let confirmed = {
+                let response = loop {
+                    let pending = this.update_in(cx, |this, window, cx| {
+                        let current = this.export.as_ref().is_some_and(|ui| {
+                            Arc::ptr_eq(&ui.cancel, cancel)
+                                && !ui.close_requested
+                                && !cancel.load(Ordering::Acquire)
+                        });
+                        let response = (current && !window.has_active_prompt()).then(|| {
+                            crate::editor_modal::confirm_action(
+                                "Check export resources",
+                                &message,
+                                "Proceed anyway",
+                                "Go back",
+                                window,
+                                cx,
+                            )
+                        });
+                        (current, response)
+                    });
+                    match pending {
+                        Ok((true, Some(response))) => break response,
+                        Ok((true, None)) => {
+                            cx.background_executor()
+                                .timer(Duration::from_millis(50))
+                                .await;
+                        }
+                        _ => return Ok(false),
+                    }
+                };
+                response.await
+            };
+            #[cfg(not(target_os = "linux"))]
+            let confirmed = {
+                let current = this
+                    .update(cx, |this, _| {
+                        this.export.as_ref().is_some_and(|ui| {
+                            Arc::ptr_eq(&ui.cancel, cancel)
+                                && !ui.close_requested
+                                && !cancel.load(Ordering::Acquire)
+                        })
+                    })
+                    .unwrap_or(false);
+                if !current {
+                    return Ok(false);
+                }
+                platform::confirm_dialog(
+                    "Check export resources",
+                    &message,
+                    "Proceed anyway",
+                    "Go back",
+                    false,
+                )
+            };
+            if !confirmed {
+                return Ok(false);
+            }
+            let resources = resources.clone();
+            let _ = gpui_tokio::Tokio::spawn(cx, async move { resources.check().await })
+                .await
+                .map_err(|error| error.to_string())??;
+        }
+        Ok::<bool, String>(true)
+    }
+    .await;
+    this.update(cx, |this, cx| {
+        let Some(ui) = this.export.as_mut() else {
+            return false;
+        };
+        if !Arc::ptr_eq(&ui.cancel, cancel) {
+            return false;
+        }
+        let accepted = result.as_ref().is_ok_and(|accepted| *accepted)
+            && !ui.close_requested
+            && !cancel.load(Ordering::Acquire);
+        if !accepted {
+            match result {
+                Err(error) if !ui.close_requested && !cancel.load(Ordering::Acquire) => {
+                    ui.phase = ExportPhase::Failed;
+                    ui.error = Some(error);
+                }
+                _ => ui.phase = ExportPhase::Idle,
+            }
+            cx.notify();
+        }
+        accepted
+    })
+    .unwrap_or(false)
+}
+
 fn cancel_matching_export(current: &Arc<AtomicBool>, requested: &Arc<AtomicBool>, confirmed: bool) {
     if confirmed && Arc::ptr_eq(current, requested) {
         current.store(true, Ordering::Relaxed);
@@ -2126,14 +2821,46 @@ fn show_upload_failure(
     }
 }
 
-fn export_stat(icon: &'static str, value: String) -> impl IntoElement {
+fn export_stat(
+    theme: &crate::theme::Theme,
+    label: &'static str,
+    value: Option<String>,
+    divided: bool,
+) -> impl IntoElement {
+    let editor = theme.editor;
     div()
         .flex()
-        .flex_row()
-        .items_center()
-        .gap(px(6.))
-        .child(svg().path(icon).size(px(12.)))
-        .child(value)
+        .flex_1()
+        .flex_col()
+        .justify_center()
+        .px(px(16.))
+        .gap(px(1.))
+        .when(divided, |this| {
+            this.border_l_1().border_color(Hsla::from(editor.line))
+        })
+        .child(
+            div()
+                .text_size(px(10.5))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(Hsla::from(editor.text_3))
+                .child(label),
+        )
+        .child(match value {
+            Some(value) => div()
+                .text_size(px(12.5))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(Hsla::from(editor.text_1))
+                .whitespace_nowrap()
+                .child(value)
+                .into_any_element(),
+            None => div()
+                .my(px(3.))
+                .h(px(12.))
+                .w(px(56.))
+                .rounded(px(4.))
+                .bg(Hsla::from(editor.ctl_active))
+                .into_any_element(),
+        })
 }
 
 fn matches_compression(current: ExportCompression, expected: ExportCompression) -> bool {
@@ -2261,6 +2988,21 @@ mod tests {
             advanced_open: false,
             organization_id: None,
         })
+    }
+
+    #[test]
+    fn stale_preview_results_cannot_replace_the_latest_or_reopened_preview() {
+        let mut ui = clipboard_export();
+        let previous = ui.preview_request.clone();
+        let current = Arc::new(());
+        ui.preview_request = current.clone();
+        assert!(ui.update_preview(&current, |ui| ui.preview_error = Some("Latest".into())));
+        assert!(!ui.update_preview(&previous, |ui| ui.preview_error = Some("Stale".into())));
+        assert_eq!(ui.preview_error.as_deref(), Some("Latest"));
+
+        let mut reopened = clipboard_export();
+        assert!(!reopened.update_preview(&current, |ui| ui.preview_error = Some("Closed".into())));
+        assert!(reopened.preview_error.is_none());
     }
 
     #[test]

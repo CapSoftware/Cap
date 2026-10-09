@@ -342,10 +342,6 @@ pub(crate) fn handle_update_handoff(app: &AppHandle) -> bool {
     true
 }
 
-/// The dev switch-back's readiness handshake (`store::classic_pending_path`
-/// in apps/desktop-gpui): `cap-gpui` writes this and stays on screen until the
-/// classic app deletes it, so a minutes-long dev rebuild never leaves the user
-/// with no app at all.
 fn classic_pending() -> PathBuf {
     shared_data_dir().join("cap-classic.pending")
 }
@@ -810,7 +806,7 @@ fn write_handoff_marker() {
 }
 
 /// The child must never inherit this process's stdio. The handoff exits this
-/// app, and whatever was reading those pipes (`pnpm tauri dev`'s tooling chain)
+/// app, and whatever was reading those pipes (`bun run tauri dev`'s tooling chain)
 /// goes with it; `cap-gpui`'s next log line then hits EPIPE, the write panics
 /// inside an ObjC run-loop callback, and the process aborts about a tenth of a
 /// second after launch. Its output goes to a file instead of `/dev/null`
@@ -968,23 +964,60 @@ pub async fn switch_to_gpui_app(app: AppHandle) -> Result<(), String> {
 ///
 /// `true` means the caller must exit before any window is created.
 pub fn redirect_at_startup_if_enabled(app: &AppHandle) -> Result<bool, String> {
+    #[cfg(debug_assertions)]
+    if crate::stop_editor_benchmark::enabled() {
+        return Ok(false);
+    }
     let update_handoff = handle_update_handoff(app);
     let redirect = !update_handoff && redirect_decision(app)?;
     if !redirect {
-        // Staying up IS the readiness signal the waiting `cap-gpui` needs --
-        // and the wait can begin while this app is ALREADY running (switching
-        // back with both apps up), so the signal has to keep firing, not just
-        // fire once at startup.
         let app = app.clone();
         tauri::async_runtime::spawn(async move {
             loop {
-                let _ = std::fs::remove_file(classic_pending());
                 handle_update_handoff(&app);
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                if classic_pending().try_exists().unwrap_or(false) {
+                    let handle = app.clone();
+                    let (sender, receiver) = tokio::sync::oneshot::channel();
+                    if app
+                        .run_on_main_thread(move || {
+                            acknowledge_classic_window(&handle);
+                            let _ = sender.send(());
+                        })
+                        .is_ok()
+                    {
+                        let _ =
+                            tokio::time::timeout(std::time::Duration::from_secs(1), receiver).await;
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(250)).await;
             }
         });
     }
     Ok(redirect)
+}
+
+fn acknowledge_classic_window(app: &AppHandle) {
+    if crate::app_is_exiting(app) {
+        return;
+    }
+    let ready = app
+        .get_webview_window("main")
+        .or_else(|| app.get_webview_window("onboarding"))
+        .is_some_and(|window| {
+            let frontend_ready = window.label() == "onboarding"
+                || window.url().is_ok_and(|url| url.path() == "/update")
+                || app
+                    .try_state::<crate::MainWindowReadyState>()
+                    .is_some_and(|state| state.is_ready());
+            frontend_ready && window.is_visible().unwrap_or(false)
+        });
+    if ready {
+        match std::fs::remove_file(classic_pending()) {
+            Ok(()) => info!("Acknowledged visible classic window for GPUI handoff"),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => warn!(%error, "Could not acknowledge the classic app handoff"),
+        }
+    }
 }
 
 fn redirect_decision(app: &AppHandle) -> Result<bool, String> {

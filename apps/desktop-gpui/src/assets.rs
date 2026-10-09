@@ -83,11 +83,8 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "shadow.svg",
     "bg-blur.svg",
     "laptop.svg",
-    "wind.svg",
-    "image-off.svg",
     "shuffle.svg",
     "gift.svg",
-    "history.svg",
     "hotkeys.svg",
     "image.svg",
     "info.svg",
@@ -101,7 +98,6 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "message-square-plus.svg",
     "mic-off.svg",
     "microphone.svg",
-    "minimize.svg",
     "minus.svg",
     "monitor.svg",
     "more-vertical.svg",
@@ -113,7 +109,6 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     // originals: type, box-select (an alias of square-dashed since Lucide
     // 0.5xx), music, video, rotate-3d, clock, monitor, columns-2, panel-right.
     "box-select.svg",
-    "clock.svg",
     "columns-2.svg",
     "monitor-outline.svg",
     "music.svg",
@@ -162,30 +157,19 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "align-right.svg",
     "arrow-left-right.svg",
     "download.svg",
-    "ease-curve.svg",
     "flip-vertical-2.svg",
-    "grid.svg",
-    "grip.svg",
-    "italic.svg",
     "maximize.svg",
-    "moon.svg",
     "mouse-pointer-2.svg",
-    "mouse-pointer-click.svg",
+    "mouse-pointer-ban.svg",
     "move.svg",
     "move-right.svg",
     "palette.svg",
-    "rabbit.svg",
     "ratio.svg",
     "refresh-cw.svg",
     "rotate-ccw.svg",
-    "rotate-cw.svg",
-    "sliders-horizontal.svg",
-    "sparkles.svg",
-    "timer.svg",
-    "volume-2.svg",
     "volume-x.svg",
-    "diamond.svg",
-    "x-mark.svg",
+    "gem.svg",
+    "sliders-horizontal.svg",
     "zap.svg",
     "zoom-in.svg",
     "zoom-out.svg",
@@ -203,7 +187,6 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     // The main window's hand-drawn traffic lights: the x and expand glyphs
     // `CaptionControlsMacOS.tsx` inlines, shown while the group is hovered.
     "traffic-close.svg",
-    "traffic-zoom.svg",
     // The remaining settings pages (`settings_pages.rs`). `circle-check` is
     // Cap's own (`packages/ui-solid/icons/circle-check.svg`, hotkeys.tsx's
     // IconCapCircleCheck); the rest are the Lucide 24x24 originals the pages'
@@ -221,6 +204,8 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "grip-vertical.svg",
     "chevron-up.svg",
     "arrow-left.svg",
+    "arrow-left-to-line.svg",
+    "arrow-right-to-line.svg",
     "film.svg",
     "folder-open.svg",
     "folder-down.svg",
@@ -237,22 +222,6 @@ const IMAGES: &[(&str, &[u8])] = assets!("images":
     "auto.jpg",
     "light.jpg",
     "dark.jpg",
-);
-
-/// The background-source tiles' fallback art, copied from
-/// `apps/desktop/src/assets/illustrations/`. Full-colour, so `img()` not
-/// `svg()`, and webp because that is what the app ships -- 4 KB for the pair,
-/// against 25 MB if the wallpapers themselves were embedded (see the README).
-///
-/// **Two of `BACKGROUND_ICONS`' four are dead in the shipping app.**
-/// `renderBackgroundSourceIcon` returns a live swatch for `color` and a live
-/// gradient for `gradient` before it ever reaches the map
-/// (`ConfigSidebar.tsx:2076-2089`), so `colorBg` and `gradientBg` are imported
-/// and never drawn; only `imageBg` (desktop and wallpaper) and
-/// `transparentBg` (image) are.
-const ILLUSTRATIONS: &[(&str, &[u8])] = assets!("illustrations":
-    "image.webp",
-    "transparent.webp",
 );
 
 const ONBOARDING: &[(&str, &[u8])] = &[
@@ -276,7 +245,6 @@ impl Assets {
             .iter()
             .chain(ICONS.iter())
             .chain(IMAGES.iter())
-            .chain(ILLUSTRATIONS.iter())
             .chain(ONBOARDING.iter())
     }
 }
@@ -333,6 +301,7 @@ mod tests {
         include_str!("teleprompter_window.rs"),
         include_str!("editor_window.rs"),
         include_str!("editor_window/frame.rs"),
+        include_str!("editor_window/scenes.rs"),
         // The timeline's nine track glyphs and its scene-mode icons are named
         // in the strip's own module, not in the window that hosts it.
         include_str!("editor_timeline.rs"),
@@ -358,9 +327,12 @@ mod tests {
         // annotation module names the tool and layer glyphs.
         include_str!("screenshot_editor.rs"),
         include_str!("screenshot_annotations.rs"),
+        // The crop overlay's own ratio glyph.
+        include_str!("screenshot_crop.rs"),
         // `ui::SelectionHeader` names the check and the trash itself.
         include_str!("ui/selection_header.rs"),
         include_str!("ui/radio_cards.rs"),
+        include_str!("ui/windows_caption.rs"),
         // The onboarding window's welcome cards and permissions surface; the
         // per-permission row glyphs are named on `OSPermission::icon`.
         include_str!("onboarding_window.rs"),
@@ -453,42 +425,6 @@ mod tests {
         );
     }
 
-    /// And for the background-source tiles' art, which resolves through the
-    /// same `AssetSource` and fails just as silently.
-    #[test]
-    fn every_referenced_illustration_is_embedded_and_vice_versa() {
-        let source = ICON_SOURCES.concat();
-        let source = source.as_str();
-
-        let referenced: Vec<&str> = source
-            .match_indices("\"illustrations/")
-            .filter_map(|(start, _)| source[start + 1..].split('"').next())
-            .collect();
-        assert!(
-            !referenced.is_empty(),
-            "found no illustration references to check"
-        );
-
-        let missing: Vec<&str> = referenced
-            .into_iter()
-            .filter(|path| Assets.load(path).unwrap().is_none())
-            .collect();
-        assert!(
-            missing.is_empty(),
-            "illustrations referenced but not embedded: {missing:?}"
-        );
-
-        let unused: Vec<&str> = ILLUSTRATIONS
-            .iter()
-            .map(|(path, _)| *path)
-            .filter(|path| !source.contains(path))
-            .collect();
-        assert!(
-            unused.is_empty(),
-            "illustrations embedded but never drawn: {unused:?}"
-        );
-    }
-
     #[test]
     fn fonts_and_icons_resolve() {
         assert!(Assets.load("fonts/Geist.ttf").unwrap().is_some());
@@ -498,10 +434,5 @@ mod tests {
         assert_eq!(Assets.list("fonts").unwrap().len(), FONTS.len());
         assert_eq!(Assets.list("icons").unwrap().len(), ICONS.len());
         assert_eq!(Assets.list("images").unwrap().len(), IMAGES.len());
-        assert!(Assets.load("illustrations/image.webp").unwrap().is_some());
-        assert_eq!(
-            Assets.list("illustrations").unwrap().len(),
-            ILLUSTRATIONS.len()
-        );
     }
 }

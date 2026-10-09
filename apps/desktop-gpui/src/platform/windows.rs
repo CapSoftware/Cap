@@ -16,6 +16,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 use super::{ForcedAppearance, MaterialKind, PanelBehavior};
 
 mod capture_exclusion;
+mod hidden_frame;
+mod session_end;
 
 #[derive(Clone, Copy)]
 pub struct NativeWindow(isize);
@@ -61,6 +63,17 @@ fn native_handle(window: &Window) -> Option<isize> {
 
 pub fn native_window(window: &Window) -> Option<NativeWindow> {
     native_handle(window).map(NativeWindow)
+}
+
+pub fn install_main_window_frame_policy(native: &NativeWindow) -> std::io::Result<()> {
+    hidden_frame::install(native.hwnd())
+}
+
+pub fn install_session_end_handler(
+    native: &NativeWindow,
+    on_session_end: fn(),
+) -> std::io::Result<()> {
+    session_end::install(native.hwnd(), on_session_end)
 }
 
 #[link(name = "dwmapi")]

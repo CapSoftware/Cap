@@ -17,7 +17,7 @@ import {
 	MenuItem,
 	PredefinedMenuItem,
 } from "@tauri-apps/api/menu";
-import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import type { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import {
 	createEffect,
@@ -82,6 +82,7 @@ import {
 	createOptionsQuery,
 	createOrganizationsQuery,
 } from "~/utils/queries";
+import { isRecordingStartCancelled } from "~/utils/recording";
 import { createRecordingMenuPopup } from "~/utils/recording-menu";
 import {
 	type CanvasControls,
@@ -197,6 +198,7 @@ function Inner() {
 		displayId: DisplayId;
 		isHoveredDisplay: string;
 		targetMode: "display" | "window" | "area" | "camera";
+		overlayInstance: string;
 	}>();
 	const [options, setOptions] = useOptions();
 	const [areaSelectionPreferences, setAreaSelectionPreferences] = makePersisted(
@@ -212,6 +214,12 @@ function Inner() {
 	onMount(() => {
 		if (params.targetMode) {
 			setOptions("targetMode", params.targetMode);
+		}
+		const instance = Number(params.overlayInstance);
+		if (Number.isSafeInteger(instance) && instance > 0) {
+			void commands.targetSelectOverlayReady(instance).catch((error) => {
+				console.error("Failed to prepare target picker", error);
+			});
 		}
 	});
 
@@ -344,12 +352,6 @@ function Inner() {
 		}
 	});
 
-	const unsubOnEscapePress = events.onEscapePress.listen(() => {
-		setOptions({ targetMode: null, targetModeDismissal: "cancelled" });
-		commands.closeTargetSelectOverlays();
-	});
-	onCleanup(() => unsubOnEscapePress.then((f) => f()));
-
 	// Dismiss the picker because a recording is starting. The dismissal reason
 	// rides along with `targetMode: null` so the main window never has to guess
 	// (from possibly-stale query state) whether it may reveal itself again.
@@ -357,28 +359,7 @@ function Inner() {
 		if (options.mode === "screenshot") return;
 		const targetModeDismissal =
 			options.mode === "instant" ? "recordingInstant" : "recordingStudio";
-		if (options.targetModeSource === "editor") {
-			setOptions({
-				targetMode: null,
-				targetModeSource: "editorRecording",
-				targetModeDismissal,
-			});
-		} else {
-			setOptions({ targetMode: null, targetModeDismissal });
-		}
-		// Hide rather than close: startRecording is invoked from THIS webview right
-		// after dismissal, and closing destroys the webview before the invoke is
-		// dispatched — the recording then silently never starts. The backend closes
-		// these windows itself once the recording is underway, and the start handler
-		// closes them if the command fails.
-		void WebviewWindow.getAll().then((all) => {
-			for (const win of all) {
-				if (win.label.startsWith("target-select-overlay-")) {
-					void win.setIgnoreCursorEvents(true);
-					void win.hide();
-				}
-			}
-		});
+		setOptions({ targetMode: null, targetModeDismissal });
 	};
 
 	// This prevents browser keyboard shortcuts from firing.
@@ -702,18 +683,10 @@ function Inner() {
 														// so the screenshot silently never happens. The start
 														// handler hides these windows and closes them once the
 														// capture is done.
-														if (options.targetModeSource === "editor") {
-															setOptions({
-																targetMode: null,
-																targetModeSource: "editorRecording",
-																targetModeDismissal: "screenshot",
-															});
-														} else {
-															setOptions({
-																targetMode: null,
-																targetModeDismissal: "screenshot",
-															});
-														}
+														setOptions({
+															targetMode: null,
+															targetModeDismissal: "screenshot",
+														});
 													} else {
 														dismissPickerForRecordingStart();
 													}
@@ -833,12 +806,51 @@ function Inner() {
 							minSize(),
 						);
 					});
+					const linux = ostype() === "linux";
+					const [localPointerInside, setLocalPointerInside] = createSignal<
+						boolean | undefined
+					>();
+					if (linux) {
+						const updateLocalPointer = (event: PointerEvent) => {
+							setLocalPointerInside(
+								event.clientX >= 0 &&
+									event.clientY >= 0 &&
+									event.clientX < window.innerWidth &&
+									event.clientY < window.innerHeight,
+							);
+						};
+						createEventListener(
+							window,
+							"pointerover",
+							updateLocalPointer,
+							true,
+						);
+						createEventListener(
+							window,
+							"pointermove",
+							updateLocalPointer,
+							true,
+						);
+						createEventListener(
+							window,
+							"pointerout",
+							(event) => {
+								if (event.relatedTarget === null) setLocalPointerInside(false);
+							},
+							true,
+						);
+						createEventListener(window, "blur", () =>
+							setLocalPointerInside(false),
+						);
+					}
 					const isActiveDisplay = createMemo(() => {
 						const activeDisplayId = targetUnderCursor.display_id;
-						if (activeDisplayId) {
+						if (activeDisplayId != null) {
 							return activeDisplayId === displayId();
 						}
-						return params.isHoveredDisplay === "true";
+						return linux
+							? (localPointerInside() ?? params.isHoveredDisplay === "true")
+							: params.isHoveredDisplay === "true";
 					});
 					const shouldShowOverlay = createMemo(
 						() => isInteracting() || isActiveDisplay(),
@@ -1286,13 +1298,7 @@ function Inner() {
 								);
 
 								try {
-									const allWindows = await WebviewWindow.getAll();
-									for (const win of allWindows) {
-										if (win.label.startsWith("target-select-overlay-")) {
-											await win.setIgnoreCursorEvents(true);
-											await win.hide();
-										}
-									}
+									await commands.suspendTargetSelectOverlays();
 									await new Promise((resolve) => setTimeout(resolve, 50));
 
 									const path = await commands.takeScreenshot(target);
@@ -1878,6 +1884,7 @@ function RecordingControls(props: {
 		createSignal(false);
 	const [confirmingWithoutMicrophone, setConfirmingWithoutMicrophone] =
 		createSignal(false);
+	const [dismissingPicker, setDismissingPicker] = createSignal(false);
 	let microphoneConfirmationRevision = 0;
 	let controlsDisposed = false;
 	onCleanup(() => {
@@ -1894,30 +1901,36 @@ function RecordingControls(props: {
 	const permissions = createMemo(() => devices.data?.permissions);
 	const setMicInput = createMicrophoneMutation();
 	const setCamera = createCameraMutation();
+	const [restoringInputs, setRestoringInputs] = createSignal(true);
 
 	onMount(async () => {
-		if (rawOptions.micName) {
-			setMicInput
-				.mutateAsync(rawOptions.micName)
-				.catch((error) => console.error("Failed to set mic input:", error));
-		}
+		const restoreMicrophone = rawOptions.micName
+			? commands
+					.setMicInput(rawOptions.micName)
+					.catch((error) =>
+						console.error("Failed to restore mic input:", error),
+					)
+			: Promise.resolve();
 
 		const isCameraOnly = props.target.variant === "cameraOnly";
-		if (rawOptions.cameraID && "ModelID" in rawOptions.cameraID)
-			await setCamera.mutateAsync({
-				model: { ModelID: rawOptions.cameraID.ModelID },
-				skipCameraWindow: isCameraOnly,
-			});
-		else if (rawOptions.cameraID && "DeviceID" in rawOptions.cameraID)
-			await setCamera.mutateAsync({
-				model: { DeviceID: rawOptions.cameraID.DeviceID },
-				skipCameraWindow: isCameraOnly,
-			});
+		const restoreCamera = async () => {
+			if (rawOptions.cameraID) {
+				await setCamera.rawMutate({ ...rawOptions.cameraID }, isCameraOnly);
+			}
 
-		if (isCameraOnly) {
-			const win = await getCameraWindow();
-			if (win) win.close();
-		}
+			if (isCameraOnly) {
+				const win = await getCameraWindow();
+				if (win) await win.close();
+			}
+		};
+
+		await Promise.all([
+			restoreMicrophone,
+			restoreCamera().catch((error) =>
+				console.error("Failed to restore camera input:", error),
+			),
+		]);
+		if (!controlsDisposed) setRestoringInputs(false);
 	});
 
 	const selectedCamera = createMemo(() => {
@@ -1965,8 +1978,10 @@ function RecordingControls(props: {
 	});
 
 	const startLoading = () =>
+		dismissingPicker() ||
 		devices.isPending ||
 		recordingStartSafety.isPending ||
+		restoringInputs() ||
 		setMicInput.isPending ||
 		setCamera.isPending;
 	const startDisabled = () => !!props.disabled || startLoading();
@@ -2021,18 +2036,20 @@ function RecordingControls(props: {
 			);
 		}
 
+		setDismissingPicker(true);
+		try {
+			await commands.suspendTargetSelectOverlays();
+		} catch (error) {
+			setDismissingPicker(false);
+			toast.error("Could not dismiss the target picker. Please try again.");
+			console.error("Failed to suspend target select overlays", error);
+			return;
+		}
+		if (controlsDisposed) return;
 		props.onRecordingStart?.();
 
 		if (rawOptions.mode === "screenshot") {
 			try {
-				const allWindows = await WebviewWindow.getAll();
-				for (const win of allWindows) {
-					if (win.label.startsWith("target-select-overlay-")) {
-						await win.setIgnoreCursorEvents(true);
-						await win.hide();
-					}
-				}
-
 				const path = await commands.takeScreenshot(target);
 				const shouldOpenEditor =
 					await commands.automationShouldOpenScreenshotEditor(target);
@@ -2078,7 +2095,7 @@ function RecordingControls(props: {
 					toast.error(
 						"Selected microphone is not available. Please select a different microphone in settings.",
 					);
-				} else {
+				} else if (!isRecordingStartCancelled(e)) {
 					toast.error(`Failed to start recording: ${msg}`);
 				}
 				// An IPC-level rejection never reaches the backend, so no
@@ -2223,7 +2240,6 @@ function RecordingControls(props: {
 										targetMode: null,
 										targetModeDismissal: "cancelled",
 									});
-									commands.setEditorRecordingTarget(null);
 									commands.closeTargetSelectOverlays();
 								}
 							}}
@@ -2269,7 +2285,6 @@ function RecordingControls(props: {
 											{(() => {
 												if (rawOptions.mode === "instant" && !auth.data)
 													return "Sign In To Use";
-												if (startLoading()) return "Preparing...";
 												if (rawOptions.mode === "screenshot")
 													return "Take Screenshot";
 												return "Start Recording";

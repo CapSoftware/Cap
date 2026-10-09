@@ -302,6 +302,33 @@ describe("recording upload cancellation", () => {
 });
 
 describe("generateThumbnail integration tests", () => {
+	test("uses the first frame when a sparse video has no frame after the thumbnail seek", async () => {
+		const directory = mkdtempSync(join(tmpdir(), "cap-sparse-thumbnail-"));
+		const input = join(directory, "single-frame.mp4");
+		try {
+			execFileSync("ffmpeg", [
+				"-v",
+				"error",
+				"-f",
+				"lavfi",
+				"-i",
+				"color=c=blue:s=160x120:r=1/2",
+				"-frames:v",
+				"1",
+				"-c:v",
+				"libx264",
+				"-pix_fmt",
+				"yuv420p",
+				input,
+			]);
+			const thumbnail = await generateThumbnail(input, 2);
+			expect(thumbnail.length).toBeGreaterThan(0);
+			expect([...thumbnail.subarray(0, 2)]).toEqual([0xff, 0xd8]);
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
+
 	test("joins an in-flight thumbnail decoder when its worker is cancelled", async () => {
 		let ready: (() => void) | undefined;
 		const started = new Promise<void>((resolve) => {
@@ -484,6 +511,78 @@ describe("generatePreviewGif integration tests", () => {
 });
 
 describe("processVideo integration tests", () => {
+	test.each(["libvpx", "libvpx-vp9"])(
+		"preserves the playable ending of sparse %s screen recordings",
+		async (codec) => {
+			const directory = mkdtempSync(join(tmpdir(), "sparse-recording-"));
+			const inputPath = join(directory, "source.webm");
+			try {
+				execFileSync("ffmpeg", [
+					"-v",
+					"error",
+					"-y",
+					"-f",
+					"lavfi",
+					"-i",
+					"testsrc2=size=160x90:rate=30:duration=8",
+					"-vf",
+					"select=lt(t\\,1)+gte(t\\,1)*not(mod(n\\,30))",
+					"-fps_mode",
+					"vfr",
+					"-c:v",
+					codec,
+					"-deadline",
+					"realtime",
+					"-cpu-used",
+					"8",
+					inputPath,
+				]);
+				const metadata = await probeVideo(`file://${inputPath}`);
+				const output = await processVideo(inputPath, metadata);
+				try {
+					const probe = JSON.parse(
+						execFileSync("ffprobe", [
+							"-v",
+							"error",
+							"-select_streams",
+							"v:0",
+							"-show_frames",
+							"-show_entries",
+							"format=duration:frame=best_effort_timestamp_time",
+							"-of",
+							"json",
+							output.path,
+						]).toString(),
+					) as {
+						format: { duration: string };
+						frames: { best_effort_timestamp_time: string }[];
+					};
+					const lastTimestamp = Number(
+						probe.frames.at(-1)?.best_effort_timestamp_time,
+					);
+					expect(probe.frames).toHaveLength(37);
+					expect(lastTimestamp).toBeCloseTo(7, 1);
+					expect(Number(probe.format.duration)).toBeGreaterThan(lastTimestamp);
+					expect(Number(probe.format.duration)).toBeCloseTo(7 + 1 / 30, 1);
+					execFileSync("ffmpeg", [
+						"-v",
+						"error",
+						"-xerror",
+						"-i",
+						output.path,
+						"-f",
+						"null",
+						"-",
+					]);
+				} finally {
+					await output.cleanup();
+				}
+			} finally {
+				rmSync(directory, { recursive: true, force: true });
+			}
+		},
+	);
+
 	test("retries transient S3 upload failures", async () => {
 		const originalFetch = globalThis.fetch;
 		let attempts = 0;

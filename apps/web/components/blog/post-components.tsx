@@ -1,4 +1,5 @@
-import type { ComponentType } from "react";
+import type { MDXComponents } from "mdx/types";
+import { CapEmbed } from "./CapEmbed";
 import { ToggleDemo } from "./timeline/ToggleDemo";
 
 /**
@@ -8,11 +9,14 @@ import { ToggleDemo } from "./timeline/ToggleDemo";
  * components, and only the post that actually renders them should pull their
  * chunks. A post whose slug is not listed gets plain MDX, exactly as before.
  */
-type PostComponents = Record<string, ComponentType>;
+type PostComponents = MDXComponents;
 
 const POST_COMPONENTS: Record<string, PostComponents> = {
 	"timeline-view": {
 		ToggleDemo,
+	},
+	"cap-v06": {
+		CapEmbed,
 	},
 };
 

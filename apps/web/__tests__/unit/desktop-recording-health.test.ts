@@ -16,6 +16,7 @@ const counts = {
 	retryLoops: 0,
 	blockedCommittedSources: 0,
 	changedSources: 0,
+	awaitingSourceReupload: 0,
 };
 
 beforeEach(() => {
@@ -25,6 +26,15 @@ beforeEach(() => {
 });
 
 describe("recording health", () => {
+	it("reports inspected uploads awaiting their original source separately from processing incidents", async () => {
+		where.mockResolvedValue([{ ...counts, awaitingSourceReupload: 12 }]);
+		expect(await getDesktopRecordingHealth()).toMatchObject({
+			status: "healthy",
+			awaitingSourceReupload: 12,
+			blockedCommittedSources: 0,
+		});
+	});
+
 	it("returns aggregate counts without recording identities or content", async () => {
 		where.mockResolvedValue([{ ...counts, retryLoops: 2, ownerId: "private" }]);
 		expect(await getDesktopRecordingHealth()).toMatchObject({

@@ -8,10 +8,12 @@ mod macos_frame_convert;
 #[cfg(target_os = "macos")]
 mod oop_fragmented_m4s;
 pub mod oop_muxer;
+mod start_gate;
 
 pub use async_camera::*;
 pub use core::*;
 pub use ffmpeg::*;
+pub use start_gate::*;
 
 #[cfg(target_os = "linux")]
 #[derive(Clone)]

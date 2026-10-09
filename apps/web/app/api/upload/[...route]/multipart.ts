@@ -16,11 +16,25 @@ import { Effect, Option, Schedule } from "effect";
 import { Hono, type MiddlewareHandler } from "hono";
 import { z } from "zod";
 import { withAuth } from "@/app/api/utils";
+import {
+	invalidateReuploadedVideo,
+	prepareDesktopReupload,
+} from "@/lib/desktop-reupload";
+import {
+	assertDesktopReuploadTarget,
+	createDesktopReuploadKey,
+	createDesktopReuploadToken,
+	decodeDesktopReuploadToken,
+} from "@/lib/desktop-reupload-token";
 import { invalidateGoogleDriveStorageQuotaCache } from "@/lib/google-drive-storage-quota";
 import {
 	queueVideoTranscription,
 	shouldQueueTranscriptionAfterMultipartComplete,
 } from "@/lib/queue-video-transcription";
+import {
+	hasCompleteRecordingParts,
+	matchesCompletedRecordingParts,
+} from "@/lib/recording-multipart-integrity";
 import { runPromise } from "@/lib/server";
 import { startVideoProcessingWorkflow } from "@/lib/video-processing";
 import { stringOrNumberOptional } from "@/utils/zod";
@@ -70,16 +84,21 @@ app.post(
 	"/initiate",
 	zValidator(
 		"json",
-		z.object({ contentType: z.string() }).and(
-			z.union([
-				z.object({ videoId: z.string(), subpath: z.string().optional() }),
-				// deprecated
-				z.object({ fileKey: z.string() }),
-			]),
-		),
+		z
+			.object({
+				contentType: z.string(),
+				replaceExisting: z.boolean().optional(),
+			})
+			.and(
+				z.union([
+					z.object({ videoId: z.string(), subpath: z.string().optional() }),
+					// deprecated
+					z.object({ fileKey: z.string() }),
+				]),
+			),
 	),
 	async (c) => {
-		const { contentType, ...body } = c.req.valid("json");
+		const { contentType, replaceExisting, ...body } = c.req.valid("json");
 		const user = c.get("user");
 
 		const fileKey = getMultipartFileKey(user.id, body);
@@ -88,6 +107,79 @@ app.post(
 		const videoIdRaw = "videoId" in body ? body.videoId : videoIdFromFileKey;
 		if (!videoIdRaw) return c.text("Video id not found", 400);
 		const videoId = Video.VideoId.make(videoIdRaw);
+
+		if (replaceExisting) {
+			if ((getSubpath(body) ?? "result.mp4") !== "result.mp4") {
+				return c.json(
+					{ error: "Replacement uploads must target a recording" },
+					400,
+				);
+			}
+			return Effect.gen(function* () {
+				const policy = yield* VideosPolicy;
+				const db = yield* Database;
+				const owned = yield* policy.getOwnedById(videoId);
+				if (Option.isNone(owned))
+					return c.json({ error: "Video not found" }, 404);
+				const [video] = owned.value;
+				const [bucket] = yield* Storage.getAccessForVideo(video, {
+					resolvePublishedOutput: false,
+				});
+				const outputKey = createDesktopReuploadKey(video);
+				const result = yield* bucket.multipart.create(outputKey, {
+					ContentType: contentType || "video/mp4",
+					CacheControl: "public, max-age=31536000, immutable",
+					Metadata: { userId: user.id, source: "cap-desktop-reupload" },
+				});
+				if (!result.UploadId)
+					return yield* Effect.fail(new Error("No upload ID returned"));
+				const backendUploadId = result.UploadId;
+				const uploadId = yield* Effect.gen(function* () {
+					const token = yield* Effect.try(() =>
+						createDesktopReuploadToken(video, {
+							uploadId: backendUploadId,
+							provider: bucket.provider,
+							outputKey,
+						}),
+					);
+					const state = {
+						mode: "multipart" as const,
+						rawFileKey: outputKey,
+						uploaded: 0,
+						total: 0,
+						phase: "uploading" as const,
+						processingProgress: 0,
+						processingMessage: null,
+						processingError: null,
+						startedAt: new Date(),
+						updatedAt: new Date(),
+					};
+					yield* db.use((db) =>
+						db
+							.insert(Db.videoUploads)
+							.values({ videoId, ...state })
+							.onDuplicateKeyUpdate({ set: state }),
+					);
+					return token;
+				}).pipe(
+					Effect.onError(() =>
+						bucket.multipart
+							.abort(outputKey, backendUploadId)
+							.pipe(Effect.ignore),
+					),
+				);
+				return c.json({ uploadId, provider: bucket.provider });
+			}).pipe(
+				Effect.catchAll(() =>
+					Effect.succeed(
+						c.json({ error: "Could not initiate replacement upload" }, 500),
+					),
+				),
+				Effect.provide(makeCurrentUserLayer(user)),
+				provideOptionalAuth,
+				runPromiseAnyEnv,
+			);
+		}
 
 		const resp = await Effect.gen(function* () {
 			const policy = yield* VideosPolicy;
@@ -106,6 +198,7 @@ app.post(
 					.onDuplicateKeyUpdate({
 						set: {
 							mode: "multipart",
+							rawFileKey: null,
 							updatedAt: new Date(),
 						},
 					}),
@@ -230,28 +323,66 @@ app.post(
 						return yield* new Video.NotFoundError();
 					}
 					const [video] = maybeVideo.value;
-					const [bucket] = yield* Storage.getAccessForVideo(video);
-
-					console.log(
-						`Getting presigned URL for part ${partNumber} of upload ${uploadId}`,
+					const replacement = yield* Effect.try(() =>
+						decodeDesktopReuploadToken(uploadId),
 					);
+					const [bucket] = yield* replacement
+						? Storage.getAccessForVideo(video, {
+								resolvePublishedOutput: false,
+							})
+						: Storage.getAccessForVideo(video);
+					if (replacement) {
+						yield* Effect.try(() =>
+							assertDesktopReuploadTarget(
+								replacement,
+								video,
+								fileKey,
+								bucket.provider,
+							),
+						);
+						yield* Effect.try(() => {
+							if (video.source.outputKey === replacement.outputKey) {
+								throw new Error("Replacement upload is already complete");
+							}
+						});
+					}
+
+					console.log(`Getting presigned URL for multipart part ${partNumber}`);
 
 					const presignedUrl =
 						yield* bucket.multipart.getPresignedUploadPartUrl(
-							fileKey,
-							uploadId,
+							replacement?.outputKey ?? fileKey,
+							replacement?.uploadId ?? uploadId,
 							partNumber,
 							{ ContentMD5: body.md5Sum },
 						);
 
 					return { presignedUrl, provider: bucket.provider };
 				}).pipe(
+					Effect.catchTag("VideoNotFoundError", () =>
+						Effect.succeed(
+							c.json(
+								{ error: "Video not found", code: "VIDEO_NOT_FOUND" },
+								404,
+							),
+						),
+					),
+					Effect.catchTag("PolicyDenied", () =>
+						Effect.succeed(
+							c.json(
+								{ error: "Video not found", code: "VIDEO_NOT_FOUND" },
+								404,
+							),
+						),
+					),
 					Effect.provide(makeCurrentUserLayer(user)),
 					provideOptionalAuth,
 					runPromiseAnyEnv,
 				);
 
-				return c.json(presignedUrl);
+				return presignedUrl instanceof Response
+					? presignedUrl
+					: c.json(presignedUrl);
 			} catch (s3Error) {
 				console.error("S3 operation failed:", s3Error);
 				throw new Error(
@@ -291,6 +422,7 @@ app.post(
 				width: stringOrNumberOptional,
 				height: stringOrNumberOptional,
 				fps: stringOrNumberOptional,
+				replaceExisting: z.boolean().optional(),
 			})
 			.and(
 				z.union([
@@ -310,6 +442,8 @@ app.post(
 
 			const fileKey = getMultipartFileKey(user.id, body);
 			const subpath = getSubpath(body) ?? "result.mp4";
+			const replacesVideo =
+				body.replaceExisting === true && subpath === "result.mp4";
 
 			const videoIdFromFileKey = fileKey.split("/")[1];
 			const videoIdRaw = "videoId" in body ? body.videoId : videoIdFromFileKey;
@@ -322,6 +456,25 @@ app.post(
 				return c.text(`Video '${encodeURIComponent(videoId)}' not found`);
 			}
 			const [video] = maybeVideo.value;
+			if (isRawRecorderUpload(subpath) && !hasCompleteRecordingParts(parts)) {
+				return c.json(
+					{ error: "Recording parts are incomplete or invalid" },
+					400,
+				);
+			}
+			const replacement = yield* Effect.try(() =>
+				decodeDesktopReuploadToken(uploadId),
+			);
+			if (replacesVideo && !replacement) {
+				return c.json(
+					{
+						error:
+							"Restart this replacement upload to preserve the existing recording",
+						code: "REPLACEMENT_RESTART_REQUIRED",
+					},
+					409,
+				);
+			}
 
 			// Server-side backstop for the free-plan recording cap. First-party
 			// recorders always report durationInSecs and self-stop at the limit
@@ -365,18 +518,46 @@ app.post(
 					// "uploading" state. Cleanup is best-effort: the 403 stands
 					// either way.
 					yield* Effect.gen(function* () {
-						const [bucket] = yield* Storage.getAccessForVideo(video);
-						yield* bucket.multipart.abort(fileKey, uploadId);
-						yield* db.use((db) =>
-							db
-								.delete(Db.videoUploads)
-								.where(eq(Db.videoUploads.videoId, videoId)),
+						const [bucket] = yield* Storage.getAccessForVideo(
+							video,
+							replacement ? { resolvePublishedOutput: false } : undefined,
 						);
+						if (replacement) {
+							yield* Effect.try(() =>
+								assertDesktopReuploadTarget(
+									replacement,
+									video,
+									fileKey,
+									bucket.provider,
+								),
+							);
+							yield* db.use((db) =>
+								db
+									.delete(Db.videoUploads)
+									.where(
+										and(
+											eq(Db.videoUploads.videoId, videoId),
+											eq(Db.videoUploads.rawFileKey, replacement.outputKey),
+										),
+									),
+							);
+							if (bucket.provider === "s3")
+								yield* bucket.multipart.abort(
+									replacement.outputKey,
+									replacement.uploadId,
+								);
+						} else {
+							yield* bucket.multipart.abort(fileKey, uploadId);
+							yield* db.use((db) =>
+								db
+									.delete(Db.videoUploads)
+									.where(eq(Db.videoUploads.videoId, videoId)),
+							);
+						}
 					}).pipe(
-						Effect.catchAll((error) =>
+						Effect.catchAll(() =>
 							Effect.logError(
 								"Failed to clean up rejected free-plan multipart upload",
-								error,
 							),
 						),
 					);
@@ -390,8 +571,136 @@ app.post(
 				}
 			}
 
+			if (replacement) {
+				return yield* Effect.gen(function* () {
+					yield* Effect.try(() =>
+						assertDesktopReuploadTarget(replacement, video, fileKey),
+					);
+					const [bucket] = yield* Storage.getAccessForVideo(video, {
+						resolvePublishedOutput: false,
+					});
+					yield* Effect.try(() =>
+						assertDesktopReuploadTarget(
+							replacement,
+							video,
+							fileKey,
+							bucket.provider,
+						),
+					);
+					const outputKey = replacement.outputKey;
+					const totalSize = parts.reduce((total, part) => total + part.size, 0);
+					const verify = bucket.headObject(outputKey).pipe(
+						Effect.filterOrFail(
+							(head) => totalSize > 0 && head.ContentLength === totalSize,
+							() => new Error("Replacement video could not be verified"),
+						),
+					);
+					if (video.source.outputKey === outputKey) {
+						const head = yield* verify;
+						return c.json({
+							success: true,
+							fileKey: outputKey,
+							objectIdentity: head.ETag,
+						});
+					}
+					yield* bucket.multipart
+						.complete(outputKey, replacement.uploadId, {
+							MultipartUpload: {
+								Parts: [...parts]
+									.sort((a, b) => a.partNumber - b.partNumber)
+									.map((part) => ({
+										PartNumber: part.partNumber,
+										ETag: part.etag,
+									})),
+							},
+							...(bucket.provider === "googleDrive"
+								? { MpuObjectSize: totalSize }
+								: {}),
+						})
+						.pipe(
+							Effect.catchAll((error) =>
+								verify.pipe(Effect.catchAll(() => Effect.fail(error))),
+							),
+						);
+					const head = yield* verify;
+					yield* db.use((db) =>
+						db.transaction(async (tx) => {
+							const publication = await prepareDesktopReupload(
+								tx,
+								video,
+								replacement,
+							);
+							if (!publication) return;
+							await tx
+								.update(Db.videos)
+								.set({
+									...publication,
+									duration: updateIfDefined(
+										body.durationInSecs,
+										Db.videos.duration,
+									),
+									width: updateIfDefined(body.width, Db.videos.width),
+									height: updateIfDefined(body.height, Db.videos.height),
+									fps: updateIfDefined(body.fps, Db.videos.fps),
+								})
+								.where(
+									and(
+										eq(Db.videos.id, videoId),
+										eq(Db.videos.ownerId, user.id),
+									),
+								);
+							await tx
+								.delete(Db.videoUploads)
+								.where(
+									and(
+										eq(Db.videoUploads.videoId, videoId),
+										eq(Db.videoUploads.rawFileKey, outputKey),
+									),
+								);
+						}),
+					);
+					yield* Effect.tryPromise(() =>
+						invalidateGoogleDriveStorageQuotaCache(
+							Option.getOrNull(video.storageIntegrationId),
+						),
+					).pipe(Effect.catchAll(Effect.logWarning));
+					// Storage resolves outputKey before signing playback URLs; only canonical derived assets need invalidation.
+					yield* Effect.tryPromise(() => invalidateReuploadedVideo(video)).pipe(
+						Effect.catchAll((error) =>
+							Effect.logWarning(
+								"Could not refresh derived recording assets; playback uses the new immutable output",
+								error,
+							),
+						),
+					);
+					if (
+						shouldQueueTranscriptionAfterMultipartComplete(
+							video.source.type,
+							false,
+						)
+					) {
+						yield* Effect.tryPromise(() =>
+							queueVideoTranscription(videoId),
+						).pipe(Effect.catchAll(Effect.logWarning));
+					}
+					return c.json({
+						success: true,
+						fileKey: outputKey,
+						objectIdentity: head.ETag,
+					});
+				}).pipe(
+					Effect.catchAll(() =>
+						Effect.succeed(
+							c.json({ error: "Could not publish replacement recording" }, 500),
+						),
+					),
+				);
+			}
+
 			return yield* Effect.gen(function* () {
-				const [bucket] = yield* Storage.getAccessForVideo(video);
+				const [bucket] = yield* Storage.getAccessForVideo(video, {
+					resolvePublishedOutput: false,
+				});
 
 				const { result, formattedParts } = yield* Effect.gen(function* () {
 					console.log(
@@ -434,14 +743,33 @@ app.post(
 						),
 					);
 
-					const result = yield* bucket.multipart.complete(fileKey, uploadId, {
-						MultipartUpload: {
-							Parts: formattedParts,
-						},
-						...(bucket.provider === "googleDrive"
-							? { MpuObjectSize: totalSize }
-							: {}),
-					});
+					const result = yield* bucket.multipart
+						.complete(fileKey, uploadId, {
+							MultipartUpload: {
+								Parts: formattedParts,
+							},
+							...(bucket.provider === "googleDrive"
+								? { MpuObjectSize: totalSize }
+								: {}),
+						})
+						.pipe(
+							Effect.catchAll((error) => {
+								if (!isRawRecorderUpload(subpath) || bucket.provider !== "s3")
+									return Effect.fail(error);
+								// A lost completion response can leave no multipart session. Match
+								// the stored object to every submitted part before acknowledging it.
+								return bucket.headObject(fileKey).pipe(
+									Effect.flatMap((head) =>
+										matchesCompletedRecordingParts(head, sortedParts)
+											? Effect.succeed({
+													ETag: head.ETag,
+													Location: undefined,
+												})
+											: Effect.fail(error),
+									),
+								);
+							}),
+						);
 					yield* Effect.promise(() =>
 						invalidateGoogleDriveStorageQuotaCache(
 							Option.getOrNull(video.storageIntegrationId),
@@ -461,6 +789,26 @@ app.post(
 					console.log(`Complete response: ${JSON.stringify(result, null, 2)}`);
 
 					yield* bucket.headObject(fileKey).pipe(
+						Effect.tap((head) =>
+							isRawRecorderUpload(subpath) &&
+							head.ContentLength !==
+								parts.reduce((total, part) => total + part.size, 0)
+								? Effect.fail(
+										new Error(
+											"Uploaded recording size does not match its parts",
+										),
+									)
+								: Effect.void,
+						),
+						Effect.tap((head) =>
+							(replacesVideo || isRawRecorderUpload(subpath)) &&
+							(!head.ContentLength ||
+								(result.ETag && head.ETag !== result.ETag))
+								? Effect.fail(
+										new Error("Reuploaded video could not be verified"),
+									)
+								: Effect.void,
+						),
 						Effect.tap((headResult) =>
 							Effect.log(
 								`Object verification successful: ContentType=${headResult.ContentType}, ContentLength=${headResult.ContentLength}`,
@@ -471,7 +819,11 @@ app.post(
 							schedule: Schedule.exponential("50 millis"),
 						}),
 						Effect.catchAll((headError) =>
-							Effect.logError(`Warning: Unable to verify object: ${headError}`),
+							replacesVideo || isRawRecorderUpload(subpath)
+								? Effect.fail(headError)
+								: Effect.logError(
+										`Warning: Unable to verify object: ${headError}`,
+									),
 						),
 					);
 
@@ -559,32 +911,30 @@ app.post(
 					}
 
 					yield* db.use((db) =>
-						db.transaction(() =>
-							Promise.all([
-								db
-									.update(Db.videos)
-									.set({
-										duration: updateIfDefined(
-											body.durationInSecs,
-											Db.videos.duration,
-										),
-										width: updateIfDefined(body.width, Db.videos.width),
-										height: updateIfDefined(body.height, Db.videos.height),
-										fps: updateIfDefined(body.fps, Db.videos.fps),
-									})
-									.where(
-										and(
-											eq(Db.videos.id, Video.VideoId.make(videoId)),
-											eq(Db.videos.ownerId, user.id),
-										),
+						db.transaction(async (tx) => {
+							await tx
+								.update(Db.videos)
+								.set({
+									duration: updateIfDefined(
+										body.durationInSecs,
+										Db.videos.duration,
 									),
-								db
-									.delete(Db.videoUploads)
-									.where(
-										eq(Db.videoUploads.videoId, Video.VideoId.make(videoId)),
+									width: updateIfDefined(body.width, Db.videos.width),
+									height: updateIfDefined(body.height, Db.videos.height),
+									fps: updateIfDefined(body.fps, Db.videos.fps),
+								})
+								.where(
+									and(
+										eq(Db.videos.id, Video.VideoId.make(videoId)),
+										eq(Db.videos.ownerId, user.id),
 									),
-							]),
-						),
+								);
+							await tx
+								.delete(Db.videoUploads)
+								.where(
+									eq(Db.videoUploads.videoId, Video.VideoId.make(videoId)),
+								);
+						}),
 					);
 
 					const mediaServerUrl = serverEnv().MEDIA_SERVER_URL;
@@ -762,6 +1112,62 @@ app.post("/abort", abortRequestValidator, (c) => {
 			return c.text(`Video '${encodeURIComponent(videoId)}' not found`);
 		}
 		const [video] = maybeVideo.value;
+
+		const replacement = yield* Effect.try(() =>
+			decodeDesktopReuploadToken(uploadId),
+		);
+		if (replacement) {
+			yield* Effect.try(() =>
+				assertDesktopReuploadTarget(replacement, video, fileKey),
+			);
+			if (video.source.outputKey === replacement.outputKey) {
+				return c.json({
+					success: true,
+					fileKey: replacement.outputKey,
+					uploadId,
+				});
+			}
+			const [bucket] = yield* Storage.getAccessForVideo(video, {
+				resolvePublishedOutput: false,
+			});
+			yield* Effect.try(() =>
+				assertDesktopReuploadTarget(
+					replacement,
+					video,
+					fileKey,
+					bucket.provider,
+				),
+			);
+
+			yield* db.use((db) =>
+				db
+					.delete(Db.videoUploads)
+					.where(
+						and(
+							eq(Db.videoUploads.videoId, videoId),
+							eq(Db.videoUploads.rawFileKey, replacement.outputKey),
+						),
+					),
+			);
+			// Drive abort deletes the object mapping, which may already be used by a concurrent publication.
+			if (bucket.provider === "s3") {
+				yield* bucket.multipart
+					.abort(replacement.outputKey, replacement.uploadId)
+					.pipe(
+						Effect.catchAll(() =>
+							Effect.logWarning(
+								"Could not abort canceled replacement storage upload",
+							),
+						),
+					);
+			}
+
+			return c.json({
+				success: true,
+				fileKey: replacement.outputKey,
+				uploadId,
+			});
+		}
 
 		const [bucket] = yield* Storage.getAccessForVideo(video);
 

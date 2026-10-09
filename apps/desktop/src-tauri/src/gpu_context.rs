@@ -39,6 +39,7 @@ impl PendingScreenshots {
 }
 
 pub struct SharedGpuContext {
+    health: crate::gpu_device_health::GpuDeviceHealth,
     pub device: Arc<wgpu::Device>,
     pub queue: Arc<wgpu::Queue>,
     pub adapter: Arc<wgpu::Adapter>,
@@ -145,7 +146,15 @@ async fn init_gpu_inner() -> Option<SharedGpuContext> {
         .await
         .ok()?;
 
+    let health = crate::gpu_device_health::GpuDeviceHealth::track(&device, |reason, message| {
+        tracing::error!(?reason, %message, "Shared GPU device lost");
+        if reason == wgpu::DeviceLostReason::Unknown {
+            sentry::capture_message("Shared GPU device lost", sentry::Level::Error);
+        }
+    });
+
     Some(SharedGpuContext {
+        health,
         device: Arc::new(device),
         queue: Arc::new(queue),
         adapter: Arc::new(adapter),
@@ -185,4 +194,13 @@ pub fn prewarm_gpu() {
     tokio::spawn(async {
         get_shared_gpu().await;
     });
+}
+
+// Every Tauri video editor uses this OnceCell's device when initialization succeeds.
+// Its resources cannot recover by reopening the editor or replacing only the device.
+pub fn ensure_shared_device_available() -> Result<(), String> {
+    if let Some(Some(gpu)) = GPU.get() {
+        gpu.health.ensure_available().map_err(str::to_string)?;
+    }
+    Ok(())
 }
