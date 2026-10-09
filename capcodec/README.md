@@ -1,6 +1,6 @@
 # capcodec
 
-Tov source for the H.264 screen encoder used when `CAP_MEDIA_VIDEO_ENCODER=capcodec`. This directory is the `main` snapshot (`517b7e6`). Cap CI leaves it unbuilt. Mount a binary as described in `apps/media-server/capcodec.md`.
+Tov source for the H.264 screen encoder used when `CAP_MEDIA_VIDEO_ENCODER=capcodec`. This directory is the `main` snapshot (`517b7e6`). The full-motion page reads its media URL from `window.capVideoSrc`, which the corpus generator sets before load. Cap CI leaves it unbuilt. Mount a binary as described in `apps/media-server/capcodec.md`.
 
 `capcodec.bundle` stores every branch. Restore it with `git clone capcodec.bundle`. The media-server flag runs `main`. `rd-next`, `ssim`, `intra-rd`, and `dashboard` stay on their own branches.
 

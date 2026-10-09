@@ -32,8 +32,6 @@ import urllib.request
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from urllib.parse import quote
-
 import numpy as np
 from Xlib import X
 from Xlib import display as xdisplay
@@ -804,8 +802,6 @@ def capture(clip, xvfb):
     pointer_file = work / "pointer.jsonl"
     ff_cmd = ffmpeg_cmd(clip, clip.frames, work)
     url = (PAGES / clip.page.split("?")[0]).as_uri() + (("?" + clip.page.split("?", 1)[1]) if "?" in clip.page else "")
-    if video_meta:
-        url += ("&" if "?" in url else "?") + "src=" + quote(Path(video_meta["file"]).as_uri(), safe="")
     info = {"url": url, "calibration": calib}
     if video_meta:
         info["source_segment"] = video_meta
@@ -840,6 +836,10 @@ def capture(clip, xvfb):
             console = []
             page.on("console", lambda m: console.append(f"{m.type}: {m.text}") if m.type in ("error", "warning") else None)
             page.on("pageerror", lambda e: console.append(f"pageerror: {e}"))
+            if video_meta:
+                page.add_init_script(
+                    "window.capVideoSrc = " + json.dumps(Path(video_meta["file"]).as_uri()) + ";"
+                )
             page.goto(url)
             info["viewport"] = fit_window(clip, page)
             page.wait_for_function("window.capReady === true", timeout=15000)

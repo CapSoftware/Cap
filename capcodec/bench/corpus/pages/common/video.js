@@ -59,6 +59,7 @@
 	window.capTextRegions = () => [];
 
 	video.requestVideoFrameCallback(onFrame);
-	video.src = params.get("src");
+	const src = window.capVideoSrc;
+	if (typeof src === "string") video.src = src;
 	video.play().catch((e) => cap.event("video_play_error", { message: String(e) }));
 })();

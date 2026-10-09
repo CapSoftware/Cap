@@ -307,8 +307,13 @@ ${[
 		clearTimeout(hoverTimer);
 		hoverTimer = setTimeout(() => {
 			const name = a.dataset.p || a.textContent;
+			const summary =
+				SUMMARIES[name] ||
+				`${name} is a topic related to the history of writing machines and office technology. It is covered in more detail in its own article.`;
 			const r = a.getBoundingClientRect();
-			preview.innerHTML = `<div class="pb"><div class="pt">${name}</div>${SUMMARIES[name] || `${name} is a topic related to the history of writing machines and office technology. It is covered in more detail in its own article.`}</div><div class="pf"><span>⚙ Preferences</span><span>Read more ›</span></div>`;
+			preview.innerHTML = `<div class="pb"><div class="pt"></div></div><div class="pf"><span>⚙ Preferences</span><span>Read more ›</span></div>`;
+			preview.querySelector(".pt").textContent = name;
+			preview.querySelector(".pb").append(document.createTextNode(summary));
 			preview.style.left = `${Math.round(r.left + scrollX)}px`;
 			preview.style.top = `${Math.round(r.bottom + scrollY + 6)}px`;
 			preview.style.display = "block";
