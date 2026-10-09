@@ -88,6 +88,7 @@ import { DashboardBackLink } from "./DashboardBackLink";
 import { describeShareAudience } from "./share-audience";
 import { useVideoDownload } from "./use-video-download";
 import { fromNow } from "./utils/from-now";
+import { formatFullDateTime } from "./utils/full-date-time";
 import { VideoDownloadMenu } from "./VideoDownloadMenu";
 
 /**
@@ -168,9 +169,17 @@ const TITLE_TEXT_CLASS =
 
 const TITLE_PLACEHOLDER = "Cap title";
 
-/** `overflow-wrap: anywhere` so a title with no spaces still breaks onto line two. */
-const TITLE_CLAMP_CLASS =
-	"block truncate sm:line-clamp-2 sm:whitespace-normal sm:[overflow-wrap:anywhere]";
+/**
+ * One line at every width, then an ellipsis. The clip box is grown by the
+ * descender (and given back with a negative margin, so the line box doesn't
+ * move): `overflow: hidden` clips at the line box, which is where a g, y or p
+ * in the title's font used to get its tail cut off.
+ */
+const TITLE_CLAMP_CLASS = "-mb-[0.2em] block truncate pb-[0.2em]";
+
+/** Cap's tooltip, widened and wrapping for text that can run long. */
+const LONG_TOOLTIP_CLASS =
+	"block max-w-[min(30rem,calc(100vw-2rem))] whitespace-normal py-2 text-left leading-5 [overflow-wrap:anywhere]";
 
 /** Every control in the title row's action cluster: one height, one radius. */
 const ACTION_BUTTON_CLASS =
@@ -307,6 +316,11 @@ export const ShareHeader = ({
 	const [isOpeningBrandingSettings, setIsOpeningBrandingSettings] =
 		useState(false);
 	const titleInputRef = useRef<HTMLInputElement>(null);
+	const [titleText, setTitleText] = useState<HTMLSpanElement | null>(null);
+	const titleTruncated = useIsTruncated(titleText, displayTitle);
+	// Kept mounted and only allowed to open while the title is cut off:
+	// toggling the tooltip itself would remount the title under the cursor.
+	const [titleTooltipOpen, setTitleTooltipOpen] = useState(false);
 	const titleButtonRef = useRef<HTMLButtonElement>(null);
 	/**
 	 * The name a rename put on screen before the server had it. Held until the
@@ -1281,15 +1295,14 @@ export const ShareHeader = ({
 								/>
 							)}
 							{/*
-							 * One line on phones, two from `sm`, then an ellipsis, so the
-							 * header is the same height for any title. The whole title
-							 * is in the hover tooltip and in the rename field. The
-							 * heading stays mounted (invisible) while renaming so the
-							 * field opening doesn't drop a two-line title to one line
-							 * and pull the video up under the cursor.
+							 * One line, then an ellipsis, so the header is the same
+							 * height for any title. A cut-off title shows in full in a
+							 * tooltip on hover and keyboard focus, and in the rename
+							 * field. The heading stays mounted (invisible) while
+							 * renaming so the field takes its place without the layout
+							 * moving.
 							 */}
 							<h1
-								title={displayTitle}
 								className={clsx(
 									TITLE_TEXT_CLASS,
 									"col-start-1 row-start-1 min-w-0",
@@ -1297,20 +1310,49 @@ export const ShareHeader = ({
 								)}
 							>
 								{isOwner ? (
-									<button
-										ref={titleButtonRef}
-										type="button"
-										// `leading-[inherit]`: the base layer gives every bare
-										// button a 1.5rem line height, which would leave the
-										// heading stubbier than the field and bump the text
-										// every time you clicked it.
-										className="block w-full cursor-text text-left leading-[inherit] outline-none"
-										onClick={startEditing}
+									<Tooltip
+										content={displayTitle}
+										open={titleTooltipOpen && titleTruncated}
+										onOpenChange={setTitleTooltipOpen}
+										position="bottom"
+										className={LONG_TOOLTIP_CLASS}
 									>
-										<span className={TITLE_CLAMP_CLASS}>{displayTitle}</span>
-									</button>
+										<button
+											ref={titleButtonRef}
+											type="button"
+											// `leading-[inherit]`: the base layer gives every bare
+											// button a 1.5rem line height, which would leave the
+											// heading stubbier than the field and bump the text
+											// every time you clicked it.
+											className="block w-full cursor-text text-left leading-[inherit] outline-none"
+											onClick={startEditing}
+										>
+											<span ref={setTitleText} className={TITLE_CLAMP_CLASS}>
+												{displayTitle}
+											</span>
+										</button>
+									</Tooltip>
 								) : (
-									<span className={TITLE_CLAMP_CLASS}>{displayTitle}</span>
+									<Tooltip
+										content={displayTitle}
+										open={titleTooltipOpen && titleTruncated}
+										onOpenChange={setTitleTooltipOpen}
+										position="bottom"
+										className={LONG_TOOLTIP_CLASS}
+									>
+										{/* Focusable only when there's more to read, so the
+										    full title is reachable from the keyboard too. */}
+										<span
+											ref={setTitleText}
+											tabIndex={titleTruncated ? 0 : undefined}
+											className={clsx(
+												TITLE_CLAMP_CLASS,
+												"rounded-md outline-none focus-visible:ring-2 focus-visible:ring-blue-9",
+											)}
+										>
+											{displayTitle}
+										</span>
+									</Tooltip>
 								)}
 							</h1>
 							{isTitleRevealing && (
@@ -1331,8 +1373,7 @@ export const ShareHeader = ({
 									{data.owner.name}
 								</span>
 								<MetaDot />
-								{/* Relative to now, so the server's render can be a unit behind. */}
-								<span suppressHydrationWarning>{fromNow(data.createdAt)}</span>
+								<CreatedAt date={data.createdAt} />
 								{views !== undefined && (
 									<Suspense fallback={null}>
 										<ViewCount
@@ -1474,5 +1515,52 @@ function MetaDot() {
 		<span aria-hidden className="text-gray-8">
 			·
 		</span>
+	);
+}
+
+/**
+ * Whether the element's text is cut off by its ellipsis. Re-measured when it
+ * resizes or `content` changes, so the title's tooltip only offers itself when
+ * there is something more to read.
+ */
+function useIsTruncated(element: HTMLElement | null, content: string): boolean {
+	const [truncated, setTruncated] = useState(false);
+	useEffect(() => {
+		if (!element) return;
+		const measure = () =>
+			setTruncated(
+				content.length > 0 && element.scrollWidth > element.clientWidth + 1,
+			);
+		measure();
+		const observer = new ResizeObserver(measure);
+		observer.observe(element);
+		return () => observer.disconnect();
+	}, [element, content]);
+	return truncated;
+}
+
+/**
+ * "3 days ago", with the exact date and time a hover or focus away. The full
+ * date is formatted after mount, in the viewer's own locale and timezone, so
+ * the server's render (in the server's) can't mismatch it.
+ */
+function CreatedAt({ date }: { date: Date }) {
+	const [fullDate, setFullDate] = useState<string | null>(null);
+	const time = new Date(date).getTime();
+	useEffect(() => {
+		setFullDate(formatFullDateTime(new Date(time)));
+	}, [time]);
+	return (
+		<Tooltip content={fullDate ?? ""} disable={!fullDate} position="bottom">
+			{/* Relative to now, so the server's render can be a unit behind. */}
+			<button
+				type="button"
+				className="cursor-default rounded-sm outline-none transition-colors hover:text-gray-12 focus-visible:ring-2 focus-visible:ring-blue-9"
+			>
+				<time dateTime={new Date(time).toISOString()} suppressHydrationWarning>
+					{fromNow(date)}
+				</time>
+			</button>
+		</Tooltip>
 	);
 }

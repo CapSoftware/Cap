@@ -12,6 +12,8 @@ const Tooltip = ({
 	kbd,
 	disable,
 	delayDuration,
+	open,
+	onOpenChange,
 }: {
 	children: React.ReactNode;
 	content: string;
@@ -20,12 +22,19 @@ const Tooltip = ({
 	kbd?: string[];
 	disable?: boolean;
 	delayDuration?: number;
+	/** Controlled open state, for a trigger that decides when it has something to say. */
+	open?: boolean;
+	onOpenChange?: (open: boolean) => void;
 }) => {
 	if (disable) {
 		return <>{children}</>;
 	}
 	return (
-		<TooltipPrimitive.Root delayDuration={delayDuration}>
+		<TooltipPrimitive.Root
+			delayDuration={delayDuration}
+			open={open}
+			onOpenChange={onOpenChange}
+		>
 			<TooltipPrimitive.Trigger asChild>{children}</TooltipPrimitive.Trigger>
 			<TooltipPrimitive.Portal>
 				<TooltipPrimitive.Content
