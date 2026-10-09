@@ -11,4 +11,4 @@ To encode with capcodec:
 
 Optional overrides: `CAPCODEC_CRF` (0–51), `CAPCODEC_PRESET` (`live`, `fast`, `medium`, `slow`), `CAPCODEC_KEYINT`, and `CAPCODEC_NOISE`. Without those, the job's CRF and preset are used. `ultrafast` maps to `fast`.
 
-Benchmark tables against x264 veryfast are in `capcodec-benchmarks.md`.
+Benchmark tables against x264 veryfast are in `capcodec-benchmarks.md`. The encoder source is `capcodec/` at the repository root.

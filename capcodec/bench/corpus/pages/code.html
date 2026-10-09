@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>difflib.py - textkit - Visual Studio Code</title>
+<link rel="stylesheet" href="common/workbench.css">
+<script src="common/cap.js"></script>
+<script src="common/editor.js"></script>
+<script src="common/workbench.js"></script>
+<script src="data/difflib_py.js"></script>
+</head>
+<body>
+<script>
+const editor = buildWorkbench({
+	theme: "light",
+	project: "textkit",
+	branch: "feat/ratio-normalize*",
+	scmCount: 3,
+	warnings: 2,
+	lang: "py",
+	langLabel: "Python",
+	interp: "3.12.3 ('.venv': venv)",
+	source: window.SOURCE_DIFFLIB_PY,
+	minimapColors: MINIMAP_LIGHT,
+	crumbs: ["src", "textkit", "difflib.py", "_calculate_ratio"],
+	tabs: [
+		{ name: "difflib.py", active: true },
+		{ name: "test_difflib.py" },
+		{ name: "README.md", preview: true },
+		{ name: "pyproject.toml" },
+	],
+	tree: [
+		{ depth: 0, dir: true, name: ".github" },
+		{ depth: 0, dir: true, name: ".venv" },
+		{ depth: 0, dir: true, name: "docs" },
+		{ depth: 0, dir: true, open: true, name: "src", gs: "M" },
+		{ depth: 1, dir: true, open: true, name: "textkit", gs: "M" },
+		{ depth: 2, name: "__init__.py" },
+		{ depth: 2, name: "_compat.py" },
+		{ depth: 2, name: "cli.py" },
+		{ depth: 2, name: "difflib.py", active: true, gs: "M" },
+		{ depth: 2, name: "fuzzy.py", gs: "M" },
+		{ depth: 2, name: "html.py" },
+		{ depth: 2, name: "normalize.py", gs: "U" },
+		{ depth: 2, name: "py.typed" },
+		{ depth: 2, name: "tokens.py" },
+		{ depth: 0, dir: true, open: true, name: "tests" },
+		{ depth: 1, name: "conftest.py" },
+		{ depth: 1, name: "test_cli.py" },
+		{ depth: 1, name: "test_difflib.py" },
+		{ depth: 1, name: "test_fuzzy.py" },
+		{ depth: 1, name: "test_html.py" },
+		{ depth: 0, name: ".gitignore" },
+		{ depth: 0, name: "CHANGELOG.md" },
+		{ depth: 0, name: "LICENSE.txt" },
+		{ depth: 0, name: "pyproject.toml" },
+		{ depth: 0, name: "README.md" },
+		{ depth: 0, name: "setup.cfg" },
+		{ depth: 0, name: "tox.ini" },
+		{ depth: 0, name: "uv.lock" },
+	],
+});
+window.capEditor = editor;
+window.capTextRegions = () => {
+	const r = editor.scroller.getBoundingClientRect();
+	const h = Math.floor((r.height - 8) / 2);
+	return [
+		[r.left, r.top + 4, 720, h],
+		[r.left, r.top + 4 + h, 720, h],
+	];
+};
+capSetReady();
+</script>
+</body>
+</html>

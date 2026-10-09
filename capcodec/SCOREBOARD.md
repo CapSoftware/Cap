@@ -1,25 +1,8 @@
-# capcodec vs x264 veryfast
-
-Measurements from the capcodec bench harness for the binary `CAP_MEDIA_VIDEO_ENCODER=capcodec` runs. This repository's CI does not regenerate them. A speed ratio above 1 means capcodec is faster. A BD-rate below 0 means capcodec uses fewer bits at the same quality.
-
-The 12-clip speed table is main `00fecf7` (read-ahead, CABAC, intra minIndex), retimed with other processes stopped. `--bframes 0` matches that encoder. Concurrent B-frames are the default after that measurement. Screen clips stay almost entirely P frames, so those speed rows still describe the default. full_motion was retimed with concurrent B-frames: 4-thread wall is 1.35-1.40x medium and 1.44-1.50x live (the same sessions measured the previous encoder at 1.09-1.10x and 1.19-1.21x). The other 11 clips were not retimed. full_motion quality below is the pre-concurrent-B bitstream.
-
-`rd-next` (`d0cce5e`) and SSIM round 3 (`b72e995`) are not in the binary this flag runs. The media server's `ultrafast` preset maps to capcodec `fast`. Job CRF and preset apply unless `CAPCODEC_CRF` or `CAPCODEC_PRESET` is set.
-
-| Metric | Result |
-|---|---|
-| Keyframe-only CPU | 1.06-1.76x at 1 and 4 threads; busy_ui uses 12% more bits in all-intra |
-| Peak RSS, 4 threads | 34-308 MiB vs 141-1304 MiB on the speed rerun |
-| Output delay | live 2 frames (5 with B-frames), medium 10 (steady 13), zerolatency 0; x264 17-19 frames at 4 threads |
-| Startup | 0.9-1.2 ms vs 1.3-1.5 ms on a 64x64 frame |
-| Decode CPU of the output | 0.58-1.54 s vs 1.59-2.40 s on the measured clips |
-| Binary | 561,312 bytes at `00fecf7`; 609,152 bytes with concurrent B-frames. Minimal x264 build is 1.29 MB |
-| Build CPU | about 12 s vs 36 s (minimal x264) |
-| Bitrate error at Cap targets | two-pass 4.9% vs 5.5%; one-pass 7.7% vs 5.5% (one-pass rate control is not in this binary) |
+# Scoreboard against x264 veryfast
 
 Quality measured 2026-10-09 on main `fff504d`. Speed remeasured the same day on main `00fecf7` (read-ahead, pin7 intra minIndex, CABAC table). Those commits match the `fff504d` bitstreams, so the quality tables still describe this encoder. Pending quality branch `rd-next` `d0cce5e`. All 12 corpus clips.
 
-How to reproduce (from the `capcodec/` directory in this repository):
+How to reproduce:
 
 - Quality: `CAPCODEC_BIN_UNCHECKED=<binary> python3 bench/bench.py standard --quality-only --encoders capcodec-medium,capcodec-live,capcodec-live-zerolatency,x264-veryfast,x264-veryfast-zerolatency --out <dir>` (1080p, 10 s per clip; code_4k is scaled to 1080p here). capcodec's CRF ladder runs 20-44 so its VMAF range covers x264's CRF 18-33; the overlap column shows how much of the two curves BD-rate compares (it was 15-24% on screen clips with the old 20-36 ladder).
 - Speed: `bench/lane.sh start`, then `bench/lane.sh run "python3 bench/speedcmp.py --binary <binary> --clips all --modes medium,live,zerolatency --retime bench/out/speedcmp-fff504d-v2 --out <dir>"`. The rerun reuses the CRF that matched x264 CRF 23 (bitstreams are unchanged, so the match stands). 5 shuffled, interleaved rounds at 1 and 4 threads; every other process is stopped for each timed run (about 690 processes stopped, frozen median). code_4k runs at native 4K for 5 s. Output: `bench/out/speedcmp-00fecf7`.

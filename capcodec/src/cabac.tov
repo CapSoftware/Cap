@@ -1,0 +1,616 @@
+import { BitWriter } from "./bitwriter"
+import { CabacRef } from "./cabac_ref"
+import {
+  CABAC_INIT_I, CABAC_INIT_P, CABAC_LAST_CTX, CABAC_RANGE_LPS, CABAC_SIG_CTX, CABAC_TRANSITION,
+} from "./tables"
+import { nonzeroMask } from "./tq"
+
+export const CAT_LUMA_DC = 0
+export const CAT_LUMA_AC = 1
+export const CAT_LUMA_4x4 = 2
+export const CAT_CHROMA_DC = 3
+export const CAT_CHROMA_AC = 4
+export const CAT_LUMA_8x8 = 5
+
+const CBF_BASE: int[] = [85, 89, 93, 97, 101, 0]
+const ABS_BASE: int[] = [227, 237, 247, 257, 266, 426]
+
+const BIN_CAP = 16384
+const BIN_FLUSH = 8192
+const BIN_TERM = -3
+const BYPASS_RUN = -4
+const BIN_END = -(1 << 30)
+// A decision bin is ctxIdx << 8 | DEC_BASE + DEC_ONE * bin: its low six bits are where tab[state] keeps the bin's
+// next state, with whether the bin is the LPS one bit above it. SIGN_FLAG and SIGN_NEG append a coefficient's sign;
+// SKIP_TERM appends an end_of_slice_flag of 0 to a skip flag. lsh[state] keeps, in the byte of each range quarter, the
+// renormalisation shift of that quarter's LPS range, so the range update needs no leading-zero count; the MPS one tests
+// lps > range - 256 rather than mps < 256 so that it does not wait for the subtraction.
+const DEC_BASE = 32
+const DEC_ONE = 9
+const SIGN_FLAG = 64
+const SIGN_NEG = 128
+const SKIP_TERM = 1 << 20
+
+const C1_INC = 0x4321
+const GT1_INC = 0x98765555
+const GT1_INC_DC = 0x88765555
+const NEXT_EQ1 = 0x76543321
+const NEXT_GT1_DIFF = 0x1111123
+
+function residualBins(bins: Int32Array, k0: int, cat: int, c: Int16Array, o: int, n: int, sl: Int32Array, pk: Int32Array, lv: Int32Array): int {
+  let k = k0
+  const nz = nonzeroMask(c, o, n)
+  const last = 63 - Math.clz64(nz)
+  const so = cat * 128
+  const tail = last >= 0 && last < n - 1
+  const stop = tail ? last : n - 1
+  const head = nz & ~(-1 << stop)
+  // Four positions a step, each one's significance bin followed by its last bin if it is significant. The final step
+  // can run past stop and write bins for positions that have none; k is recounted after it and later bins overwrite them.
+  for (let i = 0; i < stop; i += 4) {
+    const m = (head >> i) & 15
+    const v = i32x8.load(sl, so + 2 * i) + i32x8.load(pk, m * 16)
+    i32x8.shuffle(v, i32x8.load(pk, m * 16 + 8)).store(bins, k)
+    k += 4 + Math.popcount32(m)
+  }
+  k = k0 + stop + Math.popcount64(head)
+  if (tail) {
+    bins[k] = sl[so + 2 * last]! + DEC_ONE
+    bins[k + 1] = sl[so + 2 * last + 1]! + DEC_ONE
+    k += 2
+  }
+  let node = cat * 64
+  let m = nz
+  while (m !== 0) {
+    const i = 63 - Math.clz64(m)
+    m ^= 1 << i
+    const v = c[o + i]!
+    const a = v < 0 ? -v : v
+    const t = node + (a > 1 ? 4 : 0)
+    const c1 = lv[t]!
+    const ones = i32x8.splat(lv[t + 1]!)
+    node = lv[t + 2]!
+    ones.store(bins, k + 1)
+    ones.store(bins, k + 9)
+    const am1 = a - 1
+    if (am1 < 14) {
+      bins[k] = c1
+      bins[k + am1] = lv[t + 3]! + ((v >> 63) & SIGN_NEG)
+      k += am1 + 1
+    } else {
+      bins[k] = c1
+      const x = am1 - 13
+      const e = 63 - Math.clz64(x)
+      const w = (((1 << e) - 1) << (e + 2)) | ((x - (1 << e)) << 1) | ((v >> 63) & 1)
+      if (e < 8) {
+        bins[k + 14] = BYPASS_RUN - (w | ((2 * e + 1) << 16))
+        k += 15
+      } else {
+        bins[k + 14] = BYPASS_RUN - ((w >> 16) | ((2 * e - 15) << 16))
+        bins[k + 15] = BYPASS_RUN - ((w & 0xffff) | (15 << 16))
+        k += 16
+      }
+    }
+  }
+  return k
+}
+
+function carryInto(out: Uint8Array, len: int) {
+  let j = len - 1
+  while (j >= 0) {
+    const t = out[j]! + 1
+    out[j] = t & 255
+    if (t < 256) return
+    j--
+  }
+}
+
+function encodeBins(st: Int32Array, bins: Int32Array, ctx: Uint8Array, tab: Int64Array, lsh: Int64Array, out: Uint8Array) {
+  let low = st[0]!
+  let range = st[1]!
+  let queue = st[2]!
+  let len = st[3]!
+  let i = 0
+  while (true) {
+    const b = bins[i]!
+    i++
+    if (b >= 0 && b < SKIP_TERM) {
+      const ci = b >> 8
+      const s = ctx[ci]!
+      const e = tab[s]!
+      const t = e >> (b & 63)
+      ctx[ci] = t & 255
+      const q8 = (range >> 3) & 24
+      const lps = (e >> q8) & 255
+      const ls = (lsh[s]! >> q8) & 7
+      const mps = range - lps
+      const isLps = (t & 256) !== 0
+      const ms = lps > range - 256 ? 1 : 0
+      const rs = isLps ? ls : ms
+      range = isLps ? lps << ls : mps << ms
+      const sh = rs + ((b >> 6) & 1)
+      low = ((low + (isLps ? mps : 0)) << sh) + (range & -((b >> 7) & 1))
+      queue += sh
+    } else if (b >= 0) {
+      const ci = (b >> 8) & 1023
+      const s = ctx[ci]!
+      const e = tab[s]!
+      const t = e >> (b & 63)
+      ctx[ci] = t & 255
+      const q8 = (range >> 3) & 24
+      const lps = (e >> q8) & 255
+      const ls = (lsh[s]! >> q8) & 7
+      const mps = range - lps
+      const isLps = (t & 256) !== 0
+      const rs = isLps ? ls : mps < 256 ? 1 : 0
+      const term = (isLps ? lps << ls : mps < 256 ? mps + mps : mps) - 2
+      const ts = term >= 256 ? 0 : 1
+      range = term << ts
+      low = (low + (isLps ? mps : 0)) << (rs + ts)
+      queue += rs + ts
+    } else if (b > BIN_TERM) {
+      low = (low << 1) + (range & -(b & 1))
+      queue++
+    } else if (b === BIN_TERM) {
+      range -= 2
+      const sh = range >= 256 ? 0 : 1
+      low = low << sh
+      range = range << sh
+      queue += sh
+    } else if (b !== BIN_END) {
+      const x = BYPASS_RUN - b
+      const nb = (x >> 16) + 1
+      low = (low << nb) + range * (x & 0xffff)
+      queue += nb
+    } else {
+      break
+    }
+    if (queue >= 24) {
+      const sft = queue - 14
+      const v = low >> sft
+      low = low & ((1 << sft) - 1)
+      queue -= 32
+      if (v > 0xffffffff) carryInto(out, len)
+      out[len] = (v >> 24) & 255
+      out[len + 1] = (v >> 16) & 255
+      out[len + 2] = (v >> 8) & 255
+      out[len + 3] = v & 255
+      len += 4
+    }
+  }
+  while (queue >= 0) {
+    const v = low >> (queue + 10)
+    low = low & ((0x400 << queue) - 1)
+    queue -= 8
+    if (v > 0xff) carryInto(out, len)
+    out[len] = v & 255
+    len++
+  }
+  st[0] = low
+  st[1] = range
+  st[2] = queue
+  st[3] = len
+}
+
+export class Cabac {
+  ctx: Uint8Array = new Uint8Array(1024)
+  low = 0
+  range = 510
+  queue = -9
+  out: Uint8Array = new Uint8Array(65536)
+  len = 0
+  bins: Int32Array = new Int32Array(BIN_CAP + 1)
+  nb = 0
+  st: Int32Array = new Int32Array(4)
+  tab: Int64Array = new Int64Array(128)
+  lsh: Int64Array = new Int64Array(128)
+  sl: Int32Array = new Int32Array(768)
+  pk: Int32Array = new Int32Array(256)
+  lv: Int32Array = new Int32Array(384)
+
+  constructor() {
+    for (let s = 0; s < 128; s++) {
+      const mps = s & 1
+      let e = (int(CABAC_TRANSITION[s * 2]!) << 32) + (mps << 40)
+      e += (int(CABAC_TRANSITION[s * 2 + 1]!) << 41) + ((1 - mps) << 49)
+      let l = 0
+      for (let q = 0; q < 4; q++) {
+        const lps = int(CABAC_RANGE_LPS[(s >> 1) * 4 + q]!)
+        e += lps << (8 * q)
+        l += (Math.clz64(lps) - 55) << (8 * q)
+      }
+      this.tab[s] = e
+      this.lsh[s] = l
+    }
+    for (let i = 0; i < 384; i++) {
+      this.sl[2 * i] = (int(CABAC_SIG_CTX[i]!) << 8) + DEC_BASE
+      this.sl[2 * i + 1] = (int(CABAC_LAST_CTX[i]!) << 8) + DEC_BASE
+    }
+    for (let m = 0; m < 16; m++) {
+      let k = m * 16 + 8
+      for (let j = 0; j < 4; j++) {
+        const b = (m >> j) & 1
+        this.pk[m * 16 + 2 * j] = DEC_ONE * b
+        this.pk[k] = 2 * j
+        k++
+        if (b === 1) {
+          this.pk[k] = 2 * j + 1
+          k++
+        }
+      }
+    }
+    for (let cat = 0; cat < 6; cat++) {
+      const ab = (ABS_BASE[cat]! << 8) + DEC_BASE
+      const gtInc = cat === CAT_CHROMA_DC ? GT1_INC_DC : GT1_INC
+      for (let node = 0; node < 8; node++) {
+        const sh = node * 4
+        const g = ab + (((gtInc >> sh) & 15) << 8)
+        for (let gt = 0; gt < 2; gt++) {
+          const c1 = ab + (((C1_INC >> sh) & 15) << 8) + DEC_ONE * gt
+          const next = ((NEXT_EQ1 + (NEXT_GT1_DIFF & -gt)) >> sh) & 15
+          const t = cat * 64 + node * 8 + gt * 4
+          this.lv[t] = c1
+          this.lv[t + 1] = g + DEC_ONE
+          this.lv[t + 2] = cat * 64 + next * 8
+          this.lv[t + 3] = (gt === 0 ? c1 : g) + SIGN_FLAG
+        }
+      }
+    }
+  }
+
+  init(sliceQp: int, intraSlice: bool, initIdc: int) {
+    const qp = sliceQp < 0 ? 0 : sliceQp > 51 ? 51 : sliceQp
+    for (let i = 0; i < 1024; i++) {
+      let m = 0
+      let n = 0
+      if (intraSlice) {
+        m = int(CABAC_INIT_I[2 * i]!)
+        n = int(CABAC_INIT_I[2 * i + 1]!)
+      } else {
+        m = int(CABAC_INIT_P[initIdc * 2048 + 2 * i]!)
+        n = int(CABAC_INIT_P[initIdc * 2048 + 2 * i + 1]!)
+      }
+      let pre = ((m * qp) >> 4) + n
+      pre = pre < 1 ? 1 : pre > 126 ? 126 : pre
+      if (pre <= 63) {
+        this.ctx[i] = (63 - pre) * 2
+      } else {
+        this.ctx[i] = (pre - 64) * 2 + 1
+      }
+    }
+    this.low = 0
+    this.range = 510
+    this.queue = -9
+    this.len = 0
+    this.nb = 0
+  }
+
+  reserve(extra: int) {
+    const need = this.len + extra
+    if (need <= this.out.length) return
+    let cap = this.out.length * 2
+    while (cap < need) cap *= 2
+    const grown = new Uint8Array(cap)
+    grown.set(this.out.subarray(0, this.len), 0)
+    this.out = grown
+  }
+
+  putByte() {
+    const v = this.low >> (this.queue + 10)
+    this.low = this.low & ((0x400 << this.queue) - 1)
+    this.queue -= 8
+    this.reserve(1)
+    if (v > 0xff) carryInto(this.out, this.len)
+    this.out[this.len] = v & 255
+    this.len++
+  }
+
+  run() {
+    const n = this.nb
+    if (n === 0) return
+    this.reserve(n + 8)
+    this.st[0] = this.low
+    this.st[1] = this.range
+    this.st[2] = this.queue
+    this.st[3] = this.len
+    this.bins[n] = BIN_END
+    encodeBins(this.st, this.bins, this.ctx, this.tab, this.lsh, this.out)
+    this.low = this.st[0]!
+    this.range = this.st[1]!
+    this.queue = this.st[2]!
+    this.len = this.st[3]!
+    this.nb = 0
+  }
+
+  // Once per macroblock suffices: its header adds at most ~2,600 bins and residual() reserves per block (at most ~3,100).
+  room() {
+    if (this.nb > BIN_FLUSH) this.run()
+  }
+
+  add(b: int) {
+    this.bins[this.nb] = b
+    this.nb++
+  }
+
+  decision(ctxIdx: int, bin: int) {
+    this.add((ctxIdx << 8) + DEC_BASE + DEC_ONE * bin)
+  }
+
+  bypass(bin: int) {
+    this.add(bin - 2)
+  }
+
+  bypassBits(v: int, n: int) {
+    let m = n
+    while (m > 16) {
+      m -= 16
+      this.add(BYPASS_RUN - (((v >> m) & 0xffff) | (15 << 16)))
+    }
+    if (m > 0) this.add(BYPASS_RUN - ((v & ((1 << m) - 1)) | ((m - 1) << 16)))
+  }
+
+  terminate(bin: int) {
+    if (bin === 0) {
+      this.add(BIN_TERM)
+      return
+    }
+    this.run()
+    this.range -= 2
+    this.low += this.range
+    this.flush()
+  }
+
+  flush() {
+    this.low = this.low << 7
+    this.queue += 7
+    if (this.queue >= 0) this.putByte()
+    this.low = (this.low | 0x80) << 3
+    this.queue += 3
+    while (this.queue >= 0) this.putByte()
+    this.low = (this.low >> 10) << 10
+    if (this.queue > -8) {
+      this.low = this.low << (-this.queue)
+      this.queue = 0
+      this.putByte()
+    } else if (((this.low >> 10) & 1) !== 0) {
+      carryInto(this.out, this.len)
+    }
+    this.range = 2
+  }
+
+  residual(cat: int, c: Int16Array, o: int, n: int) {
+    if (this.nb > BIN_FLUSH) this.run()
+    this.nb = residualBins(this.bins, this.nb, cat, c, o, n, this.sl, this.pk, this.lv)
+  }
+
+  cbf(cat: int, inc: int, coded: bool) {
+    this.decision(CBF_BASE[cat]! + inc, coded ? 1 : 0)
+  }
+
+  skipRun(types: Int32Array, top: int, n: int, left: int, skip: int, ctxIdx: int) {
+    if (this.nb > BIN_FLUSH) this.run()
+    const bins = this.bins
+    const one = (ctxIdx << 8) + DEC_BASE + DEC_ONE + SKIP_TERM
+    const k = this.nb
+    bins[k] = one + (left << 8) + (top >= 0 && types[top]! !== skip ? 256 : 0)
+    for (let i = 1; i < n; i++) bins[k + i] = one + (top >= 0 && types[top + i]! !== skip ? 256 : 0)
+    this.nb = k + n
+  }
+
+  bytes(): u8[] {
+    let r: u8[] = []
+    for (let i = 0; i < this.len; i++) r.push(u8(this.out[i]!))
+    return r
+  }
+}
+
+class Lcg {
+  x: int
+  constructor(seed: int) {
+    this.x = seed
+  }
+  next(n: int): int {
+    this.x = (this.x * 1103515245 + 12345) & 0x7fffffff
+    return (this.x >> 8) % n
+  }
+}
+
+function sameBytes(a: u8[], b: u8[]): bool {
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) {
+    if (a[i]! !== b[i]!) return false
+  }
+  return true
+}
+
+function compareRandom(seed: int, ops: int, bias: int, terminates: bool): bool {
+  const bw = new BitWriter()
+  const ref = new CabacRef(bw)
+  const fast = new Cabac()
+  ref.init(26, seed % 2 === 0, 0)
+  fast.init(26, seed % 2 === 0, 0)
+  const rng = new Lcg(seed)
+  for (let i = 0; i < ops; i++) {
+    fast.room()
+    const kind = rng.next(terminates ? 10 : 9)
+    if (kind < 7) {
+      const ctx = rng.next(460)
+      const bin = rng.next(100) < bias ? 1 : 0
+      ref.decision(ctx, bin)
+      fast.decision(ctx, bin)
+    } else if (kind < 9) {
+      const bin = rng.next(2)
+      ref.bypass(bin)
+      fast.bypass(bin)
+    } else {
+      ref.terminate(0)
+      fast.terminate(0)
+    }
+  }
+  ref.terminate(1)
+  bw.alignZero()
+  fast.terminate(1)
+  return sameBytes(bw.buf, fast.bytes())
+}
+
+function coeffBlock(rng: Lcg, n: int, density: int, big: bool): int[] {
+  let c: int[] = []
+  for (let i = 0; i < n; i++) {
+    if (rng.next(100) < density) {
+      let a = 1 + rng.next(big ? 300 : 4)
+      if (rng.next(2) === 0) a = -a
+      c.push(a)
+    } else {
+      c.push(0)
+    }
+  }
+  return c
+}
+
+test("context initialisation follows 9.3.1.1", () => {
+  const c = new Cabac()
+  c.init(26, true, 0)
+  const m = int(CABAC_INIT_I[2 * 60]!)
+  const n = int(CABAC_INIT_I[2 * 60 + 1]!)
+  let pre = ((m * 26) >> 4) + n
+  pre = pre < 1 ? 1 : pre > 126 ? 126 : pre
+  const expected = pre <= 63 ? (63 - pre) * 2 : (pre - 64) * 2 + 1
+  expect(c.ctx[60]!).toBe(expected)
+})
+
+test("a terminated empty stream flushes to whole bytes matching the spec engine", () => {
+  const bw = new BitWriter()
+  const ref = new CabacRef(bw)
+  ref.init(26, true, 0)
+  ref.terminate(1)
+  bw.alignZero()
+  const c = new Cabac()
+  c.init(26, true, 0)
+  c.terminate(1)
+  expect(c.len > 0).toBe(true)
+  expect(sameBytes(bw.buf, c.bytes())).toBe(true)
+})
+
+test("byte-oriented engine is bit-exact with the spec engine on random symbol streams", () => {
+  let ok = 0
+  const total = 400
+  for (let seed = 1; seed <= total; seed++) {
+    const ops = seed < 100 ? seed : seed * 37
+    const bias = seed % 5 === 0 ? 50 : seed % 5 === 1 ? 3 : seed % 5 === 2 ? 97 : seed % 5 === 3 ? 20 : 80
+    if (compareRandom(seed, ops, bias, true)) ok++
+  }
+  expect(ok).toBe(total)
+})
+
+test("streams longer than the pending-bin buffer stay bit-exact without terminations", () => {
+  let ok = 0
+  for (let seed = 1; seed <= 6; seed++) {
+    if (compareRandom(seed, 50000 + seed * 3001, seed % 2 === 0 ? 10 : 60, false)) ok++
+  }
+  expect(ok).toBe(6)
+})
+
+test("multi-bit bypass runs are bit-exact with single bypass bins of the spec engine", () => {
+  let ok = 0
+  for (let seed = 1; seed <= 200; seed++) {
+    const bw = new BitWriter()
+    const ref = new CabacRef(bw)
+    const fast = new Cabac()
+    ref.init(26, seed % 2 === 0, 0)
+    fast.init(26, seed % 2 === 0, 0)
+    const rng = new Lcg(seed * 104729)
+    for (let i = 0; i < 400; i++) {
+      fast.room()
+      if (rng.next(2) === 0) {
+        const ctx = rng.next(460)
+        const bin = rng.next(100) < 30 ? 1 : 0
+        ref.decision(ctx, bin)
+        fast.decision(ctx, bin)
+      } else {
+        const n = 1 + rng.next(32)
+        const v = (rng.next(65536) << 16) | rng.next(65536)
+        for (let k = n - 1; k >= 0; k--) ref.bypass((v >> k) & 1)
+        fast.bypassBits(v, n)
+      }
+    }
+    ref.terminate(1)
+    bw.alignZero()
+    fast.terminate(1)
+    if (sameBytes(bw.buf, fast.bytes())) ok++
+  }
+  expect(ok).toBe(200)
+})
+
+test("skip runs are bit-exact with per-macroblock skip flags and terminations of the spec engine", () => {
+  let ok = 0
+  for (let seed = 1; seed <= 200; seed++) {
+    const bw = new BitWriter()
+    const ref = new CabacRef(bw)
+    const fast = new Cabac()
+    ref.init(26, false, 0)
+    fast.init(26, false, 0)
+    const rng = new Lcg(seed * 7561)
+    const types = new Int32Array(64)
+    for (let i = 0; i < 64; i++) types[i] = rng.next(3) === 0 ? 4 : 5
+    for (let i = 0; i < 300; i++) {
+      fast.room()
+      if (rng.next(3) === 0) {
+        const ctx = rng.next(460)
+        const bin = rng.next(2)
+        ref.decision(ctx, bin)
+        fast.decision(ctx, bin)
+      } else {
+        const n = 1 + rng.next(32)
+        const top = rng.next(4) === 0 ? -1 : rng.next(64 - n)
+        const left = rng.next(2)
+        const ctxIdx = rng.next(2) === 0 ? 11 : 24
+        for (let k = 0; k < n; k++) {
+          const b = top >= 0 && types[top + k]! !== 5 ? 1 : 0
+          ref.decision(ctxIdx + (k === 0 ? left : 0) + b, 1)
+          ref.terminate(0)
+        }
+        fast.skipRun(types, top, n, left, 5, ctxIdx)
+      }
+    }
+    ref.terminate(1)
+    bw.alignZero()
+    fast.terminate(1)
+    if (sameBytes(bw.buf, fast.bytes())) ok++
+  }
+  expect(ok).toBe(200)
+})
+
+test("residual coding is bit-exact with the spec engine for every block category", () => {
+  let ok = 0
+  let total = 0
+  for (let seed = 1; seed <= 120; seed++) {
+    const rng = new Lcg(seed * 7919)
+    const bw = new BitWriter()
+    const ref = new CabacRef(bw)
+    const fast = new Cabac()
+    ref.init(20 + seed % 20, seed % 3 === 0, 0)
+    fast.init(20 + seed % 20, seed % 3 === 0, 0)
+    for (let b = 0; b < 40; b++) {
+      const cat = rng.next(6)
+      const n = cat === CAT_LUMA_8x8 ? 64 : cat === CAT_CHROMA_DC ? 4 : cat === CAT_LUMA_AC || cat === CAT_CHROMA_AC ? 15 : 16
+      const c0 = coeffBlock(rng, n, 5 + rng.next(80), rng.next(4) === 0)
+      let any = false
+      for (const v of c0) if (v !== 0) any = true
+      if (!any) c0[0] = 1
+      const c = new Int16Array(n + 16)
+      for (let i = 0; i < n + 16; i++) c[i] = i < n ? c0[i]! : i - n + 1
+      ref.residual(cat, c, 0, n)
+      fast.residual(cat, c, 0, n)
+      const inc = rng.next(4)
+      const coded = rng.next(2) === 0
+      ref.cbf(cat, inc, coded)
+      fast.cbf(cat, inc, coded)
+    }
+    ref.terminate(1)
+    bw.alignZero()
+    fast.terminate(1)
+    total++
+    if (sameBytes(bw.buf, fast.bytes())) ok++
+  }
+  expect(ok).toBe(total)
+})
