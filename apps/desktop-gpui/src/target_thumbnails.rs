@@ -948,16 +948,10 @@ use platform::{capture_display_thumbnail, capture_window_thumbnail, shareable_co
 // `PixelBufferLock` so the arithmetic can be unit tested against hand-built
 // buffers on any host.
 
-/// The four 32-bit orders `capture_thumbnail_from_filter` accepts
-/// (`thumbnails/mac.rs:73-78`).
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 #[cfg(any(target_os = "macos", test))]
-pub enum ChannelOrder {
-    Bgra,
-    Rgba,
-    Argb,
-    Abgr,
-}
+pub use cap_gpui_kernels::frame::{ChannelOrder, Nv12Range};
+#[cfg(any(target_os = "macos", test))]
+use cap_gpui_kernels::frame::{convert_32bit_rows, convert_nv12_planes, ycbcr_to_rgb};
 
 /// `convert_32bit_pixel_buffer` (`thumbnails/mac.rs:111-160`).
 ///
@@ -980,56 +974,6 @@ unsafe fn convert_32bit_pixel_buffer(
     let total_len = bytes_per_row.checked_mul(height)?;
     let raw_data = unsafe { std::slice::from_raw_parts(base_ptr, total_len) };
     convert_32bit_rows(raw_data, bytes_per_row, width, height, order)
-}
-
-/// The row loop of `convert_32bit_pixel_buffer`, over a slice.
-#[cfg(any(target_os = "macos", test))]
-fn convert_32bit_rows(
-    raw_data: &[u8],
-    bytes_per_row: usize,
-    width: usize,
-    height: usize,
-    order: ChannelOrder,
-) -> Option<Vec<u8>> {
-    let mut rgba_data = Vec::with_capacity(width * height * 4);
-    for y in 0..height {
-        let row_start = y * bytes_per_row;
-        let row_end = row_start + width * 4;
-        if row_end > raw_data.len() {
-            tracing::warn!(
-                row_start = row_start,
-                row_end = row_end,
-                raw_len = raw_data.len(),
-                "Row bounds exceeded raw data length during thumbnail capture",
-            );
-            return None;
-        }
-
-        let row = &raw_data[row_start..row_end];
-        for chunk in row.chunks_exact(4) {
-            match order {
-                ChannelOrder::Bgra => {
-                    rgba_data.extend_from_slice(&[chunk[2], chunk[1], chunk[0], chunk[3]])
-                }
-                ChannelOrder::Rgba => rgba_data.extend_from_slice(chunk),
-                ChannelOrder::Argb => {
-                    rgba_data.extend_from_slice(&[chunk[1], chunk[2], chunk[3], chunk[0]])
-                }
-                ChannelOrder::Abgr => {
-                    rgba_data.extend_from_slice(&[chunk[3], chunk[2], chunk[1], chunk[0]])
-                }
-            }
-        }
-    }
-
-    Some(rgba_data)
-}
-
-#[derive(Copy, Clone)]
-#[cfg(any(target_os = "macos", test))]
-pub enum Nv12Range {
-    Video,
-    _Full,
 }
 
 /// The plane geometry `convert_nv12_pixel_buffer` reads out of the lock.
@@ -1094,94 +1038,6 @@ unsafe fn convert_nv12_pixel_buffer(
         height,
         range,
     )
-}
-
-/// The pixel loop of `convert_nv12_pixel_buffer`, over slices.
-#[cfg(any(target_os = "macos", test))]
-fn convert_nv12_planes(
-    y_plane: &[u8],
-    y_stride: usize,
-    uv_plane: &[u8],
-    uv_stride: usize,
-    width: usize,
-    height: usize,
-    range: Nv12Range,
-) -> Option<Vec<u8>> {
-    let mut rgba_data = vec![0u8; width * height * 4];
-
-    for y_idx in 0..height {
-        let y_row_start = y_idx * y_stride;
-        if y_row_start + width > y_plane.len() {
-            tracing::warn!(
-                y_row_start,
-                width,
-                y_plane_len = y_plane.len(),
-                "Y row exceeded plane length during conversion",
-            );
-            return None;
-        }
-        let y_row = &y_plane[y_row_start..y_row_start + width];
-
-        let uv_row_start = (y_idx / 2) * uv_stride;
-        if uv_row_start + width > uv_plane.len() {
-            tracing::warn!(
-                uv_row_start,
-                width,
-                uv_plane_len = uv_plane.len(),
-                "UV row exceeded plane length during conversion",
-            );
-            return None;
-        }
-        let uv_row = &uv_plane[uv_row_start..uv_row_start + width];
-
-        for (x, y_val) in y_row.iter().enumerate().take(width) {
-            let uv_index = (x / 2) * 2;
-            if uv_index + 1 >= uv_row.len() {
-                tracing::warn!(
-                    uv_index,
-                    uv_row_len = uv_row.len(),
-                    "UV index out of bounds during conversion",
-                );
-                return None;
-            }
-
-            let cb = uv_row[uv_index];
-            let cr = uv_row[uv_index + 1];
-            let (r, g, b) = ycbcr_to_rgb(*y_val, cb, cr, range);
-            let out = (y_idx * width + x) * 4;
-            rgba_data[out] = r;
-            rgba_data[out + 1] = g;
-            rgba_data[out + 2] = b;
-            rgba_data[out + 3] = 255;
-        }
-    }
-
-    Some(rgba_data)
-}
-
-/// `ycbcr_to_rgb` (`thumbnails/mac.rs:256-275`): BT.601 coefficients, with the
-/// video-range 16..235 luma expansion.
-#[cfg(any(target_os = "macos", test))]
-fn ycbcr_to_rgb(y: u8, cb: u8, cr: u8, range: Nv12Range) -> (u8, u8, u8) {
-    let y = y as f32;
-    let cb = cb as f32 - 128.0;
-    let cr = cr as f32 - 128.0;
-
-    let (y_value, scale) = match range {
-        Nv12Range::Video => ((y - 16.0).max(0.0), 1.164383_f32),
-        Nv12Range::_Full => (y, 1.0_f32),
-    };
-
-    let r = scale * y_value + 1.596027_f32 * cr;
-    let g = scale * y_value - 0.391762_f32 * cb - 0.812968_f32 * cr;
-    let b = scale * y_value + 2.017232_f32 * cb;
-
-    (clamp_channel(r), clamp_channel(g), clamp_channel(b))
-}
-
-#[cfg(any(target_os = "macos", test))]
-fn clamp_channel(value: f32) -> u8 {
-    value.clamp(0.0, 255.0) as u8
 }
 
 #[cfg(test)]

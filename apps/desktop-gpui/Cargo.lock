@@ -1756,6 +1756,7 @@ dependencies = [
  "cap-project",
  "image 0.25.10",
  "md-5",
+ "tracing",
 ]
 
 [[package]]

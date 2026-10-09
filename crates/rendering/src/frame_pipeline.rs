@@ -810,6 +810,7 @@ impl RgbaToNv12Converter {
 
         self.pending = Some(PendingNv12Output::Readback(PendingNv12Readback {
             rx: None,
+            mapped: false,
             buffer: readback_buffer,
             width,
             height,
@@ -835,6 +836,7 @@ impl RgbaToNv12Converter {
                         let _ = tx.send(result);
                     });
                 pending.rx = Some(rx);
+                pending.mapped = true;
             }
             #[cfg(target_os = "macos")]
             Some(PendingNv12Output::Surface(pending)) => {
@@ -1012,6 +1014,7 @@ impl PendingNv12Surface {
 
 pub struct PendingNv12Readback {
     rx: Option<oneshot::Receiver<Result<(), wgpu::BufferAsyncError>>>,
+    mapped: bool,
     buffer: Arc<wgpu::Buffer>,
     pub width: u32,
     pub height: u32,
@@ -1021,8 +1024,15 @@ pub struct PendingNv12Readback {
 }
 
 impl PendingNv12Readback {
-    fn cancel(self) -> RenderingError {
-        self.buffer.unmap();
+    fn unmap(&mut self) {
+        if self.mapped {
+            self.mapped = false;
+            self.buffer.unmap();
+        }
+    }
+
+    fn cancel(mut self) -> RenderingError {
+        self.unmap();
         RenderingError::BufferMapWaitingFailed
     }
 
@@ -1048,7 +1058,7 @@ impl PendingNv12Readback {
                 Ok(result) => match result {
                     Ok(()) => break,
                     Err(error) => {
-                        self.buffer.unmap();
+                        self.unmap();
                         return Err(RenderingError::BufferMapFailed(error));
                     }
                 },
@@ -1082,7 +1092,7 @@ impl PendingNv12Readback {
         };
 
         drop(data);
-        self.buffer.unmap();
+        self.unmap();
 
         let target_time_ns =
             (self.frame_number as u64 * 1_000_000_000) / self.frame_rate.max(1) as u64;
@@ -1100,6 +1110,12 @@ impl PendingNv12Readback {
             #[cfg(target_os = "linux")]
             gpu: None,
         })
+    }
+}
+
+impl Drop for PendingNv12Readback {
+    fn drop(&mut self) {
+        self.unmap();
     }
 }
 
@@ -1543,6 +1559,7 @@ impl PendingSurface {
 pub struct PendingReadback {
     readiness_phase: Option<crate::readiness::Phase>,
     rx: oneshot::Receiver<Result<(), wgpu::BufferAsyncError>>,
+    mapped: bool,
     buffer: Arc<wgpu::Buffer>,
     padded_bytes_per_row: u32,
     width: u32,
@@ -1562,8 +1579,15 @@ fn active_readback_byte_len(
 }
 
 impl PendingReadback {
-    fn cancel(&self) -> RenderingError {
-        self.buffer.unmap();
+    fn unmap(&mut self) {
+        if self.mapped {
+            self.mapped = false;
+            self.buffer.unmap();
+        }
+    }
+
+    fn cancel(&mut self) -> RenderingError {
+        self.unmap();
         RenderingError::BufferMapWaitingFailed
     }
 
@@ -1588,7 +1612,7 @@ impl PendingReadback {
                 Ok(result) => match result {
                     Ok(()) => break,
                     Err(error) => {
-                        self.buffer.unmap();
+                        self.unmap();
                         return Err(RenderingError::BufferMapFailed(error));
                     }
                 },
@@ -1631,7 +1655,7 @@ impl PendingReadback {
                     )
                 })
         else {
-            self.buffer.unmap();
+            self.unmap();
             return Err(RenderingError::BufferMapWaitingFailed);
         };
         let buffer_slice = self.buffer.slice(..active_bytes as u64);
@@ -1640,7 +1664,7 @@ impl PendingReadback {
         data_vec.extend_from_slice(&data);
 
         drop(data);
-        self.buffer.unmap();
+        self.unmap();
 
         let target_time_ns =
             (self.frame_number as u64 * 1_000_000_000) / self.frame_rate.max(1) as u64;
@@ -1656,6 +1680,12 @@ impl PendingReadback {
             frame_number: self.frame_number,
             target_time_ns,
         })
+    }
+}
+
+impl Drop for PendingReadback {
+    fn drop(&mut self) {
+        self.unmap();
     }
 }
 
@@ -1810,6 +1840,7 @@ impl PipelinedGpuReadback {
 
         self.pending = Some(PendingReadback {
             readiness_phase: phase,
+            mapped: true,
             rx,
             buffer,
             padded_bytes_per_row,
@@ -2015,6 +2046,22 @@ pub fn padded_bytes_per_row(output_size: (u32, u32)) -> u32 {
     (padded_bytes_per_row + 3) & !3
 }
 
+async fn drain_submitted_work(device: &wgpu::Device, queue: &wgpu::Queue) {
+    let finished = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&finished);
+    queue.on_submitted_work_done(move || {
+        flag.store(true, Ordering::Release);
+    });
+    let start = Instant::now();
+    let timeout = gpu_buffer_wait_timeout();
+    while !finished.load(Ordering::Acquire) && start.elapsed() <= timeout {
+        if device.poll(wgpu::PollType::Poll).is_err() {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    }
+}
+
 pub async fn finish_encoder(
     session: &mut RenderSession,
     device: &wgpu::Device,
@@ -2041,13 +2088,7 @@ pub async fn finish_encoder_timed(
         .pipelined_readback
         .get_or_insert_with(|| PipelinedGpuReadback::new(device, initial_buffer_size));
 
-    let wait_start = Instant::now();
-    let previous_frame = if let Some(prev) = readback.take_pending() {
-        Some(prev.wait(device).await?)
-    } else {
-        None
-    };
-    timings.wait_previous_duration = wait_start.elapsed();
+    let previous = readback.take_pending();
 
     let resize_start = Instant::now();
     readback.perform_resize_if_needed(device);
@@ -2062,6 +2103,20 @@ pub async fn finish_encoder_timed(
     let submit_start = Instant::now();
     readback.submit_readback(device, queue, texture, uniforms, encoder)?;
     timings.submit_readback_duration = submit_start.elapsed();
+
+    let wait_start = Instant::now();
+    let previous_frame = if let Some(prev) = previous {
+        match prev.wait(device).await {
+            Ok(frame) => Some(frame),
+            Err(error) => {
+                drain_submitted_work(device, queue).await;
+                return Err(error);
+            }
+        }
+    } else {
+        None
+    };
+    timings.wait_previous_duration = wait_start.elapsed();
 
     Ok((previous_frame, timings))
 }
@@ -2078,11 +2133,7 @@ pub async fn finish_encoder_nv12_pooled(
     let width = uniforms.output_size.0;
     let height = uniforms.output_size.1;
 
-    let previous_frame = if let Some(prev) = nv12_converter.take_pending() {
-        Some(prev.wait_with_pool(device, buffer_pool).await?)
-    } else {
-        None
-    };
+    let previous = nv12_converter.take_pending();
 
     let texture = if session.current_is_left {
         &session.textures.0
@@ -2103,17 +2154,9 @@ pub async fn finish_encoder_nv12_pooled(
         )
         .await?;
 
-    if submitted {
-        queue.submit(std::iter::once(encoder.finish()));
-        nv12_converter.after_submit(queue);
-
-        Ok(previous_frame)
-    } else if let Some(prev_frame) = previous_frame {
-        queue.submit(std::iter::once(encoder.finish()));
-        Ok(Some(prev_frame))
-    } else {
+    if !submitted && previous.is_none() {
         let rgba_frame = finish_encoder(session, device, queue, uniforms, encoder).await?;
-        Ok(rgba_frame.map(|f| Nv12RenderedFrame {
+        return Ok(rgba_frame.map(|f| Nv12RenderedFrame {
             data: SharedNv12Buffer::from_arc_vec(f.data),
             width: f.width,
             height: f.height,
@@ -2125,7 +2168,24 @@ pub async fn finish_encoder_nv12_pooled(
             surface: None,
             #[cfg(target_os = "linux")]
             gpu: None,
-        }))
+        }));
+    }
+
+    queue.submit(std::iter::once(encoder.finish()));
+    if submitted {
+        nv12_converter.after_submit(queue);
+    }
+
+    if let Some(prev) = previous {
+        match prev.wait_with_pool(device, buffer_pool).await {
+            Ok(frame) => Ok(Some(frame)),
+            Err(error) => {
+                drain_submitted_work(device, queue).await;
+                Err(error)
+            }
+        }
+    } else {
+        Ok(None)
     }
 }
 

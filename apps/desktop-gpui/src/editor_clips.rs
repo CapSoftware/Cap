@@ -2273,10 +2273,14 @@ fn decode_thumbnail_frame_with_budget(
             "Unexpected BGRA stride: src_stride={src_stride}, expected >= {dst_stride}"
         ));
     }
-    let mut buffer = vec![0u8; height * dst_stride];
-    for (y, row) in buffer.chunks_exact_mut(dst_stride).enumerate() {
-        row.copy_from_slice(&bgra_frame.data(0)[y * src_stride..y * src_stride + dst_stride]);
-    }
+    let buffer = cap_gpui_kernels::frame::copy_rows(
+        bgra_frame.data(0),
+        dst_stride,
+        src_stride,
+        height,
+        false,
+    )
+    .ok_or_else(|| "Failed to build thumbnail image".to_string())?;
 
     let image = image::RgbaImage::from_raw(width as u32, height as u32, buffer)
         .ok_or("Failed to build thumbnail image")?;

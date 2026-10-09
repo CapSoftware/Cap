@@ -1173,11 +1173,14 @@ pub fn create_screenshot(
         let height = rgb_frame.height() as usize;
         let src_stride = rgb_frame.stride(0);
         let dst_stride = width * 3;
-        let mut buffer = vec![0u8; height * dst_stride];
-        for y in 0..height {
-            let src = &rgb_frame.data(0)[y * src_stride..y * src_stride + dst_stride];
-            buffer[y * dst_stride..(y + 1) * dst_stride].copy_from_slice(src);
-        }
+        let buffer = cap_gpui_kernels::frame::copy_rows(
+            rgb_frame.data(0),
+            dst_stride,
+            src_stride,
+            height,
+            false,
+        )
+        .ok_or("Failed to create image from frame data")?;
 
         let image = image::RgbImage::from_raw(width as u32, height as u32, buffer)
             .ok_or("Failed to create image from frame data")?;

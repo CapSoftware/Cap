@@ -1850,11 +1850,14 @@ fn decode_image_with_ffmpeg(source_path: &Path) -> Result<(u32, u32, Vec<u8>), S
     let height_usize = height as usize;
     let src_stride = rgba_frame.stride(0);
     let row_bytes = width_usize * 4;
-    let mut buffer = vec![0u8; height_usize * row_bytes];
-    for y in 0..height_usize {
-        let src = &rgba_frame.data(0)[y * src_stride..y * src_stride + row_bytes];
-        buffer[y * row_bytes..(y + 1) * row_bytes].copy_from_slice(src);
-    }
+    let buffer = cap_gpui_kernels::frame::copy_rows(
+        rgba_frame.data(0),
+        row_bytes,
+        src_stride,
+        height_usize,
+        false,
+    )
+    .ok_or_else(|| "Failed to decode image".to_string())?;
 
     Ok((width, height, buffer))
 }

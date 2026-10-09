@@ -10,3 +10,4 @@ cap-audio = { path = "../../../crates/audio" }
 cap-project = { path = "../../../crates/project" }
 image = { version = "0.25.1", default-features = false, features = ["jpeg", "png", "webp"] }
 md-5 = "0.10"
+tracing = "0.1"
