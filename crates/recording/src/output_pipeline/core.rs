@@ -3132,7 +3132,6 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                         let timestamp = frame.timestamp();
                         if let Some(gate) = &start_gate {
                             if !gate.admits_video(timestamp) {
-                                held_before_start += 1;
                                 continue;
                             }
                             wall_clock_origin = gate
