@@ -154,7 +154,7 @@ function InkUnderline({
 		<span className="relative inline-block whitespace-nowrap text-gray-12">
 			{children}
 			<svg
-				className="dl-ink pointer-events-none absolute -bottom-2 left-0 h-3 w-full overflow-visible text-blue-9"
+				className="dl-ink pointer-events-none absolute -bottom-1 left-0 h-2.5 w-full overflow-visible text-blue-9"
 				viewBox="0 0 200 10"
 				preserveAspectRatio="none"
 				aria-hidden="true"
