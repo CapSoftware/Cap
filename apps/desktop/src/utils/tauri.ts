@@ -33,9 +33,8 @@ async gpuiAppAvailable() : Promise<boolean> {
     return await TAURI_INVOKE("gpui_app_available");
 },
 /**
- * Close this app and open the native one. The setting has already been written
- * by the caller, so a failure here has to be reported rather than swallowed:
- * the page reverts it.
+ * Close this app and open Cap. A failure has to be reported rather than
+ * swallowed: the Experimental page shows it on its overlay.
  */
 async switchToGpuiApp() : Promise<null> {
     return await TAURI_INVOKE("switch_to_gpui_app");
@@ -1104,9 +1103,8 @@ previousRecordingsPaths?: string[];
  */
 cameraBlurDisabledByCrash?: string | null; updateChannel?: UpdateChannel;
 /**
- * Run the experimental gpui-native app (`cap-gpui`) *instead of* this one:
- * while enabled, startup hands off to it and exits, and the native app's
- * own Experimental page hands back. See `gpui_app.rs`.
+ * Whether Cap, rather than this app, owns the session. Both apps' switch
+ * flows write it and the GPUI dev loop (`apps/desktop-gpui/dev.sh`) reads it.
  */
 enableGpuiApp?: boolean }
 export type GifExportSettings = { fps: number; resolution_base: XY<number>; quality: GifQuality | null }
