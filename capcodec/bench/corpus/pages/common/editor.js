@@ -154,7 +154,7 @@
 					continue;
 				}
 			}
-			const sm = (lang === "py" ? /^[rRbBuUfF]{0,2}("|")/ : /^("|")/).exec(
+			const sm = (lang === "py" ? /^[rRbBuUfF]{0,2}("|')/ : /^("|')/).exec(
 				rest,
 			);
 			if (sm) {
