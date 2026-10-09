@@ -20,6 +20,8 @@ export const metadata: Metadata = buildMarketingMetadata({
 
 export const revalidate = 60;
 
+const LAST_TAURI_VERSION = "0.6.0";
+
 function DownloadLinks({
 	downloads,
 	isLatest,
@@ -203,8 +205,11 @@ function ReleaseRow({
 	isLatest: boolean;
 }) {
 	return (
-		<div className="flex flex-col gap-3 p-4 rounded-lg border border-gray-5 bg-gray-1 md:flex-row md:items-center md:justify-between">
-			<div className="flex flex-col gap-1">
+		<div
+			id={`v${release.version}`}
+			className="flex flex-col gap-3 p-4 rounded-lg border scroll-mt-28 border-gray-5 bg-gray-1 md:flex-row md:items-center md:justify-between"
+		>
+			<div className="flex flex-col gap-1 md:shrink-0">
 				<div className="flex items-center gap-2">
 					<span className="text-lg font-semibold text-gray-12">
 						v{release.version}
@@ -212,6 +217,11 @@ function ReleaseRow({
 					{isLatest && (
 						<span className="px-2 py-0.5 text-xs font-medium rounded-full bg-blue-600 text-white">
 							Latest
+						</span>
+					)}
+					{release.version === LAST_TAURI_VERSION && (
+						<span className="px-2 py-0.5 text-xs font-medium whitespace-nowrap rounded-full border border-gray-5 bg-gray-2 text-gray-11">
+							Last Tauri version
 						</span>
 					)}
 				</div>
@@ -267,6 +277,18 @@ export default async function VersionsPage() {
 					</h1>
 					<p className="text-gray-10">
 						Download previous versions of Cap for macOS, Windows, and Linux.
+					</p>
+				</div>
+
+				<div className="p-4 rounded-lg border border-gray-5 bg-gray-2">
+					<h2 className="text-sm font-medium text-gray-12">
+						Cap is now a fully native app
+					</h2>
+					<p className="mt-1 text-sm leading-6 text-gray-11">
+						From 0.6.1, Cap is built natively for macOS, Windows, and Linux.
+						Version {LAST_TAURI_VERSION} is the last release of the original
+						app, which was built with Tauri. It stays available below, along
+						with every earlier version.
 					</p>
 				</div>
 

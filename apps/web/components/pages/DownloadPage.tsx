@@ -1,16 +1,9 @@
 "use client";
 
 import { Button } from "@cap/ui";
-import clsx from "clsx";
 import { useDetectPlatform } from "hooks/useDetectPlatform";
 import Link from "next/link";
-import {
-	type CSSProperties,
-	type ReactNode,
-	useEffect,
-	useId,
-	useState,
-} from "react";
+import { type CSSProperties, type ReactNode, useId, useState } from "react";
 import { trackEvent } from "@/app/utils/analytics";
 import { ChromeExtensionButton } from "@/components/ChromeExtensionButton";
 import {
@@ -18,8 +11,6 @@ import {
 	CHROME_EXTENSION_BUTTON_CLASS,
 } from "@/lib/chrome-extension";
 import {
-	getClassicDownloadUrl,
-	getClassicVersionText,
 	getDownloadButtonText,
 	getDownloadUrl,
 	getPlatformIcon,
@@ -27,28 +18,7 @@ import {
 	PlatformIcons,
 } from "@/utils/platform";
 
-type Edition = "native" | "classic";
-
-const CLASSIC_QUERY = "classic";
-
-const classicDownloads = [
-	{
-		href: "/download/classic-apple-silicon",
-		label: "Apple Silicon",
-		target: "apple_silicon",
-	},
-	{
-		href: "/download/classic-apple-intel",
-		label: "Apple Intel",
-		target: "apple_intel",
-	},
-	{ href: "/download/classic-windows", label: "Windows", target: "windows" },
-	{
-		href: "/download/classic-linux-appimage",
-		label: "Linux AppImage",
-		target: "linux_appimage",
-	},
-];
+const LAST_TAURI_VERSION = "0.6.0";
 
 const BADGE_LOOP =
 	"M 22 33 C 19 15, 84 7, 150 7.5 C 222 8, 289 14, 287 31 C 285 49, 214 55, 146 54 C 78 53, 12 47, 14 29 C 15.5 18, 44 10.5, 76 9";
@@ -132,17 +102,6 @@ function NativeAnnouncement({ boil }: { boil: string }) {
 	);
 }
 
-function ClassicAnnouncement() {
-	return (
-		<div className="inline-flex items-center gap-3 text-[13px]">
-			<span className="rounded-full border border-gray-5 bg-gray-1 px-2.5 py-0.5 font-medium text-gray-11">
-				Classic
-			</span>
-			<span className="text-gray-11">The original Cap app</span>
-		</div>
-	);
-}
-
 function InkUnderline({
 	children,
 	boil,
@@ -166,68 +125,16 @@ function InkUnderline({
 	);
 }
 
-function EditionToggle({
-	classic,
-	onChange,
-}: {
-	classic: boolean;
-	onChange: (classic: boolean) => void;
-}) {
-	const label = useId();
-	return (
-		<label
-			htmlFor={label}
-			className="group inline-flex cursor-pointer select-none items-center gap-3 rounded-full py-1.5 pr-3 pl-1.5 text-left transition-colors hover:bg-gray-3"
-		>
-			<button
-				id={label}
-				type="button"
-				role="switch"
-				aria-checked={classic}
-				onClick={() => onChange(!classic)}
-				className={clsx(
-					"relative h-5 w-9 shrink-0 rounded-full transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-8 focus-visible:ring-offset-2",
-					classic ? "bg-blue-9" : "bg-gray-6",
-				)}
-			>
-				<span
-					className={clsx(
-						"absolute top-0.5 left-0.5 size-4 rounded-full bg-white shadow-sm transition-transform duration-200 ease-out",
-						classic && "translate-x-4",
-					)}
-				/>
-			</button>
-			<span className="flex flex-col">
-				<span className="text-sm text-gray-12">
-					Download the original version
-				</span>
-				<span className="text-xs text-gray-10">
-					Cap Classic, the original Tauri app
-				</span>
-			</span>
-		</label>
-	);
-}
-
 export const DownloadPage = () => {
 	const { platform, isIntel } = useDetectPlatform();
 	const [copiedCliCommand, setCopiedCliCommand] = useState(false);
-	const [edition, setEdition] = useState<Edition>("native");
 	const boil = useId().replace(/[^a-zA-Z0-9_-]/g, "");
-	const classic = edition === "classic";
 	const loading = platform === null;
-	const primaryDownloadUrl = classic
-		? getClassicDownloadUrl(platform, isIntel)
-		: getDownloadUrl(platform, isIntel);
+	const primaryDownloadUrl = getDownloadUrl(platform, isIntel);
 	const cliInstallCommand =
 		platform === "windows"
 			? "irm https://cap.so/install-cli.ps1 | iex"
 			: "curl -fsSL https://cap.so/install-cli.sh | sh";
-
-	useEffect(() => {
-		const version = new URLSearchParams(window.location.search).get("version");
-		if (version === CLASSIC_QUERY) setEdition("classic");
-	}, []);
 
 	const trackDownloadClick = (
 		ctaLocation: string,
@@ -241,21 +148,6 @@ export const DownloadPage = () => {
 			target_url: targetUrl,
 			detected_platform: platform ?? "unknown",
 			is_intel: Boolean(isIntel),
-			edition,
-		});
-	};
-
-	const selectEdition = (nextClassic: boolean) => {
-		const next: Edition = nextClassic ? "classic" : "native";
-		setEdition(next);
-		const url = new URL(window.location.href);
-		if (nextClassic) url.searchParams.set("version", CLASSIC_QUERY);
-		else url.searchParams.delete("version");
-		window.history.replaceState(window.history.state, "", url);
-		trackEvent("download_edition_selected", {
-			source_page: "download_page",
-			edition: next,
-			detected_platform: platform ?? "unknown",
 		});
 	};
 
@@ -273,52 +165,31 @@ export const DownloadPage = () => {
 		<div className="py-32 md:py-40 wrapper wrapper-sm">
 			<BoilFilter id={boil} />
 			<div className="space-y-4 text-center">
-				<div className="flex justify-center h-8 items-center fade-in-down">
-					<div key={edition} className="dl-swap">
-						{classic ? (
-							<ClassicAnnouncement />
-						) : (
-							<NativeAnnouncement boil={boil} />
-						)}
-					</div>
+				<div className="flex justify-center items-center h-8 fade-in-down">
+					<NativeAnnouncement boil={boil} />
 				</div>
 				<h1 className="text-2xl fade-in-down animate-delay-1 md:text-4xl">
-					{classic ? "Download Cap Classic" : "Download Cap"}
+					Download Cap
 				</h1>
-				<p
-					key={`intro-${edition}`}
-					className="dl-swap mx-auto max-w-xl px-4 text-sm text-gray-11 md:text-base md:px-0"
-				>
-					{classic ? (
-						"The original Cap app. It installs next to Cap and shares your recordings and settings, so you can switch between them any time."
-					) : (
-						<>
-							The quickest way to share your screen, now a{" "}
-							<InkUnderline boil={boil}>fully native app</InkUnderline>. It
-							opens faster and stays light on your computer while you record.
-						</>
-					)}
+				<p className="px-4 mx-auto max-w-xl text-sm fade-in-down text-gray-11 animate-delay-2 md:text-base md:px-0">
+					The quickest way to share your screen, now a{" "}
+					<InkUnderline boil={boil}>fully native app</InkUnderline>. It opens
+					faster and stays light on your computer while you record.
 				</p>
 				<div className="flex flex-col justify-center items-center space-y-4 fade-in-up animate-delay-2">
 					<div className="flex flex-col items-center space-y-4">
 						<div className="flex flex-col gap-3 justify-center items-center w-full sm:flex-row sm:gap-4">
 							<Button
-								variant={classic ? "dark" : "blue"}
+								variant="blue"
 								size="lg"
 								href={primaryDownloadUrl}
 								onClick={() =>
-									trackDownloadClick(
-										"primary",
-										primaryDownloadUrl,
-										classic ? "cap_classic" : undefined,
-									)
+									trackDownloadClick("primary", primaryDownloadUrl)
 								}
 								className="flex justify-center items-center w-full font-medium text-white sm:w-auto"
 							>
 								{!loading && getPlatformIcon(platform)}
-								{classic
-									? "Download Cap Classic"
-									: getDownloadButtonText(platform, loading, isIntel)}
+								{getDownloadButtonText(platform, loading, isIntel)}
 							</Button>
 							<span className="text-sm font-medium text-gray-500">or</span>
 							<ChromeExtensionButton
@@ -336,13 +207,28 @@ export const DownloadPage = () => {
 						</div>
 
 						<div className="text-sm text-gray-10">
-							{classic
-								? getClassicVersionText(platform)
-								: getVersionText(platform)}
+							{getVersionText(platform)}
 						</div>
 
-						<EditionToggle classic={classic} onChange={selectEdition} />
+						<p className="text-xs text-gray-10">
+							Looking for the original app?{" "}
+							<Link
+								href={`/download/versions#v${LAST_TAURI_VERSION}`}
+								onClick={() =>
+									trackDownloadClick(
+										"last_tauri_version",
+										"/download/versions",
+										"tauri_app",
+									)
+								}
+								className="underline underline-offset-2 hover:text-gray-12"
+							>
+								Cap {LAST_TAURI_VERSION}
+							</Link>{" "}
+							is still available.
+						</p>
 
+						{/* Windows SmartScreen video and instructions */}
 						{platform === "windows" && (
 							<div className="mt-4 max-w-md">
 								<video
@@ -398,107 +284,103 @@ export const DownloadPage = () => {
 
 				<div className="pb-4 mt-6 fade-in-up animate-delay-2">
 					<h3 className="mb-2 text-base font-medium text-gray-10">
-						{classic
-							? "Cap Classic for other platforms:"
-							: "Other download options:"}
+						Other download options:
 					</h3>
-					{classic ? (
-						<div className="flex flex-col gap-3 justify-center items-center md:flex-row md:flex-wrap">
-							{classicDownloads
-								.filter((download) => download.href !== primaryDownloadUrl)
-								.map((download) => (
-									<a
-										key={download.href}
-										href={download.href}
-										onClick={() =>
-											trackDownloadClick(
-												`classic_${download.target}`,
-												download.href,
-												"cap_classic",
-											)
-										}
-										className="text-sm transition-all text-gray-10 hover:underline"
-									>
-										{download.label}
-									</a>
-								))}
-							<Link
-								href="/download/versions"
-								onClick={() =>
-									trackDownloadClick("all_versions", "/download/versions")
-								}
-								className="text-sm transition-all text-gray-10 hover:underline"
-							>
-								All versions
-							</Link>
-						</div>
-					) : (
-						<div className="flex flex-col gap-3 justify-center items-center md:flex-row md:flex-wrap">
-							{platform !== "windows" && (
-								<a
-									href="/download/windows"
-									onClick={() =>
-										trackDownloadClick(
-											"other_option_windows",
-											"/download/windows",
-										)
-									}
-									className="text-sm transition-all text-gray-10 hover:underline"
-								>
-									Windows (Beta)
-								</a>
-							)}
-							{platform !== "linux" && (
-								<a
-									href="/download/linux-deb"
-									onClick={() =>
-										trackDownloadClick(
-											"other_option_linux_deb",
-											"/download/linux-deb",
-										)
-									}
-									className="text-sm transition-all text-gray-10 hover:underline"
-								>
-									Debian / Ubuntu (.deb)
-								</a>
-							)}
+					<div className="flex flex-col gap-3 justify-center items-center md:flex-row md:flex-wrap">
+						{platform !== "windows" && (
 							<a
-								href="/download/linux-appimage"
+								href="/download/windows"
 								onClick={() =>
 									trackDownloadClick(
-										"other_option_linux_appimage",
-										"/download/linux-appimage",
+										"other_option_windows",
+										"/download/windows",
 									)
 								}
 								className="text-sm transition-all text-gray-10 hover:underline"
 							>
-								AppImage
+								Windows (Beta)
 							</a>
+						)}
+						{platform !== "linux" && (
 							<a
-								href="/download/linux-rpm"
+								href="/download/linux-deb"
 								onClick={() =>
 									trackDownloadClick(
-										"other_option_linux_rpm",
-										"/download/linux-rpm",
+										"other_option_linux_deb",
+										"/download/linux-deb",
 									)
 								}
 								className="text-sm transition-all text-gray-10 hover:underline"
 							>
-								Fedora / RPM
+								Debian / Ubuntu (.deb)
 							</a>
+						)}
+						<a
+							href="/download/linux-appimage"
+							onClick={() =>
+								trackDownloadClick(
+									"other_option_linux_appimage",
+									"/download/linux-appimage",
+								)
+							}
+							className="text-sm transition-all text-gray-10 hover:underline"
+						>
+							AppImage
+						</a>
+						<a
+							href="/download/linux-rpm"
+							onClick={() =>
+								trackDownloadClick(
+									"other_option_linux_rpm",
+									"/download/linux-rpm",
+								)
+							}
+							className="text-sm transition-all text-gray-10 hover:underline"
+						>
+							Fedora / RPM
+						</a>
+						<a
+							href="/download/linux-pacman"
+							onClick={() =>
+								trackDownloadClick(
+									"other_option_linux_pacman",
+									"/download/linux-pacman",
+								)
+							}
+							className="text-sm transition-all text-gray-10 hover:underline"
+						>
+							Arch / Pacman
+						</a>
+						{platform === "macos" && isIntel && (
 							<a
-								href="/download/linux-pacman"
+								href="/download/apple-silicon"
 								onClick={() =>
 									trackDownloadClick(
-										"other_option_linux_pacman",
-										"/download/linux-pacman",
+										"other_option_apple_silicon",
+										"/download/apple-silicon",
 									)
 								}
 								className="text-sm transition-all text-gray-10 hover:underline"
 							>
-								Arch / Pacman
+								Apple Silicon
 							</a>
-							{platform === "macos" && isIntel && (
+						)}
+						{platform === "macos" && !isIntel && (
+							<a
+								href="/download/apple-intel"
+								onClick={() =>
+									trackDownloadClick(
+										"other_option_apple_intel",
+										"/download/apple-intel",
+									)
+								}
+								className="text-sm transition-all text-gray-10 hover:underline"
+							>
+								Apple Intel
+							</a>
+						)}
+						{platform !== "macos" && (
+							<>
 								<a
 									href="/download/apple-silicon"
 									onClick={() =>
@@ -507,12 +389,10 @@ export const DownloadPage = () => {
 											"/download/apple-silicon",
 										)
 									}
-									className="text-sm transition-all text-gray-10 hover:underline"
+									className="text-sm transition-all text-gray-8 hover:underline"
 								>
 									Apple Silicon
 								</a>
-							)}
-							{platform === "macos" && !isIntel && (
 								<a
 									href="/download/apple-intel"
 									onClick={() =>
@@ -521,52 +401,25 @@ export const DownloadPage = () => {
 											"/download/apple-intel",
 										)
 									}
-									className="text-sm transition-all text-gray-10 hover:underline"
+									className="text-sm transition-all text-gray-8 hover:underline"
 								>
 									Apple Intel
 								</a>
-							)}
-							{platform !== "macos" && (
-								<>
-									<a
-										href="/download/apple-silicon"
-										onClick={() =>
-											trackDownloadClick(
-												"other_option_apple_silicon",
-												"/download/apple-silicon",
-											)
-										}
-										className="text-sm transition-all text-gray-8 hover:underline"
-									>
-										Apple Silicon
-									</a>
-									<a
-										href="/download/apple-intel"
-										onClick={() =>
-											trackDownloadClick(
-												"other_option_apple_intel",
-												"/download/apple-intel",
-											)
-										}
-										className="text-sm transition-all text-gray-8 hover:underline"
-									>
-										Apple Intel
-									</a>
-								</>
-							)}
-							<Link
-								href="/download/versions"
-								onClick={() =>
-									trackDownloadClick("all_versions", "/download/versions")
-								}
-								className="text-sm transition-all text-gray-10 hover:underline"
-							>
-								All versions
-							</Link>
-						</div>
-					)}
+							</>
+						)}
+						<Link
+							href="/download/versions"
+							onClick={() =>
+								trackDownloadClick("all_versions", "/download/versions")
+							}
+							className="text-sm transition-all text-gray-10 hover:underline"
+						>
+							All versions
+						</Link>
+					</div>
 				</div>
 
+				{/* Discreet SEO Links */}
 				<div className="pt-8 mt-32 text-xs border-t border-gray-5 text-gray-12">
 					<div className="flex flex-wrap gap-y-2 gap-x-4 justify-center items-center mx-auto max-w-lg">
 						<Link

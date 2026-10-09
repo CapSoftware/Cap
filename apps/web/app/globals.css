@@ -596,26 +596,9 @@ label {
 	animation: dl-ink-draw 0.7s cubic-bezier(0.55, 0.1, 0.25, 1) 1.35s forwards;
 }
 
-.dl-swap {
-	animation: dl-swap 0.32s cubic-bezier(0.2, 0.8, 0.2, 1) both;
-}
-
 @keyframes dl-ink-draw {
 	to {
 		stroke-dashoffset: 0;
-	}
-}
-
-@keyframes dl-swap {
-	from {
-		opacity: 0;
-		transform: translateY(4px);
-		filter: blur(2px);
-	}
-	to {
-		opacity: 1;
-		transform: none;
-		filter: none;
 	}
 }
 
@@ -627,10 +610,6 @@ label {
 
 	.dl-ink {
 		filter: none;
-	}
-
-	.dl-swap {
-		animation: none;
 	}
 }
 

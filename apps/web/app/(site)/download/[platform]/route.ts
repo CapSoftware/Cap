@@ -52,7 +52,7 @@ export async function GET(
 
 	const downloadUrls: Record<
 		string,
-		{ url: string; fallback: ReleaseDownloadKey | null }
+		{ url: string; fallback: ReleaseDownloadKey }
 	> = {
 		"apple-intel": {
 			url: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/dmg-x86_64",
@@ -142,22 +142,6 @@ export async function GET(
 			url: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/pacman-x86_64",
 			fallback: "linux-pacman",
 		},
-		"classic-apple-silicon": {
-			url: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/dmg-aarch64-classic",
-			fallback: null,
-		},
-		"classic-apple-intel": {
-			url: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/dmg-x86_64-classic",
-			fallback: null,
-		},
-		"classic-windows": {
-			url: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/nsis-x86_64-classic",
-			fallback: null,
-		},
-		"classic-linux-appimage": {
-			url: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/appimage-x86_64-classic",
-			fallback: null,
-		},
 	};
 
 	const download = downloadUrls[platform];
@@ -170,12 +154,6 @@ export async function GET(
 	const primary = await checkCrabNebulaDownload(download.url);
 	if (primary.ok) {
 		return NextResponse.redirect(primary.finalUrl);
-	}
-
-	if (!download.fallback) {
-		return NextResponse.redirect(
-			new URL("/download?version=classic", request.url),
-		);
 	}
 
 	const fallback = await getGitHubFallbackDownloadUrl(download.fallback);
