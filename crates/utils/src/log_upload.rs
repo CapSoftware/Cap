@@ -24,6 +24,19 @@ pub struct LogBundle {
     pub directory_available: bool,
 }
 
+impl LogBundle {
+    pub fn unavailable() -> Self {
+        let text = "Log directory is unavailable.\n".to_string();
+        Self {
+            ordinary_end: text.len(),
+            text,
+            files: Vec::new(),
+            directory_entries_scanned: 0,
+            directory_available: false,
+        }
+    }
+}
+
 pub struct PreparedUpload {
     pub log: String,
     pub context: String,
@@ -164,8 +177,7 @@ pub fn collect(dir: &Path, prefix: &str) -> LogBundle {
         directory_available: false,
     };
     let Ok(entries) = std::fs::read_dir(dir) else {
-        bundle.text.push_str("Log directory is unavailable.\n");
-        return bundle;
+        return LogBundle::unavailable();
     };
     bundle.directory_available = true;
     let mut candidates = Vec::new();
@@ -249,6 +261,28 @@ pub fn collect(dir: &Path, prefix: &str) -> LogBundle {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn unavailable_directory_produces_an_explicit_support_bundle() {
+        let bundle = LogBundle::unavailable();
+        assert!(!bundle.directory_available);
+        assert_eq!(bundle.directory_entries_scanned, 0);
+        assert!(bundle.files.is_empty());
+        let upload = prepare_upload(
+            bundle,
+            serde_json::json!({}),
+            Some("{}"),
+            Some("synthetic report"),
+            str::to_string,
+        );
+        assert_eq!(upload.log, "Log directory is unavailable.\n");
+        assert_eq!(upload.diagnostics.as_deref(), Some("{}"));
+        assert_eq!(upload.report.as_deref(), Some("synthetic report"));
+        let context: serde_json::Value = serde_json::from_str(&upload.context).unwrap();
+        assert_eq!(context["logCoverage"]["directoryAvailable"], false);
+        assert_eq!(context["logCoverage"]["directoryEntriesScanned"], 0);
+        assert_eq!(context["logCoverage"]["files"], serde_json::json!([]));
+    }
 
     #[test]
     fn retained_history_fits_with_large_metadata_and_recent_events() {

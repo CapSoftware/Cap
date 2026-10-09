@@ -21,6 +21,7 @@ pub struct MultipartUploadInitiateResponse {
 pub async fn upload_multipart_initiate(
     app: &AppHandle,
     video_id: &str,
+    replace_existing: bool,
 ) -> Result<MultipartUploadInitiateResponse, AuthedApiError> {
     let resp = app
         .authed_api_request("/api/upload/multipart/initiate", |c, url| {
@@ -28,7 +29,8 @@ pub async fn upload_multipart_initiate(
                 .header("Content-Type", "application/json")
                 .json(&serde_json::json!({
                     "videoId": video_id,
-                    "contentType": "video/mp4"
+                    "contentType": "video/mp4",
+                    "replaceExisting": replace_existing
                 }))
         })
         .await
@@ -119,6 +121,24 @@ pub struct S3VideoMeta {
     pub fps: Option<f32>,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum MultipartCompletion {
+    Completed(Option<String>),
+    ReplacementRestartRequired,
+}
+
+fn replacement_restart_required(status: u16, body: &str, replace_existing: bool) -> bool {
+    #[derive(Deserialize)]
+    struct ErrorBody {
+        code: String,
+    }
+
+    replace_existing
+        && status == 409
+        && serde_json::from_str::<ErrorBody>(body)
+            .is_ok_and(|body| body.code == "REPLACEMENT_RESTART_REQUIRED")
+}
+
 #[instrument(skip_all)]
 pub async fn upload_multipart_complete(
     app: &AppHandle,
@@ -126,7 +146,27 @@ pub async fn upload_multipart_complete(
     upload_id: &str,
     parts: &[UploadedPart],
     meta: Option<S3VideoMeta>,
+    replace_existing: bool,
 ) -> Result<Option<String>, AuthedApiError> {
+    match upload_multipart_complete_outcome(app, video_id, upload_id, parts, meta, replace_existing)
+        .await?
+    {
+        MultipartCompletion::Completed(identity) => Ok(identity),
+        MultipartCompletion::ReplacementRestartRequired => {
+            Err("Replacement upload must be restarted; local files retained".into())
+        }
+    }
+}
+
+#[instrument(skip_all)]
+pub(crate) async fn upload_multipart_complete_outcome(
+    app: &AppHandle,
+    video_id: &str,
+    upload_id: &str,
+    parts: &[UploadedPart],
+    meta: Option<S3VideoMeta>,
+    replace_existing: bool,
+) -> Result<MultipartCompletion, AuthedApiError> {
     #[derive(Serialize)]
     #[serde(rename_all = "camelCase")]
     pub struct MultipartCompleteRequest<'a> {
@@ -135,6 +175,7 @@ pub async fn upload_multipart_complete(
         parts: &'a [UploadedPart],
         #[serde(flatten)]
         meta: Option<S3VideoMeta>,
+        replace_existing: bool,
     }
 
     #[derive(Deserialize)]
@@ -154,6 +195,7 @@ pub async fn upload_multipart_complete(
                     upload_id,
                     parts,
                     meta,
+                    replace_existing,
                 })
         })
         .await
@@ -161,17 +203,19 @@ pub async fn upload_multipart_complete(
 
     if !resp.status().is_success() {
         let status = resp.status().as_u16();
-        let error_body = resp
-            .text()
-            .await
+        let error_body = crate::upload::lifecycle::cancellable(resp.text())
+            .await?
             .unwrap_or_else(|_| "<no response body>".to_string());
+        if replacement_restart_required(status, &error_body, replace_existing) {
+            return Ok(MultipartCompletion::ReplacementRestartRequired);
+        }
         return Err(format!("api/upload_multipart_complete/{status}: {error_body}").into());
     }
 
     crate::upload::lifecycle::cancellable(resp.json::<Response>())
         .await?
         .map_err(|err| format!("api/upload_multipart_complete/response: {err}").into())
-        .map(|data| data.object_identity)
+        .map(|data| MultipartCompletion::Completed(data.object_identity))
 }
 
 #[derive(Debug, Serialize)]
@@ -418,4 +462,31 @@ pub async fn fetch_organizations(app: &AppHandle) -> Result<Vec<Organization>, A
     resp.json()
         .await
         .map_err(|err| format!("api/fetch_organizations/response: {err}").into())
+}
+
+#[cfg(test)]
+mod replacement_completion_tests {
+    use super::*;
+
+    #[test]
+    fn restart_requires_replacement_conflict_and_exact_structured_code() {
+        let restart = r#"{"code":"REPLACEMENT_RESTART_REQUIRED","error":"Restart upload"}"#;
+        assert!(replacement_restart_required(409, restart, true));
+        assert!(!replacement_restart_required(409, restart, false));
+        for status in [200, 400, 401, 403, 404, 500, 503] {
+            assert!(!replacement_restart_required(status, restart, true));
+        }
+        for body in [
+            "REPLACEMENT_RESTART_REQUIRED",
+            r#"{"error":"REPLACEMENT_RESTART_REQUIRED"}"#,
+            r#"{"code":"OTHER_CONFLICT"}"#,
+            r#"{"code":"replacement_restart_required"}"#,
+            r#"{"code":null}"#,
+            r#"{"code":1}"#,
+            "{}",
+            "invalid JSON",
+        ] {
+            assert!(!replacement_restart_required(409, body, true));
+        }
+    }
 }

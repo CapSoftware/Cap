@@ -1,6 +1,6 @@
 use anyhow::Context;
 use ort::session::Session;
-use ort::value::TensorRef;
+use ort::value::{DynValue, TensorRef};
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 use std::path::{Path, PathBuf};
 
@@ -18,7 +18,7 @@ const MODEL_CHANNEL_SIZE: usize = MODEL_INPUT_SIZE * MODEL_INPUT_SIZE;
 pub struct SegmentationModel {
     session: Session,
     input: Vec<f32>,
-    output: Vec<f32>,
+    output: Option<DynValue>,
 }
 
 impl SegmentationModel {
@@ -27,11 +27,12 @@ impl SegmentationModel {
         Ok(Self {
             session,
             input: vec![0.0; 3 * MODEL_CHANNEL_SIZE],
-            output: Vec::with_capacity(MODEL_CHANNEL_SIZE),
+            output: None,
         })
     }
 
     pub fn run_inference(&mut self, rgba_256x256: &[u8]) -> anyhow::Result<&[f32]> {
+        self.output = None;
         populate_rgb_planes(&mut self.input, rgba_256x256);
         let input_value = TensorRef::from_array_view((
             [1usize, 3, MODEL_INPUT_SIZE, MODEL_INPUT_SIZE],
@@ -39,19 +40,21 @@ impl SegmentationModel {
         ))
         .context("Failed to create input tensor")?;
 
-        let outputs = self
+        let mut outputs = self
             .session
             .run(ort::inputs!["pixel_values" => input_value])
             .context("ONNX inference failed")?;
 
-        let output_value = &outputs["alphas"];
+        let output_value = self.output.insert(
+            outputs
+                .remove("alphas")
+                .context("Missing segmentation output tensor")?,
+        );
         let (_shape, raw_data) = output_value
             .try_extract_tensor::<f32>()
             .context("Failed to extract output tensor")?;
 
-        self.output.clear();
-        self.output.extend_from_slice(raw_data);
-        Ok(&self.output)
+        Ok(raw_data)
     }
 }
 
@@ -76,7 +79,16 @@ fn create_session() -> anyhow::Result<Session> {
         .with_inter_op_spinning(false)
         .map_err(|error| anyhow::anyhow!("Failed to disable ONNX inter-op spinning: {error}"))?;
 
-    #[cfg(target_os = "macos")]
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        // This small graph is cheaper on two CPU threads than CoreML's partition transfers and compilation.
+        builder = builder
+            .with_intra_threads(2)
+            .map_err(|error| anyhow::anyhow!("Failed to limit segmentation threads: {error}"))?;
+        tracing::info!("Camera background segmentation: CPU inference with two threads");
+    }
+
+    #[cfg(all(target_os = "macos", not(target_arch = "aarch64")))]
     {
         builder = try_register_coreml(builder);
     }
@@ -228,7 +240,7 @@ fn onnx_runtime_candidates(executable: Option<&Path>) -> Vec<PathBuf> {
 // logger), so a CPU-only runtime DLL would make the "registered" log a false
 // positive while inference silently runs on CPU.
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", not(target_arch = "aarch64")))]
 fn try_register_coreml(
     builder: ort::session::builder::SessionBuilder,
 ) -> ort::session::builder::SessionBuilder {

@@ -482,6 +482,7 @@ export function CanvasElementsOverlay(props: { size: Size }) {
 				const rect = cameraRect();
 				const layout = latestFrameLayout();
 				if (!rect || !layout || !cameraResizable()) return null;
+				select("camera");
 				return {
 					rect,
 					layout,
@@ -549,6 +550,7 @@ export function CanvasElementsOverlay(props: { size: Size }) {
 				const rect = displayRect();
 				const layout = latestFrameLayout();
 				if (!rect || !layout || !displayDraggable()) return null;
+				select("display");
 
 				const { output_width: W, output_height: H } = layout;
 				const contentAspect = (rect.w * W) / Math.max(rect.h * H, 1e-6);
@@ -667,7 +669,10 @@ export function CanvasElementsOverlay(props: { size: Size }) {
 	});
 
 	return (
-		<div class="absolute inset-0 isolate pointer-events-none">
+		<div
+			class="absolute inset-0 isolate pointer-events-none"
+			style={{ opacity: "var(--preview-controls-opacity, 1)" }}
+		>
 			<Show when={overlayVisible()}>
 				<Show when={selection() || editorState.timeline.selection}>
 					<div

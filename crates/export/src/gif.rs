@@ -118,6 +118,7 @@ impl GifExportSettings {
         )
         .map_err(|e| format!("Failed to create GIF encoder: {e}"))?;
 
+        let sample_timing = base.sample_timing.clone();
         let encoder_thread = tokio::task::spawn_blocking(move || {
             let mut frame_count = 0;
 
@@ -134,7 +135,16 @@ impl GifExportSettings {
                     )));
                 }
 
+                if sample_timing
+                    .as_ref()
+                    .is_some_and(|timing| timing.is_cancelled())
+                {
+                    return Err(ExportError::Other("Export cancelled".into()));
+                }
                 frame_count += 1;
+                if let Some(timing) = &sample_timing {
+                    timing.record_frame(frame.frame_number);
+                }
             }
 
             if let Err(e) = gif_encoder.finish() {
@@ -166,6 +176,7 @@ impl GifExportSettings {
             fps,
             self.resolution_base,
             &base.recordings,
+            base.sample_windows.clone(),
         )
         .then(|f| async { f.map_err(|v| v.to_string()) });
 

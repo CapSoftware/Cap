@@ -7,6 +7,7 @@ pub(crate) enum ExitBlocked {
     RecordingActive,
     FinalizationActive,
     ExportActive,
+    UploadActive,
     UpdateInstalling,
     AlreadyExiting,
 }
@@ -23,7 +24,12 @@ impl ExitBlocked {
             Self::FinalizationActive => {
                 "Cap is still saving your recording. Wait for it to finish before quitting or restarting."
             }
-            Self::ExportActive => "Wait for your export or upload to finish before restarting Cap.",
+            Self::ExportActive => {
+                "Wait for your export to finish before quitting or restarting Cap."
+            }
+            Self::UploadActive => {
+                "Cap is still uploading your recording. Wait for it to finish before quitting or restarting."
+            }
             Self::UpdateInstalling => "Cap is installing an update. Wait for it to finish.",
             Self::AlreadyExiting => "Cap is already shutting down.",
         }

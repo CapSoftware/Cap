@@ -1,6 +1,6 @@
 import { Popover } from "@kobalte/core/popover";
 import { cx } from "cva";
-import { createSignal, For, type JSX, Show } from "solid-js";
+import { createSignal, Index, type JSX, Show } from "solid-js";
 import IconLucideGripVertical from "~icons/lucide/grip-vertical";
 import type { TimelineTrackType } from "../context";
 
@@ -62,26 +62,35 @@ const TRACK_META: Record<TimelineTrackType, TrackMeta> = {
 		unavailableHint: "Record with a camera to use scenes.",
 	},
 	"3d": {
-		description: "Tilt the scene in 3D perspective.",
+		description: "Add cinematic 3D camera shots to your recording.",
 		unavailableHint: "",
 	},
 };
+
+const DEFAULT_HINT = "Choose a track to add to your timeline.";
 
 // Comes straight from the shared `--track-*` CSS variable defined in theme.css,
 // so the picker swatch is the exact same colour as the timeline segment.
 const trackColor = (type: TimelineTrackType) => `var(--track-${type})`;
 
-function TrackOptionRow(props: {
+function trackHint(option: TrackManagerOption) {
+	const meta = TRACK_META[option.type];
+	if (!option.available) return meta.unavailableHint;
+	if (!option.supportsMultiple && option.active)
+		return `Remove the ${option.label} track.`;
+	return meta.description;
+}
+
+function TrackTile(props: {
 	option: TrackManagerOption;
+	index: number;
 	onSelect: () => void;
+	onHover: (type: TimelineTrackType | null) => void;
 }) {
-	const meta = () => TRACK_META[props.option.type];
-	const accent = () => trackColor(props.option.type);
 	const available = () => props.option.available;
-	const isToggle = () => !props.option.supportsMultiple;
-	const isOn = () => props.option.active;
-	const description = () =>
-		available() ? meta().description : meta().unavailableHint;
+	const isOn = () => !props.option.supportsMultiple && props.option.active;
+	const count = () =>
+		props.option.supportsMultiple ? (props.option.count ?? 0) : 0;
 
 	return (
 		<button
@@ -93,57 +102,51 @@ function TrackOptionRow(props: {
 				if (!available()) return;
 				props.onSelect();
 			}}
-			style={{ "--seg-color": accent() }}
+			onMouseEnter={() => props.onHover(props.option.type)}
+			onMouseLeave={() => props.onHover(null)}
+			onFocus={() => props.onHover(props.option.type)}
+			onBlur={() => props.onHover(null)}
+			style={{
+				"--seg-color": trackColor(props.option.type),
+				"--tray-index": props.index,
+			}}
 			class={cx(
-				"group/row flex items-center gap-2.5 rounded-lg p-2 text-left outline-hidden transition-colors duration-150",
+				"cap-track-tray-tile group/tile flex w-16 shrink-0 flex-col items-center gap-1.5 rounded-lg pt-2 pb-1.5 outline-hidden transition-[background-color,transform] duration-150",
 				available()
-					? "cursor-default hover:bg-ed-ctl focus-visible:bg-ed-ctl"
-					: "cursor-not-allowed opacity-55",
+					? "cursor-default hover:bg-ed-ctl focus-visible:bg-ed-ctl active:scale-95"
+					: "cursor-not-allowed opacity-45",
 			)}
 		>
+			<span class="relative">
+				<span
+					class={cx(
+						"flex size-7 items-center justify-center rounded-lg [&>svg]:size-3.5",
+						available() ? "cap-track-tile" : "bg-ed-ctl text-ed-text-3",
+					)}
+				>
+					{props.option.icon()}
+				</span>
+				<Show when={isOn()}>
+					<span class="absolute -top-1 -right-1 flex size-3.5 items-center justify-center rounded-full bg-ed-accent text-white ring-2 ring-ed-card">
+						<IconLucideCheck class="size-2" />
+					</span>
+				</Show>
+				<Show when={count() > 0}>
+					<span class="absolute -top-1 -right-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-ed-text-1 px-1 text-[9px] font-semibold leading-none tabular-nums text-ed-card ring-2 ring-ed-card">
+						{count()}
+					</span>
+				</Show>
+			</span>
 			<span
 				class={cx(
-					"flex justify-center items-center rounded-md size-[22px] shrink-0",
-					available() ? "cap-track-tile" : "bg-ed-ctl text-ed-text-3",
+					"whitespace-nowrap text-[11px] font-medium leading-none transition-colors duration-150",
+					available()
+						? "text-ed-text-2 group-hover/tile:text-ed-text-1"
+						: "text-ed-text-3",
 				)}
 			>
-				{props.option.icon()}
+				{props.option.label}
 			</span>
-
-			<span class="flex flex-col flex-1 gap-0.5 min-w-0">
-				<span class="flex gap-1.5 items-center text-[13px] font-medium leading-none text-ed-text-1">
-					<span class="truncate">{props.option.label}</span>
-					<Show when={!isToggle() && (props.option.count ?? 0) > 0}>
-						<span class="cap-track-tile rounded-full min-w-4 px-1.5 py-px text-center text-[10px] font-semibold leading-none tabular-nums">
-							{props.option.count}
-						</span>
-					</Show>
-				</span>
-				<span class="text-[12px] leading-snug text-ed-text-2 line-clamp-2">
-					{description()}
-				</span>
-			</span>
-
-			<Show
-				when={isToggle() && isOn()}
-				fallback={
-					<span
-						class={cx(
-							"flex justify-center items-center rounded-md size-5 shrink-0 transition-colors duration-150",
-							available()
-								? "text-ed-text-3 group-hover/row:bg-ed-ctl-hover group-hover/row:text-ed-text-1"
-								: "text-ed-text-3",
-						)}
-					>
-						<IconLucidePlus class="size-3.5" />
-					</span>
-				}
-			>
-				<span class="flex justify-center items-center rounded-md size-5 shrink-0 text-ed-accent group-hover/row:bg-ed-ctl-hover">
-					<IconLucideCheck class="size-3.5 group-hover/row:hidden" />
-					<IconLucideX class="hidden size-3.5 group-hover/row:block" />
-				</span>
-			</Show>
 		</button>
 	);
 }
@@ -155,31 +158,40 @@ export function TrackManager(props: {
 }) {
 	const selectable = () => props.options.filter((option) => !option.locked);
 	const [open, setOpen] = createSignal(false);
+	const [hovered, setHovered] = createSignal<TimelineTrackType | null>(null);
+	const hint = () => {
+		const type = hovered();
+		const option = type && props.options.find((o) => o.type === type);
+		return option ? trackHint(option) : DEFAULT_HINT;
+	};
 
-	// The timeline sits at the bottom of the editor, so the popover always flips
-	// upward; the large overflowPadding keeps its top edge clear of the 56px
-	// traffic-light titlebar, and fitViewport caps its height so the list scrolls
-	// instead of being clipped when the window is short.
+	// The tray is anchored to the whole gutter box, not the pill, so it slides
+	// out from the exact column where the track lanes begin and its bottom
+	// edge sits on the ruler's baseline; the GPUI editor anchors the same way.
 	return (
 		<Popover
-			placement="bottom-start"
-			gutter={8}
-			overflowPadding={64}
-			fitViewport
+			placement="right-end"
+			gutter={0}
+			overflowPadding={12}
 			open={open()}
-			onOpenChange={setOpen}
+			onOpenChange={(next) => {
+				setOpen(next);
+				if (!next) setHovered(null);
+			}}
 		>
-			<Popover.Trigger
-				class={cx(
-					"flex relative z-30 shrink-0 gap-[5px] items-center pl-1.5 pr-2 h-6 rounded-md outline-hidden",
-					"bg-ed-ctl text-[12px] font-medium text-ed-text-2",
-					"transition-colors duration-150 hover:bg-ed-ctl-hover hover:text-ed-text-1",
-				)}
-				onMouseDown={(e) => e.stopPropagation()}
-			>
-				<IconLucidePlus class="size-3 shrink-0" />
-				<span class="whitespace-nowrap">Add track</span>
-			</Popover.Trigger>
+			<Popover.Anchor class="flex size-full items-center">
+				<Popover.Trigger
+					class={cx(
+						"group/trigger relative z-30 flex h-6 shrink-0 items-center gap-[5px] rounded-md pl-1.5 pr-2 outline-hidden",
+						"bg-ed-text-1 text-[12px] font-medium text-ed-card",
+						"transition-[opacity,transform] duration-150 hover:opacity-85 active:scale-[0.97]",
+					)}
+					onMouseDown={(e) => e.stopPropagation()}
+				>
+					<IconLucidePlus class="size-3 shrink-0 transition-transform duration-200 ease-out group-data-[expanded]/trigger:rotate-45" />
+					<span class="whitespace-nowrap">Add track</span>
+				</Popover.Trigger>
+			</Popover.Anchor>
 			<Popover.Portal>
 				<Popover.Content
 					onMouseDown={(e) => e.stopPropagation()}
@@ -187,41 +199,30 @@ export function TrackManager(props: {
 					// inline text editor on the canvas); returning focus to the
 					// trigger on close would steal it back.
 					onCloseAutoFocus={(e) => e.preventDefault()}
-					class={cx(
-						"z-50 flex w-[min(21rem,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-xl bg-ed-card shadow-ed-pop outline-hidden",
-						"origin-[var(--kb-popover-content-transform-origin)] data-expanded:animate-in data-expanded:fade-in data-expanded:zoom-in-95 data-closed:animate-out data-closed:fade-out data-closed:zoom-out-95",
-					)}
+					class="cap-track-tray z-50 flex origin-[var(--kb-popover-content-transform-origin)] flex-col overflow-hidden rounded-xl bg-ed-card shadow-ed-pop outline-hidden"
 				>
-					<div class="flex flex-col gap-1 px-3.5 pt-3 pb-2.5 border-b shrink-0 border-ed-line">
-						<span class="text-[13px] font-semibold leading-none tracking-[-0.01em] text-ed-text-1">
-							Add a track
-						</span>
-						<span class="text-[12px] leading-snug text-ed-text-2">
-							Layer captions, audio, zooms and more onto your timeline.
-						</span>
-					</div>
-					<div class="flex overflow-y-auto flex-col flex-1 gap-0.5 p-1.5 min-h-0 scrollbar-none">
-						<For each={selectable()}>
-							{(option) => (
-								<TrackOptionRow
-									option={option}
+					<div class="flex gap-1 p-1.5">
+						<Index each={selectable()}>
+							{(option, index) => (
+								<TrackTile
+									option={option()}
+									index={index}
+									onHover={setHovered}
 									onSelect={() => {
-										if (option.supportsMultiple) {
-											props.onAdd(option.type);
+										const current = option();
+										if (current.supportsMultiple) {
+											props.onAdd(current.type);
 										} else {
-											props.onToggle(option.type, !option.active);
+											props.onToggle(current.type, !current.active);
 										}
 										setOpen(false);
 									}}
 								/>
 							)}
-						</For>
+						</Index>
 					</div>
-					<div class="p-1.5 border-t shrink-0 border-ed-line">
-						<Popover.CloseButton class="flex gap-1.5 justify-center items-center px-3 w-full h-8 text-[13px] font-medium rounded-lg transition-colors duration-150 outline-hidden bg-ed-ctl text-ed-text-2 hover:bg-ed-ctl-hover hover:text-ed-text-1">
-							<IconLucideX class="size-3.5" />
-							Close
-						</Popover.CloseButton>
+					<div class="flex h-[30px] items-center border-t border-ed-line px-3 text-[11px] leading-none text-ed-text-2">
+						<span class="truncate">{hint()}</span>
 					</div>
 				</Popover.Content>
 			</Popover.Portal>

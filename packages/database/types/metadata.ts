@@ -105,6 +105,14 @@ export interface VideoMetadata {
 	};
 }
 
+export interface VideoCallToAction {
+	label: string;
+	url: string;
+	headline?: string;
+	color?: string;
+	showWhilePlaying?: boolean;
+}
+
 export type VideoEditRange = {
 	start: number;
 	end: number;

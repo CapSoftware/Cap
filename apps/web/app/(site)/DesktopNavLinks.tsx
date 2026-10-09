@@ -90,6 +90,10 @@ const Links: NavItem[] = [
 		href: "/download",
 	},
 	{
+		label: "Agents",
+		href: "/agents",
+	},
+	{
 		label: "Testimonials",
 		href: "/testimonials",
 	},

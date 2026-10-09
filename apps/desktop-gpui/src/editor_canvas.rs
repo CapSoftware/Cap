@@ -970,6 +970,14 @@ impl EditorWindow {
         let Some(drag) = self.canvas_drag.take() else {
             return;
         };
+        let hovered = self
+            .player_panel_bounds
+            .get()
+            .is_some_and(|bounds| bounds.contains(&window.mouse_position()));
+        self.set_player_panel_hovered(hovered, cx);
+        if !hovered {
+            self.hovered_canvas = None;
+        }
         let config = self.project.clone();
         self.history.resume(&config);
         self.snap_guides.clear();
@@ -1249,6 +1257,16 @@ impl EditorWindow {
         self.project_changed_live(cx);
     }
 
+    pub(crate) fn set_player_panel_hovered(&mut self, hovered: bool, cx: &mut Context<Self>) {
+        if self.player_panel_hovered != hovered {
+            self.player_panel_hovered = hovered;
+            if !hovered && self.canvas_drag.is_none() {
+                self.hovered_canvas = None;
+            }
+            cx.notify();
+        }
+    }
+
     fn set_canvas_hover(
         &mut self,
         element: CanvasSelection,
@@ -1286,7 +1304,9 @@ impl EditorWindow {
     /// letterboxed frame's own space -- `CanvasElementsOverlay` is mounted
     /// inside `size()` (`Player.tsx:636`), not the player pane.
     pub(crate) fn render_canvas_overlay(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if !self.canvas_overlay_visible() {
+        if !self.canvas_overlay_visible()
+            || (!self.player_panel_hovered && self.canvas_drag.is_none())
+        {
             return None;
         }
         let player = self.player_frame_rect.get()?;

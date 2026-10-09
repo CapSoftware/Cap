@@ -83,10 +83,8 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "shadow.svg",
     "bg-blur.svg",
     "laptop.svg",
-    "wind.svg",
     "shuffle.svg",
     "gift.svg",
-    "history.svg",
     "hotkeys.svg",
     "image.svg",
     "info.svg",
@@ -100,7 +98,6 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "message-square-plus.svg",
     "mic-off.svg",
     "microphone.svg",
-    "minimize.svg",
     "minus.svg",
     "monitor.svg",
     "more-vertical.svg",
@@ -112,7 +109,6 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     // originals: type, box-select (an alias of square-dashed since Lucide
     // 0.5xx), music, video, rotate-3d, clock, monitor, columns-2, panel-right.
     "box-select.svg",
-    "clock.svg",
     "columns-2.svg",
     "monitor-outline.svg",
     "music.svg",
@@ -162,20 +158,18 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "arrow-left-right.svg",
     "download.svg",
     "flip-vertical-2.svg",
-    "italic.svg",
     "maximize.svg",
     "mouse-pointer-2.svg",
+    "mouse-pointer-ban.svg",
     "move.svg",
     "move-right.svg",
     "palette.svg",
     "ratio.svg",
     "refresh-cw.svg",
     "rotate-ccw.svg",
-    "rotate-cw.svg",
-    "timer.svg",
     "volume-x.svg",
-    "diamond.svg",
-    "x-mark.svg",
+    "gem.svg",
+    "sliders-horizontal.svg",
     "zap.svg",
     "zoom-in.svg",
     "zoom-out.svg",
@@ -193,7 +187,6 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     // The main window's hand-drawn traffic lights: the x and expand glyphs
     // `CaptionControlsMacOS.tsx` inlines, shown while the group is hovered.
     "traffic-close.svg",
-    "traffic-zoom.svg",
     // The remaining settings pages (`settings_pages.rs`). `circle-check` is
     // Cap's own (`packages/ui-solid/icons/circle-check.svg`, hotkeys.tsx's
     // IconCapCircleCheck); the rest are the Lucide 24x24 originals the pages'
@@ -211,6 +204,8 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "grip-vertical.svg",
     "chevron-up.svg",
     "arrow-left.svg",
+    "arrow-left-to-line.svg",
+    "arrow-right-to-line.svg",
     "film.svg",
     "folder-open.svg",
     "folder-down.svg",
@@ -332,9 +327,12 @@ mod tests {
         // annotation module names the tool and layer glyphs.
         include_str!("screenshot_editor.rs"),
         include_str!("screenshot_annotations.rs"),
+        // The crop overlay's own ratio glyph.
+        include_str!("screenshot_crop.rs"),
         // `ui::SelectionHeader` names the check and the trash itself.
         include_str!("ui/selection_header.rs"),
         include_str!("ui/radio_cards.rs"),
+        include_str!("ui/windows_caption.rs"),
         // The onboarding window's welcome cards and permissions surface; the
         // per-permission row glyphs are named on `OSPermission::icon`.
         include_str!("onboarding_window.rs"),

@@ -6,6 +6,7 @@ import { generalSettingsStore } from "~/store";
 import { commands } from "~/utils/tauri";
 import { Editor } from "./Editor";
 import { EditorSkeleton } from "./editor-skeleton";
+import { PreparingEditorProvider } from "./preparing-editor-context";
 
 export default function () {
 	const generalSettings = generalSettingsStore.createQuery();
@@ -51,9 +52,11 @@ export default function () {
 				) && "bg-transparent-window",
 			)}
 		>
-			<Suspense fallback={<EditorSkeleton />}>
-				<Editor />
-			</Suspense>
+			<PreparingEditorProvider>
+				<Suspense fallback={<EditorSkeleton />}>
+					<Editor />
+				</Suspense>
+			</PreparingEditorProvider>
 		</div>
 	);
 }

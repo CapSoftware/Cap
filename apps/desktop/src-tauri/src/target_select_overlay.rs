@@ -27,6 +27,8 @@ use tauri_specta::Event;
 use tokio::task::JoinHandle;
 use tracing::{debug, error, instrument};
 
+mod lifecycle;
+
 #[derive(tauri_specta::Event, Serialize, Type, Clone)]
 pub struct TargetUnderCursor {
     display_id: Option<DisplayId>,
@@ -59,13 +61,36 @@ pub async fn open_target_select_overlays(
     specific_display_id: Option<String>,
     target_mode: Option<RecordingTargetMode>,
 ) -> Result<(), String> {
-    let reveal_generation = crate::clean_capture::generation(&app);
+    let session = open_target_select_overlays_for_session(
+        app,
+        state.inner(),
+        focused_target,
+        specific_display_id,
+        target_mode,
+    )
+    .await?;
+    if state.picker_is_current(session) {
+        Ok(())
+    } else {
+        Err("Target selection cancelled".into())
+    }
+}
+
+pub(crate) async fn open_target_select_overlays_for_session(
+    app: AppHandle,
+    state: &WindowFocusManager,
+    focused_target: Option<ScreenCaptureTarget>,
+    specific_display_id: Option<String>,
+    target_mode: Option<RecordingTargetMode>,
+) -> Result<u32, String> {
     if crate::clean_capture::phase(&app).is_some() {
         return Err(
             "Close or finish clean Studio recording before opening the target picker".into(),
         );
     }
     let start = Instant::now();
+    let picker_session = state.begin_picker();
+    state.register_escape(app.global_shortcut());
 
     let resolved_specific_display_id = specific_display_id.as_ref().map(|id_str| {
         id_str
@@ -110,6 +135,9 @@ pub async fn open_target_select_overlays(
     }
 
     for display_id in &display_ids {
+        if !state.picker_is_current(picker_session) {
+            return Ok(picker_session);
+        }
         let should_focus = display_id == &focus_display_id;
 
         let existing_window = CapWindowId::TargetSelectOverlay {
@@ -118,22 +146,22 @@ pub async fn open_target_select_overlays(
         .get(&app);
 
         if let Some(window) = existing_window {
-            crate::clean_capture::schedule_overlay_reveal(&window, reveal_generation, false);
+            request_overlay_reveal(&window, picker_session, should_focus);
 
             if should_focus {
-                focus_target_select_overlay(&window, reveal_generation);
+                focus_target_select_overlay(&window, picker_session);
             }
 
-            state.spawn(display_id, window.clone());
+            state.spawn(display_id, window.clone(), picker_session);
         } else if start.elapsed() < Duration::from_secs(1) {
             if let Ok(window) = (ShowCapWindow::TargetSelectOverlay {
                 display_id: display_id.clone(),
                 target_mode,
             })
-            .show(&app)
+            .show_for_picker(&app, picker_session)
             .await
             {
-                finish_created_target_select_overlay(&window, should_focus, reveal_generation);
+                finish_created_target_select_overlay(&window, should_focus, picker_session);
             }
         } else {
             let app_clone = app.clone();
@@ -143,10 +171,10 @@ pub async fn open_target_select_overlays(
                     display_id: display_id_clone,
                     target_mode,
                 })
-                .show(&app_clone)
+                .show_for_picker(&app_clone, picker_session)
                 .await
                 {
-                    finish_created_target_select_overlay(&window, should_focus, reveal_generation);
+                    finish_created_target_select_overlay(&window, should_focus, picker_session);
                 }
             });
         }
@@ -158,7 +186,7 @@ pub async fn open_target_select_overlays(
     .get(&app);
 
     if let Some(window) = focus_window {
-        focus_target_select_overlay(&window, reveal_generation);
+        focus_target_select_overlay(&window, picker_session);
     }
 
     let window_exclusions = general_settings::GeneralSettingsStore::get(&app)
@@ -173,7 +201,12 @@ pub async fn open_target_select_overlays(
 
         async move {
             while let Some((display, window)) = read_target_under_cursor(
-                || crate::app_is_exiting(&app),
+                || {
+                    crate::app_is_exiting(&app)
+                        || !app
+                            .state::<WindowFocusManager>()
+                            .picker_is_current(picker_session)
+                },
                 || {
                     focused_target
                         .as_ref()
@@ -204,6 +237,14 @@ pub async fn open_target_select_overlays(
         }
     });
 
+    let lifecycle = state
+        .lifecycle
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    if !lifecycle.is_current(picker_session) {
+        handle.abort();
+        return Ok(picker_session);
+    }
     if let Some(task) = state
         .task
         .lock()
@@ -212,9 +253,9 @@ pub async fn open_target_select_overlays(
     {
         task.abort();
     }
-    state.register_escape(app.global_shortcut());
+    drop(lifecycle);
 
-    Ok(())
+    Ok(picker_session)
 }
 
 fn describe_selectable_window(
@@ -289,23 +330,118 @@ fn first_linux_picker_target<T, R>(
 fn finish_created_target_select_overlay(
     window: &WebviewWindow,
     should_focus: bool,
-    reveal_generation: u32,
+    picker_session: u32,
 ) {
+    request_overlay_focus(window, picker_session, should_focus);
+}
+
+fn focus_target_select_overlay(window: &WebviewWindow, picker_session: u32) {
     #[cfg(target_os = "macos")]
-    let _ = (window, should_focus, reveal_generation);
+    let _ = (window, picker_session);
 
     #[cfg(not(target_os = "macos"))]
-    {
-        crate::clean_capture::schedule_overlay_reveal(window, reveal_generation, should_focus);
+    request_overlay_focus(window, picker_session, true);
+}
+
+pub(crate) fn request_overlay_reveal(window: &WebviewWindow, session: u32, focus: bool) {
+    let reveal = window
+        .app_handle()
+        .state::<WindowFocusManager>()
+        .lifecycle
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .request(window.label(), session, focus);
+    if let Some(reveal) = reveal {
+        schedule_ready_overlay(window, reveal);
     }
 }
 
-fn focus_target_select_overlay(window: &WebviewWindow, reveal_generation: u32) {
-    #[cfg(target_os = "macos")]
-    let _ = (window, reveal_generation);
+pub(crate) fn restore_overlay_reveal(window: &WebviewWindow, session: u32) {
+    let reveal = window
+        .app_handle()
+        .state::<WindowFocusManager>()
+        .lifecycle
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .restore(window.label(), session, false);
+    if let Some(reveal) = reveal {
+        schedule_ready_overlay(window, reveal);
+    }
+}
 
-    #[cfg(not(target_os = "macos"))]
-    crate::clean_capture::schedule_overlay_focus(window, reveal_generation);
+fn request_overlay_focus(window: &WebviewWindow, session: u32, focus: bool) {
+    let reveal = window
+        .app_handle()
+        .state::<WindowFocusManager>()
+        .lifecycle
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .focus(window.label(), session, focus);
+    if let Some(reveal) = reveal {
+        schedule_ready_overlay(window, reveal);
+    }
+}
+
+fn schedule_ready_overlay(window: &WebviewWindow, reveal: lifecycle::Reveal) {
+    let handle = window.clone();
+    let generation = crate::clean_capture::generation(window.app_handle());
+    let _ = window.run_on_main_thread(move || {
+        let focus = handle
+            .app_handle()
+            .state::<WindowFocusManager>()
+            .lifecycle
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .may_reveal(handle.label(), reveal);
+        let Some(focus) = focus else {
+            return;
+        };
+        if !matches!(
+            crate::clean_capture::reveal_now(&handle, generation),
+            Ok(true)
+        ) {
+            return;
+        }
+        if let Err(error) = handle.set_ignore_cursor_events(false) {
+            error!(%error, "Failed to enable target picker interaction");
+            hide_overlay(&handle);
+            return;
+        }
+        #[cfg(not(target_os = "macos"))]
+        if focus {
+            let _ = handle.set_focus();
+        }
+        #[cfg(target_os = "macos")]
+        if focus {
+            use tauri_nspanel::WebviewWindowExt;
+            if let Ok(panel) = handle.to_panel() {
+                panel.show();
+            }
+        }
+    });
+}
+
+pub(crate) fn mark_overlay_native_ready(window: &WebviewWindow, instance: u32) {
+    mark_overlay_ready(window, instance, false);
+}
+
+fn mark_overlay_ready(window: &WebviewWindow, instance: u32, frontend: bool) {
+    let reveal = window
+        .app_handle()
+        .state::<WindowFocusManager>()
+        .lifecycle
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .ready(window.label(), instance, frontend);
+    if let Some(reveal) = reveal {
+        schedule_ready_overlay(window, reveal);
+    }
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn target_select_overlay_ready(window: WebviewWindow, instance: u32) {
+    mark_overlay_ready(&window, instance, true);
 }
 
 fn should_skip_window(window: &Window, exclusions: &[WindowExclusion]) -> bool {
@@ -386,11 +522,28 @@ pub async fn close_target_select_overlays(
     Ok(())
 }
 
+#[specta::specta]
+#[tauri::command]
+pub fn suspend_target_select_overlays(app: AppHandle) {
+    let state = app.state::<WindowFocusManager>();
+    state.shutdown(&app);
+    state.clear_overlay_restore_labels();
+    for (label, window) in app.webview_windows() {
+        if matches!(
+            CapWindowId::from_str(&label),
+            Ok(CapWindowId::TargetSelectOverlay { .. })
+        ) {
+            hide_overlay(&window);
+        }
+    }
+}
+
 pub fn close_target_select_overlay_windows(app: &AppHandle) {
     let state = app.try_state::<WindowFocusManager>();
     let mut saw_overlay = false;
 
     if let Some(state) = state.as_ref() {
+        state.cancel_picker();
         state.clear_overlay_restore_labels();
     }
 
@@ -399,10 +552,9 @@ pub fn close_target_select_overlay_windows(app: &AppHandle) {
             saw_overlay = true;
             // On Windows, hide() leaves the DirectComposition transparency surface composited on
             // screen (ghost overlay). Closing the window fully releases the surface.
+            hide_overlay(&window);
             #[cfg(windows)]
             let _ = window.close();
-            #[cfg(not(windows))]
-            hide_overlay(&window);
             if let Some(state) = state.as_ref() {
                 state.destroy(&display_id, app.global_shortcut());
             }
@@ -411,6 +563,39 @@ pub fn close_target_select_overlay_windows(app: &AppHandle) {
 
     if !saw_overlay && let Some(state) = state {
         state.shutdown(app);
+    }
+}
+
+pub(crate) fn dismiss_picker_from_escape(app: &AppHandle) {
+    let Some(session) = app.state::<WindowFocusManager>().picker_session() else {
+        return;
+    };
+    let owner = CapWindowId::Main.get(app);
+    close_target_select_overlay_windows(app);
+    if let Some(owner) = owner {
+        let app = app.clone();
+        let generation = crate::clean_capture::generation(&app);
+        let _ = owner.clone().run_on_main_thread(move || {
+            let cancelled = app
+                .state::<WindowFocusManager>()
+                .lifecycle
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .is_cancelled(session);
+            let idle = app
+                .state::<ArcLock<App>>()
+                .try_read()
+                .is_ok_and(|state| !state.is_recording_active_or_pending());
+            if cancelled
+                && idle
+                && matches!(
+                    crate::clean_capture::reveal_now(&owner, generation),
+                    Ok(true)
+                )
+            {
+                let _ = owner.set_focus();
+            }
+        });
     }
 }
 
@@ -511,6 +696,8 @@ pub async fn focus_window(window_id: WindowId) -> Result<(), String> {
 
 #[derive(Default)]
 pub struct WindowFocusManager {
+    lifecycle: Mutex<lifecycle::Lifecycle>,
+    pub(crate) creation: tokio::sync::Mutex<()>,
     task: Mutex<Option<JoinHandle<()>>>,
     tasks: Mutex<HashMap<String, JoinHandle<()>>>,
     escape_registered: Mutex<bool>,
@@ -518,6 +705,55 @@ pub struct WindowFocusManager {
 }
 
 impl WindowFocusManager {
+    pub(crate) fn begin_picker(&self) -> u32 {
+        self.lifecycle
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .begin()
+    }
+
+    pub(crate) fn picker_session(&self) -> Option<u32> {
+        self.lifecycle
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .current()
+    }
+
+    pub(crate) fn picker_is_current(&self, session: u32) -> bool {
+        self.lifecycle
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_current(session)
+    }
+
+    pub(crate) fn cancel_picker(&self) -> bool {
+        self.lifecycle
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .cancel()
+    }
+
+    pub(crate) fn register_overlay(&self, label: &str, session: u32) -> Option<u32> {
+        self.lifecycle
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .register(label, session)
+    }
+
+    pub(crate) fn suspend_overlay(&self, label: &str) {
+        self.lifecycle
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .suspend(label);
+    }
+
+    pub(crate) fn suspend_all_overlays(&self) {
+        self.lifecycle
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .suspend_all();
+    }
+
     fn abort_all_tasks(&self) {
         let tasks = {
             let mut tasks = self.tasks.lock().unwrap_or_else(PoisonError::into_inner);
@@ -531,17 +767,19 @@ impl WindowFocusManager {
         abort_join_handles(tasks, task);
     }
 
-    pub fn spawn(&self, id: &DisplayId, window: WebviewWindow) {
+    pub fn spawn(&self, id: &DisplayId, window: WebviewWindow, picker_session: u32) {
         let display_id = id.clone();
         let task_id = id.to_string();
-        #[cfg(windows)]
-        let reveal_generation = crate::clean_capture::generation(window.app_handle());
         let handle = tokio::spawn(async move {
             let app = window.app_handle();
             let mut main_window_was_seen = false;
 
             loop {
-                if crate::app_is_exiting(app) {
+                if crate::app_is_exiting(app)
+                    || !app
+                        .state::<WindowFocusManager>()
+                        .picker_is_current(picker_session)
+                {
                     break;
                 }
 
@@ -582,11 +820,7 @@ impl WindowFocusManager {
                         overlay_focused || cap_main.is_focused().ok().unwrap_or_default();
 
                     if !should_refocus {
-                        crate::clean_capture::schedule_overlay_reveal(
-                            &window,
-                            reveal_generation,
-                            true,
-                        );
+                        request_overlay_focus(&window, picker_session, true);
                     }
                 }
 
@@ -594,6 +828,14 @@ impl WindowFocusManager {
             }
         });
 
+        let lifecycle = self
+            .lifecycle
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if !lifecycle.is_current(picker_session) {
+            handle.abort();
+            return;
+        }
         let mut tasks = self.tasks.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(task) = tasks.insert(task_id, handle) {
             task.abort();
@@ -633,9 +875,12 @@ impl WindowFocusManager {
     }
 
     fn finish_if_idle<R: tauri::Runtime>(&self, global_shortcut: &GlobalShortcut<R>) {
-        let tasks = self.tasks.lock().unwrap_or_else(PoisonError::into_inner);
-        if tasks.is_empty() {
-            drop(tasks);
+        let idle = self
+            .tasks
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_empty();
+        if idle && self.picker_session().is_none() {
             self.unregister_escape(global_shortcut);
 
             if let Some(task) = self
@@ -661,6 +906,7 @@ impl WindowFocusManager {
     }
 
     pub fn shutdown(&self, app: &AppHandle) {
+        self.cancel_picker();
         self.abort_all_tasks();
 
         self.unregister_escape(app.global_shortcut());

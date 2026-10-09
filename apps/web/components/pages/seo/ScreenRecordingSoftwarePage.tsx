@@ -183,9 +183,10 @@ export const screenRecordingSoftwareContent: SeoPageContent = {
 	],
 
 	video: {
-		url: "/videos/cap-screen-recording-software-demo.mp4",
-		thumbnail: "/videos/cap-screen-recording-software-thumbnail.png",
-		alt: "Cap screen recording software demo showing HD capture and instant sharing",
+		iframe: {
+			src: "https://www.rend.so/embed/10512af0-b922-4efa-8974-f8f14fc1886a?accent=3e63dd",
+			title: "Cap screen recording demo",
+		},
 	},
 
 	cta: {

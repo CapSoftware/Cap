@@ -1329,6 +1329,8 @@ mod tests {
                 end: 14.0,
                 name: None,
                 speed_audio_mode: None,
+                hide_cursor: None,
+                volume: None,
             },
             TimelineSegment {
                 recording_clip: 0,
@@ -1337,6 +1339,8 @@ mod tests {
                 end: 34.0,
                 name: None,
                 speed_audio_mode: None,
+                hide_cursor: None,
+                volume: None,
             },
         ];
         config.transitions = vec![ClipTransition {
@@ -2103,6 +2107,8 @@ mod tests {
                 end: 20.0,
                 name: None,
                 speed_audio_mode: None,
+                hide_cursor: None,
+                volume: None,
             }],
             transitions: vec![],
             zoom_segments: vec![],
@@ -2162,6 +2168,8 @@ mod tests {
                     end: 4.0,
                     name: None,
                     speed_audio_mode: None,
+                    hide_cursor: None,
+                    volume: None,
                 },
                 TimelineSegment {
                     recording_clip: 0,
@@ -2170,6 +2178,8 @@ mod tests {
                     end: 14.0,
                     name: None,
                     speed_audio_mode: None,
+                    hide_cursor: None,
+                    volume: None,
                 },
             ],
             transitions: vec![ClipTransition {

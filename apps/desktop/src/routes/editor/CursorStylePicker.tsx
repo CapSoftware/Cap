@@ -10,10 +10,16 @@ import tahoeArrow from "../../../../../crates/cursor-info/assets/mac/tahoe/defau
 import windowsArrow from "../../../../../crates/cursor-info/assets/windows/arrow.svg?raw";
 import { RgbInput } from "./color-utils";
 import { type TransformedMeta, useEditorContext } from "./context";
+import {
+	type CursorFamily,
+	type CursorStyle,
+	cursorStyleDescription,
+	cursorStyleOrder,
+	selectedCursorStyle,
+} from "./cursor-style";
 import { Field, Section, Slider } from "./ui";
 
-export type CursorFamily = "macos" | "tahoe" | "windows";
-type CursorStyle = CursorFamily | "circle";
+export type { CursorFamily } from "./cursor-style";
 
 const CURSOR_FAMILIES = {
 	macos: { label: "macOS", arrow: macArrow },
@@ -60,12 +66,6 @@ function hostCursorFamily(): CursorFamily {
 	return ostype() === "windows" ? "windows" : "macos";
 }
 
-function cursorStyleOrder(): CursorStyle[] {
-	return ostype() === "windows"
-		? ["windows", "macos", "tahoe", "circle"]
-		: ["macos", "tahoe", "windows", "circle"];
-}
-
 function CursorArrow(props: { svg: string }) {
 	return (
 		<div class="h-[34px] [&>svg]:h-full [&>svg]:w-auto" innerHTML={props.svg} />
@@ -78,31 +78,58 @@ function CircleCursor() {
 	);
 }
 
-function CursorStyleCard(props: { style: CursorStyle; recorded: boolean }) {
+function CursorStyleCard(props: {
+	style: CursorStyle;
+	recorded: CursorFamily | undefined;
+}) {
 	const label = () =>
-		props.style === "circle" ? "Circle" : CURSOR_FAMILIES[props.style].label;
+		props.style === "auto"
+			? "Default"
+			: props.style === "circle"
+				? "Circle"
+				: CURSOR_FAMILIES[props.style].label;
 
 	const tile = () => (
-		<div class="flex justify-center items-center w-full h-[60px] rounded-[10px] transition-shadow bg-ed-card-2 ring-1 ring-ed-line group-hover:ring-ed-line-strong group-data-checked:ring-2 group-data-checked:ring-ed-accent group-data-checked:ring-offset-2 group-data-checked:ring-offset-ed-card group-has-[input:focus-visible]:ring-2 group-has-[input:focus-visible]:ring-ed-accent">
+		<div
+			classList={{ "gap-3": props.style === "auto" }}
+			class="flex justify-center items-center w-full h-[60px] rounded-[10px] transition-shadow bg-ed-card-2 ring-1 ring-ed-line group-hover:ring-ed-line-strong group-data-checked:ring-2 group-data-checked:ring-ed-accent group-data-checked:ring-offset-2 group-data-checked:ring-offset-ed-card group-has-[input:focus-visible]:ring-2 group-has-[input:focus-visible]:ring-ed-accent"
+		>
 			<Show
-				when={props.style !== "circle" && props.style}
+				when={
+					props.style !== "circle" &&
+					(props.style === "auto"
+						? (props.recorded ?? hostCursorFamily())
+						: props.style)
+				}
 				fallback={<CircleCursor />}
 			>
 				{(family) => <CursorArrow svg={CURSOR_FAMILIES[family()].arrow} />}
+			</Show>
+			<Show when={props.style === "auto"}>
+				<span class="text-xs font-medium text-ed-text-1">Default</span>
+				<span class="text-[11px] text-ed-text-2">Recorded cursors</span>
 			</Show>
 		</div>
 	);
 
 	return (
-		<KRadioGroup.Item value={props.style} class="group min-w-0">
+		<KRadioGroup.Item
+			value={props.style}
+			class="group min-w-0"
+			classList={{ "col-span-4": props.style === "auto" }}
+		>
 			<KRadioGroup.ItemInput class="sr-only" />
 			<KRadioGroup.ItemLabel class="flex cursor-pointer flex-col items-center gap-1.5">
-				<Show when={props.recorded} fallback={tile()}>
-					<Tooltip content="Recorded with this cursor" childClass="w-full">
-						{tile()}
-					</Tooltip>
-				</Show>
-				<span class="max-w-full text-[11px] font-medium leading-none truncate transition-colors text-ed-text-2 group-hover:text-ed-text-1 group-data-checked:text-ed-text-1">
+				<Tooltip
+					content={cursorStyleDescription(props.style)}
+					childClass="w-full"
+				>
+					{tile()}
+				</Tooltip>
+				<span
+					classList={{ hidden: props.style === "auto" }}
+					class="max-w-full text-[11px] font-medium leading-none truncate transition-colors text-ed-text-2 group-hover:text-ed-text-1 group-data-checked:text-ed-text-1"
+				>
 					{label()}
 				</span>
 			</KRadioGroup.ItemLabel>
@@ -115,11 +142,7 @@ export function CursorStylePicker() {
 
 	const recorded = createMemo(() => recordedCursorFamily(meta()));
 
-	const selected = createMemo<CursorStyle>(() => {
-		const type = project.cursor.type;
-		if (type === "circle" || isExplicitCursorFamily(type)) return type;
-		return recorded() ?? hostCursorFamily();
-	});
+	const selected = createMemo(() => selectedCursorStyle(project.cursor.type));
 
 	return (
 		<Section name="Cursor style">
@@ -128,12 +151,13 @@ export function CursorStylePicker() {
 				value={selected()}
 				onChange={(value) => setProject("cursor", "type", value as CursorType)}
 			>
-				<For each={cursorStyleOrder()}>
-					{(style) => (
-						<CursorStyleCard style={style} recorded={recorded() === style} />
-					)}
+				<For each={cursorStyleOrder(ostype())}>
+					{(style) => <CursorStyleCard style={style} recorded={recorded()} />}
 				</For>
 			</KRadioGroup>
+			<p class="text-[11px] leading-relaxed text-ed-text-2">
+				{cursorStyleDescription(selected())}
+			</p>
 		</Section>
 	);
 }

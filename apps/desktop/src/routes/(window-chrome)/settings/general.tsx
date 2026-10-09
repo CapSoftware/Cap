@@ -26,6 +26,7 @@ import themePreviewDark from "~/assets/theme-previews/dark.jpg";
 import themePreviewLight from "~/assets/theme-previews/light.jpg";
 import { Input, Slider } from "~/routes/editor/ui";
 import {
+	audioEnhancementStore,
 	authStore,
 	generalSettingsStore,
 	recordingStartSafetyStore,
@@ -129,7 +130,11 @@ const DEFAULT_PROJECT_NAME_TEMPLATE =
 
 export default function GeneralSettings() {
 	const [stores] = createResource(() =>
-		Promise.all([generalSettingsStore.get(), recordingStartSafetyStore.get()]),
+		Promise.all([
+			generalSettingsStore.get(),
+			recordingStartSafetyStore.get(),
+			audioEnhancementStore.get(),
+		]),
 	);
 
 	return (
@@ -140,6 +145,7 @@ export default function GeneralSettings() {
 					initialRecordingStartSafety={
 						stores[1] ?? RECORDING_START_SAFETY_DEFAULTS
 					}
+					initialStudioSoundByDefault={stores[2]?.enabledByDefault ?? true}
 				/>
 			)}
 		</Show>
@@ -223,6 +229,7 @@ function AppearanceSection(props: {
 function Inner(props: {
 	initialStore: GeneralSettingsStore | null;
 	initialRecordingStartSafety: RecordingStartSafetySettings;
+	initialStudioSoundByDefault: boolean;
 }) {
 	const [settings, setSettings] = createStore<ExtendedGeneralSettingsStore>(
 		deriveGeneralSettings(props.initialStore),
@@ -232,6 +239,10 @@ function Inner(props: {
 		setConfirmBeforeRecordingWithoutMicrophone,
 	] = createSignal(
 		props.initialRecordingStartSafety.confirmBeforeRecordingWithoutMicrophone,
+	);
+
+	const [studioSoundByDefault, setStudioSoundByDefault] = createSignal(
+		props.initialStudioSoundByDefault,
 	);
 
 	createEffect(() => {
@@ -282,6 +293,17 @@ function Inner(props: {
 		} catch (error) {
 			setConfirmBeforeRecordingWithoutMicrophone(previousValue);
 			console.error("Failed to update recording start safety", error);
+		}
+	};
+
+	const handleStudioSoundByDefaultChange = async (value: boolean) => {
+		const previousValue = studioSoundByDefault();
+		setStudioSoundByDefault(value);
+		try {
+			await audioEnhancementStore.set({ enabledByDefault: value });
+		} catch (error) {
+			setStudioSoundByDefault(previousValue);
+			console.error("Failed to update Studio Sound default", error);
 		}
 	};
 
@@ -507,6 +529,12 @@ function Inner(props: {
 							description="Require confirmation when no microphone is selected or the selected microphone is unavailable."
 							value={confirmBeforeRecordingWithoutMicrophone()}
 							onChange={handleRecordingStartSafetyChange}
+						/>
+						<ToggleSettingItem
+							label="Studio Sound on new recordings"
+							description="Clean up microphone audio automatically. You can still turn it off for any recording in the editor."
+							value={studioSoundByDefault()}
+							onChange={handleStudioSoundByDefaultChange}
 						/>
 						<SelectSettingItem
 							label="Main window when recording starts"

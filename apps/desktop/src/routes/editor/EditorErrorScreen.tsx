@@ -2,7 +2,6 @@ import { Button } from "@cap/ui-solid";
 import { createMutation } from "@tanstack/solid-query";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import { createEffect, onCleanup, Show } from "solid-js";
 import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
@@ -165,7 +164,7 @@ export function EditorErrorScreen(props: {
 	});
 
 	const handleOpenFolder = () => {
-		revealItemInDir(props.projectPath);
+		commands.revealItemInDir(props.projectPath);
 	};
 
 	return (
@@ -194,6 +193,17 @@ export function EditorErrorScreen(props: {
 						</h2>
 						<p class="text-sm text-gray-11">{props.error}</p>
 					</div>
+
+					<Show when={!needsRecovery()}>
+						<Button
+							onClick={() => window.location.reload()}
+							variant="primary"
+							class="w-full"
+						>
+							<IconRefreshCw class="size-4 mr-2" />
+							Try again
+						</Button>
+					</Show>
 
 					<Show when={needsRecovery()}>
 						<div class="bg-gray-2 border border-gray-4 rounded-xl p-4 space-y-4">

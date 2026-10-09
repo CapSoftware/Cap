@@ -1,4 +1,3 @@
-import { Button } from "@cap/ui-solid";
 import { NumberField } from "@kobalte/core";
 import {
 	Collapsible,
@@ -12,7 +11,6 @@ import { Select as KSelect } from "@kobalte/core/select";
 import { Tabs as KTabs } from "@kobalte/core/tabs";
 import { createElementBounds } from "@solid-primitives/bounds";
 import { createEventListenerMap } from "@solid-primitives/event-listener";
-import { createWritableMemo } from "@solid-primitives/memo";
 import { createQuery } from "@tanstack/solid-query";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { appDataDir, resolveResource } from "@tauri-apps/api/path";
@@ -37,7 +35,6 @@ import {
 	on,
 	onCleanup,
 	onMount,
-	type ParentProps,
 	Show,
 	Suspense,
 	type ValidComponent,
@@ -45,10 +42,13 @@ import {
 import { createStore, produce } from "solid-js/store";
 import { Dynamic } from "solid-js/web";
 import toast from "solid-toast";
+import { cameraBackgroundOptions } from "~/components/CameraPreviewChrome";
 import { Toggle } from "~/components/Toggle";
-import { animatedGradientsStore, generalSettingsStore } from "~/store";
-import { listSystemFonts } from "~/utils/fonts";
-import { normalizeOpaqueHexColor } from "~/utils/hex-color";
+import {
+	animatedGradientsStore,
+	audioEnhancementStore,
+	generalSettingsStore,
+} from "~/store";
 import {
 	createSelectedOrganization,
 	getOrganizationBrandColorSwatches,
@@ -73,19 +73,12 @@ import {
 	type SplitLayout,
 	type StereoMode,
 	type TimelineSegment,
+	type VoiceIsolation,
 	type XY,
 	type ZoomSegment,
 } from "~/utils/tauri";
-import IconLucideAlignCenter from "~icons/lucide/align-center";
-import IconLucideAlignLeft from "~icons/lucide/align-left";
-import IconLucideAlignRight from "~icons/lucide/align-right";
-import IconLucideArrowLeftRight from "~icons/lucide/arrow-left-right";
-import IconLucideBoxSelect from "~icons/lucide/box-select";
 import IconLucideColumns2 from "~icons/lucide/columns-2";
 import IconLucideEyeOff from "~icons/lucide/eye-off";
-import IconLucideFlipHorizontal2 from "~icons/lucide/flip-horizontal-2";
-import IconLucideFlipVertical2 from "~icons/lucide/flip-vertical-2";
-import IconLucideItalic from "~icons/lucide/italic";
 import IconLucideKeyboard from "~icons/lucide/keyboard";
 import IconLucideMonitor from "~icons/lucide/monitor";
 import IconLucideVideo from "~icons/lucide/video";
@@ -110,13 +103,12 @@ import {
 } from "./CursorStylePicker";
 import { syncCaptionWordsWithText } from "./captions";
 import { type ClipTransition, clipSourceTimeAt } from "./clip-transitions";
-import { getColorPreviewBorderColor, hexToRgb, RgbInput } from "./color-utils";
+import { hexToRgb, RgbInput } from "./color-utils";
 import {
 	type CornerRoundingType,
 	EditorStyleContext,
 	useEditorContext,
 } from "./context";
-import { FontPicker } from "./FontPicker";
 import { GradientEditor } from "./GradientEditor";
 import { ImageSegmentConfig } from "./image-segment-config";
 import { KeyboardTab } from "./KeyboardTab";
@@ -139,62 +131,10 @@ import {
 } from "./projectConfig";
 import ShadowSettings from "./ShadowSettings";
 import { StyleGroupToggle, StyleSegmentConfig } from "./style-segment-config";
-import { TextInput } from "./TextInput";
-import {
-	TEXT_FONT_SIZE_MAX,
-	TEXT_FONT_SIZE_MIN,
-	type TextAlign,
-	type TextLayout,
-	type TextSegment,
-} from "./text";
-import {
-	applyTextPreset,
-	matchTextPreset,
-	TEXT_PRESETS,
-	type TextPreset,
-} from "./text-presets";
-import {
-	TEXT_ANIMATION_OPTIONS,
-	TEXT_SEGMENT_WEIGHT_OPTIONS,
-} from "./text-style";
-import {
-	ANGLE_PRESETS,
-	anglePresetMotion,
-	anglePresetPose,
-	applyMotionTemplate,
-	CAMERA3D_BLUR_MODE_SEEDS,
-	CAMERA3D_BOKEH_MAX_STRENGTH,
-	CAMERA3D_LIMITS,
-	CAMERA3D_RESET_POSE,
-	CAMERA3D_SCENE_DESCRIPTIONS,
-	CAMERA3D_SCENES,
-	CAMERA3D_STARTER_SCENES,
-	CAMERA3D_TRANSITION_LIMITS,
-	type Camera3DAnglePreset,
-	type Camera3DBlurMode,
-	type Camera3DBlurScalarKey,
-	type Camera3DFlipAxis,
-	type Camera3DMotionEasing,
-	type Camera3DMotionTemplate,
-	type Camera3DProperties,
-	type Camera3DPropertyKey,
-	type Camera3DScene,
-	type Camera3DSegment,
-	type Camera3DSetup,
-	camera3DPosesEqual,
-	camera3dBlurLimit,
-	cssPreviewTransform,
-	defaultCamera3DBlur,
-	findCamera3DScene,
-	flipCamera3DSegment,
-	getEndPose,
-	getMotionEasing,
-	getStartPose,
-	MOTION_EASINGS,
-	MOTION_TEMPLATES,
-	matchAnglePreset,
-	setMotion,
-} from "./three-d";
+import type { TextSegment } from "./text";
+import { TextSegmentConfig } from "./text-segment-config";
+import type { Camera3DSegment } from "./three-d";
+import { Camera3DShotPanel, camera3DShotSummary } from "./three-d-panel";
 import { heldTimeBefore, holdWindows } from "./timeline-holds";
 import {
 	ComingSoonTooltip,
@@ -509,6 +449,123 @@ export function ConfigSidebar() {
 	);
 }
 
+function StudioSoundCard() {
+	const { project, setProject } = useEditorContext();
+	const audioEnhancement = audioEnhancementStore.createQuery();
+	const [savingDefault, setSavingDefault] = createSignal(false);
+	const enabled = () => project.audio.improve;
+	const isolationOptions = [
+		{
+			value: "light",
+			label: "Light",
+			description: "Keep more of your original voice and room sound.",
+		},
+		{
+			value: "balanced",
+			label: "Balanced",
+			description: "Clearer isolation with natural voice detail.",
+		},
+		{
+			value: "strong",
+			label: "Strong",
+			description: "More isolation for noisy spaces. May change voice texture.",
+		},
+	] satisfies { value: VoiceIsolation; label: string; description: string }[];
+
+	return (
+		<div class="flex flex-col p-3.5 rounded-xl bg-ed-card-2">
+			<div class="flex flex-row gap-2.5 items-center">
+				<div
+					class="flex justify-center items-center rounded-[9px] size-[30px] shrink-0 transition-colors"
+					classList={{
+						"bg-ed-accent/12 text-ed-accent": enabled(),
+						"bg-ed-ctl text-ed-text-2": !enabled(),
+					}}
+				>
+					<IconCapMicrophone class="size-4" />
+				</div>
+				<div class="flex flex-col flex-1 gap-0.5 min-w-0">
+					<span class="text-[13px] font-medium text-ed-text-1">
+						Studio Sound
+					</span>
+					<span class="text-xs leading-4 text-ed-text-3">
+						Reduces background noise and balances your voice level.
+					</span>
+				</div>
+				<Toggle
+					checked={enabled()}
+					onChange={(value) => setProject("audio", "improve", value)}
+				/>
+			</div>
+			<Show when={enabled()}>
+				<RadioGroup
+					aria-label="Voice isolation"
+					value={project.audio.isolation}
+					disabled={savingDefault() || audioEnhancement.isPending}
+					onChange={async (value) => {
+						const option = isolationOptions.find(
+							(option) => option.value === value,
+						);
+						if (!option) return;
+						setProject("audio", "isolation", option.value);
+						if (!audioEnhancement.data?.enabledByDefault) return;
+						setSavingDefault(true);
+						try {
+							await audioEnhancementStore.set({ isolation: option.value });
+							await audioEnhancement.refetch();
+						} catch {
+							toast.error("Could not save the Studio Sound default");
+						} finally {
+							setSavingDefault(false);
+						}
+					}}
+					class="flex gap-0.5 p-0.5 mt-3 rounded-lg bg-ed-ctl"
+				>
+					<For each={isolationOptions}>
+						{(option) => (
+							<RadioGroup.Item value={option.value} class="flex-1 min-w-0">
+								<RadioGroup.ItemInput class="sr-only peer" />
+								<RadioGroup.ItemLabel class="flex justify-center py-1 text-xs font-medium rounded-md cursor-pointer text-ed-text-2 peer-focus-visible:ring-2 peer-focus-visible:ring-ed-accent data-checked:bg-ed-card data-checked:text-ed-text-1 data-disabled:opacity-50">
+									{option.label}
+								</RadioGroup.ItemLabel>
+							</RadioGroup.Item>
+						)}
+					</For>
+				</RadioGroup>
+				<p class="mt-2 text-xs leading-4 text-ed-text-3">
+					{
+						isolationOptions.find(
+							(option) => option.value === project.audio.isolation,
+						)?.description
+					}
+				</p>
+			</Show>
+			<div class="flex flex-row gap-2.5 justify-between items-center pt-3 mt-3 border-t border-ed-line">
+				<span class="text-xs text-ed-text-2">Use for new recordings</span>
+				<Toggle
+					size="sm"
+					checked={audioEnhancement.data?.enabledByDefault ?? true}
+					disabled={audioEnhancement.isPending || savingDefault()}
+					onChange={async (value) => {
+						setSavingDefault(true);
+						try {
+							await audioEnhancementStore.set({
+								enabledByDefault: value,
+								isolation: project.audio.isolation,
+							});
+							await audioEnhancement.refetch();
+						} catch {
+							toast.error("Could not save the Studio Sound default");
+						} finally {
+							setSavingDefault(false);
+						}
+					}}
+				/>
+			</div>
+		</div>
+	);
+}
+
 function ConfigSidebarContent() {
 	const {
 		project,
@@ -623,9 +680,7 @@ function ConfigSidebarContent() {
 	return (
 		<KTabs
 			value={
-				sidebarSelection() ||
-				editorState.timeline.audioPicker !== null ||
-				editorState.timeline.camera3dSetup !== null
+				sidebarSelection() || editorState.timeline.audioPicker !== null
 					? undefined
 					: state.selectedTab
 			}
@@ -690,9 +745,6 @@ function ConfigSidebarContent() {
 								if (editorState.timeline.audioReplace !== null) {
 									setEditorState("timeline", "audioReplace", null);
 								}
-								if (editorState.timeline.camera3dSetup !== null) {
-									setEditorState("timeline", "camera3dSetup", null);
-								}
 								setState("selectedTab", item.id);
 								scrollRef.scrollTo({
 									top: 0,
@@ -715,8 +767,7 @@ function ConfigSidebarContent() {
 					hidden:
 						!!sidebarSelection() ||
 						editorState.timeline.audioPicker !== null ||
-						editorState.timeline.audioReplace !== null ||
-						editorState.timeline.camera3dSetup !== null,
+						editorState.timeline.audioReplace !== null,
 				}}
 			>
 				<StyleSegmentConfig />
@@ -791,18 +842,9 @@ function ConfigSidebarContent() {
 							</Subfield>
 						)}
 
-						{/* <Subfield name="Mute Audio">
-                <Toggle
-                  checked={project.audio.mute}
-                  onChange={(v) => setProject("audio", "mute", v)}
-                />
-              </Subfield> */}
-
-						{/* <ComingSoonTooltip>
-                <Subfield name="Improve Mic Quality">
-                  <Toggle disabled />
-                </Subfield>
-              </ComingSoonTooltip> */}
+						<Show when={meta().hasMicrophone}>
+							<StudioSoundCard />
+						</Show>
 					</Section>
 					{meta().hasMicrophone && (
 						<Field
@@ -1092,23 +1134,17 @@ function ConfigSidebarContent() {
 				ref={selectionScrollRef}
 				style={{
 					"--margin-top-scroll": "5px",
-					"overflow-y": editorState.timeline.camera3dSetup
-						? "hidden"
-						: undefined,
-					padding: editorState.timeline.camera3dSetup ? "0" : undefined,
 				}}
 				class="custom-scroll min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain pt-3.5 px-4 pb-4 text-[0.875rem] space-y-3.5 bg-ed-card z-50"
 				classList={{
 					hidden:
 						!sidebarSelection() &&
 						editorState.timeline.audioPicker === null &&
-						editorState.timeline.audioReplace === null &&
-						editorState.timeline.camera3dSetup === null,
+						editorState.timeline.audioReplace === null,
 					"animate-in slide-in-from-bottom-2 fade-in":
 						!!sidebarSelection() ||
 						editorState.timeline.audioPicker !== null ||
-						editorState.timeline.audioReplace !== null ||
-						editorState.timeline.camera3dSetup !== null,
+						editorState.timeline.audioReplace !== null,
 				}}
 			>
 				<Show
@@ -1125,22 +1161,6 @@ function ConfigSidebarContent() {
 						}}
 						onClose={() => setEditorState("timeline", "audioPicker", null)}
 					/>
-				</Show>
-				<Show
-					when={
-						!sidebarSelection() &&
-						editorState.timeline.audioPicker === null &&
-						editorState.timeline.audioReplace === null
-							? editorState.timeline.camera3dSetup
-							: null
-					}
-				>
-					{(setup) => (
-						<Camera3DSetupPanel
-							setup={setup()}
-							onClose={() => setEditorState("timeline", "camera3dSetup", null)}
-						/>
-					)}
 				</Show>
 				<Show
 					when={(() => {
@@ -1664,9 +1684,9 @@ function ConfigSidebarContent() {
 								})()}
 							>
 								{(value) => (
-									<div class="space-y-4">
-										<div class="flex flex-row justify-between items-center">
-											<div class="flex gap-2 items-center">
+									<div class="space-y-3.5">
+										<div class="flex flex-row gap-2 justify-between items-center">
+											<div class="flex gap-2 items-center min-w-0">
 												<EditorButton
 													onClick={() =>
 														setEditorState("timeline", "selection", null)
@@ -1675,25 +1695,47 @@ function ConfigSidebarContent() {
 												>
 													Done
 												</EditorButton>
-												<span class="text-[12px] text-ed-text-2">
-													{value().segments.length} 3D{" "}
-													{value().segments.length === 1
-														? "segment"
-														: "segments"}{" "}
-													selected
+												<span class="text-[12px] truncate text-ed-text-2">
+													<Show
+														when={
+															value().segments.length === 1 &&
+															value().segments[0]
+														}
+														fallback={`${value().segments.length} 3D shots selected`}
+													>
+														{(item) => camera3DShotSummary(item().segment)}
+													</Show>
 												</span>
 											</div>
-											<EditorButton
-												variant="danger"
-												onClick={() => {
-													projectActions.deleteCamera3DSegments(
-														value().segments.map((s) => s.index),
-													);
-												}}
-												leftIcon={<IconCapTrash />}
-											>
-												Delete
-											</EditorButton>
+											<div class="flex gap-1 items-center shrink-0">
+												<Show
+													when={
+														value().segments.length === 1 && value().segments[0]
+													}
+												>
+													{(item) => (
+														<EditorButton
+															onClick={() =>
+																projectActions.playCamera3DShot(item().index)
+															}
+															leftIcon={<IconLucidePlay />}
+														>
+															Play shot
+														</EditorButton>
+													)}
+												</Show>
+												<EditorButton
+													variant="danger"
+													onClick={() => {
+														projectActions.deleteCamera3DSegments(
+															value().segments.map((s) => s.index),
+														);
+													}}
+													leftIcon={<IconCapTrash />}
+												>
+													Delete
+												</EditorButton>
+											</div>
 										</div>
 										<Show
 											when={
@@ -1701,12 +1743,10 @@ function ConfigSidebarContent() {
 											}
 										>
 											{(item) => (
-												<div class="p-3.5 rounded-xl bg-ed-card-2">
-													<Camera3DSegmentConfig
-														segment={item().segment}
-														segmentIndex={item().index}
-													/>
-												</div>
+												<Camera3DShotPanel
+													segment={item().segment}
+													segmentIndex={item().index}
+												/>
 											)}
 										</Show>
 									</div>
@@ -3231,25 +3271,15 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
 								onChange={(mirror) => setProject("camera", "mirror", mirror)}
 							/>
 						</Subfield>
-						<Subfield name="Background Blur">
+						<Subfield name="Background">
 							<KSelect<{ name: string; value: BackgroundBlurMode }>
-								options={[
-									{ name: "Off", value: "off" },
-									{ name: "Light Blur", value: "light" },
-									{ name: "Heavy Blur", value: "heavy" },
-								]}
+								options={cameraBackgroundOptions(ostype() === "macos")}
 								optionValue="value"
 								optionTextValue="name"
 								value={
-									(
-										[
-											{ name: "Off", value: "off" },
-											{ name: "Light Blur", value: "light" },
-											{ name: "Heavy Blur", value: "heavy" },
-										] as const
-									).find(
-										(v) =>
-											v.value ===
+									cameraBackgroundOptions(ostype() === "macos").find(
+										(option) =>
+											option.value ===
 											(project.camera.backgroundBlur?.mode ?? "off"),
 									) ?? { name: "Off", value: "off" }
 								}
@@ -3552,662 +3582,6 @@ function CornerStyleSelect(props: {
 					</PopperContent>
 				</KSelect.Portal>
 			</KSelect>
-		</div>
-	);
-}
-
-function HexColorInput(props: {
-	value: string;
-	onChange: (value: string) => void;
-	brandColorSwatches?: OrganizationBrandColorSwatch[];
-}) {
-	const [text, setText] = createWritableMemo(() => props.value);
-	let prevColor = props.value;
-	let colorInput: HTMLInputElement | undefined;
-	const selectBrandColor = (color: string) => {
-		setText(color);
-		prevColor = color;
-		props.onChange(color);
-	};
-
-	return (
-		<div class="flex flex-col gap-2">
-			<div class="flex items-center gap-3">
-				<div class="relative">
-					<button
-						type="button"
-						class="size-[2rem] rounded-[0.5rem] transition-[box-shadow]"
-						style={{
-							"background-color": text(),
-							"box-shadow": `inset 0 0 0 1px ${getColorPreviewBorderColor(
-								text(),
-							)}`,
-						}}
-						onClick={() => colorInput?.click()}
-					/>
-					<input
-						ref={(el) => {
-							colorInput = el;
-						}}
-						type="color"
-						class="absolute inset-0 w-full h-full opacity-0"
-						value={text()}
-						onInput={(e) => {
-							const next = e.currentTarget.value;
-							setText(next);
-							prevColor = next;
-							props.onChange(next);
-						}}
-					/>
-				</div>
-				<TextInput
-					class="flex-1 px-3 py-2 rounded-lg border border-gray-3 bg-gray-2 text-sm text-gray-12"
-					value={text()}
-					onFocus={() => {
-						prevColor = props.value;
-					}}
-					onInput={(e) => {
-						setText(e.currentTarget.value);
-					}}
-					onBlur={(e) => {
-						const next =
-							normalizeOpaqueHexColor(e.currentTarget.value) ?? prevColor;
-						setText(next);
-						prevColor = next;
-						props.onChange(next);
-					}}
-				/>
-			</div>
-			<BrandColorsDropdown
-				swatches={props.brandColorSwatches ?? []}
-				onSelect={selectBrandColor}
-			/>
-		</div>
-	);
-}
-
-function TextStyleSelect<T extends string | number>(props: {
-	options: { label: string; value: T }[];
-	value: T;
-	onChange: (value: T) => void;
-	fallbackLabel?: (value: T) => string;
-}) {
-	const selected = () =>
-		props.options.find((option) => option.value === props.value) ?? {
-			label: props.fallbackLabel?.(props.value) ?? String(props.value),
-			value: props.value,
-		};
-
-	return (
-		<KSelect
-			options={props.options}
-			optionValue="value"
-			optionTextValue="label"
-			value={selected()}
-			onChange={(option) => {
-				if (option) props.onChange(option.value);
-			}}
-			itemComponent={(selectItemProps) => (
-				<MenuItem<typeof KSelect.Item>
-					as={KSelect.Item}
-					item={selectItemProps.item}
-				>
-					<KSelect.ItemLabel class="flex-1">
-						{selectItemProps.item.rawValue.label}
-					</KSelect.ItemLabel>
-					<KSelect.ItemIndicator class="ml-auto text-ed-accent">
-						<IconCapCircleCheck />
-					</KSelect.ItemIndicator>
-				</MenuItem>
-			)}
-		>
-			<KSelect.Trigger class="flex w-full items-center justify-between rounded-md border border-gray-3 bg-gray-2 px-3 py-2 text-sm text-gray-12 transition-colors hover:border-gray-4 hover:bg-gray-3 focus:border-blue-9 focus:outline-hidden focus:ring-1 focus:ring-blue-9">
-				<KSelect.Value<{ label: string; value: T }> class="truncate">
-					{(state) => state.selectedOption()?.label ?? selected().label}
-				</KSelect.Value>
-				<KSelect.Icon>
-					<IconCapChevronDown class="size-3.5 shrink-0 transform transition-transform data-expanded:rotate-180 text-ed-text-3" />
-				</KSelect.Icon>
-			</KSelect.Trigger>
-			<KSelect.Portal>
-				<PopperContent<typeof KSelect.Content>
-					as={KSelect.Content}
-					class={cx(topSlideAnimateClasses, "z-50")}
-				>
-					<MenuItemList<typeof KSelect.Listbox>
-						class="overflow-y-auto max-h-52"
-						as={KSelect.Listbox}
-					/>
-				</PopperContent>
-			</KSelect.Portal>
-		</KSelect>
-	);
-}
-
-const TEXT_PRESET_HOVER_FX: Record<string, string> = {
-	fade: "group-hover:opacity-70",
-	slideUp: "group-hover:-translate-y-1",
-	slideDown: "group-hover:translate-y-1",
-	pop: "group-hover:scale-110",
-	typewriter: "",
-	none: "",
-};
-
-function TextPresetCard(props: {
-	preset: TextPreset;
-	active: boolean;
-	onApply: () => void;
-}) {
-	const style = () => props.preset.style;
-	const stackCss = () =>
-		style()
-			.fontStack.map((family) =>
-				["sans-serif", "serif", "monospace"].includes(family)
-					? family
-					: `"${family}"`,
-			)
-			.join(", ");
-
-	return (
-		<button
-			type="button"
-			onClick={() => props.onApply()}
-			class={cx(
-				"group relative flex h-16 flex-col items-center justify-center overflow-hidden rounded-lg border px-2 pb-3 transition-colors",
-				props.active
-					? "border-blue-9 ring-1 ring-blue-9"
-					: "border-gray-3 hover:border-gray-5",
-			)}
-			style={{
-				background: "linear-gradient(135deg, #17181c 0%, #2a2c33 100%)",
-			}}
-		>
-			<span
-				class={cx(
-					"max-w-full truncate text-white transition-all duration-200",
-					TEXT_PRESET_HOVER_FX[style().animationIn],
-				)}
-				style={{
-					"font-family": stackCss(),
-					"font-weight": String(style().fontWeight),
-					"font-style": style().italic ? "italic" : "normal",
-					"font-size": `${Math.min(Math.max(style().fontSize * 0.22, 11), 24)}px`,
-					"letter-spacing": `${style().letterSpacing * 0.35}px`,
-					"line-height": 1.1,
-					"text-shadow":
-						style().shadow > 0
-							? `0 1px 3px rgba(0, 0, 0, ${0.45 + style().shadow * 0.4})`
-							: "none",
-				}}
-			>
-				{props.preset.sample}
-			</span>
-			<span class="absolute inset-x-0 bottom-1 text-center text-[10px] font-medium text-white/50">
-				{props.preset.name}
-			</span>
-		</button>
-	);
-}
-
-// The renderer also supports splitLeft/splitRight takeovers; only these two
-// are exposed for now.
-const TEXT_LAYOUT_OPTIONS: {
-	value: TextLayout;
-	label: string;
-	icon: ValidComponent;
-}[] = [
-	{ value: "overlay", label: "Overlay", icon: IconLucideBoxSelect },
-	{ value: "fullscreen", label: "Fullscreen", icon: IconLucideMaximize },
-];
-
-const TEXT_LAYOUT_CENTERS: Partial<
-	Record<TextLayout, { x: number; y: number }>
-> = {
-	fullscreen: { x: 0.5, y: 0.5 },
-};
-
-const TEXT_ALIGN_OPTIONS: { value: TextAlign; icon: ValidComponent }[] = [
-	{ value: "left", icon: IconLucideAlignLeft },
-	{ value: "center", icon: IconLucideAlignCenter },
-	{ value: "right", icon: IconLucideAlignRight },
-];
-
-function TextSegmentConfig(props: {
-	segmentIndex: number;
-	segment: TextSegment;
-	brandColorSwatches: OrganizationBrandColorSwatch[];
-}) {
-	const { setProject } = useEditorContext();
-	const [installedFonts] = createResource(listSystemFonts, {
-		initialValue: [],
-	});
-	const clampNumber = (value: number, min: number, max: number) =>
-		Math.min(Math.max(Number.isFinite(value) ? value : min, min), max);
-
-	const updateSegment = (fn: (segment: TextSegment) => void) => {
-		setProject(
-			"timeline",
-			"textSegments",
-			produce((segments) => {
-				const target = segments?.[props.segmentIndex];
-				if (!target) return;
-				fn(target);
-			}),
-		);
-	};
-
-	const activePresetId = createMemo(() =>
-		matchTextPreset(props.segment, installedFonts()),
-	);
-
-	const setAnimationDuration = (
-		key: "animationInDuration" | "animationOutDuration",
-		value: number,
-	) =>
-		updateSegment((segment) => {
-			segment[key] = clampNumber(value, 0, 3);
-			// Old builds only know fadeDuration; keep it tracking the slower
-			// edge so a project opened there still fades sensibly.
-			segment.fadeDuration = Math.max(
-				segment.animationInDuration ?? 0.15,
-				segment.animationOutDuration ?? 0.15,
-			);
-		});
-
-	return (
-		<div class="space-y-4">
-			<Section name={`Text ${props.segmentIndex + 1}`}>
-				<div class="flex items-center gap-3">
-					<textarea
-						class="flex-1 px-3 py-2 rounded-lg border border-gray-3 bg-gray-2 text-gray-12 resize-none min-h-[80px]"
-						value={props.segment.content}
-						onInput={(e) =>
-							updateSegment((segment) => {
-								segment.content = e.currentTarget.value;
-							})
-						}
-					/>
-					<div class="flex flex-col items-center gap-2">
-						<span class="text-[11px] text-ed-text-3">Enabled</span>
-						<Toggle
-							checked={props.segment.enabled}
-							onChange={(value) =>
-								updateSegment((segment) => {
-									segment.enabled = value;
-								})
-							}
-						/>
-					</div>
-				</div>
-			</Section>
-			<Field name="Layout">
-				<div class="flex flex-col gap-3">
-					<div class="grid grid-cols-2 gap-1 rounded-lg border border-gray-3 bg-gray-2 p-1">
-						<For each={TEXT_LAYOUT_OPTIONS}>
-							{(option) => (
-								<button
-									type="button"
-									title={option.label}
-									class={cx(
-										"flex flex-col items-center gap-1 rounded-md py-1.5 transition-colors",
-										(props.segment.layout ?? "overlay") === option.value
-											? "bg-gray-5 text-gray-12"
-											: "text-gray-10 hover:text-gray-12",
-									)}
-									onClick={() =>
-										updateSegment((segment) => {
-											if ((segment.layout ?? "overlay") === option.value)
-												return;
-											segment.layout = option.value;
-											// A takeover layout implies where the text
-											// belongs; place it there so the result reads
-											// immediately (still draggable afterwards).
-											const center = TEXT_LAYOUT_CENTERS[option.value];
-											if (center) segment.center = { ...center };
-										})
-									}
-								>
-									<Dynamic component={option.icon} class="size-4" />
-									<span class="text-[9px] font-medium leading-none">
-										{option.label}
-									</span>
-								</button>
-							)}
-						</For>
-					</div>
-					<Show when={(props.segment.layout ?? "overlay") === "fullscreen"}>
-						<p class="text-xs leading-snug text-gray-10">
-							Pauses the video while the text is shown, then resumes where it
-							left off.
-						</p>
-					</Show>
-					<Show when={(props.segment.layout ?? "overlay") !== "overlay"}>
-						<Field
-							inline
-							name="Screen transition"
-							value={`${clampNumber(
-								props.segment.layoutTransition ?? 0.5,
-								0.1,
-								1.5,
-							).toFixed(2)}s`}
-						>
-							<Slider
-								value={[
-									clampNumber(props.segment.layoutTransition ?? 0.5, 0.1, 1.5),
-								]}
-								onChange={([value]) =>
-									updateSegment((segment) => {
-										segment.layoutTransition = clampNumber(value, 0.1, 1.5);
-									})
-								}
-								minValue={0.1}
-								maxValue={1.5}
-								step={0.05}
-								formatTooltip="s"
-							/>
-						</Field>
-					</Show>
-				</div>
-			</Field>
-			<Field name="Templates">
-				<div class="grid grid-cols-2 gap-2">
-					<For each={TEXT_PRESETS}>
-						{(preset) => (
-							<TextPresetCard
-								preset={preset}
-								active={activePresetId() === preset.id}
-								onApply={() =>
-									updateSegment((segment) =>
-										applyTextPreset(segment, preset, installedFonts()),
-									)
-								}
-							/>
-						)}
-					</For>
-				</div>
-			</Field>
-			<Field name="Font">
-				<div class="flex flex-col gap-2">
-					<FontPicker
-						value={props.segment.fontFamily ?? "sans-serif"}
-						onChange={(family) =>
-							updateSegment((segment) => {
-								segment.fontFamily = family;
-							})
-						}
-					/>
-					<div class="flex items-center gap-2">
-						<div class="flex-1">
-							<TextStyleSelect
-								options={TEXT_SEGMENT_WEIGHT_OPTIONS}
-								value={props.segment.fontWeight}
-								onChange={(value) =>
-									updateSegment((segment) => {
-										segment.fontWeight = value;
-									})
-								}
-								fallbackLabel={(value) => `Custom (${value})`}
-							/>
-						</div>
-						<button
-							type="button"
-							title="Italic"
-							class={cx(
-								"flex size-9 shrink-0 items-center justify-center rounded-md border transition-colors",
-								props.segment.italic
-									? "border-blue-9 bg-blue-9/10 text-blue-9"
-									: "border-gray-3 bg-gray-2 text-gray-11 hover:bg-gray-3",
-							)}
-							onClick={() =>
-								updateSegment((segment) => {
-									segment.italic = !segment.italic;
-								})
-							}
-						>
-							<IconLucideItalic class="size-4" />
-						</button>
-					</div>
-					<Field
-						inline
-						name="Size"
-						value={Math.round(
-							clampNumber(
-								props.segment.fontSize,
-								TEXT_FONT_SIZE_MIN,
-								TEXT_FONT_SIZE_MAX,
-							),
-						)}
-					>
-						<Slider
-							value={[
-								clampNumber(
-									props.segment.fontSize,
-									TEXT_FONT_SIZE_MIN,
-									TEXT_FONT_SIZE_MAX,
-								),
-							]}
-							onChange={([value]) =>
-								updateSegment((segment) => {
-									const newFontSize = clampNumber(
-										value,
-										TEXT_FONT_SIZE_MIN,
-										TEXT_FONT_SIZE_MAX,
-									);
-									const oldFontSize = segment.fontSize || 48;
-									const scale = newFontSize / oldFontSize;
-
-									segment.fontSize = newFontSize;
-
-									// Scale the box with the font so line wrapping is
-									// preserved; keep the top edge fixed since the renderer
-									// anchors text at the top of the box (the canvas overlay
-									// re-hugs the box to the exact glyph bounds when visible).
-									if (segment.size && segment.center) {
-										const topEdge = segment.center.y - segment.size.y / 2;
-										segment.size.x = Math.min(segment.size.x * scale, 1);
-										segment.size.y = segment.size.y * scale;
-										segment.center.y = topEdge + segment.size.y / 2;
-									}
-								})
-							}
-							minValue={TEXT_FONT_SIZE_MIN}
-							maxValue={TEXT_FONT_SIZE_MAX}
-							step={1}
-						/>
-					</Field>
-				</div>
-			</Field>
-			<Field name="Alignment">
-				<div class="flex flex-col gap-3">
-					<div class="grid grid-cols-3 gap-1 rounded-lg border border-gray-3 bg-gray-2 p-1">
-						<For each={TEXT_ALIGN_OPTIONS}>
-							{(option) => (
-								<button
-									type="button"
-									class={cx(
-										"flex items-center justify-center rounded-md py-1.5 transition-colors",
-										(props.segment.align ?? "center") === option.value
-											? "bg-gray-5 text-gray-12"
-											: "text-gray-10 hover:text-gray-12",
-									)}
-									onClick={() =>
-										updateSegment((segment) => {
-											segment.align = option.value;
-										})
-									}
-								>
-									<Dynamic component={option.icon} class="size-4" />
-								</button>
-							)}
-						</For>
-					</div>
-					<Field
-						inline
-						name="Line height"
-						value={clampNumber(props.segment.lineHeight ?? 1.2, 0.8, 2).toFixed(
-							2,
-						)}
-					>
-						<Slider
-							value={[clampNumber(props.segment.lineHeight ?? 1.2, 0.8, 2)]}
-							onChange={([value]) =>
-								updateSegment((segment) => {
-									segment.lineHeight = clampNumber(value, 0.8, 2);
-								})
-							}
-							minValue={0.8}
-							maxValue={2}
-							step={0.05}
-						/>
-					</Field>
-					<Field
-						inline
-						name="Letter spacing"
-						value={`${clampNumber(
-							props.segment.letterSpacing ?? 0,
-							-2,
-							20,
-						).toFixed(1)}px`}
-					>
-						<Slider
-							value={[clampNumber(props.segment.letterSpacing ?? 0, -2, 20)]}
-							onChange={([value]) =>
-								updateSegment((segment) => {
-									segment.letterSpacing = clampNumber(value, -2, 20);
-								})
-							}
-							minValue={-2}
-							maxValue={20}
-							step={0.5}
-							formatTooltip="px"
-						/>
-					</Field>
-				</div>
-			</Field>
-			<Field name="Color">
-				<div class="flex flex-col gap-3">
-					<HexColorInput
-						value={props.segment.color}
-						brandColorSwatches={props.brandColorSwatches}
-						onChange={(value) =>
-							updateSegment((segment) => {
-								segment.color = value;
-							})
-						}
-					/>
-					<Field inline name="Background">
-						<Toggle
-							checked={props.segment.backgroundColor != null}
-							onChange={(enabled) =>
-								updateSegment((segment) => {
-									segment.backgroundColor = enabled ? "#000000" : undefined;
-								})
-							}
-						/>
-					</Field>
-					<Show when={props.segment.backgroundColor != null}>
-						<HexColorInput
-							value={props.segment.backgroundColor ?? "#000000"}
-							brandColorSwatches={props.brandColorSwatches}
-							onChange={(value) =>
-								updateSegment((segment) => {
-									segment.backgroundColor = value;
-								})
-							}
-						/>
-					</Show>
-					<Field
-						inline
-						name="Opacity"
-						value={`${Math.round(clampNumber(props.segment.opacity ?? 1, 0, 1) * 100)}%`}
-					>
-						<Slider
-							value={[clampNumber(props.segment.opacity ?? 1, 0, 1)]}
-							onChange={([value]) =>
-								updateSegment((segment) => {
-									segment.opacity = clampNumber(value, 0, 1);
-								})
-							}
-							minValue={0}
-							maxValue={1}
-							step={0.01}
-						/>
-					</Field>
-					<Field
-						inline
-						name="Shadow"
-						value={`${Math.round(clampNumber(props.segment.shadow ?? 0, 0, 1) * 100)}%`}
-					>
-						<Slider
-							value={[clampNumber(props.segment.shadow ?? 0, 0, 1)]}
-							onChange={([value]) =>
-								updateSegment((segment) => {
-									segment.shadow = clampNumber(value, 0, 1);
-								})
-							}
-							minValue={0}
-							maxValue={1}
-							step={0.01}
-						/>
-					</Field>
-				</div>
-			</Field>
-			<Field name="Animation">
-				<div class="flex flex-col gap-3">
-					<div class="flex flex-col gap-2">
-						<span class="text-[11px] text-ed-text-3">In</span>
-						<TextStyleSelect
-							options={TEXT_ANIMATION_OPTIONS}
-							value={props.segment.animationIn ?? "fade"}
-							onChange={(value) =>
-								updateSegment((segment) => {
-									segment.animationIn = value;
-								})
-							}
-						/>
-						<Show when={(props.segment.animationIn ?? "fade") !== "none"}>
-							<Slider
-								value={[
-									clampNumber(props.segment.animationInDuration ?? 0.15, 0, 3),
-								]}
-								onChange={([value]) =>
-									setAnimationDuration("animationInDuration", value)
-								}
-								minValue={0}
-								maxValue={3}
-								step={0.05}
-								formatTooltip="s"
-							/>
-						</Show>
-					</div>
-					<div class="flex flex-col gap-2">
-						<span class="text-[11px] text-ed-text-3">Out</span>
-						<TextStyleSelect
-							options={TEXT_ANIMATION_OPTIONS}
-							value={props.segment.animationOut ?? "fade"}
-							onChange={(value) =>
-								updateSegment((segment) => {
-									segment.animationOut = value;
-								})
-							}
-						/>
-						<Show when={(props.segment.animationOut ?? "fade") !== "none"}>
-							<Slider
-								value={[
-									clampNumber(props.segment.animationOutDuration ?? 0.15, 0, 3),
-								]}
-								onChange={([value]) =>
-									setAnimationDuration("animationOutDuration", value)
-								}
-								minValue={0}
-								maxValue={3}
-								step={0.05}
-								formatTooltip="s"
-							/>
-						</Show>
-					</div>
-				</div>
-			</Field>
 		</div>
 	);
 }
@@ -4746,944 +4120,6 @@ function MaskSegmentConfig(props: {
 					/>
 				</Field>
 			</Show>
-		</div>
-	);
-}
-
-const CAMERA3D_SLIDERS: Array<{
-	key: Camera3DPropertyKey;
-	label: string;
-	unit: string;
-}> = [
-	{ key: "tiltX", label: "Tilt X", unit: "°" },
-	{ key: "tiltY", label: "Tilt Y", unit: "°" },
-	{ key: "roll", label: "Roll", unit: "°" },
-	{ key: "rotateX", label: "Rotate X", unit: "°" },
-	{ key: "rotateY", label: "Rotate Y", unit: "°" },
-	{ key: "fov", label: "Field of view", unit: "°" },
-	{ key: "zoom", label: "Zoom", unit: "" },
-	{ key: "panX", label: "Pan X", unit: "" },
-	{ key: "panY", label: "Pan Y", unit: "" },
-];
-
-function camera3dSliderIcon(key: Camera3DPropertyKey) {
-	switch (key) {
-		case "roll":
-			return <IconLucideRotateCw class="size-4" />;
-		case "fov":
-			return <IconLucideMaximize class="size-4" />;
-		case "zoom":
-			return <IconLucideSearch class="size-4" />;
-		case "panX":
-		case "panY":
-			return <IconLucideMove class="size-4" />;
-		default:
-			return <IconLucideRotate3d class="size-4" />;
-	}
-}
-
-const CAMERA3D_BLUR_MODE_OPTIONS: Array<{
-	value: Camera3DBlurMode;
-	label: string;
-}> = [
-	{ value: "none", label: "None" },
-	{ value: "radial", label: "Radial" },
-	{ value: "directional", label: "Directional" },
-	{ value: "tiltShift", label: "Tilt Shift" },
-];
-
-type Camera3DBlurSlider = {
-	key: Camera3DBlurScalarKey;
-	label: string;
-	unit: string;
-};
-
-// Each mode exposes only the parameters it actually reads, in display order.
-const CAMERA3D_BLUR_SLIDERS: Record<
-	Exclude<Camera3DBlurMode, "none">,
-	Camera3DBlurSlider[]
-> = {
-	radial: [
-		{ key: "strength", label: "Strength", unit: "" },
-		{ key: "focusX", label: "Focus X", unit: "" },
-		{ key: "focusY", label: "Focus Y", unit: "" },
-		{ key: "focusSize", label: "Focus size", unit: "" },
-		{ key: "falloff", label: "Falloff", unit: "" },
-	],
-	directional: [
-		{ key: "strength", label: "Strength", unit: "" },
-		{ key: "angle", label: "Angle", unit: "°" },
-		{ key: "dirPosition", label: "Position", unit: "" },
-		{ key: "falloff", label: "Falloff", unit: "" },
-	],
-	tiltShift: [
-		{ key: "strength", label: "Strength", unit: "" },
-		{ key: "focusY", label: "Scan", unit: "" },
-		{ key: "focusSize", label: "Focus size", unit: "" },
-		{ key: "angle", label: "Angle", unit: "°" },
-		{ key: "falloff", label: "Falloff", unit: "" },
-	],
-};
-
-function Camera3DTransitionInput(props: {
-	label: string;
-	value: number;
-	onChange: (value: number) => void;
-}) {
-	const [text, setText] = createWritableMemo(() => props.value.toString());
-
-	return (
-		<div class="flex flex-row justify-between items-center">
-			<span class="text-[11px] text-ed-text-3">{props.label}</span>
-			<div class="flex flex-row gap-1 items-center">
-				<NumberField.Root
-					value={text()}
-					onChange={setText}
-					rawValue={props.value}
-					onRawValueChange={(value) => {
-						if (Number.isNaN(value)) return;
-						props.onChange(
-							Math.min(
-								Math.max(value, CAMERA3D_TRANSITION_LIMITS.min),
-								CAMERA3D_TRANSITION_LIMITS.max,
-							),
-						);
-					}}
-					minValue={CAMERA3D_TRANSITION_LIMITS.min}
-					maxValue={CAMERA3D_TRANSITION_LIMITS.max}
-					step={CAMERA3D_TRANSITION_LIMITS.step}
-				>
-					<NumberField.Input
-						onBlur={() => {
-							if (text() === "" || Number.isNaN(props.value)) {
-								setText("0");
-								props.onChange(0);
-							}
-						}}
-						class="w-20 p-1.5 border rounded-lg bg-gray-1 focus-visible:outline-hidden"
-					/>
-				</NumberField.Root>
-				<span class="text-gray-11">s</span>
-			</div>
-		</div>
-	);
-}
-
-const CAMERA3D_ANGLE_PREVIEW_HEIGHT = 30;
-const CAMERA3D_TEMPLATE_PREVIEW_HEIGHT = 40;
-/** Scenes lead the section and are three across, so their cards read taller. */
-const CAMERA3D_SCENE_PREVIEW_HEIGHT = 48;
-/** The two pose cards are the panel's main control, so they read larger. */
-const CAMERA3D_POSE_PREVIEW_HEIGHT = 56;
-const CAMERA3D_PREVIEW_TRANSITION = "700ms ease-in-out";
-
-/**
- * A `Field` that folds away. The header keeps the Field rhythm so a closed
- * section reads as one more label in the column, with an optional summary that
- * shows the state without opening it.
- */
-function Camera3DSection(
-	props: ParentProps<{
-		name: string;
-		summary?: string;
-		open: boolean;
-		onOpenChange: (open: boolean) => void;
-	}>,
-) {
-	return (
-		<KCollapsible open={props.open} onOpenChange={props.onOpenChange}>
-			<KCollapsible.Trigger class="flex flex-row gap-1.5 items-center w-full min-h-[22px] text-[12px] font-medium group text-ed-text-2 outline-hidden">
-				{props.name}
-				<span class="flex flex-row gap-1.5 items-center ml-auto text-[11px] font-normal text-ed-text-3">
-					{props.summary}
-					<IconCapChevronDown class="transition-transform duration-200 size-3.5 group-data-expanded:rotate-180" />
-				</span>
-			</KCollapsible.Trigger>
-			<KCollapsible.Content class="overflow-hidden opacity-0 transition-opacity animate-collapsible-up data-expanded:animate-collapsible-down data-expanded:opacity-100">
-				<div class="pt-2.5">{props.children}</div>
-			</KCollapsible.Content>
-		</KCollapsible>
-	);
-}
-
-// A CSS-3D stand-in for the renderer: the perspective distance reproduces the
-// field of view at this card height and the rotations run in the renderer's
-// order (camera orbit, then the content plane's own fold).
-function Camera3DPosePreview(props: {
-	pose: Camera3DProperties;
-	height: number;
-	animate?: boolean;
-	illustrated?: boolean;
-}) {
-	const style = () => cssPreviewTransform(props.pose, props.height);
-
-	return (
-		<div
-			class="overflow-hidden relative w-full rounded-md bg-gray-3"
-			style={{
-				height: `${props.height}px`,
-				perspective: `${style().perspective}px`,
-				transition: props.animate
-					? `perspective ${CAMERA3D_PREVIEW_TRANSITION}`
-					: undefined,
-			}}
-		>
-			<div
-				class={cx(
-					"absolute inset-0 overflow-hidden rounded-[3px] border shadow-sm",
-					props.illustrated
-						? "border-blue-8 bg-blue-9"
-						: "border-gray-6 bg-gray-1 dark:bg-gray-5",
-				)}
-				style={{
-					transform: style().transform,
-					transition: props.animate
-						? `transform ${CAMERA3D_PREVIEW_TRANSITION}`
-						: undefined,
-				}}
-			>
-				<Show when={props.illustrated}>
-					<div class="flex h-full flex-col gap-2 p-3">
-						<div class="h-1 w-1/2 rounded-full bg-white/90" />
-						<div class="h-1 w-full rounded-full bg-white/60" />
-						<div class="h-1 w-4/5 rounded-full bg-white/60" />
-						<div class="h-1 w-1/2 rounded-full bg-white/60" />
-					</div>
-				</Show>
-			</div>
-		</div>
-	);
-}
-
-/**
- * One scene, as a card: the pose its first shot opens on, drifting to that
- * shot's end pose while hovered. Shared by the panel's Scenes row and the empty
- * track's setup flow, so the two always offer the same thing.
- */
-function Camera3DSceneCard(props: {
-	scene: Camera3DScene;
-	shotCount?: number;
-	description?: string;
-	selected?: boolean;
-	onClick: () => void;
-}) {
-	const [hovered, setHovered] = createSignal(false);
-	const shotCount = () => props.shotCount ?? props.scene.shots.length;
-
-	return (
-		<button
-			type="button"
-			onClick={() => props.onClick()}
-			onMouseEnter={() => setHovered(true)}
-			onMouseLeave={() => setHovered(false)}
-			onFocus={() => setHovered(true)}
-			onBlur={() => setHovered(false)}
-			aria-pressed={props.selected}
-			class={cx(
-				"flex shrink-0 rounded-lg border transition-colors outline-hidden focus-visible:ring-2 focus-visible:ring-blue-9",
-				props.description
-					? "flex-row items-center gap-3 p-2 text-left"
-					: "flex-col gap-1 p-1",
-				props.selected
-					? "border-blue-9 ring-1 ring-blue-9"
-					: "border-gray-4 hover:border-gray-7",
-			)}
-		>
-			<div class={cx("relative", props.description && "w-[86px] shrink-0")}>
-				<Camera3DPosePreview
-					animate
-					illustrated
-					pose={hovered() ? props.scene.shots[0].to : props.scene.shots[0].from}
-					height={CAMERA3D_SCENE_PREVIEW_HEIGHT}
-				/>
-				<span class="absolute top-1 right-1 rounded px-1 text-[9px] leading-[14px] bg-gray-1/80 dark:bg-gray-2/80 text-gray-11">
-					{shotCount() === 1 ? "One move" : `${shotCount()} shots`}
-				</span>
-			</div>
-			<div
-				class={cx(
-					"flex flex-col gap-1",
-					props.description ? "min-w-0 flex-1" : "text-center",
-				)}
-			>
-				<span
-					class={
-						props.description
-							? "text-xs font-medium text-gray-12"
-							: "text-[10px] leading-tight text-gray-11"
-					}
-				>
-					{props.scene.name}
-				</span>
-				<Show when={props.description}>
-					<p class="text-[11px] leading-snug text-gray-10">
-						{props.description}
-					</p>
-				</Show>
-			</div>
-		</button>
-	);
-}
-
-function Camera3DSetupPanel(props: {
-	setup: Camera3DSetup;
-	onClose: () => void;
-}) {
-	const { projectActions, setEditorState, camera3DScenePreview } =
-		useEditorContext();
-	const [sequencesOpen, setSequencesOpen] = createSignal(false);
-	const scene = () =>
-		findCamera3DScene(props.setup.sceneId) ?? CAMERA3D_STARTER_SCENES[0];
-	const preview = () => camera3DScenePreview(props.setup);
-	const range = () => {
-		const segments = preview();
-		if (!segments.length) return null;
-		return { start: segments[0].start, end: segments[segments.length - 1].end };
-	};
-	const updateSetup = (changes: Partial<Camera3DSetup>) =>
-		setEditorState("timeline", "camera3dSetup", (current) =>
-			current ? { ...current, ...changes } : current,
-		);
-	const cards = (scenes: Camera3DScene[]) => (
-		<div class="flex flex-col gap-2">
-			<For each={scenes}>
-				{(item) => (
-					<Camera3DSceneCard
-						scene={item}
-						description={CAMERA3D_SCENE_DESCRIPTIONS[item.id]}
-						selected={item.id === scene().id}
-						onClick={() => updateSetup({ sceneId: item.id })}
-					/>
-				)}
-			</For>
-		</div>
-	);
-	return (
-		<div class="flex h-full min-h-0 flex-col">
-			<div class="custom-scroll flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4">
-				<div class="flex items-center justify-between gap-2">
-					<span class="text-[13px] font-medium text-ed-text-1">
-						Add a 3D scene
-					</span>
-					<EditorButton
-						onClick={props.onClose}
-						tooltipText="Close"
-						leftIcon={<IconLucideX />}
-					/>
-				</div>
-				<p class="text-xs text-gray-10">
-					Choose a camera move. Cap takes care of the animation.
-				</p>
-				{cards(CAMERA3D_STARTER_SCENES)}
-				<Camera3DSection
-					name="Multi-shot sequences"
-					summary="Optional"
-					open={sequencesOpen()}
-					onOpenChange={setSequencesOpen}
-				>
-					{cards(CAMERA3D_SCENES)}
-				</Camera3DSection>
-			</div>
-			<div class="flex shrink-0 flex-col gap-3 border-t border-ed-line bg-ed-card p-4">
-				<Field inline name="Duration">
-					<div class="flex gap-0.5 p-0.5 w-40 rounded-lg bg-ed-ctl">
-						<For each={[3, 6, 10]}>
-							{(duration) => (
-								<button
-									type="button"
-									aria-pressed={props.setup.duration === duration}
-									onClick={() => updateSetup({ duration })}
-									class={cx(
-										"flex-1 h-[26px] rounded-md text-[11.5px] font-medium outline-hidden focus-visible:ring-1 focus-visible:ring-ed-accent",
-										props.setup.duration === duration
-											? "bg-ed-card text-ed-text-1 shadow-[0_1px_2px_rgba(0,0,0,.12),0_0_0_.5px_rgba(0,0,0,.06)] dark:bg-white/11 dark:shadow-none"
-											: "text-ed-text-2 hover:text-ed-text-1",
-									)}
-								>
-									{duration}s
-								</button>
-							)}
-						</For>
-					</div>
-				</Field>
-				<Show
-					when={range()}
-					fallback={
-						<p class="text-[11px] text-ed-text-3">
-							Click an empty part of the 3D track to choose where to add your
-							scene.
-						</p>
-					}
-				>
-					{(placement) => (
-						<p class="text-xs text-gray-10">
-							{placement().start.toFixed(1)}s – {placement().end.toFixed(1)}s ·{" "}
-							{(placement().end - placement().start).toFixed(1)}s. Drag the
-							edges after adding to change the length.
-						</p>
-					)}
-				</Show>
-				<Button
-					variant="primary"
-					size="md"
-					disabled={!range()}
-					onClick={() => projectActions.addCamera3DScene()}
-				>
-					Add {scene().name.toLowerCase()}
-				</Button>
-			</div>
-		</div>
-	);
-}
-
-function Camera3DSegmentConfig(props: {
-	segmentIndex: number;
-	segment: Camera3DSegment;
-}) {
-	const { setProject, setEditorState, projectActions } = useEditorContext();
-
-	const updateSegment = (fn: (segment: Camera3DSegment) => void) => {
-		setProject(
-			"timeline",
-			"camera3dSegments",
-			produce((segments) => {
-				const target = segments?.[props.segmentIndex];
-				if (!target) return;
-				fn(target);
-			}),
-		);
-	};
-
-	// A 3D segment is one move: the pose it opens on and the pose it lands on.
-	// Everything in this panel reads and writes that pair, and the per-property
-	// keyframe tracks underneath are only how the renderer is fed.
-	const startPose = () => getStartPose(props.segment);
-	const endPose = () => getEndPose(props.segment);
-	const isStill = () => camera3DPosesEqual(startPose(), endPose());
-
-	// Which of the two poses the Camera sliders are pointed at.
-	const [editingEnd, setEditingEnd] = createSignal(false);
-	const selectedPose = () => (editingEnd() ? endPose() : startPose());
-
-	// Selecting another segment reuses this panel, so the card selection has to
-	// fall back to Start rather than carry over.
-	createEffect(
-		on(
-			() => props.segmentIndex,
-			() => setEditingEnd(false),
-			{ defer: true },
-		),
-	);
-
-	// Parking the playhead on the pose being edited is what makes the canvas
-	// show it. The end pose is sampled a hair inside the segment so the playhead
-	// stays on this segment instead of falling into the next one.
-	const seekToPose = (end: boolean) => {
-		const time = end
-			? Math.max(props.segment.end - 0.01, props.segment.start)
-			: props.segment.start;
-		batch(() => {
-			setEditorState("playbackTime", time);
-			setEditorState("previewTime", null);
-		});
-	};
-
-	const selectPose = (end: boolean) =>
-		batch(() => {
-			setEditingEnd(end);
-			seekToPose(end);
-		});
-
-	const writeMotion = (
-		start: Camera3DProperties,
-		end: Camera3DProperties,
-		easing = getMotionEasing(props.segment),
-	) => updateSegment((segment) => setMotion(segment, start, end, easing));
-
-	// A camera edit on a still shot moves both ends, so dialling in a hold never
-	// turns into an unrequested move. Once the shot moves, each card owns its
-	// own pose.
-	const writeSelectedPose = (pose: Camera3DProperties) => {
-		if (isStill()) writeMotion(pose, pose);
-		else if (editingEnd()) writeMotion(startPose(), pose);
-		else writeMotion(pose, endPose());
-	};
-
-	const setPoseProperty = (key: Camera3DPropertyKey, value: number) =>
-		writeSelectedPose({ ...selectedPose(), [key]: value });
-
-	const swapPoses = () => {
-		const start = startPose();
-		writeMotion(endPose(), start);
-	};
-
-	const flipSegment = (axis: Camera3DFlipAxis) =>
-		updateSegment((segment) => flipCamera3DSegment(segment, axis));
-
-	const makeStill = () => {
-		const start = startPose();
-		writeMotion(start, start);
-	};
-
-	const resetCamera = () => writeSelectedPose({ ...CAMERA3D_RESET_POSE });
-
-	// The shot's identity is the pose it opens on, so the ring stays put while
-	// the end pose is being edited.
-	const activeAnglePresetId = () => matchAnglePreset(startPose());
-
-	const [hoveredTemplate, setHoveredTemplate] = createSignal<string | null>(
-		null,
-	);
-
-	// Templates own the whole camera animation: the existing move is replaced
-	// and the playhead returns to the start so the result plays from its
-	// first pose.
-	const applyTemplate = (template: Camera3DMotionTemplate) => {
-		batch(() => {
-			updateSegment((segment) => {
-				applyMotionTemplate(segment, template);
-			});
-			setEditingEnd(false);
-			setEditorState("playbackTime", props.segment.start);
-			setEditorState("previewTime", null);
-		});
-	};
-
-	// Angle presets are moving shots too, exactly like the motion grid: the
-	// shot opens on the named pose and drifts.
-	const applyAnglePreset = (preset: Camera3DAnglePreset) =>
-		applyTemplate(anglePresetMotion(preset));
-
-	// A scene replaces this one segment with its whole chain of shots, so the
-	// panel hands off to the project action that owns the splice.
-	const applyScene = (scene: Camera3DScene) =>
-		projectActions.applyCamera3DScene(props.segmentIndex, scene.id);
-
-	const motionEasing = () => getMotionEasing(props.segment);
-
-	const blur = () => props.segment.blur;
-
-	const blurSliders = () => {
-		const mode = blur().mode;
-		return mode === "none" ? [] : CAMERA3D_BLUR_SLIDERS[mode];
-	};
-
-	// Blur is on by default now, so the closed section still has to say so.
-	const blurSummary = () => {
-		const mode = blur().mode;
-		if (mode === "none") return "Off";
-		const label =
-			CAMERA3D_BLUR_MODE_OPTIONS.find((option) => option.value === mode)
-				?.label ?? mode;
-		return `${label} ${Math.round(blur().strength)}`;
-	};
-
-	// Blur is segment-level and static: it is never part of the move.
-	const setBlurValue = (key: Camera3DBlurScalarKey, value: number) =>
-		updateSegment((segment) => {
-			segment.blur[key] = value;
-		});
-
-	const setBlurMode = (mode: Camera3DBlurMode) => {
-		if (mode === blur().mode) return;
-		updateSegment((segment) => {
-			segment.blur.mode = mode;
-			const seed = CAMERA3D_BLUR_MODE_SEEDS[mode];
-			for (const key of Object.keys(seed) as Camera3DBlurScalarKey[]) {
-				const value = seed[key];
-				if (value !== undefined) segment.blur[key] = value;
-			}
-		});
-	};
-
-	const setBokeh = (enabled: boolean) => {
-		updateSegment((segment) => {
-			segment.blur.bokeh = enabled;
-			if (!enabled) return;
-			// The bokeh kernel tops out at 20, so pull the strength down with the
-			// slider's new ceiling.
-			segment.blur.strength = Math.min(
-				segment.blur.strength,
-				CAMERA3D_BOKEH_MAX_STRENGTH,
-			);
-		});
-	};
-
-	const resetBlur = () => {
-		updateSegment((segment) => {
-			segment.blur = defaultCamera3DBlur();
-		});
-	};
-
-	// Section state is panel-local: it is how this user is reading the panel
-	// right now, not something the project should remember.
-	const [cameraOpen, setCameraOpen] = createSignal(false);
-	const [blurOpen, setBlurOpen] = createSignal(false);
-	const [advancedOpen, setAdvancedOpen] = createSignal(false);
-
-	const poseCard = (label: string, end: boolean) => (
-		<button
-			type="button"
-			onClick={() => selectPose(end)}
-			class={cx(
-				"flex flex-col flex-1 gap-1 p-1 rounded-lg border transition-colors outline-hidden",
-				editingEnd() === end
-					? "border-blue-9 ring-1 ring-blue-9"
-					: "border-gray-4 hover:border-gray-7",
-			)}
-		>
-			{/* No transition here: these cards track the sliders live. */}
-			<Camera3DPosePreview
-				pose={end ? endPose() : startPose()}
-				height={CAMERA3D_POSE_PREVIEW_HEIGHT}
-			/>
-			<span class="text-[10px] leading-tight text-center text-gray-11">
-				{label}
-			</span>
-		</button>
-	);
-
-	return (
-		<div class="space-y-4">
-			<Field name="Motion">
-				<div class="flex flex-col gap-2">
-					<div class="flex flex-row gap-2 items-center">
-						{poseCard("Start", false)}
-						<EditorButton
-							onClick={swapPoses}
-							tooltipText="Swap start and end"
-							leftIcon={<IconLucideArrowLeftRight class="size-3.5" />}
-						/>
-						{poseCard("End", true)}
-					</div>
-					<div class="flex flex-row gap-1 items-center">
-						<EditorButton
-							onClick={() => flipSegment("horizontal")}
-							tooltipText="Flip horizontal"
-							leftIcon={<IconLucideFlipHorizontal2 class="size-3.5" />}
-						/>
-						<EditorButton
-							onClick={() => flipSegment("vertical")}
-							tooltipText="Flip vertical"
-							leftIcon={<IconLucideFlipVertical2 class="size-3.5" />}
-						/>
-						<Show
-							when={!isStill()}
-							fallback={
-								<p class="text-[11px] text-gray-10">
-									Open Customize camera to choose a move or adjust the end pose
-								</p>
-							}
-						>
-							<button
-								type="button"
-								onClick={makeStill}
-								class="self-start text-[11px] transition-colors outline-hidden text-gray-11 hover:text-gray-12"
-							>
-								Still shot
-							</button>
-						</Show>
-					</div>
-				</div>
-			</Field>
-			<Camera3DSection
-				name="Customize camera"
-				summary={editingEnd() ? "End pose" : "Start pose"}
-				open={cameraOpen()}
-				onOpenChange={setCameraOpen}
-			>
-				<Field name="Templates">
-					<div class="flex flex-col gap-3">
-						{/* Scenes lead: one click lays a whole chained sequence over this
-					    segment's range, where the rows below author a single shot. */}
-						<div class="grid grid-cols-3 gap-2">
-							<For each={CAMERA3D_SCENES}>
-								{(scene) => (
-									<Camera3DSceneCard
-										scene={scene}
-										onClick={() => applyScene(scene)}
-									/>
-								)}
-							</For>
-						</div>
-						<div class="grid grid-cols-5 gap-1.5">
-							<For each={ANGLE_PRESETS}>
-								{(preset) => (
-									<button
-										type="button"
-										onClick={() => applyAnglePreset(preset)}
-										onMouseEnter={() =>
-											setHoveredTemplate(`angle-${preset.id}`)
-										}
-										onMouseLeave={() =>
-											setHoveredTemplate((current) =>
-												current === `angle-${preset.id}` ? null : current,
-											)
-										}
-										class={cx(
-											"flex flex-col gap-1 p-1 rounded-lg border transition-colors outline-hidden",
-											activeAnglePresetId() === preset.id
-												? "border-blue-9 ring-1 ring-blue-9"
-												: "border-gray-4 hover:border-gray-7",
-										)}
-									>
-										<Camera3DPosePreview
-											animate
-											pose={
-												hoveredTemplate() === `angle-${preset.id}`
-													? anglePresetMotion(preset).to
-													: anglePresetPose(preset)
-											}
-											height={CAMERA3D_ANGLE_PREVIEW_HEIGHT}
-										/>
-										<span class="text-[10px] leading-tight text-center text-gray-11">
-											{preset.name}
-										</span>
-									</button>
-								)}
-							</For>
-						</div>
-						<div class="grid grid-cols-4 gap-2">
-							<For each={MOTION_TEMPLATES}>
-								{(template) => (
-									<button
-										type="button"
-										onClick={() => applyTemplate(template)}
-										onMouseEnter={() => setHoveredTemplate(template.id)}
-										onMouseLeave={() =>
-											setHoveredTemplate((current) =>
-												current === template.id ? null : current,
-											)
-										}
-										class="flex flex-col gap-1 p-1 rounded-lg border transition-colors outline-hidden border-gray-4 hover:border-gray-7"
-									>
-										<Camera3DPosePreview
-											animate
-											pose={
-												hoveredTemplate() === template.id
-													? template.to
-													: template.from
-											}
-											height={CAMERA3D_TEMPLATE_PREVIEW_HEIGHT}
-										/>
-										<span class="text-[10px] leading-tight text-center text-gray-11">
-											{template.name}
-										</span>
-									</button>
-								)}
-							</For>
-						</div>
-					</div>
-				</Field>
-				<div class="flex flex-col gap-3">
-					<For each={CAMERA3D_SLIDERS}>
-						{(slider) => (
-							<div class="flex flex-col gap-1">
-								<span class="flex flex-row gap-1.5 items-center text-xs text-gray-11">
-									{camera3dSliderIcon(slider.key)}
-									{slider.label}
-								</span>
-								<Slider
-									value={[selectedPose()[slider.key]]}
-									onChange={(v) => setPoseProperty(slider.key, v[0])}
-									minValue={CAMERA3D_LIMITS[slider.key].min}
-									maxValue={CAMERA3D_LIMITS[slider.key].max}
-									step={CAMERA3D_LIMITS[slider.key].step}
-									formatTooltip={slider.unit}
-								/>
-							</div>
-						)}
-					</For>
-					<EditorButton
-						leftIcon={<IconLucideRotateCcw />}
-						onClick={resetCamera}
-					>
-						Reset camera
-					</EditorButton>
-				</div>
-			</Camera3DSection>
-			<Camera3DSection
-				name="Blur"
-				summary={blurSummary()}
-				open={blurOpen()}
-				onOpenChange={setBlurOpen}
-			>
-				<div class="flex flex-col gap-3">
-					<Subfield name="Mode">
-						<div class="w-40">
-							<KSelect<{ value: Camera3DBlurMode; label: string }>
-								options={CAMERA3D_BLUR_MODE_OPTIONS}
-								optionValue="value"
-								optionTextValue="label"
-								value={CAMERA3D_BLUR_MODE_OPTIONS.find(
-									(option) => option.value === blur().mode,
-								)}
-								onChange={(option) => {
-									if (option) setBlurMode(option.value);
-								}}
-								disallowEmptySelection
-								itemComponent={(itemProps) => (
-									<MenuItem<typeof KSelect.Item>
-										as={KSelect.Item}
-										item={itemProps.item}
-									>
-										<KSelect.ItemLabel class="flex-1">
-											{itemProps.item.rawValue.label}
-										</KSelect.ItemLabel>
-									</MenuItem>
-								)}
-							>
-								<KSelect.Trigger class="flex flex-row gap-1.5 items-center px-2 w-full h-[26px] rounded-[7px] transition-colors bg-ed-ctl hover:bg-ed-ctl-hover outline-hidden disabled:text-ed-text-3">
-									<KSelect.Value<{
-										value: Camera3DBlurMode;
-										label: string;
-									}> class="flex-1 text-[12px] text-left truncate text-ed-text-1 font-normal">
-										{(state) => <span>{state.selectedOption().label}</span>}
-									</KSelect.Value>
-									<KSelect.Icon<ValidComponent>
-										as={(iconProps) => (
-											<IconCapChevronDown
-												{...iconProps}
-												class="size-3.5 shrink-0 transform transition-transform data-expanded:rotate-180 text-ed-text-3"
-											/>
-										)}
-									/>
-								</KSelect.Trigger>
-								<KSelect.Portal>
-									<PopperContent<typeof KSelect.Content>
-										as={KSelect.Content}
-										class={cx(topSlideAnimateClasses, "z-50")}
-									>
-										<MenuItemList<typeof KSelect.Listbox>
-											class="overflow-y-auto max-h-32"
-											as={KSelect.Listbox}
-										/>
-									</PopperContent>
-								</KSelect.Portal>
-							</KSelect>
-						</div>
-					</Subfield>
-					<Show
-						when={blur().mode !== "none"}
-						fallback={
-							<p class="text-[11px] text-ed-text-3">
-								Pick a mode to blur everything outside the focus area.
-							</p>
-						}
-					>
-						<For each={blurSliders()}>
-							{(slider) => {
-								const limit = () => camera3dBlurLimit(slider.key, blur());
-								return (
-									<Field
-										inline
-										name={slider.label}
-										value={`${blur()[slider.key].toFixed(1)}${slider.unit}`}
-									>
-										<Slider
-											value={[blur()[slider.key]]}
-											onChange={(v) => setBlurValue(slider.key, v[0])}
-											minValue={limit().min}
-											maxValue={limit().max}
-											step={limit().step}
-											formatTooltip={slider.unit}
-										/>
-									</Field>
-								);
-							}}
-						</For>
-						<Subfield name="Bokeh">
-							<Toggle checked={blur().bokeh} onChange={setBokeh} />
-						</Subfield>
-						<EditorButton
-							leftIcon={<IconLucideRotateCcw />}
-							onClick={resetBlur}
-						>
-							Turn blur off
-						</EditorButton>
-					</Show>
-				</div>
-			</Camera3DSection>
-			<Camera3DSection
-				name="Advanced"
-				open={advancedOpen()}
-				onOpenChange={setAdvancedOpen}
-			>
-				<div class="flex flex-col gap-3">
-					<Subfield name="Motion style">
-						<div class="w-40">
-							<KSelect<Camera3DMotionEasing>
-								options={MOTION_EASINGS}
-								optionValue="id"
-								optionTextValue="label"
-								value={motionEasing()}
-								onChange={(option) => {
-									if (option) writeMotion(startPose(), endPose(), option);
-								}}
-								// A still shot has no span to shape, and nowhere to store a
-								// curve, so the picker would silently snap back.
-								disabled={isStill()}
-								disallowEmptySelection
-								itemComponent={(itemProps) => (
-									<MenuItem<typeof KSelect.Item>
-										as={KSelect.Item}
-										item={itemProps.item}
-									>
-										<KSelect.ItemLabel class="flex-1">
-											{itemProps.item.rawValue.label}
-										</KSelect.ItemLabel>
-									</MenuItem>
-								)}
-							>
-								<KSelect.Trigger class="flex flex-row gap-1.5 items-center px-2 w-full h-[26px] rounded-[7px] transition-colors bg-ed-ctl hover:bg-ed-ctl-hover outline-hidden disabled:text-ed-text-3">
-									<KSelect.Value<Camera3DMotionEasing> class="flex-1 text-[12px] text-left truncate text-ed-text-1 font-normal">
-										{(state) => <span>{state.selectedOption().label}</span>}
-									</KSelect.Value>
-									<KSelect.Icon<ValidComponent>
-										as={(iconProps) => (
-											<IconCapChevronDown
-												{...iconProps}
-												class="size-3.5 shrink-0 transform transition-transform data-expanded:rotate-180 text-ed-text-3"
-											/>
-										)}
-									/>
-								</KSelect.Trigger>
-								<KSelect.Portal>
-									<PopperContent<typeof KSelect.Content>
-										as={KSelect.Content}
-										class={cx(topSlideAnimateClasses, "z-50")}
-									>
-										<MenuItemList<typeof KSelect.Listbox>
-											class="overflow-y-auto max-h-32"
-											as={KSelect.Listbox}
-										/>
-									</PopperContent>
-								</KSelect.Portal>
-							</KSelect>
-						</div>
-					</Subfield>
-					<div class="flex flex-col gap-2">
-						<Camera3DTransitionInput
-							label="Ease in"
-							value={props.segment.transitionIn}
-							onChange={(value) =>
-								updateSegment((segment) => {
-									segment.transitionIn = value;
-								})
-							}
-						/>
-						<Camera3DTransitionInput
-							label="Ease out"
-							value={props.segment.transitionOut}
-							onChange={(value) =>
-								updateSegment((segment) => {
-									segment.transitionOut = value;
-								})
-							}
-						/>
-					</div>
-				</div>
-			</Camera3DSection>
 		</div>
 	);
 }

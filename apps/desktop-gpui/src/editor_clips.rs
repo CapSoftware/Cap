@@ -176,7 +176,7 @@ pub(crate) fn transitions_after_clip_move(
 }
 
 /// `rippleTimelineTrack` (`ED/clip-transitions.ts:208-221`).
-fn ripple_track<T: TrackSegmentOps>(track: &mut [T], boundary: f64, shift: f64) {
+pub(crate) fn ripple_track<T: TrackSegmentOps>(track: &mut [T], boundary: f64, shift: f64) {
     for item in track {
         if item.start() >= boundary {
             item.set_start(item.start() + shift);
@@ -187,7 +187,7 @@ fn ripple_track<T: TrackSegmentOps>(track: &mut [T], boundary: f64, shift: f64) 
     }
 }
 
-fn ripple_keyboard_track(
+pub(crate) fn ripple_keyboard_track(
     track: &mut [cap_project::KeyboardTrackSegment],
     boundary: f64,
     shift: f64,
@@ -198,6 +198,50 @@ fn ripple_keyboard_track(
         }
         segment.remap_times(|time| if time >= boundary { time + shift } else { time });
     }
+}
+
+/// Removes the transition on `segment_index`'s leading boundary and ripples
+/// every other track past it by the overlap the transition gave back, so
+/// nothing downstream shifts under the user (`setClipTransition(index, null)`,
+/// `ED/context.ts`). Returns false when there was no effective transition.
+pub(crate) fn drop_clip_transition(
+    timeline: &mut TimelineConfiguration,
+    segment_index: usize,
+) -> bool {
+    let Some(effective) = timeline.effective_transition(segment_index) else {
+        timeline
+            .transitions
+            .retain(|candidate| candidate.segment_index as usize != segment_index);
+        return false;
+    };
+    let boundary = clip_timeline_offsets(timeline)
+        .get(segment_index)
+        .copied()
+        .unwrap_or(0.)
+        + effective.duration;
+    let boundary = edits::effective_to_output(&timeline.hold_windows(), boundary);
+    timeline
+        .transitions
+        .retain(|candidate| candidate.segment_index as usize != segment_index);
+    ripple_track(&mut timeline.style_segments, boundary, effective.duration);
+    ripple_track(&mut timeline.image_segments, boundary, effective.duration);
+    ripple_track(&mut timeline.zoom_segments, boundary, effective.duration);
+    ripple_track(&mut timeline.scene_segments, boundary, effective.duration);
+    ripple_track(&mut timeline.mask_segments, boundary, effective.duration);
+    ripple_track(&mut timeline.text_segments, boundary, effective.duration);
+    ripple_track(&mut timeline.caption_segments, boundary, effective.duration);
+    ripple_track(
+        &mut timeline.camera3d_segments,
+        boundary,
+        effective.duration,
+    );
+    ripple_keyboard_track(
+        &mut timeline.keyboard_segments,
+        boundary,
+        effective.duration,
+    );
+    ripple_track(&mut timeline.audio_segments, boundary, effective.duration);
+    true
 }
 
 /// `moveClip` (`ClipsSidebar.tsx:639-690`): reorder `timeline.segments`,
@@ -229,32 +273,7 @@ pub(crate) fn move_clip(
     dropped.sort_by_key(|transition| std::cmp::Reverse(transition.segment_index));
 
     for transition in &dropped {
-        let Some(effective) = timeline.effective_transition(transition.segment_index as usize)
-        else {
-            continue;
-        };
-        let boundary = clip_timeline_offsets(timeline)
-            .get(transition.segment_index as usize)
-            .copied()
-            .unwrap_or(0.)
-            + effective.duration;
-        let boundary = edits::effective_to_output(&timeline.hold_windows(), boundary);
-        timeline
-            .transitions
-            .retain(|candidate| candidate.segment_index != transition.segment_index);
-        ripple_track(&mut timeline.style_segments, boundary, effective.duration);
-        ripple_track(&mut timeline.image_segments, boundary, effective.duration);
-        ripple_track(&mut timeline.zoom_segments, boundary, effective.duration);
-        ripple_track(&mut timeline.scene_segments, boundary, effective.duration);
-        ripple_track(&mut timeline.mask_segments, boundary, effective.duration);
-        ripple_track(&mut timeline.text_segments, boundary, effective.duration);
-        ripple_track(&mut timeline.caption_segments, boundary, effective.duration);
-        ripple_keyboard_track(
-            &mut timeline.keyboard_segments,
-            boundary,
-            effective.duration,
-        );
-        ripple_track(&mut timeline.audio_segments, boundary, effective.duration);
+        drop_clip_transition(timeline, transition.segment_index as usize);
     }
 
     timeline.segments = proposed;
@@ -358,6 +377,11 @@ impl Default for ClipsState {
 impl ClipsState {
     pub(crate) fn is_importing(&self) -> bool {
         self.importing
+    }
+
+    /// The clip whose name is being edited, and the input holding the draft.
+    pub(crate) fn rename_in_progress(&self) -> Option<(usize, Entity<ui::TextInputState>)> {
+        Some((self.editing?, self.rename_input.clone()?))
     }
 }
 
@@ -508,7 +532,12 @@ impl EditorWindow {
     /// focus-and-select the source does through `requestAnimationFrame`. A
     /// rename already live on another card commits first -- in the DOM the
     /// old input blurs before the new one mounts.
-    fn start_clip_rename(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn start_clip_rename(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.clips.editing.is_some_and(|editing| editing != index) {
             self.commit_clip_rename(window, cx);
         }
@@ -538,20 +567,12 @@ impl EditorWindow {
         let Some(input) = self.clips.rename_input.clone() else {
             return;
         };
-        let value = input.read(cx).text().trim().to_string();
-        let name = (!value.is_empty()).then_some(value);
+        let value = input.read(cx).text().to_string();
         self.edit_project("clip-rename", window, cx, move |project| {
-            let Some(timeline) = project.timeline.as_mut() else {
-                return false;
-            };
-            let Some(segment) = timeline.segments.get_mut(index) else {
-                return false;
-            };
-            if segment.name == name {
-                return false;
-            }
-            segment.name = name;
-            true
+            project
+                .timeline
+                .as_mut()
+                .is_some_and(|timeline| edits::set_clip_name(timeline, index, &value))
         });
         cx.notify();
     }
@@ -582,7 +603,12 @@ impl EditorWindow {
     /// `deleteClip`: `projectActions.deleteClipSegment(index)`, whose maths
     /// already lives in [`edits::delete_clip_segments`] -- one undo entry,
     /// selection cleared, last clip protected.
-    fn delete_clip(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn delete_clip(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.clip_segments().len() < 2 {
             return;
         }
@@ -1941,6 +1967,8 @@ impl PreparedMp4Import {
             end: self.duration,
             name: None,
             speed_audio_mode: None,
+            hide_cursor: None,
+            volume: None,
         });
         add_clip_configs(&mut config, index, std::slice::from_ref(&self.segment));
         config.validate().map_err(|error| error.to_string())?;
@@ -2051,7 +2079,7 @@ fn show_append_error(message: &str) {
 
 /// 96px cards at 2x (`w-24` at `ClipsSidebar.tsx:881`).
 const THUMB_MAX_WIDTH: u32 = 192;
-const SEEK_DECODE_PACKET_LIMIT: usize = 240;
+const SEEK_DECODE_PACKET_LIMIT: usize = 4096;
 
 fn decode_clip_thumbnail(
     project_path: &Path,
@@ -2077,6 +2105,20 @@ fn decode_clip_thumbnail(
 }
 
 fn decode_thumbnail_frame(input: &Path, time: f64) -> Result<Arc<RenderImage>, String> {
+    decode_thumbnail_frame_with_budget(
+        input,
+        time,
+        SEEK_DECODE_PACKET_LIMIT,
+        std::time::Duration::from_secs(2),
+    )
+}
+
+fn decode_thumbnail_frame_with_budget(
+    input: &Path,
+    time: f64,
+    packet_limit: usize,
+    timeout: std::time::Duration,
+) -> Result<Arc<RenderImage>, String> {
     use ffmpeg::rescale::{Rescale, TIME_BASE};
 
     let mut ictx =
@@ -2087,6 +2129,14 @@ fn decode_thumbnail_frame(input: &Path, time: f64) -> Result<Arc<RenderImage>, S
         .best(ffmpeg::media::Type::Video)
         .ok_or("No video stream found")?;
     let stream_index = stream.index();
+    let stream_time_base = stream.time_base();
+    let stream_start = match stream.start_time() {
+        ffmpeg::ffi::AV_NOPTS_VALUE => 0,
+        timestamp => timestamp,
+    };
+    let target_timestamp = ((time * 1_000_000.0) as i64)
+        .rescale((1, 1_000_000), stream_time_base)
+        .saturating_add(stream_start);
 
     let mut decoder = ffmpeg::codec::context::Context::from_parameters(stream.parameters())
         .map_err(|e| e.to_string())?
@@ -2119,17 +2169,24 @@ fn decode_thumbnail_frame(input: &Path, time: f64) -> Result<Arc<RenderImage>, S
 
     if time > 0.0 {
         let position_us = (time * 1_000_000.0) as i64;
-        let seek_target = position_us.rescale((1, 1_000_000), TIME_BASE);
+        let seek_target = target_timestamp.rescale(stream_time_base, TIME_BASE);
         decoder.flush();
         ictx.seek(seek_target, ..seek_target)
             .map_err(|e| format!("Failed to seek to {position_us}us: {e}"))?;
     }
 
     let mut frame = ffmpeg::frame::Video::empty();
+    let mut decoded = ffmpeg::frame::Video::empty();
     let mut got_frame = false;
+    let mut reached_target = false;
+    let mut decoder_finished = false;
     let mut packets_tried = 0usize;
+    let decode_started = std::time::Instant::now();
 
     'outer: for (packet_stream, packet) in ictx.packets() {
+        if decode_started.elapsed() >= timeout {
+            return Err("Thumbnail decode time budget exhausted".to_string());
+        }
         if packet_stream.index() != stream_index {
             continue;
         }
@@ -2137,43 +2194,62 @@ fn decode_thumbnail_frame(input: &Path, time: f64) -> Result<Arc<RenderImage>, S
         packets_tried += 1;
 
         if decoder.send_packet(&packet).is_err() {
-            if packets_tried >= SEEK_DECODE_PACKET_LIMIT {
-                break;
+            if packets_tried >= packet_limit {
+                return Err("Thumbnail decode packet budget exhausted".to_string());
             }
             continue;
         }
 
-        match decoder.receive_frame(&mut frame) {
-            Ok(()) => {
-                got_frame = true;
-                break 'outer;
+        loop {
+            if decode_started.elapsed() >= timeout {
+                return Err("Thumbnail decode time budget exhausted".to_string());
             }
-            Err(ffmpeg::Error::Other { errno }) if errno == ffmpeg::ffi::EAGAIN => {}
-            Err(ffmpeg::Error::Eof) => break 'outer,
-            Err(e) => {
-                if packets_tried >= SEEK_DECODE_PACKET_LIMIT {
-                    return Err(format!("Failed to decode frame: {e}"));
+            match decoder.receive_frame(&mut decoded) {
+                Ok(()) => {
+                    std::mem::swap(&mut frame, &mut decoded);
+                    got_frame = true;
+                    if thumbnail_frame_reaches_target(&frame, target_timestamp) {
+                        reached_target = true;
+                        break 'outer;
+                    }
+                }
+                Err(ffmpeg::Error::Other { errno }) if errno == ffmpeg::ffi::EAGAIN => break,
+                Err(ffmpeg::Error::Eof) => {
+                    decoder_finished = true;
+                    break 'outer;
+                }
+                Err(e) => {
+                    if packets_tried >= packet_limit {
+                        return Err(format!("Failed to decode frame: {e}"));
+                    }
+                    break;
                 }
             }
         }
 
-        if packets_tried >= SEEK_DECODE_PACKET_LIMIT {
-            break;
+        if packets_tried >= packet_limit {
+            return Err("Thumbnail decode packet budget exhausted".to_string());
         }
     }
 
-    if !got_frame {
+    if !reached_target && !decoder_finished {
         decoder
             .send_eof()
             .map_err(|e| format!("Failed to flush decoder: {e}"))?;
         loop {
-            match decoder.receive_frame(&mut frame) {
+            if decode_started.elapsed() >= timeout {
+                return Err("Thumbnail decode time budget exhausted".to_string());
+            }
+            match decoder.receive_frame(&mut decoded) {
                 Ok(()) => {
+                    std::mem::swap(&mut frame, &mut decoded);
                     got_frame = true;
-                    break;
+                    if thumbnail_frame_reaches_target(&frame, target_timestamp) {
+                        break;
+                    }
                 }
                 Err(ffmpeg::Error::Eof) => break,
-                Err(ffmpeg::Error::Other { errno }) if errno == ffmpeg::ffi::EAGAIN => continue,
+                Err(ffmpeg::Error::Other { errno }) if errno == ffmpeg::ffi::EAGAIN => break,
                 Err(e) => return Err(format!("Failed to flush decoder: {e}")),
             }
         }
@@ -2207,6 +2283,13 @@ fn decode_thumbnail_frame(input: &Path, time: f64) -> Result<Arc<RenderImage>, S
     Ok(Arc::new(RenderImage::new(smallvec::smallvec![
         image::Frame::new(image)
     ])))
+}
+
+fn thumbnail_frame_reaches_target(frame: &ffmpeg::frame::Video, target_timestamp: i64) -> bool {
+    frame
+        .timestamp()
+        .or_else(|| frame.pts())
+        .is_none_or(|timestamp| timestamp >= target_timestamp)
 }
 
 // ---------------------------------------------------------------------------
@@ -2364,6 +2447,8 @@ fn full_timeline_for_segments(
                 end: duration,
                 name: None,
                 speed_audio_mode: None,
+                hide_cursor: None,
+                volume: None,
             })
         })
         .collect()
@@ -2959,6 +3044,8 @@ fn full_timeline_for_source_segments(
                 end: duration,
                 name: None,
                 speed_audio_mode: None,
+                hide_cursor: None,
+                volume: None,
             })
         })
         .collect()
@@ -3047,7 +3134,9 @@ fn source_timeline_segments_for_import(
             start,
             end,
             name: None,
-            speed_audio_mode: None,
+            speed_audio_mode: segment.speed_audio_mode,
+            hide_cursor: segment.hide_cursor,
+            volume: segment.volume,
         });
     }
 
@@ -3278,6 +3367,8 @@ pub(crate) fn append_cap_project_to_editor(
                 end: source_segment.end,
                 name: None,
                 speed_audio_mode: source_segment.speed_audio_mode,
+                hide_cursor: source_segment.hide_cursor,
+                volume: source_segment.volume,
             });
         }
     }
@@ -3298,6 +3389,62 @@ pub(crate) fn append_cap_project_to_editor(
 mod tests {
     use super::*;
     use gpui::{point, size};
+
+    #[test]
+    fn split_thumbnails_use_requested_time_inside_keyframe_interval() {
+        let fixture = ImportFixture::new(include_bytes!(
+            "../../desktop/src-tauri/test-data/clip-thumbnail-gop.mp4"
+        ));
+        for (time, expected_channel) in [(0.0, 2), (1.5, 1), (2.5, 0), (3.0, 0)] {
+            let thumbnail = decode_thumbnail_frame(&fixture.source, time).unwrap();
+            let data = thumbnail.as_bytes(0).unwrap();
+            let pixel = &data[..4];
+            assert!(
+                pixel[expected_channel] > 100,
+                "requested {time}s, got {pixel:?}"
+            );
+            for (channel, value) in pixel[..3].iter().enumerate() {
+                if channel != expected_channel {
+                    assert!(*value < 20, "requested {time}s, got {pixel:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn long_gop_thumbnails_reach_requested_time_and_preserve_eof_fallback() {
+        let fixture = ImportFixture::new(include_bytes!(
+            "../../desktop/src-tauri/test-data/clip-thumbnail-long-gop.mp4"
+        ));
+        for time in [8.5, 10.0, 11.0] {
+            let thumbnail = decode_thumbnail_frame(&fixture.source, time).unwrap();
+            let data = thumbnail.as_bytes(0).unwrap();
+            let pixel = &data[..4];
+            assert!(
+                pixel[0] > 100 && pixel[1] < 20 && pixel[2] < 20,
+                "requested {time}s, got {pixel:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn exhausted_decode_budget_does_not_return_partial_thumbnail() {
+        let fixture = ImportFixture::new(include_bytes!(
+            "../../desktop/src-tauri/test-data/clip-thumbnail-long-gop.mp4"
+        ));
+        for (packet_limit, timeout, expected_error) in [
+            (240, std::time::Duration::from_secs(2), "packet budget"),
+            (
+                SEEK_DECODE_PACKET_LIMIT,
+                std::time::Duration::ZERO,
+                "time budget",
+            ),
+        ] {
+            let result =
+                decode_thumbnail_frame_with_budget(&fixture.source, 8.5, packet_limit, timeout);
+            assert!(result.unwrap_err().contains(expected_error));
+        }
+    }
 
     const MP4_WITHOUT_AUDIO: &[u8] =
         include_bytes!("../../media-server/src/__tests__/fixtures/test-no-audio.mp4");
@@ -3661,6 +3808,8 @@ mod tests {
             end,
             name: None,
             speed_audio_mode: None,
+            hide_cursor: None,
+            volume: None,
         }
     }
 
@@ -3854,6 +4003,21 @@ mod tests {
             }
         ]))
         .unwrap();
+        config.camera3d_segments = [(2.0, 4.0), (11.0, 15.0), (15.0, 18.0)]
+            .into_iter()
+            .map(|(start, end)| {
+                serde_json::from_value(serde_json::json!({
+                    "start": start,
+                    "end": end,
+                    "tracks": { "zoom": [
+                        { "time": 0.0, "value": 1.0 },
+                        { "time": (end - start) / 2.0, "value": 1.5 },
+                        { "time": end - start, "value": 2.0 }
+                    ] }
+                }))
+                .unwrap()
+            })
+            .collect();
         // Moving clip 0 to the end separates the 0|1 pair, dropping the 1s
         // transition whose boundary sat at offset(1) + 1.0 = 10.0.
         assert!(move_clip(&mut config, 0, 3));
@@ -3885,6 +4049,22 @@ mod tests {
         );
         assert_eq!(config.keyboard_segments[1].keys[0].time_offset, 500.0);
         assert_eq!(config.keyboard_segments[1].keys[1].time_offset, 2500.0);
+        for (shot, (start, end)) in
+            config
+                .camera3d_segments
+                .iter()
+                .zip([(2.0, 4.0), (11.0, 16.0), (16.0, 19.0)])
+        {
+            assert_eq!((shot.start, shot.end), (start, end));
+            for (keyframe, (time, value)) in shot.tracks.zoom.iter().zip([
+                (0.0, 1.0),
+                ((end - start) / 2.0, 1.5),
+                (end - start, 2.0),
+            ]) {
+                assert!((keyframe.time - time).abs() < 1e-9);
+                assert_eq!(keyframe.value, value);
+            }
+        }
     }
 
     /// `computeDropIndex` (`:692-703`): the insertion point is after every

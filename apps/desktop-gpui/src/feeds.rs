@@ -117,6 +117,13 @@ async fn camera_input_operation<T>(
     operation.await.map(Some)
 }
 
+fn camera_preview_frame_is_fresh(
+    timestamp: cap_timestamp::Timestamp,
+    ready_at: Option<cap_timestamp::Timestamps>,
+) -> bool {
+    ready_at.is_some_and(|ready_at| timestamp.checked_duration_since(ready_at).is_some())
+}
+
 fn configuration_result(
     current_epoch: u64,
     epoch: u64,
@@ -642,7 +649,11 @@ fn run_camera_preview_worker(config: CameraPreviewWorkerConfig) {
             recording.publish(&image, dims, frame.timestamp, applied_mask);
         }
         if active.load(Ordering::Acquire) {
-            match preview_tx.try_send(crate::camera_window::CameraPreviewFrame { image, dims }) {
+            match preview_tx.try_send(crate::camera_window::CameraPreviewFrame {
+                image,
+                dims,
+                timestamp: frame.timestamp,
+            }) {
                 Ok(()) | Err(flume::TrySendError::Full(_)) => {}
                 Err(flume::TrySendError::Disconnected(_)) => {
                     #[cfg(target_os = "linux")]
@@ -667,6 +678,7 @@ pub struct Feeds {
     microphone_settings: Option<microphone::MicrophoneDeviceSettings>,
     applied_settings: crate::store::RecordingDeviceSettings,
     camera_input_pending: bool,
+    camera_preview_not_before: Option<cap_timestamp::Timestamps>,
     mic_input_pending: bool,
     mic_input_released: bool,
     microphone_error: Option<String>,
@@ -728,6 +740,7 @@ impl Feeds {
             microphone_settings: None,
             applied_settings: crate::store::RecordingDeviceSettings::default(),
             camera_input_pending: false,
+            camera_preview_not_before: None,
             mic_input_pending: false,
             mic_input_released: false,
             microphone_error: None,
@@ -832,6 +845,7 @@ impl Feeds {
                 crate::store::BlurMode::Off => 0,
                 crate::store::BlurMode::Light => 1,
                 crate::store::BlurMode::Heavy => 2,
+                crate::store::BlurMode::Remove => 0,
             },
             Ordering::Relaxed,
         );
@@ -861,6 +875,7 @@ impl Feeds {
         {
             return self.camera_epoch;
         }
+        crate::camera_window::clear_parked_camera_preview(cx);
         self.camera_epoch += 1;
         self.camera_input_epoch
             .store(self.camera_epoch, Ordering::Release);
@@ -869,6 +884,7 @@ impl Feeds {
         self.camera_settings = settings;
         self.applied_settings.camera = None;
         self.camera_input_pending = false;
+        self.camera_preview_not_before = None;
         self.camera_error = None;
         cx.notify();
 
@@ -883,6 +899,20 @@ impl Feeds {
             }
         }
         self.camera_epoch
+    }
+
+    pub(crate) fn camera_preview_epoch(&self) -> Option<u64> {
+        (self.camera.is_some()
+            && !self.camera_preview_parked
+            && !self.camera_input_pending
+            && self.camera_error.is_none()
+            && self.camera_preview_not_before.is_some())
+        .then_some(self.camera_epoch)
+    }
+
+    pub(crate) fn accepts_camera_preview(&self, timestamp: cap_timestamp::Timestamp) -> bool {
+        self.camera_preview_epoch().is_some()
+            && camera_preview_frame_is_fresh(timestamp, self.camera_preview_not_before)
     }
 
     pub fn camera_configuration_result(&self, epoch: u64) -> Option<Result<(), String>> {
@@ -909,6 +939,7 @@ impl Feeds {
         }
 
         self.camera_preview_parked = true;
+        self.camera_preview_not_before = None;
         self.applied_settings.camera = None;
         self.camera_input_pending = false;
         self.camera_epoch += 1;
@@ -948,6 +979,7 @@ impl Feeds {
     fn start_camera_preview(&mut self, selection: SelectedCamera, cx: &mut Context<Self>) {
         self.camera_error = None;
         self.camera_input_pending = true;
+        self.camera_preview_not_before = None;
         self.applied_settings.camera = None;
         let epoch = self.camera_epoch;
         let settings = self.camera_settings;
@@ -1009,7 +1041,10 @@ impl Feeds {
                 }
                 this.camera_input_pending = false;
                 match result {
-                    Ok(settings) => this.applied_settings.camera = settings.camera,
+                    Ok(settings) => {
+                        this.applied_settings.camera = settings.camera;
+                        this.camera_preview_not_before = Some(cap_timestamp::Timestamps::now());
+                    }
                     Err(error) => {
                         tracing::error!("camera input failed: {error}");
                         this.camera_error = Some(error);
@@ -1422,33 +1457,38 @@ pub(crate) fn camera_preview_image(
 /// `db_fs` from `src-tauri/src/audio_meter.rs`: peak of the batch as dB FS,
 /// clamped to [-96, 0].
 fn db_fs(samples: &MicrophoneSamples) -> f64 {
-    use cpal::SampleFormat;
+    sample_bytes_db_fs(&samples.data, samples.format)
+}
 
-    let sample_size = samples.format.sample_size();
-    if sample_size == 0 || samples.data.len() < sample_size {
+fn sample_bytes_db_fs(data: &[u8], format: cpal::SampleFormat) -> f64 {
+    use cpal::{Sample, SampleFormat};
+
+    let sample_size = format.sample_size();
+    if sample_size == 0 || data.len() < sample_size {
         return -96.0;
     }
-    let peak = samples
-        .data
+    let peak = data
         .chunks_exact(sample_size)
         .map(|data| {
-            let value: f64 = match samples.format {
+            let value: f64 = match format {
                 SampleFormat::I8 => i8::from_ne_bytes([data[0]]) as f64 / i8::MAX as f64,
-                SampleFormat::U8 => u8::from_ne_bytes([data[0]]) as f64 / u8::MAX as f64 - 0.5,
+                SampleFormat::U8 => u8::from_ne_bytes([data[0]]).to_sample::<f64>(),
                 SampleFormat::I16 => {
                     i16::from_ne_bytes([data[0], data[1]]) as f64 / i16::MAX as f64
                 }
-                SampleFormat::U16 => {
-                    u16::from_ne_bytes([data[0], data[1]]) as f64 / u16::MAX as f64 - 0.5
-                }
+                SampleFormat::U16 => u16::from_ne_bytes([data[0], data[1]]).to_sample::<f64>(),
                 SampleFormat::I32 => {
                     i32::from_ne_bytes([data[0], data[1], data[2], data[3]]) as f64
                         / i32::MAX as f64
                 }
                 SampleFormat::U32 => {
-                    u32::from_ne_bytes([data[0], data[1], data[2], data[3]]) as f64
-                        / u32::MAX as f64
-                        - 0.5
+                    u32::from_ne_bytes([data[0], data[1], data[2], data[3]]).to_sample::<f64>()
+                }
+                SampleFormat::I64 => {
+                    i64::from_ne_bytes([
+                        data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7],
+                    ]) as f64
+                        / i64::MAX as f64
                 }
                 SampleFormat::F32 => {
                     f32::from_ne_bytes([data[0], data[1], data[2], data[3]]) as f64
@@ -1466,8 +1506,136 @@ fn db_fs(samples: &MicrophoneSamples) -> f64 {
 }
 
 #[cfg(test)]
+mod meter_tests {
+    use super::sample_bytes_db_fs;
+    use cpal::SampleFormat;
+
+    #[test]
+    fn unsigned_equilibrium_has_minimum_level() {
+        let cases = [
+            (SampleFormat::U8, 128u8.to_ne_bytes().to_vec()),
+            (SampleFormat::U16, 32768u16.to_ne_bytes().to_vec()),
+            (SampleFormat::U32, (1u32 << 31).to_ne_bytes().to_vec()),
+        ];
+        for (format, bytes) in cases {
+            assert_eq!(sample_bytes_db_fs(&bytes, format), -96.0, "{format:?}");
+        }
+    }
+
+    #[test]
+    fn unsigned_negative_peaks_have_full_scale_level() {
+        for format in [SampleFormat::U8, SampleFormat::U16, SampleFormat::U32] {
+            assert_eq!(sample_bytes_db_fs(&[0; 8], format), 0.0, "{format:?}");
+        }
+    }
+
+    #[test]
+    fn unsigned_half_scale_has_same_level_on_both_sides() {
+        let expected = 20.0 * 0.5f64.log10();
+        assert_eq!(sample_bytes_db_fs(&[64], SampleFormat::U8), expected);
+        assert_eq!(sample_bytes_db_fs(&[192], SampleFormat::U8), expected);
+    }
+
+    #[test]
+    fn i64_microphone_silence_has_minimum_level() {
+        assert_eq!(
+            sample_bytes_db_fs(&0i64.to_ne_bytes(), SampleFormat::I64),
+            -96.0
+        );
+    }
+
+    #[test]
+    fn i64_microphone_peaks_have_correct_level() {
+        let cases = [
+            (i64::MIN, 0.0),
+            (i64::MAX, 0.0),
+            (1i64 << 62, 20.0 * 0.5f64.log10()),
+        ];
+        for (sample, expected) in cases {
+            assert_eq!(
+                sample_bytes_db_fs(&sample.to_ne_bytes(), SampleFormat::I64),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn signed_and_float_formats_keep_existing_levels() {
+        let cases = [
+            (
+                SampleFormat::I8,
+                63i8.to_ne_bytes().to_vec(),
+                63.0 / i8::MAX as f64,
+            ),
+            (
+                SampleFormat::I16,
+                16383i16.to_ne_bytes().to_vec(),
+                16383.0 / i16::MAX as f64,
+            ),
+            (
+                SampleFormat::I32,
+                123456i32.to_ne_bytes().to_vec(),
+                123456.0 / i32::MAX as f64,
+            ),
+            (SampleFormat::F32, 0.5f32.to_ne_bytes().to_vec(), 0.5),
+            (SampleFormat::F64, 0.5f64.to_ne_bytes().to_vec(), 0.5),
+        ];
+        for (format, bytes, amplitude) in cases {
+            assert_eq!(
+                sample_bytes_db_fs(&bytes, format),
+                20.0 * amplitude.log10(),
+                "{format:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn empty_and_partial_samples_remain_silent() {
+        assert_eq!(sample_bytes_db_fs(&[], SampleFormat::U8), -96.0);
+        assert_eq!(sample_bytes_db_fs(&[128], SampleFormat::U16), -96.0);
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preview_rejects_frames_queued_before_input_readiness() {
+        let ready = cap_timestamp::Timestamps::now();
+        let queued = ready
+            .instant()
+            .checked_sub(Duration::from_millis(1))
+            .unwrap();
+        assert!(!camera_preview_frame_is_fresh(
+            cap_timestamp::Timestamp::Instant(queued),
+            Some(ready)
+        ));
+        assert!(!camera_preview_frame_is_fresh(
+            cap_timestamp::Timestamp::Instant(ready.instant()),
+            None
+        ));
+        assert!(camera_preview_frame_is_fresh(
+            cap_timestamp::Timestamp::Instant(ready.instant()),
+            Some(ready)
+        ));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn preview_checks_native_camera_capture_clock() {
+        let ready = cap_timestamp::Timestamps::now();
+        assert!(!camera_preview_frame_is_fresh(
+            cap_timestamp::Timestamp::MachAbsoluteTime(cap_timestamp::MachAbsoluteTimestamp::new(
+                0
+            )),
+            Some(ready)
+        ));
+        assert!(camera_preview_frame_is_fresh(
+            cap_timestamp::Timestamp::MachAbsoluteTime(cap_timestamp::MachAbsoluteTimestamp::now()),
+            Some(ready)
+        ));
+    }
 
     #[tokio::test]
     async fn same_device_format_change_discards_queued_previous_configuration() {

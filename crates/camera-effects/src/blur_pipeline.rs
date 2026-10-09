@@ -14,6 +14,14 @@ pub struct BlurPipeline {
     blur_pipeline: wgpu::RenderPipeline,
     blur_bind_group_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
+    uniforms: Option<BlurUniformBuffers>,
+}
+
+struct BlurUniformBuffers {
+    dimensions: (u32, u32),
+    intensity: f32,
+    horizontal: wgpu::Buffer,
+    vertical: wgpu::Buffer,
 }
 
 pub struct BlurPassInputs<'a> {
@@ -84,7 +92,7 @@ impl BlurPipeline {
                 module: &shader,
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    format: wgpu::TextureFormat::Rgba16Float,
                     blend: None,
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -110,11 +118,12 @@ impl BlurPipeline {
             blur_pipeline,
             blur_bind_group_layout,
             sampler,
+            uniforms: None,
         }
     }
 
     pub fn blur_two_pass(
-        &self,
+        &mut self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         inputs: BlurPassInputs<'_>,
@@ -128,20 +137,30 @@ impl BlurPipeline {
             intensity,
         } = inputs;
 
-        let texel_size = [1.0 / width as f32, 1.0 / height as f32];
-
-        let h_uniforms = BlurUniforms {
-            direction: [1.0, 0.0],
-            texel_size,
-            intensity,
-            _padding: 0.0,
-            _padding2: [0.0, 0.0],
-        };
-        let h_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Blur H Uniform"),
-            contents: bytemuck::cast_slice(&[h_uniforms]),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
+        if self.uniforms.as_ref().is_none_or(|uniforms| {
+            uniforms.dimensions != (width, height) || uniforms.intensity != intensity
+        }) {
+            let create_uniform = |label, direction| {
+                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some(label),
+                    contents: bytemuck::bytes_of(&BlurUniforms {
+                        direction,
+                        texel_size: [1.0 / width as f32, 1.0 / height as f32],
+                        intensity,
+                        _padding: 0.0,
+                        _padding2: [0.0, 0.0],
+                    }),
+                    usage: wgpu::BufferUsages::UNIFORM,
+                })
+            };
+            self.uniforms = Some(BlurUniformBuffers {
+                dimensions: (width, height),
+                intensity,
+                horizontal: create_uniform("Blur H Uniform", [1.0, 0.0]),
+                vertical: create_uniform("Blur V Uniform", [0.0, 1.0]),
+            });
+        }
+        let uniforms = self.uniforms.as_ref().expect("uniforms initialized above");
         let h_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Blur H Bind Group"),
             layout: &self.blur_bind_group_layout,
@@ -156,7 +175,7 @@ impl BlurPipeline {
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: h_buffer.as_entire_binding(),
+                    resource: uniforms.horizontal.as_entire_binding(),
                 },
             ],
         });
@@ -181,18 +200,6 @@ impl BlurPipeline {
             pass.draw(0..3, 0..1);
         }
 
-        let v_uniforms = BlurUniforms {
-            direction: [0.0, 1.0],
-            texel_size,
-            intensity,
-            _padding: 0.0,
-            _padding2: [0.0, 0.0],
-        };
-        let v_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Blur V Uniform"),
-            contents: bytemuck::cast_slice(&[v_uniforms]),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
         let v_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Blur V Bind Group"),
             layout: &self.blur_bind_group_layout,
@@ -207,7 +214,7 @@ impl BlurPipeline {
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: v_buffer.as_entire_binding(),
+                    resource: uniforms.vertical.as_entire_binding(),
                 },
             ],
         });
@@ -236,8 +243,17 @@ impl BlurPipeline {
 
 pub struct CompositePipeline {
     pipeline: wgpu::RenderPipeline,
+    cutout_pipeline: wgpu::RenderPipeline,
+    background_pipeline: wgpu::RenderPipeline,
     bind_group_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
+}
+
+pub struct CompositePassInputs<'a> {
+    pub sharp: &'a wgpu::TextureView,
+    pub blurred: &'a wgpu::TextureView,
+    pub mask: &'a wgpu::TextureView,
+    pub output: &'a wgpu::TextureView,
 }
 
 impl CompositePipeline {
@@ -295,31 +311,38 @@ impl CompositePipeline {
             push_constant_ranges: &[],
         });
 
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Composite Pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: &[],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: output_format,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: Default::default(),
-            multiview: None,
-            cache: None,
-        });
+        let create_pipeline = |entry_point, format| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("Composite Pipeline"),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &[],
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some(entry_point),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: None,
+                multisample: Default::default(),
+                multiview: None,
+                cache: None,
+            })
+        };
+
+        let pipeline = create_pipeline("fs_main", output_format);
+        let cutout_pipeline = create_pipeline("fs_cutout", output_format);
+        let background_pipeline =
+            create_pipeline("fs_background", wgpu::TextureFormat::Rgba16Float);
 
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -332,6 +355,8 @@ impl CompositePipeline {
 
         Self {
             pipeline,
+            cutout_pipeline,
+            background_pipeline,
             bind_group_layout,
             sampler,
         }
@@ -341,11 +366,39 @@ impl CompositePipeline {
         &self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
-        sharp_view: &wgpu::TextureView,
-        blurred_view: &wgpu::TextureView,
-        mask_view: &wgpu::TextureView,
-        output_view: &wgpu::TextureView,
+        inputs: CompositePassInputs<'_>,
+        remove_background: bool,
     ) {
+        let pipeline = if remove_background {
+            &self.cutout_pipeline
+        } else {
+            &self.pipeline
+        };
+        self.draw(device, encoder, inputs, pipeline);
+    }
+
+    pub fn prepare_background(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        inputs: CompositePassInputs<'_>,
+    ) {
+        self.draw(device, encoder, inputs, &self.background_pipeline);
+    }
+
+    fn draw(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        inputs: CompositePassInputs<'_>,
+        pipeline: &wgpu::RenderPipeline,
+    ) {
+        let CompositePassInputs {
+            sharp: sharp_view,
+            blurred: blurred_view,
+            mask: mask_view,
+            output: output_view,
+        } = inputs;
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Composite Bind Group"),
             layout: &self.bind_group_layout,
@@ -383,7 +436,7 @@ impl CompositePipeline {
             timestamp_writes: None,
             occlusion_query_set: None,
         });
-        pass.set_pipeline(&self.pipeline);
+        pass.set_pipeline(pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
         pass.draw(0..3, 0..1);
     }
