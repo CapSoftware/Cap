@@ -9,10 +9,9 @@ export async function getLicenseCustomerIds(email: string) {
 		ssl: { rejectUnauthorized: true },
 		connectTimeout: 5_000,
 	});
+	let timeout: ReturnType<typeof setTimeout> | undefined;
 	try {
-		const [rows] = await connection.execute<
-			(RowDataPacket & { stripeId: string })[]
-		>(
+		const query = connection.execute<(RowDataPacket & { stripeId: string })[]>(
 			`SELECT DISTINCT sc.stripeId
 			FROM stripeCustomers sc JOIN user u ON u.id = sc.userId
 			WHERE u.email = ?
@@ -22,8 +21,18 @@ export async function getLicenseCustomerIds(email: string) {
 			)`,
 			[email],
 		);
+		const [rows] = await Promise.race([
+			query,
+			new Promise<never>((_, reject) => {
+				timeout = setTimeout(
+					() => reject(new Error("License billing lookup timed out.")),
+					5_000,
+				);
+			}),
+		]);
 		return rows.map((row) => row.stripeId);
 	} finally {
-		await connection.end();
+		clearTimeout(timeout);
+		connection.destroy();
 	}
 }
