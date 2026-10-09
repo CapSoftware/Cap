@@ -13,6 +13,12 @@ export type MoveFolderDestination = {
 	parentId: Folder.FolderId | null;
 };
 
+export type MoveDestinationGroup = {
+	location: MoveLocation;
+	name: string;
+	folders: MoveFolderDestination[];
+};
+
 export type MoveFolderDestinationRow = MoveFolderDestination & {
 	depth: number;
 	path: string;

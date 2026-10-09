@@ -8,7 +8,6 @@ import {
 
 vi.mock("@tauri-apps/api/event", () => ({ emit: vi.fn() }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ message: vi.fn() }));
-vi.mock("@tauri-apps/plugin-opener", () => ({ revealItemInDir: vi.fn() }));
 vi.mock("./tauri", () => ({ commands: {} }));
 
 describe("recording start cancellation", () => {
