@@ -1174,7 +1174,14 @@ function Inner(props: {
 				</Show>
 				<div
 					inert={!editorReady()}
-					class="flex overflow-y-hidden flex-col flex-1 gap-2 w-full min-h-0 leading-5 transition-opacity duration-300 ease-out motion-reduce:transition-none"
+					// The web page's own loading screen covers the editor until it
+					// is ready and then fades itself, so the editor is already
+					// at full strength beneath it.
+					class={cx(
+						"flex overflow-y-hidden flex-col flex-1 gap-2 w-full min-h-0 leading-5",
+						!isWebEditor &&
+							"transition-opacity duration-300 ease-out motion-reduce:transition-none",
+					)}
 					style={{ opacity: editorReady() ? 1 : 0.55 }}
 					data-tauri-drag-region
 				>

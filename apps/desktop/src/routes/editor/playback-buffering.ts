@@ -8,7 +8,6 @@ const PLAY_REQUEST_EVENT = "cap-editor-play-requested";
 
 let buffering = false;
 let playRequest: boolean | null = null;
-let lastPlayRequest = false;
 
 export function reportPlaybackBuffering(next: boolean) {
 	if (next === buffering) return;
@@ -25,32 +24,17 @@ export function createPlaybackBuffering() {
 	return value;
 }
 
-/// Play (or pause) pressed while the editor is still loading, for the editor
+/// Play (or pause) pressed on the web page's loading screen, for the editor
 /// to act on once it has mounted.
 export function requestPlayWhenReady(playing: boolean) {
 	playRequest = playing;
-	lastPlayRequest = playing;
 	window.dispatchEvent(new Event(PLAY_REQUEST_EVENT));
 }
 
 /// For when an editor attempt ends before taking the press, so a retry in
 /// the same page doesn't start playing without a press of its own.
 export function clearPlayRequest() {
-	if (playRequest === null && !lastPlayRequest) return;
 	playRequest = null;
-	lastPlayRequest = false;
-	if (typeof window === "undefined") return;
-	window.dispatchEvent(new Event(PLAY_REQUEST_EVENT));
-}
-
-/// Outlives the request being taken, so every loading screen, including one
-/// still covering the mounted editor, shows the same press.
-export function createPlayRequested() {
-	const [value, setValue] = createSignal(lastPlayRequest);
-	createEventListener(window, PLAY_REQUEST_EVENT, () =>
-		setValue(lastPlayRequest),
-	);
-	return value;
 }
 
 export function onPlayRequest(apply: (playing: boolean) => void) {

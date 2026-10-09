@@ -124,7 +124,6 @@ export default async function StudioEditorPage(props: {
 			isPublic={video.isPublic}
 			shareUrl={shareUrl}
 			preparingTitle={video.name}
-			preparingDuration={duration}
 			preparingTracks={
 				editorSources?.camera ||
 				video.metadata?.webEditorClips?.items.some((clip) => clip.cameraPath)

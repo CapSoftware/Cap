@@ -39,19 +39,10 @@ describe("play requests from the loading screen", () => {
 
 	it("forgets a press when its editor attempt ends before a player takes it", async () => {
 		const module = await load();
-		const shownPress = () =>
-			createRoot((dispose) => {
-				const value = module.createPlayRequested()();
-				dispose();
-				return value;
-			});
 		module.requestPlayWhenReady(true);
-		expect(shownPress()).toBe(true);
-		// The attempt fails or is torn down before its player mounts.
+		// The attempt fails or is torn down before its player mounts, and the
+		// retry's player doesn't start playing on its own.
 		module.clearPlayRequest();
-		// The retry's loading screen shows Play, not a press still waiting...
-		expect(shownPress()).toBe(false);
-		// ...and its player doesn't start playing on its own.
 		const player = mountPlayer(module);
 		expect(player.taken).toEqual([]);
 		player.dispose();

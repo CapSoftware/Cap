@@ -1009,7 +1009,8 @@ footer a {
 		z-index: 50;
 	}
 
-	::view-transition-image-pair(cap-edit-video) {
+	::view-transition-image-pair(cap-edit-video),
+	::view-transition-image-pair(cap-shell-bar) {
 		isolation: auto;
 		mix-blend-mode: normal;
 	}
@@ -1020,6 +1021,26 @@ footer a {
 		animation-duration: 280ms;
 		animation-timing-function: cubic-bezier(0.32, 0.72, 0, 1);
 		z-index: 60;
+	}
+
+	/* The new bar and video fade in over the old ones, which stay drawn: the
+	   bar until the end, the video until it has nearly landed. Safari can
+	   capture a new snapshot before it has painted, and a cross-fade would
+	   then blank them for the length of the transition. */
+	::view-transition-old(cap-shell-bar) {
+		animation: none;
+		mix-blend-mode: normal;
+	}
+
+	::view-transition-old(cap-edit-video) {
+		animation: 420ms cubic-bezier(0.55, 0, 1, 0.45) both cap-fade-out;
+		mix-blend-mode: normal;
+	}
+
+	::view-transition-new(cap-edit-video),
+	::view-transition-new(cap-shell-bar) {
+		animation: 220ms ease-out both cap-fade-in;
+		mix-blend-mode: normal;
 	}
 
 	html[data-view-transition="edit-enter"]::view-transition-old(root),

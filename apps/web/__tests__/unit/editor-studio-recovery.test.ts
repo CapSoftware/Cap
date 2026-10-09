@@ -16,7 +16,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("next/navigation", () => ({
-	useRouter: () => ({ push: mocks.push }),
+	useRouter: () => ({ push: mocks.push, prefetch: () => undefined }),
 }));
 vi.mock("next/dynamic", () => ({ default: () => () => null }));
 vi.mock("@/app/s/[videoId]/edit/studio/editor-clip-recorder", () => ({
@@ -155,7 +155,6 @@ async function openRecoveryConflict() {
 				isPublic: true,
 				shareUrl: "https://cap.so/s/video",
 				preparingTitle: "Paired replay",
-				preparingDuration: 900,
 				preparingTracks: ["display", "camera"],
 			}),
 		);
@@ -286,7 +285,6 @@ test("an unexpected browser-draft restore failure preserves the draft", async ()
 				isPublic: true,
 				shareUrl: "https://cap.so/s/video",
 				preparingTitle: "Paired replay",
-				preparingDuration: 900,
 				preparingTracks: ["display", "camera"],
 			}),
 		);
@@ -319,7 +317,6 @@ test("browser Studio keeps the shared editor shell open and connects once when r
 				isPublic: true,
 				shareUrl: "https://cap.so/s/video",
 				preparingTitle: "Paired replay",
-				preparingDuration: 900,
 				preparingTracks: ["display", "camera"],
 			}),
 		);
@@ -328,7 +325,10 @@ test("browser Studio keeps the shared editor shell open and connects once when r
 		"iframe[title='Cap editor']",
 	);
 	if (!iframe) throw new Error("Editor shell was not shown");
-	expect(requests).toHaveLength(0);
+	// Arriving without the share page's frame, only the poster is asked for.
+	expect(requests.map((request) => request.url)).toEqual([
+		"/api/thumbnail?videoId=video",
+	]);
 	const frameDocument =
 		document.implementation.createHTMLDocument("Cap editor");
 	Object.defineProperty(frameDocument, "URL", {
@@ -346,22 +346,44 @@ test("browser Studio keeps the shared editor shell open and connects once when r
 	const childWindow = iframe.contentWindow;
 	if (!childWindow) throw new Error("Editor child window was unavailable");
 	const postMessage = vi.spyOn(childWindow, "postMessage");
-	await act(async () => iframe.dispatchEvent(new Event("load")));
-	expect(postMessage).toHaveBeenCalledWith(
-		{
-			kind: "cap-editor-preparing",
-			version: 1,
-			title: "Paired replay",
-			durationSeconds: 900,
-			tracks: ["display", "camera"],
-		},
-		window.location.origin,
+	const loading = container.querySelector(
+		"section[aria-label='Opening the editor']",
 	);
+	expect(loading?.textContent).toContain("Paired replay");
+	const play = loading?.querySelector<HTMLButtonElement>(
+		"button[aria-label='Play video']",
+	);
+	await act(async () => play?.click());
+	const playRequest = {
+		kind: "cap-editor-play-request",
+		version: 1,
+		playing: true,
+	};
+	expect(postMessage).toHaveBeenCalledWith(playRequest, window.location.origin);
+	postMessage.mockClear();
+	await act(async () => iframe.dispatchEvent(new Event("load")));
+	// A press made before the frame could listen reaches it once it loads.
+	expect(postMessage).toHaveBeenCalledWith(playRequest, window.location.origin);
 	await waitFor(() => {
 		expect(mocks.connect).toHaveBeenCalledTimes(1);
 	});
 	await act(async () => iframe.dispatchEvent(new Event("load")));
 	expect(mocks.connect).toHaveBeenCalledTimes(1);
+	await act(async () =>
+		window.dispatchEvent(
+			new MessageEvent("message", {
+				data: { kind: "cap-editor-painted", version: 1 },
+				origin: window.location.origin,
+				source: childWindow,
+			}),
+		),
+	);
+	expect(loading?.hasAttribute("data-leaving")).toBe(true);
+	await waitFor(() => {
+		expect(
+			container.querySelector("section[aria-label='Opening the editor']"),
+		).toBeNull();
+	});
 });
 
 test("leaving asks first while the share link is missing this session's edits", async () => {
@@ -375,7 +397,6 @@ test("leaving asks first while the share link is missing this session's edits", 
 				isPublic: true,
 				shareUrl: "https://cap.so/s/video",
 				preparingTitle: "Paired replay",
-				preparingDuration: 900,
 				preparingTracks: ["display"],
 			}),
 		);
@@ -449,7 +470,6 @@ test("a Free editor lets its owner restore non-caption edits from a Pro browser 
 				isPublic: true,
 				shareUrl: "https://cap.so/s/video",
 				preparingTitle: "Paired replay",
-				preparingDuration: 900,
 				preparingTracks: ["display", "camera"],
 			}),
 		);
@@ -535,7 +555,6 @@ test("a Pro editor automatically restores a caption browser draft", async () => 
 				isPublic: true,
 				shareUrl: "https://cap.so/s/video",
 				preparingTitle: "Paired replay",
-				preparingDuration: 900,
 				preparingTracks: ["display", "camera"],
 			}),
 		);

@@ -1,7 +1,6 @@
 "use client";
 
 import type { Video } from "@cap/web-domain";
-import clsx from "clsx";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import {
@@ -28,6 +27,11 @@ import {
 	stripEditorCaptionContent,
 } from "@/lib/editor-caption-access";
 import type { EditorClipCapture } from "@/lib/editor-clip-recorder";
+import {
+	editorConnectionDisplay,
+	editorLoadingMessage,
+	parseEditorConnectionMessage,
+} from "@/lib/editor-connection";
 import { useEntryFrame } from "@/lib/editor-entry-frame";
 import {
 	captureEditorLocalDraft,
@@ -39,8 +43,8 @@ import type { WebEditorVideoImportProgress } from "@/lib/editor-video-import-cli
 import { openWorkerEditorSession } from "@/lib/editor-worker-session-client";
 import { navigateWithTransition, nextPageReady } from "@/utils/view-transition";
 import type { ClipRecorderContext } from "./clip-recorder-context";
-import { EditorEntryFrame } from "./editor-entry-frame";
 import { EditorHostBridge } from "./editor-host";
+import { EditorLoading } from "./editor-loading";
 
 const loadClipRecorder = () =>
 	import("./editor-clip-recorder").then((module) => module.EditorClipRecorder);
@@ -61,6 +65,50 @@ function ClipRecorderUnavailable(props: {
 		onClose.current(false);
 	}, []);
 	return null;
+}
+
+// Past this the loading screen says why it is still waiting.
+const LOADING_SLOW_AFTER_MS = 3500;
+// A recording the preview can't show a frame of still gets into the editor.
+const LOADING_GIVE_UP_AFTER_MS = 30_000;
+const LOADING_FADE_MS = 260;
+
+function savedTimelineHeight() {
+	try {
+		const saved: unknown = JSON.parse(
+			window.localStorage.getItem("editorTimelineHeightOverride") ?? "null",
+		);
+		return typeof saved === "number" && Number.isFinite(saved) ? saved : null;
+	} catch {
+		return null;
+	}
+}
+
+function useLoadingPoster(
+	videoId: Video.VideoId,
+	entryFrame: string | null | undefined,
+) {
+	const [thumbnail, setThumbnail] = useState<string | null>(null);
+	useEffect(() => {
+		if (entryFrame !== null) return;
+		const controller = new AbortController();
+		fetch(`/api/thumbnail?videoId=${encodeURIComponent(videoId)}`, {
+			signal: controller.signal,
+		})
+			.then((response) => (response.ok ? response.json() : null))
+			.then((body: unknown) => {
+				if (
+					typeof body === "object" &&
+					body !== null &&
+					"screen" in body &&
+					typeof body.screen === "string"
+				)
+					setThumbnail(body.screen);
+			})
+			.catch(() => undefined);
+		return () => controller.abort();
+	}, [entryFrame, videoId]);
+	return entryFrame ?? thumbnail;
 }
 
 const UpgradeModal = dynamic(
@@ -104,7 +152,6 @@ export function StudioEditorClient(props: {
 	isPublic: boolean;
 	shareUrl: string;
 	preparingTitle: string;
-	preparingDuration: number;
 	preparingTracks: Array<"display" | "camera">;
 }) {
 	const {
@@ -115,7 +162,6 @@ export function StudioEditorClient(props: {
 		isPublic,
 		shareUrl,
 		preparingTitle,
-		preparingDuration,
 		preparingTracks,
 	} = props;
 	const router = useRouter();
@@ -134,9 +180,18 @@ export function StudioEditorClient(props: {
 	useAppPage();
 	const [recordClipOpen, setRecordClipOpen] = useState(false);
 	const entryFrame = useEntryFrame(videoId);
+	const loadingPoster = useLoadingPoster(videoId, entryFrame);
 	const [frameLoaded, setFrameLoaded] = useState(false);
 	const [editorPainted, setEditorPainted] = useState(false);
-	const [entryFrameGone, setEntryFrameGone] = useState(false);
+	const [loadingGone, setLoadingGone] = useState(false);
+	const [loadingSlow, setLoadingSlow] = useState(false);
+	const [loadingTimelineHeight, setLoadingTimelineHeight] = useState<
+		number | null
+	>(null);
+	const [playRequested, setPlayRequested] = useState(false);
+	const playRequestedRef = useRef(false);
+	const [connection, setConnection] =
+		useState<ReturnType<typeof parseEditorConnectionMessage>>(null);
 	const [clipRecorderContext, setClipRecorderContext] =
 		useState<ClipRecorderContext | null>(null);
 	const [upgradeOpen, setUpgradeOpen] = useState(false);
@@ -510,16 +565,11 @@ export function StudioEditorClient(props: {
 				closedRef.current
 			)
 				return;
-			iframe.contentWindow?.postMessage(
-				{
-					kind: "cap-editor-preparing",
-					version: 1,
-					title: preparingTitle,
-					durationSeconds: preparingDuration,
-					tracks: preparingTracks,
-				},
-				window.location.origin,
-			);
+			if (playRequestedRef.current)
+				iframe.contentWindow?.postMessage(
+					{ kind: "cap-editor-play-request", version: 1, playing: true },
+					window.location.origin,
+				);
 			if (!sessionId) return;
 			const previous = frameConnectRef.current;
 			if (previous?.document === document) {
@@ -573,9 +623,6 @@ export function StudioEditorClient(props: {
 		[
 			captionsEnabled,
 			editorSrc,
-			preparingDuration,
-			preparingTitle,
-			preparingTracks,
 			restartAfterImport,
 			router,
 			sessionId,
@@ -601,7 +648,9 @@ export function StudioEditorClient(props: {
 				message !== null &&
 				"kind" in message
 			) {
-				if (message.kind === "cap-editor-painted") setEditorPainted(true);
+				const report = parseEditorConnectionMessage(message);
+				if (report) setConnection(report);
+				else if (message.kind === "cap-editor-painted") setEditorPainted(true);
 				else if (message.kind === "cap-editor-focus")
 					setEditorFocused(
 						"active" in message &&
@@ -625,22 +674,37 @@ export function StudioEditorClient(props: {
 		window.addEventListener("message", onFrameMessage);
 		return () => window.removeEventListener("message", onFrameMessage);
 	}, []);
-	// Arriving with a snapshot of the share page's video, the editor stays
-	// hidden behind it until it shows a frame of its own. Without one, its
-	// skeleton is enough; a project with no frame to show still gets in.
+	useEffect(() => {
+		setLoadingTimelineHeight(savedTimelineHeight());
+		const timer = setTimeout(() => setLoadingSlow(true), LOADING_SLOW_AFTER_MS);
+		return () => clearTimeout(timer);
+	}, []);
 	useEffect(() => {
 		if (!frameLoaded) return;
 		const timer = setTimeout(
 			() => setEditorPainted(true),
-			entryFrame ? 4000 : 800,
+			LOADING_GIVE_UP_AFTER_MS,
 		);
 		return () => clearTimeout(timer);
-	}, [frameLoaded, entryFrame]);
+	}, [frameLoaded]);
 	useEffect(() => {
 		if (!editorPainted) return;
-		const timer = setTimeout(() => setEntryFrameGone(true), 320);
+		// The editor took any press when its player mounted, before painting.
+		playRequestedRef.current = false;
+		const timer = setTimeout(() => setLoadingGone(true), LOADING_FADE_MS);
 		return () => clearTimeout(timer);
 	}, [editorPainted]);
+	// Play pressed while loading starts playback once the editor is ready; the
+	// frame takes the press now if it has loaded, or when it does.
+	const togglePlayWhenReady = () => {
+		const playing = !playRequestedRef.current;
+		playRequestedRef.current = playing;
+		setPlayRequested(playing);
+		iframeRef.current?.contentWindow?.postMessage(
+			{ kind: "cap-editor-play-request", version: 1, playing },
+			window.location.origin,
+		);
+	};
 	// Code for the recorder and for the share page, the usual way out, loads
 	// once the editor shows a frame rather than competing with it for one.
 	useEffect(() => {
@@ -785,21 +849,36 @@ export function StudioEditorClient(props: {
 				/>
 			</div>
 			<div className="relative min-h-0 flex-1">
-				{!entryFrameGone && <EditorEntryFrame frame={entryFrame ?? null} />}
 				<iframe
 					ref={iframeRef}
 					title="Cap editor"
 					src={editorSrc}
 					allow="fullscreen"
-					className={clsx(
-						"relative h-full w-full border-0 transition-opacity duration-300",
-						entryFrame && !editorPainted && "opacity-0",
-					)}
+					className="relative h-full w-full border-0"
 					onLoad={(event) => {
 						onFrameLoad(event.currentTarget);
 						setFrameLoaded(true);
 					}}
 				/>
+				{!loadingGone && (
+					<EditorLoading
+						title={preparingTitle}
+						poster={loadingPoster}
+						timelineRows={preparingTracks.includes("camera") ? 3 : 2}
+						timelineHeight={loadingTimelineHeight}
+						leaving={editorPainted}
+						playing={playRequested}
+						onPlay={togglePlayWhenReady}
+						slowMessage={
+							loadingSlow
+								? editorLoadingMessage(
+										editorConnectionDisplay(connection, navigator.onLine),
+										playRequested,
+									)
+								: null
+						}
+					/>
+				)}
 				{recordClipOpen && (
 					<EditorClipRecorder
 						context={clipRecorderContext}

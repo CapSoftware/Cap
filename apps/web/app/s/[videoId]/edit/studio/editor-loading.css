@@ -1,0 +1,519 @@
+/* Sizes mirror the web editor's layout (Editor.tsx, Player.tsx, Header.tsx
+   and web-layout.css); the container is the editor frame's box, so these
+   queries answer exactly as the editor's own media queries do. */
+.edl {
+	position: absolute;
+	inset: 0;
+	z-index: 1;
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+	isolation: isolate;
+	container: edl / size;
+	background: var(--rec-window);
+	transition: opacity 240ms ease-out;
+}
+
+.edl[data-leaving] {
+	opacity: 0;
+	pointer-events: none;
+}
+
+.edl-header {
+	display: flex;
+	flex: none;
+	align-items: center;
+	gap: 6px;
+	height: 52px;
+	padding: 0 12px 0 13px;
+}
+
+.edl-header .edl-pill.edl-title {
+	height: 12px;
+	max-width: 50%;
+	margin-left: 0;
+}
+
+.edl-spacer {
+	flex: 1;
+}
+
+.edl-pill {
+	display: block;
+	flex: none;
+	height: 10px;
+	border-radius: 999px;
+	background: var(--rec-ctl);
+}
+
+.edl-header .edl-pill {
+	height: 14px;
+	margin-left: 10px;
+}
+
+.edl-header .edl-save {
+	width: 72px;
+	height: 30px;
+	margin-left: 12px;
+	border-radius: 8px;
+	background: color-mix(in srgb, var(--rec-accent) 16%, transparent);
+}
+
+.edl-grid {
+	--edl-available: calc(100cqh - 124px);
+	--edl-timeline-height: max(
+		0px,
+		min(
+			var(--edl-timeline, 260px),
+			calc(var(--edl-available) - min(320px, var(--edl-available) * 0.5714))
+		)
+	);
+	display: grid;
+	flex: 1;
+	min-height: 0;
+	grid-template-columns: minmax(0, 1fr) 416px;
+	grid-template-rows: minmax(0, 1fr) 48px var(--edl-timeline-height);
+	gap: 8px;
+	padding: 0 8px 8px;
+}
+
+.edl-card {
+	position: relative;
+	min-width: 0;
+	min-height: 0;
+	overflow: hidden;
+	border-radius: 12px;
+	background: var(--rec-card);
+	box-shadow: var(--rec-card-shadow);
+}
+
+.edl-player {
+	display: flex;
+	flex-direction: column;
+}
+
+.edl-toolbar {
+	display: flex;
+	flex: none;
+	align-items: center;
+	gap: 14px;
+	height: 44px;
+	padding: 0 20px;
+}
+
+.edl-stage {
+	position: relative;
+	flex: 1;
+	min-height: 0;
+}
+
+.edl-fit {
+	position: absolute;
+	inset: 16px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	container-type: size;
+}
+
+.edl-preview {
+	position: relative;
+	z-index: 2;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	width: min(100cqw, calc(100cqh * var(--edl-aspect)));
+	aspect-ratio: var(--edl-aspect);
+	overflow: hidden;
+	background: var(--rec-ctl);
+}
+
+.edl-preview[data-poster] {
+	background: #000;
+	box-shadow: 0 0 0 1px var(--rec-line-strong);
+}
+
+.edl-poster {
+	position: absolute;
+	inset: 0;
+	width: 100%;
+	height: 100%;
+	object-fit: contain;
+}
+
+/* Out of the way when loading is quick; a calm sign of progress otherwise. */
+.edl-status {
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 10px;
+	max-width: min(17rem, 90%);
+	padding: 18px 22px;
+	text-align: center;
+	animation: edl-appear 320ms ease-out 450ms both;
+}
+
+/* The frame dims a little while it waits, and lifts as the editor's own
+   frame fades in over it. */
+.edl-shade {
+	position: absolute;
+	inset: 0;
+	background: rgb(0 0 0 / 0.38);
+	animation: edl-appear 320ms ease-out 450ms both;
+}
+
+.edl-slow {
+	margin: 0;
+	font-size: 12px;
+	line-height: 16px;
+	color: var(--rec-text-2);
+	animation: edl-appear 320ms ease-out both;
+}
+
+.edl-preview[data-poster] .edl-slow {
+	color: rgb(255 255 255 / 0.9);
+	text-shadow: 0 1px 8px rgb(0 0 0 / 0.6);
+}
+
+.edl-transport {
+	display: flex;
+	flex: none;
+	align-items: center;
+	gap: 12px;
+	height: 48px;
+	padding: 0 14px;
+}
+
+.edl-transport-side {
+	display: flex;
+	flex: 1;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+}
+
+.edl-transport-side.edl-end {
+	justify-content: flex-end;
+}
+
+.edl-controls {
+	display: flex;
+	flex: none;
+	align-items: center;
+	gap: 14px;
+}
+
+.edl-skip {
+	display: flex;
+	width: 14px;
+	justify-content: center;
+	color: var(--rec-text-2);
+}
+
+.edl-skip svg {
+	width: 14px;
+	height: 14px;
+	fill: currentColor;
+}
+
+.edl-play-slot {
+	position: relative;
+	z-index: 2;
+	display: flex;
+}
+
+.edl-play {
+	position: relative;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 32px;
+	height: 32px;
+	border-radius: 999px;
+	background: var(--rec-text-1);
+	color: var(--rec-card);
+	transition: opacity 150ms ease-out;
+}
+
+.edl-play:hover {
+	opacity: 0.9;
+}
+
+.edl-play:focus-visible {
+	outline: 2px solid var(--rec-accent);
+	outline-offset: 2px;
+}
+
+.edl-play svg {
+	width: 12px;
+	height: 12px;
+	fill: currentColor;
+}
+
+.edl-play-ring {
+	position: absolute;
+	inset: -3px;
+	border: 2px solid transparent;
+	border-top-color: var(--rec-text-1);
+	border-radius: 999px;
+	animation: edl-spin 0.9s linear infinite;
+}
+
+.edl-sheet {
+	display: flex;
+	flex-direction: column;
+}
+
+.edl-tabs {
+	display: flex;
+	flex: none;
+	align-items: center;
+	justify-content: space-around;
+	height: 46px;
+	padding: 0 10px;
+	border-bottom: 1px solid var(--rec-line);
+}
+
+.edl-tab {
+	width: 18px;
+	height: 18px;
+	border-radius: 6px;
+	background: var(--rec-ctl);
+}
+
+.edl-tabs .edl-tab.is-selected {
+	width: 40px;
+	height: 30px;
+	border-radius: 8px;
+	background: var(--rec-ctl-hover);
+}
+
+.edl-sheet-body {
+	display: flex;
+	flex-direction: column;
+	gap: 22px;
+	padding: 24px 16px;
+}
+
+.edl-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+}
+
+.edl-row-control {
+	height: 8px;
+}
+
+.edl-strip {
+	display: flex;
+	grid-column: 1 / -1;
+	align-items: center;
+	gap: 26px;
+	padding: 0 14px;
+}
+
+.edl-clip {
+	width: 150px;
+	height: 36px;
+	border-radius: 8px;
+	background: var(--rec-ctl);
+}
+
+.edl-timeline {
+	display: flex;
+	flex-direction: column;
+	grid-column: 1 / -1;
+	gap: 6px;
+	padding: 10px 12px 12px;
+}
+
+.edl-ruler {
+	display: flex;
+	flex: none;
+	align-items: center;
+	height: 24px;
+	padding-left: 4px;
+}
+
+.edl-ruler .edl-add-track {
+	height: 24px;
+	border-radius: 7px;
+}
+
+.edl-track {
+	display: flex;
+	flex: none;
+	align-items: center;
+	gap: 8px;
+	height: 44px;
+	padding-left: 12px;
+	border-radius: 8px;
+	background: var(--rec-ctl);
+}
+
+.edl-track-tile {
+	width: 22px;
+	height: 22px;
+	border-radius: 6px;
+	background: var(--rec-ctl-hover);
+}
+
+.edl-track .edl-track-label {
+	height: 8px;
+	background: var(--rec-ctl-hover);
+}
+
+.edl-sheet-bar {
+	display: none;
+	align-items: center;
+	justify-content: space-around;
+	padding: 0 16px;
+}
+
+/* A soft band of light that passes over the placeholders. It is one layer
+   that only moves, so it costs the page nothing while the editor loads. */
+.edl-sheen {
+	position: absolute;
+	inset: 0;
+	z-index: 1;
+	pointer-events: none;
+	overflow: hidden;
+}
+
+.edl-sheen::before {
+	content: "";
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	left: 0;
+	width: 60%;
+	background: linear-gradient(
+		100deg,
+		transparent 20%,
+		rgb(255 255 255 / 0.55) 50%,
+		transparent 80%
+	);
+	transform: translateX(-100%);
+	animation: edl-sheen 2.4s cubic-bezier(0.4, 0, 0.2, 1) 300ms infinite;
+	will-change: transform;
+}
+
+@container edl (max-width: 1023.98px) {
+	.edl-grid {
+		grid-template-columns: minmax(0, 1fr);
+		grid-template-rows:
+			minmax(180px, 1fr)
+			auto
+			clamp(132px, var(--edl-hug), 46%)
+			52px;
+	}
+
+	.edl-sheet,
+	.edl-wide-only {
+		display: none;
+	}
+
+	.edl-strip,
+	.edl-timeline {
+		grid-column: auto;
+	}
+
+	.edl-strip {
+		height: 48px;
+	}
+
+	.edl-sheet-bar {
+		display: flex;
+	}
+
+	.edl-controls {
+		gap: 4px;
+	}
+
+	.edl-skip,
+	.edl-play-slot {
+		width: 40px;
+		height: 40px;
+		align-items: center;
+		justify-content: center;
+	}
+}
+
+@container edl (max-width: 1023.98px) and (min-aspect-ratio: 5 / 4) {
+	.edl-grid {
+		grid-template-columns: minmax(0, 1.25fr) minmax(300px, 1fr);
+		grid-template-rows: auto minmax(0, 1fr) 52px;
+	}
+
+	.edl-player {
+		grid-area: 1 / 1 / 4 / 2;
+	}
+
+	.edl-strip {
+		grid-area: 1 / 2;
+	}
+
+	.edl-timeline {
+		grid-area: 2 / 2;
+	}
+
+	.edl-sheet-bar {
+		grid-area: 3 / 2;
+	}
+}
+
+@container edl (max-width: 639.98px) or (
+	(max-width: 1023.98px) and (max-height: 499.98px)
+) {
+	.edl-header {
+		height: 48px;
+	}
+
+	.edl-fit {
+		inset: 8px;
+	}
+
+	.edl-toolbar {
+		display: none;
+	}
+}
+
+@keyframes edl-appear {
+	from {
+		opacity: 0;
+	}
+}
+
+@keyframes edl-spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+
+@keyframes edl-sheen {
+	0% {
+		transform: translateX(-100%);
+	}
+	70%,
+	100% {
+		transform: translateX(270%);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.edl,
+	.edl-shade,
+	.edl-status,
+	.edl-slow {
+		transition: none;
+		animation: none;
+	}
+
+	.edl-sheen,
+	.edl-play-ring {
+		display: none;
+	}
+}

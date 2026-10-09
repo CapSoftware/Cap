@@ -107,3 +107,19 @@ export function editorConnectionDetail(report: EditorConnectionReport | null) {
 		);
 	return parts.length ? parts.join(" · ") : null;
 }
+
+/// Said when the editor is slow to open; the same words the editor uses when
+/// video is slow to load, so the two read as one voice.
+export function editorLoadingMessage(
+	level: EditorConnectionLevel | "checking",
+	playRequested: boolean,
+) {
+	const then = playRequested
+		? "Playback starts as soon as enough has loaded."
+		: "The editor opens as soon as it has loaded.";
+	if (level === "offline")
+		return "You're offline. The editor opens once you're back online.";
+	if (level === "poor") return `Your connection looks slow. ${then}`;
+	if (level === "fair") return `Your connection is a little slow. ${then}`;
+	return `Taking longer than usual. ${then}`;
+}
