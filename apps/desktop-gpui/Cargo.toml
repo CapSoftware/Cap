@@ -179,6 +179,7 @@ raw-window-handle = "0.6"
 tray-icon = { version = "0.21.1", default-features = false }
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
+    "Win32_Media",
     "Win32_Security",
     "Win32_System_Registry",
     "Win32_System_SystemInformation",
