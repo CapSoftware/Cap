@@ -159,6 +159,8 @@ pub struct DecodedFrame {
     image_buf_backing: Option<Arc<SendableImageBuf>>,
     #[cfg(target_os = "windows")]
     d3d11_texture_backing: Option<Arc<SendableD3D11Texture>>,
+    #[cfg(target_os = "linux")]
+    cuda_nv12: Option<Arc<crate::linux_gpu::CudaNv12Frame>>,
 }
 
 #[cfg(target_os = "macos")]
@@ -282,6 +284,8 @@ impl DecodedFrame {
             image_buf_backing: None,
             #[cfg(target_os = "windows")]
             d3d11_texture_backing: None,
+            #[cfg(target_os = "linux")]
+            cuda_nv12: None,
         }
     }
 
@@ -297,7 +301,33 @@ impl DecodedFrame {
             image_buf_backing: None,
             #[cfg(target_os = "windows")]
             d3d11_texture_backing: None,
+            #[cfg(target_os = "linux")]
+            cuda_nv12: None,
         }
+    }
+
+    /// NV12 frame that never left GPU memory (NVDEC on Linux render hosts).
+    /// `storage` is the decoder's per-frame allocation: layers compare it to
+    /// skip re-uploading a frame they already hold (VFR holds, fps upsampling).
+    #[cfg(target_os = "linux")]
+    pub fn new_nv12_cuda(
+        frame: Arc<crate::linux_gpu::CudaNv12Frame>,
+        storage: Arc<Vec<u8>>,
+    ) -> Self {
+        Self {
+            data: storage,
+            width: frame.width,
+            height: frame.height,
+            format: PixelFormat::Nv12,
+            y_stride: frame.y_pitch as u32,
+            uv_stride: frame.uv_pitch as u32,
+            cuda_nv12: Some(frame),
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn cuda_nv12(&self) -> Option<&Arc<crate::linux_gpu::CudaNv12Frame>> {
+        self.cuda_nv12.as_ref()
     }
 
     pub fn new_nv12(data: Vec<u8>, width: u32, height: u32, y_stride: u32, uv_stride: u32) -> Self {
@@ -312,6 +342,8 @@ impl DecodedFrame {
             image_buf_backing: None,
             #[cfg(target_os = "windows")]
             d3d11_texture_backing: None,
+            #[cfg(target_os = "linux")]
+            cuda_nv12: None,
         }
     }
 
@@ -333,6 +365,8 @@ impl DecodedFrame {
             image_buf_backing: None,
             #[cfg(target_os = "windows")]
             d3d11_texture_backing: None,
+            #[cfg(target_os = "linux")]
+            cuda_nv12: None,
         }
     }
 
@@ -373,6 +407,8 @@ impl DecodedFrame {
             image_buf_backing: None,
             #[cfg(target_os = "windows")]
             d3d11_texture_backing: None,
+            #[cfg(target_os = "linux")]
+            cuda_nv12: None,
         }
     }
 
@@ -394,6 +430,8 @@ impl DecodedFrame {
             image_buf_backing: None,
             #[cfg(target_os = "windows")]
             d3d11_texture_backing: None,
+            #[cfg(target_os = "linux")]
+            cuda_nv12: None,
         }
     }
 
@@ -657,6 +695,16 @@ pub struct AsyncVideoDecoderHandle {
     offset: f64,
     status: DecoderStatus,
     max_fallback_distance: u32,
+    #[cfg(target_os = "macos")]
+    fallback: Option<Arc<MacOsDecoderFallback>>,
+}
+
+#[cfg(target_os = "macos")]
+struct MacOsDecoderFallback {
+    name: &'static str,
+    path: PathBuf,
+    fps: u32,
+    decoder: tokio::sync::OnceCell<Result<AsyncVideoDecoderHandle, String>>,
 }
 
 impl AsyncVideoDecoderHandle {
@@ -690,6 +738,67 @@ impl AsyncVideoDecoderHandle {
     }
 
     async fn get_frame_with_timeout(
+        &self,
+        time: f32,
+        timeout_ms: u64,
+        max_fallback_distance: u32,
+    ) -> Option<DecodedFrame> {
+        #[cfg(target_os = "macos")]
+        if let Some(fallback) = &self.fallback {
+            if let Some(result) = fallback.decoder.get() {
+                return match result {
+                    Ok(decoder) => {
+                        decoder
+                            .request_frame(time, timeout_ms, max_fallback_distance)
+                            .await
+                    }
+                    Err(_) => None,
+                };
+            }
+            if let Some(frame) = self
+                .request_frame(time, timeout_ms, max_fallback_distance)
+                .await
+            {
+                return Some(frame);
+            }
+            let result = fallback
+                .decoder
+                .get_or_init(|| async {
+                    tracing::warn!(
+                        name = fallback.name,
+                        "Video reader stopped returning frames; switching to software decoding"
+                    );
+                    let mut decoder = spawn_ffmpeg_decoder(
+                        fallback.name,
+                        fallback.path.clone(),
+                        fallback.fps,
+                        self.offset,
+                        Duration::from_secs(30),
+                        false,
+                    )
+                    .await?;
+                    decoder.status.fallback_reason =
+                        Some("AVAssetReader returned no frame".to_string());
+                    Ok(decoder)
+                })
+                .await;
+            return match result {
+                Ok(decoder) => {
+                    decoder
+                        .request_frame(time, timeout_ms, max_fallback_distance)
+                        .await
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "Software video decoder fallback failed");
+                    None
+                }
+            };
+        }
+        self.request_frame(time, timeout_ms, max_fallback_distance)
+            .await
+    }
+
+    async fn request_frame(
         &self,
         time: f32,
         timeout_ms: u64,
@@ -732,15 +841,23 @@ impl AsyncVideoDecoderHandle {
     }
 
     pub fn decoder_status(&self) -> &DecoderStatus {
+        #[cfg(target_os = "macos")]
+        if let Some(Ok(decoder)) = self
+            .fallback
+            .as_ref()
+            .and_then(|fallback| fallback.decoder.get())
+        {
+            return &decoder.status;
+        }
         &self.status
     }
 
     pub fn decoder_type(&self) -> DecoderType {
-        self.status.decoder_type
+        self.decoder_status().decoder_type
     }
 
     pub fn is_hardware_accelerated(&self) -> bool {
-        self.status.decoder_type.is_hardware_accelerated()
+        self.decoder_type().is_hardware_accelerated()
     }
 
     pub fn video_dimensions(&self) -> (u32, u32) {
@@ -748,7 +865,7 @@ impl AsyncVideoDecoderHandle {
     }
 
     pub fn fallback_reason(&self) -> Option<&str> {
-        self.status.fallback_reason.as_deref()
+        self.decoder_status().fallback_reason.as_deref()
     }
 
     pub fn with_max_fallback_distance(mut self, max_fallback_distance: u32) -> Self {
@@ -1003,6 +1120,8 @@ impl ManagedVideoDecoder {
             offset: self.offset,
             status: status.clone(),
             max_fallback_distance: self.max_fallback_distance,
+            #[cfg(target_os = "macos")]
+            fallback: None,
         });
         Ok(status)
     }
@@ -1161,12 +1280,13 @@ async fn spawn_ffmpeg_decoder(
     fps: u32,
     offset: f64,
     timeout_duration: Duration,
-    path_display: &str,
+    use_hw_acceleration: bool,
 ) -> Result<AsyncVideoDecoderHandle, String> {
+    let path_display = path.display().to_string();
     let (ready_tx, ready_rx) = oneshot::channel::<Result<DecoderInitResult, String>>();
     let (tx, rx) = mpsc::channel();
 
-    ffmpeg::FfmpegDecoder::spawn_with_hw_config(name, path, fps, rx, ready_tx, true)
+    ffmpeg::FfmpegDecoder::spawn_with_hw_config(name, path, fps, rx, ready_tx, use_hw_acceleration)
         .map_err(|e| format!("'{name}' FFmpeg decoder / {e}"))?;
 
     match tokio::time::timeout(timeout_duration, ready_rx).await {
@@ -1186,6 +1306,8 @@ async fn spawn_ffmpeg_decoder(
                 offset,
                 status,
                 max_fallback_distance: DEFAULT_MAX_FALLBACK_DISTANCE,
+                #[cfg(target_os = "macos")]
+                fallback: None,
             })
         }
         Ok(Ok(Err(e))) => Err(format!(
@@ -1217,8 +1339,7 @@ pub async fn spawn_decoder(
                 "Video '{}' using FFmpeg decoder",
                 name
             );
-            return spawn_ffmpeg_decoder(name, path, fps, offset, timeout_duration, &path_display)
-                .await;
+            return spawn_ffmpeg_decoder(name, path, fps, offset, timeout_duration, true).await;
         }
 
         let avasset_result = {
@@ -1244,6 +1365,13 @@ pub async fn spawn_decoder(
                         offset,
                         status,
                         max_fallback_distance: DEFAULT_MAX_FALLBACK_DISTANCE,
+                        #[cfg(target_os = "macos")]
+                        fallback: Some(Arc::new(MacOsDecoderFallback {
+                            name,
+                            path: path.clone(),
+                            fps,
+                            decoder: tokio::sync::OnceCell::new(),
+                        })),
                     })
                 }
                 Ok(Ok(Err(e))) => Err(format!("AVAssetReader initialization failed: {e}")),
@@ -1289,6 +1417,8 @@ pub async fn spawn_decoder(
                             offset,
                             status,
                             max_fallback_distance: DEFAULT_MAX_FALLBACK_DISTANCE,
+                            #[cfg(target_os = "macos")]
+                            fallback: None,
                         })
                     }
                     Ok(Ok(Err(e))) => Err(format!(
@@ -1332,6 +1462,8 @@ pub async fn spawn_decoder(
                         offset,
                         status,
                         max_fallback_distance: DEFAULT_MAX_FALLBACK_DISTANCE,
+                        #[cfg(target_os = "macos")]
+                        fallback: None,
                     })
                 }
                 Ok(Ok(Err(e))) => Err(format!(
@@ -1366,6 +1498,8 @@ pub async fn spawn_decoder(
                             offset,
                             status,
                             max_fallback_distance: DEFAULT_MAX_FALLBACK_DISTANCE,
+                            #[cfg(target_os = "macos")]
+                            fallback: None,
                         })
                     }
                     Ok(Ok(Err(e))) => Err(format!(
@@ -1419,6 +1553,8 @@ pub async fn spawn_decoder(
                             offset,
                             status,
                             max_fallback_distance: DEFAULT_MAX_FALLBACK_DISTANCE,
+                            #[cfg(target_os = "macos")]
+                            fallback: None,
                         })
                     }
                     Ok(Ok(Err(e))) => Err(format!(
@@ -1461,6 +1597,8 @@ pub async fn spawn_decoder(
                     offset,
                     status,
                     max_fallback_distance: DEFAULT_MAX_FALLBACK_DISTANCE,
+                    #[cfg(target_os = "macos")]
+                    fallback: None,
                 })
             }
             Ok(Ok(Err(e))) => Err(format!("'{name}' decoder initialization failed: {e}")),
@@ -2060,6 +2198,52 @@ mod managed_worker_tests {
         paths
     }
 
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn stalled_native_decoder_falls_back_once_and_preserves_offsets_across_clones() {
+        let directory = tempfile::tempdir().unwrap();
+        encode_gapped_segments(directory.path());
+        let (sender, receiver) = mpsc::channel();
+        let decoder = AsyncVideoDecoderHandle {
+            sender,
+            offset: 0.25,
+            status: DecoderStatus {
+                decoder_type: DecoderType::AVAssetReader,
+                video_width: 160,
+                video_height: 120,
+                fallback_reason: None,
+            },
+            max_fallback_distance: 2,
+            fallback: Some(Arc::new(MacOsDecoderFallback {
+                name: "screen",
+                path: directory.path().to_path_buf(),
+                fps: 30,
+                decoder: tokio::sync::OnceCell::new(),
+            })),
+        };
+        let cloned = decoder.clone();
+        let (first, second) = tokio::join!(
+            decoder.get_frame_with_timeout(0.0, 200, 2),
+            cloned.get_frame_with_timeout(0.0, 200, 2)
+        );
+        let first = first.unwrap();
+        assert_eq!(frame_pixels(&first), frame_pixels(&second.unwrap()));
+        assert_eq!(decoder.decoder_type(), DecoderType::FFmpegSoftware);
+        assert_eq!(cloned.decoder_type(), DecoderType::FFmpegSoftware);
+        assert!(decoder.fallback_reason().is_some());
+        let (reference, join) = ordinary_worker(directory.path().to_path_buf(), 0.25, false).await;
+        assert_eq!(
+            frame_pixels(&first),
+            frame_pixels(&reference.get_frame_initial(0.0).await.unwrap())
+        );
+        let pending_before = receiver.try_iter().count();
+        assert_eq!(pending_before, 2);
+        assert!(decoder.get_frame_initial(0.5).await.is_some());
+        assert_eq!(receiver.try_iter().count(), 0);
+        drop(reference);
+        join.join().unwrap();
+    }
+
     async fn ordinary_worker(
         path: PathBuf,
         offset: f64,
@@ -2099,6 +2283,8 @@ mod managed_worker_tests {
                     fallback_reason: None,
                 },
                 max_fallback_distance: DEFAULT_MAX_FALLBACK_DISTANCE,
+                #[cfg(target_os = "macos")]
+                fallback: None,
             },
             join,
         )

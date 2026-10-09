@@ -1,8 +1,8 @@
 import { Context, Effect } from "effect";
 import { isValidElement, type ReactElement } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({ select: vi.fn() }));
+const mocks = vi.hoisted(() => ({ select: vi.fn(), ownerIsPro: true }));
 
 vi.mock("@cap/database", () => ({ db: () => ({ select: mocks.select }) }));
 vi.mock("@cap/database/auth/session", () => ({
@@ -12,8 +12,9 @@ vi.mock("@cap/env", () => ({
 	buildEnv: { NEXT_PUBLIC_WEB_URL: "https://cap.so" },
 }));
 vi.mock("@cap/ui", () => ({ Logo: () => null }));
-vi.mock("@cap/utils", () => ({ userIsPro: () => true }));
+vi.mock("@cap/utils", () => ({ userIsPro: () => mocks.ownerIsPro }));
 vi.mock("@cap/web-backend", () => ({
+	ImageUploads: Context.GenericTag("EmbedTestImages"),
 	VideosPolicy: Context.GenericTag("EmbedTestPolicy"),
 	provideOptionalAuth: <A, E, R>(effect: Effect.Effect<A, E, R>) => effect,
 	resolveEffectiveVideoRules: () => ({ settings: {} }),
@@ -21,6 +22,9 @@ vi.mock("@cap/web-backend", () => ({
 vi.mock("@/lib/server", () => ({
 	runPromise: <A, E>(effect: Effect.Effect<A, E, unknown>) =>
 		effect.pipe(
+			Effect.provideService(Context.GenericTag("EmbedTestImages"), {
+				resolveImageUrl: (url: string) => Effect.succeed(url),
+			}),
 			Effect.provideService(Context.GenericTag("EmbedTestPolicy"), {
 				canView: () => Effect.void,
 			}),
@@ -49,8 +53,10 @@ async function renderEmbed(
 	const video = {
 		id: "video",
 		ownerId: "owner",
-		settings:
-			videoSpeed === undefined ? null : { defaultPlaybackSpeed: videoSpeed },
+		settings: {
+			defaultPlaybackSpeed: videoSpeed,
+			callToAction: { label: "Book a call", url: "https://example.com/" },
+		},
 		orgSettings:
 			orgSpeed === undefined ? null : { defaultPlaybackSpeed: orgSpeed },
 		transcriptionStatus: "COMPLETE",
@@ -81,10 +87,35 @@ async function renderEmbed(
 	}
 	return (await (content.type as (props: unknown) => Promise<unknown>)(
 		content.props,
-	)) as ReactElement<{ defaultPlaybackSpeed?: number; minimal: boolean }>;
+	)) as ReactElement<{
+		defaultPlaybackSpeed?: number;
+		minimal: boolean;
+		callToAction: { label: string; url: string } | null;
+	}>;
 }
 
 describe("embed default playback speed", () => {
+	beforeEach(() => {
+		mocks.ownerIsPro = true;
+	});
+
+	it.each([
+		{ ownerIsPro: false, minimal: false },
+		{ ownerIsPro: true, minimal: false },
+		{ ownerIsPro: true, minimal: true },
+	])("gates saved calls to action: %j", async ({ ownerIsPro, minimal }) => {
+		mocks.ownerIsPro = ownerIsPro;
+		const embed = await renderEmbed(undefined, undefined, minimal);
+		if (ownerIsPro && !minimal) {
+			expect(embed.props.callToAction).toMatchObject({
+				label: "Book a call",
+				url: "https://example.com/",
+			});
+		} else {
+			expect(embed.props.callToAction).toBeNull();
+		}
+	});
+
 	it.each([
 		{ name: "organization 1×", video: undefined, org: 1, expected: 1 },
 		{ name: "video override", video: 1.5, org: 1, expected: 1.5 },

@@ -58,11 +58,18 @@ export async function deleteSpace(
 			};
 		}
 
-		await db().delete(spaceVideos).where(eq(spaceVideos.spaceId, spaceId));
-
-		await db().delete(spaceMembers).where(eq(spaceMembers.spaceId, spaceId));
-
-		await db().delete(folders).where(eq(folders.spaceId, spaceId));
+		await db().transaction(async (tx) => {
+			await tx
+				.select({ id: spaces.id })
+				.from(spaces)
+				.where(eq(spaces.id, spaceId))
+				.limit(1)
+				.for("update");
+			await tx.delete(spaceVideos).where(eq(spaceVideos.spaceId, spaceId));
+			await tx.delete(spaceMembers).where(eq(spaceMembers.spaceId, spaceId));
+			await tx.delete(folders).where(eq(folders.spaceId, spaceId));
+			await tx.delete(spaces).where(eq(spaces.id, spaceId));
+		});
 
 		try {
 			await Effect.gen(function* () {
@@ -87,8 +94,6 @@ export async function deleteSpace(
 		} catch (error) {
 			console.error("Error deleting space icons from S3:", error);
 		}
-
-		await db().delete(spaces).where(eq(spaces.id, spaceId));
 
 		revalidatePath("/dashboard");
 

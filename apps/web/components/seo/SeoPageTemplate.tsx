@@ -245,7 +245,7 @@ export const SeoPageTemplate = ({
 					</div>
 				</div>
 
-				{showVideo && (
+				{showVideo && (content.video.iframe?.src || content.video.url) && (
 					<div>
 						<div className="text-center max-w-[800px] mx-auto mb-10">
 							<h2 className="inline-block relative mb-2 text-3xl font-medium text-gray-800 md:text-4xl">
@@ -270,6 +270,7 @@ export const SeoPageTemplate = ({
 										src={content.video.iframe.src}
 										title={content.video.iframe.title || "Cap Demo"}
 										frameBorder="0"
+										allow="fullscreen; picture-in-picture"
 										allowFullScreen
 										style={{
 											position: "absolute",

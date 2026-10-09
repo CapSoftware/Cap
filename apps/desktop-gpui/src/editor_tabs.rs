@@ -2887,22 +2887,6 @@ impl EditorWindow {
                     weight_label,
                     cx,
                 )),
-            )
-            .child(
-                ui::Field::section(&theme, "Export Options").child(
-                    ui::Subfield::plain(&theme, "Export with Subtitles").child(
-                        ui::Toggle::plain(&theme, "caption-export", settings.export_with_subtitles)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                let next = !caption_settings(&this.project).export_with_subtitles;
-                                this.set_caption_setting(
-                                    "caption-export",
-                                    window,
-                                    cx,
-                                    move |settings| settings.export_with_subtitles = next,
-                                );
-                            })),
-                    ),
-                ),
             );
 
         // An extra flex ancestor here repeats intrinsic layout while scrolling.

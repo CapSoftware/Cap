@@ -236,54 +236,73 @@ export const createAudioMixer = async ({
 	micStream = null,
 }: AudioMixerInput): Promise<AudioMixer> => {
 	const context = new AudioContext();
-	if (context.state !== "running") {
-		await context.resume();
-	}
-
-	const destination = context.createMediaStreamDestination();
-	const limiter = context.createDynamicsCompressor();
-	limiter.threshold.value = -3;
-	limiter.knee.value = 2;
-	limiter.ratio.value = 20;
-	limiter.attack.value = 0.002;
-	limiter.release.value = 0.05;
-	limiter.connect(destination);
-
-	if (systemAudioTracks.length > 0) {
-		context
-			.createMediaStreamSource(new MediaStream(systemAudioTracks))
-			.connect(limiter);
-	}
-
-	let micSource: MediaStreamAudioSourceNode | null = null;
-	const setMicStream = (stream: MediaStream | null) => {
-		if (micSource) {
-			try {
-				micSource.disconnect();
-			} catch {
-				/* already disconnected */
-			}
-			micSource = null;
+	let startupTimeout: ReturnType<typeof setTimeout> | undefined;
+	try {
+		if (context.state !== "running") {
+			await Promise.race([
+				context.resume(),
+				new Promise<never>((_, reject) => {
+					startupTimeout = setTimeout(() => {
+						reject(
+							new Error(
+								"The browser could not start recording audio. Please check your audio device and try again.",
+							),
+						);
+					}, 10_000);
+				}),
+			]);
 		}
-		if (stream && stream.getAudioTracks().length > 0) {
-			micSource = context.createMediaStreamSource(stream);
-			micSource.connect(limiter);
-		}
-	};
-	setMicStream(micStream);
 
-	return {
-		context,
-		stream: destination.stream,
-		setMicStream,
-		close: async () => {
-			try {
-				await context.close();
-			} catch {
-				/* already closed */
+		const destination = context.createMediaStreamDestination();
+		const limiter = context.createDynamicsCompressor();
+		limiter.threshold.value = -3;
+		limiter.knee.value = 2;
+		limiter.ratio.value = 20;
+		limiter.attack.value = 0.002;
+		limiter.release.value = 0.05;
+		limiter.connect(destination);
+
+		if (systemAudioTracks.length > 0) {
+			context
+				.createMediaStreamSource(new MediaStream(systemAudioTracks))
+				.connect(limiter);
+		}
+
+		let micSource: MediaStreamAudioSourceNode | null = null;
+		const setMicStream = (stream: MediaStream | null) => {
+			if (micSource) {
+				try {
+					micSource.disconnect();
+				} catch {
+					/* already disconnected */
+				}
+				micSource = null;
 			}
-		},
-	};
+			if (stream && stream.getAudioTracks().length > 0) {
+				micSource = context.createMediaStreamSource(stream);
+				micSource.connect(limiter);
+			}
+		};
+		setMicStream(micStream);
+
+		return {
+			context,
+			stream: destination.stream,
+			setMicStream,
+			close: async () => {
+				try {
+					await context.close();
+				} catch {
+					/* already closed */
+				}
+			},
+		};
+	} catch (error) {
+		void context.close().catch(() => {});
+		throw error;
+	} finally {
+		clearTimeout(startupTimeout);
+	}
 };
 
 export type CaptureSource = "camera" | "display";

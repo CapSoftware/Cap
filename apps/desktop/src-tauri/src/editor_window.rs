@@ -200,15 +200,11 @@ async fn recreate_preparing_instance(
             cap_editor::EditorFrameFormat::Rgba,
         )
         .await?;
-    let render_frame_event_id = crate::RenderFrameEvent::listen_any(&app, {
+    let render_frame_event_id = crate::RenderFrameEvent::listen_checked(&app, {
         let preview_tx = inner.preview_tx.clone();
         move |event| {
             preview_tx.send_modify(|request| {
-                *request = Some((
-                    event.payload.frame_number,
-                    event.payload.fps,
-                    event.payload.resolution_base,
-                ))
+                *request = Some((event.frame_number, event.fps, event.resolution_base))
             });
         }
     });
