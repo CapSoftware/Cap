@@ -1,7 +1,7 @@
 (() => {
 	const deck = document.getElementById("deck");
 	const TOTAL = 14;
-	const foot = (n, dark) =>
+	const foot = (n) =>
 		`<div class="foot"><span class="logo"></span><span>Capture Pipeline 2.0 · Q3 Review</span><span class="num">${n} / ${TOTAL}</span></div>`;
 
 	function barChart() {

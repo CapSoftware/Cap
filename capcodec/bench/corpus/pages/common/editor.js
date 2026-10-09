@@ -11,11 +11,6 @@
 			" ",
 		),
 	);
-	const PY_BUILTINS = new Set(
-		"len range isinstance min max sum enumerate zip sorted reversed print super any all map filter iter next abs hash id repr getattr setattr hasattr divmod round".split(
-			" ",
-		),
-	);
 	const C_CONTROL = new Set(
 		"if else for while do switch case default break continue return goto".split(
 			" ",
@@ -58,7 +53,6 @@
 		const out = [];
 		let i = 0;
 		let prevWord = "";
-		const n = line.length;
 		const pushTok = (cls, text) => {
 			if (!text) return;
 			const last = out[out.length - 1];
@@ -581,7 +575,7 @@
 					col: Math.min(this.lines[l].length, this.goalCol),
 				};
 				this.hideSuggest();
-				this.updateCaret(true, true);
+				this.updateCaret(true);
 				this.renderRows(this.dirtyRows);
 				return true;
 			} else if (e.key === "Home") {
@@ -712,7 +706,7 @@
 			this.selEl.style.display = "none";
 		}
 
-		updateCaret(reveal, keepGoal) {
+		updateCaret(reveal) {
 			const { line, col } = this.caret;
 			const lh = this.lineHeight;
 			this.caretEl.style.transform = `translate(${this.gutter + col * this.cw}px, ${line * lh}px)`;

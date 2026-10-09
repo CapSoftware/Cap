@@ -29,7 +29,6 @@
 	}
 
 	let noise = null;
-	let frame = 0;
 	let lastDraw = 0;
 
 	function draw(tms) {
@@ -202,7 +201,6 @@
 			d[i + 2] += g + ((rand() * 7) | 0) - 3;
 		}
 		ctx.putImageData(img, 0, 0);
-		frame++;
 	}
 
 	function loop(ts) {

@@ -62,9 +62,10 @@
 		const xs = (i) => (i / (data.length - 1)) * (w - 2) + 1;
 		const ys = (v) => h - padY - ((v - lo) / (hi - lo)) * (h - 2 * padY);
 		ctx.beginPath();
-		data.forEach((v, i) =>
-			i ? ctx.lineTo(xs(i), ys(v)) : ctx.moveTo(xs(i), ys(v)),
-		);
+		data.forEach((v, i) => {
+			if (i) ctx.lineTo(xs(i), ys(v));
+			else ctx.moveTo(xs(i), ys(v));
+		});
 		if (fill) {
 			ctx.save();
 			ctx.lineTo(xs(data.length - 1), h);
@@ -77,9 +78,10 @@
 			ctx.fill();
 			ctx.restore();
 			ctx.beginPath();
-			data.forEach((v, i) =>
-				i ? ctx.lineTo(xs(i), ys(v)) : ctx.moveTo(xs(i), ys(v)),
-			);
+			data.forEach((v, i) => {
+				if (i) ctx.lineTo(xs(i), ys(v));
+				else ctx.moveTo(xs(i), ys(v));
+			});
 		}
 		ctx.strokeStyle = color;
 		ctx.lineWidth = 1.5;
@@ -198,7 +200,9 @@
 			for (let i = 0; i <= this.n; i++) {
 				this.times.push(t0 + i * 1000);
 				const vals = opts.gen(i - this.n);
-				this.series.forEach((s, j) => s.data.push(vals[j]));
+				this.series.forEach((s, j) => {
+					s.data.push(vals[j]);
+				});
 			}
 			this.anim = null;
 			this.yMax = this.targetMax();
@@ -294,9 +298,10 @@
 			ctx.clip();
 			this.series.forEach((s, j) => {
 				ctx.beginPath();
-				s.data.forEach((v, i) =>
-					i ? ctx.lineTo(xOf(i), yOf(v)) : ctx.moveTo(xOf(i), yOf(v)),
-				);
+				s.data.forEach((v, i) => {
+					if (i) ctx.lineTo(xOf(i), yOf(v));
+					else ctx.moveTo(xOf(i), yOf(v));
+				});
 				if (j === 0) {
 					ctx.save();
 					ctx.lineTo(xOf(len - 1), top + ph);
@@ -309,9 +314,10 @@
 					ctx.fill();
 					ctx.restore();
 					ctx.beginPath();
-					s.data.forEach((v, i) =>
-						i ? ctx.lineTo(xOf(i), yOf(v)) : ctx.moveTo(xOf(i), yOf(v)),
-					);
+					s.data.forEach((v, i) => {
+						if (i) ctx.lineTo(xOf(i), yOf(v));
+						else ctx.moveTo(xOf(i), yOf(v));
+					});
 				}
 				ctx.strokeStyle = s.color;
 				ctx.lineWidth = s.width || 1.6;
