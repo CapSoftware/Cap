@@ -177,7 +177,7 @@ const TITLE_PLACEHOLDER = "Cap title";
  * so nothing moves) is a margin for fonts whose descenders run deeper still.
  */
 const TITLE_CLAMP_CLASS =
-	"-mb-[0.1em] block truncate pb-[0.1em] leading-[inherit]";
+	"-mb-[0.1em] block truncate pb-[0.1em] leading-[inherit] tracking-[inherit]";
 
 /** Cap's tooltip, widened and wrapping for text that can run long. */
 const LONG_TOOLTIP_CLASS =
@@ -420,7 +420,18 @@ export const ShareHeader = ({
 		[],
 	);
 
-	const startEditing = () => {
+	/**
+	 * Where the caret goes when the field opens: under the pointer for a click,
+	 * so renaming reads as a caret appearing in the text you clicked, or
+	 * `null` to select the whole title (the keyboard's way in).
+	 */
+	const pendingCaretRef = useRef<number | null>(null);
+
+	const startEditing = (event?: ReactMouseEvent<HTMLButtonElement>) => {
+		pendingCaretRef.current =
+			event && event.detail > 0
+				? caretOffsetAtPoint(event.clientX, event.clientY, titleText)
+				: null;
 		setEditValue(displayTitle);
 		setIsEditing(true);
 	};
@@ -433,8 +444,13 @@ export const ShareHeader = ({
 	 */
 	useEffect(() => {
 		if (isEditing) {
-			titleInputRef.current?.focus();
-			titleInputRef.current?.select();
+			const input = titleInputRef.current;
+			if (!input) return;
+			const caret = pendingCaretRef.current;
+			pendingCaretRef.current = null;
+			input.focus({ preventScroll: true });
+			if (caret === null) input.select();
+			else input.setSelectionRange(caret, caret);
 			return;
 		}
 		if (!restoreTitleFocusRef.current) return;
@@ -1292,7 +1308,11 @@ export const ShareHeader = ({
 									onKeyDown={handleTitleKeyDown}
 									className={clsx(
 										TITLE_TEXT_CLASS,
-										"relative z-10 col-start-1 row-start-1 w-full min-w-0 border-0 bg-transparent p-0 outline-none placeholder:text-gray-9",
+										// Every box and text property the heading has, so opening the
+										// field moves nothing: no UA padding, border, margin or
+										// appearance, and the same font settings as the text it
+										// replaces. The focus ring is on the surround, outside layout.
+										"relative z-10 col-start-1 row-start-1 m-0 w-full min-w-0 appearance-none rounded-none border-0 bg-transparent p-0 outline-none [font-feature-settings:inherit] [font-kerning:inherit] [font-variation-settings:inherit] [text-rendering:inherit] placeholder:text-gray-9",
 									)}
 								/>
 							)}
@@ -1326,7 +1346,7 @@ export const ShareHeader = ({
 											// button a 1.5rem line height, which would leave the
 											// heading stubbier than the field and bump the text
 											// every time you clicked it.
-											className="block w-full cursor-text text-left leading-[inherit] outline-none"
+											className="block w-full cursor-text text-left leading-[inherit] tracking-[inherit] outline-none"
 											onClick={startEditing}
 										>
 											<span ref={setTitleText} className={TITLE_CLAMP_CLASS}>
@@ -1565,4 +1585,34 @@ function CreatedAt({ date }: { date: Date }) {
 			</button>
 		</Tooltip>
 	);
+}
+
+/**
+ * The character offset under a point in `container`'s text, for putting the
+ * rename caret where the title was clicked. `null` when the browser can't say
+ * or the point isn't in the title, and the field then selects everything.
+ */
+function caretOffsetAtPoint(
+	x: number,
+	y: number,
+	container: HTMLElement | null,
+): number | null {
+	if (!container) return null;
+	const doc = document as Document & {
+		caretPositionFromPoint?: (
+			x: number,
+			y: number,
+		) => { offsetNode: Node; offset: number } | null;
+		caretRangeFromPoint?: (x: number, y: number) => Range | null;
+	};
+	if (doc.caretPositionFromPoint) {
+		const position = doc.caretPositionFromPoint(x, y);
+		return position && container.contains(position.offsetNode)
+			? position.offset
+			: null;
+	}
+	const range = doc.caretRangeFromPoint?.(x, y);
+	return range && container.contains(range.startContainer)
+		? range.startOffset
+		: null;
 }
