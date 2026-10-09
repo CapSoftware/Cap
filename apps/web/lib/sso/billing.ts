@@ -820,9 +820,9 @@ export async function createSsoCheckout(
 	throw new Error("The SAML SSO checkout expired. Refresh before retrying.");
 }
 
-export async function createSsoBillingPortal(
+async function requireSsoBillingAccount(
 	organizationId: Organisation.OrganisationId,
-): Promise<string> {
+) {
 	const owner = await getOwner(organizationId);
 	const record = await getSsoBilling(organizationId);
 	if (
@@ -838,6 +838,7 @@ export async function createSsoBillingPortal(
 		record.stripeSubscriptionId,
 	);
 	if (
+		subscription.id !== record.stripeSubscriptionId ||
 		!isSsoSubscription(subscription) ||
 		stripeId(subscription.customer) !== record.stripeCustomerId
 	) {
@@ -845,9 +846,83 @@ export async function createSsoBillingPortal(
 			"The SAML SSO subscription does not match its billing account.",
 		);
 	}
+	return {
+		customerId: record.stripeCustomerId,
+		subscriptionId: record.stripeSubscriptionId,
+	};
+}
+
+export async function createSsoBillingPortal(
+	organizationId: Organisation.OrganisationId,
+): Promise<string> {
+	const { customerId } = await requireSsoBillingAccount(organizationId);
 	const session = await stripe().billingPortal.sessions.create({
-		customer: record.stripeCustomerId,
+		customer: customerId,
 		return_url: billingUrl(organizationId),
 	});
 	return session.url;
+}
+
+export type SsoInvoices = {
+	invoices: Array<{
+		id: string;
+		number: string | null;
+		created: number;
+		total: number;
+		currency: string;
+		status: Stripe.Invoice.Status | null;
+		pdfUrl: string | null;
+	}>;
+	hasMore: boolean;
+};
+
+function invoicePdfUrl(value: string | null | undefined): string | null {
+	if (!value) return null;
+	try {
+		const url = new URL(value);
+		if (
+			url.protocol !== "https:" ||
+			!["pay.stripe.com", "invoice.stripe.com"].includes(url.hostname) ||
+			url.username ||
+			url.password ||
+			url.port
+		)
+			return null;
+		return url.toString();
+	} catch {
+		return null;
+	}
+}
+
+export async function listSsoInvoices(
+	organizationId: Organisation.OrganisationId,
+): Promise<SsoInvoices> {
+	const { customerId, subscriptionId } =
+		await requireSsoBillingAccount(organizationId);
+	const result = await stripe().invoices.list({
+		customer: customerId,
+		subscription: subscriptionId,
+		limit: 100,
+	});
+	if (
+		result.data.some(
+			(invoice) =>
+				stripeId(invoice.customer) !== customerId ||
+				stripeId(invoice.subscription) !== subscriptionId,
+		)
+	) {
+		throw new Error("The SAML SSO invoices do not match its billing account.");
+	}
+	return {
+		invoices: result.data.map((invoice) => ({
+			id: invoice.id,
+			number: invoice.number,
+			created: invoice.created,
+			total: invoice.total,
+			currency: invoice.currency,
+			status: invoice.status,
+			pdfUrl: invoicePdfUrl(invoice.invoice_pdf),
+		})),
+		hasMore: result.has_more,
+	};
 }

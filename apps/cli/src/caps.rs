@@ -159,6 +159,17 @@ struct LoomImportArgs {
     format: OutputFormat,
 }
 
+fn loom_import_payload(loom_url: &str, owner_email: Option<&str>, space: Option<&str>) -> Value {
+    let mut payload = json!({ "loomUrl": loom_url });
+    if let Some(owner_email) = owner_email {
+        payload["ownerEmail"] = json!(owner_email);
+    }
+    if let Some(space) = space {
+        payload["spaceName"] = json!(space);
+    }
+    payload
+}
+
 #[derive(Args)]
 struct WaitArgs {
     cap: String,
@@ -1274,11 +1285,11 @@ impl CapsArgs {
                         .mutate_json_confirmed(
                             Method::POST,
                             &format!("/organizations/{organization}/imports/loom"),
-                            &json!({
-                                "loomUrl": args.loom_url,
-                                "ownerEmail": args.owner_email,
-                                "spaceName": args.space,
-                            }),
+                            &loom_import_payload(
+                                &args.loom_url,
+                                args.owner_email.as_deref(),
+                                args.space.as_deref(),
+                            ),
                         )
                         .await?;
                     let value = if args.wait {
@@ -1762,6 +1773,26 @@ impl CapsArgs {
 mod tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[test]
+    fn loom_import_payload_omits_unset_optional_fields() {
+        assert_eq!(
+            loom_import_payload("https://www.loom.com/share/abc", None, None),
+            json!({ "loomUrl": "https://www.loom.com/share/abc" })
+        );
+        assert_eq!(
+            loom_import_payload(
+                "https://www.loom.com/share/abc",
+                Some("owner@example.com"),
+                Some("Team"),
+            ),
+            json!({
+                "loomUrl": "https://www.loom.com/share/abc",
+                "ownerEmail": "owner@example.com",
+                "spaceName": "Team",
+            })
+        );
+    }
 
     async fn read_request(stream: &mut tokio::net::TcpStream) -> String {
         let mut bytes = Vec::new();

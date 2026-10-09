@@ -321,7 +321,7 @@ pub fn init(app: &AppHandle) {
         Ok(Some(s)) => s,
         Ok(None) => HotkeysStore::default(),
         Err(e) => {
-            eprintln!("Failed to load hotkeys store: {e}");
+            tracing::error!("Failed to load hotkeys store: {e}");
             HotkeysStore::default()
         }
     };
