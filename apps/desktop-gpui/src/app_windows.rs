@@ -2721,9 +2721,10 @@ fn append_own_excluded_window_ids(
         // `Window::from_id(&native_id).is_none()` (`:144-166`): a window that is
         // not in the window list has nothing for the content filter to exclude.
         // Loud when the window believes it is on screen, quiet when it is
-        // merely hidden -- the same two log levels.
+        // merely hidden -- the same two log levels. Windows never lists this
+        // process's own windows; display affinity excludes them instead.
         if scap_targets::Window::from_id(&id).is_none() {
-            if window.visible {
+            if window.visible && !cfg!(windows) {
                 tracing::warn!(
                     title,
                     number,
@@ -5360,7 +5361,7 @@ fn load_editor_waveforms(
                         .map(|audio| {
                             Arc::new(match audio {
                                 Some(audio) => editor_timeline::waveform_peaks(
-                                    audio.sample_slices().flatten(),
+                                    &audio.sample_slices().collect::<Vec<_>>(),
                                     audio.channels(),
                                 ),
                                 None => Vec::new(),

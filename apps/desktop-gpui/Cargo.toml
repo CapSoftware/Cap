@@ -5,7 +5,7 @@
 # wgpu-hal, tao) that only exist for the Tauri app.
 [workspace]
 resolver = "2"
-members = ["."]
+members = [".", "kernels"]
 
 [package]
 name = "cap-desktop-gpui"
@@ -25,6 +25,7 @@ path = "../../crates/recording/examples/studio-finalization-benchmark.rs"
 
 [dependencies]
 cap-audio = { path = "../../crates/audio" }
+cap-gpui-kernels = { path = "kernels" }
 # gpui — the wingleeio/zed fork Comet ships. The pinned rev carries f596cde
 # ("destination alpha on transparent windows: Porter-Duff OVER, not additive"),
 # which our transparent rounded main-window shell depends on.
@@ -108,7 +109,6 @@ smallvec = "1"
 unicode-segmentation = "1"
 # spawn_blocking for finalize; the runtime itself comes from gpui_tokio.
 tokio = { version = "1", features = ["rt", "time"] }
-md-5 = "0.10"
 # The same crate `tauri_plugin_global_shortcut` wraps, at the Tauri app's pin:
 # store bindings are W3C `KeyboardEvent.code` strings and this owns the
 # platform mapping (Carbon RegisterEventHotKey on macOS).
@@ -252,22 +252,22 @@ gpui_tokio = { path = "../../../zed-cap/crates/gpui_tokio" }
 # build deps at opt-level 2 and keep the app crate itself at 0.
 opt-level = 0
 # Incremental caches for this dep tree run to gigabytes on a disk that has
-# already been filled to zero once; the app crate is small enough that full
-# recompiles cost seconds.
+# already been filled to zero once; a full app-crate recompile at opt-level 0
+# costs about a minute, and `dev.sh` opts back in for its own loop.
 incremental = false
 
 [profile.dev.package."*"]
 opt-level = 2
+# Full debug info for every dependency made a 1 GB Windows PDB that every
+# relink rewrote; line tables keep file:line backtraces through dependencies.
+debug = "line-tables-only"
 
-# ...and the app crate too, since the editor landed. `frame_image` un-pads and
-# BGRA-swaps a 1080x702 frame per displayed frame, which is 3MB of per-pixel
-# work on this side of the seam: at opt-level 0 it measures **30.1ms** and the
-# preview is convert-bound at 33fps with 45% of the renderer's frames dropped;
-# at opt-level 2 it is **0.92ms**, and playback holds 59.9fps with zero drops.
-# A dev build that cannot show the editor at its real speed is a dev build that
-# will get the wrong answer out of every later editor unit. Costs ~7s a build.
-[profile.dev.package.cap-desktop-gpui]
-opt-level = 2
+# The app crate stays at opt-level 0; its per-frame pixel and sample loops live
+# in `cap-gpui-kernels` instead. `frame_image` alone measures 42.7ms per frame
+# unoptimized against 1.0ms here, and optimizing the whole app crate instead
+# turns a one-line edit into a 6-minute rebuild.
+[profile.dev.package.cap-gpui-kernels]
+opt-level = 3
 
 [profile.release]
 codegen-units = 1

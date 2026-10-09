@@ -1,0 +1,12 @@
+[package]
+name = "cap-gpui-kernels"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0"
+publish = false
+
+[dependencies]
+cap-audio = { path = "../../../crates/audio" }
+cap-project = { path = "../../../crates/project" }
+image = { version = "0.25.1", default-features = false, features = ["jpeg", "png", "webp"] }
+md-5 = "0.10"

@@ -1,5 +1,5 @@
 use std::{
-    io::{self, BufReader, Read},
+    io::{self, Read},
     panic::AssertUnwindSafe,
     path::{Path, PathBuf},
     sync::{
@@ -704,13 +704,13 @@ fn adapt(
                 .ok_or_else(ended)?;
             let (source, path) = cursor.input().ok_or_else(ended)?;
             let reader = source.reader(path).map_err(|error| error.to_string())?;
-            let mut reader = BufReader::new(CheckedCursorReader {
+            let mut reader = CheckedCursorReader {
                 reader,
                 is_live: || !*control.cancelled.borrow() && sources.live().is_some(),
                 remaining: cursor_budget,
-            });
-            let cursor = CursorEvents::load_from_reader(&mut reader)?;
-            cursor_budget = reader.get_ref().remaining;
+            };
+            let cursor = cap_gpui_kernels::codec::read_cursor_events(&mut reader)?;
+            cursor_budget = reader.remaining;
             cursor
         } else {
             CursorEvents::default()
@@ -848,12 +848,12 @@ mod tests {
     fn cursor_reader_preserves_exact_limit_and_rejects_an_extra_byte() {
         let bytes = br#"{"clicks":[],"moves":[]}"#;
         for remaining in [bytes.len() as u64, bytes.len() as u64 - 1] {
-            let reader = CheckedCursorReader {
+            let mut reader = CheckedCursorReader {
                 reader: Cursor::new(bytes),
                 is_live: || true,
                 remaining,
             };
-            let result = CursorEvents::load_from_reader(BufReader::new(reader));
+            let result = cap_gpui_kernels::codec::read_cursor_events(&mut reader);
             assert_eq!(result.is_ok(), remaining == bytes.len() as u64);
         }
     }

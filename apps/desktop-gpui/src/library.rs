@@ -29,7 +29,6 @@ use cap_project::{
 };
 use cap_recording::{recovery::RecoveryManager, upload_resume::UploadLock};
 use gpui::RenderImage;
-use image::buffer::ConvertBuffer as _;
 
 /// `RECENT_MEDIA_LIMIT` in `new-main/index.tsx:129`.
 pub const RECENT_MEDIA_LIMIT: usize = 9;
@@ -992,14 +991,11 @@ impl CacheSlot {
         if std::fs::create_dir_all(&self.dir).is_err() {
             return;
         }
-        let rgb: image::RgbImage = rgba.convert();
-        let mut encoded = Vec::new();
-        if image::codecs::jpeg::JpegEncoder::new_with_quality(&mut encoded, THUMBNAIL_JPEG_QUALITY)
-            .encode_image(&rgb)
-            .is_err()
-        {
+        let Ok(encoded) =
+            cap_gpui_kernels::codec::encode_jpeg_rgba_as_rgb(rgba, THUMBNAIL_JPEG_QUALITY)
+        else {
             return;
-        }
+        };
         let file = self.file();
         // The prefix keeps two same-mtime slots (wallpapers installed in one
         // copy) from interleaving writes into one tmp file.
@@ -1047,9 +1043,7 @@ impl CacheSlot {
 /// gpui's atlas takes BGRA; `image`'s RgbaImage is just the container (the
 /// same swap gpui's own asset loader does after decoding).
 pub fn rgba_to_render_image(mut rgba: image::RgbaImage) -> Arc<RenderImage> {
-    for pixel in rgba.chunks_exact_mut(4) {
-        pixel.swap(0, 2);
-    }
+    cap_gpui_kernels::frame::swap_red_blue(&mut rgba);
     Arc::new(RenderImage::new(smallvec::smallvec![image::Frame::new(
         rgba
     )]))
@@ -1190,8 +1184,7 @@ pub fn create_screenshot(
         if let Some(parent) = output.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
-        return image
-            .save_with_format(output, image::ImageFormat::Jpeg)
+        return cap_gpui_kernels::codec::save_rgb_image(&image, output, image::ImageFormat::Jpeg)
             .map_err(|e| e.to_string());
     }
 
