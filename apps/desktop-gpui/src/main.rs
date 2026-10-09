@@ -523,10 +523,16 @@ fn main() {
         .detach();
         #[cfg(target_os = "windows")]
         cx.spawn(async move |_| {
-            if let Some(native) = native_main
-                && let Err(error) = platform::install_main_window_frame_policy(&native)
-            {
+            let Some(native) = native_main else {
+                return;
+            };
+            if let Err(error) = platform::install_main_window_frame_policy(&native) {
                 tracing::warn!(%error, "could not install Main window frame policy");
+            }
+            if let Err(error) =
+                platform::install_session_end_handler(&native, crate::store::clear_handoff_marker)
+            {
+                tracing::warn!(%error, "could not install the Windows session end handler");
             }
         })
         .detach();
