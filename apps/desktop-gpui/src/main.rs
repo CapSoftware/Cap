@@ -145,7 +145,7 @@ fn init_logging() -> Option<tracing_appender::non_blocking::WorkerGuard> {
     // matches nothing.
     let filter = || {
         tracing_subscriber::EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| "cap_gpui=info".into())
+            .unwrap_or_else(|_| "warn,cap_gpui=info,wgpu_core=error,wgpu_hal=error".into())
     };
 
     let file = create_log_appender(&diagnostics::logs_dir(), diagnostics::LOG_FILE_PREFIX).map(
