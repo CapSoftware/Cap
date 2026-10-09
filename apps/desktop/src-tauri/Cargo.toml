@@ -50,7 +50,7 @@ specta.workspace = true
 specta-typescript = "0.0.7"
 tokio = { workspace = true, features = ["signal"] }
 uuid = { version = "1.10.0", features = ["v4"] }
-image = "0.25.2"
+image = { version = "0.25.2", default-features = false, features = ["rayon", "bmp", "dds", "exr", "ff", "gif", "hdr", "ico", "jpeg", "png", "pnm", "qoi", "tga", "tiff", "webp"] }
 futures-intrusive = "0.5.0"
 anyhow.workspace = true
 futures = { workspace = true }

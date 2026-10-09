@@ -21,7 +21,7 @@ ffmpeg.workspace = true
 futures = { workspace = true }
 futures-intrusive = "0.5.0"
 rayon = "1.10"
-image = "0.25.2"
+image = { version = "0.25.2", default-features = false, features = ["rayon", "bmp", "dds", "exr", "ff", "gif", "hdr", "ico", "jpeg", "png", "pnm", "qoi", "tga", "tiff", "webp"] }
 log = "0.4"
 serde = { workspace = true }
 serde_json = "1.0"

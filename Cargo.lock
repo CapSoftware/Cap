@@ -5085,7 +5085,6 @@ dependencies = [
  "qoi",
  "ravif",
  "rayon",
- "rgb",
  "tiff 0.10.3",
  "zune-core",
  "zune-jpeg",
