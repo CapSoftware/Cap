@@ -209,14 +209,11 @@ impl MaterialTokens {
                 fill: rgba(0x0000000b),
                 // `--macos-settings-hover: rgba(0, 0, 0, 0.065)`
                 hover: rgba(0x00000011),
-                // `--macos-settings-sidebar: rgba(255, 255, 255, 0.58)`
-                sidebar: rgba(0xffffff94),
-                // `--macos-settings-content: #f6f6f5` -- opaque, unlike every
-                // other surface here: under Liquid Glass only the sidebar
-                // shows the backdrop.
-                content: rgba(0xf6f6f5ff),
-                // `--macos-settings-card: rgba(255, 255, 255, 0.92)`
-                card: rgba(0xffffffeb),
+                sidebar: rgba(0xffffffc7),
+                // System Settings' grouped style: a white pane with faintly
+                // grey inset groups, rather than white cards on grey.
+                content: rgba(0xffffffff),
+                card: rgba(0x0000000a),
                 // `--macos-settings-window-radius: 26px`
                 window_radius: 26.,
                 // `--macos-settings-sidebar-radius: 18px`
@@ -249,10 +246,8 @@ impl MaterialTokens {
                 hover: rgba(0xffffff0d),
                 // `--macos-settings-sidebar: rgba(28, 28, 28, 0.88)`
                 sidebar: rgba(0x1c1c1ce0),
-                // `--macos-settings-content: rgba(17, 17, 17, 0.92)`
-                content: rgba(0x111111eb),
-                // `--macos-settings-card: rgba(28, 28, 28, 0.94)`
-                card: rgba(0x1c1c1cf0),
+                content: rgba(0x1e1e1eff),
+                card: rgba(0xffffff0d),
                 // The radii are set once, outside the `.dark` block.
                 window_radius: 26.,
                 sidebar_radius: 18.,
@@ -292,10 +287,8 @@ impl MaterialTokens {
                 hover: rgba(0x0000000e),
                 // `--macos-settings-sidebar: rgba(250, 250, 249, 0.74)`
                 sidebar: rgba(0xfafaf9bd),
-                // `--macos-settings-content: rgba(244, 244, 243, 0.84)`
-                content: rgba(0xf4f4f3d6),
-                // `--macos-settings-card: rgba(249, 249, 248, 0.94)`
-                card: rgba(0xf9f9f8f0),
+                content: rgba(0xfbfbfbff),
+                card: rgba(0x0000000a),
                 // `--macos-settings-window-radius: 16px`
                 window_radius: 16.,
                 // `--macos-settings-sidebar-radius: 0px`
@@ -324,10 +317,8 @@ impl MaterialTokens {
                 // `--macos-settings-sidebar: rgba(22, 22, 22, 0.9)` -- the one
                 // settings surface the glass block does *not* just re-tint.
                 sidebar: rgba(0x161616e6),
-                // `--macos-settings-content: rgba(17, 17, 17, 0.94)`
-                content: rgba(0x111111f0),
-                // `--macos-settings-card: rgba(28, 28, 28, 0.96)`
-                card: rgba(0x1c1c1cf5),
+                content: rgba(0x1e1e1eff),
+                card: rgba(0xffffff0d),
                 window_radius: 16.,
                 sidebar_radius: 0.,
             },
@@ -1302,13 +1293,13 @@ mod tests {
         }
 
         // The sidebar is a wash over the live backdrop; the content pane is
-        // `#f6f6f5`, fully opaque, in light mode only.
+        // opaque in both appearances.
         let light = Theme::light().with_material(Some(MaterialKind::LiquidGlass));
-        assert!((light.settings_sidebar_bg().a - 0.58).abs() < 0.01);
+        assert!((light.settings_sidebar_bg().a - 0.78).abs() < 0.01);
         assert_eq!(light.settings_content_bg().a, 1.);
         let dark = Theme::dark().with_material(Some(MaterialKind::LiquidGlass));
         assert!((dark.settings_sidebar_bg().a - 0.88).abs() < 0.01);
-        assert!((dark.settings_content_bg().a - 0.92).abs() < 0.01);
+        assert_eq!(dark.settings_content_bg().a, 1.);
     }
 
     /// Vibrancy keeps the `:root` radius and the pre-Tahoe surface set, and
