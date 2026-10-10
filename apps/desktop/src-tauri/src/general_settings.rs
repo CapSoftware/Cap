@@ -597,11 +597,14 @@ impl GeneralSettingsStore {
 
     pub fn get(app: &AppHandle<Wry>) -> Result<Option<Self>, String> {
         match app.store("store").map(|s| s.get("general_settings")) {
-            Ok(Some(raw)) => {
-                GeneralSettingsSnapshot::load(Some(raw)).map(|snapshot| Some(snapshot.settings))
-            }
+            Ok(raw) => Self::from_stored_value(raw),
             _ => Ok(None),
         }
+    }
+
+    pub(crate) fn from_stored_value(raw: Option<Value>) -> Result<Option<Self>, String> {
+        raw.map(|raw| GeneralSettingsSnapshot::load(Some(raw)).map(|snapshot| snapshot.settings))
+            .transpose()
     }
 
     // i don't trust anyone to not overwrite the whole store lols

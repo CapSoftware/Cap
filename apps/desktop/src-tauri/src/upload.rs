@@ -724,6 +724,24 @@ pub async fn create_or_get_video(
         "desktopMP4",
     )
     .await
+    .map(|created| created.upload_meta)
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreatedVideo {
+    #[serde(flatten)]
+    pub upload_meta: S3UploadMeta,
+    #[serde(default, deserialize_with = "deserialize_storage_capability")]
+    pub uses_default_storage: Option<bool>,
+}
+
+fn deserialize_storage_capability<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    // Optional quality metadata must not reject an otherwise valid video response.
+    Ok(serde_json::Value::deserialize(deserializer)?.as_bool())
 }
 
 #[instrument(skip(app))]
@@ -735,7 +753,7 @@ pub async fn create_or_get_video_with_mode(
     meta: Option<S3VideoMeta>,
     organization_id: Option<String>,
     recording_mode: &str,
-) -> Result<S3UploadMeta, AuthedApiError> {
+) -> Result<CreatedVideo, AuthedApiError> {
     let mut s3_config_url = if let Some(id) = video_id {
         let mut url =
             format!("/api/desktop/video/create?recordingMode={recording_mode}&videoId={id}");
@@ -797,7 +815,7 @@ pub async fn create_or_get_video_with_mode(
         .await
         .map_err(|e| format!("Failed to read response body: {e}"))?;
 
-    let config = serde_json::from_str::<S3UploadMeta>(&response_text).map_err(|e| {
+    let config = serde_json::from_str::<CreatedVideo>(&response_text).map_err(|e| {
         format!("Failed to deserialize response: {e}. Response body: {response_text}")
     })?;
 

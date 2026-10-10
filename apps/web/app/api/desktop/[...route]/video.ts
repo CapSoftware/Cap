@@ -176,6 +176,8 @@ app.get(
 
 					return c.json({
 						id: video.id,
+						usesDefaultStorage:
+							video.bucket === null && video.storageIntegrationId === null,
 						// All deprecated
 						user_id: user.id,
 						aws_region: "n/a",
@@ -391,6 +393,12 @@ app.get(
 
 			return c.json({
 				id: idToUse,
+				usesDefaultStorage:
+					writable.access?.provider === "s3" &&
+					Option.isOption(writable.bucketId) &&
+					Option.isNone(writable.bucketId) &&
+					Option.isOption(writable.storageIntegrationId) &&
+					Option.isNone(writable.storageIntegrationId),
 				// All deprecated
 				user_id: user.id,
 				aws_region: "n/a",

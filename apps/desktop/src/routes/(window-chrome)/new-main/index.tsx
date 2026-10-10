@@ -39,6 +39,7 @@ import { Transition } from "solid-transition-group";
 import Mode from "~/components/Mode";
 import { RecoveryToast } from "~/components/RecoveryToast";
 import Tooltip from "~/components/Tooltip";
+import UploadHealthIndicator from "~/components/upload-health-indicator";
 import { Input } from "~/routes/editor/ui";
 import {
 	authStore,
@@ -46,6 +47,7 @@ import {
 	recordingSettingsStore,
 } from "~/store";
 import { createSignInMutation } from "~/utils/auth";
+import { createUploadHealth } from "~/utils/create-upload-health";
 import { createTauriEventListener } from "~/utils/createEventListener";
 import {
 	type CameraWithDetails,
@@ -1858,7 +1860,11 @@ function Page() {
 	const compatibilityStudioMode = () =>
 		rawOptions.mode === "studio" &&
 		generalSettings.data?.studioRecordingQuality === "compatibility";
-
+	const uploadHealth = createUploadHealth({
+		serverUrl,
+		userId: () => auth.data?.user_id,
+		isRecording,
+	});
 	let cancelScheduledTargetListPrewarm: (() => void) | undefined;
 	onCleanup(() => cancelScheduledTargetListPrewarm?.());
 
@@ -3385,6 +3391,18 @@ function Page() {
 					</Show>
 				</Show>
 			</div>
+			<Show when={!activeMenu() && !isActivelyRecording()}>
+				<div class="flex min-w-0 justify-start">
+					<UploadHealthIndicator
+						status={uploadHealth.status()}
+						refreshing={uploadHealth.refreshing()}
+						disabled={uploadHealth.refreshing() || isRecording()}
+						onRefresh={() => {
+							void uploadHealth.refresh();
+						}}
+					/>
+				</div>
+			</Show>
 			<Show when={isActivelyRecording()}>
 				<div class="absolute inset-0 z-10 flex flex-col justify-end bg-gray-1/80 px-6 pb-8 backdrop-blur-xs">
 					<div class="pointer-events-auto">

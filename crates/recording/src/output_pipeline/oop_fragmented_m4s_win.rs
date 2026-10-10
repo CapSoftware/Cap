@@ -324,6 +324,7 @@ impl WindowsOOPFragmentedM4SMuxer {
                 let mut tracker = FragmentManifestTracker::new(
                     base_path.clone(),
                     &video_config,
+                    (video_init.width, video_init.height),
                     segment_duration,
                 );
                 if let Some(tx) = segment_tx.clone() {
