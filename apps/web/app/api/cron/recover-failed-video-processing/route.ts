@@ -1,5 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
+import { recoverLoomImportJobs } from "@/lib/loom-import/recovery";
 import { cleanupExpiredMediaProcessingBudgets } from "@/lib/media-processing-budget";
 import { recoverStalledVideoPipeline } from "@/lib/video-pipeline-recovery";
 import { recoverFailedVideoProcessing } from "@/lib/video-processing-recovery";
@@ -25,19 +26,25 @@ export async function GET(request: Request) {
 		return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 	}
 
-	const [summary, stalledPipeline, expiredBudgetsDeleted] = await Promise.all([
-		recoverFailedVideoProcessing(),
-		recoverStalledVideoPipeline(),
-		cleanupExpiredMediaProcessingBudgets().catch((error: unknown) => {
-			console.error("Processing budget cleanup failed", error);
-			return null;
-		}),
-	]);
+	const [summary, stalledPipeline, expiredBudgetsDeleted, loomImports] =
+		await Promise.all([
+			recoverFailedVideoProcessing(),
+			recoverStalledVideoPipeline(),
+			cleanupExpiredMediaProcessingBudgets().catch((error: unknown) => {
+				console.error("Processing budget cleanup failed", error);
+				return null;
+			}),
+			recoverLoomImportJobs().catch((error: unknown) => {
+				console.error("Loom import recovery failed", error);
+				return null;
+			}),
+		]);
 
 	return NextResponse.json({
 		success: true,
 		...summary,
 		stalledPipeline,
 		expiredBudgetsDeleted,
+		loomImports,
 	});
 }

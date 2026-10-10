@@ -342,6 +342,14 @@ export async function recoverStalledVideoPipeline({
 		.from(videos)
 		.innerJoin(users, eq(videos.ownerId, users.id))
 		.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
+		.leftJoin(
+			importedVideos,
+			and(
+				eq(importedVideos.id, videos.id),
+				eq(importedVideos.orgId, videos.orgId),
+				eq(importedVideos.source, "loom"),
+			),
+		)
 		.where(
 			and(
 				isNull(videoUploads.videoId),
@@ -349,7 +357,7 @@ export async function recoverStalledVideoPipeline({
 				gte(videos.createdAt, recentBefore),
 				lte(videos.updatedAt, staleBefore),
 				or(
-					isNull(videos.transcriptionStatus),
+					and(isNull(videos.transcriptionStatus), isNull(importedVideos.id)),
 					eq(videos.transcriptionStatus, "PROCESSING"),
 				),
 			),

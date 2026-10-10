@@ -71,6 +71,7 @@ const fireEvent = {
 const mocks = vi.hoisted(() => ({
 	folders: vi.fn(),
 	import: vi.fn(),
+	createJob: vi.fn(),
 	push: vi.fn(),
 	refresh: vi.fn(),
 }));
@@ -99,7 +100,9 @@ vi.mock("next/link", () => ({
 vi.mock("@/actions/loom", () => ({
 	getLoomImportFolders: mocks.folders,
 	importFromLoom: mocks.import,
-	importFromLoomCsv: vi.fn(),
+}));
+vi.mock("@/actions/loom-import", () => ({
+	createLoomImportJobAction: mocks.createJob,
 }));
 vi.mock("@cap/utils", async () => await import("@cap/utils/helpers"));
 vi.mock("@cap/ui", async () => ({
@@ -110,6 +113,7 @@ vi.mock("@cap/ui", async () => ({
 	...(await import("../../../../packages/ui/src/components/input/Input")),
 }));
 
+import { File as NodeFile } from "node:buffer";
 import { Folder, Space } from "@cap/web-domain";
 import { ImportLoomPage } from "@/app/(org)/dashboard/import/loom/ImportLoomPage";
 import type { LoomImportDestination } from "@/lib/loom-import-destination";
@@ -123,6 +127,16 @@ beforeEach(() => {
 	HTMLElement.prototype.hasPointerCapture = () => false;
 	HTMLElement.prototype.setPointerCapture = vi.fn();
 	HTMLElement.prototype.releasePointerCapture = vi.fn();
+	window.matchMedia = vi.fn((query: string) => ({
+		matches: false,
+		media: query,
+		onchange: null,
+		addEventListener: vi.fn(),
+		removeEventListener: vi.fn(),
+		addListener: vi.fn(),
+		removeListener: vi.fn(),
+		dispatchEvent: () => false,
+	}));
 	mocks.folders.mockResolvedValue([
 		{ id: "parent", name: "Course", parentId: null },
 		{ id: "child", name: "Live Calls - Two", parentId: "parent" },
@@ -278,6 +292,57 @@ describe("Loom importer component", () => {
 		);
 		expect(mocks.push).toHaveBeenCalledWith(
 			"/dashboard/spaces/space/folder/child",
+		);
+	});
+	it("imports every video from an uploaded file of bare Loom ids", async () => {
+		const first = "0dd0a01e10c742b28dbea75082c08635";
+		const second = "31f430c1a1e744b8a7b6c18a26982c71";
+		mocks.createJob.mockResolvedValue({ ok: true, jobId: "job-1" });
+		await render();
+		await act(async () => {
+			fireEvent.click(getByRole(container, "tab", { name: "Bulk Import" }));
+		});
+		const input = container.querySelector<HTMLInputElement>(
+			"[data-testid=loom-csv-input]",
+		);
+		if (!input) throw new Error("Missing CSV input");
+		Object.defineProperty(input, "files", {
+			configurable: true,
+			value: [
+				new NodeFile([`${first}\n${second}\n`], "loom-ids.csv", {
+					type: "text/csv",
+				}),
+			],
+		});
+		await act(async () => {
+			input.dispatchEvent(new Event("change", { bubbles: true }));
+		});
+		await waitFor(() =>
+			expect(
+				getByRole(container, "button", { name: "Import 2 videos" }),
+			).toBeTruthy(),
+		);
+		expect(container.textContent).toContain("loom-ids.csv");
+		await act(async () => {
+			fireEvent.click(
+				getByRole(container, "button", { name: "Import 2 videos" }),
+			);
+		});
+		await waitFor(() => expect(mocks.createJob).toHaveBeenCalledTimes(1));
+		expect(mocks.createJob).toHaveBeenCalledWith({
+			orgId: "org",
+			fileName: "loom-ids.csv",
+			rows: {
+				owners: [],
+				spaces: [],
+				rows: [
+					[1, first, -1, -1],
+					[2, second, -1, -1],
+				],
+			},
+		});
+		await waitFor(() =>
+			expect(mocks.push).toHaveBeenCalledWith("/dashboard/import/loom/job-1"),
 		);
 	});
 });

@@ -82,7 +82,7 @@ Core principles:
 - Viewer analytics and engagement (24h / 7d / 30d / lifetime).
 - Password-protected shares and custom domains (cap.yourdomain.com).
 - Organizations with member roles (Admin/Member), team workspaces, public/private spaces, and color-coded folders.
-- Built-in Loom video importer (single URL or CSV bulk import up to 500 videos).
+- Built-in Loom video importer (single URL or CSV bulk import up to 2,000 videos per CSV).
 - Browser-based web recorder available in the dashboard; referral program at /dashboard/refer.
 
 ## Storage & Privacy

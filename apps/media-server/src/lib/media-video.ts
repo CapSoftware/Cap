@@ -17,6 +17,7 @@ import {
 	PROCESS_TIMEOUT_MS,
 	type ProgressCallback,
 	UPLOAD_TIMEOUT_MS,
+	withIdleTimeout,
 	withTimeout,
 } from "./media-common";
 import { probeVideoFile } from "./media-probe";
@@ -36,6 +37,7 @@ import {
 
 const PROCESS_TIMEOUT_PER_SECOND_MS = 20_000;
 const MAX_PROCESS_TIMEOUT_MS = 2 * 60 * 60 * 1000;
+const DOWNLOAD_IDLE_TIMEOUT_MS = 3 * 60 * 1000;
 // HLS/DASH sources are pulled as many sequential segment requests rather than
 // one streamed fetch, so per-request overhead scales with video length. A
 // flat 10-minute budget is enough for typical short recordings but not for a
@@ -48,6 +50,7 @@ const PROBE_H264_LEVEL_TIMEOUT_MS = 10_000;
 const FFMPEG_HLS_CAPABILITY_TIMEOUT_MS = 10_000;
 const UPLOAD_MAX_RETRIES = 4;
 const UPLOAD_RETRY_BASE_MS = 250;
+const UPLOAD_MIN_BYTES_PER_SECOND = 1024 * 1024;
 const MAX_STDERR_BYTES = 64 * 1024;
 const REPAIR_TIMEOUT_MS = 5 * 60 * 1000;
 const MAX_LEVEL_4_2_WIDTH = 2048;
@@ -99,6 +102,7 @@ export interface VideoProcessingOptions {
 	remuxOnly?: boolean;
 	normalizeH264Level?: boolean;
 	timeoutMs?: number;
+	idleTimeoutMs?: number;
 }
 
 export interface ThumbnailOptions {
@@ -175,6 +179,7 @@ const DEFAULT_OPTIONS: Required<VideoProcessingOptions> = {
 	remuxOnly: false,
 	normalizeH264Level: false,
 	timeoutMs: PROCESS_TIMEOUT_MS,
+	idleTimeoutMs: 0,
 };
 
 const DEFAULT_THUMBNAIL_OPTIONS: Required<ThumbnailOptions> = {
@@ -989,14 +994,10 @@ async function storageResponseError(
 	);
 }
 
-function parseProgressFromStderr(
-	stderrLine: string,
-	totalDurationUs: number,
-): number | null {
+function parseOutTimeUs(stderrLine: string): number | null {
 	const match = stderrLine.match(/out_time_us=(\d+)/);
 	if (!match) return null;
-	const currentUs = Number.parseInt(match[1] ?? "0", 10);
-	return Math.min(100, (currentUs / totalDurationUs) * 100);
+	return Number.parseInt(match[1] ?? "0", 10);
 }
 
 async function runFfmpegCommand(
@@ -1234,6 +1235,7 @@ export async function downloadVideoToTemp(
 	videoUrl: string,
 	inputExtension?: string,
 	abortSignal?: AbortSignal,
+	onBytes?: (bytes: number) => void,
 ): Promise<TempFileHandle> {
 	if (isStreamingUrl(videoUrl)) {
 		return await downloadStreamingVideoToTemp(videoUrl, abortSignal);
@@ -1246,11 +1248,26 @@ export async function downloadVideoToTemp(
 		normalizeVideoInputExtension(inputExtension),
 	);
 
+	const idle = new AbortController();
+	let idleTimer: ReturnType<typeof setTimeout> | undefined;
+	const stillReceiving = () => {
+		if (idleTimer) clearTimeout(idleTimer);
+		idleTimer = setTimeout(
+			() =>
+				idle.abort(
+					new Error(
+						`Download stopped receiving data for ${DOWNLOAD_IDLE_TIMEOUT_MS / 1000} seconds`,
+					),
+				),
+			DOWNLOAD_IDLE_TIMEOUT_MS,
+		);
+	};
+
 	try {
-		const timeoutSignal = AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS);
+		stillReceiving();
 		const combinedSignal = abortSignal
-			? AbortSignal.any([abortSignal, timeoutSignal])
-			: timeoutSignal;
+			? AbortSignal.any([abortSignal, idle.signal])
+			: idle.signal;
 
 		const response = await fetchMedia(videoUrl, {
 			signal: combinedSignal,
@@ -1269,11 +1286,15 @@ export async function downloadVideoToTemp(
 
 		const reader = response.body.getReader();
 		const writer = file(tempFile.path).writer();
+		let received = 0;
 		try {
 			while (true) {
 				const { done, value } = await reader.read();
 				if (done) break;
 				writer.write(value);
+				received += value.byteLength;
+				stillReceiving();
+				onBytes?.(received);
 			}
 			await writer.end();
 		} finally {
@@ -1287,7 +1308,11 @@ export async function downloadVideoToTemp(
 		return tempFile;
 	} catch (err) {
 		await tempFile.cleanup();
-		throw err;
+		throw idle.signal.aborted && !abortSignal?.aborted
+			? idle.signal.reason
+			: err;
+	} finally {
+		if (idleTimer) clearTimeout(idleTimer);
 	}
 }
 
@@ -1628,56 +1653,65 @@ export async function processVideo(
 	const stderrLines: string[] = [];
 	const maxStderrLines = 50;
 
-	try {
-		await withTimeout(
-			(async () => {
-				void drainStream(proc.stdout as ReadableStream<Uint8Array>);
+	const encode = async (touch?: () => void) => {
+		void drainStream(proc.stdout as ReadableStream<Uint8Array>);
 
-				const stderrReader = (
-					proc.stderr as ReadableStream<Uint8Array>
-				).getReader();
-				const decoder = new TextDecoder();
-				let stderrBuffer = "";
+		const stderrReader = (
+			proc.stderr as ReadableStream<Uint8Array>
+		).getReader();
+		const decoder = new TextDecoder();
+		let stderrBuffer = "";
+		let encodedUs = -1;
 
-				try {
-					while (true) {
-						const { done, value } = await stderrReader.read();
-						if (done) break;
+		try {
+			while (true) {
+				const { done, value } = await stderrReader.read();
+				if (done) break;
 
-						stderrBuffer += decoder.decode(value, { stream: true });
-						const lines = stderrBuffer.split("\n");
-						stderrBuffer = lines.pop() ?? "";
+				stderrBuffer += decoder.decode(value, { stream: true });
+				const lines = stderrBuffer.split("\n");
+				stderrBuffer = lines.pop() ?? "";
 
-						for (const line of lines) {
-							stderrLines.push(line);
-							if (stderrLines.length > maxStderrLines) {
-								stderrLines.shift();
-							}
-							const progress = parseProgressFromStderr(line, totalDurationUs);
-							if (progress !== null && onProgress) {
-								onProgress(progress, `Encoding: ${Math.round(progress)}%`);
-							}
-						}
+				for (const line of lines) {
+					stderrLines.push(line);
+					if (stderrLines.length > maxStderrLines) {
+						stderrLines.shift();
 					}
-				} finally {
-					stderrReader.releaseLock();
+					const outTimeUs = parseOutTimeUs(line);
+					if (outTimeUs === null || outTimeUs <= encodedUs) continue;
+					encodedUs = outTimeUs;
+					touch?.();
+					const progress = Math.min(100, (outTimeUs / totalDurationUs) * 100);
+					onProgress?.(progress, `Encoding: ${Math.round(progress)}%`);
 				}
+			}
+		} finally {
+			stderrReader.releaseLock();
+		}
 
-				const exitCode = await proc.exited;
-				if (exitCode !== 0) {
-					throw new Error(
-						`FFmpeg exited with code ${exitCode}. Last stderr: ${stderrLines.slice(-10).join(" | ")}`,
-					);
-				}
+		const exitCode = await proc.exited;
+		if (exitCode !== 0) {
+			throw new Error(
+				`FFmpeg exited with code ${exitCode}. Last stderr: ${stderrLines.slice(-10).join(" | ")}`,
+			);
+		}
 
-				const outputSize = await file(outputTempFile.path).size;
-				if (outputSize === 0) {
-					throw new Error("FFmpeg produced empty output file");
-				}
-			})(),
-			processTimeoutMs,
-			() => terminateProcess(proc),
-		);
+		const outputSize = await file(outputTempFile.path).size;
+		if (outputSize === 0) {
+			throw new Error("FFmpeg produced empty output file");
+		}
+	};
+
+	try {
+		if (opts.idleTimeoutMs > 0) {
+			await withIdleTimeout(encode, opts.idleTimeoutMs, () =>
+				terminateProcess(proc),
+			);
+		} else {
+			await withTimeout(encode(), processTimeoutMs, () =>
+				terminateProcess(proc),
+			);
+		}
 
 		return outputTempFile;
 	} catch (err) {
@@ -2220,8 +2254,15 @@ async function readUploadReceipt(
 	return { objectIdentity: `"cap-drive-content-v1:${digest}"` };
 }
 
-function uploadSignal(abortSignal?: AbortSignal) {
-	const timeout = AbortSignal.timeout(UPLOAD_TIMEOUT_MS);
+export function uploadTimeoutMs(contentLength = 0) {
+	return Math.max(
+		UPLOAD_TIMEOUT_MS,
+		Math.ceil(contentLength / UPLOAD_MIN_BYTES_PER_SECOND) * 1000,
+	);
+}
+
+function uploadSignal(abortSignal?: AbortSignal, contentLength?: number) {
+	const timeout = AbortSignal.timeout(uploadTimeoutMs(contentLength));
 	return abortSignal ? AbortSignal.any([abortSignal, timeout]) : timeout;
 }
 
@@ -2266,7 +2307,7 @@ async function uploadWithRetry(
 				method: "PUT",
 				headers,
 				body: bodyFactory(),
-				signal: uploadSignal(abortSignal),
+				signal: uploadSignal(abortSignal, contentLength),
 			});
 		} catch (err) {
 			abortSignal?.throwIfAborted();

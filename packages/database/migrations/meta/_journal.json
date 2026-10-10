@@ -351,6 +351,20 @@
 			"when": 1790203121737,
 			"tag": "0049_jittery_professor_monster",
 			"breakpoints": true
+		},
+		{
+			"idx": 50,
+			"version": "5",
+			"when": 1791345311370,
+			"tag": "0050_productive_christian_walker",
+			"breakpoints": true
+		},
+		{
+			"idx": 51,
+			"version": "5",
+			"when": 1791422257360,
+			"tag": "0051_smooth_longshot",
+			"breakpoints": true
 		}
 	]
 }

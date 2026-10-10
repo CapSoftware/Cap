@@ -54,9 +54,10 @@ export async function processVideoWorkflow(
 		let metadata: ProcessedVideoMetadata;
 		for (let processingAttempt = 0; ; processingAttempt++) {
 			let capacityRetryCount = 0;
+			let jobId: string;
 			while (true) {
 				try {
-					await processVideoOnMediaServer(
+					jobId = await processVideoOnMediaServer(
 						videoId,
 						userId,
 						rawFileKey,
@@ -71,7 +72,7 @@ export async function processVideoWorkflow(
 				}
 			}
 			try {
-				metadata = await waitForVideoProcessing(videoId);
+				metadata = await waitForVideoProcessing(videoId, { jobId });
 				break;
 			} catch (error) {
 				if (
@@ -146,8 +147,8 @@ async function validateProcessingRequest(
 
 const MEDIA_SERVER_START_MAX_ATTEMPTS = 2;
 const MEDIA_SERVER_START_RETRY_BASE_MS = 250;
-const MEDIA_SERVER_PRESIGNED_GET_EXPIRES_SECONDS = 3 * 60 * 60;
-const MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS = 3 * 60 * 60;
+const MEDIA_SERVER_PRESIGNED_GET_EXPIRES_SECONDS = 24 * 60 * 60;
+const MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS = 24 * 60 * 60;
 
 function getInputExtension(rawFileKey: string): string {
 	const parts = rawFileKey.split(".");
@@ -260,7 +261,7 @@ async function processVideoOnMediaServer(
 	userId: string,
 	rawFileKey: string,
 	_bucketId: string | null,
-): Promise<void> {
+): Promise<string> {
 	"use step";
 
 	const mediaServerUrl = serverEnv().MEDIA_SERVER_URL;
@@ -339,7 +340,7 @@ async function processVideoOnMediaServer(
 		})
 		.where(eq(videoUploads.videoId, videoId as Video.VideoId));
 
-	await startMediaServerProcessJob(mediaServerUrl, {
+	return await startMediaServerProcessJob(mediaServerUrl, {
 		audioLevels: video.source.type === "webMP4",
 		videoId,
 		userId,

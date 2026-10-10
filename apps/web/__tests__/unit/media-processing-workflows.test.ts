@@ -12,6 +12,12 @@ const mocks = vi.hoisted(() => ({
 	remove: vi.fn(),
 	fetch: vi.fn(),
 	sleep: vi.fn(),
+	continueLoomImport: vi.fn(),
+	observe: vi.fn(),
+}));
+
+vi.mock("@/lib/desktop-recording-job-status", () => ({
+	observeDesktopRecordingJob: mocks.observe,
 }));
 
 vi.mock("@cap/database", () => ({
@@ -56,12 +62,16 @@ vi.mock("@/lib/video-storage", () => ({
 	decodeStorageVideo: (value: unknown) => value,
 }));
 vi.mock("@/lib/transcribe", () => ({ transcribeVideo: vi.fn() }));
+vi.mock("@/lib/loom-import/dispatch", () => ({
+	dispatchLoomImportForVideo: mocks.continueLoomImport,
+}));
 vi.mock("@/lib/ai-generation-entitlement", () => ({
 	isAiGenerationEnabledForUser: () => false,
 }));
 vi.mock("workflow", () => ({
 	sleep: mocks.sleep,
 	FatalError: class FatalError extends Error {},
+	RetryableError: class RetryableError extends Error {},
 }));
 
 import { importLoomVideoWorkflow } from "@/workflows/import-loom-video";
@@ -111,6 +121,10 @@ describe("media processing workflows", () => {
 		);
 		mocks.remove.mockImplementation(() => Effect.void);
 		mocks.sleep.mockResolvedValue(undefined);
+		mocks.continueLoomImport.mockReset().mockResolvedValue(null);
+		mocks.observe
+			.mockReset()
+			.mockResolvedValue({ status: "unavailable", delivered: false });
 		vi.stubGlobal("fetch", mocks.fetch);
 		mocks.fetch.mockReset().mockImplementation(async (url: string) => {
 			if (url.startsWith("https://www.loom.com/")) {
@@ -198,6 +212,61 @@ describe("media processing workflows", () => {
 			priority: "bulk",
 		});
 		expect(mocks.remove).not.toHaveBeenCalled();
+		expect(mocks.continueLoomImport.mock.calls).toEqual([["video"], ["video"]]);
+	});
+
+	it("waits for Loom instead of failing when Loom rate limits the download link", async () => {
+		let loomCalls = 0;
+		mocks.fetch.mockImplementation(async (url: string) => {
+			if (url.startsWith("https://www.loom.com/")) {
+				loomCalls++;
+				return loomCalls <= 4
+					? new Response("slow down", { status: 429 })
+					: Response.json({ url: "https://cdn.loom.com/original.mp4" });
+			}
+			return Response.json({ jobId: "job-1", status: "queued" });
+		});
+		mocks.rows = [[video], [pending], [], [metadata]];
+		await expect(importLoomVideoWorkflow(payload)).resolves.toMatchObject({
+			success: true,
+		});
+		expect(loomCalls).toBe(5);
+		expect(mocks.sleep.mock.calls[0]).toEqual(["60s"]);
+		expect(mocks.write).toHaveBeenCalled();
+	});
+
+	it("gives a Loom video up after Loom stays unavailable for a while", async () => {
+		mocks.fetch.mockImplementation(async (url: string) =>
+			url.startsWith("https://www.loom.com/")
+				? new Response("unavailable", { status: 503 })
+				: Response.json({ jobId: "job-1" }),
+		);
+		await expect(importLoomVideoWorkflow(payload)).rejects.toThrow(
+			"Loom is not responding right now",
+		);
+		expect(mocks.sleep.mock.calls).toEqual([
+			["60s"],
+			["120s"],
+			["180s"],
+			["240s"],
+			["300s"],
+			["360s"],
+		]);
+		expect(mocks.continueLoomImport).toHaveBeenCalledExactlyOnceWith("video");
+	});
+
+	it("frees its import slot when a Loom video fails for good", async () => {
+		mocks.continueLoomImport.mockRejectedValueOnce(new Error("Database busy"));
+		vi.spyOn(console, "error").mockImplementation(() => undefined);
+		mocks.fetch.mockImplementation(async (url: string) =>
+			url.startsWith("https://www.loom.com/")
+				? new Response(null, { status: 404 })
+				: Response.json({ jobId: "job-1" }),
+		);
+		await expect(importLoomVideoWorkflow(payload)).rejects.toThrow(
+			"Could not retrieve a download URL from Loom",
+		);
+		expect(mocks.continueLoomImport).toHaveBeenCalledExactlyOnceWith("video");
 	});
 
 	it("reuses a preserved Loom upload when retrying", async () => {
@@ -232,6 +301,76 @@ describe("media processing workflows", () => {
 			payload.rawFileKey,
 			expect.anything(),
 		);
+	});
+
+	it("restarts a Loom video from its preserved original when the worker goes quiet", async () => {
+		let now = 0;
+		const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+		mocks.sleep.mockImplementation(async (delay: unknown) => {
+			if (typeof delay === "number") now += delay;
+		});
+		const quiet = { ...pending, updatedAt: new Date(0) };
+		try {
+			mocks.rows = [
+				[video],
+				...Array.from({ length: 43 }, () => [quiet]),
+				[video],
+				[video],
+				[],
+				[metadata],
+			];
+			await expect(importLoomVideoWorkflow(payload)).resolves.toMatchObject({
+				success: true,
+			});
+			expect(now).toBeGreaterThan(30 * 60 * 1000);
+			expect(mocks.observe).toHaveBeenCalledTimes(21);
+			for (const [lookup] of mocks.observe.mock.calls) {
+				expect(lookup).toMatchObject({ videoId: "video", jobId: "job-1" });
+			}
+			expect(mocks.fetch.mock.calls.map(([url]) => url)).toEqual([
+				"https://www.loom.com/api/campaigns/sessions/loom-video/transcoded-url",
+				"https://worker.example.com/video/import",
+				"https://worker.example.com/video/process",
+			]);
+			expect(mocks.get).toHaveBeenCalledWith(
+				payload.rawFileKey,
+				expect.anything(),
+			);
+		} finally {
+			clock.mockRestore();
+		}
+	});
+
+	it("does not start a second copy while the media server still has the Loom video", async () => {
+		let now = 0;
+		const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+		mocks.sleep.mockImplementation(async (delay: unknown) => {
+			if (typeof delay === "number") now += delay;
+		});
+		mocks.observe
+			.mockResolvedValueOnce({ status: "active", delivered: false })
+			.mockResolvedValueOnce({ status: "active", delivered: false })
+			.mockResolvedValueOnce({ status: "terminal", delivered: true });
+		const quiet = { ...pending, updatedAt: new Date(0) };
+		try {
+			mocks.rows = [
+				[video],
+				...Array.from({ length: 25 }, () => [quiet]),
+				[],
+				[metadata],
+			];
+			await expect(importLoomVideoWorkflow(payload)).resolves.toMatchObject({
+				success: true,
+				metadata,
+			});
+			expect(mocks.observe).toHaveBeenCalledTimes(3);
+			expect(mocks.fetch.mock.calls.map(([url]) => url)).toEqual([
+				"https://www.loom.com/api/campaigns/sessions/loom-video/transcoded-url",
+				"https://worker.example.com/video/import",
+			]);
+		} finally {
+			clock.mockRestore();
+		}
 	});
 
 	it("supports Loom streaming fallbacks without reading a nonexistent raw object", async () => {

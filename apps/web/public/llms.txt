@@ -25,7 +25,7 @@ Cap does not assign global recording shortcuts by default. Users configure suppo
 - Signed-in timestamped comments, replies, and emoji reactions when effective viewer settings allow them.
 - Organization roles, members, spaces, folders, branding, viewer settings, and aggregate analytics.
 - Cap-managed storage, Google Drive for new uploads, and S3-compatible storage. Provider changes do not automatically move existing files.
-- Single Loom imports, organization CSV imports up to 500 rows per self-serve batch, and a durable per-video agent import workflow.
+- Single Loom imports, CSV imports up to 2,000 rows per self-serve batch, and a durable per-video agent import workflow.
 - A developer REST API plus `@cap/sdk-recorder` and `@cap/sdk-embed`. A public customer webhook subscription API is not currently documented.
 
 Captions, transcripts, titles, summaries, and chapters depend on the recording, processing state, plan, and effective organization settings. Do not promise that every recording has every AI field immediately.
