@@ -362,6 +362,7 @@ fn spawn_import(cx: &mut App, work: impl FnOnce(flume::Sender<ImportProgress>) +
     let in_flight = InFlightImport::begin();
     let worker = std::thread::Builder::new()
         .name("cap-media-import".to_string())
+        .stack_size(crate::MEDIA_THREAD_STACK_SIZE)
         .spawn(move || {
             let _in_flight = in_flight;
             work(tx);

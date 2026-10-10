@@ -14,25 +14,22 @@ use crate::theme::Theme;
 pub struct Card;
 
 impl Card {
-    /// The settings card: radius 10 and no border under the settings material,
-    /// filled with `--macos-settings-card`.
     pub fn settings(theme: &Theme, padded: bool) -> Div {
         div()
-            .rounded(px(10.))
+            .rounded(px(12.))
             .overflow_hidden()
             .bg(theme.settings_card_bg())
             .when(padded, |this| this.px(px(16.)).py(px(16.)))
     }
 
-    /// The same card with `divide-y divide-gray-3` between its rows.
     pub fn settings_rows(theme: &Theme, children: Vec<AnyElement>) -> Div {
         let border = theme.settings_border();
         let last = children.len().saturating_sub(1);
         Card::settings(theme, false).flex().flex_col().children(
             children.into_iter().enumerate().map(|(index, child)| {
-                div()
-                    .when(index != last, |this| this.border_b_1().border_color(border))
-                    .child(child)
+                div().child(child).when(index != last, |this| {
+                    this.child(div().mx(px(12.)).h(px(1.)).bg(border))
+                })
             }),
         )
     }
@@ -142,6 +139,11 @@ impl SettingRow {
             control,
             muted: theme.settings_muted(),
         }
+    }
+
+    pub fn description(mut self, description: impl Into<SharedString>) -> Self {
+        self.description = Some(description.into());
+        self
     }
 }
 
@@ -260,14 +262,8 @@ impl RenderOnce for Section {
                                     .gap(px(8.))
                                     .child(
                                         div()
-                                            .text_size(px(14.))
-                                            // `text-sm font-semibold
-                                            //  tracking-tight`
-                                            // (`settings/Setting.tsx:27`).
-                                            // `font-semibold` renders 700: no
-                                            // 600 face is loaded over there
-                                            // (`ui-solid/vite.js:31-33`).
-                                            .font_weight(FontWeight::BOLD)
+                                            .text_size(px(13.))
+                                            .font_weight(FontWeight::SEMIBOLD)
                                             .child(title),
                                     )
                                     .when(pro, |this| {

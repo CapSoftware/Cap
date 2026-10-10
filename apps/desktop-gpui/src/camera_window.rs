@@ -1791,6 +1791,7 @@ impl CameraWindow {
             let (out_tx, out_rx) = flume::bounded::<camera_blur::BlurOutput>(2);
             if let Err(error) = std::thread::Builder::new()
                 .name("camera-blur".into())
+                .stack_size(crate::MEDIA_THREAD_STACK_SIZE)
                 .spawn(move || camera_blur::run(job_rx, out_tx))
             {
                 // job_rx is gone; the caller's try_send sees Disconnected and
@@ -2461,7 +2462,7 @@ impl Render for CameraWindow {
             .size_full()
             .flex()
             .flex_col()
-            .font_family("Geist")
+            .font_family(crate::theme::UI_FONT)
             // `body { font-weight: 500 }` (`ui-solid/src/main.css:189-192`).
             .font_weight(FontWeight::MEDIUM)
             // One hover region for the whole window -- bubble, toolbar and

@@ -170,15 +170,95 @@ impl Mode {
     }
 }
 
-fn capture_hover_fill(theme: Theme, selected: bool, chevron: bool) -> Hsla {
-    if selected {
-        if chevron {
-            Theme::with_alpha(theme.blue_9, if theme.is_dark() { 0.30 } else { 0.22 })
-        } else {
-            theme.tile_selected_hover_bg()
-        }
+fn glass_tint(theme: Theme, light: f32, dark: f32) -> Hsla {
+    if theme.is_dark() {
+        gpui::hsla(0., 0., 1., dark)
     } else {
-        Theme::with_alpha(theme.blue_9, if chevron { 0.16 } else { 0.07 })
+        gpui::hsla(0., 0., 0., light)
+    }
+}
+
+fn glass_hover(theme: Theme) -> Hsla {
+    glass_tint(theme, 0.06, 0.07)
+}
+
+fn glass_press(theme: Theme) -> Hsla {
+    glass_tint(theme, 0.1, 0.11)
+}
+
+fn glass_selected(theme: Theme) -> Hsla {
+    glass_tint(theme, 0.08, 0.1)
+}
+
+fn shadow(color: Hsla, y: f32, blur: f32, spread: f32, inset: bool) -> gpui::BoxShadow {
+    gpui::BoxShadow {
+        color,
+        offset: gpui::point(px(0.), px(y)),
+        blur_radius: px(blur),
+        spread_radius: px(spread),
+        inset,
+    }
+}
+
+/// Drawn in gpui rather than with an `NSGlassEffectView` per button, which
+/// would have to track gpui's layout under the Metal layer. Two shadows, one
+/// unblurred, keep it cheap on a window that repaints with the mic meter.
+fn glass_button<E: Styled>(element: E, theme: Theme, selected: bool) -> E {
+    let dark = theme.is_dark();
+    let (top, bottom, rim) = match (selected, dark) {
+        (false, false) => (
+            gpui::hsla(0., 0., 1., 0.7),
+            gpui::hsla(0., 0., 1., 0.58),
+            gpui::hsla(0., 0., 0., 0.08),
+        ),
+        (false, true) => (
+            gpui::hsla(0., 0., 1., 0.085),
+            gpui::hsla(0., 0., 1., 0.06),
+            gpui::hsla(0., 0., 1., 0.07),
+        ),
+        (true, false) => (
+            Theme::with_alpha(theme.blue_3, 0.9),
+            Theme::with_alpha(theme.blue_3, 0.75),
+            Theme::with_alpha(theme.blue_8, 0.4),
+        ),
+        (true, true) => (
+            Theme::with_alpha(theme.blue_9, 0.24),
+            Theme::with_alpha(theme.blue_9, 0.18),
+            Theme::with_alpha(theme.blue_9, 0.3),
+        ),
+    };
+    let (highlight, lift) = if dark {
+        (gpui::hsla(0., 0., 1., 0.07), gpui::hsla(0., 0., 0., 0.2))
+    } else {
+        (gpui::hsla(0., 0., 1., 0.8), gpui::hsla(0., 0., 0., 0.04))
+    };
+    element
+        .bg(gpui::linear_gradient(
+            180.,
+            gpui::linear_color_stop(top, 0.),
+            gpui::linear_color_stop(bottom, 1.),
+        ))
+        .border_1()
+        .border_color(rim)
+        .shadow(vec![
+            shadow(highlight, 1., 0., 0., true),
+            shadow(lift, 1., 2., 0., false),
+        ])
+}
+
+fn capture_hover_fill(theme: Theme, selected: bool) -> Hsla {
+    if selected {
+        Theme::with_alpha(theme.blue_9, 0.06)
+    } else {
+        glass_tint(theme, 0.04, 0.05)
+    }
+}
+
+fn capture_press_fill(theme: Theme, selected: bool) -> Hsla {
+    if selected {
+        Theme::with_alpha(theme.blue_9, 0.12)
+    } else {
+        glass_tint(theme, 0.07, 0.09)
     }
 }
 
@@ -1022,6 +1102,10 @@ impl MainWindow {
                         this.open_panel(Panel::Target(TargetType::Display), window, cx)
                     }
                     Ok("window") => this.open_panel(Panel::Target(TargetType::Window), window, cx),
+                    Ok("camera") => this.open_panel(Panel::Device(DeviceMenu::Camera), window, cx),
+                    Ok("microphone") => {
+                        this.open_panel(Panel::Device(DeviceMenu::Microphone), window, cx)
+                    }
                     _ => {}
                 }
                 // `if (!targetMode) scheduleTargetListPrewarm()` on
@@ -2508,9 +2592,8 @@ impl Render for MainWindow {
             .when_some(theme.shell_border(), |this, color| {
                 this.border_1().border_color(color)
             })
-            .font_family("Geist")
-            // `body { font-family: "Geist Sans"; font-weight: 500 }`
-            // (`ui-solid/src/main.css:189-192`). The shipping app renders
+            .font_family(crate::theme::UI_FONT)
+            // `body { font-weight: 500 }` (`ui-solid/src/main.css:189-192`). The shipping app renders
             // *everything* Medium unless a `font-*` class says otherwise, so
             // Medium -- not Regular -- is the inherited default at every root.
             .font_weight(FontWeight::MEDIUM)
@@ -3404,7 +3487,8 @@ impl MainWindow {
                                     .text_color(theme.gray_12)
                                     .child("Back"),
                             )
-                            .hover(|style| style.bg(theme.body_hover_fill(4)))
+                            .hover(move |style| style.bg(glass_hover(theme)))
+                            .active(move |style| style.bg(glass_press(theme)))
                             .on_click(cx.listener(|this, _, _window, cx| this.back_panel(cx))),
                     )
                     .child(header_trailing),
@@ -4917,6 +5001,7 @@ impl MainWindow {
         target: DeviceFormatTarget,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
+        let theme = self.theme;
         let enabled = self.device_changes_allowed(cx);
         let name = match &target {
             DeviceFormatTarget::Camera(camera) => format!("camera-format-{}", camera.device_id),
@@ -4929,18 +5014,19 @@ impl MainWindow {
             .justify_center()
             .w(px(32.))
             .flex_shrink_0()
-            .rounded(px(6.))
+            .rounded(px(10.))
             .when(enabled, |button| {
                 button
                     .cursor_pointer()
-                    .hover(|style| style.bg(self.theme.body_hover_fill(4)))
+                    .hover(move |style| style.bg(glass_hover(theme)))
+                    .active(move |style| style.bg(glass_press(theme)))
             })
             .when(!enabled, |button| button.opacity(0.45))
             .child(
                 svg()
                     .path("icons/settings-2.svg")
-                    .size(px(16.))
-                    .text_color(self.theme.gray_11),
+                    .size(px(15.))
+                    .text_color(theme.gray_10),
             )
             .on_click(
                 cx.listener(move |this, _, _, cx| this.open_device_formats(target.clone(), cx)),
@@ -5270,83 +5356,86 @@ impl MainWindow {
         on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
     ) -> gpui::Stateful<gpui::Div> {
         let theme = self.theme;
-
-        let foreground = if selected {
-            gpui::white()
-        } else {
-            Hsla::from(theme.gray_12)
-        };
-        let detail_color = if selected {
-            let mut color = gpui::white();
-            color.a = 0.7;
-            color
-        } else {
-            Hsla::from(theme.gray_10)
-        };
+        let accent = Hsla::from(theme.blue_500);
 
         div()
             .id(id)
             .relative()
-            .overflow_hidden()
             .flex()
-            .flex_col()
-            .gap(px(2.))
-            .px(px(12.))
-            .py(px(10.))
+            .flex_row()
+            .items_center()
+            .gap(px(10.))
+            .px(px(10.))
+            .py(px(7.))
+            .min_h(px(40.))
             .w_full()
-            .rounded(px(8.))
-            .text_size(px(14.))
-            .text_color(foreground)
-            .when(selected, |this| this.bg(theme.blue_500))
+            .rounded(px(10.))
+            .cursor_pointer()
+            .when(selected, |this| this.bg(glass_selected(theme)))
             .when(!selected, |this| {
-                this.hover(|style| style.bg(theme.body_hover_fill(4)))
+                this.hover(move |style| style.bg(glass_hover(theme)))
+                    .active(move |style| style.bg(glass_press(theme)))
             })
-            .when_some(audio_level.filter(|_| selected), |this, level| {
-                this.child(
-                    div()
-                        .absolute()
-                        .top_0()
-                        .bottom_0()
-                        .left_0()
-                        .right(gpui::relative(level.clamp(0., 1.) as f32))
-                        .rounded(px(8.))
-                        .bg(gpui::hsla(0., 0., 1., 0.25)),
-                )
-            })
+            .child(
+                svg()
+                    .path(icon)
+                    .size(px(16.))
+                    .flex_shrink_0()
+                    .text_color(theme.gray_11),
+            )
             .child(
                 div()
                     .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap(px(12.))
-                    .w_full()
+                    .flex_col()
+                    .flex_1()
+                    .min_w_0()
+                    .gap(px(1.))
                     .child(
-                        svg()
-                            .path(icon)
-                            .size(px(16.))
-                            .flex_shrink_0()
-                            .text_color(foreground),
+                        div()
+                            .truncate()
+                            .text_size(px(13.))
+                            .text_color(theme.gray_12)
+                            .child(label),
                     )
-                    .child(div().flex_1().min_w_0().truncate().child(label))
-                    .when(selected, |this| {
+                    .children(detail.map(|detail| {
+                        div()
+                            .truncate()
+                            .text_size(px(11.))
+                            .text_color(theme.gray_10)
+                            .child(detail)
+                    }))
+                    .when_some(audio_level.filter(|_| selected), |this, level| {
                         this.child(
-                            svg()
-                                .path("icons/check.svg")
-                                .size(px(16.))
-                                .flex_shrink_0()
-                                .text_color(foreground),
+                            div()
+                                .mt(px(3.))
+                                .h(px(3.))
+                                .w_full()
+                                .rounded_full()
+                                .overflow_hidden()
+                                .bg(if theme.is_dark() {
+                                    gpui::hsla(0., 0., 1., 0.1)
+                                } else {
+                                    gpui::hsla(0., 0., 0., 0.07)
+                                })
+                                .child(
+                                    div()
+                                        .h_full()
+                                        .rounded_full()
+                                        .bg(accent)
+                                        .w(gpui::relative(1. - level.clamp(0., 1.) as f32)),
+                                ),
                         )
                     }),
             )
-            .children(detail.map(|detail| {
-                div()
-                    // `pl-7` = 16px icon + 12px gap.
-                    .pl(px(28.))
-                    .text_size(px(11.))
-                    .text_color(detail_color)
-                    .truncate()
-                    .child(detail)
-            }))
+            .when(selected, |this| {
+                this.child(
+                    svg()
+                        .path("icons/check.svg")
+                        .size(px(14.))
+                        .flex_shrink_0()
+                        .text_color(accent),
+                )
+            })
             .on_click(on_click)
     }
 
@@ -5686,59 +5775,50 @@ impl MainWindow {
     fn render_split_target(&self, target: TargetType, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let selected = self.target == Some(target);
-        let hover_fill = capture_hover_fill(theme, selected, false);
         let dropdown_id = SharedString::from(format!("{}-dropdown", target.label()));
 
         div()
-            .group(target.label())
             .flex()
             .flex_1()
             .overflow_hidden()
-            .rounded(px(8.))
-            .border_1()
-            .border_color(if selected {
-                Hsla::from(theme.blue_8)
-            } else {
-                theme.body_border(6)
-            })
-            .bg(if selected {
-                theme.tile_selected_bg()
-            } else {
-                theme.body_fill(2)
-            })
+            .rounded(px(10.))
+            .map(|this| glass_button(this, theme, selected))
             .child(self.target_button_inner(target, true, cx))
             .child(
                 div()
                     .id(dropdown_id.clone())
-                    .group(dropdown_id.clone())
                     .flex()
                     .w(px(28.))
-                    .rounded_r(px(7.))
+                    .rounded_r(px(9.))
                     .flex_shrink_0()
                     .items_center()
                     .justify_center()
-                    .border_l_1()
-                    .border_color(theme.body_border(6))
-                    .bg(if selected {
-                        theme.tile_selected_bg()
-                    } else {
-                        theme.body_fill(2)
-                    })
-                    .text_color(theme.gray_11)
+                    .child(
+                        div()
+                            .absolute()
+                            .left_0()
+                            .top(px(10.))
+                            .bottom(px(10.))
+                            .w(px(1.))
+                            .bg(if selected {
+                                Theme::with_alpha(theme.blue_9, 0.25)
+                            } else {
+                                glass_tint(theme, 0.08, 0.1)
+                            }),
+                    )
+                    .relative()
                     .child(
                         svg()
                             .path("icons/chevron-down.svg")
-                            .size(px(16.))
-                            .text_color(theme.gray_11)
-                            .group_hover(dropdown_id, move |style| style.text_color(theme.blue_11)),
+                            .size(px(14.))
+                            .text_color(if selected {
+                                theme.blue_10
+                            } else {
+                                theme.gray_10
+                            }),
                     )
-                    .group_hover(target.label(), move |style| style.bg(hover_fill))
-                    .hover(move |style| {
-                        style
-                            .bg(capture_hover_fill(theme, selected, true))
-                            .text_color(theme.blue_11)
-                    })
-                    .active(move |style| style.bg(theme.tile_selected_hover_bg()))
+                    .hover(move |style| style.bg(capture_hover_fill(theme, selected)))
+                    .active(move |style| style.bg(capture_press_fill(theme, selected)))
                     .tooltip(move |_, cx| {
                         ui::Tooltip::new(
                             &theme,
@@ -5766,18 +5846,8 @@ impl MainWindow {
             .flex()
             .flex_1()
             .overflow_hidden()
-            .rounded(px(8.))
-            .border_1()
-            .border_color(if selected {
-                Hsla::from(theme.blue_8)
-            } else {
-                theme.body_border(6)
-            })
-            .bg(if selected {
-                theme.tile_selected_bg()
-            } else {
-                theme.body_fill(2)
-            })
+            .rounded(px(10.))
+            .map(|this| glass_button(this, theme, selected))
             .child(self.target_button_inner(target, false, cx))
     }
 
@@ -5789,8 +5859,6 @@ impl MainWindow {
     ) -> impl IntoElement {
         let theme = self.theme;
         let selected = self.target == Some(target);
-        let hover_fill = capture_hover_fill(theme, selected, false);
-
         let icon_color = if selected {
             theme.blue_10
         } else {
@@ -5813,13 +5881,10 @@ impl MainWindow {
             .flex()
             .flex_1()
             .py(px(8.))
-            .when(split, |this| this.rounded_l(px(7.)))
-            .when(!split, |this| this.rounded(px(7.)))
-            .when(split, |this| {
-                this.group_hover(target.label(), move |style| style.bg(hover_fill))
-            })
-            .when(!split, |this| this.hover(move |style| style.bg(hover_fill)))
-            .active(move |style| style.bg(theme.tile_selected_hover_bg()))
+            .when(split, |this| this.rounded_l(px(9.)))
+            .when(!split, |this| this.rounded(px(9.)))
+            .hover(move |style| style.bg(capture_hover_fill(theme, selected)))
+            .active(move |style| style.bg(capture_press_fill(theme, selected)))
             .on_click(cx.listener(move |this, _, _window, cx| {
                 // `toggleTargetMode`: clicking the armed tile again is a
                 // cancel, which takes the overlays down with it.
@@ -5987,12 +6052,21 @@ impl MainWindow {
             .pr(px(6.))
             .w_full()
             .h(px(DEVICE_ROW_HEIGHT))
-            .rounded(px(8.))
-            .border_1()
-            .border_color(theme.body_border(6))
-            .bg(theme.body_fill(2))
+            .rounded(px(10.))
+            .map(|this| glass_button(this, theme, false))
             .cursor_default()
             .overflow_hidden()
+            .child(
+                div()
+                    .id(SharedString::from(format!("{id}-hover")))
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full()
+                    .rounded(px(9.))
+                    .group_hover(id, move |style| style.bg(capture_hover_fill(theme, false)))
+                    .group_active(id, move |style| style.bg(capture_press_fill(theme, false))),
+            )
             .when(menu == Some(DeviceMenu::Microphone), |this| {
                 this.child(
                     self.microphone_level.clone().cached(
@@ -6046,13 +6120,7 @@ impl MainWindow {
                         }
                     })),
             )
-            // `hover:border-gray-8` is not one of the classes theme.css remaps, so
-            // the border keeps its Radix step under the material.
-            .hover(|style| {
-                style
-                    .bg(theme.body_hover_fill(4))
-                    .border_color(theme.gray_8)
-            })
+            .group(id)
     }
 }
 

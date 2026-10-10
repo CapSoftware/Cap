@@ -59,24 +59,14 @@ impl MicrophoneLevel {
 
     pub(crate) fn snapshot(fill: f32, color: Hsla) -> gpui::Div {
         let mut background = color;
-        background.a *= 0.1;
+        background.a *= 0.14;
         div().size_full().when(fill > 0., |this| {
             this.child(
                 div()
-                    .relative()
                     .h_full()
                     .w(gpui::relative(fill))
-                    .rounded(px(7.))
-                    .bg(background)
-                    .child(
-                        div()
-                            .absolute()
-                            .bottom_0()
-                            .left_0()
-                            .w_full()
-                            .h(px(2.))
-                            .bg(color),
-                    ),
+                    .rounded(px(10.))
+                    .bg(background),
             )
         })
     }

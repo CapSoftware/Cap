@@ -583,7 +583,7 @@ impl Render for TeleprompterWindow {
             .when_some(theme.teleprompter_shell_border(), |this, color| {
                 this.border_1().border_color(color)
             })
-            .font_family("Geist")
+            .font_family(crate::theme::UI_FONT)
             // `body { font-weight: 500 }` (`ui-solid/src/main.css:189-192`).
             .font_weight(FontWeight::MEDIUM)
             .text_color(Hsla::from(theme.gray_12))

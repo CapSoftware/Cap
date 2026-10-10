@@ -1638,6 +1638,7 @@ impl EditorWindow {
         let (send, receive) = flume::bounded(1);
         let worker = std::thread::Builder::new()
             .name("cap-editor-import".to_string())
+            .stack_size(crate::MEDIA_THREAD_STACK_SIZE)
             .spawn(move || {
                 let result = PreparedMp4Import::prepare(
                     &target,

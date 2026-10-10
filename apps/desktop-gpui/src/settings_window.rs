@@ -155,10 +155,12 @@ impl Page {
     /// for the main window's screenshots button.
     fn icon(self) -> &'static str {
         match self {
-            Self::General | Self::Experimental => "icons/settings.svg",
+            Self::General => "icons/settings.svg",
+            Self::Experimental => "icons/settings-2.svg",
             Self::Shortcuts => "icons/hotkeys.svg",
             Self::Cli => "icons/terminal.svg",
-            Self::Recordings | Self::Quality => "icons/square-play.svg",
+            Self::Quality => "icons/gauge.svg",
+            Self::Recordings => "icons/square-play.svg",
             Self::Screenshots => "icons/image.svg",
             Self::Automations => "icons/zap.svg",
             Self::Transcription => "icons/captions.svg",
@@ -235,37 +237,33 @@ const STUDIO_QUALITY_TIERS: &[(StudioQuality, &str, &str)] = &[
     (
         StudioQuality::Balanced,
         "Balanced",
-        "Clear, detailed recordings with a practical file size. Best for everyday use.",
+        "Sharp detail at a sensible file size. Right for most recordings.",
     ),
     (
         StudioQuality::Compatibility,
         "Smaller files",
-        "Uses less disk space. Can reduce detail, especially when recording with a camera.",
+        "Saves disk space. Fine detail can soften, most of all on camera.",
     ),
     (
         StudioQuality::Ultra,
         "Maximum detail",
-        "Preserves more detail for demanding edits. Creates larger files and needs more disk space.",
+        "Keeps the most detail for heavy editing. Uses the most disk space.",
     ),
 ];
 
 const INSTANT_RESOLUTION_TIERS: &[(u32, &str, &str)] = &[
-    (1280, "720p", "Smaller uploads. Good for quick updates."),
     (
-        1920,
-        "1080p",
-        "Clear text and a practical upload size. Recommended with Cap Pro.",
+        1280,
+        "720p",
+        "Smallest uploads, so links are ready fastest.",
     ),
+    (1920, "1080p", "Sharp text at a practical upload size."),
     (
         2560,
         "1440p",
-        "More detail for larger screens. Takes longer to upload.",
+        "Extra detail for large, high-resolution screens.",
     ),
-    (
-        3840,
-        "4K",
-        "The most detail and largest uploads. Best with a fast connection.",
-    ),
+    (3840, "4K", "The most detail. Best on a fast connection."),
 ];
 
 /// `FREE_INSTANT_MODE_MAX_RESOLUTION`.
@@ -1572,9 +1570,8 @@ impl Render for SettingsWindow {
             .rounded(px(theme
                 .settings_window_radius()
                 .min(SETTINGS_MATERIAL_RADIUS as f32)))
-            .font_family("Geist")
-            // `body { font-weight: 500 }` (`ui-solid/src/main.css:189-192`).
-            .font_weight(FontWeight::MEDIUM)
+            .font_family(crate::theme::UI_FONT)
+            .font_weight(FontWeight::NORMAL)
             .text_color(theme.settings_text());
 
         #[cfg(target_os = "windows")]
@@ -1754,7 +1751,7 @@ impl SettingsWindow {
             //  var(--sidebar-padding-x); overflow-y: auto }`, `space-y-1`.
             .px(px(SIDEBAR_PADDING_X))
             .pb(px(SIDEBAR_PADDING_X))
-            .gap(px(4.))
+            .gap(px(2.))
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
@@ -1767,16 +1764,17 @@ impl SettingsWindow {
                     .items_center()
                     // `.cap-settings-nav-item { height: 32px; padding: 6px;
                     //  border-radius: 8px }`, `gap-1.5 text-[13px]`.
-                    .h(px(32.))
+                    .h(px(30.))
                     .px(px(6.))
-                    .gap(px(6.))
+                    .gap(px(8.))
                     .rounded(px(8.))
                     .text_size(px(13.))
                     .when(selected, |this| {
-                        // `.cap-settings-nav-item.bg-gray-5 { background:
-                        //  var(--macos-settings-selection) }`, and the
-                        //  `activeClass` also carries `pointer-events-none`.
-                        this.bg(theme.settings_selection())
+                        this.bg(Theme::with_alpha(
+                            rgb(Theme::SETTINGS_ACCENT),
+                            if theme.is_dark() { 0.22 } else { 0.12 },
+                        ))
+                        .font_weight(FontWeight::MEDIUM)
                     })
                     .when(!selected, |this| {
                         this.hover(|style| style.bg(theme.settings_hover()))
@@ -1787,8 +1785,6 @@ impl SettingsWindow {
                             .size(px(16.))
                             .flex_shrink_0()
                             .text_color(if selected {
-                                // `.cap-settings-nav-item.bg-gray-5 svg
-                                //  { color: var(--macos-settings-accent) }`
                                 rgb(Theme::SETTINGS_ACCENT).into()
                             } else {
                                 theme.settings_muted()
@@ -3112,7 +3108,8 @@ impl SettingsWindow {
             return;
         };
         self.has_cap_pro = store::auth_snapshot().is_upgraded();
-        if !self.has_cap_pro && resolution != FREE_INSTANT_MODE_MAX_RESOLUTION {
+        if self.instant_resolution_locked(resolution) {
+            cx.open_url(crate::auth::PRICING_URL);
             cx.notify();
             return;
         }
@@ -3131,13 +3128,6 @@ impl SettingsWindow {
 
     fn render_recording_quality(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
         vec![
-            self.section(
-                "Recording quality",
-                Some("Choose how new recordings look and how much space they use."),
-                None,
-                vec![],
-            )
-            .into_any_element(),
             self.render_studio_quality(cx).into_any_element(),
             self.render_instant_quality(cx).into_any_element(),
             self.section(
@@ -3173,40 +3163,76 @@ impl SettingsWindow {
         ]
     }
 
-    fn render_instant_quality(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = self.theme;
-        let effective = if self.has_cap_pro {
+    fn effective_instant_resolution(&self) -> u32 {
+        if self.has_cap_pro {
             self.settings.instant_mode_max_resolution
         } else {
             FREE_INSTANT_MODE_MAX_RESOLUTION
-        };
+        }
+    }
+
+    fn instant_resolution_locked(&self, resolution: u32) -> bool {
+        !self.has_cap_pro && resolution > FREE_INSTANT_MODE_MAX_RESOLUTION
+    }
+
+    fn render_instant_quality(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+        let effective = self.effective_instant_resolution();
         let summary = INSTANT_RESOLUTION_TIERS
             .iter()
             .find(|(value, _, _)| *value == effective)
             .map(|(_, _, summary)| *summary)
             .unwrap_or_default();
-        let body = self.card(true).child(
-            div().id("settings-instant-quality").anchor_scroll(Some(self.instant_quality_anchor.clone()))
-                .flex().flex_col().gap(px(12.))
-                .child(div().text_size(px(13.)).font_weight(FontWeight::MEDIUM).child("Maximum resolution"))
-                .child(self.segmented_raw("instant-resolution", INSTANT_RESOLUTION_TIERS.iter().map(|(value, label, _)| {
-                    let locked = !self.has_cap_pro && *value > FREE_INSTANT_MODE_MAX_RESOLUTION;
-                    ui::SegmentOption::new(if locked { format!("{label} · Pro") } else { (*label).to_string() }, *value == effective).disabled(locked)
-                }).collect(), cx, |this, index, cx| this.select_instant_resolution(index, cx)))
-                .child(div().text_size(px(12.)).line_height(px(18.)).text_color(theme.settings_muted()).child(format!("{summary} Resolution is limited by the screen or area you record.")))
-                .when(!self.has_cap_pro, |this| this.child(
-                    div().flex().flex_col().items_start().gap(px(12.)).pt(px(12.)).border_t_1().border_color(theme.settings_border())
-                        .child(div().text_size(px(12.)).line_height(px(18.)).child("720p is included. Cap Pro unlocks 1080p, 1440p and 4K for Instant recordings."))
-                        .child(ui::Button::settings(&theme, "instant-quality-pricing", ui::ButtonVariant::Gray, ui::ButtonSize::Sm)
-                            .label("View plans ↗").on_click(|_, _, cx| cx.open_url(crate::auth::PRICING_URL)))
-                ))
-                .when_some(self.instant_quality_notice, |this, _| this.child(div().text_size(px(12.)).text_color(Hsla::from(theme.amber_11)).child("Couldn't save your recording settings. Please try again."))),
-        );
+        let description = if self.has_cap_pro {
+            summary.to_string()
+        } else {
+            "720p on the free plan. Cap Pro records up to 4K.".to_string()
+        };
+
+        let options = INSTANT_RESOLUTION_TIERS
+            .iter()
+            .map(|(value, label, _)| {
+                let mut option = ui::SegmentOption::new(*label, *value == effective);
+                if self.instant_resolution_locked(*value) {
+                    option.icon = Some("icons/lock.svg".into());
+                }
+                option
+            })
+            .collect();
+
+        let resolution = div()
+            .id("settings-instant-quality")
+            .anchor_scroll(Some(self.instant_quality_anchor.clone()))
+            .child(
+                ui::SettingRow::settings(
+                    &theme,
+                    "Maximum resolution",
+                    None,
+                    self.segmented_raw("instant-resolution", options, cx, |this, index, cx| {
+                        this.select_instant_resolution(index, cx)
+                    })
+                    .into_any_element(),
+                )
+                .description(description),
+            );
+
+        let mut rows = vec![resolution.into_any_element()];
+        if let Some(InstantQualityNotice::SaveFailed) = self.instant_quality_notice {
+            rows.push(
+                div()
+                    .p(px(12.))
+                    .text_size(px(12.))
+                    .text_color(Hsla::from(theme.amber_11))
+                    .child("Couldn't save your recording settings. Please try again.")
+                    .into_any_element(),
+            );
+        }
+
         self.section(
-            "Instant",
-            Some("Uploads while you record, so your share link is ready when you stop."),
+            "Instant recordings",
+            Some("Uploaded while you record, so the link is ready the moment you stop."),
             None,
-            vec![body.into_any_element()],
+            vec![self.rows(rows).into_any_element()],
         )
     }
 
@@ -3222,41 +3248,138 @@ impl SettingsWindow {
         cx.notify();
     }
 
+    fn radio_dot(&self, checked: bool) -> gpui::Div {
+        let theme = self.theme;
+        let accent: Hsla = rgb(Theme::SETTINGS_ACCENT).into();
+        div()
+            .size(px(16.))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded_full()
+            .when(checked, |this| {
+                this.bg(accent)
+                    .child(div().size(px(6.)).rounded_full().bg(gpui::white()))
+            })
+            .when(!checked, |this| {
+                this.border_1()
+                    .border_color(theme.settings_border())
+                    .group_hover("studio-quality-option", |style| {
+                        style.border_color(theme.settings_muted())
+                    })
+                    .bg(if theme.is_dark() {
+                        gpui::hsla(0., 0., 1., 0.1)
+                    } else {
+                        gpui::white()
+                    })
+                    .shadow(vec![gpui::BoxShadow {
+                        color: gpui::hsla(0., 0., 0., 0.12),
+                        offset: gpui::point(px(0.), px(0.5)),
+                        blur_radius: px(1.),
+                        spread_radius: px(0.),
+                        inset: false,
+                    }])
+            })
+    }
+
     fn render_studio_quality(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let current = self.settings.studio_recording_quality;
-        let body = self.card(true).child(
-            div().id("settings-studio-quality").anchor_scroll(Some(self.studio_quality_anchor.clone()))
-                .flex().flex_col().gap(px(8.))
-                .children(STUDIO_QUALITY_TIERS.iter().copied().map(|(quality, label, description)| {
-                    let selected = current == quality;
-                    div().id(SharedString::from(format!("studio-quality-{}", quality.as_json())))
-                        .tab_index(0).aria_label(label).aria_description(description).aria_selected(selected)
-                        .cursor_pointer().flex().flex_col().gap(px(4.)).p(px(12.)).rounded(px(8.))
-                        .border_1().border_color(if selected { Hsla::from(theme.blue_9) } else { theme.settings_border() })
-                        .bg(if selected { theme.settings_selection() } else { theme.settings_card_bg() })
-                        .hover(|style| style.bg(theme.settings_fill()))
-                        .child(div().flex().items_center().gap(px(8.))
-                            .child(div().text_size(px(13.)).font_weight(FontWeight::MEDIUM).child(label))
-                            .when(quality == StudioQuality::Balanced, |this| this.child(div().text_size(px(10.)).text_color(Hsla::from(theme.blue_11)).child("Recommended")))
-                            .when(selected, |this| this.child(div().text_size(px(12.)).text_color(Hsla::from(theme.blue_11)).child("✓"))))
-                        .child(div().text_size(px(12.)).line_height(px(18.)).text_color(theme.settings_muted()).child(description))
-                        .on_click(cx.listener(move |this, _, _, cx| {
+
+        let mut rows: Vec<gpui::AnyElement> = STUDIO_QUALITY_TIERS
+            .iter()
+            .copied()
+            .map(|(quality, label, description)| {
+                let selected = current == quality;
+                div()
+                    .id(SharedString::from(format!(
+                        "studio-quality-{}",
+                        quality.as_json()
+                    )))
+                    .tab_index(0)
+                    .aria_label(label)
+                    .aria_description(description)
+                    .aria_selected(selected)
+                    .cursor_pointer()
+                    .flex()
+                    .items_start()
+                    .gap(px(10.))
+                    .p(px(12.))
+                    .group("studio-quality-option")
+                    .child(div().mt(px(1.)).child(self.radio_dot(selected)))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .min_w_0()
+                            .gap(px(2.))
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(6.))
+                                    .child(div().text_size(px(13.)).child(label))
+                                    .when(quality == StudioQuality::Balanced, |this| {
+                                        this.child(
+                                            div()
+                                                .px(px(6.))
+                                                .py(px(1.))
+                                                .rounded(px(4.))
+                                                .bg(theme.settings_fill())
+                                                .text_size(px(11.))
+                                                .text_color(theme.settings_muted())
+                                                .child("Recommended"),
+                                        )
+                                    }),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .line_height(px(16.))
+                                    .text_color(theme.settings_muted())
+                                    .child(description),
+                            ),
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.select_studio_quality(quality, cx);
+                    }))
+                    .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
+                        if event.keystroke.modifiers == Default::default()
+                            && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                        {
                             this.select_studio_quality(quality, cx);
-                        }))
-                        .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
-                            if event.keystroke.modifiers == Default::default()
-                                && matches!(event.keystroke.key.as_str(), "enter" | "space")
-                            {
-                                this.select_studio_quality(quality, cx);
-                                cx.stop_propagation();
-                            }
-                        }))
-                }))
-                .when(self.studio_quality_save_failed, |this| this.child(div().text_size(px(12.)).line_height(px(18.)).text_color(Hsla::from(theme.amber_11)).child("Couldn't save your recording settings. Please try again.")))
-                .child(div().mt(px(4.)).text_size(px(12.)).line_height(px(18.)).text_color(theme.settings_muted()).child("These options affect the original recording. Choose your final export resolution and file size in the editor.")),
-        );
-        self.section("Studio", Some("Saved to your computer, ready to edit. All three quality options are available on every plan."), None, vec![body.into_any_element()])
+                            cx.stop_propagation();
+                        }
+                    }))
+                    .into_any_element()
+            })
+            .collect();
+
+        if self.studio_quality_save_failed {
+            rows.push(
+                div()
+                    .p(px(12.))
+                    .text_size(px(12.))
+                    .text_color(Hsla::from(theme.amber_11))
+                    .child("Couldn't save your recording settings. Please try again.")
+                    .into_any_element(),
+            );
+        }
+
+        self.section(
+            "Studio recordings",
+            Some("Saved to your computer for editing. You choose the export size later, in the editor."),
+            None,
+            vec![
+                div()
+                    .id("settings-studio-quality")
+                    .anchor_scroll(Some(self.studio_quality_anchor.clone()))
+                    .child(self.rows(rows))
+                    .into_any_element(),
+            ],
+        )
     }
 
     /// The Recording card: thirteen rows, in TSX order.

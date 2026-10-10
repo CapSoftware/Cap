@@ -307,6 +307,7 @@ fn start_instant_upload_with_ownership(
         bridge = Some(
             std::thread::Builder::new()
                 .name("gpui-instant-segments".to_string())
+                .stack_size(crate::MEDIA_THREAD_STACK_SIZE)
                 .spawn(move || {
                     while !bridge_cancel.load(Ordering::Acquire) && !events_tx.is_disconnected() {
                         match segment_rx.recv_timeout(Duration::from_millis(20)) {
