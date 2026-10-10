@@ -38,14 +38,24 @@ export const useMediaRecorderSetup = () => {
 	);
 
 	const replaceLocalRecording = useCallback(
-		(chunks: Blob[], strategy: LocalRecordingStrategy) => {
+		(
+			chunks: Blob[],
+			strategy: LocalRecordingStrategy,
+			alreadyOverflowed = false,
+		) => {
 			localRecordingStrategyRef.current = strategy;
-			recordedChunksRef.current = chunks.filter((chunk) => chunk.size > 0);
-			retainedRecordingBytesRef.current = recordedChunksRef.current.reduce(
+			const retainedChunks = chunks.filter((chunk) => chunk.size > 0);
+			const retainedBytes = retainedChunks.reduce(
 				(total, chunk) => total + chunk.size,
 				0,
 			);
-			localRecordingOverflowedRef.current = false;
+			const overflowed =
+				alreadyOverflowed ||
+				(strategy.mode === "capped" && retainedBytes > strategy.maxBytes);
+			recordedChunksRef.current = overflowed ? [] : retainedChunks;
+			retainedRecordingBytesRef.current = overflowed ? 0 : retainedBytes;
+			localRecordingOverflowedRef.current = overflowed;
+			return overflowed;
 		},
 		[],
 	);
@@ -71,9 +81,11 @@ export const useMediaRecorderSetup = () => {
 
 	const onRecorderDataAvailable = useCallback(
 		(event: BlobEvent, onChunk?: (chunk: Blob, totalBytes: number) => void) => {
-			if (event.target && event.target !== mediaRecorderRef.current) return;
+			if (event.target && event.target !== mediaRecorderRef.current)
+				return false;
 			if (event.data && event.data.size > 0) {
 				totalRecordedBytesRef.current += event.data.size;
+				const wasOverflowed = localRecordingOverflowedRef.current;
 				const nextState = appendLocalRecordingChunk(
 					{
 						chunks: recordedChunksRef.current,
@@ -87,7 +99,9 @@ export const useMediaRecorderSetup = () => {
 				retainedRecordingBytesRef.current = nextState.retainedBytes;
 				localRecordingOverflowedRef.current = nextState.overflowed;
 				onChunk?.(event.data, totalRecordedBytesRef.current);
+				return !wasOverflowed && nextState.overflowed;
 			}
+			return false;
 		},
 		[],
 	);
@@ -223,6 +237,7 @@ export const useMediaRecorderSetup = () => {
 		getRecoveryBlob,
 		recordedChunksRef,
 		totalRecordedBytesRef,
+		localRecordingOverflowedRef,
 		setLocalRecordingStrategy,
 		replaceLocalRecording,
 		appendToLocalRecording,

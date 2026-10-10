@@ -58,6 +58,14 @@ const deploymentHostnames = (): string[] => {
 	}
 };
 
+/** Whether this request came in on one of Cap's own hosts, not a custom domain. */
+export const isDefaultShareRequest = (headersList: Headers) =>
+	isDefaultShareHostname(
+		requestShareHostname(headersList),
+		buildEnv.NEXT_PUBLIC_WEB_URL,
+		deploymentHostnames(),
+	);
+
 /**
  * Slack drops the preview image when `og:url` names a different host than the
  * link it unfurls, so a share page on a verified custom domain has to advertise

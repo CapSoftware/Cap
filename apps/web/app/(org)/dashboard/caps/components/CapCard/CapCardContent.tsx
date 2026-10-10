@@ -217,6 +217,7 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 						<p
 							className="text-sm truncate text-gray-10 cursor-pointer flex items-center h-full leading-[1.5rem]"
 							onClick={handleDateClick}
+							suppressHydrationWarning
 						>
 							{showFullDate
 								? moment(effectiveDate).format("YYYY-MM-DD HH:mm:ss")

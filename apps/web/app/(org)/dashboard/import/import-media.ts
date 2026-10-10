@@ -13,18 +13,36 @@ import {
 	isSupportedVideoFile,
 } from "./media-file-types";
 
-export { isSupportedMediaFile } from "./media-file-types";
+export {
+	isSupportedEditorFile,
+	isSupportedMediaFile,
+} from "./media-file-types";
 
 export async function importMediaFile({
 	file,
 	folderId,
 	orgId,
 	setUploadStatus,
+	onVideoCreated,
+	quiet = false,
+	name,
+	audioOnly = false,
+	openInEditor = false,
 }: {
 	file: File;
 	folderId?: Folder.FolderId;
 	orgId: Organisation.OrganisationId;
 	setUploadStatus: (state: UploadStatus | undefined) => void;
+	/** Called with the new Cap's id as soon as its record exists. */
+	onVideoCreated?: (videoId: string) => void;
+	/** Skip the "processing in the background" toast when the caller opens it. */
+	quiet?: boolean;
+	/** Title for the new Cap instead of the dated default. */
+	name?: string;
+	/** The video wraps an audio file, which the editor shows as a waveform. */
+	audioOnly?: boolean;
+	/** The editor opens next and reads the upload itself when it can. */
+	openInEditor?: boolean;
 }) {
 	const imageContentType = getSupportedImageContentType(file);
 
@@ -44,6 +62,10 @@ export async function importMediaFile({
 			folderId,
 			orgId,
 			setUploadStatus,
+			onVideoCreated,
+			quiet,
+			{ name, audioOnly },
+			openInEditor,
 		);
 	}
 
@@ -116,15 +138,25 @@ async function uploadVideoForServerProcessing(
 	folderId: Folder.FolderId | undefined,
 	orgId: Organisation.OrganisationId,
 	setUploadStatus: (state: UploadStatus | undefined) => void,
+	onVideoCreated?: (videoId: string) => void,
+	quiet = false,
+	details: { name?: string; audioOnly?: boolean } = {},
+	openInEditor = false,
 ) {
+	const editorSource = openInEditor
+		? import("@/lib/import-editor-probe")
+				.then(({ probeImportEditorSource }) => probeImportEditorSource(file))
+				.catch(() => null)
+		: Promise.resolve(null);
 	try {
 		setUploadStatus({ status: "parsing" });
 
 		let duration: number | undefined;
 		let resolution: string | undefined;
 
+		let parser: typeof import("@remotion/media-parser") | undefined;
 		try {
-			const parser = await import("@remotion/media-parser");
+			parser = await import("@remotion/media-parser");
 			const metadata = await parser.parseMedia({
 				src: file,
 				fields: {
@@ -140,6 +172,21 @@ async function uploadVideoForServerProcessing(
 				? `${metadata.dimensions.width}x${metadata.dimensions.height}`
 				: undefined;
 		} catch (parseError) {
+			// These containers always parse when intact, so a file that doesn't
+			// would only fail in processing after the whole upload.
+			if (
+				parser &&
+				/\.(mp4|m4v|mov|webm|mkv|avi)$/i.test(file.name) &&
+				(parseError instanceof parser.IsAnUnsupportedFileTypeError ||
+					parseError instanceof parser.IsAPdfError ||
+					parseError instanceof parser.IsAnImageError)
+			) {
+				toast.error(
+					"That file couldn't be read as a video. Try exporting it again as an MP4.",
+				);
+				setUploadStatus(undefined);
+				return false;
+			}
 			console.warn(
 				"Failed to parse video metadata, continuing without it:",
 				parseError,
@@ -152,9 +199,11 @@ async function uploadVideoForServerProcessing(
 			resolution,
 			folderId,
 			orgId,
+			...details,
 		});
 
 		const uploadId = videoData.id;
+		onVideoCreated?.(uploadId);
 
 		setUploadStatus({
 			status: "uploadingVideo",
@@ -244,7 +293,7 @@ async function uploadVideoForServerProcessing(
 		}
 		progressTracker.cleanup();
 		const total = progressTracker.getTotal() || file.size || 1;
-		await sendProgressUpdate(uploadId, total, total);
+		const progressSent = sendProgressUpdate(uploadId, total, total);
 
 		setUploadStatus({
 			status: "serverProcessing",
@@ -256,7 +305,9 @@ async function uploadVideoForServerProcessing(
 				videoId: uploadId,
 				rawFileKey: videoData.rawFileKey,
 				bucketId: videoData.bucketId,
+				editorSource: await editorSource,
 			});
+			await progressSent;
 		} catch (triggerError) {
 			console.error("Failed to trigger processing:", triggerError);
 			toast.error("Failed to start video processing. Please try again.");
@@ -265,9 +316,11 @@ async function uploadVideoForServerProcessing(
 		}
 
 		setUploadStatus(undefined);
-		toast.success(
-			"Video uploaded! Processing will continue in the background.",
-		);
+		if (!quiet) {
+			toast.success(
+				"Video uploaded! Processing will continue in the background.",
+			);
+		}
 		return true;
 	} catch (err) {
 		console.error("Video upload failed", err);

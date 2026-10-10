@@ -7,6 +7,9 @@ const FIXTURES_DIR = join(import.meta.dir, "..", "fixtures");
 const TEST_VIDEO_WITH_AUDIO_PATH = join(FIXTURES_DIR, "test-with-audio.mp4");
 const TEST_VIDEO_WITH_AUDIO = `file://${join(FIXTURES_DIR, "test-with-audio.mp4")}`;
 const TEST_VIDEO_NO_AUDIO = `file://${join(FIXTURES_DIR, "test-no-audio.mp4")}`;
+// Fragmented, with each track declaring a single frame, as the browser
+// recorder's muxer writes it. The video is six seconds long.
+const TEST_VIDEO_FRAGMENTED = `file://${join(FIXTURES_DIR, "test-fragmented.mp4")}`;
 
 async function expectRejected(promise: Promise<unknown>): Promise<void> {
 	let rejected = false;
@@ -20,6 +23,12 @@ async function expectRejected(promise: Promise<unknown>): Promise<void> {
 
 describe("mediaProbe integration tests", () => {
 	describe("probeVideo", () => {
+		test("measures a fragmented MP4 to its end, not its declared length", async () => {
+			const metadata = await probeVideo(TEST_VIDEO_FRAGMENTED);
+
+			expect(metadata.duration).toBeCloseTo(6.07, 1);
+		});
+
 		test("extracts metadata from video with audio", async () => {
 			const metadata = await probeVideo(TEST_VIDEO_WITH_AUDIO);
 

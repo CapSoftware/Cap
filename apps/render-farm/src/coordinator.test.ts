@@ -6,9 +6,10 @@ import {
 	timingSafeEqual,
 } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { ANNEX_B_PARAMETER_SETS } from "./boxes.test-util";
+import { ANNEX_B_PARAMETER_SETS, fragmentedRecording } from "./boxes.test-util";
 import type { Job, TaskState } from "./coordinator";
 import * as fmp4 from "./fmp4";
+import * as fragmentIndex from "./fragment-index";
 import * as hls from "./hls";
 import * as mp4 from "./mp4";
 import * as planning from "./planning";
@@ -152,6 +153,7 @@ function harness(env: Record<string, string> = {}) {
 		createHmac,
 		...validate,
 		...fmp4,
+		...fragmentIndex,
 		...hls,
 		...mp4,
 		...planning,
@@ -168,6 +170,12 @@ function harness(env: Record<string, string> = {}) {
 		mediaS3ConfigFromEnv: () => ({}),
 		ProbeEngine: class {},
 		Engine: class {},
+		prepareSupport: () => new Promise(() => {}),
+		prepareRecording: async () => false,
+		builtinPath: () => null,
+		builtinSize: () => {
+			throw new Error("no built-in assets in tests");
+		},
 		process: {
 			env: {
 				RF_TOKEN: "test",
@@ -618,6 +626,26 @@ describe("assembly", () => {
 		await expect(h.onVideoDone(j, state, padded)).rejects.toThrow("add up");
 		expect(j.videoResults.size).toBe(0);
 	});
+
+	test("a result whose stash was never stored is refused", async () => {
+		const h = harness();
+		const j = job();
+		const state = videoState(j);
+		const lost = stored(h, j, 0, 220_000, 1);
+		h.objects.delete(lost.stash.key);
+		await expect(h.onVideoDone(j, state, lost)).rejects.toThrow(
+			"is not stored",
+		);
+		expect(j.videoResults.size).toBe(0);
+		expect(state.state).toBe("running");
+		h.objects.set(lost.stash.key, new Uint8Array(lost.stash.bytes - 1));
+		await expect(h.onVideoDone(j, state, lost)).rejects.toThrow(
+			"is not stored",
+		);
+		h.objects.set(lost.stash.key, new Uint8Array(lost.stash.bytes));
+		await h.onVideoDone(j, state, lost);
+		expect(j.videoResults.size).toBe(1);
+	});
 });
 
 describe("coordinator recovery", () => {
@@ -694,8 +722,10 @@ describe("coordinator recovery", () => {
 		h.gate(gate.promise);
 		const first = result(original);
 		const second = result(hedge);
+		h.objects.set(first.stash.key, new Uint8Array(first.stash.bytes));
 		const accepted = h.onVideoDone(j, original, first);
 		const duplicate = h.onVideoDone(j, hedge, second);
+		await Bun.sleep(0);
 		expect(j.videoResults.size).toBe(0);
 		expect(h.writes).toEqual(["jobs/job/v/0.json"]);
 		gate.resolve();
@@ -907,6 +937,141 @@ function call(
 		}),
 	);
 }
+
+describe("cursor jobs", () => {
+	const request = {
+		sourceRoot: "owner/video/",
+		source: "owner/video/raw-upload.webm",
+		outputPrefix: "owner/video/.recording/cursor/run1/",
+		callbackUrl: "https://app.cap.test/api/render-farm/callback",
+		reference: "cursor:video",
+	};
+	const display = `${request.outputPrefix}display.mp4`;
+	const inputEvents = `${request.outputPrefix}input-events.ndjson`;
+
+	test("are queued once, wait for chunk work and settle with a signed callback", async () => {
+		const h = harness();
+		const created = (await (await call(h, "/cursor-jobs", request)).json()) as {
+			id: string;
+			status: string;
+		};
+		expect(created).toMatchObject({ status: "queued", display, inputEvents });
+		const again = (await (await call(h, "/cursor-jobs", request)).json()) as {
+			id: string;
+		};
+		expect(again.id).toBe(created.id);
+		const work = (await (
+			await call(h, "/work", {
+				worker: "gpu-a",
+				slots: 1,
+				cpus: 8,
+				kinds: ["video"],
+			})
+		).json()) as { task: protocol.CursorTask };
+		expect(work.task).toMatchObject({
+			kind: "cursor",
+			source: request.source,
+			outputPrefix: request.outputPrefix,
+			attempt: 1,
+		});
+		await call(h, "/heartbeat", {
+			worker: "gpu-a",
+			slots: 1,
+			cpus: 8,
+			running: [
+				{
+					taskId: work.task.taskId,
+					attempt: 1,
+					frames: 420,
+					total: 1000,
+					elapsedMs: 10,
+				},
+			],
+		});
+		expect(
+			await (await call(h, `/cursor-jobs/${created.id}`)).json(),
+		).toMatchObject({ status: "running", progress: 0.42 });
+		const done = `/cursor-jobs/${created.id}/done`;
+		const report = { worker: "gpu-a", attempt: 1 };
+		expect((await call(h, done, { ...report, worker: "gpu-b" })).status).toBe(
+			409,
+		);
+		h.objects.set(display, new Uint8Array(10));
+		expect((await call(h, done, report)).status).toBe(409);
+		h.objects.set(inputEvents, new Uint8Array(10));
+		expect((await call(h, done, report)).status).toBe(200);
+		expect(
+			await (await call(h, `/cursor-jobs/${created.id}`)).json(),
+		).toMatchObject({
+			status: "ready",
+			progress: 1,
+			bytes: { display: 10, inputEvents: 10 },
+		});
+		const callback = h.callbacks.find(
+			(entry) => entry.url === request.callbackUrl,
+		);
+		const body = String(callback?.init.body);
+		expect(JSON.parse(body)).toMatchObject({
+			id: created.id,
+			reference: request.reference,
+			status: "ready",
+			display,
+			inputEvents,
+		});
+		const signature = createHmac("sha256", "test").update(body).digest("hex");
+		expect(
+			(callback?.init.headers as Record<string, string>)[
+				"x-render-farm-signature"
+			],
+		).toBe(`sha256=${signature}`);
+	});
+
+	test("a failed dispatch is retried once after a backoff, then reported as an error", async () => {
+		const h = harness();
+		const created = (await (await call(h, "/cursor-jobs", request)).json()) as {
+			id: string;
+		};
+		for (const attempt of [1, 2]) {
+			const work = (await (
+				await call(h, "/work", { worker: "gpu-a", slots: 1, cpus: 8 })
+			).json()) as { task: protocol.CursorTask };
+			expect(work.task.attempt).toBe(attempt);
+			await call(h, `/cursor-jobs/${created.id}/fail`, {
+				worker: "gpu-a",
+				attempt,
+				error: "service exited 1",
+			});
+			if (attempt === 1) {
+				expect(
+					await (await call(h, `/cursor-jobs/${created.id}`)).json(),
+				).toMatchObject({ status: "queued" });
+				await Bun.sleep(2100);
+			}
+		}
+		expect(
+			await (await call(h, `/cursor-jobs/${created.id}`)).json(),
+		).toMatchObject({ status: "error", error: "service exited 1" });
+		const callback = h.callbacks.find(
+			(entry) => entry.url === request.callbackUrl,
+		);
+		expect(JSON.parse(String(callback?.init.body))).toMatchObject({
+			status: "error",
+		});
+	}, 10_000);
+
+	test("reject sources and outputs outside the recording folder", async () => {
+		const h = harness();
+		for (const invalid of [
+			{ ...request, source: "other/video/raw-upload.webm" },
+			{ ...request, outputPrefix: "other/video/cursor/" },
+			{ ...request, outputPrefix: "owner/video/.recording/cursor/run1" },
+			{ ...request, outputPrefix: "owner/video/" },
+			{ ...request, callbackUrl: "https://evil.example/callback" },
+		]) {
+			expect((await call(h, "/cursor-jobs", invalid)).status).toBe(400);
+		}
+	});
+});
 
 describe("transcodes", () => {
 	const request = {
@@ -1143,6 +1308,307 @@ describe("transcodes", () => {
 		]) {
 			expect((await call(h, "/transcodes", body)).status).toBe(400);
 		}
+	});
+});
+
+describe("placements", () => {
+	const root = "owner/video/";
+	const source = `${root}raw-upload.mp4`;
+	const output = `${root}.recording/render/sources/display.mp4`;
+	const prefixKey = `${root}.recording/render/sources/display.prefix-v1`;
+	let folder = 0;
+
+	function project(h: ReturnType<typeof harness>) {
+		const prefix = `${root}.recording/render/${folder++}/project`;
+		h.objects.set(
+			`${prefix}/recording-meta.json`,
+			new TextEncoder().encode("{}"),
+		);
+		h.objects.set(
+			`${prefix}/manifest.json`,
+			new TextEncoder().encode(
+				JSON.stringify({
+					files: [
+						{ path: "recording-meta.json", size: 2 },
+						{ path: "display.mp4", key: output, transcodeFrom: source },
+					],
+				}),
+			),
+		);
+		return prefix;
+	}
+
+	function worker(h: ReturnType<typeof harness>, features?: string[]) {
+		// The poll waits for work; registering is all these tests need.
+		void call(h, "/work", {
+			worker: `gpu-${features ? "new" : "old"}`,
+			slots: 1,
+			cpus: 8,
+			kinds: ["video"],
+			...(features ? { features } : {}),
+		});
+	}
+
+	const sourceReads = (h: ReturnType<typeof harness>) =>
+		h.ranges.filter((range) => range.startsWith(`${source}:`)).length;
+
+	test("a fragmented recording is read in place, with no transcode", async () => {
+		const h = harness();
+		worker(h, ["prefix"]);
+		const recording = fragmentedRecording({
+			frames: 300,
+			gop: 30,
+			audio: true,
+			mfra: true,
+		});
+		h.objects.set(source, recording.bytes);
+		const index = (await h.sourceIndex(project(h), root)) as {
+			manifest: { files: { path: string; size: number }[] };
+			mediaMeta: Map<
+				string,
+				{
+					key: string;
+					size: number;
+					prefix?: { key: string; size: number };
+					index: { sizes: Uint32Array; offsets: Float64Array };
+				}
+			>;
+		};
+		const meta = index.mediaMeta.get("display.mp4");
+		const prefix = h.objects.get(prefixKey) as Uint8Array;
+		expect(meta).toMatchObject({
+			key: source,
+			size: prefix.byteLength + recording.bytes.byteLength,
+			prefix: { key: prefixKey, size: prefix.byteLength },
+		});
+		expect(meta?.index.sizes.length).toBe(300);
+		expect(meta?.index.offsets[0]).toBeGreaterThan(prefix.byteLength);
+		expect(h.objects.has(output)).toBe(false);
+		expect(
+			await (
+				await call(h, "/transcodes", { sourceRoot: root, source, output })
+			).json(),
+		).toMatchObject({ status: "ready", placed: true });
+
+		// Another Save reuses the placement without touching the recording.
+		const reads = sourceReads(h);
+		await h.sourceIndex(project(h), root);
+		expect(sourceReads(h)).toBe(reads);
+
+		// So does a restarted coordinator, from the stored prefix.
+		const restarted = harness();
+		worker(restarted, ["prefix"]);
+		restarted.objects.set(source, recording.bytes);
+		restarted.objects.set(prefixKey, prefix);
+		const again = (await restarted.sourceIndex(
+			project(restarted),
+			root,
+		)) as typeof index;
+		expect(sourceReads(restarted)).toBe(0);
+		expect([
+			...(again.mediaMeta.get("display.mp4")?.index.offsets ?? []),
+		]).toEqual([...(meta?.index.offsets ?? [])]);
+	});
+
+	function prefixedTask(h: ReturnType<typeof harness>) {
+		const j = job();
+		h.jobs.set(j.id, j);
+		const state = videoState(j);
+		state.state = "queued";
+		state.worker = undefined;
+		state.attempts = 0;
+		(state.task as protocol.VideoTask).files = [
+			{
+				path: "display.mp4",
+				key: source,
+				size: 1100,
+				ranges: [[0, 600]],
+				prefix: { key: prefixKey, size: 100 },
+			},
+		];
+		h.queue.push(state);
+		return { j, state };
+	}
+
+	const answered = (poll: Promise<Response>) =>
+		Promise.race([
+			poll.then(() => "answered"),
+			Bun.sleep(20).then(() => "waiting"),
+		]);
+
+	test("a task with a prefix only goes to a worker that takes prefixes", async () => {
+		const h = harness();
+		// Planned while every live worker took prefixes (this one only runs
+		// audio, so it leaves the chunk queued)...
+		void call(h, "/work", {
+			worker: "gpu-new-audio",
+			slots: 1,
+			cpus: 8,
+			kinds: ["audio"],
+			features: ["prefix"],
+		});
+		const { state } = prefixedTask(h);
+		// ...then an older worker registers and asks for work.
+		const old = call(h, "/work", {
+			worker: "gpu-old",
+			slots: 1,
+			cpus: 8,
+			kinds: ["video"],
+		});
+		expect(await answered(old)).toBe("waiting");
+		expect(state.state).toBe("queued");
+		const work = (await (
+			await call(h, "/work", {
+				worker: "gpu-new",
+				slots: 1,
+				cpus: 8,
+				kinds: ["video"],
+				features: ["prefix"],
+			})
+		).json()) as { task: protocol.VideoTask };
+		expect(work.task.taskId).toBe(state.task.taskId);
+		expect(state.worker).toBe("gpu-new");
+	});
+
+	test("an older worker is not sent a hedge of a task with a prefix", async () => {
+		const h = harness();
+		const j = job();
+		h.jobs.set(j.id, j);
+		for (let index = 0; index < 3; index++) {
+			j.taskStats.push({ kind: "video", frames: 30, engineRenderMs: 1000 });
+		}
+		const original = videoState(j);
+		(original.task as protocol.VideoTask).files = [
+			{
+				path: "display.mp4",
+				key: source,
+				size: 1100,
+				ranges: [[0, 600]],
+				prefix: { key: prefixKey, size: 100 },
+			},
+		];
+		original.progress = {
+			frames: 27,
+			total: 30,
+			elapsedMs: 900,
+			at: 0,
+			advancedAt: Number.NEGATIVE_INFINITY,
+		};
+		const old = call(h, "/work", {
+			worker: "gpu-old",
+			slots: 1,
+			cpus: 8,
+			kinds: ["video"],
+		});
+		expect(await answered(old)).toBe("waiting");
+		expect(original.duplicated).toBeFalsy();
+		const work = (await (
+			await call(h, "/work", {
+				worker: "gpu-new",
+				slots: 1,
+				cpus: 8,
+				kinds: ["video"],
+				features: ["prefix"],
+			})
+		).json()) as { task: protocol.VideoTask };
+		expect(work.task.chunk).toBe(
+			original.task.kind === "video" ? original.task.chunk : -1,
+		);
+		expect(original.duplicated).toBe(true);
+	});
+
+	async function runWatchdogs(h: ReturnType<typeof harness>) {
+		for (const watchdog of h.watchdogs) {
+			try {
+				await watchdog();
+			} catch {}
+		}
+	}
+
+	test("with no worker left that takes prefixes, the job fails for a retry", async () => {
+		const h = harness({ RF_UNSERVABLE_GRACE_MS: "0" });
+		void call(h, "/work", {
+			worker: "gpu-old",
+			slots: 1,
+			cpus: 8,
+			kinds: ["video"],
+		});
+		const { j } = prefixedTask(h);
+		await runWatchdogs(h);
+		expect(j.status).toBe("error");
+		expect(j.error).toContain("in-place sources");
+		expect(h.queue).toHaveLength(0);
+
+		// A worker that takes prefixes and video keeps the job going instead.
+		const kept = harness({ RF_UNSERVABLE_GRACE_MS: "0" });
+		const poll = call(kept, "/work", {
+			worker: "gpu-new",
+			slots: 1,
+			cpus: 8,
+			kinds: ["video"],
+			features: ["prefix"],
+		});
+		const waiting = prefixedTask(kept);
+		await runWatchdogs(kept);
+		expect(waiting.j.status).toBe("rendering");
+		await poll;
+		expect(waiting.state.worker).toBe("gpu-new");
+	});
+
+	test("a worker that takes prefixes only for audio can't serve a video task", async () => {
+		const h = harness({ RF_UNSERVABLE_GRACE_MS: "0" });
+		void call(h, "/work", {
+			worker: "gpu-new-audio",
+			slots: 1,
+			cpus: 8,
+			kinds: ["audio"],
+			features: ["prefix"],
+		});
+		const { j, state } = prefixedTask(h);
+		await runWatchdogs(h);
+		expect(state.worker).toBeUndefined();
+		expect(j.status).toBe("error");
+		expect(j.error).toContain("in-place sources");
+	});
+
+	test("older workers, other sources and finished transcodes keep the transcode", async () => {
+		const recording = fragmentedRecording({ frames: 60, gop: 30, mfra: true });
+		const request = { sourceRoot: root, source, output };
+		// Transcoding: queued, or already handed to the registered worker.
+		const transcoding = async (h: ReturnType<typeof harness>) =>
+			(
+				(await (await call(h, "/transcodes", request)).json()) as {
+					status: string;
+				}
+			).status;
+
+		const old = harness();
+		worker(old);
+		old.objects.set(source, recording.bytes);
+		expect(["queued", "running"]).toContain(await transcoding(old));
+		expect(old.objects.has(prefixKey)).toBe(false);
+
+		const webm = harness();
+		worker(webm, ["prefix"]);
+		webm.objects.set(
+			source,
+			Uint8Array.of(0x1a, 0x45, 0xdf, 0xa3, 0, 0, 0, 0, 0),
+		);
+		expect(["queued", "running"]).toContain(await transcoding(webm));
+
+		const done = harness();
+		worker(done, ["prefix"]);
+		done.objects.set(source, recording.bytes);
+		done.objects.set(output, new Uint8Array(42));
+		expect(
+			await (await call(done, "/transcodes", request)).json(),
+		).toMatchObject({ status: "ready", size: 42 });
+		expect(done.objects.has(prefixKey)).toBe(false);
+
+		const off = harness({ RF_FRAGMENT_INDEX: "0" });
+		worker(off, ["prefix"]);
+		off.objects.set(source, recording.bytes);
+		expect(["queued", "running"]).toContain(await transcoding(off));
 	});
 });
 

@@ -96,16 +96,7 @@ vi.mock("@/app/s/[videoId]/_components/ShareVideo", async () => {
 vi.mock("@/app/s/[videoId]/_components/Sidebar", async () => {
 	const { createElement } = await import("react");
 	return {
-		Sidebar: ({ onCollapse }: { onCollapse?: () => void }) =>
-			createElement(
-				"div",
-				{ "data-sidebar": "" },
-				createElement(
-					"button",
-					{ type: "button", onClick: onCollapse },
-					"Hide sidebar",
-				),
-			),
+		Sidebar: () => createElement("div", { "data-sidebar": "" }),
 	};
 });
 
@@ -170,7 +161,6 @@ describe("Share view toggle", () => {
 
 	afterEach(() => {
 		document.body.replaceChildren();
-		window.localStorage.clear();
 		window.history.replaceState(window.history.state, "", "/s/video-id");
 	});
 
@@ -178,8 +168,7 @@ describe("Share view toggle", () => {
 		delete actEnvironment.IS_REACT_ACT_ENVIRONMENT;
 	});
 
-	it("keeps the sidebar open after mounting with an old collapsed preference", async () => {
-		window.localStorage.setItem("cap_share_rail_collapsed", "true");
+	it("always shows the sidebar, with no way to fold it away", async () => {
 		const container = document.createElement("div");
 		document.body.append(container);
 		const root = createRoot(container);
@@ -188,81 +177,10 @@ describe("Share view toggle", () => {
 			root.render(createElement(Share, createProps()));
 		});
 
-		expect(container.querySelector("aside")?.classList.contains("lg:w-0")).toBe(
-			false,
-		);
-		expect(
-			container
-				.querySelector("aside > div")
-				?.classList.contains("lg:invisible"),
-		).toBe(false);
-		expect(findButton(container, "Show sidebar")).toBeUndefined();
-
-		await act(async () => {
-			root.unmount();
-		});
-	});
-
-	it("preserves the sidebar and player while collapsing, without persisting to another visit", async () => {
-		const container = document.createElement("div");
-		document.body.append(container);
-		let root = createRoot(container);
-
-		await act(async () => {
-			root.render(createElement(Share, createProps()));
-		});
-
-		const sidebar = container.querySelector("[data-sidebar]");
-		const video = container.querySelector("[data-share-video]");
-		expect(sidebar).not.toBeNull();
-		expect(video).not.toBeNull();
-
-		await act(async () => {
-			findButton(container, "Hide sidebar")?.click();
-		});
-
-		expect(container.querySelector("aside")?.classList.contains("lg:w-0")).toBe(
-			true,
-		);
-		expect(
-			container
-				.querySelector("aside > div")
-				?.classList.contains("lg:invisible"),
-		).toBe(true);
-		expect(container.querySelector("[data-sidebar]")).toBe(sidebar);
-		expect(container.querySelector("[data-share-video]")).toBe(video);
-		const reopen = findButton(container, "Show sidebar");
-		expect(reopen).toBeDefined();
-		expect(reopen?.getAttribute("aria-controls")).toBe(
-			container.querySelector("aside")?.id,
-		);
-		expect(reopen?.getAttribute("aria-expanded")).toBe("false");
-		expect(window.localStorage.getItem("cap_share_rail_collapsed")).toBeNull();
-
-		await act(async () => {
-			reopen?.click();
-		});
-
-		expect(container.querySelector("aside")?.classList.contains("lg:w-0")).toBe(
-			false,
-		);
-		expect(container.querySelector("[data-sidebar]")).toBe(sidebar);
-		expect(container.querySelector("[data-share-video]")).toBe(video);
-
-		await act(async () => {
-			findButton(container, "Hide sidebar")?.click();
-		});
-		await act(async () => {
-			root.unmount();
-		});
-		root = createRoot(container);
-		await act(async () => {
-			root.render(createElement(Share, createProps()));
-		});
-
-		expect(container.querySelector("aside")?.classList.contains("lg:w-0")).toBe(
-			false,
-		);
+		const aside = container.querySelector("aside");
+		expect(aside).not.toBeNull();
+		expect(aside?.classList.contains("lg:w-0")).toBe(false);
+		expect(aside?.querySelector("[data-sidebar]")).not.toBeNull();
 		expect(findButton(container, "Show sidebar")).toBeUndefined();
 
 		await act(async () => {

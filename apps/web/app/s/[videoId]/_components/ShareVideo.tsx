@@ -21,7 +21,9 @@ import {
 import { finalizeDesktopSegmentsRecording } from "@/actions/video/finalize-desktop-segments";
 import { Tooltip } from "@/components/Tooltip";
 import { isRetryableDesktopSegmentsFinalizationError } from "@/lib/desktop-segments-retryable-errors";
+import { awaitsReplacementPreviewGif } from "@/lib/published-output";
 import type { ShareCallToAction } from "@/lib/share-call-to-action";
+import { shareVideoRevision } from "@/lib/share-video-revision";
 import type { VideoData } from "../types";
 import { type CaptionLanguage, useCaptionContext } from "./CaptionContext";
 import {
@@ -34,6 +36,7 @@ import {
 	shouldDeferPlaybackSource,
 	type UploadProgress,
 } from "./upload-progress";
+import { useShareVideoUpdates } from "./use-share-video-updates";
 import { formatChaptersAsVTT } from "./utils/transcript-utils";
 
 type CommentWithAuthor = typeof commentsSchema.$inferSelect & {
@@ -56,6 +59,11 @@ const HLSVideoPlayer = dynamic(() =>
 // Both ride outside the first paint: the tracker only mounts mid-upload (its
 // RPC client drags the Effect runtime along), and the upgrade modal — which
 // carries the Rive animation runtime — mounts on the first upgrade prompt.
+// Only mounted while a Save renders; it brings hls.js and the thumbnail query
+// with it, which no other viewer needs.
+const RenderFarmSaveView = dynamic(() =>
+	import("./render-farm-save-view").then((m) => m.RenderFarmSaveView),
+);
 const UploadProgressTracker = dynamic(() => import("./UploadProgressTracker"), {
 	ssr: false,
 });
@@ -81,6 +89,7 @@ export const ShareVideo = forwardRef<
 			hasActiveUpload?: boolean;
 		};
 		initialPlaybackUrl?: Promise<string | null>;
+		initialPlaybackTrusted?: boolean;
 		comments: MaybePromise<CommentWithAuthor[]>;
 		chapters?: { title: string; start: number }[];
 		areChaptersDisabled?: boolean;
@@ -97,6 +106,7 @@ export const ShareVideo = forwardRef<
 		canFinalizeDesktopSegments?: boolean;
 		showPlaybackStatusBadge?: boolean;
 		isEditProcessing: boolean;
+		renderStarting?: boolean;
 		recordingStopped?: boolean;
 		defaultPlaybackSpeed?: number;
 		viewerIsOwner?: boolean;
@@ -107,6 +117,7 @@ export const ShareVideo = forwardRef<
 		{
 			data,
 			initialPlaybackUrl,
+			initialPlaybackTrusted = false,
 			comments,
 			chapters = NO_CHAPTERS,
 			areCaptionsDisabled,
@@ -120,6 +131,7 @@ export const ShareVideo = forwardRef<
 			canFinalizeDesktopSegments = false,
 			showPlaybackStatusBadge = false,
 			isEditProcessing,
+			renderStarting = false,
 			recordingStopped = false,
 			defaultPlaybackSpeed,
 			viewerIsOwner = false,
@@ -493,9 +505,78 @@ export const ShareVideo = forwardRef<
 			videoSrc = `/api/playlist?userId=${data.owner.id}&videoId=${data.id}&videoType=video`;
 		}
 
+		const renderSaveActive =
+			isMp4Source &&
+			(renderStarting || data.metadata?.renderFarmSave?.status === "rendering");
+		const publishedRevision = shareVideoRevision(data.source);
+		const sourceRevision = isMp4Source ? publishedRevision : null;
+		// Only a web editor Save replaces a published video, so public pages
+		// watch just the videos that have one; the owner can Save any of them.
+		const savedFromWebEditor = !!(
+			data.metadata?.renderFarmSave || data.metadata?.publishedBrowserSaveId
+		);
+		const { updateAvailable, showLatest } = useShareVideoUpdates({
+			videoId: data.id,
+			revision: publishedRevision,
+			videoRef,
+			enabled:
+				(viewerIsOwner || savedFromWebEditor) &&
+				!renderSaveActive &&
+				!isOverShareLimit,
+		});
+		const capVideoPlayer = (
+			<CapVideoPlayer
+				videoId={data.id}
+				mediaPlayerClassName={clsx(
+					"w-full h-full max-w-full max-h-full overflow-visible",
+					// Timeline view: the player is a slice of the widescreen
+					// theater block, so no rounded corners against the black.
+					externalTimeline ? "rounded-none" : "rounded-xl",
+				)}
+				videoSrc={videoSrc}
+				rawFallbackSrc={rawFallbackSrc}
+				initialPlaybackUrl={initialPlaybackUrl}
+				initialPlaybackTrusted={initialPlaybackTrusted}
+				sourceRevision={sourceRevision}
+				disablePreviewGif={awaitsReplacementPreviewGif({
+					id: data.id,
+					ownerId: data.owner.id,
+					source: data.source,
+				})}
+				duration={data.duration}
+				defaultPlaybackSpeed={defaultPlaybackSpeed}
+				showPlaybackStatusBadge={showPlaybackStatusBadge}
+				disableCaptions={areCaptionsDisabled ?? false}
+				captionsInitiallyOff={captionsInitiallyOff}
+				disableCommentStamps={areCommentStampsDisabled ?? false}
+				disableReactionStamps={areReactionStampsDisabled ?? false}
+				externalTimeline={externalTimeline}
+				controlsPortalEl={controlsPortalEl}
+				chaptersSrc={areChaptersDisabled ? "" : chaptersUrl || ""}
+				captionsSrc={areCaptionsDisabled ? "" : subtitleUrl || ""}
+				videoRef={videoRef}
+				enableCrossOrigin={enableCrossOrigin}
+				hasActiveUpload={data.hasActiveUpload}
+				blockPlaybackDuringProcessing={isEditProcessing}
+				onUploadComplete={handleUploadComplete}
+				comments={stampComments}
+				onSeek={handleSeek}
+				captionLanguage={captionContext.selectedLanguage}
+				onCaptionLanguageChange={handleCaptionLanguageChange}
+				availableCaptions={captionContext.availableTranslations}
+				isCaptionLoading={captionContext.isTranslating}
+				hasCaptions={
+					data.transcriptionStatus === "COMPLETE" || liveVttContent != null
+				}
+				canRetryProcessing={canRetryProcessing}
+				callToAction={callToAction}
+			/>
+		);
+
 		return (
 			<>
 				<div
+					data-edit-video
 					className="relative h-full"
 					style={{ viewTransitionName: "cap-edit-video" }}
 				>
@@ -543,46 +624,17 @@ export const ShareVideo = forwardRef<
 							className="h-full"
 						/>
 					) : isMp4Source ? (
-						<CapVideoPlayer
-							videoId={data.id}
-							mediaPlayerClassName={clsx(
-								"w-full h-full max-w-full max-h-full overflow-visible",
-								// Timeline view: the player is a slice of the widescreen
-								// theater block, so no rounded corners against the black.
-								externalTimeline ? "rounded-none" : "rounded-xl",
-							)}
-							videoSrc={videoSrc}
-							rawFallbackSrc={rawFallbackSrc}
-							initialPlaybackUrl={initialPlaybackUrl}
-							duration={data.duration}
-							defaultPlaybackSpeed={defaultPlaybackSpeed}
-							showPlaybackStatusBadge={showPlaybackStatusBadge}
-							disableCaptions={areCaptionsDisabled ?? false}
-							captionsInitiallyOff={captionsInitiallyOff}
-							disableCommentStamps={areCommentStampsDisabled ?? false}
-							disableReactionStamps={areReactionStampsDisabled ?? false}
-							externalTimeline={externalTimeline}
-							controlsPortalEl={controlsPortalEl}
-							chaptersSrc={areChaptersDisabled ? "" : chaptersUrl || ""}
-							captionsSrc={areCaptionsDisabled ? "" : subtitleUrl || ""}
-							videoRef={videoRef}
-							enableCrossOrigin={enableCrossOrigin}
-							hasActiveUpload={data.hasActiveUpload}
-							blockPlaybackDuringProcessing={isEditProcessing}
-							onUploadComplete={handleUploadComplete}
-							comments={stampComments}
-							onSeek={handleSeek}
-							captionLanguage={captionContext.selectedLanguage}
-							onCaptionLanguageChange={handleCaptionLanguageChange}
-							availableCaptions={captionContext.availableTranslations}
-							isCaptionLoading={captionContext.isTranslating}
-							hasCaptions={
-								data.transcriptionStatus === "COMPLETE" ||
-								liveVttContent != null
-							}
-							canRetryProcessing={canRetryProcessing}
-							callToAction={callToAction}
-						/>
+						renderSaveActive ? (
+							<RenderFarmSaveView
+								videoId={data.id}
+								videoRef={videoRef}
+								fallback={capVideoPlayer}
+								startingRender={renderStarting}
+								className="h-full rounded-xl"
+							/>
+						) : (
+							capVideoPlayer
+						)
 					) : (
 						<HLSVideoPlayer
 							videoId={data.id}
@@ -617,6 +669,18 @@ export const ShareVideo = forwardRef<
 							canRetryProcessing={canRetryProcessing}
 							callToAction={callToAction}
 						/>
+					)}
+					{updateAvailable && !renderSaveActive && (
+						<div className="absolute top-3 left-1/2 z-30 flex -translate-x-1/2 items-center gap-2 rounded-full border border-white/15 bg-black/70 py-1 pr-1 pl-3 text-[12px] font-medium text-white shadow-sm backdrop-blur-sm">
+							<span>This video was updated</span>
+							<button
+								type="button"
+								onClick={showLatest}
+								className="h-6 rounded-full bg-white px-2.5 text-[11.5px] font-medium text-black transition-colors hover:bg-white/85"
+							>
+								Show latest
+							</button>
+						</div>
 					)}
 					{showFinalizeRecordingControl && (
 						<div className="absolute bottom-3 left-3 z-30 flex max-w-[calc(100%-1.5rem)] flex-col items-start gap-1.5">

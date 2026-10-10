@@ -72,17 +72,19 @@ afterEach(() => {
 });
 
 describe("preview first-frame bounds", () => {
-	it("flushes the actual first-frame bounds and cancels a stale trailing write", () => {
+	it("follows the layout without delay until the first frame, then flushes its actual bounds", () => {
 		const state = harness();
 		state.update({ width: 835, height: 542 }, false);
 		state.update({ width: 820, height: 520 }, false);
-		expect(vi.getTimerCount()).toBe(1);
+		expect(state.current()).toEqual({ width: 820, height: 520 });
+		expect(vi.getTimerCount()).toBe(0);
 		state.update({ width: 820, height: 520 }, true);
 		expect(state.current()).toEqual({ width: 835, height: 494 });
 		expect(vi.getTimerCount()).toBe(0);
 		vi.advanceTimersByTime(1000);
 		expect(state.commit.mock.calls).toEqual([
 			[{ width: 835, height: 542 }],
+			[{ width: 820, height: 520 }],
 			[{ width: 835, height: 494 }],
 		]);
 	});
@@ -137,7 +139,7 @@ describe("preview first-frame bounds", () => {
 		state.dispose();
 		state.update({ width: 900, height: 400 }, true);
 		vi.advanceTimersByTime(1000);
-		expect(state.current()).toEqual({ width: 835, height: 542 });
+		expect(state.current()).toEqual({ width: 300, height: 600 });
 		expect(state.measure).not.toHaveBeenCalled();
 		expect(vi.getTimerCount()).toBe(0);
 	});

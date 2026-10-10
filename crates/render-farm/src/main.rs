@@ -10,8 +10,13 @@
 //! - `video`: render + encode one output frame range to raw H.264 samples.
 //! - `audio`: render + encode one output sample range to raw AAC packets on
 //!   the global packet grid, with pre-roll so sections join seamlessly.
+//! - `prepare`: write a browser recording's project files (metadata, config,
+//!   pointer input) the way the editor worker does, around media the
+//!   manifest provides, so a render needs no editor worker session.
+//! - `default_config`: the configuration a never-edited recording opens with.
 
 mod audio;
+mod prepare;
 mod project;
 mod video;
 
@@ -70,6 +75,8 @@ enum Op {
     Probe(ProbeRequest),
     Video(video::VideoRequest),
     Audio(audio::AudioRequest),
+    Prepare(Box<prepare::PrepareRequest>),
+    DefaultConfig,
     Warm,
     Ping,
 }
@@ -118,6 +125,8 @@ async fn handle(op: Op) -> Result<Value> {
         Op::Probe(request) => probe(request).await?,
         Op::Video(request) => serde_json::to_value(video::render(request).await?)?,
         Op::Audio(request) => serde_json::to_value(audio::render(request).await?)?,
+        Op::Prepare(request) => prepare::prepare(*request)?,
+        Op::DefaultConfig => prepare::default_config()?,
         Op::Warm => video::warm().await?,
         Op::Ping => json!({ "pong": true }),
     })

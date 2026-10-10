@@ -26,6 +26,27 @@ import {
 
 vi.mock("@cap/env", () => ({ NODE_ENV: "test" }));
 
+// next/dynamic's loader relies on Next's own React context; resolve the
+// (mocked) modules through React.lazy instead.
+vi.mock("next/dynamic", async () => {
+	const { createElement, lazy, Suspense } = await import("react");
+	return {
+		default: (
+			loader: () => Promise<
+				| ((props: object) => ReactNode)
+				| { default: (props: object) => ReactNode }
+			>,
+		) => {
+			const Lazy = lazy(async () => {
+				const loaded = await loader();
+				return { default: "default" in loaded ? loaded.default : loaded };
+			});
+			return (props: object) =>
+				createElement(Suspense, { fallback: null }, createElement(Lazy, props));
+		},
+	};
+});
+
 vi.mock("@cap/ui", async () => {
 	const { createElement } = await import("react");
 	return {
@@ -222,6 +243,38 @@ describe("EmbedVideo playback chrome", () => {
 			await act(async () => root.unmount());
 		},
 	);
+
+	it("starts a lazily loaded HLS embed at its start time", async () => {
+		const container = document.createElement("div");
+		document.body.append(container);
+		const root = createRoot(container);
+
+		await act(async () => {
+			root.render(
+				createElement(EmbedVideo, {
+					...createProps({ type: "MediaConvert" }),
+					startTime: 30,
+				}),
+			);
+		});
+		const video = container.querySelector("video");
+		if (!video) throw new Error("Expected the HLS player to mount");
+		let currentTime = 0;
+		Object.defineProperty(video, "duration", { value: 60 });
+		Object.defineProperty(video, "currentTime", {
+			get: () => currentTime,
+			set: (value: number) => {
+				currentTime = value;
+			},
+		});
+
+		await act(async () => {
+			video.dispatchEvent(new Event("loadedmetadata"));
+		});
+		expect(currentTime).toBe(30);
+
+		await act(async () => root.unmount());
+	});
 
 	it.each([
 		["an asynchronously mounted MP4", { type: "desktopMP4" } as const],

@@ -156,6 +156,8 @@ struct MaskUniforms {
     padding0: u32,
     output_size: [f32; 2],
     padding1: [f32; 2],
+    // Uniform buffers must be a multiple of 16 bytes on WebGL2.
+    padding2: [f32; 2],
 }
 
 impl Default for MaskUniforms {
@@ -177,6 +179,7 @@ impl MaskUniforms {
             padding0: 0,
             output_size: [mask.output_size.x as f32, mask.output_size.y as f32],
             padding1: [0.0; 2],
+            padding2: [0.0; 2],
         }
     }
 }

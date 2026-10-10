@@ -39,11 +39,10 @@ import {
 	DEFAULT_WHISPER_CAPTION_MODEL,
 	getCaptionGenerationErrorMessage,
 	getModelPath,
-	mapEditedTimeToSource,
 	PARAKEET_DIR_MODELS,
 	resolveCaptionModel,
-	sourceCaptionId,
 	supportsParakeetTranscription,
+	syncCaptionSourceFromTrack,
 	syncCaptionWordsWithText,
 	transcribeEditorCaptions,
 } from "./captions";
@@ -89,6 +88,10 @@ interface LanguageOption {
 }
 
 const MODEL_DOWNLOAD_STATUS_POLL_MS = 1000;
+const isWebEditor = import.meta.env.VITE_CAP_WEB_EDITOR === "true";
+const webCaptionsEnabled = () =>
+	(window as Window & { capWebEditorCaptionsEnabled?: boolean })
+		.capWebEditorCaptionsEnabled === true;
 
 const MODEL_OPTIONS: ModelOption[] = [
 	{
@@ -153,6 +156,10 @@ const LANGUAGE_OPTIONS: LanguageOption[] = [
 	{ code: "bn", label: "Bengali" },
 	{ code: "ta", label: "Tamil" },
 ];
+
+const WEB_LANGUAGE_OPTIONS = LANGUAGE_OPTIONS.filter(
+	(option) => option.code !== "pa",
+);
 
 const STYLE_PRESET_KEYS = new Set<keyof EditorCaptionSettings>([
 	"font",
@@ -250,6 +257,11 @@ export function CaptionsTab(props: {
 }) {
 	const { project, setProject, editorInstance, editorState, setEditorState } =
 		useEditorContext();
+	const [webCaptionsProEnabled, setWebCaptionsProEnabled] = createSignal(
+		isWebEditor && webCaptionsEnabled(),
+	);
+	const syncWebCaptionPlan = () =>
+		setWebCaptionsProEnabled(webCaptionsEnabled());
 
 	const selectedCaptionIndex = () =>
 		editorState.timeline.selection?.type === "caption" &&
@@ -281,40 +293,10 @@ export function CaptionsTab(props: {
 				// Route content/timing onto the source-time caption master so the
 				// edit persists across future clip changes. Style overrides stay on
 				// the track and are carried across by source id when re-derived.
-				const sourceId = sourceCaptionId(timelineSegment.id);
-				const source = currentProject.captions?.segments?.find(
-					(segment) => segment.id === sourceId,
-				);
-				if (!source) return;
-
-				const recordingSegments = editorInstance.recordings.segments;
-				const sourceRange = { start: source.start, end: source.end };
-				const start = mapEditedTimeToSource(
-					timelineSegment.start,
-					timeline.segments,
-					recordingSegments,
-					timeline.transitions ?? [],
-					sourceRange,
-					"outgoing",
-					timeline.textSegments,
-				);
-				const end = mapEditedTimeToSource(
-					timelineSegment.end,
-					timeline.segments,
-					recordingSegments,
-					timeline.transitions ?? [],
-					sourceRange,
-					"outgoing",
-					timeline.textSegments,
-				);
-				if (start !== null) source.start = start;
-				if (end !== null) source.end = end;
-				source.text = timelineSegment.text;
-				source.words = syncCaptionWordsWithText(
-					source.text,
-					source.words,
-					source.start,
-					source.end,
+				syncCaptionSourceFromTrack(
+					currentProject,
+					index,
+					editorInstance.recordings.segments,
 				);
 			}),
 		);
@@ -419,6 +401,9 @@ export function CaptionsTab(props: {
 	const setIsGenerating = (value: boolean) =>
 		setEditorState("captions", "isGenerating", value);
 	const [hasAudio, setHasAudio] = createSignal(false);
+	const [generationError, setGenerationError] = createSignal<string | null>(
+		null,
+	);
 	const availableModelOptions = createMemo(() =>
 		supportsParakeetTranscription()
 			? MODEL_OPTIONS
@@ -561,6 +546,30 @@ export function CaptionsTab(props: {
 	};
 
 	onMount(async () => {
+		if (isWebEditor) {
+			window.addEventListener(
+				"cap-web-editor-captions-plan",
+				syncWebCaptionPlan,
+			);
+			syncWebCaptionPlan();
+			const savedLanguage = localStorage.getItem(
+				"selectedTranscriptionLanguage",
+			);
+			if (
+				savedLanguage &&
+				WEB_LANGUAGE_OPTIONS.some((option) => option.code === savedLanguage)
+			) {
+				setSelectedLanguage(savedLanguage);
+			}
+			if (editorInstance?.recordings) {
+				setHasAudio(
+					editorInstance.recordings.segments.some(
+						(segment) => segment.mic !== null || segment.system_audio !== null,
+					),
+				);
+			}
+			return;
+		}
 		try {
 			unlistenDownloadProgress = await events.downloadProgress.listen(
 				(event) => {
@@ -621,6 +630,12 @@ export function CaptionsTab(props: {
 	});
 
 	onCleanup(() => {
+		if (isWebEditor) {
+			window.removeEventListener(
+				"cap-web-editor-captions-plan",
+				syncWebCaptionPlan,
+			);
+		}
 		if (unlistenDownloadProgress) unlistenDownloadProgress();
 		stopDownloadStatusPolling();
 	});
@@ -725,6 +740,7 @@ export function CaptionsTab(props: {
 		}
 
 		setIsGenerating(true);
+		setGenerationError(null);
 
 		try {
 			const result = await transcribeEditorCaptions(
@@ -749,13 +765,15 @@ export function CaptionsTab(props: {
 
 				toast.success("Captions generated successfully!");
 			} else {
-				toast.error(
-					"No captions were generated. The audio might be too quiet or unclear.",
-				);
+				const message =
+					"No captions were generated. The audio might be too quiet or unclear.";
+				setGenerationError(message);
+				toast.error(message);
 			}
 		} catch (error) {
 			console.error("Error generating captions:", error);
 			const errorMessage = getCaptionGenerationErrorMessage(error);
+			setGenerationError(errorMessage);
 			toast.error(`Failed to generate captions: ${errorMessage}`);
 		} finally {
 			setIsGenerating(false);
@@ -777,264 +795,377 @@ export function CaptionsTab(props: {
 				</span>
 			</div>
 
-			<div class="flex flex-col gap-2">
-				<Field name="Model">
-					<KSelect<string>
-						options={availableModelOptions().map((model) => model.name)}
-						value={selectedModel()}
-						onChange={(value: string | null) => {
-							if (value) setSelectedModel(value);
-						}}
-						itemComponent={(props) => {
-							const model = availableModelOptions().find(
-								(option) => option.name === props.item.rawValue,
-							);
+			<Show when={isWebEditor}>
+				<div class="flex flex-col gap-2">
+					<p class="text-[11px] leading-relaxed text-ed-text-3">
+						Cap Pro captions use the same AssemblyAI transcription as your
+						shareable link.
+					</p>
+					<Show when={!webCaptionsProEnabled()}>
+						<a
+							href="/pricing"
+							target="_blank"
+							rel="noreferrer"
+							class="rounded-lg bg-ed-accent px-3 py-2 text-center text-[12px] font-medium text-white"
+						>
+							Upgrade to Cap Pro
+						</a>
+					</Show>
+					<Show when={webCaptionsProEnabled() && hasAudio()}>
+						<Field name="Language" inline>
+							<KSelect<string>
+								options={WEB_LANGUAGE_OPTIONS.map((option) => option.code)}
+								value={selectedLanguage()}
+								onChange={(value: string | null) => {
+									if (value) setSelectedLanguage(value);
+								}}
+								itemComponent={(props) => (
+									<MenuItem<typeof KSelect.Item>
+										as={KSelect.Item}
+										item={props.item}
+									>
+										<KSelect.ItemLabel class="flex-1">
+											{
+												WEB_LANGUAGE_OPTIONS.find(
+													(option) => option.code === props.item.rawValue,
+												)?.label
+											}
+										</KSelect.ItemLabel>
+									</MenuItem>
+								)}
+							>
+								<KSelect.Trigger class={selectTriggerClass}>
+									<KSelect.Value<string> class="truncate">
+										{(state) => {
+											const language = WEB_LANGUAGE_OPTIONS.find(
+												(option) => option.code === state.selectedOption(),
+											);
+											return (
+												<span>{language?.label || "Select a language"}</span>
+											);
+										}}
+									</KSelect.Value>
+									<KSelect.Icon>
+										<IconCapChevronDown class="shrink-0 size-3.5 transition-transform transform text-ed-text-3 data-expanded:rotate-180" />
+									</KSelect.Icon>
+								</KSelect.Trigger>
+								<KSelect.Portal>
+									<PopperContent<typeof KSelect.Content>
+										as={KSelect.Content}
+										class={topLeftAnimateClasses}
+									>
+										<MenuItemList<typeof KSelect.Listbox>
+											class="overflow-y-auto max-h-48"
+											as={KSelect.Listbox}
+										/>
+									</PopperContent>
+								</KSelect.Portal>
+							</KSelect>
+						</Field>
+						<Button
+							onClick={generateCaptions}
+							disabled={isGenerating()}
+							class="w-full"
+						>
+							{isGenerating()
+								? "Generating..."
+								: hasCaptions()
+									? "Regenerate Captions"
+									: "Generate Captions"}
+						</Button>
+						<Show when={generationError()}>
+							{(message) => (
+								<p role="alert" class="text-[11px] leading-relaxed text-red-11">
+									{message()}
+								</p>
+							)}
+						</Show>
+					</Show>
+				</div>
+			</Show>
+			<Show when={!isWebEditor}>
+				<div class="flex flex-col gap-2">
+					<Field name="Model">
+						<KSelect<string>
+							options={availableModelOptions().map((model) => model.name)}
+							value={selectedModel()}
+							onChange={(value: string | null) => {
+								if (value) setSelectedModel(value);
+							}}
+							itemComponent={(props) => {
+								const model = availableModelOptions().find(
+									(option) => option.name === props.item.rawValue,
+								);
 
-							return (
+								return (
+									<MenuItem<typeof KSelect.Item>
+										as={KSelect.Item}
+										item={props.item}
+									>
+										<div class="flex gap-3 items-center w-full">
+											<div class="flex-1 min-w-0">
+												<div class="flex gap-1.5 items-center text-ed-text-1">
+													<KSelect.ItemLabel class="font-medium truncate">
+														{model?.label ?? props.item.rawValue}
+													</KSelect.ItemLabel>
+													<Show when={model}>
+														<Tooltip openDelay={0} content={model?.modelName}>
+															<button
+																type="button"
+																class="flex shrink-0 transition-colors text-ed-text-3 hover:text-ed-text-1"
+																onPointerDown={(event) =>
+																	event.stopPropagation()
+																}
+																onClick={(event) => event.stopPropagation()}
+															>
+																<IconLucideInfo class="size-3.5" />
+															</button>
+														</Tooltip>
+													</Show>
+												</div>
+												<Show when={model}>
+													<div class="text-[11px] truncate text-ed-text-2">
+														{model?.description}
+													</div>
+												</Show>
+											</div>
+											<Show when={model}>
+												<span class="shrink-0 text-[10px] text-ed-text-3">
+													{model?.size}
+												</span>
+											</Show>
+										</div>
+									</MenuItem>
+								);
+							}}
+						>
+							<KSelect.Trigger class="flex flex-row gap-2 items-center px-2.5 py-1.5 w-full min-w-0 rounded-lg transition-colors outline-hidden bg-ed-ctl text-ed-text-1 hover:bg-ed-ctl-hover focus-visible:ring-1 focus-visible:ring-ed-accent">
+								<div class="flex-1 min-w-0 text-left">
+									<div class="flex gap-1.5 items-center">
+										<span class="text-[13px] font-medium truncate">
+											{selectedModelOption()?.label || "Select a model"}
+										</span>
+										<Show when={selectedModelOption()}>
+											<Tooltip
+												openDelay={0}
+												content={selectedModelOption()?.modelName}
+											>
+												<button
+													type="button"
+													class="flex shrink-0 transition-colors text-ed-text-3 hover:text-ed-text-1"
+													onPointerDown={(event) => event.stopPropagation()}
+													onClick={(event) => event.stopPropagation()}
+												>
+													<IconLucideInfo class="size-3.5" />
+												</button>
+											</Tooltip>
+										</Show>
+									</div>
+									<Show when={selectedModelOption()}>
+										<div class="text-[11px] truncate text-ed-text-2">
+											{selectedModelOption()?.description}
+										</div>
+									</Show>
+								</div>
+								<Show when={selectedModelOption()}>
+									<span class="shrink-0 text-[10px] text-ed-text-3">
+										{selectedModelOption()?.size}
+									</span>
+								</Show>
+								<KSelect.Icon>
+									<IconCapChevronDown class="shrink-0 size-3.5 transition-transform transform text-ed-text-3 data-expanded:rotate-180" />
+								</KSelect.Icon>
+							</KSelect.Trigger>
+							<KSelect.Portal>
+								<PopperContent<typeof KSelect.Content>
+									as={KSelect.Content}
+									class={topLeftAnimateClasses}
+								>
+									<MenuItemList<typeof KSelect.Listbox> as={KSelect.Listbox} />
+								</PopperContent>
+							</KSelect.Portal>
+						</KSelect>
+					</Field>
+
+					<Show when={!supportsParakeetTranscription()}>
+						<p class="text-[11px] leading-relaxed text-ed-text-3">
+							Parakeet caption models are unavailable on Intel Macs. Whisper
+							models remain available.
+						</p>
+					</Show>
+
+					<p class="text-[11px] leading-relaxed text-ed-text-3">
+						One time download to your system. All captions are stored locally.
+					</p>
+
+					<Field name="Language" inline>
+						<KSelect<string>
+							options={LANGUAGE_OPTIONS.map((l) => l.code)}
+							value={selectedLanguage()}
+							onChange={(value: string | null) => {
+								if (value) setSelectedLanguage(value);
+							}}
+							itemComponent={(props) => (
 								<MenuItem<typeof KSelect.Item>
 									as={KSelect.Item}
 									item={props.item}
 								>
-									<div class="flex gap-3 items-center w-full">
-										<div class="flex-1 min-w-0">
-											<div class="flex gap-1.5 items-center text-ed-text-1">
-												<KSelect.ItemLabel class="font-medium truncate">
-													{model?.label ?? props.item.rawValue}
-												</KSelect.ItemLabel>
-												<Show when={model}>
-													<Tooltip openDelay={0} content={model?.modelName}>
-														<button
-															type="button"
-															class="flex shrink-0 transition-colors text-ed-text-3 hover:text-ed-text-1"
-															onPointerDown={(event) => event.stopPropagation()}
-															onClick={(event) => event.stopPropagation()}
-														>
-															<IconLucideInfo class="size-3.5" />
-														</button>
-													</Tooltip>
-												</Show>
-											</div>
-											<Show when={model}>
-												<div class="text-[11px] truncate text-ed-text-2">
-													{model?.description}
-												</div>
-											</Show>
-										</div>
-										<Show when={model}>
-											<span class="shrink-0 text-[10px] text-ed-text-3">
-												{model?.size}
-											</span>
-										</Show>
-									</div>
+									<KSelect.ItemLabel class="flex-1">
+										{
+											LANGUAGE_OPTIONS.find(
+												(l) => l.code === props.item.rawValue,
+											)?.label
+										}
+									</KSelect.ItemLabel>
 								</MenuItem>
-							);
-						}}
-					>
-						<KSelect.Trigger class="flex flex-row gap-2 items-center px-2.5 py-1.5 w-full min-w-0 rounded-lg transition-colors outline-hidden bg-ed-ctl text-ed-text-1 hover:bg-ed-ctl-hover focus-visible:ring-1 focus-visible:ring-ed-accent">
-							<div class="flex-1 min-w-0 text-left">
-								<div class="flex gap-1.5 items-center">
-									<span class="text-[13px] font-medium truncate">
-										{selectedModelOption()?.label || "Select a model"}
-									</span>
-									<Show when={selectedModelOption()}>
-										<Tooltip
-											openDelay={0}
-											content={selectedModelOption()?.modelName}
-										>
-											<button
-												type="button"
-												class="flex shrink-0 transition-colors text-ed-text-3 hover:text-ed-text-1"
-												onPointerDown={(event) => event.stopPropagation()}
-												onClick={(event) => event.stopPropagation()}
-											>
-												<IconLucideInfo class="size-3.5" />
-											</button>
-										</Tooltip>
+							)}
+						>
+							<KSelect.Trigger class={selectTriggerClass}>
+								<KSelect.Value<string> class="truncate">
+									{(state) => {
+										const language = LANGUAGE_OPTIONS.find(
+											(l) => l.code === state.selectedOption(),
+										);
+										return (
+											<span>{language?.label || "Select a language"}</span>
+										);
+									}}
+								</KSelect.Value>
+								<KSelect.Icon>
+									<IconCapChevronDown class="shrink-0 size-3.5 transition-transform transform text-ed-text-3 data-expanded:rotate-180" />
+								</KSelect.Icon>
+							</KSelect.Trigger>
+							<KSelect.Portal>
+								<PopperContent<typeof KSelect.Content>
+									as={KSelect.Content}
+									class={topLeftAnimateClasses}
+								>
+									<MenuItemList<typeof KSelect.Listbox>
+										class="overflow-y-auto max-h-48"
+										as={KSelect.Listbox}
+									/>
+								</PopperContent>
+							</KSelect.Portal>
+						</KSelect>
+					</Field>
+
+					<Show
+						when={downloadedModels().includes(selectedModel())}
+						fallback={
+							<div class="flex flex-col gap-2">
+								<Button
+									class="flex gap-2 justify-center items-center w-full"
+									onClick={downloadModel}
+									disabled={isDownloading()}
+								>
+									<Show
+										when={isDownloading()}
+										fallback={
+											<>
+												<IconLucideDownload class="size-4" />
+												Download{" "}
+												{
+													availableModelOptions().find(
+														(m) => m.name === selectedModel(),
+													)?.label
+												}{" "}
+												Model
+											</>
+										}
+									>
+										{`Downloading ${
+											downloadingModelOption()?.label ?? "model"
+										}... ${downloadPercent()}%`}
 									</Show>
-								</div>
-								<Show when={selectedModelOption()}>
-									<div class="text-[11px] truncate text-ed-text-2">
-										{selectedModelOption()?.description}
+								</Button>
+								<Show when={isDownloading()}>
+									<div class="flex flex-col gap-1.5">
+										<div
+											class="overflow-hidden w-full h-1.5 rounded-full bg-ed-ctl"
+											role="progressbar"
+											aria-valuemin="0"
+											aria-valuemax="100"
+											aria-valuenow={downloadPercent()}
+										>
+											<div
+												class="h-1.5 rounded-full transition-all duration-300 bg-ed-accent"
+												style={{
+													width: `${clampDownloadProgress(downloadProgress())}%`,
+												}}
+											/>
+										</div>
+										<p class="text-[11px] leading-relaxed text-ed-text-3">
+											{downloadMessage() ||
+												"Keep Cap open while the model downloads. Editor reloads will reconnect automatically."}
+										</p>
 									</div>
 								</Show>
 							</div>
-							<Show when={selectedModelOption()}>
-								<span class="shrink-0 text-[10px] text-ed-text-3">
-									{selectedModelOption()?.size}
-								</span>
-							</Show>
-							<KSelect.Icon>
-								<IconCapChevronDown class="shrink-0 size-3.5 transition-transform transform text-ed-text-3 data-expanded:rotate-180" />
-							</KSelect.Icon>
-						</KSelect.Trigger>
-						<KSelect.Portal>
-							<PopperContent<typeof KSelect.Content>
-								as={KSelect.Content}
-								class={topLeftAnimateClasses}
-							>
-								<MenuItemList<typeof KSelect.Listbox> as={KSelect.Listbox} />
-							</PopperContent>
-						</KSelect.Portal>
-					</KSelect>
-				</Field>
-
-				<Show when={!supportsParakeetTranscription()}>
-					<p class="text-[11px] leading-relaxed text-ed-text-3">
-						Parakeet caption models are unavailable on Intel Macs. Whisper
-						models remain available.
-					</p>
-				</Show>
-
-				<p class="text-[11px] leading-relaxed text-ed-text-3">
-					One time download to your system. All captions are stored locally.
-				</p>
-
-				<Field name="Language" inline>
-					<KSelect<string>
-						options={LANGUAGE_OPTIONS.map((l) => l.code)}
-						value={selectedLanguage()}
-						onChange={(value: string | null) => {
-							if (value) setSelectedLanguage(value);
-						}}
-						itemComponent={(props) => (
-							<MenuItem<typeof KSelect.Item>
-								as={KSelect.Item}
-								item={props.item}
-							>
-								<KSelect.ItemLabel class="flex-1">
-									{
-										LANGUAGE_OPTIONS.find((l) => l.code === props.item.rawValue)
-											?.label
-									}
-								</KSelect.ItemLabel>
-							</MenuItem>
-						)}
+						}
 					>
-						<KSelect.Trigger class={selectTriggerClass}>
-							<KSelect.Value<string> class="truncate">
-								{(state) => {
-									const language = LANGUAGE_OPTIONS.find(
-										(l) => l.code === state.selectedOption(),
-									);
-									return <span>{language?.label || "Select a language"}</span>;
-								}}
-							</KSelect.Value>
-							<KSelect.Icon>
-								<IconCapChevronDown class="shrink-0 size-3.5 transition-transform transform text-ed-text-3 data-expanded:rotate-180" />
-							</KSelect.Icon>
-						</KSelect.Trigger>
-						<KSelect.Portal>
-							<PopperContent<typeof KSelect.Content>
-								as={KSelect.Content}
-								class={topLeftAnimateClasses}
-							>
-								<MenuItemList<typeof KSelect.Listbox>
-									class="overflow-y-auto max-h-48"
-									as={KSelect.Listbox}
-								/>
-							</PopperContent>
-						</KSelect.Portal>
-					</KSelect>
-				</Field>
-
-				<Show
-					when={downloadedModels().includes(selectedModel())}
-					fallback={
 						<div class="flex flex-col gap-2">
-							<Button
-								class="flex gap-2 justify-center items-center w-full"
-								onClick={downloadModel}
-								disabled={isDownloading()}
-							>
-								<Show
-									when={isDownloading()}
-									fallback={
-										<>
-											<IconLucideDownload class="size-4" />
-											Download{" "}
-											{
-												availableModelOptions().find(
-													(m) => m.name === selectedModel(),
-												)?.label
-											}{" "}
-											Model
-										</>
+							<Show when={hasAudio()}>
+								<Button
+									onClick={generateCaptions}
+									disabled={isGenerating() || deletingModel() !== null}
+									class="w-full"
+								>
+									{isGenerating()
+										? "Generating..."
+										: hasCaptions()
+											? "Regenerate Captions"
+											: "Generate Captions"}
+								</Button>
+							</Show>
+							<Show when={generationError()}>
+								{(message) => (
+									<p
+										role="alert"
+										class="text-[11px] leading-relaxed text-red-11"
+									>
+										{message()}
+									</p>
+								)}
+							</Show>
+							<div class="flex gap-2 justify-between items-center text-[11px] text-ed-text-3">
+								<span class="flex gap-1.5 items-center min-w-0">
+									<IconCapCircleCheck class="shrink-0 size-3.5 text-ed-text-3" />
+									<span class="truncate">
+										{selectedModelOption()?.label ?? "Caption"} model downloaded
+									</span>
+								</span>
+								<EditorButton
+									size="sm"
+									leftIcon={<IconLucideTrash2 />}
+									onClick={deleteModel}
+									disabled={
+										isGenerating() ||
+										isDownloading() ||
+										deletingModel() === selectedModel()
 									}
 								>
-									{`Downloading ${
-										downloadingModelOption()?.label ?? "model"
-									}... ${downloadPercent()}%`}
-								</Show>
-							</Button>
-							<Show when={isDownloading()}>
-								<div class="flex flex-col gap-1.5">
-									<div
-										class="overflow-hidden w-full h-1.5 rounded-full bg-ed-ctl"
-										role="progressbar"
-										aria-valuemin="0"
-										aria-valuemax="100"
-										aria-valuenow={downloadPercent()}
-									>
-										<div
-											class="h-1.5 rounded-full transition-all duration-300 bg-ed-accent"
-											style={{
-												width: `${clampDownloadProgress(downloadProgress())}%`,
-											}}
-										/>
-									</div>
-									<p class="text-[11px] leading-relaxed text-ed-text-3">
-										{downloadMessage() ||
-											"Keep Cap open while the model downloads. Editor reloads will reconnect automatically."}
-									</p>
-								</div>
-							</Show>
+									{deletingModel() === selectedModel()
+										? "Deleting..."
+										: "Delete"}
+								</EditorButton>
+							</div>
 						</div>
-					}
-				>
-					<div class="flex flex-col gap-2">
-						<Show when={hasAudio()}>
-							<Button
-								onClick={generateCaptions}
-								disabled={isGenerating() || deletingModel() !== null}
-								class="w-full"
-							>
-								{isGenerating()
-									? "Generating..."
-									: hasCaptions()
-										? "Regenerate Captions"
-										: "Generate Captions"}
-							</Button>
-						</Show>
-						<div class="flex gap-2 justify-between items-center text-[11px] text-ed-text-3">
-							<span class="flex gap-1.5 items-center min-w-0">
-								<IconCapCircleCheck class="shrink-0 size-3.5 text-ed-text-3" />
-								<span class="truncate">
-									{selectedModelOption()?.label ?? "Caption"} model downloaded
-								</span>
-							</span>
-							<EditorButton
-								size="sm"
-								leftIcon={<IconLucideTrash2 />}
-								onClick={deleteModel}
-								disabled={
-									isGenerating() ||
-									isDownloading() ||
-									deletingModel() === selectedModel()
-								}
-							>
-								{deletingModel() === selectedModel() ? "Deleting..." : "Delete"}
-							</EditorButton>
-						</div>
-					</div>
-				</Show>
-			</div>
+					</Show>
+				</div>
+			</Show>
 
-			<div class="w-full border-t border-ed-line" />
+			<div
+				class={cx(
+					"w-full border-t border-ed-line",
+					isWebEditor && !webCaptionsProEnabled() && "hidden",
+				)}
+			/>
 
 			<div
 				class={cx(
 					"flex flex-col gap-3.5",
 					!hasCaptions() && "opacity-50 pointer-events-none",
+					isWebEditor && !webCaptionsProEnabled() && "hidden",
 				)}
 			>
 				<Section name="Style">
@@ -1452,6 +1583,7 @@ export function CaptionsTab(props: {
 
 			<Show
 				when={
+					(!isWebEditor || webCaptionsProEnabled()) &&
 					editorState.timeline.selection?.type === "caption" &&
 					editorState.timeline.selection.indices.length === 1
 				}

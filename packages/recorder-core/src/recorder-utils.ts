@@ -2,6 +2,7 @@ import {
 	type DetectedDisplayRecordingMode,
 	DISPLAY_SURFACE_TO_RECORDING_MODE,
 	MP4_MIME_TYPES,
+	STREAMING_MP4_MIME_TYPES,
 	WEBM_MIME_TYPES,
 } from "./recorder-constants";
 
@@ -21,9 +22,9 @@ type RecorderEnvironment = {
 
 export type RecordingPipeline =
 	| {
-			mode: "streaming-webm";
+			mode: "streaming";
 			mimeType: string;
-			fileExtension: "webm";
+			fileExtension: "webm" | "mp4";
 			supportsProgressiveUpload: true;
 	  }
 	| {
@@ -33,12 +34,10 @@ export type RecordingPipeline =
 			supportsProgressiveUpload: false;
 	  };
 
-export const getMediaRecorderOptions = (
-	mimeType: string,
-): MediaRecorderOptions & { videoKeyFrameIntervalDuration: number } => ({
-	mimeType,
-	videoKeyFrameIntervalDuration: 2_000,
-});
+export type AudioRecordingPipeline = {
+	mimeType: string;
+	fileExtension: "webm" | "mp4";
+};
 
 export const detectCapabilities = (): RecorderCapabilities => {
 	if (typeof window === "undefined" || typeof navigator === "undefined") {
@@ -156,14 +155,36 @@ export const selectRecordingPipelineFromSupport = (
 	const supportedFallbackMimeType = fallbackCandidates.find((candidate) =>
 		isMimeSupported(candidate),
 	);
+	const streamingMp4Candidates = hasAudio
+		? [
+				...STREAMING_MP4_MIME_TYPES.withAudio,
+				...STREAMING_MP4_MIME_TYPES.videoOnly,
+			]
+		: [
+				...STREAMING_MP4_MIME_TYPES.videoOnly,
+				...STREAMING_MP4_MIME_TYPES.withAudio,
+			];
+	const supportedStreamingMp4MimeType = streamingMp4Candidates.find(
+		(candidate) => isMimeSupported(candidate),
+	);
 
-	if (supportedWebmMimeType && options?.preferStreamingUpload !== false) {
-		return {
-			mode: "streaming-webm",
-			mimeType: supportedWebmMimeType,
-			fileExtension: "webm",
-			supportsProgressiveUpload: true,
-		};
+	if (options?.preferStreamingUpload !== false) {
+		if (supportedStreamingMp4MimeType) {
+			return {
+				mode: "streaming",
+				mimeType: supportedStreamingMp4MimeType,
+				fileExtension: "mp4",
+				supportsProgressiveUpload: true,
+			};
+		}
+		if (supportedWebmMimeType) {
+			return {
+				mode: "streaming",
+				mimeType: supportedWebmMimeType,
+				fileExtension: "webm",
+				supportsProgressiveUpload: true,
+			};
+		}
 	}
 
 	if (supportedFallbackMimeType) {
@@ -221,6 +242,28 @@ export const selectRecordingPipeline = (
 		},
 	);
 };
+
+export const selectAudioRecordingPipelineFromSupport = (
+	isMimeSupported: (candidate: string) => boolean,
+): AudioRecordingPipeline | null => {
+	const candidates: AudioRecordingPipeline[] = [
+		{ mimeType: "audio/webm;codecs=opus", fileExtension: "webm" },
+		{ mimeType: "audio/webm", fileExtension: "webm" },
+		{ mimeType: "audio/mp4;codecs=mp4a.40.2", fileExtension: "mp4" },
+		{ mimeType: "audio/mp4", fileExtension: "mp4" },
+	];
+	return (
+		candidates.find((candidate) => isMimeSupported(candidate.mimeType)) ?? null
+	);
+};
+
+export const selectAudioRecordingPipeline =
+	(): AudioRecordingPipeline | null => {
+		if (typeof MediaRecorder === "undefined") return null;
+		return selectAudioRecordingPipelineFromSupport((candidate) =>
+			MediaRecorder.isTypeSupported(candidate),
+		);
+	};
 
 // Derive the codec labels that get attached to the upload as object metadata
 // from the codecs the recorder actually negotiated, rather than assuming vp9 /

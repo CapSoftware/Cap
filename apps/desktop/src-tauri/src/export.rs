@@ -2208,13 +2208,12 @@ mod tests {
 
     #[tokio::test]
     async fn export_preview_reads_saved_caption_choice_after_stale_live_preview_update() {
-        for export_with_subtitles in [false, true] {
+        for enabled in [false, true] {
             let dir = tempdir().unwrap();
             let mut saved = cap_project::ProjectConfiguration {
                 captions: Some(cap_project::CaptionsData {
                     settings: cap_project::CaptionSettings {
-                        enabled: true,
-                        export_with_subtitles,
+                        enabled,
                         ..Default::default()
                     },
                     ..Default::default()
@@ -2223,32 +2222,28 @@ mod tests {
             };
             saved.write(dir.path()).unwrap();
             let (sender, receiver) = tokio::sync::watch::channel(saved.clone());
-            saved
-                .captions
-                .as_mut()
-                .unwrap()
-                .settings
-                .export_with_subtitles = !export_with_subtitles;
-            saved.captions.as_mut().unwrap().settings.enabled = false;
+            saved.captions.as_mut().unwrap().settings.enabled = !enabled;
             sender.send(saved).unwrap();
 
             let preview = load_export_preview_config(dir.path().to_path_buf(), false)
                 .await
                 .unwrap();
-            let settings = preview.captions.unwrap().settings;
-            assert!(settings.enabled);
-            assert_eq!(settings.export_with_subtitles, export_with_subtitles);
-            assert!(
-                !receiver
+            assert_eq!(preview.captions.unwrap().settings.enabled, enabled);
+            assert_eq!(
+                receiver
                     .borrow()
                     .captions
                     .as_ref()
                     .unwrap()
                     .settings
-                    .enabled
+                    .enabled,
+                !enabled
             );
             let persisted = cap_project::ProjectConfiguration::load(dir.path()).unwrap();
-            assert!(persisted.captions.as_ref().unwrap().settings.enabled);
+            assert_eq!(
+                persisted.captions.as_ref().unwrap().settings.enabled,
+                enabled
+            );
         }
     }
 
@@ -2316,28 +2311,25 @@ mod tests {
     #[test]
     fn export_preview_caption_policy_preserves_editor_and_cursor_only_states() {
         for enabled in [false, true] {
-            for export in [false, true] {
-                for cursor_only in [false, true] {
-                    let editor = cap_project::ProjectConfiguration {
-                        captions: Some(cap_project::CaptionsData {
-                            settings: cap_project::CaptionSettings {
-                                enabled,
-                                export_with_subtitles: export,
-                                ..Default::default()
-                            },
+            for cursor_only in [false, true] {
+                let editor = cap_project::ProjectConfiguration {
+                    captions: Some(cap_project::CaptionsData {
+                        settings: cap_project::CaptionSettings {
+                            enabled,
                             ..Default::default()
-                        }),
+                        },
                         ..Default::default()
-                    };
-                    let original = serde_json::to_value(&editor).unwrap();
-                    let preview = export_project_config(editor.clone(), cursor_only);
-                    if cursor_only {
-                        assert!(preview.captions.is_none());
-                    } else {
-                        assert_eq!(preview.captions.unwrap().settings.enabled, enabled);
-                    }
-                    assert_eq!(serde_json::to_value(editor).unwrap(), original);
+                    }),
+                    ..Default::default()
+                };
+                let original = serde_json::to_value(&editor).unwrap();
+                let preview = export_project_config(editor.clone(), cursor_only);
+                if cursor_only {
+                    assert!(preview.captions.is_none());
+                } else {
+                    assert_eq!(preview.captions.unwrap().settings.enabled, enabled);
                 }
+                assert_eq!(serde_json::to_value(editor).unwrap(), original);
             }
         }
     }

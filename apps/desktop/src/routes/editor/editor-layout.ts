@@ -10,3 +10,5 @@ export function editorVerticalLayout(available: number, preferred: number) {
 		),
 	};
 }
+
+export const CLIP_STRIP_SPACE = 56;

@@ -1,0 +1,356 @@
+import {
+	canStreamAudio,
+	STREAMED_AUDIO_MIN_BYTES,
+	StreamedAudio,
+} from "./browser-audio-stream";
+import { mediaSource } from "./browser-media-inputs";
+import { probedBrowserMedia } from "./browser-media-probe";
+import type { BrowserEditorSourceCatalog } from "./browser-sources";
+
+type AudioKind = "mic" | "system" | "display";
+type AudioRole = "primary" | "overlap";
+type SpeedAudioMode = "maintainPitch" | "matchSpeed" | "mute" | null;
+type AudioSlot = {
+	element: HTMLAudioElement;
+	stream: StreamedAudio | null;
+	url: string;
+	gain: GainNode | null;
+	source: MediaElementAudioSourceNode | null;
+	fade: number;
+	lastTime: number;
+};
+
+function record(value: unknown): Record<string, unknown> | null {
+	return typeof value === "object" && value !== null && !Array.isArray(value)
+		? (value as Record<string, unknown>)
+		: null;
+}
+
+function numeric(value: unknown, fallback: number) {
+	return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function volumeFromDb(db: number) {
+	return db <= -30 ? 0 : 10 ** (db / 20);
+}
+
+function slotKey(role: AudioRole, kind: AudioKind) {
+	return `${role}:${kind}`;
+}
+
+function releaseSlot(slot: AudioSlot) {
+	slot.stream?.dispose();
+	slot.element.pause();
+	slot.element.removeAttribute("src");
+	slot.element.load();
+	slot.element.remove();
+	slot.source?.disconnect();
+	slot.gain?.disconnect();
+}
+
+export class BrowserAudioPlayback {
+	private readonly slots = new Map<string, AudioSlot>();
+	private readonly unavailableUrls = new Set<string>();
+	private readonly host = document.createElement("div");
+	private context: AudioContext | null = null;
+	private disposed = false;
+	private muted = false;
+	private micGain = 1;
+	private systemGain = 1;
+
+	constructor(
+		private readonly catalog: BrowserEditorSourceCatalog,
+		private readonly onError: (error: Error) => void,
+	) {
+		this.host.style.cssText =
+			"position:fixed;left:-10000px;top:0;width:1px;height:1px;overflow:hidden;pointer-events:none";
+		document.body.append(this.host);
+	}
+
+	setConfig(config: unknown) {
+		const audio = record(record(config)?.audio);
+		this.muted = audio?.mute === true;
+		this.micGain = volumeFromDb(numeric(audio?.micVolumeDb, 0));
+		this.systemGain = volumeFromDb(numeric(audio?.systemVolumeDb, 0));
+		for (const [key, slot] of this.slots) {
+			const kind = key.split(":")[1];
+			const gain = kind === "mic" ? this.micGain : this.systemGain;
+			if (slot.gain) slot.gain.gain.value = this.muted ? 0 : gain * slot.fade;
+		}
+	}
+
+	resume() {
+		if (this.disposed) return;
+		if (!this.context) {
+			this.context = new AudioContext({ latencyHint: "interactive" });
+			for (const [key, slot] of this.slots) this.connect(key, slot);
+		}
+		void this.context.resume().catch((cause: unknown) => {
+			this.onError(cause instanceof Error ? cause : new Error(String(cause)));
+		});
+		for (const slot of this.slots.values()) {
+			void slot.element.play().catch((cause: unknown) => {
+				if (!this.disposed && this.slotsHas(slot)) {
+					if (
+						slot.element.error?.code === 4 ||
+						(cause instanceof DOMException &&
+							cause.name === "NotSupportedError")
+					) {
+						this.markUnavailable(slot.url);
+						return;
+					}
+					this.onError(
+						cause instanceof Error ? cause : new Error(String(cause)),
+					);
+				}
+			});
+		}
+	}
+
+	private slotsHas(slot: AudioSlot) {
+		return [...this.slots.values()].includes(slot);
+	}
+
+	markUnavailable(url: string) {
+		this.unavailableUrls.add(url);
+		for (const [key, slot] of this.slots) {
+			if (slot.url !== url) continue;
+			releaseSlot(slot);
+			this.slots.delete(key);
+		}
+	}
+
+	private connect(key: string, slot: AudioSlot) {
+		if (!this.context || slot.gain) return;
+		const source = this.context.createMediaElementSource(slot.element);
+		const gain = this.context.createGain();
+		const kind = key.split(":")[1];
+		gain.gain.value = this.muted
+			? 0
+			: kind === "mic"
+				? this.micGain
+				: this.systemGain;
+		source.connect(gain).connect(this.context.destination);
+		slot.gain = gain;
+		slot.source = source;
+	}
+
+	/// Long WebM recordings stream through a MediaSource (see StreamedAudio);
+	/// anything else, or a stream that fails, plays the file directly.
+	private streamFor(
+		element: HTMLAudioElement,
+		url: string,
+		contentType: string | null,
+	) {
+		const media = mediaSource(url);
+		const duration = probedBrowserMedia(url)?.duration ?? null;
+		if (
+			!media?.size ||
+			media.size < STREAMED_AUDIO_MIN_BYTES ||
+			duration === null ||
+			!canStreamAudio(contentType)
+		) {
+			return null;
+		}
+		return new StreamedAudio(media, element, duration, () => {
+			if (this.disposed) return;
+			const time = element.currentTime;
+			element.src = url;
+			element.currentTime = time;
+			for (const slot of this.slots.values()) {
+				if (slot.element === element) slot.stream = null;
+			}
+		});
+	}
+
+	private slot(
+		role: AudioRole,
+		kind: AudioKind,
+		url: string,
+		contentType: string | null,
+	) {
+		const key = slotKey(role, kind);
+		let slot = this.slots.get(key);
+		if (slot?.url === url) return slot;
+		if (slot) releaseSlot(slot);
+		const element = document.createElement("audio");
+		element.preload = "auto";
+		element.crossOrigin = "anonymous";
+		const stream = this.streamFor(element, url, contentType);
+		if (!stream) element.src = url;
+		this.host.append(element);
+		slot = {
+			element,
+			stream,
+			url,
+			gain: null,
+			source: null,
+			fade: 1,
+			lastTime: -1,
+		};
+		this.slots.set(key, slot);
+		this.connect(key, slot);
+		return slot;
+	}
+
+	private async syncTrack(
+		role: AudioRole,
+		kind: AudioKind,
+		url: string | null,
+		contentType: string | null,
+		time: number,
+		playing: boolean,
+		speed: number,
+		mode: SpeedAudioMode,
+		fade: number,
+	): Promise<number | null> {
+		const key = slotKey(role, kind);
+		if (!url || !Number.isFinite(time) || time < 0) {
+			const slot = this.slots.get(key);
+			if (slot) {
+				releaseSlot(slot);
+				this.slots.delete(key);
+			}
+			return null;
+		}
+		if (this.unavailableUrls.has(url)) return null;
+		const slot = this.slot(role, kind, url, contentType);
+		slot.fade = Math.max(0, Math.min(fade, 2));
+		const audio = slot.element;
+		try {
+			const clampedTime = Number.isFinite(audio.duration)
+				? Math.min(time, Math.max(audio.duration - 0.001, 0))
+				: time;
+			// Once the element is audibly advancing, how far it trails the
+			// frame being drawn; the video clock follows it from there.
+			const lag =
+				playing &&
+				!audio.paused &&
+				!audio.seeking &&
+				slot.lastTime >= 0 &&
+				audio.currentTime !== slot.lastTime &&
+				clampedTime === time
+					? time - audio.currentTime
+					: null;
+			slot.lastTime = playing ? audio.currentTime : -1;
+			if (Math.abs(audio.currentTime - clampedTime) > (playing ? 0.12 : 0.01)) {
+				audio.currentTime = clampedTime;
+				slot.lastTime = -1;
+				return null;
+			}
+			// Runs every frame: unchanged values are left alone, since each
+			// write reaches the media element or schedules a gain change.
+			if (audio.playbackRate !== speed) audio.playbackRate = speed;
+			const preservesPitch = mode !== "matchSpeed";
+			if (
+				"preservesPitch" in audio &&
+				audio.preservesPitch !== preservesPitch
+			) {
+				audio.preservesPitch = preservesPitch;
+			}
+			const baseGain = kind === "mic" ? this.micGain : this.systemGain;
+			const gain = this.muted ? 0 : baseGain * slot.fade;
+			if (slot.gain && slot.gain.gain.value !== Math.fround(gain)) {
+				slot.gain.gain.value = gain;
+			}
+			if (playing) {
+				if (audio.paused) await audio.play();
+			} else if (!audio.paused) {
+				audio.pause();
+			}
+			return lag;
+		} catch (cause) {
+			if (
+				audio.error?.code === 4 ||
+				(cause instanceof DOMException && cause.name === "NotSupportedError")
+			) {
+				this.markUnavailable(url);
+				return null;
+			}
+			throw cause;
+		}
+	}
+
+	async sync(
+		segmentIndex: number,
+		role: AudioRole,
+		displayTime: number,
+		micTime: number,
+		systemTime: number,
+		playing: boolean,
+		speed: number,
+		mode: SpeedAudioMode,
+		enabled: boolean,
+		fade: number,
+		signal: AbortSignal,
+	): Promise<number | null> {
+		if (this.disposed || signal.aborted) return null;
+		const current = await this.catalog.snapshot(signal);
+		if (this.disposed || signal.aborted) return null;
+		const segment = current.segments[segmentIndex];
+		if (!segment) throw new Error("Editor audio clip is unavailable");
+		const displayAudio =
+			segmentIndex === 0 ? current.displayHasAudio : segment.hasAudio;
+		const lags = await Promise.all([
+			this.syncTrack(
+				role,
+				"display",
+				enabled && displayAudio ? (segment.display?.url ?? null) : null,
+				null,
+				displayTime,
+				playing,
+				speed,
+				mode,
+				fade,
+			),
+			this.syncTrack(
+				role,
+				"mic",
+				enabled && segmentIndex === 0 ? (current.mic?.url ?? null) : null,
+				current.mic?.contentType ?? null,
+				micTime,
+				playing,
+				speed,
+				mode,
+				fade,
+			),
+			this.syncTrack(
+				role,
+				"system",
+				enabled && segmentIndex === 0
+					? (current.systemAudio?.url ?? null)
+					: null,
+				current.systemAudio?.contentType ?? null,
+				systemTime,
+				playing,
+				speed,
+				mode,
+				fade,
+			),
+		]);
+		return lags.find((lag) => lag !== null) ?? null;
+	}
+
+	pause() {
+		for (const slot of this.slots.values()) slot.element.pause();
+	}
+
+	releaseOverlaps() {
+		for (const [key, slot] of this.slots) {
+			if (!key.startsWith("overlap:")) continue;
+			releaseSlot(slot);
+			this.slots.delete(key);
+		}
+	}
+
+	dispose() {
+		if (this.disposed) return;
+		this.disposed = true;
+		this.pause();
+		for (const slot of this.slots.values()) releaseSlot(slot);
+		this.slots.clear();
+		this.host.remove();
+		void this.context?.close();
+		this.context = null;
+	}
+}

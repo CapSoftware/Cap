@@ -11,6 +11,7 @@ import {
 import { produce } from "solid-js/store";
 import { defaultCaptionSettings } from "~/store/captions";
 import type { CaptionTrackSegment } from "~/utils/tauri";
+import { spanIndexAt, spansInOrder } from "./active-caption";
 import { useCanvasSnapTargets } from "./CanvasElementsOverlay";
 import { FPS, useEditorContext } from "./context";
 import { SNAP_PX, type SnapTargets, snapMovingRect } from "./snapping";
@@ -63,18 +64,29 @@ export function CaptionOverlay(props: CaptionOverlayProps) {
 		...project.captions?.settings,
 	}));
 
-	const activeCaption = createMemo(() => {
-		if (!settings().enabled) return null;
-		const time = currentAbsoluteTime();
-		const segments = project.timeline?.captionSegments ?? [];
-		const index = segments.findIndex(
-			(segment) => time >= segment.start && time < segment.end,
-		);
-		if (index < 0) return null;
-		const segment = segments[index];
-		if (!segment) return null;
-		return { index, segment };
-	});
+	const captionSegments = () => project.timeline?.captionSegments ?? [];
+
+	const captionsInOrder = createMemo(() => spansInOrder(captionSegments()));
+
+	const activeCaption = createMemo(
+		() => {
+			if (!settings().enabled) return null;
+			const segments = captionSegments();
+			const index = spanIndexAt(
+				segments,
+				currentAbsoluteTime(),
+				captionsInOrder(),
+			);
+			if (index < 0) return null;
+			const segment = segments[index];
+			if (!segment) return null;
+			return { index, segment };
+		},
+		undefined,
+		{
+			equals: (a, b) => a?.index === b?.index && a?.segment === b?.segment,
+		},
+	);
 
 	const text = createMemo(() => activeCaption()?.segment.text ?? "");
 

@@ -4,6 +4,21 @@ import { captureDisplayStream } from "./display-capture";
 const stream = {} as MediaStream;
 
 describe("captureDisplayStream", () => {
+	it("prefers the current tab when tab capture needs the display picker", async () => {
+		const request = vi.fn().mockResolvedValue(stream);
+
+		await expect(captureDisplayStream("tab", false, request)).resolves.toBe(
+			stream,
+		);
+		expect(request).toHaveBeenCalledTimes(1);
+		expect(request.mock.calls[0]?.[0]).toMatchObject({
+			preferCurrentTab: true,
+			selfBrowserSurface: "include",
+			monitorTypeSurfaces: "exclude",
+			audio: false,
+		});
+	});
+
 	it("falls back when advanced options are rejected before a picker can open", async () => {
 		const request = vi
 			.fn()

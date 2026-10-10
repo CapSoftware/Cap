@@ -1,3 +1,4 @@
+import { createEventListener } from "@solid-primitives/event-listener";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
@@ -21,7 +22,9 @@ import OrganizationDropdown from "./OrganizationDropdown";
 import PresetsDropdown from "./PresetsDropdown";
 import { createRecordingTitleSave } from "./recording-title-save";
 import ShareButton from "./ShareButton";
+import { TemplatesGallery } from "./templates-gallery";
 import { EditorButton } from "./ui";
+import { WebPublishControls } from "./web-publish-controls";
 
 export type ResolutionOption = {
 	label: string;
@@ -48,6 +51,11 @@ export type TitleSaveRegistration = {
 };
 
 type RegisterTitleSave = (save: TitleSaveRegistration | undefined) => void;
+const isWebEditor = import.meta.env.VITE_CAP_WEB_EDITOR === "true";
+const captionsAllowed = () =>
+	!isWebEditor ||
+	(window as Window & { capWebEditorCaptionsEnabled?: boolean })
+		.capWebEditorCaptionsEnabled === true;
 
 export function Header(props: {
 	registerTitleSave: RegisterTitleSave;
@@ -71,10 +79,20 @@ export function Header(props: {
 		setEditorState("timeline", "selection", null);
 		return true;
 	};
+	const [captionPlanAllowed, setCaptionPlanAllowed] = createSignal(
+		captionsAllowed(),
+	);
+	if (isWebEditor)
+		createEventListener(window, "cap-web-editor-captions-plan", () =>
+			setCaptionPlanAllowed(captionsAllowed()),
+		);
 
 	const hasTranscript = createMemo(() => {
 		const segments = project.captions?.segments ?? [];
-		return segments.some((seg) => seg.words && seg.words.length > 0);
+		return (
+			captionPlanAllowed() &&
+			segments.some((seg) => seg.words && seg.words.length > 0)
+		);
 	});
 
 	const isTranscriptOpen = createMemo(() => {
@@ -92,6 +110,7 @@ export function Header(props: {
 	return (
 		<div
 			data-tauri-drag-region
+			data-editor-header
 			class="flex relative shrink-0 flex-row items-center w-full h-13 pr-3 max-[900px]:grid max-[900px]:grid-cols-1 max-[900px]:grid-rows-[36px_36px] max-[900px]:h-[72px] max-[900px]:pr-2"
 		>
 			<div
@@ -101,13 +120,15 @@ export function Header(props: {
 					ostype() === "windows" && "max-[900px]:pr-[146px]",
 				)}
 			>
-				{ostype() === "macos" && (
-					<div data-tauri-drag-region class="h-full w-[92px] shrink-0" />
-				)}
-				{ostype() === "linux" && (
-					<CaptionControlsMacOS class="mr-1 ml-3 shrink-0" />
-				)}
-				{ostype() === "windows" && <div class="w-3 shrink-0" />}
+				<Show when={!isWebEditor} fallback={<div class="w-3 shrink-0" />}>
+					{ostype() === "macos" && (
+						<div data-tauri-drag-region class="h-full w-[92px] shrink-0" />
+					)}
+					{ostype() === "linux" && (
+						<CaptionControlsMacOS class="mr-1 ml-3 shrink-0" />
+					)}
+					{ostype() === "windows" && <div class="w-3 shrink-0" />}
+				</Show>
 
 				<div inert={props.disabled} class="flex gap-1.5 items-center min-w-0">
 					<NameEditor
@@ -116,23 +137,31 @@ export function Header(props: {
 						readOnly={titleReadOnly() || props.disabled === true}
 						setReadOnly={setTitleReadOnly}
 					/>
-					<span class="shrink-0 text-[13px] text-ed-text-3">.cap</span>
+					<span
+						data-header-extension
+						class="shrink-0 text-[13px] text-ed-text-3"
+					>
+						.cap
+					</span>
 				</div>
 
 				<div
 					inert={props.disabled}
+					data-header-delete
 					class="flex gap-0.5 items-center ml-1.5 shrink-0"
 				>
-					<EditorButton
-						onClick={() => {
-							clearTimelineSelection();
+					<Show when={!isWebEditor}>
+						<EditorButton
+							onClick={() => {
+								clearTimelineSelection();
 
-							console.log({ path: `${editorInstance.path}/` });
-							commands.revealItemInDir(`${editorInstance.path}/`);
-						}}
-						tooltipText="Open recording bundle"
-						leftIcon={<IconLucideFolder />}
-					/>
+								console.log({ path: `${editorInstance.path}/` });
+								commands.revealItemInDir(`${editorInstance.path}/`);
+							}}
+							tooltipText="Open recording bundle"
+							leftIcon={<IconLucideFolder />}
+						/>
+					</Show>
 					<EditorButton
 						onClick={async () => {
 							clearTimelineSelection();
@@ -154,6 +183,7 @@ export function Header(props: {
 
 			<div
 				data-tauri-drag-region
+				data-header-actions
 				inert={props.disabled}
 				class="flex shrink-0 flex-row items-center gap-1 max-[900px]:justify-end"
 			>
@@ -182,24 +212,35 @@ export function Header(props: {
 					leftIcon={<IconCapRedo />}
 				/>
 				<div class="mx-1.5 w-px h-4 shrink-0 bg-ed-line-strong" />
-				<OrganizationDropdown />
-				<PresetsDropdown />
-				<EditorButton
-					title="Clips"
-					aria-label="Clips"
-					class={cx(isClipsOpen() && "bg-ed-ctl-hover text-ed-text-1")}
-					leftIcon={<IconCapClapperboard />}
-					onClick={() => {
-						clearTimelineSelection();
-						if (isClipsOpen()) {
-							setDialog((d) => ({ ...d, open: false }));
-						} else {
-							setDialog({ type: "clips", open: true });
-						}
-					}}
+				<Show
+					when={isWebEditor}
+					fallback={
+						<>
+							<OrganizationDropdown />
+							<PresetsDropdown />
+						</>
+					}
 				>
-					<span class="max-[1200px]:hidden">Clips</span>
-				</EditorButton>
+					<TemplatesGallery />
+				</Show>
+				<Show when={!isWebEditor}>
+					<EditorButton
+						title="Clips"
+						aria-label="Clips"
+						class={cx(isClipsOpen() && "bg-ed-ctl-hover text-ed-text-1")}
+						leftIcon={<IconCapClapperboard />}
+						onClick={() => {
+							clearTimelineSelection();
+							if (isClipsOpen()) {
+								setDialog((d) => ({ ...d, open: false }));
+							} else {
+								setDialog({ type: "clips", open: true });
+							}
+						}}
+					>
+						<span class="max-[1200px]:hidden">Clips</span>
+					</EditorButton>
+				</Show>
 				<Show when={hasTranscript()}>
 					<EditorButton
 						title={isTranscriptOpen() ? "Back to editor" : "Captions"}
@@ -224,30 +265,32 @@ export function Header(props: {
 						</span>
 					</EditorButton>
 				</Show>
-				<ShareButton />
-				<button
-					type="button"
-					class={cx(
-						"flex shrink-0 gap-[7px] justify-center items-center pl-3 pr-3.5 ml-1.5 h-[30px] text-[13px] font-medium text-white rounded-lg outline-hidden",
-						"bg-linear-to-b from-ed-accent-2 to-ed-accent",
-						"shadow-[inset_0_1px_0_rgba(255,255,255,0.22),0_1px_2px_rgba(0,60,160,0.25)]",
-						"transition-[filter] duration-150 ease-out",
-						"hover:brightness-[1.06] active:brightness-[0.96]",
-					)}
-					onClick={() => {
-						clearTimelineSelection();
+				<Show when={!isWebEditor} fallback={<WebPublishControls />}>
+					<ShareButton />
+					<button
+						type="button"
+						class={cx(
+							"flex shrink-0 gap-[7px] justify-center items-center pl-3 pr-3.5 ml-1.5 h-[30px] text-[13px] font-medium text-white rounded-lg outline-hidden",
+							"bg-linear-to-b from-ed-accent-2 to-ed-accent",
+							"shadow-[inset_0_1px_0_rgba(255,255,255,0.22),0_1px_2px_rgba(0,60,160,0.25)]",
+							"transition-[filter] duration-150 ease-out",
+							"hover:brightness-[1.06] active:brightness-[0.96]",
+						)}
+						onClick={() => {
+							clearTimelineSelection();
 
-						trackEvent("export_button_clicked");
-						if (exportState.type === "done") setExportState({ type: "idle" });
+							trackEvent("export_button_clicked");
+							if (exportState.type === "done") setExportState({ type: "idle" });
 
-						setDialog({ type: "export", open: true });
-					}}
-				>
-					<UploadIcon class="size-4" />
-					Export
-				</button>
+							setDialog({ type: "export", open: true });
+						}}
+					>
+						<UploadIcon class="size-4" />
+						Export
+					</button>
+				</Show>
 			</div>
-			{ostype() === "windows" && (
+			{!isWebEditor && ostype() === "windows" && (
 				<CaptionControlsWindows11 class="shrink-0 max-[900px]:absolute max-[900px]:right-0 max-[900px]:top-0 max-[900px]:h-9" />
 			)}
 		</div>
@@ -362,7 +405,7 @@ function NameEditor(props: {
 				/>
 				<span
 					ref={prettyNameMeasureRef}
-					class="pointer-events-none max-w-[200px] px-px m-0 peer-focus:opacity-0 border-b border-transparent truncate whitespace-pre"
+					class="pointer-events-none max-w-[480px] px-px m-0 peer-focus:opacity-0 border-b border-transparent truncate whitespace-pre"
 				>
 					{prettyName()}
 				</span>

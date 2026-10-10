@@ -1,6 +1,6 @@
 "use client";
 
-import { LogoSpinner } from "@cap/ui";
+import { InkLoader } from "@/components/ink-loader";
 
 export function RecordingInProgressOverlay({
 	onConfirmStopped,
@@ -16,7 +16,7 @@ export function RecordingInProgressOverlay({
 	variant?: "solid" | "overlay";
 }) {
 	const backgroundClassName =
-		variant === "overlay" ? "bg-black/70 backdrop-blur-[1px]" : "bg-black";
+		variant === "overlay" ? "bg-black/75" : "bg-black";
 
 	return (
 		<div
@@ -65,7 +65,7 @@ export function PreparingVideoOverlay({
 		<div
 			className={`flex flex-col gap-3 justify-center items-center bg-black rounded-xl ${className ?? ""}`}
 		>
-			<LogoSpinner className="w-8 h-auto animate-spin sm:w-10" />
+			<InkLoader size="lg" tone="media" />
 			<p className="text-white/50 text-sm">{label}</p>
 		</div>
 	);

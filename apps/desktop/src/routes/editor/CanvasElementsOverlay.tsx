@@ -62,6 +62,7 @@ type SnapExclude =
 	| { text: number }
 	| { mask: number }
 	| { image: number }
+	| { waveform: number }
 	| null;
 
 /**
@@ -78,7 +79,8 @@ export function useCanvasSnapTargets() {
 		const layout = latestFrameLayout();
 
 		if (layout) {
-			if (exclude !== "display") rects.push(normRect(layout.display, layout));
+			if (exclude !== "display" && !project.hideDisplay)
+				rects.push(normRect(layout.display, layout));
 			if (layout.camera && exclude !== "camera")
 				rects.push(normRect(layout.camera, layout));
 		}
@@ -145,6 +147,22 @@ export function useCanvasSnapTargets() {
 				y: segment.center.y - h / 2,
 				w,
 				h,
+			});
+		});
+		project.timeline?.waveformSegments?.forEach((segment, index) => {
+			if (
+				typeof exclude === "object" &&
+				exclude !== null &&
+				"waveform" in exclude &&
+				exclude.waveform === index
+			)
+				return;
+			if (!segment.enabled || t < segment.start || t >= segment.end) return;
+			rects.push({
+				x: segment.center.x - segment.size.x / 2,
+				y: segment.center.y - segment.size.y / 2,
+				w: segment.size.x,
+				h: segment.size.y,
 			});
 		});
 		// The classic camera-inset margin lines only make sense for the camera
@@ -275,7 +293,10 @@ export function CanvasElementsOverlay(props: { size: Size }) {
 		return mode === "splitScreen" || mode === "floating";
 	};
 	const showDisplay = () =>
-		overlayVisible() && !paneScene() && sceneModeAt(time()) !== "cameraOnly";
+		overlayVisible() &&
+		!project.hideDisplay &&
+		!paneScene() &&
+		sceneModeAt(time()) !== "cameraOnly";
 	const showCamera = () => overlayVisible() && !paneScene();
 	// The rendered display rect is zoom-transformed while a zoom segment is
 	// active, but drags write base-layout config — lock it to avoid a

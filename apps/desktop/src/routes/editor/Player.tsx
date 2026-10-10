@@ -8,6 +8,7 @@ import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
 import {
 	createEffect,
+	createMemo,
 	createSignal,
 	For,
 	on,
@@ -21,39 +22,54 @@ import { createTauriEventListener } from "~/utils/createEventListener";
 import { commands } from "~/utils/tauri";
 import AspectRatioSelect from "./AspectRatioSelect";
 import {
+	BufferingStatus,
+	createBufferingDisplay,
+	createFramesFlowing,
+} from "./buffering-status";
+import {
 	CanvasElementsOverlay,
 	SnapGuidesOverlay,
 } from "./CanvasElementsOverlay";
 import { CaptionOverlay } from "./CaptionOverlay";
 import { CaptionsRegenerateBadge } from "./CaptionsRegenerateBadge";
 import { createCaptionTrackSegments } from "./captions";
-import { type EditorPreviewQuality, FPS, useEditorContext } from "./context";
+import {
+	type EditorPreviewQuality,
+	FPS,
+	MAX_ZOOM_IN,
+	useEditorContext,
+} from "./context";
 import { FrameButton } from "./FrameButton";
+import type { FocusMode } from "./focus-mode";
 import { ImageOverlay } from "./image-overlay";
 import { MaskOverlay } from "./MaskOverlay";
 import { PerformanceOverlay } from "./PerformanceOverlay";
+import { createPlaybackBuffering, onPlayRequest } from "./playback-buffering";
 import { usePreparingEditor } from "./preparing-editor-context";
 import { PreparingFrame } from "./preparing-frame";
 import {
 	createPreviewBoundsReaction,
 	createPreviewBoundsUpdater,
 } from "./preview-bounds";
+import { editorLayout } from "./responsive-layout";
 import { SplitScreenOverlay } from "./SplitScreenOverlay";
 import { TextOverlay } from "./TextOverlay";
+import { sliderToZoom, ZOOM_STEP, zoomToSlider } from "./Timeline/zoom";
 import { EditorButton, Slider } from "./ui";
 import { useEditorShortcuts } from "./useEditorShortcuts";
 import { formatTime } from "./utils";
+import { WaveformOverlay } from "./waveform-overlay";
 
-export function PlayerContent(props: { compactness?: number }) {
+const READOUT_INTERVAL_MS = 100;
+
+export function PlayerContent(props: {
+	compactness?: number;
+	focusMode?: FocusMode;
+}) {
 	const {
-		previewStyle,
-		selectedStyle,
-		toggleStyleGroup,
-		styleScopeToken,
 		project,
 		flushProjectConfig,
 		editorInstance,
-		setDialog,
 		totalDuration,
 		editorState,
 		setEditorState,
@@ -186,43 +202,25 @@ export function PlayerContent(props: { compactness?: number }) {
 		}
 	});
 
-	const isAtEnd = () => {
+	const isAtEnd = createMemo(() => {
 		const total = totalDuration();
 		return total > 0 && total - editorState.playbackTime <= 0.1;
-	};
+	});
 
-	const cropDialogHandler = async () => {
-		const background = selectedStyle()
-			? (selectedStyle()?.overrides.background ?? previewStyle().background)
-			: project.background;
-		if (selectedStyle() && !selectedStyle()?.overrides.background)
-			toggleStyleGroup("background", true);
-		const styleTarget = editorState.styleEditIndex;
-		const scopeToken = styleScopeToken();
-		const display = editorInstance.recordings.segments[0].display;
-		setDialog({
-			open: true,
-			type: "crop",
-			styleTarget,
-			scopeToken,
-			position: {
-				...(background.crop?.position ?? { x: 0, y: 0 }),
-			},
-			size: {
-				...(background.crop?.size ?? {
-					x: display.width,
-					y: display.height,
-				}),
-			},
-		});
-		const pending = requestHandoffPlayback(false);
-		if (pending) {
-			await pending;
-			return;
-		}
-		await commands.stopPlayback();
-		setEditorState("playing", false);
-	};
+	// While playing, the readout's frame digits change faster than they can be
+	// read, and each change costs the page a layout; it keeps up at 10 Hz.
+	let readoutAt = 0;
+	const readoutSeconds = createMemo((shown: number) => {
+		const seconds = Math.max(
+			editorState.previewTime ?? editorState.playbackTime,
+			0,
+		);
+		if (!editorState.playing) return seconds;
+		const now = performance.now();
+		if (now - readoutAt < READOUT_INTERVAL_MS) return shown;
+		readoutAt = now;
+		return seconds;
+	}, 0);
 
 	const handlePreviewQualityChange = async (quality: EditorPreviewQuality) => {
 		if (quality === previewQuality()) return;
@@ -263,7 +261,29 @@ export function PlayerContent(props: { compactness?: number }) {
 		}
 	});
 
+	// On the web the frame Play starts from can still be loading, so the
+	// button shows the press at once rather than when playback begins.
+	const [playPending, setPlayPending] = createSignal(false);
+	let playRequest = 0;
+	const shownPlaying = () => playPending() || (playbackIntent() && !isAtEnd());
+	const buffering = createPlaybackBuffering();
+	const framesFlowing = createFramesFlowing(
+		() => editorState.playbackTime,
+		() => editorState.playing,
+	);
+	const bufferingDisplay = createBufferingDisplay(
+		() => (playPending() || buffering()) && !framesFlowing(),
+		shownPlaying,
+	);
+	const playBusy = () => bufferingDisplay.shown() && shownPlaying();
+
 	const handlePlayPauseClick = async () => {
+		if (playPending()) {
+			// Pressed again before playback began: it doesn't start.
+			playRequest++;
+			setPlayPending(false);
+			return;
+		}
 		const pending = requestHandoffPlayback(
 			isAtEnd() || !playbackIntent(),
 			isAtEnd() ? 0 : undefined,
@@ -272,27 +292,44 @@ export function PlayerContent(props: { compactness?: number }) {
 			await pending;
 			return;
 		}
+		const request = ++playRequest;
+		const current = () => request === playRequest;
 		try {
 			if (isAtEnd()) {
+				setPlayPending(true);
 				await commands.stopPlayback();
 				setEditorState("playbackTime", 0);
 				await commands.seekTo(0);
+				if (!current()) return;
 				await commands.startPlayback(FPS, previewResolutionBase());
 				setEditorState("playing", true);
 			} else if (editorState.playing) {
 				await commands.stopPlayback();
 				setEditorState("playing", false);
 			} else {
+				setPlayPending(true);
 				await commands.seekTo(Math.floor(editorState.playbackTime * FPS));
+				if (!current()) return;
 				await commands.startPlayback(FPS, previewResolutionBase());
 				setEditorState("playing", true);
+			}
+			if (!current() && editorState.playing) {
+				await commands.stopPlayback();
+				setEditorState("playing", false);
 			}
 			if (editorState.playing) setEditorState("previewTime", null);
 		} catch (error) {
 			console.error("Error handling play/pause:", error);
 			setEditorState("playing", false);
+		} finally {
+			if (current()) setPlayPending(false);
 		}
 	};
+
+	// Play pressed on the loading screen starts once the editor is here.
+	onPlayRequest((playing) => {
+		if (playing !== shownPlaying()) void handlePlayPauseClick();
+	});
 
 	if (import.meta.env.DEV) {
 		createTauriEventListener<boolean>(
@@ -304,7 +341,7 @@ export function PlayerContent(props: { compactness?: number }) {
 					),
 			},
 			(playing) => {
-				if (playbackIntent() !== playing) void handlePlayPauseClick();
+				if (shownPlaying() !== playing) void handlePlayPauseClick();
 			},
 		);
 	}
@@ -334,7 +371,7 @@ export function PlayerContent(props: { compactness?: number }) {
 			combo: "Mod+=",
 			handler: () =>
 				editorState.timeline.transform.updateZoom(
-					editorState.timeline.transform.zoom / 1.1,
+					editorState.timeline.transform.zoom / ZOOM_STEP,
 					editorState.playbackTime,
 				),
 		},
@@ -342,9 +379,16 @@ export function PlayerContent(props: { compactness?: number }) {
 			combo: "Mod+-",
 			handler: () =>
 				editorState.timeline.transform.updateZoom(
-					editorState.timeline.transform.zoom * 1.1,
+					editorState.timeline.transform.zoom * ZOOM_STEP,
 					editorState.playbackTime,
 				),
+		},
+		{
+			combo: "Mod+Digit0",
+			handler: () => {
+				editorState.timeline.transform.updateZoom(zoomOutLimit(), 0);
+				editorState.timeline.transform.setPosition(0);
+			},
 		},
 		{
 			combo: "Space",
@@ -375,25 +419,19 @@ export function PlayerContent(props: { compactness?: number }) {
 			onMouseLeave={() => setPanelHovered(false)}
 		>
 			<div
+				data-player-toolbar
 				class="flex overflow-x-auto relative z-10 flex-none flex-row gap-3 items-center px-3"
 				style={{ height: `${44 - 4 * (props.compactness ?? 0)}px` }}
 			>
 				<div class="flex flex-1 gap-0.5 items-center min-w-fit">
-					<Show when={!selectedStyle()}>
-						<AspectRatioSelect />
-					</Show>
-					<EditorButton
-						variant="text"
-						tooltipText="Crop Video"
-						onClick={cropDialogHandler}
-						leftIcon={<IconCapCrop />}
-					>
-						<span class="max-[1200px]:hidden">Crop</span>
-					</EditorButton>
-					<FrameButton />
+					<PreviewTools />
 				</div>
 				<div class="flex flex-row flex-none gap-2 items-center">
-					<span class="text-xs text-ed-text-2">Preview</span>
+					<Tooltip content="How sharp playback looks while you edit. Exports always render at full quality.">
+						<span class="text-xs text-ed-text-2 cursor-default">
+							Preview quality
+						</span>
+					</Tooltip>
 					<div
 						role="group"
 						aria-label="Preview quality"
@@ -425,28 +463,36 @@ export function PlayerContent(props: { compactness?: number }) {
 				</div>
 			</div>
 			<PreviewCanvas
+				focusMode={props.focusMode}
+				buffering={
+					bufferingDisplay.shown()
+						? { playing: shownPlaying(), slow: bufferingDisplay.slow() }
+						: null
+				}
 				onPreviewMouseDown={(event) => {
 					if (event.button === 0) setPreviewPointerDown(true);
 				}}
 			/>
 			<div
+				data-player-transport
 				class="flex overflow-x-auto relative z-10 flex-none flex-row gap-3 items-center px-3.5"
 				style={{ height: `${48 - 4 * (props.compactness ?? 0)}px` }}
 			>
-				<div class="flex flex-1 items-center min-w-fit whitespace-nowrap">
-					<Time
-						class="font-medium text-ed-text-1"
-						seconds={Math.max(
-							editorState.previewTime ?? editorState.playbackTime,
-							0,
-						)}
-					/>
+				<div
+					data-player-time
+					class="flex flex-1 items-center min-w-fit whitespace-nowrap"
+				>
+					<Time class="font-medium text-ed-text-1" seconds={readoutSeconds()} />
 					<span class="text-[13px] tabular-nums text-ed-text-3"> / </span>
 					<Time seconds={totalDuration()} />
 				</div>
-				<div class="flex flex-row flex-none gap-3.5 items-center">
+				<div
+					data-transport-controls
+					class="flex flex-row flex-none gap-3.5 items-center"
+				>
 					<button
 						type="button"
+						aria-label="Skip to start"
 						class="text-ed-text-2 transition-opacity hover:opacity-70 will-change-[opacity]"
 						onClick={async () => {
 							const pending = requestHandoffPlayback(false, 0);
@@ -466,14 +512,22 @@ export function PlayerContent(props: { compactness?: number }) {
 					<Tooltip kbd={["Space"]} content="Play/Pause video">
 						<button
 							type="button"
+							aria-label={shownPlaying() ? "Pause video" : "Play video"}
+							aria-busy={playBusy() || undefined}
 							onClick={handlePlayPauseClick}
-							class="flex justify-center items-center rounded-full transition-opacity size-8 bg-ed-text-1 text-ed-card hover:opacity-90"
+							class="flex relative justify-center items-center rounded-full transition-opacity size-8 bg-ed-text-1 text-ed-card hover:opacity-90"
 						>
-							{!playbackIntent() || isAtEnd() ? (
-								<IconCapPlay class="size-3" />
-							) : (
+							{shownPlaying() ? (
 								<IconCapPause class="size-3" />
+							) : (
+								<IconCapPlay class="size-3" />
 							)}
+							<Show when={playBusy()}>
+								<span
+									aria-hidden="true"
+									class="absolute -inset-[3px] rounded-full border-2 border-transparent border-t-ed-text-1 animate-spin will-change-transform motion-reduce:animate-none"
+								/>
+							</Show>
 						</button>
 					</Tooltip>
 					<button
@@ -493,7 +547,10 @@ export function PlayerContent(props: { compactness?: number }) {
 						<IconCapNext class="size-3.5" />
 					</button>
 				</div>
-				<div class="flex flex-row flex-1 gap-0.5 justify-end items-center min-w-fit">
+				<div
+					data-transport-tools
+					class="flex flex-row flex-1 gap-0.5 justify-end items-center min-w-fit"
+				>
 					<EditorButton<typeof KToggleButton>
 						tooltipText="Toggle Split"
 						kbd={["S"]}
@@ -505,14 +562,21 @@ export function PlayerContent(props: { compactness?: number }) {
 						variant="danger"
 						leftIcon={<IconCapScissors />}
 					/>
-					<div class="mx-1.5 w-px h-4 shrink-0 bg-ed-line-strong" />
-					<div class="flex flex-row gap-0.5 items-center" title={zoomHint()}>
+					<div
+						data-player-zoom
+						class="mx-1.5 w-px h-4 shrink-0 bg-ed-line-strong"
+					/>
+					<div
+						data-player-zoom
+						class="flex flex-row gap-0.5 items-center"
+						title={zoomHint()}
+					>
 						<EditorButton
 							tooltipText="Zoom out"
 							kbd={["meta", "-"]}
 							onClick={() => {
 								editorState.timeline.transform.updateZoom(
-									editorState.timeline.transform.zoom * 1.1,
+									editorState.timeline.transform.zoom * ZOOM_STEP,
 									editorState.playbackTime,
 								);
 							}}
@@ -525,17 +589,15 @@ export function PlayerContent(props: { compactness?: number }) {
 							maxValue={1}
 							step={0.001}
 							value={[
-								Math.min(
-									Math.max(
-										1 - editorState.timeline.transform.zoom / zoomOutLimit(),
-										0,
-									),
-									1,
+								zoomToSlider(
+									editorState.timeline.transform.zoom,
+									MAX_ZOOM_IN,
+									zoomOutLimit(),
 								),
 							]}
 							onChange={([v]) => {
 								editorState.timeline.transform.updateZoom(
-									(1 - v) * zoomOutLimit(),
+									sliderToZoom(v ?? 0, MAX_ZOOM_IN, zoomOutLimit()),
 									editorState.playbackTime,
 								);
 							}}
@@ -550,7 +612,7 @@ export function PlayerContent(props: { compactness?: number }) {
 							kbd={["meta", "+"]}
 							onClick={() => {
 								editorState.timeline.transform.updateZoom(
-									editorState.timeline.transform.zoom / 1.1,
+									editorState.timeline.transform.zoom / ZOOM_STEP,
 									editorState.playbackTime,
 								);
 							}}
@@ -560,6 +622,74 @@ export function PlayerContent(props: { compactness?: number }) {
 				</div>
 			</div>
 		</div>
+	);
+}
+
+export function PreviewTools() {
+	const {
+		previewStyle,
+		selectedStyle,
+		toggleStyleGroup,
+		styleScopeToken,
+		project,
+		editorInstance,
+		setDialog,
+		editorState,
+		setEditorState,
+		requestHandoffPlayback,
+		meta,
+	} = useEditorContext();
+
+	const cropDialogHandler = async () => {
+		const background = selectedStyle()
+			? (selectedStyle()?.overrides.background ?? previewStyle().background)
+			: project.background;
+		if (selectedStyle() && !selectedStyle()?.overrides.background)
+			toggleStyleGroup("background", true);
+		const styleTarget = editorState.styleEditIndex;
+		const scopeToken = styleScopeToken();
+		const display = editorInstance.recordings.segments[0].display;
+		setDialog({
+			open: true,
+			type: "crop",
+			styleTarget,
+			scopeToken,
+			position: {
+				...(background.crop?.position ?? { x: 0, y: 0 }),
+			},
+			size: {
+				...(background.crop?.size ?? {
+					x: display.width,
+					y: display.height,
+				}),
+			},
+		});
+		const pending = requestHandoffPlayback(false);
+		if (pending) {
+			await pending;
+			return;
+		}
+		await commands.stopPlayback();
+		setEditorState("playing", false);
+	};
+
+	return (
+		<>
+			<Show when={!selectedStyle()}>
+				<AspectRatioSelect />
+			</Show>
+			<Show when={!meta().audioOnly && !project.hideDisplay}>
+				<EditorButton
+					variant="text"
+					tooltipText="Crop Video"
+					onClick={cropDialogHandler}
+					leftIcon={<IconCapCrop />}
+				>
+					<span class="max-[1200px]:hidden">Crop</span>
+				</EditorButton>
+				<FrameButton />
+			</Show>
+		</>
 	);
 }
 
@@ -575,8 +705,37 @@ const gridStyle = {
 	"background-color": "rgba(200,200,200,0.08)",
 };
 
+const prefersReducedMotion = () =>
+	window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+
+function FocusModeIcon(props: { active: boolean }) {
+	return (
+		<svg
+			viewBox="0 0 16 16"
+			fill="none"
+			stroke="currentColor"
+			stroke-width="1.6"
+			stroke-linecap="round"
+			stroke-linejoin="round"
+			class="size-4"
+			aria-hidden="true"
+		>
+			<Show
+				when={props.active}
+				fallback={
+					<path d="M2.75 6V4.25c0-.83.67-1.5 1.5-1.5H6M10 2.75h1.75c.83 0 1.5.67 1.5 1.5V6M13.25 10v1.75c0 .83-.67 1.5-1.5 1.5H10M6 13.25H4.25c-.83 0-1.5-.67-1.5-1.5V10" />
+				}
+			>
+				<path d="M6 2.75V4.5c0 .83-.67 1.5-1.5 1.5H2.75M10 2.75V4.5c0 .83.67 1.5 1.5 1.5h1.75M13.25 10H11.5c-.83 0-1.5.67-1.5 1.5v1.75M2.75 10H4.5c.83 0 1.5.67 1.5 1.5v1.75" />
+			</Show>
+		</svg>
+	);
+}
+
 function PreviewCanvas(props: {
 	onPreviewMouseDown: (event: MouseEvent) => void;
+	focusMode?: FocusMode;
+	buffering?: { playing: boolean; slow: boolean } | null;
 }) {
 	const preparing = usePreparingEditor();
 	const {
@@ -588,6 +747,10 @@ function PreviewCanvas(props: {
 	} = useEditorContext();
 
 	const hasRenderedFrame = () => canvasControls()?.hasRenderedFrame() ?? false;
+	const [hasShownFrame, setHasShownFrame] = createSignal(false);
+	createEffect(() => {
+		if (latestFrame() && hasRenderedFrame()) setHasShownFrame(true);
+	});
 	createEffect(
 		on(
 			() => editorState.playing,
@@ -629,7 +792,9 @@ function PreviewCanvas(props: {
 			capture: true,
 		},
 	);
-	const containerBounds = createElementBounds(canvasContainerRef);
+	const containerBounds = createElementBounds(canvasContainerRef, {
+		trackMutation: false,
+	});
 
 	const [debouncedBounds, setDebouncedBounds] = createSignal({
 		width: 0,
@@ -669,34 +834,38 @@ function PreviewCanvas(props: {
 		hasFrame: () => !!latestFrame(),
 		updater: boundsUpdater,
 	});
+	// The web page keeps its snapshot of the video up until the preview shows
+	// a frame of its own.
+	const previewVisible = () =>
+		preparing?.model.rendered() === true || hasShownFrame();
+	if (import.meta.env.VITE_CAP_WEB_EDITOR === "true")
+		createEffect(() => {
+			if (previewVisible())
+				window.parent.postMessage(
+					{ kind: "cap-editor-painted", version: 1 },
+					window.location.origin,
+				);
+		});
 
 	createEffect(() => {
 		const canvas = canvasRef();
 		const controls = canvasControls();
-		console.warn("[Player] Canvas init effect", {
-			hasCanvas: !!canvas,
-			hasControls: !!controls,
-			alreadyInit: initializedCanvas === canvas,
-		});
 		if (!canvas || !controls || initializedCanvas === canvas) return;
 
-		console.warn("[Player] Initializing canvas", {
-			canvasId: canvas.id,
-			isConnected: canvas.isConnected,
-		});
 		controls.initDirectCanvas(canvas);
 		initializedCanvas = canvas;
-		console.warn("[Player] Canvas initialized successfully");
 	});
 
-	const padding = 16;
-	const frameWidth = () => latestFrame()?.width ?? 1920;
-	const frameHeight = () => latestFrame()?.height ?? 1080;
+	const padding = () => (editorLayout().phone() ? 8 : 16);
+	// Every frame arrives as a new object; the preview's size only changes
+	// with its dimensions.
+	const frameWidth = createMemo(() => latestFrame()?.width ?? 1920);
+	const frameHeight = createMemo(() => latestFrame()?.height ?? 1080);
 
 	const availableWidth = () =>
-		Math.max(debouncedBounds().width - padding * 2, 0);
+		Math.max(debouncedBounds().width - padding() * 2, 0);
 	const availableHeight = () =>
-		Math.max(debouncedBounds().height - padding * 2, 0);
+		Math.max(debouncedBounds().height - padding() * 2, 0);
 
 	const containerAspect = () => {
 		const width = availableWidth();
@@ -712,19 +881,26 @@ function PreviewCanvas(props: {
 		return width / height;
 	};
 
-	const size = () => {
-		let width: number;
-		let height: number;
-		if (frameAspect() < containerAspect()) {
-			height = availableHeight();
-			width = height * frameAspect();
-		} else {
-			width = availableWidth();
-			height = width / frameAspect();
-		}
+	const size = createMemo(
+		() => {
+			let width: number;
+			let height: number;
+			if (frameAspect() < containerAspect()) {
+				height = availableHeight();
+				width = height * frameAspect();
+			} else {
+				width = availableWidth();
+				height = width / frameAspect();
+			}
 
-		return { width, height };
-	};
+			return { width, height };
+		},
+		undefined,
+		{
+			equals: (previous, next) =>
+				previous?.width === next.width && previous?.height === next.height,
+		},
+	);
 
 	createEffect(() => {
 		const frame = latestFrame();
@@ -733,14 +909,138 @@ function PreviewCanvas(props: {
 		}
 	});
 
+	// Entering or leaving focus mode resizes the preview at once rather than
+	// after the resize debounce, and glides it from where it was to where it
+	// lands. The layout can move again while the glide runs (the browser
+	// going fullscreen a moment later, the page's bar stepping aside), so for
+	// a short while each move restarts the glide from wherever the preview is
+	// shown. Positions are kept in the embedding page's coordinates, so the
+	// glide holds still on screen when this frame itself moves. The canvas
+	// measures its box under the glide's transform, so it measures again once
+	// the glide ends to stay sharp.
+	let frameRef: HTMLDivElement | undefined;
+	let focusFrom: DOMRect | undefined;
+	let focusGlide: Animation | undefined;
+	// Where the preview's box last landed, untransformed.
+	let focusTarget: DOMRect | undefined;
+	let focusSettlesAt = 0;
+	let focusGlideRun = 0;
+	const onPage = (rect: DOMRect) => {
+		let host: DOMRect | undefined;
+		try {
+			host = window.frameElement?.getBoundingClientRect();
+		} catch {}
+		return new DOMRect(
+			rect.left + (host?.left ?? 0),
+			rect.top + (host?.top ?? 0),
+			rect.width,
+			rect.height,
+		);
+	};
+	// Once the layout has moved the box no longer says where the preview is
+	// shown, so that comes from the last landing spot and the glide's current
+	// transform instead.
+	const shownRect = (layoutMoved: boolean) => {
+		if (!frameRef) return;
+		if (focusGlide && focusTarget) {
+			const transform = getComputedStyle(frameRef).transform;
+			const matrix = new DOMMatrixReadOnly(
+				transform === "none" ? undefined : transform,
+			);
+			const width = focusTarget.width * matrix.a;
+			const height = focusTarget.height * matrix.d;
+			return new DOMRect(
+				focusTarget.left + focusTarget.width / 2 + matrix.e - width / 2,
+				focusTarget.top + focusTarget.height / 2 + matrix.f - height / 2,
+				width,
+				height,
+			);
+		}
+		return layoutMoved ? focusTarget : onPage(frameRef.getBoundingClientRect());
+	};
+	const glideFrom = (from: DOMRect | undefined) => {
+		const container = canvasContainerRef();
+		if (!container?.isConnected || !hasFrame()) return;
+		const { width, height } = container.getBoundingClientRect();
+		if (width <= 0 || height <= 0) return;
+		focusGlide?.cancel();
+		focusGlide = undefined;
+		updateDebouncedBounds.clear();
+		setDebouncedBounds({ width, height });
+		const run = ++focusGlideRun;
+		// The new size reaches the page once this update finishes, still
+		// before the next frame is drawn.
+		queueMicrotask(() => {
+			if (run !== focusGlideRun || !frameRef?.isConnected) return;
+			const to = onPage(frameRef.getBoundingClientRect());
+			focusTarget = to;
+			if (!from || from.width < 2 || to.width < 2 || prefersReducedMotion())
+				return;
+			const scale = from.width / to.width;
+			const dx = from.left + from.width / 2 - (to.left + to.width / 2);
+			const dy = from.top + from.height / 2 - (to.top + to.height / 2);
+			if (Math.abs(scale - 1) < 0.005 && Math.hypot(dx, dy) < 1) return;
+			const glide = frameRef.animate(
+				[
+					{ transform: `translate(${dx}px, ${dy}px) scale(${scale})` },
+					{ transform: "none" },
+				],
+				{ duration: 380, easing: "cubic-bezier(0.32, 0.72, 0, 1)" },
+			);
+			// Resolved now, so the frame being drawn already starts where the
+			// preview was rather than at its new size.
+			glide.currentTime = 0;
+			focusGlide = glide;
+			glide.onfinish = () => {
+				if (focusGlide !== glide) return;
+				focusGlide = undefined;
+				window.dispatchEvent(new Event("resize"));
+			};
+		});
+	};
+	props.focusMode?.onBeforeChange(() => {
+		focusFrom = shownRect(false);
+	});
+	createEffect(
+		on(
+			() => props.focusMode?.active(),
+			() => {
+				const from = focusFrom;
+				focusFrom = undefined;
+				focusSettlesAt = performance.now() + 900;
+				glideFrom(from);
+			},
+			{ defer: true },
+		),
+	);
+	createEffect(
+		on(
+			() => [containerBounds.width, containerBounds.height],
+			() => {
+				if (performance.now() < focusSettlesAt) glideFrom(shownRect(true));
+			},
+			{ defer: true },
+		),
+	);
+
 	return (
 		<div
 			ref={setCanvasContainerRef}
+			data-preview-stage
 			class="relative flex-1 justify-center items-center min-h-0 bg-ed-card"
 			style={{ contain: "layout style" }}
 			onContextMenu={handleContextMenu}
 		>
 			<CaptionsRegenerateBadge class="absolute top-3 right-3 z-20" />
+			<Show when={!hasFrame() && props.buffering}>
+				{(status) => (
+					<BufferingStatus
+						playing={status().playing}
+						slow={status().slow}
+						class="z-20"
+					/>
+				)}
+			</Show>
 			<Show when={preparing?.model.rendered() && !preparing?.ordinaryReady()}>
 				<div class="absolute inset-0 flex items-center justify-center p-4 z-10 pointer-events-none">
 					<PreparingFrame fallback={false} />
@@ -750,21 +1050,22 @@ function PreviewCanvas(props: {
 				class="flex overflow-hidden absolute inset-0 justify-center items-center h-full transition-opacity duration-300 ease-out motion-reduce:transition-none"
 				style={{
 					visibility: hasFrame() ? "visible" : "hidden",
-					opacity: preparing?.model.rendered() || hasRenderedFrame() ? 1 : 0,
+					opacity: previewVisible() ? 1 : 0,
 				}}
 			>
 				<div
+					ref={frameRef}
 					class="relative"
 					style={{
 						width: `${size().width}px`,
 						height: `${size().height}px`,
-						contain: "strict",
+						contain: "size layout style",
 					}}
 				>
 					<Show when={canvasControls()} keyed>
 						{(_controls) => (
 							<canvas
-								class="rounded-md shadow-[0_12px_32px_-8px_rgba(0,0,0,0.35),0_0_0_0.5px_rgba(0,0,0,0.12)]"
+								class="shadow-[0_0_0_1px_var(--ed-line-strong)]"
 								style={{
 									width: `${size().width}px`,
 									height: `${size().height}px`,
@@ -778,16 +1079,51 @@ function PreviewCanvas(props: {
 						)}
 					</Show>
 					<Show when={hasFrame()}>
+						<Show when={props.buffering}>
+							{(status) => (
+								<BufferingStatus
+									playing={status().playing}
+									slow={status().slow}
+									scrim={status().playing}
+									onFrame
+								/>
+							)}
+						</Show>
 						<CanvasElementsOverlay size={size()} />
 						<div class="absolute inset-0 isolate pointer-events-none">
 							<MaskOverlay size={size()} />
 							<ImageOverlay size={size()} />
+							<WaveformOverlay size={size()} />
 							<TextOverlay size={size()} />
 						</div>
 						<CaptionOverlay size={size()} />
 						<SplitScreenOverlay size={size()} />
 						<SnapGuidesOverlay size={size()} />
 						<PerformanceOverlay size={size()} />
+						<Show when={size().width >= 160 && props.focusMode}>
+							{(focusMode) => {
+								const label = () =>
+									focusMode().active() ? "Exit focus mode" : "Focus mode";
+								return (
+									<div
+										class="absolute right-2.5 bottom-2.5 z-30 transition-opacity duration-200 ease-out has-[:focus-visible]:opacity-100! [@media(hover:none)]:opacity-100!"
+										style={{ opacity: "var(--preview-controls-opacity, 0)" }}
+									>
+										<Tooltip content={label()} kbd={["F"]} placement="top">
+											<button
+												type="button"
+												aria-label={label()}
+												data-editor-focus-toggle
+												onClick={() => focusMode().toggle()}
+												class="flex justify-center items-center rounded-lg size-8 text-white/90 bg-black/65 shadow-[0_0_0_0.5px_rgba(255,255,255,0.16),0_6px_16px_-4px_rgba(0,0,0,0.4)] transition-[background-color,color,transform] duration-150 ease-out hover:bg-black/75 hover:text-white active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ed-accent"
+											>
+												<FocusModeIcon active={focusMode().active()} />
+											</button>
+										</Tooltip>
+									</div>
+								);
+							}}
+						</Show>
 					</Show>
 				</div>
 			</div>

@@ -308,12 +308,13 @@ async fn load_audio_segments(
     for (index, (mic, system)) in tracks.into_iter().enumerate() {
         let window = windows.get(index).copied().flatten();
         let recorded = project.recordings.segments.get(index);
+        let clip = recorded.map(|segment| segment.display.duration);
         let mic_duration = recorded
             .and_then(|segment| segment.mic.as_ref())
-            .map(|audio| audio.duration);
+            .and_then(|audio| track_duration(audio.duration, clip));
         let system_duration = recorded
             .and_then(|segment| segment.system_audio.as_ref())
-            .map(|audio| audio.duration);
+            .and_then(|audio| track_duration(audio.duration, clip));
         let mic = load_track(mic, "mic", window, mic_duration).await?;
         let system = load_track(system, "system audio", window, system_duration).await?;
         segments.push(cap_editor::audio_segment_from_decoded(
@@ -323,6 +324,16 @@ async fn load_audio_segments(
         ));
     }
     Ok(segments)
+}
+
+/// A track's length for windowed decoding. Browser recordings' WebM audio
+/// has no container duration (probing gives a negative one); without a
+/// length every section decoded the whole track through EOF, ~11 s per
+/// section of a 2 h mic, which the first HLS segment waited on. The clip's
+/// video length stands in for it.
+fn track_duration(probed: f64, clip: Option<f64>) -> Option<f64> {
+    let usable = |duration: f64| (duration.is_finite() && duration > 0.0).then_some(duration);
+    usable(probed).or(clip.and_then(usable))
 }
 
 /// Decodes only the first `VOICE_PROFILE_SAMPLES` (what Studio Sound's voice
@@ -386,4 +397,18 @@ async fn load_track(
         ))))
     })
     .await?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::track_duration;
+
+    #[test]
+    fn unknown_track_lengths_fall_back_to_the_clip() {
+        assert_eq!(track_duration(61.5, Some(60.0)), Some(61.5));
+        assert_eq!(track_duration(-9.2e12, Some(7200.0)), Some(7200.0));
+        assert_eq!(track_duration(f64::NAN, Some(7200.0)), Some(7200.0));
+        assert_eq!(track_duration(0.0, None), None);
+        assert_eq!(track_duration(-1.0, Some(f64::NAN)), None);
+    }
 }

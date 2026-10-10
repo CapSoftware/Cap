@@ -79,8 +79,8 @@ export function PreparingTimeline(props: { model: PreparingEditorModel }) {
 										class="absolute inset-y-0 right-0 overflow-hidden"
 										style={{ left: `${(timeline().fraction ?? 0) * 100}%` }}
 									>
-										<div class="absolute inset-0 bg-ed-card/40 backdrop-blur-[3px]" />
-										<div class="absolute -left-2 inset-y-0 w-5 bg-ed-card/50 blur-md" />
+										<div class="absolute inset-0 bg-ed-card/60" />
+										<div class="absolute -left-2 inset-y-0 w-5 bg-gradient-to-r from-transparent to-ed-card/60" />
 									</div>
 									<div
 										class="absolute inset-y-0 w-px bg-ed-text-2 pointer-events-none"

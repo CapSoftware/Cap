@@ -34,6 +34,10 @@ pub struct TransitionParameters {
 
 impl TransitionCompositor {
     pub fn new(device: &wgpu::Device) -> Self {
+        Self::new_for_format(device, wgpu::TextureFormat::Rgba8Unorm)
+    }
+
+    pub fn new_for_format(device: &wgpu::Device, output_format: wgpu::TextureFormat) -> Self {
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Transition Compositor Bind Group Layout"),
             entries: &[
@@ -94,7 +98,7 @@ impl TransitionCompositor {
                 module: &shader,
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    format: output_format,
                     blend: None,
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -239,6 +243,14 @@ impl TransitionCompositor {
                 padding: 0,
             }),
         );
+
+        self.render_cached(encoder, target);
+    }
+
+    pub fn render_cached(&self, encoder: &mut wgpu::CommandEncoder, target: &wgpu::TextureView) {
+        let Some(textures) = &self.textures else {
+            return;
+        };
 
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Transition Compositor Pass"),

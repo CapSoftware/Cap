@@ -107,8 +107,34 @@ describe("published recording storage keys", () => {
 		}
 	});
 
+	it("resolves previews made beside a render that replaced the upload", () => {
+		const render = `${prefix}.recording/render/export/result`;
+		const rendered = {
+			...video,
+			source: {
+				type: "webMP4",
+				outputKey: `${render}.mp4`,
+				thumbnailKey: `${render}/screenshot.jpg`,
+				previewKey: `${render}/preview.gif`,
+			},
+		};
+		expect(
+			resolveRecordingObjectKey(
+				rendered,
+				`${prefix}screenshot/screen-capture.jpg`,
+			),
+		).toBe(`${render}/screenshot.jpg`);
+		expect(
+			resolveRecordingObjectKey(
+				rendered,
+				`${prefix}preview/animated-preview.gif`,
+			),
+		).toBe(`${render}/preview.gif`);
+	});
+
 	it.each([
 		"other/video/.recording/outputs/attempt/screenshot.jpg",
+		"other/video/.recording/render/export/result/screenshot.jpg",
 		`${prefix}.recording/sources/snapshot/video/0.mp4`,
 		`${prefix}.recording/outputs/../screenshot.jpg`,
 	])("does not alias an invalid thumbnail pointer %s", (key) => {

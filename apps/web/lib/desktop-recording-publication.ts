@@ -6,7 +6,6 @@ import {
 	videos,
 	videoUploads,
 } from "@cap/database/schema";
-import { Storage } from "@cap/web-backend/src/Storage/index";
 import { Video } from "@cap/web-domain";
 import { and, eq, sql } from "drizzle-orm";
 import { z } from "zod";
@@ -32,8 +31,7 @@ import {
 	recordingVerificationSchema,
 } from "@/lib/desktop-recording-verification";
 import { invalidateGoogleDriveStorageQuotaCache } from "@/lib/google-drive-storage-quota-cache";
-import { decodeStorageVideo } from "@/lib/video-storage";
-import { runWorkflowPromise } from "@/lib/workflow-runtime";
+import { findOutputPreviewAssets } from "@/lib/published-preview-assets";
 
 export const desktopRecordingProgressSchema = z.object({
 	jobId: z.string().min(1),
@@ -380,26 +378,6 @@ export function validateDesktopRecordingCompletion(
 	return { request, options, metadata: payload.metadata, proof };
 }
 
-async function findRecordingAssets(
-	video: typeof videos.$inferSelect,
-	outputKey: string,
-) {
-	const [bucket] = await runWorkflowPromise(
-		Storage.getAccessForVideo(decodeStorageVideo(video)),
-	);
-	const prefix = outputKey.replace(/\.mp4$/, "");
-	const thumbnailKey = `${prefix}/screenshot.jpg`;
-	const previewKey = `${prefix}/preview.gif`;
-	const present = await Promise.all([
-		runWorkflowPromise(bucket.headObject(thumbnailKey)).catch(() => null),
-		runWorkflowPromise(bucket.headObject(previewKey)).catch(() => null),
-	]);
-	return {
-		...(present[0]?.ContentLength ? { thumbnailKey } : {}),
-		...(present[1]?.ContentLength ? { previewKey } : {}),
-	};
-}
-
 export async function applyDesktopRecordingProgress(input: unknown): Promise<{
 	handled: boolean;
 	allowLegacyProcessing?: boolean;
@@ -499,7 +477,7 @@ export async function applyDesktopRecordingProgress(input: unknown): Promise<{
 	const outputKey = completion.proof.outputKey;
 	const assets =
 		job.source?.kind === "segments"
-			? await findRecordingAssets(video, outputKey)
+			? await findOutputPreviewAssets(video, outputKey)
 			: {};
 	const published = await db().transaction(async (tx) => {
 		const [current] = await tx

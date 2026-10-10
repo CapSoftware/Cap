@@ -80,7 +80,25 @@ export type TranscodeTask = {
 	keyframeSeconds: number;
 };
 
-export type WorkItem = Task | TranscodeTask;
+/**
+ * Removes the cursor burned into a browser recording: the worker writes the
+ * cleaned display video and the reconstructed pointer input (NDJSON, the
+ * format browser recordings upload) under `outputPrefix`.
+ */
+export type CursorTask = {
+	kind: "cursor";
+	taskId: string;
+	attempt?: number;
+	source: string;
+	outputPrefix: string;
+};
+
+export const CURSOR_OUTPUTS = {
+	display: "display.mp4",
+	inputEvents: "input-events.ndjson",
+} as const;
+
+export type WorkItem = Task | TranscodeTask | CursorTask;
 
 export type TaskTimings = {
 	queuedMs: number;
@@ -149,4 +167,9 @@ export type JobRequest = {
 	callbackUrl?: string;
 	/** Opaque, echoed in callbacks. */
 	reference?: string;
+	/**
+	 * A file in `recording` (e.g. `prepare.json`) from which the engine writes
+	 * the project files before planning; the manifest lists only the media.
+	 */
+	prepare?: string;
 };

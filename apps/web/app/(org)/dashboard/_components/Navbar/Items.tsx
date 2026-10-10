@@ -56,6 +56,7 @@ import {
 	ChartLineIcon,
 	CodeIcon,
 	CogIcon,
+	EditorIcon,
 	ImportIcon,
 	RecordIcon,
 } from "../AnimatedIcons";
@@ -71,7 +72,8 @@ interface Props {
 const AdminNavItems = ({ toggleMobileNav }: Props) => {
 	const pathname = usePathname();
 	const [open, setOpen] = useState(false);
-	const { user, sidebarCollapsed, userCapsCount } = useDashboardContext();
+	const { user, sidebarCollapsed, userCapsCount, webStudioEnabled } =
+		useDashboardContext();
 
 	const DEVELOPER_DASHBOARD_ALLOWED_EMAILS = ["richie@cap.so"];
 
@@ -100,6 +102,17 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 			icon: <RecordIcon />,
 			subNav: [],
 		},
+		...(webStudioEnabled
+			? [
+					{
+						name: "Editor",
+						href: `/dashboard/editor`,
+						matchChildren: true,
+						icon: <EditorIcon />,
+						subNav: [] as { name: string; href: string }[],
+					},
+				]
+			: []),
 		{
 			name: "Import Media",
 			href: loomImportPageHref(loomImportDestinationFromPathname(pathname)),

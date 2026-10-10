@@ -14,3 +14,11 @@ export const getSupportedImageContentType = (file: MediaFileLike) => {
 
 export const isSupportedMediaFile = (file: MediaFileLike) =>
 	getSupportedImageContentType(file) !== null || isSupportedVideoFile(file);
+
+export const isSupportedAudioFile = (file: MediaFileLike) =>
+	file.type.startsWith("audio/") ||
+	/\.(mp3|wav|m4a|aac|ogg|oga|opus|flac|weba)$/i.test(file.name);
+
+/** What the Editor can start a new project from: a video or an audio file. */
+export const isSupportedEditorFile = (file: MediaFileLike) =>
+	isSupportedVideoFile(file) || isSupportedAudioFile(file);

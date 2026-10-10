@@ -106,6 +106,7 @@ vi.mock("@/app/s/[videoId]/_components/ShareHeader", () => ({
 vi.mock("@/app/s/[videoId]/Share", () => ({ Share: () => null }));
 
 import ShareVideoPage from "@/app/s/[videoId]/page";
+import { Share } from "@/app/s/[videoId]/Share";
 
 const createVideo = () => ({
 	id: "video",
@@ -159,18 +160,21 @@ async function renderAuthorizedContent() {
 	if (!isValidElement(content) || typeof content.type !== "function") {
 		throw new Error("Expected authorized share content");
 	}
-	return (await (content.type as (props: unknown) => Promise<unknown>)(
-		content.props,
-	)) as ReactElement<{
-		children: ReactElement<{
-			initialPlaybackUrl?: Promise<string | null>;
-			screenshotImageUrl?: string | null;
-			data: {
-				sharedOrganizations: unknown[];
-				ownerIsOverShareLimit: boolean;
-				callToAction: { label: string; url: string } | null;
-			};
-		}>;
+	const rendered = (await (
+		content.type as (props: unknown) => Promise<unknown>
+	)(content.props)) as ReactElement<{ children: unknown }>;
+	const share = [rendered.props.children]
+		.flat()
+		.find((child) => isValidElement(child) && child.type === Share);
+	if (!share) throw new Error("Expected the share page");
+	return share as ReactElement<{
+		initialPlaybackUrl?: Promise<string | null>;
+		screenshotImageUrl?: string | null;
+		data: {
+			sharedOrganizations: unknown[];
+			ownerIsOverShareLimit: boolean;
+			callToAction: { label: string; url: string } | null;
+		};
 	}>;
 }
 
@@ -194,7 +198,7 @@ describe("share page loading", () => {
 		async (ownerIsPro) => {
 			mocks.ownerIsPro = ownerIsPro;
 			const content = await renderAuthorizedContent();
-			const callToAction = content.props.children.props.data.callToAction;
+			const callToAction = content.props.data.callToAction;
 			if (ownerIsPro) {
 				expect(callToAction).toMatchObject(
 					createVideo().videoSettings.callToAction,
@@ -210,7 +214,7 @@ describe("share page loading", () => {
 			{ id: "shared", organizationId: "shared", name: "Shared team" },
 		];
 		const content = await renderAuthorizedContent();
-		expect(content.props.children.props.data.sharedOrganizations).toEqual([
+		expect(content.props.data.sharedOrganizations).toEqual([
 			{ id: "shared", name: "Shared team" },
 		]);
 		expect(mocks.select).toHaveBeenCalledTimes(3);
@@ -284,17 +288,15 @@ describe("share page loading", () => {
 	it("streams the authorized MP4 URL without waiting for signing to finish", async () => {
 		mocks.playbackUrl.mockReturnValue(new Promise(() => {}));
 		const content = await renderAuthorizedContent();
-		expect(content.props.children.props.initialPlaybackUrl).toBeInstanceOf(
-			Promise,
-		);
+		expect(content.props.initialPlaybackUrl).toBeInstanceOf(Promise);
 		expect(mocks.playbackUrl).toHaveBeenCalledOnce();
 	});
 
 	it("does not sign media hidden by the shareable link quota", async () => {
 		mocks.quota.mockResolvedValue(true);
 		const content = await renderAuthorizedContent();
-		expect(await content.props.children.props.initialPlaybackUrl).toBeNull();
-		expect(content.props.children.props.data.ownerIsOverShareLimit).toBe(true);
+		expect(await content.props.initialPlaybackUrl).toBeNull();
+		expect(content.props.data.ownerIsOverShareLimit).toBe(true);
 		expect(mocks.playbackUrl).not.toHaveBeenCalled();
 	});
 
@@ -307,7 +309,7 @@ describe("share page loading", () => {
 	])("retains the existing player resolution for %j", async (changes) => {
 		arrangeRows([{ ...createVideo(), ...changes }]);
 		const content = await renderAuthorizedContent();
-		expect(content.props.children.props.initialPlaybackUrl).toBeUndefined();
+		expect(content.props.initialPlaybackUrl).toBeUndefined();
 		expect(mocks.playbackUrl).not.toHaveBeenCalled();
 	});
 
@@ -325,7 +327,7 @@ describe("share page loading", () => {
 		);
 
 		const content = await renderAuthorizedContent();
-		expect(content.props.children.props.screenshotImageUrl).toBe(
+		expect(content.props.screenshotImageUrl).toBe(
 			"https://media.example.com/image.jpg",
 		);
 	});

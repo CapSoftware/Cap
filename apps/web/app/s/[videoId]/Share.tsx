@@ -15,7 +15,6 @@ import {
 	use,
 	useCallback,
 	useEffect,
-	useId,
 	useMemo,
 	useOptimistic,
 	useRef,
@@ -85,9 +84,11 @@ const ensureAnalyticsSessionId = () => {
 			if (parsed?.value && parsed.expiry > now) return parsed.value;
 		}
 		const newId =
-			typeof crypto !== "undefined" && "randomUUID" in crypto
+			typeof crypto.randomUUID === "function"
 				? crypto.randomUUID()
-				: Math.random().toString(36).slice(2);
+				: Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) =>
+						byte.toString(16).padStart(2, "0"),
+					).join("");
 		window.localStorage.setItem(
 			SESSION_STORAGE_KEY,
 			JSON.stringify({ value: newId, expiry: now + SESSION_TTL_MS }),
@@ -185,6 +186,7 @@ type TranscriptionStatus =
 interface ShareProps {
 	data: VideoData;
 	initialPlaybackUrl?: Promise<string | null>;
+	initialPlaybackTrusted?: boolean;
 	comments: MaybePromise<CommentWithAuthor[]>;
 	views: MaybePromise<number>;
 	screenshotImageUrl?: string | null;
@@ -194,6 +196,7 @@ interface ShareProps {
 	userOrganizations?: { id: string; name: string }[];
 	viewerId?: string | null;
 	isEditProcessing: boolean;
+	renderStarting?: boolean;
 	recordingStopped?: boolean;
 	defaultPlaybackSpeed?: number;
 	initialAiData?: {
@@ -324,6 +327,7 @@ const useVideoStatus = (
 export const Share = ({
 	data,
 	initialPlaybackUrl,
+	initialPlaybackTrusted = false,
 	comments,
 	views,
 	screenshotImageUrl,
@@ -331,6 +335,7 @@ export const Share = ({
 	videoSettings,
 	viewerId,
 	isEditProcessing,
+	renderStarting = false,
 	recordingStopped = false,
 	defaultPlaybackSpeed,
 	aiGenerationAvailable,
@@ -724,12 +729,6 @@ export const Share = ({
 	]);
 
 	const showRail = view === "classic" && !allSettingsDisabled;
-	const sidebarId = useId();
-	const [railCollapsed, setRailCollapsed] = useState(false);
-
-	const toggleRail = useCallback(() => {
-		setRailCollapsed((collapsed) => !collapsed);
-	}, []);
 
 	return (
 		<CaptionProvider
@@ -742,29 +741,26 @@ export const Share = ({
 				fallbackDuration={data.duration}
 			>
 				{/*
-				 * The page bar. It spans the video column AND the comments rail, so
-				 * the rail hangs beneath it the way Loom's panel hangs beneath its
-				 * top bar. Hidden (never unmounted) in timeline view, which carries
-				 * its own slim title row: the header owns dialogs and the inline
-				 * title editor, and toggling views must not discard them.
+				 * The page shell, one grid. On desktop: the header's bar across the
+				 * top, then the title row and the video column on the left with the
+				 * comments rail running beside both, Loom style, so the title and
+				 * its actions sit over the video instead of stretching across the
+				 * rail. The page itself doesn't scroll there (see `page.tsx`): the
+				 * video column scrolls in its own row. Phones stack everything in
+				 * source order and scroll the document.
+				 *
+				 * The header renders its bar and its title row straight into this
+				 * grid. Timeline view hides both (never unmounts them, through the
+				 * `share-view` group): it carries its own slim title row, and the
+				 * header owns dialogs and the inline title editor, which toggling
+				 * views must not discard.
 				 */}
 				<div
-					className={clsx(
-						"shrink-0 border-b border-gray-5 bg-white px-4 lg:px-8",
-						view === "timeline" && "hidden",
-					)}
+					data-share-view={view}
+					className="group/share grid min-h-0 flex-1 grid-cols-1 content-start lg:grid-cols-[minmax(0,1fr)_auto] lg:grid-rows-[auto_auto_minmax(0,1fr)]"
 				>
 					{header}
-				</div>
-
-				{/*
-				 * The two-pane shell. On desktop the page itself no longer scrolls
-				 * (see `page.tsx`): the video column scrolls inside the left pane and
-				 * the comments rail runs the full height beside it.
-				 * Phones stack the two and scroll the document as normal.
-				 */}
-				<div className="flex flex-col flex-1 min-h-0 lg:flex-row">
-					<div className="flex flex-col flex-1 min-w-0 lg:overflow-y-auto">
+					<div className="flex flex-col min-w-0 lg:col-start-1 lg:row-start-3 lg:min-h-0 lg:overflow-y-auto">
 						{/* Gutters live here rather than on the page, so the rail can sit
 						    flush against the viewport edge while the video stays centred
 						    inside what's left. */}
@@ -954,6 +950,7 @@ export const Share = ({
 												) : (
 													<ShareVideo
 														initialPlaybackUrl={initialPlaybackUrl}
+														initialPlaybackTrusted={initialPlaybackTrusted}
 														data={shareVideoData}
 														comments={comments}
 														areChaptersDisabled={areChaptersDisabled}
@@ -987,6 +984,7 @@ export const Share = ({
 														}
 														showPlaybackStatusBadge={viewerId === data.owner.id}
 														isEditProcessing={isEditProcessing}
+														renderStarting={renderStarting}
 														recordingStopped={recordingStopped}
 														defaultPlaybackSpeed={defaultPlaybackSpeed}
 														viewerIsOwner={viewerId === data.owner.id}
@@ -1010,17 +1008,15 @@ export const Share = ({
 											>
 												{/*
 												 * The view toggle sits to the left under the player; the
-												 * absolute placement (desktop) keeps the toolbar pill
-												 * centred rather than pushed aside.
+												 * absolute placement keeps the toolbar pill centred rather
+												 * than pushed aside. Only from `xl`: between `lg` and `xl`
+												 * the rail leaves the video column too narrow for the
+												 * toggle beside a centred pill, so it stacks above it the
+												 * way it does on tablets and phones.
 												 */}
-												<div
-													className={clsx(
-														"relative",
-														showRail && railCollapsed && "lg:min-h-10 lg:px-40",
-													)}
-												>
+												<div className="relative">
 													{timelineAvailable && (
-														<div className="mb-3 flex justify-start lg:absolute lg:left-0 lg:top-1/2 lg:mb-0 lg:-translate-y-1/2">
+														<div className="mb-3 flex justify-start xl:absolute xl:left-0 xl:top-1/2 xl:mb-0 xl:-translate-y-1/2">
 															<ShareViewToggle
 																view={view}
 																onChange={setViewAndUrl}
@@ -1037,18 +1033,6 @@ export const Share = ({
 														canRecordMedia={canRecordMedia && !isScreenshot}
 														data={data}
 													/>
-													{showRail && railCollapsed && (
-														<button
-															type="button"
-															onClick={toggleRail}
-															aria-controls={sidebarId}
-															aria-expanded={false}
-															className="hidden absolute right-0 top-1/2 items-center justify-center gap-2 -translate-y-1/2 rounded-lg border border-gray-5 bg-white h-10 px-3 text-sm font-medium text-gray-10 shadow-sm transition-colors hover:text-gray-12 lg:flex"
-														>
-															<ChevronGlyph direction="left" />
-															Show sidebar
-														</button>
-													)}
 												</div>
 											</motion.div>
 										) : (
@@ -1148,28 +1132,12 @@ export const Share = ({
 					 * The comments rail. Full height, flush to the viewport edge and
 					 * scrolling independently of the video column — the panel is the
 					 * one part of this page whose usefulness is measured in vertical
-					 * space. Collapsing animates the width away; the pane stays mounted
-					 * so the open tab and scroll position survive the round trip.
+					 * space.
 					 */}
 					{showRail && (
-						<aside
-							id={sidebarId}
-							className={clsx(
-								"shrink-0 px-4 pb-8 lg:p-0 lg:h-full lg:border-l lg:border-gray-5 lg:bg-white lg:overflow-hidden",
-								reduceMotion
-									? undefined
-									: "lg:transition-[width] lg:duration-300 lg:ease-out",
-								railCollapsed ? "lg:w-0" : "lg:w-[22rem] xl:w-[24rem]",
-							)}
-						>
-							<div
-								className={clsx(
-									"lg:h-full lg:w-[22rem] xl:w-[24rem]",
-									railCollapsed && "lg:invisible",
-								)}
-							>
+						<aside className="shrink-0 px-4 pb-8 lg:col-start-2 lg:row-span-2 lg:row-start-2 lg:min-h-0 lg:h-full lg:w-[22rem] lg:overflow-hidden lg:border-l lg:border-gray-5 lg:bg-white lg:p-0 xl:w-[24rem]">
+							<div className="lg:h-full">
 								<Sidebar
-									sidebarId={sidebarId}
 									data={sidebarData}
 									videoSettings={videoSettings}
 									commentsData={commentsData}
@@ -1185,7 +1153,6 @@ export const Share = ({
 									aiGenerationEnabled={aiGenerationAvailable}
 									recordingStopped={recordingStopped}
 									canRecordMedia={canRecordMedia}
-									onCollapse={toggleRail}
 									ref={activityRef}
 								/>
 							</div>
@@ -1196,22 +1163,6 @@ export const Share = ({
 		</CaptionProvider>
 	);
 };
-
-function ChevronGlyph({ direction }: { direction: "left" | "right" }) {
-	return (
-		<svg
-			viewBox="0 0 16 16"
-			className={clsx(
-				"size-4 fill-current",
-				direction === "right" && "rotate-180",
-			)}
-			aria-hidden
-		>
-			<title>{direction === "left" ? "Expand" : "Collapse"}</title>
-			<path d="M10.3 3.3a.6.6 0 0 1 0 .85L6.45 8l3.85 3.85a.6.6 0 1 1-.85.85l-4.27-4.27a.6.6 0 0 1 0-.86L9.45 3.3a.6.6 0 0 1 .85 0Z" />
-		</svg>
-	);
-}
 
 function ScreenshotImage({ src, alt }: { src?: string | null; alt: string }) {
 	if (!src) {

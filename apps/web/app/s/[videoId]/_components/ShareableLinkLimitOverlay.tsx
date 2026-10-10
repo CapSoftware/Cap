@@ -2,11 +2,11 @@
 
 import { buildEnv } from "@cap/env";
 import { Button, Logo } from "@cap/ui";
-import { Video } from "@cap/web-domain";
+import { FREE_PLAN_SHAREABLE_LINKS_PER_MONTH } from "@cap/web-domain/src/plan-limits";
 import clsx from "clsx";
 import { BarChart3, Infinity as InfinityIcon, Share2 } from "lucide-react";
 
-const LIMIT = Video.FREE_PLAN_SHAREABLE_LINKS_PER_MONTH;
+const LIMIT = FREE_PLAN_SHAREABLE_LINKS_PER_MONTH;
 
 const PRO_BENEFITS = [
 	{ icon: Share2, label: "Unlimited shareable links" },

@@ -1,4 +1,5 @@
 import { Select as KSelect } from "@kobalte/core/select";
+import { cx } from "cva";
 import { createSignal, Show } from "solid-js";
 import Tooltip from "~/components/Tooltip";
 import IconLucideExternalLink from "~icons/lucide/external-link";
@@ -89,12 +90,25 @@ function ShareButton() {
 										rel="noreferrer"
 										title={linkToDisplay() ?? "Open link"}
 										aria-label="Open recording link"
-										class="w-full truncate max-w-[200px] max-[1400px]:w-4 max-[1400px]:shrink-0"
+										class={cx(
+											"w-full truncate max-w-[200px]",
+											"max-[1400px]:w-4 max-[1400px]:shrink-0",
+										)}
 									>
-										<span class="text-xs text-ed-text-2 max-[1400px]:hidden">
+										<span
+											class={cx(
+												"text-xs text-ed-text-2",
+												"max-[1400px]:hidden",
+											)}
+										>
 											{linkToDisplay()}
 										</span>
-										<IconLucideExternalLink class="hidden size-4 text-ed-text-2 max-[1400px]:block" />
+										<IconLucideExternalLink
+											class={cx(
+												"hidden size-4 text-ed-text-2",
+												"max-[1400px]:block",
+											)}
+										/>
 									</a>
 									<Show
 										when={

@@ -54,6 +54,7 @@ import {
 	downloadVideoToTemp,
 	generatePreviewGif,
 	generateThumbnail,
+	MAX_PROCESS_TIMEOUT_MS,
 	muxMediaTracksToMp4,
 	processVideo,
 	repairContainer,
@@ -105,6 +106,16 @@ const thumbnailSchema = z.object({
 	height: z.number().max(2000).optional(),
 	quality: z.number().min(1).max(100).optional(),
 });
+
+const previewAssetsSchema = z
+	.object({
+		videoUrl: z.string().url(),
+		thumbnailPresignedUrl: z.string().url().optional(),
+		previewGifPresignedUrl: z.string().url().optional(),
+	})
+	.refine((body) => body.thumbnailPresignedUrl || body.previewGifPresignedUrl, {
+		message: "No preview asset requested",
+	});
 
 const convertSchema = z.object({
 	videoUrl: z.string().url(),
@@ -534,6 +545,103 @@ video.post("/thumbnail", async (c) => {
 			},
 			500,
 		);
+	}
+});
+
+video.post("/preview-assets", async (c) => {
+	if (!validateMediaServerSecret(c)) {
+		return c.json({ error: "Unauthorized" }, 401);
+	}
+
+	const result = previewAssetsSchema.safeParse(
+		await c.req.json().catch(() => null),
+	);
+	if (!result.success) {
+		return c.json(
+			{
+				error: "Invalid request",
+				code: "INVALID_REQUEST",
+				details: result.error.message,
+			},
+			400,
+		);
+	}
+
+	const slot = tryAcquireDirectVideoProcessSlot(canAcceptNewVideoProcess);
+	if (!slot) {
+		c.header("Retry-After", VIDEO_BUSY_RETRY_AFTER_SECONDS.toString());
+		return c.json(getBusyResponseBody(getVideoCapacitySnapshot()), 503);
+	}
+
+	const { videoUrl, thumbnailPresignedUrl, previewGifPresignedUrl } =
+		result.data;
+	const signal = c.req.raw.signal;
+	try {
+		const metadata = await probeVideo(videoUrl);
+		if (thumbnailPresignedUrl) {
+			const thumbnail = await generateThumbnail(
+				videoUrl,
+				metadata.duration,
+				{},
+				signal,
+			);
+			await uploadToS3(thumbnail, thumbnailPresignedUrl, "image/jpeg", signal);
+		}
+		if (previewGifPresignedUrl) {
+			const previewGif = await generatePreviewGif(
+				videoUrl,
+				metadata.duration,
+				{},
+				signal,
+			);
+			try {
+				await uploadFileToS3(
+					previewGif.path,
+					previewGifPresignedUrl,
+					"image/gif",
+					signal,
+				);
+			} finally {
+				await previewGif.cleanup();
+			}
+		}
+		return c.json({ success: true });
+	} catch (err) {
+		console.error("[video/preview-assets] Error:", err);
+
+		if (isBusyError(err)) {
+			c.header("Retry-After", VIDEO_BUSY_RETRY_AFTER_SECONDS.toString());
+			return c.json(
+				{
+					error: "Server is busy",
+					code: "SERVER_BUSY",
+					details: "Too many concurrent requests, please retry later",
+				},
+				503,
+			);
+		}
+
+		if (isTimeoutError(err)) {
+			return c.json(
+				{
+					error: "Request timed out",
+					code: "TIMEOUT",
+					details: err instanceof Error ? err.message : String(err),
+				},
+				504,
+			);
+		}
+
+		return c.json(
+			{
+				error: "Failed to generate preview assets",
+				code: MEDIA_ENGINE_ERROR_CODE,
+				details: err instanceof Error ? err.message : String(err),
+			},
+			500,
+		);
+	} finally {
+		slot.release();
 	}
 });
 
@@ -1327,8 +1435,14 @@ async function processVideoAsync(
 		const isWebm = isWebmInput(options.inputExtension);
 		if (isWebm) {
 			updateJob(jobId, { message: "Checking the original recording..." });
+			// Streamed recordings often carry no duration to size this by, so it
+			// gets the longest time a transcode of the same file may take.
 			await withJobHeartbeat(jobId, () =>
-				validateVideoInput(inputTempFile.path, abortController.signal),
+				validateVideoInput(
+					inputTempFile.path,
+					abortController.signal,
+					MAX_PROCESS_TIMEOUT_MS,
+				),
 			);
 		}
 

@@ -7,8 +7,10 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { AuthContextProvider } from "@/app/Layout/AuthContext";
 import { resolveCurrentUser } from "@/app/Layout/current-user";
+import { EditorPrewarm } from "@/components/editor-shell/editor-prewarm";
 import { runPromise } from "@/lib/server";
 import { getShareableLinkUsage } from "@/lib/shareable-link-quota";
+import { isWebStudioEnabledForEmail } from "@/lib/web-studio-rollout";
 import DashboardInner from "./_components/DashboardInner";
 import { DashboardPasteImport } from "./_components/DashboardPasteImport";
 import MobileTab from "./_components/MobileTab";
@@ -116,8 +118,10 @@ export default async function DashboardLayout({
 					userPreferences={userPreferences}
 					referClicked={referClicked === "true"}
 					shareableLinkUsage={shareableLinkUsage}
+					webStudioEnabled={isWebStudioEnabledForEmail(user.email)}
 				>
 					<DashboardPasteImport />
+					<EditorPrewarm enabled={isWebStudioEnabledForEmail(user.email)} />
 					<div className="bg-gray-2 dashboard-grid">
 						<DesktopNav />
 						<div className="flex h-full [grid-area:main] focus:outline-none">

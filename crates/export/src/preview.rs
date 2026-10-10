@@ -141,7 +141,7 @@ async fn render_preview_with_base(
 /// seconds, and it is the same path the Tauri editor's fast preview takes.
 pub async fn render_preview_with_editor(
     editor: &EditorInstance,
-    project_config: ProjectConfiguration,
+    mut project_config: ProjectConfiguration,
     frame_time: f64,
     settings: ExportPreviewSettings,
 ) -> Result<ExportPreviewResult, ExportError> {
@@ -149,7 +149,6 @@ pub async fn render_preview_with_editor(
     let studio_meta = recording_meta
         .studio_meta()
         .ok_or_else(|| ExportError::Other("Cannot preview non-studio recordings".to_string()))?;
-    let mut project_config = project_config;
     if settings.cursor_only {
         project_config = make_cursor_only_project(project_config);
     }
@@ -220,6 +219,12 @@ async fn render_preview_frame(
         segments,
         total_duration,
     } = source;
+    if settings.fps == 0 {
+        return Err(ExportError::Other(
+            "Preview frame rate must be positive".to_string(),
+        ));
+    }
+    let frame_time = preview_frame_time(frame_time, total_duration, settings.fps);
     let transition_mapping = project_config.timeline.as_ref().and_then(|timeline| {
         if timeline.transitions.is_empty() {
             return None;
@@ -397,6 +402,33 @@ async fn render_preview_frame(
     })
 }
 
+fn preview_frame_time(requested: f64, duration: f64, fps: u32) -> f64 {
+    let frame_duration = 1.0 / f64::from(fps);
+    if requested >= duration && requested <= duration + frame_duration {
+        ((duration * f64::from(fps)).ceil() - 1.0).max(0.0) * frame_duration
+    } else {
+        requested
+    }
+}
+
+#[cfg(test)]
+mod preview_frame_time_tests {
+    use super::preview_frame_time;
+
+    #[test]
+    fn exact_end_maps_to_last_frame() {
+        assert_eq!(preview_frame_time(2.0, 2.0, 60), 119.0 / 60.0);
+        assert_eq!(preview_frame_time(1.9, 1.9, 60), 113.0 / 60.0);
+        assert_eq!(preview_frame_time(0.01, 0.01, 60), 0.0);
+    }
+
+    #[test]
+    fn requests_far_outside_duration_remain_invalid() {
+        assert_eq!(preview_frame_time(2.5, 2.0, 60), 2.5);
+        assert_eq!(preview_frame_time(-1.0, 2.0, 60), -1.0);
+    }
+}
+
 fn estimate_cursor_only_size_mb(total_pixels: f64, total_frames: f64) -> f64 {
     let bytes_per_frame = total_pixels * 0.4;
     (bytes_per_frame * total_frames) / (1024.0 * 1024.0)
@@ -561,15 +593,14 @@ mod subtitle_preview_tests {
     use super::*;
 
     #[test]
-    fn immediate_export_preview_keeps_enabled_captions_regardless_of_legacy_export_toggle() {
+    fn immediate_export_preview_uses_current_captions_before_disk_save() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("project-config.json");
-        for export in [false, true] {
+        for enabled in [false, true] {
             let current = ProjectConfiguration {
                 captions: Some(cap_project::CaptionsData {
                     settings: cap_project::CaptionSettings {
-                        enabled: true,
-                        export_with_subtitles: export,
+                        enabled,
                         ..Default::default()
                     },
                     ..Default::default()
@@ -578,12 +609,7 @@ mod subtitle_preview_tests {
             };
             let original = serde_json::to_value(&current).unwrap();
             let mut stale = current.clone();
-            stale
-                .captions
-                .as_mut()
-                .unwrap()
-                .settings
-                .export_with_subtitles = !export;
+            stale.captions.as_mut().unwrap().settings.enabled = !enabled;
             let stale_bytes = serde_json::to_vec(&stale).unwrap();
             std::fs::write(&path, &stale_bytes).unwrap();
             let mut builder = preview_builder_with_config(
@@ -598,11 +624,7 @@ mod subtitle_preview_tests {
                 true,
             );
             let preview = builder.load_project_config().unwrap();
-            assert!(preview.captions.as_ref().unwrap().settings.enabled);
-            assert_eq!(
-                preview.captions.unwrap().settings.export_with_subtitles,
-                export
-            );
+            assert_eq!(preview.captions.unwrap().settings.enabled, enabled);
             assert_eq!(std::fs::read(&path).unwrap(), stale_bytes);
             assert_eq!(serde_json::to_value(current).unwrap(), original);
             assert!(builder.force_ffmpeg_decoder);
@@ -615,7 +637,6 @@ mod subtitle_preview_tests {
             captions: Some(cap_project::CaptionsData {
                 settings: cap_project::CaptionSettings {
                     enabled: true,
-                    export_with_subtitles: true,
                     ..Default::default()
                 },
                 ..Default::default()

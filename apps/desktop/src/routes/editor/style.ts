@@ -53,8 +53,14 @@ export function resolveStyle<T extends Pick<ProjectConfiguration, StyleGroup>>(
 	segments: readonly StyleSegment[],
 	time: number,
 ): T {
+	return applyStyleSegments(base, activeStyleSegments(segments, time));
+}
+
+export function applyStyleSegments<
+	T extends Pick<ProjectConfiguration, StyleGroup>,
+>(base: T, active: ReturnType<typeof activeStyleSegments>): T {
 	const result = { ...base };
-	for (const { segment } of activeStyleSegments(segments, time)) {
+	for (const { segment } of active) {
 		for (const group of ["background", "camera", "cursor"] as const) {
 			const value = segment.overrides[group];
 			if (value != null) Object.assign(result, { [group]: value });

@@ -288,6 +288,9 @@ impl KeyboardLayer {
         self.has_content = false;
         self.background_scissor = None;
         self.output_size = (output_size.x, output_size.y);
+        if !super::sync_browser_fonts(&mut self.font_system) {
+            return;
+        }
 
         let Some(keyboard_data) = &uniforms.project.keyboard else {
             return;

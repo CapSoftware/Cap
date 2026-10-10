@@ -39,7 +39,7 @@ const TRACK_META: Record<TimelineTrackType, TrackMeta> = {
 	},
 	caption: {
 		description: "Auto-transcribe your recording into on-screen subtitles.",
-		unavailableHint: "",
+		unavailableHint: "Cap Pro is required for captions.",
 	},
 	keyboard: {
 		description: "Display key presses on screen as you type.",
@@ -55,6 +55,10 @@ const TRACK_META: Record<TimelineTrackType, TrackMeta> = {
 	},
 	audio: {
 		description: "Add background music or import your own audio.",
+		unavailableHint: "",
+	},
+	waveform: {
+		description: "Show a live waveform that moves with your audio.",
 		unavailableHint: "",
 	},
 	scene: {
@@ -111,7 +115,7 @@ function TrackTile(props: {
 				"--tray-index": props.index,
 			}}
 			class={cx(
-				"cap-track-tray-tile group/tile flex w-16 shrink-0 flex-col items-center gap-1.5 rounded-lg pt-2 pb-1.5 outline-hidden transition-[background-color,transform] duration-150",
+				"cap-track-tray-tile group/tile flex min-w-16 shrink-0 px-1 flex-col items-center gap-1.5 rounded-lg pt-2 pb-1.5 outline-hidden transition-[background-color,transform] duration-150",
 				available()
 					? "cursor-default hover:bg-ed-ctl focus-visible:bg-ed-ctl active:scale-95"
 					: "cursor-not-allowed opacity-45",
@@ -181,6 +185,8 @@ export function TrackManager(props: {
 		>
 			<Popover.Anchor class="flex size-full items-center">
 				<Popover.Trigger
+					data-add-track
+					aria-label="Add track"
 					class={cx(
 						"group/trigger relative z-30 flex h-6 shrink-0 items-center gap-[5px] rounded-md pl-1.5 pr-2 outline-hidden",
 						"bg-ed-text-1 text-[12px] font-medium text-ed-card",
@@ -189,7 +195,9 @@ export function TrackManager(props: {
 					onMouseDown={(e) => e.stopPropagation()}
 				>
 					<IconLucidePlus class="size-3 shrink-0 transition-transform duration-200 ease-out group-data-[expanded]/trigger:rotate-45" />
-					<span class="whitespace-nowrap">Add track</span>
+					<span data-add-track-label class="whitespace-nowrap">
+						Add track
+					</span>
 				</Popover.Trigger>
 			</Popover.Anchor>
 			<Popover.Portal>

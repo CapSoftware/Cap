@@ -17,6 +17,7 @@ export type SplitSnapResult = {
 const BOUNDARY_TRACKS = [
 	"styleSegments",
 	"imageSegments",
+	"waveformSegments",
 	"zoomSegments",
 	"sceneSegments",
 	"camera3dSegments",

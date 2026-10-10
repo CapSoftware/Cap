@@ -1124,6 +1124,7 @@ mod tests {
                 keyboard_segments: Vec::new(),
                 audio_segments: Vec::new(),
                 camera3d_segments: Vec::new(),
+                waveform_segments: Vec::new(),
             }),
             ..Default::default()
         }
@@ -2121,6 +2122,7 @@ mod tests {
             keyboard_segments: vec![],
             audio_segments: vec![],
             camera3d_segments: Vec::new(),
+            waveform_segments: Vec::new(),
         };
         let cursor = CursorEvents {
             moves: vec![
@@ -2197,6 +2199,7 @@ mod tests {
             keyboard_segments: Vec::new(),
             audio_segments: Vec::new(),
             camera3d_segments: Vec::new(),
+            waveform_segments: Vec::new(),
         };
         let map = build_time_map(Some(&timeline));
 

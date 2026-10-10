@@ -231,7 +231,9 @@ export function ZoomTrack(props: {
 										start: baseSegment.start,
 										end: Math.max(minEndTime, endTime),
 										amount: generalSettings.data?.defaultZoomAmount ?? 1.5,
-										mode: "auto",
+										mode: hasRecordedCursorData()
+											? "auto"
+											: { manual: { x: 0.5, y: 0.5 } },
 									});
 
 									createdSegmentIndex = index;

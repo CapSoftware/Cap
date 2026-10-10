@@ -445,6 +445,7 @@ pub fn preflight(path: &std::path::Path) -> Result<ProjectSummary, String> {
             keyboard_segments: Vec::new(),
             audio_segments: Vec::new(),
             camera3d_segments: Vec::new(),
+            waveform_segments: Vec::new(),
             style_segments: Vec::new(),
             image_segments: Vec::new(),
         });
@@ -11978,6 +11979,7 @@ mod tests {
                 keyboard_segments: Vec::new(),
                 audio_segments: Vec::new(),
                 camera3d_segments: Vec::new(),
+                waveform_segments: Vec::new(),
                 style_segments: Vec::new(),
                 image_segments: Vec::new(),
             }),
@@ -12044,6 +12046,7 @@ mod tests {
                 keyboard_segments: Vec::new(),
                 audio_segments: Vec::new(),
                 camera3d_segments: Vec::new(),
+                waveform_segments: Vec::new(),
                 style_segments: Vec::new(),
                 image_segments: Vec::new(),
             }),
@@ -12288,6 +12291,7 @@ mod tests {
                     edits::default_camera3d_segment(0.0, 2.0),
                     edits::default_camera3d_segment(2.0, 4.0),
                 ],
+                waveform_segments: Vec::new(),
             }),
             ..Default::default()
         };

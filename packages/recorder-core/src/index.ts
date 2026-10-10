@@ -1,3 +1,4 @@
+export * from "./audio-sidecar";
 export * from "./capture-streams";
 export * from "./instant-mp4-uploader";
 export * from "./local-recording-backup";

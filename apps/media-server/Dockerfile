@@ -6,11 +6,16 @@ RUN apt-get update \
 
 WORKDIR /app
 
-COPY apps/media-server/package.json apps/media-server/bun.lock ./
-RUN bun install --frozen-lockfile --production
+COPY package.json bun.lock bunfig.toml ./
+COPY apps/media-server/package.json ./apps/media-server/package.json
+COPY packages/editor-cap-bundle/package.json ./packages/editor-cap-bundle/package.json
+RUN bun install --frozen-lockfile --production --filter=@cap/media-server
 
-COPY apps/media-server/src ./src
+COPY packages/editor-cap-bundle/src ./packages/editor-cap-bundle/src
+COPY apps/media-server/src ./apps/media-server/src
 COPY apps/media-server/capcodec.md ./capcodec.md
+
+WORKDIR /app/apps/media-server
 
 RUN bun test src/__tests__/lib/audio-quality-policy.test.ts src/__tests__/lib/audio-quality.integration.test.ts \
 	&& bun test src/__tests__/lib/audio-quality-formats.integration.test.ts src/__tests__/lib/audio-quality-benchmark.test.ts \

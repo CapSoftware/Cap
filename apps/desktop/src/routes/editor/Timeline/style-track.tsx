@@ -1,6 +1,7 @@
 import { For, onCleanup, Show } from "solid-js";
 import { useEditorContext } from "../context";
 import { editOverlayInterval } from "../style";
+import { waveformStyleLabel } from "../waveform";
 import { useTimelineContext } from "./context";
 import {
 	SegmentContent,
@@ -21,8 +22,25 @@ export function StyleTrack(props: OverlayTrackProps) {
 	return <OverlayTrack {...props} type="style" />;
 }
 
+type OverlayInterval = { start: number; end: number };
+
+const EMPTY_LANE = {
+	style: {
+		hint: "Change background, camera and cursor for part of your video",
+		action: "· Add style",
+	},
+	image: {
+		hint: "Place images and logos on your video",
+		action: "· Add image",
+	},
+	waveform: {
+		hint: "Show a live audio waveform on your video",
+		action: "· Add waveform",
+	},
+};
+
 export function OverlayTrack(
-	props: OverlayTrackProps & { type: "style" | "image" },
+	props: OverlayTrackProps & { type: "style" | "image" | "waveform" },
 ) {
 	const {
 		project,
@@ -37,7 +55,18 @@ export function OverlayTrack(
 	const allSegments = () =>
 		(props.type === "style"
 			? project.timeline?.styleSegments
-			: project.timeline?.imageSegments) ?? [];
+			: props.type === "image"
+				? project.timeline?.imageSegments
+				: project.timeline?.waveformSegments) ?? [];
+	const setInterval = (index: number, interval: OverlayInterval) => {
+		if (props.type === "style")
+			setProject("timeline", "styleSegments", index, interval);
+		else if (props.type === "image")
+			setProject("timeline", "imageSegments", index, interval);
+		else setProject("timeline", "waveformSegments", index, interval);
+	};
+	const segmentName = (segment: ReturnType<typeof allSegments>[number]) =>
+		"name" in segment ? segment.name : waveformStyleLabel(segment.style);
 	const segments = () =>
 		allSegments()
 			.map((segment, index) => ({ segment, index }))
@@ -60,7 +89,9 @@ export function OverlayTrack(
 	const add = (time: number) => {
 		if (props.type === "style")
 			projectActions.addStyleSegment(props.laneIndex, time);
-		else void projectActions.importImageSegment(props.laneIndex, time);
+		else if (props.type === "image")
+			void projectActions.importImageSegment(props.laneIndex, time);
+		else projectActions.addWaveformSegment(props.laneIndex, time);
 	};
 	function select(index: number, event: MouseEvent) {
 		const previous = editorState.timeline.selection;
@@ -136,9 +167,7 @@ export function OverlayTrack(
 				previousEnd,
 				nextStart,
 			);
-			if (props.type === "style")
-				setProject("timeline", "styleSegments", index, interval);
-			else setProject("timeline", "imageSegments", index, interval);
+			setInterval(index, interval);
 			setEditorState("previewTime", null);
 			setEditorState(
 				"playbackTime",
@@ -154,9 +183,7 @@ export function OverlayTrack(
 			window.removeEventListener("keydown", keydown, true);
 			endDrag = undefined;
 			if (cancelled && moved && allSegments()[index] === segment) {
-				if (props.type === "style")
-					setProject("timeline", "styleSegments", index, initial);
-				else setProject("timeline", "imageSegments", index, initial);
+				setInterval(index, initial);
 				setEditorState("playbackTime", initialPlaybackTime);
 			}
 			resume();
@@ -196,24 +223,12 @@ export function OverlayTrack(
 						add(editorState.playbackTime);
 					}}
 				>
-					<Show
-						when={props.type === "image"}
-						fallback={
-							<>
-								<span>
-									Change background, camera and cursor for part of your video
-								</span>
-								<span class="cap-empty-lane-action">· Add style</span>
-							</>
-						}
-					>
-						<span>Place images and logos on your video</span>
-						<span class="cap-empty-lane-action">
-							{editorState.importingImage
-								? "· Importing image…"
-								: "· Add image"}
-						</span>
-					</Show>
+					<span>{EMPTY_LANE[props.type].hint}</span>
+					<span class="cap-empty-lane-action">
+						{props.type === "image" && editorState.importingImage
+							? "· Importing image…"
+							: EMPTY_LANE[props.type].action}
+					</span>
 				</button>
 			</Show>
 			<For each={segments()}>
@@ -226,7 +241,7 @@ export function OverlayTrack(
 						class="group"
 						selected={selected(index)}
 						muted={!segment.enabled}
-						title={`${segment.name} · ${(segment.end - segment.start).toFixed(2)}s`}
+						title={`${segmentName(segment)} · ${(segment.end - segment.start).toFixed(2)}s`}
 					>
 						<SegmentHandle
 							position="start"
@@ -239,14 +254,18 @@ export function OverlayTrack(
 							<SegmentLabel
 								full={() => (
 									<div class="cap-seg-labels">
-										<span class="cap-seg-label truncate">{segment.name}</span>
+										<span class="cap-seg-label truncate">
+											{segmentName(segment)}
+										</span>
 										<span class="cap-seg-sublabel">
 											{`${(segment.end - segment.start).toFixed(1)}s`}
 										</span>
 									</div>
 								)}
 								compact={() => (
-									<span class="cap-seg-label truncate">{segment.name}</span>
+									<span class="cap-seg-label truncate">
+										{segmentName(segment)}
+									</span>
 								)}
 							/>
 						</SegmentContent>

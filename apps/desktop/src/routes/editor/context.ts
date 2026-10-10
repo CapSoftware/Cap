@@ -4,8 +4,6 @@ import {
 } from "@solid-primitives/bounds";
 import { createContextProvider } from "@solid-primitives/context";
 import { trackStore } from "@solid-primitives/deep";
-import { createEventListener } from "@solid-primitives/event-listener";
-import { createUndoHistory } from "@solid-primitives/history";
 import { createQuery, skipToken } from "@tanstack/solid-query";
 import {
 	type Accessor,
@@ -19,6 +17,7 @@ import {
 	on,
 	onCleanup,
 	onMount,
+	untrack,
 	useContext,
 } from "solid-js";
 import { createStore, produce, reconcile, unwrap } from "solid-js/store";
@@ -58,6 +57,7 @@ import {
 	type TimelineSegment,
 	type XY,
 } from "~/utils/tauri";
+import { savedEditorProjectAfterFreeEdit } from "../../../../web/lib/editor-caption-access";
 import {
 	type AudioTrackSegment,
 	createAudioTrackSegment,
@@ -97,10 +97,12 @@ import type { MaskSegment } from "./masks";
 import { usePreparingEditor } from "./preparing-editor-context";
 import { createPreparingPlaybackHandoff } from "./preparing-playback-handoff";
 import { createProjectConfigSave } from "./project-config-save";
+import { createStoreHistory, withEditorTimeline } from "./project-history";
 import type { SnapGuide } from "./snapping";
 import {
+	activeStyleSegments,
+	applyStyleSegments,
 	defaultStyleSegment,
-	resolveStyle,
 	type StyleGroup,
 	type StyleSegment,
 	splitOverlaySegment,
@@ -140,6 +142,7 @@ import {
 	sortTrackSegments,
 } from "./timelineTracks";
 import { createProgressBar } from "./utils";
+import { defaultWaveformSegment, waveformGapAt } from "./waveform";
 
 export type ModalDialog =
 	| { type: "createPreset" }
@@ -163,6 +166,8 @@ export type CurrentDialog = ModalDialog | LayoutMode;
 export type DialogState = { open: false } | ({ open: boolean } & CurrentDialog);
 export type OpenLayoutMode = { open: true } & LayoutMode;
 export type OpenModalDialog = { open: true } & ModalDialog;
+
+const isWebEditor = import.meta.env.VITE_CAP_WEB_EDITOR === "true";
 
 const LAYOUT_MODE_TYPES: Set<CurrentDialog["type"]> = new Set([
 	"export",
@@ -211,6 +216,7 @@ export const getPreviewResolution = (
 export type TimelineTrackType =
 	| "style"
 	| "image"
+	| "waveform"
 	| "clip"
 	| "caption"
 	| "keyboard"
@@ -312,6 +318,9 @@ export function normalizeProject(
 				imageSegments: (config.overlayOrder?.length
 					? sortTrackSegments
 					: normalizeTrackSegments)(config.timeline.imageSegments ?? []),
+				waveformSegments: (config.overlayOrder?.length
+					? sortTrackSegments
+					: normalizeTrackSegments)(config.timeline.waveformSegments ?? []),
 				transitions:
 					(
 						config.timeline as TimelineConfiguration & {
@@ -383,6 +392,7 @@ export function serializeProjectConfiguration(
 				transitions: project.timeline.transitions ?? [],
 				styleSegments: project.timeline.styleSegments ?? [],
 				imageSegments: project.timeline.imageSegments ?? [],
+				waveformSegments: project.timeline.waveformSegments ?? [],
 				captionSegments: project.timeline.captionSegments ?? [],
 				keyboardSegments: project.timeline.keyboardSegments ?? [],
 				maskSegments: project.timeline.maskSegments ?? [],
@@ -415,7 +425,10 @@ export const [EditorContextProvider, useBaseEditorContext] =
 		}) => {
 			const editorInstanceContext = useEditorInstanceContext();
 			const [project, setProject] = createStore<EditorProjectConfiguration>(
-				normalizeProject(props.editorInstance.savedProjectConfig),
+				withEditorTimeline(
+					normalizeProject(props.editorInstance.savedProjectConfig),
+					props.editorInstance.recordingDuration,
+				),
 			);
 
 			const setClipTransition = (
@@ -467,6 +480,7 @@ export const [EditorContextProvider, useBaseEditorContext] =
 						const tracks = [
 							timeline.styleSegments,
 							timeline.imageSegments,
+							timeline.waveformSegments ?? [],
 							timeline.zoomSegments,
 							timeline.sceneSegments ?? [],
 							timeline.maskSegments,
@@ -577,15 +591,18 @@ export const [EditorContextProvider, useBaseEditorContext] =
 				});
 			};
 
+			const overlaySegments = (type: "style" | "image" | "waveform") =>
+				(type === "style"
+					? project.timeline?.styleSegments
+					: type === "image"
+						? project.timeline?.imageSegments
+						: project.timeline?.waveformSegments) ?? [];
 			const overlayPlacement = (
 				type: "style" | "image",
 				lane: number,
 				time: number,
 			) => {
-				const segments =
-					(type === "style"
-						? project.timeline?.styleSegments
-						: project.timeline?.imageSegments) ?? [];
+				const segments = overlaySegments(type);
 				const length = Math.min(3, totalDuration());
 				if (length <= 0) return null;
 				const requested = placeSegmentAtTime(
@@ -611,14 +628,11 @@ export const [EditorContextProvider, useBaseEditorContext] =
 					: null;
 			};
 			const selectAddedOverlay = (
-				type: "style" | "image",
+				type: "style" | "image" | "waveform",
 				lane: number,
 				start: number,
 			) => {
-				const segments =
-					(type === "style"
-						? project.timeline?.styleSegments
-						: project.timeline?.imageSegments) ?? [];
+				const segments = overlaySegments(type);
 				const index = segments.findIndex(
 					(segment) => segment.track === lane && segment.start === start,
 				);
@@ -1003,22 +1017,28 @@ export const [EditorContextProvider, useBaseEditorContext] =
 					}
 				},
 				splitOverlaySegment: (
-					type: "style" | "image",
+					type: "style" | "image" | "waveform",
 					index: number,
 					time: number,
 				) => {
-					const key = type === "style" ? "styleSegments" : "imageSegments";
 					setProject(
 						produce((value) => {
 							const timeline = value.timeline;
-							if (!timeline || !timeline[key][index]) return;
-							if (type === "style") {
+							if (!timeline) return;
+							if (type === "waveform") {
+								const segment = timeline.waveformSegments?.[index];
+								const parts =
+									segment &&
+									splitOverlaySegment(structuredClone(unwrap(segment)), time);
+								if (parts)
+									timeline.waveformSegments?.splice(index, 1, ...parts);
+							} else if (type === "style") {
 								const parts = splitOverlaySegment(
 									structuredClone(unwrap(timeline.styleSegments[index])),
 									time,
 								);
 								if (parts) timeline.styleSegments.splice(index, 1, ...parts);
-							} else {
+							} else if (timeline.imageSegments[index]) {
 								const parts = splitOverlaySegment(
 									structuredClone(unwrap(timeline.imageSegments[index])),
 									time,
@@ -1030,7 +1050,10 @@ export const [EditorContextProvider, useBaseEditorContext] =
 					setEditorState("timeline", "selection", { type, indices: [index] });
 					if (type === "style") enterStyleScope(index);
 				},
-				deleteOverlaySegments: (type: "style" | "image", indices: number[]) => {
+				deleteOverlaySegments: (
+					type: "style" | "image" | "waveform",
+					indices: number[],
+				) => {
 					const remove = new Set(indices);
 					batch(() => {
 						setProject(
@@ -1041,9 +1064,14 @@ export const [EditorContextProvider, useBaseEditorContext] =
 										value.timeline.styleSegments.filter(
 											(_, index) => !remove.has(index),
 										);
-								else
+								else if (type === "image")
 									value.timeline.imageSegments =
 										value.timeline.imageSegments.filter(
+											(_, index) => !remove.has(index),
+										);
+								else
+									value.timeline.waveformSegments =
+										value.timeline.waveformSegments?.filter(
 											(_, index) => !remove.has(index),
 										);
 							}),
@@ -1070,6 +1098,35 @@ export const [EditorContextProvider, useBaseEditorContext] =
 						}),
 					);
 					selectAddedOverlay("style", placement.lane, placement.start);
+				},
+				addWaveformSegment: (lane: number, time = 0) => {
+					const timeline = project.timeline;
+					if (!timeline) return;
+					const segments = timeline.waveformSegments ?? [];
+					const requested = waveformGapAt(
+						segments.filter((segment) => segment.track === lane),
+						time,
+						totalDuration(),
+					);
+					const placement = requested
+						? { ...requested, lane }
+						: {
+								start: 0,
+								end: totalDuration(),
+								lane: Math.max(getUsedTrackCount(segments), lane + 1),
+							};
+					if (!(placement.end > placement.start)) return;
+					setProject("timeline", "waveformSegments", (segments) =>
+						sortTrackSegments([
+							...(segments ?? []),
+							defaultWaveformSegment(
+								placement.start,
+								placement.end,
+								placement.lane,
+							),
+						]),
+					);
+					selectAddedOverlay("waveform", placement.lane, placement.start);
 				},
 				importImageSegment: async (
 					lane: number,
@@ -1536,6 +1593,7 @@ export const [EditorContextProvider, useBaseEditorContext] =
 							for (const overlay of [
 								...timeline.styleSegments,
 								...timeline.imageSegments,
+								...(timeline.waveformSegments ?? []),
 							]) {
 								overlay.start = mapOutputTime(overlay.start);
 								overlay.end = mapOutputTime(overlay.end);
@@ -1689,18 +1747,65 @@ export const [EditorContextProvider, useBaseEditorContext] =
 				},
 			};
 
+			const initialWebConfig = isWebEditor
+				? JSON.stringify(serializeProjectConfiguration(project))
+				: null;
+			let lastPersistedWebConfig: string | null = null;
 			const projectSave = createProjectConfigSave({
 				trackChanges: () => {
 					trackStore(project);
 				},
 				getConfig: () => serializeProjectConfiguration(project),
 				save: async (config) => {
+					const preservePaidCaptions =
+						isWebEditor &&
+						(
+							window as Window & {
+								capWebEditorCaptionsEnabled?: boolean;
+							}
+						).capWebEditorCaptionsEnabled === false;
 					await commands.setProjectConfig(config);
+					if (isWebEditor) {
+						const prior = JSON.parse(
+							lastPersistedWebConfig ?? initialWebConfig ?? "{}",
+						) as Record<string, unknown>;
+						lastPersistedWebConfig = JSON.stringify(
+							preservePaidCaptions
+								? savedEditorProjectAfterFreeEdit(
+										config as unknown as Record<string, unknown>,
+										prior,
+									)
+								: config,
+						);
+					}
 				},
 				onError: (error) => {
 					console.error("Failed to persist project config", error);
 				},
 			});
+			if (isWebEditor) {
+				const editorWindow = window as Window & {
+					capWebEditorUnsavedProjectSnapshot?: () => string | null;
+				};
+				const unsavedProjectSnapshot = () => {
+					const serialized = JSON.stringify(
+						serializeProjectConfiguration(project),
+					);
+					return serialized === (lastPersistedWebConfig ?? initialWebConfig)
+						? null
+						: serialized;
+				};
+				editorWindow.capWebEditorUnsavedProjectSnapshot =
+					unsavedProjectSnapshot;
+				onCleanup(() => {
+					if (
+						editorWindow.capWebEditorUnsavedProjectSnapshot ===
+						unsavedProjectSnapshot
+					) {
+						delete editorWindow.capWebEditorUnsavedProjectSnapshot;
+					}
+				});
+			}
 
 			const [storedSettings] = createResource(() => generalSettingsStore.get());
 			const initialPreviewQuality = createMemo((): EditorPreviewQuality => {
@@ -1730,6 +1835,9 @@ export const [EditorContextProvider, useBaseEditorContext] =
 
 			const previewResolutionBase = () =>
 				getPreviewResolution(previewQuality());
+			createEffect(() =>
+				editorInstanceContext.setPreviewBase(previewResolutionBase()),
+			);
 
 			const layoutModeStorageKey = `cap:editor:layoutMode:${props.editorInstance.path}`;
 
@@ -1799,20 +1907,21 @@ export const [EditorContextProvider, useBaseEditorContext] =
 					: undefined,
 			);
 
-			const totalDuration = () =>
+			const totalDuration = createMemo(() =>
 				project.timeline
 					? clipTimelineDuration(
 							project.timeline.segments,
 							project.timeline.transitions ?? [],
 						) + totalHeldDuration(holdWindows(project.timeline.textSegments))
-					: props.editorInstance.recordingDuration;
+					: props.editorInstance.recordingDuration,
+			);
 
 			type State = {
 				zoom: number;
 				position: number;
 			};
 
-			const zoomOutLimit = () => Math.min(totalDuration(), 60 * 10);
+			const zoomOutLimit = totalDuration;
 
 			function updateZoom(
 				state: State,
@@ -1880,6 +1989,7 @@ export const [EditorContextProvider, useBaseEditorContext] =
 						| null
 						| { type: "style"; indices: number[] }
 						| { type: "image"; indices: number[] }
+						| { type: "waveform"; indices: number[] }
 						| { type: "zoom"; indices: number[] }
 						| { type: "clip"; indices: number[] }
 						| { type: "transition"; index: number }
@@ -1929,6 +2039,9 @@ export const [EditorContextProvider, useBaseEditorContext] =
 					tracks: {
 						style: getUsedTrackCount(project.timeline?.styleSegments ?? []),
 						image: getUsedTrackCount(project.timeline?.imageSegments ?? []),
+						waveform: getUsedTrackCount(
+							project.timeline?.waveformSegments ?? [],
+						),
 						clip: true,
 						caption: initialCaptionTrackVisible,
 						keyboard: initialKeyboardTrackVisible,
@@ -1968,6 +2081,23 @@ export const [EditorContextProvider, useBaseEditorContext] =
 						});
 					},
 				),
+			);
+
+			// Deleting or trimming the clip under the playhead or the hover point
+			// can leave them past the new end, where the readout and preview would
+			// show time that no longer exists.
+			createEffect(
+				on(totalDuration, (end) => {
+					untrack(() => {
+						if (
+							editorState.previewTime !== null &&
+							editorState.previewTime > end
+						)
+							setEditorState("previewTime", end);
+						if (!editorState.playing && editorState.playbackTime > end)
+							setEditorState("playbackTime", end);
+					});
+				}),
 			);
 
 			// "Play shot" plays one segment and stops on its last frame. The guard
@@ -2104,12 +2234,27 @@ export const [EditorContextProvider, useBaseEditorContext] =
 					if (editorState.timeline.selection?.type === "style")
 						setEditorState("timeline", "selection", null);
 				});
+			// The active segments change far less often than the playhead, which
+			// moves every frame; the style is only rebuilt when they change.
+			const activePreviewStyles = createMemo(
+				() =>
+					activeStyleSegments(
+						project.timeline?.styleSegments ?? [],
+						editorState.previewTime ?? editorState.playbackTime,
+					),
+				undefined,
+				{
+					equals: (previous, next) =>
+						previous.length === next.length &&
+						previous.every(
+							(entry, index) =>
+								entry.index === next[index]?.index &&
+								entry.segment === next[index]?.segment,
+						),
+				},
+			);
 			const previewStyle = createMemo(() =>
-				resolveStyle(
-					project,
-					project.timeline?.styleSegments ?? [],
-					editorState.previewTime ?? editorState.playbackTime,
-				),
+				applyStyleSegments(project, activePreviewStyles()),
 			);
 			// Active smart-guide lines while an overlay drag is snapping; published
 			// by whichever overlay owns the drag, rendered once above the canvas.
@@ -2573,6 +2718,7 @@ function transformMeta({ pretty_name, ...rawMeta }: RecordingMeta) {
 			if (meta.type === "single") return !!meta.cursor;
 			return meta.segments.some((s) => !!s.cursor);
 		})(),
+		audioOnly: (rawMeta as { audioOnly?: boolean }).audioOnly === true,
 	};
 }
 
@@ -2592,6 +2738,9 @@ const createEditorInstanceContext = () => {
 	const [isWorkerReady, setIsWorkerReady] = createSignal(false);
 	const [canvasControls, setCanvasControls] =
 		createSignal<CanvasControls | null>(null);
+	// Kept in step with the chosen preview quality by the editor context, so
+	// the frame asked for when a worker connects is the right size.
+	let previewBase = getPreviewResolution(DEFAULT_PREVIEW_QUALITY);
 	const [performanceMode, setPerformanceMode] = createSignal(false);
 
 	let disposeWorkerReadyEffect: (() => void) | undefined;
@@ -2656,7 +2805,7 @@ const createEditorInstanceContext = () => {
 				events.renderFrameEvent.emit({
 					frame_number: preparing?.handoffRequestedFrame() ?? 0,
 					fps: FPS,
-					resolution_base: getPreviewResolution(DEFAULT_PREVIEW_QUALITY),
+					resolution_base: previewBase,
 				});
 			};
 
@@ -2720,6 +2869,9 @@ const createEditorInstanceContext = () => {
 		canvasControls,
 		performanceMode,
 		setPerformanceMode,
+		setPreviewBase: (base: XY<number>) => {
+			previewBase = base;
+		},
 	};
 };
 
@@ -2728,69 +2880,6 @@ export const [EditorInstanceContextProvider, useEditorInstanceContext] =
 		createEditorInstanceContext,
 		null as unknown as ReturnType<typeof createEditorInstanceContext>,
 	);
-
-function createStoreHistory<T extends Static>(
-	state: T,
-	setState: ReturnType<typeof createStore<T>>[1],
-	onRestore?: () => void,
-) {
-	// not working properly yet
-	// const getDelta = captureStoreUpdates(state);
-
-	const [pauseCount, setPauseCount] = createSignal(0);
-
-	const history = createUndoHistory(() => {
-		if (pauseCount() > 0) return;
-
-		trackStore(state);
-
-		const copy = structuredClone(unwrap(state));
-
-		return () => {
-			onRestore?.();
-			setState(reconcile(copy));
-		};
-	});
-
-	createEventListener(window, "keydown", (e) => {
-		switch (e.code) {
-			case "KeyZ": {
-				if (!(e.ctrlKey || e.metaKey)) return;
-				if (e.shiftKey) history.redo();
-				else history.undo();
-				break;
-			}
-			case "KeyY": {
-				if (!(e.ctrlKey || e.metaKey)) return;
-				history.redo();
-				break;
-			}
-			default: {
-				return;
-			}
-		}
-
-		e.preventDefault();
-		e.stopPropagation();
-	});
-
-	return Object.assign(history, {
-		pause() {
-			setPauseCount(pauseCount() + 1);
-
-			return () => {
-				setPauseCount(pauseCount() - 1);
-			};
-		},
-		isPaused: () => pauseCount() > 0,
-	});
-}
-
-type Static<T = unknown> =
-	| {
-			[K in number | string]: T;
-	  }
-	| T[];
 
 type TimelineContextValue = {
 	duration: Accessor<number>;
@@ -2836,7 +2925,9 @@ export const [TrackContextProvider, useTrackContext] = createContextProvider(
 		const [trackState, setTrackState] = createStore({
 			draggingSegment: false,
 		});
-		const bounds = createElementBounds(() => props.ref());
+		const bounds = createElementBounds(() => props.ref(), {
+			trackMutation: false,
+		});
 
 		const secsPerPixel = () =>
 			editorState.timeline.transform.zoom / (bounds.width ?? 1);

@@ -23,6 +23,14 @@ export type FileSpec = {
 	size: number;
 	/** Byte ranges [start, end) to fetch, or "all". */
 	ranges: [number, number][] | "all";
+	/** Copy this file from the machine (a built-in asset) instead of S3. */
+	local?: string;
+	/**
+	 * The file starts with this whole object (a built index, see
+	 * fragment-index.ts) and `key` follows it: bytes at or past `size` come
+	 * from `key`, `size` bytes earlier. Ranges count in the joined file.
+	 */
+	prefix?: { key: string; size: number };
 };
 
 const PIECE = 4 << 20;
@@ -82,21 +90,26 @@ export class ProjectCache {
 		return file;
 	}
 
+	/**
+	 * Piece `piece` of `key` (which is `size` bytes), written `at` bytes into
+	 * the file. A prefixed file keeps its prefix as piece -1.
+	 */
 	private fetchPiece(
-		spec: FileSpec,
+		source: { key: string; size: number; at: number },
 		file: LocalFile,
 		piece: number,
 		stats: FetchStats,
 	) {
 		let pending = file.pieces.get(piece);
 		if (!pending) {
-			const start = piece * PIECE;
-			const end = Math.min(spec.size, start + PIECE);
+			const start = Math.max(0, piece) * PIECE;
+			const end =
+				piece < 0 ? source.size : Math.min(source.size, start + PIECE);
 			pending = this.limiter.run(async () => {
-				const bytes = await this.s3.getRange(spec.key, start, end - 1);
+				const bytes = await this.s3.getRange(source.key, start, end - 1);
 				if (bytes.byteLength !== end - start) {
 					throw new Error(
-						`short read ${spec.key} ${start}-${end}: ${bytes.byteLength}`,
+						`short read ${source.key} ${start}-${end}: ${bytes.byteLength}`,
 					);
 				}
 				let written = 0;
@@ -106,7 +119,7 @@ export class ProjectCache {
 						bytes,
 						written,
 						bytes.byteLength - written,
-						start + written,
+						source.at + start + written,
 					);
 				}
 				this.bytesFetched += bytes.byteLength;
@@ -124,6 +137,15 @@ export class ProjectCache {
 		const stats: FetchStats = { bytes: 0, requests: 0, ms: 0 };
 		const work: Promise<void>[] = [];
 		for (const spec of specs) {
+			if (spec.local) {
+				const file = this.open(spec);
+				const bytes = readFileSync(spec.local);
+				if (bytes.byteLength !== spec.size) {
+					throw new Error(`${spec.local} changed size`);
+				}
+				writeSync(file.fd, bytes, 0, bytes.byteLength, 0);
+				continue;
+			}
 			if (spec.size === 0) {
 				this.open(spec);
 				continue;
@@ -131,20 +153,34 @@ export class ProjectCache {
 			const file = this.open(spec);
 			const ranges: [number, number][] =
 				spec.ranges === "all" ? [[0, spec.size]] : spec.ranges;
+			const at = spec.prefix?.size ?? 0;
+			const source = { key: spec.key, size: spec.size - at, at };
 			const pieces = new Set<number>();
 			for (const [start, end] of ranges) {
-				const clampedEnd = Math.min(end, spec.size);
-				if (clampedEnd <= start) continue;
+				if (spec.prefix && start < at && end > 0) pieces.add(-1);
+				const from = Math.max(start, at) - at;
+				const to = Math.min(end, spec.size) - at;
+				if (to <= from) continue;
 				for (
-					let piece = Math.floor(start / PIECE);
-					piece <= Math.floor((clampedEnd - 1) / PIECE);
+					let piece = Math.floor(from / PIECE);
+					piece <= Math.floor((to - 1) / PIECE);
 					piece++
 				) {
 					pieces.add(piece);
 				}
 			}
-			for (const piece of pieces)
-				work.push(this.fetchPiece(spec, file, piece, stats));
+			for (const piece of pieces) {
+				work.push(
+					this.fetchPiece(
+						piece < 0 && spec.prefix
+							? { key: spec.prefix.key, size: spec.prefix.size, at: 0 }
+							: source,
+						file,
+						piece,
+						stats,
+					),
+				);
+			}
 		}
 		await Promise.all(work);
 		if (

@@ -5,6 +5,7 @@
 !vendor
 !apps/cli
 !apps/desktop/src-tauri
+!apps/desktop/src/assets/music
 !apps/render-farm/src
 **/target
 **/node_modules

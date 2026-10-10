@@ -54,6 +54,8 @@ import { forwardRef, useEffect } from "react";
 import * as ReactDOM from "react-dom";
 import { useComposedRefs } from "@/app/lib/compose-refs";
 import { cn } from "@/app/lib/utils";
+import { InkLoader } from "@/components/ink-loader";
+import { isBrowserShortcut } from "@/lib/browser-shortcut";
 import {
 	formatPlaybackDuration,
 	normalizePlaybackSpeed,
@@ -508,6 +510,10 @@ function MediaPlayerRootImpl(props: MediaPlayerRootProps) {
 			rootImplProps.onKeyDown?.(event);
 
 			if (event.defaultPrevented) return;
+			// Cmd, Ctrl and Alt combinations belong to the browser: reload, hard
+			// reload, find, the address bar, tab switching and history. The
+			// player's single-key shortcuts must never cancel them.
+			if (isBrowserShortcut(event)) return;
 
 			const mediaElement = mediaRef.current;
 			if (!mediaElement) return;
@@ -879,7 +885,7 @@ function MediaPlayerRootImpl(props: MediaPlayerRootProps) {
 					onKeyDown={onKeyDown}
 					onKeyUp={onKeyUp}
 					className={cn(
-						"dark relative isolate flex flex-col overflow-visible bg-background outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 data-[disabled]:pointer-events-none data-[disabled]:opacity-50 [&_video]:relative [&_video]:object-contain",
+						"dark relative isolate flex flex-col justify-center overflow-visible bg-background outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 data-[disabled]:pointer-events-none data-[disabled]:opacity-50 [&_video]:relative [&_video]:object-contain",
 						// The root never clips (overlays must escape), so a video whose
 						// aspect exactly fills the box would paint square corners over
 						// the root's radius. Inheriting keeps the video's corners in
@@ -1118,7 +1124,7 @@ function MediaPlayerLoading(props: MediaPlayerLoadingProps) {
 				className,
 			)}
 		>
-			<Loader2Icon className="size-20 animate-spin stroke-[.0938rem] text-white" />
+			<InkLoader size="lg" tone="media" />
 		</LoadingPrimitive>
 	);
 }

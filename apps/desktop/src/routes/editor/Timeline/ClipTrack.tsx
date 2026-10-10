@@ -166,7 +166,7 @@ function WaveformCanvas(props: {
 }) {
 	const { project, editorState } = useEditorContext();
 	const { width } = useSegmentContext();
-	const { timelineBounds } = useTimelineContext();
+	const { timelineBounds, renderPosition, followExtent } = useTimelineContext();
 
 	let canvas: HTMLCanvasElement | undefined;
 	let rafId: number | null = null;
@@ -176,6 +176,8 @@ function WaveformCanvas(props: {
 	let systemPath: Path2D | undefined;
 	let cachedMicWaveform: number[] | undefined;
 	let cachedSystemWaveform: number[] | undefined;
+	let following = false;
+	let followedPosition = Number.NaN;
 
 	const renderCanvas = () => {
 		rafId = null;
@@ -221,11 +223,30 @@ function WaveformCanvas(props: {
 		if (useVirtualization) {
 			const viewportWidth = timelineBounds.width ?? 800;
 			const transform = editorState.timeline.transform;
-			const viewStart = transform.position;
-			const viewEnd = viewStart + transform.zoom;
+			let viewStart = renderPosition();
+			let viewEnd = viewStart + transform.zoom + followExtent();
 
 			const segStart = props.segmentOffset;
 			const segEnd = segStart + outputDuration;
+
+			// A timeline following playback scrolls every frame. The canvas then
+			// covers a wider window that moves in steps, so the waveform is
+			// redrawn a few times a screen rather than every frame. Once the view
+			// stops moving it is redrawn for the exact view.
+			const secsPerPx = outputDuration / fullSegmentWidth;
+			const extentPx = followExtent() / secsPerPx;
+			const marginPx = following
+				? Math.min(
+						viewportWidth / 4,
+						(MAX_CANVAS_WIDTH - viewportWidth - extentPx) / 2,
+					)
+				: 0;
+			if (marginPx >= 1) {
+				const step = marginPx * secsPerPx;
+				viewStart =
+					segStart + Math.floor((viewStart - segStart - step) / step) * step;
+				viewEnd = viewStart + transform.zoom + followExtent() + 2 * step;
+			}
 
 			const visibleStart = Math.max(viewStart, segStart);
 			const visibleEnd = Math.min(viewEnd, segEnd);
@@ -244,7 +265,7 @@ function WaveformCanvas(props: {
 			const pxPerSec = fullSegmentWidth / outputDuration;
 			const visibleWidthPx = Math.min(
 				(visibleEndInSegment - visibleStartInSegment) * pxPerSec,
-				viewportWidth + 200,
+				viewportWidth + extentPx + Math.max(200, 2 * marginPx),
 			);
 
 			canvasWidth = Math.min(
@@ -333,7 +354,14 @@ function WaveformCanvas(props: {
 	createEffect(() => {
 		width();
 		timelineBounds.width;
-		editorState.timeline.transform.position;
+		const position = editorState.timeline.transform.position;
+		renderPosition();
+		followExtent();
+		following =
+			editorState.playing &&
+			(following ||
+				(!Number.isNaN(followedPosition) && position !== followedPosition));
+		followedPosition = position;
 		editorState.timeline.transform.zoom;
 		props.segment.start;
 		props.segment.end;
@@ -1800,15 +1828,16 @@ function Markings(props: {
 	holds: ReadonlyArray<[number, number]>;
 }) {
 	const { editorState } = useEditorContext();
-	const { secsPerPixel, markingResolution } = useTimelineContext();
+	const { secsPerPixel, markingResolution, renderPosition, followExtent } =
+		useTimelineContext();
 
 	const transform = () => editorState.timeline.transform;
 
 	const markingParams = () => {
 		const resolution = markingResolution();
 		const visibleMin =
-			transform().position - props.prevDuration + props.segment.start;
-		const visibleMax = visibleMin + transform().zoom;
+			renderPosition() - props.prevDuration + props.segment.start;
+		const visibleMax = visibleMin + transform().zoom + followExtent();
 		const start = Math.floor(visibleMin / resolution);
 		const count = Math.ceil(visibleMax / resolution) - start;
 		return { resolution, start, count };

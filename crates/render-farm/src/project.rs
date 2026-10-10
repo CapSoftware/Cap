@@ -223,6 +223,7 @@ mod tests {
                 style_segments: Vec::new(),
                 image_segments: Vec::new(),
                 camera3d_segments: Vec::new(),
+                waveform_segments: Vec::new(),
             }),
             ..Default::default()
         }

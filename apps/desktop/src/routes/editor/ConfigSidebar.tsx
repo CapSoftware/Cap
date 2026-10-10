@@ -12,8 +12,9 @@ import { Tabs as KTabs } from "@kobalte/core/tabs";
 import { createElementBounds } from "@solid-primitives/bounds";
 import { createEventListenerMap } from "@solid-primitives/event-listener";
 import { createQuery } from "@tanstack/solid-query";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { appDataDir, resolveResource } from "@tauri-apps/api/path";
+import { open } from "@tauri-apps/plugin-dialog";
 import {
 	BaseDirectory,
 	exists,
@@ -31,6 +32,7 @@ import {
 	createSignal,
 	For,
 	Index,
+	type JSX,
 	lazy,
 	on,
 	onCleanup,
@@ -77,6 +79,7 @@ import {
 	type XY,
 	type ZoomSegment,
 } from "~/utils/tauri";
+import IconLucideChevronDown from "~icons/lucide/chevron-down";
 import IconLucideColumns2 from "~icons/lucide/columns-2";
 import IconLucideEyeOff from "~icons/lucide/eye-off";
 import IconLucideKeyboard from "~icons/lucide/keyboard";
@@ -87,6 +90,7 @@ import {
 	AnimatedGradientEditor,
 	copyAnimatedGradientConfig,
 } from "./AnimatedGradientEditor";
+
 import { AudioLibraryPanel } from "./AudioLibrary";
 import {
 	AUDIO_TRACK_BG_CLASS,
@@ -101,7 +105,10 @@ import {
 	CursorStylePicker,
 	isExplicitCursorFamily,
 } from "./CursorStylePicker";
-import { syncCaptionWordsWithText } from "./captions";
+import {
+	syncCaptionSourceFromTrack,
+	syncCaptionWordsWithText,
+} from "./captions";
 import { type ClipTransition, clipSourceTimeAt } from "./clip-transitions";
 import { hexToRgb, RgbInput } from "./color-utils";
 import {
@@ -151,7 +158,12 @@ import {
 	topSlideAnimateClasses,
 } from "./ui";
 import { formatTime } from "./utils";
+import type { WaveformSegment } from "./waveform";
+import { WaveformSegmentConfig } from "./waveform-segment-config";
 import { ZoomModeHelper } from "./ZoomModeHelper";
+
+const isWebEditor = import.meta.env.VITE_CAP_WEB_EDITOR === "true";
+const ZOOM_PREVIEW_MAX_RETRIES = 4;
 
 // Split out of the sidebar chunk: the captions tab is not visible at first
 // paint (Kobalte only mounts the selected tab), and its code is heavy. The
@@ -302,6 +314,13 @@ type WallpaperOption = {
 
 const isCurrentDesktopBackgroundPath = (path: string | null | undefined) => {
 	if (!path) return false;
+	if (
+		isWebEditor &&
+		/^content\/images\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(png|jpg|webp|gif|bmp|tiff)$/.test(
+			path,
+		)
+	)
+		return true;
 	const filename = path.split(/[\\/]/).pop();
 	if (!filename) return false;
 	return (
@@ -430,7 +449,13 @@ const TAB_IDS = {
 	captions: "captions",
 } as const;
 
-export function ConfigSidebar() {
+export type ConfigSidebarSheet = {
+	open: () => boolean;
+	setOpen: (open: boolean) => void;
+	tools?: JSX.Element;
+};
+
+export function ConfigSidebar(props: { sheet?: ConfigSidebarSheet }) {
 	const context = useEditorContext();
 	return (
 		<Show when={context.styleScopeToken()} keyed>
@@ -442,7 +467,7 @@ export function ConfigSidebar() {
 						setProject: context.createStyleProjectSetter(),
 					}}
 				>
-					<ConfigSidebarContent />
+					<ConfigSidebarContent sheet={props.sheet} />
 				</EditorStyleContext.Provider>
 			)}
 		</Show>
@@ -566,7 +591,7 @@ function StudioSoundCard() {
 	);
 }
 
-function ConfigSidebarContent() {
+function ConfigSidebarContent(props: { sheet?: ConfigSidebarSheet }) {
 	const {
 		project,
 		selectedStyle,
@@ -677,6 +702,98 @@ function ConfigSidebarContent() {
 		}
 	});
 
+	// A function so it's created inside the Tabs below, whose context it reads.
+	const tabList = () => (
+		<KTabs.List
+			class={
+				props.sheet
+					? "flex flex-1 min-w-0 flex-row justify-around items-center"
+					: "flex sticky top-0 z-60 flex-row justify-around items-center px-2.5 h-[46px] border-b border-ed-line shrink-0 bg-ed-card"
+			}
+		>
+			<For
+				each={[
+					{ id: TAB_IDS.background, icon: IconCapImage },
+					{
+						id: TAB_IDS.camera,
+						icon: IconCapCamera,
+						disabled: editorInstance.recordings.segments.every(
+							(s) => s.camera === null,
+						),
+					},
+					{ id: TAB_IDS.audio, icon: IconCapAudioOn },
+					{
+						id: TAB_IDS.cursor,
+						icon: IconCapCursor,
+						disabled: !meta().hasRecordedCursorData,
+					},
+					...(isWebEditor
+						? []
+						: [{ id: TAB_IDS.keyboard, icon: IconLucideKeyboard }]),
+					{
+						id: TAB_IDS.captions,
+						icon: IconCapMessageBubble,
+					},
+					// { id: "hotkeys" as const, icon: IconCapHotkeys },
+				].filter(
+					(item) =>
+						!(meta().audioOnly && item.id === "cursor") &&
+						(!selectedStyle() ||
+							item.id === "background" ||
+							item.id === "camera" ||
+							item.id === "cursor"),
+				)}
+			>
+				{(item) => (
+					<KTabs.Trigger
+						value={item.id}
+						aria-label={
+							item.id === "background"
+								? "Background"
+								: item.id.charAt(0).toUpperCase() + item.id.slice(1)
+						}
+						title={
+							item.id === "background"
+								? "Background"
+								: item.id.charAt(0).toUpperCase() + item.id.slice(1)
+						}
+						class={cx(
+							"flex justify-center items-center transition-colors shrink-0 outline-hidden focus-visible:ring-1 focus-visible:ring-ed-accent text-ed-text-2 hover:bg-ed-ctl hover:text-ed-text-1 data-selected:bg-ed-ctl-hover data-selected:text-ed-text-1 disabled:text-ed-text-3 disabled:opacity-60 disabled:hover:bg-transparent",
+							props.sheet
+								? "size-10 rounded-[10px]"
+								: "w-10 h-[30px] rounded-[9px]",
+						)}
+						onClick={() => {
+							const showing =
+								!!props.sheet?.open() &&
+								state.selectedTab === item.id &&
+								!sidebarSelection() &&
+								editorState.timeline.audioPicker === null &&
+								editorState.timeline.audioReplace === null;
+							props.sheet?.setOpen(!showing);
+							if (sidebarSelection()) {
+								setEditorState("timeline", "selection", null);
+							}
+							if (editorState.timeline.audioPicker !== null) {
+								setEditorState("timeline", "audioPicker", null);
+							}
+							if (editorState.timeline.audioReplace !== null) {
+								setEditorState("timeline", "audioReplace", null);
+							}
+							setState("selectedTab", item.id);
+							scrollRef.scrollTo({
+								top: 0,
+							});
+						}}
+						disabled={item.disabled}
+					>
+						<Dynamic component={item.icon} class="size-4" />
+					</KTabs.Trigger>
+				)}
+			</For>
+		</KTabs.List>
+	);
+
 	return (
 		<KTabs
 			value={
@@ -685,83 +802,51 @@ function ConfigSidebarContent() {
 					: state.selectedTab
 			}
 			class="flex overflow-hidden z-10 flex-col flex-1 min-h-0 max-w-104 rounded-xl shrink-0 bg-ed-card shadow-ed-card"
+			data-sidebar-root
+			data-sheet-closed={props.sheet && !props.sheet.open() ? "" : undefined}
 		>
-			<KTabs.List class="flex sticky top-0 z-60 flex-row justify-around items-center px-2.5 h-[46px] border-b border-ed-line shrink-0 bg-ed-card">
-				<For
-					each={[
-						{ id: TAB_IDS.background, icon: IconCapImage },
-						{
-							id: TAB_IDS.camera,
-							icon: IconCapCamera,
-							disabled: editorInstance.recordings.segments.every(
-								(s) => s.camera === null,
-							),
-						},
-						{ id: TAB_IDS.audio, icon: IconCapAudioOn },
-						{
-							id: TAB_IDS.cursor,
-							icon: IconCapCursor,
-							disabled: !meta().hasRecordedCursorData,
-						},
-						{
-							id: TAB_IDS.keyboard,
-							icon: IconLucideKeyboard,
-						},
-						{
-							id: TAB_IDS.captions,
-							icon: IconCapMessageBubble,
-						},
-						// { id: "hotkeys" as const, icon: IconCapHotkeys },
-					].filter(
-						(item) =>
-							!selectedStyle() ||
-							item.id === "background" ||
-							item.id === "camera" ||
-							item.id === "cursor",
-					)}
-				>
-					{(item) => (
-						<KTabs.Trigger
-							value={item.id}
-							aria-label={
-								item.id === "background"
-									? "Background"
-									: item.id.charAt(0).toUpperCase() + item.id.slice(1)
+			<Show when={props.sheet} fallback={tabList()}>
+				{(sheet) => (
+					<div
+						data-sheet-bar
+						class="flex sticky top-0 z-60 flex-row gap-1 items-center px-1.5 h-[52px] border-b shrink-0 bg-ed-card transition-colors"
+						classList={{
+							"border-ed-line": sheet().open(),
+							"border-transparent": !sheet().open(),
+						}}
+					>
+						{tabList()}
+						<Show
+							when={sheet().open()}
+							fallback={
+								<Show when={sheet().tools}>
+									<div class="w-px h-5 shrink-0 bg-ed-line-strong" />
+									<div data-sheet-tools class="flex shrink-0 items-center">
+										{sheet().tools}
+									</div>
+								</Show>
 							}
-							title={
-								item.id === "background"
-									? "Background"
-									: item.id.charAt(0).toUpperCase() + item.id.slice(1)
-							}
-							class="flex justify-center items-center w-10 h-[30px] rounded-[9px] transition-colors shrink-0 outline-hidden focus-visible:ring-1 focus-visible:ring-ed-accent text-ed-text-2 hover:bg-ed-ctl hover:text-ed-text-1 data-selected:bg-ed-ctl-hover data-selected:text-ed-text-1 disabled:text-ed-text-3 disabled:opacity-60 disabled:hover:bg-transparent"
-							onClick={() => {
-								// Clear any active selection first
-								if (sidebarSelection()) {
-									setEditorState("timeline", "selection", null);
-								}
-								if (editorState.timeline.audioPicker !== null) {
-									setEditorState("timeline", "audioPicker", null);
-								}
-								if (editorState.timeline.audioReplace !== null) {
-									setEditorState("timeline", "audioReplace", null);
-								}
-								setState("selectedTab", item.id);
-								scrollRef.scrollTo({
-									top: 0,
-								});
-							}}
-							disabled={item.disabled}
 						>
-							<Dynamic component={item.icon} class="size-4" />
-						</KTabs.Trigger>
-					)}
-				</For>
-			</KTabs.List>
+							<button
+								type="button"
+								aria-label="Close settings"
+								title="Close settings"
+								class="flex justify-center items-center rounded-[10px] transition-colors size-10 shrink-0 outline-hidden text-ed-text-2 hover:bg-ed-ctl hover:text-ed-text-1 focus-visible:ring-1 focus-visible:ring-ed-accent"
+								onClick={() => sheet().setOpen(false)}
+							>
+								<IconLucideChevronDown class="size-4" />
+							</button>
+						</Show>
+					</div>
+				)}
+			</Show>
 			<div
 				ref={scrollRef}
 				style={{
 					"--margin-top-scroll": "5px",
 				}}
+				inert={props.sheet && !props.sheet.open()}
+				data-sheet-content
 				class="custom-scroll overscroll-contain overflow-x-hidden overflow-y-auto text-[0.875rem] flex-1 min-h-0"
 				classList={{
 					hidden:
@@ -1135,6 +1220,8 @@ function ConfigSidebarContent() {
 				style={{
 					"--margin-top-scroll": "5px",
 				}}
+				inert={props.sheet && !props.sheet.open()}
+				data-sheet-content
 				class="custom-scroll min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain pt-3.5 px-4 pb-4 text-[0.875rem] space-y-3.5 bg-ed-card z-50"
 				classList={{
 					hidden:
@@ -1555,6 +1642,75 @@ function ConfigSidebarContent() {
 							</Show>
 							<Show
 								when={(() => {
+									const waveformSelection = selection();
+									if (waveformSelection.type !== "waveform") return;
+
+									const segments = waveformSelection.indices
+										.map((index) => ({
+											index,
+											segment: project.timeline?.waveformSegments?.[index],
+										}))
+										.filter(
+											(
+												item,
+											): item is { index: number; segment: WaveformSegment } =>
+												item.segment !== undefined,
+										);
+
+									if (segments.length === 0) {
+										setEditorState("timeline", "selection", null);
+										return;
+									}
+									return { selection: waveformSelection, segments };
+								})()}
+							>
+								{(value) => (
+									<div class="space-y-4">
+										<div class="flex flex-row justify-between items-center">
+											<div class="flex gap-2 items-center">
+												<EditorButton
+													onClick={() =>
+														setEditorState("timeline", "selection", null)
+													}
+													leftIcon={<IconLucideCheck />}
+												>
+													Done
+												</EditorButton>
+												<span class="text-[12px] text-ed-text-2">
+													{value().segments.length === 1
+														? "Audio waveform"
+														: `${value().segments.length} waveforms selected`}
+												</span>
+											</div>
+											<EditorButton
+												variant="danger"
+												onClick={() =>
+													projectActions.deleteOverlaySegments(
+														"waveform",
+														value().segments.map((s) => s.index),
+													)
+												}
+												leftIcon={<IconCapTrash />}
+											>
+												Delete
+											</EditorButton>
+										</div>
+										<For each={value().segments}>
+											{(item) => (
+												<div class="p-3.5 rounded-xl bg-ed-card-2">
+													<WaveformSegmentConfig
+														segment={item.segment}
+														segmentIndex={item.index}
+														brandColorSwatches={brandColorSwatches()}
+													/>
+												</div>
+											)}
+										</For>
+									</div>
+								)}
+							</Show>
+							<Show
+								when={(() => {
 									const zoomSelection = selection();
 									if (zoomSelection.type !== "zoom") return;
 
@@ -1837,8 +1993,15 @@ function BackgroundConfig(props: {
 	scrollRef: HTMLDivElement;
 	brandColorSwatches: OrganizationBrandColorSwatch[];
 }) {
-	const { project, setProject, editorInstance, projectHistory, selectedStyle } =
-		useEditorContext();
+	const {
+		project,
+		setProject,
+		editorInstance,
+		projectHistory,
+		selectedStyle,
+		meta,
+	} = useEditorContext();
+	const screenHidden = () => meta().audioOnly || !!project.hideDisplay;
 	const notchXMax = () => {
 		const width =
 			project.background.notch?.width ?? editorInstance.notchBase.width;
@@ -1998,6 +2161,8 @@ function BackgroundConfig(props: {
 		const assetsDir = `${editorInstance.path}/assets`;
 
 		try {
+			if (isWebEditor)
+				return await invoke<string | null>("webEditorStoredDesktopBackground");
 			const importedPrefix = `${CURRENT_DESKTOP_BACKGROUND_BASENAME}-`;
 			let newest: { path: string; timestamp: number } | null = null;
 			for (const entry of await readDir(assetsDir)) {
@@ -2180,9 +2345,20 @@ function BackgroundConfig(props: {
 		if (importingDesktopBackground()) return;
 		setImportingDesktopBackground(true);
 		try {
-			const path = await commands.importCurrentDesktopBackground(
-				editorInstance.path,
-			);
+			let source = editorInstance.path;
+			if (isWebEditor) {
+				const selected = await open({
+					filters: [
+						{
+							name: "Images",
+							extensions: [...BACKGROUND_IMAGE_EXTENSIONS, "jpeg"],
+						},
+					],
+				});
+				if (typeof selected !== "string") return;
+				source = selected;
+			}
+			const path = await commands.importCurrentDesktopBackground(source);
 			const addingFromBlankBackground = isNoneBackground();
 			batch(() => {
 				setCurrentDesktopBackgroundPath(path);
@@ -2435,7 +2611,9 @@ function BackgroundConfig(props: {
 									<div class="flex flex-col gap-3 items-center justify-center p-6 w-full rounded-xl border border-dashed bg-ed-card-2 border-ed-line-strong">
 										<IconLucideMonitor class="size-6 text-ed-text-3" />
 										<span class="text-[13px] text-center text-ed-text-1">
-											Use the wallpaper from your desktop
+											{isWebEditor
+												? "Choose your desktop wallpaper"
+												: "Use the wallpaper from your desktop"}
 										</span>
 										<EditorButton
 											onClick={importDesktopBackground}
@@ -2444,7 +2622,9 @@ function BackgroundConfig(props: {
 										>
 											{importingDesktopBackground()
 												? "Importing..."
-												: "Import desktop background"}
+												: isWebEditor
+													? "Choose desktop wallpaper"
+													: "Import desktop background"}
 										</EditorButton>
 									</div>
 								}
@@ -2748,7 +2928,7 @@ function BackgroundConfig(props: {
 														}}
 													/>
 													<div
-														class="rounded-lg transition-all duration-200 size-8 hover:peer-checked:opacity-100 peer-hover:opacity-70 peer-checked:ring-2 peer-checked:ring-ed-accent peer-checked:ring-offset-2 peer-checked:ring-offset-ed-card"
+														class="rounded-lg shadow-[inset_0_0_0_1px_var(--ed-line-strong)] transition-all duration-200 size-8 hover:peer-checked:opacity-100 peer-hover:opacity-70 peer-checked:ring-2 peer-checked:ring-ed-accent peer-checked:ring-offset-2 peer-checked:ring-offset-ed-card"
 														style={{
 															background:
 																color === "#00000000"
@@ -2788,6 +2968,14 @@ function BackgroundConfig(props: {
 				</Section>
 
 				<div class="w-full border-t border-ed-line" />
+				<Show when={!meta().audioOnly && !selectedStyle()}>
+					<Field inline name="Show screen">
+						<Toggle
+							checked={!project.hideDisplay}
+							onChange={(show) => setProject("hideDisplay", !show)}
+						/>
+					</Field>
+				</Show>
 				<SectionLabel name="Layout" />
 				<Field
 					inline
@@ -2803,148 +2991,130 @@ function BackgroundConfig(props: {
 						formatTooltip="%"
 					/>
 				</Field>
-				<Field
-					inline
-					name="Padding"
-					value={`${project.background.padding.toFixed(1)}%`}
-				>
-					<Slider
-						value={[project.background.padding]}
-						onChange={(v) => setBackgroundDimension("padding", v[0])}
-						minValue={0}
-						maxValue={40}
-						step={0.1}
-						formatTooltip="%"
-					/>
-				</Field>
-				<Show when={project.background.displayPosition}>
-					<div class="flex gap-2 justify-between items-center">
-						<span class="text-[11px] text-ed-text-3">
-							Custom screen position (dragged on canvas)
-						</span>
-						<EditorButton
-							size="sm"
-							onClick={() => setProject("background", "displayPosition", null)}
-						>
-							Reset
-						</EditorButton>
-					</div>
-				</Show>
-				<Field
-					inline
-					name="Corners"
-					value={`${project.background.rounding.toFixed(1)}%`}
-				>
-					<Slider
-						value={[project.background.rounding]}
-						onChange={(v) => setBackgroundDimension("rounding", v[0])}
-						minValue={0}
-						maxValue={100}
-						step={0.1}
-						formatTooltip="%"
-					/>
-				</Field>
-				<Field inline name="Corner Style">
-					<CornerStyleSelect
-						value={project.background.roundingType}
-						onChange={(value) =>
-							setProject("background", "roundingType", value)
-						}
-					/>
-				</Field>
-				<Show when={!selectedStyle()}>
+				<Show when={!screenHidden()}>
 					<Field
 						inline
-						name="Motion Blur"
-						value={`${Math.round(
-							(project.screenMotionBlur ??
-								project.cursor.motionBlur ??
-								DEFAULT_MOTION_BLUR) * 100,
-						)}%`}
+						name="Padding"
+						value={`${project.background.padding.toFixed(1)}%`}
 					>
 						<Slider
-							value={[
-								project.screenMotionBlur ??
-									project.cursor.motionBlur ??
-									DEFAULT_MOTION_BLUR,
-							]}
-							onChange={(v) => {
-								const value = v[0] ?? 0;
-								batch(() => {
-									setProject("cursor", "motionBlur", value);
-									setProject("screenMotionBlur", value);
-								});
-							}}
+							value={[project.background.padding]}
+							onChange={(v) => setBackgroundDimension("padding", v[0])}
 							minValue={0}
-							maxValue={1}
-							step={0.01}
-							formatTooltip={(value) => `${Math.round(value * 100)}%`}
+							maxValue={40}
+							step={0.1}
+							formatTooltip="%"
 						/>
 					</Field>
-				</Show>
-				<Field inline name="Border">
-					<Toggle
-						checked={project.background.border?.enabled ?? false}
-						onChange={(enabled) => {
-							const prev = project.background.border ?? {
-								enabled: false,
-								width: 5.0,
-								color: [0, 0, 0],
-								opacity: 50.0,
-							};
-
-							if (props.scrollRef && enabled) {
-								setTimeout(
-									() =>
-										props.scrollRef.scrollTo({
-											top: props.scrollRef.scrollHeight,
-											behavior: "smooth",
-										}),
-									100,
-								);
-							}
-
-							setProject("background", "border", {
-								...prev,
-								enabled,
-							});
-						}}
-					/>
-				</Field>
-				<KCollapsible open={project.background.border?.enabled ?? false}>
-					<KCollapsible.Content class="overflow-hidden opacity-0 transition-opacity animate-collapsible-up data-expanded:animate-collapsible-down data-expanded:opacity-100">
-						<div class="flex flex-col gap-2 pb-4">
-							<Field
-								inline
-								name="Border Width"
-								value={`${(project.background.border?.width ?? 5).toFixed(
-									1,
-								)}px`}
+					<Show when={project.background.displayPosition}>
+						<div class="flex gap-2 justify-between items-center">
+							<span class="text-[11px] text-ed-text-3">
+								Custom screen position (dragged on canvas)
+							</span>
+							<EditorButton
+								size="sm"
+								onClick={() =>
+									setProject("background", "displayPosition", null)
+								}
 							>
-								<Slider
-									value={[project.background.border?.width ?? 5.0]}
-									onChange={(v) =>
-										setProject("background", "border", {
-											...(project.background.border ?? {
-												enabled: true,
-												width: 5.0,
-												color: [0, 0, 0],
-												opacity: 50.0,
+								Reset
+							</EditorButton>
+						</div>
+					</Show>
+					<Field
+						inline
+						name="Corners"
+						value={`${project.background.rounding.toFixed(1)}%`}
+					>
+						<Slider
+							value={[project.background.rounding]}
+							onChange={(v) => setBackgroundDimension("rounding", v[0])}
+							minValue={0}
+							maxValue={100}
+							step={0.1}
+							formatTooltip="%"
+						/>
+					</Field>
+					<Field inline name="Corner Style">
+						<CornerStyleSelect
+							value={project.background.roundingType}
+							onChange={(value) =>
+								setProject("background", "roundingType", value)
+							}
+						/>
+					</Field>
+					<Show when={!selectedStyle()}>
+						<Field
+							inline
+							name="Motion Blur"
+							value={`${Math.round(
+								(project.screenMotionBlur ??
+									project.cursor.motionBlur ??
+									DEFAULT_MOTION_BLUR) * 100,
+							)}%`}
+						>
+							<Slider
+								value={[
+									project.screenMotionBlur ??
+										project.cursor.motionBlur ??
+										DEFAULT_MOTION_BLUR,
+								]}
+								onChange={(v) => {
+									const value = v[0] ?? 0;
+									batch(() => {
+										setProject("cursor", "motionBlur", value);
+										setProject("screenMotionBlur", value);
+									});
+								}}
+								minValue={0}
+								maxValue={1}
+								step={0.01}
+								formatTooltip={(value) => `${Math.round(value * 100)}%`}
+							/>
+						</Field>
+					</Show>
+					<Field inline name="Border">
+						<Toggle
+							checked={project.background.border?.enabled ?? false}
+							onChange={(enabled) => {
+								const prev = project.background.border ?? {
+									enabled: false,
+									width: 5.0,
+									color: [0, 0, 0],
+									opacity: 50.0,
+								};
+
+								if (props.scrollRef && enabled) {
+									setTimeout(
+										() =>
+											props.scrollRef.scrollTo({
+												top: props.scrollRef.scrollHeight,
+												behavior: "smooth",
 											}),
-											width: v[0],
-										})
-									}
-									minValue={1}
-									maxValue={20}
-									step={0.1}
-									formatTooltip="px"
-								/>
-							</Field>
-							<Field name="Border Color">
-								<div class="flex flex-col gap-2">
-									<RgbInput
-										value={project.background.border?.color ?? [0, 0, 0]}
-										onChange={(color) =>
+										100,
+									);
+								}
+
+								setProject("background", "border", {
+									...prev,
+									enabled,
+								});
+							}}
+						/>
+					</Field>
+					<KCollapsible open={project.background.border?.enabled ?? false}>
+						<KCollapsible.Content class="overflow-hidden opacity-0 transition-opacity animate-collapsible-up data-expanded:animate-collapsible-down data-expanded:opacity-100">
+							<div class="flex flex-col gap-2 pb-4">
+								<Field
+									inline
+									name="Border Width"
+									value={`${(project.background.border?.width ?? 5).toFixed(
+										1,
+									)}px`}
+								>
+									<Slider
+										value={[project.background.border?.width ?? 5.0]}
+										onChange={(v) =>
 											setProject("background", "border", {
 												...(project.background.border ?? {
 													enabled: true,
@@ -2952,204 +3122,228 @@ function BackgroundConfig(props: {
 													color: [0, 0, 0],
 													opacity: 50.0,
 												}),
-												color,
+												width: v[0],
 											})
 										}
+										minValue={1}
+										maxValue={20}
+										step={0.1}
+										formatTooltip="px"
 									/>
-									<BrandColorsDropdown
-										swatches={props.brandColorSwatches}
-										onSelect={setBackgroundBorderColor}
-									/>
-								</div>
-							</Field>
-							<Field
-								inline
-								name="Border Opacity"
-								value={`${(project.background.border?.opacity ?? 50).toFixed(
-									1,
-								)}%`}
-							>
-								<Slider
-									value={[project.background.border?.opacity ?? 50.0]}
-									onChange={(v) =>
-										setProject("background", "border", {
-											...(project.background.border ?? {
-												enabled: true,
-												width: 5.0,
-												color: [0, 0, 0],
-												opacity: 50.0,
-											}),
-											opacity: v[0],
-										})
-									}
-									minValue={0}
-									maxValue={100}
-									step={0.1}
-									formatTooltip="%"
-								/>
-							</Field>
-						</div>
-					</KCollapsible.Content>
-				</KCollapsible>
-				<Field inline name="MacBook notch">
-					<Toggle
-						checked={project.background.notch?.enabled ?? false}
-						onChange={(enabled) =>
-							setProject("background", "notch", {
-								...(project.background.notch ?? UNPLACED_NOTCH),
-								enabled,
-							})
-						}
-					/>
-				</Field>
-				<KCollapsible open={project.background.notch?.enabled ?? false}>
-					<KCollapsible.Content class="overflow-hidden opacity-0 transition-opacity animate-collapsible-up data-expanded:animate-collapsible-down data-expanded:opacity-100">
-						<div class="flex flex-col gap-2 pb-4">
-							<p class="text-[11px] text-ed-text-3">
-								Draws a MacBook notch over the recording. Recordings made on a
-								Mac with a notch use their own measurements; otherwise start
-								from the size below and adjust to match.
-							</p>
-							<For
-								each={
-									[
-										{ key: "width", name: "Notch Width", max: 0.4 },
-										{ key: "height", name: "Notch Height", max: 0.15 },
-										{ key: "x", name: "Notch Position", max: 1 },
-									] as const
-								}
-							>
-								{(field) => {
-									const notchValue = () =>
-										field.key === "x"
-											? Math.min(
-													project.background.notch?.x ??
-														editorInstance.notchBase.x,
-													notchXMax(),
-												)
-											: (project.background.notch?.[field.key] ??
-												editorInstance.notchBase[field.key]);
-
-									return (
-										<Field
-											inline
-											name={field.name}
-											value={`${(notchValue() * 100).toFixed(1)}%`}
-										>
-											<Slider
-												value={[notchValue()]}
-												onChange={(v) => {
-													const base = editorInstance.notchBase;
-													const prev =
-														project.background.notch ?? UNPLACED_NOTCH;
-													const next: NotchConfiguration = {
-														...prev,
+								</Field>
+								<Field name="Border Color">
+									<div class="flex flex-col gap-2">
+										<RgbInput
+											value={project.background.border?.color ?? [0, 0, 0]}
+											onChange={(color) =>
+												setProject("background", "border", {
+													...(project.background.border ?? {
 														enabled: true,
-													};
-													if (field.key === "x") {
-														next.x = Math.min(v[0], notchXMax());
-													} else {
-														next[field.key] = v[0];
-													}
+														width: 5.0,
+														color: [0, 0, 0],
+														opacity: 50.0,
+													}),
+													color,
+												})
+											}
+										/>
+										<BrandColorsDropdown
+											swatches={props.brandColorSwatches}
+											onSelect={setBackgroundBorderColor}
+										/>
+									</div>
+								</Field>
+								<Field
+									inline
+									name="Border Opacity"
+									value={`${(project.background.border?.opacity ?? 50).toFixed(
+										1,
+									)}%`}
+								>
+									<Slider
+										value={[project.background.border?.opacity ?? 50.0]}
+										onChange={(v) =>
+											setProject("background", "border", {
+												...(project.background.border ?? {
+													enabled: true,
+													width: 5.0,
+													color: [0, 0, 0],
+													opacity: 50.0,
+												}),
+												opacity: v[0],
+											})
+										}
+										minValue={0}
+										maxValue={100}
+										step={0.1}
+										formatTooltip="%"
+									/>
+								</Field>
+							</div>
+						</KCollapsible.Content>
+					</KCollapsible>
+					<Field inline name="MacBook notch">
+						<Toggle
+							checked={project.background.notch?.enabled ?? false}
+							onChange={(enabled) =>
+								setProject("background", "notch", {
+									...(project.background.notch ?? UNPLACED_NOTCH),
+									enabled,
+								})
+							}
+						/>
+					</Field>
+					<KCollapsible open={project.background.notch?.enabled ?? false}>
+						<KCollapsible.Content class="overflow-hidden opacity-0 transition-opacity animate-collapsible-up data-expanded:animate-collapsible-down data-expanded:opacity-100">
+							<div class="flex flex-col gap-2 pb-4">
+								<p class="text-[11px] text-ed-text-3">
+									Draws a MacBook notch over the recording. Recordings made on a
+									Mac with a notch use their own measurements; otherwise start
+									from the size below and adjust to match.
+								</p>
+								<For
+									each={
+										[
+											{ key: "width", name: "Notch Width", max: 0.4 },
+											{ key: "height", name: "Notch Height", max: 0.15 },
+											{ key: "x", name: "Notch Position", max: 1 },
+										] as const
+									}
+								>
+									{(field) => {
+										const notchValue = () =>
+											field.key === "x"
+												? Math.min(
+														project.background.notch?.x ??
+															editorInstance.notchBase.x,
+														notchXMax(),
+													)
+												: (project.background.notch?.[field.key] ??
+													editorInstance.notchBase[field.key]);
 
-													if (field.key === "width") {
-														// Resize about the centre rather than dragging the
-														// left edge along with the width.
-														const centre =
-															(prev.x ?? base.x) +
-															(prev.width ?? base.width) / 2;
-														next.x = Math.min(
-															Math.max(centre - v[0] / 2, 0),
-															1 - v[0],
-														);
-													}
+										return (
+											<Field
+												inline
+												name={field.name}
+												value={`${(notchValue() * 100).toFixed(1)}%`}
+											>
+												<Slider
+													value={[notchValue()]}
+													onChange={(v) => {
+														const base = editorInstance.notchBase;
+														const prev =
+															project.background.notch ?? UNPLACED_NOTCH;
+														const next: NotchConfiguration = {
+															...prev,
+															enabled: true,
+														};
+														if (field.key === "x") {
+															next.x = Math.min(v[0], notchXMax());
+														} else {
+															next[field.key] = v[0];
+														}
 
-													setProject("background", "notch", next);
-												}}
-												minValue={0}
-												maxValue={field.key === "x" ? notchXMax() : field.max}
-												step={0.001}
-												formatTooltip={(value) =>
-													`${(value * 100).toFixed(1)}%`
-												}
-											/>
-										</Field>
-									);
-								}}
-							</For>
-						</div>
-					</KCollapsible.Content>
-				</KCollapsible>
-				<Field
-					inline
-					name="Shadow"
-					value={`${(project.background.shadow ?? 0).toFixed(1)}%`}
-				>
-					<Slider
-						value={[project.background.shadow ?? 0]}
-						onChange={(v) => {
-							batch(() => {
-								setProject("background", "shadow", v[0]);
-								// Initialize advanced shadow settings if they don't exist and shadow is enabled
-								if (v[0] > 0 && !project.background.advancedShadow) {
-									setProject("background", "advancedShadow", {
+														if (field.key === "width") {
+															// Resize about the centre rather than dragging the
+															// left edge along with the width.
+															const centre =
+																(prev.x ?? base.x) +
+																(prev.width ?? base.width) / 2;
+															next.x = Math.min(
+																Math.max(centre - v[0] / 2, 0),
+																1 - v[0],
+															);
+														}
+
+														setProject("background", "notch", next);
+													}}
+													minValue={0}
+													maxValue={field.key === "x" ? notchXMax() : field.max}
+													step={0.001}
+													formatTooltip={(value) =>
+														`${(value * 100).toFixed(1)}%`
+													}
+												/>
+											</Field>
+										);
+									}}
+								</For>
+							</div>
+						</KCollapsible.Content>
+					</KCollapsible>
+					<Field
+						inline
+						name="Shadow"
+						value={`${(project.background.shadow ?? 0).toFixed(1)}%`}
+					>
+						<Slider
+							value={[project.background.shadow ?? 0]}
+							onChange={(v) => {
+								batch(() => {
+									setProject("background", "shadow", v[0]);
+									if (v[0] > 0 && !project.background.advancedShadow) {
+										setProject("background", "advancedShadow", {
+											size: 50,
+											opacity: 18,
+											blur: 50,
+										});
+									}
+								});
+							}}
+							minValue={0}
+							maxValue={100}
+							step={0.1}
+							formatTooltip="%"
+						/>
+					</Field>
+					<ShadowSettings
+						scrollRef={props.scrollRef}
+						size={{
+							value: [project.background.advancedShadow?.size ?? 50],
+							onChange: (v) => {
+								setProject("background", "advancedShadow", {
+									...(project.background.advancedShadow ?? {
 										size: 50,
 										opacity: 18,
 										blur: 50,
-									});
-								}
-							});
+									}),
+									size: v[0],
+								});
+							},
 						}}
-						minValue={0}
-						maxValue={100}
-						step={0.1}
-						formatTooltip="%"
+						opacity={{
+							value: [project.background.advancedShadow?.opacity ?? 18],
+							onChange: (v) => {
+								setProject("background", "advancedShadow", {
+									...(project.background.advancedShadow ?? {
+										size: 50,
+										opacity: 18,
+										blur: 50,
+									}),
+									opacity: v[0],
+								});
+							},
+						}}
+						blur={{
+							value: [project.background.advancedShadow?.blur ?? 50],
+							onChange: (v) => {
+								setProject("background", "advancedShadow", {
+									...(project.background.advancedShadow ?? {
+										size: 50,
+										opacity: 18,
+										blur: 50,
+									}),
+									blur: v[0],
+								});
+							},
+						}}
 					/>
-				</Field>
-				<ShadowSettings
-					scrollRef={props.scrollRef}
-					size={{
-						value: [project.background.advancedShadow?.size ?? 50],
-						onChange: (v) => {
-							setProject("background", "advancedShadow", {
-								...(project.background.advancedShadow ?? {
-									size: 50,
-									opacity: 18,
-									blur: 50,
-								}),
-								size: v[0],
-							});
-						},
-					}}
-					opacity={{
-						value: [project.background.advancedShadow?.opacity ?? 18],
-						onChange: (v) => {
-							setProject("background", "advancedShadow", {
-								...(project.background.advancedShadow ?? {
-									size: 50,
-									opacity: 18,
-									blur: 50,
-								}),
-								opacity: v[0],
-							});
-						},
-					}}
-					blur={{
-						value: [project.background.advancedShadow?.blur ?? 50],
-						onChange: (v) => {
-							setProject("background", "advancedShadow", {
-								...(project.background.advancedShadow ?? {
-									size: 50,
-									opacity: 18,
-									blur: 50,
-								}),
-								blur: v[0],
-							});
-						},
-					}}
-				/>
-				<Show when={!selectedStyle()}>
-					<ColorCorrectionSection target="screen" scrollRef={props.scrollRef} />
+					<Show when={!selectedStyle()}>
+						<ColorCorrectionSection
+							target="screen"
+							scrollRef={props.scrollRef}
+						/>
+					</Show>
 				</Show>
 				{/* <ComingSoonTooltip>
             <Field name="Inset" icon={<IconCapInset />}>
@@ -3273,11 +3467,15 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
 						</Subfield>
 						<Subfield name="Background">
 							<KSelect<{ name: string; value: BackgroundBlurMode }>
-								options={cameraBackgroundOptions(ostype() === "macos")}
+								options={cameraBackgroundOptions(
+									isWebEditor || ostype() === "macos",
+								)}
 								optionValue="value"
 								optionTextValue="name"
 								value={
-									cameraBackgroundOptions(ostype() === "macos").find(
+									cameraBackgroundOptions(
+										isWebEditor || ostype() === "macos",
+									).find(
 										(option) =>
 											option.value ===
 											(project.camera.backgroundBlur?.mode ?? "off"),
@@ -3834,7 +4032,7 @@ function CaptionSegmentConfig(props: {
 	segmentIndex: number;
 	segment: CaptionTrackSegment;
 }) {
-	const { setProject } = useEditorContext();
+	const { setProject, editorInstance } = useEditorContext();
 
 	const updateSegment = (fn: (segment: CaptionTrackSegment) => void) => {
 		setProject(
@@ -3844,16 +4042,11 @@ function CaptionSegmentConfig(props: {
 				if (!timelineSegment) return;
 
 				fn(timelineSegment);
-
-				const captionSegment = project.captions?.segments?.[props.segmentIndex];
-				if (!captionSegment) return;
-
-				captionSegment.start = timelineSegment.start;
-				captionSegment.end = timelineSegment.end;
-				captionSegment.text = timelineSegment.text;
-				captionSegment.words = timelineSegment.words?.map((word) => ({
-					...word,
-				}));
+				syncCaptionSourceFromTrack(
+					project,
+					props.segmentIndex,
+					editorInstance.recordings.segments,
+				);
 			}),
 		);
 	};
@@ -4269,11 +4462,23 @@ function ZoomSegmentPreview(props: {
 	);
 }
 
+function createAutoZoomBlocker() {
+	const generalSettings = generalSettingsStore.createQuery();
+	const { meta } = useEditorContext();
+	return () => {
+		if (!meta().hasRecordedCursorData)
+			return "Auto mode follows the cursor, and this recording has no cursor data.";
+		if (!generalSettings.data?.custom_cursor_capture2)
+			return 'Auto mode needs cursor capture. Enable "Custom cursor capture (Studio)" in Settings → General.';
+		return null;
+	};
+}
+
 function ZoomSegmentConfig(props: {
 	segmentIndex: number;
 	segment: ZoomSegment;
 }) {
-	const generalSettings = generalSettingsStore.createQuery();
+	const autoZoomBlocker = createAutoZoomBlocker();
 	const { project, setProject, editorInstance, projectHistory } =
 		useEditorContext();
 
@@ -4326,7 +4531,7 @@ function ZoomSegmentConfig(props: {
 						<KTabs.Trigger
 							value="auto"
 							class="z-10 flex-1 h-[26px] rounded-md text-[11.5px] font-medium text-ed-text-2 transition-colors duration-100 outline-hidden data-selected:text-ed-text-1 peer"
-							disabled={!generalSettings.data?.custom_cursor_capture2}
+							disabled={autoZoomBlocker() !== null}
 						>
 							Auto
 						</KTabs.Trigger>
@@ -4341,11 +4546,8 @@ function ZoomSegmentConfig(props: {
 						</KTabs.Indicator>
 					</KTabs.List>
 					<div class="space-y-3">
-						<Show when={!generalSettings.data?.custom_cursor_capture2}>
-							<p class="text-[11px] text-ed-text-3">
-								Auto mode needs cursor capture. Enable "Custom cursor capture
-								(Studio)" in Settings → General.
-							</p>
+						<Show when={autoZoomBlocker()}>
+							{(reason) => <p class="text-[11px] text-ed-text-3">{reason()}</p>}
 						</Show>
 						<ZoomModeHelper
 							mode={props.segment.mode === "auto" ? "auto" : "manual"}
@@ -4379,34 +4581,108 @@ function ZoomSegmentConfig(props: {
 									{ equals: zoomPreviewSourceEquals },
 								);
 
-								const video = document.createElement("video");
-								createEffect(() => {
-									const path = convertFileSrc(
-										`${editorInstance.path}/content/segments/segment-${
-											source().recordingSegment
-										}/display.mp4`,
-									);
-									video.src = path;
-									video.preload = "auto";
-									// Force reload if video fails to load
-									video.load();
-								});
+								// A <video> reads the whole of a fragmented web recording before
+								// it can show a frame, so the web host decodes one frame instead.
+								const video = isWebEditor
+									? undefined
+									: document.createElement("video");
+								let webFrame: HTMLImageElement | undefined;
+								const [loaded, setLoaded] = createSignal(false);
+								const [failed, setFailed] = createSignal(false);
 
-								createEffect(() => {
-									const t = source().sourceTime;
+								if (video) {
+									let retries = 0;
+									let retryTimer: ReturnType<typeof setTimeout> | undefined;
+									onCleanup(() => clearTimeout(retryTimer));
 
-									// Ensure video is ready before seeking
-									if (video.readyState >= 2) {
-										video.currentTime = t;
-									} else {
-										// Wait for video to be ready, then seek
-										const handleCanPlay = () => {
+									createEffect(() => {
+										const path = convertFileSrc(
+											`${editorInstance.path}/content/segments/segment-${
+												source().recordingSegment
+											}/display.mp4`,
+										);
+										retries = 0;
+										clearTimeout(retryTimer);
+										setFailed(false);
+										video.src = path;
+										video.preload = "auto";
+										video.load();
+									});
+
+									createEffect(() => {
+										const t = source().sourceTime;
+
+										if (video.readyState >= 2) {
 											video.currentTime = t;
-											video.removeEventListener("canplay", handleCanPlay);
-										};
-										video.addEventListener("canplay", handleCanPlay);
-									}
-								});
+										} else {
+											const handleCanPlay = () => {
+												video.currentTime = t;
+												video.removeEventListener("canplay", handleCanPlay);
+											};
+											video.addEventListener("canplay", handleCanPlay);
+										}
+									});
+
+									video.onloadeddata = () => {
+										setLoaded(true);
+										render();
+									};
+									video.onseeked = () => render();
+
+									video.onerror = (e) => {
+										console.error("Failed to load video for zoom preview:", e);
+										if (retries >= ZOOM_PREVIEW_MAX_RETRIES) {
+											setLoaded(false);
+											setFailed(true);
+											return;
+										}
+										retryTimer = setTimeout(
+											() => video.load(),
+											100 * 2 ** retries++,
+										);
+									};
+								} else {
+									createEffect(() => {
+										const { recordingSegment, sourceTime } = source();
+										let current = true;
+										onCleanup(() => {
+											current = false;
+										});
+										invoke<string>("webEditorZoomPreviewFrame", {
+											recordingSegment,
+											sourceTime,
+										})
+											.then(
+												(url) =>
+													new Promise<HTMLImageElement>((resolve, reject) => {
+														const image = new Image();
+														image.onload = () => resolve(image);
+														image.onerror = () =>
+															reject(
+																new Error("Zoom preview frame could not load"),
+															);
+														image.src = url;
+													}),
+											)
+											.then((image) => {
+												if (!current) return;
+												webFrame = image;
+												setFailed(false);
+												setLoaded(true);
+												render();
+											})
+											.catch((error) => {
+												if (!current) return;
+												console.error(
+													"Failed to load frame for zoom preview:",
+													error,
+												);
+												webFrame = undefined;
+												setLoaded(false);
+												setFailed(true);
+											});
+									});
+								}
 
 								createEffect(
 									on(
@@ -4423,7 +4699,19 @@ function ZoomSegmentConfig(props: {
 								);
 
 								const render = () => {
-									if (!canvasRef || video.readyState < 2) return;
+									if (!canvasRef) return;
+									const image =
+										webFrame ??
+										(video && video.readyState >= 2 ? video : undefined);
+									if (!image) return;
+									// The web frame is decoded at a reduced width, so the crop
+									// rectangle scales from recording pixels to frame pixels.
+									const scaleX = webFrame
+										? webFrame.naturalWidth / rawSize().x
+										: 1;
+									const scaleY = webFrame
+										? webFrame.naturalHeight / rawSize().y
+										: 1;
 
 									const ctx = canvasRef.getContext("2d");
 									if (!ctx) return;
@@ -4433,32 +4721,16 @@ function ZoomSegmentConfig(props: {
 									ctx.clearRect(0, 0, canvasRef.width, canvasRef.height);
 									// Draw video frame
 									ctx.drawImage(
-										video,
-										croppedPosition().x,
-										croppedPosition().y,
-										croppedSize().x,
-										croppedSize().y,
+										image,
+										croppedPosition().x * scaleX,
+										croppedPosition().y * scaleY,
+										croppedSize().x * scaleX,
+										croppedSize().y * scaleY,
 										0,
 										0,
 										canvasRef.width,
 										canvasRef.height,
 									);
-								};
-
-								const [loaded, setLoaded] = createSignal(false);
-								video.onloadeddata = () => {
-									setLoaded(true);
-									render();
-								};
-								video.onseeked = render;
-
-								// Add error handling
-								video.onerror = (e) => {
-									console.error("Failed to load video for zoom preview:", e);
-									// Try to reload after a short delay
-									setTimeout(() => {
-										video.load();
-									}, 100);
 								};
 
 								let canvasRef!: HTMLCanvasElement;
@@ -4556,7 +4828,9 @@ function ZoomSegmentConfig(props: {
 											<Show when={!loaded()}>
 												<div class="flex absolute inset-0 justify-center items-center bg-gray-2">
 													<div class="text-sm text-gray-11">
-														Loading preview...
+														{failed()
+															? "Preview unavailable"
+															: "Loading preview..."}
 													</div>
 												</div>
 											</Show>
@@ -4578,7 +4852,7 @@ function ZoomSegmentConfig(props: {
 function ZoomMultiSegmentConfig(props: {
 	segments: { index: number; segment: ZoomSegment }[];
 }) {
-	const generalSettings = generalSettingsStore.createQuery();
+	const autoZoomBlocker = createAutoZoomBlocker();
 	const { setProject, setEditorState } = useEditorContext();
 
 	const amounts = () => props.segments.map((s) => s.segment.amount);
@@ -4689,7 +4963,7 @@ function ZoomMultiSegmentConfig(props: {
 					<div class="flex flex-row gap-0.5 items-center p-0.5 rounded-lg bg-ed-ctl">
 						<button
 							type="button"
-							disabled={!generalSettings.data?.custom_cursor_capture2}
+							disabled={autoZoomBlocker() !== null}
 							data-selected={sharedMode() === "auto"}
 							onClick={() => setAllModes("auto")}
 							class={modeButtonClass}
@@ -4705,11 +4979,8 @@ function ZoomMultiSegmentConfig(props: {
 							Manual
 						</button>
 					</div>
-					<Show when={!generalSettings.data?.custom_cursor_capture2}>
-						<p class="text-[11px] text-ed-text-3">
-							Auto mode needs cursor capture. Enable "Custom cursor capture
-							(Studio)" in Settings → General.
-						</p>
+					<Show when={autoZoomBlocker()}>
+						{(reason) => <p class="text-[11px] text-ed-text-3">{reason()}</p>}
 					</Show>
 					<Show
 						when={(() => {

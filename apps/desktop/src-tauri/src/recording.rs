@@ -6634,6 +6634,7 @@ pub(crate) fn recording_timeline(
         keyboard_segments: Vec::new(),
         audio_segments: Vec::new(),
         camera3d_segments: Vec::new(),
+        waveform_segments: Vec::new(),
     }
 }
 
@@ -6820,15 +6821,7 @@ fn apply_screen_recording_presentation_defaults(
 }
 
 pub fn default_project_config() -> ProjectConfiguration {
-    let mut config = ProjectConfiguration::default();
-
-    apply_screen_recording_presentation_defaults(&mut config, None, false, None);
-
-    if config.background.rounding <= f64::EPSILON {
-        config.background.rounding = DEFAULT_SCREEN_RECORDING_BACKGROUND_ROUNDING_PERCENT;
-    }
-
-    config
+    cap_editor::default_screen_recording_project_config()
 }
 
 #[tauri::command]

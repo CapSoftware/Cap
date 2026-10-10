@@ -1,5 +1,12 @@
 import { COMPRESSION_BPP, type JobRequest } from "./protocol";
 
+export type CursorJobRequest = {
+	source: string;
+	outputPrefix: string;
+	callbackUrl?: string;
+	reference?: string;
+};
+
 export function validateJobRequest(body: unknown): JobRequest | string {
 	if (!body || typeof body !== "object") return "body must be a JSON object";
 	const request = body as Record<string, unknown>;
@@ -112,6 +119,13 @@ export function validateJobRequest(body: unknown): JobRequest | string {
 	) {
 		return "reference must be a string of at most 200 characters";
 	}
+	if (
+		request.prepare !== undefined &&
+		(typeof request.prepare !== "string" ||
+			!/^[a-z0-9-]{1,40}\.json$/.test(request.prepare))
+	) {
+		return "prepare must name a JSON file in the recording";
+	}
 	return request as JobRequest;
 }
 
@@ -203,6 +217,43 @@ export function checkManifestBounds(
 }
 
 /** A bucket key or folder with no empty or parent segments. */
+export function validateCursorJobRequest(
+	body: unknown,
+): CursorJobRequest | string {
+	if (!body || typeof body !== "object") return "body must be a JSON object";
+	const { sourceRoot, source, outputPrefix, callbackUrl, reference } =
+		body as Record<string, unknown>;
+	if (
+		!isKey(sourceRoot, { trailingSlash: true }) ||
+		!sourceRoot.endsWith("/") ||
+		!isKey(source) ||
+		!source.startsWith(sourceRoot) ||
+		!isKey(outputPrefix, { trailingSlash: true }) ||
+		!outputPrefix.endsWith("/") ||
+		!outputPrefix.startsWith(sourceRoot) ||
+		source.startsWith(outputPrefix)
+	) {
+		return "source and outputPrefix must be inside sourceRoot, outputPrefix a separate folder";
+	}
+	if (callbackUrl !== undefined && !isCallbackUrl(callbackUrl)) {
+		return "callbackUrl must be an https URL";
+	}
+	if (
+		reference !== undefined &&
+		(typeof reference !== "string" || reference.length > 200)
+	) {
+		return "reference must be a string of at most 200 characters";
+	}
+	return {
+		source,
+		outputPrefix,
+		...(callbackUrl !== undefined
+			? { callbackUrl: callbackUrl as string }
+			: {}),
+		...(reference !== undefined ? { reference } : {}),
+	};
+}
+
 export function isKey(
 	value: unknown,
 	options: { trailingSlash?: boolean } = {},

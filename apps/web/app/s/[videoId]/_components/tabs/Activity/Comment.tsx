@@ -117,7 +117,8 @@ const CommentComponent: React.FC<{
 						</p>
 						<div className="flex gap-2 items-center text-nowrap min-w-fit">
 							<Tooltip content={formatTimestamp(commentDate)}>
-								<p className="text-xs text-gray-8">
+								{/* Relative to now, so the server's render can be a unit behind. */}
+								<p className="text-xs text-gray-8" suppressHydrationWarning>
 									{formatTimeAgo(commentDate)}
 								</p>
 							</Tooltip>

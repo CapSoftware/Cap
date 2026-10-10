@@ -4,8 +4,9 @@
 	"private": true,
 	"scripts": {
 		"dev": "cross-env NODE_OPTIONS=--disable-warning=DEP0169 dotenv -e ../../.env -- next dev",
-		"build": "next build --turbopack",
-		"build:web": "next build --turbopack",
+		"build": "bun run build:studio && next build --turbopack",
+		"build:web": "bun run build:studio && next build --turbopack",
+		"build:studio": "bun --cwd=../../packages/editor-solid-web run build",
 		"build:docker": "cd ../.. && docker build -t cap-web-docker . --no-cache --progress=plain",
 		"start": "cross-env NODE_OPTIONS=--disable-warning=DEP0169 next start",
 		"compress-images": "bash tools/compress-images.sh",

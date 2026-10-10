@@ -25,13 +25,17 @@ import { type Organisation, Policy, Video } from "@cap/web-domain";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import type { Metadata } from "next";
+import { headers } from "next/headers";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { preconnect } from "react-dom";
 import { resolveDefaultPlaybackSpeed } from "@/lib/playback-speed";
 import * as EffectRuntime from "@/lib/server";
 import { getSharePageBranding } from "@/lib/share-branding";
 import { parseShareCallToAction } from "@/lib/share-call-to-action";
+import { getSharePlaybackUrl } from "@/lib/share-playback";
 import { buildShareVideoMetadata } from "@/lib/share-video-metadata";
+import { isDefaultShareRequest } from "@/lib/share-web-url";
 import { isVideoOverShareableLinkLimit } from "@/lib/shareable-link-quota";
 import { transcribeVideo } from "@/lib/transcribe";
 import { isAiGenerationEnabled } from "@/utils/flags";
@@ -391,9 +395,32 @@ async function EmbedContent({
 		});
 	}).pipe(EffectRuntime.runPromise);
 
+	// Same fast start as the share page: sign the processed file here instead
+	// of having the player find it through the playlist route.
+	const initialPlaybackUrl =
+		!video.hasActiveUpload &&
+		(video.source?.type === "desktopMP4" || video.source?.type === "webMP4")
+			? getSharePlaybackUrl({ ...video, owner: { id: video.ownerId } })
+			: undefined;
+	const initialPlaybackTrusted =
+		initialPlaybackUrl !== undefined &&
+		video.bucket === null &&
+		video.storageIntegrationId === null &&
+		isDefaultShareRequest(await headers());
+	if (initialPlaybackTrusted) {
+		const url = await initialPlaybackUrl;
+		if (url) {
+			try {
+				preconnect(new URL(url).origin, { crossOrigin: "anonymous" });
+			} catch {}
+		}
+	}
+
 	return (
 		<EmbedVideo
 			data={video}
+			initialPlaybackUrl={initialPlaybackUrl}
+			initialPlaybackTrusted={initialPlaybackTrusted}
 			branding={branding}
 			user={user}
 			comments={commentsQuery}

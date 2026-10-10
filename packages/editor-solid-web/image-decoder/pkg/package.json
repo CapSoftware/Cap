@@ -1,0 +1,15 @@
+{
+  "name": "cap-editor-image-decoder",
+  "type": "module",
+  "version": "0.1.0",
+  "files": [
+    "cap_editor_image_decoder_bg.wasm",
+    "cap_editor_image_decoder.js",
+    "cap_editor_image_decoder.d.ts"
+  ],
+  "main": "cap_editor_image_decoder.js",
+  "types": "cap_editor_image_decoder.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}

@@ -466,6 +466,158 @@ export function mapEditedTimeToSource(
 	return fallback;
 }
 
+/// Carries an edit made on caption track segment `trackIndex` (output time)
+/// back onto its source-timed caption, found by id: track pieces are
+/// re-derived from the sources on every clip change, and a cut can drop or
+/// split captions so track and source indices differ.
+export function syncCaptionSourceFromTrack(
+	project: {
+		captions?: { segments: CaptionSegment[] } | null;
+		timeline?: {
+			segments: TimelineSegment[];
+			captionSegments?: CaptionTrackSegment[] | null;
+			transitions?: ClipTransition[] | null;
+			textSegments?: TextSegment[] | null;
+		} | null;
+	},
+	trackIndex: number,
+	recordingSegments: SegmentRecordings[],
+) {
+	const timeline = project.timeline;
+	const track = timeline?.captionSegments?.[trackIndex];
+	if (!timeline || !track) return;
+	const sourceId = sourceCaptionId(track.id);
+	const source = project.captions?.segments?.find(
+		(segment) => segment.id === sourceId,
+	);
+	if (!source) return;
+	const sourceRange = { start: source.start, end: source.end };
+	const toSource = (time: number) =>
+		mapEditedTimeToSource(
+			time,
+			timeline.segments,
+			recordingSegments,
+			timeline.transitions ?? [],
+			sourceRange,
+			"outgoing",
+			timeline.textSegments ?? undefined,
+		);
+	const start = toSource(track.start);
+	const end = toSource(track.end);
+	if (track.id !== sourceId) {
+		syncSplitCaptionPiece(source, track, timeline, recordingSegments, {
+			start,
+			end,
+			toSource,
+		});
+		return;
+	}
+	if (start !== null) source.start = start;
+	if (end !== null) source.end = end;
+	source.text = track.text;
+	source.words = syncCaptionWordsWithText(
+		source.text,
+		source.words,
+		source.start,
+		source.end,
+	);
+}
+
+/// A caption a cut split into pieces shares one source caption, so an edit
+/// to one piece rewrites only the source words that piece shows; the others
+/// keep their words and timing.
+function syncSplitCaptionPiece(
+	source: CaptionSegment,
+	track: CaptionTrackSegment,
+	timeline: {
+		segments: TimelineSegment[];
+		transitions?: ClipTransition[] | null;
+		textSegments?: TextSegment[] | null;
+	},
+	recordingSegments: SegmentRecordings[],
+	mapped: {
+		start: number | null;
+		end: number | null;
+		toSource: (time: number) => number | null;
+	},
+) {
+	const words = source.words ?? [];
+	const pieceIndex = Number(
+		track.id.slice(
+			track.id.lastIndexOf(CAPTION_EDL_SEPARATOR) +
+				CAPTION_EDL_SEPARATOR.length,
+		),
+	);
+	const pieces = mapCaptionsToEditedTimeline(
+		[source],
+		timeline.segments,
+		recordingSegments,
+		timeline.transitions ?? [],
+		timeline.textSegments ?? undefined,
+	);
+	const shownBy = (piece: CaptionSegment | undefined) => {
+		const shown = new Set<number>();
+		for (const word of piece?.words ?? []) {
+			const time = mapped.toSource((word.start + word.end) / 2);
+			if (time === null) continue;
+			const index = words.findIndex(
+				(candidate) => candidate.start <= time && time <= candidate.end,
+			);
+			if (index !== -1) shown.add(index);
+		}
+		return shown;
+	};
+	const shown = shownBy(pieces[pieceIndex]);
+	if (shown.size === 0) {
+		if (words.length === 0) source.text = track.text;
+		return;
+	}
+	const elsewhere = new Set(
+		pieces.flatMap((piece, index) =>
+			index === pieceIndex ? [] : [...shownBy(piece)],
+		),
+	);
+	let first = Math.min(...shown);
+	let last = Math.max(...shown);
+	let tokens = track.text.trim().split(/\s+/).filter(Boolean);
+	// A word a cut runs through shows in both pieces; unless this edit changed
+	// it, it stays as it is so the other piece doesn't change too.
+	const kept = (index: number, token: string | undefined) =>
+		elsewhere.has(index) && token === words[index]?.text;
+	while (first <= last && tokens.length > 0 && kept(first, tokens[0])) {
+		first++;
+		tokens = tokens.slice(1);
+	}
+	while (first <= last && tokens.length > 0 && kept(last, tokens.at(-1))) {
+		last--;
+		tokens = tokens.slice(0, -1);
+	}
+	const before = words.slice(0, first);
+	const after = words.slice(last + 1);
+	const floor = before.at(-1)?.end ?? Number.NEGATIVE_INFINITY;
+	const ceiling = after[0]?.start ?? Number.POSITIVE_INFINITY;
+	const runStart = Math.max(
+		mapped.start ?? words[first]?.start ?? floor,
+		floor,
+	);
+	const runEnd = Math.max(
+		runStart,
+		Math.min(mapped.end ?? words[last]?.end ?? ceiling, ceiling),
+	);
+	const run = syncCaptionWordsWithText(
+		tokens.join(" "),
+		words.slice(first, last + 1),
+		runStart,
+		runEnd,
+	);
+	source.words = [...before, ...run, ...after];
+	source.text = getCaptionTextFromWords(source.words);
+	if (before.length === 0 && run[0]) source.start = run[0].start;
+	if (after.length === 0 && run.length > 0) {
+		source.end = run[run.length - 1].end;
+	}
+}
+
 export function applyCaptionResultToProject<
 	T extends {
 		captions?:
