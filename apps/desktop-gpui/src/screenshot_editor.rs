@@ -4421,7 +4421,7 @@ impl Render for ScreenshotEditorWindow {
             .size_full()
             .flex()
             .flex_col()
-            .font_family("Geist")
+            .font_family(crate::theme::UI_FONT)
             .font_weight(FontWeight::MEDIUM)
             .bg(if theme.is_dark() {
                 theme.gray_1

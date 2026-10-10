@@ -2462,7 +2462,7 @@ impl Render for CameraWindow {
             .size_full()
             .flex()
             .flex_col()
-            .font_family("Geist")
+            .font_family(crate::theme::UI_FONT)
             // `body { font-weight: 500 }` (`ui-solid/src/main.css:189-192`).
             .font_weight(FontWeight::MEDIUM)
             // One hover region for the whole window -- bubble, toolbar and

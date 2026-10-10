@@ -2508,9 +2508,8 @@ impl Render for MainWindow {
             .when_some(theme.shell_border(), |this, color| {
                 this.border_1().border_color(color)
             })
-            .font_family("Geist")
-            // `body { font-family: "Geist Sans"; font-weight: 500 }`
-            // (`ui-solid/src/main.css:189-192`). The shipping app renders
+            .font_family(crate::theme::UI_FONT)
+            // `body { font-weight: 500 }` (`ui-solid/src/main.css:189-192`). The shipping app renders
             // *everything* Medium unless a `font-*` class says otherwise, so
             // Medium -- not Regular -- is the inherited default at every root.
             .font_weight(FontWeight::MEDIUM)

@@ -1572,9 +1572,8 @@ impl Render for SettingsWindow {
             .rounded(px(theme
                 .settings_window_radius()
                 .min(SETTINGS_MATERIAL_RADIUS as f32)))
-            .font_family("Geist")
-            // `body { font-weight: 500 }` (`ui-solid/src/main.css:189-192`).
-            .font_weight(FontWeight::MEDIUM)
+            .font_family(crate::theme::UI_FONT)
+            .font_weight(FontWeight::NORMAL)
             .text_color(theme.settings_text());
 
         #[cfg(target_os = "windows")]

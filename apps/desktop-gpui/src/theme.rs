@@ -13,6 +13,15 @@ use gpui::{
 use crate::platform::{self, ForcedAppearance, MaterialKind};
 use crate::store::AppTheme;
 
+/// The interface face: the platform's own UI font (SF Pro on macOS, Segoe UI
+/// on Windows) so text matches the system. Linux distros have no reliable
+/// equivalent, so they keep the bundled Geist.
+pub const UI_FONT: &str = if cfg!(any(target_os = "macos", target_os = "windows")) {
+    ".SystemUIFont"
+} else {
+    "Geist"
+};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Appearance {
     Light,
