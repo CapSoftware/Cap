@@ -21,6 +21,8 @@ use crate::general_settings::PostStudioRecordingBehaviour;
 
 const WEBHOOK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 const COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+const CLIPBOARD_WRITE_ATTEMPTS: usize = 4;
+const CLIPBOARD_WRITE_RETRY_BASE_MS: u64 = 50;
 
 #[derive(Debug, PartialEq, Eq)]
 enum ClipboardImageSource {
@@ -57,6 +59,30 @@ fn resolve_clipboard_image_source(
     }
 }
 
+fn clipboard_write_retry_delay(attempt: usize) -> Option<std::time::Duration> {
+    (attempt + 1 < CLIPBOARD_WRITE_ATTEMPTS)
+        .then(|| std::time::Duration::from_millis(CLIPBOARD_WRITE_RETRY_BASE_MS << attempt))
+}
+
+enum ClipboardImage {
+    File(PathBuf),
+    Encoded(Vec<u8>),
+}
+
+impl ClipboardImage {
+    fn load(&self) -> Result<clipboard_rs::RustImageData, String> {
+        match self {
+            Self::File(path) => {
+                let path = path.to_string_lossy().to_string();
+                clipboard_rs::RustImageData::from_path(&path)
+                    .map_err(|e| format!("Failed to load image for clipboard: {e}"))
+            }
+            Self::Encoded(bytes) => clipboard_rs::RustImageData::from_bytes(bytes)
+                .map_err(|e| format!("Failed to load rendered screenshot for clipboard: {e}")),
+        }
+    }
+}
+
 pub struct DesktopAutomationHost {
     app: AppHandle,
     clipboard: Arc<RwLock<ClipboardContext>>,
@@ -65,6 +91,34 @@ pub struct DesktopAutomationHost {
 impl DesktopAutomationHost {
     pub fn new(app: AppHandle, clipboard: Arc<RwLock<ClipboardContext>>) -> Self {
         Self { app, clipboard }
+    }
+
+    async fn set_clipboard_image(&self, image: &ClipboardImage) -> Result<(), String> {
+        for attempt in 0..CLIPBOARD_WRITE_ATTEMPTS {
+            let image_data = image.load()?;
+            let result = {
+                let clipboard = self.clipboard.write().await;
+                clipboard.set_image(image_data)
+            };
+
+            match result {
+                Ok(()) => return Ok(()),
+                Err(error) => {
+                    let Some(retry_delay) = clipboard_write_retry_delay(attempt) else {
+                        return Err(format!("Failed to set clipboard image: {error}"));
+                    };
+                    warn!(
+                        attempt = attempt + 1,
+                        retry_delay_ms = retry_delay.as_millis(),
+                        %error,
+                        "Clipboard image write failed; retrying"
+                    );
+                    tokio::time::sleep(retry_delay).await;
+                }
+            }
+        }
+
+        unreachable!("clipboard retry loop always returns")
     }
 }
 
@@ -94,12 +148,10 @@ impl AutomationHost for DesktopAutomationHost {
         source: &ClipboardSource,
     ) -> Result<(), String> {
         let source = resolve_clipboard_image_source(ctx, *source)?;
-        let img_data = match source {
+        let image = match source {
             ClipboardImageSource::File(path) => {
-                let path = path.to_string_lossy().to_string();
-                info!(%path, "Automation: copying file to clipboard");
-                clipboard_rs::RustImageData::from_path(&path)
-                    .map_err(|e| format!("Failed to load image for clipboard: {e}"))?
+                info!(path = %path.display(), "Automation: copying file to clipboard");
+                ClipboardImage::File(path)
             }
             ClipboardImageSource::ScreenshotProject(path) => {
                 info!(project = %path.display(), "Automation: rendering screenshot for clipboard");
@@ -108,18 +160,11 @@ impl AutomationHost for DesktopAutomationHost {
                     path,
                 )
                 .await?;
-                clipboard_rs::RustImageData::from_bytes(&rendered.image_bytes)
-                    .map_err(|e| format!("Failed to load rendered screenshot for clipboard: {e}"))?
+                ClipboardImage::Encoded(rendered.image_bytes)
             }
         };
 
-        self.clipboard
-            .write()
-            .await
-            .set_image(img_data)
-            .map_err(|e| format!("Failed to set clipboard image: {e}"))?;
-
-        Ok(())
+        self.set_clipboard_image(&image).await
     }
 
     async fn save_to_location(
@@ -1018,5 +1063,22 @@ mod tests {
                 "capture.cap/original.png"
             )))
         );
+    }
+
+    #[test]
+    fn clipboard_write_retries_use_bounded_exponential_backoff() {
+        assert_eq!(
+            clipboard_write_retry_delay(0),
+            Some(std::time::Duration::from_millis(50))
+        );
+        assert_eq!(
+            clipboard_write_retry_delay(1),
+            Some(std::time::Duration::from_millis(100))
+        );
+        assert_eq!(
+            clipboard_write_retry_delay(2),
+            Some(std::time::Duration::from_millis(200))
+        );
+        assert_eq!(clipboard_write_retry_delay(3), None);
     }
 }
