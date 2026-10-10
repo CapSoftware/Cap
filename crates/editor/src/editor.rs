@@ -214,6 +214,7 @@ impl Renderer {
                 layers
             }
         };
+        layers.set_realtime_camera_effects(true);
 
         struct PendingFrame {
             input: PendingRenderInput,

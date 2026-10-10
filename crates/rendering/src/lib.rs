@@ -7074,6 +7074,7 @@ pub struct RendererLayers {
     camera_blur_processor: Option<cap_camera_effects::BlurProcessor>,
     camera_blur_init_failed: bool,
     camera_blur_unavailable: bool,
+    realtime_camera_effects: bool,
 }
 
 fn join_layer<T>(handle: std::thread::ScopedJoinHandle<'_, T>) -> T {
@@ -7196,6 +7197,7 @@ impl RendererLayers {
                 camera_blur_processor: None,
                 camera_blur_init_failed: false,
                 camera_blur_unavailable: false,
+                realtime_camera_effects: false,
             }
         });
         layers_phase.finish("returned");
@@ -7209,11 +7211,22 @@ impl RendererLayers {
         Ok(())
     }
 
+    /// Editor playback: camera segmentation runs beside rendering and each
+    /// frame composites with the newest finished mask, refined against that
+    /// frame. Seeks still wait for an exact mask. Exports keep the default,
+    /// where every frame waits for its own mask.
+    pub fn set_realtime_camera_effects(&mut self, realtime: bool) {
+        self.realtime_camera_effects = realtime;
+        if let Some(processor) = &mut self.camera_blur_processor {
+            configure_camera_blur_processor(processor, realtime);
+        }
+    }
+
     fn ensure_camera_blur_processor(&mut self, device: &wgpu::Device) {
         if self.camera_blur_processor.is_none() && !self.camera_blur_init_failed {
             match cap_camera_effects::BlurProcessor::new(device, wgpu::TextureFormat::Rgba8Unorm) {
                 Ok(mut processor) => {
-                    processor.set_frame_synchronous(true);
+                    configure_camera_blur_processor(&mut processor, self.realtime_camera_effects);
                     self.camera_blur_processor = Some(processor);
                 }
                 Err(e) => {
@@ -8072,6 +8085,16 @@ async fn produce_transition_texture(
     );
 
     Ok(incoming_encoder)
+}
+
+fn configure_camera_blur_processor(
+    processor: &mut cap_camera_effects::BlurProcessor,
+    realtime: bool,
+) {
+    processor.set_frame_synchronous(!realtime);
+    if realtime {
+        processor.set_inference_interval(std::time::Duration::ZERO);
+    }
 }
 
 fn reset_camera_blur_for_dimensions(
