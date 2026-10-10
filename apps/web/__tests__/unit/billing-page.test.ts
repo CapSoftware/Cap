@@ -73,12 +73,10 @@ beforeEach(() => {
 });
 
 describe("SSO invoice discovery on Billing", () => {
-	it("links the owner to the selected organization's Security page without loading invoices or starting billing", () => {
+	it("does not push Members down with a separate SSO invoice card", () => {
 		const markup = renderToStaticMarkup(createElement(BillingAndMembersPage));
-		expect(markup).toContain(
-			'href="/dashboard/settings/organization/security?organizationId=org%2Finvoice%3Fhistory"',
-		);
-		expect(markup).toContain("Open SSO invoices in Security settings");
+		expect(markup).not.toContain("SAML SSO invoices");
+		expect(markup).not.toContain("Security settings");
 		expect(mocks.invoices).not.toHaveBeenCalled();
 		expect(mocks.portal).not.toHaveBeenCalled();
 		expect(mocks.checkout).not.toHaveBeenCalled();
