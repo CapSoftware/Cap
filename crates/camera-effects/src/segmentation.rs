@@ -3,6 +3,8 @@ use ort::session::Session;
 use ort::value::{DynValue, TensorRef};
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 use std::path::{Path, PathBuf};
+use std::sync::mpsc;
+use std::thread;
 
 #[cfg(target_os = "macos")]
 const ORT_LIBRARY_NAME: &str = "libonnxruntime.dylib";
@@ -15,47 +17,140 @@ const MODEL_BYTES: &[u8] = include_bytes!("../assets/selfie_segmentation.onnx");
 const MODEL_INPUT_SIZE: usize = 256;
 const MODEL_CHANNEL_SIZE: usize = MODEL_INPUT_SIZE * MODEL_INPUT_SIZE;
 
+/// The ONNX session lives on its own thread with a known stack.
+///
+/// Inference is reached from whatever thread renders a frame: editor
+/// playback, export, the export estimate on a tokio worker, the render farm.
+/// MLAS's convolution kernels run partly on the calling thread and need a
+/// deep stack of their own, which overflowed a tokio worker already deep in
+/// render futures (2026-10-10). Running every session call here makes the
+/// caller's stack irrelevant; callers still block for the result, so
+/// ordering and timing are unchanged.
+const INFERENCE_THREAD_STACK_SIZE: usize = 16 * 1024 * 1024;
+
 pub struct SegmentationModel {
-    session: Session,
-    input: Vec<f32>,
-    output: Option<DynValue>,
+    requests: Option<mpsc::Sender<InferenceJob>>,
+    results: mpsc::Receiver<InferenceJob>,
+    job: Option<InferenceJob>,
+    worker: Option<thread::JoinHandle<()>>,
+}
+
+struct InferenceJob {
+    rgba: Vec<u8>,
+    mask: Vec<f32>,
+    result: anyhow::Result<()>,
+}
+
+impl InferenceJob {
+    fn new() -> Self {
+        Self {
+            rgba: Vec::with_capacity(4 * MODEL_CHANNEL_SIZE),
+            mask: Vec::with_capacity(MODEL_CHANNEL_SIZE),
+            result: Ok(()),
+        }
+    }
 }
 
 impl SegmentationModel {
     pub fn new() -> anyhow::Result<Self> {
-        let session = create_session()?;
-        Ok(Self {
-            session,
-            input: vec![0.0; 3 * MODEL_CHANNEL_SIZE],
-            output: None,
-        })
+        let (ready_tx, ready_rx) = mpsc::channel::<anyhow::Result<()>>();
+        let (requests, request_rx) = mpsc::channel::<InferenceJob>();
+        let (result_tx, results) = mpsc::channel::<InferenceJob>();
+
+        let worker = thread::Builder::new()
+            .name("cap-segmentation".into())
+            .stack_size(INFERENCE_THREAD_STACK_SIZE)
+            .spawn(move || {
+                let mut session = match create_session() {
+                    Ok(session) => {
+                        let _ = ready_tx.send(Ok(()));
+                        session
+                    }
+                    Err(error) => {
+                        let _ = ready_tx.send(Err(error));
+                        return;
+                    }
+                };
+                let mut input = vec![0.0; 3 * MODEL_CHANNEL_SIZE];
+                while let Ok(mut job) = request_rx.recv() {
+                    job.result = infer(&mut session, &mut input, &job.rgba, &mut job.mask);
+                    if result_tx.send(job).is_err() {
+                        break;
+                    }
+                }
+            })
+            .context("Failed to start the segmentation thread")?;
+
+        match ready_rx.recv() {
+            Ok(Ok(())) => Ok(Self {
+                requests: Some(requests),
+                results,
+                job: Some(InferenceJob::new()),
+                worker: Some(worker),
+            }),
+            Ok(Err(error)) => {
+                let _ = worker.join();
+                Err(error)
+            }
+            Err(_) => {
+                let _ = worker.join();
+                Err(anyhow::anyhow!(
+                    "Segmentation thread exited while loading the model"
+                ))
+            }
+        }
     }
 
     pub fn run_inference(&mut self, rgba_256x256: &[u8]) -> anyhow::Result<&[f32]> {
-        self.output = None;
-        populate_rgb_planes(&mut self.input, rgba_256x256);
-        let input_value = TensorRef::from_array_view((
-            [1usize, 3, MODEL_INPUT_SIZE, MODEL_INPUT_SIZE],
-            self.input.as_slice(),
-        ))
-        .context("Failed to create input tensor")?;
+        let mut job = self.job.take().unwrap_or_else(InferenceJob::new);
+        job.rgba.clear();
+        job.rgba.extend_from_slice(rgba_256x256);
 
-        let mut outputs = self
-            .session
-            .run(ort::inputs!["pixel_values" => input_value])
-            .context("ONNX inference failed")?;
-
-        let output_value = self.output.insert(
-            outputs
-                .remove("alphas")
-                .context("Missing segmentation output tensor")?,
-        );
-        let (_shape, raw_data) = output_value
-            .try_extract_tensor::<f32>()
-            .context("Failed to extract output tensor")?;
-
-        Ok(raw_data)
+        let stopped = || anyhow::anyhow!("Segmentation thread stopped");
+        self.requests
+            .as_ref()
+            .ok_or_else(stopped)?
+            .send(job)
+            .map_err(|_| stopped())?;
+        let job = self.job.insert(self.results.recv().map_err(|_| stopped())?);
+        std::mem::replace(&mut job.result, Ok(()))?;
+        Ok(&job.mask)
     }
+}
+
+impl Drop for SegmentationModel {
+    fn drop(&mut self) {
+        self.requests = None;
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
+fn infer(
+    session: &mut Session,
+    input: &mut [f32],
+    rgba: &[u8],
+    mask: &mut Vec<f32>,
+) -> anyhow::Result<()> {
+    mask.clear();
+    populate_rgb_planes(input, rgba);
+    let input_value =
+        TensorRef::from_array_view(([1usize, 3, MODEL_INPUT_SIZE, MODEL_INPUT_SIZE], &*input))
+            .context("Failed to create input tensor")?;
+
+    let mut outputs = session
+        .run(ort::inputs!["pixel_values" => input_value])
+        .context("ONNX inference failed")?;
+
+    let output_value: DynValue = outputs
+        .remove("alphas")
+        .context("Missing segmentation output tensor")?;
+    let (_shape, raw_data) = output_value
+        .try_extract_tensor::<f32>()
+        .context("Failed to extract output tensor")?;
+    mask.extend_from_slice(raw_data);
+    Ok(())
 }
 
 fn populate_rgb_planes(input: &mut [f32], rgba: &[u8]) {
@@ -374,6 +469,26 @@ mod tests {
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
+    }
+
+    #[test]
+    #[ignore = "requires ONNX Runtime"]
+    fn inference_runs_from_a_caller_with_a_tiny_stack() {
+        // Running the session directly on a 64 KiB stack overflows; through the
+        // segmentation thread it must not.
+        let caller = std::thread::Builder::new()
+            .stack_size(64 * 1024)
+            .spawn(|| {
+                let mut model = super::SegmentationModel::new().unwrap();
+                let rgba = vec![128; 4 * MODEL_CHANNEL_SIZE];
+                for _ in 0..3 {
+                    let mask = model.run_inference(&rgba).unwrap();
+                    assert_eq!(mask.len(), MODEL_CHANNEL_SIZE);
+                    assert!(mask.iter().all(|value| value.is_finite()));
+                }
+            })
+            .unwrap();
+        caller.join().unwrap();
     }
 
     #[test]
