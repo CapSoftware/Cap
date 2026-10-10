@@ -2828,6 +2828,17 @@ fn reject_recovery_link(metadata: &std::fs::Metadata) -> Result<(), RecoveryErro
     Ok(())
 }
 
+/// On exFAT/FAT volumes macOS keeps each file's extended attributes (every
+/// file Cap writes gets `com.apple.provenance`) in a visible `._<name>`
+/// AppleDouble sibling, and creates the destination's own sibling as soon as a
+/// copy creates `<name>`. Copying the source's sibling then fails with EEXIST,
+/// every time: https://github.com/CapSoftware/Cap/issues/2386. Cap never
+/// writes `._` names, so these entries are filesystem bookkeeping, not
+/// recording data.
+fn is_apple_double(name: &std::ffi::OsStr) -> bool {
+    name.as_encoded_bytes().starts_with(b"._")
+}
+
 fn copy_recovery_input(source: &Path, destination: &Path) -> Result<(), RecoveryError> {
     copy_recovery_input_with_durability(source, destination, RecoveryCopyDurability::Durable)
 }
@@ -2843,6 +2854,9 @@ fn copy_recovery_input_with_durability(
         std::fs::create_dir(destination)?;
         for entry in std::fs::read_dir(source)? {
             let entry = entry?;
+            if is_apple_double(&entry.file_name()) {
+                continue;
+            }
             copy_recovery_input_with_durability(
                 &entry.path(),
                 &destination.join(entry.file_name()),
@@ -2936,7 +2950,10 @@ fn recovery_snapshot(project: &Path) -> Result<RecoverySnapshot, RecoveryError> 
         if metadata.is_dir() {
             let _ = entries.insert(relative, None);
             for entry in std::fs::read_dir(path)? {
-                visit(root, &entry?.path(), entries, files, bytes)?;
+                let entry = entry?;
+                if !is_apple_double(&entry.file_name()) {
+                    visit(root, &entry.path(), entries, files, bytes)?;
+                }
             }
         } else if metadata.is_file() {
             files.push(path.to_path_buf());
@@ -3129,7 +3146,10 @@ fn recovery_publication_segments_stamp(
         );
         if metadata.is_dir() {
             for entry in std::fs::read_dir(path)? {
-                visit(root, &entry?.path(), entries, version)?;
+                let entry = entry?;
+                if !is_apple_double(&entry.file_name()) {
+                    visit(root, &entry.path(), entries, version)?;
+                }
             }
         }
         Ok(())
@@ -6211,6 +6231,30 @@ mod transactional_recovery_tests {
             assert_eq!(std::fs::read(&source).unwrap(), b"original");
             assert_eq!(std::fs::read(&destination).unwrap(), b"existing");
         }
+    }
+
+    #[test]
+    fn recovery_copies_and_snapshots_skip_apple_double_siblings() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("project");
+        let segment = project.join("content/segments/segment-0");
+        std::fs::create_dir_all(&segment).unwrap();
+        std::fs::write(segment.join("display.mp4"), b"media").unwrap();
+        let before = recovery_snapshot(&project).unwrap();
+
+        let apple_double = b"\x00\x05\x16\x07";
+        std::fs::write(segment.join("._display.mp4"), apple_double).unwrap();
+        std::fs::write(project.join("content/segments/._segment-0"), apple_double).unwrap();
+        assert_eq!(recovery_snapshot(&project).unwrap(), before);
+
+        let staged = dir.path().join("staged");
+        copy_recovery_input(&project.join("content"), &staged).unwrap();
+        assert_eq!(
+            std::fs::read(staged.join("segments/segment-0/display.mp4")).unwrap(),
+            b"media"
+        );
+        assert!(!staged.join("segments/segment-0/._display.mp4").exists());
+        assert!(!staged.join("segments/._segment-0").exists());
     }
 
     #[test]
