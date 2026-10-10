@@ -1,6 +1,4 @@
-import { getVideoCloudFrontDistributionId } from "@/lib/video-cloudfront";
-
-("use server");
+"use server";
 
 import {
 	CloudFrontClient,
@@ -18,6 +16,7 @@ import { Effect } from "effect";
 import { retireDesktopRecordingJobForOutputReplacement } from "@/lib/desktop-recording-jobs";
 import { MESSENGER_ADMIN_EMAIL } from "@/lib/messenger/constants";
 import { runPromise } from "@/lib/server";
+import { getVideoCloudFrontDistributionId } from "@/lib/video-cloudfront";
 import { decodeStorageVideo } from "@/lib/video-storage";
 
 async function requireAdmin() {
