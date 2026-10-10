@@ -15,17 +15,19 @@
 //!    the Tauri `NativeFrameConverter` uses (`camera_native.rs:301-310`).
 //!    Imports are cached per ring slot (keyed by pixel-buffer pointer +
 //!    ring generation), so the steady state creates no textures.
-//! 3. `BlurProcessor::process_into_encoder` runs the segmentation mask +
-//!    separable blur + composite, with the preview's 33ms inference interval
-//!    (`CAMERA_PREVIEW_BLUR_INFERENCE_INTERVAL`, `camera.rs:50`).
+//! 3. The same pixel buffer goes to Apple Vision person segmentation on its
+//!    own thread, and `BlurProcessor::process_into_encoder` composites with
+//!    the newest finished mask, refined against this frame by the guided
+//!    filter. Segmentation never blocks a preview frame.
 //! 4. `cap_rendering::RgbaToBgraSurfaceConverter` blits the RGBA output into
 //!    a BGRA IOSurface-backed CVPixelBuffer from its own ring, and
 //!    `PendingSurface::wait` blocks until the GPU has finished writing it, so
 //!    the buffer handed back to the window is always complete when painted.
 //!
 //! Everything runs on one dedicated `camera-blur` thread (the Tauri preview
-//! renders on a dedicated thread too, `camera.rs:466-490`), so the ~10ms
-//! CoreML/CPU segmentation inference every 33ms never blocks the UI thread.
+//! renders on a dedicated thread too, `camera.rs:466-490`), with the ~10ms
+//! Neural Engine segmentation on a second one, so neither touches the UI
+//! thread.
 //! The channel back to the window is how "what you see is what records" holds:
 //! this is the same `BlurProcessor` the editor/export camera layer runs
 //! (`cap-rendering/src/lib.rs:5742`), fed by the same `BackgroundBlurMode`
@@ -49,12 +51,12 @@ use cap_rendering::{
 };
 use cidre::{arc, cv};
 
-/// `CAMERA_PREVIEW_BLUR_MAX_TEXTURE_WIDTH/HEIGHT` (`camera.rs:46-47`): with
-/// blur on, the Tauri preview processes at most 640x360 -- the blur passes
-/// and the 256x256 segmentation downsample get a bounded input no matter what
-/// the camera delivers. The `FrameConverter` applies this cap during its
-/// hardware conversion, so the scale costs nothing extra.
-pub const BLUR_MAX_DIMS: (usize, usize) = (640, 360);
+/// With an effect on, the preview processes at most 720p: enough for a crisp
+/// cutout edge in the largest bubble on a Retina display, while the guided
+/// filter and composite stay around a millisecond of GPU time. The
+/// `FrameConverter` applies this cap during its hardware conversion, so the
+/// scale costs nothing extra.
+pub const BLUR_MAX_DIMS: (usize, usize) = (1280, 720);
 
 /// `CAMERA_PREVIEW_BLUR_INFERENCE_INTERVAL` (`camera.rs:50`).
 const BLUR_INFERENCE_INTERVAL: Duration = Duration::from_millis(33);
@@ -259,6 +261,9 @@ impl Worker {
         let (width, height) = (job.width, job.height);
         let texture = self.input_texture(&job)?.clone();
 
+        // Vision segments the converted IOSurface itself: no GPU readback or
+        // copy, and segmentation runs beside rendering instead of blocking it.
+        self.processor.set_segmentation_source(job.buffer.0.clone());
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -299,7 +304,7 @@ impl Worker {
             let raw = &*frame.pixel_buffer as *const cv::PixelBuf as CVPixelBufferRef;
             let buffer = unsafe { CVPixelBuffer::wrap_under_get_rule(raw) };
             Some(
-                crate::camera_window::snapshot_preview(&buffer)
+                crate::camera_window::snapshot_cutout(&buffer)
                     .context("cutout preview pixels unavailable")?,
             )
         } else {
@@ -360,7 +365,7 @@ mod tests {
     use std::time::Instant;
 
     #[test]
-    #[ignore = "requires CAP_CAMERA_EFFECT_TEST_FRAME containing a 640x360 RGBA webcam frame"]
+    #[ignore = "requires CAP_CAMERA_EFFECT_TEST_FRAME containing a 1280x720 RGBA webcam frame"]
     fn native_cutout_preserves_alpha_through_iosurface_and_preview_image() {
         let pixels = std::fs::read(std::env::var("CAP_CAMERA_EFFECT_TEST_FRAME").unwrap()).unwrap();
         let (width, height) = BLUR_MAX_DIMS;
