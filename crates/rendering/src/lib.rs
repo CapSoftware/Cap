@@ -2860,7 +2860,7 @@ fn clamp_vector(vec: XY<f32>, max_len: f32) -> XY<f32> {
     }
 }
 
-/// Screen Studio blur semantics: the user amount scales the LENGTH of the
+/// Length-based blur semantics: the user amount scales the LENGTH of the
 /// smear (linear in the per-frame delta, no response curve) and the shader
 /// outputs the fully blurred result — strength is a pure on/off gate, never a
 /// crossfade with the sharp frame. Per frame the dominant delta wins: a size
@@ -3024,9 +3024,9 @@ fn notch_bounds(
 }
 
 const MOTION_BLUR_BASELINE_FPS: f32 = 60.0;
-/// Velocity is measured strictly against the previous frame (Screen Studio
-/// samples frame f vs f-1); averaging over more frames lags peaks and lets
-/// blur linger after motion stops.
+/// Velocity is measured strictly against the previous frame (frame f vs
+/// f-1); averaging over more frames lags peaks and lets blur linger after
+/// motion stops.
 const DISPLAY_MOTION_SAMPLE_FRAMES: u32 = 1;
 /// Skip blur when the per-frame delta is under ~1px — a sub-pixel kernel is
 /// visually the identity, so there is no pop at the boundary.
@@ -5383,7 +5383,7 @@ mod tests {
 
     #[test]
     fn display_zoom_blur_is_symmetric_in_and_out() {
-        // Screen Studio treats zoom-in and zoom-out identically: the radial
+        // Zoom-in and zoom-out are treated identically: the radial
         // amount is |1 - diag ratio| either way.
         let small = motion_bounds(XY::new(0.0, 0.0), XY::new(1920.0, 1080.0));
         let large = motion_bounds(XY::new(-960.0, -540.0), XY::new(2880.0, 1620.0));
@@ -7074,6 +7074,7 @@ pub struct RendererLayers {
     camera_blur_processor: Option<cap_camera_effects::BlurProcessor>,
     camera_blur_init_failed: bool,
     camera_blur_unavailable: bool,
+    realtime_camera_effects: bool,
 }
 
 fn join_layer<T>(handle: std::thread::ScopedJoinHandle<'_, T>) -> T {
@@ -7196,6 +7197,7 @@ impl RendererLayers {
                 camera_blur_processor: None,
                 camera_blur_init_failed: false,
                 camera_blur_unavailable: false,
+                realtime_camera_effects: false,
             }
         });
         layers_phase.finish("returned");
@@ -7209,11 +7211,22 @@ impl RendererLayers {
         Ok(())
     }
 
+    /// Editor playback: camera segmentation runs beside rendering and each
+    /// frame composites with the newest finished mask, refined against that
+    /// frame. Seeks still wait for an exact mask. Exports keep the default,
+    /// where every frame waits for its own mask.
+    pub fn set_realtime_camera_effects(&mut self, realtime: bool) {
+        self.realtime_camera_effects = realtime;
+        if let Some(processor) = &mut self.camera_blur_processor {
+            configure_camera_blur_processor(processor, realtime);
+        }
+    }
+
     fn ensure_camera_blur_processor(&mut self, device: &wgpu::Device) {
         if self.camera_blur_processor.is_none() && !self.camera_blur_init_failed {
             match cap_camera_effects::BlurProcessor::new(device, wgpu::TextureFormat::Rgba8Unorm) {
                 Ok(mut processor) => {
-                    processor.set_frame_synchronous(true);
+                    configure_camera_blur_processor(&mut processor, self.realtime_camera_effects);
                     self.camera_blur_processor = Some(processor);
                 }
                 Err(e) => {
@@ -8072,6 +8085,16 @@ async fn produce_transition_texture(
     );
 
     Ok(incoming_encoder)
+}
+
+fn configure_camera_blur_processor(
+    processor: &mut cap_camera_effects::BlurProcessor,
+    realtime: bool,
+) {
+    processor.set_frame_synchronous(!realtime);
+    if realtime {
+        processor.set_inference_interval(std::time::Duration::ZERO);
+    }
 }
 
 fn reset_camera_blur_for_dimensions(

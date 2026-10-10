@@ -17,7 +17,7 @@ const CLICK_SHRINK_SIZE: f32 = 0.8;
 const CURSOR_IDLE_MIN_DELAY_MS: f64 = 500.0;
 const CURSOR_IDLE_FADE_OUT_MS: f64 = 400.0;
 const CURSOR_IDLE_RESUME_LOOKAHEAD_MS: f64 = 250.0;
-/// Smear length ceiling in output px. Screen Studio semantics: the smear
+/// Smear length ceiling in output px. Length-based semantics: the smear
 /// length equals the cursor's per-frame travel scaled by the user amount —
 /// linear, with no response curve — so this only bounds pathological
 /// single-frame teleports, not real flicks (spring motion peaks well below
@@ -490,7 +490,7 @@ impl CursorLayer {
             child_motion
         };
 
-        // Screen Studio semantics: smear length = per-frame travel x amount,
+        // Length-based semantics: smear length = per-frame travel x amount,
         // linear all the way down (a sub-pixel kernel is the identity, so no
         // response ramp is needed to avoid popping).
         let scaled_motion = if cursor_strength > f32::EPSILON {
@@ -1327,7 +1327,7 @@ mod tests {
 
     #[test]
     fn cursor_blur_vector_is_linear_in_travel_and_amount() {
-        // Screen Studio semantics: smear length == per-frame travel x amount,
+        // Length-based semantics: smear length == per-frame travel x amount,
         // with no response curve shortening slow-to-medium motion.
         let motion = cursor_blur_vector(XY::new(40.0, -30.0), 0.5);
         assert!((motion.x - 20.0).abs() < 1e-4);

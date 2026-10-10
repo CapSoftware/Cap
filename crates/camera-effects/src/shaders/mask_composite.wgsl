@@ -2,6 +2,10 @@
 @group(0) @binding(1) var blurred_tex: texture_2d<f32>;
 @group(0) @binding(2) var mask_tex: texture_2d<f32>;
 @group(0) @binding(3) var tex_sampler: sampler;
+@group(0) @binding(4) var matte_tex: texture_2d<f32>;
+
+const MATTE_LOW: f32 = 0.25;
+const MATTE_HIGH: f32 = 0.9;
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -27,32 +31,55 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
     return out;
 }
 
+fn cubic_bspline(t: f32) -> vec4<f32> {
+    let t2 = t * t;
+    let t3 = t2 * t;
+    let inverse = 1.0 - t;
+    return vec4<f32>(
+        inverse * inverse * inverse,
+        3.0 * t3 - 6.0 * t2 + 4.0,
+        -3.0 * t3 + 3.0 * t2 + 3.0 * t + 1.0,
+        t3,
+    ) / 6.0;
+}
+
+// Cubic B-spline upsampling of the coefficients. Bilinear upsampling left
+// the working grid visible as straight facets along the outline; the
+// B-spline is smooth across texels. Four bilinear taps, each placed so the
+// hardware filter blends a pair of texels in the B-spline's proportions.
+fn matte_coefficients(uv: vec2<f32>) -> vec4<f32> {
+    let size = vec2<f32>(textureDimensions(matte_tex));
+    let position = uv * size - 0.5;
+    let base = floor(position);
+    let fraction = position - base;
+    let weights_x = cubic_bspline(fraction.x);
+    let weights_y = cubic_bspline(fraction.y);
+    let group_x = vec2<f32>(weights_x.x + weights_x.y, weights_x.z + weights_x.w);
+    let group_y = vec2<f32>(weights_y.x + weights_y.y, weights_y.z + weights_y.w);
+    let x = (base.x + vec2<f32>(-0.5, 1.5) + vec2<f32>(weights_x.y, weights_x.w) / group_x) / size.x;
+    let y = (base.y + vec2<f32>(-0.5, 1.5) + vec2<f32>(weights_y.y, weights_y.w) / group_y) / size.y;
+    let top = textureSampleLevel(matte_tex, tex_sampler, vec2<f32>(x.x, y.x), 0.0) * group_x.x
+        + textureSampleLevel(matte_tex, tex_sampler, vec2<f32>(x.y, y.x), 0.0) * group_x.y;
+    let bottom = textureSampleLevel(matte_tex, tex_sampler, vec2<f32>(x.x, y.y), 0.0) * group_x.x
+        + textureSampleLevel(matte_tex, tex_sampler, vec2<f32>(x.y, y.y), 0.0) * group_x.y;
+    return top * group_y.x + bottom * group_y.y;
+}
+
+// Applies the guided filter at full resolution, then tightens the soft
+// matte so only genuinely mixed pixels (hair, motion) stay translucent.
 fn foreground_alpha(uv: vec2<f32>, color: vec3<f32>) -> f32 {
-    let center = textureSampleLevel(mask_tex, tex_sampler, uv, 0.0).r;
-    if center <= 0.01 || center >= 0.99 {
-        return center;
-    }
-    let texel = 1.0 / vec2<f32>(textureDimensions(mask_tex));
-    var total = 0.0;
-    var weights = 0.0;
-    for (var y = -1; y <= 1; y += 1) {
-        for (var x = -1; x <= 1; x += 1) {
-            let offset = vec2<f32>(f32(x), f32(y));
-            let sample_uv = uv + offset * texel;
-            let neighbor = textureSampleLevel(sharp_tex, tex_sampler, sample_uv, 0.0).rgb;
-            let difference = neighbor - color;
-            let weight = exp(-dot(difference, difference) * 40.0 - dot(offset, offset) * 0.5);
-            total += textureSampleLevel(mask_tex, tex_sampler, sample_uv, 0.0).r * weight;
-            weights += weight;
-        }
-    }
-    return clamp(total / weights, 0.0, 1.0);
+    let coefficients = matte_coefficients(uv);
+    let matte = dot(coefficients.rgb, color) + coefficients.a;
+    let t = clamp((matte - MATTE_LOW) / (MATTE_HIGH - MATTE_LOW), 0.0, 1.0);
+    return t * t * (3.0 - 2.0 * t);
 }
 
 @fragment
 fn fs_background(in: VertexOutput) -> @location(0) vec4<f32> {
     let sharp = textureSample(sharp_tex, tex_sampler, in.uv);
-    let texel = 1.0 / vec2<f32>(textureDimensions(mask_tex));
+    // Dilate by one output texel of this downscaled pass, so the background
+    // estimate stays clear of the subject whatever the mask resolution.
+    let texel = fwidth(in.uv);
     var foreground = textureSample(mask_tex, tex_sampler, in.uv).r;
     foreground = max(foreground, textureSample(mask_tex, tex_sampler, in.uv + vec2<f32>(texel.x, 0.0)).r);
     foreground = max(foreground, textureSample(mask_tex, tex_sampler, in.uv - vec2<f32>(texel.x, 0.0)).r);
@@ -71,41 +98,22 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     return vec4<f32>(mix(background, sharp.rgb, alpha), sharp.a);
 }
 
-fn cubic_weights(fraction: f32) -> vec4<f32> {
-    let inverse = 1.0 - fraction;
-    let square = fraction * fraction;
-    let cube = square * fraction;
-    return vec4<f32>(
-        inverse * inverse * inverse,
-        3.0 * cube - 6.0 * square + 4.0,
-        -3.0 * cube + 3.0 * square + 3.0 * fraction + 1.0,
-        cube,
-    ) / 6.0;
-}
-
-fn smooth_cutout_alpha(uv: vec2<f32>) -> f32 {
-    let size = vec2<f32>(textureDimensions(mask_tex));
-    let position = uv * size - 0.5;
-    let base = floor(position);
-    let fraction = fract(position);
-    let x_weights = cubic_weights(fraction.x);
-    let y_weights = cubic_weights(fraction.y);
-    let x_groups = x_weights.xz + x_weights.yw;
-    let y_groups = y_weights.xz + y_weights.yw;
-    let x = (base.x + vec2<f32>(-0.5, 1.5) + x_weights.yw / x_groups) / size.x;
-    let y = (base.y + vec2<f32>(-0.5, 1.5) + y_weights.yw / y_groups) / size.y;
-    let top_left = textureSampleLevel(mask_tex, tex_sampler, vec2<f32>(x.x, y.x), 0.0).r;
-    let top_right = textureSampleLevel(mask_tex, tex_sampler, vec2<f32>(x.y, y.x), 0.0).r;
-    let bottom_left = textureSampleLevel(mask_tex, tex_sampler, vec2<f32>(x.x, y.y), 0.0).r;
-    let bottom_right = textureSampleLevel(mask_tex, tex_sampler, vec2<f32>(x.y, y.y), 0.0).r;
-    let top = mix(top_left, top_right, x_groups.y);
-    let bottom = mix(bottom_left, bottom_right, x_groups.y);
-    return mix(top, bottom, y_groups.y);
-}
-
 @fragment
 fn fs_cutout(in: VertexOutput) -> @location(0) vec4<f32> {
     let sharp = textureSample(sharp_tex, tex_sampler, in.uv);
-    let alpha = clamp((smooth_cutout_alpha(in.uv) - 0.04) / 0.96, 0.0, 1.0);
-    return vec4<f32>(sharp.rgb, sharp.a * alpha);
+    let alpha = foreground_alpha(in.uv, sharp.rgb);
+    // Edge pixels are a blend of the person and the room behind them.
+    // Unmixing against the local background estimate (I = aF + (1 - a)B)
+    // stops the old wall colour from fringing the cutout.
+    let background = textureSampleLevel(blurred_tex, tex_sampler, in.uv, 0.0);
+    var color = sharp.rgb;
+    // The estimate is only trusted where the pixel is mostly person, and its
+    // shift is capped: a wrong background guess near the face must not turn
+    // into a saturated fringe.
+    if alpha > 0.0 && alpha < 1.0 && background.a > 0.01 {
+        let unmixed = (sharp.rgb - (1.0 - alpha) * background.rgb / background.a) / alpha;
+        let shift = clamp(unmixed - sharp.rgb, vec3<f32>(-0.25), vec3<f32>(0.25));
+        color = clamp(sharp.rgb + shift * smoothstep(0.2, 0.6, alpha), vec3<f32>(0.0), vec3<f32>(1.0));
+    }
+    return vec4<f32>(color, sharp.a * alpha);
 }
