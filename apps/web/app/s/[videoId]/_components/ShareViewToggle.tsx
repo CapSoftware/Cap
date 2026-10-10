@@ -53,7 +53,7 @@ export function ShareViewToggle({
 						{active && (
 							<motion.span
 								layoutId="share-view-thumb"
-								className="absolute inset-0 rounded-full border border-gray-5 bg-white shadow-sm"
+								className="absolute inset-0 rounded-full border border-gray-5 bg-gray-1 shadow-sm"
 								transition={
 									reduceMotion
 										? { duration: 0 }

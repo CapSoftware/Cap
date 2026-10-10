@@ -91,7 +91,7 @@ export function ScreenRecorderPanel({
 				</div>
 			) : (
 				<div className="flex flex-col items-center gap-2.5 rounded-xl bg-gray-3 px-5 py-5 text-center">
-					<span className="grid size-9 place-items-center rounded-full bg-white text-gray-11 ring-1 ring-gray-5">
+					<span className="grid size-9 place-items-center rounded-full bg-gray-1 text-gray-11 ring-1 ring-gray-5">
 						<svg
 							viewBox="0 0 16 16"
 							className="size-4 fill-current"
