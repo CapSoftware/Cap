@@ -14,7 +14,6 @@ use crate::theme::Theme;
 pub struct Card;
 
 impl Card {
-    /// The settings card: a System Settings group, radius 12 and no border.
     pub fn settings(theme: &Theme, padded: bool) -> Div {
         div()
             .rounded(px(12.))
@@ -23,8 +22,6 @@ impl Card {
             .when(padded, |this| this.px(px(16.)).py(px(16.)))
     }
 
-    /// The same card with hairlines between its rows, inset from both edges
-    /// the way AppKit's grouped forms draw them.
     pub fn settings_rows(theme: &Theme, children: Vec<AnyElement>) -> Div {
         let border = theme.settings_border();
         let last = children.len().saturating_sub(1);
