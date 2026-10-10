@@ -39,10 +39,12 @@ export const ASSEMBLYAI_SUPPORTED_LANGUAGES = [
 
 export function getAssemblyAITranscriptionOptions(
 	language: AiGenerationLanguage,
+	{ speakerLabels = true }: { speakerLabels?: boolean } = {},
 ) {
 	const baseOptions = {
 		speech_models: [...ASSEMBLYAI_SPEECH_MODELS],
 		format_text: true,
+		speaker_labels: speakerLabels,
 		punctuate: true,
 		// Verbatim words: the single transcription pass feeds both the word-level
 		// edit transcript and the caption VTT (which strips fillers itself).
