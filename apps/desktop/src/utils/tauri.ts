@@ -1140,6 +1140,7 @@ export type KeyPressDisplay = { key: string; timeOffset: number }
 export type KeyboardData = { settings: KeyboardSettings }
 export type KeyboardSettings = { enabled: boolean; font: string; size: number; color: string; backgroundColor: string; backgroundOpacity: number; position: string; fontWeight: number; fadeDuration: number; lingerDuration: number; groupingThresholdMs: number; showModifiers: boolean; showSpecialKeys: boolean; uppercase: boolean }
 export type KeyboardTrackSegment = { id: string; start: number; end: number; displayText: string; keys?: KeyPressDisplay[]; fadeDurationOverride?: number | null; positionOverride?: string | null; colorOverride?: string | null; backgroundColorOverride?: string | null; fontSizeOverride?: number | null; uppercaseOverride?: boolean | null }
+export type LockableTimelineTrack = "style" | "image" | "caption" | "keyboard" | "text" | "zoom" | "scene" | "mask" | "audio" | "3d"
 export type LogicalBounds = { position: LogicalPosition; size: LogicalSize }
 export type LogicalPosition = { x: number; y: number }
 export type LogicalSize = { width: number; height: number }
@@ -1218,7 +1219,12 @@ textSizeVersion?: number;
  * legacy configs are migrated on load by seeding both animation
  * durations from `fade_duration`.
  */
-textAnimVersion?: number }
+textAnimVersion?: number;
+/**
+ * Timeline tracks that keep their segments in place when clips are
+ * deleted, trimmed, retimed or given transitions, instead of rippling.
+ */
+lockedTracks: LockableTimelineTrack[] }
 export type ProjectRecordingsMeta = { segments: SegmentRecordings[] }
 export type RecordingAction = "Started" | "InvalidAuthentication" | "UpgradeRequired"
 export type RecordingDeleted = { path: string }

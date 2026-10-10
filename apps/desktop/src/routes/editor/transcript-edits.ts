@@ -20,7 +20,8 @@ export interface FlatWord {
 }
 
 export function deleteTranscriptWords(
-	project: Pick<EditorProjectConfiguration, "captions" | "timeline">,
+	project: Pick<EditorProjectConfiguration, "captions" | "timeline"> &
+		Partial<Pick<EditorProjectConfiguration, "lockedTracks">>,
 	wordsToDelete: FlatWord[],
 	recordingSegments: SegmentRecordings[],
 	mode: "captions" | "video" = "captions",
@@ -124,6 +125,8 @@ export function deleteTranscriptWords(
 				range.start,
 				range.end,
 				range.segmentIndex,
+				undefined,
+				project.lockedTracks ?? [],
 			);
 		}
 	}

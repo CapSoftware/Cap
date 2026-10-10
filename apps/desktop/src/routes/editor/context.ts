@@ -48,6 +48,7 @@ import {
 	type FrameLayoutEvent,
 	type FramesRendered,
 	type ImportedAudioTrack,
+	type LockableTimelineTrack,
 	type MultipleSegments,
 	type ProjectConfiguration,
 	type RecordingMeta,
@@ -132,7 +133,10 @@ import {
 	holdWindows,
 	totalHeldDuration,
 } from "./timeline-holds";
-import { deleteClipAndRippleAllTracks } from "./timeline-utils";
+import {
+	deleteClipAndRippleAllTracks,
+	unlockedRippleTracks,
+} from "./timeline-utils";
 import {
 	getUsedTrackCount,
 	normalizeTrackSegments,
@@ -464,25 +468,16 @@ export const [EditorContextProvider, useBaseEditorContext] =
 						const previousCamera3dDurations = camera3dSegments.map(
 							(segment) => segment.end - segment.start,
 						);
-						const tracks = [
-							timeline.styleSegments,
-							timeline.imageSegments,
-							timeline.zoomSegments,
-							timeline.sceneSegments ?? [],
-							timeline.maskSegments,
-							timeline.textSegments,
-							timeline.captionSegments ?? [],
-							timeline.audioSegments ?? [],
-							camera3dSegments,
-						];
-						for (const track of tracks) {
+						const locked = project.lockedTracks ?? [];
+						for (const track of unlockedRippleTracks(timeline, locked)) {
 							rippleTimelineTrack(track, boundary, shift);
 						}
-						rippleKeyboardTrack(
-							timeline.keyboardSegments ?? [],
-							boundary,
-							shift,
-						);
+						if (!locked.includes("keyboard"))
+							rippleKeyboardTrack(
+								timeline.keyboardSegments ?? [],
+								boundary,
+								shift,
+							);
 						for (let index = 0; index < camera3dSegments.length; index++) {
 							const camera3dSegment = camera3dSegments[index];
 							const previousDuration = previousCamera3dDurations[index];
@@ -751,7 +746,11 @@ export const [EditorContextProvider, useBaseEditorContext] =
 							produce((project) => {
 								const timeline = project.timeline;
 								if (!timeline) return;
-								deleteClipAndRippleAllTracks(timeline, segmentIndex);
+								deleteClipAndRippleAllTracks(
+									timeline,
+									segmentIndex,
+									project.lockedTracks ?? [],
+								);
 							}),
 						);
 						setEditorState("timeline", "selection", null);
@@ -1532,50 +1531,68 @@ export const [EditorContextProvider, useBaseEditorContext] =
 								const held = heldTimeBefore(oldHolds, value);
 								return value + diff(value - held);
 							};
+							const locked = project.lockedTracks ?? [];
+							const ripples = (track: LockableTimelineTrack) =>
+								!locked.includes(track);
 
 							for (const overlay of [
-								...timeline.styleSegments,
-								...timeline.imageSegments,
+								...(ripples("style") ? timeline.styleSegments : []),
+								...(ripples("image") ? timeline.imageSegments : []),
 							]) {
 								overlay.start = mapOutputTime(overlay.start);
 								overlay.end = mapOutputTime(overlay.end);
 							}
-							for (const zoomSegment of timeline.zoomSegments) {
+							for (const zoomSegment of ripples("zoom")
+								? timeline.zoomSegments
+								: []) {
 								zoomSegment.start = mapOutputTime(zoomSegment.start);
 								zoomSegment.end = mapOutputTime(zoomSegment.end);
 							}
 
-							for (const sceneSegment of timeline.sceneSegments ?? []) {
+							for (const sceneSegment of ripples("scene")
+								? (timeline.sceneSegments ?? [])
+								: []) {
 								sceneSegment.start = mapOutputTime(sceneSegment.start);
 								sceneSegment.end = mapOutputTime(sceneSegment.end);
 							}
 
-							for (const maskSegment of timeline.maskSegments) {
+							for (const maskSegment of ripples("mask")
+								? timeline.maskSegments
+								: []) {
 								maskSegment.start = mapOutputTime(maskSegment.start);
 								maskSegment.end = mapOutputTime(maskSegment.end);
 							}
 
-							for (const textSegment of timeline.textSegments) {
+							for (const textSegment of ripples("text")
+								? timeline.textSegments
+								: []) {
 								textSegment.start = mapOutputTime(textSegment.start);
 								textSegment.end = mapOutputTime(textSegment.end);
 							}
 
-							for (const audioSegment of timeline.audioSegments ?? []) {
+							for (const audioSegment of ripples("audio")
+								? (timeline.audioSegments ?? [])
+								: []) {
 								audioSegment.start = mapOutputTime(audioSegment.start);
 								audioSegment.end = mapOutputTime(audioSegment.end);
 							}
 
-							for (const captionSegment of timeline.captionSegments ?? []) {
+							for (const captionSegment of ripples("caption")
+								? (timeline.captionSegments ?? [])
+								: []) {
 								captionSegment.start = mapOutputTime(captionSegment.start);
 								captionSegment.end = mapOutputTime(captionSegment.end);
 							}
 
-							mapKeyboardTrackTimes(
-								timeline.keyboardSegments ?? [],
-								mapOutputTime,
-							);
+							if (ripples("keyboard"))
+								mapKeyboardTrackTimes(
+									timeline.keyboardSegments ?? [],
+									mapOutputTime,
+								);
 
-							for (const camera3dSegment of timeline.camera3dSegments ?? []) {
+							for (const camera3dSegment of ripples("3d")
+								? (timeline.camera3dSegments ?? [])
+								: []) {
 								const previousDuration =
 									camera3dSegment.end - camera3dSegment.start;
 								camera3dSegment.start = mapOutputTime(camera3dSegment.start);
