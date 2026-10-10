@@ -1,5 +1,5 @@
 import * as Db from "@cap/database/schema";
-import { CurrentUser, Organisation, Policy } from "@cap/web-domain";
+import { CurrentUser, Organisation, Policy, S3Bucket } from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
 import { Effect, Array as EffectArray, Option } from "effect";
 import { Database } from "../Database";
@@ -103,16 +103,18 @@ export class Organisations extends Effect.Service<Organisations>()(
 						.where(Dz.eq(Db.videos.orgId, id)),
 				);
 				const capManagedVideos = videos.filter(
-					(video) => !video.bucket && !video.storageIntegrationId,
+					(video) =>
+						S3Bucket.isCapManagedBucket(video.bucket) &&
+						!video.storageIntegrationId,
 				);
 
 				const [defaultBucket] = yield* s3Buckets.getBucketAccess(Option.none());
 
-				const deleteS3Prefix = (prefix: string) =>
+				const deleteS3Prefix = (prefix: string, bucket = defaultBucket) =>
 					Effect.gen(function* () {
 						let continuationToken: string | undefined;
 						do {
-							const listedObjects = yield* defaultBucket.listObjects({
+							const listedObjects = yield* bucket.listObjects({
 								prefix,
 								continuationToken,
 							});
@@ -126,7 +128,7 @@ export class Organisations extends Effect.Service<Organisations>()(
 								index < objects.length;
 								index += s3DeleteBatchSize
 							) {
-								yield* defaultBucket.deleteObjects(
+								yield* bucket.deleteObjects(
 									objects.slice(index, index + s3DeleteBatchSize),
 								);
 							}
@@ -139,7 +141,13 @@ export class Organisations extends Effect.Service<Organisations>()(
 
 				yield* Effect.forEach(
 					capManagedVideos,
-					(video) => deleteS3Prefix(`${video.ownerId}/${video.id}/`),
+					(video) =>
+						Effect.gen(function* () {
+							const [bucket] = yield* s3Buckets.getBucketAccess(
+								Option.fromNullable(video.bucket),
+							);
+							yield* deleteS3Prefix(`${video.ownerId}/${video.id}/`, bucket);
+						}),
 					{ concurrency: 3 },
 				);
 				yield* deleteS3Prefix(`organizations/${id}/`);

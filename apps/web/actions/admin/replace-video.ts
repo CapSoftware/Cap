@@ -16,6 +16,7 @@ import { Effect } from "effect";
 import { retireDesktopRecordingJobForOutputReplacement } from "@/lib/desktop-recording-jobs";
 import { MESSENGER_ADMIN_EMAIL } from "@/lib/messenger/constants";
 import { runPromise } from "@/lib/server";
+import { getVideoCloudFrontDistributionId } from "@/lib/video-cloudfront";
 import { decodeStorageVideo } from "@/lib/video-storage";
 
 async function requireAdmin() {
@@ -101,11 +102,7 @@ export async function invalidateVideoCache(videoId: string) {
 		await tx.delete(videoUploads).where(eq(videoUploads.videoId, video.id));
 	});
 
-	if (video.bucket) {
-		return;
-	}
-
-	const distributionId = serverEnv().CAP_CLOUDFRONT_DISTRIBUTION_ID;
+	const distributionId = getVideoCloudFrontDistributionId(video.bucket);
 	if (!distributionId) {
 		return;
 	}

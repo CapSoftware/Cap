@@ -1,12 +1,16 @@
 import * as S3 from "@aws-sdk/client-s3";
 import * as CloudFrontPresigner from "@aws-sdk/cloudfront-signer";
 import { decrypt } from "@cap/database/crypto";
-import type { Organisation, S3Bucket, User } from "@cap/web-domain";
+import { type Organisation, S3Bucket, type User } from "@cap/web-domain";
 import type { RequestPresigningArguments } from "@smithy/types";
 import { Config, Effect, Layer, Option } from "effect";
 
 import { AwsCredentials } from "../Aws.ts";
 import { Database } from "../Database.ts";
+import {
+	getNearestRegionalBucket,
+	parseRegionalBuckets,
+} from "./RegionalBuckets.ts";
 import { createS3BucketAccess } from "./S3BucketAccess.ts";
 import { S3BucketClientProvider } from "./S3BucketClientProvider.ts";
 import { S3BucketsRepo } from "./S3BucketsRepo.ts";
@@ -100,46 +104,88 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 			Effect.map(Option.fromNullable),
 		);
 
-		const cloudfrontBucketAccess = cloudfrontEnvs.pipe(
-			Option.map((cloudfrontEnvs) =>
-				Effect.flatMap(createS3BucketAccess, (s3) => {
-					const getCloudFrontSignedUrl = (
-						key: string,
-						signingArgs?: RequestPresigningArguments,
-					) => {
-						const url = `${cloudfrontEnvs.bucketUrl}/${key}`;
-						const expiresIn = signingArgs?.expiresIn ?? 3600;
-						const expires = Math.floor((Date.now() + expiresIn * 1000) / 1000);
+		const cloudfrontBucketAccess = (bucketUrl?: string) =>
+			cloudfrontEnvs.pipe(
+				Option.map((cloudfrontEnvs) =>
+					Effect.flatMap(createS3BucketAccess, (s3) => {
+						const getCloudFrontSignedUrl = (
+							key: string,
+							signingArgs?: RequestPresigningArguments,
+						) => {
+							const url = `${bucketUrl ?? cloudfrontEnvs.bucketUrl}/${key}`;
+							const expiresIn = signingArgs?.expiresIn ?? 3600;
+							const expires = Math.floor(
+								(Date.now() + expiresIn * 1000) / 1000,
+							);
 
-						const policy = {
-							Statement: [
-								{
-									Resource: url,
-									Condition: {
-										DateLessThan: {
-											"AWS:EpochTime": Math.floor(expires),
+							const policy = {
+								Statement: [
+									{
+										Resource: url,
+										Condition: {
+											DateLessThan: {
+												"AWS:EpochTime": Math.floor(expires),
+											},
 										},
 									},
-								},
-							],
+								],
+							};
+
+							return Effect.succeed(
+								CloudFrontPresigner.getSignedUrl({
+									url,
+									keyPairId: cloudfrontEnvs.keypairId,
+									privateKey: cloudfrontEnvs.privateKey,
+									policy: JSON.stringify(policy),
+								}),
+							);
 						};
 
-						return Effect.succeed(
-							CloudFrontPresigner.getSignedUrl({
-								url,
-								keyPairId: cloudfrontEnvs.keypairId,
-								privateKey: cloudfrontEnvs.privateKey,
-								policy: JSON.stringify(policy),
-							}),
-						);
-					};
+						return Effect.succeed<typeof s3>({
+							...s3,
+							getSignedObjectUrl: getCloudFrontSignedUrl,
+						});
+					}),
+				),
+			);
 
-					return Effect.succeed<typeof s3>({
-						...s3,
-						getSignedObjectUrl: getCloudFrontSignedUrl,
-					});
-				}),
+		const regionalConfigs = parseRegionalBuckets(
+			Option.getOrUndefined(
+				yield* Config.string("CAP_REGIONAL_UPLOAD_BUCKETS").pipe(Config.option),
 			),
+		);
+		const regionalUploadsEnabled = yield* Config.boolean(
+			"CAP_REGIONAL_UPLOADS_ENABLED",
+		).pipe(Effect.orElseSucceed(() => false));
+		const regionalBucketAccess = new Map(
+			regionalConfigs.flatMap((config) => {
+				const access = cloudfrontBucketAccess(config.bucketUrl);
+				if (Option.isNone(access)) return [];
+				const client = new S3.S3Client({
+					region: config.region,
+					credentials,
+					forcePathStyle: false,
+					requestHandler,
+				});
+				return [
+					[
+						config.id,
+						access.value.pipe(
+							Effect.provide(
+								Layer.succeed(S3BucketClientProvider, {
+									getInternal: Effect.succeed(client),
+									getPublic: Effect.succeed(client),
+									bucket: config.bucket,
+									isPathStyle: false,
+								}),
+							),
+						),
+					] as const,
+				];
+			}),
+		);
+		const uploadRegions = regionalConfigs.filter((config) =>
+			regionalBucketAccess.has(config.id),
 		);
 
 		const getBucketAccess = Effect.fn("S3Buckets.getProviderLayer")(function* (
@@ -154,7 +200,7 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 						isPathStyle: defaultConfigs.forcePathStyle,
 					});
 
-					return Option.match(cloudfrontBucketAccess, {
+					return Option.match(cloudfrontBucketAccess(), {
 						onSome: (access) => access,
 						onNone: () => createS3BucketAccess,
 					}).pipe(Effect.provide(provider));
@@ -183,9 +229,31 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 		});
 
 		return {
+			getRegionalUploadBucketId: (
+				latitude: string | undefined,
+				longitude: string | undefined,
+			) =>
+				regionalUploadsEnabled && defaultConfigs.region === "us-east-1"
+					? getNearestRegionalBucket(latitude, longitude, uploadRegions)
+					: Option.none<S3Bucket.S3BucketId>(),
 			getBucketAccess: Effect.fn("S3Buckets.getBucketAccess")(function* (
 				bucketId?: Option.Option<S3Bucket.S3BucketId>,
 			) {
+				const regionalBucket = S3Bucket.getRegionalBucket(
+					Option.getOrNull(bucketId ?? Option.none()),
+				);
+				if (regionalBucket) {
+					const access = regionalBucketAccess.get(regionalBucket.id);
+					if (!access)
+						return yield* Effect.fail(
+							new S3Bucket.S3Error({
+								cause: new Error(
+									`Regional storage configuration is missing or invalid: ${regionalBucket.region}`,
+								),
+							}),
+						);
+					return [yield* access, Option.none<S3Bucket.S3Bucket>()] as const;
+				}
 				const customBucket = yield* (bucketId ?? Option.none()).pipe(
 					Option.map(repo.getById),
 					Effect.transposeOption,

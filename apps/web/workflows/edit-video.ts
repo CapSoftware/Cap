@@ -33,6 +33,7 @@ import {
 import { decryptEditTranscriptObject } from "@/lib/edit-transcript-storage";
 import { startAiGeneration } from "@/lib/generate-ai";
 import { transcribeVideo } from "@/lib/transcribe";
+import { getVideoCloudFrontDistributionId } from "@/lib/video-cloudfront";
 import {
 	clearFailedEdit,
 	type EditOperation,
@@ -723,9 +724,6 @@ async function invalidateEditedVideoCache(
 ): Promise<void> {
 	"use step";
 
-	const distributionId = serverEnv().CAP_CLOUDFRONT_DISTRIBUTION_ID;
-	if (!distributionId) return;
-
 	const [video] = await db()
 		.select({
 			ownerId: videos.ownerId,
@@ -734,7 +732,9 @@ async function invalidateEditedVideoCache(
 		.from(videos)
 		.where(eq(videos.id, videoId as Video.VideoId));
 
-	if (!video || video.bucket) return;
+	if (!video) return;
+	const distributionId = getVideoCloudFrontDistributionId(video.bucket);
+	if (!distributionId) return;
 
 	const basePath = `/${video.ownerId}/${videoId}`;
 	const paths = [
