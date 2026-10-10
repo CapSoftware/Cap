@@ -74,17 +74,29 @@ pub async fn play(cue: StartCue, gate: RecordingStartGate) {
 
 async fn play_with_timeout(cue: StartCue, gate: RecordingStartGate, timeout: Duration) {
     let _arm_on_drop = ArmOnDrop(gate.clone());
+    if let Err(error) = playback_result(cue, gate, timeout).await {
+        tracing::warn!(%error, "Recording start sound unavailable");
+    }
+}
+
+pub async fn play_for_admission(cue: StartCue) -> Result<(), String> {
+    // The sound worker must never own the gate that admits recorded media.
+    playback_result(cue, RecordingStartGate::new(), PLAYBACK_TIMEOUT).await
+}
+
+async fn playback_result(
+    cue: StartCue,
+    gate: RecordingStartGate,
+    timeout: Duration,
+) -> Result<(), String> {
     let (done, done_rx) = tokio::sync::oneshot::channel();
-    if cue.command.send(PlayCommand { gate, done }).is_err() {
-        tracing::warn!("Recording start sound worker is not running");
-        return;
-    }
-    match tokio::time::timeout(timeout, done_rx).await {
-        Ok(Ok(Ok(()))) => {}
-        Ok(Ok(Err(error))) => tracing::warn!(%error, "Recording start sound unavailable"),
-        Ok(Err(_)) => tracing::warn!("Recording start sound worker stopped"),
-        Err(_) => tracing::warn!("Recording start sound timed out"),
-    }
+    cue.command
+        .send(PlayCommand { gate, done })
+        .map_err(|_| "Recording start sound worker is not running".to_string())?;
+    tokio::time::timeout(timeout, done_rx)
+        .await
+        .map_err(|_| "Recording start sound timed out".to_string())?
+        .map_err(|_| "Recording start sound worker stopped".to_string())?
 }
 
 struct ArmOnDrop(RecordingStartGate);
@@ -335,5 +347,83 @@ mod tests {
         let gate = RecordingStartGate::new();
         play(cue, gate.clone()).await;
         assert!(gate.is_armed());
+    }
+
+    #[tokio::test]
+    async fn admission_playback_waits_for_positive_worker_completion() {
+        let (cue, rx) = StartCue::stub();
+        let playback = tokio::spawn(play_for_admission(cue));
+        let command = tokio::task::spawn_blocking(move || rx.recv().unwrap())
+            .await
+            .unwrap();
+        assert!(!playback.is_finished());
+        command.finish(Ok(()));
+        assert_eq!(playback.await.unwrap(), Ok(()));
+    }
+
+    #[tokio::test]
+    async fn admission_playback_preserves_device_failure() {
+        let (cue, rx) = StartCue::stub();
+        let playback = tokio::spawn(play_for_admission(cue));
+        let command = tokio::task::spawn_blocking(move || rx.recv().unwrap())
+            .await
+            .unwrap();
+        let gate = command.gate.clone();
+        command.finish(Err("No audio output device".into()));
+        assert_eq!(
+            playback.await.unwrap(),
+            Err("No audio output device".into())
+        );
+        assert!(!gate.is_armed());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn admission_playback_timeout_is_an_error_and_cancels_the_worker() {
+        let (cue, rx) = StartCue::stub();
+        assert_eq!(
+            play_for_admission(cue).await,
+            Err("Recording start sound timed out".into())
+        );
+        let command = rx.recv().unwrap();
+        assert!(command.cancelled());
+        assert!(!command.gate.is_armed());
+    }
+
+    #[tokio::test]
+    async fn admission_playback_drop_cancels_without_arming() {
+        let (cue, rx) = StartCue::stub();
+        let playback = tokio::spawn(play_for_admission(cue));
+        let command = tokio::task::spawn_blocking(move || rx.recv().unwrap())
+            .await
+            .unwrap();
+        assert!(!command.cancelled());
+        playback.abort();
+        assert!(playback.await.unwrap_err().is_cancelled());
+        assert!(command.cancelled());
+        assert!(!command.gate.is_armed());
+    }
+
+    #[tokio::test]
+    async fn admission_playback_rejects_missing_worker() {
+        let (cue, rx) = StartCue::stub();
+        drop(rx);
+        assert_eq!(
+            play_for_admission(cue).await,
+            Err("Recording start sound worker is not running".into())
+        );
+    }
+
+    #[tokio::test]
+    async fn admission_playback_rejects_lost_completion() {
+        let (cue, rx) = StartCue::stub();
+        let playback = tokio::spawn(play_for_admission(cue));
+        let command = tokio::task::spawn_blocking(move || rx.recv().unwrap())
+            .await
+            .unwrap();
+        drop(command);
+        assert_eq!(
+            playback.await.unwrap(),
+            Err("Recording start sound worker stopped".into())
+        );
     }
 }

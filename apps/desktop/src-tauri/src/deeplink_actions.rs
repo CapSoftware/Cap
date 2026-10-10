@@ -85,6 +85,11 @@ pub struct DeepLinkActionExecutor {
 }
 
 impl DeepLinkActionExecutor {
+    #[cfg(test)]
+    pub(crate) fn from_sender(tx: std::sync::mpsc::Sender<DeepLinkAction>) -> Self {
+        Self { tx }
+    }
+
     pub fn new(app: &AppHandle) -> Self {
         let (tx, rx) = std::sync::mpsc::channel::<DeepLinkAction>();
         let app_handle = app.clone();
@@ -120,7 +125,7 @@ impl DeepLinkActionExecutor {
     }
 }
 
-pub fn handle(app_handle: &AppHandle, urls: Vec<Url>) {
+pub fn handle<R: tauri::Runtime>(app_handle: &AppHandle<R>, urls: Vec<Url>) {
     trace!("Handling deep actions for: {:?}", &urls);
 
     let actions: Vec<_> = urls

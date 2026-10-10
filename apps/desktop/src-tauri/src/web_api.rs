@@ -89,7 +89,8 @@ where
 #[derive(Clone)]
 pub(crate) struct UploadRequestContext {
     server_url: String,
-    owner_id: String,
+    owner_id: Option<String>,
+    admission_auth: Option<std::sync::Arc<AuthStore>>,
 }
 
 tokio::task_local! {
@@ -103,8 +104,31 @@ impl UploadRequestContext {
         }
         Ok(Self {
             server_url,
-            owner_id,
+            owner_id: Some(owner_id),
+            admission_auth: None,
         })
+    }
+
+    pub(crate) fn for_admission(
+        server_url: String,
+        auth: std::sync::Arc<AuthStore>,
+    ) -> Result<Self, AuthedApiError> {
+        if server_url.is_empty() {
+            return Err(AuthedApiError::InvalidAuthentication);
+        }
+        Ok(Self {
+            server_url,
+            owner_id: auth.user_id.clone(),
+            admission_auth: Some(auth),
+        })
+    }
+
+    pub(crate) fn server_url(&self) -> &str {
+        &self.server_url
+    }
+
+    pub(crate) fn owner_id(&self) -> Option<&str> {
+        self.owner_id.as_deref()
     }
 
     fn check_identity(
@@ -112,10 +136,22 @@ impl UploadRequestContext {
         server_url: &str,
         owner_id: Option<&str>,
     ) -> Result<(), AuthedApiError> {
-        if server_url != self.server_url || owner_id != Some(self.owner_id.as_str()) {
+        if server_url != self.server_url || owner_id != self.owner_id.as_deref() {
             return Err(AuthedApiError::InvalidAuthentication);
         }
         Ok(())
+    }
+
+    fn request_authority<'a>(
+        &'a self,
+        server_url: &str,
+        current_auth: &'a AuthStore,
+    ) -> Result<(&'a str, &'a AuthStore), AuthedApiError> {
+        self.check_identity(server_url, current_auth.user_id.as_deref())?;
+        Ok((
+            &self.server_url,
+            self.admission_auth.as_deref().unwrap_or(current_auth),
+        ))
     }
 
     pub(crate) async fn check(&self, app: &tauri::AppHandle) -> Result<(), AuthedApiError> {
@@ -206,16 +242,16 @@ impl<T: Manager<R> + Emitter<R>, R: Runtime> ManagerExt<R> for T {
 
         let path = path.into();
         let server_url = crate::upload::lifecycle::cancellable(current_server_url(self)).await??;
-        let server_url = if let Some(context) = UploadRequestContext::current() {
-            context.check_identity(&server_url, auth.user_id.as_deref())?;
-            context.server_url
+        let context = UploadRequestContext::current();
+        let (server_url, request_auth) = if let Some(context) = &context {
+            context.request_authority(&server_url, &auth)?
         } else {
-            server_url
+            (server_url.as_str(), &auth)
         };
         let url = format!("{server_url}{path}");
         let response = crate::upload::lifecycle::cancellable(do_authed_request(
             &self.state::<http_client::HttpClient>(),
-            &auth,
+            request_auth,
             build,
             url,
         ))
@@ -272,6 +308,101 @@ impl<T: Manager<R> + Emitter<R>, R: Runtime> ManagerExt<R> for T {
 #[cfg(test)]
 mod upload_context_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn admission_create_preserves_optional_local_owner_and_existing_auth_authority() {
+        let auth: AuthStore = serde_json::from_value(serde_json::json!({
+            "user_id":null,"secret":{"api_key":"fixture-credential"},"plan":null
+        }))
+        .unwrap();
+        let auth = std::sync::Arc::new(auth);
+        let context =
+            UploadRequestContext::for_admission("https://bound.invalid".into(), auth.clone())
+                .unwrap();
+        let ran = std::cell::Cell::new(false);
+        let result = context.run(async {
+            let context = UploadRequestContext::current().unwrap();
+            let (_, selected) = context.request_authority("https://bound.invalid", &auth)?;
+            assert!(matches!(&selected.secret, AuthSecret::ApiKey { api_key } if api_key == "fixture-credential"));
+            ran.set(true);
+            Err::<(), _>(AuthedApiError::InvalidAuthentication)
+        }).await;
+        assert!(ran.get());
+        assert!(matches!(result, Err(AuthedApiError::InvalidAuthentication)));
+        assert!(UploadRequestContext::current().is_none());
+    }
+
+    #[tokio::test]
+    async fn admission_request_sends_bound_credentials_and_origin_without_migrating_owner() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        fn auth(owner: &str, key: &str) -> AuthStore {
+            serde_json::from_value(serde_json::json!({
+                "user_id": owner, "secret":{"api_key":key}, "plan":null
+            }))
+            .unwrap()
+        }
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let bound = std::sync::Arc::new(auth("alice", "fixture-bound-key"));
+        let context = UploadRequestContext::for_admission(origin.clone(), bound).unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = vec![0; 4096];
+            let mut size = 0;
+            while !request[..size].windows(4).any(|end| end == b"\r\n\r\n") {
+                let count = stream.read(&mut request[size..]).await.unwrap();
+                assert!(count > 0);
+                size += count;
+                assert!(size < request.len());
+            }
+            let request = std::str::from_utf8(&request[..size]).unwrap();
+            assert!(request.starts_with("GET /api/desktop/video/create "));
+            assert!(
+                request
+                    .to_ascii_lowercase()
+                    .contains("authorization: bearer fixture-bound-key\r\n")
+            );
+            assert!(!request.contains("fixture-replacement-key"));
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                .await
+                .unwrap();
+        });
+        let live = auth("alice", "fixture-replacement-key");
+        let (request_origin, request_auth) = context.request_authority(&origin, &live).unwrap();
+        let response = do_authed_request(
+            &reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(3))
+                .build()
+                .unwrap(),
+            request_auth,
+            |client, url| client.get(url),
+            format!("{request_origin}/api/desktop/video/create"),
+        )
+        .await
+        .unwrap();
+        assert!(response.status().is_success());
+        tokio::time::timeout(std::time::Duration::from_secs(3), server)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            context
+                .request_authority(&origin, &auth("bob", "b"))
+                .is_err()
+        );
+        assert!(
+            context
+                .request_authority("https://other.invalid", &live)
+                .is_err()
+        );
+        let upload = UploadRequestContext::new(origin.clone(), "alice".into()).unwrap();
+        let (_, auth) = upload.request_authority(&origin, &live).unwrap();
+        assert!(
+            matches!(&auth.secret, AuthSecret::ApiKey { api_key } if api_key == "fixture-replacement-key")
+        );
+    }
 
     #[test]
     fn upload_request_errors_do_not_expose_signed_urls() {

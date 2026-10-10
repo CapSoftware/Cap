@@ -277,9 +277,10 @@ impl SegmentedVideoEncoder {
             "FFmpeg DASH muxer state after write_header()"
         );
 
+        let encoded = encoder.conversion_requirements();
         let codec_info = CodecInfo {
-            width: video_config.width,
-            height: video_config.height,
+            width: encoded.output_width,
+            height: encoded.output_height,
             frame_rate_num: video_config.frame_rate.0,
             frame_rate_den: video_config.frame_rate.1,
             time_base_num: video_config.time_base.0,
@@ -773,6 +774,65 @@ mod tests {
             }
         }
         frame
+    }
+
+    #[test]
+    fn manifest_dimensions_match_encoded_stream_after_scaling() {
+        ffmpeg::init().unwrap();
+        for (input_size, output_size, expected) in [
+            ((1920, 1080), Some((1280, 720)), (1280, 720)),
+            ((320, 240), None, (320, 240)),
+            ((320, 240), Some((160, 120)), (160, 120)),
+            ((240, 320), Some((120, 160)), (120, 160)),
+            ((320, 240), Some((159, 119)), (158, 118)),
+            ((321, 241), None, (320, 240)),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let base = directory.path().to_path_buf();
+            let mut input = test_video_info();
+            input.width = input_size.0;
+            input.height = input_size.1;
+            let mut encoder = SegmentedVideoEncoder::init(
+                base.clone(),
+                input,
+                SegmentedVideoEncoderConfig {
+                    output_size,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let initial: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(base.join("manifest.json")).unwrap())
+                    .unwrap();
+            assert_eq!(initial["is_complete"], false);
+            assert_eq!(initial["codec_info"]["width"], expected.0);
+            assert_eq!(initial["codec_info"]["height"], expected.1);
+            for frame_index in 0..36 {
+                encoder
+                    .queue_frame(
+                        create_test_frame(input_size.0, input_size.1),
+                        Duration::from_micros(frame_index * 33_333),
+                    )
+                    .unwrap();
+            }
+            encoder.finish().unwrap();
+            drop(encoder);
+            let encoded = ffmpeg::format::input(&base.join(INIT_SEGMENT_NAME)).unwrap();
+            let stream = encoded.streams().best(ffmpeg::media::Type::Video).unwrap();
+            let decoder = ffmpeg::codec::context::Context::from_parameters(stream.parameters())
+                .unwrap()
+                .decoder()
+                .video()
+                .unwrap();
+            assert_eq!((decoder.width(), decoder.height()), expected);
+            let final_manifest: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(base.join("manifest.json")).unwrap())
+                    .unwrap();
+            assert_eq!(final_manifest["is_complete"], true);
+            assert_eq!(final_manifest["codec_info"]["width"], decoder.width());
+            assert_eq!(final_manifest["codec_info"]["height"], decoder.height());
+            assert!(!final_manifest["segments"].as_array().unwrap().is_empty());
+        }
     }
 
     #[test]

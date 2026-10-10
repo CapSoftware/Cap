@@ -1,5 +1,5 @@
 use super::*;
-use crate::{auth::AuthStore, web_api::UploadRequestContext};
+use crate::web_api::UploadRequestContext;
 use futures::FutureExt;
 use std::{io::Write, sync::atomic::AtomicBool};
 
@@ -73,23 +73,27 @@ fn write(directory: &Path, intent: &Intent) -> Result<(), AuthedApiError> {
     result.map_err(|error| format!("Could not save upload intent: {error}").into())
 }
 
-pub(crate) async fn prepare(
+pub(crate) async fn prepare_bound(
     app: &AppHandle,
     directory: &Path,
     video_id: &str,
     required_audio: bool,
+    context: &UploadRequestContext,
 ) -> Result<Arc<Session>, AuthedApiError> {
-    let server_url = app.make_app_url("").await.trim_end_matches('/').to_string();
-    let owner_id = AuthStore::get(app)
-        .map_err(AuthedApiError::AuthStore)?
-        .and_then(|auth| auth.user_id);
-    let context = UploadRequestContext::new(
-        server_url.clone(),
-        owner_id
-            .clone()
-            .ok_or(AuthedApiError::InvalidAuthentication)?,
-    )?;
     context.check(app).await?;
+    persist_prepared_session(directory, video_id, required_audio, context)
+}
+
+fn persist_prepared_session(
+    directory: &Path,
+    video_id: &str,
+    required_audio: bool,
+    context: &UploadRequestContext,
+) -> Result<Arc<Session>, AuthedApiError> {
+    let owner_id = context
+        .owner_id()
+        .filter(|owner| !owner.is_empty())
+        .ok_or(AuthedApiError::InvalidAuthentication)?;
     let lock = acquire_upload_lock(directory)?;
     if read(directory)?.is_some() {
         return Err("Recording already has an upload identity".into());
@@ -99,8 +103,8 @@ pub(crate) async fn prepare(
         &Intent {
             version: 1,
             video_id: video_id.into(),
-            server_url,
-            owner_id,
+            server_url: context.server_url().to_string(),
+            owner_id: Some(owner_id.to_string()),
             required_audio: Some(required_audio),
             local_ready: false,
             cancelled: false,
@@ -1229,6 +1233,63 @@ pub(crate) async fn shutdown() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prepared_session_persists_the_bound_identity_without_credentials_and_reloads_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let auth = serde_json::from_value(serde_json::json!({
+            "user_id":"bound-owner", "secret":{"api_key":"fixture-private-credential"}, "plan":null
+        }))
+        .unwrap();
+        let context =
+            UploadRequestContext::for_admission("https://bound.invalid".into(), Arc::new(auth))
+                .unwrap();
+        let session =
+            persist_prepared_session(directory.path(), "bound-video", true, &context).unwrap();
+        let raw = std::fs::read_to_string(directory.path().join(FILE_NAME)).unwrap();
+        assert!(!raw.contains("fixture-private-credential"));
+        assert!(!raw.contains("secret"));
+        let saved = read(directory.path()).unwrap().unwrap();
+        assert_eq!(saved.owner_id.as_deref(), Some("bound-owner"));
+        assert_eq!(saved.server_url, "https://bound.invalid");
+        assert_eq!(saved.video_id, "bound-video");
+        assert_eq!(saved.required_audio, Some(true));
+        assert!(!saved.local_ready);
+        drop(session);
+        let lock = acquire_upload_lock(directory.path()).unwrap();
+        let resumed = Session::new(lock.project_path().to_path_buf(), "bound-video".into());
+        resumed.adopt(lock).unwrap();
+        let restored = resumed.context().unwrap();
+        assert_eq!(restored.owner_id(), Some("bound-owner"));
+        assert_eq!(restored.server_url(), "https://bound.invalid");
+        drop(resumed);
+        let replacement =
+            UploadRequestContext::new("https://other.invalid".into(), "other-owner".into())
+                .unwrap();
+        assert!(
+            persist_prepared_session(directory.path(), "replacement", false, &replacement).is_err()
+        );
+        let unchanged = read(directory.path()).unwrap().unwrap();
+        assert_eq!(unchanged.owner_id.as_deref(), Some("bound-owner"));
+        assert_eq!(unchanged.video_id, "bound-video");
+    }
+
+    #[test]
+    fn credential_only_creation_cannot_persist_an_ownerless_recording_session() {
+        let directory = tempfile::tempdir().unwrap();
+        let auth = serde_json::from_value(serde_json::json!({
+            "user_id":null, "secret":{"api_key":"fixture-only"}, "plan":null
+        }))
+        .unwrap();
+        let context =
+            UploadRequestContext::for_admission("https://bound.invalid".into(), Arc::new(auth))
+                .unwrap();
+        assert!(matches!(
+            persist_prepared_session(directory.path(), "video", false, &context),
+            Err(AuthedApiError::InvalidAuthentication)
+        ));
+        assert!(!directory.path().join(FILE_NAME).exists());
+    }
 
     fn project() -> (tempfile::TempDir, Arc<Session>) {
         let directory = tempfile::tempdir().unwrap();

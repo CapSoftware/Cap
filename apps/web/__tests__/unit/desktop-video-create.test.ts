@@ -6,6 +6,7 @@ import {
 	Video,
 } from "@cap/web-domain";
 import { Effect, Option } from "effect";
+import { after } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const deletion = vi.hoisted(() => ({
@@ -92,6 +93,7 @@ vi.mock("@cap/web-backend", async () => {
 		Storage: {
 			getOrganizationWritableAccess: vi.fn(),
 			getS3WritableAccessForUser: vi.fn(),
+			getWritableAccessForUser: vi.fn(),
 		},
 	};
 });
@@ -129,6 +131,8 @@ vi.mock("@/lib/google-drive-storage-quota", () => ({
 vi.mock("@/lib/live-transcribe", () => ({
 	maybeStartLiveTranscription: vi.fn(async () => "skipped"),
 }));
+
+vi.mock("next/server", () => ({ after: vi.fn() }));
 
 vi.mock("drizzle-orm", () => ({
 	and: vi.fn((...args: unknown[]) => args),
@@ -179,13 +183,16 @@ function stubStorage() {
 		Storage.getOrganizationWritableAccess as ReturnType<typeof vi.fn>;
 	const getS3WritableAccessForUser =
 		Storage.getS3WritableAccessForUser as ReturnType<typeof vi.fn>;
+	const getWritableAccessForUser =
+		Storage.getWritableAccessForUser as ReturnType<typeof vi.fn>;
 	getOrganizationWritableAccess.mockReturnValue(Effect.succeed(Option.none()));
-	getS3WritableAccessForUser.mockReturnValue(
-		Effect.succeed({
-			bucketId: Option.some("bucket-1"),
-			storageIntegrationId: Option.none(),
-		}),
-	);
+	const writable = Effect.succeed({
+		access: { provider: "s3" },
+		bucketId: Option.some("bucket-1"),
+		storageIntegrationId: Option.none(),
+	});
+	getS3WritableAccessForUser.mockReturnValue(writable);
+	getWritableAccessForUser.mockReturnValue(writable);
 }
 
 describe("GET /new-id", () => {
@@ -665,5 +672,275 @@ describe("GET /create", () => {
 		expect(response.status).toBe(400);
 		expect(await response.json()).toEqual({ error: "invalid_video_id" });
 		expect(mockDb.insert).not.toHaveBeenCalled();
+	});
+});
+
+describe("GET /create storage destination", () => {
+	let app: typeof import("@/app/api/desktop/[...route]/video")["app"];
+	const getWritableAccessForUser =
+		Storage.getWritableAccessForUser as ReturnType<typeof vi.fn>;
+	const getS3WritableAccessForUser =
+		Storage.getS3WritableAccessForUser as ReturnType<typeof vi.fn>;
+
+	beforeEach(async () => {
+		vi.clearAllMocks();
+		resetMockDb();
+		stubStorage();
+		defaultSharing.getNewVideoPublic.mockResolvedValue(true);
+		mockGetCurrentUser.mockResolvedValue({
+			id: "user-1",
+			email: "someone@cap.test",
+			defaultOrgId: "org-1",
+			activeOrganizationId: "org-1",
+		});
+		app = (await import("@/app/api/desktop/[...route]/video")).app;
+	});
+
+	function stubOrganizations() {
+		mockDb.where
+			.mockResolvedValueOnce([
+				{ id: "org-1", name: "Personal", createdAt: new Date(0) },
+			])
+			.mockResolvedValueOnce([
+				{ id: "org-2", name: "Team", createdAt: new Date(1) },
+			])
+			.mockResolvedValueOnce([{ count: 5 }]);
+	}
+
+	it.each([
+		{
+			name: "managed default S3",
+			provider: "s3",
+			bucketId: Option.none(),
+			storageIntegrationId: Option.none(),
+			usesDefaultStorage: true,
+		},
+		{
+			name: "custom S3",
+			provider: "s3",
+			bucketId: Option.some("custom-bucket"),
+			storageIntegrationId: Option.none(),
+			usesDefaultStorage: false,
+		},
+		{
+			name: "Google Drive",
+			provider: "googleDrive",
+			bucketId: Option.none(),
+			storageIntegrationId: Option.some("drive-1"),
+			usesDefaultStorage: false,
+		},
+		{
+			name: "an unknown provider without custom identifiers",
+			provider: "future-storage",
+			bucketId: Option.none(),
+			storageIntegrationId: Option.none(),
+			usesDefaultStorage: false,
+		},
+		{
+			name: "missing provider metadata",
+			provider: undefined,
+			bucketId: Option.none(),
+			storageIntegrationId: Option.none(),
+			usesDefaultStorage: false,
+		},
+		{
+			name: "contradictory S3 and Drive identifiers",
+			provider: "s3",
+			bucketId: Option.none(),
+			storageIntegrationId: Option.some("drive-1"),
+			usesDefaultStorage: false,
+		},
+	])(
+		"reports the selected $name destination without exposing access details",
+		async ({
+			provider,
+			bucketId,
+			storageIntegrationId,
+			usesDefaultStorage,
+		}) => {
+			stubOrganizations();
+			getWritableAccessForUser.mockReturnValue(
+				Effect.succeed({
+					access: { provider, credential: "fixture-only-secret" },
+					bucketId,
+					storageIntegrationId,
+				}),
+			);
+
+			const response = await app.request(
+				"https://cap.test/create?orgId=org-2&recordingMode=desktopSegments",
+				{
+					headers: { "X-Cap-Desktop-Features": "googleDriveUpload" },
+				},
+			);
+
+			expect(response.status).toBe(200);
+			expect(await response.json()).toEqual({
+				id: expect.any(String),
+				usesDefaultStorage,
+				user_id: "user-1",
+				aws_region: "n/a",
+				aws_bucket: "n/a",
+			});
+			expect(getWritableAccessForUser).toHaveBeenCalledExactlyOnceWith(
+				"user-1",
+				"org-2",
+			);
+			expect(getS3WritableAccessForUser).not.toHaveBeenCalled();
+			expect(insertedValues(schema.videos)).toMatchObject({
+				orgId: "org-2",
+				bucket: Option.getOrNull(bucketId),
+				storageIntegrationId: Option.getOrNull(storageIntegrationId),
+			});
+			expect(after).toHaveBeenCalledOnce();
+		},
+	);
+
+	it("uses the resolved default organization when the requested organization is stale", async () => {
+		stubOrganizations();
+		getWritableAccessForUser.mockImplementation((_userId, organizationId) =>
+			Effect.succeed({
+				access: { provider: "s3" },
+				bucketId:
+					organizationId === "org-1"
+						? Option.none()
+						: Option.some("other-org-bucket"),
+				storageIntegrationId: Option.none(),
+			}),
+		);
+
+		const response = await app.request(
+			"https://cap.test/create?orgId=removed",
+			{
+				headers: { "X-Cap-Desktop-Features": "googleDriveUpload" },
+			},
+		);
+
+		expect(response.status).toBe(200);
+		expect(await response.json()).toMatchObject({ usesDefaultStorage: true });
+		expect(getWritableAccessForUser).toHaveBeenCalledExactlyOnceWith(
+			"user-1",
+			"org-1",
+		);
+		expect(insertedValues(schema.videos)).toMatchObject({
+			orgId: "org-1",
+			bucket: null,
+			storageIntegrationId: null,
+		});
+	});
+
+	it("uses the actual S3 fallback selected for a client without Drive support", async () => {
+		stubOrganizations();
+		getWritableAccessForUser.mockReturnValue(
+			Effect.succeed({
+				access: { provider: "googleDrive" },
+				bucketId: Option.none(),
+				storageIntegrationId: Option.some("personal-drive"),
+			}),
+		);
+		getS3WritableAccessForUser.mockReturnValue(
+			Effect.succeed({
+				access: { provider: "s3" },
+				bucketId: Option.none(),
+				storageIntegrationId: Option.none(),
+			}),
+		);
+
+		const response = await app.request("https://cap.test/create");
+
+		expect(response.status).toBe(200);
+		expect(await response.json()).toMatchObject({ usesDefaultStorage: true });
+		expect(getS3WritableAccessForUser).toHaveBeenCalledExactlyOnceWith(
+			"user-1",
+			"org-1",
+		);
+		expect(getWritableAccessForUser).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		{
+			name: "managed default",
+			bucket: null,
+			storageIntegrationId: null,
+			expected: true,
+		},
+		{
+			name: "custom S3",
+			bucket: "bucket-1",
+			storageIntegrationId: null,
+			expected: false,
+		},
+		{
+			name: "Drive",
+			bucket: null,
+			storageIntegrationId: "drive-1",
+			expected: false,
+		},
+		{
+			name: "missing bucket metadata",
+			bucket: undefined,
+			storageIntegrationId: null,
+			expected: false,
+		},
+		{
+			name: "missing integration metadata",
+			bucket: null,
+			storageIntegrationId: undefined,
+			expected: false,
+		},
+		{
+			name: "empty bucket metadata",
+			bucket: "",
+			storageIntegrationId: null,
+			expected: false,
+		},
+	])(
+		"resumes $name from the persisted video destination",
+		async ({ bucket, storageIntegrationId, expected }) => {
+			mockDb.where.mockResolvedValueOnce([
+				{
+					id: "existing-video",
+					ownerId: "user-1",
+					orgId: "old-org",
+					bucket,
+					storageIntegrationId,
+					isScreenshot: false,
+					source: { type: "desktopSegments" },
+				},
+			]);
+
+			const response = await app.request(
+				"https://cap.test/create?videoId=existing-video&orgId=org-2",
+			);
+
+			expect(response.status).toBe(200);
+			expect(await response.json()).toMatchObject({
+				id: "existing-video",
+				usesDefaultStorage: expected,
+			});
+			expect(getWritableAccessForUser).not.toHaveBeenCalled();
+			expect(getS3WritableAccessForUser).not.toHaveBeenCalled();
+			expect(mockDb.insert).not.toHaveBeenCalled();
+			expect(after).toHaveBeenCalledOnce();
+		},
+	);
+
+	it("does not reveal another user's existing destination", async () => {
+		mockDb.where.mockResolvedValueOnce([
+			{
+				id: "existing-video",
+				ownerId: "someone-else",
+				bucket: null,
+				storageIntegrationId: null,
+			},
+		]);
+
+		const response = await app.request(
+			"https://cap.test/create?videoId=existing-video",
+		);
+
+		expect(response.status).toBe(403);
+		expect(await response.json()).toEqual({ error: "forbidden" });
+		expect(getWritableAccessForUser).not.toHaveBeenCalled();
 	});
 });

@@ -1911,7 +1911,7 @@ impl PipelineBuildScope {
         Self::with_lifetime(false)
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(test, target_os = "macos"))]
     pub(crate) fn new_macos_segment() -> Self {
         Self::with_lifetime_policy(false, false, false)
     }
@@ -7022,6 +7022,104 @@ mod tests {
             }
         }
 
+        async fn strict_primed_pipeline(
+            gate: &RecordingStartGate,
+            path: PathBuf,
+            receiver: flume::Receiver<StaticFrame>,
+            sent: Arc<std::sync::Mutex<Vec<Duration>>>,
+        ) -> OutputPipeline {
+            tokio::time::timeout(
+                Duration::from_secs(2),
+                OutputPipeline::builder(path)
+                    .with_video::<ChannelVideoSource<StaticFrame>>(ChannelVideoSourceConfig::new(
+                        VideoInfo::from_raw(cap_media_info::RawVideoFormat::Bgra, 16, 16, 30),
+                        receiver,
+                    ))
+                    .with_timestamps(Timestamps::now())
+                    .with_start_gate(Some(gate.clone()))
+                    .build::<ObservedMuxer>(sent),
+            )
+            .await
+            .expect("closed admission must not block pipeline startup")
+            .unwrap()
+        }
+
+        #[tokio::test]
+        async fn strict_pipeline_starts_closed_and_releases_static_frame_only_after_admission() {
+            let temp_dir = tempfile::tempdir().unwrap();
+            let gate = RecordingStartGate::explicit_admission();
+            let (sender, receiver) = flume::bounded(8);
+            let sent = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let mut pipeline = strict_primed_pipeline(
+                &gate,
+                temp_dir.path().join("strict-primed.mp4"),
+                receiver,
+                sent.clone(),
+            )
+            .await;
+
+            sender
+                .send_async(StaticFrame {
+                    timestamp: Timestamp::Instant(Instant::now()),
+                })
+                .await
+                .unwrap();
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            assert!(!gate.is_armed());
+            assert!(sent.lock().unwrap().is_empty());
+            assert!(pipeline.first_timestamp_rx.try_recv().unwrap().is_none());
+
+            let armed = Timestamps::now();
+            assert!(gate.arm_at(armed));
+            tokio::time::timeout(Duration::from_secs(2), async {
+                while sent.lock().unwrap().is_empty() {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .expect("a static priming frame must be released after explicit admission");
+            let outcome = pipeline.stop().await.unwrap();
+            match outcome.first_timestamp {
+                Timestamp::Instant(instant) => assert_eq!(instant, armed.instant()),
+                other => panic!("unexpected first timestamp {other:?}"),
+            }
+            assert_eq!(sent.lock().unwrap().first(), Some(&Duration::ZERO));
+        }
+
+        #[tokio::test]
+        async fn strict_pipeline_cancel_before_admission_never_outputs_held_or_queued_frames() {
+            let temp_dir = tempfile::tempdir().unwrap();
+            let gate = RecordingStartGate::explicit_admission();
+            let (sender, receiver) = flume::bounded(8);
+            let sent = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let pipeline = strict_primed_pipeline(
+                &gate,
+                temp_dir.path().join("strict-cancelled.mp4"),
+                receiver,
+                sent.clone(),
+            )
+            .await;
+            for _ in 0..8 {
+                sender
+                    .send_async(StaticFrame {
+                        timestamp: Timestamp::Instant(Instant::now()),
+                    })
+                    .await
+                    .unwrap();
+            }
+            let outcome = tokio::time::timeout(Duration::from_secs(5), pipeline.stop())
+                .await
+                .expect("cancelling an unadmitted pipeline must finish")
+                .unwrap();
+            assert_eq!(outcome.video_frame_count, 0);
+            assert!(outcome.video_timestamp_span.is_none());
+            assert!(sent.lock().unwrap().is_empty());
+            assert!(!gate.is_armed());
+            assert!(gate.arm());
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            assert!(sent.lock().unwrap().is_empty());
+        }
+
         async fn record_static_capture(startup_delay: Duration) -> (Vec<Duration>, Duration) {
             let temp_dir = tempfile::tempdir().unwrap();
             let clock = Timestamps::now();
@@ -8863,7 +8961,6 @@ mod build_scope_tests {
         MuxerSetup,
         MuxerPending,
         VideoStart,
-        #[cfg(target_os = "macos")]
         VideoStartPending,
         #[cfg(windows)]
         VideoStop,
@@ -8945,7 +9042,6 @@ mod build_scope_tests {
                 if self.probe.stage == FailureStage::VideoStart {
                     anyhow::bail!("video start fault");
                 }
-                #[cfg(target_os = "macos")]
                 if self.probe.stage == FailureStage::VideoStartPending {
                     self.probe.setup_pending.notified().await;
                 }
@@ -9232,7 +9328,6 @@ mod build_scope_tests {
         assert_eq!(probe.stopped.load(Ordering::Acquire), 1);
     }
 
-    #[cfg(target_os = "macos")]
     #[tokio::test]
     async fn macos_segment_startup_keeps_video_start_concurrent() {
         let scope = PipelineBuildScope::new_macos_segment();
