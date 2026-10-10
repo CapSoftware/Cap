@@ -3,6 +3,10 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { buildMarketingMetadata } from "@/lib/og/url";
 import {
+	LAST_TAURI_VERSION,
+	nativeDesktopReleaseIsLive,
+} from "@/utils/native-release";
+import {
 	getGitHubReleases,
 	hasDownloads,
 	type Release,
@@ -19,8 +23,6 @@ export const metadata: Metadata = buildMarketingMetadata({
 });
 
 export const revalidate = 60;
-
-const LAST_TAURI_VERSION = "0.6.0";
 
 function DownloadLinks({
 	downloads,
@@ -200,9 +202,11 @@ function LinuxIcon() {
 function ReleaseRow({
 	release,
 	isLatest,
+	nativeReleaseLive,
 }: {
 	release: Release;
 	isLatest: boolean;
+	nativeReleaseLive: boolean;
 }) {
 	return (
 		<div
@@ -219,7 +223,7 @@ function ReleaseRow({
 							Latest
 						</span>
 					)}
-					{release.version === LAST_TAURI_VERSION && (
+					{nativeReleaseLive && release.version === LAST_TAURI_VERSION && (
 						<span className="px-2 py-0.5 text-xs font-medium whitespace-nowrap rounded-full border border-gray-5 bg-gray-2 text-gray-11">
 							Last Tauri version
 						</span>
@@ -252,6 +256,8 @@ export default async function VersionsPage() {
 		error = e instanceof Error ? e.message : "Failed to fetch releases";
 	}
 
+	const nativeReleaseLive = nativeDesktopReleaseIsLive(releases);
+
 	return (
 		<div className="py-24 md:py-32 wrapper wrapper-sm">
 			<div className="space-y-6">
@@ -280,17 +286,19 @@ export default async function VersionsPage() {
 					</p>
 				</div>
 
-				<div className="p-4 rounded-lg border border-gray-5 bg-gray-2">
-					<h2 className="text-sm font-medium text-gray-12">
-						Cap is now a fully native app
-					</h2>
-					<p className="mt-1 text-sm leading-6 text-gray-11">
-						From 0.6.1, Cap is built natively for macOS, Windows, and Linux.
-						Version {LAST_TAURI_VERSION} is the last release of the original
-						app, which was built with Tauri. It stays available below, along
-						with every earlier version.
-					</p>
-				</div>
+				{nativeReleaseLive && (
+					<div className="p-4 rounded-lg border border-gray-5 bg-gray-2">
+						<h2 className="text-sm font-medium text-gray-12">
+							Cap is now a fully native app
+						</h2>
+						<p className="mt-1 text-sm leading-6 text-gray-11">
+							From 0.6.1, Cap is built natively for macOS, Windows, and Linux.
+							Version {LAST_TAURI_VERSION} is the last release of the original
+							app, which was built with Tauri. It stays available below, along
+							with every earlier version.
+						</p>
+					</div>
+				)}
 
 				{error ? (
 					<div className="p-4 rounded-lg border border-red-5 bg-red-2 text-red-11">
@@ -307,6 +315,7 @@ export default async function VersionsPage() {
 								key={release.tagName}
 								release={release}
 								isLatest={index === 0}
+								nativeReleaseLive={nativeReleaseLive}
 							/>
 						))}
 					</div>

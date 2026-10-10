@@ -10,6 +10,7 @@ import {
 	CAP_CHROME_EXTENSION_URL,
 	CHROME_EXTENSION_BUTTON_CLASS,
 } from "@/lib/chrome-extension";
+import { LAST_TAURI_VERSION } from "@/utils/native-release";
 import {
 	getDownloadButtonText,
 	getDownloadUrl,
@@ -17,8 +18,6 @@ import {
 	getVersionText,
 	PlatformIcons,
 } from "@/utils/platform";
-
-const LAST_TAURI_VERSION = "0.6.0";
 
 const BADGE_LOOP =
 	"M 22 33 C 19 15, 84 7, 150 7.5 C 222 8, 289 14, 287 31 C 285 49, 214 55, 146 54 C 78 53, 12 47, 14 29 C 15.5 18, 44 10.5, 76 9";
@@ -125,7 +124,11 @@ function InkUnderline({
 	);
 }
 
-export const DownloadPage = () => {
+export const DownloadPage = ({
+	nativeReleaseLive = false,
+}: {
+	nativeReleaseLive?: boolean;
+}) => {
 	const { platform, isIntel } = useDetectPlatform();
 	const [copiedCliCommand, setCopiedCliCommand] = useState(false);
 	const boil = useId().replace(/[^a-zA-Z0-9_-]/g, "");
@@ -163,19 +166,28 @@ export const DownloadPage = () => {
 
 	return (
 		<div className="py-32 md:py-40 wrapper wrapper-sm">
-			<BoilFilter id={boil} />
+			{nativeReleaseLive && <BoilFilter id={boil} />}
 			<div className="space-y-4 text-center">
-				<div className="flex justify-center items-center h-8 fade-in-down">
-					<NativeAnnouncement boil={boil} />
-				</div>
+				{nativeReleaseLive && (
+					<div className="flex justify-center items-center h-8 fade-in-down">
+						<NativeAnnouncement boil={boil} />
+					</div>
+				)}
 				<h1 className="text-2xl fade-in-down animate-delay-1 md:text-4xl">
 					Download Cap
 				</h1>
-				<p className="px-4 mx-auto max-w-xl text-sm fade-in-down text-gray-11 animate-delay-2 md:text-base md:px-0">
-					The quickest way to share your screen, now a{" "}
-					<InkUnderline boil={boil}>fully native app</InkUnderline>. It opens
-					faster and stays light on your computer while you record.
-				</p>
+				{nativeReleaseLive ? (
+					<p className="px-4 mx-auto max-w-xl text-sm fade-in-down text-gray-11 animate-delay-2 md:text-base md:px-0">
+						The quickest way to share your screen, now a{" "}
+						<InkUnderline boil={boil}>fully native app</InkUnderline>. It opens
+						faster and stays light on your computer while you record.
+					</p>
+				) : (
+					<p className="px-4 text-sm fade-in-down text-gray-11 animate-delay-2 md:text-base md:px-0">
+						The quickest way to share your screen. Pin to your dock or taskbar
+						and record in seconds.
+					</p>
+				)}
 				<div className="flex flex-col justify-center items-center space-y-4 fade-in-up animate-delay-2">
 					<div className="flex flex-col items-center space-y-4">
 						<div className="flex flex-col gap-3 justify-center items-center w-full sm:flex-row sm:gap-4">
@@ -210,23 +222,25 @@ export const DownloadPage = () => {
 							{getVersionText(platform)}
 						</div>
 
-						<p className="text-xs text-gray-10">
-							Looking for the original app?{" "}
-							<Link
-								href={`/download/versions#v${LAST_TAURI_VERSION}`}
-								onClick={() =>
-									trackDownloadClick(
-										"last_tauri_version",
-										"/download/versions",
-										"tauri_app",
-									)
-								}
-								className="underline underline-offset-2 hover:text-gray-12"
-							>
-								Cap {LAST_TAURI_VERSION}
-							</Link>{" "}
-							is still available.
-						</p>
+						{nativeReleaseLive && (
+							<p className="text-xs text-gray-10">
+								Looking for the original app?{" "}
+								<Link
+									href={`/download/versions#v${LAST_TAURI_VERSION}`}
+									onClick={() =>
+										trackDownloadClick(
+											"last_tauri_version",
+											"/download/versions",
+											"tauri_app",
+										)
+									}
+									className="underline underline-offset-2 hover:text-gray-12"
+								>
+									Cap {LAST_TAURI_VERSION}
+								</Link>{" "}
+								is still available.
+							</p>
+						)}
 
 						{/* Windows SmartScreen video and instructions */}
 						{platform === "windows" && (
