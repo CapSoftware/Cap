@@ -10,6 +10,50 @@ use ffmpeg::{
     frame,
 };
 
+pub trait PacketSink {
+    fn stream_time_base(&self, stream_index: usize) -> Rational;
+    fn write_packet(&mut self, packet: Packet) -> Result<(), ffmpeg::Error>;
+}
+
+impl PacketSink for format::context::Output {
+    fn stream_time_base(&self, stream_index: usize) -> Rational {
+        self.stream(stream_index).unwrap().time_base()
+    }
+
+    fn write_packet(&mut self, packet: Packet) -> Result<(), ffmpeg::Error> {
+        packet.write_interleaved(self)
+    }
+}
+
+pub struct PacketQueue {
+    stream_time_base: Rational,
+    packets: Vec<Packet>,
+}
+
+impl PacketQueue {
+    pub fn new(stream_time_base: Rational) -> Self {
+        Self {
+            stream_time_base,
+            packets: Vec::new(),
+        }
+    }
+
+    pub fn take(&mut self) -> Vec<Packet> {
+        std::mem::take(&mut self.packets)
+    }
+}
+
+impl PacketSink for PacketQueue {
+    fn stream_time_base(&self, _stream_index: usize) -> Rational {
+        self.stream_time_base
+    }
+
+    fn write_packet(&mut self, packet: Packet) -> Result<(), ffmpeg::Error> {
+        self.packets.push(packet);
+        Ok(())
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EncodedPacket {
     pub bytes: u64,
@@ -141,10 +185,10 @@ impl EncoderBase {
         }
     }
 
-    pub fn send_frame(
+    pub fn send_frame<S: PacketSink + ?Sized>(
         &mut self,
         frame: &frame::Frame,
-        output: &mut format::context::Output,
+        output: &mut S,
         encoder: &mut encoder::encoder::Encoder,
     ) -> Result<(), ffmpeg::Error> {
         encoder.send_frame(frame)?;
@@ -152,16 +196,16 @@ impl EncoderBase {
         self.process_packets(output, encoder)
     }
 
-    fn process_packets(
+    fn process_packets<S: PacketSink + ?Sized>(
         &mut self,
-        output: &mut format::context::Output,
+        output: &mut S,
         encoder: &mut encoder::encoder::Encoder,
     ) -> Result<(), ffmpeg::Error> {
         while packet_available(encoder.receive_packet(&mut self.packet))? {
             self.packet.set_stream(self.stream_index);
             self.packet.rescale_ts(
                 encoder.time_base(),
-                output.stream(self.stream_index).unwrap().time_base(),
+                output.stream_time_base(self.stream_index),
             );
 
             match (self.packet.pts(), self.packet.dts()) {
@@ -173,7 +217,7 @@ impl EncoderBase {
             let duration_synthesized = self.packet.duration() <= 0;
             if duration_synthesized
                 && let Some(duration) = nominal_packet_duration(
-                    output.stream(self.stream_index).unwrap().time_base(),
+                    output.stream_time_base(self.stream_index),
                     encoder.frame_rate(),
                 )
             {
@@ -211,7 +255,7 @@ impl EncoderBase {
                 {
                     previous.set_duration(cur_dts - prev_dts);
                 }
-                previous.write_interleaved(output)?;
+                output.write_packet(previous)?;
             }
             self.held_packet = Some((current, duration_synthesized));
         }
@@ -219,9 +263,9 @@ impl EncoderBase {
         Ok(())
     }
 
-    pub fn process_eof(
+    pub fn process_eof<S: PacketSink + ?Sized>(
         &mut self,
-        output: &mut format::context::Output,
+        output: &mut S,
         encoder: &mut encoder::encoder::Encoder,
     ) -> Result<(), ffmpeg::Error> {
         encoder.send_eof()?;
@@ -229,7 +273,7 @@ impl EncoderBase {
         self.process_packets(output, encoder)?;
 
         if let Some((previous, _)) = self.held_packet.take() {
-            previous.write_interleaved(output)?;
+            output.write_packet(previous)?;
         }
 
         Ok(())
