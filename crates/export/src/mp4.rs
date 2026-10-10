@@ -515,7 +515,7 @@ impl Mp4ExportSettings {
                 if encoder_cancellation.as_ref().is_some_and(|cancel| cancel.load(Ordering::Relaxed)) || encoder_user_cancellation.as_ref().is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
                     return Err(Mp4PipelineError::Interrupted);
                 }
-                if let Some(worker) = &audio_worker {
+                if let Some(worker) = &mut audio_worker {
                     worker.request(input.frame_number, input.timeline_frame);
                 }
 
@@ -930,15 +930,22 @@ struct ExportAudioJob {
     timeline_frame: u32,
 }
 
+/// How far audio may fall behind video before the encoder thread waits for
+/// it. The muxer interleaves by timestamp only within its 10 s window, so
+/// staying well inside it keeps the file identical to a single thread's.
+const AUDIO_LAG_LIMIT_SECS: u32 = 2;
+
 /// Renders and AAC-encodes each output frame's audio on its own thread, so
 /// voice enhancement and the AAC encoder run alongside video encoding
 /// instead of after it on the encoder thread. Packets come back in encoder
-/// order and the muxer interleaves them by timestamp, so the file matches
-/// what a single thread writes.
+/// order, one batch per frame, and the muxer interleaves them by timestamp.
 struct ExportAudioWorker {
     jobs: std::sync::mpsc::Sender<ExportAudioJob>,
     packets: std::sync::mpsc::Receiver<Vec<ffmpeg::Packet>>,
     thread: Option<std::thread::JoinHandle<Result<AACEncoder, Mp4PipelineError>>>,
+    requested: u32,
+    completed: u32,
+    lag_limit: u32,
 }
 
 impl ExportAudioWorker {
@@ -951,6 +958,7 @@ impl ExportAudioWorker {
     ) -> Result<Self, Mp4PipelineError> {
         let (jobs, job_rx) = std::sync::mpsc::channel::<ExportAudioJob>();
         let (packet_tx, packets) = std::sync::mpsc::channel();
+        let lag_limit = timeline.fps.max(1) * AUDIO_LAG_LIMIT_SECS;
         let thread = std::thread::Builder::new()
             .name("export-audio".to_string())
             .spawn(move || {
@@ -1036,8 +1044,7 @@ impl ExportAudioWorker {
                     }
                     last_timeline_frame = Some(job.timeline_frame);
                     rendered_frames += 1;
-                    let batch = queue.take();
-                    if !batch.is_empty() && packet_tx.send(batch).is_err() {
+                    if packet_tx.send(queue.take()).is_err() {
                         return Err(Mp4PipelineError::Interrupted);
                     }
                 }
@@ -1055,10 +1062,14 @@ impl ExportAudioWorker {
             jobs,
             packets,
             thread: Some(thread),
+            requested: 0,
+            completed: 0,
+            lag_limit,
         })
     }
 
-    fn request(&self, frame_number: u32, timeline_frame: u32) {
+    fn request(&mut self, frame_number: u32, timeline_frame: u32) {
+        self.requested += 1;
         let _ = self.jobs.send(ExportAudioJob {
             frame_number,
             timeline_frame,
@@ -1066,24 +1077,32 @@ impl ExportAudioWorker {
     }
 
     fn write_ready(&mut self, output: &mut MP4File) -> Result<(), Mp4PipelineError> {
-        for packets in self.packets.try_iter() {
+        loop {
+            let packets = if self.requested - self.completed > self.lag_limit {
+                self.packets.recv().ok()
+            } else {
+                match self.packets.try_recv() {
+                    Ok(packets) => Some(packets),
+                    Err(std::sync::mpsc::TryRecvError::Empty) => return Ok(()),
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => None,
+                }
+            };
+            // The worker only hangs up before its jobs run out when it
+            // fails; surface that now rather than after the rest of the video.
+            let Some(packets) = packets else {
+                return Err(self
+                    .thread
+                    .take()
+                    .and_then(|thread| join_audio_thread(thread).err())
+                    .unwrap_or_else(|| {
+                        Mp4PipelineError::Failure("Export audio thread stopped early".to_string())
+                    }));
+            };
+            self.completed += 1;
             output
                 .write_packets(packets)
                 .map_err(|error| Mp4PipelineError::Failure(error.to_string()))?;
         }
-        // The worker only stops before its jobs run out when it fails;
-        // surface that now rather than after the rest of the video.
-        if self
-            .thread
-            .as_ref()
-            .is_some_and(|thread| thread.is_finished())
-            && let Some(thread) = self.thread.take()
-        {
-            return Err(join_audio_thread(thread).err().unwrap_or_else(|| {
-                Mp4PipelineError::Failure("Export audio thread stopped early".to_string())
-            }));
-        }
-        Ok(())
     }
 
     fn finish(self, output: &mut MP4File) -> Result<(), Mp4PipelineError> {
@@ -1091,6 +1110,7 @@ impl ExportAudioWorker {
             jobs,
             packets,
             thread,
+            ..
         } = self;
         drop(jobs);
         for packets in packets.iter() {
