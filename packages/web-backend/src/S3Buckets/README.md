@@ -7,10 +7,12 @@ invalid location, disabled routing, or no usable regional configuration keeps th
 original path. Selection is local arithmetic: no geolocation request or extra database
 query. Custom storage and Google Drive retain priority.
 
-Supported destinations are Virginia (existing default), Oregon, Ireland, Frankfurt,
-São Paulo, Cape Town, Mumbai, Singapore, Tokyo, and Sydney. Only provisioned and
-configured regions participate. Geographic proximity does not guarantee the fastest
-network route; validate each region before adding it to the configuration.
+Supported destinations are Virginia (existing default), Ohio, Oregon, Montreal,
+Calgary, Ireland, London, Paris, Frankfurt, Stockholm, Milan, Spain, Bahrain, UAE,
+Mumbai, Hyderabad, Singapore, Malaysia, Tokyo, Osaka, Sydney, and Melbourne. São Paulo
+and Cape Town are excluded for cost. Only provisioned and configured regions
+participate. Geographic proximity does not guarantee the fastest network route;
+validate each region before adding it to the configuration.
 
 The destination is stored on the recording, not the user. Travel affects the next new
 recording; retries, processing, playback, edits, transfers, and deletion keep the
@@ -20,7 +22,7 @@ generated customer IDs. No schema migration or desktop change is needed.
 Provision a private S3 bucket and CloudFront distribution for each enabled region.
 Use the existing CloudFront signing key group, match Virginia's upload CORS rules,
 and grant the server/worker AWS identity bucket access and distribution invalidation.
-Enable opt-in AWS regions (such as Cape Town) in the account first. Configure every
+Enable opt-in AWS regions (such as UAE and Malaysia) in the account first. Configure every
 web and workflow deployment with `CAP_REGIONAL_UPLOAD_BUCKETS`, a JSON object keyed
 by supported AWS region. For example:
 

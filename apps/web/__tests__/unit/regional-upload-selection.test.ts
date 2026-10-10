@@ -12,14 +12,28 @@ describe("upload region selection", () => {
 	it.each([
 		["New York", "40.71", "-74.01", null],
 		["San Francisco", "37.77", "-122.42", "cap-oregon"],
-		["London", "51.51", "-0.13", "cap-ireland"],
+		["London", "51.51", "-0.13", "cap-london"],
 		["Berlin", "52.52", "13.41", "cap-frankfurt"],
-		["Buenos Aires", "-34.60", "-58.38", "cap-sao-paulo"],
-		["Johannesburg", "-26.20", "28.04", "cap-cape-town"],
+		["Buenos Aires", "-34.60", "-58.38", null],
+		["Johannesburg", "-26.20", "28.04", "cap-uae"],
 		["Delhi", "28.61", "77.21", "cap-mumbai"],
-		["Bangkok", "13.76", "100.50", "cap-singapore"],
+		["Bangkok", "13.76", "100.50", "cap-malaysia"],
 		["Tokyo", "35.68", "139.69", "cap-tokyo"],
-		["Melbourne", "-37.81", "144.96", "cap-sydney"],
+		["Melbourne", "-37.81", "144.96", "cap-melbourne"],
+		["Columbus", "40.10", "-83.00", "cap-ohio"],
+		["Montreal", "45.50", "-73.57", "cap-montreal"],
+		["Calgary", "51.04", "-114.07", "cap-calgary"],
+		["Paris", "48.86", "2.35", "cap-paris"],
+		["Stockholm", "59.33", "18.07", "cap-stockholm"],
+		["Milan", "45.46", "9.19", "cap-milan"],
+		["Madrid", "40.42", "-3.70", "cap-spain"],
+		["Manama", "26.22", "50.59", "cap-bahrain"],
+		["Abu Dhabi", "24.45", "54.38", "cap-uae"],
+		["Hyderabad", "17.39", "78.49", "cap-hyderabad"],
+		["Singapore", "1.35", "103.82", "cap-singapore"],
+		["Kuala Lumpur", "3.14", "101.69", "cap-malaysia"],
+		["Osaka", "34.69", "135.50", "cap-osaka"],
+		["Sydney", "-33.87", "151.21", "cap-sydney"],
 		["Fiji", "-18.14", "178.44", "cap-sydney"],
 		["Samoa", "-13.85", "-171.75", "cap-sydney"],
 	])(
@@ -104,6 +118,19 @@ describe("upload region selection", () => {
 			),
 		).toEqual([]);
 	});
+	it("does not admit the excluded high-cost regions", () => {
+		const bucket = {
+			bucket: "unused-bucket",
+			bucketUrl: "https://unused.cap.test",
+			distributionId: "EUNUSED",
+		};
+		expect(
+			parseRegionalBuckets(
+				JSON.stringify({ "sa-east-1": bucket, "af-south-1": bucket }),
+			),
+		).toEqual([]);
+	});
+
 	it("preserves valid regions when another region is misconfigured", () => {
 		const config = parseRegionalBuckets(
 			JSON.stringify({
