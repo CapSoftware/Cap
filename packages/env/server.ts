@@ -59,6 +59,10 @@ function createServerEnv() {
 				.optional()
 				.describe("Public URL of the S3 bucket"),
 			CAP_CLOUDFRONT_DISTRIBUTION_ID: z.string().optional(),
+			CAP_TOKYO_UPLOADS_ENABLED: boolString(),
+			CAP_TOKYO_BUCKET: z.string().optional(),
+			CAP_TOKYO_BUCKET_URL: z.string().optional(),
+			CAP_TOKYO_CLOUDFRONT_DISTRIBUTION_ID: z.string().optional(),
 			CLOUDFRONT_KEYPAIR_ID: z.string().optional(),
 			CLOUDFRONT_KEYPAIR_PRIVATE_KEY: z.string().optional(),
 

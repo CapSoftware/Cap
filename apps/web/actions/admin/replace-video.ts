@@ -1,4 +1,6 @@
-"use server";
+import { getVideoCloudFrontDistributionId } from "@/lib/video-cloudfront";
+
+("use server");
 
 import {
 	CloudFrontClient,
@@ -101,11 +103,7 @@ export async function invalidateVideoCache(videoId: string) {
 		await tx.delete(videoUploads).where(eq(videoUploads.videoId, video.id));
 	});
 
-	if (video.bucket) {
-		return;
-	}
-
-	const distributionId = serverEnv().CAP_CLOUDFRONT_DISTRIBUTION_ID;
+	const distributionId = getVideoCloudFrontDistributionId(video.bucket);
 	if (!distributionId) {
 		return;
 	}

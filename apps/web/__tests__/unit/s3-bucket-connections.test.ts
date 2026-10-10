@@ -1,5 +1,7 @@
+import { generateKeyPairSync } from "node:crypto";
 import { createServer, request as httpRequest } from "node:http";
 import type { Socket } from "node:net";
+import * as S3 from "@aws-sdk/client-s3";
 import { S3Bucket } from "@cap/web-domain";
 import { ConfigProvider, Effect, Layer, ManagedRuntime, Option } from "effect";
 import { describe, expect, it, vi } from "vitest";
@@ -42,7 +44,7 @@ vi.mock("@cap/web-backend/src/S3Buckets/S3BucketsRepo.ts", async () => {
 import { S3Buckets } from "@cap/web-backend/src/S3Buckets";
 import { s3ConnectionPool } from "@cap/web-backend/src/S3Buckets/S3ConnectionPool";
 
-async function storageFixture() {
+async function storageFixture(config: Record<string, string> = {}) {
 	let connections = 0;
 	const sockets = new Set<Socket>();
 	const authorizations: string[] = [];
@@ -73,6 +75,7 @@ async function storageFixture() {
 							["CAP_AWS_BUCKET", "capso"],
 							["S3_INTERNAL_ENDPOINT", endpoint],
 							["S3_PUBLIC_ENDPOINT", endpoint],
+							...Object.entries(config),
 						]),
 					),
 				),
@@ -224,6 +227,188 @@ describe("S3 connection reuse", () => {
 			}
 			expect(fixture.connections()).toBeLessThanOrEqual(2);
 		} finally {
+			await fixture.close();
+		}
+	});
+});
+
+const regionalConfig = {
+	CAP_TOKYO_UPLOADS_ENABLED: "true",
+	CAP_TOKYO_BUCKET: "cap-test-tokyo",
+	CAP_TOKYO_BUCKET_URL: "https://tokyo-cdn.cap.test",
+	CAP_TOKYO_CLOUDFRONT_DISTRIBUTION_ID: "ETOKYO",
+	CAP_CLOUDFRONT_DISTRIBUTION_ID: "EVIRGINIA",
+	CAP_AWS_BUCKET_URL: "https://cdn.cap.test",
+	CLOUDFRONT_KEYPAIR_ID: "KTEST",
+	CLOUDFRONT_KEYPAIR_PRIVATE_KEY: generateKeyPairSync("rsa", {
+		modulusLength: 2048,
+	})
+		.privateKey.export({ type: "pkcs8", format: "pem" })
+		.toString(),
+};
+
+describe("regional storage", () => {
+	it("selects per upload without I/O and keeps regional reads after routing is disabled", async () => {
+		const fixture = await storageFixture(regionalConfig);
+		const repoCalls = mocks.getById.mock.calls.length;
+		const send = vi.spyOn(S3.S3Client.prototype, "send");
+		try {
+			for (const [country, expected] of [
+				["JP", "cap-tokyo"],
+				["US", null],
+				["JP", "cap-tokyo"],
+				[undefined, null],
+				["ZZ", null],
+				["jp", null],
+			] as const) {
+				expect(
+					Option.getOrNull(fixture.service.getRegionalUploadBucketId(country)),
+				).toBe(expected);
+			}
+			const [regional] = await fixture.runtime.runPromise(
+				fixture.service.getBucketAccess(Option.some(S3Bucket.TokyoBucketId)),
+			);
+			const key = "owner/video/segments/segment_000001.m4s";
+			for (const effect of [
+				regional.getPresignedPutUrl(key),
+				regional.getInternalSignedObjectUrl(key),
+				regional.getInternalPresignedPutUrl(key),
+			]) {
+				const url = new URL(await fixture.runtime.runPromise(effect));
+				expect(url.hostname).toBe(
+					"cap-test-tokyo.s3.ap-northeast-1.amazonaws.com",
+				);
+				expect(url.pathname).toBe(`/${key}`);
+				expect(url.searchParams.get("X-Amz-Credential")).toContain(
+					"/ap-northeast-1/s3/",
+				);
+			}
+			const playback = new URL(
+				await fixture.runtime.runPromise(regional.getSignedObjectUrl(key)),
+			);
+			expect(playback.origin).toBe(regionalConfig.CAP_TOKYO_BUCKET_URL);
+			expect(playback.searchParams.get("Key-Pair-Id")).toBe("KTEST");
+			const [original] = await fixture.runtime.runPromise(
+				fixture.service.getBucketAccess(Option.none()),
+			);
+			expect(
+				new URL(
+					await fixture.runtime.runPromise(original.getSignedObjectUrl(key)),
+				).origin,
+			).toBe(regionalConfig.CAP_AWS_BUCKET_URL);
+			expect(send).not.toHaveBeenCalled();
+			expect(mocks.getById.mock.calls).toHaveLength(repoCalls);
+		} finally {
+			send.mockRestore();
+			await fixture.close();
+		}
+		const disabled = await storageFixture({
+			...regionalConfig,
+			CAP_TOKYO_UPLOADS_ENABLED: "false",
+		});
+		try {
+			expect(
+				Option.isNone(disabled.service.getRegionalUploadBucketId("JP")),
+			).toBe(true);
+			const [regional] = await disabled.runtime.runPromise(
+				disabled.service.getBucketAccess(Option.some(S3Bucket.TokyoBucketId)),
+			);
+			expect(regional.bucketName).toBe("cap-test-tokyo");
+		} finally {
+			await disabled.close();
+		}
+	});
+
+	it.each([
+		{},
+		{ CAP_TOKYO_UPLOADS_ENABLED: "true" },
+		{ ...regionalConfig, CAP_TOKYO_UPLOADS_ENABLED: "invalid" },
+		{ ...regionalConfig, CAP_TOKYO_BUCKET: "INVALID" },
+		{ ...regionalConfig, CAP_TOKYO_BUCKET_URL: "http://tokyo-cdn.cap.test" },
+		{
+			...regionalConfig,
+			CAP_TOKYO_BUCKET_URL: "https://tokyo-cdn.cap.test/path",
+		},
+		{ ...regionalConfig, CAP_TOKYO_CLOUDFRONT_DISTRIBUTION_ID: "" },
+		Object.fromEntries(
+			Object.entries(regionalConfig).filter(
+				([key]) => key !== "CLOUDFRONT_KEYPAIR_ID",
+			),
+		),
+	])(
+		"keeps the original upload endpoint when routing is unavailable (%#)",
+		async (config) => {
+			const fixture = await storageFixture({
+				...config,
+				S3_PUBLIC_ENDPOINT: "https://s3-accelerate.amazonaws.com",
+				S3_PATH_STYLE: "false",
+			});
+			try {
+				expect(
+					Option.isNone(fixture.service.getRegionalUploadBucketId("JP")),
+				).toBe(true);
+				const [original] = await fixture.runtime.runPromise(
+					fixture.service.getBucketAccess(Option.none()),
+				);
+				const url = new URL(
+					await fixture.runtime.runPromise(
+						original.getPresignedPutUrl("owner/video/result.mp4"),
+					),
+				);
+				expect(url.hostname).toBe("capso.s3-accelerate.amazonaws.com");
+				expect(url.searchParams.get("X-Amz-Credential")).toContain(
+					"/us-east-1/s3/",
+				);
+			} finally {
+				await fixture.close();
+			}
+		},
+	);
+
+	it("fails a persisted regional recording safely instead of writing to Virginia when config is lost", async () => {
+		const fixture = await storageFixture();
+		const repoCalls = mocks.getById.mock.calls.length;
+		try {
+			await expect(
+				fixture.runtime.runPromise(
+					fixture.service.getBucketAccess(Option.some(S3Bucket.TokyoBucketId)),
+				),
+			).rejects.toThrow("Tokyo storage configuration");
+			expect(mocks.getById.mock.calls).toHaveLength(repoCalls);
+		} finally {
+			await fixture.close();
+		}
+	});
+
+	it("keeps processing, copying, and cleanup commands in the persisted bucket", async () => {
+		const fixture = await storageFixture(regionalConfig);
+		const send = vi
+			.spyOn(S3.S3Client.prototype, "send")
+			.mockImplementation(async () => ({}));
+		try {
+			const [regional] = await fixture.runtime.runPromise(
+				fixture.service.getBucketAccess(Option.some(S3Bucket.TokyoBucketId)),
+			);
+			await fixture.runtime.runPromise(
+				regional.headObject("owner/video/result.mp4"),
+			);
+			await fixture.runtime.runPromise(
+				regional.copyObject(
+					"cap-test-tokyo/owner/video/result.mp4",
+					"new-owner/video/result.mp4",
+				),
+			);
+			await fixture.runtime.runPromise(
+				regional.listObjects({ prefix: "owner/video/" }),
+			);
+			await fixture.runtime.runPromise(
+				regional.deleteObjects([{ Key: "owner/video/result.mp4" }]),
+			);
+			expect(send).toHaveBeenCalledTimes(4);
+			for (const [command] of send.mock.calls)
+				expect(command.input).toHaveProperty("Bucket", "cap-test-tokyo");
+		} finally {
+			send.mockRestore();
 			await fixture.close();
 		}
 	});

@@ -1,7 +1,7 @@
 import * as S3 from "@aws-sdk/client-s3";
 import * as CloudFrontPresigner from "@aws-sdk/cloudfront-signer";
 import { decrypt } from "@cap/database/crypto";
-import type { Organisation, S3Bucket, User } from "@cap/web-domain";
+import { type Organisation, S3Bucket, type User } from "@cap/web-domain";
 import type { RequestPresigningArguments } from "@smithy/types";
 import { Config, Effect, Layer, Option } from "effect";
 
@@ -100,47 +100,99 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 			Effect.map(Option.fromNullable),
 		);
 
-		const cloudfrontBucketAccess = cloudfrontEnvs.pipe(
-			Option.map((cloudfrontEnvs) =>
-				Effect.flatMap(createS3BucketAccess, (s3) => {
-					const getCloudFrontSignedUrl = (
-						key: string,
-						signingArgs?: RequestPresigningArguments,
-					) => {
-						const url = `${cloudfrontEnvs.bucketUrl}/${key}`;
-						const expiresIn = signingArgs?.expiresIn ?? 3600;
-						const expires = Math.floor((Date.now() + expiresIn * 1000) / 1000);
+		const cloudfrontBucketAccess = (bucketUrl?: string) =>
+			cloudfrontEnvs.pipe(
+				Option.map((cloudfrontEnvs) =>
+					Effect.flatMap(createS3BucketAccess, (s3) => {
+						const getCloudFrontSignedUrl = (
+							key: string,
+							signingArgs?: RequestPresigningArguments,
+						) => {
+							const url = `${bucketUrl ?? cloudfrontEnvs.bucketUrl}/${key}`;
+							const expiresIn = signingArgs?.expiresIn ?? 3600;
+							const expires = Math.floor(
+								(Date.now() + expiresIn * 1000) / 1000,
+							);
 
-						const policy = {
-							Statement: [
-								{
-									Resource: url,
-									Condition: {
-										DateLessThan: {
-											"AWS:EpochTime": Math.floor(expires),
+							const policy = {
+								Statement: [
+									{
+										Resource: url,
+										Condition: {
+											DateLessThan: {
+												"AWS:EpochTime": Math.floor(expires),
+											},
 										},
 									},
-								},
-							],
+								],
+							};
+
+							return Effect.succeed(
+								CloudFrontPresigner.getSignedUrl({
+									url,
+									keyPairId: cloudfrontEnvs.keypairId,
+									privateKey: cloudfrontEnvs.privateKey,
+									policy: JSON.stringify(policy),
+								}),
+							);
 						};
 
-						return Effect.succeed(
-							CloudFrontPresigner.getSignedUrl({
-								url,
-								keyPairId: cloudfrontEnvs.keypairId,
-								privateKey: cloudfrontEnvs.privateKey,
-								policy: JSON.stringify(policy),
-							}),
-						);
-					};
+						return Effect.succeed<typeof s3>({
+							...s3,
+							getSignedObjectUrl: getCloudFrontSignedUrl,
+						});
+					}),
+				),
+			);
 
-					return Effect.succeed<typeof s3>({
-						...s3,
-						getSignedObjectUrl: getCloudFrontSignedUrl,
-					});
+		const tokyoConfig = yield* Config.all({
+			bucket: Config.string("CAP_TOKYO_BUCKET").pipe(
+				Config.validate({
+					message: "Invalid Tokyo bucket name",
+					validation: (value) =>
+						/^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(value),
 				}),
 			),
-		);
+			bucketUrl: Config.string("CAP_TOKYO_BUCKET_URL").pipe(
+				Config.validate({
+					message: "Tokyo CDN must be an HTTPS origin",
+					validation: (value) => {
+						try {
+							const url = new URL(value);
+							return url.protocol === "https:" && url.origin === value;
+						} catch {
+							return false;
+						}
+					},
+				}),
+			),
+			distributionId: Config.nonEmptyString(
+				"CAP_TOKYO_CLOUDFRONT_DISTRIBUTION_ID",
+			),
+		}).pipe(Effect.option);
+		const tokyoUploadsEnabled = yield* Config.boolean(
+			"CAP_TOKYO_UPLOADS_ENABLED",
+		).pipe(Effect.orElseSucceed(() => false));
+		const tokyoBucketAccess = Option.flatMap(tokyoConfig, (config) => {
+			const client = new S3.S3Client({
+				region: "ap-northeast-1",
+				credentials,
+				forcePathStyle: false,
+				requestHandler,
+			});
+			return Option.map(cloudfrontBucketAccess(config.bucketUrl), (access) =>
+				access.pipe(
+					Effect.provide(
+						Layer.succeed(S3BucketClientProvider, {
+							getInternal: Effect.succeed(client),
+							getPublic: Effect.succeed(client),
+							bucket: config.bucket,
+							isPathStyle: false,
+						}),
+					),
+				),
+			);
+		});
 
 		const getBucketAccess = Effect.fn("S3Buckets.getProviderLayer")(function* (
 			customBucket: Option.Option<S3Bucket.S3Bucket>,
@@ -154,7 +206,7 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 						isPathStyle: defaultConfigs.forcePathStyle,
 					});
 
-					return Option.match(cloudfrontBucketAccess, {
+					return Option.match(cloudfrontBucketAccess(), {
 						onSome: (access) => access,
 						onNone: () => createS3BucketAccess,
 					}).pipe(Effect.provide(provider));
@@ -183,9 +235,31 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 		});
 
 		return {
+			getRegionalUploadBucketId: (country: string | undefined) =>
+				tokyoUploadsEnabled &&
+				country === "JP" &&
+				Option.isSome(tokyoBucketAccess)
+					? Option.some(S3Bucket.TokyoBucketId)
+					: Option.none<S3Bucket.S3BucketId>(),
 			getBucketAccess: Effect.fn("S3Buckets.getBucketAccess")(function* (
 				bucketId?: Option.Option<S3Bucket.S3BucketId>,
 			) {
+				if (
+					Option.getOrNull(bucketId ?? Option.none()) === S3Bucket.TokyoBucketId
+				) {
+					const access = yield* Option.match(tokyoBucketAccess, {
+						onSome: (access) => access,
+						onNone: () =>
+							Effect.fail(
+								new S3Bucket.S3Error({
+									cause: new Error(
+										"Tokyo storage configuration is missing or invalid",
+									),
+								}),
+							),
+					});
+					return [access, Option.none<S3Bucket.S3Bucket>()] as const;
+				}
 				const customBucket = yield* (bucketId ?? Option.none()).pipe(
 					Option.map(repo.getById),
 					Effect.transposeOption,
@@ -225,6 +299,8 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 		AwsCredentials.Default,
 	],
 }) {
+	static getRegionalUploadBucketId = (country: string | undefined) =>
+		Effect.map(S3Buckets, (b) => b.getRegionalUploadBucketId(country));
 	static getBucketAccess = (bucketId: Option.Option<S3Bucket.S3BucketId>) =>
 		Effect.flatMap(S3Buckets, (b) =>
 			b.getBucketAccess(Option.fromNullable(bucketId).pipe(Option.flatten)),
