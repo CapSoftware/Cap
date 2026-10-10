@@ -251,6 +251,7 @@ fn validate_mask_samples(mask: &[f32], expected_samples: usize) -> Result<(), Bl
 struct ReadbackFrame {
     submitted_at: Instant,
     dimensions: (u32, u32),
+    #[cfg(target_os = "macos")]
     input_dimensions: (u32, u32),
 }
 
@@ -1158,6 +1159,7 @@ impl BlurProcessor {
                 Some(ReadbackFrame {
                     submitted_at,
                     dimensions,
+                    #[cfg(target_os = "macos")]
                     input_dimensions: input.dimensions,
                 })
             }
