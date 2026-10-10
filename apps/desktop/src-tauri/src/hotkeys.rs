@@ -304,13 +304,6 @@ pub fn init(app: &AppHandle) {
                     OnEscapePress.emit(app).ok();
                 }
 
-                if shortcut.key == Code::Comma && shortcut.mods == Modifiers::META {
-                    let app = app.clone();
-                    spawn_shortcut_task(async move {
-                        let _ = ShowCapWindow::Settings { page: None }.show(&app).await;
-                    });
-                }
-
                 let state = app.state::<HotkeysState>();
                 let store = state.lock().unwrap();
 
