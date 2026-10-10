@@ -5958,48 +5958,173 @@ mod style_image_tests {
 mod nv12_flush_tests {
     use super::*;
 
+    async fn nv12_test_constants(is_software_adapter: bool) -> Option<RenderVideoConstants> {
+        let instance = create_wgpu_instance_sync();
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions::default())
+            .await
+            .ok()?;
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor::default())
+            .await
+            .expect("graphics device");
+        let recording_meta: RecordingMeta = serde_json::from_value(serde_json::json!({
+            "pretty_name": "nv12-flush",
+            "display": { "path": "display.mp4", "fps": 60 },
+            "camera": null,
+            "audio": null,
+            "cursor": null
+        }))
+        .expect("recording metadata");
+        Some(RenderVideoConstants {
+            adapter_name: adapter.get_info().name,
+            _instance: instance,
+            _adapter: adapter,
+            device,
+            queue,
+            options: RenderOptions {
+                screen_size: XY::new(4, 4),
+                camera_size: None,
+                preserve_screen_alpha: false,
+            },
+            meta: recording_meta
+                .studio_meta()
+                .expect("studio metadata")
+                .clone(),
+            recording_meta,
+            frozen_recorded_cursors: None,
+            background_textures: Arc::new(BackgroundTextureCache::default()),
+            is_software_adapter,
+        })
+    }
+
+    #[tokio::test]
+    async fn nv12_frames_keep_their_contents_while_the_next_frame_renders() {
+        let Some(constants) = nv12_test_constants(false).await else {
+            eprintln!("No graphics adapter available for NV12 overlap regression test");
+            return;
+        };
+        let project = ProjectConfiguration::default();
+        let cursor = CursorEvents {
+            clicks: vec![],
+            moves: vec![],
+        };
+        let frames = DecodedSegmentFrames {
+            screen_size: XY::new(4, 4),
+            screen_frame: None,
+            camera_frame: None,
+            segment_time: 0.0,
+            recording_time: 0.0,
+            segment_has_camera: false,
+        };
+        let zoom = ZoomTransformTimeline::from_project(&project, &cursor, 1.0, XY::new(4, 4));
+        let mut renderer = FrameRenderer::new(&constants);
+        let mut session = RenderSession::new(&constants.device, 4, 4);
+        let mut converter = frame_pipeline::RgbaToNv12Converter::new(&constants.device);
+        let mut received = Vec::new();
+
+        for frame_number in 0..5u32 {
+            let uniforms = ProjectUniforms::new(
+                &constants,
+                &project,
+                frame_number,
+                60,
+                XY::new(4, 4),
+                &cursor,
+                &frames,
+                1.0,
+                &zoom,
+            );
+            let mut encoder = constants
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+            let target = if session.current_is_left {
+                &session.textures.0
+            } else {
+                &session.textures.1
+            };
+            let level = f64::from(40 + 40 * frame_number) / 255.0;
+            let view = target.create_view(&Default::default());
+            drop(encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("NV12 overlap test frame"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: level,
+                            g: level,
+                            b: level,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            }));
+            if let Some(frame) = frame_pipeline::finish_encoder_nv12_pooled(
+                &mut session,
+                &mut converter,
+                &constants.device,
+                &constants.queue,
+                &uniforms,
+                encoder,
+                Some(&mut renderer.nv12_buffer_pool),
+            )
+            .await
+            .expect("NV12 readback submission")
+            {
+                received.push(frame);
+            }
+        }
+        renderer.session = Some(session);
+        renderer.nv12_converter = Some(converter);
+        received.push(
+            renderer
+                .flush_pipeline_nv12()
+                .await
+                .expect("last frame remains pending")
+                .expect("last frame readback completes"),
+        );
+
+        assert_eq!(
+            received
+                .iter()
+                .map(|frame| frame.frame_number)
+                .collect::<Vec<_>>(),
+            [0, 1, 2, 3, 4]
+        );
+        let lumas = received
+            .iter()
+            .map(|frame| {
+                let data: &[u8] = frame.data.as_ref();
+                let stride = frame.y_stride as usize;
+                let luma = (0..frame.height as usize)
+                    .flat_map(|row| &data[row * stride..row * stride + frame.width as usize])
+                    .copied()
+                    .collect::<Vec<_>>();
+                assert!(
+                    luma.iter().all(|value| *value == luma[0]),
+                    "frame {} mixes contents: {luma:?}",
+                    frame.frame_number
+                );
+                luma[0]
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            lumas.windows(2).all(|pair| pair[0] < pair[1]),
+            "each frame keeps its own contents: {lumas:?}"
+        );
+    }
+
     #[tokio::test]
     async fn nv12_flush_drains_the_active_readback_pipeline() {
         for software in [true, false] {
-            let instance = create_wgpu_instance_sync();
-            let Ok(adapter) = instance
-                .request_adapter(&wgpu::RequestAdapterOptions::default())
-                .await
-            else {
+            let Some(constants) = nv12_test_constants(software).await else {
                 eprintln!("No graphics adapter available for NV12 flush regression test");
                 return;
-            };
-            let (device, queue) = adapter
-                .request_device(&wgpu::DeviceDescriptor::default())
-                .await
-                .expect("graphics device");
-            let recording_meta: RecordingMeta = serde_json::from_value(serde_json::json!({
-                "pretty_name": "nv12-flush",
-                "display": { "path": "display.mp4", "fps": 60 },
-                "camera": null,
-                "audio": null,
-                "cursor": null
-            }))
-            .expect("recording metadata");
-            let constants = RenderVideoConstants {
-                adapter_name: adapter.get_info().name,
-                _instance: instance,
-                _adapter: adapter,
-                device,
-                queue,
-                options: RenderOptions {
-                    screen_size: XY::new(4, 4),
-                    camera_size: None,
-                    preserve_screen_alpha: false,
-                },
-                meta: recording_meta
-                    .studio_meta()
-                    .expect("studio metadata")
-                    .clone(),
-                recording_meta,
-                frozen_recorded_cursors: None,
-                background_textures: Arc::new(BackgroundTextureCache::default()),
-                is_software_adapter: software,
             };
             let mut project = ProjectConfiguration::default();
             project.background.padding = 0.0;

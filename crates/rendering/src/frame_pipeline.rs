@@ -14,6 +14,7 @@ use cidre::{arc, cf, cv, io, mtl};
 
 const GPU_BUFFER_WAIT_TIMEOUT_SECS: u64 = 10;
 const SOFTWARE_GPU_BUFFER_WAIT_TIMEOUT_SECS: u64 = 60;
+const NV12_READBACK_SPIN: std::time::Duration = std::time::Duration::from_millis(8);
 
 /// Whether this process has selected a software (CPU rasterizer) wgpu adapter.
 /// Software adapters like Windows WARP legitimately take tens of seconds for the
@@ -1045,7 +1046,6 @@ impl PendingNv12Readback {
             return Err(self.cancel());
         };
 
-        let mut poll_count = 0u32;
         let start_time = Instant::now();
         let timeout_duration = gpu_buffer_wait_timeout();
 
@@ -1064,11 +1064,11 @@ impl PendingNv12Readback {
                 },
                 Err(oneshot::error::TryRecvError::Empty) => {
                     device.poll(wgpu::PollType::Poll)?;
-                    poll_count += 1;
-                    if poll_count < 10 {
+                    // tokio's timer ticks in whole milliseconds, so even a
+                    // 100µs sleep outlasts a frame's GPU work and caps the
+                    // export at the timer rate; sleep only once a frame is slow.
+                    if start_time.elapsed() < NV12_READBACK_SPIN {
                         tokio::task::yield_now().await;
-                    } else if poll_count < 100 {
-                        tokio::time::sleep(std::time::Duration::from_micros(100)).await;
                     } else {
                         tokio::time::sleep(std::time::Duration::from_millis(1)).await;
                     }
