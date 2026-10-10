@@ -130,8 +130,6 @@ impl SegmentedControl {
         }
     }
 
-    /// The settings window: a borderless trough with the chosen segment raised
-    /// on a white pill, the way AppKit draws a segmented control.
     pub fn settings(theme: &Theme, id: impl Into<ElementId>, options: Vec<SegmentOption>) -> Self {
         Self {
             container_bg: Some(theme.settings_fill()),
