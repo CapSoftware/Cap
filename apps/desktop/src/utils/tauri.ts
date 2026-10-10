@@ -97,6 +97,9 @@ async deleteRecording() : Promise<null> {
 async takeScreenshot(target: ScreenCaptureTarget) : Promise<string> {
     return await TAURI_INVOKE("take_screenshot", { target });
 },
+async captureOcrText(target: ScreenCaptureTarget) : Promise<string> {
+    return await TAURI_INVOKE("capture_ocr_text", { target });
+},
 async importCurrentDesktopBackground(projectPath: string) : Promise<string> {
     return await TAURI_INVOKE("import_current_desktop_background", { projectPath });
 },
@@ -129,6 +132,9 @@ async refreshWindowContentProtection() : Promise<null> {
 },
 async restoreMainWindowGeometry() : Promise<boolean> {
     return await TAURI_INVOKE("restore_main_window_geometry");
+},
+async showWindowWithoutActivating() : Promise<void> {
+    await TAURI_INVOKE("show_window_without_activating");
 },
 async getDefaultExcludedWindows() : Promise<WindowExclusion[]> {
     return await TAURI_INVOKE("get_default_excluded_windows");
@@ -1108,7 +1114,7 @@ cameraBlurDisabledByCrash?: string | null; updateChannel?: UpdateChannel;
  * while enabled, startup hands off to it and exits, and the native app's
  * own Experimental page hands back. See `gpui_app.rs`.
  */
-enableGpuiApp?: boolean }
+enableGpuiApp?: boolean; ocrKeepScreenshot?: boolean; ocrShowNotification?: boolean }
 export type GifExportSettings = { fps: number; resolution_base: XY<number>; quality: GifQuality | null }
 export type GifQuality = {
 /**
@@ -1123,9 +1129,9 @@ export type GlideDirection = "none" | "left" | "right" | "up" | "down"
 export type HapticPattern = "alignment" | "levelChange" | "generic"
 export type HapticPerformanceTime = "default" | "now" | "drawCompleted"
 export type Hotkey = { code: string; meta: boolean; ctrl: boolean; alt: boolean; shift: boolean }
-export type HotkeyAction = "startStudioRecording" | "startInstantRecording" | "stopRecording" | "restartRecording" | "togglePauseRecording" | "cycleRecordingMode" | "openRecordingPicker" | "openRecordingPickerDisplay" | "openRecordingPickerWindow" | "openRecordingPickerArea" | "screenshotDisplay" | "screenshotWindow" | "screenshotArea" | "other"
+export type HotkeyAction = "startStudioRecording" | "startInstantRecording" | "stopRecording" | "restartRecording" | "togglePauseRecording" | "cycleRecordingMode" | "openRecordingPicker" | "openRecordingPickerDisplay" | "openRecordingPickerWindow" | "openRecordingPickerArea" | "screenshotDisplay" | "screenshotWindow" | "screenshotArea" | "ocrArea" | "other"
 export type HotkeysConfiguration = { show: boolean }
-export type HotkeysStore = { hotkeys: { [key in HotkeyAction]: Hotkey } }
+export type HotkeysStore = { hotkeys: { [key in HotkeyAction]: Hotkey }; seeded?: HotkeyAction[] }
 export type ImageSegment = { start: number; end: number; track: number; enabled: boolean; path: string; name: string; center: XY<number>; size: XY<number>; opacity: number; rotation: number; rounding: number; flipX: boolean; flipY: boolean; lockAspect: boolean }
 export type ImportStage = "Probing" | "Converting" | "Finalizing" | "Complete" | "Failed"
 export type ImportedAudioTrack = {
@@ -1232,7 +1238,7 @@ export type RecordingSettingsStore = { target: ScreenCaptureTarget | null; micNa
 export type RecordingStarted = null
 export type RecordingStatus = "pending" | "recording"
 export type RecordingStopped = null
-export type RecordingTargetMode = "display" | "window" | "area" | "camera"
+export type RecordingTargetMode = "display" | "window" | "area" | "camera" | "ocr"
 export type RecordingsMigrationFailure = { name: string; error: string }
 export type RecordingsMigrationProgress = { total: number; done: number; current: string | null }
 export type RecordingsMigrationSummary = { moved: number; skippedInUse: number; failed: RecordingsMigrationFailure[] }
