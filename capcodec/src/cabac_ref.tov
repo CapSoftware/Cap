@@ -1,0 +1,193 @@
+import { BitWriter } from "./bitwriter"
+import { CABAC_INIT_I, CABAC_INIT_P, CABAC_NEXT_LPS, CABAC_NEXT_MPS, CABAC_RANGE_LPS, LAST8, SIG8_FRAME } from "./tables"
+
+const CAT_CHROMA_DC = 3
+const CAT_LUMA_8x8 = 5
+
+const CBF_BASE: int[] = [85, 89, 93, 97, 101, 0]
+const SIG_BASE: int[] = [105, 120, 134, 149, 152, 402]
+const LAST_BASE: int[] = [166, 181, 195, 210, 213, 417]
+const ABS_BASE: int[] = [227, 237, 247, 257, 266, 426]
+
+export class CabacRef {
+  ctx: int[] = []
+  low = 0
+  range = 510
+  outstanding = 0
+  firstBit = true
+  bw: BitWriter
+  bins = 0
+
+  constructor(bw: BitWriter) {
+    this.bw = bw
+    for (let i = 0; i < 1024; i++) this.ctx.push(0)
+  }
+
+  init(sliceQp: int, intraSlice: bool, initIdc: int) {
+    const qp = sliceQp < 0 ? 0 : sliceQp > 51 ? 51 : sliceQp
+    for (let i = 0; i < 1024; i++) {
+      let m = 0
+      let n = 0
+      if (intraSlice) {
+        m = int(CABAC_INIT_I[2 * i]!)
+        n = int(CABAC_INIT_I[2 * i + 1]!)
+      } else {
+        m = int(CABAC_INIT_P[initIdc * 2048 + 2 * i]!)
+        n = int(CABAC_INIT_P[initIdc * 2048 + 2 * i + 1]!)
+      }
+      let pre = ((m * qp) >> 4) + n
+      pre = pre < 1 ? 1 : pre > 126 ? 126 : pre
+      if (pre <= 63) {
+        this.ctx[i] = (63 - pre) * 2
+      } else {
+        this.ctx[i] = (pre - 64) * 2 + 1
+      }
+    }
+    this.low = 0
+    this.range = 510
+    this.outstanding = 0
+    this.firstBit = true
+    this.bins = 0
+  }
+
+  putBit(b: int) {
+    if (this.firstBit) {
+      this.firstBit = false
+    } else {
+      this.bw.putBits(b, 1)
+    }
+    let left = this.outstanding
+    while (left > 0) {
+      const k = left > 24 ? 24 : left
+      this.bw.putBits(b === 1 ? 0 : (1 << k) - 1, k)
+      left -= k
+    }
+    this.outstanding = 0
+  }
+
+  renorm() {
+    while (this.range < 256) {
+      if (this.low < 256) {
+        this.putBit(0)
+      } else if (this.low >= 512) {
+        this.low -= 512
+        this.putBit(1)
+      } else {
+        this.low -= 256
+        this.outstanding++
+      }
+      this.range = this.range << 1
+      this.low = this.low << 1
+    }
+  }
+
+  decision(ctxIdx: int, bin: int) {
+    const s = this.ctx[ctxIdx]!
+    const state = s >> 1
+    const mps = s & 1
+    const lps = int(CABAC_RANGE_LPS[state * 4 + ((this.range >> 6) & 3)]!)
+    this.range -= lps
+    if (bin !== mps) {
+      this.low += this.range
+      this.range = lps
+      this.ctx[ctxIdx] = state === 0 ? int(CABAC_NEXT_LPS[state]!) * 2 + (1 - mps) : int(CABAC_NEXT_LPS[state]!) * 2 + mps
+    } else {
+      this.ctx[ctxIdx] = int(CABAC_NEXT_MPS[state]!) * 2 + mps
+    }
+    this.bins++
+    if (this.range < 256) this.renorm()
+  }
+
+  bypass(bin: int) {
+    this.low = this.low << 1
+    if (bin !== 0) this.low += this.range
+    if (this.low >= 1024) {
+      this.putBit(1)
+      this.low -= 1024
+    } else if (this.low < 512) {
+      this.putBit(0)
+    } else {
+      this.low -= 512
+      this.outstanding++
+    }
+    this.bins++
+  }
+
+  terminate(bin: int) {
+    this.range -= 2
+    if (bin !== 0) {
+      this.low += this.range
+      this.range = 2
+      this.renorm()
+      this.putBit((this.low >> 9) & 1)
+      this.bw.putBits(((this.low >> 7) & 3) | 1, 2)
+    } else if (this.range < 256) {
+      this.renorm()
+    }
+    this.bins++
+  }
+
+  residual(cat: int, c: Int16Array, o: int, n: int) {
+    let last = -1
+    for (let i = n - 1; i >= 0; i--) {
+      if (c[o + i]! !== 0) {
+        last = i
+        break
+      }
+    }
+    const sb = SIG_BASE[cat]!
+    const lb = LAST_BASE[cat]!
+    for (let i = 0; i < n - 1; i++) {
+      const sig = c[o + i]! !== 0 ? 1 : 0
+      const si = cat === CAT_CHROMA_DC ? (i < 2 ? i : 2) : cat === CAT_LUMA_8x8 ? int(SIG8_FRAME[i]!) : i
+      this.decision(sb + si, sig)
+      if (sig === 1) {
+        const li = cat === CAT_CHROMA_DC ? (i < 2 ? i : 2) : cat === CAT_LUMA_8x8 ? int(LAST8[i]!) : i
+        this.decision(lb + li, i === last ? 1 : 0)
+        if (i === last) break
+      }
+    }
+    const ab = ABS_BASE[cat]!
+    const gtMax = cat === CAT_CHROMA_DC ? 3 : 4
+    let numGt1 = 0
+    let numEq1 = 0
+    for (let i = last; i >= 0; i--) {
+      const v = c[o + i]!
+      if (v === 0) continue
+      const a = v < 0 ? -v : v
+      const am1 = a - 1
+      const inc0 = numGt1 !== 0 ? 0 : (1 + numEq1 < 4 ? 1 + numEq1 : 4)
+      if (am1 === 0) {
+        this.decision(ab + inc0, 0)
+        numEq1++
+      } else {
+        this.decision(ab + inc0, 1)
+        const incG = 5 + (numGt1 < gtMax ? numGt1 : gtMax)
+        const pre = am1 < 14 ? am1 : 14
+        for (let k = 1; k < pre; k++) this.decision(ab + incG, 1)
+        if (am1 < 14) {
+          this.decision(ab + incG, 0)
+        } else {
+          let suf = am1 - 14
+          let k = 0
+          while (suf >= (1 << k)) {
+            this.bypass(1)
+            suf -= 1 << k
+            k++
+          }
+          this.bypass(0)
+          while (k > 0) {
+            k--
+            this.bypass((suf >> k) & 1)
+          }
+        }
+        numGt1++
+      }
+      this.bypass(v < 0 ? 1 : 0)
+    }
+  }
+
+  cbf(cat: int, inc: int, coded: bool) {
+    this.decision(CBF_BASE[cat]! + inc, coded ? 1 : 0)
+  }
+}

@@ -1,0 +1,558 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Q3 Infrastructure Review.pdf</title>
+<style>
+* {
+	box-sizing: border-box;
+}
+html,
+body {
+	margin: 0;
+	height: 100%;
+	overflow: hidden;
+	font-family: Inter, "Noto Sans", sans-serif;
+	font-size: 13px;
+	color: #1d1d1f;
+	cursor: default;
+	user-select: none;
+}
+body {
+	background:
+		radial-gradient(1200px 800px at 18% 85%, #f6a37a 0%, #f6a37a00 60%),
+		radial-gradient(1100px 900px at 85% 20%, #6d5bd0 0%, #6d5bd000 65%),
+		linear-gradient(160deg, #1f3c88 0%, #5a3e9b 45%, #d9708a 100%);
+}
+#menubar {
+	position: fixed;
+	top: 0;
+	left: 0;
+	right: 0;
+	height: 30px;
+	background: #e9e6efd9;
+	display: flex;
+	align-items: center;
+	padding: 0 14px;
+	gap: 20px;
+	font-size: 13.5px;
+	z-index: 5;
+}
+#menubar .app {
+	font-weight: 700;
+}
+#menubar .logo {
+	width: 15px;
+	height: 15px;
+	border-radius: 50%;
+	background: conic-gradient(#1d1d1f 0 25%, #555 0 50%, #1d1d1f 0 75%, #555 0);
+}
+#menubar .rt {
+	margin-left: auto;
+	display: flex;
+	align-items: center;
+	gap: 17px;
+}
+#menubar svg {
+	display: block;
+}
+#clock {
+	font-variant-numeric: tabular-nums;
+	min-width: 150px;
+	text-align: right;
+}
+.win {
+	position: absolute;
+	left: 230px;
+	top: 58px;
+	width: 1460px;
+	height: 906px;
+	background: #ececee;
+	border-radius: 12px;
+	box-shadow:
+		0 0 0 1px #0000002e,
+		0 28px 70px #00000059;
+	overflow: hidden;
+	display: flex;
+	flex-direction: column;
+}
+.titlebar {
+	height: 52px;
+	background: #f6f5f8;
+	border-bottom: 1px solid #d9d8dd;
+	display: flex;
+	align-items: center;
+	padding: 0 16px;
+	gap: 16px;
+	flex: none;
+}
+.lights {
+	display: flex;
+	gap: 8px;
+}
+.lights i {
+	width: 12px;
+	height: 12px;
+	border-radius: 50%;
+	box-shadow: inset 0 0 0 0.5px #0003;
+}
+.ttl {
+	display: flex;
+	flex-direction: column;
+	line-height: 1.25;
+	margin-left: 8px;
+}
+.ttl b {
+	font-size: 13px;
+	font-weight: 600;
+}
+.ttl span {
+	font-size: 11px;
+	color: #86868b;
+}
+.tools {
+	margin-left: auto;
+	display: flex;
+	gap: 6px;
+	align-items: center;
+}
+.tools .tb {
+	width: 34px;
+	height: 26px;
+	border-radius: 6px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	color: #555;
+}
+.tools .tb:hover {
+	background: #e3e2e7;
+}
+.tools .search {
+	width: 190px;
+	height: 26px;
+	border-radius: 7px;
+	background: #e4e3e8;
+	color: #86868b;
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 0 9px;
+	font-size: 12.5px;
+	margin-left: 8px;
+}
+.body {
+	flex: 1;
+	display: flex;
+	min-height: 0;
+}
+.thumbs {
+	width: 196px;
+	background: #f2f1f4;
+	border-right: 1px solid #d9d8dd;
+	padding: 16px 0;
+	overflow: hidden;
+	flex: none;
+}
+.th {
+	margin: 0 auto 16px;
+	width: 106px;
+	text-align: center;
+	font-size: 11px;
+	color: #6e6e73;
+}
+.th .pg {
+	width: 106px;
+	height: 137px;
+	background: #fff;
+	box-shadow: 0 0 0 1px #0000001f;
+	margin-bottom: 5px;
+	padding: 11px 9px;
+}
+.th.on .pg {
+	box-shadow:
+		0 0 0 1px #0000001f,
+		0 0 0 4px #b8cff8;
+}
+.th .pg i {
+	display: block;
+	height: 2px;
+	background: #c8c8cc;
+	margin-bottom: 3.5px;
+}
+.th .pg i.h {
+	height: 4px;
+	width: 60%;
+	background: #555;
+	margin-bottom: 6px;
+}
+.th .pg i.f {
+	height: 26px;
+	background: #dfe6f2;
+	margin: 5px 0;
+}
+.viewer {
+	flex: 1;
+	overflow: hidden;
+	background: #dcdbe0;
+	position: relative;
+}
+.page {
+	position: absolute;
+	left: 50%;
+	transform: translateX(-50%);
+	top: 24px;
+	width: 860px;
+	min-height: 1113px;
+	background: #fff;
+	box-shadow:
+		0 0 0 1px #0000001a,
+		0 4px 14px #0000001f;
+	padding: 64px 84px;
+	font-family: Charter, "Bitstream Charter", "Liberation Serif", serif;
+	font-size: 14.5px;
+	line-height: 1.55;
+	color: #222;
+}
+.page .hdr {
+	display: flex;
+	justify-content: space-between;
+	font-family: Inter, sans-serif;
+	font-size: 10.5px;
+	color: #888;
+	border-bottom: 1px solid #e3e3e3;
+	padding-bottom: 8px;
+	margin-bottom: 26px;
+}
+.page h2 {
+	font-family: Inter, sans-serif;
+	font-size: 19px;
+	margin: 0 0 12px;
+	font-weight: 700;
+	color: #111;
+}
+.page h3 {
+	font-family: Inter, sans-serif;
+	font-size: 14.5px;
+	margin: 22px 0 6px;
+	font-weight: 600;
+	color: #111;
+}
+.page p {
+	margin: 0 0 11px;
+	text-align: justify;
+	hyphens: auto;
+}
+.page table {
+	width: 100%;
+	border-collapse: collapse;
+	font-family: Inter, sans-serif;
+	font-size: 12px;
+	margin: 12px 0 14px;
+	font-variant-numeric: tabular-nums;
+}
+.page th,
+.page td {
+	padding: 5px 8px;
+	border-bottom: 1px solid #e5e5e5;
+	text-align: right;
+}
+.page th:first-child,
+.page td:first-child {
+	text-align: left;
+}
+.page th {
+	border-bottom: 1.5px solid #333;
+	font-weight: 600;
+}
+.page .cap {
+	font-family: Inter, sans-serif;
+	font-size: 11px;
+	color: #666;
+	margin-top: -6px;
+}
+#dock {
+	position: fixed;
+	bottom: 8px;
+	left: 50%;
+	transform: translateX(-50%);
+	height: 72px;
+	padding: 8px 10px;
+	display: flex;
+	gap: 8px;
+	align-items: flex-end;
+	background: #f4f2f8a6;
+	border: 1px solid #ffffff59;
+	border-radius: 22px;
+	box-shadow: 0 10px 30px #0000003d;
+	z-index: 4;
+}
+#dock .ic {
+	width: 54px;
+	height: 54px;
+	border-radius: 13px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	color: #fff;
+	font-weight: 700;
+	font-size: 22px;
+	position: relative;
+	box-shadow:
+		inset 0 0 0 0.5px #0003,
+		0 1px 2px #0003;
+}
+#dock .ic.run::after {
+	content: "";
+	position: absolute;
+	bottom: -6px;
+	left: 50%;
+	width: 4px;
+	height: 4px;
+	margin-left: -2px;
+	border-radius: 50%;
+	background: #333;
+}
+#dock .sep {
+	width: 1px;
+	height: 50px;
+	background: #00000026;
+	margin: 0 3px 2px;
+}
+#toasts {
+	position: fixed;
+	top: 40px;
+	right: 14px;
+	width: 364px;
+	z-index: 6;
+}
+.toast {
+	background: #f5f4f8f2;
+	border-radius: 16px;
+	box-shadow:
+		0 0 0 0.5px #0000002e,
+		0 10px 28px #0000003d;
+	padding: 12px 14px;
+	display: flex;
+	gap: 11px;
+	margin-bottom: 10px;
+	transform: translateX(420px);
+	transition: transform 0.45s cubic-bezier(0.2, 0.85, 0.25, 1);
+}
+.toast.in {
+	transform: none;
+}
+.toast.out {
+	transform: translateX(420px);
+	transition-duration: 0.35s;
+	transition-timing-function: cubic-bezier(0.55, 0, 0.8, 0.3);
+}
+.toast .ti {
+	width: 38px;
+	height: 38px;
+	border-radius: 9px;
+	flex: none;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	color: #fff;
+	font-weight: 700;
+	font-size: 17px;
+}
+.toast .tx {
+	flex: 1;
+	min-width: 0;
+	line-height: 1.35;
+}
+.toast .tx .row {
+	display: flex;
+	justify-content: space-between;
+}
+.toast .tx b {
+	font-size: 13px;
+	font-weight: 600;
+}
+.toast .tx .when {
+	font-size: 11.5px;
+	color: #86868b;
+}
+.toast .tx .msg {
+	font-size: 12.5px;
+	color: #3a3a3c;
+	display: -webkit-box;
+	-webkit-line-clamp: 2;
+	-webkit-box-orient: vertical;
+	overflow: hidden;
+}
+</style>
+<script src="common/cap.js"></script>
+</head>
+<body>
+<div id="menubar">
+	<span class="logo"></span><span class="app">Preview</span><span>File</span><span>Edit</span><span>View</span><span>Go</span><span>Tools</span><span>Window</span><span>Help</span>
+	<span class="rt">
+		<svg width="22" height="12" viewBox="0 0 22 12"><rect x="0.5" y="0.5" width="18" height="11" rx="3" fill="none" stroke="#1d1d1f" stroke-opacity=".5"/><rect x="2" y="2" width="12" height="8" rx="1.6" fill="#1d1d1f"/><rect x="19.5" y="4" width="1.6" height="4" rx=".8" fill="#1d1d1f" fill-opacity=".5"/></svg>
+		<svg width="17" height="13" viewBox="0 0 17 13"><path d="M8.5 12.2 6.2 9.5a3.4 3.4 0 0 1 4.6 0zM3.9 7.2a6.6 6.6 0 0 1 9.2 0l-1.2 1.4a4.8 4.8 0 0 0-6.8 0zM1.5 4.6a10 10 0 0 1 14 0l-1.2 1.4a8.2 8.2 0 0 0-11.6 0z" fill="#1d1d1f"/></svg>
+		<svg width="15" height="15" viewBox="0 0 15 15"><circle cx="6.3" cy="6.3" r="4.6" fill="none" stroke="#1d1d1f" stroke-width="1.6"/><path d="m9.7 9.7 4 4" stroke="#1d1d1f" stroke-width="1.8" stroke-linecap="round"/></svg>
+		<svg width="16" height="14" viewBox="0 0 16 14"><rect x="1" y="1" width="14" height="5" rx="2.5" fill="none" stroke="#1d1d1f" stroke-width="1.3"/><circle cx="12.5" cy="3.5" r="1.5" fill="#1d1d1f"/><rect x="1" y="8" width="14" height="5" rx="2.5" fill="none" stroke="#1d1d1f" stroke-width="1.3"/><circle cx="3.5" cy="10.5" r="1.5" fill="#1d1d1f"/></svg>
+		<span id="clock"></span>
+	</span>
+</div>
+
+<div class="win">
+	<div class="titlebar">
+		<span class="lights"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></span>
+		<span class="tb" style="color:#555"><svg width="18" height="14" viewBox="0 0 18 14"><rect x=".75" y=".75" width="16.5" height="12.5" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M6 1v12" stroke="currentColor" stroke-width="1.4"/></svg></span>
+		<span class="ttl"><b>Q3 Infrastructure Review.pdf</b><span>Page 2 of 14</span></span>
+		<span class="tools">
+			<span class="tb"><svg width="16" height="16" viewBox="0 0 16 16"><circle cx="7" cy="7" r="5.3" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M4.6 7h4.8" stroke="currentColor" stroke-width="1.4"/><path d="m11 11 3.6 3.6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>
+			<span class="tb"><svg width="16" height="16" viewBox="0 0 16 16"><circle cx="7" cy="7" r="5.3" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M4.6 7h4.8M7 4.6v4.8" stroke="currentColor" stroke-width="1.4"/><path d="m11 11 3.6 3.6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>
+			<span class="tb"><svg width="16" height="16" viewBox="0 0 16 16"><path d="M8 1.5v9M4.5 5 8 1.5 11.5 5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M3 8.5v5h10v-5" fill="none" stroke="currentColor" stroke-width="1.4"/></svg></span>
+			<span class="tb"><svg width="16" height="16" viewBox="0 0 16 16"><path d="M2.5 13.5 3.3 10 11 2.3a1.6 1.6 0 0 1 2.3 2.3L5.6 12.3z" fill="none" stroke="currentColor" stroke-width="1.4"/></svg></span>
+			<span class="search"><svg width="13" height="13" viewBox="0 0 15 15"><circle cx="6.3" cy="6.3" r="4.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m9.7 9.7 4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>Search</span>
+		</span>
+	</div>
+	<div class="body">
+		<div class="thumbs" id="thumbs"></div>
+		<div class="viewer" id="viewer" data-scroll-id="viewer">
+			<div class="page" id="page">
+				<div class="hdr"><span>Platform Engineering · Q3 Infrastructure Review</span><span>Confidential — internal distribution</span></div>
+				<h2>2. Reliability and capacity</h2>
+				<p>Across the quarter the production fleet served 7.4 billion API requests, up 18 percent from Q2, while the monthly availability of the public API stayed at or above the 99.95 percent objective in all three months. The single largest contributor to the error budget was the payments upstream incident on 14 August, which consumed 41 percent of the quarterly budget in under two hours. Excluding that event, the remaining burn was spread across routine deploys and two short regional network events.</p>
+				<p>Capacity planning moved from quarterly spreadsheets to the forecasting job introduced in July. The job projects request volume per service from the previous twelve weeks and flags any service whose projected p95 utilisation exceeds 70 percent within the next 30 days. In its first ten weeks it raised eleven warnings, nine of which led to scaling changes before the threshold was reached; the other two were seasonal spikes that the model now accounts for.</p>
+				<h3>2.1 Availability by service</h3>
+				<table>
+					<thead><tr><th>Service</th><th>Requests (M)</th><th>Availability</th><th>p95 (ms)</th><th>Incidents</th><th>Budget used</th></tr></thead>
+					<tbody>
+						<tr><td>api-gateway</td><td>7,412</td><td>99.982%</td><td>142</td><td>1</td><td>36%</td></tr>
+						<tr><td>checkout-svc</td><td>612</td><td>99.961%</td><td>318</td><td>2</td><td>78%</td></tr>
+						<tr><td>payments-svc</td><td>201</td><td>99.912%</td><td>466</td><td>3</td><td>176%</td></tr>
+						<tr><td>search-svc</td><td>2,904</td><td>99.990%</td><td>211</td><td>0</td><td>20%</td></tr>
+						<tr><td>catalog-svc</td><td>3,377</td><td>99.994%</td><td>88</td><td>0</td><td>12%</td></tr>
+						<tr><td>auth-svc</td><td>1,145</td><td>99.987%</td><td>64</td><td>1</td><td>26%</td></tr>
+					</tbody>
+				</table>
+				<p class="cap">Table 2. Quarterly availability and latency per tier-one service. Budget used is relative to each service's own objective.</p>
+				<p>Payments remains the only tier-one service that exceeded its error budget. The follow-up work agreed in the August review — request hedging towards the secondary provider, a shorter client timeout, and an explicit circuit breaker in the checkout path — shipped in September. Since then the service has had no incident longer than four minutes, and its p95 latency has dropped from 466 to 301 milliseconds over the last three weeks of the quarter.</p>
+				<h3>2.2 Cost</h3>
+				<p>Compute spend grew by 6 percent against an 18 percent increase in traffic, which brings the cost per million requests down to $3.12 from $3.47 in Q2. Most of the saving came from moving the search and catalog tiers onto the newer instance family and from right-sizing forty-two over-provisioned deployments identified by the utilisation report. Storage costs were flat; the log retention change planned for Q4 is expected to reduce them by roughly a fifth.</p>
+				<p>For the next quarter we propose to keep the availability objectives unchanged, to add latency objectives for the three checkout endpoints, and to extend the forecasting job to databases and queues, which are currently planned by hand.</p>
+			</div>
+		</div>
+	</div>
+</div>
+
+<div id="dock"></div>
+<div id="toasts"></div>
+
+<script>
+(() => {
+	const thumbs = document.getElementById("thumbs");
+	const pat = ["h", "", "", "", "", "f", "", "", "", "", "", "", "", "", "", "", "", "", "", "", ""];
+	for (let i = 1; i <= 6; i++) {
+		const t = document.createElement("div");
+		t.className = `th${i === 2 ? " on" : ""}`;
+		const lines = pat.map((c, k) => `<i class="${c}" style="width:${c ? "" : `${[100, 96, 100, 92, 100, 70][(k + i) % 6]}%`}"></i>`).join("");
+		t.innerHTML = `<div class="pg">${lines}</div>${i}`;
+		thumbs.append(t);
+	}
+
+	const dockApps = [
+		["#3b82f6", "#1d4ed8", "F"],
+		["#f97316", "#c2410c", "◉"],
+		["#22c55e", "#15803d", "✉"],
+		["#e5e7eb", "#9ca3af", "▦", "#ef4444"],
+		["#a855f7", "#7e22ce", "♪"],
+		["#0ea5e9", "#0369a1", "◎"],
+		["#fde68a", "#f59e0b", "✎", "#7c2d12"],
+		["#111827", "#374151", ">_"],
+		["#f43f5e", "#be123c", "▶"],
+		["#64748b", "#334155", "⚙"],
+	];
+	const dock = document.getElementById("dock");
+	const running = new Set([0, 2, 6, 7]);
+	dockApps.forEach(([a, b, g, fg], i) => {
+		const d = document.createElement("div");
+		d.className = `ic${running.has(i) ? " run" : ""}`;
+		d.style.background = `linear-gradient(180deg, ${a}, ${b})`;
+		if (fg) d.style.color = fg;
+		d.textContent = g;
+		dock.append(d);
+	});
+	const sep = document.createElement("div");
+	sep.className = "sep";
+	dock.append(sep);
+	for (const [a, b, g] of [
+		["#dbeafe", "#93c5fd", "▤"],
+		["#e5e7eb", "#cbd5e1", "🗑"],
+	]) {
+		const d = document.createElement("div");
+		d.className = "ic";
+		d.style.background = `linear-gradient(180deg, ${a}, ${b})`;
+		d.style.color = "#334155";
+		d.textContent = g;
+		dock.append(d);
+	}
+
+	const clock = document.getElementById("clock");
+	const startPerf = performance.now();
+	const base = new Date(2026, 9, 7, 9, 41, 12).getTime();
+	const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+	const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+	const pad = (n) => String(n).padStart(2, "0");
+	let lastText = "";
+	function renderClock() {
+		const d = new Date(base + Math.floor((performance.now() - startPerf) / 1000) * 1000);
+		const text = `${days[d.getDay()]} ${d.getDate()} ${months[d.getMonth()]}  ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+		if (text !== lastText) {
+			clock.textContent = text;
+			lastText = text;
+		}
+		const msToNext = 1000 - ((performance.now() - startPerf) % 1000);
+		setTimeout(renderClock, msToNext + 2);
+	}
+	renderClock();
+
+	const toastHost = document.getElementById("toasts");
+	const toastDefs = [
+		{ app: "Calendar", color: "linear-gradient(180deg,#fb7185,#e11d48)", glyph: "7", title: "Design review — in 10 minutes", msg: "Room 4.12 · Platform Engineering · with Maya, Jonas and 4 others" },
+		{ app: "Messages", color: "linear-gradient(180deg,#4ade80,#16a34a)", glyph: "✉", title: "Jonas Becker", msg: "Saw your note on the payments budget — can we add the hedging numbers to section 2.1 before Friday?" },
+		{ app: "Mail", color: "linear-gradient(180deg,#60a5fa,#2563eb)", glyph: "@", title: "Finance Ops", msg: "Re: Q3 cloud invoice reconciliation — attached the corrected cost allocation by team" },
+	];
+	function showToast(i) {
+		const def = toastDefs[i % toastDefs.length];
+		const t = document.createElement("div");
+		t.className = "toast";
+		t.innerHTML = `<div class="ti" style="background:${def.color}">${def.glyph}</div><div class="tx"><div class="row"><b>${def.app}</b><span class="when">now</span></div><div style="font-weight:600;font-size:12.5px">${def.title}</div><div class="msg">${def.msg}</div></div>`;
+		toastHost.append(t);
+		requestAnimationFrame(() => requestAnimationFrame(() => t.classList.add("in")));
+		cap.event("toast_show", { index: i });
+		setTimeout(() => {
+			t.classList.add("out");
+			cap.event("toast_hide", { index: i });
+			setTimeout(() => t.remove(), 500);
+		}, 5600);
+	}
+	window.capToast = showToast;
+	let started = false;
+	window.capStart = (offsets) => {
+		if (started) return;
+		started = true;
+		(offsets || [11000, 29500, 46000]).forEach((ms, i) => setTimeout(() => showToast(i), ms));
+	};
+
+	window.capTextRegions = () => {
+		const r = document.getElementById("page").getBoundingClientRect();
+		const ps = document.querySelectorAll(".page p");
+		const a = ps[0].getBoundingClientRect();
+		const b = ps[ps.length - 3].getBoundingClientRect();
+		return [
+			[r.left + 84, a.top, 692, Math.min(300, a.height + ps[1].getBoundingClientRect().height + 12)],
+			[r.left + 84, b.top, 692, Math.min(300, b.bottom - b.top)],
+		];
+	};
+	capSetReady();
+})();
+</script>
+</body>
+</html>

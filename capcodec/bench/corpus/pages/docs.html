@@ -1,0 +1,599 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Q3 Capture Pipeline Review - Google Docs</title>
+<style>
+* {
+	box-sizing: border-box;
+}
+html,
+body {
+	margin: 0;
+	height: 100%;
+	overflow: hidden;
+	background: #f9fbfd;
+	font-family: "Noto Sans", "Liberation Sans", sans-serif;
+	color: #1f1f1f;
+}
+svg.i {
+	width: 20px;
+	height: 20px;
+	fill: none;
+	stroke: #444746;
+	stroke-width: 1.7;
+	stroke-linecap: round;
+	stroke-linejoin: round;
+	flex: none;
+}
+#top {
+	height: 64px;
+	display: flex;
+	align-items: center;
+	padding: 0 16px 0 12px;
+	background: #f9fbfd;
+}
+#logo {
+	width: 40px;
+	height: 40px;
+	margin-right: 8px;
+}
+#titles {
+	display: flex;
+	flex-direction: column;
+	justify-content: center;
+}
+#titlerow {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	font-size: 18px;
+	height: 26px;
+}
+#titlerow .ttl {
+	padding: 0 4px;
+}
+#saving {
+	font-size: 13px;
+	color: #444746;
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	margin-left: 4px;
+}
+#menus {
+	display: flex;
+	font-size: 14px;
+	gap: 2px;
+	margin-left: -4px;
+}
+#menus span {
+	padding: 2px 7px;
+	border-radius: 4px;
+}
+#topright {
+	margin-left: auto;
+	display: flex;
+	align-items: center;
+	gap: 18px;
+}
+#share {
+	background: #c2e7ff;
+	border-radius: 20px;
+	height: 40px;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 0 18px 0 14px;
+	font-size: 14px;
+	font-weight: 600;
+	color: #001d35;
+}
+.avatar {
+	width: 32px;
+	height: 32px;
+	border-radius: 50%;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	color: #fff;
+	font-size: 14px;
+	font-weight: 600;
+}
+#toolbar {
+	height: 40px;
+	margin: 0 16px 0 16px;
+	background: #edf2fa;
+	border-radius: 24px;
+	display: flex;
+	align-items: center;
+	padding: 0 12px;
+	gap: 4px;
+	font-size: 14px;
+	color: #444746;
+}
+#toolbar .tb {
+	height: 28px;
+	min-width: 28px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	border-radius: 4px;
+	padding: 0 3px;
+	gap: 4px;
+}
+#toolbar .sep {
+	width: 1px;
+	height: 20px;
+	background: #c7c7c7;
+	margin: 0 5px;
+}
+#toolbar .dd {
+	padding: 0 6px;
+	gap: 10px;
+}
+#toolbar .fs {
+	border: 1px solid #747775;
+	border-radius: 4px;
+	width: 36px;
+	height: 24px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+#toolbar b,
+#toolbar i,
+#toolbar u {
+	font-family: "Liberation Serif", serif;
+	font-size: 17px;
+	color: #444746;
+}
+#toolbar .right {
+	margin-left: auto;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+#ruler {
+	height: 24px;
+	position: relative;
+	margin-top: 8px;
+	border-bottom: 1px solid #e3e3e3;
+	background: #f9fbfd;
+}
+#ruler .bar {
+	position: absolute;
+	left: 552px;
+	width: 816px;
+	top: 3px;
+	height: 18px;
+	background: #fff;
+	border: 1px solid #dadce0;
+}
+#ruler .margin {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	width: 96px;
+	background: #e8eaed;
+}
+#ruler .tick {
+	position: absolute;
+	top: 11px;
+	width: 1px;
+	height: 4px;
+	background: #80868b;
+}
+#ruler .tick.big {
+	top: 8px;
+	height: 7px;
+}
+#ruler .num {
+	position: absolute;
+	top: 1px;
+	font-size: 10px;
+	color: #5f6368;
+	transform: translateX(-50%);
+}
+#ruler .ind {
+	position: absolute;
+	top: 0;
+	width: 0;
+	height: 0;
+	border-left: 6px solid transparent;
+	border-right: 6px solid transparent;
+	border-top: 8px solid #1a73e8;
+	transform: translateX(-6px);
+}
+#body {
+	position: absolute;
+	top: 145px;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	display: flex;
+}
+#outline {
+	width: 264px;
+	padding: 18px 0 0 22px;
+	font-size: 14px;
+	color: #444746;
+	flex: none;
+}
+#outline .oh {
+	display: flex;
+	align-items: center;
+	gap: 14px;
+	margin-bottom: 18px;
+	font-size: 14px;
+	color: #1f1f1f;
+}
+#outline .tabitem {
+	background: #d3e3fd;
+	border-radius: 18px;
+	padding: 8px 14px;
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	margin-right: 18px;
+	color: #0b57d0;
+	font-weight: 600;
+	margin-bottom: 8px;
+}
+#outline .oi {
+	padding: 6px 0 6px 40px;
+	font-size: 13px;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	margin-right: 18px;
+}
+#outline .oi.h2 {
+	padding-left: 54px;
+}
+#canvas {
+	flex: 1;
+	overflow-y: scroll;
+	position: relative;
+}
+#canvas::-webkit-scrollbar {
+	width: 14px;
+}
+#canvas::-webkit-scrollbar-thumb {
+	background: #dadce0;
+	border-radius: 8px;
+	border: 3px solid #f9fbfd;
+}
+#canvas::-webkit-scrollbar-track {
+	background: #f9fbfd;
+}
+#pagewrap {
+	position: relative;
+	margin: 12px 0 40px 288px;
+	width: 816px;
+}
+.page {
+	width: 816px;
+	min-height: 1056px;
+	background: #fff;
+	box-shadow: 0 1px 3px 1px #3c40431a, 0 1px 2px 0 #3c404326;
+	padding: 96px 96px 96px 96px;
+}
+#doc {
+	outline: none;
+	font-family: "Liberation Sans", Arial, sans-serif;
+	font-size: 15px;
+	line-height: 1.38;
+	color: #000;
+	caret-color: #000;
+}
+#doc p {
+	margin: 0 0 10px;
+}
+#doc h1 {
+	font-size: 26px;
+	font-weight: 400;
+	margin: 0 0 4px;
+}
+#doc .subtitle {
+	font-size: 15px;
+	color: #666;
+	margin-bottom: 18px;
+}
+#doc h2 {
+	font-size: 20px;
+	font-weight: 400;
+	margin: 22px 0 8px;
+}
+#doc h3 {
+	font-size: 16px;
+	font-weight: 400;
+	color: #434343;
+	margin: 18px 0 6px;
+}
+#doc ul {
+	margin: 0 0 10px;
+	padding-left: 26px;
+}
+#doc li {
+	margin-bottom: 3px;
+}
+#doc table {
+	border-collapse: collapse;
+	width: 100%;
+	margin: 6px 0 14px;
+	font-size: 14px;
+}
+#doc td,
+#doc th {
+	border: 1px solid #000;
+	padding: 5px 7px;
+	text-align: left;
+	vertical-align: top;
+}
+#doc th {
+	background: #f3f3f3;
+	font-weight: 700;
+}
+#doc .chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	background: #e1e3e1;
+	border-radius: 10px;
+	padding: 0 7px;
+	font-size: 13px;
+	line-height: 19px;
+}
+#doc .hl {
+	background: #fef7cd;
+}
+#doc a {
+	color: #1155cc;
+}
+.comment {
+	position: absolute;
+	left: 836px;
+	width: 300px;
+	background: #fff;
+	border-radius: 8px;
+	box-shadow: 0 1px 2px 0 #3c40434d, 0 1px 3px 1px #3c404326;
+	padding: 12px 14px;
+	font-size: 13px;
+	color: #1f1f1f;
+}
+.comment .who {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	margin-bottom: 8px;
+}
+.comment .who .avatar {
+	width: 28px;
+	height: 28px;
+	font-size: 12px;
+}
+.comment .nm {
+	font-weight: 600;
+	font-size: 13px;
+}
+.comment .tm {
+	font-size: 11px;
+	color: #444746;
+}
+.comment .reply {
+	margin-top: 10px;
+	border: 1px solid #c4c7c5;
+	border-radius: 16px;
+	height: 30px;
+	padding: 0 12px;
+	display: flex;
+	align-items: center;
+	color: #747775;
+}
+#explore {
+	position: absolute;
+	right: 24px;
+	bottom: 20px;
+	width: 48px;
+	height: 48px;
+	border-radius: 16px;
+	background: #fff;
+	box-shadow: 0 1px 3px 1px #3c404326, 0 1px 2px #3c40434d;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+</style>
+<script src="common/cap.js"></script>
+</head>
+<body>
+<div id="top">
+	<svg id="logo" viewBox="0 0 40 40"><path d="M10 3h14l9 9v23a2 2 0 0 1-2 2H10a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z" fill="#4285f4"/><path d="M24 3v7a2 2 0 0 0 2 2h7z" fill="#a1c2fa"/><path d="M13 19h14M13 23h14M13 27h14M13 31h9" stroke="#fff" stroke-width="2"/></svg>
+	<div id="titles">
+		<div id="titlerow"><span class="ttl">Q3 Capture Pipeline Review</span>
+			<svg class="i" viewBox="0 0 24 24"><path d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8L3.5 9.7l5.9-.9z"/></svg>
+			<svg class="i" viewBox="0 0 24 24"><path d="M3.5 6.5h6l2 2h9v10h-17z"/><path d="M12 11.5l2.5 2.5-2.5 2.5M9 14h5"/></svg>
+			<span id="saving"><svg class="i" viewBox="0 0 24 24"><path d="M7 18a4.5 4.5 0 0 1-.6-9A6 6 0 0 1 18 9.5a4 4 0 0 1-.5 8.5z"/><path d="M9.5 13.5l2 2 3.5-3.5"/></svg><span id="savetext">Saved to Drive</span></span>
+		</div>
+		<div id="menus"><span>File</span><span>Edit</span><span>View</span><span>Insert</span><span>Format</span><span>Tools</span><span>Extensions</span><span>Help</span></div>
+	</div>
+	<div id="topright">
+		<svg class="i" viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.5-5.8"/><path d="M4 4v4h4M12 8v4.5l3 2"/></svg>
+		<svg class="i" viewBox="0 0 24 24"><path d="M4 5h16v11H8l-4 4z"/></svg>
+		<span style="display:flex;align-items:center;gap:4px"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="7" width="12" height="10" rx="2"/><path d="M15 11l5-3v8l-5-3"/></svg><span style="font-size:10px">▼</span></span>
+		<div id="share"><svg class="i" viewBox="0 0 24 24" style="stroke:#001d35"><rect x="6" y="10.5" width="12" height="9" rx="1.5"/><path d="M8.5 10.5V8a3.5 3.5 0 0 1 7 0v2.5"/></svg>Share</div>
+		<div class="avatar" style="background:#7b1fa2">M</div>
+	</div>
+</div>
+<div id="toolbar">
+	<div class="tb"><svg class="i" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="5.5"/><path d="M15 15l5 5"/></svg></div>
+	<div class="tb" style="font-size:13px;padding:0 8px;border-radius:14px;background:#dde3ea">Menus</div>
+	<div class="tb"><svg class="i" viewBox="0 0 24 24"><path d="M9 7 5 11l4 4"/><path d="M5 11h9a5 5 0 0 1 0 10h-2"/></svg></div>
+	<div class="tb"><svg class="i" viewBox="0 0 24 24"><path d="M15 7l4 4-4 4"/><path d="M19 11h-9a5 5 0 0 0 0 10h2"/></svg></div>
+	<div class="tb"><svg class="i" viewBox="0 0 24 24"><path d="M7 9V4h10v5M7 17H4v-7h16v7h-3M7 14h10v6H7z"/></svg></div>
+	<div class="tb"><svg class="i" viewBox="0 0 24 24"><path d="M4 18 8.5 6 13 18M5.7 14h5.6M14 15l2.5 2.5L21 12"/></svg></div>
+	<div class="tb"><svg class="i" viewBox="0 0 24 24"><path d="M5 4h11v4H5zM16 6h3v5h-8v3M10 14h2v6h-2z"/></svg></div>
+	<div class="tb dd">100% <span style="font-size:9px">▼</span></div>
+	<div class="sep"></div>
+	<div class="tb dd" style="width:116px;justify-content:space-between">Normal text <span style="font-size:9px">▼</span></div>
+	<div class="sep"></div>
+	<div class="tb dd" style="width:92px;justify-content:space-between">Arial <span style="font-size:9px">▼</span></div>
+	<div class="sep"></div>
+	<div class="tb">−</div><div class="fs">11</div><div class="tb">+</div>
+	<div class="sep"></div>
+	<div class="tb"><b>B</b></div><div class="tb"><i>I</i></div><div class="tb"><u>U</u></div>
+	<div class="tb" style="flex-direction:column;gap:0;font-family:'Liberation Serif';font-size:16px;line-height:16px">A<span style="display:block;width:16px;height:3px;background:#000"></span></div>
+	<div class="tb"><svg class="i" viewBox="0 0 24 24"><path d="M6 14l7-9 5 4-7 9H6z"/><path d="M4 21h16" stroke="#ffeb3b" stroke-width="3"/></svg></div>
+	<div class="sep"></div>
+	<div class="tb"><svg class="i" viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 0 6 0l3-3a4 4 0 0 0-6-6l-1 1M14 10a4 4 0 0 0-6 0l-3 3a4 4 0 0 0 6 6l1-1"/></svg></div>
+	<div class="tb"><svg class="i" viewBox="0 0 24 24"><path d="M4 5h16v11H8l-4 4z"/><path d="M12 8v5M9.5 10.5h5"/></svg></div>
+	<div class="tb"><svg class="i" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 16l5-5 4 4 2-2 5 5"/><circle cx="15.5" cy="8.5" r="1.5"/></svg></div>
+	<div class="sep"></div>
+	<div class="tb"><svg class="i" viewBox="0 0 24 24"><path d="M4 6h16M4 10h10M4 14h16M4 18h10"/></svg><span style="font-size:9px">▼</span></div>
+	<div class="tb"><svg class="i" viewBox="0 0 24 24"><path d="M11 6h9M11 12h9M11 18h9M4 4v4M2.5 10l1.5 2 1.5-2M4 20v-4"/></svg></div>
+	<div class="tb"><svg class="i" viewBox="0 0 24 24"><path d="M4 6l1.5 1.5L8 5M4 12l1.5 1.5L8 11M4 18l1.5 1.5L8 17M11 6h9M11 12h9M11 18h9"/></svg><span style="font-size:9px">▼</span></div>
+	<div class="tb"><svg class="i" viewBox="0 0 24 24"><circle cx="5" cy="6" r="1"/><circle cx="5" cy="12" r="1"/><circle cx="5" cy="18" r="1"/><path d="M9 6h11M9 12h11M9 18h11"/></svg><span style="font-size:9px">▼</span></div>
+	<div class="tb"><svg class="i" viewBox="0 0 24 24"><path d="M5 6h1M5 12h1M5 18h1M9 6h11M9 12h11M9 18h11"/></svg><span style="font-size:9px">▼</span></div>
+	<div class="tb"><svg class="i" viewBox="0 0 24 24"><path d="M4 5h16M10 10h10M10 14h10M4 19h16M7 10l-3 2 3 2"/></svg></div>
+	<div class="tb"><svg class="i" viewBox="0 0 24 24"><path d="M4 5h16M10 10h10M10 14h10M4 19h16M4 10l3 2-3 2"/></svg></div>
+	<div class="tb"><svg class="i" viewBox="0 0 24 24"><path d="M6 5h12M12 5l-3 14M4 20l16-16"/></svg></div>
+	<div class="right">
+		<div class="tb dd"><svg class="i" viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16z"/></svg><span style="font-size:9px">▼</span></div>
+		<div class="tb"><svg class="i" viewBox="0 0 24 24"><path d="M6 15l6-6 6 6"/></svg></div>
+	</div>
+</div>
+<div id="ruler"><div class="bar" id="rulerbar"></div></div>
+<div id="body">
+	<div id="outline">
+		<div class="oh"><svg class="i" viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg>Document tabs<svg class="i" viewBox="0 0 24 24" style="margin-left:auto;margin-right:18px"><path d="M12 5v14M5 12h14"/></svg></div>
+		<div class="tabitem"><svg class="i" viewBox="0 0 24 24" style="stroke:#0b57d0"><path d="M6 3h8l4 4v14H6z"/><path d="M9 11h6M9 15h6"/></svg>Tab 1</div>
+		<div class="oi">Q3 Capture Pipeline Review</div>
+		<div class="oi">Summary</div>
+		<div class="oi">Highlights</div>
+		<div class="oi h2">Encoder</div>
+		<div class="oi h2">Capture and upload</div>
+		<div class="oi">Metrics</div>
+		<div class="oi">Risks</div>
+		<div class="oi">Next steps</div>
+	</div>
+	<div id="canvas" data-scroll-id="canvas">
+		<div id="pagewrap">
+			<div class="page">
+				<div id="doc" contenteditable="true" spellcheck="false">
+<h1>Q3 Capture Pipeline Review</h1>
+<div class="subtitle">Prepared by Maya Lindqvist · Desktop &amp; Media team · <span class="chip">📅 Oct 6, 2026</span></div>
+<h2>Summary</h2>
+<p>This quarter we shipped the new capture pipeline to every desktop user. Recordings now start in under a second on most machines, the editor opens files twice as fast, and the number of failed uploads dropped by more than half. The remaining work is mostly about long recordings on older laptops, where memory use still grows too quickly after the first twenty minutes.</p>
+<h2>Highlights</h2>
+<h3>Encoder</h3>
+<ul>
+<li>Hardware encoding is now the default on Apple Silicon and on recent Intel and AMD GPUs.</li>
+<li>Screen content mode cuts the size of text-heavy recordings by about 30% at the same quality.</li>
+<li>Keyframes are placed on scene changes, so seeking in the web player feels instant.</li>
+</ul>
+<h3>Capture and upload</h3>
+<p>Segments are uploaded while the recording is still running, which means a ten minute video is usually ready to share a few seconds after the user clicks stop. We also added a <span class="hl">resumable upload path</span> for flaky connections; it has already recovered more than 4,000 recordings that would have failed before.</p>
+<h2>Metrics</h2>
+<table>
+<tr><th>Metric</th><th>Q2</th><th>Q3</th><th>Change</th></tr>
+<tr><td>Median time to first frame</td><td>1.8 s</td><td>0.7 s</td><td>−61%</td></tr>
+<tr><td>Failed uploads per 1,000 recordings</td><td>9.4</td><td>4.1</td><td>−56%</td></tr>
+<tr><td>Average file size per minute (1080p)</td><td>38 MB</td><td>26 MB</td><td>−32%</td></tr>
+<tr><td>Crash-free sessions</td><td>99.31%</td><td>99.72%</td><td>+0.41 pt</td></tr>
+</table>
+<h2>Risks</h2>
+<p>Memory growth on long recordings is the biggest open issue. We see it mostly on machines with 8 GB of RAM when the camera overlay is enabled, and it can lead to dropped frames after about half an hour. A fix for the frame pool is in review and should land in the next release.</p>
+<h2>Next steps</h2>
+<p id="last">For Q4 we want to finish the work on long recordings and start testing the new encoder with real customer content.</p>
+				</div>
+			</div>
+			<div class="comment" style="top:820px">
+				<div class="who"><div class="avatar" style="background:#00897b">D</div><div><div class="nm">Daniel Okafor</div><div class="tm">10:42 AM Today</div></div></div>
+				Can we add the numbers for Windows on ARM here as well? Even rough ones would help.
+				<div class="reply">Reply or add others with @</div>
+			</div>
+		</div>
+	</div>
+</div>
+<div id="explore"><svg class="i" viewBox="0 0 24 24" style="width:24px;height:24px"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M18 15l.8 2.2L21 18l-2.2.8L18 21l-.8-2.2L15 18l2.2-.8z"/></svg></div>
+<script>
+const ruler = document.getElementById("rulerbar");
+ruler.innerHTML = '<div class="margin" style="left:0"></div><div class="margin" style="right:0"></div>';
+for (let i = 0; i <= 8.5 * 8; i++) {
+	const x = i * 12;
+	const t = document.createElement("div");
+	t.className = `tick${i % 8 === 0 ? " big" : ""}`;
+	t.style.left = `${x}px`;
+	if (i % 8 !== 0 && i % 4 !== 0 && i % 2 !== 0) t.style.height = "3px";
+	ruler.append(t);
+	if (i % 8 === 0 && i > 0 && i < 68) {
+		const n = document.createElement("div");
+		n.className = "num";
+		n.style.left = `${x}px`;
+		n.textContent = String(i / 8 - 1);
+		ruler.append(n);
+	}
+}
+for (const x of [96, 720]) {
+	const d = document.createElement("div");
+	d.className = "ind";
+	d.style.left = `${x}px`;
+	ruler.append(d);
+}
+const canvas = document.getElementById("canvas");
+const pagewrap = document.getElementById("pagewrap");
+const doc = document.getElementById("doc");
+const page = document.querySelector(".page");
+function syncRuler() {
+	ruler.style.left = `${page.getBoundingClientRect().left}px`;
+}
+syncRuler();
+const savetext = document.getElementById("savetext");
+let saveTimer = null;
+doc.addEventListener("input", () => {
+	savetext.textContent = "Saving…";
+	clearTimeout(saveTimer);
+	saveTimer = setTimeout(() => {
+		savetext.textContent = "Saved to Drive";
+		cap.event("saved");
+	}, 1600);
+});
+function placeCaretAtEnd(el) {
+	const r = document.createRange();
+	r.selectNodeContents(el);
+	r.collapse(false);
+	const s = getSelection();
+	s.removeAllRanges();
+	s.addRange(r);
+}
+const last = document.getElementById("last");
+doc.focus({ preventScroll: true });
+placeCaretAtEnd(last);
+function positionView() {
+	const lastBottom = last.getBoundingClientRect().bottom - canvas.getBoundingClientRect().top + canvas.scrollTop;
+	canvas.scrollTop = Math.max(0, Math.round(lastBottom - canvas.clientHeight * 0.6));
+}
+positionView();
+document.fonts.ready.then(positionView);
+window.capEndOfText = () => {
+	const r = document.createRange();
+	r.selectNodeContents(doc);
+	const rects = r.getClientRects();
+	const lr = rects[rects.length - 1];
+	return [Math.round(lr.right), Math.round(lr.top + lr.height / 2)];
+};
+window.capTextRegions = () => {
+	const p = page.getBoundingClientRect();
+	const c = canvas.getBoundingClientRect();
+	const top = Math.max(c.top, p.top) + 8;
+	const h = Math.floor((c.bottom - top - 16) / 2);
+	return [
+		[p.left + 96, top, 624, h],
+		[p.left + 96, top + h, 624, h],
+	];
+};
+capSetReady();
+</script>
+</body>
+</html>

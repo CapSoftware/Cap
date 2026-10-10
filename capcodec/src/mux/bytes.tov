@@ -1,0 +1,104 @@
+const ALPHABET = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ."
+const CODES: int[] = [
+  97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120,
+  121, 122, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 48,
+  49, 50, 51, 52, 53, 54, 55, 56, 57, 32, 46,
+]
+
+export function asciiBytes(s: string): u8[] {
+  const letters = ALPHABET.chars()
+  let out: u8[] = []
+  for (const c of s.chars()) {
+    const i = letters.indexOf(c)
+    const code = i >= 0 ? CODES[i]! : 63
+    out.push(u8(code))
+  }
+  return out
+}
+
+export class ByteWriter {
+  buf: u8[] = []
+
+  u8(v: int) {
+    this.buf.push(u8(v & 255))
+  }
+
+  u16(v: int) {
+    this.buf.push(u8((v >> 8) & 255))
+    this.buf.push(u8(v & 255))
+  }
+
+  u24(v: int) {
+    this.buf.push(u8((v >> 16) & 255))
+    this.buf.push(u8((v >> 8) & 255))
+    this.buf.push(u8(v & 255))
+  }
+
+  u32(v: int) {
+    this.buf.push(u8((v >> 24) & 255))
+    this.buf.push(u8((v >> 16) & 255))
+    this.buf.push(u8((v >> 8) & 255))
+    this.buf.push(u8(v & 255))
+  }
+
+  u64(v: int) {
+    this.u32((v >> 32) & 0xffffffff)
+    this.u32(v & 0xffffffff)
+  }
+
+  zeros(n: int) {
+    for (let i = 0; i < n; i++) this.buf.push(u8(0))
+  }
+
+  bytes(b: u8[], off: int, len: int) {
+    for (let i = 0; i < len; i++) this.buf.push(b[off + i]!)
+  }
+
+  fourcc(s: string) {
+    const b = asciiBytes(s)
+    for (let i = 0; i < 4; i++) this.buf.push(i < b.length ? b[i]! : u8(32))
+  }
+
+  begin(kind: string): int {
+    const at = this.buf.length
+    this.u32(0)
+    this.fourcc(kind)
+    return at
+  }
+
+  beginFull(kind: string, version: int, flags: int): int {
+    const at = this.begin(kind)
+    this.u8(version)
+    this.u24(flags)
+    return at
+  }
+
+  end(at: int) {
+    const size = this.buf.length - at
+    this.buf[at] = u8((size >> 24) & 255)
+    this.buf[at + 1] = u8((size >> 16) & 255)
+    this.buf[at + 2] = u8((size >> 8) & 255)
+    this.buf[at + 3] = u8(size & 255)
+  }
+
+  patch32(at: int, v: int) {
+    this.buf[at] = u8((v >> 24) & 255)
+    this.buf[at + 1] = u8((v >> 16) & 255)
+    this.buf[at + 2] = u8((v >> 8) & 255)
+    this.buf[at + 3] = u8(v & 255)
+  }
+
+  length(): int {
+    return this.buf.length
+  }
+}
+
+test("boxes carry their size", () => {
+  const w = new ByteWriter()
+  const at = w.begin("free")
+  w.u32(7)
+  w.end(at)
+  expect(w.buf.length).toBe(12)
+  expect(int(w.buf[3]!)).toBe(12)
+  expect(int(w.buf[4]!)).toBe(0x66)
+})

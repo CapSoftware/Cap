@@ -13,7 +13,14 @@
 			"!apps/desktop/src/utils/tauri.ts",
 			"!apps/desktop/src/global.d.ts",
 			"!apps/web/public/gif.worker.js",
-			"!packages/ui-solid/src/auto-imports.d.ts"
+			"!packages/ui-solid/src/auto-imports.d.ts",
+			"!capcodec/**/*.tov",
+			"!capcodec/**/*.py",
+			"!capcodec/**/*.md",
+			"!capcodec/**/*.sh",
+			"!capcodec/**/*.jsonl",
+			"!capcodec/**/*.pyc",
+			"!capcodec/capcodec.bundle"
 		],
 		"ignoreUnknown": false
 	},

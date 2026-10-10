@@ -1,0 +1,828 @@
+import { closeSync, openSync, readFileSync, readSync, writeFileSync, writeSync } from "node:fs"
+import { availableParallelism } from "node:os"
+import * as path from "node:path"
+import { SideInfo, parseSideInfo } from "../src/analysis"
+import { Lookahead, LookaheadState } from "../src/lookahead"
+import { masterPlaylist, mediaPlaylist, segmentName } from "../src/mux/hls"
+import { Mp4Muxer, TIMESCALE } from "../src/mux/mp4"
+import { Encoder, FrameStats } from "../src/encoder"
+
+type Args = {
+  input: string,
+  output: string,
+  recon: string,
+  stats: string,
+  sideinfo: string,
+  width: int,
+  height: int,
+  fpsNum: int,
+  fpsDen: int,
+  frames: int,
+  qp: int,
+  preset: string,
+  profile: int,
+  keyintSec: f64,
+  threads: int,
+  noSideinfo: bool,
+  fullAnalysis: bool,
+  cavlc: bool,
+  refs: int,
+  noVfr: bool,
+  zeroLatency: bool,
+  crf: f64,
+  bitrate: int,
+  maxrate: int,
+  bufsize: int,
+  ipOffset: int,
+  rcMode: int,
+  aq: int,
+  refresh: int,
+  lifetime: bool,
+  inter8x8: bool,
+  decimate: bool,
+  idrReuse: bool,
+  globalShift: bool,
+  weightp: bool,
+  aqTexture: int,
+  sliceRows: int,
+  idrSliceRows: int,
+  idrSlices: int,
+  bframes: int,
+  bQpOffset: int,
+  bAdapt: bool,
+  bPyramid: int,
+  bRefQpOffset: int,
+  format: string,
+  subme: int,
+  subpelDirs: int,
+  keyint: int,
+  noise: int,
+  lookahead: int,
+  laStrength: f64,
+  readAheadFrames: int,
+}
+
+class UsageError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = "UsageError"
+  }
+}
+
+function usage(): string {
+  return [
+    "usage: capcodec encode --input <file|-> --width W --height H --fps N[/D] --output <file.264|-> [options]",
+    "  --frames K          stop after K frames",
+    "  --preset P          live | fast | medium | slow (default medium)",
+    "  --crf Q             constant quality (default 26)",
+    "  --qp Q              constant QP",
+    "  --bitrate K         capped VBR target in kbit/s (--maxrate K, --bufsize K)",
+    "  --aq-strength N     text-aware adaptive quantisation strength (default 1, 0 disables)",
+    "  --aq-texture N      QP raise for textured (non-text) macroblocks (default 0)",
+    "  --profile P         high | main (default high)",
+    "  --keyint-sec S      seconds between IDR frames (default 2); --keyint N in frames",
+    "  --noise N           treat per-pixel changes up to N as unchanged when no side info is given",
+    "  --slice-rows N      macroblock rows per slice (default 0: one slice per frame); --idr-slice-rows N for IDR frames",
+    "  --idr-slices N      IDR frames as N row bands coded on separate threads (default 4, 1 for one slice)",
+    "  --lookahead N       read N frames ahead and set macroblock QPs from how long their content stays (default 10, 2 on live; 0 disables)",
+    "  --bframes N         0..3 B-frames between anchors while most of the frame moves (default 3)",
+    "  --read-ahead N      with B-frames and threads, read and analyse up to N more frames while a run is coded (default 3)",
+    "  --zerolatency       no B-frames and no lookahead: every frame is output as soon as it is read",
+    "  --no-b-adapt        use B-frames on static content too; ignores side info and never drops frames",
+    "  --b-qp-offset N     B-frame QP relative to the macroblock QP of the following anchor (default 6)",
+    "  --b-pyramid         code the middle B-frame of runs of 2 or more as a reference for the others (default on, off",
+    "                      with --preset live); --no-b-pyramid",
+    "  --b-ref-qp-offset N QP offset of the reference B-frame in a pyramid (default 5)",
+    "  --no-idr-reuse      code every IDR macroblock afresh instead of reusing unchanged ones from the last IDR",
+    "  --recon FILE        write the reconstruction (yuv420p)",
+    "  --stats FILE        write per-frame statistics as JSON",
+    "  --sideinfo FILE     per-frame dirty rects, cursor and scroll hints (JSONL)",
+    "  --threads N         worker threads (default: all cores)",
+  ].join("\n")
+}
+
+function parseIntArg(name: string, v: string | undefined): int throws UsageError {
+  if (v === undefined) throw new UsageError(`missing value for ${name}`)
+  const n = parseInt(v)
+  if (n === undefined) throw new UsageError(`${name} expects an integer, got ${v}`)
+  return n
+}
+
+function parseArgs(argv: string[]): Args throws UsageError {
+  const a: Args = {
+    input: "", output: "", recon: "", stats: "", sideinfo: "", width: 0, height: 0, fpsNum: 30, fpsDen: 1,
+    frames: -1, qp: 26, preset: "medium", profile: 100, keyintSec: 2.0, threads: 0, noSideinfo: false,
+    fullAnalysis: false, cavlc: false, refs: 0, noVfr: false, zeroLatency: false, crf: 26.0, bitrate: 0, maxrate: 0,
+    bufsize: 0, ipOffset: 3, rcMode: 1, aq: 1, refresh: 3, lifetime: true, inter8x8: true, decimate: true, idrReuse: true, globalShift: true, weightp: true, aqTexture: 0, sliceRows: 0, idrSliceRows: -1, idrSlices: 4, bframes: -1, bQpOffset: 6, bAdapt: true, bPyramid: -1, bRefQpOffset: 5, format: "", subme: -1, subpelDirs: 0, keyint: 0, noise: 0,
+    lookahead: -1, laStrength: -1.0, readAheadFrames: -1,
+  }
+  let i = 0
+  while (i < argv.length) {
+    const k = argv[i]!
+    const v = argv[i + 1]
+    if (k === "--input") {
+      a.input = v ?? ""
+    } else if (k === "--output") {
+      a.output = v ?? ""
+    } else if (k === "--recon") {
+      a.recon = v ?? ""
+    } else if (k === "--stats") {
+      a.stats = v ?? ""
+    } else if (k === "--sideinfo") {
+      a.sideinfo = v ?? ""
+    } else if (k === "--width") {
+      a.width = try parseIntArg(k, v)
+    } else if (k === "--height") {
+      a.height = try parseIntArg(k, v)
+    } else if (k === "--frames") {
+      a.frames = try parseIntArg(k, v)
+    } else if (k === "--qp") {
+      a.qp = try parseIntArg(k, v)
+      a.rcMode = 0
+    } else if (k === "--crf") {
+      a.crf = parseFloat(v ?? "") ?? 26.0
+      a.rcMode = 1
+    } else if (k === "--bitrate") {
+      a.bitrate = try parseIntArg(k, v)
+      a.rcMode = 2
+    } else if (k === "--maxrate") {
+      a.maxrate = try parseIntArg(k, v)
+    } else if (k === "--bufsize") {
+      a.bufsize = try parseIntArg(k, v)
+    } else if (k === "--ipoffset") {
+      a.ipOffset = try parseIntArg(k, v)
+    } else if (k === "--aq-strength") {
+      a.aq = try parseIntArg(k, v)
+    } else if (k === "--refresh") {
+      a.refresh = try parseIntArg(k, v)
+    } else if (k === "--refs") {
+      a.refs = try parseIntArg(k, v)
+    } else if (k === "--threads") {
+      a.threads = try parseIntArg(k, v)
+    } else if (k === "--keyint") {
+      a.keyint = try parseIntArg(k, v)
+    } else if (k === "--noise") {
+      a.noise = try parseIntArg(k, v)
+    } else if (k === "--lookahead") {
+      a.lookahead = try parseIntArg(k, v)
+    } else if (k === "--read-ahead") {
+      a.readAheadFrames = try parseIntArg(k, v)
+    } else if (k === "--la-strength") {
+      a.laStrength = parseFloat(v ?? "") ?? -1.0
+    } else if (k === "--subme") {
+      a.subme = try parseIntArg(k, v)
+    } else if (k === "--subpel-dirs") {
+      a.subpelDirs = try parseIntArg(k, v)
+    } else if (k === "--format") {
+      a.format = v ?? ""
+    } else if (k === "--aq-texture") {
+      a.aqTexture = try parseIntArg(k, v)
+    } else if (k === "--slice-rows") {
+      a.sliceRows = try parseIntArg(k, v)
+    } else if (k === "--idr-slice-rows") {
+      a.idrSliceRows = try parseIntArg(k, v)
+    } else if (k === "--idr-slices") {
+      a.idrSlices = try parseIntArg(k, v)
+    } else if (k === "--bframes") {
+      a.bframes = try parseIntArg(k, v)
+    } else if (k === "--b-qp-offset") {
+      a.bQpOffset = try parseIntArg(k, v)
+    } else if (k === "--b-ref-qp-offset") {
+      a.bRefQpOffset = try parseIntArg(k, v)
+    } else if (k === "--preset") {
+      a.preset = v ?? "medium"
+    } else if (k === "--profile") {
+      a.profile = v === "main" ? 77 : 100
+    } else if (k === "--keyint-sec") {
+      a.keyintSec = parseFloat(v ?? "") ?? 2.0
+    } else if (k === "--fps") {
+      const s = v ?? ""
+      const parts = s.split("/")
+      a.fpsNum = try parseIntArg(k, parts[0])
+      a.fpsDen = parts.length > 1 ? try parseIntArg(k, parts[1]) : 1
+    } else if (k === "--no-sideinfo") {
+      a.noSideinfo = true
+      i++
+      continue
+    } else if (k === "--no-inter8x8") {
+      a.inter8x8 = false
+      i++
+      continue
+    } else if (k === "--no-decimate") {
+      a.decimate = false
+      i++
+      continue
+    } else if (k === "--no-weightp") {
+      a.weightp = false
+      i++
+      continue
+    } else if (k === "--no-global-shift") {
+      a.globalShift = false
+      i++
+      continue
+    } else if (k === "--no-idr-reuse") {
+      a.idrReuse = false
+      i++
+      continue
+    } else if (k === "--no-lifetime-aq") {
+      a.lifetime = false
+      i++
+      continue
+    } else if (k === "--no-vfr") {
+      a.noVfr = true
+      i++
+      continue
+    } else if (k === "--zerolatency") {
+      a.zeroLatency = true
+      i++
+      continue
+    } else if (k === "--no-b-adapt") {
+      a.bAdapt = false
+      i++
+      continue
+    } else if (k === "--b-pyramid" || k === "--no-b-pyramid") {
+      a.bPyramid = k === "--b-pyramid" ? 1 : 0
+      i++
+      continue
+    } else if (k === "--cavlc") {
+      a.cavlc = true
+      i++
+      continue
+    } else if (k === "--full-analysis") {
+      a.fullAnalysis = true
+      i++
+      continue
+    } else {
+      throw new UsageError(`unknown option ${k}`)
+    }
+    i += 2
+  }
+  if (a.input === "" || a.output === "" || a.width <= 0 || a.height <= 0) throw new UsageError("missing required options")
+  if ((a.width & 1) !== 0 || (a.height & 1) !== 0) throw new UsageError("width and height must be even")
+  if (a.qp < 0 || a.qp > 51) throw new UsageError("qp must be in 0..51")
+  if (a.bframes === -1) a.bframes = a.zeroLatency ? 0 : 3
+  if (a.bframes < 0 || a.bframes > 3) throw new UsageError("--bframes must be in 0..3")
+  if (a.bPyramid === -1) a.bPyramid = a.preset === "live" ? 0 : 1
+  if (a.refs === 0) a.refs = a.preset === "slow" ? 3 : a.preset === "medium" ? 2 : 1
+  if (a.lookahead < 0) a.lookahead = a.zeroLatency ? 0 : a.preset === "live" ? 2 : 10
+  if (a.readAheadFrames < 0) a.readAheadFrames = 3
+  return a
+}
+
+function readFull(fd: int, buf: Uint8Array, off: int, n: int): int throws Error {
+  let got = 0
+  while (got < n) {
+    const k = try readSync(fd, buf, off + got, n - got)
+    if (k === 0) break
+    got += k
+  }
+  return got
+}
+
+const RA_READ = 0
+const RA_TAKEN = 1
+const RA_TOTAL = 2
+const RA_FAIL = 3
+const RA_DONE = 4
+const RA_BASE = 5
+const RA_SEQ = 6
+const RA_WAITERS = 7
+const RA_LINES = 64
+
+type AheadJob = {
+  fd: int, ring: Uint8Array, fb: int, slotOf: Int32Array, prog: Int32Array, hz: Int32Array, horizons: Int32Array,
+  life: Int32Array[], keep: Uint8Array[], state: LookaheadState, w: int, h: int, depth: int, extra: int, noise: int,
+  geometricTail: bool, windowTail: bool, frameStop: int,
+}
+
+function raPublish(prog: Int32Array, at: int, v: int) {
+  Atomics.store(prog, at, v)
+  Atomics.add(prog, RA_SEQ, 1)
+  if (Atomics.load(prog, RA_WAITERS) > 0) Atomics.notify(prog, RA_SEQ)
+}
+
+// Reads, pushes and takes in the serial order while the main thread leaves room (RA_BASE is the oldest frame it may
+// still use), and returns rather than wait for room, so threads that run one after another (wasm) never block on it.
+function readBatch(job: AheadJob, lines: string[], from: int, taken: int, total: int, nLines: int, id: int) {
+  const prog = job.prog
+  const slots = job.slotOf.length
+  const look = new Lookahead(job.w, job.h, job.depth + job.extra + 1, true)
+  look.attach(job.state, from, job.noise, job.geometricTail, job.windowTail)
+  look.total = total
+  let k = from
+  let t = taken
+  try {
+    while (true) {
+      const base = Atomics.load(prog, RA_BASE)
+      const end = base + 1 + job.extra
+      if (t <= end && (look.total >= 0 ? t < look.total : t + job.depth < k)) {
+        const i = t % job.life.length
+        const horizon = job.horizons[t % job.horizons.length]!
+        job.hz[i] = horizon
+        look.takeAhead(t, horizon, job.life[i]!, job.keep.length > 0 ? job.keep[i]! : new Uint8Array(0))
+        t++
+        raPublish(prog, RA_TAKEN, t)
+      } else if (look.total < 0 && k <= end + job.depth && (k - from < lines.length || k >= nLines)) {
+        let slot = 0
+        let j = base
+        while (j < k) {
+          if (job.slotOf[j % slots]! === slot) {
+            slot++
+            j = base
+          } else {
+            j++
+          }
+        }
+        const got = job.frameStop >= 0 && k >= job.frameStop ? 0 : try readFull(job.fd, job.ring, slot * job.fb, job.fb)
+        if (got < job.fb) {
+          look.total = k
+          raPublish(prog, RA_TOTAL, k)
+        } else {
+          const line = k - from < lines.length ? lines[k - from]! : ""
+          const side = line !== "" ? try parseSideInfo(line) : undefined
+          job.slotOf[k % slots] = slot
+          look.push(job.ring, slot * job.fb, job.slotOf[(k - 1) % slots]! * job.fb, side)
+          k++
+          raPublish(prog, RA_READ, k)
+        }
+      } else {
+        break
+      }
+    }
+  } catch (e) {
+    raPublish(prog, RA_FAIL, k)
+  }
+  raPublish(prog, RA_DONE, id)
+}
+
+class ReadAhead {
+  job: AheadJob
+  sideLines: string[]
+  batch: Thread<void> | undefined = undefined
+  spawned = 0
+
+  constructor(job: AheadJob, sideLines: string[], read: int) {
+    this.job = job
+    this.sideLines = sideLines
+    Atomics.store(job.prog, RA_READ, read)
+    Atomics.store(job.prog, RA_TAKEN, 1)
+    Atomics.store(job.prog, RA_TOTAL, -1)
+    Atomics.store(job.prog, RA_FAIL, -1)
+  }
+
+  join() {
+    const b = this.batch
+    if (b === undefined) return
+    b.join()
+    this.batch = undefined
+  }
+
+  advance(base: int) {
+    const prog = this.job.prog
+    if (base > Atomics.load(prog, RA_BASE)) Atomics.store(prog, RA_BASE, base)
+    if (this.batch !== undefined && Atomics.load(prog, RA_DONE) === this.spawned) this.join()
+    const taken = Atomics.load(prog, RA_TAKEN)
+    const total = Atomics.load(prog, RA_TOTAL)
+    if (this.batch !== undefined || Atomics.load(prog, RA_FAIL) >= 0 || taken > base + 1 + this.job.extra ||
+      (total >= 0 && taken >= total)) {
+      return
+    }
+    const from = Atomics.load(prog, RA_READ)
+    const lines = this.sideLines.slice(from, from + RA_LINES)
+    const nLines = this.sideLines.length
+    const job = this.job
+    this.spawned++
+    const id = this.spawned
+    this.batch = Thread.spawn(() => readBatch(job, lines, from, taken, total, nLines, id))
+  }
+
+  wait(n: int): void throws Error {
+    const prog = this.job.prog
+    // Frame n-1 is done with before this wait; freeing its slot now keeps a reader that is keeping up with real-time
+    // input inside the per-frame path's depth + 2 slots, so the extra slots are only touched when the encoder falls behind.
+    if (n > Atomics.load(prog, RA_BASE)) Atomics.store(prog, RA_BASE, n)
+    while (true) {
+      const seq = Atomics.load(prog, RA_SEQ)
+      const total = Atomics.load(prog, RA_TOTAL)
+      if (Atomics.load(prog, RA_TAKEN) > n || (total >= 0 && n >= total)) return
+      const fail = Atomics.load(prog, RA_FAIL)
+      if (fail >= 0) {
+        if (fail < this.sideLines.length && this.sideLines[fail]! !== "") try parseSideInfo(this.sideLines[fail]!)
+        throw new Error("can't read the input")
+      }
+      if (this.batch === undefined || Atomics.load(prog, RA_DONE) === this.spawned) {
+        this.advance(n - 1)
+      } else {
+        Atomics.add(prog, RA_WAITERS, 1)
+        Atomics.wait(prog, RA_SEQ, seq)
+        Atomics.sub(prog, RA_WAITERS, 1)
+      }
+    }
+  }
+
+  // What the serial loop would have read when taking frame n: a fallback take must not see further.
+  readFor(n: int): int {
+    const got = Atomics.load(this.job.prog, RA_READ)
+    return got < n + this.job.depth + 1 ? got : n + this.job.depth + 1
+  }
+
+  endedFor(n: int): bool {
+    const total = Atomics.load(this.job.prog, RA_TOTAL)
+    return total >= 0 && total <= n + this.job.depth
+  }
+}
+
+function writeFragment(format: string, fd: int, dir: string, frag: u8[], index: int): int throws Error {
+  if (format === "hls") {
+    const sfd = try openSync(path.join(dir, segmentName(index)), "w")
+    try writeSync(sfd, frag)
+    try closeSync(sfd)
+  } else {
+    try writeSync(fd, frag)
+  }
+  return frag.length
+}
+
+class Sink {
+  format: string
+  fd: int
+  dir: string
+  mux: Mp4Muxer
+  initWritten = false
+  segDurations: f64[] = []
+  bytes = 0
+
+  constructor(format: string, fd: int, dir: string, mux: Mp4Muxer) {
+    this.format = format
+    this.fd = fd
+    this.dir = dir
+    this.mux = mux
+  }
+
+  fragmented(): bool {
+    return this.format === "fmp4" || this.format === "hls"
+  }
+}
+
+function flushFragment(sink: Sink, nextFrame: int): void throws Error {
+  const frag = sink.mux.fragment(sink.mux.sizes.length, nextFrame)
+  sink.bytes += try writeFragment(sink.format, sink.fd, sink.dir, frag, sink.segDurations.length + 1)
+  sink.segDurations.push(f64(sink.mux.lastFragmentTicks) / f64(TIMESCALE))
+}
+
+function emitUnit(sink: Sink, bits: u8[], index: int, idr: bool): void throws Error {
+  if (sink.format === "annexb") {
+    try writeSync(sink.fd, bits)
+    sink.bytes += bits.length
+    return
+  }
+  if (sink.fragmented() && idr && sink.mux.pendingSamples() > 0) try flushFragment(sink, index)
+  sink.mux.addSample(bits, index, idr)
+  if (sink.fragmented() && !sink.initWritten) {
+    const init = sink.mux.initSegment()
+    try writeSync(sink.fd, init)
+    sink.bytes += init.length
+    sink.initWritten = true
+  }
+}
+
+function emitCoded(sink: Sink, enc: Encoder, bits: u8[], firstStat: int): void throws Error {
+  let off = 0
+  for (let k = firstStat; k < enc.frames.length; k++) {
+    const f = enc.frames[k]!
+    if (f.bytes === 0) continue
+    try emitUnit(sink, bits.slice(off, off + f.bytes), f.index, f.type === "I")
+    off += f.bytes
+  }
+}
+
+function statsJson(enc: Encoder, args: Args, wallMs: f64, bytes: int, frameMap: int[]): string {
+  const frames: string[] = []
+  for (const f of enc.frames) {
+    frames.push(frameJson(f))
+  }
+  const mbs = enc.mbw * enc.mbh
+  const total = enc.tAnalysis + enc.tMotion + enc.tMode + enc.tTq + enc.tEntropy + enc.tDeblock
+  return "{" + [
+    `"encoder":"capcodec"`,
+    `"preset":${JSON.stringify(args.preset)}`,
+    `"width":${args.width}`,
+    `"height":${args.height}`,
+    `"mbs":${mbs}`,
+    `"frames_in":${enc.frameIndex}`,
+    `"frames_coded":${enc.codedFrames}`,
+    `"frames_dropped":${enc.frameIndex - enc.codedFrames}`,
+    `"bytes":${bytes}`,
+    `"time_ms":{"total":${wallMs},"stages":${total},"analysis":${enc.tAnalysis},"motion":${enc.tMotion},"mode":${enc.tMode},"tq":${enc.tTq},"entropy":${enc.tEntropy},"deblock":${enc.tDeblock}}`,
+    `"frame_map":[${frameMap.join(",")}]`,
+    `"frames":[${frames.join(",")}]`,
+  ].join(",") + "}"
+}
+
+function frameJson(f: FrameStats): string {
+  return `{"i":${f.index},"type":"${f.type}","bytes":${f.bytes},"qp":${f.qp},"changed_mbs":${f.changedMbs},` +
+    `"ms":{"analysis":${f.analysis},"motion":${f.motion},"mode":${f.mode},"tq":${f.tq},"entropy":${f.entropy},` +
+    `"deblock":${f.deblock},"total":${f.total}},"reused":${f.reused}}`
+}
+
+function encodeCommand(args: Args): void throws Error {
+  const t0 = performance.now()
+  const w = args.width
+  const h = args.height
+  const frameBytes = w * h * 3 / 2
+  const fb = Math.trunc(frameBytes)
+  const enc = new Encoder({
+    width: w, height: h, fpsNum: args.fpsNum, fpsDen: args.fpsDen, qp: args.qp,
+    keyint: args.keyint > 0 ? args.keyint : Math.max(1, Math.round(args.keyintSec * f64(args.fpsNum) / f64(args.fpsDen))),
+    profile: args.profile,
+    preset: args.preset, cabac: !args.cavlc, refs: args.refs, rcMode: args.rcMode, crf: args.crf,
+    bitrate: args.bitrate, maxrate: args.maxrate > 0 ? args.maxrate : Math.round(f64(args.bitrate) * 1.5),
+    bufsize: args.bufsize, ipOffset: args.ipOffset, weightedPred: args.weightp, worker: false,
+  })
+  enc.threads = args.threads > 0 ? args.threads : availableParallelism()
+  enc.vfr = !args.noVfr && !args.fullAnalysis
+  enc.aqStrength = args.aq
+  enc.aqTexture = args.aqTexture
+  enc.noise = args.noise
+  enc.refreshDelta = args.refresh
+  enc.lifetimeAq = args.lifetime
+  enc.inter8x8 = args.inter8x8
+  enc.decimate = args.decimate
+  enc.idrReuse = args.idrReuse
+  enc.globalShift = args.globalShift
+  enc.sliceRowsP = args.sliceRows
+  enc.sliceRowsI = args.idrSliceRows >= 0 ? args.idrSliceRows : args.sliceRows
+  enc.idrSlices = args.idrSlices < 1 ? 1 : args.idrSlices
+  if (args.subme >= 0) enc.subpel = args.subme
+  if (args.subpelDirs > 0) {
+    enc.subpelDirs = args.subpelDirs
+    enc.videoHpelDirs = args.subpelDirs
+    enc.videoQpelDirs = args.subpelDirs
+  }
+  enc.fullAnalysis = args.fullAnalysis
+  enc.bQpOffset = args.bQpOffset
+  enc.bAdapt = args.bAdapt
+  enc.pyramid = args.bPyramid === 1
+  enc.bRefQpOffset = args.bRefQpOffset
+  if (args.bframes > 0) enc.configureB(args.bframes)
+  if (args.laStrength >= 0) enc.laStrength = args.laStrength
+  let sideLines: string[] = []
+  if (args.sideinfo !== "" && !args.noSideinfo) {
+    const text = try readFileSync(args.sideinfo)
+    sideLines = text.split("\n")
+  }
+  const inFd = args.input === "-" ? 0 : try openSync(args.input, "r")
+  let format = args.format
+  if (format === "") {
+    const ext = path.extname(args.output).toLowerCase()
+    format = ext === ".mp4" ? "mp4" : ext === ".fmp4" ? "fmp4" : ext === ".m3u8" ? "hls" : "annexb"
+  }
+  const outDir = path.dirname(args.output)
+  const outFd = format === "hls" ? try openSync(path.join(outDir, "init.mp4"), "w") : args.output === "-" ? 1 : try openSync(args.output, "w")
+  const mux = new Mp4Muxer(w, h, args.fpsNum, args.fpsDen)
+  mux.reorder = enc.bframes > 0
+  mux.reorderFrames = enc.pyramid && enc.bframes >= 2 ? 2 : 1
+  const sink = new Sink(format, outFd, outDir, mux)
+  const reconFd = args.recon === "" ? -1 : try openSync(args.recon, "w")
+  const depth = args.lookahead
+  const pushLook = depth > 0 && !enc.flatLookahead()
+  const readAhead = enc.threads > 1
+  const extra = readAhead && enc.bframes > 0 && pushLook ? args.readAheadFrames : 0
+  const slots = depth + (readAhead ? 2 : 1) + extra
+  const ring = new Uint8Array(fb * slots)
+  const slotOf = new Int32Array(slots)
+  for (let k = 0; k < slots; k++) slotOf[k] = k
+  let sides: (SideInfo | undefined)[] = []
+  for (let k = 0; k < slots; k++) sides.push(undefined)
+  // While this thread waits for or codes frame n the reader may push up to frame n + depth + extra + 1; a take that
+  // falls back to this thread still needs frames n..n+depth in the lookahead's ring, and the encoder frame n's change map.
+  const look = new Lookahead(w, h, extra > 0 ? depth + extra + 1 : depth, false)
+  const geometricTail = enc.bframes === 0
+  const windowTail = geometricTail && enc.keyint > enc.laSpan
+  look.noise = args.noise
+  look.geometricTail = geometricTail
+  look.windowTail = windowTail
+  const noise = args.noise
+  const laMbs = depth > 0 ? ((w + 15) >> 4) * ((h + 15) >> 4) : 0
+  const laLife = [new Int32Array(laMbs), new Int32Array(laMbs)]
+  const laKeep = [new Uint8Array(laMbs), new Uint8Array(laMbs)]
+  for (let k = 0; k < extra; k++) {
+    laLife.push(new Int32Array(laMbs))
+    laKeep.push(new Uint8Array(laMbs))
+  }
+  let ra: ReadAhead | undefined = undefined
+  let read = 0
+  let eof = false
+  let pending: Thread<int> | undefined = undefined
+  const aheadRead = new Int32Array(1)
+  const inRing = new Int32Array(1)
+  Atomics.store(inRing, 0, 1)
+  const none = new Uint8Array(0)
+  let pendingHorizon = -1
+  let aheadHorizon = -1
+  let n = 0
+  let frameMap: int[] = []
+  enc.wantRecon = reconFd >= 0
+  enc.frameThreads = !args.zeroLatency
+  const pipelined = enc.bframes > 0 || enc.intraParallel()
+  while (args.frames < 0 || n < args.frames) {
+    if (ra !== undefined) {
+      try ra.wait(n)
+      read = ra.readFor(n)
+      eof = ra.endedFor(n)
+      look.pushed = read
+      aheadHorizon = ra.job.hz[n % laLife.length]!
+    }
+    while (!eof && read <= n + depth) {
+      const slot = read % slots
+      let got = 0
+      if (pending !== undefined) {
+        got = pending.join()
+        pending = undefined
+        if (got < 0) throw new Error("can't read the input")
+        if (got === fb && pushLook) look.pushed++
+        aheadHorizon = pendingHorizon
+      } else if (args.frames < 0 || read < args.frames) {
+        got = try readFull(inFd, ring, slot * fb, fb)
+        if (got === fb) {
+          sides[slot] = read < sideLines.length && sideLines[read]! !== "" ? try parseSideInfo(sideLines[read]!) : undefined
+          if (pushLook) look.push(ring, slot * fb, ((read + slots - 1) % slots) * fb, sides[slot])
+        }
+      }
+      if (got < fb) {
+        eof = true
+        break
+      }
+      read++
+    }
+    if (n >= read) break
+    if (depth > 0) {
+      if (eof && look.total < 0) look.finish()
+      const life = laLife[n % laLife.length]!
+      const keep = laKeep[n % laKeep.length]!
+      if (aheadHorizon >= 0 && aheadHorizon === enc.laHorizon()) {
+        look.taken++
+        enc.useLookahead(life, keep)
+      } else {
+        if (ra !== undefined) ra.join()
+        enc.takeLookahead(look, life, keep)
+      }
+      aheadHorizon = -1
+      enc.useChanges(look.changesOf(n), n, look.noise)
+    }
+    if (extra > 0 && n === 0 && !eof) {
+      const horizons = new Int32Array(enc.keyint)
+      for (let k = 0; k < enc.keyint; k++) horizons[k] = enc.laHorizonAt(k)
+      ra = new ReadAhead({
+        fd: inFd, ring, fb, slotOf, prog: new Int32Array(8), hz: new Int32Array(laLife.length), horizons, life: laLife,
+        keep: enc.wantsKeepMap() ? laKeep : [], state: look.share(), w, h, depth, extra, noise, geometricTail, windowTail,
+        frameStop: args.frames,
+      }, sideLines, read)
+    }
+    if (ra !== undefined) {
+      ra.advance(n)
+    } else if (readAhead && !eof && (args.frames < 0 || read < args.frames)) {
+      const buf = ring
+      const slot = read % slots
+      const off = slot * fb
+      const prevOff = ((read + slots - 1) % slots) * fb
+      const side = read < sideLines.length && sideLines[read]! !== "" ? try parseSideInfo(sideLines[read]!) : undefined
+      sides[slot] = side
+      const hasSide = side !== undefined
+      const dirty = side !== undefined ? side.dirty : []
+      const scroll = side !== undefined ? side.scroll : []
+      const st = look.share()
+      const at = look.pushed
+      const target = n + 1
+      const horizon = pushLook && (args.frames < 0 || target < args.frames) ? enc.laHorizonAt(target) : -1
+      const life = laLife[target % 2]!
+      const keep = enc.wantsKeepMap() ? laKeep[target % 2]! : new Uint8Array(0)
+      pendingHorizon = horizon
+      Atomics.store(aheadRead, 0, 0)
+      pending = Thread.spawn(() => {
+        try {
+          const got = try readFull(inFd, buf, off, fb)
+          Atomics.store(aheadRead, 0, got >= fb ? 1 : -1)
+          if (pushLook) {
+            const worker = new Lookahead(w, h, depth, true)
+            worker.attach(st, at, noise, geometricTail, windowTail)
+            if (got === fb) {
+              let s: SideInfo | undefined = undefined
+              if (hasSide) {
+                const t = new SideInfo()
+                t.dirty = dirty
+                t.scroll = scroll
+                s = t
+              }
+              worker.push(buf, off, prevOff, s)
+            } else {
+              worker.total = at
+            }
+            if (horizon >= 0) worker.takeAhead(target, horizon, life, keep)
+          }
+          return got
+        } catch (e) {
+          Atomics.store(aheadRead, 0, -1)
+          return -1
+        }
+      })
+    }
+    const off = slotOf[n % slots]! * fb
+    const side = ra === undefined || n <= depth ? sides[n % slots] :
+      n < sideLines.length && sideLines[n]! !== "" ? try parseSideInfo(sideLines[n]!) : undefined
+    const next = n + 1
+    let nextFrame = none
+    let nextReady = inRing
+    if (readAhead && (next >= sideLines.length || sideLines[next]! === "")) {
+      if (next < read) {
+        nextFrame = ring
+      } else if (pending !== undefined) {
+        nextFrame = ring
+        nextReady = aheadRead
+      }
+    }
+    enc.expectNext(nextFrame, slotOf[next % slots]! * fb, nextReady)
+    if (pipelined) {
+      const first = enc.frames.length
+      const bits = enc.submit(ring, off, side)
+      try emitCoded(sink, enc, bits, first)
+      for (const r of enc.takeRecon()) try writeSync(reconFd, r)
+    } else {
+      const bits = enc.encodeFrame(ring, off, side)
+      if (bits.length > 0) {
+        try emitUnit(sink, bits, n, enc.frames[enc.frames.length - 1]!.type === "I")
+        frameMap.push(n)
+        if (reconFd >= 0) try writeSync(reconFd, enc.reconFrame())
+      }
+    }
+    n++
+  }
+  if (ra !== undefined) ra.join()
+  if (pipelined) {
+    enc.expectNext(none, 0, aheadRead)
+    const first = enc.frames.length
+    const tail = enc.flush()
+    try emitCoded(sink, enc, tail, first)
+    for (const r of enc.takeRecon()) try writeSync(reconFd, r)
+    for (const f of enc.frames) {
+      if (f.bytes === 0) continue
+      let j = frameMap.length
+      frameMap.push(f.index)
+      while (j > 0 && frameMap[j - 1]! > f.index) {
+        frameMap[j] = frameMap[j - 1]!
+        j--
+      }
+      frameMap[j] = f.index
+    }
+  }
+  try finishOutput(args, enc, sink, n, frameMap, inFd, reconFd, t0)
+}
+
+function finishOutput(args: Args, enc: Encoder, sink: Sink, n: int, frameMap: int[], inFd: int, reconFd: int, t0: f64): void throws Error {
+  if (sink.format === "mp4") {
+    const file = sink.mux.progressive(n)
+    try writeSync(sink.fd, file)
+    sink.bytes += file.length
+  } else if (sink.fragmented() && sink.mux.pendingSamples() > 0) {
+    try flushFragment(sink, n)
+  }
+  const bytes = sink.bytes
+  if (sink.format === "hls") {
+    const segDurations = sink.segDurations
+    try writeFileSync(args.output, mediaPlaylist(segDurations, "init.mp4"))
+    const sps = sink.mux.sps
+    const hex = (b: u8): string => {
+      const v = int(b)
+      const d = "0123456789abcdef"
+      return d.slice(v >> 4, (v >> 4) + 1) + d.slice(v & 15, (v & 15) + 1)
+    }
+    const codecs = sps.length >= 4 ? `avc1.${hex(sps[1]!)}${hex(sps[2]!)}${hex(sps[3]!)}` : "avc1.640028"
+    let total = 0.0
+    for (const d of segDurations) total += d
+    const bw = total > 0.0 ? Math.round(f64(bytes) * 8.0 / total * 1.2) : 1000000
+    try writeFileSync(path.join(sink.dir, "master.m3u8"), masterPlaylist(path.basename(args.output), bw, codecs, args.width, args.height, f64(args.fpsNum) / f64(args.fpsDen)))
+  }
+  if (inFd !== 0) try closeSync(inFd)
+  if (sink.fd !== 1) try closeSync(sink.fd)
+  if (reconFd >= 0) try closeSync(reconFd)
+  const wall = performance.now() - t0
+  if (args.stats !== "") try writeFileSync(args.stats, statsJson(enc, args, wall, bytes, frameMap))
+  console.error(`capcodec: ${n} frames, ${bytes} bytes, ${(f64(n) * 1000.0 / wall).toFixed(1)} fps`)
+}
+
+function main(): int {
+  const argv = process.argv.slice(2)
+  if (argv.length === 0 || argv[0]! !== "encode") {
+    console.error(usage())
+    return 2
+  }
+  try {
+    const args = try parseArgs(argv.slice(1))
+    try encodeCommand(args)
+  } catch (e) {
+    console.error(`capcodec: ${e.message}`)
+    if (e instanceof UsageError) console.error(usage())
+    return 1
+  }
+  return 0
+}

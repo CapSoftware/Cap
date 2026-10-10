@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>inflate.c - zlib - Visual Studio Code</title>
+<link rel="stylesheet" href="common/workbench.css">
+<style>
+#editor {
+	flex: 1;
+	min-height: 0;
+}
+#panel {
+	height: 404px;
+	flex: none;
+	border-top: 1px solid var(--panel-border);
+	background: var(--panel-bg);
+	display: flex;
+	flex-direction: column;
+}
+#panel .ph {
+	height: 35px;
+	display: flex;
+	align-items: center;
+	padding: 0 8px 0 12px;
+	gap: 22px;
+	font-size: 11px;
+	letter-spacing: 0.03em;
+	color: #969696;
+	flex: none;
+}
+#panel .ph .pt.active {
+	color: #e7e7e7;
+	box-shadow: inset 0 -1px 0 #e7e7e7;
+	padding: 8px 0;
+}
+#panel .ph .pt .cnt {
+	background: #616161;
+	color: #fff;
+	border-radius: 9px;
+	padding: 0 5px;
+	margin-left: 4px;
+	font-size: 10px;
+}
+#panel .ph .pacts {
+	margin-left: auto;
+	display: flex;
+	gap: 10px;
+	align-items: center;
+	color: #c5c5c5;
+}
+#panel .ph .shell {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	font-size: 12px;
+	letter-spacing: 0;
+}
+#term {
+	flex: 1;
+	min-height: 0;
+	display: flex;
+	padding-left: 20px;
+}
+.term-scroller {
+	flex: 1;
+	overflow-y: scroll;
+	overflow-x: hidden;
+}
+.term-scroller::-webkit-scrollbar {
+	width: 10px;
+}
+.term-scroller::-webkit-scrollbar-thumb {
+	background: #79797966;
+}
+.term-body {
+	font-family: "JetBrains Mono", "DejaVu Sans Mono", monospace;
+	font-size: 13px;
+	line-height: 17px;
+	color: #cccccc;
+	white-space: pre;
+	padding-bottom: 2px;
+	font-variant-ligatures: none;
+}
+.tl {
+	height: 17px;
+	overflow: hidden;
+}
+.tcur {
+	background: #cccccc80;
+	outline: 1px solid #cccccc;
+}
+#term.focused .tcur {
+	background: #cccccc;
+}
+.c-g {
+	color: #0dbc79;
+}
+.c-b {
+	color: #3b8eea;
+}
+.c-y {
+	color: #e5e510;
+}
+.c-r {
+	color: #f14c4c;
+}
+.c-c {
+	color: #11a8cd;
+}
+.c-m {
+	color: #d670d6;
+}
+.c-k {
+	color: #8a8a8a;
+}
+.b {
+	font-weight: 700;
+}
+#term-tabs {
+	width: 168px;
+	flex: none;
+	border-left: 1px solid #80808059;
+	font-size: 13px;
+	color: #cccccc;
+	padding-top: 2px;
+}
+#term-tabs .tt {
+	height: 22px;
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding-left: 10px;
+}
+#term-tabs .tt.active {
+	background: #37373d;
+	box-shadow: inset 1px 0 0 #007fd4;
+}
+</style>
+<script src="common/cap.js"></script>
+<script src="common/editor.js"></script>
+<script src="common/workbench.js"></script>
+<script src="common/terminal.js"></script>
+<script src="data/inflate_c.js"></script>
+</head>
+<body>
+<script>
+const editor = buildWorkbench({
+	theme: "dark",
+	project: "zlib",
+	branch: "fix/window-reset*",
+	scmCount: 2,
+	warnings: 4,
+	lang: "c",
+	langLabel: "C",
+	interp: "Linux",
+	panel: true,
+	source: window.SOURCE_INFLATE_C,
+	minimapColors: MINIMAP_DARK,
+	crumbs: ["zlib", "inflate.c", "inflateResetKeep(z_streamp)"],
+	tabs: [
+		{ name: "inflate.c", active: true },
+		{ name: "inflate.h" },
+		{ name: "inftrees.c" },
+		{ name: "fuzz_inflate.c", preview: true },
+		{ name: "Makefile.in" },
+	],
+	tree: [
+		{ depth: 0, dir: true, name: ".github" },
+		{ depth: 0, dir: true, name: "amiga" },
+		{ depth: 0, dir: true, name: "contrib" },
+		{ depth: 0, dir: true, name: "doc" },
+		{ depth: 0, dir: true, name: "examples" },
+		{ depth: 0, dir: true, open: true, name: "fuzz", gs: "U" },
+		{ depth: 1, dir: true, name: "corpus" },
+		{ depth: 1, name: "fuzz_inflate.c", gs: "U" },
+		{ depth: 0, dir: true, name: "test" },
+		{ depth: 0, name: "adler32.c" },
+		{ depth: 0, name: "compress.c" },
+		{ depth: 0, name: "crc32.c" },
+		{ depth: 0, name: "crc32.h" },
+		{ depth: 0, name: "deflate.c" },
+		{ depth: 0, name: "deflate.h" },
+		{ depth: 0, name: "gzguts.h" },
+		{ depth: 0, name: "infback.c" },
+		{ depth: 0, name: "inffast.c" },
+		{ depth: 0, name: "inffixed.h" },
+		{ depth: 0, name: "inflate.c", active: true, gs: "M" },
+		{ depth: 0, name: "inflate.h", gs: "M" },
+		{ depth: 0, name: "inftrees.c" },
+		{ depth: 0, name: "inftrees.h" },
+		{ depth: 0, name: "Makefile.in" },
+		{ depth: 0, name: "README" },
+		{ depth: 0, name: "trees.c" },
+		{ depth: 0, name: "zconf.h" },
+		{ depth: 0, name: "zlib.h" },
+		{ depth: 0, name: "zutil.c" },
+		{ depth: 0, name: "zutil.h" },
+	],
+});
+window.capEditor = editor;
+
+const panel = document.getElementById("panel");
+panel.innerHTML = `<div class="ph">
+	<span class="pt">PROBLEMS<span class="cnt">4</span></span><span class="pt">OUTPUT</span><span class="pt">DEBUG CONSOLE</span><span class="pt active">TERMINAL</span><span class="pt">PORTS</span>
+	<span class="pacts"><span class="shell">${wbIcon("term")} bash</span>${wbIcon("plus")}${wbIcon("split")}${wbIcon("trash")}${wbIcon("more")}${wbIcon("chevup")}${wbIcon("close")}</span></div>
+	<div id="term"></div>`;
+const termHost = document.getElementById("term");
+const PROMPT = '<span class="c-g b">dev@buildbox</span>:<span class="c-b b">~/src/zlib</span>$ ';
+
+const SOURCES = "adler32 crc32 deflate infback inffast inflate inftrees trees zutil compress uncompr gzclose gzlib gzread gzwrite".split(" ");
+const MUTATIONS = "ChangeBit EraseBytes InsertByte CopyPart ChangeByte ShuffleBytes CrossOver InsertRepeatedBytes ChangeBinInt PersAutoDict ChangeASCIIInt CMP ManualDict".split(" ");
+
+function fuzzState(rng) {
+	return { execs: 2097152 + Math.floor(rng() * 100000), cov: 1184, ft: 5873, corp: 642, kb: 318, rss: 412 };
+}
+
+function fuzzLine(s, rng) {
+	const r = rng();
+	s.execs += 300 + Math.floor(rng() * 5000);
+	let kind = "REDUCE";
+	if (r < 0.22) {
+		kind = "NEW   ";
+		s.cov += rng() < 0.4 ? 1 : 0;
+		s.ft += 1 + Math.floor(rng() * 6);
+		s.corp += 1;
+		s.kb += Math.floor(rng() * 3);
+	} else if (r < 0.3) {
+		kind = "pulse ";
+	}
+	if (rng() < 0.05) s.rss += 1;
+	const n = 1 + Math.floor(rng() * 4);
+	const ms = [];
+	for (let i = 0; i < n; i++) ms.push(MUTATIONS[Math.floor(rng() * MUTATIONS.length)]);
+	const L = 1 + Math.floor(rng() * 3800);
+	const eps = 41000 + Math.floor(rng() * 9000);
+	const tail = kind === "pulse " ? "" : ` L: ${L}/4096 MS: ${n} ${ms.join("-")}-`;
+	return `#${s.execs}\t${kind} cov: ${s.cov} ft: ${s.ft} corp: ${s.corp}/${s.kb}Kb lim: 4096 exec/s: ${eps} rss: ${s.rss}Mb${tail}`;
+}
+
+function* fuzzer(rng, s, header) {
+	if (header) {
+		yield [60, ["INFO: Running with entropic power schedule (0xFF, 100).", "INFO: Seed: 1803446715"]];
+		yield [40, ["INFO: Loaded 1 modules   (2316 inline 8-bit counters): 2316 [0x5603a2f0, 0x5603ac1c),"]];
+		yield [30, ["INFO: Loaded 1 PC tables (2316 PCs): 2316 [0x5603ac20,0x56044ee0),"]];
+		yield [180, ["INFO:      642 files found in corpus/", "INFO: -max_len is not provided; libFuzzer will not generate inputs larger than 4096 bytes"]];
+		yield [420, ["INFO: seed corpus: files: 642 min: 1b max: 4096b total: 325873b rss: 38Mb", `#643\tINITED cov: ${s.cov} ft: ${s.ft} corp: ${s.corp}/${s.kb}Kb exec/s: 0 rss: 61Mb`]];
+	}
+	for (;;) {
+		const r = rng();
+		if (r < 0.12) {
+			const lines = [];
+			const n = 4 + Math.floor(rng() * 10);
+			for (let i = 0; i < n; i++) lines.push(fuzzLine(s, rng));
+			yield [30, lines];
+		} else {
+			yield [90 + Math.floor(rng() * 520), [fuzzLine(s, rng)]];
+		}
+	}
+}
+
+const fstate = { s: null };
+function fuzzCommand(cmd, rng, t, header = true) {
+	fstate.s = fstate.s || fuzzState(rng);
+	const g = fuzzer(rng, fstate.s, header);
+	g.onInterrupt = () => [
+		"==31337== libFuzzer: run interrupted; exiting",
+		`stat::number_of_executed_units: ${fstate.s.execs}`,
+		"stat::average_exec_per_sec:     45871",
+		"stat::new_units_added:          1288",
+		"stat::slowest_unit_time_sec:    0",
+		`stat::peak_rss_mb:              ${fstate.s.rss}`,
+	];
+	return g;
+}
+
+function* makeTest(rng) {
+	const flags = "-O3 -Wall -D_LARGEFILE64_SOURCE=1 -DHAVE_HIDDEN -I.";
+	for (const s of SOURCES) yield [90 + Math.floor(rng() * 260), [`gcc ${flags} -c -o ${s}.o ${s}.c`]];
+	yield [120, [`ar rc libz.a ${SOURCES.map((s) => `${s}.o`).join(" ")}`]];
+	yield [60, [`gcc ${flags} -c -o example.o test/example.c`, `gcc ${flags} -c -o minigzip.o test/minigzip.c`]];
+	yield [240, [`gcc ${flags} -o example example.o -L. libz.a`, `gcc ${flags} -o minigzip minigzip.o -L. libz.a`]];
+	yield [300, ["hello world", "zlib version 1.3.1.1-motley = 0x1311, compile flags = 0xa9", "uncompress(): hello, hello!"]];
+	yield [80, ["gzread(): hello, hello!", "gzgets() after gzseek:  hello!", "inflate(): hello, hello!"]];
+	yield [400, ["large_inflate(): OK", "after inflateSync(): hello, hello!", "inflate with dictionary: hello, hello!"]];
+	yield [60, ['\t\t<span class="c-g">*** zlib test OK ***</span>']];
+	yield [200, ["hello world", "zlib version 1.3.1.1-motley = 0x1311, compile flags = 0xa9", "uncompress(): hello, hello!", "gzread(): hello, hello!"]];
+	yield [120, ["inflate(): hello, hello!", "large_inflate(): OK", '\t\t<span class="c-g">*** zlib shared test OK ***</span>']];
+}
+
+function* gitStatus() {
+	yield [40, [
+		"On branch fix/window-reset",
+		"Your branch is ahead of 'origin/fix/window-reset' by 1 commit.",
+		'  (use "git push" to publish your local commits)',
+		"",
+		"Changes not staged for commit:",
+		'  (use "git add &lt;file&gt;..." to update what will be committed)',
+		'  (use "git restore &lt;file&gt;..." to discard changes in working directory)',
+		'\t<span class="c-r">modified:   inflate.c</span>',
+		'\t<span class="c-r">modified:   inflate.h</span>',
+		"",
+		"Untracked files:",
+		'  (use "git add &lt;file&gt;..." to include in what will be committed)',
+		'\t<span class="c-r">fuzz/</span>',
+		"",
+	]];
+}
+
+const term = new Terminal(termHost, {
+	seed: 1234,
+	prompt: PROMPT,
+	commands: {
+		"./fuzz": fuzzCommand,
+		make: (cmd, rng) => makeTest(rng),
+		"git status": () => gitStatus(),
+		clear: (cmd, rng, t) => {
+			t.body.innerHTML = "";
+			return (function* () {})();
+		},
+	},
+});
+const tabsEl = document.createElement("div");
+tabsEl.id = "term-tabs";
+tabsEl.innerHTML = `<div class="tt">${wbIcon("term")} bash</div><div class="tt active">${wbIcon("term")} fuzz_inflate</div>`;
+termHost.append(tabsEl);
+term.onFocus = () => editor.blur();
+editor.onFocus = () => term.blur();
+
+const history = [
+	`${PROMPT}make -j4 fuzz_inflate`,
+	"clang -g -O1 -fsanitize=fuzzer,address -I. -o fuzz_inflate fuzz/fuzz_inflate.c libz.a",
+	`${PROMPT}./fuzz_inflate -jobs=1 -max_len=4096 corpus/`,
+];
+for (const h of history) term.line(h);
+const prng = mulberry32(99);
+fstate.s = fuzzState(prng);
+const pre = fuzzer(prng, fstate.s, true);
+for (let i = 0; i < 30; i++) for (const l of pre.next().value[1]) term.line(l);
+const live = fuzzCommand("./fuzz", term.rng, term, false);
+
+editor.scrollTo(118 * 19);
+editor.caret = { line: 141, col: 0 };
+editor.updateCaret(false);
+editor.focus();
+term.blur();
+editor.focused = false;
+editor.host.classList.remove("focused");
+
+window.capStart = () => term.start(live);
+window.capTerm = term;
+window.capTextRegions = () => {
+	const t = term.scroller.getBoundingClientRect();
+	const e = editor.scroller.getBoundingClientRect();
+	return [
+		[e.left, e.top + 4, 720, Math.floor(e.height - 8)],
+		[t.left, t.top + 2, 1100, Math.floor(t.height - 4)],
+	];
+};
+capSetReady();
+</script>
+</body>
+</html>
