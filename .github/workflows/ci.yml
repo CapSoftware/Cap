@@ -46,7 +46,12 @@ jobs:
               - 'packages/web-api-contract/**'
               - 'scripts/build-desktop-binaries*'
               - 'scripts/build-gpui-binary.sh'
+              - 'scripts/build-linux-packages.mjs'
               - 'scripts/build-macos-packages*'
+              - 'scripts/bundle-gpui*'
+              - 'scripts/finalize-linux-*'
+              - 'scripts/finalize-macos-*'
+              - 'scripts/linux-bundle-config*'
               - 'scripts/prepare-gpui-dependency*'
               - 'scripts/run-gpui-build*'
               - 'scripts/sync-desktop-versions.mjs'
@@ -270,7 +275,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Test desktop build preparation
-        run: node --test scripts/prepare-gpui-dependency.test.mjs scripts/build-macos-packages.test.mjs
+        run: node --test scripts/prepare-gpui-dependency.test.mjs scripts/build-macos-packages.test.mjs scripts/bundle-gpui.test.mjs scripts/finalize-macos-packages.test.mjs
 
       - name: Install Linux desktop dependencies
         if: ${{ runner.os == 'Linux' }}
@@ -325,7 +330,7 @@ jobs:
         if: ${{ runner.os == 'Linux' }}
         shell: bash
         run: |
-          node --test scripts/linux-bundle-config.test.mjs scripts/finalize-linux-appimage.test.mjs
+          node --test scripts/linux-bundle-config.test.mjs scripts/finalize-linux-appimage.test.mjs scripts/finalize-linux-gpui-packages.test.mjs
           bun run --cwd apps/desktop vitest run scripts/prepare.test.js
           cargo test --locked -p cap-utils -p cap-cli-install --lib
           cargo test --locked -p cap --bin cap record::tests

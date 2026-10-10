@@ -75,7 +75,10 @@ impl HotkeyAction {
 }
 
 struct Hotkeys {
-    manager: GlobalHotKeyManager,
+    /// Only alive while something is registered: on X11 the manager owns a
+    /// thread that polls the server every 50ms whether or not any key is
+    /// grabbed.
+    manager: Option<GlobalHotKeyManager>,
     bindings: Vec<(HotKey, HotkeyAction)>,
     #[cfg(target_os = "linux")]
     capture_stop: Option<HotKey>,
@@ -83,20 +86,38 @@ struct Hotkeys {
 
 impl Global for Hotkeys {}
 
-/// Create the manager (main thread -- it installs the Carbon event handler),
-/// register the store's bindings, and start the drain. The handler callback
+impl Hotkeys {
+    fn manager(&mut self) -> Result<&GlobalHotKeyManager, String> {
+        match &mut self.manager {
+            Some(manager) => Ok(manager),
+            slot @ None => {
+                Ok(slot.insert(GlobalHotKeyManager::new().map_err(|error| error.to_string())?))
+            }
+        }
+    }
+
+    fn idle(&self) -> bool {
+        #[cfg(target_os = "linux")]
+        if self.capture_stop.is_some() {
+            return false;
+        }
+        self.bindings.is_empty()
+    }
+
+    fn release_idle_manager(&mut self) {
+        if self.idle() {
+            self.manager = None;
+        }
+    }
+}
+
+/// Register the store's bindings (on the main thread, where the manager
+/// installs the Carbon event handler) and start the drain. The handler callback
 /// fires on the OS event seam, so it only forwards into a channel; the gpui
 /// task dispatches with a clean borrow -- the tray-channel discipline.
 pub fn init(cx: &mut App) {
-    let manager = match GlobalHotKeyManager::new() {
-        Ok(manager) => manager,
-        Err(error) => {
-            tracing::error!("the global hotkey manager failed to start: {error}");
-            return;
-        }
-    };
     cx.set_global(Hotkeys {
-        manager,
+        manager: None,
         bindings: Vec::new(),
         #[cfg(target_os = "linux")]
         capture_stop: None,
@@ -152,7 +173,9 @@ pub fn reload(cx: &mut App) {
             old.push(*hotkey);
         }
     }
-    if let Err(error) = hotkeys.manager.unregister_all(&old) {
+    if let Some(manager) = &hotkeys.manager
+        && let Err(error) = manager.unregister_all(&old)
+    {
         tracing::warn!("unregistering global hotkeys failed: {error}");
     }
     hotkeys.bindings.clear();
@@ -461,9 +484,13 @@ pub fn reserve_clean_capture_stop(
         );
     }
     if actions.is_empty() {
-        hotkeys.manager.register(key).map_err(|error| {
-            anyhow::anyhow!("Ctrl+Shift+F9 is unavailable: {error}. Recording has not started.")
-        })?;
+        let registered = hotkeys
+            .manager()
+            .and_then(|manager| manager.register(key).map_err(|error| error.to_string()));
+        if let Err(error) = registered {
+            hotkeys.release_idle_manager();
+            anyhow::bail!("Ctrl+Shift+F9 is unavailable: {error}. Recording has not started.");
+        }
     }
     hotkeys.capture_stop = Some(key);
     Ok(())
@@ -505,7 +532,8 @@ pub fn release_clean_capture_stop(cx: &mut App) {
         return;
     };
     if actions_for(&hotkeys.bindings, key.id()).is_empty()
-        && let Err(error) = hotkeys.manager.unregister(key)
+        && let Some(manager) = &hotkeys.manager
+        && let Err(error) = manager.unregister(key)
     {
         tracing::warn!(%error, "Could not release the temporary recording shortcut");
     }
@@ -564,13 +592,17 @@ fn register_from_store(cx: &mut App) {
             hotkeys.bindings.push((hotkey, action));
             continue;
         }
-        match hotkeys.manager.register(hotkey) {
+        let registered = hotkeys
+            .manager()
+            .and_then(|manager| manager.register(hotkey).map_err(|error| error.to_string()));
+        match registered {
             Ok(()) => hotkeys.bindings.push((hotkey, action)),
             Err(error) => {
                 tracing::warn!(?action, code = %binding.code, "registering global hotkey failed: {error}")
             }
         }
     }
+    hotkeys.release_idle_manager();
     tracing::info!(count = hotkeys.bindings.len(), "global hotkeys registered");
 }
 
@@ -782,6 +814,34 @@ fn stored_target() -> Option<ScreenCaptureTarget> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_manager_is_only_kept_while_a_shortcut_is_registered() {
+        use super::{Code, HotKey, HotkeyAction, Hotkeys, Modifiers};
+
+        let mut hotkeys = Hotkeys {
+            manager: None,
+            bindings: Vec::new(),
+            #[cfg(target_os = "linux")]
+            capture_stop: None,
+        };
+        assert!(hotkeys.idle());
+        hotkeys.release_idle_manager();
+        assert!(hotkeys.manager.is_none());
+
+        let key = HotKey::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyR);
+        hotkeys.bindings.push((key, HotkeyAction::StopRecording));
+        assert!(!hotkeys.idle());
+        hotkeys.bindings.clear();
+
+        #[cfg(target_os = "linux")]
+        {
+            hotkeys.capture_stop = Some(key);
+            assert!(!hotkeys.idle());
+            hotkeys.capture_stop = None;
+        }
+        assert!(hotkeys.idle());
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn actual_stop_asset_is_resized_for_shared_tray_contract() {

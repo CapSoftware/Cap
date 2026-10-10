@@ -29,19 +29,11 @@ function Get-PayloadDefinitions {
 	return @(
 		[pscustomobject]@{
 			Name = "Cap.exe"
-			Path = Join-Path $releaseRoot "Cap.exe"
-		},
-		[pscustomobject]@{
-			Name = "cap-gpui.exe"
-			Path = Join-Path $WorkspaceRoot "apps/desktop/src-tauri/binaries/cap-gpui-$Target.exe"
+			Path = Join-Path $WorkspaceRoot "apps/desktop-gpui/target/$Target/release/cap-gpui.exe"
 		},
 		[pscustomobject]@{
 			Name = "cap-cli.exe"
 			Path = Join-Path $WorkspaceRoot "apps/desktop/src-tauri/binaries/cap-cli-$Target.exe"
-		},
-		[pscustomobject]@{
-			Name = "cap-exporter.exe"
-			Path = Join-Path $WorkspaceRoot "apps/desktop/src-tauri/binaries/cap-exporter-$Target.exe"
 		},
 		[pscustomobject]@{
 			Name = "cap-muxer.exe"
@@ -76,10 +68,10 @@ function Read-Manifest {
 		throw "Payload manifest '$manifestPath' does not exist."
 	}
 	$manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-	if ($manifest.schemaVersion -ne 1 -or $manifest.target -ne $Target -or @($manifest.entries).Count -ne 5) {
+	$expectedNames = @(Get-PayloadDefinitions | ForEach-Object Name | Sort-Object)
+	if ($manifest.schemaVersion -ne 1 -or $manifest.target -ne $Target -or @($manifest.entries).Count -ne $expectedNames.Count) {
 		throw "Payload manifest '$manifestPath' has an unexpected schema."
 	}
-	$expectedNames = @(Get-PayloadDefinitions | ForEach-Object Name | Sort-Object)
 	$actualNames = @($manifest.entries | ForEach-Object name | Sort-Object)
 	if (Compare-Object $expectedNames $actualNames) {
 		throw "Payload manifest '$manifestPath' has unexpected executable names."

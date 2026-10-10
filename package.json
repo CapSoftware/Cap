@@ -28,6 +28,7 @@
 		"docker:up": "turbo run docker:up",
 		"format": "bun run biome check --write",
 		"lint": "bun run biome lint",
+		"gpui:build": "dotenv -e .env -- node scripts/bundle-gpui.mjs",
 		"tauri:build": "dotenv -e .env -- bun run --cwd apps/desktop build:tauri --config src-tauri/tauri.prod.conf.json --verbose",
 		"typecheck": "bun run --cwd apps/web next typegen && bun run tsc -b",
 		"test": "turbo run test",

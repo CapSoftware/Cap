@@ -14,11 +14,7 @@
 //!   read-modify-write on the raw JSON that touches exactly one key: see
 //!   [`set_store_setting`].
 
-use std::{
-    io::Write,
-    path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
-};
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -194,11 +190,10 @@ fn bundled_resource_dirs_for(
     directories
 }
 
-/// The Tauri app's hand-off marker (`gpui_app.rs`).
-///
-/// It survives for the entire session, including recording finalization, and
-/// is removed only during clean app shutdown. A timer cannot establish health:
-/// an idle native callback can crash after any startup grace period has elapsed.
+/// The Tauri dev harness's hand-off marker (`gpui_app.rs` over there): it
+/// survives the whole session and is removed only on a clean quit, so a marker
+/// left behind reads as a crash and routes the next `bun run dev:desktop` back
+/// to the classic app.
 pub fn handoff_marker_path() -> PathBuf {
     app_data_dir().join("cap-gpui.handoff")
 }
@@ -210,11 +205,16 @@ pub fn mark_handoff_session() {
 }
 
 fn mark_handoff_session_at(path: &Path) -> std::io::Result<()> {
-    write_update_handoff_at(path, &std::process::id().to_string())
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let staged = path.with_extension(format!("handoff-{}", std::process::id()));
+    std::fs::write(&staged, std::process::id().to_string())?;
+    std::fs::rename(&staged, path).inspect_err(|_| {
+        let _ = std::fs::remove_file(&staged);
+    })
 }
 
-/// Best-effort: a marker that cannot be removed only costs one fallback to the
-/// Tauri app on the next launch.
 pub fn clear_handoff_marker() {
     clear_handoff_marker_at(&handoff_marker_path());
 }
@@ -224,99 +224,6 @@ fn clear_handoff_marker_at(path: &Path) {
         Ok(()) => tracing::info!("cleared the hand-off marker"),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => tracing::warn!("clearing the hand-off marker: {error}"),
-    }
-}
-
-/// One-shot request for the Tauri host to own the next startup and open its
-/// updater. The GPUI preference stays enabled, so the relaunch after a signed
-/// bundle update routes back to the new GPUI binary.
-pub fn update_handoff_path() -> PathBuf {
-    app_data_dir().join("cap-gpui.update-handoff")
-}
-
-pub fn request_update_handoff() -> std::io::Result<()> {
-    write_update_handoff(&std::process::id().to_string())
-}
-
-#[cfg(debug_assertions)]
-pub fn request_simulated_update_handoff() -> std::io::Result<()> {
-    write_update_handoff(&format!("simulate:{}", std::process::id()))
-}
-
-fn write_update_handoff(contents: &str) -> std::io::Result<()> {
-    write_update_handoff_at(&update_handoff_path(), contents)
-}
-
-fn write_update_handoff_at(path: &Path, contents: &str) -> std::io::Result<()> {
-    static WRITES: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    static SEQUENCE: AtomicU64 = AtomicU64::new(0);
-
-    let _guard = WRITES
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    let (temporary_path, mut file) = loop {
-        let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
-        let mut temporary_path = path.as_os_str().to_os_string();
-        temporary_path.push(format!(".tmp.{}.{sequence}", std::process::id()));
-        let temporary_path = PathBuf::from(temporary_path);
-
-        match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary_path)
-        {
-            Ok(file) => break (temporary_path, file),
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(error) => return Err(error),
-        }
-    };
-
-    let written = file.write_all(contents.as_bytes());
-    drop(file);
-    let published = written.and_then(|()| publish_update_handoff(&temporary_path, path));
-    if published.is_err() {
-        let _ = std::fs::remove_file(&temporary_path);
-    }
-    published
-}
-
-#[cfg(not(windows))]
-fn publish_update_handoff(temporary_path: &Path, path: &Path) -> std::io::Result<()> {
-    std::fs::rename(temporary_path, path)
-}
-
-#[cfg(windows)]
-fn publish_update_handoff(temporary_path: &Path, path: &Path) -> std::io::Result<()> {
-    match std::fs::rename(temporary_path, path) {
-        Ok(()) => Ok(()),
-        Err(error)
-            if matches!(
-                error.kind(),
-                std::io::ErrorKind::AlreadyExists | std::io::ErrorKind::PermissionDenied
-            ) =>
-        {
-            match std::fs::remove_file(path) {
-                Ok(()) => {}
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => return Err(error),
-            }
-            std::fs::rename(temporary_path, path)
-        }
-        Err(error) => Err(error),
-    }
-}
-
-pub fn clear_update_handoff() {
-    let path = update_handoff_path();
-    match std::fs::remove_file(&path) {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => tracing::warn!("clearing the update hand-off: {error}"),
     }
 }
 
@@ -932,10 +839,6 @@ pub struct GeneralSettings {
     /// `!!settings.outOfProcessMuxer` in experimental.tsx).
     pub enable_native_camera_preview: bool,
     pub out_of_process_muxer: bool,
-    /// Whether this app, rather than the Tauri one, owns the session. Reads
-    /// true for anyone who arrived here through the Tauri app's hand-off; the
-    /// Experimental page's Native app row turns it back off.
-    pub enable_gpui_app: bool,
     /// Not part of `general_settings` at all: the mic-confirmation toggle
     /// lives in the store's own `recording_start_safety` section
     /// (`RECORDING_START_SAFETY_DEFAULTS`), and the page renders it in the
@@ -1267,7 +1170,6 @@ impl GeneralSettings {
             editor_preview_quality: enum_at(general, "editorPreviewQuality"),
             enable_native_camera_preview: bool_at(general, "enableNativeCameraPreview", false),
             out_of_process_muxer: bool_at(general, "outOfProcessMuxer", false),
-            enable_gpui_app: bool_at(general, "enableGpuiApp", false),
             confirm_without_microphone: bool_at(
                 safety,
                 "confirmBeforeRecordingWithoutMicrophone",
@@ -1887,6 +1789,23 @@ pub fn preset_names() -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_handoff_marker_holds_this_pid_until_a_clean_quit_clears_it() {
+        let directory =
+            std::env::temp_dir().join(format!("cap-gpui-handoff-{}", super::new_uuid_v4()));
+        let marker = directory.join("cap-gpui.handoff");
+        super::mark_handoff_session_at(&marker).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&marker).unwrap(),
+            std::process::id().to_string()
+        );
+        assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
+        super::clear_handoff_marker_at(&marker);
+        assert!(!marker.exists());
+        super::clear_handoff_marker_at(&marker);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
     use super::*;
 
     struct TempStore {
@@ -2353,73 +2272,6 @@ mod tests {
         assert!(!GeneralSettings::load().enable_telemetry);
     }
 
-    /// The Tauri app hands off by setting `enableGpuiApp`, so this app has to
-    /// read the same key -- and default it off, since the vast majority of
-    /// stores predate it.
-    #[test]
-    fn the_hand_off_flag_reads_from_general_settings() {
-        let _store = TempStore::new("gpui-flag", None);
-        assert!(!GeneralSettings::load().enable_gpui_app);
-
-        assert!(super::set_store_setting(
-            GENERAL_SETTINGS,
-            "enableGpuiApp",
-            Value::Bool(true)
-        ));
-        assert!(GeneralSettings::load().enable_gpui_app);
-    }
-
-    /// Both apps have to name the same file, and it has to sit next to the
-    /// store rather than in a per-app dir.
-    #[test]
-    fn the_hand_off_marker_sits_beside_the_store() {
-        assert_eq!(
-            super::handoff_marker_path(),
-            super::app_data_dir().join("cap-gpui.handoff")
-        );
-        assert_eq!(
-            super::update_handoff_path(),
-            super::app_data_dir().join("cap-gpui.update-handoff")
-        );
-    }
-
-    #[test]
-    fn handoff_marker_survives_until_explicit_clean_shutdown() {
-        let directory =
-            std::env::temp_dir().join(format!("cap-gpui-handoff-session-{}", super::new_uuid_v4()));
-        let marker = directory.join("cap-gpui.handoff");
-
-        super::mark_handoff_session_at(&marker).unwrap();
-        assert_eq!(
-            std::fs::read_to_string(&marker).unwrap(),
-            std::process::id().to_string()
-        );
-        super::mark_handoff_session_at(&marker).unwrap();
-        assert!(marker.exists());
-
-        super::clear_handoff_marker_at(&marker);
-        assert!(!marker.exists());
-        super::clear_handoff_marker_at(&marker);
-        std::fs::remove_dir(directory).unwrap();
-    }
-
-    #[test]
-    fn handoff_marker_write_failure_leaves_existing_state_intact() {
-        let directory =
-            std::env::temp_dir().join(format!("cap-gpui-handoff-failure-{}", super::new_uuid_v4()));
-        std::fs::create_dir_all(&directory).unwrap();
-        let blocked_parent = directory.join("not-a-directory");
-        std::fs::write(&blocked_parent, "unchanged").unwrap();
-
-        assert!(super::mark_handoff_session_at(&blocked_parent.join("marker")).is_err());
-        assert_eq!(
-            std::fs::read_to_string(&blocked_parent).unwrap(),
-            "unchanged"
-        );
-        std::fs::remove_file(blocked_parent).unwrap();
-        std::fs::remove_dir(directory).unwrap();
-    }
-
     #[test]
     fn bundled_resource_paths_follow_the_installed_executable() {
         let executable = std::path::Path::new("/Applications/Cap.app/Contents/MacOS/cap-gpui");
@@ -2453,59 +2305,6 @@ mod tests {
                 std::path::PathBuf::from("/usr/bin"),
             ]
         );
-    }
-
-    #[test]
-    fn update_handoff_publication_replaces_complete_markers() {
-        let directory = std::env::temp_dir().join(format!(
-            "cap-gpui-update-handoff-replace-{}",
-            std::process::id()
-        ));
-        let marker = directory.join("cap-gpui.update-handoff");
-
-        super::write_update_handoff_at(&marker, "1234").unwrap();
-        assert_eq!(std::fs::read_to_string(&marker).unwrap(), "1234");
-
-        super::write_update_handoff_at(&marker, "simulate:5678").unwrap();
-        assert_eq!(std::fs::read_to_string(&marker).unwrap(), "simulate:5678");
-
-        let entries = std::fs::read_dir(&directory)
-            .unwrap()
-            .map(|entry| entry.unwrap().path())
-            .collect::<Vec<_>>();
-        assert_eq!(entries, vec![marker.clone()]);
-
-        std::fs::remove_file(marker).unwrap();
-        std::fs::remove_dir(directory).unwrap();
-    }
-
-    #[test]
-    fn concurrent_update_handoff_writers_publish_complete_markers() {
-        let directory = std::env::temp_dir().join(format!(
-            "cap-gpui-update-handoff-concurrent-{}",
-            std::process::id()
-        ));
-        let marker = directory.join("cap-gpui.update-handoff");
-
-        let writers = (0..8)
-            .map(|index| {
-                let marker = marker.clone();
-                std::thread::spawn(move || {
-                    super::write_update_handoff_at(&marker, &(1000 + index).to_string())
-                })
-            })
-            .collect::<Vec<_>>();
-        for writer in writers {
-            writer.join().unwrap().unwrap();
-        }
-
-        let contents = std::fs::read_to_string(&marker).unwrap();
-        let pid = contents.parse::<u32>().unwrap();
-        assert!((1000..1008).contains(&pid));
-        assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
-
-        std::fs::remove_file(marker).unwrap();
-        std::fs::remove_dir(directory).unwrap();
     }
 
     /// `normalizeTranscriptionHints`: NULs stripped, whitespace trimmed,

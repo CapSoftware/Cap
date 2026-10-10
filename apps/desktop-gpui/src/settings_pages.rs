@@ -1904,16 +1904,9 @@ impl SettingsWindow {
 // Experimental (experimental.tsx)
 // ---------------------------------------------------------------------------
 
-/// The hand-back takeover, mirroring `experimental.tsx`'s overlay: the toggle
-/// is the confirmation, and the sequence is what the user reads while Cancel is
-/// on screen.
 pub(crate) enum SwitchBack {
-    /// The sequence, timed from its start. One clock drives the sentence, its
-    /// fade and the countdown, so nothing can drift apart.
     Running(std::time::Instant),
     WaitingForClassic,
-    /// The switch was refused; the overlay stays up with the reason and the
-    /// toggle goes back to on, because nothing was switched.
     Failed(String),
 }
 
@@ -1921,8 +1914,6 @@ pub(crate) enum SwitchBack {
 /// failed and hand the user back their app with a pointer at the terminal.
 const CLASSIC_WAIT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
-/// One line at a time, fading between them, underneath the countdown rather
-/// than ahead of it: the numeral is on screen from the first frame.
 const SWITCH_SENTENCES: &[&str] = &[
     "Switching back to the classic Cap app.",
     "Your recordings and settings stay exactly where they are.",
@@ -1955,182 +1946,23 @@ fn takeover_frame(elapsed_ms: f32) -> (usize, f32, u32) {
     (index, alpha, remaining)
 }
 
-/// Where the classic app lives when this build was not started from inside its
-/// bundle and is not a dev build either.
-const CLASSIC_APP_FALLBACK: &str = "/Applications/Cap.app";
-
-#[cfg(windows)]
-const CLASSIC_EXECUTABLE_NAME: &str = "Cap.exe";
-#[cfg(not(windows))]
-const CLASSIC_EXECUTABLE_NAME: &str = "Cap";
-
-/// What "the classic app" means for this process -- decided from where its
-/// binary lives, so dev sessions reopen the dev app and installed ones the
-/// installed app.
-#[derive(Debug, PartialEq)]
-enum ClassicTarget {
-    /// `open` this bundle: the shipped layout is
-    /// `.../Cap.app/Contents/MacOS/cap-gpui`, so the nearest `.app`
-    /// ancestor is the classic app this binary shipped inside.
-    Bundle(std::path::PathBuf),
-    /// Windows and Linux install Tauri sidecars beside the main executable.
-    Executable(std::path::PathBuf),
-    /// A cargo-built binary (an ancestor directory literally named `target`):
-    /// the classic app here is the `tauri dev` harness, which cannot be
-    /// `open`ed -- ask the dev-session supervisor to restart it instead
-    /// (`store::request_classic_reopen`).
-    DevSupervisor,
-}
-
-fn classic_target_for_exe(exe: &std::path::Path) -> Option<ClassicTarget> {
-    if let Some(bundle) = exe
-        .ancestors()
-        .find(|path| path.extension().is_some_and(|extension| extension == "app"))
-    {
-        return Some(ClassicTarget::Bundle(bundle.to_path_buf()));
-    }
-    if exe
-        .components()
-        .any(|component| component.as_os_str() == "target")
-    {
-        return Some(ClassicTarget::DevSupervisor);
-    }
-
-    if let Some(parent) = exe.parent() {
-        let executable = parent.join(CLASSIC_EXECUTABLE_NAME);
-        if executable.is_file() && executable != exe {
-            return Some(ClassicTarget::Executable(executable));
-        }
-    }
-
-    let fallback = std::path::PathBuf::from(CLASSIC_APP_FALLBACK);
-    fallback.is_dir().then_some(ClassicTarget::Bundle(fallback))
-}
-
-fn classic_target() -> Option<ClassicTarget> {
-    std::env::current_exe()
-        .ok()
-        .as_deref()
-        .and_then(classic_target_for_exe)
-}
-
-pub(crate) fn start_update_handoff(cx: &mut gpui::App) {
-    begin_update_handoff(cx, store::request_update_handoff);
-}
-
-fn quit_after_flushing_editors(cx: &mut gpui::App) {
-    crate::menus::quit(cx);
-}
-
-#[cfg(debug_assertions)]
-pub(crate) fn simulate_update_handoff(cx: &mut gpui::App) {
-    cx.spawn(async move |cx| {
-        crate::platform::activate_app();
-        if crate::platform::confirm_dialog(
-            "Update Cap",
-            "Version 99.0.0 of Cap is available. Would you like to install it?",
-            "Update",
-            "Ignore",
-            false,
-        ) {
-            cx.update(|cx| begin_update_handoff(cx, store::request_simulated_update_handoff));
-        }
-    })
-    .detach();
-}
-
-fn begin_update_handoff(cx: &mut gpui::App, request_handoff: fn() -> std::io::Result<()>) {
-    if update_handoff_blocked(cx) {
-        return;
-    }
-
-    let Some(target) = classic_target() else {
-        cx.open_url("https://cap.so/download");
-        return;
-    };
-
-    if matches!(target, ClassicTarget::DevSupervisor) && !cfg!(debug_assertions) {
-        cx.open_url("https://cap.so/download");
-        return;
-    }
-
-    if update_handoff_blocked(cx) {
-        return;
-    }
-    if let Err(error) = crate::app_windows::flush_pending_editor_saves(cx) {
-        cx.spawn(async move |_| {
-            crate::platform::alert_dialog("Cap is still open", &error);
+/// Cap ships as this app alone, so the classic Tauri app only exists inside
+/// the `tauri dev` harness: a debug cargo build can hand the session back to
+/// it through the dev-session supervisor (`store::request_classic_reopen`),
+/// and nothing else has a classic app to switch to.
+fn dev_supervisor_available_for(exe: Option<&std::path::Path>, debug_build: bool) -> bool {
+    debug_build
+        && exe.is_some_and(|exe| {
+            exe.components()
+                .any(|component| component.as_os_str() == "target")
         })
-        .detach();
-        return;
-    }
-
-    if let Err(error) = request_handoff() {
-        tracing::error!("couldn't request the Tauri updater: {error}");
-        cx.open_url("https://cap.so/download");
-        return;
-    }
-
-    let started = match &target {
-        ClassicTarget::Bundle(_) | ClassicTarget::Executable(_) => launch_classic(&target),
-        ClassicTarget::DevSupervisor => {
-            store::mark_classic_pending().and_then(|()| store::request_classic_reopen())
-        }
-    };
-
-    match (started, target) {
-        (Ok(()), ClassicTarget::Bundle(_) | ClassicTarget::Executable(_)) => {
-            tracing::info!("handing off to the Tauri updater");
-            quit_after_flushing_editors(cx);
-        }
-        (Ok(()), ClassicTarget::DevSupervisor) => {
-            tracing::info!("handing off to the Tauri updater; waiting for the dev app");
-            cx.spawn(async move |cx| {
-                let started = std::time::Instant::now();
-                loop {
-                    cx.background_executor()
-                        .timer(Duration::from_millis(250))
-                        .await;
-
-                    if !store::classic_pending_path().exists() {
-                        tracing::info!("the Tauri updater is ready; quitting Cap GPUI");
-                        cx.update(quit_after_flushing_editors);
-                        return;
-                    }
-
-                    if started.elapsed() > CLASSIC_WAIT_TIMEOUT {
-                        store::clear_update_handoff();
-                        tracing::error!("the dev app did not start for the update hand-off");
-                        return;
-                    }
-                }
-            })
-            .detach();
-        }
-        (Err(error), _) => {
-            store::clear_update_handoff();
-            tracing::error!("couldn't open the Tauri updater: {error}");
-            cx.open_url("https://cap.so/download");
-        }
-    }
 }
 
-fn update_handoff_blocked(cx: &mut gpui::App) -> bool {
-    if !crate::updates::work_in_flight(cx) {
-        return false;
-    }
-
-    tracing::info!(
-        "deferring update hand-off while recording, exporting, uploading, importing, or transcribing"
-    );
-    cx.spawn(async move |_| {
-        crate::platform::alert_dialog(
-            "Cap is busy",
-            "Finish your recording, export, upload, import, or transcription task before checking for updates.",
-        );
-    })
-    .detach();
-    true
+fn dev_supervisor_available() -> bool {
+    dev_supervisor_available_for(
+        std::env::current_exe().ok().as_deref(),
+        cfg!(debug_assertions),
+    )
 }
 
 impl SettingsWindow {
@@ -2140,7 +1972,7 @@ impl SettingsWindow {
         // experimental switch has nothing to switch. The store key
         // (`enableNativeCameraPreview`) stays readable in `store.rs` and is
         // left untouched in the shared store -- the Tauri app still uses it.
-        let sections = vec![
+        let mut sections = vec![
             self.section(
                 "Reliability",
                 None,
@@ -2172,66 +2004,30 @@ impl SettingsWindow {
                 ],
             )
             .into_any_element(),
-            self.section(
-                "Native app",
-                None,
-                None,
-                vec![self.rows(vec![self.native_app_row(cx)]).into_any_element()],
-            )
-            .into_any_element(),
         ];
-
-        #[cfg(debug_assertions)]
-        let sections = {
-            let mut sections = sections;
+        if dev_supervisor_available() {
             sections.push(
                 self.section(
-                    "Updates",
+                    "Native app",
                     None,
                     None,
-                    vec![
-                        self.rows(vec![
-                            self.setting_row(
-                                "Simulate an update",
-                                Some(
-                                    "Preview the complete update flow without downloading or \
-                                     installing anything.",
-                                ),
-                                self.button(
-                                    "simulate-update",
-                                    (ui::ButtonVariant::Dark, None),
-                                    "Simulate update",
-                                    false,
-                                    cx,
-                                    |_, _, cx| simulate_update_handoff(cx),
-                                )
-                                .into_any_element(),
-                            ),
-                        ])
-                        .into_any_element(),
-                    ],
+                    vec![self.rows(vec![self.native_app_row(cx)]).into_any_element()],
                 )
                 .into_any_element(),
             );
-            sections
-        };
-
+        }
         sections
     }
 
-    /// The mirror of the Tauri page's Native app row: it hands the session over
-    /// to this app, this one hands it back.
+    /// The dev harness's Native app row: being in this app is what the toggle
+    /// means, and turning it off reopens the classic app under `tauri dev`.
     fn native_app_row(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        // Being in this app is what the toggle means, so it reads on even when
-        // the stored flag does not -- a `cargo run` or `dev.sh` launch never
-        // went through the hand-off. The flag only routes the Tauri app's
-        // startup.
         let checked = !matches!(self.pages.switch_back, Some(SwitchBack::Running(_)));
         self.setting_row(
             "Cap GPUI",
             Some(
                 "You are using the native version of Cap. Turning this off closes it and reopens \
-                 the classic app. Your recordings and settings are shared.",
+                 the classic app in the dev harness. Your recordings and settings are shared.",
             ),
             self.toggle("enable-gpui-app", checked, cx, |this, cx| {
                 match this.pages.switch_back {
@@ -2342,7 +2138,11 @@ impl SettingsWindow {
                         .cursor_pointer()
                         .hover(|style| style.bg(gpui::hsla(0., 0., 1., 0.12)))
                         .on_click(cx.listener(|this, _, _window, cx| this.cancel_switch_back(cx)))
-                        .child("Cancel"),
+                        .child(if matches!(switch, SwitchBack::Failed(_)) {
+                            "Close"
+                        } else {
+                            "Cancel"
+                        }),
                 )
                 .into_any_element(),
         )
@@ -2404,24 +2204,17 @@ impl SettingsWindow {
         true
     }
 
-    /// Write the flag, start the classic app, then quit -- in that order, so
-    /// the app that comes up already owns the session. Nothing is written when
-    /// there is no way to start one: the flag would strand the user in an app
-    /// that redirects to one that is not installed.
+    /// Hand the session (`enableGpuiApp`) to the classic dev app, ask the dev
+    /// supervisor to start it, then quit once it is visible.
     fn finish_switch_back(&mut self, cx: &mut Context<Self>) {
         if self.switch_back_blocked(cx) {
             return;
         }
-
-        let Some(target) = classic_target() else {
+        if !dev_supervisor_available() {
             self.pages.switch_back = Some(SwitchBack::Failed(
-                "Couldn't find the Cap app to switch back to.".to_string(),
+                "Couldn't find the classic Cap app to switch back to.".to_string(),
             ));
             cx.notify();
-            return;
-        };
-
-        if self.switch_back_blocked(cx) {
             return;
         }
         if let Err(error) = crate::app_windows::flush_pending_editor_saves(cx) {
@@ -2437,13 +2230,6 @@ impl SettingsWindow {
             cx.notify();
             return;
         }
-        self.settings.enable_gpui_app = false;
-        let dev = matches!(target, ClassicTarget::DevSupervisor);
-        let timeout = if dev {
-            CLASSIC_WAIT_TIMEOUT
-        } else {
-            Duration::from_secs(30)
-        };
         let pending = store::mark_classic_pending();
         self.pages.switch_back = Some(SwitchBack::WaitingForClassic);
         self.pages.switch_back_ticker = None;
@@ -2453,87 +2239,50 @@ impl SettingsWindow {
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move {
-                    pending?;
-                    match target {
-                        ClassicTarget::DevSupervisor => store::request_classic_reopen(),
-                        _ => launch_classic(&target),
-                    }
-                })
+                .spawn(async move { pending.and_then(|()| store::request_classic_reopen()) })
                 .await;
-            let mut failure = result.err().map(|error| format!("Couldn't open Cap: {error}"));
+            let mut failure = result
+                .err()
+                .map(|error| format!("Couldn't open the classic Cap app: {error}"));
             let started = std::time::Instant::now();
             while failure.is_none() {
                 match store::classic_pending_path().try_exists() {
                     Ok(false) => {
                         tracing::info!("classic app is visible; quitting GPUI");
-                        cx.update(quit_after_flushing_editors);
+                        cx.update(crate::menus::quit);
                         return;
                     }
                     Ok(true) => {}
                     Err(error) => {
-                        failure = Some(format!("Couldn't check whether Cap opened: {error}"));
+                        failure = Some(format!(
+                            "Couldn't check whether the classic Cap app opened: {error}"
+                        ));
                         break;
                     }
                 }
-                if started.elapsed() >= timeout {
-                    failure = Some(if dev {
+                if started.elapsed() >= CLASSIC_WAIT_TIMEOUT {
+                    failure = Some(
                         "The classic app hasn't opened. Check the dev terminal for build errors, then try again."
-                            .to_string()
-                    } else {
-                        "The classic app hasn't opened. Cap is still here; please try again."
-                            .to_string()
-                    });
+                            .to_string(),
+                    );
                     break;
                 }
                 cx.background_executor()
                     .timer(Duration::from_millis(250))
                     .await;
             }
-            let message = failure.unwrap_or_else(|| "Couldn't open Cap.".to_string());
+            let message =
+                failure.unwrap_or_else(|| "Couldn't open the classic Cap app.".to_string());
             tracing::error!("{message}");
             store::clear_classic_pending();
             store::set_store_setting(GENERAL_SETTINGS, "enableGpuiApp", Value::Bool(true));
             this.update(cx, |this, cx| {
-                this.settings = store::GeneralSettings::load();
                 this.pages.switch_back = Some(SwitchBack::Failed(message));
                 cx.notify();
             })
             .ok();
         })
         .detach();
-    }
-}
-
-fn classic_launch_command(target: &ClassicTarget) -> Option<std::process::Command> {
-    match target {
-        ClassicTarget::Bundle(bundle) => {
-            let mut command = std::process::Command::new("/usr/bin/open");
-            // GPUI shares Cap's bundle identity, so a normal open can reactivate GPUI.
-            command.arg("-n").arg(bundle);
-            Some(command)
-        }
-        ClassicTarget::Executable(executable) => Some(std::process::Command::new(executable)),
-        ClassicTarget::DevSupervisor => None,
-    }
-}
-
-fn launch_classic(target: &ClassicTarget) -> std::io::Result<()> {
-    let Some(mut command) = classic_launch_command(target) else {
-        return Ok(());
-    };
-    if matches!(target, ClassicTarget::Bundle(_)) {
-        let output = command.output()?;
-        if !output.status.success() {
-            return Err(std::io::Error::other(format!(
-                "Cap launcher failed ({}): {}",
-                output.status,
-                String::from_utf8_lossy(&output.stderr).trim()
-            )));
-        }
-        Ok(())
-    } else {
-        command.spawn().map(drop)
     }
 }
 
@@ -6347,8 +6096,8 @@ impl SettingsWindow {
             self.section(
                 "Automations",
                 Some(
-                    "Rules are shared with classic Cap and the Cap CLI. Experimental GPUI \
-                     saves these rules but does not run automations.",
+                    "Rules are shared with the Cap CLI. Cap saves these rules but does not \
+                     run automations yet.",
                 ),
                 None,
                 rule_content,
@@ -6936,8 +6685,8 @@ impl SettingsWindow {
                         .line_height(px(18.))
                         .text_color(Hsla::from(theme.amber_11))
                         .child(
-                            "In classic Cap or the Cap CLI, this automation runs commands or sends \
-                             network requests with your permissions. Only use values you trust.",
+                            "In the Cap CLI, this automation runs commands or sends network \
+                             requests with your permissions. Only use values you trust.",
                         ),
                 )
             })
@@ -6949,9 +6698,8 @@ impl SettingsWindow {
                         .line_height(px(18.))
                         .text_color(Hsla::from(theme.amber_11))
                         .child(
-                            "Compatibility checked: this automation cannot run in Experimental \
-                             GPUI. Saved rules remain available to classic Cap and the Cap CLI. \
-                             No actions were run.",
+                            "Compatibility checked: this automation doesn't run in Cap yet. \
+                             Saved rules remain available to the Cap CLI. No actions were run.",
                         ),
                 )
             })
@@ -8467,52 +8215,17 @@ mod tests {
         );
     }
 
-    /// The switch-back target matches how this binary was started: the `.app`
-    /// it is staged inside beats everything, a cargo `target/` path means the
-    /// dev harness (never the installed app), and only a bare binary from
-    /// neither falls through to `/Applications`.
     #[test]
-    fn the_classic_target_matches_the_launch_context() {
-        assert_eq!(
-            classic_target_for_exe(std::path::Path::new(
-                "/Applications/Cap.app/Contents/MacOS/cap-gpui"
-            )),
-            Some(ClassicTarget::Bundle(std::path::PathBuf::from(
-                "/Applications/Cap.app"
-            )))
-        );
-        assert_eq!(
-            classic_target_for_exe(std::path::Path::new(
-                "/Users/x/Cap/apps/desktop-gpui/target/debug/cap-gpui"
-            )),
-            Some(ClassicTarget::DevSupervisor)
-        );
-        // A dev binary staged inside a bundle is still that bundle's.
-        assert_eq!(
-            classic_target_for_exe(std::path::Path::new(
-                "/Users/x/Cap/target/debug/bundle/osx/Cap.app/Contents/MacOS/cap-gpui"
-            )),
-            Some(ClassicTarget::Bundle(std::path::PathBuf::from(
-                "/Users/x/Cap/target/debug/bundle/osx/Cap.app"
-            )))
-        );
-    }
+    fn only_debug_cargo_builds_can_switch_back_to_the_dev_harness() {
+        let cargo_build =
+            std::path::Path::new("/Users/x/Cap/apps/desktop-gpui/target/debug/cap-gpui");
+        let installed_app = std::path::Path::new("/Applications/Cap.app/Contents/MacOS/Cap");
 
-    #[test]
-    fn installed_handoff_launches_a_new_bundle_instance() {
-        let bundle = std::path::PathBuf::from("/Applications/Cap Preview.app");
-        let command = classic_launch_command(&ClassicTarget::Bundle(bundle.clone())).unwrap();
-        assert_eq!(command.get_program(), "/usr/bin/open");
-        assert_eq!(
-            command.get_args().collect::<Vec<_>>(),
-            [std::ffi::OsStr::new("-n"), bundle.as_os_str()]
-        );
-        assert!(classic_launch_command(&ClassicTarget::DevSupervisor).is_none());
-        let executable = std::path::PathBuf::from("/opt/cap/Cap");
-        let command =
-            classic_launch_command(&ClassicTarget::Executable(executable.clone())).unwrap();
-        assert_eq!(command.get_program(), executable.as_os_str());
-        assert_eq!(command.get_args().count(), 0);
+        assert!(dev_supervisor_available_for(Some(cargo_build), true));
+        assert!(!dev_supervisor_available_for(Some(cargo_build), false));
+        assert!(!dev_supervisor_available_for(Some(installed_app), true));
+        assert!(!dev_supervisor_available_for(Some(installed_app), false));
+        assert!(!dev_supervisor_available_for(None, true));
     }
 
     /// The takeover's whole timeline, read off its one clock.

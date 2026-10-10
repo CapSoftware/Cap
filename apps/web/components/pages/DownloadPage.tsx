@@ -3,13 +3,14 @@
 import { Button } from "@cap/ui";
 import { useDetectPlatform } from "hooks/useDetectPlatform";
 import Link from "next/link";
-import { useState } from "react";
+import { type CSSProperties, type ReactNode, useId, useState } from "react";
 import { trackEvent } from "@/app/utils/analytics";
 import { ChromeExtensionButton } from "@/components/ChromeExtensionButton";
 import {
 	CAP_CHROME_EXTENSION_URL,
 	CHROME_EXTENSION_BUTTON_CLASS,
 } from "@/lib/chrome-extension";
+import { LAST_TAURI_VERSION } from "@/utils/native-release";
 import {
 	getDownloadButtonText,
 	getDownloadUrl,
@@ -18,9 +19,119 @@ import {
 	PlatformIcons,
 } from "@/utils/platform";
 
-export const DownloadPage = () => {
+const BADGE_LOOP =
+	"M 22 33 C 19 15, 84 7, 150 7.5 C 222 8, 289 14, 287 31 C 285 49, 214 55, 146 54 C 78 53, 12 47, 14 29 C 15.5 18, 44 10.5, 76 9";
+const BADGE_SPARKS = [
+	"M 3.5 11 L 4.6 4.2",
+	"M 7.2 12.8 L 12.2 7.8",
+	"M 9.2 16.6 L 16 15.4",
+];
+const UNDERLINE =
+	"M 3 7.5 C 28 3.5, 57 9.5, 88 5.5 C 118 2, 146 9, 176 4.5 C 186 3.2, 193 3.8, 198 4.4";
+
+function BoilFilter({ id }: { id: string }) {
+	return (
+		<svg className="absolute size-0" aria-hidden="true" focusable="false">
+			<defs>
+				<filter id={id} x="-10%" y="-40%" width="120%" height="180%">
+					<feTurbulence
+						type="fractalNoise"
+						baseFrequency="0.045"
+						numOctaves="2"
+						seed="2"
+						result="noise"
+					>
+						<animate
+							attributeName="seed"
+							values="2;4;6;8"
+							dur="0.64s"
+							repeatCount="indefinite"
+							calcMode="discrete"
+						/>
+					</feTurbulence>
+					<feDisplacementMap
+						in="SourceGraphic"
+						in2="noise"
+						scale="2.2"
+						xChannelSelector="R"
+						yChannelSelector="G"
+					/>
+				</filter>
+			</defs>
+		</svg>
+	);
+}
+
+function NativeAnnouncement({ boil }: { boil: string }) {
+	const ink = { "--dl-boil": `url(#${boil})` } as CSSProperties;
+	return (
+		<div className="inline-flex items-center gap-5 text-[13px]">
+			<span className="relative inline-flex px-2 py-0.5">
+				<span className="relative z-10 font-medium text-blue-11">New</span>
+				<svg
+					className="dl-ink pointer-events-none absolute -inset-x-2 -inset-y-1.5 h-[calc(100%+12px)] w-[calc(100%+16px)] overflow-visible text-blue-9"
+					viewBox="0 0 300 60"
+					preserveAspectRatio="none"
+					aria-hidden="true"
+					style={ink}
+				>
+					<path className="dl-ink-loop" pathLength={1} d={BADGE_LOOP} />
+				</svg>
+				<svg
+					className="dl-ink pointer-events-none absolute -top-4 -right-5 size-[18px] overflow-visible text-blue-9"
+					viewBox="0 0 20 20"
+					aria-hidden="true"
+					style={ink}
+				>
+					{BADGE_SPARKS.map((spark, index) => (
+						<path
+							key={spark}
+							className="dl-ink-spark"
+							pathLength={1}
+							d={spark}
+							style={{ animationDelay: `${1.2 + index * 0.08}s` }}
+						/>
+					))}
+				</svg>
+			</span>
+			<span className="text-gray-11">
+				Rebuilt native for macOS, Windows and Linux
+			</span>
+		</div>
+	);
+}
+
+function InkUnderline({
+	children,
+	boil,
+}: {
+	children: ReactNode;
+	boil: string;
+}) {
+	return (
+		<span className="relative inline-block whitespace-nowrap text-gray-12">
+			{children}
+			<svg
+				className="dl-ink pointer-events-none absolute -bottom-1 left-0 h-2.5 w-full overflow-visible text-blue-9"
+				viewBox="0 0 200 10"
+				preserveAspectRatio="none"
+				aria-hidden="true"
+				style={{ "--dl-boil": `url(#${boil})` } as CSSProperties}
+			>
+				<path className="dl-ink-underline" pathLength={1} d={UNDERLINE} />
+			</svg>
+		</span>
+	);
+}
+
+export const DownloadPage = ({
+	nativeReleaseLive = false,
+}: {
+	nativeReleaseLive?: boolean;
+}) => {
 	const { platform, isIntel } = useDetectPlatform();
 	const [copiedCliCommand, setCopiedCliCommand] = useState(false);
+	const boil = useId().replace(/[^a-zA-Z0-9_-]/g, "");
 	const loading = platform === null;
 	const primaryDownloadUrl = getDownloadUrl(platform, isIntel);
 	const cliInstallCommand =
@@ -55,14 +166,28 @@ export const DownloadPage = () => {
 
 	return (
 		<div className="py-32 md:py-40 wrapper wrapper-sm">
+			{nativeReleaseLive && <BoilFilter id={boil} />}
 			<div className="space-y-4 text-center">
+				{nativeReleaseLive && (
+					<div className="flex justify-center items-center h-8 fade-in-down">
+						<NativeAnnouncement boil={boil} />
+					</div>
+				)}
 				<h1 className="text-2xl fade-in-down animate-delay-1 md:text-4xl">
 					Download Cap
 				</h1>
-				<p className="px-4 text-sm fade-in-down text-gray-11 animate-delay-2 md:text-base md:px-0">
-					The quickest way to share your screen. Pin to your dock or taskbar and
-					record in seconds.
-				</p>
+				{nativeReleaseLive ? (
+					<p className="px-4 mx-auto max-w-xl text-sm fade-in-down text-gray-11 animate-delay-2 md:text-base md:px-0">
+						The quickest way to share your screen, now a{" "}
+						<InkUnderline boil={boil}>fully native app</InkUnderline>. It opens
+						faster and stays light on your computer while you record.
+					</p>
+				) : (
+					<p className="px-4 text-sm fade-in-down text-gray-11 animate-delay-2 md:text-base md:px-0">
+						The quickest way to share your screen. Pin to your dock or taskbar
+						and record in seconds.
+					</p>
+				)}
 				<div className="flex flex-col justify-center items-center space-y-4 fade-in-up animate-delay-2">
 					<div className="flex flex-col items-center space-y-4">
 						<div className="flex flex-col gap-3 justify-center items-center w-full sm:flex-row sm:gap-4">
@@ -96,6 +221,26 @@ export const DownloadPage = () => {
 						<div className="text-sm text-gray-10">
 							{getVersionText(platform)}
 						</div>
+
+						{nativeReleaseLive && (
+							<p className="text-xs text-gray-10">
+								Looking for the original app?{" "}
+								<Link
+									href={`/download/versions#v${LAST_TAURI_VERSION}`}
+									onClick={() =>
+										trackDownloadClick(
+											"last_tauri_version",
+											"/download/versions",
+											"tauri_app",
+										)
+									}
+									className="underline underline-offset-2 hover:text-gray-12"
+								>
+									Cap {LAST_TAURI_VERSION}
+								</Link>{" "}
+								is still available.
+							</p>
+						)}
 
 						{/* Windows SmartScreen video and instructions */}
 						{platform === "windows" && (

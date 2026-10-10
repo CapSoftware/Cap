@@ -37,6 +37,7 @@ mod editor_window;
 mod feeds;
 mod hotkeys;
 mod import;
+mod installer;
 mod library;
 mod main_window;
 mod menus;
@@ -249,7 +250,9 @@ fn main() {
     let _log_guard = init_logging();
 
     single_instance::acquire();
-    store::mark_handoff_session();
+    if cfg!(debug_assertions) {
+        store::mark_handoff_session();
+    }
 
     platform::install_url_scheme_handler();
     for argument in std::env::args().skip(1) {
@@ -367,10 +370,12 @@ fn main() {
             return;
         };
 
-        cx.on_app_quit(|_| async {
-            crate::store::clear_handoff_marker();
-        })
-        .detach();
+        if cfg!(debug_assertions) {
+            cx.on_app_quit(|_| async {
+                crate::store::clear_handoff_marker();
+            })
+            .detach();
+        }
 
         app_windows::init(window_handle, session, cx);
         #[cfg(target_os = "macos")]

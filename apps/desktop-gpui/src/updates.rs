@@ -1,31 +1,42 @@
-//! Update discovery for sessions owned by GPUI.
-//!
-//! The endpoint response is advisory only. GPUI never downloads or installs
-//! it; accepting the prompt hands control to Tauri, which repeats the check
-//! and enforces the signed updater contract before changing the app bundle.
-
-use std::time::Duration;
+use std::{path::PathBuf, time::Duration};
 
 use futures_util::future::{Either, select};
 use gpui::{App, Global};
 use semver::Version;
-use serde::Deserialize;
 
 use crate::{
+    installer::{self, ArtifactKind, Release},
     session::RecordingSession,
     store::{GeneralSettings, UpdateChannel},
 };
 
-const UPDATE_ENDPOINT: &str =
-    "https://cdn.crabnebula.app/update/cap/cap/{target}/{current_version}";
 const STABLE_FIRST_CHECK_DELAY: Duration = Duration::from_secs(10);
 const NIGHTLY_FIRST_CHECK_DELAY: Duration = Duration::from_secs(60);
 const NIGHTLY_CHECK_INTERVAL: Duration = Duration::from_secs(2 * 60 * 60);
 const BUSY_RETRY_DELAY: Duration = Duration::from_secs(5 * 60);
+const BUSY_MESSAGE: &str =
+    "Finish your recording, export, upload, import, or transcription task before updating Cap.";
 
-#[derive(Deserialize)]
-struct AvailableUpdate {
-    version: String,
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) enum UpdateStatus {
+    #[default]
+    Idle,
+    Downloading {
+        version: Version,
+        fraction: Option<f32>,
+    },
+    Ready {
+        version: Version,
+    },
+    Installing {
+        version: Version,
+    },
+    /// On disk and waiting only for the restart, which work started while the
+    /// installer waited on an administrator prompt holds back.
+    Installed {
+        version: Version,
+        executable: PathBuf,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -49,70 +60,22 @@ impl PendingUpdateRequests {
     }
 }
 
+struct StagedUpdate {
+    kind: ArtifactKind,
+    package: PathBuf,
+}
+
 struct UpdateScheduler {
     wake: flume::Sender<()>,
     pending: PendingUpdateRequests,
     manual_in_flight: bool,
+    status: UpdateStatus,
+    staged: Option<StagedUpdate>,
+    download: Option<gpui::Task<()>>,
+    download_epoch: u64,
 }
 
 impl Global for UpdateScheduler {}
-
-fn updater_target() -> Result<String, String> {
-    let arch = if cfg!(target_arch = "aarch64") {
-        "aarch64"
-    } else {
-        "x86_64"
-    };
-
-    #[cfg(target_os = "linux")]
-    {
-        cap_utils::linux_package::updater_target(arch)
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        let platform = if cfg!(target_os = "macos") {
-            "darwin"
-        } else {
-            "windows"
-        };
-        Ok(format!("{platform}-{arch}"))
-    }
-}
-
-fn endpoint(channel: UpdateChannel) -> Result<String, String> {
-    let url = UPDATE_ENDPOINT
-        .replace("{target}", &updater_target()?)
-        .replace("{current_version}", env!("CARGO_PKG_VERSION"));
-    Ok(match channel {
-        UpdateChannel::Stable => url,
-        UpdateChannel::Nightly => format!("{url}?channel=nightly"),
-    })
-}
-
-async fn remote_version(channel: UpdateChannel) -> Result<Option<Version>, String> {
-    let response = reqwest::Client::builder()
-        .timeout(Duration::from_secs(15))
-        .build()
-        .map_err(|error| error.to_string())?
-        .get(endpoint(channel)?)
-        .send()
-        .await
-        .map_err(|error| error.to_string())?;
-
-    if response.status() == reqwest::StatusCode::NO_CONTENT {
-        return Ok(None);
-    }
-
-    let update = response
-        .error_for_status()
-        .map_err(|error| error.to_string())?
-        .json::<AvailableUpdate>()
-        .await
-        .map_err(|error| error.to_string())?;
-    Version::parse(&update.version)
-        .map(Some)
-        .map_err(|error| error.to_string())
-}
 
 fn qualifies(
     current: &Version,
@@ -128,33 +91,45 @@ fn qualifies(
             && remote != current)
 }
 
-async fn available_version(channel: UpdateChannel) -> Result<Option<Version>, String> {
-    let current = Version::parse(env!("CARGO_PKG_VERSION")).map_err(|error| error.to_string())?;
-    let stable = remote_version(UpdateChannel::Stable)
+fn current_version() -> Result<Version, String> {
+    Version::parse(env!("CARGO_PKG_VERSION")).map_err(|error| error.to_string())
+}
+
+async fn available_release(channel: UpdateChannel) -> Result<Option<Release>, String> {
+    let current = current_version()?;
+    let stable = installer::fetch_release(UpdateChannel::Stable, &current)
         .await
         .map(|candidate| {
-            candidate.filter(|remote| qualifies(&current, remote, channel, UpdateChannel::Stable))
+            candidate.filter(|remote| {
+                qualifies(&current, &remote.version, channel, UpdateChannel::Stable)
+            })
         });
 
     if channel == UpdateChannel::Stable {
         return stable;
     }
 
-    let nightly = remote_version(UpdateChannel::Nightly)
+    let nightly = installer::fetch_release(UpdateChannel::Nightly, &current)
         .await
         .map(|candidate| {
-            candidate.filter(|remote| qualifies(&current, remote, channel, UpdateChannel::Nightly))
+            candidate.filter(|remote| {
+                qualifies(&current, &remote.version, channel, UpdateChannel::Nightly)
+            })
         });
 
-    select_available_version(stable, nightly)
+    select_available_release(stable, nightly)
 }
 
-fn select_available_version(
-    stable: Result<Option<Version>, String>,
-    nightly: Result<Option<Version>, String>,
-) -> Result<Option<Version>, String> {
+fn select_available_release(
+    stable: Result<Option<Release>, String>,
+    nightly: Result<Option<Release>, String>,
+) -> Result<Option<Release>, String> {
     match (stable, nightly) {
-        (Ok(Some(stable)), Ok(Some(nightly))) => Ok(Some(stable.max(nightly))),
+        (Ok(Some(stable)), Ok(Some(nightly))) => Ok(Some(if nightly.version > stable.version {
+            nightly
+        } else {
+            stable
+        })),
         (Ok(stable), Ok(nightly)) => Ok(stable.or(nightly)),
         (Ok(candidate), Err(error)) | (Err(error), Ok(candidate)) => {
             tracing::warn!("update check failed for one channel: {error}");
@@ -171,9 +146,45 @@ pub(crate) fn work_in_flight(cx: &mut App) -> bool {
         || crate::transcription::work_in_flight()
 }
 
+pub(crate) fn status(cx: &App) -> UpdateStatus {
+    if cx.has_global::<UpdateScheduler>() {
+        cx.global::<UpdateScheduler>().status.clone()
+    } else {
+        UpdateStatus::Idle
+    }
+}
+
+fn set_status(status: UpdateStatus, cx: &mut App) {
+    let scheduler = cx.global_mut::<UpdateScheduler>();
+    if scheduler.status == status {
+        return;
+    }
+    scheduler.status = status;
+    crate::app_windows::refresh_settings(cx);
+}
+
 pub(crate) fn check_manually(cx: &mut App) {
     if !cx.has_global::<UpdateScheduler>() {
         return;
+    }
+
+    match status(cx) {
+        UpdateStatus::Ready { .. } | UpdateStatus::Installed { .. } => {
+            prompt_restart(cx);
+            return;
+        }
+        UpdateStatus::Downloading { version, .. } | UpdateStatus::Installing { version } => {
+            cx.spawn(async move |_| {
+                crate::platform::activate_app();
+                crate::platform::alert_dialog(
+                    "Update Cap",
+                    &format!("Cap is already getting version {version} ready."),
+                );
+            })
+            .detach();
+            return;
+        }
+        UpdateStatus::Idle => {}
     }
 
     let scheduler = cx.global_mut::<UpdateScheduler>();
@@ -189,9 +200,28 @@ pub(crate) fn update_channel_changed(channel: UpdateChannel, cx: &mut App) {
         return;
     }
 
+    drop_pending_update_from_previous_channel(cx);
     let scheduler = cx.global_mut::<UpdateScheduler>();
     scheduler.pending.request_channel(channel);
     let _ = scheduler.wake.try_send(());
+}
+
+fn channel_switch_drops_pending_package(status: &UpdateStatus) -> bool {
+    matches!(
+        status,
+        UpdateStatus::Downloading { .. } | UpdateStatus::Ready { .. }
+    )
+}
+
+fn drop_pending_update_from_previous_channel(cx: &mut App) {
+    if !channel_switch_drops_pending_package(&status(cx)) {
+        return;
+    }
+    let scheduler = cx.global_mut::<UpdateScheduler>();
+    scheduler.download_epoch = scheduler.download_epoch.wrapping_add(1);
+    scheduler.download = None;
+    scheduler.staged = None;
+    set_status(UpdateStatus::Idle, cx);
 }
 
 fn first_check_delay(channel: UpdateChannel) -> Duration {
@@ -211,12 +241,24 @@ fn finish_manual_check(cx: &mut App, manual: bool) {
     }
 }
 
+fn busy_alert(cx: &mut App) {
+    cx.spawn(async move |_| {
+        crate::platform::activate_app();
+        crate::platform::alert_dialog("Cap is busy", BUSY_MESSAGE);
+    })
+    .detach();
+}
+
 pub(crate) fn schedule_startup_check(cx: &mut App) {
     let (wake, requests) = flume::bounded(1);
     cx.set_global(UpdateScheduler {
         wake,
         pending: PendingUpdateRequests::default(),
         manual_in_flight: false,
+        status: UpdateStatus::Idle,
+        staged: None,
+        download: None,
+        download_epoch: 0,
     });
 
     cx.spawn(async move |cx| {
@@ -259,6 +301,7 @@ pub(crate) fn schedule_startup_check(cx: &mut App) {
             if let Some(next_channel) = request.channel {
                 channel = next_channel;
                 ignored_version = None;
+                let _ = cx.update(drop_pending_update_from_previous_channel);
             }
 
             let manual = request.manual;
@@ -273,22 +316,13 @@ pub(crate) fn schedule_startup_check(cx: &mut App) {
 
             delay = next_check_delay(channel);
 
-            if cx.update(work_in_flight) {
-                if manual {
-                    crate::platform::activate_app();
-                    crate::platform::alert_dialog(
-                        "Cap is busy",
-                        "Finish your recording, export, upload, import, or transcription task before checking for updates.",
-                    );
-                    cx.update(|cx| finish_manual_check(cx, true));
-                } else {
-                    delay = Some(BUSY_RETRY_DELAY);
-                }
+            if cx.update(|cx| status(cx) != UpdateStatus::Idle) {
+                cx.update(|cx| finish_manual_check(cx, manual));
                 continue;
             }
 
             let result = match cx
-                .update(|cx| gpui_tokio::Tokio::spawn(cx, available_version(channel)))
+                .update(|cx| gpui_tokio::Tokio::spawn(cx, available_release(channel)))
                 .await
             {
                 Ok(result) => result,
@@ -308,8 +342,8 @@ pub(crate) fn schedule_startup_check(cx: &mut App) {
                 continue;
             }
 
-            let version = match result {
-                Ok(Some(version)) => version,
+            let release = match result {
+                Ok(Some(release)) => release,
                 Ok(None) => {
                     if manual {
                         crate::platform::activate_app();
@@ -335,43 +369,318 @@ pub(crate) fn schedule_startup_check(cx: &mut App) {
                 }
             };
 
-            if !manual && ignored_version.as_ref() == Some(&version) {
-                continue;
-            }
-
-            if cx.update(work_in_flight) {
-                if manual {
-                    crate::platform::activate_app();
-                    crate::platform::alert_dialog(
-                        "Cap is busy",
-                        "Finish your recording, export, upload, import, or transcription task before checking for updates.",
-                    );
-                    cx.update(|cx| finish_manual_check(cx, true));
-                } else {
-                    delay = Some(BUSY_RETRY_DELAY);
-                }
+            if !manual && ignored_version.as_ref() == Some(&release.version) {
                 continue;
             }
 
             crate::platform::activate_app();
-            if crate::platform::confirm_dialog(
+            let accepted = crate::platform::confirm_dialog(
                 "Update Cap",
-                &format!("Version {version} of Cap is available. Would you like to install it?"),
-                "Update",
-                "Ignore",
+                &format!(
+                    "Version {} of Cap is available. Cap will download it in the background and let you know when it's ready to install.",
+                    release.version
+                ),
+                "Download",
+                "Not Now",
                 false,
-            ) {
-                cx.update(|cx| {
-                    finish_manual_check(cx, manual);
-                    crate::settings_pages::start_update_handoff(cx);
-                });
+            );
+            cx.update(|cx| finish_manual_check(cx, manual));
+            if accepted {
+                cx.update(|cx| start_download(release, cx));
             } else {
-                ignored_version = Some(version);
-                cx.update(|cx| finish_manual_check(cx, manual));
+                ignored_version = Some(release.version);
             }
         }
     })
     .detach();
+}
+
+fn start_download(release: Release, cx: &mut App) {
+    let kind = match installer::update_platform()
+        .and_then(|platform| ArtifactKind::for_platform(&platform))
+    {
+        Ok(kind) => kind,
+        Err(error) => {
+            update_failed(&error, cx);
+            return;
+        }
+    };
+
+    let version = release.version.clone();
+    set_status(
+        UpdateStatus::Downloading {
+            version: version.clone(),
+            fraction: None,
+        },
+        cx,
+    );
+    let download_epoch = cx.global::<UpdateScheduler>().download_epoch;
+
+    let (progress_sender, progress) = flume::bounded::<Option<f32>>(1);
+    let download = gpui_tokio::Tokio::spawn(cx, async move {
+        let mut reported = None::<u16>;
+        installer::download(kind, &release, move |done, total| {
+            let fraction = total
+                .filter(|total| *total > 0)
+                .map(|total| (done as f64 / total as f64).clamp(0., 1.) as f32);
+            let step = fraction.map(|fraction| (fraction * 100.) as u16);
+            if step != reported {
+                reported = step;
+                let _ = progress_sender.try_send(fraction);
+            }
+        })
+        .await
+    });
+
+    let task = cx.spawn(async move |cx| {
+        let progress_version = version.clone();
+        let progress_epoch = download_epoch;
+        let progress_updates = cx.spawn(async move |cx| {
+            while let Ok(fraction) = progress.recv_async().await {
+                cx.update(|cx| {
+                    if cx.global::<UpdateScheduler>().download_epoch != progress_epoch {
+                        return;
+                    }
+                    set_status(
+                        UpdateStatus::Downloading {
+                            version: progress_version.clone(),
+                            fraction,
+                        },
+                        cx,
+                    )
+                });
+            }
+        });
+
+        let result = match download.await {
+            Ok(result) => result,
+            Err(error) => Err(error.to_string()),
+        };
+        drop(progress_updates);
+
+        cx.update(|cx| {
+            if cx.global::<UpdateScheduler>().download_epoch != download_epoch {
+                return;
+            }
+            cx.global_mut::<UpdateScheduler>().download = None;
+            match result {
+                Ok(package) => {
+                    tracing::info!(%version, path = %package.display(), "update downloaded and verified");
+                    cx.global_mut::<UpdateScheduler>().staged =
+                        Some(StagedUpdate { kind, package });
+                    set_status(UpdateStatus::Ready { version }, cx);
+                    prompt_restart(cx);
+                }
+                Err(error) => {
+                    tracing::warn!(%version, "update download failed: {error}");
+                    update_failed(&format!("Couldn't download version {version}: {error}"), cx);
+                }
+            }
+        });
+    });
+    cx.global_mut::<UpdateScheduler>().download = Some(task);
+}
+
+fn update_failed(message: &str, cx: &mut App) {
+    set_status(UpdateStatus::Idle, cx);
+    let message =
+        format!("{message}\n\nYou can always download the latest version from cap.so/download.");
+    cx.spawn(async move |_| {
+        crate::platform::activate_app();
+        crate::platform::alert_dialog("Update Cap", &message);
+    })
+    .detach();
+}
+
+fn prompt_restart(cx: &mut App) {
+    let (UpdateStatus::Ready { version } | UpdateStatus::Installed { version, .. }) = status(cx)
+    else {
+        return;
+    };
+    if work_in_flight(cx) {
+        tracing::info!(%version, "update ready; waiting for in-flight work before prompting");
+        cx.spawn(async move |cx| {
+            cx.background_executor().timer(BUSY_RETRY_DELAY).await;
+            cx.update(prompt_restart);
+        })
+        .detach();
+        return;
+    }
+
+    cx.spawn(async move |cx| {
+        crate::platform::activate_app();
+        if crate::platform::confirm_dialog(
+            "Update Cap",
+            &format!("Cap {version} is ready. Restart Cap to finish updating."),
+            "Restart Now",
+            "Later",
+            false,
+        ) {
+            cx.update(install_and_relaunch);
+        }
+    })
+    .detach();
+}
+
+pub(crate) fn install_and_relaunch(cx: &mut App) {
+    if !cx.has_global::<UpdateScheduler>() {
+        return;
+    }
+    let status = status(cx);
+    if !matches!(
+        status,
+        UpdateStatus::Ready { .. } | UpdateStatus::Installed { .. }
+    ) {
+        return;
+    }
+    if work_in_flight(cx) {
+        busy_alert(cx);
+        return;
+    }
+    if let Err(error) = crate::app_windows::flush_pending_editor_saves(cx) {
+        cx.spawn(async move |_| {
+            crate::platform::alert_dialog("Cap is still open", &error);
+        })
+        .detach();
+        return;
+    }
+    let version = match status {
+        UpdateStatus::Installed {
+            version,
+            executable,
+        } => {
+            relaunch_into(&version, &executable, cx);
+            return;
+        }
+        UpdateStatus::Ready { version } => version,
+        _ => return,
+    };
+    let Some((package, kind)) = cx
+        .global::<UpdateScheduler>()
+        .staged
+        .as_ref()
+        .map(|staged| (staged.package.clone(), staged.kind))
+    else {
+        return;
+    };
+
+    set_status(
+        UpdateStatus::Installing {
+            version: version.clone(),
+        },
+        cx,
+    );
+    cx.spawn(async move |cx| {
+        let applied = cx
+            .background_executor()
+            .spawn(async move { apply(&package, kind) })
+            .await;
+        cx.update(|cx| match applied {
+            Ok(Some(executable)) => restart_after_install(version, executable, cx),
+            Ok(None) => {
+                tracing::info!(%version, "update installer started; quitting");
+                crate::menus::quit(cx);
+            }
+            Err(error) => {
+                tracing::error!(%version, "update install failed: {error}");
+                cx.global_mut::<UpdateScheduler>().staged = None;
+                update_failed(&format!("Couldn't install version {version}: {error}"), cx);
+            }
+        });
+    })
+    .detach();
+}
+
+/// The install can sit behind an administrator prompt for as long as the user
+/// leaves it, so anything started meanwhile defers the restart to a prompt
+/// that waits for Cap to be idle.
+fn restart_after_install(version: Version, executable: PathBuf, cx: &mut App) {
+    let deferred = if work_in_flight(cx) {
+        tracing::info!(%version, "update installed; waiting for in-flight work before restarting");
+        true
+    } else if let Err(error) = crate::app_windows::flush_pending_editor_saves(cx) {
+        tracing::warn!(%version, "update installed; editor changes are still unsaved: {error}");
+        true
+    } else {
+        false
+    };
+    if deferred {
+        set_status(
+            UpdateStatus::Installed {
+                version,
+                executable,
+            },
+            cx,
+        );
+        prompt_restart(cx);
+        return;
+    }
+    relaunch_into(&version, &executable, cx);
+}
+
+fn relaunch_into(version: &Version, executable: &std::path::Path, cx: &mut App) {
+    tracing::info!(%version, "update installed; relaunching");
+    if let Err(error) = crate::permissions::relaunch_executable(executable, cx) {
+        tracing::error!(%error, "could not relaunch after updating");
+        crate::menus::quit(cx);
+    }
+}
+
+fn apply(package: &std::path::Path, kind: ArtifactKind) -> Result<Option<PathBuf>, String> {
+    installer::check_artifact_kind(package, kind)?;
+    apply_package(package, kind)
+}
+
+#[cfg(target_os = "macos")]
+fn apply_package(
+    package: &std::path::Path,
+    _kind: ArtifactKind,
+) -> Result<Option<PathBuf>, String> {
+    let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+    let bundle = executable
+        .ancestors()
+        .find(|path| path.extension().is_some_and(|extension| extension == "app"))
+        .ok_or_else(|| "This copy of Cap isn't running from an app bundle".to_string())?;
+    installer::install_app_bundle(package, bundle)?;
+    Ok(Some(executable))
+}
+
+#[cfg(windows)]
+fn apply_package(
+    package: &std::path::Path,
+    _kind: ArtifactKind,
+) -> Result<Option<PathBuf>, String> {
+    installer::launch_installer(package, &["/P", "/R", "/UPDATE"])?;
+    Ok(None)
+}
+
+#[cfg(target_os = "linux")]
+fn apply_package(package: &std::path::Path, kind: ArtifactKind) -> Result<Option<PathBuf>, String> {
+    match kind {
+        ArtifactKind::Deb => {
+            let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+            let executable = without_deleted_suffix(&executable);
+            installer::install_deb(package)?;
+            Ok(Some(executable))
+        }
+        ArtifactKind::AppImage => {
+            let image = std::env::var_os("APPIMAGE")
+                .map(PathBuf::from)
+                .filter(|path| path.is_absolute())
+                .ok_or_else(|| "This copy of Cap isn't running from an AppImage".to_string())?;
+            installer::install_appimage(package, &image)?;
+            Ok(Some(image))
+        }
+        ArtifactKind::AppArchive | ArtifactKind::NsisInstaller => {
+            Err("This package can't be installed on Linux".to_string())
+        }
+    }
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn without_deleted_suffix(executable: &std::path::Path) -> PathBuf {
+    let path = executable.to_string_lossy();
+    PathBuf::from(path.strip_suffix(" (deleted)").unwrap_or(&path))
 }
 
 #[cfg(test)]
@@ -380,6 +689,15 @@ mod tests {
 
     fn version(value: &str) -> Version {
         Version::parse(value).unwrap()
+    }
+
+    fn release(value: &str) -> Release {
+        Release {
+            version: version(value),
+            url: format!("https://cdn.crabnebula.app/asset/{value}"),
+            signature: "c2ln".to_string(),
+            notes: None,
+        }
     }
 
     #[test]
@@ -423,20 +741,20 @@ mod tests {
     #[test]
     fn nightly_channel_survives_individual_endpoint_failures() {
         assert_eq!(
-            select_available_version(Err("stable unavailable".into()), Ok(Some(version("0.6.1"))))
+            select_available_release(Err("stable unavailable".into()), Ok(Some(release("0.6.1"))))
                 .unwrap(),
-            Some(version("0.6.1")),
+            Some(release("0.6.1")),
         );
         assert_eq!(
-            select_available_version(
-                Ok(Some(version("0.6.2"))),
+            select_available_release(
+                Ok(Some(release("0.6.2"))),
                 Err("nightly unavailable".into())
             )
             .unwrap(),
-            Some(version("0.6.2")),
+            Some(release("0.6.2")),
         );
         assert_eq!(
-            select_available_version(
+            select_available_release(
                 Err("stable unavailable".into()),
                 Err("nightly unavailable".into()),
             ),
@@ -447,12 +765,20 @@ mod tests {
     #[test]
     fn nightly_channel_prefers_the_newest_successful_version() {
         assert_eq!(
-            select_available_version(
-                Ok(Some(version("0.6.1"))),
-                Ok(Some(version("0.6.2-nightly.4"))),
+            select_available_release(
+                Ok(Some(release("0.6.1"))),
+                Ok(Some(release("0.6.2-nightly.4"))),
             )
             .unwrap(),
-            Some(version("0.6.2-nightly.4")),
+            Some(release("0.6.2-nightly.4")),
+        );
+        assert_eq!(
+            select_available_release(
+                Ok(Some(release("0.6.3"))),
+                Ok(Some(release("0.6.3-nightly.9"))),
+            )
+            .unwrap(),
+            Some(release("0.6.3")),
         );
     }
 
@@ -483,6 +809,30 @@ mod tests {
         requests.manual = false;
         assert!(!requests.request_manual(true));
         assert!(requests.request_manual(false));
+    }
+
+    #[test]
+    fn channel_switch_drops_a_download_or_staged_package_and_keeps_an_install() {
+        let nightly = version("0.6.1-nightly.4");
+        assert!(channel_switch_drops_pending_package(
+            &UpdateStatus::Downloading {
+                version: nightly.clone(),
+                fraction: Some(0.4),
+            }
+        ));
+        assert!(channel_switch_drops_pending_package(&UpdateStatus::Ready {
+            version: nightly.clone(),
+        }));
+        assert!(!channel_switch_drops_pending_package(
+            &UpdateStatus::Installing { version: nightly }
+        ));
+        assert!(!channel_switch_drops_pending_package(
+            &UpdateStatus::Installed {
+                version: version("0.6.1"),
+                executable: PathBuf::from("/Applications/Cap.app"),
+            }
+        ));
+        assert!(!channel_switch_drops_pending_package(&UpdateStatus::Idle));
     }
 
     #[test]
@@ -518,5 +868,17 @@ mod tests {
         for phase in [ExportPhase::Idle, ExportPhase::Done, ExportPhase::Failed] {
             assert!(!phase.is_busy());
         }
+    }
+
+    #[test]
+    fn deb_relaunch_targets_the_installed_path_even_after_replacement() {
+        assert_eq!(
+            without_deleted_suffix(std::path::Path::new("/usr/bin/Cap (deleted)")),
+            PathBuf::from("/usr/bin/Cap")
+        );
+        assert_eq!(
+            without_deleted_suffix(std::path::Path::new("/usr/bin/Cap")),
+            PathBuf::from("/usr/bin/Cap")
+        );
     }
 }
