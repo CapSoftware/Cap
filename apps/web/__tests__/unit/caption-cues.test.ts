@@ -20,9 +20,21 @@ describe("getActiveCaptionText", () => {
 	it("uses the latest active cue when cues overlap", () => {
 		const activeCues = createCueList([
 			{ startTime: 0, text: "First caption" },
-			{ startTime: 3.199, text: "<v Speaker>Second caption</v>" },
+			{ startTime: 3.199, text: "<v Speaker B>Second &amp; final caption</v>" },
 		]);
 
-		expect(getActiveCaptionText(activeCues)).toBe("Second caption");
+		expect(getActiveCaptionText(activeCues)).toBe(
+			"Speaker B: Second & final caption",
+		);
+	});
+
+	it("preserves legacy literal angle brackets alongside voice markup", () => {
+		expect(
+			getActiveCaptionText(
+				createCueList([
+					{ startTime: 0, text: "<v Speaker A>2 < 3 and 4 > 1</v>" },
+				]),
+			),
+		).toBe("Speaker A: 2 < 3 and 4 > 1");
 	});
 });
