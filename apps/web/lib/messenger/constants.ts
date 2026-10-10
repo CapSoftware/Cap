@@ -125,7 +125,7 @@ DESKTOP APP SETTINGS:
 - Crash-recoverable recording: on/off (fragments recording for recovery)
 - Max capture framerate: 30, 60, or 120 FPS
 - Automatically open shareable links (Pro): on/off
-- Default project name template with placeholders: {target_name}, {target_kind}, {date}, {time}, {recording_mode}, {mode}, {moment:...}
+- Default project name template with placeholders: {target_name}, {target_kind}, {date}, {time}, {recording_mode}, {mode}, {moment:...}, {random} or {random:N}
 - Excluded windows: hide specific windows from recordings (useful for hiding Cap itself or other tools)
 - Self-host server URL: point desktop app to a self-hosted Cap server
 - Configurable keyboard shortcuts for: screenshot (display/window/area), open recording picker, stop recording, restart recording, pause/resume recording, cycle recording mode, record display/window/area

@@ -1867,6 +1867,7 @@ pub fn format_project_name<'a>(
         static ref DATE_REGEX: Regex = Regex::new(r"\{date(?::([^}]+))?\}").unwrap();
         static ref TIME_REGEX: Regex = Regex::new(r"\{time(?::([^}]+))?\}").unwrap();
         static ref MOMENT_REGEX: Regex = Regex::new(r"\{moment(?::([^}]+))?\}").unwrap();
+        static ref RANDOM_REGEX: Regex = Regex::new(r"\{random(?::(\d+))?\}").unwrap();
         static ref AC: aho_corasick::AhoCorasick = {
             aho_corasick::AhoCorasick::new([
                 "{recording_mode}",
@@ -1878,6 +1879,19 @@ pub fn format_project_name<'a>(
         };
     }
     let haystack = template.unwrap_or(DEFAULT_FILENAME_TEMPLATE);
+    let haystack = RANDOM_REGEX.replace_all(haystack, |caps: &regex::Captures| {
+        let length = match caps.get(1) {
+            Some(value) => match value.as_str().parse::<usize>() {
+                Ok(length) => length,
+                Err(_) => return caps.get(0).unwrap().as_str().to_owned(),
+            },
+            None => 10,
+        };
+        if !(1..=32).contains(&length) {
+            return caps.get(0).unwrap().as_str().to_owned();
+        }
+        uuid::Uuid::new_v4().simple().to_string()[..length].to_owned()
+    });
 
     // Get recording mode information
     let (recording_mode, mode) = match recording_mode {
@@ -1888,7 +1902,7 @@ pub fn format_project_name<'a>(
 
     let result = AC
         .try_replace_all(
-            haystack,
+            &haystack,
             &[recording_mode, mode, target_kind, &truncated_target_name],
         )
         .expect("AhoCorasick replace should never fail with default configuration");
@@ -7076,6 +7090,45 @@ async fn emit_recording_started_telemetry(app: &AppHandle, state_mtx: &MutableSt
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn project_name_random_placeholder_is_filename_safe_and_sized() {
+        let name = format_project_name(
+            Some("{random}-{random:16}-{random:0}"),
+            "Example Window",
+            "Window",
+            RecordingMode::Studio,
+            None,
+        );
+        let parts = name.split('-').collect::<Vec<_>>();
+
+        assert_eq!(parts[0].len(), 10);
+        assert_eq!(parts[1].len(), 16);
+        assert!(
+            parts[..2]
+                .iter()
+                .all(|part| part.chars().all(|character| character.is_ascii_hexdigit()))
+        );
+        assert_eq!(parts[2], "{random:0}");
+    }
+
+    #[test]
+    fn project_name_preserves_random_placeholder_in_window_title() {
+        let timestamp = chrono::Local
+            .with_ymd_and_hms(2026, 8, 25, 9, 15, 0)
+            .single()
+            .unwrap();
+
+        let name = format_project_name(
+            None,
+            "Implement {random} placeholder",
+            "Window",
+            RecordingMode::Studio,
+            Some(timestamp),
+        );
+
+        assert!(name.contains("Implement {random} placeholder"));
+    }
 
     #[test]
     fn requested_microphone_absence_is_an_error_not_an_empty_track() {

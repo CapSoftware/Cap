@@ -1178,6 +1178,15 @@ function DefaultProjectNameCard(props: {
 									{momentExample()}
 								</p>
 							</div>
+
+							<div class="space-y-1">
+								<p class="font-medium text-gray-12">Random</p>
+								<p>
+									<CodeView>{"{random}"}</CodeView> → 10 filename-safe
+									hexadecimal characters; use{" "}
+									<CodeView>{"{random:16}"}</CodeView> for 16 (1–32).
+								</p>
+							</div>
 						</Collapsible.Content>
 					</Collapsible>
 				</div>
