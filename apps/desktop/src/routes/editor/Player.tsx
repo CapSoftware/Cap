@@ -19,6 +19,7 @@ import Tooltip from "~/components/Tooltip";
 import { captionsStore } from "~/store/captions";
 import { createTauriEventListener } from "~/utils/createEventListener";
 import { commands } from "~/utils/tauri";
+import IconLucideSmartphone from "~icons/lucide/smartphone";
 import AspectRatioSelect from "./AspectRatioSelect";
 import {
 	CanvasElementsOverlay,
@@ -39,6 +40,13 @@ import {
 	createPreviewBoundsUpdater,
 } from "./preview-bounds";
 import { SplitScreenOverlay } from "./SplitScreenOverlay";
+import { PreviewSafeZoneOverlay } from "./safe-zone-overlay";
+import {
+	cycleSafeZonePlatform,
+	isPortraitOutput,
+	SAFE_ZONE_LABELS,
+	safeZonePlatform,
+} from "./safe-zones";
 import { TextOverlay } from "./TextOverlay";
 import { EditorButton, Slider } from "./ui";
 import { useEditorShortcuts } from "./useEditorShortcuts";
@@ -65,7 +73,15 @@ export function PlayerContent(props: { compactness?: number }) {
 		playbackIntent,
 		requestHandoffPlayback,
 		handoffPlaybackPending,
+		latestFrameLayout,
 	} = useEditorContext();
+
+	const portraitOutput = () => {
+		const layout = latestFrameLayout();
+		return (
+			!!layout && isPortraitOutput(layout.output_width, layout.output_height)
+		);
+	};
 
 	let panelRef: HTMLDivElement | undefined;
 	const [panelHovered, setPanelHovered] = createSignal(false);
@@ -391,6 +407,20 @@ export function PlayerContent(props: { compactness?: number }) {
 						<span class="max-[1200px]:hidden">Crop</span>
 					</EditorButton>
 					<FrameButton />
+					<Show when={portraitOutput()}>
+						<EditorButton
+							tooltipText="Safe zones: Off / Reels / TikTok / Shorts"
+							onClick={() => cycleSafeZonePlatform()}
+							variant="text"
+							leftIcon={<IconLucideSmartphone />}
+						>
+							<span class="max-[1200px]:hidden">
+								{safeZonePlatform()
+									? SAFE_ZONE_LABELS[safeZonePlatform() ?? "reels"]
+									: "Safe zones"}
+							</span>
+						</EditorButton>
+					</Show>
 				</div>
 				<div class="flex flex-row flex-none gap-2 items-center">
 					<span class="text-xs text-ed-text-2">Preview</span>
@@ -778,6 +808,7 @@ function PreviewCanvas(props: {
 						)}
 					</Show>
 					<Show when={hasFrame()}>
+						<PreviewSafeZoneOverlay size={size()} />
 						<CanvasElementsOverlay size={size()} />
 						<div class="absolute inset-0 isolate pointer-events-none">
 							<MaskOverlay size={size()} />
