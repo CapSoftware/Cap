@@ -210,8 +210,9 @@ impl MaterialTokens {
                 // `--macos-settings-hover: rgba(0, 0, 0, 0.065)`
                 hover: rgba(0x00000011),
                 sidebar: rgba(0xffffffc7),
-                // System Settings' grouped style: a white pane with faintly
-                // grey inset groups, rather than white cards on grey.
+                // Deliberately not the Tauri `--macos-settings-content` /
+                // `--macos-settings-card` values: the GPUI settings window has
+                // its own grouped layout.
                 content: rgba(0xffffffff),
                 card: rgba(0x0000000a),
                 // `--macos-settings-window-radius: 26px`
