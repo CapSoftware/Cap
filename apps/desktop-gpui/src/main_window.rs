@@ -170,8 +170,6 @@ impl Mode {
     }
 }
 
-/// Rows that sit straight on the window (the device lists) are faint tints of
-/// the text colour, deepened a step on hover or selection.
 fn glass_tint(theme: Theme, light: f32, dark: f32) -> Hsla {
     if theme.is_dark() {
         gpui::hsla(0., 0., 1., dark)
