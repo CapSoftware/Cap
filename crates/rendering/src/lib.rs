@@ -6951,6 +6951,12 @@ pub struct RendererLayers {
     camera_blur_unavailable: bool,
 }
 
+fn join_layer<T>(handle: std::thread::ScopedJoinHandle<'_, T>) -> T {
+    handle
+        .join()
+        .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+}
+
 impl RendererLayers {
     fn reset_frame_state(&mut self) {
         self.display.reset_frame_state();
@@ -6992,60 +6998,81 @@ impl RendererLayers {
         include_overlays: bool,
     ) -> Self {
         let layers_phase = readiness::Phase::start("layers.new");
-        let shared_yuv_pipelines = readiness::measure("layers.shared_yuv", || {
-            Arc::new(yuv_converter::YuvConverterPipelines::new(device))
-        });
-        let shared_composite_pipeline = readiness::measure("layers.shared_composite", || {
-            Arc::new(composite_frame::CompositeVideoFramePipeline::new(device))
-        });
+        // Each layer compiles its own shaders and pipelines, and none reads
+        // another's, so they build side by side; only the layers that share
+        // the YUV and composite pipelines wait for those.
+        let layers = std::thread::scope(|scope| {
+            let background = scope
+                .spawn(|| readiness::measure("layers.background", || BackgroundLayer::new(device)));
+            let background_blur = scope
+                .spawn(|| readiness::measure("layers.background_blur", || BlurLayer::new(device)));
+            let background_color_grade = scope.spawn(|| {
+                readiness::measure("layers.background_color_grade", || {
+                    ColorGradeLayer::new(device)
+                })
+            });
+            let click_ripple = scope.spawn(|| {
+                readiness::measure("layers.click_ripple", || ClickRippleLayer::new(device))
+            });
+            let cursor =
+                scope.spawn(|| readiness::measure("layers.cursor", || CursorLayer::new(device)));
+            let mask = scope.spawn(|| readiness::measure("layers.mask", || MaskLayer::new(device)));
+            let overlays =
+                scope.spawn(|| include_overlays.then(|| OverlayLayers::new(device, queue)));
+            let camera3d = scope
+                .spawn(|| readiness::measure("layers.camera3d", || Camera3DLayer::new(device)));
+            let shared_yuv_pipelines = scope.spawn(|| {
+                readiness::measure("layers.shared_yuv", || {
+                    Arc::new(yuv_converter::YuvConverterPipelines::new(device))
+                })
+            });
+            let shared_composite_pipeline = readiness::measure("layers.shared_composite", || {
+                Arc::new(composite_frame::CompositeVideoFramePipeline::new(device))
+            });
+            let shared_yuv_pipelines = join_layer(shared_yuv_pipelines);
 
-        let layers = Self {
-            background: readiness::measure("layers.background", || BackgroundLayer::new(device)),
-            background_blur: readiness::measure("layers.background_blur", || {
-                BlurLayer::new(device)
-            }),
-            background_color_grade: readiness::measure("layers.background_color_grade", || {
-                ColorGradeLayer::new(device)
-            }),
-            frame: readiness::measure("layers.frame", || {
-                FrameLayer::new(device, shared_composite_pipeline.clone())
-            }),
-            notch: readiness::measure("layers.notch", || {
-                NotchLayer::new(device, shared_composite_pipeline.clone())
-            }),
-            display: readiness::measure("layers.display", || {
-                DisplayLayer::new_with_all_shared_pipelines(
-                    device,
-                    shared_yuv_pipelines.clone(),
-                    shared_composite_pipeline.clone(),
-                    prefer_cpu_conversion,
-                )
-            }),
-            click_ripple: readiness::measure("layers.click_ripple", || {
-                ClickRippleLayer::new(device)
-            }),
-            cursor: readiness::measure("layers.cursor", || CursorLayer::new(device)),
-            camera: readiness::measure("layers.camera", || {
-                CameraLayer::new_with_all_shared_pipelines(
-                    device,
-                    shared_yuv_pipelines.clone(),
-                    shared_composite_pipeline.clone(),
-                )
-            }),
-            camera_only: readiness::measure("layers.camera_only", || {
-                CameraLayer::new_with_all_shared_pipelines(
-                    device,
-                    shared_yuv_pipelines,
-                    shared_composite_pipeline,
-                )
-            }),
-            mask: readiness::measure("layers.mask", || MaskLayer::new(device)),
-            overlays: include_overlays.then(|| OverlayLayers::new(device, queue)),
-            camera3d: readiness::measure("layers.camera3d", || Camera3DLayer::new(device)),
-            camera_blur_processor: None,
-            camera_blur_init_failed: false,
-            camera_blur_unavailable: false,
-        };
+            Self {
+                background: join_layer(background),
+                background_blur: join_layer(background_blur),
+                background_color_grade: join_layer(background_color_grade),
+                frame: readiness::measure("layers.frame", || {
+                    FrameLayer::new(device, shared_composite_pipeline.clone())
+                }),
+                notch: readiness::measure("layers.notch", || {
+                    NotchLayer::new(device, shared_composite_pipeline.clone())
+                }),
+                display: readiness::measure("layers.display", || {
+                    DisplayLayer::new_with_all_shared_pipelines(
+                        device,
+                        shared_yuv_pipelines.clone(),
+                        shared_composite_pipeline.clone(),
+                        prefer_cpu_conversion,
+                    )
+                }),
+                click_ripple: join_layer(click_ripple),
+                cursor: join_layer(cursor),
+                camera: readiness::measure("layers.camera", || {
+                    CameraLayer::new_with_all_shared_pipelines(
+                        device,
+                        shared_yuv_pipelines.clone(),
+                        shared_composite_pipeline.clone(),
+                    )
+                }),
+                camera_only: readiness::measure("layers.camera_only", || {
+                    CameraLayer::new_with_all_shared_pipelines(
+                        device,
+                        shared_yuv_pipelines,
+                        shared_composite_pipeline,
+                    )
+                }),
+                mask: join_layer(mask),
+                overlays: join_layer(overlays),
+                camera3d: join_layer(camera3d),
+                camera_blur_processor: None,
+                camera_blur_init_failed: false,
+                camera_blur_unavailable: false,
+            }
+        });
         layers_phase.finish("returned");
         layers
     }
