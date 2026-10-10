@@ -25,9 +25,7 @@ export function formatStarCount(count: number): string {
 	if (count === 0) return "";
 	if (count >= 1000) {
 		const formatted = (count / 1000).toFixed(1);
-		return formatted.endsWith(".0")
-			? `${Math.floor(count / 1000)}k`
-			: `${formatted}k`;
+		return `${formatted.replace(/\.0$/, "")}k`;
 	}
 	return count.toString();
 }
