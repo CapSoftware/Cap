@@ -1132,16 +1132,6 @@ impl Theme {
         color
     }
 
-    pub fn tile_selected_hover_bg(&self) -> Hsla {
-        if self.is_dark() {
-            let mut color: Hsla = self.blue_4.into();
-            color.a = 0.4;
-            color
-        } else {
-            self.blue_4.into()
-        }
-    }
-
     /// Tailwind v4's stock `blue-600` -- the target-select overlay's highlight
     /// wash (`bg-blue-600/40`). Not a Radix step and not one of the app's own
     /// `--blue-*` overrides: the overlay reaches straight for the Tailwind
