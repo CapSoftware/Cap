@@ -40,6 +40,17 @@ fn should_fabricate_stall_silence(stall_duration: Duration, keepalive_after: Dur
     stall_duration >= keepalive_after
 }
 
+fn is_audio_starved(captured_delta: u64, silence_delta: u64, is_muted: bool) -> bool {
+    if is_muted {
+        return false;
+    }
+    let total = captured_delta.saturating_add(silence_delta);
+    if total == 0 || silence_delta == 0 {
+        return false;
+    }
+    (100.0 * silence_delta as f64 / total as f64) >= 80.0
+}
+
 struct ReconnectAttemptGuard(Arc<AtomicBool>);
 
 impl Drop for ReconnectAttemptGuard {
@@ -683,6 +694,7 @@ impl AudioSource for Microphone {
             crate::output_pipeline::spawn_capture_task({
                 let cancel = cancel.clone();
                 let health_tx = health_tx.clone();
+                let recording_muted = recording_muted.clone();
                 async move {
                     let frame_counter = mic_frame_counter;
                     let drop_counter = mic_drop_counter;
@@ -690,8 +702,12 @@ impl AudioSource for Microphone {
                     let mut last_log = Instant::now();
                     let mut prev_captured: u64 = 0;
                     let mut prev_dropped: u64 = 0;
+                    let mut prev_silence: u64 = 0;
                     let mut stale_count: u32 = 0;
                     let mut high_drop_intervals: u32 = 0;
+                    let mut high_silence_intervals: u32 = 0;
+                    let mut silence_stall_start: Option<Instant> = None;
+                    let mut silence_stall_emitted = false;
                     loop {
                         tokio::select! {
                             biased;
@@ -714,9 +730,13 @@ impl AudioSource for Microphone {
 
                             let captured_delta = captured.saturating_sub(prev_captured);
                             let dropped_delta = dropped.saturating_sub(prev_dropped);
-                            let data_changed = captured != prev_captured || dropped != prev_dropped;
+                            let silence_delta = silence.saturating_sub(prev_silence);
+                            let data_changed = captured != prev_captured
+                                || dropped != prev_dropped
+                                || silence != prev_silence;
                             prev_captured = captured;
                             prev_dropped = dropped;
+                            prev_silence = silence;
 
                             // Surface a *sustained* high drop rate as a health event, like
                             // every other source/muxer. The case that matters most is a
@@ -742,6 +762,31 @@ impl AudioSource for Microphone {
                                     PipelineHealthEvent::FrameDropRateHigh {
                                         source: "microphone".to_string(),
                                         rate_pct: interval_drop_pct,
+                                    },
+                                );
+                            }
+
+                            let is_muted = recording_muted.load(Ordering::Relaxed);
+                            if is_audio_starved(captured_delta, silence_delta, is_muted) {
+                                if silence_stall_start.is_none() {
+                                    silence_stall_start = Some(Instant::now());
+                                }
+                                high_silence_intervals = high_silence_intervals.saturating_add(1);
+                            } else {
+                                high_silence_intervals = 0;
+                                silence_stall_start = None;
+                                silence_stall_emitted = false;
+                            }
+                            if high_silence_intervals >= 2 && !silence_stall_emitted {
+                                silence_stall_emitted = true;
+                                let waited_ms = silence_stall_start
+                                    .map(|s| s.elapsed().as_millis() as u64)
+                                    .unwrap_or(0);
+                                emit_health(
+                                    &health_tx,
+                                    PipelineHealthEvent::Stalled {
+                                        source: "microphone".to_string(),
+                                        waited_ms,
                                     },
                                 );
                             }
@@ -1335,6 +1380,16 @@ mod tests {
         }
 
         assert!(prev.is_some(), "resampler produced no frames");
+    }
+
+    #[test]
+    fn audio_starvation_detects_sustained_silence_dominance() {
+        assert!(!is_audio_starved(100, 0, false));
+        assert!(!is_audio_starved(100, 10, false));
+        assert!(is_audio_starved(0, 100, false));
+        assert!(is_audio_starved(5, 95, false));
+        assert!(!is_audio_starved(0, 100, true));
+        assert!(!is_audio_starved(0, 0, false));
     }
 }
 
