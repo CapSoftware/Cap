@@ -1,6 +1,6 @@
 import { nanoId } from "@cap/database/helpers";
 import * as Db from "@cap/database/schema";
-import { CurrentUser, Organisation } from "@cap/web-domain";
+import { CurrentUser, Organisation, type User } from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
 import { Effect, Option } from "effect";
 
@@ -269,6 +269,91 @@ export class UsersOnboarding extends Effect.Service<UsersOnboarding>()(
 							.where(Dz.eq(Db.users.id, currentUser.id)),
 					);
 				}),
+				getStarted: Effect.fn("Onboarding.getStarted")(function* (data: {
+					path: User.OnboardingStartPath;
+				}) {
+					const currentUser = yield* CurrentUser;
+					yield* Effect.annotateCurrentSpan("onboarding.path", data.path);
+
+					yield* db.use((db) =>
+						db.transaction(async (tx) => {
+							const [user] = await tx
+								.select()
+								.from(Db.users)
+								.where(Dz.eq(Db.users.id, currentUser.id))
+								.for("update");
+							if (!user) return;
+
+							const firstName = user.name?.trim() ?? "";
+							const preferredOrganizationId =
+								user.activeOrganizationId || user.defaultOrgId;
+							const [existingOrg] = preferredOrganizationId
+								? await tx
+										.select({
+											id: Db.organizations.id,
+											tombstoneAt: Db.organizations.tombstoneAt,
+										})
+										.from(Db.organizations)
+										.where(Dz.eq(Db.organizations.id, preferredOrganizationId))
+								: [];
+
+							let createdOrganizationId: Organisation.OrganisationId | null =
+								null;
+							if (!existingOrg || existingOrg.tombstoneAt) {
+								createdOrganizationId = Organisation.OrganisationId.make(
+									nanoId(),
+								);
+								await tx.insert(Db.organizations).values({
+									id: createdOrganizationId,
+									ownerId: currentUser.id,
+									name: firstName
+										? `${firstName}'s Organization`
+										: "My Organization",
+								});
+								await tx.insert(Db.organizationMembers).values({
+									id: nanoId(),
+									organizationId: createdOrganizationId,
+									userId: currentUser.id,
+									role: "owner",
+								});
+							} else if (firstName.length > 0) {
+								await tx
+									.update(Db.organizations)
+									.set({ name: `${firstName}'s Organization` })
+									.where(
+										Dz.and(
+											Dz.eq(Db.organizations.id, existingOrg.id),
+											Dz.eq(Db.organizations.ownerId, currentUser.id),
+											Dz.isNull(Db.organizations.tombstoneAt),
+											Dz.eq(Db.organizations.name, "My Organization"),
+										),
+									);
+							}
+
+							await tx
+								.update(Db.users)
+								.set({
+									...(createdOrganizationId && {
+										activeOrganizationId: createdOrganizationId,
+										defaultOrgId: createdOrganizationId,
+									}),
+									onboarding_completed_at:
+										user.onboarding_completed_at ?? new Date(),
+									onboardingSteps: {
+										...user.onboardingSteps,
+										...(firstName.length > 0 && { welcome: true }),
+										organizationSetup: true,
+										customDomain: true,
+										inviteTeam: true,
+										download: true,
+										getStarted: true,
+									},
+								})
+								.where(Dz.eq(Db.users.id, currentUser.id));
+						}),
+					);
+				}),
+
 				skipToDashboard: Effect.fn("Onboarding.skipToDashboard")(function* () {
 					const currentUser = yield* CurrentUser;
 
@@ -297,6 +382,7 @@ export class UsersOnboarding extends Effect.Service<UsersOnboarding>()(
 										customDomain: true,
 										inviteTeam: true,
 										download: true,
+										getStarted: true,
 									},
 								})
 								.where(Dz.eq(Db.users.id, currentUser.id));
