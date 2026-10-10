@@ -261,8 +261,8 @@ impl Worker {
         let (width, height) = (job.width, job.height);
         let texture = self.input_texture(&job)?.clone();
 
-        // Vision segments the converted IOSurface itself: no GPU readback or
-        // copy, and segmentation runs beside rendering instead of blocking it.
+        // Vision takes the converted IOSurface directly (no GPU readback),
+        // and segmentation runs beside rendering instead of blocking it.
         self.processor.set_segmentation_source(job.buffer.0.clone());
         let mut encoder = self
             .device

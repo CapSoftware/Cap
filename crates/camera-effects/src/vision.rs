@@ -1,5 +1,5 @@
 use anyhow::Context;
-use cidre::{arc, cf, cv, define_obj_type, ns, objc, vn};
+use cidre::{arc, cf, cv, define_obj_type, ns, objc, vn, vt};
 use std::sync::mpsc;
 use std::thread;
 
@@ -15,12 +15,15 @@ unsafe extern "C" {
     fn CVPixelBufferGetBytesPerRow(pixel_buffer: &cv::PixelBuf) -> usize;
 }
 
-/// A BGRA camera frame handed to Vision without copying it. CF objects have
+/// A BGRA camera frame handed to Vision without a CPU copy. CF objects have
 /// atomic refcounts, so the retain can cross to the segmentation thread.
+/// Callers usually own these in a small reuse ring, so the segmentation
+/// thread first copies the frame into its own buffer with a hardware pixel
+/// transfer and releases this one before any Vision work: a slow
+/// segmentation can never read a slot the ring has already rewritten.
 pub struct SharedPixelBuffer(pub arc::R<cv::PixelBuf>);
 unsafe impl Send for SharedPixelBuffer {}
 
-/// A finished mask: one byte per sample, and its width and height.
 pub type VisionMask<'a> = (&'a [u8], (u32, u32));
 
 /// Apple Vision person segmentation (`VNGeneratePersonSegmentationRequest`).
@@ -144,6 +147,7 @@ struct Session {
     handler: arc::R<vn::SequenceRequestHandler>,
     request: Request,
     input: Option<arc::R<cv::PixelBuf>>,
+    transfer: Option<arc::R<vt::PixelTransferSession>>,
     cleanup: Cleanup,
     instance_areas: Vec<usize>,
 }
@@ -174,6 +178,7 @@ impl Session {
             handler: vn::SequenceRequestHandler::new(),
             request: Request::new(),
             input: None,
+            transfer: None,
             cleanup: Cleanup::default(),
             instance_areas: Vec::new(),
         }
@@ -186,8 +191,31 @@ impl Session {
     }
 
     fn segment(&mut self, job: &mut VisionJob) -> Result<(), String> {
-        let input = match &job.input {
-            VisionInput::PixelBuffer(buffer) => buffer.0.clone(),
+        let input = match std::mem::replace(&mut job.input, VisionInput::None) {
+            VisionInput::PixelBuffer(buffer) => {
+                let (width, height) =
+                    input_dimensions(buffer.0.width() as u32, buffer.0.height() as u32);
+                let (width, height) = (width as usize, height as usize);
+                let transfer = match &mut self.transfer {
+                    Some(transfer) => transfer,
+                    slot => {
+                        let mut transfer = vt::PixelTransferSession::new()
+                            .map_err(|error| format!("pixel transfer session: {error:?}"))?;
+                        transfer
+                            .set_realtime(true)
+                            .map_err(|error| format!("pixel transfer realtime: {error:?}"))?;
+                        slot.insert(transfer)
+                    }
+                };
+                let input = match &mut self.input {
+                    Some(input) if input.width() == width && input.height() == height => input,
+                    slot => slot.insert(create_input(width, height)?),
+                };
+                transfer
+                    .transfer(&buffer.0, input)
+                    .map_err(|error| format!("copy segmentation frame: {error:?}"))?;
+                input.clone()
+            }
             VisionInput::Pixels => {
                 let (width, height) = (job.dimensions.0 as usize, job.dimensions.1 as usize);
                 if job.bgra.len() < width * height * 4 || width == 0 || height == 0 {
