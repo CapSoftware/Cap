@@ -9,7 +9,7 @@ use ffmpeg::{
 };
 
 use crate::{
-    AudioEncoder,
+    AudioEncoder, PacketSink,
     audio::{base::AudioEncoderBase, buffered_resampler::BufferedResampler},
 };
 
@@ -27,6 +27,7 @@ pub enum AACEncoderError {
 
 pub struct AACEncoder {
     base: AudioEncoderBase,
+    stream_index: usize,
 }
 
 impl AACEncoder {
@@ -90,9 +91,15 @@ impl AACEncoder {
         output_stream.set_time_base(FFRational(1, output_config.rate()));
         output_stream.set_parameters(&encoder);
 
+        let stream_index = output_stream.index();
         Ok(Self {
-            base: AudioEncoderBase::new(encoder, resampler, output_stream.index()),
+            base: AudioEncoderBase::new(encoder, resampler, stream_index),
+            stream_index,
         })
+    }
+
+    pub fn stream_index(&self) -> usize {
+        self.stream_index
     }
 
     pub fn send_frame(
@@ -106,6 +113,17 @@ impl AACEncoder {
 
     pub fn flush(&mut self, output: &mut format::context::Output) -> Result<(), ffmpeg::Error> {
         self.base.flush(output)
+    }
+
+    /// [`Self::send_frame`] into any [`PacketSink`], such as a
+    /// [`crate::PacketQueue`] drained by a muxer on another thread.
+    pub fn send_frame_to(
+        &mut self,
+        frame: frame::Audio,
+        timestamp: Duration,
+        sink: &mut impl PacketSink,
+    ) -> Result<(), ffmpeg::Error> {
+        self.base.send_frame(frame, timestamp, sink)
     }
 }
 
@@ -176,9 +194,44 @@ mod tests {
         std::fs::read(path).unwrap()
     }
 
+    fn encode_audio_through_queue() -> Vec<u8> {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("audio.mp4");
+        let mut output = format::output(&path).unwrap();
+        let mut encoder = AACEncoder::init(
+            AudioInfo::new_raw(Sample::F32(Type::Packed), 48_000, 2),
+            &mut output,
+        )
+        .unwrap();
+        output.write_header().unwrap();
+
+        let mut queue = crate::PacketQueue::new(output.stream_time_base(encoder.stream_index()));
+        let mut position = 0;
+        for samples in [1, 997, 4_096, 1_024, 37] {
+            encoder
+                .send_frame_to(input_frame(position, samples), Duration::MAX, &mut queue)
+                .unwrap();
+            for packet in queue.take() {
+                output.write_packet(packet).unwrap();
+            }
+            position += samples as i64;
+        }
+
+        encoder.flush(&mut output).unwrap();
+        output.write_trailer().unwrap();
+        drop(encoder);
+        drop(output);
+        std::fs::read(path).unwrap()
+    }
+
     #[test]
     fn checked_audio_submission_preserves_encoded_bytes() {
         assert_eq!(encode_audio(false), encode_audio(true));
+    }
+
+    #[test]
+    fn queued_audio_packets_match_direct_writes() {
+        assert_eq!(encode_audio(true), encode_audio_through_queue());
     }
 
     #[test]

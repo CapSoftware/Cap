@@ -1,6 +1,6 @@
 use super::buffered_resampler::BufferedResampler;
-use crate::base::EncoderBase;
-use ffmpeg::{codec::encoder, format, frame};
+use crate::base::{EncoderBase, PacketSink};
+use ffmpeg::{codec::encoder, frame};
 use std::time::Duration;
 
 pub struct AudioEncoderBase {
@@ -18,11 +18,11 @@ impl AudioEncoderBase {
         }
     }
 
-    pub fn send_frame(
+    pub fn send_frame<S: PacketSink + ?Sized>(
         &mut self,
         mut frame: frame::Audio,
         timestamp: Duration,
-        output: &mut format::context::Output,
+        output: &mut S,
     ) -> Result<(), ffmpeg::Error> {
         // Input frames are stamped in input-rate units; BufferedResampler
         // rescales them to the encoder's output rate.
@@ -39,7 +39,7 @@ impl AudioEncoderBase {
         Ok(())
     }
 
-    pub fn flush(&mut self, output: &mut format::context::Output) -> Result<(), ffmpeg::Error> {
+    pub fn flush<S: PacketSink + ?Sized>(&mut self, output: &mut S) -> Result<(), ffmpeg::Error> {
         while let Some(frame) = self.resampler.flush(self.encoder.frame_size() as usize) {
             self.inner.send_frame(&frame, output, &mut self.encoder)?;
         }
