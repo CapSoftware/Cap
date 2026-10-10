@@ -20,6 +20,10 @@ async fn main() -> anyhow::Result<()> {
     );
     let (width, height): (u32, u32) = (args[2].parse()?, args[3].parse()?);
     let pixels = std::fs::read(&args[1])?;
+    anyhow::ensure!(
+        pixels.len() == (width * height * 4) as usize,
+        "expected exactly one {width}x{height} RGBA frame"
+    );
     let instance = wgpu::Instance::default();
     let adapter = instance.request_adapter(&Default::default()).await?;
     let (device, queue) = adapter.request_device(&Default::default()).await?;
@@ -65,7 +69,11 @@ async fn main() -> anyhow::Result<()> {
             .result()?;
         let base = CVPixelBufferGetBaseAddress(&buffer);
         let stride = CVPixelBufferGetBytesPerRow(&buffer);
-        for (y, row) in pixels.chunks_exact(width as usize * 4).enumerate() {
+        for (y, row) in pixels
+            .chunks_exact(width as usize * 4)
+            .take(height as usize)
+            .enumerate()
+        {
             for (x, p) in row.chunks_exact(4).enumerate() {
                 let d = base.add(y * stride + x * 4);
                 *d = p[2];
