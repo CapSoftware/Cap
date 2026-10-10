@@ -3122,6 +3122,18 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
             })
             .await;
 
+        // Log the final held-frame count so the last increment of
+        // `held_before_start` is read. Without this, Rust 1.95 warns
+        // "value assigned to `held_before_start` is never read" when
+        // the loop ends on the `continue` branch (a frame held back by
+        // the start gate just before cancellation).
+        if held_before_start > 0 {
+            info!(
+                held_frames = held_before_start,
+                "Video pipeline ended with frames held before start gate"
+            );
+        }
+
         let was_cancelled = res.is_none();
         let stopped_at = timestamps
             .instant()
