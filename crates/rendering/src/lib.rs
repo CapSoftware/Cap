@@ -2530,7 +2530,168 @@ fn compute_camera_position(
         CameraYPosition::Bottom => output_size[1] - subject_size[1] - camera_padding,
     };
 
-    [x, y]
+    [
+        x.clamp(0.0, (output_size[0] - subject_size[0]).max(0.0)),
+        y.clamp(0.0, (output_size[1] - subject_size[1]).max(0.0)),
+    ]
+}
+
+const FILL_FRAME_CURSOR_WINDOW_SECS: f32 = 1.2;
+const FILL_FRAME_CURSOR_SAMPLES: u32 = 12;
+
+fn fill_frame_active(project: &ProjectConfiguration) -> bool {
+    project.background.fill_frame
+        && project.aspect_ratio.is_some()
+        && FrameConfiguration::active_style(project.background.frame.as_ref()) == FrameStyle::None
+}
+
+// Averages the cursor over a trailing window instead of smoothing across
+// frames, so the result depends only on time and preview matches export.
+fn fill_frame_cursor_focus(
+    cursor_time: f32,
+    crop: &Crop,
+    screen_size: XY<u32>,
+    cursor_interp_fn: &dyn Fn(f32) -> Option<InterpolatedCursorPosition>,
+) -> XY<f64> {
+    let mut sum = XY::new(0.0, 0.0);
+    let mut weight_sum = 0.0;
+    for i in 0..FILL_FRAME_CURSOR_SAMPLES {
+        let age = FILL_FRAME_CURSOR_WINDOW_SECS * i as f32 / (FILL_FRAME_CURSOR_SAMPLES - 1) as f32;
+        let time = cursor_time - age;
+        if time < 0.0 {
+            break;
+        }
+        if let Some(cursor) = cursor_interp_fn(time) {
+            let weight = f64::from(FILL_FRAME_CURSOR_SAMPLES - i);
+            sum = sum + cursor.position.coord * weight;
+            weight_sum += weight;
+        }
+    }
+    if weight_sum <= 0.0 {
+        return XY::new(0.5, 0.5);
+    }
+    cursor_crop_uv(sum / weight_sum, crop, screen_size)
+}
+
+const FILL_FRAME_CURSOR_MARGIN: f64 = 0.15;
+
+fn cursor_crop_uv(position: XY<f64>, crop: &Crop, screen_size: XY<u32>) -> XY<f64> {
+    XY::new(
+        ((position.x * f64::from(screen_size.x) - f64::from(crop.position.x))
+            / f64::from(crop.size.x.max(1)))
+        .clamp(0.0, 1.0),
+        ((position.y * f64::from(screen_size.y) - f64::from(crop.position.y))
+            / f64::from(crop.size.y.max(1)))
+        .clamp(0.0, 1.0),
+    )
+}
+
+// Scene transitions straddle the scene edges, so each pin eases in across
+// `[start - transition_in, start]` and out across `[end, end + transition_out]`.
+// Adjacent pinned scenes overlap there, so overlapping pins are blended by
+// weight instead of letting the earlier one win until its window ends.
+fn fill_frame_scene_override(
+    scenes: &[cap_project::SceneSegment],
+    time: f64,
+) -> Option<(XY<f64>, f64)> {
+    let ease = |elapsed: f64, duration: f64| {
+        if duration <= 1e-6 {
+            return if elapsed >= 0.0 { 1.0 } else { 0.0 };
+        }
+        let x = (elapsed / duration).clamp(0.0, 1.0);
+        x * x * (3.0 - 2.0 * x)
+    };
+    let mut weighted = XY::new(0.0, 0.0);
+    let mut total = 0.0;
+    for scene in scenes {
+        if !matches!(scene.mode, SceneMode::Default | SceneMode::HideCamera) {
+            continue;
+        }
+        let Some(position) = scene.fill_frame_position else {
+            continue;
+        };
+        let transition_in = scene.transition_in.max(0.0);
+        let transition_out = scene.transition_out.max(0.0);
+        if time < scene.start - transition_in || time >= scene.end + transition_out {
+            continue;
+        }
+        let weight = ease(time - (scene.start - transition_in), transition_in)
+            * ease(scene.end + transition_out - time, transition_out);
+        if weight <= 0.0 {
+            continue;
+        }
+        let position = XY::new(position.x.clamp(0.0, 1.0), position.y.clamp(0.0, 1.0));
+        weighted = weighted + position * weight;
+        total += weight;
+    }
+    (total > 0.0).then(|| (weighted / total, total.min(1.0)))
+}
+
+// The smoothed focus trails fast pointer moves, so the live cursor is also
+// kept `FILL_FRAME_CURSOR_MARGIN` in from the output edges; otherwise the
+// pointer can leave the visible crop.
+fn fill_frame_bounds(
+    zoom: &InterpolatedZoom,
+    output_size: XY<f64>,
+    fit_size: XY<f64>,
+    rest_focus: XY<f64>,
+    cursor: Option<(XY<f64>, f64)>,
+) -> (Coord<FrameSpace>, Coord<FrameSpace>) {
+    let fit_size = XY::new(fit_size.x.max(1.0), fit_size.y.max(1.0));
+    let cover = (output_size.x / fit_size.x)
+        .max(output_size.y / fit_size.y)
+        .max(1.0);
+    let span = zoom.bounds.bottom_right - zoom.bounds.top_left;
+    let amount = XY::new(span.x.max(1.0), span.y.max(1.0));
+    let size = XY::new(fit_size.x * cover * amount.x, fit_size.y * cover * amount.y);
+    let engaged = zoom.t.clamp(0.0, 1.0);
+
+    let axis = |output: f64,
+                size: f64,
+                rest: f64,
+                top_left: f64,
+                amount: f64,
+                cursor: Option<(f64, f64)>| {
+        let lowest = (output - size).min(0.0);
+        let rest_start = (output * 0.5 - rest * size).clamp(lowest, 0.0);
+        let zoom_start = if amount > 1.0 + 1e-3 {
+            (output - size) * (-top_left / (amount - 1.0)).clamp(0.0, 1.0)
+        } else {
+            rest_start
+        };
+        let mut start = rest_start + (zoom_start - rest_start) * engaged;
+        if let Some((cursor, strength)) = cursor {
+            let on_screen = start + cursor * size;
+            let low = output * FILL_FRAME_CURSOR_MARGIN;
+            let high = output * (1.0 - FILL_FRAME_CURSOR_MARGIN);
+            if on_screen < low {
+                start += (low - on_screen) * strength;
+            } else if on_screen > high {
+                start -= (on_screen - high) * strength;
+            }
+        }
+        start.clamp(lowest, 0.0)
+    };
+
+    let start = XY::new(
+        axis(
+            output_size.x,
+            size.x,
+            rest_focus.x,
+            zoom.bounds.top_left.x,
+            amount.x,
+            cursor.map(|(c, strength)| (c.x, strength)),
+        ),
+        axis(
+            output_size.y,
+            size.y,
+            rest_focus.y,
+            zoom.bounds.top_left.y,
+            amount.y,
+            cursor.map(|(c, strength)| (c.y, strength)),
+        ),
+    );
+    (Coord::new(start), Coord::new(start + size))
 }
 
 /// Largest centred crop of `src` (origin+size, frame px) matching `target_aspect`
@@ -3792,6 +3953,44 @@ impl ProjectUniforms {
 
         let interpolated_cursor = cursor_interp_fn(cursor_time_for_interp);
         let prev_interpolated_cursor = cursor_interp_fn(prev_cursor_time_for_interp);
+        let fill_frame = fill_frame_active(project);
+        let follow_cursor = project.background.fill_frame_follow_cursor;
+        let fixed_fill_focus = XY::new(
+            project.background.fill_frame_position.x.clamp(0.0, 1.0),
+            project.background.fill_frame_position.y.clamp(0.0, 1.0),
+        );
+        let fill_focus = fill_frame.then(|| {
+            if follow_cursor {
+                fill_frame_cursor_focus(
+                    cursor_time_for_interp,
+                    &crop,
+                    options.screen_size,
+                    cursor_interp_fn,
+                )
+            } else {
+                fixed_fill_focus
+            }
+        });
+        let fill_cursor = interpolated_cursor
+            .as_ref()
+            .filter(|_| fill_frame && follow_cursor)
+            .map(|c| cursor_crop_uv(c.position.coord, &crop, options.screen_size));
+        let prev_fill_cursor = prev_interpolated_cursor
+            .as_ref()
+            .filter(|_| fill_frame && follow_cursor)
+            .map(|c| cursor_crop_uv(c.position.coord, &crop, options.screen_size));
+        let prev_fill_focus = fill_frame.then(|| {
+            if follow_cursor {
+                fill_frame_cursor_focus(
+                    prev_cursor_time_for_interp,
+                    &crop,
+                    options.screen_size,
+                    cursor_interp_fn,
+                )
+            } else {
+                fixed_fill_focus
+            }
+        });
         let click_ripples = collect_click_ripples(
             project,
             cursor_events,
@@ -3830,6 +4029,24 @@ impl ProjectUniforms {
         let motion_sample_frames = frame_number.min(DISPLAY_MOTION_SAMPLE_FRAMES);
         let motion_frame_delta = motion_sample_frames as f32 / fps_f32;
         let motion_prev_frame_time = (frame_time - motion_frame_delta).max(0.0);
+        let pin_fill_to_scene = |focus: Option<XY<f64>>, cursor: Option<XY<f64>>, time: f64| {
+            let Some(focus) = focus else {
+                return (None, cursor.map(|c| (c, 1.0)));
+            };
+            match fill_frame_scene_override(scene_segments, time) {
+                Some((position, weight)) => (
+                    Some(focus + (position - focus) * weight),
+                    cursor.map(|c| (c, 1.0 - weight)),
+                ),
+                None => (Some(focus), cursor.map(|c| (c, 1.0))),
+            }
+        };
+        let (fill_focus, fill_cursor) = pin_fill_to_scene(fill_focus, fill_cursor, timeline_time);
+        let (prev_fill_focus, prev_fill_cursor) = pin_fill_to_scene(
+            prev_fill_focus,
+            prev_fill_cursor,
+            f64::from(motion_prev_frame_time),
+        );
         let motion_frame_span = if has_previous {
             ((frame_time - motion_prev_frame_time) * fps_f32).max(1.0)
         } else {
@@ -4046,9 +4263,22 @@ impl ProjectUniforms {
                 }
             }
 
-            let (start, end) = Self::display_bounds(&zoom, display_offset, display_size);
-            let (prev_start, prev_end) =
-                Self::display_bounds(&motion_prev_zoom, display_offset, display_size);
+            let (start, end) = match fill_focus {
+                Some(focus) => {
+                    fill_frame_bounds(&zoom, output_size, display_size.coord, focus, fill_cursor)
+                }
+                None => Self::display_bounds(&zoom, display_offset, display_size),
+            };
+            let (prev_start, prev_end) = match prev_fill_focus {
+                Some(focus) => fill_frame_bounds(
+                    &motion_prev_zoom,
+                    output_size,
+                    display_size.coord,
+                    focus,
+                    prev_fill_cursor,
+                ),
+                None => Self::display_bounds(&motion_prev_zoom, display_offset, display_size),
+            };
 
             let scene_blur_strength = if options.camera_size.is_some() && !project.camera.hide {
                 scene.camera_only_motion(&prev_scene)
@@ -4285,6 +4515,7 @@ impl ProjectUniforms {
             let notch = project
                 .background
                 .notch
+                .filter(|_| !fill_frame)
                 .and_then(|config| config.resolve(constants.meta.display_notch()))
                 .and_then(|notch| {
                     let placement = notch_bounds(notch, options, project, layout, &zoom)?;
@@ -4466,8 +4697,14 @@ impl ProjectUniforms {
                     ],
                 };
 
-                let size = camera_size_for(zoomed_size);
-                let prev_size = camera_size_for(prev_zoomed_size);
+                let fit_to_output = |size: [f32; 2]| {
+                    let scale = (output_size[0] / size[0].max(1.0))
+                        .min(output_size[1] / size[1].max(1.0))
+                        .min(1.0);
+                    [size[0] * scale, size[1] * scale]
+                };
+                let size = fit_to_output(camera_size_for(zoomed_size));
+                let prev_size = fit_to_output(camera_size_for(prev_zoomed_size));
 
                 let position_for = |subject_size: [f32; 2]| {
                     compute_camera_position(
@@ -5369,6 +5606,141 @@ mod tests {
     }
 
     #[test]
+    fn full_width_camera_touches_both_sides() {
+        let camera = Camera::default();
+        let position = compute_camera_position(&camera, [1080.0, 1920.0], [1080.0, 1080.0], 50.0);
+        assert_eq!(position, [0.0, 790.0]);
+    }
+
+    #[test]
+    fn fill_frame_covers_vertical_output_and_follows_focus() {
+        let output = XY::new(1080.0, 1920.0);
+        let fit = XY::new(1080.0, 607.5);
+        let rest = InterpolatedZoom::default();
+
+        let (start, end) = fill_frame_bounds(&rest, output, fit, XY::new(0.5, 0.5), None);
+        assert!((end.coord.y - start.coord.y - 1920.0).abs() < 1e-6);
+        assert!(start.coord.x < 0.0 && end.coord.x > 1080.0);
+        assert!(((start.coord.x + end.coord.x) / 2.0 - 540.0).abs() < 1e-6);
+
+        let (left, _) = fill_frame_bounds(&rest, output, fit, XY::new(0.0, 0.5), None);
+        assert!(left.coord.x.abs() < 1e-6);
+        let (_, right) = fill_frame_bounds(&rest, output, fit, XY::new(1.0, 0.5), None);
+        assert!((right.coord.x - 1080.0).abs() < 1e-6);
+
+        let zoomed = InterpolatedZoom {
+            t: 1.0,
+            bounds: SegmentBounds::from_amount_center(2.0, XY::new(0.2, 0.9)),
+        };
+        let (zs, ze) = fill_frame_bounds(&zoomed, output, fit, XY::new(0.5, 0.5), None);
+        assert!((ze.coord.y - zs.coord.y - 3840.0).abs() < 1e-6);
+        assert!(zs.coord.y <= 0.0 && ze.coord.y >= 1920.0);
+        assert!(zs.coord.x <= 0.0 && ze.coord.x >= 1080.0);
+        let size = ze.coord - zs.coord;
+        assert!(((1080.0 - size.x) * 0.2 - zs.coord.x).abs() < 1e-6);
+        assert!(((1920.0 - size.y) * 0.9 - zs.coord.y).abs() < 1e-6);
+    }
+
+    #[test]
+    fn adjacent_scene_pins_blend_without_jumping() {
+        let pinned = |start: f64, end: f64, x: f64| cap_project::SceneSegment {
+            start,
+            end,
+            mode: SceneMode::Default,
+            split_layout: None,
+            transition_in: 0.5,
+            transition_out: 0.5,
+            fill_frame_position: Some(XY::new(x, 0.5)),
+        };
+        let scenes = [pinned(0.0, 4.0, 0.0), pinned(4.0, 8.0, 1.0)];
+        let x_at = |time: f64| fill_frame_scene_override(&scenes, time).unwrap().0.x;
+
+        assert!(x_at(3.0).abs() < 1e-9);
+        assert!((x_at(5.0) - 1.0).abs() < 1e-9);
+        let mut previous = x_at(3.4);
+        let mut time = 3.4;
+        while time < 4.6 {
+            time += 0.01;
+            let x = x_at(time);
+            assert!(x >= previous - 1e-9, "x went back at {time}");
+            assert!(x - previous < 0.05, "x jumped at {time}: {previous} -> {x}");
+            previous = x;
+        }
+    }
+
+    #[test]
+    fn fill_frame_scene_pins_focus_with_eased_edges() {
+        let scene = cap_project::SceneSegment {
+            start: 2.0,
+            end: 6.0,
+            mode: SceneMode::Default,
+            split_layout: Some(cap_project::SplitLayout {
+                screen_zoom: 2.0,
+                ..Default::default()
+            }),
+            transition_in: 0.5,
+            transition_out: 0.5,
+            fill_frame_position: Some(XY::new(0.1, 0.5)),
+        };
+        let unpinned = cap_project::SceneSegment {
+            fill_frame_position: None,
+            start: 7.0,
+            end: 9.0,
+            ..scene.clone()
+        };
+        let scenes = [scene, unpinned];
+
+        assert!(fill_frame_scene_override(&scenes, 1.0).is_none());
+        assert!(fill_frame_scene_override(&scenes, 8.0).is_none());
+        let (position, weight) = fill_frame_scene_override(&scenes, 4.0).unwrap();
+        assert_eq!(position, XY::new(0.1, 0.5));
+        assert!((weight - 1.0).abs() < 1e-9);
+        let (_, entering) = fill_frame_scene_override(&scenes, 1.75).unwrap();
+        assert!(entering > 0.0 && entering < 1.0);
+        let (_, started) = fill_frame_scene_override(&scenes, 2.0).unwrap();
+        assert!((started - 1.0).abs() < 1e-9);
+        let (_, leaving) = fill_frame_scene_override(&scenes, 6.25).unwrap();
+        assert!(leaving > 0.0 && leaving < 1.0);
+    }
+
+    #[test]
+    fn fill_frame_keeps_the_live_cursor_inside_the_margin() {
+        let output = XY::new(1080.0, 1920.0);
+        let fit = XY::new(1080.0, 607.5);
+        let rest = InterpolatedZoom::default();
+
+        let (start, end) = fill_frame_bounds(
+            &rest,
+            output,
+            fit,
+            XY::new(0.5, 0.5),
+            Some((XY::new(0.8, 0.5), 1.0)),
+        );
+        let width = end.coord.x - start.coord.x;
+        let cursor_x = start.coord.x + 0.8 * width;
+        assert!((cursor_x - 1080.0 * (1.0 - FILL_FRAME_CURSOR_MARGIN)).abs() < 1e-6);
+
+        let (edge, _) = fill_frame_bounds(
+            &rest,
+            output,
+            fit,
+            XY::new(0.5, 0.5),
+            Some((XY::new(1.0, 0.5), 1.0)),
+        );
+        assert!((edge.coord.x - (1080.0 - width)).abs() < 1e-6);
+
+        let (centered, centered_end) = fill_frame_bounds(
+            &rest,
+            output,
+            fit,
+            XY::new(0.6, 0.5),
+            Some((XY::new(0.6, 0.5), 1.0)),
+        );
+        let cx = centered.coord.x + 0.6 * (centered_end.coord.x - centered.coord.x);
+        assert!((cx - 540.0).abs() < 1e-6);
+    }
+
+    #[test]
     fn cutout_manual_camera_position_remains_free() {
         let mut camera = Camera {
             manual_position: Some(XY::new(0.5, 0.5)),
@@ -5805,6 +6177,7 @@ mod style_image_tests {
             split_layout: None,
             transition_in: 0.0,
             transition_out: 0.0,
+            fill_frame_position: None,
         });
         timeline.image_segments.push(ImageSegment {
             start: 0.7,
@@ -8539,6 +8912,7 @@ mod project_uniforms_tests {
                 split_layout: None,
                 transition_in: 0.5,
                 transition_out: 0.5,
+                fill_frame_position: None,
             }];
             cases.push((name, split, short, frame_number));
         }

@@ -756,7 +756,23 @@ frame: FrameConfiguration | null;
  * from `frame`: the decorative MacBook style is a mockup, this restores
  * something the capture really did hide, and the two are independent.
  */
-notch: NotchConfiguration | null }
+notch: NotchConfiguration | null;
+/**
+ * With a fixed aspect ratio, scale the recording to cover the whole
+ * output instead of fitting inside it, panning to the zoom focus (or the
+ * smoothed cursor when no zoom is active).
+ */
+fillFrame: boolean;
+/**
+ * Fill-frame pan source when no zoom is active: the smoothed cursor, or
+ * the fixed `fill_frame_position`.
+ */
+fillFrameFollowCursor: boolean;
+/**
+ * Normalized point of the recording kept centered in the output while
+ * fill frame is not following the cursor.
+ */
+fillFramePosition: XY<number> }
 export type BackgroundSource = { type: "wallpaper"; path: string | null } | { type: "image"; path: string | null } | { type: "color"; value: [number, number, number]; alpha?: number } | { type: "gradient"; from: [number, number, number]; to: [number, number, number]; angle?: number; noise_intensity?: number | null; noise_scale?: number | null; animated?: boolean | null; animation_speed?: number | null } | { type: "animatedGradient"; config: AnimatedGradientConfig }
 export type BorderConfiguration = { enabled: boolean; width: number; color: [number, number, number]; opacity: number }
 export type Camera = { hide: boolean; mirror: boolean; position: CameraPosition;
@@ -1251,7 +1267,7 @@ export type SceneMode = "default" | "cameraOnly" | "hideCamera" | "splitScreen" 
  * of full-bleed halves. Shares [`SplitLayout`] for per-pane pan/zoom.
  */
 "floating"
-export type SceneSegment = { start: number; end: number; mode?: SceneMode; splitLayout?: SplitLayout | null; transitionIn?: number; transitionOut?: number }
+export type SceneSegment = { start: number; end: number; mode?: SceneMode; splitLayout?: SplitLayout | null; transitionIn?: number; transitionOut?: number; fillFramePosition?: XY<number> | null }
 export type ScreenCaptureTarget = { variant: "window"; id: WindowId } | { variant: "display"; id: DisplayId } | { variant: "area"; screen: DisplayId; bounds: LogicalBounds } | { variant: "cameraOnly" }
 export type ScreenMovementSpring = { stiffness: number; damping: number; mass: number }
 export type ScreenshotMetaWithMetadata = ((StudioRecordingMeta | InstantRecordingMeta) & { platform?: Platform | null; pretty_name: string; sharing?: SharingMeta | null; upload?: UploadMeta | null }) & { sort_time_millis: number }
