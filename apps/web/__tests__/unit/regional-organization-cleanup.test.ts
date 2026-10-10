@@ -81,7 +81,7 @@ beforeEach(() => {
 				{
 					id: "tokyo",
 					ownerId: "owner",
-					bucket: S3Bucket.TokyoBucketId,
+					bucket: S3Bucket.S3BucketId.make("cap-tokyo"),
 					storageIntegrationId: null,
 				},
 				{
@@ -142,7 +142,7 @@ describe("organization regional media cleanup", () => {
 	it("keeps the database records when the regional bucket cannot be opened", async () => {
 		const original = mocks.bucket.getMockImplementation();
 		mocks.bucket.mockImplementation((bucket: Option.Option<string>) =>
-			Option.getOrNull(bucket) === S3Bucket.TokyoBucketId
+			Option.getOrNull(bucket) === S3Bucket.S3BucketId.make("cap-tokyo")
 				? Effect.fail(new Error("Tokyo unavailable"))
 				: original?.(bucket),
 		);

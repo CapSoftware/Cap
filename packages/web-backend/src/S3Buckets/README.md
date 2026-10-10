@@ -1,36 +1,54 @@
 # Regional Instant uploads
 
-Routing is disabled by default. On Vercel, new desktop Instant recordings use the
-request's `x-vercel-ip-country` header. Only `JP` selects Tokyo; missing/unknown
-location, disabled routing, or incomplete/invalid configuration keeps the existing
-Virginia path. No geolocation service, extra database query, or client change is
-needed. Custom storage and Google Drive take precedence.
+Disabled by default. On Vercel, new desktop Instant recordings use the request's
+`x-vercel-ip-latitude` and `x-vercel-ip-longitude` headers to choose the geographically
+nearest configured region, including the existing Virginia destination. Missing or
+invalid location, disabled routing, or no usable regional configuration keeps the
+original path. Selection is local arithmetic: no geolocation request or extra database
+query. Custom storage and Google Drive retain priority.
 
-The chosen bucket is stored on the recording, not the user. Each new recording
-uses the current request location; retries, resume, processing, playback, edits,
-transfers, and deletion keep the recording's original destination. `cap-tokyo` is
-a reserved bucket ID (generated customer IDs cannot contain hyphens); no schema
-migration or customer storage row is needed.
+Supported destinations are Virginia (existing default), Oregon, Ireland, Frankfurt,
+São Paulo, Cape Town, Mumbai, Singapore, Tokyo, and Sydney. Only provisioned and
+configured regions participate. Geographic proximity does not guarantee the fastest
+network route; validate each region before adding it to the configuration.
 
-Before enabling, provision a private S3 bucket in `ap-northeast-1` and a CloudFront
-distribution pointing to it. Use the existing CloudFront signing key group, permit
-the server/worker AWS identity to access the bucket and invalidate the distribution,
-and configure the same upload CORS rules as Virginia. Set these on every web and
-workflow deployment:
+The destination is stored on the recording, not the user. Travel affects the next new
+recording; retries, processing, playback, edits, transfers, and deletion keep the
+original destination. Reserved `cap-*` IDs fit `videos.bucket` and cannot collide with
+generated customer IDs. No schema migration or desktop change is needed.
 
-- `CAP_TOKYO_BUCKET`: bucket name.
-- `CAP_TOKYO_BUCKET_URL`: HTTPS CDN origin, without a trailing slash or path.
-- `CAP_TOKYO_CLOUDFRONT_DISTRIBUTION_ID`: that distribution's ID.
-- `CAP_TOKYO_UPLOADS_ENABLED=true`: enable selection for new uploads from Japan.
+Provision a private S3 bucket and CloudFront distribution for each enabled region.
+Use the existing CloudFront signing key group, match Virginia's upload CORS rules,
+and grant the server/worker AWS identity bucket access and distribution invalidation.
+Enable opt-in AWS regions (such as Cape Town) in the account first. Configure every
+web and workflow deployment with `CAP_REGIONAL_UPLOAD_BUCKETS`, a JSON object keyed
+by supported AWS region. For example:
 
-Keep the existing default AWS and CloudFront configuration. To roll back routing,
-set `CAP_TOKYO_UPLOADS_ENABLED=false`; retain the Tokyo bucket and configuration
-while recordings reference it. Never repoint its bucket name. Losing configuration
-for a stored Tokyo recording fails explicitly instead of writing its remaining
-objects into Virginia.
+```json
+{
+  "ap-northeast-1": {
+    "bucket": "your-tokyo-bucket",
+    "bucketUrl": "https://your-tokyo-cdn.example.com",
+    "distributionId": "YOUR_TOKYO_DISTRIBUTION_ID"
+  },
+  "eu-central-1": {
+    "bucket": "your-frankfurt-bucket",
+    "bucketUrl": "https://your-frankfurt-cdn.example.com",
+    "distributionId": "YOUR_FRANKFURT_DISTRIBUTION_ID"
+  }
+}
+```
 
-The Tokyo benchmark improved upload completion but used direct S3 playback and
-was slower to first playback/final MP4 than accelerated Virginia with CDN. Before
-enabling, repeat the GPUI streaming benchmark with this CDN configuration and verify
-source preparation, first playback, finalization, replacement, and deletion. This
-PR does not enable routing or provision infrastructure.
+Use HTTPS CDN origins without a trailing slash or path. Retain the existing default
+AWS/CloudFront configuration (`CAP_AWS_REGION=us-east-1`). After validating the
+configured destinations, set `CAP_REGIONAL_UPLOADS_ENABLED=true`. Roll back selection
+by setting it to `false`; retain regional bucket configuration while recordings refer
+to it, and never repoint a region's bucket name. Missing configuration for an existing
+regional recording fails explicitly rather than splitting its objects across regions.
+
+The Japan benchmark improved upload completion but used direct S3 playback and was
+slower to first playback/final MP4 than accelerated Virginia with CDN. Before enabling,
+repeat the GPUI benchmark with the configured CDN path and verify preparation,
+playback, finalization, replacement, and deletion. Additional buckets do not replicate
+recordings, but regional storage rates and cross-region processing transfers affect
+cost. This change does not provision infrastructure or enable production routing.

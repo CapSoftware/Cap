@@ -7,6 +7,10 @@ import { Config, Effect, Layer, Option } from "effect";
 
 import { AwsCredentials } from "../Aws.ts";
 import { Database } from "../Database.ts";
+import {
+	getNearestRegionalBucket,
+	parseRegionalBuckets,
+} from "./RegionalBuckets.ts";
 import { createS3BucketAccess } from "./S3BucketAccess.ts";
 import { S3BucketClientProvider } from "./S3BucketClientProvider.ts";
 import { S3BucketsRepo } from "./S3BucketsRepo.ts";
@@ -145,54 +149,44 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 				),
 			);
 
-		const tokyoConfig = yield* Config.all({
-			bucket: Config.string("CAP_TOKYO_BUCKET").pipe(
-				Config.validate({
-					message: "Invalid Tokyo bucket name",
-					validation: (value) =>
-						/^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(value),
-				}),
+		const regionalConfigs = parseRegionalBuckets(
+			Option.getOrUndefined(
+				yield* Config.string("CAP_REGIONAL_UPLOAD_BUCKETS").pipe(Config.option),
 			),
-			bucketUrl: Config.string("CAP_TOKYO_BUCKET_URL").pipe(
-				Config.validate({
-					message: "Tokyo CDN must be an HTTPS origin",
-					validation: (value) => {
-						try {
-							const url = new URL(value);
-							return url.protocol === "https:" && url.origin === value;
-						} catch {
-							return false;
-						}
-					},
-				}),
-			),
-			distributionId: Config.nonEmptyString(
-				"CAP_TOKYO_CLOUDFRONT_DISTRIBUTION_ID",
-			),
-		}).pipe(Effect.option);
-		const tokyoUploadsEnabled = yield* Config.boolean(
-			"CAP_TOKYO_UPLOADS_ENABLED",
+		);
+		const regionalUploadsEnabled = yield* Config.boolean(
+			"CAP_REGIONAL_UPLOADS_ENABLED",
 		).pipe(Effect.orElseSucceed(() => false));
-		const tokyoBucketAccess = Option.flatMap(tokyoConfig, (config) => {
-			const client = new S3.S3Client({
-				region: "ap-northeast-1",
-				credentials,
-				forcePathStyle: false,
-				requestHandler,
-			});
-			return Option.map(cloudfrontBucketAccess(config.bucketUrl), (access) =>
-				access.pipe(
-					Effect.provide(
-						Layer.succeed(S3BucketClientProvider, {
-							getInternal: Effect.succeed(client),
-							getPublic: Effect.succeed(client),
-							bucket: config.bucket,
-							isPathStyle: false,
-						}),
-					),
-				),
-			);
-		});
+		const regionalBucketAccess = new Map(
+			regionalConfigs.flatMap((config) => {
+				const access = cloudfrontBucketAccess(config.bucketUrl);
+				if (Option.isNone(access)) return [];
+				const client = new S3.S3Client({
+					region: config.region,
+					credentials,
+					forcePathStyle: false,
+					requestHandler,
+				});
+				return [
+					[
+						config.id,
+						access.value.pipe(
+							Effect.provide(
+								Layer.succeed(S3BucketClientProvider, {
+									getInternal: Effect.succeed(client),
+									getPublic: Effect.succeed(client),
+									bucket: config.bucket,
+									isPathStyle: false,
+								}),
+							),
+						),
+					] as const,
+				];
+			}),
+		);
+		const uploadRegions = regionalConfigs.filter((config) =>
+			regionalBucketAccess.has(config.id),
+		);
 
 		const getBucketAccess = Effect.fn("S3Buckets.getProviderLayer")(function* (
 			customBucket: Option.Option<S3Bucket.S3Bucket>,
@@ -235,30 +229,30 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 		});
 
 		return {
-			getRegionalUploadBucketId: (country: string | undefined) =>
-				tokyoUploadsEnabled &&
-				country === "JP" &&
-				Option.isSome(tokyoBucketAccess)
-					? Option.some(S3Bucket.TokyoBucketId)
+			getRegionalUploadBucketId: (
+				latitude: string | undefined,
+				longitude: string | undefined,
+			) =>
+				regionalUploadsEnabled && defaultConfigs.region === "us-east-1"
+					? getNearestRegionalBucket(latitude, longitude, uploadRegions)
 					: Option.none<S3Bucket.S3BucketId>(),
 			getBucketAccess: Effect.fn("S3Buckets.getBucketAccess")(function* (
 				bucketId?: Option.Option<S3Bucket.S3BucketId>,
 			) {
-				if (
-					Option.getOrNull(bucketId ?? Option.none()) === S3Bucket.TokyoBucketId
-				) {
-					const access = yield* Option.match(tokyoBucketAccess, {
-						onSome: (access) => access,
-						onNone: () =>
-							Effect.fail(
-								new S3Bucket.S3Error({
-									cause: new Error(
-										"Tokyo storage configuration is missing or invalid",
-									),
-								}),
-							),
-					});
-					return [access, Option.none<S3Bucket.S3Bucket>()] as const;
+				const regionalBucket = S3Bucket.getRegionalBucket(
+					Option.getOrNull(bucketId ?? Option.none()),
+				);
+				if (regionalBucket) {
+					const access = regionalBucketAccess.get(regionalBucket.id);
+					if (!access)
+						return yield* Effect.fail(
+							new S3Bucket.S3Error({
+								cause: new Error(
+									`Regional storage configuration is missing or invalid: ${regionalBucket.region}`,
+								),
+							}),
+						);
+					return [yield* access, Option.none<S3Bucket.S3Bucket>()] as const;
 				}
 				const customBucket = yield* (bucketId ?? Option.none()).pipe(
 					Option.map(repo.getById),

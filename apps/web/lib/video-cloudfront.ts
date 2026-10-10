@@ -1,9 +1,9 @@
 import { serverEnv } from "@cap/env";
-import { S3Bucket } from "@cap/web-domain";
+import { parseRegionalBuckets } from "@cap/web-backend/src/S3Buckets/RegionalBuckets";
 
 export function getVideoCloudFrontDistributionId(bucketId: string | null) {
-	if (bucketId === S3Bucket.TokyoBucketId)
-		return serverEnv().CAP_TOKYO_CLOUDFRONT_DISTRIBUTION_ID;
-	if (bucketId) return undefined;
-	return serverEnv().CAP_CLOUDFRONT_DISTRIBUTION_ID;
+	if (!bucketId) return serverEnv().CAP_CLOUDFRONT_DISTRIBUTION_ID;
+	return parseRegionalBuckets(serverEnv().CAP_REGIONAL_UPLOAD_BUCKETS).find(
+		(bucket) => bucket.id === bucketId,
+	)?.distributionId;
 }

@@ -320,7 +320,8 @@ app.get(
 					return {
 						...writable,
 						bucketId: buckets.getRegionalUploadBucketId(
-							c.req.header("x-vercel-ip-country"),
+							c.req.header("x-vercel-ip-latitude"),
+							c.req.header("x-vercel-ip-longitude"),
 						),
 					};
 				}

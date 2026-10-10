@@ -691,8 +691,11 @@ describe("new Instant recording regions", () => {
 				storageIntegrationId: Option.none(),
 			}),
 		);
-		regionalStorage.select.mockImplementation((country: string | undefined) =>
-			country === "JP" ? Option.some("cap-tokyo") : Option.none(),
+		regionalStorage.select.mockImplementation(
+			(latitude: string | undefined, longitude: string | undefined) =>
+				latitude === "35.68" && longitude === "139.69"
+					? Option.some("cap-tokyo")
+					: Option.none(),
 		);
 		defaultSharing.getNewVideoPublic.mockResolvedValue(true);
 		mockGetCurrentUser.mockResolvedValue({
@@ -715,20 +718,29 @@ describe("new Instant recording regions", () => {
 		async (mode) => {
 			const response = await app.request(
 				`https://cap.test/create?recordingMode=${mode}`,
-				{ headers: { "x-vercel-ip-country": "JP" } },
+				{
+					headers: {
+						"x-vercel-ip-latitude": "35.68",
+						"x-vercel-ip-longitude": "139.69",
+					},
+				},
 			);
 			expect(response.status).toBe(200);
 			expect(insertedValues(schema.videos)?.bucket).toBe("cap-tokyo");
-			expect(regionalStorage.select).toHaveBeenCalledWith("JP");
+			expect(regionalStorage.select).toHaveBeenCalledWith("35.68", "139.69");
 		},
 	);
 
-	it.each(["US", "", "ZZ"])(
-		"keeps Virginia for country %s",
-		async (country) => {
+	it.each<Record<string, string>>([
+		{ "x-vercel-ip-latitude": "40.71", "x-vercel-ip-longitude": "-74.01" },
+		{},
+		{ "x-vercel-ip-latitude": "bad", "x-vercel-ip-longitude": "139.69" },
+	])(
+		"keeps Virginia when no regional bucket is selected (%#)",
+		async (headers) => {
 			const response = await app.request(
 				"https://cap.test/create?recordingMode=desktopMP4",
-				{ headers: country ? { "x-vercel-ip-country": country } : {} },
+				{ headers },
 			);
 			expect(response.status).toBe(200);
 			expect(insertedValues(schema.videos)?.bucket).toBeNull();
@@ -777,7 +789,10 @@ describe("new Instant recording regions", () => {
 				}),
 			);
 			const response = await app.request(`https://cap.test/create?${query}`, {
-				headers: { "x-vercel-ip-country": "JP" },
+				headers: {
+					"x-vercel-ip-latitude": "35.68",
+					"x-vercel-ip-longitude": "139.69",
+				},
 			});
 			expect(response.status).toBe(200);
 			expect(insertedValues(schema.videos)).toMatchObject({
@@ -801,7 +816,12 @@ describe("new Instant recording regions", () => {
 			]);
 			const response = await app.request(
 				"https://cap.test/create?videoId=existing&recordingMode=desktopMP4",
-				{ headers: { "x-vercel-ip-country": "JP" } },
+				{
+					headers: {
+						"x-vercel-ip-latitude": "35.68",
+						"x-vercel-ip-longitude": "139.69",
+					},
+				},
 			);
 			expect(response.status).toBe(200);
 			expect(mockDb.insert).not.toHaveBeenCalled();
