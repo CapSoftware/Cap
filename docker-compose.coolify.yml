@@ -31,6 +31,7 @@ services:
       MEDIA_SERVER_URL: 'http://media-server:3456'
       MEDIA_SERVER_WEBHOOK_SECRET: '${SERVICE_HEX_32_MEDIASERVER}'
       MEDIA_SERVER_WEBHOOK_URL: 'http://cap-web:3000'
+      CRON_SECRET: '${SERVICE_HEX_32_CRONSECRET}'
     healthcheck:
       test:
         - CMD
@@ -59,6 +60,48 @@ services:
       timeout: 10s
       retries: 3
       start_period: 10s
+  cap-cron:
+    image: 'curlimages/curl:8.22.0'
+    restart: unless-stopped
+    depends_on:
+      cap-web:
+        condition: service_healthy
+    environment:
+      CRON_SECRET: '${SERVICE_HEX_32_CRONSECRET}'
+      CAP_WEB_INTERNAL_URL: 'http://cap-web:3000'
+    entrypoint:
+      - /bin/sh
+      - '-c'
+      - |
+        trap 'exit 0' TERM INT
+        run() {
+          mkdir "/tmp/lock.$$1" 2>/dev/null || return 0
+          code=$$(curl -s -o "/tmp/out.$$1" -w '%{http_code}' --max-time 600 -H "Authorization: Bearer $$CRON_SECRET" "$$CAP_WEB_INTERNAL_URL/api/cron/$$1")
+          echo "$$(date -u +%FT%TZ) $$1 $$code $$(head -c 500 "/tmp/out.$$1")"
+          rmdir "/tmp/lock.$$1"
+        }
+        rmdir /tmp/lock.* 2>/dev/null
+        while :; do
+          jobs >/dev/null
+          touch /tmp/heartbeat
+          sleep $$((60 - $$(date +%s) % 60)) &
+          wait $$!
+          m=$$(date -u +%M); m=$${m#0}
+          h=$$(date -u +%H); h=$${h#0}
+          case $$m in 7|22|37|52) run recover-failed-video-processing & ;; esac
+          if [ $$((m % 15)) -eq 0 ]; then run finalize-stale-desktop-segments & fi
+          if [ "$$h" = 3 ] && [ "$$m" = 17 ]; then run cleanup-agent-api & fi
+        done
+    healthcheck:
+      test:
+        - CMD
+        - sh
+        - '-c'
+        - 'find /tmp/heartbeat -mmin -3 | grep -q .'
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 90s
   mysql:
     image: 'mysql:8.0'
     restart: unless-stopped
