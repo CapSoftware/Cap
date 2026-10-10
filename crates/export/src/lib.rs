@@ -1,5 +1,6 @@
 pub mod estimates;
 pub mod gif;
+pub mod loudness;
 pub mod mov;
 pub mod mp4;
 pub mod preview;
