@@ -1,0 +1,384 @@
+import { QUANT4, DEQUANT4, QUANT8, DEQUANT8 } from "./tables"
+
+// Exact for 0 <= qp < 80 and qbits <= 30; Math.trunc of a division costs a float division and a conversion call per block,
+// and a signed 64-bit `qp % 6` a magic multiply with sign fix-ups.
+export function qpDiv6(qp: int): int {
+  return (qp * 43) >> 8
+}
+
+export function qpMod6(qp: int): int {
+  return qp - 6 * qpDiv6(qp)
+}
+
+export function quantOffset(qbits: int, intra: bool): int {
+  return ((1 << qbits) * (intra ? 0x55555556 : 0x2AAAAAAB)) >> 32
+}
+
+function dct8line(inout b: int[], o: int, s: int) {
+  const x0 = b[o]!
+  const x1 = b[o + s]!
+  const x2 = b[o + 2 * s]!
+  const x3 = b[o + 3 * s]!
+  const x4 = b[o + 4 * s]!
+  const x5 = b[o + 5 * s]!
+  const x6 = b[o + 6 * s]!
+  const x7 = b[o + 7 * s]!
+  const s07 = x0 + x7
+  const s16 = x1 + x6
+  const s25 = x2 + x5
+  const s34 = x3 + x4
+  const a0 = s07 + s34
+  const a1 = s16 + s25
+  const a2 = s07 - s34
+  const a3 = s16 - s25
+  const d07 = x0 - x7
+  const d16 = x1 - x6
+  const d25 = x2 - x5
+  const d34 = x3 - x4
+  const a4 = d16 + d25 + (d07 + (d07 >> 1))
+  const a5 = d07 - d34 - (d25 + (d25 >> 1))
+  const a6 = d07 + d34 - (d16 + (d16 >> 1))
+  const a7 = d16 - d25 + (d34 + (d34 >> 1))
+  b[o] = a0 + a1
+  b[o + 4 * s] = a0 - a1
+  b[o + 2 * s] = a2 + (a3 >> 1)
+  b[o + 6 * s] = (a2 >> 1) - a3
+  b[o + s] = a4 + (a7 >> 2)
+  b[o + 3 * s] = a5 + (a6 >> 2)
+  b[o + 5 * s] = a6 - (a5 >> 2)
+  b[o + 7 * s] = (a4 >> 2) - a7
+}
+
+function idct8line(inout b: int[], o: int, s: int, last: bool) {
+  const d0 = b[o]!
+  const d1 = b[o + s]!
+  const d2 = b[o + 2 * s]!
+  const d3 = b[o + 3 * s]!
+  const d4 = b[o + 4 * s]!
+  const d5 = b[o + 5 * s]!
+  const d6 = b[o + 6 * s]!
+  const d7 = b[o + 7 * s]!
+  const a0 = d0 + d4
+  const a4 = d0 - d4
+  const a2 = (d2 >> 1) - d6
+  const a6 = d2 + (d6 >> 1)
+  const b0 = a0 + a6
+  const b2 = a4 + a2
+  const b4 = a4 - a2
+  const b6 = a0 - a6
+  const a1 = -d3 + d5 - d7 - (d7 >> 1)
+  const a3 = d1 + d7 - d3 - (d3 >> 1)
+  const a5 = -d1 + d7 + d5 + (d5 >> 1)
+  const a7 = d3 + d5 + d1 + (d1 >> 1)
+  const b1 = a1 + (a7 >> 2)
+  const b7 = a7 - (a1 >> 2)
+  const b3 = a3 + (a5 >> 2)
+  const b5 = (a3 >> 2) - a5
+  const r = last ? 32 : 0
+  const sh = last ? 6 : 0
+  b[o] = (b0 + b7 + r) >> sh
+  b[o + s] = (b2 + b5 + r) >> sh
+  b[o + 2 * s] = (b4 + b3 + r) >> sh
+  b[o + 3 * s] = (b6 + b1 + r) >> sh
+  b[o + 4 * s] = (b6 - b1 + r) >> sh
+  b[o + 5 * s] = (b4 - b3 + r) >> sh
+  b[o + 6 * s] = (b2 - b5 + r) >> sh
+  b[o + 7 * s] = (b0 - b7 + r) >> sh
+}
+
+export function fdct8(inout blk: int[], o: int) {
+  for (let i = 0; i < 8; i++) dct8line(&blk, o + i * 8, 1)
+  for (let i = 0; i < 8; i++) dct8line(&blk, o + i, 8)
+}
+
+export function idct8(inout blk: int[], o: int) {
+  for (let i = 0; i < 8; i++) idct8line(&blk, o + i * 8, 1, false)
+  for (let i = 0; i < 8; i++) idct8line(&blk, o + i, 8, true)
+}
+
+export function quant8(inout blk: int[], o: int, qp: int, intra: bool): int {
+  const qbits = 16 + qpDiv6(qp)
+  const fi = quantOffset(qbits, intra)
+  const qm = (qp % 6) * 64
+  let nz = 0
+  for (let i = 0; i < 64; i++) {
+    const c = blk[o + i]!
+    if (c === 0) continue
+    const mf = int(QUANT8[qm + i]!)
+    const l = c > 0 ? (c * mf + fi) >> qbits : -(((-c) * mf + fi) >> qbits)
+    blk[o + i] = l
+    if (l !== 0) nz++
+  }
+  return nz
+}
+
+export function dequant8(inout blk: int[], o: int, qp: int) {
+  const q6 = qpDiv6(qp)
+  const qm = (qp % 6) * 64
+  for (let i = 0; i < 64; i++) {
+    const c = blk[o + i]!
+    if (c === 0) continue
+    const ls = 16 * int(DEQUANT8[qm + i]!)
+    if (q6 >= 6) {
+      blk[o + i] = (c * ls) << (q6 - 6)
+    } else {
+      blk[o + i] = (c * ls + (1 << (5 - q6))) >> (6 - q6)
+    }
+  }
+}
+
+export function fdct4(inout blk: int[], o: int) {
+  for (let i = 0; i < 4; i++) {
+    const r = o + i * 4
+    const x0 = blk[r]!
+    const x1 = blk[r + 1]!
+    const x2 = blk[r + 2]!
+    const x3 = blk[r + 3]!
+    const s0 = x0 + x3
+    const s1 = x1 + x2
+    const d0 = x0 - x3
+    const d1 = x1 - x2
+    blk[r] = s0 + s1
+    blk[r + 2] = s0 - s1
+    blk[r + 1] = 2 * d0 + d1
+    blk[r + 3] = d0 - 2 * d1
+  }
+  for (let i = 0; i < 4; i++) {
+    const c = o + i
+    const x0 = blk[c]!
+    const x1 = blk[c + 4]!
+    const x2 = blk[c + 8]!
+    const x3 = blk[c + 12]!
+    const s0 = x0 + x3
+    const s1 = x1 + x2
+    const d0 = x0 - x3
+    const d1 = x1 - x2
+    blk[c] = s0 + s1
+    blk[c + 8] = s0 - s1
+    blk[c + 4] = 2 * d0 + d1
+    blk[c + 12] = d0 - 2 * d1
+  }
+}
+
+export function idct4(inout blk: int[], o: int) {
+  for (let i = 0; i < 4; i++) {
+    const r = o + i * 4
+    const d0 = blk[r]!
+    const d1 = blk[r + 1]!
+    const d2 = blk[r + 2]!
+    const d3 = blk[r + 3]!
+    const e = d0 + d2
+    const f = d0 - d2
+    const g = (d1 >> 1) - d3
+    const h = d1 + (d3 >> 1)
+    blk[r] = e + h
+    blk[r + 1] = f + g
+    blk[r + 2] = f - g
+    blk[r + 3] = e - h
+  }
+  for (let i = 0; i < 4; i++) {
+    const c = o + i
+    const d0 = blk[c]!
+    const d1 = blk[c + 4]!
+    const d2 = blk[c + 8]!
+    const d3 = blk[c + 12]!
+    const e = d0 + d2
+    const f = d0 - d2
+    const g = (d1 >> 1) - d3
+    const h = d1 + (d3 >> 1)
+    blk[c] = (e + h + 32) >> 6
+    blk[c + 4] = (f + g + 32) >> 6
+    blk[c + 8] = (f - g + 32) >> 6
+    blk[c + 12] = (e - h + 32) >> 6
+  }
+}
+
+export function hadamard4(inout blk: int[], o: int, forward: bool) {
+  for (let i = 0; i < 4; i++) {
+    const r = o + i * 4
+    const x0 = blk[r]!
+    const x1 = blk[r + 1]!
+    const x2 = blk[r + 2]!
+    const x3 = blk[r + 3]!
+    const s0 = x0 + x1
+    const s1 = x2 + x3
+    const d0 = x0 - x1
+    const d1 = x2 - x3
+    blk[r] = s0 + s1
+    blk[r + 1] = s0 - s1
+    blk[r + 2] = d0 - d1
+    blk[r + 3] = d0 + d1
+  }
+  for (let i = 0; i < 4; i++) {
+    const c = o + i
+    const x0 = blk[c]!
+    const x1 = blk[c + 4]!
+    const x2 = blk[c + 8]!
+    const x3 = blk[c + 12]!
+    const s0 = x0 + x1
+    const s1 = x2 + x3
+    const d0 = x0 - x1
+    const d1 = x2 - x3
+    if (forward) {
+      blk[c] = (s0 + s1) >> 1
+      blk[c + 4] = (s0 - s1) >> 1
+      blk[c + 8] = (d0 - d1) >> 1
+      blk[c + 12] = (d0 + d1) >> 1
+    } else {
+      blk[c] = s0 + s1
+      blk[c + 4] = s0 - s1
+      blk[c + 8] = d0 - d1
+      blk[c + 12] = d0 + d1
+    }
+  }
+}
+
+export function quantScale(qp: int, pos: int): int {
+  return int(QUANT4[(qp % 6) * 16 + pos]!)
+}
+
+export function dequantScale(qp: int, pos: int): int {
+  return int(DEQUANT4[(qp % 6) * 16 + pos]!)
+}
+
+export function quant4(inout blk: int[], o: int, qp: int, intra: bool, startPos: int): int {
+  const qbits = 15 + qpDiv6(qp)
+  const fi = quantOffset(qbits, intra)
+  const qm = (qp % 6) * 16
+  let nz = 0
+  for (let i = startPos; i < 16; i++) {
+    const c = blk[o + i]!
+    const mf = int(QUANT4[qm + i]!)
+    if (c >= 0) {
+      const l = (c * mf + fi) >> qbits
+      blk[o + i] = l
+      if (l !== 0) nz++
+    } else {
+      const l = ((-c) * mf + fi) >> qbits
+      blk[o + i] = -l
+      if (l !== 0) nz++
+    }
+  }
+  return nz
+}
+
+export function dequant4(inout blk: int[], o: int, qp: int, startPos: int) {
+  const shift = qpDiv6(qp)
+  const qm = (qp % 6) * 16
+  for (let i = startPos; i < 16; i++) {
+    const c = blk[o + i]!
+    if (c !== 0) blk[o + i] = (c * int(DEQUANT4[qm + i]!)) << shift
+  }
+}
+
+export function quantDc(inout blk: int[], o: int, n: int, qp: int, intra: bool): int {
+  const qbits = 16 + qpDiv6(qp)
+  const f = quantOffset(qbits, intra)
+  const mf = int(QUANT4[(qp % 6) * 16]!)
+  let nz = 0
+  for (let i = 0; i < n; i++) {
+    const c = blk[o + i]!
+    const l = c >= 0 ? (c * mf + f) >> qbits : -(((-c) * mf + f) >> qbits)
+    blk[o + i] = l
+    if (l !== 0) nz++
+  }
+  return nz
+}
+
+export function dequantLumaDc(inout blk: int[], o: int, qp: int) {
+  const ls = 16 * int(DEQUANT4[(qp % 6) * 16]!)
+  const q6 = qpDiv6(qp)
+  for (let i = 0; i < 16; i++) {
+    const f = blk[o + i]!
+    if (qp >= 36) {
+      blk[o + i] = (f * ls) << (q6 - 6)
+    } else {
+      blk[o + i] = (f * ls + (1 << (5 - q6))) >> (6 - q6)
+    }
+  }
+}
+
+export function hadamard2(inout blk: int[], o: int) {
+  const c0 = blk[o]!
+  const c1 = blk[o + 1]!
+  const c2 = blk[o + 2]!
+  const c3 = blk[o + 3]!
+  blk[o] = c0 + c1 + c2 + c3
+  blk[o + 1] = c0 - c1 + c2 - c3
+  blk[o + 2] = c0 + c1 - c2 - c3
+  blk[o + 3] = c0 - c1 - c2 + c3
+}
+
+export function dequantChromaDc(inout blk: int[], o: int, qp: int) {
+  const ls = 16 * int(DEQUANT4[(qp % 6) * 16]!)
+  const q6 = qpDiv6(qp)
+  for (let i = 0; i < 4; i++) {
+    blk[o + i] = ((blk[o + i]! * ls) << q6) >> 5
+  }
+}
+
+test("integer quantiser helpers match the float definitions", () => {
+  let bad = 0
+  for (let qp = 0; qp < 80; qp++) {
+    if (qpDiv6(qp) !== Math.trunc(qp / 6)) bad++
+    if (qpMod6(qp) !== qp % 6) bad++
+  }
+  for (let qbits = 0; qbits <= 30; qbits++) {
+    if (quantOffset(qbits, true) !== Math.trunc((1 << qbits) / 3)) bad++
+    if (quantOffset(qbits, false) !== Math.trunc((1 << qbits) / 6)) bad++
+  }
+  expect(bad).toBe(0)
+})
+
+test("forward then inverse 4x4 transform with flat dequant reconstructs a residual", () => {
+  let b: int[] = []
+  for (let i = 0; i < 16; i++) b.push(((i * 37) % 23) - 11)
+  const orig = b.slice()
+  fdct4(&b, 0)
+  quant4(&b, 0, 0, true, 0)
+  dequant4(&b, 0, 0, 0)
+  idct4(&b, 0)
+  let maxErr = 0
+  for (let i = 0; i < 16; i++) maxErr = Math.max(maxErr, Math.abs(b[i]! - orig[i]!))
+  expect(maxErr <= 1).toBe(true)
+})
+
+test("transform of a flat block has only DC", () => {
+  let b: int[] = []
+  for (let i = 0; i < 16; i++) b.push(5)
+  fdct4(&b, 0)
+  expect(b[0]!).toBe(80)
+  let rest = 0
+  for (let i = 1; i < 16; i++) rest += Math.abs(b[i]!)
+  expect(rest).toBe(0)
+})
+
+test("quantisation at qp 28 matches the reference formula", () => {
+  let b: int[] = [1000, -1000, 37, -37, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+  quant4(&b, 0, 28, false, 0)
+  expect(b[0]!).toBe(Math.trunc((1000 * 8192 + Math.trunc(524288 / 6)) / 524288))
+  expect(b[1]!).toBe(-Math.trunc((1000 * 5243 + Math.trunc(524288 / 6)) / 524288))
+  expect(b[2]!).toBe(Math.trunc((37 * 8192 + Math.trunc(524288 / 6)) / 524288))
+})
+
+test("hadamard 4x4 inverse of forward is 8x identity before the encoder's halving", () => {
+  let b: int[] = []
+  for (let i = 0; i < 16; i++) b.push(i * 2)
+  const orig = b.slice()
+  hadamard4(&b, 0, false)
+  hadamard4(&b, 0, false)
+  for (let i = 0; i < 16; i++) expect(b[i]!).toBe(16 * orig[i]!)
+})
+
+test("8x8 transform round trip at qp 0", () => {
+  let b: int[] = []
+  for (let i = 0; i < 64; i++) b.push(((i * 53) % 41) - 20)
+  const orig = b.slice()
+  fdct8(&b, 0)
+  quant8(&b, 0, 0, true)
+  dequant8(&b, 0, 0)
+  idct8(&b, 0)
+  let maxErr = 0
+  for (let i = 0; i < 64; i++) maxErr = Math.max(maxErr, Math.abs(b[i]! - orig[i]!))
+  expect(maxErr <= 1).toBe(true)
+})

@@ -1,0 +1,219 @@
+export class BitWriter {
+  buf: u8[] = []
+  acc = 0
+  n = 0
+
+  reset() {
+    this.buf = []
+    this.acc = 0
+    this.n = 0
+  }
+
+  putBits(v: int, bits: int) {
+    if (bits === 0) return
+    this.acc = (this.acc << bits) | (v & ((1 << bits) - 1))
+    this.n += bits
+    while (this.n >= 8) {
+      this.n -= 8
+      this.buf.push(u8((this.acc >> this.n) & 255))
+    }
+    this.acc = this.acc & ((1 << this.n) - 1)
+  }
+
+  putBit(b: int) {
+    this.putBits(b, 1)
+  }
+
+  ue(v: int) {
+    const x = v + 1
+    let len = 0
+    let t = x
+    while (t > 1) {
+      t = t >> 1
+      len++
+    }
+    if (len < 16) {
+      this.putBits(x, 2 * len + 1)
+    } else {
+      this.putBits(0, len)
+      this.putBits(x, len + 1)
+    }
+  }
+
+  se(v: int) {
+    this.ue(v > 0 ? 2 * v - 1 : -2 * v)
+  }
+
+  bitPos(): int {
+    return this.buf.length * 8 + this.n
+  }
+
+  aligned(): bool {
+    return this.n === 0
+  }
+
+  trailing() {
+    this.putBits(1, 1)
+    if (this.n > 0) this.putBits(0, 8 - this.n)
+  }
+
+  alignZero() {
+    if (this.n > 0) this.putBits(0, 8 - this.n)
+  }
+}
+
+function ueBitsSlow(v: int): int {
+  let x = v + 1
+  let len = 0
+  while (x > 1) {
+    x = x >> 1
+    len++
+  }
+  return 2 * len + 1
+}
+
+export function ueBits(v: int): int {
+  return 127 - 2 * Math.clz64(v + 1)
+}
+
+export function seBits(v: int): int {
+  return 127 - 2 * Math.clz64(((v < 0 ? -v : v) << 1) | 1)
+}
+
+function nalHeader(inout out: u8[], nalRefIdc: int, nalType: int, longStart: bool) {
+  if (longStart) out.push(u8(0))
+  out.push(u8(0))
+  out.push(u8(0))
+  out.push(u8(1))
+  out.push(u8((nalRefIdc << 5) | nalType))
+}
+
+function escapeArray(inout out: u8[], rbsp: u8[]): int {
+  let zeros = 0
+  const n = rbsp.length
+  for (let i = 0; i < n; i++) {
+    const b = rbsp[i]!
+    if (zeros >= 2 && b <= u8(3)) {
+      out.push(u8(3))
+      zeros = 0
+    }
+    out.push(b)
+    zeros = b === u8(0) ? zeros + 1 : 0
+  }
+  return zeros
+}
+
+function escapeBytes(inout out: u8[], src: Uint8Array, n: int, zeros0: int) {
+  let zeros = zeros0
+  const three = u8x16.splat(3)
+  let i = 0
+  while (i < n) {
+    const run = i
+    while (i + 16 <= n && u8x16.load(src, i).max(three).eq(three).mask() === 0) i += 16
+    if (i > run) {
+      out.pushFrom(src, run, i)
+      zeros = 0
+    }
+    const end = i + 16 <= n ? i + 16 : n
+    while (i < end) {
+      const b = src[i]!
+      if (zeros >= 2 && b <= 3) {
+        out.push(u8(3))
+        zeros = 0
+      }
+      out.push(u8(b))
+      zeros = b === 0 ? zeros + 1 : 0
+      i++
+    }
+  }
+}
+
+export function appendNal(inout out: u8[], nalRefIdc: int, nalType: int, rbsp: u8[], longStart: bool) {
+  nalHeader(&out, nalRefIdc, nalType, longStart)
+  escapeArray(&out, rbsp)
+}
+
+export function appendNalBytes(inout out: u8[], nalRefIdc: int, nalType: int, head: u8[], body: Uint8Array, n: int) {
+  nalHeader(&out, nalRefIdc, nalType, true)
+  escapeBytes(&out, body, n, escapeArray(&out, head))
+}
+
+test("putBits packs MSB first", () => {
+  const w = new BitWriter()
+  w.putBits(5, 3)
+  w.putBits(1, 1)
+  w.putBits(0xabc, 12)
+  expect(w.buf.length).toBe(2)
+  expect(int(w.buf[0]!)).toBe(0xba)
+  expect(int(w.buf[1]!)).toBe(0xbc)
+})
+
+test("exp-golomb ue matches the spec table", () => {
+  const w = new BitWriter()
+  for (let v = 0; v < 9; v++) w.ue(v)
+  w.alignZero()
+  const expected = "1" + "010" + "011" + "00100" + "00101" + "00110" + "00111" + "0001000" + "0001001"
+  let bits = ""
+  for (let i = 0; i < w.buf.length; i++) {
+    let b = int(w.buf[i]!)
+    for (let k = 7; k >= 0; k--) bits += ((b >> k) & 1) === 1 ? "1" : "0"
+  }
+  expect(bits.slice(0, expected.byteLength)).toBe(expected)
+  expect(ueBits(0)).toBe(1)
+  expect(ueBits(7)).toBe(7)
+  expect(ueBits(65535)).toBe(33)
+  for (let v = 0; v < 5000; v++) expect(ueBits(v)).toBe(ueBitsSlow(v))
+})
+
+test("exp-golomb se maps signs", () => {
+  expect(seBits(0)).toBe(1)
+  expect(seBits(1)).toBe(3)
+  expect(seBits(-1)).toBe(3)
+  expect(seBits(2)).toBe(5)
+  for (let v = -5000; v <= 5000; v++) expect(seBits(v)).toBe(ueBitsSlow(v > 0 ? 2 * v - 1 : -2 * v))
+  const w = new BitWriter()
+  w.se(-2)
+  w.alignZero()
+  expect(int(w.buf[0]!)).toBe(0x28)
+})
+
+test("large ue values", () => {
+  const w = new BitWriter()
+  w.ue(100000)
+  w.alignZero()
+  expect(w.bitPos()).toBe(40)
+})
+
+test("emulation prevention", () => {
+  let out: u8[] = []
+  appendNal(&out, 3, 7, [u8(0), u8(0), u8(1), u8(0), u8(0), u8(0), u8(5)], false)
+  const got = out.slice(3).map((b) => int(b))
+  expect(got).toEqual([0x67, 0, 0, 3, 1, 0, 0, 3, 0, 5])
+})
+
+test("escaping a byte buffer after a header equals escaping both as one array", () => {
+  let seed = 5
+  for (let t = 0; t < 200; t++) {
+    const hn = t % 7
+    const n = (t * 37) % 151
+    const head: u8[] = []
+    const body = new Uint8Array(n + 3)
+    const all: u8[] = []
+    for (let i = 0; i < hn + n; i++) {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff
+      const r = (seed >> 9) & 255
+      const b = t % 3 === 0 ? r : r < 96 ? 0 : r < 128 ? r & 3 : r
+      if (i < hn) {
+        head.push(u8(b))
+      } else {
+        body[i - hn] = b
+      }
+      all.push(u8(b))
+    }
+    let a: u8[] = []
+    let b: u8[] = []
+    appendNal(&a, 2, 1, all, true)
+    appendNalBytes(&b, 2, 1, head, body, n)
+    expect(b).toEqual(a)
+  }
+})

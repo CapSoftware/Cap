@@ -1,0 +1,158 @@
+import { BitWriter } from "./bitwriter"
+import {
+  COEFF_TOKEN_LEN, COEFF_TOKEN_CODE, COEFF_TOKEN_DC_LEN, COEFF_TOKEN_DC_CODE, TOTAL_ZEROS_LEN, TOTAL_ZEROS_CODE,
+  TOTAL_ZEROS_DC_LEN, TOTAL_ZEROS_DC_CODE, RUN_BEFORE_LEN, RUN_BEFORE_CODE,
+} from "./tables"
+
+export function writeCoeffToken(bw: BitWriter, nC: int, totalCoeff: int, trailingOnes: int) {
+  if (nC < 0) {
+    const i = trailingOnes * 17 + totalCoeff
+    bw.putBits(int(COEFF_TOKEN_DC_CODE[i]!), int(COEFF_TOKEN_DC_LEN[i]!))
+    return
+  }
+  if (nC >= 8) {
+    bw.putBits(totalCoeff > 0 ? ((totalCoeff - 1) << 2) | trailingOnes : 3, 6)
+    return
+  }
+  const vlc = nC < 2 ? 0 : nC < 4 ? 1 : 2
+  const i = vlc * 68 + trailingOnes * 17 + totalCoeff
+  bw.putBits(int(COEFF_TOKEN_CODE[i]!), int(COEFF_TOKEN_LEN[i]!))
+}
+
+export function writeLevel(bw: BitWriter, levelCode: int, suffixLength: int) {
+  if (suffixLength === 0) {
+    if (levelCode < 14) {
+      bw.putBits(1, levelCode + 1)
+      return
+    }
+    if (levelCode < 30) {
+      bw.putBits(1, 15)
+      bw.putBits(levelCode - 14, 4)
+      return
+    }
+    writeEscape(bw, levelCode - 30)
+    return
+  }
+  if (levelCode < (15 << suffixLength)) {
+    bw.putBits(1, (levelCode >> suffixLength) + 1)
+    bw.putBits(levelCode & ((1 << suffixLength) - 1), suffixLength)
+    return
+  }
+  writeEscape(bw, levelCode - (15 << suffixLength))
+}
+
+function writeEscape(bw: BitWriter, rest: int) {
+  if (rest < 4096) {
+    bw.putBits(1, 16)
+    bw.putBits(rest, 12)
+    return
+  }
+  let prefix = 16
+  while (rest >= (1 << (prefix - 2)) - 4096) prefix++
+  bw.putBits(1, prefix + 1)
+  bw.putBits(rest - ((1 << (prefix - 3)) - 4096), prefix - 3)
+}
+
+export function writeResidual(bw: BitWriter, c: Int16Array, o: int, maxNum: int, nC: int): int {
+  const lim = (1 << maxNum) - 1
+  const v16 = i16x16.load(c, o)
+  const nz = v16.ne(i16x16.splat(0)).mask() & lim
+  const big = (v16.gt(i16x16.splat(1)) | v16.lt(i16x16.splat(-1))).mask() & lim
+  const total = Math.popcount64(nz)
+  const last = 63 - Math.clz64(nz)
+  const ones = Math.popcount64(nz >> (64 - Math.clz64(big)))
+  const t1 = ones < 3 ? ones : 3
+  writeCoeffToken(bw, nC, total, t1)
+  if (total === 0) return 0
+  let seen = 0
+  let suffixLength = total > 10 && t1 < 3 ? 1 : 0
+  let m = nz
+  while (m !== 0) {
+    const i = 63 - Math.clz64(m)
+    m ^= 1 << i
+    const v = c[o + i]!
+    if (seen < t1) {
+      bw.putBit(v < 0 ? 1 : 0)
+    } else {
+      let levelCode = v > 0 ? 2 * v - 2 : -2 * v - 1
+      if (seen === t1 && t1 < 3) levelCode -= 2
+      writeLevel(bw, levelCode, suffixLength)
+      if (suffixLength === 0) suffixLength = 1
+      const a = v < 0 ? -v : v
+      if (a > (3 << (suffixLength - 1)) && suffixLength < 6) suffixLength++
+    }
+    seen++
+  }
+  const totalZeros = last + 1 - total
+  if (total < maxNum) {
+    const i = (total - 1) * 16 + totalZeros
+    if (maxNum === 4) {
+      bw.putBits(int(TOTAL_ZEROS_DC_CODE[i]!), int(TOTAL_ZEROS_DC_LEN[i]!))
+    } else {
+      bw.putBits(int(TOTAL_ZEROS_CODE[i]!), int(TOTAL_ZEROS_LEN[i]!))
+    }
+  }
+  let zerosLeft = totalZeros
+  let rest = nz ^ (1 << last)
+  let i = last
+  while (rest !== 0 && zerosLeft > 0) {
+    const j = 63 - Math.clz64(rest)
+    rest ^= 1 << j
+    const run = i - 1 - j
+    const t = (zerosLeft > 7 ? 6 : zerosLeft - 1) * 16 + run
+    bw.putBits(int(RUN_BEFORE_CODE[t]!), int(RUN_BEFORE_LEN[t]!))
+    zerosLeft -= run
+    i = j
+  }
+  return total
+}
+
+test("coeff token for an empty block at nC 0 is a single 1", () => {
+  const bw = new BitWriter()
+  writeResidual(bw, new Int16Array([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]), 0, 16, 0)
+  expect(bw.bitPos()).toBe(1)
+})
+
+test("the spec's worked example encodes to the published bits", () => {
+  const bw = new BitWriter()
+  writeResidual(bw, new Int16Array([0, 3, 0, 1, -1, -1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0]), 0, 16, 0)
+  let bits = ""
+  const n = bw.bitPos()
+  bw.alignZero()
+  for (let i = 0; i < bw.buf.length; i++) {
+    const b = int(bw.buf[i]!)
+    for (let k = 7; k >= 0; k--) bits += ((b >> k) & 1) === 1 ? "1" : "0"
+  }
+  expect(bits.slice(0, n)).toBe("000010001110010111101101")
+})
+
+test("large levels use the escape", () => {
+  const bw = new BitWriter()
+  let c: int[] = [3000, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+  const t = writeResidual(bw, new Int16Array(c), 0, 16, 0)
+  expect(t).toBe(1)
+  expect(bw.bitPos() > 16).toBe(true)
+})
+
+test("coefficients past maxNum do not change the coded bits", () => {
+  const sizes: int[] = [4, 15, 16]
+  let same = 0
+  for (const n of sizes) {
+    const clean = new Int16Array([1, 0, -1, 2, 0, 0, 1, 0, 0, -1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0])
+    const junk = new Int16Array(20)
+    for (let i = 0; i < 20; i++) {
+      if (i >= n) clean[i] = 0
+      junk[i] = i < n ? clean[i]! : 7 - i
+    }
+    const a = new BitWriter()
+    const b = new BitWriter()
+    const ta = writeResidual(a, clean, 0, n, n === 4 ? -1 : 0)
+    const tb = writeResidual(b, junk, 0, n, n === 4 ? -1 : 0)
+    a.alignZero()
+    b.alignZero()
+    let eq = ta === tb && a.buf.length === b.buf.length
+    for (let i = 0; eq && i < a.buf.length; i++) eq = a.buf[i]! === b.buf[i]!
+    if (eq) same++
+  }
+  expect(same).toBe(3)
+})

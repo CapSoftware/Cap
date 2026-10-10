@@ -1,0 +1,322 @@
+function clip(v: int): int {
+  return v < 0 ? 0 : v > 255 ? 255 : v
+}
+
+function tap6(a: int, b: int, c: int, d: int, e: int, f: int): int {
+  return a - 5 * b + 20 * c + 20 * d - 5 * e + f
+}
+
+const PEL_PAIRS = [0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8]
+const INTERLEAVE_LO = [0, 16, 1, 17, 2, 18, 3, 19, 4, 20, 5, 21, 6, 22, 7, 23]
+const INTERLEAVE_HI = [8, 24, 9, 25, 10, 26, 11, 27, 12, 28, 13, 29, 14, 30, 15, 31]
+
+export function predictChroma(dst: Uint8Array, dO: int, ds: int, ref: Uint8Array, stride: int, base: int, mvx: int, mvy: int, w: int, h: int) {
+  const fx = mvx & 7
+  const fy = mvy & 7
+  const p0 = base + (mvy >> 3) * stride + (mvx >> 3)
+  if (w === 8 && ds === 8 && (h & 3) === 0) {
+    const wab = i8x32.bitcast(i16x16.splat((fx * (8 - fy)) * 256 + (8 - fx) * (8 - fy)))
+    const wcd = i8x32.bitcast(i16x16.splat((fx * fy) * 256 + (8 - fx) * fy))
+    const r32 = i16x16.splat(32)
+    let top = u8x16.load(ref, p0).swizzle(PEL_PAIRS)
+    for (let y = 0; y < h; y += 4) {
+      const r1 = p0 + (y + 1) * stride
+      const s1 = u8x16.load(ref, r1).swizzle(PEL_PAIRS)
+      const s2 = u8x16.load(ref, r1 + stride).swizzle(PEL_PAIRS)
+      const s3 = u8x16.load(ref, r1 + 2 * stride).swizzle(PEL_PAIRS)
+      const s4 = u8x16.load(ref, r1 + 3 * stride).swizzle(PEL_PAIRS)
+      const v01 = (u8x32.madd(u8x32.concat(top, s1), wab) + u8x32.madd(u8x32.concat(s1, s2), wcd) + r32) >> 6
+      const v23 = (u8x32.madd(u8x32.concat(s2, s3), wab) + u8x32.madd(u8x32.concat(s3, s4), wcd) + r32) >> 6
+      u8x32.packSat(v01, v23).store(dst, dO + y * 8)
+      top = s4
+    }
+    return
+  }
+  if (fx === 0 && fy === 0) {
+    for (let y = 0; y < h; y++) {
+      const r = p0 + y * stride
+      for (let x = 0; x < w; x++) dst[dO + y * ds + x] = ref[r + x]!
+    }
+    return
+  }
+  const wa = (8 - fx) * (8 - fy)
+  const wb = fx * (8 - fy)
+  const wc = (8 - fx) * fy
+  const wd = fx * fy
+  for (let y = 0; y < h; y++) {
+    const r = p0 + y * stride
+    for (let x = 0; x < w; x++) {
+      const p = r + x
+      const v = (wa * int(ref[p]!) + wb * int(ref[p + 1]!) + wc * int(ref[p + stride]!) + wd * int(ref[p + stride + 1]!) + 32) >> 6
+      dst[dO + y * ds + x] = v
+    }
+  }
+}
+
+export function median3(a: int, b: int, c: int): int {
+  if (a > b) {
+    if (b > c) return b
+    return a > c ? c : a
+  }
+  if (a > c) return a
+  return b > c ? c : b
+}
+
+function tap6v(a: i16x16, b: i16x16, c: i16x16, d: i16x16, e: i16x16, f: i16x16): i16x16 {
+  return a + f + (c + d) * i16x16.splat(20) - (b + e) * i16x16.splat(5)
+}
+
+function pixels(v: i16x16): u8x16 {
+  return u8x16.convert(v.max(i16x16.splat(0)).min(i16x16.splat(255)))
+}
+
+const ZIP_LO = [0, 16, 1, 17, 2, 18, 3, 19, 8, 24, 9, 25, 10, 26, 11, 27]
+const ZIP_HI = [4, 20, 5, 21, 6, 22, 7, 23, 12, 28, 13, 29, 14, 30, 15, 31]
+const QUARTERS = [0, 1, 2, 3, 8, 9, 10, 11, 4, 5, 6, 7, 12, 13, 14, 15]
+
+function hTap(y: Uint8Array, q: int): i16x16 {
+  return tap6v(i16x16.loadU8(y, q - 2), i16x16.loadU8(y, q - 1), i16x16.loadU8(y, q), i16x16.loadU8(y, q + 1),
+    i16x16.loadU8(y, q + 2), i16x16.loadU8(y, q + 3))
+}
+
+function tapJ(outerInner: i16x16, midMid: i16x16): i32x8 {
+  const ab = i16x16.madd(outerInner, i16x16(1, -5, 1, -5, 1, -5, 1, -5, 1, -5, 1, -5, 1, -5, 1, -5))
+  return (ab + i16x16.madd(midMid, i16x16.splat(10)) + i32x8.splat(512)) >> 10
+}
+
+export function computeHalfTile(hb: Uint8Array, hh: Uint8Array, hj: Uint8Array, y: Uint8Array, stride: int, base: int) {
+  const r16 = i16x16.splat(16)
+  let t0 = hTap(y, base - 2 * stride)
+  let t1 = hTap(y, base - stride)
+  let t2 = hTap(y, base)
+  let t3 = hTap(y, base + stride)
+  let t4 = hTap(y, base + 2 * stride)
+  for (let r = 0; r < 16; r++) {
+    const row = base + r * stride
+    const t5 = hTap(y, row + 3 * stride)
+    pixels((t2 + r16) >> 5).store(hb, row)
+    const v = tap6v(i16x16.loadU8(y, row - 2 * stride), i16x16.loadU8(y, row - stride), i16x16.loadU8(y, row),
+      i16x16.loadU8(y, row + stride), i16x16.loadU8(y, row + 2 * stride), i16x16.loadU8(y, row + 3 * stride))
+    pixels((v + r16) >> 5).store(hh, row)
+    const outer = t0 + t5
+    const inner = t1 + t4
+    const mid = t2 + t3
+    const lo = tapJ(i16x16.shuffle(outer, inner, ZIP_LO), i16x16.shuffle(mid, mid, ZIP_LO))
+    const hi = tapJ(i16x16.shuffle(outer, inner, ZIP_HI), i16x16.shuffle(mid, mid, ZIP_HI))
+    const j = i16x16.packSat(lo, hi)
+    pixels(j.swizzle(QUARTERS)).store(hj, row)
+    t0 = t1
+    t1 = t2
+    t2 = t3
+    t3 = t4
+    t4 = t5
+  }
+}
+
+function computeHalfTileRef(hb: Uint8Array, hh: Uint8Array, hj: Uint8Array, inout tmp: int[], y: Uint8Array, stride: int, base: int) {
+  for (let r = -2; r < 19; r++) {
+    const row = base + r * stride
+    const to = (r + 2) * 16
+    for (let i = 0; i < 16; i++) {
+      const q = row + i
+      tmp[to + i] = tap6(int(y[q - 2]!), int(y[q - 1]!), int(y[q]!), int(y[q + 1]!), int(y[q + 2]!), int(y[q + 3]!))
+    }
+  }
+  for (let r = 0; r < 16; r++) {
+    const row = base + r * stride
+    const to = (r + 2) * 16
+    for (let i = 0; i < 16; i++) {
+      const q = row + i
+      hb[q] = clip((tmp[to + i]! + 16) >> 5)
+      const v = tap6(int(y[q - 2 * stride]!), int(y[q - stride]!), int(y[q]!), int(y[q + stride]!),
+        int(y[q + 2 * stride]!), int(y[q + 3 * stride]!))
+      hh[q] = clip((v + 16) >> 5)
+      const k = to + i
+      const j1 = tap6(tmp[k - 32]!, tmp[k - 16]!, tmp[k]!, tmp[k + 16]!, tmp[k + 32]!, tmp[k + 48]!)
+      hj[q] = clip((j1 + 512) >> 10)
+    }
+  }
+}
+
+export function qpelPlanes(fx: int, fy: int): int {
+  let a = 0
+  let ao = 0
+  let b = 0
+  let bo = 0
+  if (fy === 0) {
+    if (fx === 1) {
+      b = 1
+    } else if (fx === 2) {
+      a = 1
+      b = 1
+    } else if (fx === 3) {
+      ao = 1
+      b = 1
+    }
+  } else if (fx === 0) {
+    if (fy === 1) {
+      b = 2
+    } else if (fy === 2) {
+      a = 2
+      b = 2
+    } else {
+      ao = 2
+      b = 2
+    }
+  } else if (fx === 2 && fy === 2) {
+    a = 3
+    b = 3
+  } else if (fx === 2) {
+    a = 3
+    b = 1
+    bo = fy === 1 ? 0 : 2
+  } else if (fy === 2) {
+    a = 3
+    b = 2
+    bo = fx === 1 ? 0 : 1
+  } else {
+    a = 1
+    ao = fy === 1 ? 0 : 2
+    b = 2
+    bo = fx === 1 ? 0 : 1
+  }
+  return a * 64 + ao * 16 + b * 4 + bo
+}
+
+export function avgPlanes(dst: Uint8Array, dO: int, ds: int, a: Uint8Array, ao: int, b: Uint8Array, bo: int, stride: int, w: int, h: int) {
+  if (w === 16) {
+    for (let y = 0; y < h; y++) u8x16.load(a, ao + y * stride).avg(u8x16.load(b, bo + y * stride)).store(dst, dO + y * ds)
+    return
+  }
+  for (let y = 0; y < h; y++) {
+    const pa = ao + y * stride
+    const pb = bo + y * stride
+    const d = dO + y * ds
+    for (let x = 0; x < w; x++) dst[d + x] = (int(a[pa + x]!) + int(b[pb + x]!) + 1) >> 1
+  }
+}
+
+export function weightedAvgPlanes(dst: Uint8Array, dO: int, ds: int, a: Uint8Array, ao: int, b: Uint8Array, bo: int, stride: int, w: int, h: int, w0: int, w1: int) {
+  if (w === 16 && w0 >= 0 && w1 >= 0 && w0 < 128 && w1 < 128 && w0 + w1 <= 128) {
+    const wv = i8x16.bitcast(i16x8.splat(w1 * 256 + w0))
+    const r = i16x8.splat(32)
+    for (let y = 0; y < h; y++) {
+      const va = u8x16.load(a, ao + y * stride)
+      const vb = u8x16.load(b, bo + y * stride)
+      const lo = (u8x16.madd(u8x16.shuffle(va, vb, INTERLEAVE_LO), wv) + r) >> 6
+      const hi = (u8x16.madd(u8x16.shuffle(va, vb, INTERLEAVE_HI), wv) + r) >> 6
+      u8x16.packSat(lo, hi).store(dst, dO + y * ds)
+    }
+    return
+  }
+  if (w === 16) {
+    const v0 = i16x8.splat(w0)
+    const v1 = i16x8.splat(w1)
+    const r = i16x8.splat(32)
+    for (let y = 0; y < h; y++) {
+      const va = u8x16.load(a, ao + y * stride)
+      const vb = u8x16.load(b, bo + y * stride)
+      const lo = (va.widenLow() * v0 + vb.widenLow() * v1 + r) >> 6
+      const hi = (va.widenHigh() * v0 + vb.widenHigh() * v1 + r) >> 6
+      u8x16.packSat(lo, hi).store(dst, dO + y * ds)
+    }
+    return
+  }
+  for (let y = 0; y < h; y++) {
+    const pa = ao + y * stride
+    const pb = bo + y * stride
+    const d = dO + y * ds
+    for (let x = 0; x < w; x++) dst[d + x] = (int(a[pa + x]!) * w0 + int(b[pb + x]!) * w1 + 32) >> 6
+  }
+}
+
+test("vector weighted bi-prediction average equals the scalar formula for every implicit weight", () => {
+  const a = new Uint8Array(16 * 4)
+  const b = new Uint8Array(16 * 4)
+  let x = 7
+  for (let i = 0; i < 64; i++) {
+    x = (x * 1103515245 + 12345) & 0x7fffffff
+    a[i] = i % 7 === 0 ? 255 : (x >> 9) & 255
+    b[i] = i % 5 === 0 ? 255 : (x >> 17) & 255
+  }
+  const v = new Uint8Array(64)
+  const s = new Uint8Array(64)
+  let bad = 0
+  for (let w1 = 0; w1 <= 64; w1++) {
+    weightedAvgPlanes(v, 0, 16, a, 0, b, 0, 16, 16, 4, 64 - w1, w1)
+    weightedAvgPlanes(s, 0, 8, a, 0, b, 0, 8, 8, 8, 64 - w1, w1)
+    for (let i = 0; i < 64; i++) {
+      if (v[i]! !== s[i]!) bad++
+    }
+  }
+  weightedAvgPlanes(v, 0, 16, a, 0, b, 0, 16, 16, 4, 32, 32)
+  avgPlanes(s, 0, 16, a, 0, b, 0, 16, 16, 4)
+  for (let i = 0; i < 64; i++) {
+    if (v[i]! !== s[i]!) bad++
+  }
+  expect(bad).toBe(0)
+})
+
+test("vector half-pel tiles equal the scalar 6-tap filter", () => {
+  const stride = 64
+  const y = new Uint8Array(stride * 64)
+  const hb = new Uint8Array(stride * 64)
+  const hh = new Uint8Array(stride * 64)
+  const hj = new Uint8Array(stride * 64)
+  const rb = new Uint8Array(stride * 64)
+  const rh = new Uint8Array(stride * 64)
+  const rj = new Uint8Array(stride * 64)
+  let t64: int[] = []
+  for (let i = 0; i < 21 * 16; i++) t64.push(0)
+  let bad = 0
+  for (let pat = 0; pat < 4; pat++) {
+    let x = 99 + pat
+    for (let i = 0; i < stride * 64; i++) {
+      x = (x * 1103515245 + 12345) & 0x7fffffff
+      const c = i % stride
+      const r = Math.trunc(i / stride)
+      const ext = pat === 1 ? (c + r) % 3 === 1 : pat === 2 ? c % 6 === 2 || c % 6 === 3 || r % 6 === 2 || r % 6 === 3 : false
+      const v = pat === 0 ? (i % 5 === 0 ? 255 : i % 11 === 0 ? 0 : (x >> 9) & 255) : pat === 3 ? ((x >> 9) & 1) * 255 : ext ? 255 : 0
+      y[i] = v
+    }
+    for (let ty = 1; ty < 3; ty++) {
+      for (let tx = 1; tx < 3; tx++) {
+        const base = ty * 16 * stride + tx * 16
+        computeHalfTile(hb, hh, hj, y, stride, base)
+        computeHalfTileRef(rb, rh, rj, &t64, y, stride, base)
+      }
+    }
+    for (let i = 0; i < stride * 64; i++) {
+      if (hb[i]! !== rb[i]! || hh[i]! !== rh[i]! || hj[i]! !== rj[i]!) bad++
+    }
+  }
+  expect(bad).toBe(0)
+})
+
+test("vector chroma interpolation equals the scalar bilinear filter", () => {
+  const ref = new Uint8Array(40 * 40)
+  let x = 5
+  for (let i = 0; i < 40 * 40; i++) {
+    x = (x * 1103515245 + 12345) & 0x7fffffff
+    ref[i] = (x >> 9) & 255
+  }
+  let bad = 0
+  for (let mv = 0; mv < 64; mv++) {
+    const mvx = (mv & 7) + 8 * (mv % 3) - 8
+    const mvy = (mv >> 3) + 8 * (mv % 2)
+    const a = new Uint8Array(64)
+    predictChroma(a, 0, 8, ref, 40, 10 * 40 + 10, mvx, mvy, 8, 8)
+    const fx = mvx & 7
+    const fy = mvy & 7
+    const p0 = 10 * 40 + 10 + (mvy >> 3) * 40 + (mvx >> 3)
+    for (let yy = 0; yy < 8; yy++) {
+      for (let xx = 0; xx < 8; xx++) {
+        const p = p0 + yy * 40 + xx
+        const v = ((8 - fx) * (8 - fy) * int(ref[p]!) + fx * (8 - fy) * int(ref[p + 1]!) + (8 - fx) * fy * int(ref[p + 40]!) +
+          fx * fy * int(ref[p + 41]!) + 32) >> 6
+        if (int(a[yy * 8 + xx]!) !== v) bad++
+      }
+    }
+  }
+  expect(bad).toBe(0)
+})

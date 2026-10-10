@@ -1,0 +1,7 @@
+{
+	"bd_psnr_yuv": 1.5927990279928197,
+	"clips": ["code_editor", "text_scroll", "slides"],
+	"commit": "1c82bfaeb12e-dirty",
+	"cpu_fps": 291.64864116037273,
+	"tier": "smoke"
+}

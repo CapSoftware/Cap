@@ -1,0 +1,408 @@
+export const AV_TOP = 1
+export const AV_LEFT = 2
+export const AV_TL = 4
+export const AV_TR = 8
+
+export const I4_V = 0
+export const I4_H = 1
+export const I4_DC = 2
+export const I4_DDL = 3
+export const I4_DDR = 4
+export const I4_VR = 5
+export const I4_HD = 6
+export const I4_VL = 7
+export const I4_HU = 8
+
+export const I16_V = 0
+export const I16_H = 1
+export const I16_DC = 2
+export const I16_PLANE = 3
+
+export const C_DC = 0
+export const C_H = 1
+export const C_V = 2
+export const C_PLANE = 3
+
+export function modeAvailable(mode: int, av: int): bool {
+  const top = (av & AV_TOP) !== 0
+  const left = (av & AV_LEFT) !== 0
+  const tl = (av & AV_TL) !== 0
+  if (mode === I4_V || mode === I4_DDL || mode === I4_VL) return top
+  if (mode === I4_H || mode === I4_HU) return left
+  if (mode === I4_DC) return true
+  return top && left && tl
+}
+
+export function modeMask(av: int): int {
+  const top = (av & AV_TOP) !== 0
+  const left = (av & AV_LEFT) !== 0
+  return 4 | (top ? 0x89 : 0) | (left ? 0x102 : 0) | (top && left && (av & AV_TL) !== 0 ? 0x70 : 0)
+}
+
+export function mode16Available(mode: int, av: int): bool {
+  const top = (av & AV_TOP) !== 0
+  const left = (av & AV_LEFT) !== 0
+  if (mode === I16_V) return top
+  if (mode === I16_H) return left
+  if (mode === I16_DC) return true
+  return top && left && (av & AV_TL) !== 0
+}
+
+export function chromaModeAvailable(mode: int, av: int): bool {
+  const top = (av & AV_TOP) !== 0
+  const left = (av & AV_LEFT) !== 0
+  if (mode === C_V) return top
+  if (mode === C_H) return left
+  if (mode === C_DC) return true
+  return top && left && (av & AV_TL) !== 0
+}
+
+export function gather4(e: Int32Array, p: Uint8Array, stride: int, x: int, y: int, av: int) {
+  if ((av & AV_TOP) !== 0) {
+    const o = (y - 1) * stride + x
+    for (let i = 0; i < 4; i++) e[5 + i] = int(p[o + i]!)
+    if ((av & AV_TR) !== 0) {
+      for (let i = 4; i < 8; i++) e[5 + i] = int(p[o + i]!)
+    } else {
+      const t = e[8]!
+      for (let i = 4; i < 8; i++) e[5 + i] = t
+    }
+  }
+  if ((av & AV_LEFT) !== 0) {
+    for (let i = 0; i < 4; i++) e[3 - i] = int(p[(y + i) * stride + x - 1]!)
+  }
+  if ((av & AV_TL) !== 0) e[4] = int(p[(y - 1) * stride + x - 1]!)
+}
+
+export function pred4(dst: Uint8Array, dO: int, ds: int, e: Int32Array, mode: int, av: int) {
+  if (mode === I4_V) {
+    for (let y = 0; y < 4; y++) {
+      for (let x = 0; x < 4; x++) dst[dO + y * ds + x] = e[5 + x]!
+    }
+    return
+  }
+  if (mode === I4_H) {
+    for (let y = 0; y < 4; y++) {
+      const v = e[3 - y]!
+      for (let x = 0; x < 4; x++) dst[dO + y * ds + x] = v
+    }
+    return
+  }
+  if (mode === I4_DC) {
+    const top = (av & AV_TOP) !== 0
+    const left = (av & AV_LEFT) !== 0
+    let dc = 128
+    if (top && left) {
+      dc = (e[5]! + e[6]! + e[7]! + e[8]! + e[0]! + e[1]! + e[2]! + e[3]! + 4) >> 3
+    } else if (top) {
+      dc = (e[5]! + e[6]! + e[7]! + e[8]! + 2) >> 2
+    } else if (left) {
+      dc = (e[0]! + e[1]! + e[2]! + e[3]! + 2) >> 2
+    }
+    const v = dc
+    for (let y = 0; y < 4; y++) {
+      for (let x = 0; x < 4; x++) dst[dO + y * ds + x] = v
+    }
+    return
+  }
+  directional(dst, dO, ds, e, mode, 4)
+}
+
+function fAt(e: Int32Array, i: int): int {
+  return (e[i - 1]! + 2 * e[i]! + e[i + 1]! + 2) >> 2
+}
+
+function aAt(e: Int32Array, i: int): int {
+  return (e[i]! + e[i + 1]! + 1) >> 1
+}
+
+function directional(dst: Uint8Array, dO: int, ds: int, e: Int32Array, mode: int, n: int) {
+  const tl = n
+  const t0 = n + 1
+  const last = 3 * n
+  for (let y = 0; y < n; y++) {
+    const row = dO + y * ds
+    for (let x = 0; x < n; x++) {
+      let v = 0
+      if (mode === I4_DDL) {
+        v = x === n - 1 && y === n - 1 ? (e[last - 1]! + 3 * e[last]! + 2) >> 2 : fAt(e, t0 + 1 + x + y)
+      } else if (mode === I4_DDR) {
+        v = fAt(e, tl + x - y)
+      } else if (mode === I4_VR) {
+        const z = 2 * x - y
+        if (z >= 0) {
+          v = (z & 1) === 0 ? aAt(e, tl + x - (y >> 1)) : fAt(e, tl + x - (y >> 1))
+        } else if (z === -1) {
+          v = fAt(e, tl)
+        } else {
+          v = fAt(e, tl + 1 - y + 2 * x)
+        }
+      } else if (mode === I4_HD) {
+        const z = 2 * y - x
+        if (z >= 0) {
+          v = (z & 1) === 0 ? aAt(e, tl - 1 - y + (x >> 1)) : fAt(e, tl - y + (x >> 1))
+        } else if (z === -1) {
+          v = fAt(e, tl)
+        } else {
+          v = fAt(e, tl - 1 + x - 2 * y)
+        }
+      } else if (mode === I4_VL) {
+        v = (y & 1) === 0 ? aAt(e, t0 + x + (y >> 1)) : fAt(e, t0 + 1 + x + (y >> 1))
+      } else {
+        const z = x + 2 * y
+        const k = y + (x >> 1)
+        const lim = 2 * n - 3
+        if (z < lim) {
+          v = (z & 1) === 0 ? aAt(e, n - 2 - k) : fAt(e, n - 2 - k)
+        } else if (z === lim) {
+          v = (e[1]! + 3 * e[0]! + 2) >> 2
+        } else {
+          v = e[0]!
+        }
+      }
+      dst[row + x] = v
+    }
+  }
+}
+
+export function gather8(e: Int32Array, f: Int32Array, p: Uint8Array, stride: int, x: int, y: int, av: int) {
+  const top = (av & AV_TOP) !== 0
+  const left = (av & AV_LEFT) !== 0
+  const tl = (av & AV_TL) !== 0
+  if (top) {
+    const o = (y - 1) * stride + x
+    for (let i = 0; i < 8; i++) e[9 + i] = int(p[o + i]!)
+    if ((av & AV_TR) !== 0) {
+      for (let i = 8; i < 16; i++) e[9 + i] = int(p[o + i]!)
+    } else {
+      const t = e[16]!
+      for (let i = 8; i < 16; i++) e[9 + i] = t
+    }
+  }
+  if (left) {
+    for (let i = 0; i < 8; i++) e[7 - i] = int(p[(y + i) * stride + x - 1]!)
+  }
+  if (tl) e[8] = int(p[(y - 1) * stride + x - 1]!)
+  if (tl) {
+    if (top && left) {
+      f[8] = (e[9]! + 2 * e[8]! + e[7]! + 2) >> 2
+    } else if (top) {
+      f[8] = (3 * e[8]! + e[9]! + 2) >> 2
+    } else if (left) {
+      f[8] = (3 * e[8]! + e[7]! + 2) >> 2
+    } else {
+      f[8] = e[8]!
+    }
+  }
+  if (top) {
+    f[9] = tl ? (e[8]! + 2 * e[9]! + e[10]! + 2) >> 2 : (3 * e[9]! + e[10]! + 2) >> 2
+    for (let i = 1; i < 15; i++) f[9 + i] = (e[8 + i]! + 2 * e[9 + i]! + e[10 + i]! + 2) >> 2
+    f[24] = (e[23]! + 3 * e[24]! + 2) >> 2
+  }
+  if (left) {
+    f[7] = tl ? (e[8]! + 2 * e[7]! + e[6]! + 2) >> 2 : (3 * e[7]! + e[6]! + 2) >> 2
+    for (let i = 1; i < 7; i++) f[7 - i] = (e[8 - i]! + 2 * e[7 - i]! + e[6 - i]! + 2) >> 2
+    f[0] = (e[1]! + 3 * e[0]! + 2) >> 2
+  }
+}
+
+export function pred8(dst: Uint8Array, dO: int, ds: int, f: Int32Array, mode: int, av: int) {
+  if (mode === I4_V) {
+    for (let y = 0; y < 8; y++) {
+      for (let x = 0; x < 8; x++) dst[dO + y * ds + x] = f[9 + x]!
+    }
+    return
+  }
+  if (mode === I4_H) {
+    for (let y = 0; y < 8; y++) {
+      const v = f[7 - y]!
+      for (let x = 0; x < 8; x++) dst[dO + y * ds + x] = v
+    }
+    return
+  }
+  if (mode === I4_DC) {
+    const top = (av & AV_TOP) !== 0
+    const left = (av & AV_LEFT) !== 0
+    let st = 0
+    let sl = 0
+    for (let i = 0; i < 8; i++) {
+      st += f[9 + i]!
+      sl += f[7 - i]!
+    }
+    let dc = 128
+    if (top && left) {
+      dc = (st + sl + 8) >> 4
+    } else if (top) {
+      dc = (st + 4) >> 3
+    } else if (left) {
+      dc = (sl + 4) >> 3
+    }
+    const v = dc
+    for (let y = 0; y < 8; y++) {
+      for (let x = 0; x < 8; x++) dst[dO + y * ds + x] = v
+    }
+    return
+  }
+  directional(dst, dO, ds, f, mode, 8)
+}
+
+export function pred16(dst: Uint8Array, dO: int, ds: int, p: Uint8Array, stride: int, x: int, y: int, mode: int, av: int) {
+  if (mode === I16_V) {
+    const o = (y - 1) * stride + x
+    for (let j = 0; j < 16; j++) {
+      for (let i = 0; i < 16; i++) dst[dO + j * ds + i] = p[o + i]!
+    }
+    return
+  }
+  if (mode === I16_H) {
+    for (let j = 0; j < 16; j++) {
+      const v = p[(y + j) * stride + x - 1]!
+      for (let i = 0; i < 16; i++) dst[dO + j * ds + i] = v
+    }
+    return
+  }
+  if (mode === I16_DC) {
+    const top = (av & AV_TOP) !== 0
+    const left = (av & AV_LEFT) !== 0
+    let sum = 0
+    if (top) {
+      const o = (y - 1) * stride + x
+      for (let i = 0; i < 16; i++) sum += int(p[o + i]!)
+    }
+    if (left) {
+      for (let j = 0; j < 16; j++) sum += int(p[(y + j) * stride + x - 1]!)
+    }
+    let dc = 128
+    if (top && left) {
+      dc = (sum + 16) >> 5
+    } else if (top || left) {
+      dc = (sum + 8) >> 4
+    }
+    const v = dc
+    for (let j = 0; j < 16; j++) {
+      for (let i = 0; i < 16; i++) dst[dO + j * ds + i] = v
+    }
+    return
+  }
+  const to = (y - 1) * stride + x
+  let hh = 0
+  let vv = 0
+  for (let k = 0; k < 8; k++) {
+    hh += (k + 1) * (int(p[to + 8 + k]!) - int(p[to + 6 - k]!))
+    vv += (k + 1) * (int(p[(y + 8 + k) * stride + x - 1]!) - int(p[(y + 6 - k) * stride + x - 1]!))
+  }
+  const a = 16 * (int(p[(y + 15) * stride + x - 1]!) + int(p[to + 15]!))
+  const b = (5 * hh + 32) >> 6
+  const c = (5 * vv + 32) >> 6
+  for (let j = 0; j < 16; j++) {
+    for (let i = 0; i < 16; i++) {
+      const v = (a + b * (i - 7) + c * (j - 7) + 16) >> 5
+      const c255 = v < 0 ? 0 : v > 255 ? 255 : v
+      dst[dO + j * ds + i] = c255
+    }
+  }
+}
+
+export function predChroma(dst: Uint8Array, dO: int, ds: int, p: Uint8Array, stride: int, x: int, y: int, mode: int, av: int) {
+  const top = (av & AV_TOP) !== 0
+  const left = (av & AV_LEFT) !== 0
+  if (mode === C_V) {
+    const o = (y - 1) * stride + x
+    for (let j = 0; j < 8; j++) {
+      for (let i = 0; i < 8; i++) dst[dO + j * ds + i] = p[o + i]!
+    }
+    return
+  }
+  if (mode === C_H) {
+    for (let j = 0; j < 8; j++) {
+      const v = p[(y + j) * stride + x - 1]!
+      for (let i = 0; i < 8; i++) dst[dO + j * ds + i] = v
+    }
+    return
+  }
+  if (mode === C_DC) {
+    for (let by = 0; by < 2; by++) {
+      for (let bx = 0; bx < 2; bx++) {
+        let st = 0
+        let sl = 0
+        if (top) {
+          const o = (y - 1) * stride + x + bx * 4
+          for (let i = 0; i < 4; i++) st += int(p[o + i]!)
+        }
+        if (left) {
+          for (let j = 0; j < 4; j++) sl += int(p[(y + by * 4 + j) * stride + x - 1]!)
+        }
+        let dc = 128
+        if (bx === by) {
+          if (top && left) {
+            dc = (st + sl + 4) >> 3
+          } else if (left) {
+            dc = (sl + 2) >> 2
+          } else if (top) {
+            dc = (st + 2) >> 2
+          }
+        } else if (bx === 1) {
+          if (top) {
+            dc = (st + 2) >> 2
+          } else if (left) {
+            dc = (sl + 2) >> 2
+          }
+        } else {
+          if (left) {
+            dc = (sl + 2) >> 2
+          } else if (top) {
+            dc = (st + 2) >> 2
+          }
+        }
+        const v = dc
+        for (let j = 0; j < 4; j++) {
+          for (let i = 0; i < 4; i++) dst[dO + (by * 4 + j) * ds + bx * 4 + i] = v
+        }
+      }
+    }
+    return
+  }
+  const to = (y - 1) * stride + x
+  let hh = 0
+  let vv = 0
+  for (let k = 0; k < 4; k++) {
+    hh += (k + 1) * (int(p[to + 4 + k]!) - int(p[to + 2 - k]!))
+    vv += (k + 1) * (int(p[(y + 4 + k) * stride + x - 1]!) - int(p[(y + 2 - k) * stride + x - 1]!))
+  }
+  const a = 16 * (int(p[(y + 7) * stride + x - 1]!) + int(p[to + 7]!))
+  const b = (34 * hh + 32) >> 6
+  const c = (34 * vv + 32) >> 6
+  for (let j = 0; j < 8; j++) {
+    for (let i = 0; i < 8; i++) {
+      const v = (a + b * (i - 3) + c * (j - 3) + 16) >> 5
+      const c255 = v < 0 ? 0 : v > 255 ? 255 : v
+      dst[dO + j * ds + i] = c255
+    }
+  }
+}
+
+test("4x4 directional modes on a known edge", () => {
+  const e = new Int32Array(13)
+  for (let i = 0; i < 4; i++) e[3 - i] = 10 * (i + 1)
+  e[4] = 5
+  for (let i = 0; i < 8; i++) e[5 + i] = 100 + i * 4
+  const d = new Uint8Array(16)
+  const all = AV_TOP | AV_LEFT | AV_TL | AV_TR
+  pred4(d, 0, 4, e, I4_DDL, all)
+  expect((d[0]!)).toBe((100 + 2 * 104 + 108 + 2) >> 2)
+  expect((d[15]!)).toBe((124 + 3 * 128 + 2) >> 2)
+  pred4(d, 0, 4, e, I4_DDR, all)
+  expect((d[0]!)).toBe((100 + 2 * 5 + 10 + 2) >> 2)
+  expect((d[12]!)).toBe((40 + 2 * 30 + 20 + 2) >> 2)
+  pred4(d, 0, 4, e, I4_HU, all)
+  expect((d[15]!)).toBe(40)
+  expect((d[9]!)).toBe((30 + 3 * 40 + 2) >> 2)
+  expect((d[10]!)).toBe(40)
+  pred4(d, 0, 4, e, I4_VR, all)
+  expect((d[4]!)).toBe((10 + 2 * 5 + 100 + 2) >> 2)
+  expect((d[8]!)).toBe((20 + 2 * 10 + 5 + 2) >> 2)
+  pred4(d, 0, 4, e, I4_HD, all)
+  expect((d[1]!)).toBe((10 + 2 * 5 + 100 + 2) >> 2)
+  expect((d[3]!)).toBe((108 + 2 * 104 + 100 + 2) >> 2)
+  expect((d[2]!)).toBe((104 + 2 * 100 + 5 + 2) >> 2)
+})
