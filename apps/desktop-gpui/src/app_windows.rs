@@ -1809,6 +1809,14 @@ fn pinned_window_resolution_matches(
     requested.is_none_or(|requested| resolved.is_some_and(|resolved| requested == resolved))
 }
 
+/// An area screenshot never inherits a selection: re-arming one over an open
+/// Area picker (the Screenshot Area hotkey or tray item while a recording-mode
+/// area is drawn) reopens the overlays empty instead of keeping that crop.
+/// https://github.com/CapSoftware/Cap/issues/2432
+fn reopens_overlays(armed: Option<TargetType>, mode: TargetType, recording_mode: Mode) -> bool {
+    armed != Some(mode) || (mode == TargetType::Area && recording_mode == Mode::Screenshot)
+}
+
 pub(crate) fn reject_unavailable_window(cx: &mut App) {
     dismiss_target_overlays(cx);
     RecordingSession::global(cx).update(cx, |session, cx| {
@@ -1917,8 +1925,7 @@ fn open_overlays_core(request: OverlayRequest, cx: &mut App) -> bool {
     }
 
     let select = TargetSelect::global(cx);
-    let mode_changed = select.read(cx).mode != Some(request.mode);
-    if mode_changed {
+    if reopens_overlays(select.read(cx).mode, request.mode, request.recording_mode) {
         close_overlay_windows(cx);
     }
 
@@ -7480,6 +7487,42 @@ mod tests {
         assert!(!pinned_window_resolution_matches(
             Some(&selected),
             Some(&other)
+        ));
+    }
+
+    #[test]
+    fn area_screenshots_reopen_the_overlays_instead_of_inheriting_a_selection() {
+        assert!(reopens_overlays(None, TargetType::Area, Mode::Screenshot));
+        assert!(reopens_overlays(
+            Some(TargetType::Display),
+            TargetType::Area,
+            Mode::Studio
+        ));
+        assert!(reopens_overlays(
+            Some(TargetType::Area),
+            TargetType::Area,
+            Mode::Screenshot
+        ));
+
+        assert!(!reopens_overlays(
+            Some(TargetType::Area),
+            TargetType::Area,
+            Mode::Studio
+        ));
+        assert!(!reopens_overlays(
+            Some(TargetType::Area),
+            TargetType::Area,
+            Mode::Instant
+        ));
+        assert!(!reopens_overlays(
+            Some(TargetType::Display),
+            TargetType::Display,
+            Mode::Screenshot
+        ));
+        assert!(!reopens_overlays(
+            Some(TargetType::Window),
+            TargetType::Window,
+            Mode::Screenshot
         ));
     }
 
