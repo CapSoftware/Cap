@@ -1224,6 +1224,9 @@ impl MainWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Task<()>> {
+        if target_thumbnails::captures_paused() {
+            return None;
+        }
         match kind {
             TargetType::Display => {
                 if self.thumbnails.display_inflight() {
