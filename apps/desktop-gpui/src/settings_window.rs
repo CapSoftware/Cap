@@ -3248,8 +3248,6 @@ impl SettingsWindow {
         cx.notify();
     }
 
-    /// A macOS-style radio button: a hairline ring at rest, an accent disc
-    /// with a white centre when chosen.
     fn radio_dot(&self, checked: bool) -> gpui::Div {
         let theme = self.theme;
         let accent: Hsla = rgb(Theme::SETTINGS_ACCENT).into();
