@@ -1791,6 +1791,7 @@ impl CameraWindow {
             let (out_tx, out_rx) = flume::bounded::<camera_blur::BlurOutput>(2);
             if let Err(error) = std::thread::Builder::new()
                 .name("camera-blur".into())
+                .stack_size(crate::MEDIA_THREAD_STACK_SIZE)
                 .spawn(move || camera_blur::run(job_rx, out_tx))
             {
                 // job_rx is gone; the caller's try_send sees Disconnected and

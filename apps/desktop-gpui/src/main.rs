@@ -220,11 +220,20 @@ fn create_log_appender(
     }
 }
 
-#[cfg(target_os = "windows")]
-fn windows_runtime() -> tokio::runtime::Runtime {
+/// Stack for every thread that renders, decodes, encodes or runs camera
+/// effects. Render and export futures are generic over this crate's closures,
+/// so they compile at this crate's dev opt-level and need far more stack than
+/// Rust's 2 MiB default: the export estimate overflowed a 2 MiB tokio worker
+/// on macOS (2026-10-10). Only address space is reserved; pages are committed
+/// as the thread actually uses them.
+pub(crate) const MEDIA_THREAD_STACK_SIZE: usize = 16 * 1024 * 1024;
+
+/// gpui_tokio's own runtime keeps tokio's 2 MiB worker stacks; this one
+/// matches the Tauri app's runtime on every platform.
+fn app_runtime() -> tokio::runtime::Runtime {
     tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
-        .thread_stack_size(16 * 1024 * 1024)
+        .thread_stack_size(MEDIA_THREAD_STACK_SIZE)
         .enable_all()
         .build()
         .expect("Failed to initialize Tokio")
@@ -272,16 +281,11 @@ fn main() {
             crate::deeplink::submit_deep_link(&url);
         }
     });
-    #[cfg(target_os = "windows")]
-    let runtime = windows_runtime();
-    #[cfg(target_os = "windows")]
+    let runtime = app_runtime();
     let runtime_handle = runtime.handle().clone();
 
     app.run(move |cx: &mut App| {
-        #[cfg(target_os = "windows")]
         gpui_tokio::init_from_handle(cx, runtime_handle);
-        #[cfg(not(target_os = "windows"))]
-        gpui_tokio::init(cx);
         gpui_tokio::Tokio::spawn(cx, cap_utils::operation_diagnostics::run_checkpoints()).detach();
         // The dock icon: an unbundled dev binary shows the generic terminal
         // document without it. The bytes are the shipping app's icon.png.
@@ -711,12 +715,15 @@ fn main() {
             cx.activate(true);
         }
     });
-    #[cfg(target_os = "windows")]
     runtime.shutdown_background();
 }
 
-#[cfg(all(test, target_os = "windows"))]
+#[cfg(all(
+    test,
+    any(target_os = "windows", target_os = "macos", target_os = "linux")
+))]
 mod runtime_tests {
+    #[cfg(target_os = "windows")]
     fn current_stack_size() -> usize {
         let (mut low, mut high) = (0, 0);
         unsafe {
@@ -725,20 +732,41 @@ mod runtime_tests {
         high.saturating_sub(low)
     }
 
+    #[cfg(target_os = "macos")]
+    fn current_stack_size() -> usize {
+        unsafe { libc::pthread_get_stacksize_np(libc::pthread_self()) }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn current_stack_size() -> usize {
+        unsafe {
+            let mut attr = std::mem::zeroed::<libc::pthread_attr_t>();
+            assert_eq!(libc::pthread_getattr_np(libc::pthread_self(), &mut attr), 0);
+            let mut address = std::ptr::null_mut();
+            let mut size = 0;
+            assert_eq!(
+                libc::pthread_attr_getstack(&attr, &mut address, &mut size),
+                0
+            );
+            libc::pthread_attr_destroy(&mut attr);
+            size
+        }
+    }
+
     #[test]
-    fn media_workers_and_blocking_tasks_have_large_windows_stacks() {
-        let runtime = super::windows_runtime();
+    fn media_workers_and_blocking_tasks_have_large_stacks() {
+        let runtime = super::app_runtime();
         runtime.block_on(async {
             let worker_size = tokio::spawn(async { current_stack_size() }).await.unwrap();
             let blocking_size = tokio::task::spawn_blocking(current_stack_size)
                 .await
                 .unwrap();
             assert!(
-                worker_size >= 16 * 1024 * 1024,
+                worker_size >= super::MEDIA_THREAD_STACK_SIZE,
                 "worker stack: {worker_size}"
             );
             assert!(
-                blocking_size >= 16 * 1024 * 1024,
+                blocking_size >= super::MEDIA_THREAD_STACK_SIZE,
                 "blocking stack: {blocking_size}"
             );
         });

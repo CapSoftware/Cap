@@ -1273,6 +1273,7 @@ impl Feeds {
             let blur = self.camera_preview_blur.clone();
             if let Err(error) = std::thread::Builder::new()
                 .name("camera-preview".into())
+                .stack_size(crate::MEDIA_THREAD_STACK_SIZE)
                 .spawn(move || {
                     run_camera_preview_worker(CameraPreviewWorkerConfig {
                         frames: frame_rx,
