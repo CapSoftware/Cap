@@ -2860,7 +2860,7 @@ fn clamp_vector(vec: XY<f32>, max_len: f32) -> XY<f32> {
     }
 }
 
-/// Screen Studio blur semantics: the user amount scales the LENGTH of the
+/// Length-based blur semantics: the user amount scales the LENGTH of the
 /// smear (linear in the per-frame delta, no response curve) and the shader
 /// outputs the fully blurred result — strength is a pure on/off gate, never a
 /// crossfade with the sharp frame. Per frame the dominant delta wins: a size
@@ -3024,9 +3024,9 @@ fn notch_bounds(
 }
 
 const MOTION_BLUR_BASELINE_FPS: f32 = 60.0;
-/// Velocity is measured strictly against the previous frame (Screen Studio
-/// samples frame f vs f-1); averaging over more frames lags peaks and lets
-/// blur linger after motion stops.
+/// Velocity is measured strictly against the previous frame (frame f vs
+/// f-1); averaging over more frames lags peaks and lets blur linger after
+/// motion stops.
 const DISPLAY_MOTION_SAMPLE_FRAMES: u32 = 1;
 /// Skip blur when the per-frame delta is under ~1px — a sub-pixel kernel is
 /// visually the identity, so there is no pop at the boundary.
@@ -5383,7 +5383,7 @@ mod tests {
 
     #[test]
     fn display_zoom_blur_is_symmetric_in_and_out() {
-        // Screen Studio treats zoom-in and zoom-out identically: the radial
+        // Zoom-in and zoom-out are treated identically: the radial
         // amount is |1 - diag ratio| either way.
         let small = motion_bounds(XY::new(0.0, 0.0), XY::new(1920.0, 1080.0));
         let large = motion_bounds(XY::new(-960.0, -540.0), XY::new(2880.0, 1620.0));
