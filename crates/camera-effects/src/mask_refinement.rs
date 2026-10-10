@@ -2,6 +2,7 @@ pub struct MaskRefiner {
     width: usize,
     previous_frame: Vec<u8>,
     frame_difference: Vec<u8>,
+    row_motion: Vec<u8>,
     motion_history: Vec<u8>,
     labels: Vec<usize>,
     queue: Vec<usize>,
@@ -14,6 +15,7 @@ impl MaskRefiner {
             width,
             previous_frame: vec![0; width * height * 4],
             frame_difference: vec![0; width * height],
+            row_motion: vec![0; width * height],
             motion_history: vec![0; width * height],
             labels: vec![0; width * height],
             queue: Vec::with_capacity(width * height),
@@ -30,27 +32,44 @@ impl MaskRefiner {
     ) {
         self.remove_weak_regions(mask);
         if initialized {
-            for (index, difference) in self.frame_difference.iter_mut().enumerate() {
-                let offset = index * 4;
-                *difference = (0..3)
-                    .map(|channel| {
-                        frame[offset + channel].abs_diff(self.previous_frame[offset + channel])
-                    })
-                    .max()
-                    .unwrap_or(0);
+            for ((difference, current), previous) in self
+                .frame_difference
+                .iter_mut()
+                .zip(frame.chunks_exact(4))
+                .zip(self.previous_frame.chunks_exact(4))
+            {
+                *difference = current[0]
+                    .abs_diff(previous[0])
+                    .max(current[1].abs_diff(previous[1]))
+                    .max(current[2].abs_diff(previous[2]));
             }
-            let height = mask.len() / self.width;
-            for (index, value) in mask.iter_mut().enumerate() {
-                let x = index % self.width;
-                let y = index / self.width;
-                let mut motion = (u16::from(self.motion_history[index]) * 3 / 4) as u8;
-                for row in y.saturating_sub(1)..=(y + 1).min(height - 1) {
-                    for col in x.saturating_sub(1)..=(x + 1).min(self.width - 1) {
-                        motion = motion.max(self.frame_difference[row * self.width + col]);
-                    }
+            // 3x3 neighbourhood max, separably: along rows, then columns.
+            let width = self.width;
+            for (row, output) in self
+                .frame_difference
+                .chunks_exact(width)
+                .zip(self.row_motion.chunks_exact_mut(width))
+            {
+                for x in 0..width {
+                    output[x] = row[x.saturating_sub(1)]
+                        .max(row[x])
+                        .max(row[(x + 1).min(width - 1)]);
                 }
-                self.motion_history[index] = motion;
-                *value = smooth_mask_value(previous[index], *value, f32::from(motion) / 255.0);
+            }
+            let height = mask.len() / width;
+            for y in 0..height {
+                let above = &self.row_motion[y.saturating_sub(1) * width..][..width];
+                let current = &self.row_motion[y * width..][..width];
+                let below = &self.row_motion[(y + 1).min(height - 1) * width..][..width];
+                let start = y * width;
+                for x in 0..width {
+                    let index = start + x;
+                    let decayed = (u16::from(self.motion_history[index]) * 3 / 4) as u8;
+                    let motion = decayed.max(above[x]).max(current[x]).max(below[x]);
+                    self.motion_history[index] = motion;
+                    mask[index] =
+                        smooth_mask_value(previous[index], mask[index], f32::from(motion) / 255.0);
+                }
             }
         } else {
             self.motion_history.fill(0);
@@ -58,7 +77,67 @@ impl MaskRefiner {
         std::mem::swap(&mut self.previous_frame, frame);
     }
 
-    fn remove_weak_regions(&mut self, mask: &mut [f32]) {
+    /// Fills pockets inside the person that the background cannot reach from
+    /// the frame edge. Segmentation dips over printed logos, glasses glare
+    /// and bright jewellery; the guided filter then sharpens those dips into
+    /// holes shaped like the detail. Pockets larger than `max_area` samples
+    /// are left alone, so a real gap such as an arm on a hip stays open.
+    pub fn fill_holes(&mut self, mask: &mut [f32], max_area: usize) {
+        const SOLID: f32 = 0.9;
+        self.labels.fill(0);
+        self.queue.clear();
+        // The bottom edge cuts through the presenter's torso, so only the top
+        // and sides seed the background; background beside the shoulders
+        // always reaches one of those.
+        let height = mask.len() / self.width;
+        let top = 0..self.width;
+        let sides = (1..height).flat_map(|y| [y * self.width, y * self.width + self.width - 1]);
+        for index in top.chain(sides) {
+            if mask[index] < SOLID && self.labels[index] == 0 {
+                self.labels[index] = 1;
+                self.queue.push(index);
+            }
+        }
+        self.flood(mask, SOLID, 1);
+        for start in 0..mask.len() {
+            if mask[start] >= SOLID || self.labels[start] != 0 {
+                continue;
+            }
+            self.labels[start] = 2;
+            self.queue.clear();
+            self.queue.push(start);
+            self.flood(mask, SOLID, 2);
+            if self.queue.len() <= max_area {
+                for &index in &self.queue {
+                    mask[index] = 1.0;
+                }
+            }
+        }
+    }
+
+    /// Breadth-first fill from `queue` across samples below `limit`.
+    fn flood(&mut self, mask: &[f32], limit: f32, label: usize) {
+        let mut cursor = 0;
+        while cursor < self.queue.len() {
+            let index = self.queue[cursor];
+            cursor += 1;
+            let x = index % self.width;
+            let neighbors = [
+                (x > 0).then(|| index - 1),
+                (x + 1 < self.width).then_some(index + 1),
+                index.checked_sub(self.width),
+                (index + self.width < mask.len()).then_some(index + self.width),
+            ];
+            for neighbor in neighbors.into_iter().flatten() {
+                if self.labels[neighbor] == 0 && mask[neighbor] < limit {
+                    self.labels[neighbor] = label;
+                    self.queue.push(neighbor);
+                }
+            }
+        }
+    }
+
+    pub fn remove_weak_regions(&mut self, mask: &mut [f32]) {
         self.labels.fill(0);
         self.regions.clear();
         self.regions.push((0, 0));
@@ -164,6 +243,41 @@ mod tests {
         assert_eq!(mask[22 * 32 + 25], 0.0);
         assert_eq!(mask[3 * 32 + 21], 1.0);
         assert_eq!(mask[20 * 32 + 10], 1.0);
+    }
+
+    #[test]
+    fn enclosed_dips_are_filled_but_open_and_large_gaps_are_kept() {
+        let mut refiner = MaskRefiner::new(40, 40);
+        let mut mask = vec![0.0; 1600];
+        for y in 10..40 {
+            for x in 5..35 {
+                mask[y * 40 + x] = 1.0;
+            }
+        }
+        // A logo-sized dip, one touching the bottom edge, a large enclosed
+        // gap and a notch open to the background.
+        for y in 20..23 {
+            for x in 10..13 {
+                mask[y * 40 + x] = 0.5;
+            }
+        }
+        for y in 25..35 {
+            for x in 20..32 {
+                mask[y * 40 + x] = 0.0;
+            }
+        }
+        for y in 10..15 {
+            mask[y * 40 + 18] = 0.2;
+        }
+        for x in 26..29 {
+            mask[38 * 40 + x] = 0.0;
+            mask[39 * 40 + x] = 0.0;
+        }
+        refiner.fill_holes(&mut mask, 20);
+        assert_eq!(mask[21 * 40 + 11], 1.0);
+        assert_eq!(mask[30 * 40 + 25], 0.0);
+        assert_eq!(mask[12 * 40 + 18], 0.2);
+        assert_eq!(mask[39 * 40 + 27], 1.0);
     }
 
     #[test]
