@@ -152,8 +152,6 @@ impl MP4File {
         self.output.stream_time_base(stream_index)
     }
 
-    /// Writes packets an encoder produced on another thread into a
-    /// [`crate::PacketQueue`], in the order it produced them.
     pub fn write_packets(
         &mut self,
         packets: impl IntoIterator<Item = ffmpeg::Packet>,

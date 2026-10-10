@@ -115,8 +115,6 @@ impl AACEncoder {
         self.base.flush(output)
     }
 
-    /// [`Self::send_frame`] into any [`PacketSink`], such as a
-    /// [`crate::PacketQueue`] drained by a muxer on another thread.
     pub fn send_frame_to(
         &mut self,
         frame: frame::Audio,
@@ -224,9 +222,64 @@ mod tests {
         std::fs::read(path).unwrap()
     }
 
+    fn encode_two_streams(queued_delay_batches: usize) -> Vec<u8> {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("two-streams.mp4");
+        let mut output = format::output(&path).unwrap();
+        let mut direct = AACEncoder::init(
+            AudioInfo::new_raw(Sample::F32(Type::Packed), 48_000, 2),
+            &mut output,
+        )
+        .unwrap();
+        let mut queued = AACEncoder::init(
+            AudioInfo::new_raw(Sample::F32(Type::Packed), 48_000, 2),
+            &mut output,
+        )
+        .unwrap();
+        output.write_header().unwrap();
+
+        let mut queue = crate::PacketQueue::new(output.stream_time_base(queued.stream_index()));
+        let mut delayed = std::collections::VecDeque::new();
+        let mut position = 0;
+        for index in 0..240 {
+            let samples = [800, 801, 1_024, 997][index % 4];
+            direct
+                .send_frame(input_frame(position, samples), Duration::MAX, &mut output)
+                .unwrap();
+            queued
+                .send_frame_to(input_frame(position, samples), Duration::MAX, &mut queue)
+                .unwrap();
+            delayed.push_back(queue.take());
+            while delayed.len() > queued_delay_batches {
+                for packet in delayed.pop_front().unwrap() {
+                    output.write_packet(packet).unwrap();
+                }
+            }
+            position += samples as i64;
+        }
+        for packet in delayed.into_iter().flatten() {
+            output.write_packet(packet).unwrap();
+        }
+
+        direct.flush(&mut output).unwrap();
+        queued.flush(&mut output).unwrap();
+        output.write_trailer().unwrap();
+        drop(direct);
+        drop(queued);
+        drop(output);
+        std::fs::read(path).unwrap()
+    }
+
     #[test]
     fn checked_audio_submission_preserves_encoded_bytes() {
         assert_eq!(encode_audio(false), encode_audio(true));
+    }
+
+    #[test]
+    fn delayed_queued_packets_interleave_like_lockstep_writes() {
+        let lockstep = encode_two_streams(0);
+        assert_eq!(lockstep, encode_two_streams(1));
+        assert_eq!(lockstep, encode_two_streams(120));
     }
 
     #[test]

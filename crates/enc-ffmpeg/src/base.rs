@@ -10,8 +10,6 @@ use ffmpeg::{
     frame,
 };
 
-/// Where an encoder's finished packets go: straight into a muxer, or into a
-/// [`PacketQueue`] when the encoder runs on a different thread from the muxer.
 pub trait PacketSink {
     fn stream_time_base(&self, stream_index: usize) -> Rational;
     fn write_packet(&mut self, packet: Packet) -> Result<(), ffmpeg::Error>;
@@ -27,8 +25,6 @@ impl PacketSink for format::context::Output {
     }
 }
 
-/// Collects packets in the order an encoder would have written them, for a
-/// muxer on another thread to write with [`format::context::Output`].
 pub struct PacketQueue {
     stream_time_base: Rational,
     packets: Vec<Packet>,
