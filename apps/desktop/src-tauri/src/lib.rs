@@ -4734,6 +4734,14 @@ async fn start_playback(
 #[tauri::command]
 #[specta::specta]
 #[instrument(skip(editor_instance))]
+async fn set_playback_rate(editor_instance: WindowEditorInstance, rate: f64) -> Result<(), String> {
+    editor_instance.set_playback_rate(rate);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+#[instrument(skip(editor_instance))]
 async fn stop_playback(editor_instance: WindowEditorInstance) -> Result<(), String> {
     let mut state = editor_instance.state.lock().await;
 
@@ -6846,6 +6854,7 @@ fn specta_builder() -> tauri_specta::Builder {
             audio_library::add_audio_library_track,
             audio_library::import_audio_track_file,
             start_playback,
+            set_playback_rate,
             stop_playback,
             commit_editor_preparing_frame,
             start_editor_handoff_playback,

@@ -145,7 +145,13 @@ pub struct Playback {
     pub music: crate::audio::MusicTracks,
     pub audio_output: Arc<AudioOutput>,
     pub telemetry: Option<PlaybackTelemetry>,
+    /// Wall-clock speed multiplier for editing review (J/K/L shuttle). The
+    /// audio output consumes source audio at the same rate, keeping pitch.
+    pub playback_rate: f64,
 }
+
+pub const MIN_PLAYBACK_RATE: f64 = 0.25;
+pub const MAX_PLAYBACK_RATE: f64 = 4.0;
 
 #[derive(Clone, Copy)]
 pub enum PlaybackEvent {
@@ -586,6 +592,13 @@ impl Playback {
             diagnostic.field(Field::identifier("resource", resource));
         }
         let fps_f64 = fps as f64;
+        let playback_rate =
+            if adopted.is_none() && self.playback_rate.is_finite() && self.playback_rate > 0.0 {
+                self.playback_rate
+                    .clamp(MIN_PLAYBACK_RATE, MAX_PLAYBACK_RATE)
+            } else {
+                1.0
+            };
 
         if !(fps_f64.is_finite() && fps_f64 > 0.0) {
             warn!(fps, "Invalid FPS provided for playback start");
@@ -906,7 +919,7 @@ impl Playback {
             let (audio_playhead_tx, audio_playhead_rx) =
                 watch::channel(self.start_frame_number as f64 / fps as f64);
 
-            let frame_duration = Duration::from_secs_f64(1.0 / fps_f64);
+            let frame_duration = Duration::from_secs_f64(1.0 / (fps_f64 * playback_rate));
             let mut frame_number = self.start_frame_number;
             let mut seek_generation = 0;
             let mut prefetch_buffer: VecDeque<PrefetchedFrame> =
@@ -1287,6 +1300,7 @@ impl Playback {
                     duration_secs: duration,
                     start_playhead_secs: playback_start_frame as f64 / fps_f64,
                     playhead_rx: audio_playhead_rx.clone(),
+                    playback_rate,
                 })
             };
             let mut has_audio = audio_generation.is_some();
@@ -1349,6 +1363,7 @@ impl Playback {
                         duration_secs: duration,
                         start_playhead_secs: frame_number as f64 / fps_f64,
                         playhead_rx: audio_playhead_rx.clone(),
+                        playback_rate,
                     });
                     let started = runtime.block_on(async {
                         tokio::select! {
@@ -1425,6 +1440,7 @@ impl Playback {
                                 duration_secs: duration,
                                 start_playhead_secs: frame_number as f64 / fps_f64,
                                 playhead_rx: audio_playhead_rx.clone(),
+                                playback_rate,
                             },
                             generation,
                         );
@@ -1451,7 +1467,8 @@ impl Playback {
                     Instant::now().saturating_duration_since(next_deadline)
                 };
                 if adopted.is_none() && overshoot > frame_duration + frame_duration / 2 {
-                    let frames_behind = (overshoot.as_secs_f64() * fps_f64).floor() as u32;
+                    let frames_behind =
+                        (overshoot.as_secs_f64() * fps_f64 * playback_rate).floor() as u32;
                     let skip = frames_behind.max(1);
                     let skipped_from = frame_number;
                     frame_number += skip;
@@ -1926,8 +1943,8 @@ impl Playback {
                     break 'playback;
                 }
 
-                let expected_frame =
-                    clock_anchor_frame + (start.elapsed().as_secs_f64() * fps_f64).floor() as u32;
+                let expected_frame = clock_anchor_frame
+                    + (start.elapsed().as_secs_f64() * fps_f64 * playback_rate).floor() as u32;
 
                 if frame_number < expected_frame {
                     let frames_behind = expected_frame - frame_number;

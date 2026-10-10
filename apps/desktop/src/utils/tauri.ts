@@ -262,6 +262,9 @@ async importAudioTrackFile(sourcePath: string) : Promise<ImportedAudioTrack> {
 async startPlayback(fps: number, resolutionBase: XY<number>) : Promise<null> {
     return await TAURI_INVOKE("start_playback", { fps, resolutionBase });
 },
+async setPlaybackRate(rate: number) : Promise<null> {
+    return await TAURI_INVOKE("set_playback_rate", { rate });
+},
 async stopPlayback() : Promise<null> {
     return await TAURI_INVOKE("stop_playback");
 },
