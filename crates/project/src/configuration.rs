@@ -562,6 +562,46 @@ pub struct Camera {
     pub scale_during_zoom: f32,
     #[serde(default)]
     pub background_blur: BackgroundBlurConfig,
+    #[serde(default)]
+    pub crop: Option<CameraCrop>,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct CameraCrop {
+    pub left: f64,
+    pub top: f64,
+    pub right: f64,
+    pub bottom: f64,
+}
+
+impl CameraCrop {
+    pub const MAX_TOTAL: f64 = 0.9;
+
+    pub fn region(&self) -> [f64; 4] {
+        let axis = |start: f64, end: f64| {
+            let start = if start.is_finite() {
+                start.clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            let end = if end.is_finite() {
+                end.clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            let total = start + end;
+            let scale = if total > Self::MAX_TOTAL {
+                Self::MAX_TOTAL / total
+            } else {
+                1.0
+            };
+            (start * scale, 1.0 - end * scale)
+        };
+        let (x0, x1) = axis(self.left, self.right);
+        let (y0, y1) = axis(self.top, self.bottom);
+        [x0, y0, x1, y1]
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Type, Default)]
@@ -606,6 +646,7 @@ impl Default for Camera {
             rounding_type: CornerStyle::default(),
             scale_during_zoom: Self::default_scale_during_zoom(),
             background_blur: BackgroundBlurConfig::default(),
+            crop: None,
         }
     }
 }
@@ -3025,6 +3066,32 @@ mod notch_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn camera_crop_region_keeps_part_of_the_image() {
+        let crop = CameraCrop {
+            left: 0.1,
+            top: 0.2,
+            right: 0.3,
+            bottom: 0.0,
+        };
+        let region = crop.region();
+        assert!((region[0] - 0.1).abs() < 1e-9);
+        assert!((region[1] - 0.2).abs() < 1e-9);
+        assert!((region[2] - 0.7).abs() < 1e-9);
+        assert!((region[3] - 1.0).abs() < 1e-9);
+
+        let extreme = CameraCrop {
+            left: 0.8,
+            right: 0.8,
+            ..Default::default()
+        }
+        .region();
+        assert!(extreme[2] - extreme[0] > 0.09);
+
+        let legacy: Camera = serde_json::from_str(r#"{ "mirror": true }"#).unwrap();
+        assert!(legacy.crop.is_none());
+    }
 
     #[test]
     fn studio_sound_defaults_old_projects_to_balanced_and_round_trips_tiers() {
