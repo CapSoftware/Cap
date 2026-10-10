@@ -6,7 +6,9 @@ import {
 	Video,
 } from "@cap/web-domain";
 import { Effect, Option } from "effect";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const regionalStorage = vi.hoisted(() => ({ select: vi.fn(), s3: vi.fn() }));
 
 const deletion = vi.hoisted(() => ({
 	deleteVideo: vi.fn(),
@@ -89,9 +91,10 @@ vi.mock("@cap/web-backend", async () => {
 	return {
 		makeCurrentUserLayer,
 		Videos,
+		S3Buckets: { getRegionalUploadBucketId: regionalStorage.select },
 		Storage: {
 			getOrganizationWritableAccess: vi.fn(),
-			getS3WritableAccessForUser: vi.fn(),
+			getS3WritableAccessForUser: regionalStorage.s3,
 		},
 	};
 });
@@ -126,6 +129,8 @@ vi.mock("@/lib/google-drive-storage-quota", () => ({
 
 // The live-transcription stack drags in the whole workflow graph
 // (server-only modules included); these tests only care that create works.
+vi.mock("next/server", () => ({ after: vi.fn() }));
+
 vi.mock("@/lib/live-transcribe", () => ({
 	maybeStartLiveTranscription: vi.fn(async () => "skipped"),
 }));
@@ -138,7 +143,7 @@ vi.mock("drizzle-orm", () => ({
 }));
 
 const mockGetCurrentUser = getCurrentUser as ReturnType<typeof vi.fn>;
-const { Storage } = await import("@cap/web-backend");
+const { Storage, S3Buckets } = await import("@cap/web-backend");
 const { invalidateGoogleDriveStorageQuotaCache } = await import(
 	"@/lib/google-drive-storage-quota"
 );
@@ -666,4 +671,139 @@ describe("GET /create", () => {
 		expect(await response.json()).toEqual({ error: "invalid_video_id" });
 		expect(mockDb.insert).not.toHaveBeenCalled();
 	});
+});
+
+describe("new Instant recording regions", () => {
+	let app: typeof import("@/app/api/desktop/[...route]/video")["app"];
+	beforeEach(async () => {
+		vi.clearAllMocks();
+		vi.stubEnv("VERCEL", "1");
+		resetMockDb();
+		stubStorage();
+		regionalStorage.s3.mockReturnValue(
+			Effect.succeed({
+				bucketId: Option.none(),
+				storageIntegrationId: Option.none(),
+			}),
+		);
+		regionalStorage.select.mockImplementation((country: string | undefined) =>
+			Effect.succeed(
+				country === "JP" ? Option.some("cap-tokyo") : Option.none(),
+			),
+		);
+		defaultSharing.getNewVideoPublic.mockResolvedValue(true);
+		mockGetCurrentUser.mockResolvedValue({
+			id: "user-1",
+			defaultOrgId: "org-1",
+			activeOrganizationId: "org-1",
+		});
+		mockDb.where
+			.mockResolvedValueOnce([
+				{ id: "org-1", name: "Org", createdAt: new Date() },
+			])
+			.mockResolvedValueOnce([])
+			.mockResolvedValueOnce([{ count: 5 }]);
+		app = (await import("@/app/api/desktop/[...route]/video")).app;
+	});
+	afterEach(() => vi.unstubAllEnvs());
+
+	it.each(["desktopMP4", "desktopSegments"])(
+		"persists the selected bucket for %s",
+		async (mode) => {
+			const response = await app.request(
+				`https://cap.test/create?recordingMode=${mode}`,
+				{ headers: { "x-vercel-ip-country": "JP" } },
+			);
+			expect(response.status).toBe(200);
+			expect(insertedValues(schema.videos)?.bucket).toBe("cap-tokyo");
+			expect(S3Buckets.getRegionalUploadBucketId).toHaveBeenCalledWith("JP");
+		},
+	);
+
+	it.each(["US", "", "ZZ"])(
+		"keeps Virginia for country %s",
+		async (country) => {
+			const response = await app.request(
+				"https://cap.test/create?recordingMode=desktopMP4",
+				{ headers: country ? { "x-vercel-ip-country": country } : {} },
+			);
+			expect(response.status).toBe(200);
+			expect(insertedValues(schema.videos)?.bucket).toBeNull();
+		},
+	);
+
+	it.each([
+		{
+			bucket: "custom-bucket",
+			integration: null,
+			vercel: "1",
+			query: "recordingMode=desktopMP4",
+		},
+		{
+			bucket: null,
+			integration: "drive-id",
+			vercel: "1",
+			query: "recordingMode=desktopMP4",
+		},
+		{
+			bucket: null,
+			integration: null,
+			vercel: "",
+			query: "recordingMode=desktopMP4",
+		},
+		{
+			bucket: null,
+			integration: null,
+			vercel: "1",
+			query: "isScreenshot=true&recordingMode=desktopMP4",
+		},
+		{
+			bucket: null,
+			integration: null,
+			vercel: "1",
+			query: "recordingMode=hls",
+		},
+	])(
+		"preserves storage outside eligible new Instant recordings (%#)",
+		async ({ bucket, integration, vercel, query }) => {
+			vi.stubEnv("VERCEL", vercel);
+			regionalStorage.s3.mockReturnValue(
+				Effect.succeed({
+					bucketId: Option.fromNullable(bucket),
+					storageIntegrationId: Option.fromNullable(integration),
+				}),
+			);
+			const response = await app.request(`https://cap.test/create?${query}`, {
+				headers: { "x-vercel-ip-country": "JP" },
+			});
+			expect(response.status).toBe(200);
+			expect(insertedValues(schema.videos)).toMatchObject({
+				bucket,
+				storageIntegrationId: integration,
+			});
+			expect(S3Buckets.getRegionalUploadBucketId).not.toHaveBeenCalled();
+		},
+	);
+
+	it.each([null, "cap-tokyo", "custom-bucket"])(
+		"does not reroute an existing recording after travel: %s",
+		async (bucket) => {
+			mockDb.where.mockReset().mockResolvedValue([
+				{
+					id: "existing",
+					ownerId: "user-1",
+					bucket,
+					source: { type: "desktopMP4" },
+				},
+			]);
+			const response = await app.request(
+				"https://cap.test/create?videoId=existing&recordingMode=desktopMP4",
+				{ headers: { "x-vercel-ip-country": "JP" } },
+			);
+			expect(response.status).toBe(200);
+			expect(mockDb.insert).not.toHaveBeenCalled();
+			expect(mockDb.update).not.toHaveBeenCalled();
+			expect(S3Buckets.getRegionalUploadBucketId).not.toHaveBeenCalled();
+		},
+	);
 });
