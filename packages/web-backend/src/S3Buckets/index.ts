@@ -299,8 +299,6 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 		AwsCredentials.Default,
 	],
 }) {
-	static getRegionalUploadBucketId = (country: string | undefined) =>
-		Effect.map(S3Buckets, (b) => b.getRegionalUploadBucketId(country));
 	static getBucketAccess = (bucketId: Option.Option<S3Bucket.S3BucketId>) =>
 		Effect.flatMap(S3Buckets, (b) =>
 			b.getBucketAccess(Option.fromNullable(bucketId).pipe(Option.flatten)),

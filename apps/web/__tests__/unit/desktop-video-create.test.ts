@@ -5,7 +5,7 @@ import {
 	Storage as StorageDomain,
 	Video,
 } from "@cap/web-domain";
-import { Effect, Option } from "effect";
+import { Effect, Layer, Option } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const regionalStorage = vi.hoisted(() => ({ select: vi.fn(), s3: vi.fn() }));
@@ -88,10 +88,13 @@ vi.mock("@cap/web-backend", async () => {
 	class Videos extends Effect.Service<Videos>()("Videos", {
 		sync: () => ({ delete: deletion.deleteVideo }),
 	}) {}
+	class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
+		sync: () => ({ getRegionalUploadBucketId: regionalStorage.select }),
+	}) {}
 	return {
 		makeCurrentUserLayer,
 		Videos,
-		S3Buckets: { getRegionalUploadBucketId: regionalStorage.select },
+		S3Buckets,
 		Storage: {
 			getOrganizationWritableAccess: vi.fn(),
 			getS3WritableAccessForUser: regionalStorage.s3,
@@ -101,7 +104,7 @@ vi.mock("@cap/web-backend", async () => {
 
 vi.mock("@/lib/server", async () => {
 	const { Effect } = await import("effect");
-	const { Videos } = await import("@cap/web-backend");
+	const { Videos, S3Buckets } = await import("@cap/web-backend");
 	return {
 		runPromise: vi.fn(async (value: unknown) =>
 			Effect.isEffect(value)
@@ -110,9 +113,11 @@ vi.mock("@/lib/server", async () => {
 							value as Effect.Effect<
 								unknown,
 								unknown,
-								InstanceType<typeof Videos>
+								InstanceType<typeof Videos> | InstanceType<typeof S3Buckets>
 							>
-						).pipe(Effect.provide(Videos.Default)),
+						).pipe(
+							Effect.provide(Layer.mergeAll(Videos.Default, S3Buckets.Default)),
+						),
 					)
 				: value,
 		),
@@ -143,7 +148,7 @@ vi.mock("drizzle-orm", () => ({
 }));
 
 const mockGetCurrentUser = getCurrentUser as ReturnType<typeof vi.fn>;
-const { Storage, S3Buckets } = await import("@cap/web-backend");
+const { Storage } = await import("@cap/web-backend");
 const { invalidateGoogleDriveStorageQuotaCache } = await import(
 	"@/lib/google-drive-storage-quota"
 );
@@ -687,9 +692,7 @@ describe("new Instant recording regions", () => {
 			}),
 		);
 		regionalStorage.select.mockImplementation((country: string | undefined) =>
-			Effect.succeed(
-				country === "JP" ? Option.some("cap-tokyo") : Option.none(),
-			),
+			country === "JP" ? Option.some("cap-tokyo") : Option.none(),
 		);
 		defaultSharing.getNewVideoPublic.mockResolvedValue(true);
 		mockGetCurrentUser.mockResolvedValue({
@@ -716,7 +719,7 @@ describe("new Instant recording regions", () => {
 			);
 			expect(response.status).toBe(200);
 			expect(insertedValues(schema.videos)?.bucket).toBe("cap-tokyo");
-			expect(S3Buckets.getRegionalUploadBucketId).toHaveBeenCalledWith("JP");
+			expect(regionalStorage.select).toHaveBeenCalledWith("JP");
 		},
 	);
 
@@ -781,7 +784,7 @@ describe("new Instant recording regions", () => {
 				bucket,
 				storageIntegrationId: integration,
 			});
-			expect(S3Buckets.getRegionalUploadBucketId).not.toHaveBeenCalled();
+			expect(regionalStorage.select).not.toHaveBeenCalled();
 		},
 	);
 
@@ -803,7 +806,7 @@ describe("new Instant recording regions", () => {
 			expect(response.status).toBe(200);
 			expect(mockDb.insert).not.toHaveBeenCalled();
 			expect(mockDb.update).not.toHaveBeenCalled();
-			expect(S3Buckets.getRegionalUploadBucketId).not.toHaveBeenCalled();
+			expect(regionalStorage.select).not.toHaveBeenCalled();
 		},
 	);
 });

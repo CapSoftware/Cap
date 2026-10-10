@@ -304,22 +304,28 @@ app.get(
 				);
 			}
 
-			const writable = await (clientSupportsGoogleDriveUpload
-				? Storage.getWritableAccessForUser(user.id, videoOrgId)
-				: Storage.getS3WritableAccessForUser(user.id, videoOrgId)
-			).pipe(runPromise);
-
-			const bucketId =
-				Option.isNone(writable.bucketId) &&
-				Option.isNone(writable.storageIntegrationId) &&
-				!isScreenshot &&
-				(recordingMode === "desktopSegments" ||
-					recordingMode === "desktopMP4") &&
-				process.env.VERCEL === "1"
-					? await S3Buckets.getRegionalUploadBucketId(
+			const writable = await Effect.gen(function* () {
+				const writable = yield* clientSupportsGoogleDriveUpload
+					? Storage.getWritableAccessForUser(user.id, videoOrgId)
+					: Storage.getS3WritableAccessForUser(user.id, videoOrgId);
+				if (
+					Option.isNone(writable.bucketId) &&
+					Option.isNone(writable.storageIntegrationId) &&
+					!isScreenshot &&
+					(recordingMode === "desktopSegments" ||
+						recordingMode === "desktopMP4") &&
+					process.env.VERCEL === "1"
+				) {
+					const buckets = yield* S3Buckets;
+					return {
+						...writable,
+						bucketId: buckets.getRegionalUploadBucketId(
 							c.req.header("x-vercel-ip-country"),
-						).pipe(runPromise)
-					: writable.bucketId;
+						),
+					};
+				}
+				return writable;
+			}).pipe(runPromise);
 
 			await db()
 				.insert(videos)
@@ -337,7 +343,7 @@ app.get(
 									? { type: "desktopSegments" as const }
 									: undefined,
 					isScreenshot,
-					bucket: Option.getOrNull(bucketId),
+					bucket: Option.getOrNull(writable.bucketId),
 					storageIntegrationId: Option.getOrNull(writable.storageIntegrationId),
 					public: await getNewVideoPublic(videoOrgId),
 					duration: durationInSecs,
