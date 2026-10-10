@@ -46,7 +46,7 @@ serde = { workspace = true }
 serde_json = "1.0"
 relative-path = { version = "1.9.3", features = ["serde"] }
 uuid = { version = "1.18.1", features = ["v4"] }
-image = "0.25.2"
+image = { version = "0.25.2", default-features = false, features = ["rayon", "bmp", "dds", "exr", "ff", "gif", "hdr", "ico", "jpeg", "png", "pnm", "qoi", "tga", "tiff", "webp"] }
 tempfile = "3"
 sentry.workspace = true
 futures = { workspace = true }

@@ -439,44 +439,7 @@ pub fn fitted_capture_size(source: Option<(f64, f64)>) -> (usize, usize) {
 
 /// `normalize_thumbnail_dimensions` (`thumbnails/mod.rs:44-87`), verbatim.
 pub fn normalize_thumbnail_dimensions(image: &RgbaImage) -> RgbaImage {
-    let width = image.width();
-    let height = image.height();
-
-    if width == THUMBNAIL_WIDTH && height == THUMBNAIL_HEIGHT {
-        return image.clone();
-    }
-
-    if width == 0 || height == 0 {
-        return RgbaImage::from_pixel(THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT, image::Rgba([0, 0, 0, 0]));
-    }
-
-    let scale = (THUMBNAIL_WIDTH as f32 / width as f32)
-        .min(THUMBNAIL_HEIGHT as f32 / height as f32)
-        .max(f32::MIN_POSITIVE);
-
-    let scaled_width = (width as f32 * scale)
-        .round()
-        .clamp(1.0, THUMBNAIL_WIDTH as f32) as u32;
-    let scaled_height = (height as f32 * scale)
-        .round()
-        .clamp(1.0, THUMBNAIL_HEIGHT as f32) as u32;
-
-    let resized = image::imageops::resize(
-        image,
-        scaled_width.max(1),
-        scaled_height.max(1),
-        image::imageops::FilterType::Lanczos3,
-    );
-
-    let mut canvas =
-        RgbaImage::from_pixel(THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT, image::Rgba([0, 0, 0, 0]));
-
-    let offset_x = (THUMBNAIL_WIDTH - scaled_width) / 2;
-    let offset_y = (THUMBNAIL_HEIGHT - scaled_height) / 2;
-
-    image::imageops::overlay(&mut canvas, &resized, offset_x as i64, offset_y as i64);
-
-    canvas
+    cap_gpui_kernels::thumbnail::fit_centered(image, THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT)
 }
 
 /// Run a capture sweep somewhere it is allowed to be non-`Send`.

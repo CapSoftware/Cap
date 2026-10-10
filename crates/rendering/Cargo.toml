@@ -32,7 +32,7 @@ resvg = "0.45"
 tiny-skia = "0.11"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-image = "0.25.2"
+image = { version = "0.25.2", default-features = false, features = ["rayon", "bmp", "dds", "exr", "ff", "gif", "hdr", "ico", "jpeg", "png", "pnm", "qoi", "tga", "tiff", "webp"] }
 cap-enc-ffmpeg = { path = "../enc-ffmpeg" }
 cap-video-decode = { path = "../video-decode" }
 ffmpeg-hw-device = { path = "../ffmpeg-hw-device" }

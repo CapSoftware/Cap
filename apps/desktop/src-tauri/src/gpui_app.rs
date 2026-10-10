@@ -512,7 +512,7 @@ fn macos_reopen_incumbent(path: &std::path::Path, pid: u32) -> std::io::Result<b
         }))
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 fn reopen_time_remaining(
     started: std::time::Instant,
     timeout: std::time::Duration,
@@ -528,7 +528,7 @@ fn reopen_time_remaining(
         })
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 fn send_gpui_reopen(
     endpoint: GpuiForwardingEndpoint,
     started: std::time::Instant,
@@ -604,6 +604,31 @@ pub(crate) fn request_gpui_reopen(pid: u32) -> Result<(), String> {
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                 Err(error) => return Err(error),
+            }
+            std::thread::sleep(
+                reopen_time_remaining(started, timeout)?.min(std::time::Duration::from_millis(50)),
+            );
+        }
+    };
+    request().map_err(|error| format!("Could not confirm reopening the running Cap GPUI: {error}"))
+}
+
+#[cfg(windows)]
+fn request_gpui_reopen(pid: u32) -> Result<(), String> {
+    use windows::Win32::UI::WindowsAndMessaging::AllowSetForegroundWindow;
+
+    let request = || -> std::io::Result<()> {
+        let started = std::time::Instant::now();
+        let timeout = std::time::Duration::from_secs(2);
+        let endpoint_path = gpui_pidfile().with_extension("ipc");
+        loop {
+            if let Some(endpoint) = std::fs::read_to_string(&endpoint_path)
+                .ok()
+                .and_then(|contents| parse_gpui_forwarding_endpoint(&contents))
+                .filter(|endpoint| endpoint.pid == pid)
+            {
+                let _ = unsafe { AllowSetForegroundWindow(pid) };
+                return send_gpui_reopen(endpoint, started, timeout);
             }
             std::thread::sleep(
                 reopen_time_remaining(started, timeout)?.min(std::time::Duration::from_millis(50)),
@@ -1060,7 +1085,15 @@ fn redirect_decision(app: &AppHandle) -> Result<bool, String> {
                 forward_deep_links_to_gpui(pid, &args);
             }
             #[cfg(windows)]
-            forward_deep_links_to_gpui(pid, &args);
+            if !forward_deep_links_to_gpui(pid, &args) {
+                match request_gpui_reopen(pid) {
+                    Ok(()) => {
+                        info!(pid, "Cap GPUI is already running; reopened its main window");
+                        return Ok(true);
+                    }
+                    Err(error) => warn!(%error, "could not reopen the running Cap GPUI"),
+                }
+            }
         }
         #[cfg(target_os = "linux")]
         launch_linux_activation(binary_path(app).as_deref(), spawn_detached)?;

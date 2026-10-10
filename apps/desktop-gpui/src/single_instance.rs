@@ -21,11 +21,11 @@ struct ForwardingEndpoint {
 #[derive(Debug, PartialEq, Eq)]
 enum ForwardedRequest {
     DeepLink(String),
-    #[cfg(target_os = "macos")]
+    #[cfg(any(windows, target_os = "macos"))]
     Reopen,
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(windows, target_os = "macos"))]
 const REOPEN_ACK: u8 = 1;
 
 fn pidfile() -> PathBuf {
@@ -457,7 +457,7 @@ fn send_macos_forwarded_request(
     Ok(())
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(windows, target_os = "macos"))]
 fn acknowledge_reopen(
     writer: &mut impl std::io::Write,
     enqueue: impl FnOnce() -> bool,
@@ -897,8 +897,12 @@ fn acquire_windows_instance(path: &Path) {
         for _ in 0..40 {
             if let Some(pid) = windows_instance_pid(path) {
                 tracing::info!(pid, "Cap GPUI is already running; bringing it forward");
-                forward_windows_deep_links(path, pid);
-                activate_windows_instance(pid);
+                if forward_windows_deep_links(path, pid) {
+                    activate_windows_instance(pid);
+                } else if let Err(error) = reopen_windows_instance(path, pid) {
+                    tracing::warn!(%error, "could not reopen the running Cap GPUI");
+                    activate_windows_instance(pid);
+                }
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(50));
@@ -954,7 +958,6 @@ fn start_deep_link_forwarding(path: &Path) -> std::io::Result<()> {
                         let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(2)));
                         match read_forwarded_request(&mut stream, endpoint.secret) {
                             Ok(ForwardedRequest::DeepLink(url)) => crate::deeplink::submit_deep_link(&url),
-                            #[cfg(target_os = "macos")]
                             Ok(ForwardedRequest::Reopen) => {
                                 let result = stream.set_write_timeout(Some(std::time::Duration::from_secs(2)))
                                     .and_then(|()| acknowledge_reopen(&mut stream, crate::deeplink::submit_reopen));
@@ -1013,7 +1016,7 @@ fn publish_forwarding_endpoint(temporary_path: &Path, endpoint_path: &Path) -> s
 }
 
 #[cfg(windows)]
-fn forward_windows_deep_links(path: &Path, pid: u32) {
+fn forward_windows_deep_links(path: &Path, pid: u32) -> bool {
     use std::io::Write;
 
     let urls = std::env::args()
@@ -1021,23 +1024,12 @@ fn forward_windows_deep_links(path: &Path, pid: u32) {
         .filter(|argument| is_forwardable_deep_link(argument))
         .collect::<Vec<_>>();
     if urls.is_empty() {
-        return;
+        return false;
     }
 
-    let endpoint_path = path.with_extension("ipc");
-    let endpoint = (0..40).find_map(|attempt| {
-        let endpoint = std::fs::read_to_string(&endpoint_path)
-            .ok()
-            .and_then(|contents| parse_forwarding_endpoint(&contents))
-            .filter(|endpoint| endpoint.pid == pid);
-        if endpoint.is_none() && attempt < 39 {
-            std::thread::sleep(std::time::Duration::from_millis(50));
-        }
-        endpoint
-    });
-    let Some(endpoint) = endpoint else {
+    let Some(endpoint) = windows_forwarding_endpoint(path, pid) else {
         tracing::warn!("could not find the running Cap GPUI deep-link endpoint");
-        return;
+        return true;
     };
 
     for url in urls {
@@ -1052,6 +1044,60 @@ fn forward_windows_deep_links(path: &Path, pid: u32) {
             tracing::warn!(%error, "could not forward a Cap deep link to the running instance");
         }
     }
+    true
+}
+
+#[cfg(windows)]
+fn windows_forwarding_endpoint(path: &Path, pid: u32) -> Option<ForwardingEndpoint> {
+    let endpoint_path = path.with_extension("ipc");
+    (0..40).find_map(|attempt| {
+        let endpoint = std::fs::read_to_string(&endpoint_path)
+            .ok()
+            .and_then(|contents| parse_forwarding_endpoint(&contents))
+            .filter(|endpoint| endpoint.pid == pid);
+        if endpoint.is_none() && attempt < 39 {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        endpoint
+    })
+}
+
+#[cfg(windows)]
+fn reopen_windows_instance(path: &Path, pid: u32) -> std::io::Result<()> {
+    use windows_sys::Win32::UI::WindowsAndMessaging::AllowSetForegroundWindow;
+
+    let endpoint = windows_forwarding_endpoint(path, pid).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "the running Cap GPUI has no forwarding endpoint",
+        )
+    })?;
+    unsafe { AllowSetForegroundWindow(pid) };
+    send_windows_reopen(endpoint)
+}
+
+#[cfg(windows)]
+fn send_windows_reopen(endpoint: ForwardingEndpoint) -> std::io::Result<()> {
+    use std::io::{Read, Write};
+
+    let timeout = std::time::Duration::from_secs(2);
+    let mut stream = std::net::TcpStream::connect_timeout(
+        &(std::net::Ipv4Addr::LOCALHOST, endpoint.port).into(),
+        timeout,
+    )?;
+    stream.set_write_timeout(Some(timeout))?;
+    stream.set_read_timeout(Some(timeout))?;
+    stream.write_all(&endpoint.secret.to_be_bytes())?;
+    stream.write_all(&0_u32.to_be_bytes())?;
+    let mut acknowledgment = [0_u8; 1];
+    stream.read_exact(&mut acknowledgment)?;
+    if acknowledgment[0] != REOPEN_ACK {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Cap GPUI did not acknowledge the reopen request",
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(any(windows, target_os = "macos", test))]
@@ -1092,7 +1138,7 @@ fn read_forwarded_request(
     let mut size = [0_u8; 4];
     reader.read_exact(&mut size)?;
     let size = u32::from_be_bytes(size) as usize;
-    #[cfg(target_os = "macos")]
+    #[cfg(any(windows, target_os = "macos"))]
     if size == 0 {
         return Ok(ForwardedRequest::Reopen);
     }
@@ -1475,7 +1521,7 @@ mod tests {
         payload.extend_from_slice(url.as_str().as_bytes());
         let authenticated = match read_forwarded_request(&mut payload.as_slice(), secret).unwrap() {
             ForwardedRequest::DeepLink(url) => url,
-            #[cfg(target_os = "macos")]
+            #[cfg(any(windows, target_os = "macos"))]
             ForwardedRequest::Reopen => panic!("A project action must remain a deep link"),
         };
         let authenticated = reqwest::Url::parse(&authenticated).unwrap();
@@ -1534,6 +1580,30 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn windows_reopen_waits_for_the_running_instance_to_queue_it() {
+        for queued in [true, false] {
+            let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+            let endpoint = ForwardingEndpoint {
+                pid: 123,
+                port: listener.local_addr().unwrap().port(),
+                secret: 456,
+            };
+            let server = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                assert_eq!(
+                    read_forwarded_request(&mut stream, endpoint.secret).unwrap(),
+                    ForwardedRequest::Reopen
+                );
+                super::acknowledge_reopen(&mut stream, || queued).is_ok()
+            });
+
+            assert_eq!(super::send_windows_reopen(endpoint).is_ok(), queued);
+            assert_eq!(server.join().unwrap(), queued);
+        }
+    }
+
     #[test]
     fn forwarded_deep_links_require_the_owner_secret_and_bounded_payload() {
         let secret = 0x0123_4567_89ab_cdef_u64;
@@ -1561,7 +1631,7 @@ mod tests {
                 .kind(),
             std::io::ErrorKind::InvalidData
         );
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(windows, target_os = "macos")))]
         {
             let mut empty = secret.to_be_bytes().to_vec();
             empty.extend_from_slice(&0_u32.to_be_bytes());

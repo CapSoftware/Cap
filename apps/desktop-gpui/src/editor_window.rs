@@ -562,17 +562,12 @@ fn recorded_cursor_family(studio: &StudioRecordingMeta) -> Option<CursorFamily> 
 ///   (`frame_pipeline.rs:809-827`) and gpui's atlas expects BGRA, the same
 ///   swap `library::decode_thumbnail` does after decoding a thumbnail.
 pub fn frame_image(frame: &RenderedFrame) -> Option<Arc<RenderImage>> {
-    let row_bytes = frame.width as usize * 4;
-    let mut tight = Vec::with_capacity(row_bytes * frame.height as usize);
-    for row in frame.data.chunks(frame.padded_bytes_per_row as usize) {
-        if row.len() < row_bytes {
-            return None;
-        }
-        tight.extend_from_slice(&row[..row_bytes]);
-    }
-    for pixel in tight.chunks_exact_mut(4) {
-        pixel.swap(0, 2);
-    }
+    let tight = cap_gpui_kernels::frame::unpad_rgba_to_bgra(
+        &frame.data,
+        frame.width as usize,
+        frame.padded_bytes_per_row as usize,
+        frame.height as usize,
+    )?;
     let buffer = image::RgbaImage::from_raw(frame.width, frame.height, tight)?;
     Some(Arc::new(RenderImage::new(smallvec::smallvec![
         image::Frame::new(buffer)

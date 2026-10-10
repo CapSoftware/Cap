@@ -3986,40 +3986,18 @@ pub(crate) fn masked_region_image(
         return None;
     }
 
-    let (x0, y0, width, height) = mask_region(mask, rect, (frame_width, frame_height))?;
-
-    let mut region = Vec::with_capacity(width as usize * height as usize * 4);
-    for row in 0..height {
-        let start = (y0 + row) as usize * stride + x0 as usize * 4;
-        region.extend_from_slice(&rgba[start..start + width as usize * 4]);
-    }
-    let source = image::RgbaImage::from_raw(width, height, region)?;
-
+    let region = mask_region(mask, rect, (frame_width, frame_height))?;
     let level = mask.mask_level.unwrap_or(MASK_FALLBACK_LEVEL).max(1.);
-    let processed = if mask.mask_type == Some(MaskType::Pixelate) {
-        // `blockSize = Math.max(2, Math.round(level))`, nearest both ways.
-        let block = (level.round() as u32).max(2);
-        let small = image::imageops::resize(
-            &source,
-            (width / block).max(1),
-            (height / block).max(1),
-            image::imageops::FilterType::Nearest,
-        );
-        image::imageops::resize(&small, width, height, image::imageops::FilterType::Nearest)
-    } else {
-        // `blurRegion`: `scale = Math.max(2, Math.round(level / 4))`, with
-        // smoothing on both passes.
-        let factor = ((level / 4.).round() as u32).max(2);
-        let small = image::imageops::resize(
-            &source,
-            (width / factor).max(1),
-            (height / factor).max(1),
-            image::imageops::FilterType::Triangle,
-        );
-        image::imageops::resize(&small, width, height, image::imageops::FilterType::Triangle)
-    };
+    let processed = cap_gpui_kernels::screenshot::mask_filter(
+        rgba,
+        frame_width,
+        frame_height,
+        region,
+        mask.mask_type == Some(MaskType::Pixelate),
+        level,
+    )?;
 
-    Some((x0, y0, processed))
+    Some((region.0, region.1, processed))
 }
 
 /// One mask's region in whole frame pixels: its own rect, clipped to the

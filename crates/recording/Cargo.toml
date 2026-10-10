@@ -46,7 +46,7 @@ chrono = "0.4.38"
 uuid = { version = "1.18.1", features = ["v4"] }
 tracing.workspace = true
 device_query = "4.0.1"
-image = "0.25.2"
+image = { version = "0.25.2", default-features = false, features = ["rayon", "bmp", "dds", "exr", "ff", "gif", "hdr", "ico", "jpeg", "png", "pnm", "qoi", "tga", "tiff", "webp"] }
 either = "1.13.0"
 tracing-subscriber = { version = "0.3.19" }
 relative-path = "1.9.3"
