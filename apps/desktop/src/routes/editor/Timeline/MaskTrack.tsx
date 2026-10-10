@@ -7,6 +7,12 @@ import { defaultMaskSegment } from "../masks";
 import { getSegmentTrack, sortTrackSegments } from "../timelineTracks";
 import { useTimelineContext } from "./context";
 import {
+	clearSnapGuide,
+	liveSnapTargets,
+	snapEdgeTime,
+	snapMoveDelta,
+} from "./segment-snapping";
+import {
 	SegmentContent,
 	SegmentHandle,
 	SegmentLabel,
@@ -37,6 +43,11 @@ export function MaskTrack(props: {
 		projectHistory,
 		projectActions,
 	} = useEditorContext();
+	const snapTargetsFor = (index: number) =>
+		liveSnapTargets(project.timeline, () => editorState.playbackTime, {
+			type: "mask",
+			index,
+		});
 	const { secsPerPixel, timelineBounds } = useTimelineContext();
 	const [draggingSegment, setDraggingSegment] = createSignal(false);
 	const [hoveringTrack, setHoveringTrack] = createSignal(false);
@@ -278,6 +289,7 @@ export function MaskTrack(props: {
 					}
 					props.handleUpdatePlayhead(e);
 				}
+				clearSnapGuide();
 				props.onDragStateChanged({ type: "idle" });
 				setDraggingSegment(false);
 			}
@@ -406,10 +418,23 @@ export function MaskTrack(props: {
 												bounds.nextStart - minDuration(),
 											),
 										);
-										return { start, minValue, maxValue };
+										return {
+											start,
+											minValue,
+											maxValue,
+											targets: snapTargetsFor(index),
+										};
 									},
 									(e, value, initialMouseX) => {
-										const delta = (e.clientX - initialMouseX) * secsPerPixel();
+										const delta =
+											snapEdgeTime(
+												value.start +
+													(e.clientX - initialMouseX) * secsPerPixel(),
+												e,
+												value.targets,
+												secsPerPixel(),
+												{ min: value.minValue, max: value.maxValue },
+											) - value.start;
 										const next = Math.max(
 											value.minValue,
 											Math.min(value.maxValue, value.start + delta),
@@ -445,10 +470,21 @@ export function MaskTrack(props: {
 											original,
 											minDelta,
 											maxDelta,
+											targets: snapTargetsFor(index),
 										};
 									},
 									(e, value, initialMouseX) => {
-										const delta = (e.clientX - initialMouseX) * secsPerPixel();
+										const delta = snapMoveDelta(
+											value.original,
+											(e.clientX - initialMouseX) * secsPerPixel(),
+											e,
+											value.targets,
+											secsPerPixel(),
+											{
+												min: Math.min(value.minDelta, value.maxDelta),
+												max: Math.max(value.minDelta, value.maxDelta),
+											},
+										);
 										const lowerBound = Math.min(value.minDelta, value.maxDelta);
 										const upperBound = Math.max(value.minDelta, value.maxDelta);
 										const clampedDelta = Math.min(
@@ -495,10 +531,23 @@ export function MaskTrack(props: {
 										const end = segment.end;
 										const minValue = segment.start + minDuration();
 										const maxValue = Math.max(minValue, bounds.nextStart);
-										return { end, minValue, maxValue };
+										return {
+											end,
+											minValue,
+											maxValue,
+											targets: snapTargetsFor(index),
+										};
 									},
 									(e, value, initialMouseX) => {
-										const delta = (e.clientX - initialMouseX) * secsPerPixel();
+										const delta =
+											snapEdgeTime(
+												value.end +
+													(e.clientX - initialMouseX) * secsPerPixel(),
+												e,
+												value.targets,
+												secsPerPixel(),
+												{ min: value.minValue, max: value.maxValue },
+											) - value.end;
 										const next = Math.max(
 											value.minValue,
 											Math.min(value.maxValue, value.end + delta),
