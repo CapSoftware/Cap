@@ -178,7 +178,6 @@ fn glass_tint(theme: Theme, light: f32, dark: f32) -> Hsla {
     }
 }
 
-/// A bare row on the glass under the pointer.
 fn glass_hover(theme: Theme) -> Hsla {
     glass_tint(theme, 0.06, 0.07)
 }
@@ -201,11 +200,9 @@ fn shadow(color: Hsla, y: f32, blur: f32, spread: f32, inset: bool) -> gpui::Box
     }
 }
 
-/// A quiet Liquid Glass button drawn in gpui: a translucent pane a touch
-/// brighter at the top, a faint rim, a crisp specular line along the top edge
-/// and one small shadow. Kept to two unblurred-or-tiny shadows per control so
-/// the window stays cheap to draw; real `NSGlassEffectView`s per button would
-/// have to track gpui's layout under the Metal layer.
+/// Drawn in gpui rather than with an `NSGlassEffectView` per button, which
+/// would have to track gpui's layout under the Metal layer. Two shadows, one
+/// unblurred, keep it cheap on a window that repaints with the mic meter.
 fn glass_button<E: Styled>(element: E, theme: Theme, selected: bool) -> E {
     let dark = theme.is_dark();
     let (top, bottom, rim) = match (selected, dark) {
@@ -249,9 +246,6 @@ fn glass_button<E: Styled>(element: E, theme: Theme, selected: bool) -> E {
         ])
 }
 
-/// Layered under a [`glass_button`]'s content: one step deeper on hover and
-/// another on press, the same for every button so the window reads as one
-/// control set.
 fn capture_hover_fill(theme: Theme, selected: bool) -> Hsla {
     if selected {
         Theme::with_alpha(theme.blue_9, 0.06)
