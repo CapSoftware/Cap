@@ -1571,7 +1571,7 @@ mod tests {
         assert!(!pause.active_at(now));
         pause.start_at(now);
         assert!(pause.active_at(now));
-        assert!(pause.active_at(now + CAPTURE_HANG_PAUSE - Duration::from_millis(1)));
+        assert!(pause.active_at(now + CAPTURE_HANG_PAUSE.saturating_sub(Duration::from_millis(1))));
         assert!(!pause.active_at(now + CAPTURE_HANG_PAUSE));
     }
 }
