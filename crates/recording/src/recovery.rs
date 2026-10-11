@@ -3028,6 +3028,10 @@ const RECOVERY_PUBLICATION_MAX_BYTES: u64 = 8192;
 enum RecoveryPublicationStampVersion {
     V1,
     V2,
+    /// Leaves `._` AppleDouble entries out of the segments stamp. Receipts
+    /// written as V1/V2 keep hashing them, so publications those builds
+    /// interrupted still reconcile.
+    V3,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -3126,8 +3130,11 @@ fn recovery_publication_segments_stamp(
             Entry {
                 directory: metadata.is_dir(),
                 // V1 persists allocation sizes; some filesystems change directory sizes on rename.
-                size: if metadata.is_dir() && matches!(version, RecoveryPublicationStampVersion::V2)
-                {
+                size: if metadata.is_dir()
+                    && matches!(
+                        version,
+                        RecoveryPublicationStampVersion::V2 | RecoveryPublicationStampVersion::V3
+                    ) {
                     0
                 } else {
                     metadata.len()
@@ -3147,9 +3154,12 @@ fn recovery_publication_segments_stamp(
         if metadata.is_dir() {
             for entry in std::fs::read_dir(path)? {
                 let entry = entry?;
-                if !is_apple_double(&entry.file_name()) {
-                    visit(root, &entry.path(), entries, version)?;
+                if matches!(version, RecoveryPublicationStampVersion::V3)
+                    && is_apple_double(&entry.file_name())
+                {
+                    continue;
                 }
+                visit(root, &entry.path(), entries, version)?;
             }
         }
         Ok(())
@@ -3174,7 +3184,7 @@ fn recovery_publication_segments_stamp(
 }
 
 fn recovery_publication_state(project: &Path) -> Result<RecoveryPublicationState, RecoveryError> {
-    recovery_publication_state_for_version(project, RecoveryPublicationStampVersion::V2)
+    recovery_publication_state_for_version(project, RecoveryPublicationStampVersion::V3)
 }
 
 fn recovery_publication_state_for_version(
@@ -3282,7 +3292,7 @@ fn begin_recovery_publication(project: &Path, workspace: &Path) -> Result<Vec<u8
         ));
     }
     let receipt = RecoveryPublication {
-        version: 2,
+        version: 3,
         project: project.canonicalize()?,
         workspace: name.into(),
         original: recovery_publication_state(project)?,
@@ -3351,6 +3361,7 @@ fn reconcile_recovery_publication(project: &Path) -> Result<(), RecoveryError> {
     let version = match receipt.version {
         1 => RecoveryPublicationStampVersion::V1,
         2 => RecoveryPublicationStampVersion::V2,
+        3 => RecoveryPublicationStampVersion::V3,
         _ => {
             return Err(RecoveryError::Validation(
                 "Invalid publication identity; evidence retained".into(),
@@ -5302,15 +5313,31 @@ mod transactional_recovery_tests {
         version: u32,
         had_config: bool,
     ) -> (tempfile::TempDir, PathBuf, PathBuf) {
+        publication_fixture_with_receipt(version, had_config, false)
+    }
+
+    fn publication_fixture_with_receipt(
+        version: u32,
+        had_config: bool,
+        apple_double: bool,
+    ) -> (tempfile::TempDir, PathBuf, PathBuf) {
         let fixture = publication_fixture();
         let (_, project, workspace) = &fixture;
         if !had_config {
             std::fs::remove_file(project.join("project-config.json")).unwrap();
         }
+        if apple_double {
+            std::fs::write(
+                project.join("content/segments/._raw.m4s"),
+                b"\x00\x05\x16\x07",
+            )
+            .unwrap();
+        }
         interrupt_publication(project, workspace, 0);
         let stamp_version = match version {
             1 => RecoveryPublicationStampVersion::V1,
             2 => RecoveryPublicationStampVersion::V2,
+            3 => RecoveryPublicationStampVersion::V3,
             _ => unreachable!(),
         };
         let receipt = RecoveryPublication {
@@ -5332,7 +5359,7 @@ mod transactional_recovery_tests {
 
     #[test]
     fn publication_receipt_versions_reconcile_without_changing_originals() {
-        for version in [1, 2] {
+        for version in [1, 2, 3] {
             for had_config in [false, true] {
                 let (_temporary, project, workspace) =
                     publication_fixture_with_version(version, had_config);
@@ -5350,10 +5377,61 @@ mod transactional_recovery_tests {
     }
 
     #[test]
+    fn only_v3_publication_stamps_leave_out_apple_double_entries() {
+        let temporary = tempfile::tempdir().unwrap();
+        let segments = temporary.path().join("segments");
+        std::fs::create_dir(&segments).unwrap();
+        std::fs::write(segments.join("raw.m4s"), b"original raw").unwrap();
+        let modified = segments.metadata().unwrap().modified().unwrap();
+        let versions = [
+            RecoveryPublicationStampVersion::V1,
+            RecoveryPublicationStampVersion::V2,
+            RecoveryPublicationStampVersion::V3,
+        ];
+        let before = versions.map(|version| {
+            recovery_publication_segments_stamp(&segments, version)
+                .unwrap()
+                .unwrap()
+        });
+
+        std::fs::write(segments.join("._raw.m4s"), b"\x00\x05\x16\x07").unwrap();
+        std::fs::File::open(&segments)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+        let after = versions.map(|version| {
+            recovery_publication_segments_stamp(&segments, version)
+                .unwrap()
+                .unwrap()
+        });
+
+        assert_ne!(before[0], after[0]);
+        assert_ne!(before[1], after[1]);
+        assert_eq!(before[2], after[2]);
+    }
+
+    #[test]
+    fn publication_receipts_reconcile_with_apple_double_entries_present() {
+        for version in [1, 2, 3] {
+            let (_temporary, project, workspace) =
+                publication_fixture_with_receipt(version, true, true);
+            let original = recovery_snapshot(&project).unwrap();
+            let receipt = std::fs::read(workspace.join(RECOVERY_PUBLICATION_RECEIPT)).unwrap();
+            let _lock = RecoveryLock::acquire(&project).unwrap();
+            assert_eq!(recovery_snapshot(&project).unwrap(), original);
+            assert!(!project.join(RECOVERY_PUBLICATION).exists());
+            assert_eq!(
+                std::fs::read(workspace.join(RECOVERY_PUBLICATION_RECEIPT)).unwrap(),
+                receipt
+            );
+        }
+    }
+
+    #[test]
     fn publication_receipt_versions_retain_conflict_guards() {
         use std::io::Write;
 
-        for version in [1, 2] {
+        for version in [1, 2, 3] {
             for changed in [
                 "raw", "added", "removed", "metadata", "config", "stamp", "receipt",
             ] {
@@ -6253,8 +6331,12 @@ mod transactional_recovery_tests {
             std::fs::read(staged.join("segments/segment-0/display.mp4")).unwrap(),
             b"media"
         );
-        assert!(!staged.join("segments/segment-0/._display.mp4").exists());
-        assert!(!staged.join("segments/._segment-0").exists());
+        for companion in ["segments/segment-0/._display.mp4", "segments/._segment-0"] {
+            assert_ne!(
+                std::fs::read(staged.join(companion)).ok().as_deref(),
+                Some(&apple_double[..])
+            );
+        }
     }
 
     #[test]
