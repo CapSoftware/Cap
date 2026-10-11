@@ -1215,7 +1215,7 @@ mod cursor_image_tests {
     }
 
     #[test]
-    fn a_cursor_image_that_fails_to_save_is_retried() {
+    fn a_cursor_image_that_fails_to_decode_is_not_cached() {
         let dir = tempfile::tempdir().unwrap();
         let mut response = empty_response();
         let mut last = None;
@@ -1229,5 +1229,33 @@ mod cursor_image_tests {
         assert_eq!(id, "0");
         assert!(response.cursors.is_empty());
         assert!(last.is_none());
+    }
+
+    #[test]
+    fn a_cursor_image_that_fails_to_save_is_retried() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut response = empty_response();
+        let mut last = None;
+        let red = png([255, 0, 0, 255]);
+
+        // A directory at the cursor's path makes the PNG write fail.
+        let cursor_path = dir.path().join("cursor_0.png");
+        std::fs::create_dir(&cursor_path).unwrap();
+        cursor_id_for_image(
+            cursor_data(red.clone()),
+            &mut response,
+            dir.path(),
+            &mut last,
+        );
+        assert!(response.cursors.is_empty());
+        assert!(last.is_none());
+
+        std::fs::remove_dir(&cursor_path).unwrap();
+        assert_eq!(
+            cursor_id_for_image(cursor_data(red), &mut response, dir.path(), &mut last),
+            "0"
+        );
+        assert_eq!(response.cursors.len(), 1);
+        assert!(cursor_path.is_file());
     }
 }
