@@ -334,9 +334,8 @@ pub fn spawn_cursor_recorder(
     }
 
     use device_query::{DeviceQuery, DeviceState};
-    use sha2::{Digest, Sha256};
     use std::time::Duration;
-    use tracing::{error, info};
+    use tracing::info;
 
     let stop_token = CancellationToken::new();
     let (tx, rx) = oneshot::channel();
@@ -379,6 +378,7 @@ pub fn spawn_cursor_recorder(
         let mut last_flush = Instant::now();
         let flush_interval = Duration::from_secs(CURSOR_FLUSH_INTERVAL_SECS);
         let mut last_cursor_id: Option<String> = None;
+        let mut last_cursor_image = None;
         let mut awaiting_start = start_gate.is_some();
 
         loop {
@@ -421,42 +421,8 @@ pub fn spawn_cursor_recorder(
             }
 
             let cursor_id = if let Some(data) = get_cursor_data() {
-                let hash_bytes = Sha256::digest(&data.image);
-                let id = u64::from_le_bytes(
-                    hash_bytes[..8]
-                        .try_into()
-                        .expect("sha256 produces at least 8 bytes"),
-                );
-
-                let cursor_id = if let Some(existing_id) = response.cursors.get(&id) {
-                    existing_id.id.to_string()
-                } else {
-                    let cursor_id = response.next_cursor_id.to_string();
-                    let file_name = format!("cursor_{cursor_id}.png");
-                    let cursor_path = cursors_dir.join(&file_name);
-
-                    if let Ok(image) = image::load_from_memory(&data.image) {
-                        let rgba_image = image.into_rgba8();
-
-                        if let Err(e) = rgba_image.save(&cursor_path) {
-                            error!("Failed to save cursor image: {}", e);
-                        } else {
-                            info!("Saved cursor {cursor_id} image to: {:?}", file_name);
-                            response.cursors.insert(
-                                id,
-                                Cursor {
-                                    file_name,
-                                    id: response.next_cursor_id,
-                                    hotspot: data.hotspot,
-                                    shape: data.shape,
-                                },
-                            );
-                            response.next_cursor_id += 1;
-                        }
-                    }
-
-                    cursor_id
-                };
+                let cursor_id =
+                    cursor_id_for_image(data, &mut response, &cursors_dir, &mut last_cursor_image);
                 last_cursor_id = Some(cursor_id.clone());
                 Some(cursor_id)
             } else {
@@ -573,10 +539,77 @@ pub fn spawn_cursor_recorder(
     }
 }
 
+fn cursor_id_for_image(
+    data: CursorData,
+    response: &mut CursorActorResponse,
+    cursors_dir: &Path,
+    last_cursor_image: &mut Option<(Vec<u8>, String)>,
+) -> String {
+    use sha2::{Digest, Sha256};
+    use tracing::{error, info};
+
+    // Hashing a large macOS cursor TIFF costs milliseconds, and the image
+    // rarely changes between ticks.
+    if let Some((image, cursor_id)) = last_cursor_image
+        && *image == data.image
+    {
+        return cursor_id.clone();
+    }
+
+    let hash_bytes = Sha256::digest(&data.image);
+    let id = u64::from_le_bytes(
+        hash_bytes[..8]
+            .try_into()
+            .expect("sha256 produces at least 8 bytes"),
+    );
+
+    let cursor_id = if let Some(existing_id) = response.cursors.get(&id) {
+        existing_id.id.to_string()
+    } else {
+        let cursor_id = response.next_cursor_id.to_string();
+        let file_name = format!("cursor_{cursor_id}.png");
+        let cursor_path = cursors_dir.join(&file_name);
+
+        if let Ok(image) = image::load_from_memory(&data.image) {
+            let rgba_image = image.into_rgba8();
+
+            if let Err(e) = rgba_image.save(&cursor_path) {
+                error!("Failed to save cursor image: {}", e);
+            } else {
+                info!("Saved cursor {cursor_id} image to: {:?}", file_name);
+                #[cfg(target_os = "macos")]
+                let shape = cap_cursor_info::CursorShapeMacOS::from_hash(&hex::encode(hash_bytes))
+                    .map(Into::into);
+                #[cfg(not(target_os = "macos"))]
+                let shape = data.shape;
+                response.cursors.insert(
+                    id,
+                    Cursor {
+                        file_name,
+                        id: response.next_cursor_id,
+                        hotspot: data.hotspot,
+                        shape,
+                    },
+                );
+                response.next_cursor_id += 1;
+            }
+        }
+
+        cursor_id
+    };
+
+    *last_cursor_image = response
+        .cursors
+        .contains_key(&id)
+        .then(|| (data.image, cursor_id.clone()));
+    cursor_id
+}
+
 #[derive(Debug)]
 struct CursorData {
     image: Vec<u8>,
     hotspot: XY<f64>,
+    #[cfg(not(target_os = "macos"))]
     shape: Option<CursorShape>,
 }
 
@@ -601,7 +634,6 @@ fn get_cursor_data() -> Option<CursorData> {
 fn macos_cursor_data(cursor: &objc2_app_kit::NSCursor) -> Option<CursorData> {
     use objc2::{msg_send, rc::Retained};
     use objc2_app_kit::NSImage;
-    use sha2::{Digest, Sha256};
 
     unsafe {
         // AppKit can return nil for transient system cursors despite NSCursor.image's nonnull annotation.
@@ -621,13 +653,10 @@ fn macos_cursor_data(cursor: &objc2_app_kit::NSCursor) -> Option<CursorData> {
 
         let image_data = image.TIFFRepresentation()?;
         let image = image_data.as_bytes_unchecked().to_vec();
-        let shape =
-            cap_cursor_info::CursorShapeMacOS::from_hash(&hex::encode(Sha256::digest(&image)));
 
         Some(CursorData {
             image,
             hotspot: XY::new(hotspot.x / size.width, hotspot.y / size.height),
-            shape: shape.map(Into::into),
         })
     }
 }
@@ -1105,5 +1134,100 @@ mod input_epoch_tests {
             input_epoch(Some(&gate), start_time),
             Some(start_time.instant())
         );
+    }
+}
+
+#[cfg(test)]
+mod cursor_image_tests {
+    use super::*;
+
+    fn png(color: [u8; 4]) -> Vec<u8> {
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::RgbaImage::from_pixel(8, 8, image::Rgba(color))
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+        png.into_inner()
+    }
+
+    fn cursor_data(image: Vec<u8>) -> CursorData {
+        CursorData {
+            image,
+            hotspot: XY::new(0.0, 0.0),
+            #[cfg(not(target_os = "macos"))]
+            shape: None,
+        }
+    }
+
+    fn empty_response() -> CursorActorResponse {
+        CursorActorResponse {
+            cursors: Cursors::default(),
+            next_cursor_id: 0,
+            moves: vec![],
+            clicks: vec![],
+            keyboard_presses: vec![],
+        }
+    }
+
+    #[test]
+    fn an_unchanged_cursor_image_reuses_its_id_without_hashing() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut response = empty_response();
+        let mut last = None;
+        let red = png([255, 0, 0, 255]);
+
+        assert_eq!(
+            cursor_id_for_image(
+                cursor_data(red.clone()),
+                &mut response,
+                dir.path(),
+                &mut last
+            ),
+            "0"
+        );
+        assert_eq!(response.cursors.len(), 1);
+
+        // The hash path would register this image again; the fast path never looks.
+        response.cursors.clear();
+        assert_eq!(
+            cursor_id_for_image(cursor_data(red), &mut response, dir.path(), &mut last),
+            "0"
+        );
+        assert!(response.cursors.is_empty());
+    }
+
+    #[test]
+    fn a_changed_cursor_image_gets_hashed_and_a_new_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut response = empty_response();
+        let mut last = None;
+        let red = png([255, 0, 0, 255]);
+        let blue = png([0, 0, 255, 255]);
+
+        for (image, expected) in [(red.clone(), "0"), (blue, "1"), (red, "0")] {
+            assert_eq!(
+                cursor_id_for_image(cursor_data(image), &mut response, dir.path(), &mut last),
+                expected
+            );
+        }
+        assert_eq!(response.cursors.len(), 2);
+        assert!(dir.path().join("cursor_0.png").exists());
+        assert!(dir.path().join("cursor_1.png").exists());
+    }
+
+    #[test]
+    fn a_cursor_image_that_fails_to_save_is_retried() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut response = empty_response();
+        let mut last = None;
+
+        let id = cursor_id_for_image(
+            cursor_data(b"not an image".to_vec()),
+            &mut response,
+            dir.path(),
+            &mut last,
+        );
+        assert_eq!(id, "0");
+        assert!(response.cursors.is_empty());
+        assert!(last.is_none());
     }
 }
