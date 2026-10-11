@@ -706,6 +706,18 @@ fn dispatch(action: HotkeyAction, cx: &mut App) {
     }
 }
 
+fn microphone_available(name: &str) -> bool {
+    use cap_recording::feeds::microphone::MicrophoneFeed;
+
+    if cfg!(target_os = "macos") {
+        MicrophoneFeed::list_names()
+            .iter()
+            .any(|device| device == name)
+    } else {
+        MicrophoneFeed::list().contains_key(name)
+    }
+}
+
 /// `start_recording_from_hotkey` + the `RequestStartRecording` listener
 /// (`hotkeys.rs:158-177`, `lib.rs:5529-5551` over there): confirm a start
 /// without a working microphone, then record the store's
@@ -742,17 +754,16 @@ fn start_from_hotkey(mode: Mode, cx: &mut App) {
     });
 
     cx.spawn(async move |cx| {
-        // `MicrophoneFeed::list().contains_key(name)` -- the exact
-        // availability probe the Tauri confirm runs (`hotkeys.rs:126-135`
-        // over there), on the background executor because it enumerates
-        // CoreAudio devices. No selection means no microphone, which needs no
-        // enumeration to know.
+        // The availability probe the Tauri confirm runs, on the background
+        // executor because it enumerates CoreAudio devices. On macOS that is a
+        // name match (`microphone_available_for_confirmation` over there):
+        // `MicrophoneFeed::list()` reads every input device's configuration,
+        // which held the hotkey start for over 100 ms. No selection means no
+        // microphone, which needs no enumeration to know.
         let available = match mic_name {
             Some(name) => {
                 cx.background_executor()
-                    .spawn(async move {
-                        cap_recording::feeds::microphone::MicrophoneFeed::list().contains_key(&name)
-                    })
+                    .spawn(async move { microphone_available(&name) })
                     .await
             }
             None => false,
