@@ -903,17 +903,13 @@ impl PendingNv12External {
             return Err(RenderingError::BufferMapWaitingFailed);
         };
         let started = Instant::now();
-        let mut poll_count = 0u32;
         while !completed.load(Ordering::Acquire) {
             if started.elapsed() > gpu_buffer_wait_timeout() {
                 return Err(RenderingError::BufferMapWaitingFailed);
             }
             device.poll(wgpu::PollType::Poll)?;
-            poll_count += 1;
-            if poll_count < 10 {
+            if started.elapsed() < NV12_READBACK_SPIN {
                 tokio::task::yield_now().await;
-            } else if poll_count < 100 {
-                tokio::time::sleep(std::time::Duration::from_micros(100)).await;
             } else {
                 tokio::time::sleep(std::time::Duration::from_millis(1)).await;
             }
@@ -979,17 +975,16 @@ impl PendingNv12Surface {
             return Err(RenderingError::BufferMapWaitingFailed);
         };
         let started = Instant::now();
-        let mut poll_count = 0u32;
         while !completed.load(Ordering::Acquire) {
             if started.elapsed() > gpu_buffer_wait_timeout() {
                 return Err(RenderingError::BufferMapWaitingFailed);
             }
             device.poll(wgpu::PollType::Poll)?;
-            poll_count += 1;
-            if poll_count < 10 {
+            // As in the readback wait: tokio's timer rounds even a 100µs sleep
+            // up to a millisecond, longer than a frame's GPU work, so only a
+            // slow frame sleeps.
+            if started.elapsed() < NV12_READBACK_SPIN {
                 tokio::task::yield_now().await;
-            } else if poll_count < 100 {
-                tokio::time::sleep(std::time::Duration::from_micros(100)).await;
             } else {
                 tokio::time::sleep(std::time::Duration::from_millis(1)).await;
             }
