@@ -84,8 +84,6 @@ const CAPTURE_HANG_PAUSE: Duration = Duration::from_secs(5 * 60);
 
 static CAPTURE_PAUSE: CapturePause = CapturePause::new();
 
-/// Whether a recent hang has paused thumbnail captures; sweeps are not started
-/// while it is.
 pub fn captures_paused() -> bool {
     CAPTURE_PAUSE.active_at(std::time::Instant::now())
 }
