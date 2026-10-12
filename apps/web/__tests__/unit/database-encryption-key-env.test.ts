@@ -6,6 +6,20 @@ const loadServerEnv = async () => {
 	return serverEnv();
 };
 
+const runRegister = async (key: string) => {
+	vi.useFakeTimers();
+	vi.stubEnv("NEXT_PUBLIC_IS_CAP", "");
+	vi.stubEnv("DATABASE_ENCRYPTION_KEY", key);
+	vi.spyOn(console, "log").mockImplementation(() => {});
+	const exit = vi
+		.spyOn(process, "exit")
+		.mockImplementation(() => undefined as never);
+	vi.resetModules();
+	const { register } = await import("../../instrumentation.node");
+	await register();
+	return exit;
+};
+
 describe("DATABASE_ENCRYPTION_KEY validation", () => {
 	beforeEach(() => {
 		vi.stubEnv("DATABASE_URL", "mysql://localhost/cap");
@@ -19,7 +33,7 @@ describe("DATABASE_ENCRYPTION_KEY validation", () => {
 
 	afterEach(() => {
 		vi.unstubAllEnvs();
-		vi.restoreAllMocks();
+		vi.useRealTimers();
 	});
 
 	it.each([
@@ -39,5 +53,13 @@ describe("DATABASE_ENCRYPTION_KEY validation", () => {
 		expect(console.error).toHaveBeenCalledWith(expect.any(String), [
 			expect.objectContaining({ path: ["DATABASE_ENCRYPTION_KEY"] }),
 		]);
+	});
+
+	it("exits at boot with an invalid key", async () => {
+		expect(await runRegister("x".repeat(32))).toHaveBeenCalledWith(1);
+	});
+
+	it("starts with a valid key", async () => {
+		expect(await runRegister("ab".repeat(32))).not.toHaveBeenCalled();
 	});
 });
