@@ -1695,6 +1695,9 @@ mod self_test_tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn videotoolbox_export_uses_the_default_keyframe_interval() {
+        if force_software_encoder() {
+            return;
+        }
         ffmpeg::init().ok();
         let config = VideoInfo::from_raw(cap_media_info::RawVideoFormat::Nv12, 1920, 1080, 60);
         let videotoolbox_options = |is_export| {
