@@ -52,11 +52,26 @@ fn reader_capacity() -> &'static Arc<Semaphore> {
     CAPACITY.get_or_init(|| Arc::new(Semaphore::new(MAX_ACTIVE_READERS)))
 }
 
-fn frame_cache_frame_limit(sequential_access: bool, requests_moved_backwards: bool) -> usize {
-    if sequential_access && !requests_moved_backwards {
-        SEQUENTIAL_FRAME_CACHE_SIZE
-    } else {
-        FRAME_CACHE_SIZE
+#[derive(Default)]
+struct RequestDirection {
+    highest_frame: Option<u32>,
+    moved_backwards: bool,
+}
+
+impl RequestDirection {
+    fn record_batch(&mut self, first_frame: u32, last_frame: u32) {
+        self.moved_backwards |= self
+            .highest_frame
+            .is_some_and(|highest| first_frame < highest);
+        self.highest_frame = self.highest_frame.max(Some(last_frame));
+    }
+
+    fn frame_cache_limit(&self, sequential_access: bool) -> usize {
+        if sequential_access && !self.moved_backwards {
+            SEQUENTIAL_FRAME_CACHE_SIZE
+        } else {
+            FRAME_CACHE_SIZE
+        }
     }
 }
 
@@ -654,8 +669,7 @@ impl AVAssetReaderDecoder {
 
         let mut cache = BTreeMap::<u32, CachedFrame>::new();
         let mut cache_bytes = 0usize;
-        let mut highest_requested_frame = None::<u32>;
-        let mut requests_moved_backwards = false;
+        let mut request_direction = RequestDirection::default();
 
         #[allow(unused)]
         let mut last_active_frame = None::<u32>;
@@ -775,9 +789,7 @@ impl AVAssetReaderDecoder {
             }
 
             if let (Some(first), Some(last)) = (pending_requests.first(), pending_requests.last()) {
-                requests_moved_backwards |=
-                    highest_requested_frame.is_some_and(|highest| first.frame < highest);
-                highest_requested_frame = highest_requested_frame.max(Some(last.frame));
+                request_direction.record_batch(first.frame, last.frame);
             }
 
             let is_scrubbing =
@@ -895,10 +907,8 @@ impl AVAssetReaderDecoder {
 
             last_active_frame = Some(requested_frame);
 
-            let frame_limit = frame_cache_frame_limit(
-                sequential_access.load(Ordering::Relaxed),
-                requests_moved_backwards,
-            );
+            let frame_limit =
+                request_direction.frame_cache_limit(sequential_access.load(Ordering::Relaxed));
             let mut exit = false;
             let mut frames_iterated = 0u32;
             let mut last_decoded_position: Option<f32> = None;
@@ -1304,15 +1314,31 @@ mod tests {
 
     #[test]
     fn sequential_access_bounds_the_cache_until_requests_move_backwards() {
-        assert_eq!(frame_cache_frame_limit(false, false), FRAME_CACHE_SIZE);
-        assert_eq!(frame_cache_frame_limit(false, true), FRAME_CACHE_SIZE);
+        let mut direction = RequestDirection::default();
+        assert_eq!(direction.frame_cache_limit(false), FRAME_CACHE_SIZE);
         assert_eq!(
-            frame_cache_frame_limit(true, false),
+            direction.frame_cache_limit(true),
             SEQUENTIAL_FRAME_CACHE_SIZE
         );
-        assert_eq!(frame_cache_frame_limit(true, true), FRAME_CACHE_SIZE);
 
-        let limit = frame_cache_frame_limit(true, false);
+        for (first, last) in [(0, 0), (1, 3), (3, 3), (4, 9), (40, 41)] {
+            direction.record_batch(first, last);
+            assert_eq!(
+                direction.frame_cache_limit(true),
+                SEQUENTIAL_FRAME_CACHE_SIZE
+            );
+            assert_eq!(direction.frame_cache_limit(false), FRAME_CACHE_SIZE);
+        }
+
+        direction.record_batch(38, 38);
+        assert_eq!(direction.frame_cache_limit(true), FRAME_CACHE_SIZE);
+
+        for (first, last) in [(42, 42), (43, 50), (90, 120)] {
+            direction.record_batch(first, last);
+            assert_eq!(direction.frame_cache_limit(true), FRAME_CACHE_SIZE);
+        }
+
+        let limit = RequestDirection::default().frame_cache_limit(true);
         assert!(limit >= 2);
         assert!(!frame_cache_needs_eviction(limit - 1, 0, 1, limit));
         assert!(frame_cache_needs_eviction(limit, 0, 1, limit));
