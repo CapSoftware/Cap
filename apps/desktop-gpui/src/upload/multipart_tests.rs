@@ -503,9 +503,9 @@ mod mock_network {
                     start + Duration::from_secs_f64(bytes as f64 / self.profile.link_bytes_per_sec);
                 *next_free
             };
-            let now = std::time::Instant::now();
-            if done > now {
-                std::thread::sleep(done - now);
+            let wait = done.saturating_duration_since(std::time::Instant::now());
+            if !wait.is_zero() {
+                std::thread::sleep(wait);
             }
         }
     }
@@ -631,8 +631,9 @@ mod mock_network {
                     remaining -= read;
                 }
                 window = (window * 2).min(profile.max_window);
-                if remaining > 0 && round.elapsed() < profile.rtt {
-                    std::thread::sleep(profile.rtt - round.elapsed());
+                let wait = profile.rtt.saturating_sub(round.elapsed());
+                if remaining > 0 && !wait.is_zero() {
+                    std::thread::sleep(wait);
                 }
             }
             std::thread::sleep(profile.rtt);
