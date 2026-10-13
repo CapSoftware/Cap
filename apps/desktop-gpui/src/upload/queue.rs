@@ -593,13 +593,16 @@ impl<B: UploadBackend> Manager<B> {
             return Err("This recording is already queued for upload".into());
         }
         state.preserve_local |= preserve_local;
-        state.attempt_count = upload.prior_attempts;
+        let deferred = self.stopping.load(Ordering::Acquire) || jobs.len() >= 2;
+        if !deferred {
+            state.attempt_count = upload.prior_attempts;
+        }
         if !matches!(state.phase, UploadPhase::Processing | UploadPhase::Verified) {
             state.phase = UploadPhase::Pending;
         }
         state.next_retry_at = None;
         write_state(&canonical, &state)?;
-        if self.stopping.load(Ordering::Acquire) || jobs.len() >= 2 {
+        if deferred {
             self.wake.notify_one();
             return Ok(());
         }
@@ -2097,5 +2100,51 @@ mod tests {
         assert_eq!(state.attempt_count, 1);
         assert_eq!(state.phase, UploadPhase::Retrying);
         assert_eq!(manager.backend.transfers.load(Ordering::Acquire), 0);
+    }
+
+    #[tokio::test]
+    async fn deferred_handoff_after_a_live_failure_keeps_its_count() {
+        let fixture = Fixture::new();
+        let upload = fixture.upload();
+        crate::recording::persist_instant_upload_failure(
+            &fixture.project(),
+            "Failed to upload instant segment display/segment_0.m4s",
+            upload.metadata_lock(),
+        )
+        .unwrap();
+        let manager = Arc::new(Manager::new(FakeBackend::default(), Duration::from_secs(1)));
+        for slot in 0..2 {
+            let (cancel, _) = tokio::sync::watch::channel(false);
+            manager.jobs.lock().await.insert(
+                PathBuf::from(format!("/busy-{slot}")),
+                Job {
+                    video_id: format!("busy-{slot}"),
+                    cancel,
+                    cancel_upload: Arc::new(AtomicBool::new(false)),
+                    task: tokio::spawn(std::future::pending()),
+                },
+            );
+        }
+        manager
+            .admit(fixture.project(), upload, false)
+            .await
+            .unwrap();
+        let state = fixture.state();
+        assert_eq!(state.attempt_count, 1);
+        assert_eq!(state.phase, UploadPhase::Pending);
+        assert_eq!(manager.backend.transfers.load(Ordering::Acquire), 0);
+        for job in manager.jobs.lock().await.drain().map(|(_, job)| job) {
+            job.task.abort();
+        }
+        manager.backend.fail_transfer.store(true, Ordering::Release);
+        manager
+            .admit(fixture.project(), fixture.upload(), false)
+            .await
+            .unwrap();
+        joined(&manager).await;
+        let state = fixture.state();
+        assert_eq!(state.attempt_count, 2);
+        assert_eq!(state.phase, UploadPhase::Retrying);
+        fixture.assert_retained();
     }
 }
