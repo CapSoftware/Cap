@@ -1155,6 +1155,29 @@ fn take_pooled_layers(device: &wgpu::Device, key: &str) -> Option<RendererLayers
     Some(pool.swap_remove(index).2)
 }
 
+/// Take a set of GPU layer pipelines previously returned to the pool for
+/// `key` on this device, with per-frame state reset. Returns `None` when the
+/// pool holds nothing reusable, in which case the caller should build a fresh
+/// [`RendererLayers`] and [`return_reusable_layers`] it afterwards.
+///
+/// This is the same mechanism the export path uses to avoid paying the
+/// ~0.25-0.5 s layer-pipeline build cost on every render; it is also suitable
+/// for repeated single-frame renders (e.g. export previews) that share one
+/// long-lived device.
+pub fn take_reusable_layers(device: &wgpu::Device, key: &str) -> Option<RendererLayers> {
+    take_pooled_layers(device, key).map(|mut layers| {
+        layers.reset_frame_state();
+        layers
+    })
+}
+
+/// Return layer pipelines to the pool so the next render with the same `key`
+/// on the same device can skip pipeline compilation. Only call after a clean
+/// render: a failed render may leave layer state behind.
+pub fn return_reusable_layers(device: wgpu::Device, key: String, layers: RendererLayers) {
+    return_pooled_layers(device, key, layers);
+}
+
 /// Builds a fresh set of layers for the next project's first render, off
 /// its critical path (an idle engine calls this between tasks).
 pub fn prebuild_spare_layers(
@@ -7085,7 +7108,7 @@ fn join_layer<T>(handle: std::thread::ScopedJoinHandle<'_, T>) -> T {
 }
 
 impl RendererLayers {
-    fn reset_frame_state(&mut self) {
+    pub fn reset_frame_state(&mut self) {
         self.display.reset_frame_state();
         self.camera.reset_frame_state();
         self.camera_only.reset_frame_state();

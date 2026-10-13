@@ -896,7 +896,11 @@ impl EditorWindow {
             });
 
             loop {
+                let mut latest: Option<(u32, u32)> = None;
                 while let Ok((rendered, total)) = progress_rx.try_recv() {
+                    latest = Some((rendered, total));
+                }
+                if let Some((rendered, total)) = latest {
                     let _ = this.update(cx, |this, cx| {
                         if let Some(ui) = this.export.as_mut() {
                             ui.rendered = rendered;
@@ -1174,7 +1178,11 @@ impl EditorWindow {
             });
 
             loop {
+                let mut latest: Option<(u32, u32)> = None;
                 while let Ok((rendered, total)) = progress_rx.try_recv() {
+                    latest = Some((rendered, total));
+                }
+                if let Some((rendered, total)) = latest {
                     let _ = this.update(cx, |this, cx| {
                         if let Some(ui) = this.export.as_mut() {
                             ui.rendered = rendered;
@@ -1219,7 +1227,11 @@ impl EditorWindow {
                     });
 
                     loop {
+                        let mut latest: Option<f64> = None;
                         while let Ok(progress) = upload_rx.try_recv() {
+                            latest = Some(progress);
+                        }
+                        if let Some(progress) = latest {
                             let _ = this.update(cx, |this, cx| {
                                 if let Some(ui) = this.export.as_mut() {
                                     ui.upload_progress = progress as f32;
