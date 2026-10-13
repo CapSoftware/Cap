@@ -127,6 +127,20 @@ pub fn advance_playback_position(
         .min(maximum_scroll.max(0.))
 }
 
+/// `playbackPosition = element.scrollTop`, with `if (element.scrollTop >=
+/// maximumScroll - 1) element.scrollTop = 0`: playback resumes from where the
+/// script actually is (a pause, or a wheel scroll between two plays, moves
+/// gpui's offset, not ours), and only restarts from the top once it reached the
+/// end. `offset_y` is gpui's scroll offset, which is negative.
+pub fn playback_resume_position(offset_y: f32, maximum_scroll: f32) -> f32 {
+    let position = (-offset_y).clamp(0., maximum_scroll.max(0.));
+    if position >= maximum_scroll - 1. {
+        0.
+    } else {
+        position
+    }
+}
+
 // ---------------------------------------------------------------------------
 
 /// Which range is being dragged, so one drag layer serves both pills.
@@ -406,13 +420,8 @@ impl TeleprompterWindow {
         if !self.has_script() || maximum <= 1. {
             return;
         }
-        // `playbackPosition = element.scrollTop`: a wheel scroll between two
-        // plays moves gpui's offset, not ours, so playback resumes from where
-        // the script actually is.
-        self.position = (-f32::from(self.scroll.offset().y)).clamp(0., maximum);
-        // `if (element.scrollTop >= maximumScroll - 1) element.scrollTop = 0`
-        if self.position >= maximum - 1. {
-            self.position = 0.;
+        self.position = playback_resume_position(f32::from(self.scroll.offset().y), maximum);
+        if self.position == 0. {
             self.apply_scroll();
         }
         self.settings_open = false;
@@ -1183,6 +1192,23 @@ mod tests {
         assert_eq!(calculate_playback_speed(120., 3, 350), 120.);
         assert_eq!(advance_playback_position(90., 100., 1000., 1.), 100.);
         assert_eq!(advance_playback_position(-5., 100., 0., 1.), 0.);
+    }
+
+    /// Pausing keeps the scroll offset, so pressing play again picks up where
+    /// the script stopped; only a script that already reached the end goes
+    /// back to the top (https://github.com/CapSoftware/Cap/issues/2081).
+    #[test]
+    fn playback_resumes_where_it_was_paused() {
+        let maximum = 1000.;
+        let mut position = playback_resume_position(0., maximum);
+        assert_eq!(position, 0.);
+        for _ in 0..90 {
+            position = advance_playback_position(position, maximum, 40., 1. / 30.);
+        }
+        assert!(position > 100.);
+        assert_eq!(playback_resume_position(-position, maximum), position);
+        assert_eq!(playback_resume_position(-(maximum - 0.5), maximum), 0.);
+        assert_eq!(playback_resume_position(25., maximum), 0.);
     }
 
     /// The ranges snap to their steps and stay inside their bounds, which is

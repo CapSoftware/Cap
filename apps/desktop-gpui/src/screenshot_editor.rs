@@ -204,13 +204,18 @@ pub async fn run_still_renderer(
         preserve_screen_alpha: true,
     };
 
-    let constants = match RenderVideoConstants::new_with_options(
-        options,
-        source.meta,
-        source.studio_meta,
-    )
-    .await
-    {
+    let constants = match match crate::app_windows::shared_wgpu_device().await {
+        Some(shared) => Ok(RenderVideoConstants::from_shared_device(
+            shared,
+            options,
+            source.studio_meta,
+            source.meta,
+            Arc::new(cap_rendering::BackgroundTextureCache::default()),
+        )),
+        None => {
+            RenderVideoConstants::new_with_options(options, source.meta, source.studio_meta).await
+        }
+    } {
         Ok(constants) => constants,
         Err(error) => {
             let _ = setup_tx.send(Err(format!("The GPU renderer failed to start: {error}")));
