@@ -151,24 +151,9 @@ footer a:hover {
 }
 .hero-content {
 	position: relative;
-	padding: 57px 22px 66px;
-}
-.eyebrow {
-	display: inline-flex;
-	align-items: center;
-	gap: 10px;
-	font-family: var(--font-mono), monospace;
-	font-size: 10px;
-	letter-spacing: 1.15px;
-	color: #3b5268;
-}
-.eyebrow > span {
-	width: 6px;
-	height: 6px;
-	background: #7aa8d7;
+	padding: 80px 22px 66px;
 }
 h1 {
-	margin-top: 25px;
 	font-size: clamp(40px, 4.8vw, 68px);
 	font-weight: 400;
 	letter-spacing: -3.1px;
@@ -550,9 +535,7 @@ h1 {
 	padding-top: 44px;
 }
 .period-label {
-	font-family: var(--font-mono), monospace;
-	font-size: 9px;
-	letter-spacing: 0.5px;
+	font-size: 11px;
 	color: #66717c;
 }
 .empty-incidents {
@@ -761,14 +744,10 @@ footer svg {
 		min-height: 305px;
 	}
 	.hero-content {
-		padding: 44px 16px 66px;
-	}
-	.eyebrow {
-		font-size: 9px;
+		padding: 68px 16px 66px;
 	}
 	h1 {
 		letter-spacing: -1.8px;
-		margin-top: 23px;
 		font-size: clamp(32px, 8.5vw, 48px);
 	}
 	.hero-description {
@@ -914,7 +893,7 @@ footer svg {
 		padding-top: 34px;
 	}
 	.period-label {
-		font-size: 8px;
+		font-size: 10px;
 		padding-top: 7px;
 		white-space: nowrap;
 	}

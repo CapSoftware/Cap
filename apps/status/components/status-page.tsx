@@ -165,10 +165,6 @@ export function StatusPage() {
 						/>
 					</div>
 					<div className="hero-content">
-						<p className="eyebrow">
-							<span />
-							CAP SYSTEM STATUS
-						</p>
 						<h1 id={titleId}>A little peace of mind.</h1>
 						<p className="hero-description">
 							A live look at the services behind your recordings.
@@ -265,7 +261,7 @@ export function StatusPage() {
 								<h2 id={incidentsId}>Incident history</h2>
 								<p>A little context, if something goes off track.</p>
 							</div>
-							<span className="period-label">PAST 90 DAYS</span>
+							<span className="period-label">Past 90 days</span>
 						</div>
 						{visibleIncidents.length ? (
 							<div className="incident-list">
