@@ -2246,6 +2246,7 @@ pub async fn create_shared_device() -> Result<SharedWgpuDevice, RenderingError> 
     })
 }
 
+#[derive(Clone, Debug)]
 pub struct SharedWgpuDevice {
     pub instance: wgpu::Instance,
     pub adapter: wgpu::Adapter,
