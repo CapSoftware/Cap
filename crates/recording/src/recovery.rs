@@ -6433,6 +6433,10 @@ mod transactional_recovery_tests {
         let mut files = fragments.clone();
         files.push(dir.path().join("recording-meta.json"));
         let sequential = hash_recovery_files(dir.path(), &files).unwrap();
+        assert_eq!(
+            hash_recovery_files_parallel(dir.path(), &files, 4).unwrap(),
+            sequential
+        );
         for (path, hash) in &sequential {
             assert_eq!(snapshot.get(path), Some(hash));
         }
