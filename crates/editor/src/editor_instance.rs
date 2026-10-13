@@ -12,6 +12,7 @@ use cap_rendering::{
     get_duration, spring_mass_damper::SpringMassDamperSimulationConfig,
 };
 use std::{
+    collections::VecDeque,
     path::{Path, PathBuf},
     sync::{
         Arc,
@@ -25,6 +26,7 @@ use tracing::warn;
 pub(super) const PREVIEW_RENDER_MAX_ATTEMPTS: u32 = 3;
 pub(super) const PREVIEW_RENDER_RETRY_DELAY_MS: u64 = 120;
 const PREVIEW_CURSOR_CACHE_CAPACITY: usize = 2;
+const PREVIEW_ZOOM_CACHE_CAPACITY: usize = 2;
 
 #[derive(Default)]
 pub(super) struct PreviewCursorCache {
@@ -111,6 +113,47 @@ impl PreviewCursorCache {
             timeline: Arc::clone(&timeline),
         });
         Some(timeline)
+    }
+}
+
+#[derive(Default)]
+pub(super) struct PreviewZoomCache {
+    entries: VecDeque<(u32, ZoomTransformTimeline)>,
+}
+
+impl PreviewZoomCache {
+    pub(super) fn clear(&mut self) {
+        self.entries.clear();
+    }
+
+    pub(super) fn get(
+        &mut self,
+        recording_clip: u32,
+        until_secs: f32,
+        build: impl FnOnce() -> ZoomTransformTimeline,
+    ) -> &ZoomTransformTimeline {
+        if let Some(position) = self
+            .entries
+            .iter()
+            .position(|(clip, _)| *clip == recording_clip)
+        {
+            let entry = self
+                .entries
+                .remove(position)
+                .expect("Located zoom entry is present");
+            self.entries.push_back(entry);
+        } else {
+            if self.entries.len() == PREVIEW_ZOOM_CACHE_CAPACITY {
+                self.entries.pop_front();
+            }
+            self.entries.push_back((recording_clip, build()));
+        }
+        let (_, timeline) = self
+            .entries
+            .back_mut()
+            .expect("Requested zoom entry is cached");
+        timeline.ensure_precomputed_until(until_secs);
+        timeline
     }
 }
 
@@ -983,6 +1026,9 @@ impl EditorInstance {
         tokio::spawn(async move {
             let mut prefetch_cancel_token: Option<CancellationToken> = None;
             let mut cursor_cache = PreviewCursorCache::default();
+            let mut project_rx = self.project_config.0.subscribe();
+            let mut zoom_cache = PreviewZoomCache::default();
+            let mut outgoing_zoom_cache = PreviewZoomCache::default();
 
             loop {
                 preview_rx.changed().await.unwrap();
@@ -1007,7 +1053,17 @@ impl EditorInstance {
                         break;
                     }
 
-                    let project = self.project_config.1.borrow().clone();
+                    let project = {
+                        let project = project_rx.borrow_and_update();
+                        // Each clip's cursor events and the screen size are
+                        // fixed for this instance, so only a project change
+                        // can make a cached zoom timeline stale.
+                        if project.has_changed() {
+                            zoom_cache.clear();
+                            outgoing_zoom_cache.clear();
+                        }
+                        project.clone()
+                    };
                     let frame_time = frame_number as f64 / fps as f64;
                     let transition_mapping = project.timeline.as_ref().and_then(|timeline| {
                         if timeline.transitions.is_empty() {
@@ -1074,16 +1130,17 @@ impl EditorInstance {
                             // timeline playback and export use (the old focus
                             // interpolator was never precomputed here and fell
                             // back to a divergent direct interpolation).
-                            let mut zoom_timeline =
-                                ZoomTransformTimeline::from_project_for_clip(
-                                &project,
-                                &segment_medias.cursor,
-                                total_duration,
-                                self.render_constants.options.screen_size,
-                                segment.recording_clip,
-                            );
-                            zoom_timeline
-                                .ensure_precomputed_until((frame_number as f32 + 1.0) / fps as f32);
+                            let zoom_until = (frame_number as f32 + 1.0) / fps as f32;
+                            let zoom_timeline =
+                                zoom_cache.get(segment.recording_clip, zoom_until, || {
+                                    ZoomTransformTimeline::from_project_for_clip(
+                                        &project,
+                                        &segment_medias.cursor,
+                                        total_duration,
+                                        self.render_constants.options.screen_size,
+                                        segment.recording_clip,
+                                    )
+                                });
 
                             let outgoing_transition = if let Some((outgoing, kind, progress)) =
                                 transition_mapping
@@ -1109,16 +1166,18 @@ impl EditorInstance {
                                     ) => frames,
                                 };
                                 if let Some(outgoing_frames) = outgoing_frames {
-                                    let mut outgoing_zoom =
-                                        ZoomTransformTimeline::from_project_for_outgoing_clip(
-                                            &project,
-                                            &outgoing_media.cursor,
-                                            total_duration,
-                                            self.render_constants.options.screen_size,
-                                            outgoing.segment.recording_clip,
-                                        );
-                                    outgoing_zoom.ensure_precomputed_until(
-                                        (frame_number as f32 + 1.0) / fps as f32,
+                                    let outgoing_zoom = outgoing_zoom_cache.get(
+                                        outgoing.segment.recording_clip,
+                                        zoom_until,
+                                        || {
+                                            ZoomTransformTimeline::from_project_for_outgoing_clip(
+                                                &project,
+                                                &outgoing_media.cursor,
+                                                total_duration,
+                                                self.render_constants.options.screen_size,
+                                                outgoing.segment.recording_clip,
+                                            )
+                                        },
                                     );
                                     let outgoing_cursor_timeline = cursor_cache.get(
                                         outgoing.segment.recording_clip,
@@ -1140,7 +1199,7 @@ impl EditorInstance {
                                             &outgoing_media.cursor,
                                             &outgoing_frames,
                                             total_duration,
-                                            &outgoing_zoom,
+                                            outgoing_zoom,
                                             cursor_timeline,
                                         )
                                     } else {
@@ -1153,7 +1212,7 @@ impl EditorInstance {
                                             &outgoing_media.cursor,
                                             &outgoing_frames,
                                             total_duration,
-                                            &outgoing_zoom,
+                                            outgoing_zoom,
                                         )
                                     };
                                     Some((
@@ -1201,7 +1260,7 @@ impl EditorInstance {
                                         &segment_medias.cursor,
                                         &segment_frames,
                                         total_duration,
-                                        &zoom_timeline,
+                                        zoom_timeline,
                                         cursor_timeline,
                                     )
                                 } else {
@@ -1214,7 +1273,7 @@ impl EditorInstance {
                                         &segment_medias.cursor,
                                         &segment_frames,
                                         total_duration,
-                                        &zoom_timeline,
+                                        zoom_timeline,
                                     )
                                 };
 
@@ -2065,6 +2124,207 @@ mod tests {
         project.timeline.as_mut().unwrap().style_segments[0].enabled = false;
         assert!(cache.get(0, &cursor, &project).is_none());
         assert!(cache.entries.is_empty());
+    }
+
+    fn preview_zoom_cursor(clip: u32, duration_secs: f64, moves: u32) -> CursorEvents {
+        let step_ms = duration_secs * 1000.0 / f64::from(moves);
+        CursorEvents {
+            moves: (0..moves)
+                .map(|i| CursorMoveEvent {
+                    active_modifiers: Vec::new(),
+                    cursor_id: "default".to_string(),
+                    time_ms: f64::from(i) * step_ms,
+                    x: ((f64::from(i + clip * 17) * 0.0011).sin() + 1.0) / 2.0,
+                    y: ((f64::from(i + clip * 23) * 0.0007).cos() + 1.0) / 2.0,
+                })
+                .collect(),
+            clicks: (0..(duration_secs / 3.0) as u32)
+                .map(|i| CursorClickEvent {
+                    active_modifiers: Vec::new(),
+                    cursor_id: "default".to_string(),
+                    cursor_num: 0,
+                    time_ms: f64::from(i) * 3000.0,
+                    down: true,
+                })
+                .collect(),
+        }
+    }
+
+    fn preview_zoom_project() -> ProjectConfiguration {
+        ProjectConfiguration {
+            timeline: Some(
+                serde_json::from_value(serde_json::json!({
+                    "segments": [
+                        {"recordingClip": 0, "start": 0.0, "end": 20.0, "timescale": 1.0},
+                        {"recordingClip": 1, "start": 0.0, "end": 20.0, "timescale": 1.0},
+                        {"recordingClip": 2, "start": 0.0, "end": 20.0, "timescale": 1.0}
+                    ],
+                    "zoomSegments": [
+                        {"start": 1.0, "end": 12.0, "amount": 2.0, "mode": "auto"},
+                        {"start": 25.0, "end": 31.0, "amount": 3.0, "mode": {"manual": {"x": 0.2, "y": 0.8}}},
+                        {"start": 44.0, "end": 52.0, "amount": 1.6, "mode": "auto", "instantAnimation": true}
+                    ]
+                }))
+                .unwrap(),
+            ),
+            ..ProjectConfiguration::default()
+        }
+    }
+
+    #[test]
+    fn preview_zoom_cache_scrubs_match_a_fresh_timeline() {
+        let project = preview_zoom_project();
+        let duration = project.timeline.as_ref().unwrap().duration();
+        let cursors: Vec<_> = (0..2)
+            .map(|clip| preview_zoom_cursor(clip, 20.0, 500))
+            .collect();
+        let timeline_for = |clip: u32| {
+            ZoomTransformTimeline::from_project_for_clip(
+                &project,
+                &cursors[clip as usize],
+                duration,
+                XY::new(1920, 1080),
+                clip,
+            )
+        };
+        let mut cache = PreviewZoomCache::default();
+        let mut builds = 0;
+
+        for (clip, time) in [
+            (0, 9.5),
+            (0, 2.0),
+            (0, 11.0),
+            (1, 29.0),
+            (0, 0.0),
+            (1, 26.5),
+            (1, 39.9),
+            (0, 59.0),
+        ] {
+            let until = time + 1.0 / 60.0;
+            let cached = cache
+                .get(clip, until, || {
+                    builds += 1;
+                    timeline_for(clip)
+                })
+                .sample(time);
+            let mut fresh = timeline_for(clip);
+            fresh.ensure_precomputed_until(until);
+            let fresh = fresh.sample(time);
+
+            assert_eq!(
+                cached.t.to_bits(),
+                fresh.t.to_bits(),
+                "clip={clip} time={time}"
+            );
+            assert_eq!(cached.bounds, fresh.bounds, "clip={clip} time={time}");
+        }
+        assert_eq!(builds, 2);
+    }
+
+    #[test]
+    fn preview_zoom_cache_evicts_the_oldest_clip_and_rebuilds_after_clear() {
+        let project = preview_zoom_project();
+        let cursor = preview_zoom_cursor(0, 20.0, 500);
+        let mut cache = PreviewZoomCache::default();
+        let mut builds = Vec::new();
+        let mut get = |cache: &mut PreviewZoomCache, clip: u32| {
+            cache.get(clip, 1.0, || {
+                builds.push(clip);
+                ZoomTransformTimeline::from_project_for_clip(
+                    &project,
+                    &cursor,
+                    60.0,
+                    XY::new(1920, 1080),
+                    clip,
+                )
+            });
+        };
+
+        for clip in [0, 1, 0, 2, 1, 1] {
+            get(&mut cache, clip);
+        }
+        cache.clear();
+        get(&mut cache, 1);
+
+        assert_eq!(builds, [0, 1, 2, 1, 1]);
+    }
+
+    #[test]
+    #[ignore]
+    fn benchmark_preview_zoom_scrub() {
+        use std::{hint::black_box, time::Instant};
+
+        fn percentile(sorted: &[f64], p: f64) -> f64 {
+            sorted[((sorted.len() - 1) as f64 * p).round() as usize]
+        }
+
+        let duration = 1800.0;
+        let cursor = preview_zoom_cursor(0, duration, 50_000);
+        let drag: Vec<f32> = (0..240)
+            .map(|i| 1500.0 + (i as f32 - 120.0).abs() * 0.25)
+            .collect();
+        let hover: Vec<f32> = (0..240u32)
+            .map(|i| (i.wrapping_mul(2_654_435_761) % 1_800_000) as f32 / 1000.0)
+            .collect();
+
+        for zoom_segments in [10, 60] {
+            let project = ProjectConfiguration {
+                timeline: Some(
+                    serde_json::from_value(serde_json::json!({
+                        "segments": [{"recordingClip": 0, "start": 0.0, "end": duration, "timescale": 1.0}],
+                        "zoomSegments": (0..zoom_segments).map(|i| {
+                            let start = f64::from(i) * duration / f64::from(zoom_segments) + 5.0;
+                            serde_json::json!({"start": start, "end": start + 20.0, "amount": 2.0, "mode": "auto"})
+                        }).collect::<Vec<_>>()
+                    }))
+                    .unwrap(),
+                ),
+                ..ProjectConfiguration::default()
+            };
+            let build = || {
+                ZoomTransformTimeline::from_project_for_clip(
+                    &project,
+                    &cursor,
+                    duration,
+                    XY::new(1920, 1080),
+                    0,
+                )
+            };
+
+            for (scrub, times) in [("drag around 25:00", &drag), ("hover sweep", &hover)] {
+                let mut rebuilt = Vec::with_capacity(times.len());
+                for &time in times {
+                    let start = Instant::now();
+                    let mut timeline = build();
+                    timeline.ensure_precomputed_until(time + 1.0 / 60.0);
+                    black_box(timeline.sample(time));
+                    rebuilt.push(start.elapsed().as_secs_f64() * 1000.0);
+                }
+
+                let mut cache = PreviewZoomCache::default();
+                let mut cached = Vec::with_capacity(times.len());
+                for &time in times {
+                    let start = Instant::now();
+                    black_box(cache.get(0, time + 1.0 / 60.0, build).sample(time));
+                    cached.push(start.elapsed().as_secs_f64() * 1000.0);
+                }
+
+                let total = |samples: &[f64]| samples.iter().sum::<f64>();
+                let (rebuilt_total, cached_total) = (total(&rebuilt), total(&cached));
+                rebuilt.sort_by(f64::total_cmp);
+                cached.sort_by(f64::total_cmp);
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "scrub": scrub,
+                        "zoom_segments": zoom_segments,
+                        "requests": times.len(),
+                        "rebuilt_ms": {"p50": percentile(&rebuilt, 0.5), "p95": percentile(&rebuilt, 0.95), "max": percentile(&rebuilt, 1.0), "total": rebuilt_total},
+                        "cached_ms": {"p50": percentile(&cached, 0.5), "p95": percentile(&cached, 0.95), "max": percentile(&cached, 1.0), "total": cached_total},
+                    })
+                );
+            }
+        }
     }
 
     #[test]

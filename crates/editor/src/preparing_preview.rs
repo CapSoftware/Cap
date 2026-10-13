@@ -18,6 +18,7 @@ use crate::{
     EditorFrameFormat, EditorFrameOutput,
     editor_instance::{
         PREVIEW_RENDER_MAX_ATTEMPTS, PREVIEW_RENDER_RETRY_DELAY_MS, PreviewCursorCache,
+        PreviewZoomCache,
     },
 };
 
@@ -575,7 +576,7 @@ async fn run_preview(
     control.check()?;
     let mut renderer = FrameRenderer::new(&constants);
     let mut cursor_cache = PreviewCursorCache::default();
-    let mut zoom_cache = VecDeque::new();
+    let mut zoom_cache = PreviewZoomCache::default();
     control.state.send_modify(|state| {
         state.ready = Some(PreparingPreviewReady {
             screen_size,
@@ -636,15 +637,19 @@ async fn run_preview(
             let cursor_timeline =
                 cursor_cache.get(timeline_segment.recording_clip, &cursor, &project);
             control.check()?;
-            let zoom = cached_zoom(
-                &mut zoom_cache,
+            let zoom = zoom_cache.get(
                 timeline_segment.recording_clip,
-                &project,
-                &cursor,
-                duration,
-                screen_size,
+                (request.frame_number as f32 + 1.0) / request.fps as f32,
+                || {
+                    ZoomTransformTimeline::from_project_for_clip(
+                        &project,
+                        &cursor,
+                        duration,
+                        screen_size,
+                        timeline_segment.recording_clip,
+                    )
+                },
             );
-            zoom.ensure_precomputed_until((request.frame_number as f32 + 1.0) / request.fps as f32);
             control.check()?;
             if !is_current(&requests, request) {
                 continue 'requests;
@@ -754,37 +759,6 @@ fn check_cursor_error(constants: &RenderVideoConstants) -> Result<(), PreparingP
     } else {
         Ok(())
     }
-}
-
-fn cached_zoom<'a>(
-    cache: &'a mut VecDeque<(u32, ZoomTransformTimeline)>,
-    clip: u32,
-    project: &ProjectConfiguration,
-    cursor: &CursorEvents,
-    duration: f64,
-    screen_size: XY<u32>,
-) -> &'a mut ZoomTransformTimeline {
-    if let Some(position) = cache.iter().position(|(index, _)| *index == clip) {
-        let entry = cache
-            .remove(position)
-            .expect("Located zoom entry is present");
-        cache.push_back(entry);
-    } else {
-        if cache.len() == MAX_OPEN_SEGMENTS {
-            cache.pop_front();
-        }
-        cache.push_back((
-            clip,
-            ZoomTransformTimeline::from_project_for_clip(
-                project,
-                cursor,
-                duration,
-                screen_size,
-                clip,
-            ),
-        ));
-    }
-    &mut cache.back_mut().expect("Requested zoom entry is cached").1
 }
 
 fn validate_output(
