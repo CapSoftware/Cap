@@ -315,6 +315,38 @@ mod tests {
     }
 
     #[test]
+    fn converts_multiple_padded_rows_without_last_row_padding() {
+        let expected = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+        for raw in [&PADDED[..], &PADDED[..18]] {
+            assert_eq!(
+                convert_32bit_rows(raw, 10, 2, 2, ChannelOrder::Rgba),
+                Some(expected.clone())
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_a_truncated_second_row() {
+        assert_eq!(
+            convert_32bit_rows(&PADDED[..17], 10, 2, 2, ChannelOrder::Rgba),
+            None
+        );
+    }
+
+    #[test]
+    fn zero_stride_reuses_a_complete_row_and_rejects_short_input() {
+        let raw = [1, 2, 3, 4, 5, 6, 7, 8];
+        assert_eq!(
+            convert_32bit_rows(&raw, 0, 2, 2, ChannelOrder::Bgra),
+            Some(vec![3, 2, 1, 4, 7, 6, 5, 8, 3, 2, 1, 4, 7, 6, 5, 8])
+        );
+        assert_eq!(
+            convert_32bit_rows(&raw[..7], 0, 2, 2, ChannelOrder::Bgra),
+            None
+        );
+    }
+
+    #[test]
     fn thumbnail_channel_orders_and_nv12_match_the_picker() {
         let raw = vec![1, 2, 3, 4, 5, 6, 7, 8, 0xff, 0xff, 0xff, 0xff];
         assert_eq!(
