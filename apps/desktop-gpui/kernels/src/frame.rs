@@ -15,8 +15,31 @@ pub fn unpad_rgba_to_bgra(
     stride: usize,
     rows: usize,
 ) -> Option<Vec<u8>> {
-    let mut tight = unpad_rows(data, width * 4, stride, rows)?;
-    swap_red_blue(&mut tight);
+    let row_bytes = width.checked_mul(4)?;
+    let output_len = row_bytes.checked_mul(rows)?;
+    if stride == 0 || stride < row_bytes || data.len() < stride.checked_mul(rows)? {
+        return None;
+    }
+    if output_len == 0 {
+        return Some(Vec::new());
+    }
+
+    let mut tight = vec![0; output_len];
+    for (source, target) in data
+        .chunks_exact(stride)
+        .zip(tight.chunks_exact_mut(row_bytes))
+        .take(rows)
+    {
+        for (source, target) in source[..row_bytes]
+            .chunks_exact(4)
+            .zip(target.chunks_exact_mut(4))
+        {
+            target[0] = source[2];
+            target[1] = source[1];
+            target[2] = source[0];
+            target[3] = source[3];
+        }
+    }
     Some(tight)
 }
 
