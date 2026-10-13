@@ -1202,30 +1202,36 @@ mod tests {
         let display = bundle_display_jpg(&root.join("bundle.cap"), 1512, 982);
 
         let cold = load_thumbnail_png(&display).expect("a thumbnail from the original");
+        let cold = image::load_from_memory(&cold).unwrap();
+        assert_eq!(
+            (cold.width(), cold.height()),
+            (THUMBNAIL_SIZE, THUMBNAIL_SIZE)
+        );
         let cached = cached_thumbnails(&display);
         assert_eq!(cached.len(), 1, "the first scan fills the Recents cache");
         assert_eq!(image::image_dimensions(&cached[0]).unwrap(), (392, 255));
 
+        let marker = image::Rgb([200, 30, 90]);
+        image::RgbImage::from_pixel(392, 255, marker)
+            .save_with_format(&cached[0], image::ImageFormat::Jpeg)
+            .unwrap();
+        let marker_bytes = std::fs::read(&cached[0]).unwrap();
+
         let warm = load_thumbnail_png(&display).expect("a thumbnail from the cache");
+        assert_eq!(cached_thumbnails(&display), cached);
         assert_eq!(
-            cached_thumbnails(&display),
-            cached,
+            std::fs::read(&cached[0]).unwrap(),
+            marker_bytes,
             "a hit rewrites nothing"
         );
-        let [cold, warm] =
-            [cold, warm].map(|png| image::load_from_memory(&png).unwrap().into_rgba8());
-        assert_eq!(cold.dimensions(), (THUMBNAIL_SIZE, THUMBNAIL_SIZE));
-        assert_eq!(warm.dimensions(), cold.dimensions());
-        let mean_difference = cold
-            .as_raw()
-            .iter()
-            .zip(warm.as_raw())
-            .map(|(cold, warm)| u32::from(cold.abs_diff(*warm)))
-            .sum::<u32>()
-            / cold.as_raw().len() as u32;
+        let warm = image::load_from_memory(&warm).unwrap().into_rgb8();
         assert!(
-            mean_difference <= 4,
-            "warm icon drifted by {mean_difference}"
+            warm.pixels().all(|pixel| pixel
+                .0
+                .iter()
+                .zip(marker.0)
+                .all(|(a, b)| a.abs_diff(b) <= 3)),
+            "the warm icon is built from the cached thumbnail, not the original"
         );
         std::fs::remove_dir_all(&root).ok();
     }
