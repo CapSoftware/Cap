@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	applyResult,
 	availability,
+	CHECK_INTERVAL_MS,
 	dates,
 	emptyState,
 	isStale,
@@ -27,22 +28,22 @@ describe("monitor state", () => {
 	test("confirms an incident and recovery over two consecutive samples", () => {
 		const state = emptyState();
 		applyResult(state, "website", good, start);
-		applyResult(state, "website", bad, start + 60_000);
+		applyResult(state, "website", bad, start + CHECK_INTERVAL_MS);
 		expect(state.services.website.status).toBe("degraded");
 		expect(state.incidents).toHaveLength(0);
-		applyResult(state, "website", bad, start + 120_000);
+		applyResult(state, "website", bad, start + 2 * CHECK_INTERVAL_MS);
 		expect(state.services.website.status).toBe("outage");
 		expect(state.incidents).toHaveLength(1);
 		expect(state.incidents[0].startedAt).toBe(
-			new Date(start + 60_000).toISOString(),
+			new Date(start + CHECK_INTERVAL_MS).toISOString(),
 		);
-		applyResult(state, "website", good, start + 180_000);
+		applyResult(state, "website", good, start + 3 * CHECK_INTERVAL_MS);
 		expect(state.services.website.status).toBe("outage");
 		expect(state.incidents[0].resolvedAt).toBeNull();
-		applyResult(state, "website", good, start + 240_000);
+		applyResult(state, "website", good, start + 4 * CHECK_INTERVAL_MS);
 		expect(state.services.website.status).toBe("operational");
 		expect(state.incidents[0].resolvedAt).toBe(
-			new Date(start + 240_000).toISOString(),
+			new Date(start + 4 * CHECK_INTERVAL_MS).toISOString(),
 		);
 		expect(state.incidents).toHaveLength(1);
 	});
@@ -50,8 +51,8 @@ describe("monitor state", () => {
 	test("ignores duplicate and out-of-order samples", () => {
 		const state = emptyState();
 		applyResult(state, "website", good, start);
-		applyResult(state, "website", bad, start + 1_000);
-		applyResult(state, "website", bad, start - 60_000);
+		applyResult(state, "website", bad, start + CHECK_INTERVAL_MS - 1);
+		applyResult(state, "website", bad, start - CHECK_INTERVAL_MS);
 		expect(state.services.website.days[0].operational).toBe(1);
 		expect(state.services.website.days[0].outage).toBe(0);
 		expect(state.services.website.status).toBe("operational");
@@ -68,8 +69,11 @@ describe("monitor state", () => {
 	test("marks old observations unknown without erasing the incident or history", () => {
 		const state = emptyState();
 		applyResult(state, "website", bad, start);
-		applyResult(state, "website", bad, start + 60_000);
-		const snapshot = publicSnapshot(state, start + 60_000 + STALE_AFTER_MS + 1);
+		applyResult(state, "website", bad, start + CHECK_INTERVAL_MS);
+		const snapshot = publicSnapshot(
+			state,
+			start + CHECK_INTERVAL_MS + STALE_AFTER_MS + 1,
+		);
 		expect(snapshot.services[0].status).toBe("unknown");
 		expect(snapshot.incidents[0].resolvedAt).toBeNull();
 		expect(availability(snapshot.services[0].days)).toBe(0);

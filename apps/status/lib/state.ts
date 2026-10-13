@@ -8,7 +8,8 @@ import type {
 	Snapshot,
 } from "./types";
 
-export const STALE_AFTER_MS = 180_000;
+export const CHECK_INTERVAL_MS = 5 * 60_000;
+export const STALE_AFTER_MS = 3 * CHECK_INTERVAL_MS;
 export const HISTORY_DAYS = 90;
 const DAY_MS = 86_400_000;
 
@@ -79,8 +80,8 @@ export function applyResult(
 	}
 	if (
 		previous.checkedAt &&
-		Math.floor(Date.parse(previous.checkedAt) / 60_000) >=
-			Math.floor(now / 60_000)
+		Math.floor(Date.parse(previous.checkedAt) / CHECK_INTERVAL_MS) >=
+			Math.floor(now / CHECK_INTERVAL_MS)
 	)
 		return;
 	if (isStale(previous.checkedAt, now)) {

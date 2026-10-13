@@ -1,7 +1,7 @@
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { probe } from "../../../../lib/probe";
 import { SERVICES, serviceUrl } from "../../../../lib/services";
-import { applyResult } from "../../../../lib/state";
+import { applyResult, CHECK_INTERVAL_MS } from "../../../../lib/state";
 import {
 	COMMIT_SCRIPT,
 	getRedis,
@@ -38,10 +38,10 @@ export async function GET(request: Request) {
 			const now = Date.now();
 			if (
 				state.checkedAt &&
-				Math.floor(Date.parse(state.checkedAt) / 60_000) >=
-					Math.floor(now / 60_000)
+				Math.floor(Date.parse(state.checkedAt) / CHECK_INTERVAL_MS) >=
+					Math.floor(now / CHECK_INTERVAL_MS)
 			) {
-				return Response.json({ skipped: "Minute already sampled" });
+				return Response.json({ skipped: "Check interval already sampled" });
 			}
 			const results = await Promise.all(
 				SERVICES.map(async (service) => {

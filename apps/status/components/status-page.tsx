@@ -221,7 +221,7 @@ export function StatusPage() {
 							</span>
 							{secondsAgo !== null && fresh
 								? `Updated ${secondsAgo < 60 ? "just now" : `${Math.floor(secondsAgo / 60)}m ago`}`
-								: "Updates every minute"}
+								: "Checks every 5 minutes"}
 						</div>
 					</div>
 					<section
@@ -357,8 +357,8 @@ export function StatusPage() {
 							How we keep an eye on things <span aria-hidden="true">+</span>
 						</summary>
 						<p>
-							Lightweight checks run every minute, independently of this page.
-							We retry an unhealthy response before recording it, confirm
+							Lightweight checks run every five minutes, independently of this
+							page. We retry an unhealthy response before recording it, confirm
 							incidents across two checks, and confirm recovery twice. Grey bars
 							mean no data; gaps are never counted as uptime. Percentages
 							describe successful observed checks, not unmonitored time. Select

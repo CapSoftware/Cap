@@ -1,8 +1,10 @@
-import { afterAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { GET as collect } from "../app/api/cron/check/route";
 import { GET as readStatus } from "../app/api/status/route";
 import { SERVICES } from "../lib/services";
+import { CHECK_INTERVAL_MS, emptyState } from "../lib/state";
 import { LOCK_KEY, STATE_KEY } from "../lib/store";
+import deployment from "../vercel.json";
 
 const values = new Map<string, string>();
 const realFetch = globalThis.fetch;
@@ -134,9 +136,34 @@ describe("scheduler → storage → public API", () => {
 		expect(response.headers.get("cache-control")).toContain("s-maxage=30");
 		expect(probeCalls).toBe(6);
 		expect(await (await collect(authorizedRequest())).json()).toEqual({
-			skipped: "Minute already sampled",
+			skipped: "Check interval already sampled",
 		});
 		expect(probeCalls).toBe(6);
+	});
+
+	test("limits collection to the configured five-minute interval", async () => {
+		expect(deployment.crons[0].schedule).toBe("*/5 * * * *");
+		const start =
+			Math.floor(Date.now() / CHECK_INTERVAL_MS) * CHECK_INTERVAL_MS;
+		values.set(
+			STATE_KEY,
+			JSON.stringify({
+				...emptyState(),
+				checkedAt: new Date(start).toISOString(),
+			}),
+		);
+		const clock = spyOn(Date, "now").mockReturnValue(start + 2 * 60_000);
+		try {
+			expect(await (await collect(authorizedRequest())).json()).toEqual({
+				skipped: "Check interval already sampled",
+			});
+			expect(probeCalls).toBe(0);
+			clock.mockReturnValue(start + CHECK_INTERVAL_MS);
+			expect((await collect(authorizedRequest())).status).toBe(200);
+			expect(probeCalls).toBe(6);
+		} finally {
+			clock.mockRestore();
+		}
 	});
 
 	test("overlapping invocations perform a single collection", async () => {
