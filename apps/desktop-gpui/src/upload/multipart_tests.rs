@@ -641,6 +641,10 @@ mod mock_network {
     }
 }
 
+fn local_client() -> reqwest::Client {
+    reqwest::Client::builder().no_proxy().build().unwrap()
+}
+
 /// Presigns over a fresh client per part, like `auth::authed_request`, then
 /// runs the real part PUT on either a fresh client per part (the previous
 /// behaviour) or one shared client. With `drive_urls`, presigning returns
@@ -672,7 +676,7 @@ impl PartTransport for MockPartTransport {
                 md5: None,
             });
         }
-        let url = reqwest::Client::new()
+        let url = local_client()
             .post(format!(
                 "http://{}/presign/{}",
                 self.addr, chunk.part_number
@@ -699,7 +703,7 @@ impl PartTransport for MockPartTransport {
         let client = match &self.shared {
             Some(client) => client,
             None => {
-                fresh = reqwest::Client::new();
+                fresh = local_client();
                 &fresh
             }
         };
@@ -734,6 +738,7 @@ async fn drive_urls_without_a_drive_initiate_are_put_in_order_with_content_range
         addr: server.addr,
         shared: Some(
             reqwest::Client::builder()
+                .no_proxy()
                 .resolve("www.googleapis.com", server.addr)
                 .build()
                 .unwrap(),
@@ -786,7 +791,7 @@ async fn s3_urls_are_put_concurrently_over_http_without_content_range() {
     let server = mock_network::start(fast_local_profile());
     let transport = MockPartTransport {
         addr: server.addr,
-        shared: Some(reqwest::Client::new()),
+        shared: Some(local_client()),
         drive_urls: false,
     };
     let (result, _) = run(
@@ -857,7 +862,7 @@ async fn multipart_mock_network_benchmark() {
             let server = mock_network::start(profile);
             let transport = MockPartTransport {
                 addr: server.addr,
-                shared: shared.then(reqwest::Client::new),
+                shared: shared.then(local_client),
                 drive_urls: false,
             };
             let progress = Mutex::new(Vec::new());
