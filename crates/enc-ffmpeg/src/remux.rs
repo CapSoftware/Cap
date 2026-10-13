@@ -15,6 +15,7 @@ use crate::audio::opus::{OpusEncoder, OpusEncoderError};
 static ORIGINAL_LOG_LEVEL: AtomicI32 = AtomicI32::new(-1);
 static VALIDATED_AGGREGATE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 const SEEK_PROBE_PACKET_LIMIT: usize = 240;
+const MAX_SEEK_PROBE_WORKERS: usize = 8;
 const SEEK_PROBE_PADDING_US: i64 = 250_000;
 
 fn suppress_ffmpeg_logs() {
@@ -515,9 +516,80 @@ fn probe_video_can_decode_inner(path: &Path) -> Result<bool, String> {
 }
 
 fn probe_video_seek_points_inner(path: &Path, sample_count: usize) -> Result<(), String> {
-    let mut input = avformat::input(path).map_err(|e| format!("Failed to open file: {e}"))?;
-    let duration_us = input.duration();
+    let duration_us = avformat::input(path)
+        .map_err(|e| format!("Failed to open file: {e}"))?
+        .duration();
     let probe_points = build_seek_probe_positions(duration_us, sample_count);
+    let workers = seek_probe_worker_count(probe_points.len());
+    if workers <= 1 {
+        return probe_video_seek_point_batch(path, &probe_points);
+    }
+
+    // Each probe decodes a full-resolution keyframe on one core; independent
+    // demuxer and decoder instances let them overlap without changing what is
+    // validated or which error is reported first.
+    run_in_ordered_workers(&probe_points, workers, |&position_us| {
+        probe_video_seek_point_batch(path, &[position_us])
+    })
+    .into_iter()
+    .collect()
+}
+
+fn run_in_ordered_workers<T: Sync, R: Send>(
+    items: &[T],
+    workers: usize,
+    run: impl Fn(&T) -> Result<R, String> + Sync,
+) -> Vec<Result<R, String>> {
+    let workers = workers.clamp(1, items.len().max(1));
+    let run = &run;
+    let mut ordered = std::thread::scope(|scope| {
+        let handles = (0..workers)
+            .map(|worker| {
+                scope.spawn(move || {
+                    items
+                        .iter()
+                        .enumerate()
+                        .skip(worker)
+                        .step_by(workers)
+                        .map(|(index, item)| (index, run(item)))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut ordered = (0..items.len()).map(|_| None).collect::<Vec<_>>();
+        for (worker, handle) in handles.into_iter().enumerate() {
+            match handle.join() {
+                Ok(results) => {
+                    for (index, result) in results {
+                        ordered[index] = Some(result);
+                    }
+                }
+                Err(_) => {
+                    for index in (worker..items.len()).step_by(workers) {
+                        ordered[index] = Some(Err("Seek probe worker panicked".to_string()));
+                    }
+                }
+            }
+        }
+        ordered
+    });
+    ordered
+        .iter_mut()
+        .map(|result| {
+            result
+                .take()
+                .unwrap_or_else(|| Err("Seek probe result missing".to_string()))
+        })
+        .collect()
+}
+
+fn seek_probe_worker_count(probes: usize) -> usize {
+    let cores = std::thread::available_parallelism().map_or(1, usize::from);
+    probes.min(cores / 2).clamp(1, MAX_SEEK_PROBE_WORKERS)
+}
+
+fn probe_video_seek_point_batch(path: &Path, probe_points: &[i64]) -> Result<(), String> {
+    let mut input = avformat::input(path).map_err(|e| format!("Failed to open file: {e}"))?;
 
     let (stream_index, decoder_ctx) = {
         let input_stream = input
@@ -539,7 +611,7 @@ fn probe_video_seek_points_inner(path: &Path, sample_count: usize) -> Result<(),
 
     let mut frame = ffmpeg::frame::Video::empty();
 
-    for position_us in probe_points {
+    for &position_us in probe_points {
         probe_video_seek_point_with(
             &mut input,
             &mut decoder,
@@ -1735,5 +1807,56 @@ mod tests {
         for window in positions.windows(2) {
             assert!(window[0] < window[1]);
         }
+    }
+
+    #[test]
+    fn ordered_workers_report_the_first_error_by_position_for_uneven_batches() {
+        let items = (0..8).collect::<Vec<i64>>();
+        for workers in [1, 2, 3, 5, 8, 16] {
+            let results = super::run_in_ordered_workers(&items, workers, |&item| {
+                if item == 2 || item == 5 || item == 7 {
+                    Err(format!("probe {item}"))
+                } else {
+                    Ok(item * 10)
+                }
+            });
+            let expected = items
+                .iter()
+                .map(|&item| match item {
+                    2 | 5 | 7 => Err(format!("probe {item}")),
+                    _ => Ok(item * 10),
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(results, expected, "workers={workers}");
+            assert_eq!(
+                results.into_iter().collect::<Result<Vec<_>, _>>(),
+                Err("probe 2".to_string()),
+                "workers={workers}"
+            );
+        }
+    }
+
+    #[test]
+    fn ordered_workers_turn_a_panicked_worker_into_errors_for_its_positions() {
+        let items = (0..7).collect::<Vec<i64>>();
+        let results = super::run_in_ordered_workers(&items, 3, |&item| {
+            if item == 4 {
+                panic!("decoder crashed");
+            }
+            Ok(item)
+        });
+        for (index, result) in results.iter().enumerate() {
+            if index % 3 == 1 {
+                assert_eq!(result, &Err("Seek probe worker panicked".to_string()));
+            } else {
+                assert_eq!(result, &Ok(index as i64));
+            }
+        }
+    }
+
+    #[test]
+    fn ordered_workers_accept_empty_input() {
+        let results = super::run_in_ordered_workers(&[] as &[i64], 4, |&item| Ok(item));
+        assert!(results.is_empty());
     }
 }

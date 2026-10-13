@@ -2096,16 +2096,40 @@ impl RecoveryManager {
             Self::ensure_video_decodes(path, label)?;
         }
 
-        if let Err(seek_error) = probe_video_seek_points(path, EXPORT_SEEK_PROBE_SAMPLE_COUNT) {
-            finalization_info!(
-                "Finalized {} video failed seek validation, normalizing via remux: {}",
-                label,
-                seek_error
-            );
-            Self::normalize_recovered_video(path, label)?;
-        }
-        if video_validation == VideoValidation::Bounded {
-            validate_recovery_track(path, ffmpeg::media::Type::Video, video_validation)?;
+        let (seek_result, track_result) = std::thread::scope(|scope| {
+            let track = (video_validation == VideoValidation::Bounded).then(|| {
+                scope.spawn(|| {
+                    validate_recovery_track(path, ffmpeg::media::Type::Video, video_validation)
+                })
+            });
+            let seek = probe_video_seek_points(path, EXPORT_SEEK_PROBE_SAMPLE_COUNT);
+            let track = track.map(|handle| {
+                handle.join().unwrap_or_else(|_| {
+                    Err(RecoveryError::Validation(format!(
+                        "{label} video track validation panicked"
+                    )))
+                })
+            });
+            (seek, track)
+        });
+
+        match seek_result {
+            Ok(()) => {
+                if let Some(track_result) = track_result {
+                    track_result?;
+                }
+            }
+            Err(seek_error) => {
+                finalization_info!(
+                    "Finalized {} video failed seek validation, normalizing via remux: {}",
+                    label,
+                    seek_error
+                );
+                Self::normalize_recovered_video(path, label)?;
+                if video_validation == VideoValidation::Bounded {
+                    validate_recovery_track(path, ffmpeg::media::Type::Video, video_validation)?;
+                }
+            }
         }
 
         Ok(())

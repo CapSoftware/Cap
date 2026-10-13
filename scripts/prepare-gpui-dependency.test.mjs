@@ -200,4 +200,62 @@ test("dependency verification handles overlapping patches without changing the c
 			assert.equal(existsSync(path.join(zed, "temporary.rs")), true);
 		},
 	);
+
+	git(zed, "apply", path.join(cap, patchDirectory, "zed-linux.patch"));
+	git(cap, "init", "--quiet");
+	git(cap, "config", "user.name", "Fixture");
+	git(cap, "config", "user.email", "fixture@example.invalid");
+	git(cap, "add", "--all");
+	git(cap, "commit", "--quiet", "-m", "Pin first patch stack");
+	const windowsPatch = path.join(cap, patchDirectory, "zed-windows.patch");
+	const pinWindowsRenderer = (contents) => {
+		writeFileSync(
+			windowsPatch,
+			readFileSync(windowsPatch, "utf8").replace(
+				/^\+Windows renderer.*$/m,
+				`+${contents}`,
+			),
+		);
+		git(cap, "commit", "--quiet", "--all", "-m", "Update Windows patch");
+	};
+
+	await t.test(
+		"a checkout carrying an earlier committed stack moves to the current one",
+		() => {
+			pinWindowsRenderer("Windows renderer v2");
+			const before = fingerprint();
+			const result = run(cap, "bash", [script]);
+			assert.equal(result.status, 0, result.stderr);
+			assert.match(result.stderr, /Updated .* to the current ones/);
+			assert.equal(
+				readFileSync(path.join(zed, "windows.rs"), "utf8"),
+				"Windows renderer v2\n",
+			);
+			assert.equal(
+				readFileSync(path.join(zed, "renderer.rs"), "utf8"),
+				"Linux renderer\n",
+			);
+			assert.equal(existsSync(path.join(zed, "temporary.rs")), false);
+			const after = fingerprint();
+			assert.deepEqual(after.unrelated, before.unrelated);
+			assert.equal(after.head, before.head);
+		},
+	);
+
+	await t.test(
+		"local edits to a patched file are never overwritten by an update",
+		() => {
+			writeFileSync(path.join(zed, "windows.rs"), "local experiment\n");
+			pinWindowsRenderer("Windows renderer v3");
+			const before = fingerprint();
+			const result = run(cap, "bash", [script]);
+			assert.equal(result.status, 1);
+			assert.match(result.stderr, /does not contain Cap's pinned GPUI patch/);
+			assert.deepEqual(fingerprint(), before);
+			assert.equal(
+				readFileSync(path.join(zed, "windows.rs"), "utf8"),
+				"local experiment\n",
+			);
+		},
+	);
 });

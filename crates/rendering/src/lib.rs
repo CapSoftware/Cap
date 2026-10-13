@@ -2246,6 +2246,7 @@ pub async fn create_shared_device() -> Result<SharedWgpuDevice, RenderingError> 
     })
 }
 
+#[derive(Clone, Debug)]
 pub struct SharedWgpuDevice {
     pub instance: wgpu::Instance,
     pub adapter: wgpu::Adapter,
@@ -3699,7 +3700,7 @@ impl ProjectUniforms {
         };
         let cursor_interp_fn = |time: f32| -> Option<InterpolatedCursorPosition> {
             if cursor.raw {
-                interpolate_cursor(cursor_events, time, None)
+                precomputed_cursor.interpolate_raw(cursor_events, time)
             } else {
                 variant
                     .as_deref()
@@ -8424,6 +8425,224 @@ mod project_uniforms_tests {
         )
         .await
         .unwrap()
+    }
+
+    #[tokio::test]
+    async fn raw_precomputed_cursor_preserves_rendered_pixels() {
+        let mut constants = cursor_test_constants().await;
+        let size = XY::new(320, 180);
+        constants.options.screen_size = size;
+        let events = CursorEvents {
+            moves: vec![
+                cursor_move(0.0, 0.1, 0.5),
+                cursor_move(0.0, 0.2, 0.5),
+                cursor_move(250.0, 0.3, 0.4),
+                cursor_move(800.0, 0.8, 0.6),
+                cursor_move(1500.0, 0.4, 0.3),
+                cursor_move(1800.0, 0.6, 0.5),
+            ],
+            clicks: vec![cap_project::CursorClickEvent {
+                active_modifiers: Vec::new(),
+                cursor_num: 0,
+                cursor_id: "primary".to_string(),
+                time_ms: 300.0,
+                down: true,
+            }],
+        };
+        let source = DecodedFrame::new(vec![160; 320 * 180 * 4], size.x, size.y);
+        for base_raw in [true, false] {
+            let mut project = ProjectConfiguration::default();
+            project.cursor.raw = base_raw;
+            project.cursor.set_cursor_type(CursorType::Circle);
+            project.cursor.motion_blur = 0.6;
+            project.cursor.rotation_amount = 1.0;
+            project.cursor.stop_movement_in_last_seconds = Some(0.5);
+            project.cursor.ripple.enabled = true;
+            project.timeline = Some(
+                serde_json::from_value(serde_json::json!({
+                    "segments": [{ "start": 0.0, "end": 2.0, "timescale": 1.0 }],
+                    "zoomSegments": []
+                }))
+                .unwrap(),
+            );
+            if !base_raw {
+                let mut style_cursor = project.cursor.clone();
+                style_cursor.raw = true;
+                project.timeline = Some(
+                    serde_json::from_value(serde_json::json!({
+                        "segments": [{ "start": 0.0, "end": 2.0, "timescale": 1.0 }],
+                        "zoomSegments": [],
+                        "styleSegments": [{
+                            "start": 0.0, "end": 2.0,
+                            "overrides": { "cursor": style_cursor }
+                        }]
+                    }))
+                    .unwrap(),
+                );
+            }
+            let cursor = PrecomputedCursorTimeline::new(
+                &events,
+                (!base_raw).then_some(SpringMassDamperSimulationConfig {
+                    tension: project.cursor.tension,
+                    mass: project.cursor.mass,
+                    friction: project.cursor.friction,
+                }),
+                Some(project.cursor.click_spring_config()),
+            );
+            let zoom = ZoomTransformTimeline::from_project(&project, &events, 2.0, size);
+            let mut legacy_renderer = FrameRenderer::new(&constants);
+            let mut indexed_renderer = FrameRenderer::new(&constants);
+            let mut hidden_renderer = FrameRenderer::new(&constants);
+            let mut legacy_layers = RendererLayers::new(&constants.device, &constants.queue);
+            let mut indexed_layers = RendererLayers::new(&constants.device, &constants.queue);
+            let mut hidden_layers = RendererLayers::new(&constants.device, &constants.queue);
+            for frame_number in [0, 24, 36, 75, 105] {
+                let time = frame_number as f32 / 60.0;
+                let frames = DecodedSegmentFrames {
+                    screen_size: size,
+                    screen_frame: Some(source.clone()),
+                    camera_frame: None,
+                    segment_time: time,
+                    recording_time: time,
+                    segment_has_camera: false,
+                };
+                let legacy = ProjectUniforms::new(
+                    &constants,
+                    &project,
+                    frame_number,
+                    60,
+                    size,
+                    &events,
+                    &frames,
+                    2.0,
+                    &zoom,
+                );
+                let indexed = ProjectUniforms::new_with_precomputed_cursor(
+                    &constants,
+                    &project,
+                    frame_number,
+                    60,
+                    size,
+                    &events,
+                    &frames,
+                    2.0,
+                    &zoom,
+                    &cursor,
+                );
+                let legacy = legacy_renderer
+                    .render_immediate(frames.clone(), legacy, &events, true, &mut legacy_layers)
+                    .await
+                    .unwrap();
+                let indexed = indexed_renderer
+                    .render_immediate(frames.clone(), indexed, &events, true, &mut indexed_layers)
+                    .await
+                    .unwrap();
+                assert!(
+                    legacy.data == indexed.data,
+                    "raw={base_raw} frame={frame_number}: rendered cursor pixels changed"
+                );
+                if frame_number == 24 {
+                    let mut hidden = ProjectUniforms::new(
+                        &constants,
+                        &project,
+                        frame_number,
+                        60,
+                        size,
+                        &events,
+                        &frames,
+                        2.0,
+                        &zoom,
+                    );
+                    hidden.project.cursor.hide = true;
+                    let hidden = hidden_renderer
+                        .render_immediate(frames, hidden, &events, true, &mut hidden_layers)
+                        .await
+                        .unwrap();
+                    assert!(
+                        legacy.data != hidden.data,
+                        "raw={base_raw}: the fixture must draw a cursor"
+                    );
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn benchmark_raw_cursor_uniform_preparation() {
+        use std::hint::black_box;
+
+        let mut constants = cursor_test_constants().await;
+        let size = XY::new(320, 180);
+        constants.options.screen_size = size;
+        println!("raw_uniforms adapter={}", constants.adapter_name());
+        let source = DecodedFrame::new(vec![160; 320 * 180 * 4], size.x, size.y);
+        for duration_secs in [60, 600, 3600] {
+            let mut project = ProjectConfiguration::default();
+            project.cursor.raw = true;
+            project.timeline = Some(
+                serde_json::from_value(serde_json::json!({
+                    "segments": [{ "start": 0.0, "end": duration_secs, "timescale": 1.0 }],
+                    "zoomSegments": []
+                }))
+                .unwrap(),
+            );
+            let project = Arc::new(project);
+            let events = CursorEvents {
+                moves: (0..=duration_secs * 60)
+                    .map(|index| {
+                        cursor_move(
+                            index as f64 * 1000.0 / 60.0,
+                            (index % 479) as f64 / 479.0,
+                            (index % 283) as f64 / 283.0,
+                        )
+                    })
+                    .collect(),
+                clicks: Vec::new(),
+            };
+            let cursor = PrecomputedCursorTimeline::new(&events, None, None);
+            let zoom =
+                ZoomTransformTimeline::from_project(&project, &events, duration_secs as f64, size);
+            let mut samples = Vec::new();
+            for index in 0..544 {
+                let frame_number = (duration_secs - 3) * 60 + index % 120;
+                let time = frame_number as f32 / 60.0;
+                let frames = DecodedSegmentFrames {
+                    screen_size: size,
+                    screen_frame: Some(source.clone()),
+                    camera_frame: None,
+                    segment_time: time,
+                    recording_time: time,
+                    segment_has_camera: false,
+                };
+                let started = Instant::now();
+                let uniforms = ProjectUniforms::new_with_precomputed_cursor(
+                    black_box(&constants),
+                    black_box(&project),
+                    black_box(frame_number),
+                    60,
+                    size,
+                    black_box(&events),
+                    black_box(&frames),
+                    duration_secs as f64,
+                    black_box(&zoom),
+                    black_box(&cursor),
+                );
+                let elapsed = started.elapsed().as_secs_f64() * 1e6;
+                drop(black_box(uniforms));
+                if index >= 32 {
+                    samples.push(elapsed);
+                }
+            }
+            samples.sort_by(f64::total_cmp);
+            println!(
+                "raw_uniforms duration_secs={duration_secs} moves={} frames={} p50_us={:.3} p95_us={:.3}",
+                events.moves.len(),
+                samples.len(),
+                samples[samples.len() / 2],
+                samples[samples.len() * 95 / 100],
+            );
+        }
     }
 
     #[tokio::test]

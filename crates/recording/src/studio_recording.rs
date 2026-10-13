@@ -72,6 +72,17 @@ fn camera_active_max_capture_size(
     }
 }
 
+fn studio_max_capture_size(
+    quality: crate::StudioQuality,
+    camera_active: bool,
+) -> Option<(u32, u32)> {
+    // ScreenCaptureKit scales on the GPU. Unbounded, a 5K or 6K display is
+    // captured at full size and every frame is scaled down to the H.264 limit
+    // on the CPU, which also rules out zero-copy VideoToolbox input.
+    camera_active_max_capture_size(quality, camera_active)
+        .or_else(|| cfg!(target_os = "macos").then_some((H264_MAX_DIMENSION, H264_MAX_DIMENSION)))
+}
+
 #[allow(clippy::large_enum_variant)]
 enum ActorState {
     Recording {
@@ -3255,7 +3266,7 @@ async fn create_segment_pipeline(
         let (display, crop) =
             target_to_display_and_crop(&capture_target).context("target_display_crop")?;
         let compatibility_quality = matches!(quality, crate::StudioQuality::Compatibility);
-        let max_capture_size = camera_active_max_capture_size(quality, camera_active);
+        let max_capture_size = studio_max_capture_size(quality, camera_active);
         let effective_max_fps = if compatibility_quality && camera_active {
             max_fps.min(24)
         } else {
@@ -5444,6 +5455,23 @@ mod tests {
         ] {
             assert!(camera_active_max_capture_size(quality, false).is_none());
         }
+    }
+
+    #[test]
+    fn studio_capture_is_bounded_to_the_h264_limit_on_macos() {
+        for quality in [
+            crate::StudioQuality::Compatibility,
+            crate::StudioQuality::Balanced,
+            crate::StudioQuality::Ultra,
+        ] {
+            let expected =
+                cfg!(target_os = "macos").then_some((H264_MAX_DIMENSION, H264_MAX_DIMENSION));
+            assert_eq!(studio_max_capture_size(quality, false), expected);
+        }
+        assert_eq!(
+            studio_max_capture_size(crate::StudioQuality::Compatibility, true),
+            camera_active_max_capture_size(crate::StudioQuality::Compatibility, true),
+        );
     }
 
     #[test]
