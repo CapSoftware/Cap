@@ -5221,7 +5221,7 @@ fn load_editor_project_candidate(
         // BGRA swap is a few megabytes per frame), deliver on the main one.
         cx.spawn({
             let stats = stats.clone();
-            let pump_instance = instance.clone();
+            let pump_instance = Arc::downgrade(&instance);
             async move |cx| {
                 while let Ok((output, layout)) = frame_rx.recv_async().await {
                     let (frame, number) = match output {
@@ -5257,7 +5257,7 @@ fn load_editor_project_candidate(
                     };
                     if handle
                         .update(cx, |view, window, cx| {
-                            if !view.is_instance(&pump_instance) {
+                            if !view.holds_instance(&pump_instance) {
                                 return;
                             }
                             view.frame_arrived(
@@ -5282,13 +5282,16 @@ fn load_editor_project_candidate(
         // The playhead drain. The signal is latest-wins, so this reads the
         // atomic rather than a queue: at 60Hz a backlog would only ever
         // describe the past.
-        let playhead_instance = instance.clone();
+        let playhead_instance = Arc::downgrade(&instance);
+        let playhead = Arc::downgrade(&playhead);
         cx.spawn(async move |cx| {
             while playhead_rx.recv_async().await.is_ok() {
-                let frame = playhead.position();
+                let Some(frame) = playhead.upgrade().map(|signal| signal.position()) else {
+                    return;
+                };
                 if handle
                     .update(cx, |view, window, cx| {
-                        if view.is_instance(&playhead_instance) {
+                        if view.holds_instance(&playhead_instance) {
                             view.playhead_changed(frame, window, cx);
                         }
                     })
