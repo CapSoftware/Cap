@@ -512,8 +512,8 @@ fn visible_box(start: f64, end: f64, transform: Transform, secs_per_pixel: f64) 
 // Waveform peaks
 // ---------------------------------------------------------------------------
 
-pub fn waveform_peaks<'a>(samples: impl IntoIterator<Item = &'a f32>, channels: u16) -> Vec<f32> {
-    cap_editor::waveform_peaks(samples.into_iter(), channels)
+pub fn waveform_peaks(blocks: &[&[f32]], channels: u16) -> Vec<f32> {
+    cap_gpui_kernels::waveform::peaks(blocks, channels)
 }
 
 /// `WAVEFORM_MIN_DB` / `WAVEFORM_SAMPLE_STEP` / `WAVEFORM_MUTE_DB`
@@ -4408,18 +4408,18 @@ mod tests {
     fn peak_extraction_is_one_value_per_hundred_milliseconds() {
         // Two chunks of full-scale mono at the crate's own sample rate.
         let samples = vec![1.0f32; AUDIO_SAMPLE_RATE / 5];
-        let peaks = waveform_peaks(&samples, 1);
+        let peaks = waveform_peaks(&[&samples], 1);
         assert_eq!(peaks.len(), 2);
         // 20 * log10(1.0) = 0 dBFS.
         assert!(peaks.iter().all(|value| value.abs() < 1e-4), "{peaks:?}");
 
         // Stereo halves the chunk count for the same sample buffer: the chunk
         // is `CHUNK_SIZE * channels` wide.
-        assert_eq!(waveform_peaks(&samples, 2).len(), 1);
+        assert_eq!(waveform_peaks(&[&samples], 2).len(), 1);
 
         // Digital silence is pinned to -60 rather than -inf.
         let silent = vec![0.0f32; AUDIO_SAMPLE_RATE / 10];
-        assert_eq!(waveform_peaks(&silent, 1), vec![-60.0]);
+        assert_eq!(waveform_peaks(&[&silent], 1), vec![-60.0]);
 
         // An empty track is an empty table, not a panic.
         assert!(waveform_peaks(&[], 1).is_empty());

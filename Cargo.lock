@@ -1402,6 +1402,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bytemuck",
+ "cidre",
+ "libc",
  "libloading 0.9.0",
  "ndarray 0.16.1",
  "ort",
@@ -5085,7 +5087,6 @@ dependencies = [
  "qoi",
  "ravif",
  "rayon",
- "rgb",
  "tiff 0.10.3",
  "zune-core",
  "zune-jpeg",

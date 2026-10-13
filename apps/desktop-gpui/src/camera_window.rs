@@ -394,8 +394,8 @@ mod frame {
     /// (`camera-preview-convert-benchmark`: 196us -> 137us per 720p frame on
     /// the conversion alone, byte-identical output, before atlas savings).
     /// The same transfer also downscales when a maximum size is given (blur
-    /// caps its input at 640x360, `camera.rs:46-47`), so the blur path's
-    /// scaling costs nothing extra.
+    /// caps its input at 720p, [`crate::camera_blur::BLUR_MAX_DIMS`]), so
+    /// the blur path's scaling costs nothing extra.
     ///
     /// Mirroring is a second hardware pass: a `VTPixelRotationSession` with
     /// `FlipHorizontalOrientation` flips the converted BGRA buffer into a
@@ -868,6 +868,23 @@ pub(crate) fn clear_parked_camera_preview(cx: &mut gpui::App) {
 pub(crate) fn snapshot_preview(
     buffer: &core_video::pixel_buffer::CVPixelBuffer,
 ) -> Option<Arc<gpui::RenderImage>> {
+    snapshot_bgra(buffer, (960., 540.))
+}
+
+/// The background-removal cutout, at the full 720p it was composited at: the
+/// alpha edge is the whole point, so it is never nearest-neighbour shrunk.
+#[cfg(target_os = "macos")]
+pub(crate) fn snapshot_cutout(
+    buffer: &core_video::pixel_buffer::CVPixelBuffer,
+) -> Option<Arc<gpui::RenderImage>> {
+    snapshot_bgra(buffer, (1280., 720.))
+}
+
+#[cfg(target_os = "macos")]
+fn snapshot_bgra(
+    buffer: &core_video::pixel_buffer::CVPixelBuffer,
+    (max_width, max_height): (f64, f64),
+) -> Option<Arc<gpui::RenderImage>> {
     use core_video::pixel_buffer::{kCVPixelBufferLock_ReadOnly, kCVPixelFormatType_32BGRA};
 
     let width = buffer.get_width();
@@ -892,17 +909,34 @@ pub(crate) fn snapshot_preview(
         if base.is_null() {
             return None;
         }
-        let scale = (960. / width as f64).min(540. / height as f64).min(1.);
+        let scale = (max_width / width as f64)
+            .min(max_height / height as f64)
+            .min(1.);
         let target_width = (width as f64 * scale).round().max(1.) as u32;
         let target_height = (height as f64 * scale).round().max(1.) as u32;
-        let image = image::RgbaImage::from_fn(target_width, target_height, |x, y| {
-            let source_x = x as usize * width / target_width as usize;
-            let source_y = y as usize * height / target_height as usize;
-            let offset = source_y * stride + source_x * 4;
-            let pixel = unsafe { std::slice::from_raw_parts(base.add(offset), 4) };
-            // RenderImage consumes BGRA bytes even though image::Frame wraps RgbaImage.
-            image::Rgba([pixel[0], pixel[1], pixel[2], pixel[3]])
-        });
+        let data = unsafe { std::slice::from_raw_parts(base, required_bytes) };
+        // RenderImage consumes BGRA bytes even though image::Frame wraps RgbaImage.
+        let pixels = if (target_width as usize, target_height as usize) == (width, height) {
+            if stride == row_bytes {
+                data[..row_bytes * height].to_vec()
+            } else {
+                let mut pixels = Vec::with_capacity(row_bytes * height);
+                for row in data.chunks(stride).take(height) {
+                    pixels.extend_from_slice(&row[..row_bytes]);
+                }
+                pixels
+            }
+        } else {
+            cap_gpui_kernels::frame::downsample_nearest(
+                data,
+                width,
+                height,
+                stride,
+                target_width,
+                target_height,
+            )
+        };
+        let image = image::RgbaImage::from_raw(target_width, target_height, pixels)?;
         Some(Arc::new(gpui::RenderImage::new(smallvec::smallvec![
             image::Frame::new(image)
         ])))
@@ -1788,6 +1822,7 @@ impl CameraWindow {
             let (out_tx, out_rx) = flume::bounded::<camera_blur::BlurOutput>(2);
             if let Err(error) = std::thread::Builder::new()
                 .name("camera-blur".into())
+                .stack_size(crate::MEDIA_THREAD_STACK_SIZE)
                 .spawn(move || camera_blur::run(job_rx, out_tx))
             {
                 // job_rx is gone; the caller's try_send sees Disconnected and
@@ -2458,7 +2493,7 @@ impl Render for CameraWindow {
             .size_full()
             .flex()
             .flex_col()
-            .font_family("Geist")
+            .font_family(crate::theme::UI_FONT)
             // `body { font-weight: 500 }` (`ui-solid/src/main.css:189-192`).
             .font_weight(FontWeight::MEDIUM)
             // One hover region for the whole window -- bubble, toolbar and

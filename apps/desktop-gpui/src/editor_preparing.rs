@@ -1,5 +1,5 @@
 use std::{
-    io::{self, BufReader, Read},
+    io::{self, Read},
     panic::AssertUnwindSafe,
     path::{Path, PathBuf},
     sync::{
@@ -527,6 +527,7 @@ impl PreparingRunner {
         let frame_format = EditorFrameFormat::BgraSurface;
         #[cfg(not(target_os = "macos"))]
         let frame_format = EditorFrameFormat::Rgba;
+        let shared_device = crate::app_windows::shared_wgpu_device().await;
         self.control.accepts_frames.store(true, Ordering::Release);
         let playback = PreparingPlaybackSession::spawn_with_expected_metadata(
             input,
@@ -535,6 +536,7 @@ impl PreparingRunner {
                 preview: PreparingPreviewOptions {
                     use_hardware_decoding: preparing_hardware_decode(),
                     frame_format,
+                    shared_device,
                 },
                 fps: crate::editor_window::EDITOR_PREVIEW_FPS,
                 resolution: self.resolution,
@@ -704,13 +706,13 @@ fn adapt(
                 .ok_or_else(ended)?;
             let (source, path) = cursor.input().ok_or_else(ended)?;
             let reader = source.reader(path).map_err(|error| error.to_string())?;
-            let mut reader = BufReader::new(CheckedCursorReader {
+            let mut reader = CheckedCursorReader {
                 reader,
                 is_live: || !*control.cancelled.borrow() && sources.live().is_some(),
                 remaining: cursor_budget,
-            });
-            let cursor = CursorEvents::load_from_reader(&mut reader)?;
-            cursor_budget = reader.get_ref().remaining;
+            };
+            let cursor = cap_gpui_kernels::codec::read_cursor_events(&mut reader)?;
+            cursor_budget = reader.remaining;
             cursor
         } else {
             CursorEvents::default()
@@ -848,12 +850,12 @@ mod tests {
     fn cursor_reader_preserves_exact_limit_and_rejects_an_extra_byte() {
         let bytes = br#"{"clicks":[],"moves":[]}"#;
         for remaining in [bytes.len() as u64, bytes.len() as u64 - 1] {
-            let reader = CheckedCursorReader {
+            let mut reader = CheckedCursorReader {
                 reader: Cursor::new(bytes),
                 is_live: || true,
                 remaining,
             };
-            let result = CursorEvents::load_from_reader(BufReader::new(reader));
+            let result = cap_gpui_kernels::codec::read_cursor_events(&mut reader);
             assert_eq!(result.is_ok(), remaining == bytes.len() as u64);
         }
     }

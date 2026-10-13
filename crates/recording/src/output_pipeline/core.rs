@@ -677,8 +677,25 @@ pub(crate) fn send_with_stall_budget_flume<T>(
     source: &'static str,
     health_tx: &HealthSender,
 ) -> StallSendOutcome {
+    send_with_stall_budget_flume_for(
+        tx,
+        frame,
+        source,
+        health_tx,
+        Duration::from_millis(STALL_BUDGET_MS),
+    )
+}
+
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+pub(crate) fn send_with_stall_budget_flume_for<T>(
+    tx: &flume::Sender<T>,
+    frame: T,
+    source: &'static str,
+    health_tx: &HealthSender,
+    budget: Duration,
+) -> StallSendOutcome {
     let start = Instant::now();
-    let deadline = start + Duration::from_millis(STALL_BUDGET_MS);
+    let deadline = start + budget;
     match tx.send_deadline(frame, deadline) {
         Ok(()) => StallSendOutcome::Sent,
         Err(flume::SendTimeoutError::Timeout(_)) => {
@@ -7328,17 +7345,19 @@ mod tests {
             let (tx, rx) = flume::bounded::<u32>(1);
             tx.try_send(1).expect("priming send should succeed");
             let (health_tx, mut health_rx) = new_health_channel();
+            let budget = Duration::from_secs(5);
 
             let drain_handle = std::thread::spawn(move || {
-                std::thread::sleep(Duration::from_millis(10));
-                rx.recv().expect("receiver should drain priming value");
+                assert_eq!(rx.recv().expect("receiver should drain priming value"), 1);
                 rx
             });
 
-            let outcome = send_with_stall_budget_flume(&tx, 2, "test-source", &health_tx);
+            let outcome =
+                send_with_stall_budget_flume_for(&tx, 2, "test-source", &health_tx, budget);
 
-            let _rx = drain_handle.join().unwrap();
+            let rx = drain_handle.join().unwrap();
             assert_eq!(outcome, StallSendOutcome::Sent);
+            assert_eq!(rx.recv().expect("recovered send should be queued"), 2);
             assert!(
                 drain_health_events(&mut health_rx).is_empty(),
                 "Stalled must not be emitted when send completes within budget"

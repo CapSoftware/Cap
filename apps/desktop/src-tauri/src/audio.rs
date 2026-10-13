@@ -55,3 +55,41 @@ impl AppSounds {
 pub fn get_waveform(audio: &DecodedAudio) -> Vec<f32> {
     cap_audio::waveform_peaks(audio.sample_slices().flatten(), audio.channels())
 }
+
+const WAVEFORM_PEAKS_PER_SECOND: f64 = 10.0;
+const WAVEFORM_SILENCE_DB: f32 = -60.0;
+
+/// Playback reads each track at source time plus its timing repair offset
+/// (`SegmentAudioTimingRepair`), so the peaks are shifted the same way; the
+/// editor then only has to add the user's clip offset.
+pub fn align_waveform_to_playback(peaks: Vec<f32>, timing_offset_secs: f32) -> Vec<f32> {
+    let shift = (f64::from(timing_offset_secs) * WAVEFORM_PEAKS_PER_SECOND).round() as isize;
+    if shift > 0 {
+        peaks.into_iter().skip(shift.unsigned_abs()).collect()
+    } else if shift < 0 {
+        std::iter::repeat_n(WAVEFORM_SILENCE_DB, shift.unsigned_abs())
+            .chain(peaks)
+            .collect()
+    } else {
+        peaks
+    }
+}
+
+#[cfg(test)]
+mod waveform_alignment_tests {
+    use super::align_waveform_to_playback;
+
+    #[test]
+    fn shifts_peaks_by_the_timing_repair_offset() {
+        let peaks = vec![-10.0, -20.0, -30.0, -40.0];
+        assert_eq!(
+            align_waveform_to_playback(peaks.clone(), 0.2),
+            vec![-30.0, -40.0]
+        );
+        assert_eq!(
+            align_waveform_to_playback(peaks.clone(), -0.1),
+            vec![-60.0, -10.0, -20.0, -30.0, -40.0]
+        );
+        assert_eq!(align_waveform_to_playback(peaks.clone(), 0.02), peaks);
+    }
+}

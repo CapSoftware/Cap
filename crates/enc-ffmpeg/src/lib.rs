@@ -1,5 +1,5 @@
 mod base;
-pub use base::{EncodedPacket, EncodedPacketStats};
+pub use base::{EncodedPacket, EncodedPacketStats, PacketQueue, PacketSink};
 
 mod file_sync;
 pub use file_sync::sync_media_file;

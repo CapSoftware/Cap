@@ -90,13 +90,17 @@ async fn effects_preserve_foreground_alpha_and_suppress_background_detail() {
     processor.set_frame_synchronous(true);
     processor.inference_requested = false;
     processor.mask_initialized = true;
-    for (index, mask) in processor.mask_data.iter_mut().enumerate() {
-        *mask = if index % SEGMENTATION_SIZE as usize > SEGMENTATION_SIZE as usize / 2 {
-            1.0
-        } else {
-            0.0
-        };
-    }
+    processor.mask_dimensions = (SEGMENTATION_SIZE, SEGMENTATION_SIZE);
+    processor.mask_bytes = (0..SEGMENTATION_SIZE * SEGMENTATION_SIZE)
+        .map(|index| {
+            if index % SEGMENTATION_SIZE > SEGMENTATION_SIZE / 2 {
+                255
+            } else {
+                0
+            }
+        })
+        .collect();
+    processor.mask_dirty = true;
     let mut blurred = Vec::new();
     for mode in [
         BlurMode::Remove,
@@ -138,33 +142,16 @@ async fn effects_preserve_foreground_alpha_and_suppress_background_detail() {
         blurred[1] < blurred[0] * 0.25,
         "Heavy should remove more detail than Light: {blurred:?}"
     );
-    for (index, mask) in processor.mask_data.iter_mut().enumerate() {
-        let x = index % SEGMENTATION_SIZE as usize;
-        let y = index / SEGMENTATION_SIZE as usize;
-        *mask = if x > 80 + y / 3 { 1.0 } else { 0.0 };
-    }
-    processor.mask_dirty = true;
-    let output = processor.process(&device, &queue, &input, BlurMode::Remove);
-    let diagonal = read_output(&device, &queue, output).await;
-    for row in diagonal
-        .chunks_exact(width as usize * 4)
-        .skip(40)
-        .take(height as usize - 80)
-    {
-        let alpha: Vec<_> = row.chunks_exact(4).map(|pixel| pixel[3]).collect();
-        let transition_pixels = alpha
-            .iter()
-            .filter(|&&value| value > 8 && value < 247)
-            .count();
-        assert!((3..=12).contains(&transition_pixels));
-        assert!(
-            alpha
-                .windows(2)
-                .all(|pair| pair[0].abs_diff(pair[1]) <= 100)
-        );
-    }
+    // A soft mask edge a few pixels off a hard colour edge: the guided
+    // filter must pull the matte onto the colour edge and keep it sharp.
     for pixel in pixels.chunks_exact_mut(4) {
-        pixel.copy_from_slice(&[80, 80, 80, 255]);
+        pixel.copy_from_slice(&[40, 60, 200, 255]);
+    }
+    let colour_edge = width * 3 / 5;
+    for row in pixels.chunks_exact_mut(width as usize * 4) {
+        for pixel in row.chunks_exact_mut(4).skip(colour_edge as usize) {
+            pixel.copy_from_slice(&[230, 180, 140, 255]);
+        }
     }
     queue.write_texture(
         input.as_image_copy(),
@@ -176,22 +163,42 @@ async fn effects_preserve_foreground_alpha_and_suppress_background_detail() {
         },
         input.size(),
     );
+    let mask_edge = (colour_edge - 3) as f32 / width as f32;
+    processor.mask_bytes = (0..SEGMENTATION_SIZE * SEGMENTATION_SIZE)
+        .map(|index| {
+            let x = (index % SEGMENTATION_SIZE) as f32 / SEGMENTATION_SIZE as f32;
+            (((x - mask_edge) * 40.0 + 0.5).clamp(0.0, 1.0) * 255.0) as u8
+        })
+        .collect();
+    processor.mask_dirty = true;
     let output = processor.process(&device, &queue, &input, BlurMode::Remove);
-    let flat_color = read_output(&device, &queue, output).await;
-    assert!(
-        diagonal
-            .chunks_exact(4)
-            .zip(flat_color.chunks_exact(4))
-            .all(|(before, after)| before[3] == after[3]),
-        "Camera texture must not add jagged detail to the cutout contour"
-    );
+    let snapped = read_output(&device, &queue, output).await;
+    for row in snapped
+        .chunks_exact(width as usize * 4)
+        .skip(40)
+        .take(height as usize - 80)
+    {
+        let alpha: Vec<_> = row.chunks_exact(4).map(|pixel| pixel[3]).collect();
+        let transition = alpha.iter().position(|&value| value >= 128).unwrap() as i32;
+        assert!(
+            (transition - colour_edge as i32).abs() <= 2,
+            "matte edge at {transition}, colour edge at {colour_edge}"
+        );
+        let soft = alpha
+            .iter()
+            .filter(|&&value| value > 8 && value < 247)
+            .count();
+        // The mask ramps over 16 pixels; the matte must be far tighter.
+        assert!(soft <= 6, "matte edge spread over {soft} pixels");
+    }
     processor.frame_time = Some(1.0);
     processor.inference_requested = false;
     processor.set_frame_time(1.0);
     assert!(!processor.inference_requested);
     processor.set_frame_time(1.0 + 1.0 / 30.0);
     assert!(processor.inference_requested);
-    let readback_pointer = processor.readback_pixels.as_ptr();
+    let readback_dimensions = processor.segmenter.input_dimensions(width, height);
+    let mut readback_pointer = None;
     for value in [80, 160] {
         for pixel in pixels.chunks_exact_mut(4) {
             pixel.copy_from_slice(&[value, value, value, 255]);
@@ -211,8 +218,14 @@ async fn effects_preserve_foreground_alpha_and_suppress_background_detail() {
                 .readback_downsampled(&device, &queue, &input, true)
                 .is_some()
         );
-        assert_eq!(processor.readback_pixels.as_ptr(), readback_pointer);
-        assert_eq!(processor.readback_pixels.len(), 256 * 256 * 4);
+        assert_eq!(
+            *readback_pointer.get_or_insert(processor.readback_pixels.as_ptr()),
+            processor.readback_pixels.as_ptr()
+        );
+        assert_eq!(
+            processor.readback_pixels.len(),
+            (readback_dimensions.0 * readback_dimensions.1 * 4) as usize
+        );
         assert!(
             processor
                 .readback_pixels

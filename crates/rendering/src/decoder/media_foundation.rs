@@ -280,14 +280,7 @@ impl MFDecoder {
 
                 let mut unfulfilled = Vec::with_capacity(pending_requests.len());
                 for req in pending_requests.drain(..) {
-                    let cached = cache.get(&req.frame).or_else(|| {
-                        cache
-                            .range(..=req.frame)
-                            .next_back()
-                            .filter(|(k, _)| req.frame - *k <= 2)
-                            .map(|(_, f)| f)
-                    });
-                    if let Some(frame) = cached {
+                    if let Some(frame) = cached_frame_for(&cache, last_decoded_frame, req.frame) {
                         let _ = req.sender.send(frame.to_decoded_frame());
                     } else if !req.sender.is_closed() {
                         unfulfilled.push(req);
@@ -544,6 +537,55 @@ fn frame_to_100ns(frame: u32, fps: u32) -> i64 {
     ((frame as i64) * 10_000_000) / (fps as i64)
 }
 
+// Rounds like the FFmpeg decoder's `pts_to_frame`: sample times are 100 ns
+// ticks, so 1/30 s is stored as 333_333 and truncating it lands on frame 0,
+// colliding with the real frame 0 and losing one of them from the cache.
 fn pts_100ns_to_frame(pts_100ns: i64, fps: u32) -> u32 {
-    ((pts_100ns * fps as i64) / 10_000_000) as u32
+    super::pts_to_frame(pts_100ns, ::ffmpeg::Rational::new(1, 10_000_000), fps)
+}
+
+// A frame the decoder has not reached yet has to be decoded; answering with
+// the cached frame before it shows a stale image at every readahead boundary.
+// Once the decoder is past a missing frame, the stream has no frame there, and
+// the latest earlier one is the hold the video really shows.
+fn cached_frame_for<T>(
+    cache: &BTreeMap<u32, T>,
+    last_decoded: Option<u32>,
+    frame: u32,
+) -> Option<&T> {
+    cache.get(&frame).or_else(|| {
+        last_decoded
+            .is_some_and(|last| last > frame)
+            .then(|| cache.range(..=frame).next_back().map(|(_, cached)| cached))
+            .flatten()
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sample_times_round_to_their_frame() {
+        assert_eq!(pts_100ns_to_frame(0, 30), 0);
+        assert_eq!(pts_100ns_to_frame(333_333, 30), 1);
+        assert_eq!(pts_100ns_to_frame(666_666, 30), 2);
+        assert_eq!(pts_100ns_to_frame(10_000_000, 30), 30);
+    }
+
+    #[test]
+    fn an_undecoded_frame_is_not_answered_with_the_one_before_it() {
+        let cache = BTreeMap::from([(14, 'a'), (15, 'b')]);
+        assert_eq!(cached_frame_for(&cache, Some(15), 15), Some(&'b'));
+        assert_eq!(cached_frame_for(&cache, Some(15), 16), None);
+        assert_eq!(cached_frame_for(&cache, Some(15), 17), None);
+    }
+
+    #[test]
+    fn a_frame_the_stream_skipped_holds_the_previous_one() {
+        let cache = BTreeMap::from([(14, 'a'), (17, 'b')]);
+        assert_eq!(cached_frame_for(&cache, Some(17), 15), Some(&'a'));
+        assert_eq!(cached_frame_for(&cache, Some(17), 16), Some(&'a'));
+        assert_eq!(cached_frame_for(&cache, None, 16), None);
+    }
 }

@@ -20,7 +20,7 @@ pub struct PreparingAudioSegmentInput {
     pub timing_repair: crate::SegmentAudioTimingRepair,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct PreparingPlaybackOptions {
     pub preview: crate::PreparingPreviewOptions,
     pub fps: u32,
@@ -531,7 +531,7 @@ impl PreparingPlaybackRunner {
         let discard = received.clone();
         let preview = crate::PreparingPreview::spawn(
             input,
-            self.options.preview,
+            self.options.preview.clone(),
             Box::new(move |request, output, layout| {
                 deliver_latest(&frames, &discard, (request, output, layout));
             }),

@@ -2562,7 +2562,7 @@ impl Render for OnboardingWindow {
             .overflow_hidden()
             .rounded(px(16.))
             .bg(theme.shell_bg())
-            .font_family("Geist")
+            .font_family(crate::theme::UI_FONT)
             .font_weight(FontWeight::MEDIUM)
             .text_color(theme.body_text())
             .child(header)

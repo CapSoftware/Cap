@@ -28,6 +28,7 @@ pub enum RendererMessage {
         finished: oneshot::Sender<bool>,
         cursor: Arc<CursorEvents>,
         queued_at: Instant,
+        realtime: bool,
     },
     RenderTransition {
         outgoing: RendererTransitionInput,
@@ -36,6 +37,7 @@ pub enum RendererMessage {
         progress: f32,
         finished: oneshot::Sender<bool>,
         queued_at: Instant,
+        realtime: bool,
     },
     Stop {
         finished: oneshot::Sender<()>,
@@ -219,6 +221,7 @@ impl Renderer {
             input: PendingRenderInput,
             finished: oneshot::Sender<bool>,
             queued_at: Instant,
+            realtime: bool,
         }
 
         enum PendingRenderInput {
@@ -271,6 +274,7 @@ impl Renderer {
                         finished,
                         cursor,
                         queued_at,
+                        realtime,
                     }) => Some(PendingFrame {
                         input: PendingRenderInput::Single(RendererTransitionInput {
                             segment_frames,
@@ -279,6 +283,7 @@ impl Renderer {
                         }),
                         finished,
                         queued_at,
+                        realtime,
                     }),
                     Some(RendererMessage::RenderTransition {
                         outgoing,
@@ -287,6 +292,7 @@ impl Renderer {
                         progress,
                         finished,
                         queued_at,
+                        realtime,
                     }) => Some(PendingFrame {
                         input: PendingRenderInput::Transition {
                             outgoing,
@@ -296,6 +302,7 @@ impl Renderer {
                         },
                         finished,
                         queued_at,
+                        realtime,
                     }),
                     Some(RendererMessage::Stop { finished }) => {
                         let _ = finished.send(());
@@ -335,6 +342,7 @@ impl Renderer {
                         finished,
                         cursor,
                         queued_at,
+                        realtime,
                     } => {
                         let dropped_frame_number = current.input.uniforms().frame_number;
                         let replacement_frame_number = uniforms.frame_number;
@@ -353,6 +361,7 @@ impl Renderer {
                             }),
                             finished,
                             queued_at,
+                            realtime,
                         };
                         drained_count += 1;
                     }
@@ -363,6 +372,7 @@ impl Renderer {
                         progress,
                         finished,
                         queued_at,
+                        realtime,
                     } => {
                         let dropped_frame_number = current.input.uniforms().frame_number;
                         let replacement_frame_number = incoming.uniforms.frame_number;
@@ -382,6 +392,7 @@ impl Renderer {
                             },
                             finished,
                             queued_at,
+                            realtime,
                         };
                         drained_count += 1;
                     }
@@ -408,6 +419,10 @@ impl Renderer {
                 std::time::Duration::ZERO
             };
 
+            // Playback frames composite with the newest finished camera mask;
+            // seeks and paused redraws wait for their own, since nothing
+            // redraws a still frame when a later mask lands.
+            layers.set_realtime_camera_effects(current.realtime);
             let render_start = Instant::now();
             let input_frame_number = current.input.uniforms().frame_number;
             let frame_layout = current.input.uniforms().frame_layout();
@@ -608,6 +623,7 @@ impl RendererHandle {
                 finished: finished_tx,
                 cursor,
                 queued_at: Instant::now(),
+                realtime: true,
             })
             .is_err()
             && let Some(telemetry) = &self.telemetry
@@ -634,6 +650,7 @@ impl RendererHandle {
                 progress,
                 finished: finished_tx,
                 queued_at: Instant::now(),
+                realtime: true,
             })
             .is_err()
             && let Some(telemetry) = &self.telemetry
@@ -656,6 +673,7 @@ impl RendererHandle {
             finished: finished_tx,
             cursor,
             queued_at: Instant::now(),
+            realtime: false,
         };
         if self.tx.blocking_send(msg).is_err()
             && let Some(telemetry) = &self.telemetry
@@ -678,6 +696,7 @@ impl RendererHandle {
             finished: finished_tx,
             cursor,
             queued_at: Instant::now(),
+            realtime: false,
         };
         if self.tx.send(msg).await.is_err() {
             if let Some(telemetry) = &self.telemetry {
@@ -705,6 +724,7 @@ impl RendererHandle {
             progress,
             finished: finished_tx,
             queued_at: Instant::now(),
+            realtime: false,
         };
         if self.tx.send(message).await.is_err() {
             if let Some(telemetry) = &self.telemetry {
@@ -730,6 +750,7 @@ impl RendererHandle {
             finished: finished_tx,
             cursor,
             queued_at: Instant::now(),
+            realtime: false,
         };
         if self.tx.blocking_send(msg).is_err() {
             if let Some(telemetry) = &self.telemetry {
@@ -757,6 +778,7 @@ impl RendererHandle {
             progress,
             finished: finished_tx,
             queued_at: Instant::now(),
+            realtime: false,
         };
         if self.tx.blocking_send(message).is_err() {
             if let Some(telemetry) = &self.telemetry {

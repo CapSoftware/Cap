@@ -432,11 +432,7 @@ fn format_estimate_range(range: [f64; 2], time: bool) -> String {
 }
 
 fn decode_jpeg_bytes(bytes: &[u8]) -> Option<Arc<RenderImage>> {
-    let decoded = image::load_from_memory_with_format(bytes, image::ImageFormat::Jpeg).ok()?;
-    let mut rgba = decoded.into_rgba8();
-    for pixel in rgba.chunks_exact_mut(4) {
-        pixel.swap(0, 2);
-    }
+    let rgba = cap_gpui_kernels::codec::decode_jpeg_to_bgra(bytes)?;
     Some(Arc::new(RenderImage::new(smallvec::smallvec![
         image::Frame::new(rgba)
     ])))

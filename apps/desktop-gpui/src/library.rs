@@ -29,7 +29,6 @@ use cap_project::{
 };
 use cap_recording::{recovery::RecoveryManager, upload_resume::UploadLock};
 use gpui::RenderImage;
-use image::buffer::ConvertBuffer as _;
 
 /// `RECENT_MEDIA_LIMIT` in `new-main/index.tsx:129`.
 pub const RECENT_MEDIA_LIMIT: usize = 9;
@@ -992,14 +991,11 @@ impl CacheSlot {
         if std::fs::create_dir_all(&self.dir).is_err() {
             return;
         }
-        let rgb: image::RgbImage = rgba.convert();
-        let mut encoded = Vec::new();
-        if image::codecs::jpeg::JpegEncoder::new_with_quality(&mut encoded, THUMBNAIL_JPEG_QUALITY)
-            .encode_image(&rgb)
-            .is_err()
-        {
+        let Ok(encoded) =
+            cap_gpui_kernels::codec::encode_jpeg_rgba_as_rgb(rgba, THUMBNAIL_JPEG_QUALITY)
+        else {
             return;
-        }
+        };
         let file = self.file();
         // The prefix keeps two same-mtime slots (wallpapers installed in one
         // copy) from interleaving writes into one tmp file.
@@ -1047,9 +1043,7 @@ impl CacheSlot {
 /// gpui's atlas takes BGRA; `image`'s RgbaImage is just the container (the
 /// same swap gpui's own asset loader does after decoding).
 pub fn rgba_to_render_image(mut rgba: image::RgbaImage) -> Arc<RenderImage> {
-    for pixel in rgba.chunks_exact_mut(4) {
-        pixel.swap(0, 2);
-    }
+    cap_gpui_kernels::frame::swap_red_blue(&mut rgba);
     Arc::new(RenderImage::new(smallvec::smallvec![image::Frame::new(
         rgba
     )]))
@@ -1179,20 +1173,30 @@ pub fn create_screenshot(
         let height = rgb_frame.height() as usize;
         let src_stride = rgb_frame.stride(0);
         let dst_stride = width * 3;
-        let mut buffer = vec![0u8; height * dst_stride];
-        for y in 0..height {
-            let src = &rgb_frame.data(0)[y * src_stride..y * src_stride + dst_stride];
-            buffer[y * dst_stride..(y + 1) * dst_stride].copy_from_slice(src);
-        }
+        let buffer = cap_gpui_kernels::frame::copy_rows(
+            rgb_frame.data(0),
+            dst_stride,
+            src_stride,
+            height,
+            false,
+        )
+        .ok_or("Failed to create image from frame data")?;
 
         let image = image::RgbImage::from_raw(width as u32, height as u32, buffer)
             .ok_or("Failed to create image from frame data")?;
         if let Some(parent) = output.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
-        return image
-            .save_with_format(output, image::ImageFormat::Jpeg)
-            .map_err(|e| e.to_string());
+        let staged = output.with_extension(format!("jpg.tmp-{}", crate::store::new_uuid_v4()));
+        cap_gpui_kernels::codec::save_rgb_image(&image, &staged, image::ImageFormat::Jpeg)
+            .map_err(|e| {
+                let _ = std::fs::remove_file(&staged);
+                e.to_string()
+            })?;
+        return std::fs::rename(&staged, output).map_err(|e| {
+            let _ = std::fs::remove_file(&staged);
+            e.to_string()
+        });
     }
 
     Err("Failed to create screenshot".to_string())

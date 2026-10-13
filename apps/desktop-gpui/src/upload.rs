@@ -307,6 +307,7 @@ fn start_instant_upload_with_ownership(
         bridge = Some(
             std::thread::Builder::new()
                 .name("gpui-instant-segments".to_string())
+                .stack_size(crate::MEDIA_THREAD_STACK_SIZE)
                 .spawn(move || {
                     while !bridge_cancel.load(Ordering::Acquire) && !events_tx.is_disconnected() {
                         match segment_rx.recv_timeout(Duration::from_millis(20)) {
@@ -2153,26 +2154,7 @@ async fn upload_screenshot_bytes(
 }
 
 fn compress_image(path: &Path) -> Result<Vec<u8>, AuthApiError> {
-    let img = image::ImageReader::open(path)
-        .map_err(|error| AuthApiError::Other(format!("Failed to open image: {error}")))?
-        .decode()
-        .map_err(|error| AuthApiError::Other(format!("Failed to decode image: {error}")))?;
-    let resized = img.resize(
-        img.width() / 2,
-        img.height() / 2,
-        image::imageops::FilterType::Nearest,
-    );
-    let mut buffer = Vec::new();
-    let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buffer, 30);
-    encoder
-        .encode(
-            resized.as_bytes(),
-            resized.width(),
-            resized.height(),
-            resized.color().into(),
-        )
-        .map_err(|error| AuthApiError::Other(format!("Failed to compress image: {error}")))?;
-    Ok(buffer)
+    cap_gpui_kernels::codec::compress_image_jpeg(path).map_err(AuthApiError::Other)
 }
 
 fn build_video_meta(path: &Path) -> Result<VideoMeta, String> {
@@ -2215,8 +2197,7 @@ fn chunk_size_for(file_size: u64) -> u64 {
 }
 
 fn md5_base64(bytes: &[u8]) -> String {
-    use md5::{Digest, Md5};
-    let digest = Md5::digest(bytes);
+    let digest = cap_gpui_kernels::codec::md5(bytes);
     base64::Engine::encode(&base64::engine::general_purpose::STANDARD, digest)
 }
 

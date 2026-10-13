@@ -20,6 +20,7 @@
 
 use std::sync::{Mutex, OnceLock};
 
+use cap_gpui_kernels::{codec, screenshot as pixels};
 use cap_project::{Annotation, AnnotationType, ProjectConfiguration};
 
 use crate::screenshot_annotations::{self as annotations, Rect};
@@ -133,7 +134,7 @@ pub fn composite(raw: &RawFrame, config: &ProjectConfiguration) -> Composited {
     let height = raw.height.max(1);
     if config.annotations.is_empty()
         && raw.rgba.len() == width as usize * height as usize * 4
-        && is_opaque(&raw.rgba)
+        && pixels::is_opaque(&raw.rgba)
     {
         return Composited {
             rgba: raw.rgba.clone(),
@@ -163,7 +164,7 @@ pub fn composite(raw: &RawFrame, config: &ProjectConfiguration) -> Composited {
         if let Some((x0, y0, region)) =
             annotations::masked_region_image(&raw.rgba, (width, height), mask, full)
         {
-            blit_over(&mut canvas, (width, height), &region, (x0, y0));
+            pixels::blit_over(&mut canvas, (width, height), &region, (x0, y0));
         }
     }
 
@@ -178,7 +179,7 @@ pub fn composite(raw: &RawFrame, config: &ProjectConfiguration) -> Composited {
         (-bounds.min_x).round() as i64,
         (-bounds.min_y).round() as i64,
     );
-    blit_over_offset(
+    pixels::blit_over_offset(
         &mut out,
         (bounds.width, bounds.height),
         &canvas,
@@ -204,39 +205,13 @@ pub fn needs_transparency(out: &Composited, config: &ProjectConfiguration) -> bo
     if !has_no_visible_background(&config.background.source) {
         return false;
     }
-    out.rgba
-        .iter()
-        .skip(3)
-        .step_by(4)
-        .any(|&alpha| alpha != 255)
-}
-
-fn is_opaque(rgba: &[u8]) -> bool {
-    const ALPHA_MASK: u128 = 0xff000000ff000000ff000000ff000000;
-    let mut blocks = rgba.chunks_exact(16);
-    blocks
-        .by_ref()
-        .all(|block| u128::from_le_bytes(block.try_into().unwrap()) & ALPHA_MASK == ALPHA_MASK)
-        && blocks
-            .remainder()
-            .iter()
-            .skip(3)
-            .step_by(4)
-            .all(|&alpha| alpha == 255)
+    pixels::has_translucent_pixel(&out.rgba)
 }
 
 /// `withWhiteBackground` (`useScreenshotExport.ts:18-28`).
 pub fn flatten_onto_white(out: &Composited) -> Composited {
-    let mut rgba = out.rgba.clone();
-    for pixel in rgba.chunks_exact_mut(4) {
-        let alpha = u32::from(pixel[3]);
-        for channel in &mut pixel[..3] {
-            *channel = ((u32::from(*channel) * alpha + 255 * (255 - alpha) + 127) / 255) as u8;
-        }
-        pixel[3] = 255;
-    }
     Composited {
-        rgba,
+        rgba: pixels::flatten_onto_white(&out.rgba),
         width: out.width,
         height: out.height,
     }
@@ -246,12 +221,8 @@ pub fn flatten_onto_white(out: &Composited) -> Composited {
 /// frame straight to PNG" path, still callable through
 /// `screenshot_editor::render_export_png`.
 pub fn encode_rgba_png(rgba: &[u8], width: u32, height: u32) -> Result<Vec<u8>, String> {
-    use image::ImageEncoder as _;
-    let mut png = std::io::Cursor::new(Vec::new());
-    image::codecs::png::PngEncoder::new(&mut png)
-        .write_image(rgba, width, height, image::ExtendedColorType::Rgba8)
-        .map_err(|e| format!("Failed to encode screenshot export: {e}"))?;
-    Ok(png.into_inner())
+    codec::encode_png_rgba(rgba, width, height)
+        .map_err(|e| format!("Failed to encode screenshot export: {e}"))
 }
 
 fn encode_png(out: &Composited) -> Result<Vec<u8>, String> {
@@ -263,21 +234,9 @@ fn encode_png(out: &Composited) -> Result<Vec<u8>, String> {
 /// flatten here is the same belt the browser's own encode wears.
 fn encode_jpeg(out: &Composited) -> Result<Vec<u8>, String> {
     let flat = flatten_onto_white(out);
-    let rgb: Vec<u8> = flat
-        .rgba
-        .chunks_exact(4)
-        .flat_map(|px| [px[0], px[1], px[2]])
-        .collect();
-    let mut buffer = Vec::new();
-    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buffer, 90)
-        .encode(
-            &rgb,
-            flat.width,
-            flat.height,
-            image::ExtendedColorType::Rgb8,
-        )
-        .map_err(|e| format!("Failed to encode screenshot export: {e}"))?;
-    Ok(buffer)
+    let rgb = codec::rgba_to_rgb(&flat.rgba);
+    codec::encode_jpeg_rgb(&rgb, flat.width, flat.height, 90)
+        .map_err(|e| format!("Failed to encode screenshot export: {e}"))
 }
 
 /// An encoded export, tagged with the content type the upload sends.
@@ -317,7 +276,7 @@ pub fn encode_for_share(
 /// Copy: always PNG, composited over white when transparency is not needed
 /// (`:183-198` -- `withWhiteBackground` only on the clipboard path).
 pub fn encode_for_copy(out: &Composited, config: &ProjectConfiguration) -> Result<Vec<u8>, String> {
-    if has_no_visible_background(&config.background.source) || is_opaque(&out.rgba) {
+    if has_no_visible_background(&config.background.source) || pixels::is_opaque(&out.rgba) {
         encode_png(out)
     } else {
         encode_png(&flatten_onto_white(out))
@@ -380,115 +339,6 @@ pub fn content_hash(config: &ProjectConfiguration) -> Result<String, String> {
 }
 
 // ---------------------------------------------------------------------------
-// Pixel plumbing
-// ---------------------------------------------------------------------------
-
-/// Straight-alpha source-over of one pixel -- what `drawImage` does.
-fn blend_pixel_over(dst: &mut [u8], src: [u8; 4]) {
-    if src[3] == 0 {
-        return;
-    }
-    if src[3] == 255 {
-        dst.copy_from_slice(&src);
-        return;
-    }
-    let sa = f32::from(src[3]) / 255.;
-    let da = f32::from(dst[3]) / 255.;
-    let oa = sa + da * (1. - sa);
-    if oa <= 0. {
-        dst.fill(0);
-        return;
-    }
-    for channel in 0..3 {
-        let s = f32::from(src[channel]);
-        let d = f32::from(dst[channel]);
-        dst[channel] = ((s * sa + d * da * (1. - sa)) / oa).round().clamp(0., 255.) as u8;
-    }
-    dst[3] = (oa * 255.).round() as u8;
-}
-
-/// Source-over blit of a filtered mask region into the working canvas.
-fn blit_over(canvas: &mut [u8], size: (u32, u32), region: &image::RgbaImage, at: (u32, u32)) {
-    let stride = size.0 as usize * 4;
-    for (row_index, row) in region.rows().enumerate() {
-        let y = at.1 as usize + row_index;
-        if y >= size.1 as usize {
-            break;
-        }
-        for (column_index, pixel) in row.enumerate() {
-            let x = at.0 as usize + column_index;
-            if x >= size.0 as usize {
-                break;
-            }
-            let start = y * stride + x * 4;
-            blend_pixel_over(&mut canvas[start..start + 4], pixel.0);
-        }
-    }
-}
-
-/// Source-over blit of one straight-alpha buffer into another at a (possibly
-/// negative) offset, clipping to the destination.
-fn blit_over_offset(
-    dst: &mut [u8],
-    dst_size: (u32, u32),
-    src: &[u8],
-    src_size: (u32, u32),
-    offset: (i64, i64),
-) {
-    let dst_stride = dst_size.0 as usize * 4;
-    let src_stride = src_size.0 as usize * 4;
-    for src_y in 0..src_size.1 as i64 {
-        let dst_y = src_y + offset.1;
-        if dst_y < 0 || dst_y >= i64::from(dst_size.1) {
-            continue;
-        }
-        for src_x in 0..src_size.0 as i64 {
-            let dst_x = src_x + offset.0;
-            if dst_x < 0 || dst_x >= i64::from(dst_size.0) {
-                continue;
-            }
-            let src_start = src_y as usize * src_stride + src_x as usize * 4;
-            let dst_start = dst_y as usize * dst_stride + dst_x as usize * 4;
-            let pixel = [
-                src[src_start],
-                src[src_start + 1],
-                src[src_start + 2],
-                src[src_start + 3],
-            ];
-            blend_pixel_over(&mut dst[dst_start..dst_start + 4], pixel);
-        }
-    }
-}
-
-/// `(c * a + 127) / 255` rounding both ways -- the standard integer
-/// premultiply pair. tiny-skia's pixmaps are premultiplied, our canvases are
-/// straight, so the draw pass converts in and back out.
-fn premultiply(rgba: &mut [u8]) {
-    for pixel in rgba.chunks_exact_mut(4) {
-        let alpha = u16::from(pixel[3]);
-        if alpha == 255 {
-            continue;
-        }
-        for channel in &mut pixel[..3] {
-            *channel = ((u16::from(*channel) * alpha + 127) / 255) as u8;
-        }
-    }
-}
-
-fn demultiply(rgba: &mut [u8]) {
-    for pixel in rgba.chunks_exact_mut(4) {
-        let alpha = u32::from(pixel[3]);
-        if alpha == 255 || alpha == 0 {
-            continue;
-        }
-        for channel in &mut pixel[..3] {
-            let value = (u32::from(*channel) * 255 + alpha / 2) / alpha;
-            *channel = value.min(255) as u8;
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
 // The shape draw (`drawAnnotations`, `screenshotExport.ts:42-121`)
 // ---------------------------------------------------------------------------
 
@@ -531,7 +381,7 @@ fn skia_stroke(width: f64, round: bool) -> tiny_skia::Stroke {
 /// order -- rect, ellipse, arrow, freehand with tiny-skia, text with
 /// cosmic-text, each under its own `globalAlpha`.
 fn draw_annotations_onto(canvas: &mut [u8], width: u32, height: u32, scaled: &[Annotation]) {
-    premultiply(canvas);
+    pixels::premultiply(canvas);
     if let Some(mut pixmap) = tiny_skia::PixmapMut::from_bytes(canvas, width, height) {
         for annotation in scaled {
             if annotation.annotation_type == AnnotationType::Mask {
@@ -540,7 +390,7 @@ fn draw_annotations_onto(canvas: &mut [u8], width: u32, height: u32, scaled: &[A
             draw_one(&mut pixmap, annotation);
         }
     }
-    demultiply(canvas);
+    pixels::demultiply(canvas);
 }
 
 fn draw_one(pixmap: &mut tiny_skia::PixmapMut<'_>, annotation: &Annotation) {
@@ -762,57 +612,14 @@ fn draw_text(pixmap: &mut tiny_skia::PixmapMut<'_>, annotation: &Annotation) {
     let (canvas_width, canvas_height) = (pixmap.width(), pixmap.height());
     let data = pixmap.data_mut();
     buffer.draw(font_system, swash_cache, color, |x, y, w, h, pixel| {
-        blend_rect_premultiplied(
+        pixels::blend_rect_premultiplied(
             data,
             (canvas_width, canvas_height),
             (origin_x + f64::from(x), origin_y + f64::from(y)),
             (w, h),
-            pixel,
+            [pixel.r(), pixel.g(), pixel.b(), pixel.a()],
         );
     });
-}
-
-/// Premultiplied source-over of one glyph-coverage rect (cosmic-text hands
-/// back the coverage folded into the colour's alpha).
-fn blend_rect_premultiplied(
-    data: &mut [u8],
-    size: (u32, u32),
-    at: (f64, f64),
-    rect: (u32, u32),
-    color: cosmic_text::Color,
-) {
-    let alpha = f32::from(color.a()) / 255.;
-    if alpha <= 0. {
-        return;
-    }
-    let src = [
-        (f32::from(color.r()) * alpha).round() as u8,
-        (f32::from(color.g()) * alpha).round() as u8,
-        (f32::from(color.b()) * alpha).round() as u8,
-        color.a(),
-    ];
-    let inverse = 1. - alpha;
-    let stride = size.0 as usize * 4;
-    let x0 = at.0.round() as i64;
-    let y0 = at.1.round() as i64;
-    for row in 0..i64::from(rect.1) {
-        let y = y0 + row;
-        if y < 0 || y >= i64::from(size.1) {
-            continue;
-        }
-        for column in 0..i64::from(rect.0) {
-            let x = x0 + column;
-            if x < 0 || x >= i64::from(size.0) {
-                continue;
-            }
-            let start = y as usize * stride + x as usize * 4;
-            for channel in 0..4 {
-                let d = f32::from(data[start + channel]);
-                data[start + channel] =
-                    (f32::from(src[channel]) + d * inverse).round().min(255.) as u8;
-            }
-        }
-    }
 }
 
 #[cfg(test)]
@@ -995,7 +802,7 @@ mod tests {
 
     fn reference_flatten(out: &Composited) -> Composited {
         let mut rgba = vec![255; out.rgba.len()];
-        blit_over_offset(
+        pixels::blit_over_offset(
             &mut rgba,
             (out.width, out.height),
             &out.rgba,
@@ -1021,44 +828,11 @@ mod tests {
         if !has_no_visible_background(&config.background.source) {
             rgba.fill(255);
         }
-        blit_over_offset(&mut rgba, (width, height), &canvas, (width, height), (0, 0));
+        pixels::blit_over_offset(&mut rgba, (width, height), &canvas, (width, height), (0, 0));
         Composited {
             rgba,
             width,
             height,
-        }
-    }
-
-    #[test]
-    fn white_flatten_matches_source_over_for_every_channel_and_alpha() {
-        let rgba = (0..=255u8)
-            .flat_map(|alpha| {
-                (0..=255u8).flat_map(move |channel| {
-                    [channel, 255 - channel, channel.wrapping_mul(17), alpha]
-                })
-            })
-            .collect();
-        let out = Composited {
-            rgba,
-            width: 256,
-            height: 256,
-        };
-        assert_eq!(flatten_onto_white(&out).rgba, reference_flatten(&out).rgba);
-    }
-
-    #[test]
-    fn opacity_check_matches_individual_alpha_bytes_at_block_boundaries() {
-        for length in 0..130 {
-            let opaque = vec![255; length];
-            assert!(is_opaque(&opaque));
-            for changed_byte in 0..length {
-                let mut rgba = opaque.clone();
-                rgba[changed_byte] = 127;
-                assert_eq!(
-                    is_opaque(&rgba),
-                    rgba.iter().skip(3).step_by(4).all(|&alpha| alpha == 255),
-                );
-            }
         }
     }
 
@@ -1150,7 +924,7 @@ mod tests {
                     let baseline_ms = start.elapsed().as_secs_f64() * 1000.0;
                     let start = Instant::now();
                     let result = composite(black_box(&raw), &config);
-                    let result = if is_opaque(&result.rgba) {
+                    let result = if pixels::is_opaque(&result.rgba) {
                         result
                     } else {
                         flatten_onto_white(&result)
@@ -1171,17 +945,6 @@ mod tests {
                 );
             }
         }
-    }
-
-    /// `withWhiteBackground` leaves an opaque canvas untouched.
-    #[test]
-    fn flattening_an_opaque_canvas_is_the_identity() {
-        let out = Composited {
-            rgba: vec![10, 20, 30, 255, 40, 50, 60, 255],
-            width: 2,
-            height: 1,
-        };
-        assert_eq!(flatten_onto_white(&out).rgba, out.rgba);
     }
 
     /// A composite with no annotations is the frame itself over the white
@@ -1216,15 +979,5 @@ mod tests {
         // ...and the padded margin past the frame is the white fill.
         let margin = 9 * 4;
         assert_eq!(&out.rgba[margin..margin + 4], &[255, 255, 255, 255]);
-    }
-
-    /// Premultiply/demultiply round-trips opaque pixels exactly; a fully
-    /// transparent pixel's colour is unrecoverable by definition and zeroes.
-    #[test]
-    fn premultiply_roundtrip_is_exact_for_opaque_pixels() {
-        let mut rgba = vec![13, 200, 91, 255, 1, 2, 3, 0];
-        premultiply(&mut rgba);
-        demultiply(&mut rgba);
-        assert_eq!(rgba, vec![13, 200, 91, 255, 0, 0, 0, 0]);
     }
 }

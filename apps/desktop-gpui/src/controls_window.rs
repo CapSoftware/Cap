@@ -489,7 +489,7 @@ impl Render for ControlsWindow {
             .flex_col()
             .justify_end()
             .p(px(12.))
-            .font_family("Geist")
+            .font_family(crate::theme::UI_FONT)
             // `body { font-weight: 500 }` (`ui-solid/src/main.css:189-192`).
             .font_weight(FontWeight::MEDIUM)
             .when_some(issue, |this, issue| {

@@ -7,7 +7,10 @@ import * as path from "node:path";
 import { env } from "node:process";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { createLinuxBundleConfig } from "./linux-bundle-config.mjs";
+import {
+	createLinuxBundleConfig,
+	GPUI_RPM_DEPENDS,
+} from "./linux-bundle-config.mjs";
 
 const exec = promisify(execCb);
 const execFile = promisify(execFileCb);
@@ -737,28 +740,43 @@ async function writeLinuxTauriConfig(sonameLibs) {
 	await fs.mkdir(appimageLibDir, { recursive: true });
 	await fs.copyFile(pulsePlugin, path.join(appimageLibDir, pluginName));
 
-	const configPath = path.join(
-		__root,
-		"apps",
-		"desktop",
-		"src-tauri",
-		"tauri.linux.conf.json",
+	const tauriDirectory = path.join(__root, "apps", "desktop", "src-tauri");
+	const tauriConfig = JSON.parse(
+		await fs.readFile(path.join(tauriDirectory, "tauri.conf.json"), "utf8"),
 	);
-	const baseConfig = JSON.parse(
-		await fs.readFile(
-			path.join(path.dirname(configPath), "tauri.conf.json"),
-			"utf8",
-		),
-	);
-	const config = createLinuxBundleConfig(
-		sonameLibs,
-		baseConfig.bundle.linux.deb.files,
-		baseConfig.bundle.linux.deb.depends,
+	await writeFileIfChanged(
+		path.join(tauriDirectory, "tauri.linux.conf.json"),
+		`${JSON.stringify(
+			createLinuxBundleConfig(
+				sonameLibs,
+				tauriConfig.bundle.linux.deb.files,
+				tauriConfig.bundle.linux.deb.depends,
+			),
+			null,
+			"\t",
+		)}\n`,
 	);
 
+	const gpuiDirectory = path.join(__root, "apps", "desktop-gpui");
+	const gpuiConfig = JSON.parse(
+		await fs.readFile(path.join(gpuiDirectory, "tauri.conf.json"), "utf8"),
+	);
 	await writeFileIfChanged(
-		configPath,
-		`${JSON.stringify(config, null, "\t")}\n`,
+		path.join(gpuiDirectory, "tauri.linux.conf.json"),
+		`${JSON.stringify(
+			createLinuxBundleConfig(
+				sonameLibs,
+				{},
+				gpuiConfig.bundle.linux.deb.depends,
+				{
+					root: "../..",
+					rpmDependencies: GPUI_RPM_DEPENDS,
+					mediaFramework: false,
+				},
+			),
+			null,
+			"\t",
+		)}\n`,
 	);
 	console.log(
 		`Generated Linux Tauri package configs with ${sonameLibs.length} shared libraries`,

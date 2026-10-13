@@ -2789,9 +2789,8 @@ impl ProjectConfiguration {
     }
 
     fn default_screen_motion_blur() -> f32 {
-        // Screen Studio's default blur amount is 1.0; with length-based blur
-        // semantics (amount scales the smear length, output fully blurred)
-        // 1.0 reproduces its out-of-the-box look.
+        // With length-based blur semantics (amount scales the smear length,
+        // output fully blurred) 1.0 gives the natural out-of-the-box look.
         1.0
     }
 
@@ -4105,9 +4104,9 @@ mod tests {
 
     #[test]
     fn default_motion_blur_is_full() {
-        // 1.0 matches Screen Studio's default amount under length-based blur
-        // semantics; the two fields must agree because the editor drives them
-        // with one slider and load() re-couples them.
+        // 1.0 is the natural default under length-based blur semantics; the
+        // two fields must agree because the editor drives them with one
+        // slider and load() re-couples them.
         let config = ProjectConfiguration::default();
 
         assert_eq!(config.cursor.motion_blur, 1.0);
