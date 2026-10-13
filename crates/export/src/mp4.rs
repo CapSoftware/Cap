@@ -972,8 +972,7 @@ impl ExportAudioWorker {
                 let fps_u64 = u64::from(fps);
                 let mut cursor = 0u64;
                 let mut last_timeline_frame: Option<u32> = None;
-                let mut rendered_frames = 0u32;
-                for job in job_rx {
+                for (rendered_frames, job) in job_rx.into_iter().enumerate() {
                     if is_cancelled() {
                         return Err(Mp4PipelineError::Interrupted);
                     }
@@ -1043,7 +1042,6 @@ impl ExportAudioWorker {
                         }
                     }
                     last_timeline_frame = Some(job.timeline_frame);
-                    rendered_frames += 1;
                     if packet_tx.send(queue.take()).is_err() {
                         return Err(Mp4PipelineError::Interrupted);
                     }

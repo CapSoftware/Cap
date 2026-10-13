@@ -423,42 +423,19 @@ async fn finalize_studio(
         completed.meta.status(),
         cap_project::StudioRecordingStatus::NeedsRemux
     );
+    let claim_progress = progress.clone();
     let completed = tokio::task::spawn_blocking(move || {
         if needs_remux {
             ensure_finalization_storage(&project_path)?;
         }
-        let preparing = progress
+        let preparing = claim_progress
             .as_ref()
             .and_then(|progress| progress.claim_preparing(&completed));
         let result = match preparing {
             Some(job) => RecoveryManager::remux_stopped_with_preparing(&completed, job),
             None => RecoveryManager::remux_if_needed(&project_path),
         };
-        result.map(|_| completed).map_err(anyhow::Error::from)
-    })
-    .await
-    .context("studio finalize task")?
-    .context("studio finalize")?;
-    tracing::info!(
-        elapsed_ms = started.elapsed().as_secs_f64() * 1000.0,
-        "Studio stop remux complete"
-    );
-
-    // Everything `handle_recording_finish` does after the remux,
-    // in its order: the first-frame JPEG the library's card is
-    // drawn from, then the camera preview's blur toggle copied
-    // into the project's configuration. Neither is fatal to a
-    // recording that is already on disk, so both only warn.
-    let project_path = completed.project_path.clone();
-    tokio::task::spawn_blocking(move || {
-        let thumbnail_started = std::time::Instant::now();
-        if let Some(display_path) = studio_display_path(&project_path) {
-            write_bundle_thumbnail(&project_path, &display_path);
-        }
-        tracing::info!(
-            elapsed_ms = thumbnail_started.elapsed().as_secs_f64() * 1000.0,
-            "Studio stop thumbnail complete"
-        );
+        result.map_err(anyhow::Error::from)?;
         let placement = completed
             .meta
             .camera_path()
@@ -478,6 +455,30 @@ async fn finalize_studio(
         {
             tracing::warn!(%error, "Could not apply the Studio Sound default");
         }
+        Ok::<_, anyhow::Error>(completed)
+    })
+    .await
+    .context("studio finalize task")?
+    .context("studio finalize")?;
+    tracing::info!(
+        elapsed_ms = started.elapsed().as_secs_f64() * 1000.0,
+        "Studio stop remux complete"
+    );
+
+    if let Some(progress) = &progress {
+        progress.complete(&Ok(completed.project_path.clone()));
+    }
+
+    let project_path = completed.project_path.clone();
+    tokio::task::spawn_blocking(move || {
+        let thumbnail_started = std::time::Instant::now();
+        if let Some(display_path) = studio_display_path(&project_path) {
+            write_bundle_thumbnail(&project_path, &display_path);
+        }
+        tracing::info!(
+            elapsed_ms = thumbnail_started.elapsed().as_secs_f64() * 1000.0,
+            "Studio stop thumbnail complete"
+        );
     })
     .await
     .context("studio post-finalize task")?;
@@ -734,13 +735,17 @@ impl StudioFinalizationPublisher {
     }
 
     fn complete(&self, result: &anyhow::Result<PathBuf>) {
-        self.state.send_modify(|state| {
+        self.state.send_if_modified(|state| {
+            if state.result.is_some() && result.is_ok() {
+                return false;
+            }
             state.result = Some(
                 result
                     .as_ref()
                     .map(|_| ())
                     .map_err(|error| format!("{error:#}")),
             );
+            true
         });
     }
 }
