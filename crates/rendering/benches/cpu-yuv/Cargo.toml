@@ -1,0 +1,21 @@
+[package]
+name = "cap-cpu-yuv-bench"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+rayon = "=1.11.0"
+
+[lib]
+path = "../../src/cpu_yuv.rs"
+
+[[bin]]
+name = "cpu-yuv-bench"
+path = "main.rs"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"

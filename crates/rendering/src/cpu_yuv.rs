@@ -468,28 +468,29 @@ fn nv12_convert_row_scalar(
     out_row_start: usize,
     output: &mut [u8],
 ) {
-    for col in 0..width {
-        let y_idx = y_row_start + col;
-        let uv_idx = uv_row_start + (col / 2) * 2;
+    let y_row = &y_data[y_row_start..y_row_start + width];
+    let uv_row = &uv_data[uv_row_start..uv_row_start + width.div_ceil(2) * 2];
+    let output_row = &mut output[out_row_start..out_row_start + width * 4];
 
-        let y = y_data.get(y_idx).copied().unwrap_or(0) as i32;
-        let u = uv_data.get(uv_idx).copied().unwrap_or(128) as i32;
-        let v = uv_data.get(uv_idx + 1).copied().unwrap_or(128) as i32;
+    for ((luma, chroma), pixels) in y_row
+        .chunks(2)
+        .zip(uv_row.chunks_exact(2))
+        .zip(output_row.chunks_mut(8))
+    {
+        let d = i32::from(chroma[0]) - 128;
+        let e = i32::from(chroma[1]) - 128;
+        let red = 409 * e + 128;
+        let green = -100 * d - 208 * e + 128;
+        let blue = 516 * d + 128;
 
-        let c = y - 16;
-        let d = u - 128;
-        let e = v - 128;
-
-        let r = clamp_u8((298 * c + 409 * e + 128) >> 8);
-        let g = clamp_u8((298 * c - 100 * d - 208 * e + 128) >> 8);
-        let b = clamp_u8((298 * c + 516 * d + 128) >> 8);
-
-        let out_idx = out_row_start + col * 4;
-        if out_idx + 3 < output.len() {
-            output[out_idx] = r;
-            output[out_idx + 1] = g;
-            output[out_idx + 2] = b;
-            output[out_idx + 3] = 255;
+        for (y, pixel) in luma.iter().zip(pixels.chunks_exact_mut(4)) {
+            let c = 298 * (i32::from(*y) - 16);
+            pixel.copy_from_slice(&[
+                clamp_u8((c + red) >> 8),
+                clamp_u8((c + green) >> 8),
+                clamp_u8((c + blue) >> 8),
+                255,
+            ]);
         }
     }
 }
@@ -850,28 +851,32 @@ fn yuv420p_convert_row_scalar(
     out_row_start: usize,
     output: &mut [u8],
 ) {
-    for col in 0..width {
-        let y_idx = y_row_start + col;
-        let uv_idx = uv_row_start + (col / 2);
+    let y_row = &y_data[y_row_start..y_row_start + width];
+    let chroma_width = width.div_ceil(2);
+    let u_row = &u_data[uv_row_start..uv_row_start + chroma_width];
+    let v_row = &v_data[uv_row_start..uv_row_start + chroma_width];
+    let output_row = &mut output[out_row_start..out_row_start + width * 4];
 
-        let y = y_data.get(y_idx).copied().unwrap_or(0) as i32;
-        let u = u_data.get(uv_idx).copied().unwrap_or(128) as i32;
-        let v = v_data.get(uv_idx).copied().unwrap_or(128) as i32;
+    for (((luma, u), v), pixels) in y_row
+        .chunks(2)
+        .zip(u_row)
+        .zip(v_row)
+        .zip(output_row.chunks_mut(8))
+    {
+        let d = i32::from(*u) - 128;
+        let e = i32::from(*v) - 128;
+        let red = 409 * e + 128;
+        let green = -100 * d - 208 * e + 128;
+        let blue = 516 * d + 128;
 
-        let c = y - 16;
-        let d = u - 128;
-        let e = v - 128;
-
-        let r = clamp_u8((298 * c + 409 * e + 128) >> 8);
-        let g = clamp_u8((298 * c - 100 * d - 208 * e + 128) >> 8);
-        let b = clamp_u8((298 * c + 516 * d + 128) >> 8);
-
-        let out_idx = out_row_start + col * 4;
-        if out_idx + 3 < output.len() {
-            output[out_idx] = r;
-            output[out_idx + 1] = g;
-            output[out_idx + 2] = b;
-            output[out_idx + 3] = 255;
+        for (y, pixel) in luma.iter().zip(pixels.chunks_exact_mut(4)) {
+            let c = 298 * (i32::from(*y) - 16);
+            pixel.copy_from_slice(&[
+                clamp_u8((c + red) >> 8),
+                clamp_u8((c + green) >> 8),
+                clamp_u8((c + blue) >> 8),
+                255,
+            ]);
         }
     }
 }
@@ -919,6 +924,86 @@ fn clamp_u8(val: i32) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn validated_conversion_is_exact_with_odd_sizes_padding_and_output_tail() {
+        for (width, height) in [(1_u32, 1_u32), (3, 5), (17, 18), (1921, 1081)] {
+            let y_stride = width + 7;
+            let uv_stride = width.div_ceil(2) + 5;
+            let y_len = (height - 1) * y_stride + width;
+            let uv_len = (height.div_ceil(2) - 1) * uv_stride + width.div_ceil(2);
+            let y: Vec<u8> = (0..y_len).map(|i| (i * 7) as u8).collect();
+            let u: Vec<u8> = (0..uv_len).map(|i| (i * 11) as u8).collect();
+            let v: Vec<u8> = (0..uv_len).map(|i| (i * 13) as u8).collect();
+            let uv: Vec<u8> = u.iter().zip(&v).flat_map(|(u, v)| [*u, *v]).collect();
+            let mut expected = vec![0xA5; (width * height * 4) as usize + 31];
+            let mut actual = expected.clone();
+            nv12_to_rgba(
+                &y,
+                &uv,
+                width,
+                height,
+                y_stride,
+                uv_stride * 2,
+                &mut expected,
+            );
+            nv12_to_rgba_simd(&y, &uv, width, height, y_stride, uv_stride * 2, &mut actual);
+            assert_eq!(actual, expected, "NV12 {width}x{height}");
+            yuv420p_to_rgba(
+                &y,
+                &u,
+                &v,
+                width,
+                height,
+                y_stride,
+                uv_stride,
+                &mut expected,
+            );
+            yuv420p_to_rgba_simd(&y, &u, &v, width, height, y_stride, uv_stride, &mut actual);
+            assert_eq!(actual, expected, "YUV420P {width}x{height}");
+        }
+    }
+
+    #[test]
+    fn validated_conversion_matches_every_eight_bit_color() {
+        let y: Vec<u8> = (0..256 * 256).map(|i| i as u8).collect();
+        let u: Vec<u8> = (0..128 * 128).map(|i| (i / 128 * 2) as u8).collect();
+        let mut v = vec![0; u.len()];
+        let mut uv = vec![0; u.len() * 2];
+        let mut expected = vec![0; y.len() * 4];
+        let mut actual = expected.clone();
+        for u_offset in [0_u8, 1] {
+            let u: Vec<u8> = u.iter().map(|u| u + u_offset).collect();
+            for value in 0..=255_u8 {
+                v.fill(value);
+                for (pair, u) in uv.chunks_exact_mut(2).zip(&u) {
+                    pair.copy_from_slice(&[*u, value]);
+                }
+                nv12_to_rgba(&y, &uv, 256, 256, 256, 256, &mut expected);
+                nv12_to_rgba_simd(&y, &uv, 256, 256, 256, 256, &mut actual);
+                assert_eq!(actual, expected, "NV12 U offset {u_offset}, V {value}");
+                yuv420p_to_rgba_simd(&y, &u, &v, 256, 256, 256, 128, &mut actual);
+                assert_eq!(actual, expected, "YUV420P U offset {u_offset}, V {value}");
+            }
+        }
+    }
+
+    #[test]
+    fn truncated_planes_and_outputs_keep_scalar_fallback_behavior() {
+        for plane_len in [0, 1, 7, 63] {
+            for output_len in [0, 3, 17, 256] {
+                let plane = vec![93; plane_len];
+                let mut expected = vec![0xA5; output_len];
+                let mut actual = expected.clone();
+                nv12_to_rgba(&plane, &plane, 8, 8, 8, 8, &mut expected);
+                nv12_to_rgba_simd(&plane, &plane, 8, 8, 8, 8, &mut actual);
+                assert_eq!(actual, expected);
+                yuv420p_to_rgba(&plane, &plane, &plane, 8, 8, 8, 4, &mut expected);
+                yuv420p_to_rgba_simd(&plane, &plane, &plane, 8, 8, 8, 4, &mut actual);
+                assert_eq!(actual, expected);
+            }
+        }
+    }
 
     #[test]
     fn test_nv12_basic_conversion() {
