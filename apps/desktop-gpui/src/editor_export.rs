@@ -134,13 +134,19 @@ impl ExportResolution {
     }
 
     fn size(self, canvas: (u32, u32)) -> Result<(u32, u32), String> {
+        if canvas.1 == 0 {
+            return Err("Export canvas has no height. Adjust the crop and try again.".into());
+        }
         let height = match self {
             Self::P720 => 720,
             Self::P1080 => 1080,
             Self::P4k => 2160,
         };
         let width = (f64::from(canvas.0) * f64::from(height) / f64::from(canvas.1)).ceil() as u32;
-        let width = (width + 3) & !3;
+        let width = width
+            .checked_add(3)
+            .ok_or("Export width is too large. Choose a lower resolution or adjust the crop.")?
+            & !3;
         let limit = wgpu::Limits::default().max_texture_dimension_2d;
         if width > limit || height > limit {
             return Err(format!(
@@ -780,6 +786,12 @@ impl EditorWindow {
         if ui.phase.is_busy() || ui.close_requested {
             return;
         }
+        if ui.destination == ExportDestination::Link && ui.sign_in_pending {
+            ui.sign_in_cancel.store(true, Ordering::Relaxed);
+            ui.sign_in_pending = false;
+            cx.notify();
+            return;
+        }
         let (width, height) = match ui.resolution.size(canvas) {
             Ok(size) => size,
             Err(_) => {
@@ -788,12 +800,6 @@ impl EditorWindow {
             }
         };
         if ui.destination == ExportDestination::Link {
-            if ui.sign_in_pending {
-                ui.sign_in_cancel.store(true, Ordering::Relaxed);
-                ui.sign_in_pending = false;
-                cx.notify();
-                return;
-            }
             if !store::auth_snapshot().signed_in() {
                 self.start_share_sign_in(window, cx);
                 return;
@@ -3152,6 +3158,41 @@ mod tests {
             (8192, 1080)
         );
         assert!(ExportResolution::P1080.size((8193, 1080)).is_err());
+    }
+
+    #[test]
+    fn export_presets_reject_zero_height_crops_without_panicking() {
+        let options = RenderOptions {
+            screen_size: XY::new(1920, 1080),
+            camera_size: None,
+            preserve_screen_alpha: false,
+        };
+        let mut project = ProjectConfiguration::default();
+        project.background.padding = 0.0;
+        project.background.crop = Some(Crop {
+            position: XY::new(0, 0),
+            size: XY::new(1920, 0),
+        });
+        let canvas = ProjectUniforms::get_base_size(&options, &project);
+        assert_eq!(canvas, (1920, 0));
+        for preset in [
+            ExportResolution::P720,
+            ExportResolution::P1080,
+            ExportResolution::P4k,
+        ] {
+            assert!(preset.size(canvas).is_err());
+        }
+    }
+
+    #[test]
+    fn export_presets_reject_widths_that_cannot_be_aligned() {
+        for preset in [
+            ExportResolution::P720,
+            ExportResolution::P1080,
+            ExportResolution::P4k,
+        ] {
+            assert!(preset.size((u32::MAX, 1)).is_err());
+        }
     }
 
     fn clipboard_export() -> ExportUi {
