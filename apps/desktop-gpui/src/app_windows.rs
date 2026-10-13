@@ -4714,6 +4714,7 @@ fn open_editor_window(
 
     hide_main_and_park_camera_preview(cx);
     reveal_editor_window(&key, cx);
+    prewarm_shared_wgpu_device(cx);
     if finalization.is_some() {
         tracing::info!(path = %key.display(), "preparing editor shell created");
         let frame_path = key.clone();
@@ -4728,6 +4729,69 @@ fn open_editor_window(
     }
     load_editor_project(key, handle, finalization, cx);
     Some(handle.window_id())
+}
+
+struct CachedWgpuDevice {
+    shared: cap_rendering::SharedWgpuDevice,
+    lost: Arc<std::sync::atomic::AtomicBool>,
+}
+
+static SHARED_WGPU_DEVICE: std::sync::LazyLock<tokio::sync::Mutex<Option<CachedWgpuDevice>>> =
+    std::sync::LazyLock::new(|| tokio::sync::Mutex::new(None));
+
+fn clone_shared_wgpu_device(
+    shared: &cap_rendering::SharedWgpuDevice,
+) -> cap_rendering::SharedWgpuDevice {
+    cap_rendering::SharedWgpuDevice {
+        instance: shared.instance.clone(),
+        adapter: shared.adapter.clone(),
+        device: shared.device.clone(),
+        queue: shared.queue.clone(),
+        is_software_adapter: shared.is_software_adapter,
+    }
+}
+
+pub(crate) async fn shared_wgpu_device() -> Option<cap_rendering::SharedWgpuDevice> {
+    let mut guard = SHARED_WGPU_DEVICE.lock().await;
+    if let Some(cached) = guard.as_ref() {
+        if !cached.lost.load(std::sync::atomic::Ordering::Acquire) {
+            return Some(clone_shared_wgpu_device(&cached.shared));
+        }
+        tracing::warn!("shared wgpu device was lost; recreating");
+        *guard = None;
+    }
+    let started = std::time::Instant::now();
+    match cap_rendering::create_shared_device().await {
+        Ok(shared) => {
+            let lost = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let lost_flag = lost.clone();
+            shared
+                .device
+                .set_device_lost_callback(move |reason, message| {
+                    tracing::warn!(?reason, %message, "shared wgpu device lost");
+                    lost_flag.store(true, std::sync::atomic::Ordering::Release);
+                });
+            tracing::info!(
+                elapsed_ms = started.elapsed().as_secs_f64() * 1000.0,
+                software = shared.is_software_adapter,
+                "shared wgpu device ready"
+            );
+            let cloned = clone_shared_wgpu_device(&shared);
+            *guard = Some(CachedWgpuDevice { shared, lost });
+            Some(cloned)
+        }
+        Err(error) => {
+            tracing::warn!(%error, "could not precreate shared wgpu device");
+            None
+        }
+    }
+}
+
+pub(crate) fn prewarm_shared_wgpu_device(cx: &App) {
+    gpui_tokio::Tokio::spawn(cx, async {
+        let _ = shared_wgpu_device().await;
+    })
+    .detach();
 }
 
 fn editor_audio_output() -> Arc<cap_editor::AudioOutput> {
@@ -5021,10 +5085,6 @@ fn load_editor_project_candidate(
                 // `editor_instance.rs:305`). The video pump is identical on
                 // both paths.
                 //
-                // `shared_device: None`: gpui on macOS is Metal-direct and
-                // exposes no wgpu device to share, so cap-rendering owns its
-                // own. Two GPU contexts in-process is the shape the Tauri app
-                // already has.
                 let state_cb = editor_window::make_state_callback(playhead);
                 let frame_cb = editor_window::make_frame_callback(frame_tx, frame_stats);
                 #[cfg(target_os = "macos")]
@@ -5036,11 +5096,12 @@ fn load_editor_project_candidate(
                         .recreate_preparing_candidate(state_cb, frame_cb, frame_format)
                         .await;
                 }
+                let shared_device = shared_wgpu_device().await;
                 let instance = cap_editor::EditorInstance::new_with_startup_inputs(
                     instance_path,
                     state_cb,
                     frame_cb,
-                    None,
+                    shared_device,
                     frame_format,
                     preparing_output.unwrap_or_else(editor_audio_output),
                     cap_editor::EditorStartupInputs {
@@ -6463,6 +6524,7 @@ pub fn open_screenshot_editor(path: PathBuf, cx: &mut App) {
         .ok();
 
     hide_main_window(cx);
+    prewarm_shared_wgpu_device(cx);
     screenshot_editor::load_screenshot_project(key, handle, cx);
 }
 
