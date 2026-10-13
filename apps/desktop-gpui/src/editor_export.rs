@@ -15,6 +15,7 @@ use cap_export::preview::{
 use cap_export::settings::ExportSettings;
 use cap_export::{ExporterBase, make_cursor_only_project};
 use cap_project::{BackgroundSource, RecordingMeta, XY};
+use cap_rendering::{ProjectUniforms, RenderOptions};
 use cap_utils::export_resources::{
     DiskBudget, ExportResources, estimated_working_bytes, is_resource_stop,
 };
@@ -132,12 +133,14 @@ impl ExportResolution {
         }
     }
 
-    fn size(self) -> (u32, u32) {
-        match self {
-            Self::P720 => (1280, 720),
-            Self::P1080 => (1920, 1080),
-            Self::P4k => (3840, 2160),
-        }
+    fn size(self, canvas: (u32, u32)) -> (u32, u32) {
+        let height = match self {
+            Self::P720 => 720,
+            Self::P1080 => 1080,
+            Self::P4k => 2160,
+        };
+        let width = (f64::from(canvas.0) * f64::from(height) / f64::from(canvas.1)).ceil() as u32;
+        ((width + 3) & !3, height)
     }
 
     fn from_slug(slug: &str) -> Self {
@@ -322,9 +325,7 @@ impl ExportUi {
             .unwrap_or_else(|| self.compression.bits_per_pixel())
     }
 
-    fn estimate_settings(&self) -> ExportSettings {
-        let (width, height) = self.resolution.size();
-        let resolution_base = XY::new(width, height);
+    fn estimate_settings(&self, resolution_base: XY<u32>) -> ExportSettings {
         if self.cursor_only {
             ExportSettings::Mov(MovExportSettings {
                 fps: self.fps,
@@ -439,6 +440,20 @@ fn decode_jpeg_bytes(bytes: &[u8]) -> Option<Arc<RenderImage>> {
 }
 
 impl EditorWindow {
+    fn export_canvas_size(&self) -> Option<(u32, u32)> {
+        let options = if let Some(instance) = &self.instance {
+            instance.render_constants.options
+        } else {
+            let display = &self.summary()?.recordings.segments.first()?.display;
+            RenderOptions {
+                screen_size: XY::new(display.width, display.height),
+                camera_size: None,
+                preserve_screen_alpha: false,
+            }
+        };
+        Some(ProjectUniforms::get_base_size(&options, &self.project))
+    }
+
     pub(crate) fn render_reupload_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .rounded(px(8.))
@@ -600,6 +615,9 @@ impl EditorWindow {
     }
 
     fn refresh_export_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(canvas) = self.export_canvas_size() else {
+            return;
+        };
         let path = self.project_path.clone();
         let time = self.preview_or_playhead();
         let instance = self.instance.clone();
@@ -613,10 +631,10 @@ impl EditorWindow {
         ui.estimate_loading = true;
         ui.preview_stats = None;
         let estimate_cancel = ui.estimate_cancel.clone();
-        let estimate_settings = ui.estimate_settings();
+        let (width, height) = ui.resolution.size(canvas);
+        let estimate_settings = ui.estimate_settings(XY::new(width, height));
         let estimate_instance = instance.clone();
         let estimate_project = project.clone();
-        let (width, height) = ui.resolution.size();
         let settings = ExportPreviewSettings {
             fps: ui.fps,
             resolution_base: XY::new(width, height),
@@ -728,6 +746,9 @@ impl EditorWindow {
     }
 
     pub(crate) fn start_export(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(canvas) = self.export_canvas_size() else {
+            return;
+        };
         let pretty_name = self
             .summary()
             .map(|summary| summary.pretty_name.clone())
@@ -770,7 +791,7 @@ impl EditorWindow {
         let format = ui.format;
         let cursor_only = ui.cursor_only;
         let fps = ui.fps;
-        let (width, height) = ui.resolution.size();
+        let (width, height) = ui.resolution.size(canvas);
         let compression = ui.compression;
         let custom_bpp = ui.custom_bpp;
         let optimize = ui.optimize_filesize;
@@ -1062,6 +1083,9 @@ impl EditorWindow {
     }
 
     fn start_link_export(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(canvas) = self.export_canvas_size() else {
+            return;
+        };
         let duration = self.total_duration();
         let Some(ui) = self.export.as_mut() else {
             return;
@@ -1090,7 +1114,7 @@ impl EditorWindow {
         let format = ui.format;
         let cursor_only = ui.cursor_only;
         let fps = ui.fps;
-        let (width, height) = ui.resolution.size();
+        let (width, height) = ui.resolution.size(canvas);
         let compression = ui.compression;
         let custom_bpp = ui.custom_bpp;
         let optimize = ui.optimize_filesize;
@@ -2984,13 +3008,73 @@ async fn run_export(
 
 #[cfg(test)]
 mod tests {
-    use super::{ExportDestination, ExportPhase, ExportUi, cancel_matching_export};
+    use super::{
+        ExportDestination, ExportPhase, ExportResolution, ExportUi, cancel_matching_export,
+    };
     use crate::store::ExportPrefs;
+    use cap_project::{AspectRatio, Crop, ProjectConfiguration, XY};
+    use cap_rendering::{ProjectUniforms, RenderOptions};
     use std::path::PathBuf;
     use std::sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
     };
+
+    #[test]
+    fn export_presets_keep_selected_height_for_canvas_shapes() {
+        let options = RenderOptions {
+            screen_size: XY::new(3840, 1080),
+            camera_size: None,
+            preserve_screen_alpha: false,
+        };
+        let mut project = ProjectConfiguration::default();
+        project.background.padding = 0.0;
+        for (aspect, expected_widths) in [
+            (None, [2560, 3840, 7680]),
+            (Some(AspectRatio::Wide), [1280, 1920, 3840]),
+            (Some(AspectRatio::Square), [720, 1080, 2160]),
+            (Some(AspectRatio::Vertical), [404, 608, 1216]),
+        ] {
+            project.aspect_ratio = aspect;
+            for ((preset, height), width) in [
+                (ExportResolution::P720, 720),
+                (ExportResolution::P1080, 1080),
+                (ExportResolution::P4k, 2160),
+            ]
+            .into_iter()
+            .zip(expected_widths)
+            {
+                let (x, y) = preset.size(ProjectUniforms::get_base_size(&options, &project));
+                assert_eq!(
+                    ProjectUniforms::get_output_size(&options, &project, XY::new(x, y)),
+                    (width, height),
+                    "{preset:?} {:?}",
+                    project.aspect_ratio,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn export_preset_uses_cropped_padded_canvas() {
+        let options = RenderOptions {
+            screen_size: XY::new(3840, 2160),
+            camera_size: None,
+            preserve_screen_alpha: false,
+        };
+        let mut project = ProjectConfiguration::default();
+        project.background.padding = 25.0;
+        project.background.crop = Some(Crop {
+            position: XY::new(100, 50),
+            size: XY::new(2400, 600),
+        });
+        let (x, y) =
+            ExportResolution::P1080.size(ProjectUniforms::get_base_size(&options, &project));
+        assert_eq!(
+            ProjectUniforms::get_output_size(&options, &project, XY::new(x, y)),
+            (4320, 1080),
+        );
+    }
 
     fn clipboard_export() -> ExportUi {
         ExportUi::from_preferences(ExportPrefs {
