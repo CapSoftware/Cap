@@ -701,7 +701,7 @@ async fn upload_segments(
     let mut next_preparation_request = tokio::time::Instant::now();
     let mut next_prefetch = SEGMENT_URL_PREFETCH + 1;
     let mut deferred = VecDeque::new();
-    let mut first_failures: HashMap<String, tokio::time::Instant> = HashMap::new();
+    let mut first_failures: HashMap<String, (tokio::time::Instant, String)> = HashMap::new();
     let mut retry_round = 0u32;
     let mut retry_at = tokio::time::Instant::now();
     let prefetched = checked_segment_step(&cancel, || async {
@@ -720,6 +720,10 @@ async fn upload_segments(
         if events_closed && uploads.is_empty() && deferred.is_empty() && authorized {
             break;
         }
+        let retry_deadline = first_failures
+            .values()
+            .map(|(first_failure, _)| *first_failure + SEGMENT_RETRY_WINDOW)
+            .min();
         let guarded = authorization.is_some();
         let (permission, denial) = match authorization.as_mut() {
             Some(required) => (Some(&mut required.permission), Some(&mut required.denied)),
@@ -785,6 +789,14 @@ async fn upload_segments(
                     Err(_) => events_closed = true,
                 }
             }
+            _ = async { tokio::time::sleep_until(retry_deadline.unwrap()).await }, if retry_deadline.is_some() => {
+                let error = first_failures
+                    .values()
+                    .min_by_key(|(first_failure, _)| *first_failure)
+                    .map(|(_, error)| error.clone())
+                    .unwrap_or_default();
+                return Err(error);
+            }
             _ = tokio::time::sleep_until(retry_at), if !deferred.is_empty() && uploads.len() < MAX_SEGMENT_UPLOADS => {
                 while uploads.len() < MAX_SEGMENT_UPLOADS {
                     let Some(event) = deferred.pop_front() else { break };
@@ -803,10 +815,13 @@ async fn upload_segments(
                     Err(SegmentUploadError::Fatal(error)) => return Err(error),
                     Err(SegmentUploadError::Retryable { event, error }) => {
                         let now = tokio::time::Instant::now();
-                        let first_failure = *first_failures.entry(segment_subpath(&event)).or_insert(now);
-                        if now.duration_since(first_failure) >= SEGMENT_RETRY_WINDOW {
+                        let (first_failure, last_error) = first_failures
+                            .entry(segment_subpath(&event))
+                            .or_insert_with(|| (now, String::new()));
+                        if now.duration_since(*first_failure) >= SEGMENT_RETRY_WINDOW {
                             return Err(error);
                         }
+                        last_error.clone_from(&error);
                         if deferred.is_empty() {
                             retry_at = now + segment_retry_backoff(retry_round);
                             retry_round = retry_round.saturating_add(1);
@@ -2791,6 +2806,7 @@ mod tests {
         fatal_segment: AtomicBool,
         status_failure: Mutex<Option<StatusCode>>,
         retryable_failures: std::sync::atomic::AtomicUsize,
+        stall_retries: AtomicBool,
         segment_calls: std::sync::atomic::AtomicUsize,
         segment_failed: tokio::sync::Notify,
         manifest_failures: std::sync::atomic::AtomicUsize,
@@ -2864,6 +2880,10 @@ mod tests {
                     event,
                     AuthApiError::Other("segment upload failed".into()),
                 ));
+            }
+            if self.stall_retries.load(Ordering::Acquire) {
+                tokio::time::sleep(Duration::from_secs(5 * 60) * SEGMENT_UPLOAD_ATTEMPTS).await;
+                return Err(exhausted_segment_error(event, AuthApiError::Timeout));
             }
             self.uploaded.fetch_add(1, Ordering::AcqRel);
             Ok(event)
@@ -3455,12 +3475,36 @@ mod tests {
         )
         .await
         .unwrap_err();
-        let elapsed = started.elapsed();
         assert!(error.contains("segment upload failed"));
-        assert!(elapsed >= SEGMENT_RETRY_WINDOW);
-        assert!(elapsed <= SEGMENT_RETRY_WINDOW + SEGMENT_RETRY_MAX_DELAY);
+        assert_eq!(started.elapsed(), SEGMENT_RETRY_WINDOW);
         assert_eq!(transport.completed.load(Ordering::Acquire), 0);
         assert!(transport.manifests.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn stalled_retry_cannot_outlive_the_retry_window() {
+        let transport = FakeSegmentTransport::default();
+        transport.retryable_failures.store(1, Ordering::Release);
+        transport.stall_retries.store(true, Ordering::Release);
+        let (sender, events) = flume::unbounded();
+        sender
+            .send(segment_event(0, 0.0, true, SegmentMediaType::Video))
+            .unwrap();
+        drop(sender);
+        let started = tokio::time::Instant::now();
+        let error = upload_segments(
+            &transport,
+            "stalled-retry",
+            events,
+            Arc::new(AtomicBool::new(false)),
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("segment upload failed"), "{error}");
+        assert_eq!(started.elapsed(), SEGMENT_RETRY_WINDOW);
+        assert_eq!(transport.segment_calls.load(Ordering::Acquire), 2);
+        assert_eq!(transport.completed.load(Ordering::Acquire), 0);
     }
 
     #[tokio::test(start_paused = true)]
