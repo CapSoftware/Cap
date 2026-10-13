@@ -3,7 +3,11 @@ use std::{
     collections::{BTreeMap, VecDeque},
     path::PathBuf,
     rc::Rc,
-    sync::{Arc, OnceLock, mpsc},
+    sync::{
+        Arc, OnceLock,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
     time::Duration,
 };
 
@@ -33,6 +37,11 @@ const DECODER_REQUEST_CLUSTER_GAP_FRAMES: u32 = FRAME_CACHE_SIZE as u32 / 2;
 // recordings. Keep the existing temporal cap, but also bound the raw decoded
 // frame data so playback remains viable on memory-constrained devices.
 const MAX_FRAME_CACHE_BYTES: usize = 256 * 1024 * 1024;
+// Sequential readers never revisit frames behind the newest request, so only
+// the newest few are kept: enough for repeated requests and for answering a
+// request inside a pts hole with the frame before it. Each retained frame pins
+// a decoder-owned IOSurface (about 9 MB for a 3K screen).
+const SEQUENTIAL_FRAME_CACHE_SIZE: usize = 8;
 // Paused recordings can contain hundreds of screen/camera pairs. AVAssetReader
 // starts decoding eagerly, so only requested tracks may hold native readers.
 const MAX_ACTIVE_READERS: usize = 16;
@@ -43,12 +52,21 @@ fn reader_capacity() -> &'static Arc<Semaphore> {
     CAPACITY.get_or_init(|| Arc::new(Semaphore::new(MAX_ACTIVE_READERS)))
 }
 
+fn frame_cache_frame_limit(sequential_access: bool, requests_moved_backwards: bool) -> usize {
+    if sequential_access && !requests_moved_backwards {
+        SEQUENTIAL_FRAME_CACHE_SIZE
+    } else {
+        FRAME_CACHE_SIZE
+    }
+}
+
 fn frame_cache_needs_eviction(
     current_frames: usize,
     current_bytes: usize,
     next_frame_bytes: usize,
+    frame_limit: usize,
 ) -> bool {
-    current_frames >= FRAME_CACHE_SIZE
+    current_frames >= frame_limit
         || current_bytes.saturating_add(next_frame_bytes) > MAX_FRAME_CACHE_BYTES
 }
 
@@ -585,10 +603,13 @@ impl AVAssetReaderDecoder {
         fps: u32,
         rx: mpsc::Receiver<VideoDecoderMessage>,
         ready_tx: oneshot::Sender<Result<DecoderInitResult, String>>,
+        sequential_access: Arc<AtomicBool>,
     ) {
         let handle = tokio::runtime::Handle::current();
 
-        std::thread::spawn(move || Self::run(name, path, fps, rx, ready_tx, handle));
+        std::thread::spawn(move || {
+            Self::run(name, path, fps, rx, ready_tx, handle, sequential_access)
+        });
     }
 
     fn run(
@@ -598,6 +619,7 @@ impl AVAssetReaderDecoder {
         rx: mpsc::Receiver<VideoDecoderMessage>,
         ready_tx: oneshot::Sender<Result<DecoderInitResult, String>>,
         tokio_handle: tokio::runtime::Handle,
+        sequential_access: Arc<AtomicBool>,
     ) {
         let dimensions = (|| {
             let input = format::input(&path).map_err(|error| error.to_string())?;
@@ -632,6 +654,8 @@ impl AVAssetReaderDecoder {
 
         let mut cache = BTreeMap::<u32, CachedFrame>::new();
         let mut cache_bytes = 0usize;
+        let mut highest_requested_frame = None::<u32>;
+        let mut requests_moved_backwards = false;
 
         #[allow(unused)]
         let mut last_active_frame = None::<u32>;
@@ -750,6 +774,12 @@ impl AVAssetReaderDecoder {
                 deferred_requests.extend(pending_requests.drain(split_index..));
             }
 
+            if let (Some(first), Some(last)) = (pending_requests.first(), pending_requests.last()) {
+                requests_moved_backwards |=
+                    highest_requested_frame.is_some_and(|highest| first.frame < highest);
+                highest_requested_frame = highest_requested_frame.max(Some(last.frame));
+            }
+
             let is_scrubbing =
                 this.as_mut()
                     .zip(pending_requests.first())
@@ -865,6 +895,10 @@ impl AVAssetReaderDecoder {
 
             last_active_frame = Some(requested_frame);
 
+            let frame_limit = frame_cache_frame_limit(
+                sequential_access.load(Ordering::Relaxed),
+                requests_moved_backwards,
+            );
             let mut exit = false;
             let mut frames_iterated = 0u32;
             let mut last_decoded_position: Option<f32> = None;
@@ -943,7 +977,12 @@ impl AVAssetReaderDecoder {
                             cache_bytes = cache_bytes.saturating_sub(replaced.byte_len());
                         }
                         while !cache.is_empty()
-                            && frame_cache_needs_eviction(cache.len(), cache_bytes, frame_bytes)
+                            && frame_cache_needs_eviction(
+                                cache.len(),
+                                cache_bytes,
+                                frame_bytes,
+                                frame_limit,
+                            )
                         {
                             if let Some(last_active) = &last_active_frame {
                                 let frame_to_remove = if requested_frame > *last_active {
@@ -1241,10 +1280,48 @@ mod tests {
             FRAME_CACHE_SIZE - 1,
             MAX_FRAME_CACHE_BYTES - 1,
             1,
+            FRAME_CACHE_SIZE,
         ));
-        assert!(frame_cache_needs_eviction(FRAME_CACHE_SIZE, 0, 1));
-        assert!(frame_cache_needs_eviction(1, MAX_FRAME_CACHE_BYTES, 1,));
-        assert!(frame_cache_needs_eviction(1, usize::MAX, 1));
+        assert!(frame_cache_needs_eviction(
+            FRAME_CACHE_SIZE,
+            0,
+            1,
+            FRAME_CACHE_SIZE
+        ));
+        assert!(frame_cache_needs_eviction(
+            1,
+            MAX_FRAME_CACHE_BYTES,
+            1,
+            FRAME_CACHE_SIZE
+        ));
+        assert!(frame_cache_needs_eviction(
+            1,
+            usize::MAX,
+            1,
+            FRAME_CACHE_SIZE
+        ));
+    }
+
+    #[test]
+    fn sequential_access_bounds_the_cache_until_requests_move_backwards() {
+        assert_eq!(frame_cache_frame_limit(false, false), FRAME_CACHE_SIZE);
+        assert_eq!(frame_cache_frame_limit(false, true), FRAME_CACHE_SIZE);
+        assert_eq!(
+            frame_cache_frame_limit(true, false),
+            SEQUENTIAL_FRAME_CACHE_SIZE
+        );
+        assert_eq!(frame_cache_frame_limit(true, true), FRAME_CACHE_SIZE);
+
+        let limit = frame_cache_frame_limit(true, false);
+        assert!(limit >= 2);
+        assert!(!frame_cache_needs_eviction(limit - 1, 0, 1, limit));
+        assert!(frame_cache_needs_eviction(limit, 0, 1, limit));
+        assert!(frame_cache_needs_eviction(
+            1,
+            MAX_FRAME_CACHE_BYTES,
+            1,
+            limit
+        ));
     }
 
     #[test]
