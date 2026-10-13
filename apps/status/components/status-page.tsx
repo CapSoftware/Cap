@@ -52,7 +52,9 @@ export function StatusPage() {
 		let inFlight = false;
 		let controller: AbortController | null = null;
 		async function refresh() {
-			if (inFlight || document.hidden) return;
+			if (document.hidden) return;
+			setNow(Date.now());
+			if (inFlight) return;
 			inFlight = true;
 			controller = new AbortController();
 			const timeout = setTimeout(() => controller?.abort(), 10_000);
