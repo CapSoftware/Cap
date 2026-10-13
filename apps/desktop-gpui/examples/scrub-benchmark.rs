@@ -18,12 +18,41 @@ const PREVIEW_FPS: u32 = 60;
 const PREVIEW_RESOLUTION: XY<u32> = XY { x: 1248, y: 702 };
 const REGION_FRACTIONS: [f64; 5] = [0.02, 0.17, 0.5, 0.83, 0.98];
 
+#[cfg(unix)]
 fn cpu_secs() -> f64 {
     let mut usage = std::mem::MaybeUninit::<libc::rusage>::zeroed();
     unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) };
     let usage = unsafe { usage.assume_init() };
     let secs = |time: libc::timeval| time.tv_sec as f64 + time.tv_usec as f64 / 1_000_000.0;
     secs(usage.ru_utime) + secs(usage.ru_stime)
+}
+
+#[cfg(windows)]
+fn cpu_secs() -> f64 {
+    use windows_sys::Win32::{
+        Foundation::FILETIME,
+        System::Threading::{GetCurrentProcess, GetProcessTimes},
+    };
+
+    let empty = FILETIME {
+        dwLowDateTime: 0,
+        dwHighDateTime: 0,
+    };
+    let (mut creation, mut exit, mut kernel, mut user) = (empty, empty, empty, empty);
+    unsafe {
+        GetProcessTimes(
+            GetCurrentProcess(),
+            &mut creation,
+            &mut exit,
+            &mut kernel,
+            &mut user,
+        )
+    };
+    let secs = |time: FILETIME| {
+        ((u64::from(time.dwHighDateTime) << 32) | u64::from(time.dwLowDateTime)) as f64
+            / 10_000_000.0
+    };
+    secs(kernel) + secs(user)
 }
 
 fn percentile(sorted: &[f64], fraction: f64) -> f64 {
@@ -87,15 +116,19 @@ async fn run(project_path: PathBuf, steps: u32, step_frames: u32) -> anyhow::Res
         .timeline
         .as_ref()
         .map_or(0.0, |timeline| timeline.duration());
-    let last_frame = (duration * PREVIEW_FPS as f64) as u32;
+    let last_frame = ((duration * PREVIEW_FPS as f64) as u32).saturating_sub(1);
+    let drag_frames = steps.saturating_mul(step_frames);
+    anyhow::ensure!(
+        drag_frames <= last_frame,
+        "a {drag_frames}-frame drag does not fit in this {duration:.1}s project; pass fewer STEPS or STEP_FRAMES"
+    );
     render(&instance, &frame_rx, 0).await?;
 
     let mut regions = Vec::new();
     let mut drag = Vec::new();
     let mut drag_cpu_secs = 0.0;
     for fraction in REGION_FRACTIONS {
-        let start = ((last_frame as f64 * fraction) as u32)
-            .min(last_frame.saturating_sub(steps * step_frames));
+        let start = ((last_frame as f64 * fraction) as u32).min(last_frame - drag_frames);
         let seek_ms = render(&instance, &frame_rx, start).await?;
         let cpu_started = cpu_secs();
         let mut latencies = Vec::with_capacity(steps as usize);
