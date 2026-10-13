@@ -612,8 +612,6 @@ impl StreamState {
     }
 }
 
-/// Tracks how long the running stream has gone without a control request or
-/// an active source.
 struct IdleTimer {
     last_activity: Instant,
 }
@@ -631,8 +629,6 @@ impl IdleTimer {
         IDLE_PAUSE_AFTER.saturating_sub(now.saturating_duration_since(self.last_activity))
     }
 
-    /// True once the grace period has elapsed with no source playing. An
-    /// active source restarts the grace period.
     fn should_pause(&mut self, now: Instant, source_active: bool) -> bool {
         if source_active {
             self.touch(now);
