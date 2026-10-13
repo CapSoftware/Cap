@@ -1454,27 +1454,36 @@ fn silent_audio_frame(samples: usize) -> FFAudio {
 
 /// Shared state between the background render thread and the audio callback.
 ///
-/// The timeline mix is rendered progressively into `samples` (f32 bit
-/// patterns; zero-initialised == silence). The producer publishes how far it
-/// has rendered through the two watermarks, so the callback never reads a
-/// partially-written chunk: pass 1 covers `[primary_start, len)` starting at
-/// the playhead (minus a short pre-roll), then pass 2 wraps around to cover
-/// `[0, primary_start)` for backwards seeks.
+/// The timeline mix is rendered into `samples` (f32 bit patterns) in blocks of
+/// `PROGRESSIVE_BLOCK_FRAMES`. A block's `rendered` flag is stored with
+/// `Release` only after every sample in it is written, and a rendered block is
+/// never written again, so the callback reads a block only after loading its
+/// flag with `Acquire`. The callback publishes `read_position`; the producer
+/// renders up to `PROGRESSIVE_LOOKAHEAD_SECS` past it and follows seeks, so
+/// the work done scales with what is played rather than the whole timeline.
 struct ProgressiveTimeline {
     samples: Box<[AtomicU32]>,
-    /// First sample index of the initial render pass. Fixed at construction.
-    primary_start: usize,
-    /// Rendered watermark of `[primary_start, len)`. Stored with `Release`
-    /// after the samples it covers are written; loaded with `Acquire`.
-    primary_end: AtomicUsize,
-    /// Rendered watermark of the wrap-around pass over `[0, primary_start)`.
-    wrap_end: AtomicUsize,
+    rendered: Box<[AtomicBool]>,
+    block_samples: usize,
+    read_position: AtomicUsize,
     /// Tells the producer to bail out early (playback stopped).
     stop: AtomicBool,
-    complete: AtomicBool,
 }
 
 impl ProgressiveTimeline {
+    fn new(len: usize, channels: usize, read_position: usize) -> Self {
+        let block_samples = PROGRESSIVE_BLOCK_FRAMES * channels.max(1);
+        Self {
+            samples: Self::allocate_samples(len),
+            rendered: (0..len.div_ceil(block_samples))
+                .map(|_| AtomicBool::new(false))
+                .collect(),
+            block_samples,
+            read_position: AtomicUsize::new(read_position.min(len)),
+            stop: AtomicBool::new(false),
+        }
+    }
+
     /// `AtomicU32` has the same size, alignment and bit validity as `u32`
     /// (documented guarantee), so a zeroed `u32` allocation — which the
     /// allocator can hand out as untouched zero pages, unlike constructing
@@ -1483,9 +1492,55 @@ impl ProgressiveTimeline {
         let raw = vec![0u32; len].into_boxed_slice();
         unsafe { Box::from_raw(Box::into_raw(raw) as *mut [AtomicU32]) }
     }
+
+    fn first_unrendered_block(&self, from: usize, to: usize) -> Option<usize> {
+        let to = to.min(self.samples.len());
+        if from >= to {
+            return None;
+        }
+        (from / self.block_samples..to.div_ceil(self.block_samples))
+            .find(|block| !self.rendered[*block].load(Ordering::Acquire))
+    }
 }
 
 const MAX_PROGRESSIVE_BUFFER_BYTES: usize = 512 * 1024 * 1024;
+const PROGRESSIVE_BLOCK_FRAMES: usize = 1024;
+const PROGRESSIVE_RENDER_CHUNK_SAMPLES: usize = 1024;
+/// How far past the read position the producer renders before it idles.
+const PROGRESSIVE_LOOKAHEAD_SECS: f64 = 10.0;
+const PROGRESSIVE_IDLE_POLL: std::time::Duration = std::time::Duration::from_millis(20);
+
+#[derive(Debug, PartialEq, Eq)]
+enum ProgressiveRenderStep {
+    Continue,
+    StartAt(usize),
+    Idle,
+}
+
+/// Decides the producer's next move. The active run keeps its renderer state
+/// (and so produces the same samples as one uninterrupted render) while the
+/// first unrendered block it is asked for lies at most `catch_up_samples`
+/// ahead of it; anything else, such as a seek, starts a new run at that block.
+fn progressive_render_step(
+    run_position: Option<usize>,
+    target_block: Option<usize>,
+    block_samples: usize,
+    catch_up_samples: usize,
+) -> ProgressiveRenderStep {
+    let Some(target_block) = target_block else {
+        return ProgressiveRenderStep::Idle;
+    };
+    let target_start = target_block * block_samples;
+    match run_position {
+        Some(position)
+            if position >= target_start.saturating_sub(catch_up_samples)
+                && position < target_start + block_samples =>
+        {
+            ProgressiveRenderStep::Continue
+        }
+        _ => ProgressiveRenderStep::StartAt(target_start),
+    }
+}
 
 fn output_sample_index(secs: f64, sample_rate: u32, channels: usize, limit: usize) -> usize {
     if !(secs.is_finite() && secs > 0.0) {
@@ -1583,17 +1638,19 @@ enum PrerenderedAudioBufferMode<T: FromSampleBytes> {
 /// Rendering the entire timeline up front is O(duration) — it made pressing
 /// play take seconds on long recordings (and on unoptimised dev builds), on
 /// every press. Instead the stream becomes ready as soon as a small window
-/// around the playhead is rendered; the producer runs hundreds of times
-/// faster than realtime, so playback never catches up to it in practice. A
-/// read of a not-yet-rendered region produces silence rather than blocking.
+/// around the playhead is rendered, and the producer stays a bounded
+/// lookahead in front of the playhead, far faster than realtime. A read of a
+/// not-yet-rendered region produces silence rather than blocking.
 pub struct PrerenderedAudioBuffer<T: FromSampleBytes> {
     mode: PrerenderedAudioBufferMode<T>,
 }
 
 struct ProgressiveAudioBuffer<T: FromSampleBytes> {
     timeline: Arc<ProgressiveTimeline>,
+    worker: Option<std::thread::Thread>,
     ready_rx: std::sync::mpsc::Receiver<()>,
     read_position: usize,
+    ready_window_samples: usize,
     sample_rate: u32,
     channels: usize,
     _format: std::marker::PhantomData<T>,
@@ -1602,6 +1659,9 @@ struct ProgressiveAudioBuffer<T: FromSampleBytes> {
 impl<T: FromSampleBytes> Drop for ProgressiveAudioBuffer<T> {
     fn drop(&mut self) {
         self.timeline.stop.store(true, Ordering::Release);
+        if let Some(worker) = &self.worker {
+            worker.unpark();
+        }
     }
 }
 
@@ -1777,9 +1837,6 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> ProgressiveAudioBuffer<T> {
             output_info.channels,
             estimated_output_samples,
         );
-        // The ready signal is anchored at the actual start playhead (not the
-        // pre-roll start), guaranteeing the samples the stream begins reading
-        // exist before playback starts.
         let start_index = output_sample_index(
             start_playhead_secs,
             output_info.sample_rate,
@@ -1792,51 +1849,73 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> ProgressiveAudioBuffer<T> {
             output_info.channels,
             usize::MAX,
         );
-        let ready_at_index = start_index.saturating_add(ready_window_samples);
 
-        let timeline = Arc::new(ProgressiveTimeline {
-            samples: ProgressiveTimeline::allocate_samples(estimated_output_samples),
-            primary_start,
-            primary_end: AtomicUsize::new(primary_start),
-            wrap_end: AtomicUsize::new(0),
-            stop: AtomicBool::new(false),
-            complete: AtomicBool::new(false),
-        });
+        let timeline = Arc::new(ProgressiveTimeline::new(
+            estimated_output_samples,
+            output_info.channels,
+            start_index,
+        ));
 
-        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
 
-        spawn_progressive_render(
+        let worker = spawn_progressive_render(
             timeline.clone(),
             segments,
             music,
             project.clone(),
             render_info,
             duration_secs,
-            pass1_start_secs,
-            ready_at_index,
+            ProgressiveRunStart {
+                secs: pass1_start_secs,
+                position: primary_start,
+            },
             ready_tx,
         );
 
         Self {
             timeline,
+            worker,
             ready_rx,
-            read_position: 0,
+            read_position: start_index,
+            ready_window_samples,
             sample_rate: output_info.sample_rate,
             channels: output_info.channels,
             _format: std::marker::PhantomData,
         }
     }
 
-    /// Blocks until the initial window around the start position is rendered
-    /// (or the timeout elapses; unrendered reads are silence, never garbage).
+    /// Blocks until the window after the read position is rendered (or the
+    /// timeout elapses; unrendered reads are silence, never garbage).
     pub fn wait_until_ready(&self, timeout: std::time::Duration) {
-        let _ = self.ready_rx.recv_timeout(timeout);
+        let deadline = std::time::Instant::now() + timeout;
+        while self
+            .timeline
+            .first_unrendered_block(
+                self.read_position,
+                self.read_position.saturating_add(self.ready_window_samples),
+            )
+            .is_some()
+        {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero()
+                || matches!(
+                    self.ready_rx.recv_timeout(remaining),
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected)
+                )
+            {
+                return;
+            }
+        }
     }
 
     #[cfg(test)]
     fn wait_until_fully_rendered(&self) {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        while !self.timeline.complete.load(Ordering::Acquire) {
+        while self
+            .timeline
+            .first_unrendered_block(0, self.timeline.samples.len())
+            .is_some()
+        {
             assert!(
                 std::time::Instant::now() < deadline,
                 "progressive audio render did not complete in time"
@@ -1848,6 +1927,12 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> ProgressiveAudioBuffer<T> {
     pub fn set_playhead(&mut self, playhead_secs: f64) {
         let sample_position = (playhead_secs * self.sample_rate as f64) as usize * self.channels;
         self.read_position = sample_position.min(self.timeline.samples.len());
+        self.timeline
+            .read_position
+            .store(self.read_position, Ordering::Release);
+        if let Some(worker) = &self.worker {
+            worker.unpark();
+        }
     }
 
     pub fn current_audible_playhead(&self, device_latency_secs: f64) -> f64 {
@@ -1861,32 +1946,33 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> ProgressiveAudioBuffer<T> {
     }
 
     pub fn fill(&mut self, buffer: &mut [T]) {
-        let samples = &self.timeline.samples;
-        let available = samples.len().saturating_sub(self.read_position);
-        let to_copy = buffer.len().min(available);
+        let timeline = &self.timeline;
+        let samples = &timeline.samples;
+        let to_copy = buffer
+            .len()
+            .min(samples.len().saturating_sub(self.read_position));
 
-        if to_copy > 0 {
-            let primary_start = self.timeline.primary_start;
-            let primary_end = self.timeline.primary_end.load(Ordering::Acquire);
-            let wrap_end = self.timeline.wrap_end.load(Ordering::Acquire);
-
-            for (i, slot) in buffer[..to_copy].iter_mut().enumerate() {
-                let idx = self.read_position + i;
-                let rendered = if idx >= primary_start {
-                    idx < primary_end
-                } else {
-                    idx < wrap_end
-                };
-                *slot = if rendered {
-                    <T as cpal::Sample>::from_sample(f32::from_bits(
-                        samples[idx].load(Ordering::Relaxed),
-                    ))
-                } else {
-                    T::EQUILIBRIUM
-                };
+        let mut copied = 0;
+        while copied < to_copy {
+            let idx = self.read_position + copied;
+            let block = idx / timeline.block_samples;
+            let span = ((block + 1) * timeline.block_samples - idx).min(to_copy - copied);
+            let out = &mut buffer[copied..copied + span];
+            if timeline.rendered[block].load(Ordering::Acquire) {
+                for (slot, sample) in out.iter_mut().zip(&samples[idx..idx + span]) {
+                    *slot = <T as cpal::Sample>::from_sample(f32::from_bits(
+                        sample.load(Ordering::Relaxed),
+                    ));
+                }
+            } else {
+                out.fill(T::EQUILIBRIUM);
             }
-            self.read_position += to_copy;
+            copied += span;
         }
+        self.read_position += to_copy;
+        timeline
+            .read_position
+            .store(self.read_position, Ordering::Release);
 
         if to_copy < buffer.len() {
             buffer[to_copy..].fill(T::EQUILIBRIUM);
@@ -2276,22 +2362,96 @@ impl<T: FromSampleBytes> StreamingAudioProducer<T> {
     }
 }
 
-/// Writes resampler output (packed f32 bytes) into the shared buffer,
-/// stopping at `limit`. Returns the next write index.
+/// Writes resampler output (packed f32 bytes) into the shared buffer from
+/// `out_idx`, skipping blocks that are already rendered (the callback may be
+/// reading them). Returns the next write index.
 fn store_progressive_samples(
     timeline: &ProgressiveTimeline,
     bytes: &[u8],
     mut out_idx: usize,
-    limit: usize,
 ) -> usize {
     for chunk in bytes.chunks_exact(f32::BYTE_SIZE) {
-        if out_idx >= limit {
+        if out_idx >= timeline.samples.len() {
             break;
         }
-        timeline.samples[out_idx].store(f32::from_bytes(chunk).to_bits(), Ordering::Relaxed);
+        if !timeline.rendered[out_idx / timeline.block_samples].load(Ordering::Relaxed) {
+            timeline.samples[out_idx].store(f32::from_bytes(chunk).to_bits(), Ordering::Relaxed);
+        }
         out_idx += 1;
     }
     out_idx
+}
+
+struct ProgressiveRunStart {
+    secs: f64,
+    position: usize,
+}
+
+/// One contiguous render from `ProgressiveRunStart`. A block is published
+/// only once this run has written all of it, so a run that starts mid-block
+/// leaves that block to a later run.
+struct ProgressiveRun {
+    resampler: AudioResampler,
+    source_position: usize,
+    out_position: usize,
+    next_block_to_publish: usize,
+}
+
+impl ProgressiveRun {
+    fn start(
+        renderer: &mut AudioRenderer,
+        project: &ProjectConfiguration,
+        render_info: AudioInfo,
+        start: ProgressiveRunStart,
+        block_samples: usize,
+    ) -> Option<Self> {
+        let resampler = AudioResampler::new(render_info).ok()?;
+        renderer.set_playhead(start.secs, project);
+        Some(Self {
+            resampler,
+            source_position: (start.secs * AudioData::SAMPLE_RATE as f64) as usize,
+            out_position: start.position,
+            next_block_to_publish: start.position.div_ceil(block_samples),
+        })
+    }
+
+    /// Renders one chunk, or flushes and publishes the tail once the timeline
+    /// is exhausted. Returns true when the run has finished.
+    fn render_chunk(
+        &mut self,
+        renderer: &mut AudioRenderer,
+        project: &ProjectConfiguration,
+        timeline: &ProgressiveTimeline,
+        total_source_samples: usize,
+    ) -> bool {
+        if self.source_position < total_source_samples && self.out_position < timeline.samples.len()
+        {
+            let frame = renderer
+                .render_frame(PROGRESSIVE_RENDER_CHUNK_SAMPLES, project)
+                .unwrap_or_else(|| silent_audio_frame(PROGRESSIVE_RENDER_CHUNK_SAMPLES));
+            let resampled = self.resampler.queue_and_process_frame(&frame);
+            self.out_position = store_progressive_samples(timeline, resampled, self.out_position);
+            self.source_position += PROGRESSIVE_RENDER_CHUNK_SAMPLES;
+            self.publish(timeline, self.out_position / timeline.block_samples);
+            return false;
+        }
+
+        while let Some(flushed) = self.resampler.flush_frame() {
+            if flushed.is_empty() || self.out_position >= timeline.samples.len() {
+                break;
+            }
+            self.out_position = store_progressive_samples(timeline, flushed, self.out_position);
+        }
+        self.publish(timeline, timeline.rendered.len());
+        true
+    }
+
+    fn publish(&mut self, timeline: &ProgressiveTimeline, end_block: usize) {
+        for block in self.next_block_to_publish..end_block {
+            timeline.rendered[block].store(true, Ordering::Release);
+        }
+        self.next_block_to_publish = self.next_block_to_publish.max(end_block);
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2302,138 +2462,84 @@ fn spawn_progressive_render(
     project: ProjectConfiguration,
     render_info: AudioInfo,
     duration_secs: f64,
-    pass1_start_secs: f64,
-    ready_at_index: usize,
-    ready_tx: std::sync::mpsc::Sender<()>,
-) {
+    first_run: ProgressiveRunStart,
+    ready_tx: std::sync::mpsc::SyncSender<()>,
+) -> Option<std::thread::Thread> {
     let spawn_result = std::thread::Builder::new()
         .name("cap-audio-prerender".into())
         .spawn(move || {
-            let render_start = std::time::Instant::now();
             let mut renderer = AudioRenderer::new(segments).with_music(music);
-
-            let chunk_size = 1024usize;
-
+            let sample_rate = render_info.sample_rate;
+            let channels = render_info.channels;
+            let block_samples = timeline.block_samples;
             let total_source_samples = (duration_secs * AudioData::SAMPLE_RATE as f64) as usize;
-            let pass1_source_start = (pass1_start_secs * AudioData::SAMPLE_RATE as f64) as usize;
-            let buffer_len = timeline.samples.len();
-            let mut ready_sent = false;
-            let send_ready = |sent: &mut bool| {
-                if !*sent {
-                    *sent = true;
-                    let _ = ready_tx.send(());
-                }
-            };
+            let lookahead_samples = output_sample_index(
+                PROGRESSIVE_LOOKAHEAD_SECS,
+                sample_rate,
+                channels,
+                usize::MAX,
+            );
+            let catch_up_samples = output_sample_index(
+                ProgressiveAudioBuffer::<f32>::START_PREROLL_SECS,
+                sample_rate,
+                channels,
+                usize::MAX,
+            ) + block_samples;
 
-            // Renders source samples [from_source, to_source) into the shared
-            // buffer starting at out_idx, bounded by out_limit. Mirrors the
-            // original blocking pre-render loop chunk for chunk so the sample
-            // values are identical.
-            let render_pass = |renderer: &mut AudioRenderer,
-                               start_secs: f64,
-                               from_source: usize,
-                               to_source: usize,
-                               mut out_idx: usize,
-                               out_limit: usize,
-                               watermark: &AtomicUsize,
-                               ready_at: Option<usize>,
-                               ready_sent: &mut bool|
-             -> bool {
-                let Ok(mut resampler) = AudioResampler::new(render_info) else {
-                    return false;
-                };
-                renderer.set_playhead(start_secs, &project);
-
-                let mut rendered_source = from_source;
-
-                while rendered_source < to_source {
-                    if timeline.stop.load(Ordering::Acquire) {
-                        return false;
-                    }
-
-                    match renderer.render_frame(chunk_size, &project) {
-                        Some(frame) => {
-                            let resampled = resampler.queue_and_process_frame(&frame);
-                            out_idx =
-                                store_progressive_samples(&timeline, resampled, out_idx, out_limit);
-                        }
-                        None => {
-                            let frame = silent_audio_frame(chunk_size);
-                            let resampled = resampler.queue_and_process_frame(&frame);
-                            out_idx =
-                                store_progressive_samples(&timeline, resampled, out_idx, out_limit);
-                        }
-                    }
-
-                    rendered_source += chunk_size;
-                    watermark.store(out_idx, Ordering::Release);
-
-                    if let Some(ready_at) = ready_at
-                        && out_idx >= ready_at
-                    {
-                        send_ready(ready_sent);
-                    }
-                }
-
-                while let Some(flushed) = resampler.flush_frame() {
-                    if flushed.is_empty() || out_idx >= out_limit {
-                        break;
-                    }
-                    out_idx = store_progressive_samples(&timeline, flushed, out_idx, out_limit);
-                    watermark.store(out_idx, Ordering::Release);
-                }
-
-                if ready_at.is_some() {
-                    send_ready(ready_sent);
-                }
-                true
-            };
-
-            // Pass 1: playhead (minus pre-roll) to the end of the timeline.
-            let pass1_ok = render_pass(
+            let mut run = ProgressiveRun::start(
                 &mut renderer,
-                pass1_start_secs,
-                pass1_source_start,
-                total_source_samples,
-                timeline.primary_start,
-                buffer_len,
-                &timeline.primary_end,
-                Some(ready_at_index),
-                &mut ready_sent,
+                &project,
+                render_info,
+                first_run,
+                block_samples,
             );
 
-            // Pass 2: wrap around to cover [0, playhead) for backwards seeks.
-            let pass2_ok = if pass1_ok && pass1_source_start > 0 {
-                render_pass(
-                    &mut renderer,
-                    0.0,
-                    0,
-                    pass1_source_start,
-                    0,
-                    timeline.primary_start,
-                    &timeline.wrap_end,
-                    None,
-                    &mut ready_sent,
-                )
-            } else {
-                pass1_ok
-            };
-
-            send_ready(&mut ready_sent);
-
-            if pass1_ok && pass2_ok {
-                timeline.complete.store(true, Ordering::Release);
-                info!(
-                    total_samples = buffer_len,
-                    memory_mb = (buffer_len * std::mem::size_of::<u32>()) / (1024 * 1024),
-                    elapsed_ms = render_start.elapsed().as_millis() as u64,
-                    "Progressive audio pre-render complete"
+            while !timeline.stop.load(Ordering::Acquire) {
+                let read_position = timeline.read_position.load(Ordering::Acquire);
+                let target = timeline.first_unrendered_block(
+                    read_position,
+                    read_position.saturating_add(lookahead_samples),
                 );
+                match progressive_render_step(
+                    run.as_ref().map(|run| run.out_position),
+                    target,
+                    block_samples,
+                    catch_up_samples,
+                ) {
+                    ProgressiveRenderStep::Idle => {
+                        std::thread::park_timeout(PROGRESSIVE_IDLE_POLL);
+                        continue;
+                    }
+                    ProgressiveRenderStep::StartAt(position) => {
+                        run = ProgressiveRun::start(
+                            &mut renderer,
+                            &project,
+                            render_info,
+                            ProgressiveRunStart {
+                                secs: (position / channels) as f64 / f64::from(sample_rate),
+                                position,
+                            },
+                            block_samples,
+                        );
+                    }
+                    ProgressiveRenderStep::Continue => {}
+                }
+                let Some(active) = run.as_mut() else {
+                    break;
+                };
+                if active.render_chunk(&mut renderer, &project, &timeline, total_source_samples) {
+                    run = None;
+                }
+                let _ = ready_tx.try_send(());
             }
         });
 
-    if let Err(e) = spawn_result {
-        tracing::error!("Failed to spawn audio pre-render thread: {e}");
+    match spawn_result {
+        Ok(handle) => Some(handle.thread().clone()),
+        Err(e) => {
+            tracing::error!("Failed to spawn audio pre-render thread: {e}");
+            None
+        }
     }
 }
 
@@ -2710,6 +2816,163 @@ mod tests {
             &buffer.mode,
             PrerenderedAudioBufferMode::Streaming(_)
         ));
+    }
+
+    #[test]
+    fn progressive_render_step_continues_runs_and_restarts_on_seeks() {
+        let block = 2048;
+        let catch_up = 96_000 + block;
+        let step = |run, target| progressive_render_step(run, target, block, catch_up);
+
+        assert_eq!(step(Some(0), None), ProgressiveRenderStep::Idle);
+        assert_eq!(step(None, None), ProgressiveRenderStep::Idle);
+        assert_eq!(
+            step(None, Some(3)),
+            ProgressiveRenderStep::StartAt(3 * block)
+        );
+        assert_eq!(step(Some(0), Some(46)), ProgressiveRenderStep::Continue);
+        assert_eq!(
+            step(Some(10 * block), Some(10)),
+            ProgressiveRenderStep::Continue
+        );
+        assert_eq!(
+            step(Some(10 * block + 7), Some(10)),
+            ProgressiveRenderStep::Continue
+        );
+        assert_eq!(
+            step(Some(11 * block), Some(10)),
+            ProgressiveRenderStep::StartAt(10 * block)
+        );
+        assert_eq!(
+            step(Some(10 * block), Some(5)),
+            ProgressiveRenderStep::StartAt(5 * block)
+        );
+        assert_eq!(
+            step(Some(0), Some(1_000)),
+            ProgressiveRenderStep::StartAt(1_000 * block)
+        );
+        assert_eq!(
+            step(Some(1_000 * block - catch_up), Some(1_000)),
+            ProgressiveRenderStep::Continue
+        );
+        assert_eq!(
+            step(Some(1_000 * block - catch_up - 1), Some(1_000)),
+            ProgressiveRenderStep::StartAt(1_000 * block)
+        );
+    }
+
+    fn progressive_timeline(buffer: &PrerenderedAudioBuffer<f32>) -> &ProgressiveTimeline {
+        match &buffer.mode {
+            PrerenderedAudioBufferMode::Progressive(buffer) => &buffer.timeline,
+            PrerenderedAudioBufferMode::Streaming(_) => panic!("expected progressive mode"),
+        }
+    }
+
+    fn timeline_index(secs: f64) -> usize {
+        output_sample_index(secs, AudioData::SAMPLE_RATE, 2, usize::MAX)
+    }
+
+    fn wait_for_rendered(timeline: &ProgressiveTimeline, from_secs: f64, to_secs: f64) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while timeline
+            .first_unrendered_block(timeline_index(from_secs), timeline_index(to_secs))
+            .is_some()
+        {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "{from_secs}s..{to_secs}s was not rendered in time"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+
+    fn is_rendered_at(timeline: &ProgressiveTimeline, secs: f64) -> bool {
+        timeline
+            .first_unrendered_block(timeline_index(secs), timeline_index(secs) + 1)
+            .is_none()
+    }
+
+    #[test]
+    fn progressive_render_paces_to_the_playhead_and_follows_seeks() {
+        let sections = (1..=40).map(|second| second * 500).collect::<Vec<i16>>();
+        let (_dir, renderer, project) =
+            single_clip_fixture(&sections, vec![segment(0, 0.0, 40.0, 1.0)]);
+        let mut playback = PrerenderedAudioBuffer::<f32>::new(
+            renderer.data.clone(),
+            MusicTracks::new(),
+            &project,
+            AudioRenderer::info(),
+            40.0,
+            0.0,
+        );
+        playback.set_playhead(0.0);
+        assert!(playback.wait_until_ready(std::time::Duration::from_secs(5)));
+
+        wait_for_rendered(
+            progressive_timeline(&playback),
+            0.0,
+            PROGRESSIVE_LOOKAHEAD_SECS,
+        );
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert!(!is_rendered_at(
+            progressive_timeline(&playback),
+            PROGRESSIVE_LOOKAHEAD_SECS + 0.1
+        ));
+
+        let mut played = vec![0.0; timeline_index(4.0)];
+        playback.fill(&mut played);
+        assert!((left_at_second(&played, 2) - expected(1500)).abs() < 0.001);
+        wait_for_rendered(
+            progressive_timeline(&playback),
+            4.0,
+            4.0 + PROGRESSIVE_LOOKAHEAD_SECS,
+        );
+        assert!(!is_rendered_at(progressive_timeline(&playback), 25.0));
+
+        playback.set_playhead(30.5);
+        assert!(playback.wait_until_ready(std::time::Duration::from_secs(5)));
+        let mut seeked = [0.0; 1024];
+        playback.fill(&mut seeked);
+        assert!((seeked[0] - expected(15500)).abs() < 0.001);
+        assert!(!is_rendered_at(progressive_timeline(&playback), 25.0));
+
+        playback.set_playhead(1.0);
+        let mut replayed = [0.0; 1024];
+        playback.fill(&mut replayed);
+        assert!((replayed[0] - expected(1000)).abs() < 0.001);
+    }
+
+    #[test]
+    fn progressive_render_fills_a_block_left_by_a_mid_block_start() {
+        let sections = (1..=4).map(|second| second * 2000).collect::<Vec<i16>>();
+        let (_dir, renderer, project) =
+            single_clip_fixture(&sections, vec![segment(0, 0.0, 4.0, 1.0)]);
+        let mut playback = PrerenderedAudioBuffer::<f32>::new(
+            renderer.data.clone(),
+            MusicTracks::new(),
+            &project,
+            AudioRenderer::info(),
+            4.0,
+            2.51,
+        );
+        playback.set_playhead(2.51);
+        assert!(playback.wait_until_ready(std::time::Duration::from_secs(5)));
+        playback.set_playhead(1.505);
+        assert!(playback.wait_until_ready(std::time::Duration::from_secs(5)));
+        let mut seeked = [0.0; 1024];
+        playback.fill(&mut seeked);
+        assert!(
+            seeked
+                .iter()
+                .all(|sample| (sample - expected(4000)).abs() < 0.001)
+        );
+        playback.set_playhead(0.0);
+        playback.wait_until_fully_rendered();
+        let mut played = vec![0.0; timeline_index(4.0)];
+        playback.fill(&mut played);
+        for (second, value) in sections.iter().enumerate() {
+            assert!((left_at_second(&played, second) - expected(*value)).abs() < 0.001);
+        }
     }
 
     #[test]
