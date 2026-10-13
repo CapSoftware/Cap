@@ -1007,7 +1007,7 @@ impl EditorInstance {
                         break;
                     }
 
-                    let project = self.project_config.1.borrow().clone();
+                    let project = Arc::new(self.project_config.1.borrow().clone());
                     let frame_time = frame_number as f64 / fps as f64;
                     let transition_mapping = project.timeline.as_ref().and_then(|timeline| {
                         if timeline.transitions.is_empty() {

@@ -1044,7 +1044,7 @@ impl Playback {
                 .sort_by_key(|p| p.frame_number);
 
             let playback_start_frame = frame_number;
-            let mut cached_project = self.project.borrow().clone();
+            let mut cached_project = Arc::new(self.project.borrow().clone());
 
             let build_cursor_timelines =
                 |project: &ProjectConfiguration| -> Vec<Arc<PrecomputedCursorTimeline>> {
@@ -1341,7 +1341,7 @@ impl Playback {
                     drop(adopted.take());
                     preparing_audio_released.store(true, Ordering::Release);
                     let project = self.project.borrow().clone();
-                    cached_project.audio = project.audio.clone();
+                    Arc::make_mut(&mut cached_project).audio = project.audio.clone();
                     let ticket = self.audio_output.prepare_playback(PlaySpec {
                         segments: audio_segments.clone(),
                         music: self.music.clone(),
@@ -1412,7 +1412,7 @@ impl Playback {
                     let next_project = self.project.borrow_and_update().clone();
                     let audio_changed = cached_project.audio != next_project.audio
                         || clip_audio_changed(&cached_project, &next_project);
-                    cached_project = next_project;
+                    cached_project = Arc::new(next_project);
                     if adopted.is_none()
                         && audio_changed
                         && let Some(generation) = audio_generation
@@ -1421,7 +1421,7 @@ impl Playback {
                             PlaySpec {
                                 segments: audio_segments.clone(),
                                 music: self.music.clone(),
-                                project: cached_project.clone(),
+                                project: (*cached_project).clone(),
                                 duration_secs: duration,
                                 start_playhead_secs: frame_number as f64 / fps_f64,
                                 playhead_rx: audio_playhead_rx.clone(),

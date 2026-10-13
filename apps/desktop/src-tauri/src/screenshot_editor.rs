@@ -507,7 +507,7 @@ impl ScreenshotEditorInstances {
 
                 let uniforms = ProjectUniforms::new(
                     &constants,
-                    &current_config,
+                    &std::sync::Arc::new(current_config.clone()),
                     0,
                     30,
                     cap_project::XY::new(base_w, base_h),
@@ -1023,7 +1023,7 @@ pub async fn prewarm_screenshot_renderer() {
     zoom_timeline.ensure_precomputed_until(1.0 / 30.0);
     let uniforms = ProjectUniforms::new(
         &constants,
-        &config,
+        &std::sync::Arc::new(config.clone()),
         0,
         30,
         cap_project::XY::new(base_w, base_h),
@@ -1825,7 +1825,7 @@ pub async fn render_screenshot_png(instance: &ScreenshotEditorInstance) -> Resul
     zoom_timeline.ensure_precomputed_until(1.0 / 30.0);
     let uniforms = ProjectUniforms::new(
         &constants,
-        &config,
+        &std::sync::Arc::new(config.clone()),
         0,
         30,
         resolution_base,
