@@ -21,6 +21,79 @@ pub struct KeyframeIndex {
     height: u32,
 }
 
+fn ticks_to_secs(ticks: i64, time_base: ffmpeg::Rational) -> f64 {
+    ticks as f64 * time_base.numerator() as f64 / time_base.denominator() as f64
+}
+
+// MP4/MOV demuxers load every sample's flags from the sample table when the
+// file is opened, so keyframes are known without reading any media. The table
+// stores decode timestamps, which only match presentation timestamps when the
+// stream has no reordering delay, and fragmented files only index the
+// fragments read so far; either case falls back to scanning packets.
+fn container_keyframes(
+    stream: &avformat::stream::Stream,
+    fps: f64,
+    duration_secs: f64,
+) -> Option<Vec<(u32, f64)>> {
+    let time_base = stream.time_base();
+    let raw = unsafe { stream.as_ptr() };
+    if unsafe { (*(*raw).codecpar).video_delay } > 0 {
+        return None;
+    }
+    let count = unsafe { ffmpeg::ffi::avformat_index_get_entries_count(raw) };
+    if count <= 0 {
+        return None;
+    }
+
+    let mut keyframes = Vec::new();
+    let mut last_secs = f64::MIN;
+    for index in 0..count {
+        let entry =
+            unsafe { ffmpeg::ffi::avformat_index_get_entry(raw.cast_mut(), index).as_ref() }?;
+        let secs = ticks_to_secs(entry.timestamp, time_base);
+        last_secs = last_secs.max(secs);
+        let flags = entry.flags();
+        if flags & ffmpeg::ffi::AVINDEX_KEYFRAME != 0 {
+            keyframes.push(((secs * fps).round() as u32, secs));
+        }
+    }
+
+    let covers_stream =
+        duration_secs > 0.0 && last_secs >= duration_secs - INDEX_COVERAGE_SLACK_SECS;
+    (covers_stream && !keyframes.is_empty()).then_some(keyframes)
+}
+
+const INDEX_COVERAGE_SLACK_SECS: f64 = 1.0;
+
+// Some encoders write a constant composition offset even without B-frames, so
+// every frame is presented later than the sample table's decode time says.
+fn index_times_are_presentation_times(
+    input: &mut avformat::context::Input,
+    stream_index: usize,
+) -> bool {
+    input
+        .packets()
+        .find(|(stream, _)| stream.index() == stream_index)
+        .is_some_and(|(_, packet)| packet.pts().is_some() && packet.pts() == packet.dts())
+}
+
+fn scan_keyframes(
+    input: &mut avformat::context::Input,
+    stream_index: usize,
+    time_base: ffmpeg::Rational,
+    fps: f64,
+) -> Vec<(u32, f64)> {
+    let mut keyframes = Vec::new();
+    for (stream, packet) in input.packets() {
+        if stream.index() != stream_index || !packet.is_key() {
+            continue;
+        }
+        let time_secs = ticks_to_secs(packet.pts().unwrap_or(0), time_base);
+        keyframes.push(((time_secs * fps).round() as u32, time_secs));
+    }
+    keyframes
+}
+
 impl KeyframeIndex {
     pub fn build(path: &Path) -> Result<Self, String> {
         let build_start = std::time::Instant::now();
@@ -28,7 +101,7 @@ impl KeyframeIndex {
         let mut input = avformat::input(path)
             .map_err(|e| format!("Failed to open video for keyframe scan: {e}"))?;
 
-        let (stream_index, time_base, fps, duration_secs, pixel_format, width, height) = {
+        let (stream_index, time_base, fps, duration_secs, pixel_format, width, height, indexed) = {
             let video_stream = input
                 .streams()
                 .best(ffmpeg::media::Type::Video)
@@ -63,6 +136,7 @@ impl KeyframeIndex {
             let pixel_format = pixel_to_pixel_format(decoder.format()).ok();
             let width = decoder.width();
             let height = decoder.height();
+            let indexed = container_keyframes(&video_stream, fps, duration_secs);
 
             (
                 stream_index,
@@ -72,24 +146,27 @@ impl KeyframeIndex {
                 pixel_format,
                 width,
                 height,
+                indexed,
             )
         };
 
-        let mut keyframes = Vec::new();
-
-        for (stream, packet) in input.packets() {
-            if stream.index() != stream_index {
-                continue;
+        let (keyframes, from_container) = match indexed {
+            Some(keyframes) if index_times_are_presentation_times(&mut input, stream_index) => {
+                (keyframes, true)
             }
-
-            if packet.is_key() {
-                let pts = packet.pts().unwrap_or(0);
-                let time_secs =
-                    pts as f64 * time_base.numerator() as f64 / time_base.denominator() as f64;
-                let frame_number = (time_secs * fps).round() as u32;
-                keyframes.push((frame_number, time_secs));
+            Some(_) => {
+                let mut input = avformat::input(path)
+                    .map_err(|e| format!("Failed to open video for keyframe scan: {e}"))?;
+                (
+                    scan_keyframes(&mut input, stream_index, time_base, fps),
+                    false,
+                )
             }
-        }
+            None => (
+                scan_keyframes(&mut input, stream_index, time_base, fps),
+                false,
+            ),
+        };
 
         let elapsed = build_start.elapsed();
         tracing::info!(
@@ -97,6 +174,7 @@ impl KeyframeIndex {
             keyframe_count = keyframes.len(),
             fps = fps,
             duration_secs = duration_secs,
+            from_container,
             build_ms = elapsed.as_millis(),
             "Built keyframe index"
         );
@@ -484,5 +562,74 @@ pub fn pixel_format_to_pixel(format: cv::PixelFormat) -> avformat::Pixel {
         cv::PixelFormat::_32_RGBA => avformat::Pixel::RGBA,
         cv::PixelFormat::_32_BGRA => avformat::Pixel::BGRA,
         _ => avformat::Pixel::RGBA,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    type Keyframes = Vec<(u32, f64)>;
+
+    fn both_indexes(path: &Path) -> Option<(Option<Keyframes>, Keyframes)> {
+        ffmpeg::init().unwrap();
+        let mut input = avformat::input(path).ok()?;
+        let (stream_index, time_base, fps, indexed) = {
+            let stream = input.streams().best(ffmpeg::media::Type::Video)?;
+            let rate = stream.avg_frame_rate();
+            let fps = f64::from(rate.numerator()) / f64::from(rate.denominator().max(1));
+            let duration_secs = ticks_to_secs(stream.duration(), stream.time_base());
+            let indexed = container_keyframes(&stream, fps, duration_secs);
+            (stream.index(), stream.time_base(), fps, indexed)
+        };
+        let indexed =
+            indexed.filter(|_| index_times_are_presentation_times(&mut input, stream_index));
+        let mut input = avformat::input(path).ok()?;
+        let scanned = scan_keyframes(&mut input, stream_index, time_base, fps);
+        Some((indexed, scanned))
+    }
+
+    #[test]
+    fn streams_with_reordering_fall_back_to_a_packet_scan() {
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/h264-decoder-lifecycle.mp4");
+        let (indexed, scanned) = both_indexes(&fixture).unwrap();
+        assert!(!scanned.is_empty());
+        assert!(indexed.is_none());
+    }
+
+    #[test]
+    #[ignore = "compares real recordings listed in CAP_KEYFRAME_INDEX_FILES (colon separated)"]
+    fn container_index_matches_real_recordings() {
+        let Ok(files) = std::env::var("CAP_KEYFRAME_INDEX_FILES") else {
+            return;
+        };
+        let mut mismatches = Vec::new();
+        for file in files.split(':').filter(|file| !file.is_empty()) {
+            let Some((indexed, scanned)) = both_indexes(Path::new(file)) else {
+                println!("{file}: unreadable");
+                continue;
+            };
+            let outcome = match &indexed {
+                None => "scan",
+                Some(indexed) if *indexed == scanned => "identical",
+                Some(indexed) if indexed.iter().all(|keyframe| scanned.contains(keyframe)) => {
+                    "subset"
+                }
+                Some(_) => {
+                    mismatches.push(file.to_string());
+                    "mismatch"
+                }
+            };
+            println!(
+                "{file}: outcome={outcome} container={:?} scan={}",
+                indexed.as_ref().map(Vec::len),
+                scanned.len()
+            );
+        }
+        assert!(
+            mismatches.is_empty(),
+            "index differs from scan: {mismatches:#?}"
+        );
     }
 }
