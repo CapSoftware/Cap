@@ -340,10 +340,17 @@ struct CursorTimelineVariant {
     timeline: Arc<PrecomputedCursorTimeline>,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct CursorEventOrder {
+    pub moves: bool,
+    pub clicks: bool,
+}
+
 pub struct PrecomputedCursorTimeline {
     timeline: Vec<SmoothedCursorEvent>,
     raw_cursor: CursorEvents,
     raw_moves_are_ordered: bool,
+    clicks_are_ordered: bool,
     has_smoothing: bool,
     variants: Mutex<Vec<CursorTimelineVariant>>,
 }
@@ -355,11 +362,19 @@ impl PrecomputedCursorTimeline {
         click_spring: Option<ClickSpringConfig>,
     ) -> Self {
         let raw_moves_are_ordered = cursor.moves.is_sorted_by(|a, b| a.time_ms <= b.time_ms);
+        let clicks_are_ordered = cursor
+            .clicks
+            .iter()
+            .try_fold(f64::NEG_INFINITY, |previous, click| {
+                (previous <= click.time_ms).then_some(click.time_ms)
+            })
+            .is_some();
         if cursor.moves.is_empty() || smoothing.is_none() {
             return Self {
                 timeline: vec![],
                 raw_cursor: cursor.clone(),
                 raw_moves_are_ordered,
+                clicks_are_ordered,
                 has_smoothing: false,
                 variants: Mutex::new(Vec::new()),
             };
@@ -379,6 +394,7 @@ impl PrecomputedCursorTimeline {
             timeline,
             raw_cursor: CursorEvents::default(),
             raw_moves_are_ordered,
+            clicks_are_ordered,
             has_smoothing: true,
             variants: Mutex::new(Vec::new()),
         }
@@ -415,6 +431,13 @@ impl PrecomputedCursorTimeline {
             timeline: Arc::clone(&timeline),
         });
         timeline
+    }
+
+    pub(crate) fn event_order(&self) -> CursorEventOrder {
+        CursorEventOrder {
+            moves: self.raw_moves_are_ordered,
+            clicks: self.clicks_are_ordered,
+        }
     }
 
     pub fn interpolate(&self, time_secs: f32) -> Option<InterpolatedCursorPosition> {
