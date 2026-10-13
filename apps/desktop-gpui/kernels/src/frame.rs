@@ -17,8 +17,11 @@ pub fn unpad_rgba_to_bgra(
 ) -> Option<Vec<u8>> {
     let row_bytes = width.checked_mul(4)?;
     let output_len = row_bytes.checked_mul(rows)?;
-    if stride < row_bytes || data.len() < stride.checked_mul(rows)? {
+    if stride == 0 || stride < row_bytes || data.len() < stride.checked_mul(rows)? {
         return None;
+    }
+    if output_len == 0 {
+        return Some(Vec::new());
     }
 
     let mut tight = vec![0; output_len];
@@ -275,6 +278,25 @@ mod tests {
     fn rejects_short_rows_and_zero_stride() {
         assert_eq!(unpad_rgba_to_bgra(&[0; 12], 4, 12, 1), None);
         assert_eq!(unpad_rgba_to_bgra(&[0; 16], 4, 0, 1), None);
+    }
+
+    #[test]
+    fn handles_empty_frame_dimensions() {
+        for (width, stride, rows) in [
+            (0, 0, 0),
+            (0, 0, 2),
+            (0, 10, 0),
+            (0, 10, 2),
+            (2, 0, 0),
+            (2, 10, 0),
+        ] {
+            assert_eq!(
+                unpad_rgba_to_bgra(&PADDED, width, stride, rows),
+                reference_unpad_rgba_to_bgra(&PADDED, width, stride, rows),
+            );
+        }
+        assert_eq!(unpad_rgba_to_bgra(&[], 0, 10, 0), Some(Vec::new()));
+        assert_eq!(unpad_rgba_to_bgra(&[], 2, 10, 0), Some(Vec::new()));
     }
 
     #[test]
